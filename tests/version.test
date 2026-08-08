@@ -1,0 +1,44 @@
+# version.test --
+#
+# The version number lives in two places: AC_INIT in configure.ac and
+# "package provide" in tclpdf.tcl. A drift between them would otherwise only
+# surface at the user's site - the archive is named tclpdf1.0.zip while the
+# package announces itself as 0.9, so "package require tclpdf 1.0" fails.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+set sourcetree [file dirname [file dirname [file normalize [info script]]]]
+
+proc versionFromConfigureAc {path} {
+  set fh [open $path r]
+  set text [read $fh]
+  close $fh
+  if {[regexp {AC_INIT\(\[[^\]]*\]\s*,\s*\[([^\]]*)\]\)} $text -> version]} {
+    return $version
+  }
+  return {}
+}
+
+test version-1.1 {package provide agrees with AC_INIT} -body {
+  set fromAc [versionFromConfigureAc [file join $sourcetree configure.ac]]
+  set fromTcl [package provide tclpdf]
+  if {$fromAc eq {}} {
+    return "AC_INIT in configure.ac not readable"
+  }
+  if {$fromAc ne $fromTcl} {
+    return "configure.ac says $fromAc, package provide says $fromTcl"
+  }
+  return equal
+} -result equal
+
+test version-1.2 {the package runs under this interpreter} -body {
+  package vsatisfies [info patchlevel] 8.6.11-
+} -result 1
+
+cleanupTests
