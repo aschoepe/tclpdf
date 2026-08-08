@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480" width="640" height="480">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#1b3a63"/>
+      <stop offset="0.55" stop-color="#c8632f"/>
+      <stop offset="1"    stop-color="#f2b23c"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"   stop-color="#fff6d0"/>
+      <stop offset="0.6" stop-color="#ffd257"/>
+      <stop offset="1"   stop-color="#ffb02e"/>
+    </radialGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e0a24a"/>
+      <stop offset="1" stop-color="#123048"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect x="8" y="8" width="624" height="464" rx="44" ry="44"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect x="8" y="8" width="624" height="464" fill="url(#sky)"/>
+    <circle cx="430" cy="196" r="74" fill="url(#sun)"/>
+    <!-- Berge: harte Volltonflaechen -->
+    <path d="M 8 330 L 150 196 L 250 268 L 330 210 L 470 330 Z" fill="#2d4a4f"/>
+    <path d="M 300 330 L 430 232 L 560 312 L 632 268 L 632 330 Z" fill="#22383c"/>
+    <!-- Wasser -->
+    <rect x="8" y="330" width="624" height="142" fill="url(#sea)"/>
+    <path d="M 410 336 L 450 336 L 438 400 L 422 400 Z" fill="#ffd98a" opacity="0.55"/>
+    <!-- Moewen: Bezierkurven -->
+    <path d="M 120 150 q 22 -20 44 0 q 22 -20 44 0" fill="none"
+          stroke="#f4ede0" stroke-width="5" stroke-linecap="round"/>
+    <path d="M 210 108 q 16 -15 32 0 q 16 -15 32 0" fill="none"
+          stroke="#f4ede0" stroke-width="4" stroke-linecap="round"/>
+    <!-- Beschriftungsleiste -->
+    <rect x="8" y="374" width="624" height="98" fill="#0d1b26" opacity="0.78"/>
+    <text x="40" y="416" font-family="DejaVu Sans, sans-serif" font-size="30"
+          font-weight="bold" fill="#f4ede0">SVG 1.1 · Paths and text</text>
+    <text x="40" y="450" font-family="DejaVu Sans, sans-serif" font-size="21"
+          fill="#badA55">Converted to PDF operators</text>
+  </g>
+  <rect x="8" y="8" width="624" height="464" rx="44" ry="44"
+        fill="none" stroke="#f4ede0" stroke-width="4" opacity="0.85"/>
+</svg>

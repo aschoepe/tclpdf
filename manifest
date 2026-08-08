@@ -1,5 +1,5 @@
-C Initial\sproject\sscaffolding\sfor\stclpdf\s1.0\n\n-\sTEA\sbuild\sadapted\sfor\sthis\spackage:\sconfigure.ac,\sMakefile.in,\saclocal.m4,\stclconfig,\spkgIndex.tcl.in\n-\stclpdf.tcl\sas\sthe\spackage\sstub\swith\snamespace,\sa\sTcl\s8.6.11\sand\sup\srequirement\sand\sa\scheck\sfor\sthe\sbuilt-in\szlib\scommand\n-\stests/all.tcl\sand\stests/version.test\s-\sthe\sversion\stest\skeeps\sAC_INIT\sand\spackage\sprovide\sin\sagreement\n-\stools\swith\sinstall.tcl\sfor\smake\sinstall,\splus\sarchive.sh,\smkversion.tcl\sand\sBUILD-PACKAGE.md\n-\sREADME,\sdoc/tclpdf.md\swith\sits\spandoc\stemplate,\sbilingual\sANNOUNCE\sand\suv/template-download.html\n-\slicense.terms\sset\sto\sMIT\n-\sNo\sfunctional\scode\syet
-D 2026-08-08T19:31:03.251
+C Add\sexample\sassets\sand\sthe\ssRGB\soutput\sintent\sprofile\n\n-\sicc/sRGB.icc\sas\sa\sruntime\spart\sof\sthe\spackage,\sinstalled\sand\sshipped\sin\sthe\sbinary\sarchive,\swith\sa\sREADME\srecording\sits\sidentity\sand\show\sto\sverify\sit\n-\sDejaVu\sSans\sregular\sand\sbold\swith\sLICENSE\sand\sAUTHORS,\sreduced\sfrom\sthe\supstream\srelease\sto\sthe\stwo\sfaces\sthe\sexamples\suse\n-\sRaster\simages\scovering\sthe\sJPEG\sgrey,\sJPEG\scolour,\sPNG\spalette\sand\sPNG\salpha\spaths,\splus\san\sSVG\sfor\sthe\sdeferred\sstage\s6\n-\sZUGFeRD\sinvoice\sXML\sin\sthe\sMINIMUM\sand\sEN16931\sprofiles,\srenamed\safter\stheir\sprofile\sidentifier\n-\sBoth\sREADMEs\srecord\sorigin,\slicence\sand\sthe\smeasured\sproperties\sof\severy\sfile,\sand\sthe\srule\sfor\sadding\sone\n-\sThe\stwo\sXML\sfiles\scome\swith\sno\slicence\sin\sthe\sFeRD\sdistribution\sand\sare\skept\sout\sof\sthe\srelease\sarchive\suntil\sthat\sis\ssettled
+D 2026-08-08T21:53:44.520
 F ANNOUNCE 928c6b0a9d5a269cc176fc1910fe3c4e05bdeff1d982a5c16806f80a393b1039
 F Makefile.in 12bd0b0583fe861482a0e2ed03f0dc8e80c3e4d43505d4149286162536e491c0
 F README a1946c0a300dfbed86aa0f36bc5a9762f436eb92771c234872cb19fe1540d566
@@ -8,6 +8,20 @@ F configure 63c2cd2fe1c1c8d170edb69133c0ac0c246e182bb7d94b0406c4c7c4d4b29866 x
 F configure.ac 2a92c4adc5e80d5fbc48b7cecd59f5b45c0e00e4996236b05a042acbd03d133f
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
 F doc/tclpdf.md 9c11308cd2a2e889a0ed12ae5db092579f46091e5e1151c58a6bb4e3c19ecf6e
+F examples/assets/README.md a89cb84edaed498b81fd2610de1922972ed84d4bf1717b17cbad1427e6dc9fb9
+F examples/assets/fonts/AUTHORS 1cc6e63020d517508bdb9b1132a720533a4bda93492fb93ed501645331941d11
+F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
+F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
+F examples/assets/fonts/LICENSE 477eb9a144d38fc57d928e761702f37eaf838f8c29d3ff64957f061d8dc8fc2f
+F examples/assets/images/sample-gray.jpg 9e043510817e92d27e1ac8cc1fe4d00abdf11f729e1ee94fec0fd2c27f6192c8
+F examples/assets/images/sample-indexed.png a9866993ef70ebfa11fde18ab84658d1b06e7b187619513c45a0b1641d8aa521
+F examples/assets/images/sample-photo.jpg 3ab92dbcd99234a415c82a2edd1ae78bcd8eaecea422b5604c20d7940695c9ab
+F examples/assets/images/sample-rgba.png 826c8da6c4383a053c86ad6d198ee61bc6874a3f58a214e29bee9c4b89bda48a
+F examples/assets/images/sample-vector.svg 837dfc513cd42fe1588ad85a5790b4658271719bb017dce5db0d503de540da7f
+F examples/assets/xml/zugferd-en16931.xml 53e2b6f8ac1759ab26e77f42e7d4262cf3ee333afee47581d2248efebc1aae40
+F examples/assets/xml/zugferd-minimum.xml c8acc70758fdbbcee9f3446b8ca4df9f2561242a46a6cd3cab62ee7f26466476
+F icc/README.md b875a576894d742e6253f2997540502d6a762f482f2c42866fa148824bbd6da1
+F icc/sRGB.icc af18780bd3a0b75630c372842563b9ae9f883c9ef0476c20f39a2aa14e60c3ef
 F license.terms 8a65b74c3a7031d28d75199c16aff80b7d7035498bd9ff3afcecde3160ef6795
 F pkgIndex.tcl.in b6b469557e5c2b7ac66be3986672ab44e1ee3407f120cd6c9fe94b14f600c0bf
 F tclconfig/ChangeLog 5afc872331b2b8e3ecfdbd0e8222da460b071c2f815080e47e0a1f6c49843a7f
@@ -22,8 +36,8 @@ F tools/archive.sh a315c17c2c654c276d49abe2d304e59ecfee47b3ecdfb77bbd902b74773e1
 F tools/install.tcl b16145abf0e2259217f5ac0fc404b0fdc5c12a5f570c51a1cf421ee3c990a786
 F tools/mkversion.tcl a97244b2b89d5672c1a604ef68f68bce63eff11980b25b5c7fb9b4d670d5c8d8
 F uv/template-download.html cf432183e2348e0963f527b4a93aaaf9da116f843a0f343860a23184123982fe
-P 87e8fd06941d2b486a10369a09c1830f3f86280f6a9c10594b24e50809aab038
-R cf3b1f750d2c4df9a0e30a815345ac66
+P a4f1e086dd9a9da45136bc61052c5cff8e087fb3d9986ad5fa15136d8b7a79fd
+R 0ce0fabc9f005385648da8d945547eb3
 U alex
-Z f8f321a8305fd40f04b27c0a2f6b162b
+Z 906eca98a033ee396d3b462ef5ad710a
 # Remove this line to create a well-formed Fossil manifest.
