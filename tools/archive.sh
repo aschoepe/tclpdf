@@ -32,6 +32,12 @@ mkdir -p uv/${PACKAGE_NAME}${PACKAGE_VERSION}
 
 cp ${PKG_TCL_SOURCES} manifest.txt pkgIndex.tcl license.terms uv/${PACKAGE_NAME}${PACKAGE_VERSION}
 
+# icc/ goes into the BINARY archive as well: the output intent profile is a
+# runtime part, not documentation - without it no PDF/A and therefore no
+# ZUGFeRD. The directory name is kept, the package looks for
+# [file join $dir icc sRGB.icc].
+cp -R icc uv/${PACKAGE_NAME}${PACKAGE_VERSION}/
+
 # xattr -r -d com.apple.provenance .: recursively (-r) deletes the extended attribute com.apple.provenance from the specified file or directory. com.apple.provenance: An extended attribute used by macOS (e.g., Finder or Gatekeeper) to track the origin of a file, such as downloaded sources.
 # tar --no-mac-metadata: Do not store or restore Mac extended metadata (e.g., resource forks, Finder info, and so forth). This metadata is stored in special “AppleDouble” files or as extended attributes. This option is useful when creating archives to be used on non-Mac platforms.
 # tar --disable-copyfile: This option is equivalent to setting the environment variable COPYFILE_DISABLE=1. It disables copying of extended attributes and resource forks by preventing the use of the copyfile() API. Use this when you want to avoid creation of ._* AppleDouble files or when those are not needed.
@@ -54,9 +60,20 @@ else
     echo "archive: template-download.html is missing - download.html not generated" >&2
 fi
 
+# The source archive takes the whole tree minus the exclusions below.
+#
+# examples/assets/xml is excluded ON PURPOSE: those two invoice files come from
+# the ZUGFeRD 2.5.2 DE distribution and no licence accompanies them, so they
+# must not be redistributed until that is settled (docs/TODO.md). Said out loud
+# rather than dropped quietly - a missing file in a release is otherwise found
+# by whoever runs the example, not by us.
+echo "archive: examples/assets/xml is left out - licence of the ZUGFeRD sample" >&2
+echo "archive: invoices not established yet, see docs/TODO.md" >&2
+
 cd ../..
 tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude='uv/*' \
+    --exclude="${PACKAGE_NAME}/examples/assets/xml" \
     --exclude="${PACKAGE_NAME}/.fslckout" \
     --exclude="${PACKAGE_NAME}/.fossil-settings" \
     --exclude="${PACKAGE_NAME}/.claude" \

@@ -1,7 +1,7 @@
-C Add\sexample\sassets\sand\sthe\ssRGB\soutput\sintent\sprofile\n\n-\sicc/sRGB.icc\sas\sa\sruntime\spart\sof\sthe\spackage,\sinstalled\sand\sshipped\sin\sthe\sbinary\sarchive,\swith\sa\sREADME\srecording\sits\sidentity\sand\show\sto\sverify\sit\n-\sDejaVu\sSans\sregular\sand\sbold\swith\sLICENSE\sand\sAUTHORS,\sreduced\sfrom\sthe\supstream\srelease\sto\sthe\stwo\sfaces\sthe\sexamples\suse\n-\sRaster\simages\scovering\sthe\sJPEG\sgrey,\sJPEG\scolour,\sPNG\spalette\sand\sPNG\salpha\spaths,\splus\san\sSVG\sfor\sthe\sdeferred\sstage\s6\n-\sZUGFeRD\sinvoice\sXML\sin\sthe\sMINIMUM\sand\sEN16931\sprofiles,\srenamed\safter\stheir\sprofile\sidentifier\n-\sBoth\sREADMEs\srecord\sorigin,\slicence\sand\sthe\smeasured\sproperties\sof\severy\sfile,\sand\sthe\srule\sfor\sadding\sone\n-\sThe\stwo\sXML\sfiles\scome\swith\sno\slicence\sin\sthe\sFeRD\sdistribution\sand\sare\skept\sout\sof\sthe\srelease\sarchive\suntil\sthat\sis\ssettled
-D 2026-08-08T21:53:44.520
+C Install\sand\sship\sthe\ssRGB\soutput\sintent\sprofile\n\n-\stools/install.tcl\saccepts\sdirectory\sarguments\sand\scopies\sthem\srecursively,\skeeping\sthe\sdirectory\sname\n-\smake\sinstall\snow\sinstalls\sicc/\sinto\sthe\spackage\sdirectory\n-\stools/archive.sh\scopies\sicc/\sinto\sthe\sbinary\sarchive\sas\swell
+D 2026-08-08T22:01:39.017
 F ANNOUNCE 928c6b0a9d5a269cc176fc1910fe3c4e05bdeff1d982a5c16806f80a393b1039
-F Makefile.in 12bd0b0583fe861482a0e2ed03f0dc8e80c3e4d43505d4149286162536e491c0
+F Makefile.in aeba9976d10215bfc165e67ff0f0055096a9a8cf67f1f6ea2cfbf3f6d5cd841e
 F README a1946c0a300dfbed86aa0f36bc5a9762f436eb92771c234872cb19fe1540d566
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F configure 63c2cd2fe1c1c8d170edb69133c0ac0c246e182bb7d94b0406c4c7c4d4b29866 x
@@ -32,12 +32,12 @@ F tclpdf.tcl ff0385dda4d9859dc2783d7f8a6668ee1093259ece8b5424262ce285386494cd
 F tests/all.tcl 0e8da3e84bc5259d359baa9f5790a09759b02ef36c927060b902c8dd4447bd47
 F tests/version.test ed19f23fb4b14f90d36229a5cf343ff8a88e577c8d9e01fccc44f0ba848290f2
 F tools/BUILD-PACKAGE.md a27597d3de55b653d4c52b9f0eb7765b1d1ccceaf9f3270d8987f62a64b57c98
-F tools/archive.sh a315c17c2c654c276d49abe2d304e59ecfee47b3ecdfb77bbd902b74773e178b x
-F tools/install.tcl b16145abf0e2259217f5ac0fc404b0fdc5c12a5f570c51a1cf421ee3c990a786
+F tools/archive.sh 54b9accb20720cd52fb7eeb899355209b1a381845d87218d3d837a7d724b120f x
+F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
 F tools/mkversion.tcl a97244b2b89d5672c1a604ef68f68bce63eff11980b25b5c7fb9b4d670d5c8d8
 F uv/template-download.html cf432183e2348e0963f527b4a93aaaf9da116f843a0f343860a23184123982fe
-P a4f1e086dd9a9da45136bc61052c5cff8e087fb3d9986ad5fa15136d8b7a79fd
-R 0ce0fabc9f005385648da8d945547eb3
+P b82768e52e628d19400e94ca726828dffc59538d791c543476d64a12768c0746
+R d5cb540cd72d32f5846fbaa5dd16f179
 U alex
-Z 906eca98a033ee396d3b462ef5ad710a
+Z cbd6c84d2f99b140c1d5a0176866d8d6
 # Remove this line to create a well-formed Fossil manifest.

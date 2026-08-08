@@ -105,9 +105,15 @@ doc: havepandoc doc/$(PACKAGE_NAME).html doc/$(PACKAGE_NAME).n
 
 all: havepandoc manifest.txt doc/$(PACKAGE_NAME).html doc/$(PACKAGE_NAME).n
 
+# icc/ is a DIRECTORY argument and keeps its name: the package looks for the
+# output intent profile at [file join $dir icc sRGB.icc]. It is installed
+# because it is a runtime part - its bytes end up inside every PDF/A document.
+# examples/ is deliberately NOT installed; it is documentation and travels in
+# the source archive only.
 install: all
 	$(TCLSH) `@CYGPATH@ $(srcdir)/tools/install.tcl` $(PKG_TCL_SOURCES:%=$(srcdir)/%) \
-		manifest.txt pkgIndex.tcl $(srcdir)/license.terms $(DESTDIR)$(pkglibdir)
+		manifest.txt pkgIndex.tcl $(srcdir)/license.terms $(srcdir)/icc \
+		$(DESTDIR)$(pkglibdir)
 
 test:
 	$(TCLSH) `@CYGPATH@ $(srcdir)/tests/all.tcl` $(TESTFLAGS) \
