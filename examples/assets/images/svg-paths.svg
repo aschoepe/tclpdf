@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" width="200" height="280">
+  <rect x="0" y="0" width="200" height="280" fill="#ffffff"/>
+  <text x="100" y="9" font-family="Helvetica" font-size="6" text-anchor="middle" fill="#000000">Path commands, absolute and relative</text>
+
+  <g font-family="Helvetica" font-size="3.4" fill="#000000" text-anchor="middle">
+    <g transform="translate(4,16)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 28 L 20 8 M 25 8 L 40 28" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">M: two strokes, gap</text>
+    </g>
+    <g transform="translate(53,16)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 28 l 16 -20 m 5 0 l 15 20" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">m: same, relative</text>
+    </g>
+    <g transform="translate(102,16)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 30 L 12 8 L 22 26 L 32 6 L 40 30" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">L: zigzag, 4 legs</text>
+    </g>
+    <g transform="translate(151,16)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 30 l 8 -22 l 10 18 l 10 -20 l 8 24" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">l: same, relative</text>
+    </g>
+
+    <g transform="translate(4,68)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 8 H 40 M 4 18 H 28 M 4 28 H 16" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">H: bars, long to short</text>
+    </g>
+    <g transform="translate(53,68)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 8 h 36 M 4 18 h 24 M 4 28 h 12" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">h: same, relative</text>
+    </g>
+    <g transform="translate(102,68)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 8 4 V 32 M 18 4 V 22 M 28 4 V 12" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">V: posts, long to short</text>
+    </g>
+    <g transform="translate(151,68)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 8 4 v 28 M 18 4 v 18 M 28 4 v 8" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">v: same, relative</text>
+    </g>
+
+    <g transform="translate(4,120)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 28 C 4 4 40 4 40 28" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">C: arch, opens down</text>
+    </g>
+    <g transform="translate(53,120)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 28 c 0 -24 36 -24 36 0" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">c: same, relative</text>
+    </g>
+    <g transform="translate(102,120)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 14 C 8 2 14 2 18 14 S 30 26 34 14" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <path d="M 4 30 L 14 30 S 24 18 34 30" fill="none" stroke="#c02020" stroke-width="1.2"/>
+      <text x="22.5" y="41">S blue: after C, wave</text>
+      <text x="22.5" y="45">S red: after L, one hump</text>
+    </g>
+    <g transform="translate(151,120)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 14 c 4 -12 10 -12 14 0 s 12 12 16 0" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <path d="M 4 30 l 10 0 s 10 -12 20 0" fill="none" stroke="#c02020" stroke-width="1.2"/>
+      <text x="22.5" y="41">s: same two shapes,</text>
+      <text x="22.5" y="45">relative</text>
+    </g>
+
+    <g transform="translate(4,172)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 28 Q 22 0 40 28" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">Q: one peak</text>
+    </g>
+    <g transform="translate(53,172)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 28 q 18 -28 36 0" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">q: same, relative</text>
+    </g>
+    <g transform="translate(102,172)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 14 Q 10 2 16 14 T 28 14" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <path d="M 4 30 L 14 30 T 30 30" fill="none" stroke="#c02020" stroke-width="1.2"/>
+      <text x="22.5" y="41">T blue: after Q, wave</text>
+      <text x="22.5" y="45">T red: after L, straight</text>
+    </g>
+    <g transform="translate(151,172)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 4 14 q 6 -12 12 0 t 12 0" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <path d="M 4 30 l 10 0 t 16 0" fill="none" stroke="#c02020" stroke-width="1.2"/>
+      <text x="22.5" y="41">t: same two shapes,</text>
+      <text x="22.5" y="45">relative</text>
+    </g>
+
+    <g transform="translate(4,224)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 6 28 A 17 17 0 0 1 40 28" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">A: half circle above</text>
+    </g>
+    <g transform="translate(53,224)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 6 28 a 17 17 0 0 1 34 0" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">a: same, relative</text>
+    </g>
+    <g transform="translate(102,224)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 8 6 L 38 6 L 23 30 Z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">Z: closed triangle</text>
+    </g>
+    <g transform="translate(151,224)">
+      <rect x="0" y="0" width="45" height="36" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 8 6 l 30 0 l -15 24 z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="1.2"/>
+      <text x="22.5" y="42">z: same, relative</text>
+    </g>
+  </g>
+</svg>

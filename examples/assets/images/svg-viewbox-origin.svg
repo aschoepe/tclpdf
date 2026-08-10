@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 200 100" width="200" height="100">
+  <rect x="-50" y="-50" width="200" height="100" fill="#ffffff"/>
+  <rect x="-49" y="-49" width="198" height="98" fill="none" stroke="#c02020" stroke-width="2"/>
+  <circle cx="0" cy="0" r="49" fill="none" stroke="#1a3fa0" stroke-width="2"/>
+  <rect x="60" y="-25" width="50" height="50" fill="none" stroke="#1a7f37" stroke-width="2"/>
+  <line x1="-8" y1="0" x2="8" y2="0" stroke="#000000" stroke-width="1"/>
+  <line x1="0" y1="-8" x2="0" y2="8" stroke="#000000" stroke-width="1"/>
+  <g font-family="Helvetica" font-size="5" fill="#000000">
+    <text x="50" y="-36" text-anchor="middle">viewBox -50 -50 200 100</text>
+    <text x="4" y="-12">origin 0,0 - one quarter in, half way down</text>
+    <text x="50" y="42" text-anchor="middle">blue circle and green square must not be distorted</text>
+  </g>
+</svg>

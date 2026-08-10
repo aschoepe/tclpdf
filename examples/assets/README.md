@@ -10,7 +10,7 @@ themselves. What a file is named is not evidence of what it contains, and an
 example that quietly demonstrates the wrong thing is worse than none.
 
 ```
-fonts/     one family, two weights, to embed and subset      (stage 2)
+fonts/     four families, five faces, plus their licences    (stage 2)
 images/    JPEG and PNG covering each code path, plus SVG    (stages 3 and 6)
 xml/       two ZUGFeRD profiles, to attach and to detect     (stage 5)
 ```
@@ -18,38 +18,103 @@ xml/       two ZUGFeRD profiles, to attach and to detect     (stage 5)
 The sRGB ICC profile does **not** belong here. It is not example data but part
 of the package — it goes to `icc/` at the top level and is installed with it.
 
+## None of this ships with the package
+
+Everything in this directory exists so that the **tests and the examples** have
+something to work on. It is not part of tclpdf and is not delivered with it —
+verified against the build, not assumed:
+
+| | fonts and other assets |
+| --- | --- |
+| `make install` | **not installed** — only the `.tcl` modules, `pkgIndex.tcl`, `license.terms` and `icc/` |
+| `tclpdf<version>.zip`, `.tar.gz` | **not contained** — measured, zero font files |
+| `tclpdf<version>-src.tar.gz` | contained, with the licence texts beside them |
+
+That distinction is what keeps the licensing simple. **tclpdf is MIT; the fonts
+are not.** They are third-party work under their own terms, they carry those
+terms with them in `fonts/licenses/`, and they reach nobody who merely installs
+the package. A font only becomes the user's licensing question when the user
+embeds one of their own — which is why tclpdf reads `fsType` and reports it.
+
+**Adding an asset means checking that side too:** an example is worth nothing
+if the file it needs may not be redistributed. The two ZUGFeRD invoices below
+are the standing example of how to answer that — the terms turned out to be
+inside the files themselves, so they travel in the source archive like
+everything else here.
+
 ---
 
-## fonts/ — 1.4 MB
+## fonts/ — 1.9 MB
 
-DejaVu, reduced from the 22 faces of the release to the two an example needs:
-a regular and a bold of the same family. That pair is what a real document
-uses — a heading in bold, the body in regular — and it is what shows that
-subsetting keeps two faces apart.
+Four families, one face each except DejaVu, which keeps a bold as well. Flat,
+because every example wants a short path, with the licences in `licenses/`
+named after the family they belong to — the OFL requires the text to travel
+with the fonts, and a folder of five files named `OFL.txt` would not say which
+is which.
 
-| File | Size | `fsType` | Meaning |
-| --- | --- | --- | --- |
-| `DejaVuSans.ttf` | 757 076 B | **0** | Installable — no restriction on embedding |
-| `DejaVuSans-Bold.ttf` | 705 684 B | **0** | Installable — no restriction on embedding |
-| `LICENSE` | 8 816 B | — | required, see below |
-| `AUTHORS` | 842 B | — | required, see below |
+Every family here was **read**, not assumed: `fsType`, the glyph count and the
+character coverage come out of the files.
 
-**Origin:** <https://github.com/dejavu-fonts/dejavu-fonts/releases>
+| File | Size | Glyphs | Chars | `fsType` | What it is for |
+| --- | --- | --- | --- | --- | --- |
+| `DejaVuSans.ttf` | 757 076 B | 6 253 | 5 918 | **0** | the workhorse — the only one here that covers Greek and Cyrillic |
+| `DejaVuSans-Bold.ttf` | 705 684 B | 6 196 | 5 898 | **0** | its bold, so an example can show two faces staying apart |
+| `Roboto-Regular.ttf` | 159 108 B | 1 326 | 927 | **0** | a plain text face, the counter-example to DejaVu's bulk |
+| `BitcountPropSingle-Regular.ttf` | 331 076 B | 1 938 | 396 | **0** | a display face built from dots — visibly not a text font |
+| `Niconne-Regular.ttf` | 42 056 B | 286 | 283 | **0** | a script face, and the one with **gaps**: no `č`, no `ą`, no Cyrillic |
 
-**Licence:** Bitstream Vera Fonts Copyright (c) 2003 Bitstream, Inc., plus the
-Arev glyphs (c) Tavmjong Bah; the DejaVu changes themselves are public domain.
-The licence permits redistribution as part of a larger software package, which
-is exactly this case — but it requires the copyright notices to travel along,
-which is why `LICENSE` and `AUTHORS` stay here and must not be tidied away.
+`fsType 0` means installable, no restriction on embedding. No validator
+enforces the field and no reader checks it — the responsibility sits with
+whoever adds the file. tclpdf reads and reports it (stage 2) but does not
+refuse on it.
 
-**Why `fsType` is recorded here:** it is the field in which the vendor states
-what embedding is permitted, and `0` means unrestricted. No validator enforces
-it and no PDF reader checks it — the responsibility sits with whoever adds the
-file. tclpdf reads and reports the flag (stage 2) but does not refuse on it.
+### Where they come from and under what terms
 
-Dropped from the release: the Serif, Mono, Condensed and ExtraLight faces, the
-oblique variants, `DejaVuMathTeXGyre.ttf`, the fontconfig snippets and the
-coverage tables. Together 8.4 MB that no example needs.
+| Family | Origin | Licence |
+| --- | --- | --- |
+| DejaVu | <https://github.com/dejavu-fonts/dejavu-fonts/releases> | Bitstream Vera (c) 2003 Bitstream Inc., Arev glyphs (c) Tavmjong Bah, DejaVu's own changes public domain |
+| Roboto | Google Fonts, `googlefonts/roboto-classic` | **OFL 1.1**, (c) 2011 The Roboto Project Authors — no reserved font name |
+| Bitcount Prop Single | Google Fonts, `petrvanblokland/TYPETR-Bitcount` | **OFL 1.1**, (c) 1980 The Bitcount Project Authors — no reserved font name |
+| Niconne | Google Fonts | **OFL 1.1**, (c) 2011 Vernon Adams — **reserved font name**, written `Nicone` in the file |
+
+All four permit redistribution as part of a larger package, which is this
+case, and all four require the notices to travel along. That is what
+`licenses/` is for, and it must not be tidied away.
+
+> **Niconne's reserved font name — settled 2026-08-10.** A subset is strictly
+> speaking a modification, and the OFL forbids a modified version from carrying
+> the reserved name. The six-letter prefix a PDF puts in front of every subset
+> is the customary marking for exactly that, and tclpdf writes it: read out of
+> `02.04-missing-glyphs.pdf`, the `/BaseFont` is `ZGNUBI+Niconne-Regular`. The
+> face is redistributed here unmodified, with its licence beside it. That is
+> the author's decision, and it is recorded rather than re-argued.
+>
+> Noticed while checking: the six-letter tag is derived from the font NAME, not
+> from the glyph set (`font.tcl`, `FontBaseName`), so two documents carrying
+> different subsets of the same face get the same tag. That is deliberate —
+> the same input has to give the same bytes — but ISO 32000-1 9.9.2 intends
+> the tag to tell subsets apart. Worth a decision of its own some day; it does
+> not touch the licensing question above.
+
+### What was dropped, and why
+
+From DejaVu: the Serif, Mono, Condensed and ExtraLight faces, the obliques,
+`DejaVuMathTeXGyre.ttf` and the fontconfig snippets — 8.4 MB no example needs.
+
+From the three Google packages: the `static/` folders (54 faces for Roboto, 27
+for Bitcount) and the **variable font files**. That took the folder from 20 MB
+back to 1.9 MB, and the source archive from 8.2 MB back to about 1.5 MB.
+
+> **Why the variable fonts went:** PDF has nowhere to put an axis coordinate —
+> no entry in the font dictionary, none in the descriptor. Embedding
+> `Roboto-VariableFont_wdth,wght.ttf` therefore yields the default instance and
+> nothing else, at the price of a 298 KB `gvar` table that no reader can use.
+> Measured on Bitcount, that default is not even one of the shipped styles: its
+> `CRSV` axis defaults to **0.5** while all 18 named instances sit at 0 or 1,
+> so the outlines of `a` differ from *every* static file including Regular.
+> Supporting variable fonts means instancing them at embed time — reading
+> `gvar` and interpolating, including untouched points. That is a stage of its
+> own, and it is not this one.
 
 > Measured in passing: `DejaVuMathTeXGyre.ttf` carries **`fsType=12`**, which
 > sets the "preview and print" and "editable" bits at the same time — a
@@ -101,9 +166,22 @@ profile from with a single `regexp`, without needing an XML parser.
 `Beispiele/3. EN16931/E02_2_Teilrechnung/`, renamed here after their profile
 because the original names say nothing about what distinguishes them.
 
-**Licence: not yet established** — see `docs/TODO.md`. The FeRD distribution
-carries no licence file next to the examples. Until that is settled these two
-files must not go into a release archive.
+**Licence: settled, and it travels inside the files.** There is no licence file
+beside the examples in the FeRD distribution because there does not need to be:
+each invoice carries the FeRD terms as an XML comment in its own head —
+measured, **5 708 of the 7 929 bytes** in the MINIMUM file, 72 per cent of it.
+Those terms grant free, irrevocable use of the data format including
+redistribution, further development and commercial products.
+
+**The block must not be stripped.** It is what makes these files
+redistributable, and tclpdf embeds the XML byte for byte, so it reaches every
+PDF built from them. When writing your OWN invoices, do not reproduce it: it
+belongs to the sample file, not to the format, no schema asks for it, and at a
+MINIMUM profile it would be most of the document.
+
+The version in each head is the one the sample was cut from — `2.4.0` for
+MINIMUM and `2.5.0` for EN 16931 — not the `2.5.2` of the distribution they
+ship in.
 
 The XML is read and embedded **byte for byte**. A silent line-ending
 conversion in an attachment is something no validator reports — measured on the

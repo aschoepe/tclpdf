@@ -83,6 +83,37 @@ INSTALLING
     which installs the package into /path/to/tree/lib/tclpdf<version>.
 
 
+LICENCE, AND WHY NO FONT IS PART OF IT
+
+    tclpdf itself is MIT - see the file license.terms. That covers everything
+    the package installs: the Tcl modules, pkgIndex.tcl and the sRGB ICC
+    profile in icc/, which is a runtime part because its bytes end up inside
+    every PDF/A document.
+
+    NO FONT IS PART OF THE PACKAGE. The faces under examples/assets/fonts are
+    there so that the tests and the examples have something to embed, and they
+    travel in the source archive alone:
+
+        make install                    installs no font
+        tclpdf<version>.zip, .tar.gz    contain no font
+        tclpdf<version>-src.tar.gz      carries them, with their licences
+
+    They are third-party work under their own terms: DejaVu under the
+    Bitstream Vera licence, and Roboto, Bitcount Prop Single and Niconne under
+    the SIL Open Font License 1.1. The full texts sit beside them in
+    examples/assets/fonts/licenses/, each named after the family it belongs
+    to, and they have to travel with any copy of those files. The inventory in
+    examples/assets/README.md records for every face where it came from, under
+    what terms, and what its embedding flag says.
+
+    Whether you may embed a font into a PDF that tclpdf writes is a question
+    for THAT font's licence, not for this one. All four here allow it without
+    restriction; a face you add yourself may not, and tclpdf will not stop you
+    - it reads the fsType flag and reports it, but does not refuse on it,
+    because no validator and no reader enforces it either and a package that
+    silently declined a licensed face would be the more damaging mistake.
+
+
 REPORTING BUGS
 
     Please head to https://fossil.sowaswie.de/tclpdf/ticket and

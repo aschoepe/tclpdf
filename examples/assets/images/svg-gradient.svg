@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" width="200" height="280">
+  <rect x="0" y="0" width="200" height="280" fill="#ffffff"/>
+  <text x="100" y="9" font-family="Helvetica" font-size="6" text-anchor="middle" fill="#000000">Gradients</text>
+
+  <defs>
+    <linearGradient id="gHoriz" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#1a3fa0"/>
+    </linearGradient>
+    <linearGradient id="gVert" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#1a3fa0"/>
+    </linearGradient>
+    <linearGradient id="gDiag" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#1a3fa0"/>
+    </linearGradient>
+    <linearGradient id="gThree" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c02020"/>
+      <stop offset="0.5" stop-color="#f0d000"/>
+      <stop offset="1" stop-color="#1a7f37"/>
+    </linearGradient>
+    <radialGradient id="gRadial" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#1a3fa0"/>
+    </radialGradient>
+    <linearGradient id="gShared" gradientUnits="userSpaceOnUse" x1="20" y1="0" x2="180" y2="0">
+      <stop offset="0" stop-color="#c02020"/>
+      <stop offset="1" stop-color="#1a3fa0"/>
+    </linearGradient>
+    <linearGradient id="gFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1a3fa0" stop-opacity="1"/>
+      <stop offset="1" stop-color="#1a3fa0" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <text x="100" y="18" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Two stops, white to blue - only the direction differs</text>
+
+  <g transform="translate(4,22)">
+    <rect x="0" y="0" width="60" height="40" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+    <path d="M 12 6 H 56 V 18 H 30 V 34 H 12 Z" fill="url(#gHoriz)" stroke="#606060" stroke-width="0.4"/>
+    <text x="30" y="46" font-family="Helvetica" font-size="3.2" text-anchor="middle" fill="#000000">white left, blue right</text>
+  </g>
+  <g transform="translate(70,22)">
+    <rect x="0" y="0" width="60" height="40" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+    <path d="M 12 6 H 56 V 18 H 30 V 34 H 12 Z" fill="url(#gVert)" stroke="#606060" stroke-width="0.4"/>
+    <text x="30" y="46" font-family="Helvetica" font-size="3.2" text-anchor="middle" fill="#000000">white top, blue bottom</text>
+  </g>
+  <g transform="translate(136,22)">
+    <rect x="0" y="0" width="60" height="40" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+    <path d="M 12 6 H 56 V 18 H 30 V 34 H 12 Z" fill="url(#gDiag)" stroke="#606060" stroke-width="0.4"/>
+    <text x="30" y="46" font-family="Helvetica" font-size="3.2" text-anchor="middle" fill="#000000">white top left, blue bottom right</text>
+  </g>
+
+  <text x="100" y="80" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Three stops, and a radial gradient</text>
+
+  <g transform="translate(4,84)">
+    <rect x="0" y="0" width="94" height="46" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+    <path d="M 14 8 L 88 8 L 74 38 L 6 38 Z" fill="url(#gThree)" stroke="#606060" stroke-width="0.4"/>
+    <text x="47" y="44" font-family="Helvetica" font-size="3.2" text-anchor="middle" fill="#000000">red left, yellow in the middle, green right</text>
+  </g>
+  <g transform="translate(102,84)">
+    <rect x="0" y="0" width="94" height="46" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+    <path d="M 14 8 L 88 8 L 74 38 L 6 38 Z" fill="url(#gRadial)" stroke="#606060" stroke-width="0.4"/>
+    <text x="47" y="44" font-family="Helvetica" font-size="3.2" text-anchor="middle" fill="#000000">white centre, blue towards the rim</text>
+  </g>
+
+  <text x="100" y="146" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">One gradient in user space across two separate shapes</text>
+
+  <rect x="4" y="150" width="192" height="52" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <path d="M 30 158 L 84 158 L 70 186 L 16 186 Z" fill="url(#gShared)" stroke="#606060" stroke-width="0.4"/>
+  <path d="M 130 158 L 184 158 L 170 186 L 116 186 Z" fill="url(#gShared)" stroke="#606060" stroke-width="0.4"/>
+  <text x="100" y="198" font-family="Helvetica" font-size="3.2" text-anchor="middle" fill="#000000">left shape reddish throughout, right shape blueish - the run continues across the gap</text>
+
+  <text x="100" y="214" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">stop-opacity</text>
+
+  <rect x="4" y="218" width="192" height="46" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <path d="M 40 224 L 160 224 L 140 254 L 20 254 Z" fill="url(#gFade)" stroke="#606060" stroke-width="0.4"/>
+  <text x="100" y="262" font-family="Helvetica" font-size="3.2" text-anchor="middle" fill="#000000">blue on the left fading to nothing on the right - currently drawn fully opaque</text>
+</svg>

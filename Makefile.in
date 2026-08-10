@@ -119,6 +119,28 @@ test:
 	$(TCLSH) `@CYGPATH@ $(srcdir)/tests/all.tcl` $(TESTFLAGS) \
 	  -load "package ifneeded ${PACKAGE_NAME} ${PACKAGE_VERSION} [list source [file join `@CYGPATH@ $(srcdir)` $(PACKAGE_NAME).tcl]]"
 
+# Run every example and collect the documents in examples/out. Deliberately not
+# part of "all": it writes files nothing else needs, and it is the one target
+# whose worth lies in LOOKING at the result. Eighteen scripts produce twenty
+# documents - the language example writes three, one per font situation, to
+# show what the standard faces cannot set and what a smaller face still can.
+#
+# Each script takes its output path as the first argument, so nothing is
+# written next to the sources. The scripts find the package through
+# auto_path relative to their own directory, which means pkgIndex.tcl has to
+# sit beside the modules - true for an in-tree build, see TODO item 1 for the
+# out-of-tree case.
+examples: pkgIndex.tcl
+	-rm -rf examples/out
+	@mkdir -p examples/out
+	@for script in $(srcdir)/examples/[0-9]*.tcl ; do \
+	  name=`basename $$script .tcl` ; \
+	  echo "== $$name" ; \
+	  $(TCLSH) `@CYGPATH@ $$script` examples/out/$$name.pdf || exit 1 ; \
+	done
+	@echo ""
+	@echo "`ls examples/out | wc -l | tr -d ' '` documents in examples/out"
+
 archive: manifest.txt pkgIndex.tcl
 	sh $(srcdir)/tools/archive.sh @PACKAGE_NAME@ @PACKAGE_VERSION@ $(PKG_TCL_SOURCES) manifest.txt
 
@@ -144,10 +166,11 @@ clean:
 	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
 	-rm -rf doc/$(PACKAGE_NAME).html doc/$(PACKAGE_NAME).n
 	-rm -f uv/$(PACKAGE_NAME)*.zip uv/$(PACKAGE_NAME)*.tar.gz uv/download.html
+	-rm -rf examples/out
 
 distclean: clean
 	-rm -f $(CONFIG_CLEAN_FILES)
 	-rm -rf autom4te.cache
 	-rm -f config.cache config.log config.status configure~
 
-.PHONY: install test archive release publish clean distclean
+.PHONY: install test examples archive release publish clean distclean

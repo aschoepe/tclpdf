@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" width="200" height="280">
+  <rect x="0" y="0" width="200" height="280" fill="#ffffff"/>
+  <text x="100" y="9" font-family="Helvetica" font-size="6" text-anchor="middle" fill="#000000">Inheritance and style</text>
+
+  <text x="100" y="18" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Group sets green fill and red stroke - children override step by step</text>
+
+  <g fill="#1a7f37" stroke="#c02020" stroke-width="1.6">
+    <circle cx="24" cy="34" r="11"/>
+    <g fill="#d07a00">
+      <circle cx="76" cy="34" r="11"/>
+      <circle cx="128" cy="34" r="11" fill="#1a3fa0"/>
+      <circle cx="176" cy="34" r="11" stroke="#000000" stroke-dasharray="3 2"/>
+    </g>
+  </g>
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="24" y="50">green, solid red ring</text>
+    <text x="76" y="50">orange, solid red ring</text>
+    <text x="128" y="50">blue, solid red ring</text>
+    <text x="176" y="50">orange, dashed black ring</text>
+  </g>
+
+  <text x="100" y="64" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Group sets round caps and round joins - children override them</text>
+
+  <g fill="none" stroke="#1a3fa0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 12 92 L 24 72 L 36 92"/>
+    <g stroke-linecap="butt" stroke-linejoin="miter">
+      <path d="M 64 92 L 76 72 L 88 92"/>
+    </g>
+    <g stroke-linejoin="bevel" stroke-linecap="square">
+      <path d="M 116 92 L 128 72 L 140 92"/>
+    </g>
+    <g stroke-dasharray="6 3">
+      <path d="M 164 92 L 176 72 L 188 92"/>
+    </g>
+  </g>
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="24" y="99">round tip, round ends</text>
+    <text x="76" y="99">sharp tip, cut ends</text>
+    <text x="128" y="99">flat tip, ends stick out</text>
+    <text x="176" y="99">dashed, round tip kept</text>
+  </g>
+
+  <text x="100" y="113" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Group opacity against per shape fill-opacity</text>
+
+  <g opacity="0.5" fill="#1a3fa0">
+    <rect x="16" y="120" width="34" height="24"/>
+    <rect x="36" y="128" width="34" height="24"/>
+  </g>
+  <g fill="#1a3fa0" fill-opacity="0.5">
+    <rect x="120" y="120" width="34" height="24"/>
+    <rect x="140" y="128" width="34" height="24"/>
+  </g>
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="50" y="152">group opacity: overlap must NOT be darker</text>
+    <text x="150" y="152">fill-opacity per shape: overlap IS darker</text>
+  </g>
+
+  <text x="100" y="166" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">fill-rule is inherited too</text>
+
+  <g fill-rule="evenodd" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="0.9">
+    <g transform="translate(20,170) scale(1.4)">
+      <polygon points="22,3 29.05,24.71 10.59,11.29 33.41,11.29 14.95,24.71"/>
+    </g>
+    <g fill-rule="nonzero">
+      <g transform="translate(120,170) scale(1.4)">
+        <polygon points="22,3 29.05,24.71 10.59,11.29 33.41,11.29 14.95,24.71"/>
+      </g>
+    </g>
+  </g>
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="55" y="212">inherited evenodd: middle white</text>
+    <text x="155" y="212">overridden nonzero: middle filled</text>
+  </g>
+
+  <text x="100" y="226" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Presentation attribute against style - the last one wins</text>
+
+  <rect x="8" y="230" width="34" height="18" fill="#1a7f37" stroke="#000000" stroke-width="0.6"/>
+  <rect x="50" y="230" width="34" height="18" style="fill:#1a7f37" stroke="#000000" stroke-width="0.6"/>
+  <rect x="92" y="230" width="34" height="18" fill="#d07a00" stroke="#1a3fa0" stroke-width="3"/>
+  <rect x="134" y="230" width="34" height="18" style="fill:#d07a00;stroke:#1a3fa0;stroke-width:3"/>
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="25" y="253">attribute: green</text>
+    <text x="67" y="253">style: green, same</text>
+    <text x="109" y="253">attribute: orange, blue ring</text>
+    <text x="151" y="253">style: orange, blue ring</text>
+  </g>
+
+  <rect x="30" y="258" width="40" height="14" fill="#c02020" style="fill:#1a7f37" stroke="#000000" stroke-width="0.6"/>
+  <g style="fill:#c02020">
+    <rect x="130" y="258" width="40" height="14" fill="#1a7f37" stroke="#000000" stroke-width="0.6"/>
+  </g>
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="50" y="277">attribute red, style green on the same rect: green</text>
+    <text x="150" y="277">group style red, own attribute green: green</text>
+  </g>
+</svg>

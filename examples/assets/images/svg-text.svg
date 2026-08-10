@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" width="200" height="280">
+  <rect x="0" y="0" width="200" height="280" fill="#ffffff"/>
+  <text x="100" y="9" font-family="Helvetica" font-size="6" text-anchor="middle" fill="#000000">Text</text>
+
+  <text x="100" y="18" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">All three lines start at x = 100, the red line marks that x</text>
+
+  <rect x="4" y="22" width="192" height="46" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <line x1="100" y1="24" x2="100" y2="66" stroke="#c02020" stroke-width="0.6"/>
+  <text x="100" y="34" font-family="Helvetica" font-size="6" text-anchor="start" fill="#000000">anchor start</text>
+  <text x="100" y="48" font-family="Helvetica" font-size="6" text-anchor="middle" fill="#000000">anchor middle</text>
+  <text x="100" y="62" font-family="Helvetica" font-size="6" text-anchor="end" fill="#000000">anchor end</text>
+  <g font-family="Helvetica" font-size="3" fill="#606060">
+    <text x="6" y="34">right of the line</text>
+    <text x="6" y="48">centred on the line</text>
+    <text x="6" y="62">left of the line</text>
+  </g>
+
+  <text x="100" y="78" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Font sizes - each line states its own size</text>
+
+  <rect x="4" y="82" width="192" height="42" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <text x="10" y="92" font-family="Helvetica" font-size="4" fill="#000000">this line is 4 units tall</text>
+  <text x="10" y="104" font-family="Helvetica" font-size="8" fill="#000000">this line is 8 units</text>
+  <text x="10" y="120" font-family="Helvetica" font-size="12" fill="#000000">this one 12</text>
+
+  <text x="100" y="134" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">First family name does not exist - both lines must look the same</text>
+
+  <rect x="4" y="138" width="192" height="30" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <text x="10" y="150" font-family="Nonexistent Face, Helvetica" font-size="7" fill="#000000">fallback: Hamburgefonstiv</text>
+  <text x="10" y="163" font-family="Helvetica" font-size="7" fill="#000000">plain: Hamburgefonstiv</text>
+
+  <text x="100" y="178" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">tspan children - colour, shift and back to the baseline</text>
+
+  <rect x="4" y="182" width="192" height="26" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <text x="10" y="196" font-family="Helvetica" font-size="7" fill="#000000">base <tspan fill="#c02020">red</tspan> <tspan dy="-4" fill="#1a3fa0">up</tspan><tspan dy="4" fill="#000000"> down again</tspan></text>
+  <text x="10" y="205" font-family="Helvetica" font-size="3" fill="#606060">four pieces, only the third one raised</text>
+
+  <text x="100" y="218" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Encoding - these characters must survive</text>
+
+  <rect x="4" y="222" width="192" height="26" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <text x="10" y="236" font-family="Helvetica" font-size="7" fill="#000000">Größe · Öl · Ähre · Übung · 12,50 €</text>
+  <text x="10" y="245" font-family="Helvetica" font-size="3" fill="#606060">a with two dots, o with two dots, u with two dots, sharp s, middle dot, euro sign</text>
+
+  <text x="100" y="258" font-family="Helvetica" font-size="4.2" text-anchor="middle" fill="#000000">Text must not be flipped with the y axis</text>
+
+  <rect x="4" y="262" width="192" height="16" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+  <polygon points="14,266 20,276 8,276" fill="#c02020"/>
+  <text x="26" y="274" font-family="Helvetica" font-size="8" fill="#000000">bpqd TOP - reads left to right</text>
+</svg>

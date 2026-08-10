@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" width="200" height="280">
+  <rect x="0" y="0" width="200" height="280" fill="#ffffff"/>
+  <text x="100" y="9" font-family="Helvetica" font-size="6" text-anchor="middle" fill="#000000">Elliptical arcs</text>
+
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="100" y="17" font-size="4.2">Same start and end point, all four flag pairs - all four must differ</text>
+
+    <g transform="translate(4,20)">
+      <rect x="0" y="0" width="45" height="42" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 12 30 A 13 13 0 0 0 32 16" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="12" cy="30" r="1.2" fill="#c02020"/>
+      <circle cx="32" cy="16" r="1.2" fill="#000000"/>
+      <text x="22.5" y="48">large 0, sweep 0</text>
+    </g>
+    <g transform="translate(53,20)">
+      <rect x="0" y="0" width="45" height="42" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 12 30 A 13 13 0 0 1 32 16" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="12" cy="30" r="1.2" fill="#c02020"/>
+      <circle cx="32" cy="16" r="1.2" fill="#000000"/>
+      <text x="22.5" y="48">large 0, sweep 1</text>
+    </g>
+    <g transform="translate(102,20)">
+      <rect x="0" y="0" width="45" height="42" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 12 30 A 13 13 0 1 0 32 16" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="12" cy="30" r="1.2" fill="#c02020"/>
+      <circle cx="32" cy="16" r="1.2" fill="#000000"/>
+      <text x="22.5" y="48">large 1, sweep 0</text>
+    </g>
+    <g transform="translate(151,20)">
+      <rect x="0" y="0" width="45" height="42" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 12 30 A 13 13 0 1 1 32 16" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="12" cy="30" r="1.2" fill="#c02020"/>
+      <circle cx="32" cy="16" r="1.2" fill="#000000"/>
+      <text x="22.5" y="48">large 1, sweep 1</text>
+    </g>
+
+    <text x="100" y="80" font-size="4.2">x-axis-rotation - the ellipse tilts, the end points stay put</text>
+
+    <g transform="translate(4,84)">
+      <rect x="0" y="0" width="94" height="42" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 34 32 A 20 14 0 0 1 54 22" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="34" cy="32" r="1.2" fill="#c02020"/>
+      <circle cx="54" cy="22" r="1.2" fill="#000000"/>
+      <text x="47" y="48">rotation 0</text>
+    </g>
+    <g transform="translate(102,84)">
+      <rect x="0" y="0" width="94" height="42" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 34 32 A 20 14 45 0 1 54 22" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="34" cy="32" r="1.2" fill="#c02020"/>
+      <circle cx="54" cy="22" r="1.2" fill="#000000"/>
+      <text x="47" y="48">rotation 45 - flatter, bulge moves</text>
+    </g>
+
+    <text x="100" y="144" font-size="4.2">Radii too small - they must be scaled up to reach the end point</text>
+
+    <g transform="translate(4,148)">
+      <rect x="0" y="0" width="192" height="52" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 30 44 A 20.8806 20.8806 0 0 1 70 32" fill="none" stroke="#9fb8e8" stroke-width="4"/>
+      <path d="M 30 44 A 6 6 0 0 1 70 32" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="30" cy="44" r="1.5" fill="#c02020"/>
+      <circle cx="70" cy="32" r="1.5" fill="#000000"/>
+      <text x="140" y="20">thick pale: radii 20.8806, the exact half chord</text>
+      <text x="140" y="26">thin blue: radii 6, far too small</text>
+      <text x="140" y="32">Both must lie on top of each other and</text>
+      <text x="140" y="38">end on the black dot. A gap there means</text>
+      <text x="140" y="44">the radii were not scaled up.</text>
+    </g>
+
+    <text x="100" y="216" font-size="4.2">Radius 0 - the arc must degenerate into a straight line</text>
+
+    <g transform="translate(4,220)">
+      <rect x="0" y="0" width="192" height="40" fill="none" stroke="#b0b0b0" stroke-width="0.3"/>
+      <path d="M 30 30 L 130 10" fill="none" stroke="#9fb8e8" stroke-width="4"/>
+      <path d="M 30 30 A 0 0 0 0 1 130 10" fill="none" stroke="#1a3fa0" stroke-width="1.2"/>
+      <circle cx="30" cy="30" r="1.5" fill="#c02020"/>
+      <circle cx="130" cy="10" r="1.5" fill="#000000"/>
+      <text x="96" y="46">thick pale is a plain L, thin blue is the arc - one single straight bar must be visible</text>
+    </g>
+  </g>
+</svg>

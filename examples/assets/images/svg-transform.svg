@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" width="200" height="280">
+  <rect x="0" y="0" width="200" height="280" fill="#ffffff"/>
+  <text x="100" y="9" font-family="Helvetica" font-size="6" text-anchor="middle" fill="#000000">Transforms on a 10 unit grid</text>
+
+  <g font-family="Helvetica" font-size="3.2" fill="#000000" text-anchor="middle">
+    <text x="100" y="17" font-size="4.2">Pale grey F: untransformed. Blue F: with the transform named below.</text>
+
+    <g transform="translate(6,24)">
+      <path d="M0 0V60M10 0V60M20 0V60M30 0V60M40 0V60M50 0V60M60 0V60M0 0H60M0 10H60M0 20H60M0 30H60M0 40H60M0 50H60M0 60H60" fill="none" stroke="#d8d8d8" stroke-width="0.3"/>
+      <text x="0" y="-1.5" font-size="2.6">0</text>
+      <text x="30" y="-1.5" font-size="2.6">30</text>
+      <text x="60" y="-1.5" font-size="2.6">60</text>
+      <g transform="translate(8,20)">
+        <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#e2e2e2" stroke="#9a9a9a" stroke-width="0.4"/>
+        <g transform="translate(16,-12)">
+          <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="0.8"/>
+        </g>
+      </g>
+      <text x="30" y="66">translate(16,-12)</text>
+    </g>
+
+    <g transform="translate(70,24)">
+      <path d="M0 0V60M10 0V60M20 0V60M30 0V60M40 0V60M50 0V60M60 0V60M0 0H60M0 10H60M0 20H60M0 30H60M0 40H60M0 50H60M0 60H60" fill="none" stroke="#d8d8d8" stroke-width="0.3"/>
+      <text x="0" y="-1.5" font-size="2.6">0</text>
+      <text x="60" y="-1.5" font-size="2.6">60</text>
+      <g transform="translate(8,20)">
+        <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#e2e2e2" stroke="#9a9a9a" stroke-width="0.4"/>
+        <g transform="scale(1.6,0.6)">
+          <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="0.8"/>
+        </g>
+      </g>
+      <text x="30" y="66">scale(1.6,0.6) - wider, flatter</text>
+    </g>
+
+    <g transform="translate(134,24)">
+      <path d="M0 0V60M10 0V60M20 0V60M30 0V60M40 0V60M50 0V60M60 0V60M0 0H60M0 10H60M0 20H60M0 30H60M0 40H60M0 50H60M0 60H60" fill="none" stroke="#d8d8d8" stroke-width="0.3"/>
+      <text x="0" y="-1.5" font-size="2.6">0</text>
+      <text x="60" y="-1.5" font-size="2.6">60</text>
+      <g transform="translate(8,20)">
+        <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#e2e2e2" stroke="#9a9a9a" stroke-width="0.4"/>
+        <g transform="rotate(30 6 10)">
+          <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="0.8"/>
+        </g>
+        <circle cx="6" cy="10" r="1.2" fill="#c02020"/>
+      </g>
+      <text x="30" y="66">rotate(30 6 10) - about the red dot</text>
+    </g>
+
+    <g transform="translate(6,100)">
+      <path d="M0 0V60M10 0V60M20 0V60M30 0V60M40 0V60M50 0V60M60 0V60M0 0H60M0 10H60M0 20H60M0 30H60M0 40H60M0 50H60M0 60H60" fill="none" stroke="#d8d8d8" stroke-width="0.3"/>
+      <g transform="translate(8,20)">
+        <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#e2e2e2" stroke="#9a9a9a" stroke-width="0.4"/>
+        <g transform="skewX(25)">
+          <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="0.8"/>
+        </g>
+      </g>
+      <text x="30" y="66">skewX(25) - foot goes right</text>
+    </g>
+
+    <g transform="translate(70,100)">
+      <path d="M0 0V60M10 0V60M20 0V60M30 0V60M40 0V60M50 0V60M60 0V60M0 0H60M0 10H60M0 20H60M0 30H60M0 40H60M0 50H60M0 60H60" fill="none" stroke="#d8d8d8" stroke-width="0.3"/>
+      <g transform="translate(8,20)">
+        <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#e2e2e2" stroke="#9a9a9a" stroke-width="0.4"/>
+        <g transform="skewY(20)">
+          <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="0.8"/>
+        </g>
+      </g>
+      <text x="30" y="66">skewY(20) - right side sinks</text>
+    </g>
+
+    <g transform="translate(134,100)">
+      <path d="M0 0V60M10 0V60M20 0V60M30 0V60M40 0V60M50 0V60M60 0V60M0 0H60M0 10H60M0 20H60M0 30H60M0 40H60M0 50H60M0 60H60" fill="none" stroke="#d8d8d8" stroke-width="0.3"/>
+      <g transform="translate(8,20)">
+        <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#e2e2e2" stroke="#9a9a9a" stroke-width="0.4"/>
+        <g transform="matrix(1 0.25 -0.4 1 10 -6)">
+          <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="#c8d4f0" stroke="#1a3fa0" stroke-width="0.8"/>
+        </g>
+      </g>
+      <text x="30" y="66">matrix(1 0.25 -0.4 1 10 -6)</text>
+    </g>
+
+    <text x="100" y="182" font-size="4.2">Three nested groups against the matrix worked out by hand - must coincide</text>
+
+    <g transform="translate(6,186)">
+      <path d="M0 0V60M10 0V60M20 0V60M30 0V60M40 0V60M50 0V60M60 0V60M70 0V60M80 0V60M90 0V60M100 0V60M110 0V60M120 0V60M130 0V60M140 0V60M150 0V60M160 0V60M170 0V60M180 0V60M190 0V60M0 0H190M0 10H190M0 20H190M0 30H190M0 40H190M0 50H190M0 60H190" fill="none" stroke="#d8d8d8" stroke-width="0.3"/>
+      <g transform="translate(8,6)">
+        <g transform="translate(10,4)">
+          <g transform="rotate(20)">
+            <g transform="scale(1.2)">
+              <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="none" stroke="#9fb8e8" stroke-width="3"/>
+            </g>
+          </g>
+        </g>
+      </g>
+      <g transform="translate(8,6)">
+        <g transform="matrix(1.127628 0.410424 -0.410424 1.127628 10 4)">
+          <path d="M 0 0 H 12 V 4 H 5 V 9 H 11 V 13 H 5 V 20 H 0 Z" fill="none" stroke="#c02020" stroke-width="0.8" stroke-dasharray="2 2"/>
+        </g>
+      </g>
+      <text x="120" y="20">thick pale: translate(10,4) rotate(20) scale(1.2), nested</text>
+      <text x="120" y="26">red dashed: matrix(1.127628 0.410424 -0.410424 1.127628 10 4)</text>
+      <text x="120" y="32">The dashes must sit exactly on the pale outline.</text>
+      <text x="95" y="66">An F, not a square - a mirrored or upside down square would look unchanged</text>
+    </g>
+  </g>
+</svg>

@@ -1,23 +1,40 @@
-C Install\sand\sship\sthe\ssRGB\soutput\sintent\sprofile\n\n-\stools/install.tcl\saccepts\sdirectory\sarguments\sand\scopies\sthem\srecursively,\skeeping\sthe\sdirectory\sname\n-\smake\sinstall\snow\sinstalls\sicc/\sinto\sthe\spackage\sdirectory\n-\stools/archive.sh\scopies\sicc/\sinto\sthe\sbinary\sarchive\sas\swell
-D 2026-08-08T22:01:39.017
+C Example\sassets\sand\sa\smake\starget\sto\sbuild\sthem\n\n-\sRoboto,\sBitcount\sProp\sSingle\sand\sNiconne\sadded,\sone\sface\seach,\snext\sto\sthe\stwo\sDejaVu\sfaces\n-\sexamples/assets/fonts\sflattened,\slicence\stexts\scollected\sin\sfonts/licenses\sand\srenamed\safter\sthe\sfamily\sthey\scover,\sreplacing\sthe\sbare\sAUTHORS\sand\sLICENSE\n-\sEleven\sSVG\stest\sdrawings\sadded\sunder\sexamples/assets/images\n-\sNew\starget\s"make\sexamples"\sruns\severy\sexample\sinto\sexamples/out,\sand\s"make\sclean"\sremoves\sthat\sdirectory\sagain\n-\stools/archive.sh:\sexamples/out\sexcluded\sfrom\sthe\ssource\sarchive,\sexamples/assets/xml\sno\slonger\sexcluded\n-\sexamples/assets/README\srewritten\s-\sper-face\sinventory\swith\sglyph\sand\scharacter\scounts,\sand\sa\ssection\son\swhat\sdoes\sand\sdoes\snot\sship\swith\sthe\spackage
+D 2026-08-10T07:50:45.260
 F ANNOUNCE 928c6b0a9d5a269cc176fc1910fe3c4e05bdeff1d982a5c16806f80a393b1039
-F Makefile.in aeba9976d10215bfc165e67ff0f0055096a9a8cf67f1f6ea2cfbf3f6d5cd841e
-F README a1946c0a300dfbed86aa0f36bc5a9762f436eb92771c234872cb19fe1540d566
+F Makefile.in 573119b92f4654e4303dc44222e021108c42394829e6192bb8a555747dc9b3c3
+F README afeb262d4de04378c8de7150c05342720749199b4fe844f81b119f3fffcf8af6
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F configure 63c2cd2fe1c1c8d170edb69133c0ac0c246e182bb7d94b0406c4c7c4d4b29866 x
 F configure.ac 2a92c4adc5e80d5fbc48b7cecd59f5b45c0e00e4996236b05a042acbd03d133f
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
 F doc/tclpdf.md 9c11308cd2a2e889a0ed12ae5db092579f46091e5e1151c58a6bb4e3c19ecf6e
-F examples/assets/README.md a89cb84edaed498b81fd2610de1922972ed84d4bf1717b17cbad1427e6dc9fb9
-F examples/assets/fonts/AUTHORS 1cc6e63020d517508bdb9b1132a720533a4bda93492fb93ed501645331941d11
+F examples/assets/README.md 56c293d8f215f927ba4544e3e239224d3446228c9c7af67451e4d1eeb4f975ea
+F examples/assets/fonts/BitcountPropSingle-Regular.ttf bb81b2eab3b4444ed70390e4a269e913f86494513911e786a780ef12bef2100b
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
-F examples/assets/fonts/LICENSE 477eb9a144d38fc57d928e761702f37eaf838f8c29d3ff64957f061d8dc8fc2f
+F examples/assets/fonts/Niconne-Regular.ttf f881130fea23dab9402b02b3b15a44a59808a1d34310a8fb6ad8a10249e1b9bb
+F examples/assets/fonts/Roboto-Regular.ttf 08fc6a1844d2f79437902056795a4d3201e01ce5c77f62f7b467b16a71e24924
+F examples/assets/fonts/licenses/BitcountPropSingle-OFL.txt 31c112645f019f507aa3bbc969f313581abb7b34f3d9a0b1064bb36127181704
+F examples/assets/fonts/licenses/DejaVu-AUTHORS.txt 1cc6e63020d517508bdb9b1132a720533a4bda93492fb93ed501645331941d11
+F examples/assets/fonts/licenses/DejaVu-LICENSE.txt 477eb9a144d38fc57d928e761702f37eaf838f8c29d3ff64957f061d8dc8fc2f
+F examples/assets/fonts/licenses/Niconne-OFL.txt 29e05c8a3a46b40e7efe437acd34544d87642c8154de99c3dcc3e95cd2a23244
+F examples/assets/fonts/licenses/Roboto-OFL.txt ce62f9aa575d4ecf579557e3e51530cdab7f5970b960b0b6563ef2f85b9d29c1
 F examples/assets/images/sample-gray.jpg 9e043510817e92d27e1ac8cc1fe4d00abdf11f729e1ee94fec0fd2c27f6192c8
 F examples/assets/images/sample-indexed.png a9866993ef70ebfa11fde18ab84658d1b06e7b187619513c45a0b1641d8aa521
 F examples/assets/images/sample-photo.jpg 3ab92dbcd99234a415c82a2edd1ae78bcd8eaecea422b5604c20d7940695c9ab
 F examples/assets/images/sample-rgba.png 826c8da6c4383a053c86ad6d198ee61bc6874a3f58a214e29bee9c4b89bda48a
 F examples/assets/images/sample-vector.svg 837dfc513cd42fe1588ad85a5790b4658271719bb017dce5db0d503de540da7f
+F examples/assets/images/svg-arcs.svg 82bf633f2aeb4670d76593629fd00fb9e2dcf9d0a6b7b1d81318c72b9eefd6ee
+F examples/assets/images/svg-gradient.svg ec175dcb3c1e24fc0ea0e13ded0b5e9a0197e3b09239905ea707f9fc8e935725
+F examples/assets/images/svg-inherit.svg 2a9abefef445e657d5e82913180a284b937ae014e3530d1c035e22da5a58b341
+F examples/assets/images/svg-lexer.svg e8c8dc01b1378b8fdd75d0cf107ae2f971e3f661f77d31feffd3780499d754c4
+F examples/assets/images/svg-paths.svg b83903f6f11a6855d1237d55202d5403e40e34ecf0408cbba2471de00252b587
+F examples/assets/images/svg-reuse.svg d9a5c8d5a7b408ddbbd7103eebff1aabfd279d057025fffb4540802ddc8ad2e7
+F examples/assets/images/svg-shapes.svg 10d6cabb70db736d487fded83a5a2ab140b240032a45c0f7f5f14a935511d174
+F examples/assets/images/svg-text.svg 92175fcfa632e0f01baa685a0e8b5264abb900dd431fc296e61f354582a1421a
+F examples/assets/images/svg-transform.svg 8badec53a879772523cee39c44331aff4561af9cfa1e585fcb4a5bf552eaaaa1
+F examples/assets/images/svg-viewbox-origin.svg 53c7d00a34d1032d40cd54c07b29808b83323035ee77e9450af22580bfac6d97
+F examples/assets/images/svg-viewbox.svg 3c34dbf75b955a04e5b177cb235a010d7393dfd087d95696e87465118635df45
 F examples/assets/xml/zugferd-en16931.xml 53e2b6f8ac1759ab26e77f42e7d4262cf3ee333afee47581d2248efebc1aae40
 F examples/assets/xml/zugferd-minimum.xml c8acc70758fdbbcee9f3446b8ca4df9f2561242a46a6cd3cab62ee7f26466476
 F icc/README.md b875a576894d742e6253f2997540502d6a762f482f2c42866fa148824bbd6da1
@@ -36,8 +53,8 @@ F tools/archive.sh 54b9accb20720cd52fb7eeb899355209b1a381845d87218d3d837a7d724b1
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
 F tools/mkversion.tcl a97244b2b89d5672c1a604ef68f68bce63eff11980b25b5c7fb9b4d670d5c8d8
 F uv/template-download.html cf432183e2348e0963f527b4a93aaaf9da116f843a0f343860a23184123982fe
-P b82768e52e628d19400e94ca726828dffc59538d791c543476d64a12768c0746
-R d5cb540cd72d32f5846fbaa5dd16f179
+P c4e49c409ef4262b49901803436100c4e6c267e74a074dbbc52867e9a9a14757
+R d21c62f7ef7febf882000cd2c34aa283
 U alex
-Z cbd6c84d2f99b140c1d5a0176866d8d6
+Z ebb69ed58623b7fc0784b370932bd4f5
 # Remove this line to create a well-formed Fossil manifest.

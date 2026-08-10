@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" width="200" height="100">
+  <rect x="0" y="0" width="200" height="100" fill="#ffffff"/>
+  <rect x="1" y="1" width="198" height="98" fill="none" stroke="#c02020" stroke-width="2"/>
+  <circle cx="100" cy="50" r="49" fill="none" stroke="#1a3fa0" stroke-width="2"/>
+  <rect x="10" y="25" width="50" height="50" fill="none" stroke="#1a7f37" stroke-width="2"/>
+  <line x1="100" y1="1" x2="100" y2="99" stroke="#d8d8d8" stroke-width="0.5"/>
+  <line x1="1" y1="50" x2="199" y2="50" stroke="#d8d8d8" stroke-width="0.5"/>
+  <g font-family="Helvetica" font-size="5" fill="#000000">
+    <text x="100" y="14" text-anchor="middle">viewBox 0 0 200 100</text>
+    <text x="100" y="46" text-anchor="middle">blue must stay a circle</text>
+    <text x="100" y="56" text-anchor="middle">green must stay a square</text>
+    <text x="100" y="92" text-anchor="middle">red frame must touch all four edges</text>
+  </g>
+</svg>
