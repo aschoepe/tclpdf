@@ -137,8 +137,12 @@ oo::define ::tclpdf::document::document {
     # of the ICC header as a four-character space signature.
     set space [string range $bytes 16 19]
     set components [dict get {GRAY 1 RGB  3 CMYK 4} [string trimright $space]]
-    set number [my streamObject [list N $components] $bytes]
-    set intent [[my writer] add [::tclpdf::pdfObj dictionary [list \
+    # Both numbers survive rebuilds - PdfaWrite runs on every write, and a
+    # fresh pair per run would embed the ICC profile anew each time.
+    set number [my streamObject [list N $components] $bytes \
+        [my reservation pdfa.icc]]
+    set intent [my reservation pdfa.intent]
+    [my writer] put $intent [::tclpdf::pdfObj dictionary [list \
         Type /OutputIntent \
         S /GTS_PDFA1 \
         OutputConditionIdentifier [::tclpdf::pdfObj str \
@@ -147,7 +151,7 @@ oo::define ::tclpdf::document::document {
         Info [::tclpdf::pdfObj str \
             [expr {[dict get $current identifier] ne {} ?
                 [dict get $current identifier] : "sRGB IEC61966-2.1"}]] \
-        DestOutputProfile [[my writer] ref $number]]]]
+        DestOutputProfile [[my writer] ref $number]]]
     my catalogEntry OutputIntents [::tclpdf::pdfObj arr \
         [list [[my writer] ref $intent]]]
     return
@@ -283,4 +287,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pdfa 1.0
+package provide tclpdf::pdfa 1.1

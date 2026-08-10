@@ -187,4 +187,24 @@ test attach-4.1 {a private method can be hooked onto an event} -body {
   set events
 } -result {beforeWrite catalog}
 
+test attach-rewrite-6.1 {a second write does not embed the attachments again} -body {
+  # AttachWrite runs on every write. It used to create fresh EmbeddedFile and
+  # Filespec objects per run - the file grew by the full attachment size each
+  # time, and only the last copy stayed reachable through the name tree.
+  set first [::tclpdfTest::scratch attach-rewrite-a.pdf]
+  set second [::tclpdfTest::scratch attach-rewrite-b.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach [file join [file dirname [file dirname [file normalize \
+      [info script]]]] license.terms] -name terms.txt -description "licence"
+  $doc write $first
+  $doc write $second
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $second]
+  set same [expr {$bytes eq [::tclpdfTest::readBytes $first]}]
+  file delete $first $second
+  # One Filespec, and byte-identical to the first file.
+  list [regexp -all {/Filespec} $bytes] $same
+} -result {1 1}
+
 cleanupTests

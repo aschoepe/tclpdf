@@ -1,18 +1,18 @@
-C Add\sthe\sfunctional\scode\sof\stclpdf\s1.0\s-\sstages\s1\sto\s6\n\n-\s42\sTcl\smodules\simplementing\sdocument\score,\sTrueType\sembedding\sand\ssubsetting,\sJPEG\sand\sPNG\simages,\stables,\sSVG\sand\sZUGFeRD\sas\sPDF/A-3B,\sloaded\slazily\sthrough\sa\stopic\stable\sin\sdocument.tcl\n-\s20\stest\sfiles\scovering\severy\smodule,\srun\sin\sa\ssingle\sinterpreter\sby\stests/all.tcl,\sgreen\sunder\sTcl\s8.6.18\sand\sTcl\s9.0.4\n-\s18\sexamples\sin\sexamples\splus\sa\sshared\scommon.tcl,\swriting\s20\sdocuments\n-\stools:\scoverage.tcl\sreports\swhich\sdocument\smethods\snothing\scalls,\ssvgcheck.sh\scompares\sSVG\soutput\sagainst\srsvg-convert,\smkafm.tcl\sgenerates\safmData.tcl\sfrom\sthe\sAdobe\smetrics\n-\sconfigure.ac\sand\spkgIndex.tcl.in\slist\severy\smodule,\seach\swith\sits\sown\sversion\sand\sopen-ended\sdependencies\n-\sdoc/tclpdf.md\srewritten\sas\sthe\sfull\smanual,\sone\sparagraph\sper\sline,\scovering\sall\spublic\scommands\n-\stools/archive.sh\sexcludes\sdocs\sfrom\sthe\ssource\sarchive\n-\suv/template-download.html\slists\sonly\stdom\sas\san\soptional\spackage\n-\sREADME\sstates\sthe\sscope,\sthe\slicence\sand\swhy\sno\sfont\sis\spart\sof\sthe\spackage
-D 2026-08-10T14:32:18.353
+C Make\swriting\sidempotent\s-\sa\ssecond\swrite\sno\slonger\sduplicates\sthe\sobjects\n\n-\sNew\smethod\sreservation\sin\soutput.tcl\shands\sout\swriter\sobject\snumbers\sthat\ssurvive\sa\srebuild,\sso\sa\sbuilder\swrites\sover\sits\sobjects\sinstead\sof\sallocating\snew\sones\n-\sCore\sbuilders\suse\sit:\scatalog,\spage\stree,\sresources,\sper-page\scontent\sstreams,\smetadata\sand\sinfo;\sWriteInfo\skeeps\sthe\sgenerated\sCreationDate\sso\san\sunchanged\sdocument\scomes\sout\sbyte-identical\n-\sstreamObject\sin\sdocument.tcl\stakes\san\soptional\sobject\snumber\sand\swrites\sover\sit\n-\sattach,\spdfa\sand\soutline\shold\stheir\snumbers\sthe\ssame\sway\s-\sthe\sattachment\sbytes,\sthe\sICC\sprofile\sand\sthe\sbookmark\stree\sare\sno\slonger\sembedded\sonce\sper\swrite\n-\sevent.tcl\sstates\sthe\scontract:\swrite-time\sevents\sfire\son\severy\swrite,\sso\sa\ssubscriber\sthat\screates\sobjects\smust\sbe\sidempotent\sand\stake\sits\snumbers\sfrom\sreservation\n-\sdoc/tclpdf.md\sdrops\sthe\swrite-once\srestriction\sand\sdocuments\sthat\swrite\sand\swriteChannel\smay\sbe\scombined\n-\sThree\sregression\stests:\sbyte-identical\srewrite\swith\sconstant\sobject\scount,\sadditions\sbetween\stwo\swrites\sstill\sarrive,\sattachments\sembedded\sonce\n-\sattach,\sdocument,\sevent,\soutline,\soutput\sand\spdfa\sraised\sto\s1.1\sin\sthe\smodule\sand\sin\spkgIndex.tcl.in
+D 2026-08-10T19:47:02.025
 F Makefile.in 573119b92f4654e4303dc44222e021108c42394829e6192bb8a555747dc9b3c3
 F README ee487e417de5cef96bb94a70abbce88510f2be5000509071c148687736c178cc
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F afm.tcl cada268f509a936c7c7b507e849ac605c10bf60b23ca78aac73ff120fc8c5a8a
 F afmData.tcl 7071be1258ba7f09737cd93882859ebea605c38e891c11a48146e41a471bb218
-F attach.tcl 88600cf088653111185d0c3d89b41ba37391a2324cf37c949406359bb7199cc6
+F attach.tcl 7d84107c2be570b8ab3d3e49f15fda6633a767b89cd5dc40ae5f1969a8a247c9
 F color.tcl 4fff05998b9ed9d3d79c26c38c3c209c4deb1b65de5cb647849d8b9742b71fde
 F configure f65d4fa3ae8d08a9db399e3f8e0734bf8940c71e0ecbc76e711af1bb1408e1ca x
 F configure.ac 442cb25bb50d420dc22755e02aabe29e23ec8019f4b641d47e05c94b4968d3f9
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
-F doc/tclpdf.md 20d61c277f175e392e613e2c2097646d1876cbb849d1bd8eb4b0b70c10fc3646
-F document.tcl 6f3a47573a7cfd0724d3b49cc74e5ca4fdc2c8c0d6fe39b81397ef7567626557
-F event.tcl eef8d26937a8e37bfda9afb5d2d3a4bfd73e3fcee212181bb8103b572632003e
+F doc/tclpdf.md 735e9d0983fd27896bd33cb544c90c3acb0d651d92ef8bf8efdc50705d1ddca6
+F document.tcl 1e8f1fcb0191bd4388ed07e7d027acbdca38f36702df9b5fed08db9da8e3f294
+F event.tcl b738afa9f5fb7a1697af862e9dc0413ee1c5064fab9bdc971a1e1ea2a7a6ef50
 F examples/01.01-shapes.tcl 360c8e22398b091f89e5010365a57986d47d8bc24af659d87a990bf26dfde8e5
 F examples/01.02-colour.tcl caae14a7df4825e1dd06c6c9e4dde04c39ca10fc17230200983461f062ceae6d
 F examples/01.03-text-layout.tcl cf4f7ce9ffbd42836396ec82059a6f00d52ae771997e8c07aa928ffb0ade9650
@@ -75,13 +75,13 @@ F io.tcl 3283fb3b0a0c86a656e2e7e2211a21f5feb188eba8ebb968b125e1099abc3c59
 F license.terms 8a65b74c3a7031d28d75199c16aff80b7d7035498bd9ff3afcecde3160ef6795
 F link.tcl 9cc4b1b933ef717c99409fe3312574b863123b5f357f643d9f0371c8857e9ecd
 F option.tcl 2544e8d0458ab20d626b35b94f14ccf386439a1a85e016c22331cbc95183ef33
-F outline.tcl 34c3667fa04794fe6ceb980402f6454d92906290e1b781f282b02faa96a0f2ce
-F output.tcl 75cc7134bae8884e8a8109ff7e8d80d0a08028af87c717ea5972b5c2cdd395b9
+F outline.tcl 9e47771769c85e36af6ef27adc7517c1fdd723c9d867d6c3c9b761e19c7cc7e5
+F output.tcl b75dec2302e751b651316672010716af7b72e8aef60bfd7a51bb2ec234c41d16
 F page.tcl 081a5980116b441fab2a6ef9601cb481eba2a3666339486681ba8d120a5628b1
 F pattern.tcl bbf3a0befbc175ae8dac4f16e3e30ed2267493e444a1c1307ab315254cb90dcb
 F pdfObj.tcl 67bbfb54aff773bcf864d07de81949a4cdc1f685460f369d3f110d364890ecec
-F pdfa.tcl c4b84430d0d779e1866038c0179b207321b9e39f50670b4d8fd9debe4c57f9de
-F pkgIndex.tcl.in 5e442d937ae2cfb73962c01d05bd6c052355720baa75433241df6f16db5c8451
+F pdfa.tcl d8ab4c303fc7ef4bee34c455787d51b3d42e1bbedfe5339a0a63893c2f09eea7
+F pkgIndex.tcl.in b0759077e1320b92a88552dac5ec1ae2f69cb701e15cabaf1dc5fe3e0439ce3a
 F sfnt.tcl f37cdfcbb21d6e86feb553def07a4d7d881750d88bc241897cd4c2cada03a7d7
 F shading.tcl dfaddaebe9b4c74bc23d255edf23d9965c6468af6facafc758f2db03a576c6ac
 F shape.tcl 103d3204c62df25b2f05bf67172b6717a9af5b9440f4edd32341408b62bd4cc7
@@ -100,9 +100,9 @@ F tclconfig/tcl.m4 24841be70516af95124d989e9b9a9fb07879fdc9cf2248c4ce6fc7aa3a5ae
 F tclpdf.tcl 61d63ea7df4f40dedfa03267789c0e11cf16eb1864e8b2161a7d27069341f9fc
 F tests/afm.test 1f9d42cfd702034ee2eb7a79ceae02b286afecb44809d6470769c44b0d068b35
 F tests/all.tcl 0007b1508a282c6f431080b90bf3e76afdcc0c6e311488ca3867cab46296f623
-F tests/attach.test 16001b6239e6d6ff8fa5f6a359eca271fd83df5234cf9432475cb08b6e7b2d90
+F tests/attach.test 2389e339e4128c5dbbb4682f8458da29a7128114a8666f6dce2d081013156038
 F tests/color.test 1be94d35135c4a3ecd7684e9e753ee165c1d09e6fb102237be3889387817e506
-F tests/document.test 50186755e85be9d81377cf9fc572a5b23a973eb17f44ae9789414b3e05b36d7e
+F tests/document.test f5e11f5e85d1703fca27402e319950738aacfd238059303d273696624c711b82
 F tests/event.test 5b86a3060ec2eb308fb90dd70c6d1530335a1c64d149845285c116d0de01b89c
 F tests/filter.test 73438401c18aaa25751a6e636a82c4cc9c67c158e6f787deeb4795eba7df3568
 F tests/font.test 7523240d7eead45a3ddf1f24660d7e0666aa8897f6b8b9ac811c4a500f71d25b
@@ -133,8 +133,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl f20e82e15aa6690f109531bf65a936033f610a56b090fb6613b6a8ba41996152
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P c0c89a09b5e0c412c50842d0b503d687409d130ba1432eed714e742ae80955b8
-R 47d83ec0c76c45cf288ff16dd0731a6d
+P e1795e6562b7422b6bc0f048bf7245d11dcce5026721a9d3f99a3dc11b7cf008
+R 9fe4c9c5c842ecde8852b69decbc4611
 U alex
-Z 83cd032013f78274433ecb6712d46bf5
+Z 552501f589df1015fe6b3738730b8e2f
 # Remove this line to create a well-formed Fossil manifest.

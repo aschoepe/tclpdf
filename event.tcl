@@ -19,6 +19,14 @@
 # here holds no PDF knowledge at all - which event names exist is decided by
 # the document, not here.
 #
+# ONE CONTRACT COMES WITH SUBSCRIBING: the write-time events (beforeWrite,
+# resources, catalog, info) fire on EVERY write, and a document may be written
+# more than once. A subscriber that creates objects must therefore be
+# idempotent - reserve its object numbers once, through the document's
+# [reservation], and write over them on later runs. One that reserves fresh
+# numbers per run grows the file with every write and leaves the earlier
+# objects unreachable; nothing reports that, the file merely gets larger.
+#
 
 package require Tcl 8.6.11-
 # Unlike zlib, TclOO really is a package in both interpreters - measured, 1.1.0
@@ -104,4 +112,4 @@ oo::class create ::tclpdf::event::emitter {
   }
 }
 
-package provide tclpdf::event 1.0
+package provide tclpdf::event 1.1

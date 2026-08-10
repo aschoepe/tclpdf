@@ -114,10 +114,16 @@ oo::define ::tclpdf::document::document {
 
   # Create the objects. Runs on beforeWrite, so a caller can attach right up
   # to the last moment.
+  # Idempotent, because it runs on EVERY write: each attachment holds on to
+  # its two object numbers and writes over them on a rebuild. Without that a
+  # second write embedded every attachment a second time - the file grew by
+  # the full attachment size per run and only the last copy stayed reachable.
   method AttachWrite {} {
     set writer [my writer]
     set created {}
+    set index -1
     foreach entry [my state attachments] {
+      incr index
       set bytes [dict get $entry bytes]
       set pairs [list Type /EmbeddedFile \
           Subtype [::tclpdf::pdfObj name [dict get $entry mime]]]
@@ -132,7 +138,8 @@ oo::define ::tclpdf::document::document {
         set bytes [::tclpdf::filter encodeFlate $bytes]
         lappend pairs Filter /FlateDecode
       }
-      set streamNumber [$writer addStream $pairs $bytes]
+      set streamNumber [my reservation attach.file.$index]
+      $writer stream $streamNumber $pairs $bytes
 
       set specPairs [list Type /Filespec \
           F [::tclpdf::pdfObj str [dict get $entry name]] \
@@ -144,8 +151,9 @@ oo::define ::tclpdf::document::document {
       if {[dict get $entry description] ne {}} {
         lappend specPairs Desc [::tclpdf::pdfObj str [dict get $entry description]]
       }
-      lappend created [dict create name [dict get $entry name] \
-          spec [$writer add [::tclpdf::pdfObj dictionary $specPairs]]]
+      set specNumber [my reservation attach.spec.$index]
+      $writer put $specNumber [::tclpdf::pdfObj dictionary $specPairs]
+      lappend created [dict create name [dict get $entry name] spec $specNumber]
     }
     my state attachSpecs $created
     return
@@ -182,4 +190,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.0
+package provide tclpdf::attach 1.1

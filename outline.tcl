@@ -71,10 +71,12 @@ oo::define ::tclpdf::document::document {
     if {![llength $entries]} {
       return
     }
-    set rootNumber [[my writer] reserve]
+    # Numbers survive rebuilds - this runs on every write, and reserving
+    # fresh ones per run left the previous tree unreachable in the file.
+    set rootNumber [my reservation outline.root]
     set index 0
     foreach entry $entries {
-      dict set entry number [[my writer] reserve]
+      dict set entry number [my reservation outline.$index]
       lset entries $index $entry
       incr index
     }
@@ -134,4 +136,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::outline 1.0
+package provide tclpdf::outline 1.1

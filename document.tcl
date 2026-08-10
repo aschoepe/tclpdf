@@ -21,6 +21,10 @@
 #   info          the document information dictionary is being collected
 #   afterWrite    the file is complete, the path is passed on
 #
+# The first four fire on EVERY write. A subscriber that creates objects must
+# hold its numbers through [reservation] and write over them - the contract is
+# spelled out in event.tcl.
+#
 # Resources live on the page TREE, not on each page: /Resources is an
 # inheritable page attribute (7.7.3.4), so one dictionary serves every page
 # and a logo used on five pages is embedded once.
@@ -105,12 +109,18 @@ oo::class create ::tclpdf::document::document {
   # patterns build a stream the same way, and the page content stream makes
   # three). Left as a copy it is the classic divergence bug: one of them
   # eventually learns a new filter and the others do not.
-  method streamObject {pairs content} {
+  method streamObject {pairs content {number {}}} {
     if {[dict get $tclpdfOption compress]} {
       set content [::tclpdf::filter encodeFlate $content]
       lappend pairs Filter /FlateDecode
     }
-    return [$tclpdfWriter addStream $pairs $content]
+    # With a number the stream goes OVER that object instead of into a fresh
+    # one - what a builder needs when it runs once per write (see
+    # [reservation] in output.tcl).
+    if {$number eq {}} {
+      return [$tclpdfWriter addStream $pairs $content]
+    }
+    return [$tclpdfWriter stream $number $pairs $content]
   }
 
 
@@ -404,4 +414,4 @@ oo::class create ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::document 1.0
+package provide tclpdf::document 1.1

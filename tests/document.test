@@ -346,6 +346,48 @@ test document-channel-13.2 {a document without pages is refused either way} -bod
   set codes
 } -result {1 1}
 
+test document-rewrite-14.1 {a second write is byte-identical, not larger} -body {
+  # Builders used to reserve fresh object numbers on every write: each run
+  # added five core objects and the file grew, with the earlier objects left
+  # unreachable. Now every write-time builder holds its numbers through
+  # [reservation] and writes over them - and /ID and CreationDate are kept,
+  # so nothing is left to differ.
+  set first [::tclpdfTest::scratch rewrite-a.pdf]
+  set second [::tclpdfTest::scratch rewrite-b.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "unveraendert" -at {20 20}
+  $doc write $first
+  $doc write $second
+  set count [[$doc writer] count]
+  $doc destroy
+  set same [expr {[::tclpdfTest::readBytes $first] eq [::tclpdfTest::readBytes $second]}]
+  file delete $first $second
+  list $same $count
+} -result {1 7}
+
+test document-rewrite-14.2 {write, draw on, write again - the additions arrive} -body {
+  # The measured case that ruled out caching the build: this works and has to
+  # keep working. A cached trailer would silently drop everything after the
+  # first write - a stale file with no error is worse than a large one.
+  set first [::tclpdfTest::scratch rewrite-c.pdf]
+  set second [::tclpdfTest::scratch rewrite-d.pdf]
+  # Uncompressed, so the added text is findable in the raw bytes.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc text "Erste Fassung" -at {20 20}
+  $doc write $first
+  $doc text "Nachtrag" -at {20 40}
+  $doc page add
+  $doc text "Seite zwei" -at {20 20}
+  $doc write $second
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $second]
+  file delete $first $second
+  list [regexp {/Count 2} $bytes] [regexp {Nachtrag} $bytes] \
+      [regexp {Seite zwei} $bytes]
+} -result {1 1 1}
+
 cleanupTests
 
 test document-9.1 {the document language goes into the catalog} -body {

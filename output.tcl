@@ -54,6 +54,31 @@ oo::define ::tclpdf::document::document {
     return
   }
 
+  # A writer object number that SURVIVES rebuilds. The first call under a key
+  # reserves a fresh number, every later one answers the same number again -
+  # so a builder that runs on every write puts OVER its objects instead of
+  # allocating new ones.
+  #
+  # This is what makes a second [write] produce the same file instead of a
+  # larger one. Build runs used to reserve fresh numbers every time: each
+  # write added five core objects, and every subscriber that creates objects
+  # (attachments, the output intent, the bookmark tree) added its own on top -
+  # measured, a document with one attachment grew 1803 to 3299 to 4791 bytes
+  # over three writes, embedding the attachment bytes anew each time. The file
+  # stayed valid; the earlier objects were simply unreachable.
+  #
+  # Every builder that runs at write time goes through here, and any OUTSIDE
+  # subscriber to beforeWrite or catalog that creates objects must do the
+  # same - that is the idempotence contract documented in event.tcl.
+  method reservation {key} {
+    set numbers [my state reservations]
+    if {![dict exists $numbers $key]} {
+      dict set numbers $key [$tclpdfWriter reserve]
+      my state reservations $numbers
+    }
+    return [dict get $numbers $key]
+  }
+
   # Everything both ways have in common: create the objects, fire the events,
   # hand back the trailer pairs. Split out when [writeChannel] appeared -
   # duplicating a sequence in which the ORDER of five events is the contract
@@ -64,8 +89,8 @@ oo::define ::tclpdf::document::document {
     }
     my emit beforeWrite
 
-    set catalogNumber [$tclpdfWriter reserve]
-    set pagesNumber [$tclpdfWriter reserve]
+    set catalogNumber [my reservation output.catalog]
+    set pagesNumber [my reservation output.pages]
 
     # The resource dictionary is one INDIRECT object that every page points
     # at. It could be inherited from the page tree instead - ISO 32000-1
@@ -78,7 +103,7 @@ oo::define ::tclpdf::document::document {
     #
     # One object referenced N times costs the same as inheritance did - a
     # logo used on five pages is still embedded once.
-    set resourceNumber [$tclpdfWriter reserve]
+    set resourceNumber [my reservation output.resources]
     set kids {}
     set pageIndex 0
     foreach page $tclpdfPages {
@@ -123,7 +148,8 @@ oo::define ::tclpdf::document::document {
   }
 
   method WritePage {page pagesNumber index resourceNumber} {
-    set contentNumber [my streamObject {} [dict get $page content]]
+    set contentNumber [my streamObject {} [dict get $page content] \
+        [my reservation content.$index]]
 
     set pagePairs [list Type /Page Parent [::tclpdf::pdfObj ref $pagesNumber]]
     dict for {name box} [dict get $page boxes] {
@@ -151,19 +177,24 @@ oo::define ::tclpdf::document::document {
   method WriteMetadata {} {
     # Never compressed: PDF/A requires the XMP packet to be readable without
     # decoding, and a validator that cannot read it fails the file.
-    return [$tclpdfWriter addStream {Type /Metadata Subtype /XML} $tclpdfXmp]
+    set number [my reservation output.metadata]
+    return [$tclpdfWriter stream $number {Type /Metadata Subtype /XML} $tclpdfXmp]
   }
 
   method WriteInfo {} {
+    # The generated date is stored back rather than made up per run: a second
+    # write of an unchanged document has to come out byte-identical, and a
+    # fresh timestamp is the one thing that would differ.
+    if {![dict exists $tclpdfInfo CreationDate]} {
+      dict set tclpdfInfo CreationDate [::tclpdf::pdfObj date]
+    }
     set pairs {}
     dict for {key value} $tclpdfInfo {
       lappend pairs $key [::tclpdf::pdfObj str $value]
     }
-    if {![dict exists $tclpdfInfo CreationDate]} {
-      lappend pairs CreationDate [::tclpdf::pdfObj str [::tclpdf::pdfObj date]]
-    }
-    return [$tclpdfWriter add [::tclpdf::pdfObj dictionary $pairs]]
+    return [$tclpdfWriter put [my reservation output.info] \
+        [::tclpdf::pdfObj dictionary $pairs]]
   }
 }
 
-package provide tclpdf::output 1.0
+package provide tclpdf::output 1.1

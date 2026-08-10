@@ -328,17 +328,17 @@ A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey valu
 
 *doc* **write** *path*
 
-: Writes the document to a file. Write once per document: a second **write** builds a second set of objects on top of the first, so the file stays valid and renders correctly but carries the earlier objects along unreferenced. To write the same content twice, build it twice.
+: Writes the document to a file. Writing does not finish the document: a second **write** of an unchanged document produces a byte-identical file, and drawing between two writes works - the second file carries the additions.
 
 *doc* **writeChannel** *channel*
 
-: Writes to an open channel instead of a file — a CGI response, a socket, a pipe. The caller opens and closes it; the channel is put into binary translation here, because that is what decides whether the bytes arrive unchanged. The same once-per-document rule applies as for **write**.
+: Writes to an open channel instead of a file — a CGI response, a socket, a pipe. The caller opens and closes it; the channel is put into binary translation here, because that is what decides whether the bytes arrive unchanged. **write** and **writeChannel** may be combined freely — the same document can go to a file and into a response.
 
 ## Events
 
 *doc* **on** *event script* / *doc* **off** *token* / *doc* **subscribers** *event*
 
-: The document publishes events while it is written: `beforeWrite`, `resources`, `catalog`, `info` and `afterWrite`. This is how attachments, ZUGFeRD and the output intent attach themselves without the core knowing about them, and it is available to callers for the same purpose. **on** returns a token; **off** takes that token, not the event and script again, and accepts an unknown one silently. Subscribers run in registration order and are called with the emitting object followed by whatever the emitter passes on.
+: The document publishes events while it is written: `beforeWrite`, `resources`, `catalog`, `info` and `afterWrite`. This is how attachments, ZUGFeRD and the output intent attach themselves without the core knowing about them, and it is available to callers for the same purpose. **on** returns a token; **off** takes that token, not the event and script again, and accepts an unknown one silently. Subscribers run in registration order and are called with the emitting object followed by whatever the emitter passes on. The write-time events fire on **every** write, so a subscriber that creates objects must be idempotent: take its object numbers from **reservation** once and write over them on later runs, instead of reserving fresh ones each time.
 
 # SEE ALSO
 
