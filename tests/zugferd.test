@@ -1,0 +1,237 @@
+# zugferd.test --
+#
+# PDF/A, ZUGFeRD, links and bookmarks.
+#
+# The two regressions here were both found by veraPDF on a file that qpdf
+# called clean: resources inherited from the page tree, and a table quietly
+# falling back to an unembedded Helvetica.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::pdfa
+package require tclpdf::zugferd
+package require tclpdf::link
+package require tclpdf::outline
+source [file join [file dirname [info script]] helper.tcl]
+
+set root [file dirname [file dirname [file normalize [info script]]]]
+set assets [file join $root examples assets]
+set invoice [file join $assets xml zugferd-en16931.xml]
+set minimum [file join $assets xml zugferd-minimum.xml]
+set icc [file join $root icc sRGB.icc]
+set face [file join $assets fonts DejaVuSans.ttf]
+
+testConstraint haveInvoice [expr {[file exists $invoice] && [file exists $face]}]
+testConstraint haveIcc [file exists $icc]
+
+# A document that is allowed to be PDF/A: everything in an embedded face.
+proc archivable {face} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed haus $face
+  $doc text "Rechnung" -at {20 20} -family haus
+  return $doc
+}
+
+test zugferd-1.1 {BT-24 decides the profile} -constraints haveInvoice -body {
+  # Read out of the XML rather than asked for: the two cannot drift apart,
+  # and the reference toolchain's habit of silently substituting BASIC for
+  # anything it does not know is exactly what this avoids.
+  list [::tclpdf::zugferd profile [::tclpdf::io read $invoice]] \
+      [::tclpdf::zugferd profile [::tclpdf::io read $minimum]]
+} -result {{EN 16931} MINIMUM}
+
+test zugferd-1.2 {an unknown identifier is an error, not a guess} -body {
+  set xml {<rsm:CrossIndustryInvoice><ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:something:else</ram:ID>
+      </ram:GuidelineSpecifiedDocumentContextParameter></rsm:CrossIndustryInvoice>}
+  ::tclpdf::zugferd profile $xml
+} -returnCodes error -match glob -result {*unknown BT-24*labelled BASIC*}
+
+test zugferd-1.3 {XML without BT-24 is not an invoice} -body {
+  ::tclpdf::zugferd profile "<foo><bar>x</bar></foo>"
+} -returnCodes error -match glob -result {*no BT-24*}
+
+test zugferd-1.4 {an XRechnung identifier is recognised by shape} -body {
+  set xml {<ram:GuidelineSpecifiedDocumentContextParameter><ram:ID>urn:cen.eu:en16931:2017#compliant#urn:xoev-de:kosit:standard:xrechnung_3.0</ram:ID></ram:GuidelineSpecifiedDocumentContextParameter>}
+  ::tclpdf::zugferd profile $xml
+} -result XRECHNUNG
+
+test zugferd-2.1 {a PDF/A declaration produces the XMP} -constraints haveInvoice -body {
+  set doc [archivable $face]
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch pdfa.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {<pdfaid:part>3</pdfaid:part>} $bytes] \
+      [regexp {<pdfaid:conformance>B</pdfaid:conformance>} $bytes] \
+      [regexp {/Subtype /XML} $bytes]
+} -result {1 1 1}
+
+test zugferd-2.2 {an unembedded font is refused} -body {
+  # Regression, found by veraPDF (6.2.11.4.1). A table theme defaulting to
+  # Helvetica in an otherwise embedded document produces a file that opens
+  # perfectly and is not archivable - and nothing on the way to the recipient
+  # says so.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc text "Helvetica" -at {20 20}
+  $doc pdfa -part 3
+  try {
+    $doc write [::tclpdfTest::scratch pdfa-font.pdf]
+  } finally {
+    catch {file delete [::tclpdfTest::scratch pdfa-font.pdf]}
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*every font to be embedded*Helvetica*}
+
+test zugferd-2.3 {an embedded Type0 face is NOT reported as missing} -constraints haveInvoice -body {
+  # The check follows the references: Type0 -> CIDFont -> FontDescriptor ->
+  # FontFile2. Looking only one level down reports every embedded face as
+  # unembedded, which is what a first attempt did.
+  set doc [archivable $face]
+  $doc pdfa -part 3
+  set path [::tclpdfTest::scratch pdfa-type0.pdf]
+  $doc write $path
+  $doc destroy
+  file delete $path
+  set result ok
+} -result ok
+
+test zugferd-2.4 {PDF/A part 4 is refused with a reason} -body {
+  set doc [tclpdf new]
+  try {
+    $doc pdfa -part 4
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*part 4 needs PDF 2.0*}
+
+test zugferd-3.1 {every page carries its own Resources} -body {
+  # Regression, found by veraPDF (6.2.2, "inheritedResourceNames == ''").
+  # Inheriting from the page tree is valid PDF and forbidden in PDF/A - qpdf
+  # says nothing either way.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill red
+  $doc page add
+  set path [::tclpdfTest::scratch resources.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Two pages, two /Resources entries, and the page tree without one.
+  list [regexp -all {/Type /Page[^s]} $bytes] \
+      [regexp -all {/Resources \d+ 0 R} $bytes] \
+      [regexp {/Type /Pages[^>]*/Resources} $bytes]
+} -result {2 2 0}
+
+test zugferd-4.1 {an invoice becomes a full ZUGFeRD document} -constraints {haveInvoice haveIcc} -body {
+  set doc [archivable $face]
+  set profile [$doc zugferd $invoice -icc $icc]
+  set path [::tclpdfTest::scratch zugferd.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $profile \
+      [regexp {/AFRelationship /Alternative} $bytes] \
+      [regexp {/AF \[\d+ 0 R\]} $bytes] \
+      [regexp {/GTS_PDFA1} $bytes] \
+      [regexp {<fx:ConformanceLevel>EN 16931</fx:ConformanceLevel>} $bytes] \
+      [regexp {Factur-X PDFA Extension Schema} $bytes]
+} -result {{EN 16931} 1 1 1 1 1}
+
+test zugferd-4.2 {the namespace URI keeps its case and its hash} -constraints haveInvoice -body {
+  # The sample PDFs of the Factur-X info package spell it all-lowercase,
+  # which the specification does not allow - and the trailing "#" is missing
+  # from the comment in the specification itself. Checked against the
+  # normative XMP sample, not against either of those.
+  set schema [::tclpdf::zugferd extensionSchema]
+  list [regexp {urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#</pdfaSchema} $schema] \
+      [regexp -all {<pdfaProperty:name>} $schema]
+} -result {1 4}
+
+test zugferd-4.3 {a second invoice is refused} -constraints haveInvoice -body {
+  set doc [archivable $face]
+  $doc zugferd $invoice
+  try {
+    $doc zugferd $invoice
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*already carries an invoice*}
+
+test zugferd-4.4 {a file name the standards do not allow is refused} -constraints haveInvoice -body {
+  set doc [archivable $face]
+  try {
+    $doc zugferd $invoice -name rechnung.xml
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*not a file name the standards allow*factur-x.xml*}
+
+test zugferd-5.1 {a link becomes a page annotation} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc link -at {20 20} -size {40 5} -url "https://example.org/"
+  set path [::tclpdfTest::scratch link.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Subtype /Link} $bytes] [regexp {/S /URI} $bytes] \
+      [regexp {/Annots \[} $bytes] [regexp {/F 4} $bytes]
+} -result {1 1 1 1}
+
+test zugferd-5.2 {a link to a page that does not exist is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc link -at {20 20} -size {40 5} -page 7
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*no such page: 7*}
+
+test zugferd-6.1 {bookmarks build a tree} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc page add
+  set chapter [$doc bookmark "Kapitel" -page 0]
+  $doc bookmark "Abschnitt" -page 1 -parent $chapter
+  set path [::tclpdfTest::scratch outline.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Type /Outlines} $bytes] [regexp {/PageMode /UseOutlines} $bytes] \
+      [regexp {/Count 1} $bytes] [regexp {\(Abschnitt\)} $bytes]
+} -result {1 1 1 1}
+
+test zugferd-6.2 {siblings are linked both ways} -body {
+  # The outline is a doubly linked list at each level, which is why the whole
+  # tree is written at the end rather than as it is built.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc bookmark "eins"
+  $doc bookmark "zwei"
+  $doc bookmark "drei"
+  set path [::tclpdfTest::scratch outline-siblings.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/Prev \d+ 0 R} $bytes] [regexp -all {/Next \d+ 0 R} $bytes]
+} -result {2 2}
+
+cleanupTests

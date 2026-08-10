@@ -26,10 +26,68 @@ configure {*}$argv \
     -testdir $thisdir \
     -singleproc 1
 
-# Load the package under test. Further modules are added here one by one as
-# they appear - the same list as in TEA_ADD_TCL_SOURCES (configure.ac).
+# Load the package under test through the package mechanism, the same way a
+# user gets it. That exercises the pkgIndex.tcl written by configure as well,
+# so a module missing from it fails here instead of after installation.
 set libdir [file dirname $thisdir]
-source [file join $libdir tclpdf.tcl]
+if {![file exists [file join $libdir pkgIndex.tcl]]} {
+    puts stderr "tclpdf: pkgIndex.tcl is missing - run ./configure first"
+    exit 1
+}
+lappend auto_path $libdir
+package require tclpdf
+
+# Every module is required here, not only in the test file that exercises it:
+# one that is missing from pkgIndex.tcl or broken at load time then fails once
+# and clearly, rather than as a puzzling error inside some unrelated test.
+#
+# Third of the three lists to keep in sync - the others are
+# TEA_ADD_TCL_SOURCES in configure.ac and the module pairs in pkgIndex.tcl.in.
+foreach tclpdfPkg {
+    tclpdf::pdfObj
+    tclpdf::filter
+    tclpdf::event
+    tclpdf::writer
+    tclpdf::color
+    tclpdf::geometry
+    tclpdf::document
+    tclpdf::page
+    tclpdf::graphics
+    tclpdf::shape
+    tclpdf::output
+    tclpdf::option
+    tclpdf::afmData
+    tclpdf::afm
+    tclpdf::text
+    tclpdf::textBlock
+    tclpdf::xObject
+    tclpdf::io
+    tclpdf::attach
+    tclpdf::sfnt
+    tclpdf::subset
+    tclpdf::font
+    tclpdf::imageJpeg
+    tclpdf::imagePng
+    tclpdf::imagePngAlpha
+    tclpdf::image
+    tclpdf::shading
+    tclpdf::pattern
+    tclpdf::tableLayout
+    tclpdf::tableDraw
+    tclpdf::table
+    tclpdf::pdfa
+    tclpdf::zugferd
+    tclpdf::link
+    tclpdf::outline
+    tclpdf::xml
+    tclpdf::svgPath
+    tclpdf::svg
+    tclpdf::svgElement
+    tclpdf::svgPaint
+} {
+    package require $tclpdfPkg
+}
+unset -nocomplain tclpdfPkg
 
 testConstraint mutation false
 

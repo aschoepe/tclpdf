@@ -1,0 +1,106 @@
+# color.test --
+#
+# Colour parsing and the content stream operators. The Tk test at the end is
+# the one that matters most: resolving a colour name is exactly where pdf4tcl
+# reaches for [winfo rgb] and drags in a display connection.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::color
+
+test color-parse-1.1 {a name from the table} -body {
+  ::tclpdf::color parse steelblue
+} -result {rgb {0.27450980392156865 0.5098039215686274 0.7058823529411765}}
+
+test color-parse-1.2 {six hexadecimal digits, ff becoming exactly 1.0} -body {
+  # Divided by 255 rather than 256 - otherwise white comes out at 0.996 and
+  # a PDF/A validator flags the output intent mismatch.
+  ::tclpdf::color parse #ffffff
+} -result {rgb {1.0 1.0 1.0}}
+
+test color-parse-1.3 {three digits are the doubling shorthand} -body {
+  expr {[::tclpdf::color parse #f0a] eq [::tclpdf::color parse #ff00aa]}
+} -result 1
+
+test color-parse-1.4 {a single number is grey} -body {
+  ::tclpdf::color parse 0.5
+} -result {gray 0.5}
+
+test color-parse-1.5 {three numbers are RGB, four are CMYK} -body {
+  list [lindex [::tclpdf::color parse {1 0 0}] 0] \
+      [lindex [::tclpdf::color parse {0 1 1 0}] 0]
+} -result {rgb cmyk}
+
+test color-parse-1.6 {explicit spellings} -body {
+  list [::tclpdf::color parse {gray 0.25}] [::tclpdf::color parse {rgb 1 0 0}] \
+      [::tclpdf::color parse {cmyk 0 1 1 0}]
+} -result {{gray 0.25} {rgb {1 0 0}} {cmyk {0 1 1 0}}}
+
+test color-parse-1.7 {components are clamped, not refused} -body {
+  # A rounding error in a computed colour should not abort a document.
+  ::tclpdf::color parse {rgb 1.2 -0.1 0.5}
+} -result {rgb {1 0 0.5}}
+
+test color-parse-1.8 {an unknown name is an error, not a silent black} -body {
+  ::tclpdf::color parse fuchsiablue
+} -returnCodes error -match glob -result {*unknown colour*}
+
+test color-operator-2.1 {fill and stroke differ only in case} -body {
+  set red [::tclpdf::color parse {1 0 0}]
+  list [::tclpdf::color operator $red fill] [::tclpdf::color operator $red stroke]
+} -result {{1 0 0 rg} {1 0 0 RG}}
+
+test color-operator-2.2 {grey and CMYK operators} -body {
+  list [::tclpdf::color operator [::tclpdf::color parse 0.5] fill] \
+      [::tclpdf::color operator [::tclpdf::color parse {cmyk 0 0.5 1 0}] stroke]
+} -result {{0.5 g} {0 0.5 1 0 K}}
+
+test color-operator-2.3 {numbers pass through the PDF formatter} -body {
+  # 1/3 would otherwise appear as 0.3333333333333333 and, worse, small values
+  # in exponent notation.
+  ::tclpdf::color operator [::tclpdf::color parse [list [expr {1.0/3}] 0 0]] fill
+} -result {0.33333 0 0 rg}
+
+test color-operator-2.4 {separation needs a resource and a tint} -body {
+  # The space is escaped as #20 by the name encoder - which is exactly why a
+  # spot colour name must not be concatenated by hand anywhere.
+  ::tclpdf::color operator [::tclpdf::color parse {separation {PANTONE 877} {cmyk 0 0 0 0.3} 0.6}] fill
+} -result "/PANTONE#20877 cs\n0.6 scn"
+
+test color-space-3.1 {the resource name of each space} -body {
+  lmap spec {0.5 {1 0 0} {0 0 0 1}} {
+    ::tclpdf::color space [::tclpdf::color parse $spec]
+  }
+} -result {DeviceGray DeviceRGB DeviceCMYK}
+
+test color-components-3.2 {a space gets exactly as many components as it has} -body {
+  # A short list used to pass straight through and produce "1 0 rg" - an
+  # operator with too few operands, invalid by 8.6.8. Nothing reports it: not
+  # this package, not qpdf, not a validator. The page renders in the wrong
+  # colour, or not at all. A surplus component was dropped just as silently.
+  lmap spec {{rgb 1 0} {rgb 1 0 0 0} {cmyk 0 1} {cmyk 0 1 1 0 0} {gray 0.5 0.5}} {
+    catch {::tclpdf::color parse $spec}
+  }
+} -result {1 1 1 1 1}
+
+test color-components-3.3 {the right number still works, keyed and bare} -body {
+  lmap spec {{rgb 1 0 0} {cmyk 0 1 1 0} {gray 0.5} {1 0 0} {0 1 1 0} 0.5} {
+    lindex [::tclpdf::color parse $spec] 0
+  }
+} -result {rgb cmyk gray rgb cmyk gray}
+
+test color-noTk-4.1 {resolving names does not pull in Tk} -body {
+  # The whole reason this module carries its own table. If Tk were loaded the
+  # package would stop working in a CGI or batch context, and the failure
+  # would only show up there.
+  ::tclpdf::color parse cornflowerblue
+  list [package provide Tk] [llength [info commands winfo]]
+} -result {{} 0}
+
+cleanupTests

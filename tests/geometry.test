@@ -1,0 +1,122 @@
+# geometry.test --
+#
+# Units, page sizes and matrices.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::geometry
+
+proc geometryRound {values {digits 2}} {
+  return [lmap value $values {format %.*f $digits $value}]
+}
+
+test geometry-unit-1.1 {millimetres to points} -body {
+  geometryRound [list [::tclpdf::geometry toPoints 210 mm] \
+      [::tclpdf::geometry toPoints 1 in] [::tclpdf::geometry toPoints 1 cm] \
+      [::tclpdf::geometry toPoints 12 pt]]
+} -result {595.28 72.00 28.35 12.00}
+
+test geometry-unit-1.2 {and back without drift} -body {
+  format %.6f [::tclpdf::geometry fromPoints [::tclpdf::geometry toPoints 123.456 mm] mm]
+} -result 123.456000
+
+test geometry-unit-1.3 {an unknown unit is refused} -body {
+  ::tclpdf::geometry toPoints 10 furlong
+} -returnCodes error -match glob -result {*unknown unit*}
+
+test geometry-page-2.1 {A4 portrait is the size everyone knows} -body {
+  geometryRound [::tclpdf::geometry pageSize a4]
+} -result {595.28 841.89}
+
+test geometry-page-2.2 {landscape swaps the two} -body {
+  geometryRound [::tclpdf::geometry pageSize a4 landscape]
+} -result {841.89 595.28}
+
+test geometry-page-2.3 {a size given the wrong way round is corrected} -body {
+  # {297 210} is landscape, but portrait was asked for.
+  geometryRound [::tclpdf::geometry pageSize {297 210} portrait mm]
+} -result {595.28 841.89}
+
+test geometry-page-2.4 {an explicit size in inches} -body {
+  geometryRound [::tclpdf::geometry pageSize {8.5 11} portrait in]
+} -result {612.00 792.00}
+
+test geometry-page-2.5 {an unknown format names the known ones} -body {
+  ::tclpdf::geometry pageSize a99
+} -returnCodes error -match glob -result {*unknown page format*known are: a0,*}
+
+test geometry-matrix-3.1 {identity leaves a point alone} -body {
+  geometryRound [::tclpdf::geometry apply [::tclpdf::geometry identity] 10 20]
+} -result {10.00 20.00}
+
+test geometry-matrix-3.2 {translation} -body {
+  geometryRound [::tclpdf::geometry apply [::tclpdf::geometry translate 5 -3] 10 20]
+} -result {15.00 17.00}
+
+test geometry-matrix-3.3 {rotation by 90 degrees is counter-clockwise} -body {
+  geometryRound [::tclpdf::geometry apply [::tclpdf::geometry rotate 90] 10 0]
+} -result {0.00 10.00}
+
+test geometry-matrix-3.4 {order of multiplication: first, then second} -body {
+  # Translate by 10 and then scale by 2 puts the point at 2*(x+10),
+  # not at 2*x+10. Getting this backwards is the classic matrix bug.
+  set matrix [::tclpdf::geometry multiply [::tclpdf::geometry translate 10 0] \
+      [::tclpdf::geometry scale 2]]
+  geometryRound [::tclpdf::geometry apply $matrix 5 0]
+} -result {30.00 0.00}
+
+test geometry-matrix-3.5 {rotating about a point leaves that point fixed} -body {
+  # The construction the -at option of transform uses: to the origin, rotate,
+  # back again. If either shift has the wrong sign the point moves.
+  set p {100 200}
+  set matrix [::tclpdf::geometry multiply \
+      [::tclpdf::geometry multiply \
+          [::tclpdf::geometry translate -100 -200] \
+          [::tclpdf::geometry rotate 37]] \
+      [::tclpdf::geometry translate 100 200]]
+  geometryRound [::tclpdf::geometry apply $matrix {*}$p]
+} -result {100.00 200.00}
+
+test geometry-9.1 {a size given as two numbers is taken as it stands} -body {
+  # Regression: the default orientation used to be applied to an explicit
+  # size too, so a 88 by 55 label came out 55 by 88. Whoever writes two
+  # numbers has already said which way round they go.
+  set doc [tclpdf new -unit mm]
+  $doc page add -format {88 55}
+  set label [$doc page size]
+  $doc page add -format {210 297}
+  set upright [$doc page size]
+  $doc destroy
+  list $label $upright
+} -result {{88.0 55.0} {210.0 297.0}}
+
+test geometry-9.2 {an explicit orientation still turns an explicit size} -body {
+  # Saying it wins over writing it: -orientation is not ignored, it is only
+  # not assumed.
+  set doc [tclpdf new -unit mm]
+  $doc page add -format {88 55} -orientation portrait
+  set turned [$doc page size]
+  $doc page add -format {88 55} -orientation landscape
+  set flat [$doc page size]
+  $doc destroy
+  list $turned $flat
+} -result {{55.0 88.0} {88.0 55.0}}
+
+test geometry-9.3 {a named format follows the orientation} -body {
+  # a4 IS 210 by 297 - the name carries the shape, so landscape turns it.
+  set doc [tclpdf new -unit mm]
+  $doc page add -format a4
+  set portrait [$doc page size]
+  $doc page add -format a4 -orientation landscape
+  set landscape [$doc page size]
+  $doc destroy
+  list $portrait $landscape
+} -result {{210.0 297.0} {297.0 210.0}}
+
+cleanupTests

@@ -1,0 +1,220 @@
+# writer.test --
+#
+# Tests for object numbering and file layout. Several of these guard defects
+# that produce a file some readers still open - the worst kind, because the
+# damage is only noticed at the recipient.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::writer
+source [file join [file dirname [info script]] helper.tcl]
+
+# The smallest file a reader will accept: catalog, page tree, one page and a
+# content stream. Built by hand here because document.tcl does not exist yet -
+# which also makes this a test of the writer alone.
+proc writerMinimal {pdf} {
+  set content "BT /F1 24 Tf 72 720 Td (tclpdf) Tj ET\n"
+  set catalogNumber [$pdf reserve]
+  set pagesNumber [$pdf reserve]
+  set pageNumber [$pdf reserve]
+  set contentNumber [$pdf addStream {} $content]
+  set fontNumber [$pdf add "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+  $pdf put $catalogNumber "<< /Type /Catalog /Pages [$pdf ref $pagesNumber] >>"
+  $pdf put $pagesNumber \
+      "<< /Type /Pages /Kids \[[$pdf ref $pageNumber]\] /Count 1 >>"
+  $pdf put $pageNumber "<< /Type /Page /Parent [$pdf ref $pagesNumber]\
+      /MediaBox \[0 0 595.28 841.89\]\
+      /Resources << /Font << /F1 [$pdf ref $fontNumber] >> >>\
+      /Contents [$pdf ref $contentNumber] >>"
+  return $catalogNumber
+}
+
+test writer-1.1 {numbers are handed out from one, in order} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  set numbers [list [$pdf add a] [$pdf add b] [$pdf reserve]]
+  set count [$pdf count]
+  $pdf destroy
+  list $numbers $count
+} -result {{1 2 3} 3}
+
+test writer-1.2 {a reserved number can be filled later} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  set number [$pdf reserve]
+  $pdf add "<< /Next [$pdf ref $number] >>"
+  $pdf put $number "<< /Type /Catalog >>"
+  $pdf destroy
+} -result {}
+
+test writer-1.3 {filling a number that was never reserved is refused} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  try {
+    $pdf put 99 "<< >>"
+  } finally {
+    $pdf destroy
+  }
+} -returnCodes error -match glob -result {*object 99 was never reserved*}
+
+test writer-1.4 {a reserved but unwritten object stops the file} -body {
+  # Would otherwise be written as an empty object and silently break every
+  # reference pointing at it.
+  set pdf [::tclpdf::writer::pdf new]
+  $pdf add "<< /Type /Catalog >>"
+  $pdf reserve
+  set path [makeFile {} writer-incomplete.pdf]
+  try {
+    $pdf writeFile $path {Root {1 0 R}}
+  } finally {
+    $pdf destroy
+    removeFile writer-incomplete.pdf
+  }
+} -returnCodes error -match glob -result {*reserved but never written: 2*}
+
+test writer-1.5 {stream length is the byte count, not the character count} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  # Four bytes of which two are above 127 - counted as characters this would
+  # come out as 4 either way, so the data is chosen to differ: the UTF-8 form
+  # of these two characters is four bytes, the byte form is two.
+  set data [binary format H* c3a4c3b6]
+  set number [$pdf addStream {} $data]
+  set body [$pdf body $number]
+  $pdf destroy
+  regexp {/Length (\d+)} $body -> length
+  set length
+} -result 4
+
+test writer-1.6 {text instead of bytes in a stream is refused} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  set euro [encoding convertfrom utf-8 [binary format H* e282ac]]
+  try {
+    $pdf addStream {} $euro
+  } finally {
+    $pdf destroy
+  }
+} -returnCodes error -match glob -result {*must be bytes, not text*}
+
+test writer-2.1 {the version is a parameter and reaches the header} -body {
+  set pdf [::tclpdf::writer::pdf new 2.0]
+  writerMinimal $pdf
+  set path [makeFile {} writer-version.pdf]
+  $pdf writeFile $path {Root {1 0 R}}
+  set head [string range [::tclpdfTest::readBytes $path] 0 7]
+  $pdf destroy
+  removeFile writer-version.pdf
+  set head
+} -result %PDF-2.0
+
+test writer-2.2 {a version that does not exist is refused} -body {
+  # A list of the real versions, not a pattern. The pattern that stood here
+  # first accepted "1.9" - there is no PDF 1.8 or 1.9, so the file claimed a
+  # version nobody issues, and neither a reader nor a validator says a word.
+  list [catch {::tclpdf::writer::pdf new 1.99}] \
+      [catch {::tclpdf::writer::pdf new 1.9}] \
+      [catch {::tclpdf::writer::pdf new 1.7}]
+} -result {1 1 0}
+
+test writer-2.3 {the versions that do exist are accepted} -body {
+  set wrong {}
+  foreach version {1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 2.0} {
+    if {[catch {::tclpdf::writer::pdf new $version} writer]} {
+      lappend wrong $version
+    } else {
+      $writer destroy
+    }
+  }
+  set wrong
+} -result {}
+
+test writer-2.4 {line two marks the file as binary} -body {
+  # Four bytes above 127 (7.5.2) - without them a mail gateway or a version
+  # control system may treat the file as text and translate line endings.
+  set pdf [::tclpdf::writer::pdf new]
+  writerMinimal $pdf
+  set path [makeFile {} writer-binary.pdf]
+  $pdf writeFile $path {Root {1 0 R}}
+  set bytes [::tclpdfTest::readBytes $path]
+  $pdf destroy
+  removeFile writer-binary.pdf
+  binary scan [string range $bytes 9 13] cu* codes
+  # % followed by four bytes, all above 127
+  list [lindex $codes 0] [expr {[tcl::mathfunc::min {*}[lrange $codes 1 4]] > 127}]
+} -result {37 1}
+
+test writer-2.5 {every xref entry is exactly 20 bytes} -body {
+  # Readers seek into this table by index, so a 19- or 21-byte line makes them
+  # read the neighbouring entry.
+  set pdf [::tclpdf::writer::pdf new]
+  writerMinimal $pdf
+  set path [makeFile {} writer-xref.pdf]
+  $pdf writeFile $path {Root {1 0 R}}
+  set bytes [::tclpdfTest::readBytes $path]
+  $pdf destroy
+  removeFile writer-xref.pdf
+  set start [string first "xref\n" $bytes]
+  set rest [string range $bytes $start end]
+  # skip "xref\n" and the "0 6\n" subsection header
+  set entries [string range $rest [expr {[string first "\n" $rest 5] + 1}] end]
+  set lengths {}
+  foreach line [lrange [split $entries "\n"] 0 5] {
+    lappend lengths [expr {[string length $line] + 1}]
+  }
+  lsort -unique $lengths
+} -result 20
+
+test writer-2.6 {startxref points at the xref keyword} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  writerMinimal $pdf
+  set path [makeFile {} writer-startxref.pdf]
+  $pdf writeFile $path {Root {1 0 R}}
+  set bytes [::tclpdfTest::readBytes $path]
+  $pdf destroy
+  removeFile writer-startxref.pdf
+  regexp {startxref\n(\d+)\n%%EOF} $bytes -> offset
+  string range $bytes $offset [expr {$offset + 3}]
+} -result xref
+
+test writer-2.7 {the trailer carries Size, Root and ID} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  set catalogNumber [writerMinimal $pdf]
+  set path [makeFile {} writer-trailer.pdf]
+  $pdf writeFile $path [list Root [$pdf ref $catalogNumber]]
+  set bytes [::tclpdfTest::readBytes $path]
+  $pdf destroy
+  removeFile writer-trailer.pdf
+  # Size is the highest object number plus one, ID is two identical strings
+  list [regexp {/Size 6} $bytes] [regexp {/Root 1 0 R} $bytes] \
+      [regexp {/ID \[<([0-9a-f]{32})> <\1>\]} $bytes]
+} -result {1 1 1}
+
+test writer-2.8 {the file identifier can be pinned for a reproducible result} -body {
+  set fixed [binary format H* 000102030405060708090a0b0c0d0e0f]
+  set results {}
+  foreach pass {1 2} {
+    set pdf [::tclpdf::writer::pdf new]
+    $pdf id $fixed
+    writerMinimal $pdf
+    set path [makeFile {} writer-id.pdf]
+    $pdf writeFile $path {Root {1 0 R}}
+    lappend results [::tclpdfTest::readBytes $path]
+    $pdf destroy
+    removeFile writer-id.pdf
+  }
+  expr {[lindex $results 0] eq [lindex $results 1]}
+} -result 1
+
+test writer-2.9 {two documents get different identifiers} -body {
+  set first [::tclpdf::writer::pdf new]
+  set second [::tclpdf::writer::pdf new]
+  set differ [expr {[$first id] ne [$second id]}]
+  set length [string length [$first id]]
+  $first destroy
+  $second destroy
+  list $differ $length
+} -result {1 16}
+
+cleanupTests

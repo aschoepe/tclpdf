@@ -62,18 +62,36 @@ fi
 
 # The source archive takes the whole tree minus the exclusions below.
 #
-# examples/assets/xml is excluded ON PURPOSE: those two invoice files come from
-# the ZUGFeRD 2.5.2 DE distribution and no licence accompanies them, so they
-# must not be redistributed until that is settled (docs/TODO.md). Said out loud
-# rather than dropped quietly - a missing file in a release is otherwise found
-# by whoever runs the example, not by us.
-echo "archive: examples/assets/xml is left out - licence of the ZUGFeRD sample" >&2
-echo "archive: invoices not established yet, see docs/TODO.md" >&2
+# examples/out holds what "make examples" produced. Built output has no place
+# in a SOURCE archive - and the exclusion is needed because the tar below takes
+# the whole tree rather than a list of files, so anything created in the
+# checkout travels unless it is named here.
+#
+# docs/ is INTERNAL and does not travel. It is German working material - the
+# state of play, the feature list with its reasoning, the conventions, a copy
+# of the agent memory - and it is not even under version control:
+# .fossil-settings/ignore-glob lists it, next to .claude/ and CLAUDE.md, which
+# are excluded below for the same reason.
+#
+# It also held the ISO specifications themselves at one point - PDF 32000-1,
+# 32000-2, the PDF/UA parts - 34 MB of LICENSED THIRD-PARTY DOCUMENTS that must
+# not be redistributed. Measured before this line existed: the source archive
+# was 34.4 MB against 115 KB for the binary one, and two of those directories
+# landed OUTSIDE the package directory because their names carry spaces and a
+# colon. "make publish" would have put all of it on a public server.
+#
+# examples/assets/xml used to be excluded for an unsettled licence. It is
+# settled: both invoices carry the FeRD terms as an XML comment in their own
+# head - measured, 5 708 bytes of the 7 929 in the MINIMUM file, 72 per cent of
+# it - and those terms grant free use including redistribution and commercial
+# products. The block is what makes them redistributable, so it MUST NOT be
+# stripped when the files are copied or trimmed.
 
 cd ../..
 tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude='uv/*' \
-    --exclude="${PACKAGE_NAME}/examples/assets/xml" \
+    --exclude="${PACKAGE_NAME}/examples/out" \
+    --exclude="${PACKAGE_NAME}/docs" \
     --exclude="${PACKAGE_NAME}/.fslckout" \
     --exclude="${PACKAGE_NAME}/.fossil-settings" \
     --exclude="${PACKAGE_NAME}/.claude" \

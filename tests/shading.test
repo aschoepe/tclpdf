@@ -1,0 +1,212 @@
+# shading.test --
+#
+# Axial and radial gradients, and the two kinds of pattern.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::shading
+package require tclpdf::pattern
+source [file join [file dirname [info script]] helper.tcl]
+
+test shading-1.1 {an axial gradient is shading type 2} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading axial -at {20 20} -size {60 20} -colors {white steelblue}
+  # The [sh] operator is read from the CONTENT, not from the written file:
+  # the page content stream is deflated, so a regexp over the bytes would find
+  # the dictionaries and never the operators.
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch shading-axial.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/ShadingType 2} $bytes] [regexp {/FunctionType 2} $bytes] \
+      [regexp {/Coords \[} $bytes] [regexp {sh} $content]
+} -result {1 1 1 1}
+
+test shading-1.2 {a radial gradient is shading type 3 with six coordinates} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading radial -at {20 20} -size {40 40} -colors {yellow darkred}
+  set path [::tclpdfTest::scratch shading-radial.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/ShadingType 3.*/Coords \[([^\]]*)\]} $bytes -> coords
+  list [regexp {/ShadingType 3} $bytes] [llength $coords]
+} -result {1 6}
+
+test shading-1.3 {more than two colours are stitched} -body {
+  # PDF has no multi-stop function: a gradient through three colours is a type
+  # 3 that stitches two type 2 segments together.
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading axial -at {20 20} -size {60 20} -colors {red yellow green}
+  set path [::tclpdfTest::scratch shading-stops.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/FunctionType 3} $bytes] [regexp -all {/FunctionType 2} $bytes] \
+      [regexp {/Bounds \[} $bytes]
+} -result {1 2 1}
+
+test shading-1.4 {a shading is clipped to its rectangle} -body {
+  # [sh] floods the whole clipping region, so without a clip a gradient meant
+  # for a 60 by 20 box covers the page - and no validator says a word.
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading axial -at {20 20} -size {60 20} -colors {white black}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {re W n} $content] [regexp {q.*re W n.*sh.*Q} $content]
+} -result {1 1}
+
+test shading-1.5 {one colour is not a gradient} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc shading axial -at {20 20} -size {60 20} -colors red
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*at least two*}
+
+test shading-1.6 {colours from different spaces are refused} -body {
+  # A gradient carries ONE colour space. Mixing them produces a shading whose
+  # function returns three numbers into a four-component space - the reader
+  # shows something, and it is not what was asked for.
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc shading axial -at {20 20} -size {60 20} -colors {red {cmyk 0 1 1 0}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*one*colour space*}
+
+test shading-2.1 {a shading pattern can fill any shape} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading pattern sky axial -at {20 20} -size {60 20} -colors {white navy}
+  $doc circle -at {50 30} -radius 10 -fill {pattern sky}
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch shading-pattern.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/PatternType 2} $bytes] [regexp {/Pattern cs} $content] \
+      [regexp {/Sp1 scn} $content]
+} -result {1 1 1}
+
+test shading-3.1 {a tiling pattern carries its own content} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create hatch -size {4 4} -script {
+    $doc line -from {0 4} -to {4 0} -stroke black -width 0.3
+  }
+  $doc rect -at {20 20} -size {60 20} -fill {pattern hatch}
+  set path [::tclpdfTest::scratch pattern-tile.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/PatternType 1} $bytes] [regexp {/XStep} $bytes] \
+      [regexp {/PaintType 1} $bytes]
+} -result {1 1 1}
+
+test shading-3.2 {the tile draws in its own coordinates} -body {
+  # The canvas stack redirects drawing into the tile, so {0 0} is the tile's
+  # top left - the same convention as a page, and every shape works unchanged.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc pattern create dot -size {10 10} -script {
+    $doc rect -at {0 0} -size {10 10} -fill black
+  }
+  set depth [$doc canvas depth]
+  $doc destroy
+  set depth
+} -result 0
+
+test shading-3.3 {a duplicate pattern name is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create hatch -size {4 4} -script {}
+  try {
+    $doc pattern create hatch -size {4 4} -script {}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*already exists*}
+
+test shading-3.4 {an unknown pattern name names the known ones} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create hatch -size {4 4} -script {}
+  try {
+    $doc rect -at {10 10} -size {10 10} -fill {pattern nosuch}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*no pattern named "nosuch"*hatch*}
+
+test shading-3.5 {a failing tile script does not leave the canvas pushed} -body {
+  # A leaked canvas sends every later drawing call into a form nobody writes,
+  # and the page comes out empty with no error to explain it.
+  set doc [tclpdf new]
+  $doc page add
+  catch {$doc pattern create broken -size {4 4} -script {error "no"}}
+  set depth [$doc canvas depth]
+  $doc destroy
+  set depth
+} -result 0
+
+test shading-2.2 {a shading pattern can be given a matrix} -body {
+  # A pattern is bound to the page's DEFAULT space and ignores the matrix
+  # active when the shape is painted (8.7.3.1). Inside an SVG drawing, which
+  # sits under a transform of its own, the shape is then filled in the right
+  # place while the gradient inside it sits somewhere else - usually so far
+  # off that the area comes out flat. It looks like "gradients almost work",
+  # and no validator mentions it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc shading pattern skewed axial -at {10 10} -size {50 20} \
+      -colors {white navy} -matrix {2 0 0 2 10 10}
+  $doc rect -at {10 10} -size {50 20} -fill {pattern skewed}
+  set found {}
+  for {set number 1} {$number <= [[$doc writer] count]} {incr number} {
+    if {[regexp {/PatternType 2} [[$doc writer] body $number]]} {
+      set found [[$doc writer] body $number]
+    }
+  }
+  $doc destroy
+  regexp {/Matrix \[2 0 0 2 10 10\]} $found
+} -result 1
+
+test shading-2.3 {without a matrix none is written} -body {
+  # The common case is drawing straight onto the page, where the coordinates
+  # already are page coordinates - an identity matrix would be noise.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc shading pattern plain axial -at {10 10} -size {50 20} -colors {white navy}
+  set found {}
+  for {set number 1} {$number <= [[$doc writer] count]} {incr number} {
+    if {[regexp {/PatternType 2} [[$doc writer] body $number]]} {
+      set found [[$doc writer] body $number]
+    }
+  }
+  $doc destroy
+  regexp {/Matrix} $found
+} -result 0
+
+cleanupTests

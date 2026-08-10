@@ -1,0 +1,113 @@
+# pdfObj.test --
+#
+# Tests for the PDF syntax layer. Two of these guard mistakes that a reader
+# only reports much later, as a damaged file rather than as an error:
+# exponent notation in a number, and a missing byte order mark in a string.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::pdfObj
+
+# Non-ASCII test data is written as escapes on purpose: a literal umlaut in
+# this file would be read through the system encoding by Tcl 8.6 and as UTF-8
+# by Tcl 9, so the test would compare different input in the two interpreters.
+
+test pdfObj-num-1.1 {integers keep no decimal point} -body {
+  ::tclpdf::pdfObj num 100
+} -result 100
+
+test pdfObj-num-1.2 {trailing zeros are dropped} -body {
+  ::tclpdf::pdfObj num 1.500
+} -result 1.5
+
+test pdfObj-num-1.3 {small values never use exponent notation} -body {
+  # "1e-05" would be read as three tokens and break the content stream. This
+  # is the notation Tcl produces on its own, so it has to be ruled out here.
+  set result [::tclpdf::pdfObj num 0.00001]
+  list $result [string match *e* $result]
+} -result {0.00001 0}
+
+test pdfObj-num-1.4 {values below the precision collapse to zero, not to -0} -body {
+  ::tclpdf::pdfObj num -0.0000001
+} -result 0
+
+test pdfObj-num-1.5 {precision is adjustable} -body {
+  ::tclpdf::pdfObj num 1.23456789 2
+} -result 1.23
+
+test pdfObj-num-1.6 {text is rejected} -body {
+  ::tclpdf::pdfObj num abc
+} -returnCodes error -match glob -result {tclpdf: not a number*}
+
+test pdfObj-num-1.7 {infinity has no PDF spelling} -body {
+  ::tclpdf::pdfObj num Inf
+} -returnCodes error -match glob -result {tclpdf: number has no PDF representation*}
+
+test pdfObj-name-2.1 {a plain name passes through} -body {
+  ::tclpdf::pdfObj name Type
+} -result /Type
+
+test pdfObj-name-2.2 {space and delimiters are escaped} -body {
+  list [::tclpdf::pdfObj name "Mein Name"] [::tclpdf::pdfObj name A/B] \
+      [::tclpdf::pdfObj name "a#b"]
+} -result {/Mein#20Name /A#2FB /a#23b}
+
+test pdfObj-name-2.3 {non-ASCII is escaped per UTF-8 byte} -body {
+  # o-umlaut is C3 B6 in UTF-8 - two escapes, not one.
+  ::tclpdf::pdfObj name "gr\u00f6sse"
+} -result /gr#C3#B6sse
+
+test pdfObj-str-3.1 {ASCII becomes a literal string} -body {
+  ::tclpdf::pdfObj str "Rechnung 2026"
+} -result {(Rechnung 2026)}
+
+test pdfObj-str-3.2 {parentheses and backslash are escaped once} -body {
+  ::tclpdf::pdfObj str "a(b)c\\d"
+} -result {(a\(b\)c\\d)}
+
+test pdfObj-str-3.3 {non-ASCII becomes UTF-16BE with a byte order mark} -body {
+  # Without the leading feff a reader falls back to PDFDocEncoding and the
+  # character comes out wrong - a defect no validator reports.
+  ::tclpdf::pdfObj str "\u00e4"
+} -result <feff00e4>
+
+test pdfObj-str-3.4 {characters outside the BMP become a surrogate pair} -body {
+  # U+1F600 is built from its UTF-8 bytes rather than written as \U0001F600:
+  # measured, the Tcl 8.6.18 PARSER turns that literal into U+FFFD, while the
+  # same code point read from data arrives intact in both interpreters. So the
+  # literal would test the parser, not this module - and would fail under 8.6
+  # for a reason that has nothing to do with PDF.
+  ::tclpdf::pdfObj str [encoding convertfrom utf-8 [binary format H* f09f9880]]
+} -result <feffd83dde00>
+
+test pdfObj-hexStr-4.1 {bytes become a hex string} -body {
+  ::tclpdf::pdfObj hexStr [binary format H* 00ff10]
+} -result <00ff10>
+
+test pdfObj-ref-5.1 {indirect reference} -body {
+  list [::tclpdf::pdfObj ref 12] [::tclpdf::pdfObj ref 12 3]
+} -result {{12 0 R} {12 3 R}}
+
+test pdfObj-dictionary-6.1 {keys are encoded, values are taken as they are} -body {
+  ::tclpdf::pdfObj dictionary {Type /Page Parent {3 0 R}}
+} -result {<< /Type /Page /Parent 3 0 R >>}
+
+test pdfObj-dictionary-6.2 {an empty dictionary is still valid syntax} -body {
+  ::tclpdf::pdfObj dictionary {}
+} -result {<< >>}
+
+test pdfObj-arr-7.1 {array} -body {
+  ::tclpdf::pdfObj arr {0 0 595.28 841.89}
+} -result {[0 0 595.28 841.89]}
+
+test pdfObj-date-8.1 {date carries the format of 7.9.4} -body {
+  regexp {^D:\d{14}[-+]\d{2}'\d{2}'$} [::tclpdf::pdfObj date 1770000000]
+} -result 1
+
+cleanupTests

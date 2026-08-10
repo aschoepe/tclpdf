@@ -41,4 +41,122 @@ test version-1.2 {the package runs under this interpreter} -body {
   package vsatisfies [info patchlevel] 8.6.11-
 } -result 1
 
+test version-2.1 {every module provides the version its index promises} -body {
+  # Each module now carries its own number. The index hands it out, the module
+  # gets it stamped on by the ifneeded script - so a module listed but never
+  # loadable, or listed twice with different numbers, shows up here.
+  set wrong {}
+  foreach name [package names] {
+    if {![string match tclpdf::* $name]} {
+      continue
+    }
+    if {[catch {package require $name} version]} {
+      lappend wrong "$name cannot be loaded: $version"
+    } elseif {![regexp {^\d+\.\d+$} $version]} {
+      lappend wrong "$name has a malformed version \"$version\""
+    }
+  }
+  set wrong
+} -result {}
+
+test version-2.2 {no module requires a version no module provides} -body {
+  # The guard against modules drifting apart: a dependency written as
+  # "package require tclpdf::sfnt 1.1-" is a promise that something provides
+  # 1.1 or better. If sfnt is still at 1.0, the failure would otherwise reach
+  # the user rather than the build.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set wrong {}
+  foreach file [glob -directory $root *.tcl] {
+    set channel [open $file r]
+    set source [read $channel]
+    close $channel
+    foreach {-> name wanted} [regexp -all -inline \
+        {package require (tclpdf::\w+) (\d+\.\d+)-} $source] {
+      if {[catch {package require $name} have]} {
+        lappend wrong "[file tail $file] wants $name, which does not load"
+      } elseif {[package vcompare $have $wanted] < 0} {
+        lappend wrong "[file tail $file] wants $name $wanted, but only $have exists"
+      }
+    }
+  }
+  set wrong
+} -result {}
+
+test version-2.3 {a dependency is written in the open form} -body {
+  # "package require tclpdf::sfnt 1.0" without the dash means EXACTLY 1.0.
+  # The day sfnt goes to 1.1 every module written that way stops loading -
+  # and the error names the wrong culprit.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set wrong {}
+  foreach file [glob -directory $root *.tcl] {
+    set channel [open $file r]
+    set source [read $channel]
+    close $channel
+    foreach line [split $source \n] {
+      if {[regexp {^package require (tclpdf::\w+) ?([^-\s]*)$} $line -> name version]} {
+        lappend wrong "[file tail $file]: $line"
+      }
+    }
+  }
+  set wrong
+} -result {}
+
+test version-2.4 {each module provides its version itself} -body {
+  # The [package provide] sits at the end of the module, not in the index -
+  # the version belongs in the file it describes. The index only names the
+  # same number so Tcl can answer a require WITHOUT reading the file.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set wrong {}
+  foreach file [glob -directory $root *.tcl] {
+    set name tclpdf::[file rootname [file tail $file]]
+    # The entry module and the index itself are not modules.
+    if {[file tail $file] in {tclpdf.tcl pkgIndex.tcl}} {
+      continue
+    }
+    set channel [open $file r]
+    set source [read $channel]
+    close $channel
+    if {![regexp "package provide $name (\\d+\\.\\d+)" $source -> stated]} {
+      lappend wrong "[file tail $file] provides no version of its own"
+      continue
+    }
+    if {[catch {package require $name} have]} {
+      lappend wrong "[file tail $file] cannot be loaded"
+    } elseif {$have ne $stated} {
+      lappend wrong "[file tail $file] says $stated, the index says $have"
+    }
+  }
+  set wrong
+} -result {}
+
+test version-2.5 {the index names the same version as the module} -body {
+  # If the two drift apart, [package require x 1.1] is answered from the
+  # index with "yes" and the file then provides 1.0 - Tcl reports "attempt to
+  # provide package tclpdf::x 1.0 failed: package tclpdf::x 1.1 was already
+  # provided", which names neither the file nor the cause.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set channel [open [file join $root pkgIndex.tcl] r]
+  set index [read $channel]
+  close $channel
+  set wrong {}
+  foreach {-> name indexed} [regexp -all -inline \
+      {package ifneeded (tclpdf::\w+) (\d+\.\d+)} $index] {
+    set file [file join $root [namespace tail $name].tcl]
+    if {![file exists $file]} {
+      lappend wrong "$name has no file"
+      continue
+    }
+    set channel [open $file r]
+    set source [read $channel]
+    close $channel
+    regexp "package provide $name (\\d+\\.\\d+)" $source -> stated
+    if {![info exists stated] || $stated ne $indexed} {
+      lappend wrong "$name: index $indexed, file [expr {[info exists stated] ?
+          $stated : {none}}]"
+    }
+    unset -nocomplain stated
+  }
+  set wrong
+} -result {}
+
 cleanupTests

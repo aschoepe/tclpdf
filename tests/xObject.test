@@ -1,0 +1,167 @@
+# xObject.test --
+#
+# Form XObjects. The point of the whole module is the first test: the content
+# exists ONCE in the file however often it is placed.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::xObject
+source [file join [file dirname [info script]] helper.tcl]
+
+proc xObjectCountForms {doc} {
+  set writer [$doc writer]
+  set count 0
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/Subtype /Form*} [$writer body $number]]} {
+      incr count
+    }
+  }
+  return $count
+}
+
+test xObject-1.1 {placed four times, stored once} -body {
+  # The whole point: the content exists once in the file, however often it is
+  # placed.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create logo -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc form place logo -at {10 10}
+  $doc form place logo -at {60 10}
+  $doc page add
+  $doc form place logo -at {10 10}
+  $doc form place logo -at {60 10}
+  set forms [xObjectCountForms $doc]
+  set placements [regexp -all {XO1 Do} [::tclpdfTest::content $doc 0]]
+  $doc destroy
+  list $forms $placements
+} -result {1 2}
+
+test xObject-1.2 {the size comes back in the document unit} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {170 30} -script {}
+  set size [lmap value [$doc form size block] {format %.1f $value}]
+  $doc destroy
+  set size
+} -result {170.0 30.0}
+
+test xObject-1.3 {a duplicate name is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc form create a -size {10 10} -script {}
+  try {
+    $doc form create a -size {10 10} -script {}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*already exists*}
+
+test xObject-1.4 {placing an unknown form lists the known ones} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc form create vorhanden -size {10 10} -script {}
+  try {
+    $doc form place fehlt
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*no form named "fehlt"*vorhanden*}
+
+test xObject-2.1 {drawing inside a form does not reach the page} -body {
+  # The canvas stack in the core is what redirects it - without that, every
+  # drawing method would have to know about forms.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc rect -at {0 0} -size {5 5} -fill red
+  set before [::tclpdfTest::content $doc]
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill blue
+    $doc text "im Formular" -at {2 10}
+  }
+  set after [::tclpdfTest::content $doc]
+  $doc destroy
+  # The page content is unchanged by [form create]
+  expr {$before eq $after}
+} -result 1
+
+test xObject-2.2 {inside a form y still counts from the top} -body {
+  # One convention throughout: -at is the top left corner, in a form as on a
+  # page. PDF itself puts a form's origin at the bottom left, and passing that
+  # through would make the same call behave differently depending on where it
+  # stands.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {100 50} -script {
+    $doc rect -at {0 0} -size {100 10} -fill red
+  }
+  set writer [$doc writer]
+  set body {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/Subtype /Form*} [$writer body $number]]} {
+      set body [$writer body $number]
+    }
+  }
+  $doc destroy
+  package require tclpdf::filter
+  set start [expr {[string first "stream\n" $body] + 7}]
+  set stop [expr {[string last "\nendstream" $body] - 1}]
+  set content [::tclpdf::filter decodeFlate [string range $body $start $stop]]
+  # 10 mm tall from the top of a 50 mm form: y runs from 113.39 pt to 141.73,
+  # so the rectangle starts at 113.39 - not at 0.
+  regexp {([0-9.]+) ([0-9.]+) ([0-9.]+) ([0-9.]+) re} $content -> x y w h
+  list [format %.2f $y] [format %.2f $h]
+} -result {113.39 28.35}
+
+test xObject-2.3 {a nested form works} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create inner -size {20 10} -script {
+    $doc rect -at {0 0} -size {20 10} -fill red
+  }
+  $doc form create outer -size {60 30} -script {
+    $doc rect -at {0 0} -size {60 30} -fill lightgray
+    $doc form place inner -at {5 5}
+  }
+  $doc form place outer -at {10 10}
+  set forms [xObjectCountForms $doc]
+  $doc destroy
+  set forms
+} -result 2
+
+test xObject-2.4 {an error inside the script does not leave the canvas pushed} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  catch {
+    $doc form create broken -size {10 10} -script {
+      error "something went wrong"
+    }
+  } message
+  set depth [$doc canvas depth]
+  # The page is still usable afterwards
+  $doc rect -at {0 0} -size {5 5} -fill red
+  set works [string match "*re*" [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $message $depth $works
+} -result {{something went wrong} 0 1}
+
+test xObject-3.1 {scale, rotation and opacity reach the placement} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  $doc form place block -at {10 10} -scale 0.5 -rotate 15 -opacity 0.4
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {cm} $content] [regexp {gs} $content] [regexp {q\n} $content] \
+      [regexp {Q\n} $content]
+} -result {1 1 1 1}
+
+cleanupTests

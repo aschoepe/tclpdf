@@ -37,23 +37,16 @@
   </tr>
 
   <tr>
-    <td colspan="2"><b>Optional Packages</b></td>
+    <td colspan="2"><b>Optional Package</b></td>
   </tr>
   <tr>
-    <td colspan="2">Each of these enables one feature and is needed for nothing else.
-        They are not shipped with tclpdf.</td>
+    <td colspan="2">One, and it is not shipped with tclpdf.</td>
   </tr>
   <tr>
     <td>tdom</td>
-    <td>SVG module</td>
-  </tr>
-  <tr>
-    <td>TclTLS</td>
-    <td>encryption (<code>tls::encrypt</code>; a pure-Tcl AES is roughly 1000 times slower)</td>
-  </tr>
-  <tr>
-    <td>tzint</td>
-    <td>barcodes and QR codes</td>
+    <td>used by the SVG module when present: it parses 27 to 48 times faster than
+        the parser tclpdf brings along and refuses an entity expansion bomb.
+        Without it SVG still works, through the built-in element tree parser.</td>
   </tr>
 </table>
 </div>

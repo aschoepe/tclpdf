@@ -1,0 +1,164 @@
+# event.test --
+#
+# Tests for the hook mechanism. The point of this class is that attachments,
+# ZUGFeRD and metadata can add objects without an edit inside the document
+# core, so what is tested here is mostly the contract those features rely on.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::event
+
+# A subscriber records what it was called with, so order and arguments can be
+# checked without any PDF being involved.
+proc eventRecord {args} {
+  lappend ::eventLog $args
+  return
+}
+
+proc eventFresh {} {
+  set ::eventLog {}
+  return [::tclpdf::event::emitter new]
+}
+
+test event-1.1 {a subscriber receives the emitting object and the arguments} -body {
+  set bus [eventFresh]
+  $bus on catalog [list eventRecord mark]
+  $bus emit catalog 1 2
+  set result [lindex $::eventLog 0]
+  $bus destroy
+  # mark, the object itself, then what emit passed on
+  list [lindex $result 0] [expr {[lindex $result 1] eq $bus}] [lrange $result 2 end]
+} -result {mark 1 {1 2}}
+
+test event-1.2 {emit returns how many subscribers ran} -body {
+  set bus [eventFresh]
+  $bus on resources [list eventRecord a]
+  $bus on resources [list eventRecord b]
+  set count [$bus emit resources]
+  $bus destroy
+  set count
+} -result 2
+
+test event-1.3 {an event without subscribers is not an error} -body {
+  set bus [eventFresh]
+  set count [$bus emit nobodyListens]
+  $bus destroy
+  set count
+} -result 0
+
+test event-1.4 {subscribers run in registration order} -body {
+  set bus [eventFresh]
+  $bus on catalog [list eventRecord first]
+  $bus on catalog [list eventRecord second]
+  $bus on catalog [list eventRecord third]
+  $bus emit catalog
+  set order [lmap entry $::eventLog {lindex $entry 0}]
+  $bus destroy
+  set order
+} -result {first second third}
+
+test event-1.5 {off removes exactly one subscription} -body {
+  set bus [eventFresh]
+  $bus on catalog [list eventRecord keep]
+  set token [$bus on catalog [list eventRecord drop]]
+  $bus off $token
+  $bus emit catalog
+  set order [lmap entry $::eventLog {lindex $entry 0}]
+  $bus destroy
+  set order
+} -result keep
+
+test event-1.6 {an unknown token is accepted} -body {
+  set bus [eventFresh]
+  $bus off e999
+  $bus destroy
+} -result {}
+
+test event-1.7 {an empty callback is refused} -body {
+  set bus [eventFresh]
+  try {
+    $bus on catalog {}
+  } finally {
+    $bus destroy
+  }
+} -returnCodes error -match glob -result {tclpdf: empty callback*}
+
+test event-1.8 {an error in a subscriber reaches the caller} -body {
+  # Deliberate: a ZUGFeRD attachment that fails silently produces an invoice
+  # that passes every validator and carries no invoice data.
+  set bus [eventFresh]
+  $bus on catalog {apply {{object} {error "subscriber said no"}}}
+  try {
+    $bus emit catalog
+  } finally {
+    $bus destroy
+  }
+} -returnCodes error -result {subscriber said no}
+
+test event-1.9 {subscribers can be listed for diagnostics} -body {
+  set bus [eventFresh]
+  $bus on catalog [list eventRecord a]
+  $bus on trailer [list eventRecord b]
+  set events [lsort [$bus subscribers]]
+  set forCatalog [llength [$bus subscribers catalog]]
+  set forNothing [$bus subscribers doesNotExist]
+  $bus destroy
+  list $events $forCatalog $forNothing
+} -result {{catalog trailer} 1 {}}
+
+test event-1.10 {a subscriber may unsubscribe while the event is running} -body {
+  set bus [eventFresh]
+  set token [$bus on catalog [list eventRecord a]]
+  $bus on catalog [list apply [list {object} [list $bus off $token]]]
+  $bus on catalog [list eventRecord c]
+  $bus emit catalog
+  set first [lmap entry $::eventLog {lindex $entry 0}]
+  # The removal takes effect from the next emit onwards.
+  set ::eventLog {}
+  $bus emit catalog
+  set second [lmap entry $::eventLog {lindex $entry 0}]
+  $bus destroy
+  list $first $second
+} -result {{a c} c}
+
+test event-off-5.1 {off removes exactly one subscription} -body {
+  # [off] had no test at all - measured over the whole suite and every
+  # example, it was never once called. That is also why the manual described
+  # it with the wrong signature ("off event script" instead of "off token").
+  set doc [tclpdf new]
+  set first [$doc on catalog {apply {{o args} {}}}]
+  set second [$doc on catalog {apply {{o args} {}}}]
+  set third [$doc on info {apply {{o args} {}}}]
+  $doc off $second
+  set result [list [$doc subscribers catalog] [$doc subscribers info]]
+  $doc destroy
+  list [lindex $result 0] [expr {[llength [lindex $result 1]] == 1}]
+} -result [list [list e1] 1]
+
+test event-off-5.2 {the last subscriber of an event removes the event} -body {
+  set doc [tclpdf new]
+  set token [$doc on catalog {apply {{o args} {}}}]
+  set before [$doc subscribers]
+  $doc off $token
+  set after [$doc subscribers]
+  $doc destroy
+  list $before $after
+} -result {catalog {}}
+
+test event-off-5.3 {an unknown token is not an error} -body {
+  # Unsubscribing twice must not stop a document.
+  set doc [tclpdf new]
+  set token [$doc on catalog {apply {{o args} {}}}]
+  $doc off $token
+  set code [catch {$doc off $token}]
+  $doc destroy
+  set code
+} -result 0
+
+cleanupTests

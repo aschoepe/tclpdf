@@ -1,0 +1,91 @@
+# filter.test --
+#
+# Tests for the stream filters. The Flate test checks the container format,
+# not just the round trip: "zlib deflate" would also survive a round trip here
+# and still be rejected by every PDF reader.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::filter
+
+set filterSample "BT /F1 12 Tf 72 720 Td (Rechnung 2026-0815) Tj ET\n"
+
+test filter-flate-1.1 {round trip} -body {
+  ::tclpdf::filter decodeFlate [::tclpdf::filter encodeFlate $filterSample]
+} -result $filterSample
+
+test filter-flate-1.2 {the zlib container of RFC 1950, not raw deflate} -body {
+  # /FlateDecode expects the two-byte zlib header; raw deflate has none and is
+  # rejected. 0x78 is the only CMF byte zlib emits for deflate with a 32K
+  # window, so its presence is the whole check.
+  binary scan [::tclpdf::filter encodeFlate $filterSample] cu1 first
+  expr {$first == 0x78}
+} -result 1
+
+test filter-flate-1.3 {compression actually happens} -body {
+  set plain [string repeat "0 0 595 842 re f\n" 100]
+  expr {[string length [::tclpdf::filter encodeFlate $plain]] < [string length $plain]}
+} -result 1
+
+test filter-flate-1.4 {binary data survives unchanged} -body {
+  set bytes [binary format H* 00ff8000deadbeef00]
+  set back [::tclpdf::filter decodeFlate [::tclpdf::filter encodeFlate $bytes]]
+  binary scan $back H* hex
+  set hex
+} -result 00ff8000deadbeef00
+
+test filter-ascii85-2.1 {the four-byte group of 7.4.3} -body {
+  # "Man " is the worked example of the specification: 9jqo^
+  ::tclpdf::filter encodeAscii85 "Man "
+} -result 9jqo^~>
+
+test filter-ascii85-2.2 {four zero bytes collapse into z} -body {
+  ::tclpdf::filter encodeAscii85 [binary format H* 0000000000000000]
+} -result zz~>
+
+test filter-ascii85-2.3 {a short final group keeps its length} -body {
+  # One byte in, two characters out - that is what makes the length
+  # recoverable without a separate count.
+  set encoded [::tclpdf::filter encodeAscii85 M]
+  list [string length [string range $encoded 0 end-2]] \
+      [::tclpdf::filter decodeAscii85 $encoded]
+} -result {2 M}
+
+test filter-ascii85-2.4 {round trip over every group length} -body {
+  set failed {}
+  foreach length {1 2 3 4 5 6 7 8 17 64 255} {
+    set bytes [binary format H* [string repeat 5a $length]]
+    if {[::tclpdf::filter decodeAscii85 [::tclpdf::filter encodeAscii85 $bytes]] ne $bytes} {
+      lappend failed $length
+    }
+  }
+  set failed
+} -result {}
+
+test filter-ascii85-2.5 {white space in the stream is ignored} -body {
+  ::tclpdf::filter decodeAscii85 "9jq\n o^ \t~>"
+} -result "Man "
+
+test filter-asciihex-3.1 {round trip} -body {
+  set bytes [binary format H* 00ff10abcdef]
+  ::tclpdf::filter decodeAsciiHex [::tclpdf::filter encodeAsciiHex $bytes]
+} -result [binary format H* 00ff10abcdef]
+
+test filter-asciihex-3.2 {an odd digit count is padded, not truncated} -body {
+  # 7.4.2: the missing digit counts as zero. Dropping it would lose a byte.
+  binary scan [::tclpdf::filter decodeAsciiHex "4a5>"] H* hex
+  set hex
+} -result 4a50
+
+test filter-asciihex-3.3 {the end marker is honoured, trailing junk ignored} -body {
+  binary scan [::tclpdf::filter decodeAsciiHex "48656c6c6f> and then some"] H* hex
+  set hex
+} -result 48656c6c6f
+
+cleanupTests

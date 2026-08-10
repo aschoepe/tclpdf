@@ -1,0 +1,279 @@
+#
+# tclpdf - PDF generation for Tcl
+#
+# image - placing JPEG and PNG pictures (8.9.5)
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+#
+# The public face of the image topic. Reading the two formats happens in
+# imageJpeg.tcl, imagePng.tcl and imagePngAlpha.tcl, which nothing outside
+# this file loads.
+#
+# Usage:
+#
+#   $doc image embed logo assets/logo.png
+#   $doc image place logo -at {20 20} -width 40
+#   $doc page add
+#   $doc image place logo -at {20 20} -width 40    ;# no second copy
+#
+#   $doc image draw assets/photo.jpg -at {20 70} -size {80 60}
+#
+# An embedded picture becomes a PDF object the FIRST time it is placed, not
+# when it is embedded. A caller who embeds a logo and then takes a different
+# branch does not pay for it - the same rule the font module follows.
+#
+# Two conventions that hold everywhere in this package: -at names the TOP left
+# corner, and sizes are in the document unit. Pixels only appear when a size
+# has to be derived, and then through -dpi.
+#
+
+package require Tcl 8.6.11-
+package require TclOO
+package require tclpdf::pdfObj 1.0-
+package require tclpdf::option 1.0-
+package require tclpdf::filter 1.0-
+package require tclpdf::geometry 1.0-
+package require tclpdf::io 1.0-
+package require tclpdf::imageJpeg 1.0-
+package require tclpdf::imagePng 1.0-
+package require tclpdf::document 1.0-
+
+namespace eval ::tclpdf::image {}
+
+oo::define ::tclpdf::document::document {
+
+  # $doc image embed <alias> <path> ?-type auto|jpeg|png?
+  # $doc image place <alias> ?-at {x y}? ?-size {w h}? ...
+  # $doc image draw  <path> ?-at {x y}? ...
+  # $doc image info  <alias>
+  # $doc image names
+  method image {subcommand args} {
+    switch -- $subcommand {
+      embed {return [my ImageEmbed {*}$args]}
+      place {return [my ImagePlace {*}$args]}
+      draw {return [my ImageDraw {*}$args]}
+      info {return [my ImageInfo {*}$args]}
+      size {return [my ImageSize {*}$args]}
+      names {return [dict keys [my state images]]}
+      default {
+        return -code error "tclpdf: unknown image subcommand \"$subcommand\" -\
+            known are: embed, place, draw, info, names"
+      }
+    }
+  }
+
+  method ImageEmbed {alias path args} {
+    set options [::tclpdf::option parse {type auto} $args "image embed"]
+    set images [my state images]
+    if {[dict exists $images $alias]} {
+      return -code error "tclpdf: an image named \"$alias\" is already embedded"
+    }
+    set bytes [::tclpdf::io read $path]
+    set type [dict get $options type]
+    if {$type eq "auto"} {
+      set type [my ImageType $bytes $path]
+    }
+    switch -- $type {
+      jpeg {set parsed [::tclpdf::imageJpeg parse $bytes]}
+      png {set parsed [::tclpdf::imagePng parse $bytes]}
+      default {
+        return -code error "tclpdf: unknown image type \"$type\" - known are:\
+            auto, jpeg, png"
+      }
+    }
+    dict set images $alias [dict create type $type parsed $parsed \
+        bytes $bytes path $path object {}]
+    my state images $images
+    return $alias
+  }
+
+  # Which format is this? Decided by the magic bytes, not by the file name -
+  # a ".jpg" that is really a PNG is common enough to be worth not trusting.
+  method ImageType {bytes path} {
+    if {[string range $bytes 0 7] eq "\x89PNG\r\n\x1a\n"} {
+      return png
+    }
+    binary scan [string range $bytes 0 1] cucu first second
+    if {$first == 0xff && $second == 0xd8} {
+      return jpeg
+    }
+    return -code error "tclpdf: \"$path\" is neither a JPEG nor a PNG - tclpdf\
+        writes those two formats"
+  }
+
+  method ImagePlace {alias args} {
+    set options [::tclpdf::option parse {
+      at {} size {} width {} height {} scale {} rotate 0 opacity {} dpi 72
+    } $args "image place"]
+    set images [my state images]
+    if {![dict exists $images $alias]} {
+      return -code error "tclpdf: no image named \"$alias\" - known are:\
+          [join [dict keys $images] {, }]"
+    }
+    set image [dict get $images $alias]
+    if {[dict get $image object] eq {}} {
+      # ImageWrite registers the resource in the state itself, so the local
+      # copy has to be refreshed - not doing so is how a place ends up naming
+      # a resource that the dictionary already has.
+      my ImageWrite $alias $image
+      set image [dict get [my state images] $alias]
+    }
+
+    lassign [my ImageExtent $image $options] width height
+    lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
+
+    # A picture XObject is a unit square with its origin at the BOTTOM left, so
+    # the matrix carries both the size and the flip to the top-left convention
+    # every other method here uses.
+    lassign [my coords $left [expr {$top + $height}]] x y
+    set w [my distance $width]
+    set h [my distance $height]
+
+    my save
+    if {[dict get $options opacity] ne {}} {
+      my opacity [dict get $options opacity]
+    }
+    set matrix [::tclpdf::geometry multiply \
+        [list $w 0 0 $h 0 0] [::tclpdf::geometry translate $x $y]]
+    if {[dict get $options rotate] != 0} {
+      # Rotate about the placement corner, not about the origin of the page -
+      # otherwise a rotated picture leaves the sheet, which is exactly the
+      # defect the -at handling in graphics.tcl was fixed for.
+      set matrix [::tclpdf::geometry multiply \
+          [list $w 0 0 $h 0 0] [::tclpdf::geometry multiply \
+              [::tclpdf::geometry rotate [dict get $options rotate]] \
+              [::tclpdf::geometry translate $x $y]]]
+    }
+    my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
+    my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
+    my restore
+    return $alias
+  }
+
+  # Embed and place in one step, for a picture used exactly once. The alias is
+  # derived from the path so that the same file placed twice is still stored
+  # once.
+  method ImageDraw {path args} {
+    set alias [my ImageAlias $path]
+    if {![dict exists [my state images] $alias]} {
+      my ImageEmbed $alias $path
+    }
+    return [my ImagePlace $alias {*}$args]
+  }
+
+  method ImageInfo {alias} {
+    set images [my state images]
+    if {![dict exists $images $alias]} {
+      return -code error "tclpdf: no image named \"$alias\""
+    }
+    set image [dict get $images $alias]
+    set parsed [dict get $image parsed]
+    set result [dict create type [dict get $image type] \
+        path [dict get $image path] \
+        bytes [string length [dict get $image bytes]] \
+        width [dict get $parsed width] height [dict get $parsed height]]
+    if {[dict get $image type] eq "png"} {
+      dict set result colorType [dict get $parsed colorType]
+      dict set result bitDepth [dict get $parsed bitDepth]
+      dict set result alpha [::tclpdf::imagePng hasAlpha $parsed]
+      dict set result transparency [::tclpdf::imagePng paletteTransparency $parsed]
+    } else {
+      dict set result components [dict get $parsed components]
+      dict set result bitDepth [dict get $parsed bitsPerComponent]
+      dict set result alpha 0
+    }
+    return $result
+  }
+
+  # How large a picture would come out, in the document unit, with the same
+  # options [place] takes. What a caller needs to lay out around it - and the
+  # only way to ask, since the sizing itself is private.
+  #
+  #   $doc image size logo                  -> natural size at 72 dpi
+  #   $doc image size logo -width 40        -> {40 <proportional height>}
+  #   $doc image size logo -dpi 300         -> the size at 300 dpi
+  method ImageSize {alias args} {
+    set images [my state images]
+    if {![dict exists $images $alias]} {
+      return -code error "tclpdf: no image named \"$alias\""
+    }
+    return [my ImageExtent [dict get $images $alias] [::tclpdf::option parse \
+        {size {} width {} height {} scale {} dpi 72} $args "image size"]]
+  }
+
+  # The size to draw at, in the document unit. Given nothing, a pixel is taken
+  # to be 1/dpi of an inch - with the default of 72 that is one PDF point,
+  # which is the only assumption the format itself makes.
+  method ImageExtent {image options} {
+    set parsed [dict get $image parsed]
+    set pixelWidth [dict get $parsed width]
+    set pixelHeight [dict get $parsed height]
+    set unit [my cget -unit]
+    set naturalWidth [::tclpdf::geometry fromPoints \
+        [expr {$pixelWidth * 72.0 / [dict get $options dpi]}] $unit]
+    set naturalHeight [::tclpdf::geometry fromPoints \
+        [expr {$pixelHeight * 72.0 / [dict get $options dpi]}] $unit]
+
+    return [my fitExtent $naturalWidth $naturalHeight $options]
+  }
+
+  # Turn the parsed picture into PDF objects and register the resource. Called
+  # once per image, on first placement.
+  method ImageWrite {alias image} {
+    set parsed [dict get $image parsed]
+    set pairs [list Type /XObject Subtype /Image \
+        Width [dict get $parsed width] Height [dict get $parsed height]]
+    if {[dict get $image type] eq "jpeg"} {
+      lappend pairs ColorSpace \
+          /[::tclpdf::imageJpeg space [dict get $parsed components]] \
+          BitsPerComponent [dict get $parsed bitsPerComponent] \
+          Filter /DCTDecode
+      if {[::tclpdf::imageJpeg inverted $parsed]} {
+        lappend pairs Decode [::tclpdf::pdfObj arr {1 0 1 0 1 0 1 0}]
+      }
+      set data [dict get $image bytes]
+    } else {
+      set streams [::tclpdf::imagePng streams $parsed]
+      lappend pairs {*}[dict get $streams pairs]
+      set data [dict get $streams data]
+      if {[dict exists $streams maskData]} {
+        # The soft mask is a greyscale image of its own, the same size, and
+        # the picture points at it. Written first so that its number exists
+        # by the time the picture dictionary names it.
+        set maskPairs [list Type /XObject Subtype /Image \
+            Width [dict get $parsed width] Height [dict get $parsed height] \
+            {*}[dict get $streams maskPairs]]
+        set maskNumber [[my writer] addStream $maskPairs \
+            [dict get $streams maskData]]
+        lappend pairs SMask [[my writer] ref $maskNumber]
+      }
+    }
+    set number [[my writer] addStream $pairs $data]
+    set resourceName Im[my ImageCount]
+    my resource XObject $resourceName [[my writer] ref $number]
+    set images [my state images]
+    dict set images $alias resource $resourceName
+    dict set images $alias object $number
+    my state images $images
+    return $number
+  }
+
+  method ImageCount {} {
+    set count [my state imageCount]
+    if {$count eq {}} {
+      set count 0
+    }
+    incr count
+    my state imageCount $count
+    return $count
+  }
+
+  method ImageAlias {path} {
+    return "auto:[file normalize $path]"
+  }
+}
+
+package provide tclpdf::image 1.0

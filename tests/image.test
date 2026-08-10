@@ -1,0 +1,276 @@
+# image.test --
+#
+# JPEG and PNG embedding.
+#
+# The point of most of these is which WAY a file takes, not whether it ends up
+# in the document at all. A picture that goes down the expensive path when the
+# cheap one would do produces a perfectly valid file - just a slower, larger
+# one that nothing reports.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::image
+package require tclpdf::imageJpeg
+package require tclpdf::imagePng
+package require tclpdf::imagePngAlpha
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets images]
+set photo [file join $assets sample-photo.jpg]
+set gray [file join $assets sample-gray.jpg]
+set indexed [file join $assets sample-indexed.png]
+set rgba [file join $assets sample-rgba.png]
+
+testConstraint haveImages [expr {[file exists $photo] && [file exists $rgba]}]
+
+test image-1.1 {a baseline JPEG reports its frame header} -constraints haveImages -body {
+  set parsed [::tclpdf::imageJpeg parse [::tclpdf::io read $photo]]
+  list [dict get $parsed width] [dict get $parsed height] \
+      [dict get $parsed components] [dict get $parsed bitsPerComponent]
+} -result {640 480 3 8}
+
+test image-1.2 {a grayscale JPEG is one component} -constraints haveImages -body {
+  dict get [::tclpdf::imageJpeg parse [::tclpdf::io read $gray]] components
+} -result 1
+
+test image-1.3 {the marker walk does not read a Huffman table as a frame} -constraints haveImages -body {
+  # Regression. DHT is marker 0xC4 and sits INSIDE the 0xC0..0xCF range that
+  # holds the frame headers. Comparing the scanned byte (196) against the
+  # string "0xc4" never matches, and the image then takes its dimensions from
+  # a Huffman table - which is a valid-looking document showing nothing.
+  set parsed [::tclpdf::imageJpeg parse [::tclpdf::io read $gray]]
+  list [dict get $parsed width] [dict get $parsed height]
+} -result {640 480}
+
+test image-1.4 {something that is not a JPEG} -body {
+  ::tclpdf::imageJpeg parse "not a jpeg at all"
+} -returnCodes error -match glob -result {*not a JPEG*}
+
+test image-1.5 {a progressive JPEG is refused by name} -body {
+  # SOI, then a minimal SOF2 segment. Progressive is outside what DCTDecode
+  # covers, and a document carrying one opens to a blank rectangle.
+  set bytes [binary format H* ffd8ffc2000b080010001001011100]
+  ::tclpdf::imageJpeg parse $bytes
+} -returnCodes error -match glob -result {*progressive*baseline*}
+
+test image-2.1 {a PNG reports its header} -constraints haveImages -body {
+  set parsed [::tclpdf::imagePng parse [::tclpdf::io read $rgba]]
+  list [dict get $parsed width] [dict get $parsed height] \
+      [dict get $parsed bitDepth] [dict get $parsed colorType] \
+      [dict get $parsed channels] [dict get $parsed interlace]
+} -result {640 480 8 6 4 0}
+
+test image-2.2 {a palette image keeps its PLTE} -constraints haveImages -body {
+  set parsed [::tclpdf::imagePng parse [::tclpdf::io read $indexed]]
+  list [expr {[string length [dict get $parsed palette]] / 3}] \
+      [dict get $parsed colorType] \
+      [regexp {^\[/Indexed /DeviceRGB 255 } [::tclpdf::imagePng space $parsed]]
+} -result {256 3 1}
+
+test image-2.3 {a palette that is opaque-or-not takes the cheap way} -constraints haveImages -body {
+  # Measured on this file: 256 tRNS entries, 255 of them opaque and one fully
+  # transparent. That is a colour key, so the image data is passed through
+  # untouched - no decoding, no soft mask.
+  set parsed [::tclpdf::imagePng parse [::tclpdf::io read $indexed]]
+  set streams [::tclpdf::imagePng streams $parsed]
+  list [::tclpdf::imagePng paletteTransparency $parsed] \
+      [expr {[dict get $streams data] eq [dict get $parsed idat]}] \
+      [dict exists $streams maskData]
+} -result {colourKey 1 0}
+
+test image-2.4 {an image without alpha is never decoded} -constraints haveImages -body {
+  # The whole point of the pass-through way: the bytes in the PDF ARE the
+  # bytes of the IDAT chunks, and the reader does the un-filtering.
+  set parsed [::tclpdf::imagePng parse [::tclpdf::io read $indexed]]
+  set streams [::tclpdf::imagePng streams $parsed]
+  list [expr {[dict get $streams data] eq [dict get $parsed idat]}] \
+      [regexp {/Predictor 15} [::tclpdf::imagePng decodeParms $parsed]]
+} -result {1 1}
+
+test image-2.5 {an interlaced PNG is refused by name} -body {
+  # IHDR with the interlace byte set. Adam7 rearranges the picture into seven
+  # passes, so neither way applies - and a file that silently took the
+  # pass-through way would come out scrambled.
+  set header [binary format II 4 4]
+  append header [binary format ccccc 8 6 0 0 1]
+  set chunk [binary format Ia4 13 IHDR]
+  append chunk $header [binary format I 0]
+  set idat [binary format Ia4 1 IDAT]
+  append idat "\x00" [binary format I 0]
+  ::tclpdf::imagePng parse "\x89PNG\r\n\x1a\n$chunk$idat"
+} -returnCodes error -match glob -result {*interlaced*}
+
+test image-3.1 {the alpha channel is separated out} -constraints haveImages -body {
+  set parsed [::tclpdf::imagePng parse [::tclpdf::io read $rgba]]
+  set split [::tclpdf::imagePngAlpha separate $parsed]
+  set pixels [expr {640 * 480}]
+  list [expr {[string length [dict get $split color]] == $pixels * 3}] \
+      [expr {[string length [dict get $split alpha]] == $pixels}]
+} -result {1 1}
+
+test image-3.2 {the un-filter reverses all five filter types} -constraints haveImages -body {
+  # Built here rather than measured from a file, so that every one of the five
+  # is exercised - a real encoder picks whichever is cheapest per row and may
+  # never emit some of them.
+  # Five rows of five bytes, one per filter type, each expected value worked
+  # out by hand against PNG 9.2 rather than read off the implementation:
+  #
+  #   None     the bytes as they stand
+  #   Sub      each byte plus its left neighbour: 5, 10, 15, 20, 20
+  #   Up       each byte plus the one above it
+  #   Average  each byte plus (left + above) >> 1
+  #   Paeth    each byte plus whichever neighbour the plane comes closest to
+  set rows {}
+  append rows [binary format cccccc 0 10 20 30 40 0]
+  append rows [binary format cccccc 1 5 5 5 5 0]
+  append rows [binary format cccccc 2 1 1 1 1 0]
+  append rows [binary format cccccc 3 0 0 0 0 0]
+  append rows [binary format cccccc 4 0 0 0 0 0]
+  set out [::tclpdf::imagePngAlpha unfilter $rows 5 5 8 1]
+  list [lrange $out 0 4] [lrange $out 5 9] [lrange $out 10 14] \
+      [lrange $out 15 19] [lrange $out 20 24]
+} -result {{10 20 30 40 0} {5 10 15 20 20} {6 11 16 21 20} {3 7 11 16 18} {3 7 11 16 18}}
+
+test image-4.1 {a JPEG becomes a DCTDecode XObject} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed photo $photo
+  $doc image place photo -at {10 10} -width 50
+  set path [::tclpdfTest::scratch image-jpeg.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Subtype /Image} $bytes] [regexp {/Filter /DCTDecode} $bytes] \
+      [regexp {/ColorSpace /DeviceRGB} $bytes] [regexp {/SMask} $bytes]
+} -result {1 1 1 0}
+
+test image-4.2 {a PNG with alpha gets a soft mask} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed logo $rgba
+  $doc image place logo -at {10 10} -width 50
+  set path [::tclpdfTest::scratch image-alpha.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/SMask \d+ 0 R} $bytes] [regexp {/ColorSpace /DeviceGray} $bytes]
+} -result {1 1}
+
+test image-4.3 {a colour-key palette gets a /Mask array, not a soft mask} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed tile $indexed
+  $doc image place tile -at {10 10} -width 50
+  set path [::tclpdfTest::scratch image-mask.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Mask \[} $bytes] [regexp {/SMask} $bytes]
+} -result {1 0}
+
+test image-4.4 {the same picture placed twice is stored once} -constraints haveImages -body {
+  # Embedding once per placement would make a logo on five pages five times
+  # heavier than it needs to be - and the file would still look correct.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed logo $photo
+  $doc image place logo -at {10 10} -width 30
+  $doc page add
+  $doc image place logo -at {10 10} -width 30
+  set path [::tclpdfTest::scratch image-reuse.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set size [file size $path]
+  file delete $path
+  list [regexp -all {/Filter /DCTDecode} $bytes] [expr {$size < 40000}]
+} -result {1 1}
+
+test image-4.5 {an embedded picture that is never placed produces no object} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed unused $photo
+  set path [::tclpdfTest::scratch image-unused.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/DCTDecode} $bytes
+} -result 0
+
+test image-4.6 {a duplicate alias is refused} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc image embed logo $photo
+  try {
+    $doc image embed logo $photo
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*already embedded*}
+
+test image-4.7 {the format is decided by the bytes, not the file name} -constraints haveImages -body {
+  set path [::tclpdfTest::scratch reallyPng.jpg]
+  file copy -force $rgba $path
+  set doc [tclpdf new]
+  $doc image embed sneaky $path
+  set type [dict get [$doc image info sneaky] type]
+  $doc destroy
+  file delete $path
+  set type
+} -result png
+
+test image-5.1 {natural size follows the pixel count and the dpi} -constraints haveImages -body {
+  # 640 pixels at 72 dpi are 640 points; at 300 dpi they are 640/300 inch.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image embed photo $photo
+  set wide [lindex [$doc image size photo] 0]
+  set narrow [lindex [$doc image size photo -dpi 300] 0]
+  $doc destroy
+  list $wide [format %.1f $narrow]
+} -result {640.0 153.6}
+
+test image-5.2 {a width alone keeps the aspect ratio} -constraints haveImages -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image embed photo $photo
+  lassign [$doc image size photo -width 80] w h
+  $doc destroy
+  list $w [format %.1f $h]
+} -result {80 60.0}
+
+test image-draw-6.1 {draw takes a path and embeds on the way} -constraints haveImages -body {
+  # [image draw] - the one-step form for a picture used once - was called by
+  # no test and no example. It embeds under a generated alias and places in
+  # the same call, and that alias is the part nothing had ever exercised.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image draw $photo -at {10 10} -width 30
+  set aliases [$doc image names]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength $aliases] [regexp {/[A-Za-z0-9]+ Do} $content]
+} -result {1 1}
+
+test image-draw-6.2 {the same file drawn twice is embedded once} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc image draw $photo -at {10 10} -width 30
+  $doc image draw $photo -at {10 60} -width 30
+  set aliases [$doc image names]
+  $doc destroy
+  llength $aliases
+} -result 1
+
+cleanupTests

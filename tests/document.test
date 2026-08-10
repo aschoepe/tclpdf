@@ -1,0 +1,389 @@
+# document.test --
+#
+# The document object, its pages and the drawing methods the topical modules
+# attach to it. Also the lazy loading: a method that is not there yet must
+# arrive on first use rather than fail.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::document
+source [file join [file dirname [info script]] helper.tcl]
+
+test document-1.1 {tclpdf new hands out a document} -body {
+  set doc [tclpdf new]
+  set result [list [$doc cget -format] [$doc cget -unit] [$doc page count]]
+  $doc destroy
+  set result
+} -result {a4 mm 0}
+
+test document-1.2 {options are checked, and the error lists the known ones} -body {
+  tclpdf new -formt a4
+} -returnCodes error -match glob -result {*unknown option "-formt"*-format*}
+
+test document-1.3 {writing without a page is refused} -body {
+  set doc [tclpdf new]
+  try {
+    $doc write [file join [temporaryDirectory] document-empty.pdf]
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*has no pages*}
+
+test document-1.4 {drawing without a page names the remedy} -body {
+  set doc [tclpdf new]
+  try {
+    $doc rect -at {10 10} -size {10 10} -fill red
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*no such page*page add*}
+
+test document-2.1 {page size comes back in the document unit} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set result [lmap value [$doc page size] {format %.0f $value}]
+  $doc destroy
+  set result
+} -result {210 297}
+
+test document-2.2 {a landscape page swaps the sides} -body {
+  set doc [tclpdf new]
+  $doc page add -orientation landscape
+  set result [lmap value [$doc page size] {format %.0f $value}]
+  $doc destroy
+  set result
+} -result {297 210}
+
+test document-2.3 {the five page boxes} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc page box crop {5 5 205 292}
+  set crop [lmap value [$doc page box crop] {format %.0f $value}]
+  set trim [$doc page box trim]
+  $doc destroy
+  list $crop $trim
+} -result {{5 5 205 292} {}}
+
+test document-2.4 {an unknown box names the known ones} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc page box slug {0 0 10 10}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown page box*media, crop, bleed, trim, art*}
+
+test document-2.5 {page rotation must be a multiple of 90} -body {
+  set doc [tclpdf new]
+  try {
+    $doc page add -rotate 45
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*multiple of 90*}
+
+test document-3.1 {y is measured from the TOP, and converted} -body {
+  # 20 mm from the top of an A4 page is 297-20 = 277 mm from the bottom,
+  # which is 785.2 pt. Getting this wrong puts the whole page upside down.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set result [lmap value [$doc coords 10 20] {format %.2f $value}]
+  $doc destroy
+  set result
+} -result {28.35 785.20}
+
+test document-4.1 {a drawing method arrives on first use} -body {
+  # rect lives in shape.tcl, which is not loaded until now - the topic table
+  # in document.tcl is what fetches it.
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {50 20} -fill steelblue
+  # Trailing zeros are trimmed by the number formatter, so it is 0.5098 and
+  # not 0.50980 - the shorter form is the one that ends up in the file.
+  set result [string match "*0.27451 0.5098 0.70588 rg*re*f*" [::tclpdfTest::content $doc]]
+  $doc destroy
+  set result
+} -result 1
+
+test document-4.2 {an unknown method still fails as a method} -body {
+  set doc [tclpdf new]
+  try {
+    $doc thisDoesNotExist
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown method "thisDoesNotExist"*}
+
+test document-4.3 {the painting operator follows fill and stroke} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {5 5} -fill red
+  $doc rect -at {20 10} -size {5 5} -stroke red
+  $doc rect -at {30 10} -size {5 5} -fill red -stroke blue
+  $doc rect -at {40 10} -size {5 5} -fill red -rule evenodd
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # f, S, B and f* - one of the six spellings each, and the wrong one draws
+  # nothing at all without an error.
+  list [regexp {re\s+f\n} $content] [regexp {re\s+S\n} $content] \
+      [regexp {re\s+B\n} $content] [regexp {re\s+f\*\n} $content]
+} -result {1 1 1 1}
+
+test document-4.4 {rotating about a point leaves that point where it was} -body {
+  # Regression: both shifts negative puts the shape off the page, both
+  # positive rotates about the origin. Neither produces an error - only a
+  # shape somewhere else, which no validator reports.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc save
+  $doc transform -at {100 100} -rotate 30
+  $doc restore
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) cm} \
+      $content -> a b c d e f
+  # The fixed point of the matrix must be 100/100 mm = 283.46/558.43 pt.
+  set x [expr {$a * 283.46 + $c * 558.43 + $e}]
+  set y [expr {$b * 283.46 + $d * 558.43 + $f}]
+  list [format %.1f $x] [format %.1f $y]
+} -result {283.5 558.4}
+
+test document-5.1 {a written file carries the metadata and the pages} -body {
+  set path [file join [temporaryDirectory] document-write.pdf]
+  set doc [tclpdf new]
+  $doc info Title "Rechnung 2026-0815"
+  $doc page add
+  $doc page add
+  $doc line -from {20 20} -to {190 20} -stroke black
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string range $bytes 0 7] [regexp {/Count 2} $bytes] \
+      [regexp {Rechnung 2026-0815} $bytes] [regexp {%%EOF} $bytes]
+} -result {%PDF-1.7 1 1 1}
+
+test document-5.2 {the version reaches the header} -body {
+  set path [file join [temporaryDirectory] document-version.pdf]
+  set doc [tclpdf new -version 2.0]
+  $doc page add
+  $doc write $path
+  $doc destroy
+  set head [string range [::tclpdfTest::readBytes $path] 0 7]
+  file delete $path
+  set head
+} -result %PDF-2.0
+
+test document-6.1 {a subscriber can add a catalog entry without a core change} -body {
+  # The mechanism attachments and ZUGFeRD rely on.
+  set path [file join [temporaryDirectory] document-hook.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc on catalog {apply {{document} {
+    $document catalogEntry Lang (de-DE)
+  }}}
+  $doc write $path
+  $doc destroy
+  set found [regexp {/Lang \(de-DE\)} [::tclpdfTest::readBytes $path]]
+  file delete $path
+  set found
+} -result 1
+
+test document-6.2 {XMP metadata is stored uncompressed} -body {
+  # PDF/A requires the packet to be readable without decoding; a validator
+  # that cannot read it fails the file.
+  set path [file join [temporaryDirectory] document-xmp.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc metadata {<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?></x:xmpmeta>}
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Type /Metadata} $bytes] [regexp {xpacket begin} $bytes]
+} -result {1 1}
+
+test document-9.1 {state tells reading and writing apart by argument count} -body {
+  # Regression. With a default parameter the two were indistinguishable:
+  # "my state key {}" looked like clearing and returned the value instead.
+  # The SVG module used it to reset a counter, so the counter never reset and
+  # reported gradients in drawings that have none - a diagnostic that lied.
+  set doc [tclpdf new]
+  $doc state counter 7
+  set stored [$doc state counter]
+  $doc state counter {}
+  set cleared [$doc state counter]
+  $doc destroy
+  list $stored $cleared
+} -result {7 {}}
+
+test document-9.2 {state refuses more than one value} -body {
+  set doc [tclpdf new]
+  try {
+    $doc state key a b
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*at most one value*}
+
+test document-version-10.1 {configure -version reaches the file} -body {
+  # [cget -version] answered 1.4 while the file still said %PDF-1.7: the
+  # writer is built once in the constructor and carried the version with it,
+  # so a later [configure] changed the option and nothing else. Two sources of
+  # truth, no error, and the file claims a version it was not written for.
+  set doc [tclpdf new]
+  $doc page add
+  $doc configure -version 1.4
+  set path [::tclpdfTest::scratch version.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  string range $bytes 0 7
+} -result {%PDF-1.4}
+
+test document-clear-11.1 {an empty value removes, it does not read} -body {
+  # The same trap [state] documents: with a default parameter "clear this" and
+  # "read this" are the same call, and the caller silently gets the wrong one.
+  # [info Title {}] used to RETURN the title and leave it standing.
+  set doc [tclpdf new]
+  $doc info Title "Titel"
+  set before [$doc info Title]
+  $doc info Title {}
+  set after [$doc info Title]
+  $doc destroy
+  list $before $after
+} -result {Titel {}}
+
+test document-clear-11.2 {catalogEntry and resource clear the same way} -body {
+  set doc [tclpdf new]
+  $doc catalogEntry PageMode /UseOutlines
+  $doc resource ExtGState GStest "1 0 R"
+  $doc catalogEntry PageMode {}
+  $doc resource ExtGState GStest {}
+  set result [list [$doc catalogEntry PageMode] [$doc resource ExtGState GStest]]
+  $doc destroy
+  set result
+} -result {{} {}}
+
+test document-clear-11.3 {too many arguments are refused, not guessed} -body {
+  set doc [tclpdf new]
+  set codes [list [catch {$doc info Title a b}] [catch {$doc catalogEntry K a b}] \
+      [catch {$doc metadata a b}] [catch {$doc resource Font a b c}]]
+  $doc destroy
+  set codes
+} -result {1 1 1 1}
+
+test document-box-12.1 {a page box that does not start at zero} -body {
+  # A box is {x0 y0 x1 y1}, so the size is the DIFFERENCE. Taking x1 and y1
+  # answered 220 by 307 for a page that is in fact 210 by 297 (7.7.6.3).
+  set doc [tclpdf new]
+  $doc page add
+  $doc page box media {10 10 220 307}
+  set size [$doc page size]
+  $doc destroy
+  lmap value $size {format %.0f $value}
+} -result {210 297}
+
+test document-box-12.2 {the origin follows the box, not the axis} -body {
+  # Ignoring x0 put everything ten millimetres left of the box: still in the
+  # file, outside the page, and no validator says a word.
+  set doc [tclpdf new]
+  $doc page add
+  $doc page box media {10 10 220 307}
+  $doc rect -at {0 0} -size {10 10} -fill red
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # 10 mm is 28.34646 pt - the x of the rectangle must start there, not at 0.
+  regexp {28\.34646 [0-9.]+ [0-9.]+ [0-9.]+ re} $content
+} -result 1
+
+test document-channel-13.1 {writeChannel produces the same document as write} -body {
+  # The manual described [writeChannel] and the method did not exist: it lived
+  # on the WRITER, took two arguments, and "$doc writeChannel $fh" answered
+  # "unknown method". Nothing called it, so nothing noticed.
+  set first [::tclpdfTest::scratch channel-a.pdf]
+  set second [::tclpdfTest::scratch channel-b.pdf]
+
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "Kanal" -at {20 20}
+  [$doc writer] id "0123456789abcdef"
+  $doc write $first
+  $doc destroy
+
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "Kanal" -at {20 20}
+  [$doc writer] id "0123456789abcdef"
+  set channel [open $second w]
+  $doc writeChannel $channel
+  close $channel
+  $doc destroy
+
+  # Byte for byte the same - the /ID is pinned, so nothing is left to differ.
+  set same [expr {[::tclpdfTest::readBytes $first] eq [::tclpdfTest::readBytes $second]}]
+  file delete $first $second
+  set same
+} -result 1
+
+test document-channel-13.2 {a document without pages is refused either way} -body {
+  set doc [tclpdf new]
+  set path [::tclpdfTest::scratch channel-empty.pdf]
+  set channel [open $path w]
+  set codes [list [catch {$doc write $path}] [catch {$doc writeChannel $channel}]]
+  close $channel
+  file delete $path
+  $doc destroy
+  set codes
+} -result {1 1}
+
+cleanupTests
+
+test document-9.1 {the document language goes into the catalog} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc language de-DE
+  set back [$doc language]
+  $doc text "x" -at {10 10}
+  set file [file join [::tcltest::temporaryDirectory] lang.pdf]
+  $doc write $file
+  set fh [open $file rb]
+  set bytes [read $fh]
+  close $fh
+  file delete $file
+  $doc destroy
+  # Read back what was set, and find it in the catalog rather than trusting
+  # the setter.
+  list $back [regexp {/Lang \(de-DE\)} $bytes]
+} -result {de-DE 1}
+
+test document-9.2 {a malformed language tag is refused} -body {
+  set doc [tclpdf new -unit mm]
+  set caught [catch {$doc language "de_DE"} message]
+  $doc destroy
+  list $caught [string match {*not a language tag*} $message]
+} -result {1 1}
+
+test document-9.3 {without a language nothing is written} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set empty [$doc language]
+  $doc text "x" -at {10 10}
+  set file [file join [::tcltest::temporaryDirectory] nolang.pdf]
+  $doc write $file
+  set fh [open $file rb]
+  set bytes [read $fh]
+  close $fh
+  file delete $file
+  $doc destroy
+  list $empty [regexp {/Lang} $bytes]
+} -result {{} 0}

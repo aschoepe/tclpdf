@@ -10,8 +10,9 @@ SYNOPSIS
     Create PDF documents from Tcl: pages, graphics, embedded fonts, images,
     tables and electronic invoices.
 
-    The package covers what jsPDF and jsPDF-AutoTable provide, plus two things
-    they do not: general file attachments and reusable form XObjects.
+    Beyond the usual page, text and graphics work it does two things a PDF
+    writer often leaves out: general file attachments, and form XObjects that
+    store a drawing once and place it as often as wanted.
 
         Document and graphics
             Pages, paths, transparency (ExtGState), form XObjects for reusable
@@ -37,8 +38,12 @@ SYNOPSIS
             /AF entry and name tree. The conformance level is derived from
             BT-24 of the invoice XML rather than taken on trust.
 
-    See docs/FEATURES.md for the full scope, what was deliberately left out,
-    and the measurements behind each decision.
+    Everything listed above is built and tested; nothing here is planned or
+    partial. Measured against the page count of its chapters, that covers
+    roughly a third of ISO 32000-1 - and the missing two thirds are almost
+    entirely what a READER of foreign PDFs needs rather than a writer, plus
+    encryption, form fields and tagged PDF. See the manual for the complete
+    list of commands.
 
 
 DEPENDENCIES
@@ -46,13 +51,15 @@ DEPENDENCIES
     Tcl >= 8.6.11 (runs under Tcl 9 as well)
 
     The core needs nothing beyond Tcl itself: zlib is a built-in command,
-    not a package. Optional, each for one feature only:
+    not a package.
 
-        tdom     - only for the SVG module
-        TclTLS   - only for encryption (tls::encrypt is roughly 1000 times
-                   faster than a pure-Tcl AES; without it, encryption is
-                   unavailable rather than slow)
-        tzint    - only for barcodes and QR codes
+        tdom     - optional, used by the SVG module when present. It parses
+                   27 to 48 times faster than the parser tclpdf brings along
+                   and refuses an entity expansion bomb. Without it SVG still
+                   works, through the built-in element tree parser.
+
+    That is the whole list. Encryption and barcodes are planned work and will
+    name their packages here once they exist.
 
     Tk is not required and must not be pulled in.
 
@@ -72,6 +79,12 @@ INSTALLING
         ./configure
         make test
         make install
+
+    Build IN the source directory. A separate build directory configures
+    cleanly but cannot run the tests: the generated pkgIndex.tcl locates the
+    modules through $dir, which is then the build directory, while the forty
+    .tcl files stay where the sources are. Nothing is lost by building
+    in-tree - make install puts index and modules together again either way.
 
     By default this installs into the lib directory of the Tcl
     installation found by configure (use --with-tcl to point it to the

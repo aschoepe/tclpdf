@@ -1,0 +1,227 @@
+#
+# tclpdf - PDF generation for Tcl
+#
+# writer - object numbering, cross-reference table and file layout (7.5)
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+#
+# Holds no PDF semantics - it knows nothing about pages, fonts or colours. It
+# knows how to hand out object numbers, how to place bytes in a file and how to
+# record where each object ended up. Everything topical builds on top.
+#
+# Two things are deliberately not done here:
+#
+#   * Cross-reference STREAMS and object streams are not written. Measured over
+#     the document corpus, they save 1.5 % on an 18-object invoice and 3.1 % in
+#     the median - and they cost every reader that only speaks PDF 1.4. Reading
+#     them is a different matter and belongs to stage 7 (see docs/FEATURES.md).
+#   * Offsets are not counted by hand. The channel is asked with [tell] after
+#     every object, so a miscount in the buffer cannot happen. An xref table
+#     that is off by one byte produces a file that some readers still open,
+#     which is the worst kind of defect to chase.
+#
+
+package require Tcl 8.6.11-
+package require TclOO
+package require tclpdf::pdfObj 1.0-
+
+namespace eval ::tclpdf::writer {}
+
+oo::class create ::tclpdf::writer::pdf {
+  variable tclpdfObjects tclpdfNext tclpdfVersion tclpdfId
+
+  # The PDF version is a parameter, not a constant: PDF/A-3 and therefore
+  # ZUGFeRD require 1.7, while PDF/A-4f would want 2.0. Keeping it here makes
+  # that a setting rather than a rebuild.
+  constructor {{version 1.7}} {
+    set tclpdfObjects {}
+    set tclpdfNext 0
+    set tclpdfId {}
+    my version $version
+  }
+
+  method version {{value {}}} {
+    if {$value ne {}} {
+      # A list, not a pattern. The pattern let "1.9" through, and there is
+      # no PDF 1.8 or 1.9 - the file would claim a version that does not
+      # exist, which no reader complains about and no validator checks.
+      if {$value ni {1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 2.0}} {
+        return -code error "tclpdf: there is no PDF version \"$value\" -\
+            known are 1.0 to 1.7 (ISO 32000-1) and 2.0 (ISO 32000-2)"
+      }
+      set tclpdfVersion $value
+    }
+    return $tclpdfVersion
+  }
+
+  # Reserve a number without having the content yet. This is what makes
+  # forward references possible - a page needs the number of its content
+  # stream before the stream is finished.
+  method reserve {} {
+    incr tclpdfNext
+    dict set tclpdfObjects $tclpdfNext {}
+    return $tclpdfNext
+  }
+
+  # Fill a reserved number.
+  method put {number body} {
+    if {![dict exists $tclpdfObjects $number]} {
+      return -code error "tclpdf: object $number was never reserved"
+    }
+    dict set tclpdfObjects $number $body
+    return $number
+  }
+
+  # Reserve and fill in one step - the common case.
+  method add {body} {
+    return [my put [my reserve] $body]
+  }
+
+  # A stream object. /Length is computed here and nowhere else: it is the byte
+  # count of the data exactly as written, and getting it wrong produces a file
+  # that opens in some readers and not in others.
+  method addStream {pairs data} {
+    my CheckBytes $data
+    lappend pairs Length [string length $data]
+    return [my add "[::tclpdf::pdfObj dictionary $pairs]\nstream\n$data\nendstream"]
+  }
+
+  method stream {number pairs data} {
+    my CheckBytes $data
+    lappend pairs Length [string length $data]
+    return [my put $number "[::tclpdf::pdfObj dictionary $pairs]\nstream\n$data\nendstream"]
+  }
+
+  method count {} {
+    return $tclpdfNext
+  }
+
+  # An indirect reference to one of OUR objects. Delegates the syntax to
+  # pdfObj and adds the one thing only the writer can know: whether that
+  # number was ever handed out. A reference to a number that does not exist
+  # produces a file readers open and render with pieces missing.
+  method ref {number} {
+    if {![dict exists $tclpdfObjects $number]} {
+      return -code error "tclpdf: no such object: $number"
+    }
+    return [::tclpdf::pdfObj ref $number]
+  }
+
+  # The stored body of an object - for tests and for diagnostics.
+  method body {number} {
+    if {![dict exists $tclpdfObjects $number]} {
+      return -code error "tclpdf: no such object: $number"
+    }
+    return [dict get $tclpdfObjects $number]
+  }
+
+  # The file identifier (14.4). Required by PDF/A, and readers use it to tell
+  # revisions of the same document apart. Settable so a caller who needs a
+  # byte-identical result can pin it.
+  method id {{value {}}} {
+    if {$value ne {}} {
+      set tclpdfId $value
+    } elseif {$tclpdfId eq {}} {
+      # Uniqueness is all that is asked for - this is not a digest and does not
+      # have to be one, which saves a dependency on a hash package. Eight bytes
+      # of clock plus eight of rand() cannot collide within a process and are
+      # separated across processes by the microsecond part.
+      set now [clock microseconds]
+      set bytes {}
+      for {set n 0} {$n < 8} {incr n} {
+        lappend bytes [expr {($now >> ($n * 8)) & 0xff}]
+      }
+      for {set n 0} {$n < 8} {incr n} {
+        lappend bytes [expr {int(rand() * 256)}]
+      }
+      set tclpdfId [binary format c* $bytes]
+    }
+    return $tclpdfId
+  }
+
+  # Write the whole file. The trailer pairs come from the document (/Root and
+  # /Info); /Size and /ID are added here because only the writer knows them.
+  method writeChannel {channel trailerPairs} {
+    my CheckComplete
+    # "-translation binary" ALONE - measured, adding "-encoding binary" throws
+    # under Tcl 9.0.4 ("unknown encoding \"binary\": No longer supported") and
+    # would break the package there while working fine under 8.6. The
+    # translation setting already selects the byte-transparent encoding in both.
+    fconfigure $channel -translation binary
+
+    # Line two carries four bytes above 127 so that anything looking at the
+    # file - a mail gateway, a version control system - classifies it as
+    # binary and stops translating line endings (7.5.2).
+    puts -nonewline $channel "%PDF-[my version]\n"
+    puts -nonewline $channel "%\xe2\xe3\xcf\xd3\n"
+
+    set offsets {}
+    for {set number 1} {$number <= $tclpdfNext} {incr number} {
+      dict set offsets $number [tell $channel]
+      puts -nonewline $channel "$number 0 obj\n[dict get $tclpdfObjects $number]\nendobj\n"
+    }
+
+    set startxref [tell $channel]
+    puts -nonewline $channel "xref\n0 [expr {$tclpdfNext + 1}]\n"
+    # Entry zero heads the chain of free objects and is always this literal.
+    # Every entry is exactly 20 bytes including the two-byte line ending -
+    # readers do seek into this table by index.
+    puts -nonewline $channel "0000000000 65535 f \n"
+    for {set number 1} {$number <= $tclpdfNext} {incr number} {
+      puts -nonewline $channel [format "%010d 00000 n \n" [dict get $offsets $number]]
+    }
+
+    set identifier [::tclpdf::pdfObj hexStr [my id]]
+    lappend trailerPairs Size [expr {$tclpdfNext + 1}] \
+        ID [::tclpdf::pdfObj arr [list $identifier $identifier]]
+    puts -nonewline $channel "trailer\n[::tclpdf::pdfObj dictionary $trailerPairs]\n"
+    puts -nonewline $channel "startxref\n$startxref\n%%EOF\n"
+    return $startxref
+  }
+
+  # Write to a file. The channel is configured here rather than at the call
+  # site: measured, a channel left on the default translation turns 17 written
+  # bytes into 21 in the file, and no validator reports it.
+  method writeFile {path trailerPairs} {
+    set channel [open $path w]
+    try {
+      my writeChannel $channel $trailerPairs
+    } finally {
+      close $channel
+    }
+    return $path
+  }
+
+  # A number reserved and never filled would be written as an empty object and
+  # silently break every reference pointing at it.
+  method CheckComplete {} {
+    set missing {}
+    dict for {number body} $tclpdfObjects {
+      if {$body eq {}} {
+        lappend missing $number
+      }
+    }
+    if {[llength $missing]} {
+      return -code error "tclpdf: object(s) reserved but never written: [join $missing {, }]"
+    }
+    return
+  }
+
+  # Stream data must be bytes. A string holding characters above U+00FF would
+  # give a /Length in characters while the channel writes something else - the
+  # file then looks right and is truncated.
+  method CheckBytes {data} {
+    # The range is written as escapes rather than as literal characters:
+    # Tcl 8.6 reads this file through the system encoding and Tcl 9 as
+    # UTF-8, so a literal would not mean the same thing in both.
+    if {[regexp {[^\u0000-\u00ff]} $data]} {
+      return -code error "tclpdf: stream data must be bytes, not text - encode it first"
+    }
+    return
+  }
+}
+
+package provide tclpdf::writer 1.0

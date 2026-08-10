@@ -1,0 +1,128 @@
+# afm.test --
+#
+# The 14 standard fonts. The Euro test is the one that matters: a width of 0
+# is not an error anywhere in the chain, it just places every amount on an
+# invoice slightly wrong.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::afm
+
+test afm-1.1 {all 14 standard fonts are present} -body {
+  llength [::tclpdf::afm fonts]
+} -result 14
+
+test afm-1.2 {family and style resolve to a font name} -body {
+  list [::tclpdf::afm resolve helvetica] \
+      [::tclpdf::afm resolve helvetica bold] \
+      [::tclpdf::afm resolve times {bold italic}] \
+      [::tclpdf::afm resolve courier oblique] \
+      [::tclpdf::afm resolve arial bold]
+} -result {Helvetica Helvetica-Bold Times-BoldItalic Courier-Oblique Helvetica-Bold}
+
+test afm-1.3 {a font name passes through, case-insensitively} -body {
+  list [::tclpdf::afm resolve Times-Italic] [::tclpdf::afm resolve helvetica-bold]
+} -result {Times-Italic Helvetica-Bold}
+
+test afm-1.4 {an unknown family lists the known ones} -body {
+  ::tclpdf::afm resolve garamond
+} -returnCodes error -match glob -result {*unknown font "garamond"*known families are:*}
+
+test afm-2.1 {widths match the AFM source} -body {
+  # Spot values read out of the Adobe AFM files; they are what the generator
+  # has to reproduce.
+  list [::tclpdf::afm width Helvetica 65] [::tclpdf::afm width Helvetica 32] \
+      [::tclpdf::afm width Times-Roman 65] [::tclpdf::afm width Helvetica-Bold 65]
+} -result {667 278 722 722}
+
+test afm-2.2 {Courier is monospaced} -body {
+  set widths {}
+  foreach code {65 105 87 46} {
+    lappend widths [::tclpdf::afm width Courier $code]
+  }
+  lsort -unique $widths
+} -result 600
+
+test afm-2.3 {the Euro sign has a width} -body {
+  # Regression: the generator first picked one glyph name per code point and
+  # chose "euro" where the AFM files carry "Euro", which silently produced 0
+  # for all 14 fonts.
+  set zero {}
+  foreach font [::tclpdf::afm fonts] {
+    if {$font in {Symbol ZapfDingbats}} {
+      continue
+    }
+    if {[::tclpdf::afm width $font 128] == 0} {
+      lappend zero $font
+    }
+  }
+  set zero
+} -result {}
+
+test afm-2.4 {no gaps in WinAnsi for the text fonts} -body {
+  # Byte by byte and guarded: five cp1252 positions are unassigned, and the
+  # interpreters disagree about them - 8.6.18 passes them through, 9.0.4
+  # throws "unexpected byte sequence". Converting all 256 at once passes here
+  # and fails there.
+  set gaps {}
+  foreach font {Helvetica Times-Roman Courier} {
+    for {set code 32} {$code < 256} {incr code} {
+      if {[catch {encoding convertfrom cp1252 [binary format cu $code]} char]} {
+        continue
+      }
+      if {[scan $char %c] != $code && [::tclpdf::afm width $font $code] == 0} {
+        lappend gaps $font/$code
+      }
+    }
+  }
+  set gaps
+} -result {}
+
+test afm-3.1 {string width scales with the size} -body {
+  set at12 [::tclpdf::afm stringWidth Helvetica Hallo 12]
+  set at24 [::tclpdf::afm stringWidth Helvetica Hallo 24]
+  list [format %.3f $at12] [expr {abs($at24 - 2 * $at12) < 0.0001}]
+} -result {27.336 1}
+
+test afm-3.2 {a character outside WinAnsi is refused, identically in 8.6 and 9} -body {
+  # Tcl 9 throws inside [encoding convertto] while 8.6 substitutes "?" - both
+  # have to come out as the same tclpdf message, or the package behaves
+  # differently depending on the interpreter.
+  ::tclpdf::afm stringWidth Helvetica "Preis: [encoding convertfrom utf-8 [binary format H* e4b8ad]]" 12
+} -returnCodes error -match glob \
+  -result {*U+4E2D is not available in WinAnsiEncoding*embed a TrueType font*}
+
+test afm-3.3 {the Euro sign can be written} -body {
+  set euro [encoding convertfrom utf-8 [binary format H* e282ac]]
+  binary scan [::tclpdf::afm bytes Helvetica "1,50 $euro"] H* hex
+  set hex
+} -result 312c35302080 ;# "1,50 " plus the Euro as byte 0x80
+
+test afm-3.4 {the Euro really is byte 128} -body {
+  set euro [encoding convertfrom utf-8 [binary format H* e282ac]]
+  binary scan [::tclpdf::afm bytes Helvetica $euro] cu code
+  set code
+} -result 128
+
+test afm-4.1 {Symbol and ZapfDingbats are symbolic, the others are not} -body {
+  list [::tclpdf::afm isSymbolic Symbol] [::tclpdf::afm isSymbolic ZapfDingbats] \
+      [::tclpdf::afm isSymbolic Helvetica]
+} -result {1 1 0}
+
+test afm-4.2 {the descriptor carries what a FontDescriptor needs} -body {
+  set descriptor [::tclpdf::afm descriptor Helvetica]
+  list [dict get $descriptor Ascender] [dict get $descriptor Descender] \
+      [dict get $descriptor CapHeight] [llength [dict get $descriptor FontBBox]]
+} -result {718 -207 718 4}
+
+test afm-4.3 {an unknown font names the known ones} -body {
+  ::tclpdf::afm width DoesNotExist 65
+} -returnCodes error -match glob -result {*not one of the 14 standard fonts*}
+
+cleanupTests

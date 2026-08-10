@@ -1,0 +1,190 @@
+# attach.test --
+#
+# Embedded files. The byte-identity test is the one that matters: an
+# attachment quietly rewritten on the way in still passes every validator,
+# because none of them compares it against the original.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::attach
+source [file join [file dirname [info script]] helper.tcl]
+
+# Content with CRLF, a NUL and a byte above 127 - everything a channel left on
+# the wrong translation would mangle.
+set attachSample [binary format H* 0d0a00ff41420d0a]
+
+test attach-1.1 {an attachment is listed by name} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data $attachSample -name daten.bin
+  set names [$doc attachments]
+  $doc destroy
+  set names
+} -result daten.bin
+
+test attach-1.2 {several attachments per document} -body {
+  # 4 of the 61 official reference PDFs carry more than one; the browser route
+  # this replaces cannot do it at all.
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data a -name eins.txt
+  $doc attach -data b -name zwei.txt
+  $doc attach -data c -name drei.txt
+  set names [$doc attachments]
+  $doc destroy
+  set names
+} -result {eins.txt zwei.txt drei.txt}
+
+test attach-1.3 {a duplicate name is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data a -name gleich.txt
+  try {
+    $doc attach -data b -name gleich.txt
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*already exists*name tree*}
+
+test attach-1.4 {an unknown relationship is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc attach -data a -name x.txt -relationship Beilage
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-relationship must be one of*Data*}
+
+test attach-1.5 {a missing file is reported} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc attach [file join [temporaryDirectory] does-not-exist.xml]
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*does not exist*}
+
+test attach-2.1 {bytes survive a round trip through a file, unchanged} -body {
+  # CRLF, NUL and a high byte - read, embedded uncompressed, read back out of
+  # the PDF.
+  set source [::tclpdfTest::scratch attach-source.bin]
+  ::tclpdf::io write $source $attachSample
+  set path [::tclpdfTest::scratch attach-round.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach $source -name daten.bin -compress 0
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $source $path
+  # The stream sits between "stream\n" and "\nendstream"
+  set start [string first "stream\n" $bytes]
+  set stop [string first "\nendstream" $bytes $start]
+  set embedded [string range $bytes [expr {$start + 7}] [expr {$stop - 1}]]
+  binary scan $embedded H* hex
+  set hex
+} -result 0d0a00ff41420d0a
+
+test attach-2.2 {the name defaults to the file name} -body {
+  set source [::tclpdfTest::scratch factur-x.xml]
+  ::tclpdf::io write $source "<x/>"
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach $source
+  set names [$doc attachments]
+  $doc destroy
+  file delete $source
+  set names
+} -result factur-x.xml
+
+test attach-3.1 {Filespec, name tree and AF all appear} -body {
+  set path [::tclpdfTest::scratch attach-structure.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data "<invoice/>" -name factur-x.xml -relationship Data \
+      -mime text/xml -description "Rechnungsdaten"
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Type /EmbeddedFile} $bytes] \
+      [regexp {/Type /Filespec} $bytes] \
+      [regexp {/AFRelationship /Data} $bytes] \
+      [regexp {/Names <</EmbeddedFiles|/EmbeddedFiles} $bytes] \
+      [regexp {/AF \[} $bytes] \
+      [regexp {/Subtype /text#2Fxml} $bytes]
+} -result {1 1 1 1 1 1}
+
+test attach-3.2 {AF points straight at the Filespec} -body {
+  # Ghostscript puts a second level of indirection here, and qpdf and poppler
+  # then cannot reach the invoice data even though the file validates.
+  set path [::tclpdfTest::scratch attach-af.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data "<invoice/>" -name factur-x.xml -relationship Data
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/AF \[(\d+) 0 R\]} $bytes -> number
+  regexp "(?n)^$number 0 obj\\n(.*)\$" $bytes -> body
+  # The object /AF names must BE the Filespec, not something pointing at one.
+  regexp {/Type /Filespec} $body
+} -result 1
+
+test attach-3.3 {the name tree is sorted} -body {
+  # A reader may binary-search it (7.9.6); unsorted, it finds nothing.
+  set path [::tclpdfTest::scratch attach-sorted.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  foreach name {zulu.txt alpha.txt mike.txt} {
+    $doc attach -data x -name $name
+  }
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/EmbeddedFiles << /Names \[(.*?)\] >>} $bytes -> tree
+  set names {}
+  foreach {name reference} [regexp -all -inline {\(([^)]*)\) (\d+ 0 R)} $tree] {
+    # every third element is the captured name
+  }
+  regexp -all -inline {\(([^)]*)\)} $tree
+} -result {(alpha.txt) alpha.txt (mike.txt) mike.txt (zulu.txt) zulu.txt}
+
+test attach-3.4 {Params Size is the uncompressed length} -body {
+  set path [::tclpdfTest::scratch attach-size.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data [string repeat "x" 5000] -name gross.txt -compress 1
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Params << /Size (\d+) >>} $bytes -> size
+  regexp {/Size 5000.*?/Length (\d+)} $bytes -> length
+  # Size is the original, Length the compressed one - and it did compress
+  list $size [expr {$length < 5000}]
+} -result {5000 1}
+
+test attach-4.1 {a private method can be hooked onto an event} -body {
+  # onSelf exists because the bus calls from the global context, where a
+  # method starting with a capital is not exported and "$doc Method" fails.
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data x -name x.txt
+  set events [lsort [$doc subscribers]]
+  $doc destroy
+  set events
+} -result {beforeWrite catalog}
+
+cleanupTests

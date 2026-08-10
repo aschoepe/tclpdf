@@ -1,0 +1,269 @@
+# graphics.test --
+#
+# The graphics state and the shapes that set it.
+#
+# Every test here is a regression against ONE defect: colour, line width, dash,
+# caps, joins and alpha are graphics state (8.4.1), so they survive the
+# painting operator. A shape that set them therefore changed everything drawn
+# afterwards - "rect -width 3 -dash {2 2}" made the NEXT line thick and dashed,
+# with nothing in that call to explain it. Found by reading the content stream,
+# not by any validator: the file is valid either way.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::shape
+package require tclpdf::graphics
+source [file join [file dirname [info script]] helper.tcl]
+
+# The operators of a content stream, in order, operands dropped.
+#
+# Every token, not just the last one per line: a line may carry two of them
+# ("x y m x y l"), and taking only the last silently loses the "m" - which is
+# how the first version of this file reported a test as passing that was
+# looking for something it could never find.
+proc ::tclpdfTest::operators {stream} {
+  set result {}
+  foreach token [regexp -all -inline {\S+} $stream] {
+    # Operands are numbers or the bracketed dash array; everything else that
+    # is short and alphabetic is an operator.
+    if {[string is double -strict $token] || [string match {\[*} $token]
+        || [string match {*\]} $token]} {
+      continue
+    }
+    lappend result $token
+  }
+  return $result
+}
+
+# Is the state set by the first shape taken back BEFORE the second one starts?
+#
+# Counting the operator is not enough and was the first, worthless version of
+# this test: without the guard the rectangle still writes exactly one "w" and
+# the line still writes none, so the count is 1 either way while the line comes
+# out three millimetres thick. What tells the two apart is the "Q" BETWEEN
+# them - that is what has to be measured.
+proc ::tclpdfTest::takenBack {operators operator start} {
+  set set [lsearch $operators $operator]
+  if {$set < 0} {
+    return 0
+  }
+  set restored [lsearch -start $set $operators Q]
+  if {$restored < 0} {
+    return 0
+  }
+  return [expr {[lsearch -start $restored $operators $start] > $restored}]
+}
+
+test graphics-guard-1.1 {a shape does not leak its line width} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -stroke black -width 3
+  $doc line -from {10 50} -to {60 50} -stroke black
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # "w" set, then "Q", and only then the "m" that starts the line.
+  ::tclpdfTest::takenBack $operators w m
+} -result 1
+
+test graphics-guard-1.2 {q and Q come in pairs around a styled shape} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill red -width 2 -dash {2 2}
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength [lsearch -all $operators q]] [llength [lsearch -all $operators Q]]
+} -result {1 1}
+
+test graphics-guard-1.3 {the dash pattern does not outlive the shape} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -stroke black -dash {2 2}
+  $doc rect -at {40 10} -size {20 20} -stroke black
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # "d" set, then "Q", and only then the "re" of the second rectangle.
+  ::tclpdfTest::takenBack $operators d re
+} -result 1
+
+test graphics-guard-1.4 {alpha is set inside the guard, not before it} -body {
+  # [opacity] used to write its "gs" straight to the content stream while the
+  # rest of the style was still being assembled - so it landed BEFORE the "q"
+  # and stayed in force for the whole page.
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill red -opacity 0.5
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The "gs" must come after the "q" that opens the guard.
+  expr {[lsearch $operators gs] > [lsearch $operators q]}
+} -result 1
+
+test graphics-guard-1.5 {style sets the state ON PURPOSE and is not guarded} -body {
+  # The counterpart to the tests above: [style] promises to stay in force
+  # until changed, so wrapping it would break what the manual documents.
+  set doc [tclpdf new]
+  $doc page add
+  $doc style -width 2 -fill red
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength [lsearch -all $operators q]] [llength [lsearch -all $operators w]]
+} -result {0 1}
+
+test graphics-guard-1.6 {an unstyled shape costs no q/Q} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20}
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  llength [lsearch -all $operators q]
+} -result 0
+
+test graphics-opacity-2.1 {opacity outside 0..1 is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach value {-0.5 1.5 abc} {
+    lappend codes [catch {$doc opacity $value}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1}
+
+test graphics-opacity-2.2 {the same alpha is one resource, reused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc opacity 0.5
+  $doc opacity 0.5
+  set names [dict keys [$doc resource ExtGState]]
+  $doc destroy
+  llength $names
+} -result 1
+
+test graphics-path-3.1 {the documented path call form works} -body {
+  # [path] was never called by any test or example, which is why the manual
+  # could describe it with a positional argument and "-evenOdd 1" for four
+  # releases without anybody noticing. It takes -segments and -rule.
+  set doc [tclpdf new]
+  $doc page add
+  $doc path -segments {{move 10 10} {line 50 10} {curve 55 15 55 35 50 40} {close}} \
+      -fill red -stroke black -rule evenodd
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # move, line, curve, close and the even-odd fill-and-stroke operator.
+  list [lsearch -exact $operators m] [lsearch -exact $operators l] \
+      [lsearch -exact $operators c] [lsearch -exact $operators h] \
+      [expr {"B*" in $operators}]
+} -match glob -result {[0-9]* [0-9]* [0-9]* [0-9]* 1}
+
+test graphics-path-3.2 {an unknown segment is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc path -segments {{wobble 1 2}} -stroke black} message]
+  $doc destroy
+  list $code [string match {*unknown path segment*} $message]
+} -result {1 1}
+
+test graphics-path-3.2b {a path without segments is refused} -body {
+  # Without the check this wrote a painting operator with nothing in front of
+  # it - valid, invisible, and nothing anywhere to explain the missing shape.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc path -segments {} -fill red} message]
+  $doc destroy
+  list $code [string match {*empty*} $message]
+} -result {1 1}
+
+test graphics-clip-3.3 {clip takes a rectangle} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc save
+  $doc clip -at {10 10} -size {50 50}
+  $doc restore
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # re, then W, then n - the path becomes the mask and is NOT drawn.
+  list [expr {"re" in $operators}] [expr {"W" in $operators}] \
+      [expr {[lsearch $operators n] > [lsearch $operators W]}]
+} -result {1 1 1}
+
+test graphics-clip-3.4 {clip takes an arbitrary path} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc save
+  $doc clip -segments {{move 20 20} {line 70 20} {line 45 60} {close}}
+  $doc rect -at {0 0} -size {200 200} -fill red
+  $doc restore
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The construction operators of the triangle, then W n - and no painting
+  # operator between the path and the W, or the outline would be visible.
+  set clip [lrange $operators 0 [lsearch $operators W]]
+  list [expr {"m" in $clip}] [expr {"l" in $clip}] [expr {"h" in $clip}] \
+      [expr {"f" in $clip || "S" in $clip || "B" in $clip}]
+} -result {1 1 1 0}
+
+test graphics-clip-3.5 {even-odd leaves the hole in a ring open} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc clip -rule evenodd -segments {
+    {move 10 10} {line 60 10} {line 60 60} {line 10 60} {close}
+    {move 25 25} {line 45 25} {line 45 45} {line 25 45} {close}
+  }
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  expr {"W*" in $operators}
+} -result 1
+
+test graphics-clip-3.6 {an unclosed clip path is closed for the caller} -body {
+  # An open path clips as if the last point were joined to the first anyway
+  # (8.5.4). Writing the "h" keeps file and reader in agreement - but not
+  # twice, which a caller ending in {close} would otherwise get.
+  set doc [tclpdf new]
+  $doc page add
+  $doc clip -segments {{move 10 10} {line 60 10} {line 60 60}}
+  set open [llength [lsearch -all [::tclpdfTest::operators \
+      [::tclpdfTest::content $doc]] h]]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc clip -segments {{move 10 10} {line 60 10} {line 60 60} {close}}
+  set closed [llength [lsearch -all [::tclpdfTest::operators \
+      [::tclpdfTest::content $doc]] h]]
+  $doc destroy
+  list $open $closed
+} -result {1 1}
+
+test graphics-clip-3.7 {the two forms are not mixed and not omitted} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes [list \
+      [catch {$doc clip -at {10 10} -size {20 20} -segments {{move 1 1}}}] \
+      [catch {$doc clip}] \
+      [catch {$doc clip -at {10 10}}] \
+      [catch {$doc clip -segments {}}] \
+      [catch {$doc clip -segments {{wobble 1 2}}}]]
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1}
+
+test graphics-pattern-4.1 {pattern size reports the tile} -body {
+  # The other half of a facade that nothing called: [pattern create] is used
+  # everywhere, [pattern size] by nothing.
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create tile -size {10 5} -script {}
+  set size [$doc pattern size tile]
+  set names [$doc pattern names]
+  $doc destroy
+  # In the DOCUMENT unit, the same one the size was given in - not in points.
+  list [lmap value $size {format %.0f $value}] $names
+} -result {{10 5} tile}
+
+cleanupTests

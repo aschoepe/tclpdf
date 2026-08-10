@@ -1,0 +1,344 @@
+# table.test --
+#
+# Tables: column widths, wrapping, page breaks, spans and hooks.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::table
+source [file join [file dirname [info script]] helper.tcl]
+
+proc rows {count} {
+  set result {}
+  for {set n 1} {$n <= $count} {incr n} {
+    lappend result [list $n "Artikel $n" [expr {$n * 2}]]
+  }
+  return $result
+}
+
+test table-1.1 {a table returns the y below itself} -body {
+  # finalY: what lets a caller put a total underneath without counting rows.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set y [$doc table -at {20 30} -width 170 \
+      -head {{A B C}} -body {{1 2 3} {4 5 6}}]
+  $doc destroy
+  expr {$y > 30 && $y < 70}
+} -result 1
+
+test table-1.2 {fixed widths are honoured and the rest is shared} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set widths [dict get [$doc table layout -width 100 \
+      -body {{a bbbbbbbbbb c}} -columns {{width 20} {} {width 30}}] widths]
+  $doc destroy
+  list [lindex $widths 0] [lindex $widths 2] [format %.0f [lindex $widths 1]]
+} -result {20 30 50}
+
+test table-1.3 {fixed widths wider than the table are refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30} -width 50 -body {{a b}} \
+        -columns {{width 40} {width 40}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*more than the table width*}
+
+test table-2.1 {long text wraps inside its cell} -body {
+  # The row gets taller instead of the text running past the column - which
+  # is the whole reason measuring comes before drawing.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set short [$doc table -at {20 30} -width 100 -body {{"kurz" "b"}}]
+  $doc page add
+  set long [$doc table -at {20 30} -width 100 -body \
+      {{"ein deutlich laengerer Text, der in dieser Spalte mehrfach umbrechen muss" "b"}} \
+      -columns {{width 30} {}}]
+  $doc destroy
+  expr {$long > $short}
+} -result 1
+
+test table-3.1 {a table longer than the page breaks and repeats the head} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 170 -head {{Pos Artikel Menge}} -body [rows 90]
+  set pages [$doc page count]
+  $doc destroy
+  expr {$pages > 1}
+} -result 1
+
+test table-3.2 {the head really is on the second page} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 170 -head {{Kopfzeile Artikel Menge}} -body [rows 90]
+  set second [$doc page content 1]
+  $doc destroy
+  # The word is in the content of page two, not only page one.
+  expr {[string first Kopfzeile $second] >= 0}
+} -result 1
+
+test table-3.3 {without -repeatHead it is not repeated} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 170 -head {{Kopfzeile Artikel Menge}} \
+      -body [rows 90] -repeatHead 0
+  set second [$doc page content 1]
+  $doc destroy
+  expr {[string first Kopfzeile $second] >= 0}
+} -result 0
+
+test table-4.1 {colSpan covers several columns} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set grid [dict get [$doc table layout -width 100 \
+      -body {{a b c} {{text wide colSpan 2} d}}] body]
+  $doc destroy
+  set second [lindex $grid 1]
+  list [dict get [lindex $second 0] colSpan] [dict get [lindex $second 1] column]
+} -result {2 2}
+
+test table-4.2 {rowSpan takes a place in the row below} -body {
+  # The HTML model: the covered position is NOT written out again, so the
+  # cell after it moves one column along.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set grid [dict get [$doc table layout -width 100 \
+      -body {{{text tall rowSpan 2} b c} {b2 c2}}] body]
+  $doc destroy
+  set second [lindex $grid 1]
+  list [dict get [lindex $second 0] column] [dict get [lindex $second 1] column]
+} -result {1 2}
+
+test table-4.3 {a spanning cell is drawn over all the rows it covers} -body {
+  # Regression, found by rendering: taking the cell's own measured height
+  # instead of the covered rows left the row below without a left-hand rule,
+  # and nothing reported it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 80 \
+      -body {{{text tall rowSpan 2} b} {b2}}]
+  set heights [dict get $layout bodyHeights]
+  $doc destroy
+  set spanning [lindex [lindex [dict get $layout body] 0] 0]
+  expr {[dict get $spanning spanHeight] ==
+      [lindex $heights 0] + [lindex $heights 1]}
+} -result 1
+
+test table-4.4 {a bad span is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30} -body {{{text x colSpan 0}}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*colSpan must be a positive integer*}
+
+test table-5.1 {didParseCell can change a cell before it is measured} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -body {{a b}} -theme plain \
+      -didParseCell {apply {{cell doc} {
+        dict set cell text "[dict get $cell text]!"
+        return $cell
+      }}}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {[string first "(a!)" $content] >= 0}] \
+      [expr {[string first "(b!)" $content] >= 0}]
+} -result {1 1}
+
+test table-5.2 {willDrawCell can suppress a cell} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -body {{sichtbar versteckt}} -theme plain \
+      -willDrawCell {apply {{cell doc} {
+        return [expr {[dict get $cell text] ne "versteckt"}]
+      }}}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {[string first "(sichtbar)" $content] >= 0}] \
+      [expr {[string first "(versteckt)" $content] >= 0}]
+} -result {1 0}
+
+test table-5.3 {didDrawPage runs once per page} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set seen {}
+  $doc table -at {20 30} -width 170 -head {{A B C}} -body [rows 90] \
+      -didDrawPage [list apply {{listName payload doc} {
+        upvar #0 $listName seen
+        lappend seen [dict get $payload page]
+      }} ::tclpdfTableSeen]
+  set pages [$doc page count]
+  $doc destroy
+  set count [llength $::tclpdfTableSeen]
+  unset ::tclpdfTableSeen
+  expr {$count == $pages}
+} -result 1
+
+test table-6.1 {an unknown theme names the known ones} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30} -body {{a}} -theme nosuch
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown table theme "nosuch"*striped*}
+
+test table-6.2 {a table without rows is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*needs -head or -body*}
+
+test table-7.1 {a wide table splits into column groups} -body {
+  # Ten fixed columns of 40 mm are 400 mm wide; on 170 mm that is three
+  # groups, and the first column repeats so the rows stay identifiable.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set columns {}
+  for {set n 0} {$n < 10} {incr n} {
+    lappend columns {width 40}
+  }
+  $doc table -at {20 30} -width 170 -horizontalBreak 1 -repeatColumns 1 \
+      -columns $columns \
+      -head {{c0 c1 c2 c3 c4 c5 c6 c7 c8 c9}} \
+      -body {{v0 v1 v2 v3 v4 v5 v6 v7 v8 v9}}
+  set pages [$doc page count]
+  set first [$doc page content 0]
+  set second [$doc page content 1]
+  $doc destroy
+  # The repeated column is on both, the last one only on the last page.
+  list [expr {$pages > 1}] [expr {[string first "(c0)" $second] >= 0}] \
+      [expr {[string first "(c9)" $first] >= 0}]
+} -result {1 1 0}
+
+test table-8.1 {decimal alignment lines the separators up} -body {
+  # The point of the whole thing: 1234.50 and 7.5 have different numbers of
+  # digits before the point, and the points still sit one under the other.
+  # Right alignment only looks the same while every number has the same
+  # number of decimals.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {10 10} -width 100 -theme plain \
+      -body {{"a" "1234.50"} {"b" "7.5"}} -columns {{} {align decimal}}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Both tails are placed by the same Td x - collect them and compare.
+  set xs {}
+  foreach {-> x} [regexp -all -inline {(\S+) \S+ Td\n\(\.5} $content] {
+    lappend xs $x
+  }
+  list [llength $xs] [expr {[lindex $xs 0] eq [lindex $xs 1]}]
+} -result {2 1}
+
+test table-8.2 {a trailing zero survives the line breaker} -body {
+  # Regression, and it reached far beyond tables: textLines built its
+  # candidate with [expr {$current eq {} ? $word : ...}], and expr normalises
+  # a word that looks like a number. "1234.50" came out as "1234.5" in every
+  # wrapped paragraph in the package - a valid document with a wrong figure.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set lines [$doc textLines "1234.50 and 7.50" 100 -size 9]
+  $doc destroy
+  set lines
+} -result {{1234.50 and 7.50}}
+
+test table-8.3 {a decimal column takes the separator it is told} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {10 10} -width 100 -theme plain -decimal , \
+      -body {{"a" "1234,50"} {"b" "7,5"}} -columns {{} {align decimal}}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {[string first {(,50)} $content] >= 0}
+} -result 1
+
+test table-8.4 {a heading over a decimal column is set flush right} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 100 -head {{"Item" "Amount"}} \
+      -body {{"a" "1.50"}} -columns {{} {align decimal}}]
+  $doc destroy
+  dict get [lindex [lindex [dict get $layout head] 0] 1] resolved align
+} -result right
+
+cleanupTests
+
+test table-9.1 {a rowSpan binds its rows into one group} -body {
+  # The unit that has to fit on a page is the GROUP, not the row. This checks
+  # the arithmetic on its own: every row reports the last row of its group.
+  # TableGroupSpan is private, and a private method cannot be called from
+  # outside - measured. Exporting it on this one object is the least invasive
+  # way to test the arithmetic without a whole document around it.
+  package require tclpdf::table
+  set doc [tclpdf new -unit mm]
+  oo::objdefine $doc export TableGroupSpan
+  set rows {}
+  foreach spans {1 3 1 1 2 1} {
+    lappend rows [list [dict create rowSpan $spans]]
+  }
+  # rows 0 | 1..3 | 4 | 5.. wait: row 1 spans 3, so 1,2,3 are one group;
+  # row 4 spans 2, so 4,5 are one.
+  set ends [$doc TableGroupSpan $rows]
+  $doc destroy
+  set ends
+} -result {0 3 2 3 5 5}
+
+test table-9.2 {overlapping spans merge into one group} -body {
+  # A span starting inside another group has to push the whole group's end
+  # down, otherwise a break can still land between them.
+  package require tclpdf::table
+  set doc [tclpdf new -unit mm]
+  oo::objdefine $doc export TableGroupSpan
+  set rows {}
+  foreach spans {3 1 3 1 1} {
+    lappend rows [list [dict create rowSpan $spans]]
+  }
+  set ends [$doc TableGroupSpan $rows]
+  $doc destroy
+  set ends
+} -result {4 1 4 3 4}
+
+test table-9.3 {a group is drawn whole, on one page} -body {
+  # The one that matters: not how many pages, but whether the three rows the
+  # span binds ended up on the SAME page. didDrawCell hands the cell and the
+  # document, and the document knows which page it is on.
+  #
+  # 37 filler rows put the break INSIDE the group - measured, at 36 or 39 it
+  # falls elsewhere and the test passes either way, which is how the first
+  # version of it managed to stay green against the old behaviour.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set body {}
+  for {set n 1} {$n <= 37} {incr n} {
+    lappend body [list "filler $n" "-"]
+  }
+  lappend body [list {text "spans three" rowSpan 3} a] {b} {c}
+  set ::tablePages [dict create]
+  $doc table -at {20 20} -width 100 -theme grid -body $body \
+      -didDrawCell {apply {{cell doc} {
+        set text [dict get $cell text]
+        if {$text in {"spans three" a b c}} {
+          dict set ::tablePages $text [$doc page current]
+        }
+      }}}
+  $doc destroy
+  # All four cells of the group have to report the same page.
+  set pages [lsort -unique [dict values $::tablePages]]
+  list [dict size $::tablePages] [llength $pages]
+} -result {4 1}

@@ -1,0 +1,245 @@
+# text.test --
+#
+# Text output, line breaking and justification.
+#
+# The first test is a regression against a defect that produced a file poppler
+# still rendered and qpdf refused: the font state was stored through
+# [resource] and therefore written into the PDF resource dictionary.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::text
+source [file join [file dirname [info script]] helper.tcl]
+
+test text-1.1 {module state never reaches the PDF} -body {
+  # /Resources << /tclpdfTextState << /current family helvetica style {} ... >>
+  # is what this used to produce - Tcl values inside the page tree, which
+  # breaks the structure while a tolerant reader still shows the text.
+  set path [::tclpdfTest::scratch text-state.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc font -family times -size 14
+  $doc text "Rechnung" -at {20 30}
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {tclpdfTextState} $bytes] [regexp -- {style \{\}} $bytes]
+} -result {0 0}
+
+test text-1.2 {the font becomes a resource exactly once} -body {
+  set doc [tclpdf new]
+  $doc page add
+  foreach line {eins zwei drei} {
+    $doc text $line -at {20 30} -family helvetica
+  }
+  set content [::tclpdfTest::content $doc]
+  set writer [$doc writer]
+  set fonts 0
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/Type /Font*} [$writer body $number]]} {
+      incr fonts
+    }
+  }
+  $doc destroy
+  list $fonts [regexp -all {/FHelvetica} $content]
+} -result {1 3}
+
+test text-2.1 {alignment shifts the starting point} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 12
+  set width [$doc textWidth "Rechnung"]
+  $doc text "Rechnung" -at {100 50} -align left
+  $doc text "Rechnung" -at {100 60} -align right
+  $doc text "Rechnung" -at {100 70} -align center
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set x {}
+  foreach line [split $content \n] {
+    if {[regexp {^([0-9.]+) [0-9.]+ Td$} $line -> value]} {
+      lappend x $value
+    }
+  }
+  lassign $x left right center
+  # left starts at 100 mm, right ends there, center straddles it
+  list [expr {abs($left - 283.46) < 0.1}] [expr {$right < $left}] \
+      [expr {$center > $right && $center < $left}]
+} -result {1 1 1}
+
+test text-2.2 {justify without a width is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc text "x" -at {20 20} -align justify
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*justify needs -width*}
+
+test text-2.3 {a computed position in braces is caught with a usable message} -body {
+  # -at {20 [expr {$y+5}]} does not substitute, and Tcl's own error says
+  # nothing about the cause.
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc text "x" -at {20 {[expr {1+1}]}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-at takes two numbers*braces do not substitute*}
+
+test text-3.1 {lines are broken to fit the width} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set lines [$doc textLines "ein zwei drei vier fuenf sechs sieben acht neun" 30]
+  set widest 0
+  foreach line $lines {
+    set width [$doc textWidth $line]
+    if {$width > $widest} {
+      set widest $width
+    }
+  }
+  $doc destroy
+  list [expr {[llength $lines] > 1}] [expr {$widest <= 30}]
+} -result {1 1}
+
+test text-3.2 {an over-long word is broken rather than left hanging out} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set lines [$doc textLines "Donaudampfschifffahrtsgesellschaftskapitaenspatent" 20]
+  set widest 0
+  foreach line $lines {
+    set width [$doc textWidth $line]
+    if {$width > $widest} {
+      set widest $width
+    }
+  }
+  $doc destroy
+  list [expr {[llength $lines] > 1}] [expr {$widest <= 20}]
+} -result {1 1}
+
+test text-3.3 {explicit newlines start a new line} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set lines [$doc textLines "eins\nzwei\ndrei" 100]
+  $doc destroy
+  set lines
+} -result {eins zwei drei}
+
+test text-4.1 {justification stretches spaces, and not on the last line} -body {
+  # Tw is the operator that widens spaces. Every line but the last gets one;
+  # the last must not, or a single trailing word is pulled across the column.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Dieser Absatz ist lang genug fuer mehrere Zeilen und wird im\
+      Blocksatz gesetzt damit die Wortabstaende gedehnt werden." \
+      -at {20 30} -width 60 -align justify
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set lines [regexp -all {Td} $content]
+  set stretched [regexp -all {[0-9.]+ Tw} $content]
+  # one Tw fewer than there are lines - the last one is flush left
+  list [expr {$lines > 2}] [expr {$stretched == $lines - 1}]
+} -result {1 1}
+
+test text-4.2 {a paragraph returns the y below it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10 -leading 12
+  set y [$doc text "eins zwei drei vier fuenf sechs sieben acht" -at {20 30} -width 30]
+  set height [$doc textHeight "eins zwei drei vier fuenf sechs sieben acht" 30]
+  $doc destroy
+  # y advanced by exactly the block height
+  expr {abs($y - (30 + $height)) < 0.001}
+} -result 1
+
+test text-5.1 {rotation uses Tm, not Td} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "quer" -at {50 50} -rotate 90
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {Tm} $content] [regexp {Td} $content]
+} -result {1 0}
+
+test text-5.2 {spacing, word spacing, stretch and rise reach the stream} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "x" -at {20 20} -spacing 2 -wordSpacing 3 -stretch 80 -rise 4
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {2 Tc} $content] [regexp {3 Tw} $content] \
+      [regexp {80 Tz} $content] [regexp {4 Ts} $content]
+} -result {1 1 1 1}
+
+test text-6.1 {Symbol gets no WinAnsiEncoding} -body {
+  # Declaring WinAnsi for a font with its own built-in encoding scrambles
+  # every glyph, and nothing reports it.
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "abg" -at {20 20} -family symbol
+  $doc text "abc" -at {20 30} -family helvetica
+  set writer [$doc writer]
+  set symbol {}
+  set helvetica {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match {*/BaseFont /Symbol*} $body]} {
+      set symbol $body
+    }
+    if {[string match {*/BaseFont /Helvetica*} $body]} {
+      set helvetica $body
+    }
+  }
+  $doc destroy
+  list [regexp {WinAnsiEncoding} $symbol] [regexp {WinAnsiEncoding} $helvetica]
+} -result {0 1}
+
+test text-6.2 {the Euro sign survives into the content stream} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "1,50 [encoding convertfrom utf-8 [binary format H* e282ac]]" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # byte 128 is written as the octal escape \200, which keeps the stream
+  # text-safe
+  regexp {\(1,50 \\200\)} $content
+} -result 1
+
+test text-state-9.1 {character spacing does not outlive its block} -body {
+  # Tc, Tw, Ts and Tz are TEXT state, and the text state is part of the
+  # GRAPHICS state (9.3) - they survive ET. Written only when they differ from
+  # the default, "3 Tc" stayed in force and the next plain [text] came out
+  # letter-spaced with nothing in its own call to explain it.
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "gesperrt" -at {20 20} -spacing 3
+  $doc text "normal" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Everything after the LAST Q is the second block; it must carry no Tc.
+  set tail [string range $content [string last "Q\n" $content] end]
+  list [regexp {3 Tc} $content] [regexp {Tc} $tail]
+} -result {1 0}
+
+test text-state-9.2 {a plain line is not wrapped at all} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "normal" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {^q} $content
+} -result 0
+
+cleanupTests

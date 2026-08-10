@@ -1,0 +1,149 @@
+#!/usr/bin/env tclsh
+#
+# tclpdf example 5.3 - links and bookmarks
+#
+#   tclsh examples/05.03-navigation.tcl ?output.pdf?
+#
+# A short manual with an outline and cross references. Neither is drawn on the
+# page: both are structure a reader shows beside it or acts on when clicked,
+# so the visible text has to be drawn separately - marking it up is a second
+# call, on purpose, because the text may be a heading, a table cell or
+# nothing at all.
+#
+# Two details matter for PDF/A and neither is obvious:
+#
+#   A link annotation must have its Print flag set. An archived document has
+#   to look the same printed as on screen, and a validator rejects one that
+#   could differ.
+#
+#   It gets a zero-width border, because the default is a visible frame that
+#   no caller asked for.
+#
+# The outline is built while the document is written and turned into objects
+# at the end: every entry needs the object numbers of its siblings, and the
+# format is a doubly linked list at each level rather than a nested structure.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+set here [file dirname [file normalize [info script]]]
+lappend auto_path [file dirname $here]
+package require tclpdf
+
+# The footer every example draws - shared, because eighteen copies of it
+# is how a block starts drifting.
+source [file join $here common.tcl]
+
+set target [expr {[llength $argv] ? [lindex $argv 0] : "05.03-navigation.pdf"}]
+
+set doc [tclpdf new -unit mm]
+$doc info Title "Kiln operation - short manual"
+$doc info Author "Workshop documentation"
+
+set chapters {
+    {"Safety" {
+        {"Before firing" "Check that the flue is clear and the shelves are
+            dry. A shelf soaked from washing will spall and take the ware
+            with it."}
+        {"During firing" "Never open the door above 200 degrees. The thermal
+            shock cracks both the elements and whatever is inside."}
+    }}
+    {"Loading" {
+        {"Shelf spacing" "Leave two centimetres above the tallest piece.
+            Radiant heat from the element needs somewhere to go."}
+        {"Props" "Use three props per shelf, never four. Three always sit
+            flat; four will rock on an uneven floor."}
+    }}
+    {"Firing schedules" {
+        {"Bisque" "Slow to 600 degrees, then 150 degrees per hour to 1000.
+            The slow start drives off water that would otherwise turn to
+            steam inside the clay."}
+        {"Glaze" "Full power to 1220 degrees, then hold twenty minutes. The
+            hold is what lets the glaze level out."}
+    }}
+}
+
+# First pass: one page per chapter, collecting where each section landed so
+# the contents page can point at it.
+set targets {}
+set pageNumber 0
+foreach chapter $chapters {
+    lassign $chapter title sections
+    $doc page add
+    incr pageNumber
+    set chapterId [$doc bookmark $title -page $pageNumber]
+    dict set targets $title [list $pageNumber 22]
+
+    $doc font -family helvetica -style bold -size 16
+    $doc text $title -at {20 24}
+    $doc line -from {20 28} -to {190 28} -stroke {0.5 0.5 0.55} -width 0.4
+
+    set y 40
+    foreach section $sections {
+        lassign $section heading body
+        $doc bookmark $heading -page $pageNumber -at [list 20 $y] -parent $chapterId
+        dict set targets $heading [list $pageNumber $y]
+
+        $doc font -style bold -size 11
+        $doc text $heading -at [list 20 $y]
+        $doc font -style {} -size 10
+        set y [$doc text $body -at [list 20 [expr {$y + 6}]] -width 170 \
+            -align justify -anchor top]
+        set y [expr {$y + 10}]
+    }
+
+    $doc font -size 8 -color {0.45 0.45 0.5}
+    $doc text "Back to contents" -at {20 280}
+    $doc link -at {20 276} -size {30 5} -page 0 -tooltip "Contents"
+    $doc font -color black
+}
+
+# The contents page is added last and moved to the front by drawing it on a
+# page of its own - so it can link forward to pages that already exist.
+$doc page add
+set contents [$doc page current]
+$doc font -family helvetica -style bold -size 18
+$doc text "Kiln operation" -at {20 30}
+$doc font -style {} -size 10
+$doc text "Short manual - contents" -at {20 38}
+$doc line -from {20 42} -to {190 42} -stroke {0.5 0.5 0.55} -width 0.4
+
+set y 54
+foreach chapter $chapters {
+    lassign $chapter title sections
+    lassign [dict get $targets $title] page at
+    $doc font -style bold -size 12 -color {0.15 0.25 0.55}
+    $doc text $title -at [list 20 $y]
+    $doc link -at [list 20 [expr {$y - 4}]] -size {80 6} -page $page \
+        -to [list 20 $at] -tooltip "Go to $title"
+    set y [expr {$y + 8}]
+    foreach section $sections {
+        lassign $section heading -
+        lassign [dict get $targets $heading] page at
+        $doc font -style {} -size 10 -color {0.2 0.35 0.65}
+        $doc text $heading -at [list 28 $y]
+        $doc link -at [list 28 [expr {$y - 4}]] -size {80 6} -page $page \
+            -to [list 20 $at] -tooltip "Go to $heading"
+        set y [expr {$y + 7}]
+    }
+    set y [expr {$y + 4}]
+}
+
+$doc font -style {} -size 8 -color black
+$doc text "Every line above is a link. The blue colour is drawn text - the\
+    link itself is a rectangle laid over it, and it is invisible in print." \
+    -at [list 20 [expr {$y + 6}]] -width 170
+$doc text "An external link: the workshop notes." -at [list 20 [expr {$y + 20}]]
+$doc link -at [list 20 [expr {$y + 16}]] -size {60 6} \
+    -url "https://www.example.org/workshop" -tooltip "Opens in a browser"
+
+$doc bookmark "Contents" -page $contents
+
+exampleFooter $doc
+
+$doc write $target
+puts "  written: $target ([file size $target] bytes), [$doc page count] pages"
+puts "  bookmarks: [llength [$doc bookmarks]]"
+$doc destroy

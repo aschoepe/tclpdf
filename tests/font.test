@@ -1,0 +1,458 @@
+# font.test --
+#
+# TrueType: parsing, subsetting and embedding.
+#
+# The CIDToGIDMap tests are regressions against a defect that produced a
+# document qpdf called clean and pdffonts called complete - and whose extracted
+# text was noise. Only reading the text back showed it.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::font
+source [file join [file dirname [info script]] helper.tcl]
+
+set fontRegular [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+
+testConstraint haveFont [file exists $fontRegular]
+
+test font-1.1 {a TrueType file is parsed} -constraints haveFont -body {
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  list [dict get $parsed unitsPerEm] \
+      [expr {[dict get $parsed numGlyphs] > 1000}] \
+      [dict get $parsed names postScript] \
+      [dict get $parsed fsType]
+} -result {2048 1 DejaVuSans 0}
+
+test font-1.2 {fsType is translated into words} -body {
+  list [::tclpdf::sfnt permission 0] [::tclpdf::sfnt permission 2] \
+      [::tclpdf::sfnt permission 12]
+} -match glob -result {{installable*} {restricted*} {unclear*}}
+
+test font-1.3 {a CFF font is refused with a usable message} -body {
+  # OTTO cannot go into FontFile2, and failing later on a missing glyf table
+  # would say nothing about the cause.
+  ::tclpdf::sfnt parse "OTTO[string repeat \x00 20]"
+} -returnCodes error -match glob -result {*OpenType/CFF*Convert it to TTF*}
+
+test font-1.4 {something that is not a font at all} -body {
+  ::tclpdf::sfnt parse "not a font file at all, really"
+} -returnCodes error -match glob -result {*not a TrueType font*}
+
+test font-2.1 {the cmap maps characters to glyphs} -constraints haveFont -body {
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set cmap [dict get $parsed cmap]
+  set euro [scan [encoding convertfrom utf-8 [binary format H* e282ac]] %c]
+  list [dict exists $cmap 65] [dict exists $cmap 228] [dict exists $cmap $euro]
+} -result {1 1 1}
+
+test font-3.1 {a subset carries only the glyphs asked for, plus components} -constraints haveFont -body {
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set cmap [dict get $parsed cmap]
+  # a-umlaut is a composite: it references "a" and "dieresis", and a subset
+  # that copies only the composite renders as nothing at all.
+  set aeGlyph [dict get $cmap 228]
+  set built [::tclpdf::subset build $parsed [list $aeGlyph]]
+  set order [dict get $built order]
+  set components [::tclpdf::subset::Components $parsed $aeGlyph]
+  set missing {}
+  foreach component $components {
+    if {$component ni $order} {
+      lappend missing $component
+    }
+  }
+  list [expr {[llength $components] > 0}] $missing [expr {0 in $order}]
+} -result {1 {} 1}
+
+# Split a composite glyph into one record per component: the flags, the glyph
+# id, and everything after it as hex - the offset and the optional scale. The
+# tail is what places the component; the dots of an A-dieresis sit above the A
+# because of it, and nowhere else is that written down.
+#
+# Reading it needs the same flag arithmetic the subsetter uses, so the test
+# deliberately re-implements it instead of calling into the module: a shared
+# helper would go wrong in both places at once and agree with itself.
+proc fontComponentRecords {data} {
+  set records {}
+  set position 10
+  while {$position + 4 <= [string length $data]} {
+    binary scan $data @${position}SuSu flags glyphIndex
+    set start [expr {$position + 4}]
+    # ARG_1_AND_2_ARE_WORDS, then one of the three scale forms.
+    set stop [expr {$start + (($flags & 0x0001) ? 4 : 2)}]
+    if {$flags & 0x0008} {
+      incr stop 2
+    } elseif {$flags & 0x0040} {
+      incr stop 4
+    } elseif {$flags & 0x0080} {
+      incr stop 8
+    }
+    binary scan [string range $data $start [expr {$stop - 1}]] H* tail
+    lappend records [list $flags $glyphIndex $tail]
+    set position $stop
+    # MORE_COMPONENTS
+    if {!($flags & 0x0020)} break
+  }
+  return $records
+}
+
+test font-3.1.1 {subsetting leaves every component offset alone} -constraints haveFont -body {
+  # EVERY composite in the face, not one chosen character. A-dieresis alone
+  # proves nothing: its only word-sized argument sits in the LAST component,
+  # after which the loop ends anyway, so a misread record length shifts
+  # nothing. Measured on DejaVu Sans: 1039 composites carry word arguments in
+  # the FIRST component and 383 have three or more, up to eight - those are
+  # the ones where a wrong length walks into the next record. The two counts
+  # below are asserted so that the test cannot quietly stop covering them.
+  #
+  # One subset for all of them, which is what makes this affordable: 2445
+  # composites drag their parts in and build in about 60 ms.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set composites {}
+  foreach {code glyph} [dict get $parsed cmap] {
+    if {[llength [::tclpdf::subset::Components $parsed $glyph]]} {
+      lappend composites $glyph
+    }
+  }
+  set composites [lsort -unique -integer $composites]
+  set built [::tclpdf::subset build $parsed $composites]
+  set mapping [dict get $built glyphs]
+  set again [::tclpdf::sfnt parse [dict get $built bytes]]
+
+  set faults {}
+  set deep 0
+  set wordsFirst 0
+  foreach glyph $composites {
+    set before [fontComponentRecords [::tclpdf::subset::GlyphData $parsed $glyph]]
+    set after [fontComponentRecords [::tclpdf::subset::GlyphData $again \
+        [dict get $mapping $glyph]]]
+    if {[llength $before] >= 3} {
+      incr deep
+    }
+    if {[lindex $before 0 0] & 0x0001} {
+      incr wordsFirst
+    }
+    if {[llength $before] != [llength $after]} {
+      lappend faults "$glyph: [llength $before] components became [llength $after]"
+      continue
+    }
+    foreach old $before new $after {
+      lassign $old oldFlags oldId oldTail
+      lassign $new newFlags newId newTail
+      if {$oldFlags != $newFlags} {
+        lappend faults "$glyph: flags $oldFlags became $newFlags"
+      }
+      if {$oldTail ne $newTail} {
+        lappend faults "$glyph: offset $oldTail became $newTail"
+      }
+      if {$newId != [dict get $mapping $oldId]} {
+        lappend faults "$glyph: component $oldId became $newId,\
+            not [dict get $mapping $oldId]"
+      }
+    }
+  }
+  # The first few faults are enough to name the defect; a thousand are not
+  # more informative and make the failure unreadable.
+  list [llength $composites] [expr {$deep > 100}] [expr {$wordsFirst > 100}] \
+      [llength $faults] [lrange $faults 0 2]
+} -result {2445 1 1 0 {}}
+
+# A composite whose FIRST component carries a scale and is followed by a
+# second one. Neither DejaVu face contains such a glyph - measured, zero out of
+# 2445 composites use any of the three scale forms - so the three branches that
+# skip a scale cannot be reached by any test built from those files. The glyph
+# is therefore built here: two components, ids 10 and 20, the first scaled.
+#
+# A wrong skip length lands the subsetter inside the scale bytes, and it then
+# renumbers whatever it finds there instead of the second component.
+proc fontScaledComposite {scaleFlag scale} {
+  # numberOfContours -1 marks a composite; the four numbers after it are the
+  # bounding box, which nothing here depends on.
+  set data [binary format SSSSS -1 0 0 100 100]
+  # ARGS_ARE_XY_VALUES | MORE_COMPONENTS, byte-sized arguments, plus the scale.
+  append data [binary format SuSu [expr {0x0022 | $scaleFlag}] 10]
+  append data [binary format cc 5 7] $scale
+  append data [binary format SuSu 0x0002 20] [binary format cc -3 9]
+  return $data
+}
+
+test font-3.1.2 {a scaled component does not shift the one behind it} -body {
+  set faults {}
+  foreach {name flag scale} [list \
+      "single scale" 0x0008 [binary format S 16384] \
+      "x and y scale" 0x0040 [binary format SS 16384 8192] \
+      "two by two" 0x0080 [binary format SSSS 16384 0 0 16384]] {
+    set data [fontScaledComposite $flag $scale]
+    # The smallest thing sfnt::table will read from: the glyf table is the
+    # glyph itself, and loca brackets it.
+    set font [dict create bytes $data loca [list 0 [string length $data]] \
+        tables [dict create glyf [list 0 [string length $data]]]]
+    set before [fontComponentRecords $data]
+    set after [fontComponentRecords [::tclpdf::subset::Rewrite $font 0 {10 1 20 2}]]
+    if {[llength $before] != 2 || [llength $after] != 2} {
+      lappend faults "$name: [llength $before] components became [llength $after]"
+      continue
+    }
+    foreach old $before new $after want {1 2} {
+      lassign $old oldFlags oldId oldTail
+      lassign $new newFlags newId newTail
+      if {$oldFlags != $newFlags || $oldTail ne $newTail} {
+        lappend faults "$name: component $oldId lost its placement"
+      }
+      if {$newId != $want} {
+        lappend faults "$name: component $oldId became $newId, not $want"
+      }
+    }
+  }
+  set faults
+} -result {}
+
+test font-3.1.3 {the subset keeps every left side bearing} -constraints haveFont -body {
+  # hmtx used to be written with a flat zero bearing, and no rendering check
+  # caught it. Both rasterisers put every glyph at cursor plus bearing, so the
+  # letters all crept left by their own amount and the gaps between them went
+  # uneven - wrong everywhere, but not obviously so. The obvious half only
+  # shows in CoreGraphics, which shifts the COMPONENTS of a composite by their
+  # bearing too: a-dieresis fell apart in Preview while pdftoppm drew it
+  # correctly, and qpdf and veraPDF said nothing at all.
+  #
+  # The characters below drag their marks in through the composite closure,
+  # and those marks are exactly the glyphs with a large negative bearing.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set glyphs {}
+  foreach code {65 196 228 233 252 241 353} {
+    lappend glyphs [dict get $parsed cmap $code]
+  }
+  set built [::tclpdf::subset build $parsed [lsort -unique -integer $glyphs]]
+  set again [::tclpdf::sfnt parse [dict get $built bytes]]
+  set mapping [dict get $built glyphs]
+
+  set faults {}
+  set large 0
+  foreach old [dict get $built order] {
+    set want [::tclpdf::sfnt bearing $parsed $old]
+    # A bearing far from zero is what makes the defect visible; a letter whose
+    # bearing is 16 units would move imperceptibly. Measured in this subset:
+    # two marks at -827 and -809, while the marks for acute, tilde and caron
+    # sit at POSITIVE bearings - so "negative" would have been the wrong test.
+    if {abs($want) > 500} {
+      incr large
+    }
+    set got [::tclpdf::sfnt bearing $again [dict get $mapping $old]]
+    if {$want != $got} {
+      lappend faults "glyph $old: bearing $want became $got"
+    }
+  }
+  list [expr {$large >= 2}] [llength $faults] [lrange $faults 0 2]
+} -result {1 0 {}}
+
+test font-3.1.4 {a bearing agrees with the glyph's own xMin} -constraints haveFont -body {
+  # head flag bit 1 says the two are the same, which is why a renderer may use
+  # either and why writing a wrong bearing stays invisible for so long. The
+  # real point here is the parser: hmtx is an array of PAIRS, and reading it at
+  # the wrong stride returns advance widths where bearings belong.
+  #
+  # One unit of slack, because the font itself is not exact: measured over
+  # 5857 glyphs of DejaVu Sans, five differ by exactly one unit (U+1F32,
+  # U+1F33, U+1F35, U+20D0, U+2422). A stride error would not produce ones.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set faults {}
+  set checked 0
+  foreach {code glyph} [dict get $parsed cmap] {
+    set data [::tclpdf::subset::GlyphData $parsed $glyph]
+    if {[string length $data] < 10} continue
+    binary scan $data SS - xMin
+    incr checked
+    set bearing [::tclpdf::sfnt bearing $parsed $glyph]
+    if {abs($bearing - $xMin) > 1} {
+      lappend faults "glyph $glyph: bearing $bearing, xMin $xMin"
+    }
+  }
+  list [expr {$checked > 5000}] [llength $faults] [lrange $faults 0 2]
+} -result {1 0 {}}
+
+test font-3.2 {the subset is a fraction of the original} -constraints haveFont -body {
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set cmap [dict get $parsed cmap]
+  set glyphs {}
+  foreach char [split "Rechnung 2026" {}] {
+    lappend glyphs [dict get $cmap [scan $char %c]]
+  }
+  set built [::tclpdf::subset build $parsed [lsort -unique -integer $glyphs]]
+  set original [string length [dict get $parsed bytes]]
+  set reduced [string length [dict get $built bytes]]
+  expr {$reduced < $original / 20}
+} -result 1
+
+test font-3.3 {the subset can be read back} -constraints haveFont -body {
+  # It carries no cmap on purpose - Identity-H addresses glyphs directly - so
+  # the parser must not insist on one.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set built [::tclpdf::subset build $parsed [list [dict get $parsed cmap 65]]]
+  set again [::tclpdf::sfnt parse [dict get $built bytes]]
+  list [dict get $again unitsPerEm] [dict get $again numGlyphs] \
+      [dict exists [dict get $again tables] glyf]
+} -result {2048 2 1}
+
+test font-3.4 {the same glyphs give the same bytes} -constraints haveFont -body {
+  # Reproducible output: two runs of the same report must not differ.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set glyphs [list [dict get $parsed cmap 65] [dict get $parsed cmap 66]]
+  set first [::tclpdf::subset build $parsed $glyphs]
+  set second [::tclpdf::subset build $parsed [lreverse $glyphs]]
+  expr {[dict get $first bytes] eq [dict get $second bytes]}
+} -result 1
+
+test font-4.1 {an embedded font becomes Type0 with Identity-H} -constraints haveFont -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc font -family haus -size 12
+  $doc text "Rechnung" -at {20 20}
+  set path [::tclpdfTest::scratch font-embed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Subtype /Type0} $bytes] [regexp {/Encoding /Identity-H} $bytes] \
+      [regexp {/Subtype /CIDFontType2} $bytes] [regexp {/FontFile2} $bytes] \
+      [regexp {/ToUnicode} $bytes]
+} -result {1 1 1 1 1}
+
+test font-4.2 {CIDToGIDMap is a stream, not Identity} -constraints haveFont -body {
+  # Regression. /Identity claims the CID equals the glyph number in the
+  # embedded file, which stops being true the moment anything is subsetted -
+  # the document then renders with the wrong glyphs and no tool complains.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "Rechnung" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-cidmap.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/CIDToGIDMap \d+ 0 R} $bytes] [regexp {/CIDToGIDMap /Identity} $bytes]
+} -result {1 0}
+
+test font-4.3 {content stream, CIDToGIDMap and ToUnicode agree} -constraints haveFont -body {
+  # The three have to line up or the text comes out as noise: the content
+  # stream carries the ORIGINAL glyph number, CIDToGIDMap turns it into the
+  # subset one, ToUnicode turns it back into a character. Getting this wrong
+  # is invisible to qpdf and to pdffonts.
+  package require tclpdf::filter
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "A" -at {20 20} -family haus
+  set parsed [dict get [$doc state fonts] haus parsed]
+  set glyphA [dict get $parsed cmap 65]
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch font-agree.pdf]
+  $doc write $path
+  set writer [$doc writer]
+
+  # Which object is the map? The CID font says so.
+  set mapNumber {}
+  set toUnicodeNumber {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[regexp {/CIDToGIDMap (\d+) 0 R} $body -> found]} {
+      set mapNumber $found
+    }
+    if {[regexp {/ToUnicode (\d+) 0 R} $body -> found]} {
+      set toUnicodeNumber $found
+    }
+  }
+  set map [::tclpdfTest::streamOf $writer $mapNumber]
+  set toUnicode [::tclpdfTest::streamOf $writer $toUnicodeNumber]
+  $doc destroy
+  file delete $path
+
+  # 1. the stream carries the original glyph number as two bytes
+  # [string first], not [string match]: the escaped form contains backslashes,
+  # and a glob pattern would read those as escapes rather than as characters.
+  set inStream [expr {[string first [::tclpdf::pdfObj bytesStr \
+      [binary format Su $glyphA]] $content] >= 0}]
+  # 2. ToUnicode maps that number back to U+0041
+  set inToUnicode [regexp "<[format %04X $glyphA]> <0041>" $toUnicode]
+  # 3. the map has a non-zero subset glyph at that position
+  binary scan [string range $map [expr {$glyphA * 2}] [expr {$glyphA * 2 + 1}]] Su subsetGlyph
+  list $inStream $inToUnicode [expr {$subsetGlyph != 0}]
+} -result {1 1 1}
+
+test font-4.4 {a character the font lacks is refused} -constraints haveFont -body {
+  # U+4E2D, a CJK ideograph - measured, DejaVu Sans has no glyph for it.
+  # An emoji would NOT do here: the face does carry U+1F600.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  try {
+    $doc text [encoding convertfrom utf-8 [binary format H* e4b8ad]] \
+        -at {20 20} -family haus
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*has no glyph for U+4E2D*}
+
+test font-4.7 {code points outside the BMP are read from a format 12 cmap} -constraints haveFont -body {
+  # Measured on DejaVu Sans: it maps U+1F600 through a format 12 subtable, so
+  # this also proves the parser prefers that over the BMP-only format 4.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set cmap [dict get $parsed cmap]
+  set emoji [scan [encoding convertfrom utf-8 [binary format H* f09f9880]] %c]
+  list [dict exists $cmap $emoji] \
+      [expr {[lindex [lsort -integer [dict keys $cmap]] end] > 0xFFFF}]
+} -result {1 1}
+
+test font-4.5 {an embedded font that is never used produces no objects} -constraints haveFont -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "nur Helvetica" -at {20 20}
+  set path [::tclpdfTest::scratch font-unused.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/FontFile2} $bytes
+} -result 0
+
+test font-4.6 {a duplicate alias is refused} -constraints haveFont -body {
+  set doc [tclpdf new]
+  $doc font embed haus $fontRegular
+  try {
+    $doc font embed haus $fontRegular
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*already embedded*}
+
+test font-5.1 {widths come from the font, not from a standard table} -constraints haveFont -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed haus $fontRegular
+  set embedded [$doc textWidth "Rechnung" -family haus -size 12]
+  set standard [$doc textWidth "Rechnung" -family helvetica -size 12]
+  $doc destroy
+  # Different faces, different widths - and both plausible for 8 characters
+  list [expr {$embedded != $standard}] [expr {$embedded > 20 && $embedded < 100}]
+} -result {1 1}
+
+test font-5.2 {font info reports what the file says} -constraints haveFont -body {
+  set doc [tclpdf new]
+  $doc font embed haus $fontRegular
+  set info [$doc font info haus]
+  $doc destroy
+  list [dict get $info family] [dict get $info fsType] \
+      [expr {[dict get $info glyphs] > 1000}]
+} -match glob -result {{DejaVu Sans} 0 1}
+
+cleanupTests

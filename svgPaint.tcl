@@ -1,0 +1,312 @@
+#
+# tclpdf - PDF generation for Tcl
+#
+# svgPaint - what a shape is filled and stroked with
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+#
+# Bounding box, paint, style cascade and gradients. The bounding box is
+# here rather than with the shapes because it is READ BACK from the
+# operators a shape produced: objectBoundingBox gradients need the extent
+# of the thing they fill, and only the finished path knows it.
+#
+# A private sub-module behind the svg facade: nothing loads this directly, and
+# the methods stay private to the document class. Split off when svg.tcl had
+# grown to 864 lines - the drawing kept gaining features and the file kept
+# taking them.
+#
+
+package require Tcl 8.6.11-
+package require tclpdf::document 1.0-
+
+oo::define ::tclpdf::document::document {
+
+  method SvgBounds {operators} {
+    # The operators are read WITH their letters, not as a flat list of
+    # numbers. A rectangle is "x y w h re": pairing the numbers blindly reads
+    # "w h" as a second point, and a rectangle at y=55 of height 45 comes out
+    # as a box from 45 to 55 instead of 55 to 100.
+    #
+    # That was not cosmetic - it is what made every gradient with a vertical
+    # axis come out flat, while the horizontal ones looked right because
+    # their box happened to be correct by accident.
+    set minX {}
+    foreach line [split $operators \n] {
+      set fields [regexp -all -inline -- {[-0-9.]+|[a-zA-Z*]+} $line]
+      set operator [lindex $fields end]
+      set numbers [lrange $fields 0 end-1]
+      set points {}
+      switch -- $operator {
+        re {
+          lassign $numbers x y width height
+          if {$height eq {}} {
+            continue
+          }
+          set points [list $x $y [expr {$x + $width}] [expr {$y + $height}]]
+        }
+        m - l {
+          if {[llength $numbers] >= 2} {
+            set points [lrange $numbers 0 1]
+          }
+        }
+        c {
+          # All three control points: the curve stays inside their hull, so
+          # this is an upper bound and never cuts the shape short.
+          if {[llength $numbers] >= 6} {
+            set points [lrange $numbers 0 5]
+          }
+        }
+        default {continue}
+      }
+      foreach {x y} $points {
+        if {$y eq {}} {
+          break
+        }
+        if {$minX eq {}} {
+          lassign [list $x $x $y $y] minX maxX minY maxY
+          continue
+        }
+        set minX [expr {min($minX, $x)}]
+        set maxX [expr {max($maxX, $x)}]
+        set minY [expr {min($minY, $y)}]
+        set maxY [expr {max($maxY, $y)}]
+      }
+    }
+    if {$minX eq {}} {
+      return {}
+    }
+    return [list $minX $minY [expr {$maxX - $minX}] [expr {$maxY - $minY}]]
+  }
+
+  # Fill and stroke a completed path, then paint it.
+  method SvgPaint {operators style} {
+    if {$operators eq {}} {
+      return
+    }
+    # Now the shape is known, so a gradient measured in fractions of it can
+    # be resolved. What cannot be resolved - a filter, a dangling id - is
+    # left unpainted rather than guessed at, and counted for [svg info].
+    my state svgShapeBox [my SvgBounds $operators]
+    foreach key {fill stroke} {
+      set value [dict get $style $key]
+      if {![string match "url(*" $value]} {
+        continue
+      }
+      set id [string trim [string range $value 4 end-1] "#'\" "]
+      set resolved [my SvgGradient $id]
+      if {$resolved ne {}} {
+        dict set style $key [list pattern $resolved]
+      } else {
+        dict set style $key none
+        set skipped [my state svgSkipped]
+        dict incr skipped gradient
+        my state svgSkipped $skipped
+      }
+    }
+    set fill [dict get $style fill]
+    set stroke [dict get $style stroke]
+    set hasFill [expr {$fill ne "none" && $fill ne {}}]
+    set hasStroke [expr {$stroke ne "none" && $stroke ne {}}]
+    if {!$hasFill && !$hasStroke} {
+      return
+    }
+    my save
+    if {$hasFill} {
+      # Through GraphicsColour rather than straight into the parser: that is
+      # what turns a pattern ALIAS into the resource name the content stream
+      # needs. Without it the operator names the alias and the reader reports
+      # an unknown pattern - a page with the shapes drawn and nothing in them.
+      my content "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill]] fill]\n"
+    }
+    if {$hasStroke} {
+      my content "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $stroke]] stroke]\n"
+      my content "[::tclpdf::pdfObj num [my SvgLength \
+          [dict get $style stroke-width] 1]] w\n"
+      set caps {butt 0 round 1 square 2}
+      if {[dict exists $caps [dict get $style stroke-linecap]]} {
+        my content "[dict get $caps [dict get $style stroke-linecap]] J\n"
+      }
+      set joins {miter 0 round 1 bevel 2}
+      if {[dict exists $joins [dict get $style stroke-linejoin]]} {
+        my content "[dict get $joins [dict get $style stroke-linejoin]] j\n"
+      }
+      set dash [dict get $style stroke-dasharray]
+      if {$dash ne {} && $dash ne "none"} {
+        my content "\[[join [regexp -all -inline {[0-9.]+} $dash] { }]\] 0 d\n"
+      }
+    }
+    set alpha [dict get $style fill-opacity]
+    if {$alpha ne {} && $alpha != 1} {
+      my opacity $alpha fill
+    }
+    my content $operators
+    set evenOdd [expr {[dict get $style fill-rule] eq "evenodd"}]
+    if {$hasFill && $hasStroke} {
+      my content [expr {$evenOdd ? "B*\n" : "B\n"}]
+    } elseif {$hasFill} {
+      my content [expr {$evenOdd ? "f*\n" : "f\n"}]
+    } else {
+      my content "S\n"
+    }
+    my restore
+    return
+  }
+
+  # Merge the element's own painting properties over the inherited ones. The
+  # style="" attribute wins over presentation attributes (SVG 6.4).
+  method SvgStyle {node inheritedStyle} {
+    set style $inheritedStyle
+    foreach key {fill stroke stroke-width stroke-linecap stroke-linejoin
+        stroke-dasharray fill-opacity stroke-opacity fill-rule opacity
+        font-size font-family text-anchor} {
+      if {![dict exists $style $key]} {
+        dict set style $key {}
+      }
+      set value [::tclpdf::xml attribute $node $key]
+      if {$value ne {}} {
+        dict set style $key $value
+      }
+    }
+    foreach {-> key value} [regexp -all -inline {([-a-z]+)\s*:\s*([^;]+)} \
+        [::tclpdf::xml attribute $node style]] {
+      dict set style $key [string trim $value]
+    }
+    # A url(#...) reference is left STANDING here and resolved in SvgPaint.
+    # It cannot be done at this point: a gradient in the default units is
+    # measured in fractions of the shape it fills, and the shape does not
+    # exist yet - the style is worked out before the path operators are.
+    return $style
+  }
+
+  # A <linearGradient> or <radialGradient> as a shading pattern.
+  #
+  # Registered once per id and reused - a gradient filling three shapes is one
+  # object, which is also what the SVG means.
+  #
+  # gradientUnits is the trap. The default, objectBoundingBox, measures in
+  # fractions of the shape being filled, not in drawing coordinates - so
+  # x1="0" x2="1" means "left edge to right edge of whatever this fills". The
+  # bounding box is worked out from the path operators, because at this point
+  # they are the only description of the shape there is.
+  method SvgGradient {id} {
+    set known [my state svgGradients]
+    if {[dict exists $known $id]} {
+      return [dict get $known $id]
+    }
+    set defs [my state svgDefs]
+    if {![dict exists $defs $id]} {
+      return {}
+    }
+    set node [dict get $defs $id]
+    set kind [string map {svg: {}} [::tclpdf::xml name $node]]
+    if {$kind ni {linearGradient radialGradient}} {
+      return {}
+    }
+
+    # Stops. A gradient inheriting them through href is followed once - that
+    # is the only case measured in the corpus.
+    set stops [my SvgStops $node]
+    if {[llength $stops] < 2} {
+      set reference [::tclpdf::xml attribute $node href \
+          [::tclpdf::xml attribute $node xlink:href]]
+      set parent [string trimleft $reference #]
+      if {$parent ne {} && [dict exists $defs $parent]} {
+        set stops [my SvgStops [dict get $defs $parent]]
+      }
+    }
+    if {[llength $stops] < 2} {
+      return {}
+    }
+
+    lassign [my state svgBox] boxX boxY boxWidth boxHeight
+    set units [::tclpdf::xml attribute $node gradientUnits objectBoundingBox]
+    if {$units eq "userSpaceOnUse"} {
+      set frameX $boxX
+      set frameY $boxY
+      set frameWidth $boxWidth
+      set frameHeight $boxHeight
+    } else {
+      # In fractions of the shape - and the shape is what is about to be
+      # filled, so its box is taken from the operators just built.
+      lassign [my state svgShapeBox] frameX frameY frameWidth frameHeight
+      if {$frameWidth eq {} || $frameWidth <= 0} {
+        lassign [list $boxX $boxY $boxWidth $boxHeight] \
+            frameX frameY frameWidth frameHeight
+      }
+    }
+
+    set colors {}
+    set offsets {}
+    foreach stop $stops {
+      lappend colors [lindex $stop 1]
+      lappend offsets [lindex $stop 0]
+    }
+
+    set name svgGradient$id
+    # The pattern's matrix is the group transformation followed by the
+    # drawing's own - in that order, because the shape's coordinates pass
+    # through the group first. Leaving the group out is what put every
+    # gradient inside a translated group in the wrong place, while the ones
+    # at the top level looked right.
+    set arguments [list -colors $colors -stops $offsets \
+        -matrix [::tclpdf::geometry multiply [my state svgTransform] \
+            [my state svgMatrix]]]
+    if {$kind eq "linearGradient"} {
+      set x1 [my SvgFraction [::tclpdf::xml attribute $node x1 0] $frameWidth $frameX]
+      set y1 [my SvgFraction [::tclpdf::xml attribute $node y1 0] $frameHeight $frameY]
+      set x2 [my SvgFraction [::tclpdf::xml attribute $node x2 1] $frameWidth $frameX]
+      set y2 [my SvgFraction [::tclpdf::xml attribute $node y2 0] $frameHeight $frameY]
+      lappend arguments -from [list $x1 $y1] -to [list $x2 $y2] \
+          -at [list $frameX $frameY] -size [list $frameWidth $frameHeight]
+      set sub axial
+    } else {
+      set cx [my SvgFraction [::tclpdf::xml attribute $node cx 0.5] $frameWidth $frameX]
+      set cy [my SvgFraction [::tclpdf::xml attribute $node cy 0.5] $frameHeight $frameY]
+      set r [my SvgFraction [::tclpdf::xml attribute $node r 0.5] \
+          [expr {max($frameWidth, $frameHeight)}] 0]
+      lappend arguments -center [list $cx $cy] -radius $r \
+          -at [list $frameX $frameY] -size [list $frameWidth $frameHeight]
+      set sub radial
+    }
+    if {[catch {my shading pattern $name $sub {*}$arguments}]} {
+      return {}
+    }
+    dict set known $id $name
+    my state svgGradients $known
+    return $name
+  }
+
+  # The stops of a gradient, as {offset colour} pairs. stop-color may sit in
+  # an attribute or inside style="" - both occur, the second more often.
+  method SvgStops {node} {
+    set stops {}
+    foreach child [::tclpdf::xml children $node] {
+      if {[string map {svg: {}} [::tclpdf::xml name $child]] ne "stop"} {
+        continue
+      }
+      set offset [::tclpdf::xml attribute $child offset 0]
+      if {[string match {*%} $offset]} {
+        set offset [expr {[string trimright $offset %] / 100.0}]
+      }
+      set colour [::tclpdf::xml attribute $child stop-color]
+      foreach {-> key value} [regexp -all -inline {([-a-z]+)\s*:\s*([^;]+)} \
+          [::tclpdf::xml attribute $child style]] {
+        if {$key eq "stop-color"} {
+          set colour [string trim $value]
+        }
+      }
+      if {$colour eq {} || [string match "url(*" $colour]} {
+        set colour black
+      }
+      lappend stops [list $offset $colour]
+    }
+    return $stops
+  }
+
+  # A gradient coordinate: a fraction of the frame, or a length in it.
+}
+
+package provide tclpdf::svgPaint 1.0

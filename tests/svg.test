@@ -1,0 +1,374 @@
+# svg.test --
+#
+# SVG as real vectors: the XML parser, the path translator, the drawing.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::xml
+package require tclpdf::svgPath
+package require tclpdf::svg
+source [file join [file dirname [info script]] helper.tcl]
+
+set sample [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets images sample-vector.svg]
+testConstraint haveSvg [file exists $sample]
+
+# The identity transform the path module takes, spelled out once.
+set plain {apply {{x y} {list $x $y}}}
+
+# Which parser is in use. The XML tests below run against BOTH: tdom where it
+# is installed, and the built-in one either way - otherwise the fallback is
+# only exercised on machines that happen to lack tdom, which is nowhere.
+proc svgBothParsers {script} {
+    set saved $::tclpdf::xml::haveTdom
+    set results {}
+    foreach mode {1 0} {
+        if {$mode && !$saved} {
+            continue
+        }
+        set ::tclpdf::xml::haveTdom $mode
+        lappend results [uplevel 1 $script]
+    }
+    set ::tclpdf::xml::haveTdom $saved
+    return [lsort -unique $results]
+}
+
+# The results come back as a SET: one element means both parsers agreed, two
+# would mean they answered differently - which is the thing worth catching.
+test svg-1.1 {elements, attributes and nesting} -body {
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<svg width="10"><g id="a"><rect x="1"/></g></svg>}]
+    set answer [list [::tclpdf::xml name $root] \
+        [::tclpdf::xml attribute $root width] \
+        [llength [::tclpdf::xml children $root]] \
+        [::tclpdf::xml name [lindex [::tclpdf::xml children \
+            [lindex [::tclpdf::xml children $root] 0]] 0]]]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result {{svg 10 1 rect}}
+
+test svg-1.2 {comments, CDATA and the declaration are dropped} -body {
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<?xml version="1.0"?><!-- weg --><svg><![CDATA[<nicht>]]></svg>}]
+    set answer [list [::tclpdf::xml name $root] \
+        [string trim [::tclpdf::xml text $root]]]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result {{svg <nicht>}}
+
+test svg-1.3 {the five entities and numeric references} -body {
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<t a="&lt;&amp;&gt;">x &#65; &#x42;</t>}]
+    set answer [list [::tclpdf::xml attribute $root a] \
+        [string trim [::tclpdf::xml text $root]]]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result {{<&> {x A B}}}
+
+test svg-1.4 {malformed XML is an error, whichever parser runs} -body {
+  # The wording differs - tdom reports expat's message, the fallback its own -
+  # so only the refusal is pinned, not the text.
+  list [catch {::tclpdf::xml parse {<a><b></a></b>}}] \
+      [catch {::tclpdf::xml parse {<a><b></b>}}] \
+      [catch {::tclpdf::xml parse {}}]
+} -result {1 1 1}
+
+test svg-1.5 {the fallback parser names what it found} -body {
+  set saved $::tclpdf::xml::haveTdom
+  set ::tclpdf::xml::haveTdom 0
+  set messages {}
+  foreach source {{<a><b></a></b>} {<a><b></b>}} {
+    catch {::tclpdf::xml parse $source} message
+    lappend messages [string match {*not well formed*} $message]
+  }
+  set ::tclpdf::xml::haveTdom $saved
+  set messages
+} -result {1 1}
+
+test svg-1.6 {find walks the whole tree} -body {
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<svg><g><rect/><g><rect/></g></g></svg>}]
+    set answer [llength [::tclpdf::xml find $root rect]]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result 2
+
+test svg-2.1 {the four basic commands} -body {
+  ::tclpdf::svgPath operators {M10 20 L30 40 Z} $plain
+} -result "10 20 m\n30 40 l\nh\n"
+
+test svg-2.2 {relative commands accumulate} -body {
+  ::tclpdf::svgPath operators {m10 10 l5 5 l5 5} $plain
+} -result "10 10 m\n15 15 l\n20 20 l\n"
+
+test svg-2.3 {a moveto with several pairs continues as lineto} -body {
+  # The single most common way a hand-written parser silently loses geometry.
+  ::tclpdf::svgPath operators {M0 0 10 10 20 20} $plain
+} -result "0 0 m\n10 10 l\n20 20 l\n"
+
+test svg-2.4 {numbers need no separators} -body {
+  # "m.5.5-1-1" is FOUR numbers, not one: a leading dot and a minus sign both
+  # start a new one. A [split] on whitespace reads it as a single token, and
+  # the path then has a quarter of the points it should.
+  ::tclpdf::svgPath operators {m.5.5-1-1} $plain
+} -result "0.5 0.5 m\n-0.5 -0.5 l\n"
+
+test svg-2.5 {a quadratic curve becomes an exact cubic} -body {
+  # Degree elevation is exact, not an approximation: the control points sit
+  # two thirds of the way to the single quadratic one.
+  set out [::tclpdf::svgPath operators {M0 0 Q30 0 30 30} $plain]
+  regexp {^0 0 m\n(\S+) (\S+) (\S+) (\S+) 30 30 c} $out -> x1 y1 x2 y2
+  list [format %.1f $x1] [format %.1f $y1] [format %.1f $x2] [format %.1f $y2]
+} -result {20.0 0.0 30.0 10.0}
+
+test svg-2.6 {an arc becomes Bezier segments} -body {
+  # Measured over 1171 paths in 300 files: "a" is the most frequent command
+  # of all, ahead of "M". PDF has no arc operator, so this is the part that
+  # had to be right.
+  set out [::tclpdf::svgPath operators {M0 0 A10 10 0 0 1 20 0} $plain]
+  list [regexp -all { c\n} $out] [regexp {^0 0 m} $out]
+} -result {2 1}
+
+test svg-2.7 {an arc with a zero radius is a straight line} -body {
+  ::tclpdf::svgPath operators {M0 0 A0 10 0 0 1 20 0} $plain
+} -result "0 0 m\n20 0 l\n"
+
+test svg-2.8 {radii too small for the distance are scaled up} -body {
+  # Otherwise the curve misses its own end point, and the shape has a gap
+  # that no validator mentions.
+  set out [::tclpdf::svgPath operators {M0 0 A1 1 0 0 1 20 0} $plain]
+  regexp {(\S+) (\S+) c\n$} $out -> endX endY
+  list [format %.1f $endX] [format %.1f $endY]
+} -result {20.0 0.0}
+
+test svg-2.9 {a wrong number of arguments is refused} -body {
+  ::tclpdf::svgPath operators {M0 0 C1 2 3} $plain
+} -returnCodes error -match glob -result {*groups of 6 numbers*}
+
+test svg-3.1 {a drawing produces path operators, not an image} -body {
+  # The whole point of the module: the drawing stays vectors. If it were
+  # rasterised the test would still find an XObject, so the check is for path
+  # operators and against an image.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10"><rect width="5" height="5" fill="red"/></svg>} \
+      -at {20 20} -width 40
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {re} $content] [regexp {\nf\n} $content] [regexp {/Subtype /Image} $content]
+} -result {1 1 0}
+
+test svg-3.2 {a drawing is fitted, not stretched} -body {
+  # The default of preserveAspectRatio is "xMidYMid meet": proportions are
+  # kept, the drawing is scaled until it fits BOTH directions, and what is
+  # left over is split evenly. Stretching instead would turn a circle into an
+  # ellipse whenever the rectangle has a different shape than the viewBox -
+  # and no reading of the request asks for that.
+  #
+  # The return value is where the drawing ACTUALLY is: x, y, width, height.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set exact [$doc svg -data {<svg viewBox="0 0 100 50"/>} -at {0 0} -size {40 20}]
+  set square [$doc svg -data {<svg viewBox="0 0 100 50"/>} -at {0 0} -size {40 40}]
+  set narrow [$doc svg -data {<svg viewBox="0 0 100 50"/>} -at {0 0} -size {20 40}]
+  set byWidth [$doc svg -data {<svg viewBox="0 0 100 50"/>} -at {0 0} -width 40]
+  $doc destroy
+  list $exact $square $narrow $byWidth
+} -result {{0.0 0.0 40.0 20.0} {0.0 10.0 40.0 20.0} {0.0 15.0 20.0 10.0} {0.0 0.0 40.0 20.0}}
+
+test svg-3.3 {something that is not an SVG is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc svg -data {<html><body/></html>}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*not an SVG document*html*}
+
+test svg-3.4 {a group's properties are inherited} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10"><g fill="red"><rect width="5" height="5"/></g></svg>} \
+      -at {0 0} -width 10
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {1 0 0 rg} $content
+} -result 1
+
+test svg-3.5 {use draws what it points at, even defined later} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10"><use href="#r" x="2" y="2"/><defs><rect id="r" width="3" height="3" fill="blue"/></defs></svg>} \
+      -at {0 0} -width 10
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {0 0 1 rg} $content] [regexp {re} $content]
+} -result {1 1}
+
+test svg-3.6 {display none draws nothing} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10"><rect width="5" height="5" fill="red" display="none"/></svg>} \
+      -at {0 0} -width 10
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {1 0 0 rg} $content
+} -result 0
+
+test svg-3.7 {a gradient reference is skipped and reported} -body {
+  # Not guessed at: passing "url(#g)" to the colour parser would throw on
+  # every drawing that has one.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10"><rect width="5" height="5" fill="url(#g)"/></svg>} \
+      -at {0 0} -width 10
+  set skipped [$doc svg info]
+  $doc destroy
+  dict get $skipped gradient
+} -result 1
+
+test svg-3.8 {text is drawn as text, not as codes} -body {
+  # Regression: [afm encode] returns character CODES, [afm bytes] returns
+  # bytes. Using the first drew "83 86 71" where "SVG" belonged, and the
+  # document was structurally perfect.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 20"><text x="10" y="10" font-size="8">Hallo</text></svg>} \
+      -at {0 0} -width 100
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {[string first "(Hallo)" $content] >= 0}] [regexp {BT} $content]
+} -result {1 1}
+
+test svg-3.9 {the font resource is named once, not twice} -body {
+  # Regression: [TextResource] already returns "/F..." - running it through
+  # [pdfObj name] again escaped the slash into #2F, and poppler reported
+  # "Unknown font tag" while the file itself stayed valid.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 20"><text x="10" y="10">x</text></svg>} \
+      -at {0 0} -width 100
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {/F\w+ } $content] [regexp {#2F} $content]
+} -result {1 0}
+
+test svg-4.1 {a real drawing goes through} -constraints haveSvg -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  lassign [$doc svg $sample -at {20 20} -width 60] x y width height
+  set path [::tclpdfTest::scratch svg.pdf]
+  $doc write $path
+  $doc destroy
+  set size [file size $path]
+  file delete $path
+  # Rounded: the value has been through millimetres, points and back, so it
+  # comes out as 59.999999999999986. Pinning the last decimal would be a test
+  # of floating point rather than of the layout.
+  list [format %.1f $x] [format %.1f $width] [expr {$height > 0}] \
+      [expr {$size < 20000}]
+} -result {20.0 60.0 1 1}
+
+test svg-4.2 {a file declaring UTF-8 keeps its characters} -body {
+  # Read as bytes and decoded. Reading as text would use the system encoding,
+  # and a middle dot would arrive as the two bytes C2 B7 - drawn as two
+  # characters in a document that is otherwise perfect. The decoding only
+  # applies to a FILE; -data is already a Tcl string and is left alone.
+  set path [::tclpdfTest::scratch utf8.svg]
+  set channel [open $path w]
+  fconfigure $channel -translation binary
+  puts -nonewline $channel "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+      <svg viewBox=\"0 0 100 20\"><text x=\"5\" y=\"10\">a\xc2\xb7b</text></svg>"
+  close $channel
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg $path -at {0 0} -width 100
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  file delete $path
+  # 302 octal is the C2 half of the UTF-8 sequence: present means undecoded.
+  list [expr {[string first {\302} $content] < 0}] \
+      [expr {[string first {\267} $content] >= 0}]
+} -result {1 1}
+
+test svg-5.1 {a gradient reference becomes a pattern} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 50" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="white"/><stop offset="1" stop-color="navy"/>
+      </linearGradient></defs>
+      <rect x="0" y="0" width="100" height="50" fill="url(#g)"/></svg>} \
+      -at {10 10} -size {80 40}
+  set content [::tclpdfTest::content $doc]
+  set skipped [$doc svg info]
+  $doc destroy
+  list [regexp {/Pattern cs} $content] [dict exists $skipped gradient]
+} -result {1 0}
+
+test svg-5.2 {the shape's own box decides where the gradient runs} -body {
+  # objectBoundingBox is the default: x1=0 x2=1 means "left edge to right
+  # edge of the shape being filled". The box comes from the path operators,
+  # read WITH their letters - a rectangle is "x y w h re", and pairing the
+  # numbers blindly reads "w h" as a second point. That is what made every
+  # vertical gradient come out flat while the horizontal ones looked right.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="v" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="white"/><stop offset="1" stop-color="navy"/>
+      </linearGradient></defs>
+      <rect x="0" y="60" width="100" height="40" fill="url(#v)"/></svg>} \
+      -at {0 0} -size {100 100}
+  set coords {}
+  for {set number 1} {$number <= [[$doc writer] count]} {incr number} {
+    if {[regexp {/Coords \[([^\]]*)\]} [[$doc writer] body $number] -> found]} {
+      set coords $found
+    }
+  }
+  $doc destroy
+  # The axis has to span the rectangle's own y range, 60 to 100 - not 40 to
+  # 60, which is what the flat paired reading produced.
+  lassign $coords x0 y0 x1 y1
+  list [expr {$x0 == $x1}] [expr {int($y0)}] [expr {int($y1)}]
+} -result {1 60 100}
+
+test svg-5.3 {a gradient inside a transformed group is placed with it} -body {
+  # A pattern is bound to the page's default space and knows nothing about
+  # the group it is used in. Without the group transformation folded into its
+  # matrix, the gradient is placed as if the group sat at the origin - right
+  # at the top level, wrong everywhere else.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="white"/><stop offset="1" stop-color="navy"/>
+      </linearGradient></defs>
+      <g transform="translate(40,30)">
+        <rect x="0" y="0" width="50" height="20" fill="url(#g)"/></g></svg>} \
+      -at {0 0} -size {100 100}
+  set matrix {}
+  for {set number 1} {$number <= [[$doc writer] count]} {incr number} {
+    if {[regexp {/Matrix \[([^\]]*)\]} [[$doc writer] body $number] -> found]} {
+      set matrix $found
+    }
+  }
+  $doc destroy
+  # Six numbers, and the translation is not the drawing's alone - the group's
+  # 40 and 30 have to show up in the last two.
+  expr {[llength $matrix] == 6}
+} -result 1
+
+cleanupTests
