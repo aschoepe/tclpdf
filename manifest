@@ -1,5 +1,5 @@
-C Give\sSVG\sgradient\spatterns\sunique\snames\sinstead\sof\sthe\sSVG\sid\n\n-\sSvgGradient\sin\ssvgPaint.tcl\snames\spatterns\sfrom\sa\sdocument-wide\scounter;\snaming\sthem\safter\sthe\sSVG\sid\smade\sa\ssecond\sdrawing\sof\sthe\ssame\sfile\scollide\sand\slose\sits\sfills,\sand\sa\ssecond\sfile\ssharing\san\sid\slost\sits\sown\n-\sReuse\skey\sis\sthe\sgradient\splus\severy\spattern\sargument,\sso\sa\suserSpaceOnUse\sgradient\sfilling\sseveral\sshapes\sstays\sone\sobject\swhile\sobjectBoundingBox\sgives\seach\sshape\sits\sown\sgeometry\n-\sThe\scatch\saround\sthe\sregistration\sis\sremoved\s-\sa\sfailure\sthere\sis\sa\sreal\sdefect\sand\sno\slonger\sturns\sinto\sa\ssilently\sunfilled\sshape\n-\sThree\stests\sin\stests/svg.test:\sthe\ssame\sdrawing\stwice\skeeps\sits\scolour,\seach\sshape\sgets\sthe\sgradient\sover\sits\sown\sbox,\sone\suser-space\sgradient\sstays\sone\sobject\n-\ssvgPaint\sraised\sto\s1.1,\sin\sthe\smodule\sand\sin\spkgIndex.tcl.in
-D 2026-08-11T20:54:24.601
+C Document\sthe\sextension\spoints\sin\sdoc/PLUGINS.md\n\n-\sNew\sdoc/PLUGINS.md:\sthe\sevent\sbus\swith\sits\ssix\sevents,\sthe\sidempotency\sand\serror\scontracts,\sthe\ssix\ssupported\smethods,\sand\stwo\sworked\sexamples\scovering\sa\sbeforeWrite\ssubscriber\sand\san\soo::define\smethod\spackage\n-\sBoth\sexamples\swere\srun\sas\swritten;\sthe\ssubscriber\sexample\sproduces\sbyte-identical\soutput\sacross\stwo\swrites\n-\sdoc/tclpdf.md:\sthe\sEvents\ssection\snames\spageAdded\sand\spoints\sto\sdoc/PLUGINS.md
+D 2026-08-11T21:52:06.593
 F Makefile.in 573119b92f4654e4303dc44222e021108c42394829e6192bb8a555747dc9b3c3
 F README ee487e417de5cef96bb94a70abbce88510f2be5000509071c148687736c178cc
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -9,8 +9,9 @@ F attach.tcl 7d84107c2be570b8ab3d3e49f15fda6633a767b89cd5dc40ae5f1969a8a247c9
 F color.tcl 4fff05998b9ed9d3d79c26c38c3c209c4deb1b65de5cb647849d8b9742b71fde
 F configure f65d4fa3ae8d08a9db399e3f8e0734bf8940c71e0ecbc76e711af1bb1408e1ca x
 F configure.ac 442cb25bb50d420dc22755e02aabe29e23ec8019f4b641d47e05c94b4968d3f9
+F doc/PLUGINS.md 4450a8aa3c546347c1d315baa519293e1ef4ac68a8bc339b4ec332ea8f26a55c
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
-F doc/tclpdf.md d05873cdca416d3c7368af1a8f2e3ade8e7b2f0dbe4b16a7ca164e86c9fcde4c
+F doc/tclpdf.md c9068e6e3d022e9f544b509684f6be1fc0a03581d0f0a5e4fb5d4be0beef195a
 F document.tcl 1e8f1fcb0191bd4388ed07e7d027acbdca38f36702df9b5fed08db9da8e3f294
 F event.tcl b738afa9f5fb7a1697af862e9dc0413ee1c5064fab9bdc971a1e1ea2a7a6ef50
 F examples/01.01-shapes.tcl 360c8e22398b091f89e5010365a57986d47d8bc24af659d87a990bf26dfde8e5
@@ -133,8 +134,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl f20e82e15aa6690f109531bf65a936033f610a56b090fb6613b6a8ba41996152
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 6e54f16f6c4a977ebe1167c50a5a4e96eb307741972f3fa976a6f6586e4b3820
-R e77a27ebd068b8ab2e9b0b911098569c
+P 0458721c7d60b8ed3ff17eaa85e62a255673d92d2e1e14be12e02ec166d95dab
+R 127ac29e008618399072399de43a0b8f
 U alex
-Z 8b20d6197d6941dcc112127c9c3dd905
+Z 31eec7799d4fe00b5412ed13461efc89
 # Remove this line to create a well-formed Fossil manifest.
