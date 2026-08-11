@@ -4,8 +4,8 @@
 #
 #   tclsh examples/04.01-table-basics.tcl ?output.pdf?
 #
-# One page, three themes, and all four column alignments. The interesting one
-# is the fourth: decimal.
+# One page, three themes, four column alignments and the two ways of ruling a
+# table. The interesting alignment is the fourth: decimal.
 #
 # Right alignment looks identical to decimal alignment as long as every figure
 # has the same number of decimals - which is true in a test and false in a
@@ -97,6 +97,23 @@ $doc table -at [list 140 [expr {$y - 56}]] -width 25 -theme plain \
     -head {{"right"}} -body $figures -columns {{align right}}
 $doc table -at [list 170 [expr {$y - 56}]] -width 25 -theme plain \
     -head {{"decimal"}} -body $figures -columns {{align decimal}}
+
+# -- one frame instead of a rule per cell ----------------------------------
+
+# The border style takes none, all, horizontal, vertical and outer. The last
+# one is not a cell rule at all: the frame belongs to the block, and it is
+# drawn once per page. A table running over three pages therefore gets three
+# frames, each only as tall as its own part - a single frame around the table
+# as a whole would run off the paper at the first break.
+
+$doc font -style bold -size 10
+$doc text "-style {border outer}" -at [list 20 [expr {$y + 4}]]
+$doc font -style {} -size 8
+$doc text "The same rows as above, framed once instead of ruled per cell.\
+    Hold it against -theme grid." -at [list 20 [expr {$y + 9}]] -width 110
+
+$doc table -at [list 20 [expr {$y + 16}]] -width 110 -theme grid \
+    -style {border outer} -head $head -body $rows -columns $columns
 
 exampleFooter $doc
 

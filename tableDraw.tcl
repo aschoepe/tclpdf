@@ -114,14 +114,15 @@ oo::define ::tclpdf::document::document {
   method TableDrawBorder {style x y width height} {
     set border [dict get $style border]
     # An unknown value used to fall through every branch and draw NOTHING, in
-    # silence - "outer" in particular, which reads like it should work and is
-    # not implemented. A table without rules looks like a theme choice, so
-    # nobody goes looking for a typo.
-    if {$border ni {none all horizontal vertical}} {
+    # silence. A table without rules looks like a theme choice, so nobody goes
+    # looking for a typo.
+    if {$border ni {none all horizontal vertical outer}} {
       return -code error "tclpdf: unknown table border \"$border\" - known are:\
-          none, all, horizontal, vertical"
+          none, all, horizontal, vertical, outer"
     }
-    if {$border eq "none" || [dict get $style lineWidth] <= 0} {
+    # "outer" draws nothing per cell on purpose: the frame belongs to the
+    # section as a whole and is drawn once, by TableDrawFrame.
+    if {$border in {none outer} || [dict get $style lineWidth] <= 0} {
       return
     }
     set colour [dict get $style lineColor]
@@ -143,13 +144,26 @@ oo::define ::tclpdf::document::document {
     return
   }
 
-  # NOT CALLED FROM ANYWHERE, and kept on purpose rather than deleted quietly.
+  # The frame for "-border outer", drawn once per page rather than four rules
+  # per cell. Only TableRun can call this: it is the one place that knows where
+  # what was drawn on this page begins and ends - a table breaking over three
+  # pages gets three frames, not one that runs off the paper.
   #
-  # It is the finished half of "-border outer": a frame around a whole section,
-  # drawn once instead of per cell. What is missing is the other half - the
-  # place in table.tcl that knows where a section begins and ends and would
-  # call this once it is done. Until then TableDrawBorder refuses "outer"
-  # rather than letting it draw nothing, which is what it did before.
+  # Height comes from two y coordinates rather than a height because the caller
+  # has exactly those: where the section started and where it ended.
+  method TableDrawFrame {style widths left top bottom} {
+    if {[dict get $style border] ne "outer" || $bottom <= $top} {
+      return
+    }
+    set width 0
+    foreach column $widths {
+      set width [expr {$width + $column}]
+    }
+    my TableDrawOutline $style $left $top $width [expr {$bottom - $top}]
+    return
+  }
+
+  # A frame around a whole section: one rectangle instead of a rule per cell.
   method TableDrawOutline {style x y width height} {
     if {[dict get $style lineWidth] <= 0} {
       return
@@ -160,4 +174,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.0
+package provide tclpdf::tableDraw 1.1

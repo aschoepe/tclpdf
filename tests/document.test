@@ -388,8 +388,6 @@ test document-rewrite-14.2 {write, draw on, write again - the additions arrive} 
       [regexp {Seite zwei} $bytes]
 } -result {1 1 1}
 
-cleanupTests
-
 test document-9.1 {the document language goes into the catalog} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
@@ -429,3 +427,5 @@ test document-9.3 {without a language nothing is written} -body {
   $doc destroy
   list $empty [regexp {/Lang} $bytes]
 } -result {{} 0}
+
+cleanupTests

@@ -343,6 +343,10 @@ oo::define ::tclpdf::document::document {
           set y [my TableSection $footCells $footHeights $widths $group \
               $left $y $options]
         }
+        # The frame of "-border outer" belongs to the page, not to the table:
+        # every page gets its own, from where the block started down to here.
+        # It is drawn before the hook so a running footer can sit below it.
+        my TableDrawFrame [dict get $options style] $widths $left $top $y
         my TableHook didDrawPage $options [dict create page [my page current] y $y]
         my page add
         set y $top
@@ -355,6 +359,7 @@ oo::define ::tclpdf::document::document {
           $left $y $options]
     }
     set y [my TableSection $footCells $footHeights $widths $group $left $y $options]
+    my TableDrawFrame [dict get $options style] $widths $left $top $y
     my TableHook didDrawPage $options [dict create page [my page current] y $y]
     return $y
   }
@@ -452,4 +457,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.0
+package provide tclpdf::table 1.1

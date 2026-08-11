@@ -277,8 +277,6 @@ test table-8.4 {a heading over a decimal column is set flush right} -body {
   dict get [lindex [lindex [dict get $layout head] 0] 1] resolved align
 } -result right
 
-cleanupTests
-
 test table-9.1 {a rowSpan binds its rows into one group} -body {
   # The unit that has to fit on a page is the GROUP, not the row. This checks
   # the arithmetic on its own: every row reports the last row of its group.
@@ -342,3 +340,72 @@ test table-9.3 {a group is drawn whole, on one page} -body {
   set pages [lsort -unique [dict values $::tablePages]]
   list [dict size $::tablePages] [llength $pages]
 } -result {4 1}
+
+# Every stroked rectangle in a content stream, as {x y width height}. A cell
+# rule is a line, a fill is "re f" - only the frame is "re S".
+proc frames {stream} {
+  set result {}
+  foreach {-> x y width height} [regexp -all -inline \
+      {(-?[0-9.]+) (-?[0-9.]+) (-?[0-9.]+) (-?[0-9.]+) re\nS} $stream] {
+    lappend result [list $x $y $width $height]
+  }
+  return $result
+}
+
+test table-10.1 {-border outer frames the block instead of every cell} -body {
+  # One rectangle, at the table's own position and width - and NO cell rules
+  # beside it, which is the whole point of the value.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set y [$doc table -at {20 30} -width 100 -theme grid -style {border outer} \
+      -head {{A B}} -body {{1 2} {3 4}}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set drawn [frames $stream]
+  lassign [lindex $drawn 0] x top width height
+  # mm to points, and the frame reaches from the top of the table down to the
+  # y the call itself reported.
+  set mm [expr {72 / 25.4}]
+  list [llength $drawn] \
+      [format %.2f [expr {$x / $mm}]] [format %.2f [expr {$width / $mm}]] \
+      [format %.2f [expr {$height / $mm}]] [format %.2f [expr {$y - 30}]] \
+      [llength [regexp -all -inline {(?m)^S$} $stream]]
+} -result {1 20.00 100.00 19.95 19.95 1}
+
+test table-10.2 {a table broken over pages is framed once per page} -body {
+  # A frame around the table as a whole would run off the paper. The unit is
+  # the page: three pages, three frames, each one only as tall as its own part.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set body {}
+  for {set n 1} {$n <= 90} {incr n} {
+    lappend body [list "row $n" $n]
+  }
+  $doc table -at {20 20} -width 100 -theme grid -style {border outer} \
+      -head {{A B}} -body $body
+  set pages [$doc page count]
+  set counts {}
+  set heights {}
+  for {set page 0} {$page < $pages} {incr page} {
+    set drawn [frames [::tclpdfTest::content $doc $page]]
+    lappend counts [llength $drawn]
+    foreach frame $drawn {
+      lappend heights [expr {[lindex $frame 3] < 800}]
+    }
+  }
+  $doc destroy
+  list [expr {$pages > 1}] [lsort -unique $counts] [lsort -unique $heights]
+} -result {1 1 1}
+
+test table-10.3 {an unknown border value names the known ones} -body {
+  # It used to fall through every branch and draw nothing, in silence.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30} -width 100 -style {border outside} -body {{a b}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown table border "outside"*outer*}
+
+cleanupTests
