@@ -173,6 +173,43 @@ test text-5.1 {rotation uses Tm, not Td} -body {
   list [regexp {Tm} $content] [regexp {Td} $content]
 } -result {1 0}
 
+test text-5.3 {a rotated centred line stays centred on -at} -body {
+  # The alignment shift has to run ALONG THE BASELINE. Shifting x first and
+  # rotating afterwards turned the text about the wrong point: a centred
+  # stamp drifted towards the page corner. No test combined -align with
+  # -rotate before this one - which is how it stayed unseen.
+  #
+  # At 90 degrees the maths is exact: Tm must be {0 1 -1 0 px py-s} - the
+  # anchor px unchanged, the shift s moved into the SECOND coordinate,
+  # because the baseline now runs upwards.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  lassign [$doc page size] -> pageHeight
+  set s [expr {[$doc textWidth "MITTIG"] / 2.0}]
+  $doc text "MITTIG" -at {100 700} -align center -rotate 90
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) Tm} \
+      $content -> a b c d e f
+  set py [expr {$pageHeight - 700}]
+  list $a $b $c $d [expr {abs($e - 100) < 0.01}] [expr {abs($f - ($py - $s)) < 0.01}]
+} -result {0 1 -1 0 1 1}
+
+test text-5.4 {an unrotated centred line still shifts the start point} -body {
+  # The regression guard for the ordinary case: without -rotate the shift is
+  # plain subtraction from x, exactly as before.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  lassign [$doc page size] -> pageHeight
+  set s [expr {[$doc textWidth "MITTIG"] / 2.0}]
+  $doc text "MITTIG" -at {100 700} -align center
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([-0-9.]+) ([-0-9.]+) Td} $content -> e f
+  list [expr {abs($e - (100 - $s)) < 0.01}] \
+      [expr {abs($f - ($pageHeight - 700)) < 0.01}]
+} -result {1 1}
+
 test text-5.2 {spacing, word spacing, stretch and rise reach the stream} -body {
   set doc [tclpdf new]
   $doc page add

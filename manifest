@@ -1,5 +1,5 @@
-C Document\sthe\sextension\spoints\sin\sdoc/PLUGINS.md\n\n-\sNew\sdoc/PLUGINS.md:\sthe\sevent\sbus\swith\sits\ssix\sevents,\sthe\sidempotency\sand\serror\scontracts,\sthe\ssix\ssupported\smethods,\sand\stwo\sworked\sexamples\scovering\sa\sbeforeWrite\ssubscriber\sand\san\soo::define\smethod\spackage\n-\sBoth\sexamples\swere\srun\sas\swritten;\sthe\ssubscriber\sexample\sproduces\sbyte-identical\soutput\sacross\stwo\swrites\n-\sdoc/tclpdf.md:\sthe\sEvents\ssection\snames\spageAdded\sand\spoints\sto\sdoc/PLUGINS.md
-D 2026-08-11T21:52:06.593
+C Fix\srotated\saligned\stext\sand\sadd\sa\sdiagonal\sstamp\sexample\n\n-\sThe\salignment\sshift\sof\s-align\scenter\sand\sright\snow\sruns\salong\sthe\sbaseline:\stext.tcl\spasses\sit\sinto\sTextRun,\swhere\sit\senters\sthe\sTm\smatrix\sbefore\sthe\srotation;\sa\scentred\sword\srotated\swith\s-rotate\sdrifted\soff\stowards\sthe\spage\scorner\sinstead\sof\sstaying\scentred\son\s-at\n-\stextBlock.tcl\spasses\sthe\sper-line\sshift\sthe\ssame\sway\sfor\srotated\sparagraphs\n-\sTwo\stests\sin\stests/text.test:\sthe\sexact\smatrix\sat\s90\sdegrees,\sand\sthe\sunrotated\scase\sas\sa\sregression\sguard\n-\sNew\sexample\sexamples/01.06-stamp.tcl:\sDRAFT\sand\sPAID\sset\sdiagonally\sacross\sthe\spage,\ssized\sfrom\sa\ssingle\swidth\smeasurement,\sover\sa\sreadable\ssheet\son\sA4\sand\sA5\slandscape\n-\stext\sand\stextBlock\sraised\sto\s1.1,\sin\sthe\smodule\sand\sin\spkgIndex.tcl.in
+D 2026-08-11T22:15:09.801
 F Makefile.in 573119b92f4654e4303dc44222e021108c42394829e6192bb8a555747dc9b3c3
 F README ee487e417de5cef96bb94a70abbce88510f2be5000509071c148687736c178cc
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -19,6 +19,7 @@ F examples/01.02-colour.tcl caae14a7df4825e1dd06c6c9e4dde04c39ca10fc172302009834
 F examples/01.03-text-layout.tcl cf4f7ce9ffbd42836396ec82059a6f00d52ae771997e8c07aa928ffb0ade9650
 F examples/01.04-attachments.tcl 536d4e6c184d2e19fa46967632f9125398ef928fb8b49be6305fd03ff6917a14
 F examples/01.05-forms.tcl 11687a301bd9bf0064e2afe1c91e696bec2c90e651e9d75403f9fd193f1b9c7f
+F examples/01.06-stamp.tcl e495dac13c0a314952038a049640aea700f0e3758ee7c7162c02a6f7d94664eb
 F examples/02.01-embedding.tcl 223a38c6113a27db089d5214af227d2b2a222d722d300b5abb8190b428172ec9
 F examples/02.02-languages.tcl 5bc818ac9aeb2536b7f60f9918f6b05142b2e85e13e36637e95e115a2eb248fe
 F examples/02.03-font-families.tcl 61e9ae979801edb855cf5519730e1df07f216f8d0591b10849b5d4acd416ec50
@@ -82,7 +83,7 @@ F page.tcl 081a5980116b441fab2a6ef9601cb481eba2a3666339486681ba8d120a5628b1
 F pattern.tcl bbf3a0befbc175ae8dac4f16e3e30ed2267493e444a1c1307ab315254cb90dcb
 F pdfObj.tcl 67bbfb54aff773bcf864d07de81949a4cdc1f685460f369d3f110d364890ecec
 F pdfa.tcl d8ab4c303fc7ef4bee34c455787d51b3d42e1bbedfe5339a0a63893c2f09eea7
-F pkgIndex.tcl.in 62057cafef9967e8b23aaa613c422f33c5945cede5e1b90f8228f19584c105cb
+F pkgIndex.tcl.in c0a88427312e7d59553dcec62d53888a6b3bd372aa19e66a6d78bfff7b52d3ff
 F sfnt.tcl f37cdfcbb21d6e86feb553def07a4d7d881750d88bc241897cd4c2cada03a7d7
 F shading.tcl dfaddaebe9b4c74bc23d255edf23d9965c6468af6facafc758f2db03a576c6ac
 F shape.tcl 103d3204c62df25b2f05bf67172b6717a9af5b9440f4edd32341408b62bd4cc7
@@ -115,13 +116,13 @@ F tests/pdfObj.test bfbf411c69e64987d60dad7976a65c09e05151a5ef2341eefeddb03d201f
 F tests/shading.test c077f28d6ec1d384b7e0c5d67e27a25c22338d699fc569e50374021cb0e5b722
 F tests/svg.test d4eeed8c471e8a1ba68d7768c0b834fa770eef4d663553ec25dfa4c1b1639d6e
 F tests/table.test fd278d50b2f7c0a85936c2ca9f897357f9e2db832375908035c156d8d3e86931
-F tests/text.test 549ecd9c55bd8fe932c0d2b97d383b3e95b3dd099a38773b3a519ad9788e0a27
+F tests/text.test 61e5a57912145d3be6830dea9883081183d7f4bb4145dbba13f6949686d15943
 F tests/version.test b98a03f3c4bc8ca044954f26774dc753620358c9a50c0c66044a766adad1fc64
 F tests/writer.test b03e3df17268c3d6b5515988bf7fe7439f944c1158b7698a5dbbad77699e56ee
 F tests/xObject.test 8147f07508a5abb559559948490a053ebbadcd76410b62004be6457f24144934
 F tests/zugferd.test 19363795a4431f7b5af8683d389d215e34e5588dca91a93c0eee3924a07b9f16
-F text.tcl 270587fd1e747318095294e08f5916b70489623b525d6392c5931416df0148a4
-F textBlock.tcl 620207005d2b767a431c39bd9397d9099bc567862dd4d351eba4e36ad2e85238
+F text.tcl 86a6c922d639aaa5703b07ba5fbc2da73fad373d52bfca1cf71af912919410db
+F textBlock.tcl 50b9d8e350d7615f75658e9d2dba32c1cbf58de7a83cc8ed87ea2b2d5f2ab796
 F tools/BUILD-PACKAGE.md a27597d3de55b653d4c52b9f0eb7765b1d1ccceaf9f3270d8987f62a64b57c98
 F tools/archive.sh 7f74807fe22365b2ec4035b7c248ec77cddd014db15de22502d15b6a58d684c4 x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
@@ -134,8 +135,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl f20e82e15aa6690f109531bf65a936033f610a56b090fb6613b6a8ba41996152
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 0458721c7d60b8ed3ff17eaa85e62a255673d92d2e1e14be12e02ec166d95dab
-R 127ac29e008618399072399de43a0b8f
+P fbb63a2a64dc984f50d12c1929fe08c186d1e4770a015af00bd12f76e45150c7
+R 817cc5c1f117bf1fcf386a0052c1c9de
 U alex
-Z 31eec7799d4fe00b5412ed13461efc89
+Z a11a16bf6487be2d008af538afb5c242
 # Remove this line to create a well-formed Fossil manifest.

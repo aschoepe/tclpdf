@@ -147,18 +147,22 @@ oo::define ::tclpdf::document::document {
     return $y
   }
 
+  # Alignment inside the column is a shift along the baseline and is passed
+  # to TextRun rather than applied to x - with -rotate the baseline is
+  # turned, and a pre-shifted x would rotate about the wrong point (same
+  # reasoning as in [text], text.tcl).
   method TextParagraphLine {line state x y width align isLast rotate} {
     switch -- $align {
       left {
         my TextRun $line $state $x $y $rotate
       }
       right {
-        my TextRun $line $state [expr {$x + $width - [my TextLineWidth $line $state]}] \
-            $y $rotate
+        my TextRun $line $state [expr {$x + $width}] $y $rotate \
+            [my TextLineWidth $line $state]
       }
       center - centre {
-        my TextRun $line $state \
-            [expr {$x + ($width - [my TextLineWidth $line $state]) / 2.0}] $y $rotate
+        my TextRun $line $state [expr {$x + $width / 2.0}] $y $rotate \
+            [expr {[my TextLineWidth $line $state] / 2.0}]
       }
       justify {
         # The last line of a paragraph stays flush left. Justifying it is the
@@ -208,4 +212,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.0
+package provide tclpdf::textBlock 1.1

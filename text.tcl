@@ -144,12 +144,17 @@ oo::define ::tclpdf::document::document {
     lassign [dict get $options at] x y
 
     # Alignment of a single line is a shift of the starting point - there is
-    # no PDF operator for it.
+    # no PDF operator for it. The shift is passed on rather than applied to x
+    # here, because it has to happen ALONG THE BASELINE: with -rotate the
+    # baseline is turned, and shifting x beforehand moved the anchor
+    # horizontally and then rotated about the wrong point - a rotated
+    # centred word drifted off towards the corner instead of staying centred
+    # on -at.
     set width [my textWidth $string {*}$args]
     switch -- [dict get $options align] {
-      left {}
-      right {set x [expr {$x - $width}]}
-      center - centre {set x [expr {$x - $width / 2.0}]}
+      left {set shift 0}
+      right {set shift $width}
+      center - centre {set shift [expr {$width / 2.0}]}
       justify {
         # Without a -width there is nothing to justify to.
         return -code error "tclpdf: -align justify needs -width"
@@ -160,7 +165,7 @@ oo::define ::tclpdf::document::document {
       }
     }
     set y [my TextBaseline $state $y [dict get $options anchor]]
-    my TextRun $string $state $x $y [dict get $options rotate]
+    my TextRun $string $state $x $y [dict get $options rotate] $shift
     return
   }
 
@@ -226,10 +231,13 @@ oo::define ::tclpdf::document::document {
   # graphics state stack is for, it costs nothing when the options are unused,
   # and unlike tracking what was written last it stays correct when the caller
   # does its own save/restore in between.
-  method TextRun {string state x y rotate} {
+  # shift is the alignment offset along the baseline, in the document unit:
+  # 0 for left, the line width for right, half of it for center.
+  method TextRun {string state x y rotate {shift 0}} {
     set font [dict get $state resolved]
     set size [dict get $state size]
     lassign [my coords $x $y] px py
+    set shift [::tclpdf::geometry toPoints $shift [my cget -unit]]
 
     set guarded [expr {[dict get $state spacing] != 0
         || [dict get $state wordSpacing] != 0
@@ -254,11 +262,17 @@ oo::define ::tclpdf::document::document {
     }
     if {$rotate != 0} {
       # Tm carries position AND rotation; using Td as well would compose them.
-      set matrix [::tclpdf::geometry multiply [::tclpdf::geometry rotate $rotate] \
-          [::tclpdf::geometry translate $px $py]]
+      # The alignment shift goes in FIRST, along the text's own baseline -
+      # then the rotation, then the move to the anchor. That is what keeps a
+      # centred word centred on -at at any angle.
+      set matrix [::tclpdf::geometry multiply \
+          [::tclpdf::geometry translate [expr {-$shift}] 0] \
+          [::tclpdf::geometry multiply [::tclpdf::geometry rotate $rotate] \
+              [::tclpdf::geometry translate $px $py]]]
       my content "[join [lmap n $matrix {::tclpdf::pdfObj num $n}] { }] Tm\n"
     } else {
-      my content "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py] Td\n"
+      my content "[::tclpdf::pdfObj num [expr {$px - $shift}]]\
+          [::tclpdf::pdfObj num $py] Td\n"
     }
     my content "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
     my content "ET\n"
@@ -338,4 +352,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.0
+package provide tclpdf::text 1.1
