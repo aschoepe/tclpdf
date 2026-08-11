@@ -46,7 +46,7 @@ package ifneeded @PACKAGE_NAME@::shape 1.0 [list source [file join $dir shape.tc
 package ifneeded @PACKAGE_NAME@::subset 1.0 [list source [file join $dir subset.tcl]]
 package ifneeded @PACKAGE_NAME@::svg 1.0 [list source [file join $dir svg.tcl]]
 package ifneeded @PACKAGE_NAME@::svgElement 1.0 [list source [file join $dir svgElement.tcl]]
-package ifneeded @PACKAGE_NAME@::svgPaint 1.0 [list source [file join $dir svgPaint.tcl]]
+package ifneeded @PACKAGE_NAME@::svgPaint 1.1 [list source [file join $dir svgPaint.tcl]]
 package ifneeded @PACKAGE_NAME@::svgPath 1.0 [list source [file join $dir svgPath.tcl]]
 package ifneeded @PACKAGE_NAME@::table 1.1 [list source [file join $dir table.tcl]]
 package ifneeded @PACKAGE_NAME@::tableDraw 1.1 [list source [file join $dir tableDraw.tcl]]

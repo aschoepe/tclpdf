@@ -1,5 +1,5 @@
-C Wire\sup\s-border\souter\sfor\stables\n\n-\sNew\sTableDrawFrame\sin\stableDraw.tcl,\scalled\sfrom\sTableRun:\sone\sframe\sper\spage\saround\sthe\sblock\sinstead\sof\sa\srule\sper\scell\n-\sTableDrawBorder\stakes\souter\sas\sa\sknown\svalue\sand\sdraws\snothing\sper\scell\sfor\sit\n-\sexamples/04.01-table-basics.tcl\sshows\sit\sbelow\sthe\sthree\sthemes,\son\sthe\ssame\srows\sas\s-theme\sgrid\n-\sdoc/tclpdf.md\snames\sthe\sborder\svalues:\snone,\sall,\shorizontal,\svertical,\souter\n-\sThree\stests\sin\stests/table.test:\sthe\ssingle\sframe\sand\sits\smeasurements,\sone\sframe\sper\spage\sacross\sa\sbreak,\sthe\serror\son\san\sunknown\svalue\n-\scleanupTests\smoved\sto\sthe\send\sof\stests/table.test\sand\stests/document.test\s-\sit\ssat\sahead\sof\sthe\slast\stests,\sso\sa\sfile\srun\son\sits\sown\sleft\sthem\sout\sof\sits\stally\sand\sexited\s0\seven\swith\sone\sfailing\n-\stable\sand\stableDraw\sraised\sto\s1.1,\sin\sthe\smodule\sand\sin\spkgIndex.tcl.in
-D 2026-08-11T20:42:51.766
+C Give\sSVG\sgradient\spatterns\sunique\snames\sinstead\sof\sthe\sSVG\sid\n\n-\sSvgGradient\sin\ssvgPaint.tcl\snames\spatterns\sfrom\sa\sdocument-wide\scounter;\snaming\sthem\safter\sthe\sSVG\sid\smade\sa\ssecond\sdrawing\sof\sthe\ssame\sfile\scollide\sand\slose\sits\sfills,\sand\sa\ssecond\sfile\ssharing\san\sid\slost\sits\sown\n-\sReuse\skey\sis\sthe\sgradient\splus\severy\spattern\sargument,\sso\sa\suserSpaceOnUse\sgradient\sfilling\sseveral\sshapes\sstays\sone\sobject\swhile\sobjectBoundingBox\sgives\seach\sshape\sits\sown\sgeometry\n-\sThe\scatch\saround\sthe\sregistration\sis\sremoved\s-\sa\sfailure\sthere\sis\sa\sreal\sdefect\sand\sno\slonger\sturns\sinto\sa\ssilently\sunfilled\sshape\n-\sThree\stests\sin\stests/svg.test:\sthe\ssame\sdrawing\stwice\skeeps\sits\scolour,\seach\sshape\sgets\sthe\sgradient\sover\sits\sown\sbox,\sone\suser-space\sgradient\sstays\sone\sobject\n-\ssvgPaint\sraised\sto\s1.1,\sin\sthe\smodule\sand\sin\spkgIndex.tcl.in
+D 2026-08-11T20:54:24.601
 F Makefile.in 573119b92f4654e4303dc44222e021108c42394829e6192bb8a555747dc9b3c3
 F README ee487e417de5cef96bb94a70abbce88510f2be5000509071c148687736c178cc
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -81,14 +81,14 @@ F page.tcl 081a5980116b441fab2a6ef9601cb481eba2a3666339486681ba8d120a5628b1
 F pattern.tcl bbf3a0befbc175ae8dac4f16e3e30ed2267493e444a1c1307ab315254cb90dcb
 F pdfObj.tcl 67bbfb54aff773bcf864d07de81949a4cdc1f685460f369d3f110d364890ecec
 F pdfa.tcl d8ab4c303fc7ef4bee34c455787d51b3d42e1bbedfe5339a0a63893c2f09eea7
-F pkgIndex.tcl.in 079dc02f60b937281221406aebc2d7a9e1ca4ff5a080251ce069967827437a89
+F pkgIndex.tcl.in 62057cafef9967e8b23aaa613c422f33c5945cede5e1b90f8228f19584c105cb
 F sfnt.tcl f37cdfcbb21d6e86feb553def07a4d7d881750d88bc241897cd4c2cada03a7d7
 F shading.tcl dfaddaebe9b4c74bc23d255edf23d9965c6468af6facafc758f2db03a576c6ac
 F shape.tcl 103d3204c62df25b2f05bf67172b6717a9af5b9440f4edd32341408b62bd4cc7
 F subset.tcl 8060c707bb5676b212e189553c90eb873f541aa464f8877d0333937815fb9465
 F svg.tcl 1b0010a7f57c37e8fa5263f8b3eff05ecdd7c1d5a96fbd69040ad6b226ae5971
 F svgElement.tcl 4e13cf253e9678f6d8567208a499f3367601885d61320ad9dbdec0cd0ce3a3b6
-F svgPaint.tcl 4009a121e854f022d8a6ebb9e405fcca409fd0983eb13765f70b0b903c4592c3
+F svgPaint.tcl 88edea1d3e126abc616efdbbbbd31f0275d5fa52361dcb381aabd242951f653e
 F svgPath.tcl 7c7483a34d322e2457068df0f58afcea7d4937f9d3d78a75ac49ece1a77e67eb
 F table.tcl 4054fa8aafdcf2747844ae762f270198ff5d535362ed90b469dc1f90dc42142e
 F tableDraw.tcl 081386614b42ebf04396c814cb137d6505a40db1a90c7e02438a053a1e3e1cb1
@@ -112,7 +112,7 @@ F tests/helper.tcl 20631b6057d932400b4c91af6a2ee55e701a8b39ab73aa074eb3ea08a4654
 F tests/image.test cadaea786690496a634bc077374cad6e73fa050a8aaed6a18f6b862151b943cc
 F tests/pdfObj.test bfbf411c69e64987d60dad7976a65c09e05151a5ef2341eefeddb03d201f49c0
 F tests/shading.test c077f28d6ec1d384b7e0c5d67e27a25c22338d699fc569e50374021cb0e5b722
-F tests/svg.test cf5b4fd7595036c7a80d1bbcba379c97ce401a1cce0c88eb4736e97e074527d9
+F tests/svg.test d4eeed8c471e8a1ba68d7768c0b834fa770eef4d663553ec25dfa4c1b1639d6e
 F tests/table.test fd278d50b2f7c0a85936c2ca9f897357f9e2db832375908035c156d8d3e86931
 F tests/text.test 549ecd9c55bd8fe932c0d2b97d383b3e95b3dd099a38773b3a519ad9788e0a27
 F tests/version.test b98a03f3c4bc8ca044954f26774dc753620358c9a50c0c66044a766adad1fc64
@@ -133,8 +133,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl f20e82e15aa6690f109531bf65a936033f610a56b090fb6613b6a8ba41996152
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 1a34ff2d40875d62ca8eea4ac8bd969bcd2b75bafc040cc2106cb01a52a52ff1
-R 81518075486f72023c1044c9723e851e
+P 6e54f16f6c4a977ebe1167c50a5a4e96eb307741972f3fa976a6f6586e4b3820
+R e77a27ebd068b8ab2e9b0b911098569c
 U alex
-Z 2e60b9efe091bf038837ef38d0e8b2f0
+Z 8b20d6197d6941dcc112127c9c3dd905
 # Remove this line to create a well-formed Fossil manifest.

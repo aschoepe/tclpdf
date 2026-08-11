@@ -371,4 +371,75 @@ test svg-5.3 {a gradient inside a transformed group is placed with it} -body {
   expr {[llength $matrix] == 6}
 } -result 1
 
+test svg-5.4 {the same drawing twice keeps its colour both times} -body {
+  # The pattern name used to be svgGradient<id>, document-wide. The second
+  # drawing of the same file re-registered the same names, the collision was
+  # swallowed into "no pattern", and only the first drawing had colour. The
+  # same file drawn twice has to fill both times - and report nothing skipped,
+  # because nothing was.
+  set data {<svg viewBox="0 0 100 50" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="white"/><stop offset="1" stop-color="navy"/>
+      </linearGradient></defs>
+      <rect x="0" y="0" width="100" height="50" fill="url(#g)"/></svg>}
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data $data -at {10 10} -size {80 40}
+  $doc svg -data $data -at {10 60} -size {40 20}
+  set content [::tclpdfTest::content $doc]
+  set skipped [$doc svg info]
+  set names [$doc shading names]
+  $doc destroy
+  # Two drawings, two fills, two patterns - and the two resource names differ,
+  # or the smaller drawing is painted with the larger one's geometry.
+  list [regexp -all {scn} $content] [llength $names] \
+      [llength [lsort -unique $names]] [dict exists $skipped gradient]
+} -result {2 2 2 0}
+
+test svg-5.5 {each shape gets the gradient over its own box} -body {
+  # objectBoundingBox measures in fractions of the shape being FILLED. One
+  # cached pattern per id handed the second shape the gradient computed over
+  # the first shape's box - measured: the second rectangle came out in the
+  # first gradient's far colour over its whole width. Each shape needs its
+  # own coordinates: 0..80 for the first, 120..200 for the second.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>
+      </linearGradient></defs>
+      <rect x="0" y="0" width="80" height="100" fill="url(#g)"/>
+      <rect x="120" y="0" width="80" height="100" fill="url(#g)"/></svg>} \
+      -at {0 0} -size {200 100}
+  set spans {}
+  for {set number 1} {$number <= [[$doc writer] count]} {incr number} {
+    if {[regexp {/Coords \[([^\]]*)\]} [[$doc writer] body $number] -> found]} {
+      lappend spans [list [expr {int([lindex $found 0])}] \
+          [expr {int([lindex $found 2])}]]
+    }
+  }
+  $doc destroy
+  lsort -index 0 -integer $spans
+} -result {{0 80} {120 200}}
+
+test svg-5.6 {one userSpaceOnUse gradient filling two shapes stays one object} -body {
+  # The reuse that IS correct: in user space the geometry hangs on the
+  # drawing, not on the shape, so two shapes under the same transformation
+  # share one pattern - which is also what the SVG means.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="200" y2="0"
+          gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>
+      </linearGradient></defs>
+      <rect x="0" y="0" width="80" height="100" fill="url(#g)"/>
+      <rect x="120" y="0" width="80" height="100" fill="url(#g)"/></svg>} \
+      -at {0 0} -size {200 100}
+  set names [$doc shading names]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength $names] [regexp -all {scn} $content]
+} -result {1 2}
+
 cleanupTests

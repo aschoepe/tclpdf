@@ -183,19 +183,22 @@ oo::define ::tclpdf::document::document {
 
   # A <linearGradient> or <radialGradient> as a shading pattern.
   #
-  # Registered once per id and reused - a gradient filling three shapes is one
-  # object, which is also what the SVG means.
-  #
   # gradientUnits is the trap. The default, objectBoundingBox, measures in
   # fractions of the shape being filled, not in drawing coordinates - so
   # x1="0" x2="1" means "left edge to right edge of whatever this fills". The
   # bounding box is worked out from the path operators, because at this point
   # they are the only description of the shape there is.
+  #
+  # The resource name is NOT the SVG id. A pattern is bound to the page and
+  # carries the drawing's matrix - and under objectBoundingBox the filled
+  # shape's box on top of that - so the same id can need a different object
+  # per drawing and per shape. Named after the id, the second registration
+  # collided with the first and the shape went unfilled: the same file drawn
+  # at four sizes had colour only in the first one, and a second file whose
+  # gradient happened to share an id lost its own. The names come from a
+  # document-wide counter instead, and the reuse key is what actually makes
+  # two uses interchangeable: the gradient plus every argument of the pattern.
   method SvgGradient {id} {
-    set known [my state svgGradients]
-    if {[dict exists $known $id]} {
-      return [dict get $known $id]
-    }
     set defs [my state svgDefs]
     if {![dict exists $defs $id]} {
       return {}
@@ -245,7 +248,6 @@ oo::define ::tclpdf::document::document {
       lappend offsets [lindex $stop 0]
     }
 
-    set name svgGradient$id
     # The pattern's matrix is the group transformation followed by the
     # drawing's own - in that order, because the shape's coordinates pass
     # through the group first. Leaving the group out is what put every
@@ -271,10 +273,27 @@ oo::define ::tclpdf::document::document {
           -at [list $frameX $frameY] -size [list $frameWidth $frameHeight]
       set sub radial
     }
-    if {[catch {my shading pattern $name $sub {*}$arguments}]} {
-      return {}
+    # Reuse only what is genuinely interchangeable: same gradient, same
+    # geometry, same matrix. Two shapes sharing one userSpaceOnUse gradient
+    # under the same transformation stay one object; under objectBoundingBox
+    # each shape's box differs and each gets its own.
+    set known [my state svgGradients]
+    set key [list $id $sub $arguments]
+    if {[dict exists $known $key]} {
+      return [dict get $known $key]
     }
-    dict set known $id $name
+    set sequence [my state svgGradientSeq]
+    if {$sequence eq {}} {
+      set sequence 0
+    }
+    my state svgGradientSeq [incr sequence]
+    set name svgGradient$sequence
+    # No catch around the registration. It used to swallow the name collision
+    # into "no pattern", and a swallowed error looks like a design choice -
+    # four drawings of the same file, three of them without colour. With
+    # unique names a failure here is a real defect and must be heard.
+    my shading pattern $name $sub {*}$arguments
+    dict set known $key $name
     my state svgGradients $known
     return $name
   }
@@ -309,4 +328,4 @@ oo::define ::tclpdf::document::document {
   # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.0
+package provide tclpdf::svgPaint 1.1
