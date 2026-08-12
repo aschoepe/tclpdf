@@ -1,0 +1,177 @@
+# textPath.test --
+#
+# A line of text set along a path.
+#
+# PDF has no operator for this, so the whole feature is arithmetic: the curve
+# is flattened, the arc length walked, and every glyph gets its own matrix.
+# These tests aim at the arithmetic - the straight cases where the answer is
+# known exactly, and the properties that must hold on a curve.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::textPath
+source [file join [file dirname [info script]] helper.tcl]
+
+test textPath-1.1 {every glyph gets its own text block} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "ABCDE" -segments {{move 20 100} {line 120 100}} -size 12
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Five glyphs, five BT/ET blocks - and each one a Tj of its own.
+  list [regexp -all {BT} $stream] [regexp -all {Tj} $stream]
+} -result {5 5}
+
+test textPath-1.2 {on a straight horizontal path the glyphs sit on one line} -body {
+  # The case where the answer is known: no rotation, so Td rather than Tm, the
+  # same y for every glyph, and x increasing by the glyph widths.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "ABCDE" -segments {{move 20 100} {line 120 100}} \
+      -family helvetica -size 12
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set xs [::tclpdfTest::starts $stream]
+  set ys [::tclpdfTest::starts $stream y]
+  set rising 1
+  foreach a [lrange $xs 0 end-1] b [lrange $xs 1 end] {
+    if {$b <= $a} {
+      set rising 0
+    }
+  }
+  list [llength [lsort -unique $ys]] $rising [regexp {Tm} $stream]
+} -result {1 1 0}
+
+test textPath-1.3 {the glyphs stand where plain text would put them} -body {
+  # A straight path is the same job [text] does, so the two have to agree -
+  # otherwise text on a path drifts against everything else on the page.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "ABCDE" -segments {{move 20 100} {line 120 100}} \
+      -family helvetica -size 12
+  set onPath [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc text "A" -at {20 100} -family helvetica -size 12
+  set plain [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The first glyph starts at the start of the path.
+  expr {abs([lindex $onPath 0] - [lindex $plain 0]) < 0.01}
+} -result 1
+
+test textPath-2.1 {a vertical path turns every glyph by ninety degrees} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "AB" -segments {{move 50 200} {line 50 100}} \
+      -family helvetica -size 12
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Upwards on the page: the exact matrix of a quarter turn.
+  list [regexp -all {0 1 -1 0} $stream] [regexp {Td} $stream]
+} -result {2 0}
+
+test textPath-2.2 {-align moves the string along the path} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  # A dict, not an array: every test file shares one interpreter, and a
+  # global named "start" already exists in another one - which fails only in
+  # the full run and looks like a defect in this feature.
+  set starts {}
+  foreach align {left center right} {
+    $doc page add
+    $doc textPath "ABC" -segments {{move 20 100} {line 120 100}} \
+        -family helvetica -size 12 -align $align
+    dict set starts $align [lindex [::tclpdfTest::starts \
+        [::tclpdfTest::content $doc]] 0]
+  }
+  $doc destroy
+  list [expr {[dict get $starts left] < [dict get $starts center]}] \
+      [expr {[dict get $starts center] < [dict get $starts right]}]
+} -result {1 1}
+
+test textPath-2.3 {-offset lifts the baseline off the path} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "AB" -segments {{move 20 100} {line 120 100}} -size 12
+  set on [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc] y] 0]
+  $doc page add
+  $doc textPath "AB" -segments {{move 20 100} {line 120 100}} -size 12 -offset 5
+  set off [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc] y] 0]
+  $doc destroy
+  # 5 mm further from the path - upwards on the page, so upwards in PDF too.
+  expr {abs(($off - $on) - 14.17) < 0.01}
+} -result 1
+
+test textPath-2.4 {on a vertical path the offset acts on x} -body {
+  # The other half of the perpendicular: with a horizontal path the offset is
+  # entirely in y, and a version that dropped its x term passed every test
+  # until this one. Upwards on the page, "above the path" is to its left.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "AB" -segments {{move 50 200} {line 50 100}} -size 12
+  set plain [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc]] 0]
+  $doc page add
+  $doc textPath "AB" -segments {{move 50 200} {line 50 100}} -size 12 -offset 5
+  set lifted [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  # 5 mm to the left, in points.
+  expr {abs(($plain - $lifted) - 14.17) < 0.01}
+} -result 1
+
+test textPath-3.1 {the call returns the length of the path} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set length [$doc textPath "A" -segments {{move 20 100} {line 120 100}} -size 12]
+  $doc destroy
+  format %.2f $length
+} -result 100.00
+
+test textPath-3.2 {a curve is longer than the straight line under it} -body {
+  # The flattening at work: a Bezier arching well above its ends cannot be as
+  # short as the distance between them.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set straight [$doc textPath "A" -segments {{move 20 100} {line 120 100}} -size 8]
+  $doc page add
+  set curved [$doc textPath "A" \
+      -segments {{move 20 100} {curve 45 40 95 40 120 100}} -size 8]
+  $doc destroy
+  list [expr {$curved > $straight}] [expr {$curved < 2 * $straight}]
+} -result {1 1}
+
+test textPath-3.3 {glyphs beyond the end of the path are dropped} -body {
+  # A string longer than its path loses what does not fit rather than piling
+  # the remaining glyphs on top of each other at the end - which is what a
+  # naive clamp to the last point would do.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "EIN VIEL ZU LANGER SATZ FUER DIESEN KURZEN WEG" \
+      -segments {{move 20 100} {line 40 100}} -family helvetica -size 12
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set drawn [regexp -all {Tj} $stream]
+  list [expr {$drawn > 0}] [expr {$drawn < 46}]
+} -result {1 1}
+
+test textPath-4.1 {a path is required, and so are its segments} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc textPath "x"} missing] \
+      [catch {$doc textPath "x" -segments {{move 10 10}}} single] \
+      [catch {$doc textPath "x" -segments {{wobble 1 2}}} unknown] \
+      [catch {$doc textPath "x" -segments {{move 1 1} {line 9 9}} \
+          -align justify} align]]
+  $doc destroy
+  list $codes [string match {*needs -segments*} $missing] \
+      [string match {*at least two points*} $single] \
+      [string match {*unknown path segment*} $unknown] \
+      [string match {*left, right or center*} $align]
+} -result {{1 1 1 1} 1 1 1 1}
+
+cleanupTests

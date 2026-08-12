@@ -25,12 +25,15 @@
 #   XMP packet, not only into the document information dictionary - which is
 #   the part a reader is allowed to ignore.
 #
-# Part 3 conformance B is what this writes: part 1 forbids the transparency
-# tclpdf writes without ceremony, part 4 needs PDF 2.0. Level B is "readable
-# the same way forever"; level A additionally needs a tagged structure tree,
-# which is a separate piece of work.
+# Part 3 level U is what this writes: part 1 forbids the transparency tclpdf
+# writes without ceremony, part 4 needs PDF 2.0. Level B promises the document
+# looks the same in fifteen years; level U adds that its TEXT can still be
+# extracted and searched, which rests on the ToUnicode map every embedded face
+# carries here anyway - the stronger claim costs nothing, so there is no reason
+# to declare the weaker one. Level A would need a tagged structure tree and is
+# refused rather than written and rejected at the recipient.
 #
-# Check with:  verapdf -f 3b out.pdf
+# Check with:  verapdf -f 3u out.pdf
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -80,9 +83,10 @@ $doc text "No. 2026-114" -at {184 32} -align right
 
 $doc font -family face -size 10 -color black
 set y [$doc text "This certificate records the annual calibration of the\
-    thickness gauge below. It is written as PDF/A-3B so that it can be read,\
-    and read the same way, for as long as it has to be kept - which for a\
-    calibration record is the lifetime of the instrument plus five years." \
+    thickness gauge below. It is written as PDF/A-3U so that it can be read,\
+    read the same way, and searched for as long as it has to be kept - which\
+    for a calibration record is the lifetime of the instrument plus five\
+    years." \
     -at {20 48} -width 170 -align justify -anchor top]
 
 $doc table -at [list 20 [expr {$y + 8}]] -width 170 -theme grid \
@@ -117,7 +121,7 @@ $doc line -from {20 178} -to {90 178} -stroke {0.4 0.4 0.4} -width 0.3
 # version to match and produces the XMP packet. Everything it needs about the
 # document - which fonts were used, which title was set - it reads back out of
 # the document itself rather than being told twice.
-$doc pdfa -part 3 -conformance B -profile $profile
+$doc pdfa -part 3 -conformance U -profile $profile
 
 # What was declared, read back rather than repeated from above.
 set state [$doc pdfa state]
@@ -141,4 +145,4 @@ puts "  XMP packet: [string length $packet] bytes,\
         $level : {not found}}]"
 
 puts "  written: $target ([file size $target] bytes)"
-puts "  check it with: verapdf -f 3b $target"
+puts "  check it with: verapdf -f 3u $target"

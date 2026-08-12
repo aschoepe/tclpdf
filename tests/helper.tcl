@@ -29,6 +29,35 @@ proc ::tclpdfTest::content {doc {index {}}} {
   return [$doc page content $index]
 }
 
+# Where the lines of a content stream start: the x values of every Td, and the
+# y values, in the order they were written. Two test files wanted the same
+# five lines of parsing, which is one too many - a wrapped paragraph is
+# checked by looking at where its lines begin, and that belongs in one place.
+proc ::tclpdfTest::starts {stream {axis x}} {
+  set result {}
+  foreach line [split $stream \n] {
+    # Td for an unrotated line, Tm for a turned one - the position is the last
+    # pair either way. Reading only Td answered "no lines at all" for rotated
+    # text, which looks like a drawing bug and is a reading one.
+    if {[regexp {^([-0-9.]+) ([-0-9.]+) Td$} $line -> x y]
+        || [regexp {^[-0-9.]+ [-0-9.]+ [-0-9.]+ [-0-9.]+ ([-0-9.]+) ([-0-9.]+) Tm$} \
+            $line -> x y]} {
+      lappend result [expr {$axis eq "x" ? $x : $y}]
+    }
+  }
+  return $result
+}
+
+# The differences between consecutive values - the line advance of a block,
+# read off the stream rather than assumed.
+proc ::tclpdfTest::steps {values {digits 2}} {
+  set result {}
+  foreach a [lrange $values 0 end-1] b [lrange $values 1 end] {
+    lappend result [format %.*f $digits [expr {$a - $b}]]
+  }
+  return $result
+}
+
 # A scratch path inside the tcltest temporary directory.
 proc ::tclpdfTest::scratch {name} {
   return [file join [::tcltest::temporaryDirectory] $name]

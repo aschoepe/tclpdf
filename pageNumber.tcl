@@ -1,0 +1,148 @@
+#
+# tclpdf - PDF generation for Tcl
+#
+# pageNumber - "Page 3 of 7" on every page
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+#
+#   $doc pageNumbers -at {105 285} -align center -size 8
+#
+# The problem this solves is one of order: while page three is being drawn,
+# nobody knows yet that there will be seven. Writing the number at that moment
+# is impossible; writing it afterwards means drawing onto a page that is
+# already finished.
+#
+# So the numbers are not drawn when the call is made. The call only records
+# what should appear where, and subscribes to beforeWrite - at which point
+# every page exists and the total is simply [page count].
+#
+# Each page gets its number as a form XObject of its own, kept at an object
+# number from [reservation] and written afresh on every [write]. That is what
+# makes a second write come out identical instead of stacking a second number
+# on top of the first: the object is overwritten, not added. Only the one
+# operator that invokes it goes into the page's content stream, and only once.
+#
+
+package require Tcl 8.6.11-
+package require TclOO
+package require tclpdf::pdfObj 1.0-
+package require tclpdf::option 1.0-
+package require tclpdf::geometry 1.0-
+package require tclpdf::document 1.0-
+package require tclpdf::text 1.0-
+
+namespace eval ::tclpdf::pageNumber {}
+
+oo::define ::tclpdf::document::document {
+
+  # $doc pageNumbers -at {x y} ?-format "Page %n of %m"? ?-align center?
+  #                  ?-from 2? ?-total 7? ?font options?
+  #
+  # %n is the page number, %m the total. -from skips the leading pages, which
+  # is how a title page stays unnumbered; the count itself still includes them
+  # unless -total says otherwise, because "Page 2 of 7" on the second sheet of
+  # seven is what a reader expects.
+  method pageNumbers {args} {
+    my TextInit
+    set defaults {at {} format "Page %n of %m" align left from 1 total {}}
+    foreach name $::tclpdf::text::stateOptions {
+      dict set defaults $name [my TextGet $name]
+    }
+    set options [::tclpdf::option parse $defaults $args "pageNumbers"]
+    if {[dict get $options at] eq {}} {
+      return -code error "tclpdf: pageNumbers needs -at {x y}"
+    }
+    if {[llength [dict get $options at]] != 2} {
+      return -code error "tclpdf: -at takes two numbers {x y}, got\
+          \"[dict get $options at]\""
+    }
+    if {![string is integer -strict [dict get $options from]]
+        || [dict get $options from] < 1} {
+      return -code error "tclpdf: -from is a page number counted from 1, got\
+          \"[dict get $options from]\""
+    }
+
+    set state [my state pageNumbers]
+    if {$state eq {}} {
+      set state [dict create runs {} placed {}]
+      my onSelf beforeWrite PageNumberWrite
+    }
+    # Several runs are allowed on purpose - a number at the foot and a chapter
+    # line at the head are two calls, not one call with more options.
+    dict lappend state runs $options
+    my state pageNumbers $state
+    return
+  }
+
+  # -- writing ------------------------------------------------------------
+
+  method PageNumberWrite {} {
+    set state [my state pageNumbers]
+    set placed [dict get $state placed]
+    set pages [my page count]
+    set index 0
+    foreach run [dict get $state runs] {
+      set total [expr {[dict get $run total] eq {} ? $pages : [dict get $run total]}]
+      for {set page 0} {$page < $pages} {incr page} {
+        set number [expr {$page + 1}]
+        if {$number < [dict get $run from]} {
+          continue
+        }
+        my PageNumberOne $run $page $number $total $index
+      }
+      incr index
+    }
+    return
+  }
+
+  # One page, one run. The content is rebuilt every time; the object number and
+  # the resource name are not.
+  method PageNumberOne {run page number total index} {
+    set key tclpdf::pageNumber.$index.$page
+    set label [string map [list %n $number %m $total] [dict get $run format]]
+
+    # Drawn onto a canvas the size of THIS page, so that [text] converts the
+    # coordinates against the right height - a document may mix formats, and
+    # the foot of an A5 sheet is not where the foot of an A4 sheet is.
+    lassign [my page size $page] width height
+    lassign [my extent [list $width $height]] widthPoints heightPoints
+    my canvas push $widthPoints $heightPoints
+    set failed [catch {
+      set arguments {}
+      foreach name $::tclpdf::text::stateOptions {
+        lappend arguments -$name [dict get $run $name]
+      }
+      my text $label -at [dict get $run at] -align [dict get $run align] \
+          {*}$arguments
+    } result info]
+    set content [my canvas pop]
+    if {$failed} {
+      return -options $info $result
+    }
+
+    set objectNumber [my reservation $key]
+    my streamObject [list Type /XObject Subtype /Form FormType 1 \
+        BBox [::tclpdf::pdfObj arr [list 0 0 \
+            [::tclpdf::pdfObj num $widthPoints] \
+            [::tclpdf::pdfObj num $heightPoints]]]] $content $objectNumber
+    # Stable across writes, and readable in the file: run index and page.
+    set resourceName XOPN${index}_${page}
+    my resource XObject $resourceName [[my writer] ref $objectNumber]
+
+    # The invoking operator goes in ONCE. Appending it again on the second
+    # write would draw the same form twice - harmless to look at, and a
+    # document that grows with every write.
+    set state [my state pageNumbers]
+    if {$key ni [dict get $state placed]} {
+      my content "q /$resourceName Do Q\n" $page
+      dict lappend state placed $key
+      my state pageNumbers $state
+    }
+    return
+  }
+}
+
+package provide tclpdf::pageNumber 1.0

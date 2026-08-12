@@ -118,6 +118,7 @@ oo::define ::tclpdf::document::document {
   method style {args} {
     my content [my GraphicsStyle [::tclpdf::option parse {
       fill {} stroke {} width {} dash {} cap {} join {} miter {} opacity {}
+      blend {}
     } $args]]
     return
   }
@@ -128,6 +129,53 @@ oo::define ::tclpdf::document::document {
   method opacity {value {which both}} {
     set name [my GraphicsOpacity $value $which]
     my content "[::tclpdf::pdfObj name $name] gs\n"
+    return $name
+  }
+
+  # $doc blend Multiply
+  #
+  # The blend mode decides how a colour is combined with what is already on the
+  # page: Normal replaces it, Multiply darkens, Screen lightens, and the rest of
+  # the sixteen do what their names say. Like the alpha it is graphics state, so
+  # it holds until changed - and like the alpha a shape can take it per call
+  # through -blend, which wraps it in the shape's own q/Q.
+  method blend {mode} {
+    set name [my GraphicsBlend $mode]
+    my content "[::tclpdf::pdfObj name $name] gs\n"
+    return $name
+  }
+
+  # The sixteen standard modes (11.3.5). Deliberately NOT accepted:
+  #
+  #   Compatible - deprecated since 1.4 and identical to Normal, so it says
+  #   nothing a reader could act on. The array form of /BM is deprecated too;
+  #   this writes a single name.
+  #
+  # PDF/A: parts 2 and 3 permit every standard mode, and part 1 - which allows
+  # only Normal - is refused by [pdfa] for other reasons anyway, so there is
+  # nothing to check here.
+  method GraphicsBlend {mode} {
+    set known {Normal Multiply Screen Overlay Darken Lighten ColorDodge
+        ColorBurn HardLight SoftLight Difference Exclusion Hue Saturation
+        Color Luminosity}
+    set match [lsearch -exact -nocase $known $mode]
+    if {$match < 0} {
+      if {[string equal -nocase $mode Compatible]} {
+        return -code error "tclpdf: the blend mode Compatible is deprecated\
+            and means Normal - name Normal instead"
+      }
+      return -code error "tclpdf: unknown blend mode \"$mode\" - known are:\
+          [join $known {, }]"
+    }
+    # The spelling of the standard, whatever the caller typed: a name is a
+    # name, and /multiply is not /Multiply to a reader.
+    set mode [lindex $known $match]
+    set name GB$mode
+    if {[my resource ExtGState $name] eq {}} {
+      my resource ExtGState $name [[my writer] ref [[my writer] add \
+          [::tclpdf::pdfObj dictionary [list Type /ExtGState \
+              BM [::tclpdf::pdfObj name $mode]]]]]
+    }
     return $name
   }
 
@@ -170,7 +218,7 @@ oo::define ::tclpdf::document::document {
   # [style] deliberately does NOT guard: its whole purpose is to set the state
   # until changed, which is what the manual promises.
   method GraphicsGuarded {options} {
-    foreach key {fill stroke width dash cap join miter opacity} {
+    foreach key {fill stroke width dash cap join miter opacity blend} {
       if {[dict exists $options $key] && [dict get $options $key] ne {}} {
         return 1
       }
@@ -195,6 +243,13 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $options opacity] && [dict get $options opacity] ne {}} {
       append result "[::tclpdf::pdfObj name \
           [my GraphicsOpacity [dict get $options opacity]]] gs\n"
+    }
+    # A second "gs" rather than one combined state: the operator is cumulative
+    # (11.6.6), so setting the mode leaves the alpha standing and the two stay
+    # one resource each instead of one per combination.
+    if {[dict exists $options blend] && [dict get $options blend] ne {}} {
+      append result "[::tclpdf::pdfObj name \
+          [my GraphicsBlend [dict get $options blend]]] gs\n"
     }
     if {[dict exists $options width] && [dict get $options width] ne {}} {
       append result "[::tclpdf::pdfObj num [my distance [dict get $options width]]] w\n"
@@ -272,4 +327,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.0
+package provide tclpdf::graphics 1.1

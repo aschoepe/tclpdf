@@ -92,10 +92,16 @@ set y [$doc table -at {20 38} -width 170 -theme striped \
     -didDrawPage {apply {{payload doc} {
         $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
         $doc text "Herbarium index" -at {20 287}
-        $doc text "page [expr {[dict get $payload page] + 1}]" \
-            -at {190 287} -align right
         $doc line -from {20 283} -to {190 283} -stroke {0.8 0.8 0.85} -width 0.2
     }}}]
+
+# The running head above can say everything the page knows about itself - but
+# not how many pages there will be. While page three is drawn, nobody knows
+# there will be seven; the hook cannot answer it, and no amount of ordering
+# helps. [pageNumbers] states the wish and draws it at write time, when the
+# document is complete and the total is simply the page count.
+$doc font -family helvetica -style {} -size 8 -color {0.35 0.35 0.4}
+$doc pageNumbers -at {190 287} -align right -format "page %n of %m"
 
 # finalY: continue below the table, on whatever page it ended on.
 $doc font -family helvetica -style bold -size 9 -color black
@@ -104,7 +110,9 @@ $doc font -style {} -size 8
 $doc text "The head above repeats on every page; the total appears once, at\
     the end. Sheets over 80 g are marked - the mark was applied while the\
     table was being parsed, before any row was measured, which is the only\
-    point at which a change of font size still affects how the text wraps." \
+    point at which a change of font size still affects how the text wraps.\
+    The page numbers in the corner know how many pages there are because they\
+    are drawn last, after the table has decided how far it runs." \
     -at [list 20 [expr {$y + 15}]] -width 170
 
 exampleFooter $doc

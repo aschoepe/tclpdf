@@ -127,6 +127,40 @@ $doc text "A hexadecimal value works too: #f0a is short for #ff00aa, not for\
     #f00a00." -at [list 20 [expr {$y + 22}]] -width 170
 $doc rect -at [list 20 [expr {$y + 26}]] -size {24 8} -fill #f0a
 
+# -- blend modes -------------------------------------------------------------
+
+# How a colour meets what is already on the page. Normal replaces it - the
+# other fifteen combine the two, and which one to reach for is a question of
+# what should survive: Multiply keeps the darker parts, Screen the lighter
+# ones, Luminosity keeps the brightness of the new colour and the hue of the
+# old. Every pair below is the same two rectangles, drawn in the same order.
+$doc page add
+
+$doc font -family helvetica -style bold -size 13 -color black
+$doc text "Blend modes" -at {20 22}
+$doc font -style {} -size 8
+$doc text "The blue square is drawn first, the orange one over it with the    mode named underneath. Only the second call carries -blend; the mode is    graphics state like the alpha, so it is wrapped in the shape's own    save/restore and does not reach the next one." -at {20 29} -width 170
+
+set x 20
+set y 45
+foreach mode {Normal Multiply Screen Overlay Darken Lighten
+        ColorDodge ColorBurn HardLight SoftLight Difference Exclusion
+        Hue Saturation Color Luminosity} {
+    $doc rect -at [list $x $y] -size {24 16} -fill {0.20 0.45 0.75}
+    $doc rect -at [list [expr {$x + 8}] [expr {$y + 6}]] -size {24 16} \
+        -fill {0.95 0.65 0.15} -blend $mode
+    $doc font -size 6 -color black
+    $doc text $mode -at [list $x [expr {$y + 27}]]
+    incr x 42
+    if {$x > 160} {
+        set x 20
+        incr y 38
+    }
+}
+
+$doc font -size 8
+$doc text "Compatible is refused: it has been deprecated since PDF 1.4 and    means Normal, so naming it says nothing a reader could act on. PDF/A parts    2 and 3 permit every mode above." -at [list 20 [expr {$y + 34}]] -width 170
+
 exampleFooter $doc
 
 $doc write $target

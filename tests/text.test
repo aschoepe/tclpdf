@@ -157,6 +157,24 @@ test text-4.1 {justification stretches spaces, and not on the last line} -body {
   list [expr {$lines > 2}] [expr {$stretched == $lines - 1}]
 } -result {1 1}
 
+test text-4.3 {the last line of EVERY paragraph stays flush left} -body {
+  # Not only the last line of the block: a paragraph that ends inside it ends
+  # there too. Stretching those lines pulled four words across the full column
+  # and looked like a defect in the breaker - which it was, found by comparing
+  # the rendered examples rather than by any test.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Erster Absatz, lang genug fuer mehrere Zeilen im Blocksatz damit      die Wortabstaende gedehnt werden koennen.
+Zweiter Absatz, ebenfalls      lang genug fuer mehr als eine Zeile in dieser Spalte."       -at {20 30} -width 60 -align justify
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set lines [regexp -all {Td} $content]
+  set stretched [regexp -all {[0-9.]+ Tw} $content]
+  # Two paragraphs, so two lines end one - the rest are stretched.
+  list [expr {$lines > 4}] [expr {$stretched == $lines - 2}]
+} -result {1 1}
+
 test text-4.2 {a paragraph returns the y below it} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
@@ -388,19 +406,10 @@ test text-paragraph-7.7 {an unrotated paragraph advances down the page as before
       -at {20 100} -width 60
   set content [::tclpdfTest::content $doc]
   $doc destroy
-  set ys {}
-  foreach line [split $content \n] {
-    if {[regexp {([-0-9.]+) ([-0-9.]+) Td$} $line -> x y]} {
-      lappend ys $y
-    }
-  }
+  set ys [::tclpdfTest::starts $content y]
   # Every line one leading further down the page - 12 pt, in PDF coordinates
   # therefore DECREASING y.
-  set steps {}
-  foreach a [lrange $ys 0 end-1] b [lrange $ys 1 end] {
-    lappend steps [format %.2f [expr {$a - $b}]]
-  }
-  list [expr {[llength $ys] > 2}] [lsort -unique $steps]
+  list [expr {[llength $ys] > 2}] [lsort -unique [::tclpdfTest::steps $ys]]
 } -result {1 12.00}
 
 test text-justify-8.1 {an embedded face is justified through TJ, not through Tw} -constraints haveFace -body {

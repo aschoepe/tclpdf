@@ -97,11 +97,31 @@ oo::define ::tclpdf::document::document {
     if {[package vcompare [[my writer] version] 1.7] < 0} {
       [my writer] version 1.7
     }
-    if {[string toupper [dict get $current conformance]] ni {A B U}} {
-      return -code error "tclpdf: PDF/A conformance must be A, B or U, not\
-          \"[dict get $current conformance]\""
+    # Level B is "looks the same forever", level U is B plus text that can be
+    # extracted reliably - the ToUnicode CMap this package writes for every
+    # embedded face, so U costs nothing here and is the better default answer
+    # when asked for.
+    #
+    # Level A is refused for the same reason part 1 is: it asks for a tagged
+    # document, and this writer has no structure tree. Accepting it produced a
+    # file that says PDF/A-3a and fails validation on two counts - measured
+    # with veraPDF, clauses 6.7.2.2 (MarkInfo/Marked) and 6.7.3.3
+    # (StructTreeRoot). A refusal here is worth more than a rejection at the
+    # recipient.
+    set level [string toupper [dict get $current conformance]]
+    switch -- $level {
+      B - U {}
+      A {
+        return -code error "tclpdf: PDF/A level A needs a tagged document -\
+            a structure tree and MarkInfo, neither of which tclpdf writes yet.\
+            Use level U, which guarantees extractable text, or level B"
+      }
+      default {
+        return -code error "tclpdf: PDF/A conformance must be B or U, not\
+            \"[dict get $current conformance]\""
+      }
     }
-    dict set current conformance [string toupper [dict get $current conformance]]
+    dict set current conformance $level
     if {![dict get $current registered]} {
       my onSelf beforeWrite PdfaWrite
       my onSelf catalog PdfaCatalog
@@ -287,4 +307,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pdfa 1.1
+package provide tclpdf::pdfa 1.2

@@ -187,6 +187,7 @@ oo::class create ::tclpdf::document::document {
       transform graphics
       style graphics
       opacity graphics
+      blend graphics
       line shape
       rect shape
       circle shape
@@ -212,6 +213,8 @@ oo::class create ::tclpdf::document::document {
       pdfa pdfa
       zugferd zugferd
       link link
+      pageNumbers pageNumber
+      textPath textPath
       bookmark outline
       bookmarks outline
       svg svg
@@ -414,4 +417,4 @@ oo::class create ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::document 1.1
+package provide tclpdf::document 1.2

@@ -1,0 +1,166 @@
+# pageNumber.test --
+#
+# "Page 3 of 7" - the number that cannot be written when the page is drawn.
+#
+# The interesting part is not the text, it is the ORDER: the total is unknown
+# until the last page exists, so the numbers are produced at write time. That
+# makes idempotence the central property - a second write has to overwrite the
+# numbers, not add a second set on top of them.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::pageNumber
+source [file join [file dirname [info script]] helper.tcl]
+
+test pageNumber-1.1 {every page gets its number and the total} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach n {1 2 3} {
+    $doc page add
+    $doc text "Inhalt $n" -at {20 30}
+  }
+  $doc pageNumbers -at {105 285} -align center -size 8 -format "Seite %n von %m"
+  set path [::tclpdfTest::scratch numbers.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {\(Seite 1 von 3\)} $bytes] [regexp {\(Seite 2 von 3\)} $bytes] \
+      [regexp {\(Seite 3 von 3\)} $bytes] [regexp {\(Seite 4 von 3\)} $bytes]
+} -result {1 1 1 0}
+
+test pageNumber-1.2 {a page added later changes the total, not the call} -body {
+  # The whole point of doing this at write time: the caller states the wish
+  # once, and the answer follows the document.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc pageNumbers -at {105 285} -format "%n/%m"
+  $doc page add
+  $doc page add
+  set path [::tclpdfTest::scratch numbers-late.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {\(1/3\)} $bytes] [regexp {\(3/3\)} $bytes]
+} -result {1 1}
+
+test pageNumber-1.3 {writing twice produces the same bytes} -body {
+  # The contract every write-time subscriber has to keep, and the one this
+  # feature could most easily break: the numbers live in objects taken from
+  # [reservation] and are written over, while the operator that invokes them
+  # goes into the page exactly once.
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach n {1 2 3 4} {
+    $doc page add
+    $doc text "Inhalt $n" -at {20 30}
+  }
+  $doc pageNumbers -at {105 285} -align center -size 8
+  set first [::tclpdfTest::scratch numbers-a.pdf]
+  set second [::tclpdfTest::scratch numbers-b.pdf]
+  $doc write $first
+  $doc write $second
+  $doc destroy
+  set a [::tclpdfTest::readBytes $first]
+  set b [::tclpdfTest::readBytes $second]
+  file delete $first $second
+  # Identical, and the invoking operator present once per page - not twice.
+  list [expr {$a eq $b}] [regexp -all {/XOPN[0-9_]+ Do} $a]
+} -result {1 4}
+
+test pageNumber-2.1 {-from leaves the title page unnumbered} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach n {1 2 3} {
+    $doc page add
+  }
+  $doc pageNumbers -at {105 285} -format "%n/%m" -from 2
+  set path [::tclpdfTest::scratch numbers-from.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The count still runs over the whole document - page two of three is what
+  # a reader holding the second sheet expects to read.
+  list [regexp {\(1/3\)} $bytes] [regexp {\(2/3\)} $bytes] [regexp {\(3/3\)} $bytes]
+} -result {0 1 1}
+
+test pageNumber-2.2 {-total overrides the count} -body {
+  # For a document that is one part of a larger set: "page 2 of 12" on a
+  # three-page extract.
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach n {1 2} {
+    $doc page add
+  }
+  $doc pageNumbers -at {105 285} -format "%n/%m" -total 12
+  set path [::tclpdfTest::scratch numbers-total.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {\(1/12\)} $bytes] [regexp {\(2/12\)} $bytes]
+} -result {1 1}
+
+test pageNumber-2.3 {two runs are two independent lines} -body {
+  # A number at the foot and a running title at the head are two calls. Each
+  # gets its own object per page, so neither overwrites the other.
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach n {1 2} {
+    $doc page add
+  }
+  $doc pageNumbers -at {105 285} -format "%n/%m" -align center
+  $doc pageNumbers -at {20 15} -format "Handbuch, Seite %n" -size 7
+  set path [::tclpdfTest::scratch numbers-two.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {\(1/2\)} $bytes] [regexp {\(Handbuch, Seite 1\)} $bytes] \
+      [regexp -all {/XOPN[0-9_]+ Do} $bytes]
+} -result {1 1 4}
+
+test pageNumber-3.1 {the foot follows the size of ITS page} -body {
+  # A document may mix formats, and the foot of an A5 sheet is not where the
+  # foot of an A4 sheet is. Each page therefore gets its own form, sized to
+  # that page - measured through the BBox the writer produced.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc page add -format a5
+  $doc pageNumbers -at {20 10} -format "%n"
+  set path [::tclpdfTest::scratch numbers-mixed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # A4 is 841.89 pt tall, A5 is 595.28 - one form per page, each its own size.
+  set heights {}
+  foreach {match height} [regexp -all -inline \
+      {/BBox \[0 0 [0-9.]+ ([0-9.]+)\]} $bytes] {
+    lappend heights [format %.2f $height]
+  }
+  set heights
+} -result {841.89 595.28}
+
+test pageNumber-4.1 {a position is required} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set code [catch {$doc pageNumbers -format "%n"} message]
+  $doc destroy
+  list $code [string match {*needs -at*} $message]
+} -result {1 1}
+
+test pageNumber-4.2 {a nonsensical -from is refused} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes [list [catch {$doc pageNumbers -at {20 20} -from 0}] \
+      [catch {$doc pageNumbers -at {20 20} -from x}]]
+  $doc destroy
+  set codes
+} -result {1 1}
+
+cleanupTests

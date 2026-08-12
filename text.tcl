@@ -111,7 +111,9 @@ oo::define ::tclpdf::document::document {
     # Own options plus the font options, which are accepted per call without
     # being stored - partition keeps the two apart instead of merging the
     # dictionaries and losing track of which is which.
-    set defaults {at {} rotate 0 align left width {} anchor baseline}
+    set defaults {at {} rotate 0 align left width {} anchor baseline
+        height {} indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
+        avoid {} avoidMargin 0}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -438,4 +440,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.2
+package provide tclpdf::text 1.3

@@ -405,6 +405,94 @@ test graphics-curve-8.3 {all four points are required} -body {
   list $code [string match {*-from, -c1, -c2 and -to*} $message]
 } -result {1 1}
 
+test graphics-blend-9.1 {a blend mode becomes an ExtGState and a gs} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc blend Multiply
+  set content [::tclpdfTest::content $doc]
+  set names [dict keys [$doc resource ExtGState]]
+  set writer [$doc writer]
+  set found 0
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/BM /Multiply*} [$writer body $number]]} {
+      set found 1
+    }
+  }
+  $doc destroy
+  list [regexp {gs} $content] $found [llength $names]
+} -result {1 1 1}
+
+test graphics-blend-9.2 {the spelling of the standard wins} -body {
+  # A name is a name: /multiply is not /Multiply to a reader, so what the
+  # caller types is normalised rather than passed through.
+  set doc [tclpdf new]
+  $doc page add
+  set first [$doc blend multiply]
+  set second [$doc blend MULTIPLY]
+  set names [dict keys [$doc resource ExtGState]]
+  $doc destroy
+  list $first $second [llength $names]
+} -result {GBMultiply GBMultiply 1}
+
+test graphics-blend-9.3 {two shapes with the same mode share one resource} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill red -blend Screen
+  $doc rect -at {40 10} -size {20 20} -fill blue -blend Screen
+  $doc circle -at {80 20} -radius 10 -fill green -blend Darken
+  set names [lsort [dict keys [$doc resource ExtGState]]]
+  $doc destroy
+  set names
+} -result {GBDarken GBScreen}
+
+test graphics-blend-9.4 {-blend does not outlive its shape} -body {
+  # The same rule as every other state option: a mode set for one shape must
+  # not colour everything drawn afterwards.
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill red -blend Multiply
+  $doc line -from {10 50} -to {60 50} -stroke black
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  ::tclpdfTest::takenBack $operators gs m
+} -result 1
+
+test graphics-blend-9.4b {-blend alone is guarded too} -body {
+  # Without this the mode would be the one state option that leaks: every
+  # other test sets -fill as well, which raises the guard for its own sake and
+  # hides the omission.
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -blend Multiply
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength [lsearch -all $operators q]] [llength [lsearch -all $operators Q]]
+} -result {1 1}
+
+test graphics-blend-9.5 {mode and alpha are two operators, not two resources} -body {
+  # gs is cumulative (11.6.6): setting the mode leaves the alpha standing. So
+  # each of them stays one resource instead of one per combination.
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill red -blend Multiply -opacity 0.5
+  set content [::tclpdfTest::content $doc]
+  set names [lsort [dict keys [$doc resource ExtGState]]]
+  $doc destroy
+  list [regexp -all {gs} $content] $names
+} -result {2 {GBMultiply GS0_5b}}
+
+test graphics-blend-9.6 {Compatible is refused, and says what to write instead} -body {
+  # Deprecated since 1.4 and identical to Normal - accepting it would write a
+  # name that tells a reader nothing.
+  set doc [tclpdf new]
+  $doc page add
+  set codes [list [catch {$doc blend Compatible} compatible] \
+      [catch {$doc blend Wobble} unknown]]
+  $doc destroy
+  list $codes [string match {*deprecated*Normal*} $compatible] \
+      [string match {*known are: Normal, Multiply*} $unknown]
+} -result {{1 1} 1 1}
+
 test graphics-pattern-4.1 {pattern size reports the tile} -body {
   # The other half of a facade that nothing called: [pattern create] is used
   # everywhere, [pattern size] by nothing.

@@ -1,0 +1,217 @@
+#
+# tclpdf - PDF generation for Tcl
+#
+# textPath - setting a line of text along a path
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+#
+#   $doc textPath "Bochum - Essen - Duisburg" \
+#       -segments {{move 20 60} {curve 60 30 120 90 170 55}} -align center
+#
+# A seal, a banner, a label following a road on a map: the string is set glyph
+# by glyph, each one turned by the tangent of the curve at its own position.
+#
+# PDF has no operator for this - there is no "draw along a path". What it does
+# have is one text matrix per show operation, which is enough: walk the path,
+# place each glyph where its share of the arc length falls, rotate it by the
+# direction the path takes there. The work is therefore not in the drawing but
+# in the ARC LENGTH, because glyph widths are measured along the curve and a
+# Bezier has no closed form for it.
+#
+# So the curve is flattened into short straight pieces once, and everything
+# after that is arithmetic on a polyline. The flattening is fine enough that
+# the error stays under a tenth of a point at ordinary text sizes, and coarse
+# enough that a banner does not cost thousands of segments.
+#
+
+package require Tcl 8.6.11-
+package require TclOO
+package require tclpdf::option 1.0-
+package require tclpdf::geometry 1.0-
+package require tclpdf::document 1.0-
+package require tclpdf::text 1.0-
+
+namespace eval ::tclpdf::textPath {
+  # How many straight pieces one cubic Bezier is cut into. Measured against a
+  # halved step on a 150 mm curve: the glyph positions moved by less than
+  # 0.01 mm, so finer buys nothing a reader could see.
+  variable steps 48
+}
+
+oo::define ::tclpdf::document::document {
+
+  # $doc textPath <string> -segments {...} ?-align left|center|right?
+  #               ?-offset 0? ?-side above|below? ?font options?
+  #
+  # -offset lifts the baseline off the path, in the document unit - a negative
+  # value sets the text below it. -align places the string along the path the
+  # same way it places it along a straight baseline: at the start, centred on
+  # the middle, or ending at the end.
+  method textPath {string args} {
+    my TextInit
+    set defaults {segments {} align left offset 0}
+    foreach name $::tclpdf::text::stateOptions {
+      dict set defaults $name [my TextGet $name]
+    }
+    set options [::tclpdf::option parse $defaults $args "textPath"]
+    if {![llength [dict get $options segments]]} {
+      return -code error "tclpdf: textPath needs -segments"
+    }
+    set state [my TextMerge [my TextPathOverrides $options]]
+
+    set points [my TextPathFlatten [dict get $options segments]]
+    # Two POINTS, so four numbers - counting coordinates let a lone [move]
+    # through, and the text then had nowhere to run.
+    if {[llength $points] < 4} {
+      return -code error "tclpdf: a path for text needs at least two points"
+    }
+    lassign [my TextPathLengths $points] lengths total
+
+    # Where the string starts on the path, from its own width - the same
+    # decision [text] makes for a straight line, only measured along the curve.
+    set width [my textWidth $string {*}[my TextPathOverrides $options]]
+    switch -- [dict get $options align] {
+      left {set cursor 0}
+      right {set cursor [expr {$total - $width}]}
+      center - centre {set cursor [expr {($total - $width) / 2.0}]}
+      default {
+        return -code error "tclpdf: -align must be left, right or center,\
+            not \"[dict get $options align]\""
+      }
+    }
+
+    set offset [dict get $options offset]
+    foreach char [split $string {}] {
+      set advance [my textWidth $char {*}[my TextPathOverrides $options]]
+      # The glyph is placed at its own MIDDLE and turned there: measuring the
+      # angle at the left edge tips every letter slightly into the curve, and
+      # on a tight radius the line visibly fans out.
+      lassign [my TextPathPoint $points $lengths [expr {$cursor + $advance / 2.0}]] \
+          x y angle
+      if {$x ne {}} {
+        # Back off half the advance along the baseline, so the glyph's own
+        # middle lands where it was measured.
+        set radians [expr {$angle * acos(-1) / 180.0}]
+        # The offset runs perpendicular to the baseline, and a positive one
+        # lifts the text ABOVE the path - which in document coordinates, where
+        # y grows downwards, means subtracting it.
+        set px [expr {$x - cos($radians) * $advance / 2.0
+            - sin($radians) * $offset}]
+        set py [expr {$y + sin($radians) * $advance / 2.0
+            - cos($radians) * $offset}]
+        my TextRun $char $state $px $py $angle
+      }
+      set cursor [expr {$cursor + $advance}]
+    }
+    return $total
+  }
+
+  # -- internals ----------------------------------------------------------
+
+  # Only the font options, without the ones textPath owns - [textWidth] would
+  # refuse -segments.
+  method TextPathOverrides {options} {
+    set result {}
+    foreach name $::tclpdf::text::stateOptions {
+      lappend result -$name [dict get $options $name]
+    }
+    return $result
+  }
+
+  # The path as a polyline in the DOCUMENT unit: {x y x y ...}. Curves are cut
+  # into straight pieces here and nowhere else.
+  method TextPathFlatten {segments} {
+    variable ::tclpdf::textPath::steps
+    set points {}
+    set x 0
+    set y 0
+    foreach segment $segments {
+      set kind [lindex $segment 0]
+      set numbers [lrange $segment 1 end]
+      switch -- $kind {
+        move {
+          lassign $numbers x y
+          lappend points $x $y
+        }
+        line {
+          lassign $numbers x y
+          lappend points $x $y
+        }
+        curve {
+          lassign $numbers x1 y1 x2 y2 x3 y3
+          for {set step 1} {$step <= $steps} {incr step} {
+            set t [expr {double($step) / $steps}]
+            set u [expr {1.0 - $t}]
+            lappend points [expr {$u*$u*$u*$x + 3*$u*$u*$t*$x1
+                + 3*$u*$t*$t*$x2 + $t*$t*$t*$x3}]
+            lappend points [expr {$u*$u*$u*$y + 3*$u*$u*$t*$y1
+                + 3*$u*$t*$t*$y2 + $t*$t*$t*$y3}]
+          }
+          set x $x3
+          set y $y3
+        }
+        close {
+          if {[llength $points] >= 2} {
+            lappend points [lindex $points 0] [lindex $points 1]
+            set x [lindex $points 0]
+            set y [lindex $points 1]
+          }
+        }
+        default {
+          return -code error "tclpdf: unknown path segment \"$kind\" - known\
+              are: move, line, curve, close"
+        }
+      }
+    }
+    return $points
+  }
+
+  # The cumulative length at each point, and the total.
+  method TextPathLengths {points} {
+    set lengths 0
+    set total 0
+    for {set index 2} {$index < [llength $points]} {incr index 2} {
+      set dx [expr {[lindex $points $index] - [lindex $points $index-2]}]
+      set dy [expr {[lindex $points $index+1] - [lindex $points $index-1]}]
+      set total [expr {$total + hypot($dx, $dy)}]
+      lappend lengths $total
+    }
+    return [list $lengths $total]
+  }
+
+  # Position and direction at a distance along the path. Returns {x y angle},
+  # or {{} {} {}} for a distance outside it - a string longer than its path
+  # loses the glyphs that do not fit rather than piling them up at the end.
+  method TextPathPoint {points lengths distance} {
+    if {$distance < 0 || $distance > [lindex $lengths end]} {
+      return [list {} {} {}]
+    }
+    set index 1
+    set count [llength $lengths]
+    while {$index < $count - 1 && [lindex $lengths $index] < $distance} {
+      incr index
+    }
+    set before [lindex $lengths $index-1]
+    set after [lindex $lengths $index]
+    set span [expr {$after - $before}]
+    set share [expr {$span > 0 ? ($distance - $before) / $span : 0}]
+
+    set ax [lindex $points [expr {2 * ($index - 1)}]]
+    set ay [lindex $points [expr {2 * ($index - 1) + 1}]]
+    set bx [lindex $points [expr {2 * $index}]]
+    set by [lindex $points [expr {2 * $index + 1}]]
+    set x [expr {$ax + ($bx - $ax) * $share}]
+    set y [expr {$ay + ($by - $ay) * $share}]
+
+    # The angle [text -rotate] takes: positive turns the same way the page
+    # coordinates do, and y grows downwards - so a path running up the page
+    # needs the sign of dy reversed.
+    set angle [expr {atan2($ay - $by, $bx - $ax) * 180.0 / acos(-1)}]
+    return [list $x $y $angle]
+  }
+}
+
+package provide tclpdf::textPath 1.0

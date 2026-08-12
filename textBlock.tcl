@@ -39,12 +39,42 @@ oo::define ::tclpdf::document::document {
   method textLines {string args} {
     my TextInit
     lassign [my TextBlockWidth $args] width args
+    return [lmap line [my TextBlockBreak $string $args \
+        [list apply {{width line paragraph running} {list $width 0}} $width]] {
+      dict get $line text
+    }]
+  }
+
+  # The line breaker itself. Everything wrapped in this package comes through
+  # here, and it is the ONE place that decides where a line ends.
+  #
+  # band is a command prefix called with three numbers: the index of the line
+  # inside its paragraph (0 for the first), the index of the paragraph, and the
+  # running line number over the whole block. It answers {width offset}: how
+  # wide this line may be, and how far in from the left edge it starts. The
+  # running number is what lets a band know its vertical position - which is
+  # everything, once the text has to flow around a shape. A constant band is what [textLines] asks for; an indent
+  # narrows the first line of each paragraph; flowing around a shape varies
+  # every line. Keeping that decision outside the loop is what lets all three
+  # share one breaker instead of growing a second copy.
+  #
+  # Returns one dictionary per line: text, offset, width, paragraph, and
+  # first - whether it opens its paragraph.
+  method TextBlockBreak {string arguments band} {
     set lines {}
+    set paragraphIndex 0
+    set globalLine 0
     foreach paragraph [split $string \n] {
       if {[string trim $paragraph] eq {}} {
-        lappend lines {}
+        lassign [{*}$band 0 $paragraphIndex $globalLine] width offset
+        lappend lines [dict create text {} offset $offset width $width \
+            paragraph $paragraphIndex first 1]
+        incr paragraphIndex
+        incr globalLine
         continue
       }
+      set inParagraph 0
+      lassign [{*}$band $inParagraph $paragraphIndex $globalLine] width offset
       set current {}
       foreach word [regexp -all -inline {\S+} $paragraph] {
         # NOT [expr {$current eq {} ? $word : "..."}]: expr normalises a word
@@ -57,30 +87,43 @@ oo::define ::tclpdf::document::document {
         } else {
           set candidate "$current $word"
         }
-        if {[my textWidth $candidate {*}$args] <= $width} {
+        if {[my textWidth $candidate {*}$arguments] <= $width} {
           set current $candidate
           continue
         }
         if {$current ne {}} {
-          lappend lines $current
+          lappend lines [dict create text $current offset $offset \
+              width $width paragraph $paragraphIndex \
+              first [expr {$inParagraph == 0}]]
+          incr inParagraph
+          incr globalLine
+          lassign [{*}$band $inParagraph $paragraphIndex $globalLine] width offset
           set current {}
         }
         # The word alone may still be too wide - a part number, a URL, a
         # column two millimetres across. Break it by character rather than
         # letting it run past the edge unnoticed.
-        while {[my textWidth $word {*}$args] > $width && [string length $word] > 1} {
+        while {[my textWidth $word {*}$arguments] > $width && [string length $word] > 1} {
           set take [string length $word]
-          while {$take > 1 && [my textWidth [string range $word 0 $take-1] {*}$args] > $width} {
+          while {$take > 1 && [my textWidth [string range $word 0 $take-1] {*}$arguments] > $width} {
             incr take -1
           }
-          lappend lines [string range $word 0 $take-1]
+          lappend lines [dict create text [string range $word 0 $take-1] \
+              offset $offset width $width paragraph $paragraphIndex \
+              first [expr {$inParagraph == 0}]]
+          incr inParagraph
+          incr globalLine
+          lassign [{*}$band $inParagraph $paragraphIndex $globalLine] width offset
           set word [string range $word $take end]
         }
         set current $word
       }
       if {$current ne {}} {
-        lappend lines $current
+        lappend lines [dict create text $current offset $offset width $width \
+            paragraph $paragraphIndex first [expr {$inParagraph == 0}]]
+        incr globalLine
       }
+      incr paragraphIndex
     }
     return $lines
   }
@@ -140,16 +183,111 @@ oo::define ::tclpdf::document::document {
     # with the text, which is what makes the lines run across the page.
     set lift [my TextLift $state [dict get $options anchor]]
 
-    set lines [my textLines $string $width {*}[my TextOverrides $options]]
-    set last [expr {[llength $lines] - 1}]
-    set index 0
+    # The band this paragraph is set in: the column narrowed by the indents,
+    # and the first line of each paragraph narrowed once more. A negative
+    # -firstIndent is a hanging indent and is the reason the offset is carried
+    # per line rather than added to x once.
+    set indent [dict get $options indent]
+    set indentRight [dict get $options indentRight]
+    set firstIndent [dict get $options firstIndent]
+    set band [list apply {{width indent indentRight firstIndent line paragraph running} {
+      set extra [expr {$line == 0 ? $firstIndent : 0}]
+      return [list [expr {$width - $indent - $indentRight - $extra}] \
+          [expr {$indent + $extra}]]
+    }} $width $indent $indentRight $firstIndent]
+
+    # Shapes to flow around narrow the band per line instead of per paragraph.
+    # Loaded only when asked for: a caller who never avoids anything does not
+    # pay for the module.
+    if {[llength [dict get $options avoid]]} {
+      package require tclpdf::textAvoid
+      my TextAvoidCheck [dict get $options avoid]
+      set inner [expr {$width - $indent - $indentRight}]
+      # "my", not the object name: the band is expanded inside a method of
+      # this object, and TextAvoidBand is private - reaching it from outside
+      # would need an export that nothing else wants.
+      set band [list my TextAvoidBand [dict get $options avoid] \
+          [dict get $options avoidMargin] \
+          [expr {$x + $indent}] $y $inner $leading \
+          [dict get $options paragraphSpacing]]
+    }
+
+    set lines [my TextBlockBreak $string [my TextOverrides $options] $band]
+
+    # Which lines close their paragraph - decided on the WHOLE text, before
+    # anything is held back for a height limit. A line that ends a column is
+    # not the end of its paragraph: its paragraph continues in the next
+    # column, so it stays justified. Deciding this on the drawn part alone set
+    # the last line of every column flush left, which reads as a paragraph
+    # ending there and is exactly the kind of wrong that looks deliberate.
+    set count [llength $lines]
+    for {set index 0} {$index < $count} {incr index} {
+      set closes [expr {$index == $count - 1
+          || [dict get [lindex $lines $index+1] paragraph]
+             != [dict get [lindex $lines $index] paragraph]}]
+      lset lines $index [dict replace [lindex $lines $index] closes $closes]
+    }
+
+    # A height limit turns the block into the first of several: what fits is
+    # drawn, what does not is handed back. The caller decides where the rest
+    # goes - the next column, the next page - which is why this method does
+    # not try to know.
+    set limit [dict get $options height]
+    set spacing [dict get $options paragraphSpacing]
+    set drawn {}
+    set rest {}
+    set offsetY 0
+    set previousParagraph {}
     foreach line $lines {
-      if {$line ne {}} {
-        my TextParagraphLine $line $state $x $y $width $align \
-            [expr {$index == $last}] [dict get $options rotate] \
-            [expr {$lift + $index * $leading}]
+      set paragraph [dict get $line paragraph]
+      if {$previousParagraph ne {} && $paragraph != $previousParagraph} {
+        set offsetY [expr {$offsetY + $spacing}]
+      }
+      set previousParagraph $paragraph
+      if {[llength $rest] || ($limit ne {} && $offsetY + $leading > $limit)} {
+        # Once one line has been held back, everything after it goes with it -
+        # otherwise a short line would jump ahead of a long one.
+        lappend rest $line
+        continue
+      }
+      lappend drawn [list $line $offsetY]
+      set offsetY [expr {$offsetY + $leading}]
+    }
+
+    set last [expr {[llength $drawn] - 1}]
+    set index 0
+    foreach entry $drawn {
+      lassign $entry line lineOffset
+      if {[dict get $line text] ne {}} {
+        my TextParagraphLine [dict get $line text] $state \
+            [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
+            $align [dict get $line closes] [dict get $options rotate] \
+            [expr {$lift + $lineOffset}]
       }
       incr index
+    }
+    if {$limit ne {}} {
+      # Text, not lines: the rest may have to be broken again for a column of
+      # a different width, and handing back lines would silently fix the old
+      # break points. Paragraphs keep their boundaries.
+      set text {}
+      set current {}
+      set paragraph {}
+      foreach line $rest {
+        if {$paragraph ne {} && [dict get $line paragraph] != $paragraph} {
+          lappend text [join $current { }]
+          set current {}
+        }
+        set paragraph [dict get $line paragraph]
+        if {[dict get $line text] ne {}} {
+          lappend current [dict get $line text]
+        }
+      }
+      if {[llength $current]} {
+        lappend text [join $current { }]
+      }
+      return [dict create y [expr {$y + $lift + $offsetY}] \
+          rest [join $text \n]]
     }
     # Where the next element goes: the baseline one line below the block. The
     # lift belongs IN it - with -anchor top the caller gave the top edge, and
@@ -160,7 +298,7 @@ oo::define ::tclpdf::document::document {
     # For a rotated block the block does not run down the page at all; a caller
     # placing the next element has the angle and can say better than this
     # method where "below" is.
-    return [expr {$y + $lift + [llength $lines] * $leading}]
+    return [expr {$y + $lift + $offsetY}]
   }
 
   # Alignment inside the column is a shift along the baseline and is passed
@@ -228,4 +366,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.2
+package provide tclpdf::textBlock 1.3

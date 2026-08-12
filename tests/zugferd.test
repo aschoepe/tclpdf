@@ -296,6 +296,46 @@ test zugferd-7.2 {the ICC profile is embedded once, however often it is set} -co
   list [regexp -all {/N 3} $bytes] [regexp -all {/OutputIntents} $bytes]
 } -result {1 1}
 
+test zugferd-7.4 {level U is written and validates as 3u} -constraints {haveIcc haveInvoice} -body {
+  # U is B plus "every character maps back to Unicode" - which is exactly the
+  # ToUnicode CMap this package writes for every embedded face anyway. So the
+  # stronger level costs nothing, and the only thing that was ever missing was
+  # saying so.
+  set doc [archivable $face]
+  $doc pdfa -part 3 -conformance U -profile $icc
+  set path [::tclpdfTest::scratch pdfa-u.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The declaration, and the map it rests on.
+  list [regexp {pdfaid:part>3<} $bytes] [regexp {pdfaid:conformance>U<} $bytes] \
+      [regexp {/ToUnicode} $bytes]
+} -result {1 1 1}
+
+test zugferd-7.5 {level A is refused, because the structure tree is missing} -body {
+  # The same rule as part 1: a level this writer cannot deliver is refused at
+  # the call rather than written and rejected at the recipient. Measured with
+  # veraPDF before the refusal existed - clauses 6.7.2.2 and 6.7.3.3.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc pdfa -part 3 -conformance A
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*level A needs a tagged document*level U*}
+
+test zugferd-7.6 {an unknown conformance names the ones that exist} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc pdfa -part 3 -conformance X
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*must be B or U*}
+
 test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -body {
   set doc [tclpdf new -unit mm]
   $doc page add

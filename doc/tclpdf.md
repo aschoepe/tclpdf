@@ -130,6 +130,22 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   **-anchor** chooses what the y coordinate means: `baseline` (the default) or `top`. **-rotate** turns the text about `-at`. All font options are accepted per call without changing the state.
 
+  **-height** *h* limits the block. What fits is drawn and the return value becomes a dictionary with `y` and `rest` — the text that did not fit, ready to be set in the next column or on the next page. Without `-height` the return value is the y coordinate as before.
+
+  **-indent**, **-indentRight** and **-firstIndent** narrow the column; a negative first indent hangs the opening line out to the left, which is how a numbered clause is set. **-paragraphSpacing** adds room between paragraphs, on top of the leading.
+
+  **-avoid** takes a list of shapes the text runs around: `{rect {x y} {w h}}` and `{circle {x y} r}`. Each line is narrowed by whatever reaches into it and set in the widest free segment, so a circle is followed by its outline rather than by a box around it. The shapes are not drawn — that is a separate call, and the text can just as well keep clear of something invisible.
+
+  **-avoidMargin** *d* holds the text off every avoided shape by that distance; a shape may state one of its own as a fourth element (`{circle {x y} r 7}`), which then wins. Without it the words touch the picture, which reads as a mistake however exact the geometry is.
+
+*doc* **textPath** *string* **-segments** *{...}* ?**-align** *a*? ?**-offset** *d*? ?*font options*?
+
+: Sets one line of text along a path, glyph by glyph, each one turned by the direction the path takes at its own position. The segments are the ones **path** takes (`move`, `line`, `curve`, `close`); **-align** places the string at the start, the middle or the end of the path, and **-offset** lifts the baseline off it — positive above, negative below. Returns the length of the path, which is what a caller measures a string against beforehand: glyphs that run past the end are dropped rather than piled up there. The path itself is not drawn.
+
+*doc* **pageNumbers -at** *{x y}* ?**-format** *"Page %n of %m"*? ?**-from** *n*? ?**-total** *n*? ?*font options*?
+
+: Puts a page number on every page. `%n` is the number, `%m` the total. The numbers are drawn when the document is written, not when the call is made — which is the only moment the total is known — so the call may come before the pages it numbers. **-from** leaves the leading pages unnumbered, **-total** states a total of its own for a document that is part of a larger set. Several calls are independent of each other: a number at the foot and a running title at the head are two of them.
+
 *doc* **textWidth** *string* ?*font options*?
 
 : The width of a string in the document unit.
@@ -158,7 +174,7 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 *doc* **path -segments** *list* ?**-fill** *c*? ?**-stroke** *c*? ?**-rule** *evenodd*?
 
-: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width), **-dash** (a pattern), **-cap**, **-join** and **-opacity**. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates.
+: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width), **-dash** (a pattern), **-cap**, **-join**, **-opacity** and **-blend**. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates.
 
 *doc* **clip -at** *{x y}* **-size** *{w h}* ?**-rule** *evenodd*? / *doc* **clip -segments** *list* ?**-rule** *evenodd*?
 
@@ -175,6 +191,10 @@ Positions are given in the document unit, and **y counts from the top of the pag
 *doc* **opacity** *value*
 
 : Fill and stroke opacity between 0 and 1.
+
+*doc* **blend** *mode*
+
+: The blend mode: how a colour is combined with what is already on the page. One of `Normal`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `ColorDodge`, `ColorBurn`, `HardLight`, `SoftLight`, `Difference`, `Exclusion`, `Hue`, `Saturation`, `Color` or `Luminosity`. Like the alpha it is graphics state and holds until changed; the shapes take it per call as **-blend**, which keeps it inside their own save/restore. `Compatible` is refused — it has been deprecated since PDF 1.4 and means `Normal`. PDF/A parts 2 and 3 permit every mode listed.
 
 *doc* **style** ?*options*?
 
@@ -313,6 +333,8 @@ A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey valu
 *doc* **pdfa** ?**-part** *n*? ?**-conformance** *level*? ?**-profile** *path*?
 
 : Declares PDF/A conformance, writes the output intent with the given ICC profile and raises the file version to match. Parts 2 and 3 are accepted; part 1 is refused because it forbids the transparency this package writes, and part 4 because it needs PDF 2.0.
+
+  **-conformance** takes `B` (the default) or `U`. Level B promises the document looks the same in fifteen years; level U adds that its text can be extracted and searched reliably, which rests on the ToUnicode map written for every embedded face anyway — so `U` is the stronger claim at no cost and is worth asking for. Level A is refused: it requires a tagged document, and there is no structure tree yet.
 
   Declaring conformance also turns on a check: every font in the document must be embedded, and writing fails with a message naming the offending face rather than producing a file that a validator rejects later.
 

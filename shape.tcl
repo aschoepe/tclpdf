@@ -30,7 +30,7 @@ oo::define ::tclpdf::document::document {
 
   method line {args} {
     set options [::tclpdf::option parse {
-      from {} to {} stroke black width {} dash {} cap {} join {} miter {} opacity {}
+      from {} to {} stroke black width {} dash {} cap {} join {} miter {} opacity {} blend {}
     } $args]
     if {[dict get $options from] eq {} || [dict get $options to] eq {}} {
       return -code error "tclpdf: line needs -from {x y} and -to {x y}"
@@ -52,7 +52,7 @@ oo::define ::tclpdf::document::document {
   method rect {args} {
     set options [::tclpdf::option parse {
       at {} size {} fill {} stroke {} width {} dash {} radius 0
-      cap {} join {} miter {} opacity {} rule nonzero
+      cap {} join {} miter {} opacity {} blend {} rule nonzero
     } $args]
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: rect needs -at {x y} and -size {w h}"
@@ -83,7 +83,7 @@ oo::define ::tclpdf::document::document {
   method ellipse {args} {
     set options [::tclpdf::option parse {
       at {} radius {} size {} fill {} stroke {} width {} dash {}
-      cap {} join {} miter {} opacity {} rule nonzero
+      cap {} join {} miter {} opacity {} blend {} rule nonzero
     } $args]
     if {[dict get $options at] eq {}} {
       return -code error "tclpdf: ellipse needs -at {x y}"
@@ -126,7 +126,7 @@ oo::define ::tclpdf::document::document {
   method polygon {args} {
     set options [::tclpdf::option parse {
       points {} fill {} stroke {} width {} dash {} close 1
-      cap {} join {} miter {} opacity {} rule nonzero
+      cap {} join {} miter {} opacity {} blend {} rule nonzero
     } $args]
     set points [dict get $options points]
     if {[llength $points] < 4} {
@@ -150,7 +150,7 @@ oo::define ::tclpdf::document::document {
   method curve {args} {
     set options [::tclpdf::option parse {
       from {} c1 {} c2 {} to {} fill {} stroke black width {} dash {}
-      cap {} join {} miter {} opacity {} rule nonzero close 0
+      cap {} join {} miter {} opacity {} blend {} rule nonzero close 0
     } $args]
     foreach key {from c1 c2 to} {
       if {[dict get $options $key] eq {}} {
@@ -179,7 +179,7 @@ oo::define ::tclpdf::document::document {
   method path {args} {
     set options [::tclpdf::option parse {
       segments {} fill {} stroke {} width {} dash {} close 0
-      cap {} join {} miter {} opacity {} rule nonzero
+      cap {} join {} miter {} opacity {} blend {} rule nonzero
     } $args]
     my content [my GraphicsStyle $options 1]
     my ShapeSegments [dict get $options segments]
@@ -309,4 +309,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shape 1.0
+package provide tclpdf::shape 1.1

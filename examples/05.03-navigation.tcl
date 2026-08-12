@@ -44,23 +44,23 @@ $doc info Author "Workshop documentation"
 
 set chapters {
     {"Safety" {
-        {"Before firing" "Check that the flue is clear and the shelves are
-            dry. A shelf soaked from washing will spall and take the ware
+        {"Before firing" "Check that the flue is clear and the shelves are\
+            dry. A shelf soaked from washing will spall and take the ware\
             with it."}
-        {"During firing" "Never open the door above 200 degrees. The thermal
+        {"During firing" "Never open the door above 200 degrees. The thermal\
             shock cracks both the elements and whatever is inside."}
     }}
     {"Loading" {
-        {"Shelf spacing" "Leave two centimetres above the tallest piece.
+        {"Shelf spacing" "Leave two centimetres above the tallest piece.\
             Radiant heat from the element needs somewhere to go."}
-        {"Props" "Use three props per shelf, never four. Three always sit
+        {"Props" "Use three props per shelf, never four. Three always sit\
             flat; four will rock on an uneven floor."}
     }}
     {"Firing schedules" {
-        {"Bisque" "Slow to 600 degrees, then 150 degrees per hour to 1000.
-            The slow start drives off water that would otherwise turn to
+        {"Bisque" "Slow to 600 degrees, then 150 degrees per hour to 1000.\
+            The slow start drives off water that would otherwise turn to\
             steam inside the clay."}
-        {"Glaze" "Full power to 1220 degrees, then hold twenty minutes. The
+        {"Glaze" "Full power to 1220 degrees, then hold twenty minutes. The\
             hold is what lets the glaze level out."}
     }}
 }

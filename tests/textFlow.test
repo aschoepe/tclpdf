@@ -1,0 +1,277 @@
+# textFlow.test --
+#
+# The paragraph as a flowing thing: a height limit that hands back the rest,
+# indents, paragraph spacing, and text running around shapes.
+#
+# All four rest on the same mechanism - the line breaker asks, per line, how
+# wide the line may be and where it starts. These tests aim at that band as
+# much as at the options on top of it.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::text
+package require tclpdf::textBlock
+source [file join [file dirname [info script]] helper.tcl]
+
+# A body long enough to break into many lines, without depending on the exact
+# wording anywhere.
+set flowBody "Der Fliesstext laeuft in eine Spalte begrenzter Hoehe. Was nicht\
+    mehr hineinpasst, kommt als Rest zurueck und wandert in die naechste\
+    Spalte. Das ist der ganze Mechanismus, und er macht Spaltensatz zu einer\
+    Sache von wenigen Zeilen Code."
+
+# Where the lines start, rounded. The parsing itself lives in helper.tcl -
+# text.test wants the same thing, and two copies of it drifted apart once.
+proc flowStarts {stream} {
+  return [lmap x [::tclpdfTest::starts $stream] {format %.2f $x}]
+}
+
+# How many lines were drawn.
+proc flowLines {stream} {
+  return [llength [regexp -all -inline {Td} $stream]]
+}
+
+test textFlow-1.1 {a height limit draws what fits and returns the rest} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  # 12 pt leading is 4.23 mm, so 20 mm hold four lines.
+  set result [$doc text $::flowBody -at {20 30} -width 60 -height 20]
+  set drawn [flowLines [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [dict keys $result] $drawn [expr {[dict get $result rest] ne {}}]
+} -result {{y rest} 4 1}
+
+test textFlow-1.2 {the rest is text, and picks up where the drawing stopped} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  set result [$doc text $::flowBody -at {20 30} -width 60 -height 20]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The rest is the TAIL of the body: whatever was held back, in order and
+  # complete. Both sides are normalised first - the source string is wrapped
+  # across several lines of Tcl, and the rest is rebuilt with single spaces.
+  set rest [dict get $result rest]
+  regsub -all {\s+} $::flowBody { } whole
+  regsub -all {\s+} $rest { } tail
+  list [expr {[string first $tail $whole] > 0}] \
+      [expr {[string range $whole end-[expr {[string length $tail] - 1}] end]
+          eq $tail}]
+} -result {1 1}
+
+test textFlow-1.3 {a rest that fits comes back empty} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  set result [$doc text "Kurz." -at {20 30} -width 60 -height 40]
+  $doc destroy
+  dict get $result rest
+} -result {}
+
+test textFlow-1.4 {without a height limit the return value is unchanged} -body {
+  # The regression guard for every existing caller: no -height, no dictionary.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  set y [$doc text $::flowBody -at {20 30} -width 60]
+  set height [$doc textHeight $::flowBody 60]
+  $doc destroy
+  expr {abs($y - (30 + $height)) < 0.001}
+} -result 1
+
+test textFlow-1.5 {the rest keeps paragraph boundaries} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  set result [$doc text "Erster Absatz.\nZweiter Absatz.\nDritter Absatz." \
+      -at {20 30} -width 60 -height 8]
+  $doc destroy
+  # One line fits; the two paragraphs held back stay two paragraphs.
+  list [llength [split [dict get $result rest] \n]] \
+      [string match {*Zweiter*} [dict get $result rest]]
+} -result {2 1}
+
+test textFlow-2.1 {an indent narrows the column and moves the lines} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9
+  $doc text $::flowBody -at {20 30} -width 60 -indent 10
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # 30 mm from the left edge of the page, in points, on every line.
+  list [llength [lsort -unique $starts]] [lindex $starts 0]
+} -result {1 85.04}
+
+test textFlow-2.2 {-firstIndent only moves the first line of a paragraph} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9
+  $doc text $::flowBody -at {20 30} -width 60 -firstIndent 8
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The first line starts 8 mm further in, the others at the column edge.
+  list [lindex $starts 0] [lindex $starts 1] \
+      [llength [lsort -unique [lrange $starts 1 end]]]
+} -result {79.37 56.69 1}
+
+test textFlow-2.3 {a negative -firstIndent hangs the first line out} -body {
+  # The hanging indent of a numbered list: the first line starts left of the
+  # column, the rest of the paragraph is indented under it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9
+  $doc text $::flowBody -at {20 30} -width 60 -indent 10 -firstIndent -10
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [lindex $starts 0] [lindex $starts 1]
+} -result {56.69 85.04}
+
+test textFlow-2.4 {-paragraphSpacing shows up between paragraphs only} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  $doc text "Eins.\nZwei.\nDrei." -at {20 30} -width 60 -paragraphSpacing 5
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set ys [::tclpdfTest::starts $stream y]
+  # 12 pt leading plus 5 mm spacing, the same between each pair.
+  list [lsort -unique [::tclpdfTest::steps $ys]] [llength $ys]
+} -result {26.17 3}
+
+test textFlow-3.1 {a rectangle pushes the lines beside it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  # The shape sits on the left of the first two lines, so those start to its
+  # right; the text is long enough to run past it and come back.
+  set body $::flowBody
+  append body " " $::flowBody
+  $doc text $body -at {20 30} -width 120 -avoid {{rect {20 30} {40 12}}}
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The lines beside the rectangle start after it, the one below it at the
+  # column edge again. The FIRST line is not pushed: its baseline sits exactly
+  # on the top edge of the shape, so its letters stand above the shape and its
+  # band only touches it - which is right, and worth pinning down.
+  list [lindex $starts 0] [expr {[lindex $starts 1] > 160}] [lindex $starts end]
+} -result {56.69 1 56.69}
+
+test textFlow-3.2 {a circle narrows the lines by its chord} -body {
+  # The point of treating a circle as a circle: the line through the middle is
+  # pushed furthest, the ones at top and bottom hardly at all. A bounding box
+  # would push them all equally.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 8 -leading 10
+  # Long enough to reach past the circle: it sits between 40 and 80 mm, and a
+  # short paragraph would simply end above it.
+  set body {}
+  for {set n 0} {$n < 8} {incr n} {
+    append body $::flowBody " "
+  }
+  $doc text $body -at {20 30} -width 150 -avoid {{circle {40 60} 20}}
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # Several different starts, and the widest push is larger than the first
+  # one that meets the circle at all.
+  set pushed [lsearch -all -inline -not $starts 56.69]
+  list [expr {[llength [lsort -unique $pushed]] > 2}] \
+      [expr {[lindex [lsort -real $pushed] end] > [lindex [lsort -real $pushed] 0]}]
+} -result {1 1}
+
+test textFlow-3.3a {-avoidMargin keeps the text off the shape} -body {
+  # Without it the words touch the picture, which reads as a mistake even
+  # though the geometry is exact. The distance is a property of the layout,
+  # not of the shape, so it is stated per block.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  set body $::flowBody
+  append body " " $::flowBody
+  $doc text $body -at {20 30} -width 120 -avoid {{rect {20 30} {40 12}}}
+  set tight [flowStarts [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc text $body -at {20 30} -width 120 -avoid {{rect {20 30} {40 12}}} \
+      -avoidMargin 5
+  set roomy [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # 5 mm further to the right, in points, on the lines beside the rectangle.
+  expr {abs(([lindex $roomy 1] - [lindex $tight 1]) - 14.17) < 0.01}
+} -result 1
+
+test textFlow-3.3b {a shape may carry a margin of its own} -body {
+  # A picture with a caption under it needs more room than a rule beside the
+  # column, so the per-shape value wins over the one for the block.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  set body $::flowBody
+  append body " " $::flowBody
+  $doc text $body -at {20 30} -width 120 \
+      -avoid {{rect {20 30} {40 12} 10}} -avoidMargin 2
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc text $body -at {20 30} -width 120 -avoid {{rect {20 30} {40 12}}} \
+      -avoidMargin 2
+  set plain [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # 8 mm more than the block margin of 2, in points.
+  expr {abs(([lindex $starts 1] - [lindex $plain 1]) - 22.68) < 0.01}
+} -result 1
+
+test textFlow-3.3c {the margin grows a circle in every direction} -body {
+  # Not only sideways: a margin that only widened the chord would let the
+  # lines above and below the circle run into it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 8 -leading 10
+  set body {}
+  for {set n 0} {$n < 8} {incr n} {
+    append body $::flowBody " "
+  }
+  $doc text $body -at {20 30} -width 150 -avoid {{circle {40 60} 20}}
+  set tight [llength [lsearch -all -inline -not [flowStarts \
+      [::tclpdfTest::content $doc]] 56.69]]
+  $doc page add
+  $doc text $body -at {20 30} -width 150 -avoid {{circle {40 60} 20}} \
+      -avoidMargin 6
+  set roomy [llength [lsearch -all -inline -not [flowStarts \
+      [::tclpdfTest::content $doc]] 56.69]]
+  $doc destroy
+  # A larger circle reaches into more line bands, so more lines are pushed.
+  expr {$roomy > $tight}
+} -result 1
+
+test textFlow-3.3 {a shape below the text changes nothing} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  $doc text $::flowBody -at {20 30} -width 60
+  set plain [::tclpdfTest::content $doc]
+  $doc page add
+  $doc text $::flowBody -at {20 30} -width 60 -avoid {{rect {20 200} {40 20}}}
+  set avoided [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {$plain eq $avoided}
+} -result 1
+
+test textFlow-3.4 {an unknown shape is refused at the call} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc text "x" -at {20 30} -width 60 \
+          -avoid {{triangle {1 2} 3}}} triangle] \
+      [catch {$doc text "x" -at {20 30} -width 60 -avoid {{rect {1 2}}}} short]]
+  $doc destroy
+  list $codes [string match {*not \"triangle\"*} $triangle] \
+      [string match {*{rect {x y} {width height} ?margin?}*} $short]
+} -result {{1 1} 1 1}
+
+cleanupTests
