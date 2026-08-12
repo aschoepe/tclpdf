@@ -1,5 +1,5 @@
-C Fix\sjustified,\srotated\sand\sanchored\stext,\sthe\ssubset\sprefix,\sand\sclose\sthe\stest\sand\sexample\sgaps\n\n-\stext.tcl:\sword\sspacing\sfor\sembedded\sfaces\snow\scomes\sfrom\sa\sTJ\sarray\sinstead\sof\sTw,\swhich\shas\sno\seffect\sunder\sIdentity-H\s-\sjustified\stext\scame\sout\sflush\sleft\sin\severy\sdocument\swith\san\sembedded\sfont,\sand\sPDF/A\srequires\sembedding\n-\stext.tcl,\stextBlock.tcl:\soffsets\sacross\sthe\sbaseline\s-\sthe\sascender\sof\s-anchor\stop\sand\sthe\sline\sadvance\sof\sa\sparagraph\s-\sare\sapplied\sin\sthe\stext\smatrix\sand\stherefore\sturn\swith\s-rotate;\sa\srotated\sparagraph\sdrew\sall\sof\sits\slines\son\stop\sof\sone\sanother\n-\sfont.tcl:\sa\sface\sembedded\swhole\sthrough\s"font\sembed\s-subset\s0"\sno\slonger\scarries\sa\ssix-letter\ssubset\sprefix,\sand\sthe\sname\sis\sderived\sonce\sfor\sthe\sdescriptor,\sthe\sCID\sfont\sand\sthe\sType0\sfont\n-\sdoc/tclpdf.md:\sthe\stable\shooks\sare\snamed\sas\sthey\sare\s-\sdidParseCell\sexists\sand\swas\sundocumented,\swillDrawPage\snever\sexisted\sand\swas\n-\sdoc/PLUGINS.md:\sprivate\scatalog\skeys\scarry\sthe\sXX\sprefix\sAnnex\sE\srequires,\sthe\soo::define\sexample\srequires\stclpdf::document\swithout\swhich\sit\sfails,\sand\sboth\sexamples\swere\srun\sverbatim\sagain\n-\stests/page.test:\snew,\sfor\scoords,\sdistance,\sextent,\sfitExtent\sand\sthe\spage\scontent\sbuffer\s-\sthe\smeasuring\ssurface\severy\smodule\sdraws\sthrough,\sand\snone\sof\sit\shad\sa\stest\sof\sits\sown\n-\stests:\sthe\sdocumented\smethods\sand\soptions\sthat\snothing\shad\sever\sexercised,\sacross\sattach,\sfont,\sgraphics,\simage,\ssvg,\stable,\stext\sand\szugferd\n-\sexamples:\snew\s01.07-extension.tcl\sfor\sthe\splugin\ssurface\sand\s05.04-pdfa.tcl\sfor\sarchival\sdocuments\swithout\san\sinvoice;\s01.06-stamp.tcl\snow\scentres\sthe\sword\sacross\sits\sbaseline\stoo;\sthe\sothers\sgained\sthe\soptions\sthey\snever\sshowed\n-\sfont\sraised\sto\s1.1,\stext\sand\stextBlock\sto\s1.2,\sin\sthe\smodules\sand\sin\spkgIndex.tcl.in
-D 2026-08-12T09:28:43.266
+C Show\sdecimal\scommas\sin\sthe\sMINIMUM\sinvoice\sand\sgive\sthe\sSVG\spage\sroom\n\n-\sexamples/05.01-zugferd-minimum.tcl:\sthe\sprinted\stotals\suse\sa\scomma\sand\sthe\scolumn\slines\sup\son\sit\sthrough\s-decimal,\swhile\sthe\sattached\sXML\skeeps\sthe\spoint\sEN\s16931\sprescribes\n-\sexamples/03.03-svg.tcl:\sthe\ssecond\shalf\sof\sthe\spage\smoves\sdown\sso\sthe\ssize\slabel\sno\slonger\stouches\sthe\sheading\sbelow\sit\n-\sexamples/03.03-svg.tcl:\sthe\sinline\schart\sdraws\sits\sbars\slower,\sleaving\sthe\scaption\sabove\sthe\stallest\sone\slegible
+D 2026-08-12T12:22:23.413
 F Makefile.in 573119b92f4654e4303dc44222e021108c42394829e6192bb8a555747dc9b3c3
 F README ee487e417de5cef96bb94a70abbce88510f2be5000509071c148687736c178cc
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -27,11 +27,11 @@ F examples/02.03-font-families.tcl 61e9ae979801edb855cf5519730e1df07f216f8d0591b
 F examples/02.04-missing-glyphs.tcl f717f2535bcebaf2d0170b2decb8d5e88d6ff8a556dff06043c14876ad969fe4
 F examples/03.01-images.tcl 12b8d9203adbfd0c73f7e60ec159de4d52c996cf5dce4640c9df747182165133
 F examples/03.02-gradients.tcl dffa2652b9697c5f3d7fbbf3156f4e1d44ad62aa2d52541c6d3246d3c49f1134
-F examples/03.03-svg.tcl f97e0d298b17786eea6d1b3d72261b4d6f5a8d263fd5dc8959fc07230cdee43d
+F examples/03.03-svg.tcl 351f0bb27e66aa90247660f63250098d7f0c4ebefe0adcfcb5b66325d5d29279
 F examples/04.01-table-basics.tcl 7101577155a73f6ba5d94df4056b2b5c3f423060eb0c0118ea65fd52708233b3
 F examples/04.02-table-paging.tcl 87d365a4524b9d3ded06312f15cd740e8b315f4b80f975d0a1278672e9eba8ad
 F examples/04.03-table-spans.tcl ab2a66af0177333ccf30fc5327308ac154feb0e516f442abe0b2ff6d6d261a43
-F examples/05.01-zugferd-minimum.tcl 4339b4443cba5b38a8f5b71bf4607e4ba18b84ad67dbe6cd52b8e0951674f38e
+F examples/05.01-zugferd-minimum.tcl efbdeba908bfedfcbd244b7798f6b9a2f32084a9653050874ff58e95802a7cff
 F examples/05.02-zugferd-en16931.tcl bc92410c7b0dd453bb3c8b0178af96560436f17d0df36b6fa2e23ad65467d576
 F examples/05.03-navigation.tcl ded17638573066f3334f8d60b7a9145b356d669b594901989b4e1727b5e8133d
 F examples/05.04-pdfa.tcl 5e9628921c78ea7d2b409c30c0d4ede50f055376d53c92c40fb4df425c6defdd
@@ -138,8 +138,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl f20e82e15aa6690f109531bf65a936033f610a56b090fb6613b6a8ba41996152
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P a9941b2d1ff71ae01b0d7963722e880e640910169b81cfce072237151a2d0948
-R b579ae2cfe8be45605db391014b1f226
+P 455676147dbdfbf171f0eae723983efdf3a67fcad6b6fd0e6fb81eb7f727482e
+R 2280179d9f20a34b4f9b3da5996b54b9
 U alex
-Z 1e70ec235677985d7764e6f9d0f7cf7e
+Z 5fe75f995c5aeea2df7d01dd04f6290d
 # Remove this line to create a well-formed Fossil manifest.

@@ -62,14 +62,14 @@ if {[file exists $drawing]} {
 # -- the test drawings -----------------------------------------------------
 
 $doc font -style bold -size 10
-$doc text "The test drawings" -at {20 96}
+$doc text "The test drawings" -at {20 102}
 $doc font -style {} -size 8
 $doc text "Built so that a translation error is visible without reading the\
     source: every shape is labelled with what it must look like, and several\
     appear twice by different routes so they check themselves." \
-    -at {20 101} -width 170
+    -at {20 107} -width 170
 
-set y 112
+set y 118
 set x 20
 set skipped {}
 foreach name {svg-paths svg-arcs svg-shapes svg-transform} {
@@ -91,16 +91,16 @@ foreach name {svg-paths svg-arcs svg-shapes svg-transform} {
 # -- inline markup ---------------------------------------------------------
 
 $doc font -style bold -size 10
-$doc text "Markup passed in directly" -at {20 182}
+$doc text "Markup passed in directly" -at {20 188}
 $doc font -style {} -size 8
 $doc text "-data takes a string instead of a file: a chart, a sparkline or a\
     signature built at run time never has to touch the disk." \
-    -at {20 187} -width 170
+    -at {20 193} -width 170
 
 set bars {}
 set x 5
 foreach value {34 58 41 72 29 63} {
-    set height [expr {$value * 0.9}]
+    set height [expr {$value * 0.72}]
     append bars "<rect x=\"$x\" y=\"[expr {70 - $height}]\" width=\"12\"\
         height=\"$height\" fill=\"#4a6fa5\"/>"
     incr x 15
@@ -109,11 +109,11 @@ $doc svg -data "<svg viewBox=\"0 0 95 75\" xmlns=\"http://www.w3.org/2000/svg\">
     <line x1=\"0\" y1=\"70\" x2=\"95\" y2=\"70\" stroke=\"#333\" stroke-width=\"0.8\"/>
     $bars
     <text x=\"47\" y=\"8\" font-size=\"7\" text-anchor=\"middle\">built in Tcl</text>
-  </svg>" -at {20 196} -width 60
+  </svg>" -at {20 202} -width 60
 
 $doc font -size 7
-$doc text "The same numbers as a table, for comparison:" -at {90 200}
-$doc table -at {90 204} -width 60 -theme plain \
+$doc text "The same numbers as a table, for comparison:" -at {90 206}
+$doc table -at {90 210} -width 60 -theme plain \
     -head {{Month Value}} \
     -body {{Jan 34} {Feb 58} {Mar 41} {Apr 72} {May 29} {Jun 63}} \
     -columns {{} {align right}}

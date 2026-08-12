@@ -83,15 +83,28 @@ $doc text "Invoice [dict get $data number]" -at {20 66}
 $doc font -family body -size 9
 $doc text "Invoice date: [dict get $data date]" -at {20 74}
 
+# The printed page is read by a person, the attachment by a machine, and they
+# do not use the same decimal separator: the XML carries 235.62 because
+# ISO 20022 and EN 16931 prescribe the point, while a German invoice shows
+# 235,62. Only the presentation is localised - the figures themselves stay the
+# ones the attachment states, which is the whole promise of a hybrid invoice.
+#
+# -decimal tells the column which character to line the numbers up on; without
+# it the comma would be just another character and the alignment would break.
+proc localise {value} {
+    return [string map {. ,} $value]
+}
+
 # No item table - the XML has none. The totals are all it records.
 set y [$doc table -at {20 88} -width 110 -theme striped \
     -style {family body} -headStyle {family bodyBold} -footStyle {family bodyBold} \
+    -decimal , \
     -head {{Position Amount}} \
     -body [list \
-        [list "Net amount" [dict get $data netTotal]] \
-        [list "Tax" [format %.2f [expr {[dict get $data grandTotal] -
-            [dict get $data netTotal]}]]]] \
-    -foot [list [list "Total due" [dict get $data grandTotal]]] \
+        [list "Net amount" [localise [dict get $data netTotal]]] \
+        [list "Tax" [localise [format %.2f [expr {[dict get $data grandTotal] -
+            [dict get $data netTotal]}]]]]] \
+    -foot [list [list "Total due" [localise [dict get $data grandTotal]]]] \
     -columns {{} {width 34 align decimal}}]
 
 $doc font -family bodyBold -size 10
