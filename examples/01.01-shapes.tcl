@@ -139,6 +139,27 @@ $doc page box crop {5 5 292 205}
 $doc rect -at {10 10} -size {277 190} -stroke {0.7 0.7 0.7} -width 0.3 -dash {2 2}
 $doc circle -at {148.5 105} -radius 60 -fill {cmyk 0 0.15 0.9 0} -stroke black -width 0.5
 
+# -- corners and open outlines ----------------------------------------------
+
+# How a corner is mitred only shows on a thick line. The three chevrons use
+# the same points and differ in -join alone: miter runs the two edges out to
+# their intersection, round arcs across it, bevel cuts it off.
+set x 20
+foreach join {miter round bevel} {
+  $doc polygon -points [list $x 40 [expr {$x + 20}] 20 [expr {$x + 40}] 40] \
+      -stroke {0.2 0.35 0.55} -width 6 -join $join -close 0
+  $doc text $join -at [list [expr {$x + 20}] 16] -align center -size 8
+  incr x 60
+}
+
+# -close is what tells a polygon from a polyline: the default joins the last
+# point back to the first, and -close 0 leaves the outline open. Filled, the
+# two look identical - it is the stroke that differs.
+$doc polygon -points {210 20 240 20 225 45} -stroke crimson -width 2
+$doc text "closed" -at {225 55} -align center -size 8
+$doc polygon -points {250 20 280 20 265 45} -stroke crimson -width 2 -close 0
+$doc text "open" -at {265 55} -align center -size 8
+
 exampleFooter $doc
 
 $doc write $target

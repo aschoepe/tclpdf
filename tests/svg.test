@@ -442,4 +442,39 @@ test svg-5.6 {one userSpaceOnUse gradient filling two shapes stays one object} -
   list [llength $names] [regexp -all {scn} $content]
 } -result {1 2}
 
+test svg-6.1 {a height alone scales the drawing by its own aspect ratio} -body {
+  # -width was used by every test and example, -height by none - although the
+  # manual offers both. A drawing that has to fit a table row is placed by its
+  # height, and that path had never run.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="200" height="100" fill="red"/></svg>} \
+      -at {10 10} -height 25
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The drawing keeps its viewBox coordinates and is scaled by the "cm"
+  # matrix, so that is where the size has to be read: the viewBox is twice as
+  # wide as it is tall, and 25 mm of height therefore make 50 mm of width.
+  regexp {([0-9.]+) 0 0 (-?[0-9.]+) [0-9.]+ [0-9.]+ cm} $stream -> sx sy
+  list [format %.2f [expr {200 * $sx}]] [format %.2f [expr {100 * abs($sy)}]]
+} -result {141.73 70.87}
+
+test svg-6.2 {width and height together are a box, not a stretch} -body {
+  # The difference to a picture, and worth pinning: [image place] with both
+  # given obeys both, an SVG is FITTED into the box and keeps its proportions
+  # (preserveAspectRatio "xMidYMid meet", the same rule as svg-3.2). A caller
+  # who expects the picture behaviour gets a drawing that is not stretched.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="200" height="100" fill="red"/></svg>} \
+      -at {10 10} -width 40 -height 40
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([0-9.]+) 0 0 (-?[0-9.]+) [0-9.]+ [0-9.]+ cm} $stream -> sx sy
+  # 40 mm wide, and half that tall - not 40 by 40.
+  list [format %.2f [expr {200 * $sx}]] [format %.2f [expr {100 * abs($sy)}]]
+} -result {113.39 56.69}
+
 cleanupTests

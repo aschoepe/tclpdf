@@ -234,4 +234,76 @@ test zugferd-6.2 {siblings are linked both ways} -body {
   list [regexp -all {/Prev \d+ 0 R} $bytes] [regexp -all {/Next \d+ 0 R} $bytes]
 } -result {2 2}
 
+test zugferd-5.3 {a tooltip becomes the annotation's Contents} -body {
+  # The tooltip is what a reader shows on hover and what a screen reader
+  # announces - the only text a link annotation carries at all.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc link -at {20 20} -size {40 5} -url "https://example.org/" \
+      -tooltip "The example, and nothing else"
+  set path [::tclpdfTest::scratch tooltip.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Contents \(The example, and nothing else\)} $bytes
+} -result 1
+
+test zugferd-6.3 {bookmarks reports the tree that was built} -body {
+  # The reading half of the outline facade: [bookmark] returns a handle and
+  # nothing could ever ask what the tree looks like without writing the file
+  # first. A caller building a table of contents needs exactly this.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc page add
+  $doc bookmark "eins" -page 0
+  set chapter [$doc bookmark "zwei" -page 1]
+  $doc bookmark "drei" -page 1 -parent $chapter
+  set entries [$doc bookmarks]
+  $doc destroy
+  list [llength $entries] [dict get [lindex $entries 2] title] \
+      [expr {[dict get [lindex $entries 2] parent] eq $chapter}] \
+      [dict get [lindex $entries 1] page]
+} -result {3 drei 1 1}
+
+test zugferd-7.1 {pdfa declares the conformance the caller asks for} -constraints {haveIcc haveInvoice} -body {
+  # [pdfa] on its own - without ZUGFeRD around it - is how a plain archival
+  # document is made, and it was reached only through [zugferd] until now.
+  set doc [archivable $face]
+  $doc pdfa -part 3 -conformance B -profile $icc
+  set state [$doc pdfa state]
+  set path [::tclpdfTest::scratch pdfa-plain.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [dict get $state part] [dict get $state conformance] \
+      [regexp {pdfaid:part>3<} $bytes] [regexp {pdfaid:conformance>B<} $bytes] \
+      [regexp {/OutputIntent} $bytes] [regexp {/S /GTS_PDFA1} $bytes]
+} -result {3 B 1 1 1 1}
+
+test zugferd-7.2 {the ICC profile is embedded once, however often it is set} -constraints {haveIcc haveInvoice} -body {
+  # The output intent is written on every [write], so a second run must reuse
+  # the reserved objects instead of embedding the profile again.
+  set doc [archivable $face]
+  $doc pdfa -part 3 -conformance B -profile $icc
+  set path [::tclpdfTest::scratch pdfa-twice.pdf]
+  $doc write $path
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/N 3} $bytes] [regexp -all {/OutputIntents} $bytes]
+} -result {1 1}
+
+test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc pdfa -part 1
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*PDF/A-1 forbids transparency*use part 2*}
+
 cleanupTests

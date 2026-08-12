@@ -250,6 +250,43 @@ test image-5.2 {a width alone keeps the aspect ratio} -constraints haveImages -b
   list $w [format %.1f $h]
 } -result {80 60.0}
 
+test image-5.3 {a height alone keeps the aspect ratio too} -constraints haveImages -body {
+  # The counterpart to 5.2, and the half nothing ever called: -height is
+  # documented for both [image place] and [svg], and every test and example
+  # reached for -width. A picture scaled by its height is the normal case when
+  # it has to fit a line of text or a table row.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image embed photo $photo
+  lassign [$doc image size photo -height 60] w h
+  $doc destroy
+  list [format %.1f $w] $h
+} -result {80.0 60}
+
+test image-5.4 {width and height together override the ratio} -constraints haveImages -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image embed photo $photo
+  set size [$doc image size photo -width 40 -height 40]
+  $doc destroy
+  set size
+} -result {40 40}
+
+test image-5.5 {-height reaches the placement matrix, not just the arithmetic} -constraints haveImages -body {
+  # Measuring [image size] alone would not catch a place that ignores the
+  # height it was given: the numbers in the "cm" matrix are what ends up on
+  # the page.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image embed photo $photo
+  $doc image place photo -at {10 10} -height 30
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # 40 mm by 30 mm in points, as the scale part of the matrix.
+  regexp {([0-9.]+) 0 0 ([0-9.]+) [0-9.]+ [0-9.]+ cm} $stream -> sx sy
+  list [format %.2f $sx] [format %.2f $sy]
+} -result {113.39 85.04}
+
 test image-draw-6.1 {draw takes a path and embeds on the way} -constraints haveImages -body {
   # [image draw] - the one-step form for a picture used once - was called by
   # no test and no example. It embeds under a generated alias and places in

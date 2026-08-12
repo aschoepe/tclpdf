@@ -176,6 +176,37 @@ test attach-3.4 {Params Size is the uncompressed length} -body {
   list $size [expr {$length < 5000}]
 } -result {5000 1}
 
+test attach-3.5 {-date becomes the ModDate of the embedded file} -body {
+  # The documented way to say when the attached file was made. ZUGFeRD readers
+  # and archives both look at it, and nothing had ever passed one - so the
+  # option could have been spelled anything at all.
+  set path [::tclpdfTest::scratch attach-date.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data "Rechnung" -name rechnung.txt -date "D:20260812093000+02'00'"
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Inside /Params, next to /Size - not as a document date.
+  regexp {/Params << [^>]*?/ModDate \(D:20260812093000\+02'00'\)} $bytes
+} -result 1
+
+test attach-3.6 {without -date no ModDate is invented} -body {
+  # The counterpart: a date nobody gave must not appear, or every attachment
+  # would carry the moment it happened to be written and no two runs of the
+  # same document would be byte-identical.
+  set path [::tclpdfTest::scratch attach-nodate.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data "Rechnung" -name rechnung.txt
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Params << [^>]*?/ModDate} $bytes
+} -result 0
+
 test attach-4.1 {a private method can be hooked onto an event} -body {
   # onSelf exists because the bus calls from the global context, where a
   # method starting with a capital is not exported and "$doc Method" fails.

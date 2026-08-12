@@ -397,6 +397,93 @@ test table-10.2 {a table broken over pages is framed once per page} -body {
   list [expr {$pages > 1}] [lsort -unique $counts] [lsort -unique $heights]
 } -result {1 1 1}
 
+test table-11.1 {a foot row is drawn below the body} -body {
+  # The whole -foot section had no test at all: a table can be built, broken
+  # and framed without one, so nothing ever noticed. It is where the total
+  # goes, which is the part a reader looks at first.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -head {{Posten Betrag}} \
+      -body {{Kabel 12} {Stecker 8}} -foot {{Summe 20}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Present, and after the last body row rather than before it.
+  list [expr {[string first Summe $stream] >= 0}] \
+      [expr {[string first Summe $stream] > [string first Stecker $stream]}]
+} -result {1 1}
+
+test table-11.2 {-repeatFoot carries the foot onto every page} -body {
+  # The default is 0 - a total repeated on every page would be read as a page
+  # total and is wrong more often than right. Asking for it has to work all
+  # the same, and this is the half nothing exercised.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 20} -width 170 -head {{Pos Artikel Menge}} \
+      -body [rows 90] -foot {{"Zwischensumme" "" 42}} -repeatFoot 1
+  set pages [$doc page count]
+  set seen {}
+  for {set page 0} {$page < $pages} {incr page} {
+    lappend seen [expr {[string first Zwischensumme \
+        [::tclpdfTest::content $doc $page]] >= 0}]
+  }
+  $doc destroy
+  list [expr {$pages > 1}] [lsort -unique $seen]
+} -result {1 1}
+
+test table-11.3 {without -repeatFoot it appears once} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 20} -width 170 -head {{Pos Artikel Menge}} \
+      -body [rows 90] -foot {{"Zwischensumme" "" 42}}
+  set pages [$doc page count]
+  set count 0
+  for {set page 0} {$page < $pages} {incr page} {
+    if {[string first Zwischensumme [::tclpdfTest::content $doc $page]] >= 0} {
+      incr count
+    }
+  }
+  $doc destroy
+  list [expr {$pages > 1}] $count
+} -result {1 1}
+
+test table-11.4 {each section takes its own style} -body {
+  # -headStyle, -bodyStyle and -footStyle are three separate dictionaries laid
+  # over the theme, and only the theme's own versions had ever been used. A
+  # caller who colours the three differently is the normal case, not an edge.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 20} -width 100 -theme plain \
+      -head {{A B}} -body {{1 2}} -foot {{S 3}} \
+      -headStyle {color {1 0 0}} -bodyStyle {color {0 0.5 0}} \
+      -footStyle {color {0 0 1}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The text colour of each section, in the order the sections are drawn.
+  set colours {}
+  foreach match [regexp -all -inline {[0-9.]+ [0-9.]+ [0-9.]+ rg} $stream] {
+    set colour [lrange $match 0 2]
+    if {$colour ni $colours} {
+      lappend colours $colour
+    }
+  }
+  set colours
+} -result {{1 0 0} {0 0.5 0} {0 0 1}}
+
+test table-11.5 {a section style overrides the theme, not the other way round} -body {
+  # The order matters and is easy to get backwards: the theme is the base and
+  # the caller's dictionary goes ON TOP. Reversed, every -headStyle would be
+  # silently ignored for any key the theme happens to set - and "striped"
+  # sets the head fill.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 20} -width 100 -theme striped \
+      -head {{A B}} -body {{1 2}} -headStyle {fill {1 0 0}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The head fill is the caller's red, not the theme's dark blue.
+  expr {[string first "1 0 0 rg" $stream] >= 0}
+} -result 1
+
 test table-10.3 {an unknown border value names the known ones} -body {
   # It used to fall through every branch and draw nothing, in silence.
   set doc [tclpdf new -unit mm]

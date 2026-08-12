@@ -89,12 +89,38 @@ $doc text "avoids every character WinAnsi lacks" -at {154 70} -align center
 $doc font -family faceBold -size 11 -color black
 $doc text "What embedding costs" -at {20 92}
 
+# The two rules mark the column this paragraph is justified to. They are here
+# to be measured against: an embedded face is addressed through Identity-H,
+# where the word spacing operator Tw has nothing to act on - it applies to the
+# single-byte code 32, and there is no such byte in a two-byte encoding. The
+# gaps are therefore opened with TJ, and the proof that they are is that every
+# line but the last one ends exactly on the right rule.
+$doc line -from {20 96} -to {20 128} -stroke {0.8 0.8 0.85} -width 0.2
+$doc line -from {190 96} -to {190 128} -stroke {0.8 0.8 0.85} -width 0.2
+
 $doc font -family face -size 9
 set y [$doc text "The face on disk is [file size $regular] bytes. Only the\
     glyphs set on this page go into the document, so the file below is a\
     fraction of that. Subsetting is not an option to switch on - it is the\
-    only way a document with two weights stays small enough to send." \
+    only way a document with two weights stays small enough to send, and\
+    justified text like this one reaches the rule on the right because the\
+    gaps are widened glyph by glyph rather than by an operator that a\
+    two-byte encoding never sees." \
     -at {20 99} -width 170 -align justify -anchor top]
+
+# What subsetting is worth, measured rather than claimed: the same page once
+# more, with "-subset 0" - the documented escape hatch for a face that has to
+# stay complete, because a form is filled in afterwards or a reader refuses
+# subsets. The file is written to a scratch name, weighed and deleted again.
+set whole [tclpdf new -unit mm]
+$whole page add
+$whole font embed face $regular -subset 0
+$whole text "Zofia Krzyzanowska" -at {20 20} -family face -size 16
+set wholePath [file join [file dirname $target] whole-face.tmp.pdf]
+$whole write $wholePath
+$whole destroy
+set wholeSize [file size $wholePath]
+file delete $wholePath
 
 $doc table -at [list 20 [expr {$y + 6}]] -width 130 -theme grid \
     -style {family face} -headStyle {family faceBold} \
@@ -102,6 +128,7 @@ $doc table -at [list 20 [expr {$y + 6}]] -width 130 -theme grid \
     -body [list \
         [list "DejaVuSans.ttf on disk" [file size $regular]] \
         [list "DejaVuSans-Bold.ttf on disk" [file size $bold]] \
+        [list "one name, whole face embedded" $wholeSize] \
         [list "this document, both faces embedded" "written below"]] \
     -columns {{} {align right}}
 

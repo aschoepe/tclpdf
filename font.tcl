@@ -194,8 +194,13 @@ oo::define ::tclpdf::document::document {
         [list Length1 [string length $fontBytes] Filter /FlateDecode] \
         [::tclpdf::filter encodeFlate $fontBytes]]
 
+    # Derived once and passed on: the name has to be the SAME in all three
+    # places (descriptor, CID font, Type0 font), and deriving it three times is
+    # how two of them would one day disagree.
+    set baseName [my FontBaseName $parsed $alias [dict get $entry subset]]
+
     set descriptorNumber [$writer add [::tclpdf::pdfObj dictionary \
-        [my FontDescriptorPairs $parsed $alias [$writer ref $fontFileNumber]]]]
+        [my FontDescriptorPairs $parsed $baseName [$writer ref $fontFileNumber]]]]
 
     # The CID font.
     #
@@ -213,7 +218,7 @@ oo::define ::tclpdf::document::document {
         [::tclpdf::filter encodeFlate [my FontCidToGid $mapping]]]
     set descendantNumber [$writer add [::tclpdf::pdfObj dictionary [list \
         Type /Font Subtype /CIDFontType2 \
-        BaseFont [::tclpdf::pdfObj name [my FontBaseName $parsed $alias]] \
+        BaseFont [::tclpdf::pdfObj name $baseName] \
         CIDSystemInfo [::tclpdf::pdfObj dictionary [list \
             Registry [::tclpdf::pdfObj str Adobe] \
             Ordering [::tclpdf::pdfObj str Identity] \
@@ -228,21 +233,28 @@ oo::define ::tclpdf::document::document {
 
     $writer put [dict get $entry number] [::tclpdf::pdfObj dictionary [list \
         Type /Font Subtype /Type0 \
-        BaseFont [::tclpdf::pdfObj name [my FontBaseName $parsed $alias]] \
+        BaseFont [::tclpdf::pdfObj name $baseName] \
         Encoding /Identity-H \
         DescendantFonts [::tclpdf::pdfObj arr [list [$writer ref $descendantNumber]]] \
         ToUnicode [$writer ref $toUnicodeNumber]]]
     return
   }
 
-  method FontBaseName {parsed alias} {
+  method FontBaseName {parsed alias {subsetted 1}} {
     if {[dict exists [dict get $parsed names] postScript]} {
       set name [dict get $parsed names postScript]
     } else {
       set name $alias
     }
-    # A subset name carries a six-letter tag by convention (9.9.2). It is
-    # derived from the name so that the same font gives the same tag.
+    # The six-letter tag says "this is a subset" (9.9.2) - so a face embedded
+    # WHOLE, through "font embed -subset 0", must not carry one. It did until
+    # now, which named a complete DejaVuSans a subset of itself: a reader
+    # merging fonts across documents is told to keep two incompatible copies,
+    # and a preflight tool is entitled to reject the file.
+    if {!$subsetted} {
+      return [string map {{ } {}} $name]
+    }
+    # The tag is derived from the name so that the same font gives the same one.
     set tag {}
     set seed 0
     foreach char [split $name {}] {
@@ -254,7 +266,7 @@ oo::define ::tclpdf::document::document {
     return "$tag+[string map {{ } {}} $name]"
   }
 
-  method FontDescriptorPairs {parsed alias fontFileRef} {
+  method FontDescriptorPairs {parsed baseName fontFileRef} {
     set units [dict get $parsed unitsPerEm]
     lassign [dict get $parsed bbox] xMin yMin xMax yMax
     set scale [expr {1000.0 / $units}]
@@ -265,7 +277,7 @@ oo::define ::tclpdf::document::document {
       incr flags 64
     }
     return [list Type /FontDescriptor \
-        FontName [::tclpdf::pdfObj name [my FontBaseName $parsed $alias]] \
+        FontName [::tclpdf::pdfObj name $baseName] \
         Flags $flags \
         FontBBox [::tclpdf::pdfObj arr [list \
             [::tclpdf::pdfObj num [expr {$xMin * $scale}]] \
@@ -344,4 +356,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.0
+package provide tclpdf::font 1.1

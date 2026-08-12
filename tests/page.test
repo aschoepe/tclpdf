@@ -1,0 +1,173 @@
+# page.test --
+#
+# The page module's measuring surface: coords, distance, extent, fitExtent and
+# the content buffer.
+#
+# These four are the layer every topical module draws through, and until now
+# not one of them had a test of its own - they were exercised only as a side
+# effect of drawing something. That is the wrong way round: a defect in [coords]
+# shows up as a picture in the wrong place three modules away, and the test that
+# fails then says nothing about where it came from.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::page
+package require tclpdf::shape
+package require tclpdf::xObject
+source [file join [file dirname [info script]] helper.tcl]
+
+proc pageRound {values {digits 3}} {
+  return [lmap value $values {format %.*f $digits $value}]
+}
+
+test page-coords-1.1 {the y axis is mirrored, the x axis is not} -body {
+  # A4 is 841.89 pt high, 10 mm is 28.346 pt: x passes through, y is measured
+  # from the top. The whole package depends on this one line.
+  set doc [tclpdf new]
+  $doc page add
+  set point [$doc coords 10 10]
+  $doc destroy
+  pageRound $point
+} -result {28.346 813.543}
+
+test page-coords-1.2 {the origin follows the unit, not the number} -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set point [$doc coords 10 10]
+  $doc destroy
+  # In points nothing is converted, so y is simply the page height less ten.
+  pageRound $point
+} -result {10.000 831.890}
+
+test page-coords-1.3 {inside a form the mirror axis is the form, not the page} -body {
+  # Measured the hard way once already: with the page height everything drawn
+  # into a form lands outside its bounding box - still in the file, not on the
+  # page, and no validator says a word.
+  set doc [tclpdf new]
+  $doc page add
+  set inside {}
+  $doc form create box -size {50 40} -script {
+    set inside [$doc coords 0 0]
+  }
+  $doc destroy
+  # The top left corner of a 40 mm tall form is at its own height in points.
+  pageRound $inside
+} -result {0.000 113.386}
+
+test page-distance-2.1 {a length carries no origin} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set values [list [$doc distance 10] [$doc distance 1 in] [$doc distance 10 pt]]
+  $doc destroy
+  pageRound $values
+} -result {28.346 72.000 10.000}
+
+test page-distance-2.2 {the document unit is the default, the argument wins} -body {
+  set doc [tclpdf new -unit cm]
+  $doc page add
+  set values [list [$doc distance 1] [$doc distance 1 mm]]
+  $doc destroy
+  pageRound $values
+} -result {28.346 2.835}
+
+test page-extent-3.1 {extent converts a pair the same way distance converts one} -body {
+  # The point of [extent] is that forms and tiling patterns share it. If it
+  # ever stopped agreeing with [distance], the two would drift apart silently.
+  set doc [tclpdf new]
+  $doc page add
+  set pair [$doc extent {10 20}]
+  set single [list [$doc distance 10] [$doc distance 20]]
+  $doc destroy
+  list [pageRound $pair] [expr {$pair eq $single}]
+} -result {{28.346 56.693} 1}
+
+test page-extent-3.2 {extent takes a unit like distance does} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set pair [$doc extent {10 20} pt]
+  $doc destroy
+  pageRound $pair
+} -result {10.000 20.000}
+
+test page-fit-4.1 {a width alone keeps the aspect ratio} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width 40 height {} scale {}}]
+  $doc destroy
+  pageRound $size
+} -result {40.000 20.000}
+
+test page-fit-4.2 {a height alone keeps it too} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width {} height 40 scale {}}]
+  $doc destroy
+  pageRound $size
+} -result {80.000 40.000}
+
+test page-fit-4.3 {both given means both obeyed, ratio or not} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width 40 height 40 scale {}}]
+  $doc destroy
+  pageRound $size
+} -result {40.000 40.000}
+
+test page-fit-4.4 {-size wins over everything else} -body {
+  # The order matters: -size is the caller being explicit, and a -width left
+  # over from an earlier call must not quietly override it.
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {30 30} width 40 height 40 scale 2}]
+  $doc destroy
+  pageRound $size
+} -result {30.000 30.000}
+
+test page-fit-4.5 {scale multiplies the natural size} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width {} height {} scale 0.5}]
+  $doc destroy
+  pageRound $size
+} -result {50.000 25.000}
+
+test page-fit-4.6 {nothing given leaves the natural size alone} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width {} height {} scale {}}]
+  $doc destroy
+  pageRound $size
+} -result {100.000 50.000}
+
+test page-content-5.1 {the buffer can be read back per page} -body {
+  # [page content] is the diagnosis tool the manual points at, and it takes an
+  # index: without it a test can only ever see the page it is standing on.
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill red
+  $doc page add
+  $doc circle -at {50 50} -radius 10 -stroke black
+  set first [$doc page content 0]
+  set second [$doc page content 1]
+  set current [$doc page content]
+  $doc destroy
+  list [string match {*re*} $first] [string match {*re*} $second] \
+      [expr {$current eq $second}]
+} -result {1 0 1}
+
+test page-content-5.2 {an index outside the document is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page content 7} message]
+  $doc destroy
+  list $code [string match {*page*} $message]
+} -result {1 1}
+
+cleanupTests

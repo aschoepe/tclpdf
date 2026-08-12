@@ -75,7 +75,12 @@ $doc font -style {} -size 8
 $doc image place photo -at {20 88} -width 25
 $doc image place photo -at {55 88} -width 25 -rotate 12
 $doc image place photo -at {90 88} -width 25 -opacity 0.35
-$doc text "embedded once, placed three times" -at {20 118}
+# By height instead of width: what a picture needs when it has to fit a row
+# of a table or a line of text. The width follows from the aspect ratio, so
+# neither has to be worked out by hand.
+$doc image place photo -at {125 88} -height 18.75
+$doc text "embedded once, placed four times - the last one sized by its height" \
+    -at {20 118}
 
 # -- gradients -------------------------------------------------------------
 

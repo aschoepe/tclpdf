@@ -115,6 +115,26 @@ $doc text "The same rows as above, framed once instead of ruled per cell.\
 $doc table -at [list 20 [expr {$y + 16}]] -width 110 -theme grid \
     -style {border outer} -head $head -body $rows -columns $columns
 
+# -- styling the three sections apart --------------------------------------
+
+# -style applies to the whole table; -headStyle, -bodyStyle and -footStyle lay
+# over it, section by section. They go ON TOP of the theme rather than beside
+# it, so a single key can be changed without restating the rest of it.
+
+$doc font -style bold -size 10
+$doc text "-headStyle, -bodyStyle, -footStyle" -at [list 140 [expr {$y + 4}]]
+$doc font -style {} -size 8
+$doc text "The theme underneath is plain." -at [list 140 [expr {$y + 9}]] \
+    -width 55
+
+$doc table -at [list 140 [expr {$y + 16}]] -width 55 -theme plain \
+    -head {{Item Sum}} -body {{"parts" "18.20"} {"labour" "45.00"}} \
+    -foot {{"total" "63.20"}} \
+    -headStyle {fill {0.20 0.30 0.45} color white} \
+    -bodyStyle {color {0.25 0.25 0.3}} \
+    -footStyle {fill {0.90 0.92 0.96} fontStyle bold} \
+    -columns {{} {align decimal}}
+
 exampleFooter $doc
 
 $doc write $target

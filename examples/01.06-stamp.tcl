@@ -50,9 +50,31 @@ proc diagonalStamp {doc word args} {
     set diagonal [expr {sqrt($width * $width + $height * $height)}]
     set size [expr {$probe * [dict get $options -share] * $diagonal / $measured}]
 
+    # Centring the word takes TWO corrections, and only one of them is an
+    # option. -align center handles the length of the word along its baseline;
+    # across it, -at names the BASELINE, and the letters sit entirely above
+    # that line. At stamp sizes - here around 250 pt - the difference is half
+    # the cap height, some 30 mm, and the word visibly hangs towards the lower
+    # left corner.
+    #
+    # The cap height is read from the font's own metrics rather than guessed:
+    # capitals reach exactly it, and DRAFT has neither descenders nor
+    # lower-case letters, so the middle of the capitals IS the optical middle.
+    set face [::tclpdf::afm resolve helvetica bold]
+    set capHeight [expr {[dict get [::tclpdf::afm descriptor $face] CapHeight]
+        / 1000.0 * $size * 25.4 / 72}]
+
+    # The correction runs perpendicular to the baseline, so it turns with the
+    # word: at 0 degrees it is straight down the page, at the diagonal it is
+    # split between both axes. Measured on the rendered page - the same
+    # rotation sense the angle above uses.
+    set radians [expr {$angle * $pi / 180.0}]
+    set x [expr {$width / 2.0 + $capHeight / 2.0 * sin($radians)}]
+    set y [expr {$height / 2.0 + $capHeight / 2.0 * cos($radians)}]
+
     $doc save
     $doc opacity [dict get $options -opacity]
-    $doc text $word -at [list [expr {$width / 2.0}] [expr {$height / 2.0}]] \
+    $doc text $word -at [list $x $y] \
         -align center -rotate $angle \
         -family helvetica -style bold -size $size \
         -color [dict get $options -color]

@@ -90,8 +90,13 @@ foreach value $readings {
     append csv "$position,$value\n"
     incr position 5
 }
+# -date is when the DATA was recorded, not when this PDF was written. An
+# archive that keeps the report for ten years reads it off the attachment, and
+# a value nobody sets is left out rather than invented - which is also what
+# keeps two runs of the same document byte-identical.
 $doc attach -data $csv -name readings.csv -mime text/csv \
-    -relationship Data -description "The twenty individual readings"
+    -relationship Data -description "The twenty individual readings" \
+    -date "D:20260730081500+02'00'"
 
 # A second attachment, of a different kind: the procedure the report follows.
 $doc attach -data "ISO 2360 - eddy current method\nProbe: type N, calibrated\

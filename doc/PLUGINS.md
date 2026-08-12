@@ -41,7 +41,9 @@ These methods are the supported surface for extensions:
 | `$doc state $key ?$value?` | per-document state that does not go into the PDF |
 | `$doc writer` | the low-level writer object, for object numbers and bodies |
 
-A worked example — a subscriber that stores a private data stream and points a catalog key at it. Readers ignore catalog keys they do not know, so the file stays valid everywhere; the pattern is the same one the ZUGFeRD module uses for keys that matter:
+A worked example — a subscriber that stores a private data stream and points a catalog key at it. Readers ignore catalog keys they do not know, so the file stays valid everywhere; the pattern is the same one the ZUGFeRD module uses for keys that matter.
+
+**Name private keys accordingly.** ISO 32000-2 Annex E reserves unprefixed names for the standard itself: a key of your own carries either a prefix registered with the ISO maintenance agency or, without registration, `XX` — `XXMyOrgData` rather than `MyOrgData`. An unprefixed name is not refused by any reader, and that is the problem: it silently claims a place in the standard's namespace and collides with whatever is put there later.
 
 ```tcl
 package require tclpdf
@@ -52,8 +54,8 @@ proc ::myorg::write {doc} {
     # The same number on every write - this is what makes a second
     # [$doc write] come out identical instead of growing.
     set number [$doc reservation myorg::data]
-    $doc streamObject {Type /MyOrgData} {payload bytes} $number
-    $doc catalogEntry MyOrgData "$number 0 R"
+    $doc streamObject {Type /XXMyOrgData} {payload bytes} $number
+    $doc catalogEntry XXMyOrgData "$number 0 R"
 }
 
 set doc [tclpdf new -unit mm]
@@ -68,6 +70,7 @@ The topical modules attach their methods with `oo::define` on the document class
 
 ```tcl
 package require tclpdf
+package require tclpdf::document
 
 oo::define ::tclpdf::document::document {
   method letterhead {} {
@@ -81,10 +84,13 @@ package provide myorg::letterhead 1.0
 
 After the `oo::define`, `$doc letterhead` is an ordinary method on every document. To extend a single object instead of the class, use `oo::objdefine $doc` with the same body.
 
-Two conventions keep this safe:
+Three conventions keep this safe:
 
+- **Require `tclpdf::document`, not only `tclpdf`.** The document class is loaded on first use like every other module, so it does not exist yet when an extension runs `oo::define` at load time — the error then says the class does not refer to an object, which takes a while to read as "ask for it first".
 - **Prefix your method names** (`myorgLetterhead` rather than `letterhead`) when there is any chance of meeting another extension: two packages defining the same method overwrite each other silently, last one wins.
 - **Require your package explicitly.** tclpdf autoloads its own modules on first use, but it does not know about yours — the application has to `package require myorg::letterhead` before calling the method.
+
+A worked example of all of this together — the event bus, a method added with `oo::define`, a reserved object number and a private catalog key, plus the byte-identical second write that proves the extension is idempotent — is `examples/01.07-extension.tcl` in the source distribution.
 
 ## What not to rely on
 

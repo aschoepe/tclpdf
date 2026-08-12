@@ -131,7 +131,14 @@ oo::define ::tclpdf::document::document {
 
     set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
         [my cget -unit]]
-    set y [my TextBaseline $state $y [dict get $options anchor]]
+
+    # The anchor stays put and every line says how far BELOW it its baseline
+    # sits. Advancing y instead was correct only as long as nothing turned:
+    # each line was rotated about its own advanced point, so a rotated
+    # paragraph drew all of its lines on top of one another - measured, and
+    # unreadable. As a lift the advance goes through the text matrix and turns
+    # with the text, which is what makes the lines run across the page.
+    set lift [my TextLift $state [dict get $options anchor]]
 
     set lines [my textLines $string $width {*}[my TextOverrides $options]]
     set last [expr {[llength $lines] - 1}]
@@ -139,30 +146,39 @@ oo::define ::tclpdf::document::document {
     foreach line $lines {
       if {$line ne {}} {
         my TextParagraphLine $line $state $x $y $width $align \
-            [expr {$index == $last}] [dict get $options rotate]
+            [expr {$index == $last}] [dict get $options rotate] \
+            [expr {$lift + $index * $leading}]
       }
-      set y [expr {$y + $leading}]
       incr index
     }
-    return $y
+    # Where the next element goes: the baseline one line below the block. The
+    # lift belongs IN it - with -anchor top the caller gave the top edge, and
+    # the answer is a baseline, so the ascender is part of the distance.
+    # Dropping it moved every element after a paragraph up by one ascender,
+    # which the rendered examples caught and no test did.
+    #
+    # For a rotated block the block does not run down the page at all; a caller
+    # placing the next element has the angle and can say better than this
+    # method where "below" is.
+    return [expr {$y + $lift + [llength $lines] * $leading}]
   }
 
   # Alignment inside the column is a shift along the baseline and is passed
   # to TextRun rather than applied to x - with -rotate the baseline is
   # turned, and a pre-shifted x would rotate about the wrong point (same
   # reasoning as in [text], text.tcl).
-  method TextParagraphLine {line state x y width align isLast rotate} {
+  method TextParagraphLine {line state x y width align isLast rotate {lift 0}} {
     switch -- $align {
       left {
-        my TextRun $line $state $x $y $rotate
+        my TextRun $line $state $x $y $rotate 0 $lift
       }
       right {
         my TextRun $line $state [expr {$x + $width}] $y $rotate \
-            [my TextLineWidth $line $state]
+            [my TextLineWidth $line $state] $lift
       }
       center - centre {
         my TextRun $line $state [expr {$x + $width / 2.0}] $y $rotate \
-            [expr {[my TextLineWidth $line $state] / 2.0}]
+            [expr {[my TextLineWidth $line $state] / 2.0}] $lift
       }
       justify {
         # The last line of a paragraph stays flush left. Justifying it is the
@@ -170,7 +186,7 @@ oo::define ::tclpdf::document::document {
         # column and the result is unmistakably broken.
         set spaces [expr {[llength [regexp -all -inline {\S+} $line]] - 1}]
         if {$isLast || $spaces < 1} {
-          my TextRun $line $state $x $y $rotate
+          my TextRun $line $state $x $y $rotate 0 $lift
           return
         }
         set gap [expr {$width - [my TextLineWidth $line $state]}]
@@ -181,7 +197,7 @@ oo::define ::tclpdf::document::document {
         set stretched $state
         dict set stretched wordSpacing \
             [expr {[dict get $state wordSpacing] + $extra}]
-        my TextRun $line $stretched $x $y $rotate
+        my TextRun $line $stretched $x $y $rotate 0 $lift
       }
       default {
         return -code error "tclpdf: -align must be left, right, center or\
@@ -212,4 +228,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.1
+package provide tclpdf::textBlock 1.2

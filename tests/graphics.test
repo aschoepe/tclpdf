@@ -253,6 +253,158 @@ test graphics-clip-3.7 {the two forms are not mixed and not omitted} -body {
   set codes
 } -result {1 1 1 1 1}
 
+test graphics-stroke-5.1 {caps and joins reach the content stream} -body {
+  # Both are documented and neither was ever called by a test: the manual could
+  # have named any word at all for four releases without anybody noticing.
+  set doc [tclpdf new]
+  $doc page add
+  $doc line -from {10 10} -to {60 10} -stroke black -width 3 \
+      -cap round -join bevel
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # butt/round/square are 0/1/2 J, miter/round/bevel are 0/1/2 j (8.4.3.3).
+  list [string match {*1 J*} $stream] [string match {*2 j*} $stream]
+} -result {1 1}
+
+test graphics-stroke-5.2 {every documented cap and join has a number} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set caps {}
+  foreach {name expected} {butt 0 round 1 square 2} {
+    $doc page add
+    $doc line -from {10 10} -to {60 10} -stroke black -cap $name
+    lappend caps [string match "*$expected J*" [::tclpdfTest::content $doc]]
+  }
+  set joins {}
+  foreach {name expected} {miter 0 round 1 bevel 2} {
+    $doc page add
+    $doc line -from {10 10} -to {60 10} -stroke black -join $name
+    lappend joins [string match "*$expected j*" [::tclpdfTest::content $doc]]
+  }
+  $doc destroy
+  list $caps $joins
+} -result {{1 1 1} {1 1 1}}
+
+test graphics-stroke-5.3 {an invented cap or join is refused, not written} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes [list [catch {$doc line -from {1 1} -to {2 2} -cap flat} capMessage] \
+      [catch {$doc line -from {1 1} -to {2 2} -join sharp} joinMessage]]
+  $doc destroy
+  list $codes [string match {*butt, round or square*} $capMessage] \
+      [string match {*miter, round or bevel*} $joinMessage]
+} -result {{1 1} 1 1}
+
+test graphics-ellipse-6.1 {an ellipse is four Bezier arcs, not a rectangle} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc ellipse -at {50 50} -radius 10 -stroke black
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # One move, four curves, and no "re" anywhere.
+  list [llength [lsearch -all $operators m]] \
+      [llength [lsearch -all $operators c]] [expr {"re" in $operators}]
+} -result {1 4 0}
+
+test graphics-ellipse-6.2 {-size spans the given width and height} -body {
+  # -at is the CENTRE here, unlike rect. The extreme points of the outline
+  # therefore have to sit half a size away in each direction - which is the
+  # part a caller gets wrong first, and no operator count would show it.
+  set doc [tclpdf new]
+  $doc page add
+  $doc ellipse -at {50 50} -size {20 10} -stroke black
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set xs {}
+  set ys {}
+  # Only the path lines: the style header in front of them carries "0 0 0 RG",
+  # three numbers, and taking those along shifts every pair after it.
+  foreach line [split $stream \n] {
+    if {![regexp {[mc]$} $line]} {
+      continue
+    }
+    foreach {x y} [regexp -all -inline -- {-?[0-9]+\.?[0-9]*} $line] {
+      lappend xs $x
+      lappend ys $y
+    }
+  }
+  # 20 mm wide, 10 mm tall, in points.
+  list [format %.2f [expr {[tcl::mathfunc::max {*}$xs] - [tcl::mathfunc::min {*}$xs]}]] \
+      [format %.2f [expr {[tcl::mathfunc::max {*}$ys] - [tcl::mathfunc::min {*}$ys]}]]
+} -result {56.69 28.35}
+
+test graphics-ellipse-6.3 {circle is the same call with one radius} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc circle -at {50 50} -radius 10 -stroke black
+  set circle [::tclpdfTest::content $doc]
+  $doc page add
+  $doc ellipse -at {50 50} -radius 10 -stroke black
+  set ellipse [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {$circle eq $ellipse}
+} -result 1
+
+test graphics-ellipse-6.4 {an ellipse without a size or a centre is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes [list [catch {$doc ellipse -radius 10}] \
+      [catch {$doc ellipse -at {10 10}}]]
+  $doc destroy
+  set codes
+} -result {1 1}
+
+test graphics-polygon-7.1 {a polygon closes itself unless told otherwise} -body {
+  # The default is -close 1, which is why an open one has to be asked for. A
+  # filled polygon looks the same either way - the difference is the outline.
+  set doc [tclpdf new]
+  $doc page add
+  $doc polygon -points {10 10 60 10 35 50} -stroke black
+  set closed [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc polygon -points {10 10 60 10 35 50} -stroke black -close 0
+  set open [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [expr {"h" in $closed}] [expr {"h" in $open}] \
+      [llength [lsearch -all $open l]]
+} -result {1 0 2}
+
+test graphics-polygon-7.2 {two points are the minimum} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc polygon -points {10 10} -stroke black} message]
+  $doc destroy
+  list $code [string match {*at least two points*} $message]
+} -result {1 1}
+
+test graphics-curve-8.1 {a curve is one move and one cubic} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc curve -from {10 10} -c1 {20 40} -c2 {50 40} -to {60 10} -stroke black
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength [lsearch -all $operators m]] [llength [lsearch -all $operators c]] \
+      [expr {"h" in $operators}]
+} -result {1 1 0}
+
+test graphics-curve-8.2 {-close turns the curve into a shape that can be filled} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc curve -from {10 10} -c1 {20 40} -c2 {50 40} -to {60 10} \
+      -fill red -close 1
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  expr {"h" in $operators}
+} -result 1
+
+test graphics-curve-8.3 {all four points are required} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc curve -from {10 10} -to {60 10} -stroke black} message]
+  $doc destroy
+  list $code [string match {*-from, -c1, -c2 and -to*} $message]
+} -result {1 1}
+
 test graphics-pattern-4.1 {pattern size reports the tile} -body {
   # The other half of a facade that nothing called: [pattern create] is used
   # everywhere, [pattern size] by nothing.

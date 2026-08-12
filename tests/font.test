@@ -455,4 +455,67 @@ test font-5.2 {font info reports what the file says} -constraints haveFont -body
       [expr {[dict get $info glyphs] > 1000}]
 } -match glob -result {{DejaVu Sans} 0 1}
 
+test font-6.1 {-subset 0 embeds the whole face} -constraints haveFont -body {
+  # The documented escape hatch for a face that must stay complete - a form
+  # someone fills in afterwards, or a reader that refuses subsets. Nothing had
+  # ever called it, and the difference is a factor of about eighty in size.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular -subset 0
+  $doc text "Grusse" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-whole.pdf]
+  $doc write $path
+  $doc destroy
+  set whole [file size $path]
+  file delete $path
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "Grusse" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-subset.pdf]
+  $doc write $path
+  $doc destroy
+  set part [file size $path]
+  file delete $path
+  expr {$whole > $part * 10}
+} -result 1
+
+test font-6.2 {a whole face carries no subset prefix} -constraints haveFont -body {
+  # The six-letter tag MEANS subset (9.9.2). A complete DejaVuSans announcing
+  # itself as SZGNUB+DejaVuSans tells a reader merging fonts to keep two
+  # incompatible copies of the same face, and entitles a preflight tool to
+  # reject the file. All three names have to agree - descriptor, CID font and
+  # Type0 font.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular -subset 0
+  $doc text "Grusse" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-prefix.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/BaseFont /DejaVuSans\y} $bytes] \
+      [regexp -all {/FontName /DejaVuSans\y} $bytes] \
+      [regexp {[A-Z]{6}\+DejaVuSans} $bytes]
+} -result {2 1 0}
+
+test font-6.3 {a subsetted face still carries one} -constraints haveFont -body {
+  # The other half: without this the fix above could simply drop the tag
+  # everywhere, which would be just as wrong the other way round.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "Grusse" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-tag.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The same tag in all three places, and it is derived from the name, so it
+  # is the same one on every run.
+  list [regexp -all {/BaseFont /[A-Z]{6}\+DejaVuSans} $bytes] \
+      [regexp -all {/FontName /[A-Z]{6}\+DejaVuSans} $bytes]
+} -result {2 1}
+
 cleanupTests

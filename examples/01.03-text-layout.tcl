@@ -115,6 +115,20 @@ foreach angle {0 30 60 90} {
         -at [list [expr {24 + $angle * 0.55}] [expr {$y + 26}]] -rotate $angle
 }
 
+# A whole PARAGRAPH turned, not just a line: -width and -rotate together. The
+# lines run across the page at the given angle, one leading apart, because the
+# advance is applied in the text's own frame rather than down the page - which
+# is what makes a side note like this one possible at all.
+#
+# -90 rather than 90 so that it reads from the top down, the way a note in the
+# right-hand margin is set; the lines then step to the LEFT, away from the
+# edge.
+$doc font -size 7
+$doc text "A rotated paragraph in the margin: the column is 40 mm wide,\
+    measured along the turned baseline, and the lines step sideways rather\
+    than down the page." \
+    -at [list 192 [expr {$y - 8}]] -width 40 -rotate -90 -align justify
+
 # -- the symbol font -------------------------------------------------------
 
 set y [expr {$y + 40}]

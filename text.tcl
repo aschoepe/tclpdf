@@ -164,8 +164,8 @@ oo::define ::tclpdf::document::document {
             justify, not \"[dict get $options align]\""
       }
     }
-    set y [my TextBaseline $state $y [dict get $options anchor]]
-    my TextRun $string $state $x $y [dict get $options rotate] $shift
+    my TextRun $string $state $x $y [dict get $options rotate] $shift \
+        [my TextLift $state [dict get $options anchor]]
     return
   }
 
@@ -196,14 +196,23 @@ oo::define ::tclpdf::document::document {
     return [::tclpdf::afm bytes $font $string]
   }
 
-  # Turn the anchor into a baseline. -anchor top means "the top of the letters
-  # sits at y", which is what someone laying out a box means; PDF positions on
-  # the baseline, one ascent lower. Used by the single line and by the
-  # paragraph alike - the two must not drift apart, or a heading and the body
-  # under it end up on different grids.
-  method TextBaseline {state y anchor} {
+  # How far the baseline sits BELOW the anchor point, in the document unit.
+  # -anchor top means "the top of the letters sits at y", which is what someone
+  # laying out a box means; PDF positions on the baseline, one ascent lower.
+  # Used by the single line and by the paragraph alike - the two must not drift
+  # apart, or a heading and the body under it end up on different grids.
+  #
+  # Returned rather than added to y, and that is the whole point: the offset
+  # runs perpendicular to the BASELINE, and the baseline turns with -rotate.
+  # Adding it to y first and rotating afterwards moved the text a whole
+  # ascender away from where -at said - measured with -anchor top -rotate 90,
+  # where the anchor came out identical to the unrotated one although the
+  # offset has to act on x at that angle. Same defect the alignment shift had,
+  # one axis over, and the same cure: hand it to TextRun and let the text
+  # matrix carry it.
+  method TextLift {state anchor} {
     if {$anchor ne "top"} {
-      return $y
+      return 0
     }
     set font [dict get $state resolved]
     if {[my TextEmbedded $font]} {
@@ -214,7 +223,7 @@ oo::define ::tclpdf::document::document {
       set ascent [expr {[dict get [::tclpdf::afm descriptor $font] Ascender]
           * [dict get $state size] / 1000.0}]
     }
-    return [expr {$y + [::tclpdf::geometry fromPoints $ascent [my cget -unit]]}]
+    return [::tclpdf::geometry fromPoints $ascent [my cget -unit]]
   }
 
   # One BT/ET block with one string in it.
@@ -231,16 +240,29 @@ oo::define ::tclpdf::document::document {
   # graphics state stack is for, it costs nothing when the options are unused,
   # and unlike tracking what was written last it stays correct when the caller
   # does its own save/restore in between.
-  # shift is the alignment offset along the baseline, in the document unit:
-  # 0 for left, the line width for right, half of it for center.
-  method TextRun {string state x y rotate {shift 0}} {
+  # Two offsets from the anchor, both in the document unit and both applied in
+  # TEXT SPACE, so that -rotate turns them along with the text:
+  #
+  #   shift  ALONG the baseline - 0 for left, the line width for right, half of
+  #          it for center
+  #   lift   ACROSS it, downwards - the ascender for -anchor top, and the
+  #          running line advance inside a paragraph
+  #
+  # Doing either of them on x or y before the rotation is the same mistake
+  # twice: the text then turns about a point that is no longer -at.
+  method TextRun {string state x y rotate {shift 0} {lift 0}} {
     set font [dict get $state resolved]
     set size [dict get $state size]
     lassign [my coords $x $y] px py
     set shift [::tclpdf::geometry toPoints $shift [my cget -unit]]
+    set lift [::tclpdf::geometry toPoints $lift [my cget -unit]]
 
+    # Where the word spacing comes from decides what has to be written and
+    # what has to be taken back again: with TJ there is no Tw in the stream,
+    # so a run that sets nothing else needs no guard either.
+    set byTJ [my TextTJ $font $state]
     set guarded [expr {[dict get $state spacing] != 0
-        || [dict get $state wordSpacing] != 0
+        || ([dict get $state wordSpacing] != 0 && !$byTJ)
         || [dict get $state rise] != 0
         || [dict get $state stretch] != 100}]
     if {$guarded} {
@@ -253,6 +275,9 @@ oo::define ::tclpdf::document::document {
           [::tclpdf::color parse [dict get $state color]] fill]\n
     }
     foreach {key operator} {spacing Tc wordSpacing Tw rise Ts} {
+      if {$key eq "wordSpacing" && $byTJ} {
+        continue
+      }
       if {[dict get $state $key] != 0} {
         my content "[::tclpdf::pdfObj num [dict get $state $key]] $operator\n"
       }
@@ -262,24 +287,85 @@ oo::define ::tclpdf::document::document {
     }
     if {$rotate != 0} {
       # Tm carries position AND rotation; using Td as well would compose them.
-      # The alignment shift goes in FIRST, along the text's own baseline -
-      # then the rotation, then the move to the anchor. That is what keeps a
-      # centred word centred on -at at any angle.
+      # Both offsets go in FIRST, in the text's own frame - then the rotation,
+      # then the move to the anchor. That is what keeps a centred word centred
+      # on -at at any angle, and what makes the lines of a rotated paragraph
+      # run across the page instead of piling up on each other.
+      #
+      # The lift is negative in text space: y grows upwards there, and the
+      # baseline of a line has to end up BELOW the anchor.
       set matrix [::tclpdf::geometry multiply \
-          [::tclpdf::geometry translate [expr {-$shift}] 0] \
+          [::tclpdf::geometry translate [expr {-$shift}] [expr {-$lift}]] \
           [::tclpdf::geometry multiply [::tclpdf::geometry rotate $rotate] \
               [::tclpdf::geometry translate $px $py]]]
       my content "[join [lmap n $matrix {::tclpdf::pdfObj num $n}] { }] Tm\n"
     } else {
       my content "[::tclpdf::pdfObj num [expr {$px - $shift}]]\
-          [::tclpdf::pdfObj num $py] Td\n"
+          [::tclpdf::pdfObj num [expr {$py - $lift}]] Td\n"
     }
-    my content "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
+    my content [my TextShow $font $state $string $byTJ]
     my content "ET\n"
     if {$guarded} {
       my content "Q\n"
     }
     return
+  }
+
+  # Does this run have to produce its word spacing by hand?
+  #
+  # Tw applies to the single-byte code 32 and to nothing else (9.3.3). An
+  # embedded face is addressed through Identity-H, where every code is TWO
+  # bytes - a space is 0x0000-something, no byte 32 stands alone, and Tw is
+  # written, is valid, and does nothing at all.
+  #
+  # Measured: the same paragraph stretches to the right margin with Helvetica
+  # and does not with an embedded DejaVu, with "1.07 Tw" in the stream both
+  # times. Since PDF/A requires every font to be embedded, justified text in an
+  # archival document was never justified - and nothing reported it, because
+  # the file is valid either way and the difference is a few millimetres at the
+  # end of each line.
+  method TextTJ {font state} {
+    return [expr {[dict get $state wordSpacing] != 0
+        && [dict get $state size] > 0 && [my TextEmbedded $font]}]
+  }
+
+  # The show operator for one run: "(bytes) Tj", or a TJ array when the gap
+  # after each space has to be opened by hand.
+  #
+  # TJ alternates strings and numbers, and a number is SUBTRACTED from the
+  # advance in thousandths of the text space - so a negative one opens a gap.
+  # The horizontal scale (Tz) multiplies the advance and the adjustment alike,
+  # exactly as it does with Tw, so it needs no second thought here.
+  #
+  # The space itself stays inside the preceding piece: it has a width of its
+  # own that still has to be drawn. Two spaces in a row therefore produce two
+  # adjustments, which is what Tw would have done as well - and what [textWidth]
+  # counts when it measures the line.
+  method TextShow {font state string byTJ} {
+    if {!$byTJ} {
+      return "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
+    }
+    set kick [expr {-1000.0 * [dict get $state wordSpacing]
+        / [dict get $state size]}]
+    set pieces [split $string { }]
+    set last [expr {[llength $pieces] - 1}]
+    set parts {}
+    for {set index 0} {$index <= $last} {incr index} {
+      set piece [lindex $pieces $index]
+      if {$index < $last} {
+        # The space belongs to the piece before the adjustment.
+        append piece { }
+      } elseif {$piece eq {}} {
+        # A run ending in a space: the adjustment is already written, and an
+        # empty string after it would only be noise in the stream.
+        continue
+      }
+      lappend parts [::tclpdf::pdfObj bytesStr [my TextEncode $font $piece]]
+      if {$index < $last} {
+        lappend parts [::tclpdf::pdfObj num $kick]
+      }
+    }
+    return "\[[join $parts { }]\] TJ\n"
   }
 
   # Register a font as a page resource and return its name. One resource per
@@ -352,4 +438,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.1
+package provide tclpdf::text 1.2

@@ -216,7 +216,7 @@ A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey valu
 
   Rows tied together by a `rowSpan` are never split across a page break: the whole group moves.
 
-  Four hooks are called while drawing: **-willDrawCell**, **-didDrawCell**, **-willDrawPage** and **-didDrawPage**. Each receives a dictionary and the document; returning 0 from `willDrawCell` skips that cell.
+  Four hooks are called: **-didParseCell** once per cell before it is measured, **-willDrawCell** and **-didDrawCell** around drawing it, and **-didDrawPage** after each page. Each receives a dictionary and the document, in that order; returning 0 from `willDrawCell` skips that cell, and a dictionary returned from `didParseCell` replaces the cell.
 
 *doc* **table layout** ?*same options*?
 
