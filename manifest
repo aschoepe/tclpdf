@@ -1,5 +1,5 @@
-C Honour\ssoft\shyphens,\sand\sset\sleader\srows\n\n-\safm.tcl,\sfont.tcl:\sU+00AD\snever\sreaches\sa\sfont\sany\smore\s-\sa\sstandard\sface\srefused\sthe\swhole\sstring\sover\sit,\sand\san\sembedded\sone\sset\sa\svisible\shyphen\sin\sthe\smiddle\sof\san\sunbroken\sword\n-\stextBlock.tcl:\sthe\sbreaker\stakes\sthe\soffer\swhere\sthe\sline\sneeds\sit\sand\ssets\sa\sreal\shyphen\sthere;\sclosing\sthe\sline\sand\strying\sagain\swithout\sa\sprefix\sis\sthe\snext\sround\sof\sthe\ssame\sloop\srather\sthan\sa\scase\sof\sits\sown\n-\sleader.tcl:\snew\s-\sa\srow\swith\stwo\sends\sand\sas\smany\swhole\scopies\sof\sthe\sfill\sbetween\sthem\sas\sfit,\skeeping\s-gap\sclear\sof\seach\send;\sin\sa\stagged\sdocument\sthe\srow\sis\sone\selement\sand\sthe\sfill\san\sartifact\n-\soption.tcl,\stext.tcl:\sthe\s-at\scheck\slives\sin\sone\splace\snow\sthat\sleader\sis\sits\ssecond\scaller\n-\sdocument.tcl,\sconfigure.ac,\spkgIndex.tcl.in,\stests/all.tcl:\sleader\sin\sthe\sfour\slists\sa\smodule\shas\sto\sappear\sin\n-\sexamples/01.10-hyphen-and-leader.tcl:\snew\s-\sthe\ssame\sparagraph\swith\sand\swithout\sthe\smarks\sside\sby\sside,\sa\stable\sof\scontents,\sa\stotal,\sand\swhat\sthe\sfill\smay\sbe\n-\sdoc/tclpdf.md:\sleader,\sand\swhat\sa\ssoft\shyphen\sdoes\sto\sa\sparagraph\sand\sto\sa\sstandard\sface\n-\stests/leader.test:\snew;\stextFlow.test\sgained\sthe\ssoft\shyphen\scases\n-\sKNOWN:\sa\sline\sbroken\sat\sa\ssoft\shyphen\sextracts\swith\sthe\shyphen\sin\sit.\sPDF/UA\swants\san\sActualText\saround\sthe\sbreak\sand\sthat\sis\snot\swritten\s-\sTODO\sitem\s12\scarries\sit,\swhere\sit\sused\sto\sstand\sas\snot\sapplicable
-D 2026-08-13T22:40:51.708
+C Check\sthe\smanual\sis\sno\solder\sthan\swhat\sit\sis\smade\sfrom\n\n-\stools/check.sh:\sdoc/tclpdf.n\sand\sdoc/tclpdf.html\sare\scompared\sagainst\sdoc/tclpdf.md\sby\stimestamp\s-\sneither\sis\sunder\sversion\scontrol,\sboth\stravel\sin\sthe\ssource\sarchive,\sand\sa\scheck-in\sof\sthe\ssource\salone\slooks\scomplete\seither\sway
+D 2026-08-13T22:59:32.312
 F Makefile.in 304e636831704ff8bad6eefa8d6f3dac0fa1e05ac7b1b5421dddfcb7dc0ada05
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -206,7 +206,7 @@ F textPath.tcl e6fb4bcb4a9ea69bc8866ec588b939edb8351a0daf4b34060c048560d50f00f5
 F tools/BUILD-PACKAGE.md c2c2d090ad3d7f1e8dacbcc11a065bb6f130db0cb3b7d4a02813bd41eb9e8b16
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
 F tools/archive.sh 8b8ba6949e45c0302333240be3999af3367d062ebb517102a831b9878c493f9d x
-F tools/check.sh 7f6c46d41f05917ea7176594766a449d24d525c3136e8d1805d09802652fd4d3 x
+F tools/check.sh 276298ce33cc99e1a26b202f914f2e5266ff5232fa0b506917a8f635ae479706 x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
 F tools/mkafm.tcl d3f6c1e855da6bd66c934f2bec5946f93097fd3ce69818609597d4cf39fe9981
@@ -217,8 +217,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl 04ce02c4422f2cc43d24a60a50a666d13bd75b42944a2ec9a818a8b8da4a6bf9
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 9725c6302b5d72e1590345929472653faed393afb04e63e59c867eb954ed9490
-R cd86ca782c08728f531338690dd74598
+P f0d0a1ba2b13cdcbc87e488e2b25153e4d40cf66f457ac240a6ee992bedd3bba
+R 4ae1f552135af25483f4a3ee6b120b90
 U alex
-Z 58c51f3d6f220c28bb36f0f5815189b5
+Z 2a8332f576f48e3f5edf73ac58a10f96
 # Remove this line to create a well-formed Fossil manifest.

@@ -176,6 +176,28 @@ else
   report_skip "pdfinfo (poppler) not installed"
 fi
 
+echo "=== 6. the manual is no older than what it is made from ==="
+
+# Neither doc/tclpdf.n nor doc/tclpdf.html is under version control: both are
+# built by "make all" and travel in the source archive. That is exactly why
+# nothing else notices when they fall behind - a check-in of doc/tclpdf.md
+# looks complete, and the stale pages only surface in a release, which is where
+# they cost the most. Version 1.0 shipped that way once: "make publish" ran
+# before the second check-in and the archives carried the code from before it.
+#
+# A timestamp, not a diff: the two are generated, so any difference at all is
+# either "not rebuilt" or noise from pandoc.
+manualSource=doc/tclpdf.md
+for made in doc/tclpdf.n doc/tclpdf.html; do
+  if test ! -f "$made"; then
+    report_fail "$made is missing - run make all"
+  elif test "$manualSource" -nt "$made"; then
+    report_fail "$made is older than $manualSource - run make all"
+  else
+    report_pass "`basename $made` is no older than its source"
+  fi
+done
+
 echo "==="
 echo "passed $pass, failed $fail, skipped $skip"
 test $skip -eq 0 || echo "NOTE: $skip check(s) did not run - skipped is not passed"
