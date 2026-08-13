@@ -206,6 +206,7 @@ oo::class create ::tclpdf::document::document {
       text text
       textWidth text
       textLines textBlock
+      leader leader
       textHeight textBlock
       image image
       shading shading

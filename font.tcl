@@ -115,6 +115,17 @@ oo::define ::tclpdf::document::document {
     set position 0
     foreach char [split $text {}] {
       set code [scan $char %c]
+      # A soft hyphen is a permission, not a character: it says a word may be
+      # broken here. The breaker has already put a real hyphen wherever it took
+      # the offer, so from here on the mark itself has to vanish - it must not
+      # reach a glyph, a width or the ToUnicode map. A face that HAS a glyph at
+      # U+00AD would otherwise set a hyphen in the middle of an unbroken word,
+      # which is how it looked before: "Silben-trennung", measured 4.33 pt
+      # wider than the same word without the mark.
+      if {$code == 0x00AD} {
+        incr position
+        continue
+      }
       if {![dict exists $cmap $code]} {
         return -code error "tclpdf: the font \"$alias\" has no glyph for\
             U+[format %04X $code] (position $position) - it cannot be written\

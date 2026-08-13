@@ -69,6 +69,30 @@ proc ::tclpdf::option::partition {defaults arguments} {
   return [list $defaults $rest]
 }
 
+# A point option: two numbers, or an error that names the likely mistake.
+#
+# Checked rather than left to lassign, because writing -at {20 [expr {$y+5}]}
+# is a standing invitation: braces stop the substitution, and Tcl then reports
+# "list element in braces followed by ]" from somewhere deep inside a method,
+# which says nothing about the actual mistake.
+#
+# Here rather than in text.tcl: the second caller made it a copy, and a copy of
+# an error message is how two commands come to explain the same mistake
+# differently.
+proc ::tclpdf::option::point {value option context} {
+  if {$value eq {}} {
+    return -code error "tclpdf: $context needs $option {x y}"
+  }
+  if {[catch {llength $value} count] || $count != 2
+      || ![string is double -strict [lindex $value 0]]
+      || ![string is double -strict [lindex $value 1]]} {
+    return -code error "tclpdf: $option takes two numbers {x y}, got\
+        \"$value\" - for a computed position use \[list \$x \$y\], braces do\
+        not substitute"
+  }
+  return $value
+}
+
 proc ::tclpdf::option::Where {context} {
   if {$context eq {}} {
     return {}

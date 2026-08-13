@@ -274,4 +274,108 @@ test textFlow-3.4 {an unknown shape is refused at the call} -body {
       [string match {*{rect {x y} {width height} ?margin?}*} $short]
 } -result {{1 1} 1 1}
 
+# --- soft hyphens ---------------------------------------------------------
+#
+# U+00AD is an offer to break, not a character. Before this it was both wrong
+# things at once: the standard fourteen refused the whole string, and an
+# embedded face set a visible hyphen in the middle of an unbroken word.
+
+set flowSoft "Die Sil\u00ADben\u00ADtren\u00ADnung ist eine Ver\u00ADbes\u00ADse\u00ADrung."
+set flowHard "Die Silbentrennung ist eine Verbesserung."
+set flowFont [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint haveFlowFont [file exists $flowFont]
+
+test textFlow-4.1 {a soft hyphen has no width in a standard face} -body {
+  # It used to throw here: WinAnsi has a slot at 0xAD and the metrics have no
+  # glyph in it, so a paragraph carrying the marks could not be set at all.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set with [$doc textWidth $::flowSoft -family helvetica -size 11]
+  set without [$doc textWidth $::flowHard -family helvetica -size 11]
+  $doc destroy
+  expr {abs($with - $without) < 0.0001}
+} -result 1
+
+test textFlow-4.2 {nor in an embedded one} -constraints haveFlowFont -body {
+  # DejaVu HAS a glyph at U+00AD, which is why this measured 4.33 pt wider and
+  # drew "Silben-trennung" in the middle of a line.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set with [$doc textWidth $::flowSoft -family body -size 11]
+  set without [$doc textWidth $::flowHard -family body -size 11]
+  $doc destroy
+  expr {abs($with - $without) < 0.0001}
+} -result 1
+
+test textFlow-4.3 {the breaker takes the offer and sets a real hyphen} -constraints haveFlowFont -body {
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set lines [$doc textLines $::flowSoft -family body -size 11 -width 90]
+  $doc destroy
+  # Every line but the last ends on the hyphen the breaker put there.
+  list [lindex $lines 0] [lindex $lines end]
+} -result {{Die Silbentren-} rung.}
+
+test textFlow-4.4 {the same text without the marks is broken by character} -constraints haveFlowFont -body {
+  # The control for 4.3: whatever ends those lines has to come from the marks
+  # and from nothing else. A character fallback ends without a hyphen.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set lines [$doc textLines $::flowHard -family body -size 11 -width 90]
+  $doc destroy
+  expr {[string match {*-} [lindex $lines 0]]}
+} -result 0
+
+test textFlow-4.5 {a line that does not break carries no hyphen} -constraints haveFlowFont -body {
+  # The offer is only taken where it is needed. On one wide line the marks
+  # have to disappear without a trace.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set lines [$doc textLines $::flowSoft -family body -size 11 -width 400]
+  $doc destroy
+  list [llength $lines] [string match {*-*} [lindex $lines 0]]
+} -result {1 0}
+
+test textFlow-4.6 {the remainder keeps the offers it still has} -constraints haveFlowFont -body {
+  # A word may be broken more than once. At this width every syllable is a
+  # line of its own, which only works if the leftover carries its marks on.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set lines [$doc textLines "Sil\u00ADben\u00ADtren\u00ADnung" -family body \
+      -size 11 -width 30]
+  $doc destroy
+  set lines
+} -result {Sil- ben- tren- nung}
+
+# The content stream of one paragraph in the embedded face - for comparing two
+# spellings of the same text against each other.
+proc flowStream {text width} {
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  $doc text $text -at {20 40} -width $width -family body -size 11
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  return $content
+}
+
+test textFlow-4.7 {an unbroken line reaches the page as if the marks were absent} -constraints haveFlowFont -body {
+  # The strongest statement available without a reader: at a width wide enough
+  # to need no break, the two spellings have to produce the SAME content
+  # stream - same glyphs, same kerning, same position. Anything left of the
+  # marks would show up here.
+  expr {[flowStream $::flowSoft 400] eq [flowStream $::flowHard 400]}
+} -result 1
+
+test textFlow-4.8 {and at a width that forces the break they differ} -constraints haveFlowFont -body {
+  # The other direction, so that 4.7 cannot pass by drawing nothing at all.
+  expr {[flowStream $::flowSoft 90] ne [flowStream $::flowHard 90]}
+} -result 1
+
 cleanupTests

@@ -91,14 +91,41 @@ oo::define ::tclpdf::document::document {
           set current $candidate
           continue
         }
-        if {$current ne {}} {
-          lappend lines [dict create text $current offset $offset \
+        # The word does not fit. Two things can end the line now: an offer
+        # inside the word - a soft hyphen the line still has room for, hyphen
+        # included - or the line simply closing on what it already holds.
+        #
+        # Both live in one loop, because they alternate: an offer that is too
+        # far in next to a half-full line often fits once that line is closed,
+        # and a remainder can carry further offers. Closing the line and trying
+        # again is therefore not a special case, it is the next round.
+        while {1} {
+          set taken [my TextBlockHyphen $current $word $width $arguments]
+          if {[llength $taken]} {
+            lassign $taken emit word
+          } elseif {$current ne {}} {
+            set emit $current
+          } else {
+            break
+          }
+          lappend lines [dict create text $emit offset $offset \
               width $width paragraph $paragraphIndex \
               first [expr {$inParagraph == 0}]]
           incr inParagraph
           incr globalLine
           lassign [{*}$band $inParagraph $paragraphIndex $globalLine] width offset
           set current {}
+          if {[llength $taken] && [my textWidth $word {*}$arguments] <= $width} {
+            break
+          }
+        }
+        # No offer was small enough for this width. The remaining marks come
+        # out before the character fallback below: they are invisible when
+        # drawn, and leaving them in would make it count characters that never
+        # reach the page.
+        if {[string first "\u00AD" $word] >= 0
+            && [my textWidth $word {*}$arguments] > $width} {
+          set word [string map [list "\u00AD" {}] $word]
         }
         # The word alone may still be too wide - a part number, a URL, a
         # column two millimetres across. Break it by character rather than
@@ -126,6 +153,37 @@ oo::define ::tclpdf::document::document {
       incr paragraphIndex
     }
     return $lines
+  }
+
+  # The longest beginning of a word that still fits WITH a hyphen after it, and
+  # what is left over. Empty when no offer in the word is small enough.
+  #
+  # U+00AD is an offer, not a character: "you may break here". tclpdf does not
+  # hyphenate by itself - that needs language data and is a feature of its own -
+  # but text arriving from elsewhere often carries the marks already, and until
+  # now they were either set as a visible hyphen or refused outright.
+  #
+  # The hyphen that appears at the break is a real one (U+002D), so the line
+  # ends the way a reader expects. What that costs is named in the manual:
+  # extracting such a line yields the hyphen too.
+  method TextBlockHyphen {prefix word width arguments} {
+    set parts [split $word "\u00AD"]
+    if {[llength $parts] < 2} {
+      return {}
+    }
+    # From the last offer backwards - the line is to be filled, not emptied.
+    for {set take [expr {[llength $parts] - 1}]} {$take >= 1} {incr take -1} {
+      set head [join [lrange $parts 0 [expr {$take - 1}]] {}]-
+      if {$prefix ne {}} {
+        # NOT [expr]: it normalises a word that looks like a number, and
+        # "1234.50" would come back as "1234.5" - see the breaker above.
+        set head "$prefix $head"
+      }
+      if {[my textWidth $head {*}$arguments] <= $width} {
+        return [list $head [join [lrange $parts $take end] "\u00AD"]]
+      }
+    }
+    return {}
   }
 
   # The height a block would occupy, without drawing it - for deciding whether

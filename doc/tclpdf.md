@@ -197,6 +197,21 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   **-avoidMargin** *d* holds the text off every avoided shape by that distance; a shape may state one of its own as a fourth element (`{circle {x y} r 7}`), which then wins. Without it the words touch the picture, which reads as a mistake however exact the geometry is.
 
+  **Soft hyphens are honoured.** U+00AD is not a character but a permission — this word may be broken here. Where the breaker takes the offer, a real hyphen is set at the end of the line; everywhere else the mark stays invisible, in the drawing and in the measurement alike, so the same string can be set in any width. tclpdf does **not** hyphenate by itself: that needs language data and is a feature of its own. What it does is honour the marks that text arriving from a database, an XML file or an editor already carries. Note that extracting such a line yields the hyphen as well, and that a standard face is no longer refused for carrying the mark.
+
+*doc* **leader** *left* *right* **-at** *{x y}* **-width** *w* ?**-fill** *"."*? ?**-gap** *d*? ?**-tag** *type*? ?*font options*?
+
+: A row with two ends and a filled middle — a table of contents, a price list, a total:
+
+  ~~~tcl
+  $doc leader "3. Embedding fonts" "24" -at {20 100} -width 120
+  # 3. Embedding fonts ........................... 24
+  ~~~
+
+  Both ends are measured and the space between them is filled with as many whole copies of **-fill** as fit, holding **-gap** clear of each end (1 unit by default). The remainder stays in front of the right hand end, so the figures of several rows line up. **-fill** may be any string, and an empty one draws nothing at all — which is what a sum under a rule wants. Either end may be empty. Returns the y coordinate one line down, so rows stack without measuring again.
+
+  It does not wrap: each end is one line. A left side too long for the width keeps its full length and the fill disappears, rather than moving the figure a reader is looking for. In a tagged document the row is **one** element and the fill is an artifact — a reader that spelled the dots out would say "dot dot dot dot" between every entry and its number. **-tag** names the element (`P` by default), and `-tag Artifact` takes the whole row out of the tree, which is what a running head is.
+
 *doc* **textPath** *string* **-segments** *{...}* ?**-align** *a*? ?**-offset** *d*? ?**-tag** *type*? ?*font options*?
 
 : Sets one line of text along a path, glyph by glyph, each one turned by the direction the path takes at its own position. The segments are the ones **path** takes (`move`, `line`, `curve`, `close`); **-align** places the string at the start, the middle or the end of the path, and **-offset** lifts the baseline off it — positive above, negative below. Returns the length of the path, which is what a caller measures a string against beforehand: glyphs that run past the end are dropped rather than piled up there. The path itself is not drawn.

@@ -154,6 +154,15 @@ proc ::tclpdf::afm::encode {font text} {
   set codes {}
   set position 0
   foreach char [split $text {}] {
+    # A soft hyphen marks a place where a word MAY be broken; it is not a
+    # character to set. Where the breaker used it, it has already put a real
+    # hyphen there, and everywhere else it has to vanish - so it never reaches
+    # a font. Without this the standard fourteen refused the whole string,
+    # because WinAnsi has a slot at 0xAD and the metrics have no glyph in it.
+    if {$char eq "\u00AD"} {
+      incr position
+      continue
+    }
     if {[isSymbolic $font]} {
       # No transcoding: the caller addresses the font's own encoding directly.
       set code [scan $char %c]

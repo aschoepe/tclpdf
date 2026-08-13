@@ -60,6 +60,7 @@ foreach tclpdfPkg {
     tclpdf::afm
     tclpdf::text
     tclpdf::textBlock
+    tclpdf::leader
     tclpdf::xObject
     tclpdf::io
     tclpdf::attach

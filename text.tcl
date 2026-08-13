@@ -173,16 +173,7 @@ oo::define ::tclpdf::document::document {
     # standing invitation, the braces stop the substitution, and Tcl then
     # reports "list element in braces followed by ]" from somewhere inside the
     # method - which says nothing about the actual mistake.
-    set at [dict get $options at]
-    if {$at eq {}} {
-      return -code error "tclpdf: text needs -at {x y}"
-    }
-    if {[catch {llength $at} count] || $count != 2
-        || ![string is double -strict [lindex $at 0]]
-        || ![string is double -strict [lindex $at 1]]} {
-      return -code error "tclpdf: -at takes two numbers {x y}, got \"$at\" -\
-          for a computed position use \[list \$x \$y\], braces do not substitute"
-    }
+    set at [::tclpdf::option point [dict get $options at] -at text]
     # Tagged PDF: ONE call is one piece of marked content, so a paragraph of
     # five lines becomes one P holding one mark rather than five. The bracket
     # sits outside everything the call writes - BDC before the q and EMC after

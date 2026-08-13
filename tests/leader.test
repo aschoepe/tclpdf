@@ -1,0 +1,194 @@
+# leader.test --
+#
+# A row with two ends and a filled middle: "3. The build ......... 17".
+#
+# The arithmetic is the whole feature - measure both ends, divide what is left
+# by the width of the fill, and set as many whole copies as fit. What these
+# tests pin down is that the two ends stay where they belong whatever happens
+# in between, including when nothing fits at all.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::text
+package require tclpdf::leader
+source [file join [file dirname [info script]] helper.tcl]
+
+set leaderFont [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+set leaderIcc [file join [file dirname [file dirname [file normalize [info script]]]] \
+    icc sRGB.icc]
+testConstraint haveLeaderFont [file exists $leaderFont]
+testConstraint haveLeaderIcc [file exists $leaderIcc]
+
+# The text of every show operator in the stream, in order.
+proc leaderShown {stream} {
+  set shown {}
+  foreach {- literal} [regexp -all -inline {\(((?:[^()\\]|\\.)*)\)\s*Tj} $stream] {
+    lappend shown $literal
+  }
+  return $shown
+}
+
+proc leaderDoc {} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  return $doc
+}
+
+test leader-1.1 {the middle is filled and both ends are set} -body {
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120
+  set shown [leaderShown [::tclpdfTest::content $doc]]
+  $doc destroy
+  # Three pieces: the left end, the run of dots, the right end.
+  list [llength $shown] [lindex $shown 0] [lindex $shown 2] \
+      [string map {. {}} [lindex $shown 1]]
+} -result {3 Summe 42 {}}
+
+test leader-1.2 {the right end sits at the right edge of the width} -body {
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120
+  set starts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # 20 mm from the left, 140 mm for the right edge - and the figure is set
+  # right-aligned, so its start is its own width to the left of that.
+  set right [expr {(20 + 120) * 72.0 / 25.4}]
+  list [format %.2f [lindex $starts 0]] \
+      [expr {[lindex $starts end] < $right && [lindex $starts end] > $right - 20}]
+} -result {56.69 1}
+
+test leader-1.3 {the fill never runs into either end} -body {
+  # The dots start after the left end plus the gap and stop before the right
+  # one. Whole copies only, so what is left over stays in front of the figure.
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120
+  set content [::tclpdfTest::content $doc]
+  set starts [::tclpdfTest::starts $content]
+  set widths {}
+  foreach text [leaderShown $content] {
+    lappend widths [$doc textWidth $text -family helvetica -size 10]
+  }
+  $doc destroy
+  set toPoints [expr {72.0 / 25.4}]
+  set gap [expr {1 * $toPoints}]
+  set leftEnd [expr {[lindex $starts 0] + [lindex $widths 0] * $toPoints}]
+  set fillStart [lindex $starts 1]
+  set fillEnd [expr {$fillStart + [lindex $widths 1] * $toPoints}]
+  # The gap is kept on BOTH sides, and that is what pins the count down: with
+  # one copy too many the dots still miss the figure, but they eat the gap.
+  list [expr {$fillStart >= $leftEnd + $gap - 0.01}] \
+      [expr {$fillEnd <= [lindex $starts 2] - $gap + 0.01}]
+} -result {1 1}
+
+test leader-1.4 {an empty fill leaves the middle empty} -body {
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120 -fill {}
+  set shown [leaderShown [::tclpdfTest::content $doc]]
+  $doc destroy
+  set shown
+} -result {Summe 42}
+
+test leader-1.5 {the fill string is not limited to a dot} -body {
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120 -fill "-"
+  set shown [leaderShown [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [string map {- {}} [lindex $shown 1]] \
+      [expr {[string length [lindex $shown 1]] > 10}]
+} -result {{} 1}
+
+test leader-1.6 {a row too tight for one copy keeps its ends} -body {
+  # The ends are the content; the fill is decoration. When nothing fits, the
+  # figure still has to stand where a reader looks for it.
+  set doc [leaderDoc]
+  $doc leader "Ein sehr langer Posten in dieser Zeile" "1.234,50" \
+      -at {20 30} -width 60
+  set shown [leaderShown [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength $shown] [lindex $shown end]
+} -result {2 1.234,50}
+
+test leader-1.7 {one end may be left out} -body {
+  set doc [leaderDoc]
+  $doc leader "Nur links" {} -at {20 30} -width 120
+  set a [llength [leaderShown [::tclpdfTest::content $doc]]]
+  $doc page add
+  $doc leader {} "Nur rechts" -at {20 30} -width 120
+  set b [llength [leaderShown [::tclpdfTest::content $doc]]]
+  $doc destroy
+  list $a $b
+} -result {2 2}
+
+test leader-1.8 {the return value is one line down} -body {
+  # What makes rows stackable: [text] hands back nothing without -width, so
+  # this value is built rather than passed through, and it has to be the same
+  # step a paragraph takes.
+  set doc [leaderDoc]
+  $doc font -family helvetica -size 10 -leading 15
+  set y [$doc leader "Summe" "42" -at {20 30} -width 120]
+  $doc destroy
+  # 15 pt in millimetres, below the baseline it started on.
+  expr {abs($y - (30 + 15 * 25.4 / 72.0)) < 0.001}
+} -result 1
+
+test leader-1.9 {the two required options are named when missing} -body {
+  set doc [leaderDoc]
+  set codes [list [catch {$doc leader "a" "b" -width 100} noAt] \
+      [catch {$doc leader "a" "b" -at {20 30}} noWidth]]
+  $doc destroy
+  list $codes [string match {*needs -at*} $noAt] \
+      [string match {*needs -width*} $noWidth]
+} -result {{1 1} 1 1}
+
+# --- in a tagged document -------------------------------------------------
+
+test leader-2.1 {the row is one element and the dots are an artifact} -constraints haveLeaderFont -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc font embed body $::leaderFont
+  $doc page add
+  $doc font -family body -size 10
+  $doc leader "1. Der Anfang" "3" -at {20 30} -width 120
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Two pieces of marked content inside the element and one artifact between
+  # them: a reader hears the entry and its number, not "dot dot dot".
+  list [llength [regexp -all -inline {/P <</MCID} $content]] \
+      [llength [regexp -all -inline {/Artifact BMC} $content]]
+} -result {2 1}
+
+test leader-2.2 {-tag says what kind of element the row is} -constraints haveLeaderFont -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc font embed body $::leaderFont
+  $doc page add
+  $doc font -family body -size 10
+  $doc leader "Zwischensumme" "42" -at {20 30} -width 120 -tag H2
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {[llength [regexp -all -inline {/H2 <</MCID} $content]] == 2}
+} -result 1
+
+test leader-2.3 {-tag Artifact takes the whole row out of the tree} -constraints haveLeaderFont -body {
+  # A running head is a row like any other and belongs to no element.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc font embed body $::leaderFont
+  $doc page add
+  $doc font -family body -size 10
+  $doc leader "Handbuch" "Seite 3" -at {20 15} -width 120 -tag Artifact
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength [regexp -all -inline {MCID} $content]] \
+      [expr {[llength [regexp -all -inline {/Artifact BMC} $content]] == 3}]
+} -result {0 1}
+
+cleanupTests
