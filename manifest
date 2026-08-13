@@ -1,5 +1,5 @@
-C Check\sthe\smanual\sis\sno\solder\sthan\swhat\sit\sis\smade\sfrom\n\n-\stools/check.sh:\sdoc/tclpdf.n\sand\sdoc/tclpdf.html\sare\scompared\sagainst\sdoc/tclpdf.md\sby\stimestamp\s-\sneither\sis\sunder\sversion\scontrol,\sboth\stravel\sin\sthe\ssource\sarchive,\sand\sa\scheck-in\sof\sthe\ssource\salone\slooks\scomplete\seither\sway
-D 2026-08-13T22:59:32.312
+C Document\ssvg\s-data,\sand\sthe\soptions\sthe\ssignature\swas\smissing\n\n-\sdoc/tclpdf.md:\ssvg\stakes\sits\smarkup\sfrom\sa\svariable\sas\swell\sas\sfrom\sa\sfile,\sand\s-size,\s-scale\sand\s-opacity\sexisted\swithout\sbeing\swritten\sdown;\ssvg\ssize\stakes\sa\sfile\sname\sonly,\swhich\sthe\sentry\snow\ssays
+D 2026-08-13T23:20:32.639
 F Makefile.in 304e636831704ff8bad6eefa8d6f3dac0fa1e05ac7b1b5421dddfcb7dc0ada05
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -11,7 +11,7 @@ F configure c399f34dc6d2389cae665ca556e094d3c094b866db06b88eafcc056ea15f98ff x
 F configure.ac 6d1ccce90266d75588d732a57080edd6316fd999bca07195571c6ec75f571099
 F doc/PLUGINS.md 5d5e45709f4f88fab0208ff16d98ef0d060f49ee57b60f5befd1404976d19144
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
-F doc/tclpdf.md 26126e3561365b29e67dc356cd908cc034f20a43c547d02b4a3039a14a0f3d7c
+F doc/tclpdf.md b787cfde54a8d0f43ae7242be252d969a96878cde7d050706be0d3a0d7414126
 F document.tcl e8abbedb244d0b2f588307cc4b9578437f21242a9c2bdccb475d126ff4e8d17c
 F event.tcl b738afa9f5fb7a1697af862e9dc0413ee1c5064fab9bdc971a1e1ea2a7a6ef50
 F examples/01.01-shapes.tcl 5720fbddf805f8577e2bf9c385b88a065fd3323ddd1f7abb22b2429cc34c7991
@@ -217,8 +217,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl 04ce02c4422f2cc43d24a60a50a666d13bd75b42944a2ec9a818a8b8da4a6bf9
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P f0d0a1ba2b13cdcbc87e488e2b25153e4d40cf66f457ac240a6ee992bedd3bba
-R 4ae1f552135af25483f4a3ee6b120b90
+P 2431c117e1a2878794d64de71beab4439e79ed822b2006b97422a6df0ddf0195
+R 07c4f53196f249d55cd6cc0f5918a2c3
 U alex
-Z 2a8332f576f48e3f5edf73ac58a10f96
+Z 65e78dad4d1483c1139bad4c33bac21c
 # Remove this line to create a well-formed Fossil manifest.

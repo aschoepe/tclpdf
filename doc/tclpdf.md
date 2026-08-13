@@ -358,9 +358,21 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 ## SVG
 
-*doc* **svg** *path* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-alt** *text*?
+*doc* **svg** *path* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-size** *{w h}*? ?**-scale** *s*? ?**-opacity** *o*? ?**-alt** *text*?
 
-: Draws an SVG file as **real vectors** — paths, shapes, groups, transforms, `use`, text and gradients become PDF operators, not a picture. Returns `{x y width height}` of what was drawn. Without a size the file's own dimensions apply; with one it is fitted, keeping the aspect ratio.
+*doc* **svg -data** *markup* **-at** *{x y}* ?*same options*?
+
+: Draws an SVG as **real vectors** — paths, shapes, groups, transforms, `use`, text and gradients become PDF operators, not a picture. Returns `{x y width height}` of what was drawn. Without a size the drawing's own dimensions apply; with one it is fitted, keeping the aspect ratio. **-size** gives both extents at once, **-scale** multiplies the drawing's own size, and **-opacity** applies to the drawing as a whole.
+
+  **-data** takes the markup from a Tcl variable instead of a file, which is what a generator wants: whatever produces the SVG hands it over directly, with no temporary file in between. Everything else is the same, including **-alt** — with a description the drawing becomes a `Figure` carrying it, without one an artifact.
+
+  ~~~tcl
+  set markup "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\">\
+      <circle cx=\"20\" cy=\"20\" r=\"18\" fill=\"$colour\"/></svg>"
+  $doc svg -data $markup -at {20 20} -width 12 -alt "Status: $state"
+  ~~~
+
+  Note that **svg size** below takes a file name only; the size of markup in a variable is what drawing it returns.
 
 *doc* **svg info**
 
