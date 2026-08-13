@@ -82,7 +82,7 @@ INSTALLING
 
     Build IN the source directory. A separate build directory configures
     cleanly but cannot run the tests: the generated pkgIndex.tcl locates the
-    modules through $dir, which is then the build directory, while the forty
+    modules through $dir, which is then the build directory, while the 47
     .tcl files stay where the sources are. Nothing is lost by building
     in-tree - make install puts index and modules together again either way.
 
@@ -102,6 +102,14 @@ LICENCE, AND WHY NO FONT IS PART OF IT
     the package installs: the Tcl modules, pkgIndex.tcl and the sRGB ICC
     profile in icc/, which is a runtime part because its bytes end up inside
     every PDF/A document.
+
+    ONE OTHER PIECE OF THIRD-PARTY MATERIAL travels in the source archive:
+    tools/agl/glyphlist.txt, the Adobe Glyph List, verbatim and under Adobe's
+    own BSD licence, whose text is the header of the file. It is BUILD-TIME
+    data - tools/mkafm.tcl turns glyph names into the widths in afmData.tcl
+    with it - and it is not installed. Before 2026-08-13 the same table was
+    read out of a pdf4tcl installation instead, which made afmData.tcl
+    unreproducible without another project on the disk.
 
     NO FONT IS PART OF THE PACKAGE. The faces under examples/assets/fonts are
     there so that the tests and the examples have something to embed, and they

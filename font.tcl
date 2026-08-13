@@ -91,18 +91,27 @@ oo::define ::tclpdf::document::document {
         characters [dict size [dict get $parsed cmap]]]
   }
 
-  # Encode text as two-byte glyph numbers and record which glyphs were used.
+  # A string as the glyphs that will be drawn for it.
+  #
+  # THE single place that turns characters into glyphs. Measuring, kerning and
+  # encoding all go through it, because with ligatures they can no longer
+  # agree by accident: three characters may become one glyph, and a width
+  # counted per character would then disagree with what is drawn.
+  #
+  # The result is a list of entries {glyph codes}, where codes are the
+  # character code points the glyph stands for - one for an ordinary glyph,
+  # several for a ligature. That provenance is not decoration: it is what the
+  # ToUnicode CMap is built from, and without it a ligature would extract as
+  # one unknown character instead of "ffi".
   #
   # A character the font has no glyph for is an ERROR. This is the only place
   # in the chain that notices: the reader shows a blank, the validator says
   # nothing, and the recipient sees an invoice with a gap where the amount
   # should be.
-  method FontEncode {alias text} {
-    set fonts [my state fonts]
-    set entry [dict get $fonts $alias]
+  method FontRun {alias text {ligatures 0}} {
+    set entry [dict get [my state fonts] $alias]
     set cmap [dict get $entry parsed cmap]
-    set used [dict get $entry used]
-    set bytes {}
+    set run {}
     set position 0
     foreach char [split $text {}] {
       set code [scan $char %c]
@@ -111,10 +120,46 @@ oo::define ::tclpdf::document::document {
             U+[format %04X $code] (position $position) - it cannot be written\
             with this face"
       }
-      set glyph [dict get $cmap $code]
-      dict set used $glyph $code
-      append bytes [binary format Su $glyph]
+      lappend run [list [dict get $cmap $code] [list $code]]
       incr position
+    }
+    if {$ligatures && [llength $run] > 1} {
+      set run [::tclpdf::liga apply [my FontLigaState $alias] $run]
+    }
+    return $run
+  }
+
+  # Two-byte glyph numbers for a run, recording which glyphs were used and
+  # what each of them stands for.
+  #
+  # One glyph can be reached in more than one way, and a ToUnicode CMap has
+  # room for only one destination per CID. In DejaVu Sans glyph 5044 is both
+  # the GSUB output of "ffi" and the cmap entry for U+FB03, the precomposed
+  # ligature character. Whichever was written last used to win, so a document
+  # that drew "office" before it drew U+FB03 extracted the word as
+  # o U+FB03 c e - rendering perfectly, validating cleanly, and no longer
+  # findable by searching for "office".
+  #
+  # The longer decomposition therefore wins, and the order stops mattering:
+  # three characters say more about the glyph than one does, and "ffi" is what
+  # a reader wants back from a search either way.
+  #
+  # This does NOT settle the older ambiguity of two characters sharing one
+  # glyph through the cmap alone - Roboto maps U+0394 and U+2206 to the same
+  # glyph, both lists are one long, and there is no answer that is right for
+  # both. There the first one recorded stays.
+  method FontRunEncode {alias run} {
+    set fonts [my state fonts]
+    set entry [dict get $fonts $alias]
+    set used [dict get $entry used]
+    set bytes {}
+    foreach item $run {
+      lassign $item glyph codes
+      if {![dict exists $used $glyph]
+          || [llength $codes] > [llength [dict get $used $glyph]]} {
+        dict set used $glyph $codes
+      }
+      append bytes [binary format Su $glyph]
     }
     dict set entry used $used
     dict set fonts $alias $entry
@@ -122,29 +167,29 @@ oo::define ::tclpdf::document::document {
     return $bytes
   }
 
-  # The width of a string in points, at a given size.
+  # Encode text directly. Kept for the callers that have a string and no
+  # reason to hold a run.
+  method FontEncode {alias text {ligatures 0}} {
+    return [my FontRunEncode $alias [my FontRun $alias $text $ligatures]]
+  }
+
+  # The width of a prepared run, in points.
   #
-  # With kerning the pair adjustments belong in here and not only in the
-  # drawing: the line breaker, the column widths and the text on a path all
-  # measure through this method, and a line measured without the kerning it is
-  # later drawn with breaks in the wrong place.
-  method FontWidth {alias text size {kerning 0}} {
-    set entry [dict get [my state fonts] $alias]
-    set parsed [dict get $entry parsed]
-    set cmap [dict get $parsed cmap]
+  # A ligature contributes ITS advance, not the sum of the advances of the
+  # characters it replaced - which is the whole point of measuring the run
+  # rather than the string.
+  method FontRunWidth {alias run size {kerning 0}} {
+    set parsed [dict get [my state fonts] $alias parsed]
     set units [dict get $parsed unitsPerEm]
     set total 0
-    foreach char [split $text {}] {
-      set code [scan $char %c]
-      if {[dict exists $cmap $code]} {
-        set total [expr {$total + [::tclpdf::sfnt advance $parsed \
-            [dict get $cmap $code]]}]
-      }
+    foreach item $run {
+      set total [expr {$total + [::tclpdf::sfnt advance $parsed \
+          [lindex $item 0]]}]
     }
     set points [expr {double($total) * $size / $units}]
     if {$kerning} {
       set thousandths 0
-      foreach adjust [my FontKern $alias $text] {
+      foreach adjust [my FontRunKern $alias $run] {
         set thousandths [expr {$thousandths + $adjust}]
       }
       set points [expr {$points + $thousandths * $size / 1000.0}]
@@ -152,21 +197,18 @@ oo::define ::tclpdf::document::document {
     return $points
   }
 
-  # The kerning of a string: one adjustment per gap between two characters,
-  # in thousandths of the em - the unit a TJ number is written in, so that the
+  # The kerning of a run: one adjustment per gap between two GLYPHS, in
+  # thousandths of the em - the unit a TJ number is written in, so that the
   # measurement and the drawing cannot drift apart through two conversions.
   #
-  # A string of n characters yields n-1 numbers, most of them zero. Characters
-  # the font has no glyph for end the pair rather than being skipped over:
-  # kerning applies between neighbours, and [FontEncode] refuses such a string
-  # anyway before it is ever drawn.
-  method FontKern {alias text} {
-    set count [string length $text]
+  # Per glyph, not per character: after "ffi" has become one glyph the pair to
+  # look up is that ligature and its neighbour, and the pairs that used to sit
+  # between f and f are gone with them.
+  method FontRunKern {alias run} {
+    set count [llength $run]
     if {$count < 2} {
       return {}
     }
-    set entry [dict get [my state fonts] $alias]
-    set parsed [dict get $entry parsed]
     set state [my FontKernState $alias]
     set adjustments {}
     if {[::tclpdf::kern origin $state] eq "none"} {
@@ -177,25 +219,29 @@ oo::define ::tclpdf::document::document {
       }
       return $adjustments
     }
-    set cmap [dict get $parsed cmap]
-    set units [dict get $parsed unitsPerEm]
-    set previous -1
-    set first 1
-    foreach char [split $text {}] {
-      set code [scan $char %c]
-      set glyph [expr {[dict exists $cmap $code] ? [dict get $cmap $code] : -1}]
-      if {!$first} {
-        if {$previous >= 0 && $glyph >= 0} {
-          set value [::tclpdf::kern value $state $previous $glyph]
-          lappend adjustments [expr {$value * 1000.0 / $units}]
-        } else {
-          lappend adjustments 0
-        }
-      }
-      set first 0
-      set previous $glyph
+    set units [dict get [my state fonts] $alias parsed unitsPerEm]
+    for {set index 1} {$index < $count} {incr index} {
+      set value [::tclpdf::kern value $state \
+          [lindex [lindex $run [expr {$index - 1}]] 0] \
+          [lindex [lindex $run $index] 0]]
+      lappend adjustments [expr {$value * 1000.0 / $units}]
     }
     return $adjustments
+  }
+
+  # The prepared ligatures of one font, read once and kept.
+  method FontLigaState {alias} {
+    set fonts [my state fonts]
+    set entry [dict get $fonts $alias]
+    if {[dict exists $entry liga]} {
+      return [dict get $entry liga]
+    }
+    package require tclpdf::liga 1.0-
+    set state [::tclpdf::liga build [dict get $entry parsed]]
+    dict set entry liga $state
+    dict set fonts $alias $entry
+    my state fonts $fonts
+    return $state
   }
 
   # The prepared kerning of one font, read once and kept.
@@ -407,14 +453,20 @@ oo::define ::tclpdf::document::document {
     set lines {}
     foreach glyph [lsort -integer [dict keys $used]] {
       set cid $glyph
-      set code [dict get $used $glyph]
-      if {$code > 0xFFFF} {
-        # Outside the BMP: the target is a surrogate pair.
-        set value [expr {$code - 0x10000}]
-        set target [format %04X%04X [expr {0xD800 | ($value >> 10)}] \
-            [expr {0xDC00 | ($value & 0x3FF)}]]
-      } else {
-        set target [format %04X $code]
+      # One glyph may stand for several characters: a ligature. The
+      # destination of a bfchar is a UTF-16BE STRING, not a single value, so
+      # "ffi" is written as three code units and extracts as three letters.
+      # Writing only the first would turn every ligature into a lost word.
+      set target {}
+      foreach code [dict get $used $glyph] {
+        if {$code > 0xFFFF} {
+          # Outside the BMP: the target is a surrogate pair.
+          set value [expr {$code - 0x10000}]
+          append target [format %04X%04X [expr {0xD800 | ($value >> 10)}] \
+              [expr {0xDC00 | ($value & 0x3FF)}]]
+        } else {
+          append target [format %04X $code]
+        }
       }
       lappend lines "<[format %04X $cid]> <$target>"
     }
@@ -434,4 +486,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.2
+package provide tclpdf::font 1.3

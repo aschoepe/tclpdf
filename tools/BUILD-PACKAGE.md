@@ -68,6 +68,16 @@ The packages are then available for download at
 
 * `make archive` still exists as the bare packaging step; `make
   release` is `archive` plus the dependency chain and a summary.
+* `afmData.tcl` is generated, and reproducing it needs nothing but a
+  checkout and the Adobe AFM files:
+
+      tclsh tools/mkafm.tcl <afm-directory> > afmData.tcl
+
+  The glyph list it needs sits in `tools/agl/glyphlist.txt`. Until
+  2026-08-13 the generator took that table as a second argument and
+  read it out of a pdf4tcl installation - an outside dependency that
+  appeared nowhere except in an unnamed `argv` parameter. The output
+  is byte-identical either way; that was how the change was accepted.
 * `tools/archive.sh` is not meant to be called directly; it expects
   `PACKAGE_NAME PACKAGE_VERSION PKG_TCL_SOURCES...` as arguments and
   exits with a usage message otherwise.

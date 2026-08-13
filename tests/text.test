@@ -534,4 +534,29 @@ test text-state-9.2 {a plain line is not wrapped at all} -body {
   regexp {^q} $content
 } -result 0
 
+test text-11.1 {a string with line breaks is measured by its widest line} -body {
+  # Regression, twice over. Measuring such a string as one line used to ADD
+  # the lines together - a two-line table cell then asked for a column wide
+  # enough to hold both side by side. After the glyph run became the single
+  # source of truth it threw instead, because a line feed has no glyph, and a
+  # table cell with a newline stopped working altogether.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set short [$doc textWidth "a" -family helvetica -size 12]
+  set long [$doc textWidth "bcdef" -family helvetica -size 12]
+  set both [$doc textWidth "a\nbcdef" -family helvetica -size 12]
+  $doc destroy
+  list [expr {$both == $long}] [expr {$both < $short + $long}]
+} -result {1 1}
+
+test text-11.2 {a table cell may contain a line break} -body {
+  # The natural width of the column is the widest line, not the sum.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {10 20} -width 100 -body {{"Zeile 1\nZeile 2" "x"}}
+  set doubled [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {[string length $doubled] > 0}
+} -result 1
+
 cleanupTests

@@ -113,9 +113,24 @@ oo::define ::tclpdf::document::document {
 
   # Only the font options, without the ones textPath owns - [textWidth] would
   # refuse -segments.
+  #
+  # Kerning and ligatures are forced OFF here, and not as a matter of taste:
+  # this module places one glyph at a time and adds up the advances it
+  # measured one at a time. Measuring the whole string with pair kerning would
+  # give a total that is smaller than that sum, and -align center or right
+  # would place the string by a width it never draws. Measured with DejaVu at
+  # 20 points, the two differed by 4.4 mm over 50 mm of text.
+  #
+  # Ligatures are off for the same reason and one of its own: a ligature is
+  # one glyph made from several characters, and this loop hands [TextRun] a
+  # single character at a time, so it could never form one anyway.
   method TextPathOverrides {options} {
     set result {}
     foreach name $::tclpdf::text::stateOptions {
+      if {$name in {kerning ligatures}} {
+        lappend result -$name 0
+        continue
+      }
       lappend result -$name [dict get $options $name]
     }
     return $result
@@ -214,4 +229,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.0
+package provide tclpdf::textPath 1.1

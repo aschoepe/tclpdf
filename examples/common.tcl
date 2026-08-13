@@ -34,7 +34,7 @@ proc exampleFooter {doc {family {}}} {
     # [info script] inside a proc reports the file being sourced right now,
     # which by the time this runs is the example again - common.tcl is long
     # finished. Checked under both interpreters; without that it would name
-    # this file in all eighteen footers.
+    # this file in every footer.
     set script [file tail [info script]]
 
     set fonts {}

@@ -44,8 +44,8 @@ package require tclpdf
 # yet, and the error says so in a way that takes a while to read.
 package require tclpdf::document
 
-# The footer every example draws - shared, because eighteen copies of it
-# is how a block starts drifting.
+# The footer every example draws - shared, because one copy per example is
+# how a block starts drifting.
 source [file join $here common.tcl]
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "01.07-extension.pdf"}]

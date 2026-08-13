@@ -29,7 +29,7 @@ package require tclpdf::document 1.0-
 namespace eval ::tclpdf::text {
   # Which options describe the font state rather than one call.
   variable stateOptions {family style size color spacing wordSpacing
-      stretch leading rise kerning}
+      stretch leading rise kerning ligatures}
 }
 
 oo::define ::tclpdf::document::document {
@@ -44,19 +44,21 @@ oo::define ::tclpdf::document::document {
   #   -size        in points, always - a font size in millimetres is not a
   #                thing anyone asks for
   #   -color       fill colour for text
-  #   -spacing     extra space per character (Tc), in points
+  #   -spacing     extra space between glyphs (Tc), in points
   #   -wordSpacing extra space per space character (Tw), in points
   #   -stretch     horizontal scaling in percent (Tz), 100 is normal
   #   -leading     line spacing (TL) in points; default 1.2 * size
   #   -rise        baseline shift (Ts) in points, for super- and subscript
   #   -kerning     apply the pair kerning of an embedded font, 0 or 1
+  #   -ligatures   apply the standard ligatures of an embedded font, 0 or 1
   #
-  # -kerning is ON by default: kerning is what the type designer intended, and
-  # a package that leaves it off ships worse typography than the font offers.
-  # Set it to 0 where a document has to come out exactly as an older release
-  # produced it - the pair adjustments change the width of every line they
-  # touch. It only affects embedded fonts; the metrics shipped for the
-  # standard fourteen carry widths per byte value, not kerning pairs.
+  # Both are ON by default: they are what the type designer intended, and a
+  # package that leaves them off ships worse typography than the font offers.
+  # Set them to 0 where a document has to come out exactly as an older release
+  # produced it - kerning changes the width of every line it touches, and a
+  # ligature replaces several glyphs by one. Both affect embedded faces only;
+  # the metrics shipped for the standard fourteen carry widths per byte value,
+  # neither kerning pairs nor ligatures.
   method font {args} {
     my TextInit
     if {![llength $args]} {
@@ -90,22 +92,52 @@ oo::define ::tclpdf::document::document {
   # overriding -family/-style/-size.
   method textWidth {string args} {
     my TextInit
+    # A string with line breaks in it is not one line, and measuring it as one
+    # was wrong in both directions. It used to add the lines together - a table
+    # cell of two lines asked for a column wide enough to hold both side by
+    # side - and since the glyph run became the single source of truth it threw
+    # instead, because a line feed has no glyph. What a caller wants here is
+    # the width the widest line needs.
+    #
+    # Drawing still refuses a line feed, and rightly: [text] sets ONE line.
+    # Splitting belongs to whoever draws several - textBlock and the table both
+    # do it through [textLines], which breaks paragraphs at \n exactly like
+    # this.
+    if {[string first \n $string] >= 0} {
+      set widest 0
+      foreach line [split $string \n] {
+        set width [my textWidth $line {*}$args]
+        if {$width > $widest} {
+          set widest $width
+        }
+      }
+      return $widest
+    }
     set state [my TextMerge $args]
     set font [dict get $state resolved]
     if {[my TextEmbedded $font]} {
-      set points [my FontWidth $font $string [dict get $state size] \
+      # The run is held here rather than left to a helper, because -spacing
+      # needs to know how many GLYPHS there are. Tc adds its space after every
+      # glyph drawn, and with ligatures that is no longer the number of
+      # characters: "office" is six characters and, in a face that has the ffi
+      # ligature, four glyphs. Counting characters charged for five gaps where
+      # three get drawn, and the line came out narrower than measured - visible
+      # as a frayed right edge in justified text.
+      set run [my FontRun $font $string [dict get $state ligatures]]
+      set points [my FontRunWidth $font $run [dict get $state size] \
           [dict get $state kerning]]
+      set count [llength $run]
     } else {
-      # No kerning for the standard fourteen: the metrics this package ships
-      # carry widths per byte value, not the AFM kerning pairs. Asking for
-      # -kerning with a standard font is therefore not an error but has no
-      # effect - and measuring it here differently from drawing it would be
-      # the worse answer.
+      # No kerning and no ligatures for the standard fourteen: the metrics this
+      # package ships carry widths per byte value, not the AFM kerning pairs.
+      # Asking for either with a standard font is therefore not an error but
+      # has no effect - and measuring it here differently from drawing it would
+      # be the worse answer. One glyph per character, so the two counts agree.
       set points [::tclpdf::afm stringWidth $font $string [dict get $state size]]
+      set count [string length $string]
     }
     # Character and word spacing widen the run and belong in the measurement,
     # or right-aligned text drifts.
-    set count [string length $string]
     if {$count > 1} {
       set points [expr {$points + [dict get $state spacing] * ($count - 1)}]
     }
@@ -205,10 +237,13 @@ oo::define ::tclpdf::document::document {
 
   # Bytes for the content stream: WinAnsi for a standard font, two-byte glyph
   # numbers for an embedded one.
+  # Bytes for a standard face. An embedded one never comes through here:
+  # [TextShow] takes its own road for those, because it needs the glyph run,
+  # and it decides before it calls. This used to test for that a second time
+  # and hand an embedded font to [FontEncode] WITHOUT the ligature flag - a
+  # branch nothing reached, and one that would have drawn a different glyph
+  # sequence than [textWidth] measured if anything ever had.
   method TextEncode {font string} {
-    if {[my TextEmbedded $font]} {
-      return [my FontEncode $font $string]
-    }
     return [::tclpdf::afm bytes $font $string]
   }
 
@@ -356,8 +391,11 @@ oo::define ::tclpdf::document::document {
   # the next glyph closer and a negative one opens a gap. Word spacing wants a
   # gap and therefore enters negative; a kerning pair is stored negative when
   # it tightens and therefore enters with its sign turned round.
-  method TextAdjust {font state string byTJ} {
-    set count [string length $string]
+  # The adjustments are indexed by GLYPH, not by character. With ligatures the
+  # two are no longer the same list: "office" is six characters and, in a font
+  # that has the ffi ligature, four glyphs.
+  method TextAdjust {font state run byTJ} {
+    set count [llength $run]
     if {$count < 1} {
       return {}
     }
@@ -367,9 +405,8 @@ oo::define ::tclpdf::document::document {
           / [dict get $state size]}]
     }
     set kern {}
-    if {[dict get $state kerning] && [my TextEmbedded $font]
-        && [dict get $state size] > 0} {
-      set kern [my FontKern $font $string]
+    if {[dict get $state kerning] && [dict get $state size] > 0} {
+      set kern [my FontRunKern $font $run]
     }
     if {$kick == 0 && ![llength $kern]} {
       return {}
@@ -381,10 +418,13 @@ oo::define ::tclpdf::document::document {
       # The space keeps its own width and is drawn; the adjustment follows it.
       # A run ending in a space is adjusted as well, exactly as Tw would have
       # done - and as [textWidth] counts it when it measures the line.
-      if {[string index $string $index] eq { }} {
+      #
+      # A glyph IS a space when it stands for exactly the one character U+0020.
+      # No ligature ever does, so this cannot be tripped by one.
+      if {[lindex [lindex $run $index] 1] eq {32}} {
         set value $kick
       }
-      # The last character has no successor, so there is no pair to kern.
+      # The last glyph has no successor, so there is no pair to kern.
       if {$index < $count - 1 && [llength $kern]} {
         set value [expr {$value - [lindex $kern $index]}]
       }
@@ -400,29 +440,38 @@ oo::define ::tclpdf::document::document {
   }
 
   # The show operator for one run: "(bytes) Tj", or a TJ array when something
-  # has to be adjusted by hand between the characters.
+  # has to be adjusted by hand between the glyphs.
   #
   # The horizontal scale (Tz) multiplies the advance and the adjustment alike,
   # exactly as it does with Tw, so it needs no second thought here.
+  #
+  # Only an embedded face takes the TJ road at all: word spacing through Tw is
+  # what a standard face uses, and neither kerning nor ligatures exist for the
+  # metrics shipped with this package. That is why the branch is here and not
+  # threaded through everything below it.
   method TextShow {font state string byTJ} {
-    set adjustments [my TextAdjust $font $state $string $byTJ]
-    if {![llength $adjustments]} {
+    if {![my TextEmbedded $font]} {
       return "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
+    }
+    set run [my FontRun $font $string [dict get $state ligatures]]
+    set adjustments [my TextAdjust $font $state $run $byTJ]
+    if {![llength $adjustments]} {
+      return "[::tclpdf::pdfObj bytesStr [my FontRunEncode $font $run]] Tj\n"
     }
     set parts {}
     set piece {}
-    set count [string length $string]
+    set count [llength $run]
     for {set index 0} {$index < $count} {incr index} {
-      append piece [string index $string $index]
+      lappend piece [lindex $run $index]
       set value [lindex $adjustments $index]
       if {$value != 0} {
-        lappend parts [::tclpdf::pdfObj bytesStr [my TextEncode $font $piece]]
+        lappend parts [::tclpdf::pdfObj bytesStr [my FontRunEncode $font $piece]]
         lappend parts [::tclpdf::pdfObj num $value]
         set piece {}
       }
     }
-    if {$piece ne {}} {
-      lappend parts [::tclpdf::pdfObj bytesStr [my TextEncode $font $piece]]
+    if {[llength $piece]} {
+      lappend parts [::tclpdf::pdfObj bytesStr [my FontRunEncode $font $piece]]
     }
     return "\[[join $parts { }]\] TJ\n"
   }
@@ -454,7 +503,7 @@ oo::define ::tclpdf::document::document {
       my state text [dict create \
           family helvetica style {} size 12 color black spacing 0 \
           wordSpacing 0 stretch 100 leading {} rise 0 kerning 1 \
-          resolved Helvetica]
+          ligatures 1 resolved Helvetica]
     }
     return
   }
@@ -498,4 +547,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.4
+package provide tclpdf::text 1.5

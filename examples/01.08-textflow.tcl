@@ -32,8 +32,8 @@ set here [file dirname [file normalize [info script]]]
 lappend auto_path [file dirname $here]
 package require tclpdf
 
-# The footer every example draws - shared, because eighteen copies of it
-# is how a block starts drifting.
+# The footer every example draws - shared, because one copy per example is
+# how a block starts drifting.
 source [file join $here common.tcl]
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "01.08-textflow.pdf"}]

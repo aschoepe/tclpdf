@@ -12,7 +12,7 @@
 # convenient way to resolve "steelblue" is [winfo rgb . steelblue] - and that
 # pulls in Tk and with it a display connection, so the package would stop
 # loading in a CGI or batch context. pdf4tcl takes that route (line 2861); we
-# do not. The table is 147 entries and costs nothing at load time.
+# do not. The table is 148 entries and costs nothing at load time.
 #
 # DeviceCMYK carries a caveat worth knowing: the conversion is not
 # colorimetric, and combined with an sRGB output intent it is a PDF/A risk.

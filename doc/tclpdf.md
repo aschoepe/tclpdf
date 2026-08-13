@@ -42,7 +42,7 @@ Nothing else is optional, because nothing else is used. Encryption and barcodes 
 
 **tclpdf new** ?*option value* ...?
 
-: Creates a document object and returns its command name. Options: **-unit** (`mm`, the default, or `pt`, `cm`, `in`), **-format** (a page format name such as `a4`, or a pair of numbers in the document unit), **-orientation** (`portrait` or `landscape`) and **-version** (`1.0` through `1.7`, or `2.0`; default `1.7`).
+: Creates a document object and returns its command name. Options: **-unit** (`mm`, the default, or `pt`, `cm`, `in`), **-format** (a page format name such as `a4`, or a pair of numbers in the document unit), **-orientation** (`portrait` or `landscape`), **-version** (`1.0` through `1.7`, or `2.0`; default `1.7`) and **-compress** (`1` by default — content streams are deflated; `0` writes them plainly, which is for reading the output, not for shipping it).
 
   A size given as two numbers is taken as it stands. It is turned only if an orientation is asked for as well — `{88 55}` stays 88 by 55.
 
@@ -52,7 +52,7 @@ Nothing else is optional, because nothing else is used. Encryption and barcodes 
 
 *doc* **configure** ?*option value* ...?
 
-: Reads or changes the document options after creation. With no arguments it returns them all. A page already added keeps the size it was given.
+: Changes the document options after creation. It returns nothing; read a single option with **cget**. A page already added keeps the size it was given.
 
 *doc* **cget** *option*
 
@@ -64,7 +64,7 @@ Nothing else is optional, because nothing else is used. Encryption and barcodes 
 
 ## Coordinates and units
 
-Positions are given in the document unit, and **y counts from the top of the page downwards** — the opposite of PDF's own convention, which the package converts on the way out. `-at` always names the **top left** corner of what is being placed, except inside a form or a pattern script, where the origin is that object's own bottom left corner.
+Positions are given in the document unit, and **y counts from the top of the page downwards** — the opposite of PDF's own convention, which the package converts on the way out. `-at` always names the **top left** corner of what is being placed. A form or a pattern script is no exception: inside them the origin is that object's own **top left** corner and y counts downwards, exactly as on the page — the conversion happens against the object's height instead of the page's.
 
 *doc* **coords** *x y*
 
@@ -110,7 +110,11 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 : Sets the font state, which stays in force until changed. Without arguments it returns the current state as a dictionary, including the resolved font name.
 
-  **-family** takes one of the fourteen standard faces (`helvetica`, `times`, `courier`, `symbol`, `zapfdingbats`), an exact PostScript name such as `Times-Italic`, or the alias of an embedded face. **-style** takes `bold`, `italic` or both. **-size** is always in points. Further options: **-spacing** (extra space per character), **-wordSpacing**, **-stretch** (horizontal scaling in percent), **-leading** (line spacing, default 1.2 times the size) and **-rise** (baseline shift, for super- and subscript).
+  **-family** takes one of the fourteen standard faces (`helvetica`, `times`, `courier`, `symbol`, `zapfdingbats`), an exact PostScript name such as `Times-Italic`, or the alias of an embedded face. **-style** takes `bold`, `italic` or both. **-size** is always in points. Further options: **-spacing** (extra space between glyphs — see below), **-wordSpacing**, **-stretch** (horizontal scaling in percent), **-leading** (line spacing, default 1.2 times the size) and **-rise** (baseline shift, for super- and subscript).
+
+  **-spacing** adds its space **between glyphs**, not between characters, because that is where the PDF operator behind it puts it. The two differ only when ligatures are in play: `office` is six characters and, in a face that has the `ffi` ligature, four glyphs — so `-spacing` opens three gaps there, not five. For classic letterspacing, where every letter stands apart, set **-ligatures 0** in the same call; a ligature says the letters belong close together, which is the opposite of what letterspacing says.
+
+  **-ligatures** applies the standard ligatures (`liga`) of an embedded face and is **on by default**. Where a face has one, the letters of `fi`, `ff`, `ffi` and their relatives are drawn as the single glyph the designer made for them. The characters are unaffected: the `ToUnicode` map carries the ligature back to the letters it was made from, so the text is copied and searched as it was written. Only `liga` is read - not the discretionary (`dlig`) or historical (`hlig`) sets, which the feature registry has off, and not the required ligatures (`rlig`) of the Arabic scripts, which need a shaper this package does not have. Note that a ligature need not change any width: measured on DejaVu Sans, `fi` and `fl` take exactly the room the two letters took, while `ff` is narrower.
 
   **-kerning** applies the pair kerning of an embedded face and is **on by default**. The amounts are read from the font while writing - from its GPOS table where it has kerning lookups, otherwise from its `kern` table, which is the order ISO/IEC 14496-22 prescribes - and are written into the content stream, so neither table is embedded. Kerning changes the width of every line it touches, and the width is measured with it: `textWidth`, the line breaker and the table column widths all see the kerned figures. Set **-kerning** to 0 where a document has to come out exactly as an earlier release produced it. The fourteen standard faces are unaffected: the metrics shipped for them carry widths per byte value, not kerning pairs.
 
@@ -204,7 +208,7 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 ## Colour
 
-A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey value, `{r g b}` between 0 and 1, `{c m y k}`, or a registered separation. Fills may also name a pattern: `{pattern sky}`.
+A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey value, `{r g b}` between 0 and 1, `{c m y k}`, or a registered separation. Fills may also name a pattern: `{pattern sky}`.
 
 ## Images
 
@@ -244,6 +248,10 @@ A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey valu
 
 : Measures without drawing — what a caller needs to decide whether a table still fits.
 
+*doc* **table themes**
+
+: The names of the built-in themes: `plain`, `striped`, `grid`.
+
 ## Gradients and patterns
 
 *doc* **shading axial -at** *{x y}* **-size** *{w h}* **-colors** *list* ?**-angle** *deg*?
@@ -272,7 +280,7 @@ A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey valu
 
 *doc* **form create** *name* **-size** *{w h}* **-script** *body*
 
-: Defines a form XObject — a drawing stored once and placed as often as wanted. Inside the script the origin is the form's own **bottom left** corner and y grows upward.
+: Defines a form XObject — a drawing stored once and placed as often as wanted. Inside the script the origin is the form's own **top left** corner and y counts downwards, the same way it does on a page.
 
 *doc* **form place** *name* **-at** *{x y}* ?**-scale** *s*? ?**-rotate** *deg*? ?**-opacity** *o*?
 
@@ -286,9 +294,13 @@ A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey valu
 
 : Draws an SVG file as **real vectors** — paths, shapes, groups, transforms, `use`, text and gradients become PDF operators, not a picture. Returns `{x y width height}` of what was drawn. Without a size the file's own dimensions apply; with one it is fitted, keeping the aspect ratio.
 
-*doc* **svg info** *path* / *doc* **svg size** *path*
+*doc* **svg info**
 
-: What the file contains, and its natural size.
+: What the LAST drawing skipped — the elements the module does not draw. It reports on the document, not on a file: anything written after **info** is accepted and ignored, so `svg info some.svg` says nothing about `some.svg`.
+
+*doc* **svg size** *path*
+
+: The natural size of an SVG file.
 
 ## Attachments, links and bookmarks
 
@@ -340,9 +352,21 @@ A colour is a name (`red`, `steelblue` — 147 of them, without Tk), a grey valu
 
   Declaring conformance also turns on a check: every font in the document must be embedded, and writing fails with a message naming the offending face rather than producing a file that a validator rejects later.
 
+*doc* **pdfa state**
+
+: What has been set, as a dictionary: `part`, `conformance`, `profile`, `identifier`, `extensions` and `registered`. Empty before **pdfa** was called.
+
+*doc* **pdfa extension** *xml*
+
+: Adds an extension schema to the XMP packet — the way a profile such as ZUGFeRD announces its own properties. `zugferd` uses it.
+
 *doc* **zugferd** *path* ?**-profile** *p*? ?**-icc** *path*? ?**-version** *v*?
 
 : The one call an electronic invoice needs. It reads the profile from the invoice XML (BT-24), declares PDF/A-3B, writes the output intent with the sRGB profile shipped with the package, adds the Factur-X XMP extension schema, and attaches the file as `factur-x.xml` with `/AFRelationship /Alternative` at document level, an entry in the names tree, and a modification date. Returns the detected profile.
+
+*doc* **zugferd profile** *xml*
+
+: The conformance level named in BT-24 of an invoice XML, read without writing anything. Refuses XML that carries no such identifier.
 
 *doc* **zugferd state**
 

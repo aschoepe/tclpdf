@@ -3946,7 +3946,7 @@ fi
 # text/fonts, images, tables, ZUGFeRD) are added one by one as they appear.
 
 
-    vars="tclpdf.tcl pdfObj.tcl filter.tcl event.tcl writer.tcl color.tcl geometry.tcl document.tcl page.tcl graphics.tcl shape.tcl output.tcl option.tcl afmData.tcl afm.tcl text.tcl textBlock.tcl textAvoid.tcl textPath.tcl xObject.tcl io.tcl attach.tcl sfnt.tcl subset.tcl font.tcl kern.tcl kernGpos.tcl imageJpeg.tcl imagePng.tcl imagePngAlpha.tcl image.tcl shading.tcl pattern.tcl tableLayout.tcl tableDraw.tcl table.tcl pdfa.tcl zugferd.tcl link.tcl outline.tcl pageNumber.tcl xml.tcl svgPath.tcl svg.tcl svgElement.tcl svgPaint.tcl"
+    vars="tclpdf.tcl pdfObj.tcl filter.tcl event.tcl writer.tcl color.tcl geometry.tcl document.tcl page.tcl graphics.tcl shape.tcl output.tcl option.tcl afmData.tcl afm.tcl text.tcl textBlock.tcl textAvoid.tcl textPath.tcl xObject.tcl io.tcl attach.tcl sfnt.tcl subset.tcl font.tcl kern.tcl kernGpos.tcl otLayout.tcl liga.tcl imageJpeg.tcl imagePng.tcl imagePngAlpha.tcl image.tcl shading.tcl pattern.tcl tableLayout.tcl tableDraw.tcl table.tcl pdfa.tcl zugferd.tcl link.tcl outline.tcl pageNumber.tcl xml.tcl svgPath.tcl svg.tcl svgElement.tcl svgPaint.tcl"
     for i in $vars; do
 	# check for existence, be strict because it is installed
 	if test ! -f "${srcdir}/$i" ; then

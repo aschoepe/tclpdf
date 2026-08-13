@@ -8,7 +8,7 @@ exec tclsh "$0" "$@"
 # Generate afmData.tcl - the metrics of the 14 standard fonts - from the
 # original Adobe AFM files.
 #
-# Usage: mkafm.tcl <afm-directory> <glyph2uni.tcl> > afmData.tcl
+# Usage: mkafm.tcl <afm-directory> > afmData.tcl
 #
 # This is a BUILD-TIME tool. It does not ship and it is not needed to use the
 # package; it exists so that the numbers in afmData.tcl can be reproduced and
@@ -30,12 +30,12 @@ exec tclsh "$0" "$@"
 # apply to them.
 #
 
-if {[llength $argv] != 2} {
-  puts stderr "usage: [file tail [info script]] <afm-directory> <glyph2uni.tcl>"
+if {[llength $argv] != 1} {
+  puts stderr "usage: [file tail [info script]] <afm-directory>"
   exit 1
 }
 
-lassign $argv afmDirectory glyphFile
+lassign $argv afmDirectory
 
 # The 14 standard fonts (9.6.2.2). The order is the one they are listed in.
 set fonts {
@@ -49,9 +49,30 @@ set fonts {
 set symbolic {Symbol ZapfDingbats}
 
 # --- glyph name -> Unicode, from the Adobe Glyph List ----------------------
-
-namespace eval ::pdf4tcl {}
-source $glyphFile
+#
+# agl/glyphlist.txt is the list itself, verbatim from Adobe, with its own BSD
+# licence header. It lives here rather than being fetched or borrowed: this
+# generator used to take the table as a second argument and read it out of a
+# pdf4tcl installation, which meant afmData.tcl could not be reproduced
+# without another project on the disk - a dependency that appeared nowhere but
+# in an unnamed argv parameter.
+#
+# Entries with more than one code point (ligature names such as "dalethatafpatah")
+# are skipped: they name a sequence, not a character, and nothing here can use
+# them.
+set glyphToUni {}
+set channel [open [file join [file dirname [info script]] agl glyphlist.txt] r]
+foreach line [split [read $channel] \n] {
+  if {[string index $line 0] eq "#" || $line eq ""} {
+    continue
+  }
+  lassign [split $line ";"] name codes
+  if {[llength $codes] != 1} {
+    continue
+  }
+  dict set glyphToUni $name [scan $codes %x]
+}
+close $channel
 
 # ALL names per code point, not one. Several names map to the same character
 # (Euro/euro, Delta/uni0394), and which of them a font actually carries differs
@@ -62,8 +83,12 @@ source $glyphFile
 # width 0 for the Euro sign in all 14 fonts, which would have placed every
 # amount on an invoice a few points off - in a document that opens fine and
 # that no validator complains about.
+#
+# The names of one code point keep the order of the list, which is
+# alphabetical - deterministic, unlike the hash order an array would have
+# given. Two runs of this generator therefore produce the same file.
 set uniToGlyphs {}
-foreach {name code} [array get ::pdf4tcl::GlName2Uni] {
+dict for {name code} $glyphToUni {
   dict lappend uniToGlyphs $code $name
 }
 
@@ -199,3 +224,15 @@ foreach font $fonts {
   puts "set ::tclpdf::afmData::descriptor($font) \{$values\}"
   puts ""
 }
+
+# The generator did NOT write this line until 2026-08-13, so the committed
+# afmData.tcl carried a hand-added last line while its own header said
+# "GENERATED - do not edit, rerun the generator instead". Anyone who followed
+# that instruction got a module without a version, and tests/version.test then
+# failed on it. The file has to be reproducible in full or the header is a lie.
+#
+# The number is written out here rather than read from anywhere: a module
+# version is raised by the author, deliberately, and a generator that guessed
+# it would raise it behind their back.
+puts "package provide tclpdf::afmData 1.0"
+

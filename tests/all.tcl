@@ -66,8 +66,10 @@ foreach tclpdfPkg {
     tclpdf::sfnt
     tclpdf::subset
     tclpdf::font
+    tclpdf::otLayout
     tclpdf::kernGpos
     tclpdf::kern
+    tclpdf::liga
     tclpdf::imageJpeg
     tclpdf::imagePng
     tclpdf::imagePngAlpha

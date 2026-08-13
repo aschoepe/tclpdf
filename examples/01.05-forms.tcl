@@ -11,11 +11,13 @@
 #
 # Two things about a form are easy to get wrong:
 #
-#   Inside the -script the origin is the form's own bottom left corner and y
-#   grows upward, because that is the coordinate system a form XObject is
-#   defined in (ISO 32000-1, 8.10.2). Everywhere else in tclpdf -at is the TOP
-#   left corner and y counts downward. The script below is the one place in
-#   this file where the other convention applies.
+#   Inside the -script the origin is the form's own TOP left corner and y
+#   counts downward - the same convention as everywhere else in tclpdf, and
+#   NOT the bottom-left system a form XObject is defined in (ISO 32000-1,
+#   8.10.2). The package converts against the form's own height exactly as it
+#   converts against the page height, so nothing here is a special case. This
+#   comment claimed the opposite until it was measured: a rect at {0 0} in a
+#   100 pt form comes out as "0 90 10 10 re", which is the top.
 #
 #   Placing is a transformation, not a redraw: -scale, -rotate and -opacity
 #   change the matrix the form is drawn through. The object itself stays
@@ -30,8 +32,8 @@ set here [file dirname [file normalize [info script]]]
 lappend auto_path [file dirname $here]
 package require tclpdf
 
-# The footer every example draws - shared, because eighteen copies of it
-# is how a block starts drifting.
+# The footer every example draws - shared, because one copy per example is
+# how a block starts drifting.
 source [file join $here common.tcl]
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "01.05-forms.pdf"}]

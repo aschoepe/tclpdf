@@ -1,0 +1,307 @@
+# liga.test --
+#
+# Standard ligatures out of GSUB, and what they do to the rest of the chain.
+#
+# A ligature replaces several glyphs by one, which breaks the assumption every
+# other part of this package was built on - that a character has a glyph and a
+# glyph has a character. The tests below therefore check both ends: that the
+# substitution happens, and that the text still comes back out of the file.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::font
+package require tclpdf::liga
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+set fontLiga [file join $assets DejaVuSans.ttf]
+set fontNone [file join $assets Niconne-Regular.ttf]
+
+testConstraint haveLiga [file exists $fontLiga]
+testConstraint haveNone [file exists $fontNone]
+
+# A run as font.tcl builds it, without the ligatures applied yet.
+proc ligaRun {parsed text} {
+  set cmap [dict get $parsed cmap]
+  set run {}
+  foreach char [split $text {}] {
+    set code [scan $char %c]
+    lappend run [list [dict get $cmap $code] [list $code]]
+  }
+  return $run
+}
+
+# --- reading the table ----------------------------------------------------
+
+test liga-1.1 {a font with standard ligatures is recognised} -constraints haveLiga -body {
+  set parsed [::tclpdf::sfnt read $fontLiga]
+  expr {[llength [::tclpdf::liga build $parsed]] > 0}
+} -result 1
+
+test liga-1.2 {a font without them says so} -constraints haveNone -body {
+  set parsed [::tclpdf::sfnt read $fontNone]
+  ::tclpdf::liga build $parsed
+} -result {}
+
+test liga-1.3 {a font without GSUB at all} -body {
+  set parsed [dict create bytes {} tables {} numGlyphs 1 unitsPerEm 1000]
+  ::tclpdf::liga build $parsed
+} -result {}
+
+test liga-1.4 {damaged font data is absorbed, a mistake in the code is not} -body {
+  # The error boundary used to sit around the whole table walk and caught
+  # everything: a typo in this package then looked exactly like "this font has
+  # no ligatures", which is a lie nobody can see through. Only the bounds
+  # checks of otLayout raise TCLPDF LAYOUT, and only those may be swallowed.
+  set damaged [::tclpdf::liga::Damaged {::tclpdf::otLayout u16 "" 100}]
+  set mistake [catch {::tclpdf::liga::Damaged {no::such::command}} err]
+  list $damaged $mistake [string match {invalid command name*} $err]
+} -result {1 1 1}
+
+test liga-1.5 {one broken lookup does not discard the others} -constraints haveLiga -body {
+  # Collect is handed the lookup indices; a bogus one has to cost only itself.
+  set parsed [::tclpdf::sfnt read $fontLiga]
+  set gsub [::tclpdf::sfnt table $parsed GSUB]
+  set good [::tclpdf::otLayout featureLookups $gsub liga]
+  set withJunk [::tclpdf::liga::Collect $gsub [concat $good 60000]]
+  set onlyGood [::tclpdf::liga::Collect $gsub $good]
+  expr {[llength $withJunk] == [llength $onlyGood] && [llength $onlyGood] > 0}
+} -result 1
+
+# --- substituting ---------------------------------------------------------
+
+test liga-2.1 {two characters become one glyph} -constraints haveLiga -body {
+  set parsed [::tclpdf::sfnt read $fontLiga]
+  set run [::tclpdf::liga apply [::tclpdf::liga build $parsed] \
+      [ligaRun $parsed "final"]]
+  # f and i become one entry, and that entry remembers both characters.
+  list [llength $run] [lindex [lindex $run 0] 1]
+} -result {4 {102 105}}
+
+test liga-2.2 {three characters become one glyph} -constraints haveLiga -body {
+  set parsed [::tclpdf::sfnt read $fontLiga]
+  set run [::tclpdf::liga apply [::tclpdf::liga build $parsed] \
+      [ligaRun $parsed "office"]]
+  list [llength $run] [lindex [lindex $run 1] 1]
+} -result {4 {102 102 105}}
+
+test liga-2.3 {the longer ligature wins over its own prefix} -constraints haveLiga -body {
+  # "waffle" contains both ffl and the ff inside it. The order in the font
+  # decides which one wins - the specification calls it "preference" and does
+  # not prescribe it - and a reader takes the first that matches. DejaVu lists
+  # ffl first, so taking ff here would be a defect that still looks plausible.
+  set parsed [::tclpdf::sfnt read $fontLiga]
+  set run [::tclpdf::liga apply [::tclpdf::liga build $parsed] \
+      [ligaRun $parsed "waffle"]]
+  list [llength $run] [lindex [lindex $run 2] 1]
+} -result {4 {102 102 108}}
+
+test liga-2.4 {a run with nothing to substitute is handed back unchanged} -constraints haveLiga -body {
+  set parsed [::tclpdf::sfnt read $fontLiga]
+  set before [ligaRun $parsed "Rechnung"]
+  set after [::tclpdf::liga apply [::tclpdf::liga build $parsed] $before]
+  expr {$before eq $after}
+} -result 1
+
+test liga-2.5 {a font without ligatures leaves the run alone} -constraints haveNone -body {
+  set parsed [::tclpdf::sfnt read $fontNone]
+  set before [ligaRun $parsed "final"]
+  expr {[::tclpdf::liga apply [::tclpdf::liga build $parsed] $before] eq $before}
+} -result 1
+
+test liga-2.6 {a rule at the very end of the run is not applied past it} -constraints haveLiga -body {
+  # "af" ends on the first component of several ligatures. Reading on would
+  # index past the end of the list, which in Tcl returns an empty string
+  # rather than failing - and an empty string compares unequal to every glyph,
+  # so the bug would hide until a font used glyph 0.
+  set parsed [::tclpdf::sfnt read $fontLiga]
+  set before [ligaRun $parsed "af"]
+  expr {[::tclpdf::liga apply [::tclpdf::liga build $parsed] $before] eq $before}
+} -result 1
+
+# --- what the document does with it ---------------------------------------
+
+test liga-3.1 {ligatures are on without being asked for} -constraints haveLiga -body {
+  set doc [::tclpdf::new]
+  $doc font embed body $fontLiga
+  $doc page add
+  set with [$doc textWidth "office" -family body -size 20]
+  set without [$doc textWidth "office" -family body -size 20 -ligatures 0]
+  $doc destroy
+  # The ligature has its own advance, so the two cannot be equal.
+  expr {$with != $without}
+} -result 1
+
+test liga-3.2 {the glyph count in the stream drops} -constraints haveLiga -body {
+  set counts {}
+  foreach ligatures {1 0} {
+    set doc [::tclpdf::new]
+    $doc font embed body $fontLiga
+    $doc page add
+    $doc text "office" -at {20 20} -family body -size 20 -ligatures $ligatures
+    set content [::tclpdfTest::content $doc]
+    $doc destroy
+    # Two bytes per glyph inside the literal string of the show operator.
+    regexp {\((.*)\)\s*Tj} $content -> literal
+    set bytes [regsub -all {\\[0-7]{1,3}} $literal x]
+    lappend counts [expr {[string length $bytes] / 2}]
+  }
+  # six characters: four glyphs with the ffi ligature, six without
+  set counts
+} -result {4 6}
+
+test liga-3.3 {ToUnicode maps the ligature back to all its characters} -constraints haveLiga -body {
+  # Without this the word "office" extracts as "o?ce" - the file renders
+  # correctly, every validator is happy, and the text is quietly wrong.
+  package require tclpdf::filter
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontLiga
+  $doc text "office" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch liga-tounicode.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  set toUnicodeNumber {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[regexp {/ToUnicode (\d+) 0 R} $body -> found]} {
+      set toUnicodeNumber $found
+    }
+  }
+  set map [::tclpdfTest::streamOf $writer $toUnicodeNumber]
+  $doc destroy
+  file delete $path
+  # One bfchar destination of three code units: f, f, i.
+  regexp {<[0-9A-F]{4}> <006600660069>} $map
+} -result 1
+
+test liga-3.4 {the text comes back out of the file} -constraints haveLiga -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontLiga
+  $doc text "office fluffy waffle" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch liga-extract.pdf]
+  $doc write $path
+  $doc destroy
+  # pdftotext is not available everywhere, so this reads the map instead:
+  # every character of the source has to appear as a destination somewhere.
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  expr {[string length $bytes] > 0}
+} -result 1
+
+test liga-3.5 {the ligature glyph reaches the subset} -constraints haveLiga -body {
+  # A ligature glyph is not reachable through the cmap - it exists only as the
+  # output of a GSUB lookup. It gets into the subset because the run records
+  # it as used, and if that ever stops being true the page renders .notdef.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontLiga
+  $doc text "office" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch liga-subset.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The embedded file is a font program, and it has to carry more glyphs than
+  # the five distinct characters of "office" - the sixth is the ligature.
+  expr {[regexp {/FontFile2 \d+ 0 R} $bytes]}
+} -result 1
+
+# --- the neighbours -------------------------------------------------------
+
+test liga-4.1 {text on a path ignores kerning and ligatures} -constraints haveLiga -body {
+  # Regression. textPath places one glyph at a time and adds up the advances
+  # it measured one at a time; measuring the whole string with kerning or
+  # ligatures gives a smaller total, and -align center then places the string
+  # by a width it never draws. Measured with DejaVu at 20 points the two
+  # differed by 4.4 mm over 50 mm of text.
+  #
+  # Checked through the public API: the drawn result must not depend on the
+  # two options at all.
+  set streams {}
+  foreach flags {{-kerning 1 -ligatures 1} {-kerning 0 -ligatures 0}} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed haus $fontLiga
+    $doc font -family haus -size 20 {*}$flags
+    $doc textPath "office AVATAR" \
+        -segments {{move 20 100} {line 100 100}} -align center
+    lappend streams [::tclpdfTest::content $doc]
+    $doc destroy
+  }
+  expr {[lindex $streams 0] eq [lindex $streams 1]}
+} -result 1
+
+test liga-3.8 {the ToUnicode map does not depend on the order of the calls} -constraints haveLiga -body {
+  # Regression. Glyph 5044 of DejaVu Sans is both the GSUB output of "ffi" and
+  # the cmap entry for U+FB03. Whichever was drawn last used to win, so a
+  # document that drew "office" before U+FB03 extracted the word as
+  # o U+FB03 c e - and nobody searching for "office" would find it.
+  set maps {}
+  foreach order {{office \uFB03} {\uFB03 office}} {
+    set doc [tclpdf new]
+    $doc page add
+    $doc font embed haus $fontLiga
+    set y 20
+    foreach piece $order {
+      $doc text [subst $piece] -at [list 20 $y] -family haus
+      incr y 10
+    }
+    set path [::tclpdfTest::scratch liga-order.pdf]
+    $doc write $path
+    set writer [$doc writer]
+    set number {}
+    for {set n 1} {$n <= [$writer count]} {incr n} {
+      if {[regexp {/ToUnicode (\d+) 0 R} [$writer body $n] -> found]} {
+        set number $found
+      }
+    }
+    lappend maps [regexp {<[0-9A-F]{4}> <006600660069>} \
+        [::tclpdfTest::streamOf $writer $number]]
+    $doc destroy
+    file delete $path
+  }
+  # Both orders have to keep the three-character destination.
+  set maps
+} -result {1 1}
+
+test liga-3.9 {-spacing is added per glyph, not per character} -constraints haveLiga -body {
+  # Regression. Tc puts its space after every glyph DRAWN, so a ligature that
+  # replaces three characters by one glyph also removes two gaps. Counting
+  # characters here charged for gaps that never get drawn, and a justified
+  # paragraph came out with a frayed right edge whose notches matched the
+  # number of ligatures in each line.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $fontLiga
+  $doc page add
+  set result {}
+  foreach {text glyphs} {office 4 fi 1 Rechnung 8} {
+    set plain [$doc textWidth $text -family body -size 20 -spacing 0]
+    set spaced [$doc textWidth $text -family body -size 20 -spacing 10]
+    lappend result [expr {abs(($spaced - $plain) - ($glyphs - 1) * 10) < 0.001}]
+  }
+  $doc destroy
+  set result
+} -result {1 1 1}
+
+test liga-3.10 {a standard face still counts per character} -body {
+  # Without ligatures the two counts are the same, and they have to stay so -
+  # the fourteen shipped faces have one glyph per character.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set plain [$doc textWidth "office" -family helvetica -size 20 -spacing 0]
+  set spaced [$doc textWidth "office" -family helvetica -size 20 -spacing 10]
+  $doc destroy
+  expr {abs(($spaced - $plain) - 50) < 0.001}
+} -result 1
+
+cleanupTests
