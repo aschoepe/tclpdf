@@ -62,14 +62,8 @@ test pageNumber-1.3 {writing twice produces the same bytes} -body {
     $doc text "Inhalt $n" -at {20 30}
   }
   $doc pageNumbers -at {105 285} -align center -size 8
-  set first [::tclpdfTest::scratch numbers-a.pdf]
-  set second [::tclpdfTest::scratch numbers-b.pdf]
-  $doc write $first
-  $doc write $second
+  lassign [::tclpdfTest::writeTwice $doc numbers] a b
   $doc destroy
-  set a [::tclpdfTest::readBytes $first]
-  set b [::tclpdfTest::readBytes $second]
-  file delete $first $second
   # Identical, and the invoking operator present once per page - not twice.
   list [expr {$a eq $b}] [regexp -all {/XOPN[0-9_]+ Do} $a]
 } -result {1 4}

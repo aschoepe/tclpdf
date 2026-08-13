@@ -102,19 +102,25 @@ oo::define ::tclpdf::document::document {
     # embedded face, so U costs nothing here and is the better default answer
     # when asked for.
     #
-    # Level A is refused for the same reason part 1 is: it asks for a tagged
-    # document, and this writer has no structure tree. Accepting it produced a
-    # file that says PDF/A-3a and fails validation on two counts - measured
-    # with veraPDF, clauses 6.7.2.2 (MarkInfo/Marked) and 6.7.3.3
-    # (StructTreeRoot). A refusal here is worth more than a rejection at the
-    # recipient.
+    # Level A is B and U plus a tagged document, so it needs the structure
+    # tree switched on. It used to be refused outright, and before that it was
+    # accepted without one - which produced a file saying PDF/A-3a that failed
+    # validation on two counts, measured with veraPDF, clauses 6.7.2.2
+    # (MarkInfo/Marked) and 6.7.3.3 (StructTreeRoot).
+    #
+    # Switching [tagged] on here rather than complaining would be the friendly
+    # move and is wrong: the brackets change every content stream, so a
+    # document would silently come out different from the one the caller
+    # tested. Saying which single call is missing costs them one line.
     set level [string toupper [dict get $current conformance]]
     switch -- $level {
       B - U {}
       A {
-        return -code error "tclpdf: PDF/A level A needs a tagged document -\
-            a structure tree and MarkInfo, neither of which tclpdf writes yet.\
-            Use level U, which guarantees extractable text, or level B"
+        if {[my state tagged] ne "1"} {
+          return -code error "tclpdf: PDF/A level A needs a tagged document -\
+              a structure tree and MarkInfo. Call \[\$doc tagged 1\] before\
+              drawing, or use level U, which guarantees extractable text"
+        }
       }
       default {
         return -code error "tclpdf: PDF/A conformance must be B or U, not\
@@ -148,7 +154,6 @@ oo::define ::tclpdf::document::document {
   # than a flag.
   method PdfaWrite {} {
     set current [my state pdfa]
-    my PdfaCheckFonts
     if {[dict get $current profile] eq {}} {
       return
     }
@@ -237,6 +242,20 @@ oo::define ::tclpdf::document::document {
   # The XMP packet. Written at catalog time so that everything that wanted to
   # add an extension schema has had its chance.
   method PdfaCatalog {} {
+    # The font check runs HERE and not in PdfaWrite, and the difference is not
+    # cosmetic. Both subscribe to write time events, and subscribers run in
+    # the order they registered - so a document that declared [pdfa] before
+    # its first [font embed] ran this check before the font module had
+    # written a single object. It then found no /FontFile, and refused a
+    # document whose fonts were all embedded correctly, with the message
+    # "FEbody is a standard font" - naming the resource because there was no
+    # /BaseFont to read yet.
+    #
+    # The catalog event fires after every beforeWrite subscriber, so by now
+    # the objects exist whatever order the caller used. Nothing is lost by
+    # checking late: [write] assembles everything before it opens the file,
+    # so a refusal here still leaves no file behind.
+    my PdfaCheckFonts
     if {[my metadata] eq {}} {
       my metadata [my PdfaXmp]
     }
@@ -307,4 +326,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pdfa 1.2
+package provide tclpdf::pdfa 1.3

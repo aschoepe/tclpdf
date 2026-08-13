@@ -12,6 +12,13 @@ history, including that URW++ released **the same Version 2.0 fonts in 2017
 under LPPL 1.3c and under SIL Open Font License 1.1, without a Reserved Font
 Name clause**, in addition to the AGPL v3 release of 2016.
 
+The same fonts are packaged by the distributions - on Debian and its
+derivatives as `fonts-urw-base35`
+(<https://packages.debian.org/stable/fonts/fonts-urw-base35>), described there
+as "metric-compatible with the 35 PostScript Level 2 Base Fonts". Anyone who
+would rather not take font files out of a repository has that route, and it is
+the shorter one on a Linux machine.
+
 One caveat worth knowing rather than discovering later: that repository
 describes itself in two ways. Its GitHub description says "Fork of defunct
 URWTypeFoundry/Core_35"; its README says "Nothing here is a fork or a re-hint.

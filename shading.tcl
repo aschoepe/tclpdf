@@ -64,11 +64,22 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: shading $kind needs -at {x y} and -size {w h}"
     }
     set number [my ShadingObject $kind $options]
+    # A gradient is content on the page like any shape: part of an open
+    # Figure, decoration otherwise. Without the bracket it would belong to no
+    # element at all, which PDF/UA counts as a defect.
+    set mark {}
+    if {[my state tagged] eq "1"} {
+      set mark [my StructureMark auto]
+      my content [my StructureBegin $mark]
+    }
     my save
     my clip -at [dict get $options at] -size [dict get $options size]
     set resourceName [my ShadingResource $number]
     my content "[::tclpdf::pdfObj name $resourceName] sh\n"
     my restore
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
+    }
     return $resourceName
   }
 
@@ -284,4 +295,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.0
+package provide tclpdf::shading 1.1

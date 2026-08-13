@@ -101,7 +101,19 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
-    return [my TableDrawAll $args]
+    # A tagged document gets the table as a Table element holding TR and
+    # TH/TD - the one structure a writer can derive with certainty, because
+    # the sections and the grid are already known here.
+    #
+    # The call is built as a list and run either way, so the body is not
+    # written twice; the guard reads the state directly rather than asking
+    # [tagged], which would load the structure module for every table in
+    # every document.
+    set draw [list my TableDrawAll $args]
+    if {[my state tagged] eq "1"} {
+      return [my structure Table -script $draw]
+    }
+    return [{*}$draw]
   }
 
   # What a table WOULD come out as, without drawing anything: the column
@@ -423,27 +435,47 @@ oo::define ::tclpdf::document::document {
   # Draw a run of rows that is known to fit.
   method TableSection {rows heights widths group left y options} {
     foreach row $rows height $heights {
-      foreach cell $row {
-        set x $left
-        for {set index 0} {$index < [dict get $cell column]} {incr index} {
-          set x [expr {$x + [lindex $widths $index]}]
-        }
-        set cellHeight $height
-        if {[dict get $cell rowSpan] > 1} {
-          set cellHeight [dict get $cell spanHeight]
-        }
-        dict set cell x $x
-        dict set cell y $y
-        set decision [my TableHook willDrawCell $options $cell]
-        if {$decision eq "0"} {
-          continue
-        }
-        my TableDrawCell $cell $x $y $cellHeight
-        my TableHook didDrawCell $options $cell
+      set draw [list my TableRowCells $row $height $widths $left $y $options]
+      if {[my state tagged] eq "1"} {
+        my structure TR -script $draw
+      } else {
+        {*}$draw
       }
       set y [expr {$y + $height}]
     }
     return $y
+  }
+
+  # One row's cells. Split out of TableSection so that the row can be wrapped
+  # in a TR without the loop body existing twice.
+  method TableRowCells {row height widths left y options} {
+    foreach cell $row {
+      set x $left
+      for {set index 0} {$index < [dict get $cell column]} {incr index} {
+        set x [expr {$x + [lindex $widths $index]}]
+      }
+      set cellHeight $height
+      if {[dict get $cell rowSpan] > 1} {
+        set cellHeight [dict get $cell spanHeight]
+      }
+      dict set cell x $x
+      dict set cell y $y
+      set decision [my TableHook willDrawCell $options $cell]
+      if {$decision eq "0"} {
+        continue
+      }
+      # A head cell is a TH, everything else a TD - the section is on the
+      # cell already, put there when the grid was normalised.
+      set draw [list my TableDrawCell $cell $x $y $cellHeight]
+      if {[my state tagged] eq "1"} {
+        my structure [expr {[dict get $cell section] eq "head" ? "TH" : "TD"}] \
+            -script $draw
+      } else {
+        {*}$draw
+      }
+      my TableHook didDrawCell $options $cell
+    }
+    return
   }
 
   # Call a hook, if one was given. The document is appended so that a hook can
@@ -457,4 +489,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.1
+package provide tclpdf::table 1.2

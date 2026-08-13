@@ -313,10 +313,13 @@ test zugferd-7.4 {level U is written and validates as 3u} -constraints {haveIcc 
       [regexp {/ToUnicode} $bytes]
 } -result {1 1 1}
 
-test zugferd-7.5 {level A is refused, because the structure tree is missing} -body {
-  # The same rule as part 1: a level this writer cannot deliver is refused at
-  # the call rather than written and rejected at the recipient. Measured with
-  # veraPDF before the refusal existed - clauses 6.7.2.2 and 6.7.3.3.
+test zugferd-7.5 {level A without a structure tree names the missing call} -body {
+  # Level A is deliverable since 2026-08-13, but only for a document that
+  # switched tagging on. Turning it on here instead of complaining would be
+  # the friendly move and is wrong: the brackets change every content stream,
+  # so the document would come out different from the one the caller tested.
+  # Before the tree existed this was refused outright; before THAT it was
+  # accepted and failed veraPDF on 6.7.2.2 and 6.7.3.3.
   set doc [tclpdf new -unit mm]
   $doc page add
   try {
@@ -324,7 +327,38 @@ test zugferd-7.5 {level A is refused, because the structure tree is missing} -bo
   } finally {
     $doc destroy
   }
-} -returnCodes error -match glob -result {*level A needs a tagged document*level U*}
+} -returnCodes error -match glob -result {*level A needs a tagged document*tagged 1*}
+
+test zugferd-7.7 {the font check does not depend on the order of the calls} \
+    -constraints {haveIcc haveInvoice} -body {
+  # Both subscribe to write time events, and subscribers run in the order
+  # they registered. With the check in PdfaWrite, declaring [pdfa] before the
+  # first [font embed] ran it before the font module had written anything: it
+  # found no /FontFile and refused a document whose fonts were all embedded,
+  # with "FEbody is a standard font" - the resource name, because there was
+  # no /BaseFont to read yet. The same document the other way round wrote
+  # fine, which is why no example ever hit it.
+  proc orderProbe {first face icc} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    if {$first eq "pdfa"} {
+      $doc pdfa -part 3 -conformance B -profile $icc
+      $doc font embed haus $face
+    } else {
+      $doc font embed haus $face
+      $doc pdfa -part 3 -conformance B -profile $icc
+    }
+    $doc text "Rechnung" -at {20 20} -family haus
+    set path [::tclpdfTest::scratch pdfa-order-$first.pdf]
+    set code [catch {$doc write $path} err]
+    $doc destroy
+    file delete $path
+    return [expr {$code ? $err : "ok"}]
+  }
+  set result [list [orderProbe pdfa $face $icc] [orderProbe embed $face $icc]]
+  rename orderProbe {}
+  set result
+} -result {ok ok}
 
 test zugferd-7.6 {an unknown conformance names the ones that exist} -body {
   set doc [tclpdf new -unit mm]

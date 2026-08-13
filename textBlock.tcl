@@ -306,16 +306,35 @@ oo::define ::tclpdf::document::document {
   # turned, and a pre-shifted x would rotate about the wrong point (same
   # reasoning as in [text], text.tcl).
   method TextParagraphLine {line state x y width align isLast rotate {lift 0}} {
+    # The space the line breaker consumed has to reappear in the content
+    # stream: a line ends where a word ended, and without it the next line
+    # follows immediately - "der Antrieb ist" plus "getauscht" comes back out
+    # as "istgetauscht" to anything that reads the text rather than the page.
+    # ISO 32000-1 14.8.2.6 says so for tagged documents, and it is measured:
+    # pdfinfo -struct-text showed exactly that, while neither veraPDF profile
+    # noticed.
+    #
+    # It goes into the DRAWN string only, never into the measured one - the
+    # widths below decide the alignment, and a trailing space must not move
+    # a right aligned or centred line. Visually it changes nothing either
+    # way: it sits after the last glyph of the line.
+    #
+    # Only for tagged documents, so nothing that exists today comes out with
+    # different bytes.
+    set drawn $line
+    if {!$isLast && [my state tagged] eq "1"} {
+      append drawn " "
+    }
     switch -- $align {
       left {
-        my TextRun $line $state $x $y $rotate 0 $lift
+        my TextRun $drawn $state $x $y $rotate 0 $lift
       }
       right {
-        my TextRun $line $state [expr {$x + $width}] $y $rotate \
+        my TextRun $drawn $state [expr {$x + $width}] $y $rotate \
             [my TextLineWidth $line $state] $lift
       }
       center - centre {
-        my TextRun $line $state [expr {$x + $width / 2.0}] $y $rotate \
+        my TextRun $drawn $state [expr {$x + $width / 2.0}] $y $rotate \
             [expr {[my TextLineWidth $line $state] / 2.0}] $lift
       }
       justify {
@@ -324,7 +343,7 @@ oo::define ::tclpdf::document::document {
         # column and the result is unmistakably broken.
         set spaces [expr {[llength [regexp -all -inline {\S+} $line]] - 1}]
         if {$isLast || $spaces < 1} {
-          my TextRun $line $state $x $y $rotate 0 $lift
+          my TextRun $drawn $state $x $y $rotate 0 $lift
           return
         }
         set gap [expr {$width - [my TextLineWidth $line $state]}]
@@ -335,7 +354,13 @@ oo::define ::tclpdf::document::document {
         set stretched $state
         dict set stretched wordSpacing \
             [expr {[dict get $state wordSpacing] + $extra}]
-        my TextRun $line $stretched $x $y $rotate 0 $lift
+        # The trailing space is drawn here too, and it picks up the stretched
+        # Tw like every other one - so the line reaches past the right margin
+        # by that much. Invisibly: it is a space after the last glyph, and the
+        # last glyph still sits on the edge. Leaving it out would keep the
+        # words of a justified paragraph running together for a reader, which
+        # is the defect this is here to fix.
+        my TextRun $drawn $stretched $x $y $rotate 0 $lift
       }
       default {
         return -code error "tclpdf: -align must be left, right, center or\
@@ -366,4 +391,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.3
+package provide tclpdf::textBlock 1.4

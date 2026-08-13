@@ -31,11 +31,23 @@ oo::define ::tclpdf::document::document {
     set style [dict get $cell resolved]
     set width [dict get $cell width]
 
+    # Fill and rules carry no meaning: they are decoration, and in a tagged
+    # document they say so. Without the bracket they would be content that
+    # belongs to no element, which a UA validator counts as a defect and a
+    # reader may try to announce.
+    set art {}
+    if {[my state tagged] eq "1"} {
+      set art [my StructureMark Artifact]
+      my content [my StructureBegin $art]
+    }
     if {[dict get $style fill] ne {}} {
       my rect -at [list $x $y] -size [list $width $height] \
           -fill [dict get $style fill]
     }
     my TableDrawBorder $style $x $y $width $height
+    if {[llength $art]} {
+      my content [my StructureEnd $art]
+    }
 
     set lines [dict get $cell lines]
     if {![llength $lines]} {
@@ -174,4 +186,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.1
+package provide tclpdf::tableDraw 1.2

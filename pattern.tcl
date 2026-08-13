@@ -75,7 +75,14 @@ oo::define ::tclpdf::document::document {
     }
 
     my canvas push $widthPoints $heightPoints
+    # A tiling pattern is a content stream of its own - same reasoning as a
+    # form XObject: an MCID is unique per stream, and this counter is per
+    # page. Nothing inside a pattern is marked; the shape that USES the
+    # pattern carries the marking.
+    set suspended [my state structureSuspend]
+    my state structureSuspend 1
     set failed [catch {uplevel #0 [dict get $options script]} result outcome]
+    my state structureSuspend $suspended
     set content [my canvas pop]
     if {$failed} {
       return -options $outcome $result
@@ -88,7 +95,7 @@ oo::define ::tclpdf::document::document {
             [::tclpdf::pdfObj num $heightPoints]]] \
         XStep [::tclpdf::pdfObj num $stepX] \
         YStep [::tclpdf::pdfObj num $stepY] \
-        Resources [::tclpdf::pdfObj dictionary {}]]
+        Resources [[my writer] ref [my reservation output.resources]]]
     set number [my streamObject $pairs $content]
     set resourceName Pt[my PatternCount]
     my resource Pattern $resourceName [[my writer] ref $number]
@@ -136,4 +143,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pattern 1.0
+package provide tclpdf::pattern 1.1

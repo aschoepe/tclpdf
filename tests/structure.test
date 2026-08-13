@@ -1,0 +1,643 @@
+# structure.test --
+#
+# Tagged PDF: the logical tree beside the page.
+#
+# Two halves have to agree, and each can be right while the other is wrong -
+# so both are checked here. The content stream has to carry the brackets, in
+# the right order and nested cleanly; the catalogue has to carry a tree whose
+# leaves point back at the numbers in those brackets. A file where only one
+# side is right renders perfectly and is worth nothing to a reader.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::structure
+source [file join [file dirname [info script]] helper.tcl]
+
+# --- the switch ----------------------------------------------------------
+
+test structure-1.1 {tagging is off until it is asked for} -body {
+  set doc [tclpdf new]
+  set was [$doc tagged]
+  $doc destroy
+  set was
+} -result 0
+
+test structure-1.2 {an untagged document writes no brackets at all} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Hallo" -at {20 20}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Neither operator, and no marked content of any kind.
+  expr {[string match "*BDC*" $stream] || [string match "*BMC*" $stream]}
+} -result 0
+
+test structure-1.3 {tagged takes a boolean and says so} -body {
+  set doc [tclpdf new]
+  set code [catch {$doc tagged maybe} err]
+  $doc destroy
+  list $code [string match "*boolean*" $err]
+} -result {1 1}
+
+# --- deriving and stating ------------------------------------------------
+
+test structure-2.1 {text becomes a paragraph without being told} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Hallo" -at {20 20}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {/P <</MCID (\d+)>> BDC} $stream -> mcid
+  set mcid
+} -result 0
+
+test structure-2.2 {-tag says what the writer cannot know} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Titel" -at {20 20} -tag H1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  string match "*/H1 <</MCID 0>> BDC*" $stream
+} -result 1
+
+test structure-2.3 {an artifact is bracketed but stays out of the tree} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Seite 1" -at {20 280} -tag Artifact
+  set stream [::tclpdfTest::content $doc]
+  set tree [$doc state structure]
+  $doc destroy
+  # BMC rather than BDC - there is no MCID, because nothing points at it.
+  list [string match "*/Artifact BMC*" $stream] \
+      [string match "*MCID*" $stream] [llength $tree]
+} -result {1 0 0}
+
+test structure-2.4 {an unknown type is refused where it is written} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc structure H7 -script {set marker 1}} err]
+  set missing [catch {$doc structure Div} second]
+  $doc destroy
+  # Two different mistakes, two different messages: a type that does not
+  # exist, and a call without the body it needs.
+  list $code [string match "*unknown structure type*" $err] \
+      $missing [string match "*needs -script*" $second]
+} -result {1 1 1 1}
+
+# --- nesting -------------------------------------------------------------
+
+test structure-3.1 {a container does not hold the mark itself} -body {
+  # Text drawn inside a Sect has to become a P INSIDE it. Attaching the mark
+  # to the Sect renders the same and is wrong: Annex L lets a Sect group
+  # elements, not carry content.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure Sect -script {
+    $doc text "Hallo" -at {20 20}
+  }
+  set stream [::tclpdfTest::content $doc]
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  list [string match "*/P <</MCID 0>> BDC*" $stream] $types
+} -result {1 {Sect P}}
+
+test structure-3.2 {a content element does hold it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure H1 -script {
+    $doc text "Titel" -at {20 20}
+  }
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  set types
+} -result H1
+
+test structure-3.3 {the body's result reaches the caller} -body {
+  # [table] answers with the y coordinate below itself, and a wrapper that
+  # returned the element id instead would break every table in a tagged
+  # document.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set value [$doc structure Div -script {expr {40 + 2}}]
+  $doc destroy
+  set value
+} -result 42
+
+test structure-3.4 {an error in the body still closes the element} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  catch {$doc structure Div -script {error "kaputt"}} err
+  # The stack has to be empty again, or everything after this lands in a
+  # half open element.
+  set stack [$doc state structureStack]
+  $doc destroy
+  list $err [llength $stack]
+} -result {kaputt 0}
+
+# --- one call, one mark --------------------------------------------------
+
+test structure-4.1 {a paragraph of several lines is one mark, not one per line} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Ein Absatz, der ueber mehrere Zeilen laeuft und dabei genau eine\
+      Marke bekommen soll statt einer je Zeile." -at {20 20} -width 60
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Several BT/ET runs, one bracket around all of them.
+  list [regexp -all {BDC} $stream] [regexp -all {\mBT\M} $stream]
+} -result {1 3}
+
+test structure-4.2 {the brackets nest cleanly around the text object} -body {
+  # 14.6.1: BMC/BDC...EMC and BT...ET have to nest, not overlap. "BDC BT EMC
+  # ET" is invalid even though every operator is present.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Hallo" -at {20 20}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set order {}
+  foreach line [split $stream \n] {
+    if {[regexp {(BDC|BMC|EMC|^BT$|^ET$)} $line -> operator]} {
+      lappend order $operator
+    }
+  }
+  set order
+} -result {BDC BT ET EMC}
+
+# --- tables --------------------------------------------------------------
+
+test structure-5.1 {a table tags itself down to the cell} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 9
+  $doc table -at {20 20} -width 100 -head {{A B}} -body {{1 2}}
+  set types [lsort [lmap element [$doc state structure] {
+    dict get $element type
+  }]]
+  $doc destroy
+  set types
+} -result {TD TD TH TH TR TR Table}
+
+test structure-5.2 {cell fill and rules are artifacts} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 9
+  $doc table -at {20 20} -width 100 -theme grid -head {{A}} -body {{1}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Two cells, so two artifact brackets around the drawing, and the counts
+  # of openings and closings have to match.
+  list [regexp -all {/Artifact BMC} $stream] \
+      [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
+} -result {2 1}
+
+test structure-5.3 {an untagged table is unchanged} -body {
+  # The guard has to keep the structure module out of a document that never
+  # asked for it - and the drawing has to be identical either way.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9
+  set y [$doc table -at {20 20} -width 100 -head {{A B}} -body {{1 2}}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {$y > 20}] [string match "*BDC*" $stream]
+} -result {1 0}
+
+# --- pictures ------------------------------------------------------------
+
+set image [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets images sample-gray.jpg]
+testConstraint haveImage [file exists $image]
+
+test structure-6.1 {a picture without -alt is an artifact} -constraints haveImage -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc image draw $image -at {20 20} -width 30
+  set stream [::tclpdfTest::content $doc]
+  set tree [$doc state structure]
+  $doc destroy
+  list [string match "*/Artifact BMC*" $stream] [llength $tree]
+} -result {1 0}
+
+test structure-6.2 {-alt makes it a Figure carrying the description} -constraints haveImage -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc image draw $image -at {20 20} -width 30 -alt "Die Werkhalle"
+  set stream [::tclpdfTest::content $doc]
+  set element [lindex [$doc state structure] 0]
+  $doc destroy
+  list [string match "*/Figure <</MCID 0>> BDC*" $stream] \
+      [dict get $element type] [dict get $element alt]
+} -result {1 Figure {Die Werkhalle}}
+
+# --- what reaches the file -----------------------------------------------
+
+test structure-7.1 {the catalogue carries root and MarkInfo} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Hallo" -at {20 20}
+  set path [::tclpdfTest::scratch structure-7.1.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string match "*/StructTreeRoot*" $bytes] \
+      [string match "*/Marked true*" $bytes] \
+      [string match "*/Suspects false*" $bytes]
+} -result {1 1 1}
+
+test structure-7.2 {every page with marks carries its ParentTree index} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Eins" -at {20 20}
+  $doc page add
+  $doc text "Zwei" -at {20 20}
+  set path [::tclpdfTest::scratch structure-7.2.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # One per page, and they are the keys of the ParentTree - without them a
+  # reader cannot resolve a single MCID. This ran on the catalog event once
+  # and landed on no page at all, because the pages are written first.
+  regexp -all {/StructParents} $bytes
+} -result 2
+
+test structure-7.3 {a second write produces the same tree, not a second one} -body {
+  # The write events fire on every write, so the numbers come from
+  # [reservation]; taking fresh ones would leave the earlier tree orphaned.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Hallo" -at {20 20}
+  lassign [::tclpdfTest::writeTwice $doc structure-7.3] a b
+  $doc destroy
+  list [regexp -all {/StructTreeRoot} $a] [regexp -all {/StructTreeRoot} $b] \
+      [expr {[regexp -all {/StructElem} $a] == [regexp -all {/StructElem} $b]}]
+} -result {2 2 1}
+
+test structure-7.4 {PDF/A level A needs the tree and names the missing call} -body {
+  set doc [tclpdf new -unit mm]
+  set code [catch {$doc pdfa -part 3 -conformance A} err]
+  $doc destroy
+  list $code [string match "*tagged 1*" $err]
+} -result {1 1}
+
+# --- nesting rules, Annex L ----------------------------------------------
+
+test structure-8.1 {a leaf type refuses a block element inside it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set inP [catch {$doc structure P -script {$doc structure P -script {set x 1}}} a]
+  set tableInP [catch {$doc structure P -script {
+    $doc structure Table -script {set x 1}
+  }} b]
+  $doc destroy
+  list $inP [string match "*holds text, not a P*" $a] \
+      $tableInP [string match "*holds text, not a Table*" $b]
+} -result {1 1 1 1}
+
+test structure-8.2 {a table takes rows, not cells} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc structure Table -script {
+    $doc structure TD -script {set x 1}
+  }} err]
+  $doc destroy
+  list $code [string match "*a TD belongs in TR*" $err]
+} -result {1 1}
+
+test structure-8.3 {a list item outside a list is caught too} -body {
+  # The other direction: the child rule only ever asks what a parent MAY
+  # hold, never whether the child had any business being there.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc structure LI -script {set x 1}} err]
+  $doc destroy
+  list $code [string match "*a LI belongs in L, not at the top level*" $err]
+} -result {1 1}
+
+test structure-8.4 {a list built by hand is accepted} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure L -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "1." -at {20 20}}
+      $doc structure LBody -script {$doc text "erstens" -at {26 20}}
+    }
+  }
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  set types
+} -result {L LI Lbl LBody}
+
+test structure-8.5 {text in a list item becomes its body, not an error} -body {
+  # Demanding an explicit LBody here would be correct and useless: the caller
+  # has already said this is a list item, and there is nothing else the text
+  # could be.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure L -script {
+    $doc structure LI -script {$doc text "erstens" -at {20 20}}
+    $doc structure LI -script {$doc text "zweitens" -at {20 26}}
+  }
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  set types
+} -result {L LI LBody LI LBody}
+
+# --- shapes, text on a path, drawings ------------------------------------
+
+test structure-9.1 {a shape outside any element is an artifact} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc rect -at {20 20} -size {30 10} -fill red
+  set stream [::tclpdfTest::content $doc]
+  set tree [$doc state structure]
+  $doc destroy
+  list [string match "*/Artifact BMC*" $stream] [llength $tree] \
+      [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
+} -result {1 0 1}
+
+test structure-9.2 {a shape inside a Figure belongs to it} -body {
+  # The same rectangle means different things in the two places, and neither
+  # the shape nor the structure module can tell them apart - the open element
+  # can.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc structure Figure -alt "Zwei Balken" -script {
+    $doc rect -at {20 20} -size {30 10} -fill blue
+    $doc rect -at {60 20} -size {30 10} -fill green
+  }
+  set stream [::tclpdfTest::content $doc]
+  set element [lindex [$doc state structure] 0]
+  $doc destroy
+  # Two marks, both in the one Figure, and no artifact anywhere.
+  list [regexp -all {/Figure <</MCID} $stream] [string match "*Artifact*" $stream] \
+      [llength [dict get $element kids]]
+} -result {2 0 2}
+
+test structure-9.3 {the shape bracket encloses the q, it does not cross it} -body {
+  # BDC and q have to nest rather than overlap (14.6.1), so the EMC comes
+  # after the Q - not between the paint operator and it.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc rect -at {20 20} -size {30 10} -fill red -opacity 0.5
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set order {}
+  foreach line [split $stream \n] {
+    if {[regexp {^(BMC|BDC|EMC|q|Q)$|(BMC|BDC)$} $line]} {
+      lappend order [lindex [split $line] end]
+    }
+  }
+  set order
+} -result {BMC q Q EMC}
+
+test structure-9.4 {text on a path is one element, not one per glyph} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc textPath "Rundtext" -segments {{move 20 40} {line 90 40}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # One bracket, several text objects inside it.
+  list [regexp -all {BDC} $stream] [expr {[regexp -all {\mBT\M} $stream] > 1}]
+} -result {1 1}
+
+set drawing [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets images svg-shapes.svg]
+testConstraint haveSvg [file exists $drawing]
+
+test structure-9.5 {a drawing is one Figure with -alt, one artifact without} \
+    -constraints haveSvg -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc svg $drawing -at {20 20} -width 40 -alt "Vier Grundformen"
+  $doc svg $drawing -at {80 20} -width 40
+  set stream [::tclpdfTest::content $doc]
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  # Bracketing per SVG element would scatter one illustration over dozens of
+  # leaves; the elements of a drawing mean nothing on their own.
+  list [regexp -all {/Figure <</MCID} $stream] [regexp -all {/Artifact BMC} $stream] \
+      $types
+} -result {1 1 Figure}
+
+test structure-9.6 {nothing is tagged again inside an artifact} -body {
+  # Found with veraPDF against the UA-1 profile, which 3a does not check:
+  # "Tagged content shall not be present inside content marked as Artifact".
+  # A table cell declares its fill an artifact and then draws a rectangle -
+  # and the rectangle asked which element was open, found the TH the cell is
+  # drawn in, and claimed the fill as its content. Two defects in one: the
+  # fill became content of the heading cell, inside an artifact.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 9
+  $doc table -at {20 20} -width 100 -theme striped -head {{A B}} -body {{1 2}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Walk the brackets: no BDC may open while an artifact is open.
+  set depth 0
+  set nested 0
+  foreach line [split $stream \n] {
+    if {[string match "/Artifact BMC*" $line]} {
+      incr depth
+    } elseif {[regexp {<</MCID} $line] && $depth > 0} {
+      set nested 1
+    } elseif {[string match "EMC*" $line] && $depth > 0} {
+      incr depth -1
+    }
+  }
+  list $nested $depth
+} -result {0 0}
+
+# --- word spaces across a line break -------------------------------------
+
+proc drawnLines {tagged align} {
+  set doc [tclpdf new -unit mm -compress 0]
+  if {$tagged} {
+    $doc tagged 1
+  }
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Der Antrieb ist getauscht und die Abnahme erfolgt" \
+      -at {20 20} -width 30 -align $align
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The shown strings, in order.
+  set shown {}
+  foreach {. text} [regexp -all -inline {\((.*?)\) Tj} $stream] {
+    lappend shown $text
+  }
+  return $shown
+}
+
+test structure-10.1 {a wrapped line keeps the space the breaker ate} -body {
+  # Measured with pdfinfo -struct-text, which neither veraPDF profile
+  # replaces: "der Antrieb ist" and "getauscht" came back out as
+  # "istgetauscht". ISO 32000-1 14.8.2.6 asks for the space to be in the
+  # stream, and a reader that follows the tree rather than the page has no
+  # other way to know a word ended.
+  set lines [drawnLines 1 left]
+  list [llength $lines] \
+      [expr {[string index [lindex $lines 0] end] eq " "}] \
+      [expr {[string index [lindex $lines end] end] eq " "}]
+} -result {3 1 0}
+
+test structure-10.2 {an untagged document is unchanged} -body {
+  set lines [drawnLines 0 left]
+  expr {[string index [lindex $lines 0] end] eq " "}
+} -result 0
+
+test structure-10.3 {justified lines get it too} -body {
+  # The trailing space picks up the stretched Tw here, so the line reaches
+  # past the margin by that much - invisibly, since it sits after the last
+  # glyph. Leaving it out would keep the words of a justified paragraph
+  # running together for a reader, which is the whole point.
+  set lines [drawnLines 1 justify]
+  list [expr {[string index [lindex $lines 0] end] eq " "}] \
+      [expr {[string index [lindex $lines end] end] eq " "}]
+} -result {1 0}
+
+rename drawnLines {}
+
+# --- content streams of their own ----------------------------------------
+#
+# A form XObject and a tiling pattern each have a content stream of their own,
+# and an MCID is unique per STREAM, not per page. Marking inside one puts a
+# number into the tree that the page's stream does not have, and the XObject
+# would need a StructParents entry of its own (14.7.5.2). The norm's first
+# arrangement is the one taken here: the whole Do inside one sequence, and
+# nothing marked inside.
+
+proc pageMcids {doc page} {
+  set found {}
+  foreach {. n} [regexp -all -inline {MCID (\d+)} [dict get [$doc Page $page] content]] {
+    lappend found $n
+  }
+  return $found
+}
+
+test structure-11.1 {page numbers do not put MCIDs into their XObject} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Inhalt" -at {20 20}
+  $doc page add
+  $doc text "Mehr" -at {20 20}
+  $doc pageNumbers -at {105 285} -align center -size 8
+  set path [::tclpdfTest::scratch structure-11.1.pdf]
+  $doc write $path
+  set perPage [list [pageMcids $doc 0] [pageMcids $doc 1]]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # One mark per page stream, and the whole file carries no more than those
+  # two - a third would be sitting in the form.
+  list $perPage [regexp -all {MCID} $bytes]
+} -result {{0 0} 2}
+
+test structure-11.2 {the invocation of a form is bracketed} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc form create logo -size {20 10} -script {
+    $doc rect -at {0 0} -size {20 10} -fill red
+  }
+  $doc form place logo -at {20 20}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Artifact around the Do, nothing marked inside the form, brackets balanced.
+  # The bracket is outside the q/Q, which is what has to nest.
+  set order {}
+  foreach line [split $stream \n] {
+    if {[regexp {^(/Artifact BMC|q|Q|EMC)$|Do$} $line]} {
+      lappend order [expr {[string match "*Do" $line] ? "Do" : $line}]
+    }
+  }
+  list $order [regexp -all {MCID} $stream] \
+      [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
+} -result {{{/Artifact BMC} q Do Q EMC} 0 1}
+
+test structure-11.3 {form place with -alt becomes a Figure} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc form create chart -size {20 10} -script {
+    $doc rect -at {0 0} -size {20 10} -fill blue
+  }
+  $doc form place chart -at {20 20} -alt "Umsatz je Quartal"
+  set element [lindex [$doc state structure] 0]
+  $doc destroy
+  list [dict get $element type] [dict get $element alt]
+} -result {Figure {Umsatz je Quartal}}
+
+test structure-11.4 {a gradient is marked, a pattern body is not} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc shading axial -at {20 20} -size {40 20} -colors {red blue}
+  $doc pattern create hatch -size {4 4} -script {
+    $doc line -from {0 0} -to {4 4} -stroke black
+  }
+  $doc rect -at {70 20} -size {30 20} -fill {pattern hatch}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Two artifacts - the gradient and the filled rectangle - and the pattern's
+  # own stream contributes nothing.
+  list [regexp -all {/Artifact BMC} $stream] [regexp -all {MCID} $stream] \
+      [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
+} -result {2 0 1}
+
+rename pageMcids {}
+
+cleanupTests

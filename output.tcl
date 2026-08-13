@@ -170,6 +170,13 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $annots $index]} {
       lappend pagePairs Annots [::tclpdf::pdfObj arr [dict get $annots $index]]
     }
+    # The index into the ParentTree of a tagged document, reaching this file
+    # the same way and for the same reason: a document without a structure
+    # tree costs nothing, and the topic stays out of here.
+    set structParents [my state structParents]
+    if {[dict exists $structParents $index]} {
+      lappend pagePairs StructParents [dict get $structParents $index]
+    }
     return [$tclpdfWriter put [dict get $page number] \
         [::tclpdf::pdfObj dictionary $pagePairs]]
   }
@@ -197,4 +204,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::output 1.1
+package provide tclpdf::output 1.2

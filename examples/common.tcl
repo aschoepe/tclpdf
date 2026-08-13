@@ -55,6 +55,10 @@ proc exampleFooter {doc {family {}}} {
         $doc font -family $family -style {}
     }
     $doc font -size 6 -color {0.45 0.45 0.5}
+    # -tag Artifact: a footer is a fact about the sheet, not about the text,
+    # and in a tagged document it has to say so or a reader announces it as
+    # content. Harmless everywhere else - an untagged document ignores it.
     $doc text "$script - $fonts" \
-        -at [list [expr {$width - 10}] [expr {$height - 7}]] -align right
+        -at [list [expr {$width - 10}] [expr {$height - 7}]] -align right \
+        -tag Artifact
 }

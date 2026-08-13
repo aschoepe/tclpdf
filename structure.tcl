@@ -1,0 +1,557 @@
+#
+# tclpdf - PDF generation for Tcl
+#
+# structure - the logical tree a reader needs and a page does not show
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+#
+#   $doc tagged 1
+#   $doc structure Sect -script {
+#     $doc structure H1 -script { $doc text "Annual report" -at {20 30} }
+#     $doc text $paragraph -at {20 45} -width 170       ;# becomes P
+#   }
+#
+# A tagged document carries a second, invisible layer: a tree saying what the
+# marks on the page ARE - a heading, a paragraph, a table cell - rather than
+# how they look. The drawing is unchanged to the point; nothing here moves a
+# glyph.
+#
+# Who needs it: reading software, which without the tree follows the order the
+# content stream happens to have - across both columns of a two column page.
+# From that follow PDF/UA and PDF/A level A, and with them the accessibility
+# rules public bodies increasingly have to meet.
+#
+# The mechanics are two halves that meet by number (ISO 32000-1 14.7):
+#
+#   - in the content stream, every piece of marked content is bracketed
+#     "/P <</MCID 0>> BDC ... EMC". The number is unique PER CONTENT STREAM,
+#     not per document.
+#   - in the catalogue, StructTreeRoot holds the tree, and its leaves point
+#     back at those numbers. A page carries StructParents, an index into the
+#     ParentTree, whose entry is an array indexed BY MCID.
+#
+# Which is why the counter lives per page here, and why the tree is built as
+# the document is drawn but turned into objects at write time - the same
+# reasoning outline.tcl gives for bookmarks.
+#
+# What is derived and what has to be said: a table knows it is a table, and a
+# paragraph knows it is a paragraph, so those tag themselves. A single line of
+# text does not know whether it is a heading - that is what -tag is for. A
+# guessed tree is worse than none, because reading software follows it without
+# question.
+#
+
+package require Tcl 8.6.11-
+package require TclOO
+package require tclpdf::pdfObj 1.0-
+package require tclpdf::option 1.0-
+package require tclpdf::document 1.0-
+
+namespace eval ::tclpdf::structure {
+  # The standard structure types of ISO 32000-1 14.8.4, which is the whole of
+  # them: this package invents none, and a document using only these needs no
+  # RoleMap (TS 32005 5.2).
+  #
+  # Checked at the call, not to restrict what can be expressed but to catch a
+  # typo where it happens - "H7" or "Paragraph" would otherwise travel into
+  # the file and surface in a validator hours later, with nothing pointing
+  # back at the line that wrote it.
+  variable types {
+    Document Part Art Sect Div BlockQuote Caption TOC TOCI Index NonStruct
+    Private P H H1 H2 H3 H4 H5 H6 L LI Lbl LBody Table TR TH TD THead TBody
+    TFoot Span Quote Note Reference BibEntry Code Link Annot Ruby RB RT RP
+    Warichu WT WP Figure Formula Form
+  }
+
+  # Types that group other elements instead of holding content of their own.
+  # The distinction decides where a mark goes: drawing inside an open Sect
+  # must make a P INSIDE it, while drawing inside an open H1 belongs to the
+  # H1 itself.
+  variable containers {
+    Document Part Art Sect Div TOC TOCI Index L LI Table TR THead TBody TFoot
+  }
+
+  # Which children a type accepts, for the types where Annex L is strict.
+  # Anything not named here takes any child - the point is not to police the
+  # whole standard but to catch the four structures that are actually
+  # constrained, because a tree that breaks them renders perfectly and fails
+  # validation at the recipient.
+  #
+  # Annex L is formally a 2.0 annex; the Best Practice Guide names it as what
+  # the tools check 1.7 files against as well, which is why it applies here.
+  #
+  # Two of these are enforced by tclpdf itself and would be hard to get wrong
+  # - a table builds its own TR and TD. The other two are what a caller
+  # assembles by hand, and a list is the one people get wrong: the label goes
+  # in Lbl, the text in LBody, and both go in an LI, not next to it.
+  variable childrenOf {
+    Table {TR THead TBody TFoot Caption}
+    THead {TR}
+    TBody {TR}
+    TFoot {TR}
+    TR    {TH TD}
+    L     {LI Caption}
+    LI    {Lbl LBody}
+  }
+
+  # Types that hold text and nothing structural. Annex L forbids a block
+  # element inside them - a P inside a P is the standing example, and it is
+  # what a nested [structure P] produces without anyone noticing.
+  variable leafOnly {
+    P H H1 H2 H3 H4 H5 H6 Lbl Span Quote Note Reference BibEntry Code
+  }
+
+  # Where a derived P is not allowed but the right answer is obvious. Text
+  # drawn in an open LI IS the list item's body; demanding an explicit LBody
+  # for it would be correct and useless - the caller has already said this is
+  # a list item, and there is nothing else it could be.
+  #
+  # Only LI qualifies. Text drawn straight into an L or a Table is a genuine
+  # mistake with no single right reading, and stays an error.
+  variable contentChildOf {
+    LI LBody
+  }
+
+  # The other direction: types that exist only inside one particular parent.
+  # Without this a lone LI or a TD outside any table passes, because the
+  # child rule above only ever asks what a parent MAY hold - never whether
+  # this child had any business being there.
+  variable parentOf {
+    LI    {L}
+    Lbl   {LI}
+    LBody {LI}
+    TR    {Table THead TBody TFoot}
+    TH    {TR}
+    TD    {TR}
+    THead {Table}
+    TBody {Table}
+    TFoot {Table}
+  }
+}
+
+oo::define ::tclpdf::document::document {
+
+  # $doc tagged ?0|1?  -> whether the document writes a structure tree
+  #
+  # Off by default, and deliberately: the brackets change EVERY content
+  # stream, so switching it on by default would make every document come out
+  # different from the release before. That happened once with kerning, as a
+  # conscious decision; here there is nothing to gain from it.
+  method tagged {args} {
+    if {![llength $args]} {
+      set value [my state tagged]
+      return [expr {$value eq {} ? 0 : $value}]
+    }
+    if {[llength $args] > 1} {
+      return -code error "tclpdf: tagged takes at most one value"
+    }
+    set value [lindex $args 0]
+    if {![string is boolean -strict $value]} {
+      return -code error "tclpdf: tagged takes a boolean, not \"$value\""
+    }
+    set value [expr {$value ? 1 : 0}]
+    if {$value && [my state tagged] ne "1"} {
+      # beforeWrite, not catalog: the pages are written BEFORE the catalogue
+      # event fires, and each of them needs the StructParents index this
+      # produces. Subscribing to catalog like outline.tcl does left every page
+      # without it - measured, not foreseen.
+      my onSelf beforeWrite StructureWrite
+    }
+    my state tagged $value
+    return $value
+  }
+
+  # $doc structure <type> ?-alt text? ?-lang tag? ?-title text?
+  #                       ?-actualText text? -script body
+  #
+  # Opens an element, runs the body with it open, and closes it again -
+  # whatever the body does. The bracket form is the one [form create] and
+  # [pattern create] already use, and it is the reason a half open tree
+  # cannot reach the file: an error inside the body still closes the element
+  # before it travels on.
+  method structure {type args} {
+    set options [::tclpdf::option parse {
+      alt {} lang {} title {} actualText {} script {}
+    } $args "structure"]
+    set script [dict get $options script]
+    if {$script eq {}} {
+      return -code error "tclpdf: structure needs -script"
+    }
+    set id [my StructureOpen $type $options]
+    set code [catch {uplevel 1 $script} result outcome]
+    my StructureClose $id
+    if {$code} {
+      return -options $outcome $result
+    }
+    # The BODY's result, not the element id: this wraps calls that return
+    # something the caller needs - [table] answers with the y coordinate
+    # below the table, and swallowing it would break every table in a tagged
+    # document.
+    return $result
+  }
+
+  # Open an element and make it the current one. Returns its id.
+  method StructureOpen {type {options {}}} {
+    variable ::tclpdf::structure::types
+    if {$type ni $types} {
+      return -code error "tclpdf: unknown structure type \"$type\" - the\
+          standard types of ISO 32000-1 14.8.4 are: [join [lsort $types] {, }]"
+    }
+    my StructureCheckNesting $type
+    foreach key {alt lang title actualText} {
+      if {![dict exists $options $key]} {
+        dict set options $key {}
+      }
+    }
+    set elements [my state structure]
+    set stack [my state structureStack]
+    set id [llength $elements]
+    set parent [expr {[llength $stack] ? [lindex $stack end] : {}}]
+    lappend elements [dict create type $type parent $parent kids {} \
+        alt [dict get $options alt] lang [dict get $options lang] \
+        title [dict get $options title] \
+        actualText [dict get $options actualText]]
+    if {$parent ne {}} {
+      set entry [lindex $elements $parent]
+      dict lappend entry kids [list element $id]
+      lset elements $parent $entry
+    }
+    my state structure $elements
+    my state structureStack [lappend stack $id]
+    return $id
+  }
+
+  # Refuse a child its parent may not have (Annex L). Checked when the element
+  # is opened, so the message points at the line that wrote it - a validator
+  # would report it hours later against a file, naming an object number.
+  #
+  # Only the strict types are checked. Everything else is allowed anything,
+  # because guessing at the rest of the standard would refuse trees that are
+  # perfectly good.
+  method StructureCheckNesting {type} {
+    variable ::tclpdf::structure::childrenOf
+    variable ::tclpdf::structure::leafOnly
+    variable ::tclpdf::structure::parentOf
+    set parent [my StructureCurrent]
+    set parentType [expr {$parent eq {} ? {} :
+        [dict get [lindex [my state structure] $parent] type]}]
+    if {[dict exists $parentOf $type]} {
+      set wanted [dict get $parentOf $type]
+      if {$parentType ni $wanted} {
+        set where "at the top level"
+        if {$parentType ne {}} {
+          set where "in a $parentType"
+        }
+        return -code error "tclpdf: a $type belongs in [join $wanted { or }],\
+            not $where (ISO 32000-2 Annex L)"
+      }
+    }
+    if {$parent eq {}} {
+      return
+    }
+    if {[dict exists $childrenOf $parentType]} {
+      set allowed [dict get $childrenOf $parentType]
+      if {$type ni $allowed} {
+        return -code error "tclpdf: a $parentType may not contain a $type -\
+            it takes [join $allowed {, }] (ISO 32000-2 Annex L)"
+      }
+      return
+    }
+    if {$parentType in $leafOnly} {
+      return -code error "tclpdf: a $parentType holds text, not a $type -\
+          close it before starting one (ISO 32000-2 Annex L)"
+    }
+    return
+  }
+
+  method StructureClose {id} {
+    set stack [my state structureStack]
+    if {[lindex $stack end] ne $id} {
+      return -code error "tclpdf: structure elements closed out of order"
+    }
+    my state structureStack [lrange $stack 0 end-1]
+    return
+  }
+
+  # The element a mark belongs to right now, or {} when nothing is open.
+  method StructureCurrent {} {
+    return [lindex [my state structureStack] end]
+  }
+
+  # Claim the next MCID on the current page and record which element owns it.
+  # Returns the pair {mcid type} to hand to [StructureBegin], or {} when
+  # nothing is to be bracketed.
+  #
+  # The type travels WITH the number rather than being looked up again later:
+  # a derived tag closes its element immediately, so by the time the operator
+  # is written there may be nothing open to ask.
+  #
+  # Nothing open and no derived type means the mark is an ARTIFACT - what is
+  # not in the tree is artifact by definition (14.8.2.2), and a caller who
+  # wanted it in the tree said so.
+  method StructureMark {{derived {}}} {
+    if {![my tagged]} {
+      return {}
+    }
+    # Suspended while drawing into a content stream of its own - a form
+    # XObject. MCIDs are unique per STREAM, and this counter is per page, so
+    # anything marked in there would carry a number the page does not have.
+    # Whoever suspends is responsible for bracketing the [Do] instead.
+    if {[my state structureSuspend] eq "1"} {
+      return {}
+    }
+    # Inside an artifact nothing is marked again. Artifacts do not nest, and
+    # tagged content inside one is a UA-1 defect in its own right ("Tagged
+    # content shall not be present inside content marked as Artifact") - found
+    # with veraPDF, not foreseen: a table cell declares its fill an artifact
+    # and then draws a rectangle, and the rectangle asked which element was
+    # open. It found the TH the cell is drawn in and claimed the fill as its
+    # content.
+    if {[my state structureInArtifact] eq "1"} {
+      return {}
+    }
+    # Artifact is not a structure type and never enters the tree: it is the
+    # explicit statement that something on the page carries no meaning - a
+    # running head, a page number, a rule. UA-1 needs it, because there
+    # everything must be either tagged or declared artifact; a validator
+    # counts unmarked content as a defect.
+    if {$derived eq "Artifact"} {
+      my state structureInArtifact 1
+      return [list artifact]
+    }
+    # "auto" is what the drawing primitives ask for: put this in whatever
+    # element is open, and if none is, call it an artifact. A rule under a
+    # heading means nothing and is decoration; the same rectangle inside an
+    # open Figure is part of a diagram and belongs to it. Neither the shape
+    # nor this module can tell those apart - the open element can.
+    if {$derived eq "auto"} {
+      variable ::tclpdf::structure::containers
+      set open [my StructureCurrent]
+      if {$open eq {}
+          || [dict get [lindex [my state structure] $open] type] in $containers} {
+        my state structureInArtifact 1
+        return [list artifact]
+      }
+      set derived {}
+    }
+    variable ::tclpdf::structure::containers
+    variable ::tclpdf::structure::contentChildOf
+    set element [my StructureCurrent]
+    if {$element ne {}} {
+      set open [dict get [lindex [my state structure] $element] type]
+      if {$open in $containers} {
+        # An open container cannot hold the mark itself, so the derived type
+        # becomes a child of it: text drawn in a Sect is a P in that Sect.
+        # Without a derived type there is nothing to make, and the mark falls
+        # through to being an artifact.
+        set element {}
+        if {$derived ne {} && [dict exists $contentChildOf $open]} {
+          set derived [dict get $contentChildOf $open]
+        }
+      }
+    }
+    if {$element eq {} && $derived eq {}} {
+      return {}
+    }
+    if {$element eq {}} {
+      # Created here, holds this one mark and is closed again - a paragraph
+      # in no section is still a paragraph, and one in a section is a
+      # paragraph in it.
+      set element [my StructureOpen $derived]
+      my StructureClose $element
+    }
+    set page [my page current]
+    set counters [my state structureMcid]
+    set mcid [expr {[dict exists $counters $page] ?
+        [dict get $counters $page] : 0}]
+    dict set counters $page [expr {$mcid + 1}]
+    my state structureMcid $counters
+
+    set elements [my state structure]
+    set entry [lindex $elements $element]
+    dict lappend entry kids [list mark $page $mcid]
+    lset elements $element $entry
+    my state structure $elements
+    return [list $mcid [dict get $entry type]]
+  }
+
+  # The operators around a piece of marked content, or "" when untagged. The
+  # stream names a tag of its own; a reader takes the meaning from the tree,
+  # but the two must not disagree, so it is the element's own type.
+  method StructureBegin {mark} {
+    if {![llength $mark]} {
+      return ""
+    }
+    if {[lindex $mark 0] eq "artifact"} {
+      # BMC, not BDC: there is no property list to attach, and an artifact
+      # has no MCID because nothing in the tree points at it.
+      return "/Artifact BMC\n"
+    }
+    lassign $mark mcid type
+    return "/$type <</MCID $mcid>> BDC\n"
+  }
+
+  method StructureEnd {mark} {
+    if {![llength $mark]} {
+      return ""
+    }
+    if {[lindex $mark 0] eq "artifact"} {
+      my state structureInArtifact 0
+    }
+    return "EMC\n"
+  }
+
+  # --- writing ------------------------------------------------------------
+  #
+  # Runs on the beforeWrite event, so on EVERY write - the numbers therefore
+  # come from [reservation] and survive a rebuild, which is the contract
+  # documented in event.tcl.
+
+  method StructureWrite {} {
+    if {![my tagged]} {
+      return
+    }
+    set writer [my writer]
+    set elements [my state structure]
+    set rootNumber [my reservation structure.root]
+    # Exactly one Document element below the root - TS 32005 Table 5 gives it
+    # occurrence 1, not 0..n. Creating it here rather than asking for it means
+    # a document that only ever derived its tags still gets a well formed
+    # tree.
+    set documentNumber [my reservation structure.document]
+    set treeNumber [my reservation structure.parenttree]
+
+    set index 0
+    foreach element $elements {
+      dict set element number [my reservation structure.$index]
+      lset elements $index $element
+      incr index
+    }
+
+    # Page -> array of element references, indexed by MCID. Only the elements
+    # know which marks they own, so it is collected by walking them.
+    set parents {}
+    foreach element $elements {
+      foreach kid [dict get $element kids] {
+        if {[lindex $kid 0] ne "mark"} {
+          continue
+        }
+        lassign $kid . page mcid
+        set entry [expr {[dict exists $parents $page] ?
+            [dict get $parents $page] : {}}]
+        while {[llength $entry] <= $mcid} {
+          lappend entry {}
+        }
+        lset entry $mcid [$writer ref [dict get $element number]]
+        dict set parents $page $entry
+      }
+    }
+
+    set index 0
+    set topLevel {}
+    foreach element $elements {
+      set parent [dict get $element parent]
+      if {$parent eq {}} {
+        lappend topLevel $index
+      }
+      set kids {}
+      foreach kid [dict get $element kids] {
+        switch -- [lindex $kid 0] {
+          element {
+            lappend kids [$writer ref \
+                [dict get [lindex $elements [lindex $kid 1]] number]]
+          }
+          mark {
+            lappend kids [::tclpdf::pdfObj num [lindex $kid 2]]
+          }
+        }
+      }
+      set pairs [list Type /StructElem S /[dict get $element type] \
+          P [expr {$parent eq {} ? [$writer ref $documentNumber] :
+              [$writer ref [dict get [lindex $elements $parent] number]]}]]
+      # Pg names the page the MCIDs are counted in. Required as soon as the
+      # element owns marks - without it a reader cannot resolve them.
+      set page [my StructurePage $element]
+      if {$page ne {}} {
+        lappend pairs Pg [$writer ref [dict get [my Page $page] number]]
+      }
+      if {[llength $kids] == 1} {
+        lappend pairs K [lindex $kids 0]
+      } elseif {[llength $kids]} {
+        lappend pairs K [::tclpdf::pdfObj arr $kids]
+      }
+      foreach {key option} {Alt alt Lang lang T title ActualText actualText} {
+        if {[dict get $element $option] ne {}} {
+          lappend pairs $key [::tclpdf::pdfObj str [dict get $element $option]]
+        }
+      }
+      $writer put [dict get $element number] [::tclpdf::pdfObj dictionary $pairs]
+      incr index
+    }
+
+    set documentKids {}
+    foreach top $topLevel {
+      lappend documentKids [$writer ref \
+          [dict get [lindex $elements $top] number]]
+    }
+    $writer put $documentNumber [::tclpdf::pdfObj dictionary [list \
+        Type /StructElem S /Document P [$writer ref $rootNumber] \
+        K [::tclpdf::pdfObj arr $documentKids]]]
+
+    # The ParentTree is a number tree (7.9.7): Nums pairs each key with its
+    # value, in ascending key order.
+    set nums {}
+    foreach page [lsort -integer [dict keys $parents]] {
+      lappend nums [::tclpdf::pdfObj num $page]
+      lappend nums [::tclpdf::pdfObj arr [lmap ref [dict get $parents $page] {
+        expr {$ref eq {} ? "null" : $ref}
+      }]]
+    }
+    $writer put $treeNumber [::tclpdf::pdfObj dictionary [list \
+        Nums [::tclpdf::pdfObj arr $nums]]]
+
+    $writer put $rootNumber [::tclpdf::pdfObj dictionary [list \
+        Type /StructTreeRoot \
+        K [$writer ref $documentNumber] \
+        ParentTree [$writer ref $treeNumber] \
+        ParentTreeNextKey [my page count]]]
+
+    my catalogEntry StructTreeRoot [$writer ref $rootNumber]
+    # Marked says the file follows 14.7; Suspects false says nobody has
+    # flagged the tree as doubtful. UA-1 clause 7.1 wants both.
+    my catalogEntry MarkInfo [::tclpdf::pdfObj dictionary \
+        [list Marked true Suspects false]]
+    # The page carries its index into the ParentTree. Handed over through the
+    # scratch state, the way link annotations already reach WritePage, so
+    # output.tcl stays free of this topic.
+    set structParents {}
+    foreach page [dict keys $parents] {
+      dict set structParents $page $page
+    }
+    my state structParents $structParents
+    return
+  }
+
+  # The page an element's marks sit on, or {} when it owns none or they span
+  # several. The norm allows leaving Pg out then, because each mark's page is
+  # reachable through the ParentTree anyway.
+  method StructurePage {element} {
+    set pages {}
+    foreach kid [dict get $element kids] {
+      if {[lindex $kid 0] eq "mark"} {
+        lappend pages [lindex $kid 1]
+      }
+    }
+    set pages [lsort -unique -integer $pages]
+    if {[llength $pages] == 1} {
+      return [lindex $pages 0]
+    }
+    return {}
+  }
+
+}
+
+package provide tclpdf::structure 1.0

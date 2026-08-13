@@ -52,7 +52,7 @@ oo::define ::tclpdf::document::document {
   # the middle, or ending at the end.
   method textPath {string args} {
     my TextInit
-    set defaults {segments {} align left offset 0}
+    set defaults {segments {} align left offset 0 tag P}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -61,6 +61,15 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: textPath needs -segments"
     }
     set state [my TextMerge [my TextPathOverrides $options]]
+
+    # One bracket around the whole run. Text on a path is placed glyph by
+    # glyph, so bracketing inside the loop would make one element per letter -
+    # a reader would announce them singly. -tag works as it does on [text].
+    set mark {}
+    if {[my state tagged] eq "1"} {
+      set mark [my StructureMark [dict get $options tag]]
+      my content [my StructureBegin $mark]
+    }
 
     set points [my TextPathFlatten [dict get $options segments]]
     # Two POINTS, so four numbers - counting coordinates let a lone [move]
@@ -105,6 +114,9 @@ oo::define ::tclpdf::document::document {
         my TextRun $char $state $px $py $angle
       }
       set cursor [expr {$cursor + $advance}]
+    }
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
     }
     return $total
   }
@@ -229,4 +241,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.1
+package provide tclpdf::textPath 1.2

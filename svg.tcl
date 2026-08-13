@@ -116,7 +116,7 @@ oo::define ::tclpdf::document::document {
 
   method SvgDraw {path arguments} {
     set options [::tclpdf::option parse {
-      data {} at {} size {} width {} height {} scale {} opacity {}
+      data {} at {} size {} width {} height {} scale {} opacity {} alt {}
     } $arguments "svg"]
     if {$path ne {}} {
       # Read as bytes, then decode: an SVG is UTF-8 unless its declaration
@@ -132,11 +132,33 @@ oo::define ::tclpdf::document::document {
     # The handle has to be released whatever happens - a tdom document is not
     # freed by itself, and an error while drawing would otherwise leak the
     # whole tree.
+    # A drawing is one piece of marked content, like a picture: a Figure when
+    # -alt describes it, an artifact otherwise. Bracketing per element would
+    # scatter one illustration over dozens of leaves, and the elements of an
+    # SVG mean nothing on their own.
+    set element {}
+    set mark {}
+    if {[my state tagged] eq "1"} {
+      if {[dict get $options alt] ne {}} {
+        set element [my StructureOpen Figure \
+            [dict create alt [dict get $options alt]]]
+        set mark [my StructureMark]
+      } else {
+        set mark [my StructureMark Artifact]
+      }
+      my content [my StructureBegin $mark]
+    }
     set root [::tclpdf::xml parse $markup]
     try {
       return [my SvgRoot $root $options]
     } finally {
       ::tclpdf::xml release $root
+      if {[llength $mark]} {
+        my content [my StructureEnd $mark]
+        if {$element ne {}} {
+          my StructureClose $element
+        }
+      }
     }
   }
 
@@ -347,4 +369,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.0
+package provide tclpdf::svg 1.1

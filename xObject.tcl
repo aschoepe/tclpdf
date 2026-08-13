@@ -92,9 +92,12 @@ oo::define ::tclpdf::document::document {
         BBox [::tclpdf::pdfObj arr [list 0 0 \
             [::tclpdf::pdfObj num $widthPoints] \
             [::tclpdf::pdfObj num $heightPoints]]]]
-    # No /Resources of its own: the form inherits the page tree's dictionary,
-    # which is where fonts and images already live. A private copy would mean
-    # embedding the same font twice.
+    # PDF/A 6.2.2: a content stream that references other objects - a font,
+    # a picture - must have its OWN Resources dictionary; inheriting is valid
+    # PDF and forbidden here. veraPDF rejects the file, qpdf says nothing.
+    # The same one indirect object every page points at, so nothing is
+    # embedded twice.
+    lappend pairs Resources [[my writer] ref [my reservation output.resources]]
     set number [my streamObject $pairs $content]
     set resourceName XO[my FormCount]
     my resource XObject $resourceName [[my writer] ref $number]
@@ -106,13 +109,28 @@ oo::define ::tclpdf::document::document {
 
   method FormPlace {name args} {
     set options [::tclpdf::option parse \
-        {at {} scale 1 rotate 0 opacity {}} $args "form place"]
+        {at {} scale 1 rotate 0 opacity {} alt {}} $args "form place"]
     set forms [my state forms]
     if {![dict exists $forms $name]} {
       return -code error "tclpdf: no form named \"$name\" - known are:\
           [join [dict keys $forms] {, }]"
     }
     set form [dict get $forms $name]
+    # The invocation is content on the page: a Figure when -alt describes it,
+    # an artifact otherwise. Unmarked content is a defect under PDF/UA, and a
+    # reusable block is decoration more often than not.
+    set element {}
+    set mark {}
+    if {[my state tagged] eq "1"} {
+      if {[dict get $options alt] ne {}} {
+        set element [my StructureOpen Figure \
+            [dict create alt [dict get $options alt]]]
+        set mark [my StructureMark]
+      } else {
+        set mark [my StructureMark Artifact]
+      }
+      my content [my StructureBegin $mark]
+    }
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] x y
 
     # -at names the TOP left corner, like rect - so the placement matches how
@@ -138,6 +156,12 @@ oo::define ::tclpdf::document::document {
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
     my content "[::tclpdf::pdfObj name [dict get $form resource]] Do\n"
     my restore
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
+      if {$element ne {}} {
+        my StructureClose $element
+      }
+    }
     return $name
   }
 
@@ -165,14 +189,24 @@ oo::define ::tclpdf::document::document {
   # Redirect drawing into the form. The canvas stack in the core does the
   # work, so every existing method - shapes, text, even a nested form - keeps
   # working inside a form without knowing that forms exist.
+  # A form is a content stream of its own, and an MCID is unique per STREAM,
+  # not per page. Marking inside one would put numbers into the tree that the
+  # page's stream does not have, and the XObject would need a StructParents
+  # entry of its own (14.7.5.2). So the marking is suspended while the body
+  # runs, and [FormPlace] brackets the invocation instead - which is also the
+  # arrangement the norm names first: the whole Do inside one sequence, and
+  # none inside the XObject.
   method FormBegin {width height} {
+    my state structureFormSuspend [my state structureSuspend]
+    my state structureSuspend 1
     my canvas push $width $height
     return
   }
 
   method FormEnd {} {
+    my state structureSuspend [my state structureFormSuspend]
     return [my canvas pop]
   }
 }
 
-package provide tclpdf::xObject 1.0
+package provide tclpdf::xObject 1.1

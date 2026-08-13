@@ -164,6 +164,15 @@ Positions are given in the document unit, and **y counts from the top of the pag
   values. They are published under the SIL Open Font License 1.1, so they can
   be redistributed with a document workflow; Adobe's own outlines cannot.
 
+  **tclpdf does not install any font.** Embedding one means having the file,
+  and which file that is remains the caller's choice — the package reads what
+  it is given. The URW set is version 2.0 of the URW++ Core 35, kept at
+  <https://github.com/twardoch/urw-core35-fonts>; distributions carry the same
+  fonts as a package of their own, on Debian and its derivatives as
+  `fonts-urw-base35`. The copies used to write the examples sit in the source
+  archive under `examples/assets/fonts/urw-core35-fonts`, with the licence
+  texts beside them.
+
 *doc* **font names**
 
 : The aliases embedded so far.
@@ -186,7 +195,7 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   **-avoidMargin** *d* holds the text off every avoided shape by that distance; a shape may state one of its own as a fourth element (`{circle {x y} r 7}`), which then wins. Without it the words touch the picture, which reads as a mistake however exact the geometry is.
 
-*doc* **textPath** *string* **-segments** *{...}* ?**-align** *a*? ?**-offset** *d*? ?*font options*?
+*doc* **textPath** *string* **-segments** *{...}* ?**-align** *a*? ?**-offset** *d*? ?**-tag** *type*? ?*font options*?
 
 : Sets one line of text along a path, glyph by glyph, each one turned by the direction the path takes at its own position. The segments are the ones **path** takes (`move`, `line`, `curve`, `close`); **-align** places the string at the start, the middle or the end of the path, and **-offset** lifts the baseline off it — positive above, negative below. Returns the length of the path, which is what a caller measures a string against beforehand: glyphs that run past the end are dropped rather than piled up there. The path itself is not drawn.
 
@@ -324,7 +333,7 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 : Defines a form XObject — a drawing stored once and placed as often as wanted. Inside the script the origin is the form's own **top left** corner and y counts downwards, the same way it does on a page.
 
-*doc* **form place** *name* **-at** *{x y}* ?**-scale** *s*? ?**-rotate** *deg*? ?**-opacity** *o*?
+*doc* **form place** *name* **-at** *{x y}* ?**-scale** *s*? ?**-rotate** *deg*? ?**-opacity** *o*? ?**-alt** *text*?
 
 : Places it. Placing is a transformation, not a redraw: the object stays one object in the file.
 
@@ -332,7 +341,7 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 ## SVG
 
-*doc* **svg** *path* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*?
+*doc* **svg** *path* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-alt** *text*?
 
 : Draws an SVG file as **real vectors** — paths, shapes, groups, transforms, `use`, text and gradients become PDF operators, not a picture. Returns `{x y width height}` of what was drawn. Without a size the file's own dimensions apply; with one it is fitted, keeping the aspect ratio.
 
@@ -384,13 +393,35 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 : An entry of the document catalog, for anything the package does not offer by name.
 
+## Structure and accessibility
+
+*doc* **tagged** ?*0*|*1*?
+
+: Whether the document writes a structure tree. **Off by default**, and it has to be set before anything is drawn: the brackets go into the content stream as it is written.
+
+  A tagged document carries a second, invisible layer saying what the marks on a page *are* — a heading, a paragraph, a table cell — rather than how they look. The drawing does not change. Reading software needs it: without a tree it follows the order the content stream happens to have, which on a two column page runs across both columns. PDF/UA and PDF/A level A require it.
+
+*doc* **structure** *type* ?**-alt** *text*? ?**-lang** *tag*? ?**-title** *text*? ?**-actualText** *text*? **-script** *body*
+
+: Opens a structure element, runs *body* with it open and closes it again — including when the body fails, so a half open tree cannot reach the file. Returns whatever the body returned. *type* is one of the standard types of ISO 32000-1 14.8.4; an unknown one is refused at the call rather than in a validator later.
+
+  Elements nest by nesting the calls. Grouping types — `Sect`, `Div`, `L`, `LI`, `Table`, `TR` and their kin — do not hold content themselves: text drawn inside an open `Sect` becomes a `P` **within** it, which is what the nesting rules ask for.
+
+  **Most documents need few of these.** A table knows it is a table and a paragraph knows it is a paragraph, so those tag themselves; `structure` is for the grouping a writer cannot infer.
+
+: **What is derived, and what has to be said.** `text` becomes a `P`, and one call is one element however many lines it breaks into. `table` becomes a `Table` with `TR`, `TH` and `TD`, and the fill and rules of its cells become artifacts. `image` becomes an artifact unless `-alt` describes it, and then a `Figure` carrying that description.
+
+  **-alt** appears on `image place`, `image draw`, `form place` and `svg` for the same reason and with the same effect: with it the drawing becomes a `Figure` carrying that description, without it an artifact. A form or a drawing is one piece of marked content however many operators it contains — bracketing per element would scatter one illustration over dozens of leaves, and the parts of a drawing mean nothing on their own. Nothing inside a form, a pattern or a page-number XObject is marked at all: those are content streams of their own, mark numbers are unique per stream, and it is the *invocation* that carries the marking.
+
+  What no writer can infer is whether a line of text is a heading — neither its size nor its weight says so. That is what **-tag** on `text` is for: `-tag H1`, `-tag Caption`, and so on. `-tag Artifact` takes the text out of the tree altogether, which is what a running head or a page number needs; under PDF/UA anything left unmarked counts as a defect.
+
 ## PDF/A and ZUGFeRD
 
 *doc* **pdfa** ?**-part** *n*? ?**-conformance** *level*? ?**-profile** *path*?
 
 : Declares PDF/A conformance, writes the output intent with the given ICC profile and raises the file version to match. Parts 2 and 3 are accepted; part 1 is refused because it forbids the transparency this package writes, and part 4 because it needs PDF 2.0.
 
-  **-conformance** takes `B` (the default) or `U`. Level B promises the document looks the same in fifteen years; level U adds that its text can be extracted and searched reliably, which rests on the ToUnicode map written for every embedded face anyway — so `U` is the stronger claim at no cost and is worth asking for. Level A is refused: it requires a tagged document, and there is no structure tree yet.
+  **-conformance** takes `B` (the default), `U` or `A`. Level B promises the document looks the same in fifteen years; level U adds that its text can be extracted and searched reliably, which rests on the ToUnicode map written for every embedded face anyway — so `U` is the stronger claim at no cost and is worth asking for. Level A adds the structure tree, so it needs `tagged 1` before anything is drawn; asked for without it, `pdfa` names the missing call rather than writing a file that claims 3a and fails validation.
 
   Declaring conformance also turns on a check: every font in the document must be embedded, and writing fails with a message naming the offending face rather than producing a file that a validator rejects later.
 

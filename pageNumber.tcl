@@ -109,6 +109,15 @@ oo::define ::tclpdf::document::document {
     # the foot of an A5 sheet is not where the foot of an A4 sheet is.
     lassign [my page size $page] width height
     lassign [my extent [list $width $height]] widthPoints heightPoints
+    # The number is drawn into a form XObject, which is a content stream of
+    # its own - and an MCID is unique per STREAM, not per page. Marking inside
+    # it would put a number into the tree that the page's own stream does not
+    # have, and the XObject would need a StructParents entry of its own
+    # (14.7.5.2). Suspending the marking here and bracketing the [Do] below
+    # avoids both: a page number is a pagination artifact, so nothing about it
+    # belongs in the tree anyway.
+    set suspended [my state structureSuspend]
+    my state structureSuspend 1
     my canvas push $widthPoints $heightPoints
     set failed [catch {
       set arguments {}
@@ -119,15 +128,21 @@ oo::define ::tclpdf::document::document {
           {*}$arguments
     } result info]
     set content [my canvas pop]
+    my state structureSuspend $suspended
     if {$failed} {
       return -options $info $result
     }
 
     set objectNumber [my reservation $key]
+    # Its own Resources, for the reason spelled out in xObject.tcl: the form
+    # names a font, and PDF/A 6.2.2 does not let a stream inherit what it
+    # references.
     my streamObject [list Type /XObject Subtype /Form FormType 1 \
         BBox [::tclpdf::pdfObj arr [list 0 0 \
             [::tclpdf::pdfObj num $widthPoints] \
-            [::tclpdf::pdfObj num $heightPoints]]]] $content $objectNumber
+            [::tclpdf::pdfObj num $heightPoints]]] \
+        Resources [[my writer] ref [my reservation output.resources]]] \
+        $content $objectNumber
     # Stable across writes, and readable in the file: run index and page.
     set resourceName XOPN${index}_${page}
     my resource XObject $resourceName [[my writer] ref $objectNumber]
@@ -137,7 +152,16 @@ oo::define ::tclpdf::document::document {
     # document that grows with every write.
     set state [my state pageNumbers]
     if {$key ni [dict get $state placed]} {
-      my content "q /$resourceName Do Q\n" $page
+      # Bracketed as an artifact, because the Do itself is content on the page
+      # and unmarked content is a defect under PDF/UA.
+      set open ""
+      set close ""
+      if {[my state tagged] eq "1"} {
+        set mark [my StructureMark Artifact]
+        set open [my StructureBegin $mark]
+        set close [my StructureEnd $mark]
+      }
+      my content "${open}q /$resourceName Do Q\n$close" $page
       dict lappend state placed $key
       my state pageNumbers $state
     }
@@ -145,4 +169,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.0
+package provide tclpdf::pageNumber 1.1

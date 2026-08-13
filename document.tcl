@@ -197,6 +197,7 @@ oo::class create ::tclpdf::document::document {
       path shape
       clip shape
       write output
+      reservation output
       writeChannel output
       form xObject
       attach attach
@@ -218,6 +219,11 @@ oo::class create ::tclpdf::document::document {
       bookmark outline
       bookmarks outline
       svg svg
+      tagged structure
+      structure structure
+      StructureMark structure
+      StructureBegin structure
+      StructureEnd structure
     }
     if {[dict exists $topics $method]} {
       set topic [dict get $topics $method]
@@ -417,4 +423,4 @@ oo::class create ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::document 1.2
+package provide tclpdf::document 1.3

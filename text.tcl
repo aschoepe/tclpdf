@@ -159,7 +159,7 @@ oo::define ::tclpdf::document::document {
     # dictionaries and losing track of which is which.
     set defaults {at {} rotate 0 align left width {} anchor baseline
         height {} indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-        avoid {} avoidMargin 0}
+        avoid {} avoidMargin 0 tag P}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -178,6 +178,21 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: -at takes two numbers {x y}, got \"$at\" -\
           for a computed position use \[list \$x \$y\], braces do not substitute"
     }
+    # Tagged PDF: ONE call is one piece of marked content, so a paragraph of
+    # five lines becomes one P holding one mark rather than five. The bracket
+    # sits outside everything the call writes - BDC before the q and EMC after
+    # the Q - because BMC/BDC...EMC and BT...ET have to nest cleanly rather
+    # than overlap (14.6.1), and a bracket per line would also split a
+    # sentence into five leaves for a reader.
+    #
+    # [my state tagged] rather than [my tagged]: the latter is a method of the
+    # structure module, so asking it would load that module for every document
+    # whether or not it ever wanted a tree.
+    set mark {}
+    if {[my state tagged] eq "1"} {
+      set mark [my StructureMark [dict get $options tag]]
+      my content [my StructureBegin $mark]
+    }
     if {[dict get $options width] ne {}} {
       # The paragraph half of this topic. Loaded here rather than at the top
       # of the file: textBlock requires text, so requesting it up front would
@@ -186,7 +201,11 @@ oo::define ::tclpdf::document::document {
       # This is the facade rule in practice - a caller says "text with a
       # width" and does not need to know that two files are involved.
       package require tclpdf::textBlock
-      return [my TextParagraph $string $options]
+      set result [my TextParagraph $string $options]
+      if {[llength $mark]} {
+        my content [my StructureEnd $mark]
+      }
+      return $result
     }
     set state [my TextMerge $args]
     lassign [dict get $options at] x y
@@ -214,6 +233,9 @@ oo::define ::tclpdf::document::document {
     }
     my TextRun $string $state $x $y [dict get $options rotate] $shift \
         [my TextLift $state [dict get $options anchor]]
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
+    }
     return
   }
 
@@ -547,4 +569,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.5
+package provide tclpdf::text 1.6

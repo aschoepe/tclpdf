@@ -107,6 +107,7 @@ oo::define ::tclpdf::document::document {
   method ImagePlace {alias args} {
     set options [::tclpdf::option parse {
       at {} size {} width {} height {} scale {} rotate 0 opacity {} dpi 72
+      alt {}
     } $args "image place"]
     set images [my state images]
     if {![dict exists $images $alias]} {
@@ -132,6 +133,26 @@ oo::define ::tclpdf::document::document {
     set w [my distance $width]
     set h [my distance $height]
 
+    # In a tagged document a picture is either a Figure with a description or
+    # an artifact, and there is no third answer: a Figure without Alt fails
+    # validation, and an untagged picture is content belonging to no element.
+    #
+    # Artifact is the default because it is the honest one. A logo, a rule, a
+    # background carries nothing a reader needs to hear, and that is most of
+    # what a picture in a document is. -alt turns it into a Figure and is the
+    # caller saying this one means something - which is a judgement no writer
+    # can make for them.
+    set mark {}
+    if {[my state tagged] eq "1"} {
+      if {[dict get $options alt] ne {}} {
+        set element [my StructureOpen Figure \
+            [dict create alt [dict get $options alt]]]
+        set mark [my StructureMark]
+      } else {
+        set mark [my StructureMark Artifact]
+      }
+      my content [my StructureBegin $mark]
+    }
     my save
     if {[dict get $options opacity] ne {}} {
       my opacity [dict get $options opacity]
@@ -150,6 +171,12 @@ oo::define ::tclpdf::document::document {
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
     my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
     my restore
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
+      if {[info exists element]} {
+        my StructureClose $element
+      }
+    }
     return $alias
   }
 
@@ -276,4 +303,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.0
+package provide tclpdf::image 1.1

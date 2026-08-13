@@ -63,6 +63,22 @@ proc ::tclpdfTest::scratch {name} {
   return [file join [::tcltest::temporaryDirectory] $name]
 }
 
+# Write the same document twice and return both files as bytes.
+#
+# The write events fire on EVERY write, so anything that creates objects has
+# to be idempotent - that contract is what these tests check, and each one of
+# them was writing the same six lines to do it. The files are removed again;
+# what the caller gets is the two contents.
+proc ::tclpdfTest::writeTwice {doc name} {
+  set first [scratch $name-a.pdf]
+  set second [scratch $name-b.pdf]
+  $doc write $first
+  $doc write $second
+  set result [list [readBytes $first] [readBytes $second]]
+  file delete $first $second
+  return $result
+}
+
 # The decoded stream of one object - for tests that have to look inside a
 # compressed stream (a font file, a ToUnicode map, a CIDToGIDMap).
 proc ::tclpdfTest::streamOf {writer number} {

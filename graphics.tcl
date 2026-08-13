@@ -230,6 +230,21 @@ oo::define ::tclpdf::document::document {
   # of them should spell out.
   method GraphicsStyle {options {guard 0}} {
     set result {}
+    # In a tagged document a shape is marked content like anything else:
+    # inside an open Figure it belongs to that Figure, and everywhere else it
+    # is decoration and says so. Under PDF/UA content that is neither counts
+    # as a defect.
+    #
+    # The bracket opens here and closes in GraphicsPaint, the two ends of
+    # every primitive in this package - seven methods share them, and putting
+    # it in each of them is how the pair drifts apart. The mark travels
+    # through the state because the two are separate calls; shapes do not
+    # nest, so one slot is enough.
+    if {[my state tagged] eq "1"} {
+      set mark [my StructureMark auto]
+      my state structureShape $mark
+      append result [my StructureBegin $mark]
+    }
     if {$guard && [my GraphicsGuarded $options]} {
       append result "q\n"
     }
@@ -311,6 +326,14 @@ oo::define ::tclpdf::document::document {
     # The counterpart to the "q" GraphicsStyle wrote - the same condition, so
     # the two cannot get out of step.
     set close [expr {$guard && [my GraphicsGuarded $options] ? "Q\n" : ""}]
+    # And the counterpart to the bracket it opened. It goes AFTER the Q, so
+    # the marked content encloses the whole thing rather than crossing it -
+    # BDC and q have to nest, not overlap (14.6.1).
+    if {[my state tagged] eq "1"} {
+      set mark [my state structureShape]
+      my state structureShape {}
+      append close [my StructureEnd $mark]
+    }
     if {$hasFill && $hasStroke} {
       return [expr {$evenOdd ? "B*\n" : "B\n"}]$close
     }
@@ -327,4 +350,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.1
+package provide tclpdf::graphics 1.2
