@@ -93,7 +93,23 @@ oo::define ::tclpdf::document::document {
     }
 
     set offset [dict get $options offset]
+    # -spacing has no operator here: on a path every glyph is placed by hand,
+    # and Tc only applies to a text object that runs on a straight line. So
+    # the gap has to go into the cursor, once BETWEEN each pair - which is
+    # exactly the count [textWidth] uses for the whole string, and what kept
+    # the two apart until now: the alignment measured a length that never got
+    # drawn, 44.3715 against 32.7298 mm at -spacing 3.
+    #
+    # In the document unit, because the cursor is: the option is in points
+    # like every other font size.
+    set gap [::tclpdf::geometry fromPoints [dict get $state spacing] \
+        [my cget -unit]]
+    set first 1
     foreach char [split $string {}] {
+      if {!$first} {
+        set cursor [expr {$cursor + $gap}]
+      }
+      set first 0
       set advance [my textWidth $char {*}[my TextPathOverrides $options]]
       # The glyph is placed at its own MIDDLE and turned there: measuring the
       # angle at the left edge tips every letter slightly into the curve, and
@@ -241,4 +257,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.2
+package provide tclpdf::textPath 1.3

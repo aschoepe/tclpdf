@@ -141,7 +141,12 @@ oo::define ::tclpdf::document::document {
     if {$count > 1} {
       set points [expr {$points + [dict get $state spacing] * ($count - 1)}]
     }
-    set spaces [expr {[llength [split $string { }]] - 1}]
+    # max(0, ...): an empty string splits into one empty element, so the
+    # count came out -1 and the width went NEGATIVE - measured at
+    # -wordSpacing 3: -1.0583 mm. Nothing complains, and a table column takes
+    # its natural width from it, so an empty cell asked for less room than no
+    # room at all.
+    set spaces [expr {max(0, [llength [split $string { }]] - 1)}]
     set points [expr {$points + [dict get $state wordSpacing] * $spaces}]
     set points [expr {$points * [dict get $state stretch] / 100.0}]
     return [::tclpdf::geometry fromPoints $points [my cget -unit]]
@@ -569,4 +574,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.6
+package provide tclpdf::text 1.7

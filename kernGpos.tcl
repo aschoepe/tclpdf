@@ -217,10 +217,15 @@ proc ::tclpdf::kernGpos::PairPos {gpos subtable} {
       set glyphs [::tclpdf::otLayout coverage $gpos $coverage]
       set pairSetCount [::tclpdf::otLayout u16 $gpos [expr {$subtable + 8}]]
       set pairs {}
-      set index 0
-      foreach left [dict keys $glyphs] {
+    # The array beside a coverage table is ordered BY COVERAGE INDEX, not by
+    # the order the glyphs happen to come out of the table (ISO/IEC 14496-22,
+    # p. 270). The two coincide for a conforming format 2 coverage, whose
+    # ranges must be in glyph id order - which is why a running counter worked
+    # everywhere it was tried. A font that breaks that rule would get the
+    # wrong set silently, so the index the table already carries is used.
+      dict for {left index} $glyphs {
         if {$index >= $pairSetCount} {
-          break
+          continue
         }
         set pairSet [expr {$subtable + [::tclpdf::otLayout u16 $gpos \
             [expr {$subtable + 10 + $index * 2}]]}]
@@ -234,7 +239,6 @@ proc ::tclpdf::kernGpos::PairPos {gpos subtable} {
             dict set pairs $left,$right $adjust
           }
         }
-        incr index
       }
       if {![dict size $pairs]} {
         return {}
@@ -269,4 +273,4 @@ proc ::tclpdf::kernGpos::PairPos {gpos subtable} {
   return {}
 }
 
-package provide tclpdf::kernGpos 1.1
+package provide tclpdf::kernGpos 1.2

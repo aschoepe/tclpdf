@@ -203,10 +203,15 @@ proc ::tclpdf::liga::LigatureSubst {gsub subtable rules} {
       [expr {$subtable + 2}]]}]
   set setCount [::tclpdf::otLayout u16 $gsub [expr {$subtable + 4}]]
   set glyphs [::tclpdf::otLayout coverage $gsub $coverage]
-  set index 0
-  foreach first [dict keys $glyphs] {
+  # The array beside a coverage table is ordered BY COVERAGE INDEX, not by
+  # the order the glyphs happen to come out of the table (ISO/IEC 14496-22,
+  # p. 270). The two coincide for a conforming format 2 coverage, whose
+  # ranges must be in glyph id order - which is why a running counter worked
+  # everywhere it was tried. A font that breaks that rule would get the
+  # wrong set silently, so the index the table already carries is used.
+  dict for {first index} $glyphs {
     if {$index >= $setCount} {
-      break
+      continue
     }
     set ligatureSet [expr {$subtable + [::tclpdf::otLayout u16 $gsub \
         [expr {$subtable + 6 + $index * 2}]]}]
@@ -228,9 +233,8 @@ proc ::tclpdf::liga::LigatureSubst {gsub subtable rules} {
       }
       dict lappend rules $first $rule
     }
-    incr index
   }
   return $rules
 }
 
-package provide tclpdf::liga 1.0
+package provide tclpdf::liga 1.1

@@ -559,4 +559,26 @@ test text-11.2 {a table cell may contain a line break} -body {
   expr {[string length $doubled] > 0}
 } -result 1
 
+test text-word-1.1 {an empty string has no word gaps, not minus one} -body {
+  # [split "" { }] is one empty element, so the count came out -1 and the
+  # width went negative: -1.0583 mm at -wordSpacing 3. Nothing complains, and
+  # a table column takes its natural width from it - an empty cell asked for
+  # less room than no room at all.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10 -wordSpacing 3
+  set empty [$doc textWidth ""]
+  set two [$doc textWidth "a b"]
+  set one [$doc textWidth "ab"]
+  # The same strings without the option, to isolate what the gap contributes.
+  $doc font -wordSpacing 0
+  set plain [$doc textWidth "a b"]
+  set onePlain [$doc textWidth "ab"]
+  $doc destroy
+  # Empty is zero; a single word is unaffected by the option; two words carry
+  # exactly one gap of 3 pt.
+  list $empty [expr {$one == $onePlain}] \
+      [expr {abs(($two - $plain) - 3 * 25.4 / 72.0) < 0.001}]
+} -result {0.0 1 1}
+
 cleanupTests

@@ -159,6 +159,30 @@ test textPath-3.3 {glyphs beyond the end of the path are dropped} -body {
   list [expr {$drawn > 0}] [expr {$drawn < 46}]
 } -result {1 1}
 
+test textPath-3.4 {-spacing reaches the cursor, not just the measurement} -body {
+  # The alignment takes the width of the whole string, which counts the gap
+  # between every pair of glyphs; the drawing places one glyph at a time and
+  # added up bare advances. Measured before the fix at -spacing 3: the string
+  # measured 44.3715 mm and drew 32.7298 mm, so -align center placed it by a
+  # length that never appeared on the page.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 20 -spacing 3
+  $doc textPath "Rundtext" -segments {{move 20 60} {line 190 60}} -align left
+  set stream [::tclpdfTest::content $doc]
+  set xs {}
+  foreach {. x} [regexp -all -inline {([0-9.]+) [0-9.]+ Td} $stream] {
+    lappend xs $x
+  }
+  # The span from the first glyph to the last is the measured width minus the
+  # last glyph's own advance - in points, which is what the stream carries.
+  set drawn [expr {[lindex $xs end] - [lindex $xs 0]}]
+  set expected [expr {([$doc textWidth "Rundtext"] - [$doc textWidth "t"])
+      * 72.0 / 25.4}]
+  $doc destroy
+  expr {abs($drawn - $expected) < 0.001}
+} -result 1
+
 test textPath-4.1 {a path is required, and so are its segments} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
