@@ -1,5 +1,5 @@
-C Read\sstandard\sligatures,\sand\smake\sthe\sglyph\srun\sthe\ssingle\ssource\sof\struth\n\n-\sliga.tcl:\snew\s-\sthe\sliga\sfeature\sof\sGSUB,\slookup\stype\s4,\sextension\stype\s7;\sdlig,\shlig\sand\srlig\sare\snot\sread\n-\sotLayout.tcl:\snew\s-\sthe\swalk\sboth\stables\sshare,\slifted\sout\sof\skernGpos.tcl\snow\sthat\sa\ssecond\sreader\swants\sit:\sscript\sand\slanguage\ssystem,\sfeature\sto\slookups,\slookup\sto\ssubtables,\scoverage\sand\sclass\sdefinitions\n-\sfont.tcl:\sFontRun\sturns\sa\sstring\sinto\sthe\sglyphs\sthat\sget\sdrawn\sand\scarries\swith\seach\sof\sthem\sthe\scharacters\sit\sstands\sfor,\sso\sencoding,\smeasuring\sand\skerning\scan\sno\slonger\sdisagree;\sFontWidth\sis\sgone,\sits\sone\scaller\sholds\sthe\srun\sitself\n-\sfont.tcl:\sToUnicode\swrites\sa\smulti-character\sdestination\sfor\sa\sligature,\sand\sthe\slonger\sdecomposition\swins\swhere\sone\sglyph\sis\sreachable\stwo\sways\s-\sdrawing\s"office"\sbefore\sU+FB03\sused\sto\sleave\sthe\sword\sunsearchable\n-\stext.tcl:\snew\s-ligatures\soption,\son\sby\sdefault;\sthe\sTJ\sarray\sis\ssplit\sat\sglyph\sgaps,\sand\s-spacing\scounts\sglyphs\srather\sthan\scharacters\n-\stext.tcl:\stextWidth\sof\sa\sstring\swith\sline\sbreaks\sreturns\sthe\swidest\sline\s-\sit\sused\sto\sadd\sthem\sup,\sand\slately\sthrew,\swhich\sstopped\sa\stable\scell\swith\sa\snewline\sfrom\sworking\sat\sall\n-\stext.tcl:\sTextEncode\scarries\sthe\sstandard-face\scase\sonly;\sthe\sembedded\sbranch\shad\sbeen\sunreachable\ssince\sthe\srun\sarrived\sand\swould\shave\sdropped\sthe\sligature\sflag\n-\stextPath.tcl:\skerning\sand\sligatures\sforced\soff\s-\sone\sglyph\sis\splaced\sat\sa\stime\sand\sthe\sadvances\sadded\sup,\sso\sthe\swhole-string\smeasurement\swas\san\salignment\sthat\snever\sgets\sdrawn\n-\sliga.tcl,\skernGpos.tcl:\sthe\serror\sboundary\ssits\sper\slookup\sand\sabsorbs\sonly\sTCLPDF\sLAYOUT,\sso\sa\sdamaged\slookup\scosts\sitself\salone\sand\sa\smistake\sin\sthe\spackage\sno\slonger\slooks\slike\sa\sfont\swithout\sligatures\n-\stools/mkafm.tcl:\sthe\sglyph\slist\scomes\sfrom\stools/agl/glyphlist.txt\sinstead\sof\sa\spdf4tcl\sinstallation,\sand\sthe\sgenerator\swrites\sthe\spackage\sprovide\sline\sit\salways\somitted\s-\sthe\soutput\sis\sbyte-identical\sto\sthe\scommitted\safmData.tcl\n-\sdoc/tclpdf.md:\sinside\sa\sform\sor\sa\spattern\sthe\sorigin\sis\sthe\sTOP\sleft\scorner,\snot\sthe\sbottom\sleft;\ssvg\sinfo\stakes\sno\spath;\sconfigure\sreturns\snothing;\s148\scolour\snames;\s-compress,\stable\sthemes,\spdfa\sstate,\spdfa\sextension\sand\szugferd\sprofile\sdocumented\n-\sexamples:\snew\s02.06-ligatures.tcl;\s01.05-forms.tcl\scarried\sthe\ssame\swrong\sclaim\sabout\sthe\sorigin\sin\sits\sheader\n-\sREADME:\stools/agl/glyphlist.txt\snamed\sas\sthird-party\smaterial\sunder\sAdobe's\sBSD\slicence,\sbuild-time\sonly,\snever\sinstalled\n-\sfont\s1.3,\stext\s1.5,\stextPath\s1.1,\skernGpos\s1.1;\sthe\stwo\snew\smodules\sstart\sat\s1.0\n-\sKNOWN:\slookupFlag\sis\snot\sread,\sso\skerning\sis\slost\sacross\sa\scombining\smark\sin\sdecomposed\stext;\sthe\scoverage\sindex\sis\staken\sas\sa\srunning\scount,\swhich\sa\sconforming\sfont\sdoes\snot\snotice;\stextPath\sstill\smeasures\sa\s-spacing\sit\sdoes\snot\sdraw;\stextWidth\sof\san\sempty\sstring\swith\s-wordSpacing\sreturns\sa\snegative\swidth
-D 2026-08-13T15:15:09.880
+C Carry\sthe\sfont\ssubstitutes\sand\sthe\score\smetrics\sin\sthe\stree\n\n-\sexamples/assets/fonts/adobe-afm:\snew\s-\sthe\sfourteen\sAdobe\score\sfont\smetrics\safmData.tcl\sis\sgenerated\sfrom,\swith\sthe\sLICENSE.txt\sAdobe's\sterms\sforbid\sseparating\sfrom\sthem;\sthe\sgenerator\sover\sthis\sdirectory\sreproduces\sthe\scommitted\safmData.tcl\sbyte\sfor\sbyte\sunder\sTcl\s8.6\sand\s9.0\n-\sexamples/assets/fonts/urw-core35-fonts:\snew\s-\sthe\sfourteen\sURW\sfaces\sthat\sstand\sin\sfor\sthe\sstandard\s14\swhere\sa\sdocument\shas\sto\sembed\sthem,\sTrueType\sand\sCFF,\sunder\sthe\sSIL\sOpen\sFont\sLicense\s1.1;\stheir\sadvances\swere\smeasured\sagainst\sthe\smetrics\sthis\spackage\sships\sand\smatch\sthroughout\n-\stools/archive.sh:\sthe\sAdobe\soriginals\sstay\sout\sof\sthe\ssource\sarchive\s-\sthey\sare\shere\sfor\sinternal\smeasurement\sonly\sand\severy\sone\sof\sthem\ssays\sAll\sRights\sReserved\n-\sdoc/tclpdf.md:\sfont\sembed\snow\ssays\swhich\sfile\sto\sembed\sfor\seach\sof\sthe\sfourteen,\sand\swhich\sof\sthe\scolumns\scan\sbe\sembedded\sas\sit\sstands\n-\stools/BUILD-PACKAGE.md:\sthe\sAFM\sdirectory\sis\snamed\sinstead\sof\sassumed\s-\sit\sused\sto\ssay\s"the\sAdobe\sAFM\sfiles"\sand\sby\sthe\stime\sanyone\slooked\sthey\swere\sgone\sfrom\sthe\sbuild\smachine\n-\sexamples/assets/README.md:\sadobe-afm\snamed\sas\sthe\sone\sthing\sunder\sassets\sthat\sthe\sbuild\sdepends\son\srather\sthan\sthe\sexamples\n-\sKNOWN:\sSymbol\sand\sZapfDingbats\shave\sno\sembeddable\ssubstitute\s-\sthe\sURW\sfiles\scarry\sa\ssymbol\scmap\sand\sno\sUnicode\sone,\sso\sfont\sembed\srefuses\sthem;\sthe\stwelve\stext\sfaces\scover\sHelvetica,\sTimes\sand\sCourier\scompletely
+D 2026-08-13T18:22:08.786
 F Makefile.in 573119b92f4654e4303dc44222e021108c42394829e6192bb8a555747dc9b3c3
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -11,7 +11,7 @@ F configure d1f87782fa97a792b48d4dc5f835400c405ccb51ba2d61e55887add1b5006a61 x
 F configure.ac a11d0f644ec51591794fac37c35aef8b2a5dcfc6e6d1ec02c704d2997a804a5d
 F doc/PLUGINS.md 5d5e45709f4f88fab0208ff16d98ef0d060f49ee57b60f5befd1404976d19144
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
-F doc/tclpdf.md 6aa6189dc3051e062a546ee8dde3de6bfa619ab2893a46cd5b51b8dd8b33f593
+F doc/tclpdf.md 723efc35cc73829ce55f803fb6d08fdea8fdfb078ae64c85d278e0e76e6ab9e3
 F document.tcl 333057773aaa2ed9689ece5053d77a59bdf82379e17cbe3169219144ff42c9cb
 F event.tcl b738afa9f5fb7a1697af862e9dc0413ee1c5064fab9bdc971a1e1ea2a7a6ef50
 F examples/01.01-shapes.tcl 5720fbddf805f8577e2bf9c385b88a065fd3323ddd1f7abb22b2429cc34c7991
@@ -39,17 +39,69 @@ F examples/05.01-zugferd-minimum.tcl 10d33d04dda517a92bffda1252761e4a37f604842c3
 F examples/05.02-zugferd-en16931.tcl 310f7b064cee1b41064777512bbf57463a7f94ba03e299bacba1812bcdc4d24b
 F examples/05.03-navigation.tcl 5a9d5d1edc7c839bcacb55eaa2d91ece31055839c3f61d57fd43012c9c9ae477
 F examples/05.04-pdfa.tcl d41bed33f9f9ec7df177cb681c585957f5a33a13cc0ee787766e6bd708d32b11
-F examples/assets/README.md 56c293d8f215f927ba4544e3e239224d3446228c9c7af67451e4d1eeb4f975ea
+F examples/assets/README.md f8464639e62fa6c46e4bc25f2b1b725a8b0dd43df0cc54b5366750dfa26d2bd3
 F examples/assets/fonts/BitcountPropSingle-Regular.ttf bb81b2eab3b4444ed70390e4a269e913f86494513911e786a780ef12bef2100b
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
 F examples/assets/fonts/Niconne-Regular.ttf f881130fea23dab9402b02b3b15a44a59808a1d34310a8fb6ad8a10249e1b9bb
 F examples/assets/fonts/Roboto-Regular.ttf 08fc6a1844d2f79437902056795a4d3201e01ce5c77f62f7b467b16a71e24924
+F examples/assets/fonts/adobe-afm/Courier-Bold.afm b1673a3770494034b259fac1b558ae1976aa75df03b5430ff8ecd395842f4c3c
+F examples/assets/fonts/adobe-afm/Courier-BoldOblique.afm e258caf9109070c13b06a22a17dd550a9e5c482971b64101b95cb7493e69b8a1
+F examples/assets/fonts/adobe-afm/Courier-Oblique.afm 94630cce3d7d5997a5b74946f5cb8823902c1845a357ea5a78b2844ac314a88c
+F examples/assets/fonts/adobe-afm/Courier.afm 25f081697be9a7d67f577df9a94ac6031b9a98a80465778e49b4cb015c289f4e
+F examples/assets/fonts/adobe-afm/Helvetica-Bold.afm 4c4f9f9b712597ca27dea49404af6741d19d2f882b4b08da68cf10404c0df9ae
+F examples/assets/fonts/adobe-afm/Helvetica-BoldOblique.afm 321bc61f624223f6b6431228b8fa33e27bc06b1ea38baa6c634e58b76c0926ac
+F examples/assets/fonts/adobe-afm/Helvetica-Oblique.afm 3817267441302b96322c0b045ed21f0c573ecbcdbc8788931e1314a8050f424f
+F examples/assets/fonts/adobe-afm/Helvetica.afm 68d9905ff4ef0ddbb97981d3735b57845231c50d8b941d74ba956038fa90881e
+F examples/assets/fonts/adobe-afm/LICENSE.txt fde85287650c34a9840fddcf3e3cbe1caf0c9713a2598e142b672a4c74f9b4c1
+F examples/assets/fonts/adobe-afm/MustRead.html 98595135085289e4ad51731c4db0578a59bc83921a1d3f7662464074b48b10e1
+F examples/assets/fonts/adobe-afm/README.md d47db5c1f4eab836a355b018191b980e181856c5f972ffee00e5196a1428da48
+F examples/assets/fonts/adobe-afm/Symbol.afm 197b85de63e13208d525d11ee6d85caac8953f93f666aed58a93d24a9cb31dac
+F examples/assets/fonts/adobe-afm/Times-Bold.afm ca57112cffe3a3a70ec681976dcb117b72546b97a9da35fe0305411fdf24b075
+F examples/assets/fonts/adobe-afm/Times-BoldItalic.afm 9bec7096b76061a3d7e4cd12a769984b594c77980ce260898ce1dd1c992b0bde
+F examples/assets/fonts/adobe-afm/Times-Italic.afm d7740df71f518cd6e8fffc5be6d11024199483161339c77621f90f35522e288c
+F examples/assets/fonts/adobe-afm/Times-Roman.afm 768964cf9e1e80c71abf166892f91eece71f77665c11954194bbdd8bcf667036
+F examples/assets/fonts/adobe-afm/ZapfDingbats.afm 8c6ee47bac270fd79d72a08ebcc99655dc2952e15016716227882154fb927d8d
 F examples/assets/fonts/licenses/BitcountPropSingle-OFL.txt 31c112645f019f507aa3bbc969f313581abb7b34f3d9a0b1064bb36127181704
 F examples/assets/fonts/licenses/DejaVu-AUTHORS.txt 1cc6e63020d517508bdb9b1132a720533a4bda93492fb93ed501645331941d11
 F examples/assets/fonts/licenses/DejaVu-LICENSE.txt 477eb9a144d38fc57d928e761702f37eaf838f8c29d3ff64957f061d8dc8fc2f
 F examples/assets/fonts/licenses/Niconne-OFL.txt 29e05c8a3a46b40e7efe437acd34544d87642c8154de99c3dcc3e95cd2a23244
 F examples/assets/fonts/licenses/Roboto-OFL.txt ce62f9aa575d4ecf579557e3e51530cdab7f5970b960b0b6563ef2f85b9d29c1
+F examples/assets/fonts/urw-core35-fonts/COPYING 0fa7c94b651347aebbd70f3a4497025fd8fc2a99c02aeec18645257118282de8
+F examples/assets/fonts/urw-core35-fonts/D050000L.otf e1065575a63246d43fb7b896d22b950b2db47d46e58d7a9d0319880eee798e99
+F examples/assets/fonts/urw-core35-fonts/D050000L.ttf 7a51fdc6160eecc2d240bef535b6772ed603b5b3272afb3c60e9e02210cf0d61
+F examples/assets/fonts/urw-core35-fonts/LICENSE.AGPL 471eee94bd261841e5dcc58a59ed03a79292cfa15a41fcc287dcc2ee2461aabf
+F examples/assets/fonts/urw-core35-fonts/LICENSE.LPPL 019bee3b51e9e4f11f58d0d2cdc845c671838ac01f0678c944d76425b9c512cd
+F examples/assets/fonts/urw-core35-fonts/LICENSE.OFL 86d12420653d32753eb42a2f3659ce08bd6bfebfdecf7924f0d38b555881542b
+F examples/assets/fonts/urw-core35-fonts/LICENSE.md 7cfa55ff33250c3ec73d0e8e4a1ba7040726890ccb012c5f4a73afd578bfd02c
+F examples/assets/fonts/urw-core35-fonts/NOTICE.md 8dcd9cef6ebc1853498c6276a6169685925a936619412093f0203340fe3c0118
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Bold.otf a7166d55d74185e6c8f2bed4471c5e8be2cb5e18bb937976e46dfcd5b9553d76
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Bold.ttf e48f58f0ae8666f75371a322de5063a8f1ad8ac4cae41985ebb75bb5d61055e6
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-BoldItalic.otf bc4ea948ac3d89d8e3d303de1d40143047990f8c38acf2674b9c4b2e5183914c
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-BoldItalic.ttf 501632f9d1d0a9e90ec634f2272b6fec3f77881567786867fc7ec11aa61a46df
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Italic.otf c4e6516b8a1e3bbedf6bc80d93f0f95285bb92f14de2860383081be3d21d0d4c
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Italic.ttf 38c486524a875697a2a5156e15f57e9519d08984f386deb7dbda5ac868fbeb63
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Regular.otf cecf703213af67eaf646521324f784b4ada2d73d32f517aec9d758c728cbf6d1
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Regular.ttf d119155325b215e9cdfda8037e9fbce2754cd09f5d55570001bd2bb6a4fff200
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Bold.otf 18f3bea35335412ae346c978b37a4e866d0a981ae936aa9fc48605a391e12f78
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Bold.ttf e70017cbaf9260a62603465861f7daf9b1db7020b136116c2275832afb4e325f
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-BoldItalic.otf 63e91880dbd1e22e9bb95027c31b8a17978730645269a9354f8fcea3bf947924
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-BoldItalic.ttf 9e52a8b69d7f4868618126d5327fdd0a6e8ffa249ecbef6201c3ed8c7ea5a06e
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Italic.otf e684ca30c050f97e5fd55daf46c4479fdafa6fb40b7039424961cf8a2ce15184
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Italic.ttf eeb659b5306ece01171714341cdcc786a4594abea416ca0af299a8c764ba6a5f
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Regular.otf 3f81281802de4129ce26236b5b43a6efb8f20bc5247559f30c675e6cd5e44aba
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Regular.ttf 1cdc0f18f15beb3233b606ac6f1e5768769db7b9a02174acb17ef5817a8be45f
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Bold.otf bf38b0dce89924fc045b3af3f33a900afcd679c3fdd24063224eed921153b2d2
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Bold.ttf 44fb7c8110d34c210d80e60059754c102aea05e97c91e18385ad0d6a8f3a5809
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-BoldOblique.otf 0e96d5e141bdaf49e7605f23bdc3780f0c585374fd38644ab2060303969e80aa
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-BoldOblique.ttf a7a2225515dbdc8adbf069b2551df0a9b619a87b5474de64180b1b5487e72b37
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Oblique.otf 47ba11ac1fef5743fa85f7686f4588d75ad536aeaee784371d7a95c1f21ad99e
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Oblique.ttf 8bcf6c60c6d8fd648f448d31826ca6a8c212da21c94c92740e83939a01c72585
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Regular.otf b5314715a20b2903b26d0971e484ed27ea49467ed8126c2188bc4179e854e214
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Regular.ttf 8830a67d587383b416c31267c0268b29256278b69cf353823d6cd59b13fdc140
+F examples/assets/fonts/urw-core35-fonts/README.md 53fe1e5a18bd4115fc4affd624623b40a2aebd9d3091f0579c39d35a60ad3bb5
+F examples/assets/fonts/urw-core35-fonts/StandardSymbolsPS.otf ad79bc93bcc7aeaa7d594eb2075e7a37c0a3f5675637521ad31b77e0f81e4d45
+F examples/assets/fonts/urw-core35-fonts/StandardSymbolsPS.ttf 0a5a8807461eeb337ad4d457641e768923e8fb8ef058d8e529cda6029900d7f3
 F examples/assets/images/sample-gray.jpg 9e043510817e92d27e1ac8cc1fe4d00abdf11f729e1ee94fec0fd2c27f6192c8
 F examples/assets/images/sample-indexed.png a9866993ef70ebfa11fde18ab84658d1b06e7b187619513c45a0b1641d8aa521
 F examples/assets/images/sample-photo.jpg 3ab92dbcd99234a415c82a2edd1ae78bcd8eaecea422b5604c20d7940695c9ab
@@ -142,9 +194,9 @@ F text.tcl d00e456f133dec2edd01b619bef2b31e2f2578cc2a0da98f46396b886687bb20
 F textAvoid.tcl 9c8c651e847f7f84875e739a861ffbf171afb8ad148ed091d2dff2d413d14348
 F textBlock.tcl 53507d5305ab95fe8e8879c01c3961c61231bc3b24e5c45f168573e609f92773
 F textPath.tcl 4940fec926cf505aedeed365c5e924f484729d2cebc5b5e5b204c3338b4027bd
-F tools/BUILD-PACKAGE.md 7b47255a4805bd2ac152abb5da9d6688c554891270e3f042555701e8bdaf007d
+F tools/BUILD-PACKAGE.md c2c2d090ad3d7f1e8dacbcc11a065bb6f130db0cb3b7d4a02813bd41eb9e8b16
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
-F tools/archive.sh 7f74807fe22365b2ec4035b7c248ec77cddd014db15de22502d15b6a58d684c4 x
+F tools/archive.sh 8b8ba6949e45c0302333240be3999af3367d062ebb517102a831b9878c493f9d x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
 F tools/mkafm.tcl d3f6c1e855da6bd66c934f2bec5946f93097fd3ce69818609597d4cf39fe9981
@@ -155,8 +207,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl f20e82e15aa6690f109531bf65a936033f610a56b090fb6613b6a8ba41996152
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 495518c1a0598fadf5064a0c98f70154b85e1553c3cc3394b21ec486a3299ba9
-R e482fabdbe00d49e763b148e0b185b9f
+P 1f8f6011251b066dd8c3bd822acd7b2902210c83f33581a8dae426a33f2557bb
+R 03d9a97fee1a7e7349d1b00fb682ab0c
 U alex
-Z 81c6b85d05207631d8956749ae4dc0c1
+Z 9225f50eddec7f321637b8c4955d550e
 # Remove this line to create a well-formed Fossil manifest.

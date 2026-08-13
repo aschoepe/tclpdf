@@ -11,6 +11,8 @@ example that quietly demonstrates the wrong thing is worse than none.
 
 ```
 fonts/     four families, five faces, plus their licences    (stage 2)
+           urw-core35-fonts/, fourteen faces for PDF/A       (stage 2)
+           adobe-afm/, the metrics afmData.tcl is built from (build)
 images/    JPEG and PNG covering each code path, plus SVG    (stages 3 and 6)
 xml/       two ZUGFeRD profiles, to attach and to detect     (stage 5)
 ```
@@ -32,7 +34,8 @@ verified against the build, not assumed:
 
 That distinction is what keeps the licensing simple. **tclpdf is MIT; the fonts
 are not.** They are third-party work under their own terms, they carry those
-terms with them in `fonts/licenses/`, and they reach nobody who merely installs
+terms with them — in `fonts/licenses/` for the flat files, in the directory
+itself for `urw-core35-fonts/` — and they reach nobody who merely installs
 the package. A font only becomes the user's licensing question when the user
 embeds one of their own — which is why tclpdf reads `fsType` and reports it.
 
@@ -44,13 +47,26 @@ everything else here.
 
 ---
 
-## fonts/ — 1.9 MB
+## fonts/ — 5.5 MB
 
 Four families, one face each except DejaVu, which keeps a bold as well. Flat,
 because every example wants a short path, with the licences in `licenses/`
 named after the family they belong to — the OFL requires the text to travel
 with the fonts, and a folder of five files named `OFL.txt` would not say which
 is which.
+
+`adobe-afm/` is not example data at all and is the one thing here that the
+**build** depends on: the fourteen Adobe core font metrics `afmData.tcl` is
+generated from. It sits under `fonts/` because that is where a reader looks for
+it, and it carries `LICENSE.txt`, which Adobe's terms forbid separating from the
+metrics.
+
+One exception to the flat rule: `urw-core35-fonts/` keeps its own directory,
+its own licence files and its own notice, because it is a **set** rather than a
+face — the fourteen URW faces that stand in for the standard 14 when a document
+has to be archivable. Its own `NOTICE.md` carries the origin, the licence
+choice and the two metric measurements; the flat files above stay where the
+examples expect them.
 
 Every family here was **read**, not assumed: `fsType`, the glyph count and the
 character coverage come out of the files.

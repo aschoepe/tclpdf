@@ -69,9 +69,26 @@ The packages are then available for download at
 * `make archive` still exists as the bare packaging step; `make
   release` is `archive` plus the dependency chain and a summary.
 * `afmData.tcl` is generated, and reproducing it needs nothing but a
-  checkout and the Adobe AFM files:
+  checkout:
 
-      tclsh tools/mkafm.tcl <afm-directory> > afmData.tcl
+      tclsh tools/mkafm.tcl examples/assets/fonts/adobe-afm > afmData.tcl
+
+  The metrics live in the tree, next to the glyph list the generator
+  also needs (`tools/agl/glyphlist.txt`). Adobe permits copying and
+  redistribution of the metrics without charge, provided the copyright
+  notices are kept and `LICENSE.txt` travels with them - it sits in
+  that directory for exactly that reason and must not be separated
+  from the AFM files. The font **outlines** carry no such grant and
+  are a different matter entirely.
+
+  Until 2026-08-13 this read "the Adobe AFM files" and named no
+  directory at all, and by then they were gone from the build machine,
+  so a file whose header says "GENERATED - rerun the generator" could
+  not be regenerated. The same shape of gap as the pdf4tcl dependency
+  removed the same week. Origin is now on record in
+  `examples/assets/fonts/adobe-afm/README.md`; the output is
+  byte-identical to the committed file under Tcl 8.6 and 9.0, which is
+  also how it was established that these are the files it came from.
 
   The glyph list it needs sits in `tools/agl/glyphlist.txt`. Until
   2026-08-13 the generator took that table as a second argument and

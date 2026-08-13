@@ -86,11 +86,22 @@ fi
 # it - and those terms grant free use including redistribution and commercial
 # products. The block is what makes them redistributable, so it MUST NOT be
 # stripped when the files are copied or trimmed.
+#
+# examples/assets/fonts/adobe-standard-14 is the opposite case, and it is not
+# a licence that is unsettled but one that is settled the other way. Those are
+# the original fourteen as Adobe published them, Type 1 and OpenType, and every
+# file says "All Rights Reserved" in its own copyright notice; Helvetica and
+# Times are trademarks of Heidelberger Druckmaschinen, ZapfDingbats of ITC.
+# They exist here for INTERNAL TESTING ONLY - to measure a substitute against
+# the original - and they may not leave this machine. The exclusion is repeated
+# in .fossil-settings/ignore-glob so that neither a commit nor an archive picks
+# them up. Do not remove either one.
 
 cd ../..
 tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude='uv/*' \
     --exclude="${PACKAGE_NAME}/examples/out" \
+    --exclude="${PACKAGE_NAME}/examples/assets/fonts/adobe-standard-14" \
     --exclude="${PACKAGE_NAME}/docs" \
     --exclude="${PACKAGE_NAME}/.fslckout" \
     --exclude="${PACKAGE_NAME}/.fossil-settings" \

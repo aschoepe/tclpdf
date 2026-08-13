@@ -122,6 +122,48 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 : Embeds a TrueType file under an alias, subset to the glyphs actually used. The alias is then usable as **-family**.
 
+: **Which file to embed for a standard face.** A document that has to be
+  archivable may not leave a font unembedded, and that includes the fourteen
+  standard faces — PDF/A makes no exception for them. Their outlines were never
+  released, so an equivalent has to take their place. The table below maps each
+  of the fourteen to the file that stands in for it.
+
+  | PDF standard 14 | URW Core 35 | Adobe Type 1 | Adobe OpenType | macOS | Windows |
+  |---|---|---|---|---|---|
+  | Helvetica | `NimbusSans-Regular.ttf` | `Helvetica.pfb` | `HelveticaLTStd-Roman.otf` | Helvetica | `Arial.ttf` |
+  | Helvetica-Bold | `NimbusSans-Bold.ttf` | `Helvetica-Bold.pfb` | `HelveticaLTStd-Bold.otf` | Helvetica Bold | `Arialbd.ttf` |
+  | Helvetica-Oblique | `NimbusSans-Oblique.ttf` | `Helvetica-Oblique.pfb` | `HelveticaLTStd-Obl.otf` | Helvetica Oblique | `Ariali.ttf` |
+  | Helvetica-BoldOblique | `NimbusSans-BoldOblique.ttf` | `Helvetica-BoldOblique.pfb` | `HelveticaLTStd-BoldObl.otf` | Helvetica Bold Oblique | `Arialbi.ttf` |
+  | Times-Roman | `NimbusRoman-Regular.ttf` | `Times-Roman.pfb` | `TimesLTStd-Roman.otf` | Times | `Times.ttf` |
+  | Times-Bold | `NimbusRoman-Bold.ttf` | `Times-Bold.pfb` | `TimesLTStd-Bold.otf` | Times Bold | `Timesbd.ttf` |
+  | Times-Italic | `NimbusRoman-Italic.ttf` | `Times-Italic.pfb` | `TimesLTStd-Italic.otf` | Times Italic | `Timesi.ttf` |
+  | Times-BoldItalic | `NimbusRoman-BoldItalic.ttf` | `Times-BoldItalic.pfb` | `TimesLTStd-BoldItalic.otf` | Times Bold Italic | `Timesbi.ttf` |
+  | Courier | `NimbusMonoPS-Regular.ttf` | `Courier.pfb` | `CourierStd.otf` | Courier | `Cour.ttf` |
+  | Courier-Bold | `NimbusMonoPS-Bold.ttf` | `Courier-Bold.pfb` | `CourierStd-Bold.otf` | Courier Bold | `Courbd.ttf` |
+  | Courier-Oblique | `NimbusMonoPS-Italic.ttf` | `Courier-Oblique.pfb` | `CourierStd-Oblique.otf` | Courier Oblique | `Couri.ttf` |
+  | Courier-BoldOblique | `NimbusMonoPS-BoldItalic.ttf` | `Courier-BoldOblique.pfb` | `CourierStd-BoldOblique.otf` | Courier Bold Oblique | `Courbi.ttf` |
+  | Symbol | `StandardSymbolsPS.ttf` | `Symbol.pfb` | `SymbolStd.otf` | Symbol | `Symbol.ttf` |
+  | ZapfDingbats | `D050000L.ttf` | `ZapfDingbats.pfb` | `ZapfDingbatsStd.otf` | Zapf Dingbats | — |
+
+  **Only one of those columns can be embedded as it stands.** The URW files are
+  TrueType and go in unchanged. Adobe's Type 1 files cannot: this package
+  embeds TrueType outlines, and `font embed` refuses them. Adobe's OpenType
+  files carry CFF outlines and are refused as well; convert them to TTF first.
+  The macOS entries for Helvetica, Times and Courier are TrueType
+  **collections** — several faces in one file — and a single face has to be
+  extracted before it can be used.
+
+  **Two of the fourteen have no working substitute today.** The URW files for
+  Symbol and ZapfDingbats carry a `(3,0)` symbol cmap and no Unicode one, so
+  `font embed` refuses them. The twelve text faces are unaffected and cover
+  Helvetica, Times and Courier completely.
+
+  The URW faces are metric substitutes, and measured against the metrics this
+  package ships: every one of the 2 592 advances of the twelve text faces
+  matches the standard face it stands in for, across all mapped WinAnsi byte
+  values. They are published under the SIL Open Font License 1.1, so they can
+  be redistributed with a document workflow; Adobe's own outlines cannot.
+
 *doc* **font names**
 
 : The aliases embedded so far.
