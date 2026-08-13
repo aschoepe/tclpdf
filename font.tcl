@@ -123,7 +123,12 @@ oo::define ::tclpdf::document::document {
   }
 
   # The width of a string in points, at a given size.
-  method FontWidth {alias text size} {
+  #
+  # With kerning the pair adjustments belong in here and not only in the
+  # drawing: the line breaker, the column widths and the text on a path all
+  # measure through this method, and a line measured without the kerning it is
+  # later drawn with breaks in the wrong place.
+  method FontWidth {alias text size {kerning 0}} {
     set entry [dict get [my state fonts] $alias]
     set parsed [dict get $entry parsed]
     set cmap [dict get $parsed cmap]
@@ -136,7 +141,80 @@ oo::define ::tclpdf::document::document {
             [dict get $cmap $code]]}]
       }
     }
-    return [expr {double($total) * $size / $units}]
+    set points [expr {double($total) * $size / $units}]
+    if {$kerning} {
+      set thousandths 0
+      foreach adjust [my FontKern $alias $text] {
+        set thousandths [expr {$thousandths + $adjust}]
+      }
+      set points [expr {$points + $thousandths * $size / 1000.0}]
+    }
+    return $points
+  }
+
+  # The kerning of a string: one adjustment per gap between two characters,
+  # in thousandths of the em - the unit a TJ number is written in, so that the
+  # measurement and the drawing cannot drift apart through two conversions.
+  #
+  # A string of n characters yields n-1 numbers, most of them zero. Characters
+  # the font has no glyph for end the pair rather than being skipped over:
+  # kerning applies between neighbours, and [FontEncode] refuses such a string
+  # anyway before it is ever drawn.
+  method FontKern {alias text} {
+    set count [string length $text]
+    if {$count < 2} {
+      return {}
+    }
+    set entry [dict get [my state fonts] $alias]
+    set parsed [dict get $entry parsed]
+    set state [my FontKernState $alias]
+    set adjustments {}
+    if {[::tclpdf::kern origin $state] eq "none"} {
+      # Nothing to look up - hand back zeros rather than an empty list, so
+      # every caller can index by gap without a special case.
+      for {set index 1} {$index < $count} {incr index} {
+        lappend adjustments 0
+      }
+      return $adjustments
+    }
+    set cmap [dict get $parsed cmap]
+    set units [dict get $parsed unitsPerEm]
+    set previous -1
+    set first 1
+    foreach char [split $text {}] {
+      set code [scan $char %c]
+      set glyph [expr {[dict exists $cmap $code] ? [dict get $cmap $code] : -1}]
+      if {!$first} {
+        if {$previous >= 0 && $glyph >= 0} {
+          set value [::tclpdf::kern value $state $previous $glyph]
+          lappend adjustments [expr {$value * 1000.0 / $units}]
+        } else {
+          lappend adjustments 0
+        }
+      }
+      set first 0
+      set previous $glyph
+    }
+    return $adjustments
+  }
+
+  # The prepared kerning of one font, read once and kept.
+  #
+  # Loaded here rather than at the top of the file: a document that never asks
+  # for kerning never parses a GPOS table, and that table is the largest thing
+  # in many fonts.
+  method FontKernState {alias} {
+    set fonts [my state fonts]
+    set entry [dict get $fonts $alias]
+    if {[dict exists $entry kern]} {
+      return [dict get $entry kern]
+    }
+    package require tclpdf::kern 1.0-
+    set state [::tclpdf::kern build [dict get $entry parsed]]
+    dict set entry kern $state
+    dict set fonts $alias $entry
+    my state fonts $fonts
+    return $state
   }
 
   # The resource name, registered on first use.
@@ -356,4 +434,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.1
+package provide tclpdf::font 1.2

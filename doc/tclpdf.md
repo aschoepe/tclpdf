@@ -112,6 +112,8 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   **-family** takes one of the fourteen standard faces (`helvetica`, `times`, `courier`, `symbol`, `zapfdingbats`), an exact PostScript name such as `Times-Italic`, or the alias of an embedded face. **-style** takes `bold`, `italic` or both. **-size** is always in points. Further options: **-spacing** (extra space per character), **-wordSpacing**, **-stretch** (horizontal scaling in percent), **-leading** (line spacing, default 1.2 times the size) and **-rise** (baseline shift, for super- and subscript).
 
+  **-kerning** applies the pair kerning of an embedded face and is **on by default**. The amounts are read from the font while writing - from its GPOS table where it has kerning lookups, otherwise from its `kern` table, which is the order ISO/IEC 14496-22 prescribes - and are written into the content stream, so neither table is embedded. Kerning changes the width of every line it touches, and the width is measured with it: `textWidth`, the line breaker and the table column widths all see the kerned figures. Set **-kerning** to 0 where a document has to come out exactly as an earlier release produced it. The fourteen standard faces are unaffected: the metrics shipped for them carry widths per byte value, not kerning pairs.
+
 *doc* **font embed** *alias path* ?**-subset** *0*?
 
 : Embeds a TrueType file under an alias, subset to the glyphs actually used. The alias is then usable as **-family**.

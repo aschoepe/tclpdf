@@ -1,0 +1,224 @@
+# kern.test --
+#
+# Pair kerning: which source a font kerns from, and what reaches the stream.
+#
+# The precedence between the two sources is not a preference, it is
+# ISO/IEC 14496-22:2019, 8.16 - GPOS wins whenever the resolved language
+# system has kerning lookups, and the kern table is then to be ignored. The
+# tests below check the rule on fonts that actually differ: DejaVu carries
+# both, Roboto and Niconne only GPOS.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::font
+package require tclpdf::kern
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+set fontBoth [file join $assets DejaVuSans.ttf]
+set fontGpos [file join $assets Roboto-Regular.ttf]
+set fontScript [file join $assets Niconne-Regular.ttf]
+
+testConstraint haveBoth [file exists $fontBoth]
+testConstraint haveGpos [file exists $fontGpos]
+testConstraint haveScript [file exists $fontScript]
+
+# The glyph of a character, through the font's own cmap.
+proc kernGlyph {parsed char} {
+  return [dict get [dict get $parsed cmap] [scan $char %c]]
+}
+
+# The adjustment of a pair given as two characters.
+proc kernPair {parsed state pair} {
+  return [::tclpdf::kern value $state \
+      [kernGlyph $parsed [string index $pair 0]] \
+      [kernGlyph $parsed [string index $pair 1]]]
+}
+
+# --- the sources ----------------------------------------------------------
+
+test kern-1.1 {a font with both sources kerns from GPOS} -constraints haveBoth -body {
+  set parsed [::tclpdf::sfnt read $fontBoth]
+  # The font has to carry both, or the test would prove nothing.
+  set hasKernTable [expr {[::tclpdf::sfnt table $parsed kern] ne {}}]
+  set hasGpos [expr {[llength [::tclpdf::kernGpos lookups $parsed]] > 0}]
+  list $hasKernTable $hasGpos [::tclpdf::kern origin [::tclpdf::kern build $parsed]]
+} -result {1 1 gpos}
+
+test kern-1.2 {a font with only GPOS kerns from GPOS} -constraints haveGpos -body {
+  set parsed [::tclpdf::sfnt read $fontGpos]
+  list [expr {[::tclpdf::sfnt table $parsed kern] ne {}}] \
+      [::tclpdf::kern origin [::tclpdf::kern build $parsed]]
+} -result {0 gpos}
+
+test kern-1.3 {a font without any kerning says so} -body {
+  # A minimal font: the four required tables, no kern, no GPOS.
+  set parsed [dict create bytes {} tables {} numGlyphs 1 unitsPerEm 1000]
+  set state [::tclpdf::kern build $parsed]
+  list [::tclpdf::kern origin $state] [::tclpdf::kern value $state 1 2]
+} -result {none 0}
+
+# --- the values -----------------------------------------------------------
+
+test kern-2.1 {the classic pairs come out negative} -constraints haveGpos -body {
+  set parsed [::tclpdf::sfnt read $fontGpos]
+  set state [::tclpdf::kern build $parsed]
+  set result {}
+  foreach pair {AV To Ta AT LT} {
+    lappend result [expr {[kernPair $parsed $state $pair] < 0}]
+  }
+  set result
+} -result {1 1 1 1 1}
+
+test kern-2.2 {a pair that is not kerned is zero} -constraints haveGpos -body {
+  set parsed [::tclpdf::sfnt read $fontGpos]
+  kernPair $parsed [::tclpdf::kern build $parsed] "nn"
+} -result 0
+
+test kern-2.3 {both readers agree on the same font} -constraints haveBoth -body {
+  # DejaVu records the same pairs twice, once per source. Two parsers that
+  # share no code arriving at the same numbers is the strongest check there
+  # is on either of them - and it is why this font is in the test set.
+  set parsed [::tclpdf::sfnt read $fontBoth]
+  set fromTable [::tclpdf::kern::KernTable $parsed]
+  set fromGpos [::tclpdf::kern build $parsed]
+  set differ {}
+  foreach pair {AV To Ta AT LT Yo We} {
+    set left [kernGlyph $parsed [string index $pair 0]]
+    set right [kernGlyph $parsed [string index $pair 1]]
+    set table [expr {[dict exists $fromTable $left,$right] ?
+        [dict get $fromTable $left,$right] : 0}]
+    set gpos [::tclpdf::kern value $fromGpos $left $right]
+    if {$table != $gpos || $table == 0} {
+      lappend differ [list $pair $table $gpos]
+    }
+  }
+  set differ
+} -result {}
+
+test kern-2.4 {the Latin script is resolved, not the default one} -constraints haveBoth -body {
+  # DejaVu points DFLT at one small lookup and latn at that one PLUS the
+  # Latin pair kerning. Taking DFLT first therefore loses every pair below,
+  # which is exactly the defect this test was written for.
+  set parsed [::tclpdf::sfnt read $fontBoth]
+  set state [::tclpdf::kern build $parsed]
+  expr {[kernPair $parsed $state "AV"] != 0}
+} -result 1
+
+test kern-2.5 {a font whose only script is latn is still found} -constraints haveScript -body {
+  # Niconne carries no DFLT script at all.
+  set parsed [::tclpdf::sfnt read $fontScript]
+  expr {[kernPair $parsed [::tclpdf::kern build $parsed] "To"] < 0}
+} -result 1
+
+# --- what the document does with it ---------------------------------------
+
+test kern-3.1 {kerning is on without being asked for} -constraints haveGpos -body {
+  set doc [::tclpdf::new]
+  $doc font embed body $fontGpos
+  $doc page add
+  $doc text "AV" -at {20 20} -family body -size 20
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # A TJ array without anyone asking: that is the default since 2026-08-13.
+  expr {[string match {*TJ*} $content]}
+} -result 1
+
+test kern-3.1a {and -kerning 0 turns it off again} -constraints haveGpos -body {
+  set doc [::tclpdf::new]
+  $doc font embed body $fontGpos
+  $doc page add
+  $doc text "AV" -at {20 20} -family body -size 20 -kerning 0
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Nothing to adjust between the two glyphs, so a plain Tj.
+  expr {[string match {*Tj*} $content] && ![string match {*TJ*} $content]}
+} -result 1
+
+test kern-3.2 {with -kerning the pair is adjusted in the stream} -constraints haveGpos -body {
+  set doc [::tclpdf::new]
+  $doc font embed body $fontGpos
+  $doc page add
+  $doc text "AV" -at {20 20} -family body -size 20 -kerning 1
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {[string match {*TJ*} $content]}
+} -result 1
+
+test kern-3.3 {the adjustment tightens rather than opens} -constraints haveGpos -body {
+  set doc [::tclpdf::new]
+  $doc font embed body $fontGpos
+  $doc page add
+  $doc text "AV" -at {20 20} -family body -size 20 -kerning 1
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # A TJ number is subtracted from the advance, so tightening is POSITIVE.
+  regexp {\[([^\]]*)\]\s*TJ} $content -> array
+  set numbers {}
+  foreach token $array {
+    if {[string is double -strict $token]} {
+      lappend numbers $token
+    }
+  }
+  expr {[llength $numbers] == 1 && [lindex $numbers 0] > 0}
+} -result 1
+
+test kern-3.4 {the measurement follows the drawing} -constraints haveGpos -body {
+  set doc [::tclpdf::new]
+  $doc font embed body $fontGpos
+  $doc page add
+  set plain [$doc textWidth "AVATAR" -family body -size 20 -kerning 0]
+  set kerned [$doc textWidth "AVATAR" -family body -size 20 -kerning 1]
+  $doc destroy
+  # Kerned text is narrower, and not by a rounding error.
+  expr {$kerned < $plain && ($plain - $kerned) > 0.1}
+} -result 1
+
+test kern-3.5 {a standard font is unaffected and does not fail} -body {
+  set doc [::tclpdf::new]
+  $doc page add
+  set plain [$doc textWidth "AVATAR" -family helvetica -size 20 -kerning 0]
+  set asked [$doc textWidth "AVATAR" -family helvetica -size 20 -kerning 1]
+  $doc destroy
+  expr {$plain == $asked}
+} -result 1
+
+test kern-3.6 {word spacing and kerning share one TJ array} -constraints haveGpos -body {
+  set doc [::tclpdf::new]
+  $doc font embed body $fontGpos
+  $doc page add
+  $doc text "AV AV" -at {20 20} -family body -size 20 -kerning 1 -wordSpacing 3
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {\[([^\]]*)\]\s*TJ} $content -> array
+  set numbers {}
+  foreach token $array {
+    if {[string is double -strict $token]} {
+      lappend numbers $token
+    }
+  }
+  # Two kerned pairs and one space: three adjustments, and the space opens
+  # a gap while the pairs close one.
+  list [llength $numbers] [expr {[lindex $numbers 0] > 0}] \
+      [expr {[lindex $numbers 1] < 0}] [expr {[lindex $numbers 2] > 0}]
+} -result {3 1 1 1}
+
+test kern-3.7 {the subset carries no kern table} -constraints haveBoth -body {
+  # Kerning is producer arithmetic: the numbers are in the content stream and
+  # no reader consults the font for them. Copying the table would be ballast.
+  set parsed [::tclpdf::sfnt read $fontBoth]
+  set subset [::tclpdf::subset build $parsed [list 0 [kernGlyph $parsed A]]]
+  set rebuilt [::tclpdf::sfnt parse [dict get $subset bytes]]
+  list [expr {[::tclpdf::sfnt table $rebuilt kern] eq {}}] \
+      [expr {[::tclpdf::sfnt table $rebuilt GPOS] eq {}}]
+} -result {1 1}
+
+cleanupTests

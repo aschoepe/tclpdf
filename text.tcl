@@ -29,7 +29,7 @@ package require tclpdf::document 1.0-
 namespace eval ::tclpdf::text {
   # Which options describe the font state rather than one call.
   variable stateOptions {family style size color spacing wordSpacing
-      stretch leading rise}
+      stretch leading rise kerning}
 }
 
 oo::define ::tclpdf::document::document {
@@ -49,6 +49,14 @@ oo::define ::tclpdf::document::document {
   #   -stretch     horizontal scaling in percent (Tz), 100 is normal
   #   -leading     line spacing (TL) in points; default 1.2 * size
   #   -rise        baseline shift (Ts) in points, for super- and subscript
+  #   -kerning     apply the pair kerning of an embedded font, 0 or 1
+  #
+  # -kerning is ON by default: kerning is what the type designer intended, and
+  # a package that leaves it off ships worse typography than the font offers.
+  # Set it to 0 where a document has to come out exactly as an older release
+  # produced it - the pair adjustments change the width of every line they
+  # touch. It only affects embedded fonts; the metrics shipped for the
+  # standard fourteen carry widths per byte value, not kerning pairs.
   method font {args} {
     my TextInit
     if {![llength $args]} {
@@ -85,8 +93,14 @@ oo::define ::tclpdf::document::document {
     set state [my TextMerge $args]
     set font [dict get $state resolved]
     if {[my TextEmbedded $font]} {
-      set points [my FontWidth $font $string [dict get $state size]]
+      set points [my FontWidth $font $string [dict get $state size] \
+          [dict get $state kerning]]
     } else {
+      # No kerning for the standard fourteen: the metrics this package ships
+      # carry widths per byte value, not the AFM kerning pairs. Asking for
+      # -kerning with a standard font is therefore not an error but has no
+      # effect - and measuring it here differently from drawing it would be
+      # the worse answer.
       set points [::tclpdf::afm stringWidth $font $string [dict get $state size]]
     }
     # Character and word spacing widen the run and belong in the measurement,
@@ -331,41 +345,84 @@ oo::define ::tclpdf::document::document {
         && [dict get $state size] > 0 && [my TextEmbedded $font]}]
   }
 
-  # The show operator for one run: "(bytes) Tj", or a TJ array when the gap
-  # after each space has to be opened by hand.
+  # What has to be written after each character, in thousandths of the text
+  # space - the unit of a TJ number. Empty when the run needs no TJ array at
+  # all, which keeps the common case a plain "(bytes) Tj".
   #
-  # TJ alternates strings and numbers, and a number is SUBTRACTED from the
-  # advance in thousandths of the text space - so a negative one opens a gap.
+  # Two sources meet here and are added, because they can occur at the same
+  # place: the word spacing after a space, and the kerning between a pair.
+  #
+  # SIGNS: a TJ number is SUBTRACTED from the advance, so a positive one pulls
+  # the next glyph closer and a negative one opens a gap. Word spacing wants a
+  # gap and therefore enters negative; a kerning pair is stored negative when
+  # it tightens and therefore enters with its sign turned round.
+  method TextAdjust {font state string byTJ} {
+    set count [string length $string]
+    if {$count < 1} {
+      return {}
+    }
+    set kick 0
+    if {$byTJ} {
+      set kick [expr {-1000.0 * [dict get $state wordSpacing]
+          / [dict get $state size]}]
+    }
+    set kern {}
+    if {[dict get $state kerning] && [my TextEmbedded $font]
+        && [dict get $state size] > 0} {
+      set kern [my FontKern $font $string]
+    }
+    if {$kick == 0 && ![llength $kern]} {
+      return {}
+    }
+    set adjustments {}
+    set any 0
+    for {set index 0} {$index < $count} {incr index} {
+      set value 0
+      # The space keeps its own width and is drawn; the adjustment follows it.
+      # A run ending in a space is adjusted as well, exactly as Tw would have
+      # done - and as [textWidth] counts it when it measures the line.
+      if {[string index $string $index] eq { }} {
+        set value $kick
+      }
+      # The last character has no successor, so there is no pair to kern.
+      if {$index < $count - 1 && [llength $kern]} {
+        set value [expr {$value - [lindex $kern $index]}]
+      }
+      lappend adjustments $value
+      if {$value != 0} {
+        set any 1
+      }
+    }
+    if {!$any} {
+      return {}
+    }
+    return $adjustments
+  }
+
+  # The show operator for one run: "(bytes) Tj", or a TJ array when something
+  # has to be adjusted by hand between the characters.
+  #
   # The horizontal scale (Tz) multiplies the advance and the adjustment alike,
   # exactly as it does with Tw, so it needs no second thought here.
-  #
-  # The space itself stays inside the preceding piece: it has a width of its
-  # own that still has to be drawn. Two spaces in a row therefore produce two
-  # adjustments, which is what Tw would have done as well - and what [textWidth]
-  # counts when it measures the line.
   method TextShow {font state string byTJ} {
-    if {!$byTJ} {
+    set adjustments [my TextAdjust $font $state $string $byTJ]
+    if {![llength $adjustments]} {
       return "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
     }
-    set kick [expr {-1000.0 * [dict get $state wordSpacing]
-        / [dict get $state size]}]
-    set pieces [split $string { }]
-    set last [expr {[llength $pieces] - 1}]
     set parts {}
-    for {set index 0} {$index <= $last} {incr index} {
-      set piece [lindex $pieces $index]
-      if {$index < $last} {
-        # The space belongs to the piece before the adjustment.
-        append piece { }
-      } elseif {$piece eq {}} {
-        # A run ending in a space: the adjustment is already written, and an
-        # empty string after it would only be noise in the stream.
-        continue
+    set piece {}
+    set count [string length $string]
+    for {set index 0} {$index < $count} {incr index} {
+      append piece [string index $string $index]
+      set value [lindex $adjustments $index]
+      if {$value != 0} {
+        lappend parts [::tclpdf::pdfObj bytesStr [my TextEncode $font $piece]]
+        lappend parts [::tclpdf::pdfObj num $value]
+        set piece {}
       }
+    }
+    if {$piece ne {}} {
       lappend parts [::tclpdf::pdfObj bytesStr [my TextEncode $font $piece]]
-      if {$index < $last} {
-        lappend parts [::tclpdf::pdfObj num $kick]
-      }
     }
     return "\[[join $parts { }]\] TJ\n"
   }
@@ -396,7 +453,8 @@ oo::define ::tclpdf::document::document {
     if {[my state text] eq {}} {
       my state text [dict create \
           family helvetica style {} size 12 color black spacing 0 \
-          wordSpacing 0 stretch 100 leading {} rise 0 resolved Helvetica]
+          wordSpacing 0 stretch 100 leading {} rise 0 kerning 1 \
+          resolved Helvetica]
     }
     return
   }
@@ -440,4 +498,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.3
+package provide tclpdf::text 1.4
