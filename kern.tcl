@@ -34,19 +34,20 @@
 package require Tcl 8.6.11-
 package require tclpdf::sfnt 1.0-
 package require tclpdf::kernGpos 1.0-
+package require tclpdf::gdef 1.0-
 
 namespace eval ::tclpdf::kern {
   namespace export {[a-z]*}
   namespace ensemble create
 }
 
-# Prepare a font for kerning. The result is handed back to [value] and is
+# Prepare a font for kerning. The result is handed back to [run] and is
 # worth keeping: it walks the whole table once, which a per-pair lookup must
 # not do.
 proc ::tclpdf::kern::build {font} {
   set indices [::tclpdf::kernGpos lookups $font]
   if {[llength $indices]} {
-    set prepared [::tclpdf::kernGpos subtables $font]
+    set prepared [::tclpdf::kernGpos prepare $font]
     if {[llength $prepared]} {
       return [list gpos $prepared]
     }
@@ -57,7 +58,11 @@ proc ::tclpdf::kern::build {font} {
   }
   set pairs [KernTable $font]
   if {[dict size $pairs]} {
-    return [list kern $pairs]
+    # The old table has neither lookups nor flags, but its pairs have exactly
+    # the shape a PairPos format 1 subtable produces: one lookup, no filter,
+    # one subtable. Saying so here is what lets both sources be evaluated by
+    # the same code instead of by two copies of it that drift apart.
+    return [list kern [list [list {} [list [list pairs $pairs]]]]]
   }
   return [list none {}]
 }
@@ -72,17 +77,98 @@ proc ::tclpdf::kern::origin {state} {
   return [lindex $state 0]
 }
 
+# The adjustments of a glyph run, in font units: one per gap between two
+# neighbouring glyphs, so the result is one shorter than the run and every
+# caller can index it by gap without a special case.
+#
+# Lookups are applied one after another and their adjustments add up (S. 217);
+# within one lookup the first subtable that knows the pair wins, which is how
+# the specification has subtables searched.
+#
+# Why a run and not a pair: a lookup that sets an ignore bit sees the run
+# WITHOUT the glyphs it filters out, so in "A acute V" the pair to look up is
+# A V. That question cannot be asked two glyphs at a time.
+#
+# WHERE the amount lands matters once glyphs are skipped. It goes to the gap
+# BEFORE the second glyph of the pair, not after the first: the acute belongs
+# at the right edge of the A, and taking the amount off the A's advance would
+# drag the accent along with it. For neighbouring glyphs - every pair in a
+# font that filters nothing - the two are the same gap.
+proc ::tclpdf::kern::run {state glyphs} {
+  set gaps [expr {[llength $glyphs] - 1}]
+  if {$gaps < 1} {
+    return {}
+  }
+  set result [lrepeat $gaps 0]
+  lassign $state kind prepared
+  if {$kind eq "none"} {
+    return $result
+  }
+  foreach lookup $prepared {
+    lassign $lookup filter subtables
+    if {$filter eq {}} {
+      set visible {}
+      for {set index 0} {$index <= $gaps} {incr index} {
+        lappend visible $index
+      }
+    } else {
+      set visible [::tclpdf::gdef keep $filter $glyphs]
+    }
+    set seen [llength $visible]
+    for {set at 1} {$at < $seen} {incr at} {
+      set second [lindex $visible $at]
+      set value [Pair $subtables \
+          [lindex $glyphs [lindex $visible [expr {$at - 1}]]] \
+          [lindex $glyphs $second]]
+      if {$value != 0} {
+        set gap [expr {$second - 1}]
+        lset result $gap [expr {[lindex $result $gap] + $value}]
+      }
+    }
+  }
+  return $result
+}
+
 # The adjustment for one glyph pair, in font units. Negative moves the two
 # closer together, which is what most pairs do.
+#
+# For the caller that has two glyphs and no run - a test asking what a face
+# does with "To". It is [run] over a run of two, so the two cannot answer
+# differently.
 proc ::tclpdf::kern::value {state left right} {
-  lassign $state kind data
-  switch -- $kind {
-    gpos {
-      return [::tclpdf::kernGpos value $data $left $right]
-    }
-    kern {
-      if {[dict exists $data $left,$right]} {
-        return [dict get $data $left,$right]
+  return [lindex [run $state [list $left $right]] 0]
+}
+
+# One pair against the subtables of ONE lookup: the first that knows it wins.
+proc ::tclpdf::kern::Pair {subtables left right} {
+  foreach subtable $subtables {
+    lassign $subtable kind data
+    switch -- $kind {
+      pairs {
+        if {[dict exists $data $left,$right]} {
+          return [dict get $data $left,$right]
+        }
+      }
+      classes {
+        lassign $data coverage first second matrix
+        if {[dict exists $coverage $left]} {
+          # Class 0 is not a hole: it is "everything the class definition does
+          # not name", and the matrix has a row and a column for it.
+          set one 0
+          set two 0
+          if {[dict exists $first $left]} {
+            set one [dict get $first $left]
+          }
+          if {[dict exists $second $right]} {
+            set two [dict get $second $right]
+          }
+          # Coverage decides, not the matrix cell: a zero cell is a decision of
+          # the font, and the next subtable must not overrule it.
+          if {[dict exists $matrix $one,$two]} {
+            return [dict get $matrix $one,$two]
+          }
+          return 0
+        }
       }
     }
   }

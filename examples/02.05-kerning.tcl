@@ -111,6 +111,45 @@ foreach kerning {0 1} {
   set y [expr {$y + 20}]
 }
 
+# -- an accent between the two ----------------------------------------------
+#
+# A lookup can tell the reader to leave some glyphs out of the sequence while
+# it works: Roboto sets "ignore marks" on both of its kerning lookups, and 51
+# of the 73 faces on the machine this was written on do the same. Which glyph
+# is a mark comes out of a third table, GDEF - so a reader that skips GDEF
+# cannot follow the instruction and quietly stops kerning wherever a combining
+# accent stands between two letters.
+#
+# That is only visible with DECOMPOSED text: A + U+0301 rather than the single
+# character U+00C1. Both spell the same word, both are valid, and the second
+# one was never affected.
+#
+# What tclpdf does NOT do is place the mark: GPOS mark attachment is not read,
+# so the accent is drawn at the pen position with whatever side bearing the
+# font gives it. The kerning of the letters around it is a separate question,
+# and that one is answered.
+
+$doc font -family serif -size 8 -color {0.45 0.45 0.45}
+$doc text "Kerning across a combining accent. The pair is A and V in both\
+    lines; in the second one a combining acute stands between them." \
+    -at [list 20 $y] -width 170
+set y [expr {$y + 18}]
+
+foreach {label sample} [list "precomposed  U+00C1 V" "ÁV" \
+    "decomposed   A U+0301 V" "A\u0301V"] {
+  foreach kerning {0 1} {
+    $doc font -family sans -size 28 -color black -kerning $kerning
+    $doc text $sample -at [list [expr {20 + $kerning * 30}] $y]
+  }
+  $doc font -family serif -size 7 -color {0.45 0.45 0.45}
+  $doc text $label -at [list 90 $y]
+  $doc text [format "off %.2f mm / on %.2f mm" \
+      [$doc textWidth $sample -family sans -size 28 -kerning 0] \
+      [$doc textWidth $sample -family sans -size 28 -kerning 1]] \
+      -at [list 90 [expr {$y + 4}]]
+  set y [expr {$y + 16}]
+}
+
 # The page ends on an embedded face; the footer keeps it.
 exampleFooter $doc serif
 $doc write $target

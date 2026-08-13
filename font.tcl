@@ -204,26 +204,20 @@ oo::define ::tclpdf::document::document {
   # Per glyph, not per character: after "ffi" has become one glyph the pair to
   # look up is that ligature and its neighbour, and the pairs that used to sit
   # between f and f are gone with them.
+  # The whole run goes down in one piece, not pair by pair: a lookup that
+  # ignores marks kerns A against V across the acute between them, and a caller
+  # that asked for one pair at a time could never see that pair.
   method FontRunKern {alias run} {
-    set count [llength $run]
-    if {$count < 2} {
+    if {[llength $run] < 2} {
       return {}
     }
-    set state [my FontKernState $alias]
-    set adjustments {}
-    if {[::tclpdf::kern origin $state] eq "none"} {
-      # Nothing to look up - hand back zeros rather than an empty list, so
-      # every caller can index by gap without a special case.
-      for {set index 1} {$index < $count} {incr index} {
-        lappend adjustments 0
-      }
-      return $adjustments
+    set glyphs {}
+    foreach item $run {
+      lappend glyphs [lindex $item 0]
     }
     set units [dict get [my state fonts] $alias parsed unitsPerEm]
-    for {set index 1} {$index < $count} {incr index} {
-      set value [::tclpdf::kern value $state \
-          [lindex [lindex $run [expr {$index - 1}]] 0] \
-          [lindex [lindex $run $index] 0]]
+    set adjustments {}
+    foreach value [::tclpdf::kern run [my FontKernState $alias] $glyphs] {
       lappend adjustments [expr {$value * 1000.0 / $units}]
     }
     return $adjustments

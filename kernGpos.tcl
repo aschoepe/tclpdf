@@ -23,12 +23,19 @@
 # The pairs are NOT expanded into a flat table. A class based subtable pairs
 # every glyph of one class with every glyph of another, so expanding it can
 # turn a few hundred entries into millions. The subtables are kept as they are
-# and asked per pair instead.
+# and asked per pair instead - by kern.tcl, which asks the old table the same
+# way and would otherwise hold a second copy of the same three lines.
+#
+# What each lookup ignores is settled here rather than there: the flag comes
+# out of the lookup header, the classes out of GDEF, and gdef.tcl turns the
+# two into a filter. A lookup that filters nothing carries an empty one, which
+# is the case this has to stay cheap for.
 #
 
 package require Tcl 8.6.11-
 package require tclpdf::sfnt 1.0-
 package require tclpdf::otLayout 1.0-
+package require tclpdf::gdef 1.0-
 
 namespace eval ::tclpdf::kernGpos {
   namespace export {[a-z]*}
@@ -48,7 +55,8 @@ proc ::tclpdf::kernGpos::lookups {font} {
   if {$gpos eq {}} {
     return {}
   }
-  if {[Damaged {set indices [::tclpdf::otLayout featureLookups $gpos kern]}]} {
+  if {[::tclpdf::otLayout damaged {
+      set indices [::tclpdf::otLayout featureLookups $gpos kern]}]} {
     # A damaged GPOS table is not a reason to refuse the document: the text is
     # then set without kerning, which is what a font without GPOS would give.
     return {}
@@ -56,107 +64,47 @@ proc ::tclpdf::kernGpos::lookups {font} {
   return $indices
 }
 
-# Run a script, and say whether it failed on DAMAGED FONT DATA. Anything else
-# is re-raised - only the bounds checks of otLayout raise TCLPDF LAYOUT, so a
-# mistake in this file surfaces instead of turning into "no kerning".
-proc ::tclpdf::kernGpos::Damaged {script} {
-  set code [catch {uplevel 1 $script} result options]
-  if {!$code} {
-    return 0
-  }
-  if {[lrange [dict get $options -errorcode] 0 1] eq {TCLPDF LAYOUT}} {
-    return 1
-  }
-  return -options $options $result
-}
-
-# The subtables of all kerning lookups, in lookup order, prepared for [value].
-proc ::tclpdf::kernGpos::subtables {font} {
+# All kerning lookups, in lookup order, prepared for evaluation in kern.tcl.
+# Each entry is {filter subtables}, where the filter is {} for a lookup that
+# ignores nothing - which is most of them.
+proc ::tclpdf::kernGpos::prepare {font} {
   set gpos [::tclpdf::sfnt table $font GPOS]
   if {$gpos eq {}} {
     return {}
   }
-  return [Collect $gpos]
-}
-
-# The adjustment for one pair, in font units. Zero when no subtable knows it.
-#
-# Lookups are applied one after another and their adjustments add up; within
-# one lookup the first subtable that knows the pair wins, which is how the
-# specification has subtables searched.
-proc ::tclpdf::kernGpos::value {prepared left right} {
-  set total 0
-  foreach lookup $prepared {
-    foreach subtable $lookup {
-      lassign $subtable kind data
-      set found 0
-      switch -- $kind {
-        pairs {
-          if {[dict exists $data $left,$right]} {
-            set total [expr {$total + [dict get $data $left,$right]}]
-            set found 1
-          }
-        }
-        classes {
-          lassign $data coverage first second matrix
-          if {[dict exists $coverage $left]} {
-            # Class 0 is not a hole: it is "everything the class definition
-            # does not name", and the matrix has a row and a column for it.
-            set one 0
-            set two 0
-            if {[dict exists $first $left]} {
-              set one [dict get $first $left]
-            }
-            if {[dict exists $second $right]} {
-              set two [dict get $second $right]
-            }
-            if {[dict exists $matrix $one,$two]} {
-              set total [expr {$total + [dict get $matrix $one,$two]}]
-            }
-            # Coverage decides, not the matrix cell: a zero cell is a decision
-            # of the font, and the next subtable must not overrule it.
-            set found 1
-          }
-        }
-      }
-      if {$found} {
-        break
-      }
-    }
-  }
-  return $total
+  return [Collect $gpos [::tclpdf::gdef build $font]]
 }
 
 # --- the GPOS side ---------------------------------------------------------
 
-# One lookup at a time, and a damaged one costs only itself - see the same
-# boundary in liga.tcl for why it does not sit around the whole walk.
-proc ::tclpdf::kernGpos::Collect {gpos} {
+# One lookup at a time, and a damaged one costs only itself - the error
+# boundary sits inside the loop, not around the walk.
+proc ::tclpdf::kernGpos::Collect {gpos gdef} {
   variable pairType
   variable extensionType
   set indices {}
-  if {[Damaged {set indices [::tclpdf::otLayout featureLookups $gpos kern]}]} {
+  if {[::tclpdf::otLayout damaged {
+      set indices [::tclpdf::otLayout featureLookups $gpos kern]}]} {
     return {}
   }
   set prepared {}
-  foreach index $indices {
+  foreach entry [::tclpdf::otLayout collect $gpos $indices $pairType \
+      $extensionType] {
+    lassign $entry flag markSet offsets
     set subtables {}
-    if {[Damaged {
-      set lookup [::tclpdf::otLayout lookup $gpos $index]
-      if {$lookup ne {}} {
-        foreach offset [::tclpdf::otLayout subtables $gpos $lookup $pairType \
-            $extensionType] {
-          set entry [PairPos $gpos $offset]
-          if {[llength $entry]} {
-            lappend subtables $entry
-          }
+    if {[::tclpdf::otLayout damaged {
+      foreach offset $offsets {
+        set one [PairPos $gpos $offset]
+        if {[llength $one]} {
+          lappend subtables $one
         }
       }
     }]} {
       continue
     }
     if {[llength $subtables]} {
-      lappend prepared $subtables
+      lappend prepared [list [::tclpdf::gdef filter $gdef $flag $markSet] \
+          $subtables]
     }
   }
   return $prepared

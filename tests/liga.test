@@ -18,6 +18,7 @@ namespace import -force tcltest::*
 package require tclpdf
 package require tclpdf::font
 package require tclpdf::liga
+package require tclpdf::gdef
 source [file join [file dirname [info script]] helper.tcl]
 
 set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
@@ -61,8 +62,11 @@ test liga-1.4 {damaged font data is absorbed, a mistake in the code is not} -bod
   # everything: a typo in this package then looked exactly like "this font has
   # no ligatures", which is a lie nobody can see through. Only the bounds
   # checks of otLayout raise TCLPDF LAYOUT, and only those may be swallowed.
-  set damaged [::tclpdf::liga::Damaged {::tclpdf::otLayout u16 "" 100}]
-  set mistake [catch {::tclpdf::liga::Damaged {no::such::command}} err]
+  #
+  # It lives in otLayout since GDEF: kerning and ligatures had a copy each, and
+  # the second copy is what the duplicate scanner is for.
+  set damaged [::tclpdf::otLayout damaged {::tclpdf::otLayout u16 "" 100}]
+  set mistake [catch {::tclpdf::otLayout damaged {no::such::command}} err]
   list $damaged $mistake [string match {invalid command name*} $err]
 } -result {1 1 1}
 
@@ -71,8 +75,9 @@ test liga-1.5 {one broken lookup does not discard the others} -constraints haveL
   set parsed [::tclpdf::sfnt read $fontLiga]
   set gsub [::tclpdf::sfnt table $parsed GSUB]
   set good [::tclpdf::otLayout featureLookups $gsub liga]
-  set withJunk [::tclpdf::liga::Collect $gsub [concat $good 60000]]
-  set onlyGood [::tclpdf::liga::Collect $gsub $good]
+  set gdef [::tclpdf::gdef build $parsed]
+  set withJunk [::tclpdf::liga::Collect $gsub [concat $good 60000] $gdef]
+  set onlyGood [::tclpdf::liga::Collect $gsub $good $gdef]
   expr {[llength $withJunk] == [llength $onlyGood] && [llength $onlyGood] > 0}
 } -result 1
 
@@ -303,5 +308,47 @@ test liga-3.10 {a standard face still counts per character} -body {
   $doc destroy
   expr {abs(($spaced - $plain) - 50) < 0.001}
 } -result 1
+
+# --- lookups that skip glyphs ---------------------------------------------
+#
+# Six of the 29 faces on this machine that carry a liga feature set an ignore
+# bit on it - but none of the five in this package does, so the rules and the
+# filter are built by hand here. That is not a weaker test than a font would
+# give: the walk over the visible positions is the whole change, and it is
+# exactly what these three exercise.
+
+# Two ligature rules over glyphs 10 to 13, as Collect would hand them on:
+# 10 + 11 -> 20 and 12 + 13 -> 21.
+set ligaRules [dict create 10 [list [list 20 11]] 12 [list [list 21 13]]]
+
+# A filter that leaves out glyph 99 and nothing else. The shape is gdef.tcl's:
+# {classes ignore allowed}, with 99 a mark and marks ignored.
+set ligaFilter [list [dict create 99 3] 3 {}]
+
+test liga-4.1 {a mark between the components does not stop the ligature} -body {
+  # Without the filter the run reads 10 99 11, the rule wants 10 11, and the
+  # ligature is lost - which is what happened to every accented word in a font
+  # that sets the bit.
+  set run [list [list 10 {102}] [list 99 {769}] [list 11 {105}]]
+  ::tclpdf::liga::ApplyOne $ligaFilter $ligaRules $run
+} -result {{20 {102 105}} {99 769}}
+
+test liga-4.2 {the same run without a filter is left alone} -body {
+  # The mark is then an ordinary glyph, it does not match the rule, and
+  # nothing may be substituted. This is the control for 4.1.
+  set run [list [list 10 {102}] [list 99 {769}] [list 11 {105}]]
+  ::tclpdf::liga::ApplyOne {} $ligaRules $run
+} -result {{10 102} {99 769} {11 105}}
+
+test liga-4.3 {a skipped glyph keeps its own characters and its place} -body {
+  # The mark comes out AFTER the ligature and keeps its own code point: it
+  # belonged to the first component, and the components no longer exist to
+  # attach it to. Its codes must not end up inside the ligature either, or the
+  # extracted text would gain a character the ligature does not stand for.
+  set run [list [list 1 {97}] [list 10 {102}] [list 99 {769}] [list 11 {105}] \
+      [list 12 {102}] [list 13 {108}] [list 2 {98}]]
+  set result [::tclpdf::liga::ApplyOne $ligaFilter $ligaRules $run]
+  list [llength $result] [lindex $result 2] [lindex $result 3]
+} -result {5 {99 769} {21 {102 108}}}
 
 cleanupTests

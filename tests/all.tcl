@@ -67,6 +67,7 @@ foreach tclpdfPkg {
     tclpdf::subset
     tclpdf::font
     tclpdf::otLayout
+    tclpdf::gdef
     tclpdf::kernGpos
     tclpdf::kern
     tclpdf::liga

@@ -19,6 +19,7 @@ namespace import -force tcltest::*
 package require tclpdf
 package require tclpdf::font
 package require tclpdf::kern
+package require tclpdf::gdef
 source [file join [file dirname [info script]] helper.tcl]
 
 set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
@@ -210,6 +211,55 @@ test kern-3.6 {word spacing and kerning share one TJ array} -constraints haveGpo
   list [llength $numbers] [expr {[lindex $numbers 0] > 0}] \
       [expr {[lindex $numbers 1] < 0}] [expr {[lindex $numbers 2] > 0}]
 } -result {3 1 1 1}
+
+test kern-3.8 {an accent between the two does not stop the pair} -constraints haveGpos -body {
+  # The defect this was written for: Roboto sets ignoreMarks on both of its
+  # kerning lookups, so A + U+0301 + V is the pair A V - and until GDEF was
+  # read, the pair fell through and the kerning of every decomposed accented
+  # word was lost. Measured at 100 pt, the width went from 45.4753 mm back to
+  # the 43.9766 mm the undecomposed spelling has had all along.
+  set doc [::tclpdf::new]
+  $doc font embed body $fontGpos
+  $doc page add
+  set plain [$doc textWidth "AV" -family body -size 100]
+  set decomposed [$doc textWidth "A\u0301V" -family body -size 100]
+  set unkerned [$doc textWidth "A\u0301V" -family body -size 100 -kerning 0]
+  $doc destroy
+  # The combining acute has no advance of its own, so the two spellings have
+  # to come out identical - and both narrower than the unkerned one.
+  list [expr {abs($decomposed - $plain) < 0.0001}] \
+      [expr {$unkerned - $decomposed > 1.0}]
+} -result {1 1}
+
+test kern-3.9 {the amount lands in the gap before the second glyph} -constraints haveGpos -body {
+  # Not after the first: the acute belongs at the right edge of the A, and
+  # taking the advance off the A would drag the accent along with it.
+  set parsed [::tclpdf::sfnt read $fontGpos]
+  set state [::tclpdf::kern build $parsed]
+  set glyphs [list [kernGlyph $parsed A] [kernGlyph $parsed "\u0301"] \
+      [kernGlyph $parsed V]]
+  set adjustments [::tclpdf::kern run $state $glyphs]
+  list [llength $adjustments] [lindex $adjustments 0] \
+      [expr {[lindex $adjustments 1] < 0}]
+} -result {2 0 1}
+
+test kern-3.10 {a font that filters nothing kerns exactly as before} -constraints haveBoth -body {
+  # DejaVu sets no flag on either kerning lookup, so the whole GDEF path has
+  # to stay out of its way. Same pairs, same numbers, neighbours only.
+  set parsed [::tclpdf::sfnt read $fontBoth]
+  set state [::tclpdf::kern build $parsed]
+  set glyphs {}
+  foreach char [split "AVATAR" {}] {
+    lappend glyphs [kernGlyph $parsed $char]
+  }
+  set fromRun [::tclpdf::kern run $state $glyphs]
+  set pairwise {}
+  for {set index 1} {$index < [llength $glyphs]} {incr index} {
+    lappend pairwise [::tclpdf::kern value $state \
+        [lindex $glyphs [expr {$index - 1}]] [lindex $glyphs $index]]
+  }
+  list [expr {$fromRun eq $pairwise}] [expr {[llength $fromRun] == 5}]
+} -result {1 1}
 
 test kern-3.7 {the subset carries no kern table} -constraints haveBoth -body {
   # Kerning is producer arithmetic: the numbers are in the content stream and

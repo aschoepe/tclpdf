@@ -1,0 +1,235 @@
+# gdef.test --
+#
+# The glyph classes a lookup flag filters by.
+#
+# GDEF alone does nothing and a lookupFlag alone cannot be answered - the two
+# only mean something together, which is why they meet in one module and are
+# tested here as one thing. What hangs on it: a lookup that ignores marks kerns
+# A against V across the acute between them, and 51 of the 73 faces on this
+# machine that kern from GPOS set such a flag.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::otLayout
+package require tclpdf::gdef
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+# Roboto has header 1.2 with mark glyph sets, DejaVu 1.0 with a mark attachment
+# class definition - between them every branch below has a font behind it.
+set fontSets [file join $assets Roboto-Regular.ttf]
+set fontAttach [file join $assets DejaVuSans.ttf]
+
+testConstraint haveSets [file exists $fontSets]
+testConstraint haveAttach [file exists $fontAttach]
+
+proc gdefGlyph {parsed code} {
+  # The cmap is keyed by the number, not by the way it was written down.
+  return [dict get [dict get $parsed cmap] [expr {$code}]]
+}
+
+# The first glyph of a class, so that no test has to hardcode a glyph number.
+proc gdefOfClass {state class} {
+  dict for {glyph value} [dict get $state classes] {
+    if {$value == $class} {
+      return $glyph
+    }
+  }
+  return {}
+}
+
+# --- reading the table ----------------------------------------------------
+
+test gdef-1.1 {a font with GDEF classifies its glyphs} -constraints haveSets -body {
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set state [::tclpdf::gdef build $parsed]
+  # The fixed values of S. 203: 1 base, 2 ligature, 3 mark, 4 component.
+  # U+0301 combining acute is a mark, A a base glyph.
+  list [dict exists $state classes] \
+      [dict get [dict get $state classes] [gdefGlyph $parsed 0x0301]] \
+      [dict get [dict get $state classes] [gdefGlyph $parsed 0x0041]]
+} -result {1 3 1}
+
+test gdef-1.2 {a font without GDEF is not an error} -body {
+  set parsed [dict create bytes {} tables {} numGlyphs 1 unitsPerEm 1000]
+  ::tclpdf::gdef build $parsed
+} -result {}
+
+test gdef-1.3 {mark glyph sets are read through their 32 bit offsets} -constraints haveSets -body {
+  # The one place in this format where a coverage is NOT reached through an
+  # Offset16. Reading it as 16 bits lands in the middle of the table and hands
+  # back a plausible set of glyph numbers.
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontSets]]
+  expr {[dict exists $state sets] && [llength [dict get $state sets]] > 0}
+} -result 1
+
+test gdef-1.4 {a mark attachment class definition is read} -constraints haveAttach -body {
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontAttach]]
+  expr {[dict exists $state attach] && [dict size [dict get $state attach]] > 0}
+} -result 1
+
+test gdef-1.5 {a damaged GDEF costs the filtering, not the document} -body {
+  # Twelve bytes of header whose class definition offset points past the end.
+  # Anything else raising here would be a mistake in the module and must not
+  # be swallowed - that is the boundary otLayout's error code draws.
+  set bytes [binary format IuSuSuSuSu 0x00010000 4000 0 0 0]
+  set parsed [dict create bytes $bytes tables [dict create GDEF [list 0 12]] \
+      numGlyphs 1 unitsPerEm 1000]
+  ::tclpdf::gdef build $parsed
+} -result {}
+
+# --- turning a flag into a filter -----------------------------------------
+
+test gdef-2.1 {a lookup that ignores nothing gets no filter} -constraints haveSets -body {
+  # The common case, and the one that has to stay free: with an empty filter
+  # the callers walk the run exactly as they did before this module existed.
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontSets]]
+  list [::tclpdf::gdef filter $state 0x0000] \
+      [::tclpdf::gdef filter $state 0x0001]
+} -result {{} {}}
+
+test gdef-2.2 {a font without GDEF filters nothing either} -body {
+  ::tclpdf::gdef filter {} 0x0008
+} -result {}
+
+test gdef-2.3 {ignoreMarks leaves out the marks and nothing else} -constraints haveSets -body {
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set state [::tclpdf::gdef build $parsed]
+  set filter [::tclpdf::gdef filter $state 0x0008]
+  list [expr {$filter ne {}}] \
+      [::tclpdf::gdef ignored $filter [gdefGlyph $parsed 0x0301]] \
+      [::tclpdf::gdef ignored $filter [gdefGlyph $parsed 0x0041]]
+} -result {1 1 0}
+
+test gdef-2.4 {ignoreBaseGlyphs and ignoreLigatures use the same classes} -constraints haveAttach -body {
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontAttach]]
+  set base [gdefOfClass $state 1]
+  set mark [gdefOfClass $state 3]
+  set filter [::tclpdf::gdef filter $state 0x0002]
+  list [::tclpdf::gdef ignored $filter $base] \
+      [::tclpdf::gdef ignored $filter $mark]
+} -result {1 0}
+
+test gdef-2.5 {an unclassified glyph is class 0 and survives every flag} -constraints haveAttach -body {
+  # Glyphs GDEF does not name are class 0, which no ignore bit names either.
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontAttach]]
+  set filter [::tclpdf::gdef filter $state 0x000E]
+  ::tclpdf::gdef ignored $filter 65535
+} -result 0
+
+test gdef-2.6 {markAttachmentType keeps only the marks of that type} -constraints haveAttach -body {
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontAttach]]
+  # Whatever type the first classified glyph carries: a mark of that type
+  # stays, a mark of another does not.
+  set attach [dict get $state attach]
+  set wanted {}
+  set other {}
+  dict for {glyph class} $attach {
+    if {[dict get [dict get $state classes] $glyph] != 3} {
+      continue
+    }
+    if {$wanted eq {}} {
+      set wanted [list $glyph $class]
+    } elseif {$class != [lindex $wanted 1]} {
+      set other $glyph
+      break
+    }
+  }
+  set filter [::tclpdf::gdef filter $state [expr {[lindex $wanted 1] << 8}]]
+  list [::tclpdf::gdef ignored $filter [lindex $wanted 0]] \
+      [::tclpdf::gdef ignored $filter $other]
+} -result {0 1}
+
+test gdef-2.7 {an attachment type no glyph carries filters nothing} -constraints haveAttach -body {
+  # Reading it the other way would ignore every mark in the font, which is a
+  # reading of the flag no shaper takes.
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontAttach]]
+  ::tclpdf::gdef filter $state 0xFF00
+} -result {}
+
+test gdef-2.8 {a mark filtering set keeps only the marks it lists} -constraints haveSets -body {
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set state [::tclpdf::gdef build $parsed]
+  set set0 [lindex [dict get $state sets] 0]
+  set inside [lindex [dict keys $set0] 0]
+  set outside {}
+  dict for {glyph class} [dict get $state classes] {
+    if {$class == 3 && ![dict exists $set0 $glyph]} {
+      set outside $glyph
+      break
+    }
+  }
+  set filter [::tclpdf::gdef filter $state 0x0010 0]
+  list [::tclpdf::gdef ignored $filter $inside] \
+      [::tclpdf::gdef ignored $filter $outside]
+} -result {0 1}
+
+test gdef-2.9 {ignoreMarks beats a filtering set that would keep one} -constraints haveSets -body {
+  # Precedence, S. 162: once every mark is out, no set brings one back.
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set state [::tclpdf::gdef build $parsed]
+  set inside [lindex [dict keys [lindex [dict get $state sets] 0]] 0]
+  ::tclpdf::gdef ignored [::tclpdf::gdef filter $state 0x0018 0] $inside
+} -result 1
+
+test gdef-2.10 {a set number the font does not have is ignored, not guessed} -constraints haveSets -body {
+  set state [::tclpdf::gdef build [::tclpdf::sfnt read $fontSets]]
+  ::tclpdf::gdef filter $state 0x0010 9999
+} -result {}
+
+# --- what the callers ask for ---------------------------------------------
+
+test gdef-3.1 {keep hands back positions, not glyphs} -constraints haveSets -body {
+  # Positions, because the amount a pair earns has to be attributed to a gap
+  # in the ORIGINAL run afterwards - the glyphs alone could not say where.
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set state [::tclpdf::gdef build $parsed]
+  set filter [::tclpdf::gdef filter $state 0x0008]
+  set glyphs [list [gdefGlyph $parsed 0x0041] [gdefGlyph $parsed 0x0301] \
+      [gdefGlyph $parsed 0x0056]]
+  ::tclpdf::gdef keep $filter $glyphs
+} -result {0 2}
+
+test gdef-3.2 {a run with nothing to skip keeps every position} -constraints haveSets -body {
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set state [::tclpdf::gdef build $parsed]
+  set filter [::tclpdf::gdef filter $state 0x0008]
+  ::tclpdf::gdef keep $filter [list [gdefGlyph $parsed 0x0041] \
+      [gdefGlyph $parsed 0x0056]]
+} -result {0 1}
+
+# --- the lookup header ----------------------------------------------------
+
+test gdef-4.1 {the lookup flag is read where the specification puts it} -constraints haveSets -body {
+  # Roboto sets ignoreMarks on both of its kerning lookups. If this ever comes
+  # back 0 for this font, the offset is wrong and every filter silently stops.
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set gpos [::tclpdf::sfnt table $parsed GPOS]
+  set flags {}
+  foreach index [::tclpdf::otLayout featureLookups $gpos kern] {
+    lappend flags [format 0x%04X [::tclpdf::otLayout lookupFlag $gpos \
+        [::tclpdf::otLayout lookup $gpos $index]]]
+  }
+  set flags
+} -result {0x0008 0x0008}
+
+test gdef-4.2 {markFilteringSet is absent unless the flag says otherwise} -constraints haveSets -body {
+  # It sits AFTER the subtable offsets and exists only with flag 0x0010. A
+  # reader that always reads it takes the next lookup's first subtable offset
+  # for a set number, which is a plausible small integer and therefore silent.
+  set parsed [::tclpdf::sfnt read $fontSets]
+  set gpos [::tclpdf::sfnt table $parsed GPOS]
+  set index [lindex [::tclpdf::otLayout featureLookups $gpos kern] 0]
+  ::tclpdf::otLayout markFilteringSet $gpos [::tclpdf::otLayout lookup $gpos $index]
+} -result {}
+
+cleanupTests

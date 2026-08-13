@@ -43,6 +43,24 @@ namespace eval ::tclpdf::otLayout {
 # package: a typo or a wrong argument count raises with a different code and
 # must not be turned into "this font has no ligatures".
 
+# Run a script in the CALLER's frame, and say whether it failed on damaged font
+# data. Anything else is re-raised.
+#
+# That distinction is the whole point: a plain catch around a walk turns a typo
+# in the calling file into "this font has no ligatures", which is a lie nobody
+# gets to see through. Only the bounds checks above raise TCLPDF LAYOUT, and
+# only those are absorbed.
+proc ::tclpdf::otLayout::damaged {script} {
+  set code [catch {uplevel 1 $script} result options]
+  if {!$code} {
+    return 0
+  }
+  if {[lrange [dict get $options -errorcode] 0 1] eq {TCLPDF LAYOUT}} {
+    return 1
+  }
+  return -options $options $result
+}
+
 proc ::tclpdf::otLayout::u16 {bytes offset} {
   if {$offset < 0 || $offset + 2 > [string length $bytes]} {
     return -code error -errorcode {TCLPDF LAYOUT RANGE} \
@@ -204,6 +222,28 @@ proc ::tclpdf::otLayout::subtables {table lookup wantedType extensionType} {
   return $offsets
 }
 
+# The lookupFlag of one lookup (S. 161). What the bits mean and which glyphs
+# they leave out is gdef.tcl's business - here it is two bytes at a fixed
+# offset, and no caller of this file needs to know more than that.
+proc ::tclpdf::otLayout::lookupFlag {table lookup} {
+  return [u16 $table [expr {$lookup + 2}]]
+}
+
+# The markFilteringSet of one lookup, or {} when the lookup has none.
+#
+# This is the field the variable header was warned about: it sits AFTER the
+# subtable offsets and exists only when flag 0x0010 is set. A reader that
+# assumes it is always there reads the first subtable of the next lookup as a
+# set number, which is a plausible small integer and therefore silent.
+proc ::tclpdf::otLayout::markFilteringSet {table lookup} {
+  set flag [lookupFlag $table $lookup]
+  if {!($flag & 0x0010)} {
+    return {}
+  }
+  set count [u16 $table [expr {$lookup + 4}]]
+  return [u16 $table [expr {$lookup + 6 + $count * 2}]]
+}
+
 # The offset of one lookup within the lookup list, or {} when out of range.
 proc ::tclpdf::otLayout::lookup {table index} {
   set lookupList [u16 $table 8]
@@ -211,6 +251,40 @@ proc ::tclpdf::otLayout::lookup {table index} {
     return {}
   }
   return [expr {$lookupList + [u16 $table [expr {$lookupList + 2 + $index * 2}]]}]
+}
+
+# Everything both callers need about a list of lookups, in lookup order: one
+# entry {flag markSet offsets} each, and lookups without a usable subtable left
+# out entirely.
+#
+# This exists because reading a lookup header is the same six lines in GPOS and
+# GSUB - and the moment lookupFlag joined them, those six lines were a copy.
+# The payload behind an offset is what differs, and that stays with the caller.
+#
+# A lookup whose header does not read costs only itself: one bad offset used to
+# throw away every lookup collected before it, so a font with four good
+# ligature lookups and one broken one came out with none.
+proc ::tclpdf::otLayout::collect {table indices wantedType extensionType} {
+  set collected {}
+  foreach index $indices {
+    set entry {}
+    if {[damaged {
+      set lookup [lookup $table $index]
+      if {$lookup ne {}} {
+        set offsets [subtables $table $lookup $wantedType $extensionType]
+        if {[llength $offsets]} {
+          set entry [list [lookupFlag $table $lookup] \
+              [markFilteringSet $table $lookup] $offsets]
+        }
+      }
+    }]} {
+      continue
+    }
+    if {[llength $entry]} {
+      lappend collected $entry
+    }
+  }
+  return $collected
 }
 
 # --- the two tables every subtable format uses -----------------------------

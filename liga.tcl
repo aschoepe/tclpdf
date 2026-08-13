@@ -41,6 +41,7 @@
 package require Tcl 8.6.11-
 package require tclpdf::sfnt 1.0-
 package require tclpdf::otLayout 1.0-
+package require tclpdf::gdef 1.0-
 
 namespace eval ::tclpdf::liga {
   namespace export {[a-z]*}
@@ -56,36 +57,21 @@ namespace eval ::tclpdf::liga {
 # Prepare a font for ligature substitution. The result is handed to [apply]
 # and is worth keeping: it walks the whole table once.
 #
-# Shape: a list of lookups, each a dict of first glyph -> list of rules, each
-# rule {ligatureGlyph followingGlyph ...}. The rules of one glyph stay in
-# font order.
+# Shape: a list of lookups, each {filter rules}, where rules is a dict of first
+# glyph -> list of rules, each rule {ligatureGlyph followingGlyph ...}. The
+# rules of one glyph stay in font order, and the filter is {} for a lookup that
+# ignores nothing.
 proc ::tclpdf::liga::build {font} {
   set gsub [::tclpdf::sfnt table $font GSUB]
   if {$gsub eq {}} {
     return {}
   }
-  if {[Damaged {set indices [::tclpdf::otLayout featureLookups $gsub liga]}]} {
+  if {[::tclpdf::otLayout damaged {
+      set indices [::tclpdf::otLayout featureLookups $gsub liga]}]} {
     # The way in is broken - script list or feature list. Nothing to salvage.
     return {}
   }
-  return [Collect $gsub $indices]
-}
-
-# Run a script, and say whether it failed on DAMAGED FONT DATA.
-#
-# Anything else is re-raised. That distinction is the whole point: a catch
-# around the whole walk used to turn a typo in this file into "this font has
-# no ligatures", which is a lie that nobody ever gets to see through. Only the
-# bounds checks of otLayout raise TCLPDF LAYOUT, and only those are absorbed.
-proc ::tclpdf::liga::Damaged {script} {
-  set code [catch {uplevel 1 $script} result options]
-  if {!$code} {
-    return 0
-  }
-  if {[lrange [dict get $options -errorcode] 0 1] eq {TCLPDF LAYOUT}} {
-    return 1
-  }
-  return -options $options $result
+  return [Collect $gsub $indices [::tclpdf::gdef build $font]]
 }
 
 # Substitute in a glyph run.
@@ -103,33 +89,63 @@ proc ::tclpdf::liga::apply {prepared run} {
     return $run
   }
   foreach lookup $prepared {
-    set run [ApplyOne $lookup $run]
+    lassign $lookup filter rules
+    set run [ApplyOne $filter $rules $run]
   }
   return $run
 }
 
-proc ::tclpdf::liga::ApplyOne {rules run} {
-  set result {}
+# One lookup over the whole run.
+#
+# The run is walked through the POSITIONS this lookup sees: a lookup that
+# ignores marks matches f + acute + i as the pair f i, and the acute has to be
+# invisible to the match without disappearing from the text. Where a filter is
+# absent - the common case, and every lookup of the faces this package ships -
+# the visible positions are all of them and this is the plain walk it was.
+#
+# A skipped glyph is kept and comes out AFTER the ligature. It belonged to the
+# first component, and the components no longer exist to attach it to; putting
+# it before would move an accent onto the character in front of it.
+proc ::tclpdf::liga::ApplyOne {filter rules run} {
   set count [llength $run]
+  if {$filter eq {}} {
+    set visible {}
+    for {set index 0} {$index < $count} {incr index} {
+      lappend visible $index
+    }
+  } else {
+    set glyphs {}
+    foreach entry $run {
+      lappend glyphs [lindex $entry 0]
+    }
+    set visible [::tclpdf::gdef keep $filter $glyphs]
+  }
+  set seen [llength $visible]
+  set result {}
+  # The first entry not yet handed on. It trails the match position, because a
+  # skipped glyph is written out only once it is known whether the ligature in
+  # front of it happened.
+  set emitted 0
   set at 0
-  while {$at < $count} {
-    set entry [lindex $run $at]
-    set glyph [lindex $entry 0]
+  while {$at < $seen} {
+    set start [lindex $visible $at]
     set taken 0
+    set glyph [lindex [lindex $run $start] 0]
     if {[dict exists $rules $glyph]} {
       foreach rule [dict get $rules $glyph] {
         set ligature [lindex $rule 0]
         set following [lrange $rule 1 end]
         set need [llength $following]
-        # The rule needs the entries at $at+1 through $at+$need. A shorter
+        # The rule needs the $need visible entries after this one. A shorter
         # rule further down the list may still fit, so this skips rather than
         # gives up on the glyph.
-        if {$at + $need >= $count} {
+        if {$at + $need >= $seen} {
           continue
         }
+        set parts [lrange $visible $at [expr {$at + $need}]]
         set matched 1
         for {set step 1} {$step <= $need} {incr step} {
-          if {[lindex [lindex $run [expr {$at + $step}]] 0]
+          if {[lindex [lindex $run [lindex $parts $step]] 0]
               ne [lindex $following [expr {$step - 1}]]} {
             set matched 0
             break
@@ -138,52 +154,63 @@ proc ::tclpdf::liga::ApplyOne {rules run} {
         if {!$matched} {
           continue
         }
+        while {$emitted < $start} {
+          lappend result [lindex $run $emitted]
+          incr emitted
+        }
         # The codes of every component, in order - the ligature stands for all
-        # of them, and dropping any would lose that text on extraction.
+        # of them, and dropping any would lose that text on extraction. Only
+        # the components: a skipped mark keeps its own codes and its own entry.
         set codes {}
-        for {set step 0} {$step <= $need} {incr step} {
-          lappend codes {*}[lindex [lindex $run [expr {$at + $step}]] 1]
+        foreach part $parts {
+          lappend codes {*}[lindex [lindex $run $part] 1]
         }
         lappend result [list $ligature $codes]
+        set end [lindex $parts end]
+        for {set index $start} {$index <= $end} {incr index} {
+          if {$index ni $parts} {
+            lappend result [lindex $run $index]
+          }
+        }
+        set emitted [expr {$end + 1}]
         set at [expr {$at + $need + 1}]
         set taken 1
         break
       }
     }
     if {!$taken} {
-      lappend result $entry
       incr at
     }
+  }
+  while {$emitted < $count} {
+    lappend result [lindex $run $emitted]
+    incr emitted
   }
   return $result
 }
 
 # --- reading the table -----------------------------------------------------
 
-# One lookup at a time, and a damaged one costs only itself.
-#
-# The error boundary sits INSIDE the loop on purpose. Around the whole walk,
-# one bad offset in the last lookup threw away every rule read before it - a
-# font with four good ligature lookups and one broken one came out with none.
-proc ::tclpdf::liga::Collect {gsub indices} {
+# One lookup at a time, and a damaged one costs only itself - the error
+# boundary sits inside the loop, not around the walk.
+proc ::tclpdf::liga::Collect {gsub indices gdef} {
   variable ligatureType
   variable extensionType
   set prepared {}
-  foreach index $indices {
+  foreach entry [::tclpdf::otLayout collect $gsub $indices $ligatureType \
+      $extensionType] {
+    lassign $entry flag markSet offsets
     set rules {}
-    if {[Damaged {
-      set lookup [::tclpdf::otLayout lookup $gsub $index]
-      if {$lookup ne {}} {
-        foreach offset [::tclpdf::otLayout subtables $gsub $lookup \
-            $ligatureType $extensionType] {
-          set rules [LigatureSubst $gsub $offset $rules]
-        }
+    if {[::tclpdf::otLayout damaged {
+      foreach offset $offsets {
+        set rules [LigatureSubst $gsub $offset $rules]
       }
     }]} {
       continue
     }
     if {[dict size $rules]} {
-      lappend prepared $rules
+      lappend prepared [list [::tclpdf::gdef filter $gdef $flag $markSet] \
+          $rules]
     }
   }
   return $prepared
