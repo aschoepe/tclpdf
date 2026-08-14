@@ -29,7 +29,7 @@ package require tclpdf::document 1.0-
 namespace eval ::tclpdf::text {
   # Which options describe the font state rather than one call.
   variable stateOptions {family style size color spacing wordSpacing
-      stretch leading rise kerning ligatures}
+      stretch leading rise kerning ligatures unshaped}
 }
 
 oo::define ::tclpdf::document::document {
@@ -479,7 +479,8 @@ oo::define ::tclpdf::document::document {
       return [list [expr {$total * [dict get $state size] / 1000.0}] \
           [llength $codes]]
     }
-    set run [my FontRun $font $string [dict get $state ligatures]]
+    set run [my FontRun $font $string [dict get $state ligatures] \
+        [dict get $state unshaped]]
     return [list [my FontRunWidth $font $run [dict get $state size] \
         [dict get $state kerning]] [llength $run]]
   }
@@ -505,7 +506,8 @@ oo::define ::tclpdf::document::document {
       return "[::tclpdf::pdfObj bytesStr [binary format cu* \
           [my FontType1Encode $font $string]]] Tj\n"
     }
-    set run [my FontRun $font $string [dict get $state ligatures]]
+    set run [my FontRun $font $string [dict get $state ligatures] \
+        [dict get $state unshaped]]
     set adjustments [my TextAdjust $font $state $run $byTJ]
     if {![llength $adjustments]} {
       return "[::tclpdf::pdfObj bytesStr [my FontRunEncode $font $run]] Tj\n"
@@ -555,7 +557,7 @@ oo::define ::tclpdf::document::document {
       my state text [dict create \
           family helvetica style {} size 12 color black spacing 0 \
           wordSpacing 0 stretch 100 leading {} rise 0 kerning 1 \
-          ligatures 1 resolved Helvetica]
+          ligatures 1 unshaped 0 resolved Helvetica]
     }
     return
   }

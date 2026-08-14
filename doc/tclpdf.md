@@ -116,11 +116,30 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   **-ligatures** applies the standard ligatures (`liga`) of an embedded face and is **on by default**. Where a face has one, the letters of `fi`, `ff`, `ffi` and their relatives are drawn as the single glyph the designer made for them. The characters are unaffected: the `ToUnicode` map carries the ligature back to the letters it was made from, so the text is copied and searched as it was written. Only `liga` is read - not the discretionary (`dlig`) or historical (`hlig`) sets, which the feature registry has off, and not the required ligatures (`rlig`) of the Arabic scripts, which need a shaper this package does not have. Note that a ligature need not change any width: measured on DejaVu Sans, `fi` and `fl` take exactly the room the two letters took, while `ff` is narrower.
 
+  **-unshaped** draws text from a writing system this package cannot set correctly, and is **off by default** — which means such text is *refused* rather than drawn wrong. See "Writing systems" below.
+
   **-kerning** applies the pair kerning of an embedded face and is **on by default**. The amounts are read from the font while writing - from its GPOS table where it has kerning lookups, otherwise from its `kern` table, which is the order ISO/IEC 14496-22 prescribes - and are written into the content stream, so neither table is embedded. Kerning changes the width of every line it touches, and the width is measured with it: `textWidth`, the line breaker and the table column widths all see the kerned figures. Set **-kerning** to 0 where a document has to come out exactly as an earlier release produced it. The fourteen standard faces are unaffected: the metrics shipped for them carry widths per byte value, not kerning pairs.
 
   A combining accent between two letters does not interrupt a pair. Most faces tell the reader to leave marks out of the sequence while kerning - measured here, 51 of the 73 faces on this machine that kern from GPOS do - so `A` + U+0301 + `V` is kerned as the pair `A V`, exactly as the single character U+00C1 followed by `V` has always been. The adjustment is applied in front of the second letter, which leaves the accent where the font puts it. What tclpdf does not do is position the mark itself: GPOS mark attachment is not read, so a combining glyph is drawn at the pen position with the side bearing its face gives it.
 
   **What that means in practice.** Text that arrives composed — `Ü` as `U+00DC`, `Á` as `U+00C1` — is unaffected, because the face has a finished glyph for it and there is no mark to place. That covers every European language, and it is what databases, XML and the web deliver. Text that arrives **decomposed** — `Ü` as `U+0055` followed by `U+0308` — comes out with its accents visibly displaced, and so do combinations Unicode has no composed form for at all, such as a letter carrying both a macron and an acute. Where such text has to be set, normalise it to NFC before it reaches the package.
+
+### Writing systems
+
+tclpdf maps one character to one glyph and draws them left to right. For most scripts that is the entire job, and they are set correctly: Latin, Greek, Cyrillic, the CJK scripts, Tibetan, Cuneiform, Egyptian Hieroglyphs, symbol and emoji faces.
+
+Some scripts need more, and there tclpdf **refuses to draw** rather than draw something wrong:
+
+| needs | scripts |
+|---|---|
+| contextual shaping — the glyph depends on its neighbours — **and** right-to-left ordering | Arabic, Syriac, N'Ko, Mandaic |
+| right-to-left ordering | Hebrew, Thaana, Samaritan |
+| reordering and conjunct forms | Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala, Myanmar, Khmer |
+| mark placement and reordering | Thai, Lao |
+
+The refusal is the same rule the package applies to a character the face has no glyph for: a reader shows the wrong text, a validator says nothing, and only this end can notice. Arabic drawn without shaping comes out as isolated letter forms in reverse order — it looks like text and is not.
+
+**-unshaped 1** turns the refusal off and draws the characters as isolated glyphs in logical order. That is right for exactly one case: a script that needs only ordering, in a line with no digits and no Latin words — Hebrew without nikud, say — where reversing the string before passing it in gives a correct line.
 
 *doc* **font embed** *alias path* ?**-subset** *0*? ?**-metrics** *path*?
 

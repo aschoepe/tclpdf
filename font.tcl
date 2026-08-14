@@ -201,7 +201,18 @@ oo::define ::tclpdf::document::document {
   # in the chain that notices: the reader shows a blank, the validator says
   # nothing, and the recipient sees an invoice with a gap where the amount
   # should be.
-  method FontRun {alias text {ligatures 0}} {
+  method FontRun {alias text {ligatures 0} {unshaped 0}} {
+    # Refused BEFORE anything is looked up: a script that needs shaping would
+    # otherwise come out as isolated glyphs in the wrong order, which looks
+    # like text and is not. Same rule as the missing glyph below, and the same
+    # reason - this is the only place in the chain that notices.
+    if {!$unshaped} {
+      package require tclpdf::shaping 1.0-
+      set finding [::tclpdf::shaping needed $text]
+      if {[llength $finding]} {
+        return -code error [::tclpdf::shaping message $finding]
+      }
+    }
     set entry [dict get [my state fonts] $alias]
     set cmap [dict get $entry parsed cmap]
     set run {}
@@ -273,8 +284,8 @@ oo::define ::tclpdf::document::document {
 
   # Encode text directly. Kept for the callers that have a string and no
   # reason to hold a run.
-  method FontEncode {alias text {ligatures 0}} {
-    return [my FontRunEncode $alias [my FontRun $alias $text $ligatures]]
+  method FontEncode {alias text {ligatures 0} {unshaped 0}} {
+    return [my FontRunEncode $alias [my FontRun $alias $text $ligatures $unshaped]]
   }
 
   # The width of a prepared run, in points.

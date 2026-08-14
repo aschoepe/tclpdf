@@ -1,0 +1,157 @@
+# shaping.test --
+#
+# Which writing systems this package refuses to set, and which it must not
+# refuse.
+#
+# THE SECOND HALF IS THE IMPORTANT ONE. A check like this fails in two
+# directions, and only one of them is loud: too narrow and Arabic still comes
+# out wrong, too wide and the package stops setting text it handled correctly
+# yesterday. The counter-tests below name the scripts that MUST keep working -
+# Tibetan among them, because its stacked consonants look like a case for
+# shaping and are not.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::shaping
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+set arabicFace [file join $assets NotoNaskhArabic-Variable.ttf]
+set tibetanFace [file join $assets NotoSerifTibetan-Variable.ttf]
+set latinFace [file join $assets DejaVuSans.ttf]
+
+testConstraint haveArabic [file exists $arabicFace]
+testConstraint haveTibetan [file exists $tibetanFace]
+testConstraint haveLatin [file exists $latinFace]
+
+test shaping-1.1 {a script that needs shaping is found, with its position} -body {
+  # The position counts characters from zero, exactly as the missing-glyph
+  # message does - two messages about the same string should point at it the
+  # same way.
+  lassign [::tclpdf::shaping needed "abcبdef"] position code system
+  list $position [format %04X $code] $system
+} -result {3 0628 Arabic}
+
+test shaping-1.2 {plain text needs nothing} -body {
+  list [::tclpdf::shaping needed "Grüße aus Bochum"] \
+      [::tclpdf::shaping needed "Ελλάδα Москва"] \
+      [::tclpdf::shaping needed ""]
+} -result {{} {} {}}
+
+test shaping-1.3 {the scripts that must NOT be refused} -body {
+  # Every one of these is set correctly today, and a wider list would break
+  # them. Tibetan is the one worth naming: it stacks consonants, but as
+  # separate code points rather than as contextual forms - measured on
+  # 02.09-writing-systems, it comes out right.
+  set faults {}
+  foreach {name text} [list \
+      Tibetan "ཀཁག" \
+      CJK "日本語" \
+      Greek "Ελλάδα" \
+      Cyrillic "Москва" \
+      Cuneiform "\U00012000\U00012001" \
+      Hieroglyphs "\U00013000\U00013001" \
+      Symbols "♠♪⛰"] {
+    set finding [::tclpdf::shaping needed $text]
+    if {[llength $finding]} {
+      lappend faults "$name refused: [lindex $finding 2]"
+    }
+  }
+  set faults
+} -result {}
+
+test shaping-1.4 {the scripts that must be refused, and why} -body {
+  # One representative per group, with the reason it is in the list. A script
+  # moving between groups - or falling out - shows up here rather than in a
+  # document nobody can read.
+  set found {}
+  foreach {name char} [list \
+      Arabic ب Hebrew א Syriac ܐ Thaana ހ \
+      Devanagari क Bengali ক Tamil க \
+      Thai ก Lao ກ Myanmar က Khmer ក] {
+    lassign [::tclpdf::shaping needed $char] - - system what
+    lappend found $name $system
+  }
+  set found
+} -result {Arabic Arabic Hebrew Hebrew Syriac Syriac Thaana Thaana Devanagari Devanagari Bengali Bengali Tamil Tamil Thai Thai Lao Lao Myanmar Myanmar Khmer Khmer}
+
+test shaping-1.5 {the presentation forms are caught as well} -body {
+  # Someone who has already shaped their text by hand into the Arabic
+  # Presentation Forms blocks is in the same position: the ORDER is still
+  # wrong, and that is what the message says.
+  lassign [::tclpdf::shaping needed "ﺑ"] - - system what
+  list $system [string match {*right-to-left*} $what]
+} -result {Arabic 1}
+
+test shaping-2.1 {drawing such a script is refused} -constraints haveArabic -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::arabicFace
+  set code [catch {$doc text "الع" -at {20 20} -family ar} message]
+  $doc destroy
+  list $code [string match {*belongs to Arabic*} $message] \
+      [string match {*-unshaped 1*} $message]
+} -result {1 1 1}
+
+test shaping-2.2 {-unshaped 1 draws it anyway} -constraints haveArabic -body {
+  # The escape hatch, and it has to produce actual glyphs rather than merely
+  # not throwing.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::arabicFace
+  $doc text "الع" -at {20 20} -family ar -unshaped 1
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {BT} $content] [regexp {Tj|TJ} $content]
+} -result {1 1}
+
+test shaping-2.3 {the option can be set on the font state} -constraints haveArabic -body {
+  # Like -kerning and -ligatures: per call or once for the document.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::arabicFace
+  $doc font -family ar -unshaped 1
+  set code [catch {$doc text "الع" -at {20 20}}]
+  $doc destroy
+  set code
+} -result 0
+
+test shaping-2.4 {measuring is refused too, not only drawing} -constraints haveArabic -body {
+  # textWidth goes through the same run. If it measured what text refuses to
+  # draw, a table column would be sized for a line that never appears.
+  set doc [tclpdf new -unit mm]
+  $doc font embed ar $::arabicFace
+  set code [catch {$doc textWidth "الع" -family ar}]
+  set open [catch {$doc textWidth "الع" -family ar -unshaped 1}]
+  $doc destroy
+  list $code $open
+} -result {1 0}
+
+test shaping-2.5 {a face for a script that does not need it is unaffected} -constraints haveTibetan -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed tib $::tibetanFace
+  set code [catch {$doc text "ཀཁག" -at {20 20} -family tib} message]
+  $doc destroy
+  list $code $message
+} -result {0 {}}
+
+test shaping-2.6 {the standard fourteen are unaffected} -constraints haveLatin -body {
+  # WinAnsi has none of these characters, so the standard faces could never
+  # have reached the check - and must not be slowed down by it either.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc text "Grüße aus Bochum" -at {20 20}}]
+  $doc destroy
+  set code
+} -result 0
+
+cleanupTests
