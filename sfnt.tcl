@@ -357,24 +357,7 @@ proc ::tclpdf::sfnt::ParseNames {bytes tables} {
       continue
     }
     set start [expr {$position + $stringOffset + $offset}]
-    set value [string range $bytes $start [expr {$start + $length - 1}]]
-    if {$platform == 3 || $platform == 0} {
-      # Windows (3) and Unicode (0) platform strings are both UTF-16BE. Only
-      # the first was decoded here, and platform 0 came out raw - with a NUL
-      # between every letter, which then went into the PDF as
-      # /HOVCJQ+#00T#00i#00m..., a name qpdf refuses ("null character not
-      # allowed in name token"). Whichever record comes FIRST wins, so this
-      # only shows on a font that leads with platform 0 - measured over 210
-      # faces on this machine, 20 of them do, Times New Roman among them.
-      # Macintosh (1) is one byte per character and must not come through
-      # here.
-      set decoded {}
-      binary scan $value Su* units
-      foreach unit $units {
-        append decoded [format %c $unit]
-      }
-      set value $decoded
-    }
+    set value [NameString $bytes $start $length $platform]
     set key [expr {$nameId == 6 ? "postScript" : "family"}]
     if {![dict exists $names $key]} {
       dict set names $key $value
@@ -383,4 +366,51 @@ proc ::tclpdf::sfnt::ParseNames {bytes tables} {
   return $names
 }
 
-package provide tclpdf::sfnt 1.2
+# One name record by its id, or the empty string.
+#
+# ParseNames keeps only the two names a PDF needs; this reaches any of them,
+# which is what the named instances of a variable font are addressed by - their
+# ids start at 256 and mean nothing without the table.
+proc ::tclpdf::sfnt::name {parsed nameId} {
+  set tables [dict get $parsed tables]
+  if {![dict exists $tables name]} {
+    return {}
+  }
+  set bytes [dict get $parsed bytes]
+  lassign [dict get $tables name] position -
+  binary scan $bytes @[expr {$position + 2}]SuSu count stringOffset
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {$position + 6 + $index * 12}]
+    binary scan $bytes @${at}SuSuSuSuSuSu platform encoding language id length offset
+    if {$id != $nameId} {
+      continue
+    }
+    set start [expr {$position + $stringOffset + $offset}]
+    return [NameString $bytes $start $length $platform]
+  }
+  return {}
+}
+
+# One string from the name table, decoded by the platform that wrote it.
+#
+# Windows (3) and Unicode (0) platform strings are both UTF-16BE. Only the
+# first was decoded here once, and platform 0 came out raw - with a NUL between
+# every letter, which then went into the PDF as /HOVCJQ+#00T#00i#00m..., a name
+# qpdf refuses ("null character not allowed in name token"). Whichever record
+# comes FIRST wins, so that only showed on a font leading with platform 0 -
+# measured over 210 faces on this machine, 20 of them do, Times New Roman among
+# them. Macintosh (1) is one byte per character and must not come through here.
+proc ::tclpdf::sfnt::NameString {bytes start length platform} {
+  set value [string range $bytes $start [expr {$start + $length - 1}]]
+  if {$platform != 3 && $platform != 0} {
+    return $value
+  }
+  set decoded {}
+  binary scan $value Su* units
+  foreach unit $units {
+    append decoded [format %c $unit]
+  }
+  return $decoded
+}
+
+package provide tclpdf::sfnt 1.3

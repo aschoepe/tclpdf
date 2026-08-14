@@ -712,4 +712,103 @@ test font-8.4 {-subset has no effect on a CFF face, and does not pretend to} -co
   expr {abs([lindex $sizes 0] - [lindex $sizes 1]) < 32}
 } -result 1
 
+proc variableTree {name} {
+  set here [file dirname [file dirname [file normalize [info script]]]]
+  return [file join $here examples assets fonts $name]
+}
+
+test font-8.1 {-axes embeds a chosen point on the axes} -body {
+  # Three weights out of ONE file, and they have to differ in the stream: the
+  # widths come from the instanced hmtx, so a wrong instance shows up as a
+  # wrong measurement long before anyone looks at the page.
+  set widths {}
+  foreach weight {100 400 900} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed face [variableTree Roboto-Variable.ttf] -axes [list wght $weight]
+    $doc font -family face -size 20
+    lappend widths [format %.2f [$doc textWidth "Hamburgefonstiv"]]
+    $doc destroy
+  }
+  lassign $widths thin regular black
+  list [expr {$thin < $regular}] [expr {$regular < $black}]
+} -result {1 1}
+
+test font-8.2 {-instance names a point the designer stood behind} -body {
+  # The named instance has to agree with the axis values it stands for - it is
+  # resolved to those values and takes the same path from there.
+  set widths {}
+  foreach call {{-instance Bold} {-axes {wght 700}}} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed face [variableTree Roboto-Variable.ttf] {*}$call
+    $doc font -family face -size 20
+    lappend widths [format %.4f [$doc textWidth "Hamburgefonstiv"]]
+    $doc destroy
+  }
+  expr {[lindex $widths 0] eq [lindex $widths 1]}
+} -result 1
+
+test font-8.3 {-axes refines a named instance} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed face [variableTree Roboto-Variable.ttf] \
+      -instance Bold -axes {wdth 75}
+  $doc font -family face -size 20
+  set narrow [$doc textWidth "Hamburgefonstiv"]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed face [variableTree Roboto-Variable.ttf] -instance Bold
+  $doc font -family face -size 20
+  set wide [$doc textWidth "Hamburgefonstiv"]
+  $doc destroy
+  expr {$narrow < $wide}
+} -result 1
+
+test font-8.4 {without -axes the default instance is embedded as before} -body {
+  # The behaviour every existing document relies on: an untouched variable
+  # font is its default instance, which is what sits in glyf.
+  set widths {}
+  foreach call {{} {-axes {wght 400 wdth 100}}} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed face [variableTree Roboto-Variable.ttf] {*}$call
+    $doc font -family face -size 20
+    lappend widths [format %.6f [$doc textWidth "Hamburgefonstiv"]]
+    $doc destroy
+  }
+  expr {[lindex $widths 0] eq [lindex $widths 1]}
+} -result 1
+
+test font-8.5 {an axis the font does not have is named, with the ones it does} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc font embed face [variableTree Roboto-Variable.ttf] -axes {wgth 700}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*no axis "wgth"*wght wdth*}
+
+test font-8.6 {an unknown instance lists the ones that exist} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc font embed face [variableTree Roboto-Variable.ttf] -instance Ultrablack
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*no instance named "Ultrablack"*Thin*}
+
+test font-8.7 {-axes on a static font says so instead of doing nothing} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc font embed face [variableTree Roboto-Regular.ttf] -axes {wght 700}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*not a variable font*fvar*}
+
 cleanupTests

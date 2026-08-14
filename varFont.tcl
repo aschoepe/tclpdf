@@ -158,7 +158,12 @@ proc ::tclpdf::varFont::coordinates {parsed wanted} {
   if {[dict exists [dict get $parsed tables] avar]} {
     set result [Warp $parsed $result]
   }
-  return $result
+  # Quantised to F2DOT14 - the representation the format itself uses for a
+  # normalised coordinate, in avar and in every tuple record. Carrying full
+  # double precision further would compute with a point on the axis that the
+  # font cannot express, and measured against an independent implementation
+  # that showed up as single glyphs landing one unit off.
+  return [lmap value $result {expr {[Round [expr {$value * 16384}]] / 16384.0}}]
 }
 
 # avar: the font's own correction of the normalised value.
@@ -222,9 +227,514 @@ proc ::tclpdf::varFont::Piecewise {value from to} {
   return $value
 }
 
+# Every glyph of a face, moved to one point in the axis space.
+#
+# Returns glyph id -> {bytes advance bearing}. Glyphs with no data at all stay
+# out: an empty glyph has nothing to move, and putting ten bytes of "no
+# contours" where the font has none changes the file for nothing.
+#
+# The whole face at once rather than the glyphs a document happens to use, and
+# the reason is the composites: a subset closes over them AFTER this, and a
+# component instanced at a different point than the glyph using it would tear
+# the letter apart. Measured at 67 ms for Roboto's 1326 glyphs.
+proc ::tclpdf::varFont::all {parsed coordinates} {
+  package require tclpdf::glyfOutline 1.0-
+  set glyf [::tclpdf::sfnt table $parsed glyf]
+  set loca [dict get $parsed loca]
+  set result {}
+  for {set glyph 0} {$glyph < [llength $loca] - 1} {incr glyph} {
+    set start [lindex $loca $glyph]
+    set stop [lindex $loca [expr {$glyph + 1}]]
+    set data [expr {$start >= $stop ? {} :
+        [string range $glyf $start [expr {$stop - 1}]]}]
+    set outline [::tclpdf::glyfOutline parse $data]
+    if {[dict get $outline type] eq "empty"} {
+      continue
+    }
+    set moved [instance $parsed $glyph $outline $coordinates]
+    dict set result $glyph [dict create \
+        bytes [::tclpdf::glyfOutline compose [dict get $moved outline]] \
+        advance [dict get $moved advance] \
+        bearing [dict get $moved bearing]]
+  }
+  return $result
+}
+
+# One glyph, moved to the chosen point in the axis space.
+#
+# Returns a dictionary: outline (the glyf dictionary with its points moved),
+# advance and bearing. A composite comes back unchanged apart from its metrics
+# - its deltas move the component offsets, and those are rewritten by the
+# subsetter, so instancing them here would be undone there.
+#
+# The four phantom points are what makes the advance vary: they are appended to
+# the point list, gvar shifts them like any other point, and the distance
+# between the first two IS the advance width. That is how a font varies its
+# spacing without an HVAR table - and Roboto, measured, has none.
+proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
+  set advance [::tclpdf::sfnt advance $parsed $glyph]
+  set bearing [lindex [dict get $parsed bearings] $glyph]
+  set simple [expr {[dict size $outline] && [dict get $outline type] eq "simple"}]
+  set composite [expr {[dict size $outline] &&
+      [dict get $outline type] eq "composite"}]
+  # A composite has one variation point per COMPONENT, not per outline point:
+  # what varies is where each piece is placed. An a-dieresis whose accent stays
+  # put while the letter below it grows heavier is the visible failure.
+  set points [expr {$simple ? [llength [dict get $outline x]] :
+      ($composite ? [llength [dict get $outline components]] : 0)}]
+
+  # Phantom 1 sits at the horizontal origin, phantom 2 an advance further on.
+  # Their default positions have to be right, not just their deltas: IUP puts
+  # unreferenced points between their neighbours, and the phantoms are
+  # neighbours to nothing - but the advance is read off their positions.
+  set phantomX [expr {[lindex [dict get $outline bounds] 0] - $bearing}]
+  if {!$simple} {
+    set phantomX 0
+  }
+  lassign [deltas $parsed $glyph $coordinates $outline [expr {$points + 4}]] dx dy
+
+  set shiftFirst [lindex $dx $points]
+  set shiftSecond [lindex $dx [expr {$points + 1}]]
+  set movedAdvance [Round [expr {$advance + $shiftSecond - $shiftFirst}]]
+  if {$movedAdvance < 0} {
+    set movedAdvance 0
+  }
+  if {$composite} {
+    # Only offsets move. A component placed by matching two point numbers
+    # (without ARGS_ARE_XY_VALUES) has no offset to shift, and the standard
+    # says so explicitly - shifting the point numbers instead would attach the
+    # piece to a different point of the base glyph.
+    set moved {}
+    set index 0
+    foreach component [dict get $outline components] {
+      lassign $component flags number arguments transform
+      if {$flags & 0x0002} {
+        lassign $arguments x y
+        set arguments [list \
+            [Round [expr {$x + [lindex $dx $index]}]] \
+            [Round [expr {$y + [lindex $dy $index]}]]]
+      }
+      lappend moved [list $flags $number $arguments $transform]
+      incr index
+    }
+    dict set outline components $moved
+    return [dict create outline $outline advance $movedAdvance bearing $bearing]
+  }
+  if {!$simple} {
+    return [dict create outline $outline advance $movedAdvance bearing $bearing]
+  }
+
+  # Rounding happens ONCE, on the sum of every region - rounding each region as
+  # it is added loses up to half a unit per region, and a glyph in the middle
+  # of the axis space is the sum of four of them.
+  set xs {}
+  set ys {}
+  foreach x [dict get $outline x] y [dict get $outline y] \
+      shiftX [lrange $dx 0 [expr {$points - 1}]] \
+      shiftY [lrange $dy 0 [expr {$points - 1}]] {
+    lappend xs [Round [expr {$x + $shiftX}]]
+    lappend ys [Round [expr {$y + $shiftY}]]
+  }
+  dict set outline x $xs
+  dict set outline y $ys
+  # The left side bearing follows the outline: a renderer places the glyph at
+  # cursor plus bearing, so keeping the old one would move a widened letter
+  # sideways rather than let it grow.
+  set movedBearing [expr {[llength $xs] ?
+      [Round [expr {[::tcl::mathfunc::min {*}$xs] - $phantomX - $shiftFirst}]] :
+      $bearing}]
+  return [dict create outline $outline advance $movedAdvance \
+      bearing $movedBearing]
+}
+
+# The deltas for one glyph at one point in the axis space.
+#
+# Returns two lists - the x and the y shift of every point, in font units, as
+# real numbers. The caller adds them to the default outline and rounds; adding
+# them one region at a time and rounding in between loses about a unit per
+# region, which is visible at small sizes.
+#
+# The point count has to be passed in because gvar does not carry it: a tuple
+# may say "all points", and only the outline knows how many that is. It counts
+# the FOUR PHANTOM POINTS as well - two horizontal, two vertical - which is how
+# a variable font varies its advance width without HVAR.
+proc ::tclpdf::varFont::deltas {parsed glyph coordinates outline count} {
+  set tables [dict get $parsed tables]
+  if {![dict exists $tables gvar]} {
+    return [list [lrepeat $count 0.0] [lrepeat $count 0.0]]
+  }
+  set bytes [dict get $parsed bytes]
+  lassign [dict get $tables gvar] at -
+  binary scan $bytes @[expr {$at + 4}]SuSuI axisCount sharedCount sharedOffset
+  binary scan $bytes @[expr {$at + 12}]SuSuI glyphCount flags dataOffset
+  if {$glyph >= $glyphCount} {
+    return [list [lrepeat $count 0.0] [lrepeat $count 0.0]]
+  }
+
+  # Bit 0 of flags: the offsets are either uint16 halved - exactly as in loca -
+  # or uint32. Reading the wrong width gives an offset into the middle of
+  # another glyph's data, which decodes as garbage rather than failing.
+  if {$flags & 1} {
+    binary scan $bytes @[expr {$at + 20 + $glyph * 4}]IuIu start stop
+  } else {
+    binary scan $bytes @[expr {$at + 20 + $glyph * 2}]SuSu start stop
+    set start [expr {$start * 2}]
+    set stop [expr {$stop * 2}]
+  }
+  if {$start >= $stop} {
+    # Equal offsets mean this glyph does not vary at all.
+    return [list [lrepeat $count 0.0] [lrepeat $count 0.0]]
+  }
+
+  set shared [Shared $bytes [expr {$at + $sharedOffset}] $sharedCount $axisCount]
+  return [Tuples $bytes [expr {$at + $dataOffset + $start}] \
+      [expr {$at + $dataOffset + $stop}] $axisCount $shared $coordinates \
+      $outline $count]
+}
+
+# The shared tuple records: peak coordinates a tuple can refer to by index
+# instead of carrying its own.
+proc ::tclpdf::varFont::Shared {bytes at countTuples axisCount} {
+  set result {}
+  for {set index 0} {$index < $countTuples} {incr index} {
+    set peak {}
+    for {set axis 0} {$axis < $axisCount} {incr axis} {
+      binary scan $bytes @[expr {$at + ($index * $axisCount + $axis) * 2}]S value
+      lappend peak [expr {$value / 16384.0}]
+    }
+    lappend result $peak
+  }
+  return $result
+}
+
+# One glyph's variation data: a header per tuple, then the serialised data.
+proc ::tclpdf::varFont::Tuples {bytes at end axisCount shared coordinates outline count} {
+  set dx [lrepeat $count 0.0]
+  set dy [lrepeat $count 0.0]
+  binary scan $bytes @${at}SuSu tupleCount dataOffset
+  # Bit 15 says every tuple uses one shared list of point numbers, which then
+  # sits at the front of the data area.
+  set sharePoints [expr {$tupleCount & 0x8000}]
+  set tupleCount [expr {$tupleCount & 0x0FFF}]
+  set header [expr {$at + 4}]
+  set data [expr {$at + $dataOffset}]
+
+  set sharedPoints {}
+  if {$sharePoints} {
+    lassign [Points $bytes $data $end] sharedPoints data
+  }
+
+  for {set index 0} {$index < $tupleCount} {incr index} {
+    binary scan $bytes @${header}SuSu size tupleIndex
+    incr header 4
+    set peak {}
+    if {$tupleIndex & 0x8000} {
+      # An embedded peak, right behind the header.
+      for {set axis 0} {$axis < $axisCount} {incr axis} {
+        binary scan $bytes @${header}S value
+        incr header 2
+        lappend peak [expr {$value / 16384.0}]
+      }
+    } else {
+      set peak [lindex $shared [expr {$tupleIndex & 0x0FFF}]]
+    }
+    set from {}
+    set to {}
+    if {$tupleIndex & 0x4000} {
+      # An intermediate region: the tuple applies between these two corners
+      # rather than symmetrically around zero.
+      foreach which {from to} {
+        set values {}
+        for {set axis 0} {$axis < $axisCount} {incr axis} {
+          binary scan $bytes @${header}S value
+          incr header 2
+          lappend values [expr {$value / 16384.0}]
+        }
+        set $which $values
+      }
+    }
+    set scalar [Scalar $peak $from $to $coordinates]
+    set next [expr {$data + $size}]
+    if {$scalar != 0} {
+      set position $data
+      if {$tupleIndex & 0x2000} {
+        lassign [Points $bytes $position $end] private position
+        set points $private
+      } else {
+        set points $sharedPoints
+      }
+      # An empty point list means every point, phantom points included.
+      set wanted [expr {[llength $points] ? [llength $points] : $count}]
+      lassign [Packed $bytes $position $end $wanted] xs position
+      lassign [Packed $bytes $position $end $wanted] ys position
+
+      # Spread this region's deltas over all points before scaling. The order
+      # matters and the standard is explicit about it (7.3.4.4): interpolation
+      # works on the DEFAULT positions and the UNSCALED deltas of this one
+      # region. Interpolating the running sum instead would mix regions that
+      # reference different points, and the result depends on the order the
+      # tuples happen to sit in the file.
+      if {[llength $points]} {
+        lassign [Interpolate $outline $count $points $xs $ys] xs ys
+        set points {}
+      }
+      if {![llength $points]} {
+        set points {}
+        for {set p 0} {$p < $count} {incr p} {
+          lappend points $p
+        }
+      }
+      foreach point $points x $xs y $ys {
+        if {$point >= $count} {
+          continue
+        }
+        lset dx $point [expr {[lindex $dx $point] + $scalar * $x}]
+        lset dy $point [expr {[lindex $dy $point] + $scalar * $y}]
+      }
+    }
+    set data $next
+  }
+  return [list $dx $dy]
+}
+
+# IUP - the points a tuple does not mention, worked out from the ones it does.
+#
+# A tuple usually names only the points that actually move, and the rest are
+# not "unchanged": they follow their neighbours, so that a stem which moves
+# takes its serif with it. The standard calls this inferring unreferenced
+# points (7.3.4.4).
+#
+# CONTOUR BY CONTOUR, because the two neighbours of a point have to be on the
+# same outline - interpolating the top of an "i" from the bottom of its dot
+# would tear the glyph apart. Phantom points belong to no contour and keep
+# whatever the tuple gave them.
+#
+# Returns full-length x and y delta lists, one entry per point.
+proc ::tclpdf::varFont::Interpolate {outline count points xs ys} {
+  set dx [lrepeat $count 0.0]
+  set dy [lrepeat $count 0.0]
+  set given {}
+  foreach point $points x $xs y $ys {
+    if {$point < $count} {
+      lset dx $point [expr {double($x)}]
+      lset dy $point [expr {double($y)}]
+      dict set given $point 1
+    }
+  }
+  if {![dict size $outline] || [dict get $outline type] ne "simple"} {
+    return [list $dx $dy]
+  }
+  set px [dict get $outline x]
+  set py [dict get $outline y]
+  set first 0
+  foreach last [dict get $outline ends] {
+    # Which points of THIS contour the tuple named.
+    set referenced {}
+    for {set point $first} {$point <= $last} {incr point} {
+      if {[dict exists $given $point]} {
+        lappend referenced $point
+      }
+    }
+    if {![llength $referenced]} {
+      # Not one point named: the contour does not move at all.
+      set first [expr {$last + 1}]
+      continue
+    }
+    if {[llength $referenced] == 1} {
+      # A single named point carries the whole contour, unchanged in shape.
+      set only [lindex $referenced 0]
+      for {set point $first} {$point <= $last} {incr point} {
+        lset dx $point [lindex $dx $only]
+        lset dy $point [lindex $dy $only]
+      }
+      set first [expr {$last + 1}]
+      continue
+    }
+    # Every unnamed point sits between two named ones, following the contour
+    # round - so the search wraps from the last point back to the first.
+    #
+    # The two directions are worked out SEPARATELY and from the same pair of
+    # neighbours: a point may sit between them horizontally and outside them
+    # vertically, and then it interpolates in x and copies in y.
+    set total [expr {$last - $first + 1}]
+    for {set point $first} {$point <= $last} {incr point} {
+      if {[dict exists $given $point]} {
+        continue
+      }
+      set before [Neighbour $referenced $point $first $total -1]
+      set after [Neighbour $referenced $point $first $total 1]
+      lset dx $point [Between [lindex $px $point] \
+          [lindex $px $before] [lindex $dx $before] \
+          [lindex $px $after] [lindex $dx $after]]
+      lset dy $point [Between [lindex $py $point] \
+          [lindex $py $before] [lindex $dy $before] \
+          [lindex $py $after] [lindex $dy $after]]
+    }
+    set first [expr {$last + 1}]
+  }
+  return [list $dx $dy]
+}
+
+# The nearest referenced point in one direction, wrapping around the contour.
+proc ::tclpdf::varFont::Neighbour {referenced point first total direction} {
+  for {set step 1} {$step <= $total} {incr step} {
+    set index [expr {($point - $first + $direction * $step) % $total + $first}]
+    if {$index in $referenced} {
+      return $index
+    }
+  }
+  return $point
+}
+
+# One inferred delta, from the two neighbours that surround the point.
+#
+# The three cases of 7.3.4.4, and each one is a decision about what "between"
+# means when the neighbours sit on top of each other or the point does not sit
+# between them at all.
+proc ::tclpdf::varFont::Between {target beforeAt beforeDelta afterAt afterDelta} {
+  if {$beforeAt == $afterAt} {
+    # The neighbours are at the same coordinate: they can only agree or
+    # disagree, and a disagreement has no direction to resolve it.
+    return [expr {$beforeDelta == $afterDelta ? $beforeDelta : 0.0}]
+  }
+  set lower [expr {min($beforeAt, $afterAt)}]
+  set upper [expr {max($beforeAt, $afterAt)}]
+  if {$target <= $lower} {
+    return [expr {$beforeAt < $afterAt ? $beforeDelta : $afterDelta}]
+  }
+  if {$target >= $upper} {
+    return [expr {$beforeAt > $afterAt ? $beforeDelta : $afterDelta}]
+  }
+  set share [expr {double($target - $beforeAt) / ($afterAt - $beforeAt)}]
+  return [expr {(1.0 - $share) * $beforeDelta + $share * $afterDelta}]
+}
+
+# How much a region contributes at the chosen point: 1 at its peak, falling to
+# 0 at its edges, and 0 outside. The product over all axes.
+#
+# An axis whose peak is zero does not take part - that is what lets a tuple
+# describe a region in one axis while ignoring the others, and treating it as
+# "peak 0 means the value must be 0" would switch most tuples off.
+proc ::tclpdf::varFont::Scalar {peak from to coordinates} {
+  set scalar 1.0
+  set axisCount [llength $peak]
+  for {set axis 0} {$axis < $axisCount} {incr axis} {
+    set p [lindex $peak $axis]
+    if {$p == 0} {
+      continue
+    }
+    set value [expr {$axis < [llength $coordinates] ?
+        [lindex $coordinates $axis] : 0.0}]
+    if {$value == $p} {
+      continue
+    }
+    if {[llength $from]} {
+      set start [lindex $from $axis]
+      set end [lindex $to $axis]
+    } else {
+      # Without an intermediate record the region runs from zero to the peak.
+      set start [expr {min(0.0, $p)}]
+      set end [expr {max(0.0, $p)}]
+    }
+    if {$value <= $start || $value >= $end} {
+      return 0.0
+    }
+    if {$value < $p} {
+      set scalar [expr {$scalar * ($value - $start) / ($p - $start)}]
+    } else {
+      set scalar [expr {$scalar * ($end - $value) / ($end - $p)}]
+    }
+  }
+  return $scalar
+}
+
+# Packed point numbers: a count, then runs of cumulative differences.
+#
+# Returns the numbers and the position after them. A count of zero means "all
+# points" and is reported as an empty list, which the caller turns into the
+# full range - it cannot be done here, because the point count is not known at
+# this level.
+proc ::tclpdf::varFont::Points {bytes at end} {
+  binary scan $bytes @${at}cu first
+  incr at
+  if {$first & 0x80} {
+    binary scan $bytes @${at}cu second
+    incr at
+    set count [expr {(($first & 0x7F) << 8) | $second}]
+  } else {
+    set count $first
+  }
+  if {$count == 0} {
+    return [list {} $at]
+  }
+  set points {}
+  set current 0
+  while {[llength $points] < $count && $at < $end} {
+    binary scan $bytes @${at}cu control
+    incr at
+    set run [expr {($control & 0x7F) + 1}]
+    for {set index 0} {$index < $run && [llength $points] < $count} {incr index} {
+      if {$control & 0x80} {
+        binary scan $bytes @${at}Su step
+        incr at 2
+      } else {
+        binary scan $bytes @${at}cu step
+        incr at
+      }
+      incr current $step
+      lappend points $current
+    }
+  }
+  return [list $points $at]
+}
+
+# Packed deltas: a control byte, then that many values as zero, byte or short.
+proc ::tclpdf::varFont::Packed {bytes at end count} {
+  set values {}
+  while {[llength $values] < $count && $at < $end} {
+    binary scan $bytes @${at}cu control
+    incr at
+    set run [expr {($control & 0x3F) + 1}]
+    for {set index 0} {$index < $run && [llength $values] < $count} {incr index} {
+      if {$control & 0x80} {
+        lappend values 0
+      } elseif {$control & 0x40} {
+        binary scan $bytes @${at}S value
+        incr at 2
+        lappend values $value
+      } else {
+        binary scan $bytes @${at}c value
+        incr at
+        lappend values $value
+      }
+    }
+  }
+  # A short data run leaves the rest at zero rather than short-changing the
+  # point list, which would shift every delta after it onto the wrong point.
+  while {[llength $values] < $count} {
+    lappend values 0
+  }
+  return [list $values $at]
+}
+
+# Rounding, the way the format prescribes it - and NOT the way Tcl's round()
+# does it.
+#
+# OpenType, "Coordinate scales and normalization": for fractional values of 0.5
+# and higher take the next higher integer, otherwise truncate. That is rounding
+# towards +infinity, so -2.5 becomes -2. Tcl's round() goes away from zero and
+# makes it -3.
+#
+# Measured against an independent implementation on Roboto at wght 700: with
+# round() 117 of 583 glyphs came out one unit off, all of them on the negative
+# side; with this one, none.
+proc ::tclpdf::varFont::Round {value} {
+  return [expr {int(floor($value + 0.5))}]
+}
+
 # The 16.16 fixed point number the format uses for axis values.
 proc ::tclpdf::varFont::Fixed {value} {
   return [expr {$value / 65536.0}]
 }
 
-package provide tclpdf::varFont 1.0
+package provide tclpdf::varFont 1.1

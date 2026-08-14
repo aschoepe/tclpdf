@@ -141,7 +141,7 @@ The refusal is the same rule the package applies to a character the face has no 
 
 **-unshaped 1** turns the refusal off and draws the characters as isolated glyphs in logical order. That is right for exactly one case: a script that needs only ordering, in a line with no digits and no Latin words — Hebrew without nikud, say — where reversing the string before passing it in gives a correct line.
 
-*doc* **font embed** *alias path* ?**-subset** *0*? ?**-metrics** *path*?
+*doc* **font embed** *alias path* ?**-subset** *0*? ?**-metrics** *path*? ?**-axes** *{tag value …}*? ?**-instance** *name*?
 
 : Embeds a font file under an alias, which is then usable as **-family**. The file says what it is; the extension is not consulted.
 
@@ -154,6 +154,14 @@ The refusal is the same rule the package applies to a character the face has no 
   Embedding a Type 1 program is a copy — the file already consists of the three pieces PDF asks for as `Length1`, `Length2` and `Length3`. Nothing is decrypted, and consequently nothing is subsetted: the face goes in whole, which for a text face is 25 to 105 KB. `-subset` does not apply. Kerning and ligatures do not either; a Type 1 program carries neither GPOS nor GSUB, and the kern pairs an AFM may list are not read.
 
   The reach of such a face is the 224 positions of WinAnsiEncoding, as with the standard fourteen — a character outside it is an error, not a blank. Where a document needs more, TrueType is the format to embed.
+
+: **Variable fonts** carry one set of outlines plus a rule for bending them, and **-axes** or **-instance** says where on that rule to embed. `-axes {wght 620 wdth 87}` names axis values directly; `-instance "Condensed Bold"` names a point the designer named, taken from the font's own name table. The two combine — `-instance` sets the starting point and `-axes` overrides single axes of it. Without either, the face is embedded at its default position, which is what sits in its outline table.
+
+  **Each point on the axes is its own embedded font**, because PDF has nowhere to put an axis value: not in the font dictionary, not in the descriptor. The outlines are therefore computed while embedding and go into the file as a fixed instance. Nine weights on a page mean nine subsets.
+
+  The advance widths vary with the axes and are read from the same source as the outlines, so `textWidth`, the line breaker and the table columns all measure the instance that is actually drawn. An axis the font does not have, or a named instance it does not offer, is an error that lists the ones it does. `-axes` on a face without an `fvar` table is refused rather than ignored.
+
+  What varies and what does not: outlines, component offsets and advance widths do. Hinting programs are carried through unchanged, and the deltas an `HVAR` table would add on top of the phantom points are not read — measured, neither Roboto nor any face in the examples ships one.
 
 : **Which file to embed for a standard face.** A document that has to be
   archivable may not leave a font unembedded, and that includes the fourteen

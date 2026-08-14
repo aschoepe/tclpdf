@@ -49,7 +49,8 @@ oo::define ::tclpdf::document::document {
   # Everything else goes to the text module - "font" without a subcommand is
   # the font state (-family, -size, ...).
   method FontEmbed {alias path args} {
-    set options [::tclpdf::option parse {subset 1 metrics {}} $args "font embed"]
+    set options [::tclpdf::option parse {subset 1 metrics {} axes {} instance {}} \
+        $args "font embed"]
     set fonts [my state fonts]
     if {[dict exists $fonts $alias]} {
       return -code error "tclpdf: a font named \"$alias\" is already embedded"
@@ -65,6 +66,7 @@ oo::define ::tclpdf::document::document {
       dict set fonts $alias [dict create \
           kind truetype \
           path $path parsed $parsed subset [dict get $options subset] \
+          coordinates [my FontAxes $parsed $options $path] \
           used {} number {}]
     }
     my state fonts $fonts
@@ -74,6 +76,110 @@ oo::define ::tclpdf::document::document {
       my onSelf beforeWrite FontWrite
     }
     return $alias
+  }
+
+  # Where on the axes a variable font is to be embedded, as normalised
+  # coordinates - or an empty list, which means "leave the outlines alone".
+  #
+  # BOTH SPELLINGS EXIST because they answer different questions. -instance
+  # "Bold" asks for a point the designer named and stood behind; -axes
+  # {wght 620} asks for one nobody has looked at, which is the whole reason a
+  # variable font is variable. Named instances are resolved to axis values
+  # first, so from there on there is one path.
+  #
+  # PDF HAS NOWHERE TO PUT AN AXIS VALUE - not in the font dictionary, not in
+  # the descriptor. The outlines are therefore computed here and embedded as a
+  # fixed instance; a reader never learns that the face could vary.
+  method FontAxes {parsed options path} {
+    set axes [dict get $options axes]
+    set instance [dict get $options instance]
+    if {$axes eq {} && $instance eq {}} {
+      return {}
+    }
+    package require tclpdf::varFont 1.0-
+    if {![::tclpdf::varFont isVariable $parsed]} {
+      return -code error "tclpdf: \"[file tail $path]\" is not a variable font\
+          - it has no fvar table, so -axes and -instance have nothing to set"
+    }
+    if {$instance ne {}} {
+      set found [my FontInstance $parsed $instance $path]
+      # An explicit -axes wins over the named instance it starts from, so that
+      # "Bold, but a little narrower" is one call rather than a lookup by hand.
+      set axes [dict merge $found $axes]
+    }
+    set known {}
+    foreach axis [::tclpdf::varFont axes $parsed] {
+      lappend known [lindex $axis 0]
+    }
+    dict for {tag value} $axes {
+      if {$tag ni $known} {
+        return -code error "tclpdf: \"[file tail $path]\" has no axis \"$tag\"\
+            - it has: [join $known { }]"
+      }
+      if {![string is double -strict $value]} {
+        return -code error "tclpdf: the value for axis \"$tag\" must be a\
+            number, got \"$value\""
+      }
+    }
+    return [::tclpdf::varFont coordinates $parsed $axes]
+  }
+
+  # The instanced glyphs of a variable font, computed once and kept.
+  #
+  # ONE SOURCE, because the alternative was measured and it is a defect: the
+  # instancing used to happen in the subsetter, at write time, while textWidth
+  # went on reading the advances of the file. So three weights out of one file
+  # measured the same and drew differently - the line breaker, the table
+  # columns and the /W array of the PDF all saw the default. That is the same
+  # shape of error as measuring a -spacing that is never drawn.
+  #
+  # Whole face at once rather than per glyph: measured at 67 ms for Roboto's
+  # 1326 glyphs, and a cache that fills as it goes would have to be written
+  # back into the document state on every miss.
+  method FontInstanced {alias} {
+    set fonts [my state fonts]
+    set entry [dict get $fonts $alias]
+    if {[dict exists $entry instanced]} {
+      return [dict get $entry instanced]
+    }
+    set coordinates [dict get $entry coordinates]
+    if {![llength $coordinates]} {
+      return {}
+    }
+    package require tclpdf::varFont 1.0-
+    set instanced [::tclpdf::varFont all [dict get $entry parsed] $coordinates]
+    dict set fonts $alias instanced $instanced
+    my state fonts $fonts
+    return $instanced
+  }
+
+  # The advance of one glyph, in font units - from the instance where there is
+  # one. Everything that measures goes through here.
+  method FontAdvance {alias parsed glyph} {
+    set instanced [my FontInstanced $alias]
+    if {[dict exists $instanced $glyph]} {
+      return [dict get $instanced $glyph advance]
+    }
+    return [::tclpdf::sfnt advance $parsed $glyph]
+  }
+
+  # A named instance, by the name the font gives it. The lookup is over the
+  # name table, so it is the name a font menu would show.
+  method FontInstance {parsed wanted path} {
+    set names {}
+    foreach entry [::tclpdf::varFont instances $parsed] {
+      lassign $entry nameId coordinates
+      set name [::tclpdf::sfnt name $parsed $nameId]
+      if {$name eq {}} {
+        continue
+      }
+      lappend names $name
+      if {[string equal -nocase $name $wanted]} {
+        return $coordinates
+      }
+    }
+    return -code error "tclpdf: \"[file tail $path]\" has no instance named\
+        \"$wanted\" - it has: [join $names {, }]"
   }
 
   # A Type 1 program plus the metrics beside it.
@@ -298,7 +404,7 @@ oo::define ::tclpdf::document::document {
     set units [dict get $parsed unitsPerEm]
     set total 0
     foreach item $run {
-      set total [expr {$total + [::tclpdf::sfnt advance $parsed \
+      set total [expr {$total + [my FontAdvance $alias $parsed \
           [lindex $item 0]]}]
     }
     set points [expr {double($total) * $size / $units}]
@@ -531,7 +637,8 @@ oo::define ::tclpdf::document::document {
         dict set mapping $glyph $glyph
       }
     } elseif {[dict get $entry subset]} {
-      set built [::tclpdf::subset build $parsed [dict keys $used]]
+      set built [::tclpdf::subset build $parsed [dict keys $used] \
+          [my FontInstanced $alias]]
       set fontBytes [dict get $built bytes]
       set mapping [dict get $built glyphs]
     } else {
@@ -598,7 +705,7 @@ oo::define ::tclpdf::document::document {
             Supplement 0]] \
         FontDescriptor [$writer ref $descriptorNumber] \
         DW 1000 \
-        W [my FontWidthArray $parsed $used $units]]
+        W [my FontWidthArray $alias $parsed $used $units]]
     if {!$cff} {
       set cidToGidNumber [$writer addStream {Filter /FlateDecode} \
           [::tclpdf::filter encodeFlate [my FontCidToGid $mapping]]]
@@ -673,11 +780,11 @@ oo::define ::tclpdf::document::document {
   # The /W array: widths per CID, in 1/1000 em. Written as individual entries
   # rather than as ranges - a range that is one CID off shifts every following
   # width, and the saving is a few dozen bytes.
-  method FontWidthArray {parsed used units} {
+  method FontWidthArray {alias parsed used units} {
     set scale [expr {1000.0 / $units}]
     set entries {}
     foreach glyph [lsort -integer [dict keys $used]] {
-      set width [expr {[::tclpdf::sfnt advance $parsed $glyph] * $scale}]
+      set width [expr {[my FontAdvance $alias $parsed $glyph] * $scale}]
       lappend entries $glyph [::tclpdf::pdfObj arr [list [::tclpdf::pdfObj num $width]]]
     }
     return [::tclpdf::pdfObj arr $entries]
@@ -740,4 +847,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.4
+package provide tclpdf::font 1.5

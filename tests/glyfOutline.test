@@ -1,0 +1,154 @@
+# glyfOutline.test --
+#
+# Reading the points of a TrueType glyph and writing them back.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::io
+package require tclpdf::glyfOutline
+source [file join [file dirname [info script]] helper.tcl]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set fonts [file join $here examples assets fonts]
+
+proc face {name} {
+  return [::tclpdf::sfnt parse [::tclpdf::io read \
+      [file join $::fonts $name]]]
+}
+
+test glyfOutline-1.1 {a simple glyph comes back with its points} -body {
+  # The point count is not stored anywhere: it is one more than the last
+  # contour's end, so that relation IS the format and is worth asserting.
+  # The number of contours is not - it is whatever the designer drew.
+  set font [face Roboto-Regular.ttf]
+  set glyph [::tclpdf::glyfOutline parse [::tclpdfTest::glyph $font \
+      [dict get [dict get $font cmap] 65]]]
+  set points [llength [dict get $glyph x]]
+  list [dict get $glyph type] \
+      [expr {[llength [dict get $glyph ends]] > 0}] \
+      [expr {[lindex [dict get $glyph ends] end] == $points - 1}] \
+      [expr {[llength [dict get $glyph y]] == $points}] \
+      [expr {[llength [dict get $glyph flags]] == $points}]
+} -result {simple 1 1 1 1}
+
+test glyfOutline-1.2 {an empty glyph is not a glyph with no contours} -body {
+  # A space has no data at all in glyf. Reading it as a glyph with zero
+  # contours would make the writer emit ten bytes where the font has none.
+  dict get [::tclpdf::glyfOutline parse {}] type
+} -result empty
+
+test glyfOutline-1.3 {a composite reports its components} -body {
+  set font [face Roboto-Regular.ttf]
+  # a-dieresis: a plus dieresis, the everyday composite.
+  set glyph [::tclpdf::glyfOutline parse [::tclpdfTest::glyph $font \
+      [dict get [dict get $font cmap] 228]]]
+  list [dict get $glyph type] [llength [dict get $glyph components]]
+} -result {composite 2}
+
+test glyfOutline-2.1 {the round trip keeps every point of every glyph} -body {
+  # The invariant the instancing rests on: whatever is read has to come back
+  # out unchanged, or moving a point moves the others with it.
+  set differing 0
+  set checked 0
+  foreach name {Roboto-Regular.ttf NotoSans-Variable.ttf} {
+    set font [face $name]
+    set count [expr {[llength [dict get $font loca]] - 1}]
+    for {set id 0} {$id < $count} {incr id} {
+      set data [::tclpdfTest::glyph $font $id]
+      set glyph [::tclpdf::glyfOutline parse $data]
+      if {[dict get $glyph type] ne "simple"} {
+        continue
+      }
+      incr checked
+      set again [::tclpdf::glyfOutline parse \
+          [::tclpdf::glyfOutline compose $glyph]]
+      foreach key {ends flags x y instructions} {
+        if {[dict get $glyph $key] ne [dict get $again $key]} {
+          incr differing
+          break
+        }
+      }
+    }
+  }
+  list [expr {$checked > 3000}] $differing
+} -result {1 0}
+
+test glyfOutline-2.2 {OVERLAP_SIMPLE survives the round trip} -body {
+  # It says the contours may overlap and are filled non-zero. Dropping it
+  # changes how the glyph is painted, and nothing else notices - measured, all
+  # 583 simple glyphs of Roboto-Regular set it.
+  set font [face Roboto-Regular.ttf]
+  set data [::tclpdfTest::glyph $font [dict get [dict get $font cmap] 65]]
+  set glyph [::tclpdf::glyfOutline parse $data]
+  set again [::tclpdf::glyfOutline parse [::tclpdf::glyfOutline compose $glyph]]
+  set before 0
+  set after 0
+  foreach flag [dict get $glyph flags] {
+    set before [expr {$before || ($flag & 0x40)}]
+  }
+  foreach flag [dict get $again flags] {
+    set after [expr {$after || ($flag & 0x40)}]
+  }
+  list $before $after
+} -result {1 1}
+
+test glyfOutline-2.3 {a composite round trips through its components} -body {
+  set font [face Roboto-Regular.ttf]
+  set differing 0
+  set checked 0
+  set count [expr {[llength [dict get $font loca]] - 1}]
+  for {set id 0} {$id < $count} {incr id} {
+    set glyph [::tclpdf::glyfOutline parse [::tclpdfTest::glyph $font $id]]
+    if {[dict get $glyph type] ne "composite"} {
+      continue
+    }
+    incr checked
+    set again [::tclpdf::glyfOutline parse \
+        [::tclpdf::glyfOutline compose $glyph]]
+    if {[dict get $glyph components] ne [dict get $again components]} {
+      incr differing
+    }
+  }
+  list [expr {$checked > 500}] $differing
+} -result {1 0}
+
+test glyfOutline-3.1 {the bounding box is recomputed, not carried over} -body {
+  # After moving points the stored box is wrong, and a wrong box makes a
+  # reader clip the glyph.
+  set font [face Roboto-Regular.ttf]
+  set glyph [::tclpdf::glyfOutline parse [::tclpdfTest::glyph $font \
+      [dict get [dict get $font cmap] 65]]]
+  dict set glyph x [lmap value [dict get $glyph x] {expr {$value + 500}}]
+  set again [::tclpdf::glyfOutline parse [::tclpdf::glyfOutline compose $glyph]]
+  expr {[lindex [dict get $again bounds] 0] -
+      [lindex [dict get $glyph bounds] 0]}
+} -result 500
+
+test glyfOutline-3.2 {an offset too large for a byte grows to a word} -body {
+  # A delta can push a component offset past what a byte holds. Writing it
+  # back into the old width puts the accent on the other side of the letter.
+  set font [face Roboto-Regular.ttf]
+  set glyph [::tclpdf::glyfOutline parse [::tclpdfTest::glyph $font \
+      [dict get [dict get $font cmap] 228]]]
+  set moved {}
+  foreach component [dict get $glyph components] {
+    lassign $component flags number arguments transform
+    if {$flags & 0x0002} {
+      set arguments [list 900 [lindex $arguments 1]]
+    }
+    lappend moved [list $flags $number $arguments $transform]
+  }
+  dict set glyph components $moved
+  set again [::tclpdf::glyfOutline parse [::tclpdf::glyfOutline compose $glyph]]
+  lindex [dict get $again components] 0 2 0
+} -result 900
+
+cleanupTests

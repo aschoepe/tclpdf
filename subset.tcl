@@ -45,7 +45,7 @@ namespace eval ::tclpdf::subset {
 #
 # Returns a dict: bytes (the new font file), glyphs (old id -> new id) and
 # order (new id -> old id).
-proc ::tclpdf::subset::build {font glyphs} {
+proc ::tclpdf::subset::build {font glyphs {instanced {}}} {
   set loca [dict get $font loca]
   if {![llength $loca]} {
     return -code error "tclpdf: the font has no glyf/loca tables and cannot be\
@@ -72,6 +72,15 @@ proc ::tclpdf::subset::build {font glyphs} {
   # Renumber. Sorting keeps the result reproducible - the same text must give
   # the same bytes, or two runs of the same report differ for no reason.
   set order [lsort -integer [dict keys $wanted]]
+
+  # The instanced glyphs, when the caller has them, are stashed in the font
+  # dictionary before anything reads a glyph: GlyphData picks them up, so the
+  # component walk, the rewriting and the metrics below all see the moved
+  # outlines without knowing that the face varies.
+  if {[dict size $instanced]} {
+    dict set font instanced $instanced
+  }
+
   set mapping {}
   set newId 0
   foreach glyph $order {
@@ -115,8 +124,14 @@ proc ::tclpdf::subset::build {font glyphs} {
   # non-zero bearing, 765 of them negative.
   set hmtx {}
   foreach glyph $order {
-    append hmtx [binary format SuS [::tclpdf::sfnt advance $font $glyph] \
-        [::tclpdf::sfnt bearing $font $glyph]]
+    if {[dict exists $font instanced $glyph]} {
+      append hmtx [binary format SuS \
+          [dict get $font instanced $glyph advance] \
+          [dict get $font instanced $glyph bearing]]
+    } else {
+      append hmtx [binary format SuS [::tclpdf::sfnt advance $font $glyph] \
+          [::tclpdf::sfnt bearing $font $glyph]]
+    }
   }
 
   set tables [dict create glyf $glyf loca $locaBytes hmtx $hmtx \
@@ -170,6 +185,12 @@ proc ::tclpdf::subset::Components {font glyph} {
 }
 
 proc ::tclpdf::subset::GlyphData {font glyph} {
+  # An instanced glyph stands in for the one in the file. Every reader of a
+  # glyph goes through here, so the substitution is complete by construction -
+  # the component walk and the rewriting see the moved outline too.
+  if {[dict exists $font instanced $glyph]} {
+    return [dict get $font instanced $glyph bytes]
+  }
   set loca [dict get $font loca]
   if {$glyph + 1 >= [llength $loca]} {
     return {}
@@ -291,4 +312,4 @@ proc ::tclpdf::subset::Checksum {data} {
   return $sum
 }
 
-package provide tclpdf::subset 1.0
+package provide tclpdf::subset 1.1

@@ -110,3 +110,23 @@ proc ::tclpdfTest::streamOf {writer number} {
   }
   return $data
 }
+
+# The raw glyf data of one glyph, or the empty string for a glyph that has
+# none - a space, for instance.
+#
+# Three test files reach for this, which is two too many for a copy: the
+# offsets come from loca and getting them wrong reads the neighbouring glyph
+# rather than failing.
+proc ::tclpdfTest::glyph {font id} {
+  set loca [dict get $font loca]
+  if {$id + 1 >= [llength $loca]} {
+    return {}
+  }
+  set start [lindex $loca $id]
+  set stop [lindex $loca [expr {$id + 1}]]
+  if {$start >= $stop} {
+    return {}
+  }
+  return [string range [::tclpdf::sfnt table $font glyf] $start \
+      [expr {$stop - 1}]]
+}

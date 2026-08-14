@@ -2,20 +2,23 @@
 #
 # Reading the variation tables of a variable font.
 #
-# NO VARIABLE FONT IS CHECKED IN, and that is the awkward part of this module:
-# measured on this machine, 0 of 205 fonts under the user's own directories
-# carry an fvar table, and the 29 that do are Apple's system faces, which may
-# not be redistributed. So the tests split in two:
+# The tests come in three kinds, because the three parts fail differently:
 #
-#   the arithmetic  - normalising an axis value, the piecewise avar mapping -
-#                     needs no font at all and is tested against constructed
-#                     axes. That is where the errors would be.
-#   the parsing     - fvar and its named instances - is tested against a system
-#                     font where one is present, and skips where it is not.
+#   the arithmetic  - normalising an axis value, the piecewise avar mapping,
+#                     the interpolation of unreferenced points - needs no font
+#                     at all and is checked against constructed cases. That is
+#                     where the errors would be, and a constructed case can
+#                     hold a shape no shipped font offers in isolation.
+#   the instancing  - checked against Roboto-Variable in the tree, at its
+#                     default (where nothing may move) and away from it (where
+#                     something must).
+#   the parsing     - fvar and its named instances against a system font where
+#                     one is present, and skipped where it is not.
 #
-# What that leaves uncovered on another machine is the byte layout of fvar.
-# Named rather than glossed over: it wants a font in the tree, and which one
-# that is is the author's call.
+# The strongest check is NOT here and cannot be: the outlines were compared
+# point by point against an independent implementation over five faces and six
+# instances - 11 235 glyphs, no difference. That needs fontTools, which is not
+# a dependency of this package. What it measured is recorded in TODO.md.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -159,5 +162,180 @@ test varFont-3.4 {coordinates covers every axis, named or not} -constraints have
   }
   list [expr {[llength $values] == [llength $axes]}] $faults
 } -result {1 {}}
+
+# A face from the tree, parsed. The variable ones live beside the examples.
+proc variableFace {name} {
+  set here [file dirname [file dirname [file normalize [info script]]]]
+  return [::tclpdf::sfnt read [file join $here examples assets fonts $name]]
+}
+
+proc outlineOf {font id} {
+  set data [::tclpdfTest::glyph $font $id]
+  if {$data eq {}} {
+    return {}
+  }
+  return [::tclpdf::glyfOutline parse $data]
+}
+
+test varFont-12.1 {at the default position nothing moves at all} -body {
+  # The one invariant that holds for every variable font without knowing
+  # anything about its design: what sits in glyf IS the default instance, so
+  # asking for it must produce no delta anywhere.
+  package require tclpdf::glyfOutline
+  set font [variableFace Roboto-Variable.ttf]
+  set defaults {}
+  foreach axis [::tclpdf::varFont axes $font] {
+    lappend defaults [lindex $axis 0] [lindex $axis 2]
+  }
+  set coordinates [::tclpdf::varFont coordinates $font $defaults]
+  set moved 0
+  set checked 0
+  set count [expr {[llength [dict get $font loca]] - 1}]
+  for {set id 0} {$id < $count && $checked < 200} {incr id} {
+    set outline [outlineOf $font $id]
+    if {![dict size $outline] || [dict get $outline type] ne "simple"} {
+      continue
+    }
+    incr checked
+    set result [::tclpdf::varFont instance $font $id $outline $coordinates]
+    set after [dict get $result outline]
+    if {[dict get $after x] ne [dict get $outline x] ||
+        [dict get $after y] ne [dict get $outline y] ||
+        [dict get $result advance] != [::tclpdf::sfnt advance $font $id]} {
+      incr moved
+    }
+  }
+  list [expr {$checked == 200}] $moved
+} -result {1 0}
+
+test varFont-12.2 {away from the default the outline and the advance change} -body {
+  # The counter-direction: if nothing moved here, 12.1 would pass on a broken
+  # implementation that simply returns its input.
+  set font [variableFace Roboto-Variable.ttf]
+  set id [dict get [dict get $font cmap] 72]
+  set outline [outlineOf $font $id]
+  set heavy [::tclpdf::varFont instance $font $id $outline \
+      [::tclpdf::varFont coordinates $font {wght 900}]]
+  set light [::tclpdf::varFont instance $font $id $outline \
+      [::tclpdf::varFont coordinates $font {wght 100}]]
+  list [expr {[dict get $heavy outline] ne [dict get $light outline]}] \
+      [expr {[dict get $heavy advance] > [dict get $light advance]}]
+} -result {1 1}
+
+test varFont-12.3 {a width axis moves the outline sideways only} -body {
+  # wdth is horizontal by construction, and a y delta from it would mean the
+  # axes have been mixed up somewhere between fvar and gvar.
+  set font [variableFace Roboto-Variable.ttf]
+  set id [dict get [dict get $font cmap] 72]
+  set outline [outlineOf $font $id]
+  set narrow [::tclpdf::varFont instance $font $id $outline \
+      [::tclpdf::varFont coordinates $font {wdth 75}]]
+  list [expr {[dict get $narrow outline x] ne [dict get $outline x]}] \
+      [expr {[dict get $narrow outline y] eq [dict get $outline y]}]
+} -result {1 1}
+
+test varFont-12.4 {a composite moves its components, not its points} -body {
+  set font [variableFace Roboto-Variable.ttf]
+  set id [dict get [dict get $font cmap] 228]
+  set outline [outlineOf $font $id]
+  set moved [dict get [::tclpdf::varFont instance $font $id $outline \
+      [::tclpdf::varFont coordinates $font {wght 900}]] outline]
+  set shifted 0
+  foreach before [dict get $outline components] after [dict get $moved components] {
+    if {[lindex $before 2] ne [lindex $after 2]} {
+      incr shifted
+    }
+    # The component still points at the same glyph and keeps its transform.
+    if {[lindex $before 1] != [lindex $after 1]} {
+      error "component renumbered"
+    }
+  }
+  list [dict get $moved type] [expr {$shifted > 0}]
+} -result {composite 1}
+
+test varFont-12.5 {the interpolation is actually applied while reading gvar} -body {
+    # Interpolate is exercised directly above, but nothing checked that the
+    # tuple reader CALLS it - measured, switching it off left every test green
+    # while 101 of Roboto's 583 simple glyphs came out wrong, by up to 153
+    # units.
+    #
+    # The hyphen is the smallest glyph that needs it: four points, of which a
+    # tuple names two. The values below are not chosen, they are the outcome
+    # verified point by point against an independent implementation.
+  set font [variableFace Roboto-Variable.ttf]
+  set id [dict get [dict get $font cmap] 45]
+  set outline [outlineOf $font $id]
+  set moved [dict get [::tclpdf::varFont instance $font $id $outline \
+      [::tclpdf::varFont coordinates $font {wght 700 wdth 100}]] outline]
+  list [llength [dict get $outline x]] [dict get $outline x] [dict get $moved x]
+} -result {4 {526 526 38 38} {680 680 115 115}}
+
+test varFont-13.1 {rounding follows the format, not Tcl} -body {
+  # The standard: for fractional values of 0.5 and higher take the next higher
+  # integer, otherwise truncate - that is towards +infinity, so -2.5 is -2.
+  # Tcl's round() goes away from zero and answers -3.
+  list [::tclpdf::varFont::Round -2.5] [::tclpdf::varFont::Round 2.5] \
+      [::tclpdf::varFont::Round -2.6] [::tclpdf::varFont::Round -0.5]
+} -result {-2 3 -3 0}
+
+test varFont-13.2 {normalised coordinates are quantised to F2DOT14} -body {
+  # The representation the format itself uses. Carrying full double precision
+  # further computes with a point on the axis the font cannot express.
+  set font [variableFace Roboto-Variable.ttf]
+  set faults {}
+  foreach value {700 550 123 900} {
+    foreach coordinate [::tclpdf::varFont coordinates $font [list wght $value]] {
+      set scaled [expr {$coordinate * 16384}]
+      if {abs($scaled - round($scaled)) > 1e-9} {
+        lappend faults $value
+      }
+    }
+  }
+  set faults
+} -result {}
+
+test varFont-14.1 {an unreferenced point is interpolated between its neighbours} -body {
+  # Two named points 100 apart, one unnamed halfway between them: the delta
+  # follows in proportion. Built rather than taken from a font, because no
+  # font offers the case in isolation.
+  set outline [dict create type simple ends {2} \
+      x {0 50 100} y {0 0 0} flags {1 1 1} instructions {}]
+  lassign [::tclpdf::varFont::Interpolate $outline 3 {0 2} {10 20} {0 0}] dx dy
+  lindex $dx 1
+} -result 15.0
+
+test varFont-14.2 {outside the neighbours the nearer one wins} -body {
+  # The point sits beyond both named points, so there is nothing to
+  # interpolate along - it takes the delta of the one it is nearest to.
+  set outline [dict create type simple ends {2} \
+      x {0 200 100} y {0 0 0} flags {1 1 1} instructions {}]
+  lassign [::tclpdf::varFont::Interpolate $outline 3 {0 2} {10 20} {0 0}] dx dy
+  lindex $dx 1
+} -result 20.0
+
+test varFont-14.3 {neighbours at the same place agree or contribute nothing} -body {
+  set same [dict create type simple ends {2} \
+      x {50 0 50} y {0 0 0} flags {1 1 1} instructions {}]
+  lassign [::tclpdf::varFont::Interpolate $same 3 {0 2} {7 7} {0 0}] agree ->
+  lassign [::tclpdf::varFont::Interpolate $same 3 {0 2} {7 9} {0 0}] differ ->
+  list [lindex $agree 1] [lindex $differ 1]
+} -result {7.0 0.0}
+
+test varFont-14.4 {a contour no delta mentions stays where it is} -body {
+  # Two contours, only the first one named. The second must not drift - and
+  # this is the case that separates per-contour interpolation from a global
+  # one, which would drag it along.
+  set outline [dict create type simple ends {1 3} \
+      x {0 100 0 100} y {0 0 500 500} flags {1 1 1 1} instructions {}]
+  lassign [::tclpdf::varFont::Interpolate $outline 4 {0 1} {10 10} {5 5}] dx dy
+  list [lrange $dx 2 3] [lrange $dy 2 3]
+} -result {{0.0 0.0} {0.0 0.0}}
+
+test varFont-14.5 {one named point carries its whole contour} -body {
+  set outline [dict create type simple ends {2} \
+      x {0 50 100} y {0 0 0} flags {1 1 1} instructions {}]
+  lassign [::tclpdf::varFont::Interpolate $outline 3 {1} {12} {-4}] dx dy
+  list $dx $dy
+} -result {{12.0 12.0 12.0} {-4.0 -4.0 -4.0}}
 
 cleanupTests
