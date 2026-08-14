@@ -1,5 +1,5 @@
-C Embed\sType\s1\sand\sOpenType/CFF\sfaces\n\n-\stype1.tcl:\snew,\sreads\sboth\scontainers\sof\sa\sType\s1\sprogram\s-\sa\s.pfb\swith\ssegment\smarkers\sand\sa\sraw\s.pfa\sor\s.t1\s-\sand\sthe\sAFM\sbeside\sit;\sthe\swidths\sare\saddressed\sby\sglyph\sname,\sand\swhich\sname\sa\sface\scarries\sis\sdecided\sper\sface\sagainst\sits\smetrics\srather\sthan\sby\staking\sthe\sfirst\sthe\sAdobe\slist\soffers\n-\ssfnt.tcl:\san\sOTTO\sfile\sis\sparsed\srather\sthan\srefused,\sand\smarks\sits\soutlines\sas\sCFF;\sloca\sand\sglyf\sare\sskipped,\sbeing\swhat\sTrueType\shas\sand\sCFF\shas\snot\n-\sfont.tcl:\sa\sCFF\sface\sgoes\sin\sas\sFontFile3\swith\sSubtype\sOpenType\sand\sa\sCIDFontType0\sdescendant,\swithout\sa\sCIDToGIDMap;\sa\sType\s1\sface\sas\sFontFile\swith\sthe\sthree\slengths\sit\salready\sconsists\sof.\sNeither\sis\ssubsetted\s-\sthat\sneeds\sthe\soutlines\s-\sand\sneither\scarries\sa\ssubset\sprefix\n-\safm.tcl:\sthe\sWinAnsi\sencoder\stakes\sa\swidth\slist\sinstead\sof\slooking\sone\sup,\sso\san\sembedded\ssingle-byte\sface\sgoes\sthrough\sit\srather\sthan\sthrough\sa\ssecond\scopy\n-\stext.tcl:\smeasuring\sand\sshowing\sknow\sa\sthird\skind\sof\sface\sbeside\sTrueType\sand\sthe\sstandard\sfourteen\n-\stests/type1.test\sis\snew,\stests/font.test\sgained\sthe\sCFF\scases;\sboth\scompare\sa\sface\sagainst\sthe\ssame\sface\sin\sthe\sother\sformat,\swhich\sis\swhat\sthis\stree\scan\soffer\sand\sa\sfont\sparser\snormally\scannot\n-\sexamples/02.07-type1.tcl\sand\sexamples/02.08-opentype.tcl:\snew,\sboth\sPDF/A-3u\n-\stests/helper.tcl,\sexamples/common.tcl:\sthe\swrite-and-check\sand\sthe\sarchival\sending\seach\sexisted\stwice\n-\safm,\sfont,\ssfnt\sand\stext\seach\sraised\sa\sversion,\sin\spkgIndex.tcl.in\sas\swell;\stype1\sstarts\sat\s1.0\n-\sKNOWN:\sa\sType\s1\sface\sgets\sno\skerning,\sand\sthe\skern\spairs\san\sAFM\slists\sare\snot\sread;\sthe\sreach\sof\sboth\snew\sroads\sis\sWinAnsi,\sso\sa\sdocument\sneeding\smore\scharacters\swants\sTrueType
-D 2026-08-14T11:57:20.400
+C Say\swhat\sthe\smissing\smark\sattachment\smeans\sfor\sa\scaller\n\n-\sdoc/tclpdf.md:\scomposed\stext\sis\sunaffected,\swhich\scovers\severy\sEuropean\slanguage;\sdecomposed\stext\sand\scombinations\sUnicode\shas\sno\scomposed\sform\sfor\scome\sout\swith\sdisplaced\saccents,\sand\snormalising\sto\sNFC\sbeforehand\sis\sthe\sanswer\n-\sThe\sparagraph\sabove\sit\salready\ssaid\sthe\sfeature\sis\sabsent\s-\swhat\swas\smissing\swas\swho\sit\saffects
+D 2026-08-14T12:17:28.649
 F Makefile.in 304e636831704ff8bad6eefa8d6f3dac0fa1e05ac7b1b5421dddfcb7dc0ada05
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -11,7 +11,7 @@ F configure af0795279e2cf5b75e3700f25ea6600892869d18f802cd911ae235a8bfbfe54a x
 F configure.ac 54e4119b2d5631f1134d97bf3209d5dd9a5bc86e1c321c97b99d442f6cd5d2d8
 F doc/PLUGINS.md 5d5e45709f4f88fab0208ff16d98ef0d060f49ee57b60f5befd1404976d19144
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
-F doc/tclpdf.md a81886d6da929e44475f428029727c1a1b7bdb99f85a6c12dc04cd7680f24a96
+F doc/tclpdf.md 97a7a65d81f9be96c79f66ab3e3c2ad774a56376c24fc2f49361fdfaeb86e894
 F document.tcl e8abbedb244d0b2f588307cc4b9578437f21242a9c2bdccb475d126ff4e8d17c
 F event.tcl b738afa9f5fb7a1697af862e9dc0413ee1c5064fab9bdc971a1e1ea2a7a6ef50
 F examples/01.01-shapes.tcl 5720fbddf805f8577e2bf9c385b88a065fd3323ddd1f7abb22b2429cc34c7991
@@ -261,8 +261,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl 04ce02c4422f2cc43d24a60a50a666d13bd75b42944a2ec9a818a8b8da4a6bf9
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P ae8529390df70efaec9afc052b58db2ff150ca6c02e57201f6333daa7e3590a2
-R 8f7c691170f5cbd2dde7f00fba35b7d3
+P 43caddce6bcdd3b5bb5610b5f52263e53150c2b8abfcf966759cbb34ea2c4eb3
+R a7510acf2637de86206b5d94c7471d94
 U alex
-Z 60e09b4ef3b04b09ed0f884c2bf0ea47
+Z b13d37ebc760e41d0e4e7c530b731015
 # Remove this line to create a well-formed Fossil manifest.

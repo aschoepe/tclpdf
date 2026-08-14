@@ -120,6 +120,8 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   A combining accent between two letters does not interrupt a pair. Most faces tell the reader to leave marks out of the sequence while kerning - measured here, 51 of the 73 faces on this machine that kern from GPOS do - so `A` + U+0301 + `V` is kerned as the pair `A V`, exactly as the single character U+00C1 followed by `V` has always been. The adjustment is applied in front of the second letter, which leaves the accent where the font puts it. What tclpdf does not do is position the mark itself: GPOS mark attachment is not read, so a combining glyph is drawn at the pen position with the side bearing its face gives it.
 
+  **What that means in practice.** Text that arrives composed — `Ü` as `U+00DC`, `Á` as `U+00C1` — is unaffected, because the face has a finished glyph for it and there is no mark to place. That covers every European language, and it is what databases, XML and the web deliver. Text that arrives **decomposed** — `Ü` as `U+0055` followed by `U+0308` — comes out with its accents visibly displaced, and so do combinations Unicode has no composed form for at all, such as a letter carrying both a macron and an acute. Where such text has to be set, normalise it to NFC before it reaches the package.
+
 *doc* **font embed** *alias path* ?**-subset** *0*? ?**-metrics** *path*?
 
 : Embeds a font file under an alias, which is then usable as **-family**. The file says what it is; the extension is not consulted.
