@@ -18,6 +18,9 @@
 # Only the last one costs anything. Measured on this machine: the 640x480 RGBA
 # file below takes about a third of a second, the other three are a file read.
 #
+# The second page shows the same pictures arriving as BYTES rather than as file
+# names - the shape a web backend sees, where the image was never a file.
+#
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
 # See the file "license.terms" for information on usage and redistribution
@@ -117,6 +120,71 @@ $doc rect -at {150 170} -size {35 26} -fill {pattern dots} -stroke gray -width 0
 $doc font -size 7
 $doc text "tiling pattern, 3 mm" -at {110 200}
 $doc text "tiling pattern, 4 mm" -at {150 200}
+
+exampleFooter $doc
+
+# -- the image that never was a file ---------------------------------------
+
+# A backend behind a web page gets its pictures as bytes: a canvas posted with
+# toDataURL, a chart from a subprocess, a value out of a database. -data takes
+# them as they are.
+#
+# The format is decided by the leading bytes in both cases, so the file name
+# never took part in it - which is why passing none changes nothing about the
+# result. Shown here by embedding the same picture both ways and reading back
+# what the document says about the two.
+
+$doc page add
+
+$doc font -family helvetica -style bold -size 15 -color black
+$doc text "Pictures that arrive as bytes" -at {20 22}
+$doc font -style {} -size 8
+$doc text "A web backend never sees a file: a canvas posted from a browser, a    chart from a subprocess, a BLOB out of a database. -data takes the bytes    themselves. Below, the same JPEG is embedded twice - once by name, once as    bytes - and the two describe themselves identically."     -at {20 30} -width 170
+
+# Read here only to have something to pass: in the real case the bytes arrive
+# over the wire and this line is a form field or a query result.
+set channel [open [file join $images sample-photo.jpg] rb]
+set data [read $channel]
+close $channel
+
+$doc image embed fromPath [file join $images sample-photo.jpg]
+$doc image embed fromData -data $data
+
+$doc image place fromPath -at {20 46} -width 60
+$doc image place fromData -at {90 46} -width 60
+
+$doc font -size 7 -color {0.35 0.35 0.4}
+$doc text "embedded by file name" -at {20 94}
+$doc text "embedded with -data" -at {90 94}
+
+# What the two entries say about themselves, side by side. Everything but the
+# path is the same, and the path is empty for the one that had none.
+set rows {}
+foreach key {type width height components bitDepth alpha} {
+  lappend rows [list $key [dict get [$doc image info fromPath] $key]       [dict get [$doc image info fromData] $key]]
+}
+lappend rows [list path "sample-photo.jpg"     "(empty)"]
+
+$doc font -family helvetica -style {} -size 9 -color black
+set y [$doc table -at {20 104} -width 170 -theme striped     -head {{"what the file says" "by name" "with -data"}} -body $rows     -columns {{width 60} {} {}}]
+
+$doc font -size 8
+$doc text "The bytes are stored once even when they arrive twice: with no file    name to key the cache on, the bytes themselves are the key. Two draws of    the same picture below share one image object."     -at [list 20 [expr {$y + 8}]] -width 170
+
+$doc image draw -data $data -at [list 20 [expr {$y + 24}]] -width 40
+$doc image draw -data $data -at [list 65 [expr {$y + 24}]] -width 40
+
+$doc font -size 7 -color {0.35 0.35 0.4}
+$doc text "[llength [$doc image names]] images embedded on this page and the last"     -at [list 20 [expr {$y + 60}]]
+
+# WHAT IT COSTS, and the one decision a backend has to make. A PNG carrying an
+# alpha channel is the expensive way in - the channel is split out in pure Tcl.
+# Where transparency is not needed, and for a chart on white it is not,
+# toDataURL("image/jpeg") is the cheaper call.
+$doc font -family helvetica -style bold -size 10 -color black
+$doc text "Which format to ask the browser for" -at [list 20 [expr {$y + 72}]]
+$doc font -style {} -size 8
+$doc text "canvas.toDataURL() gives PNG with an alpha channel, which is the    only path that has to be computed rather than passed through. For a chart    on a white ground the channel carries nothing, and asking for image/jpeg    instead turns the most expensive way in into the cheapest."     -at [list 20 [expr {$y + 78}]] -width 170
 
 exampleFooter $doc
 

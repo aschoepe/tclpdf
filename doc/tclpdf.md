@@ -318,17 +318,19 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 ## Images
 
-*doc* **image embed** *alias path*
+*doc* **image embed** *alias* ?*path*? ?**-data** *bytes*? ?**-type** *auto|jpeg|png*?
 
 : Reads a JPEG or PNG and prepares it for placing. JPEG data passes through untouched as `/DCTDecode`; a PNG without alpha passes through as `/FlateDecode`; only a PNG with an alpha channel is decoded, to split the channel into an `/SMask`.
+
+: **-data** takes the bytes instead of a file name — for an image that never was a file: a canvas posted from a browser, a plot from a subprocess, a value out of a database. The format is decided by the leading bytes in both cases, so nothing else changes; `image info` then reports an empty `path`. **A PNG with an alpha channel is by far the most expensive way in** — the channel has to be split out in pure Tcl, measured at about a hundred times the cost of the pass-through. Where transparency is not needed, JPEG or a PNG without alpha is the cheaper choice, and for a browser canvas that means `toDataURL("image/jpeg")`.
 
 *doc* **image place** *alias* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-rotate** *deg*? ?**-opacity** *o*?
 
 : Places an embedded image. Giving only one of width and height keeps the aspect ratio. The same image placed five times is stored once.
 
-*doc* **image draw** *path* **-at** *{x y}* ?*options*?
+*doc* **image draw** ?*path*? ?**-data** *bytes*? **-at** *{x y}* ?*options*?
 
-: Embeds and places in one call, for an image used once.
+: Embeds and places in one call, for an image used once. It takes **-data** as well; with no file name to key the cache on, the bytes themselves are the key, so the same picture drawn twice still travels once.
 
 *doc* **image info** *alias* / *doc* **image size** *alias* / *doc* **image names**
 

@@ -45,9 +45,9 @@ namespace eval ::tclpdf::image {}
 
 oo::define ::tclpdf::document::document {
 
-  # $doc image embed <alias> <path> ?-type auto|jpeg|png?
+  # $doc image embed <alias> ?path? ?-data bytes? ?-type auto|jpeg|png?
   # $doc image place <alias> ?-at {x y}? ?-size {w h}? ...
-  # $doc image draw  <path> ?-at {x y}? ...
+  # $doc image draw  ?path? ?-data bytes? ?-at {x y}? ...
   # $doc image info  <alias>
   # $doc image names
   method image {subcommand args} {
@@ -65,13 +65,40 @@ oo::define ::tclpdf::document::document {
     }
   }
 
-  method ImageEmbed {alias path args} {
-    set options [::tclpdf::option parse {type auto} $args "image embed"]
+  # A file name, or the bytes themselves.
+  #
+  # -data is for the image that never was a file: a canvas posted from a
+  # browser, a plot from a subprocess, a BLOB out of a database. Writing it to
+  # a temporary file first works and is what a caller had to do until now - but
+  # [svg] has taken markup this way from the start, and two commands of one
+  # package answering the same question differently is the kind of seam that
+  # gets discovered rather than read.
+  #
+  # The name stays FIRST and positional, as it was; -data simply replaces the
+  # path that would have followed it.
+  method ImageEmbed {args} {
+    if {![llength $args]} {
+      return -code error "tclpdf: image embed needs a name"
+    }
+    set alias [lindex $args 0]
+    set args [lrange $args 1 end]
+    set path {}
+    if {[llength $args] % 2} {
+      set path [lindex $args 0]
+      set args [lrange $args 1 end]
+    }
+    set options [::tclpdf::option parse {type auto data {}} $args "image embed"]
     set images [my state images]
     if {[dict exists $images $alias]} {
       return -code error "tclpdf: an image named \"$alias\" is already embedded"
     }
-    set bytes [::tclpdf::io read $path]
+    if {$path ne {}} {
+      set bytes [::tclpdf::io read $path]
+    } elseif {[dict get $options data] ne {}} {
+      set bytes [dict get $options data]
+    } else {
+      return -code error "tclpdf: image embed needs a file name or -data"
+    }
     set type [dict get $options type]
     if {$type eq "auto"} {
       set type [my ImageType $bytes $path]
@@ -92,6 +119,10 @@ oo::define ::tclpdf::document::document {
 
   # Which format is this? Decided by the magic bytes, not by the file name -
   # a ".jpg" that is really a PNG is common enough to be worth not trusting.
+  #
+  # Which is also why an image passed as bytes needs no name to be identified:
+  # the name never decided anything. It only has to be SAID differently when
+  # the refusal is reported, since there is no file to point at.
   method ImageType {bytes path} {
     if {[string range $bytes 0 7] eq "\x89PNG\r\n\x1a\n"} {
       return png
@@ -100,7 +131,9 @@ oo::define ::tclpdf::document::document {
     if {$first == 0xff && $second == 0xd8} {
       return jpeg
     }
-    return -code error "tclpdf: \"$path\" is neither a JPEG nor a PNG - tclpdf\
+    set what [expr {$path ne {} ? "\"$path\"" :
+        "the data passed with -data ([string length $bytes] bytes)"}]
+    return -code error "tclpdf: $what is neither a JPEG nor a PNG - tclpdf\
         writes those two formats"
   }
 
@@ -183,12 +216,43 @@ oo::define ::tclpdf::document::document {
   # Embed and place in one step, for a picture used exactly once. The alias is
   # derived from the path so that the same file placed twice is still stored
   # once.
-  method ImageDraw {path args} {
-    set alias [my ImageAlias $path]
-    if {![dict exists [my state images] $alias]} {
-      my ImageEmbed $alias $path
+  # Embed and place in one call. With -data there is no file name to key the
+  # cache on, so the bytes themselves are the key - the same image drawn twice
+  # is stored once either way.
+  method ImageDraw {args} {
+    set path {}
+    if {[llength $args] % 2} {
+      set path [lindex $args 0]
+      set args [lrange $args 1 end]
     }
-    return [my ImagePlace $alias {*}$args]
+    lassign [::tclpdf::option partition {data {}} $args] own rest
+    set data [dict get $own data]
+    if {$path eq {} && $data eq {}} {
+      return -code error "tclpdf: image draw needs a file name or -data"
+    }
+    if {$path ne {}} {
+      set alias [my ImageAlias $path]
+      set embed [list $path]
+    } else {
+      set alias "auto:data:[my ImageDigest $data]"
+      set embed [list -data $data]
+    }
+    if {![dict exists [my state images] $alias]} {
+      my ImageEmbed $alias {*}$embed
+    }
+    return [my ImagePlace $alias {*}$rest]
+  }
+
+  # A key for a block of bytes. Not a checksum for integrity - just enough for
+  # two calls with the same image to find the same entry, with the length in
+  # front so that two different images would have to agree on both.
+  method ImageDigest {data} {
+    set sum 0
+    foreach byte [split $data {}] {
+      binary scan $byte cu value
+      set sum [expr {($sum * 33 + $value) & 0xFFFFFFFF}]
+    }
+    return "[string length $data]:$sum"
   }
 
   method ImageInfo {alias} {
@@ -303,4 +367,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.1
+package provide tclpdf::image 1.2

@@ -310,4 +310,108 @@ test image-draw-6.2 {the same file drawn twice is embedded once} -constraints ha
   llength $aliases
 } -result 1
 
+test image-data-7.1 {an image can be embedded from bytes instead of a file} -constraints haveImages -body {
+  # The image that never was a file: a canvas posted from a browser, a plot
+  # from a subprocess, a BLOB from a database. What arrives is bytes, and
+  # writing them to a temporary file first is what a caller had to do until
+  # this option existed.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed shot -data [::tclpdfTest::readBytes $photo]
+  set info [$doc image info shot]
+  $doc image place shot -at {10 10} -width 30
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [dict get $info type] [dict get $info width] [dict get $info path] \
+      [regexp {/[A-Za-z0-9]+ Do} $content]
+} -result {jpeg 640 {} 1}
+
+test image-data-7.2 {a file and its bytes give the same image} -constraints haveImages -body {
+  # The invariant that says the two roads meet: the same picture, embedded
+  # both ways, has to describe itself identically - the format is decided by
+  # the magic bytes either way, and the name never took part in it.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed viaPath $photo
+  $doc image embed viaData -data [::tclpdfTest::readBytes $photo]
+  set a [dict remove [$doc image info viaPath] path]
+  set b [dict remove [$doc image info viaData] path]
+  $doc destroy
+  expr {$a eq $b}
+} -result 1
+
+test image-data-7.3 {draw takes bytes too, and stores them once} -constraints haveImages -body {
+  # With -data there is no file name to key the cache on, so the bytes are the
+  # key. The same picture drawn twice still travels once.
+  set doc [tclpdf new]
+  $doc page add
+  set bytes [::tclpdfTest::readBytes $photo]
+  $doc image draw -data $bytes -at {10 10} -width 30
+  $doc image draw -data $bytes -at {10 60} -width 30
+  set aliases [$doc image names]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength $aliases] [regexp -all {/[A-Za-z0-9]+ Do} $content]
+} -result {1 2}
+
+test image-data-7.4 {two different images do not share an entry} -constraints haveImages -body {
+  # The counter-direction of 7.3: a cache key that collides would silently
+  # draw the first picture in place of the second.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image draw -data [::tclpdfTest::readBytes $photo] -at {10 10} -width 30
+  $doc image draw -data [::tclpdfTest::readBytes $rgba] -at {10 60} -width 30
+  set aliases [$doc image names]
+  $doc destroy
+  llength $aliases
+} -result 2
+
+test image-data-7.7 {the cache key looks at the content, not just the length} -constraints haveImages -body {
+  # Sharpened after a mutation test: a key built from the length alone passed
+  # 7.4, because the two pictures there happen to differ in size. Two images
+  # of the SAME length is the case that separates them - one byte changed deep
+  # in the scan data, which the header parser never looks at.
+  set bytes [::tclpdfTest::readBytes $photo]
+  set altered $bytes
+  set at [expr {[string length $bytes] - 40}]
+  set byte [string index $bytes $at]
+  binary scan $byte cu value
+  set altered [string replace $altered $at $at \
+      [binary format cu [expr {$value ^ 0xFF}]]]
+  set doc [tclpdf new]
+  $doc page add
+  $doc image draw -data $bytes -at {10 10} -width 30
+  $doc image draw -data $altered -at {10 60} -width 30
+  set aliases [$doc image names]
+  $doc destroy
+  list [expr {[string length $bytes] == [string length $altered]}] \
+      [expr {$bytes ne $altered}] [llength $aliases]
+} -result {1 1 2}
+
+test image-data-7.5 {neither a name nor data is refused, not guessed} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set faults {}
+  foreach script {{$doc image embed} {$doc image embed lonely}
+      {$doc image draw -at {10 10}}} {
+    if {![catch [subst -nocommands $script] message]} {
+      lappend faults "$script did not fail"
+    } elseif {![string match {*needs a*} $message]} {
+      lappend faults "$script: $message"
+    }
+  }
+  $doc destroy
+  set faults
+} -result {}
+
+test image-data-7.6 {data that is not an image says so without a file name} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc image embed broken -data "this is not a picture"
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*passed with -data*neither a JPEG nor a PNG*}
+
 cleanupTests
