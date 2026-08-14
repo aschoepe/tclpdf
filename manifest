@@ -1,5 +1,5 @@
-C Say\swhat\sthe\smissing\smark\sattachment\smeans\sfor\sa\scaller\n\n-\sdoc/tclpdf.md:\scomposed\stext\sis\sunaffected,\swhich\scovers\severy\sEuropean\slanguage;\sdecomposed\stext\sand\scombinations\sUnicode\shas\sno\scomposed\sform\sfor\scome\sout\swith\sdisplaced\saccents,\sand\snormalising\sto\sNFC\sbeforehand\sis\sthe\sanswer\n-\sThe\sparagraph\sabove\sit\salready\ssaid\sthe\sfeature\sis\sabsent\s-\swhat\swas\smissing\swas\swho\sit\saffects
-D 2026-08-14T12:17:28.649
+C Add\sthe\sfont\smaterial\sunder\sexamples/assets/fonts\n\n-\sTen\sNoto\sfaces\sand\sa\sbrush\sface\swith\stheir\slicences:\sJapanese,\sTibetan,\stwo\ssymbol\ssets,\semoji,\scuneiform,\sEgyptian\shieroglyphs,\sArabic\sand\smusic\snotation\n-\sRoboto\sand\sBitcount\sProp\sSingle\sas\svariable\sfonts,\sas\sthe\smaterial\sthe\sinstancing\swork\sis\smeasured\sagainst\n-\sRoboto\sand\sBitcount\skeep\stheir\slicence\sfiles\sfrom\searlier;\sthe\sNoto\sones\sand\sPermanent\sMarker\sbring\stheirs\n-\sKNOWN:\sNoto\sColor\sEmoji\sis\sleft\sout\son\spurpose\s-\sits\sglyphs\scarry\sno\soutlines\sand\ssubsetting\skeeps\sneither\sthe\sCOLR\slayers\snor\sthe\spalette,\sso\sit\sembeds\scleanly\sand\sdraws\snothing.\sChinese\sand\sKorean\sare\sleft\sout\sfor\stheir\ssize
+D 2026-08-14T16:20:14.246
 F Makefile.in 304e636831704ff8bad6eefa8d6f3dac0fa1e05ac7b1b5421dddfcb7dc0ada05
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -48,9 +48,20 @@ F examples/05.05-tagged.tcl 471b5ac7d6f8984ae34bbb73f74f7c066096f15e4555439141ee
 F examples/05.06-lists-and-artifacts.tcl 9a1e93c95fa7896b18abc144f42fb165e7cf58082503a2985b6c64bdd325472a
 F examples/assets/README.md f8464639e62fa6c46e4bc25f2b1b725a8b0dd43df0cc54b5366750dfa26d2bd3
 F examples/assets/fonts/BitcountPropSingle-Regular.ttf bb81b2eab3b4444ed70390e4a269e913f86494513911e786a780ef12bef2100b
+F examples/assets/fonts/BitcountPropSingle-Variable.ttf d3be3f9de378898d0cf3df0da560cd567e9b17b20e8727c84f4c6c57c3857762
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
 F examples/assets/fonts/Niconne-Regular.ttf f881130fea23dab9402b02b3b15a44a59808a1d34310a8fb6ad8a10249e1b9bb
+F examples/assets/fonts/NotoEmoji-Variable.ttf 11816b536e3ca040d38b795216c424ad32f623690e18d8bb77f8b2c7df8d2b3b
+F examples/assets/fonts/NotoMusic-Regular.ttf 56b872e28508b135f16d20505857cb12ee453e563a9248436a72f455b1b38966
+F examples/assets/fonts/NotoNaskhArabic-Variable.ttf 1686824efaa32188e4055f524f7a212737a4fc90d6366c72ce922bff92207baa
+F examples/assets/fonts/NotoSans-Variable.ttf 4357fcc4c6b9c20aa8800c0957a78e644d315885ecbbdef8d7004ce30abec0db
+F examples/assets/fonts/NotoSansCuneiform-Regular.ttf 445e6215c577fdca258576f91cfe46170e9213b42555f67d7683b79bc31e2652
+F examples/assets/fonts/NotoSansEgyptianHieroglyphs-Regular.ttf efe6bae01a3196ea55d0014fa7946d2c942e8373e8247569ac418fef5968c0aa
+F examples/assets/fonts/NotoSansJP-Regular.ttf e3c97754f0f1fbf007b55b1e461d6fa210f84b24518a3ef9e9d3ccccce63597f
+F examples/assets/fonts/NotoSansSymbols-Variable.ttf fa4cb46c367393c34eb89809212dfa899c69b2806d12800a2061333485630773
+F examples/assets/fonts/NotoSansSymbols2-Regular.ttf c53e32b86146ddc2b7e6a65601f4b808df5ae7b7fdba221eed7221454beef497
+F examples/assets/fonts/NotoSerifTibetan-Variable.ttf 69811e396ad5e96b5cde650ffee27c0ac089cd066efd95e42ad599c9117cb918
 F examples/assets/fonts/OCRA.afm 61112f2d643a2d34ad1c8f69722cf7dee884afc7cc4673efeb4278c7d74edf96
 F examples/assets/fonts/OCRA.otf 21e6a2db6ef8ec7873e44975f42d1f6c3fd5ceb1b214699b8bcc889344e17d86
 F examples/assets/fonts/OCRA.pfb 831750298d81714fd8803696599998834d987f02838f2c03265076ebbed31779
@@ -59,7 +70,9 @@ F examples/assets/fonts/OCRB.afm bbd4a3db461038b4cd06c1854e01d5a6be03f725f6f4b77
 F examples/assets/fonts/OCRB.otf 1787297c9b0b0cadaaf79888d3cf38081e41e89cdba1e1c0ff7d825aab7780b1
 F examples/assets/fonts/OCRB.pfb aac333297c57d1a8e678d1e77b9a485994d1eba30e84c57f0c52eb0cc9d2e221
 F examples/assets/fonts/OCRB.ttf d524c2aee5d9ed7ff2896cbdeadb3bfbbbc18963210e4f808ed60c7cdcc4d993
+F examples/assets/fonts/PermanentMarker-Regular.ttf c328b8a17c63103ec584625b4ef19a27c52f1a957ed309a8881cd8a152b59a20
 F examples/assets/fonts/Roboto-Regular.ttf 08fc6a1844d2f79437902056795a4d3201e01ce5c77f62f7b467b16a71e24924
+F examples/assets/fonts/Roboto-Variable.ttf 2c4491c8d287d43fa747680382ae6e6e1a8898938e82455a138756bb9c7dc433
 F examples/assets/fonts/adobe-afm/Courier-Bold.afm b1673a3770494034b259fac1b558ae1976aa75df03b5430ff8ecd395842f4c3c
 F examples/assets/fonts/adobe-afm/Courier-BoldOblique.afm e258caf9109070c13b06a22a17dd550a9e5c482971b64101b95cb7493e69b8a1
 F examples/assets/fonts/adobe-afm/Courier-Oblique.afm 94630cce3d7d5997a5b74946f5cb8823902c1845a357ea5a78b2844ac314a88c
@@ -81,7 +94,18 @@ F examples/assets/fonts/licenses/BitcountPropSingle-OFL.txt 31c112645f019f507aa3
 F examples/assets/fonts/licenses/DejaVu-AUTHORS.txt 1cc6e63020d517508bdb9b1132a720533a4bda93492fb93ed501645331941d11
 F examples/assets/fonts/licenses/DejaVu-LICENSE.txt 477eb9a144d38fc57d928e761702f37eaf838f8c29d3ff64957f061d8dc8fc2f
 F examples/assets/fonts/licenses/Niconne-OFL.txt 29e05c8a3a46b40e7efe437acd34544d87642c8154de99c3dcc3e95cd2a23244
+F examples/assets/fonts/licenses/NotoEmoji-OFL.txt 539c0d216afcebc527c8845bd316c77f4671f6aa64c3f779fafe31b547e8f35c
+F examples/assets/fonts/licenses/NotoMusic-OFL.txt a4d16a09b3645851a16950e825b8f184cdf093599cd60bd6c5da981ca6c92fd7
+F examples/assets/fonts/licenses/NotoNaskhArabic-OFL.txt 0999b5f55ef244fc9471e45ec31be58c179e1804d178453691f259d2970f19d5
+F examples/assets/fonts/licenses/NotoSans-OFL.txt 983e82e33f0d0f45b06ea119b15466c971f8b3db9579a49bc8ff32c87fe0721a
+F examples/assets/fonts/licenses/NotoSansCuneiform-OFL.txt 57486b7b3322db5ae81338fdaa4cd9789516466cd4e617d99fc6a0cab3ee04c7
+F examples/assets/fonts/licenses/NotoSansEgyptianHieroglyphs-OFL.txt c0dfece9e2429440a1c0dab99e2f216fbe60e4e86fe7019cd29b6fb6efd3dcf5
+F examples/assets/fonts/licenses/NotoSansJP-OFL.txt 76a29a179147683a4d8ed636a166a4f61af139891d09445f99f67144c51408a4
+F examples/assets/fonts/licenses/NotoSansSymbols-OFL.txt 1f40fc67785224cda4ef396a861f25589bb7caebd08c79fe1ef6ecbca5035728
+F examples/assets/fonts/licenses/NotoSansSymbols2-OFL.txt 1f40fc67785224cda4ef396a861f25589bb7caebd08c79fe1ef6ecbca5035728
+F examples/assets/fonts/licenses/NotoSerifTibetan-OFL.txt 00887dc1a1de3bcb6a0a53f6850329aefbd8504d870353229dd9e0767c02965f
 F examples/assets/fonts/licenses/OCR-LICENSE.txt 4b8d6c93a7495f0d4abdf8377804b1bd5828cbdb6c155b78a108d570b08ade5e
+F examples/assets/fonts/licenses/PermanentMarker-LICENSE.txt dab9cd0c5ffdfc7bedf0b4a387c3c8d418e67d3e9dd38cd5bf6465390d1220a1
 F examples/assets/fonts/licenses/Roboto-OFL.txt ce62f9aa575d4ecf579557e3e51530cdab7f5970b960b0b6563ef2f85b9d29c1
 F examples/assets/fonts/urw-core35-fonts/COPYING 0fa7c94b651347aebbd70f3a4497025fd8fc2a99c02aeec18645257118282de8
 F examples/assets/fonts/urw-core35-fonts/D050000L.afm b0f4e2d2570d804d562bfa0dec61a1d234fce0592d2641e933c276d035594aa0
@@ -261,8 +285,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl 04ce02c4422f2cc43d24a60a50a666d13bd75b42944a2ec9a818a8b8da4a6bf9
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 43caddce6bcdd3b5bb5610b5f52263e53150c2b8abfcf966759cbb34ea2c4eb3
-R a7510acf2637de86206b5d94c7471d94
+P 77ad5fcbfc9194bbedeb46c4c0d66dc1778a91983c268e5e12d1af67278a8c25
+R 013eea5acd28d6421f38a5cf02274269
 U alex
-Z b13d37ebc760e41d0e4e7c530b731015
+Z 9cbddd9cf0aef4aa55a275bfa08e24f7
 # Remove this line to create a well-formed Fossil manifest.
