@@ -1,5 +1,5 @@
-C Draw\sbarcodes\sthrough\stzint,\sand\sadd\sPDF417\n\n-\sexamples/03.04-barcodes.tcl:\snew\s-\sCode\s128,\sEAN-13,\sQR,\sDataMatrix,\sPDF417\sand\sa\sGiroCode,\seach\sfrom\smarkup\sin\sa\svariable\srather\sthan\sa\sfile;\sPDF417\sis\ssized\sby\swidth\sbecause\sa\sstacked\ssymbol\scomes\sout\sroughly\s3.6\sto\s1.\stclpdf\scarries\sno\sencoder\sand\sthe\sexample\sskips\sitself\swhere\stzint\sis\sabsent,\sso\smake\sexamples\sis\sunaffected\n-\stests/barcode.test:\snew\s-\sas\smany\smodules\sleave\sas\sarrived\sfor\sa\slinear,\sa\smatrix\sand\sa\sstacked\ssymbol,\sa\ssymbol\sof\scircles\skeeps\sits\scurves,\san\sEAN\skeeps\sits\sdigits\sas\stext,\sand\sthe\stwo\sencoder\straps:\sstatus\s1\sto\s4\sis\sa\swarning\swith\sa\susable\ssymbol,\sand\sfrom\s5\sup\sthe\starget\svariable\sstill\sholds\sthe\sprevious\sone\n-\sdoc/tclpdf.md:\sa\sBarcodes\ssection\sunder\sSVG\s-\stzint\sis\snot\sa\sdependency,\sthe\sstatus\sis\sthree-valued,\sand\san\sEPC\sdataset\sneeds\s-eci\s26\sto\sbe\sencoded\sas\sit\ssays\sit\sis\n-\sexamples/01.10-hyphen-and-leader.tcl:\sheadings\sand\sexplanations\sin\sEnglish\slike\severy\sother\sexample.\sThe\sbroken\ssentence\sstays\sGerman\s-\sit\sis\swhat\sthe\spage\sdemonstrates,\sand\sthe\sintroduction\snow\ssays\sso\n-\sKNOWN:\snothing\shere\sdecodes.\sNo\sbarcode\sreader\sis\sinstalled\son\sthis\smachine,\sso\sno\stest\sclaims\sa\ssymbol\sscans\s-\swhat\sthey\sclaim\sis\sthat\sas\smany\sshapes\scome\sout\sas\swent\sin
-D 2026-08-14T05:34:50.431
+C Carry\sOCR\sA\sand\sOCR\sB\sfor\sthe\sclear\stext\sline\sunder\sa\sbarcode\n\n-\sexamples/assets/fonts:\sOCRA\sand\sOCRB\sin\sfour\sforms\seach\s-\sTrueType,\sOpenType,\sType\s1\sand\sthe\smetrics.\sThe\sTrueType\sones\sembed\sand\spass\sPDF/A-3u;\sthe\sdigits\sunder\san\sEAN\scan\snow\sbe\sset\sin\sthe\sface\sthe\sstandard\sasks\sfor\sinstead\sof\sin\sHelvetica\n-\sexamples/assets/fonts/licenses/OCR-LICENSE.txt:\snew\s-\sthe\sthree\slicence\sstatements\squoted\sin\sfull\srather\sthan\ssummarised,\sbecause\seach\sauthor\sis\scareful\sabout\swhat\sthey\sdo\sand\sdo\snot\ssay,\sand\sa\sparaphrase\swould\sturn\sthat\sinto\sa\spromise.\sIt\salso\slists\swhat\swas\sleft\sout\sof\sthe\stwo\ssource\spackages\sand\swhy\n-\sKNOWN:\sonly\sthe\sTrueType\sform\scan\sbe\sembedded\stoday.\sThe\sOpenType\sones\sare\sCFF,\sthe\sType\s1\sones\sare\snot\sread\sat\sall\s-\sboth\sare\skept\sas\sthe\smaterial\sa\sreader\swould\sbe\sbuilt\sand\stested\sagainst
+D 2026-08-14T08:56:12.328
 F Makefile.in 304e636831704ff8bad6eefa8d6f3dac0fa1e05ac7b1b5421dddfcb7dc0ada05
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -48,6 +48,14 @@ F examples/assets/fonts/BitcountPropSingle-Regular.ttf bb81b2eab3b4444ed70390e4a
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
 F examples/assets/fonts/Niconne-Regular.ttf f881130fea23dab9402b02b3b15a44a59808a1d34310a8fb6ad8a10249e1b9bb
+F examples/assets/fonts/OCRA.afm 61112f2d643a2d34ad1c8f69722cf7dee884afc7cc4673efeb4278c7d74edf96
+F examples/assets/fonts/OCRA.otf 21e6a2db6ef8ec7873e44975f42d1f6c3fd5ceb1b214699b8bcc889344e17d86
+F examples/assets/fonts/OCRA.pfb 831750298d81714fd8803696599998834d987f02838f2c03265076ebbed31779
+F examples/assets/fonts/OCRA.ttf 3ef20be822710f1bc3684506827934b27233577a6c7c535b31dc26c7e4f2ed2a
+F examples/assets/fonts/OCRB.afm bbd4a3db461038b4cd06c1854e01d5a6be03f725f6f4b77ae10f3c4e85dada50
+F examples/assets/fonts/OCRB.otf 1787297c9b0b0cadaaf79888d3cf38081e41e89cdba1e1c0ff7d825aab7780b1
+F examples/assets/fonts/OCRB.pfb aac333297c57d1a8e678d1e77b9a485994d1eba30e84c57f0c52eb0cc9d2e221
+F examples/assets/fonts/OCRB.ttf d524c2aee5d9ed7ff2896cbdeadb3bfbbbc18963210e4f808ed60c7cdcc4d993
 F examples/assets/fonts/Roboto-Regular.ttf 08fc6a1844d2f79437902056795a4d3201e01ce5c77f62f7b467b16a71e24924
 F examples/assets/fonts/adobe-afm/Courier-Bold.afm b1673a3770494034b259fac1b558ae1976aa75df03b5430ff8ecd395842f4c3c
 F examples/assets/fonts/adobe-afm/Courier-BoldOblique.afm e258caf9109070c13b06a22a17dd550a9e5c482971b64101b95cb7493e69b8a1
@@ -70,6 +78,7 @@ F examples/assets/fonts/licenses/BitcountPropSingle-OFL.txt 31c112645f019f507aa3
 F examples/assets/fonts/licenses/DejaVu-AUTHORS.txt 1cc6e63020d517508bdb9b1132a720533a4bda93492fb93ed501645331941d11
 F examples/assets/fonts/licenses/DejaVu-LICENSE.txt 477eb9a144d38fc57d928e761702f37eaf838f8c29d3ff64957f061d8dc8fc2f
 F examples/assets/fonts/licenses/Niconne-OFL.txt 29e05c8a3a46b40e7efe437acd34544d87642c8154de99c3dcc3e95cd2a23244
+F examples/assets/fonts/licenses/OCR-LICENSE.txt 4b8d6c93a7495f0d4abdf8377804b1bd5828cbdb6c155b78a108d570b08ade5e
 F examples/assets/fonts/licenses/Roboto-OFL.txt ce62f9aa575d4ecf579557e3e51530cdab7f5970b960b0b6563ef2f85b9d29c1
 F examples/assets/fonts/urw-core35-fonts/COPYING 0fa7c94b651347aebbd70f3a4497025fd8fc2a99c02aeec18645257118282de8
 F examples/assets/fonts/urw-core35-fonts/D050000L.otf e1065575a63246d43fb7b896d22b950b2db47d46e58d7a9d0319880eee798e99
@@ -219,8 +228,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl 04ce02c4422f2cc43d24a60a50a666d13bd75b42944a2ec9a818a8b8da4a6bf9
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 6b01065f687cb2d18551473eccf362ba06e71d2f5191a47c031988feb9e51eaf
-R c489341e6e21b7b2cb2af81f2e604ddf
+P b0c904f977a07bd6e0c0865816724e03f339f3e7f5571aa7e6b41dcc23523f81
+R 696c1b5f56b257c200f2291ba7efcf7f
 U alex
-Z e869c8cf06cdb6aa1395782f63559ffa
+Z 4f232877ec01d350c62d1086ad2fe822
 # Remove this line to create a well-formed Fossil manifest.

@@ -1,0 +1,77 @@
+OCR A and OCR B — origin and licence
+====================================
+
+The files OCRA*, OCRB* in this directory come from the OCR package of the
+Tsukurimashou Project, version 0.3.1 (2021-03-30), converted to MetaType1 by
+Matthew Skala from earlier Metafont sources. Downloaded from
+
+    https://tsukurimashou.org/ocr.php.en
+
+That page states:
+
+    They are available for free use, including in commercial applications;
+    my own contributions are public domain, and others have licensed their
+    copyright claims.
+
+Three statements make up the position. They are quoted in full rather than
+summarised, because each author is careful about what they do and do not say.
+
+1. OCR B — Norbert Schwarz, Ruhr-Universitaet Bochum, from the README of his
+   Metafont distribution:
+
+     2. To my knowledge, the original typeface for OCR-B was developed by
+        Adrian Frutiger.  In Germany there even exists an industrial
+        standard - DIN ????? - that describes the typefaces.  Based on such
+        material the input has been developed.  I cannot speak to the legal
+        consequences of these.
+        
+        As far as the digitization in METAFONT input which I have
+        developed, you may freely use, modify, and/or distribute any of
+        these files or the resulting fonts, without limitation.  A previous
+        release of ocr-b only granted rights for non-commercial use; that
+        restriction is now lifted.
+
+2. OCR A and OCR B — Matthew Skala, from ocr.tex of the package above:
+
+   I frequently receive email asking me to "confirm" or "clarify" the
+   copyright status of the OCR B fonts. Usually, the authors of such
+   messages give no indication that they have read this documentation
+   file. I make no copyright claim on these fonts myself. I do not
+   believe anyone else makes a copyright claim that would conflict with
+   the use of these fonts in a commercial project, but I cannot speak
+   for any party other than myself. I cannot give any kind of binding
+   legal opinion on the status of these fonts, and I don't want to open
+   myself to liability by giving permission to use something I don't
+   own. This documentation file already explains the origin of the fonts
+   clearly, and contains pointers to other relevant documents. If you
+   require authoritative legal advice about your proposed use of these
+   fonts, then you must retain a lawyer. I will no longer answer email
+   queries on this subject.
+
+3. The shapes themselves are standards: OCR B goes back to Adrian Frutiger
+   and a DIN standard, OCR A to ANSI X3.17-1977. Neither Schwarz nor Skala
+   claims to speak for those, and both say so in the text above. What is
+   released here is the digitisation.
+
+Not included, and why:
+
+  - the Metafont and METAPOST sources, the FontForge scripts and the build
+    system - the fonts here are the built result;
+  - the five OCR B variants OCRBS, OCRBL, OCRBF, OCRBE and OCRBX (sharp
+    corners, slanted, outline, negative, negative with sharp corners). They
+    are not alternative sizes of the standard but demonstrations: Schwarz
+    calls OCRB10 "the main driver file for the original OCR-B font, all other
+    files contain variant for illustrating purposes", and Skala writes that
+    "they aren't suitable for actual OCR use, and there are some problems in
+    the outlines". All six carry the same advance width and the same glyph
+    count and differ only in appearance;
+  - John Sauter's separate OCR A, whose PostScript name is stored under
+    platform 0 and which no longer matches the one kept here. Sauter himself
+    recommends this package in his ReadMe.
+
+Each face is here in three forms: TrueType (.ttf), OpenType (.otf) and Type 1
+(.pfb), with the metrics (.afm) beside them. tclpdf embeds the TrueType ones
+today; the other two are kept as the material a future reader would be built
+and tested against.
+
+Everything left out remains available from the two original distributions.
