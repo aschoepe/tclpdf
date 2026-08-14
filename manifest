@@ -1,5 +1,5 @@
-C Document\ssvg\s-data,\sand\sthe\soptions\sthe\ssignature\swas\smissing\n\n-\sdoc/tclpdf.md:\ssvg\stakes\sits\smarkup\sfrom\sa\svariable\sas\swell\sas\sfrom\sa\sfile,\sand\s-size,\s-scale\sand\s-opacity\sexisted\swithout\sbeing\swritten\sdown;\ssvg\ssize\stakes\sa\sfile\sname\sonly,\swhich\sthe\sentry\snow\ssays
-D 2026-08-13T23:20:32.639
+C Draw\sbarcodes\sthrough\stzint,\sand\sadd\sPDF417\n\n-\sexamples/03.04-barcodes.tcl:\snew\s-\sCode\s128,\sEAN-13,\sQR,\sDataMatrix,\sPDF417\sand\sa\sGiroCode,\seach\sfrom\smarkup\sin\sa\svariable\srather\sthan\sa\sfile;\sPDF417\sis\ssized\sby\swidth\sbecause\sa\sstacked\ssymbol\scomes\sout\sroughly\s3.6\sto\s1.\stclpdf\scarries\sno\sencoder\sand\sthe\sexample\sskips\sitself\swhere\stzint\sis\sabsent,\sso\smake\sexamples\sis\sunaffected\n-\stests/barcode.test:\snew\s-\sas\smany\smodules\sleave\sas\sarrived\sfor\sa\slinear,\sa\smatrix\sand\sa\sstacked\ssymbol,\sa\ssymbol\sof\scircles\skeeps\sits\scurves,\san\sEAN\skeeps\sits\sdigits\sas\stext,\sand\sthe\stwo\sencoder\straps:\sstatus\s1\sto\s4\sis\sa\swarning\swith\sa\susable\ssymbol,\sand\sfrom\s5\sup\sthe\starget\svariable\sstill\sholds\sthe\sprevious\sone\n-\sdoc/tclpdf.md:\sa\sBarcodes\ssection\sunder\sSVG\s-\stzint\sis\snot\sa\sdependency,\sthe\sstatus\sis\sthree-valued,\sand\san\sEPC\sdataset\sneeds\s-eci\s26\sto\sbe\sencoded\sas\sit\ssays\sit\sis\n-\sexamples/01.10-hyphen-and-leader.tcl:\sheadings\sand\sexplanations\sin\sEnglish\slike\severy\sother\sexample.\sThe\sbroken\ssentence\sstays\sGerman\s-\sit\sis\swhat\sthe\spage\sdemonstrates,\sand\sthe\sintroduction\snow\ssays\sso\n-\sKNOWN:\snothing\shere\sdecodes.\sNo\sbarcode\sreader\sis\sinstalled\son\sthis\smachine,\sso\sno\stest\sclaims\sa\ssymbol\sscans\s-\swhat\sthey\sclaim\sis\sthat\sas\smany\sshapes\scome\sout\sas\swent\sin
+D 2026-08-14T05:34:50.431
 F Makefile.in 304e636831704ff8bad6eefa8d6f3dac0fa1e05ac7b1b5421dddfcb7dc0ada05
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -11,7 +11,7 @@ F configure c399f34dc6d2389cae665ca556e094d3c094b866db06b88eafcc056ea15f98ff x
 F configure.ac 6d1ccce90266d75588d732a57080edd6316fd999bca07195571c6ec75f571099
 F doc/PLUGINS.md 5d5e45709f4f88fab0208ff16d98ef0d060f49ee57b60f5befd1404976d19144
 F doc/tclpdf-default.html 501e4a9e055ec2eba462c40b5882dfbd6b84a636938036898ff968a4c2381cca
-F doc/tclpdf.md b787cfde54a8d0f43ae7242be252d969a96878cde7d050706be0d3a0d7414126
+F doc/tclpdf.md 646d1d1f46a7d23cf30e083852769daf5bde8c9165d7e1cb38b79e4075522ce7
 F document.tcl e8abbedb244d0b2f588307cc4b9578437f21242a9c2bdccb475d126ff4e8d17c
 F event.tcl b738afa9f5fb7a1697af862e9dc0413ee1c5064fab9bdc971a1e1ea2a7a6ef50
 F examples/01.01-shapes.tcl 5720fbddf805f8577e2bf9c385b88a065fd3323ddd1f7abb22b2429cc34c7991
@@ -23,7 +23,7 @@ F examples/01.06-stamp.tcl ae4fd8979c09359be757a95707ec682f763b8c9a61dc05c5f9d36
 F examples/01.07-extension.tcl 39d5ce9228f434641bbeac1b9236ffa787af61425b06730d70540d3b6b76cdb3
 F examples/01.08-textflow.tcl 586bce80720ac961c7e7a5930e7995c1cc5c17065dec3828cb66099f12d33ce5
 F examples/01.09-text-on-path.tcl 22a28731b193947a15814cc4ccb3f3d8864e8dfa5e3b0d8f3677126cacb54ca7
-F examples/01.10-hyphen-and-leader.tcl 0a6799b3cc507dd500df8ce5a914dbc995b6cb270c8e0aa40695ee524e08e8e4
+F examples/01.10-hyphen-and-leader.tcl 1d018659458fd8fda6f6aec6738960f88eb7f39b852480dc049a3839efb2b5c6
 F examples/02.01-embedding.tcl 74c94791162de3b5833124d160797c0317cddb1f23810b82e095a45b699d508d
 F examples/02.02-languages.tcl 6615bd180f75b2fc514957e240910e83628ef4f998226a25c08e3e924d119d6f
 F examples/02.03-font-families.tcl 98fd82d7d70b54a506585f52f0391271ca69b80f2de865621332164d3d1c7835
@@ -33,6 +33,7 @@ F examples/02.06-ligatures.tcl 6e290015095ca94dd5cb2de1db6d5a28a372cd6b66bf20d1b
 F examples/03.01-images.tcl 48e39ef8bba89ea0fe19b32e694a41752f6ceeb8d6318836a94e15932ef82e84
 F examples/03.02-gradients.tcl c3ad86d4a2ba481e42053a4857f89324afa769e8a4bf5ea000dbd5c9c0c4f7d5
 F examples/03.03-svg.tcl c8c650bd30aa906d9de1ae61c3d1c9a05b668f06447fd8210e4ef6e0690b1c91
+F examples/03.04-barcodes.tcl a7ee2008df7699435536440deeca71005875eeb59be8bb076a21816c7d1638f2
 F examples/04.01-table-basics.tcl 9d5e56b365ea042be47bc18afd4a0dbcc476d6075addd14f5aefa1083a1f96a6
 F examples/04.02-table-paging.tcl 0e84927fd3ac2fae1cab555c7d35a4a7a9cc43aca2e1048ba50c4380158a5e73
 F examples/04.03-table-spans.tcl e820a910bbebca980b00d3e785b491d7b12ce9ba15b90bc16075093b0d0f52ca
@@ -172,6 +173,7 @@ F tclpdf.tcl 61d63ea7df4f40dedfa03267789c0e11cf16eb1864e8b2161a7d27069341f9fc
 F tests/afm.test 1f9d42cfd702034ee2eb7a79ceae02b286afecb44809d6470769c44b0d068b35
 F tests/all.tcl cb017ba46e4e01e652c4c7b96cd9802d826e0a3c68da999419295bf5fd47efde
 F tests/attach.test 570fec201532862ec41d9d58aa9829d4d154e87946bb1982716250163e70833d
+F tests/barcode.test 6864fa9e33ce7259155d0ed3ac6f4a30e248627987ff6338a771c5215af4c48f
 F tests/color.test 1be94d35135c4a3ecd7684e9e753ee165c1d09e6fb102237be3889387817e506
 F tests/document.test 8f94f60b394ae5fb1bb800b39df8e4ec0670b92d8c8145e5e08ac57ca1c2fd49
 F tests/event.test 5b86a3060ec2eb308fb90dd70c6d1530335a1c64d149845285c116d0de01b89c
@@ -217,8 +219,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl 04ce02c4422f2cc43d24a60a50a666d13bd75b42944a2ec9a818a8b8da4a6bf9
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P 2431c117e1a2878794d64de71beab4439e79ed822b2006b97422a6df0ddf0195
-R 07c4f53196f249d55cd6cc0f5918a2c3
+P 6b01065f687cb2d18551473eccf362ba06e71d2f5191a47c031988feb9e51eaf
+R c489341e6e21b7b2cb2af81f2e604ddf
 U alex
-Z 65e78dad4d1483c1139bad4c33bac21c
+Z e869c8cf06cdb6aa1395782f63559ffa
 # Remove this line to create a well-formed Fossil manifest.

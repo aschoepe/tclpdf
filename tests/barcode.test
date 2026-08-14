@@ -1,0 +1,149 @@
+# barcode.test --
+#
+# Barcodes reach the page through SVG, and this is the tclpdf half of that:
+# does everything the encoder produced arrive as PDF operators.
+#
+# tclpdf carries no barcode code, so nothing here tests an encoder. What is at
+# stake is the handover - a symbol that loses a module or a ring is unreadable
+# while looking perfectly fine, and neither qpdf nor a validator would say a
+# word about it.
+#
+# WHAT THESE TESTS CANNOT DO: decode. No barcode reader is installed on this
+# machine (zbarimg, zxing and dmtxread are all absent, measured), so "the
+# symbol scans" is nowhere claimed below. What is claimed is that as many
+# shapes come out as went in.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::svg
+source [file join [file dirname [info script]] helper.tcl]
+
+# tzint is a C extension and platform bound: nothing in tclpdf depends on it,
+# and neither does this file - it skips instead.
+testConstraint haveTzint [expr {![catch {package require tzint 1.3-}]}]
+
+proc barcodeSvg {data args} {
+  set rc [::tzint::Encode svg markup $data {*}$args -stat info]
+  if {$rc >= 5} {
+    error "tzint: [dict get $info error]"
+  }
+  return $markup
+}
+
+# How many modules the markup asks for, and how many the stream draws.
+#
+# tzint puts the whole symbol into ONE path whose d attribute holds a subpath
+# per module - so the count is the number of movetos on each side, not the
+# number of elements. Counting <rect> was the first attempt here and it
+# measured nothing: there is exactly one, the background, and 0 == 0 passed.
+proc barcodeShapes {markup} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data $markup -at {20 20} -width 60
+  set content [::tclpdfTest::content $doc]
+  set skipped [$doc svg info]
+  $doc destroy
+  regexp {<path[^>]*\sd="([^"]*)"} $markup -> d
+  return [list \
+      [llength [regexp -all -inline {M} $d]] \
+      [llength [regexp -all -inline { m\n} $content]] \
+      $skipped]
+}
+
+test barcode-1.1 {every bar of a linear symbol arrives} -constraints haveTzint -body {
+  # One lost bar is one wrong character, and the symbol still looks like a
+  # barcode. Nothing else in the chain would notice.
+  lassign [barcodeShapes [barcodeSvg "tclpdf 1.0" -barcode code128]] asked drawn skipped
+  list [expr {$asked > 10}] [expr {$drawn == $asked}] $skipped
+} -result {1 1 {}}
+
+test barcode-1.2 {every module of a matrix symbol arrives} -constraints haveTzint -body {
+  lassign [barcodeShapes [barcodeSvg "https://example.org" -barcode qrcode]] \
+      asked drawn skipped
+  list [expr {$asked > 50}] [expr {$drawn == $asked}] $skipped
+} -result {1 1 {}}
+
+test barcode-1.2a {a stacked symbol arrives complete} -constraints haveTzint -body {
+  # PDF417 is neither a row of bars nor a square matrix but rows of codewords,
+  # and it comes out wide and flat - roughly 3.6 to 1. A row lost in the
+  # middle is invisible to the eye and fatal to a reader.
+  lassign [barcodeShapes [barcodeSvg "tclpdf 1.0 - Ticket 4711" -barcode pdf417]] \
+      asked drawn skipped
+  list [expr {$asked > 100}] [expr {$drawn == $asked}] $skipped
+} -result {1 1 {}}
+
+test barcode-1.3 {a symbol made of circles is not turned into a raster} -constraints haveTzint -body {
+  # MaxiCode is hexagons around concentric rings. Through the bitmap route it
+  # would come out as squares - which is why the SVG route is the one taken.
+  set markup [barcodeSvg "Tcl" -barcode maxicode]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data $markup -at {20 20} -width 40
+  set content [::tclpdfTest::content $doc]
+  set skipped [$doc svg info]
+  $doc destroy
+  # Curves in the stream, and nothing reported as undrawn.
+  list [expr {[llength [regexp -all -inline { c\n} $content]] > 0}] $skipped
+} -result {1 {}}
+
+test barcode-1.4 {the clear text line stays text} -constraints haveTzint -body {
+  # The digits under an EAN are characters in the PDF, not part of the
+  # picture: they can be copied out, and a reader can speak them.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data [barcodeSvg "123456789012" -barcode ean13] -at {20 20} -width 60
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set shown {}
+  foreach {- literal} [regexp -all -inline {\(((?:[^()\\]|\\.)*)\)\s*Tj} $content] {
+    lappend shown $literal
+  }
+  # EAN-13 groups them 1 + 6 + 6.
+  set shown
+} -result {1 234567 890128}
+
+test barcode-1.5 {-notext leaves the line to the document} -constraints haveTzint -body {
+  # What a PDF/A document has to do: the standard fourteen are not embedded,
+  # so the line has to come from an embedded face instead - see the example.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data [barcodeSvg "123456789012" -barcode ean13 -notext 1] \
+      -at {20 20} -width 60
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  llength [regexp -all -inline {Tj} $content]
+} -result 0
+
+test barcode-1.6 {a warning still yields a usable symbol} -constraints haveTzint -body {
+  # Status 1 to 4 is a warning WITH output, and a Euro sign in a QR code is
+  # enough to raise one. Code that tests for "not zero" throws the symbol
+  # away - which is why the example has one place that knows the rule.
+  set markup {}
+  set rc [::tzint::Encode svg markup "Betrag 12,34 €" -barcode qrcode -stat info]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data $markup -at {20 20} -width 40
+  set skipped [$doc svg info]
+  $doc destroy
+  list [expr {$rc > 0 && $rc < 5}] [expr {[string length $markup] > 0}] $skipped
+} -result {1 1 {}}
+
+test barcode-1.7 {on a real error the target variable is left alone} -constraints haveTzint -body {
+  # The dangerous half of the same rule: from 5 up nothing is produced and the
+  # variable keeps WHAT IT HELD BEFORE. Code that looks at the variable rather
+  # than at the status draws the previous barcode again - measured here, the
+  # same Euro sign is an error for Code 128 rather than a warning.
+  ::tzint::Encode svg markup "harmlos" -barcode code128
+  set first $markup
+  set rc [::tzint::Encode svg markup "Betrag 12,34 €" -barcode code128 -stat info]
+  list [expr {$rc >= 5}] [expr {$markup eq $first}]
+} -result {1 1}
+
+cleanupTests

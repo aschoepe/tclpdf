@@ -382,6 +382,33 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 : The natural size of an SVG file.
 
+### Barcodes
+
+tclpdf has no barcode encoder and does not need one. **tzint**, the Tcl binding for libzint, encodes into SVG, and `svg -data` draws that as real vectors — a MaxiCode keeps its hexagons and rings, and the digits under an EAN stay characters that can be copied. No temporary file is involved: the markup goes from one variable into the drawing.
+
+tzint is **not a dependency**. It is a C extension and therefore platform bound; nothing in tclpdf requires it, and a document that never draws a barcode never notices it.
+
+~~~tcl
+package require tzint
+::tzint::Encode svg markup "1234567890128" -barcode ean13
+$doc svg -data $markup -at {20 20} -height 16 -alt "EAN-13 1234567890128"
+~~~
+
+Two things about the encoder are worth knowing, because neither is obvious and both cost an afternoon:
+
+**The status is three-valued.** `0` means silence, **`1` to `4` are warnings with a perfectly good symbol**, and only `5` and up mean nothing was produced. Code that tests for "not zero" throws usable barcodes away — and on an error the target variable is not cleared but **left as it was**, so code that looks at the variable instead of the status quietly draws the previous barcode again. Both were measured: a Euro sign is a warning for `qrcode` and an error for `code128`.
+
+~~~tcl
+set rc [::tzint::Encode svg markup $data -barcode qrcode -stat info]
+if {$rc >= 5} {
+    error "no barcode: [dict get $info error]"
+}
+~~~
+
+**An EPC-QR (GiroCode) needs `-eci 26`.** The dataset states its own character set in line 3, and without the option the encoder picks one itself — the symbol scans, but its encoding is not the one the data claims. `-security 2` is the error correction level the specification asks for.
+
+For an **archivable** document the clear text line has to come from tclpdf rather than from the encoder: text inside an SVG can only use the fourteen standard faces, and those are not embedded, so `write` refuses the document. Pass `-notext 1` and set the line with `text` in an embedded face.
+
 ## Attachments, links and bookmarks
 
 *doc* **attach** *path* ?**-name** *n*? ?**-mime** *m*? ?**-description** *d*? ?**-relationship** *r*? ?**-date** *d*? ?**-compress** *0*?

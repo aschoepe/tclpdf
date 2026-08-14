@@ -54,19 +54,20 @@ $doc font embed body [file join $assets fonts DejaVuSans.ttf]
 $doc font embed bold [file join $assets fonts DejaVuSans-Bold.ttf]
 
 $doc font -family bold -size 14 -color {0.20 0.30 0.45}
-$doc text "Trennstellen und Fuehrungspunkte" -at {20 25}
+$doc text "Break points and leader rows" -at {20 25}
 
 # -- the same paragraph twice ------------------------------------------------
 
 $doc font -family body -size 9 -color {0.35 0.35 0.35}
-$doc text "Derselbe Absatz in derselben Spalte: links ohne Trennstellen,\
-    rechts mit. Die Zeichenkette ist bis auf die unsichtbaren Marken\
-    identisch." -at {20 33} -width 170
+$doc text "The same paragraph in the same column: without break points on\
+    the left, with them on the right. The two strings are identical but for\
+    the invisible marks. The text itself stays German - the word being\
+    broken is the point of the example." -at {20 33} -width 170
 
-set y 45
+set y 50
 $doc font -family body -size 8 -color {0.45 0.45 0.45}
-$doc text "ohne Trennstellen" -at [list 20 $y]
-$doc text "mit Trennstellen" -at [list 110 $y]
+$doc text "no break points" -at [list 20 $y]
+$doc text "with break points" -at [list 110 $y]
 
 $doc font -family body -size 10 -color black
 $doc text $hard -at [list 20 [expr {$y + 6}]] -width 70 -align justify
@@ -80,16 +81,16 @@ set y 100
 # -- a table of contents -----------------------------------------------------
 
 $doc font -family bold -size 10 -color black
-$doc text "Inhalt" -at [list 20 $y]
+$doc text "Contents" -at [list 20 $y]
 set y [expr {$y + 8}]
 
 $doc font -family body -size 10
 foreach {entry page} {
-    "1. Das Vorhaben" 3
-    "2. Der Aufbau des Dokuments" 11
-    "3. Schriften einbetten" 24
-    "4. Tabellen, die ueber Seiten laufen" 38
-    "5. ZUGFeRD und PDF/A" 57} {
+    "1. What this is for" 3
+    "2. How a document is put together" 11
+    "3. Embedding fonts" 24
+    "4. Tables that run over pages" 38
+    "5. ZUGFeRD and PDF/A" 57} {
   set y [$doc leader $entry $page -at [list 20 $y] -width 120]
 }
 
@@ -97,14 +98,14 @@ foreach {entry page} {
 
 set y [expr {$y + 12}]
 $doc font -family bold -size 10
-$doc text "Rechnungssumme" -at [list 20 $y]
+$doc text "Invoice total" -at [list 20 $y]
 set y [expr {$y + 8}]
 
 $doc font -family body -size 10
 foreach {item amount} {
-    "Beratung, 12 Stunden" "1.428,00"
-    "Reisekosten" "213,60"
-    "Material" "47,90"} {
+    "Consulting, 12 hours" "1,428.00"
+    "Travel" "213.60"
+    "Materials" "47.90"} {
   set y [$doc leader $item $amount -at [list 20 $y] -width 120]
 }
 
@@ -113,22 +114,22 @@ foreach {item amount} {
 $doc line -from [list 20 [expr {$y - 1}]] -to [list 140 [expr {$y - 1}]] \
     -width 0.3
 $doc font -family bold -size 10
-set y [$doc leader "Gesamt" "1.689,50" -at [list 20 [expr {$y + 4}]] \
+set y [$doc leader "Total" "1,689.50" -at [list 20 [expr {$y + 4}]] \
     -width 120 -fill ""]
 
 # -- what the fill may be ----------------------------------------------------
 
 set y [expr {$y + 10}]
 $doc font -family body -size 8 -color {0.45 0.45 0.45}
-$doc text "Das Fuellzeichen ist frei, und -gap haelt den Abstand zu beiden\
-    Enden." -at [list 20 $y] -width 170
+$doc text "The fill string is free to choose, and -gap keeps the distance\
+    to both ends." -at [list 20 $y] -width 170
 set y [expr {$y + 6}]
 
 $doc font -family body -size 10 -color black
 foreach {left right fill gap} {
-    "mit Strichen" "A" "-" 1
-    "mit Punkten und mehr Abstand" "B" "." 4
-    "mit einer Folge" "C" "·· " 2} {
+    "with dashes" "A" "-" 1
+    "with dots and more room" "B" "." 4
+    "with a repeating run" "C" "·· " 2} {
   set y [$doc leader $left $right -at [list 20 $y] -width 120 \
       -fill $fill -gap $gap]
 }
