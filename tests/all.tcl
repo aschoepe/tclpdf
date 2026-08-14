@@ -66,6 +66,8 @@ foreach tclpdfPkg {
     tclpdf::attach
     tclpdf::sfnt
     tclpdf::type1
+    tclpdf::varFont
+    tclpdf::shaping
     tclpdf::subset
     tclpdf::font
     tclpdf::otLayout
