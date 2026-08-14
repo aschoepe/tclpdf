@@ -152,7 +152,7 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       head {} body {} foot {} at {} width {} columns {} theme striped
       style {} headStyle {} bodyStyle {} footStyle {} alternateFill {}
-      repeatHead 1 repeatFoot 0 minRowHeight 0 bottom {} horizontalBreak 0
+      repeatHead 1 repeatFoot 0 minRowHeight 0 bottom {} top {} horizontalBreak 0
       repeatColumns 0 decimal . didParseCell {} willDrawCell {} didDrawCell {}
       didDrawPage {}
     } $arguments "table"]
@@ -161,6 +161,14 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: table needs -head or -body"
     }
     set options [my TableTheme $options]
+
+    # A column takes the two width keys and anything a style takes - which is
+    # what TableStyle lays over the style for that column.
+    foreach column [dict get $options columns] {
+      ::tclpdf::option keys $column \
+          [list width weight {*}[dict keys $::tclpdf::table::defaults]] \
+          "column key" table
+    }
 
     set left [expr {[dict get $options at] eq {} ? 0 :
         [lindex [dict get $options at] 0]}]
@@ -179,6 +187,19 @@ oo::define ::tclpdf::document::document {
       # below the limit, and produced eleven pages for six rows. The left
       # edge says nothing about the bottom one.
       dict set options bottom [expr {$pageHeight - $pageHeight * 0.05}]
+    }
+    if {[dict get $options top] eq {}} {
+      lassign [my page size] -> pageHeight
+      # Where a table CONTINUES on the pages after the first - the counterpart
+      # to -bottom, and derived the same way, from the page height.
+      #
+      # NOT from -at. That is the same mistake -bottom made and the reason for
+      # the note above: -at says where this table starts, which is an answer to
+      # a different question. A table starting at y=240 continued at 240 on
+      # every page after the first, so the further down it began the more pages
+      # it burned - the same 60 rows took 2 pages from the top and 60 from
+      # y=270, one row per page.
+      dict set options top [expr {$pageHeight * 0.05}]
     }
     return $options
   }
@@ -203,16 +224,20 @@ oo::define ::tclpdf::document::document {
     set y $top
     set first 1
     foreach group $groups {
+      # The first column group starts where -at puts it. Every group after it
+      # sits on a page of its own and starts at the continuation position, for
+      # the same reason a continued table does.
+      set groupTop $top
       if {!$first} {
         my page add
         my TableHook didDrawPage $options [dict create page [my page current]]
-        set y $top
+        set groupTop [dict get $options top]
       }
       # The group's own widths, in the group's own order - the slice renumbers
       # the columns, so passing the full list would measure column 0 of the
       # second group against the width of column 0 of the table.
       set y [my TableRun $sections [lmap index $group {lindex $widths $index}] \
-          $group $left $top $options]
+          $group $left $groupTop $options]
       set first 0
     }
     return $y
@@ -227,6 +252,14 @@ oo::define ::tclpdf::document::document {
     }
     set theme [dict get $::tclpdf::table::themes $name]
     set style $::tclpdf::table::defaults
+    set known [dict keys $style]
+    # The four style dictionaries a caller writes, checked here because this is
+    # where they are taken in. A mistyped key in a dictionary is silence, not an
+    # error - it merges in, nothing reads it, and the caller sees the default.
+    foreach option {style headStyle bodyStyle footStyle} {
+      ::tclpdf::option keys [dict get $options $option] $known \
+          "style key" "table -$option"
+    }
     dict for {key value} [dict get $theme style] {
       dict set style $key $value
     }
@@ -308,6 +341,12 @@ oo::define ::tclpdf::document::document {
   # Draw one column group across as many pages as it takes.
   method TableRun {sections widths group left top options} {
     set y $top
+    # Where this table sits on the CURRENT page: the -at position on the first
+    # page, the continuation position on every page after it. Both the rows and
+    # the frame of "-border outer" hang off it - drawing the frame from $top on
+    # a later page would start it where the table began on the first, which for
+    # a table starting at y=240 is 225 mm above its own rows.
+    set pageTop $top
     set head [my TableSlice [dict get $sections head] $group]
     set body [my TableSlice [dict get $sections body] $group]
     set foot [my TableSlice [dict get $sections foot] $group]
@@ -358,10 +397,11 @@ oo::define ::tclpdf::document::document {
         # The frame of "-border outer" belongs to the page, not to the table:
         # every page gets its own, from where the block started down to here.
         # It is drawn before the hook so a running footer can sit below it.
-        my TableDrawFrame [dict get $options style] $widths $left $top $y
+        my TableDrawFrame [dict get $options style] $widths $left $pageTop $y
         my TableHook didDrawPage $options [dict create page [my page current] y $y]
         my page add
-        set y $top
+        set pageTop [dict get $options top]
+        set y $pageTop
         if {[dict get $options repeatHead]} {
           set y [my TableSection $headCells $headHeights $widths $group \
               $left $y $options]
@@ -371,7 +411,7 @@ oo::define ::tclpdf::document::document {
           $left $y $options]
     }
     set y [my TableSection $footCells $footHeights $widths $group $left $y $options]
-    my TableDrawFrame [dict get $options style] $widths $left $top $y
+    my TableDrawFrame [dict get $options style] $widths $left $pageTop $y
     my TableHook didDrawPage $options [dict create page [my page current] y $y]
     return $y
   }
@@ -489,4 +529,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.2
+package provide tclpdf::table 1.3

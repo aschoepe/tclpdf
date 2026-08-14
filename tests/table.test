@@ -495,4 +495,210 @@ test table-10.3 {an unknown border value names the known ones} -body {
   }
 } -returnCodes error -match glob -result {*unknown table border "outside"*outer*}
 
+proc pagingRows {count} {
+  set result {}
+  for {set n 1} {$n <= $count} {incr n} {
+    lappend result [list "row $n" $n]
+  }
+  return $result
+}
+
+test table-12.1 {a continued table starts at the top, not where it began} -body {
+  # The defect this group is here for: -at is where the table STARTS, and it
+  # used to be reinstated after every page break. The further down a table
+  # began, the more pages it burned - the same sixty rows took two pages from
+  # y=20 and sixty from y=270, one row per page.
+  set counts {}
+  foreach start {20 200 270} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc table -at [list 20 $start] -width 100 -body [pagingRows 60]
+    lappend counts [$doc page count]
+    $doc destroy
+  }
+  # Starting lower costs pages on the FIRST page only, never after it.
+  expr {[lindex $counts 2] - [lindex $counts 0] <= 1}
+} -result 1
+
+test table-12.2 {the continuation position does not come from -at} -body {
+  # Same derivation as -bottom, and for the same reason: the start position
+  # answers a different question than the type area does.
+  set firsts {}
+  foreach start {40 200} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc table -at [list 20 $start] -width 100 -body [pagingRows 60]
+    lappend firsts [lindex [::tclpdfTest::starts \
+        [::tclpdfTest::content $doc 1] y] 0]
+    $doc destroy
+  }
+  llength [lsort -unique $firsts]
+} -result 1
+
+test table-12.3 {-top places the continuation} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 200} -width 100 -top 100 -body [pagingRows 60]
+  set first [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc 1] y] 0]
+  $doc destroy
+  # 100 mm down an A4 page is 558.4 pt up from its foot; the first baseline
+  # sits one cell padding below that.
+  expr {$first > 540 && $first < 559}
+} -result 1
+
+test table-12.4 {-at still places the first page} -body {
+  # The other direction: a table that starts halfway down the page has to keep
+  # starting there, or -at would mean nothing.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 200} -width 100 -body [pagingRows 60]
+  set first [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc 0] y] 0]
+  $doc destroy
+  # 200 mm down is 274.9 pt up from the foot.
+  expr {$first > 255 && $first < 276}
+} -result 1
+
+test table-12.5 {the frame of a continued table follows it up the page} -body {
+  # The second half of the defect, and the one no page count would show: the
+  # frame took $top as well, so on page two it started where the table began on
+  # page one - 185 mm above its own rows, and nothing reports that.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 200} -width 100 -theme grid -style {border outer} \
+      -body [pagingRows 60]
+  set frame [lindex [frames [::tclpdfTest::content $doc 1]] 0]
+  $doc destroy
+  # The rectangle's top edge - y plus height in PDF coordinates - is near the
+  # continuation position, not near the 274.9 pt that -at would give.
+  expr {[lindex $frame 1] + [lindex $frame 3] > 780}
+} -result 1
+
+proc wrapRow {valign} {
+  # One cell that wraps, two that do not - the only shape in which vertical
+  # placement is visible at all.
+  set long "A cell of running text long enough to take three lines in this\
+      column, which is what makes the row taller than the single words beside\
+      it and gives valign something to do."
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 170 -theme grid \
+      -body [list [list [list text mark valign $valign] $long "9.90"]] \
+      -columns {{width 22} {} {width 26}}
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  return [lindex $ys 0]
+}
+
+test table-13.1 {valign is read from the cell, not only from its style} -body {
+  # It was documented as a cell key from the start and read from nowhere: a
+  # "valign middle" on a cell was accepted, ignored and never reported. Only a
+  # row with something that wraps shows it, and no example had one.
+  set direct [wrapRow middle]
+  set long "A cell of running text long enough to take three lines in this\
+      column, which is what makes the row taller than the single words beside\
+      it and gives valign something to do."
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 170 -theme grid \
+      -body [list [list [list text mark style {valign middle}] $long "9.90"]] \
+      -columns {{width 22} {} {width 26}}
+  set viaStyle [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc] y] 0]
+  $doc destroy
+  expr {$direct == $viaStyle}
+} -result 1
+
+test table-13.2 {the three vertical placements are distinct and ordered} -body {
+  # In PDF coordinates y counts up from the foot, so top is the largest.
+  set ys {}
+  foreach valign {top middle bottom} {
+    lappend ys [wrapRow $valign]
+  }
+  lassign $ys top middle bottom
+  expr {$top > $middle && $middle > $bottom}
+} -result 1
+
+test table-13.3 {a one-line row looks the same whatever valign says} -body {
+  # The default is top for exactly this reason: nothing wraps, so there is no
+  # spare height to place anything in, and no document changes because of it.
+  set ys {}
+  foreach valign {top middle bottom} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc table -at {20 30} -width 170 -theme grid \
+        -body [list [list [list text mark valign $valign] short "9.90"]] \
+        -columns {{width 22} {} {width 26}}
+    lappend ys [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc] y] 0]
+    $doc destroy
+  }
+  llength [lsort -unique $ys]
+} -result 1
+
+proc cellText {cell} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 170 -body [list [list $cell]]]
+  $doc destroy
+  return [dict get [lindex [dict get $layout body] 0 0] text]
+}
+
+test table-14.1 {a sentence is a cell text, not a dictionary} -body {
+  # In Tcl a string can BE a dictionary. "Medium length text here" is a four
+  # element list whose key "text" holds "here", and the old test - is "text"
+  # one of the keys - accepted it: the cell drew "here" and dropped the rest.
+  # This stood in examples/out/04.03-table-spans.pdf, shipped.
+  cellText "Medium length text here"
+} -result {Medium length text here}
+
+test table-14.2 {a dictionary cell is still read as one} -body {
+  cellText {text "the payment" align right}
+} -result {the payment}
+
+test table-14.3 {an unknown cell key is refused, not swallowed} -body {
+  # valign was the case that started this: written on a cell it was merged in,
+  # read by nobody and never reported. A dictionary merged over defaults
+  # refuses nothing, which is why the check has to be explicit.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30} -width 170 -body {{{text a valigne middle} b}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown cell key "valigne"*valign*}
+
+test table-14.4 {an unknown style key is refused, in an option and on a cell} -body {
+  set errors {}
+  foreach body {{{{text a style {bordr outer}} b}} {{a b}}} option {{} {-style {bordr outer}}} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    catch {$doc table -at {20 30} -width 170 -body $body {*}$option} message
+    $doc destroy
+    lappend errors [string match {*unknown style key "bordr"*} $message]
+  }
+  set errors
+} -result {1 1}
+
+test table-14.5 {an unknown column key is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30} -width 170 -body {{a b}} -columns {{widht 20} {}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown column key "widht"*width weight*}
+
+test table-14.6 {the remaining ambiguity is reported, not guessed} -body {
+  # A plain string that begins with a cell key AND has an even word count is
+  # read as a dictionary - the one case the first-word rule cannot separate.
+  # It says so instead of keeping a fragment, which is the whole point.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc table -at {20 30} -width 170 -body {{"text is set here" b}}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown cell key "set"*}
+
 cleanupTests

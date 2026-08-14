@@ -73,8 +73,28 @@ oo::define ::tclpdf::document::document {
 
   # One cell, from either spelling.
   method TableCell {source} {
-    set cell [dict create text {} colSpan 1 rowSpan 1 align {} style {}]
-    if {[llength $source] > 1 && [dict exists $source text]} {
+    set cell [dict create text {} colSpan 1 rowSpan 1 align {} valign {} style {}]
+    # String or dictionary - and in Tcl a string can BE a dictionary, so this
+    # decides rather than detects. It used to ask "is text one of the keys",
+    # which any plain sentence of even word count can satisfy: "Medium length
+    # text here" is a four element list whose key text holds here, so the cell
+    # drew "here" and dropped the rest. That was in a shipped example.
+    #
+    # The question is now whether the FIRST word is a cell key, which is how a
+    # dictionary is written and how a sentence practically never begins. The
+    # remaining ambiguity is named rather than papered over: a plain string
+    # that starts with one of these words AND has an even word count is read
+    # as a dictionary, and the key check below then says so instead of quietly
+    # keeping a fragment.
+    if {[llength $source] > 1 && [llength $source] % 2 == 0
+        && [lindex $source 0] in [dict keys $cell]} {
+      # Checked before the merge, and only here: from this point on the cell
+      # carries the keys the layout adds to it - row, column, section, height -
+      # which a caller never writes but the didParseCell hook may hand back.
+      # The list is the defaults just built, so it cannot drift from what is
+      # actually read. The cell's style is checked in TableStyle, where the
+      # assembled style says which keys exist.
+      ::tclpdf::option keys $source [dict keys $cell] "cell key" table
       set cell [dict merge $cell $source]
     } else {
       dict set cell text $source
@@ -369,6 +389,12 @@ oo::define ::tclpdf::document::document {
         [dict get $cell row] % 2} {
       dict set style fill [dict get $options alternateFill]
     }
+    # The assembled style is the list of keys that exist - defaults, theme and
+    # section have all been laid in by now, and each of those was checked where
+    # it was taken in. So a cell style is measured against what is actually
+    # read, without this module having to know the table's default list.
+    ::tclpdf::option keys [dict get $cell style] [dict keys $style] \
+        "style key" "a table cell"
     dict for {key value} [dict get $cell style] {
       dict set style $key $value
     }
@@ -379,11 +405,18 @@ oo::define ::tclpdf::document::document {
         ![string match {*[0-9]*} [dict get $cell text]]} {
       dict set style align right
     }
-    if {[dict get $cell align] ne {}} {
-      dict set style align [dict get $cell align]
+    # The cell's own alignment wins over column, theme and section style - it
+    # is the most specific thing said about it. Both keys, not just align:
+    # valign was documented as a cell key from the start and read from nowhere,
+    # so it vanished without a word. It only shows once a row has a cell that
+    # wraps, which is why no example caught it.
+    foreach key {align valign} {
+      if {[dict get $cell $key] ne {}} {
+        dict set style $key [dict get $cell $key]
+      }
     }
     return $style
   }
 }
 
-package provide tclpdf::tableLayout 1.0
+package provide tclpdf::tableLayout 1.1

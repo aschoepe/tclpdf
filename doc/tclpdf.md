@@ -330,11 +330,19 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 *doc* **table -at** *{x y}* **-width** *w* ?**-head** *rows*? **-body** *rows* ?**-foot** *rows*? ?*options*?
 
-: Draws a table and returns the y coordinate below it. A row is a list of cells; a cell is a string, or a dictionary with `text` and any of `colSpan`, `rowSpan`, `align`, `valign` and style keys.
+: Draws a table and returns the y coordinate below it. A row is a list of cells; a cell is a string, or a dictionary with `text` and any of `colSpan`, `rowSpan`, `align`, `valign` and style keys. `align` and `valign` may equally be written inside `style`; on the cell itself they win over column, section and theme.
+
+  A row is as tall as its tallest cell. Where one cell carries running text over several lines and its neighbours hold a single line each, `valign` says where in the row those single lines sit — `top` by default, or `middle` or `bottom`. In a table whose rows are all one line it makes no difference, which is why the default is the one that leaves such a table alone.
+
+  **Unknown keys are an error**, in a cell, in a style, and in a column description — as they already were among the `-options`. A dictionary written over defaults otherwise refuses nothing: a mistyped key is carried along, read by nobody, and the caller sees the default and no message.
+
+  A cell is read as a dictionary when its **first** word is one of the cell keys and it has an even word count; anything else is the cell's text. Tcl draws no line between a string and a dictionary, so this is a decision rather than a detection, and it leaves one ambiguous case: a plain string that begins with `text`, `align`, `colSpan`, `rowSpan`, `valign` or `style` and happens to have an even word count is read as a dictionary. It then names the offending key rather than silently keeping a fragment of the sentence. Write such a string as a cell dictionary — `{text "text is set here"}` — and it is unambiguous.
 
   Column widths come in three kinds, resolved in that order: fixed (`{width 34}`), weighted (`{weight 1}`) and automatic — the rest is shared according to how wide the content actually is.
 
   **-columns** describes the columns, **-theme** picks `striped`, `grid` or `plain`, and **-style**, **-headStyle**, **-bodyStyle** and **-footStyle** set fonts, colours and padding. The `border` style key takes `none`, `all`, `horizontal`, `vertical` or `outer`; `outer` frames the block once per page instead of ruling every cell. **-repeatHead** and **-repeatFoot** carry those sections onto each page. **-horizontalBreak** deals a table too wide for the page over further pages, with **-repeatColumns** keeping the leading columns on each.
+
+  **-top** and **-bottom** are the type area a breaking table works within, which is not the same thing as where it sits. **-at** says where this table starts on its first page; **-top** says where it resumes on every page after that, and **-bottom** how far down it may run. Both default to a margin of five percent of the page height — 14.85 mm and 282.15 mm on A4 — and neither is taken from **-at**, because where a table happens to begin says nothing about where the page ends. Set **-top** to clear a running head, and **-bottom** to clear a footer.
 
   `-align decimal` lines the decimal separators of a column up under each other, measured across head, body and foot together; **-decimal** picks the separator, `.` by default. Cells that are not numbers are set flush right.
 

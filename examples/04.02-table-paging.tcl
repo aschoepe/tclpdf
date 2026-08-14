@@ -19,6 +19,12 @@
 #   finalY - the return value - is the y below the table on the page it ended
 #   on. Without it a caller has to count rows to know where to continue.
 #
+#   -at and -top answer two different questions. -at is where THIS table
+#   starts, below the heading; -top is where it resumes on the pages after
+#   the first, and defaults to the same margin -bottom is derived from. Here
+#   it is pushed down to 26 mm to clear the running head, which only appears
+#   from page two onwards.
+#
 #   The four hooks: didParseCell runs before measuring (so a change of font
 #   size still affects the wrap), willDrawCell can suppress a cell,
 #   didDrawCell overlays one, didDrawPage runs once per page.
@@ -73,7 +79,7 @@ foreach row $rows {
     set total [expr {$total + [lindex $row 4]}]
 }
 
-set y [$doc table -at {20 38} -width 170 -theme striped \
+set y [$doc table -at {20 38} -top 26 -width 170 -theme striped \
     -head {{No. Taxon Locality Collected "Mass g"}} \
     -body $rows \
     -foot [list [list [list text "Total mass of all sheets" colSpan 4 align right] \
@@ -93,6 +99,13 @@ set y [$doc table -at {20 38} -width 170 -theme striped \
         $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
         $doc text "Herbarium index" -at {20 287}
         $doc line -from {20 283} -to {190 283} -stroke {0.8 0.8 0.85} -width 0.2
+        # A running head, but only from page two: page one has the real
+        # heading, and -at puts the table below it. -top 26 keeps the
+        # continuation clear of this line on every page after that.
+        if {[dict get $payload page] > 0} {
+            $doc text "Herbarium index, continued" -at {20 20}
+            $doc line -from {20 22} -to {190 22} -stroke {0.8 0.8 0.85} -width 0.2
+        }
     }}}]
 
 # The running head above can say everything the page knows about itself - but

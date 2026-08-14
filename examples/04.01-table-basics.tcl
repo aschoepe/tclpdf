@@ -284,6 +284,70 @@ $doc table -at [list 140 [expr {$y + 32}]] -width 55 -theme plain -decimal , \
 
 exampleFooter $doc
 
+# -- a cell that wraps, and where the others sit beside it ------------------
+
+# The everyday shape of an invoice line: a position number, a description that
+# runs over several lines, an amount. The row is as tall as its tallest cell,
+# and that is the only situation in which vertical placement is visible at all
+# - which is why the default is top. In a table whose rows are all one line,
+# every valign looks the same.
+
+$doc page add
+
+$doc font -family helvetica -style bold -size 15
+$doc text "One cell wraps, the others do not" -at {20 22}
+$doc font -style {} -size 9
+$doc text "The middle column carries running text and decides how tall the row\
+    is. The narrow columns beside it hold a single line each, and valign says\
+    where in the row that line sits: top by default, or middle or bottom. It\
+    can be written on the cell or in its style - both mean the same." \
+    -at {20 30} -width 170
+
+set description "Restoration of the herbarium cabinet: replacement of two\
+    drawer runners in oak, refitting of the glazed door including a new pane\
+    of 3 mm float glass, repair of the cornice moulding at the left rear\
+    corner, and a coat of shellac on the carcass, applied in four passes with\
+    an intermediate rub down."
+
+set body {}
+foreach {position valign amount} {
+    1 top    "1,240.00"
+    2 middle "318.50"
+    3 bottom "96.20"
+} {
+    lappend body [list \
+        [list text $position valign $valign align right] \
+        $description \
+        [list text $amount valign $valign]]
+}
+
+set y [$doc table -at {20 50} -width 170 -theme grid \
+    -head {{Pos Description Amount}} -body $body \
+    -columns {{width 16} {} {width 30 align decimal}}]
+
+$doc font -style {} -size 8
+set y [$doc text "Row one is set top, row two middle, row three bottom - the\
+    position number and the amount move, the description does not, because it\
+    fills the row on its own." -at [list 20 [expr {$y + 8}]] -width 170]
+
+# The same table again, and the same alignment - only the theme is different.
+# -theme plain draws no rules and fills nothing, so what places the columns is
+# the alignment alone. Without the rules the vertical placement is easier to
+# read, not harder: there is no cell outline to measure the line against, only
+# the neighbouring text.
+
+$doc font -style bold -size 10
+$doc text "The same, without rules or fills" -at [list 20 [expr {$y + 10}]]
+$doc font -style {} -size 8
+$doc text "-theme plain. Same columns, same valign per row." \
+    -at [list 20 [expr {$y + 15}]] -width 170
+
+set y [$doc table -at [list 20 [expr {$y + 22}]] -width 170 -theme plain \
+    -head {{Pos Description Amount}} -body $body \
+    -columns {{width 16} {} {width 30 align decimal}}]
+
+exampleFooter $doc
+
 $doc write $target
 puts "  written: $target ([file size $target] bytes), [$doc page count] page(s)"
 $doc destroy

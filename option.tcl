@@ -69,6 +69,34 @@ proc ::tclpdf::option::partition {defaults arguments} {
   return [list $defaults $rest]
 }
 
+# The keys of a dictionary, against the ones that exist.
+#
+#   ::tclpdf::option keys $cell {text colSpan rowSpan align valign style} \
+#       "cell key" table
+#
+# The counterpart to [parse] for the places a caller writes a DICTIONARY rather
+# than -name value pairs: a table cell, a style, a column description. [parse]
+# refuses an unknown option; a dictionary merged over defaults refuses nothing,
+# so a mistyped key is not an error but SILENCE - it is carried along, read by
+# nobody, and the caller sees the default and no message.
+#
+# Measured on valign written on a cell: accepted and ignored for as long as the
+# key existed, in a package that otherwise stops at a character a font has no
+# glyph for. Same standard, same place to say so.
+proc ::tclpdf::option::keys {value known what {context {}}} {
+  if {[catch {dict size $value}]} {
+    return -code error "tclpdf: $what[Where $context] takes a dictionary of\
+        key value pairs, got \"$value\""
+  }
+  dict for {key ->} $value {
+    if {$key ni $known} {
+      return -code error "tclpdf: unknown $what \"$key\"[Where $context] -\
+          known are: [join $known { }]"
+    }
+  }
+  return $value
+}
+
 # A point option: two numbers, or an error that names the likely mistake.
 #
 # Checked rather than left to lassign, because writing -at {20 [expr {$y+5}]}
@@ -100,4 +128,4 @@ proc ::tclpdf::option::Where {context} {
   return " for $context"
 }
 
-package provide tclpdf::option 1.0
+package provide tclpdf::option 1.1
