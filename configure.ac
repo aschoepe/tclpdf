@@ -88,7 +88,7 @@ fi
 # makes "make install" and "make archive" fail. The planned modules (graphics,
 # text/fonts, images, tables, ZUGFeRD) are added one by one as they appear.
 
-TEA_ADD_TCL_SOURCES([tclpdf.tcl pdfObj.tcl filter.tcl event.tcl writer.tcl color.tcl geometry.tcl document.tcl page.tcl graphics.tcl shape.tcl output.tcl option.tcl afmData.tcl afm.tcl text.tcl textBlock.tcl textAvoid.tcl leader.tcl textPath.tcl xObject.tcl io.tcl attach.tcl sfnt.tcl subset.tcl font.tcl kern.tcl kernGpos.tcl otLayout.tcl gdef.tcl liga.tcl structure.tcl imageJpeg.tcl imagePng.tcl imagePngAlpha.tcl image.tcl shading.tcl pattern.tcl tableLayout.tcl tableDraw.tcl table.tcl pdfa.tcl zugferd.tcl link.tcl outline.tcl pageNumber.tcl xml.tcl svgPath.tcl svg.tcl svgElement.tcl svgPaint.tcl])
+TEA_ADD_TCL_SOURCES([tclpdf.tcl pdfObj.tcl filter.tcl event.tcl writer.tcl color.tcl geometry.tcl document.tcl page.tcl graphics.tcl shape.tcl output.tcl option.tcl afmData.tcl afm.tcl text.tcl textBlock.tcl textAvoid.tcl leader.tcl textPath.tcl xObject.tcl io.tcl attach.tcl sfnt.tcl type1.tcl subset.tcl font.tcl kern.tcl kernGpos.tcl otLayout.tcl gdef.tcl liga.tcl structure.tcl imageJpeg.tcl imagePng.tcl imagePngAlpha.tcl image.tcl shading.tcl pattern.tcl tableLayout.tcl tableDraw.tcl table.tcl pdfa.tcl zugferd.tcl link.tcl outline.tcl pageNumber.tcl xml.tcl svgPath.tcl svg.tcl svgElement.tcl svgPaint.tcl])
 
 #--------------------------------------------------------------------
 # You can add more files to clean if your extension creates any extra

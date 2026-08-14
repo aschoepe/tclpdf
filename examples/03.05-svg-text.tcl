@@ -197,10 +197,4 @@ if {[catch {package require tzint 1.3-}]} {
 # ever asks for. That is the whole of what stood in the way.
 $doc pdfa -part 3 -conformance U -profile $profile
 
-set state [$doc pdfa state]
-exampleFooter $doc body
-$doc write $target
-puts "  written: $target"
-puts "  PDF/A-[dict get $state part][dict get $state conformance],\
-    fonts: [join [$doc font names] {, }]"
-$doc destroy
+exampleDone $doc $target body

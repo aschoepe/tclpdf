@@ -1,0 +1,266 @@
+# type1.test --
+#
+# Type 1 font programs: reading the container, the metrics beside it, and
+# embedding the result.
+#
+# WHY THE WIDTHS ARE THE INTERESTING PART. Embedding a Type 1 program is a
+# copy - the file already consists of the three pieces PDF asks for, and
+# nothing is decrypted. What can go wrong is the ENCODING: the widths come
+# from a separate AFM, addressed by glyph name, and a name chosen wrongly
+# gives a width that belongs to a different glyph. Nothing notices that - the
+# document renders, qpdf is happy, veraPDF is happy, and the text sits at the
+# wrong place.
+#
+# This is where the tree offers something no other font work does: the same
+# faces are here as TrueType AND as Type 1 AND as metrics. So the two roads
+# can be made to answer the same question, and they have to agree.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::font
+package require tclpdf::type1
+package require tclpdf::sfnt
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+set urw [file join $assets urw-core35-fonts]
+
+set pfb [file join $assets OCRB.pfb]
+set raw [file join $urw NimbusSans-Regular.t1]
+set afm [file join $urw NimbusSans-Regular.afm]
+set ttf [file join $urw NimbusSans-Regular.ttf]
+
+testConstraint havePfb [file exists $pfb]
+testConstraint haveRaw [expr {[file exists $raw] && [file exists $afm]}]
+testConstraint haveBoth [expr {[file exists $raw] && [file exists $ttf]}]
+
+test type1-1.1 {a PFB is split into the three pieces PDF asks for} -constraints havePfb -body {
+  # The segment markers state the lengths, and the three pieces plus 20 bytes
+  # of marker are the whole file: 6 bytes before each piece and 2 for the end
+  # marker. If that does not add up, a piece was lost or counted twice.
+  set font [::tclpdf::type1 read $pfb]
+  set total [expr {[dict get $font length1] + [dict get $font length2]
+      + [dict get $font length3]}]
+  list [dict get $font name] [expr {$total + 20 == [file size $pfb]}] \
+      [expr {[dict get $font length1] > 0 && [dict get $font length2] > 0
+          && [dict get $font length3] > 0}]
+} -result {OCRB 1 1}
+
+test type1-1.2 {a raw program is split by its content} -constraints haveRaw -body {
+  # No markers here, so both boundaries are read off the content: the end of
+  # the eexec line and the start of the closing zeros. Nothing is left over -
+  # unlike the PFB, the three pieces are the entire file.
+  set font [::tclpdf::type1 read $raw]
+  set total [expr {[dict get $font length1] + [dict get $font length2]
+      + [dict get $font length3]}]
+  list [dict get $font name] [expr {$total == [file size $raw]}]
+} -result {NimbusSans-Regular 1}
+
+test type1-1.3 {the clear part takes the eexec line ending with it} -constraints haveRaw -body {
+  # Where the boundary sits is not a matter of taste: a PFB counts the line
+  # ending into Length1, so the raw container has to as well, or the same face
+  # comes out with different lengths depending on which file it was read from.
+  #
+  # This test earned its keep. The first version asked whether the clear part
+  # ENDS in whitespace and expected "no" - it passed, and it passed just as
+  # well with the line-ending code deleted, because that code never ran: the
+  # membership test was written against "\r \n \t", which is an EMPTY list to
+  # Tcl. The \r stayed at the front of the encrypted part and nothing said so.
+  set font [::tclpdf::type1 read $raw]
+  set clear [dict get $font clear]
+  set encrypted [dict get $font encrypted]
+  list [string match "*eexec*" $clear] \
+      [expr {[string index $clear end] in [list \r \n]}] \
+      [expr {[string index $encrypted 0] ni [list \r \n]}] \
+      [expr {[dict get $font length1] == [string first "eexec" $clear] + 6}]
+} -result {1 1 1 1}
+
+test type1-1.4 {something that is not a Type 1 program is refused} -constraints haveBoth -body {
+  catch {::tclpdf::type1 read $ttf} message
+  set message
+} -returnCodes ok -match glob -result {*not a Type 1 font program*}
+
+test type1-2.1 {the metrics are read by glyph name} -constraints haveRaw -body {
+  set metrics [::tclpdf::type1 metrics $afm]
+  set widths [dict get $metrics widths]
+  list [dict get $metrics name] [expr {[dict size $widths] > 800}] \
+      [dict get $widths space] [dict get $widths A]
+} -result {NimbusSans-Regular 1 278 667}
+
+test type1-2.2 {the AFM code column is StandardEncoding, not WinAnsi} -constraints haveRaw -body {
+  # The trap this whole names table exists for. In an AFM, code 39 is
+  # quoteright and 96 is quoteleft - StandardEncoding. In WinAnsi they are
+  # quotesingle and grave, and they are different glyphs with different
+  # widths. Reading the AFM codes as if they were WinAnsi puts a typographic
+  # apostrophe where a straight one belongs.
+  set metrics [::tclpdf::type1 metrics $afm]
+  set names [::tclpdf::type1 names $metrics]
+  list [dict get $metrics codes 39] [dict get $names 39] \
+      [dict get $metrics codes 96] [dict get $names 96]
+} -result {quoteright quotesingle quoteleft grave}
+
+test type1-2.3 {the name chosen per position is one the face carries} -constraints haveRaw -body {
+  # Taking the FIRST AGL name for a position would pick "nbspace" at 160 and
+  # "sfthyphen" at 173, which no AFM knows - the positions would come out
+  # empty and the characters unwritable. ISO 32000-1 Annex D says both use the
+  # glyphs of space and hyphen, and that is what has to be found.
+  set metrics [::tclpdf::type1 metrics $afm]
+  set names [::tclpdf::type1 names $metrics]
+  set widths [::tclpdf::type1 widths $metrics]
+  list [dict get $names 160] [dict get $names 173] \
+      [expr {[lindex $widths 160] > 0}] [expr {[lindex $widths 173] > 0}] \
+      [dict get $names 128]
+} -result {space hyphen 1 1 Euro}
+
+test type1-2.4 {the same face measures the same on both roads} -constraints haveBoth -body {
+  # THE invariant this material is here for: the AFM widths of the Type 1
+  # program against the advances of the TrueType file of the same face, every
+  # WinAnsi position, at the same size. Two entirely separate paths through
+  # the package - one through glyph names, one through the cmap - and they
+  # have to arrive at the same number.
+  set metrics [::tclpdf::type1 metrics $afm]
+  set widths [::tclpdf::type1 widths $metrics]
+  set parsed [::tclpdf::sfnt read $ttf]
+  set units [dict get $parsed unitsPerEm]
+  set cmap [dict get $parsed cmap]
+  set same 0
+  set differ 0
+  for {set code 32} {$code < 256} {incr code} {
+    set afmWidth [lindex $widths $code]
+    if {$afmWidth == 0} {
+      continue
+    }
+    set point [scan [encoding convertfrom cp1252 [binary format c $code]] %c]
+    if {![dict exists $cmap $point]} {
+      continue
+    }
+    set advance [expr {[::tclpdf::sfnt advance $parsed [dict get $cmap $point]]
+        * 1000.0 / $units}]
+    # Half a unit: these files carry 1000 per em on one side and 2048 on the
+    # other, so a width of 600 comes back as 600.098 after the round trip.
+    if {abs($advance - $afmWidth) < 0.5} {
+      incr same
+    } else {
+      incr differ
+    }
+  }
+  list [expr {$same > 200}] $differ
+} -result {1 0}
+
+test type1-2.5 {a zero in the metrics counts as absent} -constraints haveRaw -body {
+  # The URW metrics in this tree write "Ascender 0" and "Descender 0" - the
+  # fields are present and say nothing. Taken literally, every line anchored
+  # at its top sits one full ascender too high, which in a table puts the text
+  # on the rule above it. That is what it did, and it is visible only in the
+  # rendered page, never in a test that measures widths.
+  # Measured as the DIFFERENCE between the two anchors rather than as an
+  # absolute position: that is the ascender itself, whatever operator the
+  # text goes out with and wherever on the page it sits.
+  proc type1Baseline {face anchor} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed sans $face
+    $doc text "Hg" -at {20 20} -family sans -size 100 -anchor $anchor
+    set content [::tclpdfTest::content $doc]
+    $doc destroy
+    regexp {([-0-9.]+) ([-0-9.]+) Td} $content -> x y
+    return $y
+  }
+  set metrics [::tclpdf::type1 metrics $afm]
+  set lift [expr {[type1Baseline $::raw baseline] - [type1Baseline $::raw top]}]
+  rename type1Baseline {}
+  # The AFM says zero, the bounding box says 1075 per 1000 em, so at size 100
+  # the lift is 107.5 pt. Read literally the zero would give 0 - and nothing
+  # would fail, the text would just sit one ascender too high.
+  list [dict get $metrics ascender] [expr {abs($lift - 107.5) < 0.01}]
+} -result {0 1}
+
+test type1-3.1 {a Type 1 face is embedded as the three lengths} -constraints haveRaw -body {
+  # /FontFile with Length1, Length2 and Length3 - not FontFile2, which is
+  # TrueType, and not FontFile3, which is CFF. A reader that finds the wrong
+  # one either ignores the font or renders nothing.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed sans $::raw
+  $doc text "Rechnung" -at {20 20} -family sans
+  set path [::tclpdfTest::scratch type1.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/FontFile [0-9]+ 0 R} $bytes] \
+      [regexp {/Length1 [0-9]+} $bytes] [regexp {/Length2 [0-9]+} $bytes] \
+      [regexp {/Length3 [0-9]+} $bytes] [regexp {/Subtype /Type1\y} $bytes] \
+      [regexp {/FontFile2} $bytes]
+} -result {1 1 1 1 1 0}
+
+test type1-3.2 {the widths in the document are the widths that were measured} -constraints haveRaw -body {
+  # The Widths array and [textWidth] have to come from the same place. If the
+  # array is right and the measurement is wrong, every right-aligned line and
+  # every table column is off - and the document looks perfect.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed sans $::raw
+  set measured [$doc textWidth "AVAVA" -family sans -size 1000]
+  $doc text "AVAVA" -at {20 20} -family sans
+  $doc destroy
+  set metrics [::tclpdf::type1 metrics $::afm]
+  set widths [::tclpdf::type1 widths $metrics]
+  set total 0
+  foreach char [split "AVAVA" {}] {
+    incr total [lindex $widths [scan $char %c]]
+  }
+  # Measured in millimetres at size 1000, so back to 1/1000 em for comparison.
+  set points [::tclpdf::geometry toPoints $measured mm]
+  expr {abs($points - $total) < 0.01}
+} -result 1
+
+test type1-3.3 {a character the face has no glyph for is refused} -constraints haveRaw -body {
+  # Same rule as everywhere else in the package: a missing character is an
+  # error, not a blank. This is the only place in the chain that notices.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed sans $::raw
+  set code [catch {$doc text "中" -at {20 20} -family sans} message]
+  $doc destroy
+  list $code [string match {*not available in WinAnsiEncoding*} $message] \
+      [string match {*Type 1*} $message]
+} -result {1 1 1}
+
+test type1-3.4 {the metrics have to be there} -constraints havePfb -body {
+  # Without an AFM there are no widths at all - a Type 1 program keeps them in
+  # its encrypted charstrings. Saying so plainly beats embedding a face that
+  # then measures everything as zero.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc font embed x $::pfb -metrics /nonexistent/x.afm} message]
+  $doc destroy
+  list $code [string match {*needs its metrics*} $message]
+} -result {1 1}
+
+test type1-3.5 {an embedded Type 1 face satisfies PDF/A} -constraints haveRaw -body {
+  # The open question this posting carried: whether a face embedded WHOLE,
+  # without subsetting, is acceptable. Measured against veraPDF outside the
+  # suite: PDF/A-3u, zero failed checks. Here only the half that can be
+  # tested without the validator - the document is written rather than
+  # refused, which is what the standard fourteen do not manage.
+  set doc [tclpdf new -unit mm]
+  $doc info Title "Type 1"
+  $doc page add
+  $doc font embed sans $::raw
+  $doc text "Rechnung" -at {20 20} -family sans
+  $doc pdfa -part 3 -conformance B
+  set result [::tclpdfTest::writes $doc type1-pdfa.pdf]
+  $doc destroy
+  set result
+} -result {0 1}
+
+cleanupTests

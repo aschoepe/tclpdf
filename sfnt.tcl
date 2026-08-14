@@ -51,16 +51,21 @@ proc ::tclpdf::sfnt::parse {bytes} {
   # a collection. OTTO means CFF outlines, which cannot be embedded as
   # FontFile2 - saying so is more useful than failing later on a missing glyf.
   set signature [string range $bytes 0 3]
+  # OTTO means the outlines are CFF rather than TrueType. Everything ELSE in
+  # such a file is the same sfnt structure - cmap, hmtx, head, OS/2, post are
+  # all read below without knowing the difference. So the file is parsed here
+  # and only the outline side is marked; what cannot be done with CFF outlines
+  # (subsetting, which needs glyf) is decided where it is done, not here.
+  set outlines truetype
   if {$signature eq "OTTO"} {
-    return -code error "tclpdf: this is an OpenType/CFF font - tclpdf embeds\
-        TrueType outlines (FontFile2). Convert it to TTF first"
+    set outlines cff
   }
   if {$signature eq "ttcf"} {
     return -code error "tclpdf: this is a TrueType collection - extract the\
         single face you want first"
   }
-  if {$tag != 0x00010000 && $signature ne "true"} {
-    return -code error "tclpdf: not a TrueType font (signature\
+  if {$outlines eq "truetype" && $tag != 0x00010000 && $signature ne "true"} {
+    return -code error "tclpdf: not a TrueType or OpenType font (signature\
         0x[format %08X $tag])"
   }
 
@@ -81,7 +86,7 @@ proc ::tclpdf::sfnt::parse {bytes} {
     }
   }
 
-  set font [dict create bytes $bytes tables $tables]
+  set font [dict create bytes $bytes tables $tables outlines $outlines]
   set font [dict merge $font [ParseHead $bytes $tables]]
   set font [dict merge $font [ParseMetrics $bytes $tables \
       [dict get $font numGlyphs]]]
@@ -90,8 +95,15 @@ proc ::tclpdf::sfnt::parse {bytes} {
   } else {
     dict set font cmap {}
   }
-  dict set font loca [ParseLoca $bytes $tables [dict get $font indexToLocFormat] \
-      [dict get $font numGlyphs]]
+  # loca and glyf belong to TrueType outlines. A CFF font has neither, and its
+  # outlines are not walked here at all - which is why it cannot be subsetted
+  # by this package and goes in whole.
+  if {$outlines eq "cff"} {
+    dict set font loca {}
+  } else {
+    dict set font loca [ParseLoca $bytes $tables \
+        [dict get $font indexToLocFormat] [dict get $font numGlyphs]]
+  }
   dict set font fsType [ParseFsType $bytes $tables]
   dict set font names [ParseNames $bytes $tables]
   return $font
@@ -371,4 +383,4 @@ proc ::tclpdf::sfnt::ParseNames {bytes tables} {
   return $names
 }
 
-package provide tclpdf::sfnt 1.1
+package provide tclpdf::sfnt 1.2

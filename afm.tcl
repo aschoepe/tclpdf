@@ -151,6 +151,17 @@ proc ::tclpdf::afm::stringWidth {font text size} {
 # notices a missing character. Neither veraPDF nor a PDF reader will.
 proc ::tclpdf::afm::encode {font text} {
   Check $font
+  return [encodeWidths $::tclpdf::afmData::widths($font) $text \
+      [isSymbolic $font] "the standard font $font" \
+      " - embed a TrueType font for this text"]
+}
+
+# The same against a width list handed in rather than looked up, so that an
+# embedded single-byte face - a Type 1 program with its AFM - is encoded by
+# this code and not by a second copy of it. The two differ in where the widths
+# come from and in what the message may suggest; everything that can go wrong
+# is the same.
+proc ::tclpdf::afm::encodeWidths {widths text symbolic name {hint {}}} {
   set codes {}
   set position 0
   foreach char [split $text {}] {
@@ -163,26 +174,25 @@ proc ::tclpdf::afm::encode {font text} {
       incr position
       continue
     }
-    if {[isSymbolic $font]} {
+    if {$symbolic} {
       # No transcoding: the caller addresses the font's own encoding directly.
       set code [scan $char %c]
       if {$code > 255} {
         return -code error "tclpdf: character U+[format %04X $code] cannot be\
-            written in $font, which has a 256-slot built-in encoding\
+            written in $name, which has a 256-slot built-in encoding\
             (position $position)"
       }
     } else {
       if {[catch {encoding convertto cp1252 $char} byte]
           || [encoding convertfrom cp1252 $byte] ne $char} {
         return -code error "tclpdf: character U+[format %04X [scan $char %c]]\
-            is not available in WinAnsiEncoding and cannot be written with the\
-            standard font $font (position $position) - embed a TrueType font\
-            for this text"
+            is not available in WinAnsiEncoding and cannot be written with\
+            $name (position $position)$hint"
       }
       binary scan $byte cu code
     }
-    if {[lindex $::tclpdf::afmData::widths($font) $code] == 0 && $code != 32} {
-      return -code error "tclpdf: the font $font has no glyph for\
+    if {[lindex $widths $code] == 0 && $code != 32} {
+      return -code error "tclpdf: $name has no glyph for\
           U+[format %04X [scan $char %c]] (position $position)"
     }
     lappend codes $code
@@ -204,4 +214,4 @@ proc ::tclpdf::afm::Check {font} {
   return
 }
 
-package provide tclpdf::afm 1.0
+package provide tclpdf::afm 1.1

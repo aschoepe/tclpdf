@@ -120,9 +120,19 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   A combining accent between two letters does not interrupt a pair. Most faces tell the reader to leave marks out of the sequence while kerning - measured here, 51 of the 73 faces on this machine that kern from GPOS do - so `A` + U+0301 + `V` is kerned as the pair `A V`, exactly as the single character U+00C1 followed by `V` has always been. The adjustment is applied in front of the second letter, which leaves the accent where the font puts it. What tclpdf does not do is position the mark itself: GPOS mark attachment is not read, so a combining glyph is drawn at the pen position with the side bearing its face gives it.
 
-*doc* **font embed** *alias path* ?**-subset** *0*?
+*doc* **font embed** *alias path* ?**-subset** *0*? ?**-metrics** *path*?
 
-: Embeds a TrueType file under an alias, subset to the glyphs actually used. The alias is then usable as **-family**.
+: Embeds a font file under an alias, which is then usable as **-family**. The file says what it is; the extension is not consulted.
+
+: **TrueType** (`.ttf`) is subset to the glyphs actually used, addressed by glyph number, and gets kerning and ligatures from the font's own tables. **OpenType with CFF outlines** (`.otf`) goes in whole, as `/FontFile3` with `/Subtype /OpenType` and a `/CIDFontType0` descendant — everything else about it, the character mapping and the widths included, is read exactly as for TrueType. **Type 1** (`.pfb`, `.pfa`, `.t1`) goes in whole as well and is addressed by single bytes through WinAnsiEncoding — see below.
+
+: **Why a CFF face is not subsetted.** Subsetting rewrites the `loca` and `glyf` tables, and a CFF font has neither: its outlines are charstrings in a table this package does not read. So the whole file is embedded, around 40 to 100 KB depending on the face. Where the same face exists as `.ttf`, that form is the better choice for a document that uses it for a heading and nothing else — a subset of a few words is a fraction of either. `-subset` is accepted and has no effect; the face carries no subset prefix, because nothing was subsetted.
+
+: **Type 1 needs its metrics beside it.** The widths of a Type 1 face are inside its encrypted charstrings, so they come from the AFM instead: `font embed` looks for the same base name with `.afm`, and **-metrics** names it where it sits elsewhere. Without metrics the face is refused rather than embedded with no widths.
+
+  Embedding a Type 1 program is a copy — the file already consists of the three pieces PDF asks for as `Length1`, `Length2` and `Length3`. Nothing is decrypted, and consequently nothing is subsetted: the face goes in whole, which for a text face is 25 to 105 KB. `-subset` does not apply. Kerning and ligatures do not either; a Type 1 program carries neither GPOS nor GSUB, and the kern pairs an AFM may list are not read.
+
+  The reach of such a face is the 224 positions of WinAnsiEncoding, as with the standard fourteen — a character outside it is an error, not a blank. Where a document needs more, TrueType is the format to embed.
 
 : **Which file to embed for a standard face.** A document that has to be
   archivable may not leave a font unembedded, and that includes the fourteen
@@ -147,13 +157,12 @@ Positions are given in the document unit, and **y counts from the top of the pag
   | Symbol | `StandardSymbolsPS.ttf` | `Symbol.pfb` | `SymbolStd.otf` | Symbol | `Symbol.ttf` |
   | ZapfDingbats | `D050000L.ttf` | `ZapfDingbats.pfb` | `ZapfDingbatsStd.otf` | Zapf Dingbats | — |
 
-  **Only one of those columns can be embedded as it stands.** The URW files are
-  TrueType and go in unchanged. Adobe's Type 1 files cannot: this package
-  embeds TrueType outlines, and `font embed` refuses them. Adobe's OpenType
-  files carry CFF outlines and are refused as well; convert them to TTF first.
-  The macOS entries for Helvetica, Times and Courier are TrueType
-  **collections** — several faces in one file — and a single face has to be
-  extracted before it can be used.
+  **Three of those columns can be embedded as they stand.** The URW files are
+  TrueType and go in unchanged; Adobe's Type 1 files go in whole, provided
+  their AFM is beside them; Adobe's OpenType files go in whole as CFF. The
+  macOS entries for Helvetica, Times and Courier are TrueType **collections**
+  — several faces in one file — and a single face still has to be extracted
+  before it can be used.
 
   **Two of the fourteen have no working substitute today.** The URW files for
   Symbol and ZapfDingbats carry a `(3,0)` symbol cmap and no Unicode one, so

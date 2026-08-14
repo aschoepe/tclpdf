@@ -62,3 +62,31 @@ proc exampleFooter {doc {family {}}} {
         -at [list [expr {$width - 10}] [expr {$height - 7}]] -align right \
         -tag Artifact
 }
+
+# What an archivable example reports when it is done: the level it declared
+# and the faces the file carries.
+#
+# Both are read back OUT of the document rather than repeated from the script
+# above, so the line cannot claim a conformance the file does not have or a
+# font it does not carry - the same reason the footer asks the document for
+# its fonts.
+proc exampleArchival {doc} {
+    set state [$doc pdfa state]
+    return "PDF/A-[dict get $state part][dict get $state conformance],\
+        fonts: [join [$doc font names] {, }]"
+}
+
+# The closing lines of an ARCHIVABLE example: footer, write, and the two
+# console lines that say what came out.
+#
+# Only for the PDF/A ones - the others end with a plain [write] and have
+# nothing to report beyond the file name. Pulled out when the third example
+# had the same seven lines; [exampleArchival] alone was not enough, because
+# what repeated was the whole ending.
+proc exampleDone {doc target {family {}}} {
+    exampleFooter $doc $family
+    $doc write $target
+    puts "  written: $target"
+    puts "  [exampleArchival $doc]"
+    $doc destroy
+}

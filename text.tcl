@@ -264,9 +264,7 @@ oo::define ::tclpdf::document::document {
     }
     set font [dict get $state resolved]
     if {[my TextEmbedded $font]} {
-      set parsed [dict get [my state fonts] $font parsed]
-      set ascent [expr {double([dict get $parsed ascender]) * [dict get $state size]
-          / [dict get $parsed unitsPerEm]}]
+      set ascent [my FontAscender $font [dict get $state size]]
     } else {
       set ascent [expr {[dict get [::tclpdf::afm descriptor $font] Ascender]
           * [dict get $state size] / 1000.0}]
@@ -466,6 +464,21 @@ oo::define ::tclpdf::document::document {
       return [list [::tclpdf::afm stringWidth $font $string \
           [dict get $state size]] [string length $string]]
     }
+    # A Type 1 face is embedded but single-byte: its widths are in the AFM
+    # beside it, one per code, and there is no glyph run to build. Kerning and
+    # ligatures do not apply - a Type 1 program carries neither GPOS nor GSUB.
+    # (An AFM does carry kern pairs; reading them is a separate matter and is
+    # named as such in the manual.)
+    if {[my FontKind $font] eq "type1"} {
+      set codes [my FontType1Encode $font $string]
+      set widths [dict get [my state fonts] $font widths]
+      set total 0
+      foreach code $codes {
+        incr total [lindex $widths $code]
+      }
+      return [list [expr {$total * [dict get $state size] / 1000.0}] \
+          [llength $codes]]
+    }
     set run [my FontRun $font $string [dict get $state ligatures]]
     return [list [my FontRunWidth $font $run [dict get $state size] \
         [dict get $state kerning]] [llength $run]]
@@ -484,6 +497,13 @@ oo::define ::tclpdf::document::document {
   method TextShow {font state string byTJ} {
     if {![my TextEmbedded $font]} {
       return "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
+    }
+    # An embedded Type 1 face goes out as single bytes, like a standard face,
+    # and for the same reason: it is addressed through an encoding rather than
+    # by glyph number. Word spacing reaches it through Tw as it does there.
+    if {[my FontKind $font] eq "type1"} {
+      return "[::tclpdf::pdfObj bytesStr [binary format cu* \
+          [my FontType1Encode $font $string]]] Tj\n"
     }
     set run [my FontRun $font $string [dict get $state ligatures]]
     set adjustments [my TextAdjust $font $state $run $byTJ]
@@ -579,4 +599,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.8
+package provide tclpdf::text 1.9

@@ -23,6 +23,15 @@ set fontRegular [file join [file dirname [file dirname [file normalize [info scr
 
 testConstraint haveFont [file exists $fontRegular]
 
+# The same face as TrueType and as OpenType/CFF - which is what makes the two
+# roads comparable rather than only exercisable.
+set otf [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts urw-core35-fonts NimbusSans-Regular.otf]
+set otfTtf [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts urw-core35-fonts NimbusSans-Regular.ttf]
+testConstraint haveOtf [file exists $otf]
+testConstraint haveOtfPair [expr {[file exists $otf] && [file exists $otfTtf]}]
+
 test font-1.1 {a TrueType file is parsed} -constraints haveFont -body {
   set parsed [::tclpdf::sfnt read $fontRegular]
   list [dict get $parsed unitsPerEm] \
@@ -36,15 +45,26 @@ test font-1.2 {fsType is translated into words} -body {
       [::tclpdf::sfnt permission 12]
 } -match glob -result {{installable*} {restricted*} {unclear*}}
 
-test font-1.3 {a CFF font is refused with a usable message} -body {
-  # OTTO cannot go into FontFile2, and failing later on a missing glyf table
-  # would say nothing about the cause.
-  ::tclpdf::sfnt parse "OTTO[string repeat \x00 20]"
-} -returnCodes error -match glob -result {*OpenType/CFF*Convert it to TTF*}
+test font-1.3 {a CFF font is read, and says so} -constraints haveOtf -body {
+  # OTTO used to be refused here. Everything in such a file except the
+  # outlines is the same sfnt structure, so it is parsed like any other and
+  # only the outline side is marked - what cannot be done with CFF (subsetting
+  # through loca and glyf) is decided where it is done.
+  set parsed [::tclpdf::sfnt read $::otf]
+  list [dict get $parsed outlines] [dict get $parsed loca] \
+      [expr {[dict size [dict get $parsed cmap]] > 100}] \
+      [expr {[dict get $parsed numGlyphs] > 100}]
+} -result {cff {} 1 1}
+
+test font-1.3a {a TrueType font says so too} -constraints haveFont -body {
+  # The other half, so the marking cannot quietly become constant.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  list [dict get $parsed outlines] [expr {[llength [dict get $parsed loca]] > 100}]
+} -result {truetype 1}
 
 test font-1.4 {something that is not a font at all} -body {
   ::tclpdf::sfnt parse "not a font file at all, really"
-} -returnCodes error -match glob -result {*not a TrueType font*}
+} -returnCodes error -match glob -result {*not a TrueType or OpenType font*}
 
 test font-2.1 {the cmap maps characters to glyphs} -constraints haveFont -body {
   set parsed [::tclpdf::sfnt read $fontRegular]
@@ -608,5 +628,88 @@ test font-7.3 {a Macintosh name stays one byte per character} -constraints haveF
   # DejaVu leads with platform 1, which is why it never showed the defect.
   list $leads [dict get $parsed names postScript]
 } -result {1 DejaVuSans}
+
+test font-8.1 {a CFF face is embedded as FontFile3, not FontFile2} -constraints haveOtf -body {
+  # /FontFile3 with /Subtype /OpenType takes the WHOLE sfnt file, cmap and
+  # all - so the CFF table never has to be understood, only carried. The
+  # descendant is a CIDFontType0, and CIDToGIDMap has no place there: it
+  # belongs to CIDFontType2 alone.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $::otf
+  $doc text "Rechnung" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-cff.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/FontFile3 \d+ 0 R} $bytes] [regexp {/FontFile2} $bytes] \
+      [regexp {/Subtype /OpenType} $bytes] \
+      [regexp {/Subtype /CIDFontType0\y} $bytes] \
+      [regexp {/CIDToGIDMap} $bytes] [regexp {/ToUnicode} $bytes]
+} -result {1 0 1 1 0 1}
+
+test font-8.2 {a CFF face carries no subset prefix} -constraints haveOtf -body {
+  # It goes in whole - there is no subsetter for CFF here - and the six-letter
+  # tag MEANS subset (9.9.2). Claiming one on a complete face invites a reader
+  # merging documents to keep two incompatible copies.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $::otf
+  $doc text "Rechnung" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-cff-name.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/BaseFont /NimbusSans-Regular\y} $bytes] \
+      [regexp {[A-Z]{6}\+NimbusSans} $bytes]
+} -result {2 0}
+
+test font-8.3 {the same face measures the same from either format} -constraints haveOtfPair -body {
+  # The invariant this tree offers: NimbusSans is here as CFF and as TrueType.
+  # The widths come from hmtx in both cases, but through two different files
+  # and two different glyph numberings, so agreement is worth asserting.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed cff $::otf
+  $doc font embed ttf $::otfTtf
+  set faults {}
+  foreach sample {Rechnung Hamburgefonstiv "AVATAR 12,34"} {
+    set a [$doc textWidth $sample -family cff -size 100 -kerning 0]
+    set b [$doc textWidth $sample -family ttf -size 100 -kerning 0]
+    # The tolerance grows with the line, because the error does: the CFF file
+    # carries 1000 units per em and the TrueType one 2048, so every single
+    # glyph rounds by up to half a unit and those add up. A fixed tolerance
+    # would pass short words and fail long ones - measured, "Rechnung" differs
+    # by 0.108 pt at size 100, which is 0.0135 pt per character.
+    if {abs($a - $b) > 0.05 * [string length $sample]} {
+      lappend faults "$sample: $a against $b"
+    }
+  }
+  $doc destroy
+  set faults
+} -result {}
+
+test font-8.4 {-subset has no effect on a CFF face, and does not pretend to} -constraints haveOtf -body {
+  # Asking for a subset of a CFF face cannot be honoured - loca and glyf are
+  # what the subsetter rewrites and neither exists. What matters is that the
+  # document is still correct: whole file, no prefix, either way.
+  set sizes {}
+  foreach wanted {1 0} {
+    set doc [tclpdf new]
+    $doc page add
+    $doc font embed haus $::otf -subset $wanted
+    $doc text "A" -at {20 20} -family haus
+    set path [::tclpdfTest::scratch font-cff-subset.pdf]
+    $doc write $path
+    $doc destroy
+    lappend sizes [file size $path]
+    file delete $path
+  }
+  # Same file both times, so the same size - within the few bytes the date
+  # and the ID can differ by.
+  expr {abs([lindex $sizes 0] - [lindex $sizes 1]) < 32}
+} -result 1
 
 cleanupTests

@@ -357,12 +357,9 @@ test svg-3.13 {a drawing with text can be archivable} -constraints haveFace -bod
   $doc svg -data {<svg viewBox="0 0 100 20"><text x="10" y="10" font-family="house" font-size="8">Rechnung</text></svg>} \
       -at {0 0} -width 100
   $doc pdfa -part 3 -conformance B
-  set path [::tclpdfTest::scratch svg-pdfa.pdf]
-  set code [catch {$doc write $path}]
-  set written [file exists $path]
+  set result [::tclpdfTest::writes $doc svg-pdfa.pdf]
   $doc destroy
-  file delete $path
-  list $code $written
+  set result
 } -result {0 1}
 
 test svg-3.14 {a drawing that stops halfway leaves no bracket open} -body {

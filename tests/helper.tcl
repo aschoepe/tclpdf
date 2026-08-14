@@ -79,6 +79,21 @@ proc ::tclpdfTest::writeTwice {doc name} {
   return $result
 }
 
+# Try to write a document and report whether it came out, cleaning up either
+# way: {code written}, both 0 or 1.
+#
+# For the tests that turn on a document being ACCEPTED rather than on what is
+# in it - PDF/A refusing an unembedded face is the usual reason. The write
+# itself may fail, so the file has to be asked about separately, and the
+# scratch file has to go whether it did or not.
+proc ::tclpdfTest::writes {doc name} {
+  set path [scratch $name]
+  set code [catch {$doc write $path}]
+  set written [expr {[file exists $path] ? 1 : 0}]
+  file delete $path
+  return [list $code $written]
+}
+
 # The decoded stream of one object - for tests that have to look inside a
 # compressed stream (a font file, a ToUnicode map, a CIDToGIDMap).
 proc ::tclpdfTest::streamOf {writer number} {
