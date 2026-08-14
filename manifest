@@ -1,5 +1,5 @@
-C Carry\sOCR\sA\sand\sOCR\sB\sfor\sthe\sclear\stext\sline\sunder\sa\sbarcode\n\n-\sexamples/assets/fonts:\sOCRA\sand\sOCRB\sin\sfour\sforms\seach\s-\sTrueType,\sOpenType,\sType\s1\sand\sthe\smetrics.\sThe\sTrueType\sones\sembed\sand\spass\sPDF/A-3u;\sthe\sdigits\sunder\san\sEAN\scan\snow\sbe\sset\sin\sthe\sface\sthe\sstandard\sasks\sfor\sinstead\sof\sin\sHelvetica\n-\sexamples/assets/fonts/licenses/OCR-LICENSE.txt:\snew\s-\sthe\sthree\slicence\sstatements\squoted\sin\sfull\srather\sthan\ssummarised,\sbecause\seach\sauthor\sis\scareful\sabout\swhat\sthey\sdo\sand\sdo\snot\ssay,\sand\sa\sparaphrase\swould\sturn\sthat\sinto\sa\spromise.\sIt\salso\slists\swhat\swas\sleft\sout\sof\sthe\stwo\ssource\spackages\sand\swhy\n-\sKNOWN:\sonly\sthe\sTrueType\sform\scan\sbe\sembedded\stoday.\sThe\sOpenType\sones\sare\sCFF,\sthe\sType\s1\sones\sare\snot\sread\sat\sall\s-\sboth\sare\skept\sas\sthe\smaterial\sa\sreader\swould\sbe\sbuilt\sand\stested\sagainst
-D 2026-08-14T08:56:12.328
+C Keep\sthe\sURW\sfaces\sin\sall\sfour\sformats\n\n-\sexamples/assets/fonts/urw-core35-fonts:\sthe\smetrics\sand\sthe\sType\s1\sform\sof\sthe\sfourteen\sfaces,\staken\sfrom\sthe\ssame\supstream\sarchive\sthe\sTrueType\sand\sOpenType\sfiles\scame\sfrom\s-\sall\s28\sof\sthose\scompare\sbyte\sfor\sbyte\sagainst\swhat\swas\salready\shere\n-\sNOTICE.md:\sthe\ssection\sexplaining\swhy\stwo\sformats\sand\snot\sfour\snow\sexplains\swhy\sfour.\sThe\sType\s1\sfiles\swere\sdropped\sonce\sbecause\snothing\swas\sgoing\sto\sread\sthem;\sthat\schanged,\sand\sthese\sare\sbetter\stest\smaterial\sthan\sanything\selse\sin\sthe\stree,\ssince\sthe\ssame\sface\ssits\sbeside\sthem\sas\sTrueType\sand\sas\smetrics\n-\sKNOWN:\sonly\sthe\sTrueType\sform\sembeds\stoday,\sand\stwo\sof\sthe\sfourteen\snot\seven\sthen\s-\sStandardSymbolsPS\sand\sD050000L\scarry\sa\ssymbol\scmap\sand\sno\sUnicode\sone,\swhich\sfont\sembed\srefuses.\sThat\sis\sunchanged\sand\sstated\sin\sNOTICE.md
+D 2026-08-14T09:22:10.869
 F Makefile.in 304e636831704ff8bad6eefa8d6f3dac0fa1e05ac7b1b5421dddfcb7dc0ada05
 F README d33ca81c9ce3ec96821d5b00059d87bcc5888de15b6604d41b76db321b85ec43
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -81,39 +81,67 @@ F examples/assets/fonts/licenses/Niconne-OFL.txt 29e05c8a3a46b40e7efe437acd34544
 F examples/assets/fonts/licenses/OCR-LICENSE.txt 4b8d6c93a7495f0d4abdf8377804b1bd5828cbdb6c155b78a108d570b08ade5e
 F examples/assets/fonts/licenses/Roboto-OFL.txt ce62f9aa575d4ecf579557e3e51530cdab7f5970b960b0b6563ef2f85b9d29c1
 F examples/assets/fonts/urw-core35-fonts/COPYING 0fa7c94b651347aebbd70f3a4497025fd8fc2a99c02aeec18645257118282de8
+F examples/assets/fonts/urw-core35-fonts/D050000L.afm b0f4e2d2570d804d562bfa0dec61a1d234fce0592d2641e933c276d035594aa0
 F examples/assets/fonts/urw-core35-fonts/D050000L.otf e1065575a63246d43fb7b896d22b950b2db47d46e58d7a9d0319880eee798e99
+F examples/assets/fonts/urw-core35-fonts/D050000L.t1 cb9e91f400b21fc8e616d1dcafcffd9b993f165e670ba26b6a2192c9d078b72a
 F examples/assets/fonts/urw-core35-fonts/D050000L.ttf 7a51fdc6160eecc2d240bef535b6772ed603b5b3272afb3c60e9e02210cf0d61
 F examples/assets/fonts/urw-core35-fonts/LICENSE.AGPL 471eee94bd261841e5dcc58a59ed03a79292cfa15a41fcc287dcc2ee2461aabf
 F examples/assets/fonts/urw-core35-fonts/LICENSE.LPPL 019bee3b51e9e4f11f58d0d2cdc845c671838ac01f0678c944d76425b9c512cd
 F examples/assets/fonts/urw-core35-fonts/LICENSE.OFL 86d12420653d32753eb42a2f3659ce08bd6bfebfdecf7924f0d38b555881542b
 F examples/assets/fonts/urw-core35-fonts/LICENSE.md 7cfa55ff33250c3ec73d0e8e4a1ba7040726890ccb012c5f4a73afd578bfd02c
-F examples/assets/fonts/urw-core35-fonts/NOTICE.md da8cc87cec87111860cf4104f44815cd8d02fb0667586af25eebee5bfc5191bc
+F examples/assets/fonts/urw-core35-fonts/NOTICE.md a58d530df76aa2a08a4ffc67e2c9be745e4f51eb1397a9ccf21616b267c057ef
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Bold.afm 7c791982d02db2eee96df8a12a985df67123cc4f13b8851383ca17788372cccd
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Bold.otf a7166d55d74185e6c8f2bed4471c5e8be2cb5e18bb937976e46dfcd5b9553d76
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Bold.t1 06449eac4dc14a083f43394cf61d678fb14ad8eafde3885f44a450ebfa5c71a6
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Bold.ttf e48f58f0ae8666f75371a322de5063a8f1ad8ac4cae41985ebb75bb5d61055e6
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-BoldItalic.afm e73cded9866fb4bb2ffacc284f83e74405f72f076ab5e90ad82f39ce61f492d2
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-BoldItalic.otf bc4ea948ac3d89d8e3d303de1d40143047990f8c38acf2674b9c4b2e5183914c
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-BoldItalic.t1 5cd350755f7e1d5ab40e53aa4aace4a865cdb924532639604cf4f22715f41a45
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-BoldItalic.ttf 501632f9d1d0a9e90ec634f2272b6fec3f77881567786867fc7ec11aa61a46df
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Italic.afm 081bcd45ffda3c341f99da12df9beb23024a4658d5500779eeb329cbf9ddab26
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Italic.otf c4e6516b8a1e3bbedf6bc80d93f0f95285bb92f14de2860383081be3d21d0d4c
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Italic.t1 8a72d8d4e23189a9a0007daeadffa58777dd07f6040e8b3c09b06096e81e6e7b
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Italic.ttf 38c486524a875697a2a5156e15f57e9519d08984f386deb7dbda5ac868fbeb63
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Regular.afm 75e96a9553cc04e2cd6668147000d5cd34668a1adf88aeac232915bae47d9342
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Regular.otf cecf703213af67eaf646521324f784b4ada2d73d32f517aec9d758c728cbf6d1
+F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Regular.t1 85fbedcb842b37b8bf8195a7ccdd07f2f89cef478709cc8e066dc5439abb1bdc
 F examples/assets/fonts/urw-core35-fonts/NimbusMonoPS-Regular.ttf d119155325b215e9cdfda8037e9fbce2754cd09f5d55570001bd2bb6a4fff200
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Bold.afm ae5068f49aabd197faf2fc7bf6b72970291a956faee677c0a135fc0dfa5c47ba
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Bold.otf 18f3bea35335412ae346c978b37a4e866d0a981ae936aa9fc48605a391e12f78
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Bold.t1 d4197ec8a3c87daded0df57e2ba2e28820c12ea578911c89c2411fb96f536103
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Bold.ttf e70017cbaf9260a62603465861f7daf9b1db7020b136116c2275832afb4e325f
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-BoldItalic.afm 3a704f7cbe870df71df8c31506c23741c08817af5a3af9ab018aa7d0fa1b6e05
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-BoldItalic.otf 63e91880dbd1e22e9bb95027c31b8a17978730645269a9354f8fcea3bf947924
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-BoldItalic.t1 917d11815aab1a518620cff1d29f254f7866d3220ecf0c8ae729d6076559d144
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-BoldItalic.ttf 9e52a8b69d7f4868618126d5327fdd0a6e8ffa249ecbef6201c3ed8c7ea5a06e
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Italic.afm 38ec72295c20e9b261eaed9e9821896814db1ec30137a45ab2a65b0f0535d81f
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Italic.otf e684ca30c050f97e5fd55daf46c4479fdafa6fb40b7039424961cf8a2ce15184
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Italic.t1 d7a00be6a66e9a73506eccc78f4089cb3e6c586b1c9256c5ee2339f65b2ba0ad
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Italic.ttf eeb659b5306ece01171714341cdcc786a4594abea416ca0af299a8c764ba6a5f
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Regular.afm 16ceb3ba3d2d4689d211c10f7a350294e8045f9b7716bb85141b7898233f289a
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Regular.otf 3f81281802de4129ce26236b5b43a6efb8f20bc5247559f30c675e6cd5e44aba
+F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Regular.t1 21085adc6eba0d47a4dec4a2588dbf6089ab883a9eb82db6520b7635d9b1b5b2
 F examples/assets/fonts/urw-core35-fonts/NimbusRoman-Regular.ttf 1cdc0f18f15beb3233b606ac6f1e5768769db7b9a02174acb17ef5817a8be45f
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Bold.afm 0ce11a6a2161513913dab51688a37819d3636636f2d7318ceb3c2458d27b19e6
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-Bold.otf bf38b0dce89924fc045b3af3f33a900afcd679c3fdd24063224eed921153b2d2
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Bold.t1 ceda0d890b9f85ac5ef7978eadaa8a94275db30d445f619d9418621be5c247b5
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-Bold.ttf 44fb7c8110d34c210d80e60059754c102aea05e97c91e18385ad0d6a8f3a5809
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-BoldOblique.afm c1abfd10f54b80f384eea7b1c02bb91f217ff78e15ff2fc5dc87a4a50183669f
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-BoldOblique.otf 0e96d5e141bdaf49e7605f23bdc3780f0c585374fd38644ab2060303969e80aa
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-BoldOblique.t1 9061dec5ea189f2d44ba773044c0df6a6d55294b670762d6024293a01fb0a374
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-BoldOblique.ttf a7a2225515dbdc8adbf069b2551df0a9b619a87b5474de64180b1b5487e72b37
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Oblique.afm b18d64805b94d5042195f2dafff5e3f81b1c5c3913feaeb408bd8880c54ec721
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-Oblique.otf 47ba11ac1fef5743fa85f7686f4588d75ad536aeaee784371d7a95c1f21ad99e
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Oblique.t1 0c3e4d86ac107f8b2702a7c0c2925739f25f5ddac33330848e29c88d49ff7766
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-Oblique.ttf 8bcf6c60c6d8fd648f448d31826ca6a8c212da21c94c92740e83939a01c72585
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Regular.afm db01cc8a59a5644fb402346c001aae0519e3049ac27eedf651e52a3e7922ac33
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-Regular.otf b5314715a20b2903b26d0971e484ed27ea49467ed8126c2188bc4179e854e214
+F examples/assets/fonts/urw-core35-fonts/NimbusSans-Regular.t1 04793dc4d106fe00bece29ffdd7c5f5068e595e101baa66bb608b3ffc288b66f
 F examples/assets/fonts/urw-core35-fonts/NimbusSans-Regular.ttf 8830a67d587383b416c31267c0268b29256278b69cf353823d6cd59b13fdc140
 F examples/assets/fonts/urw-core35-fonts/README.md 53fe1e5a18bd4115fc4affd624623b40a2aebd9d3091f0579c39d35a60ad3bb5
+F examples/assets/fonts/urw-core35-fonts/StandardSymbolsPS.afm a062000f6aa622cc8efe21fa6007c409ab890cad9987b0846e74a2fb3127efe0
 F examples/assets/fonts/urw-core35-fonts/StandardSymbolsPS.otf ad79bc93bcc7aeaa7d594eb2075e7a37c0a3f5675637521ad31b77e0f81e4d45
+F examples/assets/fonts/urw-core35-fonts/StandardSymbolsPS.t1 83f8f78d413e56b1194c6cfd82c5945beef968271a1de2eab235abe8f93a3b35
 F examples/assets/fonts/urw-core35-fonts/StandardSymbolsPS.ttf 0a5a8807461eeb337ad4d457641e768923e8fb8ef058d8e529cda6029900d7f3
 F examples/assets/images/sample-gray.jpg 9e043510817e92d27e1ac8cc1fe4d00abdf11f729e1ee94fec0fd2c27f6192c8
 F examples/assets/images/sample-indexed.png a9866993ef70ebfa11fde18ab84658d1b06e7b187619513c45a0b1641d8aa521
@@ -228,8 +256,8 @@ F writer.tcl c550af68de27c1ec325213d6ddccb8cdc9a6538e4e51102514b1ac50f9f7685a
 F xObject.tcl 04ce02c4422f2cc43d24a60a50a666d13bd75b42944a2ec9a818a8b8da4a6bf9
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F zugferd.tcl 9b18e37c8b210edf94f7dec43d3a645fabea485397fef530ffb84566115ce18f
-P b0c904f977a07bd6e0c0865816724e03f339f3e7f5571aa7e6b41dcc23523f81
-R 696c1b5f56b257c200f2291ba7efcf7f
+P 704cf1792cbb451e7733fbdb9e3db172464afbaeac41cd897c7d01f5bbd9cd62
+R bc445d1e0adf6df390d56e42460d6026
 U alex
-Z 4f232877ec01d350c62d1086ad2fe822
+Z e267f26d3bbc938855b2c774fa76111d
 # Remove this line to create a well-formed Fossil manifest.

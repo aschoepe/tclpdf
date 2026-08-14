@@ -1,7 +1,7 @@
 # URW Core 35, and what tclpdf keeps of it
 
-Fourteen faces out of thirty-eight, in two formats out of four. What was
-removed and why is below; the fonts themselves are untouched.
+Fourteen faces out of thirty-eight, in all four formats. What was removed and
+why is below; the fonts themselves are untouched.
 
 ## Where these files come from
 
@@ -58,15 +58,26 @@ have no counterpart in PDF and nothing here would reach for them.
 | Symbol | `StandardSymbolsPS` |
 | ZapfDingbats | `D050000L` |
 
-## Why two formats and not four
+## Why all four formats
 
-`.ttf` is what tclpdf can embed today. `.otf` carries the same outlines as CFF
-and is kept as stock for the day the package reads them; nothing uses it yet.
-`.t1` and `.afm` were dropped - Type 1 embedding is not on the roadmap at all,
-and the metrics that matter are already in `afmData.tcl`.
+`.ttf` is what tclpdf can embed today. The other three are here because each
+has a named reader waiting for it, and because having one face in four formats
+is what makes those readers checkable at all:
 
-Also dropped: `Core_35.pdf` (1.6 MB of specimen pages), the CI configuration,
-and a validation script - none of it is font data.
+* `.otf` carries the same outlines as CFF - stock for the day the package
+  reads them.
+* `.t1` is the same again as Type 1. It was dropped once, when Type 1
+  embedding was on no list; it is on one now, and these files are better test
+  material than any other in the tree, because the same face sits beside them
+  as TrueType and as metrics. A Type 1 reader has to arrive at the widths the
+  TrueType path already produces - that is an invariant nothing else offers.
+* `.afm` is the manufacturer's own metric. It is what the comparison below was
+  measured against, and re-running that comparison needs the files, not the
+  result.
+
+Dropped: `Core_35.pdf` (1.6 MB of specimen pages), the CI configuration, and a
+validation script - none of it is font data. Also dropped are the twenty-four
+faces the standard fourteen do not need.
 
 ## The point of having them: measured, both ways
 
