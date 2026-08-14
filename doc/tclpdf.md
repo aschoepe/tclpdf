@@ -374,6 +374,10 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
   Note that **svg size** below takes a file name only; the size of markup in a variable is what drawing it returns.
 
+  **Text in a drawing uses the same faces as `text` does.** `font-family` is a comma-separated wish list and the first name that resolves wins; an **embedded** face resolves under the alias it was embedded as, so `font-family="house"` finds it after `font embed house …`. That settles three things at once: the drawing may use any character the face has rather than the 224 positions of WinAnsi — `Łódź` and `Москва` are ordinary labels, not errors —, it can be set in the house face, and it can be part of an **archivable** document, which embeds every font it finds. Kerning and ligatures apply as they do elsewhere.
+
+  A list nobody can satisfy ends at `helvetica` rather than failing, which is what a drawing wants; in a PDF/A document that face is not embedded and `write` then refuses the document, so it is worth naming a face the document has. `font-weight` and `font-style` are not read — a face is chosen by name.
+
 *doc* **svg info**
 
 : What the LAST drawing skipped — the elements the module does not draw. It reports on the document, not on a file: anything written after **info** is accepted and ignored, so `svg info some.svg` says nothing about `some.svg`.
@@ -407,7 +411,7 @@ if {$rc >= 5} {
 
 **An EPC-QR (GiroCode) needs `-eci 26`.** The dataset states its own character set in line 3, and without the option the encoder picks one itself — the symbol scans, but its encoding is not the one the data claims. `-security 2` is the error correction level the specification asks for.
 
-For an **archivable** document the clear text line has to come from tclpdf rather than from the encoder: text inside an SVG can only use the fourteen standard faces, and those are not embedded, so `write` refuses the document. Pass `-notext 1` and set the line with `text` in an embedded face.
+For an **archivable** document the clear text line needs an embedded face, and the encoder names the one it wants: tzint writes `font-family="OCRB, monospace"` into its markup, so embedding a face under the alias `OCRB` is enough — the digits are then set in real OCR-B, stay text rather than becoming picture, and the markup is not touched. Where that face is not to hand, `-notext 1` leaves the line out and `text` sets it.
 
 ## Attachments, links and bookmarks
 

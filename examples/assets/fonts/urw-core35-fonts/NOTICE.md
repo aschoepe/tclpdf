@@ -19,6 +19,23 @@ as "metric-compatible with the 35 PostScript Level 2 Base Fonts". Anyone who
 would rather not take font files out of a repository has that route, and it is
 the shorter one on a Linux machine.
 
+**That route was compared against this one on 2026-08-14, and this one won on
+the licence.** The Debian source archive
+(<http://deb.debian.org/debian/pool/main/f/fonts-urw-base35/fonts-urw-base35_20200910.orig.tar.gz>)
+carries the AGPL and the font exemption and nothing else: a search through the
+whole package finds no mention of the Open Font License or of the LPPL. The
+choice of three licences is stated only upstream, in the `LICENSE.md` beside
+this file. It matters here because these files are redistributed in the source
+archive rather than merely used - the exemption covers embedding a font in a
+PDF, not shipping the font itself.
+
+That it is the same material either way was measured, not assumed: of the 28
+`.ttf` and `.otf` files kept here, 24 are byte for byte identical to Debian's.
+The four that differ are the Nimbus Sans italics, which Debian names `Italic`
+where upstream names them `Oblique` - same 859 glyphs, same bounding box, same
+advance widths, a different name table. Debian also ships 35 faces where
+upstream ships 38.
+
 One caveat worth knowing rather than discovering later: that repository
 describes itself in two ways. Its GitHub description says "Fork of defunct
 URWTypeFoundry/Core_35"; its README says "Nothing here is a fork or a re-hint.

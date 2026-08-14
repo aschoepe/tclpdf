@@ -20,6 +20,10 @@ set sample [file join [file dirname [file dirname [file normalize [info script]]
     examples assets images sample-vector.svg]
 testConstraint haveSvg [file exists $sample]
 
+set svgFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint haveFace [file exists $svgFace]
+
 # The identity transform the path module takes, spelled out once.
 set plain {apply {{x y} {list $x $y}}}
 
@@ -263,6 +267,124 @@ test svg-3.9 {the font resource is named once, not twice} -body {
   set content [::tclpdfTest::content $doc]
   $doc destroy
   list [regexp {/F\w+ } $content] [regexp {#2F} $content]
+} -result {1 0}
+
+test svg-3.10 {an embedded face is usable from a drawing} -constraints haveFace -body {
+  # Until this worked, a drawing could only ever use the standard fourteen -
+  # and naming an embedded face was the WORST way to write it: an unknown
+  # family fell back to helvetica quietly, while the known one aborted the
+  # drawing when the AFM path met a face it has no metrics for.
+  #
+  # Three things say the embedded road was taken: the resource is the embedded
+  # one, the glyphs go out as two-byte Identity-H codes rather than as ASCII,
+  # and kerning appears - which it can only do through the glyph run.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed house $::svgFace
+  $doc svg -data {<svg viewBox="0 0 100 20"><text x="10" y="10" font-family="house" font-size="8">AVA</text></svg>} \
+      -at {0 0} -width 100
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {/FEhouse } $content] [expr {[string first "(AVA)" $content] < 0}] \
+      [regexp {\] TJ} $content]
+} -result {1 1 1}
+
+test svg-3.11 {a drawing reaches past WinAnsi with an embedded face} -constraints haveFace -body {
+  # The half of this that has nothing to do with PDF/A, and the reason it is
+  # not a nicety: every place name east of Vienna aborted the drawing, in an
+  # ordinary PDF as much as in an archivable one. The standard fourteen have
+  # no glyph for these, and that is a property of those metrics - so the same
+  # string is measured both ways here, and only the embedded one may pass.
+  set text "Łódź Москва"
+  set data "<svg viewBox=\"0 0 100 20\"><text x=\"10\" y=\"10\"\
+      font-family=\"FAMILY\" font-size=\"8\">$text</text></svg>"
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed house $::svgFace
+  $doc svg -data [string map {FAMILY house} $data] -at {0 0} -width 100
+  set embedded [catch {::tclpdfTest::content $doc}]
+  set standard [catch {$doc svg -data [string map {FAMILY helvetica} $data] \
+      -at {0 30} -width 100} err]
+  $doc destroy
+  list $embedded $standard [string match {*WinAnsi*} $err]
+} -result {0 1 1}
+
+test svg-3.11a {text-anchor measures the embedded face, not a guess} -constraints haveFace -body {
+  # The other half of the same road: the anchor shifts x by the width of the
+  # text, so a drawing that measures wrong places its labels wrong without
+  # ever failing. Two strings of different length, both anchored at their end
+  # - the longer one has to start further left, and by more than a rounding.
+  proc svgAnchorX {face text} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed house $::svgFace
+    $doc svg -data "<svg viewBox=\"0 0 100 20\"><text x=\"90\" y=\"10\"\
+        font-family=\"$face\" font-size=\"8\" text-anchor=\"end\">$text</text></svg>" \
+        -at {0 0} -width 100
+    set content [::tclpdfTest::content $doc]
+    $doc destroy
+    regexp {1 0 0 1 ([-0-9.]+) [-0-9.]+ Tm} $content -> x
+    return $x
+  }
+  set short [svgAnchorX house AVA]
+  set long [svgAnchorX house AVAAVAAVA]
+  rename svgAnchorX {}
+  list [expr {$short < 90}] [expr {$long < $short}] \
+      [expr {($short - $long) > 5}]
+} -result {1 1 1}
+
+test svg-3.12 {the document's current style does not leak into a drawing} -constraints haveFace -body {
+  # A drawing says what it wants through font-family and nothing else. If the
+  # document happens to be set to bold when the drawing goes down, the label
+  # would come out bold - a picture that changes with its surroundings.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -style bold
+  $doc svg -data {<svg viewBox="0 0 100 20"><text x="10" y="10">x</text></svg>} \
+      -at {0 0} -width 100
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {/FHelvetica } $content] [regexp {/FHelveticaBold } $content]
+} -result {1 0}
+
+test svg-3.13 {a drawing with text can be archivable} -constraints haveFace -body {
+  # PDF/A refuses a font that is not embedded, so before this a drawing with
+  # so much as one label could not be made archivable at all - which is every
+  # letterhead as SVG, every chart with an axis, every barcode caption.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed house $::svgFace
+  $doc svg -data {<svg viewBox="0 0 100 20"><text x="10" y="10" font-family="house" font-size="8">Rechnung</text></svg>} \
+      -at {0 0} -width 100
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch svg-pdfa.pdf]
+  set code [catch {$doc write $path}]
+  set written [file exists $path]
+  $doc destroy
+  file delete $path
+  list $code $written
+} -result {0 1}
+
+test svg-3.14 {a drawing that stops halfway leaves no bracket open} -body {
+  # Older than the embedded-face work and found by it. A drawing brackets
+  # itself with q and a flipping matrix, and a group brackets itself again; if
+  # it stops in the middle - a face without the character asked for is the
+  # everyday reason - the Q was never written. Everything drawn afterwards
+  # then went through the flipping matrix: upside down and magnified, on a
+  # page that qpdf and veraPDF both pass without a word.
+  #
+  # Two levels deep on purpose: the group's bracket has to come off as well,
+  # so counting q against Q is the test rather than "did it restore once".
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set failed [catch {$doc svg -data {<svg viewBox="0 0 100 20"><g transform="translate(5,5)"><text x="5" y="10">Łódź</text></g></svg>} \
+      -at {20 20} -width 60}]
+  $doc text "after" -at {20 60}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set open [expr {[llength [regexp -all -inline {(?m)^q$} $content]]
+      - [llength [regexp -all -inline {(?m)^Q$} $content]]}]
+  list $failed $open
 } -result {1 0}
 
 test svg-4.1 {a real drawing goes through} -constraints haveSvg -body {

@@ -518,4 +518,95 @@ test font-6.3 {a subsetted face still carries one} -constraints haveFont -body {
       [regexp -all {/FontName /[A-Z]{6}\+DejaVuSans} $bytes]
 } -result {2 1}
 
+# A face that leads with a platform 0 name, built rather than found.
+#
+# 20 of the 210 faces on this machine lead with one - Times New Roman and
+# Arial Narrow among them - so this is not an exotic case, but none of those
+# files may be checked in. The case is therefore made from DejaVu: the
+# platform 1 record is taken out of the running by relabelling its nameId, and
+# the platform 3 record, which is already UTF-16BE, is relabelled as platform
+# 0. That is exactly what the affected fonts carry.
+proc fontLeadWithPlatformZero {source target} {
+  set channel [open $source rb]
+  set bytes [read $channel]
+  close $channel
+  set parsed [::tclpdf::sfnt parse $bytes]
+  lassign [dict get $parsed tables name] position -
+  binary scan $bytes @[expr {$position + 2}]Su count
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {$position + 6 + $index * 12}]
+    binary scan $bytes @${at}SuSuSuSu platform encoding language nameId
+    if {$nameId != 6} {
+      continue
+    }
+    if {$platform == 1} {
+      # nameId 18 is "compatible full", which nothing here reads.
+      set bytes [string replace $bytes [expr {$at + 6}] [expr {$at + 7}] \
+          [binary format Su 18]]
+    } elseif {$platform == 3} {
+      set bytes [string replace $bytes $at [expr {$at + 1}] [binary format Su 0]]
+    }
+  }
+  set channel [open $target wb]
+  puts -nonewline $channel $bytes
+  close $channel
+  return $target
+}
+
+test font-7.1 {a platform 0 name is decoded, not passed through raw} -constraints haveFont -body {
+  # Platform 0 (Unicode) is UTF-16BE just as platform 3 is, and only the
+  # second was decoded. The first record wins, so a font that leads with
+  # platform 0 handed its PostScript name over with a NUL between every
+  # letter.
+  set path [fontLeadWithPlatformZero $fontRegular \
+      [::tclpdfTest::scratch platform0.ttf]]
+  set parsed [::tclpdf::sfnt read $path]
+  file delete $path
+  set name [dict get $parsed names postScript]
+  list $name [string first \x00 $name]
+} -result {DejaVuSans -1}
+
+test font-7.2 {and the document it produces has a usable font name} -constraints haveFont -body {
+  # What the defect actually cost: /BaseFont /HOVCJQ+#00D#00e#00j... in the
+  # file, and qpdf refusing it with "null character not allowed in name token"
+  # - three warnings and exit 3, measured. veraPDF says nothing about it: it
+  # does not check names. So only this end catches it.
+  set path [fontLeadWithPlatformZero $fontRegular \
+      [::tclpdfTest::scratch platform0.ttf]]
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $path
+  $doc text "Grusse" -at {20 20} -family haus
+  set pdf [::tclpdfTest::scratch platform0.pdf]
+  $doc write $pdf
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $pdf]
+  file delete $pdf $path
+  list [regexp -all {/BaseFont /[A-Z]{6}\+DejaVuSans\y} $bytes] \
+      [regexp {#00} $bytes]
+} -result {2 0}
+
+test font-7.3 {a Macintosh name stays one byte per character} -constraints haveFont -body {
+  # The other direction, and the reason the fix names two platforms rather
+  # than "anything but 1": platform 1 is MacRoman, one byte per character.
+  # Decoded as UTF-16 it would pair the letters up - DejaVuSans would become
+  # five CJK characters, and nothing anywhere would fail.
+  set channel [open $fontRegular rb]
+  set bytes [read $channel]
+  close $channel
+  set parsed [::tclpdf::sfnt parse $bytes]
+  lassign [dict get $parsed tables name] position -
+  binary scan $bytes @[expr {$position + 2}]Su count
+  set leads {}
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {$position + 6 + $index * 12}]
+    binary scan $bytes @${at}SuSuSuSu platform encoding language nameId
+    if {$nameId == 6 && $leads eq {}} {
+      set leads $platform
+    }
+  }
+  # DejaVu leads with platform 1, which is why it never showed the defect.
+  list $leads [dict get $parsed names postScript]
+} -result {1 DejaVuSans}
+
 cleanupTests

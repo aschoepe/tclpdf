@@ -139,11 +139,13 @@ $doc text "The clear text line from the document, not from the encoder" -at [lis
 set y [expr {$y + 6}]
 
 $doc font -family body -size 8 -color {0.45 0.45 0.45}
-$doc text "An archivable document has to embed every font. Text inside an\
-    SVG can only use the fourteen standard faces today, and those are not\
-    embedded - hence -notext 1 and the digits set with tclpdf." \
+$doc text "An archivable document has to embed every font, and the caption is\
+    no exception. Either way works: -notext 1 leaves the line to the document,\
+    as here - or the encoder's own line is kept and the face it asks for is\
+    embedded, which is what 03.05-svg-text does. tzint names OCR-B, and that\
+    face is in the same directory as this one." \
     -at [list 20 $y] -width 170
-set y [expr {$y + 14}]
+set y [expr {$y + 18}]
 
 encode markup "123456789012" -barcode ean13 -notext 1
 $doc svg -data $markup -at [list 20 $y] -height 16 -alt "EAN-13 1234567890128"

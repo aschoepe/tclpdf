@@ -95,6 +95,24 @@ namespace eval ::tclpdf::svg {
 
 oo::define ::tclpdf::document::document {
 
+  # The drawing's own bracket count.
+  #
+  # [save] and [restore] write q and Q and keep no depth of their own, which is
+  # right for a caller that pairs them itself. A drawing cannot: it walks a
+  # tree of groups, each one bracketed, and it can stop anywhere in that tree.
+  # So the two are counted here, and [svg] unwinds to zero however it leaves.
+  method SvgSave {} {
+    my state svgDepth [expr {[my state svgDepth] + 1}]
+    my save
+    return
+  }
+
+  method SvgRestore {} {
+    my restore
+    my state svgDepth [expr {[my state svgDepth] - 1}]
+    return
+  }
+
   # $doc svg <path> ?options?
   # $doc svg -data <markup> ?options?
   # $doc svg size <path>          -> the drawing's own size
@@ -205,7 +223,8 @@ oo::define ::tclpdf::document::document {
         [expr {$top + $height -
             [::tclpdf::geometry fromPoints $insetY $unit]}]] originX originY
 
-    my save
+    my state svgDepth 0
+    my SvgSave
     if {[dict get $options opacity] ne {}} {
       my opacity [dict get $options opacity]
     }
@@ -226,8 +245,19 @@ oo::define ::tclpdf::document::document {
 
     # Reusable pieces are collected first: a <use> may point forward.
     my state svgDefs [my SvgCollect $root [dict create]]
-    my SvgElement $root [dict create fill black stroke none]
-    my restore
+    # Whatever the drawing opened is closed even when it stops halfway. A
+    # drawing CAN stop halfway - a face without the character asked for is the
+    # usual reason - and until this was here, a caught error left the flipping
+    # matrix in force: everything drawn afterwards came out upside down and
+    # magnified, on a page that no tool complains about. The error is passed
+    # on unchanged; only the brackets are settled.
+    try {
+      my SvgElement $root [dict create fill black stroke none]
+    } finally {
+      while {[my state svgDepth] > 0} {
+        my SvgRestore
+      }
+    }
     # Where the drawing ACTUALLY ended up, not what was asked for: once it is
     # fitted rather than stretched it is smaller than the rectangle and sits
     # centred in it, and a caller placing a caption underneath needs to know
@@ -369,4 +399,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.1
+package provide tclpdf::svg 1.2

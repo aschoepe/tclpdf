@@ -53,7 +53,7 @@ oo::define ::tclpdf::document::document {
       set outerTransform [my state svgTransform]
       my state svgTransform [::tclpdf::geometry multiply \
           [my SvgTransform $transform] $outerTransform]
-      my save
+      my SvgSave
       my content "[join [lmap number [my SvgTransform $transform] {
         ::tclpdf::pdfObj num $number
       }] { }] cm\n"
@@ -90,7 +90,7 @@ oo::define ::tclpdf::document::document {
     }
 
     if {$transform ne {}} {
-      my restore
+      my SvgRestore
       my state svgTransform $outerTransform
     }
     return
@@ -174,7 +174,7 @@ oo::define ::tclpdf::document::document {
     set x [my SvgLength [::tclpdf::xml attribute $node x] 0]
     set y [my SvgLength [::tclpdf::xml attribute $node y] 0]
     set target [dict get $defs $id]
-    my save
+    my SvgSave
     if {$x != 0 || $y != 0} {
       my content "1 0 0 1 [::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y] cm\n"
     }
@@ -188,7 +188,7 @@ oo::define ::tclpdf::document::document {
     } else {
       my SvgElement $target $style
     }
-    my restore
+    my SvgRestore
     return
   }
 
@@ -215,9 +215,15 @@ oo::define ::tclpdf::document::document {
       set size 12
     }
 
-    # font-family is a comma-separated wish list; the first name that the
-    # standard-font table knows wins, and helvetica catches the rest. A
-    # drawing must not fail because it asks for a face nobody has.
+    # font-family is a comma-separated wish list; the first name that resolves
+    # wins, and helvetica catches the rest. A drawing must not fail because it
+    # asks for a face nobody has.
+    #
+    # An EMBEDDED face resolves under its alias, so font-family="Roboto" finds
+    # it after [font embed Roboto]. That used to be the worst way to write it:
+    # an unknown name fell back quietly, and the KNOWN one aborted the drawing
+    # a few lines further down, where the AFM path met a face it had no
+    # metrics for.
     set family helvetica
     foreach candidate [split [dict get $style font-family] ,] {
       set candidate [string trim $candidate "\"' "]
@@ -229,9 +235,27 @@ oo::define ::tclpdf::document::document {
         break
       }
     }
-    set font [my TextResolve $family {}]
+    # -style is emptied deliberately: the document may currently be set to
+    # bold, and a drawing must not inherit that - SVG says what it wants
+    # through font-family, and font-weight is not read here.
+    #
+    # Everything after this goes through the same text state a [text] call
+    # builds, which is what gives a drawing the embedded path: the same
+    # measurement, the same resource, the same kerning and ligatures as the
+    # running text around it.
+    # Like every other text command: a drawing may be the first thing in the
+    # document that sets a letter, and until now it was the one that never
+    # needed the state.
+    my TextInit
+    set state [my TextMerge [list -family $family -style {} -size $size]]
+    set font [dict get $state resolved]
+    # Measured BEFORE the face is registered, and that order is deliberate.
+    # Measuring is what refuses a character the face cannot set, and a
+    # registered resource outlives the failed drawing: a caught error left
+    # Helvetica in the document, which is enough to make [pdfa] refuse to
+    # write it. An attempt that came to nothing must leave nothing behind.
+    set width [lindex [my TextPoints $state $text] 0]
     set resource [my TextResource $font]
-    set width [::tclpdf::afm stringWidth $font $text $size]
     switch -- [dict get $style text-anchor] {
       middle {set x [expr {$x - $width / 2.0}]}
       end {set x [expr {$x - $width}]}
@@ -248,7 +272,7 @@ oo::define ::tclpdf::document::document {
     # font whose name begins with a slash.
     my content "BT $resource [::tclpdf::pdfObj num $size] Tf\n"
     my content "1 0 0 1 [::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y] Tm\n"
-    my content "[::tclpdf::pdfObj bytesStr [::tclpdf::afm bytes $font $text]] Tj\n"
+    my content [my TextShow $font $state $text 0]
     my content "ET\nQ\n"
     return
   }
@@ -258,4 +282,4 @@ oo::define ::tclpdf::document::document {
   # operators are the only description of the shape available here.
 }
 
-package provide tclpdf::svgElement 1.0
+package provide tclpdf::svgElement 1.1

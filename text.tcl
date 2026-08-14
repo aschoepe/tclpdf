@@ -114,28 +114,7 @@ oo::define ::tclpdf::document::document {
       return $widest
     }
     set state [my TextMerge $args]
-    set font [dict get $state resolved]
-    if {[my TextEmbedded $font]} {
-      # The run is held here rather than left to a helper, because -spacing
-      # needs to know how many GLYPHS there are. Tc adds its space after every
-      # glyph drawn, and with ligatures that is no longer the number of
-      # characters: "office" is six characters and, in a face that has the ffi
-      # ligature, four glyphs. Counting characters charged for five gaps where
-      # three get drawn, and the line came out narrower than measured - visible
-      # as a frayed right edge in justified text.
-      set run [my FontRun $font $string [dict get $state ligatures]]
-      set points [my FontRunWidth $font $run [dict get $state size] \
-          [dict get $state kerning]]
-      set count [llength $run]
-    } else {
-      # No kerning and no ligatures for the standard fourteen: the metrics this
-      # package ships carry widths per byte value, not the AFM kerning pairs.
-      # Asking for either with a standard font is therefore not an error but
-      # has no effect - and measuring it here differently from drawing it would
-      # be the worse answer. One glyph per character, so the two counts agree.
-      set points [::tclpdf::afm stringWidth $font $string [dict get $state size]]
-      set count [string length $string]
-    }
+    lassign [my TextPoints $state $string] points count
     # Character and word spacing widen the run and belong in the measurement,
     # or right-aligned text drifts.
     if {$count > 1} {
@@ -457,6 +436,41 @@ oo::define ::tclpdf::document::document {
     return $adjustments
   }
 
+  # The plain width of a string in points, and how many GLYPHS it is.
+  #
+  # This is the one place that knows the difference between an embedded face
+  # and the standard fourteen while measuring, and [TextShow] below is its
+  # counterpart while drawing. The two belong together: a caller that measures
+  # here and draws there cannot end up with a width that was never set.
+  #
+  # Both numbers come out of the same run, and the second one is not a
+  # convenience. -spacing charges per glyph, because Tc adds its space after
+  # every glyph DRAWN; with ligatures that stops being the number of
+  # characters - "office" is six characters and, in a face that has the ffi
+  # ligature, four glyphs. Counting characters charged for five gaps where
+  # three get drawn, and the line came out narrower than measured, visible as
+  # a frayed right edge in justified text.
+  #
+  # Plain: no -spacing, no -wordSpacing, no -stretch. Those widen a line, they
+  # do not change what the glyphs measure, and the caller that wants them adds
+  # them - [textWidth] does, an SVG drawing does not, because SVG says nothing
+  # about them.
+  method TextPoints {state string} {
+    set font [dict get $state resolved]
+    if {![my TextEmbedded $font]} {
+      # No kerning and no ligatures for the standard fourteen: the metrics this
+      # package ships carry widths per byte value, not the AFM kerning pairs.
+      # Asking for either with a standard font is therefore not an error but
+      # has no effect - and measuring it here differently from drawing it would
+      # be the worse answer. One glyph per character, so the two counts agree.
+      return [list [::tclpdf::afm stringWidth $font $string \
+          [dict get $state size]] [string length $string]]
+    }
+    set run [my FontRun $font $string [dict get $state ligatures]]
+    return [list [my FontRunWidth $font $run [dict get $state size] \
+        [dict get $state kerning]] [llength $run]]
+  }
+
   # The show operator for one run: "(bytes) Tj", or a TJ array when something
   # has to be adjusted by hand between the glyphs.
   #
@@ -565,4 +579,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.7
+package provide tclpdf::text 1.8
