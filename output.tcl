@@ -169,6 +169,15 @@ oo::define ::tclpdf::document::document {
     set annots [my state annots]
     if {[dict exists $annots $index]} {
       lappend pagePairs Annots [::tclpdf::pdfObj arr [dict get $annots $index]]
+      # Tabs says in which order tabbing moves through the annotations, and
+      # /S means "follow the structure tree". PDF/UA requires it on every
+      # page that has annotations at all (7.18.1); without it the order is
+      # whatever the array happens to be, which is drawing order.
+      #
+      # Written whenever there are annotations rather than only under a UA
+      # claim: there is no case where the array order is the better answer,
+      # and 2.0 makes /S the default for exactly that reason.
+      lappend pagePairs Tabs /S
     }
     # The index into the ParentTree of a tagged document, reaching this file
     # the same way and for the same reason: a document without a structure

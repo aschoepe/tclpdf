@@ -144,12 +144,49 @@ if have verapdf; then
   done
   test $claimed -gt 0 || report_fail "no document claims a PDF/A level - did the XMP change?"
 
-  # PDF/UA is the STRICTER yardstick and deliberately not a failure: nothing
-  # here claims UA-1 yet. It is reported so that a rise in the count is seen
-  # the day it happens - measured once on a file with tagged content inside an
-  # artifact, -f 3a said conforming and ua1 found 33.
+  # PDF/UA, the same rule as above: a document is held to what it CLAIMS.
+  # The claim is pdfuaid:part in the XMP, and its value picks the profile -
+  # ua1 or ua2. A document without one is not judged by this yardstick.
+  for f in examples/out/*.pdf; do
+    uapart=`strings "$f" |
+        grep -o 'pdfuaid:part="[0-9]"\|<pdfuaid:part>[0-9]<' |
+        head -1 | tr -dc '0-9'`
+    test -n "$uapart" || continue
+    failed=`verapdf --flavour "ua$uapart" "$f" 2>/dev/null |
+        sed -n 's/.*failedChecks="\([0-9]*\)".*/\1/p' | head -1`
+    if test "$failed" = "0"; then
+      report_pass "veraPDF --flavour ua$uapart `basename $f`"
+    else
+      report_fail "veraPDF --flavour ua$uapart `basename $f`: ${failed:-no answer} failed checks"
+    fi
+  done
+
+  # WTPDF, likewise by its own declaration: the conformsTo URI names the
+  # level, and each level has its own profile.
+  for f in examples/out/*.pdf; do
+    for level in reuse accessibility; do
+      case $level in
+        reuse) profile=wt1r ;;
+        *) profile=wt1a ;;
+      esac
+      strings "$f" | grep -q "declarations/wtpdf.*#${level}1.0" || continue
+      failed=`verapdf --flavour $profile "$f" 2>/dev/null |
+          sed -n 's/.*failedChecks="\([0-9]*\)".*/\1/p' | head -1`
+      if test "$failed" = "0"; then
+        report_pass "veraPDF --flavour $profile `basename $f`"
+      else
+        report_fail "veraPDF --flavour $profile `basename $f`: ${failed:-no answer} failed checks"
+      fi
+    done
+  done
+
+  # The tagged documents that claim NO accessibility level are still measured
+  # against ua1, because the number moving is worth seeing the day it moves -
+  # measured once on a file with tagged content inside an artifact, where -f
+  # 3a said conforming and ua1 found 33.
   for f in examples/out/*.pdf; do
     grep -l "StructTreeRoot" "$f" >/dev/null 2>&1 || continue
+    strings "$f" | grep -q 'pdfuaid:part' && continue
     failed=`verapdf --flavour ua1 "$f" 2>/dev/null |
         sed -n 's/.*failedChecks="\([0-9]*\)".*/\1/p' | head -1`
     echo "  note  ua1 `basename $f`: ${failed:-no answer} (informational)"

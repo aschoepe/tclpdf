@@ -1,0 +1,207 @@
+# xmp.test --
+#
+# The metadata packet, and the fact that more than one topic writes into it.
+#
+# Two things are worth testing here and neither is the XML: that a second
+# contributor does not overwrite the first, and that what comes IN from a
+# caller is parsed rather than pasted. The XML itself is tdom's business now,
+# which is the point of building it with a parser.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::xmp
+package require tclpdf::pdfa
+source [file join [file dirname [info script]] helper.tcl]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set face [file join $here examples assets fonts DejaVuSans.ttf]
+testConstraint haveFace [file exists $face]
+
+# A minimal document with an EMBEDDED face. PDF/A refuses a standard font at
+# write time, so every document that declares it needs one - which is the
+# rule working, not an inconvenience.
+proc probe {face} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $face
+  $doc font -family face
+  $doc text "x" -at {20 20}
+  return $doc
+}
+
+# --- the timestamp --------------------------------------------------------
+
+test xmp-1.1 {the zone offset carries its colon} -body {
+  # XMP wants +HH:MM and [clock format %z] gives +HHMM. Every document this
+  # package wrote before 2026-08-15 had the colon missing, because the line
+  # meant to insert it used [string replace] with last before first - which
+  # returns the string unchanged instead of inserting. No validator objected,
+  # so only a test can hold this.
+  set stamp [::tclpdf::xmp stamp 1755000000]
+  list [regexp {^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[-+]\d\d:\d\d$} $stamp] \
+      [string length $stamp]
+} -result {1 25}
+
+test xmp-1.2 {the moment is the one it was given} -body {
+  # Two calls a second apart must not answer the same, or a document's dates
+  # would be whatever the first write happened to see.
+  set early [::tclpdf::xmp stamp 1755000000]
+  set later [::tclpdf::xmp stamp 1755003600]
+  expr {$early ne $later}
+} -result 1
+
+# --- who writes into the packet -------------------------------------------
+
+test xmp-2.1 {two topics share the packet, in registration order} -body {
+  # PDF/A first, PDF/UA second - the order they were declared in, and the
+  # order they appear in. A packet whose order depended on a dict iteration
+  # would differ between runs.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "Zwei Anspruecke"
+  $doc language de-DE
+  $doc page add
+  $doc font embed face [file join [file dirname [file dirname \
+      [file normalize [info script]]]] examples assets fonts DejaVuSans.ttf]
+  $doc font -family face
+  $doc structure H1 -script {$doc text "x" -at {20 20}}
+  $doc pdfa -part 3 -conformance A
+  $doc ua 1
+  set path [::tclpdfTest::scratch xmp-both.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set a [string first "pdfaid:part" $bytes]
+  set u [string first "pdfuaid:part" $bytes]
+  list [expr {$a > 0}] [expr {$u > 0}] [expr {$a < $u}]
+} -result {1 1 1}
+
+test xmp-2.2 {declaring a topic twice does not describe it twice} -constraints haveFace -body {
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa -part 2 -conformance U
+  set path [::tclpdfTest::scratch xmp-twice.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # One description, and it carries the LAST declaration - the callback reads
+  # the state at write time rather than at registration.
+  list [regexp -all {<pdfaid:part>} $bytes] \
+      [regexp {<pdfaid:part>2</pdfaid:part>} $bytes] \
+      [regexp {<pdfaid:conformance>U</pdfaid:conformance>} $bytes]
+} -result {1 1 1}
+
+test xmp-2.3 {an explicit packet wins over the built one} -constraints haveFace -body {
+  # A caller who supplies their own has said something more specific than
+  # anything this module would assemble.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc metadata "<?xpacket begin=\"\"?>\n<x:xmpmeta/>\n<?xpacket end=\"w\"?>"
+  set path [::tclpdfTest::scratch xmp-explicit.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {pdfaid:part} $bytes] [regexp {<x:xmpmeta/>} $bytes]
+} -result {0 1}
+
+# --- what comes in from outside -------------------------------------------
+
+test xmp-3.1 {a contribution may use the prefixes of the place it lands in} -constraints haveFace -body {
+  # The Factur-X extension schema says rdf:Bag without declaring rdf, because
+  # the rdf:RDF around it always has. Parsed on its own it is not well formed;
+  # this has to accept it anyway.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa extension {<rdf:Description rdf:about="" xmlns:probe="urn:probe">
+      <probe:list><rdf:Bag><rdf:li>eins</rdf:li></rdf:Bag></probe:list>
+    </rdf:Description>}
+  set path [::tclpdfTest::scratch xmp-raw.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {probe:list} $bytes] [regexp {<rdf:li>eins</rdf:li>} $bytes]
+} -result {1 1}
+
+test xmp-3.2 {a malformed contribution fails at the call, not in a validator} -constraints haveFace -body {
+  # The whole reason for parsing it: an unclosed element used to travel into
+  # the file, where qpdf and veraPDF both let it pass and only a human
+  # reading the XMP would ever have found it.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa extension {<rdf:Description rdf:about=""><probe:open></rdf:Description>}
+  set code [catch {$doc write [::tclpdfTest::scratch xmp-broken.pdf]} err]
+  $doc destroy
+  list $code [string match "*not well formed XML*" $err]
+} -result {1 1}
+
+test xmp-3.3 {the text of a title is escaped by the parser} -constraints haveFace -body {
+  set doc [probe $face]
+  $doc info Title "Fuenf & Sechs <sieben>"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-escape.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Only the packet: the Info dictionary carries the same title as a PDF
+  # string, where the angle brackets are ordinary characters and SHOULD
+  # stand there unescaped.
+  regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+  list [regexp {Fuenf &amp; Sechs &lt;sieben&gt;} $packet] \
+      [regexp {<sieben>} $packet]
+} -result {1 0}
+
+# --- the shape of the packet ----------------------------------------------
+
+test xmp-4.1 {a prefix is declared once, on its own description} -constraints haveFace -body {
+  # Declared at the ROOT instead, tdom repeats it on the first element using
+  # it - valid XML that breaks any reader matching "pdfaid:part>". Which is
+  # not hypothetical: a test here and an example both did.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-shape.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {xmlns:pdfaid} $bytes] \
+      [regexp {<pdfaid:part>3</pdfaid:part>} $bytes]
+} -result {1 1}
+
+test xmp-4.2 {the packet begins with its processing instruction} -body {
+  # It did not, once: a loop variable inside a contribution script shared a
+  # name with the variable the packet was being appended to, and a URI ended
+  # up in front of the opening instruction. qpdf accepted the file; veraPDF
+  # reported an XMP with nothing in it at all.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "T"
+  $doc language de-DE
+  $doc page add
+  $doc font embed face [file join [file dirname [file dirname \
+      [file normalize [info script]]]] examples assets fonts DejaVuSans.ttf]
+  $doc font -family face
+  $doc structure H1 -script {$doc text "x" -at {20 20}}
+  $doc ua -part 2 -wtpdf accessibility
+  set path [::tclpdfTest::scratch xmp-begin.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Whatever precedes the packet is PDF syntax; the packet itself starts at
+  # its instruction, with nothing between that and the stream keyword.
+  regexp {stream\r?\n<\?xpacket begin=} $bytes
+} -result 1
+
+cleanupTests

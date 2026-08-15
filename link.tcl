@@ -63,9 +63,48 @@ oo::define ::tclpdf::document::document {
       lappend pairs Dest [my destination [dict get $options page] \
           [dict get $options to] [dict get $options zoom]]
     }
+    # Reserved before the dictionary is written, because the StructParent that
+    # goes INTO it can only be asked for once the object has a number.
     set number [[my writer] add [::tclpdf::pdfObj dictionary $pairs]]
+    if {[my state tagged] eq "1"} {
+      set key [my StructureAnnotation $number]
+      if {$key ne {}} {
+        lappend pairs StructParent $key
+        [my writer] put $number [::tclpdf::pdfObj dictionary $pairs]
+      }
+    }
     my LinkRegister [my page current] [[my writer] ref $number]
     return $number
+  }
+
+  # Which link annotations carry no Contents, by page. Empty when every one
+  # of them has a description.
+  #
+  # PDF/UA makes Contents mandatory (7.18.5): a link is announced by that
+  # text, and without it a reader says "link" and stops. The fact is
+  # established here, where the annotations are, and judged by ua.tcl - the
+  # same division as fonts.
+  #
+  # A tooltip is what fills it, so the fix is one option on the call that
+  # created the link rather than anything structural.
+  method linksWithoutContents {} {
+    set missing {}
+    dict for {page references} [my state annots] {
+      foreach reference $references {
+        if {![regexp {(\d+) 0 R} $reference -> number]} {
+          continue
+        }
+        set body [[my writer] body $number]
+        if {![regexp {/Subtype /Link\M} $body]} {
+          continue
+        }
+        if {[regexp {/Contents\M} $body]} {
+          continue
+        }
+        lappend missing [expr {$page + 1}]
+      }
+    }
+    return $missing
   }
 
   # Annotations are collected per page and picked up when the page is

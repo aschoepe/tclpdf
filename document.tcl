@@ -202,7 +202,9 @@ oo::class create ::tclpdf::document::document {
       form xObject
       attach attach
       attachments attach
+      attachmentsWithoutDescription attach
       font text
+      fontsWithoutProgram font
       text text
       textWidth text
       textLines textBlock
@@ -215,14 +217,19 @@ oo::class create ::tclpdf::document::document {
       pdfa pdfa
       zugferd zugferd
       link link
+      linksWithoutContents link
       pageNumbers pageNumber
       textPath textPath
       bookmark outline
       bookmarks outline
       svg svg
+      viewerPreferences viewerPreferences
+      ua ua
       tagged structure
       structure structure
+      structureReport structure
       StructureMark structure
+      StructureAnnotation structure
       StructureBegin structure
       StructureEnd structure
     }

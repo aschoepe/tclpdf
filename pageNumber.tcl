@@ -157,7 +157,10 @@ oo::define ::tclpdf::document::document {
       set open ""
       set close ""
       if {[my state tagged] eq "1"} {
-        set mark [my StructureMark Artifact]
+        # Pagination, not the default Layout: a page number is exactly what
+        # that artifact type is for (14.8.2.2), and a reader can then leave
+        # it out of the running text on purpose rather than by accident.
+        set mark [my StructureMark Artifact Pagination]
         set open [my StructureBegin $mark]
         set close [my StructureEnd $mark]
       }

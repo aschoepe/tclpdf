@@ -523,6 +523,52 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   What no writer can infer is whether a line of text is a heading — neither its size nor its weight says so. That is what **-tag** on `text` is for: `-tag H1`, `-tag Caption`, and so on. `-tag Artifact` takes the text out of the tree altogether, which is what a running head or a page number needs; under PDF/UA anything left unmarked counts as a defect.
 
+: **Attributes.** Five options write standard attributes onto the element, each one only where the standard allows it — used elsewhere they would be written and then ignored, so they are refused at the call instead.
+
+  **-scope** takes `Row`, `Column` or `Both` and belongs on a `TH`; it says which way a header cell heads. A table sets it by itself: its head row heads columns. **-numbering** belongs on an `L` and takes `Decimal`, `UpperRoman`, `Disc` and the other values of ISO 32000 Table 347; PDF/UA makes it mandatory for an ordered list, and no writer can derive it — the label is drawn text, and `1.` and `-` look the same from here. **-bbox** belongs on a `Figure`, `Formula` or `Table` and takes the same four numbers as a rectangle; it is not required by the letter of the standard, but the reading tools rely on it. **-colSpan** and **-rowSpan** belong on a cell and are written by the table itself where it spans.
+
+: **Types beyond 1.7.** ISO 32000-2 adds `Title`, `Aside`, `DocumentFragment`, `Sub`, `FENote`, `Em`, `Strong` and headings past `H6`. They are accepted only in a 2.0 file — in a 1.7 one they would validate as non-standard types with no role map — and `ua -part 2` is the ordinary way to get one. Eleven older types (`Art`, `BlockQuote`, `TOC`, `TOCI`, `Index`, `Private`, `Quote`, `Note`, `Reference`, `BibEntry`, `Code`) exist *only* in the 1.7 namespace and keep it even inside a 2.0 tree.
+
+  A leaf type such as `P` or `H1` holds text and **inline** markup — `Span`, `Em`, `Strong`, `Link`, `Figure` and their kin — but no block element: a `P` inside a `P` is the standing example of what Annex L forbids.
+
+: **Artifacts name their kind.** What is not in the tree is bracketed as an artifact, and the bracket says which sort it is: `Pagination` for a page number, `Layout` for everything else this package produces. PDF/UA-2 requires the naming; earlier versions permit it, so it is written either way and a document does not have to be redrawn when it is upgraded.
+
+## PDF/UA
+
+*doc* **ua** ?*0*|*1*? | *doc* **ua** ?**-part** *1*|*2*? ?**-revision** *year*? ?**-wtpdf** *levels*?
+
+: Declares PDF/UA conformance — the promise that the document can be used by someone who cannot see the page. The boolean form means part 1 (ISO 14289-1) and is what a letter, an invoice or a briefing needs; part 2 (ISO 14289-2) is a PDF 2.0 format and is asked for by name.
+
+  **Off by default and explicit**, as `pdfa` is. The claim is legally meaningful in public procurement, so nothing should acquire it as a side effect — and a document using the standard 14 faces cannot make it at all.
+
+: **What it insists on, checked when the file is written.** A title (`info Title`), a language (`language`), every font embedded — the standard 14 included, which is stricter than PDF/A and rules out Symbol and ZapfDingbats entirely, as neither has an embeddable representative. Headings starting at `H1` with no level skipped. Tables with the same number of cells in every row, which `colSpan` and `rowSpan` cannot deliver. A description on every link, which is what `link -tooltip` writes. Part 2 adds a `Desc` on every attachment and forbids the generic `H`.
+
+  All of them are reported at once rather than one per run, and each message names the call to change. Writing fails; no file is left behind.
+
+: **What it contributes by itself**: the `pdfuaid` schema in the XMP, `ViewerPreferences` with `DisplayDocTitle`, and for part 2 the 2.0 structure namespace and the file version. None of them moves a mark on a page. In a document that also declares PDF/A, the PDF/A extension schema describing `pdfuaid` is written as well — without it PDF/A refuses a schema it does not know.
+
+  **-wtpdf** adds a Well-Tagged PDF declaration and takes `reuse`, `accessibility` or both. It goes with part 2 only. The identifier is written in two spellings: WTPDF 1.0 gives the URI with a slash before the fragment, veraPDF 1.30 tests for the form without one, and a document that has to satisfy both carries both — which the declaration mechanism expressly allows.
+
+: **PDF/UA-2 and PDF/A-3 cannot be combined.** Part 2 needs PDF 2.0, PDF/A-3 is a 1.7 format, and so an accessible ZUGFeRD invoice is `ua 1` together with `pdfa -part 3`. Declaring both is refused at the call that creates the contradiction.
+
+*doc* **ua state**
+
+: What has been declared, as a dictionary: `part`, `revision`, `wtpdf`, `registered`. Empty before **ua** was called.
+
+## Viewer preferences
+
+*doc* **viewerPreferences** ?**-key** *value* ...?
+
+: How a reader should present the document (ISO 32000 12.2). Without arguments it answers with what has been set so far.
+
+  Calls accumulate: each one sets the keys it names and leaves the rest alone, so a document can state its window wishes in one place and its printing wishes in another.
+
+  Booleans: **-hideToolbar**, **-hideMenubar**, **-hideWindowUI**, **-fitWindow**, **-centerWindow**, **-displayDocTitle**, **-pickTrayByPDFSize**. Names: **-nonFullScreenPageMode** (`UseNone`, `UseOutlines`, `UseThumbs`, `UseOC`), **-direction** (`L2R`, `R2L`), **-printScaling** (`None`, `AppDefault`), **-duplex** (`Simplex`, `DuplexFlipShortEdge`, `DuplexFlipLongEdge`). And **-numCopies**, a positive integer.
+
+  A misspelled value is refused at the call. It has to be: a reader that meets one falls back to its default silently and nothing anywhere reports a problem — the document simply prints on one side for the rest of its life.
+
+  `ViewArea`, `ViewClip`, `PrintArea` and `PrintClip` are deliberately absent. They are deprecated in PDF 2.0 and no reader tested here acts on them.
+
 ## PDF/A and ZUGFeRD
 
 *doc* **pdfa** ?**-part** *n*? ?**-conformance** *level*? ?**-profile** *path*?

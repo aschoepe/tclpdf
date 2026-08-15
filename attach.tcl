@@ -110,6 +110,24 @@ oo::define ::tclpdf::document::document {
     return [lmap entry [my state attachments] {dict get $entry name}]
   }
 
+  # Which attachments carry no description. Empty when every one has been
+  # given a -description.
+  #
+  # PDF/UA-2 makes Desc mandatory on every file specification (8.2.5.11), and
+  # the reason is the same as for a link: the name of a file is not a
+  # description of it, and "factur-x.xml" announced on its own tells a
+  # listener nothing. The fact is established here and judged by ua.tcl, the
+  # same division as fonts and links.
+  method attachmentsWithoutDescription {} {
+    set missing {}
+    foreach entry [my state attachments] {
+      if {[dict get $entry description] eq {}} {
+        lappend missing [dict get $entry name]
+      }
+    }
+    return $missing
+  }
+
   # -- internals ----------------------------------------------------------
 
   # Create the objects. Runs on beforeWrite, so a caller can attach right up

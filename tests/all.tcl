@@ -94,6 +94,9 @@ foreach tclpdfPkg {
     tclpdf::svg
     tclpdf::svgElement
     tclpdf::svgPaint
+    tclpdf::viewerPreferences
+    tclpdf::xmp
+    tclpdf::ua
 } {
     package require $tclpdfPkg
 }

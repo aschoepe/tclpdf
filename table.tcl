@@ -506,10 +506,27 @@ oo::define ::tclpdf::document::document {
       }
       # A head cell is a TH, everything else a TD - the section is on the
       # cell already, put there when the grid was normalised.
+      #
+      # A TH gets Scope Column, and only that value: tclpdf's head is a row of
+      # cells above the body, so every one of them heads a COLUMN. A row
+      # header would be Scope Row, and there is no way to say "this column is
+      # the header" here - inventing one from the first cell would be a guess.
+      #
+      # The spans are written out because a reader rebuilding the grid cannot
+      # measure the page to find them.
       set draw [list my TableDrawCell $cell $x $y $cellHeight]
       if {[my state tagged] eq "1"} {
-        my structure [expr {[dict get $cell section] eq "head" ? "TH" : "TD"}] \
-            -script $draw
+        set head [expr {[dict get $cell section] eq "head"}]
+        set attributes {}
+        if {$head} {
+          lappend attributes -scope Column
+        }
+        foreach {option key} {colSpan colSpan rowSpan rowSpan} {
+          if {[dict get $cell $key] > 1} {
+            lappend attributes -$option [dict get $cell $key]
+          }
+        }
+        my structure [expr {$head ? "TH" : "TD"}] {*}$attributes -script $draw
       } else {
         {*}$draw
       }

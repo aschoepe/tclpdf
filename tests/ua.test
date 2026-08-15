@@ -1,0 +1,430 @@
+# ua.test --
+#
+# PDF/UA - the accessibility claim, and the refusals that keep it honest.
+#
+# The interesting half of this module is what it does NOT let through. A claim
+# that a document is accessible is invisible in the file to anyone who does
+# not run a validator, so every check here exists because the alternative is a
+# document that says it is accessible and is not.
+#
+# Which is also why the negative tests outnumber the positive ones: writing
+# the pdfuaid schema is two lines, and deciding whether it may be written is
+# the module.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::ua
+source [file join [file dirname [info script]] helper.tcl]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set face [file join $here examples assets fonts DejaVuSans.ttf]
+testConstraint haveFace [file exists $face]
+
+# A document that meets every UA-1 requirement, as the starting point the
+# negative tests take one thing away from.
+proc accessible {face} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "Sicherheitsunterweisung 2026"
+  $doc language de-DE
+  $doc page add
+  $doc font embed face $face
+  $doc font -family face -size 12
+  $doc structure H1 -script {
+    uplevel 1 [list $doc text "Ueberschrift" -at {20 20}]
+  }
+  return $doc
+}
+
+# --- the claim ------------------------------------------------------------
+
+test ua-1.1 {the claim reaches the XMP packet} -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-claim.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # part 1 and no rev: UA-1 has no revision, and one would be a claim to
+  # something else.
+  list [regexp {<pdfuaid:part>1</pdfuaid:part>} $bytes] \
+      [regexp {pdfuaid:rev} $bytes] \
+      [regexp {xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/"} $bytes]
+} -result {1 0 1}
+
+test ua-1.2 {DisplayDocTitle is set, not demanded} -constraints haveFace -body {
+  # The one requirement the writer can meet by itself: it moves nothing on
+  # any page, so asking the caller to write it out would be ceremony.
+  set doc [accessible $face]
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-viewer.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/ViewerPreferences << /DisplayDocTitle true >>} $bytes
+} -result 1
+
+test ua-1.3 {the state answers what was declared} -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc ua 1
+  set one [dict get [$doc ua state] part]
+  $doc ua -part 1 -revision 2014
+  set revision [dict get [$doc ua state] revision]
+  $doc ua 0
+  set off [$doc ua state]
+  $doc destroy
+  list $one $revision $off
+} -result {1 2014 {}}
+
+# --- what is refused ------------------------------------------------------
+
+test ua-2.1 {a document without a tree cannot claim it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc info Title "T"
+  $doc language de-DE
+  $doc page add
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-untagged.pdf]} err]
+  $doc destroy
+  list $code [string match "*not tagged*" $err]
+} -result {1 1}
+
+test ua-2.2 {a document without a title cannot claim it} -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc info Title ""
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-title.pdf]} err]
+  $doc destroy
+  list $code [string match "*no title*" $err]
+} -result {1 1}
+
+test ua-2.3 {a document without a language cannot claim it} -constraints haveFace -body {
+  # Built by hand rather than through [accessible], because [language] with
+  # no argument READS the tag - there is no way to take one back.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc info Title "T"
+  $doc page add
+  $doc font embed face $face
+  $doc font -family face
+  $doc text "x" -at {20 20}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-lang.pdf]} err]
+  $doc destroy
+  list $code [string match "*no language*" $err]
+} -result {1 1}
+
+test ua-2.4 {a standard font cannot be used at all} -body {
+  # PDF/A leaves the standard 14 exempt; PDF/UA does not (7.21.4 Note 5).
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc info Title "T"
+  $doc language de-DE
+  $doc page add
+  $doc font -family helvetica
+  $doc text "x" -at {20 20}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-font.pdf]} err]
+  $doc destroy
+  list $code [string match "*no font program*" $err] \
+      [string match "*Helvetica*" $err]
+} -result {1 1 1}
+
+test ua-2.5 {Symbol and ZapfDingbats are named as hopeless} -body {
+  # The other twelve can be replaced by an embeddable face; these two have no
+  # embeddable representative at all, and saying so saves a search that has
+  # no result.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc info Title "T"
+  $doc language de-DE
+  $doc page add
+  $doc font -family zapfdingbats
+  $doc text "4" -at {20 20}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-dingbats.pdf]} err]
+  $doc destroy
+  list $code [string match "*no document using them can claim PDF/UA*" $err]
+} -result {1 1}
+
+test ua-2.6 {every problem is reported, not the first} -body {
+  # A caller fixing five problems in five write-and-read rounds is the
+  # failure mode this avoids.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica
+  $doc text "x" -at {20 20}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-all.pdf]} err]
+  $doc destroy
+  list $code [regexp {4 reasons} $err] [string match "*no title*" $err] \
+      [string match "*not tagged*" $err]
+} -result {1 1 1 1}
+
+# --- headings -------------------------------------------------------------
+
+test ua-3.1 {the first heading has to be an H1} -constraints haveFace -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc info Title "T"
+  $doc language de-DE
+  $doc page add
+  $doc font embed face $face
+  $doc font -family face
+  $doc structure H3 -script {$doc text "x" -at {20 20}}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-h3.pdf]} err]
+  $doc destroy
+  list $code [string match "*first heading is an H3*" $err]
+} -result {1 1}
+
+test ua-3.2 {no level may be skipped} -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc structure H3 -script {$doc text "y" -at {20 40}}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-skip.pdf]} err]
+  $doc destroy
+  list $code [string match "*jumps from H1 to H3*" $err]
+} -result {1 1}
+
+test ua-3.3 {a descent and a return are both fine} -constraints haveFace -body {
+  # H1 H2 H3 H2 H3 is a normal document: going back UP is not a skip, and a
+  # check that only ever compared with the previous level would refuse it.
+  set doc [accessible $face]
+  set y 40
+  foreach level {H2 H3 H2 H3} {
+    $doc structure $level -script [list $doc text "x" -at [list 20 $y]]
+    incr y 10
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-descent.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+# --- tables ---------------------------------------------------------------
+
+test ua-4.1 {a regular table passes} -constraints haveFace -body {
+  set doc [accessible $face]
+  # -style is not optional: a table has a font state of its own and it
+  # defaults to Helvetica, which no UA document may use.
+  $doc table -at {20 60} -width 100 -style {family face} \
+      -headStyle {family face} -head {{A B C}} -body {{1 2 3} {4 5 6}}
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-table.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-4.2 {a spanning cell makes the table irregular} -constraints haveFace -body {
+  # Not a defect in the table - PDF/UA and colSpan are simply incompatible,
+  # and the message says so rather than suggesting a fix that does not exist.
+  set doc [accessible $face]
+  $doc table -at {20 60} -width 100 -style {family face} \
+      -headStyle {family face} -head {{A B C}} -body {{{text 1 colSpan 2} 3} {4 5 6}}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-span.pdf]} err]
+  $doc destroy
+  list $code [string match "*rows of 2 and 3 cells*" $err]
+} -result {1 1}
+
+test ua-4.3 {a head cell says which way it heads} -constraints haveFace -body {
+  # Scope Column and only that: tclpdf's head is a row above the body, so
+  # every cell in it heads a column. There is no way to say "this COLUMN is
+  # the header", and guessing one from the first cell would be a guess.
+  set doc [accessible $face]
+  $doc table -at {20 60} -width 100 -style {family face} \
+      -headStyle {family face} -head {{A B}} -body {{1 2}}
+  set path [::tclpdfTest::scratch ua-scope.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/O /Table\s*/Scope /Column} $bytes] \
+      [regexp {/S /TD[^>]*/Scope} $bytes]
+} -result {2 0}
+
+# --- part 2 ---------------------------------------------------------------
+
+test ua-5.1 {part 2 raises the file version and names the namespace} \
+    -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc ua -part 2
+  set path [::tclpdfTest::scratch ua-two.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string match "%PDF-2.0*" $bytes] \
+      [regexp {<pdfuaid:part>2</pdfuaid:part>} $bytes] \
+      [regexp {<pdfuaid:rev>2024</pdfuaid:rev>} $bytes] \
+      [regexp {/Type /Namespace} $bytes] \
+      [regexp {/NS \d+ 0 R} $bytes]
+} -result {1 1 1 1 1}
+
+test ua-5.2 {the 1.7-only types keep the default namespace} \
+    -constraints haveFace -body {
+  # Eleven types exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3). Naming
+  # the 2.0 namespace on one of them would be a claim about a type that does
+  # not exist there.
+  set doc [accessible $face]
+  $doc structure Code -script {$doc text "x = 1" -at {20 40}}
+  $doc ua -part 2
+  set path [::tclpdfTest::scratch ua-only17.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The Code element carries no NS, the H1 next to it does.
+  list [regexp {/S /Code(?![^>]*/NS)} $bytes] [regexp {/S /H1[^>]*} $bytes]
+} -result {1 1}
+
+test ua-5.3 {part 2 and PDF/A-3 are mutually exclusive} -constraints haveFace -body {
+  # PDF/A-3 is a 1.7 format and UA-2 needs 2.0. Said at the call that creates
+  # the contradiction, whichever way round the two were declared.
+  set doc [accessible $face]
+  $doc pdfa -part 3 -conformance A
+  set code [catch {$doc ua -part 2} err]
+  $doc destroy
+  list $code [string match "*cannot be claimed by one file*" $err]
+} -result {1 1}
+
+test ua-5.4 {the generic H is refused under part 2 only} -constraints haveFace -body {
+  # H means "a heading at whatever level the nesting implies", and 2.0
+  # dropped it. Under part 1 it stays legal.
+  set doc [accessible $face]
+  $doc structure H -script {$doc text "x" -at {20 40}}
+  $doc ua 1
+  set one [catch {$doc write [::tclpdfTest::scratch ua-h1ok.pdf]}]
+  $doc ua -part 2
+  set two [catch {$doc write [::tclpdfTest::scratch ua-h2no.pdf]} err]
+  $doc destroy
+  file delete [::tclpdfTest::scratch ua-h1ok.pdf]
+  list $one $two [string match "*generic H*" $err]
+} -result {0 1 1}
+
+test ua-5.5 {an attachment without a description fails part 2 only} \
+    -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc attach [info script] -name probe.tcl
+  $doc ua 1
+  set one [catch {$doc write [::tclpdfTest::scratch ua-att1.pdf]}]
+  $doc ua -part 2
+  set two [catch {$doc write [::tclpdfTest::scratch ua-att2.pdf]} err]
+  $doc destroy
+  file delete [::tclpdfTest::scratch ua-att1.pdf]
+  list $one $two [string match "*Desc on every file specification*" $err]
+} -result {0 1 1}
+
+# --- WTPDF ----------------------------------------------------------------
+
+test ua-6.1 {the declaration carries both spellings of the identifier} \
+    -constraints haveFace -body {
+  # WTPDF 1.0 writes the URI with a slash before the hash in all four places
+  # it names it; veraPDF 1.30.2 tests for the form without one. Both are
+  # written - the mechanism explicitly allows several claims, and neither is
+  # a false statement about the document.
+  set doc [accessible $face]
+  $doc ua -part 2 -wtpdf accessibility
+  set path [::tclpdfTest::scratch ua-wtpdf.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {declarations/wtpdf/#accessibility1\.0} $bytes] \
+      [regexp {declarations/wtpdf#accessibility1\.0} $bytes] \
+      [regexp {rdf:parseType="Resource"} $bytes] \
+      [regexp {reuse1\.0} $bytes]
+} -result {1 1 1 0}
+
+test ua-6.2 {WTPDF belongs to part 2, and an unknown level is named} \
+    -constraints haveFace -body {
+  set doc [accessible $face]
+  set wrongPart [catch {$doc ua -part 1 -wtpdf accessibility} first]
+  set wrongLevel [catch {$doc ua -part 2 -wtpdf sideways} second]
+  $doc destroy
+  list $wrongPart [string match "*goes with PDF/UA-2*" $first] \
+      $wrongLevel [string match "*reuse and accessibility*" $second]
+} -result {1 1 1 1}
+
+test ua-6.3 {no declaration means no empty description} -constraints haveFace -body {
+  # An empty contribution is left out of the packet rather than written as a
+  # description with nothing in it.
+  set doc [accessible $face]
+  $doc ua -part 2
+  set path [::tclpdfTest::scratch ua-nodecl.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {pdfd:} $bytes] [regexp {<pdfuaid:part>2</pdfuaid:part>} $bytes]
+} -result {0 1}
+
+# --- links ----------------------------------------------------------------
+
+test ua-7.1 {a link without a description is refused} -constraints haveFace -body {
+  # A reader announces a link by its Contents (7.18.5). Without one it says
+  # "link" and stops, which is the whole of what the user learns.
+  set doc [accessible $face]
+  $doc structure Link -script {
+    $doc text "tcl.tk" -at {20 40}
+    $doc link -at {20 36} -size {20 6} -url https://www.tcl.tk/
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-link.pdf]} err]
+  $doc destroy
+  list $code [string match "*without a description*" $err] \
+      [string match "*-tooltip*" $err]
+} -result {1 1 1}
+
+test ua-7.2 {a link with a tooltip passes and joins the tree} -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc structure Link -script {
+    $doc text "tcl.tk" -at {20 40}
+    $doc link -at {20 36} -size {20 6} -url https://www.tcl.tk/ \
+        -tooltip "Zur Tcl-Startseite"
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-link-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set bytes [expr {$code ? {} : [::tclpdfTest::readBytes $path]}]
+  file delete $path
+  list $code [regexp {/Type /OBJR} $bytes] [regexp {/Contents \(Zur} $bytes]
+} -result {0 1 1}
+
+test ua-8.1 {a document claiming both standards describes the pdfuaid schema} \
+    -constraints haveFace -body {
+  # PDF/A allows only the predefined XMP schemas unless the file describes
+  # the others itself (ISO 19005, 6.6.2.3.1). pdfuaid is not predefined, so a
+  # document making both claims has to carry an extension schema description
+  # - without it veraPDF refuses the PDF/A claim, once per property, while
+  # the PDF/UA claim passes.
+  set doc [accessible $face]
+  $doc pdfa -part 3 -conformance A
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-extension.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {pdfaSchema:prefix>pdfuaid<} $bytes] \
+      [regexp {pdfaProperty:name>part<} $bytes] \
+      [regexp {pdfaProperty:name>rev<} $bytes] \
+      [regexp {pdfaSchema:namespaceURI>http://www.aiim.org/pdfua/ns/id/<} $bytes]
+} -result {1 1 1 1}
+
+cleanupTests

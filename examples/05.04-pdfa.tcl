@@ -140,8 +140,10 @@ set channel [open $target rb]
 set bytes [read $channel]
 close $channel
 regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+# The element may carry its namespace declaration, so the pattern cannot
+# demand that the tag name is followed straight by the closing bracket.
 puts "  XMP packet: [string length $packet] bytes,\
-    conformance [expr {[regexp {pdfaid:conformance>(\w)<} $bytes -> level] ?
+    conformance [expr {[regexp {pdfaid:conformance[^>]*>(\w)<} $bytes -> level] ?
         $level : {not found}}]"
 
 puts "  written: $target ([file size $target] bytes)"

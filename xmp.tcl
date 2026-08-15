@@ -1,0 +1,351 @@
+#
+# tclpdf - PDF generation for Tcl
+#
+# xmp - the metadata packet, and who is allowed to write into it (XMP part 1)
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+#
+# A PDF says who made it twice: in the Info dictionary, which is deprecated in
+# 2.0, and in an XMP packet, which is XML and is what every standard from
+# PDF/A on reads. The packet has one slot per document, so the moment two
+# topics want to write into it - PDF/A its part and conformance, PDF/UA its
+# part and revision - neither can own it any more.
+#
+# Hence this module. It owns the packet and nothing else; the topics register
+# what they want to say:
+#
+#   my xmpSchema pdfaid http://www.aiim.org/pdfa/ns/id/ \
+#       {part conformance} PdfaXmpBody
+#
+# The last argument is a METHOD, called when the packet is built, and that is
+# the whole trick: a topic's part number may still change after it registered
+# - [pdfa -part 3] can be called twice - and a callback reads the state as it
+# is at write time rather than as it was at registration. Registration order
+# is packet order, so a document that declares PDF/A and then PDF/UA gets
+# pdfaid before pdfuaid, every time.
+#
+# The method answers with a list of entries, each one {kind tag value}:
+#
+#   {text part 2}
+#   {bag declarations {{conformsTo http://pdfa.org/declarations/wtpdf/#reuse1.0}}}
+#
+# The kind is stated rather than derived from the shape of the value, and
+# that is deliberate. A value's shape is not a reliable signal in Tcl - every
+# string is also a list, and a two word title would parse as a structure. The
+# same mistake once cost this package a table cell that quietly dropped all
+# but its last word.
+#
+# Three descriptions are written by this module itself and belong to no topic:
+# dc, xmp and pdf carry title, author, subject, dates and producer, all read
+# from the Info dictionary. They are not PDF/A's property - an ordinary
+# document has them too - and putting them here is what lets [ua] produce a
+# valid packet with no PDF/A anywhere in the document.
+#
+# The XML is built with tdom rather than by appending strings, following the
+# construction in the author's ooxml package. Three things come out of that
+# and each one had been a hand written detail before: escaping is the
+# parser's business, a raw contribution from outside is PARSED on the way in
+# and a malformed one fails at the call instead of in a validator, and the
+# packet is well formed by construction rather than by review.
+#
+# Two mechanics of tdom that are not obvious and both were measured here:
+# an element command has to be declared with [dom createNodeCmd] before
+# [appendFromScript] can use it, and it needs -namespace, or a prefixed
+# ATTRIBUTE inside the script - rdf:about is one - is refused with "attribute
+# prefix does not resolve".
+#
+
+package require Tcl 8.6.11-
+package require TclOO
+package require tdom 0.9.0-
+package require tclpdf::document 1.0-
+
+namespace eval ::tclpdf::xmp {
+  namespace export {[a-z]*}
+  namespace ensemble create
+
+  variable namespaces {
+    x       "adobe:ns:meta/"
+    rdf     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    dc      "http://purl.org/dc/elements/1.1/"
+    xmp     "http://ns.adobe.com/xap/1.0/"
+    pdf     "http://ns.adobe.com/pdf/1.3/"
+  }
+
+  # Which element commands have been declared. [dom createNodeCmd] overwrites
+  # silently when called twice, but the list keeps the work out of the second
+  # document in a process that writes many.
+  variable declared {}
+
+  dom createNodeCmd textNode Text
+}
+
+# Declare the element commands for one schema. Called by [declare] below and
+# by every topic that contributes, through [xmpSchema].
+proc ::tclpdf::xmp::declare {prefix uri tags} {
+  variable declared
+  foreach tag $tags {
+    set name [expr {$prefix eq {} ? $tag : "$prefix:$tag"}]
+    if {$name in $declared} {
+      continue
+    }
+    namespace eval ::tclpdf::xmp [list dom createNodeCmd -tagName $name \
+        -namespace $uri elementNode Tag_$name]
+    lappend declared $name
+  }
+  return
+}
+
+namespace eval ::tclpdf::xmp {
+  variable namespaces
+  declare rdf [dict get $namespaces rdf] {RDF Description Alt Bag Seq li}
+  declare dc [dict get $namespaces dc] {title creator description}
+  declare xmp [dict get $namespaces xmp] {CreateDate ModifyDate CreatorTool}
+  declare pdf [dict get $namespaces pdf] {Producer}
+}
+
+# The moment as XMP wants it: ISO 8601 with the zone offset as +HH:MM, where
+# [clock format %z] gives +HHMM.
+#
+# The colon was missing from every document this package has written. The line
+# that was supposed to insert it read
+#
+#   string replace $text end-1 end-2 ":[string range $text end-1 end]"
+#
+# and does nothing at all: with last before first, [string replace] returns
+# the string unchanged rather than inserting at that point. No validator
+# objected - veraPDF accepts both spellings - so it survived until the packet
+# was rebuilt with a parser.
+proc ::tclpdf::xmp::stamp {{seconds {}}} {
+  if {$seconds eq {}} {
+    set seconds [clock seconds]
+  }
+  set text [clock format $seconds -format "%Y-%m-%dT%H:%M:%S%z"]
+  return "[string range $text 0 end-2]:[string range $text end-1 end]"
+}
+
+# One rdf:Description under $rdf, declaring $prefix, filled by $script.
+#
+# The script runs in the CALLER's frame, so it sees the caller's variables -
+# which is what lets [packet] write $title and $items straight into the tags
+# without threading anything through.
+#
+# That convenience has a price, and it was paid once: the script's own loop
+# variables are the caller's variables too. A [foreach {inner text}] in here
+# overwrote a variable called text in [packet], and the packet went out with a
+# URI in front of its opening processing instruction. See the naming note at
+# the end of [packet].
+proc ::tclpdf::xmp::Describe {rdf prefix uri script} {
+  $rdf appendFromScript { Tag_rdf:Description rdf:about {} {} }
+  set description [$rdf lastChild]
+  $description setAttributeNS {} xmlns:$prefix $uri
+  uplevel 1 [list $description appendFromScript $script]
+  # A description with nothing in it says nothing and is left out - an empty
+  # contribution should not become an empty element.
+  if {![llength [$description childNodes]]} {
+    $rdf removeChild $description
+    $description delete
+  }
+  return
+}
+
+# Build the packet.
+#
+#   descriptions   list of {prefix uri {{kind tag value} ...}}
+#   info           dict with title, author, subject, producer
+#   raw            list of rdf:Description elements as XML text
+#
+# A procedure rather than a method, and not by preference: [appendFromScript]
+# resolves the Tag_ commands in the namespace it runs in, and a TclOO method
+# runs in the class namespace where they are not.
+proc ::tclpdf::xmp::packet {descriptions info raw} {
+  variable namespaces
+  set title [dict get $info title]
+  set author [dict get $info author]
+  set subject [dict get $info subject]
+  set producer [dict get $info producer]
+  set now [stamp]
+
+  # Only x and rdf are declared at the root; every other prefix is declared on
+  # the rdf:Description that uses it, which is the shape Adobe's own writer
+  # produces and the one every XMP in the wild has.
+  #
+  # The alternative - all of them at the root - is equally valid XML and was
+  # measured to validate just as well. What it breaks is naive readers: tdom
+  # then repeats the declaration on the first element using each prefix, and
+  # "<pdfaid:conformance xmlns:pdfaid=...>U<" no longer matches a pattern
+  # looking for "pdfaid:conformance>". A test here and an example both broke
+  # on exactly that, which is warning enough about what it does to a caller's
+  # tooling.
+  #
+  # It takes createDocumentNS plus -namespace on the element commands to get
+  # here, and the declaration has to be set on the description BEFORE its
+  # children are built - see [Describe].
+  set document [dom createDocumentNS [dict get $namespaces x] x:xmpmeta]
+  set root [$document documentElement]
+  $root setAttributeNS {} xmlns:rdf [dict get $namespaces rdf]
+  $root appendFromScript { Tag_rdf:RDF {} }
+  set rdf [$root firstChild]
+
+  # One description per schema, and each one built in three steps: create the
+  # element, declare its prefix, THEN fill it. The order is the whole point.
+  # Declared afterwards, tdom writes the xmlns twice - once where it was put
+  # and once on the first child that uses the prefix - because by then the
+  # children were serialised against a scope that did not have it. Declared
+  # first, it appears exactly once, which is the shape every other XMP writer
+  # produces and the one a reader looking for "pdfaid:part>" survives.
+  foreach entry $descriptions {
+    lassign $entry prefix uri items
+    Describe $rdf $prefix $uri {
+      foreach item $items {
+        lassign $item kind tag value
+        switch -- $kind {
+          text {
+            Tag_${prefix}:$tag { Text $value }
+          }
+          bag {
+            Tag_${prefix}:$tag {
+              Tag_rdf:Bag {
+                foreach resource $value {
+                  Tag_rdf:li rdf:parseType Resource {
+                    foreach {resourceTag resourceValue} $resource {
+                      Tag_${prefix}:$resourceTag { Text $resourceValue }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  Describe $rdf dc [dict get $namespaces dc] {
+    if {$title ne {}} {
+      Tag_dc:title { Tag_rdf:Alt { Tag_rdf:li xml:lang x-default { Text $title } } }
+    }
+    if {$author ne {}} {
+      Tag_dc:creator { Tag_rdf:Seq { Tag_rdf:li { Text $author } } }
+    }
+    if {$subject ne {}} {
+      Tag_dc:description { Tag_rdf:Alt { Tag_rdf:li xml:lang x-default { Text $subject } } }
+    }
+  }
+  Describe $rdf xmp [dict get $namespaces xmp] {
+    Tag_xmp:CreateDate { Text $now }
+    Tag_xmp:ModifyDate { Text $now }
+    Tag_xmp:CreatorTool { Text $producer }
+  }
+  Describe $rdf pdf [dict get $namespaces pdf] {
+    Tag_pdf:Producer { Text $producer }
+  }
+
+  # Parsed, not appended as text: a raw contribution comes from a caller and
+  # a broken one has to fail here, where the call that produced it is still
+  # on the stack.
+  #
+  # It is parsed inside an rdf:RDF of its own rather than straight into the
+  # tree, and that is not decoration. A contribution written for this place
+  # may use the prefixes that are in scope AT this place - the Factur-X
+  # extension schema says rdf:Bag and rdf:li without declaring rdf, because
+  # the rdf:RDF around it always has. Parsed on its own it is not well formed;
+  # parsed in a wrapper carrying the same declaration it is.
+  foreach xml $raw {
+    if {[catch {dom parse "<rdf:RDF xmlns:rdf=\"[dict get $namespaces rdf]\"\
+        >$xml</rdf:RDF>"} fragment message]} {
+      $document delete
+      return -code error "tclpdf: XMP contribution is not well formed XML -\
+          [dict get $message -errorinfo]"
+    }
+    foreach child [[$fragment documentElement] childNodes] {
+      $rdf appendChild [$child cloneNode -deep]
+    }
+    $fragment delete
+  }
+  set body [$root asXML -indent 2]
+  $document delete
+
+  # [set] rather than [append] on the first line, and a name no contributed
+  # script would choose. A script passed to [Describe] runs in THIS frame, so
+  # its loop variables are these variables - and one of them was called text,
+  # which is what [append text] then continued. The packet came out with a
+  # declaration URI in front of its opening processing instruction, which qpdf
+  # accepted without a word and veraPDF reported as an XMP with nothing in it.
+  set packet "<?xpacket begin=\"\xef\xbb\xbf\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+  append packet $body "\n"
+  # The trailing padding is prescribed: it lets a tool rewrite the packet in
+  # place without moving every byte after it (XMP part 1, 7.3.2).
+  append packet [string repeat " " 100] "\n"
+  append packet "<?xpacket end=\"w\"?>\n"
+  return $packet
+}
+
+oo::define ::tclpdf::document::document {
+
+  # my xmpSchema <prefix> <uri> <tags> <method>
+  #
+  # Registering the same prefix twice replaces the entry rather than adding a
+  # second one: a topic that is declared twice must not describe itself twice
+  # in the packet.
+  method xmpSchema {prefix uri tags method} {
+    ::tclpdf::xmp::declare $prefix $uri $tags
+    set schemas [my state xmpSchemas]
+    set replaced 0
+    set result {}
+    foreach entry $schemas {
+      if {[lindex $entry 0] eq $prefix} {
+        lappend result [list $prefix $uri $method]
+        set replaced 1
+      } else {
+        lappend result $entry
+      }
+    }
+    if {!$replaced} {
+      lappend result [list $prefix $uri $method]
+    }
+    my state xmpSchemas $result
+    if {![llength $schemas]} {
+      my onSelf catalog XmpCatalog
+    }
+    return
+  }
+
+  # my xmpRaw <xml>
+  #
+  # A whole rdf:Description written by the caller, for what does not fit the
+  # tag and value form: a PDF/A extension schema description is one of these,
+  # and it is a page of RDF that no accessor could usefully model.
+  method xmpRaw {xml} {
+    set raw [my state xmpRaw]
+    lappend raw $xml
+    my state xmpRaw $raw
+    return
+  }
+
+  # Written at catalog time, so every topic has had its chance to register.
+  # An explicit [metadata] wins: a caller who supplies their own packet has
+  # said something more specific than any of this.
+  method XmpCatalog {} {
+    if {[my metadata] ne {}} {
+      return
+    }
+    set descriptions {}
+    foreach entry [my state xmpSchemas] {
+      lassign $entry prefix uri method
+      set pairs [my $method]
+      if {[llength $pairs]} {
+        lappend descriptions [list $prefix $uri $pairs]
+      }
+    }
+    my metadata [::tclpdf::xmp packet $descriptions [dict create \
+        title [my info Title] author [my info Author] \
+        subject [my info Subject] producer [my info Producer]] \
+        [my state xmpRaw]]
+    return
+  }
+}
+
+package provide tclpdf::xmp 1.0

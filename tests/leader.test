@@ -162,7 +162,7 @@ test leader-2.1 {the row is one element and the dots are an artifact} -constrain
   # Two pieces of marked content inside the element and one artifact between
   # them: a reader hears the entry and its number, not "dot dot dot".
   list [llength [regexp -all -inline {/P <</MCID} $content]] \
-      [llength [regexp -all -inline {/Artifact BMC} $content]]
+      [llength [regexp -all -inline {/Artifact <<[^>]*>> BDC} $content]]
 } -result {2 1}
 
 test leader-2.2 {-tag says what kind of element the row is} -constraints haveLeaderFont -body {
@@ -188,7 +188,7 @@ test leader-2.3 {-tag Artifact takes the whole row out of the tree} -constraints
   set content [::tclpdfTest::content $doc]
   $doc destroy
   list [llength [regexp -all -inline {MCID} $content]] \
-      [expr {[llength [regexp -all -inline {/Artifact BMC} $content]] == 3}]
+      [expr {[llength [regexp -all -inline {/Artifact <<[^>]*>> BDC} $content]] == 3}]
 } -result {0 1}
 
 cleanupTests

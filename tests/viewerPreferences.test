@@ -1,0 +1,131 @@
+# viewerPreferences.test --
+#
+# How a reader should present the document (12.2).
+#
+# A viewer preference is a wish, and a wish that is spelled wrong is not an
+# error anywhere - the reader falls back to its default and the document
+# prints single sided for the rest of its life. Which is why almost all of
+# this file is about refusing values rather than writing them.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::viewerPreferences
+source [file join [file dirname [info script]] helper.tcl]
+
+proc drawn {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "x" -at {20 20}
+  return $doc
+}
+
+test viewerPreferences-1.1 {a boolean and a name reach the catalogue} -body {
+  set doc [drawn]
+  $doc viewerPreferences -displayDocTitle 1 -duplex DuplexFlipLongEdge
+  set path [::tclpdfTest::scratch vp-basic.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/DisplayDocTitle true} $bytes] \
+      [regexp {/Duplex /DuplexFlipLongEdge} $bytes]
+} -result {1 1}
+
+test viewerPreferences-1.2 {calls accumulate instead of resetting} -body {
+  # A document may state its window wishes in one place and its printing
+  # wishes in another. Parsed with [option parse] over the full key list,
+  # each call would silently clear everything it did not name.
+  set doc [drawn]
+  $doc viewerPreferences -fitWindow 1
+  $doc viewerPreferences -numCopies 3
+  set path [::tclpdfTest::scratch vp-accumulate.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/FitWindow true} $bytes] [regexp {/NumCopies 3} $bytes]
+} -result {1 1}
+
+test viewerPreferences-1.3 {the keys keep the order of the standard's table} -body {
+  # So that a diff between two documents shows what differs rather than the
+  # order the calls happened to come in.
+  set doc [drawn]
+  $doc viewerPreferences -numCopies 2
+  $doc viewerPreferences -hideToolbar 1
+  $doc viewerPreferences -displayDocTitle 1
+  set path [::tclpdfTest::scratch vp-order.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set toolbar [string first "HideToolbar" $bytes]
+  set title [string first "DisplayDocTitle" $bytes]
+  set copies [string first "NumCopies" $bytes]
+  list [expr {$toolbar < $title}] [expr {$title < $copies}]
+} -result {1 1}
+
+test viewerPreferences-1.4 {no wish means no dictionary} -body {
+  # An empty /ViewerPreferences is legal and says nothing, and a reader has
+  # to parse it to find that out.
+  set doc [drawn]
+  set path [::tclpdfTest::scratch vp-none.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/ViewerPreferences} $bytes
+} -result 0
+
+test viewerPreferences-1.5 {the settings can be read back} -body {
+  set doc [drawn]
+  $doc viewerPreferences -displayDocTitle 1 -direction R2L
+  set state [$doc viewerPreferences]
+  $doc destroy
+  list [dict get $state displayDocTitle] [dict get $state direction]
+} -result {1 R2L}
+
+# --- what is refused ------------------------------------------------------
+
+test viewerPreferences-2.1 {a misspelled name is refused at the call} -body {
+  # The failure this prevents: /Duplex /DuplexFlipLong reaches the file, the
+  # reader ignores it, and nothing anywhere reports a problem.
+  set doc [drawn]
+  set code [catch {$doc viewerPreferences -duplex DuplexFlipLong} err]
+  $doc destroy
+  list $code [string match "*must be one of*" $err] \
+      [string match "*DuplexFlipLongEdge*" $err]
+} -result {1 1 1}
+
+test viewerPreferences-2.2 {a boolean key takes a boolean} -body {
+  set doc [drawn]
+  set code [catch {$doc viewerPreferences -displayDocTitle vielleicht} err]
+  $doc destroy
+  list $code [string match "*takes a boolean*" $err]
+} -result {1 1}
+
+test viewerPreferences-2.3 {numCopies takes a positive integer} -body {
+  set doc [drawn]
+  set zero [catch {$doc viewerPreferences -numCopies 0} first]
+  set text [catch {$doc viewerPreferences -numCopies zwei} second]
+  $doc destroy
+  list $zero [string match "*positive integer*" $first] \
+      $text [string match "*positive integer*" $second]
+} -result {1 1 1 1}
+
+test viewerPreferences-2.4 {an unknown option is refused} -body {
+  set doc [drawn]
+  set code [catch {$doc viewerPreferences -printArea CropBox} err]
+  $doc destroy
+  # ViewArea, ViewClip, PrintArea and PrintClip are deliberately absent: they
+  # are deprecated in 2.0 and no reader acts on them.
+  list $code [string match "*unknown*" $err]
+} -result {1 1}
+
+cleanupTests

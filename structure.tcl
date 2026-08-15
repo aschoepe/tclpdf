@@ -66,6 +66,27 @@ namespace eval ::tclpdf::structure {
     Warichu WT WP Figure Formula Form
   }
 
+  # What ISO 32000-2 adds (Annex M). Accepted alongside the list above rather
+  # than instead of it, because the two namespaces coexist in one 2.0 tree.
+  #
+  # DocumentFragment, Aside, Title, Sub, FENote, Em and Strong are the new
+  # names; H7 and beyond are new because 2.0 lifted the limit of six. Artifact
+  # became a structure type in 2.0 and is deliberately NOT here: in tclpdf an
+  # artifact is the statement that something is outside the tree, and letting
+  # it into the tree as a type would make one word mean both.
+  variable types20 {
+    DocumentFragment Aside Title Sub FENote Em Strong
+    H7 H8 H9 H10
+  }
+
+  # The eleven types that exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3).
+  # In a 2.0 tree they are still usable, but they stay in the default - which
+  # IS the 1.7 namespace - while everything else moves to the 2.0 one. So
+  # these are exactly the elements that get no /NS.
+  variable only17 {
+    Art BlockQuote TOC TOCI Index Private Quote Note Reference BibEntry Code
+  }
+
   # Types that group other elements instead of holding content of their own.
   # The distinction decides where a mark goes: drawing inside an open Sect
   # must make a P INSIDE it, while drawing inside an open H1 belongs to the
@@ -104,6 +125,22 @@ namespace eval ::tclpdf::structure {
     P H H1 H2 H3 H4 H5 H6 Lbl Span Quote Note Reference BibEntry Code
   }
 
+  # The inline-level types, which a leafOnly element MAY hold after all.
+  #
+  # The rule above was written as "holds text, not structure" and enforced as
+  # such - but Annex L forbids only BLOCK elements there, and the comment on
+  # it said so from the start. An emphasised word inside a paragraph is a
+  # Strong inside a P and cannot be anything else; refusing it left no way to
+  # mark up emphasis at all, and putting the Strong beside the P instead
+  # produced a tree veraPDF rejects: "Document shall not contain Strong".
+  #
+  # Found by the 5.8 example, not by a test - nothing before it had marked up
+  # a word rather than a paragraph.
+  variable inline {
+    Span Quote Note Reference BibEntry Code Link Annot Ruby RB RT RP
+    Warichu WT WP Figure Formula Form Em Strong Sub FENote
+  }
+
   # Where a derived P is not allowed but the right answer is obvious. Text
   # drawn in an open LI IS the list item's body; demanding an explicit LBody
   # for it would be correct and useless - the caller has already said this is
@@ -113,6 +150,56 @@ namespace eval ::tclpdf::structure {
   # mistake with no single right reading, and stays an error.
   variable contentChildOf {
     LI LBody
+  }
+
+  # Attributes an element can carry, as option name -> {owner key kind}.
+  #
+  # An attribute is not a key of the element dictionary but lives in an
+  # attribute object under /A, labelled with the OWNER it belongs to - a
+  # standard-attribute class, of which three matter here (14.8.5). The owner
+  # is not decoration: two owners may use the same name for different things,
+  # and a reader that finds Scope without one cannot tell which it is.
+  #
+  # All five are here because PDF/UA asks for them, and each is a value the
+  # writer either knows or cannot guess:
+  #
+  #   scope      TH only, and formally a "should" (UA-1 7.4.5) that the tools
+  #              read strictly. The table sets it: a head row is a column
+  #              header, which is the one case that is certain.
+  #   numbering  mandatory on an ordered list (UA-1 7.6), and never derivable
+  #              - the label is drawn text, and "1." and "-" look the same to
+  #              a writer.
+  #   bbox       Figure, Formula, Table. Not required by the letter of the
+  #              standard, named by the Best Practice Guide as what the tools
+  #              rely on.
+  #   colSpan    written by the table when a cell spans, so that a reader can
+  #   rowSpan    rebuild the grid without measuring anything.
+  variable attributes {
+    scope     {Table Scope name}
+    numbering {List ListNumbering name}
+    bbox      {Layout BBox rectangle}
+    colSpan   {Table ColSpan number}
+    rowSpan   {Table RowSpan number}
+  }
+
+  # The values the two name attributes accept. A misspelling here is the
+  # quiet kind of mistake: the file stays valid and the reader ignores the
+  # attribute, so a list reads as unordered forever.
+  variable attributeValues {
+    scope     {Row Column Both}
+    numbering {None Unordered Description Disc Circle Square Decimal
+               UpperRoman LowerRoman UpperAlpha LowerAlpha}
+  }
+
+  # Which types an attribute is allowed on. Checked because the attribute is
+  # silently ignored otherwise - a Scope on a TD is not an error anywhere,
+  # it simply does nothing.
+  variable attributeOn {
+    scope     {TH}
+    numbering {L}
+    bbox      {Figure Formula Table}
+    colSpan   {TH TD}
+    rowSpan   {TH TD}
   }
 
   # The other direction: types that exist only inside one particular parent.
@@ -175,6 +262,7 @@ oo::define ::tclpdf::document::document {
   method structure {type args} {
     set options [::tclpdf::option parse {
       alt {} lang {} title {} actualText {} script {}
+      scope {} numbering {} bbox {} colSpan {} rowSpan {}
     } $args "structure"]
     set script [dict get $options script]
     if {$script eq {}} {
@@ -196,12 +284,23 @@ oo::define ::tclpdf::document::document {
   # Open an element and make it the current one. Returns its id.
   method StructureOpen {type {options {}}} {
     variable ::tclpdf::structure::types
-    if {$type ni $types} {
+    variable ::tclpdf::structure::types20
+    if {$type ni $types && $type ni $types20} {
       return -code error "tclpdf: unknown structure type \"$type\" - the\
-          standard types of ISO 32000-1 14.8.4 are: [join [lsort $types] {, }]"
+          standard types of ISO 32000-1 14.8.4 are: [join [lsort $types] {, }];\
+          ISO 32000-2 adds [join [lsort $types20] {, }]"
+    }
+    # A 2.0-only type in a file that is not 2.0 would be written, validate as
+    # a non-standard type without a role map, and mean nothing to a reader.
+    if {$type in $types20 && $type ni $types
+        && [package vcompare [[my writer] version] 2.0] < 0} {
+      return -code error "tclpdf: \"$type\" is a structure type of ISO 32000-2\
+          and this document is PDF [[my writer] version] - raise the version,\
+          or use \[\$doc ua -part 2\], which does it"
     }
     my StructureCheckNesting $type
-    foreach key {alt lang title actualText} {
+    variable ::tclpdf::structure::attributes
+    foreach key [list alt lang title actualText {*}[dict keys $attributes]] {
       if {![dict exists $options $key]} {
         dict set options $key {}
       }
@@ -213,7 +312,8 @@ oo::define ::tclpdf::document::document {
     lappend elements [dict create type $type parent $parent kids {} \
         alt [dict get $options alt] lang [dict get $options lang] \
         title [dict get $options title] \
-        actualText [dict get $options actualText]]
+        actualText [dict get $options actualText] \
+        attributes [my StructureAttributes $type $options]]
     if {$parent ne {}} {
       set entry [lindex $elements $parent]
       dict lappend entry kids [list element $id]
@@ -222,6 +322,59 @@ oo::define ::tclpdf::document::document {
     my state structure $elements
     my state structureStack [lappend stack $id]
     return $id
+  }
+
+  # Turn the attribute options into owner -> pairs, checking each one where
+  # the call that set it can still be named. Answers {} when none was given,
+  # which is the ordinary case and costs an element nothing.
+  method StructureAttributes {type options} {
+    variable ::tclpdf::structure::attributes
+    variable ::tclpdf::structure::attributeValues
+    variable ::tclpdf::structure::attributeOn
+    set result {}
+    dict for {option definition} $attributes {
+      set value [dict get $options $option]
+      if {$value eq {}} {
+        continue
+      }
+      lassign $definition owner key kind
+      set allowed [dict get $attributeOn $option]
+      if {$type ni $allowed} {
+        return -code error "tclpdf: -$option belongs on [join $allowed { or }],\
+            not on a $type - it would be written and then ignored"
+      }
+      switch -- $kind {
+        name {
+          set values [dict get $attributeValues $option]
+          if {$value ni $values} {
+            return -code error "tclpdf: -$option must be one of\
+                [join $values {, }] - not \"$value\""
+          }
+          set object /$value
+        }
+        number {
+          if {![string is integer -strict $value] || $value < 1} {
+            return -code error "tclpdf: -$option takes a positive integer,\
+                not \"$value\""
+          }
+          set object [::tclpdf::pdfObj num $value]
+        }
+        rectangle {
+          if {[llength $value] != 4} {
+            return -code error "tclpdf: -$option takes four numbers\
+                {left top width height}, not \"$value\""
+          }
+          lassign $value left top width height
+          lassign [my coords $left [expr {$top + $height}]] x0 y0
+          lassign [my coords [expr {$left + $width}] $top] x1 y1
+          set object [::tclpdf::pdfObj arr [lmap number [list $x0 $y0 $x1 $y1] {
+            ::tclpdf::pdfObj num $number
+          }]]
+        }
+      }
+      dict lappend result $owner $key $object
+    }
+    return $result
   }
 
   # Refuse a child its parent may not have (Annex L). Checked when the element
@@ -234,6 +387,7 @@ oo::define ::tclpdf::document::document {
   method StructureCheckNesting {type} {
     variable ::tclpdf::structure::childrenOf
     variable ::tclpdf::structure::leafOnly
+    variable ::tclpdf::structure::inline
     variable ::tclpdf::structure::parentOf
     set parent [my StructureCurrent]
     set parentType [expr {$parent eq {} ? {} :
@@ -260,11 +414,53 @@ oo::define ::tclpdf::document::document {
       }
       return
     }
-    if {$parentType in $leafOnly} {
-      return -code error "tclpdf: a $parentType holds text, not a $type -\
-          close it before starting one (ISO 32000-2 Annex L)"
+    if {$parentType in $leafOnly && $type ni $inline} {
+      return -code error "tclpdf: a $parentType holds text and inline markup,\
+          not a $type - close it before starting one (ISO 32000-2 Annex L)"
     }
     return
+  }
+
+  # Attach an annotation to the element that is open, and answer the
+  # StructParent index it has to carry. {} when nothing is open or the
+  # document is not tagged, which is the caller's signal to write no
+  # StructParent at all.
+  #
+  # An annotation enters the tree as an OBJR - an object reference, not a
+  # marked content sequence - because it is not part of any content stream
+  # (14.7.5.4). And it uses StructParent, singular: a page has StructParents
+  # pointing at an ARRAY indexed by MCID, an annotation has StructParent
+  # pointing straight at its element. An object carrying both is invalid, and
+  # nothing here does.
+  #
+  # Annotations are numbered from zero and the PAGES move up behind them,
+  # rather than the other way round. It has to be this way: the key goes into
+  # the annotation dictionary when the link is drawn, and at that moment the
+  # document does not know how many pages it will have.
+  #
+  # Counting from the pages was the first attempt and it collides. Two pages
+  # with one link each gave the links keys 1 and 3 - the first computed when
+  # only one page existed - and key 1 was already the second page's. Both
+  # then claimed the same ParentTree entry. Found by a test, not by a
+  # validator: veraPDF reported nothing.
+  method StructureAnnotation {number} {
+    if {![my tagged]} {
+      return {}
+    }
+    set element [my StructureCurrent]
+    if {$element eq {}} {
+      return {}
+    }
+    set annotations [my state structureAnnots]
+    set key [llength $annotations]
+    lappend annotations [list $element $number $key]
+    my state structureAnnots $annotations
+    set elements [my state structure]
+    set entry [lindex $elements $element]
+    dict lappend entry kids [list objr $number]
+    lset elements $element $entry
+    my state structure $elements
+    return $key
   }
 
   method StructureClose {id} {
@@ -292,7 +488,15 @@ oo::define ::tclpdf::document::document {
   # Nothing open and no derived type means the mark is an ARTIFACT - what is
   # not in the tree is artifact by definition (14.8.2.2), and a caller who
   # wanted it in the tree said so.
-  method StructureMark {{derived {}}} {
+  # The second argument says WHICH kind of artifact, as {type ?subtype?} -
+  # Pagination for a running head or a page number, Layout for a rule or a
+  # cell fill, Page and Background for the two that nothing here produces.
+  #
+  # It matters from UA-2 on, where a bare BMC bracket is no longer enough and
+  # every artifact has to name its type. Under 1.7 it is allowed and ignored,
+  # so it is written either way rather than made to depend on the claim - a
+  # document that is upgraded to UA-2 should not have to be redrawn.
+  method StructureMark {{derived {}} {artifact Layout}} {
     if {![my tagged]} {
       return {}
     }
@@ -320,7 +524,7 @@ oo::define ::tclpdf::document::document {
     # counts unmarked content as a defect.
     if {$derived eq "Artifact"} {
       my state structureInArtifact 1
-      return [list artifact]
+      return [list artifact $artifact]
     }
     # "auto" is what the drawing primitives ask for: put this in whatever
     # element is open, and if none is, call it an artifact. A rule under a
@@ -333,7 +537,7 @@ oo::define ::tclpdf::document::document {
       if {$open eq {}
           || [dict get [lindex [my state structure] $open] type] in $containers} {
         my state structureInArtifact 1
-        return [list artifact]
+        return [list artifact $artifact]
       }
       set derived {}
     }
@@ -386,9 +590,15 @@ oo::define ::tclpdf::document::document {
       return ""
     }
     if {[lindex $mark 0] eq "artifact"} {
-      # BMC, not BDC: there is no property list to attach, and an artifact
-      # has no MCID because nothing in the tree points at it.
-      return "/Artifact BMC\n"
+      # BDC with a property list rather than a bare BMC. An artifact has no
+      # MCID - nothing in the tree points at it - but it does say what kind
+      # it is, which UA-2 requires and 1.7 permits.
+      lassign [lindex $mark 1] type subtype
+      set pairs "/Type /$type"
+      if {$subtype ne {}} {
+        append pairs " /Subtype /$subtype"
+      }
+      return "/Artifact <<$pairs>> BDC\n"
     }
     lassign $mark mcid type
     return "/$type <</MCID $mcid>> BDC\n"
@@ -450,6 +660,10 @@ oo::define ::tclpdf::document::document {
       }
     }
 
+    # {} unless a 2.0 claim put one there - see the NS key below.
+    set namespace [my state uaNamespace]
+    variable ::tclpdf::structure::only17
+
     set index 0
     set topLevel {}
     foreach element $elements {
@@ -467,11 +681,26 @@ oo::define ::tclpdf::document::document {
           mark {
             lappend kids [::tclpdf::pdfObj num [lindex $kid 2]]
           }
+          objr {
+            lappend kids [::tclpdf::pdfObj dictionary [list \
+                Type /OBJR Obj [$writer ref [lindex $kid 1]]]]
+          }
         }
       }
       set pairs [list Type /StructElem S /[dict get $element type] \
           P [expr {$parent eq {} ? [$writer ref $documentNumber] :
               [$writer ref [dict get [lindex $elements $parent] number]]}]]
+      # The namespace an element's type is read in. Empty on the 1.7 path,
+      # where the default namespace IS the 1.7 one and naming it would be
+      # noise; set by ua.tcl for part 2, where relying on the default is no
+      # longer allowed (UA-2 8.2.5.2).
+      #
+      # The eleven 1.7-only types are the exception and keep the default:
+      # naming the 2.0 namespace on a type that does not exist in it would
+      # be a claim about nothing.
+      if {$namespace ne {} && [dict get $element type] ni $only17} {
+        lappend pairs NS $namespace
+      }
       # Pg names the page the MCIDs are counted in. Required as soon as the
       # element owns marks - without it a reader cannot resolve them.
       set page [my StructurePage $element]
@@ -488,6 +717,19 @@ oo::define ::tclpdf::document::document {
           lappend pairs $key [::tclpdf::pdfObj str [dict get $element $option]]
         }
       }
+      # One owner gives a single dictionary, several give an array of them
+      # (14.8.5). Written inline rather than as an indirect object: an
+      # attribute dictionary is small, and one per cell as its own object
+      # would double the object count of a table for nothing.
+      set attributes {}
+      dict for {owner values} [dict get $element attributes] {
+        lappend attributes [::tclpdf::pdfObj dictionary [list O /$owner {*}$values]]
+      }
+      if {[llength $attributes] == 1} {
+        lappend pairs A [lindex $attributes 0]
+      } elseif {[llength $attributes]} {
+        lappend pairs A [::tclpdf::pdfObj arr $attributes]
+      }
       $writer put [dict get $element number] [::tclpdf::pdfObj dictionary $pairs]
       incr index
     }
@@ -497,27 +739,52 @@ oo::define ::tclpdf::document::document {
       lappend documentKids [$writer ref \
           [dict get [lindex $elements $top] number]]
     }
-    $writer put $documentNumber [::tclpdf::pdfObj dictionary [list \
-        Type /StructElem S /Document P [$writer ref $rootNumber] \
-        K [::tclpdf::pdfObj arr $documentKids]]]
+    set documentPairs [list Type /StructElem S /Document \
+        P [$writer ref $rootNumber] K [::tclpdf::pdfObj arr $documentKids]]
+    if {$namespace ne {}} {
+      lappend documentPairs NS $namespace
+    }
+    $writer put $documentNumber [::tclpdf::pdfObj dictionary $documentPairs]
 
     # The ParentTree is a number tree (7.9.7): Nums pairs each key with its
     # value, in ascending key order.
+    #
+    # Two kinds of entry share it. A page's key holds an ARRAY, indexed by
+    # MCID; an annotation's key holds the element itself, with no array
+    # around it. Annotation keys are counted on past the pages, so both fit
+    # in one ascending sequence.
+    set annotations [my state structureAnnots]
+    # The pages start where the annotations end - see [StructureAnnotation]
+    # for why it is that way round and not the obvious one.
+    set offset [llength $annotations]
+    set entries {}
+    foreach page [dict keys $parents] {
+      dict set entries [expr {$offset + $page}] [::tclpdf::pdfObj arr \
+          [lmap ref [dict get $parents $page] {
+            expr {$ref eq {} ? "null" : $ref}
+          }]]
+    }
+    foreach annotation $annotations {
+      lassign $annotation element . key
+      dict set entries $key [$writer ref \
+          [dict get [lindex $elements $element] number]]
+    }
     set nums {}
-    foreach page [lsort -integer [dict keys $parents]] {
-      lappend nums [::tclpdf::pdfObj num $page]
-      lappend nums [::tclpdf::pdfObj arr [lmap ref [dict get $parents $page] {
-        expr {$ref eq {} ? "null" : $ref}
-      }]]
+    foreach key [lsort -integer [dict keys $entries]] {
+      lappend nums [::tclpdf::pdfObj num $key]
+      lappend nums [dict get $entries $key]
     }
     $writer put $treeNumber [::tclpdf::pdfObj dictionary [list \
         Nums [::tclpdf::pdfObj arr $nums]]]
 
-    $writer put $rootNumber [::tclpdf::pdfObj dictionary [list \
-        Type /StructTreeRoot \
+    set rootPairs [list Type /StructTreeRoot \
         K [$writer ref $documentNumber] \
         ParentTree [$writer ref $treeNumber] \
-        ParentTreeNextKey [my page count]]]
+        ParentTreeNextKey [expr {[my page count] + [llength $annotations]}]]
+    if {$namespace ne {}} {
+      lappend rootPairs Namespaces [::tclpdf::pdfObj arr [list $namespace]]
+    }
+    $writer put $rootNumber [::tclpdf::pdfObj dictionary $rootPairs]
 
     my catalogEntry StructTreeRoot [$writer ref $rootNumber]
     # Marked says the file follows 14.7; Suspects false says nobody has
@@ -529,10 +796,82 @@ oo::define ::tclpdf::document::document {
     # output.tcl stays free of this topic.
     set structParents {}
     foreach page [dict keys $parents] {
-      dict set structParents $page $page
+      dict set structParents $page [expr {$offset + $page}]
     }
     my state structParents $structParents
     return
+  }
+
+  # What the tree looks like, for a checker that has to judge it as a whole.
+  #
+  # Two questions cannot be answered while the tree is being built, because
+  # both need what comes after: whether the headings descend without a gap,
+  # and whether every row of a table has the same number of cells. Both are
+  # PDF/UA rules, and both would be wrong to enforce here - a document that
+  # is not claiming UA may have a lone H3 for good reasons.
+  #
+  # So this answers with facts and judges nothing:
+  #
+  #   headings   the H1..H6 types in document order
+  #   rows       per table element, the cell count of each of its rows
+  #   types      every type used, once
+  #
+  # Returned rather than read out of the state by the caller: the shape of an
+  # element is this module's business, and a checker that walked it would
+  # break the next time a field is added.
+  method structureReport {} {
+    set elements [my state structure]
+    set headings {}
+    set types {}
+    set rows {}
+    foreach element $elements {
+      set type [dict get $element type]
+      if {$type ni $types} {
+        lappend types $type
+      }
+      if {[regexp {^H([1-6])$} $type -> level]} {
+        lappend headings $level
+      }
+    }
+    set index 0
+    foreach element $elements {
+      if {[dict get $element type] ne "Table"} {
+        incr index
+        continue
+      }
+      lappend rows [my StructureRowWidths $elements $index]
+      incr index
+    }
+    return [dict create headings $headings rows $rows types $types]
+  }
+
+  # The cell count of every row below one table, section groups included: a
+  # THead and a TBody hold rows of the same table and their widths have to be
+  # compared with each other, not each within its own group.
+  method StructureRowWidths {elements index} {
+    set widths {}
+    foreach kid [dict get [lindex $elements $index] kids] {
+      if {[lindex $kid 0] ne "element"} {
+        continue
+      }
+      set child [lindex $elements [lindex $kid 1]]
+      switch -- [dict get $child type] {
+        TR {
+          set cells 0
+          foreach cell [dict get $child kids] {
+            if {[lindex $cell 0] eq "element"
+                && [dict get [lindex $elements [lindex $cell 1]] type] in {TH TD}} {
+              incr cells
+            }
+          }
+          lappend widths $cells
+        }
+        THead - TBody - TFoot {
+          lappend widths {*}[my StructureRowWidths $elements [lindex $kid 1]]
+        }
+      }
+    }
+    return $widths
   }
 
   # The page an element's marks sit on, or {} when it owns none or they span

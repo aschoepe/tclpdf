@@ -38,6 +38,7 @@ package require tclpdf::pdfObj 1.0-
 package require tclpdf::option 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::filter 1.0-
+package require tclpdf::xmp 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::pdfa {
@@ -131,6 +132,10 @@ oo::define ::tclpdf::document::document {
     if {![dict get $current registered]} {
       my onSelf beforeWrite PdfaWrite
       my onSelf catalog PdfaCatalog
+      # First in the packet, because it was first here before xmp.tcl existed
+      # and a PDF/A document's metadata should keep its shape across a refactor.
+      my xmpSchema pdfaid "http://www.aiim.org/pdfa/ns/id/" \
+          {part conformance} PdfaXmpBody
       dict set current registered 1
     }
     my state pdfa $current
@@ -139,10 +144,14 @@ oo::define ::tclpdf::document::document {
 
   # Add an extension schema description to the XMP packet. ZUGFeRD needs one;
   # so would any other standard riding on PDF/A-3.
+  #
+  # Kept in the pdfa state as well as handed to xmp.tcl, because [pdfa state]
+  # is documented to answer with what has been declared and callers read it.
   method PdfaExtension {xml} {
     set current [my pdfa]
     dict lappend current extensions $xml
     my state pdfa $current
+    my xmpRaw $xml
     return
   }
 
@@ -183,60 +192,17 @@ oo::define ::tclpdf::document::document {
   }
 
   # Every font actually used has to carry its program (ISO 19005-3, 6.2.11.4).
-  #
-  # Checked against the OBJECTS rather than against a list of intentions: a
-  # font resource exists only once something was set in it, and its dictionary
-  # either names a font file or it does not. That catches the case nobody
-  # notices - a table theme defaulting to Helvetica in a document whose text
-  # is all in an embedded face.
+  # The fact is established by font.tcl, which owns the question; what belongs
+  # here is only what PDF/A makes of it.
   method PdfaCheckFonts {} {
-    set missing {}
-    dict for {name reference} [my resource Font] {
-      if {![regexp {(\d+) 0 R} $reference -> number]} {
-        continue
-      }
-      if {[my PdfaHasFontFile $number 3]} {
-        continue
-      }
-      # Name the FAMILY, not the resource - "F1 is not embedded" tells a
-      # caller nothing about which call to fix.
-      unset -nocomplain family
-      regexp {/BaseFont /(\S+?)[ />]} [[my writer] body $number] -> family
-      lappend missing [expr {[info exists family] ? $family : $name}]
-    }
+    set missing [my fontsWithoutProgram]
     if {[llength $missing]} {
       return -code error "tclpdf: PDF/A requires every font to be embedded,\
-          but [join [lsort -unique $missing] {, }] [expr {[llength $missing] > 1 ?
+          but [join $missing {, }] [expr {[llength $missing] > 1 ?
           {are standard fonts} : {is a standard font}}] - embed a face with\
           \"font embed\" and use it, or drop the pdfa declaration"
     }
     return
-  }
-
-  # Does this font object, or anything it points at, carry a font program?
-  #
-  # Following the references rather than looking in one place, because how
-  # deep the file sits depends on the kind of font: a simple TrueType font
-  # names its descriptor directly, while a Type0 goes Type0 -> CIDFont ->
-  # FontDescriptor -> FontFile2. Checking only one level reports every
-  # embedded Type0 face as missing, which is what a first attempt here did.
-  method PdfaHasFontFile {number depth} {
-    if {$depth <= 0} {
-      return 0
-    }
-    set body [[my writer] body $number]
-    if {[regexp {/FontFile[23]?\s} $body]} {
-      return 1
-    }
-    foreach reference [regexp -all -inline {(\d+) 0 R} $body] {
-      if {![string is integer -strict $reference]} {
-        continue
-      }
-      if {[my PdfaHasFontFile $reference [expr {$depth - 1}]]} {
-        return 1
-      }
-    }
-    return 0
   }
 
   # The XMP packet. Written at catalog time so that everything that wanted to
@@ -256,74 +222,19 @@ oo::define ::tclpdf::document::document {
     # checking late: [write] assembles everything before it opens the file,
     # so a refusal here still leaves no file behind.
     my PdfaCheckFonts
-    if {[my metadata] eq {}} {
-      my metadata [my PdfaXmp]
-    }
     return
   }
 
-  # Build the packet. Assembled here rather than taken from a template file
-  # because three values have to be substituted and a half-templated XMP is
-  # the worst of both.
-  method PdfaXmp {} {
+  # What PDF/A contributes to the XMP packet: the two values that make the
+  # claim. Called by xmp.tcl when the packet is built, which is why it reads
+  # the state instead of taking arguments - [pdfa -part 2] after [pdfa -part
+  # 3] has to win, and it does.
+  method PdfaXmpBody {} {
     set current [my state pdfa]
-    set title [my info Title]
-    set author [my info Author]
-    set subject [my info Subject]
-    set producer [my info Producer]
-    set extensions [join [dict get $current extensions] "\n"]
-    set stamp [clock format [clock seconds] -format "%Y-%m-%dT%H:%M:%S%z"]
-    # xmp:CreateDate wants the offset as +HH:MM, %z gives +HHMM.
-    set stamp [string replace $stamp end-1 end-2 ":[string range $stamp end-1 end]"]
-
-    append xmp "<?xpacket begin=\"\xef\xbb\xbf\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
-    append xmp "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
-    append xmp "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
-    append xmp "    <rdf:Description rdf:about=\"\"\
-        xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n"
-    append xmp "      <pdfaid:part>[dict get $current part]</pdfaid:part>\n"
-    append xmp "      <pdfaid:conformance>[dict get $current conformance]</pdfaid:conformance>\n"
-    append xmp "    </rdf:Description>\n"
-    append xmp "    <rdf:Description rdf:about=\"\"\
-        xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n"
-    if {$title ne {}} {
-      append xmp "      <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\"\
-          >[my PdfaEscape $title]</rdf:li></rdf:Alt></dc:title>\n"
-    }
-    if {$author ne {}} {
-      append xmp "      <dc:creator><rdf:Seq><rdf:li\
-          >[my PdfaEscape $author]</rdf:li></rdf:Seq></dc:creator>\n"
-    }
-    if {$subject ne {}} {
-      append xmp "      <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\"\
-          >[my PdfaEscape $subject]</rdf:li></rdf:Alt></dc:description>\n"
-    }
-    append xmp "    </rdf:Description>\n"
-    append xmp "    <rdf:Description rdf:about=\"\"\
-        xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n"
-    append xmp "      <xmp:CreateDate>$stamp</xmp:CreateDate>\n"
-    append xmp "      <xmp:ModifyDate>$stamp</xmp:ModifyDate>\n"
-    append xmp "      <xmp:CreatorTool>[my PdfaEscape $producer]</xmp:CreatorTool>\n"
-    append xmp "    </rdf:Description>\n"
-    append xmp "    <rdf:Description rdf:about=\"\"\
-        xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\n"
-    append xmp "      <pdf:Producer>[my PdfaEscape $producer]</pdf:Producer>\n"
-    append xmp "    </rdf:Description>\n"
-    if {$extensions ne {}} {
-      append xmp $extensions "\n"
-    }
-    append xmp "  </rdf:RDF>\n"
-    append xmp "</x:xmpmeta>\n"
-    # The trailing padding is prescribed: it lets a tool rewrite the packet in
-    # place without moving every byte after it (XMP part 1, 7.3.2).
-    append xmp [string repeat " " 100] "\n"
-    append xmp "<?xpacket end=\"w\"?>\n"
-    return $xmp
+    return [list [list text part [dict get $current part]] \
+        [list text conformance [dict get $current conformance]]]
   }
 
-  method PdfaEscape {text} {
-    return [string map {& &amp; < &lt; > &gt;} $text]
-  }
 }
 
 package provide tclpdf::pdfa 1.3

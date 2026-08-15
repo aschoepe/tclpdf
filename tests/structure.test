@@ -81,8 +81,9 @@ test structure-2.3 {an artifact is bracketed but stays out of the tree} -body {
   set stream [::tclpdfTest::content $doc]
   set tree [$doc state structure]
   $doc destroy
-  # BMC rather than BDC - there is no MCID, because nothing points at it.
-  list [string match "*/Artifact BMC*" $stream] \
+  # A property list rather than a bare BMC, naming the artifact type; no
+  # MCID, because nothing in the tree points at it.
+  list [string match "*/Artifact <</Type /Layout>> BDC*" $stream] \
       [string match "*MCID*" $stream] [llength $tree]
 } -result {1 0 0}
 
@@ -90,7 +91,7 @@ test structure-2.4 {an unknown type is refused where it is written} -body {
   set doc [tclpdf new -unit mm]
   $doc tagged 1
   $doc page add
-  set code [catch {$doc structure H7 -script {set marker 1}} err]
+  set code [catch {$doc structure Paragraph -script {set marker 1}} err]
   set missing [catch {$doc structure Div} second]
   $doc destroy
   # Two different mistakes, two different messages: a type that does not
@@ -98,6 +99,23 @@ test structure-2.4 {an unknown type is refused where it is written} -body {
   list $code [string match "*unknown structure type*" $err] \
       $missing [string match "*needs -script*" $second]
 } -result {1 1 1 1}
+
+test structure-2.5 {a 2.0 type is refused in a 1.7 file and taken in a 2.0 one} -body {
+  # H7 exists, but only from ISO 32000-2 on - before that six levels were the
+  # whole of it. Written into a 1.7 file it would validate as a non standard
+  # type with no role map, which is a defect a reader cannot recover from.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set refused [catch {$doc structure H7 -script {$doc text "x" -at {20 20}}} err]
+  $doc destroy
+  set two [tclpdf new -unit mm -version 2.0]
+  $two tagged 1
+  $two page add
+  set taken [catch {$two structure H7 -script {$two text "x" -at {20 20}}} .]
+  $two destroy
+  list $refused [string match "*ISO 32000-2*" $err] $taken
+} -result {1 1 0}
 
 # --- nesting -------------------------------------------------------------
 
@@ -214,7 +232,7 @@ test structure-5.2 {cell fill and rules are artifacts} -body {
   $doc destroy
   # Two cells, so two artifact brackets around the drawing, and the counts
   # of openings and closings have to match.
-  list [regexp -all {/Artifact BMC} $stream] \
+  list [regexp -all {/Artifact <<[^>]*>> BDC} $stream] \
       [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
 } -result {2 1}
 
@@ -244,7 +262,7 @@ test structure-6.1 {a picture without -alt is an artifact} -constraints haveImag
   set stream [::tclpdfTest::content $doc]
   set tree [$doc state structure]
   $doc destroy
-  list [string match "*/Artifact BMC*" $stream] [llength $tree]
+  list [string match "*/Artifact <</Type /Layout>> BDC*" $stream] [llength $tree]
 } -result {1 0}
 
 test structure-6.2 {-alt makes it a Figure carrying the description} -constraints haveImage -body {
@@ -328,8 +346,8 @@ test structure-8.1 {a leaf type refuses a block element inside it} -body {
     $doc structure Table -script {set x 1}
   }} b]
   $doc destroy
-  list $inP [string match "*holds text, not a P*" $a] \
-      $tableInP [string match "*holds text, not a Table*" $b]
+  list $inP [string match "*not a P -*" $a] \
+      $tableInP [string match "*not a Table -*" $b]
 } -result {1 1 1 1}
 
 test structure-8.2 {a table takes rows, not cells} -body {
@@ -397,7 +415,7 @@ test structure-9.1 {a shape outside any element is an artifact} -body {
   set stream [::tclpdfTest::content $doc]
   set tree [$doc state structure]
   $doc destroy
-  list [string match "*/Artifact BMC*" $stream] [llength $tree] \
+  list [string match "*/Artifact <</Type /Layout>> BDC*" $stream] [llength $tree] \
       [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
 } -result {1 0 1}
 
@@ -436,7 +454,7 @@ test structure-9.3 {the shape bracket encloses the q, it does not cross it} -bod
     }
   }
   set order
-} -result {BMC q Q EMC}
+} -result {BDC q Q EMC}
 
 test structure-9.4 {text on a path is one element, not one per glyph} -body {
   set doc [tclpdf new -unit mm]
@@ -466,7 +484,7 @@ test structure-9.5 {a drawing is one Figure with -alt, one artifact without} \
   $doc destroy
   # Bracketing per SVG element would scatter one illustration over dozens of
   # leaves; the elements of a drawing mean nothing on their own.
-  list [regexp -all {/Figure <</MCID} $stream] [regexp -all {/Artifact BMC} $stream] \
+  list [regexp -all {/Figure <</MCID} $stream] [regexp -all {/Artifact <<[^>]*>> BDC} $stream] \
       $types
 } -result {1 1 Figure}
 
@@ -488,7 +506,7 @@ test structure-9.6 {nothing is tagged again inside an artifact} -body {
   set depth 0
   set nested 0
   foreach line [split $stream \n] {
-    if {[string match "/Artifact BMC*" $line]} {
+    if {[string match "/Artifact <<*BDC*" $line]} {
       incr depth
     } elseif {[regexp {<</MCID} $line] && $depth > 0} {
       set nested 1
@@ -600,13 +618,14 @@ test structure-11.2 {the invocation of a form is bracketed} -body {
   # The bracket is outside the q/Q, which is what has to nest.
   set order {}
   foreach line [split $stream \n] {
-    if {[regexp {^(/Artifact BMC|q|Q|EMC)$|Do$} $line]} {
-      lappend order [expr {[string match "*Do" $line] ? "Do" : $line}]
+    if {[regexp {^(/Artifact <<[^>]*>> BDC|q|Q|EMC)$|Do$} $line]} {
+      lappend order [expr {[string match "*Do" $line] ? "Do" :
+          [expr {[string match "/Artifact*" $line] ? "Artifact" : $line}]}]
     }
   }
   list $order [regexp -all {MCID} $stream] \
       [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
-} -result {{{/Artifact BMC} q Do Q EMC} 0 1}
+} -result {{Artifact q Do Q EMC} 0 1}
 
 test structure-11.3 {form place with -alt becomes a Figure} -body {
   set doc [tclpdf new -unit mm -compress 0]
@@ -634,9 +653,160 @@ test structure-11.4 {a gradient is marked, a pattern body is not} -body {
   $doc destroy
   # Two artifacts - the gradient and the filled rectangle - and the pattern's
   # own stream contributes nothing.
-  list [regexp -all {/Artifact BMC} $stream] [regexp -all {MCID} $stream] \
+  list [regexp -all {/Artifact <<[^>]*>> BDC} $stream] [regexp -all {MCID} $stream] \
       [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
 } -result {2 0 1}
+
+# --- attributes ------------------------------------------------------------
+
+test structure-12.1 {an attribute is written under the owner it belongs to} -body {
+  # An attribute lives in an object under /A, labelled with the standard
+  # attribute class it comes from. Without the owner a reader that finds
+  # Scope cannot tell which Scope it is - two classes may use one name.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure L -numbering Decimal -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "1." -at {20 20}}
+      $doc structure LBody -script {$doc text "Erstens" -at {28 20}}
+    }
+  }
+  set path [::tclpdfTest::scratch attr-list.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/O /List} $bytes] [regexp {/ListNumbering /Decimal} $bytes]
+} -result {1 1}
+
+test structure-12.2 {an attribute on a type that ignores it is refused} -body {
+  # Written anyway it is not an error anywhere - it is simply ignored, and
+  # the list reads as unordered forever.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set wrongType [catch {$doc structure P -numbering Decimal -script {
+    $doc text "x" -at {20 20}
+  }} first]
+  set wrongValue [catch {$doc structure L -numbering Roman -script {
+    $doc structure LI -script {$doc text "x" -at {20 20}}
+  }} second]
+  $doc destroy
+  list $wrongType [string match "*belongs on L*" $first] \
+      $wrongValue [string match "*must be one of*" $second]
+} -result {1 1 1 1}
+
+test structure-12.3 {a bbox is turned into PDF coordinates} -body {
+  # The Best Practice Guide names BBox as what the tools rely on for a
+  # Figure. Given in document units and written in PDF ones, which means the
+  # y axis is flipped - a bbox that came through unchanged would sit at the
+  # top of the page instead of where the picture is.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Figure -alt "Ein Quadrat" -bbox {20 20 30 30} -script {
+    $doc rect -at {20 20} -size {30 30} -fill blue
+  }
+  set path [::tclpdfTest::scratch attr-bbox.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # A4 is 841.89 pt high; 20 mm from the top is 56.69 pt, so the box runs
+  # from 841.89-141.73 upwards.
+  list [regexp {/O /Layout} $bytes] \
+      [regexp {/BBox \[56\.6\d+ 700\.1\d+ 141\.7\d+ 785\.1\d+\]} $bytes]
+} -result {1 1}
+
+# --- annotations in the tree ----------------------------------------------
+
+test structure-13.1 {a link joins the tree through an OBJR} -body {
+  # An annotation is not part of any content stream, so it cannot have an
+  # MCID; it enters the tree as an object reference (14.7.5.4). And it uses
+  # StructParent, singular - a page has StructParents and points at an array
+  # indexed by MCID, an annotation points straight at its element. An object
+  # with both is invalid.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Link -script {
+    $doc text "tcl.tk" -at {20 20}
+    $doc link -at {20 16} -size {20 6} -url https://www.tcl.tk/ -tooltip "Zur Startseite"
+  }
+  set path [::tclpdfTest::scratch objr.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Type /OBJR} $bytes] [regexp {/StructParent \d+} $bytes] \
+      [regexp {/S /Link} $bytes] \
+      [regexp {/Subtype /Link[^>]*/StructParents} $bytes]
+} -result {1 1 1 0}
+
+test structure-13.2 {annotation keys continue past the page keys} -body {
+  # Both kinds share one ParentTree, so their keys have to be one ascending
+  # sequence: pages first, annotations after them, and ParentTreeNextKey past
+  # both. Overlapping keys would make a page and a link claim the same entry.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  foreach n {1 2} {
+    $doc page add
+    $doc structure Link -script {
+      $doc text "x" -at {20 20}
+      $doc link -at {20 16} -size {10 6} -url https://example.org/ -tooltip "T"
+    }
+  }
+  set path [::tclpdfTest::scratch objr-keys.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Two annotations and two pages: the ANNOTATIONS take 0 and 1 and the pages
+  # move up to 2 and 3, because an annotation's key is fixed when the link is
+  # drawn and the page count is not known yet. The next key is 4.
+  list [regexp {/ParentTreeNextKey 4} $bytes] \
+      [regexp -all {/StructParent [01]\M} $bytes] \
+      [regexp -all {/StructParents [23]\M} $bytes]
+} -result {1 2 2}
+
+test structure-13.3 {a page with annotations says how tabbing moves} -body {
+  # /Tabs /S means "follow the structure tree". PDF/UA requires it on every
+  # page that has annotations (7.18.1); without it the order is whatever the
+  # array happens to be, which is drawing order.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "erste Seite ohne Verweis" -at {20 20}
+  $doc page add
+  $doc link -at {20 16} -size {10 6} -url https://example.org/
+  set path [::tclpdfTest::scratch tabs.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # One page has annotations, so exactly one Tabs.
+  regexp -all {/Tabs /S} $bytes
+} -result 1
+
+test structure-12.4 {a paragraph holds inline markup but no block element} -body {
+  # Annex L forbids a BLOCK element inside a P - a P inside a P is the
+  # standing example. Inline markup is a different matter: an emphasised word
+  # IS a Strong inside a P and cannot be anything else. Refusing it left no
+  # way to mark up emphasis, and putting the Strong beside the paragraph
+  # instead produced a tree veraPDF rejects.
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc tagged 1
+  $doc page add
+  set inline [catch {$doc structure P -script {
+    $doc text "gewoehnlich " -at {20 20}
+    $doc structure Strong -script {$doc text "betont" -at {45 20}}
+  }}]
+  set block [catch {$doc structure P -script {
+    $doc structure Table -script {$doc text "x" -at {20 30}}
+  }} err]
+  $doc destroy
+  list $inline $block [string match "*not a Table*" $err]
+} -result {0 1 1}
 
 rename pageMcids {}
 

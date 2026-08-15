@@ -845,6 +845,64 @@ oo::define ::tclpdf::document::document {
     append map "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n"
     return $map
   }
+
+  # Which font resources of this document carry no font program, by family
+  # name. Empty when every one of them is embedded.
+  #
+  # Asked by two standards for different reasons - PDF/A 6.2.11.4 and PDF/UA
+  # 7.21.4 Note 5 - and the answer is the same fact, so it is established
+  # once here and judged there. The wording has to differ: PDF/A can suggest
+  # dropping the declaration, PDF/UA has to say that Symbol and ZapfDingbats
+  # rule the document out entirely.
+  #
+  # Checked against the OBJECTS rather than against a list of intentions: a
+  # font resource exists only once something was set in it, and its dictionary
+  # either names a font file or it does not. That catches the case nobody
+  # notices - a table theme defaulting to Helvetica in a document whose text
+  # is all in an embedded face.
+  method fontsWithoutProgram {} {
+    set missing {}
+    dict for {name reference} [my resource Font] {
+      if {![regexp {(\d+) 0 R} $reference -> number]} {
+        continue
+      }
+      if {[my FontHasProgram $number 3]} {
+        continue
+      }
+      # Name the FAMILY, not the resource - "F1 is not embedded" tells a
+      # caller nothing about which call to fix.
+      unset -nocomplain family
+      regexp {/BaseFont /(\S+?)[ />]} [[my writer] body $number] -> family
+      lappend missing [expr {[info exists family] ? $family : $name}]
+    }
+    return [lsort -unique $missing]
+  }
+
+  # Does this font object, or anything it points at, carry a font program?
+  #
+  # Following the references rather than looking in one place, because how
+  # deep the file sits depends on the kind of font: a simple TrueType font
+  # names its descriptor directly, while a Type0 goes Type0 -> CIDFont ->
+  # FontDescriptor -> FontFile2. Checking only one level reports every
+  # embedded Type0 face as missing, which is what a first attempt here did.
+  method FontHasProgram {number depth} {
+    if {$depth <= 0} {
+      return 0
+    }
+    set body [[my writer] body $number]
+    if {[regexp {/FontFile[23]?\s} $body]} {
+      return 1
+    }
+    foreach reference [regexp -all -inline {(\d+) 0 R} $body] {
+      if {![string is integer -strict $reference]} {
+        continue
+      }
+      if {[my FontHasProgram $reference [expr {$depth - 1}]]} {
+        return 1
+      }
+    }
+    return 0
+  }
 }
 
 package provide tclpdf::font 1.5
