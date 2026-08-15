@@ -64,14 +64,15 @@ oo::define ::tclpdf::document::document {
       # A structure destination names the ELEMENT rather than a place on a
       # page (12.3.2.3), so the link still lands on the right thing after the
       # content has moved. PDF/UA-2 asks for internal targets to be written
-      # this way; it needs a tagged document, and says so rather than writing
-      # a destination that points at nothing.
-      if {[my state tagged] ne "1"} {
-        return -code error "tclpdf: link -structure needs a tagged document -\
-            a structure destination points at an element of the tree. Call\
-            \[\$doc tagged 1\] before drawing"
-      }
-      lappend pairs Dest [my structureDestination [dict get $options structure]]
+      # this way. It needs a tagged document and a 2.0 file, and the guard
+      # says so rather than writing a destination that points at nothing.
+      #
+      # Written as an action (/A), not as /Dest: a GoTo carries the structure
+      # destination in /SD AND a page destination in /D (32000-2 Table 202),
+      # so a reader that does not know /SD still lands on the right page.
+      # The method builds the pair; what it holds is described there.
+      my StructureDestinationGuard "link -structure"
+      lappend pairs A [my structureDestination [dict get $options structure]]
     } else {
       lappend pairs Dest [my destination [dict get $options page] \
           [dict get $options to] [dict get $options zoom]]

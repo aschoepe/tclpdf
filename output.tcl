@@ -204,8 +204,12 @@ oo::define ::tclpdf::document::document {
     if {![dict exists $tclpdfInfo CreationDate]} {
       # The file version decides how the zone offset is spelled: 2.0 dropped
       # the apostrophe after the minutes.
+      #
+      # The seconds come from [my Created] - the same value that feeds
+      # xmp:CreateDate - rather than from a clock call of this method's own,
+      # which could land one second after the packet's.
       dict set tclpdfInfo CreationDate \
-          [::tclpdf::pdfObj date {} [$tclpdfWriter version]]
+          [::tclpdf::pdfObj date [my Created] [$tclpdfWriter version]]
     }
     set pairs {}
     dict for {key value} $tclpdfInfo {

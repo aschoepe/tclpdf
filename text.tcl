@@ -143,7 +143,7 @@ oo::define ::tclpdf::document::document {
     # dictionaries and losing track of which is which.
     set defaults {at {} rotate 0 align left width {} anchor baseline
         height {} indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-        avoid {} avoidMargin 0 tag P}
+        avoid {} avoidMargin 0 tag P expansion {}}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -163,9 +163,28 @@ oo::define ::tclpdf::document::document {
     # [my state tagged] rather than [my tagged]: the latter is a method of the
     # structure module, so asking it would load that module for every document
     # whether or not it ever wanted a tree.
+    # -expansion: the string is an abbreviation and this is its expanded form
+    # (14.9.5) - "EU", "European Union". It goes into the tree as a Span
+    # carrying /E, and the mark below lands in that Span; the structure module
+    # opens it, and what it opened is closed again after the mark, in
+    # reverse. Asked before the tagged check on purpose: without a tree an
+    # expansion has nowhere to go, and that is refused there rather than
+    # ignored here.
+    set opened {}
+    if {[dict get $options expansion] ne {}} {
+      set opened [my StructureExpansion [dict get $options tag] \
+          [dict get $options expansion]]
+    }
     set mark {}
     if {[my state tagged] eq "1"} {
-      set mark [my StructureMark [dict get $options tag]]
+      # The mark is told where the text BEGINS - its top edge, which is -at
+      # for -anchor top and one ascent above the baseline otherwise - so
+      # that a destination at the element can name the place on the page.
+      set top [lindex $at 1]
+      if {[dict get $options anchor] ne "top"} {
+        set top [expr {$top - [my TextLift [my TextMerge $args] top]}]
+      }
+      set mark [my StructureMark [dict get $options tag] Layout $top]
       my content [my StructureBegin $mark]
     }
     if {[dict get $options width] ne {}} {
@@ -179,6 +198,9 @@ oo::define ::tclpdf::document::document {
       set result [my TextParagraph $string $options]
       if {[llength $mark]} {
         my content [my StructureEnd $mark]
+      }
+      foreach id [lreverse $opened] {
+        my StructureClose $id
       }
       return $result
     }
@@ -210,6 +232,9 @@ oo::define ::tclpdf::document::document {
         [my TextLift $state [dict get $options anchor]]
     if {[llength $mark]} {
       my content [my StructureEnd $mark]
+    }
+    foreach id [lreverse $opened] {
+      my StructureClose $id
     }
     return
   }

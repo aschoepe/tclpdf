@@ -98,7 +98,7 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 *doc* **page box** *name* ?*value*? ?*index*?
 
-: Reads or sets one of the five page boxes: `media`, `crop`, `bleed`, `trim` or `art`. The value is `{x y width height}` in the document unit. A box may start away from zero; the size is then the difference, and the caller's origin follows the box rather than the axis.
+: Reads or sets one of the five page boxes: `media`, `crop`, `bleed`, `trim` or `art`. The value is `{x0 y0 x1 y1}` in the document unit — two corners, not a corner and a size. A box may start away from zero; the size is then the difference of the pairs, and the caller's origin follows the box rather than the axis.
 
 *doc* **page content** ?*index*?
 
@@ -223,7 +223,7 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **text** *string* ?**-at** *{x y}*? ?**-width** *w*? ?**-align** *a*? ...
 
-: Draws text. **Without -width** this is one line, and `-align` refers to the given point: `left` starts there, `right` ends there, `center` is centred on it. **With -width** the string is broken into a paragraph of that width, and `-align justify` becomes available. Returns the y coordinate below the last line, so the next block can continue there.
+: Draws text. **Without -width** this is one line, and `-align` refers to the given point: `left` starts there, `right` ends there, `center` is centred on it; the call returns nothing. **With -width** the string is broken into a paragraph of that width, `-align justify` becomes available, and the call returns the y coordinate below the last line, so the next block can continue there.
 
   **-anchor** chooses what the y coordinate means: `baseline` (the default) or `top`. **-rotate** turns the text about `-at`. All font options are accepted per call without changing the state.
 
@@ -234,6 +234,8 @@ The refusal is the same rule the package applies to a character the face has no 
   **-avoid** takes a list of shapes the text runs around: `{rect {x y} {w h}}` and `{circle {x y} r}`. Each line is narrowed by whatever reaches into it and set in the widest free segment, so a circle is followed by its outline rather than by a box around it. The shapes are not drawn — that is a separate call, and the text can just as well keep clear of something invisible.
 
   **-avoidMargin** *d* holds the text off every avoided shape by that distance; a shape may state one of its own as a fourth element (`{circle {x y} r 7}`), which then wins. Without it the words touch the picture, which reads as a mistake however exact the geometry is.
+
+  **-tag** *type* names what the text *is* in a tagged document — `P` unless said otherwise, `H1` for a heading, `Artifact` for what is outside the tree; **-expansion** *text* marks the string as an abbreviation and gives its expanded form. Both are described under "Structure and accessibility" below.
 
   **Soft hyphens are honoured.** U+00AD is not a character but a permission — this word may be broken here. Where the breaker takes the offer, a real hyphen is set at the end of the line; everywhere else the mark stays invisible, in the drawing and in the measurement alike, so the same string can be set in any width. tclpdf does **not** hyphenate by itself: that needs language data and is a feature of its own. What it does is honour the marks that text arriving from a database, an XML file or an editor already carries. Note that extracting such a line yields the hyphen as well, and that a standard face is no longer refused for carrying the mark.
 
@@ -286,7 +288,7 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **path -segments** *list* ?**-fill** *c*? ?**-stroke** *c*? ?**-rule** *evenodd*?
 
-: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width), **-dash** (a pattern), **-cap**, **-join**, **-opacity** and **-blend**. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates.
+: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width), **-dash** (a pattern), **-cap**, **-join**, **-miter** (the miter limit: how far a pointed join may reach before it is cut to a bevel), **-opacity** and **-blend**. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates.
 
 *doc* **clip -at** *{x y}* **-size** *{w h}* ?**-rule** *evenodd*? / *doc* **clip -segments** *list* ?**-rule** *evenodd*?
 
@@ -296,9 +298,11 @@ The refusal is the same rule the package applies to a character the face has no 
 
 : Push and pop the graphics state (`q` and `Q`).
 
-*doc* **transform** ?**-translate** *{dx dy}*? ?**-rotate** *deg*? ?**-scale** *s*? ?**-at** *{x y}*?
+*doc* **transform** ?**-translate** *{dx dy}*? ?**-rotate** *deg*? ?**-scale** *s*? ?**-skew** *{a b}*? ?**-at** *{x y}*? ?**-matrix** *{a b c d e f}*?
 
-: Multiplies the current transformation matrix. **-at** names a fixed point to turn or scale about; **-translate** is a displacement. The two are different things and must not be confused.
+: Multiplies the current transformation matrix. **-at** names a fixed point to turn, scale or skew about; **-translate** is a displacement. The two are different things and must not be confused. The parts are applied in the order translate, rotate, skew, scale.
+
+  **-skew** shears by two angles in degrees: the first tilts vertically — y follows x — and the second horizontally, which is the slant an italic-looking stamp needs. **-matrix** takes the six numbers of a PDF matrix and multiplies them in as they stand, ignoring every other option: the values are the raw `cm` operands — points, origin at the bottom left, y upwards — for the caller who already has a matrix rather than wants one built.
 
 *doc* **opacity** *value*
 
@@ -324,17 +328,17 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 : **-data** takes the bytes instead of a file name — for an image that never was a file: a canvas posted from a browser, a plot from a subprocess, a value out of a database. The format is decided by the leading bytes in both cases, so nothing else changes; `image info` then reports an empty `path`. **A PNG with an alpha channel is by far the most expensive way in** — the channel has to be split out in pure Tcl, measured at about a hundred times the cost of the pass-through. Where transparency is not needed, JPEG or a PNG without alpha is the cheaper choice, and for a browser canvas that means `toDataURL("image/jpeg")`.
 
-*doc* **image place** *alias* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-rotate** *deg*? ?**-opacity** *o*?
+*doc* **image place** *alias* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-size** *{w h}*? ?**-scale** *s*? ?**-dpi** *n*? ?**-rotate** *deg*? ?**-opacity** *o*? ?**-alt** *text*? ?**-artifact** *bool*?
 
-: Places an embedded image. Giving only one of width and height keeps the aspect ratio. The same image placed five times is stored once.
+: Places an embedded image. Giving only one of width and height keeps the aspect ratio; **-size** sets both extents at once and keeps nothing. Without any of them the natural size applies, and **-dpi** decides it: a pixel is 1/dpi of an inch, and the default 72 makes one pixel one point — `-dpi 300` places a scan at the size it was scanned from. **-scale** multiplies that natural size and yields to any explicit width, height or size. The same image placed five times is stored once.
 
-*doc* **image draw** ?*path*? ?**-data** *bytes*? **-at** *{x y}* ?*options*?
+*doc* **image draw** ?*path*? ?**-data** *bytes*? **-at** *{x y}* ?*options*? ?**-alt** *text*? ?**-artifact** *bool*?
 
-: Embeds and places in one call, for an image used once. It takes **-data** as well; with no file name to key the cache on, the bytes themselves are the key, so the same picture drawn twice still travels once.
+: Embeds and places in one call, for an image used once. It takes **-data** as well; with no file name to key the cache on, the bytes themselves are the key, so the same picture drawn twice still travels once. The options are those of **image place**, **-alt** and **-artifact** among them — what they do is described under *Structure and accessibility*.
 
 *doc* **image info** *alias* / *doc* **image size** *alias* / *doc* **image names**
 
-: What the file is (`width`, `height`, `colorType`, `alpha`), its natural size in the document unit, and the aliases embedded so far.
+: What the file is, its size, and the aliases embedded so far. **image info** answers `type`, `path`, `bytes`, `width`, `height` and `bitDepth` for both formats; a PNG adds `colorType`, `alpha` and `transparency`, a JPEG adds `components` (1 grey, 3 RGB, 4 CMYK) and `alpha` 0. **image size** is the size a placement would come out at, in the document unit, and takes the same sizing options as **place** — what a caller needs to lay out around a picture. **image names** lists the aliases.
 
 ## Tables
 
@@ -350,7 +354,7 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
   Column widths come in three kinds, resolved in that order: fixed (`{width 34}`), weighted (`{weight 1}`) and automatic — the rest is shared according to how wide the content actually is.
 
-  **-columns** describes the columns, **-theme** picks `striped`, `grid` or `plain`, and **-style**, **-headStyle**, **-bodyStyle** and **-footStyle** set fonts, colours and padding. The `border` style key takes `none`, `all`, `horizontal`, `vertical` or `outer`; `outer` frames the block once per page instead of ruling every cell. **-repeatHead** and **-repeatFoot** carry those sections onto each page. **-horizontalBreak** deals a table too wide for the page over further pages, with **-repeatColumns** keeping the leading columns on each.
+  **-columns** describes the columns, **-theme** picks `striped`, `grid` or `plain`, and **-style**, **-headStyle**, **-bodyStyle** and **-footStyle** set fonts, colours and padding. **-alternateFill** colours every second body row — the stripe the `striped` theme brings, replaceable with any colour; the other themes have none. **-minRowHeight** is the least height a row may take, for rows whose content alone would leave them shallower. The `border` style key takes `none`, `all`, `horizontal`, `vertical` or `outer`; `outer` frames the block once per page instead of ruling every cell. **-repeatHead** and **-repeatFoot** carry those sections onto each page. **-horizontalBreak** deals a table too wide for the page over further pages, with **-repeatColumns** keeping the leading columns on each.
 
   **-top** and **-bottom** are the type area a breaking table works within, which is not the same thing as where it sits. **-at** says where this table starts on its first page; **-top** says where it resumes on every page after that, and **-bottom** how far down it may run. Both default to a margin of five percent of the page height — 14.85 mm and 282.15 mm on A4 — and neither is taken from **-at**, because where a table happens to begin says nothing about where the page ends. Set **-top** to clear a running head, and **-bottom** to clear a footer.
 
@@ -370,23 +374,35 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 ## Gradients and patterns
 
-*doc* **shading axial -at** *{x y}* **-size** *{w h}* **-colors** *list* ?**-angle** *deg*?
+*doc* **shading axial -at** *{x y}* **-size** *{w h}* **-colors** *list* ?**-angle** *deg*? ?**-from** *{x y}*? ?**-to** *{x y}*?
 
-*doc* **shading radial -at** *{x y}* **-size** *{w h}* **-colors** *list*
+*doc* **shading radial -at** *{x y}* **-size** *{w h}* **-colors** *list* ?**-center** *{x y}*? ?**-radius** *r*? ?**-innerRadius** *r*? ?**-focus** *{x y}*?
 
-: Draws a gradient directly — shading types 2 and 3. More than two colours are stitched together.
+: Draws a gradient directly — shading types 2 and 3, clipped to the rectangle of **-at** and **-size**, which both forms require. More than two colours are stitched together.
 
-*doc* **shading pattern** *name* *type* ?*options*?
+  For an axial gradient, **-angle** turns the run: 0 is left to right, counting clockwise, so 90 runs top to bottom; the end points are derived from the rectangle. **-from** and **-to** name the two end points directly instead and win over **-angle** — for a run that starts or ends inside the rectangle, or one that does not pass through its centre.
 
-: Registers a gradient as a pattern, usable afterwards as `{pattern name}` in any fill.
+  A radial gradient runs from an inner to an outer circle. **-center** and **-radius** describe the outer one — by default the middle of the rectangle and half its longer side. **-innerRadius** (default 0) is the radius of the inner circle and **-focus** its centre, the same as **-center** unless given; moved off it, the highlight of a sphere sits away from the middle.
+
+  **-stops** positions the colours: one value per colour, between 0 and 1 and ascending, and the count has to match **-colors** or the call is refused. Only the inner values have an effect — the first and the last colour sit at the ends regardless — so it matters from three colours on. Without it the colours are spaced evenly.
+
+  **-extend** is a pair of booleans, `{1 1}` by default: whether the first and the last colour continue beyond the ends of the gradient or stop there.
+
+*doc* **shading pattern** *name* *type* ?*options*? ?**-matrix** *{a b c d e f}*?
+
+: Registers a gradient as a pattern, usable afterwards as `{pattern name}` in any fill. *type* is `axial` or `radial`, and the options are the ones above.
+
+  **-matrix** maps the gradient into the page. A pattern is bound to the default space of the page and ignores whatever transformation is active when the shape is painted (8.7.3.1) — filled under a transform, the shape lands in the right place and the gradient inside it somewhere else. A caller drawing under a transform passes that transform here; the coordinates are then read in the space the matrix maps from.
 
 *doc* **shading names**
 
 : The gradients registered so far, by name.
 
-*doc* **pattern create** *name* **-size** *{w h}* **-script** *body*
+*doc* **pattern create** *name* **-size** *{w h}* ?**-step** *{sx sy}*? ?**-unit** *u*? **-script** *body*
 
 : A tiling pattern. Inside the script the tile is drawn like a small page, and every shape command works unchanged.
+
+  **-step** is how far apart the tiles sit, the tile size unless given: equal, they touch; larger, and the background shows through between them — a sparse watermark rather than a hatch. **-unit** reads **-size** and **-step** in another unit than the document's.
 
 *doc* **pattern names** / *doc* **pattern size** *name*
 
@@ -394,11 +410,11 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 ## Reusable content
 
-*doc* **form create** *name* **-size** *{w h}* **-script** *body*
+*doc* **form create** *name* **-size** *{w h}* ?**-unit** *u*? **-script** *body*
 
-: Defines a form XObject — a drawing stored once and placed as often as wanted. Inside the script the origin is the form's own **top left** corner and y counts downwards, the same way it does on a page.
+: Defines a form XObject — a drawing stored once and placed as often as wanted. Inside the script the origin is the form's own **top left** corner and y counts downwards, the same way it does on a page. **-unit** reads **-size** in another unit than the document's.
 
-*doc* **form place** *name* **-at** *{x y}* ?**-scale** *s*? ?**-rotate** *deg*? ?**-opacity** *o*? ?**-alt** *text*?
+*doc* **form place** *name* **-at** *{x y}* ?**-scale** *s*? ?**-rotate** *deg*? ?**-opacity** *o*? ?**-alt** *text*? ?**-artifact** *bool*?
 
 : Places it. Placing is a transformation, not a redraw: the object stays one object in the file.
 
@@ -406,13 +422,13 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 ## SVG
 
-*doc* **svg** *path* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-size** *{w h}*? ?**-scale** *s*? ?**-opacity** *o*? ?**-alt** *text*?
+*doc* **svg** *path* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-size** *{w h}*? ?**-scale** *s*? ?**-opacity** *o*? ?**-alt** *text*? ?**-artifact** *bool*?
 
 *doc* **svg -data** *markup* **-at** *{x y}* ?*same options*?
 
 : Draws an SVG as **real vectors** — paths, shapes, groups, transforms, `use`, text and gradients become PDF operators, not a picture. Returns `{x y width height}` of what was drawn. Without a size the drawing's own dimensions apply; with one it is fitted, keeping the aspect ratio. **-size** gives both extents at once, **-scale** multiplies the drawing's own size, and **-opacity** applies to the drawing as a whole.
 
-  **-data** takes the markup from a Tcl variable instead of a file, which is what a generator wants: whatever produces the SVG hands it over directly, with no temporary file in between. Everything else is the same, including **-alt** — with a description the drawing becomes a `Figure` carrying it, without one an artifact.
+  **-data** takes the markup from a Tcl variable instead of a file, which is what a generator wants: whatever produces the SVG hands it over directly, with no temporary file in between. Everything else is the same, including **-alt** and **-artifact** — with a description the drawing becomes a `Figure` carrying it, without one an artifact, and **-artifact 1** says that this is what was meant.
 
   ~~~tcl
   set markup "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\">\
@@ -465,23 +481,29 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 *doc* **attach** *path* ?**-name** *n*? ?**-mime** *m*? ?**-description** *d*? ?**-relationship** *r*? ?**-date** *d*? ?**-compress** *0*?
 
+*doc* **attach -data** *bytes* **-name** *n* ?*same options*?
+
 : Attaches a file. `-relationship` is the `/AFRelationship` value — `Alternative`, `Data`, `Source`, `Supplement` or `Unspecified`.
+
+  **-data** takes the bytes instead of a file — for an attachment that never was one. **-name** is then required, because there is no file name to fall back on; without it the call is refused.
 
 *doc* **attachments**
 
 : What has been attached.
 
-*doc* **link -at** *{x y}* **-size** *{w h}* ?**-url** *u*? ?**-page** *n*? ?**-structure** *name*? ?**-to** *{x y}*? ?**-tooltip** *t*?
+*doc* **link -at** *{x y}* **-size** *{w h}* ?**-url** *u*? ?**-page** *n*? ?**-structure** *name*? ?**-to** *{x y}*? ?**-zoom** *z*? ?**-tooltip** *t*?
 
 : A link rectangle over an area of the page — to a URL, to a page of this document, or to a named structure element. It is drawn as nothing: the visible text is a separate call.
 
-  **-structure** takes the **-name** of a `structure` element and writes a structure destination (12.3.2.3), which names the element rather than a place on a page and therefore still lands on the right thing after the content above it has moved. PDF/UA-2 asks for internal targets to be written that way. It needs a tagged document. `bookmark` takes the same option.
+  For a page destination, **-to** names the point to land on and **-zoom** the magnification the reader applies there (`1` is 100 %); without **-zoom** the reader keeps the one it has, and without **-to** the whole page is fitted and **-zoom** does not apply.
+
+  **-structure** takes the **-name** of a `structure` element and writes a structure destination (12.3.2.3), which names the element rather than a place on a page and therefore still lands on the right thing after the content above it has moved. PDF/UA-2 asks for internal targets to be written that way. It is written as a GoTo action carrying both the structure destination (/SD) and a page destination (/D) to the element's first page — /XYZ at the top of its first content, or /Fit when no position is known — so a reader that does not understand structure destinations still lands on the right page. It needs a tagged document. `bookmark` takes the same option.
 
   **-tooltip** becomes the annotation's `Contents`, which PDF/UA requires on every link (7.18.5): it is what a reader announces instead of just saying "link".
 
-*doc* **bookmark** *title* ?**-page** *n*? ?**-at** *{x y}*? ?**-parent** *id*? ?**-structure** *name*?
+*doc* **bookmark** *title* ?**-page** *n*? ?**-at** *{x y}*? ?**-parent** *id*? ?**-open** *1*? ?**-structure** *name*?
 
-: Adds an outline entry and returns its id, which can be the `-parent` of further entries. Bookmarks are turned into objects when the document is written.
+: Adds an outline entry and returns its id, which can be the `-parent` of further entries. Bookmarks are turned into objects when the document is written. **-open** decides whether the entry shows its children unfolded, and is on by default; `-open 0` collapses a branch until the reader asks for it.
 
 *doc* **bookmarks**
 
@@ -499,7 +521,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 *doc* **metadata** ?*xml*?
 
-: Reads or sets the XMP packet directly. Normally the package writes it.
+: Reads or sets the XMP packet directly. Normally the package writes it: set by the caller it is kept as given; otherwise the packet is rebuilt on every write from the document's current title, language and declarations, so it never lags behind the Info dictionary.
 
 *doc* **catalogEntry** *key* ?*value*?
 
@@ -513,7 +535,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   A tagged document carries a second, invisible layer saying what the marks on a page *are* — a heading, a paragraph, a table cell — rather than how they look. The drawing does not change. Reading software needs it: without a tree it follows the order the content stream happens to have, which on a two column page runs across both columns. PDF/UA and PDF/A level A require it.
 
-*doc* **structure** *type* ?**-name** *name*? ?**-alt** *text*? ?**-lang** *tag*? ?**-title** *text*? ?**-actualText** *text*? ?**-scope** *side*? ?**-numbering** *style*? ?**-bbox** {*x y w h*}? ?**-colSpan** *n*? ?**-rowSpan** *n*? **-script** *body*
+*doc* **structure** *type* ?**-name** *name*? ?**-alt** *text*? ?**-lang** *tag*? ?**-title** *text*? ?**-actualText** *text*? ?**-expansion** *text*? ?**-scope** *side*? ?**-numbering** *style*? ?**-bbox** {*x y w h*}? ?**-colSpan** *n*? ?**-rowSpan** *n*? **-script** *body*
 
 : Opens a structure element, runs *body* with it open and closes it again — including when the body fails, so a half open tree cannot reach the file. Returns whatever the body returned. *type* is one of the standard types of ISO 32000-1 14.8.4; an unknown one is refused at the call rather than in a validator later.
 
@@ -523,21 +545,23 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : **What is derived, and what has to be said.** `text` becomes a `P`, and one call is one element however many lines it breaks into. `table` becomes a `Table` with `TR`, `TH` and `TD`, and the fill and rules of its cells become artifacts. `image` becomes an artifact unless `-alt` describes it, and then a `Figure` carrying that description.
 
-  **-alt** appears on `image place`, `image draw`, `form place` and `svg` for the same reason and with the same effect: with it the drawing becomes a `Figure` carrying that description, without it an artifact. A form or a drawing is one piece of marked content however many operators it contains — bracketing per element would scatter one illustration over dozens of leaves, and the parts of a drawing mean nothing on their own. Nothing inside a form, a pattern or a page-number XObject is marked at all: those are content streams of their own, mark numbers are unique per stream, and it is the *invocation* that carries the marking.
+  **-alt** appears on `image place`, `image draw`, `form place` and `svg` for the same reason and with the same effect: with it the drawing becomes a `Figure` carrying that description, without it an artifact. **-artifact 1** on the same four calls says that the artifact is intended — this one is decoration, and no description is missing. The two contradict each other and are refused together. The difference matters because an artifact is the one way real content passes a reader entirely, and PDF/UA allows it only for decoration: a graphic that became an artifact with neither option was never judged either way, and the document keeps a note of it — an artifact by default is what most pictures are, an artifact by intent is what a validator cannot ask for and a caller can say. In an untagged document neither option changes anything. A form or a drawing is one piece of marked content however many operators it contains — bracketing per element would scatter one illustration over dozens of leaves, and the parts of a drawing mean nothing on their own. Nothing inside a form, a pattern or a page-number XObject is marked at all: those are content streams of their own, mark numbers are unique per stream, and it is the *invocation* that carries the marking.
 
   A hyphen the line breaker inserted at a soft-hyphen offer is bracketed as a break rather than left to look like part of the word: it sits in a `Span` with an empty `ActualText`, so extracted text gives the word back whole (14.8.2.6). A hyphen the text brought with it is untouched — `E-Mail` stays `E-Mail`. Only in a tagged document.
 
   What no writer can infer is whether a line of text is a heading — neither its size nor its weight says so. That is what **-tag** on `text` is for: `-tag H1`, `-tag Caption`, and so on. `-tag Artifact` takes the text out of the tree altogether, which is what a running head or a page number needs; under PDF/UA anything left unmarked counts as a defect.
 
+  **-expansion** *text* is the expanded form of an abbreviation (ISO 32000 14.9.5) — PDF/UA asks that abbreviations be expanded (7.20), and a reader that is asked reads the expansion out. On `structure` it goes onto the element as `/E`; on `text` — `text "EU" -expansion "European Union"` — the word becomes a `Span` carrying it, inside the paragraph that is open, or inside the one the call would have made. It needs a tagged document and is refused without one, and it cannot go on an artifact.
+
 : **Attributes.** Five options write standard attributes onto the element, each one only where the standard allows it — used elsewhere they would be written and then ignored, so they are refused at the call instead.
 
   **-scope** takes `Row`, `Column` or `Both` and belongs on a `TH`; it says which way a header cell heads. A table sets it by itself: its head row heads columns. **-numbering** belongs on an `L` and takes `Decimal`, `UpperRoman`, `Disc` and the other values of ISO 32000 Table 347; PDF/UA makes it mandatory for an ordered list, and no writer can derive it — the label is drawn text, and `1.` and `-` look the same from here. **-bbox** belongs on a `Figure`, `Formula` or `Table` and takes the same four numbers as a rectangle; it is not required by the letter of the standard, but the reading tools rely on it. A picture placed with **-alt** gets one by itself. **-colSpan** and **-rowSpan** belong on a cell and are written by the table itself where it spans.
 
-: **Types beyond 1.7.** ISO 32000-2 adds `Title`, `Aside`, `DocumentFragment`, `Sub`, `FENote`, `Em`, `Strong` and headings past `H6`. They are accepted only in a 2.0 file — in a 1.7 one they would validate as non-standard types with no role map — and `ua -part 2` is the ordinary way to get one. Eleven older types (`Art`, `BlockQuote`, `TOC`, `TOCI`, `Index`, `Private`, `Quote`, `Note`, `Reference`, `BibEntry`, `Code`) exist *only* in the 1.7 namespace and keep it even inside a 2.0 tree.
+: **Types beyond 1.7.** ISO 32000-2 adds `Title`, `Aside`, `DocumentFragment`, `Sub`, `FENote`, `Em`, `Strong` and the headings `H7` to `H10`. They are accepted only in a 2.0 file — in a 1.7 one they would validate as non-standard types with no role map — and `ua -part 2` is the ordinary way to get one. Twelve older types (`Art`, `BlockQuote`, `TOC`, `TOCI`, `Index`, `Private`, `Quote`, `Note`, `Reference`, `BibEntry`, `Code` and the generic `H` — the 2.0 namespace knows only the numbered headings) exist *only* in the 1.7 namespace and keep it even inside a 2.0 tree.
 
   A leaf type such as `P` or `H1` holds text and **inline** markup — `Span`, `Em`, `Strong`, `Link`, `Figure` and their kin — but no block element: a `P` inside a `P` is the standing example of what Annex L forbids.
 
-: **Naming an element.** **-name** gives the element a name that a link or a bookmark points at with **-structure**. A structure destination names the *element* rather than a place on a page (12.3.2.3), so it still lands on the right thing after the content above it has grown — PDF/UA-2 asks for internal targets to be written that way. The name has to be unique and may be used before it is declared, which a link pointing forward at a later section needs. An unknown one is reported when the document is written, naming it.
+: **Naming an element.** **-name** gives the element a name that a link or a bookmark points at with **-structure**. A structure destination names the *element* rather than a place on a page (12.3.2.3), so it still lands on the right thing after the content above it has grown — PDF/UA-2 asks for internal targets to be written that way. It is written as a GoTo action carrying both the structure destination (/SD) and a page destination (/D) to the element's first page — /XYZ at the top of its first content, or /Fit when no position is known — so a reader that does not understand structure destinations still lands on the right page. The name has to be unique and may be used before it is declared, which a link pointing forward at a later section needs. An unknown one is reported when the document is written, naming it.
 
 : **Artifacts name their kind.** What is not in the tree is bracketed as an artifact, and the bracket says which sort it is: `Pagination` for a page number, `Layout` for everything else this package produces. PDF/UA-2 requires the naming; earlier versions permit it, so it is written either way and a document does not have to be redrawn when it is upgraded.
 
@@ -551,11 +575,13 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   **Off by default and explicit**, as `pdfa` is. The claim is legally meaningful in public procurement, so nothing should acquire it as a side effect — and a document using the standard 14 faces cannot make it at all.
 
-: **What it insists on, checked when the file is written.** A title (`info Title`), a language (`language`), every font embedded — the standard 14 included, which is stricter than PDF/A and rules out Symbol and ZapfDingbats entirely, as neither has an embeddable representative. Headings starting at `H1` with no level skipped. Tables with the same number of cells in every row, which `colSpan` and `rowSpan` cannot deliver. A description on every link, which is what `link -tooltip` writes. Part 2 adds a `Desc` on every attachment and forbids the generic `H`.
+: **What it insists on, checked when the file is written.** A title (`info Title`), a language (`language`), every font embedded — the standard 14 included, which is stricter than PDF/A and rules out Symbol and ZapfDingbats entirely, as neither has an embeddable representative. Headings starting at `H1` with no level skipped. Tables with the same number of cells in every row, which `colSpan` and `rowSpan` cannot deliver. A description on every link, which is what `link -tooltip` writes. Every picture, drawing and form placement either described with **-alt** or declared decoration with **-artifact 1** — one that became an artifact with neither was never judged, and an artifact may carry nothing a reader needs (7.1). Lists whose numbering and labels agree (7.6): an `L` with **-numbering** other than `None` needs a `Lbl` in every `LI`, and items carrying a `Lbl` need the `L` to say what they are — `Decimal`, `Disc`, … or `None`. `DisplayDocTitle` still on: **ua** sets it, and a later `viewerPreferences -displayDocTitle 0` is refused rather than written. Part 2 adds a `Desc` on every attachment and forbids the generic `H`.
 
   All of them are reported at once rather than one per run, and each message names the call to change. Writing fails; no file is left behind.
 
 : **What it contributes by itself**: the `pdfuaid` schema in the XMP, `ViewerPreferences` with `DisplayDocTitle`, and for part 2 the 2.0 structure namespace and the file version. None of them moves a mark on a page. In a document that also declares PDF/A, the PDF/A extension schema describing `pdfuaid` is written as well — without it PDF/A refuses a schema it does not know.
+
+  **-revision** is the year of the edition claimed, four digits, and goes into the metadata as `pdfuaid:rev` for part 2 (ISO 14289-2 Table 1); the default is 2024, the year part 2 was published. Anything that is not a four-digit year is refused at the call.
 
   **-wtpdf** adds a Well-Tagged PDF declaration and takes `reuse`, `accessibility` or both. It goes with part 2 only. The identifier is written in two spellings: WTPDF 1.0 gives the URI with a slash before the fragment, veraPDF 1.30 tests for the form without one, and a document that has to satisfy both carries both — which the declaration mechanism expressly allows.
 
@@ -579,11 +605,25 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   `ViewArea`, `ViewClip`, `PrintArea` and `PrintClip` are deliberately absent. They are deprecated in PDF 2.0 and no reader tested here acts on them.
 
+## Page labels
+
+*doc* **pageLabels** ?**-from** *index*? ?**-style** *s*? ?**-prefix** *text*? ?**-start** *n*?
+
+: What a reader calls each page (ISO 32000 12.4.2). A page has two numbers — the index the file counts it by and the number printed on it — and a reader shows the first unless the file says otherwise; then "go to page 3" lands on the third sheet while the sheet reading "3" is the sixth. One call is one range: it begins at the page **-from**, an index counted from 0 like everywhere else, and runs until the next range begins. Several calls make several ranges, in whatever order they come; a second call for the same index replaces the first. Without arguments it answers the ranges set so far, as a dictionary from index to `style`, `prefix` and `start`, in page order.
+
+  **-style** takes `D` (decimal, the default), `R` and `r` (roman), `A` and `a` (letters), or `none` for a range that carries a prefix and no number — a cover called "Cover". **-prefix** is put before the number, **-start** is the number the range begins with, a positive integer, 1 unless said otherwise. A misspelled style is refused at the call, because a reader that meets one ignores it silently.
+
+  The tree has to begin at index 0. A document that labels only its body from page 4 on has said nothing about the pages before, so a range without a style is put in front — the standard's own way of saying "no number here" — rather than writing a tree a reader may refuse.
+
+  Labels and printed numbers have to agree: Matterhorn 15-001 counts a visible page number that differs from the page label as an accessibility failure, and it is one no validator can see, because the printed number is drawn text. Nothing here is automatic — a document that prints its numbers with `pageNumbers -from 3` should say `pageLabels -from 0 -start 3` as well, so that the reader's page field shows what the sheet shows.
+
 ## PDF/A and ZUGFeRD
 
-*doc* **pdfa** ?**-part** *n*? ?**-conformance** *level*? ?**-profile** *path*?
+*doc* **pdfa** ?**-part** *n*? ?**-conformance** *level*? ?**-profile** *path*? ?**-identifier** *text*?
 
 : Declares PDF/A conformance, writes the output intent with the given ICC profile and raises the file version to match. Parts 2 and 3 are accepted; part 1 is refused because it forbids the transparency this package writes, and part 4 because it needs PDF 2.0.
+
+  Without **-profile** the sRGB profile shipped with the package is used, so every PDF/A file carries an output intent — this package paints in DeviceRGB, and ISO 19005 requires the intent for that. The output condition identifier is read from the profile's own `desc` tag (`sRGB` for the shipped one), falls back to the file name, and **-identifier** overrides it. A profile that does not exist is refused at the call.
 
   **-conformance** takes `B` (the default), `U` or `A`. Level B promises the document looks the same in fifteen years; level U adds that its text can be extracted and searched reliably, which rests on the ToUnicode map written for every embedded face anyway — so `U` is the stronger claim at no cost and is worth asking for. Level A adds the structure tree, so it needs `tagged 1` before anything is drawn; asked for without it, `pdfa` names the missing call rather than writing a file that claims 3a and fails validation.
 
@@ -597,9 +637,11 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : Adds an extension schema to the XMP packet — the way a profile such as ZUGFeRD announces its own properties. `zugferd` uses it.
 
-*doc* **zugferd** *path* ?**-profile** *p*? ?**-icc** *path*? ?**-version** *v*?
+*doc* **zugferd** *path* ?**-name** *n*? ?**-profile** *p*? ?**-type** *t*? ?**-icc** *path*? ?**-version** *v*? ?**-relationship** *r*? ?**-description** *d*? ?**-compress** *0*?
 
-: The one call an electronic invoice needs. It reads the profile from the invoice XML (BT-24), declares PDF/A-3B, writes the output intent with the sRGB profile shipped with the package, adds the Factur-X XMP extension schema, and attaches the file as `factur-x.xml` with `/AFRelationship /Alternative` at document level, an entry in the names tree, and a modification date. Returns the detected profile.
+: The one call an electronic invoice needs. It reads the profile from the invoice XML (BT-24), declares PDF/A-3B, writes the output intent with the sRGB profile shipped with the package, adds the Factur-X XMP extension schema, and attaches the file as `factur-x.xml` at document level with the `/AFRelationship` the profile prescribes — `Data` for MINIMUM and BASIC WL, `Alternative` for every fuller profile; `-relationship` overrides — plus an entry in the names tree and a modification date. Returns the detected profile.
+
+  **-name** is the name a reader looks the attachment up by, and the standards allow exactly four: `factur-x.xml`, `zugferd-invoice.xml`, `xrechnung.xml` and `order-x.xml`. Without the option the file's own name is kept where it is one of the four and `factur-x.xml` is taken otherwise; any other **-name** is refused. **-type** goes verbatim into `fx:DocumentType`: `INVOICE`, the default, or `ORDER` for an Order-X document. **-description** replaces the attachment description, which is "*profile* `invoice data`" unless given. **-compress** Flate-compresses the embedded XML and is **off by default**, so the invoice sits in the file byte for byte as it arrived.
 
 *doc* **zugferd profile** *xml*
 

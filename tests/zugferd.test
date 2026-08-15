@@ -143,6 +143,8 @@ test zugferd-4.1 {an invoice becomes a full ZUGFeRD document} -constraints {have
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
+  # EN 16931 carries the full invoice, so its XML is /Alternative - the
+  # profile-bound default that zugferd-4.5 checks from the other side.
   list $profile \
       [regexp {/AFRelationship /Alternative} $bytes] \
       [regexp {/AF \[\d+ 0 R\]} $bytes] \
@@ -179,6 +181,33 @@ test zugferd-4.4 {a file name the standards do not allow is refused} -constraint
     $doc destroy
   }
 } -returnCodes error -match glob -result {*not a file name the standards allow*factur-x.xml*}
+
+test zugferd-4.5 {MINIMUM gets /AFRelationship /Data, not /Alternative} -constraints {haveInvoice haveIcc} -body {
+  # Factur-X binds the relationship to the profile: MINIMUM (and BASIC WL)
+  # record too little to stand in for the invoice, so their XML is Data.
+  # A blanket Alternative here is a validation error on the receiving side.
+  set doc [archivable $face]
+  $doc zugferd $minimum -icc $icc
+  set path [::tclpdfTest::scratch zugferd-minimum.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/AFRelationship /Data} $bytes] \
+      [regexp {/AFRelationship /Alternative} $bytes]
+} -result {1 0}
+
+test zugferd-4.6 {an explicit -relationship wins over the profile default} -constraints {haveInvoice haveIcc} -body {
+  set doc [archivable $face]
+  $doc zugferd $minimum -icc $icc -relationship Source
+  set path [::tclpdfTest::scratch zugferd-source.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/AFRelationship /Source} $bytes] \
+      [regexp {/AFRelationship /Data} $bytes]
+} -result {1 0}
 
 test zugferd-5.1 {a link becomes a page annotation} -body {
   set doc [tclpdf new -unit mm]
@@ -379,5 +408,170 @@ test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -body
     $doc destroy
   }
 } -returnCodes error -match glob -result {*PDF/A-1 forbids transparency*use part 2*}
+
+test zugferd-7.8 {an ICC profile with a Lab space is refused by name} -body {
+  # Lab and XYZ profiles are valid ICC, but the output intent needs a device
+  # space with a component count. Until 2026-08-15 this fell over as a bare
+  # [dict get] error. Only the space signature at offset 16 is read, so a
+  # minimal fake header is enough here.
+  set path [::tclpdfTest::scratch lab.icc]
+  set fh [open $path wb]
+  puts -nonewline $fh [binary format a16a4a108 {} "Lab " {}]
+  close $fh
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -conformance B -profile $path
+  set code [catch {$doc write [::tclpdfTest::scratch lab.pdf]} err]
+  $doc destroy
+  file delete $path [::tclpdfTest::scratch lab.pdf]
+  list $code [string match {*colour space "Lab"*} $err] \
+      [string match "*GRAY, RGB and CMYK*" $err]
+} -result {1 1 1}
+
+# A minimal ICC profile: the 128-byte header with the colour space at offset
+# 16, then a tag table with the entries given as {signature bytes} pairs. Only
+# what pdfa.tcl reads is real; the rest is zero.
+proc fakeProfile {path space args} {
+  set count [expr {[llength $args] / 2}]
+  set offset [expr {132 + 12 * $count}]
+  set table {}
+  set data {}
+  foreach {sig bytes} $args {
+    append table [binary format a4IuIu $sig $offset [string length $bytes]]
+    append data $bytes
+    incr offset [string length $bytes]
+  }
+  set fh [open $path wb]
+  puts -nonewline $fh [binary format a16a4a108Iu {} $space {} $count]$table$data
+  close $fh
+  return $path
+}
+
+# A version 2 desc tag: type, four reserved bytes, the length counting the
+# terminating NUL, the ASCII text.
+proc descTag {text} {
+  return [binary format a4x4Iua* desc [expr {[string length $text] + 1}] "$text\0"]
+}
+
+test zugferd-7.9 {pdfa without -profile embeds the shipped sRGB profile} \
+    -constraints {haveIcc haveInvoice} -body {
+  # This writer paints with DeviceRGB operators, and ISO 19005-2, 6.2.4.3
+  # makes the output intent mandatory for those - so a document without a
+  # profile is not archivable. Until 2026-08-15 [pdfa] without -profile wrote
+  # no output intent at all, and only the recipient's validator said so.
+  set doc [archivable $face]
+  $doc pdfa -part 3 -conformance B
+  set state [$doc pdfa state]
+  set path [::tclpdfTest::scratch pdfa-default.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [expr {[dict get $state profile] eq $icc}] \
+      [regexp {/OutputIntents \[\d+ 0 R\]} $bytes] \
+      [regexp {/DestOutputProfile \d+ 0 R} $bytes] \
+      [regexp {/N 3} $bytes] \
+      [regexp {/OutputConditionIdentifier \(sRGB\)} $bytes]
+} -result {1 1 1 1 1}
+
+test zugferd-7.10 {the desc tag of the shipped profile reads "sRGB"} -constraints haveIcc -body {
+  # Measured against the file, and the same value icc/README.md records.
+  ::tclpdf::pdfa description [::tclpdf::io read $icc]
+} -result sRGB
+
+test zugferd-7.11 {the condition identifier comes from the profile's desc tag} -body {
+  # A GRAY profile used to go out labelled "sRGB IEC61966-2.1" - the string
+  # was fixed whatever file was passed. Now the profile names itself.
+  set path [fakeProfile [::tclpdfTest::scratch gray.icc] "GRAY" \
+      desc [descTag "Probe Gray Gamma 2.2"]]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -conformance B -profile $path
+  set out [::tclpdfTest::scratch gray.pdf]
+  $doc write $out
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $out]
+  file delete $path $out
+  list [regexp {/N 1} $bytes] \
+      [regexp {/OutputConditionIdentifier \(Probe Gray Gamma 2\.2\)} $bytes] \
+      [regexp {/Info \(Probe Gray Gamma 2\.2\)} $bytes] \
+      [regexp {IEC61966} $bytes]
+} -result {1 1 1 0}
+
+test zugferd-7.12 {a version 4 mluc desc is read, en-US preferred} -body {
+  # Two records, de-DE first: the en-US one has to win over "first wins".
+  set de "Grau"
+  set en "Grey v4"
+  set utf16 {}
+  foreach text [list $de $en] {
+    set units {}
+    foreach char [split $text {}] {lappend units [scan $char %c]}
+    lappend utf16 [binary format Su* $units]
+  }
+  set start [expr {16 + 2 * 12}]
+  set tag [binary format a4x4IuIu mluc 2 12]
+  append tag [binary format a2a2IuIu de DE [string length [lindex $utf16 0]] $start]
+  append tag [binary format a2a2IuIu en US [string length [lindex $utf16 1]] \
+      [expr {$start + [string length [lindex $utf16 0]]}]]
+  append tag [join $utf16 {}]
+  set profile [binary format a16a4a108Iu {} "RGB " {} 1]
+  append profile [binary format a4IuIu desc 144 [string length $tag]] $tag
+  ::tclpdf::pdfa description $profile
+} -result {Grey v4}
+
+test zugferd-7.13 {a profile without a readable desc is named after its file} -body {
+  set path [fakeProfile [::tclpdfTest::scratch nameless.icc] "CMYK"]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -conformance B -profile $path
+  set out [::tclpdfTest::scratch nameless.pdf]
+  $doc write $out
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $out]
+  file delete $path $out
+  list [regexp {/N 4} $bytes] [regexp {/OutputConditionIdentifier \(nameless\)} $bytes]
+} -result {1 1}
+
+test zugferd-7.14 {an explicit -profile wins over the shipped default} -constraints haveIcc -body {
+  set path [fakeProfile [::tclpdfTest::scratch mine.icc] "GRAY" desc [descTag Mine]]
+  # Given at the declaration, and given after a declaration without one.
+  set first [tclpdf new -unit mm]
+  $first pdfa -part 3 -conformance B -profile $path
+  set second [tclpdf new -unit mm]
+  $second pdfa -part 3 -conformance B
+  $second pdfa -profile $path
+  set result [list [dict get [$first pdfa state] profile] \
+      [dict get [$second pdfa state] profile]]
+  $first destroy
+  $second destroy
+  file delete $path
+  lmap p $result {expr {$p eq $path}}
+} -result {1 1}
+
+test zugferd-7.15 {a missing shipped profile is a broken installation, not silence} -body {
+  # zugferd.tcl used to degrade to "no output intent" when the file was gone;
+  # pdfa.tcl now owns the default and says what is missing and where.
+  set kept $::tclpdf::pdfa::icc
+  set ::tclpdf::pdfa::icc [::tclpdfTest::scratch not-there.icc]
+  set doc [tclpdf new -unit mm]
+  try {
+    $doc pdfa -part 3
+  } finally {
+    set ::tclpdf::pdfa::icc $kept
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*sRGB profile shipped with the package is missing at *not-there.icc*installation is incomplete*}
+
+test zugferd-7.16 {an explicit profile that does not exist is refused by name} -body {
+  set doc [tclpdf new -unit mm]
+  try {
+    $doc pdfa -part 3 -profile [::tclpdfTest::scratch nowhere.icc]
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*ICC profile "*nowhere.icc" does not exist*}
+
+rename fakeProfile {}
+rename descTag {}
 
 cleanupTests

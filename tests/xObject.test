@@ -13,6 +13,9 @@ namespace import -force tcltest::*
 
 package require tclpdf
 package require tclpdf::xObject
+# For [undescribedGraphics]: the query lives in image.tcl, which a document
+# that only places forms never loads by itself.
+package require tclpdf::image
 source [file join [file dirname [info script]] helper.tcl]
 
 proc xObjectCountForms {doc} {
@@ -163,5 +166,78 @@ test xObject-3.1 {scale, rotation and opacity reach the placement} -body {
   list [regexp {cm} $content] [regexp {gs} $content] [regexp {q\n} $content] \
       [regexp {Q\n} $content]
 } -result {1 1 1 1}
+
+# --- decoration on purpose, or by default -------------------------------
+#
+# A placement without -alt is an artifact, like a picture. Whether that was
+# asked for (-artifact 1) or merely happened is kept apart, because a form
+# is a reusable block and reusable blocks are decoration more often than
+# not - which is not the same as always.
+
+test xObject-4.1 {-artifact 1 brackets an artifact and leaves no entry} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc form place block -at {10 10} -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [string match "*/Artifact <</Type /Layout>> BDC*" $stream] \
+      [string match "*EMC*" $stream] $missing
+} -result {1 1 {}}
+
+test xObject-4.2 {without -alt and -artifact the artifact is remembered} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  $doc form place block -at {10 10} -artifact 1
+  $doc form place block -at {60 10}
+  $doc page add
+  $doc form place block -at {10 10}
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  set missing
+} -result {{kind form page 1} {kind form page 2}}
+
+test xObject-4.3 {-alt makes a Figure and leaves no entry} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  $doc form place block -at {10 10} -alt "Warnzeichen"
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [string match "*/Figure <</MCID 0>> BDC*" $stream] $missing
+} -result {1 {}}
+
+test xObject-4.4 {-artifact 1 together with -alt is refused at the call} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  try {
+    $doc form place block -at {10 10} -alt "Warnzeichen" -artifact 1
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-artifact and -alt contradict*}
+
+test xObject-4.5 {an untagged document remembers nothing} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  $doc form place block -at {10 10}
+  $doc form place block -at {60 10} -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  set state [$doc state undescribedGraphics]
+  $doc destroy
+  list [string match "*BDC*" $stream] $missing $state
+} -result {0 {} {}}
 
 cleanupTests

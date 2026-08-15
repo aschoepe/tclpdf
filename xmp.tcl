@@ -80,7 +80,21 @@ namespace eval ::tclpdf::xmp {
   # document in a process that writes many.
   variable declared {}
 
+  # The text node command is created with tdom's text check OFF, and on
+  # purpose: under Tcl 8.6 a character outside the BMP arrives as a surrogate
+  # pair (TCL_UTF_MAX 3), which the check refuses as "Invalid text value" -
+  # a legal title would make the document unwritable. The pair is not broken
+  # text: [encoding convertto utf-8] of 8.6.11+ folds it back into the real
+  # character when the packet is encoded for the stream. Tcl 9 stores the
+  # character whole and tdom serialises it as a character reference; there
+  # the check never fired. [dom createNodeCmd] captures the setting at
+  # CREATION time - measured; toggling it around the build does nothing - so
+  # it is toggled around this one line and restored for everyone else.
+  set textCheck [dom setTextCheck]
+  dom setTextCheck 0
   dom createNodeCmd textNode Text
+  dom setTextCheck $textCheck
+  unset textCheck
 }
 
 # Declare the element commands for one schema. Called by [declare] below and
@@ -102,7 +116,7 @@ proc ::tclpdf::xmp::declare {prefix uri tags} {
 namespace eval ::tclpdf::xmp {
   variable namespaces
   declare rdf [dict get $namespaces rdf] {RDF Description Alt Bag Seq li}
-  declare dc [dict get $namespaces dc] {title creator description}
+  declare dc [dict get $namespaces dc] {title creator description language}
   declare xmp [dict get $namespaces xmp] {CreateDate ModifyDate CreatorTool}
   declare pdf [dict get $namespaces pdf] {Producer}
 }
@@ -155,19 +169,25 @@ proc ::tclpdf::xmp::Describe {rdf prefix uri script} {
 # Build the packet.
 #
 #   descriptions   list of {prefix uri {{kind tag value} ...}}
-#   info           dict with title, author, subject, producer
+#   info           dict with title, author, subject, producer, and optionally
+#                  language - the document's RFC 3066 tag, written as
+#                  dc:language (a bag of locales in XMP part 1)
 #   raw            list of rdf:Description elements as XML text
 #
 # A procedure rather than a method, and not by preference: [appendFromScript]
 # resolves the Tag_ commands in the namespace it runs in, and a TclOO method
 # runs in the class namespace where they are not.
-proc ::tclpdf::xmp::packet {descriptions info raw} {
+proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   variable namespaces
   set title [dict get $info title]
   set author [dict get $info author]
   set subject [dict get $info subject]
   set producer [dict get $info producer]
-  set now [stamp]
+  set language [expr {[dict exists $info language] ? [dict get $info language] : {}}]
+  # The moment is HANDED IN by the caller, who shares it with the Info
+  # dictionary's CreationDate - two clock reads here and there could straddle
+  # a second and the two dates would disagree for the life of the file.
+  set now [stamp $seconds]
 
   # Only x and rdf are declared at the root; every other prefix is declared on
   # the rdf:Description that uses it, which is the shape Adobe's own writer
@@ -232,6 +252,11 @@ proc ::tclpdf::xmp::packet {descriptions info raw} {
     }
     if {$subject ne {}} {
       Tag_dc:description { Tag_rdf:Alt { Tag_rdf:li xml:lang x-default { Text $subject } } }
+    }
+    # The same tag the catalog's /Lang carries, so the packet says what the
+    # catalog says - a screen reader may take either.
+    if {$language ne {}} {
+      Tag_dc:language { Tag_rdf:Bag { Tag_rdf:li { Text $language } } }
     }
   }
   Describe $rdf xmp [dict get $namespaces xmp] {
@@ -328,8 +353,26 @@ oo::define ::tclpdf::document::document {
   # Written at catalog time, so every topic has had its chance to register.
   # An explicit [metadata] wins: a caller who supplies their own packet has
   # said something more specific than any of this.
+  #
+  # Rebuilt on EVERY write, not only on the first. The packet used to be
+  # built once and then left standing, because [metadata] answered non-empty
+  # from the second write on - so a title or language changed between two
+  # writes reached the Info dictionary, which is rebuilt per write, and never
+  # the packet: the two halves of the file disagreed about the document.
+  # Only PDF/A-1 validators say so (ISO 19005-1, 6.7.3 - measured with
+  # veraPDF: the 1b profile flags a diverging dc:title, 2b and 3b do not);
+  # the packet is wrong all the same, since it exists to describe the
+  # document as it is.
+  #
+  # The caller's packet is told from this module's own by comparing with what
+  # was last built here (xmpBuilt): what [metadata] holds is ours if it is
+  # what we put there, and anything else was set from outside and stays. A
+  # second write of an UNCHANGED document still comes out byte-identical -
+  # the moment comes from [Created] and everything else from state that has
+  # not moved.
   method XmpCatalog {} {
-    if {[my metadata] ne {}} {
+    set current [my metadata]
+    if {$current ne {} && $current ne [my state xmpBuilt]} {
       return
     }
     set descriptions {}
@@ -340,10 +383,12 @@ oo::define ::tclpdf::document::document {
         lappend descriptions [list $prefix $uri $pairs]
       }
     }
-    my metadata [::tclpdf::xmp packet $descriptions [dict create \
-        title [my info Title] author [my info Author] \
-        subject [my info Subject] producer [my info Producer]] \
-        [my state xmpRaw]]
+    my state xmpBuilt [my metadata [::tclpdf::xmp packet $descriptions \
+        [dict create \
+            title [my info Title] author [my info Author] \
+            subject [my info Subject] producer [my info Producer] \
+            language [my language]] \
+        [my state xmpRaw] [my Created]]]
     return
   }
 }

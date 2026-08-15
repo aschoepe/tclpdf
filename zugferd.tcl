@@ -70,14 +70,6 @@ namespace eval ::tclpdf::zugferd {
     urn:cen.eu:en16931:2017#conformant#urn:zugferd.de:2p0:extended EXTENDED
   }
 
-  # The sRGB profile that ships with the package, found relative to this
-  # file so it is still found after "make install". Used unless the caller
-  # names another: without an output intent there is no PDF/A-3 at all, and
-  # having to pass -icc for the one profile that is already there turns a
-  # complete call into an incomplete one by omission.
-  variable icc [file join [file dirname [file normalize [info script]]] \
-      icc sRGB.icc]
-
   # The file names the standards allow. The name is not decoration - a reader
   # looks the attachment up by it.
   variable names {factur-x.xml zugferd-invoice.xml xrechnung.xml order-x.xml}
@@ -102,7 +94,7 @@ oo::define ::tclpdf::document::document {
   method ZugferdInvoice {path args} {
     set options [::tclpdf::option parse {
       name {} profile {} type INVOICE version 1.0 icc {} compress 0
-      relationship Alternative description {}
+      relationship {} description {}
     } $args "zugferd"]
     if {[my state zugferd] ne {}} {
       return -code error "tclpdf: this document already carries an invoice -\
@@ -128,17 +120,29 @@ oo::define ::tclpdf::document::document {
       set profile [::tclpdf::zugferd profile $bytes]
     }
 
-    # PDF/A-3 first: the invoice rides on it, and the output intent has to be
-    # in place before anything else is written.
-    my pdfa -part 3 -conformance B
-    set profileFile [dict get $options icc]
-    if {$profileFile eq {}} {
-      set profileFile $::tclpdf::zugferd::icc
+    # The default /AFRelationship follows the profile, because Factur-X binds
+    # the two together: MINIMUM and BASIC WL record too little to stand in
+    # for the invoice, so their XML is Data - for every fuller profile the
+    # XML IS the invoice a second time, which is what Alternative means.
+    # A single value for all profiles gets one of the two families rejected.
+    # An explicit -relationship still wins.
+    set relationship [dict get $options relationship]
+    if {$relationship eq {}} {
+      if {$profile in {MINIMUM {BASIC WL}}} {
+        set relationship Data
+      } else {
+        set relationship Alternative
+      }
     }
-    if {[file exists $profileFile]} {
-      my pdfa -profile $profileFile
-    } elseif {[dict get $options icc] ne {}} {
-      return -code error "tclpdf: the ICC profile \"$profileFile\" does not exist"
+
+    # PDF/A-3 first: the invoice rides on it, and the output intent has to be
+    # in place before anything else is written. Without -icc the profile is
+    # the one [pdfa] uses by default - the sRGB profile shipped with the
+    # package - and pdfa.tcl is where a missing one is refused, so nothing is
+    # decided about it here.
+    my pdfa -part 3 -conformance B
+    if {[dict get $options icc] ne {}} {
+      my pdfa -profile [dict get $options icc]
     }
     my pdfa extension [::tclpdf::zugferd extensionSchema]
     my pdfa extension [::tclpdf::zugferd properties $name \
@@ -153,7 +157,7 @@ oo::define ::tclpdf::document::document {
     # rather than the current time: it is what the field means, and it keeps
     # the output reproducible - the same invoice written twice has to give the
     # same bytes.
-    my attach $path -name $name -relationship [dict get $options relationship] \
+    my attach $path -name $name -relationship $relationship \
         -mime text/xml -compress [dict get $options compress] \
         -description $description \
         -date [::tclpdf::pdfObj date [file mtime $path]]

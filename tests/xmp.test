@@ -204,4 +204,202 @@ test xmp-4.2 {the packet begins with its processing instruction} -body {
   regexp {stream\r?\n<\?xpacket begin=} $bytes
 } -result 1
 
+# --- the bytes of the packet ----------------------------------------------
+#
+# The stream's BOM declares UTF-8 (XMP part 1; ISO 19005 6.6.2.1), so the
+# packet has to be encoded on its way in. It was not: a title with an umlaut
+# went out as Latin-1 bytes under the UTF-8 claim, and one with a character
+# above U+00FF made the writer refuse the document altogether.
+
+test xmp-5.1 {an umlaut in the title reaches the stream as UTF-8 bytes} -constraints haveFace -body {
+  set doc [probe $face]
+  $doc info Title "M\u00fcller"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-umlaut.pdf]
+  set code [catch {$doc write $path}]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Only the packet: the font stream may contain any byte, including 0xFC.
+  regexp {<\?xpacket begin=.*?<\?xpacket end="w"\?>} $bytes packet
+  list $code [string match "*M\xc3\xbcller*" $packet] \
+      [string match "*\xfc*" $packet]
+} -result {0 1 0}
+
+test xmp-5.2 {a euro sign in the title does not make the document unwritable} -constraints haveFace -body {
+  # U+20AC is above U+00FF, and an unencoded packet then failed the writer's
+  # byte check - "stream data must be bytes, not text" for a legal title.
+  set doc [probe $face]
+  $doc info Title "5\u20ac"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-euro.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<\?xpacket begin=.*?<\?xpacket end="w"\?>} $bytes packet
+  list $code [string match "*5\xe2\x82\xac*" $packet]
+} -result {0 1}
+
+test xmp-5.3 {a title outside the BMP writes under both interpreters} -constraints haveFace -body {
+  # Built from UTF-8 bytes, the way a title read from a file arrives: Tcl 8.6
+  # holds U+1D11E as a surrogate pair and serialises it back to the real
+  # four-byte sequence; Tcl 9 holds it whole and tdom writes a character
+  # reference. Different spellings, both valid - what this test holds is that
+  # NEITHER interpreter refuses the document.
+  set doc [probe $face]
+  $doc info Title "Clef [encoding convertfrom utf-8 [binary format H* f09d849e]]"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-clef.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  expr {$code ? $err : 0}
+} -result 0
+
+# --- the two dates ---------------------------------------------------------
+
+test xmp-5.4 {xmp:CreateDate and CreationDate name the same second} -constraints haveFace -body {
+  # Both are taken at the first write, and they used to be two separate clock
+  # calls - straddle a second boundary and the file disagrees with itself for
+  # good, since both values are stored back for the second write. One value
+  # feeds both now. The spellings differ by design: XMP says +02:00 where a
+  # 1.7 date says +02'00'.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-dates.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set x [regexp {<xmp:CreateDate>(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([-+]\d\d):(\d\d)<} \
+      $bytes -> Y M D h m s zoneHour zoneMinute]
+  set p [regexp {/CreationDate \(D:(\d{14})([-+]\d\d)'(\d\d)'?\)} \
+      $bytes -> stamp pdfZoneHour pdfZoneMinute]
+  list $x $p [expr {"$Y$M$D$h$m$s" eq $stamp}] \
+      [expr {"$zoneHour$zoneMinute" eq "$pdfZoneHour$pdfZoneMinute"}]
+} -result {1 1 1 1}
+
+test xmp-5.5 {a second write is byte-identical} -body {
+  # The reason the dates and the packet are stored back at all. The packet
+  # and the title carry an umlaut, so what is stored is the ENCODED packet -
+  # one encoded again on the second write would differ.
+  #
+  # No embedded face and no [pdfa] here, and that is measured, not chosen:
+  # the font path hands out fresh object numbers on every write - a
+  # limitation of its own that predates the packet work and holds without it
+  # - so an embedded face never writes twice identically. What this test
+  # holds is the identity the metadata stream and the dates answer for.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "x" -at {20 20}
+  $doc info Title "M\u00fcller"
+  $doc metadata "<?xpacket begin=\"\"?>\n<x:xmpmeta>M\u00fcller</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+  set first [::tclpdfTest::scratch xmp-first.pdf]
+  set second [::tclpdfTest::scratch xmp-second.pdf]
+  $doc write $first
+  $doc write $second
+  $doc destroy
+  set same [string equal [::tclpdfTest::readBytes $first] \
+      [::tclpdfTest::readBytes $second]]
+  file delete $first $second
+  set same
+} -result 1
+
+# --- the packet follows the document -----------------------------------------
+#
+# The packet is rebuilt on every write. It used to be built once and left
+# standing - [metadata] answered non-empty from the second write on, and
+# XmpCatalog took that for a caller's packet - so a title changed between two
+# writes reached the Info dictionary, which is rebuilt per write, and never
+# the packet. Only a PDF/A-1 validator says so (ISO 19005-1, 6.7.3; measured:
+# veraPDF's 1b profile flags a diverging dc:title, 2b and 3b do not), but a
+# packet that describes the document as it was is wrong all the same.
+
+# The x-default title of the packet and the Title of the Info dictionary,
+# read off the bytes: {xmpTitle infoTitle}.
+proc titles {bytes} {
+  regexp {<dc:title>\s*<rdf:Alt>\s*<rdf:li xml:lang="x-default">([^<]*)<} $bytes -> x
+  regexp {/Title \(([^)]*)\)} $bytes -> i
+  return [list $x $i]
+}
+
+test xmp-6.1 {a title changed between two writes reaches the packet} -constraints haveFace -body {
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc info Title "First"
+  set first [::tclpdfTest::scratch xmp-title-a.pdf]
+  set second [::tclpdfTest::scratch xmp-title-b.pdf]
+  $doc write $first
+  $doc info Title "Second"
+  $doc write $second
+  $doc destroy
+  set a [titles [::tclpdfTest::readBytes $first]]
+  set b [titles [::tclpdfTest::readBytes $second]]
+  file delete $first $second
+  list $a $b
+} -result {{First First} {Second Second}}
+
+test xmp-6.2 {a language changed between two writes reaches the packet} -constraints haveFace -body {
+  # dc:language carries what the catalog's /Lang carries, and it follows a
+  # change the same way the title does.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc language de-DE
+  set first [::tclpdfTest::scratch xmp-lang-a.pdf]
+  set second [::tclpdfTest::scratch xmp-lang-b.pdf]
+  $doc write $first
+  $doc language en-GB
+  $doc write $second
+  $doc destroy
+  set result {}
+  foreach path [list $first $second] {
+    set bytes [::tclpdfTest::readBytes $path]
+    regexp {<dc:language>\s*<rdf:Bag>\s*<rdf:li>([^<]*)<} $bytes -> tag
+    regexp {/Lang \(([^)]*)\)} $bytes -> lang
+    lappend result [list $tag $lang]
+  }
+  file delete $first $second
+  set result
+} -result {{de-DE de-DE} {en-GB en-GB}}
+
+test xmp-6.3 {a caller's packet stands through both writes} -constraints haveFace -body {
+  # What was set from outside is not this module's to rebuild - even when the
+  # Info dictionary moves on. The two are told apart by content: what
+  # [metadata] holds is ours only if it is what XmpCatalog last put there.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc info Title "First"
+  $doc metadata "<?xpacket begin=\"\"?>\n<x:xmpmeta>mine</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+  set first [::tclpdfTest::scratch xmp-mine-a.pdf]
+  set second [::tclpdfTest::scratch xmp-mine-b.pdf]
+  $doc write $first
+  $doc info Title "Second"
+  $doc write $second
+  $doc destroy
+  set a [::tclpdfTest::readBytes $first]
+  set b [::tclpdfTest::readBytes $second]
+  file delete $first $second
+  list [regexp {<x:xmpmeta>mine</x:xmpmeta>} $a] [regexp {dc:title} $a] \
+      [regexp {<x:xmpmeta>mine</x:xmpmeta>} $b] [regexp {dc:title} $b] \
+      [regexp {/Title \(Second\)} $b]
+} -result {1 0 1 0 1}
+
+test xmp-6.4 {a rebuilt packet is byte-identical when nothing changed} -body {
+  # xmp-5.5 holds this for a caller's packet; this one holds it for the BUILT
+  # packet, which is now built twice. No embedded face - see xmp-5.5 for why
+  # - so the topic that triggers the build is registered here by hand.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "x" -at {20 20}
+  $doc info Title "M\u00fcller"
+  $doc language de-DE
+  oo::objdefine $doc method ProbeXmp {} {return {{text part 3}}}
+  $doc xmpSchema probe http://example.org/probe/ {part} ProbeXmp
+  lassign [::tclpdfTest::writeTwice $doc xmp-rebuilt] first second
+  $doc destroy
+  list [string equal $first $second] [regexp {<probe:part>3<} $second] \
+      [regexp {<dc:language>} $second]
+} -result {1 1 1}
+
 cleanupTests

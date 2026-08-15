@@ -14,8 +14,10 @@
 # /AFRelationship says WHAT the attachment is to the document:
 #
 #   Source        the file the document was generated from
-#   Data          the data behind what is shown
-#   Alternative   the same content in another form - ZUGFeRD uses this one
+#   Data          the data behind what is shown - ZUGFeRD's MINIMUM and
+#                 BASIC WL profiles use this one
+#   Alternative   the same content in another form - ZUGFeRD's fuller
+#                 profiles (BASIC and up) use this one
 #   Supplement    additional material
 #   Unspecified   the default, and the least useful
 #

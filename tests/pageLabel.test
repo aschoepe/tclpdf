@@ -1,0 +1,199 @@
+# pageLabel.test --
+#
+# What a reader calls each page (12.4.2).
+#
+# The number tree has one hard rule and one soft one. The hard one: it begins
+# at index 0 and its keys ascend - a tree that breaks either is invalid, not
+# merely odd. The soft one is Matterhorn 15-001: the label a reader shows has
+# to match the number printed on the sheet, and no validator can see whether
+# it does. So this file checks the shape of the tree, and the example checks
+# the agreement with [pageNumbers] by eye.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::pageLabel
+source [file join [file dirname [info script]] helper.tcl]
+
+# A document of six pages, so that a range at index 4 has pages to cover.
+proc drawn {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  for {set i 0} {$i < 6} {incr i} {
+    $doc page add
+    $doc text "Seite $i" -at {20 20}
+  }
+  return $doc
+}
+
+# The /Nums array of the written tree, as one string.
+proc nums {bytes} {
+  regexp {/Nums \[([^\]]*)\]} $bytes -> inside
+  return $inside
+}
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+
+# --- the tree -------------------------------------------------------------
+
+test pageLabel-1.1 {a range at index 0 is written as it was given} -body {
+  set doc [drawn]
+  $doc pageLabels -from 0 -style D
+  set path [::tclpdfTest::scratch pl-basic.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/PageLabels \d+ 0 R} $bytes] [nums $bytes]
+} -result {1 {0 << /S /D >>}}
+
+test pageLabel-1.2 {two ranges: roman for a preface, arabic from 1 for the body} -body {
+  set doc [drawn]
+  $doc pageLabels -from 0 -style r
+  $doc pageLabels -from 2 -style D -start 1
+  set path [::tclpdfTest::scratch pl-two.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # /St 1 is the default of Table 159 and is not spelled.
+  nums $bytes
+} -result {0 << /S /r >> 2 << /S /D >>}
+
+test pageLabel-1.3 {prefix and start reach the file} -body {
+  set doc [drawn]
+  $doc pageLabels -from 0 -style A -prefix "Annex " -start 3
+  set path [::tclpdfTest::scratch pl-prefix.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  nums $bytes
+} -result {0 << /S /A /P (Annex ) /St 3 >>}
+
+test pageLabel-1.4 {a tree that does not start at 0 gets a leading range without a style} -body {
+  # A number tree has to begin at 0 (7.9.7). A document that only labels its
+  # body from page 4 on has said nothing about the pages before - so a range
+  # without /S is put in front, which the standard defines as "no number".
+  set doc [drawn]
+  $doc pageLabels -from 4 -style D
+  set path [::tclpdfTest::scratch pl-lead.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  nums $bytes
+} -result {0 << >> 4 << /S /D >>}
+
+test pageLabel-1.5 {the keys ascend whatever order the calls came in} -body {
+  # 7.9.7: the keys of a Nums array shall be sorted. Given out of order, they
+  # would be written out of order without the sort - and a reader is free to
+  # stop reading a tree it finds unsorted.
+  set doc [drawn]
+  $doc pageLabels -from 4 -style D
+  $doc pageLabels -from 0 -style r
+  $doc pageLabels -from 2 -style none -prefix "Insert"
+  set path [::tclpdfTest::scratch pl-order.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  nums $bytes
+} -result {0 << /S /r >> 2 << /P (Insert) >> 4 << /S /D >>}
+
+test pageLabel-1.6 {the ranges can be read back, in page order} -body {
+  set doc [drawn]
+  $doc pageLabels -from 3 -style D
+  $doc pageLabels -from 0 -style R -prefix "P-"
+  set ranges [$doc pageLabels]
+  $doc destroy
+  list [dict keys $ranges] [dict get $ranges 0 prefix] [dict get $ranges 3 style]
+} -result {{0 3} P- D}
+
+test pageLabel-1.7 {a second call for the same index replaces the first} -body {
+  set doc [drawn]
+  $doc pageLabels -from 0 -style r
+  $doc pageLabels -from 0 -style D
+  set ranges [$doc pageLabels]
+  $doc destroy
+  list [llength [dict keys $ranges]] [dict get $ranges 0 style]
+} -result {1 D}
+
+test pageLabel-1.8 {a second write produces the same bytes} -body {
+  # The tree is written at catalog time on every write, over a reserved
+  # object number - so it does not come out twice.
+  set doc [drawn]
+  $doc pageLabels -from 0 -style r
+  $doc pageLabels -from 2 -style D -start 1
+  lassign [::tclpdfTest::writeTwice $doc pl-twice] first second
+  $doc destroy
+  list [string equal $first $second] [regexp -all {/Nums} $first]
+} -result {1 1}
+
+test pageLabel-1.9 {a range needs a page to start on} -body {
+  set doc [drawn]
+  $doc pageLabels -from 6 -style D
+  set code [catch {$doc write [::tclpdfTest::scratch pl-beyond.pdf]} err]
+  $doc destroy
+  file delete [::tclpdfTest::scratch pl-beyond.pdf]
+  list $code [string match "*does not have*6 page(s)*" $err]
+} -result {1 1}
+
+test pageLabel-1.10 {qpdf reads the labels back} -constraints qpdf -body {
+  set doc [drawn]
+  $doc pageLabels -from 0 -style r
+  $doc pageLabels -from 2 -style D -start 1
+  set path [::tclpdfTest::scratch pl-qpdf.pdf]
+  $doc write $path
+  $doc destroy
+  set json [exec qpdf --json --json-key=pagelabels $path]
+  file delete $path
+  # Two ranges, in order; the /St qpdf reports for the roman one is its own
+  # default, not something the file said.
+  list [regexp {"index": 0} $json] [regexp {"/S": "/r"} $json] \
+      [regexp {"index": 2} $json] [regexp {"/S": "/D"} $json]
+} -result {1 1 1 1}
+
+# --- what is refused ------------------------------------------------------
+
+test pageLabel-2.1 {a style has to be one of the standard's} -body {
+  set doc [drawn]
+  set code [catch {$doc pageLabels -from 0 -style roman} err]
+  $doc destroy
+  list $code [string match "*must be one of D, R, r, A, a, none*" $err]
+} -result {1 1}
+
+test pageLabel-2.2 {the first number is a positive integer} -body {
+  set doc [drawn]
+  set zero [catch {$doc pageLabels -from 0 -start 0} first]
+  set text [catch {$doc pageLabels -from 0 -start eins} second]
+  $doc destroy
+  list $zero [string match "*positive integer*" $first] \
+      $text [string match "*positive integer*" $second]
+} -result {1 1 1 1}
+
+test pageLabel-2.3 {-from is a page index counted from 0} -body {
+  set doc [drawn]
+  set missing [catch {$doc pageLabels -style D} first]
+  set negative [catch {$doc pageLabels -from -1} second]
+  $doc destroy
+  list $missing [string match "*needs -from*" $first] \
+      $negative [string match "*needs -from*" $second]
+} -result {1 1 1 1}
+
+test pageLabel-2.4 {no call means no tree} -body {
+  set doc [drawn]
+  set path [::tclpdfTest::scratch pl-none.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/PageLabels} $bytes
+} -result 0
+
+cleanupTests

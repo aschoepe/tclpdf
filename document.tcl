@@ -211,6 +211,9 @@ oo::class create ::tclpdf::document::document {
       leader leader
       textHeight textBlock
       image image
+      undescribedGraphics image
+      GraphicMark image
+      GraphicUnmark image
       shading shading
       pattern pattern
       table table
@@ -219,6 +222,7 @@ oo::class create ::tclpdf::document::document {
       link link
       linksWithoutContents link
       pageNumbers pageNumber
+      pageLabels pageLabel
       textPath textPath
       bookmark outline
       bookmarks outline
@@ -231,6 +235,8 @@ oo::class create ::tclpdf::document::document {
       StructureMark structure
       StructureAnnotation structure
       structureDestination structure
+      StructureDestinationGuard structure
+      StructureExpansion structure
       StructureBegin structure
       StructureEnd structure
     }
@@ -344,6 +350,20 @@ oo::class create ::tclpdf::document::document {
     }
   }
 
+  # The moment the document was created, read from the clock ONCE and kept.
+  # Two consumers name it: xmp:CreateDate in the packet and CreationDate in
+  # the Info dictionary. Fed from two separate clock calls during the first
+  # write, they can straddle a second boundary - and then disagree for the
+  # life of the file, since both are stored back for the sake of a
+  # byte-identical second write.
+  method Created {} {
+    set created [my state created]
+    if {$created eq {}} {
+      set created [my state created [clock seconds]]
+    }
+    return $created
+  }
+
   # A catalog entry - how a subscriber adds /AF, /Names or /OutputIntents
   # without the core knowing about them.
   method catalogEntry {key args} {
@@ -425,7 +445,14 @@ oo::class create ::tclpdf::document::document {
       return -code error "tclpdf: metadata takes at most one XMP packet"
     }
     if {[llength $args] == 1} {
-      set tclpdfXmp [lindex $args 0]
+      # Stored as UTF-8 BYTES, not as a Tcl string. The packet's own BOM in
+      # its xpacket instruction declares UTF-8 (XMP part 1, ISO 19005
+      # 6.6.2.1), and the writer refuses text in a stream anyway - a title
+      # with a character above U+00FF made the document unwritable, one
+      # between U+0080 and U+00FF wrote Latin-1 bytes under a UTF-8 claim.
+      # This is the ONE place both roads pass through: the packet XmpCatalog
+      # builds and one a caller supplies directly.
+      set tclpdfXmp [encoding convertto utf-8 [lindex $args 0]]
     }
     return $tclpdfXmp
   }

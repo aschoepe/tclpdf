@@ -60,7 +60,7 @@ oo::define ::tclpdf::document::document {
       names {return [dict keys [my state images]]}
       default {
         return -code error "tclpdf: unknown image subcommand \"$subcommand\" -\
-            known are: embed, place, draw, info, names"
+            known are: embed, place, draw, info, size, names"
       }
     }
   }
@@ -140,7 +140,7 @@ oo::define ::tclpdf::document::document {
   method ImagePlace {alias args} {
     set options [::tclpdf::option parse {
       at {} size {} width {} height {} scale {} rotate 0 opacity {} dpi 72
-      alt {}
+      alt {} artifact {}
     } $args "image place"]
     set images [my state images]
     if {![dict exists $images $alias]} {
@@ -175,22 +175,19 @@ oo::define ::tclpdf::document::document {
     # what a picture in a document is. -alt turns it into a Figure and is the
     # caller saying this one means something - which is a judgement no writer
     # can make for them.
-    set mark {}
-    if {[my state tagged] eq "1"} {
-      if {[dict get $options alt] ne {}} {
-        # The bounding box goes with it. Not required by the letter of the
-        # standard, but the Best Practice Guide names it as what the reading
-        # tools rely on to find a figure on the page - and here it costs
-        # nothing, because the four values were computed two lines up.
-        set element [my StructureOpen Figure \
-            [dict create alt [dict get $options alt] \
-                bbox [list $left $top $width $height]]]
-        set mark [my StructureMark]
-      } else {
-        set mark [my StructureMark Artifact]
-      }
-      my content [my StructureBegin $mark]
-    }
+    #
+    # -artifact 1 is the same judgement the other way round: this one is
+    # decoration, and meant to be. The default artifact is what a picture
+    # becomes when NOBODY judged, and that is the one case that has to be
+    # remembered - see [undescribedGraphics] below.
+    #
+    # The bounding box goes with the Figure. Not required by the letter of
+    # the standard, but the Best Practice Guide names it as what the reading
+    # tools rely on to find a figure on the page - and here it costs nothing,
+    # because the four values were computed two lines up.
+    lassign [my GraphicMark image "image place" [dict get $options alt] \
+        [dict get $options artifact] $top [list $left $top $width $height]] \
+        mark element
     my save
     if {[dict get $options opacity] ne {}} {
       my opacity [dict get $options opacity]
@@ -209,13 +206,92 @@ oo::define ::tclpdf::document::document {
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
     my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
     my restore
-    if {[llength $mark]} {
-      my content [my StructureEnd $mark]
-      if {[info exists element]} {
-        my StructureClose $element
+    my GraphicUnmark $mark $element
+    return $alias
+  }
+
+  # The marking every placed graphic gets, in one place: a picture, a drawing
+  # and a form invocation are all one piece of content, and in a tagged
+  # document each is either a Figure with a description or an artifact -
+  # there is no third answer. Written once here rather than in each of the
+  # three modules, because the three copies had already begun to differ.
+  #
+  # kind is image, svg or form and names the entry in [undescribedGraphics];
+  # context is the call for the error messages ("image place"); top is where
+  # the content begins, for [StructureMark]; bbox is the Figure's bounding
+  # box, which only a picture knows well enough to give.
+  #
+  # Answers {mark element}: the mark for [StructureBegin] and the Figure's id,
+  # or two empty strings in an untagged document. [GraphicUnmark] takes both
+  # back at the end.
+  method GraphicMark {kind context alt artifact top {bbox {}}} {
+    if {$artifact ne {} && ![string is boolean -strict $artifact]} {
+      return -code error "tclpdf: $context: -artifact takes a boolean, not\
+          \"$artifact\""
+    }
+    set decorative [expr {$artifact ne {} && $artifact}]
+    if {$decorative && $alt ne {}} {
+      set noun [dict get {image picture svg drawing form placement} $kind]
+      return -code error "tclpdf: $context: -artifact and -alt contradict\
+          each other - a $noun is either decoration or described, not both"
+    }
+    if {[my state tagged] ne "1"} {
+      return [list {} {}]
+    }
+    set element {}
+    if {$alt ne {}} {
+      set options [dict create alt $alt]
+      if {$bbox ne {}} {
+        dict set options bbox $bbox
+      }
+      set element [my StructureOpen Figure $options]
+      set mark [my StructureMark {} Layout $top]
+    } else {
+      set mark [my StructureMark Artifact]
+      if {[llength $mark] && !$decorative} {
+        my state undescribedGraphics [linsert [my state undescribedGraphics] \
+            end [list kind $kind page [my page current]]]
       }
     }
-    return $alias
+    my content [my StructureBegin $mark]
+    return [list $mark $element]
+  }
+
+  # The other half: end the mark and close the Figure, when there was one.
+  # The Figure is closed even when the mark is empty - inside a form XObject
+  # marks are suspended, but an element opened there is still open.
+  method GraphicUnmark {mark element} {
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
+    }
+    if {$element ne {}} {
+      my StructureClose $element
+    }
+    return
+  }
+
+  # Which graphics became artifacts because nobody said otherwise, as a list
+  # of {kind image|svg|form page N} with N counted from 1. Empty when every
+  # one was either described with -alt or declared decoration with
+  # -artifact 1 - and always empty in an untagged document, where nothing is
+  # marked and nothing is degraded.
+  #
+  # An artifact is the one way to carry real content past a reader entirely:
+  # PDF/UA allows it only for decoration (7.1), and a picture that fell into
+  # it by default was never judged either way. The fact is established here,
+  # where the marking is written, and judged by ua.tcl - the same division as
+  # [linksWithoutContents]. The state key undescribedGraphics is filled by
+  # [GraphicMark] for svg.tcl and xObject.tcl as well, since a drawing and a
+  # form placement degrade the same way; the query lives here rather than in
+  # a module of its own because a picture is the common case, and one place
+  # to ask is enough.
+  #
+  # The fix is one option on the call that placed it, whichever way the
+  # caller decides.
+  method undescribedGraphics {} {
+    return [lmap entry [my state undescribedGraphics] {
+      dict replace $entry page [expr {[dict get $entry page] + 1}]
+    }]
   }
 
   # Embed and place in one step, for a picture used exactly once. The alias is

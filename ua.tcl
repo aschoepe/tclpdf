@@ -38,11 +38,20 @@
 #   headings     7.4.2 - H1 first, no level skipped
 #   tables       UA-2 8.2.5.14 - every row the same number of cells, which
 #                colSpan and rowSpan break by their nature
+#   lists        7.6 - an ordered list names its numbering and its items
+#                carry a Lbl; items with a Lbl under a list that says
+#                nothing are refused the other way round
+#   graphics     7.1, 7.3 - a picture, drawing or form placement is either
+#                described (-alt) or declared decoration (-artifact 1);
+#                one that fell into artifact by default was never judged
+#   links        7.18.5 - Contents on every annotation
+#   viewer       7.1 - DisplayDocTitle, set by this module, is still on
 #
 # What it sets rather than demands: DisplayDocTitle, the pdfuaid schema, and
 # for part 2 the structure namespace and the file version. None of those
 # changes a single mark on a page, so asking the caller to write them out
-# would be ceremony.
+# would be ceremony. DisplayDocTitle is nonetheless checked at write time,
+# because a later [viewerPreferences] call can take it back.
 #
 # Part 2 is PDF 2.0 and therefore mutually exclusive with PDF/A-3 - and so
 # with ZUGFeRD, which is a PDF/A-3 document by definition. That is the
@@ -189,6 +198,14 @@ oo::define ::tclpdf::document::document {
       set current [dict create part 1 revision $revision wtpdf {} registered 0]
     }
     set current [::tclpdf::option parse $current $args "ua"]
+    # pdfuaid:rev is the year of the edition claimed, four digits (ISO
+    # 14289-2 Table 1). Anything else would be written into the metadata as
+    # given and mean nothing to a validator.
+    if {![regexp {^\d{4}$} [dict get $current revision]]} {
+      return -code error "tclpdf: -revision takes a four-digit year, not\
+          \"[dict get $current revision]\" - pdfuaid:rev is the year of the\
+          edition claimed (ISO 14289-2 Table 1), 2024 for the first"
+    }
     variable ::tclpdf::ua::declarations
     foreach level [dict get $current wtpdf] {
       if {![dict exists $declarations $level]} {
@@ -314,8 +331,11 @@ oo::define ::tclpdf::document::document {
       lappend problems "no language - \[\$doc language de-DE\] (7.2); a screen\
           reader picks its pronunciation from it"
     }
+    lappend problems {*}[my UaCheckViewer]
     lappend problems {*}[my UaCheckFonts]
     lappend problems {*}[my UaCheckStructure]
+    lappend problems {*}[my UaCheckLists]
+    lappend problems {*}[my UaCheckGraphics]
     lappend problems {*}[my UaCheckLinks]
     lappend problems {*}[my UaCheckAttachments]
     if {[llength $problems] == 1} {
@@ -346,6 +366,75 @@ oo::define ::tclpdf::document::document {
           representative at all, so no document using them can claim PDF/UA"
     }
     return [list $problem]
+  }
+
+  # DisplayDocTitle is set by [ua] and can be taken back by a later
+  # [viewerPreferences -displayDocTitle 0] - which the module setting it
+  # cannot see, so the finished state is read here. Nothing else in the
+  # preferences dictionary concerns UA.
+  method UaCheckViewer {} {
+    set preferences [my viewerPreferences]
+    if {[dict exists $preferences displayDocTitle]
+        && [dict get $preferences displayDocTitle]} {
+      return {}
+    }
+    return [list "viewerPreferences -displayDocTitle must stay 1 under PDF/UA\
+        (7.1) - the window shows the title instead of the file name, and\
+        \[\$doc ua\] sets it; a later \[\$doc viewerPreferences\
+        -displayDocTitle 0\] took it back"]
+  }
+
+  # A graphic that became an artifact because nobody said otherwise. An
+  # artifact carries content past a reader entirely, and PDF/UA allows that
+  # for decoration only (7.1); a picture without -alt was never judged either
+  # way, and the claim cannot be made over an open question. The facts come
+  # from [undescribedGraphics] in image.tcl; the same key is filled by a
+  # drawing and a form placement, and the document may hold none of the
+  # three, in which case the module was never loaded and there is nothing
+  # to ask.
+  method UaCheckGraphics {} {
+    if {[my state undescribedGraphics] eq {}} {
+      return {}
+    }
+    set nouns {image "an image" svg "a drawing" form "a form"}
+    return [lmap entry [my undescribedGraphics] {
+      string cat "page [dict get $entry page]: [dict get $nouns [dict get \
+          $entry kind]] was placed without -alt and without -artifact 1 -\
+          describe it, or say it is decoration; an artifact may carry nothing\
+          a reader needs (7.1, 7.3)"
+    }]
+  }
+
+  # A list says how it is numbered, or that it is not (7.6, Matterhorn 16-001):
+  # ListNumbering is mandatory on an ordered list, and a label a reader
+  # cannot name is a number it cannot read out. Two directions, because the
+  # attribute and the Lbl elements have to agree - a list numbered Decimal
+  # whose items carry no Lbl claims numbers that are not there, and items
+  # with a Lbl under a list that says nothing leave the reader guessing what
+  # the labels are.
+  #
+  # The facts come from [structureReport], one entry per L; judged here.
+  method UaCheckLists {} {
+    if {![my tagged]} {
+      return {}
+    }
+    set problems {}
+    set index 0
+    foreach list [dict get [my structureReport] lists] {
+      incr index
+      dict with list {}
+      if {$numbering ni {{} None} && $labelled < $items} {
+        lappend problems "list $index is numbered $numbering but\
+            [expr {$items - $labelled}] of its $items items\
+            [expr {$items - $labelled == 1 ? {carries} : {carry}}] no Lbl -\
+            put the number in \[\$doc structure Lbl\] inside each LI (7.6)"
+      } elseif {$numbering eq {} && $labelled} {
+        lappend problems "list $index: its items carry a Lbl but the list\
+            says no -numbering - name it (Decimal, Disc, ...) or None on\
+            \[\$doc structure L\] (7.6, Matterhorn 16-001)"
+      }
+    }
+    return $problems
   }
 
   # A link has to say where it goes in words (7.18.5) - "link" and nothing

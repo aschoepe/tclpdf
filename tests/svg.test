@@ -14,6 +14,9 @@ package require tclpdf
 package require tclpdf::xml
 package require tclpdf::svgPath
 package require tclpdf::svg
+# For [undescribedGraphics]: the query lives in image.tcl, which a document
+# that only draws SVG never loads by itself.
+package require tclpdf::image
 source [file join [file dirname [info script]] helper.tcl]
 
 set sample [file join [file dirname [file dirname [file normalize [info script]]]] \
@@ -595,5 +598,71 @@ test svg-6.2 {width and height together are a box, not a stretch} -body {
   # 40 mm wide, and half that tall - not 40 by 40.
   list [format %.2f [expr {200 * $sx}]] [format %.2f [expr {100 * abs($sy)}]]
 } -result {113.39 56.69}
+
+# --- decoration on purpose, or by default -------------------------------
+#
+# The same rule as for a picture: a drawing without -alt is an artifact, and
+# whether that was asked for (-artifact 1) or merely happened is kept apart.
+
+set svgDot {<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+    <circle cx="5" cy="5" r="4" fill="red"/></svg>}
+
+test svg-7.1 {-artifact 1 brackets an artifact and leaves no entry} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc svg -data $svgDot -at {20 20} -width 10 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [string match "*/Artifact <</Type /Layout>> BDC*" $stream] \
+      [string match "*EMC*" $stream] $missing
+} -result {1 1 {}}
+
+test svg-7.2 {without -alt and -artifact the artifact is remembered} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc svg -data $svgDot -at {20 20} -width 10 -artifact 1
+  $doc page add
+  $doc svg -data $svgDot -at {20 20} -width 10
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  set missing
+} -result {{kind svg page 2}}
+
+test svg-7.3 {-alt makes a Figure and leaves no entry} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc svg -data $svgDot -at {20 20} -width 10 -alt "Ein roter Punkt"
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [string match "*/Figure <</MCID 0>> BDC*" $stream] $missing
+} -result {1 {}}
+
+test svg-7.4 {-artifact 1 together with -alt is refused at the call} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  try {
+    $doc svg -data $svgDot -at {20 20} -width 10 -alt "Ein roter Punkt" -artifact 1
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-artifact and -alt contradict*}
+
+test svg-7.5 {an untagged document remembers nothing} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data $svgDot -at {20 20} -width 10
+  $doc svg -data $svgDot -at {40 20} -width 10 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  set state [$doc state undescribedGraphics]
+  $doc destroy
+  list [string match "*BDC*" $stream] $missing $state
+} -result {0 {} {}}
 
 cleanupTests

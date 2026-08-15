@@ -79,13 +79,22 @@ namespace eval ::tclpdf::structure {
     H7 H8 H9 H10
   }
 
-  # The eleven types that exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3).
+  # The twelve types that exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3).
   # In a 2.0 tree they are still usable, but they stay in the default - which
   # IS the 1.7 namespace - while everything else moves to the 2.0 one. So
-  # these are exactly the elements that get no /NS.
+  # these are exactly the elements that get no /NS. The generic H is one of
+  # them: the 2.0 namespace knows only the numbered Hn.
   variable only17 {
-    Art BlockQuote TOC TOCI Index Private Quote Note Reference BibEntry Code
+    Art BlockQuote TOC TOCI Index Private Quote Note Reference BibEntry Code H
   }
+
+  # What an artifact may call itself (ISO 32000-1 Table 330), and the subtypes
+  # a Pagination artifact may add (Table 331). Only Pagination has subtypes;
+  # a Layout artifact with one would carry a key no reader knows. Checked at
+  # the call, because a misspelt kind is written as a name and validates as
+  # an artifact of a type that does not exist.
+  variable artifactTypes {Pagination Layout Page Background}
+  variable artifactSubtypes {Header Footer Watermark}
 
   # Types that group other elements instead of holding content of their own.
   # The distinction decides where a mark goes: drawing inside an open Sect
@@ -206,9 +215,13 @@ namespace eval ::tclpdf::structure {
   # Without this a lone LI or a TD outside any table passes, because the
   # child rule above only ever asks what a parent MAY hold - never whether
   # this child had any business being there.
+  #
+  # A Lbl is at home in a list item, but a Note carries one as well - the
+  # footnote number (ISO 32000-1 14.8.4.3.3) - and so does its 2.0 successor
+  # FENote (ISO 32000-2 Table 368).
   variable parentOf {
     LI    {L}
-    Lbl   {LI}
+    Lbl   {LI Note FENote}
     LBody {LI}
     TR    {Table THead TBody TFoot}
     TH    {TR}
@@ -252,7 +265,7 @@ oo::define ::tclpdf::document::document {
   }
 
   # $doc structure <type> ?-alt text? ?-lang tag? ?-title text?
-  #                       ?-actualText text? -script body
+  #                       ?-actualText text? ?-expansion text? -script body
   #
   # Opens an element, runs the body with it open, and closes it again -
   # whatever the body does. The bracket form is the one [form create] and
@@ -261,7 +274,7 @@ oo::define ::tclpdf::document::document {
   # before it travels on.
   method structure {type args} {
     set options [::tclpdf::option parse {
-      alt {} lang {} title {} actualText {} script {} name {}
+      alt {} lang {} title {} actualText {} expansion {} script {} name {}
       scope {} numbering {} bbox {} colSpan {} rowSpan {}
     } $args "structure"]
     set script [dict get $options script]
@@ -274,6 +287,10 @@ oo::define ::tclpdf::document::document {
     if {$code} {
       return -options $outcome $result
     }
+    # Judged once the body is through and only then: an error from inside
+    # has already said what went wrong, and a caption complaint on top of it
+    # would hide the cause.
+    my StructureCheckCaption $id
     # The BODY's result, not the element id: this wraps calls that return
     # something the caller needs - [table] answers with the y coordinate
     # below the table, and swallowing it would break every table in a tagged
@@ -311,10 +328,14 @@ oo::define ::tclpdf::document::document {
       dict set named [dict get $options name] [llength [my state structure]]
       my state structureNames $named
     }
-    foreach key [list alt lang title actualText {*}[dict keys $attributes]] {
+    foreach key [list alt lang title actualText expansion \
+        {*}[dict keys $attributes]] {
       if {![dict exists $options $key]} {
         dict set options $key {}
       }
+    }
+    if {[dict get $options expansion] ne {}} {
+      my StructureExpansionGuard
     }
     set elements [my state structure]
     set stack [my state structureStack]
@@ -324,6 +345,7 @@ oo::define ::tclpdf::document::document {
         alt [dict get $options alt] lang [dict get $options lang] \
         title [dict get $options title] \
         actualText [dict get $options actualText] \
+        expansion [dict get $options expansion] \
         attributes [my StructureAttributes $type $options]]
     if {$parent ne {}} {
       set entry [lindex $elements $parent]
@@ -425,7 +447,12 @@ oo::define ::tclpdf::document::document {
       }
       return
     }
-    if {$parentType in $leafOnly && $type ni $inline} {
+    # A type that has just been found in one of the parents it is made for
+    # is not the block element this rule is after: a Lbl in a Note is the
+    # footnote's number, not a paragraph in a paragraph. Nothing else passes
+    # by this clause - a P names no parent, so a P in a P is still refused.
+    if {$parentType in $leafOnly && $type ni $inline
+        && ![dict exists $parentOf $type]} {
       return -code error "tclpdf: a $parentType holds text and inline markup,\
           not a $type - close it before starting one (ISO 32000-2 Annex L)"
     }
@@ -466,9 +493,12 @@ oo::define ::tclpdf::document::document {
     set key [llength $annotations]
     lappend annotations [list $element $number $key]
     my state structureAnnots $annotations
+    # The page travels with the reference: an OBJR has to name the page its
+    # annotation sits on whenever the element itself names none or another
+    # (ISO 32000-2 14.7.5.3), and only now is it known which page that is.
     set elements [my state structure]
     set entry [lindex $elements $element]
-    dict lappend entry kids [list objr $number]
+    dict lappend entry kids [list objr $number [my page current]]
     lset elements $element $entry
     my state structure $elements
     return $key
@@ -480,6 +510,43 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: structure elements closed out of order"
     }
     my state structureStack [lrange $stack 0 end-1]
+    return
+  }
+
+  # A Caption has a place, not just a parent: Annex L wants it as the FIRST
+  # child of a Table or an L, and ISO 32000-2 lets a table carry it last as
+  # well. Checked when the element's bracket closes, because only then is it
+  # known what else it holds - and still at the call, where the message can
+  # name the position rather than an object number. No caption, no complaint.
+  method StructureCheckCaption {id} {
+    set elements [my state structure]
+    set element [lindex $elements $id]
+    set type [dict get $element type]
+    if {$type ni {Table L}} {
+      return
+    }
+    set kids [dict get $element kids]
+    set position 0
+    foreach kid $kids {
+      incr position
+      if {[lindex $kid 0] ne "element"
+          || [dict get [lindex $elements [lindex $kid 1]] type] ne "Caption"} {
+        continue
+      }
+      if {$position == 1} {
+        continue
+      }
+      if {$type eq "Table" && $position == [llength $kids]
+          && [package vcompare [[my writer] version] 2.0] >= 0} {
+        continue
+      }
+      set where "first"
+      if {$type eq "Table"} {
+        set where "first or, in a 2.0 file, last"
+      }
+      return -code error "tclpdf: the Caption of a $type has to be its $where\
+          child, not child $position of [llength $kids] (ISO 32000-2 Annex L)"
+    }
     return
   }
 
@@ -507,7 +574,15 @@ oo::define ::tclpdf::document::document {
   # every artifact has to name its type. Under 1.7 it is allowed and ignored,
   # so it is written either way rather than made to depend on the claim - a
   # document that is upgraded to UA-2 should not have to be redrawn.
-  method StructureMark {{derived {}} {artifact Layout}} {
+  #
+  # The third argument is where the content BEGINS: the top edge, in the
+  # document unit, counted from the top of the page as -at is. It is kept
+  # with the mark, in PDF space, so that a structure destination can carry a
+  # page position (/XYZ) beside the element - the writer of the tree knows
+  # the page and the number of an element, but only the caller that drew the
+  # content knows where on the page it went. {} when the caller has no
+  # position to give; the destination then falls back to /Fit.
+  method StructureMark {{derived {}} {artifact Layout} {top {}}} {
     if {![my tagged]} {
       return {}
     }
@@ -520,6 +595,9 @@ oo::define ::tclpdf::document::document {
     if {[llength $derived] > 1} {
       set artifact [lrange $derived 1 end]
       set derived [lindex $derived 0]
+    }
+    if {$derived eq "Artifact"} {
+      my StructureArtifactKind $artifact
     }
     # Suspended while drawing into a content stream of its own - a form
     # XObject. MCIDs are unique per STREAM, and this counter is per page, so
@@ -595,12 +673,76 @@ oo::define ::tclpdf::document::document {
     dict set counters $page [expr {$mcid + 1}]
     my state structureMcid $counters
 
+    # The position goes into PDF space NOW, while the page it belongs to is
+    # the current one - the mirror axis is the page height, and the tree is
+    # written when a different page is current.
+    set y {}
+    if {$top ne {}} {
+      lassign [my coords 0 $top] . y
+    }
     set elements [my state structure]
     set entry [lindex $elements $element]
-    dict lappend entry kids [list mark $page $mcid]
+    dict lappend entry kids [list mark $page $mcid $y]
     lset elements $element $entry
     my state structure $elements
     return [list $mcid [dict get $entry type]]
+  }
+
+  # An expansion (14.9.5) is read from the tree and from nowhere else - in an
+  # untagged document it would be recorded and never written, and the
+  # abbreviation would stay unexplained without a word about why. Said at the
+  # call, like [StructureDestinationGuard] says it; one guard for both roads,
+  # [structure -expansion] and [text -expansion].
+  method StructureExpansionGuard {} {
+    if {[my state tagged] ne "1"} {
+      return -code error "tclpdf: -expansion needs a tagged document - the\
+          expanded form of an abbreviation is read from the structure tree.\
+          Call \[\$doc tagged 1\] first"
+    }
+    return
+  }
+
+  # The Span an abbreviation is read from (14.9.5), for [text -expansion]:
+  # opened here, and the mark that follows lands in it. Answers the ids to
+  # close after the mark, innermost last - so the caller closes them in
+  # reverse. Empty when nothing is to be opened, for the same reasons
+  # [StructureMark] gives nothing: no tree, or a suspended stream, or an
+  # artifact - an expansion inside a page number would be a Span with no
+  # content, which is worse than none.
+  #
+  # A Span is inline and needs a leaf to sit in. Drawn inside an open P it
+  # goes right in; drawn outside any element, or in a container, the derived
+  # element is opened first - the P a bare [text] would have made - because
+  # a Span straight under a Sect is exactly the tree Annex L forbids.
+  method StructureExpansion {derived expansion} {
+    if {[lindex $derived 0] eq "Artifact"} {
+      return -code error "tclpdf: -expansion on an artifact - what is outside\
+          the tree cannot carry an expanded form; drop -tag Artifact or\
+          -expansion"
+    }
+    my StructureExpansionGuard
+    if {[my state structureSuspend] eq "1"
+        || [my state structureInArtifact] eq "1"} {
+      return {}
+    }
+    variable ::tclpdf::structure::containers
+    variable ::tclpdf::structure::contentChildOf
+    set opened {}
+    set current [my StructureCurrent]
+    if {$current ne {}} {
+      set open [dict get [lindex [my state structure] $current] type]
+      if {$open in $containers} {
+        if {[dict exists $contentChildOf $open]} {
+          set derived [dict get $contentChildOf $open]
+        }
+        set current {}
+      }
+    }
+    if {$current eq {}} {
+      lappend opened [my StructureOpen $derived]
+    }
+    lappend opened [my StructureOpen Span [dict create expansion $expansion]]
+    return $opened
   }
 
   # The operators around a piece of marked content, or "" when untagged. The
@@ -633,6 +775,35 @@ oo::define ::tclpdf::document::document {
       my state structureInArtifact 0
     }
     return "EMC\n"
+  }
+
+  # Refuse an artifact kind the standard does not know, in the words of the
+  # refusal for an unknown structure type: the caller wrote "-tag {Artifact
+  # Foo}" and gets told what the choices are.
+  method StructureArtifactKind {kind} {
+    variable ::tclpdf::structure::artifactTypes
+    variable ::tclpdf::structure::artifactSubtypes
+    if {[llength $kind] > 2} {
+      return -code error "tclpdf: an artifact is \"Artifact type ?subtype?\",\
+          not \"Artifact $kind\""
+    }
+    lassign $kind type subtype
+    if {$type ni $artifactTypes} {
+      return -code error "tclpdf: unknown artifact type \"$type\" - the\
+          types of ISO 32000-1 Table 330 are: [join $artifactTypes {, }]"
+    }
+    if {$subtype ne {}} {
+      if {$type ne "Pagination"} {
+        return -code error "tclpdf: only a Pagination artifact has a\
+            subtype (ISO 32000-1 Table 331), not a $type"
+      }
+      if {$subtype ni $artifactSubtypes} {
+        return -code error "tclpdf: unknown artifact subtype \"$subtype\" -\
+            the subtypes of ISO 32000-1 Table 331 are:\
+            [join $artifactSubtypes {, }]"
+      }
+    }
+    return
   }
 
   # --- writing ------------------------------------------------------------
@@ -703,8 +874,13 @@ oo::define ::tclpdf::document::document {
             lappend kids [::tclpdf::pdfObj num [lindex $kid 2]]
           }
           objr {
+            # Pg is written on EVERY object reference rather than only where
+            # the element's own Pg differs: always naming it is unambiguous
+            # and permitted, and it spares a reader the comparison.
+            lassign $kid . number page
             lappend kids [::tclpdf::pdfObj dictionary [list \
-                Type /OBJR Obj [$writer ref [lindex $kid 1]]]]
+                Type /OBJR Obj [$writer ref $number] \
+                Pg [$writer ref [dict get [my Page $page] number]]]]
           }
         }
       }
@@ -716,7 +892,7 @@ oo::define ::tclpdf::document::document {
       # noise; set by ua.tcl for part 2, where relying on the default is no
       # longer allowed (UA-2 8.2.5.2).
       #
-      # The eleven 1.7-only types are the exception and keep the default:
+      # The twelve 1.7-only types are the exception and keep the default:
       # naming the 2.0 namespace on a type that does not exist in it would
       # be a claim about nothing.
       if {$namespace ne {} && [dict get $element type] ni $only17} {
@@ -733,7 +909,10 @@ oo::define ::tclpdf::document::document {
       } elseif {[llength $kids]} {
         lappend pairs K [::tclpdf::pdfObj arr $kids]
       }
-      foreach {key option} {Alt alt Lang lang T title ActualText actualText} {
+      # E is the expanded form of an abbreviation (14.9.5, Table 323) - a text
+      # string like Alt, so it is written the same way.
+      foreach {key option} {Alt alt Lang lang T title ActualText actualText
+          E expansion} {
         if {[dict get $element $option] ne {}} {
           lappend pairs $key [::tclpdf::pdfObj str [dict get $element $option]]
         }
@@ -811,15 +990,31 @@ oo::define ::tclpdf::document::document {
     # structure destination is the element itself where a page destination
     # would name a page (12.3.2.3) - a reader then scrolls to the CONTENT
     # rather than to a coordinate that may have moved.
-    dict for {name number} [my state structureDestinations] {
+    #
+    # Two objects per name, because the action that carries them (see
+    # [structureDestination]) names both: /SD, the element, and /D, a page
+    # destination to where the element BEGINS, for a reader that does not
+    # understand structure destinations (12.3.2.3 recommends the pair). /XYZ
+    # with the top of the first content and no zoom, when the mark recorded
+    # a position; /Fit on that page when it did not - a position that is not
+    # known is not invented.
+    dict for {name numbers} [my state structureDestinations] {
       if {![dict exists [my state structureNames] $name]} {
         return -code error "tclpdf: no structure element is named \"$name\" -\
             a link or a bookmark points at it. Name one with\
             \[\$doc structure <type> -name $name ...\]"
       }
       set target [dict get [my state structureNames] $name]
-      $writer put $number [::tclpdf::pdfObj arr [list \
+      $writer put [dict get $numbers sd] [::tclpdf::pdfObj arr [list \
           [$writer ref [dict get [lindex $elements $target] number]] /Fit]]
+      lassign [my StructureFirstPosition $elements $target] page y
+      if {$page eq {}} {
+        set page 0
+      }
+      set pageRef [$writer ref [dict get [my Page $page] number]]
+      $writer put [dict get $numbers d] [::tclpdf::pdfObj arr [expr {$y eq {} ?
+          [list $pageRef /Fit] :
+          [list $pageRef /XYZ null [::tclpdf::pdfObj num $y] null]}]]
     }
 
     my catalogEntry StructTreeRoot [$writer ref $rootNumber]
@@ -838,25 +1033,67 @@ oo::define ::tclpdf::document::document {
     return
   }
 
-  # A reference to a destination object that will point at the named element.
+  # The action that takes a reader to the named element, for the /A entry of
+  # a link annotation or an outline item:
   #
-  # The object is reserved now and filled at write time, and that indirection
-  # is what makes this work at all: an annotation is written the moment the
-  # link is drawn, while the element it points at gets its object number only
-  # when the tree is built. A destination may be an indirect object (12.3.2),
-  # so the annotation can carry a reference to something that does not exist
-  # yet.
+  #   << /S /GoTo /SD <structure destination> /D <page destination> >>
+  #
+  # An action rather than a bare /Dest, because a GoTo is the one place that
+  # holds BOTH targets (ISO 32000-2 Table 202): /SD names the element, /D the
+  # page it begins on. A reader that knows 2.0 follows /SD to the content; an
+  # older one skips the key it does not know and still lands on the right
+  # page through /D. That pairing is what 12.3.2.3 recommends and what
+  # PDF/UA-2 rests on.
+  #
+  # Both destinations are reserved now and filled at write time, and that
+  # indirection is what makes this work at all: an annotation is written the
+  # moment the link is drawn, while the element it points at gets its object
+  # number - and its first page is settled - only when the tree is built. A
+  # destination may be an indirect object (12.3.2), so the action can carry
+  # references to objects that do not exist yet.
   #
   # The name does not have to be declared yet either - a link may point
   # forwards, at a section further down the document. It is checked when the
-  # tree is written, where a mistyped one can still be named.
+  # tree is written, where a mistyped one can still be named. Asking twice
+  # for one name gets the same objects, so a caller may ask early and again
+  # when it writes.
   method structureDestination {name} {
     set wanted [my state structureDestinations]
     if {![dict exists $wanted $name]} {
-      dict set wanted $name [my reservation structure.dest.$name]
+      dict set wanted $name [dict create \
+          sd [my reservation structure.dest.$name] \
+          d [my reservation structure.pagedest.$name]]
       my state structureDestinations $wanted
     }
-    return [[my writer] ref [dict get $wanted $name]]
+    set numbers [dict get $wanted $name]
+    return [::tclpdf::pdfObj dictionary [list S /GoTo \
+        D [[my writer] ref [dict get $numbers d]] \
+        SD [[my writer] ref [dict get $numbers sd]]]]
+  }
+
+  # The refusal both takers of a structure destination - link and bookmark -
+  # have to make, kept once, beside the method it protects. caller names the
+  # call for the message.
+  #
+  # Without a tree the destination would point at nothing. And it needs a 2.0
+  # file: before ISO 32000-2 the first entry of a destination array has to be
+  # a page object (ISO 32000-1, Table 151) - written anyway it would point a
+  # validator and every reader at an object that is not a page. Both checked
+  # where the caller is: left alone, the write failed later with "reserved
+  # but never written" and no word about which call was at fault.
+  method StructureDestinationGuard {caller} {
+    if {[my state tagged] ne "1"} {
+      return -code error "tclpdf: $caller needs a tagged document - a\
+          structure destination points at an element of the tree. Call\
+          \[\$doc tagged 1\] first"
+    }
+    if {[package vcompare [[my writer] version] 2.0] < 0} {
+      return -code error "tclpdf: a structure destination is a syntax of\
+          ISO 32000-2 (12.3.2.3) and this document is PDF\
+          [[my writer] version] - raise the version, or use\
+          \[\$doc ua -part 2\], which does it"
+    }
+    return
   }
 
   # What the tree looks like, for a checker that has to judge it as a whole.
@@ -869,8 +1106,10 @@ oo::define ::tclpdf::document::document {
   #
   # So this answers with facts and judges nothing:
   #
-  #   headings   the H1..H6 types in document order
+  #   headings   the H1..H10 types in document order
   #   rows       per table element, the cell count of each of its rows
+  #   lists      per L element: its ListNumbering (empty when unset), how
+  #              many LI it holds and how many of those carry a Lbl
   #   types      every type used, once
   #
   # Returned rather than read out of the state by the caller: the shape of an
@@ -881,25 +1120,62 @@ oo::define ::tclpdf::document::document {
     set headings {}
     set types {}
     set rows {}
+    set lists {}
     foreach element $elements {
       set type [dict get $element type]
       if {$type ni $types} {
         lappend types $type
       }
-      if {[regexp {^H([1-6])$} $type -> level]} {
+      if {[regexp {^H(10|[1-9])$} $type -> level]} {
         lappend headings $level
       }
     }
     set index 0
     foreach element $elements {
-      if {[dict get $element type] ne "Table"} {
-        incr index
-        continue
+      switch -- [dict get $element type] {
+        Table {
+          lappend rows [my StructureRowWidths $elements $index]
+        }
+        L {
+          lappend lists [my StructureListShape $elements $index]
+        }
       }
-      lappend rows [my StructureRowWidths $elements $index]
       incr index
     }
-    return [dict create headings $headings rows $rows types $types]
+    return [dict create headings $headings rows $rows lists $lists types $types]
+  }
+
+  # One list as three facts: what it says it is numbered, how many items it
+  # has, and how many of them carry a label. Attributes are stored owner ->
+  # pairs with the value a name object ({List {ListNumbering /Decimal}}), so
+  # the slash comes off here.
+  method StructureListShape {elements index} {
+    set element [lindex $elements $index]
+    set numbering {}
+    set attributes [dict get $element attributes]
+    if {[dict exists $attributes List ListNumbering]} {
+      set numbering [string range [dict get $attributes List ListNumbering] 1 end]
+    }
+    set items 0
+    set labelled 0
+    foreach kid [dict get $element kids] {
+      if {[lindex $kid 0] ne "element"} {
+        continue
+      }
+      set item [lindex $elements [lindex $kid 1]]
+      if {[dict get $item type] ne "LI"} {
+        continue
+      }
+      incr items
+      foreach grandchild [dict get $item kids] {
+        if {[lindex $grandchild 0] eq "element"
+            && [dict get [lindex $elements [lindex $grandchild 1]] type] eq "Lbl"} {
+          incr labelled
+          break
+        }
+      }
+    }
+    return [dict create numbering $numbering items $items labelled $labelled]
   }
 
   # The cell count of every row below one table, section groups included: a
@@ -944,6 +1220,40 @@ oo::define ::tclpdf::document::document {
     set pages [lsort -unique -integer $pages]
     if {[llength $pages] == 1} {
       return [lindex $pages 0]
+    }
+    return {}
+  }
+
+  # Where an element BEGINS, as {page y} - the place the /D half of a
+  # structure destination sends a reader. y is the top of the first content
+  # in PDF space, or {} when the mark that begins the element recorded no
+  # position. Not [StructurePage]: that answers "the one page all marks sit
+  # on" and says nothing for an element that spans two, while here the FIRST
+  # place is wanted, and every element has one.
+  #
+  # The kids are walked in document order: the first mark or annotation (an
+  # OBJR carries its page and no position) decides, and a child element that
+  # owns neither is asked the same question in turn - a Sect that holds only
+  # a P begins where the P begins. An element with no content anywhere below
+  # it has no place of its own; page 0 is the answer then, because a
+  # destination has to name SOME page and the first is the one a reader can
+  # least be misled by.
+  method StructureFirstPosition {elements index} {
+    foreach kid [dict get [lindex $elements $index] kids] {
+      switch -- [lindex $kid 0] {
+        mark {
+          return [list [lindex $kid 1] [lindex $kid 3]]
+        }
+        objr {
+          return [list [lindex $kid 2] {}]
+        }
+        element {
+          set found [my StructureFirstPosition $elements [lindex $kid 1]]
+          if {$found ne {}} {
+            return $found
+          }
+        }
+      }
     }
     return {}
   }

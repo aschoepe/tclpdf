@@ -23,6 +23,14 @@
 # at the end: every entry needs the object numbers of its siblings, and the
 # format is a doubly linked list at each level rather than a nested structure.
 #
+# Page labels are the third piece of navigation here. A page has two numbers -
+# the index the file counts it by and the number printed on it - and a reader
+# shows the first unless the file says otherwise. The chapters print "Page 1"
+# to "Page 3" and the contents page prints no number, so the labels say the
+# same: 1 to 3, then a name. Matterhorn 15-001 counts a printed number that
+# differs from its label as an accessibility failure, and it is one no
+# validator can find, because the printed number is drawn text.
+#
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
 # See the file "license.terms" for information on usage and redistribution
@@ -97,6 +105,8 @@ foreach chapter $chapters {
     $doc font -size 8 -color {0.45 0.45 0.5}
     $doc text "Back to contents" -at {20 280}
     $doc link -at {20 276} -size {30 5} -page 0 -tooltip "Contents"
+    # The printed number - what the page label below has to agree with.
+    $doc text "Page $pageNumber" -at {190 280} -align right
     $doc font -color black
 }
 
@@ -141,9 +151,20 @@ $doc link -at [list 20 [expr {$y + 16}]] -size {60 6} \
 
 $doc bookmark "Contents" -page $contents
 
+# What the reader's page field shows (ISO 32000 12.4.2). The chapters are
+# labelled 1, 2, 3 - decimal from the first page, matching "Page 1" to
+# "Page 3" printed on them - and the contents page, which prints no number,
+# is called "Contents" instead of being page 4 (Matterhorn 15-001: the
+# visible number and the label must not disagree). A document that prints
+# its numbers with [pageNumbers -from 3] should say [pageLabels -from 0
+# -start 3] for the same reason.
+$doc pageLabels -from 0 -style D
+$doc pageLabels -from $contents -style none -prefix "Contents"
+
 exampleFooter $doc
 
 $doc write $target
 puts "  written: $target ([file size $target] bytes), [$doc page count] pages"
 puts "  bookmarks: [llength [$doc bookmarks]]"
+puts "  page labels: [dict keys [$doc pageLabels]] -> 1, 2, 3, Contents"
 $doc destroy

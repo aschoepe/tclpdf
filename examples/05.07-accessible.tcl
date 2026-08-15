@@ -20,6 +20,11 @@
 #   regular tables   every row the same number of cells, which is why this
 #                    example has no colSpan anywhere
 #   links            a description on every one
+#   lists            an ordered list names its numbering AND its items carry
+#                    a Lbl - one without the other is refused either way
+#   graphics         a picture, drawing or form placement is described with
+#                    -alt or declared decoration with -artifact 1; one that
+#                    fell into artifact by default was never judged
 #
 # All of them are checked when the file is written, all at once rather than
 # one per run, and each message names the call to change. A validator finds
@@ -27,7 +32,9 @@
 #
 # What the writer contributes by itself: the pdfuaid schema in the metadata
 # and ViewerPreferences with DisplayDocTitle. Neither moves a mark on a page,
-# so asking for them would be ceremony.
+# so asking for them would be ceremony. DisplayDocTitle is checked all the
+# same, because a later [viewerPreferences -displayDocTitle 0] can take it
+# back - and then the write refuses, naming that call.
 #
 # PDF/UA and PDF/A are independent claims about different things - one about
 # being readable by everyone, one about being readable in fifty years - and a
@@ -77,10 +84,21 @@ $doc font -family faceBold -size 16
 $doc text "Barrierefreier Bescheid" -at {20 25} -tag H1
 
 $doc font -family face -size 10
-$doc text "Dieses Dokument beansprucht PDF/UA-1. Der Anspruch steht in den\
-    Metadaten, und tclpdf schreibt ihn nur, wenn die Bedingungen dafür beim\
-    Schreiben erfüllt sind - sonst bricht der Aufruf ab und nennt die Stelle,\
-    die zu ändern ist." -at {20 34} -width 170
+# An abbreviation says what it stands for: UA-1 7.20 asks for it, and ISO
+# 32000-1 14.9.5 provides the place - the element carries /E with the
+# expanded form, and a reader that is asked can read it out. -expansion on
+# [text] puts the word into a Span with that entry; the [structure P] around
+# the three calls keeps them one paragraph, and the Span sits inside it.
+$doc structure P -script {
+  set lead "Dieses Dokument beansprucht "
+  $doc text $lead -at {20 34}
+  $doc text "PDF/UA" -at [list [expr {20 + [$doc textWidth $lead]}] 34] \
+      -expansion "PDF Universal Accessibility, ISO 14289"
+  $doc text "-1. Der Anspruch steht in den Metadaten, und tclpdf schreibt\
+      ihn nur, wenn die Bedingungen dafür beim Schreiben erfüllt sind - sonst\
+      bricht der Aufruf ab und nennt die Stelle, die zu ändern ist." \
+      -at {20 34} -width 170 -firstIndent [$doc textWidth "${lead}PDF/UA"]
+}
 
 $doc font -family faceBold -size 12
 $doc text "Was geprüft wird" -at {20 52} -tag H2
@@ -142,8 +160,13 @@ $doc structure Link -script {
 $doc font -family faceBold -size 12
 $doc text "Vorgehen" -at {20 160} -tag H2
 
-# -numbering is mandatory on an ordered list and can never be derived: the
-# label is drawn text, and "1." and "-" look the same to a writer.
+# -numbering is mandatory on an ordered list (UA-1 7.6) and can never be
+# derived: the label is drawn text, and "1." and "-" look the same to a
+# writer. The write checks that the two agree - a list numbered Decimal whose
+# items carry no Lbl is refused, and so is a list whose items carry a Lbl
+# while the list says nothing about its numbering. Here every LI holds its
+# number in a Lbl and the L says Decimal, which is the shape a reader can
+# announce as "1 of 3".
 $doc structure L -numbering Decimal -script {
   set y 168
   foreach {label body} {

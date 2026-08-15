@@ -36,6 +36,18 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       page {} at {} parent {} open 1 structure {}
     } $args "bookmark"]
+    if {[dict get $options structure] ne {}} {
+      # Checked here, where the caller is: left alone, the write would fail
+      # later with "reserved but never written" and no word about which call
+      # was at fault. What is checked, and why, stands at the guard.
+      my StructureDestinationGuard "bookmark -structure"
+      # And requested NOW, not first in OutlineWrite: the structure tree
+      # writer fills the destination objects at beforeWrite, the outline is
+      # built later, on the catalog event - a destination first asked for
+      # there is reserved after the filler has run and stays empty. The call
+      # is idempotent, so OutlineWrite asking again gets the same object.
+      my structureDestination [dict get $options structure]
+    }
     set entries [my state outline]
     if {$entries eq {}} {
       my onSelf catalog OutlineWrite
@@ -99,10 +111,16 @@ oo::define ::tclpdf::document::document {
       # and a title of "Rechnung" stays readable in the file that way.
       set pairs [list Title [::tclpdf::pdfObj str [dict get $entry title]] \
           Parent [expr {$parent eq {} ? [[my writer] ref $rootNumber] :
-              [[my writer] ref [dict get [lindex $entries $parent] number]]}] \
-          Dest [expr {[dict get $entry structure] ne {} ?
-              [my structureDestination [dict get $entry structure]] :
-              [my destination [dict get $entry page] [dict get $entry at]]}]]
+              [[my writer] ref [dict get [lindex $entries $parent] number]]}]]
+      # A page target is a plain /Dest; an element target is a GoTo action
+      # under /A, because only an action can carry the structure destination
+      # (/SD) and a page destination (/D) side by side - see
+      # [structureDestination] for why both are wanted.
+      if {[dict get $entry structure] ne {}} {
+        lappend pairs A [my structureDestination [dict get $entry structure]]
+      } else {
+        lappend pairs Dest [my destination [dict get $entry page] [dict get $entry at]]
+      }
       if {$position > 0} {
         lappend pairs Prev [[my writer] ref \
             [dict get [lindex $entries [lindex $siblings $position-1]] number]]

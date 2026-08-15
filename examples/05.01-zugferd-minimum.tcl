@@ -126,8 +126,11 @@ $doc bookmark "Invoice [dict get $data number]" -page 0
 
 # One call sets everything PDF/A-3B needs: the output intent with the sRGB
 # profile the package ships, the XMP extension schema, the attachment with
-# /AFRelationship /Alternative at document level, and the entry in the names
-# tree. Passing -icc here would name the very file the module already finds -
+# /AFRelationship /Data at document level, and the entry in the names tree.
+# Data, not Alternative: Factur-X binds the relationship to the profile, and
+# a MINIMUM XML is no alternative representation of the invoice - the page
+# above carries detail the XML does not. Example 5.2 shows the other case.
+# Passing -icc here would name the very file the module already finds -
 # measured, the two documents come out identical.
 set profile [$doc zugferd $invoice]
 puts "  profile from BT-24: $profile"

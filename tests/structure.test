@@ -842,7 +842,10 @@ test structure-14.1 {a link may point at an element instead of a page} -body {
   # It is an INDIRECT object, and that is what makes it possible at all: the
   # annotation is written when the link is drawn, the element gets its number
   # only when the tree is built.
-  set doc [tclpdf new -unit mm -compress 0]
+  #
+  # A 2.0 file, and that is not decoration: 32000-1 has no structure
+  # destinations - see 14.4 and 14.6 for what happens without the version.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
   $doc tagged 1
   $doc page add
   $doc structure Link -script {
@@ -856,16 +859,17 @@ test structure-14.1 {a link may point at an element instead of a page} -body {
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
-  # The destination is a reference, and the object it names is an array whose
+  # The structure destination is the /SD of a GoTo action (16.x has the
+  # /D beside it): a reference, and the object it names is an array whose
   # first entry points at a structure element rather than a page.
-  regexp {/Dest (\d+) 0 R} $bytes -> number
+  regexp {/A << /S /GoTo [^>]*/SD (\d+) 0 R} $bytes -> number
   regexp "\n$number 0 obj\\s*\\\[\\s*(\\d+) 0 R\\s*/Fit" $bytes -> target
   list [info exists number] \
       [regexp "\n$target 0 obj\[^s\]*/S /Sect" $bytes]
 } -result {1 1}
 
 test structure-14.2 {a name has to exist, and only once} -body {
-  set doc [tclpdf new -unit mm]
+  set doc [tclpdf new -unit mm -version 2.0]
   $doc tagged 1
   $doc page add
   $doc structure Sect -name eins -script {$doc text "a" -at {20 20}}
@@ -887,6 +891,559 @@ test structure-14.3 {a structure destination needs a tree} -body {
   list $code [string match "*needs a tagged document*" $err]
 } -result {1 1}
 
+test structure-14.4 {a structure destination needs a 2.0 file} -body {
+  # In a 1.7 file the first entry of a destination array has to be a page
+  # object (ISO 32000-1, Table 151); the element-first form exists only from
+  # ISO 32000-2 on (12.3.2.3). Refused at the call, with the version and the
+  # way out in the message - written anyway it would point every reader at
+  # an object that is not a page.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc link -at {20 16} -size {10 6} -structure ziel} err]
+  $doc destroy
+  list $code [string match "*ISO 32000-2*" $err] \
+      [string match "*PDF 1.7*" $err] [string match "*ua -part 2*" $err]
+} -result {1 1 1 1}
+
+test structure-14.5 {a bookmark at an element needs the tree, said at the call} -body {
+  # Before the guard this was taken and the write then failed with "reserved
+  # but never written" - a message with no word about which call was at
+  # fault. Now the bookmark call itself names tagged.
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc page add
+  set code [catch {$doc bookmark "Ziel" -structure ziel} err]
+  $doc destroy
+  list $code [string match "*bookmark -structure*" $err] \
+      [string match "*needs a tagged document*" $err] \
+      [string match "*tagged 1*" $err]
+} -result {1 1 1 1}
+
+test structure-14.6 {a bookmark at an element needs the 2.0 file too} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc bookmark "Ziel" -structure ziel} err]
+  $doc destroy
+  list $code [string match "*ISO 32000-2*" $err] [string match "*PDF 1.7*" $err]
+} -result {1 1 1}
+
+test structure-14.7 {a bookmark may point at an element instead of a page} -body {
+  # The bookmark twin of 14.1: the /SD of its GoTo action is a reference to
+  # an array whose first entry is a structure element rather than a page.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc bookmark "Zum Ziel" -structure ziel
+  $doc structure Sect -name ziel -script {$doc text "Ziel" -at {20 20} -tag H1}
+  set path [::tclpdfTest::scratch structdest-bm.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Title \(Zum Ziel\)[^>]*/A << /S /GoTo [^>]*/SD (\d+) 0 R} $bytes -> number
+  regexp "\n$number 0 obj\\s*\\\[\\s*(\\d+) 0 R\\s*/Fit" $bytes -> target
+  list [info exists number] \
+      [regexp "\n$target 0 obj\[^s\]*/S /Sect" $bytes]
+} -result {1 1}
+
+test structure-14.8 {ua -part 2 raises the version before the guard looks} -body {
+  # The order that has to keep working: [ua -part 2] sets the version to 2.0
+  # itself, so a caller who declared it is not sent to raise a version that
+  # is already right. This is the path example 05.08 takes.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc ua -part 2
+  $doc page add
+  set link [catch {$doc link -at {20 16} -size {10 6} -structure ziel -tooltip "T"}]
+  set mark [catch {$doc bookmark "Ziel" -structure ziel}]
+  $doc destroy
+  list $link $mark
+} -result {0 0}
+
+# --- what the standard says beyond the parent -----------------------------
+
+test structure-15.1 {an OBJR names its page even when the element has none} -body {
+  # A Link that holds nothing but the annotation owns no marks, so the
+  # element gets no Pg - and then the OBJR has to carry it (ISO 32000-2
+  # 14.7.5.3): the object reference is the only thing that says which page
+  # the annotation sits on. Written without it the tree validates and no
+  # reader can find the link from the tree.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Link -script {
+    $doc link -at {20 16} -size {20 6} -url https://www.tcl.tk/ -tooltip "T"
+  }
+  set path [::tclpdfTest::scratch objr-pg.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/S /Link /P (\d+) 0 R /K << /Type /OBJR /Obj (\d+) 0 R /Pg (\d+) 0 R} \
+      $bytes -> parent annot page
+  # The reference is an OBJR with a Pg, and the Pg is a page object.
+  list [info exists page] \
+      [regexp "\n$page 0 obj\\s*<<\[^>\]*/Type /Page\\M" $bytes] \
+      [regexp "\n$annot 0 obj\\s*<<\[^>\]*/Subtype /Link" $bytes]
+} -result {1 1 1}
+
+test structure-15.2 {an OBJR names its page beside an element that has one} -body {
+  # The element owns a mark and so names the page itself; the OBJR still
+  # says which page, because always writing it is unambiguous and permitted,
+  # and the two have to agree.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Link -script {
+    $doc text "tcl.tk" -at {20 20}
+    $doc link -at {20 16} -size {20 6} -url https://www.tcl.tk/ -tooltip "T"
+  }
+  set path [::tclpdfTest::scratch objr-pg2.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/S /Link[^>]*/Pg (\d+) 0 R /K \[[^\]]*/Type /OBJR /Obj \d+ 0 R /Pg (\d+) 0 R} \
+      $bytes -> elementPage objrPage
+  list [info exists objrPage] [expr {$elementPage eq $objrPage}]
+} -result {1 1}
+
+test structure-15.3 {an artifact type has to be one of the four} -body {
+  # ISO 32000-1 Table 330 knows Pagination, Layout, Page and Background. A
+  # misspelling would be written as a name and validate as an artifact of a
+  # type nobody knows - so it is refused at the call, naming the choices.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc text "x" -at {20 20} -tag {Artifact Foo}} err]
+  $doc destroy
+  list $code [string match "*unknown artifact type \"Foo\"*" $err] \
+      [string match "*Pagination, Layout, Page, Background*" $err]
+} -result {1 1 1}
+
+test structure-15.4 {only a Pagination artifact has a subtype, and one of three} -body {
+  # Table 331 gives Header, Footer and Watermark, and gives them to
+  # Pagination alone. A Layout with a subtype carries a key no reader knows.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set layout [catch {$doc text "x" -at {20 20} -tag {Artifact Layout Header}} first]
+  set spelt [catch {$doc text "x" -at {20 20} -tag {Artifact Pagination Head}} second]
+  set long [catch {$doc text "x" -at {20 20} -tag {Artifact Pagination Header Left}} third]
+  $doc destroy
+  list $layout [string match "*only a Pagination artifact has a subtype*" $first] \
+      $spelt [string match "*unknown artifact subtype \"Head\"*" $second] \
+      [string match "*Header, Footer, Watermark*" $second] \
+      $long [string match "*Artifact type ?subtype?*" $third]
+} -result {1 1 1 1 1 1 1}
+
+test structure-15.5 {the four types and the three subtypes are all accepted} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set codes {}
+  foreach kind {
+    {Artifact Pagination} {Artifact Pagination Header} {Artifact Pagination Footer}
+    {Artifact Pagination Watermark} {Artifact Layout} {Artifact Page}
+    {Artifact Background} Artifact
+  } {
+    lappend codes [catch {$doc text "x" -at {20 20} -tag $kind}]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes [regexp -all {/Artifact <</Type /Pagination /Subtype /Watermark>> BDC} $stream] \
+      [regexp -all {/Artifact <</Type /Background>> BDC} $stream]
+} -result {{0 0 0 0 0 0 0 0} 1 1}
+
+test structure-15.6 {the generic H keeps the default namespace in a 2.0 tree} -body {
+  # H is the twelfth type that exists only in the 1.7 namespace: 2.0 knows
+  # the numbered Hn and nothing else (TS 32005 Tab. 2/3). Naming the 2.0
+  # namespace on it would be a claim about a type that is not there.
+  #
+  # The namespace reference is planted by hand rather than through
+  # [ua -part 2], because UA-2 refuses the generic H at write time - the
+  # question here is what the tree writes, not what UA-2 allows.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc structure H -script {$doc text "x" -at {20 20}}
+  $doc structure H1 -script {$doc text "y" -at {20 30}}
+  $doc state uaNamespace [[$doc writer] ref 1]
+  set path [::tclpdfTest::scratch h-ns.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The H carries no NS, the H1 beside it does.
+  list [regexp {/S /H (?![^>]*/NS)} $bytes] [regexp {/S /H1 [^>]*/NS 1 0 R} $bytes]
+} -result {1 1}
+
+test structure-15.7 {the report counts headings up to H10} -body {
+  # 2.0 lifted the limit of six; a report that stopped at H6 would let a
+  # jump from H6 to H8 pass unseen and would not see the H7 that closes it.
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc tagged 1
+  $doc page add
+  foreach level {1 6 7 8 9 10 2} {
+    $doc structure H$level -script {$doc text "x" -at {20 20}}
+  }
+  set headings [dict get [$doc structureReport] headings]
+  $doc destroy
+  set headings
+} -result {1 6 7 8 9 10 2}
+
+test structure-15.8 {a Lbl may sit in a Note or a FENote, and nowhere new} -body {
+  # A footnote carries its number as a Lbl (ISO 32000-1 14.8.4.3.3), and so
+  # does its 2.0 successor FENote (ISO 32000-2 Table 368). The Note is a
+  # text-holding type, and the exception that lets the Lbl in must not let a
+  # block element in with it: a P in a Note, and a Lbl in a P, stay refused.
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc tagged 1
+  $doc page add
+  set note [catch {$doc structure Note -script {
+    $doc structure Lbl -script {$doc text "1" -at {20 20}}
+    $doc text "Fussnote" -at {24 20}
+  }}]
+  set fenote [catch {$doc structure FENote -script {
+    $doc structure Lbl -script {$doc text "2" -at {20 30}}
+    $doc text "Endnote" -at {24 30}
+  }}]
+  set inP [catch {$doc structure P -script {
+    $doc structure Lbl -script {$doc text "3" -at {20 40}}
+  }} first]
+  set pInNote [catch {$doc structure Note -script {
+    $doc structure P -script {$doc text "x" -at {20 50}}
+  }} second]
+  $doc destroy
+  list $note $fenote $inP [string match "*a Lbl belongs in LI or Note or FENote*" $first] \
+      $pInNote [string match "*a Note holds text and inline markup, not a P*" $second]
+} -result {0 0 1 1 1 1}
+
+test structure-15.9 {a Caption is the first child of a Table or an L} -body {
+  # Annex L: the caption comes first, so a reader announces the table by its
+  # name before it starts on the rows. Second is wrong and is said so at the
+  # call, with the position; first is right; none is no error at all.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set second [catch {$doc structure Table -script {
+    $doc structure TR -script {
+      $doc structure TD -script {$doc text "a" -at {20 20}}
+    }
+    $doc structure Caption -script {$doc text "Tabelle 1" -at {20 10}}
+    $doc structure TR -script {
+      $doc structure TD -script {$doc text "b" -at {20 30}}
+    }
+  }} err]
+  set first [catch {$doc structure Table -script {
+    $doc structure Caption -script {$doc text "Tabelle 2" -at {20 40}}
+    $doc structure TR -script {
+      $doc structure TD -script {$doc text "c" -at {20 50}}
+    }
+  }}]
+  set none [catch {$doc structure Table -script {
+    $doc structure TR -script {
+      $doc structure TD -script {$doc text "d" -at {20 60}}
+    }
+  }}]
+  set list [catch {$doc structure L -script {
+    $doc structure LI -script {$doc text "e" -at {20 70}}
+    $doc structure Caption -script {$doc text "Liste" -at {20 65}}
+  }} listErr]
+  $doc destroy
+  list $second [string match "*Caption of a Table*first*child, not child 2 of 3*" $err] \
+      $first $none $list [string match "*Caption of a L*first child, not child 2 of 2*" $listErr]
+} -result {1 1 0 0 1 1}
+
+test structure-15.10 {a table caption may come last in a 2.0 file only} -body {
+  # ISO 32000-2 lets a Table carry its caption as the last child as well; a
+  # 1.7 file has only Annex L's first. An L never takes it last.
+  set draw {
+    $doc structure TR -script {
+      $doc structure TD -script {$doc text "a" -at {20 20}}
+    }
+    $doc structure Caption -script {$doc text "Tabelle" -at {20 30}}
+  }
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc tagged 1
+  $doc page add
+  set two [catch {$doc structure Table -script $draw}]
+  set listLast [catch {$doc structure L -script {
+    $doc structure LI -script {$doc text "e" -at {20 40}}
+    $doc structure Caption -script {$doc text "Liste" -at {20 50}}
+  }}]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set one [catch {$doc structure Table -script $draw} err]
+  $doc destroy
+  list $two $listLast $one [string match "*first or, in a 2.0 file, last*" $err]
+} -result {0 1 1 1}
+
+# --- the page destination beside the structure destination ----------------
+#
+# 12.3.2.3 recommends giving a page destination alongside a structure
+# destination, so a reader that does not understand the 2.0 form still lands
+# on the right page. The carrier is a GoTo action with both /SD and /D
+# (Table 202). These tests read the two halves apart from each other.
+
+# The object numbers of the pages, in page order, from the Pages tree.
+proc pageObjects {bytes} {
+  regexp {/Type /Pages /Kids \[([^\]]*)\]} $bytes -> kids
+  return [lmap {. number} [regexp -all -inline -- {(\d+) 0 R} $kids] {set number}]
+}
+
+# The two destination arrays behind an action, as {D-array SD-array}. Which
+# dictionary is looked at is the caller's business - the annotation or the
+# outline item - given as a pattern up to the action.
+proc gotoTargets {bytes pattern} {
+  if {![regexp "$pattern/A << /S /GoTo /D (\\d+) 0 R /SD (\\d+) 0 R >>" \
+      $bytes -> d sd]} {
+    return {}
+  }
+  regexp "\n$d 0 obj\\s*(\\\[\[^\\]\]*\\\])" $bytes -> dArray
+  regexp "\n$sd 0 obj\\s*(\\\[\[^\\]\]*\\\])" $bytes -> sdArray
+  return [list $dArray $sdArray]
+}
+
+test structure-16.1 {a link at an element carries a page destination beside it} -body {
+  # The element sits on page 2 (index 1), the link on page 1. /D has to name
+  # the second page's object with the top of the first line: text 20 mm
+  # from the top has its baseline at 841.89 - 56.69 = 785.2 pt, and the top
+  # edge one ascent above - within a line of that.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Link -script {
+    $doc text "weiter" -at {20 20}
+    $doc link -at {20 16} -size {20 6} -structure ziel -tooltip "Zum Ziel"
+  }
+  $doc page add
+  $doc structure Sect -name ziel -script {$doc text "Ziel" -at {20 20} -tag H1}
+  set path [::tclpdfTest::scratch structdest-pair.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lassign [pageObjects $bytes] . second
+  lassign [gotoTargets $bytes {/Subtype /Link [^>]*}] d sd
+  regexp {^\[(\d+) 0 R /XYZ null ([\d.]+) null\]$} $d -> dPage y
+  regexp {^\[(\d+) 0 R /Fit\]$} $sd -> element
+  list [expr {$dPage eq $second}] [expr {$y > 785.2 && $y < 799.6}] \
+      [regexp "\n$element 0 obj\[^s\]*/S /Sect" $bytes]
+} -result {1 1 1}
+
+test structure-16.2 {a bookmark at an element carries the same pair} -body {
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc text "Seite eins" -at {20 20}
+  $doc bookmark "Zum Ziel" -structure ziel
+  $doc page add
+  $doc structure Sect -name ziel -script {$doc text "Ziel" -at {20 20} -tag H1}
+  set path [::tclpdfTest::scratch structdest-pair-bm.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lassign [pageObjects $bytes] . second
+  lassign [gotoTargets $bytes {/Title \(Zum Ziel\) [^>]*}] d sd
+  regexp {^\[(\d+) 0 R /XYZ null ([\d.]+) null\]$} $d -> dPage y
+  regexp {^\[(\d+) 0 R /Fit\]$} $sd -> element
+  list [expr {$dPage eq $second}] [expr {$y > 785.2 && $y < 799.6}] \
+      [regexp "\n$element 0 obj\[^s\]*/S /Sect" $bytes]
+} -result {1 1 1}
+
+test structure-16.3 {the element may come first as well as last} -body {
+  # 16.1 points forwards; this one points back at an element that is
+  # already closed when the link is drawn. Same pair, same page.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Sect -name ziel -script {$doc text "Ziel" -at {20 20} -tag H1}
+  $doc page add
+  $doc structure Link -script {
+    $doc text "zurueck" -at {20 20}
+    $doc link -at {20 16} -size {20 6} -structure ziel -tooltip "Zum Ziel"
+  }
+  set path [::tclpdfTest::scratch structdest-back.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lassign [pageObjects $bytes] first
+  lassign [gotoTargets $bytes {/Subtype /Link [^>]*}] d sd
+  regexp {^\[(\d+) 0 R /XYZ null ([\d.]+) null\]$} $d -> dPage y
+  list [expr {$dPage eq $first}] [expr {$y > 785.2 && $y < 799.6}] \
+      [string match {\[* 0 R /Fit\]} $sd]
+} -result {1 1 1}
+
+test structure-16.4 {a container without a mark of its own begins where its first child does} -body {
+  # A Sect owns no mark - its content is in the P below it. Opened on page
+  # 2 with nothing drawn there, its first content is on page 3, and that is
+  # where /D has to point: the page and the position come from the first
+  # descendant that has them.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Link -script {
+    $doc text "weiter" -at {20 20}
+    $doc link -at {20 16} -size {20 6} -structure ziel -tooltip "Zum Ziel"
+  }
+  $doc page add
+  $doc structure Sect -name ziel -script {
+    $doc page add
+    $doc structure P -script {$doc text "Absatz" -at {20 40}}
+  }
+  set path [::tclpdfTest::scratch structdest-container.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lassign [pageObjects $bytes] . . third
+  lassign [gotoTargets $bytes {/Subtype /Link [^>]*}] d sd
+  regexp {^\[(\d+) 0 R /XYZ null ([\d.]+) null\]$} $d -> dPage y
+  # 40 mm from the top: baseline at 841.89 - 113.39 = 728.5 pt.
+  list [expr {$dPage eq $third}] [expr {$y > 728.5 && $y < 742.9}]
+} -result {1 1}
+
+test structure-16.5 {without a position the page destination is a plain /Fit} -body {
+  # A Link element that holds nothing but its annotation begins at an OBJR,
+  # which has a page and no position - and an element with no content at
+  # all has neither, and gets page 1 whatever page it was opened on. Both
+  # are written as /Fit on that page rather than an /XYZ with an invented
+  # coordinate.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc text "Seite eins" -at {20 20}
+  $doc page add
+  $doc structure Link -name anker -script {
+    $doc link -at {20 16} -size {20 6} -structure leer -tooltip "Zum Leeren"
+  }
+  $doc bookmark "Zum Anker" -structure anker
+  $doc page add
+  $doc structure Sect -name leer -script {list}
+  set path [::tclpdfTest::scratch structdest-fit.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lassign [pageObjects $bytes] first second
+  lassign [gotoTargets $bytes {/Subtype /Link [^>]*}] toEmpty .
+  lassign [gotoTargets $bytes {/Title \(Zum Anker\) [^>]*}] toAnchor .
+  list [expr {$toEmpty eq "\[$first 0 R /Fit\]"}] \
+      [expr {$toAnchor eq "\[$second 0 R /Fit\]"}]
+} -result {1 1}
+
+rename pageObjects {}
+rename gotoTargets {}
 rename pageMcids {}
+
+# --- abbreviations ------------------------------------------------------
+
+test structure-17.1 {an expansion is written as /E on the element} -body {
+  # UA-1 7.20: abbreviations shall be expanded, and ISO 32000-1 14.9.5 puts
+  # the expanded form into the element dictionary as E - a text string like
+  # Alt, written the same way.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure P -expansion "Portable Document Format" -script {
+    $doc text "PDF" -at {20 20}
+  }
+  set path [::tclpdfTest::scratch expansion-structure.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/S /P [^>]*/E \(Portable Document Format\)} $bytes
+} -result 1
+
+test structure-17.2 {text -expansion opens a Span inside the open paragraph} -body {
+  # A word in a paragraph, not the paragraph: the Span holds the mark and
+  # the /E, and it sits INSIDE the P the body has open.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure P -script {
+    $doc text "The " -at {20 20}
+    $doc text "EU" -at {30 20} -expansion "European Union"
+  }
+  set path [::tclpdfTest::scratch expansion-text.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {(\d+) 0 obj\s*<< /Type /StructElem /S /P [^>]*>>} $bytes -> paragraph
+  list [regexp "/S /Span /P $paragraph 0 R \[^>\]*/E \\(European Union\\)" $bytes] \
+      [regexp -all {/E \(} $bytes]
+} -result {1 1}
+
+test structure-17.3 {text -expansion outside any element gets its derived paragraph first} -body {
+  # A Span is inline and needs a leaf to sit in. Drawn with nothing open it
+  # would land straight under Document, which is the tree Annex L forbids -
+  # so the P a bare [text] would have made is opened first, and inside a
+  # container the same rule as for the mark applies: an LI takes an LBody.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "EU" -at {20 20} -expansion "European Union"
+  $doc structure L -script {
+    $doc structure LI -script {
+      $doc text "PDF" -at {20 30} -expansion "Portable Document Format"
+    }
+  }
+  set report [$doc structureReport]
+  set path [::tclpdfTest::scratch expansion-home.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {(\d+) 0 obj\s*<< /Type /StructElem /S /LBody [^>]*>>} $bytes -> body
+  list [dict get $report types] \
+      [regexp "/S /Span /P $body 0 R" $bytes]
+} -result {{P Span L LI LBody} 1}
+
+test structure-17.4 {-expansion needs a tagged document, on both roads} -body {
+  # Without a tree the expansion would be recorded and never written; said
+  # at the call rather than ignored, like the destination guard.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set viaText [catch {$doc text "EU" -at {20 20} -expansion "European Union"} first]
+  set viaStructure [catch {$doc structure P -expansion "x" -script {
+    $doc text "x" -at {20 30}
+  }} second]
+  $doc destroy
+  list $viaText [string match "*needs a tagged document*" $first] \
+      $viaStructure [string match "*needs a tagged document*" $second]
+} -result {1 1 1 1}
+
+test structure-17.5 {an artifact cannot carry an expansion} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc text "EU" -at {20 20} -tag Artifact -expansion "x"} err]
+  $doc destroy
+  list $code [string match "*artifact*" $err]
+} -result {1 1}
+
+test structure-17.6 {the Span holds the mark and the brackets stay balanced} -body {
+  # The content stream names the Span the mark belongs to, and one BDC has
+  # one EMC - a paragraph with a width included, which returns early.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "EU" -at {20 20} -expansion "European Union"
+  $doc text "PDF and more words" -at {20 30} -width 40 -expansion "Portable Document Format"
+  set stream [::tclpdfTest::content $doc]
+  # Nothing left open: the stack is empty again after both calls.
+  set open [$doc state structureStack]
+  $doc destroy
+  list [regexp -all {/Span <</MCID \d+>> BDC} $stream] \
+      [regexp -all {BDC} $stream] [regexp -all {EMC} $stream] $open
+} -result {2 2 2 {}}
 
 cleanupTests

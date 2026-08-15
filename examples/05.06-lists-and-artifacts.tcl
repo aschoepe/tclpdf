@@ -147,7 +147,13 @@ $doc structure Sect -script {
 
   # The same block again, this time as decoration beside the text - so no
   # -alt, and it becomes an artifact. A reader hears it once, not twice.
-  $doc form place warnsign -at {170 128} -scale 0.6
+  #
+  # -artifact 1 SAYS so. Without it the placement would be an artifact just
+  # the same, but by default rather than by decision - and an artifact is
+  # the one way real content passes a reader entirely, so tclpdf keeps a
+  # note of every graphic that fell into it with neither -alt nor
+  # -artifact. Written out, the intent is on record and the note is not.
+  $doc form place warnsign -at {170 128} -scale 0.6 -artifact 1
 }
 
 # -- what a reader hears, and what it does not -----------------------------

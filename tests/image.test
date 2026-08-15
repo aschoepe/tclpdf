@@ -414,4 +414,84 @@ test image-data-7.6 {data that is not an image says so without a file name} -con
   }
 } -returnCodes error -match glob -result {*passed with -data*neither a JPEG nor a PNG*}
 
+# --- decoration on purpose, or by default -------------------------------
+#
+# In a tagged document a picture without -alt is an artifact, and an artifact
+# is the one way real content passes a reader entirely. So the difference
+# between "decoration, and meant to be" and "nobody said" has to be kept:
+# -artifact 1 is the first, and the second is remembered for ua.tcl to judge.
+
+test image-artifact-8.1 {-artifact 1 brackets an artifact and leaves no entry} -constraints haveImages -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc image draw $gray -at {20 20} -width 30 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [string match "*/Artifact <</Type /Layout>> BDC*" $stream] \
+      [string match "*EMC*" $stream] $missing
+} -result {1 1 {}}
+
+test image-artifact-8.2 {without -alt and -artifact the artifact is remembered} -constraints haveImages -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc image draw $gray -at {20 20} -width 30
+  $doc page add
+  $doc image draw $gray -at {20 20} -width 30 -artifact 1
+  $doc image draw $gray -at {20 60} -width 30
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  # The stream carries an artifact either way; the entry names the page,
+  # counted from 1, and only the ones nobody judged.
+  set missing
+} -result {{kind image page 1} {kind image page 2}}
+
+test image-artifact-8.3 {-alt makes a Figure and leaves no entry} -constraints haveImages -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc image draw $gray -at {20 20} -width 30 -alt "Die Werkhalle"
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [string match "*/Figure <</MCID 0>> BDC*" $stream] $missing
+} -result {1 {}}
+
+test image-artifact-8.4 {-artifact 1 together with -alt is refused at the call} -constraints haveImages -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  try {
+    $doc image draw $gray -at {20 20} -width 30 -alt "Die Werkhalle" -artifact 1
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-artifact and -alt contradict*}
+
+test image-artifact-8.5 {-artifact takes a boolean, and says so otherwise} -constraints haveImages -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  try {
+    $doc image draw $gray -at {20 20} -width 30 -artifact maybe
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-artifact takes a boolean, not "maybe"*}
+
+test image-artifact-8.6 {an untagged document remembers nothing} -constraints haveImages -body {
+  # Nothing is marked there, so nothing is degraded - and -artifact 1 is
+  # accepted and changes nothing, so a caller can write it once for both.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image draw $gray -at {20 20} -width 30
+  $doc image draw $gray -at {20 60} -width 30 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  set state [$doc state undescribedGraphics]
+  $doc destroy
+  list [string match "*BDC*" $stream] $missing $state
+} -result {0 {} {}}
+
 cleanupTests

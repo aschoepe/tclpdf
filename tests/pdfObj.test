@@ -63,6 +63,13 @@ test pdfObj-name-2.3 {non-ASCII is escaped per UTF-8 byte} -body {
   ::tclpdf::pdfObj name "gr\u00f6sse"
 } -result /gr#C3#B6sse
 
+test pdfObj-name-2.4 {NUL is refused, not escaped} -body {
+  # ISO 32000-1, 7.3.5 excludes NUL from names entirely - "#00" would be
+  # well-formed syntax for a name that cannot exist. The character is built
+  # with format so no literal control byte sits in this file.
+  ::tclpdf::pdfObj name "a[format %c 0]b"
+} -returnCodes error -match glob -result {tclpdf: a name must not contain a NUL*}
+
 test pdfObj-str-3.1 {ASCII becomes a literal string} -body {
   ::tclpdf::pdfObj str "Rechnung 2026"
 } -result {(Rechnung 2026)}

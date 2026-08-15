@@ -95,6 +95,7 @@ foreach tclpdfPkg {
     tclpdf::svgElement
     tclpdf::svgPaint
     tclpdf::viewerPreferences
+    tclpdf::pageLabel
     tclpdf::xmp
     tclpdf::ua
 } {

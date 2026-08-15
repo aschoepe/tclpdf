@@ -277,7 +277,7 @@ test ua-5.1 {part 2 raises the file version and names the namespace} \
 
 test ua-5.2 {the 1.7-only types keep the default namespace} \
     -constraints haveFace -body {
-  # Eleven types exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3). Naming
+  # Twelve types exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3). Naming
   # the 2.0 namespace on one of them would be a claim about a type that does
   # not exist there.
   set doc [accessible $face]
@@ -328,6 +328,50 @@ test ua-5.5 {an attachment without a description fails part 2 only} \
   file delete [::tclpdfTest::scratch ua-att1.pdf]
   list $one $two [string match "*Desc on every file specification*" $err]
 } -result {0 1 1}
+
+test ua-5.6 {PDF/A after part 2 is refused, naming the way out} -body {
+  # The other direction of ua-5.3. Until 2026-08-15 only ua.tcl checked:
+  # [ua -part 2] then [pdfa -part 3] was accepted and produced a PDF 2.0
+  # file with a PDF/A-3 claim - two standards, one file, both wrong.
+  set doc [tclpdf new]
+  $doc ua -part 2
+  set code [catch {$doc pdfa -part 3 -conformance B} err]
+  $doc destroy
+  list $code [string match "*cannot be claimed by one file*" $err] \
+      [string match "*ua 1 with pdfa -part 3*" $err]
+} -result {1 1 1}
+
+test ua-5.7 {a document configured to PDF 2.0 cannot claim PDF/A} -body {
+  # The version can reach 2.0 without ua at all, so the guard has to read
+  # the writer, not only the ua state.
+  set doc [tclpdf new]
+  $doc configure -version 2.0
+  set code [catch {$doc pdfa -part 3 -conformance B} err]
+  $doc destroy
+  list $code [string match "*PDF/A-3 is a PDF 1.7 format*" $err] \
+      [string match "*2.0*" $err]
+} -result {1 1 1}
+
+test ua-5.8 {ua 1 with pdfa -part 3 stays the ZUGFeRD combination} -body {
+  # The guard must not overreach: part 1 rides the 1.7 path and is exactly
+  # what an accessible invoice declares.
+  set doc [tclpdf new]
+  $doc ua 1
+  set code [catch {$doc pdfa -part 3 -conformance B} state]
+  set part [expr {$code ? "-" : [dict get $state part]}]
+  $doc destroy
+  list $code $part
+} -result {0 3}
+
+test ua-5.9 {pdfa alone is untouched by the guard} -body {
+  # pdfa raises the version to 1.7 itself; the guard reads the version
+  # before that raise and must not mistake one for the other.
+  set doc [tclpdf new]
+  set code [catch {$doc pdfa -part 3 -conformance B} state]
+  set second [catch {$doc pdfa -part 2} state2]
+  $doc destroy
+  list $code $second [dict get $state2 part]
+} -result {0 0 2}
 
 # --- WTPDF ----------------------------------------------------------------
 
@@ -486,5 +530,199 @@ test ua-9.3 {a page number at the top is a head, at the bottom a foot} -body {
   file delete $path
   list [regexp {/Subtype /Header} $bytes] [regexp {/Subtype /Footer} $bytes]
 } -result {1 0}
+
+# --- graphics -------------------------------------------------------------
+#
+# A picture, a drawing or a form placement without -alt is an artifact, and
+# an artifact carries content past a reader entirely. PDF/UA allows that for
+# decoration only (7.1), so a graphic that fell into it by default - nobody
+# said -alt, nobody said -artifact 1 - is an open question, and the claim is
+# not made over one. A form is used here because it needs no file; the fact
+# comes from [undescribedGraphics], and image.test, svg.test and xObject.test
+# show that all three kinds fill it.
+
+test ua-10.1 {a graphic nobody described or declared decoration is refused} \
+    -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc page add
+  $doc form place block -at {20 40}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-graphic.pdf]} err]
+  $doc destroy
+  # Page 2, counted from 1 as a caller counts; the kind is named.
+  list $code [string match "*page 2: a form was placed without -alt and\
+      without -artifact 1*" $err] [string match "*-artifact 1*" $err]
+} -result {1 1 1}
+
+test ua-10.2 {described or declared decoration, and the claim stands} \
+    -constraints haveFace -body {
+  # Both answers are fine - it is the absence of any that is refused.
+  set doc [accessible $face]
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc form place block -at {20 40} -alt "Ein blauer Block"
+  $doc form place block -at {20 70} -artifact 1
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-graphic-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-10.3 {a drawing is named as one, and every one is listed} \
+    -constraints haveFace -body {
+  # One message per graphic, not one for all: each names its own page, and
+  # two on different pages are two calls to change.
+  set dot {<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+    <circle cx="5" cy="5" r="4" fill="red"/></svg>}
+  set doc [accessible $face]
+  $doc svg -data $dot -at {20 40} -width 10
+  $doc page add
+  $doc svg -data $dot -at {20 40} -width 10
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-drawing.pdf]} err]
+  $doc destroy
+  list $code [string match "*page 1: a drawing was placed*" $err] \
+      [string match "*page 2: a drawing was placed*" $err]
+} -result {1 1 1}
+
+# --- lists ----------------------------------------------------------------
+#
+# ListNumbering is mandatory on an ordered list (7.6), and it has to agree
+# with the tree: a list numbered Decimal whose items carry no Lbl claims
+# numbers that are not there, and items with a Lbl under a list that says
+# nothing leave the reader guessing what the labels are (Matterhorn 16-001).
+
+test ua-11.1 {a numbered list whose items carry no Lbl is refused} \
+    -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc structure L -numbering Decimal -script {
+    $doc structure LI -script {$doc text "erstens" -at {20 40}}
+    $doc structure LI -script {$doc text "zweitens" -at {20 46}}
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-list-nolbl.pdf]} err]
+  $doc destroy
+  list $code [string match "*list 1 is numbered Decimal but 2 of its 2 items\
+      carry no Lbl*" $err] [string match "*structure Lbl*" $err]
+} -result {1 1 1}
+
+test ua-11.2 {items with a Lbl under a list that says nothing are refused} \
+    -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc structure L -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "1." -at {20 40}}
+      $doc structure LBody -script {$doc text "erstens" -at {28 40}}
+    }
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-list-nonum.pdf]} err]
+  $doc destroy
+  list $code [string match "*list 1: its items carry a Lbl but the list says\
+      no -numbering*" $err] [string match "*or None*" $err]
+} -result {1 1 1}
+
+test ua-11.3 {the three honest shapes of a list all pass} -constraints haveFace -body {
+  # Numbered with labels; None with labels, which is what a list of arbitrary
+  # markers says; and no numbering with no labels, the plain unordered case
+  # from example 5.6.
+  set doc [accessible $face]
+  $doc structure L -numbering Decimal -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "1." -at {20 40}}
+      $doc structure LBody -script {$doc text "erstens" -at {28 40}}
+    }
+  }
+  $doc structure L -numbering None -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "*" -at {20 50}}
+      $doc structure LBody -script {$doc text "Anmerkung" -at {28 50}}
+    }
+  }
+  $doc structure L -script {
+    $doc structure LI -script {$doc text "ohne Marke" -at {20 60}}
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-list-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-11.4 {a single unlabelled item is counted, not the whole list} \
+    -constraints haveFace -body {
+  # The message says how many of how many, so a caller with a long list
+  # knows whether to look for one item or rewrite all of them.
+  set doc [accessible $face]
+  $doc structure L -numbering LowerAlpha -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "a)" -at {20 40}}
+      $doc structure LBody -script {$doc text "eins" -at {28 40}}
+    }
+    $doc structure LI -script {$doc text "zwei" -at {28 46}}
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "c)" -at {20 52}}
+      $doc structure LBody -script {$doc text "drei" -at {28 52}}
+    }
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-list-one.pdf]} err]
+  $doc destroy
+  list $code [string match "*numbered LowerAlpha but 1 of its 3 items carries\
+      no Lbl*" $err]
+} -result {1 1}
+
+# --- the revision year ----------------------------------------------------
+
+test ua-12.1 {-revision is a four-digit year, and nothing else} -body {
+  # pdfuaid:rev is the year of the edition claimed (ISO 14289-2 Table 1).
+  # Until 2026-08-15 any value was written into the metadata as given.
+  set doc [tclpdf new]
+  set short [catch {$doc ua -part 2 -revision 24} first]
+  set word [catch {$doc ua -part 2 -revision latest} second]
+  set untouched [$doc ua state]
+  set ok [catch {$doc ua -part 2 -revision 2024} state]
+  $doc destroy
+  list $short [string match "*four-digit year, not \"24\"*" $first] \
+      $word [string match "*not \"latest\"*" $second] $untouched \
+      $ok [dict get $state revision]
+} -result {1 1 1 1 {} 0 2024}
+
+# --- DisplayDocTitle ------------------------------------------------------
+
+test ua-13.1 {DisplayDocTitle taken back after the claim is refused} \
+    -constraints haveFace -body {
+  # [ua] sets it and cannot see a later [viewerPreferences] call; the write
+  # reads the finished preferences and names the call.
+  set doc [accessible $face]
+  $doc ua 1
+  $doc viewerPreferences -displayDocTitle 0
+  set code [catch {$doc write [::tclpdfTest::scratch ua-doctitle.pdf]} err]
+  $doc destroy
+  list $code [string match "*viewerPreferences -displayDocTitle must stay 1\
+      under PDF/UA (7.1)*" $err]
+} -result {1 1}
+
+test ua-13.2 {other preferences after the claim leave it standing} \
+    -constraints haveFace -body {
+  # A later call that touches something else keeps DisplayDocTitle - the
+  # module merges rather than resets - and the check has to see that.
+  set doc [accessible $face]
+  $doc ua 1
+  $doc viewerPreferences -fitWindow 1 -duplex DuplexFlipLongEdge
+  set path [::tclpdfTest::scratch ua-doctitle-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set bytes [expr {$code ? {} : [::tclpdfTest::readBytes $path]}]
+  file delete $path
+  list $code [regexp {/DisplayDocTitle true} $bytes] [regexp {/FitWindow true} $bytes]
+} -result {0 1 1}
 
 cleanupTests

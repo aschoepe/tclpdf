@@ -135,6 +135,7 @@ oo::define ::tclpdf::document::document {
   method SvgDraw {path arguments} {
     set options [::tclpdf::option parse {
       data {} at {} size {} width {} height {} scale {} opacity {} alt {}
+      artifact {}
     } $arguments "svg"]
     if {$path ne {}} {
       # Read as bytes, then decode: an SVG is UTF-8 unless its declaration
@@ -154,29 +155,23 @@ oo::define ::tclpdf::document::document {
     # -alt describes it, an artifact otherwise. Bracketing per element would
     # scatter one illustration over dozens of leaves, and the elements of an
     # SVG mean nothing on their own.
-    set element {}
-    set mark {}
-    if {[my state tagged] eq "1"} {
-      if {[dict get $options alt] ne {}} {
-        set element [my StructureOpen Figure \
-            [dict create alt [dict get $options alt]]]
-        set mark [my StructureMark]
-      } else {
-        set mark [my StructureMark Artifact]
-      }
-      my content [my StructureBegin $mark]
-    }
+    #
+    # An artifact nobody asked for is remembered, as image.tcl does for a
+    # picture: -artifact 1 says the drawing is decoration on purpose, and
+    # without it or -alt the caller has not said - see [undescribedGraphics].
+    # The marking itself is [GraphicMark] in image.tcl, shared with the
+    # picture and the form placement; the top edge of -at is where the
+    # placement begins, so that a destination at the Figure can name the
+    # place on the page.
+    lassign [my GraphicMark svg svg [dict get $options alt] \
+        [dict get $options artifact] [expr {[dict get $options at] eq {} ?
+        0 : [lindex [dict get $options at] 1]}]] mark element
     set root [::tclpdf::xml parse $markup]
     try {
       return [my SvgRoot $root $options]
     } finally {
       ::tclpdf::xml release $root
-      if {[llength $mark]} {
-        my content [my StructureEnd $mark]
-        if {$element ne {}} {
-          my StructureClose $element
-        }
-      }
+      my GraphicUnmark $mark $element
     }
   }
 

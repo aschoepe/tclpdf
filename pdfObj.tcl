@@ -57,6 +57,13 @@ proc ::tclpdf::pdfObj::name {value} {
   # characters above U+007F, and only the UTF-8 bytes may be escaped.
   binary scan [encoding convertto utf-8 $value] cu* codes
   foreach code $codes {
+    # NUL is the one byte that may not appear in a name at all, not even
+    # escaped (7.3.5) - writing "#00" would be well-formed syntax for a name
+    # the standard says cannot exist.
+    if {$code == 0} {
+      return -code error "tclpdf: a name must not contain a NUL character\
+          (ISO 32000-1, 7.3.5)"
+    }
     set char [format %c $code]
     if {$code < 0x21 || $code > 0x7e || [string first $char $delimiters] >= 0} {
       append result [format #%02X $code]

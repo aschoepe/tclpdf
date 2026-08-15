@@ -44,6 +44,15 @@ package require tclpdf::document 1.0-
 namespace eval ::tclpdf::pdfa {
   namespace export {[a-z]*}
   namespace ensemble create
+
+  # The sRGB profile that ships with the package, found relative to this file
+  # so it is still found after "make install". It is the default for -profile:
+  # this writer paints with DeviceRGB operators, and ISO 19005-2, 6.2.4.3
+  # makes the output intent mandatory for those - so a document without a
+  # profile is not archivable, and until 2026-08-15 [pdfa] wrote exactly that
+  # and let the recipient's validator say so. zugferd.tcl uses the same path.
+  variable icc [file join [file dirname [file normalize [info script]]] \
+      icc sRGB.icc]
 }
 
 oo::define ::tclpdf::document::document {
@@ -64,10 +73,22 @@ oo::define ::tclpdf::document::document {
     }
     set current [my state pdfa]
     if {$current eq {}} {
-      set current [dict create part 3 conformance B profile {} \
-          identifier {} extensions {} registered 0]
+      set current [dict create part 3 conformance B \
+          profile $::tclpdf::pdfa::icc identifier {} extensions {} registered 0]
     }
     set current [::tclpdf::option parse $current $args "pdfa"]
+    # Said here, at the call, rather than at write time from inside a failed
+    # [read]. The shipped profile is part of the installation, so its absence
+    # is a broken installation and is named as one - it used to be degraded
+    # to "no output intent" without a word.
+    set profile [dict get $current profile]
+    if {![file exists $profile]} {
+      if {$profile eq $::tclpdf::pdfa::icc} {
+        return -code error "tclpdf: the sRGB profile shipped with the package\
+            is missing at $profile - the installation is incomplete"
+      }
+      return -code error "tclpdf: the ICC profile \"$profile\" does not exist"
+    }
     # Which parts this writer can actually deliver.
     #
     # Part 1 forbids transparency, and tclpdf writes it without ceremony
@@ -90,6 +111,24 @@ oo::define ::tclpdf::document::document {
         return -code error "tclpdf: PDF/A part must be 2 or 3 - part\
             [dict get $current part] needs PDF 2.0, which tclpdf does not write"
       }
+    }
+    # The mirror image of the check in ua.tcl: parts 2 and 3 are PDF 1.7
+    # formats (ISO 19005-2/-3 build on ISO 32000-1), and PDF/UA-2 - or a
+    # caller's [configure -version 2.0] - commits the file to 2.0. Said at
+    # the call that creates the contradiction, whichever way round the two
+    # were declared. Checked BEFORE the raise below, which only ever lifts to
+    # 1.7 - so a 2.0 seen here always came from the caller, never from pdfa
+    # itself.
+    if {[my state ua] ne {} && [dict get [my state ua] part] == 2} {
+      return -code error "tclpdf: PDF/A-[dict get $current part] is a PDF 1.7\
+          format and PDF/UA-2 needs PDF 2.0 - the two cannot be claimed by\
+          one file. Use ua 1 with pdfa -part 3, which is the combination\
+          ZUGFeRD needs"
+    }
+    if {[package vcompare [[my writer] version] 2.0] >= 0} {
+      return -code error "tclpdf: PDF/A-[dict get $current part] is a PDF 1.7\
+          format and this document is set to PDF [[my writer] version] -\
+          leave the version alone, pdfa raises it to 1.7 by itself"
     }
     # The declared part decides the minimum file version, rather than the two
     # being set independently and contradicting each other. Measured: a
@@ -163,28 +202,42 @@ oo::define ::tclpdf::document::document {
   # than a flag.
   method PdfaWrite {} {
     set current [my state pdfa]
-    if {[dict get $current profile] eq {}} {
-      return
-    }
     set bytes [::tclpdf::io read [dict get $current profile]]
     # N is the number of components the profile describes; it is at offset 16
-    # of the ICC header as a four-character space signature.
-    set space [string range $bytes 16 19]
-    set components [dict get {GRAY 1 RGB  3 CMYK 4} [string trimright $space]]
+    # of the ICC header as a four-character space signature. Lab and XYZ
+    # profiles exist and are valid ICC, but an output intent wants a device
+    # space - an unknown signature is reported with its name rather than
+    # falling over inside a dict lookup.
+    set space [string trimright [string range $bytes 16 19]]
+    set spaces {GRAY 1 RGB 3 CMYK 4}
+    if {![dict exists $spaces $space]} {
+      return -code error "tclpdf: the ICC profile\
+          \"[dict get $current profile]\" describes colour space \"$space\" -\
+          the output intent supports GRAY, RGB and CMYK"
+    }
+    set components [dict get $spaces $space]
     # Both numbers survive rebuilds - PdfaWrite runs on every write, and a
     # fresh pair per run would embed the ICC profile anew each time.
     set number [my streamObject [list N $components] $bytes \
         [my reservation pdfa.icc]]
+    # The condition identifier names the profile, and the profile knows its
+    # own name: the desc tag. It used to be a fixed "sRGB IEC61966-2.1"
+    # whatever file was passed, so a GRAY or CMYK intent went out labelled as
+    # sRGB. An explicit -identifier still wins; a profile without a readable
+    # description is named after its file.
+    set identifier [dict get $current identifier]
+    if {$identifier eq {}} {
+      set identifier [::tclpdf::pdfa description $bytes]
+    }
+    if {$identifier eq {}} {
+      set identifier [file rootname [file tail [dict get $current profile]]]
+    }
     set intent [my reservation pdfa.intent]
     [my writer] put $intent [::tclpdf::pdfObj dictionary [list \
         Type /OutputIntent \
         S /GTS_PDFA1 \
-        OutputConditionIdentifier [::tclpdf::pdfObj str \
-            [expr {[dict get $current identifier] ne {} ?
-                [dict get $current identifier] : "sRGB IEC61966-2.1"}]] \
-        Info [::tclpdf::pdfObj str \
-            [expr {[dict get $current identifier] ne {} ?
-                [dict get $current identifier] : "sRGB IEC61966-2.1"}]] \
+        OutputConditionIdentifier [::tclpdf::pdfObj str $identifier] \
+        Info [::tclpdf::pdfObj str $identifier] \
         DestOutputProfile [[my writer] ref $number]]]
     my catalogEntry OutputIntents [::tclpdf::pdfObj arr \
         [list [[my writer] ref $intent]]]
@@ -235,6 +288,68 @@ oo::define ::tclpdf::document::document {
         [list text conformance [dict get $current conformance]]]
   }
 
+}
+
+# The description an ICC profile carries about itself - the desc tag - or an
+# empty string when there is none that can be read.
+#
+# Only as much of ICC.1 as this needs: the tag table starts at byte 128 with
+# a count, then twelve bytes per entry - signature, offset, size, all
+# big-endian. A version 2 desc tag is of type 'desc' and carries a length and
+# an ASCII string (ICC.1:2001-04, 6.5.17); a version 4 one is of type 'mluc',
+# a table of language records with UTF-16BE text (ICC.1:2010, 10.13). Of the
+# records the en-US one is taken where present, the first otherwise. Every
+# offset is checked against the bytes at hand rather than trusted: a
+# truncated or lying profile gives an empty answer, not a scan error.
+proc ::tclpdf::pdfa::description {bytes} {
+  if {[binary scan $bytes @128Iu count] != 1} {
+    return {}
+  }
+  for {set i 0} {$i < $count} {incr i} {
+    if {[binary scan $bytes @[expr {132 + 12 * $i}]a4IuIu sig offset size] != 3} {
+      return {}
+    }
+    if {$sig ne "desc"} {
+      continue
+    }
+    if {$size < 12 || $offset + $size > [string length $bytes]} {
+      return {}
+    }
+    set tag [string range $bytes $offset [expr {$offset + $size - 1}]]
+    switch -- [string range $tag 0 3] {
+      desc {
+        binary scan $tag @8Iu length
+        # The length counts the terminating NUL; a profile that miscounts
+        # is trimmed rather than believed.
+        return [string trimright \
+            [string range $tag 12 [expr {12 + $length - 1}]] "\0"]
+      }
+      mluc {
+        binary scan $tag @8IuIu records recordSize
+        set chosen {}
+        for {set r 0} {$r < $records} {incr r} {
+          if {[binary scan $tag @[expr {16 + $recordSize * $r}]a2a2IuIu \
+              language country length start] != 4} {
+            break
+          }
+          if {$chosen eq {} || ($language eq "en" && $country eq "US")} {
+            set chosen [list $start $length]
+          }
+        }
+        if {$chosen eq {}} {
+          return {}
+        }
+        lassign $chosen start length
+        if {$start + $length > $size} {
+          return {}
+        }
+        binary scan $tag @${start}Su[expr {$length / 2}] units
+        return [string trimright [join [lmap unit $units {format %c $unit}] {}] "\0"]
+      }
+    }
+    return {}
+  }
+  return {}
 }
 
 package provide tclpdf::pdfa 1.4

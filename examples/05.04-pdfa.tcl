@@ -59,7 +59,10 @@ set doc [tclpdf new -unit mm]
 # The document information dictionary. It is written as well - a reader that
 # shows the title in its window title bar reads it here - but for PDF/A it is
 # the XMP packet that counts, and [pdfa] keeps the two in agreement.
-$doc info Title "Calibration certificate 2026-114"
+# The umlaut is not decoration: the title lands in the XMP packet, whose
+# stream declares UTF-8, and a character above ASCII is what proves the
+# packet was encoded rather than pasted.
+$doc info Title "Calibration certificate 2026-114 – Prüflabor Bochum"
 $doc info Author "Alexander Schoepe"
 $doc info Subject "Thickness gauge, annual calibration"
 $doc info Keywords "calibration, ISO 2360, archival"

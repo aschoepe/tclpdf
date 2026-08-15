@@ -109,7 +109,7 @@ oo::define ::tclpdf::document::document {
 
   method FormPlace {name args} {
     set options [::tclpdf::option parse \
-        {at {} scale 1 rotate 0 opacity {} alt {}} $args "form place"]
+        {at {} scale 1 rotate 0 opacity {} alt {} artifact {}} $args "form place"]
     set forms [my state forms]
     if {![dict exists $forms $name]} {
       return -code error "tclpdf: no form named \"$name\" - known are:\
@@ -119,18 +119,17 @@ oo::define ::tclpdf::document::document {
     # The invocation is content on the page: a Figure when -alt describes it,
     # an artifact otherwise. Unmarked content is a defect under PDF/UA, and a
     # reusable block is decoration more often than not.
-    set element {}
-    set mark {}
-    if {[my state tagged] eq "1"} {
-      if {[dict get $options alt] ne {}} {
-        set element [my StructureOpen Figure \
-            [dict create alt [dict get $options alt]]]
-        set mark [my StructureMark]
-      } else {
-        set mark [my StructureMark Artifact]
-      }
-      my content [my StructureBegin $mark]
-    }
+    #
+    # More often is not always, so an artifact nobody asked for is remembered,
+    # as image.tcl does for a picture: -artifact 1 says decoration on purpose,
+    # and without it or -alt the caller has not said - see
+    # [undescribedGraphics]. The marking itself is [GraphicMark] in image.tcl,
+    # shared with the picture and the drawing; the top edge of -at is where
+    # the placement begins, so that a destination at the Figure can name the
+    # place on the page.
+    lassign [my GraphicMark form "form place" [dict get $options alt] \
+        [dict get $options artifact] [expr {[dict get $options at] eq {} ?
+        0 : [lindex [dict get $options at] 1]}]] mark element
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] x y
 
     # -at names the TOP left corner, like rect - so the placement matches how
@@ -156,12 +155,7 @@ oo::define ::tclpdf::document::document {
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
     my content "[::tclpdf::pdfObj name [dict get $form resource]] Do\n"
     my restore
-    if {[llength $mark]} {
-      my content [my StructureEnd $mark]
-      if {$element ne {}} {
-        my StructureClose $element
-      }
-    }
+    my GraphicUnmark $mark $element
     return $name
   }
 
