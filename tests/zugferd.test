@@ -467,12 +467,28 @@ test zugferd-7.9 {pdfa without -profile embeds the shipped sRGB profile} \
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
+  # The shipped profile keeps the name it always had: its desc tag says only
+  # "sRGB", but the space it implements is IEC 61966-2-1, and a script that
+  # ran before the desc tag was read has to keep producing the same bytes.
   list [expr {[dict get $state profile] eq $icc}] \
       [regexp {/OutputIntents \[\d+ 0 R\]} $bytes] \
       [regexp {/DestOutputProfile \d+ 0 R} $bytes] \
       [regexp {/N 3} $bytes] \
-      [regexp {/OutputConditionIdentifier \(sRGB\)} $bytes]
-} -result {1 1 1 1 1}
+      [regexp {/OutputConditionIdentifier \(sRGB IEC61966-2.1\)} $bytes] \
+      [regexp {/Info \(sRGB IEC61966-2.1\)} $bytes]
+} -result {1 1 1 1 1 1}
+
+test zugferd-7.9a {the shipped profile named explicitly is treated the same} \
+    -constraints {haveIcc haveInvoice} -body {
+  set doc [archivable $face]
+  $doc pdfa -part 3 -conformance B -profile $icc
+  set path [::tclpdfTest::scratch pdfa-explicit-shipped.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/OutputConditionIdentifier \(sRGB IEC61966-2.1\)} $bytes
+} -result 1
 
 test zugferd-7.10 {the desc tag of the shipped profile reads "sRGB"} -constraints haveIcc -body {
   # Measured against the file, and the same value icc/README.md records.

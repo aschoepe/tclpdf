@@ -60,7 +60,10 @@ foreach tclpdfPkg {
     tclpdf::afm
     tclpdf::text
     tclpdf::textBlock
+    tclpdf::textAvoid
+    tclpdf::textPath
     tclpdf::leader
+    tclpdf::pageNumber
     tclpdf::xObject
     tclpdf::io
     tclpdf::attach
@@ -96,6 +99,10 @@ foreach tclpdfPkg {
     tclpdf::svgPaint
     tclpdf::viewerPreferences
     tclpdf::pageLabel
+    tclpdf::structure
+    tclpdf::structureWrite
+    tclpdf::structureReport
+    tclpdf::structureDest
     tclpdf::xmp
     tclpdf::ua
 } {

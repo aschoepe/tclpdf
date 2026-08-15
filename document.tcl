@@ -231,14 +231,15 @@ oo::class create ::tclpdf::document::document {
       ua ua
       tagged structure
       structure structure
-      structureReport structure
       StructureMark structure
       StructureAnnotation structure
-      structureDestination structure
-      StructureDestinationGuard structure
       StructureExpansion structure
       StructureBegin structure
       StructureEnd structure
+      StructureWrite structureWrite
+      structureReport structureReport
+      structureDestination structureDest
+      StructureDestinationGuard structureDest
     }
     if {[dict exists $topics $method]} {
       set topic [dict get $topics $method]

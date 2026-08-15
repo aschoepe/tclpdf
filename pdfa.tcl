@@ -225,7 +225,15 @@ oo::define ::tclpdf::document::document {
     # whatever file was passed, so a GRAY or CMYK intent went out labelled as
     # sRGB. An explicit -identifier still wins; a profile without a readable
     # description is named after its file.
+    #
+    # The shipped profile is the one exception: its desc tag says only "sRGB",
+    # while the colour space it implements is IEC 61966-2-1, and that is the
+    # name every document written before the desc tag was read carried. Kept
+    # so that the same script keeps producing the same bytes across releases.
     set identifier [dict get $current identifier]
+    if {$identifier eq {} && [dict get $current profile] eq $::tclpdf::pdfa::icc} {
+      set identifier "sRGB IEC61966-2.1"
+    }
     if {$identifier eq {}} {
       set identifier [::tclpdf::pdfa description $bytes]
     }
