@@ -378,4 +378,45 @@ test textFlow-4.8 {and at a width that forces the break they differ} -constraint
   expr {[flowStream $::flowSoft 90] ne [flowStream $::flowHard 90]}
 } -result 1
 
+test textFlow-shy-1.1 {a break hyphen is bracketed so it extracts away} -body {
+  # 14.8.2.6: a soft and a hard hyphen have to be distinguishable. The break
+  # hyphen is drawn as a real U+002D so the line looks right, and it sits in a
+  # Span with an EMPTY ActualText so a reader skips it - the word comes back
+  # whole. ToUnicode cannot do this: one glyph would have to mean two things.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "Sil\u00ADben\u00ADtren\u00ADnung hier." -at {20 20} -width 22
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The hyphen is shown on its own between the bracket and its end, and the
+  # brackets balance.
+  list [regexp {/Span <</ActualText <FEFF>>> BDC} $stream] \
+      [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}]
+} -result {1 1}
+
+test textFlow-shy-1.2 {an ordinary hyphen is left alone} -body {
+  # The bracket may only go around a hyphen the BREAKER put there. A word
+  # that carries its own would otherwise lose it when the text is extracted -
+  # "E-Mail" would come back as "EMail".
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "Eine E-Mail-Adresse bleibt ganz." -at {20 20} -width 60
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {ActualText} $stream
+} -result 0
+
+test textFlow-shy-1.3 {an untagged document is unchanged by any of it} -body {
+  # Nothing that exists today may come out with different bytes.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "Sil\u00ADben\u00ADtren\u00ADnung hier." -at {20 20} -width 22
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {ActualText} $stream] [regexp {BDC} $stream] \
+      [regexp {\(Silbentren-\)} $stream]
+} -result {0 0 1}
+
 cleanupTests

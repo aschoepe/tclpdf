@@ -261,7 +261,7 @@ oo::define ::tclpdf::document::document {
   # before it travels on.
   method structure {type args} {
     set options [::tclpdf::option parse {
-      alt {} lang {} title {} actualText {} script {}
+      alt {} lang {} title {} actualText {} script {} name {}
       scope {} numbering {} bbox {} colSpan {} rowSpan {}
     } $args "structure"]
     set script [dict get $options script]
@@ -300,6 +300,17 @@ oo::define ::tclpdf::document::document {
     }
     my StructureCheckNesting $type
     variable ::tclpdf::structure::attributes
+    # A name makes the element referable - see [structureDestination].
+    if {[dict exists $options name] && [dict get $options name] ne {}} {
+      set named [my state structureNames]
+      if {[dict exists $named [dict get $options name]]} {
+        return -code error "tclpdf: a structure element named\
+            \"[dict get $options name]\" already exists - a name has to be\
+            unique, or a link would not know which one it means"
+      }
+      dict set named [dict get $options name] [llength [my state structure]]
+      my state structureNames $named
+    }
     foreach key [list alt lang title actualText {*}[dict keys $attributes]] {
       if {![dict exists $options $key]} {
         dict set options $key {}
@@ -499,6 +510,16 @@ oo::define ::tclpdf::document::document {
   method StructureMark {{derived {}} {artifact Layout}} {
     if {![my tagged]} {
       return {}
+    }
+    # A caller may write the whole thing as one word list - "Artifact
+    # Pagination Header" - which is what -tag on [text] passes through. There
+    # is no ambiguity to resolve: a structure type is a single word, so
+    # anything longer is an artifact with its kind spelled out. That is not
+    # the same as guessing at a value's shape, which this package has been
+    # bitten by; the two vocabularies do not overlap.
+    if {[llength $derived] > 1} {
+      set artifact [lrange $derived 1 end]
+      set derived [lindex $derived 0]
     }
     # Suspended while drawing into a content stream of its own - a form
     # XObject. MCIDs are unique per STREAM, and this counter is per page, so
@@ -786,6 +807,21 @@ oo::define ::tclpdf::document::document {
     }
     $writer put $rootNumber [::tclpdf::pdfObj dictionary $rootPairs]
 
+    # The destination objects, now that every element has its number. A
+    # structure destination is the element itself where a page destination
+    # would name a page (12.3.2.3) - a reader then scrolls to the CONTENT
+    # rather than to a coordinate that may have moved.
+    dict for {name number} [my state structureDestinations] {
+      if {![dict exists [my state structureNames] $name]} {
+        return -code error "tclpdf: no structure element is named \"$name\" -\
+            a link or a bookmark points at it. Name one with\
+            \[\$doc structure <type> -name $name ...\]"
+      }
+      set target [dict get [my state structureNames] $name]
+      $writer put $number [::tclpdf::pdfObj arr [list \
+          [$writer ref [dict get [lindex $elements $target] number]] /Fit]]
+    }
+
     my catalogEntry StructTreeRoot [$writer ref $rootNumber]
     # Marked says the file follows 14.7; Suspects false says nobody has
     # flagged the tree as doubtful. UA-1 clause 7.1 wants both.
@@ -800,6 +836,27 @@ oo::define ::tclpdf::document::document {
     }
     my state structParents $structParents
     return
+  }
+
+  # A reference to a destination object that will point at the named element.
+  #
+  # The object is reserved now and filled at write time, and that indirection
+  # is what makes this work at all: an annotation is written the moment the
+  # link is drawn, while the element it points at gets its object number only
+  # when the tree is built. A destination may be an indirect object (12.3.2),
+  # so the annotation can carry a reference to something that does not exist
+  # yet.
+  #
+  # The name does not have to be declared yet either - a link may point
+  # forwards, at a section further down the document. It is checked when the
+  # tree is written, where a mistyped one can still be named.
+  method structureDestination {name} {
+    set wanted [my state structureDestinations]
+    if {![dict exists $wanted $name]} {
+      dict set wanted $name [my reservation structure.dest.$name]
+      my state structureDestinations $wanted
+    }
+    return [[my writer] ref [dict get $wanted $name]]
   }
 
   # What the tree looks like, for a checker that has to judge it as a whole.
@@ -893,4 +950,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structure 1.0
+package provide tclpdf::structure 1.1

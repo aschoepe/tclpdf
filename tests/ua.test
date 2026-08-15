@@ -427,4 +427,64 @@ test ua-8.1 {a document claiming both standards describes the pdfuaid schema} \
       [regexp {pdfaSchema:namespaceURI>http://www.aiim.org/pdfua/ns/id/<} $bytes]
 } -result {1 1 1 1}
 
+# --- what the 2.0 path spells differently ---------------------------------
+
+test ua-9.1 {the date drops its trailing apostrophe in a 2.0 file} \
+    -constraints haveFace -body {
+  # ISO 32000-2 struck the apostrophe after the offset minutes (7.9.4).
+  # Readers take both, but a file should spell its own version - so the
+  # version decides, not a global choice.
+  set one [accessible $face]
+  $one ua 1
+  set pathOne [::tclpdfTest::scratch ua-date17.pdf]
+  $one write $pathOne
+  $one destroy
+  set two [accessible $face]
+  $two ua -part 2
+  set pathTwo [::tclpdfTest::scratch ua-date20.pdf]
+  $two write $pathTwo
+  $two destroy
+  set bytesOne [::tclpdfTest::readBytes $pathOne]
+  set bytesTwo [::tclpdfTest::readBytes $pathTwo]
+  file delete $pathOne $pathTwo
+  list [regexp {/CreationDate \(D:\d+[-+]\d\d'\d\d'\)} $bytesOne] \
+      [regexp {/CreationDate \(D:\d+[-+]\d\d'\d\d\)} $bytesTwo]
+} -result {1 1}
+
+test ua-9.2 {a running head and a page number name their artifact subtype} -body {
+  # UA-1 7.8 wants Pagination WITH a subtype. The page number knows its own -
+  # above the middle of the page it is a head, below it a foot - and a caller
+  # writing their own says so through -tag.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "Inhalt" -at {20 40}
+  $doc text "Kopfzeile" -at {20 10} -tag {Artifact Pagination Header}
+  $doc pageNumbers -at {105 285} -align center -size 8 -format "Seite %n"
+  set path [::tclpdfTest::scratch ua-running.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Artifact <</Type /Pagination /Subtype /Header>>} $bytes] \
+      [regexp {/Artifact <</Type /Pagination /Subtype /Footer>>} $bytes]
+} -result {1 1}
+
+test ua-9.3 {a page number at the top is a head, at the bottom a foot} -body {
+  # The subtype comes from the position, so the same call at the other end of
+  # the page has to answer differently - otherwise it is a constant dressed
+  # up as a measurement.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "x" -at {20 40}
+  $doc pageNumbers -at {105 12} -align center -size 8 -format "%n"
+  set path [::tclpdfTest::scratch ua-runhead.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Subtype /Header} $bytes] [regexp {/Subtype /Footer} $bytes]
+} -result {1 0}
+
 cleanupTests

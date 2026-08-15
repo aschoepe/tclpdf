@@ -34,13 +34,14 @@ oo::define ::tclpdf::document::document {
 
   method link {args} {
     set options [::tclpdf::option parse {
-      at {} size {} url {} page {} to {} zoom {} tooltip {}
+      at {} size {} url {} page {} to {} zoom {} tooltip {} structure {}
     } $args "link"]
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: link needs -at {x y} and -size {w h}"
     }
-    if {[dict get $options url] eq {} && [dict get $options page] eq {}} {
-      return -code error "tclpdf: link needs -url or -page"
+    if {[dict get $options url] eq {} && [dict get $options page] eq {}
+        && [dict get $options structure] eq {}} {
+      return -code error "tclpdf: link needs -url, -page or -structure"
     }
     lassign [dict get $options at] left top
     lassign [dict get $options size] width height
@@ -59,6 +60,18 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options url] ne {}} {
       lappend pairs A [::tclpdf::pdfObj dictionary [list \
           S /URI URI [::tclpdf::pdfObj str [dict get $options url]]]]
+    } elseif {[dict get $options structure] ne {}} {
+      # A structure destination names the ELEMENT rather than a place on a
+      # page (12.3.2.3), so the link still lands on the right thing after the
+      # content has moved. PDF/UA-2 asks for internal targets to be written
+      # this way; it needs a tagged document, and says so rather than writing
+      # a destination that points at nothing.
+      if {[my state tagged] ne "1"} {
+        return -code error "tclpdf: link -structure needs a tagged document -\
+            a structure destination points at an element of the tree. Call\
+            \[\$doc tagged 1\] before drawing"
+      }
+      lappend pairs Dest [my structureDestination [dict get $options structure]]
     } else {
       lappend pairs Dest [my destination [dict get $options page] \
           [dict get $options to] [dict get $options zoom]]
@@ -118,4 +131,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::link 1.0
+package provide tclpdf::link 1.1

@@ -160,7 +160,16 @@ oo::define ::tclpdf::document::document {
         # Pagination, not the default Layout: a page number is exactly what
         # that artifact type is for (14.8.2.2), and a reader can then leave
         # it out of the running text on purpose rather than by accident.
-        set mark [my StructureMark Artifact Pagination]
+        #
+        # And the subtype, which UA-1 7.8 asks for, comes from where the
+        # number sits: above the middle of the page it is a running head,
+        # below it a running foot. This is the one place that KNOWS - a
+        # caller writing their own header has to say so with
+        # "-tag {Artifact Pagination Header}".
+        lassign [dict get $run at] . top
+        lassign [my page size $page] . pageHeight
+        set subtype [expr {$top * 2 < $pageHeight ? "Header" : "Footer"}]
+        set mark [my StructureMark Artifact [list Pagination $subtype]]
         set open [my StructureBegin $mark]
         set close [my StructureEnd $mark]
       }
@@ -172,4 +181,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.1
+package provide tclpdf::pageNumber 1.2

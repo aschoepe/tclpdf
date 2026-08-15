@@ -34,7 +34,7 @@ oo::define ::tclpdf::document::document {
   # $doc bookmarks              -> the entries collected so far
   method bookmark {title args} {
     set options [::tclpdf::option parse {
-      page {} at {} parent {} open 1
+      page {} at {} parent {} open 1 structure {}
     } $args "bookmark"]
     set entries [my state outline]
     if {$entries eq {}} {
@@ -54,6 +54,7 @@ oo::define ::tclpdf::document::document {
     }
     lappend entries [dict create title $title page $page \
         at [dict get $options at] parent $parent \
+        structure [dict get $options structure] \
         open [dict get $options open] number {}]
     my state outline $entries
     return $id
@@ -99,7 +100,9 @@ oo::define ::tclpdf::document::document {
       set pairs [list Title [::tclpdf::pdfObj str [dict get $entry title]] \
           Parent [expr {$parent eq {} ? [[my writer] ref $rootNumber] :
               [[my writer] ref [dict get [lindex $entries $parent] number]]}] \
-          Dest [my destination [dict get $entry page] [dict get $entry at]]]
+          Dest [expr {[dict get $entry structure] ne {} ?
+              [my structureDestination [dict get $entry structure]] :
+              [my destination [dict get $entry page] [dict get $entry at]]}]]
       if {$position > 0} {
         lappend pairs Prev [[my writer] ref \
             [dict get [lindex $entries [lindex $siblings $position-1]] number]]
@@ -136,4 +139,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::outline 1.1
+package provide tclpdf::outline 1.2

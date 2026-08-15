@@ -471,11 +471,15 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : What has been attached.
 
-*doc* **link -at** *{x y}* **-size** *{w h}* ?**-url** *u*? ?**-page** *n*? ?**-to** *{x y}*? ?**-tooltip** *t*?
+*doc* **link -at** *{x y}* **-size** *{w h}* ?**-url** *u*? ?**-page** *n*? ?**-structure** *name*? ?**-to** *{x y}*? ?**-tooltip** *t*?
 
-: A link rectangle over an area of the page, either to a URL or to a page of this document. It is drawn as nothing: the visible text is a separate call.
+: A link rectangle over an area of the page — to a URL, to a page of this document, or to a named structure element. It is drawn as nothing: the visible text is a separate call.
 
-*doc* **bookmark** *title* ?**-page** *n*? ?**-at** *{x y}*? ?**-parent** *id*?
+  **-structure** takes the **-name** of a `structure` element and writes a structure destination (12.3.2.3), which names the element rather than a place on a page and therefore still lands on the right thing after the content above it has moved. PDF/UA-2 asks for internal targets to be written that way. It needs a tagged document. `bookmark` takes the same option.
+
+  **-tooltip** becomes the annotation's `Contents`, which PDF/UA requires on every link (7.18.5): it is what a reader announces instead of just saying "link".
+
+*doc* **bookmark** *title* ?**-page** *n*? ?**-at** *{x y}*? ?**-parent** *id*? ?**-structure** *name*?
 
 : Adds an outline entry and returns its id, which can be the `-parent` of further entries. Bookmarks are turned into objects when the document is written.
 
@@ -509,7 +513,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   A tagged document carries a second, invisible layer saying what the marks on a page *are* — a heading, a paragraph, a table cell — rather than how they look. The drawing does not change. Reading software needs it: without a tree it follows the order the content stream happens to have, which on a two column page runs across both columns. PDF/UA and PDF/A level A require it.
 
-*doc* **structure** *type* ?**-alt** *text*? ?**-lang** *tag*? ?**-title** *text*? ?**-actualText** *text*? **-script** *body*
+*doc* **structure** *type* ?**-name** *name*? ?**-alt** *text*? ?**-lang** *tag*? ?**-title** *text*? ?**-actualText** *text*? ?**-scope** *side*? ?**-numbering** *style*? ?**-bbox** {*x y w h*}? ?**-colSpan** *n*? ?**-rowSpan** *n*? **-script** *body*
 
 : Opens a structure element, runs *body* with it open and closes it again — including when the body fails, so a half open tree cannot reach the file. Returns whatever the body returned. *type* is one of the standard types of ISO 32000-1 14.8.4; an unknown one is refused at the call rather than in a validator later.
 
@@ -521,17 +525,23 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   **-alt** appears on `image place`, `image draw`, `form place` and `svg` for the same reason and with the same effect: with it the drawing becomes a `Figure` carrying that description, without it an artifact. A form or a drawing is one piece of marked content however many operators it contains — bracketing per element would scatter one illustration over dozens of leaves, and the parts of a drawing mean nothing on their own. Nothing inside a form, a pattern or a page-number XObject is marked at all: those are content streams of their own, mark numbers are unique per stream, and it is the *invocation* that carries the marking.
 
+  A hyphen the line breaker inserted at a soft-hyphen offer is bracketed as a break rather than left to look like part of the word: it sits in a `Span` with an empty `ActualText`, so extracted text gives the word back whole (14.8.2.6). A hyphen the text brought with it is untouched — `E-Mail` stays `E-Mail`. Only in a tagged document.
+
   What no writer can infer is whether a line of text is a heading — neither its size nor its weight says so. That is what **-tag** on `text` is for: `-tag H1`, `-tag Caption`, and so on. `-tag Artifact` takes the text out of the tree altogether, which is what a running head or a page number needs; under PDF/UA anything left unmarked counts as a defect.
 
 : **Attributes.** Five options write standard attributes onto the element, each one only where the standard allows it — used elsewhere they would be written and then ignored, so they are refused at the call instead.
 
-  **-scope** takes `Row`, `Column` or `Both` and belongs on a `TH`; it says which way a header cell heads. A table sets it by itself: its head row heads columns. **-numbering** belongs on an `L` and takes `Decimal`, `UpperRoman`, `Disc` and the other values of ISO 32000 Table 347; PDF/UA makes it mandatory for an ordered list, and no writer can derive it — the label is drawn text, and `1.` and `-` look the same from here. **-bbox** belongs on a `Figure`, `Formula` or `Table` and takes the same four numbers as a rectangle; it is not required by the letter of the standard, but the reading tools rely on it. **-colSpan** and **-rowSpan** belong on a cell and are written by the table itself where it spans.
+  **-scope** takes `Row`, `Column` or `Both` and belongs on a `TH`; it says which way a header cell heads. A table sets it by itself: its head row heads columns. **-numbering** belongs on an `L` and takes `Decimal`, `UpperRoman`, `Disc` and the other values of ISO 32000 Table 347; PDF/UA makes it mandatory for an ordered list, and no writer can derive it — the label is drawn text, and `1.` and `-` look the same from here. **-bbox** belongs on a `Figure`, `Formula` or `Table` and takes the same four numbers as a rectangle; it is not required by the letter of the standard, but the reading tools rely on it. A picture placed with **-alt** gets one by itself. **-colSpan** and **-rowSpan** belong on a cell and are written by the table itself where it spans.
 
 : **Types beyond 1.7.** ISO 32000-2 adds `Title`, `Aside`, `DocumentFragment`, `Sub`, `FENote`, `Em`, `Strong` and headings past `H6`. They are accepted only in a 2.0 file — in a 1.7 one they would validate as non-standard types with no role map — and `ua -part 2` is the ordinary way to get one. Eleven older types (`Art`, `BlockQuote`, `TOC`, `TOCI`, `Index`, `Private`, `Quote`, `Note`, `Reference`, `BibEntry`, `Code`) exist *only* in the 1.7 namespace and keep it even inside a 2.0 tree.
 
   A leaf type such as `P` or `H1` holds text and **inline** markup — `Span`, `Em`, `Strong`, `Link`, `Figure` and their kin — but no block element: a `P` inside a `P` is the standing example of what Annex L forbids.
 
+: **Naming an element.** **-name** gives the element a name that a link or a bookmark points at with **-structure**. A structure destination names the *element* rather than a place on a page (12.3.2.3), so it still lands on the right thing after the content above it has grown — PDF/UA-2 asks for internal targets to be written that way. The name has to be unique and may be used before it is declared, which a link pointing forward at a later section needs. An unknown one is reported when the document is written, naming it.
+
 : **Artifacts name their kind.** What is not in the tree is bracketed as an artifact, and the bracket says which sort it is: `Pagination` for a page number, `Layout` for everything else this package produces. PDF/UA-2 requires the naming; earlier versions permit it, so it is written either way and a document does not have to be redrawn when it is upgraded.
+
+  **-tag** takes the kind as well, as a list: `-tag {Artifact Pagination Header}` marks a running head, `{Artifact Pagination Footer}` a running foot, which is what PDF/UA asks for (7.8). `pageNumbers` works it out by itself — above the middle of the page it is a head, below it a foot — because that is the one place that knows.
 
 ## PDF/UA
 
@@ -601,6 +611,8 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 ## Writing
 
+: **PDF 2.0 differences that are written for you.** A 2.0 file spells the zone offset of a date without the trailing apostrophe (7.9.4), and the version decides it — declaring `ua -part 2` is enough. `ProcSet`, `CharSet` and `CIDSet`, all deprecated in 2.0, are written by no version of this package.
+
 *doc* **write** *path*
 
 : Writes the document to a file. Writing does not finish the document: a second **write** of an unchanged document produces a byte-identical file, and drawing between two writes works - the second file carries the additions.
@@ -617,11 +629,16 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 # SEE ALSO
 
-qpdf(1), veraPDF, pdffonts(1), pdftotext(1)
+qpdf(1), veraPDF, pdffonts(1), pdftotext(1), tzint
+
+tzint is a Tcl binding to the Zint barcode library. It produces SVG, which
+`svg -data` draws — so barcodes need no code in this package and are not a
+dependency of it. See the `Barcodes` section above.
 
 # KEYWORDS
 
-pdf, pdf/a, zugferd, factur-x, truetype, font embedding, invoice
+pdf, pdf/a, pdf/ua, zugferd, factur-x, truetype, font embedding, invoice,
+accessibility, barcode
 
 # COPYRIGHT
 

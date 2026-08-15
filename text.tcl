@@ -296,7 +296,7 @@ oo::define ::tclpdf::document::document {
   #
   # Doing either of them on x or y before the rotation is the same mistake
   # twice: the text then turns about a point that is no longer -at.
-  method TextRun {string state x y rotate {shift 0} {lift 0}} {
+  method TextRun {string state x y rotate {shift 0} {lift 0} {hyphen 0}} {
     set font [dict get $state resolved]
     set size [dict get $state size]
     lassign [my coords $x $y] px py
@@ -349,7 +349,37 @@ oo::define ::tclpdf::document::document {
       my content "[::tclpdf::pdfObj num [expr {$px - $shift}]]\
           [::tclpdf::pdfObj num [expr {$py - $lift}]] Td\n"
     }
-    my content [my TextShow $font $state $string $byTJ]
+    # A hyphen that marks a BREAK is not a character of the text: extracting
+    # the line has to give the word back whole (14.8.2.6). So it is drawn in
+    # a Span of its own carrying an EMPTY ActualText, which is how a reader is
+    # told to skip it - the alternative, telling the two apart by ToUnicode,
+    # cannot work here because one glyph would have to mean two things.
+    #
+    # No position has to be computed for the second run, and that is the whole
+    # reason this is cheap: both shows sit inside ONE text object, so the text
+    # cursor is already where the first one left it. Alignment, centring and
+    # the stretched word spacing of a justified line are untouched.
+    #
+    # The break hyphen is the last character of the drawn string, except on a
+    # line that had the word space appended - hence the split rather than a
+    # fixed position.
+    # Only in a tagged document: the bracket means nothing without a tree,
+    # and writing it anyway would change the bytes of every existing document
+    # that happens to hyphenate.
+    if {$hyphen && [my state tagged] eq "1" && [string first "-" $string] >= 0} {
+      set at [string last "-" $string]
+      my content [my TextShow $font $state [string range $string 0 $at-1] $byTJ]
+      # The empty ActualText is UTF-16 with nothing after the byte order mark.
+      my content "/Span <</ActualText <FEFF>>> BDC\n"
+      my content [my TextShow $font $state "-" $byTJ]
+      my content "EMC\n"
+      if {$at < [string length $string] - 1} {
+        my content [my TextShow $font $state \
+            [string range $string $at+1 end] $byTJ]
+      }
+    } else {
+      my content [my TextShow $font $state $string $byTJ]
+    }
     my content "ET\n"
     if {$guarded} {
       my content "Q\n"
@@ -601,4 +631,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.9
+package provide tclpdf::text 1.10

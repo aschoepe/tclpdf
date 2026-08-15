@@ -202,7 +202,10 @@ oo::define ::tclpdf::document::document {
     # write of an unchanged document has to come out byte-identical, and a
     # fresh timestamp is the one thing that would differ.
     if {![dict exists $tclpdfInfo CreationDate]} {
-      dict set tclpdfInfo CreationDate [::tclpdf::pdfObj date]
+      # The file version decides how the zone offset is spelled: 2.0 dropped
+      # the apostrophe after the minutes.
+      dict set tclpdfInfo CreationDate \
+          [::tclpdf::pdfObj date {} [$tclpdfWriter version]]
     }
     set pairs {}
     dict for {key value} $tclpdfInfo {
@@ -213,4 +216,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::output 1.2
+package provide tclpdf::output 1.3

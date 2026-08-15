@@ -208,4 +208,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.1
+package provide tclpdf::attach 1.2

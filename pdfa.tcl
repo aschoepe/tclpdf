@@ -237,4 +237,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::pdfa 1.3
+package provide tclpdf::pdfa 1.4

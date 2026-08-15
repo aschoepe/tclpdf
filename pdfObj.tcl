@@ -142,13 +142,23 @@ proc ::tclpdf::pdfObj::arr {items} {
 }
 
 # A date string (7.9.4): D:YYYYMMDDHHmmSSOHH'mm'.
-proc ::tclpdf::pdfObj::date {{seconds {}}} {
+#
+# ISO 32000-2 struck the apostrophe AFTER the offset minutes, so 2.0 wants
+# D:...+02'00 where 1.7 wants D:...+02'00'. Readers have to accept both, but a
+# file should spell its own version - hence the argument rather than one form
+# for everyone. The default stays the 1.7 form, because that is what a
+# document is unless it says otherwise.
+proc ::tclpdf::pdfObj::date {{seconds {}} {version 1.7}} {
   if {$seconds eq {}} {
     set seconds [clock seconds]
   }
   set stamp [clock format $seconds -format D:%Y%m%d%H%M%S]
   set zone [clock format $seconds -format %z]
-  return "$stamp[string index $zone 0][string range $zone 1 2]'[string range $zone 3 4]'"
+  set offset "[string index $zone 0][string range $zone 1 2]'[string range $zone 3 4]"
+  if {[package vcompare $version 2.0] < 0} {
+    append offset "'"
+  }
+  return "$stamp$offset"
 }
 
 # UTF-16BE with a byte order mark. Without the BOM a reader falls back to
@@ -175,4 +185,4 @@ proc ::tclpdf::pdfObj::Utf16Be {value} {
   return $result
 }
 
-package provide tclpdf::pdfObj 1.0
+package provide tclpdf::pdfObj 1.1

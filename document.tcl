@@ -230,6 +230,7 @@ oo::class create ::tclpdf::document::document {
       structureReport structure
       StructureMark structure
       StructureAnnotation structure
+      structureDestination structure
       StructureBegin structure
       StructureEnd structure
     }
@@ -431,4 +432,4 @@ oo::class create ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::document 1.3
+package provide tclpdf::document 1.4

@@ -178,8 +178,13 @@ oo::define ::tclpdf::document::document {
     set mark {}
     if {[my state tagged] eq "1"} {
       if {[dict get $options alt] ne {}} {
+        # The bounding box goes with it. Not required by the letter of the
+        # standard, but the Best Practice Guide names it as what the reading
+        # tools rely on to find a figure on the page - and here it costs
+        # nothing, because the four values were computed two lines up.
         set element [my StructureOpen Figure \
-            [dict create alt [dict get $options alt]]]
+            [dict create alt [dict get $options alt] \
+                bbox [list $left $top $width $height]]]
         set mark [my StructureMark]
       } else {
         set mark [my StructureMark Artifact]
@@ -367,4 +372,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.2
+package provide tclpdf::image 1.3

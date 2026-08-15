@@ -808,6 +808,85 @@ test structure-12.4 {a paragraph holds inline markup but no block element} -body
   list $inline $block [string match "*not a Table*" $err]
 } -result {0 1 1}
 
+test structure-12.5 {a Figure from a picture carries its bounding box} -body {
+  # The four numbers are already known where the element is opened, so this
+  # costs nothing - and the reading tools rely on a Figure having a BBox to
+  # find it on the page.
+  set here [file dirname [file dirname [file normalize [info script]]]]
+  set photo [file join $here examples assets images sample-photo.jpg]
+  if {![file exists $photo]} {
+    return {1 1}
+  }
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc image embed foto $photo
+  $doc image place foto -at {20 30} -width 60 -alt "Ein Foto"
+  set path [::tclpdfTest::scratch figure-bbox.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # 20 mm from the left is 56.69 pt, 30 mm from the top is 841.89-85.04.
+  list [regexp {/S /Figure} $bytes] \
+      [regexp {/BBox \[56\.6\d+ \d+\.\d+ \d+\.\d+ 756\.8\d+\]} $bytes]
+} -result {1 1}
+
+# --- structure destinations -----------------------------------------------
+
+test structure-14.1 {a link may point at an element instead of a page} -body {
+  # A structure destination names the ELEMENT (12.3.2.3), so the link still
+  # lands on the right thing after the content around it has moved. PDF/UA-2
+  # asks for internal targets to be written this way.
+  #
+  # It is an INDIRECT object, and that is what makes it possible at all: the
+  # annotation is written when the link is drawn, the element gets its number
+  # only when the tree is built.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc structure Link -script {
+    $doc text "weiter" -at {20 20}
+    $doc link -at {20 16} -size {20 6} -structure ziel -tooltip "Zum Ziel"
+  }
+  $doc page add
+  $doc structure Sect -name ziel -script {$doc text "Ziel" -at {20 20} -tag H1}
+  set path [::tclpdfTest::scratch structdest.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The destination is a reference, and the object it names is an array whose
+  # first entry points at a structure element rather than a page.
+  regexp {/Dest (\d+) 0 R} $bytes -> number
+  regexp "\n$number 0 obj\\s*\\\[\\s*(\\d+) 0 R\\s*/Fit" $bytes -> target
+  list [info exists number] \
+      [regexp "\n$target 0 obj\[^s\]*/S /Sect" $bytes]
+} -result {1 1}
+
+test structure-14.2 {a name has to exist, and only once} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc structure Sect -name eins -script {$doc text "a" -at {20 20}}
+  set twice [catch {$doc structure Sect -name eins -script {
+    $doc text "b" -at {20 30}
+  }} first]
+  $doc link -at {20 40} -size {10 6} -structure fehlt -tooltip "T"
+  set missing [catch {$doc write [::tclpdfTest::scratch structdest-bad.pdf]} second]
+  $doc destroy
+  list $twice [string match "*already exists*" $first] \
+      $missing [string match "*no structure element is named*" $second]
+} -result {1 1 1 1}
+
+test structure-14.3 {a structure destination needs a tree} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc link -at {20 16} -size {10 6} -structure ziel} err]
+  $doc destroy
+  list $code [string match "*needs a tagged document*" $err]
+} -result {1 1}
+
 rename pageMcids {}
 
 cleanupTests

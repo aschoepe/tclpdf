@@ -67,7 +67,7 @@ oo::define ::tclpdf::document::document {
     foreach paragraph [split $string \n] {
       if {[string trim $paragraph] eq {}} {
         lassign [{*}$band 0 $paragraphIndex $globalLine] width offset
-        lappend lines [dict create text {} offset $offset width $width \
+        lappend lines [dict create text {} offset $offset width $width hyphen 0 \
             paragraph $paragraphIndex first 1]
         incr paragraphIndex
         incr globalLine
@@ -108,8 +108,13 @@ oo::define ::tclpdf::document::document {
           } else {
             break
           }
+          # hyphen 1 says the trailing "-" of this line is a BREAK, not a
+          # character of the text. It travels to the drawing so that the
+          # hyphen can be bracketed as such - extracted text has to come back
+          # without it (14.8.2.6).
           lappend lines [dict create text $emit offset $offset \
               width $width paragraph $paragraphIndex \
+              hyphen [expr {[llength $taken] ? 1 : 0}] \
               first [expr {$inParagraph == 0}]]
           incr inParagraph
           incr globalLine
@@ -136,7 +141,7 @@ oo::define ::tclpdf::document::document {
             incr take -1
           }
           lappend lines [dict create text [string range $word 0 $take-1] \
-              offset $offset width $width paragraph $paragraphIndex \
+              offset $offset width $width paragraph $paragraphIndex hyphen 0 \
               first [expr {$inParagraph == 0}]]
           incr inParagraph
           incr globalLine
@@ -146,7 +151,7 @@ oo::define ::tclpdf::document::document {
         set current $word
       }
       if {$current ne {}} {
-        lappend lines [dict create text $current offset $offset width $width \
+        lappend lines [dict create text $current offset $offset width $width hyphen 0 \
             paragraph $paragraphIndex first [expr {$inParagraph == 0}]]
         incr globalLine
       }
@@ -320,7 +325,7 @@ oo::define ::tclpdf::document::document {
         my TextParagraphLine [dict get $line text] $state \
             [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
             $align [dict get $line closes] [dict get $options rotate] \
-            [expr {$lift + $lineOffset}]
+            [expr {$lift + $lineOffset}] [dict get $line hyphen]
       }
       incr index
     }
@@ -363,7 +368,7 @@ oo::define ::tclpdf::document::document {
   # to TextRun rather than applied to x - with -rotate the baseline is
   # turned, and a pre-shifted x would rotate about the wrong point (same
   # reasoning as in [text], text.tcl).
-  method TextParagraphLine {line state x y width align isLast rotate {lift 0}} {
+  method TextParagraphLine {line state x y width align isLast rotate {lift 0} {hyphen 0}} {
     # The space the line breaker consumed has to reappear in the content
     # stream: a line ends where a word ended, and without it the next line
     # follows immediately - "der Antrieb ist" plus "getauscht" comes back out
@@ -385,15 +390,15 @@ oo::define ::tclpdf::document::document {
     }
     switch -- $align {
       left {
-        my TextRun $drawn $state $x $y $rotate 0 $lift
+        my TextRun $drawn $state $x $y $rotate 0 $lift $hyphen
       }
       right {
         my TextRun $drawn $state [expr {$x + $width}] $y $rotate \
-            [my TextLineWidth $line $state] $lift
+            [my TextLineWidth $line $state] $lift $hyphen
       }
       center - centre {
         my TextRun $drawn $state [expr {$x + $width / 2.0}] $y $rotate \
-            [expr {[my TextLineWidth $line $state] / 2.0}] $lift
+            [expr {[my TextLineWidth $line $state] / 2.0}] $lift $hyphen
       }
       justify {
         # The last line of a paragraph stays flush left. Justifying it is the
@@ -401,7 +406,7 @@ oo::define ::tclpdf::document::document {
         # column and the result is unmistakably broken.
         set spaces [expr {[llength [regexp -all -inline {\S+} $line]] - 1}]
         if {$isLast || $spaces < 1} {
-          my TextRun $drawn $state $x $y $rotate 0 $lift
+          my TextRun $drawn $state $x $y $rotate 0 $lift $hyphen
           return
         }
         set gap [expr {$width - [my TextLineWidth $line $state]}]
@@ -418,7 +423,7 @@ oo::define ::tclpdf::document::document {
         # last glyph still sits on the edge. Leaving it out would keep the
         # words of a justified paragraph running together for a reader, which
         # is the defect this is here to fix.
-        my TextRun $drawn $stretched $x $y $rotate 0 $lift
+        my TextRun $drawn $stretched $x $y $rotate 0 $lift $hyphen
       }
       default {
         return -code error "tclpdf: -align must be left, right, center or\
@@ -449,4 +454,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.4
+package provide tclpdf::textBlock 1.5

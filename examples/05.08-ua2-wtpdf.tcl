@@ -52,9 +52,9 @@ set bold [file join $assets fonts DejaVuSans-Bold.ttf]
 
 set doc [tclpdf new -unit mm]
 $doc tagged 1
-$doc info Title "Handreichung Barrierefreiheit"
+$doc info Title "A guide to accessible documents"
 $doc info Author "Alexander Schoepe"
-$doc language de-DE
+$doc language en-GB
 
 # Both levels of WTPDF: reuse says the tagging is good enough to get the
 # content back out, accessibility says it is good enough to be read aloud.
@@ -73,23 +73,26 @@ $doc font embed faceBold $bold
 # document".
 $doc font -family faceBold -size 17
 $doc structure Title -script {
-  $doc text "Handreichung Barrierefreiheit" -at {20 25}
+  $doc text "A guide to accessible documents" -at {20 25}
 }
 
 $doc font -family face -size 10
-$doc text "Dieses Dokument ist PDF/UA-2 und trägt zusätzlich die\
-    WTPDF-Erklärung für beide Stufen. Es ist eine PDF-2.0-Datei - schon\
-    deshalb, weil ISO 14289-2 nichts anderes zulässt." -at {20 36} -width 170
+$doc text "This document claims PDF/UA-2 and carries the WTPDF declaration\
+    for both conformance levels. It is a PDF 2.0 file - it has to be, because\
+    ISO 14289-2 allows nothing else." -at {20 36} -width 170
 
 # -- the heading levels 2.0 allows ------------------------------------------
 
+# -name makes the element referable - see the link at the end of the page.
 $doc font -family faceBold -size 13
-$doc text "Was der Strukturbaum trägt" -at {20 54} -tag H1
+$doc structure Sect -name baum -script {
+  $doc text "What the structure tree carries" -at {20 54} -tag H1
+}
 
 $doc font -family face -size 10
-$doc text "Die Elemente stehen im 2.0-Namensraum, den ein\
-    Namespace-Wörterbuch am Wurzelknoten benennt. Elf ältere Typen bleiben\
-    ausdrücklich im Vorgabe-Namensraum, weil es sie in 2.0 nicht gibt:" \
+$doc text "The elements sit in the 2.0 namespace, which a Namespace\
+    dictionary at the root of the tree names. Eleven older types deliberately\
+    keep the default namespace, because 2.0 does not have them:" \
     -at {20 62} -width 170
 
 # Code is one of the eleven. It carries no /NS, and that is not an omission -
@@ -102,7 +105,7 @@ $doc structure Code -script {
 }
 
 $doc font -family faceBold -size 11
-$doc text "Hervorhebung" -at {20 84} -tag H2
+$doc text "Emphasis" -at {20 84} -tag H2
 
 # Em and Strong are new in 2.0. In 1.7 both were a Span and the emphasis was
 # a matter of the font alone - which a reader cannot hear.
@@ -111,26 +114,26 @@ $doc text "Hervorhebung" -at {20 84} -tag H2
 # Strong", Table 5.
 $doc structure P -script {
   $doc font -family face -size 10
-  $doc text "Betonung war in 1.7 eine Sache der Schrift und damit unhörbar." \
-      -at {20 92} -width 170
+  $doc text "In 1.7 emphasis was a matter of the typeface alone, and so it\
+      could not be heard." -at {20 92} -width 170
   $doc structure Strong -script {
     $doc font -family faceBold -size 10
-    $doc text "Strong sagt es dem Vorleser." -at {20 99}
+    $doc text "Strong says it to a reader out loud." -at {20 99}
   }
 }
 
 # -- Aside and FENote, both new in 2.0 -------------------------------------
 
 $doc font -family faceBold -size 11
-$doc text "Randbemerkung und Fussnote" -at {20 112} -tag H2
+$doc text "Aside and footnote" -at {20 112} -tag H2
 
 # An Aside is content that belongs to the page but not to the flow of the
 # text - a marginal note, a box. In 1.7 it had to be a Div or nothing, and a
 # reader could not tell it apart from the argument it stands beside.
 $doc font -family face -size 9 -color {0.3 0.3 0.35}
 $doc structure Aside -script {
-  $doc text "Nebenbei: die Liste in 5.7 zeigt, wie eine geordnete Liste\
-      ausgezeichnet wird - hier waere sie eine Wiederholung." \
+  $doc text "By the way: example 5.7 shows how an ordered list is marked\
+      up - repeating it here would show nothing new." \
       -at {20 120} -width 170
 }
 
@@ -139,24 +142,40 @@ $doc structure Aside -script {
 # 2.0 document that wants a footnote uses this one.
 $doc font -family face -size 9 -color black
 $doc structure FENote -script {
-  $doc text "1) Fussnoten sind in 2.0 ein eigener Typ; Note gibt es dort\
-      nicht mehr." -at {20 132} -width 170
+  $doc text "1) A footnote is a type of its own in 2.0; Note is gone from\
+      that namespace." -at {20 132} -width 170
 }
 
 # -- an attachment, which needs a description in part 2 ---------------------
 
 $doc font -family faceBold -size 11
-$doc text "Anhang" -at {20 148} -tag H2
+$doc text "Attachment" -at {20 148} -tag H2
 
 $doc font -family face -size 10
-$doc text "Der Anhang trägt eine Beschreibung. Unter PDF/UA-2 ist sie\
-    Pflicht: ein Dateiname ist keine Beschreibung, und \"factur-x.xml\"\
-    vorgelesen sagt niemandem etwas." -at {20 156} -width 170
+$doc text "The attachment carries a description. PDF/UA-2 makes it\
+    mandatory: a file name is not a description, and \"factur-x.xml\" read\
+    out loud tells nobody anything." -at {20 156} -width 170
 
 $doc attach [info script] -name 05.08-ua2-wtpdf.tcl \
-    -description "Das Skript, das dieses Dokument erzeugt hat"
+    -description "The script that produced this document"
 
-$doc line -from {20 176} -to {190 176} -width 0.4 -stroke {0.4 0.4 0.4}
+# -- a link that points at an element, not at a page -----------------------
+
+$doc font -family faceBold -size 11
+$doc text "A link" -at {20 168} -tag H2
+
+# A structure destination names the ELEMENT (12.3.2.3). A page destination
+# says "page 1, 168 mm down"; this one says "the section called wtpdf" and
+# still lands there after the content above it has grown by a paragraph.
+# PDF/UA-2 asks for internal targets to be written this way.
+$doc structure Link -script {
+  $doc font -family face -size 10 -color {0.1 0.2 0.6}
+  $doc text "Back to the section on the structure tree" -at {20 176}
+  $doc link -at {20 172} -size {90 6} -structure baum \
+      -tooltip "To the section on the structure tree"
+}
+
+$doc line -from {20 186} -to {190 186} -width 0.4 -stroke {0.4 0.4 0.4}
 
 exampleFooter $doc face
 
@@ -164,7 +183,7 @@ $doc write $target
 set state [$doc ua state]
 puts "  written: $target ([file size $target] bytes), [$doc page count] page(s)"
 puts "  PDF/UA-[dict get $state part] rev [dict get $state revision],\
-    WTPDF: [join [dict get $state wtpdf] { und }]"
+    WTPDF: [join [dict get $state wtpdf] { and }]"
 puts "  check it with: verapdf --flavour ua2 $target"
 puts "                 verapdf --flavour wt1a $target"
 $doc destroy
