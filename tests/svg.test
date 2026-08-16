@@ -665,4 +665,64 @@ test svg-7.5 {an untagged document remembers nothing} -body {
   list [string match "*BDC*" $stream] $missing $state
 } -result {0 {} {}}
 
+# --- painting attributes at the edge --------------------------------------
+#
+# The counterparts of the graphics limits, for values that arrive from a
+# file rather than from a caller: SVG says what to do with each of them, and
+# what it says happens to be what 8.4.3 needs anyway.
+
+# One rectangle with the given painting attributes, drawn; returns the
+# page content and the outcome of the call.
+proc svgPaintOf {attributes} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc svg -data "<svg xmlns='http://www.w3.org/2000/svg'\
+      width='10' height='10'><rect x='1' y='1' width='5' height='5'\
+      $attributes/></svg>" -at {10 10} -width 50}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  return [list $code $stream]
+}
+
+test svg-8.1 {a colour the parser refuses leaves the drawing balanced} -body {
+  # The paint used to open a bare [save] that the drawing's own bracket
+  # count knew nothing about, so the unwinding at the end left it standing.
+  lassign [svgPaintOf {fill="nosuchcolour"}] code stream
+  list $code [regexp -all {(?:^|\s)q(?=\s)} $stream] [regexp -all {(?:^|\s)Q(?=\s)} $stream]
+} -result {1 1 1}
+
+test svg-8.2 {a dash array keeps its exponent} -body {
+  # "1e-3 2" used to be cut into 1, 3 and 2 by a pattern that knew digits
+  # and the point only.
+  lassign [svgPaintOf {stroke="black" stroke-dasharray="1e-3 2"}] code stream
+  regexp {\[([^\]]*)\] 0 d} $stream -> dash
+  list $code $dash
+} -result {0 {0.001 2}}
+
+test svg-8.3 {a dash array of nothing, or below zero, is a solid line} -body {
+  # SVG 1.1 11.4: a sum of zero renders as none; a negative value makes the
+  # property an error, and an erroneous property is ignored. Both are what
+  # 8.4.3.6 would refuse in the file.
+  set found {}
+  foreach dash {"0 0" "0" "4 -1" "none" "3 1"} {
+    lassign [svgPaintOf "stroke=\"black\" stroke-dasharray=\"$dash\""] code stream
+    lappend found $code [regexp {\] 0 d} $stream]
+  }
+  set found
+} -result {0 0 0 0 0 0 0 0 0 1}
+
+test svg-8.4 {a negative stroke width is the initial width} -body {
+  lassign [svgPaintOf {stroke="black" stroke-width="-2"}] code stream
+  regexp {([-0-9.]+) w} $stream -> width
+  list $code $width
+} -result {0 1}
+
+test svg-8.5 {fill-opacity is clamped, not refused} -body {
+  # A number that is clamped to 0..1 by the SVG definition: 1.5 is opaque
+  # and writes no state at all, -0.5 is invisible.
+  lassign [svgPaintOf {fill="red" fill-opacity="1.5"}] code1 stream1
+  lassign [svgPaintOf {fill="red" fill-opacity="-0.5"}] code2 stream2
+  list $code1 [regexp { gs} $stream1] $code2 [regexp {/GS0_0f gs} $stream2]
+} -result {0 0 0 1}
+
 cleanupTests

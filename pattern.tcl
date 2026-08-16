@@ -64,6 +64,10 @@ oo::define ::tclpdf::document::document {
     }
     set unit [dict get $options unit]
     lassign [my extent [dict get $options size] $unit] widthPoints heightPoints
+    if {$widthPoints <= 0 || $heightPoints <= 0} {
+      return -code error "tclpdf: -size of pattern \"$name\" is\
+          {[dict get $options size]} - a tile needs a width and a height above zero"
+    }
     # The step is how far apart the tiles sit. Equal to the tile size they
     # touch; larger, and the gaps show through - which is what a caller wants
     # for a sparse watermark rather than a hatch.
@@ -72,6 +76,15 @@ oo::define ::tclpdf::document::document {
       set stepY $heightPoints
     } else {
       lassign [my extent [dict get $options step] $unit] stepX stepY
+    }
+    # Neither may be zero (Table 75: XStep and YStep "shall not be zero") -
+    # a tile that repeats every nothing is one a reader cannot lay. Negative
+    # is permitted there and left alone.
+    foreach {axis step} [list X $stepX Y $stepY] {
+      if {$step == 0} {
+        return -code error "tclpdf: the ${axis} step of pattern \"$name\"\
+            is 0 - a step shall not be zero (ISO 32000-1 Table 75)"
+      }
     }
 
     my canvas push $widthPoints $heightPoints

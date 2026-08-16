@@ -12,8 +12,9 @@
 # handling and shape construction are two topics, and only the state half
 # is needed by text and images as well.
 #
-# Every shape ends in GraphicsStyle and GraphicsPaint from graphics.tcl -
-# the style prologue and the painting operator exist once for all of them.
+# Every shape ends in ShapePaint, which joins GraphicsStyle and GraphicsPaint
+# from graphics.tcl - the style prologue and the painting operator exist once
+# for all of them - and writes the finished path in a single call.
 #
 
 package require Tcl 8.6.11-
@@ -37,13 +38,11 @@ oo::define ::tclpdf::document::document {
     }
     lassign [my coords {*}[dict get $options from]] x0 y0
     lassign [my coords {*}[dict get $options to]] x1 y1
-    my content [my GraphicsStyle $options 1]
-    my content "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\
-        [::tclpdf::pdfObj num $x1] [::tclpdf::pdfObj num $y1] l\n"
-    # Through GraphicsPaint like every other shape rather than a hard-coded
+    # Through ShapePaint like every other shape rather than a hard-coded
     # "S": a line has no fill, so the operator comes out the same - but the
     # closing "Q" of the state guard does not exist twice.
-    my content [my GraphicsPaint $options 1]
+    my ShapePaint $options "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\
+        [::tclpdf::pdfObj num $x1] [::tclpdf::pdfObj num $y1] l\n"
     return
   }
 
@@ -62,15 +61,14 @@ oo::define ::tclpdf::document::document {
     lassign [my coords $left [expr {$top + $height}]] x y
     set w [my distance $width]
     set h [my distance $height]
-    my content [my GraphicsStyle $options 1]
-    set radius [my distance [dict get $options radius]]
+    set radius [my ShapeRadius [dict get $options radius] -radius]
     if {$radius > 0} {
-      my GraphicsRoundedRect $x $y $w $h $radius
+      set path [my GraphicsRoundedRect $x $y $w $h $radius]
     } else {
-      my content "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
+      set path "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
           [::tclpdf::pdfObj num $w] [::tclpdf::pdfObj num $h] re\n"
     }
-    my content [my GraphicsPaint $options 1]
+    my ShapePaint $options $path
     return
   }
 
@@ -89,37 +87,36 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: ellipse needs -at {x y}"
     }
     if {[dict get $options radius] ne {}} {
-      set rx [my distance [dict get $options radius]]
+      set rx [my ShapeRadius [dict get $options radius] -radius]
       set ry $rx
     } elseif {[dict get $options size] ne {}} {
       lassign [dict get $options size] width height
-      set rx [expr {[my distance $width] / 2.0}]
-      set ry [expr {[my distance $height] / 2.0}]
+      set rx [expr {[my ShapeRadius $width -size] / 2.0}]
+      set ry [expr {[my ShapeRadius $height -size] / 2.0}]
     } else {
       return -code error "tclpdf: ellipse needs -radius or -size {w h}"
     }
     lassign [my coords {*}[dict get $options at]] cx cy
-    my content [my GraphicsStyle $options 1]
     # Four Bezier arcs. 0.5523 is the classic magic number: the control point
     # distance that approximates a quarter circle to within 0.02 % - exact
     # arcs are not expressible as cubic Beziers at all.
     set kx [expr {$rx * 0.5522847498307936}]
     set ky [expr {$ry * 0.5522847498307936}]
     set N ::tclpdf::pdfObj
-    my content "[$N num [expr {$cx - $rx}]] [$N num $cy] m\n"
-    my content "[$N num [expr {$cx - $rx}]] [$N num [expr {$cy + $ky}]]\
+    set path "[$N num [expr {$cx - $rx}]] [$N num $cy] m\n"
+    append path "[$N num [expr {$cx - $rx}]] [$N num [expr {$cy + $ky}]]\
         [$N num [expr {$cx - $kx}]] [$N num [expr {$cy + $ry}]]\
         [$N num $cx] [$N num [expr {$cy + $ry}]] c\n"
-    my content "[$N num [expr {$cx + $kx}]] [$N num [expr {$cy + $ry}]]\
+    append path "[$N num [expr {$cx + $kx}]] [$N num [expr {$cy + $ry}]]\
         [$N num [expr {$cx + $rx}]] [$N num [expr {$cy + $ky}]]\
         [$N num [expr {$cx + $rx}]] [$N num $cy] c\n"
-    my content "[$N num [expr {$cx + $rx}]] [$N num [expr {$cy - $ky}]]\
+    append path "[$N num [expr {$cx + $rx}]] [$N num [expr {$cy - $ky}]]\
         [$N num [expr {$cx + $kx}]] [$N num [expr {$cy - $ry}]]\
         [$N num $cx] [$N num [expr {$cy - $ry}]] c\n"
-    my content "[$N num [expr {$cx - $kx}]] [$N num [expr {$cy - $ry}]]\
+    append path "[$N num [expr {$cx - $kx}]] [$N num [expr {$cy - $ry}]]\
         [$N num [expr {$cx - $rx}]] [$N num [expr {$cy - $ky}]]\
         [$N num [expr {$cx - $rx}]] [$N num $cy] c\n"
-    my content [my GraphicsPaint $options 1]
+    my ShapePaint $options $path
     return
   }
 
@@ -132,17 +129,23 @@ oo::define ::tclpdf::document::document {
     if {[llength $points] < 4} {
       return -code error "tclpdf: polygon needs at least two points as {x y x y ...}"
     }
-    my content [my GraphicsStyle $options 1]
+    # Pairs, so an even count: an odd one leaves a lone x that used to go out
+    # as "x  m" - an operator short of its operands, in a path already begun.
+    if {[llength $points] % 2} {
+      return -code error "tclpdf: -points is a list of pairs {x y x y ...},\
+          but [llength $points] numbers were given"
+    }
+    set path {}
     set operator m
     foreach {x y} $points {
       lassign [my coords $x $y] px py
-      my content "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py] $operator\n"
+      append path "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py] $operator\n"
       set operator l
     }
     if {[dict get $options close]} {
-      my content "h\n"
+      append path "h\n"
     }
-    my content [my GraphicsPaint $options 1]
+    my ShapePaint $options $path
     return
   }
 
@@ -157,19 +160,18 @@ oo::define ::tclpdf::document::document {
         return -code error "tclpdf: curve needs -from, -c1, -c2 and -to"
       }
     }
-    my content [my GraphicsStyle $options 1]
     lassign [my coords {*}[dict get $options from]] x0 y0
-    my content "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\n"
+    set path "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\n"
     set numbers {}
     foreach key {c1 c2 to} {
       lassign [my coords {*}[dict get $options $key]] px py
       lappend numbers [::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]
     }
-    my content "[join $numbers { }] c\n"
+    append path "[join $numbers { }] c\n"
     if {[dict get $options close]} {
-      my content "h\n"
+      append path "h\n"
     }
-    my content [my GraphicsPaint $options 1]
+    my ShapePaint $options $path
     return
   }
 
@@ -181,16 +183,40 @@ oo::define ::tclpdf::document::document {
       segments {} fill {} stroke {} width {} dash {} close 0
       cap {} join {} miter {} opacity {} blend {} rule nonzero
     } $args]
-    my content [my GraphicsStyle $options 1]
-    my ShapeSegments [dict get $options segments]
+    set path [my ShapeSegments [dict get $options segments]]
     if {[dict get $options close]} {
-      my content "h\n"
+      append path "h\n"
     }
-    my content [my GraphicsPaint $options 1]
+    my ShapePaint $options $path
     return
   }
 
-  # Turn a segment list into path construction operators.
+  # Style, path, painting operator - written in ONE call, and only after
+  # everything that can be refused has been. Each shape used to write the
+  # style first and check its geometry afterwards, so a bad point left a "q"
+  # open and a path without its painting operator; a validator sees neither,
+  # the rest of the page is drawn in the wrong state, and in a tagged
+  # document the mark stays open as well. The path arrives here as a finished
+  # string for that reason: building it is where the numbers are checked.
+  method ShapePaint {options path} {
+    set style [my GraphicsStyle $options 1]
+    my content $style$path[my GraphicsPaint $options 1]
+    return
+  }
+
+  # A radius (or a diameter) as a length in points, refused below zero: a
+  # negative one draws a mirrored shape or, for a rectangle, silently no
+  # rounding at all, and neither is what anyone asked for.
+  method ShapeRadius {value option} {
+    if {![string is double -strict $value] || $value < 0} {
+      return -code error "tclpdf: $option is a length of 0 or more, not \"$value\""
+    }
+    return [my distance $value]
+  }
+
+  # Turn a segment list into path construction operators - returned as a
+  # string, not written, so that nothing reaches the stream until every
+  # segment has been read and found sound.
   #
   # Shared by [path] and [clip], which is the whole reason it exists: the two
   # differ only in what comes AFTER the path - a painting operator in one case,
@@ -201,25 +227,41 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: -segments is empty - a path needs at least\
           a {move x y}"
     }
+    set operands {move 2 line 2 curve 6 close 0}
+    set result {}
     foreach segment $segments {
       set kind [lindex $segment 0]
+      if {![dict exists $operands $kind]} {
+        return -code error "tclpdf: unknown path segment \"$kind\" -\
+            known are: move, line, curve, close"
+      }
+      # A path begins with a move: "l" and "c" extend from the current
+      # point, and before the first "m" there is none (8.5.2.1). A reader
+      # may draw from wherever it happens to be, or nothing - so it is
+      # refused here.
+      if {$result eq {} && $kind ne "move"} {
+        return -code error "tclpdf: a path starts with {move x y}, not\
+            {$segment}"
+      }
+      # The count is checked, not just the numbers: {line 3} would otherwise
+      # pair its 3 with nothing and go out as one operand short.
+      if {[llength $segment] - 1 != [dict get $operands $kind]} {
+        return -code error "tclpdf: path segment \"$kind\" takes\
+            [dict get $operands $kind] numbers, not [expr {[llength $segment] - 1}]"
+      }
       set numbers {}
       foreach {x y} [lrange $segment 1 end] {
         lassign [my coords $x $y] px py
         lappend numbers [::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]
       }
       switch -- $kind {
-        move {my content "[join $numbers { }] m\n"}
-        line {my content "[join $numbers { }] l\n"}
-        curve {my content "[join $numbers { }] c\n"}
-        close {my content "h\n"}
-        default {
-          return -code error "tclpdf: unknown path segment \"$kind\" -\
-              known are: move, line, curve, close"
-        }
+        move {append result "[join $numbers { }] m\n"}
+        line {append result "[join $numbers { }] l\n"}
+        curve {append result "[join $numbers { }] c\n"}
+        close {append result "h\n"}
       }
     }
-    return
+    return $result
   }
 
   # Clip to a rectangle or to an arbitrary path (8.5.4).
@@ -254,15 +296,15 @@ oo::define ::tclpdf::document::document {
     }
     if {$hasPath} {
       set segments [dict get $options segments]
-      my ShapeSegments $segments
+      set path [my ShapeSegments $segments]
       # Closed before it is used as a mask: an open path clips as if the last
       # point were joined to the first anyway (8.5.4), and writing it out keeps
       # what the file says and what a reader does in agreement. Not a second
       # time though - a caller who ended in {close} would otherwise get two.
       if {[lindex $segments end 0] ne "close"} {
-        my content "h\n"
+        append path "h\n"
       }
-      my content "$operator n\n"
+      my content "$path$operator n\n"
       return
     }
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
@@ -277,7 +319,8 @@ oo::define ::tclpdf::document::document {
     return
   }
 
-  # A rectangle with rounded corners, as four lines and four arcs.
+  # A rectangle with rounded corners, as four lines and four arcs - returned,
+  # not written, like every other path here.
   method GraphicsRoundedRect {x y width height radius} {
     set limit [expr {min($width, $height) / 2.0}]
     if {$radius > $limit} {
@@ -287,25 +330,25 @@ oo::define ::tclpdf::document::document {
     set N ::tclpdf::pdfObj
     set right [expr {$x + $width}]
     set top [expr {$y + $height}]
-    my content "[$N num [expr {$x + $radius}]] [$N num $y] m\n"
-    my content "[$N num [expr {$right - $radius}]] [$N num $y] l\n"
-    my content "[$N num [expr {$right - $radius + $k}]] [$N num $y]\
+    set path "[$N num [expr {$x + $radius}]] [$N num $y] m\n"
+    append path "[$N num [expr {$right - $radius}]] [$N num $y] l\n"
+    append path "[$N num [expr {$right - $radius + $k}]] [$N num $y]\
         [$N num $right] [$N num [expr {$y + $radius - $k}]]\
         [$N num $right] [$N num [expr {$y + $radius}]] c\n"
-    my content "[$N num $right] [$N num [expr {$top - $radius}]] l\n"
-    my content "[$N num $right] [$N num [expr {$top - $radius + $k}]]\
+    append path "[$N num $right] [$N num [expr {$top - $radius}]] l\n"
+    append path "[$N num $right] [$N num [expr {$top - $radius + $k}]]\
         [$N num [expr {$right - $radius + $k}]] [$N num $top]\
         [$N num [expr {$right - $radius}]] [$N num $top] c\n"
-    my content "[$N num [expr {$x + $radius}]] [$N num $top] l\n"
-    my content "[$N num [expr {$x + $radius - $k}]] [$N num $top]\
+    append path "[$N num [expr {$x + $radius}]] [$N num $top] l\n"
+    append path "[$N num [expr {$x + $radius - $k}]] [$N num $top]\
         [$N num $x] [$N num [expr {$top - $radius + $k}]]\
         [$N num $x] [$N num [expr {$top - $radius}]] c\n"
-    my content "[$N num $x] [$N num [expr {$y + $radius}]] l\n"
-    my content "[$N num $x] [$N num [expr {$y + $radius - $k}]]\
+    append path "[$N num $x] [$N num [expr {$y + $radius}]] l\n"
+    append path "[$N num $x] [$N num [expr {$y + $radius - $k}]]\
         [$N num [expr {$x + $radius - $k}]] [$N num $y]\
         [$N num [expr {$x + $radius}]] [$N num $y] c\n"
-    my content "h\n"
-    return
+    append path "h\n"
+    return $path
   }
 }
 

@@ -270,6 +270,25 @@ test varFont-12.5 {the interpolation is actually applied while reading gvar} -bo
   list [llength [dict get $outline x]] [dict get $outline x] [dict get $moved x]
 } -result {4 {526 526 38 38} {680 680 115 115}}
 
+test varFont-12.6 {an empty glyph varies its advance too} -body {
+  # The space has no outline and it still has an advance, and the advance
+  # varies: gvar carries the four phantom points for it like for any glyph.
+  # It used to be left out of the instanced set, so it measured the default
+  # 508 at every weight; the numbers here are fontTools' instancer's, glyph
+  # for glyph - 490 at wght 100, 499 at 300, 508 at 400, 509 at 700, 510 at
+  # 900 - and this was the one advance out of Roboto's 1326 that disagreed.
+  set font [variableFace Roboto-Variable.ttf]
+  set space [dict get [dict get $font cmap] 32]
+  set advances {}
+  foreach weight {100 300 400 700 900} {
+    set all [::tclpdf::varFont all $font \
+        [::tclpdf::varFont coordinates $font [list wght $weight]]]
+    lappend advances [expr {[dict exists $all $space] ?
+        [dict get $all $space advance] : "missing"}]
+  }
+  list $advances [expr {[dict get $all $space bytes] eq {}}]
+} -result {{490 499 508 509 510} 1}
+
 test varFont-13.1 {rounding follows the format, not Tcl} -body {
   # The standard: for fractional values of 0.5 and higher take the next higher
   # integer, otherwise truncate - that is towards +infinity, so -2.5 is -2.
@@ -337,5 +356,40 @@ test varFont-14.5 {one named point carries its whole contour} -body {
   lassign [::tclpdf::varFont::Interpolate $outline 3 {1} {12} {-4}] dx dy
   list $dx $dy
 } -result {{12.0 12.0 12.0} {-4.0 -4.0 -4.0}}
+
+test varFont-15.1 {a named instance is called by its own PostScript name} -body {
+  # fvar may give each named instance a PostScript name of its own, and Roboto
+  # does: name id 6 says Roboto-Regular and names the default only. Asked for
+  # by name or by the axis values that ARE that instance, the answer is the
+  # same, because a reader is told which font this is either way.
+  set font [variableFace Roboto-Variable.ttf]
+  list [::tclpdf::varFont postScriptName $font {wght 700 wdth 100}] \
+      [::tclpdf::varFont postScriptName $font {wght 700}] \
+      [::tclpdf::varFont postScriptName $font {wght 100}] \
+      [::tclpdf::varFont postScriptName $font {wdth 75}] \
+      [::tclpdf::varFont postScriptName $font {}]
+} -result {Roboto-Bold Roboto-Bold Roboto-Thin Roboto-CondensedRegular Roboto-Regular}
+
+test varFont-15.2 {any other point is named by its axis values} -body {
+  # Adobe TN 5902: the family prefix - name id 25 where the font has one -
+  # then, per axis away from its default, an underscore, the value and the
+  # tag. Integers as such, fractions without trailing zeros, defaults left
+  # out: two documents naming the same point name the same font.
+  set font [variableFace Roboto-Variable.ttf]
+  list [::tclpdf::varFont postScriptName $font {wght 620}] \
+      [::tclpdf::varFont postScriptName $font {wght 620 wdth 87.5}] \
+      [::tclpdf::varFont postScriptName $font {wdth 87.5 wght 620}] \
+      [::tclpdf::varFont postScriptName $font {wght 400 wdth 80}]
+} -result {Roboto_620wght Roboto_620wght_87.5wdth Roboto_620wght_87.5wdth Roboto_80wdth}
+
+test varFont-15.3 {an instance without a PostScript name of its own gets one built} -body {
+  # NotoSansSymbols names its instances but gives none a PostScript name; the
+  # note's rule is prefix, hyphen, subfamily name reduced to letters and
+  # digits. Roboto's Condensed Bold would come out the same way as
+  # Roboto-CondensedBold - here it is what the fvar record says.
+  set font [variableFace NotoSansSymbols-Variable.ttf]
+  list [::tclpdf::varFont postScriptName $font {wght 700}] \
+      [::tclpdf::varFont postScriptName $font {wght 650}]
+} -result {NotoSansSymbols-Bold NotoSansSymbols_650wght}
 
 cleanupTests

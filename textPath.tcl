@@ -65,15 +65,6 @@ oo::define ::tclpdf::document::document {
     }
     set state [my TextMerge [my TextPathOverrides $options]]
 
-    # One bracket around the whole run. Text on a path is placed glyph by
-    # glyph, so bracketing inside the loop would make one element per letter -
-    # a reader would announce them singly. -tag works as it does on [text].
-    set mark {}
-    if {[my state tagged] eq "1"} {
-      set mark [my StructureMark [dict get $options tag]]
-      my content [my StructureBegin $mark]
-    }
-
     set points [my TextPathFlatten [dict get $options segments]]
     # Two POINTS, so four numbers - counting coordinates let a lone [move]
     # through, and the text then had nowhere to run.
@@ -110,6 +101,20 @@ oo::define ::tclpdf::document::document {
     # like every other font size.
     set gap [::tclpdf::geometry fromPoints [dict get $state spacing] \
         [my cget -unit]]
+
+    # One bracket around the whole run. Text on a path is placed glyph by
+    # glyph, so bracketing inside the loop would make one element per letter -
+    # a reader would announce them singly. -tag works as it does on [text].
+    #
+    # Opened HERE, after the path, the width and the alignment have all been
+    # accepted: opened first, a path too short for text left the BDC standing
+    # in the stream with no EMC to close it, and everything after it on the
+    # page was read as part of an element that had refused to exist.
+    set mark {}
+    if {[my state tagged] eq "1"} {
+      set mark [my StructureMark [dict get $options tag]]
+      my content [my StructureBegin $mark]
+    }
     # The characters in the order they are DRAWN. Along a straight baseline
     # [TextShow] turns the whole glyph run round in one go; here each glyph is
     # placed by hand, so the loop walks the same pieces instead - which is why

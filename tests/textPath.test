@@ -250,5 +250,37 @@ test textPath-5.2 {-align is mirrored on a path as it is on a baseline} \
       [expr {abs($rightStart - $left) < 0.01}]
 } -result {1 1}
 
+test textPath-4.2 {a refused run leaves no bracket open in a tagged document} -body {
+  # The mark was taken and its BDC written BEFORE the path was flattened and
+  # measured, so a path too short for text left the bracket standing and
+  # everything after it on the page was read as part of an element that had
+  # refused to exist.
+  set wrong {}
+  foreach call {
+    {textPath "x" -segments {{move 10 10}}}
+    {textPath "x" -segments {{wobble 1 2}}}
+    {textPath "x" -segments {{move 1 1} {line 9 9}} -align justify}
+  } {
+    set doc [tclpdf new -unit mm]
+    $doc tagged 1
+    $doc page add
+    set code [catch {$doc {*}$call}]
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    set counts [list [regexp -all {BDC} $stream] [regexp -all {EMC} $stream] \
+        [regexp -all {(?:^|\s)BT(?=\s)} $stream] [regexp -all {(?:^|\s)ET(?=\s)} $stream]]
+    if {$code != 1 || $counts ne {0 0 0 0}} {
+      lappend wrong [list $call code $code counts $counts]
+    }
+  }
+  # And the good case still gets exactly one bracket around the whole run.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc textPath "xy" -segments {{move 10 10} {line 90 10}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $wrong [regexp -all {BDC} $stream] [regexp -all {EMC} $stream]
+} -result {{} 1 1}
 
 cleanupTests

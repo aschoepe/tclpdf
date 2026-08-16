@@ -56,6 +56,32 @@ test table-1.3 {fixed widths wider than the table are refused} -body {
   }
 } -returnCodes error -match glob -result {*more than the table width*}
 
+test table-1.4 {fixed widths that leave no room for a further column are refused} -body {
+  # The sum equals the width, and a third column has no width of its own: it
+  # came out zero wide, one letter per line down the page, and nothing said so.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc table layout -width 100 -body {{a b Total}} \
+      -columns {{width 50} {width 50}}} message]
+  $doc destroy
+  list $code [string match {*leave no room for column 3*} $message]
+} -result {1 1}
+
+test table-1.5 {a column width that is not a number is refused in tclpdf's words} -body {
+  # "50%" used to surface as a Tcl error about a non-numeric operand, which
+  # names neither the column nor the key. There is no percent width - a share
+  # of the table is what weight is for.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc table layout -width 100 -body {{a b}} \
+      -columns {{width 50%}}} width] \
+      [catch {$doc table layout -width 100 -body {{a b}} \
+      -columns {{weight x}}} weight]]
+  $doc destroy
+  list $codes [string match {tclpdf: a column width is a number, not "50%"*} $width] \
+      [string match {tclpdf: a column weight is a number, not "x"*} $weight]
+} -result {{1 1} 1 1}
+
 test table-2.1 {long text wraps inside its cell} -body {
   # The row gets taller instead of the text running past the column - which
   # is the whole reason measuring comes before drawing.

@@ -21,7 +21,9 @@
 #
 
 package require Tcl 8.6.11-
+package require TclOO
 package require tclpdf::pdfObj 1.0-
+package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::color {
   namespace export {[a-z]*}
@@ -166,8 +168,8 @@ proc ::tclpdf::color::operator {parsed {which fill}} {
     rgb {set code rg}
     cmyk {set code k}
     separation {
-      # The name refers to a resource entry the document has to provide; this
-      # module only produces the operator.
+      # The name refers to a resource entry the document provides through
+      # [ColourSeparation] below; this proc only produces the operator.
       lassign $values separationName alternate tint
       set code scn
       set prefix "[::tclpdf::pdfObj name $separationName] cs"
@@ -185,6 +187,110 @@ proc ::tclpdf::color::operator {parsed {which fill}} {
     set code [string toupper $code]
   }
   return "$numbers $code"
+}
+
+# -- the separation colour space object -----------------------------------
+#
+# "/Varnish cs 1 scn" names a resource, and until 2026-08-16 nothing wrote
+# it: the operator went out, no [/Separation ...] object and no /ColorSpace
+# entry ever existed, and poppler answered "Bad color space 'Varnish'" -
+# measured on the shipped colour example, where it had been since the first
+# check-in. The operator is still made by [operator] above; what the document
+# has to add is the object the name points at (8.6.6.4), and that is a
+# document method because only the document has a writer and resources.
+
+oo::define ::tclpdf::document::document {
+
+  # Register the colour space behind a separation colour, once, and hand the
+  # specification back unchanged - so a caller can wrap it around whatever it
+  # was going to parse. Anything that is not a separation passes straight
+  # through; every module that turns a colour into an operator routes it
+  # through here, which is what makes a text in a spot colour work as well as
+  # a rectangle.
+  #
+  # The object is [/Separation /Name alternate tintTransform]: the alternate
+  # is the device space of the colour given, the transform a type 2 function
+  # from tint 0 to tint 1. Tint 0 is NO ink - and what "no ink" looks like
+  # depends on the alternate: 0 0 0 0 in CMYK, but 1 1 1 in RGB and 1 in
+  # grey, because those two count light, not ink. Get that wrong and a light
+  # tint of a varnish comes out as a dark grey.
+  method ColourSeparation {spec} {
+    set parsed [::tclpdf::color parse $spec]
+    if {[lindex $parsed 0] ne "separation"} {
+      return $spec
+    }
+    lassign [lindex $parsed 1] name alternate tint
+    # These four never refer to the ColorSpace resources (8.6.8, cs): a
+    # separation called Pattern would write "/Pattern cs" and mean the
+    # pattern space, silently.
+    if {$name in {DeviceGray DeviceRGB DeviceCMYK Pattern}} {
+      return -code error "tclpdf: \"$name\" cannot be the name of a\
+          separation - it names a colour space family (ISO 32000-1, 8.6.8)"
+    }
+    lassign $alternate space components
+    set known [my state separations]
+    if {[dict exists $known $name]} {
+      # One name, one plate: the same name with another alternate would be
+      # a second object under the first one's resource entry, and PDF/A-2
+      # 6.2.4.4 forbids two definitions of one separation outright.
+      if {[dict get $known $name] ne $alternate} {
+        return -code error "tclpdf: separation \"$name\" is already defined\
+            with the alternate {[join [dict get $known $name]]} - one name,\
+            one alternate colour"
+      }
+      return $spec
+    }
+    # Under an sRGB output intent a CMYK alternate is not archivable: ISO
+    # 19005-2, 6.2.4.4 holds the alternate to the rules for device spaces,
+    # and 6.2.4.3 admits DeviceCMYK only with a CMYK intent. Measured with
+    # veraPDF, which reports exactly that clause. Refused at the call when
+    # [pdfa] has already been declared, so the caller learns which colour it
+    # was; the catalog subscriber below catches the other order.
+    if {[my state pdfa] ne {} && $space eq "cmyk"} {
+      return -code error [my ColourSeparationRefusal $name]
+    }
+    if {![llength $known]} {
+      my onSelf catalog ColourSeparationCatalog
+    }
+    set none [dict get {gray 1 rgb {1 1 1} cmyk {0 0 0 0}} $space]
+    set function [[my writer] add [::tclpdf::pdfObj dictionary [list \
+        FunctionType 2 \
+        Domain [::tclpdf::pdfObj arr {0 1}] \
+        C0 [::tclpdf::pdfObj arr $none] \
+        C1 [::tclpdf::pdfObj arr [lmap value $components {::tclpdf::pdfObj num $value}]] \
+        N 1]]]
+    set object [[my writer] add [::tclpdf::pdfObj arr [list /Separation \
+        [::tclpdf::pdfObj name $name] /[::tclpdf::color space $alternate] \
+        [[my writer] ref $function]]]]
+    # Under the separation's own name: that is what [operator] writes after
+    # "cs", and the resource dictionary escapes it the same way.
+    my resource ColorSpace $name [[my writer] ref $object]
+    dict set known $name $alternate
+    my state separations $known
+    return $spec
+  }
+
+  # The same refusal for the other order - a document that used its spot
+  # colours first and declared [pdfa] afterwards. At catalog time, like the
+  # font check in pdfa.tcl and for the same reason: by then every declaration
+  # has been made, and [write] has not opened the file yet.
+  method ColourSeparationCatalog {} {
+    if {[my state pdfa] eq {}} {
+      return
+    }
+    dict for {name alternate} [my state separations] {
+      if {[lindex $alternate 0] eq "cmyk"} {
+        return -code error [my ColourSeparationRefusal $name]
+      }
+    }
+    return
+  }
+
+  method ColourSeparationRefusal {name} {
+    return "tclpdf: PDF/A with the sRGB output intent cannot take a\
+        separation whose alternate is CMYK - \"$name\" needs an RGB or grey\
+        alternate (ISO 19005-2, 6.2.4.4)"
+  }
 }
 
 # The name of the colour space as it appears in a resource dictionary.

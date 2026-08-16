@@ -96,6 +96,7 @@ oo::define ::tclpdf::document::document {
       dict set defaults $name [my TextGet $name]
     }
     foreach {name value} [::tclpdf::option parse $defaults $args "font"] {
+      my TextCheck $name $value
       my TextSet $name $value
     }
     # Resolving now rather than at output time means a wrong family is
@@ -173,6 +174,10 @@ oo::define ::tclpdf::document::document {
     # reports "list element in braces followed by ]" from somewhere inside the
     # method - which says nothing about the actual mistake.
     set at [::tclpdf::option point [dict get $options at] -at text]
+    # Checked here, before the mark below is opened - a wrong value used to
+    # act as baseline in silence, so -anchor middle drew a baseline block and
+    # nobody was told. See TextAnchor for the two values there are.
+    my TextAnchor [dict get $options anchor]
     # Tagged PDF: ONE call is one piece of marked content, so a paragraph of
     # five lines becomes one P holding one mark rather than five. The bracket
     # sits outside everything the call writes - BDC before the q and EMC after
@@ -314,6 +319,18 @@ oo::define ::tclpdf::document::document {
     return [::tclpdf::afm bytes $font $string]
   }
 
+  # The two meanings a y coordinate can have, and nothing else: the manual
+  # says "baseline or top", and a value outside the two is refused rather
+  # than read as baseline. Returns the anchor, so a caller can test it in the
+  # same breath.
+  method TextAnchor {anchor} {
+    if {$anchor ni {baseline top}} {
+      return -code error "tclpdf: -anchor must be baseline or top, not\
+          \"$anchor\""
+    }
+    return $anchor
+  }
+
   # How far the baseline sits BELOW the anchor point, in the document unit.
   # -anchor top means "the top of the letters sits at y", which is what someone
   # laying out a box means; PDF positions on the baseline, one ascent lower.
@@ -329,7 +346,7 @@ oo::define ::tclpdf::document::document {
   # one axis over, and the same cure: hand it to TextRun and let the text
   # matrix carry it.
   method TextLift {state anchor} {
-    if {$anchor ne "top"} {
+    if {[my TextAnchor $anchor] ne "top"} {
       return 0
     }
     set font [dict get $state resolved]
@@ -387,8 +404,10 @@ oo::define ::tclpdf::document::document {
     my content "BT\n"
     my content "[my TextResource $font] [::tclpdf::pdfObj num $size] Tf\n"
     if {[dict get $state color] ne {}} {
-      my content [::tclpdf::color operator \
-          [::tclpdf::color parse [dict get $state color]] fill]\n
+      # Through ColourSeparation so that a text in a spot colour gets its
+      # colour space resource written like a shape does.
+      my content [::tclpdf::color operator [::tclpdf::color parse \
+          [my ColourSeparation [dict get $state color]]] fill]\n
     }
     foreach {key operator} {spacing Tc wordSpacing Tw rise Ts} {
       if {$key eq "wordSpacing" && $byTJ} {
@@ -860,6 +879,31 @@ oo::define ::tclpdf::document::document {
     return [::tclpdf::pdfObj name $name]
   }
 
+  # The values that make text vanish without a word: a size of zero draws
+  # nothing and measures nothing, a stretch of zero the same, and a negative
+  # one of either draws it backwards or not at all. Refused where the value
+  # arrives - in [font] for the state, in TextMerge for a value given per
+  # call - so the message names the call that wrote it. Everything else the
+  # font state takes is checked where it is used: the family when it is
+  # resolved, the direction where a line is measured.
+  method TextCheck {name value} {
+    switch -- $name {
+      size {
+        if {![string is double -strict $value] || $value <= 0} {
+          return -code error "tclpdf: -size must be a positive number of\
+              points, not \"$value\""
+        }
+      }
+      stretch {
+        if {![string is double -strict $value] || $value <= 0} {
+          return -code error "tclpdf: -stretch is a percentage above zero,\
+              100 being normal, not \"$value\""
+        }
+      }
+    }
+    return
+  }
+
   method TextInit {} {
     if {[my state text] eq {}} {
       my state text [dict create \
@@ -901,6 +945,7 @@ oo::define ::tclpdf::document::document {
         dict set state $name $value
       }
       if {$name in $::tclpdf::text::stateOptions} {
+        my TextCheck $name $value
         dict set state $name $value
         if {$name in {family style}} {
           set changed 1

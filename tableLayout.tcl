@@ -37,7 +37,7 @@ oo::define ::tclpdf::document::document {
   # Turn the caller's rows into a grid of cell dictionaries.
   #
   # A cell is written as plain text, or as a dictionary when it needs more:
-  #   {text "Sum" colSpan 3 align right style {bold 1}}
+  #   {text "Sum" colSpan 3 align right style {fontStyle bold}}
   #
   # Returns a list of rows; each row is a list of cells, each cell carrying
   # its column index, its span and its own style.
@@ -158,6 +158,19 @@ oo::define ::tclpdf::document::document {
       if {$index >= $count} {
         break
       }
+      # Numbers, and said so here: "50%" used to reach the addition below and
+      # come back as a Tcl error about a non-numeric operand, which names
+      # neither the column nor the key. There is no percent width - a share
+      # of the table is what weight is for.
+      foreach key {width weight} {
+        if {[dict exists $column $key]
+            && ![string is double -strict [dict get $column $key]]} {
+          return -code error "tclpdf: a column $key is a number, not\
+              \"[dict get $column $key]\" - width in the document unit,\
+              weight as a share of what the fixed widths leave; there is no\
+              percent width"
+        }
+      }
       if {[dict exists $column width]} {
         lset widths $index [dict get $column width]
       } elseif {[dict exists $column weight]} {
@@ -185,6 +198,18 @@ oo::define ::tclpdf::document::document {
       # With a horizontal break that is not an error but the reason for it:
       # the columns keep their widths and are dealt out over several pages.
       set remaining 0
+    }
+    # Fixed widths that use the table up while a further column has none:
+    # that column came out zero wide, and its text one character per line
+    # down the page. Refused like a sum over the width - it IS one, once the
+    # column that has to be there is counted. A horizontal break does not
+    # help here: a column without a width has nothing to carry to the next
+    # page.
+    if {$remaining <= 0 && [llength [lsearch -all -exact $widths {}]]} {
+      set index [lsearch -exact $widths {}]
+      return -code error "tclpdf: the fixed column widths add up to $fixed\
+          and leave no room for column [expr {$index + 1}], which has no\
+          width of its own - give it one or widen the table"
     }
 
     # Natural widths - what each column would need for its longest single

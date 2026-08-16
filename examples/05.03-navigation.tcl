@@ -31,6 +31,21 @@
 # differs from its label as an accessibility failure, and it is one no
 # validator can find, because the printed number is drawn text.
 #
+# The two numbers are kept apart in the code as well, and that is the point
+# to take from this example: -page on link and bookmark counts from 0, like
+# everything else in the package and like [page current]; the printed number
+# counts from 1. Handing the printed number to -page sent every bookmark one
+# page too far - measured, and no validator sees it either, because a link
+# to the wrong page is a perfectly valid link.
+#
+# Drawing cannot return to a page once the next one is added, so the
+# contents page comes last and points BACK at chapters that exist - while
+# the chapters, made first, point FORWARD at a contents page that does not
+# exist yet. That is allowed: a link or a bookmark may name a page that is
+# added later, and the write says so if it never comes. The index of the
+# contents page is known before the first chapter is drawn - it is the
+# number of chapters - which is all a forward link needs.
+#
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
 # See the file "license.terms" for information on usage and redistribution
@@ -47,6 +62,7 @@ source [file join $here common.tcl]
 set target [expr {[llength $argv] ? [lindex $argv 0] : "05.03-navigation.pdf"}]
 
 set doc [tclpdf new -unit mm]
+$doc language en
 $doc info Title "Kiln operation - short manual"
 $doc info Author "Workshop documentation"
 
@@ -74,44 +90,50 @@ set chapters {
 }
 
 # First pass: one page per chapter, collecting where each section landed so
-# the contents page can point at it.
+# the contents page can point at it. Two counters on purpose: the index is
+# what -page and the targets take, the printed number is what the reader
+# sees on the sheet - and the label below has to agree with the latter.
 set targets {}
-set pageNumber 0
+set printed 0
 foreach chapter $chapters {
     lassign $chapter title sections
     $doc page add
-    incr pageNumber
-    set chapterId [$doc bookmark $title -page $pageNumber]
-    dict set targets $title [list $pageNumber 22]
+    set index [$doc page current]
+    incr printed
+    set chapterId [$doc bookmark $title -page $index]
+    dict set targets $title [list $index 22]
 
     $doc font -family helvetica -style bold -size 16
-    $doc text $title -at {20 24}
+    $doc text $title -at {20 24} -tag H1
     $doc line -from {20 28} -to {190 28} -stroke {0.5 0.5 0.55} -width 0.4
 
     set y 40
     foreach section $sections {
         lassign $section heading body
-        $doc bookmark $heading -page $pageNumber -at [list 20 $y] -parent $chapterId
-        dict set targets $heading [list $pageNumber $y]
+        $doc bookmark $heading -page $index -at [list 20 $y] -parent $chapterId
+        dict set targets $heading [list $index $y]
 
         $doc font -style bold -size 11
-        $doc text $heading -at [list 20 $y]
+        $doc text $heading -at [list 20 $y] -tag H2
         $doc font -style {} -size 10
         set y [$doc text $body -at [list 20 [expr {$y + 6}]] -width 170 \
             -align justify -anchor top]
         set y [expr {$y + 10}]
     }
 
+    # The way back points at a page that does not exist yet - the contents
+    # page is added after the last chapter, so its index is the number of
+    # chapters. A forward link is allowed; see the head of the file.
     $doc font -size 8 -color {0.45 0.45 0.5}
     $doc text "Back to contents" -at {20 280}
-    $doc link -at {20 276} -size {30 5} -page 0 -tooltip "Contents"
+    $doc link -at {20 276} -size {30 5} -page [llength $chapters] -tooltip "Contents"
     # The printed number - what the page label below has to agree with.
-    $doc text "Page $pageNumber" -at {190 280} -align right
+    $doc text "Page $printed" -at {190 280} -align right
     $doc font -color black
 }
 
-# The contents page is added last and moved to the front by drawing it on a
-# page of its own - so it can link forward to pages that already exist.
+# The contents page is added last, on a page of its own, so that it can point
+# at pages that already exist; the chapters pointed at it before it was made.
 $doc page add
 set contents [$doc page current]
 $doc font -family helvetica -style bold -size 18

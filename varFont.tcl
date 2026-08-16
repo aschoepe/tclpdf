@@ -34,11 +34,17 @@
 #   5. IUP     points a delta does not mention are interpolated from their
 #              neighbours - the expensive half, and the one that decides
 #              whether the result looks right
-#   6. HVAR    the advance widths vary too, and a wrong one shifts every
-#              following glyph
+#   6. advances the advance widths vary too, and a wrong one shifts every
+#              following glyph. They are read off the PHANTOM POINTS of gvar,
+#              which every glyph carries - the empty ones included - and not
+#              from HVAR: every variable face in the tree ships an HVAR, but
+#              the two sources are built from the same deltas, and an
+#              instancer that pins every axis drops HVAR after applying the
+#              phantom points. Measured against fontTools' instancer: the
+#              space of Roboto comes out at 490, 499, 508, 509 and 510 units
+#              for wght 100, 300, 400, 700 and 900 from either source.
 #
-# Steps 1 to 3 are here. What is not yet built is named in TODO.md rather than
-# implied by silence.
+# Steps 1 to 6 are here, plus the PostScript name of an instance (TN 5902).
 #
 
 package require Tcl 8.6.11-
@@ -229,9 +235,13 @@ proc ::tclpdf::varFont::Piecewise {value from to} {
 
 # Every glyph of a face, moved to one point in the axis space.
 #
-# Returns glyph id -> {bytes advance bearing}. Glyphs with no data at all stay
-# out: an empty glyph has nothing to move, and putting ten bytes of "no
-# contours" where the font has none changes the file for nothing.
+# Returns glyph id -> {bytes advance bearing}. An EMPTY glyph - a space - is in
+# the result too, with no bytes: it has no outline to move, but its advance
+# varies like any other, through the phantom points that gvar carries for it
+# as well. Roboto's space grows from 490 to 510 units between wght 100 and
+# 900; skipping the empty glyphs here left it at the default 508 for every
+# weight, and measured against fontTools that was the one advance out of
+# 1326 that disagreed.
 #
 # The whole face at once rather than the glyphs a document happens to use, and
 # the reason is the composites: a subset closes over them AFTER this, and a
@@ -248,9 +258,6 @@ proc ::tclpdf::varFont::all {parsed coordinates} {
     set data [expr {$start >= $stop ? {} :
         [string range $glyf $start [expr {$stop - 1}]]}]
     set outline [::tclpdf::glyfOutline parse $data]
-    if {[dict get $outline type] eq "empty"} {
-      continue
-    }
     set moved [instance $parsed $glyph $outline $coordinates]
     dict set result $glyph [dict create \
         bytes [::tclpdf::glyfOutline compose [dict get $moved outline]] \
@@ -269,8 +276,10 @@ proc ::tclpdf::varFont::all {parsed coordinates} {
 #
 # The four phantom points are what makes the advance vary: they are appended to
 # the point list, gvar shifts them like any other point, and the distance
-# between the first two IS the advance width. That is how a font varies its
-# spacing without an HVAR table - and Roboto, measured, has none.
+# between the first two IS the advance width. An HVAR table, where the face
+# has one - all seven variable faces in the tree do - carries the same
+# deltas a second time for readers that do not walk gvar; a full instance
+# needs only one source, and this is the one that also moves the outline.
 proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
   set advance [::tclpdf::sfnt advance $parsed $glyph]
   set bearing [lindex [dict get $parsed bearings] $glyph]
@@ -287,10 +296,8 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
   # Their default positions have to be right, not just their deltas: IUP puts
   # unreferenced points between their neighbours, and the phantoms are
   # neighbours to nothing - but the advance is read off their positions.
-  set phantomX [expr {[lindex [dict get $outline bounds] 0] - $bearing}]
-  if {!$simple} {
-    set phantomX 0
-  }
+  set phantomX [expr {$simple ?
+      [lindex [dict get $outline bounds] 0] - $bearing : 0}]
   lassign [deltas $parsed $glyph $coordinates $outline [expr {$points + 4}]] dx dy
 
   set shiftFirst [lindex $dx $points]
@@ -715,6 +722,87 @@ proc ::tclpdf::varFont::Packed {bytes at end count} {
     lappend values 0
   }
   return [list $values $at]
+}
+
+# The PostScript name of one instance, by Adobe Technical Note #5902.
+#
+# The face has ONE name of its own - name id 6, "Roboto-Regular" - and it names
+# the default. Every other point on the axes is a different font as far as a
+# PDF is concerned, and calling them all Roboto-Regular labels a Black cut as
+# the Regular one. The note settles what to call them instead:
+#
+#   a named instance   the fvar record's own postScriptNameID when it has one
+#                      (Roboto-Bold), else the family prefix, a hyphen and the
+#                      instance's subfamily name with everything but ASCII
+#                      letters and digits removed (NotoSansSymbols-Bold)
+#   any other point    the family prefix and, per axis away from its default,
+#                      "_" value tag: Roboto_620wght, Roboto_620wght_87wdth
+#
+# The family prefix is name id 25 where the font gives one, else name id 16
+# and, failing that, name id 1, stripped to ASCII letters and digits. A point
+# that happens to coincide with a named instance takes that instance's name
+# whichever way it was asked for - -axes {wght 700} IS Bold.
+#
+# axes is a dictionary tag -> user value covering the axes the caller set; the
+# rest are at their defaults.
+proc ::tclpdf::varFont::postScriptName {parsed axes} {
+  set full {}
+  set defaults {}
+  foreach axis [axes $parsed] {
+    lassign $axis tag - default
+    dict set defaults $tag $default
+    dict set full $tag [expr {[dict exists $axes $tag] ?
+        double([dict get $axes $tag]) : double($default)}]
+  }
+  set prefix [::tclpdf::sfnt name $parsed 25]
+  if {$prefix eq {}} {
+    set prefix [::tclpdf::sfnt name $parsed 16]
+    if {$prefix eq {}} {
+      set prefix [::tclpdf::sfnt name $parsed 1]
+    }
+    regsub -all {[^A-Za-z0-9]} $prefix {} prefix
+  }
+  foreach entry [instances $parsed] {
+    lassign $entry nameId coordinates postScriptId
+    set same 1
+    dict for {tag value} $coordinates {
+      if {[dict get $full $tag] != $value} {
+        set same 0
+        break
+      }
+    }
+    if {!$same} {
+      continue
+    }
+    if {$postScriptId ne {} && $postScriptId != 0xFFFF} {
+      set name [::tclpdf::sfnt name $parsed $postScriptId]
+      if {$name ne {}} {
+        return $name
+      }
+    }
+    set style [::tclpdf::sfnt name $parsed $nameId]
+    regsub -all {[^A-Za-z0-9]} $style {} style
+    if {$style ne {}} {
+      return "$prefix-$style"
+    }
+    break
+  }
+  set name $prefix
+  dict for {tag value} $full {
+    if {$value == [dict get $defaults $tag]} {
+      continue
+    }
+    # The shortest decimal that names the value: an integer as such, anything
+    # else without trailing zeros. The note asks for what round-trips through
+    # 16.16 fixed; six places are more than that format can distinguish.
+    if {$value == int($value)} {
+      set text [expr {int($value)}]
+    } else {
+      set text [string trimright [string trimright [format %.6f $value] 0] .]
+    }
+    append name _$text[string trim $tag]
+  }
+  return $name
 }
 
 # Rounding, the way the format prescribes it - and NOT the way Tcl's round()

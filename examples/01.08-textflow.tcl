@@ -148,6 +148,37 @@ $doc font -size 9 -color black
 $doc text $around -at {20 174} -width 170 -align justify -avoidMargin 4 \
     -avoid {{rect {20 183} {45 26}} {circle {148 205} 21 7}}
 
+# -- set from the top edge, and a picture wider than the column ------------
+
+$doc font -style bold -size 11
+$doc text "From the top edge, and a picture too wide" -at {20 237}
+
+$doc font -style {} -size 8 -color {0.4 0.4 0.45}
+$doc text "-anchor top places the TOP of the first line at -at, and the shapes\
+    are measured against the lines where they really are - the picture on\
+    the left starts on that very edge and narrows the first line already. On\
+    the right the picture is wider than the column: the lines it covers stay\
+    empty and the text goes on below it, rather than trickling through one\
+    letter per line." -at {20 243} -width 170
+
+set corner "Ein Bild in der oberen Ecke: die erste Zeile beginnt rechts\
+    daneben, und der Absatz nimmt unterhalb wieder die volle Breite. Die\
+    Rechnung ist dieselbe wie oben, nur der Bezugspunkt ist die Oberkante."
+set wide "Ein Bild breiter als die Spalte laesst keiner Zeile Platz. Diese\
+    Zeilen bleiben leer, und der Text setzt unter dem Bild wieder ein - kein\
+    Buchstabe landet auf dem Bild."
+
+$doc rect -at {20 255} -size {26 10} -fill {0.87 0.90 0.95} \
+    -stroke {0.55 0.62 0.75} -width 0.3
+$doc rect -at {105 261} -size {80 5} -fill {0.97 0.90 0.88} \
+    -stroke {0.80 0.62 0.58} -width 0.3
+
+$doc font -size 9 -color black
+$doc text $corner -at {20 255} -width 80 -anchor top -align justify \
+    -avoid {{rect {20 255} {26 10}}} -avoidMargin 2
+$doc text $wide -at {110 255} -width 70 -anchor top -align justify \
+    -avoid {{rect {105 261} {80 5}}} -avoidMargin 1
+
 exampleFooter $doc
 
 $doc write $target

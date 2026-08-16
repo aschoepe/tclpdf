@@ -15,22 +15,73 @@ SYNOPSIS
     store a drawing once and place it as often as wanted.
 
         Document and graphics
-            Pages, paths, transparency (ExtGState), form XObjects for reusable
-            content, RGB / CMYK / separation colours, clipping and shadings.
+            Pages and the five page boxes, paths, clipping to a rectangle or
+            an arbitrary path, transparency and blend modes, form XObjects for
+            reusable content, tiling patterns, axial and radial shadings,
+            RGB / CMYK / grey / separation colours and 148 colour names
+            without Tk.
+
+        Text
+            Single lines and paragraphs with justification, indents, a height
+            limit that hands back what did not fit, text flowing around
+            shapes, soft hyphens, leader rows, text along a path and page
+            numbers. Right-to-left lines are set as well: Hebrew by order
+            alone, Arabic with its contextual forms from the face's own GSUB
+            tables, with the numbers inside such a line keeping their own
+            order and paired brackets mirrored. What cannot be set correctly
+            is refused rather than drawn wrong.
 
         Fonts
-            Embed TrueType fonts as Type0/CIDFontType2 with Identity-H and a
-            ToUnicode CMap, subset down to the glyphs actually used. A missing
-            character raises an error instead of silently disappearing.
+            The fourteen standard faces, and three formats to embed: TrueType
+            as Type0/CIDFontType2 with Identity-H and a ToUnicode CMap, subset
+            down to the glyphs actually used, a variable face at any point on
+            its axes; OpenType with CFF outlines and Type 1 whole, since
+            subsetting either would need outlines this package does not read.
+            Pair kerning and the standard ligatures are applied from the
+            font's own tables, both on by default. A missing character raises
+            an error instead of silently disappearing.
 
         Images
             JPEG and PNG. Both are passed through unchanged wherever possible:
             a JPEG stream goes in as /DCTDecode, a PNG without alpha as
-            /FlateDecode with /Predictor 15 - neither is ever decoded.
+            /FlateDecode with /Predictor 15 - neither is ever decoded. PNG
+            alpha becomes a soft mask.
 
         Tables
             Column widths, cell wrapping, page breaks with repeated header and
-            footer rows, rowSpan/colSpan and per-cell hooks.
+            footer rows, a table too wide for the page dealt over further
+            pages, rowSpan/colSpan, decimal alignment and per-cell hooks.
+
+        SVG
+            Shapes, paths, transforms, groups, reuse, viewBox and gradients,
+            drawn as PDF vectors rather than as a picture. Text in a drawing
+            uses the same faces as the rest of the document, embedded ones
+            included.
+
+        Barcodes
+            Through tzint, which encodes into SVG that tclpdf then draws as
+            vectors. No encoder of its own, and none needed; tzint is
+            optional.
+
+        Tagged PDF and PDF/A-3a
+            A structure tree with the 49 standard types, nesting checked
+            against Annex L, artifacts kept out of it and named by kind, and
+            abbreviations carrying their expansion.
+
+        Accessibility
+            On top of the structure tree, PDF/UA-1 and PDF/UA-2 with the
+            Well-Tagged PDF declaration. The claim is refused when the
+            document does not keep it: a title, a language, every font
+            embedded including the standard fourteen, headings without a gap,
+            tables with the same number of cells in every row, a description
+            on every link, every picture either described or declared
+            decoration. All of them are reported at once when the file is
+            written, each naming the call to change.
+
+        Navigation and presentation
+            Links to a URL, a page or a structure element, bookmarks, page
+            labels, viewer preferences, and file attachments with their own
+            relationship, description and date.
 
         Electronic invoices
             ZUGFeRD / Factur-X as PDF/A-3B: ICC profile, OutputIntent, XMP with
@@ -42,8 +93,8 @@ SYNOPSIS
     partial. Measured against the page count of its chapters, that covers
     roughly a third of ISO 32000-1 - and the missing two thirds are almost
     entirely what a READER of foreign PDFs needs rather than a writer, plus
-    encryption, form fields and tagged PDF. See the manual for the complete
-    list of commands.
+    encryption and form fields. See the manual for the complete list of
+    commands.
 
 
 DEPENDENCIES
@@ -53,13 +104,20 @@ DEPENDENCIES
     The core needs nothing beyond Tcl itself: zlib is a built-in command,
     not a package.
 
-        tdom     - optional, used by the SVG module when present. It parses
-                   27 to 48 times faster than the parser tclpdf brings along
-                   and refuses an entity expansion bomb. Without it SVG still
-                   works, through the built-in element tree parser.
+        tdom     - required for the XMP metadata packet, so every document
+                   that declares PDF/A, PDF/UA or ZUGFeRD needs it. It is
+                   also what reads SVG when present: it parses 27 to 48 times
+                   faster than the parser tclpdf brings along and refuses an
+                   entity expansion bomb. Without it SVG still works, through
+                   the built-in element tree parser, and a document with no
+                   metadata claim runs without tdom.
 
-    That is the whole list. Encryption and barcodes are planned work and will
-    name their packages here once they exist.
+        tzint    - optional, only for barcodes. It produces SVG, which
+                   "svg -data" draws; no code in this package knows about
+                   barcodes.
+
+    That is the whole list. Encryption is planned work and will name its
+    package here once it exists.
 
     Tk is not required and must not be pulled in.
 
@@ -82,7 +140,7 @@ INSTALLING
 
     Build IN the source directory. A separate build directory configures
     cleanly but cannot run the tests: the generated pkgIndex.tcl locates the
-    modules through $dir, which is then the build directory, while the 47
+    modules through $dir, which is then the build directory, while the 67
     .tcl files stay where the sources are. Nothing is lost by building
     in-tree - make install puts index and modules together again either way.
 

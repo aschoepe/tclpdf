@@ -39,66 +39,85 @@ namespace eval ::tclpdf::textAvoid {}
 oo::define ::tclpdf::document::document {
 
   # The band command for a column with obstacles. Called per line by
-  # TextBlockBreak; answers {width offset} in the document unit.
+  # TextBlockBreak; answers {width offset skipped} in the document unit.
+  #
+  # It wraps another band - the one the indents make - and narrows what that
+  # one leaves: the offset it answers is measured from x, the left edge of
+  # the block, exactly like the base band's, so the two compose instead of
+  # one replacing the other.
   #
   # top is the y of the block's first baseline, and the band of line n runs
   # from one leading above its baseline down to the baseline itself - the
   # letters sit above the line, so that is the room the line actually needs.
-  method TextAvoidBand {shapes margin left top width leading spacing line paragraph running} {
-    set baseline [expr {$top + $running * $leading + $paragraph * $spacing}]
-    set bandTop [expr {$baseline - $leading}]
-    set bandBottom $baseline
-
+  #
+  # minimum is the least width worth setting anything in - the widest single
+  # character of the text. A line whose free segment is narrower than that is
+  # SKIPPED: the band moves down a line and looks again, and tells the breaker
+  # how many lines it left empty. Answering a width of zero, or of a sliver,
+  # did not do that: the breaker's character fallback took one character
+  # anyway, and a shape wider than the column had the text running through
+  # it one letter per line. Only a shape ever causes a skip - a column
+  # narrower than the minimum with nothing in the way is answered as it is,
+  # which is what keeps this from looping.
+  method TextAvoidBand {shapes margin x top leading spacing minimum base line paragraph running} {
+    lassign [{*}$base $line $paragraph $running] width offset
+    set left [expr {$x + $offset}]
     set right [expr {$left + $width}]
-    set blocked {}
-    foreach shape $shapes {
-      set interval [my TextAvoidInterval $shape $margin $bandTop $bandBottom]
-      if {[llength $interval]} {
-        lappend blocked $interval
-      }
-    }
-    if {![llength $blocked]} {
-      return [list $width 0]
-    }
+    set skipped 0
+    while {1} {
+      set baseline [expr {$top + ($running + $skipped) * $leading + $paragraph * $spacing}]
+      set bandTop [expr {$baseline - $leading}]
+      set bandBottom $baseline
 
-    # The free segments of {left right}, in order. Sorting first is what makes
-    # overlapping shapes collapse into one gap instead of cutting each other
-    # into slivers.
-    set segments {}
-    set cursor $left
-    foreach interval [lsort -real -index 0 $blocked] {
-      lassign $interval from to
-      if {$to <= $cursor} {
-        continue
+      set blocked {}
+      foreach shape $shapes {
+        set interval [my TextAvoidInterval $shape $margin $bandTop $bandBottom]
+        if {[llength $interval]} {
+          lappend blocked $interval
+        }
       }
-      if {$from > $cursor} {
-        lappend segments [list $cursor [expr {min($from, $right)}]]
+      if {![llength $blocked]} {
+        return [list $width $offset $skipped]
       }
-      set cursor [expr {max($cursor, $to)}]
-      if {$cursor >= $right} {
-        break
-      }
-    }
-    if {$cursor < $right} {
-      lappend segments [list $cursor $right]
-    }
 
-    # The widest segment, and never a negative width: a line completely
-    # covered gets nothing to set, and the breaker then moves its words to the
-    # next line rather than producing a line of single characters.
-    set best {0 0}
-    set bestWidth 0
-    foreach segment $segments {
-      lassign $segment from to
-      if {$to - $from > $bestWidth} {
-        set bestWidth [expr {$to - $from}]
-        set best $segment
+      # The free segments of {left right}, in order. Sorting first is what
+      # makes overlapping shapes collapse into one gap instead of cutting each
+      # other into slivers.
+      set segments {}
+      set cursor $left
+      foreach interval [lsort -real -index 0 $blocked] {
+        lassign $interval from to
+        if {$to <= $cursor} {
+          continue
+        }
+        if {$from > $cursor} {
+          lappend segments [list $cursor [expr {min($from, $right)}]]
+        }
+        set cursor [expr {max($cursor, $to)}]
+        if {$cursor >= $right} {
+          break
+        }
       }
+      if {$cursor < $right} {
+        lappend segments [list $cursor $right]
+      }
+
+      # The widest segment. Wide enough for a character, and the line is set
+      # in it; otherwise the line stays empty and the next one is tried.
+      set best {0 0}
+      set bestWidth 0
+      foreach segment $segments {
+        lassign $segment from to
+        if {$to - $from > $bestWidth} {
+          set bestWidth [expr {$to - $from}]
+          set best $segment
+        }
+      }
+      if {$bestWidth >= $minimum && $bestWidth > 0} {
+        return [list $bestWidth [expr {[lindex $best 0] - $x}] $skipped]
+      }
+      incr skipped
     }
-    if {$bestWidth <= 0} {
-      return [list 0 0]
-    }
-    return [list $bestWidth [expr {[lindex $best 0] - $left}]]
   }
 
   # Which x interval a shape forbids in the band between two y values, or the

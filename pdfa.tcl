@@ -163,7 +163,7 @@ oo::define ::tclpdf::document::document {
         }
       }
       default {
-        return -code error "tclpdf: PDF/A conformance must be B or U, not\
+        return -code error "tclpdf: PDF/A conformance must be B, U or A, not\
             \"[dict get $current conformance]\""
       }
     }

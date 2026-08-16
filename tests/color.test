@@ -13,6 +13,8 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf::color
+package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
 
 test color-parse-1.1 {a name from the table} -body {
   ::tclpdf::color parse steelblue
@@ -94,6 +96,157 @@ test color-components-3.3 {the right number still works, keyed and bare} -body {
     lindex [::tclpdf::color parse $spec] 0
   }
 } -result {rgb cmyk gray rgb cmyk gray}
+
+# -- the separation colour space object -----------------------------------
+#
+# The operator alone is not enough: "/Varnish cs" names a resource, and until
+# 2026-08-16 nothing wrote it - the shipped colour example carried a bad
+# colour space since the first check-in and poppler said so. Everything below
+# reads the WRITTEN file, because that is where the object has to be.
+
+# A one-page document with a rectangle in the given colour, written and read
+# back: {bytes content}. The written file is what a reader sees; the content
+# buffer is where the operators are, since the stream is deflated.
+proc ::tclpdfTest::separationDocument {name colour args} {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {20 20} -size {40 20} {*}$args -fill $colour
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch $name.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  return [list $bytes $content]
+}
+
+test color-separation-5.1 {the object and the resource entry exist} -body {
+  lassign [::tclpdfTest::separationDocument sep-object \
+      {separation Varnish {cmyk 0 0 0 0.2} 1}] bytes content
+  list [regexp {\[/Separation /Varnish /DeviceCMYK \d+ 0 R\]} $bytes] \
+      [regexp {/ColorSpace << /Varnish \d+ 0 R >>} $bytes] \
+      [regexp "/Varnish cs\n1 scn" $content]
+} -result {1 1 1}
+
+test color-separation-5.2 {the tint transform: what tint 0 means per alternate} -body {
+  # Tint 0 is NO ink. In CMYK that is 0 0 0 0; in RGB and grey, which count
+  # light rather than ink, it is white - 1 1 1 and 1. A separation with an
+  # RGB alternate and C0 [0 0 0] renders its light tints as dark grey.
+  set result {}
+  foreach {alternate expected} {
+    {cmyk 0 0 0 0.2} {/C0 [0 0 0 0] /C1 [0 0 0 0.2]}
+    {rgb 0.9 0.7 0.1} {/C0 [1 1 1] /C1 [0.9 0.7 0.1]}
+    {gray 0.5} {/C0 [1] /C1 [0.5]}
+  } {
+    lassign [::tclpdfTest::separationDocument sep-c0 \
+        [list separation Spot $alternate 0.5]] bytes content
+    lappend result [expr {[string first \
+        "/FunctionType 2 /Domain \[0 1\] $expected /N 1" $bytes] >= 0}]
+  }
+  set result
+} -result {1 1 1}
+
+test color-separation-5.3 {the alternate is spelled as a device space} -body {
+  set result {}
+  foreach {alternate space} {{rgb 1 0 0} DeviceRGB {gray 0.5} DeviceGray} {
+    lassign [::tclpdfTest::separationDocument sep-space \
+        [list separation Spot $alternate]] bytes content
+    lappend result [regexp "/Separation /Spot /$space " $bytes]
+  }
+  set result
+} -result {1 1}
+
+test color-separation-5.4 {stroke as well as fill, and one object for both} -body {
+  lassign [::tclpdfTest::separationDocument sep-stroke \
+      {separation Spot {rgb 1 0 0} 0.5} -stroke {separation Spot {rgb 1 0 0} 1}] \
+      bytes content
+  list [regexp "/Spot cs\n0.5 scn" $content] [regexp "/Spot CS\n1 SCN" $content] \
+      [regexp -all {/Separation /Spot} $bytes]
+} -result {1 1 1}
+
+test color-separation-5.5 {a name with a space is escaped, in the operator and the resource} -body {
+  lassign [::tclpdfTest::separationDocument sep-escape \
+      {separation {PANTONE 877} {cmyk 0 0 0 0.3} 0.6}] bytes content
+  list [regexp {/ColorSpace << /PANTONE#20877 } $bytes] \
+      [regexp {/Separation /PANTONE#20877 /DeviceCMYK} $bytes] \
+      [regexp "/PANTONE#20877 cs" $content]
+} -result {1 1 1}
+
+test color-separation-5.6 {a text in a spot colour gets the resource as well} -body {
+  # The text module produces its own colour operator; without going through
+  # the same registration a heading in a spot colour would name a resource
+  # that does not exist - the same fault, one module further on.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font -family helvetica -size 10 -color {separation Ink {rgb 0 0 0.5} 1}
+  $doc text "spot" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch sep-text.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Separation /Ink /DeviceRGB} $bytes] [regexp "/Ink cs\n1 scn" $content]
+} -result {1 1}
+
+test color-separation-5.7 {a second write is byte-identical} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {20 20} -size {40 20} -fill {separation Spot {rgb 1 0 0} 0.5}
+  lassign [::tclpdfTest::writeTwice $doc sep-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] [regexp -all {/Separation /Spot} $first]
+} -result {1 1}
+
+test color-separation-5.8 {one name, one alternate} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {20 20} -size {40 20} -fill {separation Spot {rgb 1 0 0} 0.5}
+  # The same alternate again is fine - the same plate, another tint.
+  $doc rect -at {20 50} -size {40 20} -fill {separation Spot {rgb 1 0 0} 1}
+  set code [catch {
+    $doc rect -at {20 80} -size {40 20} -fill {separation Spot {cmyk 0 1 1 0} 1}
+  } message]
+  $doc destroy
+  list $code $message
+} -match glob -result {1 {*separation "Spot" is already defined*}}
+
+test color-separation-5.9 {a colour space family cannot be a separation name} -body {
+  # "/Pattern cs" would mean the pattern space, whatever the resource says.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {
+    $doc rect -at {20 20} -size {40 20} -fill {separation Pattern {rgb 1 0 0} 1}
+  } message]
+  $doc destroy
+  list $code $message
+} -match glob -result {1 {*"Pattern" cannot be the name of a separation*}}
+
+test color-separation-5.10 {PDF/A refuses a CMYK alternate at the call} -body {
+  # Measured with veraPDF: under the sRGB output intent a separation whose
+  # alternate is DeviceCMYK fails ISO 19005-2, 6.2.4.3; RGB and grey pass.
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3
+  set code [catch {
+    $doc rect -at {20 20} -size {40 20} -fill {separation Gold {cmyk 0 0.2 0.8 0} 1}
+  } message]
+  set fine [catch {
+    $doc rect -at {20 20} -size {40 20} -fill {separation Gold {rgb 0.9 0.7 0.1} 1}
+  }]
+  $doc destroy
+  list $code $message $fine
+} -match glob -result {1 {*PDF/A*"Gold" needs an RGB or grey alternate*} 0}
+
+test color-separation-5.11 {PDF/A declared after the colour: refused at write, no file left} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {20 20} -size {40 20} -fill {separation Gold {cmyk 0 0.2 0.8 0} 1}
+  $doc pdfa -part 3
+  set result [::tclpdfTest::writes $doc sep-pdfa-late.pdf]
+  $doc destroy
+  set result
+} -result {1 0}
 
 test color-noTk-4.1 {resolving names does not pull in Tk} -body {
   # The whole reason this module carries its own table. If Tk were loaded the

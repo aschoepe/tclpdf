@@ -59,7 +59,7 @@ oo::define ::tclpdf::document::document {
     }
     if {[dict get $options url] ne {}} {
       lappend pairs A [::tclpdf::pdfObj dictionary [list \
-          S /URI URI [::tclpdf::pdfObj str [dict get $options url]]]]
+          S /URI URI [::tclpdf::pdfObj str [my LinkUri [dict get $options url]]]]]
     } elseif {[dict get $options structure] ne {}} {
       # A structure destination names the ELEMENT rather than a place on a
       # page (12.3.2.3), so the link still lands on the right thing after the
@@ -74,8 +74,11 @@ oo::define ::tclpdf::document::document {
       my StructureDestinationGuard "link -structure"
       lappend pairs A [my structureDestination [dict get $options structure]]
     } else {
+      # The page may not exist yet - a link forward at a page added later
+      # is allowed, and [destination] says at write time if it never came.
       lappend pairs Dest [my destination [dict get $options page] \
-          [dict get $options to] [dict get $options zoom]]
+          [dict get $options to] [dict get $options zoom] \
+          "link -page [dict get $options page] on page [my page current]"]
     }
     # Reserved before the dictionary is written, because the StructParent that
     # goes INTO it can only be asked for once the object has a number.
@@ -119,6 +122,34 @@ oo::define ::tclpdf::document::document {
       }
     }
     return $missing
+  }
+
+  # The URI as the file may carry it: 7-bit ASCII (ISO 32000-1 Table 206),
+  # everything else percent-encoded from its UTF-8 bytes (RFC 3986 2.1).
+  #
+  # Handed to [str] as it came, a URL with an umlaut in it became a UTF-16BE
+  # hex string - readable to a Tcl programmer and to no browser: what a reader
+  # passes on is the bytes of the string, and the reader was never told which
+  # encoding they were in. Measured with https://ü.de/ä, which arrived as
+  # <feff0068...00fc...>.
+  #
+  # What stays as it is: the unreserved and the reserved characters of RFC
+  # 3986 2.2 and 2.3, and the percent sign - so an already encoded %C3%BC is
+  # not encoded a second time. Everything else, a space included, becomes
+  # %XX per byte, which is what a browser does to the same address.
+  method LinkUri {url} {
+    set kept {ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789}
+    append kept {-._~} {:/?#[]@} {!$&'()*+,;=} %
+    set result {}
+    foreach byte [split [encoding convertto utf-8 $url] {}] {
+      if {[string first $byte $kept] >= 0} {
+        append result $byte
+      } else {
+        binary scan $byte cu code
+        append result [format %%%02X $code]
+      }
+    }
+    return $result
   }
 
   # Annotations are collected per page and picked up when the page is

@@ -127,11 +127,29 @@ oo::define ::tclpdf::document::document {
     # spreading the gap over all of them would need character spacing and would
     # make two rows of different lengths line up differently.
     if {$fillWidth > 0 && $room >= $fillWidth} {
+      # How many copies: as many as the ROW of them measures within the room,
+      # not the room divided by one copy. The two differ as soon as
+      # -spacing is in play - Tc goes between every two characters of the
+      # run, and one copy measured on its own carries none of it, so the
+      # division answered as if there were no spacing and the dots ran past
+      # the right hand end. The quotient is the starting point; the run is
+      # then measured as it will be drawn and shortened until it fits, or
+      # lengthened while it still does - a negative spacing narrows it.
       set count [expr {int($room / $fillWidth)}]
-      set run [string repeat $fill $count]
+      while {$count > 0
+          && [my textWidth [string repeat $fill $count] {*}$font] > $room} {
+        incr count -1
+      }
+      while {[my textWidth [string repeat $fill [expr {$count + 1}]] {*}$font]
+          <= $room} {
+        incr count
+      }
       # An artifact: the dots are decoration. Outside a tagged document the
       # option costs nothing, which is why it is not made conditional here.
-      my text $run -at [list $fillAt $y] -tag Artifact {*}$font
+      if {$count > 0} {
+        my text [string repeat $fill $count] -at [list $fillAt $y] \
+            -tag Artifact {*}$font
+      }
     }
     if {[dict get $options right] ne {}} {
       my text [dict get $options right] \

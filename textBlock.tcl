@@ -30,7 +30,25 @@ package require tclpdf::afm 1.0-
 package require tclpdf::option 1.0-
 package require tclpdf::text 1.0-
 
-namespace eval ::tclpdf::textBlock {}
+namespace eval ::tclpdf::textBlock {
+  # The options of a block, with their defaults - the same list [text] takes,
+  # so that ONE option list serves measuring and drawing: a caller builds
+  # {-width 170 -align justify -indent 5} once, asks [textHeight] whether the
+  # block still fits and then hands the same list to [text]. Refusing -align
+  # here would break exactly that. What only the drawing uses - -align,
+  # -rotate, -tag, -expansion - is accepted and has no effect on a measurement,
+  # and -height is left out of one on purpose: the height of a block is what it
+  # would take WITHOUT a limit, that is what a limit is compared against.
+  #
+  # An option outside this list is an error, not silence. Until now the two
+  # measuring methods handed everything but the width on to the font state,
+  # which ignores what it does not know: [textHeight $text -width 60 -indent 10]
+  # answered the height of an unindented block, and [textLines ... -foo 1]
+  # answered at all.
+  variable options {at {} rotate 0 align left width {} anchor baseline
+      height {} indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
+      avoid {} avoidMargin 0 tag P expansion {}}
+}
 
 oo::define ::tclpdf::document::document {
 
@@ -38,11 +56,60 @@ oo::define ::tclpdf::document::document {
   # Explicit newlines are honoured and start a new paragraph.
   method textLines {string args} {
     my TextInit
-    lassign [my TextBlockWidth $args] width args
-    return [lmap line [my TextBlockBreak $string $args \
-        [list apply {{width line paragraph running} {list $width 0}} $width]] {
-      dict get $line text
-    }]
+    set options [my TextBlockOptions $args textLines]
+    lassign [my TextBlockLines $string $options] lines
+    return [lmap line $lines {dict get $line text}]
+  }
+
+  # The height a block would occupy, without drawing it - for deciding whether
+  # it still fits on the page.
+  #
+  # Exactly what [text] advances by: the difference between the y it returns
+  # and the y it was given, with the same options. Counting lines and
+  # multiplying by the leading was that only for the plainest block - it left
+  # out the paragraph spacing, the ascender of -anchor top and the lines a
+  # shape pushes down, so a caller who placed the next element by it landed
+  # on the block.
+  method textHeight {string args} {
+    my TextInit
+    set options [my TextBlockOptions $args textHeight]
+    lassign [my TextBlockLines $string $options] lines state leading lift
+    lassign [my TextBlockPlace $lines $leading \
+        [dict get $options paragraphSpacing] {}] drawn rest below
+    return [expr {$lift + $below}]
+  }
+
+  # The options of a measuring call, read the way [text] reads its own.
+  #
+  # The width may be given either way, and BOTH have to work.
+  #
+  #   $doc textHeight $text -width 170      what the manual says
+  #   $doc textHeight $text 170             what the code has always taken
+  #
+  # The manual documented the option form for four releases while the methods
+  # took the width positionally - so "textLines $text -width 170" bound the
+  # STRING "-width" as the width, every word was too wide for it, and the
+  # result came back one character per line. textHeight then multiplied that
+  # count by the leading and answered 287 mm for a two-line paragraph. No
+  # error anywhere; the numbers are simply wrong.
+  #
+  # Told apart by the leading dash, because a width never starts with one.
+  method TextBlockOptions {arguments context} {
+    if {[llength $arguments] && [string index [lindex $arguments 0] 0] ne "-"} {
+      set arguments [list -width {*}$arguments]
+    }
+    set defaults $::tclpdf::textBlock::options
+    foreach name $::tclpdf::text::stateOptions {
+      dict set defaults $name [my TextGet $name]
+    }
+    set defaults [dict merge $defaults $::tclpdf::text::runOptions]
+    set options [::tclpdf::option parse $defaults $arguments $context]
+    if {[dict get $options width] eq {}} {
+      return -code error "tclpdf: a text block needs -width"
+    }
+    # A measurement has no limit: see the note on the option list above.
+    dict set options height {}
+    return $options
   }
 
   # The line breaker itself. Everything wrapped in this package comes through
@@ -50,33 +117,51 @@ oo::define ::tclpdf::document::document {
   #
   # band is a command prefix called with three numbers: the index of the line
   # inside its paragraph (0 for the first), the index of the paragraph, and the
-  # running line number over the whole block. It answers {width offset}: how
-  # wide this line may be, and how far in from the left edge it starts. The
-  # running number is what lets a band know its vertical position - which is
-  # everything, once the text has to flow around a shape. A constant band is what [textLines] asks for; an indent
-  # narrows the first line of each paragraph; flowing around a shape varies
-  # every line. Keeping that decision outside the loop is what lets all three
-  # share one breaker instead of growing a second copy.
+  # running line number over the whole block. It answers {width offset
+  # ?skipped?}: how wide this line may be, how far in from the left edge it
+  # starts, and how many lines above it the band left EMPTY - a line that a
+  # shape covers completely is not set at all, and the text goes on below the
+  # shape; without the third element nothing is skipped. The running number is
+  # what lets a band know its vertical position - which is everything, once
+  # the text has to flow around a shape. A constant band is what [textLines]
+  # asks for; an indent narrows the first line of each paragraph; flowing
+  # around a shape varies every line. Keeping that decision outside the loop
+  # is what lets all three share one breaker instead of growing a second copy.
   #
-  # Returns one dictionary per line: text, offset, width, paragraph, and
-  # first - whether it opens its paragraph.
+  # Returns one dictionary per line: text, offset, width, paragraph, first -
+  # whether it opens its paragraph -, running - which line of the block it is,
+  # skipped ones counted -, and from: where in the STRING the text of this line
+  # begins. That last one is what makes the rest of a height-limited block a
+  # plain tail of the original: the line before the cut says where it stops,
+  # and nothing has to be put back together from lines - which turned a soft
+  # hyphen into a hard one and a word broken by character into several words.
   method TextBlockBreak {string arguments band} {
     set lines {}
     set paragraphIndex 0
     set globalLine 0
+    set paragraphFrom 0
     foreach paragraph [split $string \n] {
       if {[string trim $paragraph] eq {}} {
+        # Not skipped by a shape: there is nothing to keep out of it, and
+        # moving it down would add its own blank line below the shape.
         lassign [{*}$band 0 $paragraphIndex $globalLine] width offset
         lappend lines [dict create text {} offset $offset width $width hyphen 0 \
-            paragraph $paragraphIndex first 1]
+            paragraph $paragraphIndex first 1 running $globalLine \
+            from $paragraphFrom]
         incr paragraphIndex
         incr globalLine
+        incr paragraphFrom [expr {[string length $paragraph] + 1}]
         continue
       }
       set inParagraph 0
-      lassign [{*}$band $inParagraph $paragraphIndex $globalLine] width offset
+      lassign [my TextBlockAsk $band $inParagraph $paragraphIndex $globalLine] \
+          width offset running
       set current {}
-      foreach word [regexp -all -inline {\S+} $paragraph] {
+      set currentFrom 0
+      foreach span [regexp -all -inline -indices {\S+} $paragraph] {
+        lassign $span wordFrom wordTo
+        set word [string range $paragraph $wordFrom $wordTo]
+        incr wordFrom $paragraphFrom
         # NOT [expr {$current eq {} ? $word : "..."}]: expr normalises a word
         # that looks like a number, and "1234.50" comes back as "1234.5". The
         # trailing zero is gone from every amount in every wrapped paragraph,
@@ -84,11 +169,14 @@ oo::define ::tclpdf::document::document {
         # figure is wrong.
         if {$current eq {}} {
           set candidate $word
+          set candidateFrom $wordFrom
         } else {
           set candidate "$current $word"
+          set candidateFrom $currentFrom
         }
         if {[my textWidth $candidate {*}$arguments] <= $width} {
           set current $candidate
+          set currentFrom $candidateFrom
           continue
         }
         # The word does not fit. Two things can end the line now: an offer
@@ -102,9 +190,16 @@ oo::define ::tclpdf::document::document {
         while {1} {
           set taken [my TextBlockHyphen $current $word $width $arguments]
           if {[llength $taken]} {
-            lassign $taken emit word
+            set from [expr {$current ne {} ? $currentFrom : $wordFrom}]
+            lassign $taken emit remainder
+            # The head consumed this much of the word - measured on the word
+            # itself rather than on the head, which carries the prefix and the
+            # hyphen and has lost the marks it broke at.
+            incr wordFrom [expr {[string length $word] - [string length $remainder]}]
+            set word $remainder
           } elseif {$current ne {}} {
             set emit $current
+            set from $currentFrom
           } else {
             break
           }
@@ -115,10 +210,11 @@ oo::define ::tclpdf::document::document {
           lappend lines [dict create text $emit offset $offset \
               width $width paragraph $paragraphIndex \
               hyphen [expr {[llength $taken] ? 1 : 0}] \
-              first [expr {$inParagraph == 0}]]
+              first [expr {$inParagraph == 0}] running $running from $from]
           incr inParagraph
-          incr globalLine
-          lassign [{*}$band $inParagraph $paragraphIndex $globalLine] width offset
+          set globalLine [expr {$running + 1}]
+          lassign [my TextBlockAsk $band $inParagraph $paragraphIndex $globalLine] \
+              width offset running
           set current {}
           if {[llength $taken] && [my textWidth $word {*}$arguments] <= $width} {
             break
@@ -127,7 +223,10 @@ oo::define ::tclpdf::document::document {
         # No offer was small enough for this width. The remaining marks come
         # out before the character fallback below: they are invisible when
         # drawn, and leaving them in would make it count characters that never
-        # reach the page.
+        # reach the page. The word with its marks is kept beside the stripped
+        # one, because the position in the string has to advance over the
+        # marks as well.
+        set marked $word
         if {[string first "\u00AD" $word] >= 0
             && [my textWidth $word {*}$arguments] > $width} {
           set word [string map [list "\u00AD" {}] $word]
@@ -142,22 +241,54 @@ oo::define ::tclpdf::document::document {
           }
           lappend lines [dict create text [string range $word 0 $take-1] \
               offset $offset width $width paragraph $paragraphIndex hyphen 0 \
-              first [expr {$inParagraph == 0}]]
+              first [expr {$inParagraph == 0}] running $running from $wordFrom]
           incr inParagraph
-          incr globalLine
-          lassign [{*}$band $inParagraph $paragraphIndex $globalLine] width offset
+          set globalLine [expr {$running + 1}]
+          lassign [my TextBlockAsk $band $inParagraph $paragraphIndex $globalLine] \
+              width offset running
+          set consumed [my TextBlockConsumed $marked $take]
+          incr wordFrom $consumed
+          set marked [string range $marked $consumed end]
           set word [string range $word $take end]
         }
         set current $word
+        set currentFrom $wordFrom
       }
       if {$current ne {}} {
         lappend lines [dict create text $current offset $offset width $width hyphen 0 \
-            paragraph $paragraphIndex first [expr {$inParagraph == 0}]]
-        incr globalLine
+            paragraph $paragraphIndex first [expr {$inParagraph == 0}] \
+            running $running from $currentFrom]
+        set globalLine [expr {$running + 1}]
       }
       incr paragraphIndex
+      incr paragraphFrom [expr {[string length $paragraph] + 1}]
     }
     return $lines
+  }
+
+  # Ask the band about a line. Answers {width offset running}: running is the
+  # line the band found room on - the one asked about, or a later one when the
+  # band skipped some.
+  method TextBlockAsk {band line paragraph running} {
+    lassign [{*}$band $line $paragraph $running] width offset skipped
+    if {$skipped eq {}} {
+      set skipped 0
+    }
+    return [list $width $offset [expr {$running + $skipped}]]
+  }
+
+  # How many characters of a word WITH its soft hyphens the first n
+  # characters of the same word without them stand for.
+  method TextBlockConsumed {marked count} {
+    set consumed 0
+    set seen 0
+    while {$seen < $count && $consumed < [string length $marked]} {
+      if {[string index $marked $consumed] ne "\u00AD"} {
+        incr seen
+      }
+      incr consumed
+    }
+    return $consumed
   }
 
   # The longest beginning of a word that still fits WITH a hyphen after it, and
@@ -191,52 +322,22 @@ oo::define ::tclpdf::document::document {
     return {}
   }
 
-  # The height a block would occupy, without drawing it - for deciding whether
-  # it still fits on the page.
-  # The width may be given either way, and BOTH have to work.
+  # The lines of a block, from a parsed option dictionary: the band built from
+  # the indents and the shapes, the string broken against it. Shared by the
+  # drawing and the two measuring methods, so that all three break the same
+  # text the same way - a height measured over different lines than the ones
+  # drawn is worth nothing.
   #
-  #   $doc textHeight $text -width 170      what the manual says
-  #   $doc textHeight $text 170             what the code has always taken
-  #
-  # The manual documented the option form for four releases while the methods
-  # took the width positionally - so "textLines $text -width 170" bound the
-  # STRING "-width" as the width, every word was too wide for it, and the
-  # result came back one character per line. textHeight then multiplied that
-  # count by the leading and answered 287 mm for a two-line paragraph. No
-  # error anywhere; the numbers are simply wrong.
-  #
-  # Told apart by the leading dash, because a width never starts with one.
-  method TextBlockWidth {arguments} {
-    if {[llength $arguments] && [string index [lindex $arguments 0] 0] ne "-"} {
-      return [list [lindex $arguments 0] [lrange $arguments 1 end]]
-    }
-    set options [::tclpdf::option partition {width {}} $arguments]
-    set width [dict get [lindex $options 0] width]
-    if {$width eq {}} {
-      return -code error "tclpdf: a text block needs -width"
-    }
-    return [list $width [lindex $options 1]]
-  }
-
-  method textHeight {string args} {
-    my TextInit
-    lassign [my TextBlockWidth $args] width args
-    set state [my TextMerge $args]
-    set count [llength [my textLines $string $width {*}$args]]
-    return [expr {$count * [::tclpdf::geometry fromPoints \
-        [dict get $state leading] [my cget -unit]]}]
-  }
-
-  # Called by [text] when -width is given. Returns the y coordinate BELOW the
-  # block, so the next element can be placed without counting lines.
-  method TextParagraph {string options} {
-    set state [my TextMerge [my TextOverrides $options]]
+  # Returns {lines state leading lift}: the font state the block is set in,
+  # its leading in the document unit, and how far below -at its first
+  # baseline sits.
+  method TextBlockLines {string options} {
     set width [dict get $options width]
-    # Mirrored once, here, for every line of the block - see TextAlign in
-    # text.tcl for what "left" means in a right-to-left line.
-    set align [my TextAlign [dict get $options align] $state]
-    lassign [dict get $options at] x y
-
+    if {![string is double -strict $width] || $width <= 0} {
+      return -code error "tclpdf: -width must be a positive number, not\
+          \"$width\""
+    }
+    set state [my TextMerge [my TextOverrides $options]]
     set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
         [my cget -unit]]
 
@@ -267,14 +368,28 @@ oo::define ::tclpdf::document::document {
     if {[llength [dict get $options avoid]]} {
       package require tclpdf::textAvoid
       my TextAvoidCheck [dict get $options avoid]
-      set inner [expr {$width - $indent - $indentRight}]
+      # The shapes are page positions, so the block needs one too - [text]
+      # always has it, a measuring call may have forgotten it.
+      set at [::tclpdf::option point [dict get $options at] -at "a block with -avoid"]
+      lassign $at x y
       # "my", not the object name: the band is expanded inside a method of
       # this object, and TextAvoidBand is private - reaching it from outside
       # would need an export that nothing else wants.
+      #
+      # It wraps the indent band rather than replacing it: the shapes narrow
+      # whatever the indents leave, and the offset it answers is measured
+      # from x like the indent band's, so a paragraph with -indent 10 starts
+      # its lines at 30 with a shape on the page as it does without one.
+      # Replacing the band lost that - every line of an indented paragraph
+      # started at x as soon as -avoid was given, whether or not any shape
+      # came near it. And the top it works from is the first BASELINE, y plus
+      # the lift, the same reference the drawing uses: handed the anchor, it
+      # took a block set with -anchor top to sit one ascender higher than it
+      # did, and the first line ran through the shape at full width.
       set band [list my TextAvoidBand [dict get $options avoid] \
-          [dict get $options avoidMargin] \
-          [expr {$x + $indent}] $y $inner $leading \
-          [dict get $options paragraphSpacing]]
+          [dict get $options avoidMargin] $x [expr {$y + $lift}] $leading \
+          [dict get $options paragraphSpacing] \
+          [my TextBlockWidest $string [my TextOverrides $options]] $band]
     }
 
     set lines [my TextBlockBreak $string [my TextOverrides $options] $band]
@@ -292,67 +407,100 @@ oo::define ::tclpdf::document::document {
              != [dict get [lindex $lines $index] paragraph]}]
       lset lines $index [dict replace [lindex $lines $index] closes $closes]
     }
+    return [list $lines $state $leading $lift]
+  }
+
+  # The widest single character of a string - the least a line has to offer
+  # for the character fallback of the breaker to set anything WITHIN it. A
+  # band narrower than that beside a shape would take one character anyway
+  # and let it run into the shape; the avoiding band leaves such a line
+  # empty instead. Measured once per block, over the distinct characters.
+  method TextBlockWidest {string arguments} {
+    set widest 0
+    foreach char [lsort -unique [split [regsub -all {\s} $string {}] {}]] {
+      set width [my textWidth $char {*}$arguments]
+      if {$width > $widest} {
+        set widest $width
+      }
+    }
+    return $widest
+  }
+
+  # Where each line sits and which lines a height limit holds back.
+  #
+  # Returns {drawn rest below}: drawn is a list of {line top} pairs - top the
+  # distance of the line's baseline below the first one -, rest the lines
+  # held back, below the distance of the baseline one line under the last
+  # drawn one.
+  #
+  # The paragraph spacing is added between two DRAWN paragraphs and nowhere
+  # else. It used to be counted whenever the paragraph changed, drawn or not,
+  # so with a limit the y handed back moved down by one spacing per held-back
+  # paragraph: a caller continuing under the block left a gap for text that
+  # was set in the next column instead.
+  method TextBlockPlace {lines leading spacing limit} {
+    set drawn {}
+    set rest {}
+    set spacings 0
+    set below 0
+    set previous {}
+    foreach line $lines {
+      set paragraph [dict get $line paragraph]
+      set advance [expr {$previous ne {} && $paragraph != $previous ? $spacing : 0}]
+      set top [expr {[dict get $line running] * $leading + $spacings + $advance}]
+      # Once one line has been held back, everything after it goes with it -
+      # otherwise a short line would jump ahead of a long one.
+      if {[llength $rest] || ($limit ne {} && $top + $leading > $limit)} {
+        lappend rest $line
+        continue
+      }
+      set spacings [expr {$spacings + $advance}]
+      lappend drawn [list $line $top]
+      set below [expr {$top + $leading}]
+      set previous $paragraph
+    }
+    return [list $drawn $rest $below]
+  }
+
+  # Called by [text] when -width is given. Returns the y coordinate BELOW the
+  # block, so the next element can be placed without counting lines.
+  method TextParagraph {string options} {
+    lassign [my TextBlockLines $string $options] lines state leading lift
+    # Mirrored once, here, for every line of the block - see TextAlign in
+    # text.tcl for what "left" means in a right-to-left line.
+    set align [my TextAlign [dict get $options align] $state]
+    lassign [dict get $options at] x y
 
     # A height limit turns the block into the first of several: what fits is
     # drawn, what does not is handed back. The caller decides where the rest
     # goes - the next column, the next page - which is why this method does
     # not try to know.
     set limit [dict get $options height]
-    set spacing [dict get $options paragraphSpacing]
-    set drawn {}
-    set rest {}
-    set offsetY 0
-    set previousParagraph {}
-    foreach line $lines {
-      set paragraph [dict get $line paragraph]
-      if {$previousParagraph ne {} && $paragraph != $previousParagraph} {
-        set offsetY [expr {$offsetY + $spacing}]
-      }
-      set previousParagraph $paragraph
-      if {[llength $rest] || ($limit ne {} && $offsetY + $leading > $limit)} {
-        # Once one line has been held back, everything after it goes with it -
-        # otherwise a short line would jump ahead of a long one.
-        lappend rest $line
-        continue
-      }
-      lappend drawn [list $line $offsetY]
-      set offsetY [expr {$offsetY + $leading}]
-    }
+    lassign [my TextBlockPlace $lines $leading \
+        [dict get $options paragraphSpacing] $limit] drawn rest below
 
-    set last [expr {[llength $drawn] - 1}]
-    set index 0
     foreach entry $drawn {
-      lassign $entry line lineOffset
+      lassign $entry line top
       if {[dict get $line text] ne {}} {
         my TextParagraphLine [dict get $line text] $state \
             [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
             $align [dict get $line closes] [dict get $options rotate] \
-            [expr {$lift + $lineOffset}] [dict get $line hyphen]
+            [expr {$lift + $top}] [dict get $line hyphen]
       }
-      incr index
     }
     if {$limit ne {}} {
       # Text, not lines: the rest may have to be broken again for a column of
       # a different width, and handing back lines would silently fix the old
-      # break points. Paragraphs keep their boundaries.
+      # break points. And the TAIL OF THE STRING, not lines joined back
+      # together: the first line held back knows where in the string it
+      # begins, and everything from there on is the rest - soft hyphens still
+      # soft, a word the fallback broke by character still one word, the
+      # paragraph breaks where they were.
       set text {}
-      set current {}
-      set paragraph {}
-      foreach line $rest {
-        if {$paragraph ne {} && [dict get $line paragraph] != $paragraph} {
-          lappend text [join $current { }]
-          set current {}
-        }
-        set paragraph [dict get $line paragraph]
-        if {[dict get $line text] ne {}} {
-          lappend current [dict get $line text]
-        }
+      if {[llength $rest]} {
+        set text [string range $string [dict get [lindex $rest 0] from] end]
       }
-      if {[llength $current]} {
-        lappend text [join $current { }]
-      }
-      return [dict create y [expr {$y + $lift + $offsetY}] \
-          rest [join $text \n]]
+      return [dict create y [expr {$y + $lift + $below}] rest $text]
     }
     # Where the next element goes: the baseline one line below the block. The
     # lift belongs IN it - with -anchor top the caller gave the top edge, and
@@ -363,7 +511,7 @@ oo::define ::tclpdf::document::document {
     # For a rotated block the block does not run down the page at all; a caller
     # placing the next element has the angle and can say better than this
     # method where "below" is.
-    return [expr {$y + $lift + $offsetY}]
+    return [expr {$y + $lift + $below}]
   }
 
   # Alignment inside the column is a shift along the baseline and is passed

@@ -64,6 +64,11 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: shading $kind needs -at {x y} and -size {w h}"
     }
     set number [my ShadingObject $kind $options]
+    # The clip's numbers are checked BEFORE anything is written: with -from
+    # and -to given the shading itself never reads -at, so a bad corner used
+    # to surface only in [clip] - after the mark and the "q" were out.
+    my coords {*}[dict get $options at]
+    my extent [dict get $options size]
     # A gradient is content on the page like any shape: part of an open
     # Figure, decoration otherwise. Without the bracket it would belong to no
     # element at all, which PDF/UA counts as a defect.
@@ -213,6 +218,15 @@ oo::define ::tclpdf::document::document {
     } else {
       set radius [expr {max($width, $height) / 2.0}]
     }
+    # Both radii of a type 3 shading are lengths and shall not be negative
+    # (Table 80, r0 and r1 >= 0). A reader given one may draw the circles
+    # inside out or nothing at all.
+    foreach {option value} [list -radius $radius \
+        -innerRadius [dict get $options innerRadius]] {
+      if {![string is double -strict $value] || $value < 0} {
+        return -code error "tclpdf: $option is a length of 0 or more, not \"$value\""
+      }
+    }
     if {$mapped} {
       lassign [my coords {*}$focus] fx fy
       lassign [my coords {*}$centre] cx cy
@@ -242,6 +256,23 @@ oo::define ::tclpdf::document::document {
     } elseif {[llength $stops] != $count} {
       return -code error "tclpdf: -stops has [llength $stops] values but there\
           are $count colours"
+    } else {
+      # The inner stops become the Bounds of the stitching function, and
+      # those shall be in increasing order and strictly inside the domain
+      # (7.10.4: Domain0 < Bounds0 < ... < Domain1). Two equal stops make a
+      # segment of no width; one outside 0..1 or out of order makes a
+      # function a reader has no way to evaluate.
+      set previous {}
+      foreach stop $stops {
+        if {![string is double -strict $stop] || $stop < 0 || $stop > 1} {
+          return -code error "tclpdf: -stops are numbers from 0 to 1, not \"$stop\""
+        }
+        if {$previous ne {} && $stop <= $previous} {
+          return -code error "tclpdf: -stops must increase strictly:\
+              [join $stops { }]"
+        }
+        set previous $stop
+      }
     }
     if {$count == 2} {
       return [my ShadingSegment [lindex $parsed 0] [lindex $parsed 1]]

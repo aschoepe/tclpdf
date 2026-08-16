@@ -105,6 +105,7 @@ proc ::tclpdf::sfnt::parse {bytes} {
         [dict get $font indexToLocFormat] [dict get $font numGlyphs]]
   }
   dict set font fsType [ParseFsType $bytes $tables]
+  dict set font italicAngle [ParsePost $bytes $tables]
   dict set font names [ParseNames $bytes $tables]
   return $font
 }
@@ -324,6 +325,27 @@ proc ::tclpdf::sfnt::ParseFsType {bytes tables} {
   lassign [dict get $tables OS/2] position -
   binary scan $bytes @[expr {$position + 8}]Su fsType
   return $fsType
+}
+
+# The italic angle the post table states (offset 4, 16.16 fixed), in degrees
+# counter-clockwise from the vertical - so an oblique face reports a negative
+# number, -12 for Nimbus Sans Oblique. Zero for an upright face and for a
+# font without a post table.
+#
+# It goes into the font descriptor as /ItalicAngle, which Table 122 requires;
+# it was written as a constant 0 for every face until this was read, and the
+# header of this file claimed the table was read all along.
+proc ::tclpdf::sfnt::ParsePost {bytes tables} {
+  if {![dict exists $tables post]} {
+    return 0
+  }
+  lassign [dict get $tables post] position length
+  if {$length < 8} {
+    return 0
+  }
+  binary scan $bytes @[expr {$position + 4}]I fixed
+  set angle [expr {$fixed / 65536.0}]
+  return [expr {$angle == int($angle) ? int($angle) : $angle}]
 }
 
 # What fsType permits, in words.

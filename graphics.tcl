@@ -71,6 +71,13 @@ oo::define ::tclpdf::document::document {
     } $args]
     if {[dict get $options matrix] ne {}} {
       set matrix [dict get $options matrix]
+      # Six numbers, no more and no fewer: "cm" takes exactly that many
+      # operands (8.4.4), and five leave a reader with an operand stack it
+      # cannot make sense of.
+      if {[llength $matrix] != 6} {
+        return -code error "tclpdf: -matrix is six numbers {a b c d e f},\
+            not [llength $matrix]"
+      }
     } else {
       set matrix [::tclpdf::geometry identity]
       if {[dict get $options at] ne {}} {
@@ -96,8 +103,22 @@ oo::define ::tclpdf::document::document {
             [::tclpdf::geometry skew $alpha $beta]]
       }
       if {[dict get $options scale] ne {}} {
+        set scale [dict get $options scale]
+        if {[llength $scale] ni {1 2}} {
+          return -code error "tclpdf: -scale is one factor or {sx sy},\
+              not \"$scale\""
+        }
+        # A factor of zero makes the matrix singular: everything drawn under
+        # it collapses to a line or a point, and there is no way back to the
+        # page from there. Negative is fine - that is a mirror.
+        foreach factor $scale {
+          if {![string is double -strict $factor] || $factor == 0} {
+            return -code error "tclpdf: -scale takes non-zero factors,\
+                not \"$factor\""
+          }
+        }
         set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry scale {*}[dict get $options scale]]]
+            [::tclpdf::geometry scale {*}$scale]]
       }
       if {[dict get $options at] ne {}} {
         # And back again - the counterpart to the shift above. Both negative
@@ -187,6 +208,13 @@ oo::define ::tclpdf::document::document {
     if {![string is double -strict $value] || $value < 0 || $value > 1} {
       return -code error "tclpdf: opacity is a number from 0 to 1, not \"$value\""
     }
+    # Refused rather than shrugged off: an unknown side used to produce an
+    # ExtGState with neither ca nor CA - a resource that changes nothing, and
+    # a call that did nothing without a word.
+    if {$which ni {fill stroke both}} {
+      return -code error "tclpdf: opacity applies to fill, stroke or both,\
+          not \"$which\""
+    }
     set pairs {Type /ExtGState}
     if {$which in {fill both}} {
       lappend pairs ca [::tclpdf::pdfObj num $value]
@@ -229,25 +257,11 @@ oo::define ::tclpdf::document::document {
   # Colour, line width, dash and joins - the part every shape needs and none
   # of them should spell out.
   method GraphicsStyle {options {guard 0}} {
+    # The operators are assembled and every value checked BEFORE the mark is
+    # taken and the "q" is written: a refused cap or colour used to leave the
+    # structure state believing a mark was open, and the next shape on the
+    # page then went unmarked. Nothing here writes; the caller does, once.
     set result {}
-    # In a tagged document a shape is marked content like anything else:
-    # inside an open Figure it belongs to that Figure, and everywhere else it
-    # is decoration and says so. Under PDF/UA content that is neither counts
-    # as a defect.
-    #
-    # The bracket opens here and closes in GraphicsPaint, the two ends of
-    # every primitive in this package - seven methods share them, and putting
-    # it in each of them is how the pair drifts apart. The mark travels
-    # through the state because the two are separate calls; shapes do not
-    # nest, so one slot is enough.
-    if {[my state tagged] eq "1"} {
-      set mark [my StructureMark auto]
-      my state structureShape $mark
-      append result [my StructureBegin $mark]
-    }
-    if {$guard && [my GraphicsGuarded $options]} {
-      append result "q\n"
-    }
     foreach {key which} {fill fill stroke stroke} {
       if {[dict exists $options $key] && [dict get $options $key] ne {}} {
         append result [::tclpdf::color operator \
@@ -267,13 +281,36 @@ oo::define ::tclpdf::document::document {
           [my GraphicsBlend [dict get $options blend]]] gs\n"
     }
     if {[dict exists $options width] && [dict get $options width] ne {}} {
-      append result "[::tclpdf::pdfObj num [my distance [dict get $options width]]] w\n"
+      # Zero is allowed and means the thinnest line the device can draw
+      # (8.4.3.2); less than that is not a width.
+      set width [dict get $options width]
+      if {![string is double -strict $width] || $width < 0} {
+        return -code error "tclpdf: -width is a number of 0 or more, not \"$width\""
+      }
+      append result "[::tclpdf::pdfObj num [my distance $width]] w\n"
     }
     if {[dict exists $options dash] && [dict get $options dash] ne {}} {
       set dash [dict get $options dash]
       if {$dash in {none solid {}}} {
         append result "\[\] 0 d\n"
       } else {
+        # 8.4.3.6: the lengths shall be non-negative and not all zero - an
+        # all-zero array would ask for a line made of nothing, and a reader
+        # is free to do anything with it, including nothing at all.
+        set positive 0
+        foreach number $dash {
+          if {![string is double -strict $number] || $number < 0} {
+            return -code error "tclpdf: -dash takes lengths of 0 or more,\
+                not \"$number\""
+          }
+          if {$number > 0} {
+            set positive 1
+          }
+        }
+        if {!$positive} {
+          return -code error "tclpdf: -dash needs at least one length above\
+              zero - {[join $dash { }]} would draw nothing"
+        }
         set lengths [lmap number $dash {::tclpdf::pdfObj num [my distance $number]}]
         append result "\[[join $lengths { }]\] 0 d\n"
       }
@@ -297,9 +334,35 @@ oo::define ::tclpdf::document::document {
       append result "[dict get $joins $style] j\n"
     }
     if {[dict exists $options miter] && [dict get $options miter] ne {}} {
-      append result "[::tclpdf::pdfObj num [dict get $options miter]] M\n"
+      # The limit is the ratio of miter length to line width and cannot be
+      # under 1 (8.4.3.5) - 1 already bevels every join.
+      set miter [dict get $options miter]
+      if {![string is double -strict $miter] || $miter < 1} {
+        return -code error "tclpdf: -miter is a number of 1 or more, not \"$miter\""
+      }
+      append result "[::tclpdf::pdfObj num $miter] M\n"
     }
-    return $result
+    # In a tagged document a shape is marked content like anything else:
+    # inside an open Figure it belongs to that Figure, and everywhere else it
+    # is decoration and says so. Under PDF/UA content that is neither counts
+    # as a defect.
+    #
+    # The bracket opens here and closes in GraphicsPaint, the two ends of
+    # every primitive in this package - seven methods share them, and putting
+    # it in each of them is how the pair drifts apart. The mark travels
+    # through the state because the two are separate calls; shapes do not
+    # nest, so one slot is enough. Taken LAST, once nothing above can refuse
+    # any more - the mark changes state the moment it is taken.
+    set prologue {}
+    if {[my state tagged] eq "1"} {
+      set mark [my StructureMark auto]
+      my state structureShape $mark
+      append prologue [my StructureBegin $mark]
+    }
+    if {$guard && [my GraphicsGuarded $options]} {
+      append prologue "q\n"
+    }
+    return $prologue$result
   }
 
   # Translate a caller's colour into one the colour module can read.
@@ -307,13 +370,15 @@ oo::define ::tclpdf::document::document {
   # Only {pattern <name>} needs translating, and it needs it here because the
   # caller's name is a document-wide alias while the content stream wants the
   # resource name. The colour module knows colour spaces, the document knows
-  # names - neither could do this alone.
+  # names - neither could do this alone. A separation is not translated but
+  # REGISTERED on the way through: the operator names a colour space resource
+  # that has to exist, and color.tcl writes it on first use.
   method GraphicsColour {spec} {
     if {[llength $spec] == 2 && [string tolower [lindex $spec 0]] eq "pattern"} {
       package require tclpdf::pattern
       return [list pattern [my PatternResource [lindex $spec 1]]]
     }
-    return $spec
+    return [my ColourSeparation $spec]
   }
 
   # The painting operator. Six spellings, and the wrong one draws nothing at

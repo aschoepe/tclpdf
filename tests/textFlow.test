@@ -99,6 +99,68 @@ test textFlow-1.5 {the rest keeps paragraph boundaries} -body {
       [string match {*Zweiter*} [dict get $result rest]]
 } -result {2 1}
 
+test textFlow-1.6 {the rest is the tail of the string, character for character} -body {
+  # Not lines joined back together: everything from the first character that
+  # was not set, as the caller wrote it - the same paragraph breaks, the same
+  # spacing, and no space put in where a line ended.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  set body "Erster Absatz mit  zwei Leerzeichen und einigen Woertern mehr,\
+      damit er umbricht.\nZweiter Absatz.\n\nVierter Absatz nach einem leeren."
+  set result [$doc text $body -at {20 30} -width 40 -height 12]
+  $doc destroy
+  set rest [dict get $result rest]
+  # A suffix: at exactly the distance from the end its length says - and the
+  # blank paragraph is still in it.
+  list [expr {[string first $rest $body]
+      == [string length $body] - [string length $rest]}] \
+      [llength [split $rest \n]]
+} -result {1 4}
+
+test textFlow-1.7 {a soft hyphen in the rest is still soft} -body {
+  # The line drawn ends in a real hyphen; the word it broke goes on in the
+  # rest with its remaining marks and WITHOUT the hyphen. Rebuilt from lines
+  # it came back as "Donau- dampfschiff": a hard hyphen, a space, two words.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body "aa bb Donau\u00ADdampf\u00ADschiff cc dd"
+  set result [$doc text $body -at {20 30} -width 18 -height 5]
+  $doc destroy
+  set rest [dict get $result rest]
+  list [expr {[string first $rest $body]
+      == [string length $body] - [string length $rest]}] \
+      [string first "\u00AD" $rest] [string first "- " $rest]
+} -result {1 5 -1}
+
+test textFlow-1.8 {a word the fallback broke by character is one word in the rest} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body "aa Donaudampfschifffahrt cc"
+  set result [$doc text $body -at {20 30} -width 15 -height 5]
+  $doc destroy
+  # One line drawn - "aa" and the first piece do not share it, the piece is
+  # too wide - and the whole word comes back, not "Donauda mpfschiff fahrt".
+  dict get $result rest
+} -result {Donaudampfschifffahrt cc}
+
+test textFlow-1.9 {the spacing of a paragraph held back is not counted} -body {
+  # y is the baseline under the last line DRAWN. It used to move down by one
+  # spacing for every paragraph in the rest, so with three paragraphs and
+  # room for one it answered two spacings below where it should.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 12
+  set limited [$doc text "p1 a\np2 b\np3 c" -at {20 100} -width 50 -height 9 \
+      -paragraphSpacing 2]
+  set plain [$doc text "p1 a" -at {20 100} -width 50 -paragraphSpacing 2]
+  $doc destroy
+  list [expr {abs([dict get $limited y] - $plain) < 0.001}] \
+      [format %.2f [dict get $limited y]]
+} -result {1 105.08}
+
 test textFlow-2.1 {an indent narrows the column and moves the lines} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
@@ -145,6 +207,67 @@ test textFlow-2.4 {-paragraphSpacing shows up between paragraphs only} -body {
   # 12 pt leading plus 5 mm spacing, the same between each pair.
   list [lsort -unique [::tclpdfTest::steps $ys]] [llength $ys]
 } -result {26.17 3}
+
+test textFlow-2.5 {textLines and textHeight read the indents like text does} -body {
+  # They used to hand everything but the width on to the font state, which
+  # ignores what it does not know - so a caller measuring an indented block
+  # got the height of an unindented one.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set plain [$doc textLines $::flowBody -width 60]
+  set indented [$doc textLines $::flowBody -width 60 -indent 10 -indentRight 10]
+  set height [$doc textHeight $::flowBody -width 60]
+  set taller [$doc textHeight $::flowBody -width 60 -indent 10 -indentRight 10]
+  $doc destroy
+  list [expr {[llength $indented] > [llength $plain]}] [expr {$taller > $height}]
+} -result {1 1}
+
+test textFlow-2.6 {an option they do not know is refused, not swallowed} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc textHeight "x" -width 60 -foo 1} height] \
+      [catch {$doc textLines "x" -width 60 -foo 1} lines]]
+  $doc destroy
+  list $codes [string match {*unknown option "-foo" for textHeight*} $height] \
+      [string match {*unknown option "-foo" for textLines*} $lines]
+} -result {{1 1} 1 1}
+
+test textFlow-2.7 {textHeight is exactly what text advances by} -body {
+  # The same option list to both, and the height is the difference between
+  # the y [text] returns and the y it was given - indents, paragraph spacing
+  # and the ascender of -anchor top included.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body "$::flowBody\n$::flowBody"
+  set results {}
+  foreach options {
+    {-width 60 -indent 10 -paragraphSpacing 5}
+    {-width 60 -indent 10 -paragraphSpacing 5 -anchor top}
+    {-width 60 -firstIndent 8 -align justify}
+  } {
+    set height [$doc textHeight $body {*}$options]
+    set below [$doc text $body -at {20 30} {*}$options]
+    lappend results [expr {abs($below - 30 - $height) < 0.001}]
+  }
+  $doc destroy
+  set results
+} -result {1 1 1}
+
+test textFlow-2.8 {the width is still taken positionally, and checked either way} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set same [expr {[$doc textLines $::flowBody 60] eq [$doc textLines $::flowBody -width 60]}]
+  set codes [list [catch {$doc textLines "ab cd" -width 0} zero] \
+      [catch {$doc textLines "ab cd" -width -5} negative] \
+      [catch {$doc text "ab cd" -at {10 10} -width 0} drawn]]
+  $doc destroy
+  list $same $codes [string match {*-width must be a positive number*} $zero] \
+      [string match {*not "-5"*} $negative] \
+      [string match {*-width must be a positive number*} $drawn]
+} -result {1 {1 1 1} 1 1 1}
 
 test textFlow-3.1 {a rectangle pushes the lines beside it} -body {
   set doc [tclpdf new -unit mm]
@@ -273,6 +396,84 @@ test textFlow-3.4 {an unknown shape is refused at the call} -body {
   list $codes [string match {*not \"triangle\"*} $triangle] \
       [string match {*{rect {x y} {width height} ?margin?}*} $short]
 } -result {{1 1} 1 1}
+
+test textFlow-3.5 {-anchor top measures the shapes from the first baseline} -body {
+  # The band was measured from -at, and with -anchor top that is one ascender
+  # above the first baseline: the block sat lower than the band thought, and
+  # the first line ran through the shape at full width.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [string repeat "The quick brown fox jumps over the lazy dog. " 4]
+  # The top edge of the rectangle lies 1.5 mm under the top of the letters,
+  # so the very first line has to be narrowed.
+  $doc text $body -at {20 25} -width 80 -anchor top \
+      -avoid {{rect {20 26.5} {40 30}}}
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # 60 mm from the left edge, in points, for EVERY line - the block ends
+  # beside the rectangle.
+  lsort -unique $starts
+} -result {170.08}
+
+test textFlow-3.6 {the indents survive a shape that is nowhere near} -body {
+  # -avoid replaced the indent band instead of narrowing it, so every line
+  # of an indented paragraph started at the column edge as soon as a shape
+  # was named, wherever that shape was.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [string repeat "The quick brown fox jumps over the lazy dog. " 3]
+  $doc text $body -at {20 20} -width 80 -indent 10 -indentRight 10 -firstIndent 5
+  set plain [flowStarts [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc text $body -at {20 20} -width 80 -indent 10 -indentRight 10 -firstIndent 5 \
+      -avoid {{rect {150 150} {10 10}}}
+  set avoided [flowStarts [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [expr {$plain eq $avoided}] [lrange $plain 0 1]
+} -result {1 {99.21 85.04}}
+
+test textFlow-3.7 {a shape wider than the column leaves the lines empty} -body {
+  # No free segment wide enough for a character: the line is skipped, not set
+  # one letter at a time down through the shape. The text goes on below it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "hello world foo" -at {20 25} -width 40 -avoid {{rect {10 20} {100 30}}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set ys [::tclpdfTest::starts $stream y]
+  # One line, in one piece, and its baseline below the rectangle: 50 mm from
+  # the top of an A4 page is 700.16 pt from the bottom.
+  list [llength $ys] [regexp {\(hello world foo\) Tj} $stream] \
+      [expr {[lindex $ys 0] < 700.16}]
+} -result {1 1 1}
+
+test textFlow-3.8 {a sliver beside a shape is skipped as well} -body {
+  # A segment narrower than the widest character would take one character
+  # anyway and let it run into the shape. Nothing starts left of the shape.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [string repeat "Wide words. " 6]
+  # 1 mm free at the left of the column, the rest of the line under the shape.
+  $doc text $body -at {20 25} -width 60 -avoid {{rect {21 20} {80 20}}}
+  set starts [flowStarts [::tclpdfTest::content $doc]]
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  # Every line at the column edge, all of them under the shape (40 mm from
+  # the top is 728.50 pt from the bottom).
+  list [lsort -unique $starts] [expr {[lindex $ys 0] < 728.5}]
+} -result {56.69 1}
+
+test textFlow-3.9 {a measuring call with -avoid needs -at, and says so} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc textHeight "x" -width 60 -avoid {{rect {1 2} {3 4}}}} message]
+  $doc destroy
+  list $code [string match {*-avoid needs -at*} $message]
+} -result {1 1}
 
 # --- soft hyphens ---------------------------------------------------------
 #

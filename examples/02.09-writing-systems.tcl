@@ -11,9 +11,16 @@
 #
 # TWO OF THE LINES RUN RIGHT TO LEFT and they are not the same case. Hebrew
 # needs nothing but the order, so -direction rtl sets it correctly and the
-# text extracts as it was written. Arabic needs the order AND contextual
-# forms; -direction rtl fixes the first half and -unshaped 1 says "draw the
-# isolated forms anyway" about the second. The note on the page says so.
+# text extracts as it was written. Arabic needs the order AND the contextual
+# forms, and tclpdf sets both - but only in a face that carries whole
+# letters. Noto Naskh Arabic, the face in the table, writes a letter as an
+# undotted skeleton plus a separate dot glyph placed by GPOS mark attachment,
+# which this package does not read, so that line is REFUSED unless the call
+# says -unshaped 1 - which this script does, and the line then comes out as
+# isolated forms in the right order. The same words are set once more in
+# DejaVu Sans, shaped, with -direction rtl and nothing else, followed by an
+# invoice line whose numbers keep their own order and whose brackets are
+# mirrored. The notes on the page say so.
 #
 # WHY THIS IS AFFORDABLE. The source files add up to 15 MB, the Japanese face
 # alone being 8.7 MB for its 17 103 glyphs. What lands in the document is a

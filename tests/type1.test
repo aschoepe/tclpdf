@@ -83,6 +83,56 @@ test type1-1.3 {the clear part takes the eexec line ending with it} -constraints
       [expr {[dict get $font length1] == [string first "eexec" $clear] + 6}]
 } -result {1 1 1 1}
 
+# The same face as a PFA, made from the .t1 by writing its encrypted piece as
+# hexadecimal - which is all a PFA is. Made rather than shipped: the URW set
+# carries no .pfa, and a 200 KB test asset for a two-line conversion is the
+# wrong trade. The line breaks fall every 64 digits, the zeros stay as they
+# are; a real PFA (t1ascii writes one) differs from this in nothing that
+# matters.
+proc type1Pfa {t1 target} {
+  set font [::tclpdf::type1 read $t1]
+  binary scan [dict get $font encrypted] H* hex
+  set lines [regexp -all -inline {.{1,64}} $hex]
+  set out [open $target wb]
+  puts -nonewline $out [dict get $font clear]
+  puts -nonewline $out [join $lines \n]\n
+  puts -nonewline $out [dict get $font trailer]
+  close $out
+  return $target
+}
+
+test type1-1.5 {a hexadecimal PFA is read back to the bytes of the .t1} -constraints haveRaw -body {
+  # ISO 32000-1 9.9.1, Table 127: the second piece of a Type 1 program is the
+  # encrypted portion in BINARY, and Length2 counts its bytes. A .pfa carries
+  # the same bytes as hex text; passed through as it was, the embedded font
+  # was one the standard does not describe - veraPDF failed it under 6.2.11.4
+  # while the .t1 of the same face passed. So the hex is decoded on reading,
+  # and the three pieces of the two containers are then byte for byte the
+  # same, Length2 included.
+  set pfa [type1Pfa $::raw [::tclpdfTest::scratch nimbus.pfa]]
+  set fromT1 [::tclpdf::type1 read $::raw]
+  set fromPfa [::tclpdf::type1 read $pfa]
+  file delete $pfa
+  list [expr {[dict get $fromPfa encrypted] eq [dict get $fromT1 encrypted]}] \
+      [expr {[dict get $fromPfa clear] eq [dict get $fromT1 clear]}] \
+      [expr {[dict get $fromPfa trailer] eq [dict get $fromT1 trailer]}] \
+      [expr {[dict get $fromPfa length2] == [dict get $fromT1 length2]}] \
+      [expr {[string is print [string range [dict get $fromPfa encrypted] 0 63]] == 0}]
+} -result {1 1 1 1 1}
+
+test type1-1.6 {a hexadecimal program that breaks off is refused, not halved} -constraints haveRaw -body {
+  # An odd digit count or a stray character inside the hex is a damaged file;
+  # decoding what can be decoded would embed a program that stops halfway
+  # through a charstring, and no reader says why.
+  set pfa [type1Pfa $::raw [::tclpdfTest::scratch nimbus-odd.pfa]]
+  set bytes [::tclpdfTest::readBytes $pfa]
+  file delete $pfa
+  set at [expr {[string first eexec $bytes] + 20}]
+  set broken [string replace $bytes $at $at g]
+  catch {::tclpdf::type1 parse $broken} message
+  set message
+} -match glob -result {*starts as hexadecimal and does not stay so*}
+
 test type1-1.4 {something that is not a Type 1 program is refused} -constraints haveBoth -body {
   catch {::tclpdf::type1 read $ttf} message
   set message
@@ -262,5 +312,38 @@ test type1-3.5 {an embedded Type 1 face satisfies PDF/A} -constraints haveRaw -b
   $doc destroy
   set result
 } -result {0 1}
+
+test type1-3.6 {a PFA embeds as the same font file as the .t1} -constraints haveRaw -body {
+  # The end of the road for 1.5: two documents, one from each container, and
+  # the FontFile streams in them are identical - which is what makes the
+  # veraPDF result for one hold for the other. Measured outside the suite:
+  # PDF/A-3u on the PFA document, zero failed checks, where the pass-through
+  # had one.
+  set pfa [type1Pfa $::raw [::tclpdfTest::scratch nimbus-doc.pfa]]
+  file copy -force $::afm [file rootname $pfa].afm
+  set streams {}
+  foreach program [list $::raw $pfa] {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed sans $program
+    $doc text "Rechnung" -at {20 20} -family sans
+    set path [::tclpdfTest::scratch type1-container.pdf]
+    $doc write $path
+    set writer [$doc writer]
+    for {set number 1} {$number <= [$writer count]} {incr number} {
+      if {[string match {*/Length2 *} [$writer body $number]]} {
+        lappend streams [::tclpdfTest::streamOf $writer $number]
+        regexp {/Length2 (\d+)} [$writer body $number] -> length2
+        lappend streams $length2
+      }
+    }
+    $doc destroy
+    file delete $path
+  }
+  file delete $pfa [file rootname $pfa].afm
+  lassign $streams t1Stream t1Length pfaStream pfaLength
+  list [llength $streams] [expr {$t1Stream eq $pfaStream}] \
+      [expr {$t1Length == $pfaLength}] [expr {$t1Length > 0}]
+} -result {4 1 1 1}
 
 cleanupTests

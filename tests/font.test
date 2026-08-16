@@ -811,4 +811,187 @@ test font-8.7 {-axes on a static font says so instead of doing nothing} -body {
   }
 } -returnCodes error -match glob -result {*not a variable font*fvar*}
 
+# The base names of the embedded faces in a written document, one per font
+# object that carries a descriptor - the tag and the name a reader is told.
+proc fontBaseNames {bytes} {
+  set names {}
+  foreach {- name} [regexp -all -inline {/FontName /(\S+)} $bytes] {
+    lappend names $name
+  }
+  return $names
+}
+
+test font-9.1 {two subsets of one face in one document carry different tags} -constraints haveFont -body {
+  # ISO 32000-1 9.6.4: different subsets of the same font in one file shall
+  # have different tags. The tag used to be a function of the name alone, so
+  # every subset of DejaVuSans in every document was SZGNUB+ - and a reader
+  # entitled to take same tag, same name for the same font would have drawn
+  # one subset with the glyphs of the other. Now it is derived from what was
+  # subsetted: two aliases of one file with different text get different
+  # tags, and the same text gets the same one.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed one $fontRegular
+  $doc font embed two $fontRegular
+  $doc font embed three $fontRegular
+  $doc text "Grusse" -at {20 20} -family one
+  $doc text "Rechnung" -at {20 40} -family two
+  $doc text "Grusse" -at {20 60} -family three
+  set path [::tclpdfTest::scratch font-tags.pdf]
+  $doc write $path
+  $doc destroy
+  set names [fontBaseNames [::tclpdfTest::readBytes $path]]
+  file delete $path
+  lassign $names one two three
+  list [llength $names] [regexp {^[A-Z]{6}\+DejaVuSans$} $one] \
+      [expr {$one ne $two}] [expr {$one eq $three}]
+} -result {3 1 1 1}
+
+test font-9.2 {the tag is the same on every write of the same document} -constraints haveFont -body {
+  # Derived from the content, not from the clock or the object number: two
+  # writes of one document are byte-identical, and two runs of one report
+  # produce the same file.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "Grusse" -at {20 20} -family haus
+  lassign [::tclpdfTest::writeTwice $doc font-tag-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] \
+      [expr {[fontBaseNames $first] eq [fontBaseNames $second]}]
+} -result {1 1}
+
+test font-9.3 {every instance of a variable face is its own font, by name and tag} -body {
+  # 02.10 embeds Roboto twenty-four times; measured with pdffonts before
+  # this, all twenty-four were SZGNUB+Roboto-Regular - the tag from the name,
+  # the name from name id 6, which names the default and nothing else. Now a
+  # named instance carries the PostScript name fvar gives it, a point in
+  # between is named by its axis values (TN 5902), and the tags differ
+  # because the glyphs do.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  foreach {alias options} {thin {-instance Thin} bold {-axes {wght 700}}
+      between {-axes {wght 620}} narrow {-instance Bold -axes {wdth 80}}} {
+    $doc font embed $alias [variableTree Roboto-Variable.ttf] {*}$options
+    $doc font -family $alias -size 12
+    $doc text "Hamburgefonstiv" -at {20 30}
+  }
+  set path [::tclpdfTest::scratch font-instances.pdf]
+  $doc write $path
+  $doc destroy
+  set names [fontBaseNames [::tclpdfTest::readBytes $path]]
+  file delete $path
+  set tags {}
+  set bare {}
+  foreach name $names {
+    regexp {^([A-Z]{6})\+(.*)$} $name -> tag rest
+    lappend tags $tag
+    lappend bare $rest
+  }
+  list $bare [llength [lsort -unique $tags]]
+} -result {{Roboto-Thin Roboto-Bold Roboto_620wght Roboto_700wght_80wdth} 4}
+
+test font-10.1 {-subset 0 on an instance embeds the instance, not the variable file} -body {
+  # PDF knows nothing of variation. The whole file, embedded as it is, is the
+  # variable face - fvar, gvar and the rest - and a reader draws its DEFAULT
+  # outlines under the /W array of the instance: Regular shapes spaced as
+  # Bold. Measured before this: 22 tables in the FontFile2, gvar among them.
+  # Now every glyph goes through the instancer and the variation tables stay
+  # behind; all 1326 glyphs are there, so no subset tag is written.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed bold [variableTree Roboto-Variable.ttf] -instance Bold -subset 0
+  $doc font -family bold -size 12
+  $doc text "Hamburgefonstiv" -at {20 30}
+  set path [::tclpdfTest::scratch font-instance-whole.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  set fontFile {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/Length1 *} [$writer body $number]]} {
+      set fontFile [::tclpdfTest::streamOf $writer $number]
+    }
+  }
+  set names [fontBaseNames [::tclpdfTest::readBytes $path]]
+  $doc destroy
+  file delete $path
+  package require tclpdf::sfnt
+  set embedded [::tclpdf::sfnt parse $fontFile]
+  set tables [lsort [dict keys [dict get $embedded tables]]]
+  set original [::tclpdf::sfnt read [variableTree Roboto-Variable.ttf]]
+  # The hmtx in the file is the instance's, not the default: the H of Roboto
+  # Bold advances 1446 units where the Regular one advances 1461 (fontTools'
+  # instancer says the same), so the two must differ, and the embedded one
+  # must be what the instancer computed.
+  package require tclpdf::varFont
+  set h [dict get [dict get $original cmap] 72]
+  set instanced [::tclpdf::varFont all $original \
+      [::tclpdf::varFont coordinates $original {wght 700}]]
+  list $names [expr {"fvar" in $tables}] [expr {"gvar" in $tables}] \
+      [expr {"glyf" in $tables}] \
+      [expr {[dict get $embedded numGlyphs] == [dict get $original numGlyphs]}] \
+      [expr {[::tclpdf::sfnt advance $embedded $h] != [::tclpdf::sfnt advance $original $h]}] \
+      [expr {[::tclpdf::sfnt advance $embedded $h] == [dict get $instanced $h advance]}]
+} -result {Roboto-Bold 0 0 1 1 1 1}
+
+test font-11.1 {the descriptor reads the italic angle and the cap height from the file} -constraints haveOtfPair -body {
+  # Table 122: ItalicAngle and CapHeight are required and were written as 0
+  # and as the ascender for every face. post.italicAngle of Nimbus Sans
+  # Oblique is -12 (measured with fontTools), OS/2 sCapHeight of Nimbus Sans
+  # 1493 of 2048 units, which is 729 in the 1/1000 em of the descriptor - and
+  # the ascender it was written as is 1602, which is 782.
+  set oblique [file join [file dirname $::otfTtf] NimbusSans-Oblique.ttf]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed upright $::otfTtf
+  $doc font embed slanted $oblique
+  $doc text "Rechnung" -at {20 20} -family upright
+  $doc text "Rechnung" -at {20 40} -family slanted
+  set path [::tclpdfTest::scratch font-descriptor.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set angles {}
+  set caps {}
+  set flags {}
+  foreach {- body} [regexp -all -inline {(/Type /FontDescriptor[^>]*)>>} $bytes] {
+    regexp {/ItalicAngle (\S+)} $body -> angle
+    regexp {/CapHeight (\S+)} $body -> cap
+    regexp {/Flags (\S+)} $body -> flag
+    lappend angles $angle
+    lappend caps [format %.0f $cap]
+    lappend flags $flag
+  }
+  list $angles $caps $flags
+} -result {{0 -12} {729 729} {4 68}}
+
+test font-11.2 {StemV follows the weight, and for an instance the wght axis} -body {
+  # TrueType has no stem width; the estimate is 50 + (usWeightClass / 65)^2,
+  # which tFPDF and mPDF write - 87 at 400, 165 at 700. For an instance of a
+  # variable face the wght axis is the weight class, so Bold out of the
+  # variable Roboto says 165 where the file's own OS/2 says 400. Roboto's
+  # sCapHeight is 1456 of 2048, 711 in the descriptor.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed regular [variableTree Roboto-Regular.ttf]
+  $doc font embed bold [variableTree Roboto-Variable.ttf] -instance Bold
+  $doc text "Rechnung" -at {20 20} -family regular
+  $doc text "Rechnung" -at {20 40} -family bold
+  set path [::tclpdfTest::scratch font-stemv.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set stems {}
+  set caps {}
+  foreach {- body} [regexp -all -inline {(/Type /FontDescriptor[^>]*)>>} $bytes] {
+    regexp {/StemV (\S+)} $body -> stem
+    regexp {/CapHeight (\S+)} $body -> cap
+    lappend stems $stem
+    lappend caps [format %.0f $cap]
+  }
+  list $stems $caps
+} -result {{87 165} {711 711}}
+
 cleanupTests

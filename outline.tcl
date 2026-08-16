@@ -59,6 +59,22 @@ oo::define ::tclpdf::document::document {
     if {$page < 0} {
       return -code error "tclpdf: a bookmark needs a page - add one first"
     }
+    if {[dict get $options structure] eq {}} {
+      # A negative or non-integer page is refused here; a page that does
+      # not exist YET is allowed, because a bookmark may point forward at a
+      # page added later - and if it never comes, the write says so, naming
+      # this bookmark by its title. That is [destination]'s asker argument.
+      if {![string is integer -strict $page] || $page < 0} {
+        return -code error "tclpdf: no such page: $page - the document has\
+            [my page count] page(s)"
+      }
+      # Asked for NOW for the same reason as the structure destination
+      # above: a page destination that points forward is an indirect object
+      # filled on beforeWrite, and the outline is built later, on catalog.
+      # Kept in the entry so OutlineWrite writes the very same reference.
+      set dest [my destination $page [dict get $options at] {} \
+          "bookmark \"$title\""]
+    }
     set id [llength $entries]
     set parent [dict get $options parent]
     if {$parent ne {} && ($parent < 0 || $parent >= $id)} {
@@ -67,6 +83,7 @@ oo::define ::tclpdf::document::document {
     lappend entries [dict create title $title page $page \
         at [dict get $options at] parent $parent \
         structure [dict get $options structure] \
+        dest [expr {[info exists dest] ? $dest : {}}] \
         open [dict get $options open] number {}]
     my state outline $entries
     return $id
@@ -119,7 +136,7 @@ oo::define ::tclpdf::document::document {
       if {[dict get $entry structure] ne {}} {
         lappend pairs A [my structureDestination [dict get $entry structure]]
       } else {
-        lappend pairs Dest [my destination [dict get $entry page] [dict get $entry at]]
+        lappend pairs Dest [dict get $entry dest]
       }
       if {$position > 0} {
         lappend pairs Prev [[my writer] ref \
@@ -130,22 +147,28 @@ oo::define ::tclpdf::document::document {
             [dict get [lindex $entries [lindex $siblings $position+1]] number]]
       }
       if {[dict exists $children $index]} {
+        # /Count is the number of VISIBLE descendants (Table 153), not of
+        # children - what [OutlineVisible] counts - and negative on a closed
+        # item, where it says how many would appear on opening it.
         set own [dict get $children $index]
+        set count [my OutlineVisible $children $entries $index]
         lappend pairs \
             First [[my writer] ref [dict get [lindex $entries [lindex $own 0]] number]] \
             Last [[my writer] ref [dict get [lindex $entries [lindex $own end]] number]] \
-            Count [expr {[dict get $entry open] ? [llength $own] : -[llength $own]}]
+            Count [expr {[dict get $entry open] ? $count : -$count}]
       }
       [my writer] put [dict get $entry number] [::tclpdf::pdfObj dictionary $pairs]
       incr index
     }
 
+    # The root counts every item that is visible when the outline opens
+    # (Table 152) - the top level and whatever the open ones show.
     set top [dict get $children {}]
     [my writer] put $rootNumber [::tclpdf::pdfObj dictionary [list \
         Type /Outlines \
         First [[my writer] ref [dict get [lindex $entries [lindex $top 0]] number]] \
         Last [[my writer] ref [dict get [lindex $entries [lindex $top end]] number]] \
-        Count [llength $top]]]
+        Count [my OutlineVisible $children $entries {}]]]
     my catalogEntry Outlines [[my writer] ref $rootNumber]
     # A document with bookmarks should open showing them - otherwise the work
     # of adding them is invisible until the reader goes looking.
@@ -153,6 +176,29 @@ oo::define ::tclpdf::document::document {
       my catalogEntry PageMode /UseOutlines
     }
     return
+  }
+
+  # How many descendants of an item a reader shows (ISO 32000-1 Tables 152
+  # and 153): its children, and through every open child that child's own
+  # visible descendants - a closed child counts once and hides what is under
+  # it. The root is the item with the empty parent id.
+  #
+  # Counting direct children instead put 1 on a chapter with one open
+  # section that had two subsections, where 3 was due, and 1 on the root of
+  # a three-level tree that opens showing three items - a reader that trusts
+  # the number showed the tree one level short.
+  method OutlineVisible {children entries index} {
+    if {![dict exists $children $index]} {
+      return 0
+    }
+    set count 0
+    foreach child [dict get $children $index] {
+      incr count
+      if {[dict get [lindex $entries $child] open]} {
+        incr count [my OutlineVisible $children $entries $child]
+      }
+    }
+    return $count
   }
 
 }

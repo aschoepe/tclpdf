@@ -17,7 +17,7 @@ tclpdf - PDF generation for Tcl
 **tclpdf** creates PDF documents from Tcl. It is a pure Tcl package: no
 compiler, no binary extension, no Tk.
 
-What is documented below is what the package provides — nothing here is planned or partial. Roughly a third of ISO 32000-1 is covered, weighted by the page count of its chapters; the remainder is almost entirely what a **reader** of foreign PDFs needs rather than a writer, plus encryption, form fields and tagged PDF.
+What is documented below is what the package provides — nothing here is planned or partial. Roughly a third of ISO 32000-1 is covered, weighted by the page count of its chapters; the remainder is almost entirely what a **reader** of foreign PDFs needs rather than a writer, plus encryption and form fields.
 
 # REQUIREMENTS
 
@@ -32,9 +32,11 @@ in and are therefore avoided: resolving colour names via `winfo rgb`, and decodi
 
 **tdom**
 
-: Used by the SVG module for parsing, and preferred when present: measured, tdom parses 27 to 48 times faster than the parser tclpdf brings along, and it rejects an entity expansion bomb that the built-in one would try to expand. Without tdom the package still reads SVG, through its own element tree parser — the same four accessors sit in front of both, so nothing else in the package can tell the difference.
+: **Required for the metadata packet**: the XMP is built with it, so every document that declares PDF/A, PDF/UA or ZUGFeRD needs tdom, and the module that writes those declarations refuses to load without it. A document that makes no such claim never loads that module and runs without tdom.
 
-Nothing else is optional, because nothing else is used. Encryption and barcodes are planned work; this page will name the packages they need once they exist.
+  The SVG module uses it for parsing where it is present, and prefers it: measured, tdom parses 27 to 48 times faster than the parser tclpdf brings along, and it rejects an entity expansion bomb that the built-in one would try to expand. Without tdom the package still reads SVG, through its own element tree parser — the same four accessors sit in front of both, so nothing else in the package can tell the difference.
+
+Nothing else is optional, because nothing else is used. Barcodes need no entry on this list: **tzint** encodes into SVG and `svg -data` draws it — see "Barcodes" below. Encryption is planned work; this page will name the package it needs once it exists.
 
 # COMMANDS
 
@@ -42,7 +44,7 @@ Nothing else is optional, because nothing else is used. Encryption and barcodes 
 
 **tclpdf new** ?*option value* ...?
 
-: Creates a document object and returns its command name. Options: **-unit** (`mm`, the default, or `pt`, `cm`, `in`), **-format** (a page format name such as `a4`, or a pair of numbers in the document unit), **-orientation** (`portrait` or `landscape`), **-version** (`1.0` through `1.7`, or `2.0`; default `1.7`) and **-compress** (`1` by default — content streams are deflated; `0` writes them plainly, which is for reading the output, not for shipping it).
+: Creates a document object and returns its command name. Options: **-unit** (`mm`, the default, or `pt`, `cm`, `in`; `px` is also accepted and is the same as `pt`), **-format** (a page format name such as `a4`, or a pair of numbers in the document unit), **-orientation** (`portrait` or `landscape`; `hoch` and `quer` are also accepted), **-version** (`1.0` through `1.7`, or `2.0`; default `1.7`) and **-compress** (`1` by default — content streams are deflated; `0` writes them plainly, which is for reading the output, not for shipping it).
 
   A size given as two numbers is taken as it stands. It is turned only if an orientation is asked for as well — `{88 55}` stays 88 by 55.
 
@@ -64,7 +66,7 @@ Nothing else is optional, because nothing else is used. Encryption and barcodes 
 
 ## Coordinates and units
 
-Positions are given in the document unit, and **y counts from the top of the page downwards** — the opposite of PDF's own convention, which the package converts on the way out. `-at` always names the **top left** corner of what is being placed. A form or a pattern script is no exception: inside them the origin is that object's own **top left** corner and y counts downwards, exactly as on the page — the conversion happens against the object's height instead of the page's.
+Positions are given in the document unit, and **y counts from the top of the page downwards** — the opposite of PDF's own convention, which the package converts on the way out. `-at` names the **top left** corner of what is being placed — with one exception, `circle` and `ellipse`, where it is the centre, because that is how a circle is described. A form or a pattern script is no exception to the rule: inside them the origin is that object's own **top left** corner and y counts downwards, exactly as on the page — the conversion happens against the object's height instead of the page's.
 
 *doc* **coords** *x y*
 
@@ -110,7 +112,7 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 : Sets the font state, which stays in force until changed. Without arguments it returns the current state as a dictionary, including the resolved font name.
 
-  **-family** takes one of the fourteen standard faces (`helvetica`, `times`, `courier`, `symbol`, `zapfdingbats`), an exact PostScript name such as `Times-Italic`, or the alias of an embedded face. **-style** takes `bold`, `italic` or both. **-size** is always in points. Further options: **-spacing** (extra space between glyphs — see below), **-wordSpacing**, **-stretch** (horizontal scaling in percent), **-leading** (line spacing, default 1.2 times the size) and **-rise** (baseline shift, for super- and subscript).
+  **-family** takes one of the fourteen standard faces (`helvetica`, `times`, `courier`, `symbol`, `zapfdingbats`), an exact PostScript name such as `Times-Italic`, or the alias of an embedded face. **-style** takes `bold`, `italic` or both; `oblique` is read as `italic`. **-size** is always in points. Further options: **-spacing** (extra space between glyphs — see below), **-wordSpacing**, **-stretch** (horizontal scaling in percent), **-leading** (line spacing, default 1.2 times the size) and **-rise** (baseline shift, for super- and subscript).
 
   **-spacing** adds its space **between glyphs**, not between characters, because that is where the PDF operator behind it puts it. The two differ only when ligatures are in play: `office` is six characters and, in a face that has the `ffi` ligature, four glyphs — so `-spacing` opens three gaps there, not five. For classic letterspacing, where every letter stands apart, set **-ligatures 0** in the same call; a ligature says the letters belong close together, which is the opposite of what letterspacing says.
 
@@ -141,7 +143,7 @@ Some scripts need more. What that "more" is decides whether tclpdf can set them 
 
 **Ordering is the one this package can supply.** Hebrew letters, Thaana and Samaritan bases carry no contextual forms: the glyph the character map gives is the glyph a reader expects, and only the order has to be turned round. `-direction rtl` turns it — after the ligatures and the kerning have been worked out on the logical run, so the pairs looked up are the ones the type designer meant, and `textWidth` answers the same number in both directions. Without the option such text is still refused, and the message names the way out.
 
-**Arabic is set with its contextual forms**, and that needs the right face as well as the option. Each character is asked which of the four shapes it stands in — isolated, initial, medial or final — by the cursive joining algorithm of the Unicode Standard, section 9.2, with the joining types taken from the Unicode Character Database. The shape itself then comes out of the face, through the GSUB features `ccmp`, `init`, `medi`, `fina` and `rlig`, applied in that order. The result is checked glyph by glyph against HarfBuzz: `tests/forms.test` shapes six words with `hb-shape` and compares the glyph numbers, and skips itself where HarfBuzz is not installed.
+**Arabic is set with its contextual forms**, and that needs the right face as well as the option. Each character is asked which of the four shapes it stands in — isolated, initial, medial or final — by the cursive joining algorithm of the Unicode Standard, section 9.2, with the joining types taken from the Unicode Character Database. The shape itself then comes out of the face, through the GSUB features `ccmp`, then the positional `isol`, `fina`, `medi` and `init` — each glyph takes exactly one of the four, the one its position asks for — and `rlig` last, applied in that order. The result is checked glyph by glyph against HarfBuzz: `tests/forms.test` shapes six words with `hb-shape` and compares the glyph numbers, and skips itself where HarfBuzz is not installed.
 
 **Which faces.** A face has to carry the three positional features, and its letters have to be whole glyphs. Some Arabic faces — Noto Naskh Arabic is the one shipped with the examples — write a letter as an undotted skeleton plus a separate dot glyph and place the dot with GPOS mark attachment, which this package does not read: the dots would land beside their letters, and measured on that face the two dots of *teh marbuta* belong a third of an em lower than they would be drawn. Such a face is **refused**, and the message says which of the two things is missing. DejaVu Sans carries whole Arabic letters and sets the same line correctly; example `02.09-writing-systems` shows both.
 
@@ -149,16 +151,16 @@ Some scripts need more. What that "more" is decides whether tclpdf can set them 
 
 **Nikud stays refused**, and deliberately: the points are combining marks, GPOS mark attachment is not read (see `-kerning` above), and a vowel point drawn at the pen position sits beside its letter instead of under it. The letters of a line without points are unaffected.
 
-**Numbers keep their own order.** A right-to-left line is not simply reversed — a run of digits inside it runs left to right, because it does in every script that uses digits. `الفاتورة 4711` sets the invoice number as `4711` and not as `1174`, which is what the plain reversal produced and what nobody looking at the page could tell was wrong. The run may hold the characters that belong to a number: a comma, a full stop, a colon, a slash or a no-break space **between two digits**, and a percent sign, a plus, a minus, a euro or a dollar sign **directly beside one**. `1.234,50%` is therefore one number and comes out whole; a euro sign with a space in front of it is not part of it and goes where the line runs. European, Arabic-Indic (`٠`–`٩`) and Extended Arabic-Indic digits count alike. This is the corner of the Unicode bidirectional algorithm (UAX #9, rules W2–W7) that one run of digits needs, and nothing beyond it.
+**Numbers keep their own order.** A right-to-left line is not simply reversed — a run of digits inside it runs left to right, because it does in every script that uses digits. `الفاتورة 4711` sets the invoice number as `4711` and not as `1174`, which is what the plain reversal produced and what nobody looking at the page could tell was wrong. The run may hold the characters that belong to a number: a comma, a full stop, a colon, a slash, a no-break space or the Arabic decimal and thousands separators (U+066B, U+066C) **between two digits**, and a percent sign (U+0025 or the Arabic U+066A), a plus, a minus (U+002D or U+2212), a euro or a dollar sign **directly beside one**. `1.234,50%` is therefore one number and comes out whole; a euro sign with a space in front of it is not part of it and goes where the line runs. European, Arabic-Indic (`٠`–`٩`) and Extended Arabic-Indic digits count alike. This is the corner of the Unicode bidirectional algorithm (UAX #9, rules W2–W7) that one run of digits needs, and nothing beyond it.
 
 **Paired brackets are mirrored.** `(` is the *opening* bracket, and the opening bracket of a line that runs the other way is drawn with the glyph of `)` — Unicode calls this mirroring (UAX #9, section 3.4) and it is a property of the display, not a different character. It applies to `( )`, `[ ]`, `{ }`, `< >`, `« »` and `‹ ›`; the German quotation marks `‚ '` look like a pair and are **not** mirrored, and neither is a slash. Because the `ToUnicode` map speaks about glyphs and the glyph of `)` is the glyph of `)` wherever it is used, each mirrored glyph is drawn inside a `Span` carrying the character it stands for as `ActualText`, so that the line still extracts as it was written. Measured with poppler 26.08.0: without that span `(שלום)` comes back as `)שלום(`.
 
 **A mixed line is refused.** A line that mixes the two directions — an Arabic sentence with a Latin word in it, a Hebrew heading with a Cyrillic name — needs the full bidirectional algorithm to decide which run goes where, and tclpdf does not implement it. Such a call is therefore **refused**, naming the first character that runs the wrong way and what to do instead:
 
   ~~~
-  tclpdf: U+0052 (position 0) is left-to-right in a -direction rtl line - a mixed
-  line needs the bidi algorithm, which tclpdf does not have; set the runs as
-  separate calls, one per direction
+  tclpdf: U+0052 (position 0) is left-to-right in a -direction rtl line
+  - a mixed line needs the bidi algorithm, which tclpdf does not have;
+  set the runs as separate calls, one per direction
   ~~~
 
   It used to be accepted and to come out with the Latin words backwards — `gnunhceR … rellüM` — which is the kind of line that looks like text and is not. Everything that is *not* strongly left-to-right may stand in such a line: right-to-left letters, digits, spaces, punctuation, brackets, currency and symbols. `-unshaped 1` turns the refusal off along with the others, for the caller who knows what it does.
@@ -181,47 +183,71 @@ The refusal is the same rule the package applies to a character the face has no 
 
 : **Why a CFF face is not subsetted.** Subsetting rewrites the `loca` and `glyf` tables, and a CFF font has neither: its outlines are charstrings in a table this package does not read. So the whole file is embedded, around 40 to 100 KB depending on the face. Where the same face exists as `.ttf`, that form is the better choice for a document that uses it for a heading and nothing else — a subset of a few words is a fraction of either. `-subset` is accepted and has no effect; the face carries no subset prefix, because nothing was subsetted.
 
+: **What the descriptor says** comes from the file (ISO 32000-1 Table 122): the italic angle from `post` — `-12` for Nimbus Sans Oblique, where a constant 0 stood before — the cap height from `OS/2` where the table is recent enough to carry one, the ascender otherwise, and the flags with the italic bit set where either says so. `StemV`, which TrueType has no field for, is estimated from the weight class as `50 + (weight / 65)²` — 87 for a regular face, 165 for a bold one, the rule tFPDF and mPDF write; for an instance of a variable face the `wght` axis is the weight class. A wrong `StemV` affects hinting hints, not the glyphs.
+
 : **Type 1 needs its metrics beside it.** The widths of a Type 1 face are inside its encrypted charstrings, so they come from the AFM instead: `font embed` looks for the same base name with `.afm`, and **-metrics** names it where it sits elsewhere. Without metrics the face is refused rather than embedded with no widths.
 
-  Embedding a Type 1 program is a copy — the file already consists of the three pieces PDF asks for as `Length1`, `Length2` and `Length3`. Nothing is decrypted, and consequently nothing is subsetted: the face goes in whole, which for a text face is 25 to 105 KB. `-subset` does not apply. Kerning and ligatures do not either; a Type 1 program carries neither GPOS nor GSUB, and the kern pairs an AFM may list are not read.
+  Embedding a Type 1 program is a copy — the file already consists of the three pieces PDF asks for as `Length1`, `Length2` and `Length3`. Nothing is decrypted, and consequently nothing is subsetted: the face goes in whole, which for a text face is 25 to 105 KB. `-subset` does not apply. The one thing that is not copied as it stands is the hexadecimal form of a `.pfa`: PDF wants the encrypted piece as bytes (ISO 32000-1 9.9.1), so the hex is decoded on reading, and a `.pfa` then embeds the same font file as the `.t1` or `.pfb` of that face — measured, byte for byte, and veraPDF passes it where the pass-through failed 6.2.11.4. Kerning and ligatures do not either; a Type 1 program carries neither GPOS nor GSUB, and the kern pairs an AFM may list are not read.
 
   The reach of such a face is the 224 positions of WinAnsiEncoding, as with the standard fourteen — a character outside it is an error, not a blank. Where a document needs more, TrueType is the format to embed.
 
 : **Variable fonts** carry one set of outlines plus a rule for bending them, and **-axes** or **-instance** says where on that rule to embed. `-axes {wght 620 wdth 87}` names axis values directly; `-instance "Condensed Bold"` names a point the designer named, taken from the font's own name table. The two combine — `-instance` sets the starting point and `-axes` overrides single axes of it. Without either, the face is embedded at its default position, which is what sits in its outline table.
 
-  **Each point on the axes is its own embedded font**, because PDF has nowhere to put an axis value: not in the font dictionary, not in the descriptor. The outlines are therefore computed while embedding and go into the file as a fixed instance. Nine weights on a page mean nine subsets.
+  **Each point on the axes is its own embedded font**, because PDF has nowhere to put an axis value: not in the font dictionary, not in the descriptor. The outlines are therefore computed while embedding and go into the file as a fixed instance. Nine weights on a page mean nine subsets, and each is named for what it is: a named instance carries the PostScript name the font gives it — `Roboto-Bold`, `Roboto-CondensedLight` — whether it was asked for by name or by the axis values that are that instance, and any other point is named by its axis values the way Adobe Technical Note 5902 lays down, `Roboto_620wght`, `Roboto_620wght_87.5wdth`. The face's own name, `Roboto-Regular`, names its default and nothing else. The subset tag in front of the name is derived from what was subsetted — the name, the glyphs used, the point on the axes — so two subsets of one file in one document carry different tags, as ISO 32000-1 9.6.4 asks, and two writes of one document carry the same. `pdffonts` on example `02.10-variable-fonts` shows twenty-four instances of one file, each under its own name and tag; it used to show twenty-four times `SZGNUB+Roboto-Regular`.
+
+  `-subset 0` on an instance still embeds every glyph — but as the instance, not as the variable file. The file itself, `fvar`, `gvar` and all, would hand a reader the default outlines under the instance's widths, Regular shapes spaced as Bold; measured with veraPDF, 22 width mismatches under 6.2.11.5. So all glyphs go through the instancer, the variation tables stay behind, and no subset tag is written because nothing is missing.
 
   The advance widths vary with the axes and are read from the same source as the outlines, so `textWidth`, the line breaker and the table columns all measure the instance that is actually drawn. An axis the font does not have, or a named instance it does not offer, is an error that lists the ones it does. `-axes` on a face without an `fvar` table is refused rather than ignored.
 
-  What varies and what does not: outlines, component offsets and advance widths do. Hinting programs are carried through unchanged, and the deltas an `HVAR` table would add on top of the phantom points are not read — measured, neither Roboto nor any face in the examples ships one.
+  What varies and what does not: outlines, component offsets and advance widths do — the advance of an empty glyph included, so a space is 490 units wide in Roboto Thin and 510 in Black, as fontTools' instancer has it. Hinting programs are carried through unchanged. The advances are read off the phantom points of `gvar`, which every glyph carries; the `HVAR` table, which every variable face in the examples ships, repeats the same deltas for readers that do not walk `gvar` and is not read — an instancer that pins every axis drops it after applying the phantom points, and measured against fontTools glyph for glyph, the two sources agree.
 
 : **Which file to embed for a standard face.** A document that has to be
   archivable may not leave a font unembedded, and that includes the fourteen
   standard faces — PDF/A makes no exception for them. Their outlines were never
-  released, so an equivalent has to take their place. The table below maps each
-  of the fourteen to the file that stands in for it.
+  released, so an equivalent has to take their place. The two tables below map
+  each of the fourteen to the file that stands in for it — the URW and the
+  Type 1 file first, then Adobe's OpenType file and what Windows ships. macOS ships the five families under their plain names — Helvetica,
+  Times, Courier, Symbol and Zapf Dingbats — with the style spelled out
+  behind the family (`Helvetica Bold Oblique`, `Times Bold Italic`).
 
-  | PDF standard 14 | URW Core 35 | Adobe Type 1 | Adobe OpenType | macOS | Windows |
-  |---|---|---|---|---|---|
-  | Helvetica | `NimbusSans-Regular.ttf` | `Helvetica.pfb` | `HelveticaLTStd-Roman.otf` | Helvetica | `Arial.ttf` |
-  | Helvetica-Bold | `NimbusSans-Bold.ttf` | `Helvetica-Bold.pfb` | `HelveticaLTStd-Bold.otf` | Helvetica Bold | `Arialbd.ttf` |
-  | Helvetica-Oblique | `NimbusSans-Oblique.ttf` | `Helvetica-Oblique.pfb` | `HelveticaLTStd-Obl.otf` | Helvetica Oblique | `Ariali.ttf` |
-  | Helvetica-BoldOblique | `NimbusSans-BoldOblique.ttf` | `Helvetica-BoldOblique.pfb` | `HelveticaLTStd-BoldObl.otf` | Helvetica Bold Oblique | `Arialbi.ttf` |
-  | Times-Roman | `NimbusRoman-Regular.ttf` | `Times-Roman.pfb` | `TimesLTStd-Roman.otf` | Times | `Times.ttf` |
-  | Times-Bold | `NimbusRoman-Bold.ttf` | `Times-Bold.pfb` | `TimesLTStd-Bold.otf` | Times Bold | `Timesbd.ttf` |
-  | Times-Italic | `NimbusRoman-Italic.ttf` | `Times-Italic.pfb` | `TimesLTStd-Italic.otf` | Times Italic | `Timesi.ttf` |
-  | Times-BoldItalic | `NimbusRoman-BoldItalic.ttf` | `Times-BoldItalic.pfb` | `TimesLTStd-BoldItalic.otf` | Times Bold Italic | `Timesbi.ttf` |
-  | Courier | `NimbusMonoPS-Regular.ttf` | `Courier.pfb` | `CourierStd.otf` | Courier | `Cour.ttf` |
-  | Courier-Bold | `NimbusMonoPS-Bold.ttf` | `Courier-Bold.pfb` | `CourierStd-Bold.otf` | Courier Bold | `Courbd.ttf` |
-  | Courier-Oblique | `NimbusMonoPS-Italic.ttf` | `Courier-Oblique.pfb` | `CourierStd-Oblique.otf` | Courier Oblique | `Couri.ttf` |
-  | Courier-BoldOblique | `NimbusMonoPS-BoldItalic.ttf` | `Courier-BoldOblique.pfb` | `CourierStd-BoldOblique.otf` | Courier Bold Oblique | `Courbi.ttf` |
-  | Symbol | `StandardSymbolsPS.ttf` | `Symbol.pfb` | `SymbolStd.otf` | Symbol | `Symbol.ttf` |
-  | ZapfDingbats | `D050000L.ttf` | `ZapfDingbats.pfb` | `ZapfDingbatsStd.otf` | Zapf Dingbats | — |
+  | PDF standard 14 | URW Core 35 | Adobe Type 1 |
+  |---|---|---|
+  | Helvetica | `NimbusSans-Regular.ttf` | `Helvetica.pfb` |
+  | Helvetica-Bold | `NimbusSans-Bold.ttf` | `Helvetica-Bold.pfb` |
+  | Helvetica-Oblique | `NimbusSans-Oblique.ttf` | `Helvetica-Oblique.pfb` |
+  | Helvetica-BoldOblique | `NimbusSans-BoldOblique.ttf` | `Helvetica-BoldOblique.pfb` |
+  | Times-Roman | `NimbusRoman-Regular.ttf` | `Times-Roman.pfb` |
+  | Times-Bold | `NimbusRoman-Bold.ttf` | `Times-Bold.pfb` |
+  | Times-Italic | `NimbusRoman-Italic.ttf` | `Times-Italic.pfb` |
+  | Times-BoldItalic | `NimbusRoman-BoldItalic.ttf` | `Times-BoldItalic.pfb` |
+  | Courier | `NimbusMonoPS-Regular.ttf` | `Courier.pfb` |
+  | Courier-Bold | `NimbusMonoPS-Bold.ttf` | `Courier-Bold.pfb` |
+  | Courier-Oblique | `NimbusMonoPS-Italic.ttf` | `Courier-Oblique.pfb` |
+  | Courier-BoldOblique | `NimbusMonoPS-BoldItalic.ttf` | `Courier-BoldOblique.pfb` |
+  | Symbol | `StandardSymbolsPS.ttf` | `Symbol.pfb` |
+  | ZapfDingbats | `D050000L.ttf` | `ZapfDingbats.pfb` |
 
-  **Three of those columns can be embedded as they stand.** The URW files are
+  | PDF standard 14 | Adobe OpenType | Windows |
+  |---|---|---|
+  | Helvetica | `HelveticaLTStd-Roman.otf` | `Arial.ttf` |
+  | Helvetica-Bold | `HelveticaLTStd-Bold.otf` | `Arialbd.ttf` |
+  | Helvetica-Oblique | `HelveticaLTStd-Obl.otf` | `Ariali.ttf` |
+  | Helvetica-BoldOblique | `HelveticaLTStd-BoldObl.otf` | `Arialbi.ttf` |
+  | Times-Roman | `TimesLTStd-Roman.otf` | `Times.ttf` |
+  | Times-Bold | `TimesLTStd-Bold.otf` | `Timesbd.ttf` |
+  | Times-Italic | `TimesLTStd-Italic.otf` | `Timesi.ttf` |
+  | Times-BoldItalic | `TimesLTStd-BoldItalic.otf` | `Timesbi.ttf` |
+  | Courier | `CourierStd.otf` | `Cour.ttf` |
+  | Courier-Bold | `CourierStd-Bold.otf` | `Courbd.ttf` |
+  | Courier-Oblique | `CourierStd-Oblique.otf` | `Couri.ttf` |
+  | Courier-BoldOblique | `CourierStd-BoldOblique.otf` | `Courbi.ttf` |
+  | Symbol | `SymbolStd.otf` | `Symbol.ttf` |
+  | ZapfDingbats | `ZapfDingbatsStd.otf` | — |
+
+  **Three of those files can be embedded as they stand.** The URW files are
   TrueType and go in unchanged; Adobe's Type 1 files go in whole, provided
   their AFM is beside them; Adobe's OpenType files go in whole as CFF. The
-  macOS entries for Helvetica, Times and Courier are TrueType **collections**
+  macOS faces for Helvetica, Times and Courier are TrueType **collections**
   — several faces in one file — and a single face still has to be extracted
   before it can be used.
 
@@ -255,17 +281,17 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **text** *string* ?**-at** *{x y}*? ?**-width** *w*? ?**-align** *a*? ?**-direction** *ltr|rtl*? ...
 
-: Draws text. **Without -width** this is one line, and `-align` refers to the given point: `left` starts there, `right` ends there, `center` is centred on it; the call returns nothing. **With -width** the string is broken into a paragraph of that width, `-align justify` becomes available, and the call returns the y coordinate below the last line, so the next block can continue there.
+: Draws text. **Without -width** this is one line, and `-align` refers to the given point: `left` starts there, `right` ends there, `center` — `centre` is accepted too — is centred on it; the call returns nothing. **With -width** the string is broken into a paragraph of that width, `-align justify` becomes available, and the call returns the y coordinate below the last line, so the next block can continue there.
 
-  **-anchor** chooses what the y coordinate means: `baseline` (the default) or `top`. **-rotate** turns the text about `-at`. All font options are accepted per call without changing the state.
+  **-anchor** chooses what the y coordinate means: `baseline` (the default) or `top`; any other value is refused. **-rotate** turns the text about `-at`. All font options are accepted per call without changing the state; a `-size` or `-stretch` of zero or less is refused, here and in **font**, rather than making the text vanish. `-width` must be a positive number.
 
   **-direction** is `ltr` or `rtl` and says which way the line runs. It is an option of the *line*, not of the font state: the same face sets a right-to-left line and a left-to-right heading beside it, so `font` does not take it. Under `rtl` the glyph run is turned round before it is written — with a run of digits keeping its own order inside it and a paired bracket drawn mirrored — and `-align` is mirrored with it: `left` means the edge the line *starts* at in reading order, which is the right hand one, so `-at` marks the right edge of a line that is otherwise unaligned. `center` and `justify` mean the same thing either way. A line that also holds strongly left-to-right text is refused rather than set backwards, and so is `rtl` on one of the standard fourteen faces or an embedded Type 1 face: those are addressed through WinAnsiEncoding, which has no right-to-left letter, so the option could only have done nothing. Which scripts this makes drawable, and what the two rules above do exactly, is described under "Writing systems" below.
 
-  **-height** *h* limits the block. What fits is drawn and the return value becomes a dictionary with `y` and `rest` — the text that did not fit, ready to be set in the next column or on the next page. Without `-height` the return value is the y coordinate as before.
+  **-height** *h* limits the block. What fits is drawn and the return value becomes a dictionary with `y` and `rest` — the text that did not fit, ready to be set in the next column or on the next page. `rest` is the tail of the string as it was given, from the first character that was not set: soft hyphens are still soft, a word broken by character is still one word, and the paragraph breaks are where they were. `y` is the baseline under the last line drawn — the paragraph spacing of a paragraph held back is not counted. Without `-height` the return value is the y coordinate as before.
 
   **-indent**, **-indentRight** and **-firstIndent** narrow the column; a negative first indent hangs the opening line out to the left, which is how a numbered clause is set. **-paragraphSpacing** adds room between paragraphs, on top of the leading.
 
-  **-avoid** takes a list of shapes the text runs around: `{rect {x y} {w h}}` and `{circle {x y} r}`. Each line is narrowed by whatever reaches into it and set in the widest free segment, so a circle is followed by its outline rather than by a box around it. The shapes are not drawn — that is a separate call, and the text can just as well keep clear of something invisible.
+  **-avoid** takes a list of shapes the text runs around: `{rect {x y} {w h}}` and `{circle {x y} r}`. Each line is narrowed by whatever reaches into it and set in the widest free segment, so a circle is followed by its outline rather than by a box around it. A line whose free segment is narrower than the widest character of the text is left empty and the text goes on below the shape — a shape wider than the column pushes the text down rather than letting it run through one letter at a time. The indents apply as they do without shapes, and the shapes are measured against the lines where they actually stand — with `-anchor top` the first baseline sits one ascender below `-at`, and a shape starting on that edge narrows the first line already. The shapes are not drawn — that is a separate call, and the text can just as well keep clear of something invisible.
 
   **-avoidMargin** *d* holds the text off every avoided shape by that distance; a shape may state one of its own as a fourth element (`{circle {x y} r 7}`), which then wins. Without it the words touch the picture, which reads as a mistake however exact the geometry is.
 
@@ -282,7 +308,7 @@ The refusal is the same rule the package applies to a character the face has no 
   # 3. Embedding fonts ........................... 24
   ~~~
 
-  Both ends are measured and the space between them is filled with as many whole copies of **-fill** as fit, holding **-gap** clear of each end (1 unit by default). The remainder stays in front of the right hand end, so the figures of several rows line up. **-fill** may be any string, and an empty one draws nothing at all — which is what a sum under a rule wants. Either end may be empty. Returns the y coordinate one line down, so rows stack without measuring again.
+  Both ends are measured and the space between them is filled with as many whole copies of **-fill** as fit — measured as the run is drawn, so `-spacing` and `-wordSpacing` are counted between the copies — holding **-gap** clear of each end (1 unit by default). The remainder stays in front of the right hand end, so the figures of several rows line up. **-fill** may be any string, and an empty one draws nothing at all — which is what a sum under a rule wants. Either end may be empty. Returns the y coordinate one line down, so rows stack without measuring again.
 
   **-direction rtl** turns the row round: the first argument is the *leading* end and belongs at the right edge, the second at the left, and the fill is measured from the other side. The alignment of each end follows, so a right-to-left row needs nothing but the option.
 
@@ -290,13 +316,13 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **textPath** *string* **-segments** *{...}* ?**-align** *a*? ?**-offset** *d*? ?**-tag** *type*? ?*font options*?
 
-: Sets one line of text along a path, glyph by glyph, each one turned by the direction the path takes at its own position. The segments are the ones **path** takes (`move`, `line`, `curve`, `close`); **-align** places the string at the start, the middle or the end of the path, and **-offset** lifts the baseline off it — positive above, negative below. Returns the length of the path, which is what a caller measures a string against beforehand: glyphs that run past the end are dropped rather than piled up there. The path itself is not drawn.
+: Sets one line of text along a path, glyph by glyph, each one turned by the direction the path takes at its own position. The segments are the ones **path** takes (`move`, `line`, `curve`, `close`); **-align** — `left`, `center` or `right`, and `centre` for `center` — places the string at the start, the middle or the end of the path, and **-offset** lifts the baseline off it — positive above, negative below. Returns the length of the path, which is what a caller measures a string against beforehand: glyphs that run past the end are dropped rather than piled up there. The path itself is not drawn.
 
   **-direction rtl** runs the glyphs backwards along the path and mirrors **-align** with them, exactly as it does on a straight baseline — including the numbers inside such a line, which keep their own order there too.
 
-*doc* **pageNumbers -at** *{x y}* ?**-format** *"Page %n of %m"*? ?**-from** *n*? ?**-total** *n*? ?*font options*?
+*doc* **pageNumbers -at** *{x y}* ?**-format** *"Page %n of %m"*? ?**-align** *a*? ?**-from** *n*? ?**-total** *n*? ?*font options*?
 
-: Puts a page number on every page. `%n` is the number, `%m` the total. It takes the *line* options as well as the font ones, so `-format "صفحة %n من %m" -direction rtl` sets a right-to-left page number with the two figures the right way round. The numbers are drawn when the document is written, not when the call is made — which is the only moment the total is known — so the call may come before the pages it numbers. **-from** leaves the leading pages unnumbered, **-total** states a total of its own for a document that is part of a larger set. Several calls are independent of each other: a number at the foot and a running title at the head are two of them.
+: Puts a page number on every page. `%n` is the number, `%m` the total. **-align** places the number on **-at** as `text` places a line: `left` (the default) starts there, `right` ends there, `center` is centred on it. It takes the *line* options as well as the font ones, so `-format "صفحة %n من %m" -direction rtl` sets a right-to-left page number with the two figures the right way round. The numbers are drawn when the document is written, not when the call is made — which is the only moment the total is known — so the call may come before the pages it numbers. **-from** leaves the leading pages unnumbered, **-total** states a total of its own for a document that is part of a larger set. Several calls are independent of each other: a number at the foot and a running title at the head are two of them.
 
 *doc* **textWidth** *string* ?*font options*?
 
@@ -304,11 +330,11 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **textHeight** *string* **-width** *w* ?*options*?
 
-: The height a paragraph of that width would take.
+: The height a paragraph of that width would take — exactly what **text** advances by with the same options: the difference between the y it returns and the y it was given, indents, paragraph spacing, the ascender of `-anchor top` and the lines a shape pushes down included. It takes the options **text** takes, so one option list serves measuring and drawing; what only the drawing uses (`-align`, `-rotate`, `-tag`) is accepted and changes nothing, `-height` is ignored, and an unknown option is an error. With `-avoid` the call needs `-at`, because the shapes are page positions.
 
 *doc* **textLines** *string* **-width** *w* ?*options*?
 
-: The lines a paragraph would be broken into.
+: The lines a paragraph would be broken into, with the same options and the same rules. Both calls also take the width as their first argument: `textLines $s 80` is the same as `textLines $s -width 80`.
 
 ## Graphics
 
@@ -326,7 +352,7 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **path -segments** *list* ?**-fill** *c*? ?**-stroke** *c*? ?**-rule** *evenodd*?
 
-: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width), **-dash** (a pattern), **-cap**, **-join**, **-miter** (the miter limit: how far a pointed join may reach before it is cut to a bevel), **-opacity** and **-blend**. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates.
+: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width, 0 or more — 0 is the thinnest line the device can draw), **-dash** (a pattern: a list of lengths of 0 or more, not all of them zero; `none` or `solid` for an unbroken line), **-cap** (`butt`, `round` or `square`), **-join** (`miter`, `round` or `bevel`), **-miter** (the miter limit: how far a pointed join may reach before it is cut to a bevel; 1 or more, and 1 bevels every join), **-opacity** and **-blend**. **-radius** is a length of 0 or more; on a rectangle it rounds the corners and 0 leaves them square. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates, and a path begins with a `move`. **-close** joins the end of a `polygon`, a `curve` or a `path` back to its start; a polygon is closed by default, the other two are not. `circle` and `ellipse` are one command under two names: either takes **-radius** for a circle or **-size** *{w h}* for an ellipse, and **-at** is the centre. A shape that is refused — a point that is not a number, an unknown segment, an odd count of **-points** — leaves nothing behind in the page: the check comes before the first byte is written.
 
 *doc* **clip -at** *{x y}* **-size** *{w h}* ?**-rule** *evenodd*? / *doc* **clip -segments** *list* ?**-rule** *evenodd*?
 
@@ -338,13 +364,13 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **transform** ?**-translate** *{dx dy}*? ?**-rotate** *deg*? ?**-scale** *s*? ?**-skew** *{a b}*? ?**-at** *{x y}*? ?**-matrix** *{a b c d e f}*?
 
-: Multiplies the current transformation matrix. **-at** names a fixed point to turn, scale or skew about; **-translate** is a displacement. The two are different things and must not be confused. The parts are applied in the order translate, rotate, skew, scale.
+: Multiplies the current transformation matrix. **-at** names a fixed point to turn, scale or skew about; **-translate** is a displacement. The two are different things and must not be confused. The parts are applied in the order translate, rotate, skew, scale. **-scale** is one factor or `{sx sy}`, none of them zero — a negative one mirrors.
 
-  **-skew** shears by two angles in degrees: the first tilts vertically — y follows x — and the second horizontally, which is the slant an italic-looking stamp needs. **-matrix** takes the six numbers of a PDF matrix and multiplies them in as they stand, ignoring every other option: the values are the raw `cm` operands — points, origin at the bottom left, y upwards — for the caller who already has a matrix rather than wants one built.
+  **-skew** shears by two angles in degrees: the first tilts vertically — y follows x — and the second horizontally, which is the slant an italic-looking stamp needs. **-matrix** takes the six numbers of a PDF matrix — exactly six — and multiplies them in as they stand, ignoring every other option: the values are the raw `cm` operands — points, origin at the bottom left, y upwards — for the caller who already has a matrix rather than wants one built.
 
-*doc* **opacity** *value*
+*doc* **opacity** *value* ?*fill*|*stroke*|*both*?
 
-: Fill and stroke opacity between 0 and 1.
+: Fill and stroke opacity between 0 and 1. The second word limits it to one of the two — `both`, the default, sets fill and stroke alike.
 
 *doc* **blend** *mode*
 
@@ -356,7 +382,9 @@ The refusal is the same rule the package applies to a character the face has no 
 
 ## Colour
 
-A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey value, `{r g b}` between 0 and 1, `{c m y k}`, or a registered separation. Fills may also name a pattern: `{pattern sky}`.
+A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a hexadecimal triplet (`#ffd700`, or `#fd7`), a grey value, `{r g b}` between 0 and 1, `{c m y k}`, or a separation. Three and four numbers are told apart by their count; the space may be named instead — `{gray 0.5}` (`grey` as well), `{rgb 1 0.84 0}`, `{cmyk 0 0.16 1 0}` — which is the unambiguous form. Fills may also name a pattern: `{pattern sky}`.
+
+A separation is a spot colour — a varnish, a security ink, a Pantone shade: `{separation Name alternate ?tint?}`. *Name* is the plate as the press will know it; *alternate* is an ordinary colour in one of the three device spaces, what a reader that has no such ink shows instead; *tint* is the coverage from 0 to 1 and defaults to 1. `{separation Varnish {cmyk 0 0 0 0.2} 0.8}` paints 80 % of a plate called Varnish. The colour space object and its tint transform are written on first use, once per name, and fill and stroke may both use it; a name that appears again must carry the same alternate, since one plate is one ink. Under PDF/A the alternate has to be RGB or grey — the sRGB output intent cannot vouch for a CMYK fallback, and a separation with a CMYK alternate is refused in a document that declares `pdfa`.
 
 ## Images
 
@@ -392,17 +420,39 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
   A cell is read as a dictionary when its **first** word is one of the cell keys and it has an even word count; anything else is the cell's text. Tcl draws no line between a string and a dictionary, so this is a decision rather than a detection, and it leaves one ambiguous case: a plain string that begins with `text`, `align`, `colSpan`, `rowSpan`, `valign` or `style` and happens to have an even word count is read as a dictionary. It then names the offending key rather than silently keeping a fragment of the sentence. Write such a string as a cell dictionary — `{text "text is set here"}` — and it is unambiguous.
 
-  Column widths come in three kinds, resolved in that order: fixed (`{width 34}`), weighted (`{weight 1}`) and automatic — the rest is shared according to how wide the content actually is.
+  Column widths come in three kinds, resolved in that order: fixed (`{width 34}`), weighted (`{weight 1}`) and automatic — the rest is shared according to how wide the content actually is. Both keys take a number; there is no percent width, a share of the table is what `weight` is for. Fixed widths that add up to more than the table are refused, and so are fixed widths that use the table up while a further column has no width of its own — that column would come out zero wide.
 
   **-columns** describes the columns, **-theme** picks `striped`, `grid` or `plain`, and **-style**, **-headStyle**, **-bodyStyle** and **-footStyle** set fonts, colours and padding. **-alternateFill** colours every second body row — the stripe the `striped` theme brings, replaceable with any colour; the other themes have none. **-minRowHeight** is the least height a row may take, for rows whose content alone would leave them shallower. The `border` style key takes `none`, `all`, `horizontal`, `vertical` or `outer`; `outer` frames the block once per page instead of ruling every cell. **-repeatHead** and **-repeatFoot** carry those sections onto each page. **-horizontalBreak** deals a table too wide for the page over further pages, with **-repeatColumns** keeping the leading columns on each.
 
   **-top** and **-bottom** are the type area a breaking table works within, which is not the same thing as where it sits. **-at** says where this table starts on its first page; **-top** says where it resumes on every page after that, and **-bottom** how far down it may run. Both default to a margin of five percent of the page height — 14.85 mm and 282.15 mm on A4 — and neither is taken from **-at**, because where a table happens to begin says nothing about where the page ends. Set **-top** to clear a running head, and **-bottom** to clear a footer.
 
-  `-align decimal` lines the decimal separators of a column up under each other, measured across head, body and foot together; **-decimal** picks the separator, `.` by default. Cells that are not numbers are set flush right.
+  `-align decimal` lines the decimal separators of a column up under each other, measured across head, body and foot together; **-decimal** picks the separator, `.` by default. A cell without the separator is aligned as if it ended at the separator, so integers line up with the integer parts of the other cells — `100` stands under the `1234` of `1234.56`, which is where a column of figures wants it — and a cell that is not a number at all sits there too.
 
   Rows tied together by a `rowSpan` are never split across a page break: the whole group moves.
 
+  **Style keys.** A style is a dictionary of the keys below, and the same keys are read at every level: **-style** for the whole table, **-headStyle**, **-bodyStyle** and **-footStyle** for a section, a column description, and the `style` of a cell — laid over each other in that order, so the most specific wins. A theme is nothing but a set of these.
+
+  | key | values | default |
+  |---|---|---|
+  | `family` | what **font -family** takes | `helvetica` |
+  | `fontStyle` | what **font -style** takes: `bold`, `italic`, both, or empty | empty |
+  | `size` | the font size, in points | `9` |
+  | `leading` | line spacing as a factor of the size | `1.15` |
+  | `padding` | space inside the cell, in the document unit | `1.5` |
+  | `fill` | the cell background — a colour, or empty for none | empty |
+  | `color` | the text colour | `black` |
+  | `align` | `left`, `right`, `center` or `decimal` | `left` |
+  | `valign` | `top`, `middle` or `bottom` | `top` |
+  | `direction` | `ltr` or `rtl` | `ltr` |
+  | `border` | `none`, `all`, `horizontal`, `vertical` or `outer` | `horizontal` |
+  | `lineColor` | the colour of the rules | `{0.6 0.6 0.6}` |
+  | `lineWidth` | the width of the rules, in the document unit | `0.1` |
+
+  A **column** description in **-columns** takes the same keys plus `width` and `weight`, described above — `{width 20 align decimal}` is a fixed column of amounts. A **cell** dictionary takes `text`, `colSpan`, `rowSpan`, `align`, `valign`, `direction` and `style`, the last holding any of the keys above.
+
   Four hooks are called: **-didParseCell** once per cell before it is measured, **-willDrawCell** and **-didDrawCell** around drawing it, and **-didDrawPage** after each page. Each receives a dictionary and the document, in that order; returning 0 from `willDrawCell` skips that cell, and a dictionary returned from `didParseCell` replaces the cell.
+
+  The dictionary a cell hook receives is the cell as the table holds it: the cell keys above, filled in — `text`, `colSpan`, `rowSpan`, `align`, `valign`, `direction`, `style` — plus `row`, `column` and `section` (`head`, `body` or `foot`), which is what `didParseCell` sees. `willDrawCell` and `didDrawCell` see the measured cell on top of that: `lines` (the text as broken), `width`, `height`, `leading`, `resolved` (the assembled style), `x` and `y` (the top left corner on the page), `spanHeight` for a cell spanning rows, and `decimal` and `tail` for the separator and the room its tail takes. `didDrawPage` receives `page`, the index of the page just finished, and `y`, where the table stopped on it — except after a page turn that a horizontal break forced, where only `page` is known.
 
 *doc* **table layout** ?*same options*?
 
@@ -422,11 +472,13 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
   For an axial gradient, **-angle** turns the run: 0 is left to right, counting clockwise, so 90 runs top to bottom; the end points are derived from the rectangle. **-from** and **-to** name the two end points directly instead and win over **-angle** — for a run that starts or ends inside the rectangle, or one that does not pass through its centre.
 
-  A radial gradient runs from an inner to an outer circle. **-center** and **-radius** describe the outer one — by default the middle of the rectangle and half its longer side. **-innerRadius** (default 0) is the radius of the inner circle and **-focus** its centre, the same as **-center** unless given; moved off it, the highlight of a sphere sits away from the middle.
+  A radial gradient runs from an inner to an outer circle. **-center** and **-radius** describe the outer one — by default the middle of the rectangle and half its longer side. **-innerRadius** (default 0) is the radius of the inner circle and **-focus** its centre, the same as **-center** unless given; moved off it, the highlight of a sphere sits away from the middle. Both radii are lengths of 0 or more.
 
-  **-stops** positions the colours: one value per colour, between 0 and 1 and ascending, and the count has to match **-colors** or the call is refused. Only the inner values have an effect — the first and the last colour sit at the ends regardless — so it matters from three colours on. Without it the colours are spaced evenly.
+  **-stops** positions the colours: one value per colour, between 0 and 1 and strictly ascending — two equal stops are refused, as is a count that does not match **-colors**. Only the inner values have an effect — the first and the last colour sit at the ends regardless — so it matters from three colours on. Without it the colours are spaced evenly.
 
   **-extend** is a pair of booleans, `{1 1}` by default: whether the first and the last colour continue beyond the ends of the gradient or stop there.
+
+  **-matrix** is accepted by both direct forms as well, and there it changes only how the coordinates are read: with it, **-from**, **-to**, **-center**, **-focus** and the radii are taken as they stand, in the space the matrix maps from, rather than converted from document coordinates — the gradient itself is painted in whatever transformation is active. Writing the matrix into the file is what the pattern form below does.
 
 *doc* **shading pattern** *name* *type* ?*options*? ?**-matrix** *{a b c d e f}*?
 
@@ -442,7 +494,7 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 : A tiling pattern. Inside the script the tile is drawn like a small page, and every shape command works unchanged.
 
-  **-step** is how far apart the tiles sit, the tile size unless given: equal, they touch; larger, and the background shows through between them — a sparse watermark rather than a hatch. **-unit** reads **-size** and **-step** in another unit than the document's.
+  **-step** is how far apart the tiles sit, the tile size unless given: equal, they touch; larger, and the background shows through between them — a sparse watermark rather than a hatch. Neither the size nor a step may be zero (ISO 32000-1 Table 75). **-unit** reads **-size** and **-step** in another unit than the document's.
 
 *doc* **pattern names** / *doc* **pattern size** *name*
 
@@ -471,7 +523,8 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
   **-data** takes the markup from a Tcl variable instead of a file, which is what a generator wants: whatever produces the SVG hands it over directly, with no temporary file in between. Everything else is the same, including **-alt** and **-artifact** — with a description the drawing becomes a `Figure` carrying it, without one an artifact, and **-artifact 1** says that this is what was meant.
 
   ~~~tcl
-  set markup "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\">\
+  set markup "<svg xmlns=\"http://www.w3.org/2000/svg\"\
+      width=\"40\" height=\"40\">\
       <circle cx=\"20\" cy=\"20\" r=\"18\" fill=\"$colour\"/></svg>"
   $doc svg -data $markup -at {20 20} -width 12 -alt "Status: $state"
   ~~~
@@ -535,6 +588,10 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : A link rectangle over an area of the page — to a URL, to a page of this document, or to a named structure element. It is drawn as nothing: the visible text is a separate call.
 
+  **-page** is the page index, counted from 0 as `page current` counts — not the number printed on the page. The page need not exist yet: a link on the first page may point at a contents page added last, and the target is resolved when the document is written — a page that never came is then reported, naming the link. A negative index is refused at once. `bookmark -page` works the same way.
+
+  **-url** is written in 7-bit ASCII as the format demands: whatever is outside it — an umlaut, a space — becomes `%XX` from its UTF-8 bytes, and a `%` already in the address is left alone, so an encoded URL is not encoded twice.
+
   For a page destination, **-to** names the point to land on and **-zoom** the magnification the reader applies there (`1` is 100 %); without **-zoom** the reader keeps the one it has, and without **-to** the whole page is fitted and **-zoom** does not apply.
 
   **-structure** takes the **-name** of a `structure` element and writes a structure destination (12.3.2.3), which names the element rather than a place on a page and therefore still lands on the right thing after the content above it has moved. PDF/UA-2 asks for internal targets to be written that way. It is written as a GoTo action carrying both the structure destination (/SD) and a page destination (/D) to the element's first page — /XYZ at the top of its first content, or /Fit when no position is known — so a reader that does not understand structure destinations still lands on the right page. It needs a tagged document. `bookmark` takes the same option.
@@ -543,7 +600,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 *doc* **bookmark** *title* ?**-page** *n*? ?**-at** *{x y}*? ?**-parent** *id*? ?**-open** *1*? ?**-structure** *name*?
 
-: Adds an outline entry and returns its id, which can be the `-parent` of further entries. Bookmarks are turned into objects when the document is written. **-open** decides whether the entry shows its children unfolded, and is on by default; `-open 0` collapses a branch until the reader asks for it.
+: Adds an outline entry and returns its id, which can be the `-parent` of further entries. **-page** counts from 0, as `page current` counts, and defaults to the current page; the page has to exist when the bookmark is made, and a missing one is refused at the call rather than at the write. Bookmarks are turned into objects when the document is written. **-open** decides whether the entry shows its children unfolded, and is on by default; `-open 0` collapses a branch until the reader asks for it. Each entry's `/Count` is the number of descendants a reader shows for it, not the number of its children, and the root counts everything visible at all levels (ISO 32000-1 12.3.3).
 
 *doc* **bookmarks**
 
@@ -605,7 +662,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : **Artifacts name their kind.** What is not in the tree is bracketed as an artifact, and the bracket says which sort it is: `Pagination` for a page number, `Layout` for everything else this package produces. PDF/UA-2 requires the naming; earlier versions permit it, so it is written either way and a document does not have to be redrawn when it is upgraded.
 
-  **-tag** takes the kind as well, as a list: `-tag {Artifact Pagination Header}` marks a running head, `{Artifact Pagination Footer}` a running foot, which is what PDF/UA asks for (7.8). `pageNumbers` works it out by itself — above the middle of the page it is a head, below it a foot — because that is the one place that knows.
+  **-tag** takes the kind as well, as a list: `-tag {Artifact Pagination Header}` marks a running head, `{Artifact Pagination Footer}` a running foot, which is what PDF/UA asks for (7.8). The kinds are the four of ISO 32000-1 Table 330 — `Pagination`, `Layout`, `Page` and `Background` — and only `Pagination` takes a subtype: `Header`, `Footer` or `Watermark` (Table 331). Anything else is refused at the call. `pageNumbers` works it out by itself — above the middle of the page it is a head, below it a foot — because that is the one place that knows.
 
 ## PDF/UA
 
@@ -667,7 +724,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   **-conformance** takes `B` (the default), `U` or `A`. Level B promises the document looks the same in fifteen years; level U adds that its text can be extracted and searched reliably, which rests on the ToUnicode map written for every embedded face anyway — so `U` is the stronger claim at no cost and is worth asking for. Level A adds the structure tree, so it needs `tagged 1` before anything is drawn; asked for without it, `pdfa` names the missing call rather than writing a file that claims 3a and fails validation.
 
-  Declaring conformance also turns on a check: every font in the document must be embedded, and writing fails with a message naming the offending face rather than producing a file that a validator rejects later.
+  Declaring conformance also turns on a check: every font in the document must be embedded, and writing fails with a message naming the offending face rather than producing a file that a validator rejects later. The same applies to a separation whose alternate is CMYK: the sRGB output intent cannot cover it (ISO 19005-2, 6.2.4.4), and the colour is refused — at the call once `pdfa` is declared, at write time when the declaration came after it.
 
 *doc* **pdfa state**
 
@@ -693,7 +750,9 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 ## Writing
 
-: **PDF 2.0 differences that are written for you.** A 2.0 file spells the zone offset of a date without the trailing apostrophe (7.9.4), and the version decides it — declaring `ua -part 2` is enough. `ProcSet`, `CharSet` and `CIDSet`, all deprecated in 2.0, are written by no version of this package.
+Two calls write the document, and neither finishes it.
+
+**PDF 2.0 differences that are written for you.** A 2.0 file spells the zone offset of a date without the trailing apostrophe (7.9.4), and the version decides it — declaring `ua -part 2` is enough. `ProcSet`, `CharSet` and `CIDSet`, all deprecated in 2.0, are written by no version of this package.
 
 *doc* **write** *path*
 

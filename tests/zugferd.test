@@ -222,15 +222,48 @@ test zugferd-5.1 {a link becomes a page annotation} -body {
       [regexp {/Annots \[} $bytes] [regexp {/F 4} $bytes]
 } -result {1 1 1 1}
 
-test zugferd-5.2 {a link to a page that does not exist is refused} -body {
+test zugferd-5.2 {a link may point at a page that does not exist yet} -body {
+  # "Back to the contents" on page one, and the contents are the last page:
+  # the target does not exist when the link is drawn. Allowed - the
+  # destination becomes an indirect object filled at write time - and the
+  # link lands on the page that was added later.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc link -at {20 20} -size {40 5} -page 2
+  $doc page add
+  $doc page add
+  set path [::tclpdfTest::scratch link-forward.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The annotation carries an indirect /Dest, and that object names the
+  # third page's object as its target.
+  regexp {/Subtype /Link[^>]*/Dest (\d+) 0 R} $bytes -> number
+  regexp "\n$number 0 obj\n\\\[(\\d+) 0 R /Fit\\\]" $bytes -> target
+  set pages [regexp -all -inline {\n(\d+) 0 obj\n<< /Type /Page } $bytes]
+  list [expr {$target eq [lindex $pages 5]}] [llength $pages]
+} -result {1 6}
+
+test zugferd-5.2a {a link at a page that never comes fails at the write, naming the link} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc link -at {20 20} -size {40 5} -page 7
+  set code [catch {$doc write [::tclpdfTest::scratch link-lost.pdf]} err]
+  $doc destroy
+  list $code [string match "*link -page 7 on page 0*7*1 page(s)*" $err] \
+      [file exists [::tclpdfTest::scratch link-lost.pdf]]
+} -result {1 1 0}
+
+test zugferd-5.2b {a negative page is refused at the call, no later page can mend it} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   try {
-    $doc link -at {20 20} -size {40 5} -page 7
+    $doc link -at {20 20} -size {40 5} -page -1
   } finally {
     $doc destroy
   }
-} -returnCodes error -match glob -result {*no such page: 7*}
+} -returnCodes error -match glob -result {*no such page: -1*}
 
 test zugferd-6.1 {bookmarks build a tree} -body {
   set doc [tclpdf new -unit mm]
@@ -278,6 +311,29 @@ test zugferd-5.3 {a tooltip becomes the annotation's Contents} -body {
   regexp {/Contents \(The example, and nothing else\)} $bytes
 } -result 1
 
+test zugferd-5.4 {a URI is written in ASCII, the rest percent-encoded} -body {
+  # ISO 32000-1 Table 206: the URI is 7-bit ASCII. An umlaut used to send
+  # the whole address through the UTF-16BE path - a hex string a reader
+  # hands to the browser as bytes of unknown encoding. RFC 3986 says what
+  # to do instead: the UTF-8 bytes as %XX. A space is outside the set too,
+  # and a percent sign already there is kept, so an encoded address is not
+  # encoded twice.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc link -at {20 20} -size {40 5} -url "https://\u00fc.de/\u00e4"
+  $doc link -at {20 30} -size {40 5} -url "https://example.org/a b?q=x y"
+  $doc link -at {20 40} -size {40 5} -url "https://example.org/%C3%BC#top"
+  set path [::tclpdfTest::scratch link-uri.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/URI \(https://%C3%BC\.de/%C3%A4\)} $bytes] \
+      [regexp {/URI \(https://example\.org/a%20b\?q=x%20y\)} $bytes] \
+      [regexp {/URI \(https://example\.org/%C3%BC#top\)} $bytes] \
+      [regexp {/URI <} $bytes]
+} -result {1 1 1 0}
+
 test zugferd-6.3 {bookmarks reports the tree that was built} -body {
   # The reading half of the outline facade: [bookmark] returns a handle and
   # nothing could ever ask what the tree looks like without writing the file
@@ -294,6 +350,58 @@ test zugferd-6.3 {bookmarks reports the tree that was built} -body {
       [expr {[dict get [lindex $entries 2] parent] eq $chapter}] \
       [dict get [lindex $entries 1] page]
 } -result {3 drei 1 1}
+
+test zugferd-6.4 {/Count counts the visible descendants, not the children} -body {
+  # ISO 32000-1 Tables 152 and 153. A > B > {C, D}, all open: A shows B, C
+  # and D, so 3, not 1; B shows 2. E > F > G with E closed: E says -2 - the
+  # two that would appear on opening it, F being open - and F says 1. The
+  # root counts what is visible at all levels: A, B, C, D and the closed E,
+  # 5. Direct children gave 1, 2, -1, 1 and 2.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set a [$doc bookmark A]
+  set b [$doc bookmark B -parent $a]
+  $doc bookmark C -parent $b
+  $doc bookmark D -parent $b
+  set e [$doc bookmark E -open 0]
+  set f [$doc bookmark F -parent $e]
+  $doc bookmark G -parent $f
+  set path [::tclpdfTest::scratch outline-count.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set counts {}
+  foreach title {A B E F} {
+    regexp "/Title \\($title\\)\[^>\]*/Count (-?\\d+)" $bytes -> count
+    lappend counts $count
+  }
+  regexp {/Type /Outlines[^>]*/Count (\d+)} $bytes -> root
+  list {*}$counts $root [regexp {/Title \(C\)[^>]*/Count} $bytes]
+} -result {3 2 -2 1 5 0}
+
+test zugferd-6.5 {a bookmark may point forward; one that never lands is named at the write} -body {
+  # A bookmark on a page added later is allowed, like a forward link. One
+  # whose page never comes fails at the write - and the message names the
+  # bookmark by its title, which "no such page: 7" from inside the write
+  # never did.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc bookmark "Later" -page 1
+  $doc page add
+  set path [::tclpdfTest::scratch bookmark-forward.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc bookmark "Nowhere" -page 7
+  set code [catch {$doc write [::tclpdfTest::scratch bookmark-lost.pdf]} err]
+  $doc destroy
+  list [regexp {/Title \(Later\)} $bytes] $code \
+      [string match {*bookmark "Nowhere" points at page 7*1 page(s)*} $err]
+} -result {1 1 1}
 
 test zugferd-7.1 {pdfa declares the conformance the caller asks for} -constraints {haveIcc haveInvoice} -body {
   # [pdfa] on its own - without ZUGFeRD around it - is how a plain archival
@@ -397,7 +505,7 @@ test zugferd-7.6 {an unknown conformance names the ones that exist} -body {
   } finally {
     $doc destroy
   }
-} -returnCodes error -match glob -result {*must be B or U*}
+} -returnCodes error -match glob -result {*must be B, U or A*}
 
 test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -body {
   set doc [tclpdf new -unit mm]

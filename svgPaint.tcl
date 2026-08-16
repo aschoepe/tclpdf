@@ -113,46 +113,95 @@ oo::define ::tclpdf::document::document {
     if {!$hasFill && !$hasStroke} {
       return
     }
-    my save
+    # Assembled first, written afterwards: a colour the parser refuses used
+    # to arrive after a bare [save] that nothing counted, and the drawing's
+    # unwinding at the end could not close it. Every value below is checked
+    # or defaulted before a byte reaches the stream, and the bracket goes
+    # through SvgSave/SvgRestore like every other one in a drawing.
+    set body {}
     if {$hasFill} {
       # Through GraphicsColour rather than straight into the parser: that is
       # what turns a pattern ALIAS into the resource name the content stream
       # needs. Without it the operator names the alias and the reader reports
       # an unknown pattern - a page with the shapes drawn and nothing in them.
-      my content "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill]] fill]\n"
+      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill]] fill]\n"
     }
     if {$hasStroke} {
-      my content "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $stroke]] stroke]\n"
-      my content "[::tclpdf::pdfObj num [my SvgLength \
-          [dict get $style stroke-width] 1]] w\n"
+      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $stroke]] stroke]\n"
+      # A negative width is an error in SVG and the property is then
+      # ignored, which leaves the initial value of 1 (SVG 1.1, 11.4).
+      set width [my SvgLength [dict get $style stroke-width] 1]
+      if {$width < 0} {
+        set width 1
+      }
+      append body "[::tclpdf::pdfObj num $width] w\n"
       set caps {butt 0 round 1 square 2}
       if {[dict exists $caps [dict get $style stroke-linecap]]} {
-        my content "[dict get $caps [dict get $style stroke-linecap]] J\n"
+        append body "[dict get $caps [dict get $style stroke-linecap]] J\n"
       }
       set joins {miter 0 round 1 bevel 2}
       if {[dict exists $joins [dict get $style stroke-linejoin]]} {
-        my content "[dict get $joins [dict get $style stroke-linejoin]] j\n"
+        append body "[dict get $joins [dict get $style stroke-linejoin]] j\n"
       }
-      set dash [dict get $style stroke-dasharray]
-      if {$dash ne {} && $dash ne "none"} {
-        my content "\[[join [regexp -all -inline {[0-9.]+} $dash] { }]\] 0 d\n"
+      set dash [my SvgDashArray [dict get $style stroke-dasharray]]
+      if {[llength $dash]} {
+        append body "\[[join $dash { }]\] 0 d\n"
       }
     }
     set alpha [dict get $style fill-opacity]
-    if {$alpha ne {} && $alpha != 1} {
-      my opacity $alpha fill
+    if {$alpha ne {} && [string is double -strict $alpha]} {
+      # Clamped, not refused: SVG defines the property as a number that is
+      # clamped to 0..1, so 1.5 is opaque and -0.2 is invisible.
+      set alpha [expr {max(0.0, min(1.0, $alpha))}]
+      if {$alpha != 1} {
+        append body "[::tclpdf::pdfObj name [my GraphicsOpacity $alpha fill]] gs\n"
+      }
     }
-    my content $operators
+    append body $operators
     set evenOdd [expr {[dict get $style fill-rule] eq "evenodd"}]
     if {$hasFill && $hasStroke} {
-      my content [expr {$evenOdd ? "B*\n" : "B\n"}]
+      append body [expr {$evenOdd ? "B*\n" : "B\n"}]
     } elseif {$hasFill} {
-      my content [expr {$evenOdd ? "f*\n" : "f\n"}]
+      append body [expr {$evenOdd ? "f*\n" : "f\n"}]
     } else {
-      my content "S\n"
+      append body "S\n"
     }
-    my restore
+    my SvgSave
+    my content $body
+    my SvgRestore
     return
+  }
+
+  # A stroke-dasharray as the lengths of a PDF dash array, or an empty list
+  # for a solid line.
+  #
+  # SVG numbers may carry an exponent - "1e-3" is a length - and the old
+  # pattern [0-9.]+ cut it into 1 and 3, so a dash written that way came out
+  # coarser and one entry longer, with nothing to say so. Negative values
+  # make the whole property an error and it is ignored (SVG 1.1, 11.4); a
+  # sum of zero is rendered as if none were given. Both are what a PDF reader
+  # would need anyway: 8.4.3.6 wants the lengths non-negative and not all
+  # zero.
+  method SvgDashArray {value} {
+    if {$value eq {} || $value eq "none"} {
+      return {}
+    }
+    set numbers [regexp -all -inline -- \
+        {[-+]?(?:[0-9]*\.)?[0-9]+(?:[eE][-+]?[0-9]+)?} $value]
+    if {![llength $numbers]} {
+      return {}
+    }
+    set sum 0
+    foreach number $numbers {
+      if {$number < 0} {
+        return {}
+      }
+      set sum [expr {$sum + $number}]
+    }
+    if {$sum == 0} {
+      return {}
+    }
+    return [lmap number $numbers {::tclpdf::pdfObj num $number}]
   }
 
   # Merge the element's own painting properties over the inherited ones. The

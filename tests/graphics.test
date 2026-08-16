@@ -506,4 +506,240 @@ test graphics-pattern-4.1 {pattern size reports the tile} -body {
   list [lmap value $size {format %.0f $value}] $names
 } -result {{10 5} tile}
 
+# -- refused values, refused early -----------------------------------------
+#
+# Two patterns from the second norm review. First: values at the edge of what
+# the standard allows went straight into the file - a dash of {0 0}, a width
+# below zero, a miter limit under 1 - and no validator says a word, because
+# each is a well-formed number in the right place. Second: a shape wrote its
+# style ("q" and all) and checked its geometry AFTERWARDS, so a refused point
+# left the "q" open and the path without a painting operator. The tests below
+# hand each primitive something wrong, catch the refusal, and then LOOK AT THE
+# STREAM.
+
+# The bracket balance of a content stream: q against Q, BDC against EMC, and
+# whether a path construction is left standing without a painting operator.
+proc ::tclpdfTest::balance {stream} {
+  set operators [::tclpdfTest::operators $stream]
+  set open 0
+  foreach operator $operators {
+    if {$operator in {m l c v y re h}} {
+      set open 1
+    } elseif {$operator in {S s f F f* B B* b b* n}} {
+      set open 0
+    }
+  }
+  return [list [llength [lsearch -all -exact $operators q]] \
+      [llength [lsearch -all -exact $operators Q]] \
+      [llength [lsearch -all -exact $operators BDC]] \
+      [llength [lsearch -all -exact $operators EMC]] \
+      $open]
+}
+
+# Every refused shape, untagged and tagged: what is left in the stream must
+# be NOTHING - the shape was refused before a byte of it went out.
+test graphics-refuse-10.1 {a refused shape leaves the stream balanced and empty} -body {
+  set calls {
+    {polygon -points {1 2 3 4 5} -stroke black}
+    {polygon -points {1 2 3} -stroke black}
+    {rect -at {1 1} -size {2 2} -radius abc -stroke black}
+    {rect -at {1 1} -size {2 2} -radius -1 -stroke black}
+    {rect -at {1 x} -size {2 2} -stroke black}
+    {curve -from {1 1} -c1 {2 2} -c2 {3 x} -to {4 4}}
+    {path -segments {{move 1 1} {arc 3 3}} -stroke black}
+    {path -segments {{move 1 1} {line 3}} -stroke black}
+    {path -segments {{line 1 1}} -stroke black}
+    {line -from {1 1} -to {2 y} -width 1}
+    {ellipse -at {1 1} -radius x -stroke black}
+    {ellipse -at {1 1} -radius -2 -stroke black}
+    {rect -at {1 1} -size {2 2} -stroke black -cap foo}
+    {rect -at {1 1} -size {2 2} -stroke black -join foo}
+    {rect -at {1 1} -size {2 2} -fill nosuchcolour}
+    {rect -at {1 1} -size {2 2} -stroke black -opacity 3}
+    {rect -at {1 1} -size {2 2} -stroke black -blend foo}
+    {rect -at {1 1} -size {2 2} -stroke black -dash {0 0}}
+    {rect -at {1 1} -size {2 2} -stroke black -width -1}
+    {rect -at {1 1} -size {2 2} -stroke black -miter 0.5}
+  }
+  set wrong {}
+  foreach tagged {0 1} {
+    foreach call $calls {
+      set doc [tclpdf new]
+      $doc tagged $tagged
+      $doc page add
+      set code [catch {$doc {*}$call}]
+      set balance [::tclpdfTest::balance [::tclpdfTest::content $doc]]
+      $doc destroy
+      if {$code != 1 || $balance ne {0 0 0 0 0}} {
+        lappend wrong [list tagged $tagged $call code $code balance $balance]
+      }
+    }
+  }
+  set wrong
+} -result {}
+
+test graphics-refuse-10.2 {a refused style does not leave the next shape unmarked} -body {
+  # The style took its structure mark and only THEN found the cap it could
+  # not read - so the mark's bookkeeping believed an artifact was open, and
+  # the next shape on the page went out without a bracket of its own.
+  set doc [tclpdf new]
+  $doc tagged 1
+  $doc page add
+  catch {$doc rect -at {1 1} -size {2 2} -stroke black -cap foo}
+  $doc rect -at {1 1} -size {2 2} -stroke black
+  set balance [::tclpdfTest::balance [::tclpdfTest::content $doc]]
+  $doc destroy
+  set balance
+} -result {1 1 1 1 0}
+
+test graphics-refuse-10.3 {a path segment takes exactly its numbers} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach segments {
+    {{move 1 1} {line 3}}
+    {{move 1}}
+    {{move 1 1} {curve 1 2 3 4 5}}
+    {{move 1 1} {close 1}}
+    {{move 1 1} {line 1 2 3 4}}
+    {{move 1 1} {curve 1 2 3 4}}
+    {{move 1 2 3 4}}
+    {{move 1 1} {line 2 2} {curve 1 2 3 4 5 6} {close}}
+  } {
+    lappend codes [catch {$doc path -segments $segments -stroke black}]
+  }
+  $doc destroy
+  # The even-but-wrong counts are the ones that matter: an odd count fails
+  # on the missing number anyway, but {line 1 2 3 4} used to go out as four
+  # operands to an operator that takes two.
+  set codes
+} -result {1 1 1 1 1 1 1 0}
+
+test graphics-refuse-10.4 {a path begins with a move, and says so} -body {
+  # "l" without a current point is undefined (8.5.2.1): a reader may draw
+  # from wherever it last was, or nothing.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc path -segments {{line 1 1} {line 2 2}} -stroke black} message]
+  set clip [catch {$doc clip -segments {{curve 1 1 2 2 3 3}}}]
+  $doc destroy
+  list $code [string match {*starts with {move x y}*} $message] $clip
+} -result {1 1 1}
+
+test graphics-refuse-10.5 {a polygon takes pairs} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set odd [catch {$doc polygon -points {1 2 3 4 5} -stroke black} message]
+  set even [catch {$doc polygon -points {1 2 3 4 5 6} -stroke black}]
+  $doc destroy
+  list $odd [string match {*pairs*} $message] $even
+} -result {1 1 0}
+
+test graphics-limit-11.1 {a dash array is non-negative and not all zero} -body {
+  # 8.4.3.6. {0 0} would ask for a line made of nothing.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach dash {{0 0} {0} {1 -1} {abc 2} {0 2} {3 1} none} {
+    lappend codes [catch {$doc rect -at {1 1} -size {2 2} -stroke black -dash $dash}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 0 0 0}
+
+test graphics-limit-11.2 {a line width is 0 or more} -body {
+  # 8.4.3.2: zero is the thinnest line the device can draw, and allowed.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach width {-1 abc 0 0.5} {
+    lappend codes [catch {$doc line -from {1 1} -to {2 2} -width $width}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 0 0}
+
+test graphics-limit-11.3 {a miter limit is 1 or more} -body {
+  # 8.4.3.5: the limit is a ratio to the line width, and 1 already bevels
+  # every join.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach miter {0.5 0 -3 abc 1 10} {
+    lappend codes [catch {$doc rect -at {1 1} -size {2 2} -stroke black -miter $miter}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 0 0}
+
+test graphics-limit-11.4 {the limits hold for style as well as for shapes} -body {
+  # One GraphicsStyle for both, so one refusal - but measured, not assumed.
+  set doc [tclpdf new]
+  $doc page add
+  set codes [list [catch {$doc style -dash {0 0}}] [catch {$doc style -width -1}] \
+      [catch {$doc style -miter 0.5}] [catch {$doc style -width 0 -miter 1 -dash {1 0}}]]
+  $doc destroy
+  set codes
+} -result {1 1 1 0}
+
+test graphics-limit-11.5 {a radius is 0 or more} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach call {
+    {rect -at {1 1} -size {2 2} -radius -1}
+    {rect -at {1 1} -size {2 2} -radius abc}
+    {rect -at {1 1} -size {2 2} -radius 0}
+    {rect -at {1 1} -size {2 2} -radius 0.5}
+    {circle -at {1 1} -radius -1}
+    {ellipse -at {1 1} -size {-2 2}}
+    {circle -at {1 1} -radius 0}
+  } {
+    lappend codes [catch {$doc {*}$call}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 0 0 1 1 0}
+
+test graphics-limit-11.6 {-matrix is six numbers} -body {
+  # "cm" takes exactly six operands (8.4.4); five used to go out as they were.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach matrix {{1 0 0 1 0} {1 0 0 1 0 0 0} {1 0 0 x 0 0} {1 0 0 1 0 0}} {
+    lappend codes [catch {$doc transform -matrix $matrix}]
+  }
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $codes [llength [lsearch -all $operators cm]]
+} -result {{1 1 1 0} 1}
+
+test graphics-limit-11.8 {opacity refuses a side it does not know} -body {
+  # "opacity 0.5 foo" used to be accepted and to write an ExtGState with
+  # neither ca nor CA - a call that changed nothing and said nothing.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set code [catch {$doc opacity 0.5 foo} err]
+  set fine [catch {$doc opacity 0.5 stroke} err2]
+  set gs [$doc resource ExtGState]
+  $doc destroy
+  list $code [string match "*fill, stroke or both*" $err] $fine [dict size $gs]
+} -result {1 1 0 1}
+
+test graphics-limit-11.7 {-scale refuses zero, and takes a mirror} -body {
+  # A zero factor makes the matrix singular; a negative one is a mirror
+  # and fine.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach scale {0 {2 0} {0 2} abc {1 2 3} -1 {2 -1} 0.5} {
+    lappend codes [catch {$doc transform -scale $scale} message]
+    if {$scale eq "1 2 3"} {
+      lappend codes [string match {*one factor or {sx sy}*} $message]
+    }
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 1 0 0 0}
+
 cleanupTests

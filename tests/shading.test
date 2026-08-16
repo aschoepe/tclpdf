@@ -209,4 +209,87 @@ test shading-2.3 {without a matrix none is written} -body {
   regexp {/Matrix} $found
 } -result 0
 
+# -- values at the edge of the standard ------------------------------------
+#
+# Each of these went into the file unchecked, and no validator objects: a
+# stitching function whose Bounds run backwards, a radius below zero, a tile
+# that repeats every zero points. The refusal is one line each; the tests are
+# what make it stay.
+
+test shading-4.1 {stops rise strictly and stay inside 0..1} -body {
+  # 7.10.4: Domain0 < Bounds0 < ... < Domain1. Equal stops make a segment
+  # of no width, one out of order a function no reader can evaluate.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach stops {{0 1.5} {0 0.7 0.3 1} {0 0.5 0.5 1} {-0.1 0.5 1} {0 x 1} {0 0.3 0.7 1} {0 1}} {
+    set colours [lrange {red green blue black} 0 [llength $stops]-1]
+    lappend codes [catch {$doc shading axial -at {1 1} -size {10 10} \
+        -colors $colours -stops $stops}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 0 0}
+
+test shading-4.2 {both radii of a radial gradient are 0 or more} -body {
+  # Table 80: r0 and r1 shall not be negative.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach call {
+    {-radius -1} {-innerRadius -1} {-radius abc} {-radius 0} {-innerRadius 0 -radius 5}
+  } {
+    lappend codes [catch {$doc shading radial -at {1 1} -size {10 10} \
+        -colors {red blue} {*}$call}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 0 0}
+
+test shading-4.3 {a tile needs a size and a step above zero} -body {
+  # Table 75: XStep and YStep shall not be zero - and the default step IS
+  # the size, so a zero size fails the same way. Negative steps are allowed
+  # there and stay allowed here.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach call {
+    {-size {0 0}} {-size {4 0}} {-size {0 0} -step {4 4}} {-size {4 -4} -step {4 4}}
+    {-size {4 4} -step {0 4}} {-size {4 4} -step {4 0}}
+    {-size {4 4} -step {4 -4}} {-size {4 4} -step {6 6}} {-size {4 4}}
+  } {
+    lappend codes [catch {$doc pattern create p[llength $codes] {*}$call -script {}}]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 1 0 0 0}
+
+test shading-4.4 {a refused gradient leaves no bracket open} -body {
+  # With -from and -to the shading itself never reads -at, so a bad corner
+  # used to surface only in the clip - after the mark and the "q" were out.
+  set wrong {}
+  foreach tagged {0 1} {
+    foreach call {
+      {shading axial -at {a b} -size {10 10} -from {0 0} -to {1 1} -colors {red blue}}
+      {shading axial -at {1 1} -size {x 10} -from {0 0} -to {1 1} -colors {red blue}}
+      {shading radial -at {1 1} -size {10 10} -colors {red blue} -radius -1}
+      {shading axial -at {1 1} -size {10 10} -colors {red blue green} -stops {0 0.7 0.3}}
+    } {
+      set doc [tclpdf new]
+      $doc tagged $tagged
+      $doc page add
+      set code [catch {$doc {*}$call}]
+      set stream [::tclpdfTest::content $doc]
+      $doc destroy
+      set counts [lmap operator {q Q BDC EMC} {
+        regexp -all "(?:^|\\s)${operator}(?=\\s|\$)" $stream
+      }]
+      if {$code != 1 || $counts ne {0 0 0 0}} {
+        lappend wrong [list tagged $tagged $call code $code counts $counts]
+      }
+    }
+  }
+  set wrong
+} -result {}
+
 cleanupTests

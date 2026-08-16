@@ -134,6 +134,16 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
     return -code error "tclpdf: a JPEG with [dict get $result components]\
         components cannot be mapped to a PDF colour space"
   }
+  # DCTDecode delivers 8 bits per component and nothing else (Table 89): a
+  # 12-bit file - SOF1 with precision 12, which libjpeg writes readily -
+  # would go out as /BitsPerComponent 12 over a filter that cannot produce
+  # them, and every reader would refuse the picture. Refused here instead,
+  # with the reason.
+  if {[dict get $result bitsPerComponent] != 8} {
+    return -code error "tclpdf: [dict get $result bitsPerComponent]-bit JPEG\
+        is not supported by DCTDecode (ISO 32000-1 Table 89) - re-save it\
+        with 8 bits per component"
+  }
   return $result
 }
 

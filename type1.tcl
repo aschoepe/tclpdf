@@ -24,6 +24,16 @@
 # the lengths have to be found in the content. Both are handled, and the
 # lengths are compared against each other where both sources exist.
 #
+# ONE ENCODING of the encrypted piece. PDF wants it as binary (9.9.1, Table
+# 127: Length2 counts the encrypted BYTES), and a .pfb or .t1 carries it so. A
+# .pfa carries the same bytes as hexadecimal text, two characters per byte
+# with line breaks between - the form made for mailing a font in the days when
+# a byte above 127 might not survive the trip. Passing that through unchanged
+# embeds a Type 1 program the standard does not describe; veraPDF reports it
+# under 6.2.11.4 for a .pfa and passes the .t1 of the same face. So the hex is
+# turned back into bytes on reading, and from there on the three containers
+# are the same font.
+#
 # WHAT IS NOT DONE, on purpose:
 #
 #   subsetting     would mean decrypting eexec and reading Type 1 charstrings.
@@ -244,15 +254,33 @@ proc ::tclpdf::type1::Boundaries {bytes} {
   # The trailer is the 512 zeros and what follows them. They are written as
   # ASCII "0" in lines, so the first run of 64 is the start of the block -
   # a run that long cannot occur inside encrypted binary by accident, and
-  # "cleartomark" behind it confirms it.
+  # "cleartomark" behind it confirms it. In a hexadecimal program a run of 64
+  # zeros would be 32 encrypted bytes of 0x00 in a row, which is as unlikely,
+  # and the hex lines are broken every 64 characters or fewer, so a run of
+  # 64 without a break is the first line of the block there too.
   set zeros [string first [string repeat 0 64] $bytes]
   if {$zeros < 0 || [string first "cleartomark" $bytes] < $zeros} {
     return -code error "tclpdf: damaged Type 1 program - no closing block of\
         zeros before cleartomark"
   }
-  return [list $clear \
-      [string range $bytes $at [expr {$zeros - 1}]] \
-      [string range $bytes $zeros end]]
+  set encrypted [string range $bytes $at [expr {$zeros - 1}]]
+
+  # Hexadecimal or binary? The Type 1 spec settles it the way a PostScript
+  # interpreter does: the first four bytes after eexec are hex digits in the
+  # one form and, by construction of the encryption, cannot all be in the
+  # other - the spec requires the first four plaintext bytes to be chosen so
+  # that at least one cipher byte is not a hex digit (Type 1 Font Format,
+  # 7.2). Whitespace between the digits is skipped, and an odd count is a
+  # damaged file, not half a byte.
+  if {[regexp {^[0-9A-Fa-f]{4}} $encrypted]} {
+    regsub -all {[[:space:]]} $encrypted {} hex
+    if {[regexp {[^0-9A-Fa-f]} $hex] || [string length $hex] % 2} {
+      return -code error "tclpdf: damaged Type 1 program - the eexec section\
+          starts as hexadecimal and does not stay so"
+    }
+    set encrypted [binary format H* $hex]
+  }
+  return [list $clear $encrypted [string range $bytes $zeros end]]
 }
 
 # What the header says about the face. Everything here is optional in the

@@ -131,12 +131,49 @@ oo::class create ::tclpdf::document::document {
   # mirroring, and because links and bookmarks would otherwise each spell it
   # out: two copies of the same array, one of which eventually learns about
   # /FitH and the other does not.
-  method destination {page {at {}} {zoom {}}} {
-    if {![string is integer -strict $page] || $page < 0 ||
-        $page >= [llength $tclpdfPages]} {
+  # A destination on a page that does not exist YET is allowed: a "back to
+  # the contents" link on page one points at the last page, which is added
+  # last. Such a target becomes an indirect object, reserved now and filled
+  # on beforeWrite when every page is there - the same trick as a structure
+  # destination. A page that is still missing then is an error naming what
+  # asked for it, so the caller learns which call was wrong rather than
+  # "no such page" from somewhere inside the write. Negative and non-integer
+  # pages are refused at once: no later page can make them right.
+  method destination {page {at {}} {zoom {}} {asker {}}} {
+    if {![string is integer -strict $page] || $page < 0} {
       return -code error "tclpdf: no such page: $page - the document has\
           [llength $tclpdfPages] page(s)"
     }
+    if {$page >= [llength $tclpdfPages]} {
+      set pending [my state pendingDestinations]
+      set key [llength $pending]
+      set number [my reservation destination.pending.$key]
+      lappend pending [list $number $page $at $zoom $asker]
+      my state pendingDestinations $pending
+      if {[llength $pending] == 1} {
+        my onSelf beforeWrite DestinationResolve
+      }
+      return [$tclpdfWriter ref $number]
+    }
+    return [my DestinationArray $page $at $zoom]
+  }
+
+  # Fill the destinations that pointed forward, now that the pages exist.
+  # Runs on every write; the objects are reserved once and written over.
+  method DestinationResolve {} {
+    foreach entry [my state pendingDestinations] {
+      lassign $entry number page at zoom asker
+      if {$page >= [llength $tclpdfPages]} {
+        return -code error "tclpdf: [expr {$asker eq {} ? "a destination" : $asker}]\
+            points at page $page and the document has\
+            [llength $tclpdfPages] page(s) - add the page, or point elsewhere"
+      }
+      $tclpdfWriter put $number [my DestinationArray $page $at $zoom]
+    }
+    return
+  }
+
+  method DestinationArray {page at zoom} {
     set target [$tclpdfWriter ref [dict get [my Page $page] number]]
     if {$at eq {}} {
       # /Fit shows the whole page rather than inventing a position the caller

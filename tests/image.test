@@ -61,6 +61,37 @@ test image-1.5 {a progressive JPEG is refused by name} -body {
   ::tclpdf::imageJpeg parse $bytes
 } -returnCodes error -match glob -result {*progressive*baseline*}
 
+test image-1.6 {a 12-bit JPEG is refused by name} -body {
+  # SOI, then a minimal SOF1 with precision 12 - what libjpeg writes for
+  # "cjpeg -precision 12". DCTDecode delivers 8 bits per component and
+  # nothing else (Table 89); written out, the picture would carry a
+  # /BitsPerComponent no reader can honour.
+  set bytes [binary format H* ffd8ffc1000b0c0010001001011100]
+  ::tclpdf::imageJpeg parse $bytes
+} -returnCodes error -match glob -result {*12-bit JPEG*DCTDecode*Table 89*}
+
+test image-1.7 {the same header with 8 bits is taken} -body {
+  set bytes [binary format H* ffd8ffc1000b080010001001011100]
+  dict get [::tclpdf::imageJpeg parse $bytes] bitsPerComponent
+} -result 8
+
+testConstraint haveCjpeg [expr {[auto_execok cjpeg] ne {} && [auto_execok djpeg] ne {}}]
+
+test image-1.8 {a real 12-bit JPEG is refused too} -constraints {haveImages haveCjpeg} -body {
+  # Made from the grey sample on the spot: cjpeg re-encodes it with 12 bits
+  # of precision, and [image embed] has to say no.
+  set pgm [::tclpdfTest::scratch image-12bit.pgm]
+  set jpg [::tclpdfTest::scratch image-12bit.jpg]
+  exec {*}[auto_execok djpeg] -pnm -outfile $pgm $gray
+  exec {*}[auto_execok cjpeg] -precision 12 -outfile $jpg $pgm
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc image embed twelve $jpg} message]
+  $doc destroy
+  file delete $pgm $jpg
+  list $code [string match {*12-bit JPEG*} $message]
+} -result {1 1}
+
 test image-2.1 {a PNG reports its header} -constraints haveImages -body {
   set parsed [::tclpdf::imagePng parse [::tclpdf::io read $rgba]]
   list [dict get $parsed width] [dict get $parsed height] \

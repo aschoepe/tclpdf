@@ -378,6 +378,22 @@ test text-anchor-7.5 {a paragraph still returns the baseline below itself} -body
       [expr {abs($fromTop - (30 + $ascent + $height)) < 0.001}]
 } -result {1 1}
 
+test text-anchor-7.8 {a value other than baseline or top is refused} -body {
+  # The manual says "baseline or top". Anything else used to act as baseline
+  # in silence, so -anchor middle drew a baseline block and nobody was told.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc text "x" -at {10 10} -anchor middle} middle] \
+      [catch {$doc text "x" -at {10 10} -width 50 -anchor bottom} bottom] \
+      [catch {$doc textHeight "x" -width 50 -anchor xyz} measured]]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Refused before anything reached the page, and the message names the two.
+  list $codes [string match {*must be baseline or top, not "middle"*} $middle] \
+      [string match {*not "bottom"*} $bottom] [string match {*not "xyz"*} $measured] \
+      [regexp {Tj} $content]
+} -result {{1 1 1} 1 1 1 0}
+
 test text-paragraph-7.6 {a rotated paragraph lays its lines side by side} -body {
   # They used to pile up on each other: the line advance ran down the page in
   # document space while every line was rotated about its own advanced point,
@@ -545,6 +561,31 @@ test text-state-9.2 {a plain line is not wrapped at all} -body {
   $doc destroy
   regexp {^q} $content
 } -result 0
+
+test text-state-9.3 {a size of zero or less is refused where it is written} -body {
+  # A size of zero draws nothing and measures nothing, and nothing said so:
+  # the text was simply gone. Refused in [font] for the state and per call.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc font -size 0} state] \
+      [catch {$doc text "x" -at {10 10} -size -3} call] \
+      [catch {$doc textWidth "x" -size 0} width] \
+      [catch {$doc text "x" -at {10 10} -width 50 -size abc} block]]
+  $doc destroy
+  list $codes [string match {*-size must be a positive number*not "0"*} $state] \
+      [string match {*not "-3"*} $call] [string match {*not "abc"*} $block]
+} -result {{1 1 1 1} 1 1 1}
+
+test text-state-9.4 {so is a stretch of zero or less} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc font -stretch 0} state] \
+      [catch {$doc text "x" -at {10 10} -stretch -50} call]]
+  set fine [catch {$doc text "x" -at {10 10} -stretch 80}]
+  $doc destroy
+  list $codes [string match {*-stretch is a percentage above zero*not "0"*} $state] \
+      [string match {*not "-50"*} $call] $fine
+} -result {{1 1} 1 1 0}
 
 test text-11.1 {a string with line breaks is measured by its widest line} -body {
   # Regression, twice over. Measuring such a string as one line used to ADD

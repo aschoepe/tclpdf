@@ -63,10 +63,11 @@ oo::define ::tclpdf::document::document {
           [dict get $options metrics]]
     } else {
       set parsed [::tclpdf::sfnt parse $bytes]
+      lassign [my FontAxes $parsed $options $path] coordinates axes
       dict set fonts $alias [dict create \
           kind truetype \
           path $path parsed $parsed subset [dict get $options subset] \
-          coordinates [my FontAxes $parsed $options $path] \
+          coordinates $coordinates axes $axes \
           used {} number {}]
     }
     my state fonts $fonts
@@ -87,8 +88,12 @@ oo::define ::tclpdf::document::document {
     return $alias
   }
 
-  # Where on the axes a variable font is to be embedded, as normalised
-  # coordinates - or an empty list, which means "leave the outlines alone".
+  # Where on the axes a variable font is to be embedded: a list of two - the
+  # normalised coordinates in fvar order, and the axis values as the caller
+  # gave them, {tag value ...} - or two empty lists, which means "leave the
+  # outlines alone". The second is kept because the PostScript name of the
+  # instance is derived from it (TN 5902): a reader is told Roboto-Bold or
+  # Roboto_620wght, not Roboto-Regular for every weight.
   #
   # BOTH SPELLINGS EXIST because they answer different questions. -instance
   # "Bold" asks for a point the designer named and stood behind; -axes
@@ -103,7 +108,7 @@ oo::define ::tclpdf::document::document {
     set axes [dict get $options axes]
     set instance [dict get $options instance]
     if {$axes eq {} && $instance eq {}} {
-      return {}
+      return {{} {}}
     }
     package require tclpdf::varFont 1.0-
     if {![::tclpdf::varFont isVariable $parsed]} {
@@ -130,7 +135,7 @@ oo::define ::tclpdf::document::document {
             number, got \"$value\""
       }
     }
-    return [::tclpdf::varFont coordinates $parsed $axes]
+    return [list [::tclpdf::varFont coordinates $parsed $axes] $axes]
   }
 
   # The instanced glyphs of a variable font, computed once and kept.
@@ -582,6 +587,27 @@ oo::define ::tclpdf::document::document {
 
   # -- writing ------------------------------------------------------------
 
+  # The object number one piece of an embedded face is written under - the
+  # font file, the descriptor, the CID font, the maps - reserved the first
+  # time it is asked for and the SAME on every write after that.
+  #
+  # The write events fire on every write of a document, and this used to add
+  # fresh objects each time: a document written twice carried two font files,
+  # two descriptors and two CIDToGIDMaps for one face, the first set of them
+  # referenced by nothing. Measured before this: the second write of a
+  # one-font document had two FontDescriptors and was 8451 bytes to the
+  # first's 4711. Now the numbers live with the face, and the second write fills the
+  # same slots again - with the glyphs used by then, which is the point of
+  # writing at write time.
+  method FontSlot {alias key} {
+    set fonts [my state fonts]
+    if {![dict exists $fonts $alias slots $key]} {
+      dict set fonts $alias slots $key [[my writer] reserve]
+      my state fonts $fonts
+    }
+    return [dict get $fonts $alias slots $key]
+  }
+
   method FontWrite {} {
     dict for {alias entry} [my state fonts] {
       if {[dict get $entry number] eq {}} {
@@ -607,7 +633,7 @@ oo::define ::tclpdf::document::document {
 
     set fontBytes [string cat [dict get $program clear] \
         [dict get $program encrypted] [dict get $program trailer]]
-    set fontFileNumber [$writer addStream \
+    set fontFileNumber [$writer stream [my FontSlot $alias fontFile] \
         [list Length1 [dict get $program length1] \
             Length2 [dict get $program length2] \
             Length3 [dict get $program length3] \
@@ -618,9 +644,9 @@ oo::define ::tclpdf::document::document {
     if {$baseName eq {}} {
       set baseName [dict get $program name]
     }
-    set descriptorNumber [$writer add [::tclpdf::pdfObj dictionary \
-        [my FontType1DescriptorPairs $entry $baseName \
-            [$writer ref $fontFileNumber]]]]
+    set descriptorNumber [$writer put [my FontSlot $alias descriptor] \
+        [::tclpdf::pdfObj dictionary [my FontType1DescriptorPairs $entry \
+            $baseName [$writer ref $fontFileNumber]]]]
 
     # FirstChar to LastChar covers the whole encoding rather than only what
     # was used: nothing is subsetted here, every one of those glyphs is in the
@@ -638,7 +664,8 @@ oo::define ::tclpdf::document::document {
         BaseFont [::tclpdf::pdfObj name $baseName] \
         FirstChar $first \
         LastChar $last \
-        Widths [$writer ref [$writer add [::tclpdf::pdfObj arr $entries]]] \
+        Widths [$writer ref [$writer put [my FontSlot $alias widths] \
+            [::tclpdf::pdfObj arr $entries]]] \
         Encoding /WinAnsiEncoding \
         FontDescriptor [$writer ref $descriptorNumber]]]
     return
@@ -681,9 +708,9 @@ oo::define ::tclpdf::document::document {
       set capHeight $ascent
     }
     # StemV has no counterpart in an AFM that is guaranteed to be there -
-    # StdVW is optional and both faces in this tree omit it. 80 is the value
-    # this package already writes for TrueType; a wrong StemV affects hinting
-    # hints, not the glyphs.
+    # StdVW is optional and both faces in this tree omit it. 80 is a middling
+    # value, close to the 87 the TrueType road estimates for a regular
+    # weight; a wrong StemV affects hinting hints, not the glyphs.
     set stemV [dict get $metrics stemV]
     if {$stemV eq {}} {
       set stemV 80
@@ -727,6 +754,24 @@ oo::define ::tclpdf::document::document {
           [my FontInstanced $alias]]
       set fontBytes [dict get $built bytes]
       set mapping [dict get $built glyphs]
+    } elseif {[llength [dict get $entry coordinates]]} {
+      # -subset 0 on an instance of a variable face: EVERY glyph goes in, but
+      # through the instancer, not as the file. The file is the variable
+      # face - fvar, gvar, avar and the rest - and PDF knows nothing of
+      # variation, so a reader would draw its default outlines under the
+      # instance's widths: Regular shapes spaced as Bold. Measured before this
+      # branch existed, the embedded FontFile2 carried 22 tables including
+      # gvar, and /W carried the Bold advances. The instance exists only as
+      # the glyphs written for it, so with -subset 0 those are all of them;
+      # every glyph keeps its number, and no subset tag is written because
+      # none is missing.
+      set all {}
+      for {set glyph 0} {$glyph < [dict get $parsed numGlyphs]} {incr glyph} {
+        lappend all $glyph
+      }
+      set built [::tclpdf::subset build $parsed $all [my FontInstanced $alias]]
+      set fontBytes [dict get $built bytes]
+      set mapping [dict get $built glyphs]
     } else {
       set fontBytes [dict get $parsed bytes]
       set mapping {}
@@ -743,11 +788,11 @@ oo::define ::tclpdf::document::document {
     # whole sfnt is handed over, cmap and all, and the reader takes what it
     # needs. /Length1 has no meaning there and is left out.
     if {$cff} {
-      set fontFileNumber [$writer addStream \
+      set fontFileNumber [$writer stream [my FontSlot $alias fontFile] \
           [list Subtype /OpenType Filter /FlateDecode] \
           [::tclpdf::filter encodeFlate $fontBytes]]
     } else {
-      set fontFileNumber [$writer addStream \
+      set fontFileNumber [$writer stream [my FontSlot $alias fontFile] \
           [list Length1 [string length $fontBytes] Filter /FlateDecode] \
           [::tclpdf::filter encodeFlate $fontBytes]]
     }
@@ -758,11 +803,11 @@ oo::define ::tclpdf::document::document {
     #
     # No subset prefix for CFF: the tag MEANS subset (9.9.2), and nothing was
     # subsetted here.
-    set baseName [my FontBaseName $parsed $alias \
+    set baseName [my FontBaseName $entry $alias \
         [expr {!$cff && [dict get $entry subset]}]]
 
-    set descriptorNumber [$writer add [::tclpdf::pdfObj dictionary \
-        [my FontDescriptorPairs $parsed $baseName \
+    set descriptorNumber [$writer put [my FontSlot $alias descriptor] \
+        [::tclpdf::pdfObj dictionary [my FontDescriptorPairs $entry $baseName \
             [$writer ref $fontFileNumber] $cff]]]
 
     # The CID font.
@@ -793,13 +838,16 @@ oo::define ::tclpdf::document::document {
         DW 1000 \
         W [my FontWidthArray $alias $parsed $used $units]]
     if {!$cff} {
-      set cidToGidNumber [$writer addStream {Filter /FlateDecode} \
+      set cidToGidNumber [$writer stream [my FontSlot $alias cidToGid] \
+          {Filter /FlateDecode} \
           [::tclpdf::filter encodeFlate [my FontCidToGid $mapping]]]
       lappend pairs CIDToGIDMap [$writer ref $cidToGidNumber]
     }
-    set descendantNumber [$writer add [::tclpdf::pdfObj dictionary $pairs]]
+    set descendantNumber [$writer put [my FontSlot $alias descendant] \
+        [::tclpdf::pdfObj dictionary $pairs]]
 
-    set toUnicodeNumber [$writer addStream {Filter /FlateDecode} \
+    set toUnicodeNumber [$writer stream [my FontSlot $alias toUnicode] \
+        {Filter /FlateDecode} \
         [::tclpdf::filter encodeFlate [my FontToUnicode $used]]]
 
     $writer put [dict get $entry number] [::tclpdf::pdfObj dictionary [list \
@@ -811,42 +859,107 @@ oo::define ::tclpdf::document::document {
     return
   }
 
-  method FontBaseName {parsed alias {subsetted 1}} {
-    if {[dict exists [dict get $parsed names] postScript]} {
+  # The name a face is embedded under, with the subset tag in front where one
+  # belongs.
+  #
+  # The name is the PostScript name of the file - or, for an instance of a
+  # variable face, the name of THAT instance by TN 5902 (varFont
+  # postScriptName): Roboto-Bold for the named one, Roboto_620wght for a
+  # point in between. Name id 6 of a variable file names its default, and
+  # writing it for every weight told a reader nine times over that a
+  # different font was Roboto-Regular.
+  #
+  # The six-letter tag says "this is a subset" (9.9.2) - so a face embedded
+  # WHOLE, through "font embed -subset 0", must not carry one. It did until
+  # now, which named a complete DejaVuSans a subset of itself: a reader
+  # merging fonts across documents is told to keep two incompatible copies,
+  # and a preflight tool is entitled to reject the file.
+  #
+  # The tag is derived from WHAT WAS SUBSETTED - the name, the glyphs used and
+  # the point on the axes - because 9.6.4 asks that different subsets of one
+  # face in one file carry different tags. It used to be a function of the
+  # name alone, and 02.10 then embedded twenty-four instances of Roboto all
+  # tagged SZGNUB+: a reader entitled to treat same tag and same name as the
+  # same font would have drawn Thin with the glyphs of Black. Same input, same
+  # tag, so two writes of one document stay byte-identical; a document that
+  # sets one letter more gets a different tag, which is exactly right, since
+  # it is a different subset.
+  method FontBaseName {entry alias {subsetted 1}} {
+    set parsed [dict get $entry parsed]
+    if {[dict exists $entry axes] && [dict size [dict get $entry axes]]} {
+      package require tclpdf::varFont 1.0-
+      set name [::tclpdf::varFont postScriptName $parsed [dict get $entry axes]]
+    } elseif {[dict exists [dict get $parsed names] postScript]} {
       set name [dict get $parsed names postScript]
     } else {
       set name $alias
     }
-    # The six-letter tag says "this is a subset" (9.9.2) - so a face embedded
-    # WHOLE, through "font embed -subset 0", must not carry one. It did until
-    # now, which named a complete DejaVuSans a subset of itself: a reader
-    # merging fonts across documents is told to keep two incompatible copies,
-    # and a preflight tool is entitled to reject the file.
+    set name [string map {{ } {}} $name]
     if {!$subsetted} {
-      return [string map {{ } {}} $name]
+      return $name
     }
-    # The tag is derived from the name so that the same font gives the same one.
+    set key "$name|[lsort -integer [dict keys [dict get $entry used]]]|[dict get $entry coordinates]"
+    # CRC-32 of the key, spelt as six capital letters - 26^6 is 308 million
+    # tags, of which the checksum picks one; the top four bits of it are not
+    # used. Not a cryptographic hash and not meant as one: two subsets that
+    # collide would have to differ in glyphs and agree in checksum, and a
+    # reader confuses two fonts only when tag AND name AND file agree.
+    set crc [zlib crc32 [encoding convertto utf-8 $key]]
     set tag {}
-    set seed 0
-    foreach char [split $name {}] {
-      incr seed [scan $char %c]
-    }
     for {set index 0} {$index < 6} {incr index} {
-      append tag [format %c [expr {65 + ($seed + $index * 7) % 26}]]
+      append tag [format %c [expr {65 + $crc % 26}]]
+      set crc [expr {$crc / 26}]
     }
-    return "$tag+[string map {{ } {}} $name]"
+    return "$tag+$name"
   }
 
-  method FontDescriptorPairs {parsed baseName fontFileRef {cff 0}} {
+  # The font descriptor (9.8.1, Table 122). Every value in it comes from the
+  # file except StemV, which TrueType has no field for.
+  #
+  # ItalicAngle is post.italicAngle - written as 0 for every face until it was
+  # read, so Nimbus Sans Oblique declared itself upright. CapHeight is OS/2
+  # sCapHeight where the table is version 2 or later and the field is filled,
+  # else the ascender - it was the ascender for every face, which put the cap
+  # height of Roboto at 928 instead of 711. StemV is estimated from
+  # usWeightClass by the rule tFPDF and mPDF use, 50 + (weight / 65)^2 - 87
+  # for a regular face, 166 for a bold one; a wrong StemV affects hinting
+  # hints, not the glyphs, and a constant 80 for a Black cut was wrong by a
+  # factor of three. For an instance of a variable face the wght axis IS its
+  # weight class, and the estimate follows the axis rather than the file's
+  # default.
+  method FontDescriptorPairs {entry baseName fontFileRef {cff 0}} {
+    set parsed [dict get $entry parsed]
     set units [dict get $parsed unitsPerEm]
     lassign [dict get $parsed bbox] xMin yMin xMax yMax
     set scale [expr {1000.0 / $units}]
+    set italicAngle [dict get $parsed italicAngle]
     # Symbolic (bit 3) rather than nonsymbolic: the font is addressed by glyph
     # id, so no standard encoding applies to it.
     set flags 4
-    if {[dict get $parsed macStyle] & 2} {
+    if {[dict get $parsed macStyle] & 2 || $italicAngle != 0} {
       incr flags 64
     }
+    set ascent [expr {[dict get $parsed ascender] * $scale}]
+    set capHeight $ascent
+    set weight 400
+    # OS/2 (Table 122 asks for CapHeight, TrueType keeps it here): version at
+    # offset 0, usWeightClass at 4, sCapHeight at 88 from version 2 on. Read
+    # from the raw table rather than parsed with the rest, because nothing
+    # else in the package wants either value.
+    set os2 [::tclpdf::sfnt table $parsed OS/2]
+    if {[string length $os2] >= 6} {
+      binary scan $os2 Sux2Su version weight
+      if {$version >= 2 && [string length $os2] >= 90} {
+        binary scan $os2 @88S sCapHeight
+        if {$sCapHeight > 0} {
+          set capHeight [expr {$sCapHeight * $scale}]
+        }
+      }
+    }
+    if {[dict exists $entry axes] && [dict exists [dict get $entry axes] wght]} {
+      set weight [dict get $entry axes wght]
+    }
+    set stemV [expr {int(50 + ($weight / 65.0) ** 2)}]
     return [list Type /FontDescriptor \
         FontName [::tclpdf::pdfObj name $baseName] \
         Flags $flags \
@@ -855,11 +968,11 @@ oo::define ::tclpdf::document::document {
             [::tclpdf::pdfObj num [expr {$yMin * $scale}]] \
             [::tclpdf::pdfObj num [expr {$xMax * $scale}]] \
             [::tclpdf::pdfObj num [expr {$yMax * $scale}]]]] \
-        ItalicAngle 0 \
-        Ascent [::tclpdf::pdfObj num [expr {[dict get $parsed ascender] * $scale}]] \
+        ItalicAngle [::tclpdf::pdfObj num $italicAngle] \
+        Ascent [::tclpdf::pdfObj num $ascent] \
         Descent [::tclpdf::pdfObj num [expr {[dict get $parsed descender] * $scale}]] \
-        CapHeight [::tclpdf::pdfObj num [expr {[dict get $parsed ascender] * $scale}]] \
-        StemV 80 \
+        CapHeight [::tclpdf::pdfObj num $capHeight] \
+        StemV $stemV \
         [expr {$cff ? {FontFile3} : {FontFile2}}] $fontFileRef]
   }
 
