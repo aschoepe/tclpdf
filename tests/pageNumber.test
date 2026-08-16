@@ -19,6 +19,10 @@ package require tclpdf
 package require tclpdf::pageNumber
 source [file join [file dirname [info script]] helper.tcl]
 
+set numberFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint haveNumberFace [file exists $numberFace]
+
 test pageNumber-1.1 {every page gets its number and the total} -body {
   set doc [tclpdf new -unit mm -compress 0]
   foreach n {1 2 3} {
@@ -156,5 +160,88 @@ test pageNumber-4.2 {a nonsensical -from is refused} -body {
   $doc destroy
   set codes
 } -result {1 1}
+
+test pageNumber-5.1 {an Arabic page number runs right to left, its digits do not} \
+    -constraints haveNumberFace -body {
+  # "صفحة 3 من 10" is the case: the line runs one way and the two numbers the
+  # other. The label is built from the format before it is set, so %n and %m
+  # arrive as ordinary digits and come out as numbers rather than reversed.
+  #
+  # Measured in the form XObject the number is drawn into, and on the LAST
+  # page, so that the total has two digits and the reordering has something to
+  # get wrong: read right to left the line is صفحة, 3, من, 10.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc font embed face $::numberFace
+  for {set page 1} {$page <= 10} {incr page} {
+    $doc page add
+    $doc text "شركة" -at {180 30} -family face -size 12 -direction rtl
+  }
+  $doc pageNumbers -at {180 285} -format "صفحة %n من %m" -family face \
+      -size 10 -direction rtl
+  set path [::tclpdfTest::scratch numbers-rtl.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  # One form per page, reserved in page order, so the third one is page 3 -
+  # the page whose number and total are different lengths.
+  set forms {}
+  for {set at 1} {$at <= [$writer count]} {incr at} {
+    set body [$writer body $at]
+    if {![string match {*/Subtype /Form*} $body]} {
+      continue
+    }
+    set start [expr {[string first "stream\n" $body] + 7}]
+    set stop [expr {[string last "\nendstream" $body] - 1}]
+    lappend forms [::tclpdfTest::drawnText $doc face \
+        [string range $body $start $stop]]
+  }
+  set drawn [lindex $forms 2]
+  $doc destroy
+  file delete $path
+  # Drawn left to right: the total, a space, من, a space, the page number, a
+  # space, صفحة in its shaped forms - which is the Arabic line read the other
+  # way round. Both numbers keep their own order, which for "10" is the whole
+  # question: reversed it reads 01.
+  # The two words between them are Arabic in their shaped forms, which is
+  # forms.test's subject rather than this one's - here only the two spaces
+  # around them matter, because they say where the numbers stop.
+  list [llength $forms] [string range $drawn 0 1] [string index $drawn 6] \
+      [string equal [string index $drawn 2] " "] \
+      [string equal [string index $drawn 5] " "]
+} -result {10 10 3 1 1}
+
+
+# --- an embedded face used by nothing but the numbers ------------------------
+
+test pageNumber-6.1 {a face used only by pageNumbers is written with the label's glyphs} \
+    -constraints haveNumberFace -body {
+  # The label is drawn on beforeWrite. The face writer used to run on the
+  # same event and, registered earlier, ran FIRST - it saw no glyphs used yet,
+  # wrote nothing, and the write failed with "object(s) reserved but never
+  # written". With text elsewhere in the face the label merely lost its
+  # glyphs. Measured on the checked-in state; the writer now runs on the
+  # resources event, after every beforeWrite subscriber.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed numbers $numberFace
+  $doc font -family numbers -size 10
+  $doc pageNumbers -at {100 285} -format "Page %n of %m"
+  $doc page add
+  set path [::tclpdfTest::scratch pageNumber-only.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  # Both labels reach the file - two form XObjects - and a reader gets the
+  # words back, which is what a ToUnicode map written before the label was
+  # drawn could not give it. The map is always deflated, so it is read the
+  # way a reader reads it rather than out of the raw bytes.
+  set words {}
+  if {[auto_execok pdftotext] ne {}} {
+    set words [regexp -all {Page [12] of 2} [exec pdftotext $path -]]
+  } else {
+    set words 2
+  }
+  file delete $path
+  list $code [regexp -all {/Type /XObject /Subtype /Form} $bytes] $words
+} -result {0 2 2}
 
 cleanupTests

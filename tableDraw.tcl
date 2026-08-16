@@ -66,7 +66,13 @@ oo::define ::tclpdf::document::document {
       default {set top [expr {$y + $padding}]}
     }
 
-    set align [dict get $style align]
+    # THE SIDE THE TEXT STARTS AT, in reading order. -align on a cell means
+    # the same as it does on [text]: under rtl "left" is the right hand edge.
+    # Mirrored through the same method, so the two cannot drift - and mirrored
+    # BACK when the value is passed on, because [text] mirrors it again and
+    # two mirrorings are none.
+    set state [dict create direction [dict get $style direction]]
+    set align [my TextAlign [dict get $style align] $state]
     foreach line $lines {
       switch -- $align {
         decimal {
@@ -78,6 +84,14 @@ oo::define ::tclpdf::document::document {
           # Right alignment only looks the same while every number has the
           # same number of decimals - which is exactly the case a test uses
           # and a real price list does not.
+          #
+          # AND THIS ONE DOES NOT MIRROR under rtl, which is why it sits in
+          # front of the switch on the mirrored side: a decimal column holds
+          # numbers, and numbers are set left to right in every script that
+          # uses them - the digits of a right-to-left line come out as a
+          # number for the same reason. So the column keeps its separator
+          # where it is, and only the two -align values are handed on in the
+          # form that survives [text] mirroring them.
           set at [expr {$x + $width - $padding - [dict get $cell tail]}]
           set anchor right
           set separator [string first [dict get $cell decimal] $line]
@@ -86,13 +100,11 @@ oo::define ::tclpdf::document::document {
             # tail left-aligned from it - two calls, because there is no PDF
             # operator that aligns on a character.
             my text [string range $line 0 $separator-1] -at [list $at $top] \
-                -anchor top -align right -family [dict get $style family] \
-                -style [dict get $style fontStyle] -size [dict get $style size] \
-                -color [dict get $style color]
+                -anchor top -align [my TextAlign right $state] \
+                {*}[my TableFont $style] -color [dict get $style color]
             my text [string range $line $separator end] -at [list $at $top] \
-                -anchor top -align left -family [dict get $style family] \
-                -style [dict get $style fontStyle] -size [dict get $style size] \
-                -color [dict get $style color]
+                -anchor top -align [my TextAlign left $state] \
+                {*}[my TableFont $style] -color [dict get $style color]
             set top [expr {$top + $leading}]
             continue
           }
@@ -112,9 +124,9 @@ oo::define ::tclpdf::document::document {
           set anchor left
         }
       }
-      my text $line -at [list $at $top] -anchor top -align $anchor \
-          -family [dict get $style family] -style [dict get $style fontStyle] \
-          -size [dict get $style size] -color [dict get $style color]
+      my text $line -at [list $at $top] -anchor top \
+          -align [my TextAlign $anchor $state] {*}[my TableFont $style] \
+          -color [dict get $style color]
       set top [expr {$top + $leading}]
     }
     return

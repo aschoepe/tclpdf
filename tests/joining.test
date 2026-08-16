@@ -1,0 +1,122 @@
+# joining.test --
+#
+# The Unicode joining algorithm: which of the four shapes each character of a
+# line stands in.
+#
+# This is the half of Arabic shaping that has nothing to do with fonts, so it
+# is tested without one. The expected forms are not invented here either -
+# they are what HarfBuzz produces for the same words (tests/forms.test does
+# that comparison with a face in hand), read back as the four positions.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::joining
+source [file join [file dirname [info script]] helper.tcl]
+
+# A string as the code point list the module takes.
+proc joiningCodes {text} {
+  set codes {}
+  foreach char [split $text {}] {
+    lappend codes [scan $char %c]
+  }
+  return $codes
+}
+
+proc joiningForms {text} {
+  return [::tclpdf::joining forms [joiningCodes $text]]
+}
+
+test joining-1.1 {the joining types of the Arabic letters} -body {
+  # One representative of each class. Alef joins only backwards, beh both
+  # ways, hamza not at all - and the fatha is transparent, which is the class
+  # that breaks a word when it is got wrong.
+  set found {}
+  foreach {name char} [list alef ا beh ب waw و hamza ء lam ل tehMarbuta ة \
+      tatweel ـ fatha "َ" sukun "ْ"] {
+    lappend found $name [::tclpdf::joining type [scan $char %c]]
+  }
+  set found
+} -result {alef R beh D waw R hamza U lam D tehMarbuta R tatweel C fatha T sukun T}
+
+test joining-1.2 {a character the table does not name is non-joining} -body {
+  # Latin, a digit, a space, and one from a plane the table stops well short
+  # of. The source file says every code point it does not list is U, so the
+  # absence is the answer.
+  list [::tclpdf::joining type [scan A %c]] [::tclpdf::joining type [scan 7 %c]] \
+      [::tclpdf::joining type 32] [::tclpdf::joining type 0x1F600] \
+      [::tclpdf::joining type 0x10FFFF]
+} -result {U U U U U}
+
+test joining-1.3 {the range ends are inside the range} -body {
+  # A binary search over ranges gets the ends wrong before it gets the middle
+  # wrong. U+06FF is the last letter of the Arabic block and dual-joining,
+  # U+0700 the Syriac end-of-paragraph mark and non-joining, U+0710 the Syriac
+  # alaph and right-joining - three neighbours, three answers.
+  list [::tclpdf::joining type 0x05FF] [::tclpdf::joining type 0x0600] \
+      [::tclpdf::joining type 0x0620] [::tclpdf::joining type 0x06FF] \
+      [::tclpdf::joining type 0x0700] [::tclpdf::joining type 0x0710]
+} -result {U U D D U R}
+
+test joining-2.1 {the forms of a word, letter by letter} -body {
+  # مرحبا - mim, ra, hah, beh, alef. The ra joins backwards only, so the hah
+  # after it starts a new stretch: init fina init medi fina, and not five
+  # medials.
+  joiningForms "مرحبا"
+} -result {init fina init medi fina}
+
+test joining-2.2 {lam-alef is an initial and a final} -body {
+  joiningForms "لا"
+} -result {init fina}
+
+test joining-2.3 {a word that begins with a non-joining pair} -body {
+  # العربية - the alef joins only backwards and has nothing before it, so it
+  # stands isolated even though a letter follows.
+  list [joiningForms "العربية"] [joiningForms "بالعالم"] [joiningForms "كتاب"]
+} -result {{isol init medi fina init medi fina} {init fina init medi fina init fina}\
+ {init medi fina isol}}
+
+test joining-3.1 {a transparent character does not break the join} -body {
+  # beh + fatha + beh. The mark is skipped when the neighbours are looked for,
+  # so the two letters still see each other - and the mark itself gets no form
+  # of its own.
+  list [joiningForms "بَب"] [joiningForms "بب"]
+} -result {{init none fina} {init fina}}
+
+test joining-3.2 {two marks in a row are as invisible as one} -body {
+  joiningForms "بَّب"
+} -result {init none none fina}
+
+test joining-4.1 {a space breaks the connection} -body {
+  # Which is why the module takes a LINE and not a word: the break is in the
+  # data, and a caller that split the text into words first would join across
+  # the seam that is no longer there.
+  joiningForms "بب بب"
+} -result {init fina none init fina}
+
+test joining-4.2 {Latin between two Arabic letters breaks it too} -body {
+  joiningForms "بAب"
+} -result {isol none isol}
+
+test joining-4.3 {tatweel joins on both sides without being a letter} -body {
+  # The keyboard character for stretching a word. It is join-causing, so the
+  # letters around it take their joined forms.
+  joiningForms "بـب"
+} -result {init medi fina}
+
+test joining-5.1 {an empty line and a single letter} -body {
+  list [::tclpdf::joining forms {}] [joiningForms "ب"] [joiningForms "ا"]
+} -result {{} isol isol}
+
+test joining-5.2 {a line of nothing but marks} -body {
+  # Nonsense text, but it must not reach for a neighbour that is not there.
+  joiningForms "َُ"
+} -result {none none}
+
+cleanupTests

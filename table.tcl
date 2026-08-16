@@ -78,9 +78,13 @@ namespace eval ::tclpdf::table {
 
   # The style every cell starts from. Sizes are in the document unit except
   # the font size, which is in points like everywhere else.
+  # direction is here rather than beside -at because it is a property of the
+  # CELL, not of the table: an invoice has a right-to-left description column
+  # and a left-to-right amount column on the same row. Being a style key it
+  # can be said at every level the others can - theme, section, column, cell.
   variable defaults {
     family helvetica fontStyle {} size 9 leading 1.15 padding 1.5
-    fill {} color black align left valign top
+    fill {} color black align left valign top direction ltr
     border horizontal lineColor {0.6 0.6 0.6} lineWidth 0.1
   }
 }

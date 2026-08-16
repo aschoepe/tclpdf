@@ -232,7 +232,9 @@ oo::define ::tclpdf::document::document {
   method TextParagraph {string options} {
     set state [my TextMerge [my TextOverrides $options]]
     set width [dict get $options width]
-    set align [dict get $options align]
+    # Mirrored once, here, for every line of the block - see TextAlign in
+    # text.tcl for what "left" means in a right-to-left line.
+    set align [my TextAlign [dict get $options align] $state]
     lassign [dict get $options at] x y
 
     set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
@@ -435,17 +437,20 @@ oo::define ::tclpdf::document::document {
 
   method TextLineWidth {line state} {
     set arguments {}
-    foreach name $::tclpdf::text::stateOptions {
+    foreach name $::tclpdf::text::lineOptions {
       lappend arguments -$name [dict get $state $name]
     }
     return [my textWidth $line {*}$arguments]
   }
 
   # The font options out of a parsed option dictionary, as a -name value list
-  # that textWidth and textLines can be handed straight through.
+  # that textWidth and textLines can be handed straight through. The direction
+  # travels with them: the line breaker measures through [textWidth], and a
+  # right-to-left script it was not told about is refused there rather than
+  # broken.
   method TextOverrides {options} {
     set arguments {}
-    foreach name $::tclpdf::text::stateOptions {
+    foreach name $::tclpdf::text::lineOptions {
       if {[dict exists $options $name]} {
         lappend arguments -$name [dict get $options $name]
       }

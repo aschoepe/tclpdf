@@ -72,13 +72,18 @@ foreach tclpdfPkg {
     tclpdf::type1
     tclpdf::varFont
     tclpdf::shaping
+    tclpdf::bidi
     tclpdf::subset
     tclpdf::font
     tclpdf::otLayout
     tclpdf::gdef
     tclpdf::kernGpos
     tclpdf::kern
+    tclpdf::gsubApply
     tclpdf::liga
+    tclpdf::joiningData
+    tclpdf::joining
+    tclpdf::forms
     tclpdf::imageJpeg
     tclpdf::imagePng
     tclpdf::imagePngAlpha

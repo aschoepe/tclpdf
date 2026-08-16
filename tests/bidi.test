@@ -1,0 +1,159 @@
+# bidi.test --
+#
+# The direction of a character inside a line: which way it runs, whether it
+# belongs to a number, and what it looks like when the line runs the other way.
+#
+# The module answers about SINGLE characters; what a line made of them comes
+# out as is text.test 13.x. Both are needed - a class list that is right and a
+# reordering that ignores it produce the same wrong invoice.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::bidi
+source [file join [file dirname [info script]] helper.tcl]
+
+# The class of every character of a string, so a case reads as what it is
+# about rather than as a column of code points.
+proc classes {string} {
+  return [lmap char [split $string {}] {::tclpdf::bidi class [scan $char %c]}]
+}
+
+test bidi-1.1 {the classes of the characters a line is made of} -body {
+  list [classes "Ra"] [classes "שא"] [classes "مب"] [classes "47"] \
+      [classes "٤٧"] [classes "۴۷"] [classes ",.:/"] [classes "%+-€\$"] \
+      [classes " ()!?"] [classes "Ж日"]
+} -result {{ltr ltr} {rtl rtl} {rtl rtl} {digit digit} {digit digit}\
+    {digit digit} {separator separator separator separator}\
+    {terminator terminator terminator terminator terminator}\
+    {neutral neutral neutral neutral neutral} {ltr ltr}}
+
+test bidi-1.2 {the Arabic digits and separators are found inside their block} \
+    -body {
+  # They sit INSIDE the right-to-left range, so the order of the tests in
+  # [class] decides the answer. Written the other way round, an Arabic-Indic
+  # number would be reversed with the letters around it and read backwards -
+  # exactly the defect this module exists to prevent, one alphabet over.
+  list [::tclpdf::bidi class 0x0660] [::tclpdf::bidi class 0x0669] \
+      [::tclpdf::bidi class 0x066A] [::tclpdf::bidi class 0x066B] \
+      [::tclpdf::bidi class 0x066C] [::tclpdf::bidi class 0x06F0] \
+      [::tclpdf::bidi class 0x0627]
+} -result {digit digit terminator separator separator digit rtl}
+
+test bidi-1.3 {the right-to-left blocks agree with shaping.tcl} -body {
+  # Two modules hold a list of the same blocks for different reasons, and the
+  # danger of that is not the copy but the DISAGREEMENT: a character shaping
+  # calls Hebrew and this module calls left-to-right would be refused as a
+  # mixed line in the very call that -direction rtl was invented for.
+  #
+  # Checked over every code point of every right-to-left system shaping knows,
+  # not over the range ends: a hole in the middle is exactly what a hand
+  # written range list produces.
+  package require tclpdf::shaping
+  set wrong {}
+  foreach {first last system token} $::tclpdf::shaping::systems {
+    # order, cursive, shape and mark are the right-to-left needs; conjunct
+    # and markOrder belong to the Indic scripts and Thai, which run the usual
+    # way.
+    if {$token ni {order cursive shape mark}} {
+      continue
+    }
+    for {set code $first} {$code <= $last} {incr code} {
+      # A digit or a number separator inside the Arabic block is not a
+      # contradiction - it is what 1.2 measures.
+      if {[::tclpdf::bidi class $code] ni {rtl digit separator terminator}} {
+        lappend wrong "U+[format %04X $code] ($system)"
+      }
+    }
+  }
+  lrange $wrong 0 4
+} -result {}
+
+test bidi-2.1 {a number is one piece, everything else is one per position} \
+    -body {
+  # The pieces of "אב 4711 גד": two letters, a space, the number as ONE piece,
+  # a space, two letters.
+  ::tclpdf::bidi segments [lmap char [split "אב 4711 גד" {}] {scan $char %c}]
+} -result {{0 0} {1 1} {2 2} {3 6} {7 7} {8 8} {9 9}}
+
+test bidi-2.2 {a separator joins the number only between two digits} -body {
+  # "1.234,50" is one piece; the full stop of "א. 5" is not part of the 5, and
+  # ".5" opens with a separator that has nothing on its left.
+  set amount [::tclpdf::bidi segments \
+      [lmap char [split "1.234,50" {}] {scan $char %c}]]
+  set sentence [::tclpdf::bidi segments \
+      [lmap char [split "א. 5" {}] {scan $char %c}]]
+  set leading [::tclpdf::bidi segments [lmap char [split ".5" {}] {scan $char %c}]]
+  list $amount $sentence $leading
+} -result {{{0 7}} {{0 0} {1 1} {2 2} {3 3}} {{0 0} {1 1}}}
+
+test bidi-2.3 {a terminator joins the number when it stands beside one} -body {
+  # A percent sign after, a currency symbol before, a sign in front of a
+  # negative amount - and a currency symbol with a space in between, which is
+  # NOT part of the number and comes out where the reversal puts it.
+  set percent [::tclpdf::bidi segments [lmap char [split "12%" {}] {scan $char %c}]]
+  set euro [::tclpdf::bidi segments [lmap char [split "€5" {}] {scan $char %c}]]
+  set signed [::tclpdf::bidi segments [lmap char [split "-12,5%" {}] {scan $char %c}]]
+  set spaced [::tclpdf::bidi segments [lmap char [split "5 €" {}] {scan $char %c}]]
+  list $percent $euro $signed $spaced
+} -result {{{0 2}} {{0 1}} {{0 5}} {{0 0} {1 1} {2 2}}}
+
+test bidi-2.4 {two numbers in one line are two pieces} -body {
+  ::tclpdf::bidi segments [lmap char [split "4711 47" {}] {scan $char %c}]
+} -result {{0 3} {4 4} {5 6}}
+
+test bidi-2.5 {a glyph that stands for several characters is never a digit} \
+    -body {
+  # A ligature reaches the reordering as one position with no single code
+  # point behind it. No face ligates digits - measured against hb-shape with
+  # DejaVu Sans - but a piece list that guessed would put a ligature inside a
+  # number and set it left to right.
+  ::tclpdf::bidi segments {52 -1 52}
+} -result {{0 0} {1 1} {2 2}}
+
+test bidi-3.1 {the mirrored pairs, and the ones that only look like pairs} \
+    -body {
+  # Measured against HarfBuzz: hb-shape --direction=rtl DejaVuSans.ttf "(א)"
+  # answers [parenleft|uni05D0|parenright], which is the reversal AND the
+  # swap; for "‚א'" it answers [quotesingle|uni05D0|quotesinglbase], which is
+  # the reversal alone.
+  set pairs {}
+  foreach char {( ) < > \[ \] \{ \} « » ‹ ›} {
+    lappend pairs [format U+%04X [::tclpdf::bidi mirror [scan $char %c]]]
+  }
+  set same {}
+  foreach char {‚ ' / \\ a ש 4} {
+    lappend same [expr {[::tclpdf::bidi mirror [scan $char %c]]
+        == [scan $char %c]}]
+  }
+  list $pairs $same
+} -result {{U+0029 U+0028 U+003E U+003C U+005D U+005B U+007D U+007B U+00BB\
+    U+00AB U+203A U+2039} {1 1 1 1 1 1 1}}
+
+test bidi-4.1 {a left-to-right character in a right-to-left line is found} \
+    -body {
+  # The position is the one the message names, and it is the FIRST such
+  # character - a line refused on the third Latin word would send the reader
+  # looking in the wrong place.
+  set found [::tclpdf::bidi opposite "Rechnung من شركة" rtl]
+  set clean [::tclpdf::bidi opposite "الفاتورة 4711 (5%)" rtl]
+  set later [::tclpdf::bidi opposite "شركة Müller" rtl]
+  # The other direction is shaping.tcl's answer, not this module's.
+  set ltr [::tclpdf::bidi opposite "Rechnung" ltr]
+  list $found $clean $later $ltr
+} -result {{0 82} {} {5 77} {}}
+
+test bidi-4.2 {the message names the character, the position and the way out} \
+    -body {
+  ::tclpdf::bidi message [::tclpdf::bidi opposite "Rechnung من شركة" rtl]
+} -result {tclpdf: U+0052 (position 0) is left-to-right in a -direction rtl\
+    line - a mixed line needs the bidi algorithm, which tclpdf does not have;\
+    set the runs as separate calls, one per direction}
+
+cleanupTests

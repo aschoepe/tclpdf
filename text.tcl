@@ -30,6 +30,22 @@ namespace eval ::tclpdf::text {
   # Which options describe the font state rather than one call.
   variable stateOptions {family style size color spacing wordSpacing
       stretch leading rise kerning ligatures unshaped}
+
+  # Options that describe ONE LINE, with their defaults. They travel with the
+  # text wherever it is measured, broken or drawn - so they are carried in the
+  # same dictionary as the font state - but they never enter the STORED state:
+  # every call starts them at their default again.
+  #
+  # -direction is one of these rather than a font option because the direction
+  # is a property of the line, not of the face: the same Hebrew face sets a
+  # right-to-left line and a left-to-right heading beside it.
+  variable runOptions {direction ltr}
+
+  # Both lists together: everything a line has to take with it when a
+  # paragraph hands one of its lines on to be measured or drawn. Named once
+  # because two places rebuild a -name value list from it, and a list rebuilt
+  # from the shorter one silently drops the direction of a paragraph.
+  variable lineOptions [concat $stateOptions [dict keys $runOptions]]
 }
 
 oo::define ::tclpdf::document::document {
@@ -147,6 +163,10 @@ oo::define ::tclpdf::document::document {
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
+    # Listed among the defaults so that [option parse] knows the option
+    # exists; the value itself is read out of the state that TextMerge builds,
+    # which is where it is checked.
+    set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "text"]
     # Checked rather than left to lassign: writing -at {20 [expr {$y+5}]} is a
     # standing invitation, the braces stop the substitution, and Tcl then
@@ -215,7 +235,7 @@ oo::define ::tclpdf::document::document {
     # centred word drifted off towards the corner instead of staying centred
     # on -at.
     set width [my textWidth $string {*}$args]
-    switch -- [dict get $options align] {
+    switch -- [my TextAlign [dict get $options align] $state] {
       left {set shift 0}
       right {set shift $width}
       center - centre {set shift [expr {$width / 2.0}]}
@@ -240,6 +260,31 @@ oo::define ::tclpdf::document::document {
   }
 
   # -- internals ----------------------------------------------------------
+
+  # The alignment as the page sees it.
+  #
+  # -align names the edge the text starts at IN READING ORDER, so in a
+  # right-to-left line "left" is the right hand edge and "right" the left one.
+  # That is what makes the default work out: left is the natural edge either
+  # way, and a caller who sets -direction rtl and nothing else gets a line
+  # flush right, which is where a right-to-left line starts.
+  #
+  # Mirrored here, in front of the branch, rather than inside it: the two
+  # alignment switches - one line here, one line per paragraph in textBlock -
+  # would otherwise both grow a direction case, and the two would drift.
+  # center and justify mean the same thing in both directions and pass
+  # through, as does an unknown value, which has to reach the branch to be
+  # reported with the word the caller wrote.
+  method TextAlign {align state} {
+    if {[dict get $state direction] ne "rtl"} {
+      return $align
+    }
+    switch -- $align {
+      left {return right}
+      right {return left}
+    }
+    return $align
+  }
 
   # The one place that knows there are two kinds of font. An embedded alias
   # passes through unchanged - it has no family/style variants, it IS the
@@ -393,14 +438,22 @@ oo::define ::tclpdf::document::document {
     # that happens to hyphenate.
     if {$hyphen && [my state tagged] eq "1" && [string first "-" $string] >= 0} {
       set at [string last "-" $string]
-      my content [my TextShow $font $state [string range $string 0 $at-1] $byTJ]
+      set first [string range $string 0 $at-1]
+      set second [string range $string $at+1 end]
+      # The three pieces are drawn in the order the text cursor moves, and
+      # that is always left to right. In a right-to-left line the piece BEHIND
+      # the break hyphen is the one that sits on the left, so the two swap -
+      # each piece is still reversed inside itself by TextShow.
+      if {[dict get $state direction] eq "rtl"} {
+        lassign [list $second $first] first second
+      }
+      my content [my TextShow $font $state $first $byTJ]
       # The empty ActualText is UTF-16 with nothing after the byte order mark.
       my content "/Span <</ActualText <FEFF>>> BDC\n"
       my content [my TextShow $font $state "-" $byTJ]
       my content "EMC\n"
-      if {$at < [string length $string] - 1} {
-        my content [my TextShow $font $state \
-            [string range $string $at+1 end] $byTJ]
+      if {$second ne {}} {
+        my content [my TextShow $font $state $second $byTJ]
       }
     } else {
       my content [my TextShow $font $state $string $byTJ]
@@ -534,8 +587,13 @@ oo::define ::tclpdf::document::document {
       return [list [expr {$total * [dict get $state size] / 1000.0}] \
           [llength $codes]]
     }
+    # The LOGICAL run, in both directions. A width is a sum and does not care
+    # about the order, and the kerning inside it must not: the pairs are
+    # directed - A V is not V A - and measuring a reversed run would answer a
+    # width the drawing never produces. So -direction reaches this call only
+    # to say which scripts may pass at all.
     set run [my FontRun $font $string [dict get $state ligatures] \
-        [dict get $state unshaped]]
+        [dict get $state unshaped] [dict get $state direction]]
     return [list [my FontRunWidth $font $run [dict get $state size] \
         [dict get $state kerning]] [llength $run]]
   }
@@ -562,25 +620,220 @@ oo::define ::tclpdf::document::document {
           [my FontType1Encode $font $string]]] Tj\n"
     }
     set run [my FontRun $font $string [dict get $state ligatures] \
-        [dict get $state unshaped]]
+        [dict get $state unshaped] [dict get $state direction]]
     set adjustments [my TextAdjust $font $state $run $byTJ]
-    if {![llength $adjustments]} {
-      return "[::tclpdf::pdfObj bytesStr [my FontRunEncode $font $run]] Tj\n"
+    # THE REORDERING, and this is the only place it happens: after the run has
+    # been built and after everything that reads it in logical order - the
+    # ligatures inside FontRun, the kerning inside TextAdjust - and before a
+    # single byte is written. The glyphs themselves are right either way; what
+    # a right-to-left line needs is the ORDER they are shown in.
+    set lead 0
+    set mirrored {}
+    if {[dict get $state direction] eq "rtl"} {
+      lassign [my TextReorder $run $adjustments] run adjustments lead
+      set mirrored [my TextMirrored $run]
     }
-    set parts {}
-    set piece {}
+    return [my TextEmit $font $run $adjustments $lead $mirrored]
+  }
+
+  # The run and its adjustments in the order they are DRAWN, for a
+  # right-to-left line, plus the adjustment that has to be written before the
+  # first glyph.
+  #
+  # Not a plain reversal, and that is the whole content of this method: a run
+  # of DIGITS keeps its own order inside the reversed line. The number 4711 in
+  # an Arabic invoice reads 4711, not 1174 - digits are written left to right
+  # in every script that uses them, which is rules W2 to W7 of UAX #9 applied
+  # to one run and nothing else. bidi.tcl says where those runs are; here they
+  # are pieces that keep their order while the LIST of pieces is turned round.
+  #
+  # THE ADJUSTMENTS travel with the glyphs, and not by being reversed with
+  # them. An adjustment is written AFTER the glyph it belongs to and closes
+  # the gap to the NEXT one, so what has to be written after a drawn glyph is
+  # the gap between it and whatever now follows it:
+  #
+  #   inside a piece   the glyphs still run forwards, so it is the gap after
+  #                    the glyph itself - the same as in a left-to-right line
+  #   at its end       the next piece is the one BEFORE it logically, so it is
+  #                    the gap in front of the piece just drawn
+  #
+  # Both cases are the same rule seen from two sides, and the plain reversal
+  # this replaces is what it reduces to when every piece is one glyph. What
+  # falls off the front is the gap after the LAST logical glyph - a word space
+  # at the end of the line - and it goes in front of the first glyph drawn,
+  # which is where the end of a right-to-left line is.
+  #
+  # EVERY gap is written exactly once, which is what keeps the drawn line as
+  # wide as [textWidth] measured it: the pieces contribute the gaps inside
+  # them, the boundaries contribute the gaps between them, and the lead
+  # contributes the last. The one place this is a compromise rather than an
+  # answer is the boundary itself - the two glyphs that end up beside each
+  # other there were not neighbours in the logical run, so the kerning written
+  # between them is the one the logical pair had. A shaper avoids the question
+  # by shaping each run separately and kerning across none of them; doing that
+  # here would change the width of the line after it was measured.
+  method TextReorder {run adjustments} {
+    # One code point per glyph, and -1 for a glyph that stands for several: a
+    # ligature can never be part of a number.
+    set codes [lmap item $run {
+      expr {[llength [lindex $item 1]] == 1 ? [lindex $item 1 0] : -1}
+    }]
+    set order {}
+    set gaps {}
+    foreach piece [my TextPieces $codes rtl] {
+      lassign $piece from to
+      for {set index $from} {$index <= $to} {incr index} {
+        lappend order $index
+        lappend gaps [expr {$index < $to ? $index : $from - 1}]
+      }
+    }
+    set drawn {}
+    foreach index $order {
+      lappend drawn [lindex $run $index]
+    }
+    set moved {}
+    set lead 0
+    if {[llength $adjustments]} {
+      set lead [lindex $adjustments end]
+      foreach gap $gaps {
+        # The last drawn glyph has nothing after it: its "gap" is the one in
+        # front of logical position 0, which does not exist.
+        lappend moved [expr {$gap < 0 ? 0 : [lindex $adjustments $gap]}]
+      }
+    }
+    return [list $drawn $moved $lead]
+  }
+
+  # The pieces of a line in the order they are DRAWN, as {first last} index
+  # pairs over the positions given.
+  #
+  # Two callers, one answer: [TextShow] reorders a glyph run in one go,
+  # [textPath] walks a path placing one glyph at a time, and if the two built
+  # this order separately a number would come out one way along a straight
+  # baseline and the other way along a curve.
+  method TextPieces {codes direction} {
+    if {$direction ne "rtl"} {
+      set pieces {}
+      set count [llength $codes]
+      for {set index 0} {$index < $count} {incr index} {
+        lappend pieces [list $index $index]
+      }
+      return $pieces
+    }
+    package require tclpdf::bidi 1.0-
+    return [lreverse [::tclpdf::bidi segments $codes]]
+  }
+
+  # Which of the drawn glyphs stand for a MIRRORED character, as
+  # {index originalCodePoint}.
+  #
+  # Asked of the run rather than remembered from FontRun, because the answer
+  # is in it: mirroring is applied to every occurrence in a right-to-left
+  # line, and the pairs are symmetrical, so a glyph whose code point has a
+  # mirror IS one, and the character the caller wrote is that mirror.
+  method TextMirrored {run} {
+    package require tclpdf::bidi 1.0-
+    set mirrored {}
+    set index 0
+    foreach item $run {
+      set codes [lindex $item 1]
+      if {[llength $codes] == 1} {
+        set code [lindex $codes 0]
+        set original [::tclpdf::bidi mirror $code]
+        if {$original != $code} {
+          dict set mirrored $index $original
+        }
+      }
+      incr index
+    }
+    return $mirrored
+  }
+
+  # The show operators for a run that is already in drawing order.
+  #
+  # A mirrored glyph is drawn inside a Span of its own carrying the character
+  # it stands for as ActualText (14.9.4), and that is not decoration: the
+  # ToUnicode map is per GLYPH, and the glyph of ")" is the glyph of ")"
+  # wherever it is used, so a line holding a mirrored bracket would otherwise
+  # extract with the brackets swapped. Measured with poppler 26.08.0: without
+  # the span "(שלום)" comes back as ")שלום(", with it as it was written. Same
+  # device as the break hyphen above, and for the same reason - the drawn
+  # glyph and the character are not the same thing.
+  method TextEmit {font run adjustments lead mirrored} {
+    if {![llength $run]} {
+      # An empty line still writes its show operator: it is what an empty
+      # paragraph line has always produced, and leaving it out would change
+      # the bytes of every document that has one.
+      return "[::tclpdf::pdfObj bytesStr [my FontRunEncode $font {}]] Tj\n"
+    }
+    # {actualText tokens} per piece, where a token is {glyph item} or
+    # {gap number}. The gap AFTER a mirrored glyph opens the next piece,
+    # which a TJ array takes as its first element.
+    set segments {}
+    set tokens {}
+    if {$lead != 0} {
+      lappend tokens [list gap $lead]
+    }
     set count [llength $run]
     for {set index 0} {$index < $count} {incr index} {
-      lappend piece [lindex $run $index]
+      if {[dict exists $mirrored $index]} {
+        lappend segments [list {} $tokens]
+        set tokens {}
+        lappend segments [list [dict get $mirrored $index] \
+            [list [list glyph [lindex $run $index]]]]
+      } else {
+        lappend tokens [list glyph [lindex $run $index]]
+      }
       set value [lindex $adjustments $index]
-      if {$value != 0} {
+      if {$value ne {} && $value != 0} {
+        lappend tokens [list gap $value]
+      }
+    }
+    lappend segments [list {} $tokens]
+    set result {}
+    foreach segment $segments {
+      lassign $segment actual tokens
+      set body [my TextTokens $font $tokens]
+      if {$body eq {}} {
+        continue
+      }
+      if {$actual eq {}} {
+        append result $body
+        continue
+      }
+      append result "/Span <</ActualText\
+          <FEFF[format %04X $actual]>>> BDC\n" $body "EMC\n"
+    }
+    return $result
+  }
+
+  # One show operator for a list of tokens: "(bytes) Tj" when nothing has to
+  # be adjusted between the glyphs, a TJ array when something has.
+  method TextTokens {font tokens} {
+    set parts {}
+    set piece {}
+    set numbers 0
+    foreach token $tokens {
+      lassign $token kind value
+      if {$kind eq "glyph"} {
+        lappend piece $value
+        continue
+      }
+      if {[llength $piece]} {
         lappend parts [::tclpdf::pdfObj bytesStr [my FontRunEncode $font $piece]]
-        lappend parts [::tclpdf::pdfObj num $value]
         set piece {}
       }
+      lappend parts [::tclpdf::pdfObj num $value]
+      incr numbers
     }
     if {[llength $piece]} {
       lappend parts [::tclpdf::pdfObj bytesStr [my FontRunEncode $font $piece]]
+    }
+    if {![llength $parts]} {
+      return {}
+    }
+    if {!$numbers} {
+      return "[lindex $parts 0] Tj\n"
     }
     return "\[[join $parts { }]\] TJ\n"
   }
@@ -633,16 +886,48 @@ oo::define ::tclpdf::document::document {
   }
 
   # The current state with per-call overrides applied, without storing them.
+  #
+  # The per-call options are merged in first at their defaults and then read
+  # from the arguments like the font options, which is what makes them reach
+  # every road at once: [textWidth], the line breaker and the drawing all come
+  # through here, and a direction that only [text] knew about would measure a
+  # line one way and set it another.
   method TextMerge {arguments} {
-    set state [my TextState]
+    set state [dict merge [my TextState] $::tclpdf::text::runOptions]
     set changed 0
     foreach {option value} $arguments {
       set name [string trimleft $option -]
+      if {[dict exists $::tclpdf::text::runOptions $name]} {
+        dict set state $name $value
+      }
       if {$name in $::tclpdf::text::stateOptions} {
         dict set state $name $value
         if {$name in {family style}} {
           set changed 1
         }
+      }
+    }
+    # Checked here rather than at each call: this is the one gate every
+    # measuring and drawing road passes, and a misspelt direction that reached
+    # the drawing would simply set the line the other way round in silence.
+    if {[dict get $state direction] ni {ltr rtl}} {
+      return -code error "tclpdf: -direction must be ltr or rtl, not\
+          \"[dict get $state direction]\""
+    }
+    # A right-to-left line needs a face that has right-to-left letters, and
+    # the standard fourteen have none: WinAnsi. Refused rather than accepted,
+    # because accepted it did nothing - the reordering lives on the glyph
+    # road, which a standard face never takes, so "-direction rtl" on
+    # Helvetica set the line left to right in silence, alignment mirrored and
+    # nothing else. Same for an embedded Type 1 face, which is addressed
+    # through the same encoding.
+    if {[dict get $state direction] eq "rtl"} {
+      set family [dict get $state family]
+      if {![my TextEmbedded $family] || [my FontKind $family] eq "type1"} {
+        return -code error "tclpdf: -direction rtl needs a TrueType or\
+            OpenType face embedded with \[font embed\] - \"$family\" is\
+            addressed through WinAnsiEncoding, which has no right-to-left\
+            letters"
       }
     }
     if {$changed} {

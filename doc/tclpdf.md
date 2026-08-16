@@ -126,20 +126,52 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 ### Writing systems
 
-tclpdf maps one character to one glyph and draws them left to right. For most scripts that is the entire job, and they are set correctly: Latin, Greek, Cyrillic, the CJK scripts, Tibetan, Cuneiform, Egyptian Hieroglyphs, symbol and emoji faces.
+tclpdf maps one character to one glyph and sets them in the order they arrive — left to right, or right to left where `-direction rtl` says so. For most scripts that is the entire job, and they are set correctly: Latin, Greek, Cyrillic, the CJK scripts, Tibetan, Cuneiform, Egyptian Hieroglyphs, symbol and emoji faces.
 
-Some scripts need more, and there tclpdf **refuses to draw** rather than draw something wrong:
+Some scripts need more. What that "more" is decides whether tclpdf can set them at all — two of the four things it can do, the rest it **refuses to draw** rather than draw something wrong:
 
-| needs | scripts |
-|---|---|
-| contextual shaping — the glyph depends on its neighbours — **and** right-to-left ordering | Arabic, Syriac, N'Ko, Mandaic |
-| right-to-left ordering | Hebrew, Thaana, Samaritan |
-| reordering and conjunct forms | Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala, Myanmar, Khmer |
-| mark placement and reordering | Thai, Lao |
+| needs | scripts | available |
+|---|---|---|
+| right-to-left ordering | Hebrew, Thaana, Samaritan | **yes — `-direction rtl`** |
+| contextual forms — the glyph depends on its neighbours — **and** right-to-left ordering | Arabic | **yes, in a face that carries whole letters — `-direction rtl`** |
+| contextual shaping and right-to-left ordering | Syriac, N'Ko, Mandaic | no |
+| mark placement | Hebrew nikud (U+0591–U+05C7), the Arabic harakat, the Thaana fili, the Samaritan points | no |
+| reordering and conjunct forms | Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala, Myanmar, Khmer | no |
+| mark placement and reordering | Thai, Lao | no |
 
-The refusal is the same rule the package applies to a character the face has no glyph for: a reader shows the wrong text, a validator says nothing, and only this end can notice. Arabic drawn without shaping comes out as isolated letter forms in reverse order — it looks like text and is not.
+**Ordering is the one this package can supply.** Hebrew letters, Thaana and Samaritan bases carry no contextual forms: the glyph the character map gives is the glyph a reader expects, and only the order has to be turned round. `-direction rtl` turns it — after the ligatures and the kerning have been worked out on the logical run, so the pairs looked up are the ones the type designer meant, and `textWidth` answers the same number in both directions. Without the option such text is still refused, and the message names the way out.
 
-**-unshaped 1** turns the refusal off and draws the characters as isolated glyphs in logical order. That is right for exactly one case: a script that needs only ordering, in a line with no digits and no Latin words — Hebrew without nikud, say — where reversing the string before passing it in gives a correct line.
+**Arabic is set with its contextual forms**, and that needs the right face as well as the option. Each character is asked which of the four shapes it stands in — isolated, initial, medial or final — by the cursive joining algorithm of the Unicode Standard, section 9.2, with the joining types taken from the Unicode Character Database. The shape itself then comes out of the face, through the GSUB features `ccmp`, `init`, `medi`, `fina` and `rlig`, applied in that order. The result is checked glyph by glyph against HarfBuzz: `tests/forms.test` shapes six words with `hb-shape` and compares the glyph numbers, and skips itself where HarfBuzz is not installed.
+
+**Which faces.** A face has to carry the three positional features, and its letters have to be whole glyphs. Some Arabic faces — Noto Naskh Arabic is the one shipped with the examples — write a letter as an undotted skeleton plus a separate dot glyph and place the dot with GPOS mark attachment, which this package does not read: the dots would land beside their letters, and measured on that face the two dots of *teh marbuta* belong a third of an em lower than they would be drawn. Such a face is **refused**, and the message says which of the two things is missing. DejaVu Sans carries whole Arabic letters and sets the same line correctly; example `02.09-writing-systems` shows both.
+
+**What is still missing in Arabic.** Two things, and both are visible rather than silent. Required ligatures that a face reaches through *chaining* lookups (GSUB types 5 and 6) are not applied — where a face writes its lam-alef as an ordinary ligature lookup, as DejaVu Sans does, the ligature comes out; where it chains to it, the two letters come out joined but as separate shapes. The same applies to the wider medial variants some faces select that way. And the harakat, the Arabic vowel signs, are marks: a line carrying them is refused for the same reason nikud is.
+
+**Nikud stays refused**, and deliberately: the points are combining marks, GPOS mark attachment is not read (see `-kerning` above), and a vowel point drawn at the pen position sits beside its letter instead of under it. The letters of a line without points are unaffected.
+
+**Numbers keep their own order.** A right-to-left line is not simply reversed — a run of digits inside it runs left to right, because it does in every script that uses digits. `الفاتورة 4711` sets the invoice number as `4711` and not as `1174`, which is what the plain reversal produced and what nobody looking at the page could tell was wrong. The run may hold the characters that belong to a number: a comma, a full stop, a colon, a slash or a no-break space **between two digits**, and a percent sign, a plus, a minus, a euro or a dollar sign **directly beside one**. `1.234,50%` is therefore one number and comes out whole; a euro sign with a space in front of it is not part of it and goes where the line runs. European, Arabic-Indic (`٠`–`٩`) and Extended Arabic-Indic digits count alike. This is the corner of the Unicode bidirectional algorithm (UAX #9, rules W2–W7) that one run of digits needs, and nothing beyond it.
+
+**Paired brackets are mirrored.** `(` is the *opening* bracket, and the opening bracket of a line that runs the other way is drawn with the glyph of `)` — Unicode calls this mirroring (UAX #9, section 3.4) and it is a property of the display, not a different character. It applies to `( )`, `[ ]`, `{ }`, `< >`, `« »` and `‹ ›`; the German quotation marks `‚ '` look like a pair and are **not** mirrored, and neither is a slash. Because the `ToUnicode` map speaks about glyphs and the glyph of `)` is the glyph of `)` wherever it is used, each mirrored glyph is drawn inside a `Span` carrying the character it stands for as `ActualText`, so that the line still extracts as it was written. Measured with poppler 26.08.0: without that span `(שלום)` comes back as `)שלום(`.
+
+**A mixed line is refused.** A line that mixes the two directions — an Arabic sentence with a Latin word in it, a Hebrew heading with a Cyrillic name — needs the full bidirectional algorithm to decide which run goes where, and tclpdf does not implement it. Such a call is therefore **refused**, naming the first character that runs the wrong way and what to do instead:
+
+  ~~~
+  tclpdf: U+0052 (position 0) is left-to-right in a -direction rtl line - a mixed
+  line needs the bidi algorithm, which tclpdf does not have; set the runs as
+  separate calls, one per direction
+  ~~~
+
+  It used to be accepted and to come out with the Latin words backwards — `gnunhceR … rellüM` — which is the kind of line that looks like text and is not. Everything that is *not* strongly left-to-right may stand in such a line: right-to-left letters, digits, spaces, punctuation, brackets, currency and symbols. `-unshaped 1` turns the refusal off along with the others, for the caller who knows what it does.
+
+  The mirror image is unchanged: a right-to-left script in a left-to-right line is refused as it always was, and that message names `-direction rtl` as the way out.
+
+**Which calls take -direction.** `text`, `textWidth` and `textLines`, and with them the paragraph forms of `text`; `textPath`, where the glyphs run backwards along the path and `-align` is mirrored with it; `leader`, where the two ends change places and the fill is measured from the other side; `pageNumbers`, so that `صفحة 3 من 10` comes out with its numbers the right way round; and the table, where `direction` is a style key and a cell key like `align` — a right-to-left description column and a left-to-right amount column on the same row are two cells, not two tables. A decimal column does not mirror: it holds numbers, and numbers are set left to right in either direction.
+
+The refusal is the same rule the package applies to a character the face has no glyph for: a reader shows the wrong text, a validator says nothing, and only this end can notice. Arabic drawn without shaping comes out as isolated letter forms — it looks like text and is not.
+
+**-unshaped 1** turns the refusal off altogether and draws the characters as isolated glyphs in the order they were given. It is not the answer for a script that needs only ordering — `-direction rtl` is, and it is the better one — nor for Arabic in a face that can be shaped. What is left for it is the case where the forms or the mark positions cannot be had and the caller decides that isolated glyphs are better than nothing; combined with `-direction rtl` such a line at least runs the right way, which is what example `02.09-writing-systems` shows for the Arabic face whose dots would be misplaced.
+
+**What extraction gives back**, measured with poppler `pdftotext` 26.08.0. A line reading `שלום עולם`, set with `-direction rtl`, extracts by default as `U+202B` `שלום עולם` `U+202C` — the string as it was written, wrapped in the two directional marks, because the reader reconstructs the logical order from the Unicode values in the `ToUnicode` map. `pdftotext -raw`, which reports the drawn order on purpose, gives the two words the other way round with the letters of each word in logical order. The same string drawn with `-unshaped 1` instead — a logical run set left to right — comes back from the default `pdftotext` **reversed**, as `םלוע םולש`. So the option that makes a right-to-left line extract as it was written is `-direction rtl`, and the one that does not is `-unshaped 1`.
 
 *doc* **font embed** *alias path* ?**-subset** *0*? ?**-metrics** *path*? ?**-axes** *{tag value …}*? ?**-instance** *name*?
 
@@ -221,11 +253,13 @@ The refusal is the same rule the package applies to a character the face has no 
 
 : What the file says about itself: `family`, `postScript`, `glyphs`, `unitsPerEm`, `characters`, and the embedding permission as `fsType` and `permission`.
 
-*doc* **text** *string* ?**-at** *{x y}*? ?**-width** *w*? ?**-align** *a*? ...
+*doc* **text** *string* ?**-at** *{x y}*? ?**-width** *w*? ?**-align** *a*? ?**-direction** *ltr|rtl*? ...
 
 : Draws text. **Without -width** this is one line, and `-align` refers to the given point: `left` starts there, `right` ends there, `center` is centred on it; the call returns nothing. **With -width** the string is broken into a paragraph of that width, `-align justify` becomes available, and the call returns the y coordinate below the last line, so the next block can continue there.
 
   **-anchor** chooses what the y coordinate means: `baseline` (the default) or `top`. **-rotate** turns the text about `-at`. All font options are accepted per call without changing the state.
+
+  **-direction** is `ltr` or `rtl` and says which way the line runs. It is an option of the *line*, not of the font state: the same face sets a right-to-left line and a left-to-right heading beside it, so `font` does not take it. Under `rtl` the glyph run is turned round before it is written — with a run of digits keeping its own order inside it and a paired bracket drawn mirrored — and `-align` is mirrored with it: `left` means the edge the line *starts* at in reading order, which is the right hand one, so `-at` marks the right edge of a line that is otherwise unaligned. `center` and `justify` mean the same thing either way. A line that also holds strongly left-to-right text is refused rather than set backwards, and so is `rtl` on one of the standard fourteen faces or an embedded Type 1 face: those are addressed through WinAnsiEncoding, which has no right-to-left letter, so the option could only have done nothing. Which scripts this makes drawable, and what the two rules above do exactly, is described under "Writing systems" below.
 
   **-height** *h* limits the block. What fits is drawn and the return value becomes a dictionary with `y` and `rest` — the text that did not fit, ready to be set in the next column or on the next page. Without `-height` the return value is the y coordinate as before.
 
@@ -250,15 +284,19 @@ The refusal is the same rule the package applies to a character the face has no 
 
   Both ends are measured and the space between them is filled with as many whole copies of **-fill** as fit, holding **-gap** clear of each end (1 unit by default). The remainder stays in front of the right hand end, so the figures of several rows line up. **-fill** may be any string, and an empty one draws nothing at all — which is what a sum under a rule wants. Either end may be empty. Returns the y coordinate one line down, so rows stack without measuring again.
 
+  **-direction rtl** turns the row round: the first argument is the *leading* end and belongs at the right edge, the second at the left, and the fill is measured from the other side. The alignment of each end follows, so a right-to-left row needs nothing but the option.
+
   It does not wrap: each end is one line. A left side too long for the width keeps its full length and the fill disappears, rather than moving the figure a reader is looking for. In a tagged document the row is **one** element and the fill is an artifact — a reader that spelled the dots out would say "dot dot dot dot" between every entry and its number. **-tag** names the element (`P` by default), and `-tag Artifact` takes the whole row out of the tree, which is what a running head is.
 
 *doc* **textPath** *string* **-segments** *{...}* ?**-align** *a*? ?**-offset** *d*? ?**-tag** *type*? ?*font options*?
 
 : Sets one line of text along a path, glyph by glyph, each one turned by the direction the path takes at its own position. The segments are the ones **path** takes (`move`, `line`, `curve`, `close`); **-align** places the string at the start, the middle or the end of the path, and **-offset** lifts the baseline off it — positive above, negative below. Returns the length of the path, which is what a caller measures a string against beforehand: glyphs that run past the end are dropped rather than piled up there. The path itself is not drawn.
 
+  **-direction rtl** runs the glyphs backwards along the path and mirrors **-align** with them, exactly as it does on a straight baseline — including the numbers inside such a line, which keep their own order there too.
+
 *doc* **pageNumbers -at** *{x y}* ?**-format** *"Page %n of %m"*? ?**-from** *n*? ?**-total** *n*? ?*font options*?
 
-: Puts a page number on every page. `%n` is the number, `%m` the total. The numbers are drawn when the document is written, not when the call is made — which is the only moment the total is known — so the call may come before the pages it numbers. **-from** leaves the leading pages unnumbered, **-total** states a total of its own for a document that is part of a larger set. Several calls are independent of each other: a number at the foot and a running title at the head are two of them.
+: Puts a page number on every page. `%n` is the number, `%m` the total. It takes the *line* options as well as the font ones, so `-format "صفحة %n من %m" -direction rtl` sets a right-to-left page number with the two figures the right way round. The numbers are drawn when the document is written, not when the call is made — which is the only moment the total is known — so the call may come before the pages it numbers. **-from** leaves the leading pages unnumbered, **-total** states a total of its own for a document that is part of a larger set. Several calls are independent of each other: a number at the foot and a running title at the head are two of them.
 
 *doc* **textWidth** *string* ?*font options*?
 
@@ -344,7 +382,9 @@ A colour is a name (`red`, `steelblue` — 148 of them, without Tk), a grey valu
 
 *doc* **table -at** *{x y}* **-width** *w* ?**-head** *rows*? **-body** *rows* ?**-foot** *rows*? ?*options*?
 
-: Draws a table and returns the y coordinate below it. A row is a list of cells; a cell is a string, or a dictionary with `text` and any of `colSpan`, `rowSpan`, `align`, `valign` and style keys. `align` and `valign` may equally be written inside `style`; on the cell itself they win over column, section and theme.
+: Draws a table and returns the y coordinate below it. A row is a list of cells; a cell is a string, or a dictionary with `text` and any of `colSpan`, `rowSpan`, `align`, `valign`, `direction` and style keys. `align`, `valign` and `direction` may equally be written inside `style`; on the cell itself they win over column, section and theme.
+
+  `direction` is `ltr` or `rtl` and says which way that cell's text runs — a property of the cell rather than of the table, because an invoice has a right-to-left description column and a left-to-right amount column on the same row. Under `rtl` the cell's `align` is mirrored with it, so the default `left` sets the text flush with the right hand edge of the cell. See "Writing systems" for what a right-to-left line does and does not do.
 
   A row is as tall as its tallest cell. Where one cell carries running text over several lines and its neighbours hold a single line each, `valign` says where in the row those single lines sit — `top` by default, or `middle` or `bottom`. In a table whose rows are all one line it makes no difference, which is why the default is the one that leaves such a table alone.
 

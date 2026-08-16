@@ -94,6 +94,87 @@ proc ::tclpdfTest::writes {doc name} {
   return [list $code $written]
 }
 
+# One list of tokens per show operator in a content stream: a string in
+# parentheses stays one token, a TJ number is one token of its own. Reading
+# them with a plain [split] is what a first attempt does, and it breaks on the
+# escaped parentheses inside the glyph bytes.
+#
+# Kept per OPERATOR rather than in one flat list, because where a number sits
+# between the pieces is exactly what a test about kerning or word spacing has
+# to see: the same amounts in the same order but one glyph further on is a
+# different line.
+proc ::tclpdfTest::shows {stream} {
+  set result {}
+  foreach line [split $stream \n] {
+    if {![string match {*Tj*} $line] && ![string match {*TJ*} $line]} {
+      continue
+    }
+    lappend result [regexp -all -inline \
+        {\((?:[^()\\]|\\.)*\)|-?[0-9]+(?:\.[0-9]+)?} $line]
+  }
+  return $result
+}
+
+# Only the numbers of such a token list - the adjustments, without the glyphs.
+proc ::tclpdfTest::numbers {tokens} {
+  return [lmap token $tokens {
+    if {[string index $token 0] eq "("} continue
+    set token
+  }]
+}
+
+# What a content stream actually DRAWS, as characters and adjustments in the
+# order they are written: the glyph numbers read back through the character
+# map of the embedded face.
+#
+# Five test files need this and none of them can do without it: a stream holds
+# glyph numbers, and a test about the ORDER of a right-to-left line has to
+# speak about characters or it asserts nothing a reader could check. The map
+# is turned round rather than looked up per glyph, because a face has tens of
+# thousands of entries and a line has twenty glyphs.
+#
+# Returns one {kind value} pair per piece over the whole stream: {text ...}
+# for a run of glyphs, {gap ...} for an adjustment between two of them. Tagged
+# rather than left to tell apart by looking, because [string is double] says
+# yes to " 4711" - a piece of a line that is a space and a number is not a
+# number, and a test that sorted them that way dropped it.
+proc ::tclpdfTest::drawn {doc alias stream} {
+  set back {}
+  dict for {code glyph} [dict get [$doc state fonts] $alias parsed cmap] {
+    dict set back $glyph $code
+  }
+  set result {}
+  foreach tokens [shows $stream] {
+    foreach token $tokens {
+      if {[string index $token 0] ne "("} {
+        lappend result [list gap $token]
+        continue
+      }
+      binary scan [subst -nocommands -novariables \
+          [string range $token 1 end-1]] Su* glyphs
+      set text {}
+      foreach glyph $glyphs {
+        append text [expr {[dict exists $back $glyph] ?
+            [format %c [dict get $back $glyph]] : "?"}]
+      }
+      lappend result [list text $text]
+    }
+  }
+  return $result
+}
+
+# The same, as one string: the characters of the line in drawing order, with
+# the adjustments left out. What a reader sees, left to right.
+proc ::tclpdfTest::drawnText {doc alias stream} {
+  set text {}
+  foreach piece [drawn $doc $alias $stream] {
+    if {[lindex $piece 0] eq "text"} {
+      append text [lindex $piece 1]
+    }
+  }
+  return $text
+}
+
 # The decoded stream of one object - for tests that have to look inside a
 # compressed stream (a font file, a ToUnicode map, a CIDToGIDMap).
 proc ::tclpdfTest::streamOf {writer number} {
@@ -129,4 +210,19 @@ proc ::tclpdfTest::glyph {font id} {
   }
   return [string range [::tclpdf::sfnt table $font glyf] $start \
       [expr {$stop - 1}]]
+}
+
+# A glyph run as font.tcl builds it from the cmap, before any substitution:
+# entries {glyph codes}, one character per entry, in logical order.
+#
+# Two test files build one - ligatures shorten it, cursive forms lengthen it -
+# and both need it to be exactly what the font module would have handed on.
+proc ::tclpdfTest::glyphRun {parsed text} {
+  set cmap [dict get $parsed cmap]
+  set run {}
+  foreach char [split $text {}] {
+    set code [scan $char %c]
+    lappend run [list [dict get $cmap $code] [list $code]]
+  }
+  return $run
 }

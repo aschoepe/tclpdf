@@ -21,6 +21,18 @@ source [file join [file dirname [info script]] helper.tcl]
 set textFace [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveFace [file exists $textFace]
+set type1Face [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts OCRB.pfb]
+testConstraint haveType1 [file exists $type1Face]
+
+# A face that kerns, for the tests that have to see the pair amounts - DejaVu
+# Sans is the general one above, Roboto the one with the pairs.
+set kernFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts Roboto-Regular.ttf]
+testConstraint haveKerning [file exists $kernFace]
+# A reader from outside, for the tests that ask what comes back OUT of the
+# file: nothing inside this package can answer that.
+testConstraint havePdfToText [expr {[auto_execok pdftotext] ne {}}]
 
 test text-1.1 {module state never reaches the PDF} -body {
   # /Resources << /tclpdfTextState << /current family helvetica style {} ... >>
@@ -580,5 +592,421 @@ test text-word-1.1 {an empty string has no word gaps, not minus one} -body {
   list $empty [expr {$one == $onePlain}] \
       [expr {abs(($two - $plain) - 3 * 25.4 / 72.0) < 0.001}]
 } -result {0.0 1 1}
+
+# -- -direction rtl -----------------------------------------------------------
+
+test text-direction-12.1 {rtl writes the same glyphs in the opposite order} \
+    -constraints haveFace -body {
+  # Stated as an equality rather than by counting bytes: a right-to-left line
+  # has to produce exactly what the reversed string produces left to right.
+  # Kerning and ligatures are off for this one so that nothing but the order
+  # can differ - what they do to a reversed run is 12.4's question.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 12 -kerning 0 -ligatures 0
+  $doc text "שלום" -at {20 20} -direction rtl
+  set reversed [$doc page content]
+  $doc destroy
+
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 12 -kerning 0 -ligatures 0
+  $doc text [string reverse "שלום"] -at {20 20} -unshaped 1
+  set backwards [$doc page content]
+  # The same string set left to right, so that a package which ignored the
+  # option could not pass this test.
+  $doc destroy
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 12 -kerning 0 -ligatures 0
+  $doc text "שלום" -at {20 20} -unshaped 1
+  set forwards [$doc page content]
+  $doc destroy
+  set glyphs [::tclpdfTest::shows $reversed]
+  list [expr {$glyphs eq [::tclpdfTest::shows $backwards]}] \
+      [expr {$glyphs eq [::tclpdfTest::shows $forwards]}]
+} -result {1 0}
+
+# WHY LATIN WORDS APPEAR IN A RIGHT-TO-LEFT LINE BELOW, and always with
+# -unshaped 1. The three tests that follow are about the MECHANICS of the
+# reversal - where a line begins, what it measures, where a kerning amount
+# lands - and Latin is the only script whose widths and kerning pairs are the
+# same in every reader's head. Since 13.x a strongly left-to-right character
+# in an rtl line is refused as a mixed line, so the tests say -unshaped 1,
+# which is the one option that means "I know what this does". The refusal
+# itself is 13.5's subject; here it would only be in the way.
+
+test text-direction-12.2 {under rtl the default alignment is the right edge} \
+    -constraints haveFace -body {
+  # -align names the edge the line STARTS at in reading order, so left and
+  # right change places. Measured on the text matrix rather than deduced: an
+  # rtl line with the default alignment has to begin where an ltr line with
+  # -align right begins, and vice versa.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 12
+  $doc text "Bochum" -at {20 20}
+  $doc text "Bochum" -at {20 30} -align right
+  $doc text "Bochum" -at {20 40} -direction rtl -unshaped 1
+  $doc text "Bochum" -at {20 50} -direction rtl -align right -unshaped 1
+  $doc text "Bochum" -at {20 60} -align center
+  $doc text "Bochum" -at {20 70} -direction rtl -align center -unshaped 1
+  lassign [::tclpdfTest::starts [$doc page content]] left right \
+      rtlLeft rtlRight centre rtlCentre
+  $doc destroy
+  list [expr {$rtlLeft eq $right}] [expr {$rtlRight eq $left}] \
+      [expr {$rtlCentre eq $centre}] [expr {$left ne $right}]
+} -result {1 1 1 1}
+
+test text-direction-12.3 {a line measures the same in both directions} \
+    -constraints haveFace -body {
+  # The width is a sum, and turning the run round must not change it - a table
+  # column sized for a Hebrew cell would otherwise be sized for a line that is
+  # never drawn. Kerning is ON here: it is the part that could differ.
+  set doc [tclpdf new -unit mm]
+  $doc font embed face $::textFace
+  set ltr [$doc textWidth "AVATAR Bochum" -family face -size 12]
+  set rtl [$doc textWidth "AVATAR Bochum" -family face -size 12 \
+      -direction rtl -unshaped 1]
+  $doc destroy
+  list [expr {$ltr == $rtl}] [expr {$ltr > 0}]
+} -result {1 1}
+
+test text-direction-12.4 {kerning keeps its amount at the same letter boundary} \
+    -constraints haveKerning -body {
+  # A kerning pair is DIRECTED - A V is not V A - so the amounts are worked
+  # out on the logical run and travel with the glyphs when it is reversed.
+  # Written the other way round, on the reversed run, the lookup would find
+  # V A and the line would come out with different gaps than [textWidth]
+  # measured for it.
+  #
+  # The amounts of AVATAR are read off both streams: reversed, the same
+  # numbers have to appear in the opposite order, because the gap between two
+  # glyphs is the same gap whichever way the line runs.
+  #
+  # And WHERE they appear is checked as well, on the two-glyph line: the pair
+  # A V drawn right to left has to come out as V, the amount, A - one glyph on
+  # either side of it. Reversing the amounts without moving them on by one
+  # produces the same numbers in the same order with the gap a glyph too late,
+  # which is why the numbers alone are not enough to see it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed rob $::kernFace
+  $doc font -family rob -size 12
+  $doc text "AVATAR" -at {20 20}
+  $doc text "AVATAR" -at {20 30} -direction rtl -unshaped 1
+  $doc text "AV" -at {20 40}
+  $doc text "AV" -at {20 50} -direction rtl -unshaped 1
+  lassign [::tclpdfTest::shows [$doc page content]] longLtr longRtl pairLtr pairRtl
+  $doc destroy
+  set ltr [::tclpdfTest::numbers $longLtr]
+  set rtl [::tclpdfTest::numbers $longRtl]
+  list [expr {$rtl eq [lreverse $ltr]}] [llength $ltr] \
+      [expr {[::tclpdfTest::numbers $pairRtl] eq [::tclpdfTest::numbers $pairLtr]}] \
+      [llength $pairRtl] [string index [lindex $pairRtl 0] 0] \
+      [string index [lindex $pairRtl 2] 0]
+} -result {1 4 1 3 ( (}
+
+test text-direction-12.5 {a paragraph runs to the right margin under rtl} \
+    -constraints haveFace -body {
+  # The same mirroring, once per line rather than once per call: with the
+  # default alignment every line of a right-to-left block ends at the right
+  # edge of the column, which is where -align right puts an ltr one.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 10
+  $doc text "אב גד הו זח טי\
+      ךכ לם מן נס עף" \
+      -at {20 20} -width 30 -direction rtl
+  set rtl [::tclpdfTest::starts [$doc page content]]
+  $doc destroy
+  # More than one line, and none of them begins at the left edge of the
+  # column - each is shifted in by whatever it is short of the full width.
+  set left [expr {20 * 72.0 / 25.4}]
+  set atLeft 0
+  foreach x $rtl {
+    if {abs($x - $left) < 0.01} {
+      incr atLeft
+    }
+  }
+  list [expr {[llength $rtl] > 1}] $atLeft
+} -result {1 0}
+
+test text-direction-12.6 {a direction that is neither is refused} -body {
+  # Silently setting the line the usual way would be the worse answer: the
+  # caller asked for something and got nothing, with nothing said.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set drawing [catch {$doc text "Bochum" -at {20 20} -direction sideways} one]
+  set measuring [catch {$doc textWidth "Bochum" -direction sideways} two]
+  # And it is not an option of the font state: the direction belongs to the
+  # line, not to the face.
+  set onFont [catch {$doc font -direction rtl} three]
+  $doc destroy
+  list $drawing [string match {*must be ltr or rtl*} $one] \
+      $measuring [string match {*must be ltr or rtl*} $two] \
+      $onFont [string match {*unknown option "-direction"*} $three]
+} -result {1 1 1 1 1 1}
+
+# -- numbers, mirrored brackets and the refusal of a mixed line ---------------
+
+# One document, one line, drawn far enough right that nothing falls off the
+# sheet - measured: a right-to-left line anchored at 20 mm runs off the left
+# edge, pdftotext then reports a negative x and drops what it cannot see, and
+# a test written that way measures poppler's clipping.
+proc rtlLine {string args} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 14 -kerning 0 -ligatures 0
+  $doc text $string -at {180 30} -direction rtl {*}$args
+  return $doc
+}
+
+# What poppler gives back, with the directional marks it wraps a right-to-left
+# line in taken out again - they are the reader's, not ours.
+proc rtlExtract {doc name} {
+  set path [::tclpdfTest::scratch $name.pdf]
+  set text [::tclpdfTest::scratch $name.txt]
+  $doc write $path
+  exec pdftotext -enc UTF-8 $path $text
+  set channel [open $text r]
+  fconfigure $channel -encoding utf-8
+  set lines [split [read $channel] \n]
+  close $channel
+  file delete $path $text
+  return [string map [list ‫ {} ‬ {} ‪ {} ‏ {}] \
+      [lindex $lines 0]]
+}
+
+test text-direction-13.1 {digits keep their own order inside the line} \
+    -constraints haveFace -body {
+  # THE defect this is for: "الفاتورة 4711" came out as 1174 on the page - a
+  # wrong invoice number, and one nobody can see is wrong. Unicode calls the
+  # digits EN and the bidi algorithm sets them left to right inside a
+  # right-to-left line (UAX #9, rules W2 to W7); the reversal alone turns them
+  # round with the letters.
+  #
+  # The reference is hb-shape for the GLYPHS - it answers
+  # [one|one|seven|four] for this string because HarfBuzz does no bidi and
+  # returns the digits as they were handed to it - and pdftotext for the TEXT.
+  # So the drawn order is asserted here directly: the four digit glyphs have
+  # to open the line, in the order 4 7 1 1.
+  set doc [rtlLine "الفاتورة 4711"]
+  set drawn [::tclpdfTest::drawnText $doc face [$doc page content]]
+  $doc destroy
+  string range $drawn 0 3
+} -result 4711
+
+test text-direction-13.2 {and the line comes back out of the file as written} \
+    -constraints {haveFace havePdfToText} -body {
+  # The other half of 13.1, and the one that cannot be deduced from it: the
+  # glyphs may be in the right order and the ToUnicode map still hand the
+  # reader a different number. poppler applies the bidi algorithm to what it
+  # reads, so a correctly drawn line comes back in LOGICAL order.
+  set doc [rtlLine "الفاتورة 4711"]
+  set found [rtlExtract $doc direction-digits]
+  $doc destroy
+  set found
+} -result "الفاتورة 4711"
+
+test text-direction-13.3 {Arabic-Indic digits are digits} -constraints haveFace \
+    -body {
+  # ١٠ is one zero, not zero one, and it sits INSIDE the Arabic block - so the
+  # module that classifies it has to find the digits before it finds the
+  # block. Drawn, the number opens the line: "صفحة ٣ من ١٠".
+  set doc [rtlLine "صفحة ٣ من ١٠"]
+  set drawn [::tclpdfTest::drawnText $doc face [$doc page content]]
+  $doc destroy
+  string range $drawn 0 1
+} -result ١٠
+
+test text-direction-13.4 {a separator and a percent sign belong to the number} \
+    -constraints haveFace -body {
+  # "1.234,50%" is ONE number: the full stop and the comma stand between two
+  # digits and the percent sign directly beside one. A euro sign with a space
+  # in front of it does not - it is a neutral and goes where the reversal puts
+  # it, which in a right-to-left line is the far side of the amount.
+  set doc [rtlLine "שלום 1.234,50% שלום"]
+  set inside [::tclpdfTest::drawnText $doc face [$doc page content]]
+  $doc destroy
+  set doc [rtlLine "שלום 50 € שלום"]
+  set apart [::tclpdfTest::drawnText $doc face [$doc page content]]
+  $doc destroy
+  list $inside $apart
+} -result {{םולש 1.234,50% םולש} {םולש € 50 םולש}}
+
+test text-direction-13.5 {two numbers in one line each keep their own order} \
+    -constraints haveFace -body {
+  set doc [rtlLine "47 שלום 11"]
+  set drawn [::tclpdfTest::drawnText $doc face [$doc page content]]
+  $doc destroy
+  set drawn
+} -result {11 םולש 47}
+
+test text-direction-13.6 {a mixed line is refused, and told where and how} \
+    -constraints haveFace -body {
+  # "Rechnung من شركة Müller" used to be ACCEPTED and to come out with the
+  # Latin words backwards - "gnunhceR ... rellüM". A line that mixes the two
+  # directions needs the bidi algorithm to decide which run goes where, and
+  # this package does not have one: refusing is the same rule it applies to a
+  # character the face has no glyph for.
+  #
+  # Measuring is refused as well as drawing, and for the reason -direction is
+  # checked in one place: a table that measured such a cell and then failed to
+  # draw it would report the mistake from the wrong call.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 12
+  set drawing [catch {$doc text "Rechnung من شركة Müller" -at {180 30} \
+      -direction rtl} message]
+  set measuring [catch {$doc textWidth "Rechnung من شركة" -direction rtl}]
+  # A line with nothing but digits, punctuation and right-to-left letters in
+  # it is not mixed and passes.
+  set clean [catch {$doc text "الفاتورة 4711 (5%)" -at {180 40} -direction rtl}]
+  # -unshaped 1 is the one way past it, as it is past the shaping refusal.
+  set anyway [catch {$doc text "Rechnung" -at {180 50} -direction rtl \
+      -unshaped 1}]
+  # And the mirror image: a right-to-left script in a left-to-right line is
+  # refused where it always was, by shaping.tcl, with its own way out.
+  set other [catch {$doc text "שלום" -at {20 60}} otherMessage]
+  $doc destroy
+  list $drawing $message $measuring $clean $anyway $other \
+      [string match {*-direction rtl*} $otherMessage]
+} -result {1 {tclpdf: U+0052 (position 0) is left-to-right in a -direction rtl\
+    line - a mixed line needs the bidi algorithm, which tclpdf does not have;\
+    set the runs as separate calls, one per direction} 1 0 0 1 1}
+
+test text-direction-13.7 {a paired bracket is drawn mirrored} \
+    -constraints haveFace -body {
+  # U+0028 is the OPENING bracket, and the opening bracket of a line that runs
+  # the other way looks like ")". Measured against HarfBuzz, which answers
+  # [parenleft|uni05D0|parenright] for "(א)" in a right-to-left run - the
+  # reversal AND the swap, since DejaVu Sans carries no rtlm feature and the
+  # shaper falls back on the mirroring table.
+  #
+  # So the drawn line opens with the glyph of "(" although the character there
+  # is ")", and each of the two carries the character it stands for as
+  # ActualText - without which the extraction would hand back the brackets
+  # swapped.
+  set doc [rtlLine "(שלום)"]
+  set content [$doc page content]
+  set drawn [::tclpdfTest::drawnText $doc face $content]
+  $doc destroy
+  # The two spans, and the drawn line: the glyph of "(" first although the
+  # character at that end is ")".
+  list [expr {$drawn eq "(םולש)"}] \
+      [regexp -all {ActualText <FEFF002[89]>} $content]
+} -result {1 2}
+
+test text-direction-13.8 {and the brackets come back the way they went in} \
+    -constraints {haveFace havePdfToText} -body {
+  # Measured before the ActualText spans were written: poppler gave ")שלום("
+  # back for this line - the mirrored glyphs read as the characters they draw,
+  # which is what a per-glyph ToUnicode map can say and nothing more.
+  set doc [rtlLine "(שלום)"]
+  set found [rtlExtract $doc direction-brackets]
+  $doc destroy
+  set found
+} -result "(שלום)"
+
+test text-direction-13.9 {an adjustment lands at the edges of the number} \
+    -constraints haveFace -body {
+  # WHERE a gap is written is the half of the reordering that the drawn order
+  # alone cannot show. The amounts belong to the LOGICAL pairs, so each has to
+  # travel to the place where the two glyphs of its pair end up beside each
+  # other - inside the number the glyphs still run forwards, at its edges they
+  # do not, and one rule that ignored the difference would put every gap one
+  # glyph too far.
+  #
+  # Word spacing rather than kerning, because it can be asked for: measured
+  # with hb-shape, neither DejaVu Sans nor Roboto kerns a pair of digits or a
+  # digit against a letter, so a kerning pair beside a number does not exist
+  # to be measured. -wordSpacing produces one adjustment per space through the
+  # same TJ road and is exact.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 14 -kerning 0 -ligatures 0 -wordSpacing 3
+  $doc text "שלום 4711 שלום" -at {180 30} -direction rtl
+  set pieces [::tclpdfTest::drawn $doc face [$doc page content]]
+  $doc destroy
+  # The two gaps sit where the two spaces are, and the number is drawn in one
+  # piece between them. The amounts themselves are 13.10's subject; here only
+  # their PLACE matters, so each is read as the word "gap".
+  set shape {}
+  set negative 1
+  foreach piece $pieces {
+    lassign $piece kind value
+    if {$kind ne "gap"} {
+      lappend shape $value
+      continue
+    }
+    lappend shape gap
+    if {$value >= 0} {
+      set negative 0
+    }
+  }
+  list $shape $negative
+} -result {{םולש gap { 4711} gap { םולש}} 1}
+
+test text-direction-13.11 {a standard face refuses -direction rtl, and says why} -body {
+  # WinAnsi has no right-to-left letter. Accepted, the option did nothing on
+  # this road - the reordering lives on the glyph road, which a standard face
+  # never takes - so "Hello" came out left to right with the alignment
+  # mirrored and nothing else said. Same road for a Type 1 face.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 12
+  set code [catch {$doc text "Hello 42" -at {190 30} -direction rtl} err]
+  set width [catch {$doc textWidth "Hello" -direction rtl} err2]
+  set fine [catch {$doc text "Hello 42" -at {20 30}} err3]
+  $doc destroy
+  list $code [string match "*font embed*" $err] [string match "*helvetica*" $err] \
+      $width $fine
+} -result {1 1 1 1 0}
+
+test text-direction-13.12 {an embedded Type 1 face refuses it the same way} \
+    -constraints haveType1 -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed t1 $type1Face
+  $doc font -family t1 -size 12
+  set code [catch {$doc text "Hello" -at {190 30} -direction rtl} err]
+  $doc destroy
+  list $code [string match "*WinAnsiEncoding*" $err] [string match "*\"t1\"*" $err]
+} -result {1 1 1}
+
+test text-direction-13.10 {the sum of the gaps is what the line measures} \
+    -constraints haveFace -body {
+  # The invariant behind the rule above: every gap is written exactly once, so
+  # a line with a number in it is as wide drawn as [textWidth] said it was.
+  # Written the obvious way - reverse the amounts and move them on by one -
+  # the gap at a number's edge is dropped and the line comes out narrower than
+  # the column that was sized for it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 14 -wordSpacing 3
+  set ltr [$doc textWidth "שלום 4711 שלום" -direction rtl]
+  $doc text "שלום 4711 שלום" -at {180 30} -direction rtl
+  set total 0
+  foreach piece [::tclpdfTest::drawn $doc face [$doc page content]] {
+    if {[lindex $piece 0] eq "gap"} {
+      set total [expr {$total + [lindex $piece 1]}]
+    }
+  }
+  $doc destroy
+  # Two spaces at 3 pt each, entered negative because a TJ number is
+  # subtracted from the advance.
+  expr {abs($total + 2 * 1000.0 * 3 / 14) < 0.001}
+} -result 1
+
 
 cleanupTests

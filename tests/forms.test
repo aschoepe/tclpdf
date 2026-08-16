@@ -1,0 +1,383 @@
+# forms.test --
+#
+# The contextual forms of a cursive script, and the ORACLE that says whether
+# they are the right ones.
+#
+# THE POINT OF THIS FILE is the comparison with HarfBuzz. A shaper can be
+# wrong in a way no assertion written here would catch, because the person
+# writing the assertion and the person writing the shaper are the same one -
+# so the expected glyph sequence is not written down at all. It is asked of
+# hb-shape, glyph number by glyph number, and the tests that do so are skipped
+# rather than guessed at where hb-shape is not installed.
+#
+# hb-shape prints the run in VISUAL order and tclpdf builds it in LOGICAL
+# order, so one of the two has to be turned round. That is the whole
+# difference between the two outputs and it is done here rather than argued
+# about.
+#
+# THE DELIBERATE DIFFERENCES are tests too, at the end: what this package
+# leaves out of rlig is measured against HarfBuzz on purpose, so that the day
+# somebody reads the chaining lookups the tests go red and say where.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::io
+package require tclpdf::forms
+package require tclpdf::gdef
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+# The two faces are two DESIGNS, not two files of the same kind, and both are
+# needed. DejaVu Sans carries whole Arabic letters and reaches their forms
+# with Single substitutions; Noto Naskh Arabic writes a letter as a skeleton
+# plus separate dots and reaches the forms with Multiple substitutions. The
+# first is what this package can set, the second is what it refuses - and
+# neither case is visible in the other face.
+set wholeFace [file join $assets DejaVuSans.ttf]
+set splitFace [file join $assets NotoNaskhArabic-Variable.ttf]
+set plainFace [file join $assets Roboto-Regular.ttf]
+
+testConstraint haveWhole [file exists $wholeFace]
+testConstraint haveSplit [file exists $splitFace]
+testConstraint havePlain [file exists $plainFace]
+testConstraint haveHbShape [expr {[auto_execok hb-shape] ne {}}]
+testConstraint havePdfToText [expr {[auto_execok pdftotext] ne {}}]
+
+proc formsParsed {path} {
+  return [::tclpdf::sfnt read $path]
+}
+
+# A run as font.tcl builds it, before anything has been substituted. Shared
+# with liga.test, which needs the same starting point for the opposite
+# substitution.
+interp alias {} formsRun {} ::tclpdfTest::glyphRun
+
+# The glyph numbers tclpdf produces for a word, in logical order.
+proc formsGlyphs {path text} {
+  set parsed [formsParsed $path]
+  set glyphs {}
+  foreach entry [::tclpdf::forms apply [::tclpdf::forms build $parsed] \
+      [formsRun $parsed $text]] {
+    lappend glyphs [lindex $entry 0]
+  }
+  return $glyphs
+}
+
+# The glyph numbers HarfBuzz produces for the same word, turned from visual
+# into logical order. FEATURES is passed on as it stands - "" for the full
+# shaping the face asks for, "-rlig,-liga,-locl" to leave out what this
+# package does not read.
+proc formsHarfBuzz {path text {features {}}} {
+  set command [list hb-shape --no-clusters --no-positions --no-glyph-names]
+  if {$features ne {}} {
+    lappend command --features=$features
+  }
+  set output [exec {*}$command $path $text]
+  set glyphs {}
+  foreach glyph [split [string trim $output {[]}] |] {
+    set glyphs [linsert $glyphs 0 $glyph]
+  }
+  return $glyphs
+}
+
+# The six words of the oracle. Ordinary Arabic, chosen so that between them
+# they cover every one of the four forms and both ways a word can start.
+set formsWords {مرحبا العربية بالعالم كتاب سلام شمس}
+
+# --- what a face offers -----------------------------------------------------
+
+test forms-1.1 {a face with the positional features is prepared} \
+    -constraints haveWhole -body {
+  set state [::tclpdf::forms build [formsParsed $::wholeFace]]
+  set tags {}
+  foreach {tag mark lookups} [dict get $state stages] {
+    lappend tags $tag
+  }
+  set tags
+} -result {fina medi init rlig}
+
+test forms-1.2 {a face without them is not prepared at all} \
+    -constraints havePlain -body {
+  # Roboto has a GSUB and even a ccmp feature, and none of the three forms.
+  # The empty answer is what makes font.tcl refuse rather than decompose
+  # letters it then cannot shape.
+  ::tclpdf::forms build [formsParsed $::plainFace]
+} -result {}
+
+test forms-1.3 {the splitting face is prepared too, ccmp and all} \
+    -constraints haveSplit -body {
+  # It is refused later, for its marks - not here. Reading it has to work, or
+  # the refusal would be an accident rather than a decision.
+  set state [::tclpdf::forms build [formsParsed $::splitFace]]
+  set tags {}
+  foreach {tag mark lookups} [dict get $state stages] {
+    lappend tags $tag
+  }
+  set tags
+} -result {ccmp fina medi init rlig}
+
+# --- the oracle -------------------------------------------------------------
+
+test forms-2.1 {every word comes out as HarfBuzz shapes it} \
+    -constraints {haveWhole haveHbShape} -body {
+  # The full comparison, with nothing switched off: this face reaches its
+  # forms with Single substitutions and its required ligatures with a
+  # Ligature lookup, and all three are types this package reads. So the two
+  # shapers have to agree glyph for glyph, and any difference is a defect.
+  set faults {}
+  foreach word $::formsWords {
+    set ours [formsGlyphs $::wholeFace $word]
+    set theirs [formsHarfBuzz $::wholeFace $word]
+    if {$ours ne $theirs} {
+      lappend faults "$word: $ours vs $theirs"
+    }
+  }
+  set faults
+} -result {}
+
+test forms-2.2 {lam-alef as well, which is a required ligature} \
+    -constraints {haveWhole haveHbShape} -body {
+  # In this face the rlig lookup is type 4 - several glyphs to one - and that
+  # is read, so the lam-alef comes out as the single glyph the face draws for
+  # it. Written out rather than only compared, because it is the one word the
+  # other face gets wrong.
+  set ours [formsGlyphs $::wholeFace "لا"]
+  list [llength $ours] [expr {$ours eq [formsHarfBuzz $::wholeFace "لا"]}]
+} -result {1 1}
+
+test forms-2.3 {the splitting face agrees except where the chaining is} \
+    -constraints {haveSplit haveHbShape} -body {
+  # Compared with rlig, liga and locl switched off, because those are where
+  # this face keeps its contextual lookups - types 5 and 6, which gsubApply
+  # does not read. Everything else, ccmp and the three positional features
+  # included, has to agree exactly.
+  set faults {}
+  foreach word $::formsWords {
+    set ours [formsGlyphs $::splitFace $word]
+    set theirs [formsHarfBuzz $::splitFace $word -rlig,-liga,-locl]
+    if {$ours ne $theirs} {
+      lappend faults "$word: $ours vs $theirs"
+    }
+  }
+  set faults
+} -result {}
+
+test forms-2.4 {a word with no chaining agrees with the full shaping too} \
+    -constraints {haveSplit haveHbShape} -body {
+  # The control for 2.3: where the face has no chaining rule to apply, the
+  # comparison with everything switched ON must come out the same. Otherwise
+  # 2.3 would pass by having switched off the very thing that differs.
+  set ours [formsGlyphs $::splitFace "مرحبا"]
+  list [expr {$ours eq [formsHarfBuzz $::splitFace "مرحبا"]}] \
+      [expr {$ours eq [formsHarfBuzz $::splitFace "مرحبا" -rlig,-liga,-locl]}]
+} -result {1 1}
+
+test forms-2.5 {rlig is applied where its lookup type allows} \
+    -constraints {haveSplit haveHbShape} -body {
+  # An isolated kaf: this face rewrites it through a Multiple substitution in
+  # rlig, which IS read. So the answer here follows the full shaping and not
+  # the reduced one - evidence that rlig is applied rather than skipped
+  # wholesale.
+  set ours [formsGlyphs $::splitFace "ك"]
+  list [expr {$ours eq [formsHarfBuzz $::splitFace "ك"]}] \
+      [expr {$ours eq [formsHarfBuzz $::splitFace "ك" -rlig,-liga,-locl]}]
+} -result {1 0}
+
+# --- the differences that are on purpose ------------------------------------
+
+test forms-3.1 {lam-alef in the splitting face stays two glyphs} \
+    -constraints {haveSplit haveHbShape} -body {
+  # THIS TEST HOLDS A LIMIT, and it is meant to fail the day it is lifted.
+  # The face reaches its lam-alef through a chaining lookup (type 6), which
+  # is not read, so the two letters come out as an ordinary initial and final
+  # pair - joined and legible, and not the shape the face draws for it.
+  # Whoever teaches gsubApply to follow chains has to come back here.
+  set ours [formsGlyphs $::splitFace "لا"]
+  set full [formsHarfBuzz $::splitFace "لا"]
+  list [llength $ours] [llength $full] [expr {$ours ne $full}] \
+      [expr {$ours eq [formsHarfBuzz $::splitFace "لا" -rlig,-liga,-locl]}]
+} -result {2 2 1 1}
+
+test forms-3.2 {and the wide medial variants are not selected} \
+    -constraints {haveSplit haveHbShape} -body {
+  # The same limit in its quieter form: a chaining rlig lookup widens the
+  # medial skeleton before certain finals. Exactly one glyph of this word
+  # differs because of it.
+  set ours [formsGlyphs $::splitFace "العربية"]
+  set full [formsHarfBuzz $::splitFace "العربية"]
+  set differing 0
+  foreach a $ours b $full {
+    if {$a ne $b} {
+      incr differing
+    }
+  }
+  list [llength $ours] [llength $full] $differing
+} -result {10 10 1}
+
+# --- what the substitutions do to the run -----------------------------------
+
+test forms-4.1 {a Multiple substitution makes the run longer} \
+    -constraints haveSplit -body {
+  # Five characters, six glyphs: ccmp writes the beh as a skeleton and a dot.
+  # The run growing is the case the ligature code never had to handle.
+  set glyphs [formsGlyphs $::splitFace "مرحبا"]
+  list [string length "مرحبا"] [llength $glyphs]
+} -result {5 6}
+
+test forms-4.2 {the characters stay on the first glyph of the sequence} \
+    -constraints haveSplit -body {
+  # And the others carry none. Both halves matter: the first is what makes
+  # the word extract, the second is what keeps it from extracting twice.
+  set parsed [formsParsed $::splitFace]
+  set run [::tclpdf::forms apply [::tclpdf::forms build $parsed] \
+      [formsRun $parsed "مرحبا"]]
+  set codes {}
+  foreach entry $run {
+    lappend codes [lindex $entry 1]
+  }
+  set flat {}
+  foreach list $codes {
+    lappend flat {*}$list
+  }
+  list $codes [llength $flat]
+} -result {{1605 1585 1581 1576 {} 1575} 5}
+
+test forms-4.3 {the run comes back with two elements per entry} \
+    -constraints haveWhole -body {
+  # The form each position stands in travels with the glyphs while the
+  # substitutions run and is dropped at the end: everything downstream takes
+  # {glyph codes}, and a third element would ride along waiting to be
+  # mistaken for something.
+  set lengths {}
+  set parsed [formsParsed $::wholeFace]
+  foreach entry [::tclpdf::forms apply [::tclpdf::forms build $parsed] \
+      [formsRun $parsed "مرحبا"]] {
+    lappend lengths [llength $entry]
+  }
+  lsort -unique $lengths
+} -result 2
+
+# --- the mark glyphs that decide whether a face can be used -----------------
+
+test forms-5.1 {the splitting face is recognised by its mark glyphs} \
+    -constraints haveSplit -body {
+  # The dots ccmp produces are GDEF class 3, and placing them is GPOS mark
+  # attachment - which this package does not read. Asked of the RESULT, so
+  # that a face is judged by what it actually produced for this text.
+  set parsed [formsParsed $::splitFace]
+  set state [::tclpdf::forms build $parsed]
+  ::tclpdf::forms marks $state \
+      [::tclpdf::forms apply $state [formsRun $parsed "مرحبا"]]
+} -result 1
+
+test forms-5.2 {a face with whole letters produces no mark} \
+    -constraints haveWhole -body {
+  set parsed [formsParsed $::wholeFace]
+  set state [::tclpdf::forms build $parsed]
+  ::tclpdf::forms marks $state \
+      [::tclpdf::forms apply $state [formsRun $parsed "مرحبا"]]
+} -result 0
+
+# --- through the document ---------------------------------------------------
+
+test forms-6.1 {the width measured is the width of the shaped glyphs} \
+    -constraints haveWhole -body {
+  # Measurement and drawing out of one source: the forms are narrower than
+  # the isolated letters, so a width taken before the shaping would lay out a
+  # line that is never drawn. Compared against the sum of the advances of the
+  # glyphs that actually go into the stream.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed ar $::wholeFace
+  set measured [$doc textWidth "مرحبا" -family ar -size 100 -direction rtl]
+  $doc destroy
+  set parsed [formsParsed $::wholeFace]
+  set units [dict get $parsed unitsPerEm]
+  set total 0
+  foreach glyph [formsGlyphs $::wholeFace "مرحبا"] {
+    incr total [::tclpdf::sfnt advance $parsed $glyph]
+  }
+  set shaped [expr {$total * 100.0 / $units}]
+  # And it must not be the width of the unshaped line, or the test would pass
+  # on a package that shapes nothing.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed ar $::wholeFace
+  set isolated [$doc textWidth "مرحبا" -family ar -size 100 -direction rtl \
+      -unshaped 1]
+  $doc destroy
+  list [expr {abs($measured - $shaped) < 0.001}] \
+      [expr {abs($measured - $isolated) > 1.0}]
+} -result {1 1}
+
+test forms-6.2 {the text comes back out of the file as it went in} \
+    -constraints {haveWhole havePdfToText} -body {
+  # THE test for the ToUnicode side, and the only one that can be: the glyphs
+  # in the file are numbers, the forms are not the characters, and nothing but
+  # a reader can say whether the word is still there. pdftotext wraps a
+  # right-to-left line in the two bidi marks U+202B and U+202C, which are the
+  # reader's and not ours.
+  set path [::tclpdfTest::scratch forms-extract.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::wholeFace
+  $doc font -family ar -size 18
+  $doc text "مرحبا" -at {180 30} -direction rtl
+  $doc text "العربية مرحبا بالعالم" -at {180 50} -direction rtl
+  $doc write $path
+  $doc destroy
+  set text [::tclpdfTest::scratch forms-extract.txt]
+  exec pdftotext -enc UTF-8 $path $text
+  set channel [open $text r]
+  fconfigure $channel -encoding utf-8
+  set lines [split [read $channel] \n]
+  close $channel
+  file delete $path $text
+  set found {}
+  foreach line [lrange $lines 0 1] {
+    lappend found [string map [list ‫ {} ‬ {} ‏ {}] $line]
+  }
+  set found
+} -result {مرحبا {العربية مرحبا بالعالم}}
+
+test forms-6.3 {a ligature keeps the characters of both its letters} \
+    -constraints haveWhole -body {
+  # The lam-alef is one glyph and stands for two characters, and the CMap has
+  # to say so in LOGICAL order - lam first, as the line was written.
+  #
+  # Checked in the CMap rather than through pdftotext, and that is not an
+  # evasion: poppler reverses the characters of a run it takes for
+  # right-to-left, ligature or not, so it hands back alef-lam for this word.
+  # Measured. The file is right and the reader does what it does; asserting
+  # the reader here would freeze somebody else's behaviour into this suite.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::wholeFace
+  $doc text "لا" -at {180 30} -family ar -size 18 -direction rtl
+  set path [::tclpdfTest::scratch forms-ligature.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  set number {}
+  for {set at 1} {$at <= [$writer count]} {incr at} {
+    if {[regexp {/ToUnicode (\d+) 0 R} [$writer body $at] -> found]} {
+      set number $found
+    }
+  }
+  set map [::tclpdfTest::streamOf $writer $number]
+  $doc destroy
+  file delete $path
+  # One entry, and it holds both characters: the lam-alef glyph. The other
+  # two entries of this document are the space and nothing else.
+  regexp {<[0-9A-F]{4}> <06440627>} $map
+} -result 1
+
+cleanupTests

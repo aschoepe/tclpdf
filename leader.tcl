@@ -50,6 +50,9 @@ oo::define ::tclpdf::document::document {
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
+    # The line options on top, as [text] takes them: a row is two lines and a
+    # fill, and all three run the way -direction says.
+    set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "leader"]
     # The two ends are positional, not options - they are what the row IS.
     # Carried in the same dictionary so that the drawing takes one argument.
@@ -98,8 +101,26 @@ oo::define ::tclpdf::document::document {
     if {$fill ne {}} {
       set fillWidth [my textWidth $fill {*}$font]
     }
+    # WHERE THE THREE PIECES SIT. The row has a leading end, a trailing end
+    # and a fill between them, and "leading" is a matter of reading order: in
+    # a right-to-left row the first argument belongs at the RIGHT edge and the
+    # second at the left. Only the three anchors change - the -align values
+    # stay as they are, because [text] mirrors those itself, and mirroring
+    # them here as well would turn them back.
+    #
+    # The remainder that no whole copy of the fill covers stays in front of
+    # the trailing end, on whichever side that is.
+    if {[dict get $options direction] eq "rtl"} {
+      set leftAt [expr {$x + $width}]
+      set fillAt [expr {$x + $width - $leftWidth - $gap}]
+      set rightAt $x
+    } else {
+      set leftAt $x
+      set fillAt [expr {$x + $leftWidth + $gap}]
+      set rightAt [expr {$x + $width}]
+    }
     if {[dict get $options left] ne {}} {
-      my text [dict get $options left] -at [list $x $y] {*}$ends {*}$font
+      my text [dict get $options left] -at [list $leftAt $y] {*}$ends {*}$font
     }
     # Whole copies only, and the remainder is left in front of the right hand
     # end. Stretching the last one to fit would mean drawing a partial glyph;
@@ -110,12 +131,11 @@ oo::define ::tclpdf::document::document {
       set run [string repeat $fill $count]
       # An artifact: the dots are decoration. Outside a tagged document the
       # option costs nothing, which is why it is not made conditional here.
-      my text $run -at [list [expr {$x + $leftWidth + $gap}] $y] \
-          -tag Artifact {*}$font
+      my text $run -at [list $fillAt $y] -tag Artifact {*}$font
     }
     if {[dict get $options right] ne {}} {
       my text [dict get $options right] \
-          -at [list [expr {$x + $width}] $y] -align right {*}$ends {*}$font
+          -at [list $rightAt $y] -align right {*}$ends {*}$font
     }
     # One line down, the same step [text -width] takes. Without a width [text]
     # returns nothing at all, so the value is built here rather than passed
@@ -128,7 +148,7 @@ oo::define ::tclpdf::document::document {
   # The font options of this call, in the form the text methods take them.
   method LeaderFont {options} {
     set font {}
-    foreach name $::tclpdf::text::stateOptions {
+    foreach name $::tclpdf::text::lineOptions {
       lappend font -$name [dict get $options $name]
     }
     return $font

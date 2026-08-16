@@ -31,6 +31,10 @@ set latinFace [file join $assets DejaVuSans.ttf]
 testConstraint haveArabic [file exists $arabicFace]
 testConstraint haveTibetan [file exists $tibetanFace]
 testConstraint haveLatin [file exists $latinFace]
+# The Hebrew face is the Latin one: measured, DejaVu Sans carries the whole
+# letter range U+05D0..U+05EA, and no face of its own for the script ships
+# with the examples.
+testConstraint haveHebrew [file exists $latinFace]
 
 test shaping-1.1 {a script that needs shaping is found, with its position} -body {
   # The position counts characters from zero, exactly as the missing-glyph
@@ -91,14 +95,18 @@ test shaping-1.5 {the presentation forms are caught as well} -body {
   list $system [string match {*right-to-left*} $what]
 } -result {Arabic 1}
 
-test shaping-2.1 {drawing such a script is refused} -constraints haveArabic -body {
+test shaping-2.1 {drawing such a script left to right is refused} \
+    -constraints haveArabic -body {
+  # Arabic needs the contextual forms AND the order. The forms exist now
+  # (forms.tcl); the order is still the caller's to ask for, so a line set
+  # without -direction rtl is refused and told which option it wants.
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc font embed ar $::arabicFace
   set code [catch {$doc text "الع" -at {20 20} -family ar} message]
   $doc destroy
   list $code [string match {*belongs to Arabic*} $message] \
-      [string match {*-unshaped 1*} $message]
+      [string match {*-direction rtl*} $message]
 } -result {1 1 1}
 
 test shaping-2.2 {-unshaped 1 draws it anyway} -constraints haveArabic -body {
@@ -143,6 +151,139 @@ test shaping-2.5 {a face for a script that does not need it is unaffected} -cons
   $doc destroy
   list $code $message
 } -result {0 {}}
+
+test shaping-3.1 {a finding says which of the two things is missing} -body {
+  # The kind is what a caller can act on, and it is appended rather than
+  # inserted so that the three fields the older callers read stay where they
+  # were.
+  set hebrew [::tclpdf::shaping needed "א"]
+  set arabic [::tclpdf::shaping needed "ب"]
+  # The nikud is asked for under rtl: under ltr the LETTER in front of it is
+  # already a finding, and the first offender is what comes back.
+  set nikud [::tclpdf::shaping needed "בָ" rtl]
+  list [lindex $hebrew 4] [lindex $arabic 4] [lindex $nikud 4] \
+      [lindex $nikud 3] [lindex $nikud 0]
+} -result {ordering forms shaping {mark placement} 1}
+
+test shaping-3.2 {under rtl only the ordering findings fall away} -body {
+  # And the walk CONTINUES past them: a Hebrew line with one Arabic word in
+  # it is still refused, and refused on the Arabic - which is the character
+  # to look at, not the first Hebrew letter before it.
+  set mixed [::tclpdf::shaping needed "שלום ب" rtl]
+  list [::tclpdf::shaping needed "שלום" rtl] \
+      [lindex $mixed 0] [lindex $mixed 2] \
+      [expr {[::tclpdf::shaping needed "ب" rtl] ne {}}]
+} -result {{} 5 Arabic 1}
+
+test shaping-3.3 {the message names the way out that exists} -body {
+  # Telling someone to set -unshaped 1 for a Hebrew line hands them the
+  # isolated-glyph escape hatch when one option would set the line correctly.
+  set ordering [::tclpdf::shaping message [::tclpdf::shaping needed "א"]]
+  set cursive [::tclpdf::shaping message [::tclpdf::shaping needed "ب"]]
+  # A mark is the case where -unshaped 1 IS the only way past, and it has to
+  # keep saying so. Asked with forms 1, which is what the caller passes once
+  # the face has said it can shape - without it the walk stops on the LETTER
+  # and never reaches the vowel sign.
+  set mark [::tclpdf::shaping message [::tclpdf::shaping needed "بَ" rtl 1]]
+  list [string match {*-direction rtl*} $ordering] \
+      [string match {*-unshaped*} $ordering] \
+      [string match {*-direction rtl*} $cursive] \
+      [string match {*-unshaped*} $cursive] \
+      [string match {*-unshaped 1*} $mark]
+} -result {1 0 1 0 1}
+
+test shaping-4.1 {Hebrew is refused until the direction is given} \
+    -constraints haveHebrew -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed heb $::latinFace
+  set refused [catch {$doc text "שלום" -at {20 20} -family heb} message]
+  set drawn [catch {$doc text "שלום" -at {20 30} -family heb -direction rtl}]
+  # Measuring goes the same way, or a table column would be sized for a line
+  # that is then refused.
+  set measured [catch {$doc textWidth "שלום" -family heb}]
+  set measuredRtl [catch {$doc textWidth "שלום" -family heb -direction rtl}]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $refused [string match {*-direction rtl*} $message] $drawn \
+      $measured $measuredRtl [regexp {Tj|TJ} $content]
+} -result {1 1 0 1 0 1}
+
+test shaping-4.2 {nikud stays refused, direction or not} -constraints haveHebrew -body {
+  # The points are combining marks and this package does not place marks, so
+  # -direction rtl would produce a line whose vowels sit beside their letters.
+  # Refusing it is the same rule as everywhere else here.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed heb $::latinFace
+  set code [catch {$doc text "שָׁלוֹם" -at {20 20} -family heb -direction rtl} message]
+  set open [catch {$doc text "שָׁלוֹם" -at {20 30} -family heb -unshaped 1}]
+  $doc destroy
+  list $code [string match {*mark placement*} $message] \
+      [string match {*-unshaped 1*} $message] $open
+} -result {1 1 1 0}
+
+test shaping-4.3 {Arabic with the direction and a face that can set it} \
+    -constraints haveHebrew -body {
+  # DejaVu Sans, which carries whole Arabic letters. -direction rtl is now
+  # the whole answer for it: the forms come out of the face and the run is
+  # reversed, so the line is set rather than refused.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::latinFace
+  set drawn [catch {$doc text "الع" -at {190 20} -family ar -direction rtl}]
+  set measured [catch {$doc textWidth "الع" -family ar -direction rtl}]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $drawn $measured [regexp {Tj|TJ} $content]
+} -result {0 0 1}
+
+test shaping-4.4 {a face whose dots are separate glyphs is refused} \
+    -constraints haveArabic -body {
+  # Noto Naskh Arabic reaches its forms through ccmp, which writes a letter
+  # as a skeleton plus a dot glyph of its own - and that dot is placed by
+  # GPOS mark attachment, which this package does not read. Measured on this
+  # face, the two dots of teh marbuta belong 294 font units lower than where
+  # they would be drawn, which at 28 pt puts them over the letter in front.
+  # So the line is refused, and the message says what is in the way.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::arabicFace
+  set code [catch {$doc text "مرحبا" -at {190 20} -family ar -direction rtl} message]
+  set open [catch {$doc text "مرحبا" -at {190 30} -family ar -direction rtl \
+      -unshaped 1}]
+  $doc destroy
+  list $code [string match {*mark glyphs*} $message] \
+      [string match {*-unshaped 1*} $message] $open
+} -result {1 1 1 0}
+
+test shaping-4.5 {a face with no forms at all is refused differently} \
+    -constraints haveTibetan -body {
+  # The Tibetan face has no init, medi or fina - and the message has to name
+  # THAT rather than the marks, or the reader goes looking in the wrong
+  # place. It has no Arabic glyphs either; the refusal comes first, which is
+  # the point: the face is judged before the characters are looked up.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed tib $::tibetanFace
+  set code [catch {$doc text "الع" -at {190 20} -family tib -direction rtl} message]
+  $doc destroy
+  list $code [string match {*no contextual forms*} $message]
+} -result {1 1}
+
+test shaping-4.6 {Arabic with vowel signs stays refused} -constraints haveHebrew -body {
+  # The forms are only half of Arabic. A fatha is a combining mark, mark
+  # placement is GPOS, and this package does not read it - so a vowelled line
+  # is refused on the vowel even in a face that shapes. The walk has to get
+  # PAST the letters to find it, which is the second pass in font.tcl.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed ar $::latinFace
+  set code [catch {$doc text "مَرحبا" -at {190 20} -family ar -direction rtl} message]
+  $doc destroy
+  list $code [string match {*U+064E*} $message] \
+      [string match {*mark placement*} $message]
+} -result {1 1 1}
 
 test shaping-2.6 {the standard fourteen are unaffected} -constraints haveLatin -body {
   # WinAnsi has none of these characters, so the standard faces could never

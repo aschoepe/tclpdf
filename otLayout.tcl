@@ -109,10 +109,21 @@ proc ::tclpdf::otLayout::tag {bytes offset} {
 # reach only 15 - taking DFLT first therefore loses the whole Latin pair
 # kerning and leaves a subtable of twenty glyphs behind.
 #
-# What this gives up: text in another script is treated with the Latin
-# lookups. Resolving the script from the text itself is the honest fix and
+# PREFERRED overrides that default order, and there is exactly one caller who
+# knows better: the cursive forms of forms.tcl are Arabic by the time they are
+# asked for, so they ask for "arab" first. Everything else takes the Latin
+# order, because everything else has no idea what script it is looking at.
+# Resolving the script from the text itself in general is the honest fix and
 # needs a script API this package does not have.
-proc ::tclpdf::otLayout::langSys {table} {
+#
+# The fallback to the first script in the list stays in both cases: a face
+# whose lookups hang off a script neither list names is better read with the
+# wrong script tag than not at all - measured, that is how several faces reach
+# their only kerning subtable.
+proc ::tclpdf::otLayout::langSys {table {preferred {}}} {
+  if {![llength $preferred]} {
+    set preferred {latn DFLT}
+  }
   set scriptList [u16 $table 4]
   set count [u16 $table $scriptList]
   set byTag {}
@@ -127,7 +138,7 @@ proc ::tclpdf::otLayout::langSys {table} {
     }
   }
   set script {}
-  foreach name {latn DFLT} {
+  foreach name $preferred {
     if {[dict exists $byTag $name]} {
       set script [dict get $byTag $name]
       break
@@ -157,8 +168,8 @@ proc ::tclpdf::otLayout::langSys {table} {
 # The result is sorted by lookup index because the specification applies
 # lookups in the order of the lookup list, not in the order the feature names
 # them.
-proc ::tclpdf::otLayout::featureLookups {table wanted} {
-  set langSys [langSys $table]
+proc ::tclpdf::otLayout::featureLookups {table wanted {preferred {}}} {
+  set langSys [langSys $table $preferred]
   if {$langSys eq {}} {
     return {}
   }
@@ -194,20 +205,27 @@ proc ::tclpdf::otLayout::featureLookups {table wanted} {
   return [lsort -integer $indices]
 }
 
-# The subtable offsets of one lookup, keeping only the wanted type.
+# The subtables of one lookup that are of a wanted type, as {type offset}.
+#
+# The TYPE comes back with the offset because one feature may well name
+# lookups of several types - the Arabic "init" feature of Noto Naskh Arabic
+# names a Single and a Multiple substitution, measured - and the reader on the
+# other end has to know which bytes it is looking at. A caller that wants one
+# type only gets the offsets alone from [subtables].
 #
 # An extension lookup is not a type of its own: it holds a 32 bit offset so
 # that a lookup can reach past the 64 KiB an Offset16 spans, and the type it
 # wraps is what counts. Which number that is differs between the two tables,
-# so the caller passes it in.
+# so the caller passes it in. It is per SUBTABLE, not per lookup, which is why
+# the type is read inside the loop.
 #
 # The lookup header is variable: markFilteringSet is present only when flag
 # 0x0010 is set. It is not read here - nothing after it is needed - but the
 # subtable offsets sit BEFORE it, so the layout is safe either way.
-proc ::tclpdf::otLayout::subtables {table lookup wantedType extensionType} {
+proc ::tclpdf::otLayout::typedSubtables {table lookup wantedTypes extensionType} {
   set type [u16 $table $lookup]
   set count [u16 $table [expr {$lookup + 4}]]
-  set offsets {}
+  set found {}
   for {set at 0} {$at < $count} {incr at} {
     set subtable [expr {$lookup + [u16 $table [expr {$lookup + 6 + $at * 2}]]}]
     set kind $type
@@ -215,9 +233,19 @@ proc ::tclpdf::otLayout::subtables {table lookup wantedType extensionType} {
       set kind [u16 $table [expr {$subtable + 2}]]
       set subtable [expr {$subtable + [u32 $table [expr {$subtable + 4}]]}]
     }
-    if {$kind == $wantedType} {
-      lappend offsets $subtable
+    if {$kind in $wantedTypes} {
+      lappend found [list $kind $subtable]
     }
+  }
+  return $found
+}
+
+# The subtable offsets of one lookup, keeping only the wanted type.
+proc ::tclpdf::otLayout::subtables {table lookup wantedType extensionType} {
+  set offsets {}
+  foreach pair [typedSubtables $table $lookup [list $wantedType] \
+      $extensionType] {
+    lappend offsets [lindex $pair 1]
   }
   return $offsets
 }
@@ -266,15 +294,32 @@ proc ::tclpdf::otLayout::lookup {table index} {
 # ligature lookups and one broken one came out with none.
 proc ::tclpdf::otLayout::collect {table indices wantedType extensionType} {
   set collected {}
+  foreach entry [collectTyped $table $indices [list $wantedType] \
+      $extensionType] {
+    lassign $entry flag markSet typed
+    set offsets {}
+    foreach pair $typed {
+      lappend offsets [lindex $pair 1]
+    }
+    lappend collected [list $flag $markSet $offsets]
+  }
+  return $collected
+}
+
+# The same, for a caller that can read more than one lookup type: one entry
+# {flag markSet subtables} per lookup, where subtables is a list of
+# {type offset}.
+proc ::tclpdf::otLayout::collectTyped {table indices wantedTypes extensionType} {
+  set collected {}
   foreach index $indices {
     set entry {}
     if {[damaged {
       set lookup [lookup $table $index]
       if {$lookup ne {}} {
-        set offsets [subtables $table $lookup $wantedType $extensionType]
-        if {[llength $offsets]} {
+        set typed [typedSubtables $table $lookup $wantedTypes $extensionType]
+        if {[llength $typed]} {
           set entry [list [lookupFlag $table $lookup] \
-              [markFilteringSet $table $lookup] $offsets]
+              [markFilteringSet $table $lookup] $typed]
         }
       }
     }]} {

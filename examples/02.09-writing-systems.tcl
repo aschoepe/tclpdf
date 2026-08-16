@@ -4,9 +4,16 @@
 #
 #   tclsh examples/02.09-writing-systems.tcl ?output.pdf?
 #
-# Ten faces on one page: Japanese, Tibetan, two symbol sets, emoji, cuneiform,
-# Egyptian hieroglyphs, Arabic and a brush face. None of them is a standard
-# font, all of them are embedded, and the document is PDF/A-3u.
+# Eleven faces on one page: Japanese, Tibetan, two symbol sets, emoji,
+# cuneiform, Egyptian hieroglyphs, Hebrew, Arabic and a brush face. None of
+# them is a standard font, all of them are embedded, and the document is
+# PDF/A-3u.
+#
+# TWO OF THE LINES RUN RIGHT TO LEFT and they are not the same case. Hebrew
+# needs nothing but the order, so -direction rtl sets it correctly and the
+# text extracts as it was written. Arabic needs the order AND contextual
+# forms; -direction rtl fixes the first half and -unshaped 1 says "draw the
+# isolated forms anyway" about the second. The note on the page says so.
 #
 # WHY THIS IS AFFORDABLE. The source files add up to 15 MB, the Japanese face
 # alone being 8.7 MB for its 17 103 glyphs. What lands in the document is a
@@ -83,10 +90,20 @@ set faces {
       "𒀀 𒀁 𒀂 𒀃 𒀄 𒀅 𒀆 𒀇 𒀈 𒀉 𒀊 𒀋 𒀌 𒀍 𒀎 𒀏 𒀐 𒀑"
   hiero    NotoSansEgyptianHieroglyphs-Regular.ttf {Egyptian hieroglyphs}
       "𓀀 𓀁 𓀂 𓀃 𓀄 𓀅 𓁀 𓁁 𓂀 𓂁 𓃀 𓃁 𓄀 𓅀 𓆀 𓇀 𓈀 𓉀"
+  hebrew   DejaVuSans.ttf                 {Hebrew - see the note below}
+      "שלום עולם ברוכים הבאים"
   arabic   NotoNaskhArabic-Variable.ttf   {Arabic - see the note below}
       "العربية مرحبا بالعالم"
   marker   PermanentMarker-Regular.ttf    {A brush face}
       "Handwritten, more or less - and it keeps going"
+}
+
+# The lines of the two right-to-left faces, kept by alias: the demonstration
+# further down sets the Arabic one in a second face, and typing it twice is
+# how two lines that are meant to be the same stop being it.
+set shaped {}
+foreach {alias file what line} $faces {
+  dict set shaped $alias $line
 }
 
 set doc [tclpdf new -unit mm]
@@ -103,7 +120,7 @@ foreach {alias file what line} $faces {
 $doc font embed music [file join $fonts NotoMusic-Regular.ttf]
 
 $doc font -family sans -size 15 -color {0.20 0.30 0.45}
-$doc text "Ten faces, one page" -at {20 22}
+$doc text "Eleven faces, one page" -at {20 22}
 
 $doc font -family sans -size 9 -color {0.35 0.35 0.35}
 $doc text "Every line below is set in a face of its own, embedded and subset\
@@ -123,14 +140,39 @@ foreach {alias file what line} $faces {
   # Not every face has every character of its own sample - a symbol picked
   # from the wrong block would stop the whole document, and saying which one
   # is more useful than a document that does not exist.
-  # The Arabic line is refused unless it is asked for explicitly: its script
-  # needs shaping and reordering, and drawing it anyway is a decision the
-  # caller has to make. Here it IS the point of the page - see the note below.
+  # The two right-to-left lines are refused unless the call says what to do
+  # about them, and they need different things - which is the point of having
+  # both on this page.
+  #
+  # Hebrew needs the ORDER and nothing else, so -direction rtl is the whole
+  # answer: the glyphs the cmap gives are the ones the reader expects, and
+  # reversing the run puts them where they belong.
+  #
+  # Arabic needs the order AND the contextual forms. tclpdf sets both since
+  # the cursive forms arrived - but not with THIS face: Noto Naskh Arabic
+  # writes a letter as an undotted skeleton plus a separate dot glyph, and
+  # placing that dot is GPOS mark attachment, which this package does not
+  # read. So the line is refused unless the caller says -unshaped 1, and the
+  # same words in a face that carries whole letters are set below. See the
+  # note under the lines.
+  #
+  # Both are anchored at the RIGHT margin, and that is not decoration: with
+  # -direction rtl the default -align left means the edge the line STARTS at
+  # in reading order, which is the right one. Anchored at 20 like the others
+  # the line would end there and run off the left edge of the sheet -
+  # measured, pdftotext -bbox then reports words at a negative x, and the
+  # words that fell off the paper are missing from the extracted text.
   set extra {}
-  if {$alias eq "arabic"} {
-    set extra {-unshaped 1}
+  set at 20
+  if {$alias eq "hebrew"} {
+    set extra {-direction rtl}
+    set at 190
   }
-  if {[catch {$doc text $line -at [list 20 [expr {$y + 7}]] {*}$extra} message]} {
+  if {$alias eq "arabic"} {
+    set extra {-unshaped 1 -direction rtl}
+    set at 190
+  }
+  if {[catch {$doc text $line -at [list $at [expr {$y + 7}]] {*}$extra} message]} {
     $doc font -family sans -size 7 -color {0.65 0.20 0.20}
     $doc text "not set: $message" -at [list 20 [expr {$y + 7}]] -width 170
   }
@@ -156,20 +198,44 @@ set y [expr {$y + 7}]
 
 $doc font -family sans -size 8 -color {0.35 0.35 0.35}
 $doc text "Cuneiform and hieroglyphs come out right because they ask for\
-    nothing beyond a glyph per character, left to right. The Arabic line above\
-    does NOT, and it is on this page to say so rather than to be admired." \
-    -at [list 20 $y] -width 170
-set y [expr {$y + 12}]
+    nothing beyond a glyph per character, left to right. The Hebrew line asks\
+    for one thing more - that the line run the other way. The Arabic line\
+    asks for two: the order and the contextual forms, and the second depends\
+    on the face." -at [list 20 $y] -width 170
+set y [expr {$y + 10}]
+
+# THE SAME WORDS IN THE OTHER FACE, and this is the point of the section: the
+# forms are not a property of the package alone. DejaVu Sans carries whole
+# Arabic letters, so -direction rtl is the whole answer for it.
+#
+# THE SECOND LINE is an invoice line, and it is there for what a right-to-left
+# line does NOT reverse: the invoice number, the amount with its separators
+# and the percentage keep their own order, and the brackets around the tax
+# rate are drawn mirrored. Both are checked against the file rather than
+# claimed - tests/text.test 13.x reads the glyphs back out of the content
+# stream and the text back out through pdftotext.
+set invoice "الفاتورة 4711 - 1.234,50 € (19%)"
+$doc font -family sans -size 7 -color {0.45 0.45 0.45}
+$doc text "The same words in DejaVu Sans, set with -direction rtl and nothing\
+    else, and an invoice line under them:" -at [list 20 $y]
+$doc font -family hebrew -size 14 -color black
+$doc text [dict get $shaped arabic] -at [list 190 [expr {$y + 7}]] \
+    -direction rtl
+$doc text $invoice -at [list 190 [expr {$y + 15}]] -direction rtl
+set y [expr {$y + 20}]
 
 $doc font -family sans -size 8 -color {0.35 0.35 0.35}
-$doc text "Two things are wrong with it, both measured. The letters are in\
-    their ISOLATED forms: in this face U+0628 maps to glyph 614, the same one\
-    the isolated presentation form uses, while the initial, medial and final\
-    shapes are glyphs 1278, 1310 and 1345 - reachable only through the init,\
-    medi and fina features of GSUB, which need a shaper. And the line runs\
-    left to right, because nothing here reorders it. Arabic, Hebrew with\
-    nikud, Devanagari and Thai all need that shaper; tclpdf does not have one\
-    and does not pretend to." -at [list 20 $y] -width 170
+$doc text "Measured, not asserted. The shapes come out of the init, medi and\
+    fina features of GSUB, and the glyphs are the ones HarfBuzz produces for\
+    the same words - checked glyph by glyph against hb-shape. In the invoice\
+    line the digits run left to right inside the right-to-left line, as\
+    Unicode says they must, and \"(\" is drawn with the glyph of \")\"; a\
+    line that MIXES the two directions is refused instead: deciding where\
+    such a run goes is the bidi algorithm, and this package has none. What is\
+    still missing in Arabic is the rest of a shaper - the ligatures reached\
+    through chaining lookups, and the mark placement of GPOS, which is why\
+    nikud, Devanagari and Thai stay refused." \
+    -at [list 20 $y] -width 170
 set y [expr {$y + 26}]
 
 # -- what a music font is not ------------------------------------------------

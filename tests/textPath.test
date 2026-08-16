@@ -19,6 +19,10 @@ package require tclpdf
 package require tclpdf::textPath
 source [file join [file dirname [info script]] helper.tcl]
 
+set pathFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint havePathFace [file exists $pathFace]
+
 test textPath-1.1 {every glyph gets its own text block} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
@@ -197,5 +201,54 @@ test textPath-4.1 {a path is required, and so are its segments} -body {
       [string match {*unknown path segment*} $unknown] \
       [string match {*left, right or center*} $align]
 } -result {{1 1 1 1} 1 1 1 1}
+
+test textPath-5.1 {a right-to-left path runs the other way, numbers do not} \
+    -constraints havePathFace -body {
+  # Along a path the glyphs are placed one at a time, so the reordering cannot
+  # be the reversal of a finished run - the loop has to walk the same pieces
+  # [text] turns round. If it did not, a straight path and a straight baseline
+  # would set the same string two different ways.
+  #
+  # The path is a straight line, so the order the glyphs are DRAWN in is the
+  # order they appear in the stream, and each one is its own show operator.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::pathFace
+  $doc textPath "שלום 4711" -segments {{move 20 60} {line 190 60}} \
+      -family face -size 12 -direction rtl
+  set drawn [::tclpdfTest::drawnText $doc face [$doc page content]]
+  $doc destroy
+  set drawn
+} -result {4711 םולש}
+
+test textPath-5.2 {-align is mirrored on a path as it is on a baseline} \
+    -constraints havePathFace -body {
+  # -align names the end the text starts at IN READING ORDER, so on a
+  # right-to-left path the default "left" is the far end. Measured on the x of
+  # the first glyph drawn: it has to sit where an ltr line with -align right
+  # begins its LAST glyph - which is the same place, the string being the same
+  # width either way.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::pathFace
+  $doc font -family face -size 12
+  $doc textPath "שלום" -segments {{move 20 60} {line 190 60}} -direction rtl
+  set defaultEnd [lindex [::tclpdfTest::starts [$doc page content]] end]
+  $doc destroy
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::pathFace
+  $doc font -family face -size 12
+  $doc textPath "שלום" -segments {{move 20 60} {line 190 60}} -direction rtl \
+      -align right
+  set rightStart [lindex [::tclpdfTest::starts [$doc page content]] 0]
+  $doc destroy
+  # The default ends at the right hand end of the path; -align right starts at
+  # the left hand one.
+  set left [expr {20 * 72.0 / 25.4}]
+  list [expr {$defaultEnd > $left + 100}] \
+      [expr {abs($rightStart - $left) < 0.01}]
+} -result {1 1}
+
 
 cleanupTests

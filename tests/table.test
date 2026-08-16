@@ -14,6 +14,10 @@ package require tclpdf
 package require tclpdf::table
 source [file join [file dirname [info script]] helper.tcl]
 
+set tableFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint haveTableFace [file exists $tableFace]
+
 proc rows {count} {
   set result {}
   for {set n 1} {$n <= $count} {incr n} {
@@ -700,5 +704,71 @@ test table-14.6 {the remaining ambiguity is reported, not guessed} -body {
     $doc destroy
   }
 } -returnCodes error -match glob -result {*unknown cell key "set"*}
+
+test table-15.1 {direction is a style key and a cell key} \
+    -constraints haveTableFace -body {
+  # Said at the table level and said on one cell, because an invoice has both:
+  # a right-to-left description column and a left-to-right amount column on
+  # the same row. The cell's own word wins over the table's, exactly as align
+  # and valign do.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::tableFace
+  $doc table -at {20 20} -width 120 -theme plain \
+      -style {family face size 10 direction rtl} \
+      -body {{"שלום 4711" {text "Total" direction ltr}}}
+  set drawn [::tclpdfTest::drawnText $doc face [$doc page content]]
+  $doc destroy
+  # The Latin cell is the sharp half of this: inheriting the table's rtl it
+  # would be a mixed line and the whole table would be refused.
+  set drawn
+} -result {4711 םולשTotal}
+
+test table-15.2 {an rtl cell starts at the right hand edge of its cell} \
+    -constraints haveTableFace -body {
+  # The cell's -align means what it means everywhere: the edge the text starts
+  # at IN READING ORDER. So the default "left" puts a right-to-left line flush
+  # with the right hand edge of the cell, and "right" with the left hand one.
+  #
+  # Measured on where each line begins, in points. The table is one column
+  # 120 mm wide at 20 mm, padding 1.5 mm.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::tableFace
+  $doc table -at {20 20} -width 120 -theme plain \
+      -style {family face size 10 direction rtl} \
+      -body {{"שלום"} {{text "שלום" align right}}}
+  set starts [::tclpdfTest::starts [$doc page content]]
+  $doc destroy
+  lassign $starts default flipped
+  set left [expr {(20 + 1.5) * 72.0 / 25.4}]
+  set right [expr {(20 + 120 - 1.5) * 72.0 / 25.4}]
+  # The default line ENDS at the right edge, so it begins a word width before
+  # it; the flipped one begins at the left edge.
+  list [expr {$default > $left}] [expr {$default < $right}] \
+      [expr {abs($flipped - $left) < 0.01}]
+} -result {1 1 1}
+
+test table-15.3 {an unknown direction on a cell is refused like any other key} \
+    -body {
+  # The key has to be entered in the two lists that say which keys exist, or
+  # it is accepted and read by nobody - which since 2026-08-14 is an error
+  # rather than silence.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set cell [catch {$doc table -at {20 30} -width 170 \
+      -body {{{text a directon rtl} b}}} one]
+  set style [catch {$doc table -at {20 30} -width 170 -body {{a b}} \
+      -style {directon rtl}} two]
+  # And a direction that is neither ltr nor rtl reaches the same check every
+  # other call comes through.
+  set wrong [catch {$doc table -at {20 30} -width 170 -body {{a b}} \
+      -style {direction sideways}} three]
+  $doc destroy
+  list $cell [string match {*unknown cell key "directon"*direction*} $one] \
+      $style [string match {*unknown style key "directon"*} $two] \
+      $wrong [string match {*must be ltr or rtl*} $three]
+} -result {1 1 1 1 1 1}
+
 
 cleanupTests

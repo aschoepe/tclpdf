@@ -51,6 +51,11 @@ oo::define ::tclpdf::document::document {
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
+    # The line options on top, as [text] takes them: a page number is one
+    # line, and "صفحة 3 من 10" is one that runs right to left. The digits of
+    # %n and %m come out of it as a number rather than reversed, which is the
+    # whole reason the option has to reach this far.
+    set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "pageNumbers"]
     if {[dict get $options at] eq {}} {
       return -code error "tclpdf: pageNumbers needs -at {x y}"
@@ -121,7 +126,7 @@ oo::define ::tclpdf::document::document {
     my canvas push $widthPoints $heightPoints
     set failed [catch {
       set arguments {}
-      foreach name $::tclpdf::text::stateOptions {
+      foreach name $::tclpdf::text::lineOptions {
         lappend arguments -$name [dict get $run $name]
       }
       my text $label -at [dict get $run at] -align [dict get $run align] \

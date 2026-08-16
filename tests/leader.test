@@ -191,4 +191,50 @@ test leader-2.3 {-tag Artifact takes the whole row out of the tree} -constraints
       [expr {[llength [regexp -all -inline {/Artifact <<[^>]*>> BDC} $content]] == 3}]
 } -result {0 1}
 
+test leader-3.1 {a right-to-left row swaps its ends and fills from the right} \
+    -constraints haveLeaderFont -body {
+  # The first argument is the LEADING end, and leading is a matter of reading
+  # order: in a right-to-left row it belongs at the right edge and the second
+  # one at the left. The dots keep the middle either way, and what no whole
+  # copy of them covers stays in front of the trailing end.
+  #
+  # Measured on where each piece begins, in points from the left edge of the
+  # sheet - the row runs from 20 mm to 140 mm.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::leaderFont
+  $doc font -family face -size 10
+  $doc leader "שלום" "4711" -at {20 30} -width 120 -direction rtl
+  set content [$doc page content]
+  set starts [::tclpdfTest::starts $content]
+  set drawn [::tclpdfTest::drawnText $doc face $content]
+  $doc destroy
+  lassign $starts first second third
+  set left [expr {20 * 72.0 / 25.4}]
+  set right [expr {140 * 72.0 / 25.4}]
+  # The Hebrew end ends AT the right edge, the number begins at the left one,
+  # and the dots lie between the two. The drawn order is the Hebrew word
+  # reversed, then the dots, then the number in its own order.
+  list [expr {$first > $second && $second > $third}] \
+      [expr {abs($third - $left) < 0.01}] [string range $drawn 0 3] \
+      [string range $drawn end-3 end]
+} -result {1 1 םולש 4711}
+
+test leader-3.2 {without the option the row is unchanged} \
+    -constraints haveLeaderFont -body {
+  # The mirroring is a branch, and a branch has two sides: the left-to-right
+  # row has to come out exactly as it did before -direction reached this
+  # command.
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120
+  set plain [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120 -direction ltr
+  set stated [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {$plain eq $stated}
+} -result 1
+
+
 cleanupTests

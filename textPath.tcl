@@ -56,6 +56,9 @@ oo::define ::tclpdf::document::document {
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
+    # The line options on top, exactly as [text] takes them: a path is still
+    # one line, and -direction is a property of the line.
+    set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "textPath"]
     if {![llength [dict get $options segments]]} {
       return -code error "tclpdf: textPath needs -segments"
@@ -82,7 +85,10 @@ oo::define ::tclpdf::document::document {
     # Where the string starts on the path, from its own width - the same
     # decision [text] makes for a straight line, only measured along the curve.
     set width [my textWidth $string {*}[my TextPathOverrides $options]]
-    switch -- [dict get $options align] {
+    # Mirrored the same way [text] mirrors it, and through the same method:
+    # -align names the edge the text starts at IN READING ORDER, so on a path
+    # that runs right to left "left" is the far end of the path.
+    switch -- [my TextAlign [dict get $options align] $state] {
       left {set cursor 0}
       right {set cursor [expr {$total - $width}]}
       center - centre {set cursor [expr {($total - $width) / 2.0}]}
@@ -104,8 +110,23 @@ oo::define ::tclpdf::document::document {
     # like every other font size.
     set gap [::tclpdf::geometry fromPoints [dict get $state spacing] \
         [my cget -unit]]
+    # The characters in the order they are DRAWN. Along a straight baseline
+    # [TextShow] turns the whole glyph run round in one go; here each glyph is
+    # placed by hand, so the loop walks the same pieces instead - which is why
+    # both ask [TextPieces] for them. A number keeps its own order inside a
+    # right-to-left line on a path exactly as it does on a baseline.
+    set characters [split $string {}]
+    set order {}
+    foreach piece [my TextPieces [lmap char $characters {scan $char %c}] \
+        [dict get $state direction]] {
+      lassign $piece from to
+      for {set index $from} {$index <= $to} {incr index} {
+        lappend order $index
+      }
+    }
     set first 1
-    foreach char [split $string {}] {
+    foreach index $order {
+      set char [lindex $characters $index]
       if {!$first} {
         set cursor [expr {$cursor + $gap}]
       }
@@ -152,9 +173,11 @@ oo::define ::tclpdf::document::document {
   # Ligatures are off for the same reason and one of its own: a ligature is
   # one glyph made from several characters, and this loop hands [TextRun] a
   # single character at a time, so it could never form one anyway.
+  # The direction travels with them: this method feeds [textWidth], and a
+  # right-to-left script it was not told about is refused there.
   method TextPathOverrides {options} {
     set result {}
-    foreach name $::tclpdf::text::stateOptions {
+    foreach name $::tclpdf::text::lineOptions {
       if {$name in {kerning ligatures}} {
         lappend result -$name 0
         continue

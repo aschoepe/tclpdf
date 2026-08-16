@@ -73,7 +73,8 @@ oo::define ::tclpdf::document::document {
 
   # One cell, from either spelling.
   method TableCell {source} {
-    set cell [dict create text {} colSpan 1 rowSpan 1 align {} valign {} style {}]
+    set cell [dict create text {} colSpan 1 rowSpan 1 align {} valign {} \
+        direction {} style {}]
     # String or dictionary - and in Tcl a string can BE a dictionary, so this
     # decides rather than detects. It used to ask "is text one of the keys",
     # which any plain sentence of even word count can satisfy: "Medium length
@@ -107,6 +108,20 @@ oo::define ::tclpdf::document::document {
       }
     }
     return $cell
+  }
+
+  # The font options of a cell style, in the form the text methods take them.
+  #
+  # One place, because four call sites want the same list - three that MEASURE
+  # here and one that DRAWS in tableDraw.tcl - and a list that grew a key in
+  # three of them would measure a column against a line it never sets. The
+  # direction is what made that concrete: a Hebrew cell measured without it is
+  # not measured differently, it is REFUSED, and the refusal would name the
+  # table rather than the cell.
+  method TableFont {style} {
+    return [list -family [dict get $style family] \
+        -style [dict get $style fontStyle] -size [dict get $style size] \
+        -direction [dict get $style direction]]
   }
 
   # How many columns the table has: the widest row wins, spans counted.
@@ -223,8 +238,7 @@ oo::define ::tclpdf::document::document {
           }
           set style [my TableStyle $cell $options]
           set width [expr {[my textWidth [dict get $cell text] \
-              -family [dict get $style family] -style [dict get $style fontStyle] \
-              -size [dict get $style size]] + 2 * [dict get $style padding]}]
+              {*}[my TableFont $style]] + 2 * [dict get $style padding]}]
           set column [dict get $cell column]
           if {$width > [lindex $natural $column]} {
             lset natural $column $width
@@ -260,8 +274,7 @@ oo::define ::tclpdf::document::document {
           set inner 0.1
         }
         set lines [my textLines [dict get $cell text] $inner \
-            -family [dict get $style family] -style [dict get $style fontStyle] \
-            -size [dict get $style size]]
+            {*}[my TableFont $style]]
         set leading [::tclpdf::geometry fromPoints \
             [expr {[dict get $style size] * [dict get $style leading]}] \
             [my cget -unit]]
@@ -354,8 +367,7 @@ oo::define ::tclpdf::document::document {
             continue
           }
           set width [my textWidth [string range $text $at end] \
-              -family [dict get $style family] \
-              -style [dict get $style fontStyle] -size [dict get $style size]]
+              {*}[my TableFont $style]]
           set column [dict get $cell column]
           if {![dict exists $tails $column] || $width > [dict get $tails $column]} {
             dict set tails $column $width
@@ -410,7 +422,7 @@ oo::define ::tclpdf::document::document {
     # valign was documented as a cell key from the start and read from nowhere,
     # so it vanished without a word. It only shows once a row has a cell that
     # wraps, which is why no example caught it.
-    foreach key {align valign} {
+    foreach key {align valign direction} {
       if {[dict get $cell $key] ne {}} {
         dict set style $key [dict get $cell $key]
       }

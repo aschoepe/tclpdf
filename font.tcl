@@ -73,7 +73,16 @@ oo::define ::tclpdf::document::document {
 
     if {[my state fontHooked] eq {}} {
       my state fontHooked 1
-      my onSelf beforeWrite FontWrite
+      # On resources, not beforeWrite: the subset and the ToUnicode map are
+      # built from the glyphs USED, and beforeWrite is when the other
+      # subscribers still draw - pageNumbers writes its labels there. Hooked
+      # to beforeWrite, this ran first (it was registered first, at embed
+      # time), wrote the face without the label's glyphs, and a face used
+      # by nothing but the page numbers had reserved its object and written
+      # none - "object(s) reserved but never written". Measured on the
+      # checked-in state; resources fires after every beforeWrite subscriber
+      # and before the catalog checks that inspect the fonts.
+      my onSelf resources FontWrite
     }
     return $alias
   }
@@ -307,16 +316,61 @@ oo::define ::tclpdf::document::document {
   # in the chain that notices: the reader shows a blank, the validator says
   # nothing, and the recipient sees an invoice with a gap where the amount
   # should be.
-  method FontRun {alias text {ligatures 0} {unshaped 0}} {
+  # The run is LOGICAL in both directions: -direction rtl is not handled here
+  # but where the run is drawn, because ligatures and kerning are defined on
+  # the logical order and reversing before them would look up the wrong pairs.
+  # What the direction settles here is only whether a script that needs
+  # nothing but the order may pass at all.
+  method FontRun {alias text {ligatures 0} {unshaped 0} {direction ltr}} {
     # Refused BEFORE anything is looked up: a script that needs shaping would
     # otherwise come out as isolated glyphs in the wrong order, which looks
     # like text and is not. Same rule as the missing glyph below, and the same
     # reason - this is the only place in the chain that notices.
+    #
+    # A CURSIVE script is the one case that is not settled here alone: whether
+    # Arabic can be set depends on the FACE, which shaping.tcl has never seen.
+    # So the answer comes back as a question, the face is asked, and the walk
+    # is repeated with the answer - the second walk being the one that can
+    # still find a vowel sign further along the line, which needs mark
+    # placement and is refused as it always was.
+    set cursive {}
     if {!$unshaped} {
       package require tclpdf::shaping 1.0-
-      set finding [::tclpdf::shaping needed $text]
+      set finding [::tclpdf::shaping needed $text $direction]
+      if {[llength $finding] && [lindex $finding 4] eq "forms"
+          && $direction eq "rtl"} {
+        if {[my FontLayoutState $alias forms] eq {}} {
+          return -code error [::tclpdf::shaping message $finding $alias]
+        }
+        # Kept, not just noted: the character it names is what a message about
+        # the face has to point at, and the second walk below ends at {}.
+        set cursive $finding
+        set finding [::tclpdf::shaping needed $text $direction 1]
+      }
       if {[llength $finding]} {
         return -code error [::tclpdf::shaping message $finding]
+      }
+    }
+    # Direction rather than script, and only a right-to-left line has either
+    # question to ask - which is why the module is loaded here and not above:
+    # a document that never sets one never pays for it.
+    if {$direction eq "rtl"} {
+      package require tclpdf::bidi 1.0-
+      # The other half of the shaping rule. A character that runs LEFT TO
+      # RIGHT in a right-to-left line - a Latin word, a Cyrillic name - needs
+      # the bidi algorithm to decide where it goes, and this package does not
+      # have it. Reversing the run around it produced "gnunhceR", and nothing
+      # said so.
+      #
+      # Behind the same -unshaped gate as the shaping refusal, and for the
+      # same reason: that option is the one place a caller says "I know what
+      # this does, draw it anyway", and a second escape hatch beside it would
+      # be one more thing to explain.
+      if {!$unshaped} {
+        set opposite [::tclpdf::bidi opposite $text $direction]
+        if {[llength $opposite]} {
+          return -code error [::tclpdf::bidi message $opposite]
+        }
       }
     }
     set entry [dict get [my state fonts] $alias]
@@ -336,16 +390,53 @@ oo::define ::tclpdf::document::document {
         incr position
         continue
       }
-      if {![dict exists $cmap $code]} {
+      # A paired bracket is DRAWN mirrored in a right-to-left line: U+0028 is
+      # the OPENING bracket, and the opening bracket of a line that runs the
+      # other way looks like ")". Unicode calls this mirroring (UAX #9,
+      # section 3.4) and it is a display property, not a different character.
+      #
+      # Done as a swap of the code point before the character map is asked,
+      # which is what a shaper does when the face carries no rtlm feature -
+      # measured, DejaVu Sans carries none, and HarfBuzz returns the mirrored
+      # glyph for it all the same. The ToUnicode map therefore says what the
+      # GLYPH is; what the CHARACTER was is written beside the glyph as an
+      # ActualText span, in text.tcl, so that the line extracts as it was
+      # given.
+      set drawn $code
+      if {$direction eq "rtl"} {
+        set drawn [::tclpdf::bidi mirror $code]
+      }
+      # The MIRRORED code is the one named when it is missing: that is the
+      # glyph the face would have to carry, and naming the one the caller
+      # typed would send them looking at a character the face has.
+      if {![dict exists $cmap $drawn]} {
         return -code error "tclpdf: the font \"$alias\" has no glyph for\
-            U+[format %04X $code] (position $position) - it cannot be written\
+            U+[format %04X $drawn] (position $position) - it cannot be written\
             with this face"
       }
-      lappend run [list [dict get $cmap $code] [list $code]]
+      lappend run [list [dict get $cmap $drawn] [list $drawn]]
       incr position
     }
+    # The contextual forms come FIRST, and not by preference: they are the
+    # shaping of the script, while ligatures are a typographic option the
+    # caller switched on. A lam-alef that a required ligature makes out of two
+    # joined shapes cannot be found before those shapes exist, and a standard
+    # ligature that fired on the isolated letters would have hidden them.
+    if {[llength $cursive]} {
+      set state [my FontLayoutState $alias forms]
+      set run [::tclpdf::forms apply $state $run]
+      # The shaping is only half an answer for a face that writes its letters
+      # as a skeleton plus separate dots: those dots are placed by GPOS mark
+      # attachment, which this package does not read, and drawing them at the
+      # pen position puts them beside the letter they belong to. Asked of the
+      # RESULT rather than of the face, because it is the result that either
+      # holds such a glyph or does not.
+      if {[::tclpdf::forms marks $state $run]} {
+        return -code error [::tclpdf::shaping message $cursive $alias marks]
+      }
+    }
     if {$ligatures && [llength $run] > 1} {
-      set run [::tclpdf::liga apply [my FontLigaState $alias] $run]
+      set run [::tclpdf::liga apply [my FontLayoutState $alias liga] $run]
     }
     return $run
   }
@@ -438,41 +529,36 @@ oo::define ::tclpdf::document::document {
     }
     set units [dict get [my state fonts] $alias parsed unitsPerEm]
     set adjustments {}
-    foreach value [::tclpdf::kern run [my FontKernState $alias] $glyphs] {
+    foreach value [::tclpdf::kern run [my FontLayoutState $alias kern] $glyphs] {
       lappend adjustments [expr {$value * 1000.0 / $units}]
     }
     return $adjustments
   }
 
-  # The prepared ligatures of one font, read once and kept.
-  method FontLigaState {alias} {
-    set fonts [my state fonts]
-    set entry [dict get $fonts $alias]
-    if {[dict exists $entry liga]} {
-      return [dict get $entry liga]
-    }
-    package require tclpdf::liga 1.0-
-    set state [::tclpdf::liga build [dict get $entry parsed]]
-    dict set entry liga $state
-    dict set fonts $alias $entry
-    my state fonts $fonts
-    return $state
-  }
-
-  # The prepared kerning of one font, read once and kept.
+  # One prepared layout table of a face, read once and kept.
   #
-  # Loaded here rather than at the top of the file: a document that never asks
-  # for kerning never parses a GPOS table, and that table is the largest thing
-  # in many fonts.
-  method FontKernState {alias} {
+  # KEY is the topic and, in all three cases, also the package and the
+  # namespace that reads it: kern for the pair kerning out of GPOS, liga for
+  # the standard ligatures, forms for the cursive shapes. Each answers [build]
+  # with something to hand to its own [apply], and {} for a face that has
+  # nothing of the kind - which is an answer and gets cached like any other.
+  #
+  # The three used to be three methods with the same nine lines in them, and
+  # the third one is what made that a duplicate rather than a coincidence.
+  #
+  # The package is loaded HERE rather than at the top of the file, and that is
+  # the point of the arrangement: a document that never kerns never parses a
+  # GPOS table - the largest thing in many fonts - and a document of Latin
+  # text never walks the Arabic script table of its faces.
+  method FontLayoutState {alias key} {
     set fonts [my state fonts]
     set entry [dict get $fonts $alias]
-    if {[dict exists $entry kern]} {
-      return [dict get $entry kern]
+    if {[dict exists $entry $key]} {
+      return [dict get $entry $key]
     }
-    package require tclpdf::kern 1.0-
-    set state [::tclpdf::kern build [dict get $entry parsed]]
-    dict set entry kern $state
+    package require tclpdf::$key 1.0-
+    set state [::tclpdf::$key build [dict get $entry parsed]]
+    dict set entry $key $state
     dict set fonts $alias $entry
     my state fonts $fonts
     return $state
