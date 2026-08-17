@@ -43,6 +43,14 @@ cp -R icc uv/${PACKAGE_NAME}${PACKAGE_VERSION}/
 # tar --disable-copyfile: This option is equivalent to setting the environment variable COPYFILE_DISABLE=1. It disables copying of extended attributes and resource forks by preventing the use of the copyfile() API. Use this when you want to avoid creation of ._* AppleDouble files or when those are not needed.
 # tar --no-xattrs: Do not store or restore extended file attributes (xattrs). These are often system or application metadata not relevant or supported on other systems.
 
+# Readable for everyone. cp keeps the modes of the checkout, and Fossil does
+# not track read bits, so a file created with 0600 by an editor or a tool
+# stays 0600 through every commit and clone - and travelled that way into a
+# release: a user reported 37 of the modules as -rw------- in the tarball,
+# unreadable once unpacked into a shared library directory. The modes are
+# set on the copy, never on the checkout.
+chmod -R u=rwX,go=rX uv/${PACKAGE_NAME}${PACKAGE_VERSION}
+
 cd uv
 zip -x '.DS_Store' -x '*/.DS_Store' -qr ${PACKAGE_NAME}${PACKAGE_VERSION}.zip ${PACKAGE_NAME}${PACKAGE_VERSION}
 tar --no-xattrs --no-mac-metadata --disable-copyfile --exclude='.DS_Store' --exclude='*/.DS_Store' -czf ${PACKAGE_NAME}${PACKAGE_VERSION}.tar.gz ${PACKAGE_NAME}${PACKAGE_VERSION}
@@ -97,7 +105,13 @@ fi
 # in .fossil-settings/ignore-glob so that neither a commit nor an archive picks
 # them up. Do not remove either one.
 
+# The source archive is taken through a staging copy for the same reason: the
+# tree itself is not touched, the copy gets the modes, and the tar takes the
+# copy. bsdtar cannot rewrite modes on the way in.
 cd ../..
+STAGE=${PACKAGE_NAME}/uv/${PACKAGE_NAME}${PACKAGE_VERSION}-src-stage
+rm -rf ${STAGE}
+mkdir -p ${STAGE}
 tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude='uv/*' \
     --exclude="${PACKAGE_NAME}/examples/out" \
@@ -111,4 +125,20 @@ tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude="${PACKAGE_NAME}/.vscode" \
     --exclude='.DS_Store' --exclude='*/.DS_Store' \
     --exclude='autom4te.cache' --exclude='configure~' --exclude='config.*' \
-    -czf ${PACKAGE_NAME}/uv/${PACKAGE_NAME}${PACKAGE_VERSION}-src.tar.gz ${PACKAGE_NAME}
+    -cf - ${PACKAGE_NAME} | (cd ${STAGE} && tar -xf -)
+chmod -R u=rwX,go=rX ${STAGE}/${PACKAGE_NAME}
+tar --no-xattrs --no-mac-metadata --disable-copyfile \
+    -czf ${PACKAGE_NAME}/uv/${PACKAGE_NAME}${PACKAGE_VERSION}-src.tar.gz -C ${STAGE} ${PACKAGE_NAME}
+rm -rf ${STAGE}
+
+# And measured, not assumed: no entry of either tarball may lack the read bit
+# for group and others. Fails the build if one does.
+for archive in ${PACKAGE_NAME}/uv/${PACKAGE_NAME}${PACKAGE_VERSION}.tar.gz \
+    ${PACKAGE_NAME}/uv/${PACKAGE_NAME}${PACKAGE_VERSION}-src.tar.gz; do
+    unreadable=`tar -tzvf ${archive} | awk '$1 !~ /^.r..r..r../ {print $NF}'`
+    if [ -n "${unreadable}" ]; then
+        echo "archive: entries without read permission for everyone in ${archive}:" >&2
+        echo "${unreadable}" >&2
+        exit 1
+    fi
+done

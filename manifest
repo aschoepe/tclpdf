@@ -1,5 +1,5 @@
-C Raise\sthe\sversion\sof\severy\smodule\schanged\ssince\s90d42eb5ca\sby\s0.1\n\n-\s48\smodules,\spackage\sprovide\sand\spkgIndex.tcl.in\salike;\sthe\slast\sraise\swas\sthe\sstructure-destinations\scheck-in\sof\s2026-08-15,\snine\scheck-ins\sago\n-\sModules\sthat\sfirst\sappeared\safter\sthat\scheck-in\sstay\sat\s1.0,\smodules\suntouched\ssince\skeep\stheir\snumber
-D 2026-08-17T17:42:44.117
+C Release\sarchives\sreadable\sfor\severyone\n\n-\stools/archive.sh:\sthe\smodes\sare\sset\son\sthe\scopy\sbefore\spacking\s-\scp\skept\sthe\scheckout's\smodes,\sFossil\sdoes\snot\strack\sread\sbits,\sand\s37\smodules\stravelled\sas\s0600\sinto\sthe\spublished\starball;\sthe\ssource\sarchive\sgoes\sthrough\sa\sstaging\scopy\sfor\sthe\ssame\sreason,\sbsdtar\scannot\srewrite\smodes\son\sthe\sway\sin\n-\sBoth\starballs\sare\sread\sback\safter\spacking;\san\sentry\swithout\sread\spermission\sfor\sgroup\sand\sothers\sfails\sthe\sbuild\sand\sis\snamed
+D 2026-08-17T19:29:58.374
 F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
 F README 8f1004173e4eecbc5679563094ae2ef636c346e6f074fca8812cd59930ee542e
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -328,7 +328,7 @@ F textBlock.tcl 8e2dcd9906ec951f9a5f48ec09e4fff93e72d082c8c6e81bf739581586661420
 F textPath.tcl 67c3383edb07db8df3d7559ea5429c50918c0c7b9ae2b54fe8c06390a09951e4
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
-F tools/archive.sh 8b8ba6949e45c0302333240be3999af3367d062ebb517102a831b9878c493f9d x
+F tools/archive.sh 2a9dc87e9ecefc6b0a5f1e6bcfaf4d4c7d63579e35d83f7cac84f0fc5d91c69a x
 F tools/check.sh 7b0b4350cf420b91d95e18af3d6395cb3fcb76e180de50a0526595040e84ee2b x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
@@ -350,8 +350,8 @@ F xObject.tcl b55e16d429e97efa492ee295e89a34d8dae6873bff50a189e460265e81bd2350
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 21a838cebe336140e482b7993d928dcde83b33732b21a8d1399ada2dd61aa2f6
 F zugferd.tcl 11ca4847e77751e0d5462a9cc9124b450cd81ce71b2fa4c1b684158fb4ccea9a
-P 248bf5d70fc525433699e3461c7f829bd1851dc7f45152dfaea27c0a950797e7
-R 5107e2ce2ab90debf22cb2f3d2976054
+P 4ee4b1a192c763400f17fb68f40da9f37b1bfb67c7606c6387fe21cceeb7daea
+R 6c9e3518a30541004bfaeecf9aa370c1
 U alex
-Z 9f9250ddbb4ef22c7427a5f2d43177b1
+Z 6ad7e163e23212ff58ba0f2340c495f4
 # Remove this line to create a well-formed Fossil manifest.
