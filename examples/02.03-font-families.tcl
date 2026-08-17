@@ -116,10 +116,26 @@ foreach {alias file purpose sample} $families {
         [file size [file join $assets fonts $file]] \
         [dict get [$doc font info $alias] glyphs]]
 }
-$doc table -at [list 20 [expr {$y + 16}]] -width 170 -theme striped \
+set y [$doc table -at [list 20 [expr {$y + 16}]] -width 170 -theme striped \
     -head {{Family "File on disk, bytes" "Glyphs in the face"}} \
     -body $rows \
-    -columns {{} {width 42 align decimal} {width 38 align decimal}}
+    -columns {{} {width 42 align decimal} {width 38 align decimal}}]
+
+# The captions on this page are the sixth family: the standard faces, which
+# are not embedded and are addressed in one of two ways - by family and
+# style, or by their PostScript name outright. "Times-Italic" IS
+# "-family times -style italic"; both style words may be given together, and
+# "oblique" is read as "italic", because Helvetica and Courier call their
+# slanted cut that.
+$doc font -family Times-Italic -size 8 -color {0.4 0.4 0.45}
+set y [$doc text "The captions on this page are set in the standard faces,\
+    which are named by family and style or - as this line, in Times-Italic -\
+    by their PostScript name outright." -at [list 20 [expr {$y + 6}]] -width 170]
+$doc font -family helvetica -style {bold italic} -size 8
+$doc text "Helvetica with -style {bold italic}," -at [list 20 [expr {$y + 1}]]
+$doc font -style oblique
+$doc text "and with -style oblique, which is read as italic." \
+    -at [list 72 [expr {$y + 1}]]
 
 exampleFooter $doc body
 

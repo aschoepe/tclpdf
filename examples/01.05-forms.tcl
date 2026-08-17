@@ -55,6 +55,21 @@ $doc form create letterhead -size {170 30} -script {
 }
 puts "  form size: [$doc form size letterhead] mm"
 
+# A stamp defined in points, in a millimetre document: -unit reads -size in
+# another unit than the document's - the size a print shop or a legacy
+# template states. Inside the script the document unit applies as always,
+# and [form size] answers in it: 72 by 36 points are 25.4 by 12.7 mm.
+$doc form create stamp -size {72 36} -unit pt -script {
+  $doc rect -at {0 0} -size {25.4 12.7} -stroke {0.7 0.15 0.1} -width 0.6 -radius 2
+  $doc font -family helvetica -size 7 -style bold -color {0.7 0.15 0.1}
+  $doc text "RECEIVED" -at {12.7 8} -align center
+}
+puts "  stamp size: [lmap v [$doc form size stamp] {format %.1f $v}] mm (defined as 72 x 36 pt)"
+$doc form place stamp -at {160 50} -rotate -12
+# The font is document state, not part of the form: the stamp's colour would
+# stay in force for the page text below, so it is taken back here.
+$doc font -color black
+
 $doc form place letterhead -at {20 15}
 $doc font -family helvetica -size 10
 $doc text "First page" -at {20 60}
@@ -88,14 +103,14 @@ exampleFooter $doc
 
 $doc write $target
 
-# Count what actually stands in the file. Six placements, two objects - the
-# claim in the header, checked against the bytes rather than asserted.
+# Count what actually stands in the file. Seven placements, three objects -
+# the claim in the header, checked against the bytes rather than asserted.
 set writer [$doc writer]
 set forms 0
 for {set n 1} {$n <= [$writer count]} {incr n} {
   if {[string match {*/Subtype /Form*} [$writer body $n]]} { incr forms }
 }
-puts "  form XObjects in the file: $forms (placed six times)"
+puts "  form XObjects in the file: $forms (placed seven times)"
 puts "  known forms: [$doc form names]"
 $doc destroy
 puts "  written: $target ([file size $target] bytes)"

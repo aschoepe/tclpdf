@@ -161,6 +161,47 @@ foreach mode {Normal Multiply Screen Overlay Darken Lighten
 $doc font -size 8
 $doc text "Compatible is refused: it has been deprecated since PDF 1.4 and    means Normal, so naming it says nothing a reader could act on. PDF/A parts    2 and 3 permit every mode above." -at [list 20 [expr {$y + 34}]] -width 170
 
+# -- the same things as state ------------------------------------------------
+
+# blend, opacity and style are commands as well: set once, in force until
+# changed - which is why each block below sits in its own save/restore.
+$doc font -style bold -size 9
+$doc text "As state: blend, opacity and style" -at {20 252}
+$doc font -style {} -size 6
+
+# [blend] as a command: every shape after it takes the mode, none of them
+# carries -blend. Multiply darkens the overlap, Screen lightens it.
+foreach {x mode} {20 Multiply 46 Screen} {
+    $doc rect -at [list $x 258] -size {16 12} -fill {0.20 0.45 0.75}
+    $doc save
+    $doc blend $mode
+    $doc rect -at [list [expr {$x + 6}] 263] -size {16 12} -fill {0.95 0.65 0.15}
+    $doc circle -at [list [expr {$x + 6}] 263] -radius 4 -fill {0.85 0.2 0.3}
+    $doc restore
+    $doc text "blend $mode" -at [list $x 281]
+}
+
+# [opacity] with its second word: fill fades the interior only, stroke the
+# outline only, both - the default - the two alike.
+foreach {x which} {80 fill 104 stroke 128 both} {
+    $doc save
+    $doc opacity 0.35 $which
+    $doc rect -at [list $x 258] -size {18 16} -fill navy -stroke crimson -width 2
+    $doc restore
+    $doc text "opacity 0.35 $which" -at [list $x 281]
+}
+
+# [style]: the drawing state until changed. The line and the two shapes
+# after it name only their colour - width, cap, join, alpha and mode come
+# from the one call, and would stay in force for the rest of the page.
+$doc save
+$doc style -width 1.5 -cap round -join round -opacity 0.7 -blend Multiply
+$doc line -from {156 260} -to {172 272} -stroke {0.2 0.45 0.75}
+$doc polygon -points {174 272 180 260 186 272} -stroke {0.85 0.2 0.3} -close 0
+$doc rect -at {166 262} -size {14 10} -fill {0.95 0.65 0.15}
+$doc restore
+$doc text "style -width -cap -join -opacity -blend" -at {154 281}
+
 exampleFooter $doc
 
 $doc write $target

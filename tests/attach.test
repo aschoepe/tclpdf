@@ -238,4 +238,42 @@ test attach-rewrite-6.1 {a second write does not embed the attachments again} -b
   list [regexp -all {/Filespec} $bytes] $same
 } -result {1 1}
 
+# -- the five relationships ----------------------------------------------------
+
+test attach-7.1 {every documented -relationship is written as /AFRelationship} -body {
+  # Data is checked in 3.1; the other four each in a document of their own,
+  # so that a value silently mapped onto another one would show up as a
+  # missing name rather than as a count that still adds up.
+  set found {}
+  foreach relationship {Alternative Source Supplement Unspecified} {
+    set path [::tclpdfTest::scratch attach-$relationship.pdf]
+    set doc [tclpdf new]
+    $doc page add
+    $doc attach -data "<x/>" -name $relationship.xml -relationship $relationship
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend found [regexp -all "/AFRelationship /$relationship\\M" $bytes]
+  }
+  set found
+} -result {1 1 1 1}
+
+test attach-7.2 {two attachments keep their own relationships} -body {
+  # A Source and an Alternative in the same file - the value belongs to the
+  # Filespec, not to the document.
+  set path [::tclpdfTest::scratch attach-two-relations.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data "a" -name source.txt -relationship Source
+  $doc attach -data "b" -name alt.txt -relationship Alternative
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/AFRelationship /Source\M} $bytes] \
+      [regexp -all {/AFRelationship /Alternative\M} $bytes] \
+      [regexp -all {/AFRelationship} $bytes]
+} -result {1 1 2}
+
 cleanupTests

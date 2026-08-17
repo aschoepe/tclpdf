@@ -857,4 +857,238 @@ test table-17.1 {a breaking table takes -top and -bottom from the type area} -bo
   list [expr {$narrow > $default}] [expr {$explicit == $default}] $default
 } -result {1 1 2}
 
+# -- -alternateFill, -minRowHeight, -bottom -----------------------------------
+
+test table-18.1 {-alternateFill colours every second body row and nothing else} -body {
+  # Four one-line rows on the plain theme, which fills nothing of its own: the
+  # colour has to appear exactly twice, once for row 1 and once for row 3.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain -alternateFill {0.9 0.2 0.2} \
+      -body {{a} {b} {c} {d}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  llength [regexp -all -inline {0.9 0.2 0.2 rg} $stream]
+} -result 2
+
+test table-18.2 {-alternateFill leaves head and foot alone} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain -alternateFill {0.9 0.2 0.2} \
+      -head {{H} {H}} -body {{a}} -foot {{F} {F}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # One body row, index 0: not even that one is coloured.
+  llength [regexp -all -inline {0.9 0.2 0.2 rg} $stream]
+} -result 0
+
+test table-18.3 {-minRowHeight raises a row that would be shallower} -body {
+  # Two one-line rows are about 6.6 mm each at size 9; asked for 30 mm the
+  # table has to end 60 mm below where it started.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set default [$doc table -at {20 30} -width 100 -theme plain -body {{a} {b}}]
+  set raised [$doc table -at {20 30} -width 100 -theme plain -minRowHeight 30 \
+      -body {{a} {b}}]
+  $doc destroy
+  list [expr {$default < 45}] [format %.2f $raised]
+} -result {1 90.00}
+
+test table-18.4 {-bottom is where a breaking table stops on every page} -body {
+  # Sixty rows: under a -bottom of 100 mm they take more pages than under
+  # the default, and the last row on the first page ends above that line.
+  set rows [lrepeat 60 {a b}]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 20} -width 100 -body $rows
+  set default [$doc page count]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 20} -width 100 -body $rows -bottom 100
+  set pages [$doc page count]
+  # The lowest text line of page one, in points from the foot: above 100 mm
+  # down, which is 297 - 100 = 197 mm = 558.4 pt.
+  set lowest [lindex [lsort -real [::tclpdfTest::starts \
+      [::tclpdfTest::content $doc 0] y]] 0]
+  $doc destroy
+  list $default [expr {$pages > $default}] [expr {$lowest > 558.4}]
+} -result {2 1 1}
+
+# -- style keys: fontStyle, leading, padding, lineColor, lineWidth -----------
+
+test table-19.1 {fontStyle picks the face the cell is set in} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain -style {fontStyle bold} \
+      -body {{a}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  lindex [regexp -inline {/F[A-Za-z]+ [0-9.]+ Tf} $stream] 0
+} -result {/FHelveticaBold 9 Tf}
+
+test table-19.2 {leading is a factor of the size and spaces the lines of a cell} -body {
+  # A cell that wraps into several lines: at leading 2.0 the lines stand
+  # 18 pt apart for a 9 pt face, at the default 1.15 they stand 10.35 pt apart.
+  set text "one two three four five six seven eight nine ten"
+  set steps {}
+  foreach leading {1.15 2.0} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc table -at {20 30} -width 30 -theme plain -style [list leading $leading] \
+        -body [list [list $text]]
+    lappend steps [lindex [::tclpdfTest::steps \
+        [::tclpdfTest::starts [::tclpdfTest::content $doc] y]] 0]
+    $doc destroy
+  }
+  set steps
+} -result {10.35 18.00}
+
+test table-19.3 {padding is the space inside the cell, in the document unit} -body {
+  # The text starts one padding right of the cell's left edge at 20 mm: at
+  # padding 5 that is 25 mm, and the row grows by twice the difference.
+  set mm [expr {72 / 25.4}]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set narrow [$doc table -at {20 30} -width 30 -theme plain -style {padding 1.5} \
+      -body {{a}}]
+  set wide [$doc table -at {20 30} -width 30 -theme plain -style {padding 5} \
+      -body {{a}}]
+  set start [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc]] 1]
+  $doc destroy
+  list [format %.2f [expr {$start / $mm}]] [format %.2f [expr {$wide - $narrow}]]
+} -result {25.00 7.00}
+
+test table-19.4 {lineColor and lineWidth are what the rules are stroked with} -body {
+  # A single cell ruled on all four sides: four strokes, each in the colour
+  # and width given, the width converted from mm to points.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain \
+      -style {border all lineColor {1 0 0} lineWidth 1} -body {{a}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength [regexp -all -inline {1 0 0 RG} $stream]] \
+      [llength [regexp -all -inline {2.83465 w} $stream]] \
+      [llength [regexp -all -inline {(?m)^S$} $stream]]
+} -result {4 4 4}
+
+# -- align and valign given literally ------------------------------------------
+
+test table-20.1 {align left, center and right place the text in the cell} -body {
+  # One column 100 mm wide at 20 mm, padding 1.5: left starts at 21.5 mm,
+  # right ends at 118.5 mm, center is centred on 70 mm. Written on the cell
+  # and on the column alike, because both are documented to take it.
+  set mm [expr {72 / 25.4}]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain \
+      -body {{{text x align left}} {{text x align center}} {{text x align right}}}
+  set cells [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain -columns {{align center}} \
+      -body {{x}}
+  set column [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  lassign $cells left center right
+  set glyph [expr {$right - 118.5 * $mm}]
+  list [format %.2f [expr {$left / $mm}]] \
+      [expr {abs($center - (70 * $mm + $glyph / 2.0)) < 0.01}] \
+      [expr {$center == [lindex $column 0]}] [expr {$right < 118.5 * $mm}]
+} -result {21.50 1 1 1}
+
+test table-20.2 {valign bottom sets a one-line cell at the foot of a wrapped row} -body {
+  # The value written out, not fed through a variable: a cell "valign bottom"
+  # beside a cell of running text starts lower than one that says top, and
+  # exactly one line - leading plus padding - above the row's lower edge.
+  set long "A cell of running text long enough to take three lines in this\
+      column, which is what makes the row taller than the single words beside\
+      it and gives valign something to do."
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set below [$doc table -at {20 30} -width 170 -theme grid \
+      -body [list [list {text mark valign bottom} $long {text mark valign top}]] \
+      -columns {{width 22} {} {width 26}}]
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  set bottom [lindex $ys 0]
+  set top [lindex $ys end]
+  # The row ends at $below mm; the last line's baseline is padding (1.5 mm)
+  # plus a little of the leading above it.
+  set foot [expr {(297 - $below) * 72 / 25.4}]
+  list [expr {$bottom < $top}] [expr {$bottom > $foot}] \
+      [expr {$bottom - $foot < 1.5 * 72 / 25.4 + 10.35}]
+} -result {1 1 1}
+
+# -- border: none, all, horizontal, vertical ---------------------------------
+
+proc rules {stream} {
+  # Every stroked line as {x1 y1 x2 y2}, in the order drawn.
+  set result {}
+  foreach {-> x1 y1 x2 y2} [regexp -all -inline \
+      {(-?[0-9.]+) (-?[0-9.]+) m (-?[0-9.]+) (-?[0-9.]+) l\nS} $stream] {
+    lappend result [list $x1 $y1 $x2 $y2]
+  }
+  return $result
+}
+
+test table-21.1 {border none draws no rule at all} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme grid -style {border none} \
+      -body {{a b} {c d}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength [rules $stream]] [llength [regexp -all -inline {(?m)^S$} $stream]]
+} -result {0 0}
+
+test table-21.2 {border all rules every cell on four sides} -body {
+  # Four cells, four rules each - shared edges are drawn by both neighbours,
+  # which is what a rule per cell means.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain -style {border all} \
+      -body {{a b} {c d}}
+  set drawn [rules [::tclpdfTest::content $doc]]
+  $doc destroy
+  set level 0
+  set upright 0
+  foreach rule $drawn {
+    lassign $rule x1 y1 x2 y2
+    if {$y1 == $y2} {incr level}
+    if {$x1 == $x2} {incr upright}
+  }
+  list [llength $drawn] $level $upright
+} -result {16 8 8}
+
+test table-21.3 {border horizontal draws only the level rules} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain -style {border horizontal} \
+      -body {{a b} {c d}}
+  set drawn [rules [::tclpdfTest::content $doc]]
+  $doc destroy
+  set upright 0
+  foreach rule $drawn {
+    if {[lindex $rule 0] == [lindex $rule 2]} {incr upright}
+  }
+  list [llength $drawn] $upright
+} -result {8 0}
+
+test table-21.4 {border vertical draws only the upright rules} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain -style {border vertical} \
+      -body {{a b} {c d}}
+  set drawn [rules [::tclpdfTest::content $doc]]
+  $doc destroy
+  set level 0
+  foreach rule $drawn {
+    if {[lindex $rule 1] == [lindex $rule 3]} {incr level}
+  }
+  list [llength $drawn] $level
+} -result {8 0}
+
 cleanupTests

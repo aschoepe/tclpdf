@@ -92,18 +92,48 @@ proc ::example::pageAdded {doc args} {
 # overwrites the first record instead of adding another one.
 proc ::example::write {doc} {
     set number [$doc reservation example::record]
-    set record "pages=[$doc state examplePages] unit=[$doc cget -unit]"
+    # What the document says about itself, asked with [cget] rather than
+    # remembered from the call that created it - a [configure] in between
+    # would have changed the answer.
+    set record "pages=[$doc state examplePages] unit=[$doc cget -unit]\
+        format=[join [$doc cget -format] x] orientation=[$doc cget -orientation]\
+        version=[$doc cget -version] compress=[$doc cget -compress]"
     $doc streamObject {Type /XXExampleRecord} $record $number
     $doc catalogEntry XXExampleRecord "$number 0 R"
 }
 
+# The other write-time events, listened to rather than used. Each subscriber
+# gets the document; afterWrite gets the path as well - or an empty string
+# when the document went into a channel, since there is no file to name.
+# They fire on EVERY write, which the console shows: two writes below, two
+# lines each.
+proc ::example::resources {doc} {
+    puts "  resources: [dict size [$doc resource Font]] font(s) go into the file"
+}
+proc ::example::catalog {doc} {
+    puts "  catalog: the record is at [$doc catalogEntry XXExampleRecord]"
+}
+proc ::example::afterWrite {doc path} {
+    puts "  afterWrite: [expr {$path eq {} ? {into a channel} : $path}]"
+}
+
 # -- a document that uses it ------------------------------------------------
 
-set doc [tclpdf new -unit mm -format a4]
+# Every option said, so that the record has something to read back. A4 is
+# given as its two numbers - a size without a name goes in the same way -
+# and "hoch" is the German spelling of portrait, accepted next to it. The
+# version is the default, said anyway. -compress 0 leaves every stream plain,
+# the record included: open the file in a text editor and the record is
+# there to read.
+set doc [tclpdf new -unit mm -format {210 297} -orientation hoch \
+    -version 1.7 -compress 0]
 $doc info Title "Extending tclpdf"
 
 set pageToken [$doc on pageAdded ::example::pageAdded]
 $doc on beforeWrite ::example::write
+$doc on resources ::example::resources
+$doc on catalog ::example::catalog
+$doc on afterWrite ::example::afterWrite
 
 $doc page add
 
@@ -124,11 +154,21 @@ $doc font -family courier -size 8
 # [text] returns the y below the block it set, which is a fraction - so the
 # rows below are stepped with expr, not with incr.
 set y [expr {$y + 8}]
+# The unit is the document's, and [configure -unit] can change it between two
+# calls - so an extension asks per call rather than assuming millimetres.
+# Here the same questions are put in inches and the answers kept, before the
+# unit goes back to mm for the drawing below.
+$doc configure -unit in
+set inches [list \
+        "page size, in inches" [lmap n [$doc page size] {format %.2f $n}] \
+        "distance 1 in -> pt" [format %.2f [$doc distance 1]]]
+$doc configure -unit mm
 foreach {label value} [list \
         "page size, in mm" [$doc page size] \
         "coords 20 30 -> pt" [lmap n [$doc coords 20 30] {format %.2f $n}] \
         "distance 20 mm -> pt" [format %.2f [$doc distance 20]] \
-        "extent {20 10} -> pt" [lmap n [$doc extent {20 10}] {format %.2f $n}]] {
+        "extent {20 10} -> pt" [lmap n [$doc extent {20 10}] {format %.2f $n}] \
+        {*}$inches] {
     $doc text "$label = $value" -at [list 20 $y]
     set y [expr {$y + 5}]
 }
@@ -172,7 +212,8 @@ close $channel
 
 set first [open $target rb]
 set second [open $scratch rb]
-set same [expr {[read $first] eq [read $second]}]
+set bytes [read $first]
+set same [expr {$bytes eq [read $second]}]
 close $first
 close $second
 file delete $scratch
@@ -181,3 +222,6 @@ $doc destroy
 
 puts "  written: $target ([file size $target] bytes)"
 puts "  second write byte-identical: [expr {$same ? {yes} : {NO - the extension is not idempotent}}]"
+# The record as it stands in the file - readable because the document is
+# written with -compress 0.
+puts "  the record in the file: [lindex [regexp -inline {pages=[^\n]*} $bytes] 0]"

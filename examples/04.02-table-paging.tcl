@@ -90,7 +90,9 @@ set plan [$doc table layout -width 170 \
 puts "  layout: [format %.0f [dict get $plan height]] mm for [llength $rows] rows,\
     columns [lmap w [dict get $plan widths] {format %.1f $w}] mm"
 
-set y [$doc table -at {20 38} -top 26 -width 170 -theme striped \
+# -bottom is the margin the table keeps at the foot of every page; the default
+# comes from the type area, 272 asks for a little more room for the page number.
+set y [$doc table -at {20 38} -top 26 -bottom 272 -width 170 -theme striped \
     -head {{No. Taxon Locality Collected "Mass g"}} \
     -body $rows \
     -foot [list [list [list text "Total mass of all sheets" colSpan 4 align right] \
@@ -126,6 +128,21 @@ set y [$doc table -at {20 38} -top 26 -width 170 -theme striped \
 # document is complete and the total is simply the page count.
 $doc font -family helvetica -style {} -size 8 -color {0.35 0.35 0.4}
 $doc pageNumbers -at {190 287} -align right -format "page %n of %m"
+
+# Several calls are independent of each other, and each takes the font options
+# on its own - a family, style, size and colour of its own rather than the
+# state left by the last [font]. This index is the first part of a bound
+# volume that goes on with the collector's register, five pages more: -total
+# names the total of the set, and %n stays what it is because this part comes
+# first. -from 2 leaves the title page out; -align left - the default, written
+# out here - starts the line on -at, beside the running head the hook draws,
+# and -align center centres the volume mark on the middle of the foot.
+set volume [expr {[$doc page count] + 5}]
+$doc pageNumbers -at {60 20} -align left -from 2 -total $volume \
+    -format "sheet %n of %m in the bound volume" \
+    -family times -style italic -size 7 -color {0.45 0.45 0.5}
+$doc pageNumbers -at {105 287} -align center -format "vol. 1" \
+    -family helvetica -style bold -size 7 -color {0.35 0.35 0.4}
 
 # finalY: continue below the table, on whatever page it ended on.
 $doc font -family helvetica -style bold -size 9 -color black

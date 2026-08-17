@@ -59,8 +59,10 @@ $doc language en-GB
 # Both levels of WTPDF: reuse says the tagging is good enough to get the
 # content back out, accessibility says it is good enough to be read aloud.
 # They are not exclusive, and a file that reaches the second has reached the
-# first.
-$doc ua -part 2 -wtpdf {reuse accessibility}
+# first. -revision is the year of the ISO 14289-2 edition claimed and goes
+# into the packet as pdfuaid:rev; 2024 is the first edition and the default,
+# said here so that the claim names it rather than inheriting it.
+$doc ua -part 2 -revision 2024 -wtpdf {reuse accessibility}
 
 $doc page add
 $doc font embed face $regular
@@ -186,7 +188,8 @@ $doc write $target
 set state [$doc ua state]
 puts "  written: $target ([file size $target] bytes), [$doc page count] page(s)"
 puts "  PDF/UA-[dict get $state part] rev [dict get $state revision],\
-    WTPDF: [join [dict get $state wtpdf] { and }]"
+    WTPDF: [join [dict get $state wtpdf] { and }],\
+    registered: [dict get $state registered]"
 puts "  check it with: verapdf --flavour ua2 $target"
 puts "                 verapdf --flavour wt1a $target"
 $doc destroy

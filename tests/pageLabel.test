@@ -196,4 +196,22 @@ test pageLabel-2.4 {no call means no tree} -body {
   regexp {/PageLabels} $bytes
 } -result 0
 
+# --- the letter styles ------------------------------------------------------
+
+test pageLabel-3.1 {-style a writes /S /a, and the reader counts the range in lower-case letters} -constraints qpdf -body {
+  # An appendix lettered a, b, c from the fourth sheet on, the body before it
+  # in arabic numerals: /a is the one style the file has to spell in lower
+  # case, and qpdf reads it back as it stands.
+  set doc [drawn]
+  $doc pageLabels -from 0 -style D
+  $doc pageLabels -from 3 -style a -prefix "Appendix "
+  set path [::tclpdfTest::scratch pl-lower.pdf]
+  $doc write $path
+  set json [exec qpdf --json --json-key=pagelabels $path]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [nums $bytes] [regexp {"/S": "/a"} $json] [regexp {"/P": "u:Appendix "} $json]
+} -result {{0 << /S /D >> 3 << /S /a /P (Appendix ) >>} 1 1}
+
 cleanupTests

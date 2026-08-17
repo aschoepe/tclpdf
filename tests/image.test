@@ -719,4 +719,127 @@ test image-artifact-8.6 {an untagged document remembers nothing} -constraints ha
   list [string match "*BDC*" $stream] $missing $state
 } -result {0 {} {}}
 
+# --- the options the manual lists and nothing had called by name ---------
+
+test image-type-9.1 {-type auto decides by the bytes, jpeg and png force a parser} -constraints haveImages -body {
+  # Forced onto the wrong file each parser refuses by name; auto and the
+  # matching type take the file. So the option is read, and not the name.
+  set doc [tclpdf new]
+  set codes {}
+  foreach {file type} [list $photo auto $photo jpeg $rgba png $rgba auto \
+      $photo png $rgba jpeg $photo gif] {
+    lappend codes [catch {$doc image embed i[llength $codes] $file -type $type} message]
+    if {[lindex $codes end]} {
+      lappend codes [string map [list "not a PNG" PNG "not a JPEG" JPEG \
+          {unknown image type "gif"} gif] \
+          [lindex [regexp -inline {not a PNG|not a JPEG|unknown image type "gif"} \
+              $message] 0]]
+    }
+  }
+  set types [lmap alias [$doc image names] {dict get [$doc image info $alias] type}]
+  $doc destroy
+  list $codes $types
+} -result {{0 0 0 0 1 PNG 1 JPEG 1 gif} {jpeg jpeg png png}}
+
+test image-sizing-10.1 {-size, -scale and -dpi on image size} -constraints haveImages -body {
+  # 640 x 480 pixels: -size sets both extents and keeps no ratio, -scale
+  # multiplies the natural size, -dpi changes what the natural size is.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image embed photo $photo
+  set size [$doc image size photo -size {30 20}]
+  set scaled [$doc image size photo -scale 0.5]
+  set dpi [$doc image size photo -dpi 144]
+  set both [$doc image size photo -scale 0.5 -dpi 144]
+  $doc destroy
+  list $size $scaled $dpi $both
+} -result {{30 20} {320.0 240.0} {320.0 240.0} {160.0 120.0}}
+
+test image-sizing-10.2 {-size, -scale, -dpi and -rotate reach the placement matrix} -constraints haveImages -body {
+  # The cm of each placement, in points: -size {30 20} is a 30 by 20 matrix,
+  # -scale 0.5 half the pixel count, -dpi 144 the same, and -rotate 90 turns
+  # the 30 by 20 into 0 30 -20 0.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image embed photo $photo
+  $doc image place photo -at {10 10} -size {30 20}
+  $doc image place photo -at {10 10} -scale 0.5
+  $doc image place photo -at {10 10} -dpi 144
+  $doc image place photo -at {10 10} -size {30 20} -rotate 90
+  set matrices [regexp -all -inline {([-0-9. ]+) cm} [::tclpdfTest::content $doc]]
+  $doc destroy
+  set result {}
+  foreach {- matrix} $matrices {
+    lappend result [lmap number [lrange $matrix 0 3] {format %.0f $number}]
+  }
+  set result
+} -result {{30 0 0 20} {320 0 0 240} {320 0 0 240} {0 30 -20 0}}
+
+test image-sizing-10.3 {image draw takes -height, -size, -scale, -dpi and -rotate as well} -constraints haveImages -body {
+  # The one-step form hands its options through to the placement; measured
+  # on the matrix, the same way as above.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image draw $photo -at {10 10} -height 60
+  $doc image draw $photo -at {10 10} -size {30 20}
+  $doc image draw $photo -at {10 10} -scale 0.25
+  $doc image draw $photo -at {10 10} -dpi 288
+  $doc image draw $photo -at {10 10} -size {30 20} -rotate 90
+  set matrices [regexp -all -inline {([-0-9. ]+) cm} [::tclpdfTest::content $doc]]
+  $doc destroy
+  set result {}
+  foreach {- matrix} $matrices {
+    lappend result [lmap number [lrange $matrix 0 3] {format %.0f $number}]
+  }
+  set result
+} -result {{80 0 0 60} {30 0 0 20} {160 0 0 120} {160 0 0 120} {0 30 -20 0}}
+
+test image-sizing-10.4 {-artifact 1 on image place brackets an artifact} -constraints haveImages -body {
+  # The counterpart to image-artifact-8.1, which measures [image draw]: the
+  # two-step form takes the option too, and it leaves no entry.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc image embed photo $photo
+  $doc image place photo -at {20 20} -width 30 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [string match "*/Artifact <</Type /Layout>> BDC*" $stream] \
+      [string match "*EMC*" $stream] $missing
+} -result {1 1 {}}
+
+test image-info-11.1 {image info answers height, bitDepth, colorType, alpha and components} -constraints haveImages -body {
+  # A JPEG says components and no colorType, a PNG colorType and no
+  # components; bitDepth, height and alpha both.
+  set doc [tclpdf new]
+  $doc image embed photo $photo
+  $doc image embed gray $gray
+  $doc image embed rgba $rgba
+  $doc image embed indexed $indexed
+  set result {}
+  foreach alias {photo gray rgba indexed} {
+    set info [$doc image info $alias]
+    lappend result [list [dict get $info height] [dict get $info bitDepth] \
+        [dict get $info alpha] \
+        [expr {[dict exists $info colorType] ? [dict get $info colorType] : "-"}] \
+        [expr {[dict exists $info components] ? [dict get $info components] : "-"}]]
+  }
+  $doc destroy
+  set result
+} -result {{480 8 0 - 3} {480 8 0 - 1} {480 8 1 6 -} {480 8 0 3 -}}
+
+test image-info-11.2 {a PNG without any transparency reports transparency none} -body {
+  # A 2 x 1 truecolor PNG with no tRNS chunk, built byte by byte: nothing to
+  # key out, nothing to compute, and the answer says so.
+  set doc [tclpdf new]
+  $doc image embed plain -data [::tclpdfTest::png 2 1 8 2 \
+      "\x00\xff\x00\x00\x00\x00\xff"]
+  set info [$doc image info plain]
+  $doc destroy
+  list [dict get $info transparency] [dict get $info alpha] \
+      [dict get $info colorType] [dict get $info bitDepth] \
+      [dict get $info width] [dict get $info height]
+} -result {none 0 2 8 2 1}
+
 cleanupTests

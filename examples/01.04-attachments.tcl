@@ -21,6 +21,10 @@
 #   Supplement    additional material
 #   Unspecified   the default, and the least useful
 #
+# All five appear here, each on the file it fits. Alongside them the two other
+# things of the same manual section: a link with -zoom, and a bookmark branch
+# folded shut with -open 0.
+#
 # Check the result with:  qpdf --list-attachments out.pdf
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
@@ -74,15 +78,30 @@ foreach value $readings {
 }
 set mean [expr {$total / [llength $readings]}]
 
-$doc table -at [list 20 [expr {$y + 6}]] -width 90 -theme grid \
-    -head {{Quantity Value}} \
-    -body [list \
-        [list "Readings" [llength $readings]] \
-        [list "Mean" [format %.2f $mean]] \
-        [list "Lowest" [format %.2f $lowest]] \
-        [list "Highest" [format %.2f $highest]] \
-        [list "Range" [format %.2f [expr {$highest - $lowest}]]]] \
-    -columns {{} {align decimal}}
+set summaryTop [expr {$y + 6}]
+set summary [list \
+    [list "Readings" [llength $readings]] \
+    [list "Mean" [format %.2f $mean]] \
+    [list "Lowest" [format %.2f $lowest]] \
+    [list "Highest" [format %.2f $highest]] \
+    [list "Range" [format %.2f [expr {$highest - $lowest}]]]]
+set summaryBottom [$doc table -at [list 20 $summaryTop] -width 90 -theme grid \
+    -head {{Quantity Value}} -body $summary -columns {{} {align decimal}}]
+
+# A link over the summary that lands on the same table magnified: -to is the
+# point the reader is taken to, -zoom the magnification it applies there (2 is
+# 200 %). Without -zoom the reader keeps whatever it has. Drawn as nothing -
+# the table above is what the reader sees and clicks.
+$doc link -at [list 20 $summaryTop] \
+    -size [list 90 [expr {$summaryBottom - $summaryTop}]] \
+    -page 0 -to [list 20 $summaryTop] -zoom 2 -tooltip "The summary, magnified"
+
+# The outline of a one-page report is short, and its branch is folded shut:
+# -open 0 keeps the children hidden until the reader unfolds the entry, which
+# is what an outline of many reports in one viewer wants.
+set report [$doc bookmark "Report SR-2026-114" -open 0]
+$doc bookmark "Summary" -at [list 20 $summaryTop] -parent $report
+$doc bookmark "Attachments" -at {20 250} -parent $report
 
 # The raw data, built here and attached from memory rather than from a file -
 # -data exists for exactly this case.
@@ -106,9 +125,32 @@ $doc attach -data "ISO 2360 - eddy current method\nProbe: type N, calibrated\
     -name procedure.txt -mime text/plain -relationship Supplement \
     -description "Method and conditions"
 
+# The other three relationships, each on the file it describes. Source is the
+# file the document was generated from - here that is this very script.
+# Alternative is the same content in another form: the summary table as plain
+# text, attached uncompressed (-compress 0) so that it can be read straight out
+# of the PDF with a text editor. Unspecified is the default and says nothing;
+# it is written out here so that the choice is visible rather than silent.
+$doc attach [info script] -name [file tail [info script]] -mime text/plain \
+    -relationship Source -description "The script this report was made with"
+
+set text "Coating thickness report SR-2026-114\n"
+foreach row $summary {
+    append text [format "%-10s %s\n" {*}$row]
+}
+$doc attach -data $text -name summary.txt -mime text/plain \
+    -relationship Alternative -compress 0 \
+    -description "The summary table as plain text"
+
+$doc attach -data "Specimen batch 7841 was stored at room temperature for\
+    48 h before measuring.\n" -name note.txt -mime text/plain \
+    -relationship Unspecified -description "A note on the specimen"
+
 $doc font -size 8
-$doc text "Two files are attached to this document: readings.csv with the raw\
-    measurements, and procedure.txt with the method." \
+$doc text "Five files are attached to this document: readings.csv with the raw\
+    measurements, procedure.txt with the method, summary.txt with the table\
+    above as text, note.txt with a remark on the specimen, and the script this\
+    report was made with." \
     -at {20 250} -width 170
 
 exampleFooter $doc

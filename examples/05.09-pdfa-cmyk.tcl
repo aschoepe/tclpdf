@@ -161,8 +161,13 @@ $doc page add
 set trimW 148.0
 set trimH 210.0
 set bleed 3.0
-set x0 [expr {(210 - $trimW) / 2}]     ;# 31 mm - the A5 page sits centred
-set y0 [expr {(297 - $trimH) / 2}]     ;# 43.5 mm
+# The sheet is whatever the media box says - read off the page rather than
+# repeated as 210 by 297, so the imposition follows a document that was
+# configured for another sheet. A box is two corners, so the size is the
+# difference.
+lassign [$doc page box media] sheetX0 sheetY0 sheetX1 sheetY1
+set x0 [expr {($sheetX1 - $sheetX0 - $trimW) / 2}]     ;# 31 mm - the A5 page sits centred
+set y0 [expr {($sheetY1 - $sheetY0 - $trimH) / 2}]     ;# 43.5 mm
 set x1 [expr {$x0 + $trimW}]
 set y1 [expr {$y0 + $trimH}]
 
@@ -172,6 +177,11 @@ set y1 [expr {$y0 + $trimH}]
 $doc page box trim [list $x0 $y0 $x1 $y1]
 $doc page box bleed [list [expr {$x0 - $bleed}] [expr {$y0 - $bleed}] \
     [expr {$x1 + $bleed}] [expr {$y1 + $bleed}]]
+# The art box is the page's meaningful content as its maker sees it - here
+# the A5 page inside its 10 mm margins. A layout program that places this
+# page into another document takes that, not the sheet (14.11.2 again).
+$doc page box art [list [expr {$x0 + 10}] [expr {$y0 + 10}] \
+    [expr {$x1 - 10}] [expr {$y1 - 10}]]
 
 # Registration black - all four inks - is what marks are printed in, so that
 # every plate carries them and a misregistered plate shows as a doubled mark.
@@ -270,6 +280,19 @@ $doc pdfa -part 3 -conformance U -profile $profile
 set state [$doc pdfa state]
 puts "  PDF/A-[dict get $state part][dict get $state conformance],\
     intent from [file tail [dict get $state profile]]"
+
+# The boxes each page carries, read back with an index - the order sheet has
+# only its media box, the print sheet all four. [page box name {} index]
+# reads on any page, whichever is current.
+for {set i 0} {$i < [$doc page count]} {incr i} {
+    set boxes {}
+    foreach name {media bleed trim art} {
+        if {[$doc page box $name {} $i] ne {}} {
+            lappend boxes $name
+        }
+    }
+    puts "  page $i boxes: [join $boxes {, }]"
+}
 
 # The footer too paints in ink: a DeviceRGB grey under a CMYK intent would be
 # the one validation error on the page.

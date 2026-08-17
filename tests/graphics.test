@@ -870,4 +870,161 @@ test graphics-limit-11.7 {-scale refuses zero, and takes a mirror} -body {
   set codes
 } -result {1 1 1 1 1 1 0 0 0}
 
+# -- the options the manual lists and nothing had called by name ----------------
+#
+# Each of these was documented and reached only sideways - -size on [circle]
+# through the ellipse code, -fill through a leader test, the caps and joins by
+# their non-default values. A test per row, reading the operator it produces.
+
+test graphics-shape-12.1 {circle -size draws an ellipse, and it is the same as ellipse -size} -body {
+  # -at is the centre: the path starts at (cx - rx, cy) and the first arc
+  # ends at (cx, cy + ry) - so both radii can be read off the stream.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc circle -at {50 50} -size {20 10} -fill red
+  set one [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc ellipse -at {50 50} -size {20 10} -fill red
+  set two [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([-0-9.]+) ([-0-9.]+) m\n} $one -> x0 y0
+  regexp {c\n} $one
+  regexp {m\n[-0-9. ]+ ([-0-9.]+) ([-0-9.]+) c\n} $one -> x1 y1
+  list [expr {$one eq $two}] [expr {50 - $x0}] [format %.2f [expr {$y1 - $y0}]] \
+      [expr {$x1 == 50}]
+} -result {1 10 5.00 1}
+
+test graphics-shape-12.2 {-fill on circle, ellipse and polygon paints with f and the fill colour} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc circle -at {30 30} -radius 10 -fill red
+  $doc ellipse -at {60 30} -size {20 10} -fill red
+  $doc polygon -points {10 10 20 10 15 20} -fill red
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # Three fills, three "rg", and no stroke operator anywhere.
+  list [llength [lsearch -all -exact $operators f]] \
+      [llength [lsearch -all -exact $operators rg]] \
+      [llength [lsearch -all -exact $operators S]] \
+      [llength [lsearch -all -exact $operators B]]
+} -result {3 3 0 0}
+
+test graphics-path-13.1 {-rule nonzero paints with f, evenodd with f*} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set star {{move 30 10} {line 42 46} {line 12 24} {line 48 24} {line 18 46} {close}}
+  $doc path -segments $star -fill red -rule nonzero
+  set nonzero [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc path -segments $star -fill red -rule evenodd
+  set evenodd [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [expr {"f" in $nonzero}] [expr {"f*" in $nonzero}] \
+      [expr {"f" in $evenodd}] [expr {"f*" in $evenodd}]
+} -result {1 0 0 1}
+
+test graphics-path-13.2 {-close on a path adds the h before the painting operator} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set open {{move 10 10} {line 30 10} {line 20 30}}
+  $doc path -segments $open -stroke black
+  set without [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc path -segments $open -stroke black -close 1
+  set with [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The h sits directly before the S, and only in the closed one.
+  list [lsearch -exact $without h] [lsearch -exact $with h] \
+      [expr {[lsearch -exact $with S] - [lsearch -exact $with h]}]
+} -result {-1 5 1}
+
+test graphics-line-14.1 {-dash none and -dash solid write the empty dash array} -body {
+  # Both spellings mean "unbroken", and both have to say so in the stream: a
+  # dash set earlier is state, and only "[] 0 d" takes it back.
+  set doc [tclpdf new]
+  $doc page add
+  $doc line -from {0 0} -to {10 10} -stroke black -dash none
+  $doc rect -at {0 0} -size {10 10} -stroke black -dash solid
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp -all {\[\] 0 d\n} $content
+} -result 2
+
+test graphics-line-14.2 {-cap butt and square, -join miter write their numbers} -body {
+  # 8.4.3.3 and 8.4.3.4: butt is 0, square 2; miter is 0. The defaults of the
+  # standard, and setting them explicitly is what puts a round cap set by
+  # [style] back.
+  set doc [tclpdf new]
+  $doc page add
+  $doc line -from {0 0} -to {10 10} -stroke black -cap butt -join miter
+  set butt [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc polygon -points {0 0 10 0 5 10} -stroke black -cap square -join miter
+  set square [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {\n0 J\n0 j\n} $butt] [regexp {\n2 J\n0 j\n} $square]
+} -result {1 1}
+
+test graphics-state-15.1 {opacity fill sets ca alone, both sets ca and CA} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set fill [$doc opacity 0.5 fill]
+  set both [$doc opacity 0.5 both]
+  set content [::tclpdfTest::content $doc]
+  set writer [$doc writer]
+  set bodies {}
+  foreach name [list $fill $both] {
+    regexp {(\d+) 0 R} [$doc resource ExtGState $name] -> number
+    lappend bodies [$writer body $number]
+  }
+  $doc destroy
+  list $fill $both [regexp -all {gs\n} $content] \
+      [string match {*/ca 0.5*} [lindex $bodies 0]] \
+      [string match {*/CA*} [lindex $bodies 0]] \
+      [string match {*/ca 0.5*/CA 0.5*} [lindex $bodies 1]]
+} -result {GS0_5f GS0_5b 2 1 0 1}
+
+test graphics-state-15.2 {every blend mode of the standard is a resource with its name} -body {
+  # The sixteen of 11.3.5, each as the COMMAND rather than as -blend on a
+  # shape: the resource name, the /BM value and the gs in the stream.
+  set doc [tclpdf new]
+  $doc page add
+  set writer [$doc writer]
+  set wrong {}
+  foreach mode {Normal Multiply Screen Overlay Darken Lighten ColorDodge
+      ColorBurn HardLight SoftLight Difference Exclusion Hue Saturation
+      Color Luminosity} {
+    set name [$doc blend $mode]
+    regexp {(\d+) 0 R} [$doc resource ExtGState $name] -> number
+    if {$name ne "GB$mode" || ![string match "*/BM /$mode *" [$writer body $number]]
+        || ![string match "*/$name gs*" [::tclpdfTest::content $doc]]} {
+      lappend wrong $mode
+    }
+  }
+  set count [dict size [$doc resource ExtGState]]
+  $doc destroy
+  list $wrong $count
+} -result {{} 16}
+
+test graphics-state-15.3 {style takes stroke, cap, join, opacity and blend, unguarded} -body {
+  # Every option the shapes take, set as state: colour first, then the two
+  # gs, then cap and join - and no q around any of it, because [style] is
+  # what a caller reaches for to set the state until further notice.
+  set doc [tclpdf new]
+  $doc page add
+  $doc style -stroke red -cap round -join bevel -opacity 0.5 -blend Multiply
+  set content [::tclpdfTest::content $doc]
+  set names [lsort [dict keys [$doc resource ExtGState]]]
+  $doc destroy
+  list $content $names
+} -result [list "1 0 0 RG\n/GS0_5b gs\n/GBMultiply gs\n1 J\n2 j\n" {GBMultiply GS0_5b}]
+
 cleanupTests

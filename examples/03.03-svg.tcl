@@ -57,6 +57,15 @@ if {[file exists $drawing]} {
         $doc text "$width mm" -at [list $x [expr {38 + $width * 0.75 + 3}]]
         incr x [expr {$width + 6}]
     }
+    # -scale multiplies the drawing's own size instead of naming one, and
+    # -opacity fades the drawing as a whole. -artifact 1 says the drawing is
+    # decoration on purpose - in a tagged document that is the alternative to
+    # -alt, and here, untagged, it is accepted and changes nothing.
+    # The drawing's own size is 226 mm wide, so a tenth of it fits the row.
+    lassign [$doc svg $drawing -at {147 68} -scale 0.1 -opacity 0.4 -artifact 1] \
+        -> -> scaledWidth scaledHeight
+    $doc text "-scale 0.1: [format %.1f $scaledWidth] mm, -opacity 0.4" \
+        -at [list 147 [expr {68 + $scaledHeight + 3}]]
 }
 
 # -- the test drawings -----------------------------------------------------

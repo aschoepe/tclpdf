@@ -339,4 +339,106 @@ test shading-4.4 {a refused gradient leaves no bracket open} -body {
   set wrong
 } -result {}
 
+# -- the options the manual lists and nothing had called by name ------------
+
+# The body of the last object carrying the given key - the shading dictionary
+# or the tiling pattern of the call just made.
+proc shadingLastBody {doc key} {
+  set writer [$doc writer]
+  set found {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match "*$key*" [$writer body $number]]} {
+      set found [$writer body $number]
+    }
+  }
+  return $found
+}
+
+# One entry of such a body: "/Coords [...]", "/Extend [...]", "/XStep 72".
+proc shadingEntry {body key} {
+  return [lindex [regexp -inline "/$key (?:\\\[\[^\]\]*\]|\[0-9.\]+)" $body] 0]
+}
+
+test shading-5.1 {-angle turns the axis of an axial gradient} -body {
+  # 0 runs left to right through the middle of the rectangle, 90 top to
+  # bottom - read off the /Coords, in points on a 200 pt page.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading axial -at {0 0} -size {100 50} -colors {red blue}
+  set flat [shadingLastBody $doc /ShadingType]
+  $doc shading axial -at {0 0} -size {100 50} -colors {red blue} -angle 90
+  set down [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingEntry $flat Coords] [shadingEntry $down Coords]
+} -result {{/Coords [0 175 100 175]} {/Coords [50 200 50 150]}}
+
+test shading-5.2 {-extend is written as the two booleans, on both forms} -body {
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading axial -at {0 0} -size {100 50} -colors {red blue}
+  set plain [shadingLastBody $doc /ShadingType]
+  $doc shading axial -at {0 0} -size {100 50} -colors {red blue} -extend {1 0}
+  set axial [shadingLastBody $doc /ShadingType]
+  $doc shading radial -at {0 0} -size {100 50} -colors {red blue} -extend {0 1}
+  set radial [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingEntry $plain Extend] \
+      [shadingEntry $axial Extend] \
+      [shadingEntry $radial Extend]
+} -result {{/Extend [true true]} {/Extend [true false]} {/Extend [false true]}}
+
+test shading-5.3 {-center and -focus of a radial gradient reach the six coordinates} -body {
+  # Coords are x0 y0 r0 x1 y1 r1: the focus with the inner radius first, the
+  # centre with the outer one last - converted from the top-left convention.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading radial -at {0 0} -size {100 50} -colors {red blue} \
+      -center {20 30} -radius 10
+  set centred [shadingLastBody $doc /ShadingType]
+  $doc shading radial -at {0 0} -size {100 50} -colors {red blue} \
+      -center {20 30} -radius 10 -focus {25 35} -innerRadius 2
+  set focused [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingEntry $centred Coords] \
+      [shadingEntry $focused Coords]
+} -result {{/Coords [20 170 0 20 170 10]} {/Coords [25 165 2 20 170 10]}}
+
+test shading-5.4 {-matrix on the direct forms reads the coordinates as they stand} -body {
+  # No matrix is written; the numbers are taken raw - no y flip, no unit -
+  # for a caller drawing under a transform. The identity is enough to show
+  # the difference: with it the points go out as given.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading axial -at {0 0} -size {100 50} -colors {red blue} \
+      -from {10 20} -to {30 40}
+  set mapped [shadingLastBody $doc /ShadingType]
+  $doc shading axial -at {0 0} -size {100 50} -colors {red blue} \
+      -from {10 20} -to {30 40} -matrix {1 0 0 1 0 0}
+  set raw [shadingLastBody $doc /ShadingType]
+  $doc shading radial -at {0 0} -size {100 50} -colors {red blue} \
+      -center {20 30} -radius 10 -focus {25 35} -innerRadius 2 -matrix {1 0 0 1 0 0}
+  set radial [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingEntry $mapped Coords] \
+      [shadingEntry $raw Coords] \
+      [shadingEntry $radial Coords] \
+      [regexp {/Matrix} $raw]
+} -result {{/Coords [10 180 30 160]} {/Coords [10 20 30 40]} {/Coords [25 35 2 20 30 10]} 0}
+
+test shading-5.5 {pattern create -unit reads -size and -step in that unit} -body {
+  # A one-inch tile in a millimetre document: 72 points in the BBox and the
+  # step, and [pattern size] answers in the document unit.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pattern create inch -size {1 1} -unit in -script {}
+  set tile [shadingLastBody $doc /PatternType]
+  $doc pattern create stepped -size {1 1} -step {2 1.5} -unit in -script {}
+  set stepped [shadingLastBody $doc /PatternType]
+  set size [$doc pattern size inch]
+  $doc destroy
+  list [shadingEntry $tile BBox] [shadingEntry $tile XStep] \
+      [shadingEntry $stepped XStep] [shadingEntry $stepped YStep] \
+      [lmap value $size {format %.1f $value}]
+} -result {{/BBox [0 0 72 72]} {/XStep 72} {/XStep 144} {/YStep 108} {25.4 25.4}}
+
 cleanupTests

@@ -49,15 +49,18 @@ $doc text "Images, gradients and patterns" -at {20 20}
 
 # -- the four picture paths ------------------------------------------------
 
+# -type names the parser: auto, the default, decides by the leading bytes;
+# jpeg and png force one, and a file whose bytes disagree is then refused
+# rather than guessed at.
 $doc font -style {} -size 8
 set x 20
-foreach {alias file label} [list \
-    photo sample-photo.jpg "JPEG, DCTDecode" \
-    gray sample-gray.jpg "JPEG, DeviceGray" \
-    tile sample-indexed.png "PNG, Indexed + Mask" \
-    logo sample-rgba.png "PNG, SMask"] {
+foreach {alias file type label} [list \
+    photo sample-photo.jpg jpeg "JPEG, DCTDecode" \
+    gray sample-gray.jpg auto "JPEG, DeviceGray" \
+    tile sample-indexed.png auto "PNG, Indexed + Mask" \
+    logo sample-rgba.png png "PNG, SMask"] {
   set start [clock milliseconds]
-  $doc image embed $alias [file join $images $file]
+  $doc image embed $alias [file join $images $file] -type $type
   $doc image place $alias -at [list $x 30] -width 40
   set spent [expr {[clock milliseconds] - $start}]
   $doc text $label -at [list $x 65]
@@ -70,6 +73,13 @@ set info [$doc image info logo]
 puts "  [dict get $info width]x[dict get $info height],\
     colour type [dict get $info colorType], alpha [dict get $info alpha]"
 puts "  natural size: [$doc image size logo] mm"
+# [image size] takes the sizing options of [image place] and answers what a
+# placement would come out at - for laying out around a picture.
+puts "  -width 40: [$doc image size logo -width 40] mm,\
+    -height 30: [$doc image size logo -height 30] mm"
+puts "  -size {30 20}: [$doc image size logo -size {30 20}] mm,\
+    -scale 0.1: [$doc image size logo -scale 0.1] mm,\
+    -dpi 300: [$doc image size logo -dpi 300] mm"
 
 # -- reuse -----------------------------------------------------------------
 
@@ -85,8 +95,19 @@ $doc image place photo -at {90 88} -width 25 -opacity 0.35
 # of a table or a line of text. The width follows from the aspect ratio, so
 # neither has to be worked out by hand.
 $doc image place photo -at {125 88} -height 18.75
-$doc text "embedded once, placed four times - the last one sized by its height" \
-    -at {20 118}
+# -size sets both extents and keeps no ratio - squeezed on purpose here.
+# -alt is what a tagged document reads out for the picture, -artifact 1 the
+# opposite: decoration on purpose. This document is untagged, so both are
+# accepted and change nothing (05.07 shows them at work).
+$doc image place photo -at {160 88} -size {25 12} -alt "the same photo, squeezed"
+# Without any extent the natural size applies, and -dpi decides it: a pixel
+# is 1/dpi of an inch, so 640 pixels at 1200 dpi are 13.5 mm - the size a
+# scan would be placed at. -scale multiplies that natural size.
+$doc image place photo -at {160 102} -dpi 1200 -artifact 1
+$doc image place photo -at {176 102} -dpi 1200 -scale 0.7
+$doc text "embedded once, placed seven times - by width, turned, faded, by height,\
+    squeezed by -size, and at 1200 dpi with and without -scale 0.7" \
+    -at {20 118} -width 130
 
 # -- gradients -------------------------------------------------------------
 
@@ -181,6 +202,20 @@ $doc text "16 bit: DeviceRGB at 16 bits + SMask - a 16-bit /Mask is ignored by r
     so the key becomes a mask (${spent16} ms, decoded once)" -at {85 257} -width 62
 $doc text "the 8-bit file on white" -at {150 257}
 
+# What [image info] says about the transparency of each: none, colourKey (a
+# /Mask array, passed through) or softMask (computed) - and for the JPEGs the
+# component count and bit depth, which is all a JPEG has to say.
+foreach alias {tile keyed keyed16 logo} {
+  set info [$doc image info $alias]
+  puts "  $alias: transparency [dict get $info transparency],\
+      alpha [dict get $info alpha], [dict get $info bitDepth] bit"
+}
+foreach alias {photo gray} {
+  set info [$doc image info $alias]
+  puts "  $alias: [dict get $info components] components,\
+      [dict get $info bitDepth] bit"
+}
+
 exampleFooter $doc
 
 # -- the image that never was a file ---------------------------------------
@@ -233,6 +268,13 @@ $doc text "The bytes are stored once even when they arrive twice: with no file  
 
 $doc image draw -data $data -at [list 20 [expr {$y + 24}]] -width 40
 $doc image draw -data $data -at [list 65 [expr {$y + 24}]] -width 40
+# [image draw] takes the options of [image place] as well: fitted by height
+# and marked as decoration, squeezed by -size and faded, scaled and turned,
+# and at its natural size for 1200 dpi.
+$doc image draw -data $data -at [list 110 [expr {$y + 24}]] -height 15 -artifact 1
+$doc image draw -data $data -at [list 135 [expr {$y + 24}]] -size {20 10} -opacity 0.5
+$doc image draw -data $data -at [list 160 [expr {$y + 24}]] -scale 0.08 -rotate 10
+$doc image draw -data $data -at [list 110 [expr {$y + 42}]] -dpi 1200
 
 $doc font -size 7 -color {0.35 0.35 0.4}
 $doc text "[llength [$doc image names]] images embedded on this page and the last"     -at [list 20 [expr {$y + 60}]]

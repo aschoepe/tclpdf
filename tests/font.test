@@ -38,6 +38,12 @@ set liberation [file join [file dirname [file dirname [file normalize [info scri
     examples assets fonts liberation-fonts]
 testConstraint haveLiberation [file exists [file join $liberation LiberationSans-Regular.ttf]]
 
+# A Type 1 face with its metrics beside it, for what [font info] says about
+# a format that has no fsType.
+set type1Face [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts tsukurimashou OCRB.pfb]
+testConstraint haveType1 [file exists $type1Face]
+
 test font-1.1 {a TrueType file is parsed} -constraints haveFont -body {
   set parsed [::tclpdf::sfnt read $fontRegular]
   list [dict get $parsed unitsPerEm] \
@@ -1345,5 +1351,86 @@ test font-13.2 {a Liberation face embeds and sets text under PDF/A} -constraints
   $doc destroy
   list $code $written $family
 } -result {0 1 {Liberation Serif}}
+
+# --- the standard faces through [font] --------------------------------------
+#
+# The resolved name is what the state reports and what /Tf names in the
+# stream, so a family, a style or a PostScript name that resolves wrongly is
+# visible in both places.
+
+test font-14.1 {-family courier and symbol resolve to their standard names} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set courier [dict get [$doc font -family courier -size 10] resolved]
+  $doc text "fixed" -at {20 20}
+  set symbol [dict get [$doc font -family symbol] resolved]
+  $doc text "abg" -at {20 30}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $courier $symbol [regexp {/FCourier 10 Tf} $content] \
+      [regexp {/FSymbol 10 Tf} $content]
+} -result {Courier Symbol 1 1}
+
+test font-14.2 {-family takes a PostScript name outright} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set state [$doc font -family Times-Italic -size 11]
+  $doc text "cursive" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [dict get $state family] [dict get $state resolved] \
+      [regexp {/FTimesItalic 11 Tf} $content]
+} -result {Times-Italic Times-Italic 1}
+
+test font-14.3 {-style italic, {bold italic} and oblique pick the variant} -body {
+  set doc [tclpdf new -unit mm]
+  set names {}
+  foreach {family style} {times italic times {bold italic} helvetica oblique
+      helvetica {bold oblique} courier {italic bold}} {
+    lappend names [dict get [$doc font -family $family -style $style] resolved]
+  }
+  $doc destroy
+  set names
+} -result {Times-Italic Times-BoldItalic Helvetica-Oblique Helvetica-BoldOblique Courier-BoldOblique}
+
+test font-14.4 {-rise on the font state reaches every line until it is reset} -body {
+  # -rise is a state option: set once, it lifts every line drawn afterwards,
+  # and setting it back to 0 takes the operator out of the stream again.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10 -rise 3
+  $doc text "one" -at {20 20}
+  $doc text "two" -at {20 30}
+  $doc font -rise 0
+  $doc text "three" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  set state [$doc font]
+  $doc destroy
+  list [regexp -all {3 Ts} $content] [dict get $state rise]
+} -result {2 0}
+
+test font-14.5 {font info answers postScript, unitsPerEm, characters and permission} \
+    -constraints haveFont -body {
+  # The four keys as [font info] hands them out, not as the parser holds them:
+  # 5.2 reads family, fsType and glyphs, and font-1.1 reads the parser.
+  set doc [tclpdf new]
+  $doc font embed haus $fontRegular
+  set info [$doc font info haus]
+  $doc destroy
+  list [dict get $info postScript] [dict get $info unitsPerEm] \
+      [expr {[dict get $info characters] > 1000}] \
+      [string range [dict get $info permission] 0 10]
+} -result {DejaVuSans 2048 1 installable}
+
+test font-14.6 {font info on a Type 1 face states that it has no fsType} \
+    -constraints haveType1 -body {
+  set doc [tclpdf new]
+  $doc font embed t1 $type1Face
+  set info [$doc font info t1]
+  $doc destroy
+  list [dict get $info postScript] [dict get $info unitsPerEm] \
+      [dict get $info fsType] [string match {*Type 1 has no fsType*} \
+      [dict get $info permission]] [expr {[dict get $info characters] > 100}]
+} -result {OCRB 1000 {} 1 1}
 
 cleanupTests

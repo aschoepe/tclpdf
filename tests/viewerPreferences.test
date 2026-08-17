@@ -128,4 +128,80 @@ test viewerPreferences-2.4 {an unknown option is refused} -body {
   list $code [string match "*unknown*" $err]
 } -result {1 1}
 
+# --- every key and every name reaches the file ------------------------------
+
+test viewerPreferences-3.1 {the remaining booleans reach the file, false as well as true} -body {
+  # A 0 is written as the keyword false, not left out: "do not hide the
+  # menu bar" is a wish too, and a reader with another default needs it.
+  set doc [drawn]
+  $doc viewerPreferences -hideMenubar 1 -hideWindowUI 1 -centerWindow 1 \
+      -pickTrayByPDFSize 0
+  set path [::tclpdfTest::scratch vp-booleans.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/ViewerPreferences\s*<<([^>]*)>>} $bytes -> dictionary
+  list [regexp {/HideMenubar true} $dictionary] \
+      [regexp {/HideWindowUI true} $dictionary] \
+      [regexp {/CenterWindow true} $dictionary] \
+      [regexp {/PickTrayByPDFSize false} $dictionary]
+} -result {1 1 1 1}
+
+test viewerPreferences-3.2 {every page mode for leaving full screen is written as a name} -body {
+  set result {}
+  foreach mode {UseNone UseOutlines UseThumbs UseOC} {
+    set doc [drawn]
+    $doc viewerPreferences -nonFullScreenPageMode $mode
+    set path [::tclpdfTest::scratch vp-mode-$mode.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend result [regexp "/NonFullScreenPageMode /$mode\\M" $bytes]
+  }
+  return $result
+} -result {1 1 1 1}
+
+test viewerPreferences-3.3 {L2R, both print scalings and the short-edge duplex} -body {
+  set doc [drawn]
+  $doc viewerPreferences -direction L2R -printScaling None \
+      -duplex DuplexFlipShortEdge
+  set path [::tclpdfTest::scratch vp-names.pdf]
+  $doc write $path
+  # A later call replaces the value rather than adding a second key.
+  $doc viewerPreferences -printScaling AppDefault
+  set second [::tclpdfTest::scratch vp-names-2.pdf]
+  $doc write $second
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set again [::tclpdfTest::readBytes $second]
+  file delete $path $second
+  list [regexp {/Direction /L2R} $bytes] \
+      [regexp {/PrintScaling /None} $bytes] \
+      [regexp {/Duplex /DuplexFlipShortEdge} $bytes] \
+      [regexp {/PrintScaling /AppDefault} $again] \
+      [regexp -all {/PrintScaling} $again]
+} -result {1 1 1 1 1}
+
+test viewerPreferences-3.4 {a key younger than the file's version is refused, naming it} -body {
+  # The dictionary and its window keys are 1.2, -direction 1.3, -printScaling
+  # 1.6, -duplex and -pickTrayByPDFSize 1.7 (Reference 1.7, Table 8.1). A
+  # 1.6 file may ask for print scaling and not for a tray or a duplex mode.
+  set doc [tclpdf new -version 1.6]
+  $doc page add
+  set scaling [catch {$doc viewerPreferences -printScaling AppDefault}]
+  set tray [catch {$doc viewerPreferences -pickTrayByPDFSize 1} first]
+  set duplex [catch {$doc viewerPreferences -duplex DuplexFlipShortEdge} second]
+  $doc destroy
+  set doc [tclpdf new -version 1.2]
+  $doc page add
+  set window [catch {$doc viewerPreferences -hideMenubar 1 -centerWindow 1}]
+  set direction [catch {$doc viewerPreferences -direction L2R} third]
+  $doc destroy
+  list $scaling $tray [string match "*-pickTrayByPDFSize needs PDF 1.7*" $first] \
+      $duplex [string match "*-duplex needs PDF 1.7*" $second] \
+      $window $direction [string match "*-direction needs PDF 1.3*" $third]
+} -result {0 1 1 1 1 0 1 1}
+
 cleanupTests

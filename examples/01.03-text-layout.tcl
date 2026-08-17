@@ -72,10 +72,15 @@ $doc text "Alignment against a fixed point" -at [list 20 $y]
 $doc line -from [list 105 [expr {$y + 4}]] -to [list 105 [expr {$y + 26}]] \
     -stroke {0.8 0.2 0.2} -width 0.3
 
+# "centre" is accepted for "center", so the option can be spelt the way the
+# rest of a program spells it. The other two options are the defaults, said
+# out loud once: the y of -at is the baseline, and the line runs left to
+# right.
 $doc font -style {} -size 10
 foreach {align label offset} {left "left of the mark" 8
-        center "centred on it" 15  right "right of the mark" 22} {
-    $doc text $label -at [list 105 [expr {$y + $offset}]] -align $align
+        centre "centred on it" 15  right "right of the mark" 22} {
+    $doc text $label -at [list 105 [expr {$y + $offset}]] -align $align \
+        -anchor baseline -direction ltr
 }
 
 # -- spacing, scaling, rotation --------------------------------------------
@@ -90,11 +95,20 @@ $doc text "normal setting" -at [list 20 $y]
 $doc text "letter spaced" -at [list 75 $y] -spacing 0.9
 $doc text "word  spaced  wide" -at [list 130 $y] -wordSpacing 3
 
+# The row above sets the four per call. They are font STATE as well: set on
+# [font] they stay in force until changed - which is how a whole caption is
+# condensed without saying so on every line - and are taken back the same
+# way. This row sets them that way.
 set y [expr {$y + 9}]
-$doc text "condensed to 70 %" -at [list 20 $y] -stretch 70
-$doc text "stretched to 130 %" -at [list 75 $y] -stretch 130
-$doc text "raised" -at [list 130 $y] -rise 1.6
-$doc text "lowered" -at [list 148 $y] -rise -1.6
+$doc font -stretch 70 -wordSpacing 1
+$doc text "condensed to 70 %" -at [list 20 $y]
+$doc font -stretch 130 -wordSpacing 0 -spacing 0.3
+$doc text "stretched to 130 %" -at [list 75 $y]
+$doc font -stretch 100 -spacing 0 -rise 1.6
+$doc text "raised" -at [list 130 $y]
+$doc font -rise -1.6
+$doc text "lowered" -at [list 148 $y]
+$doc font -rise 0
 
 set y [expr {$y + 12}]
 $doc text "H" -at [list 20 $y] -size 14
@@ -162,6 +176,55 @@ $doc font -family symbol -size 14
 $doc text "abgdepsw \326\254\316 \245\243\263" -at [list 20 [expr {$y + 16}]]
 $doc font -family zapfdingbats -size 14
 $doc text "34567 nopqr" -at [list 100 [expr {$y + 16}]]
+
+# -- measuring with every option the drawing takes -------------------------
+#
+# [textHeight] and [textLines] take the option list [text] takes, so ONE list
+# serves the measurement and the drawing. What only the drawing uses -
+# -align, -rotate, -tag - is accepted and changes nothing; -height is
+# ignored, because the height of the whole block is what the call answers.
+# The list below is deliberately the long one: two indents and a first-line
+# indent, paragraph spacing, an avoided shape with a margin, -anchor top, the
+# leading and the four glyph options per call, the direction - and the answer
+# is exactly what [text] then advances by.
+set y [expr {$y + 27}]
+$doc font -family helvetica -style bold -size 10
+$doc text "Measured before drawing, with the same options" -at [list 20 $y]
+set y [expr {$y + 5}]
+
+set note "Measured with the same list the drawing takes: indents on both\
+    sides, a first-line indent, room between the paragraphs, a shape the\
+    text keeps clear of, and the top edge as the anchor.\n\nThe second\
+    paragraph is there for the paragraph spacing to have something to space."
+set options [list -width 100 -align justify -anchor top -indent 3 \
+    -indentRight 3 -firstIndent 5 -paragraphSpacing 1.5 -leading 9 -tag P \
+    -rotate 0 -at [list 20 $y] -avoid [list [list rect [list 20 $y] {16 8}]] \
+    -avoidMargin 1.5 -spacing 0.1 -wordSpacing 0.3 -stretch 96 -direction ltr]
+$doc font -style {} -size 7
+set needed [$doc textHeight $note {*}$options]
+set lines [llength [$doc textLines $note {*}$options]]
+# -height is ignored by the measurement: the answer is the whole block.
+set same [$doc textHeight $note {*}$options -height 5]
+
+$doc rect -at [list 20 $y] -size {16 8} -fill {0.9 0.92 0.95} \
+    -stroke {0.7 0.75 0.85} -width 0.2
+set below [$doc text $note {*}$options]
+
+# The width of a line, with the options that change it: letter spacing, word
+# spacing, horizontal scaling - and the direction, which does not, because a
+# line is as wide whichever way it runs.
+$doc font -size 7
+set plain [$doc textWidth "Crustose lichens"]
+set spaced [$doc textWidth "Crustose lichens" -spacing 0.5 -wordSpacing 2]
+set narrow [$doc textWidth "Crustose lichens" -stretch 80 -direction ltr]
+set y [$doc text "textHeight said [format %.1f $needed] mm ([format %.1f $same]\
+    with -height, which it ignores), textLines counted $lines lines, and text\
+    advanced by [format %.1f [expr {$below - $y}]] mm." \
+    -at [list 128 $y] -width 62 -anchor top -leading 8.5]
+$doc text "textWidth: [format %.1f $plain] mm plain, [format %.1f $spaced]\
+    with -spacing 0.5 -wordSpacing 2, [format %.1f $narrow] at -stretch 80 -\
+    and the same in either -direction." \
+    -at [list 128 [expr {$y + 2}]] -width 62 -anchor top -leading 8.5
 
 # The family has to be named here: this page ends with ZapfDingbats selected,
 # and a footer inheriting it comes out as a row of symbols - present in the

@@ -283,4 +283,53 @@ test textPath-4.2 {a refused run leaves no bracket open in a tagged document} -b
   list $wrong [regexp -all {BDC} $stream] [regexp -all {EMC} $stream]
 } -result {{} 1 1}
 
+# --- the spellings and the font options ---------------------------------------
+
+test textPath-6.1 {-align centre is -align center} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc textPath "ABC" -segments {{move 20 100} {line 120 100}} \
+      -family helvetica -size 12 -align center
+  set center [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc]] 0]
+  $doc page add
+  $doc textPath "ABC" -segments {{move 20 100} {line 120 100}} \
+      -family helvetica -size 12 -align centre
+  set centre [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  # The same start, and neither of them the start of the path.
+  list [expr {abs($center - $centre) < 0.001}] \
+      [expr {$center > 20 * 72 / 25.4 + 10}]
+} -result {1 1}
+
+test textPath-6.2 {-tag names the element the run becomes} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc textPath "xy" -segments {{move 10 10} {line 90 10}} -tag H2
+  set heading [::tclpdfTest::content $doc]
+  $doc page add
+  $doc textPath "xy" -segments {{move 10 10} {line 90 10}} -tag Artifact
+  set artifact [::tclpdfTest::content $doc]
+  $doc destroy
+  # One bracket around the whole run either way: a heading with a marked
+  # content id, an artifact without one.
+  list [regexp -all {/H2 <</MCID} $heading] [regexp -all {MCID} $artifact] \
+      [regexp -all {/Artifact <<[^>]*>> BDC} $artifact]
+} -result {1 0 1}
+
+test textPath-6.3 {-style and -color reach every glyph of the run} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family times -size 12
+  $doc textPath "ABC" -segments {{move 20 100} {line 120 100}} \
+      -style italic -color {0.2 0.4 0.6}
+  set stream [::tclpdfTest::content $doc]
+  set state [$doc font]
+  $doc destroy
+  # Three glyphs, each in its own text block with the face and the colour
+  # stated - and the state as it was before.
+  list [regexp -all {/FTimesItalic 12 Tf} $stream] [regexp -all {0.2 0.4 0.6 rg} $stream] \
+      [dict get $state resolved] [dict get $state color]
+} -result {3 3 Times-Roman black}
+
 cleanupTests

@@ -525,4 +525,60 @@ test pdfVersion-8.3 {a good opacity on a picture and a drawing still lands insid
   regexp -all {q\n/GS0_5b gs\n[-0-9. ]+ cm} $content
 } -result 2
 
+# --- the version given to tclpdf new itself ------------------------------------
+#
+# The gate above always creates its documents one step below a feature; here
+# the version is the subject: said on [tclpdf new], it has to reach the
+# header, cget and the writer, and the feature checks have to measure against
+# it. 1.0 also proves that a document that old is writable at all - it has to
+# be uncompressed, and its objects come out without a filter.
+
+test pdfVersion-9.1 {tclpdf new -version 1.0 writes a %PDF-1.0 file without a filter} -body {
+  set doc [tclpdf new -unit mm -compress 0 -version 1.0]
+  $doc page add
+  $doc text "x" -at {10 10}
+  set path [::tclpdfTest::scratch pdfVersion-new10.pdf]
+  $doc write $path
+  set answered [list [$doc cget -version] [[$doc writer] version]]
+  # A shading is 1.3: refused against the version the document was CREATED
+  # with, three steps below.
+  set refused [catch {$doc shading axial -at {20 20} -size {60 20} \
+      -colors {white steelblue}} message]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string range $bytes 0 7] [regexp {/Filter} $bytes] $answered \
+      $refused [string match "*needs PDF 1.3 - this document is written as PDF 1.0*" $message]
+} -result {%PDF-1.0 0 {1.0 1.0} 1 1}
+
+test pdfVersion-9.2 {tclpdf new -version 1.5, 1.6 and 1.7 each reach the header and cget} -body {
+  set result {}
+  foreach version {1.5 1.6 1.7} {
+    set doc [tclpdf new -unit mm -version $version]
+    $doc page add
+    $doc text "x" -at {10 10}
+    set path [::tclpdfTest::scratch pdfVersion-new$version.pdf]
+    $doc write $path
+    lappend result [string range [::tclpdfTest::readBytes $path] 0 7] \
+        [$doc cget -version] [[$doc writer] version]
+    file delete $path
+    $doc destroy
+  }
+  set result
+} -result {%PDF-1.5 1.5 1.5 %PDF-1.6 1.6 1.6 %PDF-1.7 1.7 1.7}
+
+test pdfVersion-9.3 {a document created at 1.5 takes a 1.5 feature and refuses a 1.6 one} -body {
+  # Sixteen bits per component are 1.5 (pdfVersion-4.3), a CFF face is 1.6
+  # (pdfVersion-3.3): the created version is the measure for both, so the
+  # first passes and the second is refused naming 1.5.
+  set doc [tclpdf new -unit mm -version 1.5]
+  $doc page add
+  $doc image embed deep -data [::tclpdfTest::png 1 1 16 0 [binary format cuSu 0 0x4000]]
+  set accepted [catch {$doc image place deep -at {10 10} -width 20}]
+  set refused [catch {$doc font embed cff $otf} message]
+  $doc destroy
+  list $accepted $refused \
+      [string match "*needs PDF 1.6 - this document is written as PDF 1.5*" $message]
+} -constraints haveFonts -result {0 1 1}
+
 cleanupTests

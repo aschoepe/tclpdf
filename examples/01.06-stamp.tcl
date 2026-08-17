@@ -110,6 +110,14 @@ $doc text "This sheet is readable through the stamp - that is what the low\
 
 diagonalStamp $doc "DRAFT"
 
+# What the stamp actually wrote, read off the page rather than assumed:
+# [page content] is the content stream built so far, as text, and its last
+# operator has to be the Q that closes the stamp's save - an opacity left in
+# force would tint everything drawn after it. Reading the stream is the only
+# way to see a graphics state that leaks.
+set last [lindex [split [string trim [$doc page content]] \n] end]
+puts "  the DRAFT stamp ends on \"$last\" - its opacity does not leak"
+
 # -- the same recipe, other words and colours ------------------------------
 
 # [configure] changes the document defaults from here on: every page added
@@ -122,8 +130,31 @@ $doc font -family helvetica -style bold -size 13
 $doc text "A5 landscape, same call" -at {15 20}
 diagonalStamp $doc "PAID" -color {0.2 0.55 0.25} -opacity 0.25 -share 0.5
 
+# And a label, 88 by 55 mm - a size no format name covers. The names are
+# [tclpdf formats]; anything else is a pair of numbers in the document unit,
+# and a pair is taken as it stands, so the landscape configured above does
+# not turn it. The label printer takes it long side first, and the page is
+# stored that way; -rotate 90 is the note to a reader to show it turned.
+# /Rotate changes the display, not the content: the stamp is drawn into the
+# 88 by 55 mm page as before.
+puts "  named formats: [join [tclpdf formats] {, }]"
+$doc page add -format {88 55} -rotate 90
+diagonalStamp $doc "COPY" -color {0.25 0.35 0.65} -opacity 0.3 -share 0.7
+
 exampleFooter $doc
 
 $doc write $target
 puts "  written: $target ([file size $target] bytes), [$doc page count] page(s)"
+# Every page as it came out, read back with an index: [page size] and
+# [page content] answer for the current page without one, and for any page
+# with one. The stamp sits between save and restore on each of them, so the
+# q and Q of every stream have to balance.
+for {set i 0} {$i < [$doc page count]} {incr i} {
+    lassign [$doc page size $i] width height
+    set stream [$doc page content $i]
+    set saves [regexp -all -line {^q$} $stream]
+    set restores [regexp -all -line {^Q$} $stream]
+    puts [format "  page %d: %.0f x %.0f mm, %d save/%d restore" \
+        $i $width $height $saves $restores]
+}
 $doc destroy

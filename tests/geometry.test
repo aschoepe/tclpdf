@@ -11,6 +11,8 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf::geometry
+package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
 
 proc geometryRound {values {digits 2}} {
   return [lmap value $values {format %.*f $digits $value}]
@@ -155,5 +157,63 @@ test geometry-9.3 {a named format follows the orientation} -body {
   $doc destroy
   list $portrait $landscape
 } -result {{210.0 297.0} {297.0 210.0}}
+
+# -- transform: the cm each option produces --------------------------------------
+#
+# Read off the content stream, because the matrix is the whole effect: the
+# option is one call, and the six numbers after it are what a reader applies.
+
+test geometry-transform-10.1 {-translate moves in document units, y mirrored} -body {
+  # 10 mm right and 20 mm DOWN the page: e is +28.35 pt, f is -56.69 pt,
+  # because PDF's y points up. Getting the sign wrong moves the shape up.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -translate {10 20}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {^([-0-9. ]+) cm$} [string trim $stream] -> matrix
+  geometryRound $matrix
+} -result {1.00 0.00 0.00 1.00 28.35 -56.69}
+
+test geometry-transform-10.2 {-skew {a b}: the first angle is b of the matrix, the second is c} -body {
+  # tan(10 deg) = 0.1763, tan(20 deg) = 0.3640. The first tilts vertically -
+  # y follows x, that is the b component - and the second horizontally,
+  # the c component: swapped, an italic-looking stamp leans up instead of
+  # over.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -skew {10 20}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {^([-0-9. ]+) cm$} [string trim $stream] -> matrix
+  geometryRound $matrix 4
+} -result {1.0000 0.1763 0.3640 1.0000 0.0000 0.0000}
+
+test geometry-transform-10.3 {-scale {sx sy} scales the axes apart, one factor both alike} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -scale {2 0.5}
+  $doc transform -scale 3
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  lmap line [split [string trim $stream] \n] {
+    regexp {^([-0-9. ]+) cm$} $line -> matrix
+    geometryRound $matrix
+  }
+} -result {{2.00 0.00 0.00 0.50 0.00 0.00} {3.00 0.00 0.00 3.00 0.00 0.00}}
+
+test geometry-transform-10.4 {-translate, -skew and -scale together, in the order the manual states} -body {
+  # translate, then skew, then scale - applied to the points in that order,
+  # so the displacement goes through the skew and the scale as well: e is
+  # 28.35 doubled, f is -56.69 skewed by tan(10 deg) times 28.35 and then
+  # doubled. Measured, and held here so that a change of the order shows.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -translate {10 20} -skew {10 0} -scale {2 2}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {^([-0-9. ]+) cm$} [string trim $stream] -> matrix
+  geometryRound $matrix
+} -result {2.00 0.35 0.00 2.00 56.69 -103.39}
 
 cleanupTests

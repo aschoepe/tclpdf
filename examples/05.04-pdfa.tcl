@@ -66,6 +66,11 @@ $doc info Title "Calibration certificate 2026-114 – Prüflabor Bochum"
 $doc info Author "Alexander Schoepe"
 $doc info Subject "Thickness gauge, annual calibration"
 $doc info Keywords "calibration, ISO 2360, archival"
+# Creator is the application that made the document, Producer the library
+# that wrote the file. The second is filled in by the package and can be read
+# back; the first is ours to say.
+$doc info Creator "Calibration laboratory certificate writer"
+puts "  produced by: [$doc info Producer]"
 
 # The language belongs to an archival document as much as the fonts do: it is
 # what tells a reader how to pronounce the text and how to hyphenate it.
@@ -124,7 +129,18 @@ $doc line -from {20 178} -to {90 178} -stroke {0.4 0.4 0.4} -width 0.3
 # version to match and produces the XMP packet. Everything it needs about the
 # document - which fonts were used, which title was set - it reads back out of
 # the document itself rather than being told twice.
-$doc pdfa -part 3 -conformance U -profile $profile
+#
+# Level B is the default and is said explicitly here, as the least a PDF/A
+# document claims. -identifier names the output condition in the intent; left
+# out it is read from the profile's desc tag, and for the shipped profile it
+# is the customary registry name given here anyway - so the line shows where
+# the name comes from without changing the file.
+$doc pdfa -part 3 -conformance B -profile $profile -identifier "sRGB IEC61966-2.1"
+
+# A claim can be raised afterwards: the second call keeps part, profile and
+# identifier and changes only the level - the way an invoice goes from the 3B
+# that [zugferd] fixes to 3U. It is U from here on, so the check below is 3u.
+$doc pdfa -conformance U
 
 # A property of our own in the XMP packet. PDF/A admits metadata only from
 # schemas the packet itself describes (ISO 19005-2, 6.6.2.3.1), so the schema
@@ -156,14 +172,26 @@ $doc pdfa extension {<rdf:Description rdf:about="" xmlns:cal="urn:example:calibr
   <cal:Laboratory>Calibration laboratory, Bochum</cal:Laboratory>
 </rdf:Description>}
 
-# What was declared, read back rather than repeated from above.
+# What was declared, read back rather than repeated from above: the level,
+# the profile, the identifier, how many extension blocks were added, and
+# whether the claim is registered with the writer - which it is from the
+# first [pdfa] call on.
 set state [$doc pdfa state]
 puts "  PDF/A-[dict get $state part][dict get $state conformance],\
-    intent from [file tail [dict get $state profile]]"
+    intent from [file tail [dict get $state profile]]\
+    as \"[dict get $state identifier]\""
+puts "  extension blocks: [llength [dict get $state extensions]],\
+    registered: [dict get $state registered]"
 
 exampleFooter $doc face
 
+# [metadata] answers the XMP packet as the writer built it - empty before the
+# first write, and rebuilt on every write from the document's current title,
+# language and declarations. A caller may also SET a packet with it; then it
+# is kept as given, which PDF/A profiles with prescribed wording rely on.
+puts "  metadata before the write: [expr {[$doc metadata] eq {} ? {none yet} : {present}}]"
 $doc write $target
+puts "  metadata after the write: [string length [$doc metadata]] bytes, xpacket wrapper included"
 $doc destroy
 
 # The XMP packet is built during [write], not before it - so this is where it

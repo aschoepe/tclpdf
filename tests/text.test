@@ -1049,5 +1049,77 @@ test text-direction-13.10 {the sum of the gaps is what the line measures} \
   expr {abs($total + 2 * 1000.0 * 3 / 14) < 0.001}
 } -result 1
 
+# --- the per-call spellings and overrides ------------------------------------
+
+test text-14.1 {-align centre is -align center} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc text "Rechnung" -at {100 50} -align center
+  $doc text "Rechnung" -at {100 60} -align centre
+  set starts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  lassign $starts center centre
+  # The same x - and neither of them the anchor itself, which -align left
+  # would give.
+  list [expr {abs($center - $centre) < 0.001}] \
+      [expr {abs($center - 100 * 72 / 25.4) > 5}]
+} -result {1 1}
+
+test text-14.2 {-anchor baseline given explicitly is the default} -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc text "X" -at {100 700} -anchor baseline
+  $doc text "X" -at {100 700}
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  lassign $ys stated default
+  list [expr {abs($stated - $default) < 0.001}] [llength $ys]
+} -result {1 2}
+
+test text-14.3 {-style per call picks the variant and leaves the state alone} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family times -size 10
+  $doc text "bold" -at {20 20} -style bold
+  $doc text "cursive" -at {20 30} -style italic
+  $doc text "plain" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  set state [$doc font]
+  $doc destroy
+  list [regexp {/FTimesBold 10 Tf} $content] [regexp {/FTimesItalic 10 Tf} $content] \
+      [regexp -all {/FTimesRoman 10 Tf} $content] [dict get $state style] \
+      [dict get $state resolved]
+} -result {1 1 1 {} Times-Roman}
+
+test text-14.4 {-leading per call sets the advance of that paragraph only} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10 -leading 12
+  set text "eins zwei drei vier fuenf sechs sieben acht neun zehn"
+  $doc text $text -at {20 30} -width 30 -leading 20
+  set wide [::tclpdfTest::steps [::tclpdfTest::starts [::tclpdfTest::content $doc] y]]
+  $doc page add
+  $doc text $text -at {20 30} -width 30
+  set plain [::tclpdfTest::steps [::tclpdfTest::starts [::tclpdfTest::content $doc] y]]
+  set state [$doc font]
+  $doc destroy
+  list [lsort -unique $wide] [lsort -unique $plain] [dict get $state leading]
+} -result {20.00 12.00 12}
+
+test text-14.5 {textWidth takes -style and -stretch} -body {
+  set doc [tclpdf new -unit mm]
+  $doc font -family helvetica -size 12
+  set plain [$doc textWidth "Rechnung"]
+  set bold [$doc textWidth "Rechnung" -style bold]
+  set narrow [$doc textWidth "Rechnung" -stretch 50]
+  set state [$doc font]
+  $doc destroy
+  # Bold Helvetica is wider than regular; half the horizontal scale is half
+  # the width; and neither call changed the state.
+  list [expr {$bold > $plain}] [expr {abs($narrow * 2 - $plain) < 0.001}] \
+      [dict get $state style] [dict get $state stretch]
+} -result {1 1 {} 100}
 
 cleanupTests

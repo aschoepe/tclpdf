@@ -745,4 +745,22 @@ test svg-9.1 {svg size is the natural size in the document unit, and follows the
       [format %.2f [expr {$height - $hmm}]]
 } -result [list 1 [format %.3f [expr {72 / 25.4}]] [format %.3f [expr {72 / 25.4}]] 0.00]
 
+# -- svg -scale ---------------------------------------------------------------
+
+test svg-10.1 {-scale multiplies the drawing's own size} -body {
+  # A 40 by 20 drawing at -scale 0.5 is 20 by 10 in points, and the cm that
+  # maps the viewBox says so: the factor is 0.5, and the returned extent is
+  # half the natural one in the document unit.
+  set markup {<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"
+      viewBox="0 0 40 20"><rect width="40" height="20" fill="red"/></svg>}
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set natural [$doc svg -data $markup -at {0 0}]
+  set scaled [$doc svg -data $markup -at {0 0} -scale 0.5]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set factors [lmap {- a} [regexp -all -inline {([-0-9.]+) 0 0 [-0-9.]+ [-0-9.]+ [-0-9.]+ cm} $stream] {set a}]
+  list [lrange $natural 2 3] [lrange $scaled 2 3] $factors
+} -result {{40.0 20.0} {20.0 10.0} {1 0.5}}
+
 cleanupTests

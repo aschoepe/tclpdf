@@ -51,7 +51,12 @@ $doc page add
 # are found in the content. Both arrive here as the same thing.
 $doc font embed ocrb [file join $assets fonts tsukurimashou OCRB.pfb]
 $doc font embed sans [file join $urw NimbusSans-Regular.t1]
-$doc font embed serif [file join $urw NimbusRoman-Regular.t1]
+# The widths come from the AFM. Without -metrics the file with the same base
+# name and ".afm" is taken; -metrics names it where it sits elsewhere or is
+# called differently. Here it sits beside the program, and the option says so
+# out loud.
+$doc font embed serif [file join $urw NimbusRoman-Regular.t1] \
+    -metrics [file join $urw NimbusRoman-Regular.afm]
 
 # The same face as TrueType, for the comparison further down.
 $doc font embed sansTT [file join $urw NimbusSans-Regular.ttf]

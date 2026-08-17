@@ -748,4 +748,49 @@ test ua-13.2 {other preferences after the claim leave it standing} \
   list $code [regexp {/DisplayDocTitle true} $bytes] [regexp {/FitWindow true} $bytes]
 } -result {0 1 1}
 
+# --- reuse alone, and what state reports -----------------------------------
+
+test ua-14.1 {-wtpdf reuse writes the reuse declaration and not the other} \
+    -constraints haveFace -body {
+  # ua-6.1 covers accessibility; reuse is the other level of WTPDF 6.1.2, and
+  # a document that claims it has not claimed accessibility.
+  set doc [accessible $face]
+  $doc ua -part 2 -wtpdf reuse
+  set path [::tclpdfTest::scratch ua-wtpdf-reuse.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {declarations/wtpdf/#reuse1\.0} $bytes] \
+      [regexp {declarations/wtpdf#reuse1\.0} $bytes] \
+      [regexp {accessibility1\.0} $bytes]
+} -result {1 1 0}
+
+test ua-14.2 {ua state carries the levels asked for and whether the claim is registered} \
+    -constraints haveFace -body {
+  # registered is what tells a second call from the first: the catalog and
+  # XMP subscribers are added once, and the state says that they have been.
+  set doc [accessible $face]
+  set before [$doc ua state]
+  set state [$doc ua -part 2 -wtpdf {reuse accessibility}]
+  set again [$doc ua -part 2 -revision 2024]
+  set read [$doc ua state]
+  $doc destroy
+  list $before [dict get $state wtpdf] [dict get $state registered] \
+      [dict get $again wtpdf] [dict get $again registered] \
+      [dict get $read wtpdf] [dict get $read registered] \
+      [lsort [dict keys $read]]
+} -result {{} {reuse accessibility} 1 {reuse accessibility} 1 {reuse accessibility} 1\
+    {part registered revision wtpdf}}
+
+test ua-14.3 {without -wtpdf the state says so, and ua 1 has no levels either} -body {
+  set doc [tclpdf new]
+  set two [$doc ua -part 2]
+  $doc destroy
+  set doc [tclpdf new]
+  set one [$doc ua 1]
+  $doc destroy
+  list [dict get $two wtpdf] [dict get $one wtpdf] [dict get $one registered]
+} -result {{} {} 1}
+
 cleanupTests

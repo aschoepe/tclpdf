@@ -1238,4 +1238,88 @@ test textFlow-7.7 {an avoided shape with a value that is not a number is refused
   set codes
 } -result {1 1 1 1 1 1}
 
+# --- the measuring calls take what text takes ---------------------------------
+#
+# The manual promises one option list for measuring and drawing. What only
+# the drawing uses has to be accepted and change nothing; what the layout
+# uses has to change the answer exactly as it changes the drawing.
+
+test textFlow-8.1 {textHeight accepts -rotate, -tag and -height and none of them changes the answer} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set plain [$doc textHeight $::flowBody -width 60]
+  set results {}
+  foreach options {{-rotate 30} {-tag H1} {-height 10} {-at {20 30}}} {
+    lappend results [expr {[$doc textHeight $::flowBody -width 60 {*}$options] == $plain}]
+  }
+  # And -height is really ignored rather than honoured: 10 mm hold two lines
+  # of this block, the block itself is seven.
+  set drawn [$doc text $::flowBody -at {20 30} -width 60 -height 10]
+  $doc destroy
+  list $results [expr {$plain > 25}] [expr {[dict get $drawn rest] ne {}}]
+} -result {{1 1 1 1} 1 1}
+
+test textFlow-8.2 {textHeight with -at, -avoid and -avoidMargin measures the pushed lines} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set shape {{rect {20 35} {30 10}}}
+  set plain [$doc textHeight $::flowBody -width 60]
+  set avoided [$doc textHeight $::flowBody -width 60 -at {20 30} -avoid $shape]
+  set held [$doc textHeight $::flowBody -width 60 -at {20 30} -avoid $shape -avoidMargin 5]
+  # The same three, drawn: the height is what [text] advances by.
+  set drawn {}
+  foreach options [list {} [list -avoid $shape] [list -avoid $shape -avoidMargin 5]] {
+    lappend drawn [expr {[$doc text $::flowBody -at {20 30} -width 60 {*}$options] - 30}]
+  }
+  $doc destroy
+  list [expr {$avoided > $plain}] [expr {$held > $avoided}] \
+      [lmap a [list $plain $avoided $held] b $drawn {expr {abs($a - $b) < 0.001}}]
+} -result {1 1 {1 1 1}}
+
+test textFlow-8.3 {textLines takes -align, -firstIndent, -avoid, -avoidMargin and -anchor} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set plain [$doc textLines $::flowBody -width 60]
+  # -align changes nothing about where a line breaks.
+  set justified [$doc textLines $::flowBody -width 60 -align justify]
+  # A first indent takes room from the first line only.
+  set indented [$doc textLines $::flowBody -width 60 -firstIndent 15]
+  # A shape narrows the lines it reaches into, a margin narrows them further.
+  set shape {{rect {20 35} {30 10}}}
+  set avoided [$doc textLines $::flowBody -width 60 -at {20 30} -avoid $shape]
+  set held [$doc textLines $::flowBody -width 60 -at {20 30} -avoid $shape -avoidMargin 5]
+  # A shape on the top edge narrows the first line with -anchor top, and not
+  # with the baseline anchor, where the first line stands above the edge.
+  set edge {{rect {20 30} {30 5}}}
+  set fromTop [$doc textLines $::flowBody -width 60 -at {20 30} -avoid $edge -anchor top]
+  set fromBase [$doc textLines $::flowBody -width 60 -at {20 30} -avoid $edge -anchor baseline]
+  $doc destroy
+  list [expr {$justified eq $plain}] \
+      [expr {[string length [lindex $indented 0]] < [string length [lindex $plain 0]]}] \
+      [expr {[lindex $indented 1] ne [lindex $plain 1]}] \
+      [expr {[llength $avoided] > [llength $plain]}] \
+      [expr {[llength $held] > [llength $avoided]}] \
+      [expr {[lindex $fromTop 0] ne [lindex $plain 0]}] \
+      [expr {[lindex $fromBase 0] eq [lindex $plain 0]}]
+} -result {1 1 1 1 1 1 1}
+
+test textFlow-8.4 {textLines takes -direction, and needs it for a right-to-left paragraph} \
+    -constraints haveFlowFont -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed face $::flowFont
+  $doc font -family face -size 10
+  set text "שלום עולם ברוכים הבאים שלום עולם ברוכים הבאים"
+  set refused [catch {$doc textLines $text -width 40} message]
+  set lines [$doc textLines $text -width 40 -direction rtl]
+  $doc destroy
+  # Broken into lines, each of them the string as it was given - the
+  # reordering is a matter of the drawing, not of the breaking.
+  list $refused [string match {*-direction rtl*} $message] [llength $lines] \
+      [lindex $lines 0]
+} -result {1 1 2 {שלום עולם ברוכים הבאים}}
+
 cleanupTests

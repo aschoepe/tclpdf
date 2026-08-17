@@ -946,4 +946,172 @@ test zugferd-9.2 {zugferd profile on the document reads BT-24 without attaching 
   list $profile $state
 } -result {{EN 16931} {}}
 
+# -- pdfa -identifier and pdfa state -----------------------------------------
+
+test zugferd-10.1 {-identifier overrides the profile's own name in the output intent} \
+    -constraints haveInvoice -body {
+  # The shipped profile is named "sRGB IEC61966-2.1" unless told otherwise
+  # (zugferd-7.9); an explicit identifier goes into both keys of the intent.
+  set doc [archivable $face]
+  set state [$doc pdfa -part 3 -identifier "Archive RGB"]
+  set path [::tclpdfTest::scratch pdfa-identifier.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [dict get $state identifier] \
+      [regexp {/OutputConditionIdentifier \(Archive RGB\)} $bytes] \
+      [regexp {/Info \(Archive RGB\)} $bytes] \
+      [regexp {sRGB IEC61966-2\.1} $bytes]
+} -result {{Archive RGB} 1 1 0}
+
+test zugferd-10.2 {pdfa state answers every key, and extensions collects what was added} \
+    -constraints haveInvoice -body {
+  set doc [archivable $face]
+  set before [$doc pdfa state]
+  set first [$doc pdfa -part 3]
+  set schema {<rdf:Description rdf:about="" xmlns:x="urn:example:x#"><x:a>1</x:a></rdf:Description>}
+  $doc pdfa extension $schema
+  set state [$doc pdfa state]
+  $doc destroy
+  list $before [lsort [dict keys $state]] \
+      [dict get $first identifier] [dict get $first extensions] \
+      [dict get $first registered] \
+      [dict get $state extensions] [dict get $state registered]
+} -result [list {} {conformance extensions identifier part profile registered} \
+    {} {} 1 [list {<rdf:Description rdf:about="" xmlns:x="urn:example:x#"><x:a>1</x:a></rdf:Description>}] 1]
+
+test zugferd-10.3 {a second pdfa call keeps the identifier and the extensions, registered stays 1} \
+    -constraints haveInvoice -body {
+  # zugferd itself does this: pdfa -part 3, then pdfa -profile, then two
+  # extensions - each call reads the state back and adds to it.
+  set doc [archivable $face]
+  $doc pdfa -part 3 -identifier "Archive RGB"
+  $doc pdfa extension {<rdf:Description rdf:about="" xmlns:x="urn:example:x#"><x:a>1</x:a></rdf:Description>}
+  set state [$doc pdfa -conformance U]
+  $doc destroy
+  list [dict get $state identifier] [llength [dict get $state extensions]] \
+      [dict get $state registered] [dict get $state conformance]
+} -result {{Archive RGB} 1 1 U}
+
+# -- the zugferd options -----------------------------------------------------
+
+test zugferd-11.1 {each of the four names is written to the filespec, the name tree and the XMP} \
+    -constraints haveInvoice -body {
+  set result {}
+  foreach name {factur-x.xml zugferd-invoice.xml xrechnung.xml order-x.xml} {
+    set doc [archivable $face]
+    $doc zugferd $invoice -name $name
+    set path [::tclpdfTest::scratch zugferd-name.pdf]
+    $doc write $path
+    set state [$doc zugferd state]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend result [list [dict get $state name] \
+        [regexp "/F \\($name\\) /UF \\($name\\)" $bytes] \
+        [regexp "/EmbeddedFiles << /Names \\\[\\($name\\) \\d+ 0 R\\\]" $bytes] \
+        [regexp "<fx:DocumentFileName>$name</fx:DocumentFileName>" $bytes]]
+  }
+  return $result
+} -result {{factur-x.xml 1 1 1} {zugferd-invoice.xml 1 1 1} {xrechnung.xml 1 1 1} {order-x.xml 1 1 1}}
+
+test zugferd-11.2 {-type goes verbatim into fx:DocumentType, ORDER for an Order-X file} \
+    -constraints haveInvoice -body {
+  set doc [archivable $face]
+  $doc zugferd $invoice -name order-x.xml -type ORDER
+  set path [::tclpdfTest::scratch zugferd-order.pdf]
+  $doc write $path
+  set order [$doc zugferd state]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set doc [archivable $face]
+  $doc zugferd $invoice -type INVOICE
+  set second [::tclpdfTest::scratch zugferd-invoice.pdf]
+  $doc write $second
+  $doc destroy
+  set again [::tclpdfTest::readBytes $second]
+  file delete $second
+  list [dict get $order type] \
+      [regexp {<fx:DocumentType>ORDER</fx:DocumentType>} $bytes] \
+      [regexp {<fx:DocumentType>INVOICE</fx:DocumentType>} $bytes] \
+      [regexp {<fx:DocumentType>INVOICE</fx:DocumentType>} $again]
+} -result {ORDER 1 0 1}
+
+test zugferd-11.3 {-profile overrides BT-24, and the relationship follows the override} \
+    -constraints haveInvoice -body {
+  # The XML says EN 16931; each override is returned, written as
+  # fx:ConformanceLevel with its space, and decides the /AFRelationship the
+  # way the profile read from the file would.
+  set result {}
+  foreach {profile relationship} {
+    MINIMUM Data {BASIC WL} Data BASIC Alternative {EN 16931} Alternative
+    EXTENDED Alternative
+  } {
+    set doc [archivable $face]
+    set returned [$doc zugferd $invoice -profile $profile]
+    set path [::tclpdfTest::scratch zugferd-profile.pdf]
+    $doc write $path
+    set state [$doc zugferd state]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend result [list $returned [dict get $state profile] \
+        [regexp "<fx:ConformanceLevel>$profile</fx:ConformanceLevel>" $bytes] \
+        [regexp "/AFRelationship /$relationship " $bytes] \
+        [regexp "/Desc \\($profile invoice data\\)" $bytes]]
+  }
+  return $result
+} -result {{MINIMUM MINIMUM 1 1 1} {{BASIC WL} {BASIC WL} 1 1 1} {BASIC BASIC 1 1 1}\
+    {{EN 16931} {EN 16931} 1 1 1} {EXTENDED EXTENDED 1 1 1}}
+
+test zugferd-11.4 {-version is the fx:Version written, -description replaces the Desc} \
+    -constraints haveInvoice -body {
+  set doc [archivable $face]
+  $doc zugferd $invoice -version 2.3 -description "Rechnung 4711"
+  set path [::tclpdfTest::scratch zugferd-version.pdf]
+  $doc write $path
+  set state [$doc zugferd state]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [dict get $state version] \
+      [regexp {<fx:Version>2\.3</fx:Version>} $bytes] \
+      [regexp {<fx:Version>1\.0</fx:Version>} $bytes] \
+      [regexp {/Desc \(Rechnung 4711\)} $bytes] \
+      [regexp {invoice data} $bytes]
+} -result {2.3 1 0 1 0}
+
+test zugferd-11.5 {-compress is off by default and Flate-compresses the XML when asked} \
+    -constraints haveInvoice -body {
+  # Off: the invoice sits in the file byte for byte, and its stream carries
+  # no filter. On: the stream is FlateDecode, /Params /Size still gives the
+  # uncompressed length, and the XML text is not to be found.
+  set result {}
+  foreach compress {0 1} {
+    set doc [archivable $face]
+    $doc zugferd $invoice -compress $compress
+    set path [::tclpdfTest::scratch zugferd-compress-$compress.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    regexp {<< /Type /EmbeddedFile [^\n]*>>} $bytes stream
+    lappend result [list [regexp {/Filter /FlateDecode} $stream] \
+        [regexp "/Size [file size $invoice] " $stream] \
+        [regexp {<rsm:CrossIndustryInvoice} $bytes]]
+  }
+  # A plain [zugferd] without the option is the 0 case.
+  set doc [archivable $face]
+  $doc zugferd $invoice
+  set path [::tclpdfTest::scratch zugferd-compress-default.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lappend result [regexp {<rsm:CrossIndustryInvoice} $bytes]
+  return $result
+} -result {{0 1 1} {1 1 0} 1}
+
 cleanupTests

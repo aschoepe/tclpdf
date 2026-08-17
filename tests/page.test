@@ -396,4 +396,54 @@ test page-typeArea-7.5 {typeArea is among the page subcommands the error names} 
   list $code [regexp {known are: add, count, current, size, box, typeArea, content} $message]
 } -result {1 1}
 
+# -- the index argument of page size and page box ------------------------------
+#
+# Both answer for the CURRENT page without one; with an index they answer for
+# that page, whichever is current. Measured on a document whose pages differ,
+# so that the wrong page would show.
+
+test page-index-8.1 {page size index answers the page asked for, not the current one} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add -format a4
+  $doc page add -format a5 -orientation landscape
+  $doc page add -format {88 55}
+  set sizes [lmap i {0 1 2} {lmap v [$doc page size $i] {format %.0f $v}}]
+  set current [lmap v [$doc page size] {format %.0f $v}]
+  set code [catch {$doc page size 3} message]
+  $doc destroy
+  list $sizes $current $code [string match {*no such page: 3*} $message]
+} -result {{{210 297} {210 148} {88 55}} {88 55} 1 1}
+
+test page-index-8.2 {page box with an index reads and sets a box on another page} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add -format a4
+  $doc page add -format a5
+  # Setting on page 0 while page 1 is current: the value comes before the
+  # index, and an empty value with an index is a read.
+  $doc page box crop {10 10 200 287} 0
+  set first [lmap v [$doc page box crop {} 0] {format %.0f $v}]
+  set second [$doc page box crop {} 1]
+  set current [$doc page box crop]
+  set media [lmap v [$doc page box media {} 0] {format %.0f $v}]
+  $doc destroy
+  list $first $second $current $media
+} -result {{10 10 200 287} {} {} {0 0 210 297}}
+
+test page-index-8.3 {a box set with an index lands on that page in the file} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc page add
+  $doc page box trim {20 20 190 277} 0
+  set path [::tclpdfTest::scratch page-index-trim.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # One TrimBox in the whole file, and it sits in the object of the first
+  # page: /Type /Page objects are written in page order.
+  set pages [regexp -all -inline {<<[^>]*/Type /Page\M[^>]*>>} $bytes]
+  list [regexp -all {/TrimBox} $bytes] \
+      [regexp {/TrimBox} [lindex $pages 0]] [regexp {/TrimBox} [lindex $pages 1]]
+} -result {1 1 0}
+
 cleanupTests

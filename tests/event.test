@@ -13,6 +13,8 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf::event
+package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
 
 # A subscriber records what it was called with, so order and arguments can be
 # checked without any PDF being involved.
@@ -160,5 +162,99 @@ test event-off-5.3 {an unknown token is not an error} -body {
   $doc destroy
   set code
 } -result 0
+
+# -- the document's own events: beforeWrite, afterWrite, pageAdded --------------
+#
+# The bus itself is tested above; here the three events the manual names
+# that no other test file listens to. What is checked is when they fire,
+# what they carry, and that a subscriber's work reaches the file - beforeWrite
+# runs before the pages are written, so a mark drawn there has to be in them.
+
+test event-document-6.1 {pageAdded fires after every page add, with the new index} -body {
+  set ::eventLog {}
+  set doc [tclpdf new]
+  $doc on pageAdded eventRecord
+  $doc page add
+  $doc page add -format a5
+  set logged $::eventLog
+  # The subscriber sees a document that already HAS the page: the count is
+  # what the index says plus one, at each call.
+  set ::eventLog {}
+  $doc on pageAdded [list apply {{doc index} {
+    lappend ::eventLog [list $index [$doc page count] [$doc page current]]
+  }}]
+  $doc page add
+  # Both subscribers ran for the third page, in registration order: the
+  # recorder first, then the one that looks at the document.
+  set seen $::eventLog
+  $doc destroy
+  list [lmap entry $logged {list [expr {[lindex $entry 0] eq $doc}] [lindex $entry 1]}] \
+      [lindex $seen 0 1] [lindex $seen 1]
+} -result {{{1 0} {1 1}} 2 {2 3 2}}
+
+test event-document-6.2 {pageAdded fires for the pages a breaking text adds as well} -body {
+  set ::eventLog {}
+  set doc [tclpdf new -unit mm]
+  $doc on pageAdded eventRecord
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc text [string repeat "word " 1500] -at {20 20} -width 170 -paginate 1
+  set indices [lmap entry $::eventLog {lindex $entry 1}]
+  set count [$doc page count]
+  $doc destroy
+  list [expr {$count > 1}] [expr {$indices eq [lrange {0 1 2 3 4 5 6 7 8 9} 0 $count-1]}]
+} -result {1 1}
+
+test event-document-6.3 {beforeWrite and afterWrite bracket the write, in this order, with the path} -body {
+  set ::eventLog {}
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc on beforeWrite [list apply {{doc} {
+    lappend ::eventLog beforeWrite
+    # Drawn at write time: beforeWrite runs before the pages are turned into
+    # objects, so this lands in the file.
+    $doc text "written at write time" -at {20 20}
+  }}]
+  $doc on resources [list apply {{doc} {lappend ::eventLog resources}}]
+  $doc on catalog [list apply {{doc} {lappend ::eventLog catalog}}]
+  $doc on info [list apply {{doc} {lappend ::eventLog info}}]
+  $doc on afterWrite [list apply {{doc path} {lappend ::eventLog [list afterWrite $path]}}]
+  set path [::tclpdfTest::scratch event-write.pdf]
+  $doc write $path
+  set order $::eventLog
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list [lrange $order 0 3] [lindex $order 4] [llength $order] \
+      [regexp {\(written at write time\) Tj} $bytes]
+} -result [list {beforeWrite resources catalog info} [list afterWrite [::tclpdfTest::scratch event-write.pdf]] 5 1]
+
+test event-document-6.4 {writeChannel fires the same events, afterWrite with an empty path} -body {
+  set ::eventLog {}
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc on beforeWrite [list apply {{doc} {lappend ::eventLog beforeWrite}}]
+  $doc on afterWrite [list apply {{doc path} {lappend ::eventLog [list afterWrite $path]}}]
+  set path [::tclpdfTest::scratch event-channel.pdf]
+  set channel [open $path wb]
+  $doc writeChannel $channel
+  close $channel
+  set order $::eventLog
+  file delete $path
+  $doc destroy
+  set order
+} -result {beforeWrite {afterWrite {}}}
+
+test event-document-6.5 {a beforeWrite subscriber that fails stops the write, and no file appears} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc on beforeWrite [list apply {{doc} {error "not today"}}]
+  set path [::tclpdfTest::scratch event-refused.pdf]
+  set code [catch {$doc write $path} message]
+  set existed [file exists $path]
+  file delete $path
+  $doc destroy
+  list $code $message $existed
+} -result {1 {not today} 0}
 
 cleanupTests

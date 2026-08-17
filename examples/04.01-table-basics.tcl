@@ -4,9 +4,11 @@
 #
 #   tclsh examples/04.01-table-basics.tcl ?output.pdf?
 #
-# Two pages. The first: three themes, four column alignments and the two ways
-# of ruling a table. The second: the same figures written the continental way,
-# 1.234,50 instead of 1,234.50, aligned with -decimal ,
+# Three pages. The first: three themes, four column alignments and the two
+# ways of ruling a table. The second: the same figures written the continental
+# way, 1.234,50 instead of 1,234.50, aligned with -decimal , - and the four
+# values of the border key beside each other. The third: a cell that wraps, and
+# where its neighbours sit; then a form to be filled in by hand.
 #
 # The interesting alignment is the fourth: decimal.
 #
@@ -131,8 +133,10 @@ set rows {
 set head {{Size Finish Stock Unit}}
 set columns {{} {} {align right} {align decimal}}
 
+# The three names come from the document rather than being typed here: [table
+# themes] is what a caller asks when it offers the choice to a user.
 set y [expr {$y + 18}]
-foreach theme {striped grid plain} {
+foreach theme [$doc table themes] {
   $doc font -style {} -size 8
   $doc text "-theme $theme" -at [list 20 $y]
   set y [$doc table -at [list 20 [expr {$y + 4}]] -width 110 -theme $theme \
@@ -282,6 +286,35 @@ $doc table -at [list 140 [expr {$y + 32}]] -width 55 -theme plain -decimal , \
     -footStyle {fill {0.90 0.92 0.96} fontStyle bold} \
     -columns {{} {align decimal}}
 
+# -- the four cell rulings side by side -------------------------------------
+
+# The border key takes none, all, horizontal and vertical (and outer, shown on
+# page one). Four times the same two columns on the plain theme, which rules
+# nothing of its own, with lineWidth 0.3 mm so that the rules can be told apart, and
+# leading 1.4 - the line height as a factor of the size, which sets the row
+# height even where nothing wraps: it is what makes these rows airier than
+# the ones above without touching the padding. The first block has no rules at
+# all and takes -alternateFill instead: the stripe does what a rule does,
+# separates one row from the next.
+
+$doc font -style bold -size 10
+$doc text "border none, all, horizontal, vertical" -at [list 20 [expr {$y + 84}]]
+$doc font -style {} -size 8
+$doc text "The same two columns four times; the first block has -alternateFill\
+    in place of rules." -at [list 20 [expr {$y + 89}]] -width 170
+
+set x 20
+foreach border {none all horizontal vertical} {
+    $doc font -style {} -size 8
+    $doc text "border $border" -at [list $x [expr {$y + 96}]]
+    set stripe [expr {$border eq "none" ? {-alternateFill {0.93 0.93 0.95}} : {}}]
+    $doc table -at [list $x [expr {$y + 100}]] -width 40 -theme plain \
+        -style [list border $border lineWidth 0.3 leading 1.4] \
+        -head {{Size Stock}} -body {{M4x12 240} {M5x20 180} {M6x30 95}} \
+        -columns {{} {align right}} {*}$stripe
+    set x [expr {$x + 43}]
+}
+
 exampleFooter $doc
 
 # -- a cell that wraps, and where the others sit beside it ------------------
@@ -346,8 +379,43 @@ set y [$doc table -at [list 20 [expr {$y + 22}]] -width 170 -theme plain \
     -head {{Pos Description Amount}} -body $body \
     -columns {{width 16} {} {width 30 align decimal}}]
 
+# -- a form to be filled in by hand ----------------------------------------
+
+# Rows tall enough to write in: -minRowHeight is the least height a row may
+# take, for rows whose content alone would leave them shallower. border
+# horizontal gives every cell a writing line, padding 2 keeps the labels off
+# the edges, and valign says where a label sits in its tall cell - top for the
+# field a stamp goes on, middle for the date, bottom for the rest, so the
+# label stands on the line as it does on a printed form.
+#
+# -willDrawCell is asked before each cell is drawn; 0 skips it, rules and all.
+# The stamp field is left out that way: nothing is drawn where the stamp goes,
+# not even the line under it - a stamp over a rule looks like a correction.
+
+$doc font -style bold -size 10
+$doc text "A form: -minRowHeight, valign, -willDrawCell" \
+    -at [list 20 [expr {$y + 10}]]
+$doc font -style {} -size 8
+$doc text "Two rows of 10 mm; the labels sit on their writing line, the stamp\
+    field has none." -at [list 20 [expr {$y + 15}]] -width 170
+
+$doc table -at [list 20 [expr {$y + 22}]] -width 170 -theme plain \
+    -style {border horizontal lineWidth 0.2 padding 2} -minRowHeight 10 \
+    -body {
+        {{text "Collector" valign bottom} {} {text "Date" valign middle} {}}
+        {{text "Determined by" valign bottom} {} {text "Stamp" valign top}
+            {text stamp}}
+    } \
+    -columns {{width 30} {} {width 30} {width 40}} \
+    -willDrawCell {apply {{cell doc} {
+        # The stamp field: skipped entirely, so no writing line runs under
+        # a stamp. Everything else is drawn as measured.
+        expr {[dict get $cell text] ne "stamp"}
+    }}}
+
 exampleFooter $doc
 
 $doc write $target
 puts "  written: $target ([file size $target] bytes), [$doc page count] page(s)"
+puts "  themes: [join [$doc table themes] {, }]"
 $doc destroy

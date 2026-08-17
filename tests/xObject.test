@@ -385,4 +385,29 @@ test xObject-5.2 {an unknown form subcommand names the four that exist} -body {
   }
 } -returnCodes error -match glob -result {*unknown form subcommand "list"*create, place, names, size*}
 
+# -- form create -unit --------------------------------------------------------
+
+test xObject-6.1 {form create -unit reads -size in that unit} -body {
+  # A one-inch square in a millimetre document: 72 points in the BBox, and
+  # [form size] answers in the document unit. Inside the script the same
+  # unit as the page applies - a rectangle over the whole form has to say
+  # 25.4, not 1.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create inch -size {1 1} -unit in -script {
+    $doc rect -at {0 0} -size {25.4 25.4} -fill red
+  }
+  set writer [$doc writer]
+  set found {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/Subtype /Form*} [$writer body $number]]} {
+      set found [$writer body $number]
+    }
+  }
+  set size [$doc form size inch]
+  $doc destroy
+  list [lindex [regexp -inline {/BBox \[[^]]*\]} $found] 0] \
+      [lmap value $size {format %.1f $value}]
+} -result {{/BBox [0 0 72 72]} {25.4 25.4}}
+
 cleanupTests

@@ -60,11 +60,19 @@ $doc rect -at {132 60} -size {50 12} -fill {cmyk 0.9 0.2 0 0.05}
 $doc circle -at {40 100} -radius 15 -fill {1 0.6 0} -stroke black -width 0.3
 $doc ellipse -at {95 100} -size {50 30} -fill plum
 $doc polygon -points {140 115 155 85 170 115} -fill crimson -stroke black -width 0.5
+# circle and ellipse are one command under two names: -size on a circle draws
+# an ellipse, -radius on an ellipse draws a circle.
+$doc circle -at {130 100} -size {12 24} -fill {0.55 0.35 0.65}
+$doc ellipse -at {182 100} -radius 8 -fill {1 0.6 0} -stroke black -width 0.3
 
 # -- a Bezier curve ---------------------------------------------------------
 
 $doc curve -from {20 140} -c1 {60 120} -c2 {110 160} -to {150 140} \
     -stroke darkslateblue -width 1.5
+# -close joins the end back to the start, and the curve becomes a shape that
+# can be filled - a leaf out of one Bezier and a straight line.
+$doc curve -from {160 148} -c1 {170 122} -c2 {186 126} -to {190 132} -close 1 \
+    -fill {0.75 0.88 0.7} -stroke darkslateblue -width 0.5
 
 # -- dashes and line ends ---------------------------------------------------
 
@@ -159,6 +167,115 @@ $doc polygon -points {210 20 240 20 225 45} -stroke crimson -width 2
 $doc text "closed" -at {225 55} -align center -size 8
 $doc polygon -points {250 20 280 20 265 45} -stroke crimson -width 2 -close 0
 $doc text "open" -at {265 55} -align center -size 8
+
+# -- transform, one part at a time -----------------------------------------
+
+# The same square five times, each under one option of [transform] and each
+# in its own save/restore. The grey outline is where the square would be
+# without the transformation. -translate is a displacement; -scale takes one
+# factor or {sx sy}; -skew two angles, the second of which is the slant of an
+# italic-looking stamp; -matrix takes the six raw cm operands - points, origin
+# at the bottom left - and ignores every other option, for a caller who has a
+# matrix already. -at is the point to scale, turn or skew about.
+$doc font -size 6
+set y 62
+foreach {label options} [list \
+    "-translate {14 0}" {-translate {14 0}} \
+    "-scale 0.6" {-scale 0.6} \
+    "-scale {1.6 0.5}" {-scale {1.6 0.5}} \
+    "-skew {0 25}" {-skew {0 25}} \
+    "-matrix (a mirror in x)" {matrix}] {
+  $doc rect -at [list 12 $y] -size {12 12} -stroke {0.7 0.7 0.7} -width 0.2
+  $doc save
+  if {$options eq "matrix"} {
+    # A mirror about the square's own centre line: x goes to 2c - x, and
+    # the two numbers are the centre in points, which [distance] gives.
+    $doc transform -matrix [list -1 0 0 1 [expr {2 * [$doc distance 18]}] 0]
+  } else {
+    $doc transform -at [list 18 [expr {$y + 6}]] {*}$options
+  }
+  $doc rect -at [list 12 $y] -size {12 12} -fill {0.2 0.45 0.75} -opacity 0.6
+  $doc polygon -points [list 15 [expr {$y + 3}] 21 [expr {$y + 6}] 15 [expr {$y + 9}]] \
+      -fill white
+  $doc restore
+  $doc text $label -at [list 34 [expr {$y + 8}]]
+  incr y 20
+}
+
+# -- paths: a curve segment, the two fill rules, an even-odd clip ------------
+
+# A leaf from -segments: two curves and a close, filled. {curve x1 y1 x2 y2 x y}
+# is the segment [curve] draws as a whole shape.
+$doc path -segments {{move 220 66} {curve 232 58 246 60 250 70}
+    {curve 244 74 230 76 220 66} {close}} \
+    -fill {0.75 0.88 0.7} -stroke darkslateblue -width 0.4
+$doc text "a curve segment, closed" -at {254 69}
+
+# The same self-intersecting star twice: nonzero (the default) counts the
+# centre as inside and fills it, evenodd leaves it open.
+foreach {x rule} {222 nonzero 254 evenodd} {
+  $doc path -rule $rule -fill {0.85 0.35 0.1} -segments [list \
+      [list move [expr {$x + 12}] 84] [list line [expr {$x + 19}] 106] \
+      [list line [expr {$x}] 92] [list line [expr {$x + 24}] 92] \
+      [list line [expr {$x + 5}] 106] {close}]
+  $doc text "-rule $rule" -at [list [expr {$x + 12}] 111] -align center
+}
+# -close on a path: the last point is joined back to the first before the
+# stroke, so the open corner of the triangle is drawn too.
+$doc path -segments {{move 222 118} {line 240 118} {line 231 130}} \
+    -stroke {0.2 0.35 0.55} -width 1.2 -close 1
+$doc text "path -close 1" -at {244 125}
+
+# A clip with -rule evenodd: two nested squares as one path, and the hatch
+# is kept between them - the inner square stays open.
+$doc save
+$doc clip -rule evenodd -segments {
+  {move 220 136} {line 250 136} {line 250 162} {line 220 162} {close}
+  {move 228 143} {line 242 143} {line 242 155} {line 228 155} {close}
+}
+foreach offset {0 4 8 12 16 20 24 28 32 36 40 44 48 52} {
+  $doc line -from [list [expr {216 + $offset}] 136] \
+      -to [list [expr {216 + $offset - 12}] 162] -stroke darkcyan -width 1.2
+}
+$doc restore
+$doc text "clip -rule evenodd" -at {254 150}
+
+# -- line styles: caps, joins, and the two spellings of "solid" ------------
+
+# The three caps on the same thick line, the thin line underneath showing
+# where the path really ends: butt stops there, square runs half a width
+# beyond it, round rounds it. Then the joins by name, and -miter: the limit
+# says how far a pointed join may reach before it is cut to a bevel - 1
+# bevels every join, so the second chevron loses its point.
+set x 12
+foreach cap {butt round square} {
+  $doc line -from [list $x 178] -to [list [expr {$x + 14}] 178] \
+      -stroke {0.2 0.35 0.55} -width 3 -cap $cap
+  $doc line -from [list $x 178] -to [list [expr {$x + 14}] 178] -stroke white -width 0.2
+  $doc text "-cap $cap" -at [list $x 186]
+  incr x 22
+}
+set x 84
+foreach {label options} {
+    "-join miter" {-join miter}
+    "-miter 1" {-join miter -miter 1}
+    "-join round" {-join round}
+    "-join bevel" {-join bevel}} {
+  $doc polygon -points [list $x 182 [expr {$x + 6}] 172 [expr {$x + 12}] 182] \
+      -stroke {0.2 0.35 0.55} -width 2.5 -close 0 {*}$options
+  $doc text $label -at [list [expr {$x - 2}] 189]
+  incr x 22
+}
+# -dash none and -dash solid both mean an unbroken line - and they have to
+# say so: a dash set by [style] is graphics state and holds until something
+# takes it back. Between the two, a line without -dash comes out dashed.
+$doc save
+$doc style -dash {2 1} -width 0.6 -stroke gray
+$doc line -from {180 174} -to {285 174} -dash none
+$doc line -from {180 179} -to {285 179}
+$doc line -from {180 184} -to {285 184} -dash solid
+$doc restore
+$doc text "-dash none / inherited from style -dash {2 1} / -dash solid" -at {180 190}
 
 exampleFooter $doc
 

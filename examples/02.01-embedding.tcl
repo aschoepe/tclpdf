@@ -53,8 +53,8 @@ $doc font embed faceBold $bold
 
 # What the file says about itself, including what the vendor permits.
 set info [$doc font info face]
-puts "  [dict get $info family]: [dict get $info glyphs] glyphs,\
-    [dict get $info characters] characters mapped"
+puts "  [dict get $info family] ([dict get $info postScript]):\
+    [dict get $info glyphs] glyphs, [dict get $info characters] characters mapped"
 puts "  fsType [dict get $info fsType]: [dict get $info permission]"
 
 # -- the badge -------------------------------------------------------------

@@ -402,4 +402,76 @@ test xmp-6.4 {a rebuilt packet is byte-identical when nothing changed} -body {
       [regexp {<dc:language>} $second]
 } -result {1 1 1}
 
+# --- the information dictionary keys ------------------------------------------
+#
+# [info] takes six keys. Title is measured throughout this file; the other
+# five are held here: each has to reach the Info dictionary as a PDF string,
+# and the ones the packet carries have to reach the packet under the tag
+# ISO 32000-1 Table 317 pairs them with.
+
+test xmp-7.1 {Author, Subject, Keywords and Creator reach the Info dictionary} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc info Author "A. Author"
+  $doc info Subject "The subject"
+  $doc info Keywords "one, two"
+  $doc info Creator "The creating application"
+  set answered [list [$doc info Author] [$doc info Subject] \
+      [$doc info Keywords] [$doc info Creator]]
+  set path [::tclpdfTest::scratch xmp-info-keys.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<<[^>]*/Author[^>]*>>} $bytes dictionary
+  list $answered [regexp {/Author \(A\. Author\)} $dictionary] \
+      [regexp {/Subject \(The subject\)} $dictionary] \
+      [regexp {/Keywords \(one, two\)} $dictionary] \
+      [regexp {/Creator \(The creating application\)} $dictionary]
+} -result {{{A. Author} {The subject} {one, two} {The creating application}} 1 1 1 1}
+
+test xmp-7.2 {Producer is the package by default and can be replaced} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set default [$doc info Producer]
+  $doc info Producer "My generator 2.0"
+  set path [::tclpdfTest::scratch xmp-info-producer.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string match "tclpdf *" $default] \
+      [regexp {/Producer \(My generator 2\.0\)} $bytes] [regexp {/Producer \(tclpdf} $bytes]
+} -result {1 1 0}
+
+test xmp-7.3 {Author, Subject and Producer reach the packet as dc:creator, dc:description and pdf:Producer} -constraints haveFace -body {
+  set doc [probe $face]
+  $doc info Author "A. Author"
+  $doc info Subject "The subject"
+  $doc info Producer "My generator 2.0"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-info-packet.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+  list [regexp {<dc:creator>\s*<rdf:Seq>\s*<rdf:li>A\. Author</rdf:li>} $packet] \
+      [regexp {<dc:description>\s*<rdf:Alt>\s*<rdf:li xml:lang="x-default">The subject</rdf:li>} $packet] \
+      [regexp {<pdf:Producer>My generator 2\.0</pdf:Producer>} $packet]
+} -result {1 1 1}
+
+test xmp-7.4 {an empty value removes a key from the dictionary} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc info Keywords "one, two"
+  $doc info Keywords {}
+  set path [::tclpdfTest::scratch xmp-info-removed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Keywords} $bytes
+} -result 0
+
 cleanupTests

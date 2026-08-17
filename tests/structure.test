@@ -1486,4 +1486,364 @@ test structure-16.2 {a paginated artifact is declared again on every page} -body
   set marks
 } -result {1 1 1}
 
+# --- -tag on text: the explicit type and the artifact kinds ------------------
+
+test structure-18.1 {text -tag P is the explicit form of the derived paragraph} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Ein Absatz" -at {20 20} -tag P
+  $doc structure Sect -script {
+    $doc text "Noch einer" -at {20 30} -tag P
+  }
+  set stream [::tclpdfTest::content $doc]
+  set elements [$doc state structure]
+  $doc destroy
+  # Two P marks; the first P sits at the top, the second inside the Sect.
+  list [regexp -all {/P <</MCID \d+>> BDC} $stream] \
+      [lmap element $elements {dict get $element type}] \
+      [dict get [lindex $elements 2] parent]
+} -result {2 {P Sect P} 1}
+
+test structure-18.2 {text -tag {Artifact Pagination Footer} brackets a running foot} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Seite 1" -at {20 280} -tag {Artifact Pagination Footer}
+  set stream [::tclpdfTest::content $doc]
+  set elements [$doc state structure]
+  $doc destroy
+  # The kind and the subtype are in the bracket, no MCID, nothing in the tree.
+  list [regexp -all {/Artifact <</Type /Pagination /Subtype /Footer>> BDC} $stream] \
+      [regexp -all {MCID} $stream] [regexp -all {EMC} $stream] [llength $elements]
+} -result {1 0 1 0}
+
+test structure-18.3 {each of the four artifact kinds is written by name} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set y 20
+  foreach kind {Pagination Layout Page Background} {
+    $doc text $kind -at [list 20 [incr y 10]] -tag [list Artifact $kind]
+  }
+  set stream [::tclpdfTest::content $doc]
+  set elements [$doc state structure]
+  $doc destroy
+  list [regexp -all {/Artifact <</Type /Pagination>> BDC} $stream] \
+      [regexp -all {/Artifact <</Type /Layout>> BDC} $stream] \
+      [regexp -all {/Artifact <</Type /Page>> BDC} $stream] \
+      [regexp -all {/Artifact <</Type /Background>> BDC} $stream] \
+      [regexp -all {EMC} $stream] [llength $elements]
+} -result {1 1 1 1 4 0}
+
+test structure-18.4 {each of the three Pagination subtypes is written by name} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set y 20
+  foreach subtype {Header Footer Watermark} {
+    $doc text $subtype -at [list 20 [incr y 10]] -tag [list Artifact Pagination $subtype]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {/Artifact <</Type /Pagination /Subtype /Header>> BDC} $stream] \
+      [regexp -all {/Artifact <</Type /Pagination /Subtype /Footer>> BDC} $stream] \
+      [regexp -all {/Artifact <</Type /Pagination /Subtype /Watermark>> BDC} $stream] \
+      [regexp -all {EMC} $stream]
+} -result {1 1 1 3}
+
+# --- page destinations: -at, -to and -zoom ---------------------------------
+
+test structure-19.1 {link -at and -size become the Rect, in points and flipped} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set number [$doc link -at {20 80} -size {40 10} -page 0]
+  set body [[$doc writer] body $number]
+  $doc destroy
+  # 20 mm = 56.69 pt; the top edge at 80 mm is 841.89 - 226.77 = 615.12 pt,
+  # the bottom edge 10 mm lower.
+  regexp {/Rect \[56\.69\d* 586\.77\d* 170\.07\d* 615\.11\d*\]} $body
+} -result 1
+
+test structure-19.2 {link -to lands on a point, and without -zoom the reader keeps its own} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set number [$doc link -at {20 80} -size {40 10} -page 0 -to {20 30}]
+  set body [[$doc writer] body $number]
+  $doc destroy
+  # /XYZ x y zoom, with zoom null: 20 mm from the top is 841.89 - 85.04 pt.
+  regexp {/Dest \[\d+ 0 R /XYZ 56\.69\d* 756\.85\d* null\]} $body
+} -result 1
+
+test structure-19.3 {link -zoom is the magnification behind the point} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set number [$doc link -at {20 80} -size {40 10} -page 0 -to {20 30} -zoom 2]
+  set body [[$doc writer] body $number]
+  $doc destroy
+  regexp {/Dest \[\d+ 0 R /XYZ 56\.69\d* 756\.85\d* 2\]} $body
+} -result 1
+
+test structure-19.4 {without -to the page is fitted, and -zoom does not apply} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set plain [$doc link -at {20 80} -size {40 10} -page 0]
+  set zoomed [$doc link -at {20 100} -size {40 10} -page 0 -zoom 2]
+  set first [[$doc writer] body $plain]
+  set second [[$doc writer] body $zoomed]
+  $doc destroy
+  list [regexp {/Dest \[\d+ 0 R /Fit\]} $first] [regexp {/Dest \[\d+ 0 R /Fit\]} $second] \
+      [regexp {XYZ} $second]
+} -result {1 1 0}
+
+test structure-19.5 {bookmark -at is a point on the page, without it the whole page} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc bookmark "Punkt" -at {20 30}
+  $doc bookmark "Seite"
+  set path [::tclpdfTest::scratch bookmark-at.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Title \(Punkt\) [^>]*/Dest \[\d+ 0 R /XYZ 56\.69\d* 756\.85\d* null\]} $bytes] \
+      [regexp {/Title \(Seite\) [^>]*/Dest \[\d+ 0 R /Fit\]} $bytes]
+} -result {1 1}
+
+# --- the element options and attributes, one by one -------------------------
+
+test structure-20.1 {-lang, -title and -actualText go onto the element} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -lang en-GB -title "Preface" -actualText "Read this" -script {
+    $doc text "Rd ths" -at {20 20}
+  }
+  set path [::tclpdfTest::scratch attr-text.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Lang, T and ActualText are keys of the element itself (14.7.2), not
+  # attributes under /A - and all three sit on the one P.
+  regexp {/S /P [^>]*/Lang \(en-GB\) /T \(Preface\) /ActualText \(Read this\)} $bytes
+} -result 1
+
+test structure-20.2 {-scope on a TH takes Row, Column and Both} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure Table -script {
+    $doc structure TR -script {
+      $doc structure TH -scope Row -script {$doc text "Zeile" -at {20 20}}
+      $doc structure TH -scope Column -script {$doc text "Spalte" -at {60 20}}
+      $doc structure TH -scope Both -script {$doc text "Beides" -at {100 20}}
+    }
+  }
+  set stream [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch attr-scope.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Three TH marks, each element carrying its Scope under the Table owner.
+  list [regexp -all {/TH <</MCID \d+>> BDC} $stream] \
+      [regexp {/S /TH [^>]*/A << /O /Table /Scope /Row >>} $bytes] \
+      [regexp {/S /TH [^>]*/A << /O /Table /Scope /Column >>} $bytes] \
+      [regexp {/S /TH [^>]*/A << /O /Table /Scope /Both >>} $bytes]
+} -result {3 1 1 1}
+
+test structure-20.3 {-colSpan and -rowSpan are written on TH and TD} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure Table -script {
+    $doc structure TR -script {
+      $doc structure TH -colSpan 2 -script {$doc text "Kopf" -at {20 20}}
+    }
+    $doc structure TR -script {
+      $doc structure TD -rowSpan 3 -script {$doc text "Zelle" -at {20 30}}
+      $doc structure TD -colSpan 2 -rowSpan 2 -script {$doc text "Block" -at {60 30}}
+    }
+  }
+  set path [::tclpdfTest::scratch attr-span.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/S /TH [^>]*/A << /O /Table /ColSpan 2 >>} $bytes] \
+      [regexp {/S /TD [^>]*/A << /O /Table /RowSpan 3 >>} $bytes] \
+      [regexp {/S /TD [^>]*/A << /O /Table /ColSpan 2 /RowSpan 2 >>} $bytes]
+} -result {1 1 1}
+
+test structure-20.4 {-numbering UpperRoman and Disc name the list style} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure L -numbering UpperRoman -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "I." -at {20 20}}
+      $doc text "Erstens" -at {30 20}
+    }
+  }
+  $doc structure L -numbering Disc -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "-" -at {20 30}}
+      $doc text "Punkt" -at {30 30}
+    }
+  }
+  set path [::tclpdfTest::scratch attr-numbering.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/S /L [^>]*/A << /O /List /ListNumbering /UpperRoman >>} $bytes] \
+      [regexp {/S /L [^>]*/A << /O /List /ListNumbering /Disc >>} $bytes]
+} -result {1 1}
+
+test structure-20.5 {a Formula holds its text and takes a bbox} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure Formula -bbox {20 50 30 10} -script {
+    $doc text "E = mc2" -at {20 55}
+  }
+  set stream [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch formula.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The text is the Formula's own mark - a Formula holds content, it is not a
+  # container that would make a P of it.
+  list [regexp -all {/Formula <</MCID \d+>> BDC} $stream] \
+      [regexp {/S /Formula [^>]*/K \d+ /A << /O /Layout /BBox \[56\.69\d* 671\.81\d* 141\.73\d* 700\.15\d*\] >>} $bytes]
+} -result {1 1}
+
+test structure-20.6 {an explicit Span is inline markup inside the paragraph} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -script {
+    $doc text "Ein Wort" -at {20 20}
+    $doc structure Span -lang la -script {$doc text "in medias res" -at {40 20}}
+    $doc text "im Absatz." -at {70 20}
+  }
+  set stream [::tclpdfTest::content $doc]
+  set elements [$doc state structure]
+  set path [::tclpdfTest::scratch span.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The P holds three kids in order - mark, Span, mark - and the Span holds
+  # the middle mark and its own language.
+  list [regexp -all {/P <</MCID \d+>> BDC} $stream] \
+      [regexp -all {/Span <</MCID \d+>> BDC} $stream] \
+      [lmap element $elements {dict get $element type}] \
+      [dict get [lindex $elements 1] parent] \
+      [regexp {/S /P [^>]*/K \[0 \d+ 0 R 2\]} $bytes] \
+      [regexp {/S /Span [^>]*/K 1 /Lang \(la\)} $bytes]
+} -result {2 1 {P Span} 0 1 1}
+
+# --- the types of 2.0, and the types that stayed in 1.7 ---------------------
+
+test structure-21.1 {the 2.0 types are opened and reach the tree in a 2.0 file} -body {
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set y 20
+  foreach type {Title Aside DocumentFragment Sub Em H8 H9 H10} {
+    $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+  }
+  set stream [::tclpdfTest::content $doc]
+  set opened [lmap element [$doc state structure] {dict get $element type}]
+  set path [::tclpdfTest::scratch types20.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set found {}
+  foreach type {Title Aside DocumentFragment Sub Em H8 H9 H10} {
+    # Each type holds its own mark, and each is an element under Document.
+    lappend found [regexp -all "/$type <</MCID \\d+>> BDC" $stream] \
+        [regexp -all "/S /$type /P \\d+ 0 R /Pg" $bytes]
+  }
+  list $opened $found
+} -result {{Title Aside DocumentFragment Sub Em H8 H9 H10} {1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1}}
+
+test structure-21.2 {the 2.0 types are refused in a 1.7 file, naming the way out} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set codes {}
+  foreach type {Title Aside DocumentFragment Sub Em H8 H9 H10} {
+    lappend codes [catch {$doc structure $type -script {$doc text "x" -at {20 20}}} err]
+    lappend codes [string match "*\"$type\" is a structure type of ISO 32000-2*ua -part 2*" $err]
+  }
+  set elements [$doc state structure]
+  $doc destroy
+  list $codes [llength $elements]
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} 0}
+
+test structure-22.1 {the 1.7-only types are opened and reach the tree} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set y 20
+  foreach type {Art BlockQuote TOC TOCI Index Private Quote Reference BibEntry} {
+    $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+  }
+  set opened [lmap element [$doc state structure] {dict get $element type}]
+  set path [::tclpdfTest::scratch types17.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set found {}
+  foreach type {Art BlockQuote TOC TOCI Index Private Quote Reference BibEntry} {
+    lappend found [regexp -all "/S /$type /P \\d+ 0 R" $bytes]
+  }
+  # Art, TOC, TOCI and Index are containers: the text in them becomes a P of
+  # theirs. The other five hold the text themselves.
+  list $opened $found
+} -result {{Art P BlockQuote TOC P TOCI P Index P Private Quote Reference BibEntry} {1 1 1 1 1 1 1 1 1}}
+
+test structure-22.2 {the 1.7-only types keep the default namespace in a 2.0 tree} -body {
+  # As 15.6 shows for the generic H: these types are not in the 2.0
+  # namespace, so naming it on them would be a claim about nothing.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set y 20
+  foreach type {Art BlockQuote TOC TOCI Index Private Quote Reference BibEntry} {
+    $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+  }
+  $doc state uaNamespace [[$doc writer] ref 1]
+  set path [::tclpdfTest::scratch types17-ns.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set found {}
+  foreach type {Art BlockQuote TOC TOCI Index Private Quote Reference BibEntry} {
+    lappend found [regexp "/S /$type (?!\[^>\]*/NS)" $bytes]
+  }
+  # The derived P beside them does carry the namespace.
+  list $found [regexp {/S /P [^>]*/NS 1 0 R} $bytes]
+} -result {{1 1 1 1 1 1 1 1 1} 1}
+
 cleanupTests

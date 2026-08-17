@@ -244,4 +244,46 @@ test pageNumber-6.1 {a face used only by pageNumbers is written with the label's
   list $code [regexp -all {/Type /XObject /Subtype /Form} $bytes] $words
 } -result {0 2 2}
 
+# --- the line and font options ---------------------------------------------------
+
+test pageNumber-7.1 {-align left starts at -at, -align right ends there} -body {
+  # Three runs at one anchor, one per alignment - each its own form, and the
+  # label's Td inside it says where the line begins.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  foreach align {left center right} {
+    $doc pageNumbers -at {105 285} -format "$align %n" -align $align -size 8
+  }
+  set path [::tclpdfTest::scratch numbers-align.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set starts {}
+  foreach {match x label} [regexp -all -inline \
+      {([-0-9.]+) [-0-9.]+ Td\n\((left|center|right) 1\) Tj} $bytes] {
+    dict set starts $label $x
+  }
+  set anchor [expr {105 * 72 / 25.4}]
+  list [dict size $starts] [expr {abs([dict get $starts left] - $anchor) < 0.01}] \
+      [expr {[dict get $starts right] < [dict get $starts center]}] \
+      [expr {[dict get $starts center] < [dict get $starts left]}]
+} -result {3 1 1 1}
+
+test pageNumber-7.2 {-style and -color are set on the number and leave the state alone} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family times -size 10
+  $doc pageNumbers -at {105 285} -format "%n" -style bold -color {0.5 0.5 0.5}
+  set path [::tclpdfTest::scratch numbers-style.pdf]
+  $doc write $path
+  set state [$doc font]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/FTimesBold 10 Tf\n0.5 0.5 0.5 rg} $bytes] \
+      [regexp {/BaseFont /Times-Bold} $bytes] \
+      [dict get $state resolved] [dict get $state color]
+} -result {1 1 Times-Roman black}
+
 cleanupTests

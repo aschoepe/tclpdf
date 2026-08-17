@@ -262,5 +262,55 @@ test leader-3.2 {without the option the row is unchanged} \
   expr {$plain eq $stated}
 } -result 1
 
+# --- the options a row takes of its own ----------------------------------------
+
+test leader-4.1 {-gap widens the room kept clear at both ends} -body {
+  # A larger gap leaves less room for the fill, so fewer copies of it are set
+  # - and the ends stay where they were.
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120
+  set narrow [leaderShown [::tclpdfTest::content $doc]]
+  set narrowStarts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc leader "Summe" "42" -at {20 30} -width 120 -gap 8
+  set wide [leaderShown [::tclpdfTest::content $doc]]
+  set wideStarts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [expr {[string length [lindex $wide 1]] < [string length [lindex $narrow 1]]}] \
+      [expr {[lindex $wideStarts 0] == [lindex $narrowStarts 0]}] \
+      [expr {[lindex $wideStarts 2] == [lindex $narrowStarts 2]}] \
+      [expr {[lindex $wideStarts 1] > [lindex $narrowStarts 1]}]
+} -result {1 1 1 1}
+
+test leader-4.2 {-family, -style, -size and -color reach every piece of the row} -body {
+  # The row takes the font options per call, like [text]: the three pieces
+  # are set in the face, size and colour named, and the state is untouched.
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120 \
+      -family times -style bold -size 14 -color {0.6 0.25 0.25}
+  set content [::tclpdfTest::content $doc]
+  set state [$doc font]
+  $doc destroy
+  list [regexp -all {/FTimesBold 14 Tf} $content] \
+      [regexp -all {0.6 0.25 0.25 rg} $content] \
+      [regexp -all {/FHelvetica} $content] \
+      [dict get $state resolved] [dict get $state size]
+} -result {3 3 0 Helvetica 10}
+
+test leader-4.3 {-wordSpacing is counted between the copies of a fill that has a space} -body {
+  # A fill of "· " puts a space between its copies, and word spacing widens
+  # each of them - so fewer copies fit, and the run is still drawn with the
+  # operator that widens it.
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120 -fill ". "
+  set plain [leaderShown [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc leader "Summe" "42" -at {20 30} -width 120 -fill ". " -wordSpacing 4
+  set content [::tclpdfTest::content $doc]
+  set spaced [leaderShown $content]
+  $doc destroy
+  list [expr {[string length [lindex $spaced 1]] < [string length [lindex $plain 1]]}] \
+      [regexp -all {4 Tw} $content]
+} -result {1 3}
 
 cleanupTests

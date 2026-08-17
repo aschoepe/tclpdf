@@ -189,13 +189,19 @@ foreach {alias file what line} $faces {
     set at 190
   }
   if {$alias eq "arabic"} {
-    set extra {-unshaped 1 -direction rtl}
+    # -unshaped is a FONT option, so it is set on [font] here, where it
+    # stays in force like -size does, and turned off again below once the
+    # line is drawn; -direction is a property of the LINE, and stays on the
+    # [text] call.
+    $doc font -unshaped 1
+    set extra {-direction rtl}
     set at 190
   }
   if {[catch {$doc text $line -at [list $at [expr {$y + 7}]] {*}$extra} message]} {
     $doc font -family sans -size 7 -color {0.65 0.20 0.20}
     $doc text "not set: $message" -at [list 20 [expr {$y + 7}]] -width 170
   }
+  $doc font -unshaped 0
   set y [expr {$y + 17}]
 }
 

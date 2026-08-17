@@ -461,4 +461,92 @@ test document-10.3 {an empty -typeArea returns to the default} -body {
   lmap v $area {format %.2f $v}
 } -result {10.50 14.85 199.50 282.15}
 
+# -- the options of tclpdf new, on the command itself --------------------------
+#
+# Every value the manual lists for [tclpdf new], exercised where it is given
+# rather than on [page add] or [configure]: the option decides what the FIRST
+# page measures, and cget has to answer what was said.
+
+test document-options-15.1 {-unit in and -unit px measure the page in that unit} -body {
+  # A4 is 8.27 by 11.69 inches; px is the same as pt, so it answers points.
+  set doc [tclpdf new -unit in]
+  $doc page add
+  set inches [lmap v [$doc page size] {format %.2f $v}]
+  set unit [$doc cget -unit]
+  $doc destroy
+  set doc [tclpdf new -unit px]
+  $doc page add
+  set pixels [lmap v [$doc page size] {format %.2f $v}]
+  set stroke [$doc coords 72 72]
+  $doc destroy
+  list $inches $unit $pixels [lmap v $stroke {format %.2f $v}]
+} -result {{8.27 11.69} in {595.28 841.89} {72.00 769.89}}
+
+test document-options-15.2 {-format a4 by name and -format {w h} as a pair} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  set named [lmap v [$doc page size] {format %.0f $v}]
+  $doc destroy
+  # A pair is taken as it stands: {88 55} is 88 wide, not turned upright.
+  set doc [tclpdf new -unit mm -format {88 55}]
+  $doc page add
+  set pair [lmap v [$doc page size] {format %.0f $v}]
+  set kept [$doc cget -format]
+  $doc destroy
+  list $named $pair $kept
+} -result {{210 297} {88 55} {88 55}}
+
+test document-options-15.3 {-orientation portrait, landscape, hoch and quer on a named format} -body {
+  set result {}
+  foreach orientation {portrait landscape hoch quer} {
+    set doc [tclpdf new -unit mm -format a4 -orientation $orientation]
+    $doc page add
+    lappend result [lmap v [$doc page size] {format %.0f $v}] [$doc cget -orientation]
+    $doc destroy
+  }
+  set result
+} -result {{210 297} portrait {297 210} landscape {210 297} hoch {297 210} quer}
+
+test document-options-15.4 {tclpdf formats lists the names page add accepts, sorted} -body {
+  set formats [tclpdf formats]
+  set doc [tclpdf new -unit mm]
+  foreach name $formats {
+    $doc page add -format $name
+  }
+  set pages [$doc page count]
+  $doc destroy
+  list [expr {"a4" in $formats}] [expr {"letter" in $formats}] \
+      [expr {$formats eq [lsort $formats]}] [expr {$pages == [llength $formats]}]
+} -result {1 1 1 1}
+
+test document-options-15.5 {configure -format and -orientation change the pages added from then on} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc configure -format a5
+  $doc page add
+  $doc configure -orientation landscape
+  $doc page add
+  set sizes [lmap i {0 1 2} {lmap v [$doc page size $i] {format %.0f $v}}]
+  set answers [list [$doc cget -format] [$doc cget -orientation]]
+  $doc destroy
+  list $sizes $answers
+} -result {{{210 297} {148 210} {210 148}} {a5 landscape}}
+
+test document-options-15.6 {cget -compress answers the option, and the file follows it} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "x" -at {10 10}
+  set plain [$doc cget -compress]
+  set path [::tclpdfTest::scratch document-compress.pdf]
+  $doc write $path
+  set unfiltered [regexp {FlateDecode} [::tclpdfTest::readBytes $path]]
+  $doc configure -compress 1
+  set deflated [$doc cget -compress]
+  $doc write $path
+  set filtered [regexp {FlateDecode} [::tclpdfTest::readBytes $path]]
+  file delete $path
+  $doc destroy
+  list $plain $unfiltered $deflated $filtered
+} -result {0 0 1 1}
+
 cleanupTests

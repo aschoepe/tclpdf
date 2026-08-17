@@ -263,4 +263,28 @@ test bidi-4.2 {the message names the character, the position and the way out} \
     line - a mixed line needs the bidi algorithm, which tclpdf does not have;\
     set the runs as separate calls, one per direction}
 
+set bidiFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint haveBidiFace [file exists $bidiFace]
+
+test bidi-5.1 {-direction ltr stated on a line is the default, and a right-to-left one refuses it} \
+    -constraints haveBidiFace -body {
+  # The option has two values and the tests above only ever set the second.
+  # Stated, ltr has to give the stream the unstated call gives; and a
+  # right-to-left character in such a line is refused as it always was, with
+  # -direction rtl named as the way out.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Rechnung 4711" -at {20 30}
+  set plain [::tclpdfTest::content $doc]
+  $doc page add
+  $doc text "Rechnung 4711" -at {20 30} -direction ltr
+  set stated [::tclpdfTest::content $doc]
+  $doc font embed face $::bidiFace
+  set code [catch {$doc text "שלום" -at {20 40} -family face -direction ltr} message]
+  $doc destroy
+  list [expr {$plain eq $stated}] $code [string match {*-direction rtl*} $message]
+} -result {1 1 1}
+
 cleanupTests

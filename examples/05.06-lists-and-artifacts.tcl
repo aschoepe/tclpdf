@@ -21,8 +21,10 @@
 # tclpdf declares it by default and only puts a picture into the tree when
 # -alt says what it shows.
 #
-# Watch for the calls that are NOT there: no -tag on the paragraphs, none on
-# the list items, none on the gradient. What a writer can derive, it derives.
+# Watch for the calls that are NOT there: no -tag on the paragraphs (one says
+# -tag P out loud, to show the form), none on the list items, none on the
+# gradient. What a writer can derive, it derives. And watch the ones that
+# name their kind: -tag {Artifact Pagination Header} and its kin, at the top.
 #
 #   verapdf -f 3a          examples/out/05.06-lists-and-artifacts.pdf
 #   verapdf --flavour ua1  examples/out/05.06-lists-and-artifacts.pdf
@@ -69,6 +71,32 @@ $doc shading axial -at {0 0} -size {210 24} -colors {{0.20 0.30 0.45} {0.35 0.50
 
 $doc font -family faceBold -size 16 -color white
 $doc text "Sicherheitsunterweisung" -at {20 15} -tag H1
+
+# -- the marks that name their kind -----------------------------------------
+
+# An artifact may say which sort it is, and -tag takes the kind as a list:
+# the four kinds of ISO 32000-1 Table 330, and for Pagination one of three
+# subtypes (Table 331). Named, a reader that skips artifacts can still tell a
+# running head from a crop mark - and PDF/UA-2 requires the naming.
+$doc font -family face -size 7 -color {0.85 0.90 0.95}
+# A running head: a Pagination artifact with the Header subtype.
+$doc text "Werk Bochum · Unterweisung 2026" -at {20 5} -tag {Artifact Pagination Header}
+# A running foot, the Footer subtype - the page number is one, and so is this.
+$doc font -family face -size 7 -color {0.5 0.5 0.5}
+$doc text "Seite 1 von 1" -at {20 290} -tag {Artifact Pagination Footer}
+# A watermark, the third subtype: faint and large, and outside the tree.
+$doc font -family faceBold -size 60 -color {0.93 0.93 0.93}
+$doc text "ENTWURF" -at {40 240} -rotate 30 -tag {Artifact Pagination Watermark}
+# A Layout artifact is decoration in the flow - an ornament between sections.
+$doc font -family face -size 9 -color {0.6 0.6 0.6}
+$doc text "· · ·" -at {105 34} -align center -tag {Artifact Layout}
+# A Page artifact is a production mark - here a registration cross in the corner.
+$doc font -family face -size 6 -color black
+$doc text "+" -at {6 6} -tag {Artifact Page}
+# A Background artifact fills the ground the content sits on: a faint imprint
+# behind the lower half of the page.
+$doc font -family faceBold -size 28 -color {0.96 0.96 0.96}
+$doc text "2026" -at {150 275} -tag {Artifact Background}
 
 # -- an ordered list, built the way the norm wants it -----------------------
 
@@ -163,13 +191,20 @@ $doc structure Sect -script {
   $doc text "Zur Probe" -at {20 158} -tag H2
 
   $doc font -family face -size 9
+  # -tag P is what a text call becomes anyway; said out loud once, so the
+  # explicit form is on the page beside the derived one.
   $doc text "Die Linie unter dieser Zeile, der Farbverlauf oben und die\
       Fußzeile stehen nicht im Baum. Wer das Dokument mit\
       \"pdfinfo -struct-text\" ausliest, findet sie nicht - und genau das ist\
-      der Zweck." -at {20 164} -width 170
+      der Zweck." -at {20 164} -width 170 -tag P
 }
 
 $doc line -from {20 176} -to {190 176} -width 0.4 -stroke {0.4 0.4 0.4}
+
+# A bare -tag Artifact, without a kind: the plain form, for a note that is
+# about the sheet rather than the text. The kind defaults to Layout.
+$doc font -family face -size 7 -color {0.5 0.5 0.5}
+$doc text "Stand: August 2026" -at {20 180} -tag Artifact
 
 # The footer names the script and the faces, and is an artifact by nature.
 exampleFooter $doc face

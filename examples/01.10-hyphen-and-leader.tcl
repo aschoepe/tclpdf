@@ -134,6 +134,36 @@ foreach {left right fill gap} {
       -fill $fill -gap $gap]
 }
 
+# -- the options a row takes ---------------------------------------------------
+#
+# A row is set with the font options of the call, like a line of [text]: the
+# face and its style, the size, the colour, letter and word spacing - the
+# last one counted between the copies of a fill that has a space in it. It
+# takes the two line options as well. -tag names what the row IS in a tagged
+# document, P unless said otherwise, and Artifact takes it out of the tree
+# altogether, which is what a running head wants; this document is not
+# tagged, so both are accepted here and change nothing. -direction rtl turns
+# the row round: the first argument is the LEADING end and belongs at the
+# right edge, the figure at the left. Set beside the contents, in the column
+# the rows above leave free.
+set x 145
+set ry 100
+$doc font -family bold -size 10 -color black
+$doc text "Options on the row" -at [list $x $ry]
+set ry [expr {$ry + 8}]
+$doc font -family body -size 10
+set ry [$doc leader "in Helvetica" "1" -at [list $x $ry] -width 45 \
+    -family helvetica -style italic -size 9]
+set ry [$doc leader "in a colour" "2" -at [list $x $ry] -width 45 \
+    -color {0.60 0.25 0.25}]
+set ry [$doc leader "letter spaced" "3" -at [list $x $ry] -width 45 -spacing 0.4]
+set ry [$doc leader "word spaced" "4" -at [list $x $ry] -width 45 \
+    -fill ". " -wordSpacing 2]
+set ry [$doc leader "as a heading" "5" -at [list $x $ry] -width 45 -tag H2]
+set ry [$doc leader "as an artifact" "6" -at [list $x $ry] -width 45 -tag Artifact]
+# "total" and its amount, right to left: the word ends at the right edge.
+set ry [$doc leader "סך הכל" "1.234,50" -at [list $x $ry] -width 45 -direction rtl]
+
 # -- the spaces of Unicode as break points ------------------------------------
 #
 # The same amounts twice, in the same narrow column. On the left a no-break

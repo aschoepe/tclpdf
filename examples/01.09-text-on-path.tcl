@@ -36,6 +36,7 @@ package require tclpdf
 source [file join $here common.tcl]
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "01.09-text-on-path.pdf"}]
+set assets [file join $here assets]
 
 set doc [tclpdf new -unit mm]
 $doc info Title "Text along a path"
@@ -138,6 +139,44 @@ foreach {offset colour label} {
     $doc textPath $label -segments $arc -align center -offset $offset \
         -color $colour
 }
+
+# -- one straight path, every alignment, and the other direction -------------
+#
+# -align places the string at the start, the middle or the end of the path -
+# "centre" is accepted for "center" - and the font options are taken per
+# call, as [text] takes them. -tag names what the run is in a tagged
+# document (P unless said otherwise); this one is not tagged, so it is
+# accepted and changes nothing. -direction rtl runs the glyphs backwards
+# along the path and mirrors -align with them, so the Hebrew line below
+# starts at the right hand end of its path; it needs a face with the letters,
+# which is why one is embedded here.
+$doc font -family helvetica -style bold -size 11 -color black
+$doc text "Along one line, three alignments" -at {20 200}
+$doc font -style {} -size 8 -color {0.4 0.4 0.45}
+$doc text "The same 150 mm path four times: -align left, centre and right,\
+    and a right-to-left line, whose -align left is the right hand end." \
+    -at {20 206} -width 170
+
+$doc font embed hebrew [file join $assets fonts DejaVuSans.ttf]
+set y 218
+foreach {align label family style size} {
+    left   "-align left, Times bold"      times     bold   10
+    centre "-align centre, Helvetica"     helvetica {}     9
+    right  "-align right, Courier italic" courier   italic 9
+} {
+    $doc path -segments [list [list move 20 $y] [list line 170 $y]] \
+        -stroke {0.85 0.85 0.9} -width 0.3
+    $doc textPath $label -segments [list [list move 20 $y] [list line 170 $y]] \
+        -align $align -family $family -style $style -size $size -tag P
+    set y [expr {$y + 8}]
+}
+$doc path -segments [list [list move 20 $y] [list line 170 $y]] \
+    -stroke {0.85 0.85 0.9} -width 0.3
+$doc textPath "שלום עולם 4711" -segments [list [list move 20 $y] [list line 170 $y]] \
+    -family hebrew -size 10 -direction rtl
+$doc font -family helvetica -size 7 -color {0.4 0.4 0.45}
+$doc text "-direction rtl: the line begins at the right, the number keeps its order" \
+    -at [list 20 [expr {$y + 5}]]
 
 exampleFooter $doc
 

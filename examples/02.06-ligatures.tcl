@@ -68,10 +68,19 @@ foreach {face caption} {body {DejaVu Sans}  sans {Roboto}} {
   $doc font -family body -size 8 -color {0.45 0.45 0.45}
   $doc text $caption -at [list 20 [expr {$y - 9}]]
 
+  # -ligatures is a font option, so it can be set as state on [font] or per
+  # call on [text]. The first face does it the first way, the second face the
+  # second way - and the state is left at its default afterwards either way.
   foreach ligatures {0 1} {
     set at [expr {$y + $ligatures * 12}]
-    $doc font -family $face -size 22 -color black -ligatures $ligatures
-    $doc text $words -at [list 20 $at]
+    if {$face eq "body"} {
+      $doc font -family $face -size 22 -color black -ligatures $ligatures
+      $doc text $words -at [list 20 $at]
+      $doc font -ligatures 1
+    } else {
+      $doc font -family $face -size 22 -color black
+      $doc text $words -at [list 20 $at] -ligatures $ligatures
+    }
     $doc font -family body -size 7 -color {0.6 0.6 0.6}
     $doc text [expr {$ligatures ? "on" : "off"}] -at [list 155 $at]
   }
