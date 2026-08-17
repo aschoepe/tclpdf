@@ -455,4 +455,4 @@ proc ::tclpdf::glyfOutline::Matrix {flags transform} {
   return {1 0 0 1}
 }
 
-package provide tclpdf::glyfOutline 1.0
+package provide tclpdf::glyfOutline 1.1

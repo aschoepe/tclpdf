@@ -173,4 +173,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::leader 1.0
+package provide tclpdf::leader 1.1

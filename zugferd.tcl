@@ -258,4 +258,4 @@ proc ::tclpdf::zugferd::properties {name type version conformance} {
   return $xml
 }
 
-package provide tclpdf::zugferd 1.0
+package provide tclpdf::zugferd 1.1

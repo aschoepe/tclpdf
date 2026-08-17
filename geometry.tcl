@@ -224,4 +224,4 @@ proc ::tclpdf::geometry::check {matrix what} {
   return $matrix
 }
 
-package provide tclpdf::geometry 1.0
+package provide tclpdf::geometry 1.1

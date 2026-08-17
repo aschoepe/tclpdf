@@ -220,4 +220,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::output 1.3
+package provide tclpdf::output 1.4

@@ -482,4 +482,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.3
+package provide tclpdf::image 1.4

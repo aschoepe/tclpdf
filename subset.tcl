@@ -373,4 +373,4 @@ proc ::tclpdf::subset::Checksum {data} {
   return $sum
 }
 
-package provide tclpdf::subset 1.1
+package provide tclpdf::subset 1.2

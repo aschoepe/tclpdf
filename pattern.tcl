@@ -224,4 +224,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pattern 1.1
+package provide tclpdf::pattern 1.2

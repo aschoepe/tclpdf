@@ -361,4 +361,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shape 1.1
+package provide tclpdf::shape 1.2

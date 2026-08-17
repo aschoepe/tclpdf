@@ -556,4 +556,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.4
+package provide tclpdf::table 1.5

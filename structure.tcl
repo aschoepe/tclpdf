@@ -841,4 +841,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structure 1.1
+package provide tclpdf::structure 1.2

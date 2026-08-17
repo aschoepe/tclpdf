@@ -440,4 +440,4 @@ proc ::tclpdf::color::Clamp {value} {
   return $value
 }
 
-package provide tclpdf::color 1.0
+package provide tclpdf::color 1.1

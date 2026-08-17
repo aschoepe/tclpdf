@@ -186,4 +186,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.2
+package provide tclpdf::pageNumber 1.3

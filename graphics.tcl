@@ -437,4 +437,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.2
+package provide tclpdf::graphics 1.3

@@ -167,4 +167,4 @@ proc ::tclpdf::imageJpeg::inverted {parsed} {
   return [expr {[dict get $parsed components] == 4 && [dict get $parsed adobe]}]
 }
 
-package provide tclpdf::imageJpeg 1.0
+package provide tclpdf::imageJpeg 1.1

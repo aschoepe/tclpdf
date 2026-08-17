@@ -166,4 +166,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::link 1.1
+package provide tclpdf::link 1.2

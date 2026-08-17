@@ -551,4 +551,4 @@ oo::class create ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::document 1.4
+package provide tclpdf::document 1.5

@@ -263,4 +263,4 @@ proc ::tclpdf::shaping::message {finding {face {}} {why forms}} {
   return "$head - tclpdf does not do that. $anyway"
 }
 
-package provide tclpdf::shaping 1.0
+package provide tclpdf::shaping 1.1

@@ -1150,4 +1150,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.6
+package provide tclpdf::font 1.7

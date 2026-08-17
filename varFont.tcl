@@ -968,4 +968,4 @@ proc ::tclpdf::varFont::Fixed {value} {
   return [expr {$value / 65536.0}]
 }
 
-package provide tclpdf::varFont 1.1
+package provide tclpdf::varFont 1.2

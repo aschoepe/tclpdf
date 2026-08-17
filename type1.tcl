@@ -392,4 +392,4 @@ proc ::tclpdf::type1::metrics {path} {
   return $metrics
 }
 
-package provide tclpdf::type1 1.0
+package provide tclpdf::type1 1.1

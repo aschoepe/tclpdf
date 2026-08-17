@@ -456,4 +456,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableLayout 1.1
+package provide tclpdf::tableLayout 1.2

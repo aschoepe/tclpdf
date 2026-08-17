@@ -213,4 +213,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.2
+package provide tclpdf::attach 1.3

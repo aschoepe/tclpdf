@@ -73,4 +73,4 @@ proc ::tclpdf::liga::apply {prepared run} {
   return [::tclpdf::gsubApply apply $prepared $run]
 }
 
-package provide tclpdf::liga 1.1
+package provide tclpdf::liga 1.2

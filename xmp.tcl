@@ -393,4 +393,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xmp 1.0
+package provide tclpdf::xmp 1.1

@@ -306,4 +306,4 @@ set ::tclpdf::afmData::widths(ZapfDingbats) {
 }
 set ::tclpdf::afmData::descriptor(ZapfDingbats) {FontBBox {-1 -143 981 820} CapHeight 0 XHeight 0 Ascender 0 Descender 0 ItalicAngle 0 StdVW 90 Flags 4}
 
-package provide tclpdf::afmData 1.0
+package provide tclpdf::afmData 1.1

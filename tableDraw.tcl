@@ -198,4 +198,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.2
+package provide tclpdf::tableDraw 1.3

@@ -209,4 +209,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textAvoid 1.0
+package provide tclpdf::textAvoid 1.1

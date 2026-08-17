@@ -377,4 +377,4 @@ oo::define ::tclpdf::document::document {
   # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.1
+package provide tclpdf::svgPaint 1.2

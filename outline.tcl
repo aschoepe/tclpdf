@@ -203,4 +203,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::outline 1.2
+package provide tclpdf::outline 1.3

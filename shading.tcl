@@ -365,4 +365,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.1
+package provide tclpdf::shading 1.2

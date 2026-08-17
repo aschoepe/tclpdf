@@ -269,4 +269,4 @@ proc ::tclpdf::imagePngAlpha::Indices {line depth width} {
   return $indices
 }
 
-package provide tclpdf::imagePngAlpha 1.0
+package provide tclpdf::imagePngAlpha 1.1

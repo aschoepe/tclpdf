@@ -398,4 +398,4 @@ proc ::tclpdf::otLayout::classDef {table offset} {
   return $classes
 }
 
-package provide tclpdf::otLayout 1.0
+package provide tclpdf::otLayout 1.1

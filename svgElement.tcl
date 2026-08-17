@@ -282,4 +282,4 @@ oo::define ::tclpdf::document::document {
   # operators are the only description of the shape available here.
 }
 
-package provide tclpdf::svgElement 1.1
+package provide tclpdf::svgElement 1.2

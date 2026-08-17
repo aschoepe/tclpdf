@@ -401,4 +401,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.2
+package provide tclpdf::svg 1.3

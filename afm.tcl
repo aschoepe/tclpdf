@@ -219,4 +219,4 @@ proc ::tclpdf::afm::Check {font} {
   return
 }
 
-package provide tclpdf::afm 1.1
+package provide tclpdf::afm 1.2
