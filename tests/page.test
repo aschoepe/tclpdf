@@ -170,4 +170,176 @@ test page-content-5.2 {an index outside the document is refused} -body {
   list $code [string match {*page*} $message]
 } -result {1 1}
 
+# -- page boxes: what is refused before it is stored --------------------------
+#
+# Measured 2026-08-16, before the checks: -format {0 0}, a crop box of
+# {-10 -10 9999 9999} on A4, a reversed pair and a box of no area all went
+# through and into the file, and neither qpdf nor veraPDF (PDF/A-1b) said a
+# word about any of them.
+
+test page-box-6.1 {a box inside the media box is stored and read back} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc page box crop {10 10 200 287}
+  $doc page box trim {0 0 210 297}
+  set result [list [pageRound [$doc page box crop]] [pageRound [$doc page box trim]]]
+  $doc destroy
+  set result
+} -result {{10.000 10.000 200.000 287.000} {0.000 0.000 210.000 297.000}}
+
+test page-box-6.2 {a box sticking out to the left is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page box crop {-1 10 200 287}} message]
+  $doc destroy
+  list $code [string match {*outside the media box*} $message]
+} -result {1 1}
+
+test page-box-6.3 {a box sticking out at the bottom is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page box bleed {10 -1 200 287}} message]
+  $doc destroy
+  list $code [string match {*outside the media box*} $message]
+} -result {1 1}
+
+test page-box-6.4 {a box sticking out to the right is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page box trim {10 10 211 287}} message]
+  $doc destroy
+  list $code [string match {*outside the media box*} $message]
+} -result {1 1}
+
+test page-box-6.5 {a box sticking out at the top is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page box art {10 10 200 298}} message]
+  $doc destroy
+  list $code [string match {*outside the media box*} $message]
+} -result {1 1}
+
+test page-box-6.6 {the message names both rectangles in the document unit} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page box crop {0 0 300 100}} message]
+  $doc destroy
+  list $code [string match {*{0 0 300 100} mm*{0 0 210 297} mm*} $message]
+} -result {1 1}
+
+test page-box-6.7 {a box refused leaves the page as it was} -body {
+  # Refuse before write: a failed crop box must not half-arrive.
+  set doc [tclpdf new]
+  $doc page add
+  catch {$doc page box crop {0 0 300 100}}
+  set crop [$doc page box crop]
+  $doc destroy
+  set crop
+} -result {}
+
+test page-box-6.8 {a box of no width or no height is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach box {{10 10 10 100} {10 10 100 10} {10 10 10 10}} {
+    lappend codes [catch {$doc page box crop $box} message]
+  }
+  $doc destroy
+  list $codes [string match {*x1 must exceed x0*} $message]
+} -result {{1 1 1} 1}
+
+test page-box-6.9 {reversed corners are refused, not swapped} -body {
+  # 7.9.5 lets a reader normalise any two diagonal corners; tclpdf names the
+  # mistake instead, because coords and page size take the order literally.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page box crop {200 287 10 10}} message]
+  set crop [$doc page box crop]
+  $doc destroy
+  list $code [string match {*x1 must exceed x0*} $message] $crop
+} -result {1 1 {}}
+
+test page-box-6.10 {0.001 pt of slack: a rounding residue passes, a real overhang does not} -body {
+  # A caller's own arithmetic in mm may end a hair past the table value; that
+  # is not an overhang. 0.001 mm beyond the edge is 0.0028 pt, and is.
+  set doc [tclpdf new]
+  $doc page add
+  set residue [catch {$doc page box crop {0 0 210 297.0000001}}]
+  set overhang [catch {$doc page box crop {0 0 210 297.001}} message]
+  $doc destroy
+  list $residue $overhang [string match {*outside the media box*} $message]
+} -result {0 1 1}
+
+test page-box-6.11 {a media box below 3 pt is refused} -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc page box media {0 0 2 2}} message]
+  $doc destroy
+  list $code [string match {*between 3 and 14400 pt*} $message]
+} -result {1 1}
+
+test page-box-6.12 {a media box above 14400 pt is refused, 14400 itself is not} -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set refused [catch {$doc page box media {0 0 14401 100}} message]
+  set allowed [catch {$doc page box media {0 0 14400 14400}}]
+  $doc destroy
+  list $refused [string match {*between 3 and 14400 pt*} $message] $allowed
+} -result {1 1 0}
+
+test page-box-6.13 {5080 mm is exactly 14400 pt and passes} -body {
+  set doc [tclpdf new]
+  set code [catch {$doc page add -format {5080 5080}} message]
+  $doc destroy
+  list $code $message
+} -result {0 0}
+
+test page-box-6.14 {page add refuses a -format of no size or negative size} -body {
+  set doc [tclpdf new]
+  set codes {}
+  foreach format {{0 0} {-100 -50} {6000 6000} {0.5 100}} {
+    lappend codes [catch {$doc page add -format $format} message]
+  }
+  set count [$doc page count]
+  $doc destroy
+  list $codes $count [string match {*-format*between 3 and 14400 pt*} $message]
+} -result {{1 1 1 1} 0 1}
+
+test page-box-6.15 {shrinking the media box under a crop box is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc page box crop {10 10 200 287}
+  set code [catch {$doc page box media {0 0 100 100}} message]
+  set size [$doc page size]
+  $doc destroy
+  list $code [string match {*page box crop*outside the media box*} $message] \
+      [pageRound $size 0]
+} -result {1 1 {210 297}}
+
+test page-box-6.16 {growing the media box, or moving it while it still holds the others, is fine} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc page box crop {10 10 200 287}
+  set code [catch {$doc page box media {-10 -10 300 300}} message]
+  set size [$doc page size]
+  $doc destroy
+  list $code [pageRound $size 0]
+} -result {0 {310 310}}
+
+test page-box-6.17 {the getters are what they were} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set before [list [$doc page box media] [$doc page box crop] [$doc page size]]
+  $doc destroy
+  list [pageRound [lindex $before 0]] [lindex $before 1] [pageRound [lindex $before 2]]
+} -result {{0.000 0.000 210.000 297.000} {} {210.000 297.000}}
+
+test page-box-6.18 {a list that is not four numbers is still refused first} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc page box crop {1 2 3}} message]
+  $doc destroy
+  list $code [string match {*x0 y0 x1 y1*} $message]
+} -result {1 1}
+
 cleanupTests

@@ -104,6 +104,25 @@ $doc text "2" -at [list 55 $y] -size 9 -rise 3.5
 $doc font -family helvetica -size 7
 $doc text "subscript and superscript through -rise" -at [list 62 $y]
 
+# A no-break space (U+00A0) between a number and its unit. WinAnsiEncoding
+# has it at 0xA0 as a second code for the space glyph (ISO 32000-1 Annex D),
+# so the standard fourteen set it - as wide as a space, and still a no-break
+# space when the text is extracted.
+$doc font -size 11
+$doc text "12\u00A0\u20AC and 5\u00A0kg" -at [list 130 $y]
+$doc font -size 7
+$doc text "no-break space, U+00A0, in Helvetica" -at [list 130 [expr {$y + 4}]]
+
+# The same inside a paragraph. A line never breaks at a no-break space - the
+# amount goes to the next line WITH its unit, "the key" ends the second line
+# and "5 EUR" opens the third - and a justified line stretches only the word
+# spaces: the gap between "34" and its euro sign stays the width of a space
+# while the ones around it grow (UAX #14 class GL; ISO 32000-1 9.3.3).
+$doc font -size 8
+$doc text "The rent is 12\u00A0\u20AC, the deposit 34\u00A0\u20AC and the key\
+    5\u00A0\u20AC: an amount keeps its unit at the end of a line, and only the\
+    word spaces stretch." -at [list 130 [expr {$y + 10}]] -width 34 -align justify
+
 # -- rotation --------------------------------------------------------------
 
 set y [expr {$y + 16}]

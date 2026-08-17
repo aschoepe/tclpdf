@@ -40,11 +40,18 @@ test bidi-1.2 {the Arabic digits and separators are found inside their block} \
   # [class] decides the answer. Written the other way round, an Arabic-Indic
   # number would be reversed with the letters around it and read backwards -
   # exactly the defect this module exists to prevent, one alphabet over.
+  #
+  # U+066B and U+066C, the Arabic decimal and thousands separators, are AN in
+  # DerivedBidiClass.txt and not CS - part of the number, not a separator
+  # inside it - so they answer "digit" and belong to a number wherever they
+  # touch it, where the full stop and the comma (CS) belong only between two
+  # digits. They used to be listed by hand as separators; the table says
+  # otherwise, and the table is Unicode's.
   list [::tclpdf::bidi class 0x0660] [::tclpdf::bidi class 0x0669] \
       [::tclpdf::bidi class 0x066A] [::tclpdf::bidi class 0x066B] \
       [::tclpdf::bidi class 0x066C] [::tclpdf::bidi class 0x06F0] \
       [::tclpdf::bidi class 0x0627]
-} -result {digit digit terminator separator separator digit rtl}
+} -result {digit digit terminator digit digit digit rtl}
 
 test bidi-1.3 {the right-to-left blocks agree with shaping.tcl} -body {
   # Two modules hold a list of the same blocks for different reasons, and the
@@ -74,6 +81,71 @@ test bidi-1.3 {the right-to-left blocks agree with shaping.tcl} -body {
   }
   lrange $wrong 0 4
 } -result {}
+
+test bidi-1.4 {the terminators are the database's, not a hand list's} -body {
+  # Measured 2026-08-16 with DejaVu Sans: "5°", "£3" and "7‰" in a -direction
+  # rtl line came out of the file as "°5", "3£" and "‰7", while "5%" and "5€"
+  # were right - the hand list knew the percent and the euro sign and not the
+  # degree, the pound and the per mille sign, all three ET in UAX #9. Every
+  # ET of the Latin-1 block, the per mille sign, the currency block INCLUDING
+  # its unassigned code points (the file's @missing default for 20A0..20CF is
+  # ET), the number sign and the plus-minus sign; and the superscript digits,
+  # which are EN.
+  list [classes "°£‰¢¥#±"] [::tclpdf::bidi class 0x20CF] [classes "²³¹"] \
+      [::tclpdf::bidi class 0x2070] [::tclpdf::bidi class 0x2081]
+} -result {{terminator terminator terminator terminator terminator terminator\
+    terminator} terminator {digit digit digit} digit digit}
+
+test bidi-1.5 {ES is a terminator and NO-BREAK SPACE a separator, by rule} \
+    -body {
+  # Two places where the reduction to three classes bends UAX #9 on purpose,
+  # and a test so that neither can silently become the plain rule: the plus,
+  # the hyphen-minus and the minus sign are ES (rule W4, joins between two
+  # digits only) and are treated as ET (rule W5, joins beside one) so that
+  # "-5" stays whole; U+00A0 is CS in the database itself, the space that
+  # groups thousands, and joins between two digits like the comma.
+  list [classes "+-−"] [::tclpdf::bidi class 0x00A0] \
+      [::tclpdf::bidi segments {45 53}] \
+      [::tclpdf::bidi segments {49 160 50 51 52}] \
+      [::tclpdf::bidi segments {160 53}]
+} -result {{terminator terminator terminator} separator {{0 1}} {{0 4}}\
+    {{0 0} {1 1}}}
+
+test bidi-1.6 {bidiData.tcl is what the generator makes of the UCD file} \
+    -body {
+  # A generated table that drifted from its source - a hand fix, a newer
+  # DerivedBidiClass.txt without a rerun - would still load and still answer,
+  # just not what Unicode says. So the generator is run and its output
+  # compared with the file that ships, byte for byte.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set made [exec [info nameofexecutable] [file join $root tools mkbidi.tcl] \
+      [file join $root tools ucd DerivedBidiClass.txt]]
+  set channel [open [file join $root bidiData.tcl] r]
+  fconfigure $channel -encoding utf-8
+  set shipped [read $channel]
+  close $channel
+  string equal [string trimright $made \n] [string trimright $shipped \n]
+} -result 1
+
+test bidi-1.7 {the table is sorted, free of overlap and reduced completely} \
+    -body {
+  # [class] finds a character by halving the table, which needs the order and
+  # the absence of overlap; and every class the table carries has to be one
+  # the reduction knows, or a character would come back with a raw UAX #9
+  # class instead of one of the six this module answers.
+  set previous -1
+  set wrong {}
+  foreach {first last class} $::tclpdf::bidiData::ranges {
+    if {$first <= $previous || $last < $first} {
+      lappend wrong [format U+%04X $first]
+    }
+    if {![dict exists $::tclpdf::bidi::numberClasses $class]} {
+      lappend wrong $class
+    }
+    set previous $last
+  }
+  list [expr {[llength $::tclpdf::bidiData::ranges] > 0}] $wrong
+} -result {1 {}}
 
 test bidi-2.1 {a number is one piece, everything else is one per position} \
     -body {
@@ -116,6 +188,30 @@ test bidi-2.5 {a glyph that stands for several characters is never a digit} \
   # number and set it left to right.
   ::tclpdf::bidi segments {52 -1 52}
 } -result {{0 0} {1 1} {2 2}}
+
+test bidi-2.6 {a degree, a pound, a per mille beside a digit are the number} \
+    -body {
+  # The three measured defects, and the rest of the Latin-1 terminators with
+  # them: each is ONE piece, exactly like "12%" in 2.3, so the reversal keeps
+  # the temperature, the amount and the rate the way round they were written.
+  set pieces {}
+  foreach string {"5°" "£3" "7‰" "2²" "¢5" "¥5" "#5" "±5" "-17,5°" "£1.234,50"} {
+    lappend pieces [::tclpdf::bidi segments \
+        [lmap char [split $string {}] {scan $char %c}]]
+  }
+  set pieces
+} -result {{{0 1}} {{0 1}} {{0 1}} {{0 1}} {{0 1}} {{0 1}} {{0 1}} {{0 1}}\
+    {{0 5}} {{0 8}}}
+
+test bidi-2.7 {an Arabic separator belongs to the number even at its end} \
+    -body {
+  # AN, not CS: "٥٫" is one piece where "5." is two, and U+0600, the ARABIC
+  # NUMBER SIGN that a year or a verse count is written after, is AN as well
+  # and opens the number it belongs to.
+  list [::tclpdf::bidi segments {0x0665 0x066B}] \
+      [::tclpdf::bidi segments {53 46}] \
+      [::tclpdf::bidi segments {0x0600 0x0661 0x0664}]
+} -result {{{0 1}} {{0 0} {1 1}} {{0 2}}}
 
 test bidi-3.1 {the mirrored pairs, and the ones that only look like pairs} \
     -body {

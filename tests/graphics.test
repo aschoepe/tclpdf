@@ -506,6 +506,119 @@ test graphics-pattern-4.1 {pattern size reports the tile} -body {
   list [lmap value $size {format %.0f $value}] $names
 } -result {{10 5} tile}
 
+# The pattern dictionaries of a document, straight from the writer's buffer -
+# one body per PatternType 1 object, so a test can look at /Matrix (or its
+# absence) without writing and re-reading a file.
+proc ::tclpdfTest::patternBodies {doc} {
+  set writer [$doc writer]
+  set bodies {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match {*/PatternType 1*} $body]} {
+      lappend bodies $body
+    }
+  }
+  return $bodies
+}
+
+# The six numbers of the /Matrix in a pattern body, or the empty string.
+proc ::tclpdfTest::patternMatrix {body} {
+  if {[regexp {/Matrix \[([^\]]*)\]} $body -> numbers]} {
+    return $numbers
+  }
+  return {}
+}
+
+# -- the pattern matrix (8.7.3.1, Table 75) ---------------------------------
+#
+# Pattern space hangs off the DEFAULT space of the page. Without a /Matrix the
+# tiles start at the page's bottom left corner, and a shape anywhere else gets
+# them cut at whatever phase falls on its edge; a hatch could be turned only
+# inside the tile script. -matrix writes the six numbers as they stand,
+# -origin anchors the grid at a document point.
+
+test graphics-pattern-4.2 {no option, no /Matrix - the object is what it was} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create tile -size {4 4} -script {}
+  set bodies [::tclpdfTest::patternBodies $doc]
+  $doc destroy
+  list [llength $bodies] [string match {*/Matrix*} [lindex $bodies 0]]
+} -result {1 0}
+
+test graphics-pattern-4.3 {-matrix is written as the six numbers given} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create turned -size {4 4} -matrix {0.7071 0.7071 -0.7071 0.7071 0 0} \
+      -script {}
+  set bodies [::tclpdfTest::patternBodies $doc]
+  $doc destroy
+  ::tclpdfTest::patternMatrix [lindex $bodies 0]
+} -result {0.7071 0.7071 -0.7071 0.7071 0 0}
+
+test graphics-pattern-4.4 {-origin becomes a translation to the document point} -body {
+  # A4, mm: {30 50} is 30 mm from the left and 50 mm from the top, so
+  # x = 30 * 72/25.4 and y = 841.89 - 50 * 72/25.4 - the same mirroring
+  # [coords] does for -at.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pattern create anchored -size {4 4} -origin {30 50} -script {}
+  set bodies [::tclpdfTest::patternBodies $doc]
+  $doc destroy
+  lassign [::tclpdfTest::patternMatrix [lindex $bodies 0]] a b c d e f
+  list $a $b $c $d [format %.2f $e] [format %.2f $f] \
+      [format %.2f [expr {30 * 72 / 25.4}]] \
+      [format %.2f [expr {841.89 - 50 * 72 / 25.4}]]
+} -result {1 0 0 1 85.04 700.16 85.04 700.16}
+
+test graphics-pattern-4.5 {a wrong matrix is refused before anything is written} -body {
+  # Five numbers, a letter, a singular matrix (a*d - b*c = 0: the tiles
+  # collapse onto a line and a reader paints nothing, silently), a point
+  # that is not one, and both options at once. Each refusal must leave no
+  # object, no /Pattern resource and no pushed canvas - and the script must
+  # not have run.
+  set wrong {}
+  foreach call {
+    {-matrix {1 0 0 1 0}}
+    {-matrix {1 0 0 1 0 0 0}}
+    {-matrix {1 0 0 x 0 0}}
+    {-matrix {1 2 2 4 0 0}}
+    {-matrix {0 0 0 0 0 0}}
+    {-origin {1 2 3}}
+    {-origin {1 x}}
+    {-matrix {1 0 0 1 0 0} -origin {1 1}}
+  } {
+    set doc [tclpdf new]
+    $doc page add
+    set ::ran 0
+    set code [catch {$doc pattern create p -size {4 4} {*}$call -script {set ::ran 1}}]
+    set left [list $code $::ran [llength [::tclpdfTest::patternBodies $doc]] \
+        [dict keys [$doc resource Pattern]] [$doc canvas depth] [$doc pattern names]]
+    $doc destroy
+    if {$left ne {1 0 0 {} 0 {}}} {
+      lappend wrong [list $call $left]
+    }
+  }
+  unset -nocomplain ::ran
+  set wrong
+} -result {}
+
+test graphics-pattern-4.6 {a mirror is not singular, and the size stays unscaled} -body {
+  # A negative determinant is a mirror and is fine; -matrix and -origin are
+  # each accepted alone. And [pattern size] answers the BBox of pattern space
+  # - a matrix that doubles the tile does not double the answer.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc pattern create mirror -size {4 4} \
+      -matrix {-1 0 0 1 0 0} -script {}}] \
+      [catch {$doc pattern create big -size {4 4} -matrix {2 0 0 2 0 0} -script {}}] \
+      [catch {$doc pattern create here -size {4 4} -origin {10 10} -script {}}]]
+  set size [lmap value [$doc pattern size big] {format %.0f $value}]
+  set names [$doc pattern names]
+  $doc destroy
+  list $codes $size $names
+} -result {{0 0 0} {4 4} {mirror big here}}
+
 # -- refused values, refused early -----------------------------------------
 #
 # Two patterns from the second norm review. First: values at the edge of what

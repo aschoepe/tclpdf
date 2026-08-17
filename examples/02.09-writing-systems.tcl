@@ -221,15 +221,24 @@ set y [expr {$y + 10}]
 # rate are drawn mirrored. Both are checked against the file rather than
 # claimed - tests/text.test 13.x reads the glyphs back out of the content
 # stream and the text back out through pdftotext.
+#
+# THE THIRD LINE is the same point with the OTHER signs an amount comes with:
+# a temperature with its degree sign, a rate in per mille, an amount in
+# pounds. They are European Terminators in UAX #9 like the percent and the
+# euro sign, and they used to be missing from a hand list - measured
+# 2026-08-16, "5°" came out of the file as "°5". The classes are read off the
+# Unicode database now (bidiData.tcl), so the three stay with their numbers.
 set invoice "الفاتورة 4711 - 1.234,50 € (19%)"
+set amounts "الحرارة -17,5° - الخصم 3‰ - المبلغ £1.234,50"
 $doc font -family sans -size 7 -color {0.45 0.45 0.45}
 $doc text "The same words in DejaVu Sans, set with -direction rtl and nothing\
-    else, and an invoice line under them:" -at [list 20 $y]
+    else, an invoice line and a line of amounts under them:" -at [list 20 $y]
 $doc font -family hebrew -size 14 -color black
 $doc text [dict get $shaped arabic] -at [list 190 [expr {$y + 7}]] \
     -direction rtl
 $doc text $invoice -at [list 190 [expr {$y + 15}]] -direction rtl
-set y [expr {$y + 20}]
+$doc text $amounts -at [list 190 [expr {$y + 23}]] -direction rtl
+set y [expr {$y + 28}]
 
 $doc font -family sans -size 8 -color {0.35 0.35 0.35}
 $doc text "Measured, not asserted. The shapes come out of the init, medi and\

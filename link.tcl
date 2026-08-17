@@ -43,6 +43,9 @@ oo::define ::tclpdf::document::document {
         && [dict get $options structure] eq {}} {
       return -code error "tclpdf: link needs -url, -page or -structure"
     }
+    # Annotation flags (/F) and actions (/A, the URI link) are PDF 1.1
+    # (Reference 1.7, Table 8.15 and 8.5); a 1.0 file has neither.
+    my RequireVersion 1.1 "link"
     lassign [dict get $options at] left top
     lassign [dict get $options size] width height
     lassign [my coords $left [expr {$top + $height}]] x0 y0

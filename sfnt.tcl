@@ -22,6 +22,7 @@
 #   glyf  the outlines - only walked, never interpreted
 #   OS/2  fsType, the flag saying what the vendor permits
 #   post  italic angle
+#   CFF   the header and the first Top DICT only - is the font CID-keyed?
 #
 # All values are big-endian regardless of the machine, which is what every
 # "S"/"I" in the binary scans below is about. Getting one wrong yields a font
@@ -79,7 +80,13 @@ proc ::tclpdf::sfnt::parse {bytes} {
   # cmap is NOT required: a subset built by subset.tcl deliberately carries
   # none, because with Identity-H the PDF addresses glyphs directly. Demanding
   # it here would make the package unable to re-read its own output.
-  foreach required {head hhea hmtx maxp} {
+  # An OTTO file without a CFF table has no outlines at all - the signature
+  # promises them in that table and nowhere else (OpenType spec, "OTTO").
+  set requiredTables {head hhea hmtx maxp}
+  if {$outlines eq "cff"} {
+    lappend requiredTables "CFF "
+  }
+  foreach required $requiredTables {
     if {![dict exists $tables $required]} {
       return -code error "tclpdf: the font has no \"$required\" table and\
           cannot be embedded"
@@ -100,7 +107,9 @@ proc ::tclpdf::sfnt::parse {bytes} {
   # by this package and goes in whole.
   if {$outlines eq "cff"} {
     dict set font loca {}
+    dict set font cidKeyed [ParseCffCidKeyed $bytes $tables]
   } else {
+    dict set font cidKeyed 0
     dict set font loca [ParseLoca $bytes $tables \
         [dict get $font indexToLocFormat] [dict get $font numGlyphs]]
   }
@@ -318,6 +327,130 @@ proc ::tclpdf::sfnt::ParseLoca {bytes tables format numGlyphs} {
 # tclpdf reads and reports it but does not refuse on it: no PDF reader and no
 # validator enforces it either, and a package that silently declines to embed
 # a font the user owns a licence for is the more harmful of the two errors.
+# Whether the CFF table holds a CID-keyed font - the one thing about CFF that
+# has to be known before embedding, and the only thing read from that table.
+#
+# A CFF font is either name-keyed or CID-keyed, and the difference decides
+# what a glyph number in the PDF MEANS. ISO 32000-1 9.7.4.2: for a CIDFontType0
+# whose program is not CID-keyed the CID is the glyph index; for a CID-keyed
+# one the CID is looked up in the program's charset. This package addresses
+# glyphs by index through Identity-H, which is right for the first kind and
+# silently wrong for the second wherever charset is not the identity - no
+# validator notices, only the wrong glyph on the page. Measured on Hiragino
+# Sans GB W3 (macOS): 288 of 29352 glyphs sit under a CID that is not their
+# index.
+#
+# The mark is the ROS operator (escape 12 30) in the Top DICT, which a CID
+# font MUST carry and MUST carry first (CFF spec, TN 5176 section 18). The
+# whole DICT is walked nevertheless: it costs nothing and does not depend on a
+# producer having read that sentence. To get there: header (TN 5176 section 6;
+# hdrSize at byte 2), Name INDEX, Top DICT INDEX (section 5 for INDEX, section
+# 4 for the DICT data). Nothing past the first Top DICT is read.
+proc ::tclpdf::sfnt::ParseCffCidKeyed {bytes tables} {
+  lassign [dict get $tables "CFF "] position length
+  set cff [string range $bytes $position [expr {$position + $length - 1}]]
+  if {[string length $cff] < 4} {
+    return -code error "tclpdf: the CFF table is too short to hold a font"
+  }
+  binary scan $cff @2cu hdrSize
+  lassign [CffIndex $cff $hdrSize] next -
+  lassign [CffIndex $cff $next] - topDict
+  if {$topDict eq {}} {
+    # count 0: an INDEX with nothing in it. A CFF with no Top DICT describes
+    # no font, so there is nothing to embed.
+    return -code error "tclpdf: the CFF table has an empty Top DICT INDEX -\
+        it describes no font"
+  }
+  return [CffDictHasOperator $topDict 12 30]
+}
+
+# One CFF INDEX (TN 5176 section 5): count, offSize, count+1 offsets that are
+# 1-based into the data that follows. Returns the position just past the INDEX
+# and its FIRST item - all this package ever needs from one. count 0 is a
+# two-byte INDEX with no offSize and no data at all.
+proc ::tclpdf::sfnt::CffIndex {cff at} {
+  if {[binary scan $cff @${at}Su count] != 1} {
+    return -code error "tclpdf: the CFF table is truncated"
+  }
+  if {$count == 0} {
+    return [list [expr {$at + 2}] {}]
+  }
+  binary scan $cff @[expr {$at + 2}]cu offSize
+  if {$offSize < 1 || $offSize > 4} {
+    return -code error "tclpdf: the CFF table has an INDEX with offSize\
+        $offSize, which the format does not allow (1 to 4)"
+  }
+  set at [expr {$at + 3}]
+  set offsets {}
+  # Two offsets suffice for the first item; the last one says where the INDEX
+  # ends. offSize 3 has no binary-scan format, so every size is folded from
+  # bytes.
+  foreach index [list 0 1 $count] {
+    if {[binary scan $cff @[expr {$at + $index * $offSize}]cu$offSize digits] != 1
+        || [llength $digits] != $offSize} {
+      return -code error "tclpdf: the CFF table is truncated"
+    }
+    set value 0
+    foreach digit $digits {
+      set value [expr {$value * 256 + $digit}]
+    }
+    lappend offsets $value
+  }
+  lassign $offsets first second last
+  set data [expr {$at + ($count + 1) * $offSize - 1}]
+  return [list [expr {$data + $last}] \
+      [string range $cff [expr {$data + $first}] [expr {$data + $second - 1}]]]
+}
+
+# Whether a CFF DICT (TN 5176 section 4) carries the operator b0 - or, with b0
+# 12, the escaped operator b1. Operands are skipped by their own encoding:
+# 28 and 29 carry two and four bytes, 30 is a real number of nibbles up to one
+# that is 0xf, 32 to 254 are integers of one to three bytes; 0 to 21 are
+# operators, 12 the escape. Reading operands as operators would find the
+# number 30 where no ROS is - hence the walk instead of a byte search.
+proc ::tclpdf::sfnt::CffDictHasOperator {dict b0 {b1 {}}} {
+  set length [string length $dict]
+  set at 0
+  while {$at < $length} {
+    binary scan $dict @${at}cu byte
+    if {$byte <= 21} {
+      if {$byte == 12} {
+        binary scan $dict @[expr {$at + 1}]cu escaped
+        if {$b0 == 12 && $escaped == $b1} {
+          return 1
+        }
+        incr at 2
+      } else {
+        if {$byte == $b0 && $b1 eq {}} {
+          return 1
+        }
+        incr at
+      }
+    } elseif {$byte == 28} {
+      incr at 3
+    } elseif {$byte == 29} {
+      incr at 5
+    } elseif {$byte == 30} {
+      incr at
+      while {$at < $length} {
+        binary scan $dict @${at}cu nibbles
+        incr at
+        if {($nibbles & 0x0f) == 0x0f || ($nibbles >> 4) == 0x0f} {
+          break
+        }
+      }
+    } elseif {$byte <= 246} {
+      incr at
+    } elseif {$byte <= 254} {
+      incr at 2
+    } else {
+      # 22 to 27, 31 and 255 are reserved; one byte each, on the way past.
+      incr at
+    }
+  }
+  return 0
+}
+
 proc ::tclpdf::sfnt::ParseFsType {bytes tables} {
   if {![dict exists $tables OS/2]} {
     return 0

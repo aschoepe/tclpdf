@@ -82,6 +82,8 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: pageLabels -start takes a positive integer,\
           not \"$start\""
     }
+    # Page labels are PDF 1.3 (Reference 1.7, 8.3.1).
+    my RequireVersion 1.3 "pageLabels"
     if {$ranges eq {}} {
       my onSelf catalog PageLabelCatalog
     }

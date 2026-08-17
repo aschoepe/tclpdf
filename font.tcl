@@ -58,11 +58,36 @@ oo::define ::tclpdf::document::document {
     # The file says what it is; the extension does not. Read once and let both
     # parsers work on the same bytes rather than opening it twice.
     set bytes [::tclpdf::io read $path]
+    # An embedded face is PDF 1.2 whatever its kind: the program goes in as
+    # a FlateDecode stream (Reference 1.7, Table 3.5), and a TrueType face is
+    # written as a Type 0 font with Identity-H and a ToUnicode CMap (5.6 and
+    # Table 5.18, both PDF 1.2). Checked here, at the call, rather than at
+    # write time when the caller cannot tell any more which line asked.
+    my RequireVersion 1.2 "font embed"
     if {[string index $bytes 0] eq "\x80" || [string range $bytes 0 1] eq "%!"} {
       dict set fonts $alias [my FontEmbedType1 $alias $path $bytes \
           [dict get $options metrics]]
     } else {
       set parsed [::tclpdf::sfnt parse $bytes]
+      # A CFF face goes in as FontFile3 with /Subtype /OpenType, which is
+      # PDF 1.6 (Reference 1.7, Table 5.23).
+      if {[dict get $parsed outlines] eq "cff"} {
+        my RequireVersion 1.6 "font embed of a CFF (OpenType) face"
+      }
+      # A CFF face goes in whole as CIDFontType0 and its glyphs are addressed
+      # by index through Identity-H. ISO 32000-1 9.7.4.2 lets that stand only
+      # for a name-keyed program; in a CID-keyed one the CID goes through the
+      # program's charset, and wherever that is not the identity a reader that
+      # follows the standard draws another glyph than the one measured here -
+      # silently, past every validator. Refused at embed time rather than
+      # built: the tree holds no such face, and mapping through charset would
+      # be a piece of its own.
+      if {[dict get $parsed cidKeyed]} {
+        return -code error "tclpdf: \"[file tail $path]\" is a CID-keyed CFF\
+            font, which tclpdf cannot embed - its glyphs would be addressed by\
+            CID, not by glyph index; convert it to TrueType or to a name-keyed\
+            CFF"
+      }
       lassign [my FontAxes $parsed $options $path] coordinates axes
       dict set fonts $alias [dict create \
           kind truetype \
@@ -740,7 +765,8 @@ oo::define ::tclpdf::document::document {
 
     # CFF outlines are embedded whole. Subsetting rewrites loca and glyf, and
     # a CFF font has neither - its outlines are charstrings in a table this
-    # package does not read. Everything else about the face is the same sfnt
+    # package reads no further than its Top DICT (sfnt.tcl, the CID-keyed
+    # question). Everything else about the face is the same sfnt
     # structure, which is why the road forks here and not earlier.
     set cff [expr {[dict get $parsed outlines] eq "cff"}]
     if {$cff} {
@@ -807,7 +833,7 @@ oo::define ::tclpdf::document::document {
         [expr {!$cff && [dict get $entry subset]}]]
 
     set descriptorNumber [$writer put [my FontSlot $alias descriptor] \
-        [::tclpdf::pdfObj dictionary [my FontDescriptorPairs $entry $baseName \
+        [::tclpdf::pdfObj dictionary [my FontDescriptorPairs $alias $entry $baseName \
             [$writer ref $fontFileNumber] $cff]]]
 
     # The CID font.
@@ -927,10 +953,25 @@ oo::define ::tclpdf::document::document {
   # factor of three. For an instance of a variable face the wght axis IS its
   # weight class, and the estimate follows the axis rather than the file's
   # default.
-  method FontDescriptorPairs {entry baseName fontFileRef {cff 0}} {
+  #
+  # FontBBox is the file's box - the whole face, not the glyphs the subset
+  # keeps, which is what fontTools' subsetter leaves in head as well unless
+  # told to recalculate - or,
+  # for an instance of a variable face, the box of the MOVED face from the
+  # instanced glyphs (varFont bounds), which is also what the subset's head
+  # table carries. The file's box describes the default outlines, and none of
+  # them is embedded for an instance: measured on Roboto at wght 900, the
+  # instance reaches 130 units (63 thousandths of an em) further right than
+  # the file's box says.
+  method FontDescriptorPairs {alias entry baseName fontFileRef {cff 0}} {
     set parsed [dict get $entry parsed]
     set units [dict get $parsed unitsPerEm]
-    lassign [dict get $parsed bbox] xMin yMin xMax yMax
+    set bbox [dict get $parsed bbox]
+    if {[llength [dict get $entry coordinates]]} {
+      package require tclpdf::varFont 1.0-
+      set bbox [::tclpdf::varFont bounds [my FontInstanced $alias]]
+    }
+    lassign $bbox xMin yMin xMax yMax
     set scale [expr {1000.0 / $units}]
     set italicAngle [dict get $parsed italicAngle]
     # Symbolic (bit 3) rather than nonsymbolic: the font is addressed by glyph

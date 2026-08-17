@@ -91,6 +91,33 @@ test font-3.1 {a subset carries only the glyphs asked for, plus components} -con
   list [expr {[llength $components] > 0}] $missing [expr {0 in $order}]
 } -result {1 {} 1}
 
+test font-3.2 {head.checkSumAdjustment makes the whole subset sum to 0xB1B0AFBA} -constraints haveFont -body {
+  # OpenType head: with the field at zero the file sums to S, and the field
+  # is 0xB1B0AFBA - S; so with the field in place the file sums to
+  # 0xB1B0AFBA. Verified the way fontTools verifies it. Before 2026-08-17 the
+  # field shipped as 0 in every subset while a comment promised otherwise.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set built [::tclpdf::subset build $parsed [list [dict get $parsed cmap 65]]]
+  set bytes [dict get $built bytes]
+  # Find head in the directory: 12 bytes header, 16 per entry.
+  binary scan $bytes @4Su count
+  set headOffset -1
+  for {set i 0} {$i < $count} {incr i} {
+    binary scan $bytes @[expr {12 + $i * 16}]a4IuIuIu tag sum offset length
+    if {$tag eq "head"} {
+      set headOffset $offset
+      set headSum $sum
+    }
+  }
+  binary scan $bytes @[expr {$headOffset + 8}]Iu adjustment
+  set total [::tclpdf::subset::Checksum $bytes]
+  # The directory checksum of head is taken with the field zeroed.
+  set headZeroed [string replace [string range $bytes $headOffset [expr {$headOffset + 53}]] 8 11 [binary format Iu 0]]
+  list [expr {$headOffset > 0}] [expr {$adjustment != 0}] \
+      [format %08X $total] \
+      [expr {$headSum == [::tclpdf::subset::Checksum $headZeroed]}]
+} -result {1 1 B1B0AFBA 1}
+
 # Split a composite glyph into one record per component: the flags, the glyph
 # id, and everything after it as hex - the offset and the optional scale. The
 # tail is what places the component; the dots of an A-dieresis sit above the A
@@ -993,5 +1020,202 @@ test font-11.2 {StemV follows the weight, and for an instance the wght axis} -bo
   }
   list $stems $caps
 } -result {{87 165} {711 711}}
+
+test font-11.3 {head and /FontBBox of an instance describe the moved face, of a plain subset the file} -constraints haveFont -body {
+  # Table 122: FontBBox is the box of ALL glyphs of the font at one origin,
+  # and for an instance the font is the moved face - the file's box describes
+  # outlines that were left behind. Roboto at wght 900 reaches 2483 units to
+  # the right where the file says 2353 (varFont bounds); both the subset's
+  # head table and the descriptor have to say 2483, in units and in
+  # thousandths of an em, and agree with each other. A face embedded as it
+  # came keeps the file's box in both places, byte for byte in head - a
+  # subset's box is the whole face's, as before.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed black [variableTree Roboto-Variable.ttf] -axes {wght 900}
+  $doc font embed plain $fontRegular
+  $doc text "Hamburgefonstiv" -at {20 30} -family black
+  $doc text "Hamburgefonstiv" -at {20 50} -family plain
+  set path [::tclpdfTest::scratch font-bbox.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  set boxes {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match {*/Type /FontDescriptor*} $body]} {
+      regexp {/FontName /[A-Z]{6}\+(\S+)} $body -> name
+      regexp {/FontBBox \[([^\]]*)\]} $body -> box
+      regexp {/FontFile2 (\d+) 0 R} $body -> fileNumber
+      set embedded [::tclpdf::sfnt parse [::tclpdfTest::streamOf $writer $fileNumber]]
+      set head [::tclpdf::sfnt table $embedded head]
+      binary scan $head @36SSSS xMin yMin xMax yMax
+      dict set boxes $name [list $box [list $xMin $yMin $xMax $yMax] \
+          [dict get $embedded unitsPerEm]]
+    }
+  }
+  $doc destroy
+  file delete $path
+  package require tclpdf::varFont
+  set original [::tclpdf::sfnt read [variableTree Roboto-Variable.ttf]]
+  set moved [::tclpdf::varFont bounds [::tclpdf::varFont all $original \
+      [::tclpdf::varFont coordinates $original {wght 900}]]]
+  set plain [::tclpdf::sfnt read $fontRegular]
+  set result {}
+  foreach name {Roboto-Black DejaVuSans} expected [list $moved [dict get $plain bbox]] {
+    lassign [dict get $boxes $name] box head units
+    set scaled [lmap value $head {format %.5g [expr {$value * 1000.0 / $units}]}]
+    lappend result [expr {$head eq $expected}] \
+        [expr {[lmap value $box {format %.5g $value}] eq $scaled}]
+  }
+  list $result [lindex [dict get $boxes Roboto-Black] 1] \
+      [expr {$moved ne [dict get $original bbox]}] \
+      [format %.0f [lindex [dict get $boxes Roboto-Black] 0 2]]
+} -result {{1 1 1 1} {-1476 -555 2483 2163} 1 1212}
+
+# A CID-keyed CFF face, built rather than found - the tree holds none, and the
+# ones on this machine (Hiragino, in a macOS collection) may not be checked in.
+#
+# The mark of a CID font is the ROS operator (12 30) in the CFF Top DICT (TN
+# 5176 section 18), so NimbusSans gets one: the operands "391 392 0" as
+# shortints and the escaped operator go in front of - or, with "end", behind -
+# the first Top DICT, the Top DICT INDEX is rebuilt with offSize 4 and shifted
+# offsets, and the CFF table is appended to the sfnt under a corrected
+# directory entry. The Top DICT's own offsets into the CFF (charset,
+# CharStrings, Private) are NOT moved, so the result is a font that parses up
+# to its Top DICT and no further - which is exactly as far as the package
+# reads, and all the case needs.
+proc fontMakeCidKeyed {source target {where front}} {
+  set channel [open $source rb]
+  set bytes [read $channel]
+  close $channel
+  set parsed [::tclpdf::sfnt parse $bytes]
+  lassign [dict get $parsed tables "CFF "] position length
+  set cff [string range $bytes $position [expr {$position + $length - 1}]]
+  binary scan $cff @2cu hdrSize
+  # Name INDEX: walk past it.
+  set at $hdrSize
+  binary scan $cff @${at}Su count
+  binary scan $cff @[expr {$at + 2}]cu offSize
+  set at [expr {$at + 3}]
+  binary scan $cff @[expr {$at + $count * $offSize}]cu$offSize digits
+  set last 0
+  foreach digit $digits {
+    set last [expr {$last * 256 + $digit}]
+  }
+  set topAt [expr {$at + ($count + 1) * $offSize - 1 + $last}]
+  # Top DICT INDEX: read the items, prefix (or suffix) the first, rebuild.
+  binary scan $cff @${topAt}Su count
+  binary scan $cff @[expr {$topAt + 2}]cu offSize
+  set at [expr {$topAt + 3}]
+  set offsets {}
+  for {set index 0} {$index <= $count} {incr index} {
+    binary scan $cff @[expr {$at + $index * $offSize}]cu$offSize digits
+    set value 0
+    foreach digit $digits {
+      set value [expr {$value * 256 + $digit}]
+    }
+    lappend offsets $value
+  }
+  set data [expr {$at + ($count + 1) * $offSize - 1}]
+  set items {}
+  for {set index 0} {$index < $count} {incr index} {
+    lappend items [string range $cff [expr {$data + [lindex $offsets $index]}] \
+        [expr {$data + [lindex $offsets $index+1] - 1}]]
+  }
+  set ros [binary format cuSucuSucucucu 28 391 28 392 139 12 30]
+  if {$where eq "front"} {
+    lset items 0 $ros[lindex $items 0]
+  } else {
+    lset items 0 [lindex $items 0]$ros
+  }
+  set rebuilt [binary format Sucu $count 4]
+  set offset 1
+  append rebuilt [binary format Iu $offset]
+  foreach item $items {
+    incr offset [string length $item]
+    append rebuilt [binary format Iu $offset]
+  }
+  append rebuilt {*}$items
+  set end [expr {$data + [lindex $offsets end]}]
+  set cff [string range $cff 0 [expr {$topAt - 1}]]$rebuilt[string range $cff $end end]
+  # Back into the sfnt: appended at the end, directory entry moved there.
+  set pad [expr {(4 - [string length $bytes] % 4) % 4}]
+  append bytes [string repeat \0 $pad]
+  set newPosition [string length $bytes]
+  append bytes $cff
+  binary scan $bytes @4Su numTables
+  for {set index 0} {$index < $numTables} {incr index} {
+    set entry [expr {12 + $index * 16}]
+    if {[string range $bytes $entry [expr {$entry + 3}]] eq "CFF "} {
+      set bytes [string replace $bytes [expr {$entry + 8}] [expr {$entry + 15}] \
+          [binary format IuIu $newPosition [string length $cff]]]
+    }
+  }
+  set channel [open $target wb]
+  puts -nonewline $channel $bytes
+  close $channel
+  return $target
+}
+
+test font-12.1 {a name-keyed CFF face is read as one, and embeds} -constraints haveOtf -body {
+  # The regression side: NimbusSans carries no ROS, and font-8.1 already
+  # writes it. Here the flag itself is asserted, so that the detection cannot
+  # drift towards refusing everything.
+  set parsed [::tclpdf::sfnt read $::otf]
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc font embed haus $::otf} result]
+  $doc destroy
+  list [dict get $parsed outlines] [dict get $parsed cidKeyed] $code $result
+} -result {cff 0 0 haus}
+
+test font-12.2 {a ROS in the Top DICT marks the face CID-keyed} -constraints haveOtf -body {
+  set path [fontMakeCidKeyed $::otf [::tclpdfTest::scratch cid-keyed.otf]]
+  set parsed [::tclpdf::sfnt read $path]
+  file delete $path
+  list [dict get $parsed outlines] [dict get $parsed cidKeyed]
+} -result {cff 1}
+
+test font-12.3 {a CID-keyed CFF face is refused at embed time, by name} -constraints haveOtf -body {
+  # ISO 32000-1 9.7.4.2: with a CID-keyed program the CID goes through the
+  # program's charset, and this package addresses glyphs by index. Refused
+  # where the file is handed over, not at write time, and before anything is
+  # entered under the alias.
+  set path [fontMakeCidKeyed $::otf [::tclpdfTest::scratch cid-keyed.otf]]
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc font embed haus $path} result]
+  set names [$doc font names]
+  $doc destroy
+  file delete $path
+  list $code $result $names
+} -result [list 1 "tclpdf: \"cid-keyed.otf\" is a CID-keyed CFF font, which\
+    tclpdf cannot embed - its glyphs would be addressed by CID, not by glyph\
+    index; convert it to TrueType or to a name-keyed CFF" {}]
+
+test font-12.4 {the ROS is found behind the other operators as well} -constraints haveOtf -body {
+  # The spec puts ROS first; the walk does not rely on that. Behind every
+  # other operand of NimbusSans' Top DICT the walker has to have skipped each
+  # one by its own encoding to arrive at the operator at all.
+  set path [fontMakeCidKeyed $::otf [::tclpdfTest::scratch cid-keyed-end.otf] end]
+  set parsed [::tclpdf::sfnt read $path]
+  file delete $path
+  dict get $parsed cidKeyed
+} -result 1
+
+test font-12.5 {an OTTO file without a CFF table is refused} -constraints haveOtf -body {
+  # The signature promises outlines in that table and nowhere else. Relabelled
+  # in the directory, so that everything else about the file stays valid.
+  set bytes [::tclpdfTest::readBytes $::otf]
+  binary scan $bytes @4Su numTables
+  for {set index 0} {$index < $numTables} {incr index} {
+    set entry [expr {12 + $index * 16}]
+    if {[string range $bytes $entry [expr {$entry + 3}]] eq "CFF "} {
+      set bytes [string replace $bytes $entry [expr {$entry + 3}] "CFFx"]
+    }
+  }
+  catch {::tclpdf::sfnt parse $bytes} result
+  set result
+} -result {tclpdf: the font has no "CFF " table and cannot be embedded}
 
 cleanupTests

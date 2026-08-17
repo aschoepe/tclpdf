@@ -620,4 +620,154 @@ test textFlow-shy-1.3 {an untagged document is unchanged by any of it} -body {
       [regexp {\(Silbentren-\)} $stream]
 } -result {0 0 1}
 
+# The no-break space, U+00A0, in a paragraph. UAX #14 puts it in class GL,
+# glue: a line does not break at it. The breaker did - Tcl's \s matches it, so
+# "12<nbsp>EUR" split into two words, and the words were joined back with a
+# plain space, so the stream never saw the U+00A0 either. Justification then
+# counted the gap as a word space and handed it a share of the stretch that
+# only code 32 can take (ISO 32000-1 9.3.3), and the line stopped short.
+
+set flowAmounts "12\u00A0\u20AC und 34\u00A0\u20AC und 56\u00A0\u20AC"
+set flowAmountsLine \
+    "12\u00A0\u20AC und 34\u00A0\u20AC und 56\u00A0\u20AC und 78\u00A0\u20AC und 90\u00A0\u20AC ende"
+
+test textFlow-5.1 {a line does not break at a no-break space} -body {
+  # 60 pt of Helvetica 10 hold "12 EUR und 34" (52.82 pt) but not "12 EUR
+  # und 34 EUR" (61.16 pt) - broken at the no-break space the first line
+  # would end on "34" and leave the unit to the next one.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set lines [$doc textLines $::flowAmounts -family helvetica -size 10 -width 60]
+  $doc destroy
+  set lines
+} -result [list "12\u00A0\u20AC und" "34\u00A0\u20AC und" "56\u00A0\u20AC"]
+
+test textFlow-5.2 {nor with an embedded face} -constraints haveFlowFont -body {
+  # 65 pt of DejaVu 10: "12 EUR und 34" is 60.37 pt, with the unit 69.91.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set lines [$doc textLines $::flowAmounts -family body -size 10 -width 65]
+  $doc destroy
+  set lines
+} -result [list "12\u00A0\u20AC und" "34\u00A0\u20AC und" "56\u00A0\u20AC"]
+
+test textFlow-5.3 {the wrapped line keeps the byte 0xA0 in a standard face} -body {
+  # 0xA0, not 0x20 - the breaker used to join its words with a plain space
+  # and the extracted text lost the no-break space, while the same string
+  # drawn without -width kept it (afm-3.7).
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc text $::flowAmounts -at {20 700} -width 60 -family helvetica -size 10
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {\(12\\240\\200 und\) Tj} $stream] [regexp {\(12 \\200} $stream]
+} -result {1 0}
+
+test textFlow-5.4 {and the glyph of U+00A0 in an embedded one} -constraints haveFlowFont -body {
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc font embed body $::flowFont
+  $doc page add
+  $doc text $::flowAmounts -at {20 700} -width 65 -family body -size 10
+  set stream [::tclpdfTest::content $doc]
+  set drawn [::tclpdfTest::drawnText $doc body $stream]
+  $doc destroy
+  # Read back through the cmap: the character between "12" and the euro sign
+  # is U+00A0, and the whole paragraph comes out with its no-break spaces.
+  list [string range $drawn 0 4] [regexp -all "\u00A0" $drawn]
+} -result [list "12\u00A0\u20AC " 3]
+
+test textFlow-5.5 {a justified line with no-break spaces reaches the margin, Helvetica} -body {
+  # The first line holds five word spaces and three no-break spaces. Tw
+  # stretches the five (9.3.3); with the gap spread over eight the line ended
+  # 3 x 1.33 pt short of the margin.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text $::flowAmountsLine -at {20 700} -width 140 -align justify
+  set stream [::tclpdfTest::content $doc]
+  set first [lindex [$doc textLines $::flowAmountsLine -width 140] 0]
+  set natural [$doc textWidth $first]
+  $doc destroy
+  regexp {([-0-9.]+) Tw} $stream -> tw
+  set spaces [regexp -all { } $first]
+  set edge [expr {$natural + $tw * $spaces}]
+  list [regexp -all "\u00A0" $first] $spaces [expr {abs($edge - 140) < 0.01}]
+} -result {3 5 1}
+
+test textFlow-5.6 {and with an embedded face, through the TJ array} -constraints haveFlowFont -body {
+  # The TJ road adjusts after the glyph of U+0020 and after nothing else, so
+  # the no-break spaces get no share and the five word spaces take it all.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc font embed body $::flowFont
+  $doc page add
+  $doc font -family body -size 10
+  $doc text $::flowAmountsLine -at {20 700} -width 140 -align justify
+  set stream [::tclpdfTest::content $doc]
+  set first [lindex [$doc textLines $::flowAmountsLine -width 140] 0]
+  set natural [$doc textWidth $first]
+  set pieces [::tclpdfTest::drawn $doc body $stream]
+  $doc destroy
+  # The pieces of the first line: every gap follows a piece ending in a
+  # word space, and the gaps add up to what the line is short of the margin.
+  set gaps 0
+  set edge $natural
+  set afterSpace 1
+  set previous {}
+  foreach piece $pieces {
+    lassign $piece kind value
+    if {$kind eq "gap"} {
+      incr gaps
+      set edge [expr {$edge - $value / 1000.0 * 10}]
+      if {[string index $previous end] ne " "} {
+        set afterSpace 0
+      }
+    } else {
+      set previous $value
+    }
+  }
+  list $gaps $afterSpace [expr {abs($edge - 140) < 0.01}]
+} -result {5 1 1}
+
+test textFlow-5.7 {a thin space is a character of the word, not a break} -constraints haveFlowFont -body {
+  # U+2009 is class BA in UAX #14 - a break would be allowed - but it cannot
+  # be stretched (only code 32 can), and the breaker takes it into the word
+  # like every other space of Unicode; it is set with its own glyph width.
+  # Before, \s split at it and a plain space stood in the stream where the
+  # text had a thin one.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc font embed body $::flowFont
+  $doc page add
+  set text "12\u2009\u20AC und 34\u2009\u20AC und 56\u2009\u20AC"
+  set lines [$doc textLines $text -family body -size 10 -width 65]
+  $doc text $text -at {20 700} -width 65 -family body -size 10
+  set drawn [::tclpdfTest::drawnText $doc body [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [lindex $lines 0] [regexp -all "\u2009" $drawn]
+} -result [list "12\u2009\u20AC und" 3]
+
+test textFlow-5.8 {a thin space is refused by a standard face, in a paragraph as on a line} -body {
+  # WinAnsiEncoding has no thin space. It used to pass through the breaker
+  # unnoticed, replaced by a plain space; now the paragraph says the same as
+  # the single line does.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set result [catch {$doc textLines "12\u2009\u20AC und" -family helvetica -size 10 -width 60} message]
+  $doc destroy
+  list $result [regexp {U\+2009} $message]
+} -result {1 1}
+
+test textFlow-5.9 {a tab and a carriage return still break the line and are set as a space} -body {
+  # The controls of ASCII have no glyph in any face and remain separators -
+  # a CRLF file must not start refusing its paragraphs for the CR at the end
+  # of each line.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  set lines [$doc textLines "12\t\u20AC und\r\n34\t\u20AC" -family helvetica -size 10 -width 200]
+  $doc text "12\t\u20AC und\r\n34\t\u20AC" -at {20 700} -width 200 -family helvetica -size 10
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $lines [regexp {\(12 \\200 und\) Tj} $stream] [regexp {\(34 \\200\) Tj} $stream]
+} -result [list [list "12 \u20AC und" "34 \u20AC"] 1 1]
+
 cleanupTests

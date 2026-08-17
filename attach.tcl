@@ -84,6 +84,11 @@ oo::define ::tclpdf::document::document {
           [join $known {, }] - not \"[dict get $options relationship]\""
     }
 
+    # Embedded file streams and the EmbeddedFiles name tree are PDF 1.3
+    # (Reference 1.7, 3.10.3). /AF and /AFRelationship are PDF 2.0 entries
+    # that ISO 19005-3 (Annex E) admits into a 1.7 file as an extension -
+    # which is what every ZUGFeRD invoice is - and are therefore NOT gated.
+    my RequireVersion 1.3 "attach"
     set attachments [my state attachments]
     foreach entry $attachments {
       if {[dict get $entry name] eq [dict get $options name]} {

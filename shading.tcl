@@ -139,6 +139,9 @@ oo::define ::tclpdf::document::document {
   # The shading dictionary itself. Both types share everything except how the
   # geometry is spelled, so they share a method.
   method ShadingObject {kind options} {
+    # Shadings, sh and PatternType 2 are PDF 1.3 (Reference 1.7, 4.6.3).
+    # First thing, before the function object goes out.
+    my RequireVersion 1.3 "shading"
     set colors [dict get $options colors]
     if {[llength $colors] < 2} {
       return -code error "tclpdf: a shading needs at least two -colors"

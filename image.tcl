@@ -158,6 +158,13 @@ oo::define ::tclpdf::document::document {
 
     lassign [my ImageExtent $image $options] width height
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
+    # The alpha is checked - and its ExtGState made - before the mark and the
+    # "q" are out: refused after [save], a bad value left a q without its Q
+    # in the stream. Same order as [FormPlace] in xObject.tcl.
+    set alpha {}
+    if {[dict get $options opacity] ne {}} {
+      set alpha [my GraphicsOpacity [dict get $options opacity]]
+    }
 
     # A picture XObject is a unit square with its origin at the BOTTOM left, so
     # the matrix carries both the size and the flip to the top-left convention
@@ -189,8 +196,8 @@ oo::define ::tclpdf::document::document {
         [dict get $options artifact] $top [list $left $top $width $height]] \
         mark element
     my save
-    if {[dict get $options opacity] ne {}} {
-      my opacity [dict get $options opacity]
+    if {$alpha ne {}} {
+      my content "[::tclpdf::pdfObj name $alpha] gs\n"
     }
     set matrix [::tclpdf::geometry multiply \
         [list $w 0 0 $h 0 0] [::tclpdf::geometry translate $x $y]]
@@ -351,7 +358,7 @@ oo::define ::tclpdf::document::document {
       dict set result colorType [dict get $parsed colorType]
       dict set result bitDepth [dict get $parsed bitDepth]
       dict set result alpha [::tclpdf::imagePng hasAlpha $parsed]
-      dict set result transparency [::tclpdf::imagePng paletteTransparency $parsed]
+      dict set result transparency [::tclpdf::imagePng transparency $parsed]
     } else {
       dict set result components [dict get $parsed components]
       dict set result bitDepth [dict get $parsed bitsPerComponent]
@@ -409,6 +416,19 @@ oo::define ::tclpdf::document::document {
       set data [dict get $image bytes]
     } else {
       set streams [::tclpdf::imagePng streams $parsed]
+      # What the picture needs of the file, before its first object goes
+      # out (Reference 1.7, Table 4.39): a colour key /Mask is PDF 1.3, a
+      # soft mask 1.4, sixteen bits per component 1.5. The FlateDecode
+      # filter every PNG carries is checked by the writer.
+      if {[dict exists [dict get $streams pairs] Mask]} {
+        my RequireVersion 1.3 "a PNG picture with a transparent colour"
+      }
+      if {[dict exists $streams maskData]} {
+        my RequireVersion 1.4 "a PNG picture with an alpha channel"
+      }
+      if {[dict get $parsed bitDepth] == 16} {
+        my RequireVersion 1.5 "a 16-bit PNG picture"
+      }
       lappend pairs {*}[dict get $streams pairs]
       set data [dict get $streams data]
       if {[dict exists $streams maskData]} {

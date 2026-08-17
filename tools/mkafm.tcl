@@ -48,6 +48,17 @@ set fonts {
 # Fonts with a built-in encoding - cp1252 says nothing about them.
 set symbolic {Symbol ZapfDingbats}
 
+# Two positions carry a glyph the AGL does not give them: ISO 32000-1 Annex
+# D.2 (footnotes to "space" and "hyphen") makes 0xA0 in WinAnsiEncoding a
+# second code for space - the no-break space - and 0xAD a second code for
+# hyphen. A reader draws those glyphs there, so their widths belong there
+# too. Through the AGL alone the two positions come out as "nbspace" and
+# "sfthyphen", which no AFM knows, and held 0 - measured 2026-08-16: U+00A0
+# in Helvetica was refused as "no glyph". type1.tcl carries the same two
+# aliases for an embedded Type 1 face; this is the standard-fourteen half of
+# that rule.
+set annexD {160 space 173 hyphen}
+
 # --- glyph name -> Unicode, from the Adobe Glyph List ----------------------
 #
 # agl/glyphlist.txt is the list itself, verbatim from Adobe, with its own BSD
@@ -179,12 +190,19 @@ foreach font $fonts {
         continue
       }
       set unicode [scan $char %c]
+      # The Annex D name first: it is the glyph a reader draws at this code,
+      # whatever else the AGL may list for the character.
+      set names {}
+      if {[dict exists $annexD $code]} {
+        lappend names [dict get $annexD $code]
+      }
       if {[dict exists $uniToGlyphs $unicode]} {
-        foreach name [dict get $uniToGlyphs $unicode] {
-          if {[dict exists $widths $name]} {
-            set width [dict get $widths $name]
-            break
-          }
+        lappend names {*}[dict get $uniToGlyphs $unicode]
+      }
+      foreach name $names {
+        if {[dict exists $widths $name]} {
+          set width [dict get $widths $name]
+          break
         }
       }
       lappend table $width

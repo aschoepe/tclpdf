@@ -261,6 +261,9 @@ oo::define ::tclpdf::document::document {
     }
     set value [expr {$value ? 1 : 0}]
     if {$value && [my state tagged] ne "1"} {
+      # Tagged PDF - MarkInfo, StructTreeRoot, BDC with an MCID - is PDF 1.4
+      # (Reference 1.7, 10.6 and Table 3.25).
+      my RequireVersion 1.4 "tagged"
       # beforeWrite, not catalog: the pages are written BEFORE the catalogue
       # event fires, and each of them needs the StructParents index this
       # produces. Subscribing to catalog like outline.tcl does left every page

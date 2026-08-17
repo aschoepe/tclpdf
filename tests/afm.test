@@ -110,6 +110,46 @@ test afm-3.4 {the Euro really is byte 128} -body {
   set code
 } -result 128
 
+# U+00A0, the no-break space. ISO 32000-1 Annex D.2 makes 0xA0 in
+# WinAnsiEncoding a second code for "space" (and 0xAD one for "hyphen"), so a
+# reader draws the space glyph there. Measured 2026-08-16 before the fix: the
+# AGL names for U+00A0 are nbspace/nonbreakingspace, no AFM carries either,
+# the table held 0 and "12\u00A0EUR" in Helvetica was refused as "no glyph".
+
+test afm-3.5 {the no-break space has the width of the space in every text font} -body {
+  set off {}
+  foreach font [::tclpdf::afm fonts] {
+    if {[::tclpdf::afm isSymbolic $font]} {
+      continue
+    }
+    if {[::tclpdf::afm width $font 160] != [::tclpdf::afm width $font 32]
+        || [::tclpdf::afm width $font 173] != [::tclpdf::afm width $font 45]} {
+      lappend off $font
+    }
+  }
+  set off
+} -result {}
+
+test afm-3.6 {a string with a no-break space measures like one with a space} -body {
+  list [expr {[::tclpdf::afm stringWidth Helvetica "12\u00A0EUR" 10]
+      == [::tclpdf::afm stringWidth Helvetica "12 EUR" 10]}] \
+      [format %.2f [::tclpdf::afm stringWidth Times-Roman "a\u00A0b" 10]]
+} -result {1 11.94} ;# 444 + 250 + 500 in Times-Roman
+
+test afm-3.7 {the no-break space is written as byte 0xA0, not turned into a space} -body {
+  # 0xA0 rather than 0x20: a text extractor then still sees a no-break space,
+  # and a line breaker working on the extracted text still sees no break.
+  binary scan [::tclpdf::afm bytes Helvetica "12\u00A0EUR"] H* hex
+  set hex
+} -result 3132a0455552
+
+test afm-3.8 {the no-break space is not a character of Symbol or ZapfDingbats} -body {
+  # 0xA0 is a Euro sign in Symbol and unassigned in ZapfDingbats - the alias
+  # is a WinAnsi rule and must not leak into the built-in encodings.
+  list [::tclpdf::afm width Symbol 160] [::tclpdf::afm width ZapfDingbats 160] \
+      [catch {::tclpdf::afm bytes ZapfDingbats "\u00A0"} message] $message
+} -match glob -result {750 0 1 {*ZapfDingbats has no glyph for U+00A0*}}
+
 test afm-4.1 {Symbol and ZapfDingbats are symbolic, the others are not} -body {
   list [::tclpdf::afm isSymbolic Symbol] [::tclpdf::afm isSymbolic ZapfDingbats] \
       [::tclpdf::afm isSymbolic Helvetica]

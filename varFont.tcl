@@ -44,7 +44,9 @@
 #              space of Roboto comes out at 490, 499, 508, 509 and 510 units
 #              for wght 100, 300, 400, 700 and 900 from either source.
 #
-# Steps 1 to 6 are here, plus the PostScript name of an instance (TN 5902).
+# Steps 1 to 6 are here, plus the PostScript name of an instance (TN 5902)
+# and the bounding box of a moved face, which the subset and the font
+# descriptor both state.
 #
 
 package require Tcl 8.6.11-
@@ -247,22 +249,96 @@ proc ::tclpdf::varFont::Piecewise {value from to} {
 # the reason is the composites: a subset closes over them AFTER this, and a
 # component instanced at a different point than the glyph using it would tear
 # the letter apart. Measured at 67 ms for Roboto's 1326 glyphs.
+#
+# TWO PASSES, and the composites are why. A composite's bounding box and left
+# side bearing follow the outlines of its components AS MOVED, and a component
+# may sit anywhere in the glyph order - Roboto's dieresis is glyph 106, the
+# A-dieresis that places it glyph 671, but nothing forbids the reverse. So
+# every glyph is moved first, and only then does each composite get its box
+# and bearing from the moved set. Measured 2026-08-17 over the seven variable
+# faces in the tree at wght maximum: with the header's box and bearing carried
+# over, 6 207 of 6 275 composites had a box off by 10 units or more (up to 376
+# in Roboto Black, 515 at the wght 100 wdth 62.5 corner of NotoSans) and 4 280
+# a bearing off by that much (up to 224, Roboto's Iota with tonos) - Roboto's
+# A-dieresis 33, D-caron and r-caron 123, Cyrillic short I 87 units. Neither
+# poppler nor CoreGraphics show it, because both place a glyph at xMin minus
+# bearing and the two stale values agree with each other - measured, the
+# renders before and after are byte-identical. The file was wrong all the
+# same: head flag bit 1 promises lsb = xMin, and the box is what a reader is
+# told the glyph covers. The second pass costs about 10 ms for Roboto's 1326
+# glyphs (88 to 98 ms, measured the same day on the same machine).
 proc ::tclpdf::varFont::all {parsed coordinates} {
   package require tclpdf::glyfOutline 1.0-
   set glyf [::tclpdf::sfnt table $parsed glyf]
   set loca [dict get $parsed loca]
-  set result {}
+  set outlines {}
+  set moved {}
   for {set glyph 0} {$glyph < [llength $loca] - 1} {incr glyph} {
     set start [lindex $loca $glyph]
     set stop [lindex $loca [expr {$glyph + 1}]]
     set data [expr {$start >= $stop ? {} :
         [string range $glyf $start [expr {$stop - 1}]]}]
     set outline [::tclpdf::glyfOutline parse $data]
-    set moved [instance $parsed $glyph $outline $coordinates]
+    set entry [instance $parsed $glyph $outline $coordinates]
+    dict set outlines $glyph [dict get $entry outline]
+    dict set moved $glyph $entry
+  }
+  set result {}
+  dict for {glyph entry} $moved {
+    set outline [dict get $entry outline]
+    set bearing [dict get $entry bearing]
+    if {[dict size $outline] && [dict get $outline type] eq "composite"} {
+      set bounds [::tclpdf::glyfOutline bounds $outlines $glyph]
+      dict set outline bounds $bounds
+      # The same rule as for a simple glyph: the bearing is measured from the
+      # moved phantom point 1 to the moved xMin.
+      set bearing [Round [expr {[lindex $bounds 0] - [dict get $entry origin]}]]
+    }
     dict set result $glyph [dict create \
-        bytes [::tclpdf::glyfOutline compose [dict get $moved outline]] \
-        advance [dict get $moved advance] \
-        bearing [dict get $moved bearing]]
+        bytes [::tclpdf::glyfOutline compose $outline] \
+        advance [dict get $entry advance] \
+        bearing $bearing]
+  }
+  return $result
+}
+
+# The bounding box of a moved face: the union of the boxes of every glyph
+# [all] returned, {xMin yMin xMax yMax} in font units - the four zeros on a
+# set with no outline at all.
+#
+# It is what the header of the file carries for the DEFAULT position (head
+# xMin..yMax, ISO/IEC 14496-22 "head"), and it changes when the outlines do:
+# measured 2026-08-17 over the seven variable faces in the tree at their axis
+# corners against the box the file declares, Roboto reaches 130 units further
+# right at wght 900 and stops 327 units short at wght 100 wdth 75, NotoSans
+# gains 57 units at the top at wght 900, NotoSerifTibetan drops 351 units
+# below the file's yMin at wght 900. Both places that state a box for the
+# embedded font - the head table of the subset and /FontBBox in the font
+# descriptor (ISO 32000-1 9.8.1, Table 122: the smallest rectangle enclosing
+# ALL glyphs of the font placed at one origin) - take it from here for an
+# instance, so that a font that carries only moved outlines does not describe
+# the outlines it left behind. Read off the eight header bytes of each glyph
+# record rather than the points: [all] wrote them from the moved points
+# (glyfOutline compose, and bounds for a composite), so they are already
+# right and cost nothing to sum.
+proc ::tclpdf::varFont::bounds {instanced} {
+  set result {}
+  dict for {glyph entry} $instanced {
+    set bytes [dict get $entry bytes]
+    if {[string length $bytes] < 10} {
+      continue
+    }
+    binary scan $bytes @2SSSS xMin yMin xMax yMax
+    if {![llength $result]} {
+      set result [list $xMin $yMin $xMax $yMax]
+      continue
+    }
+    lassign $result left bottom right top
+    set result [list [expr {min($left, $xMin)}] [expr {min($bottom, $yMin)}] \
+        [expr {max($right, $xMax)}] [expr {max($top, $yMax)}]]
+  }
+  if {![llength $result]} {
+    return {0 0 0 0}
   }
   return $result
 }
@@ -270,9 +346,11 @@ proc ::tclpdf::varFont::all {parsed coordinates} {
 # One glyph, moved to the chosen point in the axis space.
 #
 # Returns a dictionary: outline (the glyf dictionary with its points moved),
-# advance and bearing. A composite comes back unchanged apart from its metrics
-# - its deltas move the component offsets, and those are rewritten by the
-# subsetter, so instancing them here would be undone there.
+# advance, bearing and origin - the x of the moved phantom point 1, which is
+# what a bearing is measured from. A composite comes back with its component
+# OFFSETS moved and its box and bearing as they were: those depend on the
+# components' outlines, which this proc has not seen, and [all] sets them once
+# every glyph is moved.
 #
 # The four phantom points are what makes the advance vary: they are appended to
 # the point list, gvar shifts them like any other point, and the distance
@@ -296,7 +374,7 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
   # Their default positions have to be right, not just their deltas: IUP puts
   # unreferenced points between their neighbours, and the phantoms are
   # neighbours to nothing - but the advance is read off their positions.
-  set phantomX [expr {$simple ?
+  set phantomX [expr {$simple || $composite ?
       [lindex [dict get $outline bounds] 0] - $bearing : 0}]
   lassign [deltas $parsed $glyph $coordinates $outline [expr {$points + 4}]] dx dy
 
@@ -306,6 +384,7 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
   if {$movedAdvance < 0} {
     set movedAdvance 0
   }
+  set origin [expr {$phantomX + $shiftFirst}]
   if {$composite} {
     # Only offsets move. A component placed by matching two point numbers
     # (without ARGS_ARE_XY_VALUES) has no offset to shift, and the standard
@@ -325,10 +404,12 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
       incr index
     }
     dict set outline components $moved
-    return [dict create outline $outline advance $movedAdvance bearing $bearing]
+    return [dict create outline $outline advance $movedAdvance \
+        bearing $bearing origin $origin]
   }
   if {!$simple} {
-    return [dict create outline $outline advance $movedAdvance bearing $bearing]
+    return [dict create outline $outline advance $movedAdvance \
+        bearing $bearing origin $origin]
   }
 
   # Rounding happens ONCE, on the sum of every region - rounding each region as
@@ -348,10 +429,10 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
   # cursor plus bearing, so keeping the old one would move a widened letter
   # sideways rather than let it grow.
   set movedBearing [expr {[llength $xs] ?
-      [Round [expr {[::tcl::mathfunc::min {*}$xs] - $phantomX - $shiftFirst}]] :
+      [Round [expr {[::tcl::mathfunc::min {*}$xs] - $origin}]] :
       $bearing}]
   return [dict create outline $outline advance $movedAdvance \
-      bearing $movedBearing]
+      bearing $movedBearing origin $origin]
 }
 
 # The deltas for one glyph at one point in the axis space.

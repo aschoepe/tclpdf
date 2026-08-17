@@ -1,0 +1,442 @@
+# pdfVersion.test --
+#
+# Features against the file's PDF version (7.5.2, the header). A document
+# created with -version 1.3 that carries an ExtGState /ca claims a version
+# that does not know the entry - measured, the file passed qpdf and veraPDF
+# says nothing about it either, so the only place this can be caught is
+# before the feature is written. Every gate here is [RequireVersion]: one
+# test per feature, refused one step below the version that introduced it
+# and accepted at that version, plus the writer's own gate on FlateDecode
+# and the refusal of lowering the version under a feature already used.
+#
+# The versions are those the PDF Reference 1.7 marks per section ("PDF 1.x");
+# ISO 32000-1 no longer says. Each test names the section next to the number.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::graphics
+package require tclpdf::shading
+package require tclpdf::pattern
+package require tclpdf::font
+package require tclpdf::image
+package require tclpdf::structure
+package require tclpdf::attach
+package require tclpdf::pageLabel
+package require tclpdf::viewerPreferences
+package require tclpdf::link
+package require tclpdf::pdfa
+package require tclpdf::svg
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets]
+set keyedPng [file join $assets images sample-keyed.png]
+set rgbaPng [file join $assets images sample-rgba.png]
+set ttf [file join $assets fonts urw-core35-fonts NimbusSans-Regular.ttf]
+set otf [file join $assets fonts urw-core35-fonts NimbusSans-Regular.otf]
+set pfb [file join $assets fonts OCRA.pfb]
+set afm [file join $assets fonts OCRA.afm]
+
+testConstraint havePng [expr {[file exists $keyedPng] && [file exists $rgbaPng]}]
+testConstraint haveFonts [expr {[file exists $ttf] && [file exists $otf]
+    && [file exists $pfb] && [file exists $afm]}]
+
+# The pair every feature is measured with: refused one step below its
+# version, with a message that names the feature AND the version, and
+# accepted at the version itself. "script" runs with $doc bound; the
+# document is uncompressed so that a 1.0 or 1.1 file is possible at all.
+proc ::tclpdfTest::gate {below at feature script} {
+  set doc [tclpdf new -unit mm -compress 0 -version $below]
+  $doc page add
+  set refused [catch [list uplevel 1 [string map [list @doc $doc] $script]] message]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [tclpdf new -unit mm -compress 0 -version $at]
+  $doc page add
+  set accepted [catch [list uplevel 1 [string map [list @doc $doc] $script]] second]
+  $doc destroy
+  set named [expr {[string match "tclpdf: $feature needs PDF $at - this document\
+      is written as PDF $below*" $message]}]
+  # Refused BEFORE anything reached the page: no q, no BDC, nothing.
+  return [list $refused $named [expr {$content eq {}}] \
+      [expr {$accepted ? "accepted failed: $second" : 0}]]
+}
+
+# --- transparency: 1.4 (Reference 1.7, Table 4.8 and 7.2.4) ---------------
+
+test pdfVersion-1.1 {opacity is PDF 1.4} -body {
+  ::tclpdfTest::gate 1.3 1.4 opacity {@doc opacity 0.5}
+} -result {1 1 1 0}
+
+test pdfVersion-1.2 {a wrong opacity is still reported as a wrong number} -body {
+  # The value check comes first, so a caller with two mistakes hears about
+  # the one that would survive a raised version.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  catch {$doc opacity 5} message
+  $doc destroy
+  set message
+} -match glob -result {*number from 0 to 1*}
+
+test pdfVersion-1.3 {blend is PDF 1.4} -body {
+  ::tclpdfTest::gate 1.3 1.4 blend {@doc blend Multiply}
+} -result {1 1 1 0}
+
+test pdfVersion-1.4 {-opacity on a shape takes the same road} -body {
+  ::tclpdfTest::gate 1.3 1.4 opacity \
+      {@doc rect -at {10 10} -size {20 20} -fill red -opacity 0.5}
+} -result {1 1 1 0}
+
+test pdfVersion-1.5 {form place -opacity takes the same road} -body {
+  ::tclpdfTest::gate 1.3 1.4 opacity {
+    @doc form create logo -size {10 10} -script {}
+    @doc form place logo -at {10 10} -opacity 0.5
+  }
+} -result {1 1 1 0}
+
+# --- shading and patterns: 1.3 and 1.2 (Reference 1.7, 4.6) ---------------
+
+test pdfVersion-2.1 {a shading is PDF 1.3} -body {
+  ::tclpdfTest::gate 1.2 1.3 shading \
+      {@doc shading axial -at {20 20} -size {60 20} -colors {white steelblue}}
+} -result {1 1 1 0}
+
+test pdfVersion-2.2 {a shading pattern is PDF 1.3} -body {
+  ::tclpdfTest::gate 1.2 1.3 shading \
+      {@doc shading pattern sky axial -at {20 20} -size {60 20} -colors {white blue}}
+} -result {1 1 1 0}
+
+test pdfVersion-2.3 {a tiling pattern is PDF 1.2} -body {
+  ::tclpdfTest::gate 1.1 1.2 pattern \
+      {@doc pattern create tile -size {10 5} -script {}}
+} -result {1 1 1 0}
+
+test pdfVersion-2.4 {a separation colour is PDF 1.2} -body {
+  ::tclpdfTest::gate 1.1 1.2 "a separation colour" \
+      {@doc rect -at {10 10} -size {20 20} -fill {separation Varnish {cmyk 0 0 0 0.2}}}
+} -result {1 1 1 0}
+
+# --- fonts: 1.2 for any embedded face, 1.6 for CFF (Reference 1.7, 5.6,
+#     Tables 5.18 and 5.23) ----------------------------------------------------
+
+test pdfVersion-3.1 {font embed of a TrueType face is PDF 1.2} -constraints haveFonts -body {
+  ::tclpdfTest::gate 1.1 1.2 "font embed" {@doc font embed sans $::ttf}
+} -result {1 1 1 0}
+
+test pdfVersion-3.2 {font embed of a Type 1 face is PDF 1.2 - the program is deflated} -constraints haveFonts -body {
+  ::tclpdfTest::gate 1.1 1.2 "font embed" \
+      {@doc font embed ocr $::pfb -metrics $::afm}
+} -result {1 1 1 0}
+
+test pdfVersion-3.3 {font embed of a CFF face is PDF 1.6} -constraints haveFonts -body {
+  ::tclpdfTest::gate 1.5 1.6 "font embed of a CFF (OpenType) face" \
+      {@doc font embed sans $::otf}
+} -result {1 1 1 0}
+
+test pdfVersion-3.4 {a TrueType face at 1.3 is written as a Type 0 font} -constraints haveFonts -body {
+  # 1.3 is above 1.2: the embedding goes through, and the file carries the
+  # Type 0 font with Identity-H that 1.2 introduced.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  $doc font embed sans $::ttf
+  $doc text "abc" -at {10 10} -family sans
+  set path [::tclpdfTest::scratch pdfVersion-type0.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string range $bytes 0 7] [regexp {/Subtype /Type0} $bytes] \
+      [regexp {/Encoding /Identity-H} $bytes]
+} -result {%PDF-1.3 1 1}
+
+# --- pictures: /Mask 1.3, SMask 1.4, 16 bit 1.5 (Reference 1.7, Table 4.39) -
+
+test pdfVersion-4.1 {a colour-keyed PNG is PDF 1.3} -constraints havePng -body {
+  ::tclpdfTest::gate 1.2 1.3 "a PNG picture with a transparent colour" {
+    @doc image embed keyed $::keyedPng
+    @doc image place keyed -at {10 10} -width 20
+  }
+} -result {1 1 1 0}
+
+test pdfVersion-4.2 {a PNG with an alpha channel is PDF 1.4} -constraints havePng -body {
+  ::tclpdfTest::gate 1.3 1.4 "a PNG picture with an alpha channel" {
+    @doc image embed rgba $::rgbaPng
+    @doc image place rgba -at {10 10} -width 20
+  }
+} -result {1 1 1 0}
+
+test pdfVersion-4.3 {sixteen bits per component are PDF 1.5} -body {
+  # A 16-bit greyscale PNG of one pixel: no encoder in the tree saves that
+  # depth, and one pixel is all the gate needs to see.
+  ::tclpdfTest::gate 1.4 1.5 "a 16-bit PNG picture" {
+    @doc image embed deep -data [::tclpdfTest::png 1 1 16 0 [binary format cuSu 0 0xABCD]]
+    @doc image place deep -at {10 10} -width 20
+  }
+} -result {1 1 1 0}
+
+test pdfVersion-4.4 {a JPEG needs nothing above 1.0 - DCTDecode is PDF 1.0} -body {
+  # No JPEG asset is needed to say so: the gate list has no entry for it,
+  # so a placed JPEG at 1.0 is refused for nothing here. Measured with the
+  # photo when present.
+  set photo [file join $::assets images sample-photo.jpg]
+  if {![file exists $photo]} {
+    return {1 1 1 0}
+  }
+  ::tclpdfTest::gate 1.0 1.0 "" {
+    @doc image embed photo $photo
+    @doc image place photo -at {10 10} -width 20
+  }
+} -match glob -result {0 0 * 0}
+
+# --- FlateDecode: 1.2, checked by the writer for every stream (Reference
+#     1.7, Table 3.5) ---------------------------------------------------------
+
+test pdfVersion-5.1 {-compress 1 under 1.1 is refused when the first stream is written} -body {
+  # The default is -compress 1, so a 1.1 document with a page cannot be
+  # written unless the caller says -compress 0. Refused at write time - the
+  # writer is the one place every stream passes - and naming what deflates.
+  set doc [tclpdf new -unit mm -version 1.1]
+  $doc page add
+  $doc text "x" -at {10 10}
+  set path [::tclpdfTest::scratch pdfVersion-flate.pdf]
+  set refused [catch {$doc write $path} message]
+  set existed [file exists $path]
+  # The same document, uncompressed, is a 1.1 file without a filter.
+  $doc configure -compress 0
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $refused [string match "tclpdf: a FlateDecode stream (-compress 1,*)\
+      needs PDF 1.2 - this document is written as PDF 1.1*" $message] \
+      $existed [string range $bytes 0 7] [regexp {FlateDecode} $bytes]
+} -result {1 1 0 %PDF-1.1 0}
+
+test pdfVersion-5.2 {a PNG under 1.1 is refused for its filter, before its object} -body {
+  # A greyscale pixel with neither key nor alpha: the only thing it needs is
+  # the filter - and that refusal comes from the writer, at the place.
+  set doc [tclpdf new -unit mm -compress 0 -version 1.1]
+  $doc page add
+  $doc image embed plain -data [::tclpdfTest::png 1 1 8 0 [binary format cucu 0 0x40]]
+  set before [[$doc writer] count]
+  set refused [catch {$doc image place plain -at {10 10} -width 20} message]
+  set after [[$doc writer] count]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $refused [string match "*FlateDecode*needs PDF 1.2*" $message] \
+      [expr {$after - $before}] [expr {$content eq {}}]
+} -result {1 1 0 1}
+
+test pdfVersion-5.3 {-compress 1 at 1.2 writes Flate} -body {
+  set doc [tclpdf new -unit mm -version 1.2]
+  $doc page add
+  $doc text "x" -at {10 10}
+  set path [::tclpdfTest::scratch pdfVersion-flate12.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string range $bytes 0 7] [regexp {FlateDecode} $bytes]
+} -result {%PDF-1.2 1}
+
+# --- catalogue-level features ------------------------------------------------
+
+test pdfVersion-6.1 {tagged is PDF 1.4 (Reference 1.7, 10.6)} -body {
+  ::tclpdfTest::gate 1.3 1.4 tagged {@doc tagged 1}
+} -result {1 1 1 0}
+
+test pdfVersion-6.2 {metadata is PDF 1.4 (Reference 1.7, 10.2.2)} -body {
+  ::tclpdfTest::gate 1.3 1.4 metadata {@doc metadata "<x:xmpmeta/>"}
+} -result {1 1 1 0}
+
+test pdfVersion-6.3 {language is PDF 1.4 (Reference 1.7, Table 3.25)} -body {
+  ::tclpdfTest::gate 1.3 1.4 language {@doc language de-DE}
+} -result {1 1 1 0}
+
+test pdfVersion-6.4 {attach is PDF 1.3 (Reference 1.7, 3.10.3)} -body {
+  ::tclpdfTest::gate 1.2 1.3 attach {@doc attach -data abc -name a.txt}
+} -result {1 1 1 0}
+
+test pdfVersion-6.5 {pageLabels is PDF 1.3 (Reference 1.7, 8.3.1)} -body {
+  ::tclpdfTest::gate 1.2 1.3 pageLabels {@doc pageLabels -from 0 -style r}
+} -result {1 1 1 0}
+
+test pdfVersion-6.6 {link is PDF 1.1 - flags and actions (Reference 1.7, Table 8.15, 8.5)} -body {
+  ::tclpdfTest::gate 1.0 1.1 link \
+      {@doc link -at {10 10} -size {20 5} -url https://example.org/}
+} -result {1 1 1 0}
+
+test pdfVersion-6.7 {viewerPreferences is PDF 1.2 (Reference 1.7, Table 8.1)} -body {
+  ::tclpdfTest::gate 1.1 1.2 "viewerPreferences -hideToolbar" \
+      {@doc viewerPreferences -hideToolbar 1}
+} -result {1 1 1 0}
+
+test pdfVersion-6.8 {viewerPreferences: the later keys carry their own version} -body {
+  set out {}
+  foreach {below at option value} {
+    1.2 1.3 direction R2L
+    1.3 1.4 displayDocTitle 1
+    1.5 1.6 printScaling None
+    1.6 1.7 duplex Simplex
+    1.6 1.7 pickTrayByPDFSize 1
+    1.6 1.7 numCopies 2
+  } {
+    lappend out [::tclpdfTest::gate $below $at "viewerPreferences -$option" \
+        [list @doc viewerPreferences -$option $value]]
+  }
+  lsort -unique $out
+} -result {{1 1 1 0}}
+
+test pdfVersion-6.9 {a refused key leaves the earlier keys unset as well} -body {
+  # The options of one call are checked before any is stored - so a call
+  # with a good key and a bad one changes nothing.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  catch {$doc viewerPreferences -hideToolbar 1 -displayDocTitle 1}
+  set state [$doc viewerPreferences]
+  $doc destroy
+  set state
+} -result {}
+
+# --- lowering the version under a feature already used ------------------------
+
+test pdfVersion-7.1 {configure -version below a used feature is refused, naming it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc opacity 0.5
+  set refused [catch {$doc configure -version 1.3} message]
+  set kept [list [$doc cget -version] [[$doc writer] version]]
+  $doc configure -version 1.4
+  set lowered [list [$doc cget -version] [[$doc writer] version]]
+  $doc destroy
+  list $refused $message $kept $lowered
+} -result {1 {tclpdf: this document already uses opacity, which needs PDF 1.4 - it cannot be lowered to PDF 1.3} {1.7 1.7} {1.4 1.4}}
+
+test pdfVersion-7.2 {the highest requirement is the one remembered} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc opacity 0.5
+  $doc pageLabels -from 0 -style D
+  catch {$doc configure -version 1.3} message
+  $doc destroy
+  set message
+} -match glob -result {*uses opacity, which needs PDF 1.4*}
+
+test pdfVersion-7.3 {pdfa raises through configure, and a later configure does not undo it} -body {
+  # Measured before: "pdfa -part 3" put the writer at 1.7, [cget -version]
+  # still said 1.4, and the next "configure -unit pt" put the writer back at
+  # 1.4 - a PDF/A-3 file with a 1.4 header, which veraPDF accepts.
+  set doc [tclpdf new -unit mm -version 1.4]
+  $doc page add
+  $doc pdfa -part 3 -conformance b
+  set raised [list [$doc cget -version] [[$doc writer] version]]
+  $doc configure -unit pt
+  set kept [[$doc writer] version]
+  set refused [catch {$doc configure -version 1.4} message]
+  $doc destroy
+  list $raised $kept $refused $message
+} -result {{1.7 1.7} 1.7 1 {tclpdf: this document already uses PDF/A-3, which needs PDF 1.7 - it cannot be lowered to PDF 1.4}}
+
+test pdfVersion-7.5 {a configure that does not name -version leaves a raised writer alone} -body {
+  # [ua -part 2] raises the writer to 2.0 without going through the option,
+  # and [configure] used to hand the option's 1.7 back down with every call -
+  # measured with pdfa before it went through configure. Only a call that
+  # changes -version reaches the writer now.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc ua -part 2
+  set raised [[$doc writer] version]
+  $doc configure -unit pt
+  set kept [[$doc writer] version]
+  $doc destroy
+  list $raised $kept
+} -result {2.0 2.0}
+
+test pdfVersion-7.4 {a document at the default version meets every gate} -body {
+  # 1.7 covers everything below 2.0, so the gates never fire for a default
+  # document - what every example relies on.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc opacity 0.5
+  $doc blend Multiply
+  $doc shading axial -at {20 20} -size {60 20} -colors {white steelblue}
+  $doc pattern create tile -size {10 5} -script {}
+  $doc tagged 1
+  $doc language de
+  $doc attach -data abc -name a.txt
+  $doc pageLabels -from 0 -style D
+  $doc viewerPreferences -duplex Simplex
+  $doc link -at {10 10} -size {20 5} -url https://example.org/
+  $doc destroy
+} -result {}
+
+# --- a wrong -opacity on a picture or a drawing leaves nothing behind -----------
+
+test pdfVersion-6.10 {bleed, trim and art boxes are PDF 1.3 (Table 30); media and crop are not gated} -body {
+  set doc [tclpdf new -unit mm -compress 0 -version 1.2]
+  $doc page add
+  set ok [list [catch {$doc page box crop {10 10 200 287}}] \
+      [catch {$doc page box media {0 0 210 297}}]]
+  $doc destroy
+  list {*}$ok \
+      [::tclpdfTest::gate 1.2 1.3 "page box bleed" {@doc page box bleed {5 5 205 292}}] \
+      [::tclpdfTest::gate 1.2 1.3 "page box trim" {@doc page box trim {5 5 205 292}}] \
+      [::tclpdfTest::gate 1.2 1.3 "page box art" {@doc page box art {5 5 205 292}}]
+} -result {0 0 {1 1 1 0} {1 1 1 0} {1 1 1 0}}
+
+test pdfVersion-7.6 {ua -part 1 raises to 1.7 through configure and cannot be lowered} -body {
+  set doc [tclpdf new -unit mm -version 1.4]
+  $doc page add
+  $doc tagged 1
+  $doc ua -part 1 -revision 2014
+  set raised [list [$doc cget -version] [[$doc writer] version]]
+  set refused [catch {$doc configure -version 1.4} message]
+  $doc destroy
+  list $raised $refused $message
+} -result {{1.7 1.7} 1 {tclpdf: this document already uses PDF/UA-1, which needs PDF 1.7 - it cannot be lowered to PDF 1.4}}
+
+test pdfVersion-8.1 {image place with a wrong opacity writes no q} -constraints havePng -body {
+  # Refused after [save], the value left "q" without its "Q" in the stream -
+  # and, in a tagged document, the mark's BDC/EMC around it. Now the alpha is
+  # checked before the mark and the save, as [form place] does.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed rgba $::rgbaPng
+  set refused [catch {$doc image place rgba -at {10 10} -width 20 -opacity 7} message]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $refused [string match {*number from 0 to 1*} $message] $content
+} -result {1 1 {}}
+
+test pdfVersion-8.2 {svg with a wrong opacity writes no q} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set refused [catch {$doc svg -data {<svg viewBox="0 0 10 10"><rect width="5" height="5" fill="red"/></svg>} \
+      -at {10 10} -size {20 20} -opacity 7} message]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $refused [string match {*number from 0 to 1*} $message] $content
+} -result {1 1 {}}
+
+test pdfVersion-8.3 {a good opacity on a picture and a drawing still lands inside the q} -constraints havePng -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed rgba $::rgbaPng
+  $doc image place rgba -at {10 10} -width 20 -opacity 0.5
+  $doc svg -data {<svg viewBox="0 0 10 10"><rect width="5" height="5" fill="red"/></svg>} \
+      -at {10 40} -size {20 20} -opacity 0.5
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Twice: q, then the gs, before the cm - once for the picture, once for
+  # the drawing.
+  regexp -all {q\n/GS0_5b gs\n[-0-9. ]+ cm} $content
+} -result 2
+
+cleanupTests

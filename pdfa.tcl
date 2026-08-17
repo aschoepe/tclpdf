@@ -134,9 +134,14 @@ oo::define ::tclpdf::document::document {
     # being set independently and contradicting each other. Measured: a
     # document with "%PDF-1.4" in the header and pdfaid:part 3 in the XMP
     # passes veraPDF without a word - two claims, one file, nobody objects.
+    # Through [configure], so that [cget -version] answers what the header
+    # says; and recorded with the writer, so that a later [configure
+    # -version 1.4] is refused naming PDF/A rather than writing that very
+    # file.
     if {[package vcompare [[my writer] version] 1.7] < 0} {
-      [my writer] version 1.7
+      my configure -version 1.7
     }
+    my RequireVersion 1.7 "PDF/A-[dict get $current part]"
     # Level B is "looks the same forever", level U is B plus text that can be
     # extracted reliably - the ToUnicode CMap this package writes for every
     # embedded face, so U costs nothing here and is the better default answer

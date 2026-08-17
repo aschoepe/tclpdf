@@ -12,6 +12,9 @@
 #                    reader un-filters, which it has to be able to do anyway
 #   PNG palette      /Indexed, with a /Mask array when the transparency is
 #                    opaque-or-nothing
+#   PNG colour key   a greyscale or truecolor file whose tRNS chunk names one
+#                    transparent colour: the same /Mask array, still passed
+#                    through - the reader keys the colour out
 #   PNG with alpha   the only computed path: decompress, un-filter, split the
 #                    channel out into an /SMask
 #
@@ -114,12 +117,57 @@ $doc pattern create hatch -size {3 3} -script {
 $doc pattern create dots -size {4 4} -script {
   $doc circle -at {2 2} -radius 0.6 -fill {0.8 0.4 0.2}
 }
-$doc rect -at {110 170} -size {35 26} -fill {pattern hatch} -stroke gray -width 0.3
-$doc rect -at {150 170} -size {35 26} -fill {pattern dots} -stroke gray -width 0.3
+# Pattern space hangs off the page, not off the shape (ISO 32000-1 8.7.3.1):
+# without a matrix the tiles are laid from the page's bottom left corner, and
+# a rectangle gets them cut at whatever phase falls on its edge - the dots
+# below are halved at the left edge. -matrix takes the six raw numbers, here a
+# turn by 45 degrees; -origin anchors the grid at a document point, here the
+# corner of the rectangle, so the first tile sits flush in it. Both belong to
+# the pattern object: the same dots anchored elsewhere are a second pattern.
+set angle [expr {45 * acos(-1) / 180.0}]
+$doc pattern create hatchTurned -size {3 3} \
+    -matrix [list [expr {cos($angle)}] [expr {sin($angle)}] \
+        [expr {-sin($angle)}] [expr {cos($angle)}] 0 0] -script {
+  $doc line -from {0 3} -to {3 0} -stroke {0.55 0.6 0.72} -width 0.25
+}
+$doc pattern create dotsAnchored -size {4 4} -origin {171 170} -script {
+  $doc circle -at {2 2} -radius 0.6 -fill {0.8 0.4 0.2}
+}
+$doc rect -at {108 170} -size {19 26} -fill {pattern hatch} -stroke gray -width 0.3
+$doc rect -at {129 170} -size {19 26} -fill {pattern hatchTurned} -stroke gray -width 0.3
+$doc rect -at {150 170} -size {19 26} -fill {pattern dots} -stroke gray -width 0.3
+$doc rect -at {171 170} -size {19 26} -fill {pattern dotsAnchored} -stroke gray -width 0.3
 
 $doc font -size 7
-$doc text "tiling pattern, 3 mm" -at {110 200}
-$doc text "tiling pattern, 4 mm" -at {150 200}
+$doc text "hatch, 3 mm" -at {108 200}
+$doc text "-matrix, turned 45" -at {129 200}
+$doc text "dots, 4 mm" -at {150 200}
+$doc text "-origin at the corner" -at {171 200}
+$doc text "tiling patterns; the tiles hang off the page - the third is cut at its left\
+    edge, the fourth begins flush at the corner it was anchored to" -at {108 204} -width 82
+
+# -- colour key --------------------------------------------------------------
+
+# A truecolor PNG whose tRNS chunk names one colour as transparent - the way
+# a GIF-era logo carries its cut-out, and what many converters write for
+# "transparent background" without an alpha channel. The magenta ground of
+# this file is keyed out by the reader, so whatever is under the picture
+# shows through: here a coloured field and one of the tiling patterns. The
+# picture still travels untouched; only a /Mask array is added.
+$doc font -style bold -size 9
+$doc text "Colour key: one transparent colour, no alpha channel" -at {20 212}
+$doc rect -at {20 218} -size {60 34} -fill {0.93 0.55 0.2}
+$doc rect -at {85 218} -size {60 34} -fill {pattern hatch} -stroke gray -width 0.3
+set start [clock milliseconds]
+$doc image embed keyed [file join $images sample-keyed.png]
+$doc image place keyed -at {33 220} -height 30
+$doc image place keyed -at {98 220} -height 30
+set spent [expr {[clock milliseconds] - $start}]
+$doc image place keyed -at {150 220} -height 30
+$doc font -style {} -size 7
+$doc text "PNG, DeviceRGB + Mask - the ground shows through where the file said magenta\
+    (${spent} ms, a pass-through)" -at {20 257}
+$doc text "the same file on white" -at {150 257}
 
 exampleFooter $doc
 
@@ -193,5 +241,6 @@ puts "  written: $target ([file size $target] bytes)"
 puts "  source pictures together: [expr {[file size [file join $images sample-photo.jpg]] +
     [file size [file join $images sample-gray.jpg]] +
     [file size [file join $images sample-indexed.png]] +
+    [file size [file join $images sample-keyed.png]] +
     [file size [file join $images sample-rgba.png]]}] bytes"
 $doc destroy

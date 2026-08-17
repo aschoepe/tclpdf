@@ -53,6 +53,18 @@ namespace eval ::tclpdf::viewerPreferences {
     numCopies             NumCopies
   }
 
+  # From which PDF version each key exists (Reference 1.7, Table 8.1). The
+  # dictionary itself and the five window keys are 1.2; anything not listed
+  # here needs no more than that.
+  variable since {
+    direction             1.3
+    displayDocTitle       1.4
+    printScaling          1.6
+    duplex                1.7
+    pickTrayByPDFSize     1.7
+    numCopies             1.7
+  }
+
   # Which options take a boolean rather than a name. Kept apart from the
   # value lists below because a boolean has no fixed spelling to check
   # against - "yes" and 1 are both true and both have to reach the file as
@@ -84,6 +96,7 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::viewerPreferences::keys
     variable ::tclpdf::viewerPreferences::booleans
     variable ::tclpdf::viewerPreferences::values
+    variable ::tclpdf::viewerPreferences::since
     set current [my state viewerPreferences]
     if {![llength $args]} {
       return $current
@@ -115,6 +128,8 @@ oo::define ::tclpdf::document::document {
               positive integer, not \"$value\""
         }
       }
+      my RequireVersion [expr {[dict exists $since $option] ?
+          [dict get $since $option] : 1.2}] "viewerPreferences -$option"
       dict set current $option $value
     }
     if {[my state viewerPreferences] eq {}} {

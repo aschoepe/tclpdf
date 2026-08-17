@@ -392,4 +392,241 @@ test varFont-15.3 {an instance without a PostScript name of its own gets one bui
       [::tclpdf::varFont postScriptName $font {wght 650}]
 } -result {NotoSansSymbols-Bold NotoSansSymbols_650wght}
 
+# -- the box and the bearing of a composite after a move -----------------------
+#
+# A composite's header carries a bounding box, and hmtx a left side bearing,
+# and both describe the components where the FILE places them. Once the
+# components' outlines and offsets have moved, the box has to be rebuilt from
+# what is now drawn (fontTools' recalcBounds does the same) and the bearing
+# has to follow xMin, as head flag bit 1 promises. Measured 2026-08-17 over the
+# seven variable faces in the tree at wght maximum: 6 207 of 6 275 composites
+# had a box off by 10 units or more when the header's was carried over, the
+# A-dieresis of Roboto Black by 90 on the right, its r-caron by 123 on the
+# left.
+
+test varFont-16.1 {a moved composite gets its box and bearing from its components} -body {
+  # A-dieresis of Roboto at wght 900: A (glyph 37) and dieresis (glyph 106),
+  # both simple, offsets moved by gvar. The expected box is computed here from
+  # the components as [all] moved them, without help from the module.
+  package require tclpdf::glyfOutline
+  set font [variableFace Roboto-Variable.ttf]
+  set id [dict get [dict get $font cmap] 196]
+  set all [::tclpdf::varFont all $font \
+      [::tclpdf::varFont coordinates $font {wght 900}]]
+  set composite [::tclpdf::glyfOutline parse [dict get $all $id bytes]]
+  set xs {}
+  set ys {}
+  foreach component [dict get $composite components] {
+    lassign $component flags number arguments -
+    lassign $arguments dx dy
+    set part [::tclpdf::glyfOutline parse [dict get $all $number bytes]]
+    foreach x [dict get $part x] y [dict get $part y] {
+      lappend xs [expr {$x + $dx}]
+      lappend ys [expr {$y + $dy}]
+    }
+  }
+  set expected [list [tcl::mathfunc::min {*}$xs] [tcl::mathfunc::min {*}$ys] \
+      [tcl::mathfunc::max {*}$xs] [tcl::mathfunc::max {*}$ys]]
+  set before [dict get [outlineOf $font $id] bounds]
+  list [dict get $composite type] [llength [dict get $composite components]] \
+      [expr {[dict get $composite bounds] eq $expected}] \
+      [expr {[dict get $all $id bearing] == [lindex $expected 0]}] \
+      [expr {[dict get $composite bounds] ne $before}] \
+      [expr {[dict get $all $id bearing] != [::tclpdf::sfnt bearing $font $id]}]
+} -result {composite 2 1 1 1 1}
+
+test varFont-16.2 {every composite of the moved face agrees with its components} -body {
+  # The same over the whole of Roboto at both ends of the weight axis - a
+  # composite whose component sits later in the glyph order, or one made of
+  # composites, would fail here and not in 16.1.
+  package require tclpdf::glyfOutline
+  set font [variableFace Roboto-Variable.ttf]
+  set wrong 0
+  set composites 0
+  foreach weight {100 900} {
+    set all [::tclpdf::varFont all $font \
+        [::tclpdf::varFont coordinates $font [list wght $weight]]]
+    set outlines {}
+    dict for {id entry} $all {
+      dict set outlines $id [::tclpdf::glyfOutline parse [dict get $entry bytes]]
+    }
+    dict for {id outline} $outlines {
+      if {[dict get $outline type] ne "composite"} {
+        continue
+      }
+      incr composites
+      set bounds [::tclpdf::glyfOutline bounds $outlines $id]
+      if {[dict get $outline bounds] ne $bounds ||
+          [dict get $all $id bearing] != [lindex $bounds 0]} {
+        incr wrong
+      }
+    }
+  }
+  list [expr {$composites > 1000}] $wrong
+} -result {1 0}
+
+test varFont-16.3 {at the default position a composite keeps its box and bearing} -body {
+  # The counter-direction to 16.1: rebuilding the box must reproduce the
+  # header's where nothing has moved, or the rebuild itself is wrong.
+  package require tclpdf::glyfOutline
+  set font [variableFace Roboto-Variable.ttf]
+  set defaults {}
+  foreach axis [::tclpdf::varFont axes $font] {
+    lappend defaults [lindex $axis 0] [lindex $axis 2]
+  }
+  set all [::tclpdf::varFont all $font \
+      [::tclpdf::varFont coordinates $font $defaults]]
+  set changed 0
+  set composites 0
+  dict for {id entry} $all {
+    set outline [::tclpdf::glyfOutline parse [dict get $entry bytes]]
+    if {[dict get $outline type] ne "composite"} {
+      continue
+    }
+    incr composites
+    if {[dict get $outline bounds] ne [dict get [outlineOf $font $id] bounds] ||
+        [dict get $entry bearing] != [::tclpdf::sfnt bearing $font $id]} {
+      incr changed
+    }
+  }
+  list [expr {$composites > 700}] $changed
+} -result {1 0}
+
+test varFont-16.4 {the box of a composite applies the component transform} -body {
+  # No face in the tree carries a transformed component, so the branch is
+  # exercised on constructed outlines: a square 0..100 placed once as it is,
+  # once at half scale and offset (200, 0), once through a two-by-two matrix
+  # that mirrors x and offsets by (-50, 0). SCALED_COMPONENT_OFFSET is left
+  # off, so the offsets stay in font units (the Microsoft reading).
+  package require tclpdf::glyfOutline
+  set square [dict create type simple ends {3} flags {1 1 1 1} \
+      x {0 100 100 0} y {0 0 100 100} instructions {} bounds {0 0 100 100}]
+  set half [binary format S 8192]
+  set mirror [binary format SSSS -16384 0 0 16384]
+  set composite [dict create type composite bounds {0 0 0 0} instructions {} \
+      components [list \
+          [list 0x0002 1 {0 0} {}] \
+          [list 0x000A 1 {200 0} $half] \
+          [list 0x0082 1 {-50 0} $mirror]]]
+  set outlines [dict create 1 $square 2 $composite]
+  list [::tclpdf::glyfOutline bounds $outlines 1] \
+      [::tclpdf::glyfOutline bounds $outlines 2]
+} -result {{0 0 100 100} {-150 0 250 100}}
+
+test varFont-16.5 {a composite of composites is followed all the way down} -body {
+  # Constructed, because the variable faces in the tree hardly nest: a
+  # square 0..100, a composite placing it twice, and a composite placing THAT
+  # 300 units up. The outer box is only right when the inner one is expanded
+  # to points rather than stopped at its own (deliberately wrong) header.
+  package require tclpdf::glyfOutline
+  set square [dict create type simple ends {3} flags {1 1 1 1} \
+      x {0 100 100 0} y {0 0 100 100} instructions {} bounds {0 0 100 100}]
+  set pair [dict create type composite bounds {0 0 0 0} instructions {} \
+      components [list [list 0x0002 1 {0 0} {}] [list 0x0002 1 {200 0} {}]]]
+  set stack [dict create type composite bounds {0 0 0 0} instructions {} \
+      components [list [list 0x0002 2 {0 300} {}]]]
+  set outlines [dict create 1 $square 2 $pair 3 $stack]
+  # And the one real case: NotoEmoji nests once (measured over the seven
+  # variable faces: no other does), so its moved outer composite has to
+  # agree with a walk over the moved set.
+  set font [variableFace NotoEmoji-Variable.ttf]
+  set all [::tclpdf::varFont all $font \
+      [::tclpdf::varFont coordinates $font {wght 700}]]
+  set moved {}
+  dict for {id entry} $all {
+    dict set moved $id [::tclpdf::glyfOutline parse [dict get $entry bytes]]
+  }
+  set nested 0
+  set wrong 0
+  dict for {id outline} $moved {
+    if {[dict get $outline type] ne "composite"} {
+      continue
+    }
+    foreach component [dict get $outline components] {
+      if {[dict get $moved [lindex $component 1] type] eq "composite"} {
+        incr nested
+        if {[dict get $outline bounds] ne [::tclpdf::glyfOutline bounds $moved $id]} {
+          incr wrong
+        }
+        break
+      }
+    }
+  }
+  list [::tclpdf::glyfOutline bounds $outlines 2] \
+      [::tclpdf::glyfOutline bounds $outlines 3] $nested $wrong
+} -result {{0 0 300 100} {0 300 300 400} 1 0}
+
+# The bounding box of a moved face - what the subset's head table and the
+# font descriptor's /FontBBox are set from for an instance. Measured over the
+# seven variable faces at their axis corners, the file's box is off by up to
+# 351 units once the outlines have moved (NotoSerifTibetan, wght 900, yMin);
+# Roboto's right edge grows from 2353 to 2483 at wght 900.
+
+test varFont-17.1 {the box of a moved face is the union of its moved glyphs} -body {
+  # Computed here from every glyph's parsed outline, without help from the
+  # module: for a simple glyph from its points, for a composite from the box
+  # [all] wrote (16.2 checks THAT against the components). The result must
+  # differ from the file's box, or the case proves nothing.
+  package require tclpdf::glyfOutline
+  set font [variableFace Roboto-Variable.ttf]
+  set all [::tclpdf::varFont all $font \
+      [::tclpdf::varFont coordinates $font {wght 900}]]
+  set expected {}
+  dict for {id entry} $all {
+    set outline [::tclpdf::glyfOutline parse [dict get $entry bytes]]
+    if {[dict get $outline type] eq "empty"} {
+      continue
+    }
+    if {[dict get $outline type] eq "simple"} {
+      set xs [dict get $outline x]
+      set ys [dict get $outline y]
+      set box [list [tcl::mathfunc::min {*}$xs] [tcl::mathfunc::min {*}$ys] \
+          [tcl::mathfunc::max {*}$xs] [tcl::mathfunc::max {*}$ys]]
+    } else {
+      set box [dict get $outline bounds]
+    }
+    if {$expected eq {}} {
+      set expected $box
+      continue
+    }
+    lassign $expected a b c d
+    lassign $box e f g h
+    set expected [list [expr {min($a, $e)}] [expr {min($b, $f)}] \
+        [expr {max($c, $g)}] [expr {max($d, $h)}]]
+  }
+  set bounds [::tclpdf::varFont bounds $all]
+  list [expr {$bounds eq $expected}] [expr {$bounds ne [dict get $font bbox]}] \
+      [lindex $bounds 0] [lindex $bounds 2] [dict get $font bbox]
+} -result {1 1 -1476 2483 {-1510 -555 2353 2163}}
+
+test varFont-17.2 {at the default position the box is the file's} -body {
+  # The counter-direction: what sits in glyf is the default instance, so its
+  # union has to reproduce head xMin..yMax - Roboto's header is exact (it is
+  # not for every face: Bitcount and NotoSansSymbols declare a box wider than
+  # their default outlines, measured 2026-08-17).
+  set font [variableFace Roboto-Variable.ttf]
+  set defaults {}
+  foreach axis [::tclpdf::varFont axes $font] {
+    lappend defaults [lindex $axis 0] [lindex $axis 2]
+  }
+  set all [::tclpdf::varFont all $font \
+      [::tclpdf::varFont coordinates $font $defaults]]
+  expr {[::tclpdf::varFont bounds $all] eq [dict get $font bbox]}
+} -result 1
+
+test varFont-17.3 {empty glyphs do not count, and an empty set is four zeros} -body {
+  # A space has no header to read a box from; were it counted as {0 0 0 0}
+  # it would drag a face that sits entirely above the baseline down to zero -
+  # so the two boxes here sit above and right of the origin on purpose.
+  set box [binary format SSSSS 1 10 20 30 40]
+  set other [binary format SSSSS 1 15 25 60 80]
+  set glyphs [dict create \
+      0 [dict create bytes {} advance 500 bearing 0] \
+      1 [dict create bytes $box advance 500 bearing 10] \
+      2 [dict create bytes $other advance 500 bearing 15]]
+  list [::tclpdf::varFont bounds $glyphs] \
+      [::tclpdf::varFont bounds [dict create 0 [dict create bytes {} advance 1 bearing 0]]] \
+      [::tclpdf::varFont bounds {}]
+} -result {{10 20 60 80} {0 0 0 0} {0 0 0 0}}
+
 cleanupTests

@@ -168,8 +168,11 @@ proc ::tclpdf::afm::encodeWidths {widths text symbolic name {hint {}}} {
     # A soft hyphen marks a place where a word MAY be broken; it is not a
     # character to set. Where the breaker used it, it has already put a real
     # hyphen there, and everywhere else it has to vanish - so it never reaches
-    # a font. Without this the standard fourteen refused the whole string,
-    # because WinAnsi has a slot at 0xAD and the metrics have no glyph in it.
+    # a font. Written through as byte 0xAD it would not vanish: ISO 32000-1
+    # Annex D.2 makes that code a second "hyphen" in WinAnsiEncoding, and a
+    # reader would draw one at every offer. (Its neighbour 0xA0, the no-break
+    # space, IS a character to set - Annex D.2 makes it a second "space",
+    # and the width table carries the space width there for that reason.)
     if {$char eq "\u00AD"} {
       incr position
       continue

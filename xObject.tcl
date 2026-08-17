@@ -92,6 +92,36 @@ oo::define ::tclpdf::document::document {
         BBox [::tclpdf::pdfObj arr [list 0 0 \
             [::tclpdf::pdfObj num $widthPoints] \
             [::tclpdf::pdfObj num $heightPoints]]]]
+    # A transparency group (11.6.6), so that [FormPlace] -opacity fades the
+    # form as ONE object. Without the group a form is treated as if its
+    # objects were painted directly onto the page (8.10.1), and the alpha set
+    # before the Do applies to each of them separately: where two shapes
+    # inside the form overlap, the second is composited over the first at
+    # half strength - measured, two opaque rectangles at -opacity 0.5 came out
+    # (191 63 63) in the overlap, the black one showing through the red, and
+    # (255 127 127) with the group. No validator sees the difference.
+    #
+    # Written for every form, not only for one placed with -opacity: the
+    # object is written here and placed later, possibly many times, and a
+    # group at alpha 1 with the Normal blend mode composites the same as no
+    # group (11.6.6) - measured with poppler, the examples with forms render
+    # to the same pixels except along the form's edge, where the group's
+    # anti-aliasing differs by one row. Isolated (I true), so the contents
+    # composite against a transparent backdrop rather than the page: a blend
+    # mode set before the Do then applies to the form once, not to each
+    # shape against the page. The group colour space is DeviceRGB, the space
+    # this writer paints with by default and the one the default sRGB output
+    # intent describes (ISO 19005-2, 6.2.4.3 wants them consistent); a
+    # document painting in CMYK still composites correctly through an RGB
+    # group, only the blending happens in RGB. Optional for an isolated
+    # group on a page, but stating it keeps every reader on the same space.
+    #
+    # Groups exist since PDF 1.4 - a document set to an older version gets
+    # none, and -opacity then acts per object as before.
+    if {[package vcompare [[my writer] version] 1.4] >= 0} {
+      lappend pairs Group [::tclpdf::pdfObj dictionary \
+          {S /Transparency CS /DeviceRGB I true}]
+    }
     # PDF/A 6.2.2: a content stream that references other objects - a font,
     # a picture - must have its OWN Resources dictionary; inheriting is valid
     # PDF and forbidden here. veraPDF rejects the file, qpdf says nothing.
@@ -116,6 +146,14 @@ oo::define ::tclpdf::document::document {
           [join [dict keys $forms] {, }]"
     }
     set form [dict get $forms $name]
+    # The alpha is checked - and its ExtGState made - before anything is
+    # written: refused after [save] it left a q without its Q in the stream
+    # (measured, "q\n" and nothing else). [GraphicsOpacity] refuses first
+    # and creates second, so a bad value leaves no resource either.
+    set alpha {}
+    if {[dict get $options opacity] ne {}} {
+      set alpha [my GraphicsOpacity [dict get $options opacity]]
+    }
     # The invocation is content on the page: a Figure when -alt describes it,
     # an artifact otherwise. Unmarked content is a defect under PDF/UA, and a
     # reusable block is decoration more often than not.
@@ -140,8 +178,8 @@ oo::define ::tclpdf::document::document {
     lassign [my coords $x [expr {$y + $heightUnit * [dict get $options scale]}]] px py
 
     my save
-    if {[dict get $options opacity] ne {}} {
-      my opacity [dict get $options opacity]
+    if {$alpha ne {}} {
+      my content "[::tclpdf::pdfObj name $alpha] gs\n"
     }
     set matrix [::tclpdf::geometry translate $px $py]
     if {[dict get $options rotate] != 0} {

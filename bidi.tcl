@@ -46,6 +46,7 @@
 #
 
 package require Tcl 8.6.11-
+package require tclpdf::bidiData 1.0-
 
 namespace eval ::tclpdf::bidi {
   namespace export {[a-z]*}
@@ -53,10 +54,10 @@ namespace eval ::tclpdf::bidi {
 
   # Every list below is written in HEXADECIMAL, because that is how Unicode
   # names a character and a list in decimal cannot be read against the
-  # standard. They are compared as numbers, and [dict exists] and the [in]
-  # operator compare STRINGS: "0x0028" is not "40", and a list left as
-  # written answers "not mirrored" for every character in it. So each is
-  # turned into numbers once, here, rather than at every lookup.
+  # standard. The ranges are compared as numbers and that reads "0x0028" as
+  # 40; [dict exists] compares STRINGS, and a mirror list left as written
+  # answers "not mirrored" for every character in it. So each is turned into
+  # numbers once, here, rather than at every lookup.
   proc Numbers {list} {
     return [lmap code $list {expr {$code}}]
   }
@@ -79,42 +80,53 @@ namespace eval ::tclpdf::bidi {
     0x1E800 0x1EFFF
   }]
 
-  # What counts as a digit for the island rule: European, Arabic-Indic and
-  # Extended Arabic-Indic. Unicode calls the first and third EN and the second
-  # AN; the difference decides how they interact with a sign or a currency
-  # symbol in the full algorithm, and it decides nothing here, because a run
-  # of digits keeps its order either way.
-  variable digitRanges [Numbers {
-    0x0030 0x0039
-    0x0660 0x0669
-    0x06F0 0x06F9
-  }]
-
-  # Common Separators - they belong to the number only BETWEEN two digits.
-  # "1.234,50" is one number; a full stop at the end of a sentence is not part
-  # of one, and treating it as such would drag the sentence's punctuation into
-  # the island.
+  # WHO BELONGS TO A NUMBER is not decided here but read off the Unicode
+  # Character Database: bidiData.tcl carries the Bidi_Class of every
+  # character UAX #9 folds into a number - EN and AN, the digits (rules W2,
+  # W3); ES and CS, the separators (W4); ET, the terminators (W5) - generated
+  # from tools/ucd/DerivedBidiClass.txt (Unicode 17.0.0) by tools/mkbidi.tcl.
   #
-  # U+066B and U+066C are the Arabic decimal and thousands separators, the
-  # counterparts of the full stop and the comma for Arabic-Indic digits. They
-  # are not in UAX #9's CS class - they are AN, which is to say they are part
-  # of the number rather than a separator inside it - and the effect here is
-  # the same, so they are listed with the rule that produces it.
-  variable separators [Numbers {0x002C 0x002E 0x003A 0x002F 0x00A0 0x066B 0x066C}]
-
-  # European Terminators - part of the number when they stand DIRECTLY beside
-  # one: a percent sign, a plus or minus, a currency symbol. Deliberately a
-  # short list: every character named here is one that appears in an amount.
+  # It used to be a hand list, "deliberately short: every character named
+  # here is one that appears in an amount", and the shortness was the defect:
+  # measured 2026-08-16 with DejaVu Sans, "5°", "£3" and "7‰" in a -direction
+  # rtl line came out of the file as "°5", "3£" and "‰7". The degree sign, the
+  # pound sign and the per mille sign are ET in UAX #9, and a terminator the
+  # list does not know is a neutral that turns round with the line - a wrong
+  # amount that looks like an amount. The database knows 31 ET ranges; a hand
+  # list that named them all would be a copy of it with the risk of drift.
   #
-  # U+002B, U+002D and U+2212 are formally ES (European Separator) rather than
-  # ET, and UAX #9 rule W4 only makes an ES part of the number between two
-  # digits. They are treated with the ET rule instead, so that "-5" and "+3%"
-  # stay whole. What the two rules would produce differs only in where a
-  # LEADING sign ends up, and a leading sign that is not part of its number is
-  # the reading nobody wants.
+  # The five classes are reduced to the three this module acts on, and the
+  # reduction is where the rules of UAX #9 are bent, in two places, on
+  # purpose:
   #
-  # U+066A is the Arabic percent sign, listed for the same reason U+066B is.
-  variable terminators [Numbers {0x0025 0x002B 0x002D 0x2212 0x20AC 0x0024 0x066A}]
+  #   ES is treated as ET. Rule W4 makes an ES part of the number only
+  #   BETWEEN two digits, W5 makes an ET part of it whenever it touches one.
+  #   The plus, the minus and the hyphen-minus are ES, and under W4 alone the
+  #   sign of "-5" would not be part of its number and would come out on the
+  #   wrong side of it. That is the reading nobody wants, so "-5" and "+3%"
+  #   stay whole here. What the two rules produce differs ONLY in where a
+  #   leading or trailing sign ends up.
+  #
+  #   AN is a digit. The Arabic decimal and thousands separators U+066B and
+  #   U+066C are AN in the database, not CS - Unicode counts them as part of
+  #   the number rather than as a separator inside it, and so does this
+  #   module now: they belong to the number wherever they stand beside its
+  #   digits, where a CS belongs to it only between two of them. Their
+  #   Latin counterparts, the full stop and the comma, ARE CS, so "1.234,50"
+  #   is one number and the full stop closing a sentence is not part of the
+  #   number before it.
+  #
+  # U+00A0 NO-BREAK SPACE is CS in the database - the space that groups
+  # thousands in "1 234,50" - so it joins a number between two digits without
+  # being named here, and it stays a neutral everywhere else, which is what
+  # the neutral list below says about it too.
+  variable numberClasses {
+    EN digit
+    AN digit
+    CS separator
+    ET terminator
+    ES terminator
+  }
 
   # Everything that is neither strongly left-to-right nor right-to-left:
   # spaces, punctuation, symbols, currency, arrows, emoji. A character in here
@@ -180,30 +192,25 @@ namespace eval ::tclpdf::bidi {
 #   ltr          runs left to right
 #
 # The order of the tests is the answer to an overlap: the Arabic-Indic digits
-# and the Arabic separators sit INSIDE the Arabic block, so they have to be
-# recognised before the block is.
+# and the Arabic separators sit INSIDE the Arabic block, so the number table
+# has to be asked before the block is.
 proc ::tclpdf::bidi::class {code} {
-  # As a NUMBER, once. The lists below are asked in two ways - a range by
-  # comparison, a membership by [in] - and the two disagree about "0x05D0":
-  # the comparison reads it as 1488 and the membership as a seven character
-  # string that equals nothing. One conversion here settles it for all of
-  # them, and for [mirror] below, which has the same two ways in one.
+  # As a NUMBER, once. The lists below are asked by comparison, and a
+  # comparison reads "0x05D0" as 1488 where a string lookup would read it as
+  # seven characters that equal nothing. One conversion here settles it for
+  # all of them, and for [mirror] below, which asks a dict.
   set code [expr {int($code)}]
-  variable digitRanges
-  variable separators
-  variable terminators
+  variable numberClasses
   variable neutralRanges
   variable rtlRanges
-  foreach {first last} $digitRanges {
+  # The number table first - a digit inside the Arabic block is a digit. It
+  # is walked like the two block lists under it rather than halved the way
+  # joining.tcl reads its table: 69 ranges against 532 there, and one search
+  # written twice is one search that drifts.
+  foreach {first last kind} $::tclpdf::bidiData::ranges {
     if {$code >= $first && $code <= $last} {
-      return digit
+      return [dict get $numberClasses $kind]
     }
-  }
-  if {$code in $separators} {
-    return separator
-  }
-  if {$code in $terminators} {
-    return terminator
   }
   foreach {first last} $rtlRanges {
     if {$code >= $first && $code <= $last} {

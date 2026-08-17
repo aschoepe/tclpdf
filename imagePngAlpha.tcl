@@ -168,7 +168,7 @@ proc ::tclpdf::imagePngAlpha::unfilter {raw width height depth channels} {
 
 # The soft mask of a palette image whose tRNS chunk holds partial values.
 #
-# Only reached when [paletteTransparency] said "softMask" - a palette that is
+# Only reached when [transparency] said "softMask" - a palette that is
 # merely opaque-or-not takes the colour-key way and is never decoded.
 proc ::tclpdf::imagePngAlpha::paletteMask {parsed} {
   set width [dict get $parsed width]

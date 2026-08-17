@@ -16,6 +16,10 @@
 #                  goes into the PDF byte for byte as /FlateDecode with
 #                  /Predictor 15. The reader does the un-filtering, which it
 #                  has to be able to do anyway. Nothing is decompressed here.
+#                  A tRNS chunk on this way becomes a /Mask array (colour key
+#                  masking, 8.9.6.4): the one transparent colour of a
+#                  greyscale or truecolor file, or the transparent indices of
+#                  a palette. Neither costs a decode.
 #
 #   decode         colour types 4 and 6 (with alpha): PDF has no image format
 #                  carrying its own alpha, so the channel has to be separated
@@ -119,6 +123,15 @@ proc ::tclpdf::imagePng::parse {bytes} {
   if {[dict get $result colorType] == 3 && [dict get $result palette] eq {}} {
     return -code error "tclpdf: damaged PNG - a palette image without a PLTE chunk"
   }
+  # For colour types 0 and 2 the tRNS chunk is one colour, two bytes per
+  # sample whatever the bit depth (PNG 11.3.2.1). Any other length is a
+  # damaged file, and it is refused here rather than read as a half colour.
+  set expected [switch -- [dict get $result colorType] 0 {expr 2} 2 {expr 6} default {expr 0}]
+  set trns [string length [dict get $result transparency]]
+  if {$expected && $trns && $trns != $expected} {
+    return -code error "tclpdf: damaged PNG - the tRNS chunk of a colour type\
+        [dict get $result colorType] image is $trns bytes, expected $expected"
+  }
   return $result
 }
 
@@ -168,40 +181,51 @@ proc ::tclpdf::imagePng::decodeParms {parsed} {
       Columns [dict get $parsed width]]]
 }
 
-# How a palette image carries its transparency - and which of two very
-# different ways the caller has to take.
+# How a PNG without an alpha channel carries its transparency - and which of
+# two very different ways the caller has to take.
 #
 # Returns "none", "colourKey" or "softMask":
 #
 #   none        no tRNS chunk, or every entry fully opaque
-#   colourKey   every entry is either 0 or 255. A /Mask array naming the
-#               fully transparent indices does the job, and the image data
-#               stays a pass-through - nothing is decoded.
-#   softMask    at least one entry is partially transparent. That needs a real
-#               /SMask built from the index data, so the picture has to be
-#               decoded after all.
+#   colourKey   the transparency is all-or-nothing: for colour types 0 and 2
+#               the one colour the tRNS chunk names (PNG 11.3.2.1), for a
+#               palette every entry either 0 or 255. A /Mask array does the
+#               job, and the image data stays a pass-through - nothing is
+#               decoded.
+#   softMask    a palette with at least one partially transparent entry. That
+#               needs a real /SMask built from the index data, so the picture
+#               has to be decoded after all.
 #
 # The distinction is worth making because the common case - a logo with one
-# transparent background colour - lands on the cheap side.
-proc ::tclpdf::imagePng::paletteTransparency {parsed} {
-  if {[dict get $parsed colorType] != 3 || [dict get $parsed transparency] eq {}} {
+# transparent background colour - lands on the cheap side. Colour types 4 and
+# 6 always answer "none": their transparency is a channel, not a chunk, and
+# the format forbids tRNS there.
+proc ::tclpdf::imagePng::transparency {parsed} {
+  if {[dict get $parsed transparency] eq {}} {
     return none
   }
-  binary scan [dict get $parsed transparency] cu* alphas
-  set partial 0
-  set transparent 0
-  foreach alpha $alphas {
-    if {$alpha == 0} {
-      incr transparent
-    } elseif {$alpha != 255} {
-      incr partial
+  switch -- [dict get $parsed colorType] {
+    0 - 2 {
+      return [expr {[colourKey $parsed] eq {} ? "none" : "colourKey"}]
     }
-  }
-  if {$partial} {
-    return softMask
-  }
-  if {$transparent} {
-    return colourKey
+    3 {
+      binary scan [dict get $parsed transparency] cu* alphas
+      set partial 0
+      set transparent 0
+      foreach alpha $alphas {
+        if {$alpha == 0} {
+          incr transparent
+        } elseif {$alpha != 255} {
+          incr partial
+        }
+      }
+      if {$partial} {
+        return softMask
+      }
+      if {$transparent} {
+        return colourKey
+      }
+    }
   }
   return none
 }
@@ -235,7 +259,7 @@ proc ::tclpdf::imagePng::streams {parsed} {
   lappend pairs Filter /FlateDecode DecodeParms [decodeParms $parsed]
   set result [dict create data [dict get $parsed idat] pairs $pairs]
 
-  switch -- [paletteTransparency $parsed] {
+  switch -- [transparency $parsed] {
     colourKey {
       dict set result pairs [linsert $pairs end \
           Mask [::tclpdf::pdfObj arr [colourKey $parsed]]]
@@ -254,11 +278,41 @@ proc ::tclpdf::imagePng::streams {parsed} {
   return $result
 }
 
-# The /Mask array for a colour-key palette: one {min max} pair per fully
-# transparent index. Adjacent indices are merged into a single range, which is
-# what the array wants anyway (8.9.6.4).
+# The /Mask array (8.9.6.4) for a colour-keyed picture: one {min max} pair
+# per colour component, or per run of transparent palette indices.
+#
+# The ranges are sample values BEFORE any Decode array, in the bit depth of
+# the image - and the image goes in at its own depth, so a 16-bit tRNS value
+# is written as the 16-bit value it is; nothing is halved. For colour types 0
+# and 2 the chunk carries one colour, two bytes per sample big-endian with the
+# value in the low bits (PNG 11.3.2.1), so each component becomes the range
+# {value value}. A value beyond what the depth can hold matches no sample -
+# the same as no transparency, which is what is answered.
+#
+# For a palette, adjacent transparent indices are merged into a single range,
+# which is what the array wants anyway.
 proc ::tclpdf::imagePng::colourKey {parsed} {
-  binary scan [dict get $parsed transparency] cu* alphas
+  set trns [dict get $parsed transparency]
+  switch -- [dict get $parsed colorType] {
+    0 {binary scan $trns Su values}
+    2 {binary scan $trns SuSuSu r g b; set values [list $r $g $b]}
+    3 {return [PaletteKey $trns]}
+    default {return {}}
+  }
+  set limit [expr {(1 << [dict get $parsed bitDepth]) - 1}]
+  set ranges {}
+  foreach value $values {
+    if {$value > $limit} {
+      return {}
+    }
+    lappend ranges $value $value
+  }
+  return $ranges
+}
+
+# The ranges of fully transparent indices in a palette's tRNS bytes.
+proc ::tclpdf::imagePng::PaletteKey {trns} {
+  binary scan $trns cu* alphas
   set ranges {}
   set index 0
   set start -1

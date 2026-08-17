@@ -163,6 +163,13 @@ oo::define ::tclpdf::document::document {
     # picture and the form placement; the top edge of -at is where the
     # placement begins, so that a destination at the Figure can name the
     # place on the page.
+    # The alpha is checked - and its ExtGState made - before the mark and
+    # the "q" are out: refused inside [SvgRoot] it left a q and the mark's
+    # BDC/EMC around nothing. Same order as [FormPlace] in xObject.tcl; the
+    # option carries the resource name from here on.
+    if {[dict get $options opacity] ne {}} {
+      dict set options opacity [my GraphicsOpacity [dict get $options opacity]]
+    }
     lassign [my GraphicMark svg svg [dict get $options alt] \
         [dict get $options artifact] [expr {[dict get $options at] eq {} ?
         0 : [lindex [dict get $options at] 1]}]] mark element
@@ -221,7 +228,7 @@ oo::define ::tclpdf::document::document {
     my state svgDepth 0
     my SvgSave
     if {[dict get $options opacity] ne {}} {
-      my opacity [dict get $options opacity]
+      my content "[::tclpdf::pdfObj name [dict get $options opacity]] gs\n"
     }
     my content "[::tclpdf::pdfObj num $scaleX] 0 0\
         [::tclpdf::pdfObj num [expr {-$scaleY}]]\

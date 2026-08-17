@@ -58,6 +58,28 @@ proc ::tclpdfTest::steps {values {digits 2}} {
   return $result
 }
 
+# A complete PNG from its parts, byte by byte, so that every depth and
+# colour type the format allows can be exercised - a real encoder saves
+# whichever depth it was given. "rows" are the filtered scanlines, filter
+# byte included; "trns" the tRNS body, or {} for none.
+proc ::tclpdfTest::png {width height depth colorType rows {trns {}} {plte {}}} {
+  set chunks {}
+  lappend chunks IHDR [binary format IIccccc $width $height $depth $colorType 0 0 0]
+  if {$plte ne {}} {
+    lappend chunks PLTE $plte
+  }
+  if {$trns ne {}} {
+    lappend chunks tRNS $trns
+  }
+  lappend chunks IDAT [zlib compress $rows] IEND {}
+  set png "\x89PNG\r\n\x1a\n"
+  foreach {type body} $chunks {
+    append png [binary format I [string length $body]] $type $body \
+        [binary format I [zlib crc32 $type$body]]
+  }
+  return $png
+}
+
 # A scratch path inside the tcltest temporary directory.
 proc ::tclpdfTest::scratch {name} {
   return [file join [::tcltest::temporaryDirectory] $name]

@@ -67,18 +67,35 @@ $doc form place letterhead -at {20 200} -rotate 5
 $doc text "Second page - the same object three times, scaled, faded and turned" \
     -at {20 60}
 
+# A form is a transparency group (ISO 32000-1, 11.6.6), so -opacity fades it
+# as ONE object. That shows where shapes inside the form overlap: the square
+# is drawn over the disc, and at -opacity 0.5 the disc must not show through
+# it - faded per object it would, and the overlap would come out darker than
+# either. The disc's own -opacity 0.6 in the letterhead above is the other
+# half of the same rule: inside a group the alpha starts at 1, so the faded
+# placement fades the disc too, instead of the disc's 0.6 replacing the 0.4.
+$doc form create seal -size {25 25} -script {
+  $doc circle -at {10 10} -radius 10 -fill {0.15 0.35 0.6}
+  $doc rect -at {8 8} -size {17 17} -fill {0.85 0.3 0.2}
+}
+$doc form place seal -at {120 115}
+$doc form place seal -at {150 115} -opacity 0.5
+$doc font -size 8
+$doc text "the same form opaque and at -opacity 0.5:" -at {120 145}
+$doc text "the square hides the disc in both" -at {120 149}
+
 exampleFooter $doc
 
 $doc write $target
 
-# Count what actually stands in the file. Four placements, one object - the
+# Count what actually stands in the file. Six placements, two objects - the
 # claim in the header, checked against the bytes rather than asserted.
 set writer [$doc writer]
 set forms 0
 for {set n 1} {$n <= [$writer count]} {incr n} {
   if {[string match {*/Subtype /Form*} [$writer body $n]]} { incr forms }
 }
-puts "  form XObjects in the file: $forms (placed four times)"
+puts "  form XObjects in the file: $forms (placed six times)"
 puts "  known forms: [$doc form names]"
 $doc destroy
 puts "  written: $target ([file size $target] bytes)"

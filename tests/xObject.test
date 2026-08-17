@@ -167,6 +167,77 @@ test xObject-3.1 {scale, rotation and opacity reach the placement} -body {
       [regexp {Q\n} $content]
 } -result {1 1 1 1}
 
+# A form's own body of the dictionary - the first object with /Subtype /Form,
+# for the tests that look at the form and not at the page.
+proc xObjectFormBody {doc} {
+  set writer [$doc writer]
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/Subtype /Form*} [$writer body $number]]} {
+      return [$writer body $number]
+    }
+  }
+  return {}
+}
+
+# --- the form is a transparency group -----------------------------------
+#
+# Without /Group the alpha set before the Do applies to every object inside
+# the form on its own (8.10.1), and two overlapping shapes are faded twice
+# where they meet. With it the form is composited as one object (11.6.6).
+# Measured with poppler, two opaque rectangles at -opacity 0.5: overlap
+# (191 63 63) without the group, (255 127 127) with it - the red one alone,
+# faded once.
+
+test xObject-3.2 {a form is an isolated transparency group} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  set body [xObjectFormBody $doc]
+  $doc destroy
+  regexp {/Group << /S /Transparency /CS /DeviceRGB /I true >>} $body
+} -result 1
+
+test xObject-3.3 {before PDF 1.4 there is no group} -body {
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  set body [xObjectFormBody $doc]
+  $doc destroy
+  list [string match {*/Subtype /Form*} $body] [string match {*/Group*} $body]
+} -result {1 0}
+
+test xObject-3.4 {a group changes nothing for a form placed without -opacity} -body {
+  # The group is written for every form (the object is written once and
+  # placed later, possibly many times); the placement without -opacity has
+  # to stay the same as before: cm and Do inside q/Q, no gs.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  $doc form place block -at {10 10}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {gs} $content] [regexp {q
+.*cm
+.*Do
+Q
+} $content]
+} -result {0 1}
+
+test xObject-3.5 {an opacity outside 0..1 is refused before anything is written} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {40 20} -script {}
+  set results {}
+  foreach value {1.5 -0.1 abc} {
+    lappend results [catch {$doc form place block -at {10 10} -opacity $value} message]
+    lappend results [string match {tclpdf: opacity is a number from 0 to 1*} $message]
+  }
+  # Refused after [save] the stream kept a q without its Q - measured.
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $results $content
+} -result {{1 1 1 1 1 1} {}}
+
 # --- decoration on purpose, or by default -------------------------------
 #
 # A placement without -alt is an artifact, like a picture. Whether that was

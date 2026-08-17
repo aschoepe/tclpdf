@@ -24,6 +24,9 @@
 # What lives here:
 #
 #   page add/count/size/box   the public entry, and the five boxes of 14.11.2
+#   PageBox*                  what a box has to satisfy before it is stored:
+#                             corners in order (7.9.5), inside the media box
+#                             (14.11.2), the page within Annex C's limits
 #   content, canvas           the page's content stream, and the stack that
 #                             redirects drawing into a form XObject or a tile -
 #                             the reason [rect] and [text] work inside a
@@ -98,6 +101,10 @@ oo::define ::tclpdf::document::document {
     }
     lassign [::tclpdf::geometry pageSize $format $orientation \
         [dict get $tclpdfOption unit]] width height
+    # The same limits as for [page box media]: -format {0 0} and negative pairs
+    # went through here unchallenged (measured 2026-08-16), and a page of no
+    # size is only found by whoever opens the file.
+    my PageBoxLimits [list 0 0 $width $height] "-format \"$format\""
     dict set page number [$tclpdfWriter reserve]
     dict set page boxes [dict create media [list 0 0 $width $height]]
     dict set page content {}
@@ -143,11 +150,110 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: a page box is {x0 y0 x1 y1}, got \"$value\""
     }
     set unit [dict get $tclpdfOption unit]
-    dict set page boxes $name [lmap number $value {
+    set box [lmap number $value {
       ::tclpdf::geometry toPoints $number $unit
     }]
+    # Everything that can be refused is refused BEFORE the page is touched:
+    # a box that fails halfway must not leave the page with a media box it
+    # cannot hold.
+    my PageBoxCorners $box "page box $name"
+    # Bleed, trim and art boxes are PDF 1.3 (Table 30); media and crop have
+    # been there since 1.0.
+    if {$name in {bleed trim art}} {
+      my RequireVersion 1.3 "page box $name"
+    }
+    set boxes [dict get $page boxes]
+    if {$name eq "media"} {
+      my PageBoxLimits $box "page box media"
+      # A media box set AFTER the others has to hold them still. Shrinking it
+      # under a crop box would leave a document that 14.11.2 tells the reader
+      # to repair by intersection - the reader correcting what the writer
+      # should not have written - and dropping the crop box instead would be
+      # a change nobody asked for. So the shrink is refused and the message
+      # names the box: set the media box first, or move the box that sticks
+      # out.
+      dict for {other rect} $boxes {
+        if {$other ne "media"} {
+          my PageBoxInside $other $rect $box
+        }
+      }
+    } else {
+      my PageBoxInside $name $box [dict get $boxes media]
+    }
+    dict set page boxes $name $box
     lset tclpdfPages $position $page
     return $value
+  }
+
+  # -- what a box has to satisfy ---------------------------------------------
+  #
+  # All three checks take POINTS and report in the document unit; refusing is
+  # the rule throughout (compare ShapeRadius): tclpdf writes the file, and a
+  # value the reader has to mend is a mistake nobody was told about.
+
+  # 7.9.5 lets a rectangle name any two diagonal corners and asks the READER
+  # to normalise. tclpdf does not: the manual promises {x0 y0 x1 y1}, and
+  # [coords] and [page size] take that order literally - a reversed media box
+  # mirrors y against the wrong edge and reports a negative size. A reversed
+  # pair is far more often a corner-and-size confusion than intent, so it is
+  # named rather than swapped. The same test catches an EMPTY box: a rectangle
+  # of no width or no height shows nothing, and Annex C sets the minimum at
+  # 3 units anyway.
+  method PageBoxCorners {box what} {
+    lassign $box x0 y0 x1 y1
+    if {$x1 <= $x0 || $y1 <= $y0} {
+      return -code error "tclpdf: $what: x1 must exceed x0 and y1 must exceed\
+          y0 in {x0 y0 x1 y1}, got [my PageBoxText $box]"
+    }
+    return
+  }
+
+  # Annex C.2 of ISO 32000-1: a page is at least 3 by 3 and at most 14400 by
+  # 14400 units in default user space. Nothing between the writer and the
+  # reader checks this - qpdf and veraPDF (PDF/A-1b, measured 2026-08-16) both
+  # pass a page of 20000 pt and one of no size at all.
+  method PageBoxLimits {box what} {
+    lassign $box x0 y0 x1 y1
+    set width [expr {$x1 - $x0}]
+    set height [expr {$y1 - $y0}]
+    # 0.001 pt of slack: 5080 mm IS 14400 pt, and the product of the mm
+    # factor may miss it in the last binary digit.
+    if {$width < 3 - 0.001 || $height < 3 - 0.001 \
+        || $width > 14400 + 0.001 || $height > 14400 + 0.001} {
+      return -code error "tclpdf: $what: a page is between 3 and 14400 pt on\
+          each side (ISO 32000-1 Annex C), got\
+          [my PageBoxText [list $width $height]]"
+    }
+    return
+  }
+
+  # 14.11.2: crop, bleed, trim and art "shall not ordinarily extend beyond the
+  # boundaries of the media box"; if they do, the reader cuts them back to the
+  # intersection. Refused here for the same reason as above - the caller
+  # asked for a box, and would get a different one without a word.
+  method PageBoxInside {name box media} {
+    lassign $box x0 y0 x1 y1
+    lassign $media mx0 my0 mx1 my1
+    # 0.001 pt of tolerance for a box computed in mm against a media box that
+    # came from the format table: both go through the same product, but a
+    # caller's own arithmetic (297 - 10, say) may not.
+    set slack 0.001
+    if {$x0 < $mx0 - $slack || $y0 < $my0 - $slack \
+        || $x1 > $mx1 + $slack || $y1 > $my1 + $slack} {
+      return -code error "tclpdf: page box $name [my PageBoxText $box] lies\
+          outside the media box [my PageBoxText $media] (ISO 32000-1 14.11.2)"
+    }
+    return
+  }
+
+  # Points back into the document unit for a message: three decimals, trailing
+  # zeros dropped, so that A4 reads "{210 297} mm" and not "{210.000 297.000}".
+  method PageBoxText {values} {
+    set unit [dict get $tclpdfOption unit]
+    return "{[lmap value $values {
+      set text [format %.3f [::tclpdf::geometry fromPoints $value $unit]]
+      string trimright [string trimright $text 0] .
+    }]} $unit"
   }
 
   # Append to the content stream. Everything topical - graphics, text, images -

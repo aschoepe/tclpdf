@@ -191,6 +191,8 @@ oo::define ::tclpdf::document::document {
     # The spelling of the standard, whatever the caller typed: a name is a
     # name, and /multiply is not /Multiply to a reader.
     set mode [lindex $known $match]
+    # Blend modes came with transparency in PDF 1.4 (Reference 1.7, 7.2.4).
+    my RequireVersion 1.4 "blend"
     set name GB$mode
     if {[my resource ExtGState $name] eq {}} {
       my resource ExtGState $name [[my writer] ref [[my writer] add \
@@ -215,6 +217,9 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: opacity applies to fill, stroke or both,\
           not \"$which\""
     }
+    # /ca and /CA are PDF 1.4 (Reference 1.7, Table 4.8). Checked after the
+    # value, so that a wrong number is still reported as a wrong number.
+    my RequireVersion 1.4 "opacity"
     set pairs {Type /ExtGState}
     if {$which in {fill both}} {
       lappend pairs ca [::tclpdf::pdfObj num $value]
@@ -377,6 +382,12 @@ oo::define ::tclpdf::document::document {
     if {[llength $spec] == 2 && [string tolower [lindex $spec 0]] eq "pattern"} {
       package require tclpdf::pattern
       return [list pattern [my PatternResource [lindex $spec 1]]]
+    }
+    # The Separation colour space is PDF 1.2 (Reference 1.7, Table 4.12);
+    # gated here, on the only road into [ColourSeparation], which registers
+    # the resource on first use.
+    if {[string tolower [lindex $spec 0]] eq "separation"} {
+      my RequireVersion 1.2 "a separation colour"
     }
     return [my ColourSeparation $spec]
   }

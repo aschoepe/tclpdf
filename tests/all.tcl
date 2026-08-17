@@ -72,6 +72,7 @@ foreach tclpdfPkg {
     tclpdf::type1
     tclpdf::varFont
     tclpdf::shaping
+    tclpdf::bidiData
     tclpdf::bidi
     tclpdf::subset
     tclpdf::font

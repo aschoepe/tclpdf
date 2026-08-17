@@ -22,6 +22,10 @@
 # than pushed over the edge, and that break is a fallback, not typography -
 # proper hyphenation needs language data and is a feature of its own.
 #
+# A line breaks at ASCII white space only. The no-break space and the other
+# spaces of Unicode are characters of the word they stand in - the class and
+# the reasons are with it below.
+#
 
 package require Tcl 8.6.11-
 package require TclOO
@@ -48,6 +52,27 @@ namespace eval ::tclpdf::textBlock {
   variable options {at {} rotate 0 align left width {} anchor baseline
       height {} indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
       avoid {} avoidMargin 0 tag P expansion {}}
+
+  # Where a line may break: at the ASCII white space characters, and nowhere
+  # else. \s is NOT that class - Tcl's \s (8.6.18 and 9.0.4, measured) also
+  # matches U+00A0, U+2007, U+202F, U+2009, U+3000, even U+200B and U+FEFF -
+  # so a breaker built on it broke "12<nbsp>EUR" between the number and its
+  # unit, which is the one thing a no-break space is there to prevent (UAX
+  # #14: class GL, glue), and put a plain space into the stream where the
+  # text had U+00A0.
+  #
+  # The characters listed here are controls without a glyph in any face; a
+  # tab or a stray CR of a CRLF file is a break and is drawn as the space
+  # that joins two words. Every other white space of Unicode is a character
+  # of its own: it stays in the word, is measured and set with its own glyph
+  # width, and is refused by a face that has no glyph for it. So a thin or an
+  # em space (U+2009, U+2003 - UAX #14 class BA) is not a break point either.
+  # It cannot be a stretchable one anyway: word spacing reaches only the
+  # single-byte code 32 (ISO 32000-1 9.3.3), and the TJ road an embedded face
+  # takes adjusts the glyph of U+0020 alone, so a break there would leave a
+  # justified line short by every such gap.
+  variable separators "\t\n\v\f\r "
+  variable word {[^\t\n\v\f\r ]+}
 }
 
 oo::define ::tclpdf::document::document {
@@ -141,7 +166,7 @@ oo::define ::tclpdf::document::document {
     set globalLine 0
     set paragraphFrom 0
     foreach paragraph [split $string \n] {
-      if {[string trim $paragraph] eq {}} {
+      if {[string trim $paragraph $::tclpdf::textBlock::separators] eq {}} {
         # Not skipped by a shape: there is nothing to keep out of it, and
         # moving it down would add its own blank line below the shape.
         lassign [{*}$band 0 $paragraphIndex $globalLine] width offset
@@ -158,7 +183,7 @@ oo::define ::tclpdf::document::document {
           width offset running
       set current {}
       set currentFrom 0
-      foreach span [regexp -all -inline -indices {\S+} $paragraph] {
+      foreach span [regexp -all -inline -indices $::tclpdf::textBlock::word $paragraph] {
         lassign $span wordFrom wordTo
         set word [string range $paragraph $wordFrom $wordTo]
         incr wordFrom $paragraphFrom
@@ -167,6 +192,11 @@ oo::define ::tclpdf::document::document {
         # trailing zero is gone from every amount in every wrapped paragraph,
         # and nothing reports it - the document is perfectly valid and the
         # figure is wrong.
+        #
+        # Joined by a plain space, which is right only because every
+        # separator IS one to the page - see the class at the top. A no-break
+        # space never gets here as a separator: it stays inside its word and
+        # reaches the stream as U+00A0.
         if {$current eq {}} {
           set candidate $word
           set candidateFrom $wordFrom
@@ -417,7 +447,8 @@ oo::define ::tclpdf::document::document {
   # empty instead. Measured once per block, over the distinct characters.
   method TextBlockWidest {string arguments} {
     set widest 0
-    foreach char [lsort -unique [split [regsub -all {\s} $string {}] {}]] {
+    foreach char [lsort -unique [split \
+        [regsub -all "\[$::tclpdf::textBlock::separators\]" $string {}] {}]] {
       set width [my textWidth $char {*}$arguments]
       if {$width > $widest} {
         set widest $width
@@ -554,7 +585,13 @@ oo::define ::tclpdf::document::document {
         # The last line of a paragraph stays flush left. Justifying it is the
         # classic mistake - one word on a line gets stretched across the whole
         # column and the result is unmistakably broken.
-        set spaces [expr {[llength [regexp -all -inline {\S+} $line]] - 1}]
+        #
+        # Counted as the SPACES of the line, U+0020 and nothing else, because
+        # that is what Tw stretches (9.3.3) and what the TJ road adjusts: a
+        # no-break space stands inside a word and gets none of the gap. Counting
+        # words instead handed the gap out over the no-break spaces as well,
+        # and the line stopped short of the margin by exactly their share.
+        set spaces [regexp -all { } $line]
         if {$isLast || $spaces < 1} {
           my TextRun $drawn $state $x $y $rotate 0 $lift $hyphen
           return

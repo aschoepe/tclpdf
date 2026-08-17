@@ -81,11 +81,20 @@ oo::class create ::tclpdf::document::document {
   # Without that the option and the file disagreed: [cget -version] answered
   # 1.4 while the file still began with %PDF-1.7, and nothing anywhere said so.
   # The constructor calls this before the writer exists, hence the guard.
+  #
+  # Handed on only when THIS call changed it. pdfa and ua raise the writer's
+  # version by themselves, and handing the option on unconditionally undid
+  # that: measured, "pdfa -part 3" put the writer at 1.7 and the next
+  # "configure -unit pt" put it back at 1.4. The writer refuses a version
+  # below what the document already uses, so the option is set only after
+  # the writer took it.
   method configure {args} {
-    set tclpdfOption [::tclpdf::option parse $tclpdfOption $args "the document"]
-    if {[info exists tclpdfWriter]} {
-      $tclpdfWriter version [dict get $tclpdfOption version]
+    set options [::tclpdf::option parse $tclpdfOption $args "the document"]
+    if {[info exists tclpdfWriter]
+        && [dict get $options version] ne [dict get $tclpdfOption version]} {
+      $tclpdfWriter version [dict get $options version]
     }
+    set tclpdfOption $options
     return
   }
 
@@ -101,6 +110,16 @@ oo::class create ::tclpdf::document::document {
   # modules go through here rather than keeping a writer instance around.
   method writer {} {
     return $tclpdfWriter
+  }
+
+  # A feature that exists only from a certain PDF version on, called BEFORE
+  # the module writes it: "my RequireVersion 1.4 opacity". Refuses when the
+  # document is older, remembers it otherwise - the writer holds both halves,
+  # see [require] there. Not raised behind the caller's back: whoever set
+  # -version 1.3 said what the file may contain, and a feature that does not
+  # fit is a mistake to name, not to paper over.
+  method RequireVersion {version feature} {
+    return [$tclpdfWriter require $version $feature]
   }
 
   # A content stream object, deflated when the document is set to compress.
@@ -447,6 +466,8 @@ oo::class create ::tclpdf::document::document {
       return -code error "tclpdf: \"$tag\" is not a language tag - expected\
           something like de, de-DE or en-GB (RFC 3066)"
     }
+    # /Lang in the catalog is PDF 1.4 (Reference 1.7, Table 3.25).
+    my RequireVersion 1.4 "language"
     my catalogEntry Lang [::tclpdf::pdfObj str $tag]
     return $tag
   }
@@ -483,6 +504,11 @@ oo::class create ::tclpdf::document::document {
       return -code error "tclpdf: metadata takes at most one XMP packet"
     }
     if {[llength $args] == 1} {
+      # A metadata stream is PDF 1.4 (Reference 1.7, 10.2.2). Checked here
+      # because this is the one road every packet takes - the caller's own
+      # and the one [XmpCatalog] builds for pdfa and ua, both of which raise
+      # the version themselves.
+      my RequireVersion 1.4 "metadata"
       # Stored as UTF-8 BYTES, not as a Tcl string. The packet's own BOM in
       # its xpacket instruction declares UTF-8 (XMP part 1, ISO 19005
       # 6.6.2.1), and the writer refuses text in a stream anyway - a title

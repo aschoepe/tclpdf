@@ -219,7 +219,15 @@ oo::define ::tclpdf::document::document {
           declaration. Use \[\$doc ua -part 2 -wtpdf accessibility\]"
     }
     switch -- [dict get $current part] {
-      1 {}
+      1 {
+        # PDF/UA-1 (ISO 14289-1, 5.1) is a profile of ISO 32000-1, so the file
+        # is PDF 1.7 - lifted the way pdfa lifts, and recorded, so that a
+        # later [configure -version 1.4] is refused naming PDF/UA.
+        if {[package vcompare [[my writer] version] 1.7] < 0} {
+          my configure -version 1.7
+        }
+        my RequireVersion 1.7 "PDF/UA-1"
+      }
       2 {
         # The version is raised here rather than checked at write time,
         # because everything written from now on has to know: 2.0 spells the

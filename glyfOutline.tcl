@@ -26,7 +26,9 @@
 # COMPOSITES ARE NOT DECODED into points. A composite says "draw glyph 36 here
 # and glyph 700 there", and its variation deltas move those offsets, not any
 # outline. So [parse] reports it as a composite with its components and leaves
-# the outlines to the glyphs it names.
+# the outlines to the glyphs it names. The one place that has to see through a
+# composite is [bounds]: after instancing, the box a composite covers is known
+# only from the components it now places, and it is computed from them.
 #
 
 package require Tcl 8.6.11-
@@ -162,8 +164,8 @@ proc ::tclpdf::glyfOutline::parse {data} {
 # flags travel with them rather than being decoded away.
 #
 # The transform is kept as raw bytes: a scale, a two-by-two matrix or nothing.
-# Nothing here has any reason to look inside it, and re-encoding an F2DOT14 is
-# a way to lose a bit for no gain.
+# Nothing that WRITES has any reason to look inside it, and re-encoding an
+# F2DOT14 is a way to lose a bit for no gain; [bounds] decodes it read-only.
 proc ::tclpdf::glyfOutline::Components {data} {
   set position 10
   set result {}
@@ -205,6 +207,11 @@ proc ::tclpdf::glyfOutline::Components {data} {
 # The argument width is decided again rather than kept: a delta can push an
 # offset past what a byte holds, and writing it back into the old width is how
 # an accent ends up on the other side of the letter.
+#
+# The box goes out as the dictionary holds it. Unlike a simple glyph's it
+# cannot be recomputed here, because it depends on glyphs this one only names;
+# [bounds] computes it from the whole set, and whoever moves the components
+# sets it before composing.
 proc ::tclpdf::glyfOutline::Composite {glyph} {
   set data [binary format S -1]
   append data [binary format SSSS {*}[dict get $glyph bounds]]
@@ -327,7 +334,7 @@ proc ::tclpdf::glyfOutline::compose {glyph} {
 
   set instructions [dict get $glyph instructions]
   set data [binary format S [llength $ends]]
-  append data [binary format SSSS {*}[Bounds $xs $ys]]
+  append data [binary format SSSS {*}[PointBounds $xs $ys]]
   foreach end $ends {
     append data [binary format Su $end]
   }
@@ -338,12 +345,114 @@ proc ::tclpdf::glyfOutline::compose {glyph} {
 
 # The bounding box of a set of points. On an empty set the four zeros a reader
 # expects, rather than an error - a glyph may legitimately have no points.
-proc ::tclpdf::glyfOutline::Bounds {xs ys} {
+proc ::tclpdf::glyfOutline::PointBounds {xs ys} {
   if {![llength $xs]} {
     return {0 0 0 0}
   }
   return [list [::tcl::mathfunc::min {*}$xs] [::tcl::mathfunc::min {*}$ys] \
       [::tcl::mathfunc::max {*}$xs] [::tcl::mathfunc::max {*}$ys]]
+}
+
+# The bounding box of one glyph out of a set of parsed outlines - glyph id ->
+# the dictionary [parse] returns - computed from the POINTS, through any
+# composite. {xMin yMin xMax yMax} in font units, integers.
+#
+# The header of a composite carries a box, but it describes the components at
+# the positions the FILE places them. Instancing a variable font moves both
+# the components' outlines and their offsets, and measured over the seven
+# variable faces in the tree at their axis extremes, the box that was read is
+# then off by up to 515 units (NotoSans, wght 100 wdth 62.5) - not on odd
+# glyphs, on A-dieresis, I-grave and I-with-tonos. So the box of a composite is
+# not trusted after a move; it is rebuilt from what the composite now draws,
+# which is what fontTools' recalcBounds does as well.
+#
+# The transform of a component (ISO/IEC 14496-22, glyf "Composite glyph
+# description") is applied to the component's points, and to its offset as
+# well only where SCALED_COMPONENT_OFFSET says so - the Microsoft reading,
+# offset unscaled, is the default and the one every rasteriser follows when
+# neither bit is set. None of the seven faces in the tree carries a transformed
+# component; the branch is there because the format allows it, not because it
+# was measured. A component placed by matching two point numbers takes its
+# offset from the points, as the rasteriser would.
+proc ::tclpdf::glyfOutline::bounds {outlines glyph} {
+  lassign [Points $outlines $glyph 0] xs ys
+  return [lmap value [PointBounds $xs $ys] {expr {int(floor($value + 0.5))}}]
+}
+
+# The points a glyph draws, {xs ys}, through composites. Depth is bounded
+# because a malformed font can make a composite refer to itself, and the
+# recursion has to end somewhere other than the stack.
+proc ::tclpdf::glyfOutline::Points {outlines glyph depth} {
+  if {$depth > 16 || ![dict exists $outlines $glyph]} {
+    return {{} {}}
+  }
+  set outline [dict get $outlines $glyph]
+  if {![dict size $outline] || [dict get $outline type] eq "empty"} {
+    return {{} {}}
+  }
+  if {[dict get $outline type] eq "simple"} {
+    return [list [dict get $outline x] [dict get $outline y]]
+  }
+  set xs {}
+  set ys {}
+  foreach component [dict get $outline components] {
+    lassign $component flags number arguments transform
+    lassign [Points $outlines $number [expr {$depth + 1}]] cxs cys
+    lassign [Matrix $flags $transform] a b c d
+    if {$flags & 0x0002} {
+      lassign $arguments dx dy
+      if {($flags & 0x0800) && !($flags & 0x1000)} {
+        lassign [list [expr {$a * $dx + $c * $dy}] \
+            [expr {$b * $dx + $d * $dy}]] dx dy
+      }
+    } else {
+      # Point matching: point `first` of what is assembled so far lands on
+      # point `second` of the component.
+      lassign $arguments first second
+      set px [lindex $xs $first]
+      set qx [lindex $cxs $second]
+      if {$px eq {} || $qx eq {}} {
+        set dx 0
+        set dy 0
+      } else {
+        set qy [lindex $cys $second]
+        set dx [expr {$px - ($a * $qx + $c * $qy)}]
+        set dy [expr {[lindex $ys $first] - ($b * $qx + $d * $qy)}]
+      }
+    }
+    if {$a == 1 && $b == 0 && $c == 0 && $d == 1} {
+      foreach x $cxs y $cys {
+        lappend xs [expr {$x + $dx}]
+        lappend ys [expr {$y + $dy}]
+      }
+    } else {
+      foreach x $cxs y $cys {
+        lappend xs [expr {$a * $x + $c * $y + $dx}]
+        lappend ys [expr {$b * $x + $d * $y + $dy}]
+      }
+    }
+  }
+  return [list $xs $ys]
+}
+
+# The transform of a component as {a b c d}: WE_HAVE_A_SCALE,
+# WE_HAVE_AN_X_AND_Y_SCALE or WE_HAVE_A_TWO_BY_TWO, each in F2DOT14; the
+# identity where there is none.
+proc ::tclpdf::glyfOutline::Matrix {flags transform} {
+  if {$flags & 0x0008} {
+    binary scan $transform S scale
+    set scale [expr {$scale / 16384.0}]
+    return [list $scale 0 0 $scale]
+  }
+  if {$flags & 0x0040} {
+    binary scan $transform SS scaleX scaleY
+    return [list [expr {$scaleX / 16384.0}] 0 0 [expr {$scaleY / 16384.0}]]
+  }
+  if {$flags & 0x0080} {
+    binary scan $transform SSSS a b c d
+    return [lmap value [list $a $b $c $d] {expr {$value / 16384.0}}]
+  }
+  return {1 0 0 1}
 }
 
 package provide tclpdf::glyfOutline 1.0

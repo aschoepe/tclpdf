@@ -31,7 +31,7 @@ package require tclpdf::pdfObj 1.0-
 namespace eval ::tclpdf::writer {}
 
 oo::class create ::tclpdf::writer::pdf {
-  variable tclpdfObjects tclpdfNext tclpdfVersion tclpdfId
+  variable tclpdfObjects tclpdfNext tclpdfVersion tclpdfId tclpdfRequired
 
   # The PDF version is a parameter, not a constant: PDF/A-3 and therefore
   # ZUGFeRD require 1.7, while PDF/A-4f would want 2.0. Keeping it here makes
@@ -40,6 +40,7 @@ oo::class create ::tclpdf::writer::pdf {
     set tclpdfObjects {}
     set tclpdfNext 0
     set tclpdfId {}
+    set tclpdfRequired {}
     my version $version
   }
 
@@ -52,9 +53,42 @@ oo::class create ::tclpdf::writer::pdf {
         return -code error "tclpdf: there is no PDF version \"$value\" -\
             known are 1.0 to 1.7 (ISO 32000-1) and 2.0 (ISO 32000-2)"
       }
+      # Not below what the document already uses: [require] checked against
+      # the version of ITS moment, and lowering it afterwards would put the
+      # feature into a file whose header disowns it - the hole a check at
+      # call time leaves open, closed here rather than by checking again
+      # at write time.
+      if {$tclpdfRequired ne {}
+          && [package vcompare $value [lindex $tclpdfRequired 0]] < 0} {
+        return -code error "tclpdf: this document already uses\
+            [lindex $tclpdfRequired 1], which needs PDF\
+            [lindex $tclpdfRequired 0] - it cannot be lowered to PDF $value"
+      }
       set tclpdfVersion $value
     }
     return $tclpdfVersion
+  }
+
+  # A feature that exists only from a certain PDF version on, about to be
+  # written. Refused - not raised past the caller, who set the version on
+  # purpose - when the file is older than that; remembered otherwise, so
+  # that [version] can refuse a later lowering. The header is what a reader
+  # believes: a 1.3 file carrying an ExtGState /ca is one that some readers
+  # render opaque and no validator objects to.
+  #
+  # The version is what the writer holds NOW: pdfa raises it, so a feature
+  # asked for after that call passes where it failed before, which is right.
+  method require {version feature} {
+    if {[package vcompare $tclpdfVersion $version] < 0} {
+      return -code error "tclpdf: $feature needs PDF $version - this document\
+          is written as PDF $tclpdfVersion; create it with -version $version\
+          or higher, or raise it with configure -version"
+    }
+    if {$tclpdfRequired eq {}
+        || [package vcompare $version [lindex $tclpdfRequired 0]] > 0} {
+      set tclpdfRequired [list $version $feature]
+    }
+    return
   }
 
   # Reserve a number without having the content yet. This is what makes
@@ -84,15 +118,27 @@ oo::class create ::tclpdf::writer::pdf {
   # count of the data exactly as written, and getting it wrong produces a file
   # that opens in some readers and not in others.
   method addStream {pairs data} {
-    my CheckBytes $data
-    lappend pairs Length [string length $data]
-    return [my add "[::tclpdf::pdfObj dictionary $pairs]\nstream\n$data\nendstream"]
+    return [my add [my StreamBody $pairs $data]]
   }
 
   method stream {number pairs data} {
+    return [my put $number [my StreamBody $pairs $data]]
+  }
+
+  # The one place every stream passes through - which makes it the place for
+  # the one filter check. FlateDecode exists since PDF 1.2 (PDF Reference
+  # 1.7, Table 3.5); the document's -compress, an embedded font program, a
+  # PNG picture and an attachment all deflate, and gating them each at their
+  # own site is how one of them would one day be forgotten.
+  method StreamBody {pairs data} {
     my CheckBytes $data
+    if {[dict exists $pairs Filter]
+        && [string match *FlateDecode* [dict get $pairs Filter]]} {
+      my require 1.2 "a FlateDecode stream (-compress 1, an embedded font, a\
+          PNG picture, a compressed attachment)"
+    }
     lappend pairs Length [string length $data]
-    return [my put $number "[::tclpdf::pdfObj dictionary $pairs]\nstream\n$data\nendstream"]
+    return "[::tclpdf::pdfObj dictionary $pairs]\nstream\n$data\nendstream"
   }
 
   method count {} {

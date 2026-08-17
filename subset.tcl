@@ -24,7 +24,8 @@
 #
 # Which tables travel:
 #
-#   head hhea maxp   rewritten (glyph count, loca format)
+#   head hhea maxp   rewritten (glyph count, loca format; for an instance of
+#                    a variable face also the bounding box)
 #   hmtx loca glyf   rebuilt from the chosen glyphs
 #   cvt fpgm prep    copied unchanged when present - the hinting programs,
 #                    dropped only because they are not needed at all sizes
@@ -246,10 +247,27 @@ proc ::tclpdf::subset::Rewrite {font glyph mapping} {
 proc ::tclpdf::subset::Head {font} {
   set head [::tclpdf::sfnt table $font head]
   # indexToLocFormat to 1 (long), matching the loca written above. The
-  # checksum adjustment at offset 8 is zeroed - it covers the whole file and
-  # is recomputed in Assemble.
+  # checksum adjustment at offset 8 is zeroed here - it covers the whole
+  # file, so only Assemble, which has the whole file, can set it; the table
+  # checksum of head is taken with the field at zero, as the format says.
+  # (Until 2026-08-17 this comment promised the recomputation and Assemble
+  # did not do it - the field shipped as 0 in every subset.)
   set head [string replace $head 8 11 [binary format Iu 0]]
-  return [string replace $head 50 51 [binary format S 1]]
+  set head [string replace $head 50 51 [binary format S 1]]
+  # xMin yMin xMax yMax at offset 36: the box of the DEFAULT outlines, which
+  # is not the box of the outlines this file carries once they were moved
+  # (varFont bounds has the measurements - up to 351 units off in the tree).
+  # Set for an instance only, from the same union the font descriptor states,
+  # so that head and /FontBBox agree; a face embedded as it came keeps its
+  # header byte for byte, as it did before, and its box is the whole file's,
+  # not the subset's - which is what fontTools' subsetter leaves there unless
+  # told to recalculate, and what every document written so far carries.
+  if {[dict exists $font instanced]} {
+    package require tclpdf::varFont 1.0-
+    set head [string replace $head 36 43 [binary format SSSS \
+        {*}[::tclpdf::varFont bounds [dict get $font instanced]]]]
+  }
+  return $head
 }
 
 proc ::tclpdf::subset::Hhea {font count} {
@@ -297,7 +315,34 @@ proc ::tclpdf::subset::Assemble {tables} {
     append body [string repeat \x00 $padding]
     incr offset [expr {$length + $padding}]
   }
-  return $header$directory$body
+  set file $header$directory$body
+  # head.checkSumAdjustment (OpenType 'head', ISO/IEC 14496-22 5.2.4): with
+  # the field at zero, sum the whole file as 32-bit words and store
+  # 0xB1B0AFBA minus that sum. A reader that verifies it - fontTools does,
+  # FreeType does not - saw 0 and a checksum mismatch in every subset before
+  # this. The head table's own directory checksum stays the one computed
+  # above, over the zeroed field, which is what the format prescribes.
+  if {[dict exists $tables head]} {
+    set headOffset [expr {$directoryLength + [TableOffset $tags $tables head]}]
+    set adjustment [expr {(0xB1B0AFBA - [Checksum $file]) & 0xFFFFFFFF}]
+    set file [string replace $file [expr {$headOffset + 8}] \
+        [expr {$headOffset + 11}] [binary format Iu $adjustment]]
+  }
+  return $file
+}
+
+# Where a table starts inside the body: the padded lengths of the tables that
+# sort before it.
+proc ::tclpdf::subset::TableOffset {tags tables tag} {
+  set offset 0
+  foreach candidate $tags {
+    if {$candidate eq $tag} {
+      return $offset
+    }
+    set length [string length [dict get $tables $candidate]]
+    incr offset [expr {$length + (4 - $length % 4) % 4}]
+  }
+  return -code error "tclpdf: no table $tag in the subset"
 }
 
 # The table checksum: the sum of the 32-bit words, modulo 2^32.
