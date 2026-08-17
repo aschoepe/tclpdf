@@ -44,8 +44,9 @@ proc exampleFooter {doc {family {}} {colour {0.45 0.45 0.5}}} {
     # An "if", not an "expr": expr normalises what it returns, and a value that
     # only looks like a number comes back changed. That cost this package a
     # defect once already, in the line breaker.
+    set families [lsort -unique $fonts]
     if {[llength $fonts]} {
-        set fonts "embedded: [join [lsort -unique $fonts] {, }]"
+        set fonts "embedded: [join $families {, }]"
     } else {
         set fonts "standard faces, nothing embedded"
     }
@@ -57,6 +58,13 @@ proc exampleFooter {doc {family {}} {colour {0.45 0.45 0.5}}} {
     # The colour is a parameter for one reason: a document under a CMYK
     # output intent (05.09) may not paint DeviceRGB, footer included.
     $doc font -size 6 -color $colour
+    # A footer that names twelve faces (02.09) is wider than the page and ran
+    # off its left edge - measured 243 mm on A4. Where the list does not fit
+    # between the margins, the count stands in for it; the page that embeds
+    # that many faces has a table of them anyway.
+    if {[$doc textWidth "$script - $fonts"] > $width - 20} {
+        set fonts "embedded: [llength $families] faces"
+    }
     # -tag Artifact: a footer is a fact about the sheet, not about the text,
     # and in a tagged document it has to say so or a reader announces it as
     # content. Harmless everywhere else - an untagged document ignores it.

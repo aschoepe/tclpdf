@@ -16,6 +16,13 @@ $endif$
   <title>$if(title-prefix)$$title-prefix$ – $endif$$pagetitle$</title>
   <style>
     $styles.html()$
+    /* A table whose separator line in the Markdown source sets column widths
+       arrives with a colgroup; keep those proportions exactly (fixed layout
+       needs a definite width) and wrap an over-long word inside its cell
+       instead of letting it widen the column. Tables without a colgroup are
+       left to the browser's auto layout. */
+    table:has(colgroup) { table-layout: fixed; width: 100%; }
+    table:has(colgroup) th, table:has(colgroup) td { overflow-wrap: anywhere; }
   </style>
 $for(css)$
   <link rel="stylesheet" href="$css$" />

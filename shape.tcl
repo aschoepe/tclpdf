@@ -41,7 +41,7 @@ oo::define ::tclpdf::document::document {
     # Through ShapePaint like every other shape rather than a hard-coded
     # "S": a line has no fill, so the operator comes out the same - but the
     # closing "Q" of the state guard does not exist twice.
-    my ShapePaint $options "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\
+    my ShapePaint line $options "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\
         [::tclpdf::pdfObj num $x1] [::tclpdf::pdfObj num $y1] l\n"
     return
   }
@@ -68,7 +68,7 @@ oo::define ::tclpdf::document::document {
       set path "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
           [::tclpdf::pdfObj num $w] [::tclpdf::pdfObj num $h] re\n"
     }
-    my ShapePaint $options $path
+    my ShapePaint rect $options $path
     return
   }
 
@@ -89,7 +89,12 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options radius] ne {}} {
       set rx [my ShapeRadius [dict get $options radius] -radius]
       set ry $rx
+      # A shape with one radius IS a circle, whichever of the two names
+      # drew it - and "circle on page 3" is what a caller who wrote [circle]
+      # will look for.
+      set what circle
     } elseif {[dict get $options size] ne {}} {
+      set what ellipse
       lassign [dict get $options size] width height
       set rx [expr {[my ShapeRadius $width -size] / 2.0}]
       set ry [expr {[my ShapeRadius $height -size] / 2.0}]
@@ -116,7 +121,7 @@ oo::define ::tclpdf::document::document {
     append path "[$N num [expr {$cx - $kx}]] [$N num [expr {$cy - $ry}]]\
         [$N num [expr {$cx - $rx}]] [$N num [expr {$cy - $ky}]]\
         [$N num [expr {$cx - $rx}]] [$N num $cy] c\n"
-    my ShapePaint $options $path
+    my ShapePaint $what $options $path
     return
   }
 
@@ -145,7 +150,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options close]} {
       append path "h\n"
     }
-    my ShapePaint $options $path
+    my ShapePaint polygon $options $path
     return
   }
 
@@ -171,7 +176,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options close]} {
       append path "h\n"
     }
-    my ShapePaint $options $path
+    my ShapePaint curve $options $path
     return
   }
 
@@ -187,7 +192,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options close]} {
       append path "h\n"
     }
-    my ShapePaint $options $path
+    my ShapePaint path $options $path
     return
   }
 
@@ -198,8 +203,12 @@ oo::define ::tclpdf::document::document {
   # the rest of the page is drawn in the wrong state, and in a tagged
   # document the mark stays open as well. The path arrives here as a finished
   # string for that reason: building it is where the numbers are checked.
-  method ShapePaint {options path} {
-    set style [my GraphicsStyle $options 1]
+  #
+  # "what" is the shape's own name, carried down to the colour space record
+  # (see [ColourUsed] in color.tcl) so that a PDF/A refusal can say "rect on
+  # page 3" rather than "a colour somewhere".
+  method ShapePaint {what options path} {
+    set style [my GraphicsStyle $options 1 $what]
     my content $style$path[my GraphicsPaint $options 1]
     return
   }

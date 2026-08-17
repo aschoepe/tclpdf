@@ -695,6 +695,204 @@ test zugferd-7.16 {an explicit profile that does not exist is refused by name} -
   }
 } -returnCodes error -match glob -result {*ICC profile "*nowhere.icc" does not exist*}
 
+# -- the colour space check (ISO 19005-2, 6.2.4.3) -------------------------
+#
+# Every case that is refused below was written WITHOUT the check first and
+# fed to veraPDF 1.30.2 with -f 3b: each fails exactly 6.2.4.3-2 (DeviceRGB
+# under a non-RGB intent) or -3 (DeviceCMYK under a non-CMYK intent), and
+# every case that is let through here passes there. The check does no more
+# and no less than the validator, measured over fill, stroke, text, picture,
+# Indexed base, shading, tiling pattern, form content and separation
+# alternate under both the shipped sRGB profile and the CMYK press profile.
+
+# Next to the sRGB profile - and derived from THAT path rather than from
+# $root, which zugferd-6.4 above uses as a scratch variable.
+set cmykIcc [file join [file dirname $icc] ISOcoated_v2_bas.ICC]
+testConstraint haveCmykIcc [file exists $cmykIcc]
+
+# A PDF/A document with an embedded face and the given profile, drawn by the
+# script; answers {code message left} of the write - "left" being whether a
+# refused write left a file behind - and cleans up.
+proc intentProbe {face profile script} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed haus $face
+  $doc font -family haus -size 10
+  $doc pdfa -part 3 -conformance B -profile $profile
+  uplevel 1 [list set doc $doc]
+  uplevel 1 $script
+  set path [::tclpdfTest::scratch intent.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  set left [expr {$code && [file exists $path]}]
+  file delete $path
+  if {!$code} {
+    set message written
+  }
+  return [list $code $message $left]
+}
+
+test zugferd-8.1 {a CMYK fill under the sRGB intent is refused at the write, naming the call and the page} \
+    -constraints {haveIcc haveInvoice} -body {
+  intentProbe $face $icc {
+    $doc rect -at {20 20} -size {40 20} -fill {cmyk 0 1 1 0}
+  }
+} -match glob -result {1 {tclpdf: PDF/A with the RGB output intent "sRGB.icc" cannot carry DeviceCMYK (ISO 19005-2, 6.2.4.3) - used by rect on page 1; paint in RGB or grey, or give a CMYK profile with pdfa -profile} 0}
+
+test zugferd-8.2 {an RGB colour under a CMYK intent is refused the same way, on the page it was painted} \
+    -constraints {haveCmykIcc haveInvoice} -body {
+  intentProbe $face $cmykIcc {
+    $doc text "black is grey and fine" -at {20 20}
+    $doc page add
+    $doc text "steelblue is not" -at {20 20} -color steelblue
+  }
+} -match glob -result {1 {tclpdf: PDF/A with the CMYK output intent "ISOcoated_v2_bas.ICC" cannot carry DeviceRGB (ISO 19005-2, 6.2.4.3) - used by text on page 2; paint in CMYK or grey, or give an RGB profile with pdfa -profile} 0}
+
+test zugferd-8.3 {grey under either intent, RGB under sRGB and CMYK under CMYK are all written} \
+    -constraints {haveIcc haveCmykIcc haveInvoice} -body {
+  # Named greys - silver, gray, black, white - parse as DeviceGray on
+  # purpose (color-parse-1.9), which is what keeps them usable here.
+  list [intentProbe $face $icc {
+    $doc rect -at {20 20} -size {40 20} -fill {rgb 0.2 0.4 0.6} -stroke silver
+    $doc text "text" -at {20 50} -color {gray 0.3}
+  }] [intentProbe $face $cmykIcc {
+    $doc rect -at {20 20} -size {40 20} -fill {cmyk 0 1 1 0} -stroke silver
+    $doc text "text" -at {20 50} -color black
+  }]
+} -result {{0 written 0} {0 written 0}}
+
+test zugferd-8.4 {a picture's colour space counts: an RGB PNG under a CMYK intent, an Indexed one over RGB too, a grey one not} \
+    -constraints {haveCmykIcc haveInvoice} -body {
+  # Measured with veraPDF: /Indexed over DeviceRGB fails 6.2.4.3-2 exactly
+  # like DeviceRGB, and a soft mask (DeviceGray) is fine under every intent.
+  set rgb [::tclpdfTest::png 1 1 8 2 [binary format cucucucu 0 10 20 30]]
+  set indexed [::tclpdfTest::png 1 1 8 3 [binary format cucu 0 0] {} \
+      [binary format cucucu 10 20 30]]
+  set gray [::tclpdfTest::png 1 1 8 0 [binary format cucu 0 128]]
+  list [lrange [intentProbe $face $cmykIcc {
+    $doc image embed pic -data $rgb
+    $doc page add
+    $doc image place pic -at {20 20} -width 10
+  }] 0 1] [lindex [intentProbe $face $cmykIcc {
+    $doc image draw -data $indexed -at {20 20} -width 10
+  }] 0] [lindex [intentProbe $face $cmykIcc {
+    $doc image draw -data $gray -at {20 20} -width 10
+  }] 0]
+} -match glob -result {{1 {*cannot carry DeviceRGB*used by image place on page 2;*}} 1 0}
+
+test zugferd-8.5 {a CMYK JPEG under the sRGB intent is refused, and passes under the CMYK one} \
+    -constraints {haveIcc haveCmykIcc haveInvoice} -body {
+  # Measured with veraPDF on a real CMYK JPEG made with ImageMagick: 6.2.4.3-3
+  # under sRGB, clean under ISO Coated v2. Here a bare SOI + SOF0 header with
+  # four components is enough - the parser reads the component count and
+  # nothing further decides the space.
+  set jpeg [binary format H* ffd8ffc00014080010001004011100021100031100041100]
+  list [lrange [intentProbe $face $icc {
+    $doc image draw -data $jpeg -at {20 20} -width 10
+  }] 0 1] [lindex [intentProbe $face $cmykIcc {
+    $doc image draw -data $jpeg -at {20 20} -width 10
+  }] 0]
+} -match glob -result {{1 {*cannot carry DeviceCMYK*used by image place on page 1;*}} 0}
+
+test zugferd-8.6 {a shading's colour space counts, painted directly or as a pattern} \
+    -constraints {haveIcc haveCmykIcc haveInvoice} -body {
+  # A grey stop between coloured ones takes their space (shading.tcl); a
+  # gradient that is grey throughout stays grey and passes anywhere.
+  list [lrange [intentProbe $face $cmykIcc {
+    $doc shading axial -at {20 20} -size {40 20} -colors {white steelblue}
+  }] 0 1] [lrange [intentProbe $face $icc {
+    $doc shading pattern sky radial -at {20 20} -size {40 20} \
+        -colors {{cmyk 1 0 0 0} white}
+    $doc rect -at {20 20} -size {40 20} -fill {pattern sky}
+  }] 0 1] [lindex [intentProbe $face $cmykIcc {
+    $doc shading axial -at {20 20} -size {40 20} -colors {white black}
+  }] 0]
+} -match glob -result {{1 {*cannot carry DeviceRGB*used by shading axial on page 1;*}} {1 {*cannot carry DeviceCMYK*used by shading pattern "sky" on page 1;*}} 0}
+
+test zugferd-8.7 {the content of a tiling pattern and of a form is recorded like the page's} \
+    -constraints {haveCmykIcc haveInvoice} -body {
+  # Both are content streams of their own; veraPDF walks them and fails
+  # 6.2.4.3-2 for an RGB fill inside either.
+  list [lrange [intentProbe $face $cmykIcc {
+    $doc pattern create hatch -size {4 4} \
+        -script [list $doc line -from {0 0} -to {4 4} -stroke steelblue]
+    $doc rect -at {20 20} -size {40 20} -fill {pattern hatch}
+  }] 0 1] [lrange [intentProbe $face $cmykIcc {
+    $doc form create seal -size {10 10} \
+        -script [list $doc circle -at {5 5} -radius 4 -fill orange]
+    $doc form place seal -at {20 20}
+  }] 0 1]
+} -match glob -result {{1 {*cannot carry DeviceRGB*used by line on page 1;*}} {1 {*cannot carry DeviceRGB*used by circle on page 1;*}}}
+
+test zugferd-8.8 {pdfa declared after the drawing is refused the same as before it} \
+    -constraints {haveIcc haveInvoice} -body {
+  # The record is kept whether or not pdfa is ever declared, and the check
+  # runs at catalog time - so the two orders cannot come out different.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed haus $face
+  $doc rect -at {20 20} -size {40 20} -fill {cmyk 0 1 1 0}
+  $doc pdfa -part 3 -profile $icc
+  set late [catch {$doc write [::tclpdfTest::scratch intent-late.pdf]} lateMessage]
+  $doc destroy
+  file delete [::tclpdfTest::scratch intent-late.pdf]
+  lassign [intentProbe $face $icc {
+    $doc rect -at {20 20} -size {40 20} -fill {cmyk 0 1 1 0}
+  }] early earlyMessage
+  list $late $early [expr {$lateMessage eq $earlyMessage}]
+} -result {1 1 1}
+
+test zugferd-8.9 {every offending space in one message, and only the first three distinct users of each} \
+    -constraints haveInvoice -body {
+  # A GRAY intent admits neither DeviceRGB nor DeviceCMYK, so both can offend
+  # at once - the shape of the message with two spaces, and the cap on the
+  # list: three distinct callers, then "and elsewhere". A GRAY profile does
+  # not ship with the package; the header is all the check reads.
+  set grayIcc [fakeProfile [::tclpdfTest::scratch gray.icc] "GRAY"]
+  set result [intentProbe $face $grayIcc {
+    $doc rect -at {20 20} -size {40 20} -fill steelblue
+    $doc rect -at {20 50} -size {40 20} -fill orange
+    $doc page add
+    $doc text "rgb" -at {20 20} -color steelblue
+    $doc line -from {20 30} -to {60 30} -stroke steelblue
+    $doc circle -at {40 60} -radius 5 -fill steelblue
+    $doc text "cmyk" -at {20 80} -color {cmyk 0 1 1 0}
+  }]
+  file delete $grayIcc
+  set result
+} -result {1 {tclpdf: PDF/A with the GRAY output intent "gray.icc" cannot carry DeviceRGB or DeviceCMYK (ISO 19005-2, 6.2.4.3) - used DeviceRGB by rect on page 1, text on page 2, line on page 2 and elsewhere; DeviceCMYK by text on page 2; paint in grey, or give an RGB or CMYK profile with pdfa -profile} 0}
+
+test zugferd-8.10 {without pdfa nothing is checked, but the record is kept} -body {
+  # DeviceGray is recorded too - the record is the fact "which spaces does
+  # this document use", not a list of suspects.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc rect -at {20 20} -size {40 20} -fill {cmyk 0 1 1 0} -stroke black
+  $doc rect -at {20 50} -size {40 20} -fill {cmyk 0 1 1 0}
+  set used [$doc colourSpacesUsed]
+  set result [::tclpdfTest::writes $doc intent-none.pdf]
+  $doc destroy
+  list $result [dict get $used DeviceCMYK] [dict get $used DeviceGray users]
+} -result {{0 1} {users {{rect on page 1}} more 0} {{rect on page 1}}}
+
+test zugferd-8.11 {a refused call leaves no record: the check names only what reached the file} \
+    -constraints {haveIcc haveInvoice} -body {
+  # A width below zero, an opacity above one, stops out of order - each is
+  # refused before anything is written, and the colour it carried must not
+  # haunt a later write. Caught here as a script would that recovers.
+  set jpeg [binary format H* ffd8ffc00014080010001004011100021100031100041100]
+  set outcome [intentProbe $face $icc {
+    set refused [list \
+        [catch {$doc rect -at {20 20} -size {40 20} -fill {cmyk 0 1 1 0} -width -1}] \
+        [catch {$doc shading axial -at {20 20} -size {40 20} \
+            -colors {{cmyk 1 0 0 0} white} -stops {0.8 0.2}}] \
+        [catch {$doc image draw -data $jpeg -at {20 20} -width 5 -opacity 2}]]
+    $doc text "fine" -at {20 20}
+  }]
+  list $refused $outcome
+} -result {{1 1 1} {0 written 0}}
+
+rename intentProbe {}
 rename fakeProfile {}
 rename descTag {}
 

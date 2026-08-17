@@ -404,10 +404,11 @@ oo::define ::tclpdf::document::document {
     my content "BT\n"
     my content "[my TextResource $font] [::tclpdf::pdfObj num $size] Tf\n"
     if {[dict get $state color] ne {}} {
-      # Through ColourSeparation so that a text in a spot colour gets its
-      # colour space resource written like a shape does.
+      # Through ColourUsed so that a text in a spot colour gets its colour
+      # space resource written like a shape does, and its space recorded
+      # for the PDF/A intent check like a shape's.
       my content [::tclpdf::color operator [::tclpdf::color parse \
-          [my ColourSeparation [dict get $state color]]] fill]\n
+          [my ColourUsed [dict get $state color] text]] fill]\n
     }
     foreach {key operator} {spacing Tc wordSpacing Tw rise Ts} {
       if {$key eq "wordSpacing" && $byTJ} {

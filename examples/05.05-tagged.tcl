@@ -27,7 +27,9 @@
 # formality - under PDF/UA anything left unmarked counts as a defect.
 #
 # The document is written as PDF/A-3a, which is level B plus reliable text
-# plus this tree. Check it with:
+# plus this tree. Its text is Italian - the language tag says so, and the
+# example shows that the structure carries a language like it carries a
+# heading: as a fact about the text, not as a look. Check it with:
 #
 #   verapdf -f 3a examples/out/05.05-tagged.pdf
 #
@@ -57,13 +59,15 @@ set doc [tclpdf new -unit mm]
 # and not the start of it.
 $doc tagged 1
 
-$doc info Title "Werkstattbericht 2026-114"
+$doc info Title "Rapporto d'officina 2026-114"
 $doc info Author "Alexander Schoepe"
-$doc info Subject "Instandsetzung, Jahresbericht"
+$doc info Subject "Manutenzione straordinaria, rapporto annuale"
 
 # A tagged document without a language is only half accessible: the tree says
-# what a passage is, the language says how to pronounce it.
-$doc language de-DE
+# what a passage is, the language says how to pronounce it. The text is
+# Italian, so the tag says so - a screen reader set to German would read
+# "manutenzione" with German vowels otherwise.
+$doc language it-IT
 
 $doc page add
 $doc font embed face $regular
@@ -85,19 +89,20 @@ $doc structure Sect -script {
   $doc font -family faceBold -size 16
   # Nothing in the call says "heading" - not the size, not the weight. A
   # reader cannot infer it from either, so it is stated.
-  $doc text "Werkstattbericht 2026" -at {20 30} -tag H1
+  $doc text "Rapporto d'officina 2026" -at {20 30} -tag H1
 
   $doc line -from {20 33} -to {190 33} -width 0.4 -stroke {0.4 0.4 0.4}
 
   $doc font -family face -size 10
   # No -tag: a paragraph is what this becomes, and the writer knows it.
-  $doc text "Die Instandsetzung der Presse 3 wurde im Berichtsjahr\
-      abgeschlossen. Der Antrieb ist getauscht, die Steuerung auf den neuen\
-      Regler umgestellt und die Abnahme durch den Sachverständigen erfolgt." \
+  $doc text "La manutenzione straordinaria della pressa 3 è stata completata\
+      nell'anno di riferimento. L'azionamento è stato sostituito, il comando\
+      è passato al nuovo regolatore e il collaudo da parte del perito è stato\
+      eseguito." \
       -at {20 42} -width 170
 
-  $doc text "Der Bericht führt die Kosten je Gewerk auf. Die Summe weicht von\
-      der Schätzung aus dem Vorjahr um weniger als fünf Prozent ab." \
+  $doc text "Il rapporto elenca i costi per ciascun lotto di lavori. Il totale\
+      si scosta dalla stima dell'anno precedente di meno del cinque per cento." \
       -at {20 60} -width 170
 }
 
@@ -106,7 +111,7 @@ $doc structure Sect -script {
 $doc structure Sect -script {
 
   $doc font -family faceBold -size 12
-  $doc text "Kosten je Gewerk" -at {20 82} -tag H2
+  $doc text "Costi per lotto di lavori" -at {20 82} -tag H2
 
   $doc font -family face -size 9
   # Not one -tag in this call. The sections and the grid are known here, so
@@ -120,13 +125,13 @@ $doc structure Sect -script {
   # exactly the "forgotten -family" the PDF/A check was built to catch.
   $doc table -at {20 88} -width 170 -theme striped \
       -style {family face} -headStyle {family faceBold} \
-      -head {{Gewerk Firma Betrag}} \
+      -head {{Lotto Ditta Importo}} \
       -body {
-        {"Antrieb" "Meyer Antriebstechnik" "18.400,00"}
-        {"Steuerung" "Elektro Brandt" "9.250,50"}
-        {"Montage" "eigene Werkstatt" "3.180,00"}
+        {"Azionamento" "Meccanica Rossi S.r.l." "18.400,00"}
+        {"Comando" "Elettrotecnica Bianchi" "9.250,50"}
+        {"Montaggio" "officina interna" "3.180,00"}
       } \
-      -foot {{{text "Summe" colSpan 2 align right} "30.830,50"}} \
+      -foot {{{text "Totale" colSpan 2 align right} "30.830,50"}} \
       -columns {{} {} {align decimal}} -decimal ,
 }
 
@@ -135,19 +140,19 @@ $doc structure Sect -script {
 $doc structure Sect -script {
 
   $doc font -family faceBold -size 12
-  $doc text "Anlagen" -at {20 140} -tag H3
+  $doc text "Allegati" -at {20 140} -tag H3
 
   $doc font -family face -size 9
-  $doc text "Links die Presse nach der Instandsetzung. Rechts ein Muster ohne\
-      Aussage - es steht als Beispiel dafür, was ein Bild ohne Beschreibung\
-      wird." -at {20 146} -width 170
+  $doc text "A sinistra la pressa dopo la manutenzione. A destra un motivo\
+      senza significato - sta lì come esempio di ciò che diventa un'immagine\
+      senza descrizione." -at {20 146} -width 170
 
   # -alt makes it a Figure and provides the description a Figure must have.
   # What belongs in there is what someone would say who describes the page to
-  # a person who cannot see it - not "Foto" and not the file name.
+  # a person who cannot see it - not "foto" and not the file name.
   $doc image draw [file join $assets images sample-photo.jpg] \
       -at {20 158} -width 70 \
-      -alt "Die Presse 3 nach dem Antriebstausch, Blick von der Bedienseite"
+      -alt "La pressa 3 dopo la sostituzione dell'azionamento, vista dal lato operatore"
 
   # No -alt, so an artifact. That is the honest default: most pictures in a
   # document are decoration, and a Figure without a description would fail

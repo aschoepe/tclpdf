@@ -16,6 +16,12 @@ package require tclpdf::color
 package require tclpdf
 source [file join [file dirname [info script]] helper.tcl]
 
+# The CMYK press profile that ships with the package, for the tests that
+# need an intent other than sRGB.
+set cmykIcc [file join [file dirname [file dirname [file normalize \
+    [info script]]]] icc ISOcoated_v2_bas.ICC]
+testConstraint haveCmykIcc [file exists $cmykIcc]
+
 test color-parse-1.1 {a name from the table} -body {
   ::tclpdf::color parse steelblue
 } -result {rgb {0.27450980392156865 0.5098039215686274 0.7058823529411765}}
@@ -240,21 +246,27 @@ test color-separation-5.9 {a colour space family cannot be a separation name} -b
   list $code $message
 } -match glob -result {1 {*"Pattern" cannot be the name of a separation*}}
 
-test color-separation-5.10 {PDF/A refuses a CMYK alternate at the call} -body {
+test color-separation-5.10 {PDF/A refuses a CMYK alternate under the sRGB intent, naming the separation and the call} -body {
   # Measured with veraPDF: under the sRGB output intent a separation whose
-  # alternate is DeviceCMYK fails ISO 19005-2, 6.2.4.3; RGB and grey pass.
+  # alternate is DeviceCMYK fails ISO 19005-2, 6.2.4.3 (through 6.2.4.4);
+  # RGB and grey pass. The alternate counts as a use of that space, and the
+  # intent check in pdfa.tcl judges it at write time like every other
+  # colour - the refusal names the separation AND the shape that painted it.
   set doc [tclpdf new]
   $doc page add
   $doc pdfa -part 3
-  set code [catch {
-    $doc rect -at {20 20} -size {40 20} -fill {separation Gold {cmyk 0 0.2 0.8 0} 1}
-  } message]
-  set fine [catch {
-    $doc rect -at {20 20} -size {40 20} -fill {separation Gold {rgb 0.9 0.7 0.1} 1}
-  }]
+  $doc rect -at {20 20} -size {40 20} -fill {separation Gold {cmyk 0 0.2 0.8 0} 1}
+  set code [catch {$doc write [::tclpdfTest::scratch sep-pdfa.pdf]} message]
+  $doc destroy
+  file delete [::tclpdfTest::scratch sep-pdfa.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3
+  $doc rect -at {20 20} -size {40 20} -fill {separation Gold {rgb 0.9 0.7 0.1} 1}
+  set fine [::tclpdfTest::writes $doc sep-pdfa-rgb.pdf]
   $doc destroy
   list $code $message $fine
-} -match glob -result {1 {*PDF/A*"Gold" needs an RGB or grey alternate*} 0}
+} -match glob -result {1 {*PDF/A*cannot carry DeviceCMYK*separation "Gold" in rect on page 1*} {0 1}}
 
 test color-separation-5.11 {PDF/A declared after the colour: refused at write, no file left} -body {
   set doc [tclpdf new]
@@ -265,6 +277,27 @@ test color-separation-5.11 {PDF/A declared after the colour: refused at write, n
   $doc destroy
   set result
 } -result {1 0}
+
+test color-separation-5.12 {under a CMYK intent the CMYK alternate is fine and the RGB one is not} -constraints haveCmykIcc -body {
+  # The mirror image, measured with veraPDF against the ISO Coated v2
+  # profile: a CMYK alternate passes, an RGB alternate fails 6.2.4.3-2.
+  # Until 2026-08-17 the CMYK alternate was refused under EVERY intent, with
+  # a message that named "the sRGB output intent" whatever profile was set.
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc rect -at {20 20} -size {40 20} -fill {separation Gold {cmyk 0 0.2 0.8 0} 1}
+  set fine [::tclpdfTest::writes $doc sep-cmyk-intent.pdf]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc rect -at {20 20} -size {40 20} -fill {separation Gold {rgb 0.9 0.7 0.1} 1}
+  set code [catch {$doc write [::tclpdfTest::scratch sep-cmyk-rgb.pdf]} message]
+  $doc destroy
+  file delete [::tclpdfTest::scratch sep-cmyk-rgb.pdf]
+  list $fine $code $message
+} -match glob -result {{0 1} 1 {*CMYK output intent*cannot carry DeviceRGB*separation "Gold" in rect on page 1*}}
 
 test color-noTk-4.1 {resolving names does not pull in Tk} -body {
   # The whole reason this module carries its own table. If Tk were loaded the

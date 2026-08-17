@@ -62,7 +62,7 @@ namespace eval ::tclpdf::table {
     }
     striped {
       style {border horizontal lineColor 0.76}
-      headStyle {fill 0.30 color 1 fontStyle bold border none}
+      headStyle {fill {0.22 0.28 0.40} color 1 fontStyle bold border none}
       bodyStyle {}
       footStyle {fontStyle bold fill 0.91}
       alternateFill 0.965
@@ -75,12 +75,15 @@ namespace eval ::tclpdf::table {
       alternateFill {}
     }
   }
-  # The theme colours are single numbers - DeviceGray - on purpose. A theme
-  # colours a table the caller did not colour, so it must not decide the
-  # document's colour space for it: DeviceRGB is refused by PDF/A under a
-  # CMYK or grey output intent (ISO 19005-2, 6.2.4.3), DeviceGray under none.
-  # Until 2026-08-17 the greys were RGB triples and the striped head a blue;
-  # a table with -theme grid was the one failed check in a CMYK document.
+  # The greys are single numbers - DeviceGray - on purpose: a theme colours a
+  # table the caller did not colour, and DeviceGray is the one space every
+  # PDF/A output intent allows (ISO 19005-2, 6.2.4.3), where DeviceRGB needs
+  # an RGB intent and DeviceCMYK a CMYK one. Until 2026-08-17 the greys were
+  # RGB triples, and a table with -theme grid was the one failed check in a
+  # document with a CMYK intent. The striped head keeps its blue - an RGB
+  # value, right under the default sRGB intent and in every plain PDF; a
+  # document with a CMYK or grey intent overrides it with -headStyle, which
+  # the manual says. Blue has no space that every intent allows.
 
   # The style every cell starts from. Sizes are in the document unit except
   # the font size, which is in points like everywhere else.

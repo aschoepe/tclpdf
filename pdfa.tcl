@@ -20,12 +20,17 @@
 # document with an attachment and an extension schema, and zugferd.tcl adds
 # exactly those two things.
 #
-# One promise IS checked here, and only because it is cheap and certain: that
-# every font used is embedded. The 14 standard fonts are not, so a document
-# that quietly falls back to Helvetica - a table style, a forgotten -family -
-# is not archivable, and nothing on the way to the recipient says so. This is
-# the same reasoning as refusing a character the font has no glyph for: the
-# writer is the only place in the chain that still knows what was meant.
+# Two promises ARE checked here, and only because they are cheap and certain.
+# That every font used is embedded: the 14 standard fonts are not, so a
+# document that quietly falls back to Helvetica - a table style, a forgotten
+# -family - is not archivable, and nothing on the way to the recipient says
+# so. And that every colour space used fits the output intent (6.2.4.3):
+# DeviceRGB needs an RGB intent, DeviceCMYK a CMYK one, and a single {cmyk 0
+# 1 1 0} under the shipped sRGB profile - or a steelblue under a CMYK press
+# profile - fails validation at the recipient, where nobody can tell any more
+# which call painted it. This is the same reasoning as refusing a character
+# the font has no glyph for: the writer is the only place in the chain that
+# still knows what was meant.
 #
 # Everything else is left to veraPDF. Declaring a document archivable does not
 # make it so, and a checker built into the writer would only ever confirm its
@@ -212,20 +217,7 @@ oo::define ::tclpdf::document::document {
   # than a flag.
   method PdfaWrite {} {
     set current [my state pdfa]
-    set bytes [::tclpdf::io read [dict get $current profile]]
-    # N is the number of components the profile describes; it is at offset 16
-    # of the ICC header as a four-character space signature. Lab and XYZ
-    # profiles exist and are valid ICC, but an output intent wants a device
-    # space - an unknown signature is reported with its name rather than
-    # falling over inside a dict lookup.
-    set space [string trimright [string range $bytes 16 19]]
-    set spaces {GRAY 1 RGB 3 CMYK 4}
-    if {![dict exists $spaces $space]} {
-      return -code error "tclpdf: the ICC profile\
-          \"[dict get $current profile]\" describes colour space \"$space\" -\
-          the output intent supports GRAY, RGB and CMYK"
-    }
-    set components [dict get $spaces $space]
+    lassign [my PdfaProfile] bytes space components
     # Both numbers survive rebuilds - PdfaWrite runs on every write, and a
     # fresh pair per run would embed the ICC profile anew each time.
     set number [my streamObject [list N $components] $bytes \
@@ -262,6 +254,29 @@ oo::define ::tclpdf::document::document {
     return
   }
 
+  # The declared profile, read: its bytes, the device space it describes -
+  # GRAY, RGB or CMYK - and the component count that space has. The space is
+  # at offset 16 of the ICC header as a four-character signature. Lab and XYZ
+  # profiles exist and are valid ICC, but an output intent wants a device
+  # space - an unknown signature is reported with its name rather than
+  # falling over inside a dict lookup.
+  #
+  # Two readers: PdfaWrite embeds the bytes and needs N; PdfaCheckColour
+  # holds the space against the colours used. One reading, so the two cannot
+  # disagree about what the intent is.
+  method PdfaProfile {} {
+    set profile [dict get [my state pdfa] profile]
+    set bytes [::tclpdf::io read $profile]
+    set space [string trimright [string range $bytes 16 19]]
+    set spaces {GRAY 1 RGB 3 CMYK 4}
+    if {![dict exists $spaces $space]} {
+      return -code error "tclpdf: the ICC profile \"$profile\" describes\
+          colour space \"$space\" - the output intent supports GRAY, RGB and\
+          CMYK"
+    }
+    return [list $bytes $space [dict get $spaces $space]]
+  }
+
   # Every font actually used has to carry its program (ISO 19005-3, 6.2.11.4).
   # The fact is established by font.tcl, which owns the question; what belongs
   # here is only what PDF/A makes of it.
@@ -274,6 +289,63 @@ oo::define ::tclpdf::document::document {
           \"font embed\" and use it, or drop the pdfa declaration"
     }
     return
+  }
+
+  # Every device colour space used has to fit the output intent (ISO 19005-2,
+  # 6.2.4.3, the same words in 19005-3): DeviceGray under any intent,
+  # DeviceRGB only under an RGB one, DeviceCMYK only under a CMYK one - and
+  # veraPDF applies that to a picture's colour space, an Indexed base, a
+  # shading and a separation's alternate (6.2.4.4) exactly as to a fill.
+  # Measured 2026-08-17 with veraPDF 1.30.2 over every one of those roads
+  # under both the shipped sRGB profile and a CMYK press profile: each fails
+  # 6.2.4.3-2 or -3 under the wrong intent, each passes under the right one.
+  #
+  # The facts come from [colourSpacesUsed] in color.tcl, fed by every module
+  # that paints; judged here. All offending spaces in one message, like the
+  # fonts, and each with the calls that used it - a refusal that says "a
+  # colour somewhere" sends the caller reading every line of the script.
+  #
+  # The alternative would be to write /DefaultRGB and /DefaultCMYK colour
+  # space resources, which the clause also admits. That would let a caller
+  # mix spaces under one intent, at the price of an ICC-based space per page
+  # resource dictionary that the caller never asked for and this writer does
+  # not otherwise produce - so it is a refusal with the fix named, not a
+  # silent conversion.
+  method PdfaCheckColour {} {
+    set used [my colourSpacesUsed]
+    if {$used eq {}} {
+      return
+    }
+    lassign [my PdfaProfile] - intent
+    set offending {}
+    foreach {space needs} {DeviceRGB RGB DeviceCMYK CMYK} {
+      if {$intent ne $needs && [dict exists $used $space]} {
+        lappend offending $space
+      }
+    }
+    if {![llength $offending]} {
+      return
+    }
+    set users [lmap space $offending {
+      set by [join [dict get $used $space users] {, }]
+      if {[dict get $used $space more]} {
+        append by " and elsewhere"
+      }
+      # The space is named again only when two are listed - "used by rect
+      # on page 1" reads better than "used DeviceCMYK by rect on page 1".
+      expr {[llength $offending] > 1 ? "$space by $by" : "by $by"}
+    }]
+    # Under a GRAY intent both spaces can offend at once; the hint names the
+    # profile that would admit what was painted, and the space the intent
+    # does admit.
+    set paint [dict get {GRAY grey RGB {RGB or grey} CMYK {CMYK or grey}} $intent]
+    set profile [dict get {DeviceRGB {an RGB profile} DeviceCMYK {a CMYK profile}
+        {DeviceRGB DeviceCMYK} {an RGB or CMYK profile}} $offending]
+    return -code error "tclpdf: PDF/A with the $intent output intent\
+        \"[file tail [dict get [my state pdfa] profile]]\" cannot carry\
+        [join $offending { or }] (ISO 19005-2, 6.2.4.3) - used\
+        [join $users {; }]; paint in $paint, or give $profile with pdfa\
+        -profile"
   }
 
   # The XMP packet. Written at catalog time so that everything that wanted to
@@ -292,7 +364,12 @@ oo::define ::tclpdf::document::document {
     # the objects exist whatever order the caller used. Nothing is lost by
     # checking late: [write] assembles everything before it opens the file,
     # so a refusal here still leaves no file behind.
+    #
+    # The colour check sits here for the same reason with one more: the
+    # record it reads is filled while drawing, and [pdfa] may be declared
+    # before or after the drawing - at catalog time both orders look alike.
     my PdfaCheckFonts
+    my PdfaCheckColour
     return
   }
 

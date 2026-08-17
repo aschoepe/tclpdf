@@ -46,8 +46,11 @@ exec tclsh "$0" "$@"
 # are exactly as non-joining as the unlisted rest. And with U dropped the
 # @missing line is dropped too - it names nothing but U.
 #
-# WHAT IS NOT MERGED. Two ranges of one type side by side stay two lines -
-# the file lists them so, and the table is meant to be read against it.
+# MERGED. Two ranges of one type side by side become one line, as in
+# mkbidi.tcl - the same rule for both generators (decided 2026-08-17; until
+# then this file kept the source's split, 13 pairs, 532 rows against 519).
+# The lookup does not care, and a reader checking against the UCD file
+# finds every code point in the same class either way.
 #
 
 if {[llength $argv] != 1} {
@@ -88,5 +91,5 @@ foreach line $lines {
       Non_Joining (U) - which is what the source file says about every code
       point it does not list, so the absence is the answer and not a gap.
     } \
-    -ranges [::ucd::sort $ranges] \
+    -ranges [::ucd::merge $ranges] \
     -version 1.0

@@ -139,7 +139,7 @@ oo::define ::tclpdf::document::document {
     my content [my GraphicsStyle [::tclpdf::option parse {
       fill {} stroke {} width {} dash {} cap {} join {} miter {} opacity {}
       blend {}
-    } $args]]
+    } $args] 0 style]
     return
   }
 
@@ -259,20 +259,21 @@ oo::define ::tclpdf::document::document {
   }
 
   # Colour, line width, dash and joins - the part every shape needs and none
-  # of them should spell out.
-  method GraphicsStyle {options {guard 0}} {
+  # of them should spell out. "what" names the calling command - "rect",
+  # "style" - for the colour space record, see [ColourUsed].
+  method GraphicsStyle {options guard what} {
     # The operators are assembled and every value checked BEFORE the mark is
     # taken and the "q" is written: a refused cap or colour used to leave the
     # structure state believing a mark was open, and the next shape on the
     # page then went unmarked. Nothing here writes; the caller does, once.
+    #
+    # The colours come LAST, once every other value has passed, and are put
+    # in FRONT of the result - the stream reads "rg ... w ... d" as it always
+    # did. Last, because translating a colour records its space for the
+    # PDF/A intent check ([ColourUsed]): done first, a refused width left a
+    # record of a colour that never reached the stream, and a later write
+    # under [pdfa] named a rectangle that was not there.
     set result {}
-    foreach {key which} {fill fill stroke stroke} {
-      if {[dict exists $options $key] && [dict get $options $key] ne {}} {
-        append result [::tclpdf::color operator \
-            [::tclpdf::color parse [my GraphicsColour [dict get $options $key]]] \
-            $which] "\n"
-      }
-    }
     if {[dict exists $options opacity] && [dict get $options opacity] ne {}} {
       append result "[::tclpdf::pdfObj name \
           [my GraphicsOpacity [dict get $options opacity]]] gs\n"
@@ -346,6 +347,15 @@ oo::define ::tclpdf::document::document {
       }
       append result "[::tclpdf::pdfObj num $miter] M\n"
     }
+    set colours {}
+    foreach {key which} {fill fill stroke stroke} {
+      if {[dict exists $options $key] && [dict get $options $key] ne {}} {
+        append colours [::tclpdf::color operator \
+            [::tclpdf::color parse [my GraphicsColour [dict get $options $key] $what]] \
+            $which] "\n"
+      }
+    }
+    set result $colours$result
     # In a tagged document a shape is marked content like anything else:
     # inside an open Figure it belongs to that Figure, and everywhere else it
     # is decoration and says so. Under PDF/UA content that is neither counts
@@ -374,21 +384,23 @@ oo::define ::tclpdf::document::document {
   # Only {pattern <name>} needs translating, and it needs it here because the
   # caller's name is a document-wide alias while the content stream wants the
   # resource name. The colour module knows colour spaces, the document knows
-  # names - neither could do this alone. A separation is not translated but
-  # REGISTERED on the way through: the operator names a colour space resource
-  # that has to exist, and color.tcl writes it on first use.
-  method GraphicsColour {spec} {
+  # names - neither could do this alone. Everything else is not translated
+  # but RECORDED on the way through - which colour space "what" is about to
+  # paint in - and a separation is registered as well: the operator names a
+  # colour space resource that has to exist, and color.tcl writes it on
+  # first use.
+  method GraphicsColour {spec what} {
     if {[llength $spec] == 2 && [string tolower [lindex $spec 0]] eq "pattern"} {
       package require tclpdf::pattern
       return [list pattern [my PatternResource [lindex $spec 1]]]
     }
     # The Separation colour space is PDF 1.2 (Reference 1.7, Table 4.12);
-    # gated here, on the only road into [ColourSeparation], which registers
-    # the resource on first use.
+    # gated here, on the road every shape takes into [ColourUsed], which
+    # registers the resource on first use.
     if {[string tolower [lindex $spec 0]] eq "separation"} {
       my RequireVersion 1.2 "a separation colour"
     }
-    return [my ColourSeparation $spec]
+    return [my ColourUsed $spec $what]
   }
 
   # The painting operator. Six spellings, and the wrong one draws nothing at

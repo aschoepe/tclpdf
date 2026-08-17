@@ -266,7 +266,7 @@ oo::define ::tclpdf::document::document {
       set fill black
     }
     my content "q 1 0 0 -1 0 [::tclpdf::pdfObj num [expr {2.0 * $y}]] cm\n"
-    my content "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill]] fill]\n"
+    my content "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill svg]] fill]\n"
     # [TextResource] already returns PDF name syntax - running it through
     # [name] again escapes the slash into #2F, and the reader then looks for a
     # font whose name begins with a slash.

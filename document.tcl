@@ -278,6 +278,8 @@ oo::class create ::tclpdf::document::document {
       undescribedGraphics image
       GraphicMark image
       GraphicUnmark image
+      ColourSpaceUsed color
+      colourSpacesUsed color
       shading shading
       pattern pattern
       table table

@@ -87,7 +87,7 @@ havepandoc:
 		echo "build the nroff and html versions of the documentation." ;\
 	fi
 
-doc/$(PACKAGE_NAME).html: $(srcdir)/doc/$(PACKAGE_NAME).md
+doc/$(PACKAGE_NAME).html: $(srcdir)/doc/$(PACKAGE_NAME).md $(srcdir)/doc/$(PACKAGE_NAME)-default.html
 	@if test "${HAVE_PANDOC}" = "yes" ; then \
 		mkdir -p doc ;\
 		pandoc --template $(srcdir)/doc/$(PACKAGE_NAME)-default.html -f markdown -t html \

@@ -63,7 +63,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: shading $kind needs -at {x y} and -size {w h}"
     }
-    set number [my ShadingObject $kind $options]
+    set number [my ShadingObject $kind $options "shading $kind"]
     # The clip's numbers are checked BEFORE anything is written: with -from
     # and -to given the shading itself never reads -at, so a bad corner used
     # to surface only in [clip] - after the mark and the "q" were out.
@@ -102,7 +102,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: shading pattern needs -at {x y} and -size {w h}"
     }
-    set number [my ShadingObject $kind $options]
+    set number [my ShadingObject $kind $options "shading pattern \"$name\""]
     # PatternType 2 is a shading pattern: the shading itself, plus the matrix
     # that maps it into the page.
     #
@@ -149,8 +149,9 @@ oo::define ::tclpdf::document::document {
   }
 
   # The shading dictionary itself. Both types share everything except how the
-  # geometry is spelled, so they share a method.
-  method ShadingObject {kind options} {
+  # geometry is spelled, so they share a method. "what" names the caller for
+  # the colour space record.
+  method ShadingObject {kind options what} {
     # Shadings, sh and PatternType 2 are PDF 1.3 (Reference 1.7, 4.6.3).
     # First thing, before the function object goes out.
     my RequireVersion 1.3 "shading"
@@ -183,10 +184,20 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: a shading in a separation colour space is\
           not supported - give the alternate space directly"
     }
+    # The coordinates BEFORE the function object goes out: a refused corner
+    # used to leave a function without a consumer behind.
+    set coords [my ShadingCoords $kind $options]
     set function [my ShadingFunction $parsed [dict get $options stops]]
+    # Only now, past the last value that can be refused, the colour space
+    # record: a gradient's space counts like a painted colour for the PDF/A
+    # intent check (ISO 19005-2, 6.2.4.3 - measured with veraPDF: a
+    # DeviceRGB shading fails under a CMYK intent, painted directly or
+    # through a pattern), and a shading that was refused must not be on
+    # record.
+    my ColourSpaceUsed $space $what
     set pairs [list ShadingType [expr {$kind eq "axial" ? 2 : 3}] \
         ColorSpace /$space \
-        Coords [::tclpdf::pdfObj arr [my ShadingCoords $kind $options]] \
+        Coords [::tclpdf::pdfObj arr $coords] \
         Function [[my writer] ref $function]]
     lassign [dict get $options extend] extendStart extendEnd
     lappend pairs Extend [::tclpdf::pdfObj arr \

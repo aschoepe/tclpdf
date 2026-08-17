@@ -165,6 +165,16 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options opacity] ne {}} {
       set alpha [my GraphicsOpacity [dict get $options opacity]]
     }
+    # A picture's colour space counts like a painted colour for the PDF/A
+    # intent check (ISO 19005-2, 6.2.4.3 - measured with veraPDF, a DeviceRGB
+    # picture fails under a CMYK intent, a DeviceCMYK JPEG under sRGB).
+    # Recorded per PLACEMENT, not once at ImageWrite: the record names the
+    # page, and the object is written on the first page the picture appears
+    # on, which may not be the one a caller looks at. And recorded here,
+    # after the last value that can be refused, so that a placement that
+    # never happened leaves no record. A soft mask is DeviceGray, which
+    # every intent admits, and is not recorded.
+    my ColourSpaceUsed [dict get $image space] "image place"
 
     # A picture XObject is a unit square with its origin at the BOTTOM left, so
     # the matrix carries both the size and the flip to the top-left convention
@@ -406,8 +416,8 @@ oo::define ::tclpdf::document::document {
     set pairs [list Type /XObject Subtype /Image \
         Width [dict get $parsed width] Height [dict get $parsed height]]
     if {[dict get $image type] eq "jpeg"} {
-      lappend pairs ColorSpace \
-          /[::tclpdf::imageJpeg space [dict get $parsed components]] \
+      set space [::tclpdf::imageJpeg space [dict get $parsed components]]
+      lappend pairs ColorSpace /$space \
           BitsPerComponent [dict get $parsed bitsPerComponent] \
           Filter /DCTDecode
       if {[::tclpdf::imageJpeg inverted $parsed]} {
@@ -415,6 +425,7 @@ oo::define ::tclpdf::document::document {
       }
       set data [dict get $image bytes]
     } else {
+      set space [::tclpdf::imagePng device $parsed]
       set streams [::tclpdf::imagePng streams $parsed]
       # What the picture needs of the file, before its first object goes
       # out (Reference 1.7, Table 4.39): a colour key /Mask is PDF 1.3, a
@@ -449,6 +460,9 @@ oo::define ::tclpdf::document::document {
     set images [my state images]
     dict set images $alias resource $resourceName
     dict set images $alias object $number
+    # The device space of the samples - DeviceGray, DeviceRGB, DeviceCMYK -
+    # kept for [ImagePlace] to record; the base of an Indexed picture.
+    dict set images $alias space $space
     my state images $images
     return $number
   }

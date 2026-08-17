@@ -154,20 +154,31 @@ proc ::tclpdf::imagePng::hasAlpha {parsed} {
   return [expr {[dict get $parsed colorType] in {4 6}}]
 }
 
-# The PDF colour space for a parsed PNG, as PDF syntax. Palette images become
-# /Indexed with the PLTE chunk as the lookup string.
-proc ::tclpdf::imagePng::space {parsed} {
+# The device colour space a parsed PNG's samples are in - DeviceGray or
+# DeviceRGB, the name without the slash. A palette image is DeviceRGB: that
+# is the space its PLTE entries are in and the base its /Indexed refers to,
+# and it is what PDF/A holds against the output intent (ISO 19005-2, 6.2.4.3
+# - measured with veraPDF, an Indexed picture over DeviceRGB fails under a
+# CMYK intent exactly like a plain RGB one).
+proc ::tclpdf::imagePng::device {parsed} {
   switch -- [dict get $parsed colorType] {
-    0 - 4 {return /DeviceGray}
-    2 - 6 {return /DeviceRGB}
-    3 {
-      set palette [dict get $parsed palette]
-      set last [expr {[string length $palette] / 3 - 1}]
-      return "\[/Indexed /DeviceRGB $last [::tclpdf::pdfObj bytesStr $palette]\]"
-    }
+    0 - 4 {return DeviceGray}
+    2 - 3 - 6 {return DeviceRGB}
   }
   return -code error "tclpdf: PNG colour type [dict get $parsed colorType] is\
       not defined by the format"
+}
+
+# The PDF colour space for a parsed PNG, as PDF syntax. Palette images become
+# /Indexed with the PLTE chunk as the lookup string.
+proc ::tclpdf::imagePng::space {parsed} {
+  set device [device $parsed]
+  if {[dict get $parsed colorType] == 3} {
+    set palette [dict get $parsed palette]
+    set last [expr {[string length $palette] / 3 - 1}]
+    return "\[/Indexed /$device $last [::tclpdf::pdfObj bytesStr $palette]\]"
+  }
+  return /$device
 }
 
 # The /DecodeParms for the pass-through way. The reader is told to reverse

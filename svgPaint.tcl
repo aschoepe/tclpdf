@@ -124,10 +124,10 @@ oo::define ::tclpdf::document::document {
       # what turns a pattern ALIAS into the resource name the content stream
       # needs. Without it the operator names the alias and the reader reports
       # an unknown pattern - a page with the shapes drawn and nothing in them.
-      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill]] fill]\n"
+      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill svg]] fill]\n"
     }
     if {$hasStroke} {
-      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $stroke]] stroke]\n"
+      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $stroke svg]] stroke]\n"
       # A negative width is an error in SVG and the property is then
       # ignored, which leaves the initial value of 1 (SVG 1.1, 11.4).
       set width [my SvgLength [dict get $style stroke-width] 1]
