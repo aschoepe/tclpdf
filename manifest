@@ -1,5 +1,5 @@
-C Release\sarchives\sreadable\sfor\severyone\n\n-\stools/archive.sh:\sthe\smodes\sare\sset\son\sthe\scopy\sbefore\spacking\s-\scp\skept\sthe\scheckout's\smodes,\sFossil\sdoes\snot\strack\sread\sbits,\sand\s37\smodules\stravelled\sas\s0600\sinto\sthe\spublished\starball;\sthe\ssource\sarchive\sgoes\sthrough\sa\sstaging\scopy\sfor\sthe\ssame\sreason,\sbsdtar\scannot\srewrite\smodes\son\sthe\sway\sin\n-\sBoth\starballs\sare\sread\sback\safter\spacking;\san\sentry\swithout\sread\spermission\sfor\sgroup\sand\sothers\sfails\sthe\sbuild\sand\sis\snamed
-D 2026-08-17T19:29:58.374
+C Manual:\sa\smissing\sglyph\sis\san\serror,\sand\sa\sfont\sviewer\sis\sno\sproof\sof\scoverage\n\n-\sdoc/tclpdf.md,\sfont\sembed:\snew\sparagraph\son\sthe\srefusal\sfor\sa\scharacter\sthe\sface\shas\sno\sglyph\sfor\s-\sthe\smessage,\swhy\sonly\sthe\swriter\scan\snotice,\sand\sthat\sa\sfont\sviewer\ssubstitutes\sglyphs\sfrom\sother\sfaces\swithout\ssaying\sso;\shb-shape\sand\sfc-list\snamed\sas\sthe\sways\sto\scheck\n-\sexamples/02.04-missing-glyphs.tcl:\sthe\ssame\snote\sin\sthe\sheader\scomment;\sno\scode\schange
+D 2026-08-17T20:03:00.062
 F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
 F README 8f1004173e4eecbc5679563094ae2ef636c346e6f074fca8812cd59930ee542e
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -13,7 +13,7 @@ F configure de3603e80aaf251fcce87fa3ad73f1ece39666cfd3d203fa38ba71e453725c9a x
 F configure.ac 53c7c8ab33c6b471c43878a66bca7abb55528e91d0fcaa11ae256ccac0284011
 F doc/PLUGINS.md 5d5e45709f4f88fab0208ff16d98ef0d060f49ee57b60f5befd1404976d19144
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md 8e5d032fc66632adbe8a6ebaffd285d62d06fa6f2405ae130dd3dab57781bfcc
+F doc/tclpdf.md 60c9a51ce7f36030f8d663e6fb95ce5111022e75e4b8fa90e5a898a0a930ce39
 F document.tcl a5d328c22cdfd3dedc04c48773bc5b5b02dc069ae8d88b0e9fec3c9bfaf75e97
 F event.tcl b738afa9f5fb7a1697af862e9dc0413ee1c5064fab9bdc971a1e1ea2a7a6ef50
 F examples/01.01-shapes.tcl 5720fbddf805f8577e2bf9c385b88a065fd3323ddd1f7abb22b2429cc34c7991
@@ -30,7 +30,7 @@ F examples/01.11-type-area.tcl 6179dd22b3abb8c731d9ef4cb6b23022816344ced6977e6e6
 F examples/02.01-embedding.tcl 74c94791162de3b5833124d160797c0317cddb1f23810b82e095a45b699d508d
 F examples/02.02-languages.tcl 477d100351b4550e25b6434f3ee694832d8debc1412a9d054cb407ea781e8d42
 F examples/02.03-font-families.tcl ba330eab44509009bc0e672d8cb97b1b8d7428358f96cd09e903056a19a6b05b
-F examples/02.04-missing-glyphs.tcl ad70bce2f721805401537231907d40a7935fa4ab1ca96e174f759a970c726569
+F examples/02.04-missing-glyphs.tcl bf072c8a196513604f67ad59d142b242c73dfd9a2977c12d83ceb01ba66556d2
 F examples/02.05-kerning.tcl 0ae0c5f05e784ed497ad6695a38a4a7a360df6cbbbf56a3e946cf59a9613b2c9
 F examples/02.06-ligatures.tcl 92136521a4ed3c811e05d862485ea9fe538d18cb2c4824397d138c506b2df0ab
 F examples/02.07-type1.tcl 7d61272599e3c1bd8211a82d5ff34545262af8757105f0b6c4658dbcf26f3eb7
@@ -350,8 +350,8 @@ F xObject.tcl b55e16d429e97efa492ee295e89a34d8dae6873bff50a189e460265e81bd2350
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 21a838cebe336140e482b7993d928dcde83b33732b21a8d1399ada2dd61aa2f6
 F zugferd.tcl 11ca4847e77751e0d5462a9cc9124b450cd81ce71b2fa4c1b684158fb4ccea9a
-P 4ee4b1a192c763400f17fb68f40da9f37b1bfb67c7606c6387fe21cceeb7daea
-R 6c9e3518a30541004bfaeecf9aa370c1
+P 032538e771fdbba6dc181d9c4cd7aa32347121eb167709022d42810a1f71116b
+R 831c8685e12cb6e94bb27565d9777d55
 U alex
-Z 6ad7e163e23212ff58ba0f2340c495f4
+Z 3bc8080cea2fcbe9363c927fbd21ae68
 # Remove this line to create a well-formed Fossil manifest.

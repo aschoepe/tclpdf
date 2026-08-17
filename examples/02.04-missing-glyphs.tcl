@@ -26,6 +26,13 @@
 #   So it says so, names the character and the position, and lets the caller
 #   decide - which is what the loop below does, in four lines.
 #
+# Do not take a font viewer's word for the coverage: a viewer that is asked
+# for a character the face lacks substitutes the glyph from another face and
+# shows it without saying so - FreeSans has no U+2714, its viewer window shows
+# the check mark all the same, and hb-shape answers .notdef. A PDF has no such
+# fallback; the embedded font is all a reader has. The file tells the truth,
+# and so does the message below.
+#
 # The page keeps a record of which line got which face, so the decision is
 # visible on the paper rather than buried in the script.
 #
