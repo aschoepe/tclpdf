@@ -80,29 +80,42 @@ set profile [file join [file dirname $here] icc sRGB.icc]
 # literal works under both - 8.6 reports a string length of 2 for it, being a
 # surrogate pair internally, but splits it into one character with the right
 # code point, which is what the glyph run needs.
+# The cuneiform signs are Sumerian logograms one meets first: AN (heaven,
+# god), KI (earth), LUGAL (king), E2 (house), URU (city), A (water), UD (sun,
+# day), GISH (tree, wood), EN (lord), KA (mouth), LU2 (man), SAL (woman), DISH
+# (one) and U (ten) - not the first code points of the block, which are A
+# and its compounds. Tibetan shows its letters only: the vowel signs and the
+# subjoined letters are combining marks that need GPOS placement, and set as
+# glyphs in sequence they land beside the next letter (measured, shaping.tcl),
+# so [text] refuses them like the Hebrew nikud.
+# The hieroglyphs are the ones people know: the wedjat eye (Gardiner D10),
+# ankh (S34), scarab (L1), owl (G17), falcon (G5), vulture (G1), quail chick
+# (G43), reed (M17), water (N35), sun (N5), cobra (I10), lion (E23), seated man
+# and woman (A1, B1), djed pillar (R11), walking legs (D54) - not the first
+# code points of the block, which are eighteen seated men.
 set faces {
-  sans     NotoSans-Variable.ttf          {Latin, Greek and Cyrillic}
+  sans     google/NotoSans-Variable.ttf          {Latin, Greek and Cyrillic}
       "Grüße aus Bochum - Ελλάδα - Москва - Łódź - Plzeň"
-  jp       NotoSansJP-Regular.ttf         {Japanese}
+  jp       google/NotoSansJP-Regular.ttf         {Japanese}
       "日本語のテキスト ひらがな カタカナ 漢字 東京 一二三四五"
-  tibetan  NotoSerifTibetan-Variable.ttf  {Tibetan}
+  tibetan  google/NotoSerifTibetan-Variable.ttf  {Tibetan - the thirty letters; vowel signs and stacks need mark placement and are refused}
       "ཀ ཁ ག ང ཅ ཆ ཇ ཉ ཏ ཐ ད ན པ ཕ བ མ ཙ ཚ ཛ ཝ ཞ ཟ འ ཡ ར ལ ཤ ས ཧ ཨ"
-  symbols  NotoSansSymbols-Variable.ttf   {Symbols}
+  symbols  google/NotoSansSymbols-Variable.ttf   {Symbols}
       "☥ ☦ ☪ ☮ ☯ ☸ ☺ ☽ ☿ ♀ ♂ ♃ ♄ ♈ ♉ ♊ ♪ ♫ ⚐ ⚑ ⛰ ⛽"
-  symbols2 NotoSansSymbols2-Regular.ttf   {More symbols}
+  symbols2 google/NotoSansSymbols2-Regular.ttf   {More symbols}
       "✁ ✂ ✈ ✏ ✔ ✖ ✤ ✪ ❄ ❤ ➜ ➡ ⭐ ⭕ ⚀ ⚁ ⚂ ⚃ ⚄ ⚅ ♔ ♕ ♖ ♗ ♘ ♙"
-  emoji    NotoEmoji-Variable.ttf         {Emoji, monochrome}
+  emoji    google/NotoEmoji-Variable.ttf         {Emoji, monochrome}
       "🏡🧁🍰🏜️🎁🎂🎈🎺🙏💕🌶︎🔋🔥🍾😃🐬🚲🌳🔧🌧🔬"
-  cuneiform NotoSansCuneiform-Regular.ttf {Cuneiform}
-      "𒀀 𒀁 𒀂 𒀃 𒀄 𒀅 𒀆 𒀇 𒀈 𒀉 𒀊 𒀋 𒀌 𒀍 𒀎 𒀏 𒀐 𒀑"
-  hiero    NotoSansEgyptianHieroglyphs-Regular.ttf {Egyptian hieroglyphs}
-      "𓀀 𓀁 𓀂 𓀃 𓀄 𓀅 𓁀 𓁁 𓂀 𓂁 𓃀 𓃁 𓄀 𓅀 𓆀 𓇀 𓈀 𓉀"
+  cuneiform google/NotoSansCuneiform-Regular.ttf {Cuneiform - Sumerian logograms}
+      "𒀭 𒆠 𒈗 𒂍 𒌷 𒀀 𒌓 𒄑 𒂗 𒅗 𒇽 𒊩 𒁹 𒌋"
+  hiero    google/NotoSansEgyptianHieroglyphs-Regular.ttf {Egyptian hieroglyphs}
+      "𓂀 𓋹 𓆣 𓅓 𓅃 𓄿 𓅱 𓇋 𓈖 𓇳 𓆓 𓃭 𓀀 𓁐 𓊽 𓂻"
   hebrew   DejaVuSans.ttf                 {Hebrew - see the note below}
       "שלום עולם ברוכים הבאים"
-  arabic   NotoNaskhArabic-Variable.ttf   {Arabic - see the note below}
+  arabic   google/NotoNaskhArabic-Variable.ttf   {Arabic - see the note below}
       "العربية مرحبا بالعالم"
-  marker   PermanentMarker-Regular.ttf    {A brush face}
-      "Handwritten, more or less - and it keeps going"
+  marker   google/PermanentMarker-Regular.ttf    {A brush face}
+      "Handwritten, more or less - 0123456789, 42 %, 17.08.2026, No. 4711"
 }
 
 # The lines of the two right-to-left faces, kept by alias: the demonstration
@@ -124,7 +137,7 @@ foreach {alias file what line} $faces {
 
 # Nicht in der Liste oben: die Musikschrift setzt keine Zeile, sie liefert die
 # Zeichen fuer das gezeichnete Notensystem weiter unten.
-$doc font embed music [file join $fonts NotoMusic-Regular.ttf]
+$doc font embed music [file join $fonts google NotoMusic-Regular.ttf]
 
 $doc font -family sans -size 15 -color {0.20 0.30 0.45}
 $doc text "Eleven faces, one page" -at {20 22}
@@ -356,7 +369,7 @@ set y [expr {$y + 4}]
 # variable font whose default instance is Regular. The named instance Bold of
 # the same file is embedded as a face of its own; it is counted in the tally
 # further down like every other face.
-$doc font embed bold [file join $fonts NotoSans-Variable.ttf] -instance Bold
+$doc font embed bold [file join $fonts google NotoSans-Variable.ttf] -instance Bold
 
 # THE THREE NUMBERS everything below is measured in. gap is the distance
 # between two staff lines; a step (one note name up) is half of it, a stem is
@@ -860,8 +873,8 @@ foreach {alias file what line} $faces {
 # belongs in the tally, and so does the bold instance of the sans face that
 # sets one word of the score: same file, a subset of its own.
 foreach {alias file what} {
-    music NotoMusic-Regular.ttf "Music notation"
-    bold  NotoSans-Variable.ttf "Latin, bold instance of the same file"
+    music google/NotoMusic-Regular.ttf "Music notation"
+    bold  google/NotoSans-Variable.ttf "Latin, bold instance of the same file"
 } {
   lappend rows [list $what \
       [format "%.1f MB" [expr {[file size [file join $fonts $file]] / 1048576.0}]] \

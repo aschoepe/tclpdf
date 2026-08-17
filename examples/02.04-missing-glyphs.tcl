@@ -61,7 +61,7 @@ set doc [tclpdf new -unit mm]
 $doc info Title "tclpdf example: missing glyphs"
 $doc page add
 
-$doc font embed script [file join $assets fonts Niconne-Regular.ttf]
+$doc font embed script [file join $assets fonts google Niconne-Regular.ttf]
 $doc font embed body [file join $assets fonts DejaVuSans.ttf]
 $doc font embed bodyBold [file join $assets fonts DejaVuSans-Bold.ttf]
 

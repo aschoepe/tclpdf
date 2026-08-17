@@ -49,7 +49,7 @@ $doc page add
 # Two faces are enough here, and they carry different ligature sets - which
 # is half of what this page has to show.
 $doc font embed body [file join $assets fonts DejaVuSans.ttf]
-$doc font embed sans [file join $assets fonts Roboto-Regular.ttf]
+$doc font embed sans [file join $assets fonts google Roboto-Regular.ttf]
 
 $doc font -family body -style bold -size 14 -color {0.20 0.30 0.45}
 $doc text "Standard ligatures" -at {20 25}

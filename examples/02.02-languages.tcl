@@ -161,7 +161,7 @@ $doc destroy
 # report does anyway.
 set doc [tclpdf new -unit mm]
 $doc info Title "Languages in a smaller embedded face"
-$doc font embed roboto [file join $assets fonts Roboto-Regular.ttf]
+$doc font embed roboto [file join $assets fonts google Roboto-Regular.ttf]
 $doc font embed bodyBold [file join $assets fonts DejaVuSans-Bold.ttf]
 lassign [page $doc roboto bodyBold \
     "A smaller face - fewer characters, same twelve lines"] failedSmall bottom
@@ -169,7 +169,7 @@ $doc font -family roboto -size 8
 set small [$doc font info roboto]
 $doc text "Roboto maps [dict get $small characters] characters where DejaVu\
     Sans maps $largeChars, and sets the same twelve lines from a font file of\
-    [file size [file join $assets fonts Roboto-Regular.ttf]] bytes against\
+    [file size [file join $assets fonts google Roboto-Regular.ttf]] bytes against\
     [file size [file join $assets fonts DejaVuSans.ttf]]. Compare the two\
     documents, though, and they are within a tenth of each other: a subset\
     carries the glyphs the page uses, so the size on disk hardly reaches the\

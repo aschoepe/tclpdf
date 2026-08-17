@@ -46,10 +46,17 @@
 # no option here can produce a shape the cmap does not lead to. That is why a
 # finding carries its kind (ordering or shaping) alongside the prose.
 #
-# WHAT IS DELIBERATELY NOT LISTED. Tibetan - measured, it comes out right:
-# its stacked consonants are separate code points rather than contextual
-# forms. CJK, Cuneiform, Egyptian Hieroglyphs, Greek, Cyrillic and the Latin
-# range likewise. The list holds what BREAKS, not what a shaper could improve.
+# WHAT IS DELIBERATELY NOT LISTED. Tibetan LETTERS - measured, they come out
+# right: consonants, tsheg, digits are one glyph each and sit side by side.
+# What IS listed of Tibetan are its marks: the vowel signs (U+0F71..) and the
+# subjoined letters (U+0F90..) are combining marks that a shaper places over
+# and under the base through GPOS - and without that they land beside the
+# NEXT letter. Measured 2026-08-17 on Noto Serif Tibetan: the o of "bod" over
+# the d, the subjoined ka of "skad" under the d; the earlier measurement
+# ("stacked consonants are separate code points") had looked at letters only.
+# So they are cut out like the Hebrew nikud. CJK, Cuneiform, Egyptian
+# Hieroglyphs, Greek, Cyrillic and the Latin range need nothing. The list holds
+# what BREAKS, not what a shaper could improve.
 #
 
 package require Tcl 8.6.11-
@@ -138,6 +145,16 @@ namespace eval ::tclpdf::shaping {
     0x0D80 0x0DFF Sinhala     conjunct
     0x0E00 0x0E7F Thai        markOrder
     0x0E80 0x0EFF Lao         markOrder
+    0x0F18 0x0F19 Tibetan     mark
+    0x0F35 0x0F35 Tibetan     mark
+    0x0F37 0x0F37 Tibetan     mark
+    0x0F39 0x0F39 Tibetan     mark
+    0x0F3E 0x0F3F Tibetan     mark
+    0x0F71 0x0F84 Tibetan     mark
+    0x0F86 0x0F87 Tibetan     mark
+    0x0F8D 0x0F97 Tibetan     mark
+    0x0F99 0x0FBC Tibetan     mark
+    0x0FC6 0x0FC6 Tibetan     mark
     0x1000 0x109F Myanmar     conjunct
     0x1780 0x17FF Khmer       conjunct
     0xFB1D 0xFB1D Hebrew      order

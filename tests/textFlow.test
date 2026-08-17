@@ -486,7 +486,7 @@ set flowHard "Die Silbentrennung ist eine Verbesserung."
 set flowFont [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveFlowFont [file exists $flowFont]
-set flowJpFont [file join [file dirname $flowFont] NotoSansJP-Regular.ttf]
+set flowJpFont [file join [file dirname $flowFont] google NotoSansJP-Regular.ttf]
 testConstraint haveJpFont [file exists $flowJpFont]
 
 test textFlow-4.1 {a soft hyphen has no width in a standard face} -body {

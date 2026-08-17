@@ -1,0 +1,20 @@
+Licence of sRGB2014.icc
+=======================
+
+sRGB2014.icc is the ICC v2 sRGB profile published by the International Color
+Consortium at https://www.color.org/srgbprofiles.xalter (the successor, since
+2015, of sRGB_IEC61966-2-1_black_scaled.icc). The copy here is byte-identical
+to the file in Debian's icc-profiles-free 2.4 (color.org/sRGB2014.icc),
+sha256 384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a.
+
+The ICC's terms, as stated for its profiles and recorded in Debian's
+copyright file for the package (License: ICC):
+
+    This profile is made available by the International Color Consortium,
+    and may be copied, distributed, embedded, made, used, and sold
+    without restriction. Altered versions of this profile shall have the
+    original identification and copyright information removed and shall
+    not be misrepresented as the original profile.
+
+The profile's own copyright tag reads
+"Copyright International Color Consortium, 2015".

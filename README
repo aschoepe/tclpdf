@@ -159,10 +159,13 @@ LICENCE, AND WHY NO FONT IS PART OF IT
     tclpdf itself is MIT - see the file license.terms. That covers everything
     the package installs: the Tcl modules, pkgIndex.tcl and the ICC
     profiles in icc/, which are a runtime part because their bytes end up
-    inside every PDF/A document. Two profiles ship: sRGB.icc (the default
-    output intent, "no copyright, use freely") and ISOcoated_v2_bas.ICC, a
-    CMYK intent for print work from basICColor under the zlib licence - the
-    grant is the file LICENSE-ZLIB-bICC beside it, see icc/README.md.
+    inside every PDF/A document. Four profiles ship: sRGB.icc (the default
+    output intent, "no copyright, use freely"), ISOcoated_v2_bas.ICC, a CMYK
+    intent for print work, and ISOcoated_v2_grey1c_bas.ICC, a grey intent for
+    monochrome documents - the two from basICColor under the zlib licence,
+    the grant is the file LICENSE-ZLIB-bICC beside them - and sRGB2014.icc,
+    the ICC's own sRGB profile under the ICC's terms (LICENSE-ICC.txt), kept
+    beside the default for comparison; see icc/README.md.
 
     ONE OTHER PIECE OF THIRD-PARTY MATERIAL travels in the source archive:
     tools/agl/glyphlist.txt, the Adobe Glyph List, verbatim and under Adobe's
@@ -180,16 +183,22 @@ LICENCE, AND WHY NO FONT IS PART OF IT
         tclpdf<version>.zip, .tar.gz    contain no font
         tclpdf<version>-src.tar.gz      carries them, with their licences
 
-    They are third-party work under their own terms: DejaVu under the
-    Bitstream Vera licence, and Roboto, Bitcount Prop Single and Niconne under
-    the SIL Open Font License 1.1. The full texts sit beside them in
+    They are third-party work under their own terms, sorted by origin:
+    DejaVu (Bitstream Vera licence) directly under fonts/, the Google Fonts
+    faces - Roboto, Bitcount Prop Single, Niconne, Permanent Marker and ten
+    Noto faces - under fonts/google/ (SIL Open Font License 1.1, Permanent
+    Marker Apache 2.0), OCR A and OCR B under fonts/tsukurimashou/ (public
+    domain and free-use statements of their authors), the URW Core 35 under
+    fonts/urw-core35-fonts/ (OFL 1.1 chosen of three) and the Liberation
+    fonts under fonts/liberation-fonts/ (OFL 1.1) - two free sets that keep
+    the measure of the standard 14, see the manual. The full texts sit in
     examples/assets/fonts/licenses/, each named after the family it belongs
     to, and they have to travel with any copy of those files. The inventory in
     examples/assets/README.md records for every face where it came from, under
     what terms, and what its embedding flag says.
 
     Whether you may embed a font into a PDF that tclpdf writes is a question
-    for THAT font's licence, not for this one. All four here allow it without
+    for THAT font's licence, not for this one. All of them here allow it without
     restriction; a face you add yourself may not, and tclpdf will not stop you
     - it reads the fsType flag and reports it, but does not refuse on it,
     because no validator and no reader enforces it either and a package that

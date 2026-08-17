@@ -25,8 +25,8 @@ source [file join [file dirname [info script]] helper.tcl]
 set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts]
 set fontBoth [file join $assets DejaVuSans.ttf]
-set fontGpos [file join $assets Roboto-Regular.ttf]
-set fontScript [file join $assets Niconne-Regular.ttf]
+set fontGpos [file join $assets google Roboto-Regular.ttf]
+set fontScript [file join $assets google Niconne-Regular.ttf]
 
 testConstraint haveBoth [file exists $fontBoth]
 testConstraint haveGpos [file exists $fontGpos]

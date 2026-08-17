@@ -60,7 +60,7 @@ $doc text "Roboto Variable carries two axes: wght from 100 to 900 and wdth\
 set y 46
 foreach weight {100 200 300 400 500 600 700 800 900} {
     set alias w$weight
-    $doc font embed $alias [file join $fonts Roboto-Variable.ttf] \
+    $doc font embed $alias [file join $fonts google Roboto-Variable.ttf] \
         -axes [list wght $weight]
     $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
     $doc text "wght $weight" -at [list 20 $y]
@@ -82,7 +82,7 @@ $doc text "The nine steps above are the named instances. These two are not:\
 set y 150
 foreach weight {150 450} {
     set alias between$weight
-    $doc font embed $alias [file join $fonts Roboto-Variable.ttf] \
+    $doc font embed $alias [file join $fonts google Roboto-Variable.ttf] \
         -axes [list wght $weight]
     $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
     $doc text "wght $weight" -at [list 20 $y]
@@ -108,7 +108,7 @@ foreach {label axes} {
     "wght 700 wdth 75" {wght 700 wdth 75}
 } {
     set alias [string map {" " _} d$label]
-    $doc font embed $alias [file join $fonts Roboto-Variable.ttf] -axes $axes
+    $doc font embed $alias [file join $fonts google Roboto-Variable.ttf] -axes $axes
     $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
     $doc text $label -at [list 20 $y]
     $doc font -family $alias -size 13 -color black
@@ -135,7 +135,7 @@ set y 48
 foreach name {"Thin" "Light" "Regular" "Medium" "Bold" "Black"
         "Condensed Light" "Condensed Bold"} {
     set alias [string map {" " _} n$name]
-    $doc font embed $alias [file join $fonts Roboto-Variable.ttf] -instance $name
+    $doc font embed $alias [file join $fonts google Roboto-Variable.ttf] -instance $name
     $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
     $doc text $name -at [list 20 $y]
     $doc font -family $alias -size 13 -color black
@@ -150,7 +150,7 @@ $doc text "-axes overrides single axes of the instance it starts from, so\
     \"Bold, but narrower\" is one call rather than a lookup by hand." \
     -at {20 130} -width 170
 
-$doc font embed refined [file join $fonts Roboto-Variable.ttf] \
+$doc font embed refined [file join $fonts google Roboto-Variable.ttf] \
     -instance "Bold" -axes {wdth 80}
 $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
 $doc text "-instance Bold -axes {wdth 80}" -at {20 141}

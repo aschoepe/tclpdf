@@ -45,7 +45,7 @@ set target [expr {[llength $argv] ? [lindex $argv 0] : "03.05-svg-text.pdf"}]
 set assets [file join $here assets]
 set regular [file join $assets fonts DejaVuSans.ttf]
 set bold [file join $assets fonts DejaVuSans-Bold.ttf]
-set mono [file join $assets fonts OCRB.ttf]
+set mono [file join $assets fonts tsukurimashou OCRB.ttf]
 set profile [file join [file dirname $here] icc sRGB.icc]
 
 set doc [tclpdf new -unit mm]

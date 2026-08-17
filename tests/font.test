@@ -32,6 +32,12 @@ set otfTtf [file join [file dirname [file dirname [file normalize [info script]]
 testConstraint haveOtf [file exists $otf]
 testConstraint haveOtfPair [expr {[file exists $otf] && [file exists $otfTtf]}]
 
+# The Liberation set - metric copies of Arial, Times New Roman and Courier New,
+# standing in for the standard 14 from the other lineage than URW.
+set liberation [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts liberation-fonts]
+testConstraint haveLiberation [file exists [file join $liberation LiberationSans-Regular.ttf]]
+
 test font-1.1 {a TrueType file is parsed} -constraints haveFont -body {
   set parsed [::tclpdf::sfnt read $fontRegular]
   list [dict get $parsed unitsPerEm] \
@@ -741,7 +747,7 @@ test font-8.4 {-subset has no effect on a CFF face, and does not pretend to} -co
 
 proc variableTree {name} {
   set here [file dirname [file dirname [file normalize [info script]]]]
-  return [file join $here examples assets fonts $name]
+  return [file join $here examples assets fonts google $name]
 }
 
 test font-8.1 {-axes embeds a chosen point on the axes} -body {
@@ -1268,5 +1274,76 @@ test font-12.5 {an OTTO file without a CFF table is refused} -constraints haveOt
   catch {::tclpdf::sfnt parse $bytes} result
   set result
 } -result {tclpdf: the font has no "CFF " table and cannot be embedded}
+
+# How many WinAnsi advances of a face equal the AFM of the standard face it
+# stands in for - within half a unit at 1000/em - and which characters differ.
+proc metricMatch {path std} {
+  set font [::tclpdf::sfnt read $path]
+  set upem [dict get $font unitsPerEm]
+  set cmap [dict get $font cmap]
+  set equal 0
+  set differ {}
+  for {set code 32} {$code < 256} {incr code} {
+    if {$code >= 127 && $code < 160} continue
+    set char [encoding convertfrom cp1252 [binary format c $code]]
+    if {[catch {::tclpdf::afm width $std $code} width] || $width == 0} continue
+    set cp [scan $char %c]
+    if {![dict exists $cmap $cp]} {
+      lappend differ [format U+%04X $cp]
+      continue
+    }
+    set advance [expr {[::tclpdf::sfnt advance $font [dict get $cmap $cp]] * 1000.0 / $upem}]
+    if {abs($advance - $width) < 0.5} {
+      incr equal
+    } else {
+      lappend differ [format U+%04X $cp]
+    }
+  }
+  return [list $equal $differ]
+}
+
+test font-13.1 {Liberation Sans, Serif and Mono match the standard faces' advances except for five symbols} \
+    -constraints haveLiberation -body {
+  # The claim the manual makes under the standard-14 table, pinned: 2255 of
+  # 2292 WinAnsi advances equal, and what differs is the handful of symbols
+  # where Arial and Times New Roman never were Helvetica and Times - macron,
+  # plus-minus, micro sign, middle dot, division sign (U+00AF U+00B1 U+00B5
+  # U+00B7 U+00F7); the mono faces match Courier completely. Measured
+  # 2026-08-17 on release 2.1.5; a newer release that moves a width shows up
+  # here first.
+  set five {U+00AF U+00B1 U+00B5 U+00B7 U+00F7}
+  set result {}
+  set total 0
+  foreach {file std} {
+    LiberationSans-Regular.ttf Helvetica LiberationSans-Bold.ttf Helvetica-Bold
+    LiberationSans-Italic.ttf Helvetica-Oblique LiberationSans-BoldItalic.ttf Helvetica-BoldOblique
+    LiberationSerif-Regular.ttf Times-Roman LiberationSerif-Bold.ttf Times-Bold
+    LiberationSerif-Italic.ttf Times-Italic LiberationSerif-BoldItalic.ttf Times-BoldItalic
+    LiberationMono-Regular.ttf Courier LiberationMono-Bold.ttf Courier-Bold
+    LiberationMono-Italic.ttf Courier-Oblique LiberationMono-BoldItalic.ttf Courier-BoldOblique
+  } {
+    lassign [metricMatch [file join $::liberation $file] $std] equal differ
+    incr total $equal
+    set outside {}
+    foreach cp $differ {
+      if {$cp ni $five} {lappend outside $cp}
+    }
+    lappend result [list $equal $outside]
+  }
+  list $total $result
+} -result {2255 {{186 {}} {186 {}} {186 {}} {186 {}} {186 {}} {186 {}} {187 {}} {188 {}} {191 {}} {191 {}} {191 {}} {191 {}}}}
+
+test font-13.2 {a Liberation face embeds and sets text under PDF/A} -constraints haveLiberation -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed lib [file join $::liberation LiberationSerif-Regular.ttf]
+  $doc font -family lib -size 11
+  $doc text "Liberation Serif in place of Times" -at {20 30}
+  $doc pdfa -part 3 -conformance U
+  lassign [::tclpdfTest::writes $doc font-liberation.pdf] code written
+  set family [dict get [$doc font info lib] family]
+  $doc destroy
+  list $code $written $family
+} -result {0 1 {Liberation Serif}}
 
 cleanupTests

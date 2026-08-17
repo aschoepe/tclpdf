@@ -119,7 +119,12 @@ $doc text "This document follows the MINIMUM profile, which records the\
     invoice by itself." -at [list 20 [expr {$y + 18}]] -width 170 -align justify
 
 $doc font -size 8
-$doc text "The same invoice is attached as XML. Compare the two." \
+$doc text "The same invoice is attached as XML. Compare the two. The file\
+    claims PDF/A-3B - the level every invoice reaches without a structure\
+    tree, declared by the one zugferd call regardless of the XML; the profile\
+    from BT-24 decides the attachment's relationship, not the PDF/A level.\
+    A document that wants 3U or 3A says so afterwards with pdfa\
+    -conformance." \
     -at [list 20 [expr {$y + 52}]] -width 170
 
 $doc bookmark "Invoice [dict get $data number]" -page 0
@@ -132,6 +137,17 @@ $doc bookmark "Invoice [dict get $data number]" -page 0
 # above carries detail the XML does not. Example 5.2 shows the other case.
 # Passing -icc here would name the very file the module already finds -
 # measured, the two documents come out identical.
+#
+# What decides the PDF/A level: nothing in the XML. [zugferd] always declares
+# PDF/A-3B - the least the standards ask for and the level every invoice
+# reaches without a structure tree; BT-24 gives the Factur-X profile
+# (MINIMUM, BASIC WL, ...), which steers /AFRelationship and fx:ConformanceLevel,
+# not the PDF/A conformance. A document that wants more says so afterwards:
+# [$doc pdfa -conformance U] after this call raises the claim to 3U with the
+# Factur-X extension in place, and A needs [tagged 1] besides - measured, the
+# file then validates against the higher profile. -icc names another output
+# intent profile (a CMYK one, see pdfa -profile); the colours are held against
+# it at write time.
 set profile [$doc zugferd $invoice]
 puts "  profile from BT-24: $profile"
 puts "  attachment: [dict get [$doc zugferd state] name],\

@@ -47,7 +47,7 @@ $doc page add
 
 $doc font embed serif [file join $assets fonts DejaVuSans.ttf]
 $doc font embed serifBold [file join $assets fonts DejaVuSans-Bold.ttf]
-$doc font embed sans [file join $assets fonts Roboto-Regular.ttf]
+$doc font embed sans [file join $assets fonts google Roboto-Regular.ttf]
 
 $doc font -family serifBold -size 14 -color {0.20 0.30 0.45}
 $doc text "Pair kerning" -at {20 25}

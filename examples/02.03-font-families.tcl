@@ -1,11 +1,11 @@
 #!/usr/bin/env tclsh
 #
-# tclpdf example 2.3 - four families in one document
+# tclpdf example 2.3 - five families in one document
 #
 #   tclsh examples/02.03-font-families.tcl ?output.pdf?
 #
 # Example 2.1 embeds one face and shows how little of it travels. This one
-# embeds four and shows what choosing between them costs, because the numbers
+# embeds five and shows what choosing between them costs, because the numbers
 # are not where intuition puts them:
 #
 #   A face's SIZE ON DISK says nothing about what it costs in a document.
@@ -17,6 +17,11 @@
 #   is a property no file name mentions. Niconne is a fine heading face and
 #   cannot set Czech; Bitcount covers 396 characters, which is enough for
 #   German and not for much beyond it.
+#
+#   A face's METRICS are a third thing again. Liberation Sans is drawn to the
+#   advances of Arial, which are Helvetica's for all but five symbols: text set
+#   in it takes the same room as the standard face - the free stand-in for a
+#   layout measured on Helvetica (measured in tests/font.test, font-13.1).
 #
 # So the order to ask the questions in is: does the face have the characters,
 # then does it look right, then what does it cost. This page asks all three,
@@ -43,23 +48,26 @@ set families {
     body    DejaVuSans.ttf
             "text face, the widest coverage here"
             "The quick brown fox jumps over the lazy dog."
-    roboto  Roboto-Regular.ttf
+    roboto  google/Roboto-Regular.ttf
             "text face, a fifth of the file size"
             "The quick brown fox jumps over the lazy dog."
-    bitcount BitcountPropSingle-Regular.ttf
+    bitcount google/BitcountPropSingle-Regular.ttf
             "display face, drawn from dots"
             "SYSTEM READY 08:15 - 23.4 C"
-    niconne Niconne-Regular.ttf
+    niconne google/Niconne-Regular.ttf
             "script face, headings only"
             "Menu of the day"
+    liberation liberation-fonts/LiberationSans-Regular.ttf
+            "text face, the metric twin of Helvetica and Arial"
+            "The quick brown fox jumps over the lazy dog."
 }
 
 set doc [tclpdf new -unit mm]
-$doc info Title "tclpdf example: four families in one document"
+$doc info Title "tclpdf example: five families in one document"
 $doc page add
 
 $doc font -family helvetica -style bold -size 15
-$doc text "Four families, one document" -at {20 22}
+$doc text "Five families, one document" -at {20 22}
 $doc font -style {} -size 9
 $doc text "Each face below is embedded and subsetted separately. The figures\
     are read back out of the document, not written down here." \
@@ -96,7 +104,7 @@ foreach {alias file purpose sample} $families {
 # -- what each face costs in THIS document ---------------------------------
 
 $doc font -family helvetica -style bold -size 10 -color black
-$doc text "What the four cost here" -at [list 20 $y]
+$doc text "What the five cost here" -at [list 20 $y]
 $doc font -style {} -size 8
 $doc text "The subset carries the glyphs this page uses. The file on disk is\
     what had to be parsed to get there - the two are unrelated, and only the\

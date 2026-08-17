@@ -25,7 +25,7 @@ source [file join [file dirname [info script]] helper.tcl]
 set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts]
 set fontLiga [file join $assets DejaVuSans.ttf]
-set fontNone [file join $assets Niconne-Regular.ttf]
+set fontNone [file join $assets google Niconne-Regular.ttf]
 
 testConstraint haveLiga [file exists $fontLiga]
 testConstraint haveNone [file exists $fontNone]

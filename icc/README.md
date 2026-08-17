@@ -1,6 +1,6 @@
 # ICC profiles
 
-`sRGB.icc` — the output intent profile for PDF/A-3 and therefore for ZUGFeRD; the default of `pdfa`. `ISOcoated_v2_bas.ICC` — a CMYK output intent for print work, see below.
+`sRGB.icc` — the output intent profile for PDF/A-3 and therefore for ZUGFeRD; the default of `pdfa`. `ISOcoated_v2_bas.ICC` — a CMYK output intent for print work, `ISOcoated_v2_grey1c_bas.ICC` — a grey one for monochrome documents, and `sRGB2014.icc` — the ICC's own, newer sRGB profile, kept beside the default so that the two can be compared (examples 05.11 and 05.12); all below.
 
 This is **not** example data. PDF/A requires the output intent profile to be
 **embedded in every document**, so the file is part of the package: it is
@@ -81,3 +81,55 @@ but 3.5 MB. This is the smallest one with a licence compatible with MIT.
 Measured: as the output intent of a PDF/A-3b document veraPDF 1.30.2 reports
 0 failed checks; the identifier tclpdf writes from its `desc` tag is
 `ISO Coated v2 (basICColor)`.
+
+## `ISOcoated_v2_grey1c_bas.ICC` — the grey output intent (added 2026-08-17)
+
+The third intent, for a document that paints in grey only — a monochrome
+archival copy, a form without colour. Under it PDF/A admits DeviceGray alone
+(ISO 19005-2, 6.2.4.3), which `pdfa` checks at the write. It exists so that the
+GRAY branch of that check is held against a real profile rather than a
+synthetic header (tests/zugferd.test 8.9 and 8.12, example 05.10).
+
+| | |
+| --- | --- |
+| Size | 936 B |
+| sha256 | `2dde48d5589b93a59c4514fd292f7037d08bc1b37ef728655be4965aeee57cbe` |
+| Signature | `acsp`, version 2.1.0, class `prtr`, colour space `GRAY` |
+| `desc` tag | `ISO Coated v2 - GREY 1c - (basICColor)` — the grey component of the same FOGRA39 characterisation |
+| `cprt` tag | `basICColor - Copyright (c) 2007 Color Solutions, All Rights Reserved.` |
+| Licence | zlib/libpng, the same grant in `LICENSE-ZLIB-bICC` — the file is part of the same basICColor set as the CMYK profile above |
+
+Origin: Debian `icc-profiles-free` 2.4, `icc-profiles-basiccolor-printing2009`,
+byte-identical to the Debian source. Measured: a grey document with it as the
+intent passes veraPDF 3b with 0 failed checks; the same document with an RGB
+or a CMYK fill fails on 6.2.4.3-2 or -3 — exactly what `pdfa` refuses.
+
+## `sRGB2014.icc` — the ICC's sRGB profile, beside the default (added 2026-08-17)
+
+Not the default: `pdfa -profile icc/sRGB2014.icc` selects it. It is here so
+that the choice of the default can be seen rather than believed — examples
+05.11 (default `sRGB.icc`) and 05.12 (`sRGB2014.icc`) write the same page under
+each and print what the profile bytes say.
+
+| | `sRGB.icc` (default) | `sRGB2014.icc` |
+| --- | --- | --- |
+| Origin | OpenICC, Kai-Uwe Behrmann, 2004 | International Color Consortium, 2015 — successor of `sRGB_IEC61966-2-1_black_scaled.icc` |
+| Size on disk | 6 922 B | 3 024 B |
+| Size in the PDF (Flate stream) | **2 449 B** | **2 553 B** — the older profile's 1024-point curves compress well; the disk sizes mislead |
+| sha256 | `2a92d4bae450b76d8b0aa42193df974d75f62738ecebf74f01c5e75b12a95796` | `384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a` |
+| Version, class | 2.3, `mntr` | 2.0, `mntr` |
+| White point tag | D65 (0.9501 1 1.0883), no `chad` | D50 (0.9642 1 0.8249) with `chad` (Bradford D65→D50), as v4 requires and v2 recommends |
+| Black point | no `bkpt` | `bkpt`, scaled to zero — hence the old name |
+| Other tags | `chrm`, `dmnd`, `dmdd` | `lumi`, `meas`, `tech`, `vued` |
+| Primaries, tone curve | identical to within 0.0002; the same 1024-point curve | |
+| `desc` | `sRGB` | `sRGB2014` |
+| `cprt` | `no copyright, use freely` | `Copyright International Color Consortium, 2015` |
+| Licence | Zlib | ICC — copy, embed, sell without restriction; do not alter under the name (`LICENSE-ICC.txt`) |
+
+Measured 2026-08-17: a ZUGFeRD invoice with `sRGB2014.icc` as its intent
+passes veraPDF 3b with 0 failed checks. Under relative rendering the two are
+the same colours; the D50 tag with `chad` matters to the absolute colorimetric
+intent only. Why the default is still the OpenICC file: it was chosen for its
+licence and its 61-of-61 record and has never given a reader trouble; in the file
+the two are within a hundred bytes of each other, and they differ by whose
+copyright line sits in the document.

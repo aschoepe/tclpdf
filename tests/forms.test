@@ -43,8 +43,8 @@ set assets [file join [file dirname [file dirname [file normalize [info script]]
 # first is what this package can set, the second is what it refuses - and
 # neither case is visible in the other face.
 set wholeFace [file join $assets DejaVuSans.ttf]
-set splitFace [file join $assets NotoNaskhArabic-Variable.ttf]
-set plainFace [file join $assets Roboto-Regular.ttf]
+set splitFace [file join $assets google NotoNaskhArabic-Variable.ttf]
+set plainFace [file join $assets google Roboto-Regular.ttf]
 
 testConstraint haveWhole [file exists $wholeFace]
 testConstraint haveSplit [file exists $splitFace]

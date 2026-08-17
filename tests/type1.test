@@ -33,7 +33,7 @@ set assets [file join [file dirname [file dirname [file normalize [info script]]
     examples assets fonts]
 set urw [file join $assets urw-core35-fonts]
 
-set pfb [file join $assets OCRB.pfb]
+set pfb [file join $assets tsukurimashou OCRB.pfb]
 set raw [file join $urw NimbusSans-Regular.t1]
 set afm [file join $urw NimbusSans-Regular.afm]
 set ttf [file join $urw NimbusSans-Regular.ttf]

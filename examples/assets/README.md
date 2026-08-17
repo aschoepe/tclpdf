@@ -47,13 +47,26 @@ everything else here.
 
 ---
 
-## fonts/ — 5.5 MB
+## fonts/ — 32 MB
 
-Four families, one face each except DejaVu, which keeps a bold as well. Flat,
-because every example wants a short path, with the licences in `licenses/`
-named after the family they belong to — the OFL requires the text to travel
-with the fonts, and a folder of five files named `OFL.txt` would not say which
-is which.
+Sorted by **origin** since 2026-08-17, one directory per source, so that a
+licence question has one place to look:
+
+| directory | what | terms |
+| --- | --- | --- |
+| `fonts/` itself | DejaVu Sans, regular and bold — the face most tests and examples reach for first, kept flat for the short path | Bitstream Vera licence, `licenses/DejaVu-*` |
+| `google/` | the Google Fonts faces: Roboto (static and variable), Bitcount Prop Single (static and variable), Niconne, Permanent Marker, and the ten Noto faces of example 02.09 (Sans, Sans JP, Serif Tibetan, Sans Symbols, Sans Symbols 2, Emoji, Sans Cuneiform, Sans Egyptian Hieroglyphs, Naskh Arabic, Music) — 17 MB | SIL Open Font License 1.1 (Permanent Marker: Apache 2.0), one text per family in `licenses/` |
+| `tsukurimashou/` | OCR A and OCR B, each as `.ttf`, `.otf`, `.pfb` and `.afm`, from the OCR package of the Tsukurimashou Project | public domain and free-use statements of the three authors, quoted in `licenses/OCR-LICENSE.txt` |
+| `urw-core35-fonts/` | the fourteen URW faces that stand in for the standard 14, in four formats, with their own `NOTICE.md` and licence texts | OFL 1.1 chosen of three |
+| `liberation-fonts/` | Liberation Sans, Serif and Mono, four styles each (release 2.1.5) — metric copies of Arial, Times New Roman and Courier New, the second free stand-in for the standard 14; own `NOTICE.md` with origin, hash and the measurement (2255 of 2292 advances equal to the AFM) | SIL OFL 1.1, `LICENSE` beside them |
+| `adobe-afm/` | the fourteen Adobe core font metrics — build input, not example data, see below | Adobe's AFM grant, `LICENSE.txt` beside them |
+| `adobe-standard-14/` | Adobe's own Type 1 and OpenType files — **internal test material only**, ignore-globbed and kept out of every archive | all rights reserved |
+| `licenses/` | the licence texts of the flat and the `google/` faces, named after the family | — |
+
+The licences live in `licenses/` rather than beside each file because the OFL
+requires the text to travel with the fonts and a folder of seventeen files
+named `OFL.txt` would not say which is which; the sets (`urw-core35-fonts/`,
+`adobe-afm/`) carry their own, as their sources ship them.
 
 `adobe-afm/` is not example data at all and is the one thing here that the
 **build** depends on: the fourteen Adobe core font metrics `afmData.tcl` is
@@ -61,12 +74,10 @@ generated from. It sits under `fonts/` because that is where a reader looks for
 it, and it carries `LICENSE.txt`, which Adobe's terms forbid separating from the
 metrics.
 
-One exception to the flat rule: `urw-core35-fonts/` keeps its own directory,
-its own licence files and its own notice, because it is a **set** rather than a
-face — the fourteen URW faces that stand in for the standard 14 when a document
-has to be archivable. Its own `NOTICE.md` carries the origin, the licence
-choice and the two metric measurements; the flat files above stay where the
-examples expect them.
+`urw-core35-fonts/` keeps its own licence files and its own notice, because it
+is a **set** rather than a face — the fourteen URW faces that stand in for the
+standard 14 when a document has to be archivable. Its own `NOTICE.md` carries
+the origin, the licence choice and the two metric measurements.
 
 Every family here was **read**, not assumed: `fsType`, the glyph count and the
 character coverage come out of the files.
@@ -75,9 +86,9 @@ character coverage come out of the files.
 | --- | --- | --- | --- | --- | --- |
 | `DejaVuSans.ttf` | 757 076 B | 6 253 | 5 918 | **0** | the workhorse — the only one here that covers Greek and Cyrillic |
 | `DejaVuSans-Bold.ttf` | 705 684 B | 6 196 | 5 898 | **0** | its bold, so an example can show two faces staying apart |
-| `Roboto-Regular.ttf` | 159 108 B | 1 326 | 927 | **0** | a plain text face, the counter-example to DejaVu's bulk |
-| `BitcountPropSingle-Regular.ttf` | 331 076 B | 1 938 | 396 | **0** | a display face built from dots — visibly not a text font |
-| `Niconne-Regular.ttf` | 42 056 B | 286 | 283 | **0** | a script face, and the one with **gaps**: no `č`, no `ą`, no Cyrillic |
+| `google/Roboto-Regular.ttf` | 159 108 B | 1 326 | 927 | **0** | a plain text face, the counter-example to DejaVu's bulk |
+| `google/BitcountPropSingle-Regular.ttf` | 331 076 B | 1 938 | 396 | **0** | a display face built from dots — visibly not a text font |
+| `google/Niconne-Regular.ttf` | 42 056 B | 286 | 283 | **0** | a script face, and the one with **gaps**: no `č`, no `ą`, no Cyrillic |
 
 `fsType 0` means installable, no restriction on embedding. No validator
 enforces the field and no reader checks it — the responsibility sits with

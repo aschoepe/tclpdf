@@ -1,7 +1,7 @@
 OCR A and OCR B — origin and licence
 ====================================
 
-The files OCRA*, OCRB* in this directory come from the OCR package of the
+The files OCRA*, OCRB* in ../tsukurimashou/ come from the OCR package of the
 Tsukurimashou Project, version 0.3.1 (2021-03-30), converted to MetaType1 by
 Matthew Skala from earlier Metafont sources. Downloaded from
 

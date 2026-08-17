@@ -49,7 +49,7 @@ $doc page add
 # Two containers of the same format. A .pfb wraps the three pieces in segment
 # markers that state their lengths; a .t1 carries them raw, and the lengths
 # are found in the content. Both arrive here as the same thing.
-$doc font embed ocrb [file join $assets fonts OCRB.pfb]
+$doc font embed ocrb [file join $assets fonts tsukurimashou OCRB.pfb]
 $doc font embed sans [file join $urw NimbusSans-Regular.t1]
 $doc font embed serif [file join $urw NimbusRoman-Regular.t1]
 
@@ -80,7 +80,7 @@ set y [expr {$y + 12}]
 
 set rows {}
 foreach {label file} [list \
-    OCRB.pfb [file join $assets fonts OCRB.pfb] \
+    OCRB.pfb [file join $assets fonts tsukurimashou OCRB.pfb] \
     NimbusSans-Regular.t1 [file join $urw NimbusSans-Regular.t1] \
     NimbusRoman-Regular.t1 [file join $urw NimbusRoman-Regular.t1]] {
   set program [::tclpdf::type1 read $file]

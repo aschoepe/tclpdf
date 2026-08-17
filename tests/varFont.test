@@ -166,7 +166,7 @@ test varFont-3.4 {coordinates covers every axis, named or not} -constraints have
 # A face from the tree, parsed. The variable ones live beside the examples.
 proc variableFace {name} {
   set here [file dirname [file dirname [file normalize [info script]]]]
-  return [::tclpdf::sfnt read [file join $here examples assets fonts $name]]
+  return [::tclpdf::sfnt read [file join $here examples assets fonts google $name]]
 }
 
 proc outlineOf {font id} {

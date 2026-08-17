@@ -21,7 +21,7 @@ set fonts [file join $here examples assets fonts]
 
 proc face {name} {
   return [::tclpdf::sfnt parse [::tclpdf::io read \
-      [file join $::fonts $name]]]
+      [file join $::fonts google $name]]]
 }
 
 test glyfOutline-1.1 {a simple glyph comes back with its points} -body {

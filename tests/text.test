@@ -22,13 +22,13 @@ set textFace [file join [file dirname [file dirname [file normalize [info script
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveFace [file exists $textFace]
 set type1Face [file join [file dirname [file dirname [file normalize [info script]]]] \
-    examples assets fonts OCRB.pfb]
+    examples assets fonts tsukurimashou OCRB.pfb]
 testConstraint haveType1 [file exists $type1Face]
 
 # A face that kerns, for the tests that have to see the pair amounts - DejaVu
 # Sans is the general one above, Roboto the one with the pairs.
 set kernFace [file join [file dirname [file dirname [file normalize [info script]]]] \
-    examples assets fonts Roboto-Regular.ttf]
+    examples assets fonts google Roboto-Regular.ttf]
 testConstraint haveKerning [file exists $kernFace]
 # A reader from outside, for the tests that ask what comes back OUT of the
 # file: nothing inside this package can answer that.

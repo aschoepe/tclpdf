@@ -709,6 +709,8 @@ test zugferd-7.16 {an explicit profile that does not exist is refused by name} -
 # $root, which zugferd-6.4 above uses as a scratch variable.
 set cmykIcc [file join [file dirname $icc] ISOcoated_v2_bas.ICC]
 testConstraint haveCmykIcc [file exists $cmykIcc]
+set greyIcc [file join [file dirname $icc] ISOcoated_v2_grey1c_bas.ICC]
+testConstraint haveGreyIcc [file exists $greyIcc]
 
 # A PDF/A document with an embedded face and the given profile, drawn by the
 # script; answers {code message left} of the write - "left" being whether a
@@ -843,13 +845,14 @@ test zugferd-8.8 {pdfa declared after the drawing is refused the same as before 
 } -result {1 1 1}
 
 test zugferd-8.9 {every offending space in one message, and only the first three distinct users of each} \
-    -constraints haveInvoice -body {
+    -constraints {haveInvoice haveGreyIcc} -body {
   # A GRAY intent admits neither DeviceRGB nor DeviceCMYK, so both can offend
   # at once - the shape of the message with two spaces, and the cap on the
-  # list: three distinct callers, then "and elsewhere". A GRAY profile does
-  # not ship with the package; the header is all the check reads.
-  set grayIcc [fakeProfile [::tclpdfTest::scratch gray.icc] "GRAY"]
-  set result [intentProbe $face $grayIcc {
+  # list: three distinct callers, then "and elsewhere". The grey profile is
+  # the shipped one (icc/ISOcoated_v2_grey1c_bas.ICC); measured 2026-08-17,
+  # veraPDF fails the same two files on 6.2.4.3-2 and -3 and passes the grey
+  # one (8.12).
+  set result [intentProbe $face $::greyIcc {
     $doc rect -at {20 20} -size {40 20} -fill steelblue
     $doc rect -at {20 50} -size {40 20} -fill orange
     $doc page add
@@ -858,9 +861,8 @@ test zugferd-8.9 {every offending space in one message, and only the first three
     $doc circle -at {40 60} -radius 5 -fill steelblue
     $doc text "cmyk" -at {20 80} -color {cmyk 0 1 1 0}
   }]
-  file delete $grayIcc
   set result
-} -result {1 {tclpdf: PDF/A with the GRAY output intent "gray.icc" cannot carry DeviceRGB or DeviceCMYK (ISO 19005-2, 6.2.4.3) - used DeviceRGB by rect on page 1, text on page 2, line on page 2 and elsewhere; DeviceCMYK by text on page 2; paint in grey, or give an RGB or CMYK profile with pdfa -profile} 0}
+} -result {1 {tclpdf: PDF/A with the GRAY output intent "ISOcoated_v2_grey1c_bas.ICC" cannot carry DeviceRGB or DeviceCMYK (ISO 19005-2, 6.2.4.3) - used DeviceRGB by rect on page 1, text on page 2, line on page 2 and elsewhere; DeviceCMYK by text on page 2; paint in grey, or give an RGB or CMYK profile with pdfa -profile} 0}
 
 test zugferd-8.10 {without pdfa nothing is checked, but the record is kept} -body {
   # DeviceGray is recorded too - the record is the fact "which spaces does
@@ -891,6 +893,29 @@ test zugferd-8.11 {a refused call leaves no record: the check names only what re
   }]
   list $refused $outcome
 } -result {{1 1 1} {0 written 0}}
+
+test zugferd-8.12 {the shipped grey profile: a grey document writes and carries a one-component intent} \
+    -constraints {haveInvoice haveGreyIcc} -body {
+  # The third intent the package ships, so the GRAY branch of the check is
+  # held against a real profile rather than a synthetic header: grey and the
+  # achromatic names pass, the intent goes out with /N 1 and the profile's
+  # own description as identifier - and veraPDF (3b) reports 0 failed checks
+  # on this very document, measured 2026-08-17.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed face $face
+  $doc font -family face
+  $doc pdfa -part 3 -conformance B -profile $::greyIcc
+  $doc rect -at {20 20} -size {40 20} -fill 0.5 -stroke black
+  $doc text "grey only" -at {20 50} -color silver
+  set path [::tclpdfTest::scratch grey-intent.pdf]
+  set code [catch {$doc write $path}]
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $code [regexp {/N 1} $bytes] \
+      [regexp {/OutputConditionIdentifier \(ISO Coated v2 - GREY 1c - \\\(basICColor\\\)\)} $bytes]
+} -result {0 1 1}
 
 rename intentProbe {}
 rename fakeProfile {}

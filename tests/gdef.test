@@ -26,7 +26,7 @@ set assets [file join [file dirname [file dirname [file normalize [info script]]
     examples assets fonts]
 # Roboto has header 1.2 with mark glyph sets, DejaVu 1.0 with a mark attachment
 # class definition - between them every branch below has a font behind it.
-set fontSets [file join $assets Roboto-Regular.ttf]
+set fontSets [file join $assets google Roboto-Regular.ttf]
 set fontAttach [file join $assets DejaVuSans.ttf]
 
 testConstraint haveSets [file exists $fontSets]

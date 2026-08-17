@@ -67,8 +67,9 @@ test bidi-1.3 {the right-to-left blocks agree with shaping.tcl} -body {
   foreach {first last system token} $::tclpdf::shaping::systems {
     # order, cursive, shape and mark are the right-to-left needs; conjunct
     # and markOrder belong to the Indic scripts and Thai, which run the usual
-    # way.
-    if {$token ni {order cursive shape mark}} {
+    # way. mark is a placement need, not a direction: since 2026-08-17 the
+    # Tibetan vowel signs carry it too, and Tibetan runs left to right.
+    if {$token ni {order cursive shape mark} || $system eq "Tibetan"} {
       continue
     }
     for {set code $first} {$code <= $last} {incr code} {

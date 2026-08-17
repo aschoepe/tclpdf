@@ -100,8 +100,11 @@ $doc text "The elements sit in the 2.0 namespace, which a Namespace\
 # claim about nothing.
 $doc font -family face -size 9
 $doc structure Code -script {
+  # 77, not 72: the paragraph above runs to three lines at this width, and
+  # its last baseline sits at 71 - the code line used to be drawn through it
+  # (seen in Preview, 2026-08-17).
   $doc text "set doc \[tclpdf new -unit mm\] ;# Code, Note, Quote, TOC ..." \
-      -at {24 72}
+      -at {24 77}
 }
 
 $doc font -family faceBold -size 11

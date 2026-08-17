@@ -78,7 +78,7 @@ namespace eval ::tclpdf::zugferd {
 oo::define ::tclpdf::document::document {
 
   # $doc zugferd <path> ?-name factur-x.xml? ?-profile ...? ?-type INVOICE?
-  #              ?-version 1.0? ?-profileIcc icc/sRGB.icc? ?-compress 0?
+  #              ?-version 1.0? ?-icc icc/sRGB.icc? ?-relationship r? ?-description d? ?-compress 0?
   # $doc zugferd profile <xmlBytes>    -> the conformance level, without writing
   # $doc zugferd state
   method zugferd {args} {
