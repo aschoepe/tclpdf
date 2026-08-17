@@ -842,4 +842,15 @@ test image-info-11.2 {a PNG without any transparency reports transparency none} 
       [dict get $info width] [dict get $info height]
 } -result {none 0 2 8 2 1}
 
+test image-info-11.3 {a PNG with an alpha channel reports transparency softMask, which is what the file gets} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc image embed rgba $rgba
+  $doc image embed indexed $indexed
+  set a [$doc image info rgba]
+  set b [$doc image info indexed]
+  $doc destroy
+  # the indexed sample keys one palette entry out: a /Mask array, not a mask
+  list [dict get $a alpha] [dict get $a transparency] [dict get $b alpha] [dict get $b transparency]
+} -result {1 softMask 0 colourKey}
+
 cleanupTests

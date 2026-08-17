@@ -183,10 +183,55 @@ $doc bookmark "Contents" -page $contents
 $doc pageLabels -from 0 -style D
 $doc pageLabels -from $contents -style none -prefix "Contents"
 
+# -- how a reader should present the document -------------------------------
+#
+# Viewer preferences (ISO 32000 12.2) are the fourth piece of navigation, and
+# the one nothing on the page shows: every key is a wish the reader may follow
+# or ignore. Calls accumulate - each sets the keys it names and leaves the rest
+# alone - so the window wishes stand here and the printing wishes below.
+#
+# The window: keep the toolbar, the menu bar and the window controls (the
+# three hide keys are what a kiosk or a slide show sets, not a manual), size
+# the window to the first page and centre it, and show the title from [info]
+# in the title bar instead of the file name - the one key PDF/UA makes
+# mandatory, because "05.03-navigation.pdf" says nothing to someone listening.
+$doc viewerPreferences -hideToolbar 0 -hideMenubar 0 -hideWindowUI 0 \
+    -fitWindow 1 -centerWindow 1 -displayDocTitle 1
+
+# What the reader shows beside the page after leaving full-screen mode, and
+# which way the pages run. The values are checked at the call: a misspelled
+# one would not be an error any validator finds - the reader silently falls
+# back to its default. UseNone shows the page alone, UseThumbs the thumbnails,
+# UseOC the optional-content panel; R2L is for scripts read right to left.
+# Each on a call of its own so the replacement is visible: a later call
+# overrides what an earlier one set for the same key, and [viewerPreferences]
+# without arguments answers with the result.
+$doc viewerPreferences -nonFullScreenPageMode UseNone
+$doc viewerPreferences -nonFullScreenPageMode UseThumbs -direction R2L
+$doc viewerPreferences -nonFullScreenPageMode UseOC
+# ...and what a manual with an outline wants: the bookmarks, read left to right.
+$doc viewerPreferences -nonFullScreenPageMode UseOutlines -direction L2R
+
+# The printing wishes, in one place of their own. -printScaling None prints
+# the page at its own size, AppDefault leaves the choice to the reader.
+# -duplex asks for one-sided printing (Simplex) or two-sided, turned on the
+# short edge or - the binding a manual gets - on the long edge.
+# -pickTrayByPDFSize lets the page size choose the paper tray, and -numCopies
+# is what the print dialogue proposes. -direction needs PDF 1.3,
+# -displayDocTitle 1.4, -printScaling 1.6 and the three printing keys 1.7 -
+# the default here; a document declared older refuses them at the call.
+$doc viewerPreferences -printScaling None -duplex Simplex
+$doc viewerPreferences -duplex DuplexFlipShortEdge
+$doc viewerPreferences -printScaling AppDefault -duplex DuplexFlipLongEdge \
+    -pickTrayByPDFSize 1 -numCopies 1
+
 exampleFooter $doc
 
 $doc write $target
 puts "  written: $target ([file size $target] bytes), [$doc page count] pages"
 puts "  bookmarks: [llength [$doc bookmarks]]"
 puts "  page labels: [dict keys [$doc pageLabels]] -> 1, 2, 3, Contents"
+set prefs [$doc viewerPreferences]
+puts "  viewer preferences: [dict size $prefs] keys, after full screen\
+    [dict get $prefs nonFullScreenPageMode], prints [dict get $prefs duplex]"
 $doc destroy

@@ -57,6 +57,9 @@ oo::class create ::tclpdf::document::document {
       compress 1
       typeArea {}
     }
+    # The state exists before the first configure: configure records there
+    # whether an orientation was asked for (see below).
+    set tclpdfState {}
     my configure {*}$args
     set tclpdfWriter [::tclpdf::writer::pdf new [dict get $tclpdfOption version]]
     set tclpdfPages {}
@@ -64,7 +67,6 @@ oo::class create ::tclpdf::document::document {
     set tclpdfXmp {}
     set tclpdfResources {}
     set tclpdfCatalog {}
-    set tclpdfState {}
     set tclpdfCanvas {}
     set tclpdfInfo [dict create Producer "tclpdf [package provide tclpdf]"]
   }
@@ -111,6 +113,15 @@ oo::class create ::tclpdf::document::document {
     if {[info exists tclpdfWriter]
         && [dict get $options version] ne [dict get $tclpdfOption version]} {
       $tclpdfWriter version [dict get $options version]
+    }
+    # Whether the caller SAID which way round, or is living with the default.
+    # It matters for a page size given as two numbers: those are taken as
+    # they stand unless an orientation was asked for - here, or on the page
+    # add itself (see PageAdd). The default "portrait" is not a request.
+    foreach {option value} $args {
+      if {[string trimleft $option -] eq "orientation"} {
+        dict set tclpdfState orientationStated 1
+      }
     }
     set tclpdfOption $options
     return
@@ -551,4 +562,4 @@ oo::class create ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::document 1.5
+package provide tclpdf::document 1.6

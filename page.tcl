@@ -77,8 +77,12 @@ oo::define ::tclpdf::document::document {
     set orientation [dict get $tclpdfOption orientation]
     # Whether the caller SAID which way round, or is getting the default. It
     # matters for a size given as two numbers: those are taken as they stand
-    # unless an orientation was asked for.
-    set stated 0
+    # unless an orientation was asked for - on this call, or on the document
+    # (tclpdf new / configure -orientation, recorded in the state; the
+    # default "portrait" is not a request). Measured before 2026-08-17: only
+    # the page add's own option counted, and "tclpdf new -format {55 88}
+    # -orientation quer" gave 55 by 88 although the manual promised the turn.
+    set stated [expr {[my state orientationStated] ne {}}]
     set rotate 0
     foreach {option value} $args {
       switch -- [string trimleft $option -] {
@@ -313,6 +317,35 @@ oo::define ::tclpdf::document::document {
     return
   }
 
+  # A value that belongs to the CURRENT content stream rather than to the
+  # document: the top canvas while a form or a pattern is being built, the
+  # current page otherwise. Graphics state that this package has to remember
+  # lives here - the colours [style] set, for one - because a stream starts
+  # fresh and knows nothing of the page before it or the page it is placed
+  # on. Answers {} for a key never set.
+  #
+  #   my streamState key          -> value
+  #   my streamState key value    sets it
+  method streamState {key args} {
+    if {[llength $tclpdfCanvas]} {
+      set top [expr {[llength $tclpdfCanvas] - 1}]
+      set record [lindex $tclpdfCanvas $top]
+    } else {
+      set top [my PageIndex {}]
+      set record [lindex $tclpdfPages $top]
+    }
+    if {![llength $args]} {
+      return [expr {[dict exists $record $key] ? [dict get $record $key] : {}}]
+    }
+    dict set record $key [lindex $args 0]
+    if {[llength $tclpdfCanvas]} {
+      lset tclpdfCanvas $top $record
+    } else {
+      lset tclpdfPages $top $record
+    }
+    return [lindex $args 0]
+  }
+
   # The drawing surface stack. push takes the size in POINTS.
   #
   #   $doc canvas push $width $height    start collecting elsewhere
@@ -441,4 +474,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::page 1.1
+package provide tclpdf::page 1.2

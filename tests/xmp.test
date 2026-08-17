@@ -474,4 +474,35 @@ test xmp-7.4 {an empty value removes a key from the dictionary} -body {
   regexp {/Keywords} $bytes
 } -result 0
 
+test xmp-7.5 {Creator is xmp:CreatorTool and Keywords is pdf:Keywords, as Table 317 pairs them} -constraints haveFace -body {
+  set doc [probe $face]
+  $doc info Creator "My application 3.1"
+  $doc info Keywords "alpha, beta"
+  $doc info Producer "My generator 2.0"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-info-pairing.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+  list [regexp {<xmp:CreatorTool>My application 3\.1</xmp:CreatorTool>} $packet] \
+      [regexp {<pdf:Keywords>alpha, beta</pdf:Keywords>} $packet] \
+      [regexp {<pdf:Producer>My generator 2\.0</pdf:Producer>} $packet] \
+      [regexp {<xmp:CreatorTool>My generator} $packet]
+} -result {1 1 1 0}
+
+test xmp-7.6 {without a Creator the creating tool is the producer, and no empty Keywords is written} -constraints haveFace -body {
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-info-default.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+  list [regexp {<xmp:CreatorTool>tclpdf [0-9.]+</xmp:CreatorTool>} $packet] \
+      [regexp {pdf:Keywords} $packet]
+} -result {1 0}
+
 cleanupTests

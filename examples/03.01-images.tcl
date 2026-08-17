@@ -202,9 +202,10 @@ $doc text "16 bit: DeviceRGB at 16 bits + SMask - a 16-bit /Mask is ignored by r
     so the key becomes a mask (${spent16} ms, decoded once)" -at {85 257} -width 62
 $doc text "the 8-bit file on white" -at {150 257}
 
-# What [image info] says about the transparency of each: none, colourKey (a
-# /Mask array, passed through) or softMask (computed) - and for the JPEGs the
-# component count and bit depth, which is all a JPEG has to say.
+# What [image info] says about the transparency of each - how it reaches the
+# file: none, colourKey (a /Mask array, passed through) or softMask (an
+# /SMask: the logo's alpha channel, or a computed mask) - and for the JPEGs
+# the component count and bit depth, which is all a JPEG has to say.
 foreach alias {tile keyed keyed16 logo} {
   set info [$doc image info $alias]
   puts "  $alias: transparency [dict get $info transparency],\

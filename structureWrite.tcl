@@ -56,6 +56,7 @@ oo::define ::tclpdf::document::document {
     # Page -> array of element references, indexed by MCID. Only the elements
     # know which marks they own, so it is collected by walking them.
     set parents {}
+    set identifiers {}
     foreach element $elements {
       foreach kid [dict get $element kids] {
         if {[lindex $kid 0] ne "mark"} {
@@ -150,6 +151,14 @@ oo::define ::tclpdf::document::document {
           lappend pairs $key [::tclpdf::pdfObj str [dict get $element $option]]
         }
       }
+      # The identifier is a byte string, not a text string (Table 323), and
+      # every element that has one goes into the IDTree of the root - the
+      # tree is required as soon as one element carries an ID (Table 322).
+      if {[dict get $element id] ne {}} {
+        lappend pairs ID [::tclpdf::pdfObj str [dict get $element id]]
+        dict set identifiers [dict get $element id] \
+            [$writer ref [dict get $element number]]
+      }
       # One owner gives a single dictionary, several give an array of them
       # (14.8.5). Written inline rather than as an indirect object: an
       # attribute dictionary is small, and one per cell as its own object
@@ -216,6 +225,16 @@ oo::define ::tclpdf::document::document {
         ParentTreeNextKey [expr {[my page count] + [llength $annotations]}]]
     if {$namespace ne {}} {
       lappend rootPairs Namespaces [::tclpdf::pdfObj arr [list $namespace]]
+    }
+    # A name tree (7.9.6): keys in lexical order of their bytes, one flat
+    # Names array - a document has a handful of identifiers, not thousands.
+    if {[dict size $identifiers]} {
+      set names {}
+      foreach key [lsort [dict keys $identifiers]] {
+        lappend names [::tclpdf::pdfObj str $key] [dict get $identifiers $key]
+      }
+      lappend rootPairs IDTree [::tclpdf::pdfObj dictionary \
+          [list Names [::tclpdf::pdfObj arr $names]]]
     }
     $writer put $rootNumber [::tclpdf::pdfObj dictionary $rootPairs]
 
@@ -319,4 +338,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structureWrite 1.0
+package provide tclpdf::structureWrite 1.1

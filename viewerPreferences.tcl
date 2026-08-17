@@ -130,6 +130,11 @@ oo::define ::tclpdf::document::document {
       }
       my RequireVersion [expr {[dict exists $since $option] ?
           [dict get $since $option] : 1.2}] "viewerPreferences -$option"
+      # One VALUE has a version of its own: UseOC names optional content,
+      # which is PDF 1.5 (ISO 32000-1 Table 150) - the key it sits in is 1.2.
+      if {$option eq "nonFullScreenPageMode" && $value eq "UseOC"} {
+        my RequireVersion 1.5 "viewerPreferences -nonFullScreenPageMode UseOC"
+      }
       dict set current $option $value
     }
     if {[my state viewerPreferences] eq {}} {
@@ -168,4 +173,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::viewerPreferences 1.1
+package provide tclpdf::viewerPreferences 1.2

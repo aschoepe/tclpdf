@@ -1448,7 +1448,7 @@ test structure-17.6 {the Span holds the mark and the brackets stay balanced} -bo
 
 # -- one paragraph over two pages -------------------------------------------
 
-test structure-16.1 {a paginated paragraph is one P with a marked-content reference per page} -body {
+test structure-23.1 {a paginated paragraph is one P with a marked-content reference per page} -body {
   set doc [tclpdf new -unit mm -compress 0 -typeArea {20 25}]
   $doc tagged 1
   $doc page add
@@ -1472,7 +1472,7 @@ test structure-16.1 {a paginated paragraph is one P with a marked-content refere
       [expr {$a != $b}]
 } -result {2 1 {1 1} 2 1 1}
 
-test structure-16.2 {a paginated artifact is declared again on every page} -body {
+test structure-23.2 {a paginated artifact is declared again on every page} -body {
   set doc [tclpdf new -unit mm -compress 0 -typeArea {20 25}]
   $doc tagged 1
   $doc page add
@@ -1755,6 +1755,47 @@ test structure-20.6 {an explicit Span is inline markup inside the paragraph} -bo
       [regexp {/S /P [^>]*/K \[0 \d+ 0 R 2\]} $bytes] \
       [regexp {/S /Span [^>]*/K 1 /Lang \(la\)} $bytes]
 } -result {2 1 {P Span} 0 1 1}
+
+test structure-20.7 {-id writes /ID and the IDTree; a Note gets an id of its own} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -id para-1 -script {$doc text "One" -at {20 20}}
+  $doc structure Note -script {$doc text "Two" -at {20 30}}
+  $doc structure Note -id my-note -script {$doc text "Three" -at {20 40}}
+  $doc structure P -script {$doc text "Four" -at {20 50}}
+  set path [::tclpdfTest::scratch structure-id.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/IDTree << /Names \[([^]]*)\] >>} $bytes -> names
+  list [regexp -all {/ID \(} $bytes] [regexp {/S /Note [^>]*/ID \(Note2\)|/ID \(Note2\)} $bytes] \
+      [regexp {/ID \(my-note\)} $bytes] [regexp {/ID \(para-1\)} $bytes] \
+      [regexp -all {\(Note2\) \d+ 0 R \(my-note\) \d+ 0 R \(para-1\) \d+ 0 R} $names]
+} -result {3 1 1 1 1}
+
+test structure-20.8 {a duplicate id is refused; without any id there is no IDTree} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -id twice -script {$doc text "One" -at {20 20}}
+  set refused [catch {$doc structure P -id twice -script {$doc text "Two" -at {20 30}}} msg]
+  $doc destroy
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -script {$doc text "One" -at {20 20}}
+  set path [::tclpdfTest::scratch structure-noid.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $refused [string match "*already exists*" $msg] [regexp {IDTree} $bytes] [regexp {/ID \(} $bytes]
+} -result {1 1 0 0}
 
 # --- the types of 2.0, and the types that stayed in 1.7 ---------------------
 

@@ -204,4 +204,17 @@ test viewerPreferences-3.4 {a key younger than the file's version is refused, na
       $window $direction [string match "*-direction needs PDF 1.3*" $third]
 } -result {0 1 1 1 1 0 1 1}
 
+test viewerPreferences-3.5 {UseOC is a 1.5 value inside a 1.2 key} -body {
+  set doc [tclpdf new -version 1.4]
+  $doc page add
+  set thumbs [catch {$doc viewerPreferences -nonFullScreenPageMode UseThumbs}]
+  set oc [catch {$doc viewerPreferences -nonFullScreenPageMode UseOC} msg]
+  $doc destroy
+  set doc [tclpdf new -version 1.5]
+  $doc page add
+  set ok [catch {$doc viewerPreferences -nonFullScreenPageMode UseOC}]
+  $doc destroy
+  list $thumbs $oc [string match "*UseOC needs PDF 1.5*" $msg] $ok
+} -result {0 1 1 0}
+
 cleanupTests

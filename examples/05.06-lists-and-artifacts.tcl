@@ -27,11 +27,13 @@
 # name their kind: -tag {Artifact Pagination Header} and its kin, at the top.
 #
 #   verapdf -f 3a          examples/out/05.06-lists-and-artifacts.pdf
-#   verapdf --flavour ua1  examples/out/05.06-lists-and-artifacts.pdf
 #   pdfinfo -struct-text   examples/out/05.06-lists-and-artifacts.pdf
 #
-# The last one is the interesting one: it reads the document the way a screen
-# reader does, out of the tree rather than off the page.
+# The document declares PDF/A-3a and nothing else; held against ua1 it
+# reports the two points a UA claim would add (the pdfuaid schema in the
+# metadata and DisplayDocTitle), which is what 5.7 is about. The second line
+# is the interesting one: it reads the document the way a screen reader does,
+# out of the tree rather than off the page.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -200,6 +202,52 @@ $doc structure Sect -script {
 }
 
 $doc line -from {20 176} -to {190 176} -width 0.4 -stroke {0.4 0.4 0.4}
+
+# -- what a list says about its own labels ----------------------------------
+
+# -numbering names the kind of label a list carries (ISO 32000 Table 347),
+# because the label is drawn text and "I." and "-" look the same to a writer.
+# The two lists above said nothing; these three say it out loud: UpperRoman
+# for roman numerals, Disc for a bullet, and None for a list that has no
+# labels at all - the same list as "Nach der Arbeit", now saying so.
+$doc structure Sect -script {
+  $doc font -family faceBold -size 11 -color black
+  $doc text "Was eine Liste über ihre Marken sagt" -at {20 196} -tag H2
+  $doc font -family face -size 9
+
+  $doc structure L -numbering UpperRoman -script {
+    set y 204
+    foreach {label text} {"I." "Einweisung" "II." "Probelauf" "III." "Freigabe"} {
+      $doc structure LI -script {
+        $doc structure Lbl -script { $doc text $label -at [list 20 $y] }
+        $doc structure LBody -script { $doc text $text -at [list 28 $y] }
+      }
+      incr y 5
+    }
+  }
+  $doc structure L -numbering Disc -script {
+    set y 204
+    foreach text {"Helm" "Brille" "Gehörschutz"} {
+      $doc structure LI -script {
+        $doc structure Lbl -script { $doc text "•" -at [list 78 $y] }
+        $doc structure LBody -script { $doc text $text -at [list 83 $y] }
+      }
+      incr y 5
+    }
+  }
+  $doc structure L -numbering None -script {
+    set y 204
+    foreach text {"Halle 2" "Halle 3" "Lager"} {
+      $doc structure LI -script { $doc text $text -at [list 136 $y] }
+      incr y 5
+    }
+  }
+
+  $doc font -family face -size 7 -color {0.5 0.5 0.5}
+  $doc text "-numbering UpperRoman" -at {20 222}
+  $doc text "-numbering Disc" -at {78 222}
+  $doc text "-numbering None" -at {136 222}
+}
 
 # A bare -tag Artifact, without a kind: the plain form, for a note that is
 # about the sheet rather than the text. The kind defaults to Layout.

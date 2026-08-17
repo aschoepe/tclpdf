@@ -202,18 +202,42 @@ test geometry-transform-10.3 {-scale {sx sy} scales the axes apart, one factor b
   }
 } -result {{2.00 0.00 0.00 0.50 0.00 0.00} {3.00 0.00 0.00 3.00 0.00 0.00}}
 
-test geometry-transform-10.4 {-translate, -skew and -scale together, in the order the manual states} -body {
-  # translate, then skew, then scale - applied to the points in that order,
-  # so the displacement goes through the skew and the scale as well: e is
-  # 28.35 doubled, f is -56.69 skewed by tan(10 deg) times 28.35 and then
-  # doubled. Measured, and held here so that a change of the order shows.
+test geometry-transform-10.4 {-translate, -skew and -scale together compose like the sequence of calls} -body {
+  # One call with three parts is the same matrix as three calls in the order
+  # translate, skew, scale - a point is scaled, then skewed, then displaced,
+  # so the displacement stays 10 by 20 mm: e is 28.35, not 28.35 doubled.
+  # Measured the other way round before 2026-08-17 (56.69 -103.39).
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc transform -translate {10 20} -skew {10 0} -scale {2 2}
+  set one [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -translate {10 20}
+  $doc transform -skew {10 0}
+  $doc transform -scale {2 2}
+  set steps [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {^([-0-9. ]+) cm$} [string trim $one] -> matrix
+  # the three cm of the sequence, multiplied as a reader multiplies them:
+  # each new cm goes in FRONT of the CTM (8.3.4), so a point meets the last
+  # one first
+  set product [::tclpdf::geometry identity]
+  foreach {a b c d e f} [regexp -all -inline {[-0-9.]+} $steps] {
+    set product [::tclpdf::geometry multiply [list $a $b $c $d $e $f] $product]
+  }
+  list [geometryRound $matrix] [geometryRound $product]
+} -result {{2.00 0.35 0.00 2.00 28.35 -56.69} {2.00 0.35 0.00 2.00 28.35 -56.69}}
+
+test geometry-transform-10.5 {-translate with -rotate: the displacement is not turned} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -translate {10 0} -rotate 90
   set stream [::tclpdfTest::content $doc]
   $doc destroy
   regexp {^([-0-9. ]+) cm$} [string trim $stream] -> matrix
   geometryRound $matrix
-} -result {2.00 0.35 0.00 2.00 56.69 -103.39}
+} -result {0.00 1.00 -1.00 0.00 28.35 0.00}
 
 cleanupTests

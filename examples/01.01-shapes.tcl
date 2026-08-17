@@ -176,7 +176,11 @@ $doc text "open" -at {265 55} -align center -size 8
 # factor or {sx sy}; -skew two angles, the second of which is the slant of an
 # italic-looking stamp; -matrix takes the six raw cm operands - points, origin
 # at the bottom left - and ignores every other option, for a caller who has a
-# matrix already. -at is the point to scale, turn or skew about.
+# matrix already. -at is the point to scale, turn or skew about. Several
+# parts in one call compose like the same calls in sequence - translate,
+# rotate, skew, scale - so the square under "-translate {6 0} -rotate 45"
+# is turned about its centre and then moved 6 mm to the right, not moved
+# along a turned axis.
 $doc font -size 6
 set y 62
 foreach {label options} [list \
@@ -184,6 +188,7 @@ foreach {label options} [list \
     "-scale 0.6" {-scale 0.6} \
     "-scale {1.6 0.5}" {-scale {1.6 0.5}} \
     "-skew {0 25}" {-skew {0 25}} \
+    "-translate {6 0} -rotate 45" {-translate {6 0} -rotate 45} \
     "-matrix (a mirror in x)" {matrix}] {
   $doc rect -at [list 12 $y] -size {12 12} -stroke {0.7 0.7 0.7} -width 0.2
   $doc save
@@ -268,7 +273,8 @@ foreach {label options} {
 }
 # -dash none and -dash solid both mean an unbroken line - and they have to
 # say so: a dash set by [style] is graphics state and holds until something
-# takes it back. Between the two, a line without -dash comes out dashed.
+# takes it back. Between the two, a line without -dash comes out dashed -
+# and all three come out grey, the stroke [style] set, without naming it.
 $doc save
 $doc style -dash {2 1} -width 0.6 -stroke gray
 $doc line -from {180 174} -to {285 174} -dash none

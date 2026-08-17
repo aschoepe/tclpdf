@@ -118,7 +118,7 @@ namespace eval ::tclpdf::xmp {
   declare rdf [dict get $namespaces rdf] {RDF Description Alt Bag Seq li}
   declare dc [dict get $namespaces dc] {title creator description language}
   declare xmp [dict get $namespaces xmp] {CreateDate ModifyDate CreatorTool}
-  declare pdf [dict get $namespaces pdf] {Producer}
+  declare pdf [dict get $namespaces pdf] {Producer Keywords}
 }
 
 # The moment as XMP wants it: ISO 8601 with the zone offset as +HH:MM, where
@@ -183,6 +183,14 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   set author [dict get $info author]
   set subject [dict get $info subject]
   set producer [dict get $info producer]
+  # ISO 32000-1 Table 317 pairs the Info entries with the packet: Creator is
+  # xmp:CreatorTool, Producer is pdf:Producer, Keywords is pdf:Keywords. The
+  # tool that first created the document is the caller's application when it
+  # names one, and this package when it does not - CreatorTool used to carry
+  # the producer in both cases, so a document with "info Creator" set said
+  # two different things about itself.
+  set creator [expr {[dict exists $info creator] ? [dict get $info creator] : {}}]
+  set keywords [expr {[dict exists $info keywords] ? [dict get $info keywords] : {}}]
   set language [expr {[dict exists $info language] ? [dict get $info language] : {}}]
   # The moment is HANDED IN by the caller, who shares it with the Info
   # dictionary's CreationDate - two clock reads here and there could straddle
@@ -262,10 +270,13 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   Describe $rdf xmp [dict get $namespaces xmp] {
     Tag_xmp:CreateDate { Text $now }
     Tag_xmp:ModifyDate { Text $now }
-    Tag_xmp:CreatorTool { Text $producer }
+    Tag_xmp:CreatorTool { Text [expr {$creator ne {} ? $creator : $producer}] }
   }
   Describe $rdf pdf [dict get $namespaces pdf] {
     Tag_pdf:Producer { Text $producer }
+    if {$keywords ne {}} {
+      Tag_pdf:Keywords { Text $keywords }
+    }
   }
 
   # Parsed, not appended as text: a raw contribution comes from a caller and
@@ -387,10 +398,11 @@ oo::define ::tclpdf::document::document {
         [dict create \
             title [my info Title] author [my info Author] \
             subject [my info Subject] producer [my info Producer] \
+            creator [my info Creator] keywords [my info Keywords] \
             language [my language]] \
         [my state xmpRaw] [my Created]]]
     return
   }
 }
 
-package provide tclpdf::xmp 1.1
+package provide tclpdf::xmp 1.2

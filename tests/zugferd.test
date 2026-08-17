@@ -946,6 +946,21 @@ test zugferd-9.2 {zugferd profile on the document reads BT-24 without attaching 
   list $profile $state
 } -result {{EN 16931} {}}
 
+test zugferd-9.3 {zugferd state carries the relationship that was written} -constraints haveInvoice -body {
+  set out {}
+  foreach {options expected} {{} Alternative {-profile MINIMUM} Data {-relationship Source} Source} {
+    set doc [archivable $face]
+    $doc zugferd $invoice {*}$options
+    lappend out [dict get [$doc zugferd state] relationship]
+    set path [::tclpdfTest::scratch zugferd-state-rel.pdf]
+    $doc write $path
+    $doc destroy
+    lappend out [regexp "/AFRelationship /$expected" [::tclpdfTest::readBytes $path]]
+    file delete $path
+  }
+  set out
+} -result {Alternative 1 Data 1 Source 1}
+
 # -- pdfa -identifier and pdfa state -----------------------------------------
 
 test zugferd-10.1 {-identifier overrides the profile's own name in the output intent} \
@@ -1113,5 +1128,21 @@ test zugferd-11.5 {-compress is off by default and Flate-compresses the XML when
   lappend result [regexp {<rsm:CrossIndustryInvoice} $bytes]
   return $result
 } -result {{0 1 1} {1 1 0} 1}
+
+test zugferd-11.6 {-profile and -type refuse what is not a level or a type} -constraints haveInvoice -body {
+  set out {}
+  foreach {option value} {-profile Basic -profile EXTENDET -type invoice -type QUOTE} {
+    set doc [archivable $face]
+    lappend out [catch {$doc zugferd $invoice $option $value} msg] \
+        [regexp {is not a (conformance level|document type) - use one of: } $msg]
+    $doc destroy
+  }
+  # XRECHNUNG is a level: it is what the reader answers for an XRechnung
+  # identifier, so an override may say it too
+  set doc [archivable $face]
+  lappend out [$doc zugferd $invoice -profile XRECHNUNG]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 1 1 1 XRECHNUNG}
 
 cleanupTests

@@ -31,10 +31,15 @@ oo::define ::tclpdf::document::document {
 
   method line {args} {
     set options [::tclpdf::option parse {
-      from {} to {} stroke black width {} dash {} cap {} join {} miter {} opacity {} blend {}
+      from {} to {} stroke {} width {} dash {} cap {} join {} miter {} opacity {} blend {}
     } $args]
     if {[dict get $options from] eq {} || [dict get $options to] eq {}} {
       return -code error "tclpdf: line needs -from {x y} and -to {x y}"
+    }
+    # A line is drawn in black unless told otherwise - by its own -stroke, or
+    # by the stroke colour [style] set before it.
+    if {[dict get $options stroke] eq {} && [my streamState styleStroke] eq {}} {
+      dict set options stroke black
     }
     lassign [my coords {*}[dict get $options from]] x0 y0
     lassign [my coords {*}[dict get $options to]] x1 y1
@@ -157,13 +162,19 @@ oo::define ::tclpdf::document::document {
   # A cubic Bezier: -from, two control points, -to.
   method curve {args} {
     set options [::tclpdf::option parse {
-      from {} c1 {} c2 {} to {} fill {} stroke black width {} dash {}
+      from {} c1 {} c2 {} to {} fill {} stroke {} width {} dash {}
       cap {} join {} miter {} opacity {} blend {} rule nonzero close 0
     } $args]
     foreach key {from c1 c2 to} {
       if {[dict get $options $key] eq {}} {
         return -code error "tclpdf: curve needs -from, -c1, -c2 and -to"
       }
+    }
+    # Stroked in black unless told otherwise, as a line is - by its own
+    # options, or by a colour [style] set before it.
+    if {[dict get $options stroke] eq {} && [dict get $options fill] eq {}
+        && [my streamState styleStroke] eq {} && [my streamState styleFill] eq {}} {
+      dict set options stroke black
     }
     lassign [my coords {*}[dict get $options from]] x0 y0
     set path "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\n"
@@ -361,4 +372,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shape 1.2
+package provide tclpdf::shape 1.3

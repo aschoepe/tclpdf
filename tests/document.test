@@ -549,4 +549,27 @@ test document-options-15.6 {cget -compress answers the option, and the file foll
   list $plain $unfiltered $deflated $filtered
 } -result {0 0 1 1}
 
+test document-options-15.7 {a two-number format is turned when the document asked for an orientation} -body {
+  set out {}
+  foreach args {{-format {55 88}} {-format {55 88} -orientation quer} {-format {88 55} -orientation portrait} {-orientation landscape}} {
+    set doc [tclpdf new {*}$args]
+    $doc page add
+    lappend out [lmap v [$doc page size] {format %.0f $v}]
+    # a pair on page add follows the document's stated orientation as well,
+    # and the page add's own orientation wins over both
+    $doc page add -format {55 88}
+    lappend out [lmap v [$doc page size] {format %.0f $v}]
+    $doc page add -format {55 88} -orientation portrait
+    lappend out [lmap v [$doc page size] {format %.0f $v}]
+    $doc destroy
+  }
+  # configure counts as asking, too
+  set doc [tclpdf new]
+  $doc configure -orientation landscape
+  $doc page add -format {55 88}
+  lappend out [lmap v [$doc page size] {format %.0f $v}]
+  $doc destroy
+  set out
+} -result {{55 88} {55 88} {55 88} {88 55} {88 55} {55 88} {55 88} {55 88} {55 88} {297 210} {88 55} {55 88} {88 55}}
+
 cleanupTests

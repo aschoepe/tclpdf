@@ -73,6 +73,14 @@ namespace eval ::tclpdf::zugferd {
   # The file names the standards allow. The name is not decoration - a reader
   # looks the attachment up by it.
   variable names {factur-x.xml zugferd-invoice.xml xrechnung.xml order-x.xml}
+
+  # The conformance levels a -profile override may name: the five of the
+  # table above and XRECHNUNG, which [profile] answers for an XRechnung
+  # identifier. And the two document types of fx:DocumentType. Both used to
+  # go into the XMP verbatim, whatever they said - measured 2026-08-17, a
+  # typo became a conformance level nobody validates against.
+  variable levels {MINIMUM {BASIC WL} BASIC {EN 16931} EXTENDED XRECHNUNG}
+  variable types {INVOICE ORDER}
 }
 
 oo::define ::tclpdf::document::document {
@@ -118,6 +126,13 @@ oo::define ::tclpdf::document::document {
     set profile [dict get $options profile]
     if {$profile eq {}} {
       set profile [::tclpdf::zugferd profile $bytes]
+    } elseif {$profile ni $::tclpdf::zugferd::levels} {
+      return -code error "tclpdf: \"$profile\" is not a conformance level -\
+          use one of: [join $::tclpdf::zugferd::levels {, }]"
+    }
+    if {[dict get $options type] ni $::tclpdf::zugferd::types} {
+      return -code error "tclpdf: \"[dict get $options type]\" is not a\
+          document type - use one of: [join $::tclpdf::zugferd::types {, }]"
     }
 
     # The default /AFRelationship follows the profile, because Factur-X binds
@@ -164,7 +179,7 @@ oo::define ::tclpdf::document::document {
 
     my state zugferd [dict create name $name profile $profile \
         type [dict get $options type] version [dict get $options version] \
-        bytes [string length $bytes]]
+        relationship $relationship bytes [string length $bytes]]
     return $profile
   }
 }
@@ -258,4 +273,4 @@ proc ::tclpdf::zugferd::properties {name type version conformance} {
   return $xml
 }
 
-package provide tclpdf::zugferd 1.1
+package provide tclpdf::zugferd 1.2

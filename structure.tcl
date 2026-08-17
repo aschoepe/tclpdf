@@ -285,7 +285,7 @@ oo::define ::tclpdf::document::document {
   method structure {type args} {
     set options [::tclpdf::option parse {
       alt {} lang {} title {} actualText {} expansion {} script {} name {}
-      scope {} numbering {} bbox {} colSpan {} rowSpan {}
+      id {} scope {} numbering {} bbox {} colSpan {} rowSpan {}
     } $args "structure"]
     set script [dict get $options script]
     if {$script eq {}} {
@@ -338,7 +338,7 @@ oo::define ::tclpdf::document::document {
       dict set named [dict get $options name] [llength [my state structure]]
       my state structureNames $named
     }
-    foreach key [list alt lang title actualText expansion \
+    foreach key [list alt lang title actualText expansion id \
         {*}[dict keys $attributes]] {
       if {![dict exists $options $key]} {
         dict set options $key {}
@@ -351,11 +351,31 @@ oo::define ::tclpdf::document::document {
     set stack [my state structureStack]
     set id [llength $elements]
     set parent [expr {[llength $stack] ? [lindex $stack end] : {}}]
+    # The element identifier (14.7.2, /ID) - the string a reader looks the
+    # element up by in the IDTree; distinct from -name, which is this
+    # package's own handle for destinations. -id gives one to any element,
+    # and a Note gets one on its own when none was given: PDF/UA-1 asks for
+    # it (7.9, "Note tag shall have ID entry"; veraPDF checks) and there is
+    # nothing to decide about its value.
+    set identifier [dict get $options id]
+    if {$identifier eq {} && $type eq "Note"} {
+      set identifier "Note[expr {$id + 1}]"
+    }
+    if {$identifier ne {}} {
+      set known [my state structureIds]
+      if {[dict exists $known $identifier]} {
+        return -code error "tclpdf: a structure element with the id\
+            \"$identifier\" already exists - an id has to be unique in the\
+            document (ISO 32000-1 14.7.2)"
+      }
+      dict set known $identifier $id
+      my state structureIds $known
+    }
     lappend elements [dict create type $type parent $parent kids {} \
         alt [dict get $options alt] lang [dict get $options lang] \
         title [dict get $options title] \
         actualText [dict get $options actualText] \
-        expansion [dict get $options expansion] \
+        expansion [dict get $options expansion] id $identifier \
         attributes [my StructureAttributes $type $options]]
     if {$parent ne {}} {
       set entry [lindex $elements $parent]
@@ -841,4 +861,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structure 1.2
+package provide tclpdf::structure 1.3

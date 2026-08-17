@@ -71,6 +71,10 @@ $doc info Keywords "calibration, ISO 2360, archival"
 # back; the first is ours to say.
 $doc info Creator "Calibration laboratory certificate writer"
 puts "  produced by: [$doc info Producer]"
+# The same six entries go into the XMP packet under the properties ISO 32000-1
+# Table 317 pairs them with - Creator as xmp:CreatorTool, Keywords as
+# pdf:Keywords - so a reader that looks at either half of the file sees the same.
+puts "  creator: [$doc info Creator]; keywords: [$doc info Keywords]"
 
 # The language belongs to an archival document as much as the fonts do: it is
 # what tells a reader how to pronounce the text and how to hyphenate it.

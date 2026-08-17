@@ -184,6 +184,103 @@ $doc line -from {20 186} -to {190 186} -width 0.4 -stroke {0.4 0.4 0.4}
 
 exampleFooter $doc face
 
+# -- a second page: the rest of what 2.0 added ------------------------------
+
+# Title, Aside, FENote, Strong and Code are on page 1. What is left of the
+# 2.0 vocabulary is here, each on a [structure] call of its own: the heading
+# levels past six, Em beside Strong, Sub for a subscript, and
+# DocumentFragment for a piece of another document carried inside this one.
+$doc page add
+
+# -- H7 to H10 --------------------------------------------------------------
+
+# 1.7 stopped at H6. 2.0 lifted the limit, and a deep document may say so -
+# but no level may be skipped on the way down (UA-1 7.4.2, and the write
+# checks it), so the ladder starts where page 1 stopped, at H2, and takes
+# every step to H10. The type is named on the call; the size is only how it
+# looks.
+$doc font -family faceBold -size 11 -color black
+$doc text "Ten heading levels" -at {20 25} -tag H2
+
+$doc font -family face -size 10
+$doc text "A heading level is the one thing a listener has to tell how deep\
+    in the document they are. Six were enough for most documents and are\
+    still what page 1 uses; a standard with parts, clauses, subclauses and\
+    numbered paragraphs runs out of them." -at {20 33} -width 170
+
+$doc font -family faceBold -size 10
+$doc structure H3 -script { $doc text "Part 1 - H3" -at {20 50} }
+$doc structure H4 -script { $doc text "Clause 1.2 - H4" -at {24 56} }
+$doc font -size 9
+$doc structure H5 -script { $doc text "Subclause 1.2.3 - H5" -at {28 62} }
+$doc structure H6 -script { $doc text "Paragraph 1.2.3.4 - H6" -at {32 68} }
+$doc font -size 8
+$doc structure H7 -script {
+  $doc text "Item 1.2.3.4.5 - H7, the first level 1.7 did not have" -at {36 74}
+}
+$doc structure H8 -script { $doc text "Point 1.2.3.4.5.6 - H8" -at {40 80} }
+$doc structure H9 -script { $doc text "Note 1.2.3.4.5.6.7 - H9" -at {44 86} }
+$doc structure H10 -script {
+  $doc text "Example 1.2.3.4.5.6.7.8 - H10, the last one" -at {48 92}
+}
+
+# -- Em and Sub, both inline ------------------------------------------------
+
+$doc font -family faceBold -size 11
+$doc text "Em and Sub" -at {20 108} -tag H2
+
+# Em is emphasis, Strong is importance - two words a reader says differently.
+# Both are inline and sit inside the paragraph, never beside it. Sub is a
+# subscript; the -rise on the text call lowers the glyph, the Sub says what
+# the lowering means, and without it "H2O" is read out as a number.
+$doc structure P -script {
+  $doc font -family face -size 10 -color black
+  set lead "Emphasis is a matter of tone: this word is "
+  $doc text $lead -at {20 116}
+  $doc structure Em -script {
+    $doc text "emphasised" -at [list [expr {20 + [$doc textWidth $lead]}] 116]
+  }
+  $doc text ", and Strong on page 1 was important." \
+      -at [list [expr {20 + [$doc textWidth "${lead}emphasised"]}] 116]
+}
+$doc structure P -script {
+  $doc font -family face -size 10
+  set lead "The coolant is plain water, H"
+  $doc text $lead -at {20 124}
+  $doc structure Sub -script {
+    $doc text "2" -at [list [expr {20 + [$doc textWidth $lead]}] 124] \
+        -size 7 -rise -1.5
+  }
+  $doc text "O, and nothing else." \
+      -at [list [expr {20 + [$doc textWidth $lead] + [$doc textWidth "2" -size 7]}] 124]
+}
+
+# -- DocumentFragment ------------------------------------------------------
+
+$doc font -family faceBold -size 11
+$doc text "A fragment of another document" -at {20 140} -tag H2
+
+$doc font -family face -size 10
+$doc text "A quotation is part of the argument; a DocumentFragment is a piece\
+    of another document carried along whole - an excerpt from example 5.7,\
+    here, in its own language. The frame around it is decoration and an\
+    artifact; the fragment holds a paragraph, not the frame." \
+    -at {20 148} -width 170
+
+$doc rect -at {20 164} -size {170 18} -stroke {0.6 0.6 0.65} -width 0.3
+$doc structure DocumentFragment -lang de-DE -title "Aus Beispiel 5.7" -script {
+  $doc structure P -script {
+    $doc font -family face -size 9 -color {0.25 0.25 0.3}
+    $doc text "Titel, Sprache, Schrifteinbettung, Überschriftenfolge,\
+        Tabellenform und die Beschreibung jedes Verweises. Die Prüfung läuft\
+        einmal und meldet alles, was fehlt - nicht den ersten Punkt und dann\
+        wieder von vorn." -at {23 170} -width 164
+  }
+}
+$doc font -family face -size 10 -color black
+
+exampleFooter $doc face
+
 $doc write $target
 set state [$doc ua state]
 puts "  written: $target ([file size $target] bytes), [$doc page count] page(s)"

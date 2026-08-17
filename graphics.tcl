@@ -36,13 +36,25 @@ oo::define ::tclpdf::document::document {
 
   # q and Q (8.4.2). Always in pairs - an unbalanced q leaves the rest of the
   # page in whatever state the last shape left behind.
+  # q and Q, and with them the colours [style] set: a reader restores its
+  # colour on Q, so what this package remembers about them has to follow.
   method save {} {
     my content "q\n"
+    set stack [my streamState styleStack]
+    lappend stack [list [my streamState styleFill] [my streamState styleStroke]]
+    my streamState styleStack $stack
     return
   }
 
   method restore {} {
     my content "Q\n"
+    set stack [my streamState styleStack]
+    if {[llength $stack]} {
+      lassign [lindex $stack end] fill stroke
+      my streamState styleFill $fill
+      my streamState styleStroke $stroke
+      my streamState styleStack [lrange $stack 0 end-1]
+    }
     return
   }
 
@@ -63,8 +75,16 @@ oo::define ::tclpdf::document::document {
   # it with -translate instead mirrors the y axis a second time and the shape
   # lands somewhere else entirely.
   #
-  # Applied in the order translate, rotate, skew, scale. Wrap it in save and
-  # restore, or it stays in force for the rest of the page.
+  # The parts compose as if called one after another - translate, then
+  # rotate, then skew, then scale - which is what a sequence of cm operators
+  # does: a point drawn afterwards is scaled first, skewed, turned, and
+  # displaced LAST, so the displacement is in unscaled, unturned document
+  # units (the reading Canvas and SVG give "translate() rotate()" as well).
+  # Measured before 2026-08-17 the order was the other way round - the
+  # displacement went through the rotation and the scale, and
+  # "-translate {10 20} -scale 2" moved by 20 and 40 - although the manual
+  # promised the sequence. Wrap it in save and restore, or it stays in force
+  # for the rest of the page.
   method transform {args} {
     set options [::tclpdf::option parse {
       at {} translate {} rotate {} scale {} skew {} matrix {}
@@ -78,28 +98,24 @@ oo::define ::tclpdf::document::document {
       # reason -scale refuses a zero factor below.
       set matrix [::tclpdf::geometry check [dict get $options matrix] transform]
     } else {
-      set matrix [::tclpdf::geometry identity]
-      if {[dict get $options at] ne {}} {
-        # To the origin FIRST: a point q ends up at (q - p) rotated, plus p.
-        # The other order rotates the whole page about the origin and then
-        # shifts, which puts the shape somewhere else entirely.
-        lassign [my coords {*}[dict get $options at]] px py
-        set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry translate [expr {-$px}] [expr {-$py}]]]
-      }
+      # Every part is checked and built first, and composed afterwards in
+      # the order the points go through them (see above): the values are
+      # refused before anything is written, whatever their position.
+      set translate {}
+      set rotate {}
+      set skew {}
+      set scale {}
       if {[dict get $options translate] ne {}} {
         lassign [dict get $options translate] dx dy
-        set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry translate [my distance $dx] [expr {-[my distance $dy]}]]]
+        set translate [::tclpdf::geometry translate [my distance $dx] \
+            [expr {-[my distance $dy]}]]
       }
       if {[dict get $options rotate] ne {}} {
-        set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry rotate [dict get $options rotate]]]
+        set rotate [::tclpdf::geometry rotate [dict get $options rotate]]
       }
       if {[dict get $options skew] ne {}} {
         lassign [dict get $options skew] alpha beta
-        set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry skew $alpha $beta]]
+        set skew [::tclpdf::geometry skew $alpha $beta]
       }
       if {[dict get $options scale] ne {}} {
         set scale [dict get $options scale]
@@ -116,16 +132,30 @@ oo::define ::tclpdf::document::document {
                 not \"$factor\""
           }
         }
+        set scale [::tclpdf::geometry scale {*}$scale]
+      }
+      set matrix [::tclpdf::geometry identity]
+      if {[dict get $options at] ne {}} {
+        # To the origin FIRST: a point q ends up at (q - p) transformed, plus
+        # p. The other order turns the whole page about the origin and then
+        # shifts, which puts the shape somewhere else entirely.
+        lassign [my coords {*}[dict get $options at]] px py
         set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry scale {*}$scale]]
+            [::tclpdf::geometry translate [expr {-$px}] [expr {-$py}]]]
+      }
+      # Scale, skew, rotate, translate: the point meets them in this order,
+      # which is the sequence "translate, rotate, skew, scale" of cm calls.
+      foreach part [list $scale $skew $rotate $translate] {
+        if {$part ne {}} {
+          set matrix [::tclpdf::geometry multiply $matrix $part]
+        }
       }
       if {[dict get $options at] ne {}} {
         # And back again - the counterpart to the shift above. Both negative
-        # puts the shape off the page; both positive rotates about the origin
+        # puts the shape off the page; both positive turns about the origin
         # and then moves. Neither produces an error, only a shape in the wrong
         # place, which is why the pair is written out here rather than folded
         # into the loop above.
-        lassign [my coords {*}[dict get $options at]] px py
         set matrix [::tclpdf::geometry multiply $matrix \
             [::tclpdf::geometry translate $px $py]]
       }
@@ -135,11 +165,23 @@ oo::define ::tclpdf::document::document {
   }
 
   # Set colour, line width, dash pattern, caps and joins without drawing.
+  #
+  # The colours are remembered as well as written: a shape that names no
+  # colour of its own paints with them (see GraphicsPaint), which is what
+  # "in force until changed" has to mean for a colour. Measured before
+  # 2026-08-17 the operators went out and nothing ever painted with them - a
+  # bare rect after "style -fill red" ended in n.
   method style {args} {
-    my content [my GraphicsStyle [::tclpdf::option parse {
+    set options [::tclpdf::option parse {
       fill {} stroke {} width {} dash {} cap {} join {} miter {} opacity {}
       blend {}
-    } $args] 0 style]
+    } $args]
+    my content [my GraphicsStyle $options 0 style]
+    foreach which {fill stroke} {
+      if {[dict get $options $which] ne {}} {
+        my streamState style[string totitle $which] [dict get $options $which]
+      }
+    }
     return
   }
 
@@ -406,8 +448,14 @@ oo::define ::tclpdf::document::document {
   # The painting operator. Six spellings, and the wrong one draws nothing at
   # all without any error - which is why this is derived rather than typed.
   method GraphicsPaint {options {guard 0}} {
-    set hasFill [expr {[dict exists $options fill] && [dict get $options fill] ne {}}]
-    set hasStroke [expr {[dict exists $options stroke] && [dict get $options stroke] ne {}}]
+    # A shape paints what it names - and what [style] named before it, for
+    # the sides it left unnamed: the colour operators are in the stream
+    # already, only the painting operator has to know. A shape that cannot
+    # take a side at all (a line has no -fill) is not given it either.
+    set hasFill [expr {[dict exists $options fill]
+        && ([dict get $options fill] ne {} || [my streamState styleFill] ne {})}]
+    set hasStroke [expr {[dict exists $options stroke]
+        && ([dict get $options stroke] ne {} || [my streamState styleStroke] ne {})}]
     set evenOdd [expr {[dict exists $options rule]
         && [dict get $options rule] eq "evenodd"}]
     # The counterpart to the "q" GraphicsStyle wrote - the same condition, so
@@ -437,4 +485,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.3
+package provide tclpdf::graphics 1.4

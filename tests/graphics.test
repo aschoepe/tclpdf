@@ -1027,4 +1027,50 @@ test graphics-state-15.3 {style takes stroke, cap, join, opacity and blend, ungu
   list $content $names
 } -result [list "1 0 0 RG\n/GS0_5b gs\n/GBMultiply gs\n1 J\n2 j\n" {GBMultiply GS0_5b}]
 
+test graphics-state-15.4 {style colours paint the shapes that name none of their own} -body {
+  # -fill and -stroke on style are in force until changed, like the width: a
+  # bare rect after "style -fill red -stroke blue" fills AND strokes, one
+  # with its own -fill fills green and still strokes blue (the side it left
+  # unnamed), and a line has no fill to be given.
+  set doc [tclpdf new]
+  $doc page add
+  $doc style -fill red -stroke blue
+  $doc rect -at {10 10} -size {20 20}
+  $doc rect -at {40 10} -size {20 20} -fill green
+  $doc line -from {10 40} -to {30 40}
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength [lsearch -all $operators B]] [llength [lsearch -all $operators f]] \
+      [llength [lsearch -all $operators S]] [llength [lsearch -all $operators n]]
+} -result {2 0 1 0}
+
+test graphics-state-15.5 {style colours follow save/restore, stay out of a form, and end with the page} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc save
+  $doc style -fill red
+  $doc rect -at {10 10} -size {20 20}
+  $doc restore
+  # after Q the reader has forgotten the red, and so has the package
+  $doc rect -at {40 10} -size {20 20}
+  set page1 [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  # a form is its own stream: the style of the page does not reach into it,
+  # and one set inside it does not leak out
+  $doc style -stroke blue
+  $doc form create box -size {30 30} -script {
+    $doc rect -at {1 1} -size {10 10}
+    $doc style -fill green
+  }
+  $doc rect -at {70 10} -size {20 20}
+  set page1b [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  # a new page starts fresh
+  $doc page add
+  $doc rect -at {10 10} -size {20 20}
+  set page2 [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength [lsearch -all $page1 f]] [llength [lsearch -all $page1 n]] \
+      [llength [lsearch -all $page1b S]] [llength [lsearch -all $page1b B]] \
+      [llength [lsearch -all $page2 n]] [llength [lsearch -all $page2 S]]
+} -result {1 1 1 0 1 0}
+
 cleanupTests

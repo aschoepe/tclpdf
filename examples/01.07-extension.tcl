@@ -124,7 +124,9 @@ proc ::example::afterWrite {doc path} {
 # and "hoch" is the German spelling of portrait, accepted next to it. The
 # version is the default, said anyway. -compress 0 leaves every stream plain,
 # the record included: open the file in a text editor and the record is
-# there to read.
+# there to read. The format is a pair of numbers, and -orientation hoch says
+# which way round they go - a pair is turned only when an orientation is asked
+# for, so {297 210} -orientation hoch would come out 210 by 297 as well.
 set doc [tclpdf new -unit mm -format {210 297} -orientation hoch \
     -version 1.7 -compress 0]
 $doc info Title "Extending tclpdf"

@@ -368,7 +368,13 @@ oo::define ::tclpdf::document::document {
       dict set result colorType [dict get $parsed colorType]
       dict set result bitDepth [dict get $parsed bitDepth]
       dict set result alpha [::tclpdf::imagePng hasAlpha $parsed]
-      dict set result transparency [::tclpdf::imagePng transparency $parsed]
+      # What the FILE gets: an alpha channel is written as an /SMask, exactly
+      # as a partial palette is - so it answers softMask here, although the
+      # PNG-side classification below it is about tRNS chunks and calls a
+      # channel "none". Measured 2026-08-17: a caller reading "transparency
+      # none" for a picture that plainly has soft edges was misled.
+      dict set result transparency [expr {[::tclpdf::imagePng hasAlpha $parsed]
+          ? "softMask" : [::tclpdf::imagePng transparency $parsed]}]
     } else {
       dict set result components [dict get $parsed components]
       dict set result bitDepth [dict get $parsed bitsPerComponent]
@@ -482,4 +488,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.4
+package provide tclpdf::image 1.5

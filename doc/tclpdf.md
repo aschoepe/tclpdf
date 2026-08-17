@@ -28,13 +28,15 @@ The core needs nothing beyond Tcl itself. In particular **zlib** is a built-in c
 
 # OPTIONAL PACKAGES
 
+tclpdf loads and runs with nothing but Tcl 8.6.11 or later. One package matters, for two things:
+
 **tdom**
 
-: **Required for the metadata packet**: the XMP is built with it, so every document that declares PDF/A, PDF/UA or ZUGFeRD needs tdom, and the module that writes those declarations refuses to load without it. A document that makes no such claim never loads that module and runs without tdom.
+: **The metadata packet needs it**: the XMP is built with it, so every document that declares PDF/A, PDF/UA or ZUGFeRD needs tdom, and the module that writes those declarations refuses to load without it. A document that makes no such claim never loads that module and runs without tdom.
 
   The SVG module uses it for parsing where it is present, and prefers it: measured, tdom parses 27 to 48 times faster than the parser tclpdf brings along, and it rejects an entity expansion bomb that the built-in one would try to expand. Without tdom the package still reads SVG, through its own element tree parser — the same four accessors sit in front of both, so nothing else in the package can tell the difference.
 
-Nothing else is optional, because nothing else is used. Barcodes need no entry on this list: **tzint** encodes into SVG and `svg -data` draws it — see "Barcodes" below. Encryption is planned work; this page will name the package it needs once it exists.
+There is no other optional package; barcodes need none either, because tzint encodes into SVG and `svg -data` draws it — see "Barcodes" below.
 
 # COMMANDS
 
@@ -44,7 +46,7 @@ Nothing else is optional, because nothing else is used. Barcodes need no entry o
 
 : Creates a document object and returns its command name. Options: **-unit** (`mm`, the default, or `pt`, `cm`, `in`; `px` is also accepted and is the same as `pt`), **-format** (a page format name such as `a4`, or a pair of numbers in the document unit), **-orientation** (`portrait` or `landscape`; `hoch` and `quer` are also accepted), **-version** (`1.0` through `1.7`, or `2.0`; default `1.7`), **-compress** (`1` by default — content streams are deflated; `0` writes them plainly, which is for reading the output, not for shipping it) and **-typeArea** (the margins flowing text and breaking tables keep, `{top bottom}` or `{top bottom left right}` in the document unit; without it five percent of the page height top and bottom and of the page width at the sides — see **page typeArea**, **text -height max** and **table**). Every feature is checked against the version before it is written: an `opacity` in a document created with `-version 1.3`, a shading in a `1.2` file, an embedded font in a `1.1` file are refused with a message naming the feature and the version it needs (`opacity needs PDF 1.4 - this document is written as PDF 1.3`), rather than raised behind the caller's back — whoever set the version said what the file may contain. The version is never raised silently, with three exceptions that are claims rather than features: `pdfa` and `ua -part 1` lift the file to 1.7 and `ua -part 2` to 2.0. Below `1.2` there is no FlateDecode, so a `1.0` or `1.1` document needs `-compress 0` and can hold neither embedded fonts nor PNG pictures; the refusal comes when the first stream is written.
 
-  A size given as two numbers is taken as it stands. It is turned only if an orientation is asked for as well — `{88 55}` stays 88 by 55.
+  A size given as two numbers is taken as it stands — `{88 55}` stays 88 by 55. It is turned only if an orientation is asked for as well, on **tclpdf new**, on **configure** or on the **page add** itself: `-format {88 55} -orientation portrait` gives 55 by 88. The default `portrait` is not a request, so a pair without any orientation is never touched.
 
 **tclpdf formats**
 
@@ -98,7 +100,7 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
 *doc* **page box** *name* ?*value*? ?*index*?
 
-: Reads or sets one of the five page boxes: `media`, `crop`, `bleed`, `trim` or `art`. The value is `{x0 y0 x1 y1}` in the document unit — two corners, not a corner and a size. A box may start away from zero; the size is then the difference of the pairs, and the caller's origin follows the box rather than the axis. A box whose corners are not in order (`x1` must exceed `x0` and `y1` must exceed `y0`), or that reaches beyond the media box, is refused with both rectangles in the message — ISO 32000-1 14.11.2 would have the reader cut it back and 7.9.5 would have it swap the corners, both without a word, and tclpdf names the mistake instead. The media box itself must measure between 3 and 14400 pt on each side (Annex C; **page add** applies the same limit to **-format**), and cannot be shrunk under a box already set: set the media box first, or move the box that sticks out.
+: Reads or sets one of the five page boxes: `media`, `crop`, `bleed`, `trim` or `art`. The value is `{x0 y0 x1 y1}` in the document unit — two corners, not a corner and a size. A box may start away from zero; the size is then the difference of the pairs, and the caller's origin follows the box rather than the axis. A box whose corners are not in order (`x1` must exceed `x0` and `y1` must exceed `y0`), or that reaches beyond the media box, is refused with both rectangles in the message — ISO 32000-1 14.11.2 would have the reader cut it back and 7.9.5 would have it swap the corners, both without a word, and tclpdf names the mistake instead. The media box itself must measure between 3 and 14400 pt on each side (Annex C; **page add** applies the same limit to **-format**), and cannot be shrunk under a box already set: set the media box first, or move the box that sticks out. *index* is the page, counted from 0 as **page current** counts, the current page without it — and because it comes after the value, reading a box of another page takes an empty value in between: `page box media {} 0` reads the first page's media box, `page box media 0` is refused as a box that is not four numbers.
 
 *doc* **page typeArea** ?*index*?
 
@@ -354,7 +356,7 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **transform** ?**-translate** *{dx dy}*? ?**-rotate** *deg*? ?**-scale** *s*? ?**-skew** *{a b}*? ?**-at** *{x y}*? ?**-matrix** *{a b c d e f}*?
 
-: Multiplies the current transformation matrix. **-at** names a fixed point to turn, scale or skew about; **-translate** is a displacement. The two are different things and must not be confused. The parts are applied in the order translate, rotate, skew, scale. **-scale** is one factor or `{sx sy}`, none of them zero — a negative one mirrors.
+: Multiplies the current transformation matrix. **-at** names a fixed point to turn, scale or skew about; **-translate** is a displacement. The two are different things and must not be confused. The parts compose as if called one after another — translate, then rotate, then skew, then scale — the way a sequence of `cm` operators does: a shape drawn afterwards is scaled first, skewed, turned, and displaced last, so the displacement is in unscaled, unturned document units, as it is in Canvas or SVG (`-translate {10 0} -rotate 90` moves 10 mm to the right, not 10 mm down). **-scale** is one factor or `{sx sy}`, none of them zero — a negative one mirrors.
 
   **-skew** shears by two angles in degrees: the first tilts vertically — y follows x — and the second horizontally, which is the slant an italic-looking stamp needs. **-matrix** takes the six numbers of a PDF matrix — exactly six, and not singular: a `cm` whose a·d − b·c is zero folds everything drawn after it onto a line, so it is refused before it is written — and multiplies them in as they stand, ignoring every other option: the values are the raw `cm` operands — points, origin at the bottom left, y upwards — for the caller who already has a matrix rather than wants one built.
 
@@ -368,7 +370,7 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **style** ?*options*?
 
-: Sets the drawing state — the same options the shapes take, in force until changed.
+: Sets the drawing state — the same options the shapes take, in force until changed: a `-width`, `-dash`, `-cap`, `-join`, `-miter`, `-opacity`, `-blend`, `-fill` or `-stroke` set here holds for every shape that does not name its own. The colours are the part worth spelling out: after `style -fill red -stroke blue` a bare `rect` is filled red and stroked blue, a `rect -fill green` is filled green and still stroked blue — a shape paints the sides `style` coloured plus the ones it names itself — and a `line`, which has no fill, is stroked blue instead of the black it draws in on its own. The state is that of the *stream*: **save** and **restore** take it back with the `Q`, a form or a pattern being built neither sees the page's colours nor leaks its own, and a new page starts fresh.
 
 ## Colour
 
@@ -394,7 +396,7 @@ A separation is a spot colour — a varnish, a security ink, a Pantone shade: `{
 
 *doc* **image info** *alias* / *doc* **image size** *alias* / *doc* **image names**
 
-: What the file is, its size, and the aliases embedded so far. **image info** answers `type`, `path`, `bytes`, `width`, `height` and `bitDepth` for both formats; a PNG adds `colorType`, `alpha` and `transparency` (`none`, `colourKey` — a `/Mask` array, still passed through — or `softMask` — a mask computed from the pixels: a palette with partial entries, or a 16-bit colour key), a JPEG adds `components` (1 grey, 3 RGB, 4 CMYK) and `alpha` 0. **image size** is the size a placement would come out at, in the document unit, and takes the same sizing options as **place** — what a caller needs to lay out around a picture. **image names** lists the aliases.
+: What the file is, its size, and the aliases embedded so far. **image info** answers `type`, `path`, `bytes`, `width`, `height` and `bitDepth` for both formats; a PNG adds `colorType`, `alpha` and `transparency` — how the picture's transparency reaches the file: `none`, `colourKey` (a `/Mask` array, the picture still passed through) or `softMask` (an `/SMask`: an alpha channel, a palette with partial entries, or a 16-bit colour key), a JPEG adds `components` (1 grey, 3 RGB, 4 CMYK) and `alpha` 0. **image size** is the size a placement would come out at, in the document unit, and takes the same sizing options as **place** — what a caller needs to lay out around a picture. **image names** lists the aliases.
 
 ## Tables
 
@@ -602,7 +604,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 *doc* **info** *key* ?*value*?
 
-: Reads or sets an entry of the information dictionary: `Title`, `Author`, `Subject`, `Keywords`, `Creator`, `Producer`.
+: Reads or sets an entry of the information dictionary: `Title`, `Author`, `Subject`, `Keywords`, `Creator`, `Producer`. Each one goes into the XMP packet as well, under the property ISO 32000-1 Table 317 pairs it with: `Title` as `dc:title`, `Author` as `dc:creator`, `Subject` as `dc:description`, `Keywords` as `pdf:Keywords`, `Creator` — the application that made the document — as `xmp:CreatorTool`, and `Producer` — the writer, `tclpdf` unless replaced — as `pdf:Producer`. Without a `Creator` the creating tool in the packet is the producer.
 
 *doc* **language** ?*tag*?
 
@@ -624,7 +626,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
   A tagged document carries a second, invisible layer saying what the marks on a page *are* — a heading, a paragraph, a table cell — rather than how they look. The drawing does not change. Reading software needs it: without a tree it follows the order the content stream happens to have, which on a two column page runs across both columns. PDF/UA and PDF/A level A require it.
 
-*doc* **structure** *type* ?**-name** *name*? ?**-alt** *text*? ?**-lang** *tag*? ?**-title** *text*? ?**-actualText** *text*? ?**-expansion** *text*? ?**-scope** *side*? ?**-numbering** *style*? ?**-bbox** {*x y w h*}? ?**-colSpan** *n*? ?**-rowSpan** *n*? **-script** *body*
+*doc* **structure** *type* ?**-name** *name*? ?**-id** *string*? ?**-alt** *text*? ?**-lang** *tag*? ?**-title** *text*? ?**-actualText** *text*? ?**-expansion** *text*? ?**-scope** *side*? ?**-numbering** *style*? ?**-bbox** {*x y w h*}? ?**-colSpan** *n*? ?**-rowSpan** *n*? **-script** *body*
 
 : Opens a structure element, runs *body* with it open and closes it again — including when the body fails, so a half open tree cannot reach the file. Returns whatever the body returned. *type* is one of the standard types of ISO 32000-1 14.8.4; an unknown one is refused at the call rather than in a validator later.
 
@@ -651,6 +653,8 @@ For an **archivable** document the clear text line needs an embedded face, and t
   A leaf type such as `P` or `H1` holds text and **inline** markup — `Span`, `Em`, `Strong`, `Link`, `Figure` and their kin — but no block element: a `P` inside a `P` is the standing example of what Annex L forbids.
 
 : **Naming an element.** **-name** gives the element a name that a link or a bookmark points at with **-structure**. A structure destination names the *element* rather than a place on a page (12.3.2.3), so it still lands on the right thing after the content above it has grown — PDF/UA-2 asks for internal targets to be written that way. It is written as a GoTo action carrying both the structure destination (/SD) and a page destination (/D) to the element's first page — /XYZ at the top of its first content, or /Fit when no position is known — so a reader that does not understand structure destinations still lands on the right page. The name has to be unique and may be used before it is declared, which a link pointing forward at a later section needs. An unknown one is reported when the document is written, naming it.
+
+  **-id** is something else: the element identifier of ISO 32000-1 14.7.2, a string written as `/ID` on the element and entered in the `IDTree` of the structure tree root, by which a reader — not this package — looks the element up. It has to be unique in the document. A `Note` gets one on its own when none is given (`Note` followed by its position in the tree), because PDF/UA-1 asks every note for one (7.9); every other element has one only when asked.
 
 : **Artifacts name their kind.** What is not in the tree is bracketed as an artifact, and the bracket says which sort it is: `Pagination` for a page number, `Layout` for everything else this package produces. PDF/UA-2 requires the naming; earlier versions permit it, so it is written either way and a document does not have to be redrawn when it is upgraded.
 
@@ -684,7 +688,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 *doc* **viewerPreferences** ?**-key** *value* ...?
 
-: How a reader should present the document (ISO 32000 12.2). Without arguments it answers with what has been set so far. (PDF 1.2; `-direction` 1.3, `-displayDocTitle` 1.4, `-printScaling` 1.6, `-duplex`, `-pickTrayByPDFSize` and `-numCopies` 1.7.)
+: How a reader should present the document (ISO 32000 12.2). Without arguments it answers with what has been set so far. (PDF 1.2; `-direction` 1.3, `-displayDocTitle` 1.4, the value `UseOC` 1.5, `-printScaling` 1.6, `-duplex`, `-pickTrayByPDFSize` and `-numCopies` 1.7.)
 
   Calls accumulate: each one sets the keys it names and leaves the rest alone, so a document can state its window wishes in one place and its printing wishes in another.
 
@@ -730,9 +734,9 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : The one call an electronic invoice needs. It reads the profile from the invoice XML (BT-24), declares PDF/A-3B, writes the output intent with the sRGB profile shipped with the package, adds the Factur-X XMP extension schema, and attaches the file as `factur-x.xml` at document level with the `/AFRelationship` the profile prescribes — `Data` for MINIMUM and BASIC WL, `Alternative` for every fuller profile; `-relationship` overrides — plus an entry in the names tree and a modification date. Returns the detected profile.
 
-  **-name** is the name a reader looks the attachment up by, and the standards allow exactly four: `factur-x.xml`, `zugferd-invoice.xml`, `xrechnung.xml` and `order-x.xml`. Without the option the file's own name is kept where it is one of the four and `factur-x.xml` is taken otherwise; any other **-name** is refused. **-type** goes verbatim into `fx:DocumentType`: `INVOICE`, the default, or `ORDER` for an Order-X document. **-description** replaces the attachment description, which is "*profile* `invoice data`" unless given. **-compress** Flate-compresses the embedded XML and is **off by default**, so the invoice sits in the file byte for byte as it arrived.
+  **-name** is the name a reader looks the attachment up by, and the standards allow exactly four: `factur-x.xml`, `zugferd-invoice.xml`, `xrechnung.xml` and `order-x.xml`. Without the option the file's own name is kept where it is one of the four and `factur-x.xml` is taken otherwise; any other **-name** is refused. **-type** goes into `fx:DocumentType`: `INVOICE`, the default, or `ORDER` for an Order-X document; anything else is refused. **-description** replaces the attachment description, which is "*profile* `invoice data`" unless given. **-compress** Flate-compresses the embedded XML and is **off by default**, so the invoice sits in the file byte for byte as it arrived.
 
-  **PDF/A-3B is fixed at this call** — the level every invoice reaches without a structure tree, and the least the standards ask for. A document that wants more says so afterwards: `pdfa -conformance U` after `zugferd` raises the claim to 3U with the Factur-X extension in place, and `A` needs `tagged 1` besides — measured, the file then validates against the higher profile. **-icc** names another output intent profile in place of the shipped sRGB one — a CMYK profile for an invoice painted in process colours, see `pdfa -profile` — and the colours are held against it at write time like everywhere else. **-profile** overrides the level read from BT-24 (`MINIMUM`, `BASIC WL`, `BASIC`, `EN 16931`, `EXTENDED`), for an XML whose identifier the reader does not recognise; **-version** is the `fx:Version` written to the XMP, `1.0` unless given.
+  **PDF/A-3B is fixed at this call** — the level every invoice reaches without a structure tree, and the least the standards ask for. A document that wants more says so afterwards: `pdfa -conformance U` after `zugferd` raises the claim to 3U with the Factur-X extension in place, and `A` needs `tagged 1` besides — measured, the file then validates against the higher profile. **-icc** names another output intent profile in place of the shipped sRGB one — a CMYK profile for an invoice painted in process colours, see `pdfa -profile` — and the colours are held against it at write time like everywhere else. **-profile** overrides the level read from BT-24 (`MINIMUM`, `BASIC WL`, `BASIC`, `EN 16931`, `EXTENDED`, or `XRECHNUNG`, which is what an XRechnung identifier is read as), for an XML whose identifier the reader does not recognise — any other word is refused, because it would go into the XMP as a conformance level nobody validates against; **-version** is the `fx:Version` written to the XMP, `1.0` unless given.
 
 *doc* **zugferd profile** *xml*
 
@@ -740,7 +744,7 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 *doc* **zugferd state**
 
-: What was attached and under which profile.
+: What was attached and under which profile: `name`, `profile`, `type`, `version`, `relationship` — the `/AFRelationship` that was written, prescribed by the profile or given — and `bytes`. Empty before the call.
 
 ## Writing
 
@@ -764,7 +768,9 @@ Two calls write the document, and neither finishes it.
 
 # SEE ALSO
 
-qpdf(1), veraPDF, pdffonts(1), pdftotext(1), tzint
+tdom, qpdf(1), veraPDF, pdffonts(1), pdftotext(1), tzint
+
+tdom builds the XMP metadata packet — every document that declares PDF/A, PDF/UA or ZUGFeRD needs it — and, where present, parses SVG in place of the built-in parser; see "Optional packages" at the top.
 
 tzint is a Tcl binding to the Zint barcode library. It produces SVG, which `svg -data` draws — so barcodes need no code in this package and are not a dependency of it. See the `Barcodes` section above.
 

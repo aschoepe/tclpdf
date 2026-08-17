@@ -193,6 +193,50 @@ puts "  profile from BT-24: $profile"
 puts "  attachment: [dict get [$doc zugferd state] name],\
     [dict get [$doc zugferd state] bytes] bytes"
 
+# -- the options, tried on documents that are thrown away ------------------
+
+# The call above takes every default, and the defaults are right for this
+# invoice. What the options do is shown below on documents of their own: a
+# ZUGFeRD document carries exactly ONE invoice - a second call is refused -
+# so each variant gets a fresh document in memory, is asked what it would
+# write, and is destroyed unwritten. The file this example writes stays the
+# one invoice above.
+#
+# The values are the ones the standards allow. -name is what a reader looks
+# the attachment up by, and exactly four are permitted; -type goes verbatim
+# into fx:DocumentType, ORDER being Order-X; -profile overrides BT-24 - meant
+# for an XML whose identifier the reader does not know, and here it stands in
+# for five different invoices, because one XML serves them all; -version is
+# fx:Version, -description the attachment's text, -compress packs the XML
+# with Flate (off by default: the invoice sits in the file byte for byte);
+# -relationship overrides the /AFRelationship the profile prescribes - Data
+# for MINIMUM and BASIC WL, Alternative for every fuller profile; and -icc
+# names another output intent profile in place of the shipped sRGB one -
+# here the package's second sRGB profile, sRGB2014.
+set srgb2014 [file join [file dirname $here] icc sRGB2014.icc]
+set variants [list \
+    {-name factur-x.xml -profile "EN 16931" -type INVOICE -version 1.0 \
+        -description "EN 16931 invoice data" -compress 0} \
+    {-name zugferd-invoice.xml -profile MINIMUM -relationship Data} \
+    {-name xrechnung.xml -profile "BASIC WL"} \
+    {-name order-x.xml -type ORDER -profile BASIC -description "Order-X order data"} \
+    [list -profile EXTENDED -relationship Alternative -compress 1 -icc $srgb2014]]
+puts "  the options, each on a throwaway document:"
+foreach options $variants {
+    set demo [tclpdf new]
+    $demo zugferd $invoice {*}$options
+    set state [$demo zugferd state]
+    # The relationship is in the record - the one the profile prescribes, or
+    # the one -relationship gave; the compression the attach module keeps.
+    set attached [lindex [$demo state attachments] 0]
+    puts [format "    %-20s %-9s %-7s /AFRelationship /%-11s intent %s%s" \
+        [dict get $state name] [dict get $state profile] [dict get $state type] \
+        [dict get $state relationship] \
+        [file tail [dict get [$demo pdfa state] profile]] \
+        [expr {[dict get $attached compress] ? ", Flate" : ""}]]
+    $demo destroy
+}
+
 exampleFooter $doc
 
 $doc write $target
