@@ -566,8 +566,9 @@ oo::define ::tclpdf::document::document {
   }
 
   # Claim the next MCID on the current page and record which element owns it.
-  # Returns the pair {mcid type} to hand to [StructureBegin], or {} when
-  # nothing is to be bracketed.
+  # Returns {mcid type element} - the first two to hand to [StructureBegin],
+  # the element for [StructureMarkAgain] - or {} when nothing is to be
+  # bracketed.
   #
   # The type travels WITH the number rather than being looked up again later:
   # a derived tag closes its element immediately, so by the time the operator
@@ -676,6 +677,28 @@ oo::define ::tclpdf::document::document {
       set element [my StructureOpen $derived]
       my StructureClose $element
     }
+    return [my StructureAttach $element $top]
+  }
+
+  # A further mark for an element that already has one - on another page.
+  # A paragraph that [text -paginate] carries over a page break stays ONE
+  # element with a mark on each page (the same shape a table breaking over
+  # pages has: one Table, kids on every page); a fresh P per page would read
+  # as two paragraphs. The element is the third word of what [StructureMark]
+  # answered for the first page. Nothing is checked about what is open now:
+  # the element was chosen when the paragraph began, and a page break in the
+  # middle of it changes nothing about where it belongs.
+  method StructureMarkAgain {element {top {}}} {
+    if {![my tagged] || $element eq {}} {
+      return {}
+    }
+    return [my StructureAttach $element $top]
+  }
+
+  # Claim the next MCID on the current page for an element and record it as
+  # a kid. Answers {mcid type element}: the first two for [StructureBegin],
+  # the element for [StructureMarkAgain].
+  method StructureAttach {element top} {
     set page [my page current]
     set counters [my state structureMcid]
     set mcid [expr {[dict exists $counters $page] ?
@@ -695,7 +718,7 @@ oo::define ::tclpdf::document::document {
     dict lappend entry kids [list mark $page $mcid $y]
     lset elements $element $entry
     my state structure $elements
-    return [list $mcid [dict get $entry type]]
+    return [list $mcid [dict get $entry type] $element]
   }
 
   # An expansion (14.9.5) is read from the tree and from nowhere else - in an

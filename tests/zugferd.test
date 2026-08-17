@@ -921,4 +921,29 @@ rename intentProbe {}
 rename fakeProfile {}
 rename descTag {}
 
+# -- zugferd state and zugferd profile ---------------------------------------
+
+test zugferd-9.1 {zugferd state is empty before the call and the record after it} -constraints haveInvoice -body {
+  set doc [archivable $face]
+  set before [$doc zugferd state]
+  set profile [$doc zugferd $invoice]
+  set state [$doc zugferd state]
+  $doc destroy
+  list $before [dict get $state name] [dict get $state profile] \
+      [dict get $state type] [dict get $state version] \
+      [expr {[dict get $state bytes] == [file size $invoice]}] \
+      [expr {[dict get $state profile] eq $profile}]
+} -result {{} factur-x.xml {EN 16931} INVOICE 1.0 1 1}
+
+test zugferd-9.2 {zugferd profile on the document reads BT-24 without attaching anything} -constraints haveInvoice -body {
+  set doc [tclpdf new -unit mm]
+  set channel [open $invoice rb]
+  set xml [read $channel]
+  close $channel
+  set profile [$doc zugferd profile $xml]
+  set state [$doc zugferd state]
+  $doc destroy
+  list $profile $state
+} -result {{EN 16931} {}}
+
 cleanupTests

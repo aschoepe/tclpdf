@@ -112,7 +112,12 @@ diagonalStamp $doc "DRAFT"
 
 # -- the same recipe, other words and colours ------------------------------
 
-$doc page add -format a5 -orientation landscape
+# [configure] changes the document defaults from here on: every page added
+# without a format of its own is A5 landscape now, while the A4 page above
+# keeps the size it was given. [page add -format a5 -orientation landscape]
+# would do the same for this one page only.
+$doc configure -format a5 -orientation landscape
+$doc page add
 $doc font -family helvetica -style bold -size 13
 $doc text "A5 landscape, same call" -at {15 20}
 diagonalStamp $doc "PAID" -color {0.2 0.55 0.25} -opacity 0.25 -share 0.5

@@ -1446,4 +1446,44 @@ test structure-17.6 {the Span holds the mark and the brackets stay balanced} -bo
       [regexp -all {BDC} $stream] [regexp -all {EMC} $stream] $open
 } -result {2 2 2 {}}
 
+# -- one paragraph over two pages -------------------------------------------
+
+test structure-16.1 {a paginated paragraph is one P with a marked-content reference per page} -body {
+  set doc [tclpdf new -unit mm -compress 0 -typeArea {20 25}]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [join [lrepeat 12 "Ein Absatz, der ueber das Seitenende hinaus laeuft und auf der naechsten Seite weitergeht, bleibt im Baum ein einziger Absatz."] " "]
+  set result [$doc text $body -at {20 250} -width 170 -paginate 1]
+  set pages [$doc page count]
+  set marks [list [regexp -all {/P <</MCID} [::tclpdfTest::content $doc 0]] \
+      [regexp -all {/P <</MCID} [::tclpdfTest::content $doc 1]]]
+  set path [::tclpdfTest::scratch paginate-p.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # One P element; its kids are two MCRs, each naming its page (an element
+  # whose marks span pages has no Pg of its own, 14.7.4.2); each page
+  # brackets its own share of the text.
+  list $pages [regexp -all {/S /P\M} $bytes] $marks \
+      [regexp -all {/Type /MCR} $bytes] \
+      [regexp {/S /P /P \d+ 0 R /K \[<< /Type /MCR /Pg (\d+) 0 R /MCID 0 >> << /Type /MCR /Pg (\d+) 0 R /MCID 0 >>\]} $bytes -> a b] \
+      [expr {$a != $b}]
+} -result {2 1 {1 1} 2 1 1}
+
+test structure-16.2 {a paginated artifact is declared again on every page} -body {
+  set doc [tclpdf new -unit mm -compress 0 -typeArea {20 25}]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [join [lrepeat 12 "Kleingedrucktes, das ueber die Seite laeuft und keinen Inhalt traegt."] " "]
+  $doc text $body -at {20 250} -width 170 -paginate 1 -tag {Artifact Layout}
+  set marks [list [regexp -all {/Artifact <</Type /Layout>> BDC} [::tclpdfTest::content $doc 0]] \
+      [regexp -all {/Artifact <</Type /Layout>> BDC} [::tclpdfTest::content $doc 1]] \
+      [regexp -all {EMC} [::tclpdfTest::content $doc 1]]]
+  $doc destroy
+  set marks
+} -result {1 1 1}
+
 cleanupTests

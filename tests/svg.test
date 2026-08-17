@@ -725,4 +725,24 @@ test svg-8.5 {fill-opacity is clamped, not refused} -body {
   list $code1 [regexp { gs} $stream1] $code2 [regexp {/GS0_0f gs} $stream2]
 } -result {0 0 0 1}
 
+# -- svg size -----------------------------------------------------------------
+
+test svg-9.1 {svg size is the natural size in the document unit, and follows the unit} -constraints haveSvg -body {
+  # The same file asked twice: once by a millimetre document, once by a point
+  # document. The two answers differ by exactly the unit factor, and drawing
+  # the file at its natural width comes out at its natural height - so the
+  # answer is what a caller can plan a page with.
+  set mm [tclpdf new -unit mm]
+  set pt [tclpdf new -unit pt]
+  lassign [$mm svg size $sample] wmm hmm
+  lassign [$pt svg size $sample] wpt hpt
+  $mm page add
+  lassign [$mm svg $sample -at {0 0} -width $wmm] -> -> width height
+  $mm destroy
+  $pt destroy
+  list [expr {$wmm > 0 && $hmm > 0}] \
+      [format %.3f [expr {$wpt / $wmm}]] [format %.3f [expr {$hpt / $hmm}]] \
+      [format %.2f [expr {$height - $hmm}]]
+} -result [list 1 [format %.3f [expr {72 / 25.4}]] [format %.3f [expr {72 / 25.4}]] 0.00]
+
 cleanupTests

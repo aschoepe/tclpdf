@@ -428,4 +428,37 @@ test document-9.3 {without a language nothing is written} -body {
   list $empty [regexp {/Lang} $bytes]
 } -result {{} 0}
 
+# -- -typeArea ----------------------------------------------------------------
+
+test document-10.1 {-typeArea takes two or four distances and answers them back} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  set two [$doc cget -typeArea]
+  $doc configure -typeArea {20 25 15 18}
+  set four [$doc cget -typeArea]
+  $doc destroy
+  list $two $four
+} -result {{20 25} {20 25 15 18}}
+
+test document-10.2 {three distances are refused, and so is a negative one} -body {
+  set doc [tclpdf new -unit mm]
+  set codes {}
+  foreach value {{1 2 3} {-1 2} {a b} {20 25 15 -1}} {
+    lappend codes [catch {$doc configure -typeArea $value} message] $message
+  }
+  $doc destroy
+  list [lindex $codes 0] [regexp {takes \{top bottom\} or} [lindex $codes 1]] \
+      [lindex $codes 2] [regexp {distances of 0 or more, not "-1"} [lindex $codes 3]] \
+      [lindex $codes 4] [regexp {not "a"} [lindex $codes 5]] \
+      [lindex $codes 6] [regexp {not "-1"} [lindex $codes 7]]
+} -result {1 1 1 1 1 1 1 1}
+
+test document-10.3 {an empty -typeArea returns to the default} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc configure -typeArea {}
+  $doc page add
+  set area [$doc page typeArea]
+  $doc destroy
+  lmap v $area {format %.2f $v}
+} -result {10.50 14.85 199.50 282.15}
+
 cleanupTests

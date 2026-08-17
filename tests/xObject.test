@@ -363,4 +363,26 @@ test xObject-4.5 {an untagged document remembers nothing} -body {
   list [string match "*BDC*" $stream] $missing $state
 } -result {0 {} {}}
 
+# -- form names ---------------------------------------------------------------
+
+test xObject-5.1 {form names lists what was created, in order, and nothing before} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set before [$doc form names]
+  $doc form create logo -size {40 20} -script {}
+  $doc form create seal -size {30 30} -script {}
+  set after [$doc form names]
+  $doc destroy
+  list $before $after
+} -result {{} {logo seal}}
+
+test xObject-5.2 {an unknown form subcommand names the four that exist} -body {
+  set doc [tclpdf new -unit mm]
+  try {
+    $doc form list
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*unknown form subcommand "list"*create, place, names, size*}
+
 cleanupTests

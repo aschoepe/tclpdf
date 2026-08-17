@@ -55,6 +55,7 @@ oo::class create ::tclpdf::document::document {
       unit mm
       version 1.7
       compress 1
+      typeArea {}
     }
     my configure {*}$args
     set tclpdfWriter [::tclpdf::writer::pdf new [dict get $tclpdfOption version]]
@@ -90,6 +91,23 @@ oo::class create ::tclpdf::document::document {
   # the writer took it.
   method configure {args} {
     set options [::tclpdf::option parse $tclpdfOption $args "the document"]
+    # The type area is checked here, once, rather than by everyone who reads
+    # it: two or four numbers in the document unit, none of them negative.
+    # Whether it leaves room on a page is a question of the page, and is
+    # asked when a page is measured against it (see [page typeArea]).
+    set area [dict get $options typeArea]
+    if {$area ne {}} {
+      if {[catch {llength $area} count] || $count ni {2 4}} {
+        return -code error "tclpdf: -typeArea takes {top bottom} or\
+            {top bottom left right}, got \"$area\""
+      }
+      foreach value $area {
+        if {![string is double -strict $value] || $value < 0} {
+          return -code error "tclpdf: -typeArea takes distances of 0 or\
+              more, not \"$value\""
+        }
+      }
+    }
     if {[info exists tclpdfWriter]
         && [dict get $options version] ne [dict get $tclpdfOption version]} {
       $tclpdfWriter version [dict get $options version]

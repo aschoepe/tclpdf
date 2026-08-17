@@ -159,7 +159,8 @@ oo::define ::tclpdf::document::document {
     # being stored - partition keeps the two apart instead of merging the
     # dictionaries and losing track of which is which.
     set defaults {at {} rotate 0 align left width {} anchor baseline
-        height {} indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
+        height {} paginate 0 columns 1 gutter {} balance 0
+        indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
         avoid {} avoidMargin 0 tag P expansion {}}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
@@ -174,6 +175,10 @@ oo::define ::tclpdf::document::document {
     # reports "list element in braces followed by ]" from somewhere inside the
     # method - which says nothing about the actual mistake.
     set at [::tclpdf::option point [dict get $options at] -at text]
+    if {![string is boolean -strict [dict get $options paginate]]} {
+      return -code error "tclpdf: -paginate takes a boolean, not\
+          \"[dict get $options paginate]\""
+    }
     # Checked here, before the mark below is opened - a wrong value used to
     # act as baseline in silence, so -anchor middle drew a baseline block and
     # nobody was told. See TextAnchor for the two values there are.
@@ -201,7 +206,11 @@ oo::define ::tclpdf::document::document {
           [dict get $options expansion]]
     }
     set mark {}
-    if {[my state tagged] eq "1"} {
+    if {[my state tagged] eq "1" && ![dict get $options paginate]} {
+      # A paginated block marks per page, inside TextPaginate - a mark cannot
+      # straddle the page break this call makes. Everything else is bracketed
+      # here.
+      #
       # The mark is told where the text BEGINS - its top edge, which is -at
       # for -anchor top and one ascent above the baseline otherwise - so
       # that a destination at the element can name the place on the page.
@@ -211,6 +220,10 @@ oo::define ::tclpdf::document::document {
       }
       set mark [my StructureMark [dict get $options tag] Layout $top]
       my content [my StructureBegin $mark]
+    }
+    if {[dict get $options paginate] && [dict get $options width] eq {}} {
+      return -code error "tclpdf: -paginate breaks a paragraph over pages, and\
+          a paragraph needs -width"
     }
     if {[dict get $options width] ne {}} {
       # The paragraph half of this topic. Loaded here rather than at the top

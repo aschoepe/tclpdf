@@ -342,4 +342,58 @@ test page-box-6.18 {a list that is not four numbers is still refused first} -bod
   list $code [string match {*x0 y0 x1 y1*} $message]
 } -result {1 1}
 
+# -- page typeArea ------------------------------------------------------------
+
+test page-typeArea-7.1 {without -typeArea the area is five percent in from every edge} -body {
+  # A4: 210 x 297. 5 % of the height top and bottom, 5 % of the width at
+  # the sides - the rule table has always used for -top and -bottom.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set area [$doc page typeArea]
+  $doc destroy
+  lmap v $area {format %.2f $v}
+} -result {10.50 14.85 199.50 282.15}
+
+test page-typeArea-7.2 {two margins set top and bottom, four set the sides as well} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  set two [$doc page typeArea]
+  $doc configure -typeArea {20 25 15 18}
+  set four [$doc page typeArea]
+  $doc destroy
+  list [lmap v $two {format %.2f $v}] [lmap v $four {format %.2f $v}]
+} -result {{10.50 20.00 199.50 272.00} {15.00 20.00 192.00 272.00}}
+
+test page-typeArea-7.3 {the area follows the page it is asked about} -body {
+  # The margins are distances; a landscape page has a different area than
+  # a portrait one, and each page answers for itself.
+  set doc [tclpdf new -unit mm -typeArea {20 25 15 15}]
+  $doc page add
+  $doc page add -format a5 -orientation landscape
+  set first [$doc page typeArea 0]
+  set second [$doc page typeArea]
+  $doc destroy
+  list [lmap v $first {format %.2f $v}] [lmap v $second {format %.2f $v}]
+} -result {{15.00 20.00 195.00 272.00} {15.00 20.00 195.00 123.00}}
+
+test page-typeArea-7.4 {margins that meet leave no area and are refused at the page} -body {
+  set doc [tclpdf new -unit mm -typeArea {150 150}]
+  $doc page add
+  set code [catch {$doc page typeArea} message]
+  # The option itself is fine - a taller page would take it.
+  $doc page add -format {210 400}
+  set tall [$doc page typeArea]
+  $doc destroy
+  list $code [regexp {leaves no room on a page of 210 by 297} $message] \
+      [lmap v $tall {format %.2f $v}]
+} -result {1 1 {10.50 150.00 199.50 250.00}}
+
+test page-typeArea-7.5 {typeArea is among the page subcommands the error names} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc page area} message]
+  $doc destroy
+  list $code [regexp {known are: add, count, current, size, box, typeArea, content} $message]
+} -result {1 1}
+
 cleanupTests

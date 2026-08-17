@@ -49,6 +49,7 @@ oo::define ::tclpdf::document::document {
   # $doc page count
   # $doc page size ?index?        -> {width height} in the document unit
   # $doc page box <name> ?value?  -> media, crop, bleed, trim or art
+  # $doc page typeArea ?index?    -> {x0 y0 x1 y1}, the type area on that page
   method page {subcommand args} {
     switch -- $subcommand {
       add {return [my PageAdd {*}$args]}
@@ -56,6 +57,7 @@ oo::define ::tclpdf::document::document {
       current {return $tclpdfCurrent}
       size {return [my PageSize {*}$args]}
       box {return [my PageBox {*}$args]}
+      typeArea {return [my PageTypeArea {*}$args]}
       content {
         # The raw content stream of a page, before it is compressed and turned
         # into an object. For diagnostics and for tests - "why is this shape
@@ -65,7 +67,7 @@ oo::define ::tclpdf::document::document {
       }
       default {
         return -code error "tclpdf: unknown page subcommand \"$subcommand\" -\
-            known are: add, count, current, size, box, content"
+            known are: add, count, current, size, box, typeArea, content"
       }
     }
   }
@@ -125,6 +127,37 @@ oo::define ::tclpdf::document::document {
     set unit [dict get $tclpdfOption unit]
     return [list [::tclpdf::geometry fromPoints [expr {$x1 - $x0}] $unit] \
         [::tclpdf::geometry fromPoints [expr {$y1 - $y0}] $unit]]
+  }
+
+  # The type area of a page: where flowing text and breaking tables begin
+  # and end. Answered as corners {x0 y0 x1 y1} in the document unit, like a
+  # page box, so that a caller can place a running head above y0 and start
+  # a column at {x0 y0}. Nothing in the file records it - it is a rule for
+  # the layout, not a property of the page.
+  #
+  # -typeArea gives the margins {top bottom ?left right?}; without it the
+  # margins are five percent of the page height, top and bottom, and five
+  # percent of the page width at the sides - the same rule [table] has
+  # always applied to -top and -bottom, now in one place. Two margins that
+  # meet leave no area, and that is refused here, at the page they meet on,
+  # rather than being handed on as an empty band nothing fits into.
+  method PageTypeArea {{index {}}} {
+    lassign [my PageSize $index] width height
+    set margins [dict get $tclpdfOption typeArea]
+    if {$margins eq {}} {
+      set margins [list [expr {$height * 0.05}] [expr {$height * 0.05}] \
+          [expr {$width * 0.05}] [expr {$width * 0.05}]]
+    } elseif {[llength $margins] == 2} {
+      lappend margins [expr {$width * 0.05}] [expr {$width * 0.05}]
+    }
+    lassign $margins top bottom left right
+    if {$top + $bottom >= $height || $left + $right >= $width} {
+      return -code error "tclpdf: the type area leaves no room on a page of\
+          [format %g $width] by [format %g $height] - margins are\
+          {[format %g $top] [format %g $bottom] [format %g $left]\
+          [format %g $right]}"
+    }
+    return [list $left $top [expr {$width - $right}] [expr {$height - $bottom}]]
   }
 
   # Media, crop, bleed, trim and art (7.7.6.3). Values are given in the

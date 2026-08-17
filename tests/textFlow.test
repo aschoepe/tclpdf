@@ -914,4 +914,328 @@ test textFlow-5.17 {a breakable space in front of a word belongs to the word} -c
   set lines
 } -result [list "\u2003Once upon" "a time"]
 
+# -- the type area: -height max and -paginate --------------------------------
+
+set flowLong [join [lrepeat 12 $::flowBody] "\n"]
+
+test textFlow-6.1 {-height max draws down to the bottom of the type area and hands back the rest} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowLong -at {20 200} -width 170 -height max]
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  # The last baseline is inside the area (bottom at 272 mm = 70.87 pt from
+  # the page bottom in PDF space), one line more would not be, and the rest
+  # is text, not empty.
+  set lowest [::tcl::mathfunc::min {*}$ys]
+  list [expr {[dict get $result y] <= 272}] [expr {$lowest > 70.87}] \
+      [expr {[string length [dict get $result rest]] > 0}] \
+      [string equal [dict get $result rest] $::flowLong]
+} -result {1 1 1 0}
+
+test textFlow-6.2 {-height max under -anchor top keeps the whole block inside the area} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowLong -at {20 200} -width 170 -height max -anchor top]
+  $doc destroy
+  expr {[dict get $result y] <= 272}
+} -result 1
+
+test textFlow-6.3 {-height max at the bottom of the area draws nothing and hands everything back} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowLong -at {20 271} -width 170 -height max]
+  set lines [flowLines [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $lines [string equal [dict get $result rest] $::flowLong]
+} -result {0 1}
+
+test textFlow-6.4 {-height takes a distance or max, and refuses the rest in its own words} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach value {abc -5} {
+    lappend codes [catch {$doc text "x" -at {20 20} -width 100 -height $value} message]
+    lappend codes [regexp -- {-height takes a distance of 0 or more, or "max"} $message]
+  }
+  lappend codes [catch {$doc text "x" -at {20 20} -width 100 -height max -rotate 10} message]
+  lappend codes [regexp {cannot be combined with -rotate} $message]
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 1}
+
+test textFlow-6.5 {-paginate carries the block over pages and answers where it ended} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowLong -at {20 250} -width 170 -paginate 1]
+  set pages [$doc page count]
+  set current [$doc page current]
+  # Every page has lines, and the last y is on the last page above the
+  # bottom of the area.
+  set counts [lmap i [lrange {0 1 2 3 4} 0 [expr {$pages - 1}]] \
+      {flowLines [::tclpdfTest::content $doc $i]}]
+  $doc destroy
+  list [expr {$pages > 1}] [dict get $result rest] \
+      [expr {[dict get $result page] == $current && $current == $pages - 1}] \
+      [expr {[dict get $result y] <= 272}] \
+      [expr {[lindex [lsort -integer $counts] 0] > 0}]
+} -result {1 {} 1 1 1}
+
+test textFlow-6.6 {a continuation page starts at the top of the type area} -body {
+  set doc [tclpdf new -unit mm -typeArea {30 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text $::flowLong -at {20 250} -width 170 -paginate 1
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc 1] y]
+  $doc destroy
+  # The continuation hangs from the top of the area like a block with
+  # -anchor top: the first baseline sits one ascent (Helvetica 718/1000 of
+  # 10 pt = 7.18 pt) under it. 30 mm from the top = 297 - 30 = 267 mm =
+  # 756.85 pt, less 7.18.
+  format %.2f [::tcl::mathfunc::max {*}$ys]
+} -result 749.67
+
+test textFlow-6.7 {a paragraph broken by the page keeps its first indent for the paragraph, not the page} -body {
+  # A block with -firstIndent 8: the first line of every paragraph is
+  # indented. Broken in the middle of a paragraph, the first line on the
+  # next page is NOT the first of its paragraph and does without; the next
+  # whole paragraph on that page indents as usual.
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowLong -at {20 250} -width 170 -paginate 1 -firstIndent 8]
+  set first [lindex [flowStarts [::tclpdfTest::content $doc 0]] 0]
+  set second [flowStarts [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  # 20 mm = 56.69 pt, plus 8 mm = 79.37 pt.
+  list $first [lindex $second 0] [expr {"79.37" in $second}]
+} -result {79.37 56.69 1}
+
+test textFlow-6.8 {a break that falls on a paragraph boundary indents the next page's first line} -body {
+  # One paragraph exactly the height that is left, then a page break: the
+  # first line on page 2 opens a paragraph and is indented.
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set one [$doc textHeight $::flowBody -width 170 -firstIndent 8 -anchor top]
+  set start [expr {272 - $one - 1}]
+  $doc text "$::flowBody\n$::flowBody" -at [list 20 $start] -width 170 \
+      -paginate 1 -firstIndent 8 -anchor top
+  set second [flowStarts [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  lindex $second 0
+} -result 79.37
+
+test textFlow-6.9 {-avoid holds on the first page only} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text $::flowLong -at {20 250} -width 170 -paginate 1 \
+      -avoid {{rect {20 245} {80 20}}}
+  set first [flowStarts [::tclpdfTest::content $doc 0]]
+  set second [flowStarts [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  # Page 1 opens beside the shape, page 2 at the column's own left edge.
+  list [expr {[lindex $first 0] > 56.69}] [lindex $second 0]
+} -result {1 56.69}
+
+test textFlow-6.10 {every continuation page fires pageAdded, and a handler may draw on it} -body {
+  set doc [tclpdf new -unit mm -typeArea {30 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::flowHeads {}
+  $doc on pageAdded [list apply {{doc index} {
+    lappend ::flowHeads $index
+    $doc text "Running head" -at {20 15}
+  }}]
+  $doc text $::flowLong -at {20 250} -width 170 -paginate 1
+  set pages [$doc page count]
+  set heads [regexp -all {\(Running head\)} [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  list [expr {[llength $::flowHeads] == $pages - 1}] [lindex $::flowHeads 0] $heads
+} -result {1 1 1}
+
+test textFlow-6.11 {a page not one line fits into is refused rather than paginated for ever} -body {
+  set doc [tclpdf new -unit mm -typeArea {146 146}]
+  $doc page add
+  $doc font -family helvetica -size 60
+  set code [catch {$doc text [string repeat "Word " 40] -at {20 20} -width 100 -paginate 1} message]
+  set pages [$doc page count]
+  $doc destroy
+  list $code [regexp {not one line fits into the type area of page 2} $message] \
+      [regexp {the area is 5 high \(146 to 151\)} $message] $pages
+} -result {1 1 1 2}
+
+test textFlow-6.12 {-paginate wants a paragraph and a boolean} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc text "x" -at {20 20} -paginate 1} m1] \
+      [regexp {needs -width} $m1] \
+      [catch {$doc text "x" -at {20 20} -width 100 -paginate yes} m2] \
+      [catch {$doc text "x" -at {20 20} -width 100 -paginate maybe} m3] \
+      [regexp -- {-paginate takes a boolean} $m3] \
+      [catch {$doc text "x" -at {20 20} -width 100 -paginate 1 -rotate 5} m4] \
+      [regexp {cannot be combined with -rotate} $m4]]
+  # -paginate is accepted by the measuring calls like -height: it changes
+  # nothing about the height a block would take.
+  set height [$doc textHeight $::flowBody -width 100 -paginate 1]
+  set plain [$doc textHeight $::flowBody -width 100]
+  $doc destroy
+  list {*}$codes [expr {$height == $plain}]
+} -result {1 1 0 1 1 1 1 1}
+
+test textFlow-6.13 {a paginated block that fits on its page is the plain answer in the dictionary} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set plain [$doc text $::flowBody -at {20 30} -width 170]
+  set paged [$doc text $::flowBody -at {20 30} -width 170 -paginate 1]
+  set pages [$doc page count]
+  $doc destroy
+  list [expr {abs([dict get $paged y] - $plain) < 0.001}] [dict get $paged rest] \
+      [dict get $paged page] $pages
+} -result {1 {} 0 1}
+
+# -- columns: -columns, -gutter, -balance -------------------------------------
+
+# The lowest baseline of every column on a page, keyed by the column's x, in
+# points - what "the columns end together" is measured by.
+proc flowColumnBottoms {stream} {
+  set xs [::tclpdfTest::starts $stream x]
+  set ys [::tclpdfTest::starts $stream y]
+  set bottoms {}
+  foreach x $xs y $ys {
+    set key [format %.2f $x]
+    if {![dict exists $bottoms $key] || $y < [dict get $bottoms $key]} {
+      dict set bottoms $key $y
+    }
+  }
+  return $bottoms
+}
+
+test textFlow-7.1 {-columns fills the columns of a page left to right, -gutter apart} -body {
+  set doc [tclpdf new -unit mm -typeArea {25 25 20 20}]
+  $doc page add
+  $doc font -family helvetica -size 9
+  set body [join [lrepeat 22 $::flowBody] "\n"]
+  set result [$doc text $body -at {20 25} -width 170 -anchor top \
+      -paginate 1 -columns 3 -gutter 6]
+  set starts [lsort -unique -real [flowStarts [::tclpdfTest::content $doc]]]
+  set pages [$doc page count]
+  $doc destroy
+  # (170 - 2 * 6) / 3 = 52.67 mm a column: 20, 78.67, 137.33 mm = 56.69,
+  # 223.0, 389.29 pt. All on one page, ended in the last column.
+  list $pages [dict get $result page] [dict get $result column] [dict get $result rest] \
+      [lmap x $starts {format %.1f $x}]
+} -result {1 0 2 {} {56.7 223.0 389.3}}
+
+test textFlow-7.2 {-height max with -columns fills this page's columns and hands back the rest} -body {
+  set doc [tclpdf new -unit mm -typeArea {25 25 20 20}]
+  $doc page add
+  $doc font -family helvetica -size 11
+  set body [join [lrepeat 40 $::flowBody] "\n"]
+  set result [$doc text $body -at {20 25} -width 170 -anchor top -height max -columns 2]
+  set starts [lsort -unique -real [flowStarts [::tclpdfTest::content $doc]]]
+  set pages [$doc page count]
+  $doc destroy
+  list $pages [llength $starts] [dict get $result column] \
+      [expr {[string length [dict get $result rest]] > 0}] \
+      [expr {[string length [dict get $result rest]] < [string length $body]}]
+} -result {1 2 1 1 1}
+
+test textFlow-7.3 {-balance cuts the columns of the last page to one height} -body {
+  set doc [tclpdf new -unit mm -typeArea {25 25 20 20}]
+  $doc page add
+  $doc font -family helvetica -size 9
+  set body [join [lrepeat 22 $::flowBody] "\n"]
+  $doc text $body -at {20 25} -width 170 -anchor top -paginate 1 -columns 3 -gutter 6
+  set plain [flowColumnBottoms [::tclpdfTest::content $doc 0]]
+  $doc page add
+  $doc text $body -at {20 25} -width 170 -anchor top -paginate 1 -columns 3 -gutter 6 -balance 1
+  set balanced [flowColumnBottoms [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  # Unbalanced: the first column runs to the bottom of the area (272 mm from
+  # the top = 70.87 pt; the last baseline sits a leading and a bit above
+  # it, 84.16 measured), the last one stops far above it. Balanced: the
+  # three bottoms are within two leadings (2 x 10.8 pt) of each other -
+  # a line count that does not divide by three leaves the last column up
+  # to two lines short -, and none is at the bottom of the area.
+  set plainValues [dict values $plain]
+  set balancedValues [dict values $balanced]
+  list [expr {[lindex $plainValues 0] - 70.87 < 25}] \
+      [expr {[lindex $plainValues 2] - [lindex $plainValues 0] > 100}] \
+      [expr {[::tcl::mathfunc::max {*}$balancedValues] - [::tcl::mathfunc::min {*}$balancedValues] <= 2 * 10.8 + 0.01}] \
+      [expr {[::tcl::mathfunc::min {*}$balancedValues] > 100}]
+} -result {1 1 1 1}
+
+test textFlow-7.4 {a balanced run that fills its page balances only the last page} -body {
+  set doc [tclpdf new -unit mm -typeArea {25 25 20 20}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [join [lrepeat 40 $::flowBody] "\n"]
+  set result [$doc text $body -at {20 25} -width 170 -anchor top -paginate 1 -columns 2 -balance 1]
+  set first [dict values [flowColumnBottoms [::tclpdfTest::content $doc 0]]]
+  set last [dict values [flowColumnBottoms [::tclpdfTest::content $doc [dict get $result page]]]]
+  $doc destroy
+  # Page 1: both columns to the bottom. Last page: even, and above it.
+  list [expr {[dict get $result page] > 0}] \
+      [expr {[lindex $first 0] - 70.87 < 25 && [lindex $first 1] - 70.87 < 25}] \
+      [expr {abs([lindex $last 0] - [lindex $last 1]) <= 12}] \
+      [expr {[lindex $last 0] > 100}]
+} -result {1 1 1 1}
+
+test textFlow-7.5 {columns continue on the next page from the top of the area} -body {
+  set doc [tclpdf new -unit mm -typeArea {30 25 20 20}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [join [lrepeat 40 $::flowBody] "\n"]
+  set result [$doc text $body -at {20 100} -width 170 -paginate 1 -columns 2]
+  set second [::tclpdfTest::content $doc 1]
+  set tops [dict values [flowColumnBottoms $second]]
+  set ys [::tclpdfTest::starts $second y]
+  $doc destroy
+  # Two columns on page 2, both hanging from the top of the area (756.85 pt
+  # less the ascent 7.18).
+  list [expr {[dict get $result page] >= 1}] [llength $tops] \
+      [format %.2f [::tcl::mathfunc::max {*}$ys]]
+} -result {1 2 749.67}
+
+test textFlow-7.6 {columns are checked in tclpdf's words} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach {call pattern} {
+    {-columns 0 -paginate 1} {-columns takes a whole number of 1 or more}
+    {-columns 2} {needs -height max or -paginate}
+    {-columns 2 -gutter -1 -paginate 1} {-gutter takes a distance of 0 or more}
+    {-columns 2 -balance x -paginate 1} {-balance takes a boolean}
+    {-balance 1 -paginate 1} {needs -columns of 2 or more}
+    {-columns 2 -balance 1 -paginate 1 -avoid {{rect {20 20} {10 10}}}} {cannot be combined with -avoid}
+    {-columns 2 -gutter 200 -paginate 1} {leave no width inside -width 170}
+  } {
+    lappend codes [catch {$doc text "x y z" -at {20 20} -width 170 {*}$call} message] \
+        [regexp -- $pattern $message]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 1 1 1 1 1 1 1 1 1}
+
+test textFlow-7.7 {an avoided shape with a value that is not a number is refused in tclpdf's words} -body {
+  # A rectangle built from the answer of a call that answers nothing - the
+  # empty x - used to fail in the band arithmetic with Tcl's own message.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach shape {{rect {{} 90} {60 45} 3} {rect {95 90} {60 x}} {circle {a 20} 10}} {
+    lappend codes [catch {$doc text "x y z" -at {20 20} -width 100 -avoid [list $shape]} message] \
+        [regexp {an avoided (rectangle|circle) is} $message]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 1}
+
 cleanupTests

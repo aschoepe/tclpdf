@@ -821,4 +821,40 @@ test table-15.3 {an unknown direction on a cell is refused like any other key} \
 } -result {1 1 1 1 1 1}
 
 
+# -- table themes -------------------------------------------------------------
+
+test table-16.1 {table themes lists the built-in themes, and an unknown theme names them} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set names [$doc table themes]
+  set code [catch {$doc table -at {20 20} -width 100 -theme fancy -body {{a b}}} message]
+  $doc destroy
+  list $names $code [regexp {known are: plain, striped, grid} $message]
+} -result {{plain striped grid} 1 1}
+
+# -- the type area as the default for -top and -bottom -----------------------
+
+test table-17.1 {a breaking table takes -top and -bottom from the type area} -body {
+  # The same sixty rows: under the default area they take fewer pages than
+  # under an area that leaves only a narrow band per page - and an explicit
+  # -bottom still wins over the area.
+  set rows [lrepeat 60 {a b}]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 20} -width 100 -body $rows
+  set default [$doc page count]
+  $doc destroy
+  set doc [tclpdf new -unit mm -typeArea {120 120}]
+  $doc page add
+  $doc table -at {20 20} -width 100 -body $rows
+  set narrow [$doc page count]
+  $doc destroy
+  set doc [tclpdf new -unit mm -typeArea {120 120}]
+  $doc page add
+  $doc table -at {20 20} -width 100 -body $rows -bottom 280 -top 20
+  set explicit [$doc page count]
+  $doc destroy
+  list [expr {$narrow > $default}] [expr {$explicit == $default}] $default
+} -result {1 1 2}
+
 cleanupTests

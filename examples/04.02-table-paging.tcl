@@ -79,6 +79,17 @@ foreach row $rows {
     set total [expr {$total + [lindex $row 4]}]
 }
 
+# Measured before it is drawn: [table layout] takes the same options and
+# answers with the column widths and the height the whole table would need -
+# what a caller looks at to decide whether it still fits under a heading, or
+# has to start on a fresh page. Nothing is drawn by this call.
+set plan [$doc table layout -width 170 \
+    -head {{No. Taxon Locality Collected "Mass g"}} \
+    -body $rows \
+    -columns {{width 16 align right} {} {} {width 26} {width 22 align decimal}}]
+puts "  layout: [format %.0f [dict get $plan height]] mm for [llength $rows] rows,\
+    columns [lmap w [dict get $plan widths] {format %.1f $w}] mm"
+
 set y [$doc table -at {20 38} -top 26 -width 170 -theme striped \
     -head {{No. Taxon Locality Collected "Mass g"}} \
     -body $rows \

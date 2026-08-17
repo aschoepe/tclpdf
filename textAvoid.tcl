@@ -176,18 +176,25 @@ oo::define ::tclpdf::document::document {
   # would otherwise surface as a wrong wrap and not as an error.
   method TextAvoidCheck {shapes} {
     foreach shape $shapes {
+      # The numbers are checked here as well as the shape of the list: a
+      # rectangle built from a value that turned out empty - the return of
+      # a call that answers nothing, say - used to fail deep in the band
+      # arithmetic with Tcl's own words.
+      set numbers [concat {*}[lrange $shape 1 end]]
       switch -- [lindex $shape 0] {
         rect {
           if {[llength $shape] < 3 || [llength $shape] > 4
               || [llength [lindex $shape 1]] != 2
-              || [llength [lindex $shape 2]] != 2} {
+              || [llength [lindex $shape 2]] != 2
+              || [lsearch -not -regexp $numbers {^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$}] >= 0} {
             return -code error "tclpdf: an avoided rectangle is\
                 {rect {x y} {width height} ?margin?}, got \"$shape\""
           }
         }
         circle {
           if {[llength $shape] < 3 || [llength $shape] > 4
-              || [llength [lindex $shape 1]] != 2} {
+              || [llength [lindex $shape 1]] != 2
+              || [lsearch -not -regexp $numbers {^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$}] >= 0} {
             return -code error "tclpdf: an avoided circle is\
                 {circle {x y} radius ?margin?}, got \"$shape\""
           }

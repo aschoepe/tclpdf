@@ -126,6 +126,36 @@ $doc line -from {20 178} -to {90 178} -stroke {0.4 0.4 0.4} -width 0.3
 # the document itself rather than being told twice.
 $doc pdfa -part 3 -conformance U -profile $profile
 
+# A property of our own in the XMP packet. PDF/A admits metadata only from
+# schemas the packet itself describes (ISO 19005-2, 6.6.2.3.1), so the schema
+# comes first - name, namespace, prefix and every property with type,
+# category and description - and the value after it. [pdfa extension] takes
+# each block as it is; ZUGFeRD announces its four fx: properties the same way.
+$doc pdfa extension {<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#">
+  <pdfaExtension:schemas>
+    <rdf:Bag>
+      <rdf:li rdf:parseType="Resource">
+        <pdfaSchema:schema>Calibration certificate schema</pdfaSchema:schema>
+        <pdfaSchema:namespaceURI>urn:example:calibration:1.0#</pdfaSchema:namespaceURI>
+        <pdfaSchema:prefix>cal</pdfaSchema:prefix>
+        <pdfaSchema:property>
+          <rdf:Seq>
+            <rdf:li rdf:parseType="Resource">
+              <pdfaProperty:name>Laboratory</pdfaProperty:name>
+              <pdfaProperty:valueType>Text</pdfaProperty:valueType>
+              <pdfaProperty:category>external</pdfaProperty:category>
+              <pdfaProperty:description>The laboratory that issued the certificate</pdfaProperty:description>
+            </rdf:li>
+          </rdf:Seq>
+        </pdfaSchema:property>
+      </rdf:li>
+    </rdf:Bag>
+  </pdfaExtension:schemas>
+</rdf:Description>}
+$doc pdfa extension {<rdf:Description rdf:about="" xmlns:cal="urn:example:calibration:1.0#">
+  <cal:Laboratory>Calibration laboratory, Bochum</cal:Laboratory>
+</rdf:Description>}
+
 # What was declared, read back rather than repeated from above.
 set state [$doc pdfa state]
 puts "  PDF/A-[dict get $state part][dict get $state conformance],\

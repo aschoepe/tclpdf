@@ -189,30 +189,27 @@ oo::define ::tclpdf::document::document {
       lassign [my page size] pageWidth ->
       dict set options width [expr {$pageWidth - 2 * max($left, 10)}]
     }
-    if {[dict get $options bottom] eq {}} {
-      lassign [my page size] -> pageHeight
-      # A margin below the table, not the paper edge - a table ending flush
-      # with the sheet is a defect nobody reports either.
+    if {[dict get $options bottom] eq {} || [dict get $options top] eq {}} {
+      # The type area of the page - -typeArea when the document has one,
+      # five percent of the page height otherwise; see [page typeArea].
       #
-      # Derived from the page height, NOT from the left margin. Taking it
-      # from -at meant a table placed at x=140 got a bottom of 157 instead of
+      # Derived from the page, NOT from -at. Taking the bottom from the left
+      # margin meant a table placed at x=140 got a bottom of 157 instead of
       # 287: it broke after two rows, started again on the new page still
-      # below the limit, and produced eleven pages for six rows. The left
-      # edge says nothing about the bottom one.
-      dict set options bottom [expr {$pageHeight - $pageHeight * 0.05}]
-    }
-    if {[dict get $options top] eq {}} {
-      lassign [my page size] -> pageHeight
-      # Where a table CONTINUES on the pages after the first - the counterpart
-      # to -bottom, and derived the same way, from the page height.
-      #
-      # NOT from -at. That is the same mistake -bottom made and the reason for
-      # the note above: -at says where this table starts, which is an answer to
-      # a different question. A table starting at y=240 continued at 240 on
-      # every page after the first, so the further down it began the more pages
-      # it burned - the same 60 rows took 2 pages from the top and 60 from
-      # y=270, one row per page.
-      dict set options top [expr {$pageHeight * 0.05}]
+      # below the limit, and produced eleven pages for six rows. And taking
+      # the top from -at made a table starting at y=240 continue at 240 on
+      # every page after the first, so the further down it began the more
+      # pages it burned - the same 60 rows took 2 pages from the top and 60
+      # from y=270, one row per page. -at says where THIS table starts,
+      # which is an answer to a different question than where the page ends
+      # and where the next one begins.
+      lassign [my page typeArea] -> areaTop -> areaBottom
+      if {[dict get $options bottom] eq {}} {
+        dict set options bottom $areaBottom
+      }
+      if {[dict get $options top] eq {}} {
+        dict set options top $areaTop
+      }
     }
     return $options
   }

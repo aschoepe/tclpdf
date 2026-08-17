@@ -83,6 +83,13 @@ oo::define ::tclpdf::document::document {
       if {$parent eq {}} {
         lappend topLevel $index
       }
+      # Pg names the page the MCIDs are counted in, and [StructurePage]
+      # answers it only when every mark sits on ONE page. An element whose
+      # marks span pages - a paragraph carried over a page break by [text
+      # -paginate] - has no Pg, and then a bare number would name nothing:
+      # each mark goes in as a marked-content reference naming its own page
+      # (14.7.4.2, Table 324).
+      set elementPage [my StructurePage $element]
       set kids {}
       foreach kid [dict get $element kids] {
         switch -- [lindex $kid 0] {
@@ -91,7 +98,14 @@ oo::define ::tclpdf::document::document {
                 [dict get [lindex $elements [lindex $kid 1]] number]]
           }
           mark {
-            lappend kids [::tclpdf::pdfObj num [lindex $kid 2]]
+            lassign $kid . markPage mcid
+            if {$markPage eq $elementPage} {
+              lappend kids [::tclpdf::pdfObj num $mcid]
+            } else {
+              lappend kids [::tclpdf::pdfObj dictionary [list \
+                  Type /MCR Pg [$writer ref [dict get [my Page $markPage] number]] \
+                  MCID [::tclpdf::pdfObj num $mcid]]]
+            }
           }
           objr {
             # Pg is written on EVERY object reference rather than only where
@@ -118,11 +132,10 @@ oo::define ::tclpdf::document::document {
       if {$namespace ne {} && [dict get $element type] ni $only17} {
         lappend pairs NS $namespace
       }
-      # Pg names the page the MCIDs are counted in. Required as soon as the
-      # element owns marks - without it a reader cannot resolve them.
-      set page [my StructurePage $element]
-      if {$page ne {}} {
-        lappend pairs Pg [$writer ref [dict get [my Page $page] number]]
+      # Pg is required as soon as the element owns marks - without it a
+      # reader cannot resolve them.
+      if {$elementPage ne {}} {
+        lappend pairs Pg [$writer ref [dict get [my Page $elementPage] number]]
       }
       if {[llength $kids] == 1} {
         lappend pairs K [lindex $kids 0]

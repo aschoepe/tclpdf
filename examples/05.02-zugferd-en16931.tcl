@@ -180,6 +180,14 @@ $doc bookmark "Invoice [dict get $data number]" -page 0
 # file then validates against the higher profile. -icc names another output
 # intent profile (a CMYK one, see pdfa -profile); the colours are held against
 # it at write time.
+# The profile can be read before anything is attached: [zugferd profile]
+# looks at BT-24 of the XML and answers with the Factur-X level, and refuses
+# XML that carries no such identifier. Nothing is written by this call.
+set channel [open $invoice rb]
+set xml [read $channel]
+close $channel
+puts "  BT-24 read ahead: [$doc zugferd profile $xml]"
+
 set profile [$doc zugferd $invoice]
 puts "  profile from BT-24: $profile"
 puts "  attachment: [dict get [$doc zugferd state] name],\
