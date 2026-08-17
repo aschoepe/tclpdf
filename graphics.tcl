@@ -70,14 +70,13 @@ oo::define ::tclpdf::document::document {
       at {} translate {} rotate {} scale {} skew {} matrix {}
     } $args]
     if {[dict get $options matrix] ne {}} {
-      set matrix [dict get $options matrix]
-      # Six numbers, no more and no fewer: "cm" takes exactly that many
-      # operands (8.4.4), and five leave a reader with an operand stack it
-      # cannot make sense of.
-      if {[llength $matrix] != 6} {
-        return -code error "tclpdf: -matrix is six numbers {a b c d e f},\
-            not [llength $matrix]"
-      }
+      # Six finite numbers and not singular - the one check every raw
+      # -matrix gets (geometry.tcl), before the cm goes out. "cm" takes
+      # exactly six operands (8.4.4), and five leave a reader with an operand
+      # stack it cannot make sense of; a singular cm (8.3.4) folds everything
+      # drawn after it onto a line, with no way back to the page - the same
+      # reason -scale refuses a zero factor below.
+      set matrix [::tclpdf::geometry check [dict get $options matrix] transform]
     } else {
       set matrix [::tclpdf::geometry identity]
       if {[dict get $options at] ne {}} {

@@ -486,6 +486,8 @@ set flowHard "Die Silbentrennung ist eine Verbesserung."
 set flowFont [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveFlowFont [file exists $flowFont]
+set flowJpFont [file join [file dirname $flowFont] NotoSansJP-Regular.ttf]
+testConstraint haveJpFont [file exists $flowJpFont]
 
 test textFlow-4.1 {a soft hyphen has no width in a standard face} -body {
   # It used to throw here: WinAnsi has a slot at 0xAD and the metrics have no
@@ -729,22 +731,23 @@ test textFlow-5.6 {and with an embedded face, through the TJ array} -constraints
   list $gaps $afterSpace [expr {abs($edge - 140) < 0.01}]
 } -result {5 1 1}
 
-test textFlow-5.7 {a thin space is a character of the word, not a break} -constraints haveFlowFont -body {
-  # U+2009 is class BA in UAX #14 - a break would be allowed - but it cannot
-  # be stretched (only code 32 can), and the breaker takes it into the word
-  # like every other space of Unicode; it is set with its own glyph width.
-  # Before, \s split at it and a plain space stood in the stream where the
-  # text had a thin one.
+test textFlow-5.7 {a thin space is a break point, and is not set where the line breaks} -constraints haveFlowFont -body {
+  # U+2009 is class BA in UAX #14: a line may break after it. 45 pt of DejaVu
+  # 10 hold "aaa<thin>bbb" (39.42 pt) but not "aaa<thin>bbb<thin>ccc"
+  # (57.92) - so the line ends after the second thin space, which is not
+  # set, while the first one stays inside the line as a glyph. Before this
+  # the thin space was a character of the word like the no-break space, and
+  # the whole string was one word broken by character.
   set doc [tclpdf new -unit pt -compress 0]
   $doc font embed body $::flowFont
   $doc page add
-  set text "12\u2009\u20AC und 34\u2009\u20AC und 56\u2009\u20AC"
-  set lines [$doc textLines $text -family body -size 10 -width 65]
-  $doc text $text -at {20 700} -width 65 -family body -size 10
+  set text "aaa\u2009bbb\u2009ccc"
+  set lines [$doc textLines $text -family body -size 10 -width 45]
+  $doc text $text -at {20 700} -width 45 -family body -size 10
   set drawn [::tclpdfTest::drawnText $doc body [::tclpdfTest::content $doc]]
   $doc destroy
-  list [lindex $lines 0] [regexp -all "\u2009" $drawn]
-} -result [list "12\u2009\u20AC und" 3]
+  list $lines [regexp -all "\u2009" $drawn]
+} -result [list [list "aaa\u2009bbb" ccc] 1]
 
 test textFlow-5.8 {a thin space is refused by a standard face, in a paragraph as on a line} -body {
   # WinAnsiEncoding has no thin space. It used to pass through the breaker
@@ -769,5 +772,146 @@ test textFlow-5.9 {a tab and a carriage return still break the line and are set 
   $doc destroy
   list $lines [regexp {\(12 \\200 und\) Tj} $stream] [regexp {\(34 \\200\) Tj} $stream]
 } -result [list [list "12 \u20AC und" "34 \u20AC"] 1 1]
+
+test textFlow-5.10 {a thin space the line ends on takes no room} -constraints haveFlowFont -body {
+  # 19.5 pt hold "aaa" (18.38) but not "aaa<thin>" (20.38). The line ends
+  # after the thin space and the thin space is not set, so it must not be
+  # measured either - measured, "aaa<thin>" was too wide, fell to the
+  # character fallback, and the thin space opened the second line.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set lines [$doc textLines "aaa\u2009bbb" -family body -size 10 -width 19.5]
+  $doc destroy
+  set lines
+} -result {aaa bbb}
+
+test textFlow-5.11 {a justified line grows at its word spaces and keeps the thin spaces thin} -constraints haveFlowFont -body {
+  # Three thin spaces inside the first line and five word spaces. Only
+  # U+0020 can be stretched (9.3.3, and the TJ road adjusts after that glyph
+  # alone), so the five take the whole gap and the line reaches the margin.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc font embed body $::flowFont
+  $doc page add
+  $doc font -family body -size 10
+  set text "12\u2009\u20AC und 34\u2009\u20AC und 56\u2009\u20AC und 78\u2009\u20AC und 90\u2009\u20AC ende"
+  $doc text $text -at {20 700} -width 140 -align justify
+  set stream [::tclpdfTest::content $doc]
+  set first [lindex [$doc textLines $text -width 140] 0]
+  set natural [$doc textWidth $first]
+  set pieces [::tclpdfTest::drawn $doc body $stream]
+  $doc destroy
+  set gaps 0
+  set edge $natural
+  set afterSpace 1
+  set previous {}
+  foreach piece $pieces {
+    lassign $piece kind value
+    if {$kind eq "gap"} {
+      incr gaps
+      set edge [expr {$edge - $value / 1000.0 * 10}]
+      if {[string index $previous end] ne " "} {
+        set afterSpace 0
+      }
+    } else {
+      set previous $value
+    }
+  }
+  list [regexp -all "\u2009" $first] $gaps $afterSpace [expr {abs($edge - 140) < 0.01}]
+} -result {3 5 1 1}
+
+test textFlow-5.12 {the figure space and the narrow no-break space do not break either} -constraints haveFlowFont -body {
+  # U+2007 and U+202F are class GL like U+00A0: the same amounts as in 5.2,
+  # the same lines. A break at either would end the first line on "34".
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set text "12\u202F\u20AC und 34\u2007\u20AC und 56\u202F\u20AC"
+  set lines [$doc textLines $text -family body -size 10 -width 65]
+  $doc destroy
+  set lines
+} -result [list "12\u202F\u20AC und" "34\u2007\u20AC und" "56\u202F\u20AC"]
+
+test textFlow-5.13 {the ideographic space breaks} -constraints haveJpFont -body {
+  # U+3000, class BA. DejaVu Sans has no glyph for it and refuses it (as
+  # for any character it lacks); Noto Sans JP sets it 10 pt wide. 50 pt hold
+  # "aaa<ideographic>bbb" (45.43) and not the third word.
+  set doc [tclpdf new -unit pt]
+  $doc font embed jp $::flowJpFont
+  $doc page add
+  set lines [$doc textLines "aaa\u3000bbb\u3000ccc" -family jp -size 10 -width 50]
+  $doc destroy
+  set lines
+} -result [list "aaa\u3000bbb" ccc]
+
+test textFlow-5.14 {the rest of a height-limited block carries its thin spaces as they were} -constraints haveFlowFont -body {
+  # The rest is the tail of the string: a thin space inside it is still
+  # U+2009, not the space the breaker joins words with, and the one the
+  # first line broke at is consumed like a space would be. Broken again,
+  # the rest gives the lines the whole block would have given.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  $doc font -family body -size 10
+  set text "aaa\u2009bbb ccc\u2009ddd\u2009eee fff"
+  set all [$doc textLines $text -width 45]
+  set result [$doc text $text -at {20 700} -width 45 -height 12]
+  set rest [dict get $result rest]
+  set again [$doc textLines $rest -width 45]
+  $doc destroy
+  list $all $rest [expr {$again eq [lrange $all 1 end]}]
+} -result [list [list "aaa\u2009bbb" "ccc\u2009ddd" "eee fff"] "ccc\u2009ddd\u2009eee fff" 1]
+
+test textFlow-5.15 {the zero width space breaks, and has no width inside a line} -constraints haveFlowFont -body {
+  # U+200B, class ZW: a break opportunity that shows nothing. Like the
+  # soft hyphen it never reaches a font (font.tcl, afm.tcl): a face without
+  # a glyph for it would refuse the string, one with an (empty) glyph would
+  # carry it into the file. So the line breaks at it, the width is exactly
+  # that of the letters, and the stream holds no U+200B. 40 pt hold "aaabbb"
+  # (37.43) and not "aaabbbccc".
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc font embed body $::flowFont
+  $doc page add
+  $doc font -family body -size 10
+  set text "aaa\u200Bbbb\u200Bccc"
+  set lines [$doc textLines $text -width 40]
+  set width [expr {[$doc textWidth [lindex $lines 0]] - [$doc textWidth aaabbb]}]
+  $doc text $text -at {20 700} -width 40
+  set drawn [::tclpdfTest::drawnText $doc body [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $lines [expr {abs($width) < 0.0001}] [regexp -all "\u200B" $drawn]
+} -result [list [list "aaa\u200Bbbb" ccc] 1 0]
+
+test textFlow-5.16 {a breakable space inside a line is still refused by a face without the glyph} -body {
+  # As 5.8: the standard fourteen have no thin space, and a paragraph says
+  # so like a single line does. The zero width space is different: it is
+  # stripped before any font is asked (like the soft hyphen), so Helvetica
+  # sets the string and measures it as if the mark were not there. Only
+  # where the line ENDS on a thin space is the face not asked either - the
+  # character is not set there.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set thin [catch {$doc textLines "12\u2009\u20AC und" -family helvetica -size 10 -width 60} m1]
+  set zero [catch {$doc textLines "12\u200B\u20AC und" -family helvetica -size 10 -width 60} m2]
+  set same [expr {[$doc textWidth "12\u200B\u20AC" -family helvetica -size 10]
+      == [$doc textWidth "12\u20AC" -family helvetica -size 10]}]
+  set ends [$doc textLines "12\u2009" -family helvetica -size 10 -width 60]
+  $doc destroy
+  list $thin [regexp {U\+2009} $m1] $zero $m2 $same $ends
+} -result [list 1 1 0 [list "12\u200B\u20AC und"] 1 12]
+
+test textFlow-5.17 {a breakable space in front of a word belongs to the word} -constraints haveFlowFont -body {
+  # UAX #14 lets a line break after a class BA space, not before it. One that
+  # opens a paragraph - an em space as an indent - or follows a plain space
+  # is therefore set with the word behind it, and stays where the text put
+  # it: the first line begins with the em space, and 65 pt of DejaVu 10 hold
+  # "<em>Once upon" (64.18, 10 of it the em space) but not "a" as well.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::flowFont
+  $doc page add
+  set lines [$doc textLines "\u2003Once upon a time" -family body -size 10 -width 65]
+  $doc destroy
+  set lines
+} -result [list "\u2003Once upon" "a time"]
 
 cleanupTests

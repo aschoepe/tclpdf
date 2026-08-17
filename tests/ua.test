@@ -352,6 +352,29 @@ test ua-5.7 {a document configured to PDF 2.0 cannot claim PDF/A} -body {
       [string match "*2.0*" $err]
 } -result {1 1 1}
 
+test ua-5.10 {part 1 on a file raised to 2.0 is refused at write time, naming the way out} -constraints haveFace -body {
+  # ua -part 1 lifts the file to 1.7 and does not cap it - a document may
+  # still move on to part 2, which needs 2.0. So a part-1 claim on a 2.0
+  # file is caught where the other claims are checked: at write time.
+  # veraPDF ua1 fails such a file on ISO 14289-1 6.1-1 (measured 2026-08-17).
+  set doc [tclpdf new]
+  $doc tagged 1
+  $doc info Title "UA on 2.0"
+  $doc language en
+  $doc font embed face $face
+  $doc font -family face
+  $doc page add
+  $doc text "hello" -at {20 20}
+  $doc ua -part 1 -revision 2014
+  $doc configure -version 2.0
+  set code [catch {$doc write [::tclpdfTest::scratch ua-2.0.pdf]} err]
+  $doc configure -version 1.7
+  lassign [::tclpdfTest::writes $doc ua-1.7.pdf] again written
+  $doc destroy
+  list $code [string match "*PDF/UA-1 is a PDF 1.7 format*" $err] \
+      [string match "*part 2 instead*" $err] $again $written
+} -result {1 1 1 0 1}
+
 test ua-5.8 {ua 1 with pdfa -part 3 stays the ZUGFeRD combination} -body {
   # The guard must not overreach: part 1 rides the 1.7 path and is exactly
   # what an accessible invoice declares.

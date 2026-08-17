@@ -12,7 +12,7 @@
 # tools/ucd/DerivedJoiningType.txt of the Unicode Character Database,
 # version 16.0.0, (C) Unicode, Inc. Rerun the generator instead of correcting
 # an entry here; a hand-fixed value would be lost on the next run and
-# would no longer match its source.
+# would no longer match its source - tests/joining.test compares the two.
 #
 # Ranges of {first last type}, sorted by first and free of overlap, with
 # the types R, L, D, C and T. A character that is not in the table is

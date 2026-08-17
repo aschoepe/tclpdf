@@ -174,30 +174,12 @@ oo::define ::tclpdf::document::document {
     if {$matrix eq {}} {
       return {}
     }
-    # Six numbers, no more and no fewer - a /Matrix is the six operands of cm
-    # (Table 75, 8.3.4), and a reader given five has no rule for which one is
-    # missing.
-    if {[llength $matrix] != 6} {
-      return -code error "tclpdf: -matrix is six numbers {a b c d e f},\
-          not [llength $matrix]"
-    }
-    lassign $matrix a b c d
-    foreach number $matrix {
-      if {![string is double -strict $number]} {
-        return -code error "tclpdf: -matrix of pattern \"$name\" takes\
-            numbers, not \"$number\""
-      }
-    }
-    # A singular matrix (a*d - b*c = 0) squashes pattern space onto a line:
-    # a reader paints nothing or gives up, and neither one says why. It is a
-    # well-formed array in the right place, so no validator objects either -
-    # the value at the norm's edge that has to be refused here.
-    if {$a * $d - $b * $c == 0} {
-      return -code error "tclpdf: -matrix of pattern \"$name\" is singular\
-          ({$matrix}) - a*d - b*c must not be zero, or the tiles collapse\
-          onto a line"
-    }
-    return $matrix
+    # Six finite numbers and not singular - the one check every raw -matrix
+    # gets (geometry.tcl), here before the pattern object is written. A
+    # singular pattern matrix squashes the tiles onto a line: a reader paints
+    # nothing or gives up, and no validator objects to a well-formed array in
+    # the right place.
+    return [::tclpdf::geometry check $matrix "pattern \"$name\""]
   }
 
   # The tile in the document unit - the BBox of pattern space, UNSCALED: a

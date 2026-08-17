@@ -154,6 +154,13 @@ $doc text "tiling patterns; the tiles hang off the page - the third is cut at it
 # this file is keyed out by the reader, so whatever is under the picture
 # shows through: here a coloured field and one of the tiling patterns. The
 # picture still travels untouched; only a /Mask array is added.
+#
+# The same file at 16 bits per sample takes another way: readers were
+# measured to ignore a /Mask array at that depth (poppler compares the ranges
+# as if the image were 8-bit, CoreGraphics renders it opaque too), so the key
+# is decoded once and written as an /SMask of 0 and 255 - the picture itself
+# still passes through at 16 bits. That decode is what the second timing
+# shows; a 96x96 file costs a few milliseconds.
 $doc font -style bold -size 9
 $doc text "Colour key: one transparent colour, no alpha channel" -at {20 212}
 $doc rect -at {20 218} -size {60 34} -fill {0.93 0.55 0.2}
@@ -161,13 +168,18 @@ $doc rect -at {85 218} -size {60 34} -fill {pattern hatch} -stroke gray -width 0
 set start [clock milliseconds]
 $doc image embed keyed [file join $images sample-keyed.png]
 $doc image place keyed -at {33 220} -height 30
-$doc image place keyed -at {98 220} -height 30
 set spent [expr {[clock milliseconds] - $start}]
+set start [clock milliseconds]
+$doc image embed keyed16 [file join $images sample-keyed16.png]
+$doc image place keyed16 -at {98 220} -height 30
+set spent16 [expr {[clock milliseconds] - $start}]
 $doc image place keyed -at {150 220} -height 30
 $doc font -style {} -size 7
-$doc text "PNG, DeviceRGB + Mask - the ground shows through where the file said magenta\
-    (${spent} ms, a pass-through)" -at {20 257}
-$doc text "the same file on white" -at {150 257}
+$doc text "8 bit: DeviceRGB + Mask, the ground shows through where the file said magenta\
+    (${spent} ms, a pass-through)" -at {20 257} -width 62
+$doc text "16 bit: DeviceRGB at 16 bits + SMask - a 16-bit /Mask is ignored by readers,\
+    so the key becomes a mask (${spent16} ms, decoded once)" -at {85 257} -width 62
+$doc text "the 8-bit file on white" -at {150 257}
 
 exampleFooter $doc
 
@@ -242,5 +254,6 @@ puts "  source pictures together: [expr {[file size [file join $images sample-ph
     [file size [file join $images sample-gray.jpg]] +
     [file size [file join $images sample-indexed.png]] +
     [file size [file join $images sample-keyed.png]] +
+    [file size [file join $images sample-keyed16.png]] +
     [file size [file join $images sample-rgba.png]]}] bytes"
 $doc destroy

@@ -30,7 +30,7 @@
 # back to Helvetica and an example ending on an embedded face must keep it.
 # Pass one where the page ends on a face that cannot set the footer - a symbol
 # font, or one without the punctuation the line needs.
-proc exampleFooter {doc {family {}}} {
+proc exampleFooter {doc {family {}} {colour {0.45 0.45 0.5}}} {
     # [info script] inside a proc reports the file being sourced right now,
     # which by the time this runs is the example again - common.tcl is long
     # finished. Checked under both interpreters; without that it would name
@@ -54,7 +54,9 @@ proc exampleFooter {doc {family {}}} {
     if {$family ne {}} {
         $doc font -family $family -style {}
     }
-    $doc font -size 6 -color {0.45 0.45 0.5}
+    # The colour is a parameter for one reason: a document under a CMYK
+    # output intent (05.09) may not paint DeviceRGB, footer included.
+    $doc font -size 6 -color $colour
     # -tag Artifact: a footer is a fact about the sheet, not about the text,
     # and in a tagged document it has to say so or a reader announces it as
     # content. Harmless everywhere else - an untagged document ignores it.
@@ -83,8 +85,8 @@ proc exampleArchival {doc} {
 # nothing to report beyond the file name. Pulled out when the third example
 # had the same seven lines; [exampleArchival] alone was not enough, because
 # what repeated was the whole ending.
-proc exampleDone {doc target {family {}}} {
-    exampleFooter $doc $family
+proc exampleDone {doc target {family {}} {colour {0.45 0.45 0.5}}} {
+    exampleFooter $doc $family $colour
     $doc write $target
     puts "  written: $target"
     puts "  [exampleArchival $doc]"

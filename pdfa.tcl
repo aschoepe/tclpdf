@@ -135,13 +135,18 @@ oo::define ::tclpdf::document::document {
     # document with "%PDF-1.4" in the header and pdfaid:part 3 in the XMP
     # passes veraPDF without a word - two claims, one file, nobody objects.
     # Through [configure], so that [cget -version] answers what the header
-    # says; and recorded with the writer, so that a later [configure
-    # -version 1.4] is refused naming PDF/A rather than writing that very
-    # file.
+    # says; and recorded with the writer both ways, so that a later [configure
+    # -version 1.4] OR [configure -version 2.0] is refused naming PDF/A rather
+    # than writing that very file. The ceiling is not decoration: measured,
+    # "pdfa -part 3" then "configure -version 2.0" produced %PDF-2.0 with
+    # pdfaid:part 3, and veraPDF -f 3b failed it on ISO 19005-3 6.1.2-1
+    # alone (the header shall be %PDF-1.n, n 0 to 7) - the same for part 2
+    # under 19005-2.
     if {[package vcompare [[my writer] version] 1.7] < 0} {
       my configure -version 1.7
     }
     my RequireVersion 1.7 "PDF/A-[dict get $current part]"
+    my LimitVersion 1.7 "PDF/A-[dict get $current part]"
     # Level B is "looks the same forever", level U is B plus text that can be
     # extracted reliably - the ToUnicode CMap this package writes for every
     # embedded face, so U costs nothing here and is the better default answer

@@ -25,7 +25,8 @@
 # Which tables travel:
 #
 #   head hhea maxp   rewritten (glyph count, loca format; for an instance of
-#                    a variable face also the bounding box)
+#                    a variable face also the bounding box and the hhea
+#                    summary of advance, bearings and extent)
 #   hmtx loca glyf   rebuilt from the chosen glyphs
 #   cvt fpgm prep    copied unchanged when present - the hinting programs,
 #                    dropped only because they are not needed at all sizes
@@ -274,7 +275,22 @@ proc ::tclpdf::subset::Hhea {font count} {
   set hhea [::tclpdf::sfnt table $font hhea]
   # numberOfHMetrics has to match the hmtx written above, or a reader takes
   # the wrong widths for the tail of the font.
-  return [string replace $hhea 34 35 [binary format Su $count]]
+  set hhea [string replace $hhea 34 35 [binary format Su $count]]
+  # advanceWidthMax, minLeftSideBearing, minRightSideBearing and xMaxExtent at
+  # offset 10 (ISO/IEC 14496-22 "hhea") summarise the glyphs of the file, and
+  # like the box in head they were measured on the DEFAULT outlines - up to
+  # 377 units off once the outlines have moved (varFont hheaMetrics has the
+  # measurements). Set for an instance only, from the same moved set the hmtx
+  # and glyf above were written from; a face embedded as it came keeps the
+  # file's numbers byte for byte, as before, and they describe the whole face
+  # rather than the subset - which is what fontTools' subsetter leaves there
+  # unless told to recalculate.
+  if {[dict exists $font instanced]} {
+    package require tclpdf::varFont 1.0-
+    set hhea [string replace $hhea 10 17 [binary format SuSSS \
+        {*}[::tclpdf::varFont hheaMetrics [dict get $font instanced]]]]
+  }
+  return $hhea
 }
 
 proc ::tclpdf::subset::Maxp {font count} {

@@ -31,7 +31,8 @@ package require tclpdf::pdfObj 1.0-
 namespace eval ::tclpdf::writer {}
 
 oo::class create ::tclpdf::writer::pdf {
-  variable tclpdfObjects tclpdfNext tclpdfVersion tclpdfId tclpdfRequired
+  variable tclpdfObjects tclpdfNext tclpdfVersion tclpdfId tclpdfRequired \
+      tclpdfCeiling
 
   # The PDF version is a parameter, not a constant: PDF/A-3 and therefore
   # ZUGFeRD require 1.7, while PDF/A-4f would want 2.0. Keeping it here makes
@@ -41,6 +42,7 @@ oo::class create ::tclpdf::writer::pdf {
     set tclpdfNext 0
     set tclpdfId {}
     set tclpdfRequired {}
+    set tclpdfCeiling {}
     my version $version
   }
 
@@ -63,6 +65,21 @@ oo::class create ::tclpdf::writer::pdf {
         return -code error "tclpdf: this document already uses\
             [lindex $tclpdfRequired 1], which needs PDF\
             [lindex $tclpdfRequired 0] - it cannot be lowered to PDF $value"
+      }
+      # And not above what a claim in the document allows: [limit] recorded
+      # the ceiling at ITS moment, and raising past it afterwards would put
+      # a PDF/A-3 claim into a file whose header disowns it.
+      # Measured: "pdfa -part 3" then "configure -version 2.0" wrote
+      # %PDF-2.0 with pdfaid:part 3, and veraPDF failed it on one rule
+      # only, ISO 19005-3 6.1.2-1 - the header has to be %PDF-1.n, n from 0
+      # to 7 - the file itself being fine. The one place that can catch it
+      # is here, before the header exists.
+      if {$tclpdfCeiling ne {}
+          && [package vcompare $value [lindex $tclpdfCeiling 0]] > 0} {
+        return -code error "tclpdf: this document claims\
+            [lindex $tclpdfCeiling 1], which is written as PDF\
+            [lindex $tclpdfCeiling 0] at most - it cannot be raised to PDF\
+            $value"
       }
       set tclpdfVersion $value
     }
@@ -87,6 +104,26 @@ oo::class create ::tclpdf::writer::pdf {
     if {$tclpdfRequired eq {}
         || [package vcompare $version [lindex $tclpdfRequired 0]] > 0} {
       set tclpdfRequired [list $version $feature]
+    }
+    return
+  }
+
+  # The mirror image of [require]: a claim that binds the file to a version
+  # AT MOST, about to be made. PDF/A-2 and -3 (ISO 19005-2/-3, 6.1.2) are
+  # profiles of ISO 32000-1, and each spells out that the header is
+  # "%PDF-1.n" with n from 0 to 7 - so a 2.0 file cannot carry the claim,
+  # whatever else is in it (measured with veraPDF, see pdfa.tcl). Refused
+  # when the file is already past the ceiling; remembered otherwise, so that
+  # [version] can refuse a later raising. The lowest ceiling is the one that
+  # counts, as the highest requirement is in [require].
+  method limit {version feature} {
+    if {[package vcompare $tclpdfVersion $version] > 0} {
+      return -code error "tclpdf: $feature is written as PDF $version at\
+          most - this document is written as PDF $tclpdfVersion"
+    }
+    if {$tclpdfCeiling eq {}
+        || [package vcompare $version [lindex $tclpdfCeiling 0]] < 0} {
+      set tclpdfCeiling [list $version $feature]
     }
     return
   }

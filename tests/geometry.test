@@ -83,6 +83,43 @@ test geometry-matrix-3.5 {rotating about a point leaves that point fixed} -body 
   geometryRound [::tclpdf::geometry apply $matrix {*}$p]
 } -result {100.00 200.00}
 
+test geometry-matrix-3.6 {check passes a good matrix through, mirror included} -body {
+  # The one check behind -matrix of transform, pattern create and shading.
+  # A negative determinant is a mirror and fine; a small one is a small
+  # matrix, not a singular one - only a*d - b*c of exactly 0 is refused.
+  list [::tclpdf::geometry check {1 0 0 1 0 0} transform] \
+      [::tclpdf::geometry check {-1 0 0 1 0 0} transform] \
+      [::tclpdf::geometry check {0.001 0 0 0.001 5 5} transform] \
+      [::tclpdf::geometry check {1 0.5 0 1 0 0} transform]
+} -result {{1 0 0 1 0 0} {-1 0 0 1 0 0} {0.001 0 0 0.001 5 5} {1 0.5 0 1 0 0}}
+
+test geometry-matrix-3.7 {check refuses five or seven values} -body {
+  # A matrix is the six operands of cm (8.3.4, Table 75); a reader given
+  # five has no rule for which one is missing.
+  list [catch {::tclpdf::geometry check {1 0 0 1 0} transform} five] $five \
+      [catch {::tclpdf::geometry check {1 0 0 1 0 0 0} {pattern "p"}} seven] $seven
+} -result {1 {tclpdf: -matrix of transform is six numbers {a b c d e f}, not 5}\
+    1 {tclpdf: -matrix of pattern "p" is six numbers {a b c d e f}, not 7}}
+
+test geometry-matrix-3.8 {check refuses a letter, and Inf and NaN} -body {
+  # Inf and NaN pass "string is double" but have no PDF spelling (7.3.3),
+  # so they are no more a matrix entry than a letter is.
+  set codes {}
+  foreach matrix {{1 0 0 x 0 0} {Inf 0 0 1 0 0} {1 0 0 NaN 0 0} {1e400 0 0 1 0 0}} {
+    lappend codes [catch {::tclpdf::geometry check $matrix transform} message]
+    lappend codes [string match {tclpdf: -matrix of transform takes numbers, not "*"} $message]
+  }
+  set codes
+} -result {1 1 1 1 1 1 1 1}
+
+test geometry-matrix-3.9 {check refuses a singular matrix} -body {
+  # {1 2 2 4}: proportional columns, a*d - b*c is exactly 0. Everything
+  # under such a cm, or filled with such a pattern, collapses onto a line
+  # and no reader or validator says why.
+  list [catch {::tclpdf::geometry check {1 2 2 4 0 0} {shading axial}} message] $message \
+      [catch {::tclpdf::geometry check {0 0 0 0 0 0} transform}]
+} -result {1 {tclpdf: -matrix of shading axial is singular ({1 2 2 4 0 0}) - a*d - b*c must not be zero, or everything under it collapses onto a line} 1}
+
 test geometry-9.1 {a size given as two numbers is taken as it stands} -body {
   # Regression: the default orientation used to be applied to an explicit
   # size too, so a 88 by 55 label came out 55 by 88. Whoever writes two

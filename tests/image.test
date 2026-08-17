@@ -147,6 +147,13 @@ test image-2.5 {an interlaced PNG is refused by name} -body {
 # no validator has an opinion on that. It now becomes a /Mask array (colour
 # key masking, 8.9.6.4) - still a pass-through, nothing decoded.
 #
+# Except at 16 bits. Measured on 2026-08-16 with pdftoppm and with
+# CoreGraphics (qlmanage): a /Mask array at BitsPerComponent 16 is never
+# applied - poppler treats a 16-bit image as 8-bit but compares the ranges
+# unshifted - and the picture renders opaque, exactly the defect the array was
+# meant to fix. So a 16-bit key is decoded for a soft mask of 0/255 instead;
+# the picture itself still passes through at 16 bits.
+#
 # The files are built here, byte by byte, so that every depth the format
 # allows is exercised; a real encoder saves whichever depth it was given.
 
@@ -166,14 +173,21 @@ test image-2.6 {greyscale, 8 bit: the tRNS value becomes a one-value /Mask range
       [dict exists $streams maskData]
 } -result {colourKey {192 192} {[192 192]} 1 0}
 
-test image-2.7 {greyscale, 16 bit: the key stays a 16-bit value} -body {
-  # The image goes in at BitsPerComponent 16 and /Mask ranges are sample values
-  # at that depth, so 0xABCD is 43981, not 171.
-  set png [::tclpdfTest::png 1 1 16 0 [binary format cuSu 0 0xABCD] \
+test image-2.7 {greyscale, 16 bit: the key is a 16-bit value, but goes out as a soft mask} -body {
+  # Two pixels, 0x2000 and 0xABCD; the second is the transparent one. The key
+  # is answered at the depth of the file - 43981, not 171 - but no /Mask is
+  # written: the picture passes through at BitsPerComponent 16 and an /SMask
+  # of one byte per pixel carries 0 for the keyed pixel, 255 for the other.
+  set png [::tclpdfTest::png 2 1 16 0 [binary format cuSuSu 0 0x2000 0xABCD] \
       [binary format Su 0xABCD]]
-  set streams [::tclpdf::imagePng streams [::tclpdf::imagePng parse $png]]
-  list [dict get $streams pairs BitsPerComponent] [dict get $streams pairs Mask]
-} -result {16 {[43981 43981]}}
+  set parsed [::tclpdf::imagePng parse $png]
+  set streams [::tclpdf::imagePng streams $parsed]
+  binary scan [::tclpdf::filter decodeFlate [dict get $streams maskData]] cu* mask
+  list [::tclpdf::imagePng transparency $parsed] [::tclpdf::imagePng colourKey $parsed] \
+      [dict get $streams pairs BitsPerComponent] [dict exists $streams pairs Mask] \
+      [expr {[dict get $streams data] eq [dict get $parsed idat]}] \
+      [dict get $streams maskPairs BitsPerComponent] $mask
+} -result {softMask {43981 43981} 16 0 1 8 {255 0}}
 
 test image-2.8 {greyscale below 8 bit: the value sits in the low bits, the range is the value} -body {
   # One row of eight pixels at each depth: for depth 1 the byte 0b10101010,
@@ -201,12 +215,20 @@ test image-2.9 {truecolor, 8 bit: three ranges, one per component} -body {
       [dict get $streams pairs ColorSpace] [dict exists $streams maskData]
 } -result {colourKey {[255 255 0 0 255 255]} /DeviceRGB 0}
 
-test image-2.10 {truecolor, 16 bit: three 16-bit ranges} -body {
-  set row [binary format cuSuSuSu 0 0x0100 0x8000 0xFFFF]
-  set png [::tclpdfTest::png 1 1 16 2 $row [binary format SuSuSu 0x0100 0x8000 0xFFFF]]
-  set streams [::tclpdf::imagePng streams [::tclpdf::imagePng parse $png]]
-  list [dict get $streams pairs BitsPerComponent] [dict get $streams pairs Mask]
-} -result {16 {[256 256 32768 32768 65535 65535]}}
+test image-2.10 {truecolor, 16 bit: three 16-bit ranges, and a soft mask that wants all three} -body {
+  # Three pixels: the key itself, one that agrees in two components out of
+  # three (so it must stay opaque), and an unrelated colour.
+  set row [binary format cuSuSuSuSuSuSuSuSuSu 0 0x0100 0x8000 0xFFFF \
+      0x0100 0x8000 0xFFFE 0x0000 0x0000 0x8000]
+  set png [::tclpdfTest::png 3 1 16 2 $row [binary format SuSuSu 0x0100 0x8000 0xFFFF]]
+  set parsed [::tclpdf::imagePng parse $png]
+  set streams [::tclpdf::imagePng streams $parsed]
+  binary scan [::tclpdf::filter decodeFlate [dict get $streams maskData]] cu* mask
+  list [::tclpdf::imagePng transparency $parsed] [::tclpdf::imagePng colourKey $parsed] \
+      [dict get $streams pairs BitsPerComponent] [dict exists $streams pairs Mask] \
+      [dict get $streams pairs ColorSpace] \
+      [expr {[dict get $streams data] eq [dict get $parsed idat]}] $mask
+} -result {softMask {256 256 32768 32768 65535 65535} 16 0 /DeviceRGB 1 {0 255 255}}
 
 test image-2.11 {no tRNS, no /Mask - and the palette way is untouched} -body {
   set png [::tclpdfTest::png 2 1 8 0 [binary format cucucu 0 0x40 0xC0]]
@@ -275,6 +297,14 @@ test image-3.2 {the un-filter reverses all five filter types} -constraints haveI
       [lrange $out 15 19] [lrange $out 20 24]
 } -result {{10 20 30 40 0} {5 10 15 20 20} {6 11 16 21 20} {3 7 11 16 18} {3 7 11 16 18}}
 
+test image-3.3 {the colour-key mask is built for 16 bits only, and says so otherwise} -body {
+  # An 8-bit key takes the /Mask way and never gets here; asked directly, the
+  # builder refuses by name rather than comparing bytes to a two-byte key.
+  set png [::tclpdfTest::png 2 1 8 0 [binary format cucucu 0 0x40 0xC0] \
+      [binary format Su 0xC0]]
+  ::tclpdf::imagePngAlpha colourKeyMask [::tclpdf::imagePng parse $png]
+} -returnCodes error -match glob -result {tclpdf: a colour-key soft mask is built for 16-bit*depth 8*}
+
 test image-4.1 {a JPEG becomes a DCTDecode XObject} -constraints haveImages -body {
   set doc [tclpdf new]
   $doc page add
@@ -335,19 +365,44 @@ test image-4.8 {a keyed truecolor PNG is written with /Mask and without a soft m
       [regexp {/Predictor 15} $bytes]
 } -result {colourKey 1 0 1}
 
-test image-4.9 {a keyed 16-bit greyscale PNG keeps depth and key together} -body {
-  set png [::tclpdfTest::png 1 1 16 0 [binary format cuSu 0 0xABCD] \
+test image-4.9 {a keyed 16-bit greyscale PNG keeps its depth and gets a soft mask, not a /Mask} -body {
+  # End to end: the picture stays 16 bit, the /SMask reference reaches its
+  # dictionary, and no /Mask array is written alongside - a reader would
+  # apply neither, having ignored the array. [image info] says which way.
+  set png [::tclpdfTest::png 2 1 16 0 [binary format cuSuSu 0 0x2000 0xABCD] \
       [binary format Su 0xABCD]]
   set doc [tclpdf new]
   $doc page add
-  $doc image draw -data $png -at {10 10} -width 50
+  $doc image embed deep -data $png
+  set info [$doc image info deep]
+  $doc image place deep -at {10 10} -width 50
   set path [::tclpdfTest::scratch image-colourkey16.pdf]
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
-  list [regexp {/BitsPerComponent 16} $bytes] [regexp {/Mask \[43981 43981\]} $bytes]
-} -result {1 1}
+  list [dict get $info transparency] [regexp {/BitsPerComponent 16} $bytes] \
+      [regexp {/SMask \d+ 0 R} $bytes] [regexp {/Mask \[} $bytes] \
+      [regexp {/Predictor 15} $bytes]
+} -result {softMask 1 1 0 1}
+
+test image-4.10 {a keyed 16-bit truecolor PNG goes the same way} -body {
+  set row [binary format cuSuSuSuSuSuSu 0 0 0 0x8000 0x0100 0x8000 0xFFFF]
+  set png [::tclpdfTest::png 2 1 16 2 $row [binary format SuSuSu 0x0100 0x8000 0xFFFF]]
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed deep -data $png
+  set info [$doc image info deep]
+  $doc image place deep -at {10 10} -width 50
+  set path [::tclpdfTest::scratch image-colourkey16rgb.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [dict get $info transparency] [regexp {/BitsPerComponent 16} $bytes] \
+      [regexp {/ColorSpace /DeviceRGB} $bytes] [regexp {/SMask \d+ 0 R} $bytes] \
+      [regexp {/Mask \[} $bytes]
+} -result {softMask 1 1 1 0}
 
 test image-4.4 {the same picture placed twice is stored once} -constraints haveImages -body {
   # Embedding once per placement would make a logo on five pages five times

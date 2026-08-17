@@ -827,6 +827,21 @@ test graphics-limit-11.6 {-matrix is six numbers} -body {
   list $codes [llength [lsearch -all $operators cm]]
 } -result {{1 1 1 0} 1}
 
+test graphics-limit-11.9 {a singular -matrix is refused before the cm is written} -body {
+  # A singular cm (a*d - b*c = 0, 8.3.4) folds everything drawn after it
+  # onto a line, with no way back to the page - the same reason -scale
+  # refuses a zero factor. It used to go out as it stood. Refused before
+  # [content]: the stream stays empty. A mirror is not singular.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc transform -matrix {1 2 2 4 0 0}} message]
+  set content [::tclpdfTest::content $doc]
+  set mirror [catch {$doc transform -matrix {-1 0 0 1 0 0}}]
+  $doc destroy
+  list $code [string match {tclpdf: -matrix of transform is singular*} $message] \
+      $content $mirror
+} -result {1 1 {} 0}
+
 test graphics-limit-11.8 {opacity refuses a side it does not know} -body {
   # "opacity 0.5 foo" used to be accepted and to write an ExtGState with
   # neither ca nor CA - a call that changed nothing and said nothing.

@@ -183,4 +183,45 @@ proc ::tclpdf::geometry::apply {matrix x y} {
   return [list [expr {$a * $x + $c * $y + $e}] [expr {$b * $x + $d * $y + $f}]]
 }
 
+# Refuse a matrix a caller hands in raw - the -matrix option of transform,
+# pattern create and shading - before it is written anywhere. Returns the
+# matrix; the error names the owner ("pattern \"hatch\"", "transform",
+# "shading axial") so the caller does not have to.
+#
+# Six numbers, no more and no fewer: a matrix is the six operands of cm
+# (8.3.4, Table 75), and a reader given five has no rule for which one is
+# missing. Numbers, and finite ones - Inf and NaN pass "string is double" but
+# have no PDF spelling (7.3.3). And not singular: a*d - b*c = 0 collapses the
+# space onto a line or a point, everything drawn under a cm like that or
+# filled with such a pattern comes out invisible, and neither a reader nor a
+# validator says why - it is a well-formed array in the right place.
+#
+# The determinant is compared with 0 exactly, not against a tolerance. The
+# case that has to be caught is the caller who wrote {1 2 2 4 0 0} - two
+# proportional columns, and 1*4 - 2*2 is exactly 0 in floating point. A small
+# determinant, on the other hand, is a small matrix, not a singular one:
+# {0.001 0 0 0.001 0 0} maps a coordinate space of thousands onto the page and
+# a reader inverts it without trouble; a tolerance would refuse exactly such
+# legitimate values while still letting through a rounded 1e-17 from a
+# computed matrix that is as good as singular. Neither error can be told from
+# the number alone, so only the exact case is refused.
+proc ::tclpdf::geometry::check {matrix what} {
+  if {[llength $matrix] != 6} {
+    return -code error "tclpdf: -matrix of $what is six numbers {a b c d e f},\
+        not [llength $matrix]"
+  }
+  foreach number $matrix {
+    if {![string is double -strict $number] || [catch {expr {$number - $number}}]} {
+      return -code error "tclpdf: -matrix of $what takes numbers, not \"$number\""
+    }
+  }
+  lassign $matrix a b c d
+  if {$a * $d - $b * $c == 0} {
+    return -code error "tclpdf: -matrix of $what is singular ({$matrix}) -\
+        a*d - b*c must not be zero, or everything under it collapses onto a\
+        line"
+  }
+  return $matrix
+}
+
 package provide tclpdf::geometry 1.0

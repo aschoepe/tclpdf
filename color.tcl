@@ -96,14 +96,14 @@ proc ::tclpdf::color::parse {spec} {
   if {[llength $spec] == 1} {
     set single [lindex $spec 0]
     if {[string index $single 0] eq "#"} {
-      return [list rgb [Hex [string range $single 1 end]]]
+      return [Achromatic [Hex [string range $single 1 end]]]
     }
     if {[string is double -strict $single]} {
       return [list gray [list [Clamp $single]]]
     }
     set key [string tolower $single]
     if {[dict exists $names $key]} {
-      return [list rgb [Hex [dict get $names $key]]]
+      return [Achromatic [Hex [dict get $names $key]]]
     }
     return -code error "tclpdf: unknown colour \"$single\""
   }
@@ -294,6 +294,25 @@ oo::define ::tclpdf::document::document {
 }
 
 # The name of the colour space as it appears in a resource dictionary.
+# A grey stop between coloured ones: the same grey, said in the other space.
+# A shading (and anything else that needs its colours in ONE space) calls
+# this on every stop with the space the coloured stops use; a grey becomes
+# {g g g} in RGB and {0 0 0 1-g} in CMYK, a colour already in that space is
+# returned as it is, and anything else is left for the caller to refuse.
+# Needed since "white" and "#808080" parse as grey: {white steelblue} is an
+# RGB gradient, and it would be absurd to refuse it.
+proc ::tclpdf::color::promote {parsed space} {
+  if {[lindex $parsed 0] ne "gray" || $space eq "gray"} {
+    return $parsed
+  }
+  set g [lindex $parsed 1 0]
+  switch -- $space {
+    rgb {return [list rgb [list $g $g $g]]}
+    cmyk {return [list cmyk [list 0 0 0 [expr {1 - $g}]]]}
+  }
+  return $parsed
+}
+
 proc ::tclpdf::color::space {parsed} {
   switch -- [lindex $parsed 0] {
     gray {return DeviceGray}
@@ -315,6 +334,22 @@ proc ::tclpdf::color::Numbers {space values} {
 
 # Split a hexadecimal colour into components. Three digits are the shorthand
 # in which each digit is doubled - "#f0a" is "#ff00aa", not "#f00a00".
+# A named or hex colour whose three components are equal is a grey, and it
+# is written as DeviceGray rather than as DeviceRGB with three equal numbers.
+# The picture is the same; what differs is what PDF/A makes of it: DeviceRGB
+# is allowed only under an RGB output intent (ISO 19005-2, 6.2.4.3), DeviceGray
+# under any. So "black", "white", "gray", "silver" and #808080 stay usable in
+# a document whose intent is CMYK, where {0 0 0} would be refused by the
+# validator - measured on the example with the ISO Coated v2 intent, where a
+# footer in {0.45 0.45 0.5} was the one failed check on the page.
+proc ::tclpdf::color::Achromatic {rgb} {
+  lassign $rgb r g b
+  if {$r == $g && $g == $b} {
+    return [list gray [list $r]]
+  }
+  return [list rgb $rgb]
+}
+
 proc ::tclpdf::color::Hex {hex} {
   set hex [string trim $hex]
   if {[string length $hex] == 3} {

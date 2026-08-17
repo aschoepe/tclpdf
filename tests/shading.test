@@ -193,6 +193,53 @@ test shading-2.2 {a shading pattern can be given a matrix} -body {
   regexp {/Matrix \[2 0 0 2 10 10\]} $found
 } -result 1
 
+test shading-2.4 {a wrong pattern matrix is refused before the shading is written} -body {
+  # Five numbers, a letter, a singular matrix: each used to reach the file -
+  # the first two as they stood, the letter after function and shading were
+  # already out, two objects without a consumer. Refused BEFORE ShadingObject
+  # the writer holds nothing new (the page is object 1), no /Pattern resource
+  # exists and the name is not taken.
+  set wrong {}
+  foreach matrix {{1 0 0 1 0} {1 0 0 1 0 0 0} {1 0 0 x 0 0} {1 2 2 4 0 0} {0 0 0 0 0 0}} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    set before [[$doc writer] count]
+    set code [catch {$doc shading pattern g axial -at {10 10} -size {50 20} \
+        -colors {white navy} -matrix $matrix} message]
+    set left [list $code [expr {[[$doc writer] count] - $before}] \
+        [dict keys [$doc resource Pattern]] [$doc shading names] \
+        [string match {tclpdf: -matrix of shading pattern "g" *} $message]]
+    $doc destroy
+    if {$left ne {1 0 {} {} 1}} {
+      lappend wrong [list $matrix $left]
+    }
+  }
+  set wrong
+} -result {}
+
+test shading-2.5 {the direct forms check their -matrix as well} -body {
+  # -matrix of [shading axial] and [shading radial] writes nothing - it says
+  # the coordinates are in the space of the cm the caller has in force. A
+  # singular one there is a gradient nobody will see, so it gets the same
+  # refusal, and nothing is written: no object, no q, no sh.
+  set wrong {}
+  foreach kind {axial radial} {
+    set doc [tclpdf new]
+    $doc page add
+    set before [[$doc writer] count]
+    set code [catch {$doc shading $kind -at {10 10} -size {50 20} \
+        -colors {red blue} -matrix {1 2 2 4 0 0}} message]
+    set left [list $code [expr {[[$doc writer] count] - $before}] \
+        [::tclpdfTest::content $doc] \
+        [string match "tclpdf: -matrix of shading $kind is singular*" $message]]
+    $doc destroy
+    if {$left ne {1 0 {} 1}} {
+      lappend wrong [list $kind $left]
+    }
+  }
+  set wrong
+} -result {}
+
 test shading-2.3 {without a matrix none is written} -body {
   # The common case is drawing straight onto the page, where the coordinates
   # already are page coordinates - an identity matrix would be noise.

@@ -19,7 +19,9 @@
 #                  A tRNS chunk on this way becomes a /Mask array (colour key
 #                  masking, 8.9.6.4): the one transparent colour of a
 #                  greyscale or truecolor file, or the transparent indices of
-#                  a palette. Neither costs a decode.
+#                  a palette. Neither costs a decode. The one exception is a
+#                  16-bit key, which readers were measured to ignore; that
+#                  is decoded for its mask alone, see [transparency].
 #
 #   decode         colour types 4 and 6 (with alpha): PDF has no image format
 #                  carrying its own alpha, so the channel has to be separated
@@ -192,21 +194,34 @@ proc ::tclpdf::imagePng::decodeParms {parsed} {
 #               palette every entry either 0 or 255. A /Mask array does the
 #               job, and the image data stays a pass-through - nothing is
 #               decoded.
-#   softMask    a palette with at least one partially transparent entry. That
-#               needs a real /SMask built from the index data, so the picture
-#               has to be decoded after all.
+#   softMask    a palette with at least one partially transparent entry, or
+#               a colour key at 16 bits. That needs a real /SMask built from
+#               the decoded samples, so the picture has to be decoded after
+#               all - though only for the mask; the picture itself still
+#               passes through.
 #
 # The distinction is worth making because the common case - a logo with one
 # transparent background colour - lands on the cheap side. Colour types 4 and
 # 6 always answer "none": their transparency is a channel, not a chunk, and
 # the format forbids tRNS there.
+#
+# The 16-bit exception is a concession to readers, not to the format: a /Mask
+# array at BitsPerComponent 16 is what 8.9.6.4 asks for, and it is what was
+# written until 2026-08-16. Measured then: poppler renders such a picture
+# opaque - it treats a 16-bit image as 8-bit but compares the ranges
+# unshifted, so the key never matches - and so does CoreGraphics. Both keyed
+# out the same picture at 8 bits, so the array stays for 8 bits and below,
+# and only 16 bits pay for the mask.
 proc ::tclpdf::imagePng::transparency {parsed} {
   if {[dict get $parsed transparency] eq {}} {
     return none
   }
   switch -- [dict get $parsed colorType] {
     0 - 2 {
-      return [expr {[colourKey $parsed] eq {} ? "none" : "colourKey"}]
+      if {[colourKey $parsed] eq {}} {
+        return none
+      }
+      return [expr {[dict get $parsed bitDepth] == 16 ? "softMask" : "colourKey"}]
     }
     3 {
       binary scan [dict get $parsed transparency] cu* alphas
@@ -266,11 +281,16 @@ proc ::tclpdf::imagePng::streams {parsed} {
     }
     softMask {
       # A partially transparent palette entry cannot be expressed as a colour
-      # key, so the index data has to be decoded after all - but only to build
-      # the mask. The picture itself still goes in untouched.
+      # key, and a 16-bit colour key is one no reader applies - so the pixel
+      # data has to be decoded after all, but only to build the mask. The
+      # picture itself still goes in untouched, at its own depth.
       package require tclpdf::imagePngAlpha
-      dict set result maskData [::tclpdf::filter encodeFlate \
-          [::tclpdf::imagePngAlpha paletteMask $parsed]]
+      if {[dict get $parsed colorType] == 3} {
+        set mask [::tclpdf::imagePngAlpha paletteMask $parsed]
+      } else {
+        set mask [::tclpdf::imagePngAlpha colourKeyMask $parsed]
+      }
+      dict set result maskData [::tclpdf::filter encodeFlate $mask]
       dict set result maskPairs [list ColorSpace /DeviceGray \
           BitsPerComponent 8 Filter /FlateDecode]
     }
@@ -283,11 +303,13 @@ proc ::tclpdf::imagePng::streams {parsed} {
 #
 # The ranges are sample values BEFORE any Decode array, in the bit depth of
 # the image - and the image goes in at its own depth, so a 16-bit tRNS value
-# is written as the 16-bit value it is; nothing is halved. For colour types 0
-# and 2 the chunk carries one colour, two bytes per sample big-endian with the
-# value in the low bits (PNG 11.3.2.1), so each component becomes the range
-# {value value}. A value beyond what the depth can hold matches no sample -
-# the same as no transparency, which is what is answered.
+# is answered as the 16-bit value it is; nothing is halved. (Whether it is
+# then WRITTEN as a /Mask is [transparency]'s decision - at 16 bits it is
+# not, see there.) For colour types 0 and 2 the chunk carries one colour, two
+# bytes per sample big-endian with the value in the low bits (PNG 11.3.2.1),
+# so each component becomes the range {value value}. A value beyond what the
+# depth can hold matches no sample - the same as no transparency, which is
+# what is answered.
 #
 # For a palette, adjacent transparent indices are merged into a single range,
 # which is what the array wants anyway.

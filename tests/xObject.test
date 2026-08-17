@@ -194,8 +194,60 @@ test xObject-3.2 {a form is an isolated transparency group} -body {
   $doc form create block -size {40 20} -script {}
   set body [xObjectFormBody $doc]
   $doc destroy
-  regexp {/Group << /S /Transparency /CS /DeviceRGB /I true >>} $body
+  regexp {/Group << /S /Transparency /I true >>} $body
 } -result 1
+
+# The group names no colour space. A /CS /DeviceRGB counts as a use of
+# DeviceRGB, which ISO 19005-2, 6.2.4.3 allows only under an RGB output
+# intent - measured with veraPDF: one failed check (6.2.4.3-2) under a CMYK
+# and under a GRAY intent, none without the entry (ISO 32000-1, Table 147:
+# CS is optional and defaults to the parent's, here the page's device space).
+# The intent may be declared before or after the form is created; the group
+# comes out the same either way.
+
+# Apple's CMYK profile, if this is a Mac; not part of the package.
+# The CMYK output intent shipped with the package (icc/README.md) - so the
+# test runs everywhere, not only where a system profile happens to exist.
+set cmykProfile [file join [file dirname [file dirname [file normalize [info script]]]] icc ISOcoated_v2_bas.ICC]
+testConstraint haveCmykProfile [file exists $cmykProfile]
+
+test xObject-3.2a {the group names no colour space, whatever the intent} -body {
+  set results {}
+  foreach order {before after} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    if {$order eq "before"} {$doc form create block -size {40 20} -script {}}
+    $doc pdfa -part 3 -conformance B
+    if {$order eq "after"} {$doc form create block -size {40 20} -script {}}
+    set body [xObjectFormBody $doc]
+    $doc destroy
+    lappend results [regexp {/Group << /S /Transparency /I true >>} $body] \
+        [string match {*/CS*} $body]
+  }
+  set results
+} -result {1 0 1 0}
+
+test xObject-3.2b {a form under a CMYK output intent} -constraints haveCmykProfile -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {20 20} -fill {cmyk 0 0 0 1}
+  }
+  $doc pdfa -part 3 -conformance B -profile $cmykProfile
+  $doc form place block -at {10 10} -opacity 0.5
+  set path [::tclpdfTest::scratch xObject-cmyk.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set body [xObjectFormBody $doc]
+  $doc destroy
+  # The intent is written and describes four components; the group is the
+  # same as under sRGB and names no space of its own - the one veraPDF
+  # accepts (measured, 0 failed checks against 3b; /CS /DeviceRGB was 1).
+  list [regexp -all {/N 4} $bytes] [regexp {/S /GTS_PDFA1} $bytes] \
+      [string match {*/CS*} $body] \
+      [regexp {/Group << /S /Transparency /I true >>} $body]
+} -result {1 1 0 1}
 
 test xObject-3.3 {before PDF 1.4 there is no group} -body {
   set doc [tclpdf new -unit mm -version 1.3]

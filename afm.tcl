@@ -173,7 +173,9 @@ proc ::tclpdf::afm::encodeWidths {widths text symbolic name {hint {}}} {
     # reader would draw one at every offer. (Its neighbour 0xA0, the no-break
     # space, IS a character to set - Annex D.2 makes it a second "space",
     # and the width table carries the space width there for that reason.)
-    if {$char eq "\u00AD"} {
+    # The zero width space U+200B likewise: a break opportunity, nothing to
+    # set - and no WinAnsi position for it, so it would have been refused.
+    if {$char eq "\u00AD" || $char eq "\u200B"} {
       incr position
       continue
     }

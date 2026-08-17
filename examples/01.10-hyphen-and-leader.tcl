@@ -134,6 +134,37 @@ foreach {left right fill gap} {
       -fill $fill -gap $gap]
 }
 
+# -- the spaces of Unicode as break points ------------------------------------
+#
+# The same amounts twice, in the same narrow column. On the left a no-break
+# space stands between each number and its unit (U+00A0, UAX #14 class GL):
+# the two never part, so "60 EUR" and "90 EUR" go to the next line together.
+# On the right it is a thin space (U+2009, class BA): the line may end after
+# it, so it does - "60" and "90" close their lines and the euro sign opens the
+# next one, and the thin space at the break is not set at all. Inside a line
+# the thin space is a character like any other, set with its own width, and
+# stays that width when the line is justified: only the word spaces stretch
+# (ISO 32000-1 9.3.3). The standard fourteen have no thin space and would
+# refuse the right hand column, which is why it takes an embedded face.
+set y [expr {$y + 12}]
+$doc font -family body -size 8 -color {0.45 0.45 0.45}
+$doc text "Two spaces between a number and its unit: the no-break space keeps\
+    the two together, the thin space lets the line end between them." \
+    -at [list 20 $y] -width 170
+set y [expr {$y + 8}]
+$doc text "no-break space, U+00A0" -at [list 20 $y]
+$doc text "thin space, U+2009" -at [list 65 $y]
+
+set amounts "Rent 1,200%1\$s\u20AC, deposit 2,400%1\$s\u20AC, key 50%1\$s\u20AC,\
+    cleaning 120%1\$s\u20AC, parking 60%1\$s\u20AC and heating 90%1\$s\u20AC a\
+    month - the space between each number and its unit decides whether the\
+    two may part at the end of a line."
+$doc font -family body -size 10 -color black
+$doc text [format $amounts "\u00A0"] -at [list 20 [expr {$y + 6}]] -width 33 \
+    -align justify
+$doc text [format $amounts "\u2009"] -at [list 65 [expr {$y + 6}]] -width 33 \
+    -align justify
+
 exampleFooter $doc body
 $doc write $target
 puts "  written: $target"

@@ -122,6 +122,14 @@ oo::class create ::tclpdf::document::document {
     return [$tclpdfWriter require $version $feature]
   }
 
+  # The counterpart: a claim that binds the file to a version AT MOST, made
+  # BEFORE the module records it: "my LimitVersion 1.7 PDF/A-3". Refuses when
+  # the document is already past it, remembers it otherwise - so that a later
+  # [configure -version 2.0] is refused naming the claim, see [limit] there.
+  method LimitVersion {version feature} {
+    return [$tclpdfWriter limit $version $feature]
+  }
+
   # A content stream object, deflated when the document is set to compress.
   #
   # Extracted when the second module needed it (form XObjects and tiling

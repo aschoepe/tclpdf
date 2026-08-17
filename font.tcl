@@ -416,7 +416,12 @@ oo::define ::tclpdf::document::document {
       # U+00AD would otherwise set a hyphen in the middle of an unbroken word,
       # which is how it looked before: "Silben-trennung", measured 4.33 pt
       # wider than the same word without the mark.
-      if {$code == 0x00AD} {
+      # The zero width space U+200B is the same kind of thing: a break
+      # opportunity the breaker has already used or dropped, with nothing to
+      # draw. Most faces have no glyph for it and would refuse the string;
+      # the few that do would carry an empty glyph into the file. Neither is
+      # what anyone wrote it for.
+      if {$code == 0x00AD || $code == 0x200B} {
         incr position
         continue
       }

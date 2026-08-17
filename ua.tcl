@@ -218,6 +218,17 @@ oo::define ::tclpdf::document::document {
           specification, and its accessibility level is UA-2 plus a\
           declaration. Use \[\$doc ua -part 2 -wtpdf accessibility\]"
     }
+    # Said at the call that creates the contradiction, whichever way round the
+    # two were declared - and said BEFORE the raise below: pdfa caps the writer
+    # at 1.7, so the raise would be refused by the writer with a message that
+    # names PDF/A but not the way out; and until 2026-08-17 the raise came
+    # first, which left the writer at 2.0 after the refusal - measured, the
+    # PDF/A-3 file that followed had a %PDF-2.0 header.
+    if {[dict get $current part] == 2 && [my state pdfa] ne {}} {
+      return -code error "tclpdf: PDF/UA-2 needs PDF 2.0 and PDF/A-3 is a PDF\
+          1.7 format - the two cannot be claimed by one file. Use ua -part 1\
+          with PDF/A-3, which is the combination ZUGFeRD needs"
+    }
     switch -- [dict get $current part] {
       1 {
         # PDF/UA-1 (ISO 14289-1, 5.1) is a profile of ISO 32000-1, so the file
@@ -248,13 +259,6 @@ oo::define ::tclpdf::document::document {
             \"[dict get $current part]\" - part 1 is ISO 14289-1 on the PDF\
             1.7 path, part 2 is ISO 14289-2 and needs PDF 2.0"
       }
-    }
-    # Said at the call that creates the contradiction, whichever way round the
-    # two were declared.
-    if {[dict get $current part] == 2 && [my state pdfa] ne {}} {
-      return -code error "tclpdf: PDF/UA-2 needs PDF 2.0 and PDF/A-3 is a PDF\
-          1.7 format - the two cannot be claimed by one file. Use ua -part 1\
-          with PDF/A-3, which is the combination ZUGFeRD needs"
     }
     if {![dict get $current registered]} {
       my onSelf catalog UaCatalog
@@ -338,6 +342,16 @@ oo::define ::tclpdf::document::document {
     if {[my catalogEntry Lang] eq {}} {
       lappend problems "no language - \[\$doc language de-DE\] (7.2); a screen\
           reader picks its pronunciation from it"
+    }
+    # PDF/UA-1 is a profile of ISO 32000-1: its header is %PDF-1.n (ISO
+    # 14289-1 6.1, veraPDF rule 6.1-1, measured to fail on a 2.0 file).
+    # Checked here rather than capped in the writer, because a document may
+    # move from part 1 to part 2 - which needs 2.0 - before it is written.
+    if {[dict get [my state ua] part] == 1
+        && [package vcompare [[my writer] version] 2.0] >= 0} {
+      lappend problems "PDF/UA-1 is a PDF 1.7 format (ISO 14289-1, 6.1) and\
+          this document is written as PDF [[my writer] version] - claim\
+          part 2 instead, or leave -version alone"
     }
     lappend problems {*}[my UaCheckViewer]
     lappend problems {*}[my UaCheckFonts]

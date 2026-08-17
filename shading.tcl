@@ -59,7 +59,7 @@ oo::define ::tclpdf::document::document {
   # Paint into a rectangle. The clip is what bounds it: [sh] covers the whole
   # clipping region, and without one it would flood the page.
   method ShadingPaint {kind arguments} {
-    set options [my ShadingOptions $arguments]
+    set options [my ShadingOptions $arguments "shading $kind"]
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: shading $kind needs -at {x y} and -size {w h}"
     }
@@ -98,7 +98,7 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: shading pattern kind must be axial or radial,\
           not \"$kind\""
     }
-    set options [my ShadingOptions $args]
+    set options [my ShadingOptions $args "shading pattern \"$name\""]
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: shading pattern needs -at {x y} and -size {w h}"
     }
@@ -129,11 +129,23 @@ oo::define ::tclpdf::document::document {
     return $name
   }
 
-  method ShadingOptions {arguments} {
-    return [::tclpdf::option parse {
+  # The options of both forms, and the -matrix checked right here - BEFORE
+  # ShadingObject, which writes the function and the shading dictionary.
+  # Until it was, five numbers or a singular matrix went into the /Matrix as
+  # they stood, and a letter failed at the number formatting - after function
+  # and shading were out, two objects without a consumer. And the direct
+  # forms take the same check although they write no matrix: the value there
+  # stands for the cm the caller has in force, and a singular one is a
+  # gradient nobody will see. "what" names the caller for the messages.
+  method ShadingOptions {arguments what} {
+    set options [::tclpdf::option parse {
       at {} size {} colors {} stops {} angle 0 extend {1 1}
       from {} to {} center {} radius {} innerRadius 0 focus {} matrix {}
-    } $arguments "shading"]
+    } $arguments $what]
+    if {[dict get $options matrix] ne {}} {
+      ::tclpdf::geometry check [dict get $options matrix] $what
+    }
+    return $options
   }
 
   # The shading dictionary itself. Both types share everything except how the
@@ -147,6 +159,19 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: a shading needs at least two -colors"
     }
     set parsed [lmap spec $colors {::tclpdf::color parse $spec}]
+    # A grey stop takes the space of the coloured ones: "white" is grey since
+    # names with equal components are, and {white steelblue} is an RGB
+    # gradient. The first non-grey stop decides; all grey stays grey.
+    set coloured {}
+    foreach colour $parsed {
+      if {[lindex $colour 0] ne "gray"} {
+        set coloured [lindex $colour 0]
+        break
+      }
+    }
+    if {$coloured ne {}} {
+      set parsed [lmap colour $parsed {::tclpdf::color promote $colour $coloured}]
+    }
     set space [::tclpdf::color space [lindex $parsed 0]]
     foreach colour $parsed {
       if {[::tclpdf::color space $colour] ne $space} {

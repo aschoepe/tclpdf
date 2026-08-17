@@ -120,10 +120,7 @@ test bidi-1.6 {bidiData.tcl is what the generator makes of the UCD file} \
   set root [file dirname [file dirname [file normalize [info script]]]]
   set made [exec [info nameofexecutable] [file join $root tools mkbidi.tcl] \
       [file join $root tools ucd DerivedBidiClass.txt]]
-  set channel [open [file join $root bidiData.tcl] r]
-  fconfigure $channel -encoding utf-8
-  set shipped [read $channel]
-  close $channel
+  set shipped [::tclpdfTest::readBytes [file join $root bidiData.tcl]]
   string equal [string trimright $made \n] [string trimright $shipped \n]
 } -result 1
 
@@ -146,6 +143,19 @@ test bidi-1.7 {the table is sorted, free of overlap and reduced completely} \
   }
   list [expr {[llength $::tclpdf::bidiData::ranges] > 0}] $wrong
 } -result {1 {}}
+
+test bidi-1.8 {the generator refuses a UCD file that is not its own} -body {
+  # Measured before tools/ucd.tcl: mkbidi.tcl fed DerivedJoiningType.txt read
+  # the joining types as bidi classes, kept none of them and wrote an EMPTY
+  # table with exit status 0 - a file that loads, answers nothing and looks
+  # finished. The library reads the name the file gives itself in its first
+  # line and stops before a line is written.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set made [catch {exec [info nameofexecutable] \
+      [file join $root tools mkbidi.tcl] \
+      [file join $root tools ucd DerivedJoiningType.txt]} output]
+  list $made [string match {mkbidi: *does not name itself*} $output]
+} -result {1 1}
 
 test bidi-2.1 {a number is one piece, everything else is one per position} \
     -body {

@@ -402,6 +402,92 @@ test pdfVersion-7.6 {ua -part 1 raises to 1.7 through configure and cannot be lo
   list $raised $refused $message
 } -result {{1.7 1.7} 1 {tclpdf: this document already uses PDF/UA-1, which needs PDF 1.7 - it cannot be lowered to PDF 1.4}}
 
+# --- raising the version over a claim that caps it -----------------------------
+
+test pdfVersion-7.7 {pdfa -part 3 then configure -version 2.0 is refused, naming the claim} -body {
+  # Measured before: accepted, and the file began with %PDF-2.0 while the
+  # XMP said pdfaid:part 3 - veraPDF -f 3b fails it on ISO 19005-3 6.1.2-1
+  # (the header shall be %PDF-1.n, n from 0 to 7) and nothing else.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -conformance b
+  set refused [catch {$doc configure -version 2.0} message]
+  set kept [list [$doc cget -version] [[$doc writer] version]]
+  # The bracket holds both ways: 1.7 is the floor AND the ceiling.
+  set lowered [catch {$doc configure -version 1.6}]
+  $doc configure -version 1.7
+  $doc destroy
+  list $refused $message $kept $lowered
+} -result {1 {tclpdf: this document claims PDF/A-3, which is written as PDF 1.7 at most - it cannot be raised to PDF 2.0} {1.7 1.7} 1}
+
+test pdfVersion-7.8 {pdfa -part 2 caps at 1.7 as well; a refused part 1 leaves no cap behind} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 2 -conformance b
+  set two [catch {$doc configure -version 2.0} message]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  # Part 1 is refused before anything is recorded - so the version is still
+  # free afterwards.
+  set one [catch {$doc pdfa -part 1 -conformance b}]
+  set free [catch {$doc configure -version 2.0}]
+  set version [[$doc writer] version]
+  $doc destroy
+  list $two [string match "*claims PDF/A-2, which is written as PDF 1.7 at most*" $message] \
+      $one $free $version
+} -result {1 1 1 0 2.0}
+
+test pdfVersion-7.9 {configure -version 2.0 then pdfa is refused for part 2 and 3, before the raise} -body {
+  set out {}
+  foreach part {2 3} {
+    set doc [tclpdf new -unit mm -version 2.0]
+    $doc page add
+    set refused [catch {$doc pdfa -part $part -conformance b} message]
+    # Refused before anything was recorded: no state, no requirement, and
+    # the version untouched.
+    lappend out $refused \
+        [string match "tclpdf: PDF/A-$part is a PDF 1.7 format and this document\
+            is set to PDF 2.0 -*" $message] \
+        [$doc pdfa state] [[$doc writer] version] [catch {$doc configure -version 1.4}]
+    $doc destroy
+  }
+  set out
+} -result {1 1 {} 2.0 0 1 1 {} 2.0 0}
+
+test pdfVersion-7.10 {the writer's limit: refused past the ceiling, the lowest ceiling is the one kept} -body {
+  set writer [::tclpdf::writer::pdf new 1.7]
+  # 1.7 as floor and ceiling at once is fine - that is exactly PDF/A-3.
+  $writer require 1.7 "PDF/A-3"
+  $writer limit 1.7 "PDF/A-3"
+  set past [catch {$writer limit 1.6 "something older"} message]
+  set lower [catch {$writer version 1.6} down]
+  set higher [catch {$writer version 2.0} up]
+  $writer destroy
+  # A ceiling below the one recorded replaces it - the lowest counts, as the
+  # highest requirement does in [require].
+  set writer [::tclpdf::writer::pdf new 1.4]
+  $writer limit 1.7 "PDF/A-3"
+  $writer limit 1.5 "an older claim"
+  set kept [catch {$writer version 1.6} message2]
+  $writer destroy
+  list $past $message $lower $down $higher $up $kept $message2
+} -result {1 {tclpdf: something older is written as PDF 1.6 at most - this document is written as PDF 1.7} 1 {tclpdf: this document already uses PDF/A-3, which needs PDF 1.7 - it cannot be lowered to PDF 1.6} 1 {tclpdf: this document claims PDF/A-3, which is written as PDF 1.7 at most - it cannot be raised to PDF 2.0} 1 {tclpdf: this document claims an older claim, which is written as PDF 1.5 at most - it cannot be raised to PDF 1.6}}
+
+test pdfVersion-7.11 {pdfa then ua -part 2 is refused with the way out, and leaves the writer at 1.7} -body {
+  # Measured before: the refusal came AFTER ua had raised the writer to 2.0,
+  # so a PDF/A-3 file with a %PDF-2.0 header followed. Now the contradiction
+  # is said before the raise - and the raise itself would be refused by the
+  # cap from pdfa anyway.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -conformance b
+  set refused [catch {$doc ua -part 2} message]
+  set kept [list [[$doc writer] version] [$doc ua state]]
+  $doc destroy
+  list $refused [string match "*cannot be claimed by one file. Use ua -part 1*" $message] $kept
+} -result {1 1 {1.7 {}}}
+
 test pdfVersion-8.1 {image place with a wrong opacity writes no q} -constraints havePng -body {
   # Refused after [save], the value left "q" without its "Q" in the stream -
   # and, in a tagged document, the mark's BDC/EMC around it. Now the alpha is

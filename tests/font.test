@@ -1072,6 +1072,57 @@ test font-11.3 {head and /FontBBox of an instance describe the moved face, of a 
       [format %.0f [lindex [dict get $boxes Roboto-Black] 0 2]]
 } -result {{1 1 1 1} {-1476 -555 2483 2163} 1 1212}
 
+test font-11.4 {hhea of an instance summarises the moved face, of a plain subset the file} -constraints haveFont -body {
+  # The four summary fields at hhea offset 10 - advanceWidthMax,
+  # minLeftSideBearing, minRightSideBearing, xMaxExtent (ISO/IEC 14496-22
+  # "hhea") - describe the glyphs of the file, and for an instance the file
+  # carries the moved glyphs: Roboto at wght 900 has an advance of 2475 and an
+  # extent of 2483 where the file says 2378 and 2353 (varFont hheaMetrics).
+  # The embedded subset has to say what the instancer computed, and its
+  # numberOfHMetrics has to match its glyph count still. A face embedded as
+  # it came keeps the file's four fields byte for byte.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed black [variableTree Roboto-Variable.ttf] -axes {wght 900}
+  $doc font embed plain $fontRegular
+  $doc text "Hamburgefonstiv" -at {20 30} -family black
+  $doc text "Hamburgefonstiv" -at {20 50} -family plain
+  set path [::tclpdfTest::scratch font-hhea.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  set summaries {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match {*/Type /FontDescriptor*} $body]} {
+      regexp {/FontName /[A-Z]{6}\+(\S+)} $body -> name
+      regexp {/FontFile2 (\d+) 0 R} $body -> fileNumber
+      set embedded [::tclpdf::sfnt parse [::tclpdfTest::streamOf $writer $fileNumber]]
+      set hhea [::tclpdf::sfnt table $embedded hhea]
+      binary scan $hhea @10SuSSS advance left right extent
+      binary scan $hhea @34Su metrics
+      dict set summaries $name [list [list $advance $left $right $extent] \
+          [expr {$metrics == [dict get $embedded numGlyphs]}]]
+    }
+  }
+  $doc destroy
+  file delete $path
+  package require tclpdf::varFont
+  set original [::tclpdf::sfnt read [variableTree Roboto-Variable.ttf]]
+  set moved [::tclpdf::varFont hheaMetrics [::tclpdf::varFont all $original \
+      [::tclpdf::varFont coordinates $original {wght 900}]]]
+  binary scan [::tclpdf::sfnt table $original hhea] @10SuSSS a b c d
+  set fileRoboto [list $a $b $c $d]
+  binary scan [::tclpdf::sfnt table [::tclpdf::sfnt read $fontRegular] hhea] @10SuSSS a b c d
+  set filePlain [list $a $b $c $d]
+  set result {}
+  foreach name {Roboto-Black DejaVuSans} expected [list $moved $filePlain] {
+    lassign [dict get $summaries $name] summary counted
+    lappend result [expr {$summary eq $expected}] $counted
+  }
+  list $result [lindex [dict get $summaries Roboto-Black] 0] \
+      [expr {$moved ne $fileRoboto}] $filePlain
+} -result {{1 1 1 1} {2475 -1476 -472 2483} 1 {3838 -2090 -1455 3673}}
+
 # A CID-keyed CFF face, built rather than found - the tree holds none, and the
 # ones on this machine (Hiragino, in a macOS collection) may not be checked in.
 #

@@ -12,7 +12,9 @@ exec tclsh "$0" "$@"
 #
 # This is a BUILD-TIME tool. It does not ship and it is not needed to use the
 # package; it exists so that the table in joiningData.tcl can be reproduced
-# and checked against its source rather than being trusted.
+# and checked against its source rather than being trusted - tests/joining.test
+# runs it and compares. The reading, sorting and writing it shares with
+# mkbidi.tcl live in tools/ucd.tcl.
 #
 # WHY THIS FILE AND NOT ArabicShaping.txt. ArabicShaping.txt is the file the
 # standard points at, and it is not enough on its own: it lists R, L, D, C and
@@ -41,7 +43,11 @@ exec tclsh "$0" "$@"
 # ("@missing: 0000..10FFFF; Non_Joining" in the file header). Writing it out
 # would double the table to say what its absence already says. The 50 U
 # entries the file does list are ranges INSIDE the joining blocks, and they
-# are exactly as non-joining as the unlisted rest.
+# are exactly as non-joining as the unlisted rest. And with U dropped the
+# @missing line is dropped too - it names nothing but U.
+#
+# WHAT IS NOT MERGED. Two ranges of one type side by side stay two lines -
+# the file lists them so, and the table is meant to be read against it.
 #
 
 if {[llength $argv] != 1} {
@@ -49,121 +55,38 @@ if {[llength $argv] != 1} {
   exit 1
 }
 
-lassign $argv source
+source [file join [file dirname [info script]] ucd.tcl]
 
-set channel [open $source r]
-fconfigure $channel -encoding utf-8
-set text [read $channel]
-close $channel
+lassign [::ucd::read [lindex $argv 0] DerivedJoiningType] version lines
 
-# The version the file names itself, so the generated table can say which
-# Unicode it is - a table that does not name its edition cannot be checked
-# against one.
-set version {}
-if {[regexp {DerivedJoiningType-([0-9.]+)\.txt} $text -> found]} {
-  set version $found
-}
-
-# Field 0 is a code point or a "first..last" range, field 1 the Joining_Type.
-# Everything from a # onwards is a comment - which in this file carries the
-# General_Category and the character name, neither of which is needed here.
 set ranges {}
-foreach line [split $text \n] {
-  set line [string trim [regsub {#.*$} $line {}]]
-  if {$line eq {}} {
+foreach line $lines {
+  set parsed [::ucd::parse $line]
+  if {$parsed eq {}} {
     continue
   }
-  set fields [split $line \;]
-  if {[llength $fields] < 2} {
-    continue
-  }
-  set codes [string trim [lindex $fields 0]]
-  set type [string trim [lindex $fields 1]]
+  lassign $parsed first last type
   if {$type eq "U"} {
     continue
   }
   if {$type ni {R L D C T}} {
-    puts stderr "mkjoining: unknown joining type \"$type\" in: $line"
-    exit 1
+    ::ucd::fail "unknown joining type \"$type\" in: $line"
   }
-  if {[regexp {^([0-9A-Fa-f]+)\.\.([0-9A-Fa-f]+)$} $codes -> first last]} {
-    lappend ranges [list [scan $first %x] [scan $last %x] $type]
-  } elseif {[regexp {^[0-9A-Fa-f]+$} $codes]} {
-    set value [scan $codes %x]
-    lappend ranges [list $value $value $type]
-  } else {
-    puts stderr "mkjoining: cannot read the code point field: $line"
-    exit 1
-  }
+  lappend ranges $parsed
 }
 
-if {![llength $ranges]} {
-  puts stderr "mkjoining: no data in $source - wrong file?"
-  exit 1
-}
-
-# Sorted by first code point, because the module finds a character by halving
-# the table. The file is already in order block by block, but it is grouped BY
-# TYPE, so the C ranges come before the D ones and the whole thing is not
-# sorted at all as it stands.
-set ranges [lsort -integer -index 0 $ranges]
-
-# A range that overlaps its neighbour would make the search answer by chance
-# which of the two it finds. The Unicode file cannot contain one - a character
-# has one Joining_Type - but a wrong parse above could produce it, and this is
-# the cheap place to notice.
-set previous -1
-foreach range $ranges {
-  lassign $range first last type
-  if {$first <= $previous} {
-    puts stderr "mkjoining: ranges overlap at [format U+%04X $first]"
-    exit 1
-  }
-  set previous $last
-}
-
-puts "#"
-puts "# tclpdf - PDF generation for Tcl"
-puts "#"
-puts "# joiningData - the Unicode Joining_Type table"
-puts "#"
-puts "# Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>"
-puts "#"
-puts "# See the file \"license.terms\" for information on usage and redistribution"
-puts "# of this file (MIT License)."
-puts "#"
-if {$version eq {}} {
-  set edition "of unnamed version"
-} else {
-  set edition "version $version"
-}
-puts "# GENERATED - do not edit. Produced by tools/mkjoining.tcl from"
-puts "# tools/ucd/DerivedJoiningType.txt of the Unicode Character Database,"
-puts "# $edition, (C) Unicode, Inc. Rerun the generator instead of correcting"
-puts "# an entry here; a hand-fixed value would be lost on the next run and"
-puts "# would no longer match its source."
-puts "#"
-puts "# Ranges of {first last type}, sorted by first and free of overlap, with"
-puts "# the types R, L, D, C and T. A character that is not in the table is"
-puts "# Non_Joining (U) - which is what the source file says about every code"
-puts "# point it does not list, so the absence is the answer and not a gap."
-puts "#"
-puts ""
-puts "package require Tcl 8.6.11-"
-puts ""
-puts "namespace eval ::tclpdf::joiningData \{"
-puts "  # [llength $ranges] ranges, one to the line."
-puts "  variable ranges \{"
-foreach range $ranges {
-  lassign $range first last type
-  puts [format "    0x%04X 0x%04X %s" $first $last $type]
-}
-puts "  \}"
-puts "\}"
-puts ""
-# The module version is written out here rather than derived from anything: a
-# module version is raised by the author, deliberately, and a generator that
-# guessed it would raise it behind their back. (The same lesson mkafm.tcl
-# records - a generated file that does not write its own last line makes its
-# "do not edit" header a lie.)
-puts "package provide tclpdf::joiningData 1.0"
+::ucd::write \
+    -module joiningData \
+    -title "the Unicode Joining_Type table" \
+    -generator mkjoining.tcl \
+    -source DerivedJoiningType.txt \
+    -edition $version \
+    -test joining.test \
+    -notes {
+      Ranges of {first last type}, sorted by first and free of overlap, with
+      the types R, L, D, C and T. A character that is not in the table is
+      Non_Joining (U) - which is what the source file says about every code
+      point it does not list, so the absence is the answer and not a gap.
+    } \
+    -ranges [::ucd::sort $ranges] \
+    -version 1.0

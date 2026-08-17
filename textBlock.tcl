@@ -22,9 +22,9 @@
 # than pushed over the edge, and that break is a fallback, not typography -
 # proper hyphenation needs language data and is a feature of its own.
 #
-# A line breaks at ASCII white space only. The no-break space and the other
-# spaces of Unicode are characters of the word they stand in - the class and
-# the reasons are with it below.
+# A line breaks at ASCII white space, and after the spaces of Unicode that
+# UAX #14 lets a line break at; the no-break spaces are characters of the
+# word they stand in - the two classes and the reasons are with them below.
 #
 
 package require Tcl 8.6.11-
@@ -53,26 +53,47 @@ namespace eval ::tclpdf::textBlock {
       height {} indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
       avoid {} avoidMargin 0 tag P expansion {}}
 
-  # Where a line may break: at the ASCII white space characters, and nowhere
-  # else. \s is NOT that class - Tcl's \s (8.6.18 and 9.0.4, measured) also
-  # matches U+00A0, U+2007, U+202F, U+2009, U+3000, even U+200B and U+FEFF -
-  # so a breaker built on it broke "12<nbsp>EUR" between the number and its
-  # unit, which is the one thing a no-break space is there to prevent (UAX
-  # #14: class GL, glue), and put a plain space into the stream where the
-  # text had U+00A0.
+  # Where a line may break. Two classes, told apart by what happens to the
+  # character when the line breaks there:
   #
-  # The characters listed here are controls without a glyph in any face; a
-  # tab or a stray CR of a CRLF file is a break and is drawn as the space
-  # that joins two words. Every other white space of Unicode is a character
-  # of its own: it stays in the word, is measured and set with its own glyph
-  # width, and is refused by a face that has no glyph for it. So a thin or an
-  # em space (U+2009, U+2003 - UAX #14 class BA) is not a break point either.
-  # It cannot be a stretchable one anyway: word spacing reaches only the
-  # single-byte code 32 (ISO 32000-1 9.3.3), and the TJ road an embedded face
-  # takes adjusts the glyph of U+0020 alone, so a break there would leave a
-  # justified line short by every such gap.
+  # The SEPARATORS are the ASCII white space characters - controls without a
+  # glyph in any face, and the space. A tab or a stray CR of a CRLF file is a
+  # break and is drawn as the space that joins two words. \s is NOT this class:
+  # Tcl's \s (8.6.18 and 9.0.4, measured) also matches U+00A0, U+2007, U+202F,
+  # U+2009, U+3000, even U+200B and U+FEFF - so a breaker built on it broke
+  # "12<nbsp>EUR" between the number and its unit, which is the one thing a
+  # no-break space is there to prevent (UAX #14: class GL, glue), and put a
+  # plain space into the stream where the text had U+00A0.
+  #
+  # The BREAKABLE spaces are the ones UAX #14 puts in class BA - the Ogham
+  # space mark, en quad to hair space, the medium mathematical and the
+  # ideographic space - and the zero width space, class ZW. A line MAY end
+  # after one of them, and when it does the character goes the way a space
+  # goes: it is not set. Inside a line it is a character of the text: it is
+  # measured and set with its own glyph width, and refused by a face that has
+  # no glyph for it - which for U+200B is most faces (DejaVu Sans, Noto Sans
+  # and Roboto carry it, measured; the standard fourteen do not) - and it is
+  # NEVER stretched: word spacing reaches only the single-byte code 32 (ISO
+  # 32000-1 9.3.3), and the TJ road an embedded face takes adjusts the glyph
+  # of U+0020 alone. So a justified line with a thin space in it grows at its
+  # word spaces and keeps the thin space thin.
+  #
+  # Every other white space of Unicode is a character of the word it stands
+  # in - the no-break spaces U+00A0, U+2007 and U+202F (class GL) by design,
+  # and the line and paragraph separators U+2028, U+2029 and U+0085 because
+  # nothing here has decided what they mean; a face without the glyph refuses
+  # them, as it always did.
+  #
+  # A word carries its breakable spaces at either end: those after it are
+  # where the line may end, and are stripped when it does; one in front of a
+  # word - after a plain space, or opening a paragraph as an em space indent -
+  # belongs to the word and is set. Whether two words are joined by a space
+  # or by nothing is read off their positions in the paragraph, not off the
+  # characters, because a word ending in a thin space may or may not have a
+  # plain space after it as well.
   variable separators "\t\n\v\f\r "
-  variable word {[^\t\n\v\f\r ]+}
+  variable breakable "\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2008\u2009\u200A\u200B\u205F\u3000"
+  variable word "\[$breakable\]*\[^$separators$breakable\]+\[$breakable\]*|\[$breakable\]+"
 }
 
 oo::define ::tclpdf::document::document {
@@ -183,28 +204,31 @@ oo::define ::tclpdf::document::document {
           width offset running
       set current {}
       set currentFrom 0
+      set previousTo -2
       foreach span [regexp -all -inline -indices $::tclpdf::textBlock::word $paragraph] {
         lassign $span wordFrom wordTo
         set word [string range $paragraph $wordFrom $wordTo]
+        # What stands between this word and the one before it: nothing, when
+        # the two touch - the one before ends in a breakable space -, or the
+        # plain space that every separator is to the page (see the classes at
+        # the top). A no-break space never gets here as a separator: it stays
+        # inside its word and reaches the stream as U+00A0.
+        set glue [expr {$wordFrom == $previousTo + 1 ? {} : { }}]
+        set previousTo $wordTo
         incr wordFrom $paragraphFrom
         # NOT [expr {$current eq {} ? $word : "..."}]: expr normalises a word
         # that looks like a number, and "1234.50" comes back as "1234.5". The
         # trailing zero is gone from every amount in every wrapped paragraph,
         # and nothing reports it - the document is perfectly valid and the
         # figure is wrong.
-        #
-        # Joined by a plain space, which is right only because every
-        # separator IS one to the page - see the class at the top. A no-break
-        # space never gets here as a separator: it stays inside its word and
-        # reaches the stream as U+00A0.
         if {$current eq {}} {
           set candidate $word
           set candidateFrom $wordFrom
         } else {
-          set candidate "$current $word"
+          set candidate "$current$glue$word"
           set candidateFrom $currentFrom
         }
-        if {[my textWidth $candidate {*}$arguments] <= $width} {
+        if {[my TextBlockFits $candidate $width $arguments]} {
           set current $candidate
           set currentFrom $candidateFrom
           continue
@@ -218,7 +242,7 @@ oo::define ::tclpdf::document::document {
         # and a remainder can carry further offers. Closing the line and trying
         # again is therefore not a special case, it is the next round.
         while {1} {
-          set taken [my TextBlockHyphen $current $word $width $arguments]
+          set taken [my TextBlockHyphen $current $glue $word $width $arguments]
           if {[llength $taken]} {
             set from [expr {$current ne {} ? $currentFrom : $wordFrom}]
             lassign $taken emit remainder
@@ -237,7 +261,7 @@ oo::define ::tclpdf::document::document {
           # character of the text. It travels to the drawing so that the
           # hyphen can be bracketed as such - extracted text has to come back
           # without it (14.8.2.6).
-          lappend lines [dict create text $emit offset $offset \
+          lappend lines [dict create text [my TextBlockClose $emit] offset $offset \
               width $width paragraph $paragraphIndex \
               hyphen [expr {[llength $taken] ? 1 : 0}] \
               first [expr {$inParagraph == 0}] running $running from $from]
@@ -246,7 +270,7 @@ oo::define ::tclpdf::document::document {
           lassign [my TextBlockAsk $band $inParagraph $paragraphIndex $globalLine] \
               width offset running
           set current {}
-          if {[llength $taken] && [my textWidth $word {*}$arguments] <= $width} {
+          if {[llength $taken] && [my TextBlockFits $word $width $arguments]} {
             break
           }
         }
@@ -258,13 +282,13 @@ oo::define ::tclpdf::document::document {
         # marks as well.
         set marked $word
         if {[string first "\u00AD" $word] >= 0
-            && [my textWidth $word {*}$arguments] > $width} {
+            && ![my TextBlockFits $word $width $arguments]} {
           set word [string map [list "\u00AD" {}] $word]
         }
         # The word alone may still be too wide - a part number, a URL, a
         # column two millimetres across. Break it by character rather than
         # letting it run past the edge unnoticed.
-        while {[my textWidth $word {*}$arguments] > $width && [string length $word] > 1} {
+        while {![my TextBlockFits $word $width $arguments] && [string length $word] > 1} {
           set take [string length $word]
           while {$take > 1 && [my textWidth [string range $word 0 $take-1] {*}$arguments] > $width} {
             incr take -1
@@ -285,7 +309,7 @@ oo::define ::tclpdf::document::document {
         set currentFrom $wordFrom
       }
       if {$current ne {}} {
-        lappend lines [dict create text $current offset $offset width $width hyphen 0 \
+        lappend lines [dict create text [my TextBlockClose $current] offset $offset width $width hyphen 0 \
             paragraph $paragraphIndex first [expr {$inParagraph == 0}] \
             running $running from $currentFrom]
         set globalLine [expr {$running + 1}]
@@ -294,6 +318,24 @@ oo::define ::tclpdf::document::document {
       incr paragraphFrom [expr {[string length $paragraph] + 1}]
     }
     return $lines
+  }
+
+  # A line as it is closed: without the breakable spaces a word carries at
+  # its end - the line ends there the way it ends at a plain space, and the
+  # character is not set - and without a plain space left in front of them,
+  # "aaa <thin>" closes as "aaa". What is stripped is only what stands at the
+  # END: the same character inside the line stays, glyph width and all.
+  method TextBlockClose {text} {
+    return [string trimright $text \
+        $::tclpdf::textBlock::breakable$::tclpdf::textBlock::separators]
+  }
+
+  # Whether a line fits a width, measured as the line would be closed - a
+  # thin space the line ends on takes no room, as a plain space there takes
+  # none. Measured with it, "aaa<thin>" fell to the character fallback in a
+  # column that holds "aaa", and the thin space opened the next line.
+  method TextBlockFits {text width arguments} {
+    return [expr {[my textWidth [my TextBlockClose $text] {*}$arguments] <= $width}]
   }
 
   # Ask the band about a line. Answers {width offset running}: running is the
@@ -332,7 +374,7 @@ oo::define ::tclpdf::document::document {
   # The hyphen that appears at the break is a real one (U+002D), so the line
   # ends the way a reader expects. What that costs is named in the manual:
   # extracting such a line yields the hyphen too.
-  method TextBlockHyphen {prefix word width arguments} {
+  method TextBlockHyphen {prefix glue word width arguments} {
     set parts [split $word "\u00AD"]
     if {[llength $parts] < 2} {
       return {}
@@ -342,8 +384,10 @@ oo::define ::tclpdf::document::document {
       set head [join [lrange $parts 0 [expr {$take - 1}]] {}]-
       if {$prefix ne {}} {
         # NOT [expr]: it normalises a word that looks like a number, and
-        # "1234.50" would come back as "1234.5" - see the breaker above.
-        set head "$prefix $head"
+        # "1234.50" would come back as "1234.5" - see the breaker above. The
+        # glue is the breaker's: a plain space, or nothing after a word that
+        # ends in a breakable space.
+        set head "$prefix$glue$head"
       }
       if {[my textWidth $head {*}$arguments] <= $width} {
         return [list $head [join [lrange $parts $take end] "\u00AD"]]

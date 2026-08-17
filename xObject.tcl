@@ -109,18 +109,26 @@ oo::define ::tclpdf::document::document {
     # anti-aliasing differs by one row. Isolated (I true), so the contents
     # composite against a transparent backdrop rather than the page: a blend
     # mode set before the Do then applies to the form once, not to each
-    # shape against the page. The group colour space is DeviceRGB, the space
-    # this writer paints with by default and the one the default sRGB output
-    # intent describes (ISO 19005-2, 6.2.4.3 wants them consistent); a
-    # document painting in CMYK still composites correctly through an RGB
-    # group, only the blending happens in RGB. Optional for an isolated
-    # group on a page, but stating it keeps every reader on the same space.
+    # shape against the page.
+    #
+    # No CS: the group then composites in the space of the page it is
+    # painted onto, which without a page group is the device's native space
+    # (ISO 32000-1, Table 147 - CS is optional unless the group is the G of a
+    # luminosity soft mask, and defaults to the parent's). Naming one is a
+    # claim PDF/A checks: a group /CS /DeviceRGB is "use of DeviceRGB", and
+    # ISO 19005-2, 6.2.4.3 allows that only under an RGB output intent -
+    # measured with veraPDF, one failed check (6.2.4.3-2) for a CMYK and for
+    # a GRAY intent, none for sRGB. Following the intent instead would mean
+    # reading the profile's colour space here, which pdfa.tcl already does at
+    # write time, and deciding at [form create] what [pdfa] may only declare
+    # afterwards. Left out, the group is clean under every intent (0 failed
+    # checks with sRGB, GRAY and CMYK profiles), and poppler renders the same
+    # pixels with and without it, the overlap included.
     #
     # Groups exist since PDF 1.4 - a document set to an older version gets
     # none, and -opacity then acts per object as before.
     if {[package vcompare [[my writer] version] 1.4] >= 0} {
-      lappend pairs Group [::tclpdf::pdfObj dictionary \
-          {S /Transparency CS /DeviceRGB I true}]
+      lappend pairs Group [::tclpdf::pdfObj dictionary {S /Transparency I true}]
     }
     # PDF/A 6.2.2: a content stream that references other objects - a font,
     # a picture - must have its OWN Resources dictionary; inheriting is valid

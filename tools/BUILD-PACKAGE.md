@@ -95,6 +95,16 @@ The packages are then available for download at
   read it out of a pdf4tcl installation - an outside dependency that
   appeared nowhere except in an unnamed `argv` parameter. The output
   is byte-identical either way; that was how the change was accepted.
+* `joiningData.tcl` and `bidiData.tcl` are generated too, from the
+  Unicode Character Database files under `tools/ucd/`:
+
+      tclsh tools/mkjoining.tcl tools/ucd/DerivedJoiningType.txt > joiningData.tcl
+      tclsh tools/mkbidi.tcl tools/ucd/DerivedBidiClass.txt > bidiData.tcl
+
+  Both generators share `tools/ucd.tcl` (build time only, not
+  installed); tests/joining.test and tests/bidi.test compare their
+  output byte for byte with the checked-in files.
+
 * `tools/archive.sh` is not meant to be called directly; it expects
   `PACKAGE_NAME PACKAGE_VERSION PKG_TCL_SOURCES...` as arguments and
   exits with a usage message otherwise.

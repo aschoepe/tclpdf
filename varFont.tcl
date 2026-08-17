@@ -44,9 +44,9 @@
 #              space of Roboto comes out at 490, 499, 508, 509 and 510 units
 #              for wght 100, 300, 400, 700 and 900 from either source.
 #
-# Steps 1 to 6 are here, plus the PostScript name of an instance (TN 5902)
-# and the bounding box of a moved face, which the subset and the font
-# descriptor both state.
+# Steps 1 to 6 are here, plus the PostScript name of an instance (TN 5902),
+# the bounding box of a moved face, which the subset and the font descriptor
+# both state, and the hhea summary of its advances and bearings.
 #
 
 package require Tcl 8.6.11-
@@ -341,6 +341,68 @@ proc ::tclpdf::varFont::bounds {instanced} {
     return {0 0 0 0}
   }
   return $result
+}
+
+# The horizontal summary of a moved face - what the hhea table states about
+# ALL its glyphs (ISO/IEC 14496-22 "hhea", the four fields at offset 10):
+# {advanceWidthMax minLeftSideBearing minRightSideBearing xMaxExtent}, in
+# font units. Same footing as [bounds]: the file's numbers describe the
+# DEFAULT outlines, and they move with them - measured 2026-08-17 over the
+# seven variable faces in the tree at their axis corners against the file's
+# hhea, Roboto's advanceWidthMax drops from 2378 to 2101 at wght 100 wdth 75
+# and its xMaxExtent grows from 2353 to 2483 at wght 900; NotoSans's
+# minRightSideBearing is 377 units off at wght 100 wdth 62.5, NotoSerifTibetan
+# reaches 105 units further at wght 900. At the default position the four
+# reproduce the file's for five of the seven faces (Bitcount and
+# NotoSansSymbols declare numbers their default outlines do not reach, as
+# they do in head).
+#
+# The rule is the format's, and it is also what fontTools' hhea recalc does:
+# advanceWidthMax is the maximum over EVERY glyph of hmtx, empty ones
+# included - a wide blank glyph has an advance like any other; the other
+# three are taken over the glyphs WITH contours only, so a space (no bytes,
+# no box) does not push minLeftSideBearing to zero for a face whose every
+# outline starts right of the origin. minRightSideBearing is aw - (lsb +
+# xMax - xMin), xMaxExtent is lsb + (xMax - xMin), both from the moved
+# bearing [all] measured and the box it wrote into the glyph header - the
+# same numbers the subset's hmtx and glyf carry, so the summary and the
+# glyphs agree by construction. A set without an outline gives {awMax 0 0 0}.
+proc ::tclpdf::varFont::hheaMetrics {instanced} {
+  set advanceMax 0
+  set minLeft {}
+  set minRight {}
+  set extent {}
+  dict for {glyph entry} $instanced {
+    set advance [dict get $entry advance]
+    if {$advance > $advanceMax} {
+      set advanceMax $advance
+    }
+    set bytes [dict get $entry bytes]
+    if {[string length $bytes] < 10} {
+      continue
+    }
+    binary scan $bytes SSxxS contours xMin xMax
+    if {$contours == 0} {
+      continue
+    }
+    set bearing [dict get $entry bearing]
+    set width [expr {$xMax - $xMin}]
+    set right [expr {$advance - ($bearing + $width)}]
+    set reach [expr {$bearing + $width}]
+    if {$minLeft eq {} || $bearing < $minLeft} {
+      set minLeft $bearing
+    }
+    if {$minRight eq {} || $right < $minRight} {
+      set minRight $right
+    }
+    if {$extent eq {} || $reach > $extent} {
+      set extent $reach
+    }
+  }
+  if {$minLeft eq {}} {
+    return [list $advanceMax 0 0 0]
+  }
+  return [list $advanceMax $minLeft $minRight $extent]
 }
 
 # One glyph, moved to the chosen point in the axis space.

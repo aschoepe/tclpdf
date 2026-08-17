@@ -23,9 +23,10 @@
 # candidate for the optional C accelerator, and an optional accelerator is
 # only replaceable when there is a single, named place to replace.
 #
-# Anything without an alpha channel never reaches this file - imagePng.tcl
-# hands those to the reader untouched. This is a private sub-module behind the
-# [image] facade.
+# Anything without an alpha channel reaches this file only to have a mask
+# computed - a palette with partial transparency, or a 16-bit colour key -
+# and even then the picture itself is handed to the reader untouched by
+# imagePng.tcl. This is a private sub-module behind the [image] facade.
 #
 
 package require Tcl 8.6.11-
@@ -191,6 +192,55 @@ proc ::tclpdf::imagePngAlpha::paletteMask {parsed} {
     incr offset $stride
     foreach index [Indices $line $depth $width] {
       lappend alpha [expr {$index < [llength $table] ? [lindex $table $index] : 255}]
+    }
+  }
+  return [binary format c* $alpha]
+}
+
+# The soft mask of a 16-bit greyscale or truecolor image with a tRNS colour
+# key.
+#
+# The key itself would be a /Mask array (8.9.6.4), and for 8 bits and below
+# it is written as one. Not at 16 bits: poppler reads a 16-bit image as an
+# 8-bit one (Stream.cc "we treat 16 bit images as 8 bit ones") but compares
+# the /Mask ranges unshifted (Gfx.cc, maskColors), so a 16-bit key never
+# matches and the picture renders opaque - and CoreGraphics was measured to
+# do the same. Both are readers a document is going to meet, so at 16 bits
+# the key is turned into what every reader applies: an /SMask with 0 where
+# the pixel is the key colour and 255 everywhere else. That means decoding
+# after all, once, for the mask; the picture itself still passes through.
+#
+# Only reached when [transparency] said "softMask" for colour type 0 or 2.
+proc ::tclpdf::imagePngAlpha::colourKeyMask {parsed} {
+  set width [dict get $parsed width]
+  set height [dict get $parsed height]
+  set depth [dict get $parsed bitDepth]
+  set channels [dict get $parsed channels]
+  if {$depth != 16 || $channels ni {1 3}} {
+    # [transparency] routes only 16-bit greyscale and truecolor here; a /Mask
+    # array serves every other depth, so this is a caller's mistake.
+    return -code error "tclpdf: a colour-key soft mask is built for 16-bit\
+        greyscale and truecolor PNGs only, not depth $depth with $channels\
+        channels"
+  }
+  # The key: two bytes per sample big-endian (PNG 11.3.2.1), one sample per
+  # channel - the same width as the pixel samples, so both compare as 16-bit
+  # values without any shifting.
+  binary scan [dict get $parsed transparency] Su* key
+  set pixels [unfilter [::tclpdf::filter decodeFlate [dict get $parsed idat]] \
+      $width $height $depth $channels]
+
+  set alpha {}
+  if {$channels == 1} {
+    lassign $key k
+    foreach {hi lo} $pixels {
+      lappend alpha [expr {(($hi << 8) | $lo) == $k ? 0 : 255}]
+    }
+  } else {
+    lassign $key kr kg kb
+    foreach {rh rl gh gl bh bl} $pixels {
+      lappend alpha [expr {(($rh << 8) | $rl) == $kr && (($gh << 8) | $gl) == $kg
+          && (($bh << 8) | $bl) == $kb ? 0 : 255}]
     }
   }
   return [binary format c* $alpha]

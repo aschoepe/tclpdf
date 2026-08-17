@@ -215,6 +215,26 @@ test table-5.3 {didDrawPage runs once per page} -body {
   expr {$count == $pages}
 } -result 1
 
+test table-6.2 {every theme paints in DeviceGray, so no theme decides the document's colour space} -body {
+  # A theme colours what the caller did not colour, and PDF/A allows
+  # DeviceRGB only under an RGB output intent (ISO 19005-2, 6.2.4.3),
+  # DeviceGray under any: a table with -theme grid was the one failed check
+  # in a document with a CMYK intent, until the greys became single numbers.
+  # Every theme's content stream therefore holds g/G operators and no rg/RG.
+  set result {}
+  foreach theme {plain striped grid} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc table -at {20 30} -width 100 -theme $theme \
+        -head {{a b}} -body {{1 2} {3 4} {5 6}} -foot {{x y}}
+    set content [::tclpdfTest::content $doc]
+    $doc destroy
+    lappend result [list $theme [regexp -all {[\d.]+ [\d.]+ [\d.]+ (rg|RG)\n} $content] \
+        [expr {[regexp -all {[\d.]+ (g|G)\n} $content] > 0}]]
+  }
+  set result
+} -result {{plain 0 1} {striped 0 1} {grid 0 1}}
+
 test table-6.1 {an unknown theme names the known ones} -body {
   set doc [tclpdf new -unit mm]
   $doc page add

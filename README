@@ -157,9 +157,12 @@ INSTALLING
 LICENCE, AND WHY NO FONT IS PART OF IT
 
     tclpdf itself is MIT - see the file license.terms. That covers everything
-    the package installs: the Tcl modules, pkgIndex.tcl and the sRGB ICC
-    profile in icc/, which is a runtime part because its bytes end up inside
-    every PDF/A document.
+    the package installs: the Tcl modules, pkgIndex.tcl and the ICC
+    profiles in icc/, which are a runtime part because their bytes end up
+    inside every PDF/A document. Two profiles ship: sRGB.icc (the default
+    output intent, "no copyright, use freely") and ISOcoated_v2_bas.ICC, a
+    CMYK intent for print work from basICColor under the zlib licence - the
+    grant is the file LICENSE-ZLIB-bICC beside it, see icc/README.md.
 
     ONE OTHER PIECE OF THIRD-PARTY MATERIAL travels in the source archive:
     tools/agl/glyphlist.txt, the Adobe Glyph List, verbatim and under Adobe's

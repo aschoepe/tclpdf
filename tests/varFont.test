@@ -629,4 +629,98 @@ test varFont-17.3 {empty glyphs do not count, and an empty set is four zeros} -b
       [::tclpdf::varFont bounds {}]
 } -result {{10 20 60 80} {0 0 0 0} {0 0 0 0}}
 
+# The hhea summary of a moved face - advanceWidthMax, minLeftSideBearing,
+# minRightSideBearing, xMaxExtent - what the subset's hhea table is set from
+# for an instance. Measured over the seven variable faces at their axis
+# corners against the file's hhea: Roboto's advanceWidthMax drops from 2378
+# to 2101 at wght 100 wdth 75 and its xMaxExtent grows from 2353 to 2483 at
+# wght 900; NotoSans's minRightSideBearing is 377 units off at wght 100 wdth
+# 62.5.
+
+test varFont-18.1 {the hhea summary of a moved face is computed from its moved glyphs} -body {
+  # Computed here by the format's own rule (ISO/IEC 14496-22 "hhea") from
+  # every glyph's parsed outline and hmtx entry, without help from the module:
+  # the maximum advance over ALL glyphs, and over the glyphs with contours the
+  # smallest bearing, the smallest advance - (bearing + width) and the largest
+  # bearing + width; a simple glyph's width from its points, a composite's from
+  # the box [all] wrote (16.2 checks THAT against the components). The result
+  # must differ from the file's numbers, or the case proves nothing.
+  package require tclpdf::glyfOutline
+  set font [variableFace Roboto-Variable.ttf]
+  set all [::tclpdf::varFont all $font \
+      [::tclpdf::varFont coordinates $font {wght 900}]]
+  set advanceMax 0
+  set minLeft {}
+  set minRight {}
+  set extent {}
+  dict for {id entry} $all {
+    set advance [dict get $entry advance]
+    set advanceMax [expr {max($advanceMax, $advance)}]
+    set outline [::tclpdf::glyfOutline parse [dict get $entry bytes]]
+    if {[dict get $outline type] eq "empty"} {
+      continue
+    }
+    if {[dict get $outline type] eq "simple"} {
+      set xs [dict get $outline x]
+      set width [expr {[tcl::mathfunc::max {*}$xs] - [tcl::mathfunc::min {*}$xs]}]
+    } else {
+      lassign [dict get $outline bounds] xMin - xMax -
+      set width [expr {$xMax - $xMin}]
+    }
+    set bearing [dict get $entry bearing]
+    if {$minLeft eq {}} {
+      set minLeft $bearing
+      set minRight [expr {$advance - ($bearing + $width)}]
+      set extent [expr {$bearing + $width}]
+      continue
+    }
+    set minLeft [expr {min($minLeft, $bearing)}]
+    set minRight [expr {min($minRight, $advance - ($bearing + $width))}]
+    set extent [expr {max($extent, $bearing + $width)}]
+  }
+  set expected [list $advanceMax $minLeft $minRight $extent]
+  binary scan [::tclpdf::sfnt table $font hhea] @10SuSSS a b c d
+  set metrics [::tclpdf::varFont hheaMetrics $all]
+  list [expr {$metrics eq $expected}] [expr {$metrics ne [list $a $b $c $d]}] \
+      $metrics [list $a $b $c $d]
+} -result {1 1 {2475 -1476 -472 2483} {2378 -1510 -438 2353}}
+
+test varFont-18.2 {at the default position the hhea summary is the file's} -body {
+  # The counter-direction: what sits in glyf is the default instance, so its
+  # summary has to reproduce hhea's four fields - Roboto's are exact (they are
+  # not for every face: Bitcount and NotoSansSymbols declare an extent and a
+  # maximum advance their default outlines do not reach, measured 2026-08-17,
+  # as they do in head).
+  set font [variableFace Roboto-Variable.ttf]
+  set defaults {}
+  foreach axis [::tclpdf::varFont axes $font] {
+    lappend defaults [lindex $axis 0] [lindex $axis 2]
+  }
+  set all [::tclpdf::varFont all $font \
+      [::tclpdf::varFont coordinates $font $defaults]]
+  binary scan [::tclpdf::sfnt table $font hhea] @10SuSSS a b c d
+  expr {[::tclpdf::varFont hheaMetrics $all] eq [list $a $b $c $d]}
+} -result 1
+
+test varFont-18.3 {empty glyphs count for the advance only, and an empty set gives zeros} -body {
+  # A space has an advance like any other, and the widest glyph of a face may
+  # well be a blank one - so it counts for advanceWidthMax. It has no outline,
+  # so it must NOT count for the bearings and the extent: taken as bearing 0
+  # and width 0 it would cap minLeftSideBearing at zero for a face whose every
+  # outline starts right of the origin - the two boxes here do on purpose -
+  # and put a right side bearing of 900 into the comparison. A glyph header
+  # with zero contours is empty as well.
+  set box [binary format SSSSS 1 10 20 30 40]
+  set other [binary format SSSSS 1 15 25 60 80]
+  set hollow [binary format SSSSS 0 0 0 0 0]
+  set glyphs [dict create \
+      0 [dict create bytes {} advance 900 bearing 0] \
+      1 [dict create bytes $box advance 500 bearing 10] \
+      2 [dict create bytes $other advance 100 bearing 15] \
+      3 [dict create bytes $hollow advance 300 bearing 0]]
+  list [::tclpdf::varFont hheaMetrics $glyphs] \
+      [::tclpdf::varFont hheaMetrics [dict create 0 [dict create bytes {} advance 250 bearing 0]]] \
+      [::tclpdf::varFont hheaMetrics {}]
+} -result {{900 10 40 60} {250 0 0 0} {0 0 0 0}}
+
 cleanupTests
