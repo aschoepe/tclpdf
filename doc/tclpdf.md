@@ -38,6 +38,8 @@ tclpdf loads and runs with nothing but Tcl 8.6.11 or later. One package matters,
 
 : **The metadata packet needs it**: the XMP is built with it, so every document that declares PDF/A, PDF/UA or ZUGFeRD needs tdom, and the module that writes those declarations refuses to load without it. A document that makes no such claim never loads that module and runs without tdom.
 
+  Only those four modules need it: `icc embed` and an `{icc alias …}` colour do not, although the ICC profile they read is also what an output intent carries — the header reader they share lives in the colour module. A document that paints in ICC colours and claims nothing therefore runs without tdom.
+
   The SVG module uses it for parsing where it is present, and prefers it: measured, tdom parses 27 to 48 times faster than the parser tclpdf brings along, and it rejects an entity expansion bomb that the built-in one would try to expand. Without tdom the package still reads SVG, through its own element tree parser — the same four accessors sit in front of both, so nothing else in the package can tell the difference.
 
 There is no other optional package; barcodes need none either, because tzint encodes into SVG and `svg -data` draws it — see "Barcodes" below.

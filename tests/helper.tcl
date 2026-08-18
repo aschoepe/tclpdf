@@ -14,6 +14,17 @@
 
 namespace eval ::tclpdfTest {}
 
+# The four modules that build or read the XMP packet need tdom, and without it
+# they refuse to load - which is correct, and is what the manual promises: a
+# document that claims no conformance never loads them and runs without tdom.
+# The suite has to follow that promise rather than break on it: every test that
+# calls [pdfa], [ua], [zugferd], [xmpSchema] or [xmpRaw] carries this
+# constraint, so a machine without tdom skips those and runs the rest. Defined
+# here because a single test file may be run on its own, and it is set only
+# once per file and unconditionally: the answer is the same wherever it is
+# asked, so there is nothing to guard against.
+::tcltest::testConstraint haveTdom [expr {![catch {package require tdom 0.9.0-}]}]
+
 # Read a file as bytes. Every test that looks at a generated PDF needs this,
 # and it needs the binary translation - reading a PDF as text turns the binary
 # marker in line two into replacement characters and shifts every offset.

@@ -123,7 +123,7 @@ oo::define ::tclpdf::document::document {
     # ICC profile ("acsp" at offset 36) describing a device space. The
     # manual says a Lab or XYZ profile is refused at the call; it used to be
     # refused at the write, out of PdfaProfile.
-    ::tclpdf::pdfa space [::tclpdf::io read $profile] $profile
+    ::tclpdf::color::iccSpace [::tclpdf::io read $profile] $profile
     # Which parts this writer can actually deliver.
     #
     # Part 1 forbids transparency, and tclpdf writes it without ceremony
@@ -319,7 +319,7 @@ oo::define ::tclpdf::document::document {
   method PdfaProfile {} {
     set profile [dict get [my state pdfa] profile]
     set bytes [::tclpdf::io read $profile]
-    return [list $bytes {*}[::tclpdf::pdfa space $bytes $profile]]
+    return [list $bytes {*}[::tclpdf::color::iccSpace $bytes $profile]]
   }
 
   # Every font actually used has to carry its program (ISO 19005-3, 6.2.11.4).
@@ -434,31 +434,6 @@ oo::define ::tclpdf::document::document {
 
 }
 
-# The device space an ICC profile describes and the component count that
-# space has - {RGB 3}, {GRAY 1}, {CMYK 4} - read from the header: the
-# profile file signature "acsp" at offset 36 (ICC.1, 7.2.9) says it is a
-# profile at all, and the four-character data colour space at offset 16
-# (7.2.6) says which. Lab and XYZ profiles exist and are valid ICC, but an
-# output intent wants a device space; either is reported by name rather
-# than falling over inside a dict lookup. Called at the [pdfa] call, so a
-# wrong profile is refused where it was named, and again from PdfaProfile
-# at write time - one reading, so the two cannot disagree about the intent.
-proc ::tclpdf::pdfa::space {bytes profile} {
-  if {[string range $bytes 36 39] ne "acsp"} {
-    return -code error "tclpdf: \"$profile\" is not an ICC profile - the\
-        signature \"acsp\" is missing from its header"
-  }
-  set space [string trimright [string range $bytes 16 19]]
-  set spaces {GRAY 1 RGB 3 CMYK 4}
-  if {![dict exists $spaces $space]} {
-    # Worded for every caller alike - the output intent, [icc embed], a
-    # picture's embedded profile all read through here.
-    return -code error "tclpdf: the ICC profile \"$profile\" describes\
-        colour space \"$space\" - a device space profile is needed: GRAY,\
-        RGB and CMYK"
-  }
-  return [list $space [dict get $spaces $space]]
-}
 
 # The description an ICC profile carries about itself - the desc tag - or an
 # empty string when there is none that can be read.

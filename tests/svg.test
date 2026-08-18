@@ -350,7 +350,7 @@ test svg-3.12 {the document's current style does not leak into a drawing} -const
   list [regexp {/FHelvetica } $content] [regexp {/FHelveticaBold } $content]
 } -result {1 0}
 
-test svg-3.13 {a drawing with text can be archivable} -constraints haveFace -body {
+test svg-3.13 {a drawing with text can be archivable} -constraints {haveFace haveTdom} -body {
   # PDF/A refuses a font that is not embedded, so before this a drawing with
   # so much as one label could not be made archivable at all - which is every
   # letterhead as SVG, every chart with an axis, every barcode caption.

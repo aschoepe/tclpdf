@@ -13,6 +13,10 @@
 package require tcltest 2.2
 namespace import -force tcltest::*
 
+# For the haveTdom constraint: four modules need tdom, and where it is
+# missing they cannot be loaded - which these three would report as a defect.
+source [file join [file dirname [info script]] helper.tcl]
+
 set sourcetree [file dirname [file dirname [file normalize [info script]]]]
 
 proc versionFromConfigureAc {path} {
@@ -41,7 +45,7 @@ test version-1.2 {the package runs under this interpreter} -body {
   package vsatisfies [info patchlevel] 8.6.11-
 } -result 1
 
-test version-2.1 {every module provides the version its index promises} -body {
+test version-2.1 {every module provides the version its index promises} -constraints haveTdom -body {
   # Each module now carries its own number. The index hands it out, the module
   # gets it stamped on by the ifneeded script - so a module listed but never
   # loadable, or listed twice with different numbers, shows up here.
@@ -59,7 +63,7 @@ test version-2.1 {every module provides the version its index promises} -body {
   set wrong
 } -result {}
 
-test version-2.2 {no module requires a version no module provides} -body {
+test version-2.2 {no module requires a version no module provides} -constraints haveTdom -body {
   # The guard against modules drifting apart: a dependency written as
   # "package require tclpdf::sfnt 1.1-" is a promise that something provides
   # 1.1 or better. If sfnt is still at 1.0, the failure would otherwise reach
@@ -101,7 +105,7 @@ test version-2.3 {a dependency is written in the open form} -body {
   set wrong
 } -result {}
 
-test version-2.4 {each module provides its version itself} -body {
+test version-2.4 {each module provides its version itself} -constraints haveTdom -body {
   # The [package provide] sits at the end of the module, not in the index -
   # the version belongs in the file it describes. The index only names the
   # same number so Tcl can answer a require WITHOUT reading the file.

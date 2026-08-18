@@ -1081,7 +1081,7 @@ test image-figure-15.3 {outside a Figure - under a Sect, under nothing - the def
   list [regexp -all {/Artifact <</Type /Layout>> BDC} $stream] [llength $missing]
 } -result {2 2}
 
-test image-figure-15.4 {Figure{picture, Caption} passes ua 1 and, where veraPDF is there, its ua1 profile} -constraints haveImages -body {
+test image-figure-15.4 {Figure{picture, Caption} passes ua 1 and, where veraPDF is there, its ua1 profile} -constraints {haveImages haveTdom} -body {
   set face [file join [file dirname $assets] fonts DejaVuSans.ttf]
   if {![file exists $face]} {
     return skipped
@@ -1103,14 +1103,21 @@ test image-figure-15.4 {Figure{picture, Caption} passes ua 1 and, where veraPDF 
   set path [::tclpdfTest::scratch figure-caption.pdf]
   set code [catch {$doc write $path} message]
   $doc destroy
-  set failed -
+  # The idiom of color.test: "ok" unless veraPDF says otherwise, so the case
+  # states what it measured. It answered "-" for a missing tool once and
+  # matched that against the glob {0 [0-]} - which does NOT match a hyphen
+  # (measured: [string match {0 [0-]} {0 -}] is 0), so the test failed on
+  # every machine without veraPDF and passed on the one it was written on.
+  set verdict ok
   if {[auto_execok verapdf] ne {}} {
     catch {exec verapdf -f ua1 $path 2>@1} report
-    regexp {failedChecks="([0-9]+)"} $report -> failed
+    if {![regexp {failedChecks="0"} $report]} {
+      set verdict $report
+    }
   }
   file delete $path
-  list $code $failed
-} -match glob -result {0 [0-]}
+  list $code $verdict
+} -result {0 ok}
 
 # --- the embedded ICC profile: JPEG APP2 and PNG iCCP --------------------------
 #
@@ -1286,8 +1293,7 @@ test image-icc-17.8 {an RGBA PNG keeps the profile on the colour, and the mask s
       [regexp {/ColorSpace /DeviceGray} $bytes]
 } -result {1 1}
 
-test image-icc-17.9 {under a CMYK intent the tagged picture passes where the bare one is refused} \
-    -constraints {haveImages haveSrgbIcc haveCmykIcc} -body {
+test image-icc-17.9 {under a CMYK intent the tagged picture passes where the bare one is refused} -constraints {haveImages haveSrgbIcc haveCmykIcc haveTdom} -body {
   # The measured point of the whole road: ISO 19005-2, 6.2.4.3 holds a
   # picture's DEVICE space against the intent, and a picture carrying its
   # profile is anchored to that profile instead. veraPDF, where present,

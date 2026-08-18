@@ -16,9 +16,18 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
+
+# This file needs the XMP modules and therefore tdom, which is optional for
+# the package itself - so the file steps aside where it is missing rather
+# than taking the run down with it. helper.tcl sets the constraint.
+if {![testConstraint haveTdom]} {
+    puts "  skipped: [file tail [info script]] needs tdom"
+    cleanupTests
+    return
+}
 package require tclpdf::xmp
 package require tclpdf::pdfa
-source [file join [file dirname [info script]] helper.tcl]
 
 set here [file dirname [file dirname [file normalize [info script]]]]
 set face [file join $here examples assets fonts DejaVuSans.ttf]
@@ -59,7 +68,7 @@ test xmp-1.2 {the moment is the one it was given} -body {
 
 # --- who writes into the packet -------------------------------------------
 
-test xmp-2.1 {two topics share the packet, in registration order} -body {
+test xmp-2.1 {two topics share the packet, in registration order} -constraints haveTdom -body {
   # PDF/A first, PDF/UA second - the order they were declared in, and the
   # order they appear in. A packet whose order depended on a dict iteration
   # would differ between runs.
@@ -84,7 +93,7 @@ test xmp-2.1 {two topics share the packet, in registration order} -body {
   list [expr {$a > 0}] [expr {$u > 0}] [expr {$a < $u}]
 } -result {1 1 1}
 
-test xmp-2.2 {declaring a topic twice does not describe it twice} -constraints haveFace -body {
+test xmp-2.2 {declaring a topic twice does not describe it twice} -constraints {haveFace haveTdom} -body {
   set doc [probe $face]
   $doc pdfa -part 3 -conformance B
   $doc pdfa -part 2 -conformance U
@@ -100,7 +109,7 @@ test xmp-2.2 {declaring a topic twice does not describe it twice} -constraints h
       [regexp {<pdfaid:conformance>U</pdfaid:conformance>} $bytes]
 } -result {1 1 1}
 
-test xmp-2.3 {an explicit packet wins over the built one} -constraints haveFace -body {
+test xmp-2.3 {an explicit packet wins over the built one} -constraints {haveFace haveTdom} -body {
   # A caller who supplies their own has said something more specific than
   # anything this module would assemble.
   set doc [probe $face]
@@ -116,7 +125,7 @@ test xmp-2.3 {an explicit packet wins over the built one} -constraints haveFace 
 
 # --- what comes in from outside -------------------------------------------
 
-test xmp-3.1 {a contribution may use the prefixes of the place it lands in} -constraints haveFace -body {
+test xmp-3.1 {a contribution may use the prefixes of the place it lands in} -constraints {haveFace haveTdom} -body {
   # The Factur-X extension schema says rdf:Bag without declaring rdf, because
   # the rdf:RDF around it always has. Parsed on its own it is not well formed;
   # this has to accept it anyway.
@@ -133,7 +142,7 @@ test xmp-3.1 {a contribution may use the prefixes of the place it lands in} -con
   list [regexp {probe:list} $bytes] [regexp {<rdf:li>eins</rdf:li>} $bytes]
 } -result {1 1}
 
-test xmp-3.2 {a malformed contribution fails at the call, not in a validator} -constraints haveFace -body {
+test xmp-3.2 {a malformed contribution fails at the call, not in a validator} -constraints {haveFace haveTdom} -body {
   # The whole reason for parsing it: an unclosed element used to travel into
   # the file, where qpdf and veraPDF both let it pass and only a human
   # reading the XMP would ever have found it.
@@ -145,7 +154,7 @@ test xmp-3.2 {a malformed contribution fails at the call, not in a validator} -c
   list $code [string match "*not well formed XML*" $err]
 } -result {1 1}
 
-test xmp-3.3 {the text of a title is escaped by the parser} -constraints haveFace -body {
+test xmp-3.3 {the text of a title is escaped by the parser} -constraints {haveFace haveTdom} -body {
   set doc [probe $face]
   $doc info Title "Fuenf & Sechs <sieben>"
   $doc pdfa -part 3 -conformance B
@@ -164,7 +173,7 @@ test xmp-3.3 {the text of a title is escaped by the parser} -constraints haveFac
 
 # --- the shape of the packet ----------------------------------------------
 
-test xmp-4.1 {a prefix is declared once, on its own description} -constraints haveFace -body {
+test xmp-4.1 {a prefix is declared once, on its own description} -constraints {haveFace haveTdom} -body {
   # Declared at the ROOT instead, tdom repeats it on the first element using
   # it - valid XML that breaks any reader matching "pdfaid:part>". Which is
   # not hypothetical: a test here and an example both did.
@@ -179,7 +188,7 @@ test xmp-4.1 {a prefix is declared once, on its own description} -constraints ha
       [regexp {<pdfaid:part>3</pdfaid:part>} $bytes]
 } -result {1 1}
 
-test xmp-4.2 {the packet begins with its processing instruction} -body {
+test xmp-4.2 {the packet begins with its processing instruction} -constraints haveTdom -body {
   # It did not, once: a loop variable inside a contribution script shared a
   # name with the variable the packet was being appended to, and a URI ended
   # up in front of the opening instruction. qpdf accepted the file; veraPDF
@@ -211,7 +220,7 @@ test xmp-4.2 {the packet begins with its processing instruction} -body {
 # went out as Latin-1 bytes under the UTF-8 claim, and one with a character
 # above U+00FF made the writer refuse the document altogether.
 
-test xmp-5.1 {an umlaut in the title reaches the stream as UTF-8 bytes} -constraints haveFace -body {
+test xmp-5.1 {an umlaut in the title reaches the stream as UTF-8 bytes} -constraints {haveFace haveTdom} -body {
   set doc [probe $face]
   $doc info Title "M\u00fcller"
   $doc pdfa -part 3 -conformance B
@@ -226,7 +235,7 @@ test xmp-5.1 {an umlaut in the title reaches the stream as UTF-8 bytes} -constra
       [string match "*\xfc*" $packet]
 } -result {0 1 0}
 
-test xmp-5.2 {a euro sign in the title does not make the document unwritable} -constraints haveFace -body {
+test xmp-5.2 {a euro sign in the title does not make the document unwritable} -constraints {haveFace haveTdom} -body {
   # U+20AC is above U+00FF, and an unencoded packet then failed the writer's
   # byte check - "stream data must be bytes, not text" for a legal title.
   set doc [probe $face]
@@ -241,7 +250,7 @@ test xmp-5.2 {a euro sign in the title does not make the document unwritable} -c
   list $code [string match "*5\xe2\x82\xac*" $packet]
 } -result {0 1}
 
-test xmp-5.3 {a title outside the BMP writes under both interpreters} -constraints haveFace -body {
+test xmp-5.3 {a title outside the BMP writes under both interpreters} -constraints {haveFace haveTdom} -body {
   # Built from UTF-8 bytes, the way a title read from a file arrives: Tcl 8.6
   # holds U+1D11E as a surrogate pair and serialises it back to the real
   # four-byte sequence; Tcl 9 holds it whole and tdom writes a character
@@ -259,7 +268,7 @@ test xmp-5.3 {a title outside the BMP writes under both interpreters} -constrain
 
 # --- the two dates ---------------------------------------------------------
 
-test xmp-5.4 {xmp:CreateDate and CreationDate name the same second} -constraints haveFace -body {
+test xmp-5.4 {xmp:CreateDate and CreationDate name the same second} -constraints {haveFace haveTdom} -body {
   # Both are taken at the first write, and they used to be two separate clock
   # calls - straddle a second boundary and the file disagrees with itself for
   # good, since both values are stored back for the second write. One value
@@ -324,7 +333,7 @@ proc titles {bytes} {
   return [list $x $i]
 }
 
-test xmp-6.1 {a title changed between two writes reaches the packet} -constraints haveFace -body {
+test xmp-6.1 {a title changed between two writes reaches the packet} -constraints {haveFace haveTdom} -body {
   set doc [probe $face]
   $doc pdfa -part 3 -conformance B
   $doc info Title "First"
@@ -340,7 +349,7 @@ test xmp-6.1 {a title changed between two writes reaches the packet} -constraint
   list $a $b
 } -result {{First First} {Second Second}}
 
-test xmp-6.2 {a language changed between two writes reaches the packet} -constraints haveFace -body {
+test xmp-6.2 {a language changed between two writes reaches the packet} -constraints {haveFace haveTdom} -body {
   # dc:language carries what the catalog's /Lang carries, and it follows a
   # change the same way the title does.
   set doc [probe $face]
@@ -363,7 +372,7 @@ test xmp-6.2 {a language changed between two writes reaches the packet} -constra
   set result
 } -result {{de-DE de-DE} {en-GB en-GB}}
 
-test xmp-6.3 {a caller's packet stands through both writes} -constraints haveFace -body {
+test xmp-6.3 {a caller's packet stands through both writes} -constraints {haveFace haveTdom} -body {
   # What was set from outside is not this module's to rebuild - even when the
   # Info dictionary moves on. The two are told apart by content: what
   # [metadata] holds is ours only if it is what XmpCatalog last put there.
@@ -385,7 +394,7 @@ test xmp-6.3 {a caller's packet stands through both writes} -constraints haveFac
       [regexp {/Title \(Second\)} $b]
 } -result {1 0 1 0 1}
 
-test xmp-6.4 {a rebuilt packet is byte-identical when nothing changed} -body {
+test xmp-6.4 {a rebuilt packet is byte-identical when nothing changed} -constraints haveTdom -body {
   # xmp-5.5 holds this for a caller's packet; this one holds it for the BUILT
   # packet, which is now built twice. No embedded face - see xmp-5.5 for why
   # - so the topic that triggers the build is registered here by hand.
@@ -444,7 +453,7 @@ test xmp-7.2 {Producer is the package by default and can be replaced} -body {
       [regexp {/Producer \(My generator 2\.0\)} $bytes] [regexp {/Producer \(tclpdf} $bytes]
 } -result {1 1 0}
 
-test xmp-7.3 {Author, Subject and Producer reach the packet as dc:creator, dc:description and pdf:Producer} -constraints haveFace -body {
+test xmp-7.3 {Author, Subject and Producer reach the packet as dc:creator, dc:description and pdf:Producer} -constraints {haveFace haveTdom} -body {
   set doc [probe $face]
   $doc info Author "A. Author"
   $doc info Subject "The subject"
@@ -474,7 +483,7 @@ test xmp-7.4 {an empty value removes a key from the dictionary} -body {
   regexp {/Keywords} $bytes
 } -result 0
 
-test xmp-7.5 {Creator is xmp:CreatorTool and Keywords is pdf:Keywords, as Table 317 pairs them} -constraints haveFace -body {
+test xmp-7.5 {Creator is xmp:CreatorTool and Keywords is pdf:Keywords, as Table 317 pairs them} -constraints {haveFace haveTdom} -body {
   set doc [probe $face]
   $doc info Creator "My application 3.1"
   $doc info Keywords "alpha, beta"
@@ -492,7 +501,7 @@ test xmp-7.5 {Creator is xmp:CreatorTool and Keywords is pdf:Keywords, as Table 
       [regexp {<xmp:CreatorTool>My generator} $packet]
 } -result {1 1 1 0}
 
-test xmp-7.6 {without a Creator the creating tool is the producer, and no empty Keywords is written} -constraints haveFace -body {
+test xmp-7.6 {without a Creator the creating tool is the producer, and no empty Keywords is written} -constraints {haveFace haveTdom} -body {
   set doc [probe $face]
   $doc pdfa -part 3 -conformance B
   set path [::tclpdfTest::scratch xmp-info-default.pdf]
@@ -507,7 +516,7 @@ test xmp-7.6 {without a Creator the creating tool is the producer, and no empty 
 
 # --- what the packet's bytes and the caller's text are ----------------------
 
-test xmp-8.1 {the xpacket begin attribute is the three-byte UTF-8 BOM} -constraints haveFace -body {
+test xmp-8.1 {the xpacket begin attribute is the three-byte UTF-8 BOM} -constraints {haveFace haveTdom} -body {
   # XMP part 1, 7.3.2: begin carries U+FEFF, which is EF BB BF once the
   # packet is UTF-8. It used to be the three Latin-1 CHARACTERS EF BB BF,
   # and the encoding then made six bytes of them - C3 AF C2 BB C2 BF -
@@ -524,7 +533,7 @@ test xmp-8.1 {the xpacket begin attribute is the three-byte UTF-8 BOM} -constrai
   set hex
 } -result efbbbf
 
-test xmp-8.2 {metadata answers text and encodes once: setting back what it answered is a no-op} -constraints haveFace -body {
+test xmp-8.2 {metadata answers text and encodes once: setting back what it answered is a no-op} -constraints {haveFace haveTdom} -body {
   # The manual says a caller's packet is kept as given. [metadata] used to
   # answer UTF-8 BYTES and to encode what it was given, so "$doc metadata
   # [$doc metadata]" encoded twice and "Müller" went out as "MÃ¼ller".
@@ -550,7 +559,7 @@ test xmp-8.2 {metadata answers text and encodes once: setting back what it answe
       [string match "*M\xc3\x83\xc2\xbcller*" $packetB]
 } -result {1 -1 1 1 0}
 
-test xmp-8.3 {without a Producer no pdf:Producer and no CreatorTool are written, empty or otherwise} -constraints haveFace -body {
+test xmp-8.3 {without a Producer no pdf:Producer and no CreatorTool are written, empty or otherwise} -constraints {haveFace haveTdom} -body {
   # "info Producer {}" removes the key; the packet used to write
   # <pdf:Producer/> for it - an empty element naming an empty tool.
   set doc [probe $face]
@@ -566,7 +575,7 @@ test xmp-8.3 {without a Producer no pdf:Producer and no CreatorTool are written,
       [regexp {/Producer} $bytes] [regexp {<xmp:CreateDate>} $packet]
 } -result {0 0 0 1}
 
-test xmp-8.4 {a CreationDate or ModDate set through info is mirrored into the packet, as Table 317 pairs them} -constraints haveFace -body {
+test xmp-8.4 {a CreationDate or ModDate set through info is mirrored into the packet, as Table 317 pairs them} -constraints {haveFace haveTdom} -body {
   # The packet used to say [Created] for both dates whatever the dictionary
   # said - two claims, one file, and ISO 19005-1 6.7.3 forbids exactly that.
   set doc [probe $face]
@@ -604,7 +613,7 @@ test xmp-8.5 {only a PDF date is taken for CreationDate and ModDate, and a parti
       [::tclpdf::xmp stampFromPdf D:20190304050607+02] [::tclpdf::xmp stampFromPdf junk]
 } -result {1 9 2019 2019-03 2019-03-04T05:00:00 2019-03-04T05:06:07-05:30 2019-03-04T05:06:07+02:00 {}}
 
-test xmp-8.6 {Trapped is a name in the dictionary, takes only its three values, and stays out of the packet} -constraints haveFace -body {
+test xmp-8.6 {Trapped is a name in the dictionary, takes only its three values, and stays out of the packet} -constraints {haveFace haveTdom} -body {
   # Table 317: Trapped is a NAME - True, False, Unknown. It used to be
   # written as the string (True). The packet does not carry pdf:Trapped:
   # measured with veraPDF 1.30, a 3u document that was clean without it
@@ -628,7 +637,7 @@ test xmp-8.6 {Trapped is a name in the dictionary, takes only its three values, 
 
 # --- a raw contribution alone -----------------------------------------------
 
-test xmp-9.1 {a raw contribution alone builds the packet} -body {
+test xmp-9.1 {a raw contribution alone builds the packet} -constraints haveTdom -body {
   # It did not, once: the build hook was subscribed by [xmpSchema] only, and
   # a document whose only contribution was a raw one wrote no /Metadata at
   # all - silently, with [metadata] answering an empty string.
@@ -651,7 +660,7 @@ test xmp-9.1 {a raw contribution alone builds the packet} -body {
       [expr {[string length $built] > 0}]
 } -result {1 1 1}
 
-test xmp-9.2 {raw and schema subscribe the build once, in either order} -body {
+test xmp-9.2 {raw and schema subscribe the build once, in either order} -constraints haveTdom -body {
   # Both ways into the packet share one catalog hook: whichever is called
   # first subscribes it and the second must not add another - subscribed
   # twice, the packet would be rebuilt twice on every write.
@@ -674,7 +683,7 @@ test xmp-9.2 {raw and schema subscribe the build once, in either order} -body {
   set result
 } -result {1 1}
 
-test xmp-9.3 {a claim, a schema and a raw contribution keep their packet order} -constraints haveFace -body {
+test xmp-9.3 {a claim, a schema and a raw contribution keep their packet order} -constraints {haveFace haveTdom} -body {
   # The order of the packet before the raw way triggered the build too, held
   # so it stays: the claim's description first (registration order), the
   # probe schema second, the dc/xmp/pdf trio after them, the raw contribution
@@ -699,7 +708,7 @@ test xmp-9.3 {a claim, a schema and a raw contribution keep their packet order} 
 
 # --- an undeclared tag ------------------------------------------------------
 
-test xmp-10.1 {a tag not declared in xmpSchema fails the write naming schema and tags} -body {
+test xmp-10.1 {a tag not declared in xmpSchema fails the write naming schema and tags} -constraints haveTdom -body {
   # It used to fail as tdom's raw {invalid command name "Tag_myorg:undeclared"},
   # with no word about which schema went wrong or what it had declared.
   set doc [tclpdf new -unit mm -compress 0]
@@ -711,7 +720,7 @@ test xmp-10.1 {a tag not declared in xmpSchema fails the write naming schema and
   list $code [string equal {tclpdf: unknown tag "undeclared" for XMP schema "myorg" - declared are: alpha, beta} $err]
 } -result {1 1}
 
-test xmp-10.2 {an undeclared tag inside a bag fails the same way} -body {
+test xmp-10.2 {an undeclared tag inside a bag fails the same way} -constraints haveTdom -body {
   # A bag's resources carry tags of the same schema, and they are held to
   # the same declaration.
   set doc [tclpdf new -unit mm -compress 0]

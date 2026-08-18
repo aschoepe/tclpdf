@@ -252,7 +252,7 @@ test color-separation-5.9 {a colour space family cannot be a separation name} -b
   list $code $message
 } -match glob -result {1 {*"Pattern" cannot be the name of a separation*}}
 
-test color-separation-5.10 {PDF/A refuses a CMYK alternate under the sRGB intent, naming the separation and the call} -body {
+test color-separation-5.10 {PDF/A refuses a CMYK alternate under the sRGB intent, naming the separation and the call} -constraints haveTdom -body {
   # Measured with veraPDF: under the sRGB output intent a separation whose
   # alternate is DeviceCMYK fails ISO 19005-2, 6.2.4.3 (through 6.2.4.4);
   # RGB and grey pass. The alternate counts as a use of that space, and the
@@ -274,7 +274,7 @@ test color-separation-5.10 {PDF/A refuses a CMYK alternate under the sRGB intent
   list $code $message $fine
 } -match glob -result {1 {*PDF/A*cannot carry DeviceCMYK*separation "Gold" in rect on page 1*} {0 1}}
 
-test color-separation-5.11 {PDF/A declared after the colour: refused at write, no file left} -body {
+test color-separation-5.11 {PDF/A declared after the colour: refused at write, no file left} -constraints haveTdom -body {
   set doc [tclpdf new]
   $doc page add
   $doc rect -at {20 20} -size {40 20} -fill {separation Gold {cmyk 0 0.2 0.8 0} 1}
@@ -284,7 +284,7 @@ test color-separation-5.11 {PDF/A declared after the colour: refused at write, n
   set result
 } -result {1 0}
 
-test color-separation-5.12 {under a CMYK intent the CMYK alternate is fine and the RGB one is not} -constraints haveCmykIcc -body {
+test color-separation-5.12 {under a CMYK intent the CMYK alternate is fine and the RGB one is not} -constraints {haveCmykIcc haveTdom} -body {
   # The mirror image, measured with veraPDF against the ISO Coated v2
   # profile: a CMYK alternate passes, an RGB alternate fails 6.2.4.3-2.
   # Until 2026-08-17 the CMYK alternate was refused under EVERY intent, with
@@ -446,8 +446,7 @@ test color-icc-7.7 {a file that is no profile is refused at the call, with nothi
   list $code [string match {*is not an ICC profile*acsp*} $message] $names
 } -result {1 1 {}}
 
-test color-icc-7.8 {a profile serving as colour space AND output intent stands in the file once} \
-    -constraints haveSrgbIcc -body {
+test color-icc-7.8 {a profile serving as colour space AND output intent stands in the file once} -constraints {haveSrgbIcc haveTdom} -body {
   # [pdfa] embeds the shipped sRGB profile as the output intent;
   # registering the same file as a colour space must not add a second
   # stream - the intent's DestOutputProfile points at the very object the
@@ -468,8 +467,7 @@ test color-icc-7.8 {a profile serving as colour space AND output intent stands i
   list [regexp -all {acsp} $bytes] [expr {$arrayTarget == $intentTarget}]
 } -result {1 1}
 
-test color-icc-7.9 {under a CMYK intent the ICC colour passes where DeviceRGB is refused} \
-    -constraints {haveSrgbIcc haveCmykIcc} -body {
+test color-icc-7.9 {under a CMYK intent the ICC colour passes where DeviceRGB is refused} -constraints {haveSrgbIcc haveCmykIcc haveTdom} -body {
   # The point of the space: ISO 19005-2, 6.2.4.3 holds DEVICE colours
   # against the intent, and an ICCBased colour carries its own profile -
   # so the same three numbers pass under the press profile where the bare
@@ -491,8 +489,7 @@ test color-icc-7.9 {under a CMYK intent the ICC colour passes where DeviceRGB is
   list $fine $code [string match {*cannot carry DeviceRGB*} $message]
 } -result {{0 1} 1 1}
 
-test color-icc-7.10 {veraPDF, where present: 3B passes with ICC colour under the CMYK intent} \
-    -constraints {haveSrgbIcc haveCmykIcc} -body {
+test color-icc-7.10 {veraPDF, where present: 3B passes with ICC colour under the CMYK intent} -constraints {haveSrgbIcc haveCmykIcc haveTdom} -body {
   set doc [tclpdf new]
   $doc page add
   $doc pdfa -part 3 -profile $cmykIcc
@@ -513,7 +510,7 @@ test color-icc-7.10 {veraPDF, where present: 3B passes with ICC colour under the
   set result
 } -result ok
 
-test color-icc-7.11 {a second write is byte-identical} -constraints haveSrgbIcc -body {
+test color-icc-7.11 {a second write is byte-identical} -constraints {haveSrgbIcc haveTdom} -body {
   set doc [tclpdf new -compress 0]
   $doc page add
   $doc pdfa -part 3

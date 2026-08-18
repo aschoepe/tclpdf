@@ -211,7 +211,7 @@ test xObject-3.2 {a form is an isolated transparency group} -body {
 set cmykProfile [file join [file dirname [file dirname [file normalize [info script]]]] icc ISOcoated_v2_bas.ICC]
 testConstraint haveCmykProfile [file exists $cmykProfile]
 
-test xObject-3.2a {the group names no colour space, whatever the intent} -body {
+test xObject-3.2a {the group names no colour space, whatever the intent} -constraints haveTdom -body {
   set results {}
   foreach order {before after} {
     set doc [tclpdf new -unit mm]
@@ -227,7 +227,7 @@ test xObject-3.2a {the group names no colour space, whatever the intent} -body {
   set results
 } -result {1 0 1 0}
 
-test xObject-3.2b {a form under a CMYK output intent} -constraints haveCmykProfile -body {
+test xObject-3.2b {a form under a CMYK output intent} -constraints {haveCmykProfile haveTdom} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc form create block -size {40 20} -script {

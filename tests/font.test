@@ -1348,7 +1348,7 @@ test font-13.1 {Liberation Sans, Serif and Mono match the standard faces' advanc
   list $total $result
 } -result {2555 {{211 {}} {211 {}} {211 {}} {211 {}} {211 {}} {211 {}} {212 {}} {213 {}} {216 {}} {216 {}} {216 {}} {216 {}}}}
 
-test font-13.2 {a Liberation face embeds and sets text under PDF/A} -constraints haveLiberation -body {
+test font-13.2 {a Liberation face embeds and sets text under PDF/A} -constraints {haveLiberation haveTdom} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc font embed lib [file join $::liberation LiberationSerif-Regular.ttf]

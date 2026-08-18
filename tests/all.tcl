@@ -94,8 +94,6 @@ foreach tclpdfPkg {
     tclpdf::tableLayout
     tclpdf::tableDraw
     tclpdf::table
-    tclpdf::pdfa
-    tclpdf::zugferd
     tclpdf::link
     tclpdf::outline
     tclpdf::xml
@@ -109,10 +107,20 @@ foreach tclpdfPkg {
     tclpdf::structureWrite
     tclpdf::structureReport
     tclpdf::structureDest
-    tclpdf::xmp
-    tclpdf::ua
 } {
     package require $tclpdfPkg
+}
+unset -nocomplain tclpdfPkg
+
+# The four that build or read the XMP packet stand apart because they need
+# tdom, which the package does not require of anyone else: a document that
+# claims no conformance never loads them. Required unconditionally here, the
+# whole suite died on a machine without tdom - 1551 tests taken down by an
+# optional dependency of four modules. Now they are asked for where they can
+# be had, and the tests that use them carry the haveTdom constraint from
+# helper.tcl, so such a machine skips those and runs everything else.
+foreach tclpdfPkg {tclpdf::xmp tclpdf::pdfa tclpdf::zugferd tclpdf::ua} {
+    catch {package require $tclpdfPkg}
 }
 unset -nocomplain tclpdfPkg
 

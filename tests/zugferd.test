@@ -15,11 +15,20 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf
-package require tclpdf::pdfa
-package require tclpdf::zugferd
 package require tclpdf::link
 package require tclpdf::outline
 source [file join [file dirname [info script]] helper.tcl]
+
+# This file needs the XMP modules and therefore tdom, which is optional for
+# the package itself - so the file steps aside where it is missing rather
+# than taking the run down with it. helper.tcl sets the constraint.
+if {![testConstraint haveTdom]} {
+    puts "  skipped: [file tail [info script]] needs tdom"
+    cleanupTests
+    return
+}
+package require tclpdf::pdfa
+package require tclpdf::zugferd
 
 set root [file dirname [file dirname [file normalize [info script]]]]
 set assets [file join $root examples assets]
@@ -87,7 +96,7 @@ test zugferd-1.4 {an XRechnung identifier is recognised by shape} -body {
   ::tclpdf::zugferd profile $xml
 } -result XRECHNUNG
 
-test zugferd-2.1 {a PDF/A declaration produces the XMP} -constraints haveInvoice -body {
+test zugferd-2.1 {a PDF/A declaration produces the XMP} -constraints {haveInvoice haveTdom} -body {
   set doc [archivable $face]
   $doc pdfa -part 3 -conformance B
   set path [::tclpdfTest::scratch pdfa.pdf]
@@ -100,7 +109,7 @@ test zugferd-2.1 {a PDF/A declaration produces the XMP} -constraints haveInvoice
       [regexp {/Subtype /XML} $bytes]
 } -result {1 1 1}
 
-test zugferd-2.2 {an unembedded font is refused} -body {
+test zugferd-2.2 {an unembedded font is refused} -constraints haveTdom -body {
   # Regression, found by veraPDF (6.2.11.4.1). A table theme defaulting to
   # Helvetica in an otherwise embedded document produces a file that opens
   # perfectly and is not archivable - and nothing on the way to the recipient
@@ -117,7 +126,7 @@ test zugferd-2.2 {an unembedded font is refused} -body {
   }
 } -returnCodes error -match glob -result {*every font to be embedded*Helvetica*}
 
-test zugferd-2.3 {an embedded Type0 face is NOT reported as missing} -constraints haveInvoice -body {
+test zugferd-2.3 {an embedded Type0 face is NOT reported as missing} -constraints {haveInvoice haveTdom} -body {
   # The check follows the references: Type0 -> CIDFont -> FontDescriptor ->
   # FontFile2. Looking only one level down reports every embedded face as
   # unembedded, which is what a first attempt did.
@@ -130,7 +139,7 @@ test zugferd-2.3 {an embedded Type0 face is NOT reported as missing} -constraint
   set result ok
 } -result ok
 
-test zugferd-2.4 {PDF/A part 4 is refused with a reason} -body {
+test zugferd-2.4 {PDF/A part 4 is refused with a reason} -constraints haveTdom -body {
   set doc [tclpdf new]
   try {
     $doc pdfa -part 4
@@ -158,7 +167,7 @@ test zugferd-3.1 {every page carries its own Resources} -body {
       [regexp {/Type /Pages[^>]*/Resources} $bytes]
 } -result {2 2 0}
 
-test zugferd-4.1 {an invoice becomes a full ZUGFeRD document} -constraints {haveInvoice haveIcc} -body {
+test zugferd-4.1 {an invoice becomes a full ZUGFeRD document} -constraints {haveInvoice haveIcc haveTdom} -body {
   set doc [archivable $face]
   set profile [$doc zugferd $invoice -icc $icc]
   set path [::tclpdfTest::scratch zugferd.pdf]
@@ -186,7 +195,7 @@ test zugferd-4.2 {the namespace URI keeps its case and its hash} -constraints ha
       [regexp -all {<pdfaProperty:name>} $schema]
 } -result {1 4}
 
-test zugferd-4.3 {a second invoice is refused} -constraints haveInvoice -body {
+test zugferd-4.3 {a second invoice is refused} -constraints {haveInvoice haveTdom} -body {
   set doc [archivable $face]
   $doc zugferd $invoice
   try {
@@ -196,7 +205,7 @@ test zugferd-4.3 {a second invoice is refused} -constraints haveInvoice -body {
   }
 } -returnCodes error -match glob -result {*already carries an invoice*}
 
-test zugferd-4.4 {a file name the standards do not allow is refused} -constraints haveInvoice -body {
+test zugferd-4.4 {a file name the standards do not allow is refused} -constraints {haveInvoice haveTdom} -body {
   set doc [archivable $face]
   try {
     $doc zugferd $invoice -name rechnung.xml
@@ -205,7 +214,7 @@ test zugferd-4.4 {a file name the standards do not allow is refused} -constraint
   }
 } -returnCodes error -match glob -result {*not a file name the standards allow*factur-x.xml*}
 
-test zugferd-4.5 {MINIMUM gets /AFRelationship /Data, not /Alternative} -constraints {haveInvoice haveIcc} -body {
+test zugferd-4.5 {MINIMUM gets /AFRelationship /Data, not /Alternative} -constraints {haveInvoice haveIcc haveTdom} -body {
   # Factur-X binds the relationship to the profile: MINIMUM (and BASIC WL)
   # record too little to stand in for the invoice, so their XML is Data.
   # A blanket Alternative here is a validation error on the receiving side.
@@ -220,7 +229,7 @@ test zugferd-4.5 {MINIMUM gets /AFRelationship /Data, not /Alternative} -constra
       [regexp {/AFRelationship /Alternative} $bytes]
 } -result {1 0}
 
-test zugferd-4.6 {an explicit -relationship wins over the profile default} -constraints {haveInvoice haveIcc} -body {
+test zugferd-4.6 {an explicit -relationship wins over the profile default} -constraints {haveInvoice haveIcc haveTdom} -body {
   set doc [archivable $face]
   $doc zugferd $minimum -icc $icc -relationship Source
   set path [::tclpdfTest::scratch zugferd-source.pdf]
@@ -426,7 +435,7 @@ test zugferd-6.5 {a bookmark may point forward; one that never lands is named at
       [string match {*bookmark "Nowhere" points at page 7*1 page(s)*} $err]
 } -result {1 1 1}
 
-test zugferd-7.1 {pdfa declares the conformance the caller asks for} -constraints {haveIcc haveInvoice} -body {
+test zugferd-7.1 {pdfa declares the conformance the caller asks for} -constraints {haveIcc haveInvoice haveTdom} -body {
   # [pdfa] on its own - without ZUGFeRD around it - is how a plain archival
   # document is made, and it was reached only through [zugferd] until now.
   set doc [archivable $face]
@@ -442,7 +451,7 @@ test zugferd-7.1 {pdfa declares the conformance the caller asks for} -constraint
       [regexp {/OutputIntent} $bytes] [regexp {/S /GTS_PDFA1} $bytes]
 } -result {3 B 1 1 1 1}
 
-test zugferd-7.2 {the ICC profile is embedded once, however often it is set} -constraints {haveIcc haveInvoice} -body {
+test zugferd-7.2 {the ICC profile is embedded once, however often it is set} -constraints {haveIcc haveInvoice haveTdom} -body {
   # The output intent is written on every [write], so a second run must reuse
   # the reserved objects instead of embedding the profile again.
   set doc [archivable $face]
@@ -456,7 +465,7 @@ test zugferd-7.2 {the ICC profile is embedded once, however often it is set} -co
   list [regexp -all {/N 3} $bytes] [regexp -all {/OutputIntents} $bytes]
 } -result {1 1}
 
-test zugferd-7.4 {level U is written and validates as 3u} -constraints {haveIcc haveInvoice} -body {
+test zugferd-7.4 {level U is written and validates as 3u} -constraints {haveIcc haveInvoice haveTdom} -body {
   # U is B plus "every character maps back to Unicode" - which is exactly the
   # ToUnicode CMap this package writes for every embedded face anyway. So the
   # stronger level costs nothing, and the only thing that was ever missing was
@@ -473,7 +482,7 @@ test zugferd-7.4 {level U is written and validates as 3u} -constraints {haveIcc 
       [regexp {/ToUnicode} $bytes]
 } -result {1 1 1}
 
-test zugferd-7.5 {level A without a structure tree names the missing call} -body {
+test zugferd-7.5 {level A without a structure tree names the missing call} -constraints haveTdom -body {
   # Level A is deliverable since 2026-08-13, but only for a document that
   # switched tagging on. Turning it on here instead of complaining would be
   # the friendly move and is wrong: the brackets change every content stream,
@@ -489,8 +498,7 @@ test zugferd-7.5 {level A without a structure tree names the missing call} -body
   }
 } -returnCodes error -match glob -result {*level A needs a tagged document*tagged 1*}
 
-test zugferd-7.7 {the font check does not depend on the order of the calls} \
-    -constraints {haveIcc haveInvoice} -body {
+test zugferd-7.7 {the font check does not depend on the order of the calls} -constraints {haveIcc haveInvoice haveTdom} -body {
   # Both subscribe to write time events, and subscribers run in the order
   # they registered. With the check in PdfaWrite, declaring [pdfa] before the
   # first [font embed] ran it before the font module had written anything: it
@@ -520,7 +528,7 @@ test zugferd-7.7 {the font check does not depend on the order of the calls} \
   set result
 } -result {ok ok}
 
-test zugferd-7.6 {an unknown conformance names the ones that exist} -body {
+test zugferd-7.6 {an unknown conformance names the ones that exist} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   try {
@@ -530,7 +538,7 @@ test zugferd-7.6 {an unknown conformance names the ones that exist} -body {
   }
 } -returnCodes error -match glob -result {*must be B, U or A*}
 
-test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -body {
+test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   try {
@@ -540,7 +548,7 @@ test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -body
   }
 } -returnCodes error -match glob -result {*PDF/A-1 forbids transparency*use part 2*}
 
-test zugferd-7.8 {an ICC profile with a Lab space is refused by name, at the call} -body {
+test zugferd-7.8 {an ICC profile with a Lab space is refused by name, at the call} -constraints haveTdom -body {
   # Lab and XYZ profiles are valid ICC, but the output intent needs a device
   # space with a component count. Until 2026-08-15 this fell over as a bare
   # [dict get] error; until 2026-08-18 it was refused at the WRITE, out of
@@ -561,7 +569,7 @@ test zugferd-7.8 {an ICC profile with a Lab space is refused by name, at the cal
       [string match "*GRAY, RGB and CMYK*" $err] $state
 } -result {1 1 1 {}}
 
-test zugferd-7.8a {a file without the ICC signature is refused as no profile at all} -body {
+test zugferd-7.8a {a file without the ICC signature is refused as no profile at all} -constraints haveTdom -body {
   # 128 zero bytes have a "colour space" of four NULs and would otherwise
   # be reported as an unsupported space; the "acsp" check at offset 36 says
   # what it is - not an ICC profile - and says so at the call.
@@ -605,8 +613,7 @@ proc descTag {text} {
   return [binary format a4x4Iua* desc [expr {[string length $text] + 1}] "$text\0"]
 }
 
-test zugferd-7.9 {pdfa without -profile embeds the shipped sRGB profile} \
-    -constraints {haveIcc haveInvoice} -body {
+test zugferd-7.9 {pdfa without -profile embeds the shipped sRGB profile} -constraints {haveIcc haveInvoice haveTdom} -body {
   # This writer paints with DeviceRGB operators, and ISO 19005-2, 6.2.4.3
   # makes the output intent mandatory for those - so a document without a
   # profile is not archivable. Until 2026-08-15 [pdfa] without -profile wrote
@@ -630,8 +637,7 @@ test zugferd-7.9 {pdfa without -profile embeds the shipped sRGB profile} \
       [regexp {/Info \(sRGB IEC61966-2.1\)} $bytes]
 } -result {1 1 1 1 1 1}
 
-test zugferd-7.9a {the shipped profile named explicitly is treated the same} \
-    -constraints {haveIcc haveInvoice} -body {
+test zugferd-7.9a {the shipped profile named explicitly is treated the same} -constraints {haveIcc haveInvoice haveTdom} -body {
   set doc [archivable $face]
   $doc pdfa -part 3 -conformance B -profile $icc
   set path [::tclpdfTest::scratch pdfa-explicit-shipped.pdf]
@@ -647,7 +653,7 @@ test zugferd-7.10 {the desc tag of the shipped profile reads "sRGB"} -constraint
   ::tclpdf::pdfa description [::tclpdf::io read $icc]
 } -result sRGB
 
-test zugferd-7.11 {the condition identifier comes from the profile's desc tag} -body {
+test zugferd-7.11 {the condition identifier comes from the profile's desc tag} -constraints haveTdom -body {
   # A GRAY profile used to go out labelled "sRGB IEC61966-2.1" - the string
   # was fixed whatever file was passed. Now the profile names itself.
   set path [fakeProfile [::tclpdfTest::scratch gray.icc] "GRAY" \
@@ -687,7 +693,7 @@ test zugferd-7.12 {a version 4 mluc desc is read, en-US preferred} -body {
   ::tclpdf::pdfa description $profile
 } -result {Grey v4}
 
-test zugferd-7.13 {a profile without a readable desc is named after its file} -body {
+test zugferd-7.13 {a profile without a readable desc is named after its file} -constraints haveTdom -body {
   set path [fakeProfile [::tclpdfTest::scratch nameless.icc] "CMYK"]
   set doc [tclpdf new -unit mm]
   $doc page add
@@ -716,7 +722,7 @@ test zugferd-7.14 {an explicit -profile wins over the shipped default} -constrai
   lmap p $result {expr {$p eq $path}}
 } -result {1 1}
 
-test zugferd-7.15 {a missing shipped profile is a broken installation, not silence} -body {
+test zugferd-7.15 {a missing shipped profile is a broken installation, not silence} -constraints haveTdom -body {
   # zugferd.tcl used to degrade to "no output intent" when the file was gone;
   # pdfa.tcl now owns the default and says what is missing and where.
   set kept $::tclpdf::pdfa::icc
@@ -730,7 +736,7 @@ test zugferd-7.15 {a missing shipped profile is a broken installation, not silen
   }
 } -returnCodes error -match glob -result {*sRGB profile shipped with the package is missing at *not-there.icc*installation is incomplete*}
 
-test zugferd-7.16 {an explicit profile that does not exist is refused by name} -body {
+test zugferd-7.16 {an explicit profile that does not exist is refused by name} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm]
   try {
     $doc pdfa -part 3 -profile [::tclpdfTest::scratch nowhere.icc]
@@ -870,8 +876,7 @@ test zugferd-8.7 {the content of a tiling pattern and of a form is recorded like
   }] 0 1]
 } -match glob -result {{1 {*cannot carry DeviceRGB*used by line on page 1;*}} {1 {*cannot carry DeviceRGB*used by circle on page 1;*}}}
 
-test zugferd-8.8 {pdfa declared after the drawing is refused the same as before it} \
-    -constraints {haveIcc haveInvoice} -body {
+test zugferd-8.8 {pdfa declared after the drawing is refused the same as before it} -constraints {haveIcc haveInvoice haveTdom} -body {
   # The record is kept whether or not pdfa is ever declared, and the check
   # runs at catalog time - so the two orders cannot come out different.
   set doc [tclpdf new -unit mm]
@@ -938,8 +943,7 @@ test zugferd-8.11 {a refused call leaves no record: the check names only what re
   list $refused $outcome
 } -result {{1 1 1} {0 written 0}}
 
-test zugferd-8.12 {the shipped grey profile: a grey document writes and carries a one-component intent} \
-    -constraints {haveInvoice haveGreyIcc} -body {
+test zugferd-8.12 {the shipped grey profile: a grey document writes and carries a one-component intent} -constraints {haveInvoice haveGreyIcc haveTdom} -body {
   # The third intent the package ships, so the GRAY branch of the check is
   # held against a real profile rather than a synthetic header: grey and the
   # achromatic names pass, the intent goes out with /N 1 and the profile's
@@ -967,7 +971,7 @@ rename descTag {}
 
 # -- zugferd state and zugferd profile ---------------------------------------
 
-test zugferd-9.1 {zugferd state is empty before the call and the record after it} -constraints haveInvoice -body {
+test zugferd-9.1 {zugferd state is empty before the call and the record after it} -constraints {haveInvoice haveTdom} -body {
   set doc [archivable $face]
   set before [$doc zugferd state]
   set profile [$doc zugferd $invoice]
@@ -979,7 +983,7 @@ test zugferd-9.1 {zugferd state is empty before the call and the record after it
       [expr {[dict get $state profile] eq $profile}]
 } -result {{} factur-x.xml {EN 16931} INVOICE 1.0 1 1}
 
-test zugferd-9.2 {zugferd profile on the document reads BT-24 without attaching anything} -constraints haveInvoice -body {
+test zugferd-9.2 {zugferd profile on the document reads BT-24 without attaching anything} -constraints {haveInvoice haveTdom} -body {
   set doc [tclpdf new -unit mm]
   set channel [open $invoice rb]
   set xml [read $channel]
@@ -990,7 +994,7 @@ test zugferd-9.2 {zugferd profile on the document reads BT-24 without attaching 
   list $profile $state
 } -result {{EN 16931} {}}
 
-test zugferd-9.3 {zugferd state carries the relationship that was written} -constraints haveInvoice -body {
+test zugferd-9.3 {zugferd state carries the relationship that was written} -constraints {haveInvoice haveTdom} -body {
   set out {}
   foreach {options expected} {{} Alternative {-profile MINIMUM} Data {-relationship Source} Source} {
     set doc [archivable $face]
@@ -1007,8 +1011,7 @@ test zugferd-9.3 {zugferd state carries the relationship that was written} -cons
 
 # -- pdfa -identifier and pdfa state -----------------------------------------
 
-test zugferd-10.1 {-identifier overrides the profile's own name in the output intent} \
-    -constraints haveInvoice -body {
+test zugferd-10.1 {-identifier overrides the profile's own name in the output intent} -constraints {haveInvoice haveTdom} -body {
   # The shipped profile is named "sRGB IEC61966-2.1" unless told otherwise
   # (zugferd-7.9); an explicit identifier goes into both keys of the intent.
   set doc [archivable $face]
@@ -1024,8 +1027,7 @@ test zugferd-10.1 {-identifier overrides the profile's own name in the output in
       [regexp {sRGB IEC61966-2\.1} $bytes]
 } -result {{Archive RGB} 1 1 0}
 
-test zugferd-10.2 {pdfa state answers every key, and extensions collects what was added} \
-    -constraints haveInvoice -body {
+test zugferd-10.2 {pdfa state answers every key, and extensions collects what was added} -constraints {haveInvoice haveTdom} -body {
   set doc [archivable $face]
   set before [$doc pdfa state]
   set first [$doc pdfa -part 3]
@@ -1040,8 +1042,7 @@ test zugferd-10.2 {pdfa state answers every key, and extensions collects what wa
 } -result [list {} {conformance extensions identifier part profile registered} \
     {} {} 1 [list {<rdf:Description rdf:about="" xmlns:x="urn:example:x#"><x:a>1</x:a></rdf:Description>}] 1]
 
-test zugferd-10.3 {a second pdfa call keeps the identifier and the extensions, registered stays 1} \
-    -constraints haveInvoice -body {
+test zugferd-10.3 {a second pdfa call keeps the identifier and the extensions, registered stays 1} -constraints {haveInvoice haveTdom} -body {
   # zugferd itself does this: one pdfa call, then two extensions, and a
   # caller's pdfa -conformance U afterwards - each call reads the state
   # back and adds to it.
@@ -1056,8 +1057,7 @@ test zugferd-10.3 {a second pdfa call keeps the identifier and the extensions, r
 
 # -- the zugferd options -----------------------------------------------------
 
-test zugferd-11.1 {each of the three invoice names is written to the filespec, the name tree and the XMP} \
-    -constraints haveInvoice -body {
+test zugferd-11.1 {each of the three invoice names is written to the filespec, the name tree and the XMP} -constraints {haveInvoice haveTdom} -body {
   # order-x.xml, the fourth name the standards know, is an order's and is
   # refused for an invoice since 2026-08-18 - block 13. This test used to
   # pin it as a name for the invoice.
@@ -1079,8 +1079,7 @@ test zugferd-11.1 {each of the three invoice names is written to the filespec, t
   return $result
 } -result {{factur-x.xml 1 1 1} {zugferd-invoice.xml 1 1 1} {xrechnung.xml 1 1 1}}
 
-test zugferd-11.2 {-type goes verbatim into fx:DocumentType, ORDER for an Order-X file} \
-    -constraints haveInvoice -body {
+test zugferd-11.2 {-type goes verbatim into fx:DocumentType, ORDER for an Order-X file} -constraints {haveInvoice haveTdom} -body {
   # This used to label the EN 16931 invoice XML ORDER; since 2026-08-18
   # the type has to belong to the family BT-24 names, so the order gets an
   # Order-X XML of its own.
@@ -1105,8 +1104,7 @@ test zugferd-11.2 {-type goes verbatim into fx:DocumentType, ORDER for an Order-
       [regexp {<fx:DocumentType>INVOICE</fx:DocumentType>} $again]
 } -result {ORDER 1 0 1}
 
-test zugferd-11.3 {-profile overrides BT-24, and the relationship follows the override} \
-    -constraints haveInvoice -body {
+test zugferd-11.3 {-profile overrides BT-24, and the relationship follows the override} -constraints {haveInvoice haveTdom} -body {
   # The XML says EN 16931; each override is returned, written as
   # fx:ConformanceLevel with its space, and decides the /AFRelationship the
   # way the profile read from the file would.
@@ -1132,8 +1130,7 @@ test zugferd-11.3 {-profile overrides BT-24, and the relationship follows the ov
 } -result {{MINIMUM MINIMUM 1 1 1} {{BASIC WL} {BASIC WL} 1 1 1} {BASIC BASIC 1 1 1}\
     {{EN 16931} {EN 16931} 1 1 1} {EXTENDED EXTENDED 1 1 1}}
 
-test zugferd-11.4 {-version is the fx:Version written, -description replaces the Desc} \
-    -constraints haveInvoice -body {
+test zugferd-11.4 {-version is the fx:Version written, -description replaces the Desc} -constraints {haveInvoice haveTdom} -body {
   set doc [archivable $face]
   $doc zugferd $invoice -version 2.3 -description "Rechnung 4711"
   set path [::tclpdfTest::scratch zugferd-version.pdf]
@@ -1149,8 +1146,7 @@ test zugferd-11.4 {-version is the fx:Version written, -description replaces the
       [regexp {invoice data} $bytes]
 } -result {2.3 1 0 1 0}
 
-test zugferd-11.5 {-compress is off by default and Flate-compresses the XML when asked} \
-    -constraints haveInvoice -body {
+test zugferd-11.5 {-compress is off by default and Flate-compresses the XML when asked} -constraints {haveInvoice haveTdom} -body {
   # Off: the invoice sits in the file byte for byte, and its stream carries
   # no filter. On: the stream is FlateDecode, /Params /Size still gives the
   # uncompressed length, and the XML text is not to be found.
@@ -1180,7 +1176,7 @@ test zugferd-11.5 {-compress is off by default and Flate-compresses the XML when
   return $result
 } -result {{0 1 1} {1 1 0} 1}
 
-test zugferd-11.6 {-profile and -type refuse what is not a level or a type} -constraints haveInvoice -body {
+test zugferd-11.6 {-profile and -type refuse what is not a level or a type} -constraints {haveInvoice haveTdom} -body {
   set out {}
   foreach {option value} {-profile Basic -profile EXTENDET -type invoice -type QUOTE} {
     set doc [archivable $face]
@@ -1210,8 +1206,7 @@ proc untouched {doc} {
       [$doc zugferd state]]
 }
 
-test zugferd-12.1 {a zugferd refused for -relationship leaves no PDF/A claim, no schema and no attachment; the retry declares the schema once} \
-    -constraints haveInvoice -body {
+test zugferd-12.1 {a zugferd refused for -relationship leaves no PDF/A claim, no schema and no attachment; the retry declares the schema once} -constraints {haveInvoice haveTdom} -body {
   # This used to leave a PDF/A-3B claim with the Factur-X schema and
   # fx:DocumentFileName in the packet and NO invoice in the file - a
   # document that validates and lies - and the retry declared the schema
@@ -1230,8 +1225,7 @@ test zugferd-12.1 {a zugferd refused for -relationship leaves no PDF/A claim, no
       [regexp -all {<fx:DocumentFileName>} $bytes] [regexp -all {/AFRelationship} $bytes]
 } -result {1 1 {{} {} {} {}} 1 1 1}
 
-test zugferd-12.2 {-version takes digits and dots only, and is checked before anything is declared} \
-    -constraints haveInvoice -body {
+test zugferd-12.2 {-version takes digits and dots only, and is checked before anything is declared} -constraints {haveInvoice haveTdom} -body {
   # "" used to come out as <fx:Version/>, and a "<" went into the packet
   # unescaped - the parser then refused the whole document at write time,
   # after pdfa had already been declared.
@@ -1250,8 +1244,7 @@ test zugferd-12.2 {-version takes digits and dots only, and is checked before an
 } -result [list 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} \
     1 1 {{} {} {} {}} {EN 16931} 2.3.1]
 
-test zugferd-12.3 {a missing -icc, a -compress that is no boolean and a name already taken are all refused before the claim} \
-    -constraints haveInvoice -body {
+test zugferd-12.3 {a missing -icc, a -compress that is no boolean and a name already taken are all refused before the claim} -constraints {haveInvoice haveTdom} -body {
   set out {}
   set doc [archivable $face]
   lappend out [catch {$doc zugferd $invoice -icc [::tclpdfTest::scratch nowhere.icc]} err] \
@@ -1266,7 +1259,7 @@ test zugferd-12.3 {a missing -icc, a -compress that is no boolean and a name alr
   set out
 } -result [list 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {} {} {}]
 
-test zugferd-12.4 {a refused pdfa leaves the version, the floor and the ceiling alone} -body {
+test zugferd-12.4 {a refused pdfa leaves the version, the floor and the ceiling alone} -constraints haveTdom -body {
   # "pdfa -conformance Z" used to raise the version to 1.7 and pin the
   # floor and the ceiling to PDF/A-3 before the conformance was looked at:
   # the state was empty and "configure -version 2.0" was refused for a
@@ -1290,7 +1283,7 @@ test zugferd-12.4 {a refused pdfa leaves the version, the floor and the ceiling 
   lsort -unique [lmap {a b c d e f g} $out {list $a $b $c $d $e $f $g}]
 } -result {{1 1 {} 1.4 1.4 0 0}}
 
-test zugferd-12.5 {an attachment under a PDF/A-2 claim is refused, part 3 admits it} -constraints haveIcc -body {
+test zugferd-12.5 {an attachment under a PDF/A-2 claim is refused, part 3 admits it} -constraints {haveIcc haveTdom} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc pdfa -part 2
@@ -1303,7 +1296,7 @@ test zugferd-12.5 {an attachment under a PDF/A-2 claim is refused, part 3 admits
   list $code [string match {*claims PDF/A-2*ISO 19005-2, 6.8*pdfa -part 3*} $err] $none $one
 } -result {1 1 {} x.txt}
 
-test zugferd-12.6 {the shipped profile is recognised under a relative path and a dotted one} -constraints haveIcc -body {
+test zugferd-12.6 {the shipped profile is recognised under a relative path and a dotted one} -constraints {haveIcc haveTdom} -body {
   # The comparison used to be on the path STRING: "-profile icc/sRGB.icc"
   # from the package directory went out under the desc tag's bare "sRGB"
   # instead of "sRGB IEC61966-2.1". Normalized on the way in - and the
@@ -1333,7 +1326,7 @@ test zugferd-12.6 {the shipped profile is recognised under a relative path and a
   set out
 } -result {1 1 1 1 1 1}
 
-test zugferd-12.7 {pdfa extension before any pdfa call is refused instead of declaring PDF/A-3B by itself} -body {
+test zugferd-12.7 {pdfa extension before any pdfa call is refused instead of declaring PDF/A-3B by itself} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   set code [catch {$doc pdfa extension {<rdf:Description rdf:about="" xmlns:x="urn:x#"><x:a>1</x:a></rdf:Description>}} err]
@@ -1342,7 +1335,7 @@ test zugferd-12.7 {pdfa extension before any pdfa call is refused instead of dec
   list $code [string match {*pdfa extension needs a PDF/A declaration*call pdfa first*} $err] $state
 } -result {1 1 {{} {} 1.7}}
 
-test zugferd-12.8 {pdfa parses its four public options only: -registered and -extensions are unknown} -body {
+test zugferd-12.8 {pdfa parses its four public options only: -registered and -extensions are unknown} -constraints haveTdom -body {
   # The whole state dict used to be the parse defaults, so "-registered 1"
   # was accepted - and claimed conformance without ever subscribing to the
   # write - and named in the message for a misspelled option.
@@ -1368,8 +1361,7 @@ test zugferd-12.8 {pdfa parses its four public options only: -registered and -ex
 # The tests build the XML themselves; the sample files stay in the
 # distribution.
 
-test zugferd-13.1 {an Order-X identifier: level from BT-24, type ORDER, name order-x.xml, Data, the order namespace} \
-    -constraints haveInvoice -body {
+test zugferd-13.1 {an Order-X identifier: level from BT-24, type ORDER, name order-x.xml, Data, the order namespace} -constraints {haveInvoice haveTdom} -body {
   set out {}
   foreach {identifier level} {
     urn:order-x.eu:1p0:basic BASIC urn:order-x.eu:1p0:comfort COMFORT
@@ -1399,8 +1391,7 @@ test zugferd-13.1 {an Order-X identifier: level from BT-24, type ORDER, name ord
   set out
 } -result {{BASIC ORDER order-x.xml Data 1 1 1 1 1 1 1 1 2 0} {COMFORT ORDER order-x.xml Data 1 1 1 1 1 1 1 1 2 0} {EXTENDED ORDER order-x.xml Data 1 1 1 1 1 1 1 1 2 0}}
 
-test zugferd-13.2 {the three order types go into fx:DocumentType, and -profile alone still reads the family from BT-24} \
-    -constraints haveInvoice -body {
+test zugferd-13.2 {the three order types go into fx:DocumentType, and -profile alone still reads the family from BT-24} -constraints {haveInvoice haveTdom} -body {
   # -profile overrides the level, and BT-24 used to go unread then; the
   # family still comes from it, so an order XML with -profile COMFORT and
   # no -type is an ORDER, not an INVOICE at a level invoices do not have.
@@ -1430,8 +1421,7 @@ test zugferd-13.2 {the three order types go into fx:DocumentType, and -profile a
   set out
 } -result {{BASIC ORDER_RESPONSE order-x.xml 1 1} {BASIC ORDER_CHANGE order-x.xml 1 1} {COMFORT ORDER order-x.xml 1 1} {EXTENDED ORDER_CHANGE order-x.xml 1 1} BASIC ORDER}
 
-test zugferd-13.3 {-relationship Source and Alternative on request; Supplement and Unspecified refused for order-x.xml, leaving nothing behind} \
-    -constraints haveInvoice -body {
+test zugferd-13.3 {-relationship Source and Alternative on request; Supplement and Unspecified refused for order-x.xml, leaving nothing behind} -constraints {haveInvoice haveTdom} -body {
   set out {}
   foreach relationship {Source Alternative} {
     set doc [archivable $face]
@@ -1455,8 +1445,7 @@ test zugferd-13.3 {-relationship Source and Alternative on request; Supplement a
   set out
 } -result {{Source 1} {Alternative 1} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}}}
 
-test zugferd-13.4 {a level of the other family is refused naming both, whether it comes from -profile or from BT-24} \
-    -constraints haveInvoice -body {
+test zugferd-13.4 {a level of the other family is refused naming both, whether it comes from -profile or from BT-24} -constraints {haveInvoice haveTdom} -body {
   # Four crossings, each refused before anything is written: an invoice
   # level under an order type, an order level under an invoice type, an
   # invoice XML declared an order, an order XML declared an invoice. BASIC
@@ -1483,8 +1472,7 @@ test zugferd-13.4 {a level of the other family is refused naming both, whether i
   set out
 } -result {1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1}
 
-test zugferd-13.5 {order-x.xml is the order's name and no invoice's; the file's own name counts only within the family} \
-    -constraints haveInvoice -body {
+test zugferd-13.5 {order-x.xml is the order's name and no invoice's; the file's own name counts only within the family} -constraints {haveInvoice haveTdom} -body {
   set order [orderXml urn:order-x.eu:1p0:comfort]
   set out {}
   # An invoice may not be called order-x.xml, an order nothing else.
@@ -1524,7 +1512,7 @@ test zugferd-13.5 {order-x.xml is the order's name and no invoice's; the file's 
   set out
 } -result {1 1 {{} {} {} {}} 1 1 1 1 1 1 1 1 order-x.xml factur-x.xml INVOICE}
 
-test zugferd-13.6 {zugferd profile answers the Order-X level, and the reader knows the family} -body {
+test zugferd-13.6 {zugferd profile answers the Order-X level, and the reader knows the family} -constraints haveTdom -body {
   set out {}
   foreach {identifier level} {
     urn:order-x.eu:1p0:basic BASIC urn:order-x.eu:1p0:comfort COMFORT

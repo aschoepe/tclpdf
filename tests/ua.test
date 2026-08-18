@@ -20,8 +20,17 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf
-package require tclpdf::ua
 source [file join [file dirname [info script]] helper.tcl]
+
+# This file needs the XMP modules and therefore tdom, which is optional for
+# the package itself - so the file steps aside where it is missing rather
+# than taking the run down with it. helper.tcl sets the constraint.
+if {![testConstraint haveTdom]} {
+    puts "  skipped: [file tail [info script]] needs tdom"
+    cleanupTests
+    return
+}
+package require tclpdf::ua
 
 set here [file dirname [file dirname [file normalize [info script]]]]
 set face [file join $here examples assets fonts DejaVuSans.ttf]
@@ -46,7 +55,7 @@ proc accessible {face {heading H1}} {
 
 # --- the claim ------------------------------------------------------------
 
-test ua-1.1 {the claim reaches the XMP packet} -constraints haveFace -body {
+test ua-1.1 {the claim reaches the XMP packet} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc ua 1
   set path [::tclpdfTest::scratch ua-claim.pdf]
@@ -61,7 +70,7 @@ test ua-1.1 {the claim reaches the XMP packet} -constraints haveFace -body {
       [regexp {xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/"} $bytes]
 } -result {1 0 1}
 
-test ua-1.2 {DisplayDocTitle is set, not demanded} -constraints haveFace -body {
+test ua-1.2 {DisplayDocTitle is set, not demanded} -constraints {haveFace haveTdom} -body {
   # The one requirement the writer can meet by itself: it moves nothing on
   # any page, so asking the caller to write it out would be ceremony.
   set doc [accessible $face]
@@ -74,7 +83,7 @@ test ua-1.2 {DisplayDocTitle is set, not demanded} -constraints haveFace -body {
   regexp {/ViewerPreferences << /DisplayDocTitle true >>} $bytes
 } -result 1
 
-test ua-1.3 {the state answers what was declared} -constraints haveFace -body {
+test ua-1.3 {the state answers what was declared} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc ua 1
   set one [dict get [$doc ua state] part]
@@ -88,7 +97,7 @@ test ua-1.3 {the state answers what was declared} -constraints haveFace -body {
 
 # --- what is refused ------------------------------------------------------
 
-test ua-2.1 {a document without a tree cannot claim it} -body {
+test ua-2.1 {a document without a tree cannot claim it} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm]
   $doc info Title "T"
   $doc language de-DE
@@ -99,7 +108,7 @@ test ua-2.1 {a document without a tree cannot claim it} -body {
   list $code [string match "*not tagged*" $err]
 } -result {1 1}
 
-test ua-2.2 {a document without a title cannot claim it} -constraints haveFace -body {
+test ua-2.2 {a document without a title cannot claim it} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc info Title ""
   $doc ua 1
@@ -108,7 +117,7 @@ test ua-2.2 {a document without a title cannot claim it} -constraints haveFace -
   list $code [string match "*no title*" $err]
 } -result {1 1}
 
-test ua-2.3 {a document without a language cannot claim it} -constraints haveFace -body {
+test ua-2.3 {a document without a language cannot claim it} -constraints {haveFace haveTdom} -body {
   # Built by hand rather than through [accessible], because [language] with
   # no argument READS the tag - there is no way to take one back.
   set doc [tclpdf new -unit mm]
@@ -124,7 +133,7 @@ test ua-2.3 {a document without a language cannot claim it} -constraints haveFac
   list $code [string match "*no language*" $err]
 } -result {1 1}
 
-test ua-2.4 {a standard font cannot be used at all} -body {
+test ua-2.4 {a standard font cannot be used at all} -constraints haveTdom -body {
   # PDF/A leaves the standard 14 exempt; PDF/UA does not (7.21.4 Note 5).
   set doc [tclpdf new -unit mm]
   $doc tagged 1
@@ -140,7 +149,7 @@ test ua-2.4 {a standard font cannot be used at all} -body {
       [string match "*Helvetica*" $err]
 } -result {1 1 1}
 
-test ua-2.5 {Symbol and ZapfDingbats are named as hopeless} -body {
+test ua-2.5 {Symbol and ZapfDingbats are named as hopeless} -constraints haveTdom -body {
   # The other twelve can be replaced by an embeddable face; these two have no
   # embeddable representative at all, and saying so saves a search that has
   # no result.
@@ -157,7 +166,7 @@ test ua-2.5 {Symbol and ZapfDingbats are named as hopeless} -body {
   list $code [string match "*no document using them can claim PDF/UA*" $err]
 } -result {1 1}
 
-test ua-2.6 {every problem is reported, not the first} -body {
+test ua-2.6 {every problem is reported, not the first} -constraints haveTdom -body {
   # A caller fixing five problems in five write-and-read rounds is the
   # failure mode this avoids.
   set doc [tclpdf new -unit mm]
@@ -173,7 +182,7 @@ test ua-2.6 {every problem is reported, not the first} -body {
 
 # --- headings -------------------------------------------------------------
 
-test ua-3.1 {the first heading has to be an H1} -constraints haveFace -body {
+test ua-3.1 {the first heading has to be an H1} -constraints {haveFace haveTdom} -body {
   set doc [tclpdf new -unit mm]
   $doc tagged 1
   $doc info Title "T"
@@ -188,7 +197,7 @@ test ua-3.1 {the first heading has to be an H1} -constraints haveFace -body {
   list $code [string match "*first heading is an H3*" $err]
 } -result {1 1}
 
-test ua-3.2 {no level may be skipped} -constraints haveFace -body {
+test ua-3.2 {no level may be skipped} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc structure H3 -script {$doc text "y" -at {20 40}}
   $doc ua 1
@@ -197,7 +206,7 @@ test ua-3.2 {no level may be skipped} -constraints haveFace -body {
   list $code [string match "*jumps from H1 to H3*" $err]
 } -result {1 1}
 
-test ua-3.3 {a descent and a return are both fine} -constraints haveFace -body {
+test ua-3.3 {a descent and a return are both fine} -constraints {haveFace haveTdom} -body {
   # H1 H2 H3 H2 H3 is a normal document: going back UP is not a skip, and a
   # check that only ever compared with the previous level would refuse it.
   set doc [accessible $face]
@@ -214,8 +223,7 @@ test ua-3.3 {a descent and a return are both fine} -constraints haveFace -body {
   list $code [expr {$code ? $err : {}}]
 } -result {0 {}}
 
-test ua-3.4 {the generic H does not mix with the numbered headings} \
-    -constraints haveFace -body {
+test ua-3.4 {the generic H does not mix with the numbered headings} -constraints {haveFace haveTdom} -body {
   # A document is either weakly structured (H throughout, the level implied
   # by the nesting) or strongly structured (H1 to Hn) - Matterhorn 14-006.
   # Measured 2026-08-18: veraPDF ua1 fails the mixture with two checks
@@ -231,7 +239,7 @@ test ua-3.4 {the generic H does not mix with the numbered headings} \
 
 # --- tables ---------------------------------------------------------------
 
-test ua-4.1 {a regular table passes} -constraints haveFace -body {
+test ua-4.1 {a regular table passes} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   # -style is not optional: a table has a font state of its own and it
   # defaults to Helvetica, which no UA document may use.
@@ -245,7 +253,7 @@ test ua-4.1 {a regular table passes} -constraints haveFace -body {
   list $code [expr {$code ? $err : {}}]
 } -result {0 {}}
 
-test ua-4.2 {a spanning cell keeps the grid regular, an irregular table is refused} -constraints haveFace -body {
+test ua-4.2 {a spanning cell keeps the grid regular, an irregular table is refused} -constraints {haveFace haveTdom} -body {
   # Until 2026-08-18 this test pinned the opposite: a table with a colSpan
   # was refused as "rows of 2 and 3 cells". The rule counts COLUMNS, spans
   # included (Matterhorn 15-003, UA-2 8.2.5.26), and veraPDF passes such a
@@ -294,8 +302,7 @@ test ua-4.3 {a head cell says which way it heads} -constraints haveFace -body {
 
 # --- part 2 ---------------------------------------------------------------
 
-test ua-5.1 {part 2 raises the file version and names the namespace} \
-    -constraints haveFace -body {
+test ua-5.1 {part 2 raises the file version and names the namespace} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc ua -part 2
   set path [::tclpdfTest::scratch ua-two.pdf]
@@ -310,8 +317,7 @@ test ua-5.1 {part 2 raises the file version and names the namespace} \
       [regexp {/NS \d+ 0 R} $bytes]
 } -result {1 1 1 1 1}
 
-test ua-5.2 {the 1.7-only types keep the default namespace} \
-    -constraints haveFace -body {
+test ua-5.2 {the 1.7-only types keep the default namespace} -constraints {haveFace haveTdom} -body {
   # Twelve types exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3). Naming
   # the 2.0 namespace on one of them would be a claim about a type that does
   # not exist there.
@@ -327,7 +333,7 @@ test ua-5.2 {the 1.7-only types keep the default namespace} \
   list [regexp {/S /Code(?![^>]*/NS)} $bytes] [regexp {/S /H1[^>]*} $bytes]
 } -result {1 1}
 
-test ua-5.3 {part 2 and PDF/A-3 are mutually exclusive} -constraints haveFace -body {
+test ua-5.3 {part 2 and PDF/A-3 are mutually exclusive} -constraints {haveFace haveTdom} -body {
   # PDF/A-3 is a 1.7 format and UA-2 needs 2.0. Said at the call that creates
   # the contradiction, whichever way round the two were declared.
   set doc [accessible $face]
@@ -337,8 +343,7 @@ test ua-5.3 {part 2 and PDF/A-3 are mutually exclusive} -constraints haveFace -b
   list $code [string match "*cannot be claimed by one file*" $err]
 } -result {1 1}
 
-test ua-5.4 {the generic H alone passes part 1 and is refused under part 2} \
-    -constraints haveFace -body {
+test ua-5.4 {the generic H alone passes part 1 and is refused under part 2} -constraints {haveFace haveTdom} -body {
   # H means "a heading at whatever level the nesting implies", and 2.0
   # dropped it. Under part 1 it stays legal - ALONE. Until 2026-08-18 this
   # test added the H to [accessible], whose tree already holds an H1, and
@@ -355,8 +360,7 @@ test ua-5.4 {the generic H alone passes part 1 and is refused under part 2} \
   list $one $two [string match "*generic H*" $err]
 } -result {0 1 1}
 
-test ua-5.5 {an attachment without a description fails part 2 only} \
-    -constraints haveFace -body {
+test ua-5.5 {an attachment without a description fails part 2 only} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc attach [info script] -name probe.tcl
   $doc ua 1
@@ -368,7 +372,7 @@ test ua-5.5 {an attachment without a description fails part 2 only} \
   list $one $two [string match "*Desc on every file specification*" $err]
 } -result {0 1 1}
 
-test ua-5.6 {PDF/A after part 2 is refused, naming the way out} -body {
+test ua-5.6 {PDF/A after part 2 is refused, naming the way out} -constraints haveTdom -body {
   # The other direction of ua-5.3. Until 2026-08-15 only ua.tcl checked:
   # [ua -part 2] then [pdfa -part 3] was accepted and produced a PDF 2.0
   # file with a PDF/A-3 claim - two standards, one file, both wrong.
@@ -380,7 +384,7 @@ test ua-5.6 {PDF/A after part 2 is refused, naming the way out} -body {
       [string match "*ua 1 with pdfa -part 3*" $err]
 } -result {1 1 1}
 
-test ua-5.7 {a document configured to PDF 2.0 cannot claim PDF/A} -body {
+test ua-5.7 {a document configured to PDF 2.0 cannot claim PDF/A} -constraints haveTdom -body {
   # The version can reach 2.0 without ua at all, so the guard has to read
   # the writer, not only the ua state.
   set doc [tclpdf new]
@@ -391,7 +395,7 @@ test ua-5.7 {a document configured to PDF 2.0 cannot claim PDF/A} -body {
       [string match "*2.0*" $err]
 } -result {1 1 1}
 
-test ua-5.10 {part 1 on a file raised to 2.0 is refused at write time, naming the way out} -constraints haveFace -body {
+test ua-5.10 {part 1 on a file raised to 2.0 is refused at write time, naming the way out} -constraints {haveFace haveTdom} -body {
   # ua -part 1 lifts the file to 1.7 and does not cap it - a document may
   # still move on to part 2, which needs 2.0. So a part-1 claim on a 2.0
   # file is caught where the other claims are checked: at write time.
@@ -414,7 +418,7 @@ test ua-5.10 {part 1 on a file raised to 2.0 is refused at write time, naming th
       [string match "*part 2 instead*" $err] $again $written
 } -result {1 1 1 0 1}
 
-test ua-5.8 {ua 1 with pdfa -part 3 stays the ZUGFeRD combination} -body {
+test ua-5.8 {ua 1 with pdfa -part 3 stays the ZUGFeRD combination} -constraints haveTdom -body {
   # The guard must not overreach: part 1 rides the 1.7 path and is exactly
   # what an accessible invoice declares.
   set doc [tclpdf new]
@@ -425,7 +429,7 @@ test ua-5.8 {ua 1 with pdfa -part 3 stays the ZUGFeRD combination} -body {
   list $code $part
 } -result {0 3}
 
-test ua-5.9 {pdfa alone is untouched by the guard} -body {
+test ua-5.9 {pdfa alone is untouched by the guard} -constraints haveTdom -body {
   # pdfa raises the version to 1.7 itself; the guard reads the version
   # before that raise and must not mistake one for the other.
   set doc [tclpdf new]
@@ -437,8 +441,7 @@ test ua-5.9 {pdfa alone is untouched by the guard} -body {
 
 # --- WTPDF ----------------------------------------------------------------
 
-test ua-6.1 {the declaration carries both spellings of the identifier} \
-    -constraints haveFace -body {
+test ua-6.1 {the declaration carries both spellings of the identifier} -constraints {haveFace haveTdom} -body {
   # WTPDF 1.0 writes the URI with a slash before the hash in all four places
   # it names it; veraPDF 1.30.2 tests for the form without one. Both are
   # written - the mechanism explicitly allows several claims, and neither is
@@ -456,8 +459,7 @@ test ua-6.1 {the declaration carries both spellings of the identifier} \
       [regexp {reuse1\.0} $bytes]
 } -result {1 1 1 0}
 
-test ua-6.2 {WTPDF belongs to part 2, and an unknown level is named} \
-    -constraints haveFace -body {
+test ua-6.2 {WTPDF belongs to part 2, and an unknown level is named} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   set wrongPart [catch {$doc ua -part 1 -wtpdf accessibility} first]
   set wrongLevel [catch {$doc ua -part 2 -wtpdf sideways} second]
@@ -466,7 +468,7 @@ test ua-6.2 {WTPDF belongs to part 2, and an unknown level is named} \
       $wrongLevel [string match "*reuse and accessibility*" $second]
 } -result {1 1 1 1}
 
-test ua-6.3 {no declaration means no empty description} -constraints haveFace -body {
+test ua-6.3 {no declaration means no empty description} -constraints {haveFace haveTdom} -body {
   # An empty contribution is left out of the packet rather than written as a
   # description with nothing in it.
   set doc [accessible $face]
@@ -481,7 +483,7 @@ test ua-6.3 {no declaration means no empty description} -constraints haveFace -b
 
 # --- links ----------------------------------------------------------------
 
-test ua-7.1 {a link without a description is refused} -constraints haveFace -body {
+test ua-7.1 {a link without a description is refused} -constraints {haveFace haveTdom} -body {
   # A reader announces a link by its Contents (7.18.5). Without one it says
   # "link" and stops, which is the whole of what the user learns.
   set doc [accessible $face]
@@ -496,7 +498,7 @@ test ua-7.1 {a link without a description is refused} -constraints haveFace -bod
       [string match "*-tooltip*" $err]
 } -result {1 1 1}
 
-test ua-7.2 {a link with a tooltip passes and joins the tree} -constraints haveFace -body {
+test ua-7.2 {a link with a tooltip passes and joins the tree} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc structure Link -script {
     $doc text "tcl.tk" -at {20 40}
@@ -512,8 +514,7 @@ test ua-7.2 {a link with a tooltip passes and joins the tree} -constraints haveF
   list $code [regexp {/Type /OBJR} $bytes] [regexp {/Contents \(Zur} $bytes]
 } -result {0 1 1}
 
-test ua-8.1 {a document claiming both standards describes the pdfuaid schema} \
-    -constraints haveFace -body {
+test ua-8.1 {a document claiming both standards describes the pdfuaid schema} -constraints {haveFace haveTdom} -body {
   # PDF/A allows only the predefined XMP schemas unless the file describes
   # the others itself (ISO 19005, 6.6.2.3.1). pdfuaid is not predefined, so a
   # document making both claims has to carry an extension schema description
@@ -603,8 +604,7 @@ test ua-9.3 {a page number at the top is a head, at the bottom a foot} -body {
 # comes from [undescribedGraphics], and image.test, svg.test and xObject.test
 # show that all three kinds fill it.
 
-test ua-10.1 {a graphic nobody described or declared decoration is refused} \
-    -constraints haveFace -body {
+test ua-10.1 {a graphic nobody described or declared decoration is refused} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc form create block -size {40 20} -script {
     $doc rect -at {0 0} -size {40 20} -fill steelblue
@@ -619,8 +619,7 @@ test ua-10.1 {a graphic nobody described or declared decoration is refused} \
       without -artifact 1*" $err] [string match "*-artifact 1*" $err]
 } -result {1 1 1}
 
-test ua-10.2 {described or declared decoration, and the claim stands} \
-    -constraints haveFace -body {
+test ua-10.2 {described or declared decoration, and the claim stands} -constraints {haveFace haveTdom} -body {
   # Both answers are fine - it is the absence of any that is refused.
   set doc [accessible $face]
   $doc form create block -size {40 20} -script {
@@ -636,8 +635,7 @@ test ua-10.2 {described or declared decoration, and the claim stands} \
   list $code [expr {$code ? $err : {}}]
 } -result {0 {}}
 
-test ua-10.3 {a drawing is named as one, and every one is listed} \
-    -constraints haveFace -body {
+test ua-10.3 {a drawing is named as one, and every one is listed} -constraints {haveFace haveTdom} -body {
   # One message per graphic, not one for all: each names its own page, and
   # two on different pages are two calls to change.
   set dot {<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
@@ -660,8 +658,7 @@ test ua-10.3 {a drawing is named as one, and every one is listed} \
 # numbers that are not there, and items with a Lbl under a list that says
 # nothing leave the reader guessing what the labels are (Matterhorn 16-001).
 
-test ua-11.1 {a numbered list whose items carry no Lbl is refused} \
-    -constraints haveFace -body {
+test ua-11.1 {a numbered list whose items carry no Lbl is refused} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc structure L -numbering Decimal -script {
     $doc structure LI -script {$doc text "erstens" -at {20 40}}
@@ -674,8 +671,7 @@ test ua-11.1 {a numbered list whose items carry no Lbl is refused} \
       carry no Lbl*" $err] [string match "*structure Lbl*" $err]
 } -result {1 1 1}
 
-test ua-11.2 {items with a Lbl under a list that says nothing are refused} \
-    -constraints haveFace -body {
+test ua-11.2 {items with a Lbl under a list that says nothing are refused} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc structure L -script {
     $doc structure LI -script {
@@ -690,7 +686,7 @@ test ua-11.2 {items with a Lbl under a list that says nothing are refused} \
       no -numbering*" $err] [string match "*or None*" $err]
 } -result {1 1 1}
 
-test ua-11.3 {the three honest shapes of a list all pass} -constraints haveFace -body {
+test ua-11.3 {the three honest shapes of a list all pass} -constraints {haveFace haveTdom} -body {
   # Numbered with labels; None with labels, which is what a list of arbitrary
   # markers says; and no numbering with no labels, the plain unordered case
   # from example 5.6.
@@ -718,8 +714,7 @@ test ua-11.3 {the three honest shapes of a list all pass} -constraints haveFace 
   list $code [expr {$code ? $err : {}}]
 } -result {0 {}}
 
-test ua-11.4 {a single unlabelled item is counted, not the whole list} \
-    -constraints haveFace -body {
+test ua-11.4 {a single unlabelled item is counted, not the whole list} -constraints {haveFace haveTdom} -body {
   # The message says how many of how many, so a caller with a long list
   # knows whether to look for one item or rewrite all of them.
   set doc [accessible $face]
@@ -743,7 +738,7 @@ test ua-11.4 {a single unlabelled item is counted, not the whole list} \
 
 # --- the revision year ----------------------------------------------------
 
-test ua-12.1 {-revision is a four-digit year, and nothing else} -body {
+test ua-12.1 {-revision is a four-digit year, and nothing else} -constraints haveTdom -body {
   # pdfuaid:rev is the year of the edition claimed (ISO 14289-2 Table 1).
   # Until 2026-08-15 any value was written into the metadata as given.
   set doc [tclpdf new]
@@ -759,8 +754,7 @@ test ua-12.1 {-revision is a four-digit year, and nothing else} -body {
 
 # --- DisplayDocTitle ------------------------------------------------------
 
-test ua-13.1 {DisplayDocTitle taken back after the claim is refused} \
-    -constraints haveFace -body {
+test ua-13.1 {DisplayDocTitle taken back after the claim is refused} -constraints {haveFace haveTdom} -body {
   # [ua] sets it and cannot see a later [viewerPreferences] call; the write
   # reads the finished preferences and names the call.
   set doc [accessible $face]
@@ -772,8 +766,7 @@ test ua-13.1 {DisplayDocTitle taken back after the claim is refused} \
       under PDF/UA (7.1)*" $err]
 } -result {1 1}
 
-test ua-13.2 {other preferences after the claim leave it standing} \
-    -constraints haveFace -body {
+test ua-13.2 {other preferences after the claim leave it standing} -constraints {haveFace haveTdom} -body {
   # A later call that touches something else keeps DisplayDocTitle - the
   # module merges rather than resets - and the check has to see that.
   set doc [accessible $face]
@@ -789,8 +782,7 @@ test ua-13.2 {other preferences after the claim leave it standing} \
 
 # --- reuse alone, and what state reports -----------------------------------
 
-test ua-14.1 {-wtpdf reuse writes the reuse declaration and not the other} \
-    -constraints haveFace -body {
+test ua-14.1 {-wtpdf reuse writes the reuse declaration and not the other} -constraints {haveFace haveTdom} -body {
   # ua-6.1 covers accessibility; reuse is the other level of WTPDF 6.1.2, and
   # a document that claims it has not claimed accessibility.
   set doc [accessible $face]
@@ -805,8 +797,7 @@ test ua-14.1 {-wtpdf reuse writes the reuse declaration and not the other} \
       [regexp {accessibility1\.0} $bytes]
 } -result {1 1 0}
 
-test ua-14.2 {ua state carries the levels asked for and whether the claim is registered} \
-    -constraints haveFace -body {
+test ua-14.2 {ua state carries the levels asked for and whether the claim is registered} -constraints {haveFace haveTdom} -body {
   # registered is what tells a second call from the first: the catalog and
   # XMP subscribers are added once, and the state says that they have been.
   set doc [accessible $face]
@@ -822,7 +813,7 @@ test ua-14.2 {ua state carries the levels asked for and whether the claim is reg
 } -result {{} {reuse accessibility} 1 {reuse accessibility} 1 {reuse accessibility} 1\
     {part registered revision wtpdf}}
 
-test ua-14.3 {without -wtpdf the state says so, and ua 1 has no levels either} -body {
+test ua-14.3 {without -wtpdf the state says so, and ua 1 has no levels either} -constraints haveTdom -body {
   set doc [tclpdf new]
   set two [$doc ua -part 2]
   $doc destroy
@@ -834,8 +825,7 @@ test ua-14.3 {without -wtpdf the state says so, and ua 1 has no levels either} -
 
 # --- part 2 through configure, ua 0, the private state key -------------------
 
-test ua-15.1 {part 2 raises the version through configure, and it cannot be lowered again} \
-    -constraints haveFace -body {
+test ua-15.1 {part 2 raises the version through configure, and it cannot be lowered again} -constraints {haveFace haveTdom} -body {
   # cget answered the old version while the writer was at 2.0, and a later
   # configure -version 1.7 was taken - a %PDF-1.7 file with pdfuaid:part 2.
   set doc [accessible $face]
@@ -853,7 +843,7 @@ test ua-15.1 {part 2 raises the version through configure, and it cannot be lowe
       $still [string range $bytes 0 7]
 } -result {2.0 2.0 1 1 2.0 %PDF-2.0}
 
-test ua-15.2 {ua 0 withdraws the claim and everything it put there} -constraints haveFace -body {
+test ua-15.2 {ua 0 withdraws the claim and everything it put there} -constraints {haveFace haveTdom} -body {
   # ua 1; ua 0; write died on the empty state, and what ua had set stayed
   # in the file: the schema, DisplayDocTitle, the extension schema.
   set doc [accessible $face]
@@ -870,7 +860,7 @@ test ua-15.2 {ua 0 withdraws the claim and everything it put there} -constraints
   list $state $raw $preferences $code [regexp {pdfuaid} $bytes] [regexp {DisplayDocTitle} $bytes]
 } -result {{} {} {} 0 0 0}
 
-test ua-15.3 {a claim withdrawn and made again describes itself once} -constraints haveFace -body {
+test ua-15.3 {a claim withdrawn and made again describes itself once} -constraints {haveFace haveTdom} -body {
   # And subscribes once: the catalog subscribers after ua 1 and after
   # ua 1; ua 0; ua 1 are the same in number. (A viewer preference of the
   # caller's own, so that the preferences module - which subscribes once
@@ -894,7 +884,7 @@ test ua-15.3 {a claim withdrawn and made again describes itself once} -constrain
       [expr {$again - $once}]
 } -result {1 1 1 1 0}
 
-test ua-15.4 {ua 0 puts DisplayDocTitle back the way it was} -constraints haveFace -body {
+test ua-15.4 {ua 0 puts DisplayDocTitle back the way it was} -constraints {haveFace haveTdom} -body {
   # Set by the caller before the claim it stays; set by ua alone it goes.
   set doc [accessible $face]
   $doc viewerPreferences -displayDocTitle 1 -hideToolbar 1
@@ -911,7 +901,7 @@ test ua-15.4 {ua 0 puts DisplayDocTitle back the way it was} -constraints haveFa
   list [lsort -stride 2 $kept] $gone
 } -result {{displayDocTitle 1 hideToolbar 1} {hideToolbar 1}}
 
-test ua-15.5 {ua 0 after part 2 takes the namespace demand with it} -constraints haveFace -body {
+test ua-15.5 {ua 0 after part 2 takes the namespace demand with it} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc ua -part 2
   $doc ua 0
@@ -926,7 +916,7 @@ test ua-15.5 {ua 0 after part 2 takes the namespace demand with it} -constraints
   list $demand $code [string range $bytes 0 7] [regexp {/Type /Namespace} $bytes] [regexp {pdfuaid} $bytes]
 } -result {{} 0 %PDF-2.0 0 0}
 
-test ua-15.6 {registered is state, not an option} -body {
+test ua-15.6 {registered is state, not an option} -constraints haveTdom -body {
   set doc [tclpdf new]
   set code [catch {$doc ua -registered 1} err]
   set state [$doc ua state]
@@ -937,7 +927,7 @@ test ua-15.6 {registered is state, not an option} -body {
 
 # --- Note under part 2, links inside a Link ---------------------------------
 
-test ua-15.7 {Note is refused under part 2, as H is} -constraints haveFace -body {
+test ua-15.7 {Note is refused under part 2, as H is} -constraints {haveFace haveTdom} -body {
   set doc [accessible $face]
   $doc structure Note -script {$doc text "n" -at {20 40}}
   $doc ua -part 2
@@ -953,7 +943,7 @@ test ua-15.7 {Note is refused under part 2, as H is} -constraints haveFace -body
   list $code [string match "*the tree uses Note - PDF/UA-2 wants FENote*8.2.5.14*" $err] $one
 } -result {1 1 0}
 
-test ua-15.8 {a link annotation outside a Link element is refused} -constraints haveFace -body {
+test ua-15.8 {a link annotation outside a Link element is refused} -constraints {haveFace haveTdom} -body {
   # veraPDF ua1 7.18.5-1: the annotation's structure parent has to be a
   # Link. Drawn outside any element it joins none; drawn in a P it joins
   # the P.
@@ -969,8 +959,7 @@ test ua-15.8 {a link annotation outside a Link element is refused} -constraints 
   list $code [string match "*2 link annotations are not inside a Link structure element, on page 1*7.18.5*structure Link*" $err]
 } -result {1 1}
 
-test ua-15.9 {part 2 lets a Reference hold the link annotation, part 1 does not} \
-    -constraints haveFace -body {
+test ua-15.9 {part 2 lets a Reference hold the link annotation, part 1 does not} -constraints {haveFace haveTdom} -body {
   # ISO 14289-2 8.2.5.20 names Link or Reference; ISO 14289-1 7.18.5 Link.
   set doc [accessible $face]
   $doc structure P -script {

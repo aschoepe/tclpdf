@@ -328,7 +328,7 @@ test structure-7.3 {a second write produces the same tree, not a second one} -bo
       [expr {[regexp -all {/StructElem} $a] == [regexp -all {/StructElem} $b]}]
 } -result {2 2 1}
 
-test structure-7.4 {PDF/A level A needs the tree and names the missing call} -body {
+test structure-7.4 {PDF/A level A needs the tree and names the missing call} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm]
   set code [catch {$doc pdfa -part 3 -conformance A} err]
   $doc destroy
@@ -947,7 +947,7 @@ test structure-14.7 {a bookmark may point at an element instead of a page} -body
       [regexp "\n$target 0 obj\[^s\]*/S /Sect" $bytes]
 } -result {1 1}
 
-test structure-14.8 {ua -part 2 raises the version before the guard looks} -body {
+test structure-14.8 {ua -part 2 raises the version before the guard looks} -constraints haveTdom -body {
   # The order that has to keep working: [ua -part 2] sets the version to 2.0
   # itself, so a caller who declared it is not sent to raise a version that
   # is already right. This is the path example 05.08 takes.

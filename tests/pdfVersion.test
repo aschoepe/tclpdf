@@ -31,9 +31,18 @@ package require tclpdf::attach
 package require tclpdf::pageLabel
 package require tclpdf::viewerPreferences
 package require tclpdf::link
-package require tclpdf::pdfa
 package require tclpdf::svg
 source [file join [file dirname [info script]] helper.tcl]
+
+# This file needs the XMP modules and therefore tdom, which is optional for
+# the package itself - so the file steps aside where it is missing rather
+# than taking the run down with it. helper.tcl sets the constraint.
+if {![testConstraint haveTdom]} {
+    puts "  skipped: [file tail [info script]] needs tdom"
+    cleanupTests
+    return
+}
+package require tclpdf::pdfa
 
 set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets]
@@ -329,7 +338,7 @@ test pdfVersion-7.2 {the highest requirement is the one remembered} -body {
   set message
 } -match glob -result {*uses opacity, which needs PDF 1.4*}
 
-test pdfVersion-7.3 {pdfa raises through configure, and a later configure does not undo it} -body {
+test pdfVersion-7.3 {pdfa raises through configure, and a later configure does not undo it} -constraints haveTdom -body {
   # Measured before: "pdfa -part 3" put the writer at 1.7, [cget -version]
   # still said 1.4, and the next "configure -unit pt" put the writer back at
   # 1.4 - a PDF/A-3 file with a 1.4 header, which veraPDF accepts.
@@ -344,7 +353,7 @@ test pdfVersion-7.3 {pdfa raises through configure, and a later configure does n
   list $raised $kept $refused $message
 } -result {{1.7 1.7} 1.7 1 {tclpdf: this document already uses PDF/A-3, which needs PDF 1.7 - it cannot be lowered to PDF 1.4}}
 
-test pdfVersion-7.5 {a configure that does not name -version leaves a raised writer alone} -body {
+test pdfVersion-7.5 {a configure that does not name -version leaves a raised writer alone} -constraints haveTdom -body {
   # [ua -part 2] raises the writer to 2.0 without going through the option,
   # and [configure] used to hand the option's 1.7 back down with every call -
   # measured with pdfa before it went through configure. Only a call that
@@ -392,7 +401,7 @@ test pdfVersion-6.10 {bleed, trim and art boxes are PDF 1.3 (Table 30); media an
       [::tclpdfTest::gate 1.2 1.3 "page box art" {@doc page box art {5 5 205 292}}]
 } -result {0 0 {1 1 1 0} {1 1 1 0} {1 1 1 0}}
 
-test pdfVersion-7.6 {ua -part 1 raises to 1.7 through configure and cannot be lowered} -body {
+test pdfVersion-7.6 {ua -part 1 raises to 1.7 through configure and cannot be lowered} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm -version 1.4]
   $doc page add
   $doc tagged 1
@@ -405,7 +414,7 @@ test pdfVersion-7.6 {ua -part 1 raises to 1.7 through configure and cannot be lo
 
 # --- raising the version over a claim that caps it -----------------------------
 
-test pdfVersion-7.7 {pdfa -part 3 then configure -version 2.0 is refused, naming the claim} -body {
+test pdfVersion-7.7 {pdfa -part 3 then configure -version 2.0 is refused, naming the claim} -constraints haveTdom -body {
   # Measured before: accepted, and the file began with %PDF-2.0 while the
   # XMP said pdfaid:part 3 - veraPDF -f 3b fails it on ISO 19005-3 6.1.2-1
   # (the header shall be %PDF-1.n, n from 0 to 7) and nothing else.
@@ -421,7 +430,7 @@ test pdfVersion-7.7 {pdfa -part 3 then configure -version 2.0 is refused, naming
   list $refused $message $kept $lowered
 } -result {1 {tclpdf: this document claims PDF/A-3, which is written as PDF 1.7 at most - it cannot be raised to PDF 2.0} {1.7 1.7} 1}
 
-test pdfVersion-7.8 {pdfa -part 2 caps at 1.7 as well; a refused part 1 leaves no cap behind} -body {
+test pdfVersion-7.8 {pdfa -part 2 caps at 1.7 as well; a refused part 1 leaves no cap behind} -constraints haveTdom -body {
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc pdfa -part 2 -conformance b
@@ -439,7 +448,7 @@ test pdfVersion-7.8 {pdfa -part 2 caps at 1.7 as well; a refused part 1 leaves n
       $one $free $version
 } -result {1 1 1 0 2.0}
 
-test pdfVersion-7.9 {configure -version 2.0 then pdfa is refused for part 2 and 3, before the raise} -body {
+test pdfVersion-7.9 {configure -version 2.0 then pdfa is refused for part 2 and 3, before the raise} -constraints haveTdom -body {
   set out {}
   foreach part {2 3} {
     set doc [tclpdf new -unit mm -version 2.0]
@@ -475,7 +484,7 @@ test pdfVersion-7.10 {the writer's limit: refused past the ceiling, the lowest c
   list $past $message $lower $down $higher $up $kept $message2
 } -result {1 {tclpdf: something older is written as PDF 1.6 at most - this document is written as PDF 1.7} 1 {tclpdf: this document already uses PDF/A-3, which needs PDF 1.7 - it cannot be lowered to PDF 1.6} 1 {tclpdf: this document claims PDF/A-3, which is written as PDF 1.7 at most - it cannot be raised to PDF 2.0} 1 {tclpdf: this document claims an older claim, which is written as PDF 1.5 at most - it cannot be raised to PDF 1.6}}
 
-test pdfVersion-7.11 {pdfa then ua -part 2 is refused with the way out, and leaves the writer at 1.7} -body {
+test pdfVersion-7.11 {pdfa then ua -part 2 is refused with the way out, and leaves the writer at 1.7} -constraints haveTdom -body {
   # Measured before: the refusal came AFTER ua had raised the writer to 2.0,
   # so a PDF/A-3 file with a %PDF-2.0 header followed. Now the contradiction
   # is said before the raise - and the raise itself would be refused by the

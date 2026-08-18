@@ -453,12 +453,11 @@ oo::define ::tclpdf::document::document {
   }
 
   # Read an ICC profile header: {GRAY 1}, {RGB 3} or {CMYK 4}, or an error
-  # naming what is wrong. The reader lives in pdfa.tcl because the output
-  # intent needed it first; it is required lazily so that a document that
-  # never touches a profile does not load the PDF/A machinery.
+  # naming what is wrong. The reader sits in this module because colour is
+  # what it is about; it used to live in pdfa.tcl, and an ICC colour then
+  # loaded the PDF/A machinery and tdom with it.
   method IccInspect {bytes what} {
-    package require tclpdf::pdfa
-    return [::tclpdf::pdfa space $bytes $what]
+    return [::tclpdf::color::iccSpace $bytes $what]
   }
 
   # The stream object of a profile, written ONCE per document however many
@@ -526,7 +525,29 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-# The name of the colour space as it appears in a resource dictionary.
+# What an ICC profile says it describes: {GRAY 1}, {RGB 3} or {CMYK 4}, or an
+# error naming what is wrong. It lived in pdfa.tcl, where the output intent
+# needed it first, and every ICC colour therefore pulled the PDF/A machinery
+# in behind it - and with it tdom, which nothing about reading twenty bytes of
+# a header needs. Three callers now: the output intent, [icc embed] and a
+# picture's embedded profile.
+proc ::tclpdf::color::iccSpace {bytes profile} {
+  if {[string range $bytes 36 39] ne "acsp"} {
+    return -code error "tclpdf: \"$profile\" is not an ICC profile - the\
+        signature \"acsp\" is missing from its header"
+  }
+  set space [string trimright [string range $bytes 16 19]]
+  set spaces {GRAY 1 RGB 3 CMYK 4}
+  if {![dict exists $spaces $space]} {
+    # Worded for every caller alike - the output intent, [icc embed], a
+    # picture's embedded profile all read through here.
+    return -code error "tclpdf: the ICC profile \"$profile\" describes\
+        colour space \"$space\" - a device space profile is needed: GRAY,\
+        RGB and CMYK"
+  }
+  return [list $space [dict get $spaces $space]]
+}
+
 # A grey stop between coloured ones: the same grey, said in the other space.
 # A shading (and anything else that needs its colours in ONE space) calls
 # this on every stop with the space the coloured stops use; a grey becomes
@@ -546,6 +567,7 @@ proc ::tclpdf::color::promote {parsed space} {
   return $parsed
 }
 
+# The name of the colour space as it appears in a resource dictionary.
 proc ::tclpdf::color::space {parsed} {
   switch -- [lindex $parsed 0] {
     gray {return DeviceGray}

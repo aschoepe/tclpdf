@@ -296,7 +296,7 @@ test type1-3.4 {the metrics have to be there} -constraints havePfb -body {
   list $code [string match {*needs its metrics*} $message]
 } -result {1 1}
 
-test type1-3.5 {an embedded Type 1 face satisfies PDF/A} -constraints haveRaw -body {
+test type1-3.5 {an embedded Type 1 face satisfies PDF/A} -constraints {haveRaw haveTdom} -body {
   # The open question this posting carried: whether a face embedded WHOLE,
   # without subsetting, is acceptable. Measured against veraPDF outside the
   # suite: PDF/A-3u, zero failed checks. Here only the half that can be

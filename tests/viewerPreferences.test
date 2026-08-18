@@ -226,7 +226,7 @@ test viewerPreferences-3.5 {UseOC is a 1.5 value inside a 1.2 key} -body {
   list $thumbs $oc [string match "*UseOC needs PDF 1.5*" $msg] $ok
 } -result {0 1 1 0}
 
-test viewerPreferences-4.1 {the catalog subscription is made once, and survives an emptied dictionary} -body {
+test viewerPreferences-4.1 {the catalog subscription is made once, and survives an emptied dictionary} -constraints haveTdom -body {
   # ua 1 sets DisplayDocTitle, ua 0 takes it out again and the dictionary is
   # empty as at the start. "First call" used to be read off that emptiness,
   # so the next preference subscribed ViewerPreferencesCatalog a second time
