@@ -59,20 +59,28 @@ proc ::tclpdf::afm::fonts {} {
 proc ::tclpdf::afm::resolve {family {style {}}} {
   variable families
   # An exact font name passes through - case-insensitively, so "helvetica-bold"
-  # works as well as "Helvetica-Bold".
+  # works as well as "Helvetica-Bold" - and it passes through WHATEVER the
+  # style says: the name is the style. Measured before 2026-08-18: it passed
+  # only when no style was given, so "font -family helvetica -style bold"
+  # followed by "font -family Times-Italic" was refused as an unknown font -
+  # the stale bold sent Times-Italic down the family road, and there is no
+  # such family.
   #
-  # Only when NO style was given, though. "helvetica" is both a family name and
-  # a font name, so passing it through unconditionally silently dropped the
-  # style: [resolve helvetica bold] returned Helvetica, and the heading came
-  # out in the regular weight with nothing to indicate why.
-  if {$style eq {}} {
+  # The one exception is a name that is ALSO a family with variants -
+  # Helvetica, Courier - asked for with a style: those go the family road, so
+  # that [resolve Helvetica bold] answers Helvetica-Bold. Passed through, the
+  # style was silently dropped and the heading came out in the regular weight
+  # with nothing to indicate why. Symbol and ZapfDingbats have no variants to
+  # drop a style into and pass through like any other exact name.
+  set key [string tolower $family]
+  if {$style eq {} || ![dict exists $families $key]
+      || [dict size [dict get $families $key]] == 1} {
     foreach name [fonts] {
       if {[string equal -nocase $name $family]} {
         return $name
       }
     }
   }
-  set key [string tolower $family]
   if {![dict exists $families $key]} {
     return -code error "tclpdf: unknown font \"$family\" - known families are:\
         [join [lsort [dict keys $families]] {, }]"
@@ -175,7 +183,11 @@ proc ::tclpdf::afm::encodeWidths {widths text symbolic name {hint {}}} {
     # and the width table carries the space width there for that reason.)
     # The zero width space U+200B likewise: a break opportunity, nothing to
     # set - and no WinAnsi position for it, so it would have been refused.
-    if {$char eq "\u00AD" || $char eq "\u200B"} {
+    # U+FEFF, the byte order mark a file read without stripping it carries in
+    # front of its first word, is the third (font.tcl drops it for an
+    # embedded face; measured, the standard faces refused it as "not
+    # available in WinAnsiEncoding"): nothing to draw, no width, no break.
+    if {$char eq "\u00AD" || $char eq "\u200B" || $char eq "\uFEFF"} {
       incr position
       continue
     }
@@ -219,4 +231,4 @@ proc ::tclpdf::afm::Check {font} {
   return
 }
 
-package provide tclpdf::afm 1.2
+package provide tclpdf::afm 1.3

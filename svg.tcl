@@ -29,8 +29,11 @@
 #   structure   g, svg, a, switch, defs, use, symbol; title/desc/metadata and
 #               script are skipped on purpose
 #   painting    fill, stroke, stroke-width, stroke-linecap, stroke-linejoin,
-#               stroke-dasharray, opacity, fill-opacity, fill-rule, display,
-#               and the same set inside a style="" attribute, which wins
+#               stroke-dasharray, fill-opacity, stroke-opacity, opacity
+#               (as the product with the two, and multiplied down a group -
+#               a group at 0.5 holding a shape at 0.5 paints it at 0.25),
+#               fill-rule, display, and the same set inside a style=""
+#               attribute, which wins
 #   geometry    transform (translate, scale, rotate about a point, skewX,
 #               skewY, matrix), viewBox
 #   fitting     the DEFAULT of preserveAspectRatio - xMidYMid meet: the
@@ -71,6 +74,7 @@ package require tclpdf::svgPath 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::afm 1.0-
 package require tclpdf::text 1.0-
+package require tclpdf::graphics 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::svg {
@@ -166,7 +170,15 @@ oo::define ::tclpdf::document::document {
     # The alpha is checked - and its ExtGState made - before the mark and
     # the "q" are out: refused inside [SvgRoot] it left a q and the mark's
     # BDC/EMC around nothing. Same order as [FormPlace] in xObject.tcl; the
-    # option carries the resource name from here on.
+    # option carries the resource name from here on. -at and the sizes are
+    # checked here too, before the mark: a bad corner used to leave an
+    # empty BDC/EMC pair, and a zero -scale or a negative -width went into
+    # the drawing's cm as a singular or a mirroring matrix (geometry.tcl,
+    # checkFit).
+    if {[dict get $options at] ne {}} {
+      my GraphicsPoint [dict get $options at] -at svg
+    }
+    ::tclpdf::geometry checkFit $options svg
     if {[dict get $options opacity] ne {}} {
       dict set options opacity [my GraphicsOpacity [dict get $options opacity]]
     }
@@ -401,4 +413,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.3
+package provide tclpdf::svg 1.4

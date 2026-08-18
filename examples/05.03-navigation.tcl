@@ -223,7 +223,7 @@ $doc viewerPreferences -nonFullScreenPageMode UseOutlines -direction L2R
 $doc viewerPreferences -printScaling None -duplex Simplex
 $doc viewerPreferences -duplex DuplexFlipShortEdge
 $doc viewerPreferences -printScaling AppDefault -duplex DuplexFlipLongEdge \
-    -pickTrayByPDFSize 1 -numCopies 1
+    -pickTrayByPDFSize 1 -numCopies 2
 
 exampleFooter $doc
 

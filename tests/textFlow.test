@@ -1322,4 +1322,141 @@ test textFlow-8.4 {textLines takes -direction, and needs it for a right-to-left 
       [lindex $lines 0]
 } -result {1 1 2 {שלום עולם ברוכים הבאים}}
 
+# -- the caller's page, the fresh page, and what is refused before anything is drawn
+
+test textFlow-9.1 {a paragraph placed under the last line of the caller's page paginates onto the next page} -body {
+  # -at three millimetres above the bottom of the area, one line needs 4.23
+  # (10 pt Helvetica, leading 12 pt): nothing fits here, and that is the
+  # caller's page - the answer is the next page, not the refusal a fresh
+  # page gets. Nothing is drawn on page 1.
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowBody -at {20 269} -width 170 -paginate 1]
+  set pages [$doc page count]
+  set first [flowLines [::tclpdfTest::content $doc 0]]
+  set second [flowLines [::tclpdfTest::content $doc 1]]
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc 1] y]
+  $doc destroy
+  # The continuation hangs from the top of the area: 20 mm from the top =
+  # 277 mm = 785.20 pt, less the ascent of 7.18 pt.
+  list $pages $first [expr {$second > 0}] [dict get $result page] [dict get $result rest] \
+      [format %.2f [::tcl::mathfunc::max {*}$ys]]
+} -result {2 0 1 1 {} 778.02}
+
+test textFlow-9.2 {the same with columns: nothing on the caller's page, the columns begin on the next} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowLong -at {20 269} -width 170 -paginate 1 -columns 2]
+  set pages [$doc page count]
+  set first [flowLines [::tclpdfTest::content $doc 0]]
+  set xs [lsort -real -unique [lmap x [::tclpdfTest::starts [::tclpdfTest::content $doc 1] x] {format %.2f $x}]]
+  $doc destroy
+  # Two columns on page 2: two distinct starting x, 20 mm and 20 + 82.5 + 5.
+  list [expr {$pages >= 2}] $first [expr {[dict get $result page] == $pages - 1}] $xs
+} -result {1 0 1 {56.69 304.72}}
+
+test textFlow-9.3 {a page the loop added is still refused when not one line fits into it} -body {
+  # As before (6.11): the caller's page takes five lines above the area,
+  # the fresh page has 5 mm for a 25 mm leading and is refused, naming
+  # itself.
+  set doc [tclpdf new -unit mm -typeArea {146 146}]
+  $doc page add
+  $doc font -family helvetica -size 60
+  set code [catch {$doc text [string repeat "Word " 40] -at {20 20} -width 100 -paginate 1} message]
+  set pages [$doc page count]
+  $doc destroy
+  list $code [regexp {not one line fits into the type area of page 2} $message] $pages
+} -result {1 1 2}
+
+test textFlow-9.4 {-paginate refuses a numeric -height rather than replacing it by max in silence} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc text $::flowBody -at {20 20} -width 100 -paginate 1 -height 20} message]
+  set pages [$doc page count]
+  set lines [flowLines [::tclpdfTest::content $doc]]
+  set ok [catch {$doc text $::flowBody -at {20 20} -width 100 -paginate 1 -height max} result]
+  $doc destroy
+  list $code [regexp -- {-height max} $message] $pages $lines $ok [dict get $result rest]
+} -result {1 1 1 0 0 {}}
+
+test textFlow-9.5 {a -height max block that draws nothing answers the y it was given} -body {
+  # Under the area with -anchor top: no line, so no ascender to count - the
+  # answer used to be y plus the ascent of a line that was never set.
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set single [$doc text $::flowBody -at {20 280} -width 170 -height max -anchor top]
+  set columns [$doc text $::flowBody -at {20 280} -width 170 -height max -anchor top -columns 2]
+  set lines [flowLines [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [dict get $single y] [dict get $columns y] $lines \
+      [string equal [dict get $single rest] $::flowBody] \
+      [string equal [dict get $columns rest] $::flowBody]
+} -result {280 280 0 1 1}
+
+test textFlow-9.6 {the indents and the paragraph spacing are refused in tclpdf's words, drawing and measuring} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach option {-indent -indentRight -firstIndent -paragraphSpacing} {
+    lappend codes [catch {$doc text "x y z" -at {20 20} -width 100 $option bogus} message] \
+        [regexp -- "$option takes a distance" $message] \
+        [catch {$doc textHeight "x y z" -width 100 $option bogus} message] \
+        [regexp -- "$option takes a distance" $message] \
+        [catch {$doc textLines "x y z" -width 100 $option bogus} message] \
+        [regexp -- "$option takes a distance" $message]
+  }
+  # A negative first indent is a hanging indent and stays legal.
+  lappend codes [catch {$doc text "x y z" -at {20 20} -width 100 -firstIndent -5}]
+  set lines [flowLines [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $codes $lines
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0} 1}
+
+test textFlow-9.7 {an avoided shape needs a size, and -avoidMargin a number} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach {shape pattern} {
+    {rect {30 30} {-10 10}} {rectangle needs a width and a height above zero}
+    {rect {30 30} {10 0}} {rectangle needs a width and a height above zero}
+    {circle {30 30} 0} {circle needs a radius above zero}
+    {circle {30 30} -5} {circle needs a radius above zero}
+  } {
+    lappend codes [catch {$doc text "x y z" -at {20 20} -width 100 -avoid [list $shape]} message] \
+        [regexp $pattern $message] \
+        [catch {$doc textLines "x y z" -width 100 -at {20 20} -avoid [list $shape]} message] \
+        [regexp $pattern $message]
+  }
+  lappend codes [catch {$doc text "x y z" -at {20 20} -width 100 \
+      -avoid {{circle {30 30} 5}} -avoidMargin abc} message] \
+      [regexp -- {-avoidMargin takes a distance} $message] \
+      [catch {$doc textHeight "x y z" -width 100 -at {20 20} \
+      -avoid {{circle {30 30} 5}} -avoidMargin abc} message] \
+      [regexp -- {-avoidMargin takes a distance} $message]
+  set lines [flowLines [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $codes $lines
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} 0}
+
+test textFlow-9.8 {a shape covering the rest of the caller's page moves the text to the next page, it does not refuse} -body {
+  # There is room for lines under -at, so nothing is decided in advance;
+  # the shape leaves every one of them empty, and the whole rest comes back
+  # from the caller's page. That is still not a page the loop added, so it
+  # is not the page the refusal is for: the text goes on on page 2, without
+  # the shape.
+  set doc [tclpdf new -unit mm -typeArea {20 25}]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc text $::flowBody -at {20 240} -width 170 -paginate 1 \
+      -avoid {{rect {15 230} {180 60}}}} result]
+  set pages [$doc page count]
+  set first [flowLines [::tclpdfTest::content $doc 0]]
+  set second [flowLines [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  list $code $pages $first [expr {$second > 0}] [dict get $result page] [dict get $result rest]
+} -result {0 2 0 1 1 {}}
+
 cleanupTests

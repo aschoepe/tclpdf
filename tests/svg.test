@@ -719,10 +719,12 @@ test svg-8.4 {a negative stroke width is the initial width} -body {
 
 test svg-8.5 {fill-opacity is clamped, not refused} -body {
   # A number that is clamped to 0..1 by the SVG definition: 1.5 is opaque
-  # and writes no state at all, -0.5 is invisible.
+  # and writes no state at all, -0.5 is invisible. (The resource is named
+  # from the value as the file spells it - GS0f, not GS0_0f as this test
+  # had it until 2026-08-18, when the name still followed the spelling.)
   lassign [svgPaintOf {fill="red" fill-opacity="1.5"}] code1 stream1
   lassign [svgPaintOf {fill="red" fill-opacity="-0.5"}] code2 stream2
-  list $code1 [regexp { gs} $stream1] $code2 [regexp {/GS0_0f gs} $stream2]
+  list $code1 [regexp { gs} $stream1] $code2 [regexp {/GS0f gs} $stream2]
 } -result {0 0 0 1}
 
 # -- svg size -----------------------------------------------------------------
@@ -762,5 +764,90 @@ test svg-10.1 {-scale multiplies the drawing's own size} -body {
   set factors [lmap {- a} [regexp -all -inline {([-0-9.]+) 0 0 [-0-9.]+ [-0-9.]+ [-0-9.]+ cm} $stream] {set a}]
   list [lrange $natural 2 3] [lrange $scaled 2 3] $factors
 } -result {{40.0 20.0} {20.0 10.0} {1 0.5}}
+
+# -- opacity and stroke-opacity ---------------------------------------------------
+#
+# The header claimed both since the first check-in; measured before
+# 2026-08-18 only fill-opacity reached the file. stroke-opacity is /CA,
+# opacity multiplies into both sides and down a group.
+
+test svg-opacity-11.1 {stroke-opacity is a CA, fill-opacity a ca, both at once one gs} -body {
+  lassign [svgPaintOf {fill="red" stroke="blue" stroke-opacity="0.5"}] code1 stream1
+  lassign [svgPaintOf {fill="red" stroke="blue" fill-opacity="0.5"}] code2 stream2
+  lassign [svgPaintOf {fill="red" stroke="blue" fill-opacity="0.5" stroke-opacity="0.5"}] code3 stream3
+  lassign [svgPaintOf {fill="red" stroke="blue" fill-opacity="0.25" stroke-opacity="0.5"}] code4 stream4
+  list $code1 [regexp -all {/GS0_5s gs} $stream1] [regexp -all { gs} $stream1] \
+      $code2 [regexp -all {/GS0_5f gs} $stream2] [regexp -all { gs} $stream2] \
+      $code3 [regexp -all {/GS0_5b gs} $stream3] [regexp -all { gs} $stream3] \
+      $code4 [regexp -all {/GS0_25f gs} $stream4] [regexp -all {/GS0_5s gs} $stream4]
+} -result {0 1 1 0 1 1 0 1 1 0 1 1}
+
+test svg-opacity-11.2 {opacity applies to both sides, and multiplies with the per-side values} -body {
+  lassign [svgPaintOf {fill="red" stroke="blue" opacity="0.5"}] code1 stream1
+  lassign [svgPaintOf {fill="red" stroke="blue" opacity="0.5" fill-opacity="0.5"}] code2 stream2
+  lassign [svgPaintOf {fill="red" style="opacity:0.5;stroke:blue"}] code3 stream3
+  list $code1 [regexp -all {/GS0_5b gs} $stream1] \
+      $code2 [regexp -all {/GS0_25f gs} $stream2] [regexp -all {/GS0_5s gs} $stream2] \
+      $code3 [regexp -all {/GS0_5b gs} $stream3]
+} -result {0 1 0 1 1 0 1}
+
+test svg-opacity-11.3 {a group's opacity multiplies down to its children} -body {
+  # A group at 0.5 holding a shape at 0.5 paints it at 0.25; a sibling
+  # without its own is at the group's 0.5; and the resources are the
+  # dedupled ExtGStates of the document.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>
+      <g opacity='0.5'><rect width='5' height='5' fill='red' opacity='0.5'/>
+      <rect x='5' width='5' height='5' fill='red'/></g>
+      <rect y='5' width='5' height='5' fill='red'/></svg>} -at {10 10} -width 50
+  set stream [::tclpdfTest::content $doc]
+  set resources [lsort [dict keys [$doc resource ExtGState]]]
+  $doc destroy
+  list [regexp -all {/GS0_25b gs} $stream] [regexp -all {/GS0_5b gs} $stream] \
+      [regexp -all { gs} $stream] $resources
+} -result {1 1 2 {GS0_25b GS0_5b}}
+
+test svg-opacity-11.4 {opacity 1 and values above it write nothing; below zero is invisible} -body {
+  lassign [svgPaintOf {fill="red" opacity="1"}] code1 stream1
+  lassign [svgPaintOf {fill="red" opacity="1.5" stroke-opacity="2"}] code2 stream2
+  lassign [svgPaintOf {fill="red" opacity="-1"}] code3 stream3
+  list $code1 [regexp { gs} $stream1] $code2 [regexp { gs} $stream2] \
+      $code3 [regexp {/GS0b gs} $stream3]
+} -result {0 0 0 0 0 1}
+
+# -- refused before the mark ----------------------------------------------------------
+
+test svg-refuse-12.1 {-at, -scale, -width, -height and -size are checked before anything is written} -body {
+  # -at {a b} used to leave an empty BDC/EMC pair on a tagged page; -scale
+  # 0 went into the drawing's cm as a singular matrix and -width -1 as a
+  # mirror.
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc tagged 1
+  $doc page add
+  set markup {<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5"/></svg>}
+  set codes {}
+  foreach {call pattern} {
+    {-at {a b}} {*not a measurement*}
+    {-at {1}} {*-at of svg is a point {x y}*}
+    {-at {1 2 3}} {*-at of svg is a point {x y}*}
+    {-at {1 1} -scale 0} {*-scale of svg is a factor above zero*}
+    {-at {1 1} -scale -1} {*-scale of svg is a factor above zero*}
+    {-at {1 1} -width -1} {*-width of svg is a length above zero*}
+    {-at {1 1} -width x} {*-width of svg is a length above zero*}
+    {-at {1 1} -height 0} {*-height of svg is a length above zero*}
+    {-at {1 1} -size {5}} {*-size of svg is {width height}*}
+    {-at {1 1} -size {5 -5}} {*-size of svg takes lengths above zero*}
+  } {
+    lappend codes [catch {$doc svg -data $markup {*}$call} message]
+    lappend codes [string match $pattern $message]
+  }
+  set before [::tclpdfTest::content $doc]
+  $doc svg -data $markup -at {1 1} -scale 2 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $before [regexp {^/Artifact <</Type /Layout>> BDC\nq\n} $stream] \
+      [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}]
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} 1 1}
 
 cleanupTests

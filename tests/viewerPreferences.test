@@ -110,14 +110,23 @@ test viewerPreferences-2.2 {a boolean key takes a boolean} -body {
   list $code [string match "*takes a boolean*" $err]
 } -result {1 1}
 
-test viewerPreferences-2.3 {numCopies takes a positive integer} -body {
+test viewerPreferences-2.3 {numCopies takes an integer from 2 to 5, as Table 150 supports} -body {
+  # Table 150: "supported values shall be the integers 2 through 5; values
+  # outside this range shall be ignored". This test used to pin "positive
+  # integer", under which a 1 or a 100 was written and ignored at the reader.
+  # 0x3 and 2.0 pass [string is integer] and are not what a reader parses.
   set doc [drawn]
-  set zero [catch {$doc viewerPreferences -numCopies 0} first]
-  set text [catch {$doc viewerPreferences -numCopies zwei} second]
+  set out {}
+  foreach value {0 1 6 100 zwei 0x3 2.0 -3} {
+    lappend out [catch {$doc viewerPreferences -numCopies $value} err] \
+        [string match "*integer from 2 to 5*" $err]
+  }
+  set accepted [lmap value {2 3 4 5} {
+    dict get [$doc viewerPreferences -numCopies $value] numCopies
+  }]
   $doc destroy
-  list $zero [string match "*positive integer*" $first] \
-      $text [string match "*positive integer*" $second]
-} -result {1 1 1 1}
+  list [lsort -unique $out] $accepted
+} -result {1 {2 3 4 5}}
 
 test viewerPreferences-2.4 {an unknown option is refused} -body {
   set doc [drawn]
@@ -216,5 +225,33 @@ test viewerPreferences-3.5 {UseOC is a 1.5 value inside a 1.2 key} -body {
   $doc destroy
   list $thumbs $oc [string match "*UseOC needs PDF 1.5*" $msg] $ok
 } -result {0 1 1 0}
+
+test viewerPreferences-4.1 {the catalog subscription is made once, and survives an emptied dictionary} -body {
+  # ua 1 sets DisplayDocTitle, ua 0 takes it out again and the dictionary is
+  # empty as at the start. "First call" used to be read off that emptiness,
+  # so the next preference subscribed ViewerPreferencesCatalog a second time
+  # - measured, one catalog subscriber more. Now the module remembers that
+  # it has subscribed, once per document.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "Titel"
+  $doc language de-DE
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc structure H1 -script {$doc text "Ueberschrift" -at {20 20}}
+  $doc ua 1
+  set once [llength [$doc subscribers catalog]]
+  $doc ua 0
+  set emptied [$doc viewerPreferences]
+  $doc viewerPreferences -hideToolbar 1
+  set again [llength [$doc subscribers catalog]]
+  set path [::tclpdfTest::scratch viewerPreferences-once.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $emptied [expr {$again - $once}] [regexp -all {/ViewerPreferences} $bytes] \
+      [regexp -all {/HideToolbar true} $bytes] [regexp -all {/DisplayDocTitle} $bytes]
+} -result {{} 0 1 1 0}
 
 cleanupTests

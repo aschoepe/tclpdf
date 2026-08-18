@@ -127,6 +127,41 @@ oo::define ::tclpdf::document::document {
     return $missing
   }
 
+  # Which link annotations are not inside a structure element of one of the
+  # given types, by page - a Link, unless the caller says otherwise. Empty
+  # when every one of them is.
+  #
+  # PDF/UA wants a link annotation nested in a Link element (UA-1 7.18.5,
+  # Matterhorn 28-011 - veraPDF fails one that is not; UA-2 8.2.5.20 lets a
+  # Reference do as well, which is why the types are the caller's): the
+  # element is where a reader finds the text that goes with the rectangle.
+  # A link drawn outside any element joins no element at all, one drawn
+  # inside an open P joins the P; neither is a Link. The fact is established
+  # here and judged by ua.tcl, as [linksWithoutContents] is; the element an
+  # annotation joined is structure.tcl's to answer.
+  method linksWithoutElement {{types Link}} {
+    set missing {}
+    dict for {page references} [my state annots] {
+      foreach reference $references {
+        if {![regexp {(\d+) 0 R} $reference -> number]} {
+          continue
+        }
+        set body [[my writer] body $number]
+        if {![regexp {/Subtype /Link\M} $body]} {
+          continue
+        }
+        # In an untagged document there is no element to have joined, and
+        # the structure module is not asked - it may not even be loaded.
+        if {[my state tagged] eq "1"
+            && [my StructureAnnotationOwner $number] in $types} {
+          continue
+        }
+        lappend missing [expr {$page + 1}]
+      }
+    }
+    return $missing
+  }
+
   # The URI as the file may carry it: 7-bit ASCII (ISO 32000-1 Table 206),
   # everything else percent-encoded from its UTF-8 bytes (RFC 3986 2.1).
   #
@@ -166,4 +201,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::link 1.2
+package provide tclpdf::link 1.3

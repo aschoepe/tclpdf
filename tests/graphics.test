@@ -1073,4 +1073,182 @@ test graphics-state-15.5 {style colours follow save/restore, stay out of a form,
       [llength [lsearch -all $page2 n]] [llength [lsearch -all $page2 S]]
 } -result {1 1 1 0 1 0}
 
+# -- style in a tagged document -----------------------------------------------
+#
+# [style] paints nothing; it sets state. In a tagged document GraphicsStyle
+# used to take the mark for it all the same, and the artifact BDC it opened
+# was closed by nobody - GraphicsPaint, where the bracket ends, is never
+# reached by a style call. Every shape and every text after it then sat
+# inside that bracket, unmarked (14.6.1; PDF/UA-1 7.1). Measured on
+# 2026-08-18 with the reviewer's probe: "/Artifact ... BDC" once, no EMC,
+# no "/P" for the text.
+
+test graphics-style-16.1 {style opens no bracket; the shape and the text after it are marked} -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc tagged 1
+  $doc page add
+  $doc style -fill red -width 2
+  $doc rect -at {0 0} -size {5 5}
+  $doc text "abc" -at {10 10}
+  $doc style -stroke blue
+  $doc line -from {0 0} -to {5 5}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # two artifacts (rect, line), one P (text), and as many EMC as BDC; the
+  # first operator of the stream is the colour, outside any bracket
+  list [regexp -all {/Artifact <</Type /Layout>> BDC} $stream] \
+      [regexp -all {/P <</MCID [0-9]+>> BDC} $stream] \
+      [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}] \
+      [lindex [split $stream \n] 0]
+} -result {2 1 1 {1 0 0 rg}}
+
+test graphics-style-16.2 {a shape after style is inside its own bracket, not inside one style opened} -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc tagged 1
+  $doc page add
+  $doc style -fill red
+  $doc rect -at {0 0} -size {5 5}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # BDC, path, painting operator, EMC - and nothing before the BDC but the
+  # colour operator
+  regexp {^1 0 0 rg\n/Artifact <</Type /Layout>> BDC\n0 95 5 5 re\nf\nEMC\n$} $stream
+} -result 1
+
+# -- restore without a save ---------------------------------------------------
+
+test graphics-restore-17.1 {restore without a save is refused and writes no Q} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [catch {$doc restore} message]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string match "*restore without a save*" $message] $stream
+} -result {1 1 {}}
+
+test graphics-restore-17.2 {the depth is per stream: a form cannot restore the page's save} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc save
+  set code [catch {$doc form create f -size {10 10} -script {$doc restore}} message]
+  # the page's own save is still open and can be closed
+  $doc restore
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string match "*restore without a save*" $message] $stream
+} -result [list 1 1 "q\nQ\n"]
+
+# -- one ExtGState per alpha, not per spelling ---------------------------------
+
+test graphics-opacity-18.1 {0.5, .5, 0.50 and 5e-1 are one resource} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set names {}
+  foreach value {0.5 .5 0.50 5e-1 1 1.0 0} {
+    lappend names [$doc opacity $value]
+  }
+  set resources [$doc resource ExtGState]
+  $doc destroy
+  list [lsort -unique $names] [lsort [dict keys $resources]]
+} -result {{GS0_5b GS0b GS1b} {GS0_5b GS0b GS1b}}
+
+# -- a point is two numbers ------------------------------------------------------
+#
+# [coords] takes a third argument, the page whose height to mirror against.
+# A -from, -to, -at, -center or -focus of three numbers used to hand it the
+# third one: {20 20 1} was mirrored against page 2, or died on a page that
+# did not exist, and neither said the point was the problem.
+
+test graphics-point-19.1 {three numbers in a point are refused, and nothing is written} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc page add
+  set codes {}
+  foreach call {
+    {line -from {1 1 0} -to {5 5}}
+    {line -from {1 1} -to {5 5 1}}
+    {curve -from {1 1 1} -c1 {2 2} -c2 {3 3} -to {4 4}}
+    {curve -from {1 1} -c1 {2 2} -c2 {3 3 0} -to {4 4}}
+    {circle -at {5 5 0} -radius 2}
+    {ellipse -at {5} -size {4 2}}
+    {transform -at {5 5 1} -rotate 10}
+  } {
+    lappend codes [catch {$doc {*}$call} message]
+    lappend codes [string match "*is a point {x y}*" $message]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $stream
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1} {}}
+
+test graphics-point-19.2 {two numbers are still a point on the current page} -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc page add
+  $doc line -from {0 0} -to {5 5}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {0 100 m 5 95 l} $stream
+} -result 1
+
+# -- the fill rule is nonzero or evenodd --------------------------------------
+
+test graphics-rule-20.1 {a misspelt -rule is refused on every shape and on clip} -body {
+  set doc [tclpdf new -compress 0]
+  $doc tagged 1
+  $doc page add
+  set codes {}
+  foreach call {
+    {rect -at {1 1} -size {2 2} -rule foo}
+    {path -segments {{move 1 1} {line 5 5} {line 1 5} {close}} -rule foo}
+    {polygon -points {1 1 5 5 1 5} -rule Evenodd}
+    {ellipse -at {5 5} -radius 2 -rule none}
+    {curve -from {1 1} -c1 {2 2} -c2 {3 3} -to {4 4} -rule 1}
+    {clip -at {1 1} -size {2 2} -rule foo}
+    {clip -segments {{move 1 1} {line 5 5}} -rule foo}
+  } {
+    lappend codes [catch {$doc {*}$call} message]
+    lappend codes [string match "*-rule is nonzero or evenodd*" $message]
+  }
+  # nothing in the stream, no mark taken: the next shape is bracketed as
+  # usual
+  set before [::tclpdfTest::content $doc]
+  $doc rect -at {1 1} -size {2 2} -fill red
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $before [regexp {^/Artifact <</Type /Layout>> BDC\nq\n} $stream]
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} 1}
+
+test graphics-rule-20.2 {the two rules still work} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc rect -at {1 1} -size {2 2} -fill red -rule evenodd
+  $doc rect -at {1 1} -size {2 2} -fill red -rule nonzero
+  $doc clip -at {1 1} -size {2 2} -rule evenodd
+  set ops [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [lsearch -all -inline -exact $ops f*] [lsearch -all -inline -exact $ops f] \
+      [lsearch -all -inline -exact $ops W*]
+} -result {f* f W*}
+
+# -- a refused tile leaves no record --------------------------------------------
+
+test graphics-pattern-21.1 {pattern create -step {5} is refused before the script runs} -body {
+  # The script painted, its colour was recorded for the PDF/A intent check,
+  # and only then did the one-number step fail: [pdfa] later refused the
+  # write for a rectangle in no tile. Now the count is checked first.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set ran 0
+  set codes {}
+  foreach call {{-step {5}} {-size {4}} {-size {4 4 4}} {-step {5 5 5}}} {
+    lappend codes [catch {$doc pattern create t1 -size {4 4} {*}$call \
+        -script {set ::ran 1; $doc rect -at {0 0} -size {2 2} -fill {cmyk 1 0 0 0}}} message]
+    lappend codes [string match {*is {width height}*} $message]
+  }
+  set result [list $codes $ran [$doc colourSpacesUsed] [$doc pattern names] \
+      [$doc resource Pattern]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1} 0 {} {} {}}
+
 cleanupTests

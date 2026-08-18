@@ -122,11 +122,35 @@ proc ::tclpdf::color::parse {spec} {
     separation {
       # {separation Name alternate tint} - the alternate space is what a
       # reader falls back to when it cannot render the spot colour itself.
+      #
+      # The name is a colourant and has to name one: empty, it went out as
+      # "/ cs" until 2026-08-18, a name of nothing. All and None are the
+      # two special colourants of 8.6.6.4 - every plate, and no plate - and
+      # are written as they stand: [/Separation /All ...] is exactly what
+      # the norm defines for a registration mark, and nothing here has to
+      # know it is special.
       lassign $spec -> separationName alternate tint
+      if {$separationName eq {}} {
+        return -code error "tclpdf: a separation needs a name -\
+            {separation Name alternate ?tint?}"
+      }
+      # The alternate is a DEVICE space (8.6.6.4: "an alternate colour
+      # space ... any device or CIE-based colour space, but not another
+      # special colour space"): a separation, a pattern, an indexed space
+      # cannot stand in. Refused here, before anything is recorded - a
+      # separation over a separation used to be recorded as a use of the
+      # colour space "Separation" and die a line later, looking up its
+      # "no ink" colour.
+      set parsedAlternate [parse $alternate]
+      if {[lindex $parsedAlternate 0] ni {gray rgb cmyk}} {
+        return -code error "tclpdf: the alternate of separation\
+            \"$separationName\" is a device colour - grey, RGB or CMYK - not\
+            {$alternate} (ISO 32000-1, 8.6.6.4)"
+      }
       if {$tint eq {}} {
         set tint 1
       }
-      return [list separation [list $separationName [parse $alternate] [Clamp $tint]]]
+      return [list separation [list $separationName $parsedAlternate [Clamp $tint]]]
     }
     pattern {
       # {pattern Name} - a tiling or shading pattern standing in for a
@@ -440,4 +464,4 @@ proc ::tclpdf::color::Clamp {value} {
   return $value
 }
 
-package provide tclpdf::color 1.1
+package provide tclpdf::color 1.2

@@ -1289,10 +1289,18 @@ proc metricMatch {path std} {
   set cmap [dict get $font cmap]
   set equal 0
   set differ {}
+  # Every mapped WinAnsi position, 32..255: an unmapped one (127, 129, 141,
+  # 143, 144, 157) has no width in the metrics and is skipped by that; 160
+  # and 173 are the second codes of space and hyphen (Annex D) and are not
+  # counted twice; the 25 positions of 128..159 - euro, the quotation marks,
+  # the ellipsis, the per mille - count like the rest. That makes 216 per
+  # face, the same yardstick as the URW measurement (2592 = 12 x 216).
   for {set code 32} {$code < 256} {incr code} {
-    if {$code >= 127 && $code < 160} continue
-    set char [encoding convertfrom cp1252 [binary format c $code]]
+    if {$code == 160 || $code == 173} continue
+    # The width first: an unmapped position has none, and Tcl 9 refuses to
+    # decode 0x81 as cp1252 at all.
     if {[catch {::tclpdf::afm width $std $code} width] || $width == 0} continue
+    set char [encoding convertfrom cp1252 [binary format c $code]]
     set cp [scan $char %c]
     if {![dict exists $cmap $cp]} {
       lappend differ [format U+%04X $cp]
@@ -1310,13 +1318,14 @@ proc metricMatch {path std} {
 
 test font-13.1 {Liberation Sans, Serif and Mono match the standard faces' advances except for five symbols} \
     -constraints haveLiberation -body {
-  # The claim the manual makes under the standard-14 table, pinned: 2255 of
-  # 2292 WinAnsi advances equal, and what differs is the handful of symbols
-  # where Arial and Times New Roman never were Helvetica and Times - macron,
-  # plus-minus, micro sign, middle dot, division sign (U+00AF U+00B1 U+00B5
-  # U+00B7 U+00F7); the mono faces match Courier completely. Measured
-  # 2026-08-17 on release 2.1.5; a newer release that moves a width shows up
-  # here first.
+  # The claim the manual makes under the standard-14 table, pinned: 2555 of
+  # 2592 WinAnsi advances equal (216 per face, the same count as for URW),
+  # and what differs is the handful of symbols where Arial and Times New
+  # Roman never were Helvetica and Times - macron, plus-minus, micro sign,
+  # middle dot, division sign (U+00AF U+00B1 U+00B5 U+00B7 U+00F7); the mono
+  # faces match Courier completely. Measured 2026-08-17 on release 2.1.5 and
+  # again 2026-08-18 over all 216 positions (it used to skip 128..159 and
+  # count 191); a newer release that moves a width shows up here first.
   set five {U+00AF U+00B1 U+00B5 U+00B7 U+00F7}
   set result {}
   set total 0
@@ -1337,7 +1346,7 @@ test font-13.1 {Liberation Sans, Serif and Mono match the standard faces' advanc
     lappend result [list $equal $outside]
   }
   list $total $result
-} -result {2255 {{186 {}} {186 {}} {186 {}} {186 {}} {186 {}} {186 {}} {187 {}} {188 {}} {191 {}} {191 {}} {191 {}} {191 {}}}}
+} -result {2555 {{211 {}} {211 {}} {211 {}} {211 {}} {211 {}} {211 {}} {212 {}} {213 {}} {216 {}} {216 {}} {216 {}} {216 {}}}}
 
 test font-13.2 {a Liberation face embeds and sets text under PDF/A} -constraints haveLiberation -body {
   set doc [tclpdf new -unit mm]
@@ -1432,5 +1441,224 @@ test font-14.6 {font info on a Type 1 face states that it has no fsType} \
       [dict get $info fsType] [string match {*Type 1 has no fsType*} \
       [dict get $info permission]] [expr {[dict get $info characters] > 100}]
 } -result {OCRB 1000 {} 1 1}
+
+test font-15.1 {two aliases that differ only in a space are two resources and two faces} \
+    -constraints haveFont -body {
+  # The resource name used to be the alias with its spaces stripped, so "a b"
+  # and "ab" were one resource: the second face never got a font object and
+  # its glyph numbers were drawn through the first face's CIDToGIDMap. Read
+  # off the file: two Tf names, two FontDescriptors, and every glyph of the
+  # second alias mapped in the ToUnicode CMap of its own object.
+  set roboto [file join [file dirname $fontRegular] google Roboto-Regular.ttf]
+  if {![file exists $roboto]} {
+    set roboto $fontRegular
+  }
+  set doc [tclpdf new -unit pt -format {400 200}]
+  $doc page add
+  $doc font embed "a b" $fontRegular
+  $doc font embed "ab" $roboto
+  $doc font -family "a b" -size 24
+  $doc text "DejaVu" -at {10 50}
+  $doc font -family "ab" -size 24
+  $doc text "Roboto" -at {10 100}
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch alias-space.pdf]
+  $doc write $path
+  set fonts [$doc state fonts]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [lsort -unique [regexp -all -inline {/FE[^ ]+ 24 Tf} $content]] \
+      [regexp -all {/Type /FontDescriptor} $bytes] \
+      [expr {[dict get $fonts {a b} number] != [dict get $fonts ab number]}]
+} -result {{{/FEa#20b 24 Tf} {/FEab 24 Tf}} 2 1}
+
+test font-15.2 {the resource name carries the alias, escaped, and is the same on every write} \
+    -constraints haveFont -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed "Haus Schrift/1" $fontRegular
+  $doc font -family "Haus Schrift/1" -size 10
+  $doc text "x" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  lassign [::tclpdfTest::writeTwice $doc alias-escape] first second
+  $doc destroy
+  list [regexp {/FEHaus#20Schrift#2F1 10 Tf} $content] [string equal $first $second] \
+      [regexp {/Font << /FEHaus#20Schrift#2F1 \d+ 0 R >>} $first]
+} -result {1 1 1}
+
+test font-15.3 {-subset takes a boolean, and says so at embed time} -constraints haveFont -body {
+  # It used to be taken as given and to fail at write time - in an "if"
+  # nowhere near the call that set it. Refused at the call, and refused
+  # before anything is kept: the alias is not embedded afterwards.
+  set doc [tclpdf new]
+  set code [catch {$doc font embed haus $fontRegular -subset abc} message]
+  set names [$doc font names]
+  $doc font embed haus $fontRegular -subset no
+  set kept [dict get [$doc state fonts] haus subset]
+  $doc destroy
+  list $code [string match {*-subset takes a boolean, not "abc"*} $message] $names $kept
+} -result {1 1 {} no}
+
+test font-15.4 {-metrics belongs to Type 1 and -axes/-instance to a variable face - the other way round is refused} \
+    -constraints {haveFont haveType1} -body {
+  # The manual promises -axes on a face without fvar is refused rather than
+  # ignored; a Type 1 program was the gap, and -metrics on a TrueType face
+  # the mirror image of it. Both are refused at the call, and the alias is
+  # not embedded.
+  set doc [tclpdf new]
+  set metrics [catch {$doc font embed a $fontRegular -metrics [file rootname $type1Face].afm} m1]
+  set axes [catch {$doc font embed b $type1Face -axes {wght 700}} m2]
+  set instance [catch {$doc font embed c $type1Face -instance Bold} m3]
+  set names [$doc font names]
+  $doc destroy
+  list $metrics [string match {*-metrics names the AFM of a Type 1*DejaVuSans.ttf*} $m1] \
+      $axes [string match {*OCRB.pfb*is a Type 1 font program, which has no axes*} $m2] \
+      $instance [string match {*is a Type 1 font program, which has no axes*} $m3] $names
+} -result {1 1 1 1 1 1 {}}
+
+test font-15.5 {an axis value outside the fvar range is refused with the range, not clamped in silence} -body {
+  # The normalisation clamps, so the outlines of wght 5000 were those of 900
+  # - but the name said Roboto_5000wght and StemV was 5967. Refused at the
+  # call with the range; the ends of the range themselves are on the axis
+  # and go through, and so does a named instance.
+  set doc [tclpdf new]
+  set high [catch {$doc font embed a [variableTree Roboto-Variable.ttf] -axes {wght 5000}} m1]
+  set low [catch {$doc font embed b [variableTree Roboto-Variable.ttf] -axes {wdth 74.9}} m2]
+  $doc font embed c [variableTree Roboto-Variable.ttf] -axes {wght 900}
+  $doc font embed d [variableTree Roboto-Variable.ttf] -axes {wght 100 wdth 75}
+  $doc font embed e [variableTree Roboto-Variable.ttf] -instance Bold -axes {wdth 100}
+  set names [$doc font names]
+  $doc destroy
+  list $high [string match {*value 5000 for axis "wght" is outside its range in "Roboto-Variable.ttf" - wght runs from 100 to 900 (default 400)*} $m1] \
+      $low [string match {*value 74.9 for axis "wdth"*wdth runs from 75 to 100*} $m2] $names
+} -result {1 1 1 1 {c d e}}
+
+test font-15.6 {a slnt or ital instance is an italic face in the descriptor} -body {
+  # Bitcount's slnt axis runs -8 .. 0: at -8 the outlines lean, and the
+  # descriptor used to say ItalicAngle 0 and Flags 4 all the same. The slnt
+  # value is the angle (both count degrees counter-clockwise from the
+  # vertical), and the italic flag (Table 123 bit 7) comes with it; a weight
+  # instance of the same file stays upright.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed slanted [variableTree BitcountPropSingle-Variable.ttf] -axes {slnt -8 wght 700}
+  $doc font embed upright [variableTree BitcountPropSingle-Variable.ttf] -axes {wght 700}
+  $doc text "Bitcount" -at {20 20} -family slanted
+  $doc text "Bitcount" -at {20 40} -family upright
+  set path [::tclpdfTest::scratch font-slant.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set found {}
+  foreach {- body} [regexp -all -inline {(/Type /FontDescriptor[^>]*)>>} $bytes] {
+    regexp {/FontName /[A-Z]{6}\+(\S+)} $body -> name
+    regexp {/ItalicAngle (\S+)} $body -> angle
+    regexp {/Flags (\S+)} $body -> flag
+    dict set found $name [list $angle $flag]
+  }
+  set found
+} -result {BitcountPropSingle_700wght_-8slnt {-8 68} BitcountPropSingle_700wght {0 4}}
+
+test font-15.7 {CapHeight without sCapHeight is the top of the H, not the ascender} \
+    -constraints haveFont -body {
+  # DejaVu Sans carries OS/2 version 1, which has no sCapHeight, and the
+  # descriptor wrote the ascender: 928 for a cap height that measures 729
+  # (yMax of the H, 1493 of 2048 units). Roboto has version 4 and keeps its
+  # own field, 711, which 11.2 pins - here as the control that the fallback
+  # does not reach past the field.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed dejavu $fontRegular
+  $doc font embed roboto [variableTree Roboto-Regular.ttf]
+  $doc text "H" -at {20 20} -family dejavu
+  $doc text "H" -at {20 40} -family roboto
+  set path [::tclpdfTest::scratch font-capheight.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set found {}
+  foreach {- body} [regexp -all -inline {(/Type /FontDescriptor[^>]*)>>} $bytes] {
+    regexp {/FontName /[A-Z]{6}\+(\S+)} $body -> name
+    regexp {/CapHeight (\S+)} $body -> cap
+    regexp {/Ascent (\S+)} $body -> ascent
+    dict set found $name [list [format %.0f $cap] [expr {$cap < $ascent}]]
+  }
+  set found
+} -result {DejaVuSans {729 1} Roboto-Regular {711 1}}
+
+test font-15.8 {the Type 0 name of a CFF face carries the CMap name, as 9.7.6.1 asks} \
+    -constraints {haveOtf haveFont} -body {
+  # For a CIDFontType0 descendant the Type 0 font's BaseFont should be the
+  # descendant's name, a hyphen and the CMap name: NimbusSans-Regular-Identity-H
+  # on the Type 0 font, NimbusSans-Regular on the CIDFont and the descriptor.
+  # A TrueType face (CIDFontType2) keeps one name in all three places.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed cff $::otf
+  $doc font embed ttf $fontRegular
+  $doc text "Rechnung" -at {20 20} -family cff
+  $doc text "Rechnung" -at {20 40} -family ttf
+  set path [::tclpdfTest::scratch font-type0-name.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  set found {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[regexp {/Subtype /(Type0|CIDFontType0|CIDFontType2)\y.*/BaseFont /(\S+)} $body -> kind name]} {
+      lappend found $kind [regsub {^[A-Z]{6}\+} $name {}]
+    }
+  }
+  $doc destroy
+  file delete $path
+  set pairs {}
+  foreach {kind name} $found {
+    lappend pairs "$kind $name"
+  }
+  lsort $pairs
+} -result {{CIDFontType0 NimbusSans-Regular} {CIDFontType2 DejaVuSans} {Type0 DejaVuSans} {Type0 NimbusSans-Regular-Identity-H}}
+
+test font-15.9 {permission reads the subsetting and bitmap bits, and knows an absent OS/2} \
+    -constraints haveFont -body {
+  # fsType 0x0100 forbids subsetting and 0x0200 allows bitmap embedding only
+  # (OpenType OS/2); read as the low nibble alone both answered "installable".
+  # A face without an OS/2 table has stated nothing - the subset this package
+  # writes is such a face - and that is "unknown", not 0.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "H" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch font-fstype.pdf]
+  $doc write $path
+  set writer [$doc writer]
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[regexp {/FontFile2 (\d+) 0 R} [$writer body $number] -> fileNumber]} {
+      set subset [::tclpdf::sfnt parse [::tclpdfTest::streamOf $writer $fileNumber]]
+    }
+  }
+  $doc destroy
+  file delete $path
+  list [::tclpdf::sfnt permission 0x0100] [::tclpdf::sfnt permission 0x0208] \
+      [::tclpdf::sfnt permission 0x0304] [dict get $subset fsType] \
+      [::tclpdf::sfnt permission [dict get $subset fsType]]
+} -result {{installable - no restriction on embedding; no subsetting (bit 8)} {editable; bitmap embedding only (bit 9)} {preview and print only; no subsetting (bit 8); bitmap embedding only (bit 9)} {} {unknown - the face has no OS/2 table and states no permission}}
+
+test font-15.10 {font info names an instance of a variable face as it is embedded} -body {
+  # Measured before this: -instance Bold and -axes {wght 620} both answered
+  # Roboto-Regular - name id 6, which names the file's default. The name a
+  # reader sees is the instance's (TN 5902), and font info answers that one.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set names {}
+  foreach {alias options} {bold {-instance Bold} between {-axes {wght 620}}
+      plain {}} {
+    $doc font embed $alias [variableTree Roboto-Variable.ttf] {*}$options
+    lappend names [dict get [$doc font info $alias] postScript]
+  }
+  $doc destroy
+  set names
+} -result {Roboto-Bold Roboto_620wght Roboto-Regular}
 
 cleanupTests

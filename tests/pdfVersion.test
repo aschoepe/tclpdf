@@ -363,12 +363,13 @@ test pdfVersion-7.4 {a document at the default version meets every gate} -body {
   # 1.7 covers everything below 2.0, so the gates never fire for a default
   # document - what every example relies on.
   set doc [tclpdf new -unit mm]
+  # tagged first: it has to come before anything is drawn (structure-27.x).
+  $doc tagged 1
   $doc page add
   $doc opacity 0.5
   $doc blend Multiply
   $doc shading axial -at {20 20} -size {60 20} -colors {white steelblue}
   $doc pattern create tile -size {10 5} -script {}
-  $doc tagged 1
   $doc language de
   $doc attach -data abc -name a.txt
   $doc pageLabels -from 0 -style D

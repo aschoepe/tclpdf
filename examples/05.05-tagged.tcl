@@ -365,16 +365,23 @@ $doc structure Art -script {
   }
 
   # The bibliography: one BibEntry per work. The Reference above points here.
+  # A BibEntry is inline markup, like Quote and Span above - it needs a P
+  # around it, and straight under the Art it would be refused (ISO 32005
+  # Table 5).
   $doc font -family faceBold -size 10
   $doc text "Bibliografia" -at {20 190} -tag H3
   $doc font -family face -size 9
-  $doc structure BibEntry -script {
-    $doc text "\[1\] Manuale d'uso della pressa 3, edizione 2024, cap. 7." \
-        -at {20 197}
+  $doc structure P -script {
+    $doc structure BibEntry -script {
+      $doc text "\[1\] Manuale d'uso della pressa 3, edizione 2024, cap. 7." \
+          -at {20 197}
+    }
   }
-  $doc structure BibEntry -script {
-    $doc text "\[2\] Norma interna di manutenzione MI-12, revisione 3." \
-        -at {20 202}
+  $doc structure P -script {
+    $doc structure BibEntry -script {
+      $doc text "\[2\] Norma interna di manutenzione MI-12, revisione 3." \
+          -at {20 202}
+    }
   }
 }
 

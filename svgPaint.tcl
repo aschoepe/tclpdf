@@ -148,13 +148,39 @@ oo::define ::tclpdf::document::document {
         append body "\[[join $dash { }]\] 0 d\n"
       }
     }
-    set alpha [dict get $style fill-opacity]
-    if {$alpha ne {} && [string is double -strict $alpha]} {
-      # Clamped, not refused: SVG defines the property as a number that is
-      # clamped to 0..1, so 1.5 is opaque and -0.2 is invisible.
-      set alpha [expr {max(0.0, min(1.0, $alpha))}]
-      if {$alpha != 1} {
-        append body "[::tclpdf::pdfObj name [my GraphicsOpacity $alpha fill]] gs\n"
+    # Three properties, two operands: fill-opacity goes into /ca,
+    # stroke-opacity into /CA, and opacity - the element's group opacity,
+    # already multiplied down the tree by SvgStyle - into both. Without a
+    # transparency group per element that product is the nearest PDF has:
+    # exact wherever fill and stroke do not overlap, and off by the overlap
+    # where they do. Each value is clamped, not refused: SVG defines them as
+    # numbers clamped to 0..1, so 1.5 is opaque and -0.2 is invisible. One
+    # "gs" when the two sides agree, one per side when they differ; nothing
+    # at 1, which is the initial state anyway. Measured before 2026-08-18
+    # only fill-opacity was applied, and opacity and stroke-opacity were
+    # read and dropped although the header claimed them.
+    set group [dict get $style opacity]
+    if {$group eq {} || ![string is double -strict $group]} {
+      set group 1
+    }
+    set alphas {}
+    foreach key {fill-opacity stroke-opacity} {
+      set alpha [dict get $style $key]
+      if {$alpha eq {} || ![string is double -strict $alpha]} {
+        set alpha 1
+      }
+      lappend alphas [expr {max(0.0, min(1.0, $alpha)) * max(0.0, min(1.0, $group))}]
+    }
+    lassign $alphas fillAlpha strokeAlpha
+    if {$fillAlpha == $strokeAlpha} {
+      if {$fillAlpha != 1} {
+        append body "[::tclpdf::pdfObj name [my GraphicsOpacity $fillAlpha both]] gs\n"
+      }
+    } else {
+      foreach {alpha which} [list $fillAlpha fill $strokeAlpha stroke] {
+        if {$alpha != 1} {
+          append body "[::tclpdf::pdfObj name [my GraphicsOpacity $alpha $which]] gs\n"
+        }
       }
     }
     append body $operators
@@ -208,6 +234,15 @@ oo::define ::tclpdf::document::document {
   # style="" attribute wins over presentation attributes (SVG 6.4).
   method SvgStyle {node inheritedStyle} {
     set style $inheritedStyle
+    # opacity is not inherited but MULTIPLIED (SVG 1.1, 14.5): it applies to
+    # the element as a whole, children included, so a child inside a group
+    # at 0.5 is at 0.5 times its own. The style carries the product; the
+    # element's own value is collected on its own below and folded in.
+    set groupOpacity 1
+    if {[dict exists $style opacity] && [string is double -strict [dict get $style opacity]]} {
+      set groupOpacity [dict get $style opacity]
+    }
+    dict set style opacity {}
     foreach key {fill stroke stroke-width stroke-linecap stroke-linejoin
         stroke-dasharray fill-opacity stroke-opacity fill-rule opacity
         font-size font-family text-anchor} {
@@ -223,6 +258,11 @@ oo::define ::tclpdf::document::document {
         [::tclpdf::xml attribute $node style]] {
       dict set style $key [string trim $value]
     }
+    set own [dict get $style opacity]
+    if {$own eq {} || ![string is double -strict $own]} {
+      set own 1
+    }
+    dict set style opacity [expr {$groupOpacity * max(0.0, min(1.0, $own))}]
     # A url(#...) reference is left STANDING here and resolved in SvgPaint.
     # It cannot be done at this point: a gradient in the default units is
     # measured in fractions of the shape it fills, and the shape does not
@@ -377,4 +417,4 @@ oo::define ::tclpdf::document::document {
   # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.2
+package provide tclpdf::svgPaint 1.3

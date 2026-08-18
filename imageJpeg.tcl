@@ -29,10 +29,16 @@ package require Tcl 8.6.11-
 namespace eval ::tclpdf::imageJpeg {
   namespace export {[a-z]*}
   namespace ensemble create
-  # Start of frame, by compression method. Only the two Huffman-coded ones are
-  # usable: ISO 32000-1 7.4.8 limits DCTDecode to baseline and extended
-  # sequential, so progressive and arithmetic-coded files have to be refused
-  # rather than written into a document no reader will show.
+  # Start of frame, by compression method. Only the two sequential
+  # Huffman-coded ones are embedded. DCTDecode itself (ISO 32000-1, 7.4.8)
+  # covers baseline, extended sequential and - since PDF 1.3 - progressive
+  # JPEG; what it does not cover is the lossless and the arithmetic-coded
+  # processes, and those are refused with that reason. Progressive is
+  # refused for a reason of this package's own: the data goes into the file
+  # exactly as it is, nothing is decoded or re-encoded here, and only the
+  # sequential processes are what this module embeds - so the caller is
+  # told to re-save, not told the format forbids it. (Measured before
+  # 2026-08-18 the message blamed the clause, which says the opposite.)
   variable sofBaseline 0xc0
   variable sofExtended 0xc1
   variable sofProgressive 0xc2
@@ -96,9 +102,10 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
     if {$marker >= 0xc0 && $marker <= 0xcf &&
         $marker != 0xc4 && $marker != 0xc8 && $marker != 0xcc} {
       if {$marker == $sofProgressive} {
-        return -code error "tclpdf: this is a progressive JPEG, which\
-            DCTDecode does not cover (ISO 32000-1, 7.4.8) - re-save it as a\
-            baseline JPEG, or use PNG"
+        return -code error "tclpdf: this is a progressive JPEG - tclpdf\
+            passes JPEG data through as it is and embeds only baseline and\
+            extended sequential files; re-save it as a baseline JPEG, or\
+            use PNG"
       }
       if {$marker == $sofLossless || $marker >= 0xc9} {
         return -code error "tclpdf: this JPEG uses a coding method DCTDecode\
@@ -129,6 +136,14 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
 
   if {![dict exists $result width]} {
     return -code error "tclpdf: damaged JPEG - no start-of-frame marker found"
+  }
+  # A picture of no width or no height went out as /Width 0 (Table 89
+  # wants a positive integer): a frame header saying so is a damaged file,
+  # or one whose height is to be defined by a DNL marker after the first
+  # scan - which this module does not read either.
+  if {[dict get $result width] <= 0 || [dict get $result height] <= 0} {
+    return -code error "tclpdf: damaged JPEG - the frame header says\
+        [dict get $result width] x [dict get $result height] pixels"
   }
   if {[dict get $result components] ni {1 3 4}} {
     return -code error "tclpdf: a JPEG with [dict get $result components]\
@@ -167,4 +182,4 @@ proc ::tclpdf::imageJpeg::inverted {parsed} {
   return [expr {[dict get $parsed components] == 4 && [dict get $parsed adobe]}]
 }
 
-package provide tclpdf::imageJpeg 1.1
+package provide tclpdf::imageJpeg 1.2

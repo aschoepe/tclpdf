@@ -446,4 +446,22 @@ test page-index-8.3 {a box set with an index lands on that page in the file} -bo
       [regexp {/TrimBox} [lindex $pages 0]] [regexp {/TrimBox} [lindex $pages 1]]
 } -result {1 1 0}
 
+# -- one optional index, and the message when there is more ------------------
+
+test page-args-9.1 {page typeArea and page size take one optional index, and say so} -body {
+  # "page typeArea 0 1" used to leak the arity of the private method: 'wrong #
+  # args: should be "my PageTypeArea ?index?"'.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach subcommand {typeArea size} {
+    lappend out [catch {$doc page $subcommand 0 1} message] \
+        [string equal $message "tclpdf: page $subcommand takes one optional\
+        page index, got \"0 1\""] [llength [$doc page $subcommand 0]] \
+        [llength [$doc page $subcommand]]
+  }
+  $doc destroy
+  set out
+} -result {1 1 4 4 1 1 2 2}
+
 cleanupTests

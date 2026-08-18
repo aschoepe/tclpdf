@@ -87,6 +87,7 @@ namespace eval ::tclpdf::shaping {
     order     {ordering {right-to-left ordering}}
     cursive   {forms    {contextual forms and right-to-left ordering}}
     shape     {shaping  {contextual shaping and right-to-left ordering}}
+    join      {shaping  {contextual shaping}}
     conjunct  {shaping  {reordering and conjunct forms}}
     markOrder {shaping  {mark placement and reordering}}
     mark      {shaping  {mark placement}}
@@ -117,6 +118,23 @@ namespace eval ::tclpdf::shaping {
   # Syriac, N'Ko and Mandaic are cursive too and stay refused: they need the
   # same forms Arabic needs, nothing here has been measured against a face
   # that sets them, and "it probably works" is not what this module is for.
+  # The same goes for the joining scripts beyond them, which the list used to
+  # miss although the joining table (joiningData.tcl) knows every one of
+  # them: Syriac Supplement, and in the supplementary planes Manichaean,
+  # Psalter Pahlavi, Hanifi Rohingya, Sogdian, Old Uyghur, Chorasmian and
+  # Adlam - all right-to-left and cursive - and, running the other way,
+  # Mongolian and Phags-pa, whose letters join without any question of
+  # direction. Measured 2026-08-18: U+0860, U+1820, U+1E900, U+10D00, U+10F30
+  # and U+10AC0 all passed as if they needed nothing. The two Arabic
+  # extensions B and C are Arabic and take the cursive road with the rest of
+  # it: forms.tcl finds their shapes through the same joining types and the
+  # same GSUB features.
+  #
+  # The Arabic presentation forms end at U+FEFE. U+FEFF is the byte order
+  # mark, ZERO WIDTH NO-BREAK SPACE - no Arabic, no mark, nothing to draw -
+  # and taken with the block it was refused as needing mark placement, in a
+  # left-to-right line of Latin text as well. It is dropped where it is met
+  # instead, like U+200B (font.tcl, FontRun).
   variable systems {
     0x0590 0x0590 Hebrew      order
     0x0591 0x05C7 Hebrew      mark
@@ -132,6 +150,8 @@ namespace eval ::tclpdf::shaping {
     0x0816 0x082D Samaritan   mark
     0x082E 0x083F Samaritan   order
     0x0840 0x085F Mandaic     shape
+    0x0860 0x086F Syriac      shape
+    0x0870 0x089F Arabic      cursive
     0x08A0 0x08FF Arabic      cursive
     0x0900 0x097F Devanagari  conjunct
     0x0980 0x09FF Bengali     conjunct
@@ -157,11 +177,21 @@ namespace eval ::tclpdf::shaping {
     0x0FC6 0x0FC6 Tibetan     mark
     0x1000 0x109F Myanmar     conjunct
     0x1780 0x17FF Khmer       conjunct
+    0x1800 0x18AF Mongolian   join
+    0xA840 0xA87F Phags-pa    join
     0xFB1D 0xFB1D Hebrew      order
     0xFB1E 0xFB1E Hebrew      mark
     0xFB1F 0xFB4F Hebrew      order
     0xFB50 0xFDFF Arabic      cursive
-    0xFE70 0xFEFF Arabic      cursive
+    0xFE70 0xFEFE Arabic      cursive
+    0x10AC0 0x10AFF Manichaean shape
+    0x10B80 0x10BAF {Psalter Pahlavi} shape
+    0x10D00 0x10D3F {Hanifi Rohingya} shape
+    0x10EC0 0x10EFF Arabic     cursive
+    0x10F30 0x10F6F Sogdian    shape
+    0x10F70 0x10FAF {Old Uyghur} shape
+    0x10FB0 0x10FDF Chorasmian shape
+    0x1E900 0x1E95F Adlam      shape
   }
 }
 
@@ -263,4 +293,4 @@ proc ::tclpdf::shaping::message {finding {face {}} {why forms}} {
   return "$head - tclpdf does not do that. $anyway"
 }
 
-package provide tclpdf::shaping 1.1
+package provide tclpdf::shaping 1.2

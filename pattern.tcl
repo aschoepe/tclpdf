@@ -69,6 +69,19 @@ oo::define ::tclpdf::document::document {
     # nothing.
     my RequireVersion 1.2 "pattern"
     set unit [dict get $options unit]
+    # Two numbers each, counted before they are read: -size {5} or -step
+    # {5} used to pass the checks below with an empty second value, run the
+    # script - which painted, and recorded its colours for the PDF/A intent
+    # check - and die at the XStep, leaving a record of a rectangle that is
+    # in no tile and on no page (measured before 2026-08-18: [pdfa] then
+    # refused the write for it).
+    foreach key {size step} {
+      set value [dict get $options $key]
+      if {$value ne {} && [llength $value] != 2} {
+        return -code error "tclpdf: -$key of pattern \"$name\" is {width\
+            height}, not \"$value\""
+      }
+    }
     lassign [my extent [dict get $options size] $unit] widthPoints heightPoints
     if {$widthPoints <= 0 || $heightPoints <= 0} {
       return -code error "tclpdf: -size of pattern \"$name\" is\
@@ -224,4 +237,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pattern 1.2
+package provide tclpdf::pattern 1.3

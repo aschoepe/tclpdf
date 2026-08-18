@@ -307,4 +307,55 @@ test color-noTk-4.1 {resolving names does not pull in Tk} -body {
   list [package provide Tk] [llength [info commands winfo]]
 } -result {{} 0}
 
+# -- the separation's name and its alternate ---------------------------------------
+#
+# 8.6.6.4: the name is a colourant; the alternate is a device (or CIE) space
+# and never another special one. Measured before 2026-08-18: an empty name
+# went out as "/ cs", and a separation whose alternate was a separation was
+# recorded as a use of the space "Separation" and died a line later. All and
+# None are the two special colourants the clause defines and are written as
+# they stand.
+
+test color-separation-6.1 {an empty separation name is refused} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [catch {$doc rect -at {1 1} -size {2 2} -fill {separation {} {cmyk 0 0 0 1}}} message]
+  set result [list $code [string match "*a separation needs a name*" $message] \
+      [::tclpdfTest::content $doc] [$doc colourSpacesUsed]]
+  $doc destroy
+  set result
+} -result {1 1 {} {}}
+
+test color-separation-6.2 {an alternate that is not a device space is refused before anything is recorded} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set codes {}
+  foreach alternate {{separation Bar {cmyk 0 0 0 1}} {pattern sky}} {
+    lappend codes [catch {$doc rect -at {1 1} -size {2 2} \
+        -fill [list separation Foo $alternate]} message]
+    lappend codes [string match {*alternate of separation "Foo" is a device colour*8.6.6.4*} $message]
+  }
+  set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
+      [$doc state separations] [$doc resource ColorSpace]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1} {} {} {} {}}
+
+test color-separation-6.3 {All and None are written as the special colourants they are} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc rect -at {1 1} -size {2 2} -fill {separation All {cmyk 0 0 0 1}}
+  $doc rect -at {1 1} -size {2 2} -stroke {separation None {gray 0}}
+  set writer [$doc writer]
+  set found {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[regexp {\[/Separation (/\w+) (/\w+)} [$writer body $number] -> name space]} {
+      lappend found $name $space
+    }
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $found [regexp {/All cs\n1 scn} $stream] [regexp {/None CS\n1 SCN} $stream]
+} -result {{/All /DeviceCMYK /None /DeviceGray} 1 1}
+
 cleanupTests

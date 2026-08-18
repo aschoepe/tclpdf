@@ -39,6 +39,7 @@ package require tclpdf::pdfObj 1.0-
 package require tclpdf::option 1.0-
 package require tclpdf::filter 1.0-
 package require tclpdf::geometry 1.0-
+package require tclpdf::graphics 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::xObject {}
@@ -75,8 +76,20 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $forms $name]} {
       return -code error "tclpdf: a form named \"$name\" already exists"
     }
+    # Two lengths above zero, checked BEFORE the script runs - the same
+    # check a tiling pattern makes: a form of no width has a BBox with no
+    # inside and no reader draws it, and one number instead of two used to
+    # run the script and fail afterwards, at the BBox.
+    if {[llength [dict get $options size]] != 2} {
+      return -code error "tclpdf: -size of form \"$name\" is {width height},\
+          not \"[dict get $options size]\""
+    }
     lassign [my extent [dict get $options size] [dict get $options unit]] \
         widthPoints heightPoints
+    if {$widthPoints <= 0 || $heightPoints <= 0} {
+      return -code error "tclpdf: -size of form \"$name\" is\
+          {[dict get $options size]} - a form needs a width and a height above zero"
+    }
 
     # The script draws onto a temporary page whose height is the form height -
     # that way [coords] mirrors against the right value and every existing
@@ -154,10 +167,26 @@ oo::define ::tclpdf::document::document {
           [join [dict keys $forms] {, }]"
     }
     set form [dict get $forms $name]
-    # The alpha is checked - and its ExtGState made - before anything is
-    # written: refused after [save] it left a q without its Q in the stream
-    # (measured, "q\n" and nothing else). [GraphicsOpacity] refuses first
-    # and creates second, so a bad value leaves no resource either.
+    # Every value is checked before anything is written - the mark, the
+    # "q": -at, -scale, -rotate, and the alpha last, since that one makes
+    # its ExtGState as it passes ([GraphicsOpacity] refuses first and
+    # creates second). Measured before 2026-08-18: "-rotate x" and
+    # "-at {1}" were read after the mark and the q were out and left both
+    # open; "-scale 0" went out as a singular cm, and "-scale -1" put the
+    # form mirrored above and left of the corner it was given. A factor
+    # above zero is what a size wants; turning is what -rotate is for.
+    if {[dict get $options at] ne {}} {
+      my GraphicsPoint [dict get $options at] -at "form place"
+    }
+    set scale [dict get $options scale]
+    if {![string is double -strict $scale] || $scale <= 0} {
+      return -code error "tclpdf: -scale of form place is a factor above zero,\
+          not \"$scale\""
+    }
+    if {![string is double -strict [dict get $options rotate]]} {
+      return -code error "tclpdf: -rotate of form place is an angle in\
+          degrees, not \"[dict get $options rotate]\""
+    }
     set alpha {}
     if {[dict get $options opacity] ne {}} {
       set alpha [my GraphicsOpacity [dict get $options opacity]]
@@ -249,4 +278,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xObject 1.2
+package provide tclpdf::xObject 1.3

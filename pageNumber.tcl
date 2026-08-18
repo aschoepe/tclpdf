@@ -69,6 +69,19 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: -from is a page number counted from 1, got\
           \"[dict get $options from]\""
     }
+    # Both checked at the CALL. The number is drawn at write time, and a
+    # value refused only there names [write] rather than the call that
+    # wrote it - and -total was not refused at all: "abc" went straight
+    # into the label as %m.
+    set total [dict get $options total]
+    if {$total ne {} && (![string is integer -strict $total] || $total < 1)} {
+      return -code error "tclpdf: -total is a page count of 1 or more, got\
+          \"$total\""
+    }
+    if {[dict get $options align] ni {left right center centre}} {
+      return -code error "tclpdf: -align must be left, right or center,\
+          not \"[dict get $options align]\""
+    }
 
     set state [my state pageNumbers]
     if {$state eq {}} {
@@ -186,4 +199,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.3
+package provide tclpdf::pageNumber 1.4

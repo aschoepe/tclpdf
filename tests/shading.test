@@ -441,4 +441,77 @@ test shading-5.5 {pattern create -unit reads -size and -step in that unit} -body
       [lmap value $size {format %.1f $value}]
 } -result {{/BBox [0 0 72 72]} {/XStep 72} {/XStep 144} {/YStep 108} {25.4 25.4}}
 
+# -- refused before the function goes out -----------------------------------------
+#
+# ShadingObject writes the function and the shading dictionary and records
+# the colour space; whatever is read after that has to be checked before.
+# Measured before 2026-08-18 with the reviewer's probes: "-at {a b}" with
+# -from and -to given, "-size {50}" and "-extend 1" each left two objects
+# without a consumer and a record "shading axial on page 1" for a gradient
+# that never reached the page - and under [pdfa] the write was refused for
+# it. A third number in -from or -to went to [coords] as a page index.
+
+test shading-6.1 {a bad -at, -size, -extend, -from, -to, -center or -focus leaves nothing behind} -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc tagged 1
+  $doc page add
+  $doc page add
+  set objects [[$doc writer] count]
+  set codes {}
+  foreach {call pattern} {
+    {axial -at {a b} -size {10 10} -from {0 0} -to {5 5}} {*-at of shading axial takes numbers*}
+    {axial -at {1 1} -size {50} -from {0 0} -to {5 5}} {*-size of shading axial is a size {w h}*}
+    {axial -at {1 1} -size {10 10} -extend 1} {*-extend of shading axial is two booleans*}
+    {axial -at {1 1} -size {10 10} -extend {1 1 1}} {*-extend of shading axial is two booleans*}
+    {axial -at {1 1} -size {10 10} -extend {foo 1}} {*-extend of shading axial is two booleans*}
+    {axial -at {1 1} -size {10 10} -from {0 0 1} -to {5 5}} {*-from of shading axial is a point {x y}*}
+    {axial -at {1 1} -size {10 10} -from {0 0} -to {5}} {*-to of shading axial is a point {x y}*}
+    {radial -at {1 1} -size {10 10} -center {5 5 1}} {*-center of shading radial is a point {x y}*}
+    {radial -at {1 1} -size {10 10} -focus {a b}} {*-focus of shading radial takes numbers*}
+    {radial -at {1} -size {10 10}} {*-at of shading radial is a point {x y}*}
+  } {
+    lappend codes [catch {$doc shading {*}$call -colors {{cmyk 1 0 0 0} {cmyk 0 1 0 0}}} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
+      [expr {[[$doc writer] count] - $objects}] [$doc resource Shading]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} {} 0 {}}
+
+test shading-6.2 {the pattern form takes the same checks, and leaves no pattern behind} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set objects [[$doc writer] count]
+  set codes {}
+  foreach {call pattern} {
+    {-at {a b} -size {10 10} -from {0 0} -to {5 5}} {*-at of shading pattern "sky" takes numbers*}
+    {-at {1 1} -size {10 10} -extend 1} {*-extend of shading pattern "sky" is two booleans*}
+    {-at {1 1} -size {10 10} -from {0 0 1} -to {5 5}} {*-from of shading pattern "sky" is a point*}
+  } {
+    lappend codes [catch {$doc shading pattern sky axial {*}$call -colors {red blue}} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes [$doc shading names] [$doc colourSpacesUsed] \
+      [expr {[[$doc writer] count] - $objects}] [$doc resource Pattern]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1} {} {} 0 {}}
+
+test shading-6.3 {two booleans, in any spelling, are still an Extend} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc shading axial -at {1 1} -size {10 10} -colors {red blue} -extend {yes no}
+  $doc shading axial -at {1 1} -size {10 10} -colors {red blue} -extend {0 true}
+  set writer [$doc writer]
+  set found {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[regexp {/Extend \[([a-z ]+)\]} [$writer body $number] -> extend]} {
+      lappend found $extend
+    }
+  }
+  $doc destroy
+  set found
+} -result {{true false} {false true}}
+
 cleanupTests

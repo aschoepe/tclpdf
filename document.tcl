@@ -109,6 +109,33 @@ oo::class create ::tclpdf::document::document {
               more, not \"$value\""
         }
       }
+      # The margins are kept in the document unit, and follow it: a call
+      # that changes -unit and does not restate -typeArea has the stored
+      # margins re-expressed in the new unit. Measured before 2026-08-18:
+      # "tclpdf new -typeArea {25 25}" and then "configure -unit pt" gave
+      # margins of 25 pt, not 70.87 - the numbers stayed and the unit
+      # under them changed. The page boxes are kept in points and never had
+      # this; the margins keep the unit so that [cget -typeArea] answers what
+      # the caller wrote, exactly, until the unit moves. A -typeArea given
+      # in the same call as -unit is in that unit.
+      set from [dict get $tclpdfOption unit]
+      set to [dict get $options unit]
+      if {$from ne $to && "typeArea" ni [lmap {name ->} $args {
+        string trimleft $name -
+      }]} {
+        dict set options typeArea [lmap value $area {
+          ::tclpdf::geometry fromPoints \
+              [::tclpdf::geometry toPoints $value $from] $to
+        }]
+      }
+    }
+    # -compress is read as a boolean by every stream that is written, and
+    # a value that is not one used to fail there - "expected boolean value
+    # but got foo" out of the first write, a raw Tcl message naming no
+    # option - or, for "-compress 2", to be silently taken as true.
+    if {![string is boolean -strict [dict get $options compress]]} {
+      return -code error "tclpdf: -compress takes a boolean, not\
+          \"[dict get $options compress]\""
     }
     if {[info exists tclpdfWriter]
         && [dict get $options version] ne [dict get $tclpdfOption version]} {
@@ -512,7 +539,14 @@ oo::class create ::tclpdf::document::document {
   }
 
   # Document information (14.3.3). Keys are Title, Author, Subject, Keywords,
-  # Creator, Producer.
+  # Creator, Producer - the text strings - plus CreationDate and ModDate,
+  # which are PDF dates, and Trapped, which is a NAME (ISO 32000-1, Table
+  # 317: True, False or Unknown). Those three are checked here at the call:
+  # "info CreationDate yesterday" used to reach the file verbatim, and
+  # "info Trapped True" was written as the string (True), which no reader
+  # takes for the name /True. The two dates are mirrored into the XMP packet
+  # under the properties the table pairs them with; Trapped is not, and
+  # xmp.tcl says why.
   method info {key args} {
     if {[llength $args] == 0} {
       if {[dict exists $tclpdfInfo $key]} {
@@ -531,8 +565,35 @@ oo::class create ::tclpdf::document::document {
       dict unset tclpdfInfo $key
       return {}
     }
+    switch -- $key {
+      CreationDate - ModDate {
+        my CheckDate $value "info $key"
+      }
+      Trapped {
+        if {$value ni {True False Unknown}} {
+          return -code error "tclpdf: info Trapped takes True, False or\
+              Unknown - a name, ISO 32000-1 Table 317 - not \"$value\""
+        }
+        # The key is PDF 1.3 (Reference 1.7, Table 10.2).
+        my RequireVersion 1.3 "info Trapped"
+      }
+    }
     dict set tclpdfInfo $key $value
     return $value
+  }
+
+  # A PDF date (7.9.4) - "D:YYYYMMDDHHmmSSOHH'mm'", every part after the
+  # year optional, as [pdfObj date] writes it and as 2.0 spells it without
+  # the closing apostrophe - checked before it is stored anywhere. Two
+  # callers: [info] for CreationDate and ModDate, and [attach] for -date;
+  # each names itself, so the message says which call was wrong.
+  method CheckDate {value what} {
+    if {[::tclpdf::document::parseDate $value] eq {}} {
+      return -code error "tclpdf: $what takes a PDF date such as\
+          D:20260818120000+02'00' (ISO 32000-1, 7.9.4) - pdfObj date writes\
+          one from a clock value - not \"$value\""
+    }
+    return
   }
 
   # XMP metadata, set as raw XML (14.3.2). Raw on purpose: PDF/A and ZUGFeRD
@@ -548,18 +609,56 @@ oo::class create ::tclpdf::document::document {
       # and the one [XmpCatalog] builds for pdfa and ua, both of which raise
       # the version themselves.
       my RequireVersion 1.4 "metadata"
-      # Stored as UTF-8 BYTES, not as a Tcl string. The packet's own BOM in
-      # its xpacket instruction declares UTF-8 (XMP part 1, ISO 19005
-      # 6.6.2.1), and the writer refuses text in a stream anyway - a title
-      # with a character above U+00FF made the document unwritable, one
-      # between U+0080 and U+00FF wrote Latin-1 bytes under a UTF-8 claim.
-      # This is the ONE place both roads pass through: the packet XmpCatalog
-      # builds and one a caller supplies directly.
-      set tclpdfXmp [encoding convertto utf-8 [lindex $args 0]]
+      # Stored as TEXT, and answered as text: what a caller sets is what
+      # they read back. It is encoded to UTF-8 ONCE, when the stream is
+      # written (WriteMetadata in output.tcl) - the packet's own BOM in its
+      # xpacket instruction declares UTF-8 (XMP part 1, ISO 19005 6.6.2.1),
+      # and the writer refuses text in a stream anyway. The encoding used
+      # to happen here, which stored bytes: [metadata] then answered UTF-8
+      # bytes, and "$doc metadata [$doc metadata]" - the manual's "kept as
+      # given" taken at its word - encoded them a second time, so a title
+      # "Müller" went out as "MÃ¼ller".
+      set tclpdfXmp [lindex $args 0]
     }
     return $tclpdfXmp
   }
 
+  # The events this document fires - see the head of this file. The bus
+  # (event.tcl) holds no PDF knowledge and asks here; a subscription to any
+  # other name is refused there naming these, rather than accepted for an
+  # event that never comes.
+  method events {} {
+    return {pageAdded beforeWrite resources catalog info afterWrite}
+  }
+
+}
+
+# The fields of a PDF date string (7.9.4): a dict of year month day hour
+# minute second sign zoneHour zoneMinute, the absent ones empty - or an
+# empty string when the text is not a PDF date. The syntax is
+# D:YYYYMMDDHHmmSSOHH'mm', each part after the year optional but only in
+# order; O is +, - or Z. ISO 32000-1 asks for the apostrophe after the zone
+# minutes as well and 2.0 dropped it, so it is optional here - both are
+# read as the same moment. The ranges are checked too: a month 13 is as
+# little a date as "yesterday" is, and would reach the file the same way.
+#
+# One parser for two readers: [CheckDate] refuses at the call, and xmp.tcl
+# turns the same fields into the XMP form for the packet.
+proc ::tclpdf::document::parseDate {value} {
+  if {![regexp {^D:(\d{4})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:([-+Z])(?:(\d{2})(?:'(\d{2})'?)?)?)?)?)?)?)?)?$} \
+      $value -> year month day hour minute second sign zoneHour zoneMinute]} {
+    return {}
+  }
+  foreach {field low high} {month 1 12 day 1 31 hour 0 23 minute 0 59
+      second 0 59 zoneHour 0 23 zoneMinute 0 59} {
+    set number [set $field]
+    if {$number ne {} && ([scan $number %d] < $low || [scan $number %d] > $high)} {
+      return {}
+    }
+  }
+  return [dict create year $year month $month day $day hour $hour \
+      minute $minute second $second sign $sign zoneHour $zoneHour \
+      zoneMinute $zoneMinute]
 }
 
 package provide tclpdf::document 1.6

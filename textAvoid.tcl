@@ -173,13 +173,23 @@ oo::define ::tclpdf::document::document {
   }
 
   # Check the list once, at the call, rather than per line - a typo in a shape
-  # would otherwise surface as a wrong wrap and not as an error.
-  method TextAvoidCheck {shapes} {
+  # would otherwise surface as a wrong wrap and not as an error. The margin
+  # is the -avoidMargin of the call, checked with the shapes because it is
+  # added to every one of them: "abc" there used to reach the band and fail
+  # in Tcl's words.
+  method TextAvoidCheck {shapes {margin 0}} {
+    if {![string is double -strict $margin]} {
+      return -code error "tclpdf: -avoidMargin takes a distance in the\
+          document unit, not \"$margin\""
+    }
     foreach shape $shapes {
       # The numbers are checked here as well as the shape of the list: a
       # rectangle built from a value that turned out empty - the return of
       # a call that answers nothing, say - used to fail deep in the band
-      # arithmetic with Tcl's own words.
+      # arithmetic with Tcl's own words. And the SIZE has to be one: a
+      # rectangle of no width, or of a negative one, and a circle of no
+      # radius are not shapes on the page - they passed, and the wrap was
+      # whatever the band arithmetic made of them, in silence.
       set numbers [concat {*}[lrange $shape 1 end]]
       switch -- [lindex $shape 0] {
         rect {
@@ -190,6 +200,11 @@ oo::define ::tclpdf::document::document {
             return -code error "tclpdf: an avoided rectangle is\
                 {rect {x y} {width height} ?margin?}, got \"$shape\""
           }
+          lassign [lindex $shape 2] width height
+          if {$width <= 0 || $height <= 0} {
+            return -code error "tclpdf: an avoided rectangle needs a width\
+                and a height above zero, got {$width $height} in \"$shape\""
+          }
         }
         circle {
           if {[llength $shape] < 3 || [llength $shape] > 4
@@ -197,6 +212,10 @@ oo::define ::tclpdf::document::document {
               || [lsearch -not -regexp $numbers {^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$}] >= 0} {
             return -code error "tclpdf: an avoided circle is\
                 {circle {x y} radius ?margin?}, got \"$shape\""
+          }
+          if {[lindex $shape 2] <= 0} {
+            return -code error "tclpdf: an avoided circle needs a radius\
+                above zero, got [lindex $shape 2] in \"$shape\""
           }
         }
         default {
@@ -209,4 +228,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textAvoid 1.1
+package provide tclpdf::textAvoid 1.2

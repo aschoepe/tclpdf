@@ -346,4 +346,81 @@ test type1-3.6 {a PFA embeds as the same font file as the .t1} -constraints have
       [expr {$t1Length == $pfaLength}] [expr {$t1Length > 0}]
 } -result {4 1 1 1}
 
+test type1-4.1 {the glyph names of the program are read from behind the encryption} \
+    -constraints haveRaw -body {
+  # The eexec section is decrypted and the /CharStrings entries walked - and
+  # for these two faces the program and the AFM agree name for name: 855
+  # charstrings in Nimbus Sans, 145 in OCR-B, every AFM name among them.
+  set result {}
+  foreach {program metricsFile} [list $::raw $::afm $::pfb [file rootname $::pfb].afm] {
+    set glyphs [::tclpdf::type1 glyphs [::tclpdf::type1 read $program]]
+    set metrics [::tclpdf::type1 metrics $metricsFile]
+    set missing 0
+    foreach name [dict keys [dict get $metrics widths]] {
+      if {![dict exists $glyphs $name]} {
+        incr missing
+      }
+    }
+    lappend result [dict size $glyphs] [dict size [dict get $metrics widths]] \
+        $missing [dict exists $glyphs A] [dict exists $glyphs .notdef]
+  }
+  set result
+} -result {855 855 0 1 1 145 145 0 1 1}
+
+test type1-4.2 {a PFA decrypts to the same glyph names as the .t1} -constraints haveRaw -body {
+  set pfa [type1Pfa $::raw [::tclpdfTest::scratch nimbus-glyphs.pfa]]
+  set fromPfa [::tclpdf::type1 glyphs [::tclpdf::type1 read $pfa]]
+  file delete $pfa
+  set fromT1 [::tclpdf::type1 glyphs [::tclpdf::type1 read $::raw]]
+  list [dict size $fromPfa] [expr {[lsort [dict keys $fromPfa]] eq [lsort [dict keys $fromT1]]}]
+} -result {855 1}
+
+test type1-4.3 {a name the AFM lists and the program lacks maps to nothing} -constraints haveRaw -body {
+  # Adobe's Helvetica.afm lists Euro and Helvetica.pfb has no such
+  # charstring; that face is not in the tree, so the case is built: the AFM
+  # copy calls the glyph "euro", which the winAnsi table knows as the second
+  # name for position 128 and the program does not carry. Read by the AFM
+  # alone the position was mapped, the byte set, and the reader drew a
+  # blank; read against the program it is unmapped, so the euro sign is
+  # refused like any character the face lacks. The names decided WITHOUT the
+  # program are the old answer, kept in the result to show the difference.
+  set metrics [::tclpdf::type1 metrics $::afm]
+  set widths [dict get $metrics widths]
+  dict set widths euro [dict get $widths Euro]
+  dict unset widths Euro
+  dict set metrics widths $widths
+  set glyphs [::tclpdf::type1 glyphs [::tclpdf::type1 read $::raw]]
+  set without [::tclpdf::type1 names $metrics]
+  set with [::tclpdf::type1 names $metrics $glyphs]
+  list [dict get $without 128] [dict exists $with 128] \
+      [lindex [::tclpdf::type1 widths $metrics] 128] \
+      [lindex [::tclpdf::type1 widths $metrics $glyphs] 128] \
+      [dict get $with 65] [expr {[dict size $without] - [dict size $with]}]
+} -result {euro 0 556 0 A 1}
+
+test type1-4.4 {an embedded face refuses the character its program lacks, whatever the AFM says} \
+    -constraints haveRaw -body {
+  # The same case through the document: the AFM copy sits in the scratch
+  # directory and is named with -metrics, the program is the tree's own. The
+  # euro sign is refused by the missing-glyph message, [font info] counts one
+  # position fewer, and a plain word still sets.
+  set copy [::tclpdfTest::scratch nimbus-euro.afm]
+  set out [open $copy w]
+  fconfigure $out -translation binary
+  puts -nonewline $out [string map {"; N Euro ;" "; N euro ;"} \
+      [::tclpdfTest::readBytes $::afm]]
+  close $out
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed sans $::raw -metrics $copy
+  set info [$doc font info sans]
+  set code [catch {$doc text "12 \u20AC" -at {20 20} -family sans} message]
+  $doc text "12 EUR" -at {20 30} -family sans
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  file delete $copy
+  list $code [string match {*"sans" has no glyph for U+20AC (position 3)*} $message] \
+      [dict get $info characters] [regexp -all {Tj} $content]
+} -result {1 1 217 1}
+
 cleanupTests

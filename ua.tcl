@@ -36,15 +36,17 @@
 #   fonts        7.21.4 Note 5 - embedding is unconditional here, unlike
 #                PDF/A, where the standard 14 stay exempt
 #   headings     7.4.2 - H1 first, no level skipped
-#   tables       UA-2 8.2.5.14 - every row the same number of cells, which
-#                colSpan and rowSpan break by their nature
+#   tables       7.5 / UA-2 8.2.5.26, Matterhorn 15-003 - every row spans
+#                the same number of columns, colSpan and rowSpan counted
+#                as the columns they cover
 #   lists        7.6 - an ordered list names its numbering and its items
 #                carry a Lbl; items with a Lbl under a list that says
 #                nothing are refused the other way round
 #   graphics     7.1, 7.3 - a picture, drawing or form placement is either
 #                described (-alt) or declared decoration (-artifact 1);
 #                one that fell into artifact by default was never judged
-#   links        7.18.5 - Contents on every annotation
+#   links        7.18.5 - Contents on every annotation, and every one
+#                inside a Link element (Matterhorn 28-011)
 #   viewer       7.1 - DisplayDocTitle, set by this module, is still on
 #
 # What it sets rather than demands: DisplayDocTitle, the pdfuaid schema, and
@@ -71,11 +73,6 @@ namespace eval ::tclpdf::ua {
   namespace ensemble create
 
   variable schema "http://www.aiim.org/pdfua/ns/id/"
-
-  # The structure namespace of PDF 2.0. A UA-2 tree may not rely on the 1.7
-  # default any more (UA-2 8.2.5.2), and one dictionary plus /NS on the
-  # elements is the whole of what that costs.
-  variable structureNamespace "http://iso.org/pdf2/ssn"
 
   # The revision year that goes with part 2. ISO 14289-2 was published in
   # 2024, and pdfuaid:rev is the year, not the part.
@@ -178,7 +175,7 @@ oo::define ::tclpdf::document::document {
   method ua {args} {
     if {[llength $args] == 1 && [string is boolean -strict [lindex $args 0]]} {
       if {![lindex $args 0]} {
-        my state ua {}
+        my UaWithdraw
         return {}
       }
       set args {}
@@ -195,9 +192,14 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::ua::revision
     set current [my state ua]
     if {$current eq {}} {
-      set current [dict create part 1 revision $revision wtpdf {} registered 0]
+      set current [dict create part 1 revision $revision wtpdf {}]
     }
-    set current [::tclpdf::option parse $current $args "ua"]
+    # Parsed over the public options only: the state carries "registered"
+    # beside them, and parsing over the whole of it accepted "-registered 1"
+    # and named it among the known options - measured. What is not an option
+    # is added back afterwards.
+    set current [dict merge $current [::tclpdf::option parse \
+        [dict remove $current registered] $args "ua"]]
     # pdfuaid:rev is the year of the edition claimed, four digits (ISO
     # 14289-2 Table 1). Anything else would be written into the metadata as
     # given and mean nothing to a validator.
@@ -242,17 +244,20 @@ oo::define ::tclpdf::document::document {
       2 {
         # The version is raised here rather than checked at write time,
         # because everything written from now on has to know: 2.0 spells the
-        # date differently and drops keys that 1.7 still wants.
+        # date differently and drops keys that 1.7 still wants. Through
+        # [configure], as part 1 does, so that cget answers 2.0 - the writer
+        # alone left the option at its old value - and recorded, so that a
+        # later [configure -version 1.7] is refused naming PDF/UA-2 rather
+        # than writing a %PDF-1.7 header over a part-2 claim; measured both
+        # ways.
         if {[package vcompare [[my writer] version] 2.0] < 0} {
-          [my writer] version 2.0
+          my configure -version 2.0
         }
-        # The reference is published NOW, even though the object it points at
-        # is written at beforeWrite. structure.tcl needs it while it builds
-        # the tree, and both run on the same event in registration order -
-        # tagged registered first, so the tree is written before anything
-        # here could hand it over.
-        my state uaNamespace [[my writer] ref [my reservation ua.namespace]]
-        my onSelf beforeWrite UaWrite
+        my RequireVersion 2.0 "PDF/UA-2"
+        # A UA-2 tree may not rely on the default namespace (UA-2 8.2.5.2);
+        # structureWrite.tcl writes the 2.0 one and names it on every element
+        # when this says so - or on its own, when a 2.0-only type asks for it.
+        my state structureNamespace 1
       }
       default {
         return -code error "tclpdf: PDF/UA part must be 1 or 2, not\
@@ -260,13 +265,21 @@ oo::define ::tclpdf::document::document {
             1.7 path, part 2 is ISO 14289-2 and needs PDF 2.0"
       }
     }
-    if {![dict get $current registered]} {
+    # The subscribers and the schemas are registered ONCE per document, and
+    # stay registered through [ua 0]: each of them answers nothing while no
+    # claim is made, so a claim withdrawn and made again does not describe
+    # itself twice in the packet - which it did, measured with veraPDF, when
+    # ua 0 dropped the mark and the next ua 1 registered everything anew.
+    if {[my state uaRegistered] ne "1"} {
       my onSelf catalog UaCatalog
       variable ::tclpdf::ua::schema
       my xmpSchema pdfuaid $schema {part rev} UaXmpBody
       variable ::tclpdf::ua::declarationSchema
       my xmpSchema pdfd $declarationSchema {declarations conformsTo} \
           UaDeclarationBody
+      my state uaRegistered 1
+    }
+    if {[my state ua] eq {}} {
       # DisplayDocTitle is mandatory (7.1) and has no alternative: a document
       # claiming UA and asking the viewer to show its file name would be
       # contradicting itself. Set, not demanded - it moves nothing on any page.
@@ -276,22 +289,65 @@ oo::define ::tclpdf::document::document {
       # and a subscriber added while that event is already running is added
       # too late to be called. Measured - the key was simply absent, with
       # nothing anywhere reporting a problem.
+      #
+      # What it was before is kept, so that [ua 0] can put it back: a caller
+      # who set it before the claim keeps it, one who did not gets it taken
+      # away again with the claim.
+      set preferences [my viewerPreferences]
+      my state uaDisplayDocTitleBefore [expr {
+          [dict exists $preferences displayDocTitle] ?
+          [dict get $preferences displayDocTitle] : "unset"}]
       my viewerPreferences -displayDocTitle 1
       # Written whether or not PDF/A is declared, because the two can be
       # declared in either order and this has to be in the packet by the time
       # it is built. In a document that is not PDF/A it describes a schema
       # nobody asked about - a kilobyte of metadata, and correct.
       my xmpRaw [::tclpdf::ua extensionSchema]
-      dict set current registered 1
     }
+    dict set current registered 1
     my state ua $current
     return $current
+  }
+
+  # [ua 0]: the claim is withdrawn, and everything the claim put there goes
+  # with it - the state, the extension schema in the packet, the structure
+  # namespace demand, DisplayDocTitle where it was ours to set. The
+  # subscribers stay and answer nothing on an empty state (see UaCatalog,
+  # UaXmpBody, UaDeclarationBody). Until 2026-08-18 only the state was
+  # cleared: the write that followed died on the empty dictionary, and a
+  # second [ua 1] registered the schema a second time.
+  #
+  # What cannot be taken back is the file version: part 1 raised it to 1.7
+  # and recorded that as a requirement, and a requirement is a fact about
+  # what the file already contains. A 1.7 file without a claim is a correct
+  # file.
+  method UaWithdraw {} {
+    if {[my state ua] eq {}} {
+      return
+    }
+    my state ua {}
+    my state structureNamespace {}
+    my state xmpRaw [lsearch -all -inline -not -exact [my state xmpRaw] \
+        [::tclpdf::ua extensionSchema]]
+    set before [my state uaDisplayDocTitleBefore]
+    if {$before eq "unset"} {
+      set preferences [my viewerPreferences]
+      dict unset preferences displayDocTitle
+      my state viewerPreferences $preferences
+    } elseif {$before ne {}} {
+      my viewerPreferences -displayDocTitle $before
+    }
+    my state uaDisplayDocTitleBefore {}
+    return
   }
 
   # What PDF/UA contributes to the XMP packet. rev is part 2 only: UA-1 has
   # no revision and a validator reads one as a claim to something else.
   method UaXmpBody {} {
     set current [my state ua]
+    if {$current eq {}} {
+      return {}
+    }
     set items [list [list text part [dict get $current part]]]
     if {[dict get $current part] == 2} {
       lappend items [list text rev [dict get $current revision]]
@@ -304,6 +360,9 @@ oo::define ::tclpdf::document::document {
   # as a description with nothing in it.
   method UaDeclarationBody {} {
     variable ::tclpdf::ua::declarations
+    if {[my state ua] eq {}} {
+      return {}
+    }
     set levels [dict get [my state ua] wtpdf]
     if {![llength $levels]} {
       return {}
@@ -321,6 +380,9 @@ oo::define ::tclpdf::document::document {
   # exist as objects by now and can be inspected rather than assumed. The
   # same reasoning, and the same measured mishap behind it, as PdfaCatalog.
   method UaCatalog {} {
+    if {[my state ua] eq {}} {
+      return
+    }
     my UaCheck
     return
   }
@@ -467,14 +529,31 @@ oo::define ::tclpdf::document::document {
     if {[my state annots] eq {}} {
       return {}
     }
+    set problems {}
     set missing [my linksWithoutContents]
-    if {![llength $missing]} {
-      return {}
+    if {[llength $missing]} {
+      lappend problems "[llength $missing] link annotation[expr {[llength $missing] == 1 ?
+          {} : {s}}] without a description, on page [join [lsort -unique -integer \
+          $missing] {, }] - PDF/UA needs Contents on every one (7.18.5); pass\
+          -tooltip to \[\$doc link\]"
     }
-    return [list "[llength $missing] link annotation[expr {[llength $missing] == 1 ?
-        {} : {s}}] without a description, on page [join [lsort -unique -integer \
-        $missing] {, }] - PDF/UA needs Contents on every one (7.18.5); pass\
-        -tooltip to \[\$doc link\]"]
+    # And inside a Link element (UA-1 7.18.5, Matterhorn 28-011: veraPDF
+    # fails a link annotation that is not), which is where the description
+    # is read from as well; UA-2 (8.2.5.20) lets a Reference do too. The fact
+    # comes from link.tcl again; a link drawn outside any element, or inside
+    # a P, is in neither.
+    set two [expr {[dict get [my state ua] part] == 2}]
+    set outside [expr {[my tagged] ?
+        [my linksWithoutElement [expr {$two ? {Link Reference} : {Link}}]] : {}}]
+    if {[llength $outside]} {
+      lappend problems "[llength $outside] link annotation[expr {[llength $outside] == 1 ?
+          { is} : {s are}}] not inside a Link structure element, on page\
+          [join [lsort -unique -integer $outside] {, }] - PDF/UA wants every\
+          one nested in a Link[expr {$two ? { or a Reference} : {}}]\
+          ([expr {$two ? {8.2.5.20} : {7.18.5}}]); draw the text and the\
+          link inside \[\$doc structure Link -script ...\]"
+    }
+    return $problems
   }
 
   # UA-2 only: every file specification needs a Desc (8.2.5.11). UA-1 does
@@ -521,33 +600,30 @@ oo::define ::tclpdf::document::document {
       lappend problems "the tree uses the generic H - PDF/UA-2 wants a\
           numbered heading, H1 to Hn (8.2.5.20)"
     }
+    # UA-2 as well: Note is a 1.7-only type, and 8.2.5.14 wants it gone
+    # unless a role map says what it is - FENote is what 2.0 calls it.
+    if {[dict get [my state ua] part] == 2 && "Note" in [dict get $report types]} {
+      lappend problems "the tree uses Note - PDF/UA-2 wants FENote, the 2.0\
+          name for it (8.2.5.14)"
+    }
+    # The width of a row is the number of COLUMNS it covers, spans counted
+    # (Matterhorn 15-003, UA-2 8.2.5.26): a cell with -colSpan 2 is two of
+    # them, and a cell spanning down from the row above is one the row
+    # below does not draw. [structureReport] does that arithmetic; a table
+    # whose rows still differ is one no reader can lay out as a grid.
     set index 0
     foreach widths [dict get $report rows] {
       incr index
       if {[llength [lsort -unique $widths]] > 1} {
         lappend problems "table $index has rows of [join [lsort -unique \
-            $widths] { and }] cells - PDF/UA needs every row to hold the same\
-            number, which colSpan and rowSpan cannot. Draw it as separate\
-            tables, or leave the claim off this document"
+            $widths] { and }] columns - PDF/UA needs every row to cover the\
+            same number, spans counted (7.5, Matterhorn 15-003). Fill the\
+            short rows, or draw it as separate tables"
       }
     }
     return $problems
   }
 
-  # The 2.0 structure namespace: one dictionary, named by the tree root and
-  # by every element in it. Written here rather than in structure.tcl because
-  # nothing but UA-2 needs it - a 1.7 tree is in the default namespace and
-  # says so by saying nothing (14.8.6.1).
-  #
-  # Runs on every write, over a reserved number, which is the contract for
-  # anything that creates objects at write time.
-  method UaWrite {} {
-    variable ::tclpdf::ua::structureNamespace
-    [my writer] put [my reservation ua.namespace] \
-        [::tclpdf::pdfObj dictionary [list \
-            Type /Namespace NS [::tclpdf::pdfObj str $structureNamespace]]]
-    return
-  }
 }
 
-package provide tclpdf::ua 1.1
+package provide tclpdf::ua 1.2

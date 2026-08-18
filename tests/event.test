@@ -257,4 +257,30 @@ test event-document-6.5 {a beforeWrite subscriber that fails stops the write, an
   list $code $message $existed
 } -result {1 {not today} 0}
 
+# -- which events exist ------------------------------------------------------
+
+test event-document-7.1 {the document refuses a subscription to an event it never fires, naming the ones it does} -body {
+  # "on beforeWrte" used to be accepted without a word, and the subscriber
+  # never ran. Which names exist is the document's knowledge, asked through
+  # [events]; the bare emitter (event-1.9 subscribes to "trailer") has no
+  # list and refuses nothing.
+  set doc [tclpdf new -unit mm]
+  set code [catch {$doc on beforeWrte [list eventRecord x]} err]
+  set known [$doc events]
+  set none [$doc subscribers]
+  set token [$doc on beforeWrite [list eventRecord x]]
+  $doc destroy
+  list $code [string match {*no event "beforeWrte"*known are: pageAdded, beforeWrite,\
+      resources, catalog, info, afterWrite*} $err] $known $none [string match e* $token]
+} -result {1 1 {pageAdded beforeWrite resources catalog info afterWrite} {} 1}
+
+test event-document-7.2 {a bare emitter still takes any name} -body {
+  set bus [eventFresh]
+  set token [$bus on anything [list eventRecord a]]
+  set events [$bus events]
+  $bus emit anything
+  $bus destroy
+  list [string match e* $token] $events [llength $::eventLog]
+} -result {1 {} 1}
+
 cleanupTests

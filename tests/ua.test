@@ -229,17 +229,36 @@ test ua-4.1 {a regular table passes} -constraints haveFace -body {
   list $code [expr {$code ? $err : {}}]
 } -result {0 {}}
 
-test ua-4.2 {a spanning cell makes the table irregular} -constraints haveFace -body {
-  # Not a defect in the table - PDF/UA and colSpan are simply incompatible,
-  # and the message says so rather than suggesting a fix that does not exist.
+test ua-4.2 {a spanning cell keeps the grid regular, an irregular table is refused} -constraints haveFace -body {
+  # Until 2026-08-18 this test pinned the opposite: a table with a colSpan
+  # was refused as "rows of 2 and 3 cells". The rule counts COLUMNS, spans
+  # included (Matterhorn 15-003, UA-2 8.2.5.26), and veraPDF passes such a
+  # table - the cell holding "1" covers two columns, so every row covers
+  # three. What is refused is a table whose rows differ that way too.
   set doc [accessible $face]
   $doc table -at {20 60} -width 100 -style {family face} \
-      -headStyle {family face} -head {{A B C}} -body {{{text 1 colSpan 2} 3} {4 5 6}}
+      -headStyle {family face} -head {{A B C}} \
+      -body {{{text 1 colSpan 2} 3} {{text 4 rowSpan 2} 5 6} {7 8}}
   $doc ua 1
-  set code [catch {$doc write [::tclpdfTest::scratch ua-span.pdf]} err]
+  set path [::tclpdfTest::scratch ua-span.pdf]
+  set code [catch {$doc write $path} err]
   $doc destroy
-  list $code [string match "*rows of 2 and 3 cells*" $err]
-} -result {1 1}
+  file delete $path
+  set doc [accessible $face]
+  $doc structure Table -script {
+    $doc structure TR -script {
+      foreach x {A B C} {$doc structure TH -scope Column -script {$doc text $x -at {20 60}}}
+    }
+    $doc structure TR -script {
+      foreach x {a b} {$doc structure TD -script {$doc text $x -at {20 70}}}
+    }
+  }
+  $doc ua 1
+  set irregular [catch {$doc write [::tclpdfTest::scratch ua-irregular.pdf]} err2]
+  $doc destroy
+  list $code [expr {$code ? $err : {}}] $irregular \
+      [string match "*table 1 has rows of 2 and 3 columns*spans counted*" $err2]
+} -result {0 {} 1 1}
 
 test ua-4.3 {a head cell says which way it heads} -constraints haveFace -body {
   # Scope Column and only that: tclpdf's head is a row above the body, so
@@ -792,5 +811,170 @@ test ua-14.3 {without -wtpdf the state says so, and ua 1 has no levels either} -
   $doc destroy
   list [dict get $two wtpdf] [dict get $one wtpdf] [dict get $one registered]
 } -result {{} {} 1}
+
+# --- part 2 through configure, ua 0, the private state key -------------------
+
+test ua-15.1 {part 2 raises the version through configure, and it cannot be lowered again} \
+    -constraints haveFace -body {
+  # cget answered the old version while the writer was at 2.0, and a later
+  # configure -version 1.7 was taken - a %PDF-1.7 file with pdfuaid:part 2.
+  set doc [accessible $face]
+  $doc ua -part 2
+  set version [$doc cget -version]
+  set writer [[$doc writer] version]
+  set lowered [catch {$doc configure -version 1.7} err]
+  set still [[$doc writer] version]
+  set path [::tclpdfTest::scratch ua-two-cget.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $version $writer $lowered [string match "*PDF/UA-2*cannot be lowered to PDF 1.7*" $err] \
+      $still [string range $bytes 0 7]
+} -result {2.0 2.0 1 1 2.0 %PDF-2.0}
+
+test ua-15.2 {ua 0 withdraws the claim and everything it put there} -constraints haveFace -body {
+  # ua 1; ua 0; write died on the empty state, and what ua had set stayed
+  # in the file: the schema, DisplayDocTitle, the extension schema.
+  set doc [accessible $face]
+  $doc ua 1
+  $doc ua 0
+  set state [$doc ua state]
+  set raw [$doc state xmpRaw]
+  set preferences [$doc viewerPreferences]
+  set path [::tclpdfTest::scratch ua-off.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set bytes [expr {$code ? $err : [::tclpdfTest::readBytes $path]}]
+  file delete $path
+  list $state $raw $preferences $code [regexp {pdfuaid} $bytes] [regexp {DisplayDocTitle} $bytes]
+} -result {{} {} {} 0 0 0}
+
+test ua-15.3 {a claim withdrawn and made again describes itself once} -constraints haveFace -body {
+  # And subscribes once: the catalog subscribers after ua 1 and after
+  # ua 1; ua 0; ua 1 are the same in number. (A viewer preference of the
+  # caller's own, so that the preferences module - which subscribes once
+  # per document on its first key - is already in place and not what is
+  # counted here.)
+  set doc [accessible $face]
+  $doc viewerPreferences -hideToolbar 1
+  $doc ua 1
+  set once [llength [$doc subscribers catalog]]
+  $doc ua 0
+  $doc ua 1
+  set again [llength [$doc subscribers catalog]]
+  set path [::tclpdfTest::scratch ua-again.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {<pdfuaid:part>1</pdfuaid:part>} $bytes] \
+      [regexp -all {<pdfaSchema:prefix>pdfuaid</pdfaSchema:prefix>} $bytes] \
+      [regexp -all {xmlns:pdfuaid=} $bytes] [regexp -all {/DisplayDocTitle true} $bytes] \
+      [expr {$again - $once}]
+} -result {1 1 1 1 0}
+
+test ua-15.4 {ua 0 puts DisplayDocTitle back the way it was} -constraints haveFace -body {
+  # Set by the caller before the claim it stays; set by ua alone it goes.
+  set doc [accessible $face]
+  $doc viewerPreferences -displayDocTitle 1 -hideToolbar 1
+  $doc ua 1
+  $doc ua 0
+  set kept [$doc viewerPreferences]
+  $doc destroy
+  set doc [accessible $face]
+  $doc viewerPreferences -hideToolbar 1
+  $doc ua 1
+  $doc ua 0
+  set gone [$doc viewerPreferences]
+  $doc destroy
+  list [lsort -stride 2 $kept] $gone
+} -result {{displayDocTitle 1 hideToolbar 1} {hideToolbar 1}}
+
+test ua-15.5 {ua 0 after part 2 takes the namespace demand with it} -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc ua -part 2
+  $doc ua 0
+  set demand [$doc state structureNamespace]
+  set path [::tclpdfTest::scratch ua-two-off.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set bytes [expr {$code ? $err : [::tclpdfTest::readBytes $path]}]
+  file delete $path
+  # The version stays 2.0 - a fact about the file - and the tree stays in
+  # the default namespace, having no 2.0-only type.
+  list $demand $code [string range $bytes 0 7] [regexp {/Type /Namespace} $bytes] [regexp {pdfuaid} $bytes]
+} -result {{} 0 %PDF-2.0 0 0}
+
+test ua-15.6 {registered is state, not an option} -body {
+  set doc [tclpdf new]
+  set code [catch {$doc ua -registered 1} err]
+  set state [$doc ua state]
+  $doc destroy
+  list $code [string match {*unknown option "-registered"*} $err] \
+      [regexp {known are: -part -revision -wtpdf$} $err] $state
+} -result {1 1 1 {}}
+
+# --- Note under part 2, links inside a Link ---------------------------------
+
+test ua-15.7 {Note is refused under part 2, as H is} -constraints haveFace -body {
+  set doc [accessible $face]
+  $doc structure Note -script {$doc text "n" -at {20 40}}
+  $doc ua -part 2
+  set code [catch {$doc write [::tclpdfTest::scratch ua-note.pdf]} err]
+  $doc destroy
+  set doc [accessible $face]
+  $doc structure Note -script {$doc text "n" -at {20 40}}
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-note1.pdf]
+  set one [catch {$doc write $path} err1]
+  $doc destroy
+  file delete $path
+  list $code [string match "*the tree uses Note - PDF/UA-2 wants FENote*8.2.5.14*" $err] $one
+} -result {1 1 0}
+
+test ua-15.8 {a link annotation outside a Link element is refused} -constraints haveFace -body {
+  # veraPDF ua1 7.18.5-1: the annotation's structure parent has to be a
+  # Link. Drawn outside any element it joins none; drawn in a P it joins
+  # the P.
+  set doc [accessible $face]
+  $doc link -at {20 36} -size {20 6} -url https://www.tcl.tk/ -tooltip "t"
+  $doc structure P -script {
+    $doc text "tcl.tk" -at {20 50}
+    $doc link -at {20 46} -size {20 6} -url https://www.tcl.tk/ -tooltip "t"
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-link-out.pdf]} err]
+  $doc destroy
+  list $code [string match "*2 link annotations are not inside a Link structure element, on page 1*7.18.5*structure Link*" $err]
+} -result {1 1}
+
+test ua-15.9 {part 2 lets a Reference hold the link annotation, part 1 does not} \
+    -constraints haveFace -body {
+  # ISO 14289-2 8.2.5.20 names Link or Reference; ISO 14289-1 7.18.5 Link.
+  set doc [accessible $face]
+  $doc structure P -script {
+    $doc structure Reference -script {
+      $doc text "see" -at {20 50}
+      $doc link -at {20 46} -size {20 6} -url https://www.tcl.tk/ -tooltip "t"
+    }
+  }
+  $doc ua 1
+  set one [catch {$doc write [::tclpdfTest::scratch ua-link-ref1.pdf]} err1]
+  $doc destroy
+  set doc [accessible $face]
+  $doc structure P -script {
+    $doc structure Reference -script {
+      $doc text "see" -at {20 50}
+      $doc link -at {20 46} -size {20 6} -url https://www.tcl.tk/ -tooltip "t"
+    }
+  }
+  $doc ua -part 2
+  set path [::tclpdfTest::scratch ua-link-ref2.pdf]
+  set two [catch {$doc write $path} err2]
+  $doc destroy
+  file delete $path
+  list $one [string match "*not inside a Link structure element*" $err1] $two
+} -result {1 1 0}
 
 cleanupTests

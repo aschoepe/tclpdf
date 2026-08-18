@@ -63,12 +63,12 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: shading $kind needs -at {x y} and -size {w h}"
     }
+    # -at and -size were checked in ShadingOptions, so the clip below
+    # cannot refuse: with -from and -to given the shading itself never
+    # reads -at, and a bad corner used to surface only in [clip] - after
+    # the function and the shading were written and the mark and the "q"
+    # were out.
     set number [my ShadingObject $kind $options "shading $kind"]
-    # The clip's numbers are checked BEFORE anything is written: with -from
-    # and -to given the shading itself never reads -at, so a bad corner used
-    # to surface only in [clip] - after the mark and the "q" were out.
-    my coords {*}[dict get $options at]
-    my extent [dict get $options size]
     # A gradient is content on the page like any shape: part of an open
     # Figure, decoration otherwise. Without the bracket it would belong to no
     # element at all, which PDF/UA counts as a defect.
@@ -129,14 +129,20 @@ oo::define ::tclpdf::document::document {
     return $name
   }
 
-  # The options of both forms, and the -matrix checked right here - BEFORE
-  # ShadingObject, which writes the function and the shading dictionary.
-  # Until it was, five numbers or a singular matrix went into the /Matrix as
-  # they stood, and a letter failed at the number formatting - after function
-  # and shading were out, two objects without a consumer. And the direct
-  # forms take the same check although they write no matrix: the value there
-  # stands for the cm the caller has in force, and a singular one is a
-  # gradient nobody will see. "what" names the caller for the messages.
+  # The options of both forms, and every value that a later step would
+  # read AFTER something is written checked right here - BEFORE
+  # ShadingObject, which writes the function and the shading dictionary and
+  # records the colour space. Until the -matrix was, five numbers or a
+  # singular matrix went into the /Matrix as they stood, and a letter failed
+  # at the number formatting - after function and shading were out, two
+  # objects without a consumer. Measured again before 2026-08-18: "-at
+  # {a b}" with -from and -to given, "-size {50}" and "-extend 1" left the
+  # same two orphans and a colour space record for a gradient that never
+  # reached the page, and a third number in -from or -to went to [coords]
+  # as a page index. The direct forms take the matrix check although they
+  # write no matrix: the value there stands for the cm the caller has in
+  # force, and a singular one is a gradient nobody will see. "what" names
+  # the caller for the messages.
   method ShadingOptions {arguments what} {
     set options [::tclpdf::option parse {
       at {} size {} colors {} stops {} angle 0 extend {1 1}
@@ -144,6 +150,35 @@ oo::define ::tclpdf::document::document {
     } $arguments $what]
     if {[dict get $options matrix] ne {}} {
       ::tclpdf::geometry check [dict get $options matrix] $what
+    }
+    # Points and the size: exactly two numbers each. Not through [coords]
+    # here - under a -matrix they are read as they stand - only counted and
+    # checked as numbers.
+    foreach {key noun} {at point size size from point to point center point focus point} {
+      set value [dict get $options $key]
+      if {$value eq {}} {
+        continue
+      }
+      set shape [expr {$noun eq "point" ? "{x y}" : "{w h}"}]
+      if {[llength $value] != 2} {
+        return -code error "tclpdf: -$key of $what is a $noun $shape, not\
+            \"$value\""
+      }
+      foreach number $value {
+        if {![string is double -strict $number]} {
+          return -code error "tclpdf: -$key of $what takes numbers, not\
+              \"$number\""
+        }
+      }
+    }
+    # /Extend is two booleans (Table 78, Table 80): whether the gradient
+    # goes on beyond its start and its end. One value used to pass the
+    # start and fail on the missing end - after everything was written.
+    set extend [dict get $options extend]
+    if {[llength $extend] != 2 || ![string is boolean -strict [lindex $extend 0]]
+        || ![string is boolean -strict [lindex $extend 1]]} {
+      return -code error "tclpdf: -extend of $what is two booleans\
+          {start end}, not \"$extend\""
     }
     return $options
   }
@@ -365,4 +400,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.2
+package provide tclpdf::shading 1.3

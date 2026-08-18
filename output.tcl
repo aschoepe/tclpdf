@@ -177,7 +177,15 @@ oo::define ::tclpdf::document::document {
       # Written whenever there are annotations rather than only under a UA
       # claim: there is no case where the array order is the better answer,
       # and 2.0 makes /S the default for exactly that reason.
-      lappend pagePairs Tabs /S
+      #
+      # But only in a file that is 1.5 or later - Tabs is a PDF 1.5 entry
+      # (ISO 32000-1, Table 30), and a 1.4 file with links carried it all
+      # the same. Left out rather than refused: nothing was asked for, and
+      # a reader of an older file has no structure tree to follow anyway.
+      # PDF/UA, which does require the key, is 1.7 and never lands here.
+      if {[package vcompare [$tclpdfWriter version] 1.5] >= 0} {
+        lappend pagePairs Tabs /S
+      }
     }
     # The index into the ParentTree of a tagged document, reaching this file
     # the same way and for the same reason: a document without a structure
@@ -193,8 +201,15 @@ oo::define ::tclpdf::document::document {
   method WriteMetadata {} {
     # Never compressed: PDF/A requires the XMP packet to be readable without
     # decoding, and a validator that cannot read it fails the file.
+    #
+    # Encoded to UTF-8 HERE, once, on its way into the stream: [metadata]
+    # holds text (see document.tcl), and this is the one place the text
+    # becomes bytes - the packet's BOM declares UTF-8, and the writer
+    # refuses text in a stream. Under Tcl 8.6 this is also what folds a
+    # surrogate pair back into its character (see xmp.tcl).
     set number [my reservation output.metadata]
-    return [$tclpdfWriter stream $number {Type /Metadata Subtype /XML} $tclpdfXmp]
+    return [$tclpdfWriter stream $number {Type /Metadata Subtype /XML} \
+        [encoding convertto utf-8 $tclpdfXmp]]
   }
 
   method WriteInfo {} {
@@ -213,11 +228,18 @@ oo::define ::tclpdf::document::document {
     }
     set pairs {}
     dict for {key value} $tclpdfInfo {
-      lappend pairs $key [::tclpdf::pdfObj str $value]
+      # Trapped is the one entry of Table 317 that is a NAME - /True, /False
+      # or /Unknown; [info] admits nothing else. It used to go out as the
+      # string (True), which is a value the table does not know.
+      if {$key eq "Trapped"} {
+        lappend pairs $key [::tclpdf::pdfObj name $value]
+      } else {
+        lappend pairs $key [::tclpdf::pdfObj str $value]
+      }
     }
     return [$tclpdfWriter put [my reservation output.info] \
         [::tclpdf::pdfObj dictionary $pairs]]
   }
 }
 
-package provide tclpdf::output 1.4
+package provide tclpdf::output 1.5

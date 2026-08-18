@@ -139,11 +139,10 @@ oo::define ::tclpdf::document::document {
     set border [dict get $style border]
     # An unknown value used to fall through every branch and draw NOTHING, in
     # silence. A table without rules looks like a theme choice, so nobody goes
-    # looking for a typo.
-    if {$border ni {none all horizontal vertical outer}} {
-      return -code error "tclpdf: unknown table border \"$border\" - known are:\
-          none, all, horizontal, vertical, outer"
-    }
+    # looking for a typo. It is refused before the cell is measured - see
+    # TableStyleCheck in tableLayout.tcl, which holds the list - so that the
+    # cell's fill is not on the page when the rules are refused.
+    #
     # "outer" draws nothing per cell on purpose: the frame belongs to the
     # section as a whole and is drawn once, by TableDrawFrame.
     if {$border in {none outer} || [dict get $style lineWidth] <= 0} {
@@ -198,4 +197,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.3
+package provide tclpdf::tableDraw 1.4

@@ -95,8 +95,14 @@ oo::define ::tclpdf::document::document {
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
-    foreach {name value} [::tclpdf::option parse $defaults $args "font"] {
+    # Checked through before anything is stored: a call refused on its
+    # third option must not have set the first two - "-family times -size 0"
+    # left the family changed and the size where it was.
+    set parsed [::tclpdf::option parse $defaults $args "font"]
+    foreach {name value} $parsed {
       my TextCheck $name $value
+    }
+    foreach {name value} $parsed {
       my TextSet $name $value
     }
     # Resolving now rather than at output time means a wrong family is
@@ -183,6 +189,71 @@ oo::define ::tclpdf::document::document {
     # act as baseline in silence, so -anchor middle drew a baseline block and
     # nobody was told. See TextAnchor for the two values there are.
     my TextAnchor [dict get $options anchor]
+    if {![string is double -strict [dict get $options rotate]]} {
+      return -code error "tclpdf: -rotate takes an angle in degrees, not\
+          \"[dict get $options rotate]\""
+    }
+    # EVERYTHING that can be refused is refused HERE, before a byte reaches
+    # the stream or a mark the tree - the font state with its per-call
+    # overrides, the alignment of a line, the options of a paragraph. The
+    # mark used to be opened first and the checks came after it, so a refused
+    # -align left the BDC standing in the stream with no EMC, a leaf with an
+    # empty MCID in the tree, and, for -tag Artifact, the whole document
+    # believing it was still inside an artifact: every later mark was
+    # suppressed. Measured, not deduced (2026-08-18). After a refused call
+    # the stream, the tree and the state have to look as if the call never
+    # happened - so the order is: check, then mark, then draw.
+    set state [my TextMerge $args]
+    set width [dict get $options width]
+    if {[dict get $options paginate] && $width eq {}} {
+      return -code error "tclpdf: -paginate breaks a paragraph over pages, and\
+          a paragraph needs -width"
+    }
+    if {$width ne {}} {
+      # The paragraph half of this topic. Loaded here rather than at the top
+      # of the file: textBlock requires text, so requesting it up front would
+      # be a cycle. At this point text is fully provided and it is not.
+      #
+      # This is the facade rule in practice - a caller says "text with a
+      # width" and does not need to know that two files are involved.
+      package require tclpdf::textBlock
+      set options [my TextBlockCheck $options]
+    } else {
+      # Alignment of a single line is a shift of the starting point - there
+      # is no PDF operator for it. The shift is passed on rather than applied
+      # to x here, because it has to happen ALONG THE BASELINE: with -rotate
+      # the baseline is turned, and shifting x beforehand moved the anchor
+      # horizontally and then rotated about the wrong point - a rotated
+      # centred word drifted off towards the corner instead of staying
+      # centred on -at.
+      #
+      # A line feed is refused here, by name: [text] sets ONE line, and a
+      # paragraph is asked for with -width. It used to be refused as well -
+      # as a character the face has no glyph for, from inside the drawing,
+      # which said nothing about the mistake and came after the mark.
+      if {[string first \n $string] >= 0} {
+        return -code error "tclpdf: text sets one line, and the string has a\
+            line feed at position [string first \n $string] - give -width to\
+            set a paragraph, which breaks at line feeds"
+      }
+      # Measured before the mark as well: the width is where a character the
+      # face has no glyph for is reported, and the drawing below meets the
+      # same glyph run and cannot fail on it afterwards.
+      set lineWidth [my textWidth $string {*}$args]
+      switch -- [my TextAlign [dict get $options align] $state] {
+        left {set shift 0}
+        right {set shift $lineWidth}
+        center - centre {set shift [expr {$lineWidth / 2.0}]}
+        justify {
+          # Without a -width there is nothing to justify to.
+          return -code error "tclpdf: -align justify needs -width"
+        }
+        default {
+          return -code error "tclpdf: -align must be left, right, center or\
+              justify, not \"[dict get $options align]\""
+        }
+      }
+    }
     # Tagged PDF: ONE call is one piece of marked content, so a paragraph of
     # five lines becomes one P holding one mark rather than five. The bracket
     # sits outside everything the call writes - BDC before the q and EMC after
@@ -200,81 +271,71 @@ oo::define ::tclpdf::document::document {
     # reverse. Asked before the tagged check on purpose: without a tree an
     # expansion has nowhere to go, and that is refused there rather than
     # ignored here.
+    # A height-limited block that admits not one line draws nothing and
+    # answers y as given with the whole string as the rest - decided here,
+    # BEFORE the mark and the expansion, so that nothing is marked and no
+    # element opened for what is not drawn: measured, a -height max block
+    # placed under the type area left an empty BDC..EMC in the stream and a P
+    # with a mark of nothing in the tree. The paginating road decides the
+    # same way in advance (TextPaginate); -paginate itself never takes this
+    # exit, its answer to no room is the next page.
+    if {$width ne {} && ![dict get $options paginate]
+        && [dict get $options columns] == 1 && [my TextBlockNoRoom $options]} {
+      return [dict create y [lindex $at 1] rest $string]
+    }
     set opened {}
     if {[dict get $options expansion] ne {}} {
       set opened [my StructureExpansion [dict get $options tag] \
           [dict get $options expansion]]
     }
+    # A block that runs page by page or column by column marks per PAGE,
+    # inside TextPaginate - a mark cannot straddle the page break that call
+    # makes, and every page brackets its own share. Both roads take that
+    # exit, -paginate and -columns alike: bracketing here as well put a
+    # second BDC inside the first, two P elements for one paragraph and
+    # nested MCIDs, which 14.7.4.2 does not allow. Everything else is
+    # bracketed here.
+    set perPage [expr {$width ne {} && ([dict get $options paginate]
+        || [dict get $options columns] > 1)}]
     set mark {}
-    if {[my state tagged] eq "1" && ![dict get $options paginate]} {
-      # A paginated block marks per page, inside TextPaginate - a mark cannot
-      # straddle the page break this call makes. Everything else is bracketed
-      # here.
-      #
+    if {[my state tagged] eq "1" && !$perPage} {
       # The mark is told where the text BEGINS - its top edge, which is -at
       # for -anchor top and one ascent above the baseline otherwise - so
       # that a destination at the element can name the place on the page.
       set top [lindex $at 1]
       if {[dict get $options anchor] ne "top"} {
-        set top [expr {$top - [my TextLift [my TextMerge $args] top]}]
+        set top [expr {$top - [my TextLift $state top]}]
       }
       set mark [my StructureMark [dict get $options tag] Layout $top]
       my content [my StructureBegin $mark]
     }
-    if {[dict get $options paginate] && [dict get $options width] eq {}} {
-      return -code error "tclpdf: -paginate breaks a paragraph over pages, and\
-          a paragraph needs -width"
-    }
-    if {[dict get $options width] ne {}} {
-      # The paragraph half of this topic. Loaded here rather than at the top
-      # of the file: textBlock requires text, so requesting it up front would
-      # be a cycle. At this point text is fully provided and it is not.
-      #
-      # This is the facade rule in practice - a caller says "text with a
-      # width" and does not need to know that two files are involved.
-      package require tclpdf::textBlock
-      set result [my TextParagraph $string $options]
-      if {[llength $mark]} {
-        my content [my StructureEnd $mark]
+    # What is left to fail now is what only the drawing meets - a glyph the
+    # face lacks, deep in the line breaker of a paragraph. Caught, so that
+    # the bracket is closed and the elements opened for it are closed too,
+    # and then rethrown as it was: the alternative is a document that goes
+    # on believing it is inside an artifact, or a Span left open on the
+    # stack.
+    lassign $at x y
+    set failed [catch {
+      if {$width ne {}} {
+        my TextParagraph $string $options
+      } else {
+        # Answers nothing, as a single line always has: the y under a
+        # paragraph is what the block road returns.
+        my TextRun $string $state $x $y [dict get $options rotate] $shift \
+            [my TextLift $state [dict get $options anchor]]
       }
-      foreach id [lreverse $opened] {
-        my StructureClose $id
-      }
-      return $result
-    }
-    set state [my TextMerge $args]
-    lassign [dict get $options at] x y
-
-    # Alignment of a single line is a shift of the starting point - there is
-    # no PDF operator for it. The shift is passed on rather than applied to x
-    # here, because it has to happen ALONG THE BASELINE: with -rotate the
-    # baseline is turned, and shifting x beforehand moved the anchor
-    # horizontally and then rotated about the wrong point - a rotated
-    # centred word drifted off towards the corner instead of staying centred
-    # on -at.
-    set width [my textWidth $string {*}$args]
-    switch -- [my TextAlign [dict get $options align] $state] {
-      left {set shift 0}
-      right {set shift $width}
-      center - centre {set shift [expr {$width / 2.0}]}
-      justify {
-        # Without a -width there is nothing to justify to.
-        return -code error "tclpdf: -align justify needs -width"
-      }
-      default {
-        return -code error "tclpdf: -align must be left, right, center or\
-            justify, not \"[dict get $options align]\""
-      }
-    }
-    my TextRun $string $state $x $y [dict get $options rotate] $shift \
-        [my TextLift $state [dict get $options anchor]]
+    } result info]
     if {[llength $mark]} {
       my content [my StructureEnd $mark]
     }
     foreach id [lreverse $opened] {
       my StructureClose $id
     }
-    return
+    if {$failed} {
+      return -options $info $result
+    }
+    return $result
   }
 
   # -- internals ----------------------------------------------------------
@@ -406,11 +467,20 @@ oo::define ::tclpdf::document::document {
     # Where the word spacing comes from decides what has to be written and
     # what has to be taken back again: with TJ there is no Tw in the stream,
     # so a run that sets nothing else needs no guard either.
+    #
+    # The colour is guarded on the same terms. The fill colour of the text
+    # is graphics state as well, and [style -fill] remembers a colour for
+    # every shape that names none: a text between the two painted its own
+    # colour and left it in force, so the bare rect after "style -fill red;
+    # text ..." came out black while the stream state still said red.
+    # Only when a style colour IS in force - a document without [style]
+    # keeps its bytes.
     set byTJ [my TextTJ $font $state]
     set guarded [expr {[dict get $state spacing] != 0
         || ([dict get $state wordSpacing] != 0 && !$byTJ)
         || [dict get $state rise] != 0
-        || [dict get $state stretch] != 100}]
+        || [dict get $state stretch] != 100
+        || ([dict get $state color] ne {} && [my streamState styleFill] ne {})}]
     if {$guarded} {
       my content "q\n"
     }
@@ -706,11 +776,13 @@ oo::define ::tclpdf::document::document {
   # by shaping each run separately and kerning across none of them; doing that
   # here would change the width of the line after it was measured.
   method TextReorder {run adjustments} {
-    # One code point per glyph, and -1 for a glyph that stands for several: a
-    # ligature can never be part of a number.
-    set codes [lmap item $run {
-      expr {[llength [lindex $item 1]] == 1 ? [lindex $item 1 0] : -1}
-    }]
+    # One code point per glyph, and for a glyph that stands for several - a
+    # ligature - the list of them: bidi.tcl treats the list as a letter of
+    # its last code point's kind and never as a number. It used to be handed
+    # -1, and a lam-alef that ended the word before a number was then no
+    # letter at all for W2: measured, "\u0644\u0627 12%" set a European
+    # 12% where fribidi --rtl sets the Arabic "%12".
+    set codes [lmap item $run {lindex $item 1}]
     set order {}
     set gaps {}
     foreach piece [my TextPieces $codes rtl] {
@@ -902,6 +974,19 @@ oo::define ::tclpdf::document::document {
   # resolved, the direction where a line is measured.
   method TextCheck {name value} {
     switch -- $name {
+      style {
+        # The words the manual names, split the way they are read: any
+        # order, any case, joined by spaces, commas or hyphens. Anything
+        # else used to be dropped in silence - "-style foo" set the regular
+        # face and "{bold foo}" the bold one, and a typo in a style was a
+        # heading in the wrong weight with nothing to say why.
+        foreach word [split [string tolower [join $value " "]] " ,-"] {
+          if {$word ne {} && $word ni {bold italic oblique}} {
+            return -code error "tclpdf: -style takes bold, italic or oblique,\
+                alone or together, not \"$value\""
+          }
+        }
+      }
       size {
         if {![string is double -strict $value] || $value <= 0} {
           return -code error "tclpdf: -size must be a positive number of\
@@ -1000,4 +1085,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.11
+package provide tclpdf::text 1.12

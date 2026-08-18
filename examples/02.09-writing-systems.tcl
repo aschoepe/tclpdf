@@ -255,7 +255,13 @@ set y [expr {$y + 9}]
 # pounds. They are European Terminators in UAX #9 like the percent and the
 # euro sign, and they used to be missing from a hand list - measured
 # 2026-08-16, "5°" came out of the file as "°5". The classes are read off the
-# Unicode database now (bidiData.tcl), so the three stay with their numbers.
+# Unicode database now (bidiData.tcl). Whether a sign joins its number is
+# then rule W2/W5: after a Hebrew letter, or at the start of a line, the
+# digits are European and the sign travels with them; after an Arabic word,
+# as here, the digits count as Arabic and take no terminator, so the degree,
+# per-mille and pound signs stand BESIDE their numbers where the line runs -
+# "-17,5°" is a sign, a number and a degree sign, exactly as fribidi orders
+# it (tests/bidi.test 6.x). Render page 2 to see it.
 set invoice "الفاتورة 4711 - 1.234,50 € (19%)"
 set amounts "الحرارة -17,5° - الخصم 3‰ - المبلغ £1.234,50"
 $doc font -family sans -size 7 -color {0.45 0.45 0.45}

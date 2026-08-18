@@ -165,4 +165,47 @@ test afm-4.3 {an unknown font names the known ones} -body {
   ::tclpdf::afm width DoesNotExist 65
 } -returnCodes error -match glob -result {*not one of the 14 standard fonts*}
 
+# -- an exact font name is the style ------------------------------------------
+
+test afm-5.1 {an exact font name passes through whatever style is in force} -body {
+  # "font -family helvetica -style bold" and then "font -family Times-Italic"
+  # was refused as an unknown font: the stale bold sent the name down the
+  # family road. The name IS the style.
+  list [::tclpdf::afm resolve Times-Italic bold] \
+      [::tclpdf::afm resolve Times-Italic {bold italic}] \
+      [::tclpdf::afm resolve helvetica-boldoblique italic] \
+      [::tclpdf::afm resolve Symbol bold] \
+      [::tclpdf::afm resolve Times-Roman bold]
+} -result {Times-Italic Times-Italic Helvetica-BoldOblique Symbol Times-Roman}
+
+test afm-5.2 {a name that is also a family still takes the style} -body {
+  # Helvetica and Courier are font names AND family names; with a style they
+  # go the family road, or -style bold would be dropped without a word.
+  list [::tclpdf::afm resolve Helvetica bold] [::tclpdf::afm resolve Courier italic] \
+      [::tclpdf::afm resolve Helvetica] [::tclpdf::afm resolve arial bold]
+} -result {Helvetica-Bold Courier-Oblique Helvetica Helvetica-Bold}
+
+test afm-5.3 {a document switches to an exact name while a style is set} -body {
+  package require tclpdf
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -style bold
+  set state [$doc font -family Times-Italic]
+  $doc text "cursive" -at {20 20}
+  set content [$doc page content]
+  $doc destroy
+  list [dict get $state resolved] [regexp {/FTimesItalic } $content]
+} -result {Times-Italic 1}
+
+test afm-6.1 {the byte order mark is dropped by a standard face, like the soft hyphen} -body {
+  # A file read without stripping its BOM carries U+FEFF in front of its first
+  # word. An embedded face already drops it; the standard fourteen refused it
+  # ("not available in WinAnsiEncoding") until this. Nothing to draw, no
+  # width: the codes and the width are those of the text without it.
+  list [::tclpdf::afm encode Helvetica "a\uFEFFb"] \
+      [::tclpdf::afm encode Helvetica "\uFEFFab"] \
+      [expr {[::tclpdf::afm stringWidth Helvetica "a\uFEFFb" 12] ==
+             [::tclpdf::afm stringWidth Helvetica "ab" 12]}]
+} -result {{97 98} {97 98} 1}
+
 cleanupTests

@@ -27,6 +27,35 @@ package require tclpdf::pdfObj 1.0-
 package require tclpdf::document 1.0-
 package require tclpdf::structure 1.1-
 
+namespace eval ::tclpdf::structureWrite {}
+
+# The bytes a string object of [pdfObj str] carries, for sorting name tree
+# keys the way a reader compares them (7.9.6): the characters themselves when
+# they are all printable ASCII - [str] writes those as a literal - and
+# otherwise a byte order mark followed by UTF-16BE, code unit by code unit,
+# with a character beyond the BMP as its surrogate pair. This mirrors the
+# decision [str] makes rather than asking it, because [str] answers with the
+# escaped file form and the sort needs the raw bytes; the two have to move
+# together, and the test on the IDTree order is what says so if they do not.
+proc ::tclpdf::structureWrite::keyBytes {value} {
+  if {[regexp {^[\x20-\x7e\r\n\t]*$} $value]} {
+    return $value
+  }
+  set result "\xfe\xff"
+  foreach char [split $value {}] {
+    set code [scan $char %c]
+    if {$code > 0xFFFF} {
+      incr code -0x10000
+      append result [format %c%c%c%c \
+          [expr {0xD8 | (($code >> 18) & 0x3)}] [expr {($code >> 10) & 0xFF}] \
+          [expr {0xDC | (($code >> 8) & 0x3)}] [expr {$code & 0xFF}]]
+    } else {
+      append result [format %c%c [expr {$code >> 8}] [expr {$code & 0xFF}]]
+    }
+  }
+  return $result
+}
+
 oo::define ::tclpdf::document::document {
 
   # Runs on the beforeWrite event, so on EVERY write - the numbers therefore
@@ -73,8 +102,9 @@ oo::define ::tclpdf::document::document {
       }
     }
 
-    # {} unless a 2.0 claim put one there - see the NS key below.
-    set namespace [my state uaNamespace]
+    # The 2.0 structure namespace, or {} on the 1.7 path - see the NS key
+    # below and [StructureNamespace] for when it is written.
+    set namespace [my StructureNamespace $elements]
     variable ::tclpdf::structure::only17
 
     set index 0
@@ -124,8 +154,7 @@ oo::define ::tclpdf::document::document {
               [$writer ref [dict get [lindex $elements $parent] number]]}]]
       # The namespace an element's type is read in. Empty on the 1.7 path,
       # where the default namespace IS the 1.7 one and naming it would be
-      # noise; set by ua.tcl for part 2, where relying on the default is no
-      # longer allowed (UA-2 8.2.5.2).
+      # noise; the 2.0 one where the tree needs it (see StructureNamespace).
       #
       # The twelve 1.7-only types are the exception and keep the default:
       # naming the 2.0 namespace on a type that does not exist in it would
@@ -226,11 +255,21 @@ oo::define ::tclpdf::document::document {
     if {$namespace ne {}} {
       lappend rootPairs Namespaces [::tclpdf::pdfObj arr [list $namespace]]
     }
-    # A name tree (7.9.6): keys in lexical order of their bytes, one flat
+    # A name tree (7.9.6): keys in lexical order of their BYTES, one flat
     # Names array - a document has a handful of identifiers, not thousands.
+    #
+    # The bytes, not the characters: [str] writes an ASCII id as a literal
+    # string and anything else as UTF-16BE behind a byte order mark, and
+    # the mark's FE sorts after every ASCII byte. Sorted by code point,
+    # "aé" came out between "Note6" and "b" while its bytes say it belongs
+    # after "b" - a reader doing the binary search the tree is for then
+    # misses it. Measured with qpdf --qdf on the written file.
     if {[dict size $identifiers]} {
       set names {}
-      foreach key [lsort [dict keys $identifiers]] {
+      foreach key [lsort -command [list apply {{a b} {
+        string compare [::tclpdf::structureWrite::keyBytes $a] \
+            [::tclpdf::structureWrite::keyBytes $b]
+      }}] [dict keys $identifiers]] {
         lappend names [::tclpdf::pdfObj str $key] [dict get $identifiers $key]
       }
       lappend rootPairs IDTree [::tclpdf::pdfObj dictionary \
@@ -283,6 +322,45 @@ oo::define ::tclpdf::document::document {
     }
     my state structParents $structParents
     return
+  }
+
+  # The reference to the 2.0 structure namespace (ISO 32000-2 14.8.6), written
+  # here as one dictionary and answered for the NS keys - or {} when the tree
+  # stays in the default namespace, which is the 1.7 one (14.8.6.1).
+  #
+  # Two things ask for it, and either suffices. A PDF/UA-2 claim, which may
+  # not rely on the default any more (UA-2 8.2.5.2) - ua.tcl says so through
+  # the state key structureNamespace. And an element of a type that exists
+  # only in 2.0: an H7 or a Strong with no NS is read in the 1.7 namespace,
+  # where there is no such type (Table 355) - the file validates and the
+  # element means nothing. Until 2026-08-18 only the claim counted, and a
+  # plain 2.0 document with an H7 was written without any namespace at all;
+  # measured with grep on the file.
+  #
+  # Nothing below 2.0 - the types that need it are refused there anyway, and
+  # a claim that asks for it raises the version first.
+  method StructureNamespace {elements} {
+    if {[package vcompare [[my writer] version] 2.0] < 0} {
+      return {}
+    }
+    variable ::tclpdf::structure::types
+    set wanted [expr {[my state structureNamespace] eq "1"}]
+    if {!$wanted} {
+      foreach element $elements {
+        if {[dict get $element type] ni $types} {
+          set wanted 1
+          break
+        }
+      }
+    }
+    if {!$wanted} {
+      return {}
+    }
+    variable ::tclpdf::structure::namespace20
+    set number [my reservation structure.namespace]
+    [my writer] put $number [::tclpdf::pdfObj dictionary [list \
+        Type /Namespace NS [::tclpdf::pdfObj str $namespace20]]]
+    return [[my writer] ref $number]
   }
 
   # The page an element's marks sit on, or {} when it owns none or they span

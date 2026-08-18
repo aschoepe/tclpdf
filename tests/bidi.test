@@ -200,6 +200,21 @@ test bidi-2.5 {a glyph that stands for several characters is never a digit} \
   ::tclpdf::bidi segments {52 -1 52}
 } -result {{0 0} {1 1} {2 2}}
 
+test bidi-2.8 {a ligature handed in as its code points is a letter for W2, and still never a digit} \
+    -body {
+  # The lam-alef of "\u0644\u0627 12%" reaches the reordering as ONE glyph
+  # standing for two letters. Handed in as -1 (2.5) it was no letter at all,
+  # W2 found no Arabic letter before the digits, and 12% stayed a European
+  # number - one piece, where fribidi --rtl has an Arabic one: "12" and "%"
+  # apart. Handed in as its code list the last letter counts; a ligature of
+  # digits - no face has one - would still be no digit.
+  set text [list {0x0644 0x0627} 32 49 50 37]
+  list [::tclpdf::bidi segments $text] \
+      [::tclpdf::bidi segments [lreplace $text 0 0 -1]] \
+      [::tclpdf::bidi segments {52 {52 53} 52}] \
+      [::tclpdf::bidi segments {0x05D0 {0x05D1 0x05D2} 32 49 50 37}]
+} -result {{{0 0} {1 1} {2 3} {4 4}} {{0 0} {1 1} {2 4}} {{0 0} {1 1} {2 2}} {{0 0} {1 1} {2 2} {3 5}}}
+
 test bidi-2.6 {a degree, a pound, a per mille beside a digit are the number} \
     -body {
   # The three measured defects, and the rest of the Latin-1 terminators with
@@ -286,5 +301,157 @@ test bidi-5.1 {-direction ltr stated on a line is the default, and a right-to-le
   $doc destroy
   list [expr {$plain eq $stated}] $code [string match {*-direction rtl*} $message]
 } -result {1 1 1}
+
+# -- W2, W4, W5 as UAX #9 has them ---------------------------------------------
+#
+# Measured 2026-08-18 against fribidi --rtl --ltov over the corpus in 6.6:
+# eleven of thirty-one lines differed. Six of them were one rule missing and
+# two applied too widely - a European digit after an Arabic letter is an
+# Arabic digit (W2), and an Arabic digit takes no terminator (W5 is EN only)
+# and joins a separator only to another Arabic digit (W4). The other five are
+# the documented bend for the sign of a European number, and 6.6 lists them.
+
+proc pieces {string} {
+  return [::tclpdf::bidi segments [lmap char [split $string {}] {scan $char %c}]]
+}
+
+test bidi-6.1 {W2 - after an Arabic letter a European digit is an Arabic digit, and takes no percent sign} -body {
+  # "(19%)" after Arabic came out of the file as ")19%(" where fribidi has
+  # ")%19(": the digits had become AN, and no terminator joins an AN. After
+  # a Hebrew letter the same digits stay European and the sign joins; and a
+  # number that opens the line has R before it (sos) and stays European too.
+  list [pieces "م 19%"] [pieces "א 19%"] [pieces "19% א"]
+} -result {{{0 0} {1 1} {2 3} {4 4}} {{0 0} {1 1} {2 4}} {{0 2} {3 3} {4 4}}}
+
+test bidi-6.2 {W2 - the context is the LAST strong letter, whatever came before} -body {
+  # Hebrew after Arabic turns the digits European again, Arabic after Hebrew
+  # turns them Arabic; a neutral or a number in between changes nothing.
+  list [pieces "م א 5%"] [pieces "א م 5%"] [pieces "م 4 (5%)"] [pieces "م - 5%"]
+} -result {{{0 0} {1 1} {2 2} {3 3} {4 5}} {{0 0} {1 1} {2 2} {3 3} {4 4} {5 5}}\
+    {{0 0} {1 1} {2 2} {3 3} {4 4} {5 5} {6 6} {7 7}} {{0 0} {1 1} {2 2} {3 3} {4 4} {5 5}}}
+
+test bidi-6.3 {W4 - a separator joins two digits of the SAME class only} -body {
+  # "٤,5" is an Arabic digit, a comma and a European one - three pieces, as
+  # fribidi has it - where "٤,٥" and "4,5" are one number each; and after an
+  # Arabic letter "1.234,50" is still one number, because W2 has made every
+  # digit in it Arabic before W4 looks.
+  list [pieces "٤,5"] [pieces "٤,٥"] [pieces "4,5"] [pieces "م 1.234,50"]
+} -result {{{0 0} {1 1} {2 2}} {{0 2}} {{0 2}} {{0 0} {1 1} {2 9}}}
+
+test bidi-6.4 {W5 - a terminator and a sign join a European digit, never an Arabic one} -body {
+  # "٥٪" and "٥%" are two pieces each and "5٪" is one: it is the digit that
+  # decides, not the sign. After an Arabic word "-17,5°" is a sign, a number
+  # and a degree sign; after a Hebrew word it is one number, which is the
+  # documented bend for the sign and rule W5 for the degree.
+  list [pieces "٥٪"] [pieces "٥%"] [pieces "5٪"] [pieces "م -17,5°"] [pieces "א -17,5°"]
+} -result {{{0 0} {1 1}} {{0 0} {1 1}} {{0 1}} {{0 0} {1 1} {2 2} {3 6} {7 7}} {{0 0} {1 1} {2 7}}}
+
+test bidi-6.5 {the Arabic letter blocks are the database's block defaults} -body {
+  # arabicRanges is a hand list of blocks, so it is read against the
+  # @missing lines of DerivedBidiClass.txt that state the default class of
+  # each block: every Arabic_Letter block there has to be covered, and every
+  # code point in the list has to be AL - or a number character, which the
+  # number table claims first - and never Right_To_Left.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set channel [open [file join $root tools ucd DerivedBidiClass.txt] r]
+  fconfigure $channel -encoding utf-8
+  set text [read $channel]
+  close $channel
+  set defaults {}
+  foreach {- first last kind} [regexp -all -inline -line \
+      {^# @missing: ([0-9A-F]+)\.\.([0-9A-F]+); (\w+)} $text] {
+    lappend defaults [expr 0x$first] [expr 0x$last] $kind
+  }
+  set uncovered {}
+  set wrong {}
+  foreach {first last kind} $defaults {
+    if {$kind ne "Arabic_Letter"} {
+      continue
+    }
+    # The one block the list cuts short, on purpose: U+FEFF is BN.
+    if {$last == 0xFEFF} {
+      set last 0xFEFE
+    }
+    set inside 0
+    foreach {from to} $::tclpdf::bidi::arabicRanges {
+      if {$first >= $from && $last <= $to} {
+        set inside 1
+      }
+    }
+    if {!$inside} {
+      lappend uncovered [format %04X..%04X $first $last]
+    }
+  }
+  foreach {from to} $::tclpdf::bidi::arabicRanges {
+    for {set code $from} {$code <= $to} {incr code} {
+      # U+FDD0..U+FDEF are noncharacters - no default in the file, and no
+      # text carries them.
+      if {[::tclpdf::bidi class $code] ne "rtl" || ($code >= 0xFDD0 && $code <= 0xFDEF)} {
+        continue
+      }
+      set default L
+      foreach {first last kind} $defaults {
+        if {$code >= $first && $code <= $last} {
+          set default $kind
+        }
+      }
+      if {$default ne "Arabic_Letter"} {
+        lappend wrong [format U+%04X $code]
+      }
+    }
+  }
+  # U+FEFF is BN, and the neutral list has it - not the Arabic one.
+  list $uncovered [lrange $wrong 0 3] [::tclpdf::bidi class 0xFEFF] \
+      [::tclpdf::bidi class 0xFEFE] [::tclpdf::bidi class 0x05D0] [::tclpdf::bidi class 0x0628]
+} -result {{} {} neutral rtl rtl rtl}
+
+testConstraint haveFribidi [expr {[auto_execok fribidi] ne {}}]
+
+test bidi-6.6 {the corpus against fribidi - same order except for the sign of a European number} \
+    -constraints haveFribidi -body {
+  # Thirty-one lines an invoice, a letter or a form actually has, in Hebrew
+  # and Arabic, ordered here and by fribidi (--rtl, the same paragraph
+  # direction). The lines that come out differently are listed with the
+  # reason, and there is one reason: a plus or minus beside a EUROPEAN digit
+  # joins it here (bidi-1.5), where UAX #9 lets it stand alone. Everything
+  # else agrees, W2 included - which is what the six lines with Arabic
+  # letters and signs are in the corpus for.
+  proc fribidiOrder {line} {
+    set map [string trim [exec fribidi --rtl --nopad --nobreak --novisual --ltov << "$line\n"] \n]
+    set visual [lrepeat [llength $map] -1]
+    set logical 0
+    foreach position $map {
+      lset visual $position $logical
+      incr logical
+    }
+    return $visual
+  }
+  proc ourOrder {line} {
+    set order {}
+    foreach piece [lreverse [pieces $line]] {
+      lassign $piece from to
+      for {set index $from} {$index <= $to} {incr index} {
+        lappend order $index
+      }
+    }
+    return $order
+  }
+  set differ {}
+  foreach line [list \
+      "الفاتورة 4711 - 1.234,50 € (19%)" \
+      "الحرارة -17,5° - الخصم 3‰ - المبلغ £1.234,50" \
+      "שלום עולם ברוכים הבאים" "חשבונית מספר 4711" "סך הכל 1.234,50 €" \
+      "תאריך: 17.08.2026" "(כולל מס 17%)" "الفاتورة رقم 2026-114" \
+      "الرجاء الدفع خلال 30 يوما" "العنوان: شارع النيل 12، القاهرة" \
+      "طباعة 12.500 علبة" "٥٪ מ" "مبلغ ٥٠٪" "א ٤,5 ב" "-5 ו+3%" "א (12) ב" \
+      "{א} <ב>" "מחיר: 12,5%" "א 5- ב" "א -5 ב" "א 5 - 3 ב" "טל' 030-123 45 67" \
+      "€ 5 א" "5€ א" "א 5 €" "א 1 234,50 ב" "א 3.5.2026 ב" "א 10:30 ב" \
+      "א 50%+ ב" "א +50 ב" "א ٥ ب"] {
+    if {[ourOrder $line] ne [fribidiOrder $line]} {
+      lappend differ $line
+    }
+  }
+  set differ
+} -result {{-5 ו+3%} {א 5- ב} {א -5 ב} {א 50%+ ב} {א +50 ב}}
 
 cleanupTests

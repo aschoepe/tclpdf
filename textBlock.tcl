@@ -154,9 +154,138 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options width] eq {}} {
       return -code error "tclpdf: a text block needs -width"
     }
+    my TextBlockWidth [dict get $options width]
+    my TextBlockDistances $options
     # A measurement has no limit: see the note on the option list above.
     dict set options height {}
     return $options
+  }
+
+  # Everything a drawn paragraph refuses, checked in ONE place and BEFORE
+  # anything is written: [text] calls this in front of the structure mark,
+  # so that a refused option leaves the stream, the tree and the state as
+  # they were - the checks used to sit at the head of TextParagraph, one
+  # step behind the BDC. Answers the options with the gutter default filled
+  # in, which is what TextParagraph and TextPaginate work from; neither of
+  # them checks again.
+  #
+  # The measuring calls do not come through here on purpose: they take the
+  # options [text] takes and ignore what only the drawing uses, so a caller
+  # can hand the same list to [textHeight] and to [text] - refusing "-columns
+  # without -height max" of a measurement would break exactly that. What
+  # they share with the drawing - the width, the distances - is checked by
+  # the two methods below, from both roads.
+  method TextBlockCheck {options} {
+    my TextBlockWidth [dict get $options width]
+    # The words TextParagraphLine switches on; refused there as well, in the
+    # same words, for a caller that reaches it directly - but a paragraph of
+    # [text] has to be refused before its mark.
+    if {[dict get $options align] ni {left right center centre justify}} {
+      return -code error "tclpdf: -align must be left, right, center or\
+          justify, not \"[dict get $options align]\""
+    }
+    set height [dict get $options height]
+    if {$height ne {} && $height ne "max"
+        && (![string is double -strict $height] || $height < 0)} {
+      return -code error "tclpdf: -height takes a distance of 0 or more, or\
+          \"max\" for the rest of the type area, not \"$height\""
+    }
+    set paginate [dict get $options paginate]
+    if {![string is boolean -strict $paginate]} {
+      return -code error "tclpdf: -paginate takes a boolean, not \"$paginate\""
+    }
+    if {$paginate && $height ne {} && $height ne "max"} {
+      # It used to be replaced by max in silence, so "-paginate 1 -height 20"
+      # filled the page and the caller was not told that the 20 meant
+      # nothing.
+      return -code error "tclpdf: -paginate fills each page to the bottom of\
+          the type area, which is -height max - a height of $height has no\
+          place beside it; leave -height out or say -height max"
+    }
+    if {[dict get $options rotate] != 0 && ($height eq "max" || $paginate)} {
+      # The type area is a band down the page; a turned block does not run
+      # down the page, so there is nothing to measure it against.
+      return -code error "tclpdf: -height max and -paginate set an upright\
+          block against the type area - they cannot be combined with -rotate"
+    }
+    # Columns: a count, a gutter between them, and whether the last page
+    # is balanced. Only meaningful where the bottom of the column is the
+    # type area - -height max or -paginate -, because that is what fills a
+    # column before the next one begins.
+    set columns [dict get $options columns]
+    if {![string is integer -strict $columns] || $columns < 1} {
+      return -code error "tclpdf: -columns takes a whole number of 1 or more,\
+          not \"$columns\""
+    }
+    set gutter [dict get $options gutter]
+    if {$gutter eq {}} {
+      # Five millimetres in whatever the document counts in.
+      set gutter [::tclpdf::geometry fromPoints \
+          [::tclpdf::geometry toPoints 5 mm] [my cget -unit]]
+      dict set options gutter $gutter
+    } elseif {![string is double -strict $gutter] || $gutter < 0} {
+      return -code error "tclpdf: -gutter takes a distance of 0 or more, not\
+          \"$gutter\""
+    }
+    set balance [dict get $options balance]
+    if {![string is boolean -strict $balance]} {
+      return -code error "tclpdf: -balance takes a boolean, not \"$balance\""
+    }
+    if {$columns > 1 && $height ne "max" && !$paginate} {
+      return -code error "tclpdf: -columns fills one column to the bottom of\
+          the type area before it begins the next - it needs -height max or\
+          -paginate"
+    }
+    if {$balance && $columns == 1} {
+      return -code error "tclpdf: -balance evens out the columns of the last\
+          page - it needs -columns of 2 or more"
+    }
+    if {$balance && [llength [dict get $options avoid]]} {
+      # The balance is found by measuring the columns without drawing them,
+      # and the shapes are positions on the page that would make each
+      # column break differently - the measurement would lie.
+      return -code error "tclpdf: -balance measures the columns without the\
+          page - it cannot be combined with -avoid"
+    }
+    set width [dict get $options width]
+    if {($width - $gutter * ($columns - 1)) / double($columns) <= 0} {
+      return -code error "tclpdf: $columns columns with a gutter of\
+          [format %g $gutter] leave no width inside -width [format %g $width]"
+    }
+    my TextBlockDistances $options
+    if {[llength [dict get $options avoid]]} {
+      # Loaded only when asked for: a caller who never avoids anything does
+      # not pay for the module.
+      package require tclpdf::textAvoid
+      my TextAvoidCheck [dict get $options avoid] [dict get $options avoidMargin]
+    }
+    return $options
+  }
+
+  # The width of a block: a positive number, or the refusal in the words
+  # both roads use.
+  method TextBlockWidth {width} {
+    if {![string is double -strict $width] || $width <= 0} {
+      return -code error "tclpdf: -width must be a positive number, not\
+          \"$width\""
+    }
+    return $width
+  }
+
+  # The distances that shape the band - the three indents and the paragraph
+  # spacing. Numbers, any sign: a negative -firstIndent is a hanging indent
+  # by design. Refused here rather than left to the band, which met a value
+  # like "bogus" in an [expr] and reported it in Tcl's words from inside the
+  # line breaker - after the mark of a tagged paragraph had been written.
+  method TextBlockDistances {options} {
+    foreach name {indent indentRight firstIndent paragraphSpacing} {
+      set value [dict get $options $name]
+      if {![string is double -strict $value]} {
+        return -code error "tclpdf: -$name takes a distance in the document\
+            unit, not \"$value\""
+      }
+    }
+    return
   }
 
   # The line breaker itself. Everything wrapped in this package comes through
@@ -408,10 +537,6 @@ oo::define ::tclpdf::document::document {
   # baseline sits.
   method TextBlockLines {string options} {
     set width [dict get $options width]
-    if {![string is double -strict $width] || $width <= 0} {
-      return -code error "tclpdf: -width must be a positive number, not\
-          \"$width\""
-    }
     set state [my TextMerge [my TextOverrides $options]]
     set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
         [my cget -unit]]
@@ -451,7 +576,7 @@ oo::define ::tclpdf::document::document {
     # pay for the module.
     if {[llength [dict get $options avoid]]} {
       package require tclpdf::textAvoid
-      my TextAvoidCheck [dict get $options avoid]
+      my TextAvoidCheck [dict get $options avoid] [dict get $options avoidMargin]
       # The shapes are page positions, so the block needs one too - [text]
       # always has it, a measuring call may have forgotten it.
       set at [::tclpdf::option point [dict get $options at] -at "a block with -avoid"]
@@ -547,70 +672,18 @@ oo::define ::tclpdf::document::document {
     return [list $drawn $rest $below]
   }
 
-  # Called by [text] when -width is given. Returns the y coordinate BELOW the
-  # block, so the next element can be placed without counting lines - or,
-  # with -height, the dictionary {y rest}; with -paginate {y rest page}.
+  # Called by [text] when -width is given, with the options TextBlockCheck
+  # has passed - the checks are there, in front of the mark, and not here.
+  # Returns the y coordinate BELOW the block, so the next element can be
+  # placed without counting lines - or, with -height, the dictionary {y
+  # rest}; with -paginate {y rest page}.
   method TextParagraph {string options} {
-    set height [dict get $options height]
-    if {$height ne {} && $height ne "max"
-        && (![string is double -strict $height] || $height < 0)} {
-      return -code error "tclpdf: -height takes a distance of 0 or more, or\
-          \"max\" for the rest of the type area, not \"$height\""
-    }
     set paginate [dict get $options paginate]
-    if {![string is boolean -strict $paginate]} {
-      return -code error "tclpdf: -paginate takes a boolean, not \"$paginate\""
-    }
-    if {[dict get $options rotate] != 0 && ($height eq "max" || $paginate)} {
-      # The type area is a band down the page; a turned block does not run
-      # down the page, so there is nothing to measure it against.
-      return -code error "tclpdf: -height max and -paginate set an upright\
-          block against the type area - they cannot be combined with -rotate"
-    }
-    # Columns: a count, a gutter between them, and whether the last page
-    # is balanced. Only meaningful where the bottom of the column is the
-    # type area - -height max or -paginate -, because that is what fills a
-    # column before the next one begins.
-    set columns [dict get $options columns]
-    if {![string is integer -strict $columns] || $columns < 1} {
-      return -code error "tclpdf: -columns takes a whole number of 1 or more,\
-          not \"$columns\""
-    }
-    set gutter [dict get $options gutter]
-    if {$gutter eq {}} {
-      # Five millimetres in whatever the document counts in.
-      set gutter [::tclpdf::geometry fromPoints \
-          [::tclpdf::geometry toPoints 5 mm] [my cget -unit]]
-      dict set options gutter $gutter
-    } elseif {![string is double -strict $gutter] || $gutter < 0} {
-      return -code error "tclpdf: -gutter takes a distance of 0 or more, not\
-          \"$gutter\""
-    }
-    set balance [dict get $options balance]
-    if {![string is boolean -strict $balance]} {
-      return -code error "tclpdf: -balance takes a boolean, not \"$balance\""
-    }
-    if {$columns > 1 && $height ne "max" && !$paginate} {
-      return -code error "tclpdf: -columns fills one column to the bottom of\
-          the type area before it begins the next - it needs -height max or\
-          -paginate"
-    }
-    if {$balance && $columns == 1} {
-      return -code error "tclpdf: -balance evens out the columns of the last\
-          page - it needs -columns of 2 or more"
-    }
-    if {$balance && [llength [dict get $options avoid]]} {
-      # The balance is found by measuring the columns without drawing them,
-      # and the shapes are positions on the page that would make each
-      # column break differently - the measurement would lie.
-      return -code error "tclpdf: -balance measures the columns without the\
-          page - it cannot be combined with -avoid"
-    }
-    if {$paginate || $columns > 1} {
+    if {$paginate || [dict get $options columns] > 1} {
       return [my TextPaginate $string $options $paginate]
     }
     lassign [my TextParagraphOnce $string $options] y rest continued
-    if {$height ne {}} {
+    if {[dict get $options height] ne {}} {
       return [dict create y $y rest $rest]
     }
     return $y
@@ -648,96 +721,120 @@ oo::define ::tclpdf::document::document {
   # page's columns without it, page the index of the page the text ended
   # on, column the column it ended in, counted from 0.
   method TextPaginate {string options paginate} {
-    lassign [::tclpdf::option point [dict get $options at] -at \
-        "text -paginate"] x y
+    lassign [dict get $options at] x y
     dict set options height max
     set tag [dict get $options tag]
     set columns [dict get $options columns]
     set gutter [dict get $options gutter]
     set balance [dict get $options balance]
     set width [dict get $options width]
-    if {![string is double -strict $width] || $width <= 0} {
-      return -code error "tclpdf: -width must be a positive number, not\
-          \"$width\""
-    }
+    # Positive: TextBlockCheck refused the combination that would not be.
     set columnWidth [expr {($width - $gutter * ($columns - 1)) / double($columns)}]
-    if {$columnWidth <= 0} {
-      return -code error "tclpdf: $columns columns with a gutter of\
-          [format %g $gutter] leave no width inside -width [format %g $width]"
-    }
     dict set options width $columnWidth
     set element {}
     set continued 0
     set column 0
+    # Whether the page the loop is on is one IT added, as against the
+    # caller's page the block was placed on. Two things hang on it. A page
+    # not one line fits into is refused - but only a fresh one: there the
+    # text starts at the top of the area, and what does not fit there never
+    # will, so going on would add pages for ever. The caller's page is
+    # different: -at may sit three millimetres above the bottom of the area
+    # on purpose, the way a heading lands there, and the answer to that is
+    # the next page, not an error. The guard used to be "the rest is still
+    # whole and a continuation flag is set", and the flag was set after the
+    # first column of ANY page - so the caller's own page was refused with a
+    # message about a page it had not asked for.
+    #
+    # And on the caller's page nothing is marked or drawn when nothing fits:
+    # a mark opened around no content would put a leaf with an empty MCID
+    # into the tree. Decided from the leading and the room, in advance -
+    # TextBlockPlace holds every line back when the first one, at the top
+    # of the block, does not fit, and that first line needs one leading
+    # under the first baseline (see TextParagraphOnce for the lift).
+    set fresh 0
     while {1} {
-      # The mark, per page. Its top is where the text begins - -at for
-      # -anchor top, one ascent above the baseline otherwise - as in [text].
-      set mark {}
-      if {[my state tagged] eq "1"} {
-        set top $y
-        if {[dict get $options anchor] ne "top"} {
-          set state [my TextMerge [my TextOverrides $options]]
-          set top [expr {$top - [my TextLift $state top]}]
-        }
-        # The first page decides: a structure element gets its further
-        # marks through StructureMarkAgain, an artifact is simply declared
-        # again on every page - artifacts are not in the tree and have no
-        # element to come back to.
-        if {$element eq {} || $element eq "artifact"} {
-          set mark [my StructureMark $tag Layout $top]
-          if {[lindex $mark 0] eq "artifact"} {
-            set element artifact
-          } elseif {[llength $mark]} {
-            set element [lindex $mark 2]
-          }
-        } else {
-          set mark [my StructureMarkAgain $element $top]
-        }
-        my content [my StructureBegin $mark]
-      }
-      # Balanced columns are cut to one height when the rest fits the page;
-      # otherwise every column runs to the bottom of the area.
-      if {$balance && $columns > 1} {
-        set limit [my TextBalanceLimit $string $options $y $columns]
-        if {$limit ne {}} {
-          dict set options height $limit
-        }
-      }
-      set before $string
-      for {set column 0} {$column < $columns} {incr column} {
-        dict set options at [list [expr {$x + $column * ($columnWidth + $gutter)}] $y]
-        lassign [my TextParagraphOnce $string $options] yEnd rest continued
-        if {$rest eq {}} {
-          break
-        }
-        set string $rest
-        dict set options continued $continued
-      }
-      if {[llength $mark]} {
-        my content [my StructureEnd $mark]
-      }
-      if {$rest eq {}} {
-        set column [expr {min($column, $columns - 1)}]
-        set y $yEnd
-        break
-      }
-      if {!$paginate} {
-        # -height max with columns: this page's columns are full, the rest
-        # is the caller's, like the rest of any height-limited block.
-        return [dict create y $yEnd rest $rest page [my page current] \
+      set rest $string
+      # A -height max block with columns is not paginating: its page is the
+      # caller's, and an empty answer with the whole rest is what -height
+      # gives for a block below the area - answered here, before the mark,
+      # for the reason above; it used to mark and then draw nothing.
+      if {!$paginate && [my TextPaginateNoRoom $options $y]} {
+        return [dict create y $y rest $string page [my page current] \
             column [expr {$columns - 1}]]
       }
-      if {$rest eq $before && [dict exists $options continued]} {
-        # A fresh page, the whole rest still there: not one line fits into
-        # the type area. Going on would add pages for ever.
-        lassign [my page typeArea] -> areaTop -> areaBottom
-        return -code error "tclpdf: text -paginate: not one line fits into\
-            the type area of page [expr {[my page current] + 1}] - the area is\
-            [format %g [expr {$areaBottom - $areaTop}]] high\
-            ([format %g $areaTop] to [format %g $areaBottom]) and the leading\
-            is [format %g [my TextBlockLeading $options]]"
+      set room [expr {$fresh || ![my TextPaginateNoRoom $options $y]}]
+      if {$room} {
+        # The mark, per page. Its top is where the text begins - -at for
+        # -anchor top, one ascent above the baseline otherwise - as in [text].
+        set mark {}
+        if {[my state tagged] eq "1"} {
+          set top $y
+          if {[dict get $options anchor] ne "top"} {
+            set state [my TextMerge [my TextOverrides $options]]
+            set top [expr {$top - [my TextLift $state top]}]
+          }
+          # The first page decides: a structure element gets its further
+          # marks through StructureMarkAgain, an artifact is simply declared
+          # again on every page - artifacts are not in the tree and have no
+          # element to come back to.
+          if {$element eq {} || $element eq "artifact"} {
+            set mark [my StructureMark $tag Layout $top]
+            if {[lindex $mark 0] eq "artifact"} {
+              set element artifact
+            } elseif {[llength $mark]} {
+              set element [lindex $mark 2]
+            }
+          } else {
+            set mark [my StructureMarkAgain $element $top]
+          }
+          my content [my StructureBegin $mark]
+        }
+        # Balanced columns are cut to one height when the rest fits the page;
+        # otherwise every column runs to the bottom of the area.
+        if {$balance && $columns > 1} {
+          set limit [my TextBalanceLimit $string $options $y $columns]
+          if {$limit ne {}} {
+            dict set options height $limit
+          }
+        }
+        set before $string
+        for {set column 0} {$column < $columns} {incr column} {
+          dict set options at [list [expr {$x + $column * ($columnWidth + $gutter)}] $y]
+          lassign [my TextParagraphOnce $string $options] yEnd rest continued
+          if {$rest eq {}} {
+            break
+          }
+          set string $rest
+          dict set options continued $continued
+        }
+        if {[llength $mark]} {
+          my content [my StructureEnd $mark]
+        }
+        if {$rest eq {}} {
+          set column [expr {min($column, $columns - 1)}]
+          set y $yEnd
+          break
+        }
+        if {!$paginate} {
+          # -height max with columns: this page's columns are full, the rest
+          # is the caller's, like the rest of any height-limited block.
+          return [dict create y $yEnd rest $rest page [my page current] \
+              column [expr {$columns - 1}]]
+        }
+        if {$fresh && $rest eq $before} {
+          # A fresh page, the whole rest still there: not one line fits into
+          # the type area. Going on would add pages for ever.
+          lassign [my page typeArea] -> areaTop -> areaBottom
+          return -code error "tclpdf: text -paginate: not one line fits into\
+              the type area of page [expr {[my page current] + 1}] - the area is\
+              [format %g [expr {$areaBottom - $areaTop}]] high\
+              ([format %g $areaTop] to [format %g $areaBottom]) and the leading\
+              is [format %g [my TextBlockLeading $options]]"
+        }
       }
       my page add
+      set fresh 1
       lassign [my page typeArea] -> y
       set string $rest
       dict set options continued $continued
@@ -749,6 +846,45 @@ oo::define ::tclpdf::document::document {
       dict set options anchor top
     }
     return [dict create y $y rest {} page [my page current] column $column]
+  }
+
+  # Whether a block starting at y on the current page has room for not one
+  # line: the first baseline sits the lift under y, and the line needs a
+  # leading under that - the same arithmetic TextParagraphOnce and
+  # TextBlockPlace do for the limit of -height max, so that the two agree.
+  # (A shape to avoid can only take room away, never add it, so a page this
+  # says no to draws nothing whatever the shapes.)
+  method TextPaginateNoRoom {options y} {
+    set state [my TextMerge [my TextOverrides $options]]
+    set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
+        [my cget -unit]]
+    set lift [my TextLift $state [dict get $options anchor]]
+    set limit [expr {max(0, [lindex [my page typeArea] 3] - $y - $lift)}]
+    return [expr {$leading > $limit}]
+  }
+
+  # The same question for the block [text] brackets itself - one with a
+  # -height and neither -paginate nor -columns: whether its limit admits not
+  # one line. "max" is the room under -at (TextPaginateNoRoom); a number is
+  # the limit as TextBlockPlace applies it, and the first line, at the top of
+  # the block, needs one leading inside it. Asked BEFORE the mark, for the
+  # same reason TextPaginate asks: measured, a -height max block placed under
+  # the type area wrote "/P <</MCID 0>> BDC EMC" around nothing and left a P
+  # with a mark of nothing in the tree, and answered y with the whole rest -
+  # which is the right answer, without the mark. A block without -height
+  # always draws (its lines are not held back), so it is not asked.
+  method TextBlockNoRoom {options} {
+    set height [dict get $options height]
+    if {$height eq {}} {
+      return 0
+    }
+    if {$height eq "max"} {
+      return [my TextPaginateNoRoom $options [lindex [dict get $options at] 1]]
+    }
+    set state [my TextMerge [my TextOverrides $options]]
+    set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
+        [my cget -unit]]
+    return [expr {$leading > $height}]
   }
 
   # The height that spreads a text evenly over n columns starting at y on
@@ -831,13 +967,21 @@ oo::define ::tclpdf::document::document {
     lassign [my TextBlockPlace $lines $leading \
         [dict get $options paragraphSpacing] $limit] drawn rest below
 
+    # A line that is followed by more of the same text - the next line of
+    # its paragraph, or the first of the next one - is drawn with a space
+    # after it (see TextParagraphLine for why). The last line of the WHOLE
+    # block is the only one that is not: the last DRAWN line, with a rest
+    # held back, is followed by that rest, on the next page of a paginated
+    # run or in the caller's next call.
+    set last [lindex $lines end]
     foreach entry $drawn {
       lassign $entry line top
       if {[dict get $line text] ne {}} {
         my TextParagraphLine [dict get $line text] $state \
             [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
             $align [dict get $line closes] [dict get $options rotate] \
-            [expr {$lift + $top}] [dict get $line hyphen]
+            [expr {$lift + $top}] [dict get $line hyphen] \
+            [expr {$line ne $last}]
       }
     }
     # Text, not lines: the rest may have to be broken again for a column of
@@ -862,6 +1006,14 @@ oo::define ::tclpdf::document::document {
     # For a rotated block the block does not run down the page at all; a caller
     # placing the next element has the angle and can say better than this
     # method where "below" is.
+    #
+    # Nothing drawn - a -height max block placed under the area - and the
+    # answer is y as it was given: no line, no ascender to count. It used to
+    # be y plus the lift, so an -anchor top block that drew nothing moved
+    # the caller's next element down by an ascent it never used.
+    if {![llength $drawn]} {
+      return [list $y $text $continued]
+    }
     return [list [expr {$y + $lift + $below}] $text $continued]
   }
 
@@ -869,7 +1021,7 @@ oo::define ::tclpdf::document::document {
   # to TextRun rather than applied to x - with -rotate the baseline is
   # turned, and a pre-shifted x would rotate about the wrong point (same
   # reasoning as in [text], text.tcl).
-  method TextParagraphLine {line state x y width align isLast rotate {lift 0} {hyphen 0}} {
+  method TextParagraphLine {line state x y width align isLast rotate {lift 0} {hyphen 0} {followed 1}} {
     # The space the line breaker consumed has to reappear in the content
     # stream: a line ends where a word ended, and without it the next line
     # follows immediately - "der Antrieb ist" plus "getauscht" comes back out
@@ -878,15 +1030,25 @@ oo::define ::tclpdf::document::document {
     # pdfinfo -struct-text showed exactly that, while neither veraPDF profile
     # noticed.
     #
+    # The same for the line that CLOSES a paragraph when another paragraph
+    # follows in the same call: the paragraph break is a line feed in the
+    # string, which has no glyph, and without the space the two came back as
+    # "First para end.Second para start." from one element - measured with
+    # pdfinfo -struct-text, 2026-08-18. Whether something follows is the
+    # caller's to say (followed): the last line of a block has nothing after
+    # it and gets none.
+    #
     # It goes into the DRAWN string only, never into the measured one - the
     # widths below decide the alignment, and a trailing space must not move
     # a right aligned or centred line. Visually it changes nothing either
-    # way: it sits after the last glyph of the line.
+    # way: it sits after the last glyph of the line. isLast - the line
+    # closes its paragraph - keeps its own meaning below: it is what
+    # decides that the line is not justified.
     #
     # Only for tagged documents, so nothing that exists today comes out with
     # different bytes.
     set drawn $line
-    if {!$isLast && [my state tagged] eq "1"} {
+    if {(!$isLast || $followed) && [my state tagged] eq "1"} {
       append drawn " "
     }
     switch -- $align {
@@ -964,4 +1126,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.6
+package provide tclpdf::textBlock 1.7

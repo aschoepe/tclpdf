@@ -41,8 +41,8 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options stroke] eq {} && [my streamState styleStroke] eq {}} {
       dict set options stroke black
     }
-    lassign [my coords {*}[dict get $options from]] x0 y0
-    lassign [my coords {*}[dict get $options to]] x1 y1
+    lassign [my GraphicsPoint [dict get $options from] -from line] x0 y0
+    lassign [my GraphicsPoint [dict get $options to] -to line] x1 y1
     # Through ShapePaint like every other shape rather than a hard-coded
     # "S": a line has no fill, so the operator comes out the same - but the
     # closing "Q" of the state guard does not exist twice.
@@ -106,7 +106,7 @@ oo::define ::tclpdf::document::document {
     } else {
       return -code error "tclpdf: ellipse needs -radius or -size {w h}"
     }
-    lassign [my coords {*}[dict get $options at]] cx cy
+    lassign [my GraphicsPoint [dict get $options at] -at $what] cx cy
     # Four Bezier arcs. 0.5523 is the classic magic number: the control point
     # distance that approximates a quarter circle to within 0.02 % - exact
     # arcs are not expressible as cubic Beziers at all.
@@ -176,11 +176,11 @@ oo::define ::tclpdf::document::document {
         && [my streamState styleStroke] eq {} && [my streamState styleFill] eq {}} {
       dict set options stroke black
     }
-    lassign [my coords {*}[dict get $options from]] x0 y0
+    lassign [my GraphicsPoint [dict get $options from] -from curve] x0 y0
     set path "[::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] m\n"
     set numbers {}
     foreach key {c1 c2 to} {
-      lassign [my coords {*}[dict get $options $key]] px py
+      lassign [my GraphicsPoint [dict get $options $key] -$key curve] px py
       lappend numbers [::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]
     }
     append path "[join $numbers { }] c\n"
@@ -309,6 +309,12 @@ oo::define ::tclpdf::document::document {
     if {!$hasRect && !$hasPath} {
       return -code error "tclpdf: clip needs -at {x y} with -size {w h},\
           or -segments"
+    }
+    # The two rules of 8.5.3.3, and nothing else: a misspelt one used to
+    # clip nonzero without a word.
+    if {[dict get $options rule] ni {nonzero evenodd}} {
+      return -code error "tclpdf: -rule is nonzero or evenodd, not\
+          \"[dict get $options rule]\""
     }
     set operator W
     if {[dict get $options rule] eq "evenodd"} {

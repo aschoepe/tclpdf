@@ -81,7 +81,22 @@ oo::define ::tclpdf::document::document {
       set current [dict create part 3 conformance B \
           profile $::tclpdf::pdfa::icc identifier {} extensions {} registered 0]
     }
-    set current [::tclpdf::option parse $current $args "pdfa"]
+    # Parsed over the four PUBLIC keys only. The whole state dict used to be
+    # the parse defaults, which made "-registered 1" and "-extensions" valid
+    # options and named them in the message for a misspelled one - and
+    # "-registered 1" on a fresh document then claimed conformance without
+    # ever subscribing to the write, so no output intent and no packet.
+    set current [dict merge $current [::tclpdf::option parse \
+        [dict filter $current key part conformance profile identifier] \
+        $args "pdfa"]]
+
+    # Everything below up to the version calls is a CHECK and changes
+    # nothing: a refused call has to leave the document as it was. It used
+    # not to - "pdfa -conformance Z" had already raised the version to 1.7
+    # and pinned the floor and the ceiling to PDF/A-3 before the conformance
+    # was looked at, and the next "configure -version 2.0" was refused for a
+    # claim that no state held.
+    #
     # Said here, at the call, rather than at write time from inside a failed
     # [read]. The shipped profile is part of the installation, so its absence
     # is a broken installation and is named as one - it used to be degraded
@@ -94,6 +109,17 @@ oo::define ::tclpdf::document::document {
       }
       return -code error "tclpdf: the ICC profile \"$profile\" does not exist"
     }
+    # Stored NORMALIZED, so that the shipped profile is recognised however
+    # its path was spelled: "-profile icc/sRGB.icc" from the package
+    # directory used to be compared as a string against the absolute path,
+    # miss, and go out under the desc tag's bare "sRGB" instead of the
+    # "sRGB IEC61966-2.1" every other document carries.
+    dict set current profile [file normalize $profile]
+    # And read once here, for what the output intent needs of it: a real
+    # ICC profile ("acsp" at offset 36) describing a device space. The
+    # manual says a Lab or XYZ profile is refused at the call; it used to be
+    # refused at the write, out of PdfaProfile.
+    ::tclpdf::pdfa space [::tclpdf::io read $profile] $profile
     # Which parts this writer can actually deliver.
     #
     # Part 1 forbids transparency, and tclpdf writes it without ceremony
@@ -117,6 +143,17 @@ oo::define ::tclpdf::document::document {
             [dict get $current part] needs PDF 2.0, which tclpdf does not write"
       }
     }
+    # Part 2 admits an embedded file only when that file is itself PDF/A
+    # (ISO 19005-2, 6.8) - which no attachment this package writes is
+    # checked to be, and veraPDF's 2b profile fails a file with any other.
+    # Part 3 was made for exactly that case. The mirror check sits in
+    # attach.tcl for an attachment that arrives after the claim.
+    if {[dict get $current part] == 2 && [llength [my state attachments]]} {
+      return -code error "tclpdf: PDF/A-2 admits no embedded file that is\
+          not itself PDF/A (ISO 19005-2, 6.8), and this document carries\
+          [llength [my state attachments]] attachment(s) - use part 3, which\
+          admits any file"
+    }
     # The mirror image of the check in ua.tcl: parts 2 and 3 are PDF 1.7
     # formats (ISO 19005-2/-3 build on ISO 32000-1), and PDF/UA-2 - or a
     # caller's [configure -version 2.0] - commits the file to 2.0. Said at
@@ -135,23 +172,6 @@ oo::define ::tclpdf::document::document {
           format and this document is set to PDF [[my writer] version] -\
           leave the version alone, pdfa raises it to 1.7 by itself"
     }
-    # The declared part decides the minimum file version, rather than the two
-    # being set independently and contradicting each other. Measured: a
-    # document with "%PDF-1.4" in the header and pdfaid:part 3 in the XMP
-    # passes veraPDF without a word - two claims, one file, nobody objects.
-    # Through [configure], so that [cget -version] answers what the header
-    # says; and recorded with the writer both ways, so that a later [configure
-    # -version 1.4] OR [configure -version 2.0] is refused naming PDF/A rather
-    # than writing that very file. The ceiling is not decoration: measured,
-    # "pdfa -part 3" then "configure -version 2.0" produced %PDF-2.0 with
-    # pdfaid:part 3, and veraPDF -f 3b failed it on ISO 19005-3 6.1.2-1
-    # alone (the header shall be %PDF-1.n, n 0 to 7) - the same for part 2
-    # under 19005-2.
-    if {[package vcompare [[my writer] version] 1.7] < 0} {
-      my configure -version 1.7
-    }
-    my RequireVersion 1.7 "PDF/A-[dict get $current part]"
-    my LimitVersion 1.7 "PDF/A-[dict get $current part]"
     # Level B is "looks the same forever", level U is B plus text that can be
     # extracted reliably - the ToUnicode CMap this package writes for every
     # embedded face, so U costs nothing here and is the better default answer
@@ -183,6 +203,24 @@ oo::define ::tclpdf::document::document {
       }
     }
     dict set current conformance $level
+
+    # From here on the document changes. The declared part decides the
+    # minimum file version, rather than the two being set independently and
+    # contradicting each other. Measured: a document with "%PDF-1.4" in the
+    # header and pdfaid:part 3 in the XMP passes veraPDF without a word - two
+    # claims, one file, nobody objects. Through [configure], so that [cget
+    # -version] answers what the header says; and recorded with the writer
+    # both ways, so that a later [configure -version 1.4] OR [configure
+    # -version 2.0] is refused naming PDF/A rather than writing that very
+    # file. The ceiling is not decoration: measured, "pdfa -part 3" then
+    # "configure -version 2.0" produced %PDF-2.0 with pdfaid:part 3, and
+    # veraPDF -f 3b failed it on ISO 19005-3 6.1.2-1 alone (the header shall
+    # be %PDF-1.n, n 0 to 7) - the same for part 2 under 19005-2.
+    if {[package vcompare [[my writer] version] 1.7] < 0} {
+      my configure -version 1.7
+    }
+    my RequireVersion 1.7 "PDF/A-[dict get $current part]"
+    my LimitVersion 1.7 "PDF/A-[dict get $current part]"
     if {![dict get $current registered]} {
       my onSelf beforeWrite PdfaWrite
       my onSelf catalog PdfaCatalog
@@ -202,7 +240,15 @@ oo::define ::tclpdf::document::document {
   # Kept in the pdfa state as well as handed to xmp.tcl, because [pdfa state]
   # is documented to answer with what has been declared and callers read it.
   method PdfaExtension {xml} {
-    set current [my pdfa]
+    # After a [pdfa] call, never instead of one: this used to call [pdfa]
+    # itself when nothing had been declared, and a document that only meant
+    # to add a schema came out claiming PDF/A-3B - a claim its fonts and
+    # colours had never been held to.
+    if {[my state pdfa] eq {}} {
+      return -code error "tclpdf: pdfa extension needs a PDF/A declaration to\
+          add to - call pdfa first"
+    }
+    set current [my state pdfa]
     dict lappend current extensions $xml
     my state pdfa $current
     my xmpRaw $xml
@@ -267,14 +313,7 @@ oo::define ::tclpdf::document::document {
   method PdfaProfile {} {
     set profile [dict get [my state pdfa] profile]
     set bytes [::tclpdf::io read $profile]
-    set space [string trimright [string range $bytes 16 19]]
-    set spaces {GRAY 1 RGB 3 CMYK 4}
-    if {![dict exists $spaces $space]} {
-      return -code error "tclpdf: the ICC profile \"$profile\" describes\
-          colour space \"$space\" - the output intent supports GRAY, RGB and\
-          CMYK"
-    }
-    return [list $bytes $space [dict get $spaces $space]]
+    return [list $bytes {*}[::tclpdf::pdfa space $bytes $profile]]
   }
 
   # Every font actually used has to carry its program (ISO 19005-3, 6.2.11.4).
@@ -385,6 +424,30 @@ oo::define ::tclpdf::document::document {
 
 }
 
+# The device space an ICC profile describes and the component count that
+# space has - {RGB 3}, {GRAY 1}, {CMYK 4} - read from the header: the
+# profile file signature "acsp" at offset 36 (ICC.1, 7.2.9) says it is a
+# profile at all, and the four-character data colour space at offset 16
+# (7.2.6) says which. Lab and XYZ profiles exist and are valid ICC, but an
+# output intent wants a device space; either is reported by name rather
+# than falling over inside a dict lookup. Called at the [pdfa] call, so a
+# wrong profile is refused where it was named, and again from PdfaProfile
+# at write time - one reading, so the two cannot disagree about the intent.
+proc ::tclpdf::pdfa::space {bytes profile} {
+  if {[string range $bytes 36 39] ne "acsp"} {
+    return -code error "tclpdf: \"$profile\" is not an ICC profile - the\
+        signature \"acsp\" is missing from its header"
+  }
+  set space [string trimright [string range $bytes 16 19]]
+  set spaces {GRAY 1 RGB 3 CMYK 4}
+  if {![dict exists $spaces $space]} {
+    return -code error "tclpdf: the ICC profile \"$profile\" describes\
+        colour space \"$space\" - the output intent supports GRAY, RGB and\
+        CMYK"
+  }
+  return [list $space [dict get $spaces $space]]
+}
+
 # The description an ICC profile carries about itself - the desc tag - or an
 # empty string when there is none that can be read.
 #
@@ -447,4 +510,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.5
+package provide tclpdf::pdfa 1.6

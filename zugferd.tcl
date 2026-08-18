@@ -1,18 +1,18 @@
 #
 # tclpdf - PDF generation for Tcl
 #
-# zugferd - an electronic invoice inside a PDF/A-3 document
+# zugferd - an electronic invoice or order inside a PDF/A-3 document
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
 # See the file "license.terms" for information on usage and redistribution
 # of this file (MIT License).
 #
-# ZUGFeRD, Factur-X and XRechnung-in-PDF are the same construction: a PDF/A-3
-# document carrying the invoice a second time as machine-readable XML. What
-# this module adds to pdfa.tcl and attach.tcl is small and entirely specific:
-# the extension schema, the four fx: properties, and reading the profile out
-# of the XML instead of asking for it.
+# ZUGFeRD, Factur-X, XRechnung-in-PDF and Order-X are the same construction:
+# a PDF/A-3 document carrying the invoice - or the order - a second time as
+# machine-readable XML. What this module adds to pdfa.tcl and attach.tcl is
+# small and entirely specific: the extension schema, the four fx: properties,
+# and reading the profile out of the XML instead of asking for it.
 #
 #   $doc zugferd invoice.xml
 #   $doc write rechnung.pdf
@@ -43,6 +43,15 @@
 # PDFs of the Factur-X info package spell it all-lowercase, which the
 # specification does not allow.
 #
+# Order-X (Order-X 1.0, 4.1.2) uses the same schema - same name, same four
+# properties - under a namespace URI of its own, WITHOUT the ":invoice"
+# segment: urn:factur-x:pdfa:CrossIndustryDocument:1p0#. Measured on the 24
+# sample PDFs and the XMP sample of the Order-X 1.0 distribution: all of
+# them spell it that way, all of them keep the schema name "Factur-X PDFA
+# Extension Schema" that table 4-1 of the specification renames to
+# "Order-X PDFA extension Schema" - the samples are followed, as for
+# Factur-X.
+#
 
 package require Tcl 8.6.11-
 package require TclOO
@@ -56,31 +65,61 @@ namespace eval ::tclpdf::zugferd {
   namespace export {[a-z]*}
   namespace ensemble create
 
-  # BT-24, the "specification identifier", and the conformance level it maps
-  # to. The value goes into fx:ConformanceLevel verbatim, spaces included.
+  # BT-24, the "specification identifier": the document family it belongs
+  # to and the conformance level it maps to. The level goes into
+  # fx:ConformanceLevel verbatim, spaces included. BASIC and EXTENDED exist
+  # in both families, which is why the family is recorded next to the level
+  # rather than derived from it: an invoice at BASIC is not an order at
+  # BASIC, and the URN is the only thing that tells them apart.
   variable profiles {
-    urn:factur-x.eu:1p0:minimum MINIMUM
-    urn:zugferd.de:2p0:minimum MINIMUM
-    urn:factur-x.eu:1p0:basicwl {BASIC WL}
-    urn:zugferd.de:2p0:basicwl {BASIC WL}
-    urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic BASIC
-    urn:cen.eu:en16931:2017#compliant#urn:zugferd.de:2p0:basic BASIC
-    urn:cen.eu:en16931:2017 {EN 16931}
-    urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended EXTENDED
-    urn:cen.eu:en16931:2017#conformant#urn:zugferd.de:2p0:extended EXTENDED
+    urn:factur-x.eu:1p0:minimum {invoice MINIMUM}
+    urn:zugferd.de:2p0:minimum {invoice MINIMUM}
+    urn:factur-x.eu:1p0:basicwl {invoice {BASIC WL}}
+    urn:zugferd.de:2p0:basicwl {invoice {BASIC WL}}
+    urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic {invoice BASIC}
+    urn:cen.eu:en16931:2017#compliant#urn:zugferd.de:2p0:basic {invoice BASIC}
+    urn:cen.eu:en16931:2017 {invoice {EN 16931}}
+    urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended {invoice EXTENDED}
+    urn:cen.eu:en16931:2017#conformant#urn:zugferd.de:2p0:extended {invoice EXTENDED}
+    urn:order-x.eu:1p0:basic {order BASIC}
+    urn:order-x.eu:1p0:comfort {order COMFORT}
+    urn:order-x.eu:1p0:extended {order EXTENDED}
   }
 
-  # The file names the standards allow. The name is not decoration - a reader
-  # looks the attachment up by it.
-  variable names {factur-x.xml zugferd-invoice.xml xrechnung.xml order-x.xml}
+  # The two document families and what belongs to each: the fx:DocumentType
+  # values, the conformance levels a -profile override may name, and the
+  # file names the standards allow. The name is not decoration - a reader
+  # looks the attachment up by it - and it is bound to the family: Order-X
+  # 1.0, 4.1.1 embeds the order as order-x.xml and nothing else, and none
+  # of the three invoice names is an order. The first name of a family is
+  # its default.
+  #
+  # The invoice levels are the five of the table above and XRECHNUNG, which
+  # [profile] answers for an XRechnung identifier; the order levels are the
+  # three of Order-X 1.0, 3.1 (its "COMFORT" is what EN 16931 is to an
+  # invoice). Both used to go into the XMP verbatim, whatever they said -
+  # measured 2026-08-17, a typo became a conformance level nobody validates
+  # against.
+  variable families {
+    invoice {
+      types {INVOICE}
+      levels {MINIMUM {BASIC WL} BASIC {EN 16931} EXTENDED XRECHNUNG}
+      names {factur-x.xml zugferd-invoice.xml xrechnung.xml}
+      description invoice
+    }
+    order {
+      types {ORDER ORDER_RESPONSE ORDER_CHANGE}
+      levels {BASIC COMFORT EXTENDED}
+      names {order-x.xml}
+      description order
+    }
+  }
+  variable types {INVOICE ORDER ORDER_RESPONSE ORDER_CHANGE}
 
-  # The conformance levels a -profile override may name: the five of the
-  # table above and XRECHNUNG, which [profile] answers for an XRechnung
-  # identifier. And the two document types of fx:DocumentType. Both used to
-  # go into the XMP verbatim, whatever they said - measured 2026-08-17, a
-  # typo became a conformance level nobody validates against.
-  variable levels {MINIMUM {BASIC WL} BASIC {EN 16931} EXTENDED XRECHNUNG}
-  variable types {INVOICE ORDER}
+  # The relationships Order-X 1.0, 4.1.1 allows for order-x.xml - Supplement
+  # and Unspecified are for the other attachments. Factur-X leaves the
+  # invoice's relationship to the profile, see the method.
+  variable orderRelationships {Data Source Alternative}
 }
 
 oo::define ::tclpdf::document::document {
@@ -101,38 +140,120 @@ oo::define ::tclpdf::document::document {
 
   method ZugferdInvoice {path args} {
     set options [::tclpdf::option parse {
-      name {} profile {} type INVOICE version 1.0 icc {} compress 0
+      name {} profile {} type {} version 1.0 icc {} compress 0
       relationship {} description {}
     } $args "zugferd"]
     if {[my state zugferd] ne {}} {
-      return -code error "tclpdf: this document already carries an invoice -\
-          a ZUGFeRD document has exactly one"
+      return -code error "tclpdf: this document already carries an invoice or\
+          order - a ZUGFeRD or Order-X document has exactly one"
     }
+
+    # Every option is checked HERE, before the first call that changes the
+    # document. This method makes three calls that each leave state behind
+    # - pdfa, pdfa extension, attach - and a refusal from the last of them
+    # used to leave the first two standing: a bad -relationship, caught
+    # inside [attach], left a PDF/A-3B claim with the Factur-X schema and
+    # fx:DocumentFileName in the packet and NO invoice in the file - a
+    # document that validates and lies - and a corrected retry declared the
+    # schema a second time.
 
     # Read as bytes and keep them that way. Everything downstream - the
     # attachment, the checksum a recipient may compute - depends on it.
     set bytes [::tclpdf::io read $path]
+
+    # The document type decides the family - invoice or order - and the
+    # family decides which levels, which names and which relationships are
+    # allowed. Without -type the family comes from BT-24: an Order-X
+    # identifier makes the document an ORDER (the plain order, not a
+    # response or change - those the caller has to name), anything else an
+    # INVOICE. Without -profile BT-24 gives the level as well, and then
+    # the identifier's family and -type have to agree: a Factur-X BASIC
+    # invoice under -type ORDER would come out with a level that Order-X
+    # also knows, labelled as something it is not.
+    variable ::tclpdf::zugferd::families
+    variable ::tclpdf::zugferd::types
+    set type [dict get $options type]
+    if {$type ne {} && $type ni $types} {
+      return -code error "tclpdf: \"$type\" is not a document type - use one\
+          of: [join $types {, }]"
+    }
+    set profile [dict get $options profile]
+    set read {}
+    if {$profile eq {}} {
+      lassign [::tclpdf::zugferd identify $bytes] read profile
+    } elseif {$type eq {}} {
+      # -profile overrides the level, so BT-24 may say anything - even
+      # nothing. Where it names a family all the same, that family is the
+      # default type; where it does not, INVOICE is.
+      catch {set read [lindex [::tclpdf::zugferd identify $bytes] 0]}
+    }
+    if {$type eq {}} {
+      set type [expr {$read eq "order" ? "ORDER" : "INVOICE"}]
+    }
+    set family [expr {$type in [dict get $families order types] ? "order" : "invoice"}]
+    set kind [dict get $families $family description]
+    if {$read ne {} && $read ne $family} {
+      return -code error "tclpdf: BT-24 of this XML is an $read identifier\
+          ($profile) and -type $type makes it an $kind - the two have to\
+          agree; pass -profile to override the identifier, or the -type of\
+          the $read family: [join [dict get $families $read types] {, }]"
+    }
+    set levels [dict get $families $family levels]
+    if {[dict get $options profile] ne {} && $profile ni $levels} {
+      set other [expr {$family eq "order" ? "invoice" : "order"}]
+      if {$profile in [dict get $families $other levels]} {
+        return -code error "tclpdf: \"$profile\" is a conformance level of\
+            an [dict get $families $other description], and this document is\
+            an $kind (-type $type) - its levels are: [join $levels {, }]; for\
+            an [dict get $families $other description] pass -type\
+            [join [dict get $families $other types] {, }]"
+      }
+      return -code error "tclpdf: \"$profile\" is not a conformance level -\
+          use one of: [join $levels {, }]"
+    }
+
+    # The name is bound to the family. Without -name the file's own name is
+    # kept where it is one the family allows, and the family's default is
+    # taken otherwise.
+    set names [dict get $families $family names]
     set name [dict get $options name]
     if {$name eq {}} {
       set name [file tail $path]
-      if {$name ni $::tclpdf::zugferd::names} {
-        set name factur-x.xml
+      if {$name ni $names} {
+        set name [lindex $names 0]
       }
     }
-    if {$name ni $::tclpdf::zugferd::names} {
+    if {$name ni $names} {
+      set other [expr {$family eq "order" ? "invoice" : "order"}]
+      if {$name in [dict get $families $other names]} {
+        return -code error "tclpdf: \"$name\" is the file name of an\
+            [dict get $families $other description], and this document is an\
+            $kind (-type $type) - which is embedded as [join $names {, }]\
+            (Order-X 1.0, 4.1.1 binds the name to the document); for an\
+            [dict get $families $other description] pass -type\
+            [join [dict get $families $other types] {, }]"
+      }
       return -code error "tclpdf: \"$name\" is not a file name the standards\
-          allow - use one of: [join $::tclpdf::zugferd::names {, }]"
+          allow - use one of: [join $names {, }]"
     }
-    set profile [dict get $options profile]
-    if {$profile eq {}} {
-      set profile [::tclpdf::zugferd profile $bytes]
-    } elseif {$profile ni $::tclpdf::zugferd::levels} {
-      return -code error "tclpdf: \"$profile\" is not a conformance level -\
-          use one of: [join $::tclpdf::zugferd::levels {, }]"
+    if {$name in [my attachments]} {
+      return -code error "tclpdf: an attachment named \"$name\" already\
+          exists - names in the embedded file name tree have to be unique"
     }
-    if {[dict get $options type] ni $::tclpdf::zugferd::types} {
-      return -code error "tclpdf: \"[dict get $options type]\" is not a\
-          document type - use one of: [join $::tclpdf::zugferd::types {, }]"
+    # fx:Version is the version of the standard the XML follows - "1.0" for
+    # every Factur-X and ZUGFeRD 2.x invoice and for Order-X 1.0 - and it
+    # goes into the packet as XML text. Digits and dots only: an empty
+    # value used to come out as "<fx:Version/>", and a "<" in it went into
+    # the packet unescaped, where the parser refused the whole document at
+    # write time.
+    set version [dict get $options version]
+    if {![regexp {^[0-9]+(\.[0-9]+)*$} $version]} {
+      return -code error "tclpdf: -version takes a version number such as\
+          1.0 - digits and dots - not \"$version\""
+    }
+    if {![string is boolean -strict [dict get $options compress]]} {
+      return -code error "tclpdf: -compress takes a boolean, not\
+          \"[dict get $options compress]\""
     }
 
     # The default /AFRelationship follows the profile, because Factur-X binds
@@ -140,63 +261,80 @@ oo::define ::tclpdf::document::document {
     # for the invoice, so their XML is Data - for every fuller profile the
     # XML IS the invoice a second time, which is what Alternative means.
     # A single value for all profiles gets one of the two families rejected.
-    # An explicit -relationship still wins.
+    # An order is Data: Order-X 1.0, 4.1.1 allows Data, Source or
+    # Alternative for order-x.xml and prescribes none of them, and an
+    # order's XML is data for processing - the sample PDFs of the
+    # distribution split 12 Data, 6 Source, 6 Alternative. An explicit
+    # -relationship still wins - and is checked here against the list
+    # attach.tcl owns, not left to [attach] at the end; for order-x.xml
+    # against the three of 4.1.1 besides.
     set relationship [dict get $options relationship]
     if {$relationship eq {}} {
-      if {$profile in {MINIMUM {BASIC WL}}} {
+      if {$family eq "order" || $profile in {MINIMUM {BASIC WL}}} {
         set relationship Data
       } else {
         set relationship Alternative
       }
+    } elseif {$relationship ni $::tclpdf::attach::relationships} {
+      return -code error "tclpdf: -relationship must be one of\
+          [join $::tclpdf::attach::relationships {, }] - not \"$relationship\""
+    } elseif {$family eq "order" \
+        && $relationship ni $::tclpdf::zugferd::orderRelationships} {
+      return -code error "tclpdf: -relationship for $name is one of\
+          [join $::tclpdf::zugferd::orderRelationships {, }] (Order-X 1.0,\
+          4.1.1) - not \"$relationship\", which is for the other attachments"
     }
 
     # PDF/A-3 first: the invoice rides on it, and the output intent has to be
-    # in place before anything else is written. Without -icc the profile is
-    # the one [pdfa] uses by default - the sRGB profile shipped with the
-    # package - and pdfa.tcl is where a missing one is refused, so nothing is
-    # decided about it here.
-    my pdfa -part 3 -conformance B
+    # in place before anything else is written. ONE call, so that a profile
+    # pdfa refuses - a missing -icc - refuses before the claim exists rather
+    # than after it. Without -icc the profile is the one [pdfa] uses by
+    # default - the sRGB profile shipped with the package - and pdfa.tcl is
+    # where a missing one is refused, so nothing is decided about it here.
+    set declaration [list -part 3 -conformance B]
     if {[dict get $options icc] ne {}} {
-      my pdfa -profile [dict get $options icc]
+      lappend declaration -profile [dict get $options icc]
     }
-    my pdfa extension [::tclpdf::zugferd extensionSchema]
-    my pdfa extension [::tclpdf::zugferd properties $name \
-        [dict get $options type] [dict get $options version] $profile]
+    my pdfa {*}$declaration
+    my pdfa extension [::tclpdf::zugferd extensionSchema $family]
+    my pdfa extension [::tclpdf::zugferd properties $name $type $version \
+        $profile $family]
 
     set description [dict get $options description]
     if {$description eq {}} {
-      set description "$profile invoice data"
+      set description "$profile $kind data"
     }
     # ModDate in the /Params dictionary is required for the attachment (Factur-X
-    # 1.09.2, embedding rules). The MODIFICATION TIME OF THE XML FILE is used
-    # rather than the current time: it is what the field means, and it keeps
-    # the output reproducible - the same invoice written twice has to give the
-    # same bytes.
+    # 1.09.2, embedding rules; Order-X 1.0, 4.1.1). The MODIFICATION TIME OF
+    # THE XML FILE is used rather than the current time: it is what the field
+    # means, and it keeps the output reproducible - the same invoice written
+    # twice has to give the same bytes.
     my attach $path -name $name -relationship $relationship \
         -mime text/xml -compress [dict get $options compress] \
         -description $description \
         -date [::tclpdf::pdfObj date [file mtime $path]]
 
     my state zugferd [dict create name $name profile $profile \
-        type [dict get $options type] version [dict get $options version] \
+        type $type version $version \
         relationship $relationship bytes [string length $bytes]]
     return $profile
   }
 }
 
-# Read BT-24 out of the invoice and translate it into a conformance level.
+# Read BT-24 out of the XML and translate it into the document family and
+# the conformance level: {invoice {EN 16931}}, {order COMFORT}.
 #
 # One regexp, no XML parser: the element occurs once, its content is a URN,
 # and pulling in a DOM to read a single string would make tdom a runtime
 # dependency of every invoice.
-proc ::tclpdf::zugferd::profile {bytes} {
+proc ::tclpdf::zugferd::identify {bytes} {
   variable profiles
 
   if {![regexp {GuidelineSpecifiedDocumentContextParameter>.*?<ram:ID>([^<]+)<} \
       $bytes -> identifier]} {
     return -code error "tclpdf: this XML carries no BT-24 specification\
         identifier (GuidelineSpecifiedDocumentContextParameter) - it is not a\
-        ZUGFeRD or Factur-X invoice"
+        ZUGFeRD or Factur-X invoice or an Order-X order"
   }
   set identifier [string trim $identifier]
   if {[dict exists $profiles $identifier]} {
@@ -206,24 +344,38 @@ proc ::tclpdf::zugferd::profile {bytes} {
   # ones appear with every release - so the shape is recognised rather than
   # the exact string, and anything else is refused by name.
   if {[string match {*xrechnung*} [string tolower $identifier]]} {
-    return XRECHNUNG
+    return {invoice XRECHNUNG}
   }
   return -code error "tclpdf: unknown BT-24 specification identifier\
       \"$identifier\" - pass -profile to override. Guessing here is how an\
       EXTENDED invoice goes out labelled BASIC"
 }
 
+# The conformance level alone - what [zugferd profile] answers.
+proc ::tclpdf::zugferd::profile {bytes} {
+  return [lindex [identify $bytes] 1]
+}
+
+# The namespace URI of the fx: schema for a document family - see the
+# header: Factur-X carries ":invoice", Order-X does not.
+proc ::tclpdf::zugferd::namespaceURI {family} {
+  if {$family eq "order"} {
+    return "urn:factur-x:pdfa:CrossIndustryDocument:1p0#"
+  }
+  return "urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#"
+}
 # The PDF/A extension schema description, word for word from the normative
 # sample. Required because PDF/A only permits metadata whose schema is
 # described in the packet itself - without this the file fails validation
-# even though the fx: properties are correct.
-proc ::tclpdf::zugferd::extensionSchema {} {
-    return {    <rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#">
+# even though the fx: properties are correct. The family - invoice by
+# default, order for Order-X - picks the namespace URI, nothing else.
+proc ::tclpdf::zugferd::extensionSchema {{family invoice}} {
+    return [string map [list @namespaceURI@ [namespaceURI $family]] {    <rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#">
       <pdfaExtension:schemas>
         <rdf:Bag>
           <rdf:li rdf:parseType="Resource">
             <pdfaSchema:schema>Factur-X PDFA Extension Schema</pdfaSchema:schema>
-            <pdfaSchema:namespaceURI>urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#</pdfaSchema:namespaceURI>
+            <pdfaSchema:namespaceURI>@namespaceURI@</pdfaSchema:namespaceURI>
             <pdfaSchema:prefix>fx</pdfaSchema:prefix>
             <pdfaSchema:property>
               <rdf:Seq>
@@ -256,15 +408,14 @@ proc ::tclpdf::zugferd::extensionSchema {} {
           </rdf:li>
         </rdf:Bag>
       </pdfaExtension:schemas>
-    </rdf:Description>}
+    </rdf:Description>}]
 }
 
 # The four properties themselves. This is what a recipient's software reads to
-# find out that there is an invoice, what it is called and which profile it
-# follows - before opening the attachment.
-proc ::tclpdf::zugferd::properties {name type version conformance} {
-  set namespace "urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#"
-  append xml "    <rdf:Description rdf:about=\"\" xmlns:fx=\"$namespace\">\n"
+# find out that there is an invoice or an order, what it is called and which
+# profile it follows - before opening the attachment.
+proc ::tclpdf::zugferd::properties {name type version conformance {family invoice}} {
+  append xml "    <rdf:Description rdf:about=\"\" xmlns:fx=\"[namespaceURI $family]\">\n"
   append xml "      <fx:DocumentType>$type</fx:DocumentType>\n"
   append xml "      <fx:DocumentFileName>$name</fx:DocumentFileName>\n"
   append xml "      <fx:Version>$version</fx:Version>\n"

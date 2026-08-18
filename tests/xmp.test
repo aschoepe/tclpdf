@@ -505,4 +505,125 @@ test xmp-7.6 {without a Creator the creating tool is the producer, and no empty 
       [regexp {pdf:Keywords} $packet]
 } -result {1 0}
 
+# --- what the packet's bytes and the caller's text are ----------------------
+
+test xmp-8.1 {the xpacket begin attribute is the three-byte UTF-8 BOM} -constraints haveFace -body {
+  # XMP part 1, 7.3.2: begin carries U+FEFF, which is EF BB BF once the
+  # packet is UTF-8. It used to be the three Latin-1 CHARACTERS EF BB BF,
+  # and the encoding then made six bytes of them - C3 AF C2 BB C2 BF -
+  # under both interpreters, and no validator said a word.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-bom.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<\?xpacket begin="([^"]*)"} $bytes -> begin
+  binary scan $begin H* hex
+  set hex
+} -result efbbbf
+
+test xmp-8.2 {metadata answers text and encodes once: setting back what it answered is a no-op} -constraints haveFace -body {
+  # The manual says a caller's packet is kept as given. [metadata] used to
+  # answer UTF-8 BYTES and to encode what it was given, so "$doc metadata
+  # [$doc metadata]" encoded twice and "Müller" went out as "MÃ¼ller".
+  set doc [probe $face]
+  $doc info Title "M\u00fcller"
+  $doc pdfa -part 3 -conformance B
+  set first [::tclpdfTest::scratch xmp-round-a.pdf]
+  set second [::tclpdfTest::scratch xmp-round-b.pdf]
+  $doc write $first
+  set answered [$doc metadata]
+  $doc metadata $answered
+  $doc write $second
+  $doc destroy
+  set a [::tclpdfTest::readBytes $first]
+  set b [::tclpdfTest::readBytes $second]
+  file delete $first $second
+  regexp {<\?xpacket begin=.*?<\?xpacket end="w"\?>} $a packetA
+  regexp {<\?xpacket begin=.*?<\?xpacket end="w"\?>} $b packetB
+  # Answered as text: the umlaut is there as the character, not as C3 BC.
+  list [expr {[string first "M\u00fcller" $answered] >= 0}] \
+      [string first "\xc3\xbc" $answered] \
+      [string equal $packetA $packetB] [string match "*M\xc3\xbcller*" $packetB] \
+      [string match "*M\xc3\x83\xc2\xbcller*" $packetB]
+} -result {1 -1 1 1 0}
+
+test xmp-8.3 {without a Producer no pdf:Producer and no CreatorTool are written, empty or otherwise} -constraints haveFace -body {
+  # "info Producer {}" removes the key; the packet used to write
+  # <pdf:Producer/> for it - an empty element naming an empty tool.
+  set doc [probe $face]
+  $doc info Producer {}
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-no-producer.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+  list [regexp {pdf:Producer} $packet] [regexp {xmp:CreatorTool} $packet] \
+      [regexp {/Producer} $bytes] [regexp {<xmp:CreateDate>} $packet]
+} -result {0 0 0 1}
+
+test xmp-8.4 {a CreationDate or ModDate set through info is mirrored into the packet, as Table 317 pairs them} -constraints haveFace -body {
+  # The packet used to say [Created] for both dates whatever the dictionary
+  # said - two claims, one file, and ISO 19005-1 6.7.3 forbids exactly that.
+  set doc [probe $face]
+  $doc info CreationDate "D:20190101120000+01'00'"
+  $doc info ModDate "D:20200202130000Z"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-dates.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+  list [regexp {<xmp:CreateDate>2019-01-01T12:00:00\+01:00</xmp:CreateDate>} $packet] \
+      [regexp {<xmp:ModifyDate>2020-02-02T13:00:00Z</xmp:ModifyDate>} $packet] \
+      [regexp {/CreationDate \(D:20190101120000\+01'00'\)} $bytes] \
+      [regexp {/ModDate \(D:20200202130000Z\)} $bytes]
+} -result {1 1 1 1}
+
+test xmp-8.5 {only a PDF date is taken for CreationDate and ModDate, and a partial one stays partial} -body {
+  set doc [tclpdf new -unit mm]
+  set out {}
+  foreach value {yesterday D:20261318 20260818 D:2026081812000 D:20260818120000+02'00'x} {
+    lappend out [catch {$doc info CreationDate $value} err] \
+        [string match {*info CreationDate takes a PDF date*7.9.4*} $err]
+  }
+  lappend out [catch {$doc info ModDate "yesterday"} err] [string match {*info ModDate takes*} $err]
+  set accepted [lmap value {D:2026 D:202608 D:20260818 D:2026081812 D:20260818120000
+      D:20260818120000Z D:20260818120000+02'00' D:20260818120000+02'00 D:20260818120000-05'30'} {
+    $doc info CreationDate $value
+  }]
+  $doc destroy
+  list [lsort -unique $out] [llength $accepted] \
+      [::tclpdf::xmp stampFromPdf D:2019] [::tclpdf::xmp stampFromPdf D:201903] \
+      [::tclpdf::xmp stampFromPdf D:2019030405] [::tclpdf::xmp stampFromPdf D:20190304050607-05'30'] \
+      [::tclpdf::xmp stampFromPdf D:20190304050607+02] [::tclpdf::xmp stampFromPdf junk]
+} -result {1 9 2019 2019-03 2019-03-04T05:00:00 2019-03-04T05:06:07-05:30 2019-03-04T05:06:07+02:00 {}}
+
+test xmp-8.6 {Trapped is a name in the dictionary, takes only its three values, and stays out of the packet} -constraints haveFace -body {
+  # Table 317: Trapped is a NAME - True, False, Unknown. It used to be
+  # written as the string (True). The packet does not carry pdf:Trapped:
+  # measured with veraPDF 1.30, a 3u document that was clean without it
+  # fails 6.6.2.3.1 twice with it, because the predefined PDF schema of ISO
+  # 19005 knows Keywords, PDFVersion and Producer only.
+  set doc [probe $face]
+  set refused [list [catch {$doc info Trapped maybe} err] \
+      [string match {*info Trapped takes True, False or Unknown*} $err] \
+      [catch {$doc info Trapped true}]]
+  $doc info Trapped True
+  $doc pdfa -part 3 -conformance U
+  set path [::tclpdfTest::scratch xmp-trapped.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<x:xmpmeta.*?</x:xmpmeta>} $bytes packet
+  list $refused [regexp {/Trapped /True} $bytes] [regexp {/Trapped \(} $bytes] \
+      [regexp {Trapped} $packet]
+} -result {{1 1 1} 1 0 0}
+
 cleanupTests

@@ -11,7 +11,7 @@
 #   $doc structureReport   -> {headings {1 2 2 3} rows {{3 3 3}} lists {...} types {...}}
 #
 # Answers questions about the tree as a whole - the heading levels in order,
-# the cell count of every table row, the shape of every list - and judges
+# the column count of every table row, the shape of every list - and judges
 # none of them; ua.tcl reads the answers and applies the PDF/UA rules to
 # them. Nothing here writes to the tree or to the file.
 #
@@ -37,7 +37,8 @@ oo::define ::tclpdf::document::document {
   # So this answers with facts and judges nothing:
   #
   #   headings   the H1..H10 types in document order
-  #   rows       per table element, the cell count of each of its rows
+  #   rows       per table element, the number of columns each of its rows
+  #              covers - spans counted, see [StructureRowWidths]
   #   lists      per L element: its ListNumbering (empty when unset), how
   #              many LI it holds and how many of those carry a Lbl
   #   types      every type used, once
@@ -64,7 +65,7 @@ oo::define ::tclpdf::document::document {
     foreach element $elements {
       switch -- [dict get $element type] {
         Table {
-          lappend rows [my StructureRowWidths $elements $index]
+          lappend rows [lindex [my StructureRowWidths $elements $index] 0]
         }
         L {
           lappend lists [my StructureListShape $elements $index]
@@ -108,10 +109,27 @@ oo::define ::tclpdf::document::document {
     return [dict create numbering $numbering items $items labelled $labelled]
   }
 
-  # The cell count of every row below one table, section groups included: a
+  # The width of every row below one table, section groups included: a
   # THead and a TBody hold rows of the same table and their widths have to be
   # compared with each other, not each within its own group.
-  method StructureRowWidths {elements index} {
+  #
+  # Width is the number of COLUMNS a row covers, not the number of cells it
+  # holds - the two differ exactly where a cell spans. A cell with ColSpan 2
+  # covers two columns; a cell with RowSpan 2 covers its column in the row
+  # below as well, where no cell is drawn for it. That is the grid a reader
+  # rebuilds (Matterhorn 15-003, UA-2 8.2.5.26: "taking into account
+  # spans"), and a table whose rows differ THAT way is one no reader can lay
+  # out. Counting cells refused every regular table with a span - measured:
+  # veraPDF passes such a table and this module did not.
+  #
+  # The attributes are stored owner -> pairs with number objects as values
+  # ({Table {ColSpan 2}}); [pdfObj num] writes an integer as itself.
+  #
+  # The carry runs through the whole table in row order, groups included: a
+  # RowSpan is a claim on the rows that follow, wherever they sit. Answered
+  # as {widths carry}, so that a group can hand the carry on; the caller
+  # takes the widths.
+  method StructureRowWidths {elements index {carry {}}} {
     set widths {}
     foreach kid [dict get [lindex $elements $index] kids] {
       if {[lindex $kid 0] ne "element"} {
@@ -120,23 +138,51 @@ oo::define ::tclpdf::document::document {
       set child [lindex $elements [lindex $kid 1]]
       switch -- [dict get $child type] {
         TR {
-          set cells 0
-          foreach cell [dict get $child kids] {
-            if {[lindex $cell 0] eq "element"
-                && [dict get [lindex $elements [lindex $cell 1]] type] in {TH TD}} {
-              incr cells
+          # What the rows above claim in this row, then the row's own cells.
+          set columns 0
+          set next {}
+          foreach claim $carry {
+            lassign $claim rows span
+            incr columns $span
+            if {$rows > 1} {
+              lappend next [list [expr {$rows - 1}] $span]
             }
           }
-          lappend widths $cells
+          foreach cell [dict get $child kids] {
+            if {[lindex $cell 0] ne "element"} {
+              continue
+            }
+            set element [lindex $elements [lindex $cell 1]]
+            if {[dict get $element type] ni {TH TD}} {
+              continue
+            }
+            set attributes [dict get $element attributes]
+            set colSpan 1
+            set rowSpan 1
+            if {[dict exists $attributes Table ColSpan]} {
+              set colSpan [dict get $attributes Table ColSpan]
+            }
+            if {[dict exists $attributes Table RowSpan]} {
+              set rowSpan [dict get $attributes Table RowSpan]
+            }
+            incr columns $colSpan
+            if {$rowSpan > 1} {
+              lappend next [list [expr {$rowSpan - 1}] $colSpan]
+            }
+          }
+          lappend widths $columns
+          set carry $next
         }
         THead - TBody - TFoot {
-          lappend widths {*}[my StructureRowWidths $elements [lindex $kid 1]]
+          lassign [my StructureRowWidths $elements [lindex $kid 1] $carry] \
+              below carry
+          lappend widths {*}$below
         }
       }
     }
-    return $widths
+    return [list $widths $carry]
   }
 
 }
 
-package provide tclpdf::structureReport 1.0
+package provide tclpdf::structureReport 1.1

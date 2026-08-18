@@ -59,19 +59,43 @@ oo::define ::tclpdf::document::document {
     dict set options left $left
     dict set options right $right
     ::tclpdf::option point [dict get $options at] -at leader
-    if {[dict get $options width] eq {}} {
+    set width [dict get $options width]
+    if {$width eq {}} {
       return -code error "tclpdf: leader needs -width - the row is filled to\
           that width, and without it there is nothing to fill"
+    }
+    # Checked as [text] checks its width, and before anything is drawn: a
+    # negative width put the right hand end to the left of -at, and "abc"
+    # failed in Tcl's words from inside the arithmetic below.
+    if {![string is double -strict $width] || $width <= 0} {
+      return -code error "tclpdf: -width must be a positive number, not\
+          \"$width\""
+    }
+    set gap [dict get $options gap]
+    if {![string is double -strict $gap] || $gap < 0} {
+      return -code error "tclpdf: -gap takes a distance of 0 or more, not\
+          \"$gap\""
     }
     # One element for the whole row rather than one per end: the heading and
     # its page number are one entry, and a reader following the tree should
     # hear them together.
-    if {[my state tagged] eq "1" && [dict get $options tag] ne "Artifact"} {
+    #
+    # An artifact is the first WORD of the tag, not the whole of it: -tag
+    # takes the kind as a list, "Artifact Pagination Header" for a running
+    # head, exactly as [text] takes it - compared whole, the list was handed
+    # to [structure] as a type and refused as one.
+    if {[my state tagged] eq "1" && ![my LeaderArtifact $options]} {
       return [my structure [dict get $options tag] -script {
         my LeaderDraw $options
       }]
     }
     return [my LeaderDraw $options]
+  }
+
+  # Whether the row is declared an artifact - by the first word of -tag,
+  # which is how [text] reads it, the kind following.
+  method LeaderArtifact {options} {
+    return [expr {[lindex [dict get $options tag] 0] eq "Artifact"}]
   }
 
   method LeaderDraw {options} {
@@ -80,10 +104,14 @@ oo::define ::tclpdf::document::document {
     set font [my LeaderFont $options]
     # The ends normally say nothing: an element is already open around them and
     # they join it. Only -tag Artifact has to reach them, or the row would be
-    # taken out of the tree while its two ends stayed in it.
+    # taken out of the tree while its two ends stayed in it. It reaches them
+    # whole, kind and all - and the fill with it: the dots of a running head
+    # are as much pagination as its two ends.
     set ends {}
-    if {[dict get $options tag] eq "Artifact"} {
-      set ends [list -tag Artifact]
+    set fillTag Artifact
+    if {[my LeaderArtifact $options]} {
+      set ends [list -tag [dict get $options tag]]
+      set fillTag [dict get $options tag]
     }
     # The ends first, both at their final position: the fill is what adapts.
     set leftWidth 0
@@ -148,7 +176,7 @@ oo::define ::tclpdf::document::document {
       # option costs nothing, which is why it is not made conditional here.
       if {$count > 0} {
         my text [string repeat $fill $count] -at [list $fillAt $y] \
-            -tag Artifact {*}$font
+            -tag $fillTag {*}$font
       }
     }
     if {[dict get $options right] ne {}} {
@@ -173,4 +201,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::leader 1.1
+package provide tclpdf::leader 1.2

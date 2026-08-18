@@ -1061,22 +1061,23 @@ test structure-15.6 {the generic H keeps the default namespace in a 2.0 tree} -b
   # the numbered Hn and nothing else (TS 32005 Tab. 2/3). Naming the 2.0
   # namespace on it would be a claim about a type that is not there.
   #
-  # The namespace reference is planted by hand rather than through
-  # [ua -part 2], because UA-2 refuses the generic H at write time - the
-  # question here is what the tree writes, not what UA-2 allows.
+  # The namespace is demanded by hand - the state key ua.tcl sets for part
+  # 2 - rather than through [ua -part 2], because UA-2 refuses the generic
+  # H at write time; the question here is what the tree writes, not what
+  # UA-2 allows.
   set doc [tclpdf new -unit mm -compress 0 -version 2.0]
   $doc tagged 1
   $doc page add
   $doc structure H -script {$doc text "x" -at {20 20}}
   $doc structure H1 -script {$doc text "y" -at {20 30}}
-  $doc state uaNamespace [[$doc writer] ref 1]
+  $doc state structureNamespace 1
   set path [::tclpdfTest::scratch h-ns.pdf]
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
   # The H carries no NS, the H1 beside it does.
-  list [regexp {/S /H (?![^>]*/NS)} $bytes] [regexp {/S /H1 [^>]*/NS 1 0 R} $bytes]
+  list [regexp {/S /H (?![^>]*/NS)} $bytes] [regexp {/S /H1 [^>]*/NS \d+ 0 R} $bytes]
 } -result {1 1}
 
 test structure-15.7 {the report counts headings up to H10} -body {
@@ -1805,8 +1806,17 @@ test structure-21.1 {the 2.0 types are opened and reach the tree in a 2.0 file} 
   $doc page add
   $doc font -family helvetica -size 10
   set y 20
+  # Sub and Em are inline markup and need a paragraph around them (ISO
+  # 32005 Table 5, structure-26.x) - the P is opened for them and closed
+  # again, so that the tree lists the types in the same order.
   foreach type {Title Aside DocumentFragment Sub Em H8 H9 H10} {
-    $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+    if {$type in {Sub Em}} {
+      $doc structure P -script {
+        $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+      }
+    } else {
+      $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+    }
   }
   set stream [::tclpdfTest::content $doc]
   set opened [lmap element [$doc state structure] {dict get $element type}]
@@ -1817,12 +1827,13 @@ test structure-21.1 {the 2.0 types are opened and reach the tree in a 2.0 file} 
   file delete $path
   set found {}
   foreach type {Title Aside DocumentFragment Sub Em H8 H9 H10} {
-    # Each type holds its own mark, and each is an element under Document.
+    # Each type holds its own mark, and each is an element under Document -
+    # or under its P - naming the 2.0 namespace (structure-25.x).
     lappend found [regexp -all "/$type <</MCID \\d+>> BDC" $stream] \
-        [regexp -all "/S /$type /P \\d+ 0 R /Pg" $bytes]
+        [regexp -all "/S /$type /P \\d+ 0 R /NS \\d+ 0 R /Pg" $bytes]
   }
   list $opened $found
-} -result {{Title Aside DocumentFragment Sub Em H8 H9 H10} {1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1}}
+} -result {{Title Aside DocumentFragment P Sub P Em H8 H9 H10} {1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1}}
 
 test structure-21.2 {the 2.0 types are refused in a 1.7 file, naming the way out} -body {
   set doc [tclpdf new -unit mm]
@@ -1844,8 +1855,16 @@ test structure-22.1 {the 1.7-only types are opened and reach the tree} -body {
   $doc page add
   $doc font -family helvetica -size 10
   set y 20
+  # Quote, Reference and BibEntry are inline markup and need a paragraph
+  # around them (ISO 32005 Table 5, structure-26.x).
   foreach type {Art BlockQuote TOC TOCI Index Private Quote Reference BibEntry} {
-    $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+    if {$type in {Quote Reference BibEntry}} {
+      $doc structure P -script {
+        $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+      }
+    } else {
+      $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+    }
   }
   set opened [lmap element [$doc state structure] {dict get $element type}]
   set path [::tclpdfTest::scratch types17.pdf]
@@ -1860,7 +1879,7 @@ test structure-22.1 {the 1.7-only types are opened and reach the tree} -body {
   # Art, TOC, TOCI and Index are containers: the text in them becomes a P of
   # theirs. The other five hold the text themselves.
   list $opened $found
-} -result {{Art P BlockQuote TOC P TOCI P Index P Private Quote Reference BibEntry} {1 1 1 1 1 1 1 1 1}}
+} -result {{Art P BlockQuote TOC P TOCI P Index P Private P Quote P Reference P BibEntry} {1 1 1 1 1 1 1 1 1}}
 
 test structure-22.2 {the 1.7-only types keep the default namespace in a 2.0 tree} -body {
   # As 15.6 shows for the generic H: these types are not in the 2.0
@@ -1871,9 +1890,16 @@ test structure-22.2 {the 1.7-only types keep the default namespace in a 2.0 tree
   $doc font -family helvetica -size 10
   set y 20
   foreach type {Art BlockQuote TOC TOCI Index Private Quote Reference BibEntry} {
-    $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+    if {$type in {Quote Reference BibEntry}} {
+      $doc structure P -script {
+        $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+      }
+    } else {
+      $doc structure $type -script {$doc text $type -at [list 20 [incr y 10]]}
+    }
   }
-  $doc state uaNamespace [[$doc writer] ref 1]
+  # Demanded by hand, as 15.6 does; ua.tcl sets the same key for part 2.
+  $doc state structureNamespace 1
   set path [::tclpdfTest::scratch types17-ns.pdf]
   $doc write $path
   $doc destroy
@@ -1884,7 +1910,575 @@ test structure-22.2 {the 1.7-only types keep the default namespace in a 2.0 tree
     lappend found [regexp "/S /$type (?!\[^>\]*/NS)" $bytes]
   }
   # The derived P beside them does carry the namespace.
-  list $found [regexp {/S /P [^>]*/NS 1 0 R} $bytes]
+  list $found [regexp {/S /P [^>]*/NS \d+ 0 R} $bytes]
 } -result {{1 1 1 1 1 1 1 1 1} 1}
+
+# -- marks in text: one per page, none before the checks, a space between paragraphs
+
+test structure-30.1 {a -columns block with -height max is one P with one mark on the page, not a mark inside a mark} -body {
+  # [text] used to bracket the call AND TextPaginate bracketed each page:
+  # "/P <</MCID 0>> BDC /P <</MCID 1>> BDC ... EMC EMC" - two P elements for
+  # one paragraph and nested MCIDs (14.7.4.2).
+  set doc [tclpdf new -unit mm -compress 0 -typeArea {20 25}]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [join [lrepeat 12 "Ein Absatz in zwei Spalten, auf einer Seite gesetzt, ist im Baum ein einziger Absatz mit einer einzigen Marke."] " "]
+  $doc text $body -at {20 30} -width 170 -height max -columns 2
+  set stream [::tclpdfTest::content $doc]
+  set tree [$doc state structure]
+  $doc destroy
+  # One BDC, one EMC, the BDC before the EMC and no second BDC between them;
+  # one element in the tree with one mark.
+  list [regexp -all {/P <</MCID} $stream] [regexp -all {BDC} $stream] [regexp -all {EMC} $stream] \
+      [regexp {BDC\n(?:(?!BDC).)*EMC\n} $stream] [llength $tree] \
+      [llength [dict get [lindex $tree 0] kids]]
+} -result {1 1 1 1 1 1}
+
+test structure-30.2 {a refused text call leaves the stream, the tree and the artifact state as they were} -body {
+  # Every check comes before the mark now. It used to be the other way
+  # round: BDC written, then -align read - a bracket with no EMC, a leaf
+  # with an empty MCID, and with -tag Artifact the whole document believing
+  # it was inside an artifact, so that every later mark was suppressed.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set wrong {}
+  foreach call {
+    {"x" -at {20 20} -align junk}
+    {"x" -at {20 20} -tag Artifact -align junk}
+    {"x" -at {20 20} -tag {Artifact Pagination Header} -align justify}
+    {"x" -at {20 20} -anchor top -family nosuch}
+    {"a\nb" -at {20 20}}
+    {"x" -at {20 20} -rotate abc}
+    {"x y z" -at {20 20} -width 100 -align junk}
+    {"x y z" -at {20 20} -width 100 -columns 2}
+    {"x y z" -at {20 20} -width 100 -avoid {{blob 1 2}}}
+    {"x y z" -at {20 20} -width 100 -tag {Artifact Pagination Footer} -firstIndent bogus}
+    {"x y z" -at {20 20} -width 100 -tag Artifact -height max -rotate 10}
+    {"x y z" -at {20 20} -width 100 -paginate 1 -height 20}
+    {"EU" -at {20 20} -expansion "European Union" -align justify}
+    {"EU" -at {20 20} -expansion "European Union" -width 100 -columns 0}
+  } {
+    set code [catch {$doc text {*}$call} message]
+    set stream [::tclpdfTest::content $doc]
+    set after [list $code [string length $stream] [$doc state structureInArtifact] \
+        [$doc state structureStack] [llength [$doc state structure]]]
+    if {$after ne {1 0 {} {} 0} && $after ne {1 0 0 {} 0}} {
+      lappend wrong [list $call $after $message]
+    }
+  }
+  # And the document goes on as if nothing had happened: the next paragraph
+  # is MCID 0 of the page and the first element of the tree.
+  $doc text "weiter" -at {20 40}
+  set stream [::tclpdfTest::content $doc]
+  set tree [$doc state structure]
+  $doc destroy
+  list $wrong [regexp {^/P <</MCID 0>> BDC\n} $stream] [regexp -all {BDC} $stream] \
+      [regexp -all {EMC} $stream] [llength $tree] [dict get [lindex $tree 0] type]
+} -result {{} 1 1 1 1 P}
+
+test structure-30.3 {an error the drawing itself meets closes the mark and the elements opened for it} -body {
+  # What only the line breaker finds - a character the face has no glyph
+  # for - comes after the mark. The bracket is closed and the error goes
+  # on: no BDC without EMC, no artifact left declared, no Span left open.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set codes {}
+  set thin "aaa\u2009bbb ccc"
+  foreach call [list [list $thin -at {20 20} -width 100 -tag Artifact] \
+      [list $thin -at {20 30} -width 100 -expansion "x y"]] {
+    lappend codes [catch {$doc text {*}$call} message] [regexp {U\+2009} $message]
+  }
+  set stream [::tclpdfTest::content $doc]
+  set state [list [$doc state structureInArtifact] [$doc state structureStack]]
+  $doc text "weiter" -at {20 40}
+  set after [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}] $state \
+      [regexp {/P <</MCID \d+>> BDC\nBT\n[^E]*\(weiter\) Tj\nET\nEMC\n$} $after]
+} -result {{1 1 1 1} 1 {0 {}} 1}
+
+test structure-30.4 {the line that closes a paragraph is followed by a space when another paragraph follows in the same call} -body {
+  # A paragraph break is a line feed, which has no glyph: extracted from
+  # one element the two paragraphs came back as "First para end.Second
+  # para start." (pdfinfo -struct-text). The last line of the block gets no
+  # space - nothing follows it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "First para end.\nSecond para start." -at {20 30} -width 100
+  set stream [::tclpdfTest::content $doc]
+  # With a limit, the last line drawn is followed by the rest - on the next
+  # page of a paginated run or in the caller's next call - and gets one too.
+  set limited [$doc text "One.\nTwo.\nThree." -at {20 60} -width 100 -height 9]
+  set second [string range [::tclpdfTest::content $doc] [string length $stream] end]
+  $doc destroy
+  list [regexp {\(First para end\. \) Tj} $stream] [regexp {\(Second para start\.\) Tj} $stream] \
+      [regexp {\(One\. \) Tj} $second] [regexp {\(Two\. \) Tj} $second] \
+      [regexp {Three} $second] [dict get $limited rest]
+} -result {1 1 1 1 0 Three.}
+
+test structure-30.5 {a paginated paragraph that starts on a page with no room marks nothing there} -body {
+  # -at under the last line of the caller's page: the text begins on the
+  # next page, and the mark with it - a mark around nothing would put a
+  # leaf with an empty MCID into the tree.
+  set doc [tclpdf new -unit mm -compress 0 -typeArea {20 25}]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body [join [lrepeat 3 "Ein Absatz, der unter der letzten Zeile beginnt, faengt auf der naechsten Seite an."] " "]
+  set result [$doc text $body -at {20 269} -width 170 -paginate 1]
+  set first [::tclpdfTest::content $doc 0]
+  set second [::tclpdfTest::content $doc 1]
+  set tree [$doc state structure]
+  $doc destroy
+  # The one mark is on page 1 (the second page), MCID 0, at the top of the
+  # area: 20 mm from the top = 785.20 pt.
+  lassign [dict get [lindex $tree 0] kids] kid
+  list [string length $first] [regexp -all {/P <</MCID 0>> BDC} $second] [regexp -all {EMC} $second] \
+      [dict get $result page] [llength $tree] [llength [dict get [lindex $tree 0] kids]] \
+      [lrange $kid 0 2] [format %.2f [lindex $kid 3]]
+} -result {0 1 1 1 1 1 {mark 1 0} 785.20}
+
+test structure-31.1 {a height-limited block with no room for one line marks nothing and opens nothing} -body {
+  # A -height max block placed under the type area, and a -height too small
+  # for one line: nothing is drawn, and the caller gets y as given with the
+  # whole string as the rest. Measured before this: [text] opened the mark
+  # first - "/P <</MCID 0>> BDC\nEMC\n" around nothing, and a P holding a
+  # mark of nothing in the tree; the -columns road (its mark is opened in
+  # TextPaginate) did the same. -paginate decides in advance (30.5); the two
+  # roads without it now do too. Where a line DOES fit - -height equal to
+  # the leading - the block is drawn and marked as before.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set body "Ein Absatz unter dem Satzspiegel."
+  set answers {}
+  foreach call [list [list -at {20 290} -width 100 -height max] \
+      [list -at {20 100} -width 100 -height 2] \
+      [list -at {20 290} -width 100 -height max -columns 2] \
+      [list -at {20 290} -width 100 -height max -tag Artifact]] {
+    set result [$doc text $body {*}$call]
+    lappend answers [dict get $result y] [expr {[dict get $result rest] eq $body}]
+  }
+  set stream [::tclpdfTest::content $doc]
+  set tree [$doc state structure]
+  # The default leading is 1.2 times the size: 12 pt.
+  set leading [::tclpdf::geometry fromPoints 12 mm]
+  set drawn [$doc text $body -at {20 100} -width 100 -height $leading]
+  set after [::tclpdfTest::content $doc]
+  set treeAfter [$doc state structure]
+  $doc destroy
+  list $answers [string length $stream] [regexp -all {BDC|BMC} $stream] [llength $tree] \
+      [dict get $drawn rest] [regexp -all {/P <</MCID 0>> BDC} $after] [regexp -all {EMC} $after] \
+      [llength $treeAfter]
+} -result {{290 1 100 1 290 1 290 1} 0 0 0 {} 1 1 1}
+
+# --- the IDTree, the name, the language, the empty body ----------------------
+
+test structure-24.1 {the IDTree is sorted by the bytes of its keys, not by code point} -body {
+  # A name tree is ordered by the BYTES of its keys (7.9.6). [str] writes an
+  # ASCII id as a literal and anything else as UTF-16BE behind FE FF, so
+  # every non-ASCII key sorts after every ASCII one - and among themselves
+  # by their code units. Sorted by code point, "aé" landed between "Note"
+  # and "b" and "B" and "b" were right by accident.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set y 10
+  foreach id [list "ÿ" "Ā" b B "aé" "é"] {
+    $doc structure P -id $id -script {$doc text x -at [list 20 [incr y 10]]}
+  }
+  $doc structure Note -script {$doc text x -at [list 20 [incr y 10]]}
+  set path [::tclpdfTest::scratch idtree-order.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/IDTree << /Names \[([^]]*)\] >>} $bytes -> names
+  # The keys alone, in file order.
+  set keys [regexp -all -inline {\([^)]*\)|<[0-9a-fA-F]*>} $names]
+  # Beyond the BMP the code units are a surrogate pair, and a pair sorts
+  # BEFORE U+E000 by its bytes although the code point is larger - the
+  # bytes decide (spelled as the pair, which both Tcl 8.6 and 9 keep as is).
+  list $keys [::tclpdf::structureWrite::keyBytes "\uD83D\uDE00"] \
+      [string compare [::tclpdf::structureWrite::keyBytes "\uD83D\uDE00"] \
+          [::tclpdf::structureWrite::keyBytes "\uE000"]]
+} -result [list {(B) (Note7) (b) <feff006100e9> <feff00e9> <feff00ff> <feff0100>} \
+    "\xfe\xff\xd8\x3d\xde\x00" -1]
+
+test structure-24.2 {a call refused for its id leaves its name unclaimed} -body {
+  # -name was registered before -id was checked: a call refused for a
+  # duplicate id left the name behind, pointing at whatever element came
+  # next. Every check first, every registration last.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc structure P -id one -script {$doc text a -at {20 20}}
+  set refused [catch {$doc structure P -name here -id one \
+      -script {$doc text b -at {20 30}}} err]
+  set namesAfter [$doc state structureNames]
+  set idsAfter [$doc state structureIds]
+  # The name is free, and once taken it points at the element that took it.
+  $doc structure H1 -name here -script {$doc text c -at {20 40}}
+  set names [$doc state structureNames]
+  set type [dict get [lindex [$doc state structure] [dict get $names here]] type]
+  # A refused attribute leaves the id unclaimed as well.
+  set refused2 [catch {$doc structure P -id two -numbering Disc \
+      -script {$doc text d -at {20 50}}} err2]
+  set ids [$doc state structureIds]
+  $doc destroy
+  list $refused [string match "*id*already exists*" $err] $namesAfter $idsAfter \
+      $names $type $refused2 [dict exists $ids two]
+} -result {1 1 {} {one 0} {here 1} H1 1 0}
+
+test structure-24.3 {-lang has to be a language tag, as the document's is} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set codes {}
+  foreach tag {de_DE {not a tag!} de-} {
+    lappend codes [catch {$doc structure P -lang $tag \
+        -script {$doc text x -at {20 20}}} err]
+    lappend codes [string match "*-lang \"$tag\" is not a language tag*RFC 3066*" $err]
+  }
+  set left [llength [$doc state structure]]
+  set stream [::tclpdfTest::content $doc]
+  $doc structure P -lang de-DE -script {
+    $doc structure Span -lang en -script {$doc text x -at {20 30}}
+  }
+  set langs [lmap element [$doc state structure] {dict get $element lang}]
+  $doc destroy
+  list $codes $left $stream $langs
+} -result {{1 1 1 1 1 1} 0 {} {de-DE en}}
+
+test structure-24.4 {an empty -script is a body, a missing one is not} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set missing [catch {$doc structure Sect} err]
+  set empty [catch {$doc structure Sect -name later -script {}} err2]
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  list $missing $err $empty $err2 $types
+} -result {1 {tclpdf: structure needs -script} 0 {} Sect}
+
+# --- the 2.0 namespace outside a UA-2 claim -----------------------------------
+
+test structure-25.1 {a 2.0-only type puts the tree into the 2.0 namespace, claim or not} -body {
+  # An H7 without /NS is read in the default - the 1.7 - namespace, where
+  # there is no such type (ISO 32000-2 Table 355, 14.8.6.1). Until now the
+  # namespace was written for a UA-2 claim only.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure H7 -script {$doc text seven -at {20 20}}
+  $doc structure H -script {$doc text generic -at {20 30}}
+  $doc text para -at {20 40}
+  set path [::tclpdfTest::scratch ns-plain.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {(\d+) 0 obj\s*<< /Type /Namespace /NS \(http://iso.org/pdf2/ssn\) >>} $bytes -> number
+  list [info exists number] \
+      [regexp "/S /H7 /P \\d+ 0 R /NS $number 0 R" $bytes] \
+      [regexp "/S /P /P \\d+ 0 R /NS $number 0 R" $bytes] \
+      [regexp "/S /Document /P \\d+ 0 R /K \\\[\[^\]\]*\\\] /NS $number 0 R" $bytes] \
+      [regexp {/S /H (?![^>]*/NS)} $bytes] \
+      [regexp "/Namespaces \\\[$number 0 R\\\]" $bytes]
+} -result {1 1 1 1 1 1}
+
+test structure-25.2 {a 2.0 file with 1.7 types only stays in the default namespace} -body {
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure H1 -script {$doc text one -at {20 20}}
+  $doc text para -at {20 40}
+  set path [::tclpdfTest::scratch ns-none.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Type /Namespace} $bytes] [regexp {/NS } $bytes] [regexp {/Namespaces} $bytes]
+} -result {0 0 0}
+
+# --- -tag against the open element, and where an element may not be ----------
+
+test structure-26.1 {-tag inside an open leaf opens a child, or is refused naming both} -body {
+  # The tag says what the text IS. Inside an open P a -tag Span is a Span in
+  # that P; inside a Figure a -tag Caption is its Caption; an H1 inside a P
+  # is what Annex L forbids and is refused - before the bracket is written.
+  # Until now the tag was dropped and the text marked as the open element.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -script {
+    $doc text "one " -at {20 20}
+    $doc text "two" -at {30 20} -tag Span
+  }
+  $doc structure Figure -alt "a box" -script {
+    $doc rect -at {20 30} -size {10 10} -fill blue
+    $doc text "caption" -at {20 45} -tag Caption
+  }
+  $doc structure Link -script {
+    $doc text "abbr" -at {20 55} -tag Span
+  }
+  set before [::tclpdfTest::content $doc]
+  set elementsBefore [llength [$doc state structure]]
+  set refused [catch {$doc structure P -script {
+    $doc text "heading?" -at {20 65} -tag H1
+  }} err]
+  set after [::tclpdfTest::content $doc]
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [dict get $element parent] \
+        [llength [dict get $element kids]]
+  }]
+  $doc destroy
+  list $shape [regexp -all {/Span <</MCID \d+>> BDC} $before] \
+      [regexp {/Caption <</MCID \d+>> BDC} $before] \
+      $refused [string match "*a P holds text and inline markup, not a H1*" $err] \
+      [expr {$after eq $before}] [expr {[llength $shape] - $elementsBefore}]
+} -result {{{P {} 2} {Span 0 1} {Figure {} 2} {Caption 2 1} {Link {} 1} {Span 4 1} {P {} 0}} 2 1 1 1 1 1}
+
+test structure-26.2 {-tag with a grouping type is refused, and nothing is written} -body {
+  # A Table or a Sect holds elements, not a mark; "-tag Table" on a line of
+  # text made a Table whose one kid was a marked-content sequence.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set codes {}
+  foreach type {Table L LI TR Sect Document TBody} {
+    lappend codes [catch {$doc text "as $type" -at {20 20} -tag $type} err]
+    lappend codes [string match "*-tag $type names a grouping type*structure $type -script*" $err]
+  }
+  set stream [::tclpdfTest::content $doc]
+  set elements [$doc state structure]
+  set mcid [$doc state structureMcid]
+  # Inside an open Sect the same refusal, and the Sect stays empty.
+  set inside [catch {$doc structure Sect -script {
+    $doc text x -at {20 30} -tag L
+  }} err2]
+  set kids [dict get [lindex [$doc state structure] 0] kids]
+  $doc destroy
+  list $codes $stream $elements $mcid $inside [string match "*grouping type*" $err2] $kids
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} {} {} 1 1 {}}
+
+test structure-26.3 {inline markup needs an element that holds text around it} -body {
+  # ISO 32005 Table 5, as veraPDF checks it: a Span, Quote, BibEntry, Em,
+  # Strong or Sub straight under Document, or in a Sect, Art, Aside, TOC or
+  # BlockQuote, is "Document shall not contain Span". Div, Part and
+  # NonStruct are looked through. Reference is refused at the top level
+  # only - a TOCI holds one.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set codes {}
+  foreach type {Span Quote BibEntry Em Strong Sub Ruby Reference} {
+    lappend codes [catch {$doc structure $type -script {$doc text x -at {20 20}}} err]
+    lappend codes [string match "*a $type is inline markup*not at the top level (ISO 32005 Table 5)*" $err]
+  }
+  set left [llength [$doc state structure]]
+  set stream [::tclpdfTest::content $doc]
+  # In a Sect, in a Div at the top, in a BlockQuote: refused. In a P, in a
+  # P inside a Div inside a Sect, in a TOCI (Reference): fine.
+  set inSect [catch {$doc structure Sect -script {
+    $doc structure Span -script {$doc text x -at {20 20}}}} errSect]
+  set inDiv [catch {$doc structure Div -script {
+    $doc structure Em -script {$doc text x -at {20 20}}}} errDiv]
+  set inQuote [catch {$doc structure BlockQuote -script {
+    $doc structure Quote -script {$doc text x -at {20 20}}}} errQuote]
+  set fine [catch {
+    $doc structure Sect -script {
+      $doc structure P -script {
+        $doc structure Span -script {$doc text x -at {20 30}}
+      }
+      $doc structure Div -script {
+        $doc structure P -script {
+          $doc structure Strong -script {$doc text x -at {20 40}}
+        }
+      }
+    }
+    $doc structure Sect -script {
+      $doc structure Reference -script {$doc text x -at {20 50}}
+    }
+    $doc structure TOC -script {
+      $doc structure TOCI -script {
+        $doc structure Reference -script {$doc text x -at {20 60}}
+      }
+    }
+    $doc structure Figure -alt f -script {
+      $doc structure Span -script {$doc text x -at {20 70}}
+      $doc structure Div -script {
+        $doc structure Em -script {$doc text x -at {20 75}}
+      }
+    }
+  } errFine]
+  # A Div at the top is looked through: a Reference in it is at the top.
+  set refDiv [catch {$doc structure Div -script {
+    $doc structure Reference -script {$doc text x -at {20 20}}}} errRefDiv]
+  # -tag on text takes the same road.
+  set tagged [catch {$doc text x -at {20 80} -tag Span} errTag]
+  $doc destroy
+  list $codes $left $stream $inSect [string match "*not in a Sect*" $errSect] \
+      $inDiv [string match "*not in a Div*" $errDiv] \
+      $inQuote [string match "*not in a BlockQuote*" $errQuote] \
+      $fine $errFine $refDiv [string match "*a Reference is inline markup*not in a Div*" $errRefDiv] \
+      $tagged [string match "*a Span is inline markup*" $errTag]
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} 0 {} 1 1 1 1 1 1 0 {} 1 1 1 1}
+
+test structure-26.4 {-tag beside -expansion still lands the mark in the expansion's Span} -body {
+  # The tag names the element AROUND the Span - an H1 holding an abbreviation
+  # - and the mark itself belongs in the Span, not in a child of it named
+  # after the tag.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "EU" -at {20 20} -tag H1 -expansion "European Union"
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [dict get $element parent] \
+        [llength [dict get $element kids]] [dict get $element expansion]
+  }]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $shape [regexp -all {BDC} $stream] [regexp {/Span <</MCID 0>> BDC} $stream]
+} -result {{{H1 {} 1 {}} {Span 0 1 {European Union}}} 1 1}
+
+# --- tagged has to come first ---------------------------------------------------
+
+test structure-27.1 {tagged 1 is refused once a page has content, and stays off} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "drawn first" -at {20 20}
+  set refused [catch {$doc tagged 1} err]
+  set state [$doc tagged]
+  set subscribers [$doc subscribers beforeWrite]
+  $doc text "drawn after" -at {20 30}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Pages that exist but hold nothing are no obstacle.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc page add
+  set fine [catch {$doc tagged 1} err2]
+  set on [$doc tagged]
+  $doc destroy
+  list $refused [string match "*tagged 1 has to come before anything is drawn - page 2 already has content*" $err] \
+      $state $subscribers [regexp {BDC} $stream] $fine $on
+} -result {1 1 0 {} 0 0 1}
+
+# --- -numbering by file version ------------------------------------------------
+
+test structure-28.1 {-numbering takes the values of Table 347 in a 1.7 file and Table 369 in a 2.0 one} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  set codes {}
+  foreach value {Ordered Unordered Description} {
+    lappend codes [catch {$doc structure L -numbering $value -script {}} err]
+    lappend codes [string match "*-numbering $value is a value of ISO 32000-2 (Table 369) and this document is PDF 1.7*ua -part 2*" $err]
+  }
+  set left [llength [$doc state structure]]
+  set typo [catch {$doc structure L -numbering Roman -script {}} errTypo]
+  foreach value {None Disc Circle Square Decimal UpperRoman LowerRoman UpperAlpha LowerAlpha} {
+    lappend codes [catch {$doc structure L -numbering $value -script {}}]
+  }
+  $doc destroy
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set two {}
+  foreach value {Ordered Unordered Description Decimal} {
+    lappend two [catch {$doc structure L -numbering $value -script {
+      $doc structure LI -script {$doc structure LBody -script {$doc text x -at {20 20}}}
+    }}]
+  }
+  set path [::tclpdfTest::scratch numbering20.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $codes $left $typo [string match "*must be one of None, Disc*ISO 32000-2 adds Unordered, Description, Ordered*" $errTypo] \
+      $two [regexp -all {/ListNumbering /(Ordered|Unordered|Description|Decimal)} $bytes]
+} -result {{1 1 1 1 1 1 0 0 0 0 0 0 0 0 0} 0 1 1 {0 0 0 0} 4}
+
+# --- the report counts columns, and the open element can be asked ----------------
+
+test structure-29.1 {the report gives the columns a row covers, spans counted} -body {
+  # A cell with -colSpan 2 covers two columns; a cell with -rowSpan 2 covers
+  # its column in the next row too. Counted as cells, every regular table
+  # with a span looked irregular.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure Table -script {
+    $doc structure THead -script {
+      $doc structure TR -script {
+        $doc structure TH -colSpan 2 -script {$doc text ab -at {20 20}}
+        $doc structure TH -script {$doc text c -at {40 20}}
+      }
+    }
+    $doc structure TBody -script {
+      $doc structure TR -script {
+        $doc structure TD -rowSpan 2 -script {$doc text a -at {20 30}}
+        $doc structure TD -script {$doc text b -at {30 30}}
+        $doc structure TD -script {$doc text c -at {40 30}}
+      }
+      $doc structure TR -script {
+        $doc structure TD -script {$doc text b -at {30 40}}
+        $doc structure TD -colSpan 1 -script {$doc text c -at {40 40}}
+      }
+    }
+  }
+  # And one that is irregular however it is counted.
+  $doc structure Table -script {
+    $doc structure TR -script {
+      $doc structure TD -script {$doc text a -at {20 60}}
+      $doc structure TD -script {$doc text b -at {30 60}}
+    }
+    $doc structure TR -script {
+      $doc structure TD -rowSpan 2 -script {$doc text a -at {20 70}}
+    }
+    $doc structure TR -script {
+      $doc structure TD -script {$doc text b -at {30 80}}
+      $doc structure TD -script {$doc text c -at {40 80}}
+    }
+  }
+  set rows [dict get [$doc structureReport] rows]
+  $doc destroy
+  set rows
+} -result {{3 3 3} {2 1 3}}
+
+test structure-29.2 {the type of the open element can be asked, for whoever draws into it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  # Private, like the modules that ask it; exported for the test alone.
+  oo::objdefine $doc export StructureOpenType
+  set outside [$doc StructureOpenType]
+  set inside [$doc structure Figure -alt f -script {
+    list [$doc StructureOpenType] [$doc structure Span -script {$doc StructureOpenType}]
+  }]
+  set after [$doc StructureOpenType]
+  $doc destroy
+  list $outside $inside $after
+} -result {{} {Figure Span} {}}
 
 cleanupTests

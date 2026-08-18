@@ -1049,6 +1049,30 @@ test text-direction-13.10 {the sum of the gaps is what the line measures} \
   expr {abs($total + 2 * 1000.0 * 3 / 14) < 0.001}
 } -result 1
 
+test text-direction-13.13 {a number after a lam-alef ligature is an Arabic number} \
+    -constraints haveFace -body {
+  # W2 of UAX #9: a European digit after an Arabic letter is an Arabic digit,
+  # and an Arabic digit takes no percent sign with it (W5). The lam-alef is
+  # one glyph for two letters, and the reordering used to hand bidi.tcl a -1
+  # for it - no letter, so W2 looked past it and "12%" stayed European: one
+  # piece, drawn 12% where fribidi --rtl draws %12. Measured with DejaVu Sans,
+  # which ligates lam-alef; the second string has a plain alef before the
+  # ligature and was right before this, the third is the same defect after a
+  # Hebrew word.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::textFace
+  $doc font -family face -size 12
+  set drawn {}
+  foreach string [list "\u0644\u0627 12%" "\u0627\u0644\u0627 12%" "\u05D0 \u0644\u0627 12%"] {
+    $doc text $string -at {180 30} -direction rtl
+    lappend drawn [string range [::tclpdfTest::drawnText $doc face [$doc page content]] 0 3]
+    $doc page add
+  }
+  $doc destroy
+  set drawn
+} -result [list "%12 " "%12 " "%12 "]
+
 # --- the per-call spellings and overrides ------------------------------------
 
 test text-14.1 {-align centre is -align center} -body {
@@ -1121,5 +1145,115 @@ test text-14.5 {textWidth takes -style and -stretch} -body {
   list [expr {$bold > $plain}] [expr {abs($narrow * 2 - $plain) < 0.001}] \
       [dict get $state style] [dict get $state stretch]
 } -result {1 1 {} 100}
+
+# --- what a text call leaves behind, and what it refuses -----------------------
+
+test text-15.1 {a text between style -fill and a bare rect leaves the style colour in force} -body {
+  # [style -fill red] is remembered for every shape that names no colour;
+  # the text paints its own colour inside BT/ET, and that used to stay in
+  # force - the bare rect after it came out black while the stream state
+  # still said red. Now the text's colour is bracketed in q/Q like its
+  # spacing is, and the rect paints with what the style set.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc style -fill red
+  $doc text "abc" -at {10 10}
+  $doc rect -at {10 20} -size {10 10}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # The colour operator of the text sits inside q...Q; between the Q and
+  # the rect's path no colour is set, so "1 0 0 rg" is what the f paints
+  # with.
+  set tail [string range $content [string first "ET\nQ\n" $content] end]
+  list [regexp {^1 0 0 rg\nq\nBT\n} $content] [regexp {0 g\n} $content] \
+      [regexp {ET\nQ\n[\d. ]+ re\nf\n} $content] \
+      [regexp {\n[\d. ]+ (g|rg|k)\n} $tail]
+} -result {1 1 1 0}
+
+test text-15.2 {without a style colour in force a plain text is not bracketed - its bytes stay} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "abc" -at {10 10}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {^BT\n} $content] [regexp {q\n} $content]
+} -result {1 0}
+
+test text-15.3 {a style colour restored by Q takes the bracket away again} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc save
+  $doc style -fill red
+  $doc restore
+  $doc text "abc" -at {10 10}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # After the Q nothing is in force any more, and the text is written as
+  # it always was: BT straight after the Q.
+  regexp {Q\nBT\n} $content
+} -result 1
+
+test text-15.4 {-style takes bold, italic and oblique in any spelling and refuses other words} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set codes {}
+  foreach style {bold italic oblique {bold italic} Bold-Italic bold,oblique {}} {
+    lappend codes [catch {$doc font -style $style}]
+  }
+  set accepted [dict get [$doc font] resolved]
+  $doc font -style {}
+  foreach style {foo {bold foo} regular} {
+    lappend codes [catch {$doc font -style $style} message] \
+        [regexp -- {-style takes bold, italic or oblique} $message]
+  }
+  # Refused per call as well, and the state is untouched by every refusal.
+  lappend codes [catch {$doc text "x" -at {20 20} -style foo} message] \
+      [regexp -- {-style takes bold, italic or oblique} $message]
+  set state [$doc font]
+  $doc destroy
+  list $codes $accepted [dict get $state style] [dict get $state resolved]
+} -result {{0 0 0 0 0 0 0 1 1 1 1 1 1 1 1} Helvetica {} Helvetica}
+
+test text-15.5 {a refused font call sets nothing - not even the options before the wrong one} -body {
+  set doc [tclpdf new -unit mm]
+  $doc font -family helvetica -size 10
+  set code [catch {$doc font -family times -size 0} message]
+  set state [$doc font]
+  $doc destroy
+  list $code [dict get $state family] [dict get $state size] [dict get $state resolved]
+} -result {1 helvetica 10 Helvetica}
+
+test text-15.6 {-rotate takes an angle, and says so before anything is drawn} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes [list [catch {$doc text "x" -at {20 20} -rotate abc} m1] \
+      [regexp -- {-rotate takes an angle in degrees, not "abc"} $m1] \
+      [catch {$doc text "x y z" -at {20 20} -width 100 -rotate abc} m2] \
+      [regexp -- {-rotate takes an angle in degrees, not "abc"} $m2] \
+      [catch {$doc text "x" -at {20 20} -rotate 12.5}]]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # One text object on the page: the one that was accepted.
+  list $codes [regexp -all {BT\n} $content]
+} -result {{1 1 1 1 0} 1}
+
+test text-16.1 {a standard face sets a string with a byte order mark as if the mark were not there} -body {
+  # A file read without stripping its BOM carries U+FEFF in front of its
+  # first word. The embedded faces drop it (font.tcl); the standard fourteen
+  # refused it - "character U+FEFF is not available in WinAnsiEncoding" -
+  # until afm.tcl learnt the same. Nothing is drawn for it and it has no
+  # width, single line and paragraph alike.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 12
+  set code [catch {$doc text "\uFEFFHallo Welt" -at {20 20}} message]
+  $doc text "\uFEFFHallo Welt und mehr Text" -at {20 40} -width 40
+  set same [expr {[$doc textWidth "\uFEFFHallo"] == [$doc textWidth "Hallo"]}]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code $message $same [regexp -all {\(Hallo Welt} $content] \
+      [regexp -all "\uFEFF" $content]
+} -result {0 {} 1 2 0}
 
 cleanupTests

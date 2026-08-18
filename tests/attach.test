@@ -276,4 +276,122 @@ test attach-7.2 {two attachments keep their own relationships} -body {
       [regexp -all {/AFRelationship} $bytes]
 } -result {1 1 2}
 
+# -- checked at the call ------------------------------------------------------
+#
+# Every option is checked before the attachment is recorded: what used to
+# fail at the write - or, worse, not fail at all - now names the option.
+
+test attach-8.1 {-data with a character above U+00FF is refused at the call, compressed or not} -body {
+  # Uncompressed, the writer's byte check refused it at the write;
+  # compressed, [zlib compress] kept the low byte of each character and
+  # said nothing - "中" (U+4E2D) went into the file as the one byte 0x2D.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach compress {0 1} {
+    lappend out [catch {$doc attach -data "\u4e2d" -name cjk$compress.txt -compress $compress} err] \
+        [string match {*-data takes bytes, not text*encoding convertto*} $err]
+  }
+  # Bytes up to U+00FF are bytes and go through - and come out unchanged.
+  $doc attach -data "M\xfcller\x00\xff" -name latin.bin -compress 0
+  set path [::tclpdfTest::scratch attach-bytes.pdf]
+  $doc write $path
+  set names [$doc attachments]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $out $names [string match "*M\xfcller\x00\xff*" $bytes]
+} -result {{1 1 1 1} latin.bin 1}
+
+test attach-8.2 {-date, -mime and -compress are checked at the call, and a good date reaches /Params /ModDate} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach {option value pattern} {
+    -date yesterday                {*attach -date takes a PDF date*7.9.4*not "yesterday"*}
+    -date {2026-08-18 12:00:00}    {*attach -date takes a PDF date*}
+    -mime {}                       {*-mime takes a media type such as text/xml*}
+    -mime {not a mime}             {*-mime takes a media type*not "not a mime"*}
+    -mime text                     {*-mime takes a media type*}
+    -compress maybe                {*-compress takes a boolean, not "maybe"*}
+  } {
+    lappend out [catch {$doc attach -data x -name bad.txt $option $value} err] \
+        [string match $pattern $err]
+  }
+  set none [$doc attachments]
+  $doc attach -data x -name good.txt -date "D:20260818120000+02'00'" \
+      -mime application/vnd.ms-excel -compress no
+  set path [::tclpdfTest::scratch attach-checked.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [lsort -unique $out] $none \
+      [regexp {/ModDate \(D:20260818120000\+02'00'\)} $bytes] \
+      [regexp {/Subtype /application#2Fvnd.ms-excel} $bytes]
+} -result {1 {} 1 1}
+
+test attach-8.3 {a name with a path separator is refused; a non-ASCII name gets an ASCII /F and the real /UF} -body {
+  # 7.11.2.1: "/" separates and "\\" escapes in a file specification
+  # string, so neither belongs in a NAME. /F is a byte string every reader
+  # takes, /UF the text string with the real name (Table 44); the name used
+  # to go into /F as UTF-16BE, which is not a form 7.11.2.1 knows.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach name {dir/sub.txt dir\\sub.txt} {
+    lappend out [catch {$doc attach -data x -name $name} err] \
+        [string match {*-name must not contain "/" or "\\"*7.11.2.1*} $err]
+  }
+  $doc attach -data x -name "\u00c4rger \u00fc.txt"
+  set path [::tclpdfTest::scratch attach-names.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<< /Type /Filespec [^\n]*>>} $bytes spec
+  # UTF-16BE with BOM: FE FF, then 00C4 'r' 'g' 'e' 'r' ' ' 00FC '.' ...
+  list $out [regexp {/F \(_rger _\.txt\)} $spec] \
+      [regexp {/UF <feff00c40072006700650072002000fc002e007400780074>} $spec] \
+      [regexp {/F <} $spec]
+} -result {{1 1 1 1} 1 1 0}
+
+test attach-8.4 {the name tree is sorted by the bytes of the keys, the same under both interpreters} -body {
+  # 7.9.6: keys are compared as byte strings. Sorted as Tcl strings, a name
+  # outside the BMP came before U+FFC2 under 8.6 (surrogates D83D...) and
+  # after it under 9.0 (1F600) - only the first is the order of the file,
+  # where both are UTF-16BE. ASCII keys are their own bytes and sort before
+  # the FE FF of a hex key.
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data x -name "\uffc2.txt"
+  $doc attach -data x -name "[encoding convertfrom utf-8 [binary format H* F09F9880]].txt"
+  $doc attach -data x -name b.txt
+  $doc attach -data x -name a.txt
+  set path [::tclpdfTest::scratch attach-order.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Names \[([^\]]*)\]} $bytes -> tree
+  regexp -all -inline {\([^)]*\)|<[0-9a-f]+>} $tree
+} -result {(a.txt) (b.txt) <feffd83dde00002e007400780074> <feffffc2002e007400780074>}
+
+test attach-8.5 {an empty attachment is allowed: -data {} is present, not absent} -body {
+  # A zero-byte marker file is a legal thing to embed; "-data {}" used to
+  # be refused as "needs a file name or -data".
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data {} -name empty.txt -compress 0
+  set none [catch {$doc attach -name x.txt} err]
+  set names [$doc attachments]
+  set path [::tclpdfTest::scratch attach-empty.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $names $none [string match {*needs a file name or -data*} $err] \
+      [regexp {/Params << /Size 0 >>} $bytes] [regexp {/Length 0 >>} $bytes]
+} -result {empty.txt 1 1 1 1}
+
 cleanupTests

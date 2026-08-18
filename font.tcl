@@ -55,6 +55,12 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $fonts $alias]} {
       return -code error "tclpdf: a font named \"$alias\" is already embedded"
     }
+    # Validated HERE, at the call. -subset used to be taken as given and to
+    # fail at write time, in an "if" nowhere near the line that set it.
+    if {![string is boolean -strict [dict get $options subset]]} {
+      return -code error "tclpdf: -subset takes a boolean, not\
+          \"[dict get $options subset]\""
+    }
     # The file says what it is; the extension does not. Read once and let both
     # parsers work on the same bytes rather than opening it twice.
     set bytes [::tclpdf::io read $path]
@@ -64,10 +70,27 @@ oo::define ::tclpdf::document::document {
     # Table 5.18, both PDF 1.2). Checked here, at the call, rather than at
     # write time when the caller cannot tell any more which line asked.
     my RequireVersion 1.2 "font embed"
+    # Two options belong to one road each, and an option that has nothing to
+    # act on is refused rather than ignored - the manual says so of -axes on
+    # a face without an fvar table, and the same reasoning holds for the
+    # kind of file: -metrics names an AFM, which only a Type 1 program has a
+    # use for, and -axes or -instance ask a variable font for a point on its
+    # axes, which a Type 1 program does not have. Silently taking either
+    # would embed something other than what the call describes.
     if {[string index $bytes 0] eq "\x80" || [string range $bytes 0 1] eq "%!"} {
+      if {[dict get $options axes] ne {} || [dict get $options instance] ne {}} {
+        return -code error "tclpdf: \"[file tail $path]\" is a Type 1 font\
+            program, which has no axes - -axes and -instance apply to a\
+            variable TrueType face"
+      }
       dict set fonts $alias [my FontEmbedType1 $alias $path $bytes \
           [dict get $options metrics]]
     } else {
+      if {[dict get $options metrics] ne {}} {
+        return -code error "tclpdf: -metrics names the AFM of a Type 1 font\
+            program - \"[file tail $path]\" is a TrueType or OpenType face and\
+            carries its own metrics"
+      }
       set parsed [::tclpdf::sfnt parse $bytes]
       # A CFF face goes in as FontFile3 with /Subtype /OpenType, which is
       # PDF 1.6 (Reference 1.7, Table 5.23).
@@ -147,8 +170,10 @@ oo::define ::tclpdf::document::document {
       set axes [dict merge $found $axes]
     }
     set known {}
+    set ranges {}
     foreach axis [::tclpdf::varFont axes $parsed] {
       lappend known [lindex $axis 0]
+      dict set ranges [lindex $axis 0] [lrange $axis 1 3]
     }
     dict for {tag value} $axes {
       if {$tag ni $known} {
@@ -158,6 +183,20 @@ oo::define ::tclpdf::document::document {
       if {![string is double -strict $value]} {
         return -code error "tclpdf: the value for axis \"$tag\" must be a\
             number, got \"$value\""
+      }
+      # Inside the axis, or refused. The normalisation clamps (varFont
+      # normalise, as the format prescribes), so the OUTLINES of wght 5000
+      # were those of 900 - but the value itself went on into the PostScript
+      # name and the descriptor: measured, Roboto_5000wght with a StemV of
+      # 5967, a font that does not exist named as if it did. Refused here,
+      # before anything downstream sees the number, and with the range so
+      # that the caller can pick a point that is on the axis.
+      lassign [dict get $ranges $tag] minimum default maximum
+      if {$value < $minimum || $value > $maximum} {
+        return -code error "tclpdf: the value $value for axis \"$tag\" is\
+            outside its range in \"[file tail $path]\" - $tag runs from\
+            [::tclpdf::pdfObj num $minimum] to [::tclpdf::pdfObj num $maximum]\
+            (default [::tclpdf::pdfObj num $default])"
       }
     }
     return [list [::tclpdf::varFont coordinates $parsed $axes] $axes]
@@ -228,6 +267,13 @@ oo::define ::tclpdf::document::document {
   # reading them would be the subsetting work this way exists to avoid. So the
   # AFM is looked for next to the program under the same base name, and
   # -metrics names it where it sits elsewhere.
+  #
+  # The AFM says which glyphs the face HAS, and it is not always right: Adobe's
+  # Helvetica.afm lists Euro, Helvetica.pfb carries no such charstring. Read
+  # by the AFM alone, the byte was set and the reader drew a blank - the one
+  # thing the missing-glyph rule exists to prevent. So the program's own glyph
+  # names are read (type1 glyphs) and a position is mapped only where both
+  # agree; a character the program lacks is refused, as it is for TrueType.
   method FontEmbedType1 {alias path bytes metricsPath} {
     package require tclpdf::type1 1.0-
     set program [::tclpdf::type1 parse $bytes]
@@ -240,12 +286,13 @@ oo::define ::tclpdf::document::document {
           name it with -metrics"
     }
     set metrics [::tclpdf::type1 metrics $metricsPath]
+    set glyphs [::tclpdf::type1 glyphs $program]
     return [dict create \
         kind type1 \
         path $path metricsPath $metricsPath \
         program $program metrics $metrics \
-        widths [::tclpdf::type1 widths $metrics] \
-        names [::tclpdf::type1 names $metrics] \
+        widths [::tclpdf::type1 widths $metrics $glyphs] \
+        names [::tclpdf::type1 names $metrics $glyphs] \
         subset 0 used {} number {}]
   }
 
@@ -317,11 +364,14 @@ oo::define ::tclpdf::document::document {
           characters [dict size [dict get $fonts $alias names]]]
     }
     set parsed [dict get $fonts $alias parsed]
+    # postScript is the name the face is embedded under - for an instance of
+    # a variable font the instance's name by TN 5902 (FontBaseName), not name
+    # id 6, which names the file's default: measured, "-instance Bold"
+    # answered Roboto-Regular while the file said Roboto-Bold.
     return [dict create \
         family [expr {[dict exists [dict get $parsed names] family] ?
             [dict get $parsed names family] : {}}] \
-        postScript [expr {[dict exists [dict get $parsed names] postScript] ?
-            [dict get $parsed names postScript] : {}}] \
+        postScript [my FontBaseName [dict get $fonts $alias] $alias 0] \
         glyphs [dict get $parsed numGlyphs] \
         unitsPerEm [dict get $parsed unitsPerEm] \
         fsType [dict get $parsed fsType] \
@@ -420,8 +470,12 @@ oo::define ::tclpdf::document::document {
       # opportunity the breaker has already used or dropped, with nothing to
       # draw. Most faces have no glyph for it and would refuse the string;
       # the few that do would carry an empty glyph into the file. Neither is
-      # what anyone wrote it for.
-      if {$code == 0x00AD || $code == 0x200B} {
+      # what anyone wrote it for. U+FEFF, the byte order mark that a file
+      # read without stripping it carries in front of its first word, is the
+      # third: ZERO WIDTH NO-BREAK SPACE, nothing to draw either - and it
+      # used to be refused as an Arabic mark, because the presentation forms
+      # block it closes was taken whole.
+      if {$code == 0x00AD || $code == 0x200B || $code == 0xFEFF} {
         incr position
         continue
       }
@@ -600,8 +654,17 @@ oo::define ::tclpdf::document::document {
   }
 
   # The resource name, registered on first use.
+  #
+  # The alias goes into the name AS IT IS, and pdfObj name escapes whatever
+  # a PDF name cannot carry bare (7.3.5, #xx from PDF 1.2 on - which font
+  # embed already requires). It used to strip the spaces first, and that made
+  # two aliases one resource: "a b" and "ab" both became FEab, the second
+  # face never got an object, and its text was drawn through the first face's
+  # CIDToGIDMap. Measured before this: two embeds, one FontDescriptor,
+  # pdffonts listing one face. Anything injective would do; keeping the alias
+  # readable in the file is worth the escape.
   method FontResource {alias} {
-    set name FE[string map {{ } {}} $alias]
+    set name FE$alias
     if {[my resource Font $name] eq {}} {
       set fonts [my state fonts]
       set entry [dict get $fonts $alias]
@@ -881,9 +944,18 @@ oo::define ::tclpdf::document::document {
         {Filter /FlateDecode} \
         [::tclpdf::filter encodeFlate [my FontToUnicode $used]]]
 
+    # The Type 0 font's own name: for a CIDFontType0 descendant, 9.7.6.1
+    # says it should be the descendant's BaseFont with the CMap name behind
+    # a hyphen - NimbusSans-Regular-Identity-H - and for a CIDFontType2 the
+    # descendant's name alone. Neither costs anything, and a "should" that
+    # is free is followed.
+    set type0Name $baseName
+    if {$cff} {
+      append type0Name -Identity-H
+    }
     $writer put [dict get $entry number] [::tclpdf::pdfObj dictionary [list \
         Type /Font Subtype /Type0 \
-        BaseFont [::tclpdf::pdfObj name $baseName] \
+        BaseFont [::tclpdf::pdfObj name $type0Name] \
         Encoding /Identity-H \
         DescendantFonts [::tclpdf::pdfObj arr [list [$writer ref $descendantNumber]]] \
         ToUnicode [$writer ref $toUnicodeNumber]]]
@@ -968,6 +1040,21 @@ oo::define ::tclpdf::document::document {
   # them is embedded for an instance: measured on Roboto at wght 900, the
   # instance reaches 130 units (63 thousandths of an em) further right than
   # the file's box says.
+  #
+  # An instance on a slnt or ital axis is a slanted face however upright the
+  # file's post table says the default is: the slnt value IS the italic angle
+  # (both are degrees counter-clockwise from the vertical, OpenType "slnt",
+  # negative for a right lean), and ital at 0.5 or more is the italic design.
+  # Both set the italic flag (Table 123, bit 7). Measured before this:
+  # Bitcount at slnt -8 wrote ItalicAngle 0 and Flags 4 under outlines that
+  # lean.
+  #
+  # CapHeight where OS/2 is older than version 2 and has no sCapHeight: the
+  # top of the H (U+0048), which is what the field measures - not the
+  # ascender, which is where the ascender is. DejaVu Sans, OS/2 version 1,
+  # wrote 928 for a cap height of 729. Only a face without an H, or a CFF
+  # face without OS/2 v2 (whose glyph boxes this package does not read),
+  # still falls back to the ascender.
   method FontDescriptorPairs {alias entry baseName fontFileRef {cff 0}} {
     set parsed [dict get $entry parsed]
     set units [dict get $parsed unitsPerEm]
@@ -979,14 +1066,25 @@ oo::define ::tclpdf::document::document {
     lassign $bbox xMin yMin xMax yMax
     set scale [expr {1000.0 / $units}]
     set italicAngle [dict get $parsed italicAngle]
+    set italicAxis 0
+    if {[dict exists $entry axes]} {
+      set axes [dict get $entry axes]
+      if {[dict exists $axes slnt] && [dict get $axes slnt] != 0} {
+        set italicAngle [::tclpdf::pdfObj num [dict get $axes slnt]]
+        set italicAxis 1
+      }
+      if {[dict exists $axes ital] && [dict get $axes ital] >= 0.5} {
+        set italicAxis 1
+      }
+    }
     # Symbolic (bit 3) rather than nonsymbolic: the font is addressed by glyph
     # id, so no standard encoding applies to it.
     set flags 4
-    if {[dict get $parsed macStyle] & 2 || $italicAngle != 0} {
+    if {[dict get $parsed macStyle] & 2 || $italicAngle != 0 || $italicAxis} {
       incr flags 64
     }
     set ascent [expr {[dict get $parsed ascender] * $scale}]
-    set capHeight $ascent
+    set capHeight {}
     set weight 400
     # OS/2 (Table 122 asks for CapHeight, TrueType keeps it here): version at
     # offset 0, usWeightClass at 4, sCapHeight at 88 from version 2 on. Read
@@ -1001,6 +1099,10 @@ oo::define ::tclpdf::document::document {
           set capHeight [expr {$sCapHeight * $scale}]
         }
       }
+    }
+    if {$capHeight eq {}} {
+      set top [my FontGlyphTop $alias $parsed 72]
+      set capHeight [expr {$top eq {} ? $ascent : $top * $scale}]
     }
     if {[dict exists $entry axes] && [dict exists [dict get $entry axes] wght]} {
       set weight [dict get $entry axes wght]
@@ -1020,6 +1122,35 @@ oo::define ::tclpdf::document::document {
         CapHeight [::tclpdf::pdfObj num $capHeight] \
         StemV $stemV \
         [expr {$cff ? {FontFile3} : {FontFile2}}] $fontFileRef]
+  }
+
+  # The yMax of the glyph a character maps to, in font units, read off the
+  # glyph record's header - of the instanced glyph where the face is an
+  # instance, since that is the glyph the file will carry - or {} where there
+  # is none to read: no such character, an empty glyph, or CFF outlines,
+  # which this package does not walk. The code is a decimal code point, as
+  # the cmap keys are: a dict compares strings, and 0x0048 is not 72 to it.
+  method FontGlyphTop {alias parsed code} {
+    set cmap [dict get $parsed cmap]
+    if {![dict exists $cmap $code] || [dict get $parsed outlines] ne "truetype"} {
+      return {}
+    }
+    set glyph [dict get $cmap $code]
+    set instanced [my FontInstanced $alias]
+    if {[dict exists $instanced $glyph]} {
+      set data [dict get $instanced $glyph bytes]
+    } else {
+      set loca [dict get $parsed loca]
+      set start [lindex $loca $glyph]
+      set stop [lindex $loca [expr {$glyph + 1}]]
+      set data [expr {$start >= $stop ? {} :
+          [string range [::tclpdf::sfnt table $parsed glyf] $start [expr {$stop - 1}]]}]
+    }
+    if {[string length $data] < 10} {
+      return {}
+    }
+    binary scan $data @8S yMax
+    return $yMax
   }
 
   # The /W array: widths per CID, in 1/1000 em. Written as individual entries
@@ -1150,4 +1281,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.7
+package provide tclpdf::font 1.8

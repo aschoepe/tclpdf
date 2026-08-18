@@ -141,6 +141,51 @@ proc ::tclpdf::xmp::stamp {{seconds {}}} {
   return "[string range $text 0 end-2]:[string range $text end-1 end]"
 }
 
+# The moment a PDF date string names (7.9.4, "D:YYYYMMDDHHmmSSOHH'mm'"), as
+# XMP wants it - or an empty string when the text is not a PDF date. Table
+# 317 pairs Info's CreationDate with xmp:CreateDate and ModDate with
+# xmp:ModifyDate; a caller who set either through [info] gets it mirrored
+# into the packet rather than the packet saying [Created] for both while
+# the dictionary says something else. The fields are what [parseDate] in
+# document.tcl reads out - one parser for the check at the call and for
+# this conversion.
+#
+# XMP dates are as partial as PDF ones (XMP part 1, 8.2.1.4: YYYY, YYYY-MM,
+# YYYY-MM-DD, then a time with at least hh:mm), so a date without a time
+# stays a date. A time is written with seconds and with the zone where the
+# PDF date has one - "Z" as Z, an offset as +HH:MM. A PDF date that gives
+# an hour and no minutes gets ":00" for them, as XMP has no shorter form.
+proc ::tclpdf::xmp::stampFromPdf {date} {
+  set fields [::tclpdf::document::parseDate $date]
+  if {$fields eq {}} {
+    return {}
+  }
+  dict with fields {}
+  # Absent minutes and seconds are spelled "00" - through [string], not
+  # through [expr], which would hand back the number 0 for the string "00".
+  foreach field {minute second zoneHour zoneMinute} {
+    if {[set $field] eq {}} {
+      set $field 00
+    }
+  }
+  set text $year
+  if {$month ne {}} {
+    append text - $month
+    if {$day ne {}} {
+      append text - $day
+      if {$hour ne {}} {
+        append text T $hour : $minute : $second
+        if {$sign eq "Z"} {
+          append text Z
+        } elseif {$sign ne {}} {
+          append text $sign $zoneHour : $zoneMinute
+        }
+      }
+    }
+  }
+  return $text
+}
+
 # One rdf:Description under $rdf, declaring $prefix, filled by $script.
 #
 # The script runs in the CALLER's frame, so it sees the caller's variables -
@@ -170,8 +215,10 @@ proc ::tclpdf::xmp::Describe {rdf prefix uri script} {
 #
 #   descriptions   list of {prefix uri {{kind tag value} ...}}
 #   info           dict with title, author, subject, producer, and optionally
-#                  language - the document's RFC 3066 tag, written as
-#                  dc:language (a bag of locales in XMP part 1)
+#                  creator, keywords, language - the document's RFC 3066
+#                  tag, written as dc:language (a bag of locales in XMP
+#                  part 1) - created and modified, the Info dictionary's
+#                  CreationDate and ModDate as PDF date strings
 #   raw            list of rdf:Description elements as XML text
 #
 # A procedure rather than a method, and not by preference: [appendFromScript]
@@ -195,7 +242,21 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   # The moment is HANDED IN by the caller, who shares it with the Info
   # dictionary's CreationDate - two clock reads here and there could straddle
   # a second and the two dates would disagree for the life of the file.
+  # A CreationDate or ModDate the caller SET wins over it for the property
+  # Table 317 pairs it with: the packet describes the dictionary, and a
+  # dictionary saying 2019 under a packet saying today is what ISO 19005-1,
+  # 6.7.3 forbids and what a reader comparing the two would report.
   set now [stamp $seconds]
+  set created $now
+  set modified $now
+  foreach {key variable} {created created modified modified} {
+    if {[dict exists $info $key] && [dict get $info $key] ne {}} {
+      set converted [stampFromPdf [dict get $info $key]]
+      if {$converted ne {}} {
+        set $variable $converted
+      }
+    }
+  }
 
   # Only x and rdf are declared at the root; every other prefix is declared on
   # the rdf:Description that uses it, which is the shape Adobe's own writer
@@ -268,15 +329,28 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
     }
   }
   Describe $rdf xmp [dict get $namespaces xmp] {
-    Tag_xmp:CreateDate { Text $now }
-    Tag_xmp:ModifyDate { Text $now }
-    Tag_xmp:CreatorTool { Text [expr {$creator ne {} ? $creator : $producer}] }
+    Tag_xmp:CreateDate { Text $created }
+    Tag_xmp:ModifyDate { Text $modified }
+    # Without a Producer - "info Producer {}" removes the key - there is no
+    # tool to name, and an empty element would name one that is empty.
+    if {$creator ne {} || $producer ne {}} {
+      Tag_xmp:CreatorTool { Text [expr {$creator ne {} ? $creator : $producer}] }
+    }
   }
   Describe $rdf pdf [dict get $namespaces pdf] {
-    Tag_pdf:Producer { Text $producer }
+    if {$producer ne {}} {
+      Tag_pdf:Producer { Text $producer }
+    }
     if {$keywords ne {}} {
       Tag_pdf:Keywords { Text $keywords }
     }
+    # Info's Trapped is NOT mirrored, although ISO 32000-1 Table 317 pairs
+    # it with pdf:Trapped: the predefined PDF schema of ISO 19005 - the
+    # 2004/2005 XMP specification's - knows Keywords, PDFVersion and
+    # Producer only, and veraPDF 1.30 fails a PDF/A file carrying
+    # pdf:Trapped on 6.6.2.3.1 (measured 2026-08-18, two failed checks on
+    # a 3u document that was clean without it). The dictionary keeps the
+    # name; the packet stays inside the schema every validator knows.
   }
 
   # Parsed, not appended as text: a raw contribution comes from a caller and
@@ -310,7 +384,15 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   # which is what [append text] then continued. The packet came out with a
   # declaration URI in front of its opening processing instruction, which qpdf
   # accepted without a word and veraPDF reported as an XMP with nothing in it.
-  set packet "<?xpacket begin=\"\xef\xbb\xbf\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+  #
+  # The begin attribute is the byte order mark, ONE character U+FEFF, and
+  # the packet is encoded to UTF-8 on its way into the stream (see
+  # [metadata] and WriteMetadata) - which turns it into the three bytes EF
+  # BB BF that XMP part 1, 7.3.2 asks for. It used to be written as the
+  # three Latin-1 CHARACTERS \xef\xbb\xbf, and the encoding then made six
+  # bytes of them, C3 AF C2 BB C2 BF: no validator objected, and every
+  # packet this package wrote carried a begin attribute that was not a BOM.
+  set packet "<?xpacket begin=\"\ufeff\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
   append packet $body "\n"
   # The trailing padding is prescribed: it lets a tool rewrite the packet in
   # place without moving every byte after it (XMP part 1, 7.3.2).
@@ -399,7 +481,8 @@ oo::define ::tclpdf::document::document {
             title [my info Title] author [my info Author] \
             subject [my info Subject] producer [my info Producer] \
             creator [my info Creator] keywords [my info Keywords] \
-            language [my language]] \
+            language [my language] \
+            created [my info CreationDate] modified [my info ModDate]] \
         [my state xmpRaw] [my Created]]]
     return
   }

@@ -410,4 +410,58 @@ test xObject-6.1 {form create -unit reads -size in that unit} -body {
       [lmap value $size {format %.1f $value}]
 } -result {{/BBox [0 0 72 72]} {25.4 25.4}}
 
+# -- refused before the script runs, before the mark is taken --------------------
+
+test xObject-refuse-7.1 {form create -size is two lengths above zero, checked before the script} -body {
+  # A tiling pattern made the same check; a form did not: {0 0} and {-5 5}
+  # were accepted, and {5} ran the script and failed at the BBox.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set ran 0
+  set codes {}
+  foreach {size pattern} {
+    {0 0} {*-size of form "f" is {0 0} - a form needs*above zero*}
+    {-5 5} {*-size of form "f" is {-5 5} - a form needs*above zero*}
+    {5 0} {*a form needs*above zero*}
+    {5} {*-size of form "f" is {width height}, not "5"*}
+    {5 5 5} {*-size of form "f" is {width height}*}
+  } {
+    lappend codes [catch {$doc form create f -size $size -script {set ::ran 1}} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes $ran [$doc form names] [$doc resource XObject] [::tclpdfTest::content $doc]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1 1 1} 0 {} {} {}}
+
+test xObject-refuse-7.2 {form place: -at, -scale and -rotate are checked before the mark and the q} -body {
+  # -rotate x and -at {1} used to be read after the mark and the q were
+  # written and left both open; -scale 0 went out as a singular cm, and
+  # -scale -1 placed the form mirrored beyond its corner.
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc tagged 1
+  $doc page add
+  $doc form create g -size {10 10} -script {}
+  set codes {}
+  foreach {call pattern} {
+    {-rotate x} {*-rotate of form place is an angle*}
+    {-scale x} {*-scale of form place is a factor above zero*}
+    {-scale 0} {*-scale of form place is a factor above zero*}
+    {-scale -1} {*-scale of form place is a factor above zero*}
+    {-at {1}} {*-at of form place is a point {x y}*}
+    {-at {1 2 3}} {*-at of form place is a point {x y}*}
+    {-at {a b}} {*not a measurement*}
+  } {
+    lappend codes [catch {$doc form place g -at {1 1} {*}$call} message]
+    lappend codes [string match $pattern $message]
+  }
+  set before [::tclpdfTest::content $doc]
+  # and a placement that passes is bracketed and balanced as usual
+  $doc form place g -at {1 1} -scale 2 -rotate 10 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $before \
+      [regexp {^/Artifact <</Type /Layout>> BDC\nq\n[-0-9. ]+ cm\n/XO1 Do\nQ\nEMC\n$} $stream]
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} 1}
+
 cleanupTests

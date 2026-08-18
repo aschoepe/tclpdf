@@ -451,9 +451,11 @@ proc ::tclpdf::sfnt::CffDictHasOperator {dict b0 {b1 {}}} {
   return 0
 }
 
+# fsType from OS/2, or {} for a face without that table: an absent
+# permission is not permission 0, and [permission] says so.
 proc ::tclpdf::sfnt::ParseFsType {bytes tables} {
   if {![dict exists $tables OS/2]} {
-    return 0
+    return {}
   }
   lassign [dict get $tables OS/2] position -
   binary scan $bytes @[expr {$position + 8}]Su fsType
@@ -481,20 +483,39 @@ proc ::tclpdf::sfnt::ParsePost {bytes tables} {
   return [expr {$angle == int($angle) ? int($angle) : $angle}]
 }
 
-# What fsType permits, in words.
+# What fsType permits, in words - the whole of it, not the low nibble alone.
+#
+# Bits 0-3 say whether embedding is allowed at all; bit 8 (0x0100) forbids
+# SUBSETTING and bit 9 (0x0200) allows bitmaps only (OpenType "OS/2",
+# fsType). Read as the low four bits only, 0x0100 answered "installable",
+# which is the one word that must not be said of a face whose vendor forbids
+# the very thing this package does to it. The two upper bits are appended
+# where set, so the answer to a face that permits embedding but not
+# subsetting names both. An empty fsType - no OS/2 table at all - is not 0:
+# the file has stated nothing, and "unknown" is the honest word.
 proc ::tclpdf::sfnt::permission {fsType} {
+  if {$fsType eq {}} {
+    return "unknown - the face has no OS/2 table and states no permission"
+  }
   # Bits 1, 2 and 3 are mutually exclusive by the specification - a font that
   # sets several is malformed, and saying so beats picking one.
   set bits [expr {$fsType & 0x000F}]
   switch -- $bits {
-    0 {return "installable - no restriction on embedding"}
-    2 {return "restricted - the vendor does not permit embedding"}
-    4 {return "preview and print only"}
-    8 {return "editable"}
+    0 {set words "installable - no restriction on embedding"}
+    2 {set words "restricted - the vendor does not permit embedding"}
+    4 {set words "preview and print only"}
+    8 {set words "editable"}
     default {
-      return "unclear - fsType $fsType sets several exclusive bits"
+      set words "unclear - fsType $fsType sets several exclusive bits"
     }
   }
+  if {$fsType & 0x0100} {
+    append words "; no subsetting (bit 8)"
+  }
+  if {$fsType & 0x0200} {
+    append words "; bitmap embedding only (bit 9)"
+  }
+  return $words
 }
 
 # The PostScript name and the family name, from the name table.
@@ -568,4 +589,4 @@ proc ::tclpdf::sfnt::NameString {bytes start length platform} {
   return $decoded
 }
 
-package provide tclpdf::sfnt 1.4
+package provide tclpdf::sfnt 1.5

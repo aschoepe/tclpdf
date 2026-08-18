@@ -313,4 +313,57 @@ test leader-4.3 {-wordSpacing is counted between the copies of a fill that has a
       [regexp -all {4 Tw} $content]
 } -result {1 3}
 
+# -- what the row refuses, and the artifact kind ------------------------------
+
+test leader-5.1 {-width and -gap are checked as text checks its width, before anything is drawn} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes {}
+  foreach {call pattern} {
+    {-width -5} {-width must be a positive number, not "-5"}
+    {-width abc} {-width must be a positive number, not "abc"}
+    {-width 0} {-width must be a positive number, not "0"}
+    {-width 100 -gap -30} {-gap takes a distance of 0 or more, not "-30"}
+    {-width 100 -gap abc} {-gap takes a distance of 0 or more, not "abc"}
+  } {
+    lappend codes [catch {$doc leader "a" "b" -at {20 20} {*}$call} message] \
+        [regexp -- $pattern $message]
+  }
+  set content [::tclpdfTest::content $doc]
+  # A gap of 0 is legal: the fill runs up to both ends.
+  lappend codes [catch {$doc leader "a" "b" -at {20 20} -width 100 -gap 0}]
+  $doc destroy
+  list $codes [string length $content]
+} -result {{1 1 1 1 1 1 1 1 1 1 0} 0}
+
+test leader-5.2 {-tag takes the artifact kind as a list, as text does, and the whole row carries it} -body {
+  # A running head is "-tag {Artifact Pagination Header}"; compared whole,
+  # the list was handed to [structure] as a type and refused as one.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc leader "Intro" "3" -at {20 20} -width 100 \
+      -tag {Artifact Pagination Header}} result]
+  set content [::tclpdfTest::content $doc]
+  set tree [$doc state structure]
+  $doc destroy
+  # Both ends and the fill are bracketed as that artifact - three of them,
+  # nothing else in the stream, and nothing in the tree.
+  list $code [regexp -all {/Artifact <</Type /Pagination /Subtype /Header>> BDC} $content] \
+      [regexp -all {BDC} $content] [regexp -all {EMC} $content] [regexp -all {MCID} $content] \
+      [llength $tree] [expr {$result > 20}]
+} -result {0 3 3 3 0 0 1}
+
+test leader-5.3 {an artifact kind the standard does not know is refused, and the stream stays empty} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc leader "Intro" "3" -at {20 20} -width 100 -tag {Artifact Foo}} message]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [regexp {unknown artifact type "Foo"} $message] [string length $content]
+} -result {1 1 0}
+
 cleanupTests

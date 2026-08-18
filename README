@@ -60,8 +60,8 @@ SYNOPSIS
 
         Barcodes
             Through tzint, which encodes into SVG that tclpdf then draws as
-            vectors. No encoder of its own, and none needed; tzint is
-            optional.
+            vectors. No encoder of its own, and none needed; tzint is not a
+            dependency of this package.
 
         Tagged PDF and PDF/A-3a
             A structure tree with the 49 standard types, nesting checked
@@ -104,20 +104,19 @@ DEPENDENCIES
     The core needs nothing beyond Tcl itself: zlib is a built-in command,
     not a package.
 
-        tdom     - required for the XMP metadata packet, so every document
-                   that declares PDF/A, PDF/UA or ZUGFeRD needs it. It is
-                   also what reads SVG when present: it parses 27 to 48 times
-                   faster than the parser tclpdf brings along and refuses an
-                   entity expansion bomb. Without it SVG still works, through
-                   the built-in element tree parser, and a document with no
-                   metadata claim runs without tdom.
+        tdom     - 0.9.0 or newer; required for the XMP metadata packet, so
+                   every document that declares PDF/A, PDF/UA or ZUGFeRD
+                   needs it. It is also what reads SVG when present: it
+                   parses 27 to 48 times faster than the parser tclpdf brings
+                   along and refuses an entity expansion bomb. Without it SVG
+                   still works, through the built-in element tree parser, and
+                   a document with no metadata claim runs without tdom.
 
-        tzint    - optional, only for barcodes. It produces SVG, which
-                   "svg -data" draws; no code in this package knows about
-                   barcodes.
-
-    That is the whole list. Encryption is planned work and will name its
-    package here once it exists.
+    That is the whole list; there is no other optional package. Barcodes
+    need none either: tzint is a separate encoder, not a package tclpdf
+    uses - it produces SVG, which "svg -data" draws, and no code in this
+    package knows about barcodes. Encryption is planned work and will name
+    its package here once it exists.
 
     Tk is not required and must not be pulled in.
 
@@ -130,9 +129,21 @@ GETTING THE CODE
 
 INSTALLING
 
-    Simply extract the download tclpdf-<version>.zip into your Tcl library path.
+    The release archives tclpdf<version>.zip and tclpdf<version>.tar.gz hold
+    the same thing: one directory tclpdf<version> with the Tcl modules,
+    pkgIndex.tcl and the ICC profiles in icc/ - nothing to build. Extract
+    it into a directory on the auto_path of your tclsh (the lib directory
+    of the Tcl installation, or one you add with lappend auto_path), and
 
-    Since tclpdf is TEA-compatible you should be able to do
+        package require tclpdf
+
+    finds it. Nothing else is needed; tdom only for PDF/A, PDF/UA and
+    ZUGFeRD (see the manual, "Optional packages").
+
+    The source archive tclpdf<version>-src.tar.gz - and a checkout of the
+    repository - carry the tests, the examples with their fonts, the manual
+    sources and the tools. Since tclpdf is TEA-compatible you should be
+    able to do
 
         ./configure
         make test
@@ -140,7 +151,7 @@ INSTALLING
 
     Build IN the source directory. A separate build directory configures
     cleanly but cannot run the tests: the generated pkgIndex.tcl locates the
-    modules through $dir, which is then the build directory, while the 67
+    modules through $dir, which is then the build directory, while the 68
     .tcl files stay where the sources are. Nothing is lost by building
     in-tree - make install puts index and modules together again either way.
 
@@ -167,13 +178,17 @@ LICENCE, AND WHY NO FONT IS PART OF IT
     the ICC's own sRGB profile under the ICC's terms (LICENSE-ICC.txt), kept
     beside the default for comparison; see icc/README.md.
 
-    ONE OTHER PIECE OF THIRD-PARTY MATERIAL travels in the source archive:
-    tools/agl/glyphlist.txt, the Adobe Glyph List, verbatim and under Adobe's
-    own BSD licence, whose text is the header of the file. It is BUILD-TIME
-    data - tools/mkafm.tcl turns glyph names into the widths in afmData.tcl
-    with it - and it is not installed. Before 2026-08-13 the same table was
-    read out of a pdf4tcl installation instead, which made afmData.tcl
-    unreproducible without another project on the disk.
+    TWO OTHER PIECES OF THIRD-PARTY MATERIAL travel in the source archive,
+    both BUILD-TIME data and neither installed: tools/agl/glyphlist.txt, the
+    Adobe Glyph List, verbatim and under Adobe's own BSD licence, whose text
+    is the header of the file - tools/mkafm.tcl turns glyph names into the
+    widths in afmData.tcl with it; and examples/assets/fonts/adobe-afm/, the
+    fourteen Adobe core font metrics (the AFM files with Adobe's LICENSE.txt
+    and MustRead.html beside them, Adobe's AFM grant, which forbids
+    separating the licence from the metrics) that afmData.tcl is generated
+    from. Before 2026-08-13 the same table was read out of a pdf4tcl
+    installation instead, which made afmData.tcl unreproducible without
+    another project on the disk.
 
     NO FONT IS PART OF THE PACKAGE. The faces under examples/assets/fonts are
     there so that the tests and the examples have something to embed, and they
@@ -191,7 +206,9 @@ LICENCE, AND WHY NO FONT IS PART OF IT
     domain and free-use statements of their authors), the URW Core 35 under
     fonts/urw-core35-fonts/ (OFL 1.1 chosen of three) and the Liberation
     fonts under fonts/liberation-fonts/ (OFL 1.1) - two free sets that keep
-    the measure of the standard 14, see the manual. The full texts sit in
+    the measure of the standard 14, see the manual - and the fourteen Adobe
+    core font metrics under fonts/adobe-afm/ (Adobe's AFM grant, LICENSE.txt
+    beside them; build input, not example data). The full texts sit in
     examples/assets/fonts/licenses/, each named after the family it belongs
     to, and they have to travel with any copy of those files. The inventory in
     examples/assets/README.md records for every face where it came from, under

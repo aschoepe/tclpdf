@@ -123,9 +123,16 @@ oo::define ::tclpdf::document::document {
               of [join $allowed {, }] - not \"$value\""
         }
       } elseif {$option eq "numCopies"} {
-        if {![string is integer -strict $value] || $value < 1} {
-          return -code error "tclpdf: viewerPreferences -numCopies takes a\
-              positive integer, not \"$value\""
+        # Table 150: "supported values shall be the integers 2 through 5;
+        # values outside this range shall be ignored". A 1 or a 100 is not
+        # a wish a reader follows, so it is refused rather than written -
+        # "positive integer" used to be the rule here, and the value went
+        # into the file to be ignored at the recipient. Whole digits only:
+        # 0x3 and 2.0 are integers to [string is integer] and not to a
+        # reader.
+        if {![regexp {^[2-5]$} $value]} {
+          return -code error "tclpdf: viewerPreferences -numCopies takes an\
+              integer from 2 to 5 (ISO 32000-1, Table 150), not \"$value\""
         }
       }
       my RequireVersion [expr {[dict exists $since $option] ?
@@ -137,7 +144,14 @@ oo::define ::tclpdf::document::document {
       }
       dict set current $option $value
     }
-    if {[my state viewerPreferences] eq {}} {
+    # Subscribed once per document, and remembered as such - like fontHooked
+    # in font.tcl. It used to be decided by "no preference set yet", and
+    # that is not the same thing: ua 0 empties the dictionary again
+    # (UaWithdraw takes DisplayDocTitle back out), and the next call then
+    # subscribed a second ViewerPreferencesCatalog - measured, one catalog
+    # subscriber more after ua 1; ua 0; viewerPreferences -hideToolbar 1.
+    if {[my state viewerPreferencesHooked] eq {}} {
+      my state viewerPreferencesHooked 1
       my onSelf catalog ViewerPreferencesCatalog
     }
     my state viewerPreferences $current

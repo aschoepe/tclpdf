@@ -18,10 +18,16 @@
 #     the document corpus, they save 1.5 % on an 18-object invoice and 3.1 % in
 #     the median - and they cost every reader that only speaks PDF 1.4. Reading
 #     them is a different matter and belongs to stage 7 (see docs/FEATURES.md).
-#   * Offsets are not counted by hand. The channel is asked with [tell] after
-#     every object, so a miscount in the buffer cannot happen. An xref table
-#     that is off by one byte produces a file that some readers still open,
-#     which is the worst kind of defect to chase.
+#   * Offsets are counted from the bytes handed to the channel, not asked of
+#     the channel with [tell]. That used to be the other way round, for the
+#     safety of never miscounting - and [tell] answers -1 on a pipe or a
+#     socket, and on a channel that already carries a CGI header it counts
+#     the header in: the xref then said "-000000001" for every object, and
+#     "startxref -1". An xref offset is relative to the %PDF- header (7.5.4),
+#     so counting what is written after that point is right on every kind
+#     of channel. An xref table that is off by one byte produces a file that
+#     some readers still open, which is the worst kind of defect to chase -
+#     hence one counter, fed by the one method that writes.
 #
 
 package require Tcl 8.6.11-
@@ -235,34 +241,56 @@ oo::class create ::tclpdf::writer::pdf {
     # translation setting already selects the byte-transparent encoding in both.
     fconfigure $channel -translation binary
 
+    # Every byte goes through [Emit], which counts it: the xref offsets are
+    # taken from that count, never from [tell] - see the head of this file.
+    # The count starts at the header, because that is where a reader starts
+    # counting too (7.5.4): a channel that already carries a CGI header gets
+    # a file whose offsets are right all the same.
+    set written 0
+
     # Line two carries four bytes above 127 so that anything looking at the
     # file - a mail gateway, a version control system - classifies it as
     # binary and stops translating line endings (7.5.2).
-    puts -nonewline $channel "%PDF-[my version]\n"
-    puts -nonewline $channel "%\xe2\xe3\xcf\xd3\n"
+    incr written [my Emit $channel "%PDF-[my version]\n"]
+    incr written [my Emit $channel "%\xe2\xe3\xcf\xd3\n"]
 
     set offsets {}
     for {set number 1} {$number <= $tclpdfNext} {incr number} {
-      dict set offsets $number [tell $channel]
-      puts -nonewline $channel "$number 0 obj\n[dict get $tclpdfObjects $number]\nendobj\n"
+      dict set offsets $number $written
+      incr written [my Emit $channel \
+          "$number 0 obj\n[dict get $tclpdfObjects $number]\nendobj\n"]
     }
 
-    set startxref [tell $channel]
-    puts -nonewline $channel "xref\n0 [expr {$tclpdfNext + 1}]\n"
+    set startxref $written
+    incr written [my Emit $channel "xref\n0 [expr {$tclpdfNext + 1}]\n"]
     # Entry zero heads the chain of free objects and is always this literal.
     # Every entry is exactly 20 bytes including the two-byte line ending -
     # readers do seek into this table by index.
-    puts -nonewline $channel "0000000000 65535 f \n"
+    incr written [my Emit $channel "0000000000 65535 f \n"]
     for {set number 1} {$number <= $tclpdfNext} {incr number} {
-      puts -nonewline $channel [format "%010d 00000 n \n" [dict get $offsets $number]]
+      incr written [my Emit $channel \
+          [format "%010d 00000 n \n" [dict get $offsets $number]]]
     }
 
     set identifier [::tclpdf::pdfObj hexStr [my id]]
     lappend trailerPairs Size [expr {$tclpdfNext + 1}] \
         ID [::tclpdf::pdfObj arr [list $identifier $identifier]]
-    puts -nonewline $channel "trailer\n[::tclpdf::pdfObj dictionary $trailerPairs]\n"
-    puts -nonewline $channel "startxref\n$startxref\n%%EOF\n"
+    incr written [my Emit $channel \
+        "trailer\n[::tclpdf::pdfObj dictionary $trailerPairs]\n"]
+    incr written [my Emit $channel "startxref\n$startxref\n%%EOF\n"]
     return $startxref
+  }
+
+  # Write one piece and answer its length, which the caller adds to its
+  # count. The count is what the xref is built from, so this is the ONE way
+  # bytes leave [writeChannel]: a second [puts] beside it would be a byte
+  # the table does not know about. The length is the string length, which
+  # is the byte count because everything that reaches here is bytes - stream
+  # data by [CheckBytes], and every other object body by construction in
+  # pdfObj.
+  method Emit {channel text} {
+    puts -nonewline $channel $text
+    return [string length $text]
   }
 
   # Write to a file. The channel is configured here rather than at the call
@@ -307,4 +335,4 @@ oo::class create ::tclpdf::writer::pdf {
   }
 }
 
-package provide tclpdf::writer 1.1
+package provide tclpdf::writer 1.2

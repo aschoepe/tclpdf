@@ -320,4 +320,94 @@ test shaping-2.6 {the standard fourteen are unaffected} -constraints haveLatin -
   set code
 } -result 0
 
+# A supplementary-plane character is one character to Tcl 9 and a replacement
+# character to Tcl 8.6's \U escape - measured: "\U0001E900" scans as U+FFFD
+# in 8.6. Decoded from its UTF-8 bytes it is the right character in both, so
+# that is how the tests below spell such a character.
+proc smp {code} {
+  return [encoding convertfrom utf-8 [binary format cccc \
+      [expr {0xF0 | ($code >> 18)}] [expr {0x80 | (($code >> 12) & 0x3F)}] \
+      [expr {0x80 | (($code >> 6) & 0x3F)}] [expr {0x80 | ($code & 0x3F)}]]]
+}
+
+test shaping-5.1 {the joining scripts the list used to miss are refused, in both directions} -body {
+  # Measured 2026-08-18: U+0860, U+0872, U+1820 passed as needing nothing,
+  # although the joining table knows every one of them as D or R. Syriac
+  # Supplement joins like Syriac, Arabic Extended-B is Arabic and takes the
+  # cursive road, and Mongolian joins without running right to left - so its
+  # message must not send anyone to -direction rtl.
+  set found {}
+  foreach {name char} [list SyriacSup "\u0860" ArabicExtB "\u0872" \
+      Mongolian "\u1820" PhagsPa "\uA840"] {
+    foreach direction {ltr rtl} {
+      set finding [::tclpdf::shaping needed $char $direction]
+      lappend found "$name/$direction" [expr {[llength $finding] ?
+          "[lindex $finding 2]/[lindex $finding 4]" : "-"}]
+    }
+  }
+  list $found [string match "*needs contextual shaping - tclpdf does not*" \
+      [::tclpdf::shaping message [::tclpdf::shaping needed "\u1820"]]] \
+      [string match "*right-to-left*" \
+      [::tclpdf::shaping message [::tclpdf::shaping needed "\u1820"]]]
+} -result {{SyriacSup/ltr Syriac/shaping SyriacSup/rtl Syriac/shaping ArabicExtB/ltr Arabic/forms ArabicExtB/rtl Arabic/forms Mongolian/ltr Mongolian/shaping Mongolian/rtl Mongolian/shaping PhagsPa/ltr Phags-pa/shaping PhagsPa/rtl Phags-pa/shaping} 1 0}
+
+test shaping-5.2 {an Arabic Extended-B mark is a mark, by joining type} -body {
+  # U+0898 is transparent in the joining table, so the cursive road turns it
+  # into a mark finding as it does for a fatha - the same rule reaching the
+  # new block through the same table.
+  lassign [::tclpdf::shaping needed "\u0872\u0898" rtl 1] position code system what kind
+  list $position [format %04X $code] $system $kind
+} -result {1 0898 Arabic shaping}
+
+test shaping-5.3 {the cursive scripts of the supplementary planes are refused} -body {
+  # Measured 2026-08-18: Adlam, Hanifi Rohingya, Sogdian and Manichaean
+  # passed as if they needed nothing. Each is D or L or R in the joining
+  # table and right-to-left; and Arabic Extended-C is Arabic. The characters
+  # come from their UTF-8 bytes (see smp above), which Tcl 8.6 can hold
+  # where its \U escape cannot.
+  set found {}
+  foreach {name char} [list Manichaean [smp 0x10AC0] PsalterPahlavi [smp 0x10B80] \
+      HanifiRohingya [smp 0x10D00] ArabicExtC [smp 0x10EC2] Sogdian [smp 0x10F30] \
+      OldUyghur [smp 0x10F70] Chorasmian [smp 0x10FB0] Adlam [smp 0x1E900]] {
+    set finding [::tclpdf::shaping needed $char rtl]
+    lappend found $name [expr {[llength $finding] ?
+        "[lindex $finding 2]/[lindex $finding 4]" : "-"}]
+  }
+  set found
+} -result {Manichaean Manichaean/shaping PsalterPahlavi {Psalter Pahlavi/shaping} HanifiRohingya {Hanifi Rohingya/shaping} ArabicExtC Arabic/forms Sogdian Sogdian/shaping OldUyghur {Old Uyghur/shaping} Chorasmian Chorasmian/shaping Adlam Adlam/shaping}
+
+test shaping-5.4 {the byte order mark is not Arabic and not a mark} -body {
+  # U+FEFF closes the Arabic Presentation Forms-B block and is none of it:
+  # ZERO WIDTH NO-BREAK SPACE, BN. Taken with the block it was refused as
+  # needing mark placement - in a Latin line too, which is where a file read
+  # with its BOM left in puts it. U+FEFE, the last real presentation form,
+  # is still caught.
+  list [::tclpdf::shaping needed "\uFEFFabc"] \
+      [::tclpdf::shaping needed "\u05D0\uFEFF" rtl] \
+      [lrange [::tclpdf::shaping needed "\uFEFE"] 2 2]
+} -result {{} {} Arabic}
+
+test shaping-5.5 {a BOM in front of the text is dropped, not drawn and not refused} \
+    -constraints haveLatin -body {
+  # The same as U+200B in FontRun: nothing to draw, nothing to measure, and
+  # no glyph asked of the face - DejaVu Sans has one at U+FEFF, and drawing
+  # it would carry an empty glyph into the file. Two lines, with and without
+  # the mark, and the same show operator for both.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed face $::latinFace
+  $doc font -family face -size 12
+  $doc text "\uFEFFBochum" -at {20 20}
+  $doc text "Bochum" -at {20 30}
+  set width [$doc textWidth "\uFEFFBochum"]
+  set plain [$doc textWidth "Bochum"]
+  set shows [::tclpdfTest::shows [::tclpdfTest::content $doc]]
+  $doc page add
+  set code [catch {$doc text "\u05D0\uFEFF\u05D1" -at {100 20} -direction rtl} message]
+  set rtl [::tclpdfTest::drawnText $doc face [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [expr {$width == $plain}] [expr {[lindex $shows 0] eq [lindex $shows 1]}] \
+      $code $rtl
+} -result [list 1 1 0 "\u05D1\u05D0"]
+
 cleanupTests

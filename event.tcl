@@ -53,9 +53,20 @@ oo::class create ::tclpdf::event::emitter {
   # subscriber never has to capture the object from its surroundings.
   #
   # Returns a token for [off]. Subscribers run in registration order.
+  #
+  # The event has to be one the emitter fires. Which names those are is the
+  # emitter's business, not this class's - it asks [events], which answers
+  # an empty list here and the six names in the document - and a name not
+  # in that list is refused, naming the ones that exist. "on beforeWrte"
+  # used to be accepted without a word, and the subscriber then never ran.
   method on {event script} {
     if {$script eq {}} {
       return -code error "tclpdf: empty callback for event \"$event\""
+    }
+    set known [my events]
+    if {[llength $known] && $event ni $known} {
+      return -code error "tclpdf: there is no event \"$event\" - known are:\
+          [join $known {, }]"
     }
     set token e[incr tclpdfNextToken]
     dict lappend tclpdfSubscribers $event [list $token $script]
@@ -100,6 +111,13 @@ oo::class create ::tclpdf::event::emitter {
     return $count
   }
 
+  # The events this emitter fires, for [on] to check against. Empty means
+  # anything goes - a bare emitter has no PDF knowledge and no list; the
+  # document overrides this with the names it fires (see document.tcl).
+  method events {} {
+    return {}
+  }
+
   # Which events currently have subscribers - for tests and for diagnostics.
   method subscribers {{event {}}} {
     if {$event eq {}} {
@@ -112,4 +130,4 @@ oo::class create ::tclpdf::event::emitter {
   }
 }
 
-package provide tclpdf::event 1.1
+package provide tclpdf::event 1.2

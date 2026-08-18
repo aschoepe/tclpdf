@@ -114,6 +114,11 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
+    # Everything that can be refused is refused here, before an element is
+    # opened or a cell drawn: options, values, widths, and whether every row
+    # fits the band. A table refused for a mistyped key leaves the page, the
+    # structure tree and the state as they were.
+    set prepared [my TablePrepare $args]
     # A tagged document gets the table as a Table element holding TR and
     # TH/TD - the one structure a writer can derive with certainty, because
     # the sections and the grid are already known here.
@@ -122,7 +127,7 @@ oo::define ::tclpdf::document::document {
     # written twice; the guard reads the state directly rather than asking
     # [tagged], which would load the structure module for every table in
     # every document.
-    set draw [list my TableDrawAll $args]
+    set draw [list my TableDrawAll $prepared]
     if {[my state tagged] eq "1"} {
       return [my structure Table -script $draw]
     }
@@ -183,42 +188,104 @@ oo::define ::tclpdf::document::document {
           "column key" table
     }
 
+    # The distances, checked as numbers before anything reads them. Measured
+    # before 2026-08-18: "-bottom abc" compared as a string and quietly
+    # switched the breaking off, "-minRowHeight -5" was taken, and "-top abc"
+    # surfaced from inside the run as a Tcl error about a non-numeric operand,
+    # which names neither the option nor the mistake.
+    foreach option {top bottom} {
+      set value [dict get $options $option]
+      if {$value ne {} && (![string is double -strict $value] || $value < 0)} {
+        return -code error "tclpdf: -$option takes a distance from the top of\
+            the page in the document unit, not \"$value\""
+      }
+    }
+    set minimum [dict get $options minRowHeight]
+    if {![string is double -strict $minimum] || $minimum < 0} {
+      return -code error "tclpdf: -minRowHeight takes a height of 0 or more in\
+          the document unit, not \"$minimum\""
+    }
+    set repeat [dict get $options repeatColumns]
+    if {![string is integer -strict $repeat] || $repeat < 0} {
+      return -code error "tclpdf: -repeatColumns takes a number of leading\
+          columns, 0 or more, not \"$repeat\""
+    }
+
     set left [expr {[dict get $options at] eq {} ? 0 :
         [lindex [dict get $options at] 0]}]
     if {[dict get $options width] eq {}} {
       lassign [my page size] pageWidth ->
       dict set options width [expr {$pageWidth - 2 * max($left, 10)}]
     }
-    if {[dict get $options bottom] eq {} || [dict get $options top] eq {}} {
-      # The type area of the page - -typeArea when the document has one,
-      # five percent of the page height otherwise; see [page typeArea].
-      #
-      # Derived from the page, NOT from -at. Taking the bottom from the left
-      # margin meant a table placed at x=140 got a bottom of 157 instead of
-      # 287: it broke after two rows, started again on the new page still
-      # below the limit, and produced eleven pages for six rows. And taking
-      # the top from -at made a table starting at y=240 continue at 240 on
-      # every page after the first, so the further down it began the more
-      # pages it burned - the same 60 rows took 2 pages from the top and 60
-      # from y=270, one row per page. -at says where THIS table starts,
-      # which is an answer to a different question than where the page ends
-      # and where the next one begins.
+    # Which of -top and -bottom the caller left to the page is remembered,
+    # because the answer is asked on every page the table is drawn on - see
+    # TableArea. Not asked here: [layout] measures cells and needs neither.
+    dict set options topDefault [expr {[dict get $options top] eq {}}]
+    dict set options bottomDefault [expr {[dict get $options bottom] eq {}}]
+    return $options
+  }
+
+  # -top and -bottom for the CURRENT page: the caller's own values where they
+  # were given, the type area of the page for the rest - -typeArea when the
+  # document has one, five percent of the page height otherwise; see
+  # [page typeArea].
+  #
+  # Derived from the page, NOT from -at. Taking the bottom from the left
+  # margin meant a table placed at x=140 got a bottom of 157 instead of
+  # 287: it broke after two rows, started again on the new page still
+  # below the limit, and produced eleven pages for six rows. And taking
+  # the top from -at made a table starting at y=240 continue at 240 on
+  # every page after the first, so the further down it began the more
+  # pages it burned - the same 60 rows took 2 pages from the top and 60
+  # from y=270, one row per page. -at says where THIS table starts,
+  # which is an answer to a different question than where the page ends
+  # and where the next one begins.
+  #
+  # And asked again after every page the table adds, not once at the call:
+  # the defaults were taken from the page current at the call and carried
+  # onto continuation pages of another size - measured on a landscape
+  # document whose first page was portrait, the rows of page two ran to
+  # 278 mm on a page 210 mm high. [text -paginate] reads the area per page;
+  # so does this now. The two checks live here for the same reason: an
+  # explicit -top against the default bottom of a smaller continuation page
+  # can leave no band at all, and a band nothing fits into is refused rather
+  # than filled one row per page.
+  method TableArea {options} {
+    if {[dict get $options topDefault] || [dict get $options bottomDefault]} {
       lassign [my page typeArea] -> areaTop -> areaBottom
-      if {[dict get $options bottom] eq {}} {
-        dict set options bottom $areaBottom
-      }
-      if {[dict get $options top] eq {}} {
+      if {[dict get $options topDefault]} {
         dict set options top $areaTop
       }
+      if {[dict get $options bottomDefault]} {
+        dict set options bottom $areaBottom
+      }
+    }
+    set top [dict get $options top]
+    set bottom [dict get $options bottom]
+    lassign [my page size] -> pageHeight
+    if {$bottom > $pageHeight} {
+      return -code error "tclpdf: -bottom [format %g $bottom] lies below the\
+          foot of page [my page current], which is [format %g $pageHeight]\
+          high - -bottom is where a breaking table stops, and has to be on the\
+          page"
+    }
+    if {$bottom <= $top} {
+      return -code error "tclpdf: -bottom [format %g $bottom] is not below\
+          -top [format %g $top] on page [my page current] - the table would\
+          have no room between where it resumes and where it stops"
     }
     return $options
   }
 
-  method TableDrawAll {arguments} {
+  # The first half of drawing a table: everything up to, but not including,
+  # the first operator. Answers what TableDrawAll takes - the options, where
+  # the table starts, and every column group measured.
+  method TablePrepare {arguments} {
     set options [my TableOptions $arguments]
     if {[dict get $options at] eq {}} {
       return -code error "tclpdf: table needs -at {x y}"
     }
+    set options [my TableArea $options]
     lassign [dict get $options at] left top
 
     set sections {}
@@ -231,23 +298,49 @@ oo::define ::tclpdf::document::document {
         [dict get $options columns] [dict get $options width] $options]
 
     set groups [my TableGroups $widths $options]
-    set y $top
+    # Every column group is measured, and measured against the area, before
+    # the first one is drawn: a group that cannot be broken to fit is refused
+    # with nothing on the page, not after the group before it went out.
+    set runs {}
     set first 1
     foreach group $groups {
+      # The group's own widths, in the group's own order - the slice renumbers
+      # the columns, so passing the full list would measure column 0 of the
+      # second group against the width of column 0 of the table.
+      set run [my TableMeasureRun $sections \
+          [lmap index $group {lindex $widths $index}] $group $options]
+      # The first group starts where -at puts it, so its first page may
+      # offer more room than the area does (an -at above -top) - or less, in
+      # which case it starts on the next page, where the area is the room.
+      # Every later group starts at -top on a page of its own.
+      set room [expr {[dict get $options bottom] - [dict get $options top]}]
+      if {$first} {
+        set room [expr {max($room, [dict get $options bottom] - $top)}]
+      }
+      my TableCheckFit $run $room $options
+      lappend runs $run
+      set first 0
+    }
+    return [dict create options $options left $left top $top runs $runs]
+  }
+
+  # The second half: the measured column groups onto the pages.
+  method TableDrawAll {prepared} {
+    dict with prepared {}
+    set y $top
+    set first 1
+    foreach run $runs {
       # The first column group starts where -at puts it. Every group after it
       # sits on a page of its own and starts at the continuation position, for
       # the same reason a continued table does.
       set groupTop $top
       if {!$first} {
         my page add
+        set options [my TableArea $options]
         my TableHook didDrawPage $options [dict create page [my page current]]
         set groupTop [dict get $options top]
       }
-      # The group's own widths, in the group's own order - the slice renumbers
-      # the columns, so passing the full list would measure column 0 of the
-      # second group against the width of column 0 of the table.
-      set y [my TableRun $sections [lmap index $group {lindex $widths $index}] \
-          $group $left $groupTop $options]
+      set y [my TableRun $run $left $groupTop $options]
       set first 0
     }
     return $y
@@ -348,15 +441,11 @@ oo::define ::tclpdf::document::document {
     return [expr {[llength $groups] ? $groups : [list $all]}]
   }
 
-  # Draw one column group across as many pages as it takes.
-  method TableRun {sections widths group left top options} {
-    set y $top
-    # Where this table sits on the CURRENT page: the -at position on the first
-    # page, the continuation position on every page after it. Both the rows and
-    # the frame of "-border outer" hang off it - drawing the frame from $top on
-    # a later page would start it where the table began on the first, which for
-    # a table starting at y=240 is 225 mm above its own rows.
-    set pageTop $top
+  # Measure one column group: the three sections sliced to it, every cell
+  # wrapped, the row heights, and the sums the run keeps asking for. Nothing
+  # is drawn here, which is what lets TableDrawAll measure every group before
+  # it draws the first.
+  method TableMeasureRun {sections widths group options} {
     set head [my TableSlice [dict get $sections head] $group]
     set body [my TableSlice [dict get $sections body] $group]
     set foot [my TableSlice [dict get $sections foot] $group]
@@ -364,18 +453,17 @@ oo::define ::tclpdf::document::document {
     # One set of decimal tails for all three sections: the total in the foot
     # has to line up with the amounts in the body.
     set tails [my TableDecimalTails [list $head $body $foot] $widths $options]
-    lassign [my TableMeasure $head $widths $options $tails] headCells headHeights
-    lassign [my TableMeasure $body $widths $options $tails] bodyCells bodyHeights
-    lassign [my TableMeasure $foot $widths $options $tails] footCells footHeights
-
-    set footHeight 0
-    foreach height $footHeights {
-      set footHeight [expr {$footHeight + $height}]
+    set run [dict create widths $widths group $group]
+    foreach section {head body foot} grid [list $head $body $foot] {
+      lassign [my TableMeasure $grid $widths $options $tails] cells heights
+      dict set run ${section}Cells $cells
+      dict set run ${section}Heights $heights
+      set total 0
+      foreach height $heights {
+        set total [expr {$total + $height}]
+      }
+      dict set run ${section}Height $total
     }
-    set bottom [dict get $options bottom]
-
-    set y [my TableSection $headCells $headHeights $widths $group $left $y $options]
-    set headY $y
     # Rows tied together by a rowSpan must not be split across a page break.
     # The spanning cell is drawn over the full height of the rows it covers,
     # so a break inside the group draws it past the bottom margin - and
@@ -384,22 +472,143 @@ oo::define ::tclpdf::document::document {
     # So the group, not the row, is the unit that has to fit. TableGroupSpan
     # returns for every row the last row of its group; a row with no span is
     # its own group and behaves exactly as before.
-    set groupEnd [my TableGroupSpan $bodyCells]
-    set groupBottom -1
+    dict set run groupEnd [my TableGroupSpan [dict get $run bodyCells]]
+    return $run
+  }
+
+  # What has to follow a body row on the page it starts on: the group of
+  # rows it opens (one row, or the rows a rowSpan ties together), and the
+  # foot when it comes right after them - under -repeatFoot on every page,
+  # and after the last row in any case. Answers the height, or nothing when
+  # the index does not open a group; -1 asks for a table without body rows,
+  # where the foot follows the head. The head is NOT in it: whether a head
+  # stands above the group is the caller's question - it does on the first
+  # page and, under -repeatHead, on the page a break leads to, but never on
+  # the page the break leaves.
+  method TableNeed {run index options} {
+    set groupEnd [dict get $run groupEnd]
+    set count [llength $groupEnd]
+    if {$index < 0} {
+      return [dict get $run footHeight]
+    }
+    if {$index > 0 && [lindex $groupEnd $index-1] >= $index} {
+      return {}
+    }
+    set last [lindex $groupEnd $index]
+    set needed 0
+    for {set j $index} {$j <= $last} {incr j} {
+      set needed [expr {$needed + [lindex [dict get $run bodyHeights] $j]}]
+    }
+    if {$last == $count - 1 || [dict get $options repeatFoot]} {
+      set needed [expr {$needed + [dict get $run footHeight]}]
+    }
+    return $needed
+  }
+
+  # A table is broken between rows, and only there. A head taller than the
+  # band between -top and -bottom, a row or a rowSpan group that with the
+  # head and foot drawn around it does not fit the band, used to be drawn
+  # past -bottom - or, once broken, one row per page - and nothing said so.
+  # Refused here, before the first cell is drawn, naming what is too tall
+  # and the band it has to fit.
+  method TableCheckFit {run room options} {
+    set count [llength [dict get $run bodyHeights]]
+    set slack 0.001
+    set groupEnd [dict get $run groupEnd]
+    for {set index [expr {$count ? 0 : -1}]} {$index < $count} {incr index} {
+      set needed [my TableNeed $run $index $options]
+      if {$needed eq {}} {
+        continue
+      }
+      # The head stands above the first group, and above every group a break
+      # leads to when it is repeated.
+      if {$index <= 0 || [dict get $options repeatHead]} {
+        set needed [expr {$needed + [dict get $run headHeight]}]
+      }
+      if {$needed <= $room + $slack} {
+        continue
+      }
+      # Which parts stand together, each with its height, so that the caller
+      # sees which of them is the tall one.
+      set parts {}
+      set last [expr {$index < 0 ? -1 : [lindex $groupEnd $index]}]
+      if {($index <= 0 || [dict get $options repeatHead])
+          && [dict get $run headHeight] > 0} {
+        lappend parts "the head ([format %.2f [dict get $run headHeight]])"
+      }
+      if {$index >= 0} {
+        set rows 0
+        for {set j $index} {$j <= $last} {incr j} {
+          set rows [expr {$rows + [lindex [dict get $run bodyHeights] $j]}]
+        }
+        if {$last > $index} {
+          lappend parts "rows [expr {$index + 1}] to [expr {$last + 1}], tied\
+              by a rowSpan ([format %.2f $rows])"
+        } else {
+          lappend parts "row [expr {$index + 1}] ([format %.2f $rows])"
+        }
+      }
+      if {($index < 0 || $last == $count - 1 || [dict get $options repeatFoot])
+          && [dict get $run footHeight] > 0} {
+        lappend parts "the foot ([format %.2f [dict get $run footHeight]])"
+      }
+      if {[llength $parts] > 1} {
+        set parts [list "[join [lrange $parts 0 end-1] {, }] and\
+            [lindex $parts end]"]
+      }
+      return -code error "tclpdf: what has to stand together on a page -\
+          [lindex $parts 0] - is [format %.2f $needed] high, more than the\
+          [format %.2f $room] between -top [format %g [dict get $options top]]\
+          and -bottom [format %g [dict get $options bottom]] - a table is\
+          broken between rows, and every row has to fit that band with what\
+          is drawn around it"
+    }
+    return
+  }
+
+  # Draw one measured column group across as many pages as it takes.
+  method TableRun {run left top options} {
+    set widths [dict get $run widths]
+    set group [dict get $run group]
+    set headCells [dict get $run headCells]
+    set headHeights [dict get $run headHeights]
+    set bodyCells [dict get $run bodyCells]
+    set bodyHeights [dict get $run bodyHeights]
+    set footCells [dict get $run footCells]
+    set footHeights [dict get $run footHeights]
+    set bottom [dict get $options bottom]
+
+    set y $top
+    # Where this table sits on the CURRENT page: the -at position on the first
+    # page, the continuation position on every page after it. Both the rows and
+    # the frame of "-border outer" hang off it - drawing the frame from $top on
+    # a later page would start it where the table began on the first, which for
+    # a table starting at y=240 is 225 mm above its own rows.
+    set pageTop $top
+    # The head goes with the first row group, or with the foot when there
+    # are no rows: when that does not fit below where the table starts, the
+    # table starts on the next page instead. Measured before 2026-08-18: the
+    # head was set below -bottom, or alone at the foot of the page, and the
+    # rows followed on the next - an orphan head nothing reported. Nothing
+    # is drawn on the page left behind, so didDrawPage is not told of it.
+    set needed [expr {[dict get $run headHeight] +
+        [my TableNeed $run [expr {[llength $bodyCells] ? 0 : -1}] $options]}]
+    if {$y + $needed > $bottom} {
+      my page add
+      set options [my TableArea $options]
+      set bottom [dict get $options bottom]
+      set pageTop [dict get $options top]
+      set y $pageTop
+    }
+    set y [my TableSection $headCells $headHeights $widths $group $left $y $options]
     for {set index 0} {$index < [llength $bodyCells]} {incr index} {
       set row [lindex $bodyCells $index]
       set height [lindex $bodyHeights $index]
-      set reserve [expr {[dict get $options repeatFoot] ? $footHeight : 0}]
       # Only ask at a group boundary. Inside a group there is nothing to
-      # decide - it was decided when the group started.
-      set needed 0
-      if {$index > $groupBottom} {
-        set groupBottom [lindex $groupEnd $index]
-        for {set j $index} {$j <= $groupBottom} {incr j} {
-          set needed [expr {$needed + [lindex $bodyHeights $j]}]
-        }
-      }
-      if {$needed && $y + $needed + $reserve > $bottom} {
+      # decide - it was decided when the group started; and the first group
+      # was decided above, together with the head.
+      set needed [my TableNeed $run $index $options]
+      if {$index > 0 && $needed ne {} && $y + $needed > $bottom} {
         if {[dict get $options repeatFoot]} {
           set y [my TableSection $footCells $footHeights $widths $group \
               $left $y $options]
@@ -410,6 +619,9 @@ oo::define ::tclpdf::document::document {
         my TableDrawFrame [dict get $options style] $widths $left $pageTop $y
         my TableHook didDrawPage $options [dict create page [my page current] y $y]
         my page add
+        # The area of the page just added, not the one the table began on.
+        set options [my TableArea $options]
+        set bottom [dict get $options bottom]
         set pageTop [dict get $options top]
         set y $pageTop
         if {[dict get $options repeatHead]} {
@@ -556,4 +768,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.5
+package provide tclpdf::table 1.6

@@ -54,12 +54,17 @@ test image-1.4 {something that is not a JPEG} -body {
   ::tclpdf::imageJpeg parse "not a jpeg at all"
 } -returnCodes error -match glob -result {*not a JPEG*}
 
-test image-1.5 {a progressive JPEG is refused by name} -body {
-  # SOI, then a minimal SOF2 segment. Progressive is outside what DCTDecode
-  # covers, and a document carrying one opens to a blank rectangle.
+test image-1.5 {a progressive JPEG is refused by name, for the true reason} -body {
+  # SOI, then a minimal SOF2 segment. DCTDecode covers progressive JPEG
+  # since PDF 1.3 (ISO 32000-1, 7.4.8) - the refusal is this package's own
+  # decision (pass-through of sequential data only), and the message has to
+  # say so rather than blame the clause, as it did until 2026-08-18.
   set bytes [binary format H* ffd8ffc2000b080010001001011100]
-  ::tclpdf::imageJpeg parse $bytes
-} -returnCodes error -match glob -result {*progressive*baseline*}
+  set code [catch {::tclpdf::imageJpeg parse $bytes} message]
+  list $code [string match {*progressive*baseline*} $message] \
+      [string match {*passes JPEG data through*} $message] \
+      [string match {*DCTDecode does not cover*} $message]
+} -result {1 1 1 0}
 
 test image-1.6 {a 12-bit JPEG is refused by name} -body {
   # SOI, then a minimal SOF1 with precision 12 - what libjpeg writes for
@@ -852,5 +857,279 @@ test image-info-11.3 {a PNG with an alpha channel reports transparency softMask,
   # the indexed sample keys one palette entry out: a /Mask array, not a mask
   list [dict get $a alpha] [dict get $a transparency] [dict get $b alpha] [dict get $b transparency]
 } -result {1 softMask 0 colourKey}
+
+# --- a palette keyed in two runs -----------------------------------------------
+#
+# /Mask is 2 x n integers for an image of n components (8.9.6.4), and an
+# Indexed image has one component: the array holds ONE range. A palette
+# whose transparent entries are the indices 0 and 2 used to go out as
+# /Mask [0 0 2 2] - four integers for one component, of which a reader
+# applies the first pair. Measured before 2026-08-18 with the reviewer's
+# probe: the second run stayed opaque. Such a palette takes the soft mask
+# way now; one run still keys out.
+
+test image-palette-12.1 {two runs of transparent indices become a soft mask} -body {
+  # 4 x 2, palette red green blue, tRNS 0 255 0: the indices 0 and 2 are
+  # transparent, 1 is not.
+  set plte [binary format c* {255 0 0 0 255 0 0 0 255}]
+  set png [::tclpdfTest::png 4 2 8 3 [binary format c* {0 0 1 2 1 0 2 2 1 0}] \
+      [binary format c* {0 255 0}] $plte]
+  set parsed [::tclpdf::imagePng parse $png]
+  set streams [::tclpdf::imagePng streams $parsed]
+  binary scan [::tclpdf::filter decodeFlate [dict get $streams maskData]] cu* mask
+  list [::tclpdf::imagePng transparency $parsed] [::tclpdf::imagePng colourKey $parsed] \
+      [dict exists $streams pairs Mask] [dict exists $streams maskData] \
+      [expr {[dict get $streams data] eq [dict get $parsed idat]}] $mask
+} -result {softMask {0 0 2 2} 0 1 1 {0 255 0 255 0 0 255 0}}
+
+test image-palette-12.2 {one run - one index, or adjacent ones - is still a /Mask array} -body {
+  set plte [binary format c* {255 0 0 0 255 0 0 0 255}]
+  set rows [binary format c* {0 0 1 2 1 0 2 2 1 0}]
+  set one [::tclpdf::imagePng streams [::tclpdf::imagePng parse \
+      [::tclpdfTest::png 4 2 8 3 $rows [binary format c* {255 0 255}] $plte]]]
+  set run [::tclpdf::imagePng streams [::tclpdf::imagePng parse \
+      [::tclpdfTest::png 4 2 8 3 $rows [binary format c* {0 0 255}] $plte]]]
+  list [dict get $one pairs Mask] [dict exists $one maskData] \
+      [dict get $run pairs Mask] [dict exists $run maskData]
+} -result {{[1 1]} 0 {[0 1]} 0}
+
+test image-palette-12.3 {the file carries the /SMask and no /Mask, at four bits as well} -body {
+  # The 4-bit variant packs two indices per byte: 0x01 0x21 / 0x22 0x10.
+  set plte [binary format c* {255 0 0 0 255 0 0 0 255}]
+  set png [::tclpdfTest::png 4 2 4 3 [binary format c* {0 0x01 0x21 0 0x22 0x10}] \
+      [binary format c* {0 255 0}] $plte]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pal -data $png
+  set info [$doc image info pal]
+  $doc image place pal -at {10 10} -width 20
+  set path [::tclpdfTest::scratch pal-two-runs.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [dict get $info transparency] [regexp {/Mask \[} $bytes] \
+      [regexp {/SMask [0-9]+ 0 R} $bytes] [regexp {/BitsPerComponent 4} $bytes]
+} -result {softMask 0 1 1}
+
+# --- damaged headers ------------------------------------------------------------
+
+test image-parse-13.1 {a PNG of no width or no height is refused} -body {
+  set codes {}
+  foreach {width height} {0 1 1 0 0 0} {
+    lappend codes [catch {::tclpdf::imagePng parse \
+        [::tclpdfTest::png $width $height 8 0 "\x00\x40"]} message]
+    lappend codes [string match "*damaged PNG*$width x $height*" $message]
+  }
+  set codes
+} -result {1 1 1 1 1 1}
+
+test image-parse-13.2 {a JPEG of no width or no height is refused} -body {
+  # SOF0 with height 0 / width 16, then width 0 / height 16, then both.
+  set codes {}
+  foreach {hex size} {ffd8ffc0000b080000001001011100 {16 x 0}
+      ffd8ffc0000b080010000001011100 {0 x 16}
+      ffd8ffc0000b080000000001011100 {0 x 0}} {
+    lappend codes [catch {::tclpdf::imageJpeg parse [binary format H* $hex]} message]
+    lappend codes [string match "*damaged JPEG*$size*" $message]
+  }
+  set codes
+} -result {1 1 1 1 1 1}
+
+test image-parse-13.3 {a PLTE chunk that is not RGB triples is refused} -body {
+  set png [::tclpdfTest::png 2 1 8 3 "\x00\x00\x01" {} [binary format c* {255 0 0 0}]]
+  set code [catch {::tclpdf::imagePng parse $png} message]
+  list $code [string match "*PLTE chunk is 4 bytes*" $message]
+} -result {1 1}
+
+test image-parse-13.4 {a tRNS chunk longer than the palette is refused} -body {
+  set plte [binary format c* {255 0 0 0 255 0 0 0 255}]
+  set long [::tclpdfTest::png 2 1 8 3 "\x00\x00\x01" [binary format c* {255 255 255 0}] $plte]
+  set fits [::tclpdfTest::png 2 1 8 3 "\x00\x00\x01" [binary format c* {255 0}] $plte]
+  set code [catch {::tclpdf::imagePng parse $long} message]
+  list $code [string match "*tRNS chunk has 4 entries for a palette of 3*" $message] \
+      [::tclpdf::imagePng transparency [::tclpdf::imagePng parse $fits]]
+} -result {1 1 colourKey}
+
+# --- refused before anything is written -------------------------------------
+#
+# Every value of [image place] is checked before the object goes into the
+# file, before the colour space is recorded and before the mark and the "q"
+# are out. Measured before 2026-08-18: -rotate x was read after [save];
+# -dpi 0 went out as Inf; -scale 0 as a singular cm; -width -1 mirrored;
+# -at {a b} left a colour space record behind. Each of these left the
+# stream, the record and the writer as if the call had never been made -
+# that is what the tests assert.
+
+test image-refuse-14.1 {rotate, dpi, scale, width, height, size, at: refused, nothing written} -constraints haveImages -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc tagged 1
+  $doc page add
+  $doc image embed photo $photo
+  set objects [[$doc writer] count]
+  set codes {}
+  foreach {call pattern} {
+    {-rotate x} {*-rotate of image place is an angle*}
+    {-dpi 0} {*-dpi of image place is a resolution above zero*}
+    {-dpi -72} {*-dpi of image place*above zero*}
+    {-scale 0} {*-scale of image place is a factor above zero*}
+    {-scale -2} {*-scale of image place*above zero*}
+    {-width -1} {*-width of image place is a length above zero*}
+    {-height 0} {*-height of image place is a length above zero*}
+    {-size {5}} {*-size of image place is {width height}*}
+    {-size {a b}} {*-size of image place takes lengths above zero*}
+    {-size {0 0}} {*-size of image place takes lengths above zero*}
+    {-at {1}} {*-at of image place is a point {x y}*}
+    {-at {1 2 3}} {*-at of image place is a point {x y}*}
+    {-artifact yes -alt x} {*-artifact and -alt contradict*}
+    {-artifact maybe} {*-artifact takes a boolean*}
+  } {
+    lappend codes [catch {$doc image place photo -at {0 0} {*}$call} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
+      [expr {[[$doc writer] count] - $objects}] [$doc undescribedGraphics]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} {} 0 {}}
+
+test image-refuse-14.2 {image size refuses the same values} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc image embed photo $photo
+  set codes {}
+  foreach call {{-dpi 0} {-scale 0} {-width -1} {-size {5}}} {
+    lappend codes [catch {$doc image size photo {*}$call} message]
+    lappend codes [string match "*of image size*" $message]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 1 1 1}
+
+test image-refuse-14.3 {a placement that passes still records, writes and marks} -constraints haveImages -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc tagged 1
+  $doc page add
+  $doc image embed photo $photo
+  $doc image place photo -at {0 0} -width 40 -rotate 10 -dpi 300 -artifact 1
+  set stream [::tclpdfTest::content $doc]
+  set result [list [dict keys [$doc colourSpacesUsed]] \
+      [regexp {^/Artifact <</Type /Layout>> BDC\nq\n[-0-9. ]+ cm\n/Im1 Do\nQ\nEMC\n$} $stream]]
+  $doc destroy
+  set result
+} -result {DeviceRGB 1}
+
+# --- a picture inside an open Figure ------------------------------------------
+#
+# [structure Figure -alt ... -script {...}] around a picture and its Caption
+# is how a described figure with a caption is built - and until 2026-08-18
+# the picture inside it became an artifact by default: decoration inside
+# the very element that says it is content, and PDF/UA refused the
+# document (7.1). The picture's mark now attaches to the open Figure, as a
+# shape's does; the Figure's own -alt describes it.
+
+test image-figure-15.1 {inside an open Figure the picture's mark belongs to the Figure} -constraints haveImages -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc tagged 1
+  $doc page add
+  $doc image embed photo $photo
+  $doc structure Figure -alt "a described figure" -script {
+    $doc image place photo -at {20 20} -width 30
+  }
+  set stream [::tclpdfTest::content $doc]
+  set structure [$doc state structure]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  # one Figure, whose kid is the picture's mark; the stream brackets the Do
+  # as /Figure, not as an artifact; nothing undescribed
+  list [llength $structure] [dict get [lindex $structure 0] type] \
+      [lindex [dict get [lindex $structure 0] kids] 0 0] \
+      [regexp {/Figure <</MCID 0>> BDC\nq\n[-0-9. ]+ cm\n/Im1 Do\nQ\nEMC} $stream] \
+      [regexp {Artifact} $stream] $missing
+} -result {1 Figure mark 1 0 {}}
+
+test image-figure-15.2 {-artifact 1 and -alt inside a Figure keep their meaning} -constraints haveImages -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc tagged 1
+  $doc page add
+  $doc image embed photo $photo
+  $doc structure Figure -alt "outer" -script {
+    $doc image place photo -at {20 20} -width 30 -artifact 1
+    $doc image place photo -at {20 60} -width 30 -alt "inner"
+  }
+  set stream [::tclpdfTest::content $doc]
+  set structure [$doc state structure]
+  $doc destroy
+  # the first is an artifact on purpose, the second a Figure of its own
+  # inside the outer one
+  list [regexp {/Artifact <</Type /Layout>> BDC} $stream] [llength $structure] \
+      [dict get [lindex $structure 1] type] [dict get [lindex $structure 1] parent] \
+      [dict get [lindex $structure 1] alt]
+} -result {1 2 Figure 0 inner}
+
+test image-figure-15.3 {outside a Figure - under a Sect, under nothing - the default is still an artifact} -constraints haveImages -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc tagged 1
+  $doc page add
+  $doc image embed photo $photo
+  $doc image place photo -at {20 20} -width 30
+  $doc structure Sect -script {
+    $doc image place photo -at {20 60} -width 30
+  }
+  set stream [::tclpdfTest::content $doc]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  list [regexp -all {/Artifact <</Type /Layout>> BDC} $stream] [llength $missing]
+} -result {2 2}
+
+test image-figure-15.4 {Figure{picture, Caption} passes ua 1 and, where veraPDF is there, its ua1 profile} -constraints haveImages -body {
+  set face [file join [file dirname $assets] fonts DejaVuSans.ttf]
+  if {![file exists $face]} {
+    return skipped
+  }
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title T
+  $doc language de
+  $doc ua 1
+  $doc page add
+  $doc font embed face $face
+  $doc font -family face -size 10
+  $doc text "H" -at {20 10} -tag H1
+  $doc image embed pic $photo
+  $doc structure Figure -alt "a described figure with a caption" -script {
+    $doc image place pic -at {20 20} -width 30
+    $doc text "Figure 1" -at {20 60} -tag Caption
+  }
+  set path [::tclpdfTest::scratch figure-caption.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  set failed -
+  if {[auto_execok verapdf] ne {}} {
+    catch {exec verapdf -f ua1 $path 2>@1} report
+    regexp {failedChecks="([0-9]+)"} $report -> failed
+  }
+  file delete $path
+  list $code $failed
+} -match glob -result {0 [0-]}
+
+# --- inside a form nothing is marked, and no element is opened -----------------
+
+test image-form-16.1 {image draw -alt inside form create opens no Figure} -constraints haveImages -body {
+  # The marks are suspended inside a form (an MCID is unique per stream);
+  # an element opened there hung in the tree with a BBox in the form's
+  # coordinates and no content on any page - measured before 2026-08-18.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc form create f1 -size {40 40} -script {
+    $doc image draw $photo -at {0 0} -width 30 -alt "inside form"
+  }
+  $doc form place f1 -at {20 50} -alt "the form"
+  set structure [$doc state structure]
+  set missing [$doc undescribedGraphics]
+  $doc destroy
+  # one Figure - the placement's - and nothing undescribed
+  list [llength $structure] [dict get [lindex $structure 0] alt] $missing
+} -result {1 {the form} {}}
 
 cleanupTests

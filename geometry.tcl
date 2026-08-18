@@ -224,4 +224,49 @@ proc ::tclpdf::geometry::check {matrix what} {
   return $matrix
 }
 
-package provide tclpdf::geometry 1.1
+# Refuse the sizing options a caller hands to something with a natural size
+# - a picture, a drawing - before [fitExtent] reads them: -size {w h}, -width,
+# -height, -scale and -dpi, whichever the dict carries. Returns nothing; the
+# error names the owner ("image place", "svg") so the caller does not have to.
+#
+# Every one of them ends up in the cm that places the thing, and there is
+# only one kind of value that belongs there: a length or a factor ABOVE zero.
+# Zero makes the matrix singular - a picture folded onto a line, no way back
+# to the page for anything drawn under it, and no reader or validator says
+# why (8.3.4; the same reason [transform] refuses a zero -scale). Negative
+# is not a mirror here, as it would be for a transform: it is a size, and a
+# picture of width -40 is placed mirrored to the LEFT of the corner it was
+# given, which nobody asked for. A dpi of zero divided the natural size by
+# nothing and went out as Inf; below zero it turned the picture inside out.
+# Measured before 2026-08-18: all of these went into the file unrefused. And
+# a size of one number, or of letters, used to surface as an arithmetic
+# error from wherever it was first used - after the mark and the "q" were
+# out.
+proc ::tclpdf::geometry::checkFit {options what} {
+  if {[dict exists $options size] && [dict get $options size] ne {}} {
+    set size [dict get $options size]
+    if {[llength $size] != 2} {
+      return -code error "tclpdf: -size of $what is {width height}, not\
+          \"$size\""
+    }
+    foreach value $size {
+      if {![string is double -strict $value] || $value <= 0} {
+        return -code error "tclpdf: -size of $what takes lengths above zero,\
+            not \"$value\""
+      }
+    }
+  }
+  foreach {key noun} {width length height length scale factor dpi resolution} {
+    if {![dict exists $options $key] || [dict get $options $key] eq {}} {
+      continue
+    }
+    set value [dict get $options $key]
+    if {![string is double -strict $value] || $value <= 0} {
+      return -code error "tclpdf: -$key of $what is a $noun above zero, not\
+          \"$value\""
+    }
+  }
+  return
+}
+
+package provide tclpdf::geometry 1.2

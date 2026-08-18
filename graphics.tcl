@@ -46,15 +46,22 @@ oo::define ::tclpdf::document::document {
     return
   }
 
+  # Refused without a [save] to answer: the stack of remembered colours is
+  # one entry per open q, so an empty one means no q is open in this
+  # stream, and the Q would leave the reader with more restores than saves
+  # - undefined by 8.4.2, and measured before 2026-08-18 it went out
+  # without a word. Nothing is written when it is refused.
   method restore {} {
-    my content "Q\n"
     set stack [my streamState styleStack]
-    if {[llength $stack]} {
-      lassign [lindex $stack end] fill stroke
-      my streamState styleFill $fill
-      my streamState styleStroke $stroke
-      my streamState styleStack [lrange $stack 0 end-1]
+    if {![llength $stack]} {
+      return -code error "tclpdf: restore without a save - the graphics state\
+          stack of this stream is empty (8.4.2)"
     }
+    my content "Q\n"
+    lassign [lindex $stack end] fill stroke
+    my streamState styleFill $fill
+    my streamState styleStroke $stroke
+    my streamState styleStack [lrange $stack 0 end-1]
     return
   }
 
@@ -139,7 +146,7 @@ oo::define ::tclpdf::document::document {
         # To the origin FIRST: a point q ends up at (q - p) transformed, plus
         # p. The other order turns the whole page about the origin and then
         # shifts, which puts the shape somewhere else entirely.
-        lassign [my coords {*}[dict get $options at]] px py
+        lassign [my GraphicsPoint [dict get $options at] -at transform] px py
         set matrix [::tclpdf::geometry multiply $matrix \
             [::tclpdf::geometry translate [expr {-$px}] [expr {-$py}]]]
       }
@@ -269,8 +276,11 @@ oo::define ::tclpdf::document::document {
       lappend pairs CA [::tclpdf::pdfObj num $value]
     }
     # One resource per distinct value, reused across the document: a name
-    # derived from the value is what makes that automatic.
-    set name GS[string map {. _ - m} $value][string index $which 0]
+    # derived from the value is what makes that automatic - from the value
+    # as the file spells it, not as the caller typed it. Measured before
+    # 2026-08-18 the name was built from the caller's text, and 0.5, .5,
+    # 0.50 and 5e-1 were four ExtGState objects with the same /ca.
+    set name GS[string map {. _ - m} [::tclpdf::pdfObj num $value]][string index $which 0]
     if {[my resource ExtGState $name] eq {}} {
       my resource ExtGState $name \
           [[my writer] ref [[my writer] add [::tclpdf::pdfObj dictionary $pairs]]]
@@ -316,6 +326,14 @@ oo::define ::tclpdf::document::document {
     # record of a colour that never reached the stream, and a later write
     # under [pdfa] named a rectangle that was not there.
     set result {}
+    # The fill rule is read by GraphicsPaint, but checked here, with the
+    # rest: by the time the painting operator is derived the mark below has
+    # been taken. Anything but the two names of 8.5.3.3 used to paint
+    # nonzero without a word.
+    if {[dict exists $options rule] && [dict get $options rule] ni {nonzero evenodd}} {
+      return -code error "tclpdf: -rule is nonzero or evenodd, not\
+          \"[dict get $options rule]\""
+    }
     if {[dict exists $options opacity] && [dict get $options opacity] ne {}} {
       append result "[::tclpdf::pdfObj name \
           [my GraphicsOpacity [dict get $options opacity]]] gs\n"
@@ -409,8 +427,16 @@ oo::define ::tclpdf::document::document {
     # through the state because the two are separate calls; shapes do not
     # nest, so one slot is enough. Taken LAST, once nothing above can refuse
     # any more - the mark changes state the moment it is taken.
+    #
+    # And taken only for a SHAPE - "guard" is what tells a shape from
+    # [style]. A style call paints nothing: its operators are graphics
+    # state, which no marked-content bracket has to enclose, and nothing
+    # of it reaches GraphicsPaint, where the bracket is closed. Measured
+    # before 2026-08-18: in a tagged document [style] opened an artifact
+    # BDC that nothing closed, and every shape and every text after it sat
+    # unmarked inside that bracket (14.6.1; PDF/UA-1 7.1).
     set prologue {}
-    if {[my state tagged] eq "1"} {
+    if {$guard && [my state tagged] eq "1"} {
       set mark [my StructureMark auto]
       my state structureShape $mark
       append prologue [my StructureBegin $mark]
@@ -419,6 +445,22 @@ oo::define ::tclpdf::document::document {
       append prologue "q\n"
     }
     return $prologue$result
+  }
+
+  # A caller's point - -at, -from, -to, -center, -focus - as PDF
+  # coordinates, refused unless it is exactly two numbers. [coords] takes a
+  # third argument, the page whose height to mirror against, and a point
+  # with a third number used to hand it that number: {20 20 1} landed
+  # mirrored against page 2, or died on a page that did not exist, with
+  # nothing to say the point was the problem. Every site that turns an
+  # option into a point goes through here; "option" and "what" name them
+  # in the refusal ("-at of image place").
+  method GraphicsPoint {value option what} {
+    if {[llength $value] != 2} {
+      return -code error "tclpdf: $option of $what is a point {x y}, not\
+          \"$value\""
+    }
+    return [my coords {*}$value]
   }
 
   # Translate a caller's colour into one the colour module can read.

@@ -40,6 +40,29 @@ proc archivable {face} {
   return $doc
 }
 
+# An Order-X-shaped XML in the scratch directory: the message root and BT-24
+# are all zugferd.tcl reads - nothing else of the standard is needed to see
+# what the module does with an order. Returns the path.
+# The files are written under the scratch directory - which is the working
+# directory when the suite runs without -tmpdir, as make test does - and are
+# removed before cleanupTests below, so no XML is left behind in the tree.
+set orderXmlFiles {}
+proc orderXml {identifier {name order-x.xml}} {
+  set path [::tclpdfTest::scratch $name]
+  lappend ::orderXmlFiles $path
+  set f [open $path wb]
+  puts -nonewline $f [string map [list @ID@ $identifier] {<rsm:SCRDMCCBDACIOMessageStructure xmlns:rsm="urn:un:unece:uncefact:data:SCRDMCCBDACIOMessageStructure:100" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:128">
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>@ID@</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+</rsm:SCRDMCCBDACIOMessageStructure>
+}]
+  close $f
+  return $path
+}
+
 test zugferd-1.1 {BT-24 decides the profile} -constraints haveInvoice -body {
   # Read out of the XML rather than asked for: the two cannot drift apart,
   # and the reference toolchain's habit of silently substituting BASIC for
@@ -517,28 +540,49 @@ test zugferd-7.3 {part 1 is refused and the reason names a part that fits} -body
   }
 } -returnCodes error -match glob -result {*PDF/A-1 forbids transparency*use part 2*}
 
-test zugferd-7.8 {an ICC profile with a Lab space is refused by name} -body {
+test zugferd-7.8 {an ICC profile with a Lab space is refused by name, at the call} -body {
   # Lab and XYZ profiles are valid ICC, but the output intent needs a device
   # space with a component count. Until 2026-08-15 this fell over as a bare
-  # [dict get] error. Only the space signature at offset 16 is read, so a
-  # minimal fake header is enough here.
+  # [dict get] error; until 2026-08-18 it was refused at the WRITE, out of
+  # PdfaProfile, while the manual said at the call - and the claim stood in
+  # the state meanwhile. Only the header is read, so a minimal fake one -
+  # the space at offset 16, the "acsp" signature at 36 - is enough here.
   set path [::tclpdfTest::scratch lab.icc]
   set fh [open $path wb]
-  puts -nonewline $fh [binary format a16a4a108 {} "Lab " {}]
+  puts -nonewline $fh [binary format a16a4a16a4a88 {} "Lab " {} acsp {}]
   close $fh
   set doc [tclpdf new -unit mm]
   $doc page add
-  $doc pdfa -part 3 -conformance B -profile $path
-  set code [catch {$doc write [::tclpdfTest::scratch lab.pdf]} err]
+  set code [catch {$doc pdfa -part 3 -conformance B -profile $path} err]
+  set state [$doc pdfa state]
   $doc destroy
-  file delete $path [::tclpdfTest::scratch lab.pdf]
+  file delete $path
   list $code [string match {*colour space "Lab"*} $err] \
-      [string match "*GRAY, RGB and CMYK*" $err]
-} -result {1 1 1}
+      [string match "*GRAY, RGB and CMYK*" $err] $state
+} -result {1 1 1 {}}
+
+test zugferd-7.8a {a file without the ICC signature is refused as no profile at all} -body {
+  # 128 zero bytes have a "colour space" of four NULs and would otherwise
+  # be reported as an unsupported space; the "acsp" check at offset 36 says
+  # what it is - not an ICC profile - and says so at the call.
+  set path [::tclpdfTest::scratch notanicc.icc]
+  set fh [open $path wb]
+  puts -nonewline $fh [binary format a128 {}]
+  close $fh
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc pdfa -part 3 -profile $path} err]
+  set version [$doc cget -version]
+  set state [$doc pdfa state]
+  $doc destroy
+  file delete $path
+  list $code [string match {*is not an ICC profile*acsp*} $err] $state
+} -result {1 1 {}}
 
 # A minimal ICC profile: the 128-byte header with the colour space at offset
-# 16, then a tag table with the entries given as {signature bytes} pairs. Only
-# what pdfa.tcl reads is real; the rest is zero.
+# 16 and the "acsp" signature at 36, then a tag table with the entries given
+# as {signature bytes} pairs. Only what pdfa.tcl reads is real; the rest is
+# zero.
 proc fakeProfile {path space args} {
   set count [expr {[llength $args] / 2}]
   set offset [expr {132 + 12 * $count}]
@@ -550,7 +594,7 @@ proc fakeProfile {path space args} {
     incr offset [string length $bytes]
   }
   set fh [open $path wb]
-  puts -nonewline $fh [binary format a16a4a108Iu {} $space {} $count]$table$data
+  puts -nonewline $fh [binary format a16a4a16a4a88Iu {} $space {} acsp {} $count]$table$data
   close $fh
   return $path
 }
@@ -638,7 +682,7 @@ test zugferd-7.12 {a version 4 mluc desc is read, en-US preferred} -body {
   append tag [binary format a2a2IuIu en US [string length [lindex $utf16 1]] \
       [expr {$start + [string length [lindex $utf16 0]]}]]
   append tag [join $utf16 {}]
-  set profile [binary format a16a4a108Iu {} "RGB " {} 1]
+  set profile [binary format a16a4a16a4a88Iu {} "RGB " {} acsp {} 1]
   append profile [binary format a4IuIu desc 144 [string length $tag]] $tag
   ::tclpdf::pdfa description $profile
 } -result {Grey v4}
@@ -998,8 +1042,9 @@ test zugferd-10.2 {pdfa state answers every key, and extensions collects what wa
 
 test zugferd-10.3 {a second pdfa call keeps the identifier and the extensions, registered stays 1} \
     -constraints haveInvoice -body {
-  # zugferd itself does this: pdfa -part 3, then pdfa -profile, then two
-  # extensions - each call reads the state back and adds to it.
+  # zugferd itself does this: one pdfa call, then two extensions, and a
+  # caller's pdfa -conformance U afterwards - each call reads the state
+  # back and adds to it.
   set doc [archivable $face]
   $doc pdfa -part 3 -identifier "Archive RGB"
   $doc pdfa extension {<rdf:Description rdf:about="" xmlns:x="urn:example:x#"><x:a>1</x:a></rdf:Description>}
@@ -1011,10 +1056,13 @@ test zugferd-10.3 {a second pdfa call keeps the identifier and the extensions, r
 
 # -- the zugferd options -----------------------------------------------------
 
-test zugferd-11.1 {each of the four names is written to the filespec, the name tree and the XMP} \
+test zugferd-11.1 {each of the three invoice names is written to the filespec, the name tree and the XMP} \
     -constraints haveInvoice -body {
+  # order-x.xml, the fourth name the standards know, is an order's and is
+  # refused for an invoice since 2026-08-18 - block 13. This test used to
+  # pin it as a name for the invoice.
   set result {}
-  foreach name {factur-x.xml zugferd-invoice.xml xrechnung.xml order-x.xml} {
+  foreach name {factur-x.xml zugferd-invoice.xml xrechnung.xml} {
     set doc [archivable $face]
     $doc zugferd $invoice -name $name
     set path [::tclpdfTest::scratch zugferd-name.pdf]
@@ -1029,12 +1077,15 @@ test zugferd-11.1 {each of the four names is written to the filespec, the name t
         [regexp "<fx:DocumentFileName>$name</fx:DocumentFileName>" $bytes]]
   }
   return $result
-} -result {{factur-x.xml 1 1 1} {zugferd-invoice.xml 1 1 1} {xrechnung.xml 1 1 1} {order-x.xml 1 1 1}}
+} -result {{factur-x.xml 1 1 1} {zugferd-invoice.xml 1 1 1} {xrechnung.xml 1 1 1}}
 
 test zugferd-11.2 {-type goes verbatim into fx:DocumentType, ORDER for an Order-X file} \
     -constraints haveInvoice -body {
+  # This used to label the EN 16931 invoice XML ORDER; since 2026-08-18
+  # the type has to belong to the family BT-24 names, so the order gets an
+  # Order-X XML of its own.
   set doc [archivable $face]
-  $doc zugferd $invoice -name order-x.xml -type ORDER
+  $doc zugferd [orderXml urn:order-x.eu:1p0:basic] -type ORDER
   set path [::tclpdfTest::scratch zugferd-order.pdf]
   $doc write $path
   set order [$doc zugferd state]
@@ -1145,4 +1196,363 @@ test zugferd-11.6 {-profile and -type refuse what is not a level or a type} -con
   set out
 } -result {1 1 1 1 1 1 1 1 XRECHNUNG}
 
+# -- a refused call leaves nothing behind ------------------------------------
+#
+# pdfa and zugferd each make several changes - the version, the floor and
+# the ceiling, the state, the packet's schemas, an attachment - and a
+# refusal in the middle used to leave the earlier ones standing. Every
+# option is checked before the first change now, in both.
+
+# What a refused call must not have touched: the pdfa state, the raw XMP
+# contributions, the attachments, and the zugferd state.
+proc untouched {doc} {
+  return [list [$doc pdfa state] [$doc state xmpRaw] [$doc attachments] \
+      [$doc zugferd state]]
+}
+
+test zugferd-12.1 {a zugferd refused for -relationship leaves no PDF/A claim, no schema and no attachment; the retry declares the schema once} \
+    -constraints haveInvoice -body {
+  # This used to leave a PDF/A-3B claim with the Factur-X schema and
+  # fx:DocumentFileName in the packet and NO invoice in the file - a
+  # document that validates and lies - and the retry declared the schema
+  # a second time.
+  set doc [archivable $face]
+  set code [catch {$doc zugferd $invoice -relationship Foo} err]
+  set after [untouched $doc]
+  $doc zugferd $invoice
+  set path [::tclpdfTest::scratch zugferd-retry.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $code [string match {*-relationship must be one of Source, Data*not "Foo"*} $err] \
+      $after [regexp -all {Factur-X PDFA Extension Schema} $bytes] \
+      [regexp -all {<fx:DocumentFileName>} $bytes] [regexp -all {/AFRelationship} $bytes]
+} -result {1 1 {{} {} {} {}} 1 1 1}
+
+test zugferd-12.2 {-version takes digits and dots only, and is checked before anything is declared} \
+    -constraints haveInvoice -body {
+  # "" used to come out as <fx:Version/>, and a "<" went into the packet
+  # unescaped - the parser then refused the whole document at write time,
+  # after pdfa had already been declared.
+  set out {}
+  foreach value {{} 1.0<x {1.0 & co} foo 1.0.} {
+    set doc [archivable $face]
+    lappend out [catch {$doc zugferd $invoice -version $value} err] \
+        [string match {*-version takes a version number such as 1.0*} $err] \
+        [untouched $doc]
+    $doc destroy
+  }
+  set doc [archivable $face]
+  lappend out [$doc zugferd $invoice -version 2.3.1] [dict get [$doc zugferd state] version]
+  $doc destroy
+  set out
+} -result [list 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} \
+    1 1 {{} {} {} {}} {EN 16931} 2.3.1]
+
+test zugferd-12.3 {a missing -icc, a -compress that is no boolean and a name already taken are all refused before the claim} \
+    -constraints haveInvoice -body {
+  set out {}
+  set doc [archivable $face]
+  lappend out [catch {$doc zugferd $invoice -icc [::tclpdfTest::scratch nowhere.icc]} err] \
+      [string match {*ICC profile "*nowhere.icc" does not exist*} $err] [untouched $doc]
+  lappend out [catch {$doc zugferd $invoice -compress maybe} err] \
+      [string match {*-compress takes a boolean, not "maybe"*} $err] [untouched $doc]
+  $doc attach -data "<x/>" -name factur-x.xml
+  lappend out [catch {$doc zugferd $invoice} err] \
+      [string match {*attachment named "factur-x.xml" already exists*} $err] \
+      [$doc pdfa state] [$doc state xmpRaw] [$doc zugferd state]
+  $doc destroy
+  set out
+} -result [list 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {} {} {}]
+
+test zugferd-12.4 {a refused pdfa leaves the version, the floor and the ceiling alone} -body {
+  # "pdfa -conformance Z" used to raise the version to 1.7 and pin the
+  # floor and the ceiling to PDF/A-3 before the conformance was looked at:
+  # the state was empty and "configure -version 2.0" was refused for a
+  # claim nobody held. The same for level A without a tagged document, and
+  # for a part 2 over an attachment.
+  set out {}
+  foreach {call pattern} {
+    {pdfa -conformance Z}          {*conformance must be B, U or A*}
+    {pdfa -conformance A}          {*level A needs a tagged document*}
+    {pdfa -part 4}                 {*part must be 2 or 3*}
+    {pdfa -part 2}                 {*PDF/A-2 admits no embedded file*1 attachment*use part 3*}
+  } {
+    set doc [tclpdf new -unit mm -version 1.4]
+    $doc page add
+    $doc attach -data x -name x.txt
+    lappend out [catch {$doc {*}$call} err] [string match $pattern $err] \
+        [$doc pdfa state] [$doc cget -version] [[$doc writer] version] \
+        [catch {$doc configure -version 2.0}] [catch {$doc configure -version 1.3}]
+    $doc destroy
+  }
+  lsort -unique [lmap {a b c d e f g} $out {list $a $b $c $d $e $f $g}]
+} -result {{1 1 {} 1.4 1.4 0 0}}
+
+test zugferd-12.5 {an attachment under a PDF/A-2 claim is refused, part 3 admits it} -constraints haveIcc -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 2
+  set code [catch {$doc attach -data x -name x.txt} err]
+  set none [$doc attachments]
+  $doc pdfa -part 3
+  $doc attach -data x -name x.txt
+  set one [$doc attachments]
+  $doc destroy
+  list $code [string match {*claims PDF/A-2*ISO 19005-2, 6.8*pdfa -part 3*} $err] $none $one
+} -result {1 1 {} x.txt}
+
+test zugferd-12.6 {the shipped profile is recognised under a relative path and a dotted one} -constraints haveIcc -body {
+  # The comparison used to be on the path STRING: "-profile icc/sRGB.icc"
+  # from the package directory went out under the desc tag's bare "sRGB"
+  # instead of "sRGB IEC61966-2.1". Normalized on the way in - and the
+  # state answers the normalized path.
+  # The package directory from $icc - $root is a scratch variable of
+  # zugferd-6.4 by now.
+  set base [file dirname [file dirname $icc]]
+  set kept [pwd]
+  cd $base
+  set out {}
+  try {
+    foreach spelling [list icc/sRGB.icc [file join $base . icc sRGB.icc] $icc] {
+      set doc [tclpdf new -unit mm]
+      $doc page add
+      $doc pdfa -part 3 -profile $spelling
+      set path [::tclpdfTest::scratch pdfa-spelling.pdf]
+      $doc write $path
+      lappend out [regexp {/OutputConditionIdentifier \(sRGB IEC61966-2.1\)} \
+          [::tclpdfTest::readBytes $path]] \
+          [expr {[dict get [$doc pdfa state] profile] eq $icc}]
+      $doc destroy
+      file delete $path
+    }
+  } finally {
+    cd $kept
+  }
+  set out
+} -result {1 1 1 1 1 1}
+
+test zugferd-12.7 {pdfa extension before any pdfa call is refused instead of declaring PDF/A-3B by itself} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc pdfa extension {<rdf:Description rdf:about="" xmlns:x="urn:x#"><x:a>1</x:a></rdf:Description>}} err]
+  set state [list [$doc pdfa state] [$doc state xmpRaw] [$doc cget -version]]
+  $doc destroy
+  list $code [string match {*pdfa extension needs a PDF/A declaration*call pdfa first*} $err] $state
+} -result {1 1 {{} {} 1.7}}
+
+test zugferd-12.8 {pdfa parses its four public options only: -registered and -extensions are unknown} -body {
+  # The whole state dict used to be the parse defaults, so "-registered 1"
+  # was accepted - and claimed conformance without ever subscribing to the
+  # write - and named in the message for a misspelled option.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach option {-registered -extensions -foo} {
+    lappend out [catch {$doc pdfa $option 1} err] \
+        [string match "*unknown option \"$option\" for pdfa - known are: -part -conformance -profile -identifier" $err] \
+        [$doc pdfa state]
+  }
+  $doc destroy
+  set out
+} -result {1 1 {} 1 1 {} 1 1 {}}
+
+# -- Order-X ------------------------------------------------------------------
+#
+# Order-X 1.0 rides on the same construction with three levels of its own
+# (BASIC, COMFORT, EXTENDED - 3.1), three document types (ORDER,
+# ORDER_RESPONSE, ORDER_CHANGE - 4.1.2), ONE file name (order-x.xml - 4.1.1),
+# a relationship of Data, Source or Alternative (4.1.1) and the fx: schema
+# under a namespace URI without ":invoice" (4.1.2, and all 24 sample PDFs).
+# The tests build the XML themselves; the sample files stay in the
+# distribution.
+
+test zugferd-13.1 {an Order-X identifier: level from BT-24, type ORDER, name order-x.xml, Data, the order namespace} \
+    -constraints haveInvoice -body {
+  set out {}
+  foreach {identifier level} {
+    urn:order-x.eu:1p0:basic BASIC urn:order-x.eu:1p0:comfort COMFORT
+    urn:order-x.eu:1p0:extended EXTENDED
+  } {
+    set doc [archivable $face]
+    set returned [$doc zugferd [orderXml $identifier]]
+    set path [::tclpdfTest::scratch zugferd-orderx.pdf]
+    $doc write $path
+    set state [$doc zugferd state]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend out [list $returned [dict get $state type] [dict get $state name] \
+        [dict get $state relationship] \
+        [regexp {<fx:DocumentType>ORDER</fx:DocumentType>} $bytes] \
+        [regexp "<fx:ConformanceLevel>$level</fx:ConformanceLevel>" $bytes] \
+        [regexp {<fx:DocumentFileName>order-x.xml</fx:DocumentFileName>} $bytes] \
+        [regexp {<fx:Version>1\.0</fx:Version>} $bytes] \
+        [regexp {/F \(order-x.xml\) /UF \(order-x.xml\)} $bytes] \
+        [regexp {/AFRelationship /Data } $bytes] \
+        [regexp "/Desc \\($level order data\\)" $bytes] \
+        [regexp {/Subtype /text#2Fxml} $bytes] \
+        [regexp -all {urn:factur-x:pdfa:CrossIndustryDocument:1p0#} $bytes] \
+        [regexp -all {CrossIndustryDocument:invoice:} $bytes]]
+  }
+  set out
+} -result {{BASIC ORDER order-x.xml Data 1 1 1 1 1 1 1 1 2 0} {COMFORT ORDER order-x.xml Data 1 1 1 1 1 1 1 1 2 0} {EXTENDED ORDER order-x.xml Data 1 1 1 1 1 1 1 1 2 0}}
+
+test zugferd-13.2 {the three order types go into fx:DocumentType, and -profile alone still reads the family from BT-24} \
+    -constraints haveInvoice -body {
+  # -profile overrides the level, and BT-24 used to go unread then; the
+  # family still comes from it, so an order XML with -profile COMFORT and
+  # no -type is an ORDER, not an INVOICE at a level invoices do not have.
+  set out {}
+  foreach {options type} {
+    {-type ORDER_RESPONSE} ORDER_RESPONSE {-type ORDER_CHANGE} ORDER_CHANGE
+    {-profile COMFORT} ORDER {-profile EXTENDED -type ORDER_CHANGE} ORDER_CHANGE
+  } {
+    set doc [archivable $face]
+    set returned [$doc zugferd [orderXml urn:order-x.eu:1p0:basic] {*}$options]
+    set path [::tclpdfTest::scratch zugferd-ordertype.pdf]
+    $doc write $path
+    set state [$doc zugferd state]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend out [list $returned [dict get $state type] [dict get $state name] \
+        [regexp "<fx:DocumentType>$type</fx:DocumentType>" $bytes] \
+        [regexp "<fx:ConformanceLevel>$returned</fx:ConformanceLevel>" $bytes]]
+  }
+  # With -profile AND -type given, BT-24 is not consulted at all - an
+  # identifier the reader does not know is what -profile is for.
+  set doc [archivable $face]
+  lappend out [$doc zugferd [orderXml urn:order-x.eu:2p0:future] -profile BASIC -type ORDER] \
+      [dict get [$doc zugferd state] type]
+  $doc destroy
+  set out
+} -result {{BASIC ORDER_RESPONSE order-x.xml 1 1} {BASIC ORDER_CHANGE order-x.xml 1 1} {COMFORT ORDER order-x.xml 1 1} {EXTENDED ORDER_CHANGE order-x.xml 1 1} BASIC ORDER}
+
+test zugferd-13.3 {-relationship Source and Alternative on request; Supplement and Unspecified refused for order-x.xml, leaving nothing behind} \
+    -constraints haveInvoice -body {
+  set out {}
+  foreach relationship {Source Alternative} {
+    set doc [archivable $face]
+    $doc zugferd [orderXml urn:order-x.eu:1p0:comfort] -relationship $relationship
+    set path [::tclpdfTest::scratch zugferd-orderrel.pdf]
+    $doc write $path
+    set state [$doc zugferd state]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend out [list [dict get $state relationship] \
+        [regexp "/AFRelationship /$relationship " $bytes]]
+  }
+  foreach relationship {Supplement Unspecified} {
+    set doc [archivable $face]
+    lappend out [catch {$doc zugferd [orderXml urn:order-x.eu:1p0:comfort] -relationship $relationship} err] \
+        [string match "*-relationship for order-x.xml is one of Data, Source, Alternative (Order-X 1.0, 4.1.1) - not \"$relationship\"*" $err] \
+        [untouched $doc]
+    $doc destroy
+  }
+  set out
+} -result {{Source 1} {Alternative 1} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}}}
+
+test zugferd-13.4 {a level of the other family is refused naming both, whether it comes from -profile or from BT-24} \
+    -constraints haveInvoice -body {
+  # Four crossings, each refused before anything is written: an invoice
+  # level under an order type, an order level under an invoice type, an
+  # invoice XML declared an order, an order XML declared an invoice. BASIC
+  # and EXTENDED exist in both families - the URN decides, not the word.
+  set order [orderXml urn:order-x.eu:1p0:basic]
+  set out {}
+  foreach {path options pattern} [list \
+      $order {-profile {EN 16931}} {*"EN 16931" is a conformance level of an invoice, and this document is an order (-type ORDER)*BASIC, COMFORT, EXTENDED*pass -type INVOICE*} \
+      $invoice {-profile COMFORT} {*"COMFORT" is a conformance level of an order, and this document is an invoice (-type INVOICE)*MINIMUM, BASIC WL*pass -type ORDER, ORDER_RESPONSE, ORDER_CHANGE*} \
+      $invoice {-type ORDER} {*BT-24 of this XML is an invoice identifier (EN 16931) and -type ORDER makes it an order*pass -profile*or the -type of the invoice family: INVOICE*} \
+      $order {-type INVOICE} {*BT-24 of this XML is an order identifier (BASIC) and -type INVOICE makes it an invoice*ORDER, ORDER_RESPONSE, ORDER_CHANGE*} \
+      $invoice {-type ORDER_RESPONSE -name order-x.xml} {*BT-24 of this XML is an invoice identifier*-type ORDER_RESPONSE makes it an order*}] {
+    set doc [archivable $face]
+    lappend out [catch {$doc zugferd $path {*}$options} err] \
+        [string match $pattern $err] [untouched $doc]
+    $doc destroy
+  }
+  # A word that is a level of neither family keeps the plain message with
+  # the levels of the document's own family.
+  set doc [archivable $face]
+  lappend out [catch {$doc zugferd $order -profile Comfort} err] \
+      [string match {*"Comfort" is not a conformance level - use one of: BASIC, COMFORT, EXTENDED} $err]
+  $doc destroy
+  set out
+} -result {1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1 {{} {} {} {}} 1 1}
+
+test zugferd-13.5 {order-x.xml is the order's name and no invoice's; the file's own name counts only within the family} \
+    -constraints haveInvoice -body {
+  set order [orderXml urn:order-x.eu:1p0:comfort]
+  set out {}
+  # An invoice may not be called order-x.xml, an order nothing else.
+  set doc [archivable $face]
+  lappend out [catch {$doc zugferd $invoice -name order-x.xml} err] \
+      [string match {*"order-x.xml" is the file name of an order, and this document is an invoice (-type INVOICE)*factur-x.xml, zugferd-invoice.xml, xrechnung.xml*Order-X 1.0, 4.1.1*pass -type ORDER, ORDER_RESPONSE, ORDER_CHANGE} $err] \
+      [untouched $doc]
+  $doc destroy
+  foreach name {factur-x.xml zugferd-invoice.xml xrechnung.xml} {
+    set doc [archivable $face]
+    lappend out [catch {$doc zugferd $order -name $name} err] \
+        [string match "*\"$name\" is the file name of an invoice, and this document is an order (-type ORDER)*embedded as order-x.xml*Order-X 1.0, 4.1.1*pass -type INVOICE" $err]
+    $doc destroy
+  }
+  # A name the standards do not know at all: the plain message, with the
+  # names of the document's own family.
+  set doc [archivable $face]
+  lappend out [catch {$doc zugferd $order -name bestellung.xml} err] \
+      [string match {*"bestellung.xml" is not a file name the standards allow - use one of: order-x.xml} $err]
+  $doc destroy
+  # Without -name the file's own name is kept where it is one of the
+  # family's, and the family's default is taken otherwise: an order in a
+  # file called bestellung.xml is embedded as order-x.xml, an invoice in a
+  # file called order-x.xml as factur-x.xml - not refused, because nobody
+  # asked for the name.
+  set doc [archivable $face]
+  $doc zugferd [orderXml urn:order-x.eu:1p0:comfort bestellung.xml]
+  lappend out [dict get [$doc zugferd state] name]
+  $doc destroy
+  set copy [::tclpdfTest::scratch order-x.xml]
+  file copy -force $invoice $copy
+  set doc [archivable $face]
+  $doc zugferd $copy
+  lappend out [dict get [$doc zugferd state] name] [dict get [$doc zugferd state] type]
+  $doc destroy
+  file delete $copy
+  set out
+} -result {1 1 {{} {} {} {}} 1 1 1 1 1 1 1 1 order-x.xml factur-x.xml INVOICE}
+
+test zugferd-13.6 {zugferd profile answers the Order-X level, and the reader knows the family} -body {
+  set out {}
+  foreach {identifier level} {
+    urn:order-x.eu:1p0:basic BASIC urn:order-x.eu:1p0:comfort COMFORT
+    urn:order-x.eu:1p0:extended EXTENDED
+  } {
+    set xml "<ram:GuidelineSpecifiedDocumentContextParameter><ram:ID>$identifier</ram:ID></ram:GuidelineSpecifiedDocumentContextParameter>"
+    lappend out [::tclpdf::zugferd profile $xml] [::tclpdf::zugferd identify $xml]
+  }
+  # The same word, the invoice URN: the family tells them apart.
+  lappend out [::tclpdf::zugferd identify {<ram:GuidelineSpecifiedDocumentContextParameter><ram:ID>urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic</ram:ID></ram:GuidelineSpecifiedDocumentContextParameter>}]
+  # And the document's own reader answers the same.
+  set doc [tclpdf new -unit mm]
+  lappend out [$doc zugferd profile {<ram:GuidelineSpecifiedDocumentContextParameter><ram:ID>urn:order-x.eu:1p0:comfort</ram:ID></ram:GuidelineSpecifiedDocumentContextParameter>}]
+  $doc destroy
+  set out
+} -result {BASIC {order BASIC} COMFORT {order COMFORT} EXTENDED {order EXTENDED} {invoice BASIC} COMFORT}
+
+test zugferd-13.7 {the schema procs answer the invoice namespace without a family and the order namespace with one} -body {
+  list [regexp {namespaceURI>urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#<} [::tclpdf::zugferd extensionSchema]] \
+      [regexp {namespaceURI>urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#<} [::tclpdf::zugferd extensionSchema invoice]] \
+      [regexp {namespaceURI>urn:factur-x:pdfa:CrossIndustryDocument:1p0#<} [::tclpdf::zugferd extensionSchema order]] \
+      [regexp -all {<pdfaProperty:name>} [::tclpdf::zugferd extensionSchema order]] \
+      [regexp {Factur-X PDFA Extension Schema} [::tclpdf::zugferd extensionSchema order]] \
+      [regexp {xmlns:fx="urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#"} [::tclpdf::zugferd properties factur-x.xml INVOICE 1.0 BASIC]] \
+      [regexp {xmlns:fx="urn:factur-x:pdfa:CrossIndustryDocument:1p0#"} [::tclpdf::zugferd properties order-x.xml ORDER 1.0 BASIC order]]
+} -result {1 1 1 4 1 1 1}
+
+foreach path $orderXmlFiles {
+  file delete -force $path
+}
 cleanupTests

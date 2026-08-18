@@ -332,4 +332,22 @@ test textPath-6.3 {-style and -color reach every glyph of the run} -body {
       [dict get $state resolved] [dict get $state color]
 } -result {3 3 Times-Roman black}
 
+# -- -offset -------------------------------------------------------------------
+
+test textPath-7.1 {-offset takes a distance of either sign and refuses the rest in tclpdf's words} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc textPath "xy" -segments {{move 10 10} {line 90 10}} -offset abc} message]
+  set empty [string length [::tclpdfTest::content $doc]]
+  set above [catch {$doc textPath "xy" -segments {{move 10 10} {line 90 10}} -offset 3}]
+  set below [catch {$doc textPath "xy" -segments {{move 10 10} {line 90 10}} -offset -3}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Refused before the mark: an empty stream after the refusal, and the two
+  # accepted runs bracket themselves as before.
+  list $code [regexp -- {-offset takes a distance in the document unit, not "abc"} $message] \
+      $empty $above $below [regexp -all {BDC} $stream] [regexp -all {EMC} $stream]
+} -result {1 1 0 0 0 2 2}
+
 cleanupTests

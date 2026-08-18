@@ -15,9 +15,9 @@
 # asks for as Length1, Length2 and Length3 (ISO 32000-1 9.9.1): a PostScript
 # header in the clear, the eexec-encrypted body, and 512 zeros with
 # "cleartomark" behind them. Embedding is therefore a matter of finding the
-# two boundaries and copying the bytes - nothing is decrypted, no charstring
-# is read. That is the whole difference to OpenType/CFF, where the table has
-# to be understood before it can be cut down.
+# two boundaries and copying the bytes - no charstring is rewritten. That is
+# the whole difference to OpenType/CFF, where the table has to be understood
+# before it can be cut down.
 #
 # TWO CONTAINERS, one format. A .pfb wraps the same three pieces in 6-byte
 # segment markers that state their lengths; a .t1 or .pfa carries them raw and
@@ -34,12 +34,25 @@
 # turned back into bytes on reading, and from there on the three containers
 # are the same font.
 #
+# ONE LOOK BEHIND THE ENCRYPTION, and for one question only: which glyphs the
+# program actually holds. The AFM lists what the metrics know, and that is
+# not always what the program carries - Adobe's Helvetica.afm lists Euro
+# with a width of 556, and Helvetica.pfb has no such charstring. Trusting the
+# AFM alone set the byte, and the reader drew .notdef: a blank where the
+# amount's currency was, past every validator. So the eexec section is
+# decrypted (Type 1 Font Format, 7.2) and the names of /CharStrings are
+# read; a WinAnsi position is mapped only to a name BOTH sides carry, and a
+# character the program lacks is refused, as it is for TrueType. Nothing else
+# is read from the plaintext, and the bytes embedded are the bytes as they
+# came.
+#
 # WHAT IS NOT DONE, on purpose:
 #
-#   subsetting     would mean decrypting eexec and reading Type 1 charstrings.
+#   subsetting     would mean reading and rewriting Type 1 charstrings.
 #                  A whole face here is 25 to 105 KB, which is the price.
 #   widths         come from the AFM beside the font, not from the program.
-#                  They are in the charstrings (hsbw), behind the encryption.
+#                  They are in the charstrings (hsbw), which are encrypted a
+#                  second time and are not read.
 #   hinting, seac  never looked at - the bytes are passed through.
 #
 
@@ -113,19 +126,24 @@ namespace eval ::tclpdf::type1 {
 }
 
 # The glyph names this face is addressed by, per byte value: for each WinAnsi
-# position the first candidate the metrics actually carry.
+# position the first candidate the metrics actually carry - and, where the
+# program's glyph names are given (from [glyphs]), that the program carries
+# as well. A name the AFM knows and the program lacks maps to nothing, so the
+# position is unwritable and the character is refused rather than set as a
+# blank.
 #
 # This is the one place that decides a name, and [widths] below reads its
 # answer rather than deciding again - two loops over the same table would be
 # free to disagree, and a width that belongs to a different glyph than the one
 # drawn is invisible in every check a PDF goes through.
-proc ::tclpdf::type1::names {metrics} {
+proc ::tclpdf::type1::names {metrics {glyphs {}}} {
   variable winAnsi
   set known [dict get $metrics widths]
   set result {}
   foreach {code candidates} $winAnsi {
     foreach name $candidates {
-      if {[dict exists $known $name]} {
+      if {[dict exists $known $name]
+          && ($glyphs eq {} || [dict exists $glyphs $name])} {
         dict set result $code $name
         break
       }
@@ -137,13 +155,71 @@ proc ::tclpdf::type1::names {metrics} {
 # The widths of a face by byte value under WinAnsiEncoding, as the 256-entry
 # list the rest of the package measures with. An unmapped position holds 0,
 # which is what [afm encodeWidths] reads as "this face cannot set that".
-proc ::tclpdf::type1::widths {metrics} {
+proc ::tclpdf::type1::widths {metrics {glyphs {}}} {
   set known [dict get $metrics widths]
   set list [lrepeat 256 0]
-  foreach {code name} [names $metrics] {
+  foreach {code name} [names $metrics $glyphs] {
     lset list $code [dict get $known $name]
   }
   return $list
+}
+
+# The glyphs a program holds, as a dict of charstring name -> 1, read from
+# the decrypted eexec section of a parsed font.
+#
+# The section is walked as a PostScript interpreter would, entry by entry -
+# "/name length RD <length bytes> ND" - and NOT scanned with a pattern: the
+# charstring bytes are themselves encrypted, so they are as good as random,
+# and a run of them will sooner or later spell "/A 5 RD ". The Subrs before
+# CharStrings are the same shape and are skipped the same way, by starting at
+# the /CharStrings token. The count in "/CharStrings 315 dict" is a capacity
+# and may exceed the entries; what is returned is what is there.
+proc ::tclpdf::type1::glyphs {font} {
+  set plain [Decrypt [dict get $font encrypted] 55665 4]
+  set at [string first "/CharStrings" $plain]
+  if {$at < 0} {
+    return -code error "tclpdf: damaged Type 1 program - no /CharStrings in\
+        the eexec section"
+  }
+  # "/CharStrings 315 dict dup begin" - the entries follow "begin".
+  set at [string first "begin" $plain $at]
+  if {$at < 0} {
+    return -code error "tclpdf: damaged Type 1 program - /CharStrings has\
+        no begin"
+  }
+  incr at 5
+  set result {}
+  set pattern {\s*/([^\s/{}()\[\]<>]+)\s+(\d+)\s+\S+\s}
+  while {[regexp -start $at -indices $pattern $plain whole name length]} {
+    if {[lindex $whole 0] != $at} {
+      # The next thing is not an entry - "end", or damage. Either way the
+      # dictionary is over.
+      break
+    }
+    dict set result [string range $plain {*}$name] 1
+    # Past the bytes and past the closing token (ND, |- or a synonym).
+    set at [expr {[lindex $whole 1] + 1 + [string range $plain {*}$length]}]
+    if {![regexp -start $at -indices {\s*\S+} $plain token]} {
+      break
+    }
+    set at [expr {[lindex $token 1] + 1}]
+  }
+  return $result
+}
+
+# The eexec and charstring cipher (Type 1 Font Format, 7.2): r = 55665 for
+# the eexec section, 4330 for a charstring, and the first $skip bytes of the
+# plaintext are the random lead-in the format prescribes.
+proc ::tclpdf::type1::Decrypt {bytes r skip} {
+  set c1 52845
+  set c2 22719
+  binary scan $bytes cu* codes
+  set plain {}
+  foreach c $codes {
+    lappend plain [expr {$c ^ ($r >> 8)}]
+    set r [expr {(($c + $r) * $c1 + $c2) & 0xFFFF}]
+  }
+  return [binary format c* [lrange $plain $skip end]]
 }
 
 # Read a font program and return the three pieces plus what the header says
@@ -392,4 +468,4 @@ proc ::tclpdf::type1::metrics {path} {
   return $metrics
 }
 
-package provide tclpdf::type1 1.1
+package provide tclpdf::type1 1.2

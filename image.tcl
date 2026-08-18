@@ -39,6 +39,7 @@ package require tclpdf::geometry 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::imageJpeg 1.0-
 package require tclpdf::imagePng 1.0-
+package require tclpdf::graphics 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::image {}
@@ -148,6 +149,30 @@ oo::define ::tclpdf::document::document {
           [join [dict keys $images] {, }]"
     }
     set image [dict get $images $alias]
+    # Every value is checked BEFORE the picture's object goes out, before
+    # its colour space is recorded and before the mark and the "q" are
+    # written: -at, -rotate, the sizes and -dpi (in ImageExtent), -alt
+    # against -artifact, and the alpha last, since that one makes its
+    # ExtGState as it passes. Measured before 2026-08-18: "-rotate x" was
+    # read after [save] and left the mark and the q open, "-dpi 0" went
+    # out as Inf, "-at {a b}" left a colour space record for a picture that
+    # never reached the page, and every one of them had already written the
+    # image object into the file.
+    if {[dict get $options at] ne {}} {
+      my GraphicsPoint [dict get $options at] -at "image place"
+    }
+    lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
+    if {![string is double -strict [dict get $options rotate]]} {
+      return -code error "tclpdf: -rotate of image place is an angle in\
+          degrees, not \"[dict get $options rotate]\""
+    }
+    lassign [my ImageExtent $image $options "image place"] width height
+    my GraphicCheck image "image place" [dict get $options alt] \
+        [dict get $options artifact]
+    set alpha {}
+    if {[dict get $options opacity] ne {}} {
+      set alpha [my GraphicsOpacity [dict get $options opacity]]
+    }
     if {[dict get $image object] eq {}} {
       # ImageWrite registers the resource in the state itself, so the local
       # copy has to be refreshed - not doing so is how a place ends up naming
@@ -156,15 +181,6 @@ oo::define ::tclpdf::document::document {
       set image [dict get [my state images] $alias]
     }
 
-    lassign [my ImageExtent $image $options] width height
-    lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
-    # The alpha is checked - and its ExtGState made - before the mark and the
-    # "q" are out: refused after [save], a bad value left a q without its Q
-    # in the stream. Same order as [FormPlace] in xObject.tcl.
-    set alpha {}
-    if {[dict get $options opacity] ne {}} {
-      set alpha [my GraphicsOpacity [dict get $options opacity]]
-    }
     # A picture's colour space counts like a painted colour for the PDF/A
     # intent check (ISO 19005-2, 6.2.4.3 - measured with veraPDF, a DeviceRGB
     # picture fails under a CMYK intent, a DeviceCMYK JPEG under sRGB).
@@ -242,17 +258,19 @@ oo::define ::tclpdf::document::document {
   # or two empty strings in an untagged document. [GraphicUnmark] takes both
   # back at the end.
   method GraphicMark {kind context alt artifact top {bbox {}}} {
-    if {$artifact ne {} && ![string is boolean -strict $artifact]} {
-      return -code error "tclpdf: $context: -artifact takes a boolean, not\
-          \"$artifact\""
-    }
+    my GraphicCheck $kind $context $alt $artifact
     set decorative [expr {$artifact ne {} && $artifact}]
-    if {$decorative && $alt ne {}} {
-      set noun [dict get {image picture svg drawing form placement} $kind]
-      return -code error "tclpdf: $context: -artifact and -alt contradict\
-          each other - a $noun is either decoration or described, not both"
-    }
     if {[my state tagged] ne "1"} {
+      return [list {} {}]
+    }
+    # Inside a form XObject or a tiling pattern the marking is suspended
+    # (see [FormBegin]): the stream has no MCIDs of its own, and the
+    # invocation carries the mark. No element either - a Figure opened
+    # here would hang in the tree with a BBox in the form's coordinates and
+    # no content on any page. Measured before 2026-08-18: "image draw -alt"
+    # inside [form create] did exactly that, although the manual promises
+    # that nothing inside a form is marked.
+    if {[my state structureSuspend] eq "1"} {
       return [list {} {}]
     }
     set element {}
@@ -263,6 +281,16 @@ oo::define ::tclpdf::document::document {
       }
       set element [my StructureOpen Figure $options]
       set mark [my StructureMark {} Layout $top]
+    } elseif {!$decorative && [my GraphicInFigure]} {
+      # Placed inside a Figure the caller opened - [structure Figure -alt
+      # ... -script {...}] around a picture and its Caption - the picture
+      # IS that figure's content, and the Figure's own -alt describes it:
+      # the mark attaches to the open element, as a shape's does. As an
+      # artifact it would be decoration inside the very element that says
+      # it is not, and PDF/UA refused the document (measured with veraPDF
+      # before 2026-08-18: 7.1, an undescribed picture) - with no way to
+      # build Figure{picture, Caption} at all.
+      set mark [my StructureMark {} Layout $top]
     } else {
       set mark [my StructureMark Artifact]
       if {[llength $mark] && !$decorative} {
@@ -272,6 +300,35 @@ oo::define ::tclpdf::document::document {
     }
     my content [my StructureBegin $mark]
     return [list $mark $element]
+  }
+
+  # The two refusals of [GraphicMark], on their own so that a caller can
+  # have them BEFORE it writes anything the mark does not undo - the image
+  # object, the colour space record. GraphicMark calls it first thing as
+  # well, so the drawing and the form placement need nothing extra.
+  method GraphicCheck {kind context alt artifact} {
+    if {$artifact ne {} && ![string is boolean -strict $artifact]} {
+      return -code error "tclpdf: $context: -artifact takes a boolean, not\
+          \"$artifact\""
+    }
+    if {$artifact ne {} && $artifact && $alt ne {}} {
+      set noun [dict get {image picture svg drawing form placement} $kind]
+      return -code error "tclpdf: $context: -artifact and -alt contradict\
+          each other - a $noun is either decoration or described, not both"
+    }
+    return
+  }
+
+  # Is the element open right now a Figure? Read from the structure state,
+  # not through a structure method: the stack and the element list are
+  # what [StructureMark auto] reads too, and the question is small enough
+  # not to need a door of its own.
+  method GraphicInFigure {} {
+    set open [lindex [my state structureStack] end]
+    if {$open eq {}} {
+      return 0
+    }
+    return [expr {[dict get [lindex [my state structure] $open] type] eq "Figure"}]
   }
 
   # The other half: end the mark and close the Figure, when there was one.
@@ -396,13 +453,20 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: no image named \"$alias\""
     }
     return [my ImageExtent [dict get $images $alias] [::tclpdf::option parse \
-        {size {} width {} height {} scale {} dpi 72} $args "image size"]]
+        {size {} width {} height {} scale {} dpi 72} $args "image size"] "image size"]
   }
 
   # The size to draw at, in the document unit. Given nothing, a pixel is taken
   # to be 1/dpi of an inch - with the default of 72 that is one PDF point,
   # which is the only assumption the format itself makes.
-  method ImageExtent {image options} {
+  #
+  # The sizing options are refused here, before anything reads them, and
+  # for [image size] as for [image place] - a size that cannot be placed is
+  # not one worth answering: lengths and factors above zero, a dpi above
+  # zero, a -size of exactly two numbers (geometry.tcl, checkFit). "what"
+  # names the call for the refusal.
+  method ImageExtent {image options what} {
+    ::tclpdf::geometry checkFit $options $what
     set parsed [dict get $image parsed]
     set pixelWidth [dict get $parsed width]
     set pixelHeight [dict get $parsed height]

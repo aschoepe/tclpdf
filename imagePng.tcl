@@ -18,10 +18,13 @@
 #                  has to be able to do anyway. Nothing is decompressed here.
 #                  A tRNS chunk on this way becomes a /Mask array (colour key
 #                  masking, 8.9.6.4): the one transparent colour of a
-#                  greyscale or truecolor file, or the transparent indices of
-#                  a palette. Neither costs a decode. The one exception is a
-#                  16-bit key, which readers were measured to ignore; that
-#                  is decoded for its mask alone, see [transparency].
+#                  greyscale or truecolor file, or ONE run of transparent
+#                  indices of a palette. Neither costs a decode. Two
+#                  exceptions are decoded for their mask alone, see
+#                  [transparency]: a 16-bit key, which readers were measured
+#                  to ignore, and a palette whose transparent indices are
+#                  not one contiguous run - the array holds one range per
+#                  component, and an Indexed image has one.
 #
 #   decode         colour types 4 and 6 (with alpha): PDF has no image format
 #                  carrying its own alpha, so the channel has to be separated
@@ -122,8 +125,31 @@ proc ::tclpdf::imagePng::parse {bytes} {
     return -code error "tclpdf: this PNG is interlaced (Adam7), which tclpdf\
         does not read - re-save it without interlacing"
   }
+  # A picture of no width or no height (PNG 11.2.2: both shall be non-zero)
+  # went out as /Width 0, which Table 89 does not allow either.
+  if {[dict get $result width] <= 0 || [dict get $result height] <= 0} {
+    return -code error "tclpdf: damaged PNG - the IHDR chunk says\
+        [dict get $result width] x [dict get $result height] pixels"
+  }
   if {[dict get $result colorType] == 3 && [dict get $result palette] eq {}} {
     return -code error "tclpdf: damaged PNG - a palette image without a PLTE chunk"
+  }
+  # The palette is RGB triples (PNG 11.2.3: a length not divisible by 3 is
+  # an error) and became a wrong /Indexed lookup as it stood; the tRNS of a
+  # palette holds one byte per entry at most (11.3.2.1), and a longer one
+  # yielded a /Mask range past hival, or a soft mask reading entries that
+  # do not exist.
+  if {[dict get $result colorType] == 3} {
+    set entries [string length [dict get $result palette]]
+    if {$entries % 3} {
+      return -code error "tclpdf: damaged PNG - the PLTE chunk is $entries\
+          bytes, not a multiple of 3"
+    }
+    set trns [string length [dict get $result transparency]]
+    if {$trns > $entries / 3} {
+      return -code error "tclpdf: damaged PNG - the tRNS chunk has $trns\
+          entries for a palette of [expr {$entries / 3}]"
+    }
   }
   # For colour types 0 and 2 the tRNS chunk is one colour, two bytes per
   # sample whatever the bit depth (PNG 11.3.2.1). Any other length is a
@@ -202,14 +228,23 @@ proc ::tclpdf::imagePng::decodeParms {parsed} {
 #   none        no tRNS chunk, or every entry fully opaque
 #   colourKey   the transparency is all-or-nothing: for colour types 0 and 2
 #               the one colour the tRNS chunk names (PNG 11.3.2.1), for a
-#               palette every entry either 0 or 255. A /Mask array does the
-#               job, and the image data stays a pass-through - nothing is
+#               palette every entry either 0 or 255 AND the transparent ones
+#               one contiguous run of indices. A /Mask array does the job,
+#               and the image data stays a pass-through - nothing is
 #               decoded.
-#   softMask    a palette with at least one partially transparent entry, or
-#               a colour key at 16 bits. That needs a real /SMask built from
+#   softMask    a palette with at least one partially transparent entry, a
+#               palette whose transparent indices are two or more runs, or a
+#               colour key at 16 bits. That needs a real /SMask built from
 #               the decoded samples, so the picture has to be decoded after
 #               all - though only for the mask; the picture itself still
 #               passes through.
+#
+# The runs matter because /Mask is 2 x n integers for an image of n
+# components (8.9.6.4), and an Indexed image has ONE: the array holds one
+# range, and a second pair - {0 0 2 2} for the indices 0 and 2 - is not a
+# second range but four integers for a one-component image, which a reader
+# reads as the first pair and the rest as noise. Measured before 2026-08-18
+# it was written that way, and the second run stayed opaque.
 #
 # The distinction is worth making because the common case - a logo with one
 # transparent background colour - lands on the cheap side. Colour types 4 and
@@ -249,7 +284,8 @@ proc ::tclpdf::imagePng::transparency {parsed} {
         return softMask
       }
       if {$transparent} {
-        return colourKey
+        return [expr {[llength [PaletteKey [dict get $parsed transparency]]] > 2
+            ? "softMask" : "colourKey"}]
       }
     }
   }
@@ -322,8 +358,8 @@ proc ::tclpdf::imagePng::streams {parsed} {
 # depth can hold matches no sample - the same as no transparency, which is
 # what is answered.
 #
-# For a palette, adjacent transparent indices are merged into a single range,
-# which is what the array wants anyway.
+# For a palette, adjacent transparent indices are merged into a single range
+# - and only a single one is ever written; see [transparency].
 proc ::tclpdf::imagePng::colourKey {parsed} {
   set trns [dict get $parsed transparency]
   switch -- [dict get $parsed colorType] {
@@ -366,4 +402,4 @@ proc ::tclpdf::imagePng::PaletteKey {trns} {
   return $ranges
 }
 
-package provide tclpdf::imagePng 1.1
+package provide tclpdf::imagePng 1.2

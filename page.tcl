@@ -55,9 +55,9 @@ oo::define ::tclpdf::document::document {
       add {return [my PageAdd {*}$args]}
       count {return [llength $tclpdfPages]}
       current {return $tclpdfCurrent}
-      size {return [my PageSize {*}$args]}
+      size {return [my PageSize [my PageOptionalIndex size $args]]}
       box {return [my PageBox {*}$args]}
-      typeArea {return [my PageTypeArea {*}$args]}
+      typeArea {return [my PageTypeArea [my PageOptionalIndex typeArea $args]]}
       content {
         # The raw content stream of a page, before it is compressed and turned
         # into an object. For diagnostics and for tests - "why is this shape
@@ -70,6 +70,18 @@ oo::define ::tclpdf::document::document {
             known are: add, count, current, size, box, typeArea, content"
       }
     }
+  }
+
+  # The one optional argument [page size] and [page typeArea] take. Checked
+  # here rather than left to the method's own arity: "page typeArea 0 1"
+  # used to answer 'wrong # args: should be "my PageTypeArea ?index?"',
+  # which names a private method and not the public call.
+  method PageOptionalIndex {subcommand arguments} {
+    if {[llength $arguments] > 1} {
+      return -code error "tclpdf: page $subcommand takes one optional page\
+          index, got \"$arguments\""
+    }
+    return [lindex $arguments 0]
   }
 
   method PageAdd {args} {

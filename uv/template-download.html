@@ -26,6 +26,22 @@
   </tr>
 
   <tr>
+    <td colspan="2"><b>Installing</b></td>
+  </tr>
+  <tr>
+    <td colspan="2">The .zip and the .tar.gz hold the same thing: one directory
+        <code>tclpdfPACKAGE_VERSION</code> with the Tcl modules, <code>pkgIndex.tcl</code>
+        and the ICC profiles - nothing to build. Extract it into a directory on the
+        <code>auto_path</code> of your tclsh and <code>package require tclpdf</code>
+        finds it. The source archive carries the tests, the examples with their
+        fonts, the manual sources and the tools, and installs the TEA way:
+        <code>./configure; make test; make install</code>.</td>
+  </tr>
+  <tr>
+    <td colspan="2">&nbsp;</td>
+  </tr>
+
+  <tr>
     <td colspan="2"><b>Requirements</b></td>
   </tr>
   <tr>
@@ -43,10 +59,13 @@
     <td colspan="2">One, and it is not shipped with tclpdf.</td>
   </tr>
   <tr>
-    <td>tdom</td>
-    <td>used by the SVG module when present: it parses 27 to 48 times faster than
-        the parser tclpdf brings along and refuses an entity expansion bomb.
-        Without it SVG still works, through the built-in element tree parser.</td>
+    <td>tdom 0.9.0 or newer</td>
+    <td>needed for the XMP metadata packet, so every document that declares
+        PDF/A, PDF/UA or ZUGFeRD needs it; a document that makes no such claim
+        runs without it. The SVG module uses it as well when present: it parses
+        27 to 48 times faster than the parser tclpdf brings along and refuses an
+        entity expansion bomb - without it SVG still works, through the built-in
+        element tree parser.</td>
   </tr>
 </table>
 </div>

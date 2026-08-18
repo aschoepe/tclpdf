@@ -39,7 +39,44 @@ package require tclpdf::filter 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::document 1.0-
 
-namespace eval ::tclpdf::attach {}
+namespace eval ::tclpdf::attach {
+  # The /AFRelationship names of PDF/A-3 (ISO 19005-3, Annex E; ISO 32000-2,
+  # Table 43). Owned here and read by zugferd.tcl, which checks its
+  # -relationship before it starts declaring things - one list, so the two
+  # cannot drift.
+  variable relationships {Source Data Alternative Supplement Unspecified}
+}
+
+# The bytes a reader compares when it looks a name up in the EmbeddedFiles
+# name tree: 7.9.6 says the keys are sorted as byte strings, and the byte
+# string of a key is what [pdfObj str] writes - the characters themselves
+# for a printable ASCII name, UTF-16BE with a byte order mark for any other.
+# Sorting the Tcl strings instead used to give a different order under the
+# two interpreters for a name outside the BMP against one at U+FFC2: 8.6
+# holds the first as a surrogate pair (D83D..., below FFC2) and 9.0 as the
+# whole character (1F600, above it), and only one of those is the byte order
+# of the file. Read back from the string object rather than encoded a second
+# time here, so the sort and the file cannot disagree.
+proc ::tclpdf::attach::keyBytes {name} {
+  set written [::tclpdf::pdfObj str $name]
+  if {[string index $written 0] eq "<"} {
+    return [binary decode hex [string range $written 1 end-1]]
+  }
+  return $name
+}
+
+# The /F entry of a file specification is a byte string in the file system's
+# own encoding, with "/" as the separator and "\\" as the escape (7.11.2.1),
+# and every reader that has ever existed reads it; /UF is the text string
+# with the real name (Table 44). For a name that is printable ASCII the two
+# are the same. For any other, /F carries this fallback: every character
+# outside printable ASCII replaced by "_", so that a reader too old for /UF
+# still gets a name it can show, and one that knows /UF gets the real one.
+# The name used to go into /F as UTF-16BE, which is not a form 7.11.2.1
+# knows.
+proc ::tclpdf::attach::fallbackName {name} {
+  return [regsub -all {[^\x20-\x7e]} $name _]
+}
 
 oo::define ::tclpdf::document::document {
 
@@ -63,25 +100,84 @@ oo::define ::tclpdf::document::document {
       mime application/octet-stream compress 1 date {}
     } $args "attach"]
 
+    # Every check before the first change - a refused call leaves nothing
+    # behind, and the checks that used to wait for the write ("expected
+    # boolean value" out of the first [write] for -compress maybe, "stream
+    # data must be bytes" for a -data with text in it) now name the option
+    # at the call that gave it.
+    #
+    # -data is told from its absence by PRESENCE, not by content: an empty
+    # attachment - a zero-byte marker file - is a legal thing to embed, and
+    # "-data {}" used to be refused as "needs a file name or -data".
+    set given 0
+    foreach {option value} $args {
+      if {[string trimleft $option -] eq "data"} {
+        set given 1
+      }
+    }
     if {$path ne {}} {
       # Binary, always - see io.tcl for what that prevents.
       set bytes [::tclpdf::io read $path]
       if {[dict get $options name] eq {}} {
         dict set options name [file tail $path]
       }
-    } elseif {[dict get $options data] ne {}} {
+    } elseif {$given} {
       set bytes [dict get $options data]
+      # Bytes, as the option says. A character above U+00FF is text that was
+      # never encoded, and the two roads out used to treat it differently:
+      # uncompressed it was refused at the write by the writer's byte check,
+      # compressed it went to [zlib compress], which keeps the low byte of
+      # each character and says nothing - "中" became one byte 0x2D in the
+      # file. Same rule as the writer's, said at the call.
+      if {[regexp {[^\u0000-\u00ff]} $bytes]} {
+        return -code error "tclpdf: -data takes bytes, not text - encode it\
+            first (encoding convertto utf-8 \$text)"
+      }
     } else {
       return -code error "tclpdf: attach needs a file name or -data"
     }
-    if {[dict get $options name] eq {}} {
+    set name [dict get $options name]
+    if {$name eq {}} {
       return -code error "tclpdf: attach needs -name when given -data"
     }
+    # 7.11.2.1: in a file specification string "/" separates path
+    # components and "\\" escapes, so neither can be part of a NAME - a
+    # "dir/sub.txt" would be read as a path, and the name tree wants a name.
+    if {[string first / $name] >= 0 || [string first \\ $name] >= 0} {
+      return -code error "tclpdf: -name must not contain \"/\" or \"\\\" -\
+          they are path separators in a file specification (ISO 32000-1,\
+          7.11.2.1) - not \"$name\""
+    }
 
-    set known {Source Data Alternative Supplement Unspecified}
-    if {[dict get $options relationship] ni $known} {
+    variable ::tclpdf::attach::relationships
+    if {[dict get $options relationship] ni $relationships} {
       return -code error "tclpdf: -relationship must be one of\
-          [join $known {, }] - not \"[dict get $options relationship]\""
+          [join $relationships {, }] - not \"[dict get $options relationship]\""
+    }
+    # /Subtype of the embedded file stream is the MIME type as a name
+    # (Table 45), so it needs the shape "type/subtype" of RFC 2045 tokens -
+    # an empty or a spaced value wrote a name a reader cannot use.
+    if {![regexp {^[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+$} \
+        [dict get $options mime]]} {
+      return -code error "tclpdf: -mime takes a media type such as text/xml\
+          or application/pdf, not \"[dict get $options mime]\""
+    }
+    if {![string is boolean -strict [dict get $options compress]]} {
+      return -code error "tclpdf: -compress takes a boolean, not\
+          \"[dict get $options compress]\""
+    }
+    # /ModDate in the Params dictionary is a PDF date (Table 46) - the same
+    # shape [info CreationDate] takes, checked by the same reader.
+    if {[dict get $options date] ne {}} {
+      my CheckDate [dict get $options date] "attach -date"
+    }
+    # The mirror of the check in pdfa.tcl: PDF/A-2 admits no embedded file
+    # that is not itself PDF/A (ISO 19005-2, 6.8), and a claim already made
+    # is not quietly broken by an attachment that follows it.
+    if {[my state pdfa] ne {} && [dict get [my state pdfa] part] == 2} {
+      return -code error "tclpdf: this document claims PDF/A-2, which admits\
+          no embedded file that is not itself PDF/A (ISO 19005-2, 6.8) -\
+          declare pdfa -part 3, which admits any file"
     }
 
     # Embedded file streams and the EmbeddedFiles name tree are PDF 1.3
@@ -91,9 +187,9 @@ oo::define ::tclpdf::document::document {
     my RequireVersion 1.3 "attach"
     set attachments [my state attachments]
     foreach entry $attachments {
-      if {[dict get $entry name] eq [dict get $options name]} {
+      if {[dict get $entry name] eq $name} {
         return -code error "tclpdf: an attachment named\
-            \"[dict get $options name]\" already exists - names in the embedded\
+            \"$name\" already exists - names in the embedded\
             file name tree have to be unique"
       }
     }
@@ -164,8 +260,10 @@ oo::define ::tclpdf::document::document {
       set streamNumber [my reservation attach.file.$index]
       $writer stream $streamNumber $pairs $bytes
 
+      # /F a byte string that every reader takes, /UF the text string with
+      # the real name - see [fallbackName] for why the two can differ.
       set specPairs [list Type /Filespec \
-          F [::tclpdf::pdfObj str [dict get $entry name]] \
+          F [::tclpdf::pdfObj str [::tclpdf::attach::fallbackName [dict get $entry name]]] \
           UF [::tclpdf::pdfObj str [dict get $entry name]] \
           AFRelationship [::tclpdf::pdfObj name [dict get $entry relationship]] \
           EF [::tclpdf::pdfObj dictionary \
@@ -192,9 +290,12 @@ oo::define ::tclpdf::document::document {
     set writer [my writer]
 
     # The name tree has to be sorted by name (7.9.6) - a reader is allowed to
-    # binary-search it, and an unsorted tree then finds nothing.
+    # binary-search it, and an unsorted tree then finds nothing. Sorted by
+    # the BYTES of the key as written, which is what the reader compares -
+    # see [keyBytes] for the case where the Tcl string order differs.
     set sorted [lsort -command {apply {{a b} {
-      string compare [dict get $a name] [dict get $b name]
+      string compare [::tclpdf::attach::keyBytes [dict get $a name]] \
+          [::tclpdf::attach::keyBytes [dict get $b name]]
     }}} $specs]
     set pairs {}
     foreach entry $sorted {
@@ -213,4 +314,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.3
+package provide tclpdf::attach 1.4

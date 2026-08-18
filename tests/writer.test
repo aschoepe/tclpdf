@@ -217,4 +217,75 @@ test writer-2.9 {two documents get different identifiers} -body {
   list $differ $length
 } -result {1 16}
 
+# -- writing to a channel ---------------------------------------------------
+#
+# The xref offsets are counted from the bytes written, not asked of the
+# channel: [tell] answers -1 on a pipe or a socket - every entry then read
+# "-000000001 00000 n" and startxref was -1 - and on a channel that already
+# carries something it counts that in, while a reader counts from %PDF-.
+
+# Where the file says its objects are, checked against where they are: the
+# xref entry of every object has to point at "N 0 obj", and startxref at
+# "xref". Answers a list of the mismatches, so an empty list is right.
+proc writerMismatches {bytes} {
+  set wrong {}
+  if {![regexp {startxref\n(-?\d+)\n%%EOF} $bytes -> start]
+      || [string range $bytes $start [expr {$start + 3}]] ne "xref"} {
+    lappend wrong startxref
+  }
+  regexp {xref\n0 (\d+)\n} $bytes -> count
+  set table [string range $bytes [expr {$start + [string length "xref\n0 $count\n"]}] end]
+  for {set number 1} {$number < $count} {incr number} {
+    set entry [string range $table [expr {$number * 20}] [expr {$number * 20 + 19}]]
+    scan $entry %d offset
+    if {[string range $bytes $offset [expr {$offset + [string length "$number 0 obj"] - 1}]] \
+        ne "$number 0 obj"} {
+      lappend wrong $number
+    }
+  }
+  return $wrong
+}
+
+test writer-3.1 {a pipe gets the same bytes as a file, offsets included} -body {
+  set fixed [binary format H* 000102030405060708090a0b0c0d0e0f]
+  set pdf [::tclpdf::writer::pdf new]
+  $pdf id $fixed
+  writerMinimal $pdf
+  set path [makeFile {} writer-pipe-file.pdf]
+  $pdf writeFile $path {Root {1 0 R}}
+  set fromFile [::tclpdfTest::readBytes $path]
+  removeFile writer-pipe-file.pdf
+  # [tell] on this channel answers -1 - the case the count exists for.
+  set path [makeFile {} writer-pipe.pdf]
+  set channel [open "|cat > $path" w]
+  set told [tell $channel]
+  $pdf writeChannel $channel {Root {1 0 R}}
+  close $channel
+  set fromPipe [::tclpdfTest::readBytes $path]
+  $pdf destroy
+  removeFile writer-pipe.pdf
+  list $told [string equal $fromFile $fromPipe] [writerMismatches $fromPipe] \
+      [regexp -- {-000000001} $fromPipe]
+} -result {-1 1 {} 0}
+
+test writer-3.2 {a channel that already carries a header gets offsets counted from %PDF-} -body {
+  # A CGI response: the header goes first, then the document. A reader
+  # takes the offsets relative to the %PDF- line (7.5.4), so a count that
+  # started with the channel would be off by the header's length.
+  set pdf [::tclpdf::writer::pdf new]
+  writerMinimal $pdf
+  set path [makeFile {} writer-header.pdf]
+  set channel [open $path w]
+  set header "Content-Type: application/pdf\r\n\r\n"
+  puts -nonewline $channel $header
+  $pdf writeChannel $channel {Root {1 0 R}}
+  close $channel
+  set bytes [::tclpdfTest::readBytes $path]
+  $pdf destroy
+  removeFile writer-header.pdf
+  set document [string range $bytes [string length $header] end]
+  list [string range $bytes 0 [expr {[string length $header] - 1}]] \
+      [string range $document 0 4] [writerMismatches $document]
+} -result [list "Content-Type: application/pdf\r\n\r\n" %PDF- {}]
+
 cleanupTests

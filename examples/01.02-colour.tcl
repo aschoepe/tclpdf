@@ -104,7 +104,7 @@ $doc text "upper: rgb    lower: the same colour as cmyk" -at {20 158}
 # -- named colours ---------------------------------------------------------
 
 $doc font -style bold -size 10
-$doc text "Named colours - 147 of them, without Tk" -at {20 172}
+$doc text "Named colours - 148 of them, without Tk" -at {20 172}
 
 set x 20
 set y 178

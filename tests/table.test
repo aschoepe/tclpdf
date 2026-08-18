@@ -1091,4 +1091,189 @@ test table-21.4 {border vertical draws only the upright rules} -body {
   list [llength $drawn] $level
 } -result {8 0}
 
+# -- the area per page, and what is refused before a cell is drawn ------------
+
+test table-22.1 {a continued table takes -top and -bottom from the page it lands on} -body {
+  # A landscape document whose first page is portrait: the defaults used to be
+  # read once, from the portrait page, and the rows of the landscape pages ran
+  # to 278 mm on a page 210 mm high. Every page's lowest baseline has to lie
+  # above its own area bottom.
+  set doc [tclpdf new -unit mm -orientation landscape]
+  $doc page add -orientation portrait
+  $doc table -at {20 20} -width 100 -body [pagingRows 100]
+  set out {}
+  for {set page 0} {$page < [$doc page count]} {incr page} {
+    lassign [$doc page size $page] -> height
+    set bottom [lindex [$doc page typeArea $page] 3]
+    set lowest [expr {$height - [lindex [::tclpdfTest::starts \
+        [::tclpdfTest::content $doc $page] y] end] / 72.0 * 25.4}]
+    lappend out [expr {$lowest < $bottom}]
+  }
+  set pages [$doc page count]
+  $doc destroy
+  list $pages [lsort -unique $out]
+} -result {4 1}
+
+test table-22.2 {-top, -bottom and -minRowHeight are numbers, and say so} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach {option value} {top abc bottom abc minRowHeight abc minRowHeight -5
+      repeatColumns -1 repeatColumns 1.5} {
+    lappend out [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+        -$option $value} message] [regexp "^tclpdf: -$option takes .*\"$value\"" \
+        $message]
+  }
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $out [string length $content]
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1} 0}
+
+test table-22.3 {-bottom at or above -top, and -bottom below the page, are refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  lappend out [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -top 200 -bottom 100} message] [regexp {^tclpdf: -bottom 100 is not below -top 200} $message]
+  lappend out [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -top 100 -bottom 100} message] [regexp {is not below -top} $message]
+  lappend out [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -bottom 400} message] [regexp {^tclpdf: -bottom 400 lies below the foot of page 0, which is 297 high} $message]
+  set content [::tclpdfTest::content $doc]
+  set pages [$doc page count]
+  $doc destroy
+  list $out $pages [string length $content]
+} -result {{1 1 1 1 1 1} 1 0}
+
+test table-22.4 {a head taller than the band is refused, and nothing is drawn} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set tall [string repeat "line\n" 80]
+  set code [catch {$doc table -at {20 20} -width 100 \
+      -head [list [list $tall B]] -body {{a b}}} message]
+  set content [::tclpdfTest::content $doc]
+  set pages [$doc page count]
+  $doc destroy
+  list $code [regexp {^tclpdf: what has to stand together on a page - the head \(\d+\.\d\d\) and row 1 \(\d+\.\d\d\) - is \d+\.\d\d high, more than the 267\.30 between -top 14\.85 and -bottom 282\.15} $message] \
+      $pages [string length $content]
+} -result {1 1 1 0}
+
+test table-22.5 {rows a rowSpan ties together that do not fit the band are refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set tall [string repeat "line\n" 80]
+  set body [list [list [dict create text $tall rowSpan 3] b] {x y} {q r} {after 1}]
+  set code [catch {$doc table -at {20 200} -width 100 -body $body} message]
+  set content [::tclpdfTest::content $doc]
+  set pages [$doc page count]
+  $doc destroy
+  list $code [regexp {rows 1 to 3, tied by a rowSpan \(\d+\.\d\d\) - is} $message] \
+      $pages [string length $content]
+} -result {1 1 1 0}
+
+test table-22.6 {a table that cannot start above -bottom starts on the next page} -body {
+  # -at below -bottom, and -at so close to it that the head would stand alone:
+  # in both cases the page it was placed on stays empty of it and the head
+  # goes with the first row.
+  set out {}
+  foreach {at bottom} {250 200 270 280} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc table -at [list 20 $at] -width 100 -head {{A B}} -body {{a b} {c d}} \
+        -bottom $bottom
+    lappend out [$doc page count] \
+        [regexp -all {Tj} [::tclpdfTest::content $doc 0]] \
+        [regexp -all {Tj} [::tclpdfTest::content $doc 1]]
+    $doc destroy
+  }
+  set out
+} -result {2 0 6 2 0 6}
+
+test table-22.7 {the foot after the last row is kept inside -bottom} -body {
+  # A row of 6.65 mm and a foot of the same height, placed so that the row
+  # fits and the foot would not: the last row moves to the next page with
+  # its foot rather than the foot being drawn past -bottom.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 270} -width 100 -body {{a b}} -foot {{F G}} -bottom 280
+  set pages [$doc page count]
+  set first [regexp -all {Tj} [::tclpdfTest::content $doc 0]]
+  $doc destroy
+  list $pages $first
+} -result {2 0}
+
+test table-22.8 {align, valign, padding, lineWidth and leading are checked as values} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach {key value pattern} {
+    align foo {^tclpdf: unknown table align "foo" - known are: left, right, center, decimal}
+    valign foo {^tclpdf: unknown table valign "foo" - known are: top, middle, bottom}
+    padding -1 {^tclpdf: a table padding is a distance of 0 or more}
+    lineWidth -1 {^tclpdf: a table lineWidth is a width of 0 or more}
+    leading 0 {^tclpdf: a table leading is a factor of the font size above 0}
+    border foo {^tclpdf: unknown table border "foo" - known are: none, all, horizontal, vertical, outer}
+  } {
+    lappend out [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+        -style [list $key $value]} message] [regexp $pattern $message]
+  }
+  # The same on a cell, where the cell's own align wins over everything.
+  lappend out [catch {$doc table -at {20 20} -width 100 \
+      -body {{{text a align foo} b}}} message] [regexp {unknown table align "foo"} $message]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $out [string length $content]
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1} 0}
+
+test table-22.9 {a colSpan over a column no row has, and a rowSpan past the last row, are refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  lappend out [catch {$doc table -at {20 20} -width 100 \
+      -body {{{text a colSpan 5} b c}}} message] \
+      [regexp {^tclpdf: a colSpan reaches over column 2, which no row has a cell in} $message]
+  lappend out [catch {$doc table -at {20 20} -width 100 \
+      -head {{{text T colSpan 4}}} -body {{a b c}}} message] \
+      [regexp {reaches over column 4} $message]
+  # Described in -columns, the column is there on purpose.
+  lappend out [catch {$doc table -at {20 20} -width 100 \
+      -head {{{text T colSpan 4}}} -body {{a b c}} \
+      -columns {{} {} {} {width 10}}} message]
+  lappend out [catch {$doc table -at {20 60} -width 100 \
+      -body {{{text a rowSpan 5} b c} {d e f}}} message] \
+      [regexp {^tclpdf: a rowSpan of 5 in row 1 of the body reaches past its last row - the body has 2 row\(s\)} $message]
+  $doc destroy
+  set out
+} -result {1 1 1 1 0 1 1}
+
+test table-22.10 {a fontStyle the font module does not know is refused before a cell is drawn} -body {
+  # The value goes to [text] as -style; the refusal is the font module's, and
+  # it comes from measuring, before anything is written.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -style {fontStyle foo}} message]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string length $content]
+} -result {1 0}
+
+test table-22.11 {a refused table leaves no Table element in a tagged document} -body {
+  # The checks run before the element is opened: a table refused for a value
+  # leaves the tree as it was, and the one that is drawn is the only Table.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -style {align foo}}]
+  $doc table -at {20 40} -width 100 -body {{a b}}
+  set path [::tclpdfTest::scratch table-refused-tagged.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $code [regexp -all {/S /Table} $bytes] [regexp -all {/S /TR} $bytes]
+} -result {1 1 1}
+
 cleanupTests

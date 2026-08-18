@@ -207,6 +207,27 @@ set result [$doc text $body -at [list $x0 [expr {$y0 + 12}]] -width $width \
 puts "  picture: [format %.0f $pw] x [format %.0f $ph] mm between the columns,\
     text ended on page [expr {[dict get $result page] + 1}]"
 
+# -- 6. a page of another size -----------------------------------------------
+
+# The area is a rule, not a pair of numbers: it is asked of every page. A
+# table that starts on a landscape page and runs on to the portrait pages the
+# document adds takes its -top and -bottom from each page it lands on - the
+# rows stop 25 mm above the foot of the landscape page AND 25 mm above the
+# foot of the portrait ones, and the running head sits in each page's own
+# margin. Until 2026-08-18 the two distances were read once, from the page
+# the table began on, and carried onto the others.
+$doc page add -orientation landscape
+lassign [$doc page typeArea] x0 y0 x1 y1
+$doc font -style bold -size 14
+$doc text "6. Started on a landscape page, continued on portrait ones" \
+    -at [list $x0 [expr {$y0 + 4}]]
+$doc font -style {} -size 10
+set y [$doc table -at [list $x0 [expr {$y0 + 12}]] -width $width -theme striped \
+    -head {{No. Word Amount}} -body $rows \
+    -columns {{width 16 align right} {} {width 30 align decimal}}]
+puts "  mixed sizes: the table ended on page [$doc page count] at y =\
+    [format %.1f $y] mm, [lmap v [$doc page size] {format %.0f $v}] mm"
+
 exampleFooter $doc helvetica
 
 $doc write $target

@@ -572,4 +572,84 @@ test document-options-15.7 {a two-number format is turned when the document aske
   set out
 } -result {{55 88} {55 88} {55 88} {88 55} {88 55} {55 88} {55 88} {55 88} {55 88} {297 210} {88 55} {55 88} {88 55}}
 
+# -- -typeArea follows the unit ------------------------------------------------
+
+test document-typeArea-21.1 {the margins follow a change of -unit} -body {
+  # 25 mm top and bottom, then the document goes to points: the page boxes
+  # are stored in points and read back in the new unit; the margins used to
+  # stay 25 and be read as 25 pt.
+  set doc [tclpdf new -unit mm -typeArea {25 25}]
+  $doc page add
+  set mm [lmap v [$doc page typeArea] {format %.2f $v}]
+  $doc configure -unit pt
+  set pt [lmap v [$doc page typeArea] {format %.2f $v}]
+  set cget [lmap v [$doc cget -typeArea] {format %.2f $v}]
+  $doc configure -unit cm
+  set cm [lmap v [$doc cget -typeArea] {format %.2f $v}]
+  $doc destroy
+  list $mm $pt $cget $cm
+} -result {{10.50 25.00 199.50 272.00} {29.76 70.87 565.51 771.02} {70.87 70.87} {2.50 2.50}}
+
+test document-typeArea-21.2 {a -typeArea given with -unit in the same call is in that unit} -body {
+  set doc [tclpdf new -unit pt -typeArea {72 72 36 36}]
+  $doc page add
+  set area [lmap v [$doc page typeArea] {format %.1f $v}]
+  set kept [$doc cget -typeArea]
+  # configure both at once: the new area is read in the new unit, not
+  # converted from the old one.
+  $doc configure -unit in -typeArea {1 1}
+  set inch [$doc cget -typeArea]
+  set page [lmap v [$doc page typeArea] {format %.3f $v}]
+  $doc destroy
+  list $area $kept $inch $page
+} -result {{36.0 72.0 559.3 769.9} {72 72 36 36} {1 1} {0.413 1.000 7.854 10.693}}
+
+test document-typeArea-21.3 {cget answers what was written, exactly, while the unit stands} -body {
+  set doc [tclpdf new -unit mm -typeArea {20 25 15 18}]
+  $doc configure -compress 0
+  set same [$doc cget -typeArea]
+  $doc destroy
+  set same
+} -result {20 25 15 18}
+
+# -- -compress is a boolean, /Tabs is a 1.5 key ------------------------------
+
+test document-compress-20.1 {-compress takes a boolean and refuses anything else at the call} -body {
+  # "-compress foo" used to fail at the first write with "expected boolean
+  # value but got foo" - a raw Tcl message naming no option - and
+  # "-compress 2" was silently taken as true.
+  set out {}
+  foreach value {foo 2 {} 1.5} {
+    lappend out [catch {tclpdf new -compress $value} err] \
+        [string match "*-compress takes a boolean, not \"$value\"*" $err]
+  }
+  set doc [tclpdf new -compress yes]
+  lappend out [$doc cget -compress]
+  lappend out [catch {$doc configure -compress maybe} err] \
+      [string match {*-compress takes a boolean, not "maybe"*} $err] [$doc cget -compress]
+  $doc configure -compress off
+  lappend out [$doc cget -compress]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 1 1 1 yes 1 1 yes off}
+
+test document-compress-20.2 {/Tabs /S is written on a page with annotations from PDF 1.5 on, not below} -body {
+  # Tabs is a PDF 1.5 entry of the page dictionary (ISO 32000-1, Table
+  # 30); a 1.4 file with a link used to carry it all the same. Left out
+  # below 1.5 rather than refused - nothing was asked for.
+  set out {}
+  foreach version {1.4 1.5 1.7} {
+    set doc [tclpdf new -unit mm -compress 0 -version $version]
+    $doc page add
+    $doc link -at {10 10} -size {20 10} -url http://example.org/
+    set path [::tclpdfTest::scratch document-tabs-$version.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend out [regexp -all {/Tabs /S} $bytes] [regexp -all {/Annots \[} $bytes]
+  }
+  set out
+} -result {0 1 1 1 1 1}
+
 cleanupTests

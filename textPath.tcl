@@ -90,6 +90,12 @@ oo::define ::tclpdf::document::document {
     }
 
     set offset [dict get $options offset]
+    if {![string is double -strict $offset]} {
+      # Any sign - below the path is a place too - but a number, and said
+      # so here: "abc" used to fail in Tcl's words from inside the loop.
+      return -code error "tclpdf: -offset takes a distance in the document\
+          unit, not \"$offset\""
+    }
     # -spacing has no operator here: on a path every glyph is placed by hand,
     # and Tc only applies to a text object that runs on a straight line. So
     # the gap has to go into the cursor, once BETWEEN each pair - which is
@@ -285,4 +291,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.4
+package provide tclpdf::textPath 1.5

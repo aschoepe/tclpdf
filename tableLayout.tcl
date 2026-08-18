@@ -54,6 +54,15 @@ oo::define ::tclpdf::document::document {
           incr column
         }
         set cell [my TableCell $source]
+        # A span past the last row of the section is malformed input. It used
+        # to be clamped where the row heights are added up, and the table
+        # came out as if the caller had written the span that fits - the
+        # answer to a question nobody asked.
+        if {$rowIndex + [dict get $cell rowSpan] > [llength $rows]} {
+          return -code error "tclpdf: a rowSpan of [dict get $cell rowSpan] in\
+              row [expr {$rowIndex + 1}] of the $section reaches past its last\
+              row - the $section has [llength $rows] row(s)"
+        }
         dict set cell row $rowIndex
         dict set cell column $column
         dict set cell section $section
@@ -140,6 +149,34 @@ oo::define ::tclpdf::document::document {
     return $count
   }
 
+  # A colSpan covers columns of the table; it does not add any. A span
+  # reaching over a column in which no row has a cell - "colSpan 5" in a
+  # table whose rows have three cells - used to be taken as it stood: the
+  # table grew the columns, each of them one unit wide, the cells after the
+  # span were pushed right by them, and nothing said so. Refused, unless
+  # -columns describes the column - then it is there on purpose, and its
+  # description says how wide.
+  method TableColumnsCovered {sections count columns} {
+    set starts [lrepeat $count 0]
+    foreach grid $sections {
+      foreach row $grid {
+        foreach cell $row {
+          lset starts [dict get $cell column] 1
+        }
+      }
+    }
+    for {set index 0} {$index < $count} {incr index} {
+      if {[lindex $starts $index] || $index < [llength $columns]} {
+        continue
+      }
+      return -code error "tclpdf: a colSpan reaches over column\
+          [expr {$index + 1}], which no row has a cell in - a span covers the\
+          columns of the table and adds none; describe the column in -columns\
+          if it is meant to be there"
+    }
+    return
+  }
+
   # Column widths, in the document unit.
   #
   # Three kinds, and they are resolved in this order because each constrains
@@ -151,6 +188,7 @@ oo::define ::tclpdf::document::document {
   # column is two millimetres wide because it happened to come last.
   method TableColumnWidths {sections columns total options} {
     set count [my TableColumnCount $sections]
+    my TableColumnsCovered $sections $count $columns
     set widths [lrepeat $count {}]
     set weights [lrepeat $count 0]
     set index 0
@@ -452,8 +490,46 @@ oo::define ::tclpdf::document::document {
         dict set style $key [dict get $cell $key]
       }
     }
+    return [my TableStyleCheck $style]
+  }
+
+  # The values of the assembled style, once every level has had its say. The
+  # keys were checked where they came in; the VALUES were not, and a wrong
+  # one fell through the switch that reads it - "align foo" set the text
+  # left, "valign foo" set it at the top, a negative padding pulled the text
+  # out of its cell, a leading of 0 stacked the lines on one line - and
+  # nothing said so. border was refused, but by the code that draws the
+  # rules - after the cell's fill had gone out; direction is refused by
+  # [text] at measuring. All of it is refused here, before a cell is
+  # measured, so that a table with a mistyped value draws nothing at all.
+  # size and family go through [text], which has its own word on both.
+  method TableStyleCheck {style} {
+    foreach {key known} {
+      align {left right center decimal}
+      valign {top middle bottom}
+      border {none all horizontal vertical outer}
+    } {
+      if {[dict get $style $key] ni $known} {
+        return -code error "tclpdf: unknown table $key\
+            \"[dict get $style $key]\" - known are: [join $known {, }]"
+      }
+    }
+    foreach {key what} {
+      padding {a distance of 0 or more in the document unit}
+      lineWidth {a width of 0 or more in the document unit}
+    } {
+      set value [dict get $style $key]
+      if {![string is double -strict $value] || $value < 0} {
+        return -code error "tclpdf: a table $key is $what, not \"$value\""
+      }
+    }
+    set leading [dict get $style leading]
+    if {![string is double -strict $leading] || $leading <= 0} {
+      return -code error "tclpdf: a table leading is a factor of the font\
+          size above 0, not \"$leading\""
+    }
     return $style
   }
 }
 
-package provide tclpdf::tableLayout 1.2
+package provide tclpdf::tableLayout 1.3

@@ -86,6 +86,11 @@ namespace eval ::tclpdf::structure {
     H7 H8 H9 H10
   }
 
+  # The structure namespace of PDF 2.0 (ISO 32000-2 14.8.6.1), named on every
+  # element that lives in it - see [StructureNamespace] in structureWrite.tcl
+  # for when a tree names it at all.
+  variable namespace20 "http://iso.org/pdf2/ssn"
+
   # The twelve types that exist ONLY in the 1.7 namespace (TS 32005 Tab. 2/3).
   # In a 2.0 tree they are still usable, but they stay in the default - which
   # IS the 1.7 namespace - while everything else moves to the 2.0 one. So
@@ -157,6 +162,30 @@ namespace eval ::tclpdf::structure {
     Warichu WT WP Figure Formula Form Em Strong Sub FENote
   }
 
+  # The inline types that are NOTHING BUT inline: inline markup marks up
+  # something, and straight under Document or a Sect there is nothing it
+  # could be inside of. A Strong at the top level is what veraPDF reports as
+  # "Document shall not contain Strong" (ISO 32005 Table 5), and a Span in a
+  # Sect as "Sect-Span". Refused where it is opened, like the other parent
+  # rules: it needs an ancestor that holds text - a P, a heading, a cell, a
+  # Figure - and Div, Part and NonStruct are looked through on the way up,
+  # as the validator looks through them (transparent). The grouping types
+  # that are no home for it are the containers plus the three below, which
+  # hold marks in this package but no inline element in Table 5.
+  #
+  # Measured against veraPDF ua2 rather than read from the table: Figure,
+  # Formula, Form, Link, Annot, Code, Note and FENote pass at the top level
+  # and are left out; the parts of a Ruby or a Warichu are placed by
+  # parentOf below. Reference is the odd one - refused under Document and
+  # nowhere else that matters (a TOCI holds one, and 5.5 draws it so), so
+  # it is refused at the top level only.
+  variable inlineOnly {
+    Span Quote BibEntry Ruby Warichu Em Strong Sub
+  }
+  variable transparent {Div Part NonStruct}
+  variable noInlineHome {DocumentFragment Aside BlockQuote}
+  variable notAtTop {Reference}
+
   # Where a derived P is not allowed but the right answer is obvious. Text
   # drawn in an open LI IS the list item's body; demanding an explicit LBody
   # for it would be correct and useless - the caller has already said this is
@@ -201,10 +230,18 @@ namespace eval ::tclpdf::structure {
   # The values the two name attributes accept. A misspelling here is the
   # quiet kind of mistake: the file stays valid and the reader ignores the
   # attribute, so a list reads as unordered forever.
+  #
+  # The numbering styles are those of ISO 32000-1 Table 347. ISO 32000-2
+  # (Table 369) added three, and those are kept apart below: written into a
+  # 1.7 file they would be a value no 1.7 reader knows, silently ignored -
+  # the same quiet mistake as a misspelling, in a file that validates.
   variable attributeValues {
     scope     {Row Column Both}
-    numbering {None Unordered Description Disc Circle Square Decimal
+    numbering {None Disc Circle Square Decimal
                UpperRoman LowerRoman UpperAlpha LowerAlpha}
+  }
+  variable attributeValues20 {
+    numbering {Unordered Description Ordered}
   }
 
   # Which types an attribute is allowed on. Checked because the attribute is
@@ -261,6 +298,19 @@ oo::define ::tclpdf::document::document {
     }
     set value [expr {$value ? 1 : 0}]
     if {$value && [my state tagged] ne "1"} {
+      # Before anything is drawn, and refused otherwise: the brackets go into
+      # the content stream as it is written, so whatever a page already
+      # holds would stay unmarked in a file whose MarkInfo says the opposite
+      # - content a reader neither finds in the tree nor knows to skip. A
+      # page that exists but holds nothing yet is fine.
+      for {set index 0} {$index < [my page count]} {incr index} {
+        if {[my page content $index] ne {}} {
+          return -code error "tclpdf: tagged 1 has to come before anything is\
+              drawn - page [expr {$index + 1}] already has content, and\
+              content drawn before the switch would stay outside the tree.\
+              Call \[\$doc tagged 1\] right after \[tclpdf new\]"
+        }
+      }
       # Tagged PDF - MarkInfo, StructTreeRoot, BDC with an MCID - is PDF 1.4
       # (Reference 1.7, 10.6 and Table 3.25).
       my RequireVersion 1.4 "tagged"
@@ -287,10 +337,15 @@ oo::define ::tclpdf::document::document {
       alt {} lang {} title {} actualText {} expansion {} script {} name {}
       id {} scope {} numbering {} bbox {} colSpan {} rowSpan {}
     } $args "structure"]
-    set script [dict get $options script]
-    if {$script eq {}} {
+    # Missing, not empty: an element with nothing in it is a legitimate thing
+    # to ask for - a placeholder a link points at, an L that is filled later
+    # - and [option parse] cannot tell an empty -script from an absent one,
+    # so the arguments themselves are asked, the way [configure] asks them
+    # about -orientation.
+    if {"script" ni [lmap {option value} $args {string trimleft $option -}]} {
       return -code error "tclpdf: structure needs -script"
     }
+    set script [dict get $options script]
     set id [my StructureOpen $type $options]
     set code [catch {uplevel 1 $script} result outcome]
     my StructureClose $id
@@ -327,22 +382,37 @@ oo::define ::tclpdf::document::document {
     }
     my StructureCheckNesting $type
     variable ::tclpdf::structure::attributes
-    # A name makes the element referable - see [structureDestination].
-    if {[dict exists $options name] && [dict get $options name] ne {}} {
-      set named [my state structureNames]
-      if {[dict exists $named [dict get $options name]]} {
-        return -code error "tclpdf: a structure element named\
-            \"[dict get $options name]\" already exists - a name has to be\
-            unique, or a link would not know which one it means"
-      }
-      dict set named [dict get $options name] [llength [my state structure]]
-      my state structureNames $named
-    }
-    foreach key [list alt lang title actualText expansion id \
+    foreach key [list alt lang title actualText expansion id name \
         {*}[dict keys $attributes]] {
       if {![dict exists $options $key]} {
         dict set options $key {}
       }
+    }
+    # Every check first, every registration last: a refused call must leave
+    # the state as if it had never happened. Until 2026-08-18 the name was
+    # claimed before the id was checked, and a call refused for a duplicate
+    # id left its name behind, pointing at whatever element came next.
+    #
+    # A name makes the element referable - see [structureDestination].
+    set name [dict get $options name]
+    if {$name ne {}} {
+      set named [my state structureNames]
+      if {[dict exists $named $name]} {
+        return -code error "tclpdf: a structure element named\
+            \"$name\" already exists - a name has to be\
+            unique, or a link would not know which one it means"
+      }
+    }
+    # Lang is a language tag like the document's (14.9.2): the same shape
+    # [language] in document.tcl checks, RFC 3066 - "de", "de-DE", "en-GB".
+    # Written unchecked it would reach a screen reader as a voice it cannot
+    # pick. The expression is the one [language] uses, spelled a second time
+    # because document.tcl keeps it inside that method; the two have to move
+    # together.
+    set lang [dict get $options lang]
+    if {$lang ne {} && ![regexp {^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$} $lang]} {
+      return -code error "tclpdf: -lang \"$lang\" is not a language tag -\
+          expected something like de, de-DE or en-GB (RFC 3066)"
     }
     if {[dict get $options expansion] ne {}} {
       my StructureExpansionGuard
@@ -368,15 +438,25 @@ oo::define ::tclpdf::document::document {
             \"$identifier\" already exists - an id has to be unique in the\
             document (ISO 32000-1 14.7.2)"
       }
+    }
+    # The attributes are checked as they are turned into objects - the last
+    # thing that can refuse.
+    set attributeObjects [my StructureAttributes $type $options]
+
+    if {$name ne {}} {
+      dict set named $name $id
+      my state structureNames $named
+    }
+    if {$identifier ne {}} {
       dict set known $identifier $id
       my state structureIds $known
     }
     lappend elements [dict create type $type parent $parent kids {} \
-        alt [dict get $options alt] lang [dict get $options lang] \
+        alt [dict get $options alt] lang $lang \
         title [dict get $options title] \
         actualText [dict get $options actualText] \
         expansion [dict get $options expansion] id $identifier \
-        attributes [my StructureAttributes $type $options]]
+        attributes $attributeObjects]
     if {$parent ne {}} {
       set entry [lindex $elements $parent]
       dict lappend entry kids [list element $id]
@@ -393,6 +473,7 @@ oo::define ::tclpdf::document::document {
   method StructureAttributes {type options} {
     variable ::tclpdf::structure::attributes
     variable ::tclpdf::structure::attributeValues
+    variable ::tclpdf::structure::attributeValues20
     variable ::tclpdf::structure::attributeOn
     set result {}
     dict for {option definition} $attributes {
@@ -409,9 +490,24 @@ oo::define ::tclpdf::document::document {
       switch -- $kind {
         name {
           set values [dict get $attributeValues $option]
-          if {$value ni $values} {
+          set values20 [expr {[dict exists $attributeValues20 $option] ?
+              [dict get $attributeValues20 $option] : {}}]
+          if {$value in $values20
+              && [package vcompare [[my writer] version] 2.0] < 0} {
+            # Written into a 1.7 file it would be a value no reader of that
+            # file knows and ignore - the quiet mistake this check exists
+            # for, in a file that validates.
+            return -code error "tclpdf: -$option $value is a value of ISO\
+                32000-2 (Table 369) and this document is PDF\
+                [[my writer] version] - in a 1.7 file the values are\
+                [join $values {, }]; raise the version, or use\
+                \[\$doc ua -part 2\], which does it"
+          }
+          if {$value ni $values && $value ni $values20} {
             return -code error "tclpdf: -$option must be one of\
-                [join $values {, }] - not \"$value\""
+                [join $values {, }] - not \"$value\"[expr {
+                [llength $values20] ? "; ISO 32000-2 adds [join $values20 {, }]"
+                : {}}]"
           }
           set object /$value
         }
@@ -451,6 +547,7 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::structure::childrenOf
     variable ::tclpdf::structure::leafOnly
     variable ::tclpdf::structure::inline
+    variable ::tclpdf::structure::inlineOnly
     variable ::tclpdf::structure::parentOf
     set parent [my StructureCurrent]
     set parentType [expr {$parent eq {} ? {} :
@@ -465,6 +562,19 @@ oo::define ::tclpdf::document::document {
         return -code error "tclpdf: a $type belongs in [join $wanted { or }],\
             not $where (ISO 32000-2 Annex L)"
       }
+    }
+    # Inline markup needs something to be inside of - see inlineOnly.
+    variable ::tclpdf::structure::notAtTop
+    set home [my StructureInlineHome]
+    if {($type in $inlineOnly && $home ne "1")
+        || ($type in $notAtTop && $home eq "top")} {
+      set where "at the top level"
+      if {$parentType ne {}} {
+        set where "in a $parentType"
+      }
+      return -code error "tclpdf: a $type is inline markup and belongs inside\
+          an element that holds text - a P, a heading, a cell, a Figure -\
+          not $where (ISO 32005 Table 5)"
     }
     if {$parent eq {}} {
       return
@@ -487,6 +597,39 @@ oo::define ::tclpdf::document::document {
           not a $type - close it before starting one (ISO 32000-2 Annex L)"
     }
     return
+  }
+
+  # Whether an inline element opened now would sit inside something that
+  # holds text: 1 when the nearest open element that is not transparent
+  # (Div, Part, NonStruct pass the question up, as ISO 32005 does) is
+  # neither a container nor one of noInlineHome; 0 inside a bare Sect, Art,
+  # Aside or TOC; and "top" when nothing but transparent elements is open,
+  # for the rule that looks at the top level alone.
+  method StructureInlineHome {} {
+    variable ::tclpdf::structure::containers
+    variable ::tclpdf::structure::transparent
+    variable ::tclpdf::structure::noInlineHome
+    set elements [my state structure]
+    foreach id [lreverse [my state structureStack]] {
+      set type [dict get [lindex $elements $id] type]
+      if {$type in $transparent} {
+        continue
+      }
+      return [expr {$type ni $containers && $type ni $noInlineHome}]
+    }
+    return top
+  }
+
+  # The type of the element that is open right now, or {} when none is - the
+  # question a module drawing something asks before deciding whose content
+  # it becomes ("is a Figure open?"), answered here so that no other module
+  # reads the stack.
+  method StructureOpenType {} {
+    set current [my StructureCurrent]
+    if {$current eq {}} {
+      return {}
+    }
+    return [dict get [lindex [my state structure] $current] type]
   }
 
   # Attach an annotation to the element that is open, and answer the
@@ -534,12 +677,29 @@ oo::define ::tclpdf::document::document {
     return $key
   }
 
+  # The type of the element an annotation was attached to by
+  # [StructureAnnotation], or {} when it was attached to none - drawn
+  # outside any element, or before the document was tagged. Asked by
+  # link.tcl for the UA rule that a link annotation sits inside a Link.
+  method StructureAnnotationOwner {number} {
+    foreach annotation [my state structureAnnots] {
+      lassign $annotation element owner
+      if {$owner == $number} {
+        return [dict get [lindex [my state structure] $element] type]
+      }
+    }
+    return {}
+  }
+
   method StructureClose {id} {
     set stack [my state structureStack]
     if {[lindex $stack end] ne $id} {
       return -code error "tclpdf: structure elements closed out of order"
     }
     my state structureStack [lrange $stack 0 end-1]
+    if {$id eq [my state structureExpansionSpan]} {
+      my state structureExpansionSpan {}
+    }
     return
   }
 
@@ -673,6 +833,16 @@ oo::define ::tclpdf::document::document {
     }
     variable ::tclpdf::structure::containers
     variable ::tclpdf::structure::contentChildOf
+    # A grouping type holds elements, not a mark: "-tag Table" on a line of
+    # text would make a Table whose one kid is a marked-content sequence,
+    # which no reader can make anything of. The structure call is the way to
+    # open one, and the text drawn inside it becomes its P. Refused before
+    # anything is claimed - no element, no MCID.
+    if {$derived in $containers} {
+      return -code error "tclpdf: -tag $derived names a grouping type, which\
+          holds elements and no text of its own - open it with \[\$doc\
+          structure $derived -script ...\] and draw inside it"
+    }
     set element [my StructureCurrent]
     if {$element ne {}} {
       set open [dict get [lindex [my state structure] $element] type]
@@ -685,6 +855,23 @@ oo::define ::tclpdf::document::document {
         if {$derived ne {} && [dict exists $contentChildOf $open]} {
           set derived [dict get $contentChildOf $open]
         }
+      } elseif {$derived ni [list {} P $open]
+          && $element ne [my state structureExpansionSpan]} {
+        # An open leaf and a tag that names something else: the tag says
+        # what the text IS, so it becomes a child - a Span in the open P, a
+        # Caption in the open Figure - or is refused by the nesting rules,
+        # naming both types, where an H1 inside a P is asked for. Until
+        # 2026-08-18 the tag was dropped and the text marked as the open
+        # element, without a word.
+        #
+        # P is the exception because it is what [text] passes when nothing
+        # was said: text drawn in an open H1 IS the heading, not a paragraph
+        # in it - which is also why an explicit -tag P in an open leaf reads
+        # as "this is that element's text" rather than as a P inside it.
+        # And the Span that [StructureExpansion] opened for this very mark
+        # is the other: the tag went into the element around that Span,
+        # and the mark belongs in it whatever the tag said.
+        set element {}
       }
     }
     if {$element eq {} && $derived eq {}} {
@@ -795,6 +982,10 @@ oo::define ::tclpdf::document::document {
       lappend opened [my StructureOpen $derived]
     }
     lappend opened [my StructureOpen Span [dict create expansion $expansion]]
+    # Remembered for the mark that follows: [text] hands its -tag to
+    # [StructureMark] as well, and the mark has to land in this Span, not
+    # become a child of it named after the tag - see there.
+    my state structureExpansionSpan [lindex $opened end]
     return $opened
   }
 

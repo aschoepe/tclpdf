@@ -286,4 +286,37 @@ test pageNumber-7.2 {-style and -color are set on the number and leave the state
       [dict get $state resolved] [dict get $state color]
 } -result {1 1 Times-Roman black}
 
+# -- checked at the call, not at write --------------------------------------------
+
+test pageNumber-8.1 {-total is a page count and -align one of the three, both refused at the call} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes {}
+  foreach {call pattern} {
+    {-total abc} {-total is a page count of 1 or more, got "abc"}
+    {-total 0} {-total is a page count of 1 or more, got "0"}
+    {-total 2.5} {-total is a page count of 1 or more, got "2.5"}
+    {-align junk} {-align must be left, right or center, not "junk"}
+    {-align justify} {-align must be left, right or center, not "justify"}
+  } {
+    lappend codes [catch {$doc pageNumbers -at {100 280} {*}$call} message] \
+        [regexp -- $pattern $message]
+  }
+  # Nothing was recorded by the refused calls: a write draws no number.
+  set path [::tclpdfTest::scratch pagenumber-refused.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lappend codes [regexp {XOPN} $bytes]
+  # The three alignments and a total pass, and reach the page.
+  foreach call {{-align left} {-align right} {-align center} {-align centre} {-total 7}} {
+    lappend codes [catch {$doc pageNumbers -at {100 280} {*}$call}]
+  }
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $codes [regexp {\(Page 1 of 7\)} $bytes]
+} -result {{1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0} 1}
+
 cleanupTests
