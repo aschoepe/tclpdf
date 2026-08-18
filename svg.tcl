@@ -30,10 +30,11 @@
 #               script are skipped on purpose
 #   painting    fill, stroke, stroke-width, stroke-linecap, stroke-linejoin,
 #               stroke-dasharray, fill-opacity, stroke-opacity, opacity
-#               (as the product with the two, and multiplied down a group -
-#               a group at 0.5 holding a shape at 0.5 paints it at 0.25),
-#               fill-rule, display, and the same set inside a style=""
-#               attribute, which wins
+#               (a shape's own value as the product with the two; a group
+#               element below one becomes a transparency group, so its
+#               children overlap without darkening - SvgGroup in
+#               svgElement.tcl), fill-rule, display, and the same set
+#               inside a style="" attribute, which wins
 #   geometry    transform (translate, scale, rotate about a point, skewX,
 #               skewY, matrix), viewBox
 #   fitting     the DEFAULT of preserveAspectRatio - xMidYMid meet: the
@@ -252,6 +253,9 @@ oo::define ::tclpdf::document::document {
     # page's default space and would otherwise sit outside the shape it fills.
     my state svgBox [list $boxX $boxY $boxWidth $boxHeight]
     my state svgGradients {}
+    # No transparency group is being captured yet - and none may be left
+    # over from a drawing that failed halfway.
+    my state svgGroupStack {}
     my state svgTransform [::tclpdf::geometry identity]
     my state svgMatrix [list $scaleX 0 0 [expr {-$scaleY}] \
         [expr {$originX - $boxX * $scaleX}] \
@@ -413,4 +417,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.4
+package provide tclpdf::svg 1.5

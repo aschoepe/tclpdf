@@ -70,6 +70,16 @@ $doc page add
 
 $doc font embed body [file join $assets fonts DejaVuSans.ttf]
 $doc font embed bold [file join $assets fonts DejaVuSans-Bold.ttf]
+# The encoder names the face it wants in the markup, and a face embedded under
+# exactly that alias is what the drawing then finds - the markup is not touched
+# to achieve it. It asks for two, and they are not interchangeable: OCR-B under
+# an EAN or UPC, where the anchors are computed for its digit widths and a
+# narrower face leaves the clear text no longer standing under its own bars,
+# and Arimo for the rest. Without them the line falls back to a standard face,
+# which also means an unembedded font in a document that embeds everything
+# else.
+$doc font embed OCRB [file join $assets fonts tsukurimashou OCRB.ttf]
+$doc font embed Arimo [file join $assets fonts google Arimo-Variable.ttf]
 
 $doc font -family bold -size 14 -color {0.20 0.30 0.45}
 $doc text "Barcodes" -at {20 25}
@@ -135,22 +145,28 @@ set y [expr {$y + 40}]
 # -- the clear text line, and why it is set here -----------------------------
 
 $doc font -family bold -size 10 -color black
-$doc text "The clear text line from the document, not from the encoder" -at [list 20 $y]
+$doc text "The clear text line, and who sets it" -at [list 20 $y]
 set y [expr {$y + 6}]
 
 $doc font -family body -size 8 -color {0.45 0.45 0.45}
-$doc text "An archivable document has to embed every font, and the caption is\
-    no exception. Either way works: -notext 1 leaves the line to the document,\
-    as here - or the encoder's own line is kept and the face it asks for is\
-    embedded, which is what 03.05-svg-text does. tzint names OCR-B, and that\
-    face is in the same directory as this one." \
+$doc text "The encoder sets it, and this document embeds the faces the encoder\
+    asks for - OCR-B here, Arimo above - that is the whole of it. Every digit\
+    then stands over the seven modules it encodes, because the anchors in the\
+    markup are computed for OCR-B: the leading digit ends left of the guard\
+    bars, each group is centred under its half. The other way is -notext 1,\
+    which leaves the line to the document; a caller who takes it has to work\
+    out the module widths per symbology, and EAN-13 is the easiest of them." \
     -at [list 20 $y] -width 170
-set y [expr {$y + 18}]
+set y [expr {$y + 22}]
 
-encode markup "123456789012" -barcode ean13 -notext 1
-$doc svg -data $markup -at [list 20 $y] -height 16 -alt "EAN-13 1234567890128"
-$doc font -family body -size 8 -color black
-$doc text "1 234567 890128" -at [list 20 [expr {$y + 20}]]
+# The caption scales with the symbol, so its size is set by two things
+# together: -smalltext asks the encoder for 7 units instead of 10, and the
+# height decides what a unit is worth. 7 of 57 units at 24 mm is 2.9 mm, about
+# 8 pt - 10 of 59 at this height would be 4 mm and shout. The small symbols
+# above keep the default for the same reason from the other end: 7 units of a
+# 16 mm symbol come out at 2 mm and stop being a caption.
+encode markup "123456789012" -barcode ean13 -smalltext 1
+$doc svg -data $markup -at [list 20 $y] -height 24 -alt "EAN-13 1234567890128"
 
 exampleFooter $doc body
 $doc write $target

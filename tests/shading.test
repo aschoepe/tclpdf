@@ -514,4 +514,115 @@ test shading-6.3 {two booleans, in any spelling, are still an Extend} -body {
   set found
 } -result {{true false} {false true}}
 
+# A pattern belongs to the space of the stream that carries it (ISO 32000-2,
+# 8.7.2). Measured before this block existed: a gradient placed on the page
+# and filled inside a form ran (0,0,255) to (178,0,77) where the same call on
+# the page gave (13,0,242) to (242,0,13) - shifted and squeezed, and nothing
+# reported it. It cannot be converted either, because the form's space is
+# only settled when it is painted and a form may be painted more than once.
+
+test shading-7.1 {a gradient placed on the page is refused inside a form} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading pattern g axial -at {10 10} -size {40 30} -colors {blue red}
+  set message {}
+  catch {
+    $doc form create f -size {40 30} -script {
+      $doc rect -at {0 0} -size {40 30} -fill {pattern g}
+    }
+  } message
+  $doc destroy
+  list [string match {*was placed on the page*a form or a pattern*} $message] \
+      [string match {*8.7.2*} $message] \
+      [string match {*define the pattern where it is used*-matrix*} $message]
+} -result {1 1 1}
+
+test shading-7.2 {a gradient placed inside a form is refused on the page} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc form create f -size {40 30} -script {
+    $doc shading pattern g axial -at {0 0} -size {40 30} -colors {blue red}
+    $doc rect -at {0 0} -size {40 30} -fill {pattern g}
+  }
+  set message {}
+  catch {$doc rect -at {10 10} -size {40 30} -fill {pattern g}} message
+  $doc destroy
+  string match {*was placed on a form or a pattern*on the page*} $message
+} -result 1
+
+test shading-7.3 {with -matrix the caller has said which space, and it passes} -body {
+  # The SVG path works exactly this way: it hands in the matrix from the shape
+  # to the form it is captured into (svg-opacity-11.12).
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading pattern g axial -at {0 0} -size {40 30} -colors {blue red} \
+      -matrix {1 0 0 1 0 0}
+  $doc form create f -size {40 30} -script {
+    $doc rect -at {0 0} -size {40 30} -fill {pattern g}
+  }
+  $doc form place f -at {10 10}
+  set ok [expr {[llength [$doc form names]] == 1}]
+  $doc destroy
+  set ok
+} -result 1
+
+test shading-7.4 {a tile with no place of its own crosses streams as before} -body {
+  # A tiling pattern without -origin and without -matrix tiles from the corner
+  # of whatever space it lands in - that is what it is for, and refusing it
+  # would take away the ordinary hatch.
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create hatch -size {3 3} -script {
+    $doc line -from {0 0} -to {3 3} -stroke black -width 0.3
+  }
+  $doc rect -at {10 10} -size {20 20} -fill {pattern hatch}
+  $doc form create f -size {20 20} -script {
+    $doc rect -at {0 0} -size {20 20} -fill {pattern hatch}
+  }
+  $doc form place f -at {40 10}
+  set ok [expr {[llength [$doc form names]] == 1}]
+  $doc destroy
+  set ok
+} -result 1
+
+test shading-7.5 {a tile anchored with -origin is watched like a gradient} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create hatch -size {3 3} -origin {10 10} -script {
+    $doc line -from {0 0} -to {3 3} -stroke black -width 0.3
+  }
+  set message {}
+  catch {
+    $doc form create f -size {20 20} -script {
+      $doc rect -at {0 0} -size {20 20} -fill {pattern hatch}
+    }
+  } message
+  $doc destroy
+  string match {*pattern "hatch" was placed on the page*} $message
+} -result 1
+
+test shading-7.6 {a gradient of its own inside the form is the way that works} -body {
+  # Two placements of the same form, and the pattern is written once - the
+  # form's space is the same for both, which is why this is the answer to
+  # 7.1 rather than a workaround.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc form create f -size {40 30} -script {
+    $doc shading pattern g axial -at {0 0} -size {40 30} -colors {blue red}
+    $doc rect -at {0 0} -size {40 30} -fill {pattern g}
+  }
+  $doc form place f -at {10 10}
+  $doc form place f -at {10 50}
+  set writer [$doc writer]
+  set patterns 0
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[regexp {/PatternType 2} [$writer body $number]]} {
+      incr patterns
+    }
+  }
+  $doc destroy
+  set patterns
+} -result 1
+
+
 cleanupTests

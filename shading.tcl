@@ -108,8 +108,9 @@ oo::define ::tclpdf::document::document {
     #
     # Usually none is needed - the coordinates are already in page space, the
     # space a caller thinks in. But a pattern is bound to the DEFAULT space of
-    # the page and ignores whatever matrix is active when the shape is
-    # painted (8.7.3.1). Inside an SVG drawing, which sits under a matrix of
+    # the PARENT CONTENT STREAM - the page here, a form's own space inside a
+    # form - and ignores whatever matrix is active when the shape is painted
+    # (8.7.2). Inside an SVG drawing, which sits under a matrix of
     # its own, that means the shape gets filled in the right place and the
     # gradient inside it sits somewhere else - wrong size, wrong direction,
     # usually so far off that the area comes out flat. Nothing reports it; it
@@ -126,6 +127,17 @@ oo::define ::tclpdf::document::document {
     my resource Pattern $resourceName [[my writer] ref $patternNumber]
     dict set shadings $name $resourceName
     my state shadings $shadings
+    # Without a matrix the end points went through [coords] and mean a place
+    # in THIS stream - a use in another one is refused rather than drawn
+    # somewhere else (pattern.tcl, PatternAnchor). With one the caller has
+    # said which space the numbers are in, which is how the SVG path works.
+    if {[dict get $options matrix] eq {}} {
+      # Loaded the same way graphics.tcl loads it when a colour reads
+      # {pattern <name>}: the pattern module owns the registry that spans
+      # both kinds, and nothing here needs it until a gradient is placed.
+      package require tclpdf::pattern
+      my PatternAnchor $name
+    }
     return $name
   }
 
@@ -400,4 +412,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.3
+package provide tclpdf::shading 1.4

@@ -143,18 +143,26 @@ oo::define ::tclpdf::document::document {
     dict set patterns $name [dict create resource $resourceName \
         width $widthPoints height $heightPoints]
     my state patterns $patterns
+    # -origin went through [coords] and is therefore a place in THIS stream;
+    # a raw -matrix is the caller's own word for the space it maps from, and
+    # a tile without either is not anchored anywhere. See PatternAnchor.
+    if {[dict get $options origin] ne {}} {
+      my PatternAnchor $name
+    }
     return $name
   }
 
   # The /Matrix of a tiling pattern (Table 75), or the empty string for none.
   #
-  # Pattern space is bound to the DEFAULT space of the page, not to whatever
-  # transformation is active when the shape is painted (8.7.3.1) - the same
-  # trap shading.tcl spells out at its PatternType 2 dictionary, and it holds
-  # here unchanged, inside a form as much as under an SVG transform. Without a
-  # matrix the tiles are laid from the page's bottom left corner: a rectangle
-  # at {30 50} gets them cut at whatever phase falls on its edge, and turning
-  # or scaling the hatch is only possible inside the tile script.
+  # Pattern space is bound to the DEFAULT space of the parent content stream,
+  # not to whatever transformation is active when the shape is painted (8.7.2)
+  # - the same trap shading.tcl spells out at its PatternType 2 dictionary. On
+  # a page that space is the page; inside a form XObject it is the form's, and
+  # a pattern therefore cannot be carried from one into the other (see
+  # PatternAnchor). Without a matrix the tiles are laid from the corner of that
+  # space: a rectangle at {30 50} gets them cut at whatever phase falls on its
+  # edge, and turning or scaling the hatch is only possible inside the tile
+  # script.
   #
   # -matrix is the raw thing, six numbers written as they stand - the same
   # words as [transform -matrix] and [shading pattern -matrix]. -origin is the
@@ -220,15 +228,62 @@ oo::define ::tclpdf::document::document {
     return $count
   }
 
+  # Remember the stream a placed pattern was measured in, so that using it in
+  # another one can be refused rather than drawn wrong.
+  #
+  # A pattern matrix maps pattern space to the default space of the PARENT
+  # CONTENT STREAM - the stream that has the pattern in its resources (ISO
+  # 32000-2, 8.7.2). On a page that is the page; inside a form XObject it is
+  # "the form coordinate space at the time the form is painted with the Do
+  # operator". A gradient measured against the page and then filled inside a
+  # form therefore comes out somewhere else: measured on a 120 mm page,
+  # (13,0,242) to (242,0,13) on the page and (0,0,255) to (178,0,77) in the
+  # form - shifted and squeezed, and neither a validator nor the eye reports
+  # it reliably.
+  #
+  # It cannot be computed away either. The right matrix would depend on where
+  # the form is placed, and a form may be placed more than once - which is
+  # word for word the PostScript feature the note beside 8.7.2 rules out for
+  # PDF ("PDF does not support this feature").
+  #
+  # So the placement is remembered and a use in another stream is refused,
+  # with the two ways that do work: define the pattern inside the form, or
+  # pass -matrix and say which space it maps from. Only patterns that have a
+  # PLACE are watched - a tiling pattern without -origin and without -matrix
+  # tiles from the corner of whatever space it lands in, which is what it is
+  # for, and a caller who passed -matrix has said where it belongs.
+  method PatternAnchor {name} {
+    set anchors [my state patternAnchors]
+    dict set anchors $name [my canvas depth]
+    my state patternAnchors $anchors
+    return
+  }
+
   # The resource name behind a caller's pattern name, for whichever of the two
   # kinds it is. Used by graphics.tcl when a colour reads {pattern <name>} -
-  # that is the one place the two registries have to be looked at together.
+  # that is the one place the two registries have to be looked at together,
+  # and therefore the one place the stream can be checked.
   method PatternResource {name} {
     set patterns [my state patterns]
+    set shadings [my state shadings]
+    set anchors [my state patternAnchors]
+    if {[dict exists $anchors $name]} {
+      set was [dict get $anchors $name]
+      set now [my canvas depth]
+      if {$was != $now} {
+        set there [expr {$was ? "a form or a pattern" : "the page"}]
+        set here [expr {$now ? "a form or a pattern" : "the page"}]
+        return -code error "tclpdf: pattern \"$name\" was placed on $there and\
+            cannot be used on $here - a pattern belongs to the space of the\
+            stream that carries it (ISO 32000-2, 8.7.2), and the two cannot be\
+            converted into each other because a form may be placed more than\
+            once; define the pattern where it is used, or pass -matrix to say\
+            which space it maps from"
+      }
+    }
     if {[dict exists $patterns $name]} {
       return [dict get $patterns $name resource]
     }
-    set shadings [my state shadings]
     if {[dict exists $shadings $name]} {
       return [dict get $shadings $name]
     }
@@ -237,4 +292,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pattern 1.3
+package provide tclpdf::pattern 1.4

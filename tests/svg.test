@@ -791,22 +791,184 @@ test svg-opacity-11.2 {opacity applies to both sides, and multiplies with the pe
       $code3 [regexp -all {/GS0_5b gs} $stream3]
 } -result {0 1 0 1 1 0 1}
 
-test svg-opacity-11.3 {a group's opacity multiplies down to its children} -body {
-  # A group at 0.5 holding a shape at 0.5 paints it at 0.25; a sibling
-  # without its own is at the group's 0.5; and the resources are the
-  # dedupled ExtGStates of the document.
+test svg-opacity-11.3 {a group's opacity is one alpha on the group, not a product} -body {
+  # Before 2026-08-18 the group's 0.5 was multiplied down (a child at 0.5
+  # painted at 0.25), and overlapping children came out darker in the
+  # overlap - measured with pdftoppm, (255 63 63) against (255 127 127)
+  # for a single circle. Now the children go into a form XObject with a
+  # transparency group and the 0.5 is applied ONCE, to the Do: the page
+  # carries the group's alpha, the form carries only the children's own,
+  # and no 0.25 exists anywhere.
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>
       <g opacity='0.5'><rect width='5' height='5' fill='red' opacity='0.5'/>
       <rect x='5' width='5' height='5' fill='red'/></g>
       <rect y='5' width='5' height='5' fill='red'/></svg>} -at {10 10} -width 50
-  set stream [::tclpdfTest::content $doc]
+  set page [::tclpdfTest::content $doc]
+  set reference [dict get [$doc resource XObject] svgGroup1]
+  set form [::tclpdfTest::streamOf [$doc writer] [lindex $reference 0]]
   set resources [lsort [dict keys [$doc resource ExtGState]]]
   $doc destroy
-  list [regexp -all {/GS0_25b gs} $stream] [regexp -all {/GS0_5b gs} $stream] \
-      [regexp -all { gs} $stream] $resources
-} -result {1 1 2 {GS0_25b GS0_5b}}
+  list [regexp -all {/GS0_5b gs\n/svgGroup1 Do} $page] \
+      [regexp -all { gs} $page] [regexp -all {/GS0_25b gs} $page$form] \
+      [regexp -all {/GS0_5b gs} $form] [regexp -all { gs} $form] $resources
+} -result {1 1 0 1 1 GS0_5b}
+
+test svg-opacity-11.5 {the group's form: /Group /S /Transparency, isolated, no /CS, BBox from the children} -body {
+  # No /CS on purpose - naming one is a colour space claim PDF/A tests
+  # against the output intent (ISO 19005-2, 6.2.4.3); see [FormCreate].
+  # The BBox is the union of what the children painted: one filled rect,
+  # so exactly its corners.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='60' height='40'>
+      <g opacity='0.5'><rect x='10' y='5' width='40' height='30' fill='red'/></g></svg>} \
+      -at {10 10} -width 60
+  set body [[$doc writer] body [lindex [dict get [$doc resource XObject] svgGroup1] 0]]
+  $doc destroy
+  list [regexp {/Subtype /Form} $body] \
+      [regexp {/Group << /S /Transparency /I true >>} $body] \
+      [regexp {/CS} $body] [regexp {/BBox \[10 5 50 35\]} $body]
+} -result {1 1 0 1}
+
+test svg-opacity-11.6 {nested half-transparent groups nest their forms} -body {
+  # The inner group is captured first and its Do sits inside the outer
+  # form; the page sees only the outer one.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10'>
+      <g opacity='0.5'><g opacity='0.5'><rect width='5' height='5' fill='red'/></g>
+      <rect x='10' width='5' height='5' fill='red'/></g></svg>} -at {10 10} -width 40
+  set page [::tclpdfTest::content $doc]
+  set outer [::tclpdfTest::streamOf [$doc writer] \
+      [lindex [dict get [$doc resource XObject] svgGroup2] 0]]
+  $doc destroy
+  list [regexp -all {/svgGroup2 Do} $page] [regexp -all {/svgGroup1 Do} $page] \
+      [regexp -all {/GS0_5b gs\n/svgGroup1 Do} $outer]
+} -result {1 0 1}
+
+test svg-opacity-11.7 {a transform inside the group moves its BBox along} -body {
+  # The BBox is written in the form's own space; a child's transform maps
+  # the shape before it is unioned. Without the mapping the BBox stays at
+  # the origin and CLIPS the drawing - a rect translated by {10 20} must
+  # arrive at exactly that corner.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='60' height='40'>
+      <g opacity='0.5'><g transform='translate(10,20)'>
+      <rect width='5' height='5' fill='red'/></g></g></svg>} -at {10 10} -width 60
+  set body [[$doc writer] body [lindex [dict get [$doc resource XObject] svgGroup1] 0]]
+  $doc destroy
+  regexp {/BBox \[10 20 15 25\]} $body
+} -result 1
+
+test svg-opacity-11.8 {a stroked child pads the BBox for its stroke} -body {
+  # A stroke reaches beyond the path: half the width at an edge and a miter
+  # spike up to five widths, so the box grows by five widths on every side.
+  # A BBox clips - too small cuts the line's ends and caps off.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='30' height='20'>
+      <g opacity='0.5'><line x1='0' y1='10' x2='20' y2='10' stroke='red'
+      stroke-width='2'/></g></svg>} -at {10 10} -width 60
+  set body [[$doc writer] body [lindex [dict get [$doc resource XObject] svgGroup1] 0]]
+  $doc destroy
+  regexp {/BBox \[-10 0 30 20\]} $body
+} -result 1
+
+test svg-opacity-11.9 {below PDF 1.4 the group is refused at the alpha, with the version} -body {
+  # No transparency before 1.4: the factor stays multiplied down, and the
+  # gs it needs is refused like every alpha - naming the version rather
+  # than writing a /Group entry the file's header disowns.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  set code [catch {$doc svg -data {<svg xmlns='http://www.w3.org/2000/svg'
+      width='10' height='10'><g opacity='0.5'>
+      <rect width='5' height='5' fill='red'/></g></svg>} -at {10 10} -width 20} message]
+  set leftover [dict keys [$doc resource XObject]]
+  $doc destroy
+  # No XObject either: the guard sits BEFORE the capture, so the refusal
+  # leaves no form carrying a /Group the file's version disowns.
+  list $code [string match "*opacity needs PDF 1.4*" $message] $leftover
+} -result {1 1 {}}
+
+test svg-opacity-11.10 {a failure inside the capture leaves no bracket, no canvas and no XObject} -body {
+  # The children draw into a pushed canvas; an error there - a face
+  # refusal is the everyday one - must discard the capture: the canvas
+  # popped, the q/Q balance settled on the PAGE, and no half-written
+  # XObject in the resources.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc svg -data {<svg viewBox='0 0 20 10'>
+      <g opacity='0.5' transform='translate(1,1)'><rect width='5' height='5' fill='red'/>
+      <text x='1' y='8'>Łódź</text></g></svg>} -at {10 10} -width 20}]
+  set content [::tclpdfTest::content $doc]
+  set open [expr {[llength [regexp -all -inline {(?m)^q$} $content]]
+      - [llength [regexp -all -inline {(?m)^Q$} $content]]}]
+  set leftover [dict keys [$doc resource XObject]]
+  set depth [$doc canvas depth]
+  $doc destroy
+  list $code $open $leftover $depth
+} -result {1 0 {} 0}
+
+test svg-opacity-11.11 {use with opacity renders its target as one group} -body {
+  # A <use> renders the referenced element as a group of its own (SVG 5.6),
+  # so its opacity gets the same treatment as a <g>'s: one alpha on the Do,
+  # and the two circles of the target overlap without darkening.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='60' height='40'>
+      <defs><g id='pair'><circle cx='20' cy='20' r='15' fill='red'/>
+      <circle cx='40' cy='20' r='15' fill='red'/></g></defs>
+      <use href='#pair' x='5' opacity='0.5'/></svg>} -at {10 10} -width 60
+  set page [::tclpdfTest::content $doc]
+  set form [::tclpdfTest::streamOf [$doc writer] \
+      [lindex [dict get [$doc resource XObject] svgGroup1] 0]]
+  $doc destroy
+  list [regexp -all {/GS0_5b gs\n/svgGroup1 Do} $page] \
+      [regexp -all { gs} $form] [expr {[regexp -all { c\n} $form] > 0}]
+} -result {1 0 1}
+
+test svg-opacity-11.12 {a gradient inside the capture is anchored to the form, not the page} -body {
+  # A pattern maps to the default space of its parent content stream.
+  # Captured into the group's form that is the form's space, onto which the
+  # CTM at the Do is applied AGAIN - with the page chain in the matrix the
+  # drawing's scale ran twice and the gradient came out stretched to one
+  # colour, measured with pdftoppm. So inside a capture the matrix is only
+  # the path from the shape to the form: here the inner group's translate,
+  # and none of the drawing's 2.83 pt/mm.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'>
+      <defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='0'>
+        <stop offset='0' stop-color='white'/><stop offset='1' stop-color='navy'/>
+      </linearGradient></defs>
+      <g opacity='0.5'><g transform='translate(40,30)'>
+        <rect x='0' y='0' width='50' height='20' fill='url(#g)'/></g></g></svg>} \
+      -at {0 0} -size {100 100}
+  set matrix {}
+  for {set number 1} {$number <= [[$doc writer] count]} {incr number} {
+    if {[regexp {/Matrix \[([^\]]*)\]} [[$doc writer] body $number] -> found]} {
+      set matrix $found
+    }
+  }
+  $doc destroy
+  set matrix
+} -result {1 0 0 1 40 30}
+
+test svg-opacity-11.13 {a group of nothing drawable writes no XObject and no alpha} -body {
+  # Skipped elements leave the capture empty; an empty form and a gs for
+  # it would be bytes for nothing.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>
+      <g opacity='0.5'><filter id='f'/></g></svg>} -at {10 10} -width 20
+  set page [::tclpdfTest::content $doc]
+  set forms [dict keys [$doc resource XObject]]
+  $doc destroy
+  list $forms [regexp { gs} $page] [regexp { Do} $page]
+} -result {{} 0 0}
 
 test svg-opacity-11.4 {opacity 1 and values above it write nothing; below zero is invisible} -body {
   lassign [svgPaintOf {fill="red" opacity="1"}] code1 stream1

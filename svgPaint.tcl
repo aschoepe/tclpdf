@@ -149,11 +149,13 @@ oo::define ::tclpdf::document::document {
       }
     }
     # Three properties, two operands: fill-opacity goes into /ca,
-    # stroke-opacity into /CA, and opacity - the element's group opacity,
-    # already multiplied down the tree by SvgStyle - into both. Without a
-    # transparency group per element that product is the nearest PDF has:
-    # exact wherever fill and stroke do not overlap, and off by the overlap
-    # where they do. Each value is clamped, not refused: SVG defines them as
+    # stroke-opacity into /CA, and opacity into both. For a SHAPE that
+    # product is its own value - a container's own factor never arrives
+    # here on PDF 1.4 or later, it is applied once to the finished
+    # transparency group (SvgGroup in svgElement.tcl). What remains
+    # approximate is the shape itself: /ca and /CA are exact wherever fill
+    # and stroke do not overlap, and off by the overlap where they do.
+    # Each value is clamped, not refused: SVG defines them as
     # numbers clamped to 0..1, so 1.5 is opaque and -0.2 is invisible. One
     # "gs" when the two sides agree, one per side when they differ; nothing
     # at 1, which is the initial state anyway. Measured before 2026-08-18
@@ -191,6 +193,19 @@ oo::define ::tclpdf::document::document {
       append body [expr {$evenOdd ? "f*\n" : "f\n"}]
     } else {
       append body "S\n"
+    }
+    # While a transparency group is being captured (SvgGroup) its BBox is
+    # collected from the shapes as they are painted - the operators are the
+    # only description of the extent there is. A stroke reaches beyond the
+    # path: half the width at an edge, and a miter spike up to the miter
+    # limit of 10 times half the width (8.4.3.5) - so a stroked shape is
+    # padded by five widths. A BBox clips, so too small is a defect and too
+    # large is only a bigger group.
+    if {[llength [my state svgGroupStack]] && [my state svgShapeBox] ne {}} {
+      lassign [my state svgShapeBox] boxX boxY boxWidth boxHeight
+      set pad [expr {$hasStroke ? $width * 5 : 0}]
+      my SvgGroupBox [expr {$boxX - $pad}] [expr {$boxY - $pad}] \
+          [expr {$boxX + $boxWidth + $pad}] [expr {$boxY + $boxHeight + $pad}]
     }
     my SvgSave
     my content $body
@@ -262,7 +277,13 @@ oo::define ::tclpdf::document::document {
     if {$own eq {} || ![string is double -strict $own]} {
       set own 1
     }
-    dict set style opacity [expr {$groupOpacity * max(0.0, min(1.0, $own))}]
+    set own [expr {max(0.0, min(1.0, $own))}]
+    # The element's OWN factor, kept apart from the product: a container
+    # whose own opacity is below one becomes a transparency group
+    # (SvgGroup), and there the factor is applied once to the finished
+    # group rather than multiplied into every child.
+    dict set style ownOpacity $own
+    dict set style opacity [expr {$groupOpacity * $own}]
     # A url(#...) reference is left STANDING here and resolved in SvgPaint.
     # It cannot be done at this point: a gradient in the default units is
     # measured in fractions of the shape it fills, and the shape does not
@@ -342,9 +363,22 @@ oo::define ::tclpdf::document::document {
     # through the group first. Leaving the group out is what put every
     # gradient inside a translated group in the wrong place, while the ones
     # at the top level looked right.
-    set arguments [list -colors $colors -stops $offsets \
-        -matrix [::tclpdf::geometry multiply [my state svgTransform] \
-            [my state svgMatrix]]]
+    #
+    # Inside a transparency group's form (SvgGroup) the anchor changes: a
+    # pattern maps to the default space of its parent CONTENT STREAM, and
+    # for a shape captured into the form that is the form's space, onto
+    # which the CTM at the Do is applied again. Measured with pdftoppm, the
+    # full chain there ran the drawing's scale twice and a gradient came
+    # out stretched to a single colour - so within a capture the matrix is
+    # only the path from the shape's coordinates to the form's.
+    set stack [my state svgGroupStack]
+    if {[llength $stack]} {
+      set matrix [dict get [lindex $stack end] rel]
+    } else {
+      set matrix [::tclpdf::geometry multiply [my state svgTransform] \
+          [my state svgMatrix]]
+    }
+    set arguments [list -colors $colors -stops $offsets -matrix $matrix]
     if {$kind eq "linearGradient"} {
       set x1 [my SvgFraction [::tclpdf::xml attribute $node x1 0] $frameWidth $frameX]
       set y1 [my SvgFraction [::tclpdf::xml attribute $node y1 0] $frameHeight $frameY]
@@ -417,4 +451,4 @@ oo::define ::tclpdf::document::document {
   # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.3
+package provide tclpdf::svgPaint 1.4

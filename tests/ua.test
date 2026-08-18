@@ -28,8 +28,9 @@ set face [file join $here examples assets fonts DejaVuSans.ttf]
 testConstraint haveFace [file exists $face]
 
 # A document that meets every UA-1 requirement, as the starting point the
-# negative tests take one thing away from.
-proc accessible {face} {
+# negative tests take one thing away from. The heading is an H1 unless a
+# test needs the weakly structured form - then it asks for the generic H.
+proc accessible {face {heading H1}} {
   set doc [tclpdf new -unit mm -compress 0]
   $doc tagged 1
   $doc info Title "Sicherheitsunterweisung 2026"
@@ -37,7 +38,7 @@ proc accessible {face} {
   $doc page add
   $doc font embed face $face
   $doc font -family face -size 12
-  $doc structure H1 -script {
+  $doc structure $heading -script {
     uplevel 1 [list $doc text "Ueberschrift" -at {20 20}]
   }
   return $doc
@@ -213,6 +214,21 @@ test ua-3.3 {a descent and a return are both fine} -constraints haveFace -body {
   list $code [expr {$code ? $err : {}}]
 } -result {0 {}}
 
+test ua-3.4 {the generic H does not mix with the numbered headings} \
+    -constraints haveFace -body {
+  # A document is either weakly structured (H throughout, the level implied
+  # by the nesting) or strongly structured (H1 to Hn) - Matterhorn 14-006.
+  # Measured 2026-08-18: veraPDF ua1 fails the mixture with two checks
+  # under 7.4.4 and passes either form alone. [accessible] brings the H1.
+  set doc [accessible $face]
+  $doc structure H -script {$doc text "x" -at {20 40}}
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-mixed-h.pdf]} err]
+  $doc destroy
+  list $code [string match "*mixes the generic H*" $err] \
+      [string match "*Matterhorn 14-006*" $err]
+} -result {1 1 1}
+
 # --- tables ---------------------------------------------------------------
 
 test ua-4.1 {a regular table passes} -constraints haveFace -body {
@@ -321,11 +337,15 @@ test ua-5.3 {part 2 and PDF/A-3 are mutually exclusive} -constraints haveFace -b
   list $code [string match "*cannot be claimed by one file*" $err]
 } -result {1 1}
 
-test ua-5.4 {the generic H is refused under part 2 only} -constraints haveFace -body {
+test ua-5.4 {the generic H alone passes part 1 and is refused under part 2} \
+    -constraints haveFace -body {
   # H means "a heading at whatever level the nesting implies", and 2.0
-  # dropped it. Under part 1 it stays legal.
-  set doc [accessible $face]
-  $doc structure H -script {$doc text "x" -at {20 40}}
+  # dropped it. Under part 1 it stays legal - ALONE. Until 2026-08-18 this
+  # test added the H to [accessible], whose tree already holds an H1, and
+  # pinned that mixture as legal; measured, veraPDF fails such a file under
+  # ua1 (7.4.4, Matterhorn 14-006), and ua-3.4 now pins the refusal. Here
+  # [accessible] is asked for the generic H as its only heading.
+  set doc [accessible $face H]
   $doc ua 1
   set one [catch {$doc write [::tclpdfTest::scratch ua-h1ok.pdf]}]
   $doc ua -part 2

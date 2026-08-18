@@ -40,7 +40,9 @@
 # WHAT THE ANSWER DISTINGUISHES. Not every refusal is the same refusal, and
 # treating them alike refused text this package can set. A script that needs
 # nothing but the ORDER of its glyphs reversed - Hebrew letters, Thaana and
-# Samaritan bases - is set correctly once the caller says -direction rtl,
+# Samaritan bases, and the non-cursive right-to-left scripts of the
+# supplementary planes from Phoenician to Old Hungarian - is set correctly
+# once the caller says -direction rtl,
 # because reversing a run is something this package can actually do. A script
 # whose glyph FORMS or MARK POSITIONS are missing is not, and stays refused:
 # no option here can produce a shape the cmap does not lead to. That is why a
@@ -130,6 +132,28 @@ namespace eval ::tclpdf::shaping {
   # it: forms.tcl finds their shapes through the same joining types and the
   # same GSUB features.
   #
+  # THE NON-CURSIVE RIGHT-TO-LEFT SCRIPTS of the supplementary planes stood
+  # in neither list and were set left to right in silence - measured
+  # 2026-08-18: U+10900 (Phoenician), U+10A10 (Kharoshthi) and U+1EE01
+  # passed as needing nothing, and a word of Arabic mathematical letters
+  # drawn in DejaVu Sans came back out of pdftotext in logical order, from
+  # the left. They are the R and AL blocks of DerivedBidiClass.txt that the
+  # joining table does NOT know - no forms to look up, like Hebrew - so they
+  # take the order road: Cypriot through Old Hungarian, Garay, Yezidi, Old
+  # Sogdian, Elymaic, Mende Kikakui, the two Siyaq number blocks and the
+  # Arabic mathematical alphabets, each block taken whole. Their combining
+  # marks (the Kharoshthi vowel signs and virama among them) are a scatter
+  # like the Arabic ones and are found by Joining_Type in [needed], not cut
+  # out by hand. Meroitic Cursive is cursive in name only: the joining table
+  # has no entry for it, measured against DerivedJoiningType.txt.
+  #
+  # Deliberately NOT listed beside them: the Rumi numeral symbols
+  # (U+10E60..U+10E7E). They are AN digits, and a run of digits keeps its
+  # own order in either direction - listing the block would refuse text this
+  # package sets correctly. The unassigned stretches between the blocks
+  # (U+108B0.., U+10960.. and the like) belong to no script and stay out
+  # with them.
+  #
   # The Arabic presentation forms end at U+FEFE. U+FEFF is the byte order
   # mark, ZERO WIDTH NO-BREAK SPACE - no Arabic, no mark, nothing to draw -
   # and taken with the block it was refused as needing mark placement, in a
@@ -184,14 +208,40 @@ namespace eval ::tclpdf::shaping {
     0xFB1F 0xFB4F Hebrew      order
     0xFB50 0xFDFF Arabic      cursive
     0xFE70 0xFEFE Arabic      cursive
+    0x10800 0x1083F Cypriot    order
+    0x10840 0x1085F {Imperial Aramaic} order
+    0x10860 0x1087F Palmyrene  order
+    0x10880 0x108AF Nabataean  order
+    0x108E0 0x108FF Hatran     order
+    0x10900 0x1091F Phoenician order
+    0x10920 0x1093F Lydian     order
+    0x10940 0x1095F Sidetic    order
+    0x10980 0x1099F {Meroitic Hieroglyphs} order
+    0x109A0 0x109FF {Meroitic Cursive} order
+    0x10A00 0x10A5F Kharoshthi order
+    0x10A60 0x10A7F {Old South Arabian} order
+    0x10A80 0x10A9F {Old North Arabian} order
     0x10AC0 0x10AFF Manichaean shape
+    0x10B00 0x10B3F Avestan    order
+    0x10B40 0x10B5F {Inscriptional Parthian} order
+    0x10B60 0x10B7F {Inscriptional Pahlavi} order
     0x10B80 0x10BAF {Psalter Pahlavi} shape
+    0x10C00 0x10C4F {Old Turkic} order
+    0x10C80 0x10CFF {Old Hungarian} order
     0x10D00 0x10D3F {Hanifi Rohingya} shape
+    0x10D40 0x10D8F Garay      order
+    0x10E80 0x10EBF Yezidi     order
     0x10EC0 0x10EFF Arabic     cursive
+    0x10F00 0x10F2F {Old Sogdian} order
     0x10F30 0x10F6F Sogdian    shape
     0x10F70 0x10FAF {Old Uyghur} shape
     0x10FB0 0x10FDF Chorasmian shape
+    0x10FE0 0x10FFF Elymaic    order
+    0x1E800 0x1E8DF {Mende Kikakui} order
     0x1E900 0x1E95F Adlam      shape
+    0x1EC70 0x1ECBF {Indic Siyaq Numbers} order
+    0x1ED00 0x1ED4F {Ottoman Siyaq Numbers} order
+    0x1EE00 0x1EEFF {Arabic Mathematical Alphabetic Symbols} order
   }
 }
 
@@ -229,11 +279,16 @@ proc ::tclpdf::shaping::needed {text {direction ltr} {forms 0}} {
         continue
       }
       lassign [dict get $needs $token] kind what
-      if {$kind eq "forms"} {
-        # A transparent character in a cursive block is a mark, and a mark
-        # needs GPOS attachment rather than a form. Asked of the Unicode
-        # table rather than of a range list, because the marks of these
-        # blocks do not come in ranges.
+      if {$kind in {forms ordering}} {
+        # A transparent character in a cursive or an ordering block is a
+        # mark, and a mark needs GPOS attachment rather than a form or a
+        # turned run. Asked of the Unicode table rather than of a range
+        # list, because the marks of these blocks do not come in ranges:
+        # the Arabic harakat are a scatter, and so are the Kharoshthi vowel
+        # signs and virama, the Garay, Yezidi and Mende Kikakui marks. The
+        # Hebrew nikud, the Thaana fili, the Samaritan points and the
+        # Tibetan marks are cut out of their blocks above and never reach
+        # this question.
         package require tclpdf::joining 1.0-
         if {[::tclpdf::joining type $code] eq "T"} {
           lassign [dict get $needs mark] kind what
@@ -293,4 +348,4 @@ proc ::tclpdf::shaping::message {finding {face {}} {why forms}} {
   return "$head - tclpdf does not do that. $anyway"
 }
 
-package provide tclpdf::shaping 1.2
+package provide tclpdf::shaping 1.3

@@ -410,4 +410,140 @@ test shaping-5.5 {a BOM in front of the text is dropped, not drawn and not refus
       $code $rtl
 } -result [list 1 1 0 "\u05D1\u05D0"]
 
+test shaping-6.1 {the non-cursive right-to-left scripts of the supplementary planes need the order, and only the order} -body {
+  # Measured 2026-08-18: every one of these passed as needing nothing and was
+  # set from the left in silence - the wrong-but-plausible line this module
+  # exists to prevent, one plane up. They carry no contextual forms (the
+  # joining table has no entry for any of them, Meroitic Cursive included,
+  # which is cursive in name only), so -direction rtl is the whole answer:
+  # refused without it, set with it.
+  set faults {}
+  foreach {name code} [list Cypriot 0x10800 ImperialAramaic 0x10840 \
+      Palmyrene 0x10860 Nabataean 0x10880 Hatran 0x108E0 Phoenician 0x10900 \
+      Lydian 0x10920 Sidetic 0x10940 MeroiticHieroglyphs 0x10980 \
+      MeroiticCursive 0x109A0 Kharoshthi 0x10A10 OldSouthArabian 0x10A60 \
+      OldNorthArabian 0x10A80 Avestan 0x10B00 InscriptionalParthian 0x10B40 \
+      InscriptionalPahlavi 0x10B60 OldTurkic 0x10C00 OldHungarian 0x10C80 \
+      Garay 0x10D50 Yezidi 0x10E80 OldSogdian 0x10F00 Elymaic 0x10FE0 \
+      MendeKikakui 0x1E800 IndicSiyaq 0x1EC71 OttomanSiyaq 0x1ED01 \
+      ArabicMath 0x1EE01] {
+    set char [smp $code]
+    set ltr [::tclpdf::shaping needed $char]
+    set rtl [::tclpdf::shaping needed $char rtl]
+    if {[lindex $ltr 4] ne "ordering" || $rtl ne {}} {
+      lappend faults "$name: ltr <$ltr> rtl <$rtl>"
+    }
+  }
+  list $faults [string match {*-direction rtl*} \
+      [::tclpdf::shaping message [::tclpdf::shaping needed [smp 0x10900]]]]
+} -result {{} 1}
+
+test shaping-6.2 {every strong right-to-left character above the BMP is refused - read off the UCD, not off this list} -body {
+  # The tripwire for the too-narrow direction, driven by the same file the
+  # bidi table is generated from: every code point DerivedBidiClass.txt
+  # lists as R or AL in the supplementary planes has to come back as a
+  # finding under ltr. A block dropped from the list - which is exactly how
+  # this defect existed, measured 2026-08-18 - turns this red with the
+  # characters it lost.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set file [open [file join $root tools ucd DerivedBidiClass.txt] r]
+  set wrong {}
+  while {[gets $file line] >= 0} {
+    if {![regexp {^([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))? *; (R|AL) } \
+        $line - firstHex lastHex]} {
+      continue
+    }
+    # scan for BOTH ends, never expr: to expr a hex string like 1E950 or
+    # 06E6 is scientific notation, and the six-million-character "range" it
+    # makes of a two-character Arabic line was measured before it was
+    # believed.
+    scan $firstHex %x first
+    if {$lastHex eq {}} {
+      set last $first
+    } else {
+      scan $lastHex %x last
+    }
+    if {$last < 0x10000} {
+      continue
+    }
+    for {set code $first} {$code <= $last} {incr code} {
+      if {[::tclpdf::shaping needed [smp $code]] eq {}} {
+        lappend wrong [format U+%04X $code]
+      }
+    }
+  }
+  close $file
+  lrange $wrong 0 4
+} -result {}
+
+test shaping-6.3 {their combining marks stay refused under rtl, found by joining type} -body {
+  # The marks of these blocks are a scatter like the Arabic harakat -
+  # Kharoshthi's vowel signs and virama, Garay's, Yezidi's, Mende Kikakui's
+  # combining digits - so they are asked of the joining table rather than
+  # cut out by hand, and -direction rtl must not quietly set them beside
+  # their letters.
+  set found {}
+  foreach {name code} [list KharoshthiVowel 0x10A01 KharoshthiVirama 0x10A3F \
+      GarayVowel 0x10D69 YezidiMark 0x10EAB MendeDigit 0x1E8D0] {
+    lassign [::tclpdf::shaping needed [smp $code] rtl] - - system what kind
+    lappend found $name "$what/$kind"
+  }
+  set found
+} -result {KharoshthiVowel {mark placement/shaping} KharoshthiVirama {mark placement/shaping} GarayVowel {mark placement/shaping} YezidiMark {mark placement/shaping} MendeDigit {mark placement/shaping}}
+
+test shaping-6.4 {what sits beside them must not be caught} -body {
+  # The tripwire for the too-wide direction. Old Italic and Gothic are
+  # left-to-right scripts of the same plane; the Rumi numeral symbols are AN
+  # digits, and a run of digits keeps its own order in either direction, so
+  # a Rumi number set from the left is right as it stands - a list that took
+  # the block would refuse text this package sets correctly. U+10960 is
+  # unassigned, between the blocks, and belongs to no script.
+  set faults {}
+  foreach {name code} [list OldItalic 0x10300 Gothic 0x10330 \
+      Rumi 0x10E60 unassigned 0x10960] {
+    set finding [::tclpdf::shaping needed [smp $code]]
+    if {$finding ne {}} {
+      lappend faults "$name refused: $finding"
+    }
+  }
+  set faults
+} -result {}
+
+test shaping-6.5 {the one such block a bundled face carries, refused and then set} -constraints haveLatin -body {
+  # DejaVu Sans carries 73 of the Arabic mathematical letters - measured off
+  # its cmap, and no face in the examples carries Phoenician or Kharoshthi -
+  # so this is the block the document level can be shown on. Before the list
+  # knew these blocks the word passed silently and pdftotext gave it back in
+  # logical order, from the left (measured 2026-08-18). Now: refused without
+  # the direction, and drawn REVERSED with it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed dv $::latinFace
+  set word "[smp 0x1EE01][smp 0x1EE02][smp 0x1EE03]"
+  set refused [catch {$doc text $word -at {20 20} -family dv} message]
+  set drawn [catch {$doc text $word -at {190 20} -family dv -direction rtl}]
+  # The drawn order is read as GLYPH numbers, not through drawnText: that
+  # helper renders a code point with [format %c], which under Tcl 8.6 turns
+  # anything above the BMP into U+FFFD - measured, three replacement
+  # characters where the three letters were.
+  set cmap [dict get [$doc state fonts] dv parsed cmap]
+  set glyphs {}
+  foreach tokens [::tclpdfTest::shows [::tclpdfTest::content $doc]] {
+    foreach token $tokens {
+      if {[string index $token 0] ne "("} {
+        continue
+      }
+      binary scan [subst -nocommands -novariables \
+          [string range $token 1 end-1]] Su* ids
+      lappend glyphs {*}$ids
+    }
+  }
+  set reversed [lmap code {0x1EE03 0x1EE02 0x1EE01} {
+    dict get $cmap [expr {$code}]
+  }]
+  $doc destroy
+  list $refused [string match {*-direction rtl*} $message] $drawn \
+      [expr {$glyphs eq $reversed}]
+} -result {1 1 0 1}
+
 cleanupTests

@@ -127,6 +127,24 @@ $doc table -at {90 210} -width 60 -theme plain \
     -body {{Jan 34} {Feb 58} {Mar 41} {Apr 72} {May 29} {Jun 63}} \
     -columns {{} {align right}}
 
+# -- group opacity as a transparency group ---------------------------------
+#
+# Two overlapping circles in a group at opacity 0.5. With the alpha
+# multiplied down to each child the overlap composites twice and comes out
+# darker; as a transparency group the children flatten first and the 0.5
+# applies once, so the lens where the circles meet stays exactly as light
+# as the circles - measured with pdftoppm: (255 127 127) everywhere,
+# against (255 63 63) in the overlap before 2026-08-18.
+$doc font -size 7
+$doc text "A group at opacity 0.5 - the overlap stays as light as the circles:" \
+    -at {155 206} -width 35
+$doc svg -data {<svg viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg">
+    <g opacity="0.5">
+      <circle cx="22" cy="20" r="16" fill="#c00000"/>
+      <circle cx="38" cy="20" r="16" fill="#c00000"/>
+    </g>
+  </svg>} -at {152 222} -width 38 -artifact 1
+
 $doc font -size 7
 $doc text "Skipped while drawing: [expr {[dict size $skipped] ?
     $skipped : {nothing}}]" -at {20 268} -width 170

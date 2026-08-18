@@ -99,18 +99,38 @@ $doc font -size 8
 $doc text "the same form opaque and at -opacity 0.5:" -at {120 145}
 $doc text "the square hides the disc in both" -at {120 149}
 
+# A pattern belongs to the space of the stream that carries it (ISO 32000-2,
+# 8.7.2): on a page that is the page, inside a form it is the form's own
+# space. So a gradient a form fills with is created INSIDE the form - then
+# every placement carries it, and the two below match although they stand
+# in different places. A gradient placed on the page and used in here
+# would be refused, and that refusal is the point: the matrix that would put
+# it right depends on where the form is painted, and a form may be painted
+# more than once. Give -matrix if the numbers are meant in another space.
+$doc form create badge -size {36 14} -script {
+  $doc shading pattern sheen axial -at {0 0} -size {36 14} \
+      -colors {{0.20 0.35 0.60} {0.45 0.70 0.90}} -angle 20
+  $doc rect -at {0 0} -size {36 14} -radius 2 -fill {pattern sheen}
+  $doc font -family helvetica -size 7 -style bold -color white
+  $doc text "PAID" -at {13 9}
+}
+$doc form place badge -at {20 160}
+$doc form place badge -at {120 160}
+$doc font -family helvetica -size 8 -style {} -color black
+$doc text "one form, its gradient created inside it, placed twice" -at {20 180}
+
 exampleFooter $doc
 
 $doc write $target
 
-# Count what actually stands in the file. Seven placements, three objects -
+# Count what actually stands in the file. Nine placements, four objects -
 # the claim in the header, checked against the bytes rather than asserted.
 set writer [$doc writer]
 set forms 0
 for {set n 1} {$n <= [$writer count]} {incr n} {
   if {[string match {*/Subtype /Form*} [$writer body $n]]} { incr forms }
 }
-puts "  form XObjects in the file: $forms (placed seven times)"
+puts "  form XObjects in the file: $forms (placed nine times)"
 puts "  known forms: [$doc form names]"
 $doc destroy
 puts "  written: $target ([file size $target] bytes)"

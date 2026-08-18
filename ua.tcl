@@ -593,12 +593,24 @@ oo::define ::tclpdf::document::document {
       }
       set previous $level
     }
-    # UA-2 only, and not a tightening for its own sake: H means "a heading at
-    # whatever level the nesting implies", and 2.0 dropped it because the
-    # nesting rarely says what the author meant. H1 to Hn are unambiguous.
-    if {[dict get [my state ua] part] == 2 && "H" in [dict get $report types]} {
-      lappend problems "the tree uses the generic H - PDF/UA-2 wants a\
-          numbered heading, H1 to Hn (8.2.5.20)"
+    # H means "a heading at whatever level the nesting implies". 2.0 dropped
+    # it because the nesting rarely says what the author meant - H1 to Hn are
+    # unambiguous - so part 2 refuses it outright. Part 1 keeps it, but not
+    # beside the numbered ones: a document is either weakly structured (H
+    # throughout, the nesting speaks) or strongly structured (H1 to Hn), and
+    # in a mixture the two answers can disagree. Measured 2026-08-18 with
+    # veraPDF: ua1 fails the mixture with two checks under 7.4.4 (Matterhorn
+    # 14-006) and passes a tree of H alone.
+    if {"H" in [dict get $report types]} {
+      if {[dict get [my state ua] part] == 2} {
+        lappend problems "the tree uses the generic H - PDF/UA-2 wants a\
+            numbered heading, H1 to Hn (8.2.5.20)"
+      } elseif {[llength [dict get $report headings]]} {
+        lappend problems "the tree mixes the generic H with numbered\
+            headings - a document is either weakly structured (H throughout)\
+            or strongly structured (H1 to Hn), never both (7.4.4, Matterhorn\
+            14-006)"
+      }
     }
     # UA-2 as well: Note is a 1.7-only type, and 8.2.5.14 wants it gone
     # unless a role map says what it is - FENote is what 2.0 calls it.
@@ -626,4 +638,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.2
+package provide tclpdf::ua 1.3

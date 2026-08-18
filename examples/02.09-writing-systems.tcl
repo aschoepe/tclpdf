@@ -342,6 +342,30 @@ set y [$doc table -at [list 20 $y] -width 170 -theme grid \
     -foot {{"21.580,00" "المجموع"}} \
     -decimal ,]
 
+# -- the planes above, right to left -----------------------------------------
+
+# The right-to-left scripts of the supplementary planes - Phoenician,
+# Kharoshthi, Imperial Aramaic, Old Turkic and the rest - need nothing but
+# the order either, and the same refusal guards them: without -direction rtl
+# such a line is refused rather than set from the left, which it silently
+# was before the list knew them (measured 2026-08-18, shaping.tcl). No face
+# in the examples carries their glyphs; the one such block one does carry
+# are the Arabic mathematical letters in DejaVu Sans - the symbols an
+# equation in Arabic prose is written in, running right to left like the
+# prose. So that block stands in for the rest: seen equals beh plus dal,
+# the x = a + b of the notation, read from the right.
+set y [expr {$y + 8}]
+$doc font -family sans -size 11 -color black
+$doc text "The planes above, right to left" -at [list 20 $y]
+set y [expr {$y + 6}]
+$doc font -family sans -size 7 -color {0.45 0.45 0.45}
+$doc text "Arabic mathematical letters (U+1EE00 block, in DejaVu Sans) - the\
+    one supplementary-plane right-to-left block a face of these pages\
+    carries; Phoenician or Kharoshthi would need a face of their own:" \
+    -at [list 20 $y] -width 170
+$doc font -family hebrew -size 14 -color black
+$doc text "𞸎 = 𞸁 + 𞸃" -at [list 190 [expr {$y + 10}]] -direction rtl
+
 # -- what a music font is not ------------------------------------------------
 
 $doc page add
