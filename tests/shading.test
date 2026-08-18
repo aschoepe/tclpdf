@@ -625,4 +625,59 @@ test shading-7.6 {a gradient of its own inside the form is the way that works} -
 } -result 1
 
 
+# -- 8. a pattern as the colour of text -----------------------------------
+
+test shading-8.1 {text coloured with a gradient names the resource, not the alias} -body {
+  # It wrote the alias once - "/sunset scn" - which no resource dictionary
+  # carried: qpdf and veraPDF passed the file, poppler said "Unknown pattern"
+  # and drew nothing. The text has to take the road the shapes take.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc shading pattern sunset axial -at {20 20} -size {60 20} -colors {white steelblue}
+  $doc font -family helvetica -size 14 -color {pattern sunset}
+  $doc text "SUNSET" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {/Pattern cs\n/Sp[0-9]+ scn} $content] [regexp {/sunset scn} $content]
+} -result {1 0}
+
+test shading-8.2 {the pattern is in the resources of the page the text is on} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc pattern create hatch -size {3 3} -script {
+    $doc line -from {0 3} -to {3 0} -stroke black -width 0.3
+  }
+  $doc font -family helvetica -size 20
+  $doc text "HATCH" -at {20 40} -color {pattern hatch}
+  set path [::tclpdfTest::scratch shading-text-pattern.pdf]
+  $doc write $path
+  # The page names its resources by reference; that object has to carry the
+  # pattern under the name the content stream uses.
+  set writer [$doc writer]
+  set found 0
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[regexp {/Type /Page[^s].*/Resources (\d+) 0 R} [$writer body $number] -> resources]} {
+      regexp {/Pattern cs\n(/Pt[0-9]+) scn} [::tclpdfTest::content $doc] -> name
+      set found [regexp "/Pattern\\s*<<\[^>\]*$name " [$writer body $resources]]
+    }
+  }
+  $doc destroy
+  file delete $path
+  set found
+} -result 1
+
+test shading-8.3 {a text with a page gradient inside a form is refused like a shape} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading pattern g axial -at {0 0} -size {40 30} -colors {blue red}
+  catch {
+    $doc form create f -size {40 30} -script {
+      $doc font -family helvetica -size 10 -color {pattern g}
+      $doc text "x" -at {5 15}
+    }
+  } message
+  $doc destroy
+  string match {*pattern "g" was placed on the page*} $message
+} -result 1
+
 cleanupTests

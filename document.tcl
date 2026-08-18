@@ -325,6 +325,7 @@ oo::class create ::tclpdf::document::document {
       style graphics
       opacity graphics
       blend graphics
+      GraphicsColour graphics
       line shape
       rect shape
       circle shape

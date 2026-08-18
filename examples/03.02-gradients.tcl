@@ -65,6 +65,15 @@ $doc font -family helvetica -style {} -size 6 -color {0.45 0.30 0.12}
 $doc text "340 g  -  harvested 2026  -  keep cool after opening" \
     -at {55 76} -align center
 
+# A pattern is a colour, and text takes a colour: the label's own gradient
+# fills its letters, through -color like every other text colour. It used to
+# write the alias into the stream instead of the resource name - poppler said
+# "Unknown pattern" and drew nothing, qpdf and veraPDF said nothing at all.
+$doc shading pattern ink axial -at {20 88} -size {70 8} \
+    -colors {{0.55 0.35 0.15} {0.93 0.66 0.30}}
+$doc font -family helvetica -style bold -size 16 -color {pattern ink}
+$doc text "APRICOT" -at {55 95} -align center
+
 # -- the shading types -----------------------------------------------------
 
 $doc font -family helvetica -style bold -size 10 -color black

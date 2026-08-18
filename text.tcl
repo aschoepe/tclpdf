@@ -487,11 +487,15 @@ oo::define ::tclpdf::document::document {
     my content "BT\n"
     my content "[my TextResource $font] [::tclpdf::pdfObj num $size] Tf\n"
     if {[dict get $state color] ne {}} {
-      # Through ColourUsed so that a text in a spot colour gets its colour
-      # space resource written like a shape does, and its space recorded
-      # for the PDF/A intent check like a shape's.
+      # Through GraphicsColour, the road every shape takes: a spot colour
+      # gets its colour space resource written and its space recorded for
+      # the PDF/A intent check, and a {pattern name} is translated from the
+      # caller's alias into the RESOURCE name. It went through ColourUsed
+      # alone once, which records but does not translate - a text coloured
+      # with a pattern then wrote "/sunset scn", a name no resource dictionary
+      # carried; qpdf and veraPDF said nothing, poppler "Unknown pattern".
       my content [::tclpdf::color operator [::tclpdf::color parse \
-          [my ColourUsed [dict get $state color] text]] fill]\n
+          [my GraphicsColour [dict get $state color] text]] fill]\n
     }
     foreach {key operator} {spacing Tc wordSpacing Tw rise Ts} {
       if {$key eq "wordSpacing" && $byTJ} {

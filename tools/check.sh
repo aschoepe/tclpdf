@@ -267,6 +267,34 @@ for made in doc/tclpdf.n doc/tclpdf.html; do
   fi
 done
 
+echo "=== 8. the reference code of the tclpdf-tcl skill runs ==="
+
+# doc/claude/skills/tclpdf-tcl/reference/*.md is the code a reader - or an
+# agent - copies, so it has to keep running against the package as it is;
+# check.tcl there extracts every tcl block, runs each file in a fresh tclsh
+# and puts qpdf and veraPDF over what came out. Under the same interpreter
+# rule as the suite: both where both are present. Output goes beside the
+# example output, which "make clean" removes.
+reference=doc/claude/skills/tclpdf-tcl
+if test -f "$reference/check.tcl"; then
+  for tclsh in tclsh8.6 tclsh9.0; do
+    if have $tclsh; then
+      if TCLPDF_REFERENCE_OUT=examples/out/reference \
+          $tclsh "$reference/check.tcl" "$reference/assets.tcl" >/tmp/tclpdf-reference.$$ 2>&1; then
+        report_pass "reference snippets under $tclsh: `tail -1 /tmp/tclpdf-reference.$$`"
+      else
+        report_fail "reference snippets under $tclsh - see below"
+        grep -v '^PASS' /tmp/tclpdf-reference.$$ | head -20
+      fi
+      rm -f /tmp/tclpdf-reference.$$
+    else
+      report_skip "reference snippets under $tclsh - interpreter not installed"
+    fi
+  done
+else
+  report_skip "$reference/check.tcl not present"
+fi
+
 echo "==="
 echo "passed $pass, failed $fail, skipped $skip"
 test $skip -eq 0 || echo "NOTE: $skip check(s) did not run - skipped is not passed"
