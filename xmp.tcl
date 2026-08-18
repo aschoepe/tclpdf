@@ -258,6 +258,44 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
     }
   }
 
+  # Every tag a schema method answers has to have been declared in the
+  # [xmpSchema] call that registered the schema: the element commands exist
+  # for declared tags only, and an undeclared one used to surface as tdom's
+  # raw "invalid command name Tag_..." with no word about which schema went
+  # wrong. Checked up front, where the schema and its declared tags can both
+  # be named - and before the document is created, so there is nothing to
+  # clean up.
+  variable declared
+  foreach entry $descriptions {
+    lassign $entry prefix uri items
+    set answered {}
+    foreach item $items {
+      lassign $item kind tag value
+      lappend answered $tag
+      # A bag's resources carry tags of the same schema (see the build
+      # below), and they are held to the same declaration.
+      if {$kind eq "bag"} {
+        foreach resource $value {
+          foreach {resourceTag resourceValue} $resource {
+            lappend answered $resourceTag
+          }
+        }
+      }
+    }
+    foreach tag $answered {
+      if {"$prefix:$tag" ni $declared} {
+        set known {}
+        foreach name $declared {
+          if {[string equal -length [string length "$prefix:"] "$prefix:" $name]} {
+            lappend known [string range $name [string length "$prefix:"] end]
+          }
+        }
+        return -code error "tclpdf: unknown tag \"$tag\" for XMP schema\
+            \"$prefix\" - declared are: [join $known {, }]"
+      }
+    }
+  }
+
   # Only x and rdf are declared at the root; every other prefix is declared on
   # the rdf:Description that uses it, which is the shape Adobe's own writer
   # produces and the one every XMP in the wild has.
@@ -425,7 +463,10 @@ oo::define ::tclpdf::document::document {
       lappend result [list $prefix $uri $method]
     }
     my state xmpSchemas $result
-    if {![llength $schemas]} {
+    # The build hook is shared with [xmpRaw]: whichever of the two is called
+    # first subscribes it, so the guard looks at both states - subscribed
+    # twice, the packet would be rebuilt twice on every write.
+    if {![llength $schemas] && ![llength [my state xmpRaw]]} {
       my onSelf catalog XmpCatalog
     }
     return
@@ -436,8 +477,18 @@ oo::define ::tclpdf::document::document {
   # A whole rdf:Description written by the caller, for what does not fit the
   # tag and value form: a PDF/A extension schema description is one of these,
   # and it is a page of RDF that no accessor could usefully model.
+  #
+  # Subscribes the packet build exactly as [xmpSchema] does: a packet needs
+  # no conformance claim, and a document whose only contribution is a raw
+  # one gets its packet too. It did not, once - the hook belonged to
+  # [xmpSchema] alone, and of two equal-ranking ways into the packet only
+  # one triggered the build: the raw contribution was stored, the write
+  # said nothing, and the file had no /Metadata at all.
   method xmpRaw {xml} {
     set raw [my state xmpRaw]
+    if {![llength $raw] && ![llength [my state xmpSchemas]]} {
+      my onSelf catalog XmpCatalog
+    }
     lappend raw $xml
     my state xmpRaw $raw
     return
@@ -488,4 +539,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xmp 1.2
+package provide tclpdf::xmp 1.3

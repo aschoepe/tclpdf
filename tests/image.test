@@ -1112,6 +1112,211 @@ test image-figure-15.4 {Figure{picture, Caption} passes ua 1 and, where veraPDF 
   list $code $failed
 } -match glob -result {0 [0-]}
 
+# --- the embedded ICC profile: JPEG APP2 and PNG iCCP --------------------------
+#
+# A profile found in the file becomes the picture's /ICCBased colour space
+# (8.6.5.5) instead of the bare device name - which is what makes the picture
+# device independent under PDF/A, see 17.9 - unless -icc 0 leaves it behind.
+# The profile stream goes through the same registry as [icc embed] and the
+# output intent, so one profile stands in the document once.
+
+set iccDir [file join [file dirname [file dirname [file dirname $assets]]] icc]
+set srgbIcc [file join $iccDir sRGB.icc]
+set cmykIcc [file join $iccDir ISOcoated_v2_bas.ICC]
+testConstraint haveSrgbIcc [file exists $srgbIcc]
+testConstraint haveCmykIcc [file exists $cmykIcc]
+
+# Splice an iCCP chunk into a PNG built by ::tclpdfTest::png: name, NUL,
+# method 0, the profile deflated (PNG 11.3.3.2), placed right after IHDR -
+# signature plus IHDR are the first 33 bytes.
+proc ::tclpdfTest::pngWithIccp {png profile} {
+  set body "icc\0\0[zlib compress $profile]"
+  set chunk "[binary format I [string length $body]]iCCP$body[binary format \
+      I [zlib crc32 iCCP$body]]"
+  return "[string range $png 0 32]$chunk[string range $png 33 end]"
+}
+
+# Splice APP2 ICC_PROFILE segments into a JPEG, right after SOI, the profile
+# dealt over "segments" parts - each carries its sequence number and the
+# total (ICC.1, Annex B.4).
+proc ::tclpdfTest::jpegWithIcc {jpeg profile {segments 1}} {
+  set size [expr {([string length $profile] + $segments - 1) / $segments}]
+  set app2 {}
+  set seq 1
+  for {set offset 0} {$offset < [string length $profile]} {incr offset $size} {
+    set body "ICC_PROFILE\0[binary format cucu $seq $segments][string range \
+        $profile $offset [expr {$offset + $size - 1}]]"
+    append app2 "\xff\xe2[binary format Su [expr {[string length $body] + 2}]]$body"
+    incr seq
+  }
+  return "[string range $jpeg 0 1]$app2[string range $jpeg 2 end]"
+}
+
+test image-icc-17.1 {a PNG iCCP profile becomes the picture's ICCBased colour space} \
+    -constraints haveSrgbIcc -body {
+  set profile [::tclpdf::io read $srgbIcc]
+  set png [::tclpdfTest::pngWithIccp \
+      [::tclpdfTest::png 1 1 8 2 "\x00\x20\x40\x60"] $profile]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data $png
+  set info [$doc image info pic]
+  $doc image place pic -at {20 20} -width 40
+  set used [dict keys [$doc colourSpacesUsed]]
+  set path [::tclpdfTest::scratch icc-png.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [dict get $info icc] [regexp {/ColorSpace \[/ICCBased \d+ 0 R\]} $bytes] \
+      [regexp -all {/N 3} $bytes] $used
+} -result [list [file size $srgbIcc] 1 1 ICCBased]
+
+test image-icc-17.2 {a palette PNG keeps its profile as the base of /Indexed} \
+    -constraints haveSrgbIcc -body {
+  set profile [::tclpdf::io read $srgbIcc]
+  set png [::tclpdfTest::pngWithIccp \
+      [::tclpdfTest::png 1 1 8 3 "\x00\x00" {} "\xff\x00\x00"] $profile]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image draw -data $png -at {20 20} -width 40
+  set path [::tclpdfTest::scratch icc-indexed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/ColorSpace \[/Indexed \[/ICCBased \d+ 0 R\] 0 } $bytes
+} -result 1
+
+test image-icc-17.3 {APP2 segments are reassembled by their numbers, not by their order} \
+    -constraints haveSrgbIcc -body {
+  # A profile larger than a segment travels split, and nothing promises the
+  # segments arrive in order - built here over two segments and then
+  # swapped, the parse has to give back the profile byte for byte.
+  set profile [::tclpdf::io read $srgbIcc]
+  set jpeg [binary format H* ffd8ffc1000b080010001001011100]
+  set straight [::tclpdfTest::jpegWithIcc $jpeg $profile 2]
+  # Swap the two APP2 segments: both sit right after SOI, each 2 + 2 +
+  # [Su length] bytes long.
+  binary scan $straight @4Su first
+  set a [string range $straight 2 [expr {3 + $first}]]
+  binary scan $straight @[expr {6 + $first}]Su second
+  set b [string range $straight [expr {4 + $first}] [expr {5 + $first + $second}]]
+  set swapped "[string range $straight 0 1]$b$a[string range $straight \
+      [expr {6 + $first + $second}] end]"
+  list [expr {[dict get [::tclpdf::imageJpeg parse $straight] icc] eq $profile}] \
+      [expr {[dict get [::tclpdf::imageJpeg parse $swapped] icc] eq $profile}]
+} -result {1 1}
+
+test image-icc-17.4 {-icc 0 leaves the profile behind} \
+    -constraints {haveImages haveSrgbIcc} -body {
+  set profile [::tclpdf::io read $srgbIcc]
+  set tagged [::tclpdfTest::jpegWithIcc [::tclpdf::io read $photo] $profile 2]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed with -data $tagged
+  $doc image embed without -data $tagged -icc 0
+  set kept [list [dict get [$doc image info with] icc] \
+      [dict get [$doc image info without] icc]]
+  $doc image place without -at {20 20} -width 40
+  set path [::tclpdfTest::scratch icc-dropped.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $kept [regexp {/ColorSpace /DeviceRGB} $bytes] [regexp {/ICCBased} $bytes]
+} -result [list [list [file size $srgbIcc] 0] 1 0]
+
+test image-icc-17.5 {a profile that contradicts the samples is refused, with nothing kept} \
+    -constraints {haveImages haveSrgbIcc} -body {
+  # sample-gray.jpg is one component; the sRGB profile describes three. An
+  # /N that contradicts the data is a picture no reader renders predictably
+  # (8.6.5.5) - refused at the embed, before anything is recorded.
+  set tagged [::tclpdfTest::jpegWithIcc [::tclpdf::io read $gray] \
+      [::tclpdf::io read $srgbIcc]]
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc image embed pic -data $tagged} message]
+  set names [$doc image names]
+  $doc destroy
+  list $code [string match {*describes RGB*samples are in DeviceGray*} $message] \
+      [string match {*-icc 0*} $message] $names
+} -result {1 1 1 {}}
+
+test image-icc-17.6 {a broken profile is refused naming -icc 0 as the way out, which then works} \
+    -constraints haveImages -body {
+  set tagged [::tclpdfTest::jpegWithIcc [::tclpdf::io read $photo] \
+      [string repeat x 200]]
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc image embed pic -data $tagged} message]
+  set fine [catch {$doc image embed pic -data $tagged -icc 0}]
+  $doc destroy
+  list $code [string match {*is not an ICC profile*} $message] \
+      [string match {*-icc 0*} $message] $fine
+} -result {1 1 1 0}
+
+test image-icc-17.7 {a missing APP2 segment is a damaged file} -constraints haveSrgbIcc -body {
+  set jpeg [binary format H* ffd8ffc1000b080010001001011100]
+  set both [::tclpdfTest::jpegWithIcc $jpeg [::tclpdf::io read $srgbIcc] 2]
+  # Cut the second segment out, leaving "1 of 2" alone.
+  binary scan $both @4Su first
+  set cut "[string range $both 0 [expr {3 + $first}]][string range $both \
+      [expr {4 + $first + 2 + [set second [expr {[binary scan $both \
+      @[expr {6 + $first}]Su s] ? $s : 0}]]}] end]"
+  ::tclpdf::imageJpeg parse $cut
+} -returnCodes error -match glob -result {*damaged JPEG*segment 2 is missing*}
+
+test image-icc-17.8 {an RGBA PNG keeps the profile on the colour, and the mask stays DeviceGray} \
+    -constraints haveSrgbIcc -body {
+  # The soft mask is coverage, not colour - a profile on it would be wrong
+  # twice: /N 3 for one channel, and colour management over alpha values.
+  set png [::tclpdfTest::pngWithIccp \
+      [::tclpdfTest::png 1 1 8 6 "\x00\x20\x40\x60\x80"] \
+      [::tclpdf::io read $srgbIcc]]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image draw -data $png -at {20 20} -width 40
+  set path [::tclpdfTest::scratch icc-rgba.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/ColorSpace \[/ICCBased \d+ 0 R\]} $bytes] \
+      [regexp {/ColorSpace /DeviceGray} $bytes]
+} -result {1 1}
+
+test image-icc-17.9 {under a CMYK intent the tagged picture passes where the bare one is refused} \
+    -constraints {haveImages haveSrgbIcc haveCmykIcc} -body {
+  # The measured point of the whole road: ISO 19005-2, 6.2.4.3 holds a
+  # picture's DEVICE space against the intent, and a picture carrying its
+  # profile is anchored to that profile instead. veraPDF, where present,
+  # confirms the pass with 0 failedChecks.
+  set tagged [::tclpdfTest::jpegWithIcc [::tclpdf::io read $photo] \
+      [::tclpdf::io read $srgbIcc] 2]
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc image draw -data $tagged -at {20 20} -width 40
+  set path [::tclpdfTest::scratch icc-image-intent.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  set failed -
+  if {!$code && [auto_execok verapdf] ne {}} {
+    catch {exec verapdf -f 3b $path 2>@1} report
+    regexp {failedChecks="([0-9]+)"} $report -> failed
+  }
+  file delete $path
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc image draw -data [::tclpdf::io read $photo] -at {20 20} -width 40
+  set refused [catch {$doc write [::tclpdfTest::scratch icc-image-bare.pdf]} message]
+  $doc destroy
+  file delete [::tclpdfTest::scratch icc-image-bare.pdf]
+  list $code $failed $refused [string match {*cannot carry DeviceRGB*image place*} $message]
+} -match glob -result {0 [-0] 1 1}
+
 # --- inside a form nothing is marked, and no element is opened -----------------
 
 test image-form-16.1 {image draw -alt inside form create opens no Figure} -constraints haveImages -body {

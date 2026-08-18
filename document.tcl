@@ -222,7 +222,24 @@ oo::class create ::tclpdf::document::document {
   # asked for it, so the caller learns which call was wrong rather than
   # "no such page" from somewhere inside the write. Negative and non-integer
   # pages are refused at once: no later page can make them right.
-  method destination {page {at {}} {zoom {}} {asker {}}} {
+  #
+  # The page is the first argument - it is the destination's subject, as the
+  # alias is [font embed]'s - and the point and the magnification are options
+  # under the names [link] already uses for the same two choices: -to and
+  # -zoom.
+  method destination {page args} {
+    set options [::tclpdf::option parse {to {} zoom {}} $args "destination"]
+    return [my Destination $page \
+        [dict get $options to] [dict get $options zoom] {}]
+  }
+
+  # The worker behind [destination], and the form link and bookmark call:
+  # ASKER is the wording of the write-time error when the page never comes
+  # ("bookmark \"Contents\"", "link -page 9 on page 0"). It is an argument of
+  # the machinery, not of the public method - as an option it would name
+  # internals in the manual, and a direct caller's forward destination is
+  # still reported, as "a destination".
+  method Destination {page at zoom asker} {
     if {![string is integer -strict $page] || $page < 0} {
       return -code error "tclpdf: no such page: $page - the document has\
           [llength $tclpdfPages] page(s)"
@@ -336,6 +353,7 @@ oo::class create ::tclpdf::document::document {
       GraphicUnmark image
       ColourSpaceUsed color
       colourSpacesUsed color
+      icc color
       shading shading
       pattern pattern
       table table
@@ -661,4 +679,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.6
+package provide tclpdf::document 1.7

@@ -72,7 +72,7 @@ proc ::tclpdf::imagePng::parse {bytes} {
   }
   set total [string length $bytes]
   set offset 8
-  set result [dict create palette {} transparency {} idat {}]
+  set result [dict create palette {} transparency {} idat {} icc {}]
   set seenHeader 0
 
   while {$offset + 8 <= $total} {
@@ -105,6 +105,27 @@ proc ::tclpdf::imagePng::parse {bytes} {
       }
       PLTE {dict set result palette $body}
       tRNS {dict set result transparency $body}
+      iCCP {
+        # Profile name, NUL, compression method, zlib data (PNG 11.3.3.2).
+        # The name is documentation and is not kept; 0 is the only
+        # compression method the format defines.
+        set zero [string first \0 $body]
+        if {$zero < 0 || $zero + 2 > [string length $body]} {
+          return -code error "tclpdf: damaged PNG - the iCCP chunk has no\
+              compression method"
+        }
+        binary scan [string index $body [expr {$zero + 1}]] cu method
+        if {$method != 0} {
+          return -code error "tclpdf: PNG iCCP compression method $method is\
+              not defined by the format"
+        }
+        if {[catch {zlib decompress \
+            [string range $body [expr {$zero + 2}] end]} profile]} {
+          return -code error "tclpdf: damaged PNG - the iCCP chunk does not\
+              decompress"
+        }
+        dict set result icc $profile
+      }
       IDAT {dict append result idat $body}
       IEND {break}
     }
@@ -196,15 +217,20 @@ proc ::tclpdf::imagePng::device {parsed} {
 }
 
 # The PDF colour space for a parsed PNG, as PDF syntax. Palette images become
-# /Indexed with the PLTE chunk as the lookup string.
-proc ::tclpdf::imagePng::space {parsed} {
-  set device [device $parsed]
+# /Indexed with the PLTE chunk as the lookup string. "base" replaces the
+# device space name when the caller anchors the samples to a profile - an
+# ICCBased array reference standing where /DeviceRGB would; only the
+# document layer can build it, since it holds the object number.
+proc ::tclpdf::imagePng::space {parsed {base {}}} {
+  if {$base eq {}} {
+    set base /[device $parsed]
+  }
   if {[dict get $parsed colorType] == 3} {
     set palette [dict get $parsed palette]
     set last [expr {[string length $palette] / 3 - 1}]
-    return "\[/Indexed /$device $last [::tclpdf::pdfObj bytesStr $palette]\]"
+    return "\[/Indexed $base $last [::tclpdf::pdfObj bytesStr $palette]\]"
   }
-  return /$device
+  return $base
 }
 
 # The /DecodeParms for the pass-through way. The reader is told to reverse
@@ -297,9 +323,11 @@ proc ::tclpdf::imagePng::transparency {parsed} {
 #
 # Returns a dict with "data" and "pairs", plus "maskData" and "maskPairs" when
 # a soft mask is called for. Which of the three ways a file takes is decided
-# here and nowhere else - the caller only creates objects.
-proc ::tclpdf::imagePng::streams {parsed} {
-  set pairs [list ColorSpace [space $parsed] \
+# here and nowhere else - the caller only creates objects. "base" is handed
+# on to [space]; a soft mask stays /DeviceGray regardless, because the mask
+# is coverage, not colour.
+proc ::tclpdf::imagePng::streams {parsed {base {}}} {
+  set pairs [list ColorSpace [space $parsed $base] \
       BitsPerComponent [dict get $parsed bitDepth]]
 
   if {[hasAlpha $parsed]} {
@@ -402,4 +430,4 @@ proc ::tclpdf::imagePng::PaletteKey {trns} {
   return $ranges
 }
 
-package provide tclpdf::imagePng 1.2
+package provide tclpdf::imagePng 1.3

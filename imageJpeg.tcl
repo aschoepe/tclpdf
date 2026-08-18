@@ -68,7 +68,14 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
     return -code error "tclpdf: not a JPEG file - it does not start with SOI"
   }
 
-  set result [dict create adobe 0 transform -1 progressive 0]
+  set result [dict create adobe 0 transform -1 progressive 0 icc {}]
+  # An embedded ICC profile travels in APP2 segments marked "ICC_PROFILE"
+  # (ICC.1, Annex B.4). A segment body holds at most 64 KB, so a profile is
+  # split over several, each carrying its sequence number and the total
+  # count - collected here by number and assembled after the walk, because
+  # nothing says they arrive in order.
+  set iccChunks {}
+  set iccCount 0
   set offset 2
   while {$offset + 1 < $total} {
     binary scan [string range $bytes $offset [expr {$offset + 1}]] cucu pad marker
@@ -124,6 +131,22 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
       # Keep walking: the APP14 segment may follow the frame header, and its
       # transform flag decides whether a four-component file is inverted.
     }
+    if {$marker == 0xe2 && [string range $body 0 11] eq "ICC_PROFILE\0"
+        && [string length $body] >= 14} {
+      binary scan $body @12cucu seq count
+      if {$iccCount == 0} {
+        set iccCount $count
+      }
+      # Every segment repeats the count, and each number appears once.
+      # A file that disagrees with itself is damaged - said with the
+      # numbers rather than assembling a profile with a hole in it.
+      if {$count != $iccCount || $seq < 1 || $seq > $iccCount
+          || [dict exists $iccChunks $seq]} {
+        return -code error "tclpdf: damaged JPEG - the ICC profile segments\
+            disagree (segment $seq of $count after $iccCount announced)"
+      }
+      dict set iccChunks $seq [string range $body 14 end]
+    }
     if {$marker == 0xee && [string range $body 0 4] eq "Adobe"} {
       dict set result adobe 1
       if {[string length $body] >= 12} {
@@ -136,6 +159,17 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
 
   if {![dict exists $result width]} {
     return -code error "tclpdf: damaged JPEG - no start-of-frame marker found"
+  }
+  if {$iccCount} {
+    set profile {}
+    for {set seq 1} {$seq <= $iccCount} {incr seq} {
+      if {![dict exists $iccChunks $seq]} {
+        return -code error "tclpdf: damaged JPEG - the ICC profile is split\
+            over $iccCount APP2 segments and segment $seq is missing"
+      }
+      append profile [dict get $iccChunks $seq]
+    }
+    dict set result icc $profile
   }
   # A picture of no width or no height went out as /Width 0 (Table 89
   # wants a positive integer): a frame header saying so is a damaged file,
@@ -182,4 +216,4 @@ proc ::tclpdf::imageJpeg::inverted {parsed} {
   return [expr {[dict get $parsed components] == 4 && [dict get $parsed adobe]}]
 }
 
-package provide tclpdf::imageJpeg 1.2
+package provide tclpdf::imageJpeg 1.3

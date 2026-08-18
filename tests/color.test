@@ -22,6 +22,12 @@ set cmykIcc [file join [file dirname [file dirname [file normalize \
     [info script]]]] icc ISOcoated_v2_bas.ICC]
 testConstraint haveCmykIcc [file exists $cmykIcc]
 
+# The shipped sRGB profile, for the ICC based colour space tests - the same
+# file [pdfa] embeds by default, which is what the sharing test turns on.
+set srgbIcc [file join [file dirname [file dirname [file normalize \
+    [info script]]]] icc sRGB.icc]
+testConstraint haveSrgbIcc [file exists $srgbIcc]
+
 test color-parse-1.1 {a name from the table} -body {
   ::tclpdf::color parse steelblue
 } -result {rgb {0.27450980392156865 0.5098039215686274 0.7058823529411765}}
@@ -340,6 +346,210 @@ test color-separation-6.2 {an alternate that is not a device space is refused be
   $doc destroy
   set result
 } -result {{1 1 1 1} {} {} {} {}}
+
+# -- the ICC based colour space (8.6.5.5) ------------------------------------
+#
+# {icc alias components...} paints in the space of a profile registered with
+# [icc embed]. The space is a stream with /N; it is device independent, so
+# PDF/A admits it under EVERY output intent - measured with veraPDF 1.30.2,
+# see 7.9/7.10 - and a profile that also serves as the output intent stands
+# in the document once, not twice.
+
+test color-icc-7.1 {parse keeps the alias and clamps the components} -body {
+  ::tclpdf::color parse {icc press 0.2 1.4 -0.1}
+} -result {icc {press {0.2 1 0}}}
+
+test color-icc-7.2 {fill and stroke operators, the alias escaped like a resource name} -body {
+  set parsed [::tclpdf::color parse {icc {chart 2} 0.2 0.45 0.75}]
+  list [::tclpdf::color operator $parsed fill] [::tclpdf::color operator $parsed stroke]
+} -result [list "/chart#202 cs\n0.2 0.45 0.75 scn" "/chart#202 CS\n0.2 0.45 0.75 SCN"]
+
+test color-icc-7.3 {the stream, the array and the resource exist, and fill, stroke and text share them} \
+    -constraints haveSrgbIcc -body {
+  # The operator names a resource, and a resource needs its object - the
+  # same lesson as the separation above, one space further on. One
+  # [/ICCBased n 0 R] array, one profile stream, however many roads use it.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc icc embed chart $srgbIcc
+  $doc rect -at {20 20} -size {40 20} -fill {icc chart 0.2 0.45 0.75} \
+      -stroke {icc chart 1 0 0}
+  $doc font -family helvetica -size 10 -color {icc chart 0 0 0.5}
+  $doc text "icc" -at {20 50}
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch icc-object.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/ColorSpace << /chart \d+ 0 R >>} $bytes] \
+      [llength [lsort -unique [regexp -all -inline {\[/ICCBased \d+ 0 R\]} $bytes]]] \
+      [regexp -all {/N 3} $bytes] \
+      [regexp "/chart cs\n0.2 0.45 0.75 scn" $content] \
+      [regexp "/chart CS\n1 0 0 SCN" $content] \
+      [regexp "/chart cs\n0 0 0.5 scn" $content]
+} -result {1 1 1 1 1 1}
+
+test color-icc-7.4 {an unregistered alias is refused before anything is recorded} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [catch {$doc rect -at {1 1} -size {2 2} -fill {icc nope 1 0 0}} message]
+  set result [list $code [string match {*no ICC profile named "nope"*icc embed*} $message] \
+      [::tclpdfTest::content $doc] [$doc colourSpacesUsed] [$doc resource ColorSpace]]
+  $doc destroy
+  set result
+} -result {1 1 {} {} {}}
+
+test color-icc-7.5 {the component count is the profile's, and a wrong one leaves no record} \
+    -constraints haveSrgbIcc -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc icc embed chart $srgbIcc
+  set code [catch {$doc rect -at {1 1} -size {2 2} -fill {icc chart 0.5}} message]
+  set result [list $code [string match {*"chart" is a RGB profile and takes 3 components, got 1*} \
+      $message] [::tclpdfTest::content $doc] [$doc colourSpacesUsed]]
+  $doc destroy
+  set result
+} -result {1 1 {} {}}
+
+test color-icc-7.6 {duplicate aliases, family names, and the separation clash both ways} \
+    -constraints haveSrgbIcc -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc icc embed chart $srgbIcc
+  set codes [list [catch {$doc icc embed chart $srgbIcc} m1] \
+      [catch {$doc icc embed Pattern $srgbIcc} m2]]
+  # A separation may not take a registered alias, and an alias may not take
+  # a used separation name - the two share the ColorSpace resources.
+  lappend codes [catch {$doc rect -at {1 1} -size {2 2} \
+      -fill {separation chart {cmyk 0 0 0 1}}} m3]
+  $doc rect -at {1 1} -size {2 2} -fill {separation Gold {cmyk 0 0.2 0.8 0}}
+  lappend codes [catch {$doc icc embed Gold $srgbIcc} m4]
+  $doc destroy
+  list $codes [string match {*already embedded*} $m1] \
+      [string match {*colour space family*} $m2] \
+      [string match {*already names an ICC profile*} $m3] \
+      [string match {*already names a separation*} $m4]
+} -result {{1 1 1 1} 1 1 1 1}
+
+test color-icc-7.7 {a file that is no profile is refused at the call, with nothing kept} -body {
+  set path [::tclpdfTest::scratch not-a-profile.icc]
+  set fh [open $path wb]
+  puts -nonewline $fh [string repeat x 200]
+  close $fh
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc icc embed junk $path} message]
+  set names [$doc icc names]
+  $doc destroy
+  file delete $path
+  list $code [string match {*is not an ICC profile*acsp*} $message] $names
+} -result {1 1 {}}
+
+test color-icc-7.8 {a profile serving as colour space AND output intent stands in the file once} \
+    -constraints haveSrgbIcc -body {
+  # [pdfa] embeds the shipped sRGB profile as the output intent;
+  # registering the same file as a colour space must not add a second
+  # stream - the intent's DestOutputProfile points at the very object the
+  # ICCBased array points at. Counted by the header signature, which with
+  # -compress 0 appears once per embedded profile and nowhere else.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc pdfa -part 3
+  $doc icc embed srgb $srgbIcc
+  $doc rect -at {20 20} -size {40 20} -fill {icc srgb 0.2 0.45 0.75}
+  set path [::tclpdfTest::scratch icc-shared.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/ICCBased (\d+) 0 R} $bytes -> arrayTarget
+  regexp {/DestOutputProfile (\d+) 0 R} $bytes -> intentTarget
+  list [regexp -all {acsp} $bytes] [expr {$arrayTarget == $intentTarget}]
+} -result {1 1}
+
+test color-icc-7.9 {under a CMYK intent the ICC colour passes where DeviceRGB is refused} \
+    -constraints {haveSrgbIcc haveCmykIcc} -body {
+  # The point of the space: ISO 19005-2, 6.2.4.3 holds DEVICE colours
+  # against the intent, and an ICCBased colour carries its own profile -
+  # so the same three numbers pass under the press profile where the bare
+  # triplet fails. Measured with veraPDF 1.30.2, see 7.10.
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc icc embed srgb $srgbIcc
+  $doc rect -at {20 20} -size {40 20} -fill {icc srgb 0.2 0.45 0.75}
+  set fine [::tclpdfTest::writes $doc icc-cmyk-intent.pdf]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc rect -at {20 20} -size {40 20} -fill {rgb 0.2 0.45 0.75}
+  set code [catch {$doc write [::tclpdfTest::scratch icc-cmyk-rgb.pdf]} message]
+  $doc destroy
+  file delete [::tclpdfTest::scratch icc-cmyk-rgb.pdf]
+  list $fine $code [string match {*cannot carry DeviceRGB*} $message]
+} -result {{0 1} 1 1}
+
+test color-icc-7.10 {veraPDF, where present: 3B passes with ICC colour under the CMYK intent} \
+    -constraints {haveSrgbIcc haveCmykIcc} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc icc embed srgb $srgbIcc
+  $doc rect -at {20 20} -size {40 20} -fill {icc srgb 0.2 0.45 0.75} \
+      -stroke {icc srgb 1 0 0}
+  set path [::tclpdfTest::scratch icc-verapdf.pdf]
+  $doc write $path
+  $doc destroy
+  set result ok
+  if {[auto_execok verapdf] ne {}} {
+    catch {exec verapdf -f 3b $path 2>@1} report
+    if {![regexp {failedChecks="0"} $report]} {
+      set result $report
+    }
+  }
+  file delete $path
+  set result
+} -result ok
+
+test color-icc-7.11 {a second write is byte-identical} -constraints haveSrgbIcc -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc pdfa -part 3
+  $doc icc embed srgb $srgbIcc
+  $doc rect -at {20 20} -size {40 20} -fill {icc srgb 0.2 0.45 0.75}
+  lassign [::tclpdfTest::writeTwice $doc icc-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] [regexp -all {acsp} $first]
+} -result {1 1}
+
+test color-icc-7.12 {a shading stop cannot be an ICC colour, and the refusal writes nothing} \
+    -constraints haveSrgbIcc -body {
+  # A shading names its space by FAMILY in its dictionary, which an ICC
+  # based space does not have - refused where the stops are collected,
+  # before the function object goes out.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc icc embed srgb $srgbIcc
+  set code [catch {$doc shading axial -at {20 20} -size {40 20} \
+      -colors {{icc srgb 1 0 0} white}} message]
+  set result [list $code [string match {*ICC based colour cannot stand here*} $message] \
+      [::tclpdfTest::content $doc] [$doc colourSpacesUsed]]
+  $doc destroy
+  set result
+} -result {1 1 {} {}}
+
+test color-icc-7.13 {ICCBased is PDF 1.3, said at the call} -constraints haveSrgbIcc -body {
+  set doc [tclpdf new -version 1.2]
+  $doc page add
+  $doc icc embed srgb $srgbIcc
+  set code [catch {$doc rect -at {1 1} -size {2 2} -fill {icc srgb 1 0 0}} message]
+  set result [list $code [string match {*an ICC based colour needs PDF 1.3*} $message] \
+      [$doc colourSpacesUsed]]
+  $doc destroy
+  set result
+} -result {1 1 {}}
 
 test color-separation-6.3 {All and None are written as the special colourants they are} -body {
   set doc [tclpdf new -compress 0]

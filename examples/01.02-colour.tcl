@@ -13,6 +13,9 @@
 #                 generated PDFs use it
 #   Separation    a spot colour: a varnish, a security ink, Pantone 485 - a
 #                 named plate with a fallback for readers that cannot render it
+#   ICCBased      numbers anchored to an ICC profile instead of to the device -
+#                 measured over 539 foreign PDFs, 302 carry one; the profile is
+#                 registered once under an alias and travels in the file once
 #
 # Colour names come from a table in the package, not from Tk. [winfo rgb]
 # would have done the job and would have pulled in a windowing system to
@@ -47,10 +50,15 @@ proc swatch {doc x y colour label} {
     $doc text $label -at [list $x [expr {$y + 17}]]
 }
 
-# -- the four spaces -------------------------------------------------------
+# -- the five spaces -------------------------------------------------------
+
+# The ICC based space wants its profile registered first: once per document,
+# under an alias every later fill, stroke and text colour uses. The profile
+# stream is written on first use and stands in the file exactly once.
+$doc icc embed chart [file join [file dirname $here] icc sRGB2014.icc]
 
 $doc font -style bold -size 10
-$doc text "Four colour spaces" -at {20 34}
+$doc text "Five colour spaces" -at {20 34}
 
 set x 20
 foreach {colour label} {
@@ -58,6 +66,7 @@ foreach {colour label} {
     {rgb 0.85 0.2 0.15}         "rgb 0.85 0.2 0.15"
     {cmyk 0 0.85 0.85 0.05}     "cmyk 0 .85 .85 .05"
     {separation Varnish {cmyk 0 0 0 0.15} 0.8} "separation Varnish"
+    {icc chart 0.85 0.2 0.15}   "icc chart (sRGB)"
 } {
     swatch $doc $x 40 $colour $label
     incr x 30
@@ -67,7 +76,9 @@ $doc font -style {} -size 8
 $doc text "The second and third are the same red said two ways. On a screen\
     they look alike; on a press they are different inks. A CMYK value under an\
     sRGB output intent is a PDF/A risk - the intent claims a space the numbers\
-    are not in." -at {20 62} -width 170
+    are not in. The fifth is the same red a third way: the numbers of the\
+    second, anchored to the sRGB2014 profile - device independent, so it\
+    passes under any PDF/A output intent." -at {20 62} -width 170
 
 # -- grey ramp and CMYK round trip -----------------------------------------
 

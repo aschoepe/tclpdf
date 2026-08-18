@@ -652,4 +652,69 @@ test document-compress-20.2 {/Tabs /S is written on a page with annotations from
   set out
 } -result {0 1 1 1 1 1}
 
+# --- destinations ---------------------------------------------------------
+
+test document-destination-21.1 {destination builds the array: /Fit bare, /XYZ with -to and -zoom} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc page add
+  set out [list [$doc destination 1]]
+  # -to lands on the point, -zoom is the magnification there; without -zoom
+  # the reader keeps its own, written as null.
+  lappend out [regexp {^\[\d+ 0 R /XYZ [-\d.]+ [-\d.]+ 1.5\]$} \
+      [$doc destination 1 -to {20 30} -zoom 1.5]]
+  lappend out [regexp {^\[\d+ 0 R /XYZ [-\d.]+ [-\d.]+ null\]$} \
+      [$doc destination 1 -to {20 30}]]
+  $doc destroy
+  set out
+} -match glob -result {{\[* 0 R /Fit\]} 1 1}
+
+test document-destination-21.2 {destination takes options, not positional arguments} -body {
+  # The point and the zoom used to be positional; the option form is the
+  # only one, so the old call is refused with the list of known options.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc page add
+  set out [list [catch {$doc destination 1 {20 30} 1.5} err] \
+      [string match {*unknown option*known are: -to -zoom*} $err]]
+  lappend out [catch {$doc destination 1 -bogus x} err] \
+      [string match {*unknown option "-bogus"*} $err]
+  lappend out [catch {$doc destination -1} err] \
+      [string match {*no such page: -1*} $err]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 1}
+
+test document-destination-21.3 {a destination at a page that never comes fails at the write} -body {
+  # A forward destination is allowed and becomes an indirect object; a page
+  # still missing at write time is reported. A direct call has no name of
+  # its own, so the report says "a destination" - link and bookmark pass
+  # theirs through the internal form, see zugferd-5.2a and zugferd-6.5.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out [list [regexp {^\d+ 0 R$} [$doc destination 9]]]
+  lappend out [catch {$doc write [::tclpdfTest::scratch document-dest-lost.pdf]} err] \
+      [string match {*a destination points at page 9 and the document has 1 page(s)*} $err]
+  $doc destroy
+  set out
+} -result {1 1 1}
+
+test document-destination-21.4 {catalogEntry OpenAction takes a destination} -body {
+  # The standing direct use: the reader opens the document on page two.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc page add
+  $doc catalogEntry OpenAction [$doc destination 1]
+  set path [::tclpdfTest::scratch document-dest-open.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/OpenAction \[(\d+) 0 R /Fit\]} $bytes -> number
+  # The action's target has to be the SECOND page object, as zugferd-5.2
+  # reads its target off the page list.
+  set pages [regexp -all -inline {\n(\d+) 0 obj\n<< /Type /Page } $bytes]
+  expr {$number eq [lindex $pages 3]}
+} -result 1
+
 cleanupTests

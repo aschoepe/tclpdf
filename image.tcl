@@ -39,6 +39,10 @@ package require tclpdf::geometry 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::imageJpeg 1.0-
 package require tclpdf::imagePng 1.0-
+# For [IccInspect] and [IccProfileObject]: a picture's embedded profile goes
+# through the same reader and the same one-stream-per-profile registry as a
+# registered colour space and the PDF/A output intent.
+package require tclpdf::color 1.0-
 package require tclpdf::graphics 1.0-
 package require tclpdf::document 1.0-
 
@@ -88,7 +92,12 @@ oo::define ::tclpdf::document::document {
       set path [lindex $args 0]
       set args [lrange $args 1 end]
     }
-    set options [::tclpdf::option parse {type auto data {}} $args "image embed"]
+    set options [::tclpdf::option parse {type auto data {} icc 1} $args \
+        "image embed"]
+    if {![string is boolean -strict [dict get $options icc]]} {
+      return -code error "tclpdf: -icc of image embed takes a boolean, not\
+          \"[dict get $options icc]\""
+    }
     set images [my state images]
     if {[dict exists $images $alias]} {
       return -code error "tclpdf: an image named \"$alias\" is already embedded"
@@ -110,6 +119,37 @@ oo::define ::tclpdf::document::document {
       default {
         return -code error "tclpdf: unknown image type \"$type\" - known are:\
             auto, jpeg, png"
+      }
+    }
+    # An embedded ICC profile (JPEG APP2, PNG iCCP) becomes the picture's
+    # /ICCBased colour space instead of the bare device space - unless
+    # -icc 0 says to leave it behind. A kept profile is held to what
+    # 8.6.5.5 requires of it HERE, before anything is recorded: it has to
+    # be a profile at all, and it has to describe the space the samples
+    # are in - an /N that contradicts the data is a picture no reader
+    # renders predictably.
+    if {[dict get $parsed icc] ne {}} {
+      if {![dict get $options icc]} {
+        dict set parsed icc {}
+      } else {
+        set source [expr {$path ne {} ? $path : "the picture data"}]
+        if {[catch {my IccInspect [dict get $parsed icc] \
+            "the ICC profile in $source"} inspected]} {
+          return -code error "$inspected - the picture itself is fine;\
+              -icc 0 embeds it without the profile"
+        }
+        lassign $inspected profileSpace profileComponents
+        set device [expr {$type eq "jpeg"
+            ? [::tclpdf::imageJpeg space [dict get $parsed components]]
+            : [::tclpdf::imagePng device $parsed]}]
+        if {$profileSpace ne [dict get \
+            {DeviceGray GRAY DeviceRGB RGB DeviceCMYK CMYK} $device]} {
+          return -code error "tclpdf: the ICC profile in $source describes\
+              $profileSpace, but the picture's samples are in $device - the\
+              profile of an image colour space has to describe that space\
+              (ISO 32000-1, 8.6.5.5); -icc 0 embeds the picture without it"
+        }
+        dict set parsed iccComponents $profileComponents
       }
     }
     dict set images $alias [dict create type $type parsed $parsed \
@@ -437,6 +477,10 @@ oo::define ::tclpdf::document::document {
       dict set result bitDepth [dict get $parsed bitsPerComponent]
       dict set result alpha 0
     }
+    # The size of the ICC profile that will travel with the picture, 0 when
+    # the file carries none or -icc 0 left it behind - so a caller can see
+    # which of the two a placement will get.
+    dict set result icc [string length [dict get $parsed icc]]
     return $result
   }
 
@@ -487,7 +531,12 @@ oo::define ::tclpdf::document::document {
         Width [dict get $parsed width] Height [dict get $parsed height]]
     if {[dict get $image type] eq "jpeg"} {
       set space [::tclpdf::imageJpeg space [dict get $parsed components]]
-      lappend pairs ColorSpace /$space \
+      set colourSpace /$space
+      if {[dict get $parsed icc] ne {}} {
+        set colourSpace [my ImageProfileBase $parsed]
+        set space ICCBased
+      }
+      lappend pairs ColorSpace $colourSpace \
           BitsPerComponent [dict get $parsed bitsPerComponent] \
           Filter /DCTDecode
       if {[::tclpdf::imageJpeg inverted $parsed]} {
@@ -496,20 +545,30 @@ oo::define ::tclpdf::document::document {
       set data [dict get $image bytes]
     } else {
       set space [::tclpdf::imagePng device $parsed]
-      set streams [::tclpdf::imagePng streams $parsed]
       # What the picture needs of the file, before its first object goes
       # out (Reference 1.7, Table 4.39): a colour key /Mask is PDF 1.3, a
       # soft mask 1.4, sixteen bits per component 1.5. The FlateDecode
-      # filter every PNG carries is checked by the writer.
-      if {[dict exists [dict get $streams pairs] Mask]} {
+      # filter every PNG carries is checked by the writer. Read off
+      # [transparency] and [hasAlpha] - the very deciders [streams]
+      # consults - rather than off the built pairs, because the ICC
+      # profile stream below is an object too and has to come after the
+      # last refusal.
+      set way [::tclpdf::imagePng transparency $parsed]
+      if {$way eq "colourKey"} {
         my RequireVersion 1.3 "a PNG picture with a transparent colour"
       }
-      if {[dict exists $streams maskData]} {
+      if {[::tclpdf::imagePng hasAlpha $parsed] || $way eq "softMask"} {
         my RequireVersion 1.4 "a PNG picture with an alpha channel"
       }
       if {[dict get $parsed bitDepth] == 16} {
         my RequireVersion 1.5 "a 16-bit PNG picture"
       }
+      set base {}
+      if {[dict get $parsed icc] ne {}} {
+        set base [my ImageProfileBase $parsed]
+        set space ICCBased
+      }
+      set streams [::tclpdf::imagePng streams $parsed $base]
       lappend pairs {*}[dict get $streams pairs]
       set data [dict get $streams data]
       if {[dict exists $streams maskData]} {
@@ -530,11 +589,27 @@ oo::define ::tclpdf::document::document {
     set images [my state images]
     dict set images $alias resource $resourceName
     dict set images $alias object $number
-    # The device space of the samples - DeviceGray, DeviceRGB, DeviceCMYK -
-    # kept for [ImagePlace] to record; the base of an Indexed picture.
+    # The space of the samples - DeviceGray, DeviceRGB, DeviceCMYK, or
+    # ICCBased for a picture travelling with its profile - kept for
+    # [ImagePlace] to record; for an Indexed picture it is the base. The
+    # PDF/A intent check judges the device names and leaves ICCBased alone,
+    # which is the point of carrying the profile.
     dict set images $alias space $space
     my state images $images
     return $number
+  }
+
+  # The ICCBased colour space of a picture's embedded profile, as the PDF
+  # text standing where the device space name would - "[/ICCBased n 0 R]"
+  # plain, or as the base of an /Indexed array. Through the document-wide
+  # profile registry, so five pictures tagged with the same sRGB profile
+  # share one stream - and so does the PDF/A output intent, when it names
+  # the same profile. ICCBased is PDF 1.3 (Reference 1.7, 4.5.4).
+  method ImageProfileBase {parsed} {
+    my RequireVersion 1.3 "a picture with an ICC profile"
+    return [::tclpdf::pdfObj arr [list /ICCBased [[my writer] ref \
+        [my IccProfileObject [dict get $parsed icc] \
+            [dict get $parsed iccComponents]]]]]
   }
 
   method ImageCount {} {
@@ -552,4 +627,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.5
+package provide tclpdf::image 1.6

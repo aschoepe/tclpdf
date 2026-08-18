@@ -63,7 +63,7 @@ oo::define ::tclpdf::document::document {
       # A negative or non-integer page is refused here; a page that does
       # not exist YET is allowed, because a bookmark may point forward at a
       # page added later - and if it never comes, the write says so, naming
-      # this bookmark by its title. That is [destination]'s asker argument.
+      # this bookmark by its title. That is [Destination]'s asker argument.
       if {![string is integer -strict $page] || $page < 0} {
         return -code error "tclpdf: no such page: $page - the document has\
             [my page count] page(s)"
@@ -72,7 +72,7 @@ oo::define ::tclpdf::document::document {
       # above: a page destination that points forward is an indirect object
       # filled on beforeWrite, and the outline is built later, on catalog.
       # Kept in the entry so OutlineWrite writes the very same reference.
-      set dest [my destination $page [dict get $options at] {} \
+      set dest [my Destination $page [dict get $options at] {} \
           "bookmark \"$title\""]
     }
     set id [llength $entries]
@@ -203,4 +203,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::outline 1.3
+package provide tclpdf::outline 1.4

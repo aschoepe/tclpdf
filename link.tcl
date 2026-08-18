@@ -78,8 +78,8 @@ oo::define ::tclpdf::document::document {
       lappend pairs A [my structureDestination [dict get $options structure]]
     } else {
       # The page may not exist yet - a link forward at a page added later
-      # is allowed, and [destination] says at write time if it never came.
-      lappend pairs Dest [my destination [dict get $options page] \
+      # is allowed, and [Destination] says at write time if it never came.
+      lappend pairs Dest [my Destination [dict get $options page] \
           [dict get $options to] [dict get $options zoom] \
           "link -page [dict get $options page] on page [my page current]"]
     }
@@ -201,4 +201,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::link 1.3
+package provide tclpdf::link 1.4

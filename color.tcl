@@ -23,6 +23,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
+package require tclpdf::io 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::color {
@@ -87,6 +88,7 @@ namespace eval ::tclpdf::color {
 #   {rgb 1 0 0}
 #   {cmyk 0 1 1 0}
 #   {separation Name alternateSpace tint}
+#   {icc alias components...}
 #
 # Components are 0..1, not 0..255. That is the PDF convention and mixing the
 # two is the classic source of a picture that comes out white.
@@ -158,6 +160,20 @@ proc ::tclpdf::color::parse {spec} {
       # caller's alias into it is the document's job, not this module's.
       return [list pattern [list [lindex $spec 1]]]
     }
+    icc {
+      # {icc alias components...} - a colour in an ICC based space
+      # (8.6.5.5). The alias names a profile registered with [icc embed];
+      # how many components follow is that profile's business, and it is
+      # checked where the profile is known - in [ColourUsed] below. The
+      # values are clamped here like every other component.
+      set alias [lindex $spec 1]
+      if {$alias eq {}} {
+        return -code error "tclpdf: an ICC colour needs the alias of an\
+            embedded profile - {icc alias components...}"
+      }
+      return [list icc [list $alias \
+          [lmap value [lrange $spec 2 end] {Clamp $value}]]]
+    }
   }
 
   # No keyword: decide by the number of components.
@@ -202,6 +218,18 @@ proc ::tclpdf::color::operator {parsed {which fill}} {
         set code SCN
       }
       return "$prefix\n[::tclpdf::pdfObj num $tint] $code"
+    }
+    icc {
+      # Like a separation: the alias is the resource entry [ColourUsed]
+      # provides, followed by the components in the profile's space.
+      set alias [lindex $values 0]
+      set code scn
+      set prefix "[::tclpdf::pdfObj name $alias] cs"
+      if {$which eq "stroke"} {
+        set prefix "[::tclpdf::pdfObj name $alias] CS"
+        set code SCN
+      }
+      return "$prefix\n$numbers $code"
     }
     default {
       return -code error "tclpdf: unknown colour space \"$space\""
@@ -263,6 +291,9 @@ oo::define ::tclpdf::document::document {
     if {[lindex $parsed 0] eq "pattern"} {
       return $spec
     }
+    if {[lindex $parsed 0] eq "icc"} {
+      return [my IccColourUsed $parsed $what $spec]
+    }
     if {[lindex $parsed 0] ne "separation"} {
       my ColourSpaceUsed [::tclpdf::color space $parsed] $what
       return $spec
@@ -274,6 +305,14 @@ oo::define ::tclpdf::document::document {
     if {$name in {DeviceGray DeviceRGB DeviceCMYK Pattern}} {
       return -code error "tclpdf: \"$name\" cannot be the name of a\
           separation - it names a colour space family (ISO 32000-1, 8.6.8)"
+    }
+    # Separations and ICC profiles share the ColorSpace resource dictionary,
+    # so one name cannot be both - the second definition would silently
+    # shadow the first in every "cs" that follows. The mirror check sits in
+    # [IccEmbed].
+    if {[dict exists [my state iccProfiles] $name]} {
+      return -code error "tclpdf: \"$name\" already names an ICC profile -\
+          a separation cannot reuse it"
     }
     # The alternate is what a reader without the plate paints, so it counts
     # as a use of that space (ISO 19005-2, 6.2.4.4) - and it is recorded
@@ -312,8 +351,137 @@ oo::define ::tclpdf::document::document {
     return $spec
   }
 
-  # Record one use of a device colour space: DeviceGray, DeviceRGB or
-  # DeviceCMYK, by the call named in "what", on the current page. Called by
+  # -- ICC based colour spaces (8.6.5.5) ----------------------------------
+  #
+  # An ICCBased space is a stream holding the profile, with /N for the
+  # component count - the space every colour-managed workflow hands around,
+  # and by count the most common colour space in foreign PDFs measured
+  # (302 of 539 documents). Because it is anchored to a profile rather than
+  # to the device, it is admissible under EVERY PDF/A output intent -
+  # measured with veraPDF 1.30.2: an ICC sRGB fill passes 3B under a CMYK
+  # intent where the same colour as DeviceRGB fails 6.2.4.3 - which is why
+  # it is recorded under its own name and the intent check leaves it alone.
+
+  # $doc icc embed <alias> <path>    register a profile under an alias
+  # $doc icc names                   the aliases registered so far
+  #
+  # After [icc embed press ISOcoated.icc], {icc press 0 1 1 0} is a colour
+  # wherever one is taken: fill, stroke, text. The registration only reads
+  # and checks the profile; objects are written on first use, the rule
+  # [font embed] and [image embed] follow.
+  method icc {subcommand args} {
+    switch -- $subcommand {
+      embed {return [my IccEmbed {*}$args]}
+      names {return [dict keys [my state iccProfiles]]}
+      default {
+        return -code error "tclpdf: unknown icc subcommand \"$subcommand\" -\
+            known are: embed, names"
+      }
+    }
+  }
+
+  # Register a profile. Everything here is a CHECK - a refused call leaves
+  # no state - and the header is read by the one ICC reader this package
+  # has, the same one the output intent uses (pdfa.tcl), so the two cannot
+  # disagree about what a profile describes.
+  method IccEmbed {alias path} {
+    if {$alias eq {}} {
+      return -code error "tclpdf: icc embed needs an alias and a file name"
+    }
+    # These four never refer to the ColorSpace resources (8.6.8, cs): an
+    # alias called Pattern would write "/Pattern cs" and mean the pattern
+    # space, silently - the same trap as a separation of that name.
+    if {$alias in {DeviceGray DeviceRGB DeviceCMYK Pattern}} {
+      return -code error "tclpdf: \"$alias\" cannot be the alias of an ICC\
+          profile - it names a colour space family (ISO 32000-1, 8.6.8)"
+    }
+    set known [my state iccProfiles]
+    if {[dict exists $known $alias]} {
+      return -code error "tclpdf: an ICC profile named \"$alias\" is already\
+          embedded"
+    }
+    if {[dict exists [my state separations] $alias]} {
+      return -code error "tclpdf: \"$alias\" already names a separation - an\
+          ICC profile cannot reuse it"
+    }
+    set bytes [::tclpdf::io read $path]
+    lassign [my IccInspect $bytes $path] space components
+    dict set known $alias [dict create path [file normalize $path] \
+        bytes $bytes space $space components $components object {}]
+    my state iccProfiles $known
+    return $alias
+  }
+
+  # The worker behind an {icc ...} colour in [ColourUsed]: check, record,
+  # and write the objects once. Everything that can be refused is refused
+  # before the record and before the first object - a rejected colour must
+  # leave neither.
+  method IccColourUsed {parsed what spec} {
+    lassign [lindex $parsed 1] alias values
+    set known [my state iccProfiles]
+    if {![dict exists $known $alias]} {
+      set hint ""
+      if {[llength [dict keys $known]]} {
+        set hint " - known are: [join [dict keys $known] {, }]"
+      }
+      return -code error "tclpdf: no ICC profile named \"$alias\" - register\
+          it with \"icc embed\" first$hint"
+    }
+    set profile [dict get $known $alias]
+    if {[llength $values] != [dict get $profile components]} {
+      return -code error "tclpdf: \"$alias\" is a [dict get $profile space]\
+          profile and takes [dict get $profile components] component[expr\
+          {[dict get $profile components] == 1 ? {} : {s}}], got\
+          [llength $values]: \"$values\""
+    }
+    # ICCBased is PDF 1.3 (Reference 1.7, 4.5.4) - said before anything is
+    # written or recorded.
+    my RequireVersion 1.3 "an ICC based colour"
+    my ColourSpaceUsed ICCBased "icc \"$alias\" in $what"
+    if {[dict get $profile object] eq {}} {
+      set stream [my IccProfileObject [dict get $profile bytes] \
+          [dict get $profile components]]
+      set object [[my writer] add [::tclpdf::pdfObj arr \
+          [list /ICCBased [[my writer] ref $stream]]]]
+      # Under the alias: that is what [operator] writes after "cs", and the
+      # resource dictionary escapes it the same way.
+      my resource ColorSpace $alias [[my writer] ref $object]
+      dict set known $alias object $object
+      my state iccProfiles $known
+    }
+    return $spec
+  }
+
+  # Read an ICC profile header: {GRAY 1}, {RGB 3} or {CMYK 4}, or an error
+  # naming what is wrong. The reader lives in pdfa.tcl because the output
+  # intent needed it first; it is required lazily so that a document that
+  # never touches a profile does not load the PDF/A machinery.
+  method IccInspect {bytes what} {
+    package require tclpdf::pdfa
+    return [::tclpdf::pdfa space $bytes $what]
+  }
+
+  # The stream object of a profile, written ONCE per document however many
+  # roads it arrives by: a registered colour space, a picture's embedded
+  # profile, the PDF/A output intent - pdfa.tcl asks here before writing its
+  # own. Keyed by the bytes, not by a path, because a picture's profile
+  # never had one; on the freak chance of a digest collision the bytes are
+  # compared and a second stream is simply written.
+  method IccProfileObject {bytes components} {
+    set streams [my state iccStreams]
+    set digest "[string length $bytes]:[zlib crc32 $bytes]"
+    if {[dict exists $streams $digest]
+        && [lindex [dict get $streams $digest] 1] eq $bytes} {
+      return [lindex [dict get $streams $digest] 0]
+    }
+    set number [my streamObject [list N $components] $bytes]
+    dict set streams $digest [list $number $bytes]
+    my state iccStreams $streams
+    return $number
+  }
+
+  # Record one use of a colour space: DeviceGray, DeviceRGB, DeviceCMYK or
+  # ICCBased, by the call named in "what", on the current page. Called by
   # [ColourUsed] for every painted colour, by image.tcl for a picture's
   # colour space and by shading.tcl for a gradient's - each site names its
   # own space, so no module reads another's structures.
@@ -347,10 +515,12 @@ oo::define ::tclpdf::document::document {
     return
   }
 
-  # Which device colour spaces the document uses, and where: a dict from
-  # DeviceGray, DeviceRGB, DeviceCMYK to {users {...} more 0|1}, the users
-  # being up to three "what on page N" strings. Empty until something is
-  # painted. What pdfa.tcl holds against the output intent.
+  # Which colour spaces the document uses, and where: a dict from
+  # DeviceGray, DeviceRGB, DeviceCMYK, ICCBased to {users {...} more 0|1},
+  # the users being up to three "what on page N" strings. Empty until
+  # something is painted. What pdfa.tcl holds against the output intent -
+  # the device spaces; ICCBased is in the record as a fact, and stays
+  # unjudged there because a profile-anchored space fits every intent.
   method colourSpacesUsed {} {
     return [my state colourSpaces]
   }
@@ -383,6 +553,16 @@ proc ::tclpdf::color::space {parsed} {
     cmyk {return DeviceCMYK}
     separation {return Separation}
     pattern {return Pattern}
+    icc {
+      # An ICC colour has no family NAME that could stand in a resource or
+      # a shading dictionary - its space is an object, written by
+      # [ColourUsed], which never asks this question. Whoever does ask -
+      # a shading collecting its stops is the one caller - cannot use the
+      # answer, and is told so instead of receiving "/ICCBased" and
+      # writing it as if it were /DeviceRGB.
+      return -code error "tclpdf: an ICC based colour cannot stand here -\
+          gradients and separation alternates take grey, RGB or CMYK"
+    }
   }
   return -code error "tclpdf: unknown colour space \"[lindex $parsed 0]\""
 }
@@ -391,6 +571,9 @@ proc ::tclpdf::color::space {parsed} {
 proc ::tclpdf::color::Numbers {space values} {
   if {$space eq "separation"} {
     return [list [lindex $values 2]]
+  }
+  if {$space eq "icc"} {
+    return [lindex $values 1]
   }
   return $values
 }
@@ -464,4 +647,4 @@ proc ::tclpdf::color::Clamp {value} {
   return $value
 }
 
-package provide tclpdf::color 1.2
+package provide tclpdf::color 1.3

@@ -1,5 +1,5 @@
-C Text\sstate\soptions\schecked\swhere\sthey\sare\swritten,\sOrder-X\swith\sa\sreal\sorder,\sMustang\sin\sthe\sacceptance\srun\n\n-\sEvery\soption\sof\sthe\stext\sstate\sis\srefused\sat\sthe\scall\sthat\swrites\sit:\s-leading\sa\snumber\sabove\szero\sor\sempty\sfor\sthe\sdefault,\s-spacing,\s-wordSpacing\sand\s-rise\sa\snumber\sof\seither\ssign,\s-kerning,\s-ligatures\sand\s-unshaped\sa\sboolean,\sand\san\sunknown\s-color\swhere\sit\sis\swritten\srather\sthan\sat\sthe\snext\spiece\sof\stext\s-\sseven\sof\sthe\stwelve\spassed\sanything\sat\sall\suntil\snow,\sand\s"-leading\s120%"\sreached\sthe\sblock\sarithmetic\sbefore\sit\sbroke\n-\sexamples/assets/xml/order-x-comfort.xml:\sa\scomplete\sCOMFORT\sorder\scarrying\sexactly\sthe\spurchase\sorder\s05.13\sprints\s-\sthe\ssame\snumbers,\sarticles,\squantities\sand\stotal,\sthe\stax\snote\sas\san\sIncludedNote;\s05.13\sloads\sit\sthe\sway\s05.01\sand\s05.02\sload\stheirs,\sinstead\sof\sbuilding\sa\sbare\sBT-24\sshell\n-\stools/check.sh\sruns\sMustang\sover\severy\sdocument\swhose\smetadata\snames\san\sattached\sinvoice\sor\sorder\s-\sthe\sZUGFeRD\slayer\sno\svalidator\sin\sthe\srun\scovered\sso\sfar;\sa\smissing\sjar\sor\sjava\sskips,\sand\sthe\sreport's\sfirst\serror\sis\squoted\son\sfailure.\sBefore\sthis\sthe\sOrder-X\sexample\swas\srefused\sby\sMustang\sas\san\sincomplete\sdocument\swhile\sits\sPDF\sside\swas\salready\scorrect\n-\s05.14\sspeaks\sSpanish,\sthe\sway\s05.05\sspeaks\sItalian\n-\sManual:\sthe\schecked\stext\soptions,\sand\sthe\sentries\sfor\sdestination,\sxmpSchema\sand\sxmpRaw,\swhich\swere\spublic\sand\sundocumented\n-\sTests:\s1517\sunder\s8.6\sand\s9.0,\smake\scheck\s35\spassed\n-\sKNOWN\sa\sraw\sxmpRaw\scontribution\swithout\sa\sconformance\sclaim\snever\sreaches\sthe\sfile\sand\ssays\snothing;\sdestination\sstill\stakes\sfour\spositional\sarguments
-D 2026-08-18T11:17:39.475
+C ICCBased\sas\sa\sdrawing\sand\san\simage\scolour,\sand\sa\sraw\sXMP\scontribution\sthat\sreaches\sthe\sfile\n\n-\sicc\sembed\snames\sa\sprofile\sand\s{icc\salias\svalues}\spaints\swith\sit\s-\sfill,\sstroke\sand\stext;\sthe\sspace\sis\swritten\sonce\sper\sprofile\sand\sa\sprofile\sthat\sis\salso\sthe\soutput\sintent\sstands\sin\sthe\sfile\sexactly\sonce,\soutput\sintent\sand\scolour\sspace\spointing\sat\sthe\ssame\sobject\n-\sAn\simage\scarries\sthe\sprofile\sits\sfile\snames:\sJPEG\sAPP2\sassembled\sby\ssequence\snumber\srather\sthan\sreading\sorder,\sPNG\siCCP,\srefused\swhen\sthe\scomponent\scount\sof\sthe\sprofile\sand\sof\sthe\ssamples\sdisagree;\simage\sembed\s-icc\s0\sdeclines\sit,\simage\sinfo\sanswers\sthe\sprofile\ssize,\sand\sthe\ssoft\smask\sstays\sDeviceGray\n-\sThe\scolour\sguard\sjudges\sdevice\sspaces\sonly,\sas\sit\sdid:\sthe\ssame\sblue\swrites\sunder\sa\sCMYK\soutput\sintent\sas\sICCBased\swhere\sDeviceRGB\sis\srefused,\sveraPDF\sreporting\sno\sfailed\scheck\seither\sway\n-\sxmpRaw\ssubscribes\sthe\spacket\sbuild\sthe\sway\sxmpSchema\sdoes\s-\sa\scontribution\son\sa\sdocument\sthat\sclaims\sno\sconformance\sused\sto\sbe\sdropped\swithout\sa\sword;\sa\sproperty\sanswered\sbut\snot\sdeclared\snow\sfails\swith\sa\smessage\snaming\sthe\sschema\sand\sthe\sdeclared\snames,\sinstead\sof\sa\sraw\sTcl\serror\n-\sModule\sversions\s+0.1:\scolor,\sdocument,\simage,\simageJpeg,\simagePng,\slink,\soutline,\spdfa,\sxmp\n-\sManual,\sboth\splugin\spages\sand\sexample\s01.02\sfollow;\stests:\s1548\sunder\s8.6\sand\s9.0,\smake\scheck\s35\spassed\n-\sKNOWN\sICCBased\sis\srefused\sin\sa\sshading\sand\sas\sa\sseparation\salternate,\sand\sthere\sis\sno\sicc\sembed\s-data
+D 2026-08-18T13:03:32.366
 F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -8,16 +8,16 @@ F afmData.tcl 208153e22bcd2bfe508d52ca81bae87137658497e266c6aefccfa3c1bd5f6f49
 F attach.tcl 300fc9b0aab1b63d44d0ffeb70360244f34cf000a53d7381bb46805d9769ee58
 F bidi.tcl b74b8e1449d7058402cab1aca8edab6b7f4a6d79dd16edecc4a103e84c3bfc3b
 F bidiData.tcl fb4b333f0221b0af49e0bf47d9c05941e33d3291236241715fced64e574b4099
-F color.tcl 8fb561f98f9a3cca6c579542c88bea4af2aa725adc5898d23de3b7deb9bdd941
+F color.tcl 1d0edb185fc19684e40082bf8c6fbd25e272889e62ab1e3b2e0ad1bfa5d94e44
 F configure 9f2235df3002bc045ada319e051f8229802007f35eeef37676f3e23b2d4e2c5c x
 F configure.ac 77924e93d2a1dfee1a49213d60c73bc0fbd113cad074af4b0afe2610031e49a4
-F doc/PLUGINS.md 5d5e45709f4f88fab0208ff16d98ef0d060f49ee57b60f5befd1404976d19144
+F doc/PLUGINS.md edc439981eda773751581f6509f361ef8a0e67f3e3779c9633d84ca82034b37c
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md fb8e86905ba1e755cce7dcc01b462f640a8045b3d0fb82a88b44b8f001436964
-F document.tcl c11081990b1e92190bafa295dbcd6dffc1730914254bab50727cf52a35483911
+F doc/tclpdf.md 3ad82d8cf85df93938d557b0531be579dee60887f30af2ecec6bf8bd421b0d2f
+F document.tcl 09e72075524fd27a1080f58a4348505e783dd50ca518b77527ac6fa36e7b566d
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
 F examples/01.01-shapes.tcl d5ad63be2c5a0627461cbfdfc5b9331c76bb9058faed25d02365e61db84187ff
-F examples/01.02-colour.tcl 1927550d3588817a4e56edd8927f82eeae0135aaa5475a644d280cfb83947e4b
+F examples/01.02-colour.tcl ad287f5282ac29ed1b7a856a71912c9c238dcde421eb24114751629575ac118f
 F examples/01.03-text-layout.tcl 2d583d537de2bd7e0237477353868b7e648bf585c6a315f978781eb934c3dfe8
 F examples/01.04-attachments.tcl abbce3654c9d7a9ab8957f8a5b150c4fa03536d435f402104f1080caa98eb405
 F examples/01.05-forms.tcl 5a2e35565825ed4fb7479b49f8bc21d57f4bd057520ea69cf8b747954bfbfbe8
@@ -238,9 +238,9 @@ F icc/LICENSE-ZLIB-bICC 334f239290b4b687eaf5bbccefa573eefe68e8e48878d71731f0487f
 F icc/README.md 9adf991171aea4835c64d9322e31192bc23357586183205e7ebeddee5e6a9509
 F icc/sRGB.icc af18780bd3a0b75630c372842563b9ae9f883c9ef0476c20f39a2aa14e60c3ef
 F icc/sRGB2014.icc 9e1c2496ceb618f80229e57b60a03f18615cbefe3e772b20e6ff72568fcbd87a
-F image.tcl 3426a26036076ca72ccb0a3c5ca4e06d8774dfa51503c98051e077299b32f186
-F imageJpeg.tcl 79251ddb3ae33e386230fcc809a622c6fc30a6a8292c07917aee27741412cce4
-F imagePng.tcl 9cc0110c0168994bfb6948d4f206d6f18b6e86ba6cfb1986882c8524d1772326
+F image.tcl 88c87adfb23ebcc7d47da95d4b5f3a70c93921be88a7ae8fac9a2941c9d96e83
+F imageJpeg.tcl 319a05dd9b56f1bc228187ebff08a5d5d68396b61b8d7e1e5e6dca30153a11fc
+F imagePng.tcl ccf828bf31beecda309ca90d815479287431034cb88d125710073620bd64b73f
 F imagePngAlpha.tcl cbfafce895654236aba0d6278759b17be0a30943bdb442e332130a5e984f8a59
 F io.tcl 3283fb3b0a0c86a656e2e7e2211a21f5feb188eba8ebb968b125e1099abc3c59
 F joining.tcl dc3b951a953ca221e6ca9098e5c1fa9f98a0bde39414b1bfc3fb5887326c7371
@@ -250,18 +250,18 @@ F kernGpos.tcl 1e73198191c615973ce8aef6ed2b2070dd73910c398cc9341092673a74c717e7
 F leader.tcl 89fb7e3197044fea6f2714f877f8ba9b6d06802e7560d712950277349ff491c5
 F license.terms 8a65b74c3a7031d28d75199c16aff80b7d7035498bd9ff3afcecde3160ef6795
 F liga.tcl 5306e7e01dcbe04108ac1ece54454b579c2597dac0c7d63375c349486471b253
-F link.tcl 8a0b224a1228229ea3ec9a893343b50beffd7a9c01ee06518d00ca06609270f3
+F link.tcl 8cc2e64f7050421a9ffeb9bee99b7152f7dafb68279b25a411910ba57896b2de
 F option.tcl c1cda8badb434e19fa71513a35bd8c3365deb96906c378d30ccc773a6f17b35f
 F otLayout.tcl 6bbfac23a7945356774ddb19ab4a4cf733feb8564dbf1654c7320a5fdc58a9da
-F outline.tcl be45c1b8690c26f7465346a76680bc80054521af750c055cf3b7fb339005aaf2
+F outline.tcl ebfce1f93e7de4dc20ec9d92980cefe8c940a01c5ed3659cae079e7df33f1ffc
 F output.tcl 2f9c17b4a1249028d172b83388bce6b99c0d7a0dd8e91004cff898e92893912a
 F page.tcl f803d4cc1c4ecc164e6b8feeb0a40677e30e9a27bfdfaa2b54d24b5c7c46913c
 F pageLabel.tcl 5ac0a04779de476f995e096c32c9329b9dc9a5e51a2e9f163f39f749cfc50d14
 F pageNumber.tcl 35986b98f21323e6e0197d43d31f874dbe7fd274e7c55cd91706825b433eddab
 F pattern.tcl 77c0e0467a4da082e09f9d8162b876d4eb259246263344951aa65ef6da0f3557
 F pdfObj.tcl ae3e9a23eaeaa1616732ecfbf187f9320e89006e6d316d0e65e8a0271d28c56e
-F pdfa.tcl abe27e6edda13466f877d79376787f8d4d7fca2ccd7feeca0089627ea47b0c2f
-F pkgIndex.tcl.in 5d55dc36530ff88f2aa2190ad170a9a958d2713ba1f5a7245f34b9f3b5215387
+F pdfa.tcl 6f1394d3552aaa273aa8ffe7939dbebfb4f6cfcc3e8b149252b4fddc7937835c
+F pkgIndex.tcl.in e91e44188d864cbcd384b526dde82f140a2b0b799873b35bab09b47559b5ff08
 F sfnt.tcl 73c92dc8ccc361ad4f69bd598a2515fdbd253e8fb1562a8a6b07179e24267daf
 F shading.tcl 1e8ec0839b60b8763338127e6fd22a0ee803ea12cf723db9f7d39cee6a0daa0f
 F shape.tcl bd5f96abe2c70437df77f50e74c8c282ae44d4dd7e903d53c91e4d3feecc7636
@@ -288,8 +288,8 @@ F tests/all.tcl 726fe5f81760826c7fa4ba4a8c59014a7465c98d57b9c64e2419eeff94b9b710
 F tests/attach.test fc2ffc71531b9dde2b550a888e94407a0888c47c9314eaf0289739850b5af250
 F tests/barcode.test 6864fa9e33ce7259155d0ed3ac6f4a30e248627987ff6338a771c5215af4c48f
 F tests/bidi.test ff69564a49dab8ba6cfc157a07e486783b2114686a54bfdd8cc55cbb0371e7a3
-F tests/color.test 6e96d87205eed751c8ea6a6d1dc1b6d895f38a28e53f3ef5d4ce2e18317b716b
-F tests/document.test 2b5a5ff9ce43cbc160e4ef6877766781e6f731db40a88d39f55114ca1a38ce89
+F tests/color.test 671d62b5daa41319c993cdab17cb3188ea94a5163b28df53ea99460ae92051d8
+F tests/document.test 8c991205d155e2cabb3aae25e3aa3c7372836ccf68063b4db4861ae91573dae8
 F tests/event.test 4f2421ec504f22faeceab45e576fe65165a87be7753503e98fac6800ce3384d3
 F tests/filter.test 73438401c18aaa25751a6e636a82c4cc9c67c158e6f787deeb4795eba7df3568
 F tests/font.test c9a23bcc0a3f173fc31e361a1ebeba54340415d46fcd16efa951ca932fec8ccc
@@ -300,7 +300,7 @@ F tests/glyfOutline.test 68e1acd165e1ba2e2e5f3e8d731919054a52455069e116311a98cce
 F tests/graphics.test 290de8e9da3c1f34ecc4bd600322ffa01a92a4b65f6ddb6d2316ccfbd6b0436c
 F tests/gsubApply.test 5a1d9cba1dfeff3ad2b4d5fbe6d021c440d3828c304ccf6760c0bae42d74de65
 F tests/helper.tcl c1b8ab807afe816b8c2a7092ddcadbf6ecf0b4cea905fd23e5beb2ed5a031bdc
-F tests/image.test f3a251b355f359fe7eb3e50798b475d4075e848d61ede9b90e4ce1d5de357b61
+F tests/image.test a30333623d36b96a3eb534b45dd91186be693a82b01e54eb694204d313d73394
 F tests/joining.test 9ba3834dcf0dce5d3c025084ed9d88df24b00e4f85e59bca4c7cadb1ba84f276
 F tests/kern.test 038fab018040d486f28b65f4c0b86bf544793c81c455fc7b173e93484c789000
 F tests/leader.test f2612b023ef21002f74d863dd96eb8f674206441b6594fc23c8de57c5e2a1f6e
@@ -325,7 +325,7 @@ F tests/version.test b98a03f3c4bc8ca044954f26774dc753620358c9a50c0c66044a766adad
 F tests/viewerPreferences.test d252ac2c6879975ea3a5a39cc13c4e12d64a46d84ae632abfaa3f3645cd509d2
 F tests/writer.test b1dd0798062381811235ed248982f587ef571336104532d962d88c7d76dfee88
 F tests/xObject.test d08532f1d140d908ec4e6bd3093225d7dcbb75a12ca37a8d8bb7985c8af00833
-F tests/xmp.test cc5a7f091a72e95c60149b394ef88be64d30aa857761d5f1453190aa53465bed
+F tests/xmp.test 1ab4d55bacd1b3eb6755557b8836db80579ad89568150c3211ba7958234f8718
 F tests/zugferd.test 9203bb0426aedcb953360c544b24729b1a2f74cb4d70cca1e8f57e1b2a980476
 F text.tcl 1d7a36d7002bf49926d1c74e6711efbdc82e82be36d2c483f6c8e077646a6ea7
 F textAvoid.tcl 9ddc54f52332482ae2478a85cd9350a26aa6fe8c7700357083cce4ccdedce833
@@ -353,10 +353,10 @@ F viewerPreferences.tcl 12e2e24b2c91b0765cad893b2a22f0913f4925ab6239ac90be08f5fd
 F writer.tcl b877f182c8ff1e25380235d54e71015891f3fd3e7a4f2ccc4e62f2c92bcc0196
 F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
-F xmp.tcl 838a0dbd3a35913ac407d88e7134414478d53ef9c67b5dca1714144277316bb0
+F xmp.tcl 71cc72e6bdbaee79a2cbbd16e5c0f4486ae3ad78553c34fc7d297e7359e31186
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 3f10b00025230d014aadccf4e293a6822b0d9c03eff0fc6e72881027c4181add
-R 87658c45a8d324d8d09155624f9ad1b0
+P 1c7007d750ca731c28384b24ce51144b78371fa373cc576c0e3409d637548d87
+R 94e95aec1d6e319ffc02db804b27e4c8
 U alex
-Z d50c39291a9d0ec4142e49ccdcf4754d
+Z dc221a183b9f7b2d0eb8fc671bd84241
 # Remove this line to create a well-formed Fossil manifest.

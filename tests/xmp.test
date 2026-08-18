@@ -626,4 +626,101 @@ test xmp-8.6 {Trapped is a name in the dictionary, takes only its three values, 
       [regexp {Trapped} $packet]
 } -result {{1 1 1} 1 0 0}
 
+# --- a raw contribution alone -----------------------------------------------
+
+test xmp-9.1 {a raw contribution alone builds the packet} -body {
+  # It did not, once: the build hook was subscribed by [xmpSchema] only, and
+  # a document whose only contribution was a raw one wrote no /Metadata at
+  # all - silently, with [metadata] answering an empty string.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "x" -at {20 20}
+  $doc xmpRaw {<rdf:Description rdf:about="" xmlns:my="urn:x-my:1#"><my:tag>hello</my:tag></rdf:Description>}
+  set path [::tclpdfTest::scratch xmp-raw-alone.pdf]
+  $doc write $path
+  set built [$doc metadata]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Well formed by measurement, not by trust: parse what was built. A parse
+  # failure errors the test.
+  regexp {<x:xmpmeta.*</x:xmpmeta>} $built packet
+  set document [dom parse $packet]
+  $document delete
+  list [regexp {/Type /Metadata} $bytes] [regexp {<my:tag>hello</my:tag>} $bytes] \
+      [expr {[string length $built] > 0}]
+} -result {1 1 1}
+
+test xmp-9.2 {raw and schema subscribe the build once, in either order} -body {
+  # Both ways into the packet share one catalog hook: whichever is called
+  # first subscribes it and the second must not add another - subscribed
+  # twice, the packet would be rebuilt twice on every write.
+  set fragment {<rdf:Description rdf:about="" xmlns:my="urn:x-my:1#"><my:tag>hello</my:tag></rdf:Description>}
+  set result {}
+  foreach order {rawFirst schemaFirst} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    oo::objdefine $doc method ProbeXmp {} {return {{text part 3}}}
+    if {$order eq "rawFirst"} {
+      $doc xmpRaw $fragment
+      $doc xmpSchema probe http://example.org/probe/ {part} ProbeXmp
+    } else {
+      $doc xmpSchema probe http://example.org/probe/ {part} ProbeXmp
+      $doc xmpRaw $fragment
+    }
+    lappend result [llength [$doc subscribers catalog]]
+    $doc destroy
+  }
+  set result
+} -result {1 1}
+
+test xmp-9.3 {a claim, a schema and a raw contribution keep their packet order} -constraints haveFace -body {
+  # The order of the packet before the raw way triggered the build too, held
+  # so it stays: the claim's description first (registration order), the
+  # probe schema second, the dc/xmp/pdf trio after them, the raw contribution
+  # last - and one packet, not two.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  oo::objdefine $doc method ProbeXmp {} {return {{text part 3}}}
+  $doc xmpSchema probe http://example.org/probe/ {part} ProbeXmp
+  $doc xmpRaw {<rdf:Description rdf:about="" xmlns:my="urn:x-my:1#"><my:tag>hello</my:tag></rdf:Description>}
+  set path [::tclpdfTest::scratch xmp-order.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set claim [string first "pdfaid:part" $bytes]
+  set schema [string first "probe:part" $bytes]
+  set shared [string first "xmp:CreateDate" $bytes]
+  set raw [string first "my:tag" $bytes]
+  list [regexp -all {<\?xpacket begin} $bytes] \
+      [expr {$claim > 0 && $claim < $schema && $schema < $shared && $shared < $raw}]
+} -result {1 1}
+
+# --- an undeclared tag ------------------------------------------------------
+
+test xmp-10.1 {a tag not declared in xmpSchema fails the write naming schema and tags} -body {
+  # It used to fail as tdom's raw {invalid command name "Tag_myorg:undeclared"},
+  # with no word about which schema went wrong or what it had declared.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  oo::objdefine $doc method ProbeXmp {} {return {{text undeclared 1}}}
+  $doc xmpSchema myorg http://example.org/my/ {alpha beta} ProbeXmp
+  set code [catch {$doc write [::tclpdfTest::scratch xmp-undeclared.pdf]} err]
+  $doc destroy
+  list $code [string equal {tclpdf: unknown tag "undeclared" for XMP schema "myorg" - declared are: alpha, beta} $err]
+} -result {1 1}
+
+test xmp-10.2 {an undeclared tag inside a bag fails the same way} -body {
+  # A bag's resources carry tags of the same schema, and they are held to
+  # the same declaration.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  oo::objdefine $doc method ProbeXmp {} {return {{bag alpha {{beta b gamma c}}}}}
+  $doc xmpSchema myorg http://example.org/my/ {alpha beta} ProbeXmp
+  set code [catch {$doc write [::tclpdfTest::scratch xmp-undeclared-bag.pdf]} err]
+  $doc destroy
+  list $code [string match {tclpdf: unknown tag "gamma" for XMP schema "myorg" - declared are: *} $err]
+} -result {1 1}
+
 cleanupTests

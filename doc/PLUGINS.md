@@ -39,7 +39,11 @@ These methods are the supported surface for extensions:
 | `$doc resource $category ?$name? ?$value?` | register a resource: Font, XObject, ExtGState, ColorSpace, Pattern or Shading |
 | `$doc catalogEntry $key ?$value?` | set, read or clear a catalog key — how /AF, /Names and /OutputIntents get in without the core knowing them |
 | `$doc state $key ?$value?` | per-document state that does not go into the PDF |
+| `$doc xmpSchema $prefix $uri $tags $method` | declare an XMP schema of your own: *method*, a document method added with `oo::define`, answers its properties each time the packet is built |
+| `$doc xmpRaw $xml` | append ready-made `rdf:Description` elements to the XMP packet |
 | `$doc writer` | the low-level writer object, for object numbers and bodies |
+
+The table is not the whole promise: any method the manual documents is supported API in the same sense, and `xmpSchema` and `xmpRaw` are described in full in the manual's Metadata section. Both live in the `tclpdf::xmp` module, which every conformance claim loads — without one, `package require tclpdf::xmp` first. One point from there bears repeating: the packet is built once a schema is registered or a raw contribution is added — `xmpRaw` subscribes the build just as `xmpSchema` does, so a contribution on a document that claims nothing reaches the file all the same.
 
 A worked example — a subscriber that stores a private data stream and points a catalog key at it. Readers ignore catalog keys they do not know, so the file stays valid everywhere; the pattern is the same one the ZUGFeRD module uses for keys that matter.
 
@@ -94,4 +98,4 @@ A worked example of all of this together — the event bus, a method added with 
 
 ## What not to rely on
 
-Methods whose names start with an uppercase letter are private, and everything not listed above is internal: it may change between releases without notice. If an extension needs something the surface above does not offer, that is worth a report — the surface is meant to grow from real cases.
+Methods whose names start with an uppercase letter are private, and everything neither in the table above nor documented in the manual is internal: it may change between releases without notice. If an extension needs something the surface above does not offer, that is worth a report — the surface is meant to grow from real cases.

@@ -45,6 +45,10 @@ package require tclpdf::io 1.0-
 package require tclpdf::filter 1.0-
 package require tclpdf::xmp 1.0-
 package require tclpdf::document 1.0-
+# For [IccProfileObject]: the output intent's profile stream is the same
+# object an ICC based colour space points at, so both go through the one
+# registry in color.tcl - a profile stands in the document once.
+package require tclpdf::color 1.0-
 
 namespace eval ::tclpdf::pdfa {
   namespace export {[a-z]*}
@@ -264,10 +268,12 @@ oo::define ::tclpdf::document::document {
   method PdfaWrite {} {
     set current [my state pdfa]
     lassign [my PdfaProfile] bytes space components
-    # Both numbers survive rebuilds - PdfaWrite runs on every write, and a
-    # fresh pair per run would embed the ICC profile anew each time.
-    set number [my streamObject [list N $components] $bytes \
-        [my reservation pdfa.icc]]
+    # Through the profile registry in color.tcl, which writes each distinct
+    # profile ONCE and remembers its number: a rerun of PdfaWrite finds the
+    # same object again (the idempotence the reservation used to provide),
+    # and a document that also paints in this profile - [icc embed] with the
+    # same file - shares the stream instead of carrying it twice.
+    set number [my IccProfileObject $bytes $components]
     # The condition identifier names the profile, and the profile knows its
     # own name: the desc tag. It used to be a fixed "sRGB IEC61966-2.1"
     # whatever file was passed, so a GRAY or CMYK intent went out labelled as
@@ -343,6 +349,10 @@ oo::define ::tclpdf::document::document {
   # that paints; judged here. All offending spaces in one message, like the
   # fonts, and each with the calls that used it - a refusal that says "a
   # colour somewhere" sends the caller reading every line of the script.
+  # ICCBased stands in the same record and is deliberately not judged: it
+  # carries its own profile, so it fits under every intent - measured with
+  # veraPDF, an ICC sRGB fill under the CMYK intent passes 3B where the same
+  # colour as DeviceRGB fails 6.2.4.3.
   #
   # The alternative would be to write /DefaultRGB and /DefaultCMYK colour
   # space resources, which the clause also admits. That would let a caller
@@ -441,9 +451,11 @@ proc ::tclpdf::pdfa::space {bytes profile} {
   set space [string trimright [string range $bytes 16 19]]
   set spaces {GRAY 1 RGB 3 CMYK 4}
   if {![dict exists $spaces $space]} {
+    # Worded for every caller alike - the output intent, [icc embed], a
+    # picture's embedded profile all read through here.
     return -code error "tclpdf: the ICC profile \"$profile\" describes\
-        colour space \"$space\" - the output intent supports GRAY, RGB and\
-        CMYK"
+        colour space \"$space\" - a device space profile is needed: GRAY,\
+        RGB and CMYK"
   }
   return [list $space [dict get $spaces $space]]
 }
@@ -510,4 +522,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.6
+package provide tclpdf::pdfa 1.7
