@@ -587,6 +587,74 @@ test text-state-9.4 {so is a stretch of zero or less} -body {
       [string match {*not "-50"*} $call] $fine
 } -result {{1 1} 1 1 0}
 
+test text-state-9.5 {a leading of zero or less, or one that is no number, is refused} -body {
+  # "-leading 120%" used to be taken without a word: a single line carried
+  # it along unread, and a paragraph blew up on it with a raw "can't use
+  # non-numeric string" from the block arithmetic. Refused where it is
+  # written - in [font] for the state and per call - like -size and
+  # -stretch; the empty string stays, it stands for the default of 1.2
+  # times the size.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc font -leading 120%} state] \
+      [catch {$doc text "x" -at {10 10} -leading 0} call] \
+      [catch {$doc text "a b c" -at {10 10} -width 20 -leading -5} block]]
+  set fine [list [catch {$doc font -leading {}}] \
+      [catch {$doc text "x" -at {10 10} -leading 14.5}]]
+  $doc destroy
+  list $codes [string match {*-leading is a line spacing in points above\
+      zero*not "120%"*} $state] [string match {*not "0"*} $call] \
+      [string match {*not "-5"*} $block] $fine
+} -result {{1 1 1} 1 1 1 {0 0}}
+
+test text-state-9.6 {spacing, word spacing and rise must be numbers, of any sign} -body {
+  # "font -spacing foo" was stored in silence and the raw Tcl error came
+  # from the NEXT text call, which named nothing the caller had written.
+  # Only the number is demanded: negative spacing tightens, a negative rise
+  # is a subscript, so the sign stays free.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc font -spacing foo} spacing] \
+      [catch {$doc text "x" -at {10 10} -wordSpacing foo} word] \
+      [catch {$doc font -rise foo} rise]]
+  set fine [list [catch {$doc text "x" -at {10 10} -spacing -0.5}] \
+      [catch {$doc text "x" -at {10 10} -wordSpacing -1}] \
+      [catch {$doc text "x" -at {10 10} -rise -2}]]
+  $doc destroy
+  list $codes [string match {*-spacing takes a number of points*not "foo"*} $spacing] \
+      [string match {*-wordSpacing takes a number*} $word] \
+      [string match {*-rise takes a number*} $rise] $fine
+} -result {{1 1 1} 1 1 1 {0 0 0}}
+
+test text-state-9.7 {kerning, ligatures and unshaped take a boolean} -body {
+  # Any string at all used to pass - the standard-font road never reads the
+  # three, so "-kerning foo" did nothing and said nothing.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc font -kerning foo} kerning] \
+      [catch {$doc text "x" -at {10 10} -ligatures 2} ligatures] \
+      [catch {$doc font -unshaped -5} unshaped]]
+  set fine [list [catch {$doc font -kerning 0}] \
+      [catch {$doc text "x" -at {10 10} -ligatures true -unshaped no}]]
+  $doc destroy
+  list $codes [string match {*-kerning takes a boolean, not "foo"*} $kerning] \
+      [string match {*-ligatures takes a boolean, not "2"*} $ligatures] \
+      [string match {*-unshaped takes a boolean, not "-5"*} $unshaped] $fine
+} -result {{1 1 1} 1 1 1 {0 0}}
+
+test text-state-9.8 {a colour the parser refuses is refused at the call that wrote it} -body {
+  # "font -color foo" was stored without a word and the parser's message
+  # came from the next text call - three calls later, naming nothing the
+  # caller had written there.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set state [catch {$doc font -color foo} message]
+  set fine [list [catch {$doc font -color {rgb 1 0 0}}] \
+      [catch {$doc text "x" -at {10 10} -color black}]]
+  $doc destroy
+  list $state [string match {*unknown colour "foo"*} $message] $fine
+} -result {1 1 {0 0}}
+
 test text-11.1 {a string with line breaks is measured by its widest line} -body {
   # Regression, twice over. Measuring such a string as one line used to ADD
   # the lines together - a two-line table cell then asked for a column wide

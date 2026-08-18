@@ -1,5 +1,5 @@
-C Order-X,\sXRECHNUNG\sand\sSource\son\sthe\soption\sround\sof\s05.02\n\n-\sThe\sthrowaway\sdocuments\snow\scover\sthe\ssixth\sconformance\slevel\sand\sthe\sthird\srelationship\sthe\sstandards\sallow,\sso\severy\svalue\sthe\szugferd\sentry\snames\sis\sshown\ssomewhere
-D 2026-08-18T09:58:48.087
+C Text\sstate\soptions\schecked\swhere\sthey\sare\swritten,\sOrder-X\swith\sa\sreal\sorder,\sMustang\sin\sthe\sacceptance\srun\n\n-\sEvery\soption\sof\sthe\stext\sstate\sis\srefused\sat\sthe\scall\sthat\swrites\sit:\s-leading\sa\snumber\sabove\szero\sor\sempty\sfor\sthe\sdefault,\s-spacing,\s-wordSpacing\sand\s-rise\sa\snumber\sof\seither\ssign,\s-kerning,\s-ligatures\sand\s-unshaped\sa\sboolean,\sand\san\sunknown\s-color\swhere\sit\sis\swritten\srather\sthan\sat\sthe\snext\spiece\sof\stext\s-\sseven\sof\sthe\stwelve\spassed\sanything\sat\sall\suntil\snow,\sand\s"-leading\s120%"\sreached\sthe\sblock\sarithmetic\sbefore\sit\sbroke\n-\sexamples/assets/xml/order-x-comfort.xml:\sa\scomplete\sCOMFORT\sorder\scarrying\sexactly\sthe\spurchase\sorder\s05.13\sprints\s-\sthe\ssame\snumbers,\sarticles,\squantities\sand\stotal,\sthe\stax\snote\sas\san\sIncludedNote;\s05.13\sloads\sit\sthe\sway\s05.01\sand\s05.02\sload\stheirs,\sinstead\sof\sbuilding\sa\sbare\sBT-24\sshell\n-\stools/check.sh\sruns\sMustang\sover\severy\sdocument\swhose\smetadata\snames\san\sattached\sinvoice\sor\sorder\s-\sthe\sZUGFeRD\slayer\sno\svalidator\sin\sthe\srun\scovered\sso\sfar;\sa\smissing\sjar\sor\sjava\sskips,\sand\sthe\sreport's\sfirst\serror\sis\squoted\son\sfailure.\sBefore\sthis\sthe\sOrder-X\sexample\swas\srefused\sby\sMustang\sas\san\sincomplete\sdocument\swhile\sits\sPDF\sside\swas\salready\scorrect\n-\s05.14\sspeaks\sSpanish,\sthe\sway\s05.05\sspeaks\sItalian\n-\sManual:\sthe\schecked\stext\soptions,\sand\sthe\sentries\sfor\sdestination,\sxmpSchema\sand\sxmpRaw,\swhich\swere\spublic\sand\sundocumented\n-\sTests:\s1517\sunder\s8.6\sand\s9.0,\smake\scheck\s35\spassed\n-\sKNOWN\sa\sraw\sxmpRaw\scontribution\swithout\sa\sconformance\sclaim\snever\sreaches\sthe\sfile\sand\ssays\snothing;\sdestination\sstill\stakes\sfour\spositional\sarguments
+D 2026-08-18T11:17:39.475
 F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -13,7 +13,7 @@ F configure 9f2235df3002bc045ada319e051f8229802007f35eeef37676f3e23b2d4e2c5c x
 F configure.ac 77924e93d2a1dfee1a49213d60c73bc0fbd113cad074af4b0afe2610031e49a4
 F doc/PLUGINS.md 5d5e45709f4f88fab0208ff16d98ef0d060f49ee57b60f5befd1404976d19144
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md 98b7b782b8c3d4cc4dc0f6337bfeeb1a527e988fdda3d6de445b857e81e64f4c
+F doc/tclpdf.md fb8e86905ba1e755cce7dcc01b462f640a8045b3d0fb82a88b44b8f001436964
 F document.tcl c11081990b1e92190bafa295dbcd6dffc1730914254bab50727cf52a35483911
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
 F examples/01.01-shapes.tcl d5ad63be2c5a0627461cbfdfc5b9331c76bb9058faed25d02365e61db84187ff
@@ -57,8 +57,8 @@ F examples/05.09-pdfa-cmyk.tcl 1bdf79c2d668010584fc66132b7ae93b7dddc6f006e302db4
 F examples/05.10-pdfa-grey.tcl 1f82160dc92cb1deb5d8080c8013a3741d9289ef2462aa84f62170ecb13a5ec0
 F examples/05.11-pdfa-srgb-openicc.tcl 394017dc08ff1c9c06025e7b1cdc6229250b9e474d2406885caf713fc5717269
 F examples/05.12-pdfa-srgb2014.tcl e1c32b9fe67065ae3fc57dd6b8160c86649badc75c892be371e435466104f289
-F examples/05.13-order-x.tcl adbe059b8c97e21cc0cd37aa024c996005f357def224a5a8c239bf94c939e528
-F examples/05.14-weakly-structured.tcl 579cfb4acede175d90d6760fc87928e107ed02bd70c36162798a017bd68f63c8
+F examples/05.13-order-x.tcl 55ba6fffe22ac21d03c592d249ed993153886cf14268b0c97b72a6611033441e
+F examples/05.14-weakly-structured.tcl 7efdd0d81e86fa209e98a19c7a6f197522c6ebd096c6673a2b1c9f8d0bb579f8
 F examples/assets/README.md 8c24ab538756c31beccac0b880b26103f322328f04a14eb15b8d3954d1b001e8
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
@@ -219,6 +219,7 @@ F examples/assets/images/svg-text.svg 92175fcfa632e0f01baa685a0e8b5264abb900dd43
 F examples/assets/images/svg-transform.svg 8badec53a879772523cee39c44331aff4561af9cfa1e585fcb4a5bf552eaaaa1
 F examples/assets/images/svg-viewbox-origin.svg 53c7d00a34d1032d40cd54c07b29808b83323035ee77e9450af22580bfac6d97
 F examples/assets/images/svg-viewbox.svg 3c34dbf75b955a04e5b177cb235a010d7393dfd087d95696e87465118635df45
+F examples/assets/xml/order-x-comfort.xml 35f15c337414112a8e33a3e768de03c7b5763eba13437213d49c74c359c7d5ef
 F examples/assets/xml/zugferd-en16931.xml 53e2b6f8ac1759ab26e77f42e7d4262cf3ee333afee47581d2248efebc1aae40
 F examples/assets/xml/zugferd-minimum.xml c8acc70758fdbbcee9f3446b8ca4df9f2561242a46a6cd3cab62ee7f26466476
 F examples/common.tcl c7f222d8a060ad18a394f59a4373bb45d9763da2719ffe39c40dd345ec9fa85e
@@ -314,7 +315,7 @@ F tests/shaping.test 208a519b59fbffbdb8e9eebb5259aa89e8a11c1e581eb6927826fba72d7
 F tests/structure.test d772f2a340b8f5903759f4ffef9049da4f55b0956c6651e6d3de2dc3b22cc9f0
 F tests/svg.test 065b57c4c33ca1b637994ff6953332b3ce00db9b6a0bfe06f3faad3459243921
 F tests/table.test 3429da4e19188eef8feaef140d999f7b6519d5951c5b53b0db9f5a987bac80c3
-F tests/text.test 0bf74a5f4a5f14a95d189bdc545648d2ff838f1d6962880a981a8aea8e93c787
+F tests/text.test 4e1713d51358461b347309fec40bbc55f3f21da538082674006886fabb5f7156
 F tests/textFlow.test 01aa0ac995ab02141a7a5c49bafc357c3dba0c3c8ffdada761d3dc7514a5bf48
 F tests/textPath.test 8e71ffffef331f2632d3b2ef470c2a10a5b4d93e8781e1d128f3211ad99c3e3e
 F tests/type1.test 604d2a99477abb405175e3318bfecafb2a258c8739156aad232296880980c2e8
@@ -326,14 +327,14 @@ F tests/writer.test b1dd0798062381811235ed248982f587ef571336104532d962d88c7d76df
 F tests/xObject.test d08532f1d140d908ec4e6bd3093225d7dcbb75a12ca37a8d8bb7985c8af00833
 F tests/xmp.test cc5a7f091a72e95c60149b394ef88be64d30aa857761d5f1453190aa53465bed
 F tests/zugferd.test 9203bb0426aedcb953360c544b24729b1a2f74cb4d70cca1e8f57e1b2a980476
-F text.tcl 2ec18f2c9211a46497632c33c56d9907715e3dd8b60956cc7f65df50442b5cf1
+F text.tcl 1d7a36d7002bf49926d1c74e6711efbdc82e82be36d2c483f6c8e077646a6ea7
 F textAvoid.tcl 9ddc54f52332482ae2478a85cd9350a26aa6fe8c7700357083cce4ccdedce833
 F textBlock.tcl 989e51a2239c68a961314599361c56700148d9449813f47be4298debdbd45e97
 F textPath.tcl 571bf06d92e655d8cfd67e234afb0492a14c0d3ff3efe48ebc586dd706c6c928
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
 F tools/archive.sh 2a9dc87e9ecefc6b0a5f1e6bcfaf4d4c7d63579e35d83f7cac84f0fc5d91c69a x
-F tools/check.sh 7b0b4350cf420b91d95e18af3d6395cb3fcb76e180de50a0526595040e84ee2b x
+F tools/check.sh f012abc78aa890a3e010c2225cf88ac3222a89f123631aa98caa1cf0b64dc0ba x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
 F tools/mkafm.tcl a063c46cdce9e9dd1b270249fd72e1ccb253c30bcdb836c244fef6760c3956c0
@@ -354,8 +355,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 838a0dbd3a35913ac407d88e7134414478d53ef9c67b5dca1714144277316bb0
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 458ca7676ff768617daa08925581370ca15573033bedfcb6eab155e5265f8bb6
-R 9a1391ff9b8b193c130288827258dd9d
+P 3f10b00025230d014aadccf4e293a6822b0d9c03eff0fc6e72881027c4181add
+R 87658c45a8d324d8d09155624f9ad1b0
 U alex
-Z cd5c57c03cf4135112904b5aadc8fb68
+Z d50c39291a9d0ec4142e49ccdcf4754d
 # Remove this line to create a well-formed Fossil manifest.

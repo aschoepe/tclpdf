@@ -195,7 +195,39 @@ else
   report_skip "veraPDF not installed"
 fi
 
-echo "=== 5. a reader, not a validator ==="
+echo "=== 5. Mustang over every document that carries a hybrid attachment ==="
+
+# ZUGFeRD, Factur-X and Order-X have a reference validator of their own:
+# Mustangproject checks the attached XML against schema and schematron and
+# the way it sits in the PDF - none of which qpdf or veraPDF looks at.
+# Which documents this yardstick applies to is, again, not a list kept here:
+# the Factur-X / Order-X extension schema in the XMP names the attached file
+# in fx:DocumentFileName, and a document without that claim is no hybrid and
+# is not judged.
+#
+# The exit code, never the output: 0 is valid, anything else is not. On
+# failure the report's first <error> is quoted, because a bare "invalid"
+# sends whoever reads it straight back to re-running the tool by hand.
+# Measured 2026-08-18: about 1 s per document (0.9-1.2 s, JVM start included) - three documents, three seconds.
+mustang=`ls tools/Mustang-CLI-*.jar 2>/dev/null | head -1`
+if test -n "$mustang" && have java; then
+  found=0
+  for f in examples/out/*.pdf; do
+    strings "$f" | grep -q '<fx:DocumentFileName>' || continue
+    found=`expr $found + 1`
+    if out=`java -jar "$mustang" --action validate --source "$f" --disable-file-logging 2>/dev/null`; then
+      report_pass "Mustang `basename $f`"
+    else
+      msg=`echo "$out" | sed -n 's/.*<error[^>]*>\(.*\)<\/error>.*/\1/p' | head -1`
+      report_fail "Mustang `basename $f`: ${msg:-invalid}"
+    fi
+  done
+  test $found -gt 0 || report_fail "no document names a hybrid attachment - did the XMP change?"
+else
+  report_skip "Mustang (java plus tools/Mustang-CLI-*.jar) not available"
+fi
+
+echo "=== 6. a reader, not a validator ==="
 
 # What no profile catches: text that validates and extracts wrongly. Missing
 # word spaces at a line break came out as "istgetauscht" through every profile.
@@ -213,7 +245,7 @@ else
   report_skip "pdfinfo (poppler) not installed"
 fi
 
-echo "=== 6. the manual is no older than what it is made from ==="
+echo "=== 7. the manual is no older than what it is made from ==="
 
 # Neither doc/tclpdf.n nor doc/tclpdf.html is under version control: both are
 # built by "make all" and travel in the source archive. That is exactly why

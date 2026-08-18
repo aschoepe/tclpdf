@@ -55,10 +55,11 @@ $doc tagged 1
 
 # The claim below refuses to go out without a title and a language, as in
 # 5.7 - a weakly structured document is under the same rules as a strongly
-# structured one in everything but its headings.
-$doc info Title "Werksordnung, Auszug"
+# structured one in everything but its headings. The text is Spanish, so
+# the tag says so - as in 5.5, where the same line carries Italian.
+$doc info Title "Reglamento interno, extracto"
 $doc info Author "Alexander Schoepe"
-$doc language de-DE
+$doc language es-ES
 
 $doc page add
 $doc font embed face $regular
@@ -72,13 +73,14 @@ $doc structure Sect -script {
 
   $doc structure H -script {
     $doc font -family faceBold -size 16
-    $doc text "Werksordnung" -at {20 25}
+    $doc text "Reglamento interno" -at {20 25}
   }
 
   $doc font -family face -size 10
-  $doc text "Dieser Auszug übernimmt die Gliederung der Quelle, wie sie ist:\
-      Abschnitte in Abschnitten, ohne nummerierte Ebenen. Jede Überschrift\
-      ist ein generisches H - wie tief sie sitzt, sagt die Schachtelung." \
+  $doc text "Este extracto conserva la estructura de la fuente tal cual:\
+      secciones dentro de secciones, sin niveles numerados. Cada título es\
+      una H genérica: ¿a qué profundidad está? Lo dice el anidamiento, sin\
+      ambigüedad." \
       -at {20 34} -width 170
 
   # One level down: a Sect inside the Sect, its H an H2 in effect - said by
@@ -87,24 +89,25 @@ $doc structure Sect -script {
 
     $doc structure H -script {
       $doc font -family faceBold -size 13
-      $doc text "Zutritt" -at {20 52}
+      $doc text "Acceso" -at {20 52}
     }
 
     $doc font -family face -size 10
-    $doc text "Das Werksgelände betritt, wer angemeldet ist. Besucher tragen\
-        den Ausweis sichtbar und bleiben in Begleitung." -at {20 60} -width 170
+    $doc text "Al recinto de la fábrica solo accede quien está registrado.\
+        Los visitantes llevan la acreditación visible y van siempre\
+        acompañados." -at {20 60} -width 170
 
     # And a third level, nested in the second.
     $doc structure Sect -script {
 
       $doc structure H -script {
         $doc font -family faceBold -size 11
-        $doc text "Lieferverkehr" -at {20 76}
+        $doc text "Tráfico de reparto" -at {20 76}
       }
 
       $doc font -family face -size 10
-      $doc text "Anlieferungen melden sich am Tor 2. Die Halle wird nur nach\
-          Einweisung befahren." -at {20 83} -width 170
+      $doc text "Las entregas se presentan en la puerta 2. Por la nave solo\
+          se circula después de recibir instrucciones." -at {20 83} -width 170
     }
   }
 
@@ -113,12 +116,12 @@ $doc structure Sect -script {
 
     $doc structure H -script {
       $doc font -family faceBold -size 13
-      $doc text "Verhalten im Alarmfall" -at {20 102}
+      $doc text "Actuación en caso de alarma" -at {20 102}
     }
 
     $doc font -family face -size 10
-    $doc text "Bei Alarm sind Maschinen abzuschalten und die Sammelplätze\
-        aufzusuchen. Aufzüge werden nicht benutzt." -at {20 110} -width 170
+    $doc text "En caso de alarma, apague las máquinas y diríjase a los puntos\
+        de reunión. ¡No utilice ningún ascensor!" -at {20 110} -width 170
   }
 }
 
@@ -132,13 +135,13 @@ $doc ua 1
 
 set mixed [tclpdf new -unit mm]
 $mixed tagged 1
-$mixed info Title "Mischform"
-$mixed language de-DE
+$mixed info Title "Forma mixta"
+$mixed language es-ES
 $mixed page add
 $mixed font embed face $regular
 $mixed font -family face -size 12
-$mixed text "Nummeriert" -at {20 25} -tag H1
-$mixed structure H -script {$mixed text "Generisch" -at {20 40}}
+$mixed text "Numerado" -at {20 25} -tag H1
+$mixed structure H -script {$mixed text "Genérico" -at {20 40}}
 $mixed ua 1
 catch {$mixed write [file join [file dirname $target] never-written.pdf]} refusal
 $mixed destroy

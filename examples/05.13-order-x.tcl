@@ -27,13 +27,11 @@
 # fresh document in memory that is asked what it would write and destroyed
 # unwritten. The file this example writes stays the one purchase order.
 #
-# THE XML HERE IS A HULL, NOT A FULL ORDER MESSAGE. It carries the message
-# root and BT-24 - everything [zugferd] reads - and is built by this script
-# the same way the test suite builds it. A real deployment attaches the
-# complete SCRDM order message its ERP produced; composing that message is
-# the ERP's job, not this package's. That is also why, unlike 05.01/05.02,
-# the figures on this page are illustrative rather than read out of the
-# attachment - the hull has no figures to read.
+# The attachment is a complete Order-X COMFORT message from assets/xml,
+# schema-valid and accepted by the reference validator (Mustangproject).
+# Like 05.01 and 05.02, the page shows the order the attachment states:
+# same parties, same three lines, same total. A checker opening the XML
+# must not find a second, different order.
 #
 # Check with:  verapdf -f 3b out.pdf  and  qpdf --list-attachments out.pdf
 #
@@ -51,34 +49,16 @@ package require tclpdf
 source [file join $here common.tcl]
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "05.13-order-x.pdf"}]
-set outdir [file dirname [file normalize $target]]
+set assets [file join $here assets]
 
-# The Order-X hull: message root and BT-24, all the module reads. Written
-# next to the output file - never into the source tree - and deleted at the
-# end. The file is deliberately NOT called order-x.xml: without -name an
-# order is embedded as order-x.xml - the one name the standard allows -
-# whatever the file on disk is called.
-set orderXmlFiles {}
-proc orderXml {name identifier} {
-    set path [file join $::outdir $name]
-    lappend ::orderXmlFiles $path
-    set f [open $path wb]
-    puts -nonewline $f [string map [list @ID@ $identifier] {<rsm:SCRDMCCBDACIOMessageStructure xmlns:rsm="urn:un:unece:uncefact:data:SCRDMCCBDACIOMessageStructure:100" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:128">
-  <rsm:ExchangedDocumentContext>
-    <ram:GuidelineSpecifiedDocumentContextParameter>
-      <ram:ID>@ID@</ram:ID>
-    </ram:GuidelineSpecifiedDocumentContextParameter>
-  </rsm:ExchangedDocumentContext>
-</rsm:SCRDMCCBDACIOMessageStructure>
-}]
-    close $f
-    return $path
-}
+# The attached order. The file is deliberately NOT called order-x.xml:
+# without -name an order is embedded as order-x.xml - the one name the
+# standard allows - whatever the file on disk is called.
+set order [file join $assets xml order-x-comfort.xml]
 
-set order [orderXml 05.13-order-comfort.xml urn:order-x.eu:1p0:comfort]
-
-# What the page shows. In an order the customer is the issuer and the
-# supplier the recipient - the same cast as 05.02, with the roles reversed.
+# What the XML states. Nothing here is invented. In an order the customer is
+# the issuer and the supplier the recipient - the same cast as 05.02, with
+# the roles reversed.
 set data {
     number       87421
     date         "18 August 2026"
@@ -189,11 +169,11 @@ puts "  attachment: [dict get [$doc zugferd state] name],\
 #   -type ORDER_RESPONSE   the seller answering the order; a response has to
 #                          be named, BT-24 alone always means ORDER
 #   -type ORDER_CHANGE     the buyer changing an order already placed
-#   -profile COMFORT       overrides the level read from BT-24 - meant for
-#                          an XML whose identifier the reader does not know;
-#                          the FAMILY still comes from BT-24, so the order
-#                          stays an ORDER and does not fall back to INVOICE
-set basic [orderXml 05.13-order-basic.xml urn:order-x.eu:1p0:basic]
+#   -profile COMFORT       names the level instead of reading it from BT-24 -
+#                          meant for an XML whose identifier the reader does
+#                          not know; the FAMILY still comes from BT-24, so
+#                          the order stays an ORDER and does not fall back
+#                          to INVOICE
 puts "  the order types and the override, each on a throwaway document:"
 foreach options {
     {-type ORDER_RESPONSE}
@@ -201,7 +181,7 @@ foreach options {
     {-profile COMFORT}
 } {
     set demo [tclpdf new]
-    $demo zugferd $basic {*}$options
+    $demo zugferd $order {*}$options
     set state [$demo zugferd state]
     puts [format "    %-22s %-9s %-14s /AFRelationship /%s" \
         [dict get $state name] [dict get $state profile] \
@@ -213,7 +193,7 @@ foreach options {
 # an order, and the refusal names both sides. A refused zugferd leaves no
 # PDF/A claim, no schema and no attachment behind.
 set demo [tclpdf new]
-catch {$demo zugferd $basic -profile "EN 16931"} refusal
+catch {$demo zugferd $order -profile "EN 16931"} refusal
 puts "  refused across families:"
 puts "    $refusal"
 $demo destroy
@@ -224,8 +204,3 @@ $doc write $target
 puts "  written: $target ([file size $target] bytes)"
 puts "  [exampleArchival $doc]"
 $doc destroy
-
-# The hulls served their purpose; only the PDF remains.
-foreach path $orderXmlFiles {
-    file delete $path
-}

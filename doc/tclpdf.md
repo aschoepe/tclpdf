@@ -122,6 +122,7 @@ Positions are given in the document unit, and **y counts from the top of the pag
 
   **-family** takes one of the fourteen standard faces (`helvetica`, `times`, `courier`, `symbol`, `zapfdingbats`; `arial` is accepted as another name for `helvetica`), an exact PostScript name such as `Times-Italic` — which names the face itself, so a **-style** in force does not apply to it — or the alias of an embedded face. **-style** takes `bold`, `italic` or both; `oblique` is read as `italic`; any other word is refused. **-size** is always in points. Further options: **-spacing** (extra space between glyphs — see below), **-wordSpacing**, **-stretch** (horizontal scaling in percent), **-leading** (line spacing, default 1.2 times the size) and **-rise** (baseline shift, for super- and subscript).
 
+  Every option is checked at the call that writes it, in **font** and per call alike. **-leading** must be a number above zero; an empty value restores the default of 1.2 times the size. **-spacing**, **-wordSpacing** and **-rise** take a number of points of either sign — negative spacing tightens, a negative rise is a subscript. **-kerning**, **-ligatures** and **-unshaped** take a boolean. A **-color** the colour parser does not know is refused where it is written, not at the next piece of text.
   **-spacing** adds its space **between glyphs**, not between characters, because that is where the PDF operator behind it puts it. The two differ only when ligatures are in play: `office` is six characters and, in a face that has the `ffi` ligature, four glyphs — so `-spacing` opens three gaps there, not five. For classic letterspacing, where every letter stands apart, set **-ligatures 0** in the same call; a ligature says the letters belong close together, which is the opposite of what letterspacing says.
 
   **-ligatures** applies the standard ligatures (`liga`) of an embedded face and is **on by default**. Where a face has one, the letters of `fi`, `ff`, `ffi` and their relatives are drawn as the single glyph the designer made for them. The characters are unaffected: the `ToUnicode` map carries the ligature back to the letters it was made from, so the text is copied and searched as it was written. Only `liga` is read - not the discretionary (`dlig`) or historical (`hlig`) sets, which the feature registry has off; the required ligatures (`rlig`) of the Arabic scripts are applied by the cursive shaping under `-direction rtl`, whether or not `-ligatures` is on. Note that a ligature need not change any width: measured on DejaVu Sans, `fi` and `fl` take exactly the room the two letters took, while `ff` is narrower.
@@ -607,6 +608,14 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : The outline built so far.
 
+*doc* **destination** *page* ?*{x y}*? ?*zoom*? ?*asker*?
+
+: A destination in PDF syntax (ISO 32000-1 12.3.2) — where a link or a bookmark points. `link -page` and `bookmark` build theirs through it; calling it directly is for a place the package does not write itself, and **catalogEntry** is the standing one: `catalogEntry OpenAction [$doc destination 1]` makes a reader open the document on the second page. *page* counts from 0 as `page current` counts — not the number printed on the page.
+
+  Without a point the whole page is fitted (`/Fit`) and *zoom* does not apply. With *{x y}* — in the document unit, from the top left corner as every coordinate here — the reader lands on that point (`/XYZ`), and *zoom* is the magnification it applies there, `1` being 100 %; without *zoom* the reader keeps the one it has. The same three choices `link -to` and `-zoom` offer, because they end up here.
+
+  For a page that exists the call returns the destination array itself; a *page* beyond the last is allowed and returns a reference to an object filled when the document is written — a link on the first page may point at a contents page added last. A page that never came is then reported, and the report names the *asker* when one was given — `link` and `bookmark` pass theirs, a direct caller may pass a word like `OpenAction` — and says `a destination` otherwise. A negative or non-numeric *page* is refused at once.
+
 ## Metadata
 
 *doc* **info** *key* ?*value*?
@@ -620,6 +629,16 @@ For an **archivable** document the clear text line needs an embedded face, and t
 *doc* **metadata** ?*xml*?
 
 : Reads or sets the XMP packet directly. Normally the package writes it: set by the caller it is kept as given — as text, answered back unchanged, and encoded to UTF-8 once when the file is written, so `metadata [$doc metadata]` is a no-op; otherwise the packet is rebuilt on every write from the document's current title, language and declarations, so it never lags behind the Info dictionary. (PDF 1.4.)
+
+*doc* **xmpSchema** *prefix uri tags method*
+
+: Registers a schema that writes an `rdf:Description` of its own into the XMP packet each time the packet is built — the mechanism by which PDF/A and PDF/UA put their identification there, open to an extension with properties of its own to declare. *prefix* and *uri* name the schema and *tags* lists every property name it may write; a property answered but not listed fails the write. *method* names a method of the document object — an extension adds one with `oo::define`, see `doc/PLUGINS.md` in the source distribution — that is called when the packet is built and answers the properties as a list of *{kind tag value}* entries: kind `text` writes the value as the element's text, kind `bag` takes a list of tag-value pair lists and writes an `rdf:Bag` whose items carry them as resources. A method rather than the values themselves, because the values may change after registration — `pdfa -part 3` can follow — and a callback reads the state as it is at write time, so a second **write** stays truthful. An empty answer omits the description. Registration order is packet order, and registering a *prefix* again replaces its entry rather than adding a second one. Returns nothing.
+
+  Both commands live in the `tclpdf::xmp` module, which every conformance claim loads; without one, `package require tclpdf::xmp` first — it needs tdom, as the packet does.
+
+*doc* **xmpRaw** *xml*
+
+: Adds ready-made XML to the packet, for what does not fit the tag-and-value form of **xmpSchema**: whole `rdf:Description` elements, appended under the packet's `rdf:RDF` as given — a PDF/A extension schema is a page of RDF no accessor could usefully model, and `pdfa extension` rides on this call. The `rdf` prefix may be used without declaring it, since the element around it always has; every other namespace the fragment must declare itself. The XML is parsed when the packet is built, and a malformed contribution fails the **write** naming itself rather than travelling on to a validator. The packet is built once a schema is registered — every conformance claim registers one — and a raw contribution alone does not cause that. Returns nothing.
 
 *doc* **catalogEntry** *key* ?*value*?
 

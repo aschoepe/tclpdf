@@ -965,13 +965,28 @@ oo::define ::tclpdf::document::document {
     return [::tclpdf::pdfObj name $name]
   }
 
-  # The values that make text vanish without a word: a size of zero draws
-  # nothing and measures nothing, a stretch of zero the same, and a negative
-  # one of either draws it backwards or not at all. Refused where the value
-  # arrives - in [font] for the state, in TextMerge for a value given per
-  # call - so the message names the call that wrote it. Everything else the
-  # font state takes is checked where it is used: the family when it is
-  # resolved, the direction where a line is measured.
+  # Every value the font state takes is refused HERE, where it arrives - in
+  # [font] for the state, in TextMerge for a value given per call - so the
+  # message names the call that wrote it. Only the family is left to its own
+  # resolver and the direction to the gate in TextMerge; both refuse with
+  # their own message at the same moment.
+  #
+  # Checking only where a value is USED was the previous state, and what it
+  # did was measured (2026-08-18): "-leading 120%" set a single line in
+  # silence and blew a paragraph up with a raw "can't use non-numeric string
+  # as operand" from the block arithmetic; "font -spacing foo" was stored
+  # without a word and the raw error came from the NEXT text call, which
+  # named nothing the caller had written there; and the three booleans took
+  # any string at all, because the standard-font road never reads them.
+  #
+  # Size and stretch refuse zero as well: a size of zero draws nothing and
+  # measures nothing, a stretch of zero the same, and a negative one of
+  # either draws it backwards or not at all. The leading refuses zero for
+  # the same reason - every line of a block would land on the first one -
+  # but keeps the empty string, which stands for the default of 1.2 times
+  # the size (decided in TextMerge, where the size is known). Spacing, word
+  # spacing and rise take any number: negative spacing tightens, a negative
+  # rise is a subscript.
   method TextCheck {name value} {
     switch -- $name {
       style {
@@ -997,6 +1012,35 @@ oo::define ::tclpdf::document::document {
         if {![string is double -strict $value] || $value <= 0} {
           return -code error "tclpdf: -stretch is a percentage above zero,\
               100 being normal, not \"$value\""
+        }
+      }
+      leading {
+        if {$value ne {} && (![string is double -strict $value]
+            || $value <= 0)} {
+          return -code error "tclpdf: -leading is a line spacing in points\
+              above zero - or empty for the default of 1.2 times the size -\
+              not \"$value\""
+        }
+      }
+      spacing - wordSpacing - rise {
+        if {![string is double -strict $value]} {
+          return -code error "tclpdf: -$name takes a number of points, not\
+              \"$value\""
+        }
+      }
+      kerning - ligatures - unshaped {
+        if {![string is boolean -strict $value]} {
+          return -code error "tclpdf: -$name takes a boolean, not \"$value\""
+        }
+      }
+      color {
+        # The empty string leaves the fill colour of the stream in force -
+        # that is what TextRun reads it as - so only a non-empty value has
+        # to parse. The parser's own message is the one the drawing would
+        # have raised; it only comes at the call that wrote the colour now,
+        # not at the next text.
+        if {$value ne {}} {
+          ::tclpdf::color parse $value
         }
       }
     }
