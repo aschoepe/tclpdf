@@ -210,7 +210,9 @@ puts "  attachment: [dict get [$doc zugferd state] name],\
 # fx:Version, -description the attachment's text, -compress packs the XML
 # with Flate (off by default: the invoice sits in the file byte for byte);
 # -relationship overrides the /AFRelationship the profile prescribes - Data
-# for MINIMUM and BASIC WL, Alternative for every fuller profile; and -icc
+# for MINIMUM and BASIC WL, Alternative for every fuller profile, Source where
+# the XML is what the invoice was made from; XRECHNUNG is the sixth level, the
+# one a reader answers for an XRechnung identifier; and -icc
 # names another output intent profile in place of the shipped sRGB one -
 # here the package's second sRGB profile, sRGB2014.
 set srgb2014 [file join [file dirname $here] icc sRGB2014.icc]
@@ -219,6 +221,7 @@ set variants [list \
         -description "EN 16931 invoice data" -compress 0} \
     {-name zugferd-invoice.xml -profile MINIMUM -relationship Data} \
     {-name xrechnung.xml -profile "BASIC WL"} \
+    {-name xrechnung.xml -profile XRECHNUNG -relationship Source} \
     {-name order-x.xml -type ORDER -profile BASIC -description "Order-X order data"} \
     [list -profile EXTENDED -relationship Alternative -compress 1 -icc $srgb2014]]
 puts "  the options, each on a throwaway document:"

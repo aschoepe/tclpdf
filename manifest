@@ -1,5 +1,5 @@
-C Four\sparked\sitems\sbuilt,\sand\sa\spattern\sused\sin\sthe\swrong\sstream\sis\snow\srefused\n\n-\sSVG\sgroup\sopacity\sis\sa\sreal\stransparency\sgroup:\san\selement\swith\san\sopacity\sof\sits\sown\sdraws\sinto\sa\sform\sXObject\swith\s/Group\s/S\s/Transparency\sand\sone\sgs\sin\sfront,\sso\soverlapping\schildren\sstop\scompounding\n-\sua\srefuses\sa\stree\sthat\smixes\sthe\sgeneric\sH\swith\snumbered\sheadings\s-\sa\sdocument\sis\sweakly\sor\sstrongly\sstructured,\snot\sboth,\sand\sthe\swrite\swent\sthrough\suntil\snow\n-\sshaping\sorder\scarries\sthe\s26\sright-to-left\sblocks\sof\sthe\shigher\splanes,\sPhoenician\sto\sthe\sArabic\smathematical\sletters,\swhich\sused\sto\sbe\sset\sfrom\sthe\sleft\swithout\sa\sword\n-\spattern\sand\sshading\srefuse\sa\splaced\spattern\sin\sanother\sstream\sthan\sthe\sone\sit\swas\splaced\sin,\snaming\sthe\stwo\sways\sthat\swork\s-\screate\sit\swhere\sit\sis\sused,\sor\spass\s-matrix;\sa\stile\swith\sno\splace\sof\sits\sown\sstill\scrosses\sfreely\n-\sNew\sexample\s05.13-order-x:\san\sOrder-X\sorder\sat\sCOMFORT,\sthe\stwo\sother\sdocument\stypes\son\sthrow-away\sdocuments,\sand\sthe\sfamily\sbinding\sas\sa\scaught\serror\n-\sNew\sexample\s05.14-weakly-structured:\snested\ssections\swhose\severy\sheading\sis\sa\sgeneric\sH,\sand\sthe\smixture\srefused\sbeside\sit\n-\s03.04-barcodes\slets\sthe\sencoder\sset\sthe\sclear\stext\sline\sand\sembeds\sthe\stwo\sfaces\sit\snames,\sOCR-B\sunder\san\sEAN\sand\sArimo\sfor\sthe\srest,\sso\snothing\sin\sthe\sdocument\sis\sunembedded;\s-smalltext\swith\sa\staller\ssymbol\ssizes\sthe\scaption\n-\sArimo\svariable\sfont\sadded\sunder\sexamples/assets/fonts/google\swith\sits\sOFL\stext;\sexamples/assets/README.md\sand\sdocs\sfollow\n-\s01.05-forms\sgains\sa\sform\swith\sa\sgradient\sof\sits\sown,\splaced\stwice;\s03.03-svg\stwo\soverlapping\scircles\sin\sa\shalf-transparent\sgroup;\s02.09\sa\sright-to-left\sline\sfrom\sthe\splanes\sabove\n-\sManual:\spattern\sspace\sbelongs\sto\sthe\sparent\scontent\sstream\srather\sthan\sthe\spage,\sand\sthe\sua\sentry\snames\sthe\sheading\srule\n-\sModule\sversions\s+0.1:\sshaping,\sua,\ssvg,\ssvgElement,\ssvgPaint,\spattern,\sshading\n-\sTests:\s1513\sunder\s8.6\sand\s9.0,\smake\scheck\s32\spassed,\s45\sdocuments\sfrom\s43\sexamples
-D 2026-08-18T09:52:53.327
+C Order-X,\sXRECHNUNG\sand\sSource\son\sthe\soption\sround\sof\s05.02\n\n-\sThe\sthrowaway\sdocuments\snow\scover\sthe\ssixth\sconformance\slevel\sand\sthe\sthird\srelationship\sthe\sstandards\sallow,\sso\severy\svalue\sthe\szugferd\sentry\snames\sis\sshown\ssomewhere
+D 2026-08-18T09:58:48.087
 F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -46,7 +46,7 @@ F examples/04.01-table-basics.tcl f2ee0fe8326397a1cf008837576d6dfdf873b960b9ae8b
 F examples/04.02-table-paging.tcl 42c41f0dca8b4c10be1342add4490b36e1a99437820ae604a089e97cc8ae56e6
 F examples/04.03-table-spans.tcl e820a910bbebca980b00d3e785b491d7b12ce9ba15b90bc16075093b0d0f52ca
 F examples/05.01-zugferd-minimum.tcl 5aa883f950453c613f26e610f56796060cc6bec859270bfd4ed0e04f2a201d1f
-F examples/05.02-zugferd-en16931.tcl b927da58df49cc53bcb52a4825767eae2383fa21e87738e7d44a28d445a2647a
+F examples/05.02-zugferd-en16931.tcl 634d3f465bae4be8d6b18301d8ac7acc27c3919ff4154abb7cd427a84a52eafd
 F examples/05.03-navigation.tcl 7baaeaea433f5bfcf3188e2095559bca90c1ceba0da069a5bc64b5e300ab52f5
 F examples/05.04-pdfa.tcl 2bee7201a05827104dfae46162fbfb864a0a15025481c0c8fe8156448bde7207
 F examples/05.05-tagged.tcl 3bf19e39eeec4244befd8180a9894c9bbd4b55aa3b1843fafbf13c0712425fcf
@@ -354,8 +354,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 838a0dbd3a35913ac407d88e7134414478d53ef9c67b5dca1714144277316bb0
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 5c22d9ea598fb8a44f18f0245561dc796a0543fea2690c73ff3c95adb1b3924a
-R d2da7a0008d167aa17d683ae18da4b93
+P 458ca7676ff768617daa08925581370ca15573033bedfcb6eab155e5265f8bb6
+R 9a1391ff9b8b193c130288827258dd9d
 U alex
-Z 76de7faa2103b2737066581a33db7890
+Z cd5c57c03cf4135112904b5aadc8fb68
 # Remove this line to create a well-formed Fossil manifest.
