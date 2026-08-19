@@ -42,7 +42,7 @@ tclpdf loads and runs with nothing but Tcl 8.6.11 or later. One package matters,
 
   The SVG module uses it for parsing where it is present, and prefers it: measured, tdom parses 27 to 48 times faster than the parser tclpdf brings along, and it rejects an entity expansion bomb that the built-in one would try to expand. Without tdom the package still reads SVG, through its own element tree parser — the same four accessors sit in front of both, so nothing else in the package can tell the difference.
 
-There is no other optional package; barcodes need none either, because tzint encodes into SVG and `svg -data` draws it — see "Barcodes" below.
+There is no other package that **tclpdf itself** loads. Barcodes look like an exception and are not one: **tzint** is required by *your* script rather than by tclpdf — without it there is no barcode, but nothing in this package knows about them or asks for it. What tzint produces is SVG, and `svg -data` draws it — see "Barcodes" below.
 
 # COMMANDS
 
@@ -810,9 +810,9 @@ Two calls write the document, and neither finishes it.
 
 tdom, qpdf(1), veraPDF, pdffonts(1), pdftotext(1), tzint
 
-tdom builds the XMP metadata packet — every document that declares PDF/A, PDF/UA or ZUGFeRD needs it — and, where present, parses SVG in place of the built-in parser; see "Optional packages" at the top.
+tdom builds the XMP metadata packet — every document that declares PDF/A, PDF/UA or ZUGFeRD needs it — and, where present, parses SVG in place of the built-in parser; see "Optional packages" at the top. Its home is <https://tdom.org>.
 
-tzint is a Tcl binding to the Zint barcode library. It produces SVG, which `svg -data` draws — so barcodes need no code in this package and are not a dependency of it. See the `Barcodes` section above.
+tzint is a Tcl binding to the Zint barcode library, at <https://fossil.sowaswie.de/tzint>. It produces SVG, which `svg -data` draws — so barcodes need no code in this package and are not a dependency of it, but drawing one does need tzint installed. See the `Barcodes` section above.
 
 # KEYWORDS
 

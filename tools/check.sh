@@ -273,13 +273,18 @@ echo "=== 8. the reference code of the tclpdf-tcl skill runs ==="
 # agent - copies, so it has to keep running against the package as it is;
 # check.tcl there extracts every tcl block, runs each file in a fresh tclsh
 # and puts qpdf and veraPDF over what came out. Under the same interpreter
-# rule as the suite: both where both are present. Output goes beside the
-# example output, which "make clean" removes.
+# rule as the suite: both where both are present.
+#
+# What it produces stays, under examples/tmp/reference: the extracted scripts
+# there, their PDFs in its out/. The name says what it is - nothing in that
+# branch is a source file - and after a failure it is the evidence, because
+# the extracted script carries the line numbers the error message names.
+# "make clean" removes examples/tmp either way.
 reference=doc/claude/skills/tclpdf-tcl
 if test -f "$reference/check.tcl"; then
   for tclsh in tclsh8.6 tclsh9.0; do
     if have $tclsh; then
-      if TCLPDF_REFERENCE_OUT=examples/out/reference \
+      if TCLPDF_REFERENCE_OUT=examples/tmp/reference/out \
           $tclsh "$reference/check.tcl" "$reference/assets.tcl" >/tmp/tclpdf-reference.$$ 2>&1; then
         report_pass "reference snippets under $tclsh: `tail -1 /tmp/tclpdf-reference.$$`"
       else

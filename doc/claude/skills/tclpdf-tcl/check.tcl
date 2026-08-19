@@ -38,7 +38,12 @@ if {![llength $files]} {
 # path in it does not exist; each script sources it again for itself.
 source $assetsFile
 if {![info exists out]} { puts stderr "assets file sets no \$out"; exit 2 }
-file mkdir $out
+# The extracted scripts sit beside the output directory rather than inside it,
+# the way the examples sit beside theirs: check-*.tcl next to out/*.pdf, both
+# under whatever assets.tcl points $out at - examples/tmp/reference in this
+# tree. Keeps "the code" and "what it produced" apart at a glance.
+set scripts [file dirname [file normalize $out]]
+file mkdir $out $scripts
 foreach name {ttf ttfBold otf type1 variable jpeg png svgFile iccRgb iccCmyk invoiceXml orderXml} {
     if {[info exists $name] && ![file exists [set $name]]} {
         puts stderr "asset \$$name does not exist: [set $name]"
@@ -81,7 +86,7 @@ set tclsh [info nameofexecutable]
 foreach path $files {
     set code [snippets $path]
     if {$code eq {}} { skip "[file tail $path]: no tcl block"; continue }
-    set script [file join $out "check-[file rootname [file tail $path]].tcl"]
+    set script [file join $scripts "check-[file rootname [file tail $path]].tcl"]
     set channel [open $script w]
     fconfigure $channel -encoding utf-8
     # Every script starts from the same assets; the auto_path is the caller's.

@@ -70,10 +70,12 @@ fi
 
 # The source archive takes the whole tree minus the exclusions below.
 #
-# examples/out holds what "make examples" produced. Built output has no place
-# in a SOURCE archive - and the exclusion is needed because the tar below takes
-# the whole tree rather than a list of files, so anything created in the
-# checkout travels unless it is named here.
+# examples/out holds what "make examples" produced, and examples/tmp what
+# section 8 of "make check" produced - the scripts extracted from the skill's
+# reference pages and their PDFs. Built output has no place in a SOURCE archive
+# - and the exclusion is needed because the tar below takes the whole tree
+# rather than a list of files, so anything created in the checkout travels
+# unless it is named here.
 #
 # docs/ is INTERNAL and does not travel. It is German working material - the
 # state of play, the feature list with its reasoning, the conventions, a copy
@@ -123,6 +125,7 @@ mkdir -p ${STAGE}
 tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude='uv/*' \
     --exclude="${PACKAGE_NAME}/examples/out" \
+    --exclude="${PACKAGE_NAME}/examples/tmp" \
     --exclude="${PACKAGE_NAME}/examples/assets/fonts/adobe-standard-14" \
     --exclude="${PACKAGE_NAME}/docs" \
     --exclude="${PACKAGE_NAME}/.fslckout" \

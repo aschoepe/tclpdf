@@ -140,7 +140,9 @@ examples: pkgIndex.tcl
 	  $(TCLSH) `@CYGPATH@ $$script` examples/out/$$name.pdf || exit 1 ; \
 	done
 	@echo ""
-	@echo "`ls examples/out | wc -l | tr -d ' '` documents in examples/out"
+# Count the PDFs, not the entries - the number is about documents, and an
+# entry that is not one would be counted all the same.
+	@echo "`ls examples/out/*.pdf 2>/dev/null | wc -l | tr -d ' '` documents in examples/out"
 
 # The full acceptance run: the test suite under every interpreter present, all
 # examples, and then the outside validators over what came out - qpdf on every
@@ -180,7 +182,7 @@ clean:
 	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
 	-rm -rf doc/$(PACKAGE_NAME).html doc/$(PACKAGE_NAME).n
 	-rm -f uv/$(PACKAGE_NAME)*.zip uv/$(PACKAGE_NAME)*.tar.gz uv/download.html
-	-rm -rf examples/out
+	-rm -rf examples/out examples/tmp
 
 distclean: clean
 	-rm -f $(CONFIG_CLEAN_FILES)

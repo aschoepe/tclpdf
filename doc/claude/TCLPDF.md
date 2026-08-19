@@ -8,6 +8,12 @@ A PDF library is a large surface with a small number of load-bearing conventions
 
 The reference files hold one working snippet per documented call, kept runnable by `check.tcl` against the package as it is. The instruction to the model is therefore short: **copy the snippet, then adapt.** Where the reference and the model's memory disagree, the reference wins; where the reference and the manual disagree, the manual wins and the reference is wrong.
 
+## Why it ships with the source
+
+`doc/claude/` travels in the source archive, and that is the point: whoever fetches tclpdf gets a **checked** skill for writing their own PDFs along with the package it describes. Checked is meant literally - `check.tcl` runs on the recipient's machine against the assets in `examples/assets`, so the snippets are not a promise made here but something the reader can verify there, against the version they actually have. `make check` runs the same thing as section 8 of the acceptance, which is why the two cannot drift apart.
+
+It sits under `doc/` rather than `.claude/` for the same reason: `.claude/` is this working copy's own agent configuration and is excluded from every archive, while `doc/` is what the package hands out. A project that wants the skill copies it from there into its own `.claude/skills/`.
+
 ## Installing the skill in a project
 
 1. Copy `skills/tclpdf-tcl/` to `<project>/.claude/skills/tclpdf-tcl/` (or wherever the agent loads skills from). Nothing in it refers to a path outside the directory except through `assets.tcl`.

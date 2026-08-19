@@ -27,10 +27,12 @@ set iccCmyk  [file join $root icc ISOcoated_v2_bas.ICC]
 set invoiceXml [file join $assets xml zugferd-en16931.xml]
 set orderXml   [file join $assets xml order-x-comfort.xml]
 
-# Where the PDFs go. The environment may say; otherwise a directory beside
-# the package's own example output, which "make clean" removes as well.
+# Where the PDFs go, and - one level up - the scripts check.tcl extracts:
+# examples/tmp/reference/check-*.tcl beside examples/tmp/reference/out/*.pdf.
+# Under "tmp" because that is what it is: nothing here is a source file, and
+# "make clean" removes the whole examples/tmp branch.
 if {[info exists ::env(TCLPDF_REFERENCE_OUT)]} {
     set out $::env(TCLPDF_REFERENCE_OUT)
 } else {
-    set out [file join $root examples out reference]
+    set out [file join $root examples tmp reference out]
 }

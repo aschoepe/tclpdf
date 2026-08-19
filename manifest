@@ -1,6 +1,6 @@
-C A\shello-world\sas\sthe\sfirst\sexample\n\n-\sNew\sexamples/00.01-hello-world.tcl:\sten\slines,\sno\scommon.tcl\sand\sno\sfooter,\snumbered\sto\ssort\sfirst\sso\sthat\s"make\sexamples"\sand\sa\sdirectory\slisting\sboth\sstart\swith\sit.\sThe\stwo\sversion\snumbers\sin\sthe\sline\sit\sdraws\sare\sasked\sof\sthe\sdocument\sand\sof\sthe\spackage\srather\sthan\styped\sout
-D 2026-08-19T10:13:08.604
-F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
+C The\sreference\srun\swrites\sto\sexamples/tmp,\sand\sbarcodes\sstop\slooking\sdependency-free\n\n-\sSection\s8\sof\sthe\sacceptance\swrites\sto\sexamples/tmp/reference:\sthe\sextracted\sscripts\sthere,\stheir\sPDFs\sin\sits\sout/.\smake\sclean\sremoves\sexamples/tmp,\signore-glob\sand\sthe\ssource\sarchive\sexclude\sit,\sand\smake\sexamples\scounts\sPDFs\srather\sthan\sdirectory\sentries\n-\sThe\smanual\ssaid\sbarcodes\sneed\sno\soptional\spackage,\swhich\sreads\sas\sneeding\snothing:\stzint\sis\srequired\sby\sthe\scaller's\sscript\srather\sthan\sby\stclpdf,\sand\swithout\sit\sthere\sis\sno\sbarcode.\sSEE\sALSO\snow\scarries\sthe\saddresses\sof\stdom\sand\stzint\n-\sdoc/claude/TCLPDF.md\sand\sthe\sskill's\sown\spage\ssay\swhy\sthe\sskill\sships\swith\sthe\ssource:\swhoever\sfetches\stclpdf\sgets\sa\sreference\sthey\scan\sverify\son\stheir\sown\smachine\swith\scheck.tcl,\sagainst\stheir\scopy\sof\sthe\spackage
+D 2026-08-19T10:58:35.807
+F Makefile.in f38c5132ee1f63a8e7974ca6871cf25204ede9a31cf26f18d677510b65564250
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F afm.tcl 8231b1e59ae0c7a57a15b75143abf5a963252fd16f5dc9536ed8eaae8132035d
@@ -12,10 +12,10 @@ F color.tcl a0b13267552f5db9268c75794906e328a710b9176a2c172461415359bc6047be
 F configure 9f2235df3002bc045ada319e051f8229802007f35eeef37676f3e23b2d4e2c5c x
 F configure.ac 77924e93d2a1dfee1a49213d60c73bc0fbd113cad074af4b0afe2610031e49a4
 F doc/PLUGINS.md edc439981eda773751581f6509f361ef8a0e67f3e3779c9633d84ca82034b37c
-F doc/claude/TCLPDF.md 722625371f4304c0e9e2132340615c91433bf35c277c0186f1200aed80917b14
-F doc/claude/skills/tclpdf-tcl/SKILL.md 602d0b07aaf8e8f0760223a14fc05a686ed10b79aec3bf995c45b7d29f1d56fe
-F doc/claude/skills/tclpdf-tcl/assets.tcl 247b0cbb7056a0d5e512f9855508007b23c1c17adbec3a7df224eadd21d9119f
-F doc/claude/skills/tclpdf-tcl/check.tcl 8c80bb0bcb8f842c24b2ad93db9d1c1d36209570c30501a32d85395062a3e2d1
+F doc/claude/TCLPDF.md a35e6265560a6871691cd0cafb594b5b4cff308c7e52e49d57d4ce8edc758ad4
+F doc/claude/skills/tclpdf-tcl/SKILL.md 02c984623578cf363526f52b72647e842b4146f16ada2bdd90debc9ec64f0ac7
+F doc/claude/skills/tclpdf-tcl/assets.tcl 997dd1c96d09bde87045f3e54a1a3b7d602a14852f49f5099191f04fbc290fb5
+F doc/claude/skills/tclpdf-tcl/check.tcl 182f3003fac9484ff9d27e28dd8acba9cda7684d6193ebd64711c116a97dc0f8
 F doc/claude/skills/tclpdf-tcl/reference/01-document.md 6825d89cd506272a6341133fd23c1affa0d69128f0a2c7ce1f827faaed22c6ba
 F doc/claude/skills/tclpdf-tcl/reference/02-fonts.md 048a7a8532a4ed90075d3d9c2cc529c79b4e1571bbcccd95341ff534b83d5148
 F doc/claude/skills/tclpdf-tcl/reference/03-text.md a046b097a4bcd5bdd73a0421836482e1b1bb6a680f1bb189a1b32cae2c3d2ed6
@@ -27,10 +27,10 @@ F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md b281f35b55af1
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md e74770aceab2bdfb54e8ac69b7aa32bbf1ce3d0158ad7cf125b5b3ceca689913
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 343ab802c41131f981debb4ec3f0ce031f8f3daf2fbb50fc0ff3dd34de626414
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md 7e6a40b65617c05270d3b3c02c9f88e777259e225997173f877d30c3a0239f2e
+F doc/tclpdf.md ffdcdeeaa15d6e22af9680d001f75cf9840f5cd9faeb5d4d4d40052d852733cb
 F document.tcl 08d06f8bb3cf935a889fc26d4bbdba183db47bc894806b35d852ce15037e5eea
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
-F examples/00.01-hello-world.tcl 7ebcbd6467061066628f2b536cc6729baf1f9684da8c8bed0842c458e7b2bd68 w examples/06.01-hello-world.tcl
+F examples/00.01-hello-world.tcl 7ebcbd6467061066628f2b536cc6729baf1f9684da8c8bed0842c458e7b2bd68
 F examples/01.01-shapes.tcl d5ad63be2c5a0627461cbfdfc5b9331c76bb9058faed25d02365e61db84187ff
 F examples/01.02-colour.tcl ad287f5282ac29ed1b7a856a71912c9c238dcde421eb24114751629575ac118f
 F examples/01.03-text-layout.tcl 2d583d537de2bd7e0237477353868b7e648bf585c6a315f978781eb934c3dfe8
@@ -349,8 +349,8 @@ F textBlock.tcl 989e51a2239c68a961314599361c56700148d9449813f47be4298debdbd45e97
 F textPath.tcl 571bf06d92e655d8cfd67e234afb0492a14c0d3ff3efe48ebc586dd706c6c928
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
-F tools/archive.sh fc53ca8f2371fe855d76b8807d1c83c5e8bd5a62fbf5e9e83cbe7c26d6e330c2 x
-F tools/check.sh 74182b977c902b5a0346473972ad8dec1466a5b4e30145dfeeca2f9458f27d3a x
+F tools/archive.sh 11c5aa071dbddf63075b9b59dcf2c1157b67a4b519024885aaaab96853014dd3 x
+F tools/check.sh 1128e275bcc1d2f1a28621148ae35536d55061d21d459cadafb74e7a55751dc9 x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
 F tools/mkafm.tcl a063c46cdce9e9dd1b270249fd72e1ccb253c30bcdb836c244fef6760c3956c0
@@ -371,8 +371,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 71cc72e6bdbaee79a2cbbd16e5c0f4486ae3ad78553c34fc7d297e7359e31186
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 87aaa21900681bba012b89edb6e6ee6593a3b8e676359bb1539430ad722d8952
-R eeffdaa0b2109c3b6642bbded01ff1ee
+P cd8b152fcd487991ed1653a7548cc0c9b4672410f6e20c8d039121e27c20da79
+R 9ea780744d8314f02a1a9cbcdfbaa654
 U alex
-Z a3d75e8d4770e9a7aea7ea87a2f9b3ad
+Z 65f78fcf5e6b5d32745c82f7ebc570c5
 # Remove this line to create a well-formed Fossil manifest.
