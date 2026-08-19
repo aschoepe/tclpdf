@@ -1,5 +1,5 @@
-C make\stest\skeeps\sthe\scaller's\sTCLLIBPATH,\sand\sthe\stools\sreport\ssays\swhere\sit\ssearched\n\n-\sMakefile.in:\sthe\sTEA\stemplate\sassigned\sTCLLIBPATH\soutright\sand\serased\sthe\senvironment\s-\sa\stdom\sor\stzint\sin\sa\sprivate\sdirectory\scounted\sas\smissing\sunder\smake\stest\swhile\severy\sinteractive\stclsh\sfound\sit.\sThe\sharness\snow\sputs\sthe\sbuild\sdirectory\sfirst\sand\sthe\scaller's\sTCLLIBPATH\safter\sit\n-\stests/000-tools.test\sprints\sthe\sauto_path\sin\ssearch\sorder\sbefore\sthe\spackages,\sso\sa\sMISSING\sline\sshows\swhether\sthe\sdirectory\sthe\spackage\slives\sin\swas\ssearched\sat\sall
-D 2026-08-19T11:48:23.994
+C Version\s1.1.1\n\n-\sconfigure.ac,\stclpdf.tcl,\smanual\sheader\s-\sthe\sthree\sversion\ssites,\sconfigure\sregenerated
+D 2026-08-19T12:30:45.380
 F Makefile.in 32a12f00edbc19d7303ba0653f6ffe6b7b94f17ddde8a3a9ef313a843dbfd517
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -9,8 +9,8 @@ F attach.tcl 300fc9b0aab1b63d44d0ffeb70360244f34cf000a53d7381bb46805d9769ee58
 F bidi.tcl b74b8e1449d7058402cab1aca8edab6b7f4a6d79dd16edecc4a103e84c3bfc3b
 F bidiData.tcl fb4b333f0221b0af49e0bf47d9c05941e33d3291236241715fced64e574b4099
 F color.tcl a0b13267552f5db9268c75794906e328a710b9176a2c172461415359bc6047be
-F configure 9f2235df3002bc045ada319e051f8229802007f35eeef37676f3e23b2d4e2c5c x
-F configure.ac 77924e93d2a1dfee1a49213d60c73bc0fbd113cad074af4b0afe2610031e49a4
+F configure 187256e494a241d2b3f9d63846ac187dab1e83b0f27ac4fa96966ed8098deff0 x
+F configure.ac a6f4409f766dcbb241534aedc82833ee92294596605919f8a8673fb956724a1f
 F doc/PLUGINS.md edc439981eda773751581f6509f361ef8a0e67f3e3779c9633d84ca82034b37c
 F doc/claude/TCLPDF.md a35e6265560a6871691cd0cafb594b5b4cff308c7e52e49d57d4ce8edc758ad4
 F doc/claude/skills/tclpdf-tcl/SKILL.md 02c984623578cf363526f52b72647e842b4146f16ada2bdd90debc9ec64f0ac7
@@ -27,7 +27,7 @@ F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md b281f35b55af1
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md e74770aceab2bdfb54e8ac69b7aa32bbf1ce3d0158ad7cf125b5b3ceca689913
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 343ab802c41131f981debb4ec3f0ce031f8f3daf2fbb50fc0ff3dd34de626414
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md ffdcdeeaa15d6e22af9680d001f75cf9840f5cd9faeb5d4d4d40052d852733cb
+F doc/tclpdf.md e36941a554c2c074e93cfd5d6851ff7b14de5c7405a6e8fef544d028c5482429
 F document.tcl 08d06f8bb3cf935a889fc26d4bbdba183db47bc894806b35d852ce15037e5eea
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
 F examples/00.01-hello-world.tcl 7ebcbd6467061066628f2b536cc6729baf1f9684da8c8bed0842c458e7b2bd68
@@ -297,7 +297,7 @@ F tclconfig/ChangeLog 5afc872331b2b8e3ecfdbd0e8222da460b071c2f815080e47e0a1f6c49
 F tclconfig/README.txt 8285d9bad9933ad1ca9fd89398e7f22bea1b96dc68fb3d1536d0b3922725b21d
 F tclconfig/install-sh d5e7acec82cb30a616dc8023b6d77abf3e7109f86175f47741afe89b34d1d4f8 x
 F tclconfig/tcl.m4 24841be70516af95124d989e9b9a9fb07879fdc9cf2248c4ce6fc7aa3a5ae72b
-F tclpdf.tcl 73df4e5630277b9cdf501c13a2df4abdf73b960978ba0eb6aef7f229bafa57e2
+F tclpdf.tcl 91b9f302758c400379b40bf49694d5ff9a305382876bcb6975c426961f85952e
 F tests/000-tools.test 43d9c7116603b93449a4d88a80490b87a3f651c3fff3b2d6bc9d8c9c92bf1d6c
 F tests/afm.test 7ba5543b73b5b4f085a61edf0ab9f04c13f69d877312d0a31ba817140496642a
 F tests/all.tcl 88deed6ab659223e1fde61af5168d0642bb05cae6b392041910da63c9785c52c
@@ -371,8 +371,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 71cc72e6bdbaee79a2cbbd16e5c0f4486ae3ad78553c34fc7d297e7359e31186
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 63be41bad8ac2d1431680f278b2a551c18d9ea7ae213c0365d9730ee11012d23
-R ef970d77e7306a0a0fd47649f9b4265c
+P d1c3524ddbcbb5b504de0ce4247a75b4f4e3f32b25175979188b64df31db15f8
+R 0ce7327aeddf4cef379754e223a25ad0
 U alex
-Z 87b1536615771a4b0a45eabdf5fde251
+Z 8100269894ddcb7e52f4d4ec0707a494
 # Remove this line to create a well-formed Fossil manifest.
