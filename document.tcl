@@ -338,6 +338,7 @@ oo::class create ::tclpdf::document::document {
       reservation output
       writeChannel output
       form xObject
+      pdf import
       attach attach
       attachments attach
       attachmentsWithoutDescription attach

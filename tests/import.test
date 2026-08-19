@@ -1,0 +1,330 @@
+# import.test --
+#
+# A page of an existing PDF, taken over as a form: the tokenizer, both
+# cross-reference flavours, the box and rotation handling, the refusals.
+#
+# The fixtures are built here rather than shipped: the classic-table files
+# come from tclpdf itself or are handcrafted byte for byte (which is what
+# exercises the corners - a direct /Resources, a /Contents array, an
+# inherited MediaBox, a literal string that looks like a reference), and
+# the modern flavour is produced at test time by qpdf from the classic one,
+# under the qpdf constraint.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::import
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+
+# The template most tests import: one A4 page written by tclpdf itself,
+# with an embedded piece of everything a letterhead drags along - text in
+# a standard face, a filled rectangle, a line.
+proc ::tclpdfTest::template {{pages 1}} {
+    set path [scratch import-template.pdf]
+    set doc [tclpdf new -unit pt -format a4]
+    for {set i 1} {$i <= $pages} {incr i} {
+        $doc page add
+        $doc rect -at {40 40} -size {515 60} -fill #e8e0f0
+        $doc text "Template page $i" -at {60 78} -size 24
+        $doc line -from {40 760} -to {555 760} -width 0.5
+    }
+    $doc write $path
+    $doc destroy
+    return $path
+}
+
+# --- the tokenizer ---------------------------------------------------------
+
+test import-1.1 {a literal string that looks like a reference stays a string} -body {
+    set pos 0
+    ::tclpdf::import::Parse {(see 5 0 R for details)} pos
+} -result {s {see 5 0 R for details}}
+
+test import-1.2 {references and plain numbers are told apart by lookahead} -body {
+    set pos 0
+    set a [::tclpdf::import::Parse {[3 0 R 3 0 4]} pos]
+    set pos 0
+    set b [::tclpdf::import::Parse {<< /A 3 0 R /B 3 >>} pos]
+    list $a $b
+} -result {{a {{r {3 0}} {n 3} {n 0} {n 4}}} {d {A {r {3 0}} B {n 3}}}}
+
+test import-1.3 {nested dictionaries, arrays, hex strings, booleans, null} -body {
+    set pos 0
+    ::tclpdf::import::Parse {<< /D << /X [<AB> true null] >> /N /Nm >>} pos
+} -result {d {D {d {X {a {{h AB} {b true} {z {}}}}}} N {nm Nm}}}
+
+test import-1.4 {string escapes: parentheses, octal, line continuation} -body {
+    set pos 0
+    ::tclpdf::import::Parse "(a\\(b\\)c \\101 d\\\ne)" pos
+} -result {s {a(b)c A de}}
+
+test import-1.5 {serializing renumbers references and re-escapes strings} -body {
+    set pos 0
+    set value [::tclpdf::import::Parse {<< /K [7 0 R (x\(y)] >>} pos]
+    ::tclpdf::import::Serialize $value {7 12}
+} -result {<< /K [ 12 0 R (x\(y) ] >>}
+
+test import-1.6 {comments are whitespace} -body {
+    set pos 0
+    ::tclpdf::import::Parse "%note\n42" pos
+} -result {n 42}
+
+# --- the classic round trip ------------------------------------------------
+
+test import-2.1 {an imported page is a form XObject with its own resources} -body {
+    set template [::tclpdfTest::template]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import kopfbogen $template
+    $doc form place kopfbogen -at {0 0}
+    set size [$doc form size kopfbogen]
+    set path [::tclpdfTest::scratch import-roundtrip.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $template
+    list [format %.2f [lindex $size 0]] [format %.2f [lindex $size 1]] \
+        [regexp {/Subtype /Form} $bytes] [regexp {/Matrix \[} $bytes]
+} -result {595.28 841.89 1 1}
+
+test import-2.2 {placing twice stores the page once} -body {
+    set template [::tclpdfTest::template]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import kopfbogen $template
+    $doc form place kopfbogen -at {0 0}
+    $doc page add
+    $doc form place kopfbogen -at {0 0} -scale 0.5
+    set path [::tclpdfTest::scratch import-once.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $template
+    regexp -all {/Subtype /Form} $bytes
+} -result 1
+
+test import-2.3 {the second write is byte-identical} -body {
+    set template [::tclpdfTest::template]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import kopfbogen $template
+    $doc form place kopfbogen -at {0 0}
+    lassign [::tclpdfTest::writeTwice $doc import-twice] first second
+    $doc destroy
+    file delete $template
+    expr {$first eq $second}
+} -result 1
+
+test import-2.4 {qpdf accepts the file} -constraints qpdf -body {
+    set template [::tclpdfTest::template]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import kopfbogen $template
+    $doc form place kopfbogen -at {0 0}
+    set path [::tclpdfTest::scratch import-qpdf.pdf]
+    $doc write $path
+    $doc destroy
+    set status [catch {exec qpdf --check $path} output]
+    file delete $path $template
+    list $status [regexp {(?i)no syntax or stream encoding errors} $output]
+} -result {0 1}
+
+# --- pages and refusals ----------------------------------------------------
+
+test import-3.1 {-page picks a page of a multi-page file} -body {
+    set template [::tclpdfTest::template 3]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import seite $template -page 2
+    $doc form place seite -at {0 0}
+    set path [::tclpdfTest::scratch import-page2.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $template
+    # Which page came along is read from the copied content: the pages
+    # differ only in their drawn number.
+    list [regexp {Template page 2} $bytes] [regexp {Template page 1} $bytes] \
+        [regexp {Template page 3} $bytes]
+} -result {1 0 0}
+
+test import-3.2 {a page beyond the last is refused with the count} -body {
+    set template [::tclpdfTest::template 3]
+    set doc [tclpdf new]
+    $doc page add
+    set result [catch {$doc pdf import x $template -page 4} message]
+    $doc destroy
+    file delete $template
+    list $result $message
+} -match glob -result {1 {*has 3 pages - there is no page 4}}
+
+test import-3.3 {an alias in use is refused} -body {
+    set template [::tclpdfTest::template]
+    set doc [tclpdf new]
+    $doc page add
+    $doc pdf import x $template
+    set result [catch {$doc pdf import x $template} message]
+    $doc destroy
+    file delete $template
+    list $result $message
+} -result {1 {tclpdf: a form named "x" already exists}}
+
+test import-3.4 {-page takes a number counted from 1} -body {
+    set doc [tclpdf new]
+    set result [catch {$doc pdf import x y.pdf -page 0} message]
+    $doc destroy
+    list $result $message
+} -result {1 {tclpdf: -page of pdf import is a page number counted from 1, not "0"}}
+
+test import-3.5 {unknown subcommand names the known one} -body {
+    set doc [tclpdf new]
+    set result [catch {$doc pdf export x y.pdf} message]
+    $doc destroy
+    list $result $message
+} -result {1 {tclpdf: unknown pdf subcommand "export" - known is: import}}
+
+test import-3.6 {a missing file is refused by name} -body {
+    set doc [tclpdf new]
+    set result [catch {$doc pdf import x /no/such/file.pdf} message]
+    $doc destroy
+    list $result $message
+} -result {1 {tclpdf: pdf import: no file "/no/such/file.pdf"}}
+
+# --- the handcrafted corners ----------------------------------------------
+#
+# A file tclpdf would never write: MediaBox inherited from the page TREE,
+# /Resources direct on the page, /Contents an ARRAY of two streams, a
+# content string that contains "999 0 R" as text, an optional-content
+# resource. Byte for byte, so the parser meets the real thing.
+
+proc ::tclpdfTest::handcrafted {} {
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Contents \[5 0 R 6 0 R\]\
+        /Resources << /Font << /Helv 4 0 R >>\
+        /Properties << /oc1 7 0 R >> >> >>"
+    lappend objects "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    set one "BT /Helv 12 Tf 20 400 Td (half one) Tj ET"
+    lappend objects "<< /Length [string length $one] >>\nstream\n$one\nendstream"
+    set two "BT /Helv 12 Tf 20 380 Td (\\(999 0 R\\) is text) Tj ET"
+    lappend objects "<< /Length [string length $two] >>\nstream\n$two\nendstream"
+    lappend objects "<< /Type /OCG /Name (Layer) >>"
+
+    set out "%PDF-1.4\n"
+    set offsets {}
+    set number 0
+    foreach body $objects {
+        lappend offsets [string length $out]
+        append out "[incr number] 0 obj\n$body\nendobj\n"
+    }
+    set xref [string length $out]
+    append out "xref\n0 [expr {$number + 1}]\n"
+    append out [format "%010d %05d f \n" 0 65535]
+    foreach offset $offsets {
+        append out [format "%010d %05d n \n" $offset 0]
+    }
+    append out "trailer\n<< /Size [expr {$number + 1}] /Root 1 0 R >>\n"
+    append out "startxref\n$xref\n%%EOF\n"
+    set path [scratch import-handcrafted.pdf]
+    set channel [open $path wb]
+    puts -nonewline $channel $out
+    close $channel
+    return $path
+}
+
+test import-4.1 {inherited MediaBox, direct resources, contents array, OCG} -body {
+    set fixture [::tclpdfTest::handcrafted]
+    # -compress 0 keeps the merged content readable for the assertions.
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import hand $fixture
+    $doc form place hand -at {0 0}
+    set size [$doc form size hand]
+    set path [::tclpdfTest::scratch import-hand.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    list $size \
+        [regexp {half one} $bytes] \
+        [regexp {999 0 R\\\) is text} $bytes] \
+        [regexp {/OCProperties} $bytes] \
+        [regexp {/Type /OCG} $bytes]
+} -result {{400.0 500.0} 1 1 1 1}
+
+test import-4.2 {the two content streams are one stream, in order} -body {
+    set fixture [::tclpdfTest::handcrafted]
+    set doc [tclpdf new -unit pt -compress 0]
+    $doc page add
+    $doc pdf import hand $fixture
+    $doc form place hand -at {0 0}
+    set path [::tclpdfTest::scratch import-merge.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    # One form, and "half one" before the second half inside it.
+    list [regexp -all {/Subtype /Form} $bytes] \
+        [expr {[string first {half one} $bytes] \
+            < [string first {999 0 R} $bytes]}]
+} -result {1 1}
+
+# --- the modern flavour ----------------------------------------------------
+
+test import-5.1 {object streams and cross-reference streams are read} -constraints qpdf -body {
+    set template [::tclpdfTest::template]
+    set modern [::tclpdfTest::scratch import-modern-src.pdf]
+    exec qpdf --object-streams=generate $template $modern
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import kopfbogen $modern
+    $doc form place kopfbogen -at {0 0}
+    set size [$doc form size kopfbogen]
+    set path [::tclpdfTest::scratch import-modern.pdf]
+    $doc write $path
+    $doc destroy
+    set status [catch {exec qpdf --check $path}]
+    file delete $path $template $modern
+    list [format %.2f [lindex $size 0]] $status
+} -result {595.28 0}
+
+test import-5.2 {an encrypted file is refused by name} -constraints qpdf -body {
+    set template [::tclpdfTest::template]
+    set locked [::tclpdfTest::scratch import-locked.pdf]
+    exec qpdf --encrypt "" owner 256 -- $template $locked
+    set doc [tclpdf new]
+    $doc page add
+    set result [catch {$doc pdf import x $locked} message]
+    $doc destroy
+    file delete $template $locked
+    list $result [string match {*is encrypted - encrypted files are not imported} $message]
+} -result {1 1}
+
+test import-5.3 {/Rotate becomes the form's matrix and swaps its extent} -constraints qpdf -body {
+    set template [::tclpdfTest::template]
+    set turned [::tclpdfTest::scratch import-turned.pdf]
+    exec qpdf $template --rotate=90:1 $turned
+    set doc [tclpdf new -unit pt -format {841.89 595.276}]
+    $doc page add
+    $doc pdf import quer $turned
+    $doc form place quer -at {0 0}
+    set size [$doc form size quer]
+    set path [::tclpdfTest::scratch import-turned-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $template $turned
+    list [format %.2f [lindex $size 0]] [format %.2f [lindex $size 1]] \
+        [regexp {/Matrix \[0 -1 1 0 } $bytes]
+} -result {841.89 595.28 1}
+
+cleanupTests

@@ -522,6 +522,22 @@ A separation is a spot colour — a varnish, a security ink, a Pantone shade: `{
 
 *doc* **form names** / *doc* **form size** *name*
 
+: The names of the forms this document holds, and the size of one of them in the document unit — the created and the imported alike.
+
+## Importing a page from an existing PDF
+
+*doc* **pdf import** *alias path* ?**-page** *n*?
+
+: Takes over one page of an existing PDF file as a form: the page is registered under *alias* exactly as **form create** registers one, and **form place** puts it down — as often as wanted, scaled, rotated, faded — while the page is stored once. Taking over a letterhead is one **pdf import** and one **form place** per page; `examples/06.01-pdf-import.tcl` shows it end to end. **-page** counts from 1; without it the first page comes.
+
+  **What is read.** Both cross-reference flavours of ISO 32000: the classic table (7.5.4) and, since PDF 1.5, cross-reference streams with object streams (7.5.7–7.5.8) — measured on a stock of real invoices, 29 of 32 use the stream flavour — hybrid files included, and incremental updates followed over `/Prev`, newest section first. The page's inheritable attributes (`/Resources`, `/MediaBox`, `/CropBox`, `/Rotate`) are taken from the page tree where the page itself is silent. The form's extent is the CropBox where one exists — that is what a viewer shows — and the MediaBox otherwise; a `/Rotate` of 90, 180 or 270 becomes the form's matrix, so the placement shows the page upright, the way a viewer shows it, with width and height swapped accordingly in **form size**.
+
+  **What travels, and how.** Everything reachable from the page's resources is copied object by object and renumbered — fonts, images, ICC profiles, extended graphics states — with their bytes and their `/Filter` entries untouched: the import never decodes what it does not have to, so an exotic image filter is no obstacle. The copy walks PARSED objects rather than substituting text, so a literal string that happens to contain `5 0 R` stays a string. Only the page's CONTENT streams are decoded — they become one stream inside the form, written behind this document's own **-compress** — which is why their filters must be ones this package can read: FlateDecode, ASCII85Decode, ASCIIHexDecode, or none; anything else is refused naming the filter. An optional-content resource (`/Properties`) gets its catalog counterpart written as `/OCProperties`, so the layers stay configurable.
+
+  **What is refused, naming the file:** encrypted files (this package carries no decryption), a page number beyond the count (the message says how many pages the file has), a broken or truncated cross reference, and content filters the package cannot decode. Refusing beats guessing — a letterhead that is silently wrong reaches the recipient.
+
+  **What the import does not judge.** The imported page is taken as it is: **pdfa** and **ua** of this document vouch for what this document draws, not for what the foreign page contains. A document that claims conformance and imports foreign content is the caller's responsibility — validate the result, exactly as `make check` does for the examples.
+
 ## SVG
 
 *doc* **svg** *path* **-at** *{x y}* ?**-width** *w*? ?**-height** *h*? ?**-size** *{w h}*? ?**-scale** *s*? ?**-opacity** *o*? ?**-alt** *text*? ?**-artifact** *bool*?

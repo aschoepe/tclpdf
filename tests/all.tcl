@@ -65,6 +65,7 @@ foreach tclpdfPkg {
     tclpdf::leader
     tclpdf::pageNumber
     tclpdf::xObject
+    tclpdf::import
     tclpdf::io
     tclpdf::attach
     tclpdf::sfnt
