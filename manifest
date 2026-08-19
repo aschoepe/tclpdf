@@ -1,6 +1,6 @@
-C The\sreference\srun\swrites\sto\sexamples/tmp,\sand\sbarcodes\sstop\slooking\sdependency-free\n\n-\sSection\s8\sof\sthe\sacceptance\swrites\sto\sexamples/tmp/reference:\sthe\sextracted\sscripts\sthere,\stheir\sPDFs\sin\sits\sout/.\smake\sclean\sremoves\sexamples/tmp,\signore-glob\sand\sthe\ssource\sarchive\sexclude\sit,\sand\smake\sexamples\scounts\sPDFs\srather\sthan\sdirectory\sentries\n-\sThe\smanual\ssaid\sbarcodes\sneed\sno\soptional\spackage,\swhich\sreads\sas\sneeding\snothing:\stzint\sis\srequired\sby\sthe\scaller's\sscript\srather\sthan\sby\stclpdf,\sand\swithout\sit\sthere\sis\sno\sbarcode.\sSEE\sALSO\snow\scarries\sthe\saddresses\sof\stdom\sand\stzint\n-\sdoc/claude/TCLPDF.md\sand\sthe\sskill's\sown\spage\ssay\swhy\sthe\sskill\sships\swith\sthe\ssource:\swhoever\sfetches\stclpdf\sgets\sa\sreference\sthey\scan\sverify\son\stheir\sown\smachine\swith\scheck.tcl,\sagainst\stheir\scopy\sof\sthe\spackage
-D 2026-08-19T10:58:35.807
-F Makefile.in f38c5132ee1f63a8e7974ca6871cf25204ede9a31cf26f18d677510b65564250
+C make\stest\skeeps\sthe\scaller's\sTCLLIBPATH,\sand\sthe\stools\sreport\ssays\swhere\sit\ssearched\n\n-\sMakefile.in:\sthe\sTEA\stemplate\sassigned\sTCLLIBPATH\soutright\sand\serased\sthe\senvironment\s-\sa\stdom\sor\stzint\sin\sa\sprivate\sdirectory\scounted\sas\smissing\sunder\smake\stest\swhile\severy\sinteractive\stclsh\sfound\sit.\sThe\sharness\snow\sputs\sthe\sbuild\sdirectory\sfirst\sand\sthe\scaller's\sTCLLIBPATH\safter\sit\n-\stests/000-tools.test\sprints\sthe\sauto_path\sin\ssearch\sorder\sbefore\sthe\spackages,\sso\sa\sMISSING\sline\sshows\swhether\sthe\sdirectory\sthe\spackage\slives\sin\swas\ssearched\sat\sall
+D 2026-08-19T11:48:23.994
+F Makefile.in 32a12f00edbc19d7303ba0653f6ffe6b7b94f17ddde8a3a9ef313a843dbfd517
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F afm.tcl 8231b1e59ae0c7a57a15b75143abf5a963252fd16f5dc9536ed8eaae8132035d
@@ -298,7 +298,7 @@ F tclconfig/README.txt 8285d9bad9933ad1ca9fd89398e7f22bea1b96dc68fb3d1536d0b3922
 F tclconfig/install-sh d5e7acec82cb30a616dc8023b6d77abf3e7109f86175f47741afe89b34d1d4f8 x
 F tclconfig/tcl.m4 24841be70516af95124d989e9b9a9fb07879fdc9cf2248c4ce6fc7aa3a5ae72b
 F tclpdf.tcl 73df4e5630277b9cdf501c13a2df4abdf73b960978ba0eb6aef7f229bafa57e2
-F tests/000-tools.test d8c0b495245051e9aedeffbcd47b566d48af8a5e2349039ceced41996b5ae0a9
+F tests/000-tools.test 43d9c7116603b93449a4d88a80490b87a3f651c3fff3b2d6bc9d8c9c92bf1d6c
 F tests/afm.test 7ba5543b73b5b4f085a61edf0ab9f04c13f69d877312d0a31ba817140496642a
 F tests/all.tcl 88deed6ab659223e1fde61af5168d0642bb05cae6b392041910da63c9785c52c
 F tests/attach.test fc2ffc71531b9dde2b550a888e94407a0888c47c9314eaf0289739850b5af250
@@ -371,8 +371,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 71cc72e6bdbaee79a2cbbd16e5c0f4486ae3ad78553c34fc7d297e7359e31186
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P cd8b152fcd487991ed1653a7548cc0c9b4672410f6e20c8d039121e27c20da79
-R 9ea780744d8314f02a1a9cbcdfbaa654
+P 63be41bad8ac2d1431680f278b2a551c18d9ea7ae213c0365d9730ee11012d23
+R ef970d77e7306a0a0fd47649f9b4265c
 U alex
-Z 65f78fcf5e6b5d32745c82f7ebc570c5
+Z 87b1536615771a4b0a45eabdf5fde251
 # Remove this line to create a well-formed Fossil manifest.

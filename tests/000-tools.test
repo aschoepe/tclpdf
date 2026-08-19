@@ -101,6 +101,19 @@ test tools-1.1 {what this machine can check} -body {
         [info patchlevel] [info nameofexecutable]]
     lappend report ""
 
+    # Where a "package require" will look, in order. This is the line that
+    # answers "installed, but MISSING below - why?": a package living in a
+    # private directory is only found when that directory is in this list,
+    # and "make test" builds the list from the build directory plus the
+    # caller's TCLLIBPATH. It clobbered the TCLLIBPATH once - tdom stood
+    # installed in ~/lib and the report said MISSING, with nothing saying
+    # that ~/lib was never searched.
+    lappend report "  auto_path (where packages are searched, in order)"
+    foreach dir $::auto_path {
+        lappend report "    $dir"
+    }
+    lappend report ""
+
     # The two Tcl packages. tdom is the one that matters: without it the four
     # XMP modules do not load and every test that declares a conformance
     # steps aside.

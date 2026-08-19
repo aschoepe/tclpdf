@@ -41,11 +41,16 @@ CYGPATH		= @CYGPATH@
 TCL_BIN_DIR	= @TCL_BIN_DIR@
 TCL_SRC_DIR	= @TCL_SRC_DIR@
 EXTRA_PATH	= $(top_builddir):$(TCL_BIN_DIR)
-TCLLIBPATH	= $(top_builddir)
+# The build directory FIRST, so the package under test wins - and then the
+# caller's own TCLLIBPATH, not instead of it. The TEA template assigned the
+# variable outright, which erased the environment: a tdom or tzint living in
+# a private directory (reachable only through the user's TCLLIBPATH) counted
+# as missing under "make test" while every interactive tclsh found it.
+PKG_TCLLIBPATH	= $(top_builddir) $(TCLLIBPATH)
 TCLSH_ENV	= TCL_LIBRARY=`@CYGPATH@ $(TCL_SRC_DIR)/library`
 PKG_ENV		= LD_LIBRARY_PATH="$(EXTRA_PATH):$(@LD_LIBRARY_PATH_VAR@)" \
 		  PATH="$(EXTRA_PATH):$(PATH)" \
-		  TCLLIBPATH="$(TCLLIBPATH)"
+		  TCLLIBPATH="$(PKG_TCLLIBPATH)"
 
 TCLSH_PROG	= @TCLSH_PROG@
 TCLSH   	= $(PKG_ENV) $(TCLSH_ENV) $(TCLSH_PROG)
