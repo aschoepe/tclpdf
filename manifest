@@ -1,5 +1,5 @@
-C Etappe\s7:\spdf\simport\s-\sa\spage\sof\san\sexisting\sPDF\sbecomes\sa\sform\n\n-\simport.tcl:\s$doc\spdf\simport\salias\spath\s?-page\sn?,\splaced\swith\sform\splace\s-\sreal\stokenizer,\sclassic\sxref\stables\sand\scross-reference/object\sstreams\swith\sPNG\spredictors\sand\shybrid\sfiles,\sinherited\spage\sattributes,\sCropBox\sand\s/Rotate\sfolded\sinto\sthe\sform's\sBBox\sand\sMatrix,\sresources\scopied\sbyte\sfor\sbyte\swith\stheir\sfilters\suntouched,\scontent\sstreams\sdecoded\sand\smerged,\sOCProperties\swritten\sfor\soptional\scontent\n-\srefused\sby\sname:\sencrypted\sfiles,\scontent\sfilters\sthe\spackage\scannot\sdecode,\sa\spage\sbeyond\sthe\scount\s-\sLZW\scontent\sstreams\sstay\sdeferred\suntil\sa\sreal\sfile\sshows\sup,\snow\sa\sroadmap\sitem\n-\stests/import.test\swith\shandcrafted\sand\sqpdf-built\sfixtures,\sexample\s06.01-pdf-import\swrites\sand\sthen\simports\sits\sown\sletterhead,\smanual\ssection\son\simporting\sadded,\smodule\sregistered\sin\sconfigure.ac,\spkgIndex.tcl.in,\stests/all.tcl\sand\sthe\sdocument\sautoloader
-D 2026-08-19T20:53:23.048
+C Add\sdoc/TCLPDF-VS-PDF4TCL.md\s-\sthe\smeasured\stclpdf\sversus\spdf4tcl\scomparison
+D 2026-08-19T21:14:59.772
 F Makefile.in 32a12f00edbc19d7303ba0653f6ffe6b7b94f17ddde8a3a9ef313a843dbfd517
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -12,6 +12,7 @@ F color.tcl a0b13267552f5db9268c75794906e328a710b9176a2c172461415359bc6047be
 F configure 463bf4986886dc2d2a8ba5c205844be2ef4d78e775848c2e6b7c8eb5d1496603 x
 F configure.ac 4fb1ba822cadaf69db6e8ae7cfcd9c6474258cbf6ac2465665ba46eaf5d784fe
 F doc/PLUGINS.md edc439981eda773751581f6509f361ef8a0e67f3e3779c9633d84ca82034b37c
+F doc/TCLPDF-VS-PDF4TCL.md 2691537a11650e367a00a5b240a512e1b9de73b575e472822e201565c21c1360
 F doc/claude/TCLPDF.md a35e6265560a6871691cd0cafb594b5b4cff308c7e52e49d57d4ce8edc758ad4
 F doc/claude/skills/tclpdf-tcl/SKILL.md 02c984623578cf363526f52b72647e842b4146f16ada2bdd90debc9ec64f0ac7
 F doc/claude/skills/tclpdf-tcl/assets.tcl 997dd1c96d09bde87045f3e54a1a3b7d602a14852f49f5099191f04fbc290fb5
@@ -374,8 +375,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 71cc72e6bdbaee79a2cbbd16e5c0f4486ae3ad78553c34fc7d297e7359e31186
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 6a5c9009c1594bd5ad2a41b1ba924a7037eb07880d9acaaf79c917e747684a1d
-R fd328134816ee604dc9597d49e935eba
+P f1eee9a095ec5a0732a57ca60cc673be6f697812ab5a0c3b11f61c6758da1ae0
+R a163cc7c93a85f63c91d04090583de8b
 U alex
-Z 3cc9ec5fab3199c4b99a9af5b5ea3df3
+Z a9c70467d698f14a87029a7e88079bb3
 # Remove this line to create a well-formed Fossil manifest.
