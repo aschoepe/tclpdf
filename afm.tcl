@@ -161,7 +161,7 @@ proc ::tclpdf::afm::encode {font text} {
   Check $font
   return [encodeWidths $::tclpdf::afmData::widths($font) $text \
       [isSymbolic $font] "the standard font $font" \
-      " - embed a TrueType font for this text"]
+      " - embed a TrueType font for this text" $font]
 }
 
 # The same against a width list handed in rather than looked up, so that an
@@ -169,7 +169,18 @@ proc ::tclpdf::afm::encode {font text} {
 # this code and not by a second copy of it. The two differ in where the widths
 # come from and in what the message may suggest; everything that can go wrong
 # is the same.
-proc ::tclpdf::afm::encodeWidths {widths text symbolic name {hint {}}} {
+# Every refusal below carries -errorcode {TCLPDF FONT GLYPH codepoint
+# position fontname} so a script can trap and handle it - switch faces, drop
+# the run - without parsing the message, whose wording is NOT a contract.
+# The errorcode is; it is documented in the manual under "Error codes", and
+# font.tcl throws the same one for an embedded face. $id is the name the
+# document knows the font by (the PostScript name of a standard font, the
+# caller's alias otherwise); $name is the prose for the message and may be a
+# whole phrase, which is why the two travel separately.
+proc ::tclpdf::afm::encodeWidths {widths text symbolic name {hint {}} {id {}}} {
+  if {$id eq {}} {
+    set id $name
+  }
   set codes {}
   set position 0
   foreach char [split $text {}] {
@@ -195,22 +206,30 @@ proc ::tclpdf::afm::encodeWidths {widths text symbolic name {hint {}}} {
       # No transcoding: the caller addresses the font's own encoding directly.
       set code [scan $char %c]
       if {$code > 255} {
-        return -code error "tclpdf: character U+[format %04X $code] cannot be\
+        set u U+[format %04X $code]
+        return -code error \
+            -errorcode [list TCLPDF FONT GLYPH $u $position $id] \
+            "tclpdf: character $u cannot be\
             written in $name, which has a 256-slot built-in encoding\
             (position $position)"
       }
     } else {
       if {[catch {encoding convertto cp1252 $char} byte]
           || [encoding convertfrom cp1252 $byte] ne $char} {
-        return -code error "tclpdf: character U+[format %04X [scan $char %c]]\
+        set u U+[format %04X [scan $char %c]]
+        return -code error \
+            -errorcode [list TCLPDF FONT GLYPH $u $position $id] \
+            "tclpdf: character $u\
             is not available in WinAnsiEncoding and cannot be written with\
             $name (position $position)$hint"
       }
       binary scan $byte cu code
     }
     if {[lindex $widths $code] == 0 && $code != 32} {
-      return -code error "tclpdf: $name has no glyph for\
-          U+[format %04X [scan $char %c]] (position $position)"
+      set u U+[format %04X [scan $char %c]]
+      return -code error \
+          -errorcode [list TCLPDF FONT GLYPH $u $position $id] \
+          "tclpdf: $name has no glyph for $u (position $position)"
     }
     lappend codes $code
     incr position

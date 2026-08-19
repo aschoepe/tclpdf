@@ -285,6 +285,18 @@ test type1-3.3 {a character the face has no glyph for is refused} -constraints h
       [string match {*Type 1*} $message]
 } -result {1 1 1}
 
+test type1-3.3a {the refusal carries the machine-readable -errorcode} -constraints haveRaw -body {
+  # The Type 1 road runs through the same encoder as the standard faces
+  # (afm encodeWidths), so it throws the same contract - with the caller's
+  # alias as the fontname element, not the message's descriptive phrase.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed sans $::raw
+  catch {$doc text "中" -at {20 20} -family sans} - opts
+  $doc destroy
+  dict get $opts -errorcode
+} -result {TCLPDF FONT GLYPH U+4E2D 0 sans}
+
 test type1-3.4 {the metrics have to be there} -constraints havePfb -body {
   # Without an AFM there are no widths at all - a Type 1 program keeps them in
   # its encrypted charstrings. Saying so plainly beats embedding a face that

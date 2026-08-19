@@ -24,7 +24,10 @@
 #
 #   The writer is the last place in the chain that still knows what was meant.
 #   So it says so, names the character and the position, and lets the caller
-#   decide - which is what the loop below does, in four lines.
+#   decide - which is what the loop below does, in four lines. The same facts
+#   travel machine-readable in the error's -errorcode - the list
+#   {TCLPDF FONT GLYPH codepoint position fontname}, see "Error codes" in the
+#   manual - so the loop traps by prefix instead of parsing the message.
 #
 # Do not take a font viewer's word for the coverage: a viewer that is asked
 # for a character the face lacks substitutes the glyph from another face and
@@ -92,14 +95,17 @@ set record {}
 set y 58
 foreach {dish price} $dishes {
     $doc font -family script -size 14 -color black
-    if {[catch {$doc text $dish -at [list 20 $y]} reason]} {
+    try {
+        $doc text $dish -at [list 20 $y]
+        lappend record [list $dish Niconne "set as chosen"]
+    } trap {TCLPDF FONT GLYPH} {reason opts} {
+        # Trapped by the errorcode's prefix, not by parsing the message: the
+        # list behind it carries the codepoint, the position and the face,
+        # and its shape is a documented contract while the wording is not.
+        set codepoint [lindex [dict get $opts -errorcode] 3]
         $doc font -family body -size 11
         $doc text $dish -at [list 20 $y]
-        # The message ends in a sentence; the codepoint is what matters here.
-        regexp {U\+[0-9A-F]{4}} $reason codepoint
         lappend record [list $dish "DejaVu Sans" "no glyph for $codepoint"]
-    } else {
-        lappend record [list $dish Niconne "set as chosen"]
     }
     $doc font -family body -size 11
     # -align decimal belongs to tables, where a column knows what the column

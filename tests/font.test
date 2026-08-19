@@ -461,6 +461,25 @@ test font-4.4 {a character the font lacks is refused} -constraints haveFont -bod
   }
 } -returnCodes error -match glob -result {*has no glyph for U+4E2D*}
 
+test font-4.4a {the refusal carries the machine-readable -errorcode} -constraints haveFont -body {
+  # Same contract as the standard faces (see afm-3.9 and the manual under
+  # "Error codes"); the fontname element is the caller's own alias. Trapped
+  # here exactly as a script would, by the prefix of the errorcode list.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  try {
+    $doc text "ab[encoding convertfrom utf-8 [binary format H* e4b8ad]]" \
+        -at {20 20} -family haus
+    set found none
+  } trap {TCLPDF FONT GLYPH} {- opts} {
+    set found [dict get $opts -errorcode]
+  } finally {
+    $doc destroy
+  }
+  set found
+} -result {TCLPDF FONT GLYPH U+4E2D 2 haus}
+
 test font-4.7 {code points outside the BMP are read from a format 12 cmap} -constraints haveFont -body {
   # Measured on DejaVu Sans: it maps U+1F600 through a format 12 subtable, so
   # this also proves the parser prefers that over the BMP-only format 4.

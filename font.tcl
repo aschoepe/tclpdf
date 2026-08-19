@@ -336,7 +336,7 @@ oo::define ::tclpdf::document::document {
     return [::tclpdf::afm encodeWidths \
         [dict get [my state fonts] $alias widths] $text 0 \
         "the embedded Type 1 face \"$alias\"" \
-        " - embed a TrueType face for this text"]
+        " - embed a TrueType face for this text" $alias]
   }
 
   method FontNames {} {
@@ -499,8 +499,13 @@ oo::define ::tclpdf::document::document {
       # glyph the face would have to carry, and naming the one the caller
       # typed would send them looking at a character the face has.
       if {![dict exists $cmap $drawn]} {
-        return -code error "tclpdf: the font \"$alias\" has no glyph for\
-            U+[format %04X $drawn] (position $position) - it cannot be written\
+        # Same -errorcode as the three refusals in [afm encodeWidths]; the
+        # contract is described there and in the manual under "Error codes".
+        set u U+[format %04X $drawn]
+        return -code error \
+            -errorcode [list TCLPDF FONT GLYPH $u $position $alias] \
+            "tclpdf: the font \"$alias\" has no glyph for\
+            $u (position $position) - it cannot be written\
             with this face"
       }
       lappend run [list [dict get $cmap $drawn] [list $drawn]]

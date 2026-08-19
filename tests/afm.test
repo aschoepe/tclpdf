@@ -150,6 +150,24 @@ test afm-3.8 {the no-break space is not a character of Symbol or ZapfDingbats} -
       [catch {::tclpdf::afm bytes ZapfDingbats "\u00A0"} message] $message
 } -match glob -result {750 0 1 {*ZapfDingbats has no glyph for U+00A0*}}
 
+test afm-3.9 {every refusal carries the machine-readable -errorcode} -body {
+  # The contract for scripts, documented in the manual under "Error codes":
+  # {TCLPDF FONT GLYPH codepoint position fontname}, trappable by prefix,
+  # stable while the message wording is free to change. All three refusals
+  # of this module throw it: outside WinAnsi, no glyph, outside a built-in
+  # 256-slot encoding.
+  set han [encoding convertfrom utf-8 [binary format H* e4b8ad]]
+  catch {::tclpdf::afm bytes Helvetica "ab$han"} - opts
+  set winAnsi [dict get $opts -errorcode]
+  catch {::tclpdf::afm bytes ZapfDingbats "\u00A0"} - opts
+  set noGlyph [dict get $opts -errorcode]
+  catch {::tclpdf::afm bytes Symbol $han} - opts
+  set builtIn [dict get $opts -errorcode]
+  list $winAnsi $noGlyph $builtIn
+} -result {{TCLPDF FONT GLYPH U+4E2D 2 Helvetica}\
+    {TCLPDF FONT GLYPH U+00A0 0 ZapfDingbats}\
+    {TCLPDF FONT GLYPH U+4E2D 0 Symbol}}
+
 test afm-4.1 {Symbol and ZapfDingbats are symbolic, the others are not} -body {
   list [::tclpdf::afm isSymbolic Symbol] [::tclpdf::afm isSymbolic ZapfDingbats] \
       [::tclpdf::afm isSymbolic Helvetica]
