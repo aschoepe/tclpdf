@@ -104,6 +104,14 @@ fi
 # the original - and they may not leave this machine. The exclusion is repeated
 # in .fossil-settings/ignore-glob so that neither a commit nor an archive picks
 # them up. Do not remove either one.
+#
+# tools/Mustang-CLI-*.jar is the same shape of problem in the smaller: the
+# ZUGFeRD validator "make check" runs is a SEPARATE PROJECT under Apache 2.0
+# and a 59 MB jar that whoever wants that check downloads themselves. It is
+# ignore-globbed as well, so it never reaches a commit - but the tar below
+# takes the working tree rather than the repository, so without this line it
+# would ride along in the source archive, quadrupling it and putting foreign
+# code into an MIT tarball without its licence.
 
 # The source archive is taken through a staging copy for the same reason: the
 # tree itself is not touched, the copy gets the modes, and the tar takes the
@@ -120,6 +128,7 @@ tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude="${PACKAGE_NAME}/.fslckout" \
     --exclude="${PACKAGE_NAME}/.fossil-settings" \
     --exclude="${PACKAGE_NAME}/.claude" \
+    --exclude="${PACKAGE_NAME}/tools/Mustang-CLI-*.jar" \
     --exclude="${PACKAGE_NAME}/CLAUDE.md" \
     --exclude="${PACKAGE_NAME}/.gitattributes" \
     --exclude="${PACKAGE_NAME}/.vscode" \

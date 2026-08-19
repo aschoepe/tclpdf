@@ -1,0 +1,184 @@
+# 000-tools.test --
+#
+# What this machine can check, printed before anything is checked.
+#
+# The file is named to sort first: tcltest runs the directory in alphabetical
+# order, and this report is worth nothing after the run it describes. It makes
+# no assertion about the tools - a missing one is not a failure here, it is a
+# fact about the machine, and the tests that need it carry a constraint of
+# their own. What it does assert is that the report itself could be produced.
+#
+# It exists because two runs on other machines cost an evening between them:
+# one where Homebrew's tdom was in the package index but its shared library
+# was gone, so "package require" threw and took the whole suite with it, and
+# one where a tool was simply absent and the run reported "passed" for the
+# tests that quietly checked nothing. Both would have been one line of output
+# away from obvious.
+#
+# The cost of each missing tool is counted from the test files themselves
+# rather than written down here, so the numbers cannot go stale.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+source [file join [file dirname [info script]] helper.tcl]
+
+namespace eval ::tclpdfTools {}
+
+# What a Tcl package is and where it comes from. The path is the interesting
+# part: "installed" and "loadable" are different questions, and the answer to
+# the second one lives in the [package ifneeded] script - the file it loads or
+# sources. That is exactly the file that was missing in the case above.
+proc ::tclpdfTools::package {name requirement} {
+    if {[catch {::package require $name $requirement} version]} {
+        return [list no {} {} $version]
+    }
+    set where {}
+    foreach line [split [::package ifneeded $name $version] ";\n"] {
+        set line [string trim $line]
+        if {[regexp {^(?:load|source)\s+(\S+)} $line -> path]} {
+            set where $path
+            break
+        }
+    }
+    return [list yes $version $where {}]
+}
+
+# An external program: the path [auto_execok] resolves, and the version the
+# program itself reports. The flag differs per tool and so does the channel -
+# poppler, libjpeg-turbo and java answer on stderr, veraPDF prefixes its
+# answer with JVM warnings - so both channels are read and the first line that
+# looks like an answer is taken.
+proc ::tclpdfTools::program {name flag} {
+    set path [auto_execok $name]
+    if {$path eq {}} {
+        return [list no {} {}]
+    }
+    set path [lindex $path 0]
+    set version {}
+    if {![catch {exec $path {*}$flag 2>@1} output]
+            || [string length $output]} {
+        foreach line [split $output \n] {
+            set line [string trim $line]
+            if {$line eq {} || [string match {WARNING:*} $line]
+                    || [string match {Note:*} $line]} {
+                continue
+            }
+            set version $line
+            break
+        }
+    }
+    return [list yes $version $path]
+}
+
+# How many tests a missing constraint costs - counted in the test files, so
+# that adding a test that needs hb-shape updates this report by itself.
+proc ::tclpdfTools::tests {constraint} {
+    set count 0
+    foreach file [glob -nocomplain -directory [file dirname [info script]] *.test] {
+        set channel [open $file r]
+        fconfigure $channel -encoding utf-8
+        set text [read $channel]
+        close $channel
+        # The "--" is not decoration: the pattern starts with a hyphen and
+        # regexp would read it as an option and fail with "bad option".
+        incr count [regexp -all -- \
+            "-constraints\\s+(?:\\{\[^\}\]*\\y$constraint\\y\[^\}\]*\\}|$constraint\\y)" \
+            $text]
+    }
+    return $count
+}
+
+test tools-1.1 {what this machine can check} -body {
+    set report {}
+    lappend report "" "  tclpdf test tools" ""
+    lappend report [format "  %-10s %-22s %s" Tcl \
+        [info patchlevel] [info nameofexecutable]]
+    lappend report ""
+
+    # The two Tcl packages. tdom is the one that matters: without it the four
+    # XMP modules do not load and every test that declares a conformance
+    # steps aside.
+    set missing {}
+    lappend report "  Tcl packages"
+    foreach {name requirement constraint what} {
+        tdom 0.9.0- haveTdom "PDF/A, PDF/UA, ZUGFeRD - the XMP packet"
+        tzint 1.3-  haveTzint "barcodes, drawn from the encoder's SVG"
+    } {
+        lassign [::tclpdfTools::package $name $requirement] found version where why
+        set cost [::tclpdfTools::tests $constraint]
+        if {$found eq "yes"} {
+            lappend report [format "    %-8s %-8s %s" $name $version $where]
+        } else {
+            lappend report [format "    %-8s %-8s MISSING - %d test%s skipped: %s" \
+                $name - $cost [expr {$cost == 1 ? "" : "s"}] $what]
+            lappend missing "$name ($cost)"
+        }
+    }
+    lappend report ""
+
+    # The programs. The second column says which run needs it: the suite, the
+    # acceptance run, or both.
+    lappend report "  Programs"
+    foreach {name flag constraint used what} {
+        qpdf      --version  qpdf           "test+check" "structure of every document written"
+        verapdf   --version  {}             "test+check" "conformance - and 3 tests then check less WITHOUT saying so"
+        pdftotext -v         havePdfToText  "test"       "text extraction"
+        pdfinfo   -v         {}             "check"      "a reader rather than a validator"
+        hb-shape  --version  haveHbShape    "test"       "Arabic shaping against HarfBuzz"
+        fribidi   --version  haveFribidi    "test"       "the bidi rules against the reference"
+        cjpeg     -version   haveCjpeg      "test"       "a JPEG built at test time"
+        djpeg     -version   haveCjpeg      "test"       "and read back again"
+        java      -version   {}             "check"      "runs Mustangproject over the invoices"
+        pandoc    --version  {}             "check"      "builds the manual pages"
+    } {
+        lassign [::tclpdfTools::program $name $flag] found version path
+        if {$found eq "yes"} {
+            lappend report [format "    %-10s %-11s %-38s %s" $name $used \
+                [string range $version 0 37] $path]
+        } else {
+            set cost ""
+            if {$constraint ne {}} {
+                set n [::tclpdfTools::tests $constraint]
+                set cost [format " - %d test%s skipped" $n \
+                    [expr {$n == 1 ? "" : "s"}]]
+            }
+            lappend report [format "    %-10s %-11s MISSING%s - %s" $name $used \
+                $cost $what]
+            lappend missing $name
+        }
+    }
+
+    # Mustangproject is not a program on the PATH but a jar that whoever wants
+    # that check downloads into tools/ - the only entry here that is opt-in.
+    set jar [lindex [lsort [glob -nocomplain -directory \
+        [file join [file dirname [file dirname [file normalize [info script]]]] tools] \
+        Mustang-CLI-*.jar]] end]
+    lappend report ""
+    if {$jar ne {}} {
+        lappend report [format "    %-10s %-11s %-38s %s" Mustang check \
+            [file rootname [file tail $jar]] $jar]
+    } else {
+        lappend report [format "    %-10s %-11s MISSING - %s" Mustang check \
+            "not in the tree; https://github.com/ZUGFeRD/mustangproject"]
+    }
+
+    lappend report ""
+    if {[llength $missing]} {
+        lappend report "  missing: [join $missing {, }]"
+        lappend report "  a missing tool is a skip, never a pass - the run says so at the end"
+    } else {
+        lappend report "  everything this suite and \"make check\" can use is present"
+    }
+    lappend report ""
+    puts [join $report \n]
+
+    # The assertion is only that the report could be made: every entry
+    # answered, nothing threw. What it found is a fact about the machine.
+    expr {[llength $report] > 12}
+} -result 1

@@ -1,5 +1,5 @@
-C An\sICC\scolour\sno\slonger\spulls\stdom\sin,\sand\sthe\ssuite\sruns\swhere\stdom\sis\sabsent\n\n-\sThe\sICC\sheader\sreader\smoves\sfrom\spdfa.tcl\sto\scolor.tcl\sas\scolor::iccSpace:\sicc\sembed\sand\severy\s{icc\salias\s...}\scolour\sloaded\sthe\sPDF/A\smachinery\sand\stdom\sbehind\sit,\swhich\sreading\stwenty\sbytes\sof\sa\sheader\snever\sneeded;\sthe\soutput\sintent,\sicc\sembed\sand\sa\spicture's\sembedded\sprofile\snow\sread\sthrough\sthe\scolour\smodule.\sThe\smanual\ssays\swhich\sfour\smodules\stdom\sis\sfor\n-\stests/helper.tcl\sdefines\sthe\shaveTdom\sconstraint\sand\stests/all.tcl\sasks\sfor\sxmp,\spdfa,\szugferd\sand\sua\sinside\sa\scatch;\sthe\sfour\stest\sfiles\sthat\sneed\sthem\sstep\saside,\s158\stests\selsewhere\scarry\sthe\sconstraint.\sA\smachine\swithout\stdom\sused\sto\slose\sthe\swhole\srun\sat\sthe\sfirst\spackage\srequire\n-\simage-figure-15.4\scompared\s"0\s-"\sagainst\sthe\sglob\s{0\s[0-]},\swhich\sdoes\snot\smatch\sa\shyphen,\sso\sit\sfailed\son\severy\smachine\swithout\sveraPDF\sand\spassed\son\sthe\sone\sit\swas\swritten\son;\sit\sfollows\scolor.test\snow\sand\sstates\swhat\sit\smeasured\n-\sTests:\s1551\sunder\s8.6\sand\s9.0,\s1328\swith\s28\sskipped\sand\snone\sfailed\swhere\stdom\scannot\sbe\sfound,\smake\scheck\s37\spassed
-D 2026-08-18T16:34:30.605
+C A\stools\sreport\sthat\sruns\sbefore\sthe\ssuite,\sand\sMustang\skept\sout\sof\sthe\ssource\sarchive\n\n-\sNew\stests/000-tools.test,\snamed\sto\ssort\sfirst:\sTcl\spackages\sand\sexternal\sprograms\swith\sversion\sand\sthe\spath\sthey\swere\sactually\sfound\sat,\stdom\sand\stzint\sthrough\stheir\spackage\sifneeded\sscript.\sA\smissing\stool\sis\sreported\swith\swhat\sit\scosts,\scounted\sfrom\sthe\sconstraints\sin\sthe\stest\sfiles\srather\sthan\swritten\sdown;\sveraPDF\sis\scalled\sout\sas\sthe\sone\swhose\stests\scheck\sless\swithout\ssaying\sso\n-\stools/archive.sh\sexcludes\stools/Mustang-CLI-*.jar:\sthe\star\stakes\sthe\sworking\stree,\snot\sthe\srepository,\sso\sthe\signore-glob\salone\sdid\snot\skeep\sit\sout\n-\sTests:\s1552\sunder\s8.6\sand\s9.0,\smake\scheck\s37\spassed\n-\sKNOWN\sthe\sreport\sshows\sin\smake\stest\sonly;\smake\scheck\sfilters\sthe\stest\soutput\sdown\sto\sits\ssummary\sline
+D 2026-08-19T09:05:56.907
 F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -297,6 +297,7 @@ F tclconfig/README.txt 8285d9bad9933ad1ca9fd89398e7f22bea1b96dc68fb3d1536d0b3922
 F tclconfig/install-sh d5e7acec82cb30a616dc8023b6d77abf3e7109f86175f47741afe89b34d1d4f8 x
 F tclconfig/tcl.m4 24841be70516af95124d989e9b9a9fb07879fdc9cf2248c4ce6fc7aa3a5ae72b
 F tclpdf.tcl 73df4e5630277b9cdf501c13a2df4abdf73b960978ba0eb6aef7f229bafa57e2
+F tests/000-tools.test d8c0b495245051e9aedeffbcd47b566d48af8a5e2349039ceced41996b5ae0a9
 F tests/afm.test 7ba5543b73b5b4f085a61edf0ab9f04c13f69d877312d0a31ba817140496642a
 F tests/all.tcl 88deed6ab659223e1fde61af5168d0642bb05cae6b392041910da63c9785c52c
 F tests/attach.test fc2ffc71531b9dde2b550a888e94407a0888c47c9314eaf0289739850b5af250
@@ -347,7 +348,7 @@ F textBlock.tcl 989e51a2239c68a961314599361c56700148d9449813f47be4298debdbd45e97
 F textPath.tcl 571bf06d92e655d8cfd67e234afb0492a14c0d3ff3efe48ebc586dd706c6c928
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
-F tools/archive.sh 2a9dc87e9ecefc6b0a5f1e6bcfaf4d4c7d63579e35d83f7cac84f0fc5d91c69a x
+F tools/archive.sh fc53ca8f2371fe855d76b8807d1c83c5e8bd5a62fbf5e9e83cbe7c26d6e330c2 x
 F tools/check.sh 74182b977c902b5a0346473972ad8dec1466a5b4e30145dfeeca2f9458f27d3a x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
@@ -369,8 +370,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 71cc72e6bdbaee79a2cbbd16e5c0f4486ae3ad78553c34fc7d297e7359e31186
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 020e39014c77aac5280aa3f38883ed4534b8855d93810a3d1ed5609b8e8fa519
-R 1ef9a9c286b9ee698b9944fa8c7eef57
+P 33d4164fd27b144b8dda9279611c1f6c783be63c9653b23639f8c0f75b447f9e
+R b19f4b3d3e709e7b256434c6ccefb5fa
 U alex
-Z cc685f26bc7528b150f1727256dac07e
+Z 1b553717bff871d0b9e376777cf0dbc0
 # Remove this line to create a well-formed Fossil manifest.
