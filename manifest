@@ -1,5 +1,5 @@
-C A\stools\sreport\sthat\sruns\sbefore\sthe\ssuite,\sand\sMustang\skept\sout\sof\sthe\ssource\sarchive\n\n-\sNew\stests/000-tools.test,\snamed\sto\ssort\sfirst:\sTcl\spackages\sand\sexternal\sprograms\swith\sversion\sand\sthe\spath\sthey\swere\sactually\sfound\sat,\stdom\sand\stzint\sthrough\stheir\spackage\sifneeded\sscript.\sA\smissing\stool\sis\sreported\swith\swhat\sit\scosts,\scounted\sfrom\sthe\sconstraints\sin\sthe\stest\sfiles\srather\sthan\swritten\sdown;\sveraPDF\sis\scalled\sout\sas\sthe\sone\swhose\stests\scheck\sless\swithout\ssaying\sso\n-\stools/archive.sh\sexcludes\stools/Mustang-CLI-*.jar:\sthe\star\stakes\sthe\sworking\stree,\snot\sthe\srepository,\sso\sthe\signore-glob\salone\sdid\snot\skeep\sit\sout\n-\sTests:\s1552\sunder\s8.6\sand\s9.0,\smake\scheck\s37\spassed\n-\sKNOWN\sthe\sreport\sshows\sin\smake\stest\sonly;\smake\scheck\sfilters\sthe\stest\soutput\sdown\sto\sits\ssummary\sline
-D 2026-08-19T09:05:56.907
+C A\shello-world\sas\sthe\sfirst\sexample\n\n-\sNew\sexamples/00.01-hello-world.tcl:\sten\slines,\sno\scommon.tcl\sand\sno\sfooter,\snumbered\sto\ssort\sfirst\sso\sthat\s"make\sexamples"\sand\sa\sdirectory\slisting\sboth\sstart\swith\sit.\sThe\stwo\sversion\snumbers\sin\sthe\sline\sit\sdraws\sare\sasked\sof\sthe\sdocument\sand\sof\sthe\spackage\srather\sthan\styped\sout
+D 2026-08-19T10:13:08.604
 F Makefile.in ee9247e02496e2e0f24de9bc14b2f87bafdcf0f78693cac5e6fd3e140d28b079
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -30,6 +30,7 @@ F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b453808
 F doc/tclpdf.md 7e6a40b65617c05270d3b3c02c9f88e777259e225997173f877d30c3a0239f2e
 F document.tcl 08d06f8bb3cf935a889fc26d4bbdba183db47bc894806b35d852ce15037e5eea
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
+F examples/00.01-hello-world.tcl 7ebcbd6467061066628f2b536cc6729baf1f9684da8c8bed0842c458e7b2bd68 w examples/06.01-hello-world.tcl
 F examples/01.01-shapes.tcl d5ad63be2c5a0627461cbfdfc5b9331c76bb9058faed25d02365e61db84187ff
 F examples/01.02-colour.tcl ad287f5282ac29ed1b7a856a71912c9c238dcde421eb24114751629575ac118f
 F examples/01.03-text-layout.tcl 2d583d537de2bd7e0237477353868b7e648bf585c6a315f978781eb934c3dfe8
@@ -370,8 +371,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 71cc72e6bdbaee79a2cbbd16e5c0f4486ae3ad78553c34fc7d297e7359e31186
 F zugferd.tcl 55e19df2f90459ad09323d7a3db7747982e63d2f341c617f00b159a0c34b576a
-P 33d4164fd27b144b8dda9279611c1f6c783be63c9653b23639f8c0f75b447f9e
-R b19f4b3d3e709e7b256434c6ccefb5fa
+P 87aaa21900681bba012b89edb6e6ee6593a3b8e676359bb1539430ad722d8952
+R eeffdaa0b2109c3b6642bbded01ff1ee
 U alex
-Z 1b553717bff871d0b9e376777cf0dbc0
+Z a3d75e8d4770e9a7aea7ea87a2f9b3ad
 # Remove this line to create a well-formed Fossil manifest.
