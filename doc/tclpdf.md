@@ -16,7 +16,7 @@ tclpdf - PDF generation for Tcl
 
 **tclpdf** creates PDF documents from Tcl. It is a pure Tcl package: no compiler, no binary extension, no Tk.
 
-What is documented below is what the package provides — nothing here is planned or partial. Roughly a third of ISO 32000-1 is covered, weighted by the page count of its chapters; the remainder is almost entirely what a **reader** of foreign PDFs needs rather than a writer, plus encryption and form fields.
+What is documented below is what the package provides — nothing here is planned or partial. Roughly a third of ISO 32000-1 is covered, weighted by the page count of its chapters; the remainder is almost entirely what a **reader** of foreign PDFs needs rather than a writer — reading an encrypted file among them — plus form fields.
 
 # INSTALLATION
 

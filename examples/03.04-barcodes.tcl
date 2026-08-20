@@ -129,8 +129,11 @@ $doc text "Zeile 3 des Datensatzes sagt \"1\", also UTF-8. -eci 26 haelt die\
     Spezifikation verlangte Fehlerkorrekturstufe M." -at [list 20 $y] -width 170
 set y [expr {$y + 12}]
 
-set epc "BCD\n002\n1\nSCT\nBANKDEFFXXX\nMuster GmbH\n\
-    DE89370400440532013000\nEUR12.34\n\n\nRechnung 2026-114"
+# A published example account: the check digits are valid, the bank code and
+# the BIC belong together and to a real institute, the account number does
+# not exist. See docs/MUSTERDATEN.md for where these come from.
+set epc "BCD\n002\n1\nSCT\nBYLADEM1001\nMuster GmbH\n\
+    DE02120300000000202051\nEUR12.34\n\n\nRechnung 2026-114"
 encode markup $epc -barcode qrcode -security 2 -eci 26
 $doc svg -data $markup -at [list 20 $y] -height 30 \
     -alt "GiroCode: Ueberweisung 12,34 Euro an Muster GmbH"

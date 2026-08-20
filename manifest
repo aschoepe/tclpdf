@@ -1,5 +1,5 @@
-C Stage\s8:\sencryption,\sthe\sstandard\ssecurity\shandler\sin\srevision\s6\n\n-\scrypto.tcl\s-\sAES-256\sin\sCBC\sand\ssingle-block\sECB,\sSHA-256,\sSHA-384,\sSHA-512\sand\srandom\sbytes\sfrom\s/dev/urandom,\sall\sin\spure\sTcl\sand\schecked\sagainst\sFIPS\s197,\sNIST\sSP\s800-38A\sand\sFIPS\s180-4;\sthe\sS-box\sis\scomputed\srather\sthan\stranscribed,\sand\sa\smissing\srandom\ssource\sis\srefused\sby\sname\sinstead\sof\sweakened\n-\sencrypt.tcl\s-\s$doc\sencrypt\swith\suser\sand\sowner\spassword,\spermissions\sby\sname\sand\s-metadata,\swriting\s/V\s5\s/R\s6\swith\sAESV3\sfor\sstrings,\sstreams\sand\sthe\sfile;\srevisions\s2\sto\s4\sand\sRC4\sare\snot\swritten,\sbeing\sdeprecated\sin\sPDF\s2.0\n-\sthe\sseams\sthe\scipher\shangs\sin:\swriter\sgains\sencryptor\swith\sa\smetadata\sflag\sand\sruns\sit\sbetween\sthe\sfilters\sand\s/Length,\sdocument\sgains\strailerEntry\sas\sthe\stwin\sof\scatalogEntry,\sand\stwenty\sstring\ssites\sgo\sthrough\sStr,\sHexStr\sand\sBytesStr\s-\sa\sguard\stest\snames\sany\snew\scall\sthat\sbypasses\sthem,\sand\sthe\sthree\sexemptions\scarry\stheir\sreason\sat\sthe\scode\n-\simport.tcl\sno\slonger\sbuilds\scopied\sresource\sstreams\sby\shand,\sso\s/Length\shas\sone\sproducer\sagain\sand\scopied\sstreams\smeet\sthe\sfilter\scheck\slike\severy\sother\n-\spdfa\sand\szugferd\srefuse\san\sencrypted\sdocument\sand\sencrypt\srefuses\stheirs,\sin\swhichever\sorder\sthe\scalls\sare\smade;\sencrypt\salso\srefuses\sa\sdocument\sthat\salready\scarries\sdrawing,\sa\slanguage\sor\sa\slink,\swhose\sstrings\sare\sbuilt\sat\sthe\scall\sand\swould\sotherwise\sstay\sin\sthe\sclear\sinside\san\sencrypted\sfile\n-\smanual\sgains\sthe\sEncryption\ssection\sand\squalifies\sthe\sbyte-identical\spromise,\swhich\sencryption\sgives\sup\son\spurpose;\sexamples\s07.01\sand\s07.02\sshow\sboth\spatterns,\sand\scheck.sh\sgives\sthe\sencrypted\sexample\sits\spassword\sand\schecks\sthat\sit\sneeds\sone\n-\sknowingly\snot\sthere:\sreading\ssomeone\selse's\sencrypted\sfile,\sthe\spublic-key\shandler,\sand\sSASLprep\son\sthe\spassword
-D 2026-08-20T11:13:56.238
+C Sample\sdata\sin\sthe\sexamples:\sreal\sIBANs,\sand\sthe\smanual\sno\slonger\scounts\sencryption\sas\smissing\n\n-\sManual:\sthe\sDESCRIPTION\ssentence\slisted\sencryption\samong\swhat\sthe\spackage\sdoes\snot\sdo\s-\sit\snames\sreading\san\sencrypted\sfile\sinstead
+D 2026-08-20T12:29:01.908
 F Makefile.in d6f4813e99b024fd8252c36e174753e913178747852b26a40c93ff1599f0e955
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -29,7 +29,7 @@ F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md b281f35b55af1
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md e74770aceab2bdfb54e8ac69b7aa32bbf1ce3d0158ad7cf125b5b3ceca689913
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 343ab802c41131f981debb4ec3f0ce031f8f3daf2fbb50fc0ff3dd34de626414
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md 3a220a6817d8fd426da73608000c447ae3bb5a5d8df08fec9cf6bc33f33cac0a
+F doc/tclpdf.md 2d9247cc308150c1e3b76df431b181cf068107c7dad6700e8c9fc5776f50a01a
 F document.tcl 1ab00b2e0b5b6821c4032d5106c7b5ab25645254585af1ebc74f1f548093c655
 F encrypt.tcl 6d4c599238a4dc7a11b93cc35633afbf388255d508dfd4045f4924ade3120b93
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
@@ -58,7 +58,7 @@ F examples/02.10-variable-fonts.tcl ba9f49e6b2571a55fe622cf7569e3801060f13e23e96
 F examples/03.01-images.tcl c29cfd51cfd2f200db5670768372f20803ddd603d9226171112d0dff73fef2df
 F examples/03.02-gradients.tcl 55dcaec9a62445d8dce857b5d2d7390abc77d016b0070e9ed177524e44c3a076
 F examples/03.03-svg.tcl 8694a30e48f185b2dbcf52bd75e46036fe9b8a4522737675780ce37011b6150c
-F examples/03.04-barcodes.tcl d6b296a426a8a248b812188ac1e067f97ec9fbc4ff97694b2976979e613809ca
+F examples/03.04-barcodes.tcl 5dc837e13069a6abe31d6f46de1efbc83aaa2183ba63ca87b13f6b1a8d97ff94
 F examples/03.05-svg-text.tcl 1de337ff643e97ba03806b0e5f079c9c662958d3059bb40f23233c2369924b58
 F examples/04.01-table-basics.tcl f2ee0fe8326397a1cf008837576d6dfdf873b960b9ae8b9caab2aa3f47013d03
 F examples/04.02-table-paging.tcl 42c41f0dca8b4c10be1342add4490b36e1a99437820ae604a089e97cc8ae56e6
@@ -77,7 +77,7 @@ F examples/05.11-pdfa-srgb-openicc.tcl 394017dc08ff1c9c06025e7b1cdc6229250b9e474
 F examples/05.12-pdfa-srgb2014.tcl e1c32b9fe67065ae3fc57dd6b8160c86649badc75c892be371e435466104f289
 F examples/05.13-order-x.tcl 55ba6fffe22ac21d03c592d249ed993153886cf14268b0c97b72a6611033441e
 F examples/05.14-weakly-structured.tcl 7efdd0d81e86fa209e98a19c7a6f197522c6ebd096c6673a2b1c9f8d0bb579f8
-F examples/06.01-pdf-import.tcl 52eca5932637ca2d08a15db2364795a3be39973aff34fe0999395fdff91f0dde
+F examples/06.01-pdf-import.tcl bb7d2e70869fe6d2c54139f363be77b5b7ffd657859e87eebde7eabe25e36898
 F examples/07.01-encryption.tcl 4ea830d5a5963ab136aa0091bfee3ed1017fc23f17e7460349dabbb969994cdf
 F examples/07.02-permissions.tcl 2dc6be3733bd7b76ce992b7ffc44539a86e73d361c4e3a985ad14c737484a46e
 F examples/assets/README.md 8c24ab538756c31beccac0b880b26103f322328f04a14eb15b8d3954d1b001e8
@@ -382,8 +382,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 70ccf21cdf234f7c23c389217c6db0b23a5007631fe9534b1d8e3cbce8e23ea8
 F zugferd.tcl eed0756f706877c6c8eac25f55b8eefe7ddb9c6bd34b56ea989540a9c02d1110
-P 42160d2ef63e812dfe9fb3779f27ce1b32e892bc0373b179f78113a3ef5da051
-R e9fa4b181b5707c1885f23df27926c37
+P 01724f5e6a00213d6e0dcdb6a94f72a4bdf27ad1870b45c2bfc836cb69afc8ed
+R c17d9db91354ef5a94d5d19f863fd5c8
 U alex
-Z b52aba4f0791612d9a4b49086fd5b704
+Z e6575bc4afb4c02668e7731a1e1525d5
 # Remove this line to create a well-formed Fossil manifest.

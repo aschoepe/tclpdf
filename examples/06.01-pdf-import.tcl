@@ -50,7 +50,7 @@ $doc font -style {} -size 8
 $doc text "Musterstrasse 1 - 44795 Bochum - musterfirma.example" \
     -at {20 22} -color white
 $doc line -from {20 270} -to {190 270} -width 0.2
-$doc text "Bank: DE00 0000 0000 0000 0000 00 - Registergericht Bochum" \
+$doc text "Bank: DE02 1203 0000 0000 2020 51 - Registergericht Bochum" \
     -at {20 276} -color {0.4 0.4 0.4}
 $doc write $letterhead
 $doc destroy
@@ -72,7 +72,7 @@ $doc form place briefbogen -at {0 0}
 
 $doc font -family helvetica -size 11
 $doc text "Musterfirma GmbH - Musterstrasse 1 - 44795 Bochum" -at {20 45} -size 7
-$doc text "Frau\nErika Beispiel\nBeispielweg 2\n44795 Bochum" -at {20 52} \
+$doc text "Frau\nErika Mustermann\nMusterstrasse 12\n12345 Musterstadt" -at {20 52} \
     -width 80
 $doc font -style bold -size 13
 $doc text "This letter is written ON the imported page" -at {20 95}
