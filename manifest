@@ -1,6 +1,6 @@
-C The\stwo\sround-4\sleftovers:\sabsolute\serror\sposition,\sno\sorphan\sprofile\sobject\n\n-\stextBlock\s-\sa\srefused\sglyph\snames\sits\sposition\sin\sthe\sstring\sas\shanded\sin\son\severy\sroad\sof\sthe\sparagraph\sbreaker,\sfound\sby\ssearching\sthat\sstring\srather\sthan\sby\soffset\sarithmetic,\sand\sthe\s-avoid\sroad\sno\slonger\sreports\sposition\szero;\sthe\smanual\sdrops\sits\sexception\ssentence\n-\simage\sand\simagePng\s-\san\salpha\sPNG\swith\san\sICC\sprofile\sdecodes\sbefore\sthe\sfirst\swriter\sobject,\sso\sa\sfailing\spicture\sleaves\sno\sorphan\sprofile\sobject\sbehind;\sthe\sversion\srefusal\snames\sthe\sthreshold\sthat\sactually\sapplies
-D 2026-08-20T07:59:27.566
-F Makefile.in 32a12f00edbc19d7303ba0653f6ffe6b7b94f17ddde8a3a9ef313a843dbfd517
+C Add\smake\spublish-examples:\sthe\sexample\sPDFs\sgo\sto\sthe\sunversioned\sarea\n\n-\snew\starget\safter\sthe\spublish\spattern:\sbuilds\sthe\sexamples,\suploads\seach\sPDF\sas\sexamples/name\sto\sthe\sunversioned\sarea,\ssyncs\sand\scounts\s-\sthe\s"examples"\swiki\spage\slists\sand\slinks\sthem;\sunversioned\scontent\sis\sreplaced,\snot\sversioned,\sso\sre-publishing\sdoes\snot\sgrow\sthe\srepository
+D 2026-08-20T08:29:19.191
+F Makefile.in d6f4813e99b024fd8252c36e174753e913178747852b26a40c93ff1599f0e955
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F afm.tcl b2db0c5edd61467144a3fc40b5266cf1cf3404791fb1fe46b9e5898fce96085e
@@ -376,8 +376,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 70ccf21cdf234f7c23c389217c6db0b23a5007631fe9534b1d8e3cbce8e23ea8
 F zugferd.tcl 8992ed206187116fe68199f30b4306bbf9cb62636151ae79f96731ec4e6c2018
-P 26d52f034cc26f3853626fcb1d20253e5462f2c6a3cd5c5cd87a9c868ff0fef3
-R ff80de5ab3e6a981694b9d212ef20eab
+P 832543b2706115f5ca0c04c05deba2ff584653ea5fe352a122001757d51aa4ea
+R 326af6c7f1dc643fa39984135b7be10c
 U alex
-Z f0bdd7ed3536e53afa8d46d7dbad74b0
+Z 6c58232f8da25f4f7d39e25df9a7de5e
 # Remove this line to create a well-formed Fossil manifest.

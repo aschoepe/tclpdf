@@ -171,6 +171,16 @@ release: archive
 	@ls -l uv/$(PACKAGE_NAME)$(PACKAGE_VERSION)*.zip uv/$(PACKAGE_NAME)$(PACKAGE_VERSION)*.tar.gz
 	@echo "Publish them with: make publish"
 
+# The finished example PDFs, served from the unversioned area under
+# examples/ and listed on the "examples" wiki page. Unversioned content is
+# replaced, not versioned - re-publishing does not grow the repository.
+# Writes to the repository and the server, so it runs on request only,
+# like publish.
+publish-examples: examples
+	for f in examples/out/*.pdf; do fossil uv add $$f --as examples/`basename $$f`; done
+	fossil uv sync
+	fossil uv ls | grep -c '^examples/'
+
 publish:
 	fossil uv add uv/$(PACKAGE_NAME)$(PACKAGE_VERSION).zip --as $(PACKAGE_NAME)$(PACKAGE_VERSION).zip
 	fossil uv add uv/$(PACKAGE_NAME)$(PACKAGE_VERSION).tar.gz --as $(PACKAGE_NAME)$(PACKAGE_VERSION).tar.gz
