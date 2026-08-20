@@ -1,5 +1,5 @@
-C Norm\sreview\sround\s4:\stwelve\sviolations\sfixed,\sgray\sareas\sand\shardenings\sbuilt\n\n-\simport.tcl\s-\sinherited\spage\sattributes\stake\sthe\snearest\sancestor,\sCropBox\sintersected\swith\sthe\sMediaBox,\sname\s#-escapes\sdecoded\sand\sre-escaped,\sOCG\sconfigurations\smerged\sacross\simports\sand\sOCMDs\sresolved\sto\stheir\sgroups,\sstream\s/Length\sverified\sagainst\sendstream,\simported\sforms\scarry\sa\stransparency\sgroup,\swhitespace\sreduced\sto\sthe\ssix\sPDF\sbytes,\sinteger-valued\s/Rotate\sreals\sread\n-\stext\sand\stextBlock\s-\scolour\sresolved\sbefore\sthe\sfirst\sstream\sbyte\sso\sa\srefused\s-color\sleaves\sno\sopen\sBT\sor\sq,\spaginate\scloses\sits\sstructure\smark\son\serror,\sthe\sglyph\serrorcode\sposition\scounts\sin\sthe\sstring\sas\shanded\sin\son\severy\sparagraph\sroad,\sno\sempty\sstructure\selement\swhen\s-avoid\sleaves\sno\sline\son\sa\spage\n-\sstructure,\ssvg,\spdfa,\sua\s-\ssvg\sparses\sbefore\sthe\smark,\s2.0\sconstructs\spin\sthe\sversion\sfloor\sagainst\slater\slowering,\sPDF/A\slevel\sA\sasks\sthe\sua\squestion\sfor\sundescribed\sgraphics,\sRuby\sand\sWarichu\ssequences\sand\sTHead/TFoot\scardinality\senforced\n-\snumbers\sand\simages\s-\sthe\sPDF\sreal\srange\sis\senforced\sat\sthe\sone\snumber\swriter,\sversion\sfloors\spinned\safter\sthe\svalue\schecks\sinstead\sof\sbefore,\sdamaged\sPNG\salpha\sdata\sand\sduplicate\sJPEG\sICC\ssegments\snamed\sin\stheir\smessages\n-\sfonts\s-\scmap\sformat\s12\sgroup\sbounds\schecked\sso\sa\sdamaged\sface\sis\srefused\sinstead\sof\shanging,\ssurrogate\scode\spoints\sskipped\swhen\sreading\sa\scmap\n-\ssmaller\s-\sone\sshared\ssegment\scheck\sfor\spath\sand\stextPath,\sresource\scategories\sheld\sto\sthe\sresource\sdictionary,\sxmpSchema\sand\sxmpRaw\slazy-load,\sattachment\s/F\sfallback\sone\sunderscore\sper\scode\spoint\sunder\sboth\sinterpreters,\sUTF-16\sinvoice\sXML\snamed\sas\ssuch,\sexamples\s01.03,\s04.03\sand\s05.05\scorrected\n-\smanual\sfollows\sthe\sfixes\swith\snew\ssentences,\sPLUGINS\snames\sthe\seight\sresource\scategories\n-\sknowingly\sopen,\sin\sthe\sTODO:\sa\sbreaking\sspace\swithout\sa\sglyph\sstill\sreports\sthe\schunk\sposition\sinside\sa\sparagraph,\sand\sa\sfailing\salpha\sPNG\swith\san\sICC\sprofile\sleaves\san\sorphan\sprofile\sobject\sbehind
-D 2026-08-20T06:29:46.698
+C Retire\sthe\smeasured\spdf4tcl\scomparison\sin\sfavour\sof\sa\sshort\snotice\n\n-\sdoc/TCLPDF-VS-PDF4TCL.md\scarries\sa\sfriendly\snotice\sinstead\sof\sthe\sfeature\stable:\sthe\sactively\smaintained\sfork\sat\sgithub.com/gregnix/pdf4tcl\scloses\spublicly\snamed\sgaps\swithin\sa\sday,\sso\skeeping\sa\smeasured\slist\scurrent\swould\scost\snearly\sas\smuch\sas\sextending\sthe\ssoftware\s-\sthe\spage\snow\spoints\sthere,\snotes\sthat\stclpdf\sis\sMIT\sand\staking\swhat\sis\suseful\sis\swelcome,\sand\skeeps\sthe\sone\sstable\sstatement:\sthe\stwo\sprojects\scomplement\seach\sother\n-\sthe\sdated\ssnapshot\smeasured\sagainst\s0.9.4\sremains\sin\sthis\sfile's\searlier\srevisions
+D 2026-08-20T07:52:56.742
 F Makefile.in 32a12f00edbc19d7303ba0653f6ffe6b7b94f17ddde8a3a9ef313a843dbfd517
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -12,7 +12,7 @@ F color.tcl 4bc45aceac4e1977f0f81129a253cd360e487d9971dbc2a21a1534a765260c34
 F configure 463bf4986886dc2d2a8ba5c205844be2ef4d78e775848c2e6b7c8eb5d1496603 x
 F configure.ac 4fb1ba822cadaf69db6e8ae7cfcd9c6474258cbf6ac2465665ba46eaf5d784fe
 F doc/PLUGINS.md 3febfcf9e854715bb2a437011973dd2a3d57943f062747858aa5edbfd56f6023
-F doc/TCLPDF-VS-PDF4TCL.md 2691537a11650e367a00a5b240a512e1b9de73b575e472822e201565c21c1360
+F doc/TCLPDF-VS-PDF4TCL.md 6c339a524e8f47f0473a9541a6e54181508f7beb0bdd2cced87f534d3224f025
 F doc/claude/TCLPDF.md a35e6265560a6871691cd0cafb594b5b4cff308c7e52e49d57d4ce8edc758ad4
 F doc/claude/skills/tclpdf-tcl/SKILL.md 02c984623578cf363526f52b72647e842b4146f16ada2bdd90debc9ec64f0ac7
 F doc/claude/skills/tclpdf-tcl/assets.tcl 997dd1c96d09bde87045f3e54a1a3b7d602a14852f49f5099191f04fbc290fb5
@@ -376,8 +376,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 70ccf21cdf234f7c23c389217c6db0b23a5007631fe9534b1d8e3cbce8e23ea8
 F zugferd.tcl 8992ed206187116fe68199f30b4306bbf9cb62636151ae79f96731ec4e6c2018
-P 9d2943d59fb033a3fd3c524f20eb93ff758a2617bf27f6ff94c15cdddb277ede
-R ef67fb1b3a0980e9350803cbc05839fb
+P c55d5aab3f6c633d625a34e46d2575ed0927e4aaa6ff512dd14352f93df7467e
+R 49deeee01db9bebb9cfc60985a8dc318
 U alex
-Z d5d7a8d2a044fa6e1823703e1d1b944c
+Z 86df5c6b75835d12d0dad77dc71e78db
 # Remove this line to create a well-formed Fossil manifest.
