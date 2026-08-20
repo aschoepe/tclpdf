@@ -425,4 +425,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.4
+package provide tclpdf::shading 1.5

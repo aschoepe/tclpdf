@@ -329,4 +329,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.4
+package provide tclpdf::attach 1.5

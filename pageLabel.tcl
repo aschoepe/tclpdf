@@ -142,4 +142,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageLabel 1.0
+package provide tclpdf::pageLabel 1.1

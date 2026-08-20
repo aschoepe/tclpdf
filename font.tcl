@@ -1286,4 +1286,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.8
+package provide tclpdf::font 1.9

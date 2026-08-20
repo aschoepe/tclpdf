@@ -416,4 +416,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structureWrite 1.1
+package provide tclpdf::structureWrite 1.2

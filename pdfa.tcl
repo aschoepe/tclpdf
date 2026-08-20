@@ -534,4 +534,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.7
+package provide tclpdf::pdfa 1.8

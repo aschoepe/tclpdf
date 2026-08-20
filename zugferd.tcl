@@ -440,4 +440,4 @@ proc ::tclpdf::zugferd::properties {name type version conformance {family invoic
   return $xml
 }
 
-package provide tclpdf::zugferd 1.2
+package provide tclpdf::zugferd 1.3

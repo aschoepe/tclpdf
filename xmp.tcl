@@ -548,4 +548,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xmp 1.3
+package provide tclpdf::xmp 1.4

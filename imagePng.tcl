@@ -454,4 +454,4 @@ proc ::tclpdf::imagePng::PaletteKey {trns} {
   return $ranges
 }
 
-package provide tclpdf::imagePng 1.3
+package provide tclpdf::imagePng 1.4

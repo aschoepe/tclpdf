@@ -645,4 +645,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.6
+package provide tclpdf::image 1.7

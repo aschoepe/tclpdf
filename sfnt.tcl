@@ -624,4 +624,4 @@ proc ::tclpdf::sfnt::NameString {bytes start length platform} {
   return $decoded
 }
 
-package provide tclpdf::sfnt 1.5
+package provide tclpdf::sfnt 1.6

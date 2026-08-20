@@ -1161,4 +1161,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.12
+package provide tclpdf::text 1.13

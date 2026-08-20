@@ -98,4 +98,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structureDest 1.0
+package provide tclpdf::structureDest 1.1
