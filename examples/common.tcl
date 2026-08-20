@@ -1,5 +1,5 @@
 #
-# tclpdf examples - the one thing every example does the same way
+# tclpdf examples - what more than one example does the same way
 #
 #   source [file join $here common.tcl]
 #   ...
@@ -9,6 +9,13 @@
 # example carried its own copy of it. Eighteen copies of ten lines is how a
 # block starts drifting: one gets a fix, the others do not, and nobody notices
 # because each file on its own still looks right. So it lives here once.
+#
+# The rule since then is the same one the package follows: a block that turns
+# up in a SECOND example moves here, at once, rather than being copied. The
+# footer was the first, [exampleIccFacts] came with the pair 05.11/05.12, and
+# the openssl scaffolding at the end of this file with the pair 08.01/08.02.
+# Nothing here runs while the file is sourced, and nothing here requires a
+# topical package - every example in the tree loads it, whatever it is about.
 #
 # The price is that an example is no longer a single file you can lift out of
 # the tree and run. That is the trade, made knowingly - the assets next door
@@ -163,4 +170,257 @@ proc exampleIccFacts {path} {
         }
     }
     return $facts
+}
+
+# ---------------------------------------------------------------------------
+# What the two signature examples share
+# ---------------------------------------------------------------------------
+#
+# 08.01 (an invisible signature) and 08.02 (a visible one) show two different
+# things about the same mechanism, and both need the same outside world to
+# show it: a test CA, an end certificate under it, a command prefix that
+# answers a CMS object, and a way to ask openssl what it thinks of its own
+# work. All of that stood twice, line for line, until it moved here.
+#
+# NOTHING BELOW RUNS WHILE THIS FILE IS SOURCED. All 49 examples load it and
+# 47 of them have nothing to do with signatures, so there is no [package
+# require tclpdf::sign] here, no openssl call, and no work in the body -
+# procedures only, called by the two examples that want them.
+#
+# What is NOT here is what the two examples differ in, and that is the larger
+# half: the wording on their pages, the appearance form 08.02 draws, the dates
+# it needs for it, and the [$doc sign] calls themselves. A signature example
+# whose central call sat behind a helper would be showing the helper.
+
+# Every call to an outside program goes through here for one reason: openssl
+# writes its progress to stderr, and [exec] turns any stderr output at all
+# into an error. "2>@1" merges the two, so the EXIT STATUS decides - which is
+# what it is for.
+proc exampleRun {args} {
+    return [exec {*}$args 2>@1]
+}
+
+# Bytes in and out, with -translation binary ALONE: Tcl 9 no longer knows the
+# channel encoding "binary", and the translation setting picks the
+# byte-transparent encoding by itself.
+proc exampleReadBinary {path} {
+    set channel [open $path r]
+    fconfigure $channel -translation binary
+    set data [read $channel]
+    close $channel
+    return $data
+}
+
+proc exampleWriteBinary {path data} {
+    set channel [open $path w]
+    fconfigure $channel -translation binary
+    puts -nonewline $channel $data
+    close $channel
+}
+
+# A temporary directory, made the way both interpreters can: [file tempfile]
+# hands out a unique NAME as well as a channel, and a directory of that name
+# is then ours alone. [file tempdir] would be shorter and exists in Tcl 9 only.
+proc exampleTempDirectory {} {
+    set channel [file tempfile path]
+    close $channel
+    file delete $path
+    file mkdir $path
+    return $path
+}
+
+# A test CA and one end certificate under it. Measured on this machine: the
+# pair takes 0.08 s.
+#
+# The two extensions on each are not decoration. A CA without
+# basicConstraints CA:TRUE signs nothing a verifier accepts, and an end
+# certificate without digitalSignature in its keyUsage is not a signing
+# certificate - the second is what a reader checks before it looks at the
+# digest at all.
+proc exampleCertificates {dir} {
+    exampleRun openssl req -x509 -newkey rsa:2048 \
+        -keyout [file join $dir ca.key] -out [file join $dir ca.pem] \
+        -days 3650 -nodes -subj "/C=DE/O=tclpdf test/CN=tclpdf test CA" \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign"
+    exampleRun openssl req -newkey rsa:2048 \
+        -keyout [file join $dir leaf.key] -out [file join $dir leaf.csr] \
+        -nodes -subj "/C=DE/O=tclpdf test/CN=Erika Mustermann"
+    exampleWriteBinary [file join $dir leaf.cnf] \
+        "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,nonRepudiation\n"
+    exampleRun openssl x509 -req -in [file join $dir leaf.csr] \
+        -CA [file join $dir ca.pem] -CAkey [file join $dir ca.key] \
+        -CAcreateserial -out [file join $dir leaf.pem] -days 730 \
+        -extfile [file join $dir leaf.cnf]
+    return
+}
+
+# THE SIGNER. This is the whole of the outside world as tclpdf sees it: a
+# command prefix that is handed the bytes and answers a CMS SignedData object
+# in DER. It is called as "{*}$prefix $bytes", so the directory and the extra
+# switches are bound in through the prefix and the bytes arrive last.
+#
+# "extra" is a list of further openssl arguments, and there is exactly one in
+# use: 08.01 asks for -cades, which produces the CAdES-BES object that
+# /SubFilter /ETSI.CAdES.detached promises, because that example is about the
+# refusal such a claim runs into. 08.02 signs with the default profile and
+# passes nothing. -binary keeps openssl from treating the bytes as text with
+# line endings, which for the middle of a PDF would be fatal. Measured: 28 ms,
+# and 2599 bytes of DER with an RSA-2048 certificate and its issuer in it.
+#
+# Both files stay where they are afterwards on purpose - [exampleOpensslVerify]
+# needs exactly these two, the detached content and the signature over it.
+proc exampleOpensslSigner {dir extra bytes} {
+    exampleWriteBinary [file join $dir content.bin] $bytes
+    exampleRun openssl cms -sign -binary -in [file join $dir content.bin] \
+        -signer [file join $dir leaf.pem] -inkey [file join $dir leaf.key] \
+        -certfile [file join $dir ca.pem] {*}$extra -md sha256 \
+        -outform DER -out [file join $dir signature.der]
+    return [exampleReadBinary [file join $dir signature.der]]
+}
+
+# What openssl says about its own work, checked against the test CA. Not a
+# formality: it is the one line in these scripts that would notice if the
+# bytes handed to the signer were not the bytes the file ends up covering.
+proc exampleOpensslVerify {dir} {
+    if {[catch {
+        exampleRun openssl cms -verify -inform DER \
+            -in [file join $dir signature.der] \
+            -content [file join $dir content.bin] -binary \
+            -CAfile [file join $dir ca.pem] -purpose any -out /dev/null
+    } answer]} {
+        return "openssl says: [lindex [split $answer \n] 0]"
+    }
+    return "openssl cms -verify: successful, against the test CA"
+}
+
+# Whether there is a signature to be had, decided ONCE and before the first
+# [$doc sign] call - not inside the signer. A signer that fails is a write
+# that fails, and by then half a document is on disk; a missing openssl has to
+# be known while the page is still being laid out, because the page says so.
+#
+# Answers three values for [lassign]:
+#
+#   dir     the temporary directory holding the certificates, {} if there are
+#           none - hand it back to [exampleSigningEnd] when the script is done
+#   signer  a command prefix ready for -signer, {} if openssl is unusable
+#   why     why not, in a sentence, {} when there is a signer
+#
+# It prints NOTHING. What a missing signature means differs per document and
+# is the example's sentence to write, on its page and on the console.
+proc exampleSigningSetup {{extra {}}} {
+    if {![llength [auto_execok openssl]]} {
+        return [list {} {} "openssl was not found on the PATH"]
+    }
+    set dir [exampleTempDirectory]
+    if {[catch {exampleCertificates $dir} message]} {
+        file delete -force $dir
+        return [list {} {} "openssl is here but would not make the\
+            certificates: [lindex [split $message \n] 0]"]
+    }
+    return [list $dir [list exampleOpensslSigner $dir $extra] {}]
+}
+
+# The closing lines of a signature example: throw the test certificates away
+# and print, for each document written, the commands a reader can check it
+# with. "commands" is a command prefix called with the plain file name - the
+# list differs per example, so the example that knows it supplies it.
+proc exampleSigningEnd {dir names commands} {
+    if {$dir ne {}} {
+        file delete -force $dir
+    }
+    puts "  check both with:"
+    foreach name $names {
+        foreach line [{*}$commands [file tail $name]] {
+            puts "    $line"
+        }
+    }
+    return
+}
+
+# The three commands every signed file answers to, which is what both examples
+# print and put on their pages; "extra" appends the lines one of them wants on
+# top of that. Not a fourth and fifth line here with a switch to leave them
+# out: what 08.01 adds needs the detached content only that script keeps.
+proc exampleSignatureChecks {name {extra {}}} {
+    return [concat [list \
+        "pdfsig $name" \
+        "qpdf --check $name" \
+        "pdfsig -dump $name"] $extra]
+}
+
+# Running text on a page of prose, top down. Both signature examples set the
+# same kind of page, and prose at hard-coded coordinates is how paragraphs
+# start overlapping the day one of them gains a line: [text] with -width
+# answers the y the next line would start at, so the page stays right.
+#
+# The 20 mm left margin and the 170 mm measure are an A4 page in mm with the
+# margins these two examples use. An example laid out otherwise sets its text
+# itself rather than passing a fourth and fifth argument.
+proc exampleHeading {doc yName text} {
+    upvar 1 $yName y
+    $doc font -family helvetica -style bold -size 11 -color {0 0 0}
+    $doc text $text -at [list 20 $y]
+    set y [expr {$y + 7}]
+    return
+}
+
+proc examplePara {doc yName text {colour {0 0 0}}} {
+    upvar 1 $yName y
+    $doc font -family helvetica -style {} -size 10 -color $colour
+    set y [expr {[$doc text $text -at [list 20 $y] -width 170] + 3}]
+    return
+}
+
+# The same commands on the page, in courier, so that the file carries them
+# when it is mailed on and the console is not there any more.
+proc exampleCommandBlock {doc yName commands} {
+    upvar 1 $yName y
+    $doc font -family courier -style {} -size 8.5 -color {0 0 0}
+    foreach command $commands {
+        $doc text $command -at [list 20 $y]
+        set y [expr {$y + 5}]
+    }
+    set y [expr {$y + 2}]
+    return
+}
+
+# What could not be signed, said on the page rather than left to the reader to
+# discover in a validator. The heading and the colour are the same in both
+# examples; what follows is not, because what an unfilled placeholder means
+# for an invisible field and for a visible one reads differently. So the
+# sentence is the caller's.
+proc exampleNotSigned {doc yName text} {
+    upvar 1 $yName y
+    exampleHeading $doc y "This document is NOT signed"
+    examplePara $doc y $text {0.70 0.15 0.15}
+    return
+}
+
+# The closing lines of a document that comes off the write SIGNED: footer,
+# write, and what the finished file says about its own signature.
+#
+# The report is read back out of the document with [$doc sign state] rather
+# than repeated from the [sign] call above, the same reason [exampleArchival]
+# asks the document for its fonts: a line that states what was requested
+# cannot notice when the file says something else.
+#
+# Only for the one-stage documents. The two-stage ones end with a plain write
+# - their signature does not exist yet at that point, and what they have to
+# report comes after [::tclpdf::sign embed] instead.
+proc exampleSignatureDone {doc target dir} {
+    exampleFooter $doc
+    $doc write $target
+    set state [$doc sign state]
+    $doc destroy
+    puts "  written: $target ([file size $target] bytes)"
+    if {[dict get $state signed]} {
+        puts "  /ByteRange \[[dict get $state byteRange]\],\
+            [dict get $state length] bytes of DER in\
+            [dict get $state size] reserved"
+        puts "  [exampleOpensslVerify $dir]"
+    } else {
+        puts "  placeholder unfilled, /ByteRange \[[dict get $state byteRange]\]"
+    }
+    return
 }

@@ -363,6 +363,7 @@ oo::class create ::tclpdf::document::document {
       table table
       pdfa pdfa
       encrypt encrypt
+      sign sign
       xmpSchema xmp
       xmpRaw xmp
       zugferd zugferd

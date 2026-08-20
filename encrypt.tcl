@@ -378,6 +378,20 @@ oo::define ::tclpdf::document::document {
           [my state pdfa] part]"
     }
 
+    # The mirror image of the check in sign.tcl: 7.6.2 takes exactly one
+    # thing out of the encryption - "any hexadecimal strings representing
+    # the value of the Contents key in a Signature dictionary" - and leaves
+    # the other strings of that dictionary in it. Buildable, and measured
+    # against no reader, so it is refused at whichever of the two calls
+    # comes second rather than written and hoped for.
+    if {[my state sign] ne {}} {
+      return -code error "tclpdf: this document is being signed, and tclpdf\
+          does not encrypt a signed document - 7.6.2 exempts only the\
+          /Contents string of a signature dictionary from encryption, not\
+          the rest of it. Drop the \[\$doc sign\] call or the encrypt call,\
+          they cannot both stand"
+    }
+
     # Before anything is drawn, and refused otherwise. Two measured reasons,
     # and neither of them shows up in the finished file as anything but a
     # document that will not open:

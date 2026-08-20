@@ -147,6 +147,8 @@ test tools-1.1 {what this machine can check} -body {
         fribidi   --version  haveFribidi    "test"       "the bidi rules against the reference"
         cjpeg     -version   haveCjpeg      "test"       "a JPEG built at test time"
         djpeg     -version   haveCjpeg      "test"       "and read back again"
+        pdfsig    -v         pdfsig         "test+check" "reads a signature back and rechecks its digest"
+        openssl   version    signing        "test+check" "makes the test certificates and the CMS object to sign with"
         java      -version   {}             "check"      "runs Mustangproject over the invoices"
         pandoc    --version  {}             "check"      "builds the manual pages"
     } {
@@ -164,6 +166,26 @@ test tools-1.1 {what this machine can check} -body {
             lappend report [format "    %-10s %-11s MISSING%s - %s" $name $used \
                 $cost $what]
             lappend missing $name
+        }
+    }
+
+    # openssl is the one entry where being FOUND is not the same as being
+    # usable: every mac carries LibreSSL as /usr/bin/openssl, and it has no
+    # "cms -cades", which is what a CAdES signature needs. Asked here by
+    # looking at what the program itself offers - the constraint in sign.test
+    # settles the same question by signing something, but that file runs
+    # after this one, and a report that asked it would always answer no.
+    lassign [::tclpdfTools::program openssl version] opensslFound
+    if {$opensslFound eq "yes"} {
+        set cades 0
+        catch {
+            set help [exec openssl cms -help 2>@1]
+            set cades [expr {[string first "-cades" $help] >= 0}]
+        }
+        if {!$cades} {
+            lappend report [format "    %-10s %-11s %s" {} {} \
+                "that openssl cannot sign - it has no \"cms -cades\", so it is\
+                LibreSSL rather than OpenSSL, and the signature tests skip"]
         }
     }
 

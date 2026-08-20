@@ -45,6 +45,16 @@ oo::define ::tclpdf::document::document {
   # writeChannel $fh" answered "unknown method". Nothing called it, which is
   # why nothing noticed.
   method writeChannel {channel} {
+    # A document that has to be read back after it is written cannot go down
+    # a channel, and the module that knows why says so in [state needsFile]:
+    # the value IS the reason, and it is refused here rather than after the
+    # bytes are gone. The core stays out of the topic - it asks whether
+    # something objects, not what the something is (sign.tcl is the first
+    # one, because /ByteRange describes its own finished file).
+    set objection [my state needsFile]
+    if {$objection ne {}} {
+      return -code error $objection
+    }
     set trailerPairs [my OutputBuild]
     $tclpdfWriter writeChannel $channel $trailerPairs
     # No path to pass on, so subscribers get an empty one - they use it for

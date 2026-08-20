@@ -1,0 +1,1531 @@
+# sign.test --
+#
+# Digital signatures (ISO 32000-2, 12.8): what the module puts into the
+# document, what it patches into the FINISHED file, and - where openssl and
+# pdfsig are installed - whether a reader calls the result valid.
+#
+# The order is the one encrypt.test uses, and for the same reason. The tests
+# below say which piece is wrong: the dictionary, the widget, the arithmetic
+# of /ByteRange. The pdfsig round trip at the end says whether the file is a
+# signed document at all, and that one cannot be faked from the inside -
+# poppler recomputes the digest over the ranges the file itself states.
+#
+# Two things this file does deliberately. It reads the finished file with
+# plain regular expressions rather than through the module's own [Locate]:
+# a parser checked against itself agrees with every mistake it makes. And it
+# carries counter-proofs - a flipped byte and an appended one - because a
+# check that cannot go red proves nothing about the ones that stay green.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sign
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint pdfsig [expr {[auto_execok pdfsig] ne {}}]
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint verapdf [expr {[auto_execok verapdf] ne {}}]
+
+# Where the test certificates go. Its own directory under the tcltest
+# temporary one, so the whole lot is removed with a single call at the end -
+# openssl writes a serial file and a log nobody asked for.
+set ::tclpdfTest::signDir [file join [::tcltest::temporaryDirectory] sign-pki]
+
+# A test CA and an end certificate, made on the fly rather than shipped:
+# a certificate in the source tree expires, and this costs a tenth of a
+# second. The key usage is the one a signing certificate needs -
+# digitalSignature and nonRepudiation - so that a verifier has no reason to
+# refuse it other than the CA being unknown, which it is and has to be.
+proc ::tclpdfTest::signPki {} {
+  variable signDir
+  file mkdir $signDir
+  set log [file join $signDir openssl.log]
+  set ca [file join $signDir ca.pem]
+  set caKey [file join $signDir ca.key]
+  set leaf [file join $signDir leaf.pem]
+  set leafKey [file join $signDir leaf.key]
+  set request [file join $signDir leaf.csr]
+  set extensions [file join $signDir leaf.cnf]
+  # openssl reports its progress on stderr even when it succeeds, so stderr
+  # goes to a file - [exec] would otherwise turn every one of these calls
+  # into an error.
+  exec openssl req -x509 -newkey rsa:2048 -keyout $caKey -out $ca \
+      -days 3650 -nodes -subj "/C=DE/O=tclpdf test/CN=tclpdf test CA" \
+      -addext "basicConstraints=critical,CA:TRUE" \
+      -addext "keyUsage=critical,keyCertSign,cRLSign" 2> $log
+  exec openssl req -newkey rsa:2048 -keyout $leafKey -out $request -nodes \
+      -subj "/C=DE/O=tclpdf test/CN=Erika Mustermann" 2> $log
+  set fh [open $extensions w]
+  puts $fh "basicConstraints=critical,CA:FALSE"
+  puts $fh "keyUsage=critical,digitalSignature,nonRepudiation"
+  close $fh
+  exec openssl x509 -req -in $request -CA $ca -CAkey $caKey -CAcreateserial \
+      -out $leaf -days 730 -extfile $extensions 2> $log
+  # And the thing itself, once, over four bytes: an openssl that cannot make
+  # a CAdES object is of no use here, and finding that out at the constraint
+  # is the difference between four skipped tests and four failed ones.
+  # Measured rather than assumed - /usr/bin/openssl on this machine is
+  # LibreSSL 3.3.6 and has no -cades at all.
+  signWith "probe"
+  return
+}
+
+# The -signer prefix the real tests use: openssl makes a CAdES-BES object
+# over the bytes it is handed, which is what /ETSI.CAdES.detached promises.
+proc ::tclpdfTest::signWith {bytes} {
+  variable signDir
+  set in [file join $signDir signed.bin]
+  set out [file join $signDir signature.der]
+  set fh [open $in wb]
+  puts -nonewline $fh $bytes
+  close $fh
+  exec openssl cms -sign -binary -in $in -signer [file join $signDir leaf.pem] \
+      -inkey [file join $signDir leaf.key] -certfile [file join $signDir ca.pem] \
+      -cades -md sha256 -outform DER -out $out 2> [file join $signDir openssl.log]
+  return [readBytes $out]
+}
+
+# Measured rather than assumed: openssl is present here, and whether THIS
+# openssl can do what the tests ask of it - RSA keys, a CAdES object - is
+# answered by making the pair and stopping if that fails.
+testConstraint signing [expr {[auto_execok openssl] ne {}
+    && ![catch {::tclpdfTest::signPki}]}]
+
+# Whether openssl accepts the CMS object over the bytes it was made for.
+# -purpose any because the certificate is a signing one and not a mail one,
+# which is the purpose "cms -verify" checks by default.
+proc ::tclpdfTest::signVerify {der bytes} {
+  variable signDir
+  set derFile [file join $signDir check.der]
+  set contentFile [file join $signDir check.bin]
+  foreach {path value} [list $derFile $der $contentFile $bytes] {
+    set fh [open $path wb]
+    puts -nonewline $fh $value
+    close $fh
+  }
+  return [catch {exec openssl cms -verify -binary -inform DER -in $derFile \
+      -content $contentFile -CAfile [file join $signDir ca.pem] -purpose any \
+      -out [file join $signDir check.out] \
+      2> [file join $signDir openssl.log]}]
+}
+
+# What pdfsig says about a file.
+#
+# Its first line on stderr is always "NSS_Init failed: security library: bad
+# database.", which is not an error, and its exit status is 1 for a digest
+# that does not match - which is a RESULT here, not a failure. So stderr goes
+# to a file and the status is caught; what the tests read is the report.
+proc ::tclpdfTest::signReport {path} {
+  variable signDir
+  catch {exec pdfsig $path 2> [file join $signDir pdfsig.log]} report
+  return $report
+}
+
+# Where the signature sits in a finished file, read with regular expressions
+# and not through ::tclpdf::sign::Locate - see the head of this file.
+#
+# Answers: byteRange (the four numbers as the file states them), room (how
+# many characters the array occupies, brackets included), contents (the index
+# of the '<' before the value) and hex (the value itself).
+proc ::tclpdfTest::signParse {data} {
+  if {![regexp -indices {/ByteRange \[([0-9 ]*)\]} $data whole numbers]} {
+    return {}
+  }
+  set list {}
+  foreach word [regexp -all -inline {[0-9]+} [string range $data {*}$numbers]] {
+    # [scan] rather than [expr]: "0000000010" is octal to Tcl.
+    lappend list [scan $word %d]
+  }
+  if {![regexp -indices -start [lindex $numbers 1] \
+      {/Contents <([0-9a-fA-F]*)>} $data key hex]} {
+    return {}
+  }
+  return [dict create byteRange $list \
+      room [expr {[lindex $numbers 1] - [lindex $numbers 0] + 3}] \
+      contents [expr {[lindex $hex 0] - 1}] \
+      hex [string range $data {*}$hex]]
+}
+
+# A one-page document with a line of text on it - what nearly every test
+# here starts from.
+proc ::tclpdfTest::signDoc {args} {
+  set doc [tclpdf new -unit pt -format a4 {*}$args]
+  $doc page add
+  $doc text "Hallo signierte Welt" -at {60 700} -size 18
+  return $doc
+}
+
+# The same, written to a scratch file with the signature options given.
+# Answers the path; the caller deletes it.
+proc ::tclpdfTest::signed {name args} {
+  set doc [signDoc -version 2.0]
+  $doc sign {*}$args
+  set path [scratch $name]
+  $doc write $path
+  $doc destroy
+  return $path
+}
+
+# A signer that answers bytes without being able to sign anything: enough to
+# exercise the reserved space, the state and the length neutrality of the
+# second patch, on a machine that has no openssl at all.
+proc ::tclpdfTest::signFake {length bytes} {
+  return [string repeat \xa5 $length]
+}
+
+#
+# --- the prepared document --------------------------------------------------
+#
+
+test sign-1.1 {a signed document is written, and carries a signature dictionary} -body {
+  set path [::tclpdfTest::signed sign-plain.pdf -size 2048]
+  set data [::tclpdfTest::readBytes $path]
+  set size [file size $path]
+  file delete $path
+  # The reserved room is really in the file and not merely promised: 2048
+  # bytes of signature are 4096 hexadecimal digits, and the file is longer
+  # than that on top of a page.
+  list [expr {$size > 4096}] \
+      [regexp {/Type /Sig} $data] [regexp {/Filter /Adobe\.PPKLite} $data] \
+      [regexp {/ByteRange \[} $data] [regexp {/Contents <} $data]
+} -result {1 1 1 1 1}
+
+test sign-1.2 {/ByteRange is filled in and no longer the placeholder} -body {
+  set path [::tclpdfTest::signed sign-range.pdf -size 512]
+  set found [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]]
+  file delete $path
+  set numbers [dict get $found byteRange]
+  # Four numbers, the placeholder's three zeros gone, and the array in
+  # exactly the room the placeholder had: 36 characters, brackets included.
+  # That last one is the whole mechanism - a byte gained here would move
+  # every offset the array itself states.
+  list [llength $numbers] [expr {[lindex $numbers 1] != 0}] \
+      [expr {[lindex $numbers 2] != 0}] [expr {[lindex $numbers 3] != 0}] \
+      [dict get $found room] \
+      [expr {[dict get $found room]
+          == [string length $::tclpdf::sign::byteRangePlaceholder]}]
+} -result {4 1 1 1 36 1}
+
+test sign-1.3 {the four numbers describe this very file, byte for byte} -body {
+  # The arithmetic 12.8.1 asks for: everything except the value of /Contents,
+  # its delimiters included. Recomputed here from the positions found in the
+  # file, so a range that is off by one is caught without a verifier.
+  set path [::tclpdfTest::signed sign-arith.pdf -size 512]
+  set data [::tclpdfTest::readBytes $path]
+  set found [::tclpdfTest::signParse $data]
+  file delete $path
+  lassign [dict get $found byteRange] a b c d
+  set gap [dict get $found contents]
+  set after [expr {$gap + 2 + [string length [dict get $found hex]]}]
+  list $a [expr {$b == $gap}] [expr {$c == $after}] \
+      [expr {$c + $d == [string length $data]}] \
+      [string index $data $gap] [string index $data [expr {$after - 1}]]
+} -result {0 1 1 1 < >}
+
+test sign-1.4 {/Contents holds exactly the room -size asked for, and it is empty} -body {
+  set result {}
+  foreach size {512 2048} {
+    set path [::tclpdfTest::signed sign-size-$size.pdf -size $size]
+    set found [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]]
+    file delete $path
+    set hex [dict get $found hex]
+    lappend result [string length $hex] \
+        [expr {$hex eq [string repeat 0 [string length $hex]]}]
+  }
+  set result
+} -result {1024 1 4096 1}
+
+test sign-1.5 {the widget is the invisible signature of 12.8.5.3} -body {
+  set path [::tclpdfTest::signed sign-widget.pdf -size 256 -field "Freigabe"]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {<< /Type /Annot /Subtype /Widget [^>]*>>} $data widget
+  regexp {/F ([0-9]+)} $widget -> flags
+  # The flags one at a time, as veraPDF rule 6.3.2-2 reads them: Print set,
+  # Invisible, Hidden, NoView and ToggleNoView clear. Checked bitwise rather
+  # than as the number 4, because that is what the rule says and what a
+  # changed value would have to keep.
+  # And no appearance stream anywhere in the file: a rectangle whose corners
+  # coincide is the one case Table 166 exempts from needing one, which is
+  # what makes the invisible field valid under veraPDF rule 6.3.3-1 without
+  # anything being drawn for it.
+  list [regexp {/FT /Sig} $widget] [regexp {/T \(Freigabe\)} $widget] \
+      [regexp {/Rect \[0 0 0 0\]} $widget] $flags \
+      [expr {$flags & 4}] [expr {$flags & 1}] [expr {$flags & 2}] \
+      [expr {$flags & 32}] [expr {$flags & 256}] [regexp {/AP <<} $data]
+} -result {1 1 1 4 4 0 0 0 0 0}
+
+test sign-1.6 {/V points at the signature dictionary, /P at the page} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 256
+  set path [::tclpdfTest::scratch sign-refs.pdf]
+  $doc write $path
+  set data [::tclpdfTest::readBytes $path]
+  set numbers [$doc state reservations]
+  $doc destroy
+  file delete $path
+  regexp {<< /Type /Annot /Subtype /Widget [^>]*>>} $data widget
+  regexp {/V ([0-9]+) 0 R} $widget -> value
+  regexp {/P ([0-9]+) 0 R} $widget -> page
+  # The signature dictionary is the object the reservation named, and it is
+  # a DIRECT dictionary with the placeholders in it - 12.8.1 asks twice for
+  # direct values, and a /Contents behind a reference would sit outside the
+  # bytes the digest covers.
+  set body [string range $data [string first "$value 0 obj" $data] end]
+  list [expr {$value == [dict get $numbers sign.dictionary]}] \
+      [regexp {/Type /Sig} [string range $body 0 200]] \
+      [regexp "$page 0 obj\n<< /Type /Page " $data]
+} -result {1 1 1}
+
+test sign-1.7 {/AcroForm lists the field, with /SigFlags 3} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 256
+  set path [::tclpdfTest::scratch sign-acroform.pdf]
+  $doc write $path
+  set data [::tclpdfTest::readBytes $path]
+  set widget [dict get [$doc state reservations] sign.widget]
+  $doc destroy
+  file delete $path
+  # SignaturesExist and AppendOnly (Table 225), and the field named by the
+  # very object the widget was written to.
+  list [regexp "/AcroForm << /Fields \\\[$widget 0 R\\\] /SigFlags 3 >>" $data] \
+      [regexp {/Type /Catalog} $data]
+} -result {1 1}
+
+test sign-1.8 {-page puts the widget into that page's /Annots and nowhere else} -body {
+  set doc [tclpdf new -unit pt -format a4 -version 2.0]
+  $doc page add
+  $doc text "Seite 1" -at {60 700}
+  $doc page add
+  $doc text "Seite 2" -at {60 700}
+  $doc sign -size 256 -page 1
+  set path [::tclpdfTest::scratch sign-page.pdf]
+  $doc write $path
+  set data [::tclpdfTest::readBytes $path]
+  set annots [$doc state annots]
+  set widget [dict get [$doc state reservations] sign.widget]
+  $doc destroy
+  file delete $path
+  # The second kid of the page tree is the page the widget names, and the
+  # only /Annots array in the file is that page's.
+  regexp {/Kids \[([^\]]*)\]} $data -> kids
+  regexp {/P ([0-9]+) 0 R} $data -> page
+  list [dict keys $annots] \
+      [expr {[dict get $annots 1] eq [list "$widget 0 R"]}] \
+      [expr {"$page 0 R" eq [lrange $kids 3 5]}] \
+      [regexp -all "/Annots \\\[$widget 0 R\\\]" $data]
+} -result {1 1 1 1}
+
+test sign-1.9 {the text entries are there when given and absent when not} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 8 -name "Erika Mustermann" -reason "Freigabe" \
+      -location "Bochum" -contact "erika@example.com"
+  set path [::tclpdfTest::scratch sign-text.pdf]
+  $doc write $path
+  set full [[$doc writer] body [dict get [$doc state reservations] sign.dictionary]]
+  $doc destroy
+  file delete $path
+  set bare [::tclpdfTest::signed sign-bare.pdf -size 8]
+  set bareData [::tclpdfTest::readBytes $bare]
+  file delete $bare
+  list [regexp {/Name \(Erika Mustermann\)} $full] \
+      [regexp {/Reason \(Freigabe\)} $full] \
+      [regexp {/Location \(Bochum\)} $full] \
+      [regexp {/ContactInfo \(erika@example\.com\)} $full] \
+      [regexp {/Name} $bareData] [regexp {/Reason} $bareData] \
+      [regexp {/Location} $bareData] [regexp {/ContactInfo} $bareData]
+} -result {1 1 1 1 0 0 0 0}
+
+test sign-1.10 {/M is written both ways - as the time in one, as a placeholder in the other} -body {
+  # ETSI EN 319 142-1, Table 1 has the entry with the key M at "shall be
+  # present" for every baseline level, and Table 255 of ISO 32000-2
+  # recommends the opposite - a shall against a should. Measured against a
+  # reader as well: Acrobat takes the time from /M alone and reported
+  # "signing time not available" for the one file of seven specimens that
+  # had none, which was ours.
+  #
+  # So it is written always. Where the moment is known - a -signer signs the
+  # document as it is written - the value is the time; where it is not, the
+  # value is the placeholder [::tclpdf::sign digest] later writes over.
+  set bare [::tclpdfTest::signed sign-m-bare.pdf -size 8]
+  set bareData [::tclpdfTest::readBytes $bare]
+  file delete $bare
+  set path [::tclpdfTest::signed sign-m-signed.pdf -size 64 \
+      -signer [list ::tclpdfTest::signFake 20]]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  set stamp {}
+  regexp {/M \(([^)]*)\)} $data -> stamp
+  set waiting {}
+  regexp {/M \(([^)]*)\)} $bareData -> waiting
+  # A real date, read by the package's own date parser, and one that is
+  # actually now - a hard-coded string would pass the first two checks.
+  set real [expr {[::tclpdf::document::parseDate $stamp] ne {}}]
+  set fresh 0
+  if {$real} {
+    set fresh [expr {abs([clock scan [string range $stamp 2 15] \
+        -format %Y%m%d%H%M%S] - [clock seconds]) < 120}]
+  }
+  # The placeholder is a year no clock produces, it is exactly as long as
+  # the date that will replace it, and it is the 2.0 spelling of 7.9.4 -
+  # both documents are written as 2.0, so both drop the last apostrophe.
+  list [regexp {/M \(D:} $data] $real $fresh $waiting \
+      [expr {[string length $waiting] == [string length $stamp]}]
+} -result [list 1 1 1 "D:00000000000000+00'00" 1]
+
+test sign-1.11 {two writes of a PREPARED document give the same file} -body {
+  # The idempotence contract, and the one place where a signature could break
+  # it: the objects are put OVER, not allocated again, and what the second
+  # write emits is the placeholder once more - the real /ByteRange only ever
+  # exists in the file. That is why writing twice works at all.
+  #
+  # A PREPARED document, and that is not a weakening of the test but where
+  # the claim still holds: a SIGNED one carries the time of the write and a
+  # CMS object with a random number in it, so two writes of it differ by
+  # construction. The last element checks the reason this one does not - no
+  # signer, so what stands in /M is the placeholder, which is a constant.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 256
+  set first [::tclpdfTest::scratch sign-twice-a.pdf]
+  set second [::tclpdfTest::scratch sign-twice-b.pdf]
+  $doc write $first
+  set count [[$doc writer] count]
+  $doc write $second
+  set again [[$doc writer] count]
+  set a [::tclpdfTest::readBytes $first]
+  set b [::tclpdfTest::readBytes $second]
+  set body [[$doc writer] body [dict get [$doc state reservations] sign.dictionary]]
+  $doc destroy
+  file delete $first $second
+  list [expr {$a eq $b}] [expr {$count == $again}] \
+      [expr {[string first $::tclpdf::sign::byteRangePlaceholder $body] >= 0}] \
+      [expr {[llength [dict get [::tclpdfTest::signParse $a] byteRange]] == 4}] \
+      [expr {[string first "/M ([::tclpdf::sign::DatePlaceholder 2.0])" $a] > 0}]
+} -result {1 1 1 1 1}
+
+test sign-1.12 {-date writes the time it is given, and -date {} keeps /M out} -body {
+  set result {}
+  # An explicit date is the caller's own statement, not a guess the module
+  # made, and is written even where there is no signer.
+  set path [::tclpdfTest::signed sign-m-fixed.pdf -size 8 \
+      -date "D:20260101120000+01'00'"]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  lappend result [regexp {/M \(D:20260101120000\+01'00'\)} $data]
+  # And the way out for whoever reads Table 255 to the letter: no entry at
+  # all, on a document that is really signed.
+  set path [::tclpdfTest::signed sign-m-none.pdf -size 64 -date {} \
+      -signer [list ::tclpdfTest::signFake 20]]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  lappend result [regexp {/M } $data] [regexp {/Contents <a5a5} $data]
+} -result {1 0 1}
+
+test sign-1.13 {/M lies inside the bytes the signature covers} -body {
+  # The measurement the whole placeholder rests on. /M is written BEHIND the
+  # reserved room, so it falls into the second of the two ranges - which is
+  # what allows [digest] to fill it in and still hand out bytes that carry
+  # it. An /M in front of /Contents would sit in the first range, be signed
+  # as the placeholder, and every later fill would break the digest.
+  set path [::tclpdfTest::signed sign-m-range.pdf -size 256]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp -indices {/M \(([^)]*)\)} $data whole value
+  lassign [dict get [::tclpdfTest::signParse $data] byteRange] a b c d
+  # Both ends of the value inside the second range, and the range itself
+  # reaching to the end of the file.
+  list [expr {[lindex $value 0] >= $c}] \
+      [expr {[lindex $value 1] < $c + $d}] \
+      [expr {[lindex $value 0] > $b}] \
+      [expr {$c + $d == [string length $data]}]
+} -result {1 1 1 1}
+
+#
+# --- the visible field ------------------------------------------------------
+#
+# -rect gives the field a place on the page, -appearance names the form
+# XObject the CALLER drew for it. The module hangs the one into the other and
+# draws nothing, so what these tests check is the hanging: the rectangle, the
+# reference, and that the reference is the object "form create" wrote.
+#
+
+test sign-1.14 {a visible field carries the rectangle and the caller's appearance} -body {
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc form create sigbox -size {60 20} -script {
+    $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc page add
+  $doc text "Rechnung" -at {20 20}
+  $doc sign -size 256 -rect {20 30 60 20} -appearance sigbox
+  set path [::tclpdfTest::scratch sign-visible.pdf]
+  $doc write $path
+  set data [::tclpdfTest::readBytes $path]
+  # What the form XObject was written as, asked of the document rather than
+  # guessed from the file - the comparison below is only worth something if
+  # the two sides come from different places.
+  set stream [$doc resource XObject \
+      [dict get [$doc state forms] sigbox resource]]
+  $doc destroy
+  file delete $path
+  # The dictionary now holds a /AP << ... >> of its own, so the widget runs
+  # up to its /P rather than to the first ">>".
+  regexp {/Type /Annot /Subtype /Widget .*?/P [0-9]+ 0 R >>} $data widget
+  set reference {}
+  regexp {/AP << /N ([0-9]+ 0 R) >>} $widget -> reference
+  set flags {}
+  regexp {/F ([0-9]+)} $widget -> flags
+  # /F 4 is not a consequence of being invisible: rule 6.3.2-2 asks Print
+  # set and Hidden, Invisible, NoView and ToggleNoView clear of every
+  # annotation, so a visible field carries the same value.
+  list [regexp {/FT /Sig} $widget] \
+      [regexp {/Rect \[[0-9.]+ [0-9.]+ [0-9.]+ [0-9.]+\]} $widget] \
+      [expr {$reference eq $stream}] $flags \
+      [regexp "[string map {{ 0 R} { 0 obj}} $reference]\n<< /Type /XObject\
+          /Subtype /Form" $data]
+} -result {1 1 1 4 1}
+
+test sign-1.15 {the rectangle is the caller's, counted from the TOP of the page} -body {
+  # THE measurement of this option. tclpdf counts y from the top of the page
+  # and a PDF counts it from the bottom, so a rectangle handed through
+  # unturned lands mirrored - in the file, on no page, and with no validator
+  # saying a word. Checked twice over and against two different things: the
+  # arithmetic done here from the paper size, in numbers this file works out
+  # itself, and the SAME form placed as page content at the same -at, whose
+  # "cm" translation has to be the rectangle's lower left corner. If the two
+  # agree, the field sits where anything drawn at those coordinates sits.
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc form create sigbox -size {60 20} -script {
+    $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc page add
+  $doc form place sigbox -at {20 30} -artifact 1
+  $doc sign -size 256 -rect {20 30 60 20} -appearance sigbox
+  set path [::tclpdfTest::scratch sign-visible-rect.pdf]
+  $doc write $path
+  set data [::tclpdfTest::readBytes $path]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  file delete $path
+  regexp {/Type /Annot /Subtype /Widget .*?/P [0-9]+ 0 R >>} $data widget
+  regexp {/Rect \[([-0-9. ]+)\]} $widget -> found
+  # A4 is 210 by 297 mm and a point is 1/72 inch: the four numbers a PDF
+  # rectangle wants, worked out without asking the package.
+  set unit [expr {72.0 / 25.4}]
+  set expected [list [expr {20 * $unit}] [expr {(297 - 50) * $unit}] \
+      [expr {80 * $unit}] [expr {(297 - 30) * $unit}]]
+  set exact 1
+  foreach number $found want $expected {
+    if {abs($number - $want) > 0.001} {
+      set exact [list $found ne $expected]
+    }
+  }
+  # And the placement of the same form at the same place, from the content
+  # stream: "1 0 0 1 x y cm" with x y the lower left corner.
+  set placed {}
+  regexp {1 0 0 1 ([-0-9.]+) ([-0-9.]+) cm} $stream -> px py
+  list $exact [expr {abs($px - [lindex $found 0]) < 0.001}] \
+      [expr {abs($py - [lindex $found 1]) < 0.001}]
+} -result {1 1 1}
+
+test sign-1.16 {a field sticking out is allowed, one beside the page is not} -body {
+  # Nothing else in this package takes the page edge for a boundary - a text
+  # at a negative y is written as well - so a rectangle that merely sticks
+  # out stays the caller's business, the more so as a media box need not
+  # start at zero. One lying ENTIRELY beside the page is the other case: it
+  # is an appearance nothing ever paints, which is what -appearance without
+  # -rect is refused for, and it is what a y counted from the wrong end or a
+  # -rect in the wrong unit produces.
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc form create sigbox -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc page add
+  $doc sign -size 256 -rect {-10 -5 40 20} -appearance sigbox
+  set path [::tclpdfTest::scratch sign-visible-edge.pdf]
+  set out [catch {$doc write $path}]
+  set data [::tclpdfTest::readBytes $path]
+  $doc destroy
+  file delete $path
+  regexp {/Type /Annot /Subtype /Widget .*?/P [0-9]+ 0 R >>} $data widget
+  regexp {/Rect \[([-0-9. ]+)\]} $widget -> found
+  # Beside it, on a second document: 300 mm to the right of a page 210 mm
+  # wide.
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc form create sigbox -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc page add
+  $doc sign -size 256 -rect {300 30 40 20} -appearance sigbox
+  set code [catch {$doc write [::tclpdfTest::scratch sign-visible-off.pdf]} \
+      message]
+  $doc destroy
+  file delete [::tclpdfTest::scratch sign-visible-off.pdf]
+  list $out [expr {[lindex $found 0] < 0}] $code \
+      [string match "*entirely outside page 0*" $message] \
+      [string match "*media box is 0 0 595.27559 841.88976*" $message]
+} -result {0 1 1 1 1}
+
+#
+# --- the state --------------------------------------------------------------
+#
+
+test sign-2.1 {a document without a signature has no state} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set result [list [$doc sign state] [$doc state sign] [$doc state needsFile]]
+  $doc destroy
+  set result
+} -result {{} {} {}}
+
+test sign-2.2 {the state before and after the write} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set before [$doc sign -size 64 -field "Freigabe" \
+      -signer [list ::tclpdfTest::signFake 20]]
+  set path [::tclpdfTest::scratch sign-state.pdf]
+  $doc write $path
+  set after [$doc sign state]
+  $doc destroy
+  file delete $path
+  list [dict get $before signed] [dict get $before byteRange] \
+      [dict get $before length] [dict get $after signed] \
+      [llength [dict get $after byteRange]] [dict get $after length] \
+      [dict get $after size] [dict get $after field]
+} -result {0 {} {} 1 4 20 64 Freigabe}
+
+test sign-2.3 {the signer is not in the state} -body {
+  # It is a command prefix that may carry a passphrase or the path of a key,
+  # and a state that answers with it puts both into every log that prints
+  # what a document claims.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 8 -signer [list ::tclpdfTest::signFake 4] \
+      -name "Erika" -reason "Freigabe" -location "Bochum" -contact "e@x.de"
+  set state [$doc sign state]
+  set inner [$doc state sign]
+  $doc destroy
+  # The private state HAS the signer - the point is that the answer does not,
+  # and neither do the four text entries, which have no business being read
+  # back from a state either.
+  list [lsort [dict keys $state]] [dict exists $inner signer] \
+      [dict get $inner signer]
+} -result [list [lsort {appearance byteRange date field length page rect
+    signed size subFilter}] 1 [list ::tclpdfTest::signFake 4]]
+
+test sign-2.4 {the call answers what the query answers} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set answer [$doc sign -size 32]
+  set query [$doc sign state]
+  $doc destroy
+  expr {$answer eq $query}
+} -result 1
+
+test sign-2.5 {an unknown subcommand names the one that exists} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set code [catch {$doc sign zustand} message]
+  $doc destroy
+  list $code [string match "*unknown sign subcommand \"zustand\"*known is: state*" $message]
+} -result {1 1}
+
+test sign-2.6 {the state names the rectangle and the appearance, or neither} -body {
+  # The two are in the state because they are the one thing about a
+  # signature that can be SEEN, and a caller that hands the document on has
+  # no other way to ask where the field ended up. Empty says invisible,
+  # which is the same word the option gives.
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc form create sigbox -size {60 20} -script {
+    $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc page add
+  set visible [$doc sign -size 256 -rect {20 30 60 20} -appearance sigbox]
+  $doc destroy
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set invisible [$doc sign -size 256]
+  $doc destroy
+  list [dict get $visible rect] [dict get $visible appearance] \
+      [dict get $invisible rect] [dict get $invisible appearance]
+} -result {{20 30 60 20} sigbox {} {}}
+
+#
+# --- the SubFilter ----------------------------------------------------------
+#
+
+test sign-3.1 {-subfilter cades writes the PAdES value and raises the version} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set state [$doc sign -size 8 -subfilter cades]
+  set path [::tclpdfTest::scratch sign-pades.pdf]
+  $doc write $path
+  set data [::tclpdfTest::readBytes $path]
+  $doc destroy
+  file delete $path
+  list [dict get $state subFilter] [regexp {/SubFilter /ETSI\.CAdES\.detached} $data] \
+      [regexp {%PDF-2\.0} $data]
+} -result {/ETSI.CAdES.detached 1 1}
+
+test sign-3.2 {the default is adbe.pkcs7.detached, whatever the version says} -body {
+  # The decoupling, and the reason for it: until 2026-08-20 the value
+  # followed the file version, so a 2.0 document claimed PAdES because it was
+  # 2.0 - a claim about the signature profile made by the file format rather
+  # than by anybody. Both documents here take the default and get the value
+  # that claims less; the 1.7 one is what PDF/A-2 and -3 are written as.
+  set result {}
+  foreach argument {{-version 2.0} {}} {
+    set doc [::tclpdfTest::signDoc {*}$argument]
+    set state [$doc sign -size 8]
+    set path [::tclpdfTest::scratch sign-pkcs7.pdf]
+    $doc write $path
+    set data [::tclpdfTest::readBytes $path]
+    lappend result [dict get $state subFilter] \
+        [regexp {/SubFilter /adbe\.pkcs7\.detached} $data] \
+        [[$doc writer] version]
+    $doc destroy
+    file delete $path
+  }
+  set result
+} -result {/adbe.pkcs7.detached 1 2.0 /adbe.pkcs7.detached 1 1.7}
+
+test sign-3.3 {a document pinned below 1.6 is refused, and nothing is left behind} -body {
+  # The refusal comes before a single piece of state is set, and that is
+  # checkable rather than a matter of reading the code: the document still
+  # goes down a channel afterwards, which a prepared one never does.
+  set doc [::tclpdfTest::signDoc -version 1.4]
+  set code [catch {$doc sign} message]
+  set after [list [$doc sign state] [$doc state needsFile]]
+  set path [::tclpdfTest::scratch sign-1.4.pdf]
+  set channel [open $path wb]
+  set written [catch {$doc writeChannel $channel}]
+  close $channel
+  set size [file size $path]
+  $doc destroy
+  file delete $path
+  list $code [string match "*needs PDF 1.6*" $message] $after \
+      $written [expr {$size > 0}]
+} -result {1 1 {{} {}} 0 1}
+
+test sign-3.4 {-subfilter cades on a document written as 1.7 is refused} -body {
+  # PAdES arrived with PDF 2.0 (Table 255), so the claim carries a floor -
+  # and a document that may not be raised to it is told so before anything
+  # is set, which is checkable: the state is still empty afterwards.
+  set doc [::tclpdfTest::signDoc]
+  set code [catch {$doc sign -subfilter cades} message]
+  set after [list [$doc sign state] [$doc state needsFile]]
+  set version [[$doc writer] version]
+  $doc destroy
+  list $code [string match "*PAdES signature*needs PDF 2.0*" $message] $after \
+      $version
+} -result {1 1 {{} {}} 1.7}
+
+test sign-3.5 {an unknown -subfilter names the two values that exist} -body {
+  # And it names them by what they mean, not only by their spelling: the two
+  # the standard deprecates for writers - adbe.x509.rsa_sha1 and
+  # adbe.pkcs7.sha1 - are not offered at all, so a caller who came looking
+  # for one of them has to be told what is here instead.
+  set result {}
+  foreach value {pades adbe.pkcs7.detached {} adbe.pkcs7.sha1} {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    lappend result [catch {$doc sign -subfilter $value} message] \
+        [string match "*sign -subfilter is the signature profile*\"pkcs7\"*\"cades\"*" $message] \
+        [$doc sign state]
+    $doc destroy
+  }
+  set result
+} -result {1 1 {} 1 1 {} 1 1 {} 1 1 {}}
+
+#
+# --- the refusals -----------------------------------------------------------
+#
+
+test sign-4.1 {a second sign is refused, and the first one survives it} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set first [$doc sign -size 64 -field "Freigabe"]
+  set code [catch {$doc sign -size 128 -field "Zweite"} message]
+  set after [$doc sign state]
+  $doc destroy
+  list $code [string match "*already being signed*7.5.6*" $message] \
+      [expr {$after eq $first}]
+} -result {1 1 1}
+
+test sign-4.2 {sign after encrypt is refused} -body {
+  set doc [tclpdf new -unit pt -format a4 -version 2.0]
+  $doc encrypt -user secret
+  $doc page add
+  set code [catch {$doc sign} message]
+  set after [list [$doc sign state] [$doc state needsFile]]
+  $doc destroy
+  list $code [string match "*does not sign an encrypted document*7.6.2*" $message] \
+      $after
+} -result {1 1 {{} {}}}
+
+test sign-4.3 {encrypt after sign is refused too - whichever comes second says so} -body {
+  # Both directions, because a check written on one side only lets the other
+  # order through and produces a file whose signature dictionary is encrypted
+  # except for the one string 7.6.2 exempts.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 8
+  set code [catch {$doc encrypt -user secret} message]
+  set after [$doc encrypt state]
+  $doc destroy
+  list $code [string match "*does not encrypt a signed document*7.6.2*" $message] \
+      $after
+} -result {1 1 {}}
+
+test sign-4.4 {the channel way is refused BEFORE a byte goes down it} -body {
+  # The whole point of the refusal sitting in [writeChannel] rather than in
+  # the afterWrite handler: a document written to a socket cannot be read
+  # back, so the placeholder would go out over the wire and the sentence
+  # about it would arrive afterwards. The count of bytes in the channel is
+  # what says which of the two happened.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 64
+  set path [::tclpdfTest::scratch sign-channel.pdf]
+  set channel [open $path wb]
+  set code [catch {$doc writeChannel $channel} message]
+  close $channel
+  set size [file size $path]
+  $doc destroy
+  file delete $path
+  list $code $size [string match "*cannot be written to a channel*" $message] \
+      [string match "*\[\$doc write \$path\]*" $message]
+} -result {1 0 1 1}
+
+test sign-4.5 {a signature that does not fit is refused with its error code} -constraints signing -body {
+  # The refusal a caller can act on without reading English: the code carries
+  # what was needed and what was reserved, so -size can be raised and the
+  # document written again. Truncating instead would produce a file every
+  # structural check calls signed and no verifier accepts.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 64 -signer ::tclpdfTest::signWith
+  set path [::tclpdfTest::scratch sign-space.pdf]
+  set code [catch {$doc write $path} message options]
+  $doc destroy
+  file delete $path
+  set der [::tclpdfTest::readBytes [file join $::tclpdfTest::signDir signature.der]]
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [expr {[lindex [dict get $options -errorcode] 3] == [string length $der]}] \
+      [lindex [dict get $options -errorcode] 4] \
+      [string match "*sign -size *" $message]
+} -result {1 {TCLPDF SIGN SPACE} 1 64 1}
+
+test sign-4.6 {the same refusal without openssl, and the file keeps its placeholder} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 4 -signer [list ::tclpdfTest::signFake 100]
+  set path [::tclpdfTest::scratch sign-space2.pdf]
+  set code [catch {$doc write $path} message options]
+  $doc destroy
+  # The file exists - the writer wrote it before the handler refused - and
+  # what is in it is the untouched reservation, not half a signature.
+  set found [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]]
+  file delete $path
+  list $code [dict get $options -errorcode] \
+      [dict get $found hex]
+} -result {1 {TCLPDF SIGN SPACE 100 4} 00000000}
+
+test sign-4.7 {a signer that answers nothing} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 64 -signer [list apply {{bytes} {return {}}}]
+  set path [::tclpdfTest::scratch sign-silent.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  file delete $path
+  list $code [string match "*-signer prefix answered nothing*" $message]
+} -result {1 1}
+
+test sign-4.8 {a signer that answers text rather than bytes} -body {
+  # A character above 0xff cannot be a byte of a DER object, and nothing
+  # between here and a verifier would say so: the file would carry
+  # hexadecimal nonsense and look signed.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 64 -signer [list apply {{bytes} {return "DER\u20ac"}}]
+  set path [::tclpdfTest::scratch sign-text-der.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  file delete $path
+  list $code [string match "*text, not bytes*" $message]
+} -result {1 1}
+
+test sign-4.9 {-size takes a positive integer, and says what one costs} -body {
+  set result {}
+  foreach value {0 -1 abc {}} {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    lappend result [catch {$doc sign -size $value} message] \
+        [string match "*sign -size is the number of bytes reserved*" $message] \
+        [$doc sign state]
+    $doc destroy
+  }
+  set result
+} -result {1 1 {} 1 1 {} 1 1 {} 1 1 {}}
+
+test sign-4.10 {-field cannot be empty} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set code [catch {$doc sign -field {}} message]
+  set after [$doc sign state]
+  $doc destroy
+  list $code [string match "*sign -field*cannot be empty*12.7.4.2*" $message] $after
+} -result {1 1 {}}
+
+test sign-4.11 {-page is an index counted from 0} -body {
+  set result {}
+  foreach value {-1 x 1.5} {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    lappend result [catch {$doc sign -page $value} message] \
+        [string match "*sign -page is a page index counted from 0*" $message]
+    $doc destroy
+  }
+  set result
+} -result {1 1 1 1 1 1}
+
+test sign-4.12 {-page names a page the document does not have} -body {
+  # Said at write time, because that is when the document is complete - the
+  # page may still be added after the sign call.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -page 5
+  set path [::tclpdfTest::scratch sign-nopage.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  # No file: the refusal comes on beforeWrite, before the writer opens one.
+  set exists [file exists $path]
+  file delete $path
+  list $code [string match "*sign -page 5 names a page this document does not have*1 page(s)*" $message] $exists
+} -result {1 1 0}
+
+test sign-4.13 {-signer has to be a well-formed list} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set code [catch {$doc sign -signer "\{unbalanced"} message]
+  set after [$doc sign state]
+  $doc destroy
+  list $code [string match "*sign -signer is a command prefix*" $message] $after
+} -result {1 1 {}}
+
+test sign-4.14 {an unknown option names the ones that exist} -body {
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set code [catch {$doc sign -key geheim} message]
+  $doc destroy
+  list $code [string match {*unknown option "-key" for sign*} $message] \
+      [string match "*-signer*-size*-field*-page*" $message]
+} -result {1 1 1}
+
+test sign-4.15 {-date takes a PDF date, "now" or nothing, and refuses the rest} -body {
+  set result {}
+  # The third one is a well-formed PDF date with a month of 13 - the check is
+  # the package's own [CheckDate], and it reads the ranges as well as the
+  # shape, which is why this belongs here and not in a regular expression of
+  # its own.
+  foreach value {jetzt 2026-01-01 D:20261301} {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    lappend result [catch {$doc sign -date $value} message] \
+        [string match "*sign -date takes a PDF date*" $message] \
+        [$doc sign state]
+    $doc destroy
+  }
+  foreach value [list {} now "D:20260101120000+01'00'"] {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    lappend result [catch {$doc sign -date $value}] \
+        [dict get [$doc sign state] date]
+    $doc destroy
+  }
+  set result
+} -result [list 1 1 {} 1 1 {} 1 1 {} 0 {} 0 now 0 "D:20260101120000+01'00'"]
+
+test sign-4.16 {a signer that states the time in the CMS object breaks the PAdES claim} -body {
+  # The write way's half of the check sign-5.12 makes for [embed], and the
+  # same eleven bytes. Both sides need it: a caller who signs during the
+  # write never touches [embed], and one who signs afterwards never touches
+  # this handler.
+  set attribute [binary decode hex 06092a864886f70d010905]
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 256 -subfilter cades \
+      -signer [list apply {{attribute bytes} {
+        return [string repeat \xa5 20]$attribute
+      }} $attribute]
+  set path [::tclpdfTest::scratch sign-cades-time.pdf]
+  set code [catch {$doc write $path} message options]
+  $doc destroy
+  # The file exists - the writer wrote it before the handler refused - and
+  # what is in it is the untouched reservation. Which is the point of
+  # refusing here rather than leaving it to a validator: the way out is one
+  # option away and nothing has been signed.
+  set hex [dict get [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]] hex]
+  file delete $path
+  # And the same signer under the default, which claims no PAdES.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 256 -signer [list apply {{attribute bytes} {
+    return [string repeat \xa5 20]$attribute
+  }} $attribute]
+  set plain [::tclpdfTest::scratch sign-pkcs7-time.pdf]
+  set second [catch {$doc write $plain} other]
+  set length [dict get [$doc sign state] length]
+  $doc destroy
+  file delete $plain
+  list $code [dict get $options -errorcode] \
+      [expr {$hex eq [string repeat 0 512]}] \
+      [string match "*ETSI EN 319 142-1, Table 1*shall not be present*" $message] \
+      $second $length
+} -result {1 {TCLPDF SIGN SIGNINGTIME} 1 1 0 31}
+
+test sign-4.17 {-rect without -appearance is refused, with the rule as the reason} -body {
+  # The half a validator catches: a visible annotation with no appearance
+  # dictionary fails veraPDF rule 6.3.3-1, and a reader draws nothing where
+  # the caller asked for a signature. Said at the call, where the way out is
+  # one option away.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set code [catch {$doc sign -size 256 -rect {20 30 60 20}} message]
+  # Nothing was set: the document still takes a signature afterwards, which
+  # is the check that the refusal came before the state did.
+  set after [catch {$doc sign -size 256} state]
+  $doc destroy
+  list $code [string match "*-appearance*" $message] \
+      [string match "*6.3.3-1*" $message] \
+      [string match "*form create*" $message] $after [dict get $state rect]
+} -result {1 1 1 1 0 {}}
+
+test sign-4.18 {-appearance without -rect is refused - a drawing on no area} -body {
+  # The half no validator catches, because the file is perfectly valid: the
+  # appearance is simply never painted. That makes it the caller's error and
+  # not the document's, and the only place it can be named is here.
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc form create sigbox -size {60 20} -script {
+    $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc page add
+  set code [catch {$doc sign -size 256 -appearance sigbox} message]
+  $doc destroy
+  list $code [string match "*-rect*" $message] \
+      [string match "*12.5.5*" $message]
+} -result {1 1 1}
+
+test sign-4.19 {-rect is four numbers with a width and a height above zero} -body {
+  set result {}
+  foreach rect {{20 30 60} {20 30 60 20 5} {20 30 sechzig 20} {20 30 0 20}
+      {20 30 60 -20}} {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    lappend result [catch {$doc sign -size 256 -rect $rect \
+        -appearance sigbox} message]
+    $doc destroy
+  }
+  # And the two messages that say different things: the shape of the value,
+  # and an area of nothing.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  catch {$doc sign -size 256 -rect {20 30} -appearance x} shape
+  catch {$doc sign -size 256 -rect {20 30 0 20} -appearance x} area
+  $doc destroy
+  lappend result [string match "*{x y w h}*top left corner*" $shape] \
+      [string match "*a width of 0 and a height of 20*" $area]
+} -result {1 1 1 1 1 1 1}
+
+test sign-4.20 {-appearance names a form of this document, and the refusal lists them} -body {
+  # The same shape of refusal "form place" makes for an unknown name, and it
+  # is made at the WRITE rather than at the call: the sign call may stand
+  # anywhere before the write, so a form created after it counts as much as
+  # one created before, exactly as a page added after it does.
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc form create sigbox -size {60 20} -script {
+    $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc form create logo -size {20 20} -script {}
+  $doc page add
+  # Taken at the call, which is the point of the second half of this test.
+  set accepted [catch {$doc sign -size 256 -rect {20 30 60 20} \
+      -appearance stempel}]
+  set code [catch {$doc write [::tclpdfTest::scratch sign-appearance.pdf]} \
+      message]
+  $doc destroy
+  file delete [::tclpdfTest::scratch sign-appearance.pdf]
+  # And the other way round: the form made AFTER the sign call is found.
+  set doc [tclpdf new -unit mm -format a4 -version 2.0]
+  $doc page add
+  $doc sign -size 256 -rect {20 30 60 20} -appearance spaeter
+  $doc form create spaeter -size {60 20} -script {
+    $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+  }
+  set late [catch {$doc write [::tclpdfTest::scratch sign-late.pdf]} other]
+  $doc destroy
+  file delete [::tclpdfTest::scratch sign-late.pdf]
+  list $accepted $code [string match "*\"stempel\"*" $message] \
+      [string match "*known are: sigbox, logo*" $message] \
+      [string match "*form create*" $message] $late \
+      [expr {$late ? $other : {}}]
+} -result {0 1 1 1 1 0 {}}
+
+#
+# --- the two entry points on the finished file ------------------------------
+#
+
+test sign-5.1 {digest answers the bytes the file says are signed} -body {
+  set path [::tclpdfTest::signed sign-digest.pdf -size 512]
+  set job [::tclpdf::sign digest $path]
+  # Read AFTER the call, and that is the change of 2026-08-20: [digest]
+  # writes the time of signing over the /M placeholder before it answers, so
+  # the file the bytes belong to is the one that exists now.
+  set data [::tclpdfTest::readBytes $path]
+  set found [::tclpdfTest::signParse $data]
+  file delete $path
+  # Recomputed independently: everything before the '<' and everything after
+  # the '>', and nothing else - the value of /Contents is the one thing left
+  # out, delimiters included.
+  set gap [dict get $found contents]
+  set after [expr {$gap + 2 + [string length [dict get $found hex]]}]
+  set expected [string range $data 0 [expr {$gap - 1}]][string range $data $after end]
+  list [lsort [dict keys $job]] \
+      [expr {[dict get $job bytes] eq $expected}] \
+      [expr {[dict get $job byteRange] eq [dict get $found byteRange]}] \
+      [expr {[dict get $job offset] == $gap}] [dict get $job size] \
+      [expr {[string length [dict get $job bytes]]
+          == [string length $data] - 2 * 512 - 2}] \
+      [dict get $job subFilter]
+} -result [list {byteRange bytes date offset size subFilter} 1 1 1 512 1 \
+    /adbe.pkcs7.detached]
+
+test sign-5.2 {digest refuses a file that carries no signature} -body {
+  set doc [::tclpdfTest::signDoc]
+  set path [::tclpdfTest::scratch sign-unsigned.pdf]
+  $doc write $path
+  $doc destroy
+  set code [catch {::tclpdf::sign digest $path} message]
+  file delete $path
+  list $code [string match "*carries no signature*no /ByteRange*" $message]
+} -result {1 1}
+
+test sign-5.3 {digest refuses a file that was changed after it was written} -body {
+  # The file has to agree with itself. A /ByteRange that no longer describes
+  # this file would hand out bytes whose digest no reader recomputes, and
+  # the signature would fail with nothing to point at.
+  set path [::tclpdfTest::signed sign-changed.pdf -size 256]
+  set fh [open $path ab]
+  puts -nonewline $fh "% angehaengt"
+  close $fh
+  set code [catch {::tclpdf::sign digest $path} message]
+  file delete $path
+  list $code [string match "*does not describe this file*changed after it was written*" $message]
+} -result {1 1}
+
+test sign-5.4 {embed writes into the gap without moving a byte} -body {
+  # And the property that makes the two-stage way work at all: what digest
+  # hands out before the signature is embedded is what it hands out after -
+  # otherwise the object would be made over bytes the file no longer has.
+  set path [::tclpdfTest::signed sign-embed.pdf -size 256]
+  set before [file size $path]
+  set beforeBytes [dict get [::tclpdf::sign digest $path] bytes]
+  set der [string repeat \xa5 40]
+  set length [::tclpdf::sign embed $path $der]
+  set data [::tclpdfTest::readBytes $path]
+  set afterBytes [dict get [::tclpdf::sign digest $path] bytes]
+  file delete $path
+  set hex [dict get [::tclpdfTest::signParse $data] hex]
+  list $length [expr {[string length $data] == $before}] \
+      [expr {$beforeBytes eq $afterBytes}] \
+      [string range $hex 0 79] [string length $hex] \
+      [string range $hex 80 end]
+} -result [list 40 1 1 [string repeat a5 40] 512 [string repeat 0 432]]
+
+test sign-5.5 {embed refuses a DER that does not fit, with the same code} -body {
+  set path [::tclpdfTest::signed sign-embed-big.pdf -size 16]
+  set code [catch {::tclpdf::sign embed $path [string repeat \xa5 17]} message options]
+  # And the file is untouched by the refusal.
+  set hex [dict get [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]] hex]
+  file delete $path
+  list $code [dict get $options -errorcode] \
+      [expr {$hex eq [string repeat 0 32]}] \
+      [string match "*sign -size 17*" $message]
+} -result {1 {TCLPDF SIGN SPACE 17 16} 1 1}
+
+test sign-5.6 {embed refuses a file that was changed after it was written} -body {
+  # The counterpart to sign-5.1 through 5.3 that was missing, and it was not
+  # a theoretical gap: measured, ten bytes appended to a prepared file made
+  # [digest] refuse with the right sentence and [embed] write the DER in
+  # without a word. What comes out looks signed, carries a real CMS object,
+  # passes every structural check and verifies nowhere.
+  set path [::tclpdfTest::signed sign-embed-changed.pdf -size 256]
+  set fh [open $path ab]
+  puts -nonewline $fh "0123456789"
+  close $fh
+  set code [catch {::tclpdf::sign embed $path [string repeat \xa5 40]} message]
+  # And the refusal left the file alone: the reservation is still zeros.
+  set hex [dict get [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]] hex]
+  file delete $path
+  list $code [string match \
+      "*does not describe this file*changed after it was written*" $message] \
+      [expr {$hex eq [string repeat 0 512]}]
+} -result {1 1 1}
+
+test sign-5.7 {embed refuses text where bytes were asked for} -body {
+  # The same check the write way has made since the first version, and the
+  # same sentence. Measured on what happened without it: under Tcl 8.6 the
+  # call answered 4 and wrote the low byte of each character into the gap,
+  # under Tcl 9 [binary encode hex] raised an error about code points that
+  # says nothing about signatures.
+  set path [::tclpdfTest::signed sign-embed-text.pdf -size 256]
+  set code [catch {::tclpdf::sign embed $path "Gr\u00fc\u20ac"} message]
+  set hex [dict get [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]] hex]
+  file delete $path
+  list $code [string match "*text, not bytes*" $message] \
+      [expr {$hex eq [string repeat 0 512]}]
+} -result {1 1 1}
+
+test sign-5.8 {digest writes the time of signing over the placeholder} -body {
+  # The second half of "/M is always there": the entry exists from the write
+  # on, and the value arrives at the moment the bytes are handed out - which
+  # is the moment of signing for a two-stage document, and the only moment
+  # that can be stated without lying. The file is written back for it, and
+  # the whole point is that it is written back WITHOUT changing length.
+  set path [::tclpdfTest::signed sign-m-fill.pdf -size 256]
+  set before [::tclpdfTest::readBytes $path]
+  set job [::tclpdf::sign digest $path]
+  set after [::tclpdfTest::readBytes $path]
+  file delete $path
+  set waiting {}
+  set written {}
+  regexp {/M \(([^)]*)\)} $before -> waiting
+  regexp {/M \(([^)]*)\)} $after -> written
+  list $waiting [expr {[string length $before] == [string length $after]}] \
+      [expr {$written eq [dict get $job date]}] \
+      [expr {[::tclpdf::document::parseDate $written] ne {}}] \
+      [expr {abs([clock scan [string range $written 2 15] \
+          -format %Y%m%d%H%M%S] - [clock seconds]) < 120}] \
+      [expr {[string first $written [dict get $job bytes]] >= 0}] \
+      [expr {[string first $waiting [dict get $job bytes]] < 0}]
+} -result [list "D:00000000000000+00'00" 1 1 1 1 1 1]
+
+test sign-5.9 {digest is idempotent - the second call fills nothing and answers the same bytes} -body {
+  # Which is what makes the placeholder safe to have: a caller who asks
+  # twice, or who asks again after handing the file on, gets the file as it
+  # stands rather than a new time over a value that is already signed.
+  set path [::tclpdfTest::signed sign-m-again.pdf -size 256]
+  set first [::tclpdf::sign digest $path]
+  set data [::tclpdfTest::readBytes $path]
+  set second [::tclpdf::sign digest $path]
+  set again [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [expr {[dict get $first bytes] eq [dict get $second bytes]}] \
+      [expr {[dict get $first date] ne {}}] [dict get $second date] \
+      [expr {$data eq $again}]
+} -result {1 1 {} 1}
+
+test sign-5.10 {digest -date states a time of its own, and refuses what does not fit} -body {
+  set result {}
+  # A time the caller states rather than measures - a signing service that
+  # answers with the moment it signed, for instance.
+  set path [::tclpdfTest::signed sign-m-given.pdf -size 64]
+  set job [::tclpdf::sign digest $path -date "D:20260101120000+01'00"]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  set written {}
+  regexp {/M \(([^)]*)\)} $data -> written
+  lappend result $written [expr {[dict get $job date] eq $written}]
+  # Not a date at all: refused by the package's own check, before the file
+  # is even opened.
+  set path [::tclpdfTest::signed sign-m-bad.pdf -size 64]
+  lappend result [catch {::tclpdf::sign digest $path -date "gestern"} message] \
+      [string match "*sign digest -date takes a PDF date*" $message]
+  # A date, but a short one - 7.9.4 lets every part after the year be left
+  # out, and the room in the file does not care: the entry sits inside the
+  # bytes the signature covers and cannot change length.
+  lappend result [catch {::tclpdf::sign digest $path -date "D:20260101"} message] \
+      [string match "*is 10 characters and the /M entry*holds 22*" $message]
+  # And neither refusal touched the file: the placeholder is still there.
+  lappend result [regexp {/M \(D:00000000000000} [::tclpdfTest::readBytes $path]]
+  file delete $path
+  set result
+} -result [list "D:20260101120000+01'00" 1 1 1 1 1 1]
+
+test sign-5.11 {digest leaves an /M the document stated alone} -body {
+  # -date on the sign call is the caller's own statement about the time, and
+  # a later call knows less about it than they did. Both ways round: a fixed
+  # date stays, and a document written with -date {} keeps no entry at all -
+  # one cannot be added later, because adding one would move every byte
+  # behind it.
+  set path [::tclpdfTest::signed sign-m-fixed-2.pdf -size 64 \
+      -date "D:20260101120000+01'00"]
+  set job [::tclpdf::sign digest $path]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  set none [::tclpdfTest::signed sign-m-without.pdf -size 64 -date {}]
+  set second [::tclpdf::sign digest $none]
+  set noneData [::tclpdfTest::readBytes $none]
+  file delete $none
+  list [dict get $job date] [regexp {/M \(D:20260101120000\+01'00\)} $data] \
+      [dict get $second date] [regexp {/M } $noneData]
+} -result {{} 1 {} 0}
+
+test sign-5.12 {embed refuses a signing-time attribute where the file claims PAdES} -body {
+  # ETSI EN 319 142-1, Table 1: the attribute "shall not be present" at every
+  # baseline level. [embed] has no document object left to ask, so it reads
+  # the claim out of the file - which is what /SubFilter is in [Locate] for.
+  #
+  # The DER here is not a CMS object and does not need to be: the check is a
+  # search for eleven bytes and says so in its own comment.
+  set attribute [binary decode hex 06092a864886f70d010905]
+  set der [string repeat \xa5 20]$attribute[string repeat \xa5 20]
+  set path [::tclpdfTest::signed sign-embed-cades.pdf -size 256 -subfilter cades]
+  set code [catch {::tclpdf::sign embed $path $der} message options]
+  # And the refusal left the file alone - the room is still zeros, so the
+  # document can be signed again by something that leaves the attribute out.
+  set hex [dict get [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]] hex]
+  file delete $path
+  # The same object into a file that claims nothing: /adbe.pkcs7.detached is
+  # the PKCS#7 world, where ISO 32000-2 Table 255 asks for the attribute
+  # rather than forbidding it.
+  set plain [::tclpdfTest::signed sign-embed-pkcs7.pdf -size 256]
+  set length [::tclpdf::sign embed $plain $der]
+  file delete $plain
+  list $code [dict get $options -errorcode] \
+      [expr {$hex eq [string repeat 0 512]}] \
+      [string match "*signing-time attribute (OID 1.2.840.113549.1.9.5)*" $message] \
+      [string match "*openssl cms -sign*BouncyCastle*" $message] \
+      [string match "*-subfilter pkcs7*pyHanko*" $message] \
+      $length
+} -result {1 {TCLPDF SIGN SIGNINGTIME} 1 1 1 1 51}
+
+#
+# --- openssl and pdfsig: the real thing -------------------------------------
+#
+
+test sign-6.1 {pdfsig calls the signature valid and the whole document signed} -constraints {signing pdfsig} -body {
+  set path [::tclpdfTest::signed sign-real.pdf -size 4096 \
+      -signer ::tclpdfTest::signWith -name "Erika Mustermann" \
+      -reason "Freigabe" -field "Freigabe"]
+  set report [::tclpdfTest::signReport $path]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  # "Certificate issuer isn't Trusted" is expected of a CA made two hundred
+  # milliseconds ago and is not a defect - what is checked is the digest and
+  # the coverage. /M is read out of the same file: the entry Acrobat wants
+  # sits inside the bytes the signature covers, so a reader that recomputes
+  # the digest is also the proof that it was there when it was signed.
+  list [string match "*Signature is Valid.*" $report] \
+      [string match "*Total document signed*" $report] \
+      [regexp {/M \(D:} $data] \
+      [string match "*Signature Field Name: Freigabe*" $report] \
+      [string match "*Signature Type: adbe.pkcs7.detached*" $report] \
+      [string match "*Common Name: Erika Mustermann*" $report]
+} -result {1 1 1 1 1 1}
+
+test sign-6.2 {openssl verifies the CMS object over the bytes digest hands out} -constraints signing -body {
+  # The other side of the same claim, and the one that does not need a PDF
+  # reader: the object in the file verifies against the bytes the file itself
+  # says were signed. If /ByteRange were off by one, this is where it shows.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 4096 -signer ::tclpdfTest::signWith
+  set path [::tclpdfTest::scratch sign-verify.pdf]
+  $doc write $path
+  set length [dict get [$doc sign state] length]
+  $doc destroy
+  set job [::tclpdf::sign digest $path]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The DER out of the file, its own length long - the rest of the room is
+  # the zero padding 12.8.3.3.1 prescribes and is not part of the object.
+  set at [dict get $job offset]
+  set der [binary decode hex \
+      [string range $data [expr {$at + 1}] [expr {$at + 2 * $length}]]]
+  list [::tclpdfTest::signVerify $der [dict get $job bytes]] \
+      [expr {$length > 0}] \
+      [::tclpdfTest::signVerify $der [string range [dict get $job bytes] 1 end]]
+} -result {0 1 1}
+
+test sign-6.3 {a flipped byte inside the signed range is caught} -constraints {signing pdfsig} -body {
+  # The counter-proof. Without it every green test above says only that
+  # something was written, not that it is bound to the bytes around it.
+  set path [::tclpdfTest::signed sign-tamper.pdf -size 4096 \
+      -signer ::tclpdfTest::signWith]
+  set clean [::tclpdfTest::signReport $path]
+  # Byte 100 is inside the first range - the header and the first objects.
+  set fh [open $path r+b]
+  seek $fh 100
+  set original [read $fh 1]
+  seek $fh 100
+  puts -nonewline $fh [expr {$original eq "X" ? "Y" : "X"}]
+  close $fh
+  set broken [::tclpdfTest::signReport $path]
+  file delete $path
+  list [string match "*Signature is Valid.*" $clean] \
+      [string match "*Digest Mismatch.*" $clean] \
+      [string match "*Signature is Valid.*" $broken] \
+      [string match "*Digest Mismatch.*" $broken]
+} -result {1 0 0 1}
+
+test sign-6.4 {bytes appended behind %%EOF are outside the signature} -constraints {signing pdfsig} -body {
+  # The second counter-proof, and a different one: the digest still matches,
+  # because what was appended is not in any range - and that is exactly what
+  # a reader has to notice and report. "Total document signed" turns into
+  # "Not total document signed".
+  set path [::tclpdfTest::signed sign-append.pdf -size 4096 \
+      -signer ::tclpdfTest::signWith]
+  set fh [open $path ab]
+  puts -nonewline $fh "\n% ein Nachtrag\n"
+  close $fh
+  set report [::tclpdfTest::signReport $path]
+  file delete $path
+  list [string match "*Signature is Valid.*" $report] \
+      [string match "*Total document signed*" $report] \
+      [string match "*Not total document signed*" $report]
+} -result {1 0 1}
+
+test sign-6.5 {the two-stage way ends in a valid signature} -constraints {signing pdfsig} -body {
+  # Written without a signer, carried out of the process and back: this is
+  # the way a card reader or a signing service is used, and the file in
+  # between is a complete PDF with an empty reservation in it.
+  set path [::tclpdfTest::signed sign-stage.pdf -size 4096 -name "Erika Mustermann"]
+  set before [file size $path]
+  set placeholder [::tclpdfTest::signReport $path]
+  set job [::tclpdf::sign digest $path]
+  set length [::tclpdf::sign embed $path [::tclpdfTest::signWith [dict get $job bytes]]]
+  set report [::tclpdfTest::signReport $path]
+  set after [file size $path]
+  file delete $path
+  list [expr {$before == $after}] [expr {$length > 0}] \
+      [string match "*Signature is Valid.*" $placeholder] \
+      [string match "*Signature is Valid.*" $report] \
+      [string match "*Total document signed*" $report]
+} -result {1 1 0 1 1}
+
+test sign-6.6 {a signed file is still a structurally sound PDF} -constraints {signing qpdf} -body {
+  # The patch happens after the xref table is written, so a check that reads
+  # the file through its offsets is the one that would find a shifted byte.
+  set path [::tclpdfTest::signed sign-qpdf.pdf -size 4096 \
+      -signer ::tclpdfTest::signWith]
+  set code [catch {exec qpdf --check $path} report]
+  file delete $path
+  list $code [string match "*No syntax or stream encoding errors*" $report]
+} -result {0 1}
+
+test sign-6.7 {openssl and -subfilter cades cannot both stand, and it is openssl} -constraints signing -body {
+  # The measurement behind the refusal, made with the real thing rather than
+  # with eleven bytes: "openssl cms -sign" writes a signing-time attribute
+  # into every object it makes and has no switch to leave it out, so this
+  # openssl - the one the tests above sign with - cannot produce a PAdES
+  # signature. That is a property of openssl and not of tclpdf, which is
+  # exactly what the refusal says and why the way out it names is a different
+  # signer or a different -subfilter.
+  #
+  # Both ways in, because a caller meets one or the other and never both.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 4096 -subfilter cades -signer ::tclpdfTest::signWith
+  set path [::tclpdfTest::scratch sign-cades-openssl.pdf]
+  set write [catch {$doc write $path} message options]
+  $doc destroy
+  file delete $path
+  set two [::tclpdfTest::signed sign-cades-stage.pdf -size 4096 -subfilter cades]
+  set job [::tclpdf::sign digest $two]
+  set der [::tclpdfTest::signWith [dict get $job bytes]]
+  set embed [catch {::tclpdf::sign embed $two $der} other code]
+  file delete $two
+  # And the same object into a file that claims no PAdES goes in without a
+  # word - the attribute is only wrong under the claim.
+  set plain [::tclpdfTest::signed sign-pkcs7-openssl.pdf -size 4096]
+  set length [::tclpdf::sign embed $plain [::tclpdfTest::signWith \
+      [dict get [::tclpdf::sign digest $plain] bytes]]]
+  file delete $plain
+  list $write [dict get $options -errorcode] $embed [dict get $code -errorcode] \
+      [string match "*pyHanko*EU DSS*" $other] \
+      [dict get $job subFilter] [expr {$length > 0}]
+} -result [list 1 {TCLPDF SIGN SIGNINGTIME} 1 {TCLPDF SIGN SIGNINGTIME} 1 \
+    /ETSI.CAdES.detached 1]
+
+#
+# --- PDF/A ------------------------------------------------------------------
+#
+
+set ::tclpdfTest::signFace [file join [file dirname [file dirname \
+    [file normalize [info script]]]] examples assets fonts DejaVuSans.ttf]
+testConstraint haveFace [file exists $::tclpdfTest::signFace]
+
+# An archival document: a claim, a title, a language and an embedded face,
+# because PDF/A may not fall back to a standard font.
+proc ::tclpdfTest::signArchival {} {
+  variable signFace
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3
+  $doc info Title "Signierte Archivprobe"
+  $doc language de-DE
+  $doc page add
+  $doc font embed haus $signFace
+  $doc text "Rechnung" -at {20 20} -family haus
+  return $doc
+}
+
+test sign-7.1 {PDF/A does not forbid a signature - ISO 19005-3 6.4.3 provides for one} -constraints {haveTdom haveFace} -body {
+  # The refusal that must NOT happen. Clause 6.4.3 states three requirements
+  # on signatures, which would be pointless if the profile forbade them - so
+  # a document that claims PDF/A-3 takes the call, and takes it as a 1.7
+  # signature because the profile is one of ISO 32000-1.
+  set doc [::tclpdfTest::signArchival]
+  set code [catch {$doc sign -size 4096 -name "Erika Mustermann"} state]
+  set path [::tclpdfTest::scratch sign-pdfa.pdf]
+  set written [catch {$doc write $path} message]
+  $doc destroy
+  set exists [file exists $path]
+  file delete $path
+  list $code [dict get $state subFilter] $written \
+      [expr {$written ? $message : {}}] $exists
+} -result {0 /adbe.pkcs7.detached 0 {} 1}
+
+test sign-7.2 {a signed PDF/A-3b file validates} -constraints {haveTdom haveFace signing} -body {
+  # veraPDF where it is installed, the same way pdfa.test asks it. Its rule
+  # for clause 6.4.3 reads the CMS object itself - it counts the SignerInfo
+  # structures and looks for the signing certificate - so this is the check
+  # that says the object in /Contents is a real one and not merely the right
+  # number of bytes.
+  set doc [::tclpdfTest::signArchival]
+  $doc sign -size 4096 -signer ::tclpdfTest::signWith -name "Erika Mustermann"
+  set path [::tclpdfTest::scratch sign-pdfa-signed.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  set result [list $code [expr {$code ? $message : {}}]]
+  if {!$code && [auto_execok verapdf] ne {}} {
+    catch {exec verapdf -f 3b $path 2>@1} report
+    if {![regexp {failedChecks="0"} $report]} {
+      set result $report
+    }
+  }
+  file delete $path
+  set result
+} -result {0 {}}
+
+test sign-7.3 {a VISIBLE signature validates, and the same file without /AP does not} -constraints {haveTdom haveFace signing verapdf} -body {
+  # The one check that proves the appearance is not decoration but the
+  # reason the field may be visible at all. Both directions are measured on
+  # the SAME BYTES: the second file is the first with the "/AP << /N n 0 R
+  # >>" overwritten by as many spaces, which leaves every offset and the
+  # signature's own /ByteRange arithmetic untouched and changes exactly one
+  # thing - whether the widget has an appearance dictionary.
+  #
+  # Measured 2026-08-20 with veraPDF 1.30.0: with /AP isCompliant true and 0
+  # failed checks, without it isCompliant false and one failed check, rule
+  # 6.3.3-1, "An annotation does not contain an appearance dictionary".
+  set doc [::tclpdfTest::signArchival]
+  $doc form create sigbox -size {60 20} -script {
+    $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+    $doc text "Erika Mustermann" -at {3 7} -size 9 -family haus
+  }
+  $doc sign -size 4096 -signer ::tclpdfTest::signWith \
+      -name "Erika Mustermann" -rect {20 40 60 20} -appearance sigbox
+  set path [::tclpdfTest::scratch sign-pdfa-visible.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  if {$code} {
+    return [list $code $message]
+  }
+  set data [::tclpdfTest::readBytes $path]
+  set stripped [::tclpdfTest::scratch sign-pdfa-visible-noap.pdf]
+  regexp -indices {/AP << /N [0-9]+ 0 R >>} $data where
+  set blind [string replace $data {*}$where \
+      [string repeat " " [expr {[lindex $where 1] - [lindex $where 0] + 1}]]]
+  ::tclpdf::io write $stripped $blind
+  catch {exec verapdf -f 3b $path 2>@1} good
+  catch {exec verapdf -f 3b $stripped 2>@1} bad
+  set sameLength [expr {[file size $path] == [file size $stripped]}]
+  file delete $path $stripped
+  list $code $sameLength [regexp {isCompliant="true"} $good] \
+      [regexp {failedChecks="0"} $good] \
+      [regexp {isCompliant="false"} $bad] \
+      [regexp {clause="6.3.3" testNumber="1" status="failed"} $bad]
+} -result {0 1 1 1 1 1}
+
+# The certificates go with the rest of the scratch files: they are made at
+# load time, not by a test, so nothing else would remove them.
+file delete -force $::tclpdfTest::signDir
+
+cleanupTests

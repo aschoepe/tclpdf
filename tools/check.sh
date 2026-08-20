@@ -22,6 +22,12 @@
 # So the run is not "qpdf or veraPDF", it is all of them, and each against the
 # right yardstick.
 #
+# The signed documents are the one case where the yardstick is not a profile
+# but a second implementation of the same arithmetic: pdfsig recomputes the
+# digest over the bytes /ByteRange names, and says whether the signature
+# covers the whole file. Nothing on this side could catch a /ByteRange that is
+# off by one - this side is what computed it.
+#
 # WHICH PROFILE a document is checked against is not a list kept here - a list
 # goes stale the day someone adds an example. Each document says it itself, in
 # its XMP: pdfaid:part and pdfaid:conformance. A document that claims nothing
@@ -259,7 +265,109 @@ else
   report_skip "pdfinfo (poppler) not installed"
 fi
 
-echo "=== 7. the manual is no older than what it is made from ==="
+echo "=== 7. pdfsig over every signed document ==="
+
+# The one thing in this package that only a second program can confirm. Every
+# offset in the file can be right, qpdf can be happy with all of it, and the
+# digest can still not match what the CMS object was made over - nothing on
+# this side of the fence would notice, because this side is what computed the
+# offsets in the first place. pdfsig recomputes the digest.
+#
+# Which documents: the ones that carry a /ByteRange, not a list kept here.
+# Two answers are wanted and both matter. "Signature is Valid" is about the
+# digest; "Total document signed" is about coverage, and a signature over
+# half a document is worth half a document.
+#
+# What is NOT a failure: the certificate. The example signs with a test CA it
+# generates and deletes again, so "Certificate issuer isn't Trusted" is the
+# correct verdict and is not looked at here. A valid signature and a trusted
+# signature are two different statements.
+#
+# What is also not a failure: an unfilled placeholder. Without openssl the
+# example writes the document with the reserved room still full of zeros -
+# a legitimate file, and exactly what stage one of the two-stage way hands
+# on. pdfsig names that case itself ("Signature has not yet been verified"),
+# and it is SKIPPED, because a machine without openssl has nothing to check
+# here, not something broken.
+if have pdfsig; then
+  signed=0
+  victim=""
+  for f in examples/out/*.pdf; do
+    grep -l "/ByteRange" "$f" >/dev/null 2>&1 || continue
+    out=`pdfsig "$f" 2>/dev/null`
+    case "$out" in
+      *"has not yet been verified"*)
+        report_skip "pdfsig `basename $f` - placeholder unfilled, the example found no openssl"
+        continue
+        ;;
+    esac
+    signed=`expr $signed + 1`
+    case "$out" in
+      *"Signature is Valid"*)
+        case "$out" in
+          *"Total document signed"*)
+            test -n "$victim" || victim="$f"
+            report_pass "pdfsig `basename $f`: valid, over the whole file"
+            ;;
+          *)
+            report_fail "pdfsig `basename $f`: valid, but NOT over the whole document"
+            ;;
+        esac
+        ;;
+      *)
+        verdict=`echo "$out" | sed -n 's/.*Signature Validation: //p' | head -1`
+        report_fail "pdfsig `basename $f`: ${verdict:-no verdict}"
+        ;;
+    esac
+  done
+
+  # The control line, and it is the reason the section is worth running: a
+  # verifier that cannot say no verifies nothing. So hand pdfsig a copy whose
+  # bytes were changed INSIDE the signed range and require it to notice.
+  #
+  # Where: the /Producer string of the information dictionary. It is plain
+  # text, every tclpdf document has one, and it sits in the second signed
+  # range - which runs from the end of the reserved room to the end of the
+  # file. One character of it changed leaves a PERFECTLY WELL-FORMED PDF that
+  # no longer matches its signature, which is the file this whole section
+  # exists for. Ten bytes past the key is the first character of the value,
+  # so the dictionary keys themselves stay untouched.
+  #
+  # qpdf is asked about the copy as well and has to still accept it: if the
+  # tampered file were merely broken, pdfsig refusing it would prove nothing
+  # about the digest.
+  if test -z "$victim"; then
+    report_skip "the tamper control - no signed document to tamper with"
+  else
+    at=`grep -abo "Producer" "$victim" 2>/dev/null | tail -1 | cut -d: -f1`
+    if test -z "$at"; then
+      report_fail "no /Producer in `basename $victim` - the tamper control has nothing to change"
+    else
+      cp "$victim" /tmp/tclpdf-tampered.$$
+      printf 'X' | dd of=/tmp/tclpdf-tampered.$$ bs=1 seek=`expr $at + 10` \
+          count=1 conv=notrunc 2>/dev/null
+      if cmp -s "$victim" /tmp/tclpdf-tampered.$$; then
+        report_fail "the tamper control changed no byte - the control is not working"
+      elif have qpdf && ! qpdf --check /tmp/tclpdf-tampered.$$ >/dev/null 2>&1; then
+        report_fail "the tampered copy is not a well-formed PDF - the control proves nothing"
+      else
+        case `pdfsig /tmp/tclpdf-tampered.$$ 2>/dev/null` in
+          *"Digest Mismatch"*)
+            report_pass "pdfsig control: one byte changed inside the signed range is caught"
+            ;;
+          *)
+            report_fail "pdfsig accepted a tampered document - the check is not working"
+            ;;
+        esac
+      fi
+      rm -f /tmp/tclpdf-tampered.$$
+    fi
+  fi
+else
+  report_skip "pdfsig (poppler) not installed"
+fi
+
+echo "=== 8. the manual is no older than what it is made from ==="
 
 # Neither doc/tclpdf.n nor doc/tclpdf.html is under version control: both are
 # built by "make all" and travel in the source archive. That is exactly why
@@ -281,7 +389,7 @@ for made in doc/tclpdf.n doc/tclpdf.html; do
   fi
 done
 
-echo "=== 8. the reference code of the tclpdf-tcl skill runs ==="
+echo "=== 9. the reference code of the tclpdf-tcl skill runs ==="
 
 # doc/claude/skills/tclpdf-tcl/reference/*.md is the code a reader - or an
 # agent - copies, so it has to keep running against the package as it is;

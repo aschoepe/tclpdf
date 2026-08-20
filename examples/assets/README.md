@@ -164,11 +164,17 @@ stage 6. All raster images are 640 × 480.
 | `sample-indexed.png` | 11 269 B | PNG, 8 bit, **colour type 3** (palette) | `/Indexed` with the PLTE chunk carried over |
 | `sample-rgba.png` | 40 215 B | PNG, 8 bit, **colour type 6** (RGBA) | the alpha path via `/SMask` — the one measured bottleneck (Paeth unfiltering) |
 | `sample-vector.svg` | 2 262 B | SVG 1.1 | stage 6, deferred |
+| `erika-mustermann.jpg` | 119 541 B | baseline JPEG (SOF0), 3 components, sRGB, **with an embedded ICC profile** (APP2, 3 160 B) — beside Exif, XMP and a Photoshop segment | the ICCBased path for pictures: the profile becomes the image colour space instead of the bare device name |
+| `signature-mustermann.svg` | 14 754 B | SVG 1.1, one filled path with 10 contours | the appearance of a visible signature (stage 8) — public domain, see below |
 
 The SVG uses `circle`, `clipPath`, `defs`, `g`, `linearGradient`, `path`,
 `radialGradient`, `rect`, `stop` and `text` — deliberately the constructs that
 decide whether SVG support is worth building: gradients map onto shading types
 2 and 3, `clipPath` onto `W n`, and `text` is the one that needs a font.
+
+`erika-mustermann.jpg` is the portrait from the same specimen — the passport photograph of the identity card of the Personalausweisverordnung, published by the Bundesministerium des Innern and in the public domain on the same grounds as the signature. Two things about it are worth knowing rather than assuming. It carries an ICC profile, so it exercises a code path the other JPEGs do not: `image embed` keeps the profile and writes `/ICCBased` instead of `/DeviceRGB`. And the sources disagree about who is in the picture: Wikimedia Commons calls the person fictitious, while the Wikipedia article on the name states that the photographs on these specimens show actual employees of the Bundesdruckerei. Nothing follows from that for the licence — an official work stays an official work — but a specimen portrait is not the place for the assumption that nobody is depicted.
+
+`signature-mustermann.svg` is the signature of Erika Mustermann as it stands on the German identity card specimen — traced from the artwork of the Personalausweisverordnung of 1 November 2010 into filled paths. That artwork is part of an official regulation and therefore in the public domain under section 5 paragraph 1 of the German copyright act; Wikimedia Commons carries the specimen on the same grounds. Erika Mustermann is the placeholder person of German official documents and has been since 1983 — the name is a convention, not a person, and the signature is a specimen, not anyone's mark. It is a drawing here, not a photograph of a document: the file holds paths, so `examples/08.02-signature-visible.tcl` puts real vectors into the appearance stream of its signature field.
 
 Neither PNG is interlaced. That is intentional: an interlaced PNG cannot be
 passed through and would have to be decoded and re-encoded, which is a
