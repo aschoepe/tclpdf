@@ -264,6 +264,13 @@ proc ::tclpdf::sfnt::CmapFormat4 {bytes position} {
       continue
     }
     for {set code $start} {$code <= $end} {incr code} {
+      if {$code >= 0xD800 && $code <= 0xDFFF} {
+        # Surrogate code points are not characters and OpenType forbids them
+        # in a cmap; passed through, one would end up as a lone surrogate in
+        # the ToUnicode CMap, whose targets ISO 32000-2 9.10.3 requires to be
+        # well-formed UTF-16BE strings.
+        continue
+      }
       if {$rangeOffset == 0} {
         set glyph [expr {($code + $delta) & 0xFFFF}]
       } else {
@@ -288,11 +295,39 @@ proc ::tclpdf::sfnt::CmapFormat4 {bytes position} {
 
 proc ::tclpdf::sfnt::CmapFormat12 {bytes position} {
   binary scan $bytes @[expr {$position + 12}]Iu nGroups
+  # The group count steers the loop below, so it is checked before it is
+  # believed: a corrupt count read as an unsigned 32-bit value would send
+  # the loop reading billions of groups past the end of the file.
+  set room [expr {[string length $bytes] - $position - 16}]
+  if {$nGroups * 12 > $room} {
+    return -code error "tclpdf: the cmap table is damaged - format 12\
+        declares $nGroups groups where only $room bytes follow"
+  }
   set map {}
   for {set group 0} {$group < $nGroups} {incr group} {
     set at [expr {$position + 16 + $group * 12}]
     binary scan $bytes @${at}IuIuIu start end startGlyph
+    # Same reason as above: end steers the inner loop, and a corrupt end of
+    # 0xFFFFFFFF would keep it running for four billion iterations. Unicode
+    # ends at 0x10FFFF, so anything beyond is damage, not data.
+    if {$start > $end} {
+      return -code error "tclpdf: the cmap table is damaged - format 12\
+          group $group ends (0x[format %X $end]) before it starts\
+          (0x[format %X $start])"
+    }
+    if {$end > 0x10FFFF} {
+      return -code error "tclpdf: the cmap table is damaged - format 12\
+          group $group ends at 0x[format %X $end], beyond the last Unicode\
+          code point 0x10FFFF"
+    }
     for {set code $start} {$code <= $end} {incr code} {
+      if {$code >= 0xD800 && $code <= 0xDFFF} {
+        # Surrogate code points are not characters and OpenType forbids them
+        # in a cmap; passed through, one would end up as a lone surrogate in
+        # the ToUnicode CMap, whose targets ISO 32000-2 9.10.3 requires to be
+        # well-formed UTF-16BE strings.
+        continue
+      }
       dict set map $code [expr {$startGlyph + $code - $start}]
     }
   }

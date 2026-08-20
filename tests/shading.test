@@ -680,4 +680,65 @@ test shading-8.3 {a text with a page gradient inside a form is refused like a sh
   string match {*pattern "g" was placed on the page*} $message
 } -result 1
 
+# --- the version floor is pinned by what reached the file, not by refusals ----
+
+test shading-9.1 {a coordinate beyond the PDF real range is refused, nothing behind} -body {
+  set doc [tclpdf new -compress 0 -unit pt]
+  $doc page add
+  set objects [[$doc writer] count]
+  set at [catch {$doc shading axial -at {1e39 0} -size {10 10} \
+      -colors {red blue}} message]
+  set size [catch {$doc shading axial -at {0 0} -size {1e300 10} \
+      -colors {red blue}} second]
+  set result [list $at [string match {*no PDF representation*} $message] \
+      $size [string match {*no PDF representation*} $second] \
+      [expr {[[$doc writer] count] - $objects}] [::tclpdfTest::content $doc]]
+  $doc destroy
+  set result
+} -result {1 1 1 1 0 {}}
+
+test shading-9.2 {a refused shading does not pin the version floor} -body {
+  # RequireVersion used to come first: a shading refused over its values
+  # blocked a later "configure -version 1.2" over a feature that never
+  # made it into the file.
+  set doc [tclpdf new]
+  $doc page add
+  set one [catch {$doc shading axial -at {20 20} -size {60 20} -colors {white}}]
+  set stops [catch {$doc shading axial -at {20 20} -size {60 20} \
+      -colors {red yellow green} -stops {0 0.5 2}} message]
+  set lowered [catch {$doc configure -version 1.2}]
+  $doc destroy
+  list $one $stops [string match {*-stops are numbers from 0 to 1*} $message] $lowered
+} -result {1 1 1 0}
+
+test shading-9.3 {an accepted shading still pins the floor at 1.3} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading axial -at {20 20} -size {60 20} -colors {white steelblue}
+  set code [catch {$doc configure -version 1.2} message]
+  $doc destroy
+  list $code [string match {*shading*needs PDF 1.3*} $message]
+} -result {1 1}
+
+test shading-9.4 {a refused pattern does not pin the floor, an accepted one does} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  foreach args {
+    {-size {5} -script {}}
+    {-size {10 5} -step {0 5} -script {}}
+    {-size {10 5} -matrix {1 0 0 1 0} -script {}}
+  } {
+    lappend codes [catch {$doc pattern create tile {*}$args}]
+  }
+  lappend codes [catch {$doc configure -version 1.1}]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc pattern create tile -size {10 5} -script {}
+  lappend codes [catch {$doc configure -version 1.1} message]
+  $doc destroy
+  list $codes [string match {*pattern*needs PDF 1.2*} $message]
+} -result {{1 1 1 0 1} 1}
+
 cleanupTests

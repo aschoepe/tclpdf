@@ -149,13 +149,15 @@ $doc text "The shift roster below is long enough that the break falls right\
 # below it the break falls before the block and above it after, and either way
 # the page would look the same whether the fix is there or not.
 set roster {}
-set day 1
+# One day per NAME: the week turns after seven days. Counted per shift it
+# turned after seven SHIFTS, and Wednesday afternoon was already week 2.
+set day 0
 foreach name {Monday Tuesday Wednesday Thursday Friday Saturday Sunday
               Monday Tuesday Wednesday} {
+    incr day
     foreach shift {Early Late Night} {
         lappend roster [list "$name, week [expr {($day - 1) / 7 + 1}]" $shift \
             "R. Neumann" "6:00 - 14:00"]
-        incr day
     }
 }
 # The block that must not be torn: one name covering a weekend of six shifts.

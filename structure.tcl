@@ -137,6 +137,18 @@ namespace eval ::tclpdf::structure {
     TR    {TH TD}
     L     {LI Caption}
     LI    {Lbl LBody}
+    Ruby  {RB RT RP}
+    Warichu {WP WT}
+  }
+
+  # The two types whose content is a fixed SEQUENCE, not a set (ISO 32000-2
+  # Table 369): what a Ruby or a Warichu may hold in which order. Membership
+  # is checked by childrenOf above when a part is opened; the order and the
+  # completeness only when the parent closes, in [StructureCheckSequence] -
+  # halfway through the bracket the sequence is legitimately incomplete.
+  variable sequenceOf {
+    Ruby    {{RB RT} {RB RP RT RP}}
+    Warichu {{WP WT WP}}
   }
 
   # Types that hold text and nothing structural. Annex L forbids a block
@@ -175,8 +187,11 @@ namespace eval ::tclpdf::structure {
   #
   # Measured against veraPDF ua2 rather than read from the table: Figure,
   # Formula, Form, Link, Annot, Code, Note and FENote pass at the top level
-  # and are left out; the parts of a Ruby or a Warichu are placed by
-  # parentOf below. Reference is the odd one - refused under Document and
+  # and are left out; the parts of a Ruby or a Warichu are held to their
+  # parent by parentOf below, to their membership by childrenOf, and to
+  # their order by sequenceOf - parentOf alone never checked what a Ruby
+  # holds, only where an RB may stand. Reference is the odd one - refused
+  # under Document and
   # nowhere else that matters (a TOCI holds one, and 5.5 draws it so), so
   # it is refused at the top level only.
   variable inlineOnly {
@@ -273,6 +288,11 @@ namespace eval ::tclpdf::structure {
     THead {Table}
     TBody {Table}
     TFoot {Table}
+    RB    {Ruby}
+    RT    {Ruby}
+    RP    {Ruby}
+    WT    {Warichu}
+    WP    {Warichu}
   }
 }
 
@@ -356,6 +376,7 @@ oo::define ::tclpdf::document::document {
     # has already said what went wrong, and a caption complaint on top of it
     # would hide the cause.
     my StructureCheckCaption $id
+    my StructureCheckSequence $id
     # The BODY's result, not the element id: this wraps calls that return
     # something the caller needs - [table] answers with the y coordinate
     # below the table, and swallowing it would break every table in a tagged
@@ -374,11 +395,16 @@ oo::define ::tclpdf::document::document {
     }
     # A 2.0-only type in a file that is not 2.0 would be written, validate as
     # a non-standard type without a role map, and mean nothing to a reader.
-    if {$type in $types20 && $type ni $types
-        && [package vcompare [[my writer] version] 2.0] < 0} {
-      return -code error "tclpdf: \"$type\" is a structure type of ISO 32000-2\
-          and this document is PDF [[my writer] version] - raise the version,\
-          or use \[\$doc ua -part 2\], which does it"
+    if {$type in $types20 && $type ni $types} {
+      if {[package vcompare [[my writer] version] 2.0] < 0} {
+        return -code error "tclpdf: \"$type\" is a structure type of ISO\
+            32000-2 and this document is PDF [[my writer] version] - raise\
+            the version, or use \[\$doc ua -part 2\], which does it"
+      }
+      # Accepted - so the floor is pinned with the writer: a later
+      # [configure -version 1.7] is refused naming the type, instead of
+      # writing a 1.7 file that carries it after all.
+      my RequireVersion 2.0 "the structure type $type"
     }
     my StructureCheckNesting $type
     variable ::tclpdf::structure::attributes
@@ -509,6 +535,12 @@ oo::define ::tclpdf::document::document {
                 [llength $values20] ? "; ISO 32000-2 adds [join $values20 {, }]"
                 : {}}]"
           }
+          if {$value in $values20 && $value ni $values} {
+            # Accepted - so the floor is pinned with the writer: a later
+            # [configure -version 1.7] is refused naming the value, instead
+            # of writing a 1.7 file that carries it after all.
+            my RequireVersion 2.0 "-$option $value (ISO 32000-2 Table 369)"
+          }
           set object /$value
         }
         number {
@@ -584,6 +616,20 @@ oo::define ::tclpdf::document::document {
       if {$type ni $allowed} {
         return -code error "tclpdf: a $parentType may not contain a $type -\
             it takes [join $allowed {, }] (ISO 32000-2 Annex L)"
+      }
+      # A Table holds at most ONE THead and ONE TFoot (Annex L gives both
+      # the cardinality 0..1); the second is refused where it is opened.
+      # veraPDF reports the duplicate only against the finished file,
+      # naming an object number - here the message still names the call.
+      if {$type in {THead TFoot}} {
+        set elements [my state structure]
+        foreach kid [dict get [lindex $elements $parent] kids] {
+          if {[lindex $kid 0] eq "element" && [dict get [lindex $elements \
+              [lindex $kid 1]] type] eq $type} {
+            return -code error "tclpdf: this Table already has a $type - a\
+                table holds at most one (ISO 32000-2 Annex L)"
+          }
+        }
       }
       return
     }
@@ -738,6 +784,60 @@ oo::define ::tclpdf::document::document {
           child, not child $position of [llength $kids] (ISO 32000-2 Annex L)"
     }
     return
+  }
+
+  # Ruby and Warichu hold a fixed SEQUENCE, not a set (ISO 32000-2 Table
+  # 369, kept in sequenceOf): checked like the Caption's place when the
+  # element's bracket closes, because only then is the whole sequence known
+  # - and still at the call, where the message can name the position rather
+  # than an object number. Only element kids count; a mark drawn straight
+  # into a Ruby has no place in Table 369 either, and the mismatch names it.
+  # veraPDF ua1 never looks at this - only ua2 does - so a tree that breaks
+  # it validates today and fails at the first UA-2 recipient.
+  method StructureCheckSequence {id} {
+    variable ::tclpdf::structure::sequenceOf
+    set elements [my state structure]
+    set element [lindex $elements $id]
+    set type [dict get $element type]
+    if {![dict exists $sequenceOf $type]} {
+      return
+    }
+    set sequence [lmap kid [dict get $element kids] {
+      if {[lindex $kid 0] ne "element"} {
+        continue
+      }
+      dict get [lindex $elements [lindex $kid 1]] type
+    }]
+    set wanted [dict get $sequenceOf $type]
+    if {$sequence in $wanted} {
+      return
+    }
+    return -code error "tclpdf: a $type holds exactly\
+        [join [lmap variant $wanted {join $variant +}] { or }]\
+        (ISO 32000-2 Table 369) - this one holds [expr {
+        [llength $sequence] ? [join $sequence +] : {nothing}}]"
+  }
+
+  # The graphics that became artifacts because nobody said otherwise, worded
+  # for a refusal: an artifact carries content past a reader entirely, and a
+  # picture, drawing or form placed without -alt and without -artifact 1 was
+  # never judged either way. Two claims stand on that judgement - PDF/UA
+  # (ua.tcl, 7.1/7.3) and PDF/A level A (pdfa.tcl, ISO 19005 6.7.3) - and
+  # the question lives HERE, with the marks, because the two topics may not
+  # require each other and both already depend on this module: each claim
+  # demands a tagged document, [tagged] lives here, and the record read
+  # below is only ever filled in a tagged one. The facts come from
+  # [undescribedGraphics] in image.tcl, which fills the key for a drawing
+  # and a form placement as well; clause is the caller's citation, the one
+  # word the two claims do not share.
+  method GraphicsUndescribed {clause} {
+    set nouns {image "an image" svg "a drawing" form "a form"}
+    return [lmap entry [my undescribedGraphics] {
+      string cat "page [dict get $entry page]: [dict get $nouns [dict get \
+          $entry kind]] was placed without -alt and without -artifact 1 -\
+          describe it, or say it is decoration; an artifact may carry nothing\
+          a reader needs ($clause)"
+    }]
   }
 
   # The element a mark belongs to right now, or {} when nothing is open.

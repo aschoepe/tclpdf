@@ -1276,4 +1276,18 @@ test table-22.11 {a refused table leaves no Table element in a tagged document} 
   list $code [regexp -all {/S /Table} $bytes] [regexp -all {/S /TR} $bytes]
 } -result {1 1 1}
 
+
+test table-23.1 {a decimal cell whose separator opens the line writes no empty show} -body {
+  # ",50" has no head before the separator - drawing the empty head anyway
+  # wrote a bare "() Tj" into the stream.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {10 10} -width 100 -theme plain -decimal , \
+      -body {{",50"} {"1,25"}} -columns {{align decimal}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {\(\) Tj} $stream] [regexp -all {\(,50\) Tj} $stream] \
+      [regexp -all {\(1\) Tj} $stream]
+} -result {0 1 1}
+
 cleanupTests

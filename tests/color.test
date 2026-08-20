@@ -565,4 +565,38 @@ test color-separation-6.3 {All and None are written as the special colourants th
   list $found [regexp {/All cs\n1 scn} $stream] [regexp {/None CS\n1 SCN} $stream]
 } -result {{/All /DeviceCMYK /None /DeviceGray} 1 1}
 
+test color-separation-6.4 {a refused separation does not pin the version floor, an accepted one does} -body {
+  # RequireVersion sat in front of the checks: a separation refused over
+  # its name blocked a later "configure -version 1.1" over a colour that
+  # never reached the file.
+  set doc [tclpdf new]
+  $doc page add
+  set refused [catch {$doc rect -at {10 10} -size {20 20} \
+      -fill {separation Pattern {rgb 1 0 0} 0.5}} message]
+  set lowered [catch {$doc configure -version 1.1}]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill {separation Spot {cmyk 0 1 1 0} 0.5}
+  set pinned [catch {$doc configure -version 1.1} second]
+  $doc destroy
+  list $refused [string match {*cannot be the name of a separation*} $message] \
+      $lowered $pinned [string match {*a separation colour*needs PDF 1.2*} $second]
+} -result {1 1 0 1 1}
+
+test color-separation-6.5 {a refused redefinition records nothing} -body {
+  # The mismatch check now comes before the colour space record - the
+  # rejected alternate must not appear in what PDF/A holds against the
+  # output intent.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc rect -at {10 10} -size {20 20} -fill {separation Spot {rgb 1 0 0} 0.5}
+  set code [catch {$doc rect -at {10 10} -size {20 20} \
+      -fill {separation Spot {cmyk 0 1 1 0} 0.5}} message]
+  set spaces [$doc colourSpacesUsed]
+  $doc destroy
+  list $code [string match {*already defined*one name*} $message] \
+      [dict exists $spaces DeviceCMYK] [dict exists $spaces DeviceRGB]
+} -result {1 1 0 1}
+
 cleanupTests

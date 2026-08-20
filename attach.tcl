@@ -40,8 +40,10 @@ package require tclpdf::io 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::attach {
-  # The /AFRelationship names of PDF/A-3 (ISO 19005-3, Annex E; ISO 32000-2,
-  # Table 43). Owned here and read by zugferd.tcl, which checks its
+  # The /AFRelationship names admitted here are the five of ISO 19005-3,
+  # Annex E - Table 43 of ISO 32000-2 knows more (EncryptedPayload, FormData,
+  # Schema), which PDF/A-3 does not, and this package writes attachments for
+  # PDF/A-3. Owned here and read by zugferd.tcl, which checks its
   # -relationship before it starts declaring things - one list, so the two
   # cannot drift.
   variable relationships {Source Data Alternative Supplement Unspecified}
@@ -75,6 +77,12 @@ proc ::tclpdf::attach::keyBytes {name} {
 # The name used to go into /F as UTF-16BE, which is not a form 7.11.2.1
 # knows.
 proc ::tclpdf::attach::fallbackName {name} {
+  # One "_" per CODE POINT, not per string element: under Tcl 8.6 a character
+  # beyond the BMP is stored as a surrogate pair - two elements - which the
+  # class below alone turned into two underscores where Tcl 9, storing the
+  # character whole, wrote one, and the /F bytes differed by interpreter.
+  # The pair is folded first, as one; under Tcl 9 the range never matches.
+  regsub -all {[\uD800-\uDBFF][\uDC00-\uDFFF]} $name _ name
   return [regsub -all {[^\x20-\x7e]} $name _]
 }
 

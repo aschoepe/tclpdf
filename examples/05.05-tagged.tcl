@@ -154,11 +154,12 @@ $doc structure Sect -script {
       -at {20 158} -width 70 \
       -alt "La pressa 3 dopo la sostituzione dell'azionamento, vista dal lato operatore"
 
-  # No -alt, so an artifact. That is the honest default: most pictures in a
-  # document are decoration, and a Figure without a description would fail
-  # validation rather than help anyone.
+  # Declared an artifact: decoration, not content. Under Level A the
+  # declaration is asked for - a picture with neither -alt nor -artifact 1
+  # would go out as an artifact a screen reader never sees, so the write
+  # refuses it rather than deciding silently (ISO 19005-2, 6.7.3).
   $doc image draw [file join $assets images sample-gray.jpg] \
-      -at {100 158} -width 70
+      -at {100 158} -width 70 -artifact 1
 }
 
 # The footer is an artifact by nature - a page number is a fact about the

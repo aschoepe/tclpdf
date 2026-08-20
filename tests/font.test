@@ -1680,4 +1680,227 @@ test font-15.10 {font info names an instance of a variable face as it is embedde
   set names
 } -result {Roboto-Bold Roboto_620wght Roboto-Regular}
 
+# Damaged and norm-breaking cmaps, built rather than found (the platform 0
+# name fixture above sets the pattern): DejaVu carries a format 12 subtable
+# as (3,10) and (0,10) - both records point at the same table, and (3,10) is
+# the one the parser prefers - so the fixtures patch that table in place.
+proc fontPatchCmap12 {source target patches} {
+  set channel [open $source rb]
+  set bytes [read $channel]
+  close $channel
+  set parsed [::tclpdf::sfnt parse $bytes]
+  lassign [dict get $parsed tables cmap] cmapAt -
+  binary scan $bytes @[expr {$cmapAt + 2}]Su count
+  set table -1
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {$cmapAt + 4 + $index * 8}]
+    binary scan $bytes @${at}SuSuIu platform encoding offset
+    if {$platform == 3 && $encoding == 10} {
+      set table [expr {$cmapAt + $offset}]
+    }
+  }
+  foreach patch $patches {
+    switch -- [lindex $patch 0] {
+      ngroups {
+        set bytes [string replace $bytes [expr {$table + 12}] \
+            [expr {$table + 15}] [binary format Iu [lindex $patch 1]]]
+      }
+      group {
+        lassign $patch - group start end glyph
+        set at [expr {$table + 16 + $group * 12}]
+        set bytes [string replace $bytes $at [expr {$at + 11}] \
+            [binary format IuIuIu $start $end $glyph]]
+      }
+    }
+  }
+  set channel [open $target wb]
+  puts -nonewline $channel $bytes
+  close $channel
+  return $target
+}
+
+test font-16.1 {a format 12 group that ends before it starts is refused by name} \
+    -constraints haveFont -body {
+  # Group 0 of DejaVu maps 0x20..0x7E; turned around it becomes damage the
+  # old loop silently skipped (an empty for loop) - accepting a font whose
+  # character map lies about itself.
+  set path [fontPatchCmap12 $fontRegular \
+      [::tclpdfTest::scratch cmap12-turned.ttf] {{group 0 0x20 0x1F 3}}]
+  set code [catch {::tclpdf::sfnt read $path} message]
+  file delete $path
+  list $code $message
+} -result {1 {tclpdf: the cmap table is damaged - format 12 group 0 ends (0x1F) before it starts (0x20)}}
+
+test font-16.2 {a format 12 group ending at 0xFFFFFFFF is refused at once, not iterated} \
+    -constraints haveFont -body {
+  # The case that made the check necessary: end is read as an unsigned
+  # 32-bit value, and 0xFFFFFFFF sent the inner loop into four billion
+  # iterations - font embed hung instead of refusing. The elapsed time is
+  # part of the assertion: a refusal that takes minutes is still a hang.
+  set path [fontPatchCmap12 $fontRegular \
+      [::tclpdfTest::scratch cmap12-huge.ttf] {{group 0 0x20 0xFFFFFFFF 3}}]
+  set before [clock milliseconds]
+  set code [catch {::tclpdf::sfnt read $path} message]
+  set elapsed [expr {[clock milliseconds] - $before}]
+  file delete $path
+  list $code $message [expr {$elapsed < 1000}]
+} -result {1 {tclpdf: the cmap table is damaged - format 12 group 0 ends at 0xFFFFFFFF, beyond the last Unicode code point 0x10FFFF} 1}
+
+test font-16.3 {a format 12 group just past the last code point is refused, not mapped} \
+    -constraints haveFont -body {
+  # The small-overshoot twin of 16.2, and the one that keeps the bound
+  # honest: without the check this group maps four code points beyond
+  # Unicode and the font parses - a wrong acceptance a test can see without
+  # hanging the suite, where removing the check under 16.2 would.
+  set path [fontPatchCmap12 $fontRegular \
+      [::tclpdfTest::scratch cmap12-past.ttf] {{group 280 0x10FFFE 0x110001 3}}]
+  set code [catch {::tclpdf::sfnt read $path} message]
+  file delete $path
+  list $code $message
+} -result {1 {tclpdf: the cmap table is damaged - format 12 group 280 ends at 0x110001, beyond the last Unicode code point 0x10FFFF}}
+
+test font-16.4 {a format 12 group count past the end of the file is refused before the loop} \
+    -constraints haveFont -body {
+  # nGroups steers the outer loop; 0x10000000 groups would ask for 3 GB of
+  # table. Without the check the loop runs until binary scan falls off the
+  # end of the file and dies with a raw Tcl error instead of a refusal.
+  set path [fontPatchCmap12 $fontRegular \
+      [::tclpdfTest::scratch cmap12-count.ttf] {{ngroups 0x10000000}}]
+  set code [catch {::tclpdf::sfnt read $path} message]
+  file delete $path
+  list $code $message
+} -match glob -result {1 {tclpdf: the cmap table is damaged - format 12 declares 268435456 groups where only * bytes follow}}
+
+test font-16.5 {the checks cost the intact face nothing - DejaVu still embeds} \
+    -constraints haveFont -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $fontRegular
+  $doc text "Grusse" -at {20 20} -family haus
+  set path [::tclpdfTest::scratch cmap12-intact.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp -all {/BaseFont /[A-Z]{6}\+DejaVuSans\y} $bytes
+} -result 2
+
+test font-16.6 {a format 12 cmap entry on a surrogate code point never enters the map} \
+    -constraints haveFont -body {
+  # OpenType forbids surrogate code points in a cmap, but a norm-breaking
+  # font can carry one - and passed through it became a lone surrogate in
+  # the ToUnicode CMap (ISO 32000-2 9.10.3 requires well-formed UTF-16BE).
+  # Group 3 of DejaVu is a single-code group (U+02F3), rebuilt here as a
+  # single-code group on U+D800 pointing at a real glyph.
+  set path [fontPatchCmap12 $fontRegular \
+      [::tclpdfTest::scratch cmap12-surrogate.ttf] {{group 3 0xD800 0xD800 36}}]
+  set parsed [::tclpdf::sfnt read $path]
+  file delete $path
+  set cmap [dict get $parsed cmap]
+  # 55296 is 0xD800 as the map keys it; 65 -> 36 is the positive control
+  # proving the probe reads the map that would have carried the entry.
+  list [dict exists $cmap 55296] [dict get $cmap 65]
+} -result {0 36}
+
+test font-16.7 {a surrogate is "no glyph" at setting time - the refusal contract holds} \
+    -constraints haveFont -body {
+  # The character counts as absent, so setting it refuses with the same
+  # errorCode as any missing glyph - the contract from the manual's "Error
+  # codes" section survives the norm-breaking font.
+  set path [fontPatchCmap12 $fontRegular \
+      [::tclpdfTest::scratch cmap12-surrogate.ttf] {{group 3 0xD800 0xD800 36}}]
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $path
+  set code [catch {$doc text [format %c 0xD800] -at {20 20} -family haus} \
+      message options]
+  $doc destroy
+  file delete $path
+  list $code [lrange [dict get $options -errorcode] 0 3]
+} -result {1 {TCLPDF FONT GLYPH U+D800}}
+
+test font-16.8 {the ToUnicode CMap of the written file carries no lone surrogate} \
+    -constraints haveFont -body {
+  # The end the norm cares about: the file. The surrogate is ATTEMPTED (its
+  # own glyph, 37, so a leak would write its own bfchar) and the written
+  # ToUnicode CMap maps A - the positive control proving the probe reads the
+  # right stream - while holding no <D800> target anywhere.
+  set path [fontPatchCmap12 $fontRegular \
+      [::tclpdfTest::scratch cmap12-surrogate.ttf] {{group 3 0xD800 0xD800 37}}]
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed haus $path
+  $doc text "A" -at {20 20} -family haus
+  catch {$doc text [format %c 0xD800] -at {20 30} -family haus}
+  set glyphA [dict get [$doc state fonts] haus parsed cmap 65]
+  set pdf [::tclpdfTest::scratch cmap12-surrogate.pdf]
+  $doc write $pdf
+  set writer [$doc writer]
+  set toUnicodeNumber {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[regexp {/ToUnicode (\d+) 0 R} [$writer body $number] -> found]} {
+      set toUnicodeNumber $found
+    }
+  }
+  set toUnicode [::tclpdfTest::streamOf $writer $toUnicodeNumber]
+  $doc destroy
+  file delete $pdf $path
+  list [regexp "<[format %04X $glyphA]> <0041>" $toUnicode] \
+      [regexp -nocase {<D800>} $toUnicode]
+} -result {1 0}
+
+test font-16.9 {a format 4 cmap entry on a surrogate code point never enters the map} \
+    -constraints haveFont -body {
+  # The same door in the other format: format 4 is BMP-only and can carry
+  # D800-DFFF just as well. DejaVu's format 12 records are demoted to an
+  # unknown platform so the (3,1) format 4 table is the one chosen, and its
+  # last PUA segment is rebuilt as a single-code segment on U+D800 with a
+  # delta pointing at a real glyph.
+  set channel [open $fontRegular rb]
+  set bytes [read $channel]
+  close $channel
+  set parsed [::tclpdf::sfnt parse $bytes]
+  lassign [dict get $parsed tables cmap] cmapAt -
+  binary scan $bytes @[expr {$cmapAt + 2}]Su count
+  set table -1
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {$cmapAt + 4 + $index * 8}]
+    binary scan $bytes @${at}SuSuIu platform encoding offset
+    if {$encoding == 10} {
+      # Out of the running: platform 5 scores below every Unicode record.
+      set bytes [string replace $bytes $at [expr {$at + 1}] \
+          [binary format Su 5]]
+    } elseif {$platform == 3 && $encoding == 1} {
+      set table [expr {$cmapAt + $offset}]
+    }
+  }
+  binary scan $bytes @[expr {$table + 6}]Su segCountX2
+  set endBase [expr {$table + 14}]
+  set startBase [expr {$endBase + $segCountX2 + 2}]
+  set deltaBase [expr {$startBase + $segCountX2}]
+  set rangeBase [expr {$deltaBase + $segCountX2}]
+  for {set segment 0} {$segment < $segCountX2 / 2} {incr segment} {
+    set two [expr {$segment * 2}]
+    binary scan $bytes @[expr {$startBase + $two}]Su start
+    if {$start >= 0xE000 && $start != 0xFFFF} {
+      foreach {base value} [list $endBase 0xD800 $startBase 0xD800 \
+          $deltaBase [expr {(36 - 0xD800) & 0xFFFF}] $rangeBase 0] {
+        set bytes [string replace $bytes [expr {$base + $two}] \
+            [expr {$base + $two + 1}] [binary format Su $value]]
+      }
+      break
+    }
+  }
+  set path [::tclpdfTest::scratch cmap4-surrogate.ttf]
+  set channel [open $path wb]
+  puts -nonewline $channel $bytes
+  close $channel
+  set parsed [::tclpdf::sfnt read $path]
+  file delete $path
+  set cmap [dict get $parsed cmap]
+  # Without the skip, D800 maps to (0xD800 + delta) & 0xFFFF = 36. The
+  # positive control 65 -> 36 proves the format 4 table is the one read.
+  list [dict exists $cmap 55296] [dict get $cmap 65]
+} -result {0 36}
+
 cleanupTests

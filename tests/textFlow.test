@@ -1459,4 +1459,184 @@ test textFlow-9.8 {a shape covering the rest of the caller's page moves the text
   list $code $pages $first [expr {$second > 0}] [dict get $result page] [dict get $result rest]
 } -result {0 2 0 1 1 {}}
 
+# -- the errorcode contract of the breaker: the position counts in the string as handed in
+
+# A string whose character at INDEX is one the face has no glyph for. Built,
+# not written out, so the index is what the name says wherever the tests need
+# it - the manual promises the 0-based index in the string as handed in.
+proc flowBadAt {index char} {
+  set head [string range [string repeat "Wort und weiter " 10] 0 $index-1]
+  return "$head$char danach noch etwas Text."
+}
+
+test textFlow-10.1 {a glyph refusal from the breaker names the index in the string as handed in} -body {
+  # The breaker measures candidate chunks, so the thrown position used to be
+  # counted in whatever chunk was under measurement - index 67 came back as a
+  # small number that moved with the glyph widths of the face. The contract
+  # (manual, Error codes) is the index in the caller's string.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set text [flowBadAt 67 "☃"]
+  try {
+    $doc text $text -at {20 30} -width 30 -family helvetica -size 10
+  } trap {TCLPDF FONT GLYPH} {message opts} {}
+  $doc destroy
+  list [string first "☃" $text] [dict get $opts -errorcode] \
+      [regexp {\(position 67\)} $message]
+} -result {67 {TCLPDF FONT GLYPH U+2603 67 Helvetica} 1}
+
+test textFlow-10.2 {the position does not move with the glyph widths of the face} -constraints haveFlowFont -body {
+  # The same index with an embedded face whose widths break the lines
+  # elsewhere. (DejaVu Sans HAS a glyph for U+2603, measured - the missing
+  # one here is U+4E2D.)
+  set doc [tclpdf new -unit mm]
+  $doc font embed body $::flowFont
+  $doc page add
+  try {
+    $doc text [flowBadAt 67 "中"] -at {20 30} -width 30 -family body -size 10
+  } trap {TCLPDF FONT GLYPH} {- opts} {}
+  $doc destroy
+  dict get $opts -errorcode
+} -result {TCLPDF FONT GLYPH U+4E2D 67 body}
+
+test textFlow-10.3 {every road through the breaker names the same position} -body {
+  # textHeight and textLines measure, -height max, -paginate and -columns
+  # draw - one pre-measurement at the shared entrance serves them all.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set text [flowBadAt 67 "☃"]
+  set codes {}
+  foreach arguments [list \
+      [list textHeight $text -width 30] \
+      [list textLines $text -width 30] \
+      [list text $text -at {20 30} -width 30 -height max] \
+      [list text $text -at {20 30} -width 30 -paginate 1] \
+      [list text $text -at {20 30} -width 60 -height max -columns 2]] {
+    try {
+      $doc {*}$arguments -family helvetica -size 10
+    } trap {TCLPDF FONT GLYPH} {- opts} {
+      lappend codes [dict get $opts -errorcode]
+    }
+  }
+  $doc destroy
+  lsort -unique $codes
+} -result {{TCLPDF FONT GLYPH U+2603 67 Helvetica}}
+
+test textFlow-10.4 {soft hyphens in front of the missing glyph do not shift the count} -body {
+  # U+00AD is skipped by the measuring loops WITH its position counted, so
+  # the index stays the index of the string as handed in.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set text "Sil­ben­tren­nung vor dem Zeichen ☃ hier."
+  set index [string first "☃" $text]
+  try {
+    $doc text $text -at {20 30} -width 25 -family helvetica -size 10
+  } trap {TCLPDF FONT GLYPH} {- opts} {}
+  $doc destroy
+  # Three soft hyphens stand in front - the guard proves they are still in
+  # the source string - and the errorcode counts them like any character.
+  list [regexp -all "­" $text] [string equal [dict get $opts -errorcode] \
+      [list TCLPDF FONT GLYPH U+2603 $index Helvetica]]
+} -result {3 1}
+
+test textFlow-10.5 {paragraphs in front count too: the string as handed in is the whole string} -body {
+  # The breaker splits at line feeds; the position must not start over at
+  # each paragraph.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set text "Erster Absatz ohne Fehler.\nZweiter Absatz mit ☃ darin."
+  try {
+    $doc text $text -at {20 30} -width 40 -family helvetica -size 10
+  } trap {TCLPDF FONT GLYPH} {- opts} {}
+  $doc destroy
+  list [string first "☃" $text] [dict get $opts -errorcode]
+} -result {46 {TCLPDF FONT GLYPH U+2603 46 Helvetica}}
+
+# -- brackets and ghost marks: what an error or an empty page leaves behind
+
+test textFlow-11.1 {a glyph refusal in a paginated tagged block closes the page's bracket} -constraints haveFlowFont -body {
+  # The paginated road brackets per page, inside TextPaginate - a glyph the
+  # face lacks, met in the second paragraph, used to leave that page's BDC
+  # open: BDC=2/EMC=1 over the run, and the next content became a child of
+  # the dead paragraph. Caught, closed, and rethrown as it was - the
+  # errorcode contract has to survive the rethrow, position and all.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc font embed body $::flowFont
+  $doc page add
+  set text "Erster Absatz ohne Fehler.\nZweiter Absatz mit 中 mitten im Text."
+  set code [catch {$doc text $text -at {20 250} -width 170 -family body \
+      -size 10 -paginate 1} message opts]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string match {TCLPDF FONT GLYPH *} [dict get $opts -errorcode]] \
+      [dict get $opts -errorcode] \
+      [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}]
+} -result {1 1 {TCLPDF FONT GLYPH U+4E2D 46 body} 1}
+
+test textFlow-11.2 {a shape over the whole type area leaves no ghost paragraph on the caller's page} -body {
+  # The mark used to be opened before the columns were drawn, so a page the
+  # shapes leave nothing on carried an empty "/P <</MCID 0>> BDC EMC" with
+  # its MCR - a leaf of nothing in the tree. The page is measured first and
+  # the mark waits; the text still terminates on page 2, without the shape.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set result [$doc text $::flowBody -at {20 20} -width 170 -paginate 1 \
+      -avoid {{rect {0 0} {210 297}}}]
+  set pages [$doc page count]
+  set first [::tclpdfTest::content $doc 0]
+  set second [::tclpdfTest::content $doc 1]
+  set path [::tclpdfTest::scratch flowGhost.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  # No bracket at all on the caller's page, one real one on page 2; the
+  # tree holds exactly the one P element the drawn page made.
+  list $pages [regexp -all {BDC} $first] [flowLines $first] \
+      [regexp -all {BDC} $second] [regexp -all {EMC} $second] \
+      [expr {[flowLines $second] > 0}] \
+      [dict get $result page] [dict get $result rest] \
+      [regexp -all {/P <</MCID \d+>> BDC\nEMC} $bytes] \
+      [regexp -all {/S /P} $bytes]
+} -result {2 0 0 1 1 1 1 {} 0 1}
+
+test textFlow-11.3 {-height max with the page covered answers the whole rest without a mark} -body {
+  # The same ghost on the -height max roads: [text] asks TextBlockNoRoom
+  # before its own mark, and with columns TextPaginate answers before its
+  # one - both used to check only the leading, not the shapes.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set single [$doc text $::flowBody -at {20 20} -width 170 -height max \
+      -avoid {{rect {0 0} {210 297}}}]
+  set columns [$doc text $::flowBody -at {20 20} -width 170 -height max \
+      -columns 2 -avoid {{rect {0 0} {210 297}}}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {BDC} $stream] [flowLines $stream] \
+      [dict get $single y] [string equal [dict get $single rest] $::flowBody] \
+      [dict get $columns y] [string equal [dict get $columns rest] $::flowBody]
+} -result {0 0 20 1 20 1}
+
+test textFlow-11.4 {a shape over only part of the page still marks and draws below it} -body {
+  # The other direction: the empty-page answer may only suppress a mark
+  # where the drawing lands nothing - a half-covered page draws under the
+  # shape, bracketed as ever.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text $::flowBody -at {20 20} -width 170 -paginate 1 \
+      -avoid {{rect {0 0} {210 100}}}
+  set pages [$doc page count]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $pages [regexp -all {/P <</MCID \d+>> BDC} $stream] \
+      [regexp -all {EMC} $stream] [expr {[flowLines $stream] > 0}]
+} -result {1 1 1 1}
+
 cleanupTests

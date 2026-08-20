@@ -360,6 +360,8 @@ oo::class create ::tclpdf::document::document {
       pattern pattern
       table table
       pdfa pdfa
+      xmpSchema xmp
+      xmpRaw xmp
       zugferd zugferd
       link link
       linksWithoutContents link
@@ -399,12 +401,21 @@ oo::class create ::tclpdf::document::document {
 
   # -- resources, catalog, metadata ---------------------------------------
 
-  # Register a resource: category is Font, XObject, ExtGState, ColorSpace,
-  # Pattern or Shading; value is already PDF syntax, usually a reference.
-  # Told apart by the NUMBER of arguments, for the reason spelled out at
-  # [state] below: with a default parameter, "clear this" and "read this" are
-  # the same call and the caller silently gets the wrong one of the two.
+  # Register a resource: category is one of the eight entries of the resource
+  # dictionary (ISO 32000-2, Table 34); value is already PDF syntax, usually a
+  # reference. Told apart by the NUMBER of arguments, for the reason spelled
+  # out at [state] below: with a default parameter, "clear this" and "read
+  # this" are the same call and the caller silently gets the wrong one of the
+  # two.
   method resource {category args} {
+    # Checked against the table rather than trusted: a misspelt category used
+    # to land in the file without a word, as a dictionary no reader looks up.
+    if {$category ni {ExtGState ColorSpace Pattern Shading XObject Font
+        ProcSet Properties}} {
+      return -code error "tclpdf: resource category is ExtGState, ColorSpace,\
+          Pattern, Shading, XObject, Font, ProcSet or Properties, not\
+          \"$category\""
+    }
     switch -- [llength $args] {
       0 {
         # The whole category - what the PDF/A check needs to walk every font

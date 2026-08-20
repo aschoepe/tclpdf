@@ -526,6 +526,57 @@ oo::define ::tclpdf::document::document {
     return {}
   }
 
+  # Measure the WHOLE string once, before the breaker sees it. The breaker
+  # measures candidate chunks of a paragraph, so a glyph refusal thrown from
+  # inside it carried a position counted in the chunk under measurement - and
+  # which chunk that is depends on the glyph widths, so the same missing
+  # glyph was reported at one position with one face and at another with the
+  # next. The errorcode contract (manual, "Error codes") promises the 0-based
+  # index in the string as handed in; measured whole and first, the refusal
+  # comes from the same road [textWidth] takes, with the same font options
+  # the breaker measures with, and the position is counted in the caller's
+  # string. The table does the same before it wraps a cell (tableLayout.tcl),
+  # which is why its refusals were right all along.
+  #
+  # Run by run between the characters the breaker never hands to a face
+  # whole: the separators - a line feed or a tab has no glyph anywhere, and
+  # the breaker sets the space of the page for them - and the breakable
+  # spaces, which are set or stripped by where the lines happen to END, so
+  # no measurement in advance can say whether a face will be asked for one.
+  # A breakable space the break leaves inside a line is therefore still
+  # refused by the breaker itself, with the chunk's position - the one
+  # deliberate remainder of the old counting. Everything else sits inside a
+  # run, the position moved out by what stands in front of it; the
+  # characters the measuring loops skip without setting - the soft hyphen,
+  # the zero width space, the byte order mark - are counted by those loops
+  # already, so nothing shifts.
+  #
+  # The cost is ONE extra measuring pass over the block's text per call, on
+  # top of the many the breaker makes anyway - linear, not quadratic: the
+  # breaker's chunk measurements stay what they were, and every chunk it
+  # measures is text this pass has already accepted.
+  method TextBlockPremeasure {string arguments} {
+    set skip "$::tclpdf::textBlock::separators$::tclpdf::textBlock::breakable"
+    foreach span [regexp -all -inline -indices "\[^$skip\]+" $string] {
+      lassign $span from to
+      try {
+        my textWidth [string range $string $from $to] {*}$arguments
+      } trap {TCLPDF FONT GLYPH} {message options} {
+        set code [dict get $options -errorcode]
+        set position [expr {[lindex $code 4] + $from}]
+        dict set options -errorcode [lreplace $code 4 4 $position]
+        regsub {\(position \d+\)} $message "(position $position)" message
+        if {[dict exists $options -errorinfo]} {
+          regsub {\(position \d+\)} [dict get $options -errorinfo] \
+              "(position $position)" info
+          dict set options -errorinfo $info
+        }
+        return -options $options $message
+      }
+    }
+    return
+  }
+
   # The lines of a block, from a parsed option dictionary: the band built from
   # the indents and the shapes, the string broken against it. Shared by the
   # drawing and the two measuring methods, so that all three break the same
@@ -537,7 +588,12 @@ oo::define ::tclpdf::document::document {
   # baseline sits.
   method TextBlockLines {string options} {
     set width [dict get $options width]
-    set state [my TextMerge [my TextOverrides $options]]
+    set arguments [my TextOverrides $options]
+    # The whole string, measured once and first - a glyph refusal has to
+    # name the position in the caller's string, not in a chunk of the
+    # breaker's; see TextBlockPremeasure.
+    my TextBlockPremeasure $string $arguments
+    set state [my TextMerge $arguments]
     set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
         [my cget -unit]]
 
@@ -549,27 +605,9 @@ oo::define ::tclpdf::document::document {
     # with the text, which is what makes the lines run across the page.
     set lift [my TextLift $state [dict get $options anchor]]
 
-    # The band this paragraph is set in: the column narrowed by the indents,
-    # and the first line of each paragraph narrowed once more. A negative
-    # -firstIndent is a hanging indent and is the reason the offset is carried
-    # per line rather than added to x once.
-    set indent [dict get $options indent]
-    set indentRight [dict get $options indentRight]
-    set firstIndent [dict get $options firstIndent]
-    # A block that CONTINUES a paragraph - the rest of a height-limited block
-    # set on the next page by [text -paginate] - opens with a line that is
-    # not the first of its paragraph, however much it is the first of this
-    # block; the first indent belongs to the paragraph, not to the page, so
-    # that line does without. Every paragraph after it is a whole one and
-    # indents as usual. Internal: set by the pagination, not an option.
-    set continued [expr {[dict exists $options continued]
-        && [dict get $options continued]}]
-    set band [list apply {{width indent indentRight firstIndent continued line paragraph running} {
-      set extra [expr {$line == 0 && !($continued && $paragraph == 0) ?
-          $firstIndent : 0}]
-      return [list [expr {$width - $indent - $indentRight - $extra}] \
-          [expr {$indent + $extra}]]
-    }} $width $indent $indentRight $firstIndent $continued]
+    # The band this paragraph is set in - built by TextBlockBand, which the
+    # no-room answer of TextBlockNoRoom asks as well.
+    set band [my TextBlockBand $options]
 
     # Shapes to flow around narrow the band per line instead of per paragraph.
     # Loaded only when asked for: a caller who never avoids anything does not
@@ -598,10 +636,10 @@ oo::define ::tclpdf::document::document {
       set band [list my TextAvoidBand [dict get $options avoid] \
           [dict get $options avoidMargin] $x [expr {$y + $lift}] $leading \
           [dict get $options paragraphSpacing] \
-          [my TextBlockWidest $string [my TextOverrides $options]] $band]
+          [my TextBlockWidest $string $arguments] $band]
     }
 
-    set lines [my TextBlockBreak $string [my TextOverrides $options] $band]
+    set lines [my TextBlockBreak $string $arguments $band]
 
     # Which lines close their paragraph - decided on the WHOLE text, before
     # anything is held back for a height limit. A line that ends a column is
@@ -617,6 +655,33 @@ oo::define ::tclpdf::document::document {
       lset lines $index [dict replace [lindex $lines $index] closes $closes]
     }
     return [list $lines $state $leading $lift]
+  }
+
+  # The band the indents make: the column narrowed by -indent and
+  # -indentRight, and the first line of each paragraph narrowed once more by
+  # -firstIndent. A negative -firstIndent is a hanging indent and is the
+  # reason the offset is carried per line rather than added to x once.
+  #
+  # A block that CONTINUES a paragraph - the rest of a height-limited block
+  # set on the next page by [text -paginate] - opens with a line that is
+  # not the first of its paragraph, however much it is the first of this
+  # block; the first indent belongs to the paragraph, not to the page, so
+  # that line does without. Every paragraph after it is a whole one and
+  # indents as usual. Internal: set by the pagination, not an option.
+  #
+  # One builder, because the same band now serves two askers: the breaker
+  # (TextBlockLines) and the no-room answer of TextBlockNoRoom.
+  method TextBlockBand {options} {
+    set continued [expr {[dict exists $options continued]
+        && [dict get $options continued]}]
+    return [list apply {{width indent indentRight firstIndent continued line paragraph running} {
+      set extra [expr {$line == 0 && !($continued && $paragraph == 0) ?
+          $firstIndent : 0}]
+      return [list [expr {$width - $indent - $indentRight - $extra}] \
+          [expr {$indent + $extra}]]
+    }} [dict get $options width] [dict get $options indent] \
+        [dict get $options indentRight] [dict get $options firstIndent] \
+        $continued]
   }
 
   # The widest single character of a string - the least a line has to offer
@@ -676,7 +741,7 @@ oo::define ::tclpdf::document::document {
   # has passed - the checks are there, in front of the mark, and not here.
   # Returns the y coordinate BELOW the block, so the next element can be
   # placed without counting lines - or, with -height, the dictionary {y
-  # rest}; with -paginate {y rest page}.
+  # rest}; with -paginate or -columns {y rest page column}.
   method TextParagraph {string options} {
     set paginate [dict get $options paginate]
     if {$paginate || [dict get $options columns] > 1} {
@@ -748,10 +813,13 @@ oo::define ::tclpdf::document::document {
     #
     # And on the caller's page nothing is marked or drawn when nothing fits:
     # a mark opened around no content would put a leaf with an empty MCID
-    # into the tree. Decided from the leading and the room, in advance -
+    # into the tree. Decided in advance from the leading and the room -
     # TextBlockPlace holds every line back when the first one, at the top
     # of the block, does not fit, and that first line needs one leading
-    # under the first baseline (see TextParagraphOnce for the lift).
+    # under the first baseline (see TextParagraphOnce for the lift) - and,
+    # with shapes to avoid, from the page measured as the drawing would
+    # draw it (TextPaginateEmpty): a shape over the whole band leaves no
+    # line on the page where the leading alone saw room.
     set fresh 0
     while {1} {
       set rest $string
@@ -759,11 +827,13 @@ oo::define ::tclpdf::document::document {
       # caller's, and an empty answer with the whole rest is what -height
       # gives for a block below the area - answered here, before the mark,
       # for the reason above; it used to mark and then draw nothing.
-      if {!$paginate && [my TextPaginateNoRoom $options $y]} {
+      if {!$paginate && [my TextPaginateEmpty $string $options $x $y \
+          $columnWidth $gutter $columns]} {
         return [dict create y $y rest $string page [my page current] \
             column [expr {$columns - 1}]]
       }
-      set room [expr {$fresh || ![my TextPaginateNoRoom $options $y]}]
+      set room [expr {$fresh || ![my TextPaginateEmpty $string $options $x $y \
+          $columnWidth $gutter $columns]}]
       if {$room} {
         # The mark, per page. Its top is where the text begins - -at for
         # -anchor top, one ascent above the baseline otherwise - as in [text].
@@ -790,26 +860,40 @@ oo::define ::tclpdf::document::document {
           }
           my content [my StructureBegin $mark]
         }
-        # Balanced columns are cut to one height when the rest fits the page;
-        # otherwise every column runs to the bottom of the area.
-        if {$balance && $columns > 1} {
-          set limit [my TextBalanceLimit $string $options $y $columns]
-          if {$limit ne {}} {
-            dict set options height $limit
-          }
-        }
         set before $string
-        for {set column 0} {$column < $columns} {incr column} {
-          dict set options at [list [expr {$x + $column * ($columnWidth + $gutter)}] $y]
-          lassign [my TextParagraphOnce $string $options] yEnd rest continued
-          if {$rest eq {}} {
-            break
+        # What can fail from here on is what only the drawing meets - a
+        # glyph the face lacks, met when the page's share is measured or
+        # set. Caught, so that the bracket above is closed before the error
+        # travels on, and then rethrown exactly as it was, errorcode and
+        # all - the same guard [text] holds around its own mark (text.tcl),
+        # which covers every road but this one: without it the BDC of this
+        # page stayed open, the EMC count fell one short, and whatever
+        # content came next became a child of the dead paragraph - nested
+        # MCIDs, which 14.7.4.2 does not allow.
+        set failed [catch {
+          # Balanced columns are cut to one height when the rest fits the
+          # page; otherwise every column runs to the bottom of the area.
+          if {$balance && $columns > 1} {
+            set limit [my TextBalanceLimit $string $options $y $columns]
+            if {$limit ne {}} {
+              dict set options height $limit
+            }
           }
-          set string $rest
-          dict set options continued $continued
-        }
+          for {set column 0} {$column < $columns} {incr column} {
+            dict set options at [list [expr {$x + $column * ($columnWidth + $gutter)}] $y]
+            lassign [my TextParagraphOnce $string $options] yEnd rest continued
+            if {$rest eq {}} {
+              break
+            }
+            set string $rest
+            dict set options continued $continued
+          }
+        } result info]
         if {[llength $mark]} {
           my content [my StructureEnd $mark]
+        }
+        if {$failed} {
+          return -options $info $result
         }
         if {$rest eq {}} {
           set column [expr {min($column, $columns - 1)}]
@@ -863,6 +947,42 @@ oo::define ::tclpdf::document::document {
     return [expr {$leading > $limit}]
   }
 
+  # Whether not one line of the string lands on the current page: the
+  # leading against the room under y (TextPaginateNoRoom), and, with shapes
+  # to avoid, the page measured column by column the way the drawing
+  # measures it - the same lines, the same limit. A shape over the whole
+  # band makes the avoiding band skip line after line until it is past the
+  # shape, which can be past the bottom of the area; the leading alone
+  # cannot see that, and the structure mark opened over such a page
+  # bracketed nothing - an empty "/P <</MCID n>> BDC EMC" with its MCR, a
+  # leaf of nothing in the tree, exactly the ghost the note above promises
+  # to keep out. So the mark waits for this answer. A drawn line counts even
+  # when it is a blank one, because the drawing would consume it and move
+  # on - this check must never say "empty" where the drawing would advance.
+  # Costs one measuring pass over the page's text, and only where -avoid is
+  # given; a column that lands nothing hands the next column the same text,
+  # which is why the loop below need not carry a rest.
+  method TextPaginateEmpty {string options x y columnWidth gutter columns} {
+    if {[my TextPaginateNoRoom $options $y]} {
+      return 1
+    }
+    if {![llength [dict get $options avoid]]} {
+      return 0
+    }
+    dict set options height max
+    for {set column 0} {$column < $columns} {incr column} {
+      dict set options at [list [expr {$x + $column * ($columnWidth + $gutter)}] $y]
+      lassign [my TextBlockLines $string $options] lines state leading lift
+      set limit [expr {max(0, [lindex [my page typeArea] 3] - $y - $lift)}]
+      lassign [my TextBlockPlace $lines $leading \
+          [dict get $options paragraphSpacing] $limit] drawn
+      if {[llength $drawn]} {
+        return 0
+      }
+    }
+    return 1
+  }
+
   # The same question for the block [text] brackets itself - one with a
   # -height and neither -paginate nor -columns: whether its limit admits not
   # one line. "max" is the room under -at (TextPaginateNoRoom); a number is
@@ -878,13 +998,45 @@ oo::define ::tclpdf::document::document {
     if {$height eq {}} {
       return 0
     }
-    if {$height eq "max"} {
-      return [my TextPaginateNoRoom $options [lindex [dict get $options at] 1]]
-    }
     set state [my TextMerge [my TextOverrides $options]]
     set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
         [my cget -unit]]
-    return [expr {$leading > $height}]
+    set lift [my TextLift $state [dict get $options anchor]]
+    set y [lindex [dict get $options at] 1]
+    if {$height eq "max"} {
+      if {[my TextPaginateNoRoom $options $y]} {
+        return 1
+      }
+      set limit [expr {max(0, [lindex [my page typeArea] 3] - $y - $lift)}]
+    } else {
+      if {$leading > $height} {
+        return 1
+      }
+      set limit $height
+    }
+    if {![llength [dict get $options avoid]]} {
+      return 0
+    }
+    # The leading found room, but a shape can leave none: a shape over the
+    # whole band makes the avoiding band skip line after line until it is
+    # past the shape, and the first line can land below the limit - the mark
+    # [text] opens around the block would then bracket nothing (the ghost
+    # named above). This road has no string - [text] asks before it hands
+    # the text on - so the band itself is asked where the FIRST line lands,
+    # with a minimum width of 0: the widest free sliver is accepted, so the
+    # answer errs on the side of drawing and says "no room" only where the
+    # drawing, whose lines need real width, would land nothing either. (A
+    # blank first paragraph does not pass through the band; its line would
+    # be consumed without content, and "no room" draws the same nothing and
+    # keeps the blank at the head of the rest.)
+    package require tclpdf::textAvoid
+    lassign [::tclpdf::option point [dict get $options at] -at \
+        "a block with -avoid"] x y
+    set band [list my TextAvoidBand [dict get $options avoid] \
+        [dict get $options avoidMargin] $x [expr {$y + $lift}] $leading \
+        [dict get $options paragraphSpacing] 0 [my TextBlockBand $options]]
+    lassign [my TextBlockAsk $band 0 0 0] width offset running
+    return [expr {($running + 1) * $leading > $limit}]
   }
 
   # The height that spreads a text evenly over n columns starting at y on

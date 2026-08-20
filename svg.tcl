@@ -175,7 +175,9 @@ oo::define ::tclpdf::document::document {
     # checked here too, before the mark: a bad corner used to leave an
     # empty BDC/EMC pair, and a zero -scale or a negative -width went into
     # the drawing's cm as a singular or a mirroring matrix (geometry.tcl,
-    # checkFit).
+    # checkFit). And the markup is PARSED before the mark as well: parsed
+    # after it, markup that does not parse left the BDC and the -alt Figure
+    # open, and whatever was drawn next became a child of that dead Figure.
     if {[dict get $options at] ne {}} {
       my GraphicsPoint [dict get $options at] -at svg
     }
@@ -183,15 +185,18 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options opacity] ne {}} {
       dict set options opacity [my GraphicsOpacity [dict get $options opacity]]
     }
-    lassign [my GraphicMark svg svg [dict get $options alt] \
-        [dict get $options artifact] [expr {[dict get $options at] eq {} ?
-        0 : [lindex [dict get $options at] 1]}]] mark element
     set root [::tclpdf::xml parse $markup]
     try {
-      return [my SvgRoot $root $options]
+      lassign [my GraphicMark svg svg [dict get $options alt] \
+          [dict get $options artifact] [expr {[dict get $options at] eq {} ?
+          0 : [lindex [dict get $options at] 1]}]] mark element
+      try {
+        return [my SvgRoot $root $options]
+      } finally {
+        my GraphicUnmark $mark $element
+      }
     } finally {
       ::tclpdf::xml release $root
-      my GraphicUnmark $mark $element
     }
   }
 

@@ -717,4 +717,19 @@ test document-destination-21.4 {catalogEntry OpenAction takes a destination} -bo
   expr {$number eq [lindex $pages 3]}
 } -result 1
 
+
+test document-resource-22.1 {resource refuses a category outside Table 34 by name, on read and write} -body {
+  # ISO 32000-2, Table 34 names the eight entries of a resource dictionary.
+  # A misspelt category used to land in the file without a word, as a
+  # dictionary no reader ever looks up.
+  set doc [tclpdf new]
+  set write [catch {$doc resource Bogus X "1 0 R"} m1]
+  set read [catch {$doc resource Bogus} m2]
+  set good [catch {$doc resource ProcSet PDF "/PDF"}]
+  set back [$doc resource ProcSet PDF]
+  $doc destroy
+  list $write [string match {tclpdf: resource category is ExtGState, ColorSpace, Pattern, Shading, XObject, Font, ProcSet or Properties, not "Bogus"} $m1] \
+      $read [string match {tclpdf:*not "Bogus"} $m2] $good $back
+} -result {1 1 1 1 0 /PDF}
+
 cleanupTests

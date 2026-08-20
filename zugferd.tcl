@@ -330,6 +330,14 @@ oo::define ::tclpdf::document::document {
 proc ::tclpdf::zugferd::identify {bytes} {
   variable profiles
 
+  # A UTF-16 file can never match the pattern below - every ASCII letter
+  # carries a NUL neighbour - and the BT-24 refusal it got instead blamed
+  # the content for the encoding. The byte order mark is the giveaway.
+  set bom [string range $bytes 0 1]
+  if {$bom eq "\xFF\xFE" || $bom eq "\xFE\xFF"} {
+    return -code error "tclpdf: this XML is UTF-16 encoded - re-encode the\
+        XML as UTF-8"
+  }
   if {![regexp {GuidelineSpecifiedDocumentContextParameter>.*?<ram:ID>([^<]+)<} \
       $bytes -> identifier]} {
     return -code error "tclpdf: this XML carries no BT-24 specification\

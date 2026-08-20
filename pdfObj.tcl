@@ -36,6 +36,16 @@ proc ::tclpdf::pdfObj::num {value {digits 5}} {
   if {[string match -nocase *inf* $result] || [string match -nocase *nan* $result]} {
     return -code error "tclpdf: number has no PDF representation: \"$value\""
   }
+  # Neither has a magnitude beyond what a PDF real holds (ISO 32000-1,
+  # Annex C.2: about +/-3.403e38). Fixed notation writes it anyway, as a
+  # number of hundreds of digits - and a reader refuses that: qpdf reports
+  # an overflow, treats the object as null and drops the whole content
+  # stream it appears in.
+  if {abs($value) > 3.403e38} {
+    return -code error "tclpdf: number has no PDF representation: \"$value\"\
+        is beyond the PDF real range of about +/-3.403e38 (ISO 32000-1,\
+        Annex C.2)"
+  }
   if {[string first . $result] >= 0} {
     set result [string trimright [string trimright $result 0] .]
   }

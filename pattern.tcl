@@ -64,10 +64,6 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $patterns $name]} {
       return -code error "tclpdf: a pattern named \"$name\" already exists"
     }
-    # Patterns and the Pattern colour space are PDF 1.2 (Reference 1.7, 4.6
-    # and Table 4.12). Before the script runs, so a refused pattern draws
-    # nothing.
-    my RequireVersion 1.2 "pattern"
     set unit [dict get $options unit]
     # Two numbers each, counted before they are read: -size {5} or -step
     # {5} used to pass the checks below with an empty second value, run the
@@ -110,6 +106,12 @@ oo::define ::tclpdf::document::document {
     # page's. And before the script runs, so a refused matrix leaves nothing
     # behind - no object, no resource entry.
     set matrix [my PatternMatrix $name $options]
+    # Patterns and the Pattern colour space are PDF 1.2 (Reference 1.7, 4.6
+    # and Table 4.12). AFTER the last option that can be refused - a refused
+    # pattern must not pin the version floor, or a later "configure -version
+    # 1.1" would be refused over a pattern that never came to be - and still
+    # before the script runs, so a version refusal draws and records nothing.
+    my RequireVersion 1.2 "pattern"
 
     my canvas push $widthPoints $heightPoints
     # A tiling pattern is a content stream of its own - same reasoning as a

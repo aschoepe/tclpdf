@@ -951,6 +951,36 @@ test image-parse-13.4 {a tRNS chunk longer than the palette is refused} -body {
       [::tclpdf::imagePng transparency [::tclpdf::imagePng parse $fits]]
 } -result {1 1 colourKey}
 
+test image-parse-13.5 {an alpha PNG whose image data does not decompress is refused by name, and pins no floor} -body {
+  # A destroyed IDAT used to die with zlib's bare "data error", and the
+  # refusal came AFTER RequireVersion: 1.4 for the alpha channel was
+  # pinned, and a later "configure -version 1.3" was then refused over a
+  # picture that never made it into the file.
+  set rows [binary format c* {0 1 2 3 4 0 5 6 7 8}]
+  set good [::tclpdfTest::png 1 2 8 6 $rows]
+  # Same length, the zlib stream zeroed: [parse] still sees a PNG, the
+  # inflate then fails.
+  set bad [string map [list [zlib compress $rows] \
+      [string repeat \x00 [string length [zlib compress $rows]]]] $good]
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed broken -data $bad -type png
+  set code [catch {$doc image place broken -at {10 10} -width 20} message]
+  set lowered [catch {$doc configure -version 1.3}]
+  $doc destroy
+  list $code $message $lowered
+} -result {1 {tclpdf: damaged PNG - the image data does not decompress} 0}
+
+test image-parse-13.6 {an accepted alpha PNG still pins the floor at 1.4} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc image draw -data [::tclpdfTest::png 1 2 8 6 \
+      [binary format c* {0 1 2 3 4 0 5 6 7 8}]] -at {10 10} -width 20
+  set code [catch {$doc configure -version 1.3} message]
+  $doc destroy
+  list $code [string match {*alpha channel*needs PDF 1.4*} $message]
+} -result {1 1}
+
 # --- refused before anything is written -------------------------------------
 #
 # Every value of [image place] is checked before the object goes into the
@@ -1322,6 +1352,37 @@ test image-icc-17.9 {under a CMYK intent the tagged picture passes where the bar
   file delete [::tclpdfTest::scratch icc-image-bare.pdf]
   list $code $failed $refused [string match {*cannot carry DeviceRGB*image place*} $message]
 } -match glob -result {0 [-0] 1 1}
+
+test image-icc-17.10 {the profile's source reads naturally in the refusal, for -data and for a file} -constraints haveImages -body {
+  # The old message put the whole description in quotation marks:
+  # "the ICC profile in the picture data" is not an ICC profile ...
+  set tagged [::tclpdfTest::jpegWithIcc [::tclpdf::io read $photo] \
+      [string repeat x 200]]
+  set doc [tclpdf new]
+  $doc page add
+  catch {$doc image embed byData -data $tagged} viaData
+  set path [::tclpdfTest::scratch tagged-junk.jpg]
+  set fh [open $path wb]
+  puts -nonewline $fh $tagged
+  close $fh
+  catch {$doc image embed byFile $path} viaFile
+  $doc destroy
+  file delete $path
+  list [string match {tclpdf: the ICC profile in the picture data is not an ICC profile - the signature*} $viaData] \
+      [expr {[string first "the ICC profile in \"$path\" is not an ICC profile" $viaFile] >= 0}]
+} -result {1 1}
+
+test image-icc-17.11 {a repeated APP2 sequence number is called a duplicate} -constraints haveSrgbIcc -body {
+  # "segments disagree (segment 1 of 2 after 2 announced)" points at
+  # figures that agree - a duplicate is its own mistake.
+  set jpeg [binary format H* ffd8ffc1000b080010001001011100]
+  set both [::tclpdfTest::jpegWithIcc $jpeg [::tclpdf::io read $srgbIcc] 2]
+  # Splice a copy of the first segment in after itself: "1 of 2" twice.
+  binary scan $both @4Su first
+  set dup "[string range $both 0 [expr {3 + $first}]][string range $both 2 \
+      [expr {3 + $first}]][string range $both [expr {4 + $first}] end]"
+  ::tclpdf::imageJpeg parse $dup
+} -returnCodes error -match glob -result {*damaged JPEG - ICC profile segment 1 of 2 appears twice*}
 
 # --- inside a form nothing is marked, and no element is opened -----------------
 

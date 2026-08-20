@@ -397,6 +397,30 @@ oo::define ::tclpdf::document::document {
         -profile"
   }
 
+  # Level A only: the accessibility half of the claim. A graphic nobody
+  # described and nobody declared decoration is written as an artifact -
+  # content a screen reader never sees (ISO 32000-1 14.8.2.2) - and the
+  # validator cannot object, because an artifact is exactly what the file
+  # says it is: measured 2026-08-20, a 3a file with an undescribed form
+  # placement passes veraPDF with failedChecks=0. ISO 19005-2, 6.7.3 (the
+  # same words in 19005-3) makes level A the promise that real content is
+  # reachable through the tree, so the claim is not made over the open
+  # question - the same refusal [ua] makes, asked from the shared wording
+  # in structure.tcl ([GraphicsUndescribed]); levels B and U promise
+  # appearance and text extraction, not accessibility, and stay silent.
+  method PdfaCheckGraphics {} {
+    if {[dict get [my state pdfa] conformance] ne "A"
+        || [my state undescribedGraphics] eq {}} {
+      return
+    }
+    set problems [my GraphicsUndescribed "ISO 19005 6.7.3"]
+    return -code error "tclpdf: PDF/A-[dict get [my state pdfa] part]A\
+        promises reachable content, and [llength $problems]\
+        graphic[expr {[llength $problems] == 1 ? {} : {s}}] would go out as\
+        [expr {[llength $problems] == 1 ? {an artifact} : {artifacts}}] a\
+        reader never sees:\n  - [join $problems "\n  - "]"
+  }
+
   # The XMP packet. Written at catalog time so that everything that wanted to
   # add an extension schema has had its chance.
   method PdfaCatalog {} {
@@ -417,8 +441,11 @@ oo::define ::tclpdf::document::document {
     # The colour check sits here for the same reason with one more: the
     # record it reads is filled while drawing, and [pdfa] may be declared
     # before or after the drawing - at catalog time both orders look alike.
+    # The graphics check sits here for the same reason again: the record is
+    # filled while drawing, whatever order [pdfa] and the drawing came in.
     my PdfaCheckFonts
     my PdfaCheckColour
+    my PdfaCheckGraphics
     return
   }
 

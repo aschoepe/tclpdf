@@ -1324,4 +1324,92 @@ test text-16.1 {a standard face sets a string with a byte order mark as if the m
       [regexp -all "\uFEFF" $content]
 } -result {0 {} 1 2 0}
 
+# --- a colour refused late must not leave brackets open (Table 105, 14.6.1) ---
+
+test text-17.1 {a refused colour leaves no open BT and no orphaned Tf in the stream} -body {
+  # The colour used to be resolved AFTER q, BT and Tf were already in the
+  # stream, so an unknown ICC alias, a wrong component count or an unknown
+  # pattern name left an unclosed text object behind - BT does not nest
+  # (Table 105) - and the next text opened a second one inside it. Resolved
+  # before the first byte now, a refused call leaves the stream as it found
+  # it: empty here, and the accepted text after it balances exactly.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes [list [catch {$doc text "abc" -at {10 10} -color {icc nix 0 1}} m1] \
+      [string match tclpdf:* $m1] \
+      [catch {$doc text "abc" -at {10 10} -color {pattern sunset}} m2] \
+      [string match tclpdf:* $m2] \
+      [catch {$doc text "abc" -at {10 10} -color {1 2 3 4 5 6}} m3] \
+      [string match tclpdf:* $m3]]
+  set empty [expr {[::tclpdfTest::content $doc] eq {}}]
+  $doc text "danach" -at {10 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $empty [regexp -all {q\n} $content] [regexp -all {Q\n} $content] \
+      [regexp -all {BT\n} $content] [regexp -all {ET\n} $content] \
+      [regexp -all { Tf\n} $content]
+} -result {{1 1 1 1 1 1} 1 0 0 1 1 1}
+
+test text-17.2 {with a style colour in force the refused call leaves no open q either} -body {
+  # [style -fill] makes the text's own colour guarded in q/Q; the refusal
+  # used to come after the q was written. Only the style's colour operator
+  # may be in the stream after the refusal, and the accepted text still
+  # brackets itself completely.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc style -fill red
+  set code [catch {$doc text "abc" -at {10 10} -color {icc nix 0 1}}]
+  set before [string equal [::tclpdfTest::content $doc] "1 0 0 rg\n"]
+  $doc text "danach" -at {10 20} -color blue
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code $before [regexp -all {q\n} $content] [regexp -all {Q\n} $content] \
+      [regexp -all {BT\n} $content] [regexp -all {ET\n} $content]
+} -result {1 1 1 1 1 1}
+
+test text-17.3 {tagged: a refused colour closes its bracket, the next text is its own element} -body {
+  # The mark is opened before the drawing and the existing catch closes it
+  # on any throw. With the colour refused before the first byte the element
+  # is an empty BDC/EMC pair, and the next text nests cleanly BESIDE it
+  # rather than crossing the dangling BT (14.6.1, 14.7.4.2).
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  set code [catch {$doc text "kaputt" -at {10 10} -color {icc nix 0 1}}]
+  $doc text "danach" -at {10 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [regexp -all { BDC\n} $content] [regexp -all {EMC\n} $content] \
+      [regexp -all {BT\n} $content] [regexp -all {ET\n} $content] \
+      [regexp {/P <</MCID 0>> BDC\nEMC\n/P <</MCID 1>> BDC\nBT\n} $content]
+} -result {1 2 2 1 1 1}
+
+test text-17.4 {a caught refusal changes nothing - stream and resources as if never called} -body {
+  # The same document twice, once with a refused call caught in the middle:
+  # content stream, object count and every object body have to come out the
+  # same - a resource registered before the refusal fires would change the
+  # generated names of everything after it.
+  set streams {}
+  set bodies {}
+  foreach poke {0 1} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc style -fill red
+    $doc text "eins" -at {10 10} -color {0 0.5 1}
+    if {$poke} {
+      catch {$doc text "kaputt" -at {10 15} -color {icc nix 0 1}}
+    }
+    $doc text "zwei" -at {10 20}
+    lappend streams [::tclpdfTest::content $doc]
+    set writer [$doc writer]
+    set all {}
+    for {set number 1} {$number <= [$writer count]} {incr number} {
+      lappend all [$writer body $number]
+    }
+    lappend bodies $all
+    $doc destroy
+  }
+  list [string equal {*}$streams] [string equal {*}$bodies]
+} -result {1 1}
+
 cleanupTests

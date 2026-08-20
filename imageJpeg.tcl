@@ -139,9 +139,14 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
       }
       # Every segment repeats the count, and each number appears once.
       # A file that disagrees with itself is damaged - said with the
-      # numbers rather than assembling a profile with a hole in it.
-      if {$count != $iccCount || $seq < 1 || $seq > $iccCount
-          || [dict exists $iccChunks $seq]} {
+      # numbers rather than assembling a profile with a hole in it. A
+      # repeated number is its own mistake and is called one: "disagree
+      # (segment 1 of 2 after 2 announced)" points at figures that agree.
+      if {[dict exists $iccChunks $seq]} {
+        return -code error "tclpdf: damaged JPEG - ICC profile segment $seq\
+            of $iccCount appears twice"
+      }
+      if {$count != $iccCount || $seq < 1 || $seq > $iccCount} {
         return -code error "tclpdf: damaged JPEG - the ICC profile segments\
             disagree (segment $seq of $count after $iccCount announced)"
       }

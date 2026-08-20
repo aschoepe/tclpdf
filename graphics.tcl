@@ -479,11 +479,8 @@ oo::define ::tclpdf::document::document {
       return [list pattern [my PatternResource [lindex $spec 1]]]
     }
     # The Separation colour space is PDF 1.2 (Reference 1.7, Table 4.12);
-    # gated here, on the road every shape takes into [ColourUsed], which
-    # registers the resource on first use.
-    if {[string tolower [lindex $spec 0]] eq "separation"} {
-      my RequireVersion 1.2 "a separation colour"
-    }
+    # gated in [ColourUsed] behind the separation's own checks, so a
+    # refused separation does not pin the version floor.
     return [my ColourUsed $spec $what]
   }
 

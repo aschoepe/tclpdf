@@ -205,20 +205,10 @@ test import-3.6 {a missing file is refused by name} -body {
 # content string that contains "999 0 R" as text, an optional-content
 # resource. Byte for byte, so the parser meets the real thing.
 
-proc ::tclpdfTest::handcrafted {} {
-    set objects {}
-    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
-    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>"
-    lappend objects "<< /Type /Page /Parent 2 0 R /Contents \[5 0 R 6 0 R\]\
-        /Resources << /Font << /Helv 4 0 R >>\
-        /Properties << /oc1 7 0 R >> >> >>"
-    lappend objects "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
-    set one "BT /Helv 12 Tf 20 400 Td (half one) Tj ET"
-    lappend objects "<< /Length [string length $one] >>\nstream\n$one\nendstream"
-    set two "BT /Helv 12 Tf 20 380 Td (\\(999 0 R\\) is text) Tj ET"
-    lappend objects "<< /Length [string length $two] >>\nstream\n$two\nendstream"
-    lappend objects "<< /Type /OCG /Name (Layer) >>"
-
+# A classic-table file from a list of object bodies, byte for byte - the
+# boilerplate of [handcrafted], extracted when the norm-review fixtures
+# would have been its fourth copy.
+proc ::tclpdfTest::buildpdf {name objects} {
     set out "%PDF-1.4\n"
     set offsets {}
     set number 0
@@ -234,11 +224,27 @@ proc ::tclpdfTest::handcrafted {} {
     }
     append out "trailer\n<< /Size [expr {$number + 1}] /Root 1 0 R >>\n"
     append out "startxref\n$xref\n%%EOF\n"
-    set path [scratch import-handcrafted.pdf]
+    set path [scratch $name]
     set channel [open $path wb]
     puts -nonewline $channel $out
     close $channel
     return $path
+}
+
+proc ::tclpdfTest::handcrafted {} {
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Contents \[5 0 R 6 0 R\]\
+        /Resources << /Font << /Helv 4 0 R >>\
+        /Properties << /oc1 7 0 R >> >> >>"
+    lappend objects "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    set one "BT /Helv 12 Tf 20 400 Td (half one) Tj ET"
+    lappend objects "<< /Length [string length $one] >>\nstream\n$one\nendstream"
+    set two "BT /Helv 12 Tf 20 380 Td (\\(999 0 R\\) is text) Tj ET"
+    lappend objects "<< /Length [string length $two] >>\nstream\n$two\nendstream"
+    lappend objects "<< /Type /OCG /Name (Layer) >>"
+    return [buildpdf import-handcrafted.pdf $objects]
 }
 
 test import-4.1 {inherited MediaBox, direct resources, contents array, OCG} -body {
@@ -326,5 +332,301 @@ test import-5.3 {/Rotate becomes the form's matrix and swaps its extent} -constr
     list [format %.2f [lindex $size 0]] [format %.2f [lindex $size 1]] \
         [regexp {/Matrix \[0 -1 1 0 } $bytes]
 } -result {841.89 595.28 1}
+
+# --- inheritance: the nearest ancestor wins (7.7.3.4) -----------------------
+
+test import-6.1 {inherited attributes come from the nearest ancestor, not the root} -body {
+    # Root and intermediate node contradict each other in MediaBox AND
+    # Rotate; the page is silent. The intermediate node is closer, so the
+    # form is 400x500 turned by 270 - the wrong (top-down) reading answers
+    # 100x100 turned by 90.
+    set fixture [::tclpdfTest::buildpdf import-inherit.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 100 100\] /Rotate 90 >>" \
+        "<< /Type /Pages /Parent 2 0 R /Kids \[4 0 R\] /Count 1 /MediaBox \[0 0 400 500\] /Rotate 270 >>" \
+        "<< /Type /Page /Parent 3 0 R /Contents 5 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import erbe $fixture
+    set size [$doc form size erbe]
+    $doc destroy
+    file delete $fixture
+    set size
+} -result {500.0 400.0}
+
+test import-6.2 {the page's own attribute beats every ancestor} -body {
+    set fixture [::tclpdfTest::buildpdf import-inherit-own.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 100 100\] >>" \
+        "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 300 600\] /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import eigen $fixture
+    set size [$doc form size eigen]
+    $doc destroy
+    file delete $fixture
+    set size
+} -result {300.0 600.0}
+
+# --- CropBox is bounded by the MediaBox (14.11.2.2) --------------------------
+
+test import-7.1 {a CropBox larger than the MediaBox is cut to their intersection} -body {
+    # The two boxes come from DIFFERENT nodes: MediaBox inherited from the
+    # tree, CropBox on the page. Without the intersection the form would be
+    # 600x500.
+    set fixture [::tclpdfTest::buildpdf import-crop.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /CropBox \[-100 -100 500 400\] /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import schnitt $fixture
+    set size [$doc form size schnitt]
+    $doc destroy
+    file delete $fixture
+    set size
+} -result {200.0 200.0}
+
+test import-7.2 {a CropBox that misses the MediaBox entirely is refused} -body {
+    set fixture [::tclpdfTest::buildpdf import-crop-empty.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /CropBox \[300 300 400 400\] /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    set result [catch {$doc pdf import leer $fixture} message]
+    $doc destroy
+    file delete $fixture
+    list $result $message
+} -match glob -result {1 {tclpdf: * the CropBox of page 1 does not intersect its MediaBox*}}
+
+# --- #xx escapes in names (7.3.5.2) ------------------------------------------
+
+test import-8.1 {/Ro#74ate is /Rotate: the escaped name turns the page} -body {
+    set fixture [::tclpdfTest::buildpdf import-hash-rotate.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Ro#74ate 90 /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import gedreht $fixture
+    set size [$doc form size gedreht]
+    $doc destroy
+    file delete $fixture
+    set size
+} -result {500.0 400.0}
+
+test import-8.2 {a resource name with a space survives the round trip byte-preservingly} -body {
+    # The content stream travels verbatim and keeps /A#20B as written; the
+    # resource dictionary is parsed (the key DECODES to "A B") and must be
+    # re-escaped on the way out, or the two no longer name the same thing.
+    set stream "BT /A#20B 12 Tf (x) Tj ET"
+    set fixture [::tclpdfTest::buildpdf import-hash-space.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R\
+            /Resources << /Font << /A#20B 5 0 R >> >> >>" \
+        "<< /Length [string length $stream] >>\nstream\n$stream\nendstream" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import raum $fixture
+    $doc form place raum -at {0 0}
+    set path [::tclpdfTest::scratch import-hash-space-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    # Once in the copied resources dictionary, once in the content.
+    regexp -all {/A#20B} $bytes
+} -result 2
+
+test import-8.3 {/Fl#61teDecode is FlateDecode and gets decoded} -body {
+    package require tclpdf::filter
+    set stream [::tclpdf::filter encodeFlate "BT /Helv 12 Tf 20 40 Td (half one) Tj ET"]
+    set fixture [::tclpdfTest::buildpdf import-hash-filter.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+        "<< /Length [string length $stream] /Filter /Fl#61teDecode >>\nstream\n$stream\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import flate $fixture
+    $doc form place flate -at {0 0}
+    set path [::tclpdfTest::scratch import-hash-filter-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    regexp {half one} $bytes
+} -result 1
+
+test import-8.4 {a # without two hex digits stays literal; Serialize re-escapes} -body {
+    set pos 0
+    set a [::tclpdf::import::Parse {/A#5x} pos]
+    set pos 0
+    set b [::tclpdf::import::Parse {/B#} pos]
+    list $a $b [::tclpdf::import::Serialize {nm {A B}} {}] \
+        [::tclpdf::import::Serialize {nm A#5x} {}]
+} -result {{nm A#5x} {nm B#} /A#20B /A#235x}
+
+# --- optional content: merging and OCMD (8.11.4.2, Table 98) -----------------
+
+test import-9.1 {a second import merges its OCGs into the catalog entry} -body {
+    set fixture [::tclpdfTest::handcrafted]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import eins $fixture
+    $doc pdf import zwei $fixture
+    set entry [$doc catalogEntry OCProperties]
+    $doc destroy
+    file delete $fixture
+    regexp {/OCGs \[([^\]]*)\]} $entry -> ocgs
+    regexp {/ON \[([^\]]*)\]} $entry -> on
+    list [llength [regexp -all -inline {\d+ 0 R} $ocgs]] \
+        [llength [regexp -all -inline {\d+ 0 R} $on]]
+} -result {2 2}
+
+test import-10.1 {an OCMD resolves to the groups behind it, not itself} -body {
+    # /oc1 points at an OCMD whose /OCGs is a single reference, /oc2 at one
+    # whose /OCGs is an array - both forms of Table 98. The catalog array
+    # takes the two OCGs; the OCMDs are copied but stay out of it.
+    set fixture [::tclpdfTest::buildpdf import-ocmd.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R\
+            /Resources << /Properties << /oc1 5 0 R /oc2 6 0 R >> >> >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /Type /OCMD /OCGs 7 0 R >>" \
+        "<< /Type /OCMD /OCGs \[8 0 R\] >>" \
+        "<< /Type /OCG /Name (One) >>" \
+        "<< /Type /OCG /Name (Two) >>"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import ebenen $fixture
+    $doc form place ebenen -at {0 0}
+    set path [::tclpdfTest::scratch import-ocmd-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    # Anchored at /OCProperties: the copied OCMDs carry /OCGs arrays of
+    # their own, and an unanchored pattern reads one of those instead.
+    regexp {/OCProperties << /OCGs \[([^\]]*)\]} $bytes -> inner
+    set numbers [lmap {- number} [regexp -all -inline {(\d+) 0 R} $inner] {set number}]
+    set kinds [lmap number $numbers {
+        expr {[regexp "\n$number 0 obj\n<< /Type /OCG " $bytes] ? "ocg" : "other"}
+    }]
+    list [llength $numbers] $kinds [regexp {/Type /OCMD} $bytes]
+} -result {2 {ocg ocg} 1}
+
+# --- the transparency group of the imported form (PDF/A 6.2.4.3-2) ----------
+
+test import-11.1 {the imported form carries the same group as form create} -body {
+    set template [::tclpdfTest::template]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import kopfbogen $template
+    $doc form place kopfbogen -at {0 0}
+    set path [::tclpdfTest::scratch import-group.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $template
+    # Isolated, and deliberately WITHOUT /CS - see xObject.tcl.
+    list [regexp {/Subtype /Form} $bytes] \
+        [regexp {/Group << /S /Transparency /I true >>} $bytes] \
+        [regexp {/Group <<[^>]*/CS} $bytes]
+} -result {1 1 0}
+
+test import-11.2 {a document older than PDF 1.4 gets no group} -body {
+    set template [::tclpdfTest::template]
+    set doc [tclpdf new -unit pt -format a4 -compress 0 -version 1.3]
+    $doc page add
+    $doc pdf import kopfbogen $template
+    $doc form place kopfbogen -at {0 0}
+    set path [::tclpdfTest::scratch import-group-13.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $template
+    list [regexp {/Subtype /Form} $bytes] [regexp {/Group} $bytes]
+} -result {1 0}
+
+# --- /Length has to end at endstream (7.3.8.1) -------------------------------
+
+test import-12.1 {a /Length overshooting the stream is refused, not copied as garbage} -body {
+    set stream "BT (x) Tj ET"
+    set fixture [::tclpdfTest::buildpdf import-length.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+        "<< /Length [expr {[string length $stream] + 40}] >>\nstream\n$stream\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    set result [catch {$doc pdf import krumm $fixture} message]
+    $doc destroy
+    file delete $fixture
+    list $result $message
+} -match glob -result {1 {tclpdf: *declares /Length 52 but does not end at endstream}}
+
+# --- white space is six bytes, not Unicode (7.2.2, Table 1) ------------------
+
+test import-13.1 {a raw 0xA0 byte is a regular character and does not split a name} -body {
+    set pos 0
+    set token [::tclpdf::import::Parse "/Na\xA0me 1" pos]
+    list [lindex $token 0] [expr {[lindex $token 1] eq "Na\xA0me"}] \
+        [::tclpdf::import::Serialize $token {}]
+} -result {nm 1 /Na#A0me}
+
+# --- /Rotate as a real, or not a multiple of 90 (defective files) ------------
+
+test import-14.1 {an integer-valued real /Rotate 90.0 is read as 90} -body {
+    set fixture [::tclpdfTest::buildpdf import-rotate-real.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Rotate 90.0 /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc pdf import real $fixture
+    set size [$doc form size real]
+    $doc destroy
+    file delete $fixture
+    set size
+} -result {500.0 400.0}
+
+test import-14.2 {/Rotate 45 is refused by name, not silently ignored} -body {
+    set fixture [::tclpdfTest::buildpdf import-rotate-45.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Rotate 45 /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    set result [catch {$doc pdf import schief $fixture} message]
+    $doc destroy
+    file delete $fixture
+    list $result $message
+} -match glob -result {1 {tclpdf: *carries /Rotate 45, which is not a multiple of 90}}
+
+test import-14.3 {a non-integral /Rotate is refused with a tclpdf message, not a raw Tcl error} -body {
+    set fixture [::tclpdfTest::buildpdf import-rotate-frac.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Rotate 90.5 /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    set result [catch {$doc pdf import krumm $fixture} message]
+    $doc destroy
+    file delete $fixture
+    list $result $message
+} -match glob -result {1 {tclpdf: *carries /Rotate "90.5", which is not usable as a multiple of 90}}
 
 cleanupTests

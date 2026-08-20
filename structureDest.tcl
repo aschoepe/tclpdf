@@ -88,6 +88,11 @@ oo::define ::tclpdf::document::document {
           [[my writer] version] - raise the version, or use\
           \[\$doc ua -part 2\], which does it"
     }
+    # Accepted - so the floor is pinned with the writer, the way [tagged]
+    # and [ua] pin theirs: a later [configure -version 1.7] is refused
+    # naming this call, instead of writing a 1.7 file that carries an /SD
+    # destination no reader of that version knows.
+    my RequireVersion 2.0 "$caller (a structure destination)"
     return
   }
 

@@ -46,7 +46,8 @@
 # operators end up behind this document's own compression.
 #
 # The page's boxes travel along: the form's BBox is the CropBox where one
-# exists, the MediaBox otherwise, and a /Rotate of 90, 180 or 270 becomes
+# exists - intersected with the MediaBox, which bounds it (14.11.2.2) -
+# the MediaBox otherwise, and a /Rotate of 90, 180 or 270 becomes
 # the form's /Matrix, so the placed page looks the way a viewer shows it.
 # A /Properties resource (optional content, "layers") gets its catalog
 # counterpart via /OCProperties, or a validator reports an OCG without a
@@ -71,21 +72,27 @@ namespace eval ::tclpdf::import {}
 #   a {value ...}       array
 #   n text              number, kept as written
 #   r {num gen}         indirect reference
-#   nm text             name, kept as written (escapes included)
+#   nm bytes            name, #xx escapes DECODED (7.3.5.2)
 #   s bytes             literal string, DECODED bytes
 #   h hextext           hex string, digits as written
 #   b true|false        boolean
 #   z {}                null
-# Keeping numbers and names as written means a copied object round-trips
-# byte-comparably; only strings are decoded, because their escapes must be
-# understood to find the closing parenthesis at all.
+# Keeping numbers as written means a copied object round-trips
+# byte-comparably. Names and strings are decoded: strings because their
+# escapes must be understood to find the closing parenthesis at all, names
+# because every Get compares plain text - /Ro#74ate IS /Rotate (7.3.5.2).
+# Serialize re-escapes both on the way out.
 
+# White space is the six bytes of Table 1 (7.2.2) - and ONLY those. Tcl's
+# [string is space] is Unicode-wide: a raw 0xA0 or 0x85 byte would count as
+# space and split a legal name in the middle.
 proc ::tclpdf::import::SkipWs {bytes posVar} {
     upvar 1 $posVar pos
     set length [string length $bytes]
     while {$pos < $length} {
         set c [string index $bytes $pos]
-        if {[string is space $c] || $c eq "\x00"} {
+        if {$c eq " " || $c eq "\n" || $c eq "\r" || $c eq "\t"
+                || $c eq "\f" || $c eq "\x00"} {
             incr pos
         } elseif {$c eq "%"} {
             # A comment runs to the end of the line (7.2.4). Spelled with
@@ -104,9 +111,12 @@ proc ::tclpdf::import::SkipWs {bytes posVar} {
     }
 }
 
-# The characters that end a name, a number or a keyword (7.2.3).
+# The characters that end a name, a number or a keyword (7.2.3): the six
+# white-space bytes of Table 1 and the delimiters - see SkipWs for why not
+# [string is space].
 proc ::tclpdf::import::Delimiter {c} {
-    return [expr {$c eq {} || [string is space $c] || $c eq "\x00"
+    return [expr {$c eq {} || $c eq " " || $c eq "\n" || $c eq "\r"
+        || $c eq "\t" || $c eq "\f" || $c eq "\x00"
         || $c in {( ) < > \[ \] \{ \} / %}}]
 }
 
@@ -189,7 +199,30 @@ proc ::tclpdf::import::Parse {bytes posVar} {
         ( {return [list s [ParseString $bytes pos]]}
         / {
             incr pos
-            return [list nm [ParseToken $bytes pos]]
+            set raw [ParseToken $bytes pos]
+            # #xx decodes to its byte (7.3.5.2); a # NOT followed by two
+            # hex digits stays literal - broken files exist, and reading
+            # them as written loses less than refusing.
+            if {[string first # $raw] >= 0} {
+                set name {}
+                set i 0
+                set length [string length $raw]
+                while {$i < $length} {
+                    set c [string index $raw $i]
+                    set hex [string range $raw [expr {$i + 1}] \
+                        [expr {$i + 2}]]
+                    if {$c eq "#" && [string length $hex] == 2
+                            && [string is xdigit -strict $hex]} {
+                        append name [format %c [scan $hex %x]]
+                        incr i 3
+                    } else {
+                        append name $c
+                        incr i
+                    }
+                }
+                set raw $name
+            }
+            return [list nm $raw]
         }
         {\[} {
             incr pos
@@ -270,6 +303,23 @@ proc ::tclpdf::import::Parse {bytes posVar} {
 
 # ------------------------------------------------------------- serializing
 
+# A name written back: every byte outside the regular range becomes a #xx
+# escape (7.3.5.2) - the delimiters, #, and anything below 0x21 or above
+# 0x7E, which covers the six white-space bytes.
+proc ::tclpdf::import::EscapeName {name} {
+    set out {}
+    foreach c [split $name {}] {
+        scan $c %c code
+        if {$code < 0x21 || $code > 0x7E || $c eq "#"
+                || $c in {( ) < > \[ \] \{ \} / %}} {
+            append out [format #%02X $code]
+        } else {
+            append out $c
+        }
+    }
+    return $out
+}
+
 # Writes a parsed object back as PDF syntax; every reference is renumbered
 # through the map (old number -> new number). A reference to an object that
 # was never copied names itself - it means the closure walk has a hole.
@@ -279,7 +329,7 @@ proc ::tclpdf::import::Serialize {value map} {
         d {
             set out "<<"
             foreach {key item} $payload {
-                append out " /" $key " " [Serialize $item $map]
+                append out " /" [EscapeName $key] " " [Serialize $item $map]
             }
             append out " >>"
             return $out
@@ -293,7 +343,7 @@ proc ::tclpdf::import::Serialize {value map} {
             return $out
         }
         n {return $payload}
-        nm {return "/$payload"}
+        nm {return "/[EscapeName $payload]"}
         h {return "<$payload>"}
         b {return $payload}
         z {return "null"}
@@ -563,6 +613,18 @@ proc ::tclpdf::import::ObjectAt {readerVar offset} {
             offset $offset has no usable /Length"
     }
     set data [string range $bytes $pos [expr {$pos + $length - 1}]]
+    # /Length must land exactly on the end of the data: behind it, after an
+    # optional end-of-line, the keyword endstream follows (7.3.8.1). A wrong
+    # length silently turns neighbouring bytes into stream data or stream
+    # data into operators - refusing beats guessing.
+    set tail [expr {$pos + $length}]
+    if {[string index $bytes $tail] eq "\r"} {incr tail}
+    if {[string index $bytes $tail] eq "\n"} {incr tail}
+    if {[string range $bytes $tail [expr {$tail + 8}]] ne "endstream"} {
+        return -code error "tclpdf: [dict get $reader path]: the stream at\
+            offset $offset declares /Length $length but does not end at\
+            endstream"
+    }
     return [list $value 1 $data]
 }
 
@@ -760,8 +822,13 @@ proc ::tclpdf::import::Page {readerVar number} {
     set inherited {}
     set remaining $number
     while 1 {
+        # The NEAREST ancestor wins (7.7.3.4: an attribute the page lacks
+        # is inherited from the closest node above it that has one). The
+        # walk runs root -> leaf, so a value found deeper OVERWRITES the
+        # one above it; the page's own entries, already in its payload,
+        # win over all of them below.
         foreach key {Resources MediaBox CropBox Rotate} {
-            if {![dict exists $inherited $key] && [Get $node $key] ne {}} {
+            if {[Get $node $key] ne {}} {
                 dict set inherited $key [Get $node $key]
             }
         }
@@ -799,6 +866,24 @@ proc ::tclpdf::import::Page {readerVar number} {
     }
 }
 
+# A page box, resolved to four numbers and normalized so that the first
+# corner is the lower left - the standard allows any two diagonally
+# opposite corners (7.9.5). Empty when the page has no such box.
+proc ::tclpdf::import::Box {readerVar pageDict key} {
+    upvar 1 $readerVar reader
+    set box [Resolve reader [Get $pageDict $key]]
+    if {$box eq {}} {
+        return {}
+    }
+    set edges {}
+    foreach item [lindex $box 1] {
+        lappend edges [lindex [Resolve reader $item] 1]
+    }
+    lassign $edges a b c d
+    return [list [expr {min($a, $c)}] [expr {min($b, $d)}] \
+        [expr {max($a, $c)}] [expr {max($b, $d)}]]
+}
+
 # ------------------------------------------------------------ the takeover
 
 oo::define ::tclpdf::document::document {
@@ -832,30 +917,55 @@ oo::define ::tclpdf::document::document {
     set reader [::tclpdf::import::Open $path]
     set pageDict [::tclpdf::import::Page reader $page]
 
-    # The box that becomes the form: CropBox where one exists - that is
-    # what a viewer shows - the MediaBox otherwise (7.7.3.3).
-    set box [::tclpdf::import::Resolve reader \
-        [::tclpdf::import::Get $pageDict CropBox]]
-    if {$box eq {}} {
-      set box [::tclpdf::import::Resolve reader \
-          [::tclpdf::import::Get $pageDict MediaBox]]
-    }
-    if {$box eq {}} {
+    # The box that becomes the form: the CropBox where one exists - that
+    # is what a viewer shows - taken as its INTERSECTION with the MediaBox,
+    # which bounds it (14.11.2.2); the MediaBox alone otherwise (7.7.3.3).
+    # The two boxes are resolved independently because they can be
+    # inherited from DIFFERENT nodes of the page tree.
+    set media [::tclpdf::import::Box reader $pageDict MediaBox]
+    if {$media eq {}} {
       return -code error "tclpdf: $path: page $page has no MediaBox"
     }
-    set edges {}
-    foreach item [lindex $box 1] {
-      lappend edges [lindex [::tclpdf::import::Resolve reader $item] 1]
+    set crop [::tclpdf::import::Box reader $pageDict CropBox]
+    if {$crop eq {}} {
+      set edges $media
+    } else {
+      lassign $media mx0 my0 mx1 my1
+      lassign $crop cx0 cy0 cx1 cy1
+      set edges [list [expr {max($mx0, $cx0)}] [expr {max($my0, $cy0)}] \
+          [expr {min($mx1, $cx1)}] [expr {min($my1, $cy1)}]]
+      lassign $edges x0 y0 x1 y1
+      if {$x0 >= $x1 || $y0 >= $y1} {
+        return -code error "tclpdf: $path: the CropBox of page $page does\
+            not intersect its MediaBox - nothing of the page is visible"
+      }
     }
     lassign $edges x0 y0 x1 y1
-    set width [expr {abs($x1 - $x0)}]
-    set height [expr {abs($y1 - $y0)}]
+    set width [expr {$x1 - $x0}]
+    set height [expr {$y1 - $y0}]
 
     set rotate 0
     set rotateValue [::tclpdf::import::Resolve reader \
         [::tclpdf::import::Get $pageDict Rotate]]
     if {$rotateValue ne {}} {
-      set rotate [expr {([lindex $rotateValue 1] % 360 + 360) % 360}]
+      set raw [lindex $rotateValue 1]
+      if {![string is entier -strict $raw]} {
+        # The standard wants an integer (Table 31). An integer-valued real
+        # like 90.0 is a defect worth tolerating; anything else is refused
+        # rather than guessed at.
+        if {[string is double -strict $raw]
+            && ![catch {expr {$raw == entier($raw)}} whole] && $whole} {
+          set raw [expr {entier($raw)}]
+        } else {
+          return -code error "tclpdf: $path: page $page carries /Rotate\
+              \"$raw\", which is not usable as a multiple of 90"
+        }
+      }
+      if {$raw % 90 != 0} {
+        return -code error "tclpdf: $path: page $page carries /Rotate $raw,\
+            which is not a multiple of 90"
+      }
+      set rotate [expr {($raw % 360 + 360) % 360}]
     }
 
     # Everything the page's resources reach is copied and renumbered; the
@@ -904,18 +1014,62 @@ oo::define ::tclpdf::document::document {
     }
 
     # An optional-content resource needs its catalog counterpart, or the
-    # file carries layers no viewer can configure.
+    # file carries layers no viewer can configure. Table 98 allows an OCMD
+    # as a /Properties value; the catalog's /OCGs array takes the GROUPS
+    # behind it - its /OCGs, a reference or an array of them - never the
+    # OCMD itself (8.11.4.2 asks for every group in the document there).
     set resolved [::tclpdf::import::Resolve reader $resources]
-    set properties [::tclpdf::import::Get $resolved Properties]
-    if {$properties ne {}} {
+    set properties [::tclpdf::import::Resolve reader \
+        [::tclpdf::import::Get $resolved Properties]]
+    set numbers {}
+    # A second import MERGES with what an earlier one put into the catalog
+    # rather than overwriting it; the entry is this module's own
+    # serialization, read back with its own parser. First come the groups
+    # already there, then the new ones, duplicates dropped by number.
+    set existing [my catalogEntry OCProperties]
+    if {$existing ne {}} {
+      set pos 0
+      set have [::tclpdf::import::Parse $existing pos]
+      foreach item [lindex [::tclpdf::import::Get $have OCGs] 1] {
+        if {[lindex $item 0] eq "r"} {
+          lappend numbers [lindex [lindex $item 1] 0]
+        }
+      }
+    }
+    if {[lindex $properties 0] eq "d"} {
+      foreach {- item} [lindex $properties 1] {
+        if {[lindex $item 0] ne "r"} continue
+        set entry [::tclpdf::import::Resolve reader $item]
+        if {[lindex [::tclpdf::import::Get $entry Type] 1] eq "OCMD"} {
+          set members [::tclpdf::import::Get $entry OCGs]
+          if {[lindex $members 0] eq "r"} {
+            set members [list $members]
+          } elseif {[lindex $members 0] eq "a"} {
+            set members [lindex $members 1]
+          } else {
+            set members {}
+          }
+          foreach member $members {
+            if {[lindex $member 0] eq "r"} {
+              lappend numbers \
+                  [dict get $map [lindex [lindex $member 1] 0]]
+            }
+          }
+        } else {
+          lappend numbers [dict get $map [lindex [lindex $item 1] 0]]
+        }
+      }
+    }
+    if {[llength $numbers]} {
       set groups {}
-      foreach number [::tclpdf::import::Refs $properties] {
-        lappend groups "[dict get $map $number] 0 R"
+      set seen {}
+      foreach number $numbers {
+        if {[dict exists $seen $number]} continue
+        dict set seen $number 1
+        lappend groups "$number 0 R"
       }
-      if {[llength $groups]} {
-        my catalogEntry OCProperties "<< /OCGs \[[join $groups { }]\]\
-            /D << /ON \[[join $groups { }]\] >> >>"
-      }
+      my catalogEntry OCProperties "<< /OCGs \[[join $groups { }]\]\
+          /D << /ON \[[join $groups { }]\] >> >>"
     }
 
     # The content: one stream or an array of streams whose CONCATENATION
@@ -972,6 +1126,15 @@ oo::define ::tclpdf::document::document {
         Matrix [::tclpdf::pdfObj arr \
             [lmap number $matrix {::tclpdf::pdfObj num $number}]] \
         Resources $resourcesRef]
+    # The same transparency group [form create] writes - isolated, and
+    # deliberately without /CS; xObject.tcl carries the full reasoning (a
+    # named colour space is a PDF/A claim, ISO 19005-2, 6.2.4.3-2).
+    # Without the group, [form place -opacity] composites each imported
+    # object separately instead of fading the page as a whole. Groups
+    # exist since PDF 1.4 - an older document gets none.
+    if {[package vcompare [$writer version] 1.4] >= 0} {
+      lappend pairs Group [::tclpdf::pdfObj dictionary {S /Transparency I true}]
+    }
     set number [my streamObject $pairs $content]
 
     set resourceName PI[expr {[dict size $forms] + 1}]

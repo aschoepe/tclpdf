@@ -114,7 +114,10 @@ set y [expr {$y + 12}]
 $doc text "H" -at [list 20 $y] -size 14
 $doc text "2" -at [list 24.6 $y] -size 9 -rise -1
 $doc text "O and E = mc" -at [list 27 $y] -size 14
-$doc text "2" -at [list 55 $y] -size 9 -rise 3.5
+# The superscript starts where its prefix ends - measured, not guessed: a
+# fixed x used to park the 2 on the c.
+$doc text "2" -at [list [expr {27 + [$doc textWidth "O and E = mc" -size 14]}] $y] \
+    -size 9 -rise 3.5
 $doc font -family helvetica -size 7
 $doc text "subscript and superscript through -rise" -at [list 62 $y]
 

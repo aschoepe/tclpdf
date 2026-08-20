@@ -106,8 +106,17 @@ proc ::tclpdf::xmp::declare {prefix uri tags} {
     if {$name in $declared} {
       continue
     }
-    namespace eval ::tclpdf::xmp [list dom createNodeCmd -tagName $name \
-        -namespace $uri elementNode Tag_$name]
+    # Refused with the caller's words, by tdom's own validator: the raw
+    # "Invalid tag name 'Tag_...'" out of [dom createNodeCmd] names an
+    # internal command, not the schema the caller wrote. The catch stays as
+    # the net under it - a bad PREFIX passes the tag check and still fails
+    # in the same call.
+    if {![dom isNCName $tag] || [catch {namespace eval ::tclpdf::xmp \
+        [list dom createNodeCmd -tagName $name -namespace $uri \
+        elementNode Tag_$name]}]} {
+      return -code error "tclpdf: xmpSchema tag \"$tag\" is not a valid XML\
+          name (schema $prefix)"
+    }
     lappend declared $name
   }
   return

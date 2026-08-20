@@ -98,10 +98,14 @@ oo::define ::tclpdf::document::document {
           if {$separator >= 0} {
             # The head is set right-aligned to the separator position, the
             # tail left-aligned from it - two calls, because there is no PDF
-            # operator that aligns on a character.
-            my text [string range $line 0 $separator-1] -at [list $at $top] \
-                -anchor top -align [my TextAlign right $state] \
-                {*}[my TableFont $style] -color [dict get $style color]
+            # operator that aligns on a character. Unless the separator opens
+            # the line (",50"): the head is empty then, and drawing it wrote
+            # a bare "() Tj" into the stream.
+            if {$separator > 0} {
+              my text [string range $line 0 $separator-1] -at [list $at $top] \
+                  -anchor top -align [my TextAlign right $state] \
+                  {*}[my TableFont $style] -color [dict get $style color]
+            }
             my text [string range $line $separator end] -at [list $at $top] \
                 -anchor top -align [my TextAlign left $state] \
                 {*}[my TableFont $style] -color [dict get $style color]

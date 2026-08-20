@@ -33,6 +33,7 @@ package require tclpdf::option 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 package require tclpdf::text 1.0-
+package require tclpdf::shape 1.0-
 
 namespace eval ::tclpdf::textPath {
   # How many straight pieces one cubic Bezier is cut into. Measured against a
@@ -63,6 +64,10 @@ oo::define ::tclpdf::document::document {
     if {![llength [dict get $options segments]]} {
       return -code error "tclpdf: textPath needs -segments"
     }
+    # The same refusals [path] gives, from the same place: a wrong operand
+    # count or a non-number used to crash in the arc-length arithmetic
+    # instead of being refused by name.
+    ::tclpdf::shape::checkSegments [dict get $options segments]
     set state [my TextMerge [my TextPathOverrides $options]]
 
     set points [my TextPathFlatten [dict get $options segments]]
@@ -199,7 +204,8 @@ oo::define ::tclpdf::document::document {
   }
 
   # The path as a polyline in the DOCUMENT unit: {x y x y ...}. Curves are cut
-  # into straight pieces here and nowhere else.
+  # into straight pieces here and nowhere else. The segments arrive checked:
+  # [textPath] ran ::tclpdf::shape::checkSegments before calling this.
   method TextPathFlatten {segments} {
     variable ::tclpdf::textPath::steps
     set points {}
@@ -236,10 +242,6 @@ oo::define ::tclpdf::document::document {
             set x [lindex $points 0]
             set y [lindex $points 1]
           }
-        }
-        default {
-          return -code error "tclpdf: unknown path segment \"$kind\" - known\
-              are: move, line, curve, close"
         }
       }
     }

@@ -49,6 +49,23 @@ test pdfObj-num-1.7 {infinity has no PDF spelling} -body {
   ::tclpdf::pdfObj num Inf
 } -returnCodes error -match glob -result {tclpdf: number has no PDF representation*}
 
+test pdfObj-num-1.8 {a magnitude beyond the PDF real range is refused} -body {
+  # ISO 32000-1, Annex C.2: a PDF real reaches about +/-3.403e38. Fixed
+  # notation would write 1e300 as three hundred digits, and qpdf then
+  # reports an overflow, treats the object as null and drops the whole
+  # content stream it appears in (measured for the review of 2026-08-20).
+  list [catch {::tclpdf::pdfObj num 1e300} first] \
+      [string match {tclpdf: number has no PDF representation: "1e300"*3.403e38*} $first] \
+      [catch {::tclpdf::pdfObj num -1e39} second] \
+      [string match {tclpdf: number has no PDF representation*} $second]
+} -result {1 1 1 1}
+
+test pdfObj-num-1.9 {the full PDF real range stays usable} -body {
+  # 3e38 is inside Annex C.2 - the limit refuses what PDF cannot hold, not
+  # what is merely large: 39 digits, no error.
+  string length [::tclpdf::pdfObj num 3e38]
+} -result 39
+
 test pdfObj-name-2.1 {a plain name passes through} -body {
   ::tclpdf::pdfObj name Type
 } -result /Type

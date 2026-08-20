@@ -394,4 +394,26 @@ test attach-8.5 {an empty attachment is allowed: -data {} is present, not absent
       [regexp {/Params << /Size 0 >>} $bytes] [regexp {/Length 0 >>} $bytes]
 } -result {empty.txt 1 1 1 1}
 
+
+test attach-8.6 {the /F fallback writes one "_" per code point, the same bytes under both interpreters} -body {
+  # U+1F600 lies beyond the BMP: Tcl 8.6 stores it as a surrogate pair - two
+  # string elements - and a character-wise replacement wrote TWO underscores
+  # where Tcl 9, storing the character whole, wrote one; the /F bytes
+  # differed by interpreter. The expectation is welded to the one-underscore
+  # form, so whichever interpreter runs this file measures against the same
+  # bytes. Decoded from UTF-8 as in attach-8.4, because the \U escape of
+  # 8.6.18 answers U+FFFD for a code point it cannot store as one element.
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data x \
+      -name "Bericht [encoding convertfrom utf-8 [binary format H* F09F9880]].txt"
+  set path [::tclpdfTest::scratch attach-fallback.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/F \(([^)]*)\)} $bytes -> f
+  set f
+} -result {Bericht _.txt}
+
 cleanupTests

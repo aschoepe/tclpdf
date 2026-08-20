@@ -481,11 +481,18 @@ oo::define ::tclpdf::document::document {
         || [dict get $state rise] != 0
         || [dict get $state stretch] != 100
         || ([dict get $state color] ne {} && [my streamState styleFill] ne {})}]
-    if {$guarded} {
-      my content "q\n"
-    }
-    my content "BT\n"
-    my content "[my TextResource $font] [::tclpdf::pdfObj num $size] Tf\n"
+    # Everything that can still refuse is resolved BEFORE the first byte goes
+    # into the stream. The colour used to be resolved after "q" and "BT" were
+    # already written, so a late refusal - an unknown ICC alias, a wrong
+    # component count, an unknown pattern name - left both brackets open in
+    # the page stream: BT does not nest (Table 105), and in a tagged document
+    # the dangling BT crossed the BDC bracket (14.6.1). GraphicsStyle does it
+    # right for the shapes - check everything, then write - and this is the
+    # same order. The font resource is resolved first, as it was written
+    # first, so the registration order and with it every generated resource
+    # name stays what it was.
+    set resource [my TextResource $font]
+    set colour {}
     if {[dict get $state color] ne {}} {
       # Through GraphicsColour, the road every shape takes: a spot colour
       # gets its colour space resource written and its space recorded for
@@ -494,8 +501,16 @@ oo::define ::tclpdf::document::document {
       # alone once, which records but does not translate - a text coloured
       # with a pattern then wrote "/sunset scn", a name no resource dictionary
       # carried; qpdf and veraPDF said nothing, poppler "Unknown pattern".
-      my content [::tclpdf::color operator [::tclpdf::color parse \
+      set colour [::tclpdf::color operator [::tclpdf::color parse \
           [my GraphicsColour [dict get $state color] text]] fill]\n
+    }
+    if {$guarded} {
+      my content "q\n"
+    }
+    my content "BT\n"
+    my content "$resource [::tclpdf::pdfObj num $size] Tf\n"
+    if {$colour ne {}} {
+      my content $colour
     }
     foreach {key operator} {spacing Tc wordSpacing Tw rise Ts} {
       if {$key eq "wordSpacing" && $byTJ} {

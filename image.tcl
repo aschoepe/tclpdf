@@ -132,7 +132,7 @@ oo::define ::tclpdf::document::document {
       if {![dict get $options icc]} {
         dict set parsed icc {}
       } else {
-        set source [expr {$path ne {} ? $path : "the picture data"}]
+        set source [expr {$path ne {} ? "\"$path\"" : "the picture data"}]
         if {[catch {my IccInspect [dict get $parsed icc] \
             "the ICC profile in $source"} inspected]} {
           return -code error "$inspected - the picture itself is fine;\
@@ -545,14 +545,21 @@ oo::define ::tclpdf::document::document {
       set data [dict get $image bytes]
     } else {
       set space [::tclpdf::imagePng device $parsed]
-      # What the picture needs of the file, before its first object goes
-      # out (Reference 1.7, Table 4.39): a colour key /Mask is PDF 1.3, a
-      # soft mask 1.4, sixteen bits per component 1.5. The FlateDecode
-      # filter every PNG carries is checked by the writer. Read off
-      # [transparency] and [hasAlpha] - the very deciders [streams]
-      # consults - rather than off the built pairs, because the ICC
-      # profile stream below is an object too and has to come after the
-      # last refusal.
+      set base {}
+      if {[dict get $parsed icc] ne {}} {
+        set base [my ImageProfileBase $parsed]
+        set space ICCBased
+      }
+      set streams [::tclpdf::imagePng streams $parsed $base]
+      # What the picture needs of the file (Reference 1.7, Table 4.39): a
+      # colour key /Mask is PDF 1.3, a soft mask 1.4, sixteen bits per
+      # component 1.5. The FlateDecode filter every PNG carries is checked
+      # by the writer. Read off [transparency] and [hasAlpha] - the very
+      # deciders [streams] consults - rather than off the built pairs, and
+      # AFTER [streams], which is the last call that can refuse the picture
+      # (a damaged alpha channel dies decoding there): a refused picture
+      # must not pin the version floor. Still before the picture's own
+      # objects, so a version refusal leaves mask and image unwritten.
       set way [::tclpdf::imagePng transparency $parsed]
       if {$way eq "colourKey"} {
         my RequireVersion 1.3 "a PNG picture with a transparent colour"
@@ -563,12 +570,6 @@ oo::define ::tclpdf::document::document {
       if {[dict get $parsed bitDepth] == 16} {
         my RequireVersion 1.5 "a 16-bit PNG picture"
       }
-      set base {}
-      if {[dict get $parsed icc] ne {}} {
-        set base [my ImageProfileBase $parsed]
-        set space ICCBased
-      }
-      set streams [::tclpdf::imagePng streams $parsed $base]
       lappend pairs {*}[dict get $streams pairs]
       set data [dict get $streams data]
       if {[dict exists $streams maskData]} {

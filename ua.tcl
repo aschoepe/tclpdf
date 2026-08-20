@@ -471,22 +471,16 @@ oo::define ::tclpdf::document::document {
   # A graphic that became an artifact because nobody said otherwise. An
   # artifact carries content past a reader entirely, and PDF/UA allows that
   # for decoration only (7.1); a picture without -alt was never judged either
-  # way, and the claim cannot be made over an open question. The facts come
-  # from [undescribedGraphics] in image.tcl; the same key is filled by a
-  # drawing and a form placement, and the document may hold none of the
-  # three, in which case the module was never loaded and there is nothing
-  # to ask.
+  # way, and the claim cannot be made over an open question. The question
+  # and its wording live in structure.tcl ([GraphicsUndescribed]), shared
+  # with the PDF/A level A check in pdfa.tcl - only the clause differs. The
+  # guard on the state stays here: an empty record means the document may
+  # never have loaded the modules involved, and there is nothing to ask.
   method UaCheckGraphics {} {
     if {[my state undescribedGraphics] eq {}} {
       return {}
     }
-    set nouns {image "an image" svg "a drawing" form "a form"}
-    return [lmap entry [my undescribedGraphics] {
-      string cat "page [dict get $entry page]: [dict get $nouns [dict get \
-          $entry kind]] was placed without -alt and without -artifact 1 -\
-          describe it, or say it is decoration; an artifact may carry nothing\
-          a reader needs (7.1, 7.3)"
-    }]
+    return [my GraphicsUndescribed "7.1, 7.3"]
   }
 
   # A list says how it is numbered, or that it is not (7.6, Matterhorn 16-001):

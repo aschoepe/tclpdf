@@ -2481,4 +2481,179 @@ test structure-29.2 {the type of the open element can be asked, for whoever draw
   list $outside $inside $after
 } -result {{} {Figure Span} {}}
 
+# --- Ruby, Warichu and the table head: content models ----------------------
+#
+# ISO 32000-2 Table 369 gives Ruby and Warichu a fixed SEQUENCE - RB RT or
+# RB RP RT RP, and WP WT WP - and Annex L gives THead and TFoot the
+# cardinality 0..1 per Table. veraPDF ua1 checks none of it (measured in
+# review round 4); UA-2 and the recipient's reader do. An orphaned part and
+# a wrong member are refused where the element opens, the order and the
+# completeness where the bracket closes - only then is the sequence known.
+
+proc rubyDoc {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  return $doc
+}
+
+test structure-32.1 {both legal Ruby sequences and the legal Warichu run} -body {
+  set doc [rubyDoc]
+  $doc structure P -script {
+    $doc structure Ruby -script {
+      $doc structure RB -script {$doc text base -at {20 20}}
+      $doc structure RT -script {$doc text ruby -at {20 25}}
+    }
+    $doc structure Ruby -script {
+      $doc structure RB -script {$doc text base -at {20 30}}
+      $doc structure RP -script {$doc text ( -at {20 35}}
+      $doc structure RT -script {$doc text ruby -at {20 40}}
+      $doc structure RP -script {$doc text ) -at {20 45}}
+    }
+    $doc structure Warichu -script {
+      $doc structure WP -script {$doc text ( -at {20 50}}
+      $doc structure WT -script {$doc text inline -at {20 55}}
+      $doc structure WP -script {$doc text ) -at {20 60}}
+    }
+  }
+  set count [llength [$doc state structure]]
+  $doc destroy
+  set count
+} -result 13
+
+test structure-32.2 {the parts in the wrong order are refused when the bracket closes} -body {
+  set doc [rubyDoc]
+  set code [catch {$doc structure P -script {
+    $doc structure Ruby -script {
+      $doc structure RT -script {$doc text ruby -at {20 20}}
+      $doc structure RB -script {$doc text base -at {20 25}}
+    }
+  }} err]
+  $doc destroy
+  list $code [string match "*a Ruby holds exactly RB+RT or RB+RP+RT+RP (ISO\
+      32000-2 Table 369) - this one holds RT+RB*" $err]
+} -result {1 1}
+
+test structure-32.3 {an incomplete Ruby and an incomplete Warichu are refused} -body {
+  set doc [rubyDoc]
+  set ruby [catch {$doc structure P -script {
+    $doc structure Ruby -script {
+      $doc structure RB -script {$doc text base -at {20 20}}
+    }
+  }} errRuby]
+  set warichu [catch {$doc structure P -script {
+    $doc structure Warichu -script {
+      $doc structure WT -script {$doc text inline -at {20 30}}
+    }
+  }} errWarichu]
+  $doc destroy
+  list $ruby [string match "*this one holds RB*" $errRuby] \
+      $warichu [string match "*a Warichu holds exactly WP+WT+WP*this one\
+      holds WT*" $errWarichu]
+} -result {1 1 1 1}
+
+test structure-32.4 {an orphaned part is refused where it opens} -body {
+  # The part never opens, so nothing has to be unwound: the tree holds the
+  # P and nothing else, and the stream holds no bracket for the part.
+  set doc [rubyDoc]
+  set code [catch {$doc structure P -script {
+    $doc structure RT -script {$doc text ruby -at {20 20}}
+  }} err]
+  set left [llength [$doc state structure]]
+  $doc destroy
+  list $code [string match "*a RT belongs in Ruby, not in a P (ISO 32000-2\
+      Annex L)*" $err] $left
+} -result {1 1 1}
+
+test structure-32.5 {a second THead is refused, one THead and one TFoot are fine} -body {
+  set doc [rubyDoc]
+  set fine [catch {$doc structure Table -script {
+    $doc structure THead -script {$doc structure TR -script {
+      $doc structure TH -scope Column -script {$doc text head -at {20 20}}}}
+    $doc structure TBody -script {$doc structure TR -script {
+      $doc structure TD -script {$doc text body -at {20 25}}}}
+    $doc structure TFoot -script {$doc structure TR -script {
+      $doc structure TD -script {$doc text foot -at {20 30}}}}
+  }} errFine]
+  set second [catch {$doc structure Table -script {
+    $doc structure THead -script {$doc structure TR -script {
+      $doc structure TH -scope Column -script {$doc text head -at {20 40}}}}
+    $doc structure THead -script {}
+  }} errSecond]
+  set foot [catch {$doc structure Table -script {
+    $doc structure TFoot -script {$doc structure TR -script {
+      $doc structure TD -script {$doc text foot -at {20 50}}}}
+    $doc structure TFoot -script {}
+  }} errFoot]
+  $doc destroy
+  list $fine $second [string match "*this Table already has a THead - a\
+      table holds at most one (ISO 32000-2 Annex L)*" $errSecond] \
+      $foot [string match "*already has a TFoot*" $errFoot]
+} -result {0 1 1 1 1}
+
+# --- the 2.0 constructs pin the version floor -------------------------------
+#
+# Review round 4, violation 9: the three 2.0 gates - a 2.0-only structure
+# type, a 2.0 attribute value, a structure destination - compared the
+# version at the call and nothing more, so [configure -version 1.7]
+# AFTERWARDS was accepted and wrote a 1.7 file carrying /Em, Ordered or an
+# /SD destination. Each accepted construct now pins the floor with the
+# writer, the way [tagged] and [ua] do.
+
+test structure-33.1 {a 2.0-only type refuses a later lowering, naming the type} -body {
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -script {
+    $doc structure Em -script {$doc text emphasis -at {20 20}}
+  }
+  set code [catch {$doc configure -version 1.7} err]
+  set kept [$doc cget -version]
+  $doc destroy
+  list $code [string match "*already uses the structure type Em, which needs\
+      PDF 2.0 - it cannot be lowered to PDF 1.7*" $err] $kept
+} -result {1 1 2.0}
+
+test structure-33.2 {-numbering Ordered refuses a later lowering, naming the value} -body {
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc structure L -numbering Ordered -script {}
+  set code [catch {$doc configure -version 1.7} err]
+  $doc destroy
+  list $code [string match "*already uses -numbering Ordered (ISO 32000-2\
+      Table 369), which needs PDF 2.0*" $err]
+} -result {1 1}
+
+test structure-33.3 {a structure destination refuses a later lowering} -body {
+  # link and bookmark share the guard in structureDest.tcl, so one road
+  # pins for both.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -name target -script {$doc text target -at {20 20}}
+  $doc link -at {20 40} -size {30 10} -structure target -tooltip "go there"
+  set code [catch {$doc configure -version 1.7} err]
+  $doc destroy
+  list $code [string match "*already uses link -structure (a structure\
+      destination), which needs PDF 2.0*" $err]
+} -result {1 1}
+
+test structure-33.4 {without a 2.0 construct the same document lowers without a word} -body {
+  # The counter-direction: tagged pins 1.4 and nothing else does, so a 2.0
+  # document that used none of the three constructs goes down to 1.7.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure P -script {$doc text plain -at {20 20}}
+  set code [catch {$doc configure -version 1.7} err]
+  set version [$doc cget -version]
+  $doc destroy
+  list $code $version
+} -result {0 1.7}
+
 cleanupTests

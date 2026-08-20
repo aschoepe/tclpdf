@@ -1012,4 +1012,26 @@ test svg-refuse-12.1 {-at, -scale, -width, -height and -size are checked before 
       [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}]
 } -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} 1 1}
 
+test svg-refuse-12.2 {markup that does not parse leaves no open bracket and no dead Figure} -body {
+  # Review round 4, violation 8: [GraphicMark] used to come BEFORE the
+  # parse, so markup that did not parse left the BDC and the -alt Figure
+  # open - and whatever was drawn next became a child of that dead Figure.
+  # Parsed first, the refusal opens nothing: the tree stays empty, the
+  # stream stays balanced, and the next text is the document's own P with
+  # the page's first MCID.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc svg -data {<svg width="10" height="10"><g><rect} \
+      -at {20 20} -size {40 40} -alt "broken"} err]
+  set opened [llength [$doc state structure]]
+  $doc text after -at {20 100}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code $opened \
+      [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}] \
+      [regexp {/P <</MCID 0>> BDC} $stream]
+} -result {1 0 1 1}
+
 cleanupTests

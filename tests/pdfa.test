@@ -1,0 +1,113 @@
+# pdfa.test --
+#
+# PDF/A level A - the accessibility half of the archival claim.
+#
+# Most of the pdfa module is exercised where its checks bite: the font check
+# in font.test, the colour checks in color.test and image.test, the version
+# fence in pdfVersion.test, the whole declaration under ZUGFeRD in
+# zugferd.test. This file holds what belongs to the claim itself: level A
+# promises reachable content (ISO 19005-2, 6.7.3), and a graphic nobody
+# described and nobody declared decoration would go out as an artifact -
+# content a screen reader never sees, in a file veraPDF declares conformant
+# (measured in review round 4: failedChecks=0 on exactly that file).
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
+
+# This file needs the XMP modules and therefore tdom, which is optional for
+# the package itself - so the file steps aside where it is missing rather
+# than taking the run down with it. helper.tcl sets the constraint.
+if {![testConstraint haveTdom]} {
+    puts "  skipped: [file tail [info script]] needs tdom"
+    cleanupTests
+    return
+}
+package require tclpdf::pdfa
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set face [file join $here examples assets fonts DejaVuSans.ttf]
+testConstraint haveFace [file exists $face]
+
+# A tagged document with an embedded face and one paragraph - what a level A
+# claim needs before the graphics question even comes up. A form is used as
+# the graphic because it needs no file; image.test, svg.test and
+# xObject.test show that all three kinds fill the same record.
+proc archival {face} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "Archivprobe"
+  $doc language de-DE
+  $doc page add
+  $doc font embed face $face
+  $doc font -family face -size 12
+  $doc structure P -script {
+    uplevel 1 [list $doc text "Inhalt" -at {20 20}]
+  }
+  return $doc
+}
+
+test pdfa-graphics-1.1 {level A refuses a graphic nobody described or declared decoration} -constraints haveFace -body {
+  set doc [archival $face]
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc form place block -at {20 40}
+  $doc pdfa -part 3 -conformance A
+  set code [catch {$doc write [::tclpdfTest::scratch pdfa-graphic.pdf]} err]
+  $doc destroy
+  # The page counted from 1, the kind named, and both ways out in the text.
+  list $code [string match "*page 1: a form was placed without -alt and\
+      without -artifact 1*" $err] [string match "*ISO 19005 6.7.3*" $err] \
+      [string match "*-artifact 1*" $err]
+} -result {1 1 1 1}
+
+test pdfa-graphics-1.2 {described or declared decoration, and the 3a claim validates} -constraints haveFace -body {
+  # Both answers are fine - it is the absence of any that is refused. And
+  # where veraPDF is installed, the finished file is held against the very
+  # profile it claims.
+  set doc [archival $face]
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc form place block -at {20 40} -alt "Ein blauer Block"
+  $doc form place block -at {20 70} -artifact 1
+  $doc pdfa -part 3 -conformance A
+  set path [::tclpdfTest::scratch pdfa-graphic-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set result [list $code [expr {$code ? $err : {}}]]
+  if {!$code && [auto_execok verapdf] ne {}} {
+    catch {exec verapdf -f 3a $path 2>@1} report
+    if {![regexp {failedChecks="0"} $report]} {
+      set result $report
+    }
+  }
+  file delete $path
+  set result
+} -result {0 {}}
+
+test pdfa-graphics-1.3 {levels B and U stay silent - they promise appearance, not accessibility} -constraints haveFace -body {
+  # The counter-direction: the same undescribed graphic under level U goes
+  # through, because B and U make no promise about reachable content.
+  set doc [archival $face]
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc form place block -at {20 40}
+  $doc pdfa -part 3 -conformance U
+  set path [::tclpdfTest::scratch pdfa-graphic-u.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+cleanupTests

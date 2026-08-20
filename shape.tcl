@@ -22,8 +22,54 @@ package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::graphics 1.0-
 package require tclpdf::option 1.0-
+package require tclpdf::geometry 1.0-
 
 namespace eval ::tclpdf::shape {}
+
+# Refuse a malformed segment list by name, before anything is written or
+# measured. A namespace proc rather than a private method because textPath is
+# its second consumer: it flattens the same segment lists into a polyline, and
+# without this check a wrong operand count or a non-number crashed in its
+# arithmetic ("can't use non-numeric string...") where [path] refuses by name.
+#
+#   {move 2 line 2 curve 6 close 0}  -  the segment kinds and their operand
+#   counts, stated once here for every consumer.
+proc ::tclpdf::shape::checkSegments {segments} {
+  if {![llength $segments]} {
+    return -code error "tclpdf: -segments is empty - a path needs at least\
+        a {move x y}"
+  }
+  set operands {move 2 line 2 curve 6 close 0}
+  set first 1
+  foreach segment $segments {
+    set kind [lindex $segment 0]
+    if {![dict exists $operands $kind]} {
+      return -code error "tclpdf: unknown path segment \"$kind\" -\
+          known are: move, line, curve, close"
+    }
+    # A path begins with a move: "l" and "c" extend from the current
+    # point, and before the first "m" there is none (8.5.2.1). A reader
+    # may draw from wherever it happens to be, or nothing - so it is
+    # refused here.
+    if {$first && $kind ne "move"} {
+      return -code error "tclpdf: a path starts with {move x y}, not\
+          {$segment}"
+    }
+    set first 0
+    # The count is checked, not just the numbers: {line 3} would otherwise
+    # pair its 3 with nothing and go out as one operand short.
+    if {[llength $segment] - 1 != [dict get $operands $kind]} {
+      return -code error "tclpdf: path segment \"$kind\" takes\
+          [dict get $operands $kind] numbers, not [expr {[llength $segment] - 1}]"
+    }
+    # The numbers themselves, through the one parser that owns the wording:
+    # the converted value is not wanted here, only the refusal.
+    foreach value [lrange $segment 1 end] {
+      ::tclpdf::geometry::toPoints $value
+    }
+  }
+  return
+}
 
 oo::define ::tclpdf::document::document {
 
@@ -243,32 +289,12 @@ oo::define ::tclpdf::document::document {
   # "W n" in the other. Written twice they would drift, and the copy that does
   # not learn about a new segment kind is the one nobody tests.
   method ShapeSegments {segments} {
-    if {![llength $segments]} {
-      return -code error "tclpdf: -segments is empty - a path needs at least\
-          a {move x y}"
-    }
-    set operands {move 2 line 2 curve 6 close 0}
+    # The refusals live in [checkSegments], shared with textPath - nothing
+    # below runs until every segment has been found sound.
+    ::tclpdf::shape::checkSegments $segments
     set result {}
     foreach segment $segments {
       set kind [lindex $segment 0]
-      if {![dict exists $operands $kind]} {
-        return -code error "tclpdf: unknown path segment \"$kind\" -\
-            known are: move, line, curve, close"
-      }
-      # A path begins with a move: "l" and "c" extend from the current
-      # point, and before the first "m" there is none (8.5.2.1). A reader
-      # may draw from wherever it happens to be, or nothing - so it is
-      # refused here.
-      if {$result eq {} && $kind ne "move"} {
-        return -code error "tclpdf: a path starts with {move x y}, not\
-            {$segment}"
-      }
-      # The count is checked, not just the numbers: {line 3} would otherwise
-      # pair its 3 with nothing and go out as one operand short.
-      if {[llength $segment] - 1 != [dict get $operands $kind]} {
-        return -code error "tclpdf: path segment \"$kind\" takes\
-            [dict get $operands $kind] numbers, not [expr {[llength $segment] - 1}]"
-      }
       set numbers {}
       foreach {x y} [lrange $segment 1 end] {
         lassign [my coords $x $y] px py

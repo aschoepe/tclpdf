@@ -199,9 +199,6 @@ oo::define ::tclpdf::document::document {
   # geometry is spelled, so they share a method. "what" names the caller for
   # the colour space record.
   method ShadingObject {kind options what} {
-    # Shadings, sh and PatternType 2 are PDF 1.3 (Reference 1.7, 4.6.3).
-    # First thing, before the function object goes out.
-    my RequireVersion 1.3 "shading"
     set colors [dict get $options colors]
     if {[llength $colors] < 2} {
       return -code error "tclpdf: a shading needs at least two -colors"
@@ -234,7 +231,14 @@ oo::define ::tclpdf::document::document {
     # The coordinates BEFORE the function object goes out: a refused corner
     # used to leave a function without a consumer behind.
     set coords [my ShadingCoords $kind $options]
-    set function [my ShadingFunction $parsed [dict get $options stops]]
+    set stops [my ShadingStops [llength $parsed] [dict get $options stops]]
+    # Shadings, sh and PatternType 2 are PDF 1.3 (Reference 1.7, 4.6.3).
+    # AFTER the last value that can be refused - a refused shading must not
+    # pin the version floor, or a later "configure -version 1.2" would be
+    # refused over a shading that never made it into the file - and before
+    # the function object goes out, so a version refusal leaves no object.
+    my RequireVersion 1.3 "shading"
+    set function [my ShadingFunction $parsed $stops]
     # Only now, past the last value that can be refused, the colour space
     # record: a gradient's space counts like a painted colour for the PDF/A
     # intent check (ISO 19005-2, 6.2.4.3 - measured with veraPDF: a
@@ -330,36 +334,45 @@ oo::define ::tclpdf::document::document {
         [::tclpdf::pdfObj num $outer]]
   }
 
-  # The colour function. Two colours are one type 2; more are a type 3 that
-  # stitches one type 2 per segment (7.10.3, 7.10.4).
-  method ShadingFunction {parsed stops} {
-    set count [llength $parsed]
+  # Check and complete the -stops: spread evenly when not given, held to
+  # count, range and order otherwise. Apart from [ShadingFunction] so that
+  # the last value a shading can be refused over is judged BEFORE the
+  # version floor is pinned and before any function object is written.
+  method ShadingStops {count stops} {
     if {$stops eq {}} {
-      set stops {}
       for {set index 0} {$index < $count} {incr index} {
         lappend stops [expr {$index / double($count - 1)}]
       }
-    } elseif {[llength $stops] != $count} {
+      return $stops
+    }
+    if {[llength $stops] != $count} {
       return -code error "tclpdf: -stops has [llength $stops] values but there\
           are $count colours"
-    } else {
-      # The inner stops become the Bounds of the stitching function, and
-      # those shall be in increasing order and strictly inside the domain
-      # (7.10.4: Domain0 < Bounds0 < ... < Domain1). Two equal stops make a
-      # segment of no width; one outside 0..1 or out of order makes a
-      # function a reader has no way to evaluate.
-      set previous {}
-      foreach stop $stops {
-        if {![string is double -strict $stop] || $stop < 0 || $stop > 1} {
-          return -code error "tclpdf: -stops are numbers from 0 to 1, not \"$stop\""
-        }
-        if {$previous ne {} && $stop <= $previous} {
-          return -code error "tclpdf: -stops must increase strictly:\
-              [join $stops { }]"
-        }
-        set previous $stop
-      }
     }
+    # The inner stops become the Bounds of the stitching function, and
+    # those shall be in increasing order and strictly inside the domain
+    # (7.10.4: Domain0 < Bounds0 < ... < Domain1). Two equal stops make a
+    # segment of no width; one outside 0..1 or out of order makes a
+    # function a reader has no way to evaluate.
+    set previous {}
+    foreach stop $stops {
+      if {![string is double -strict $stop] || $stop < 0 || $stop > 1} {
+        return -code error "tclpdf: -stops are numbers from 0 to 1, not \"$stop\""
+      }
+      if {$previous ne {} && $stop <= $previous} {
+        return -code error "tclpdf: -stops must increase strictly:\
+            [join $stops { }]"
+      }
+      set previous $stop
+    }
+    return $stops
+  }
+
+  # The colour function. Two colours are one type 2; more are a type 3 that
+  # stitches one type 2 per segment (7.10.3, 7.10.4). The stops arrive
+  # checked and completed, from [ShadingStops].
+  method ShadingFunction {parsed stops} {
+    set count [llength $parsed]
     if {$count == 2} {
       return [my ShadingSegment [lindex $parsed 0] [lindex $parsed 1]]
     }

@@ -37,6 +37,16 @@ namespace eval ::tclpdf::imagePngAlpha {
   namespace ensemble create
 }
 
+# Inflate the IDAT bytes. zlib answers a damaged stream with a bare "data
+# error" that names neither the file format nor the problem - caught here,
+# once for the three sites that decode, and rethrown as what it is.
+proc ::tclpdf::imagePngAlpha::Decode {parsed} {
+  if {[catch {::tclpdf::filter decodeFlate [dict get $parsed idat]} data]} {
+    return -code error "tclpdf: damaged PNG - the image data does not decompress"
+  }
+  return $data
+}
+
 # Separate a parsed PNG into colour and alpha bytes.
 #
 # Returns a dict with "color" and "alpha", both raw (uncompressed, unfiltered)
@@ -52,7 +62,7 @@ proc ::tclpdf::imagePngAlpha::separate {parsed} {
     return -code error "tclpdf: a PNG with an alpha channel cannot have a bit\
         depth of $depth"
   }
-  set pixels [unfilter [::tclpdf::filter decodeFlate [dict get $parsed idat]] \
+  set pixels [unfilter [Decode $parsed] \
       $width $height $depth $channels]
 
   set color {}
@@ -182,7 +192,7 @@ proc ::tclpdf::imagePngAlpha::paletteMask {parsed} {
     lappend table 255
   }
 
-  set rows [unfilter [::tclpdf::filter decodeFlate [dict get $parsed idat]] \
+  set rows [unfilter [Decode $parsed] \
       $width $height $depth 1]
   set stride [expr {($width * $depth + 7) / 8}]
   set alpha {}
@@ -227,7 +237,7 @@ proc ::tclpdf::imagePngAlpha::colourKeyMask {parsed} {
   # channel - the same width as the pixel samples, so both compare as 16-bit
   # values without any shifting.
   binary scan [dict get $parsed transparency] Su* key
-  set pixels [unfilter [::tclpdf::filter decodeFlate [dict get $parsed idat]] \
+  set pixels [unfilter [Decode $parsed] \
       $width $height $depth $channels]
 
   set alpha {}

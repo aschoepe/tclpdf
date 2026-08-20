@@ -36,7 +36,7 @@ These methods are the supported surface for extensions:
 | --- | --- |
 | `$doc reservation $key` | an object number that survives rebuilds — handed out once per key, stable across writes |
 | `$doc streamObject $pairs $content ?$number?` | write a stream object; with a number it writes over that object instead of allocating a fresh one |
-| `$doc resource $category ?$name? ?$value?` | register a resource: Font, XObject, ExtGState, ColorSpace, Pattern or Shading |
+| `$doc resource $category ?$name? ?$value?` | register a resource; the category must be one of the eight of the resource dictionary (ISO 32000-2, Table 34): ExtGState, ColorSpace, Pattern, Shading, XObject, Font, ProcSet or Properties — anything else is refused by name |
 | `$doc catalogEntry $key ?$value?` | set, read or clear a catalog key — how /AF, /Names and /OutputIntents get in without the core knowing them |
 | `$doc state $key ?$value?` | per-document state that does not go into the PDF |
 | `$doc xmpSchema $prefix $uri $tags $method` | declare an XMP schema of your own: *method*, a document method added with `oo::define`, answers its properties each time the packet is built |

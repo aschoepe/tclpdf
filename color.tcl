@@ -314,23 +314,29 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: \"$name\" already names an ICC profile -\
           a separation cannot reuse it"
     }
+    lassign $alternate space components
+    set known [my state separations]
+    # One name, one plate: the same name with another alternate would be
+    # a second object under the first one's resource entry, and PDF/A-2
+    # 6.2.4.4 forbids two definitions of one separation outright. Checked
+    # before anything is recorded: a refused redefinition must leave no
+    # record and no version floor.
+    if {[dict exists $known $name] && [dict get $known $name] ne $alternate} {
+      return -code error "tclpdf: separation \"$name\" is already defined\
+          with the alternate {[join [dict get $known $name]]} - one name,\
+          one alternate colour"
+    }
+    # The Separation colour space is PDF 1.2 (Reference 1.7, Table 4.12) -
+    # past the last refusal, before the record and the objects, the same
+    # order as [IccColourUsed] below.
+    my RequireVersion 1.2 "a separation colour"
     # The alternate is what a reader without the plate paints, so it counts
     # as a use of that space (ISO 19005-2, 6.2.4.4) - and it is recorded
     # under the separation's name, because that is the colour the caller
     # wrote and has to change.
     my ColourSpaceUsed [::tclpdf::color space $alternate] \
         "separation \"$name\" in $what"
-    lassign $alternate space components
-    set known [my state separations]
     if {[dict exists $known $name]} {
-      # One name, one plate: the same name with another alternate would be
-      # a second object under the first one's resource entry, and PDF/A-2
-      # 6.2.4.4 forbids two definitions of one separation outright.
-      if {[dict get $known $name] ne $alternate} {
-        return -code error "tclpdf: separation \"$name\" is already defined\
-            with the alternate {[join [dict get $known $name]]} - one name,\
-            one alternate colour"
-      }
       return $spec
     }
     set none [dict get {gray 1 rgb {1 1 1} cmyk {0 0 0 0}} $space]
@@ -405,7 +411,7 @@ oo::define ::tclpdf::document::document {
           ICC profile cannot reuse it"
     }
     set bytes [::tclpdf::io read $path]
-    lassign [my IccInspect $bytes $path] space components
+    lassign [my IccInspect $bytes "\"$path\""] space components
     dict set known $alias [dict create path [file normalize $path] \
         bytes $bytes space $space components $components object {}]
     my state iccProfiles $known
@@ -532,8 +538,12 @@ oo::define ::tclpdf::document::document {
 # a header needs. Three callers now: the output intent, [icc embed] and a
 # picture's embedded profile.
 proc ::tclpdf::color::iccSpace {bytes profile} {
+  # "profile" is the caller's noun phrase for the source - a quoted file
+  # name, or a description like "the ICC profile in the picture data" -
+  # dropped into the message as it is. Quoting it here wrapped whole
+  # descriptions in quotation marks; the caller knows what to call it.
   if {[string range $bytes 36 39] ne "acsp"} {
-    return -code error "tclpdf: \"$profile\" is not an ICC profile - the\
+    return -code error "tclpdf: $profile is not an ICC profile - the\
         signature \"acsp\" is missing from its header"
   }
   set space [string trimright [string range $bytes 16 19]]
@@ -541,9 +551,8 @@ proc ::tclpdf::color::iccSpace {bytes profile} {
   if {![dict exists $spaces $space]} {
     # Worded for every caller alike - the output intent, [icc embed], a
     # picture's embedded profile all read through here.
-    return -code error "tclpdf: the ICC profile \"$profile\" describes\
-        colour space \"$space\" - a device space profile is needed: GRAY,\
-        RGB and CMYK"
+    return -code error "tclpdf: $profile describes colour space \"$space\" -\
+        a device space profile is needed: GRAY, RGB and CMYK"
   }
   return [list $space [dict get $spaces $space]]
 }

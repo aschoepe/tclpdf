@@ -350,4 +350,31 @@ test textPath-7.1 {-offset takes a distance of either sign and refuses the rest 
       $empty $above $below [regexp -all {BDC} $stream] [regexp -all {EMC} $stream]
 } -result {1 1 0 0 0 2 2}
 
+
+test textPath-8.1 {segments are refused as path refuses them - kind, first move, count, numbers} -body {
+  # The check is the SAME code path [path] uses (::tclpdf::shape::checkSegments):
+  # before it ran here, a wrong operand count or a non-number crashed in the
+  # arc-length arithmetic with Tcl's words instead of tclpdf's.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set out {}
+  foreach {segments pattern} {
+    {{move {20 40}}}           {path segment "move" takes 2 numbers, not 1}
+    {{move 20 40} {line 30}}   {path segment "line" takes 2 numbers, not 1}
+    {{move a b} {line c d}}    {not a measurement: "a"}
+    {{line 20 40}}             {a path starts with*}
+    {{move 20 40} {arc 1 2}}   {unknown path segment "arc"*}
+  } {
+    set code [catch {$doc textPath "hi" -segments $segments} message]
+    lappend out $code [string match "tclpdf: *" $message] \
+        [string match "*$pattern*" $message]
+  }
+  # Word for word what [path] answers for the review's segment.
+  catch {$doc textPath "hi" -segments {{move {20 40}}}} fromTextPath
+  catch {$doc path -segments {{move {20 40}}}} fromPath
+  set drawn [string length [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $out [expr {$fromTextPath eq $fromPath}] $drawn
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} 1 0}
+
 cleanupTests

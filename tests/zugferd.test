@@ -1543,4 +1543,20 @@ test zugferd-13.7 {the schema procs answer the invoice namespace without a famil
 foreach path $orderXmlFiles {
   file delete -force $path
 }
+
+test zugferd-14.1 {UTF-16 XML is refused for its encoding, not for a missing BT-24} -body {
+  # A UTF-16 file can never match the ASCII regexp that reads BT-24, and the
+  # refusal it got blamed the content for the encoding. The BOM says what is
+  # actually wrong.
+  set out {}
+  foreach bom [list "\xFF\xFE" "\xFE\xFF"] {
+    set code [catch {::tclpdf::zugferd identify "${bom}<x/>"} message]
+    lappend out $code [string equal {tclpdf: this XML is UTF-16 encoded - re-encode the XML as UTF-8} $message]
+  }
+  # A UTF-8 file without the element keeps the BT-24 refusal.
+  lappend out [catch {::tclpdf::zugferd identify {<x/>}} message] \
+      [string match {*carries no BT-24*} $message]
+  set out
+} -result {1 1 1 1 1 1}
+
 cleanupTests

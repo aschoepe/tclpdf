@@ -732,4 +732,35 @@ test xmp-10.2 {an undeclared tag inside a bag fails the same way} -constraints h
   list $code [string match {tclpdf: unknown tag "gamma" for XMP schema "myorg" - declared are: *} $err]
 } -result {1 1}
 
+
+test xmp-11.1 {xmpSchema and xmpRaw load their module on a fresh document} -constraints haveTdom -body {
+  # The lazy-load table is consulted only while the method is undefined, and
+  # this file requires tclpdf::xmp at the top - so the measurement needs an
+  # interpreter that has not loaded it. Both methods used to be missing from
+  # the table and answered "unknown method" on a fresh document.
+  set child [interp create]
+  $child eval [list set auto_path $auto_path]
+  set out [$child eval {
+    package require tclpdf
+    set doc [tclpdf new]
+    list [catch {$doc xmpSchema pdfaid http://www.aiim.org/pdfa/ns/id/ {part} XmpMissing}] \
+        [catch {$doc xmpRaw {<rdf:Description/>}}]
+  }]
+  interp delete $child
+  set out
+} -result {0 0}
+
+test xmp-11.2 {a tag that is no XML name is refused at the call, naming tag and schema} -constraints haveTdom -body {
+  # tdom's raw refusal named an internal command ("Invalid tag name
+  # 'Tag_myns:a b'"), not the schema the caller wrote.
+  set doc [tclpdf new]
+  set out {}
+  foreach tag [list "a b" 1tag] {
+    set code [catch {$doc xmpSchema myns http://example.org/ns/ [list $tag] XmpMissing} message]
+    lappend out $code [string equal "tclpdf: xmpSchema tag \"$tag\" is not a valid XML name (schema myns)" $message]
+  }
+  $doc destroy
+  set out
+} -result {1 1 1 1}
+
 cleanupTests
