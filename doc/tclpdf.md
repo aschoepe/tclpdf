@@ -802,6 +802,28 @@ For an **archivable** document the clear text line needs an embedded face, and t
 
 : What was attached and under which profile: `name`, `profile`, `type`, `version`, `relationship` — the `/AFRelationship` that was written, prescribed by the profile or given — and `bytes`. Empty before the call.
 
+## Encryption
+
+*doc* **encrypt** ?**-user** *text*? ?**-owner** *text*? ?**-permissions** *list*? ?**-metadata** *bool*?
+
+: Encrypts the document with the standard security handler in revision 6: AES-256 for strings, streams and the file as a whole (`/V 5 /R 6`, crypt filter method `/AESV3`). The older revisions — RC4 and AES-128 — are deprecated in PDF 2.0 and are not written: a writer that offers them offers a choice whose wrong half looks exactly like the right one from outside. Returns the state as a dictionary, without the key and without the derived values. **encrypt state** answers the same later.
+
+  **The two passwords.** The *user* password opens the document with the permissions below, the *owner* password opens it with all of them. Without **-owner** the user password serves as both; an empty owner password is not offered, being the first one any reader tries. An empty **-user** password is allowed and is often what is wanted: the document opens for everyone, and it is the owner password that lifts the restrictions.
+
+  **-permissions** takes a list of names: `print`, `modify` (change the content), `copy` (extract text and graphics), `annotate` (annotations and form fields), `fill` (fill in existing form fields), `assemble` (insert, rotate and delete pages, add bookmarks) and `highres` (print at full quality). The default is `all`; the empty list grants nothing and still leaves a document that can be read on screen, since reading is not a permission. The bits the standard fixes are set by the package (ISO 32000-2, Table 22). Note what permissions are worth: they are a statement of intent that a conforming reader honours, not a lock — the content is decrypted either way once the file opens.
+
+  **-metadata 0** leaves the XMP packet in the clear, so a cataloguing system can index a document it may not open.
+
+  **AESV3 is a PDF 2.0 feature**, so the document needs `-version 2.0`; the version is not raised behind the caller's back, the missing call is named instead.
+
+  **encrypt has to come first** — before the first page, the first line of text, the first pattern, and before **language** and **link**, which build their entries at the call rather than at write time. A stream or a string written before the cipher was installed would stay in the clear inside a file whose `/Encrypt` says otherwise, and a reader decrypting what was never encrypted ends up with an empty value and no complaint from any tool. The call is refused rather than repaired, naming the page or the object in the way.
+
+  **PDF/A forbids encryption** (the `Encrypt` keyword shall not be used in the trailer), and a ZUGFeRD or Order-X invoice is a PDF/A-3 document — both combinations are refused, in whichever order the two calls are made.
+
+  Two things stay readable on purpose: the file identifier `/ID` in the trailer, which a reader compares before it has any key, and the strings of the encryption dictionary itself (ISO 32000-2, 7.6.2).
+
+  **What is not there:** revisions 2 to 4 and RC4; reading someone else's encrypted file (**pdf import** refuses it by name); the public-key handler; encrypting only the attachments; and SASLprep (RFC 4013) on the password — for an ASCII password that is the identity, but a password with combining characters may be spelled differently here than by a reader that normalises. The cipher protects confidentiality and nothing else: it is not a signature, and pure Tcl gives no promise about side channels.
+
 ## Writing
 
 Two calls write the document, and neither finishes it.
@@ -810,7 +832,7 @@ Two calls write the document, and neither finishes it.
 
 *doc* **write** *path*
 
-: Writes the document to a file. Writing does not finish the document: a second **write** of an unchanged document produces a byte-identical file, and drawing between two writes works - the second file carries the additions.
+: Writes the document to a file. Writing does not finish the document: a second **write** of an unchanged document produces a byte-identical file — unless the document is encrypted, where every string and every stream takes a fresh initialisation vector and reusing one would be the mistake; there the second file is a different sequence of bytes carrying the same objects, opened by the same password. Drawing between two writes works either way — the second file carries the additions.
 
 *doc* **writeChannel** *channel*
 

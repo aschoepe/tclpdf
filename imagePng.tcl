@@ -221,14 +221,19 @@ proc ::tclpdf::imagePng::device {parsed} {
 # device space name when the caller anchors the samples to a profile - an
 # ICCBased array reference standing where /DeviceRGB would; only the
 # document layer can build it, since it holds the object number.
-proc ::tclpdf::imagePng::space {parsed {base {}}} {
+# The palette is a STRING in the file, so it cannot be written by this proc on
+# its own once a document is encrypted (ISO 32000-2, 7.6.2 encrypts every
+# string in every object). A namespace proc has no [my], so the way to build
+# a string is handed in as a command prefix rather than reached for through a
+# global: by default it is pdfObj, and the document layer passes its own.
+proc ::tclpdf::imagePng::space {parsed {base {}} {bytesStr {::tclpdf::pdfObj bytesStr}}} {
   if {$base eq {}} {
     set base /[device $parsed]
   }
   if {[dict get $parsed colorType] == 3} {
     set palette [dict get $parsed palette]
     set last [expr {[string length $palette] / 3 - 1}]
-    return "\[/Indexed $base $last [::tclpdf::pdfObj bytesStr $palette]\]"
+    return "\[/Indexed $base $last [{*}$bytesStr $palette]\]"
   }
   return $base
 }
@@ -245,8 +250,8 @@ proc ::tclpdf::imagePng::space {parsed {base {}}} {
 # after such a refusal (measured 2026-08-20), against the rule that a
 # refused call leaves nothing behind. So the picture decodes first and is
 # anchored second.
-proc ::tclpdf::imagePng::anchor {pairs parsed base} {
-  dict set pairs ColorSpace [space $parsed $base]
+proc ::tclpdf::imagePng::anchor {pairs parsed base {bytesStr {::tclpdf::pdfObj bytesStr}}} {
+  dict set pairs ColorSpace [space $parsed $base $bytesStr]
   return $pairs
 }
 
@@ -345,8 +350,8 @@ proc ::tclpdf::imagePng::transparency {parsed} {
 # refused. The colour space comes out on the device space of the file; a
 # picture travelling with an ICC profile is anchored afterwards, by
 # [anchor].
-proc ::tclpdf::imagePng::streams {parsed} {
-  set pairs [list ColorSpace [space $parsed] \
+proc ::tclpdf::imagePng::streams {parsed {bytesStr {::tclpdf::pdfObj bytesStr}}} {
+  set pairs [list ColorSpace [space $parsed {} $bytesStr] \
       BitsPerComponent [dict get $parsed bitDepth]]
 
   if {[hasAlpha $parsed]} {

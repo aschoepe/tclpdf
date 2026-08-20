@@ -987,12 +987,27 @@ oo::define ::tclpdf::document::document {
     foreach number $order {
       lassign [::tclpdf::import::Object reader $number] value hasStream data
       if {$hasStream} {
-        # The raw bytes and their /Filter travel unchanged; only /Length
-        # is restated, as a direct number, so an indirect length object
-        # need not come along.
-        ::tclpdf::import::Put value Length [list n [string length $data]]
-        $writer put [dict get $map $number] \
-            "[::tclpdf::import::Serialize $value $map]\nstream\n${data}\nendstream"
+        # The raw bytes and their /Filter travel unchanged, and the object
+        # goes out through [stream] rather than being assembled here: that
+        # is the one place /Length is computed (writer.tcl) and the one
+        # place a stream's filters are checked against the document's PDF
+        # version. Building the body here meant a copied stream was the
+        # single stream in the document that passed neither - a second
+        # producer of /Length beside the writer's, and a FlateDecode
+        # resource that could land in a file whose header disowns the
+        # filter.
+        #
+        # /Length is dropped rather than restated: the writer sets it, and
+        # an indirect length object therefore need not come along.
+        # The parsed value is a dictionary whenever hasStream is true: a
+        # stream is only recognised as one when its /Length could be read
+        # out of a dictionary, so there is nothing else it could be here.
+        set pairs {}
+        foreach {key item} [lindex $value 1] {
+          if {$key eq "Length"} continue
+          lappend pairs $key [::tclpdf::import::Serialize $item $map]
+        }
+        $writer stream [dict get $map $number] $pairs $data
       } else {
         $writer put [dict get $map $number] \
             [::tclpdf::import::Serialize $value $map]

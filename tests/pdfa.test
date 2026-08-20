@@ -110,4 +110,17 @@ test pdfa-graphics-1.3 {levels B and U stay silent - they promise appearance, no
   list $code [expr {$code ? $err : {}}]
 } -result {0 {}}
 
+test pdfa-encrypt-4.1 {PDF/A refuses an encrypted document} -body {
+  # The mirror of the check in encrypt.tcl - said at whichever call comes
+  # second. veraPDF rule 6.1.3-2: the Encrypt keyword shall not be used in
+  # the trailer dictionary.
+  set doc [tclpdf new -version 2.0]
+  $doc encrypt -user secret -owner master
+  # The refusal comes before the profile is even looked at, so the path does
+  # not have to exist for this test - what is measured is the order check.
+  set code [catch {$doc pdfa -part 3 -profile [file join $here icc sRGB.icc]} message]
+  $doc destroy
+  list $code [string match {*PDF/A forbids encryption*} $message]
+} -result {1 1}
+
 cleanupTests

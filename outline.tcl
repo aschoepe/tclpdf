@@ -126,7 +126,7 @@ oo::define ::tclpdf::document::document {
       set position [lsearch -exact $siblings $index]
       # [str], not the UTF-16 helper directly: it already picks the encoding,
       # and a title of "Rechnung" stays readable in the file that way.
-      set pairs [list Title [::tclpdf::pdfObj str [dict get $entry title]] \
+      set pairs [list Title [my Str [dict get $entry title]] \
           Parent [expr {$parent eq {} ? [[my writer] ref $rootNumber] :
               [[my writer] ref [dict get [lindex $entries $parent] number]]}]]
       # A page target is a plain /Dest; an element target is a GoTo action

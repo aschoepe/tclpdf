@@ -629,4 +629,66 @@ test import-14.3 {a non-integral /Rotate is refused with a tclpdf message, not a
     list $result $message
 } -match glob -result {1 {tclpdf: *carries /Rotate "90.5", which is not usable as a multiple of 90}}
 
+# --- a copied stream is a stream, not a hand-built object body ---------------
+#
+# The resource closure used to assemble "<<...>>\nstream\n...\nendstream" by
+# hand and hand THAT to [put]. It was the one stream in the document that
+# never saw [writer StreamBody] - so /Length had a second producer beside the
+# writer's, and the filter check every other stream passes was skipped.
+
+test import-15.1 {a Flate resource copied into a 1.1 document is refused, not smuggled in} -body {
+    # -compress 0, so the only deflated stream in the file is the one the
+    # import copies: what the check answers about is unambiguous.
+    set stream [::tclpdf::filter encodeFlate "q Q"]
+    set fixture [::tclpdfTest::buildpdf import-old-flate.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /XObject << /Fm 4 0 R >> >> >>" \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\]\
+            /Filter /FlateDecode /Length [string length $stream] >>\
+            \nstream\n$stream\nendstream" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4 -version 1.1 -compress 0]
+    $doc page add
+    set result [catch {$doc pdf import alt $fixture} message]
+    $doc destroy
+    file delete $fixture
+    list $result $message
+} -match glob -result {1 {tclpdf: a FlateDecode stream *needs PDF 1.2*}}
+
+test import-15.2 {the copied stream carries one /Length, the writer's, and its bytes are untouched} -body {
+    # The fixture states its length INDIRECTLY, which is legal (7.3.8.2) and
+    # is why the copy may not simply carry the entry over: object 6 is not
+    # part of the resource closure and never travels.
+    set stream "q 1 0 0 1 0 0 cm Q"
+    set fixture [::tclpdfTest::buildpdf import-indirect-length.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /XObject << /Fm 4 0 R >> >> >>" \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\] /Length 6 0 R >>\
+            \nstream\n$stream\nendstream" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "[string length $stream]"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import laenge $fixture
+    $doc form place laenge -at {0 0}
+    set writer [$doc writer]
+    set found {}
+    for {set number 1} {$number <= [$writer count]} {incr number} {
+        set body [$writer body $number]
+        if {[string match {*/Subtype /Form*} $body]
+                && [string match "*$stream*" $body]} {
+            lappend found [regexp -all {/Length} $body] \
+                [regexp "/Length [string length $stream]" $body] \
+                [::tclpdfTest::streamOf $writer $number]
+        }
+    }
+    $doc destroy
+    file delete $fixture
+    set found
+} -result [list 1 1 "q 1 0 0 1 0 0 cm Q"]
+
 cleanupTests

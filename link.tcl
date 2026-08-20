@@ -58,11 +58,11 @@ oo::define ::tclpdf::document::document {
         Border [::tclpdf::pdfObj arr {0 0 0}] \
         F 4]
     if {[dict get $options tooltip] ne {}} {
-      lappend pairs Contents [::tclpdf::pdfObj str [dict get $options tooltip]]
+      lappend pairs Contents [my Str [dict get $options tooltip]]
     }
     if {[dict get $options url] ne {}} {
       lappend pairs A [::tclpdf::pdfObj dictionary [list \
-          S /URI URI [::tclpdf::pdfObj str [my LinkUri [dict get $options url]]]]]
+          S /URI URI [my Str [my LinkUri [dict get $options url]]]]]
     } elseif {[dict get $options structure] ne {}} {
       # A structure destination names the ELEMENT rather than a place on a
       # page (12.3.2.3), so the link still lands on the right thing after the

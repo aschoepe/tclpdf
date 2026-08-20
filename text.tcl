@@ -730,6 +730,15 @@ oo::define ::tclpdf::document::document {
   # what a standard face uses, and neither kerning nor ligatures exist for the
   # metrics shipped with this package. That is why the branch is here and not
   # threaded through everything below it.
+  #
+  # The strings built here and in [TextEmit] go to pdfObj DIRECTLY, not
+  # through the document's string constructors, and they are the only place
+  # in the package that does. They sit INSIDE a content stream, and a
+  # content stream is encrypted as a whole (ISO 32000-2, 7.6.2): the strings
+  # in it are already covered by that and must not be encrypted a second
+  # time, which would leave the file unreadable with no reader able to say
+  # why. The rule is the object boundary - a string in an object dictionary
+  # is encrypted on its own, a string in a stream travels with the stream.
   method TextShow {font state string byTJ} {
     if {![my TextEmbedded $font]} {
       return "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
@@ -738,6 +747,7 @@ oo::define ::tclpdf::document::document {
     # and for the same reason: it is addressed through an encoding rather than
     # by glyph number. Word spacing reaches it through Tw as it does there.
     if {[my FontKind $font] eq "type1"} {
+      # Inside the content stream - see the head of this method.
       return "[::tclpdf::pdfObj bytesStr [binary format cu* \
           [my FontType1Encode $font $string]]] Tj\n"
     }
@@ -887,7 +897,8 @@ oo::define ::tclpdf::document::document {
     if {![llength $run]} {
       # An empty line still writes its show operator: it is what an empty
       # paragraph line has always produced, and leaving it out would change
-      # the bytes of every document that has one.
+      # the bytes of every document that has one. Straight to pdfObj, like
+      # every string inside a content stream - see [TextShow].
       return "[::tclpdf::pdfObj bytesStr [my FontRunEncode $font {}]] Tj\n"
     }
     # {actualText tokens} per piece, where a token is {glyph item} or
@@ -944,6 +955,7 @@ oo::define ::tclpdf::document::document {
         continue
       }
       if {[llength $piece]} {
+        # In the content stream, so not through the document - see [TextShow].
         lappend parts [::tclpdf::pdfObj bytesStr [my FontRunEncode $font $piece]]
         set piece {}
       }
@@ -951,6 +963,7 @@ oo::define ::tclpdf::document::document {
       incr numbers
     }
     if {[llength $piece]} {
+      # In the content stream, so not through the document - see [TextShow].
       lappend parts [::tclpdf::pdfObj bytesStr [my FontRunEncode $font $piece]]
     }
     if {![llength $parts]} {

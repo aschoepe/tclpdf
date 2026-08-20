@@ -553,7 +553,13 @@ oo::define ::tclpdf::document::document {
       # base left an orphaned profile stream behind whenever the decoding
       # then failed, and a refused call has to leave nothing. The object
       # numbers are the same either way, since [streams] creates none.
-      set streams [::tclpdf::imagePng streams $parsed]
+      # The palette of an indexed picture is a string, and a string in an
+      # encrypted document has to go through the document's own constructor
+      # (7.6.2). [streams] is a namespace proc and has no [my], so the way
+      # to build one travels as a command prefix; "[self namespace]::my"
+      # is what lets it stay a private method.
+      set streams [::tclpdf::imagePng streams $parsed \
+          [list [self namespace]::my BytesStr]]
       # What the picture needs of the file (Reference 1.7, Table 4.39): a
       # colour key /Mask is PDF 1.3, a soft mask 1.4, sixteen bits per
       # component 1.5. The FlateDecode filter every PNG carries is checked
@@ -578,7 +584,7 @@ oo::define ::tclpdf::document::document {
       set streamPairs [dict get $streams pairs]
       if {[dict get $parsed icc] ne {}} {
         set streamPairs [::tclpdf::imagePng anchor $streamPairs $parsed \
-            [my ImageProfileBase $parsed]]
+            [my ImageProfileBase $parsed] [list [self namespace]::my BytesStr]]
         set space ICCBased
       }
       lappend pairs {*}$streamPairs

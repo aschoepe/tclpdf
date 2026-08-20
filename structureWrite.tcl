@@ -177,14 +177,14 @@ oo::define ::tclpdf::document::document {
       foreach {key option} {Alt alt Lang lang T title ActualText actualText
           E expansion} {
         if {[dict get $element $option] ne {}} {
-          lappend pairs $key [::tclpdf::pdfObj str [dict get $element $option]]
+          lappend pairs $key [my Str [dict get $element $option]]
         }
       }
       # The identifier is a byte string, not a text string (Table 323), and
       # every element that has one goes into the IDTree of the root - the
       # tree is required as soon as one element carries an ID (Table 322).
       if {[dict get $element id] ne {}} {
-        lappend pairs ID [::tclpdf::pdfObj str [dict get $element id]]
+        lappend pairs ID [my Str [dict get $element id]]
         dict set identifiers [dict get $element id] \
             [$writer ref [dict get $element number]]
       }
@@ -270,7 +270,7 @@ oo::define ::tclpdf::document::document {
         string compare [::tclpdf::structureWrite::keyBytes $a] \
             [::tclpdf::structureWrite::keyBytes $b]
       }}] [dict keys $identifiers]] {
-        lappend names [::tclpdf::pdfObj str $key] [dict get $identifiers $key]
+        lappend names [my Str $key] [dict get $identifiers $key]
       }
       lappend rootPairs IDTree [::tclpdf::pdfObj dictionary \
           [list Names [::tclpdf::pdfObj arr $names]]]
@@ -359,7 +359,7 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::structure::namespace20
     set number [my reservation structure.namespace]
     [my writer] put $number [::tclpdf::pdfObj dictionary [list \
-        Type /Namespace NS [::tclpdf::pdfObj str $namespace20]]]
+        Type /Namespace NS [my Str $namespace20]]]
     return [[my writer] ref $number]
   }
 

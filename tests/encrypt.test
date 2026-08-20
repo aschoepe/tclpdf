@@ -1,0 +1,675 @@
+# encrypt.test --
+#
+# The standard security handler, revision 6: the algorithms of ISO 32000-2,
+# 7.6 one at a time, and then the only check that matters - qpdf opening the
+# file with the password and getting the document back.
+#
+# The order is deliberate. The unit tests below say which algorithm broke; the
+# qpdf round trip says whether the file is a PDF at all, and it is the one an
+# implementation of this cannot fake, because qpdf recomputes algorithm 2.B
+# from the password and the salts and refuses if a single byte is wrong.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::encrypt
+package require tclpdf::crypto
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint pdftotext [expr {[auto_execok pdftotext] ne {}}]
+testConstraint pdfinfo [expr {[auto_execok pdfinfo] ne {}}]
+
+# Sixteen zero bytes: the initialisation vector algorithms 8 and 9 wrap the
+# file key with, and - over a single block - the way to undo the ECB of
+# algorithm 10 with the CBC the crypto module offers.
+set ::tclpdfTest::zeroIv [string repeat \x00 16]
+
+# The title the round trip carries. Written with \u escapes rather than as
+# letters: a test file has no encoding declaration, and a document whose title
+# depends on how tcltest read this file would fail for a reason that has
+# nothing to do with encryption.
+set ::tclpdfTest::umlautTitle "Bericht \u00fcber Pr\u00fcfst\u00e4nde"
+
+# What the ZUGFeRD refusal needs: an invoice XML and a face to embed, since a
+# PDF/A document may not fall back to a standard font. Both ship with the
+# examples; without them that one test steps aside.
+set ::tclpdfTest::root [file dirname [file dirname [file normalize [info script]]]]
+set ::tclpdfTest::invoice [file join $::tclpdfTest::root examples assets xml \
+    zugferd-minimum.xml]
+set ::tclpdfTest::face [file join $::tclpdfTest::root examples assets fonts \
+    DejaVuSans.ttf]
+testConstraint haveInvoice [expr {[file exists $::tclpdfTest::invoice]
+    && [file exists $::tclpdfTest::face]}]
+
+# An encrypted document with one line of text on one page. Written by the
+# tests that need a file rather than by each of them building its own: an
+# [encrypt] call runs algorithm 2.B four times and costs the better part of
+# two seconds, and four copies of that is a suite nobody runs.
+proc ::tclpdfTest::encrypted {name args} {
+    set path [scratch $name]
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt {*}$args
+    $doc page add
+    $doc info Title $::tclpdfTest::umlautTitle
+    $doc text "Hallo verschluesselte Welt" -at {60 700} -size 18
+    $doc write $path
+    $doc destroy
+    return $path
+}
+
+#
+# --- the algorithms ---------------------------------------------------------
+#
+
+test encrypt-1.1 {the permission flags of Table 22} -body {
+    # -4 is every bit but the two the table reserves as zero; -3392 is the
+    # bare minimum a writer has to set, and it is not zero: bits 7, 8, 10 and
+    # 13 to 32 are reserved as ONE, bit 10 because "PDF writers shall always
+    # set this bit to 1".
+    list [::tclpdf::encrypt flags all] \
+        [::tclpdf::encrypt flags {}] \
+        [::tclpdf::encrypt flags {print copy}] \
+        [::tclpdf::encrypt flags {print modify copy annotate fill assemble highres}]
+} -result {-4 -3392 -3372 -4}
+
+test encrypt-1.2 {each name is its own bit, and the reserved ones are always there} -body {
+    # Every single permission, against the bit position the standard gives
+    # it - read off the difference to the empty set, which is what isolates
+    # the one bit the name stands for.
+    set empty [::tclpdf::encrypt flags {}]
+    set result {}
+    foreach {name bit} {print 3 modify 4 copy 5 annotate 6 fill 9 assemble 11
+            highres 12} {
+        lappend result [expr {([::tclpdf::encrypt flags $name] - $empty)
+            == (1 << ($bit - 1))}]
+    }
+    # And bit 10 set even when nothing was granted.
+    lappend result [expr {($empty & (1 << 9)) != 0}]
+} -result {1 1 1 1 1 1 1 1}
+
+test encrypt-1.3 {an unknown permission is refused by name} -body {
+    ::tclpdf::encrypt flags {print kopieren}
+} -returnCodes error -result {tclpdf: unknown permission "kopieren" - known are: print modify copy annotate fill assemble highres, or "all"}
+
+test encrypt-1.4 {the padding of 7.6.3.1, the full block included} -body {
+    # The case that catches a padding written from memory: a message whose
+    # length is already a multiple of 16 gets a WHOLE block of 0x10, and an
+    # empty stream is the smallest example of it.
+    set result {}
+    foreach length {0 1 9 15 16 17 32} {
+        set padded [::tclpdf::encrypt pad [string repeat a $length]]
+        binary scan [string index $padded end] cu value
+        lappend result [list [string length $padded] $value]
+    }
+    set result
+} -result {{16 16} {16 15} {16 7} {16 1} {32 16} {32 15} {48 16}}
+
+test encrypt-1.5 {the pad bytes all carry the pad length} -body {
+    set padded [::tclpdf::encrypt pad [string repeat a 9]]
+    binary scan [string range $padded 9 end] cu* bytes
+    set bytes
+} -result {7 7 7 7 7 7 7}
+
+test encrypt-1.6 {algorithm 2.B answers 32 bytes and depends on every input} -body {
+    set a [::tclpdf::encrypt hash secret [string repeat \x01 8]]
+    set b [::tclpdf::encrypt hash secret [string repeat \x01 8]]
+    set c [::tclpdf::encrypt hash secret [string repeat \x02 8]]
+    set d [::tclpdf::encrypt hash full [string repeat \x01 8]]
+    set e [::tclpdf::encrypt hash secret [string repeat \x01 8] [string repeat \x03 48]]
+    list [string length $a] [expr {$a eq $b}] [expr {$a eq $c}] \
+        [expr {$a eq $d}] [expr {$a eq $e}]
+} -result {32 1 0 0 0}
+
+test encrypt-1.7 {the modulo 3 of step (c) is the byte sum, over real blocks} -body {
+    # The claim the whole hash rests on: 256 = 1 (mod 3), so the remainder of
+    # the first 16 bytes read as a big-endian integer is the remainder of
+    # their sum. Checked against the bignum form over a thousand blocks of
+    # real cipher output rather than over neat ones.
+    set key [string repeat \x2a 32]
+    set bad 0
+    for {set n 0} {$n < 1000} {incr n} {
+        set block [::tclpdf::crypto aesEncryptBlock $key \
+            [binary format Wa8 $n 12345678]]
+        binary scan $block H* hex
+        binary scan $block cu16 bytes
+        set sum 0
+        foreach byte $bytes {
+            incr sum $byte
+        }
+        # Through a variable: inside braces "0x$hex" is not substituted,
+        # and expr then reads it as a bareword.
+        set big 0x$hex
+        if {$big % 3 != $sum % 3} {
+            incr bad
+        }
+    }
+    set bad
+} -result 0
+
+test encrypt-1.8 {algorithm 8: U is hash, validation salt, key salt} -body {
+    set key [string repeat \x11 32]
+    lassign [::tclpdf::encrypt userKeys secret $key] u ue
+    # The 32-byte hash in front of U has to recompute from the password and
+    # the validation salt that follows it - that is what a reader does.
+    set validation [string range $u 32 39]
+    set keySalt [string range $u 40 47]
+    list [string length $u] [string length $ue] \
+        [expr {[string range $u 0 31] eq [::tclpdf::encrypt hash secret $validation]}] \
+        [expr {[::tclpdf::crypto aesDecrypt \
+            [::tclpdf::encrypt hash secret $keySalt] \
+            $::tclpdfTest::zeroIv $ue] eq $key}]
+} -result {48 32 1 1}
+
+test encrypt-1.9 {algorithm 9: O carries U in its hash} -body {
+    set key [string repeat \x11 32]
+    lassign [::tclpdf::encrypt userKeys secret $key] u ue
+    lassign [::tclpdf::encrypt ownerKeys full $key $u] o oe
+    set validation [string range $o 32 39]
+    set keySalt [string range $o 40 47]
+    list [string length $o] [string length $oe] \
+        [expr {[string range $o 0 31] eq [::tclpdf::encrypt hash full $validation $u]}] \
+        [expr {[string range $o 0 31] eq [::tclpdf::encrypt hash full $validation]}] \
+        [expr {[::tclpdf::crypto aesDecrypt \
+            [::tclpdf::encrypt hash full $keySalt $u] \
+            $::tclpdfTest::zeroIv $oe] eq $key}]
+} -result {48 32 1 0 1}
+
+test encrypt-1.10 {algorithm 9 without the 48 bytes of U is refused} -body {
+    ::tclpdf::encrypt ownerKeys full [string repeat \x11 32] [string repeat \x22 32]
+} -returnCodes error -result {tclpdf: the owner key needs the 48-byte U value of algorithm 8, got 32 bytes}
+
+test encrypt-1.11 {algorithm 10: the Perms block, byte for byte} -body {
+    set key [string repeat \x11 32]
+    set block [::tclpdf::encrypt perms $key -3372 1]
+    # One block in ECB is one block in CBC with a zero vector, which is how
+    # the block is read back with what crypto offers.
+    set plain [::tclpdf::crypto aesDecrypt $key $::tclpdfTest::zeroIv $block]
+    binary scan [string range $plain 0 3] i value
+    binary scan [string range $plain 4 7] H* upper
+    list [string length $block] $value $upper [string range $plain 8 11] \
+        [string length [string range $plain 12 15]]
+} -result {16 -3372 ffffffff Tadb 4}
+
+test encrypt-1.12 {EncryptMetadata reaches the Perms block too} -body {
+    set key [string repeat \x11 32]
+    set plain [::tclpdf::crypto aesDecrypt $key $::tclpdfTest::zeroIv \
+        [::tclpdf::encrypt perms $key -4 0]]
+    string range $plain 8 11
+} -result {Fadb}
+
+test encrypt-1.13 {algorithm 1.A: a fresh vector in front, and it is fresh} -body {
+    set key [string repeat \x11 32]
+    set a [::tclpdf::encrypt cipher $key "Hallo"]
+    set b [::tclpdf::encrypt cipher $key "Hallo"]
+    # 5 bytes of message become 16 of vector plus one padded block, and the
+    # same message twice must not give the same bytes twice.
+    list [string length $a] [expr {$a eq $b}] \
+        [expr {[string range $a 0 15] eq [string range $b 0 15]}] \
+        [::tclpdf::crypto aesDecrypt $key [string range $a 0 15] \
+            [string range $a 16 end]]
+} -result [list 32 0 0 Hallo[string repeat \x0b 11]]
+
+test encrypt-1.14 {an empty stream is a vector and one full pad block} -body {
+    set key [string repeat \x11 32]
+    set out [::tclpdf::encrypt cipher $key ""]
+    list [string length $out] [::tclpdf::crypto aesDecrypt $key \
+        [string range $out 0 15] [string range $out 16 end]]
+} -result [list 32 [string repeat \x10 16]]
+
+test encrypt-1.15 {a password is UTF-8 and stops after 127 bytes} -body {
+    list [::tclpdf::encrypt password "abc"] \
+        [string length [::tclpdf::encrypt password "\u00fcber"]] \
+        [string length [::tclpdf::encrypt password [string repeat a 200]]] \
+        [string length [::tclpdf::encrypt password [string repeat \u00fc 100]]]
+} -result {abc 5 127 127}
+
+test encrypt-1.16 {a text string is encoded before it is encrypted, as pdfObj would} -body {
+    # The bytes have to be the ones an unencrypted file would carry, or the
+    # reader decrypts correctly and then reads the wrong text.
+    binary scan [::tclpdf::encrypt textBytes "\u00fcber"] H* wide
+    list [::tclpdf::encrypt textBytes "Bericht"] $wide
+} -result {Bericht feff00fc006200650072}
+
+#
+# --- the file: qpdf opens it ------------------------------------------------
+#
+
+test encrypt-2.1 {qpdf reports AESv3 and revision 6} -constraints qpdf -body {
+    set path [::tclpdfTest::encrypted encrypt-round.pdf -user secret -owner full \
+        -permissions {print copy}]
+    set report [exec qpdf --password=secret --show-encryption $path]
+    file delete $path
+    lmap pattern {{R = 6} {P = -3372} {Supplied password is user password}
+            {stream encryption method: AESv3} {string encryption method: AESv3}
+            {file encryption method: AESv3}} {
+        expr {[string first $pattern $report] >= 0}
+    }
+} -result {1 1 1 1 1 1}
+
+test encrypt-2.2 {the text comes back out} -constraints {qpdf pdftotext} -body {
+    set path [::tclpdfTest::encrypted encrypt-text.pdf -user secret]
+    set plain [::tclpdfTest::scratch encrypt-text-plain.pdf]
+    exec qpdf --password=secret --decrypt $path $plain
+    # Twice over: out of the decrypted file, and out of the encrypted one
+    # with the password handed to the reader.
+    set fromPlain [exec pdftotext $plain -]
+    set fromCipher [exec pdftotext -upw secret $path -]
+    file delete $path $plain
+    list [string match "*Hallo verschluesselte Welt*" $fromPlain] \
+        [string match "*Hallo verschluesselte Welt*" $fromCipher]
+} -result {1 1}
+
+test encrypt-2.3 {without the password the file stays shut} -constraints qpdf -body {
+    # The control. Everything else here shows that the document can be
+    # opened; this one shows that it has to be.
+    set path [::tclpdfTest::encrypted encrypt-shut.pdf -user secret]
+    set status [catch {exec qpdf --check $path} output]
+    file delete $path
+    list $status [string match "*password*" $output]
+} -result {1 1}
+
+test encrypt-2.4 {an empty user password opens without one, and still restricts} -constraints qpdf -body {
+    # Allowed and useful: the document is readable by anyone, the owner
+    # password is what unlocks the permissions.
+    set path [::tclpdfTest::encrypted encrypt-open.pdf -owner full \
+        -permissions {print}]
+    set report [exec qpdf --show-encryption $path]
+    file delete $path
+    lmap pattern {{R = 6} {print low resolution: allowed}
+            {extract for any purpose: not allowed}
+            {modify anything: not allowed}} {
+        expr {[string first $pattern $report] >= 0}
+    }
+} -result {1 1 1 1}
+
+test encrypt-2.5 {the owner password is recognised as the owner's} -constraints qpdf -body {
+    set path [::tclpdfTest::encrypted encrypt-owner.pdf -user secret -owner full]
+    set asOwner [exec qpdf --password=full --show-encryption $path]
+    set asUser [exec qpdf --password=secret --show-encryption $path]
+    file delete $path
+    list [string match "*Supplied password is owner password*" $asOwner] \
+        [string match "*Supplied password is user password*" $asUser]
+} -result {1 1}
+
+test encrypt-2.6 {without an owner password the user password is both} -body {
+    # Not asked of qpdf: --show-encryption reports whichever side matched
+    # first and says "user password" for a file where the two are the same,
+    # which proves nothing. Asked of the owner key instead, the way a reader
+    # authenticating an owner password would - decrypt /OE with the hash over
+    # the user's password, the owner key salt and /U, and see the file key.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    set state [$doc state encrypt]
+    $doc destroy
+    set o [dict get $state o]
+    set recovered [::tclpdf::crypto aesDecrypt \
+        [::tclpdf::encrypt hash secret [string range $o 40 47] \
+            [dict get $state u]] \
+        $::tclpdfTest::zeroIv [dict get $state oe]]
+    list [expr {$recovered eq [dict get $state key]}] \
+        [expr {[string range $o 0 31] eq [::tclpdf::encrypt hash secret \
+            [string range $o 32 39] [dict get $state u]]}]
+} -result {1 1}
+
+test encrypt-2.7 {a page without content is an empty stream, and qpdf takes it} -constraints qpdf -body {
+    # The corner an implementation gets wrong once: an empty stream must
+    # still carry a vector and a full block of padding.
+    #
+    # -compress 0 is what makes this test the one it claims to be. With the
+    # default the empty content stream is deflated first, and eight bytes of
+    # zlib wrapper reach the cipher instead of nothing at all - measured
+    # against a padding that skipped the full block, which this test passed
+    # until the compression was switched off.
+    set path [::tclpdfTest::scratch encrypt-empty.pdf]
+    set doc [tclpdf new -unit pt -format a4 -version 2.0 -compress 0]
+    $doc encrypt -user secret
+    $doc page add
+    $doc write $path
+    $doc destroy
+    set status [catch {exec qpdf --password=secret --check $path} output]
+    # The stream as it stands in the file: a 16-byte vector and one pad
+    # block, and /Length saying 32.
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    list $status [string match "*No syntax or stream encoding errors*" $output] \
+        [regexp {/Length 32 >>\nstream} $bytes]
+} -result {0 1 1}
+
+test encrypt-2.8 {an attachment with null bytes survives byte for byte} -constraints qpdf -body {
+    set path [::tclpdfTest::scratch encrypt-attach.pdf]
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    $doc page add
+    $doc text "x" -at {20 700}
+    $doc attach -data "a\x00b\x00c\xff" -name nul.bin \
+        -mime application/octet-stream -compress 0
+    $doc write $path
+    $doc destroy
+    # Through a FILE, not through [exec]'s pipe: the pipe is decoded with
+    # the system encoding and 0xff is not valid UTF-8 there, so the six
+    # bytes would come back as something else and the test would be about
+    # Tcl channels rather than about encryption.
+    set out [::tclpdfTest::scratch encrypt-attach.bin]
+    exec qpdf --password=secret --show-attachment=nul.bin $path > $out
+    binary scan [::tclpdfTest::readBytes $out] H* hex
+    file delete $path $out
+    set hex
+} -result 6100620063ff
+
+test encrypt-2.9 {an umlaut in the title reaches the reader} -constraints {qpdf pdfinfo} -body {
+    # The info dictionary travels encrypted like everything else, and it is
+    # the one string a reader shows before it shows a page. Compared as UTF-8
+    # BYTES for the same reason 2.8 goes through a file.
+    set path [::tclpdfTest::encrypted encrypt-title.pdf -user secret]
+    set out [::tclpdfTest::scratch encrypt-title.txt]
+    exec pdfinfo -upw secret $path > $out
+    set info [::tclpdfTest::readBytes $out]
+    file delete $path $out
+    string match "*[encoding convertto utf-8 $::tclpdfTest::umlautTitle]*" $info
+} -result 1
+
+test encrypt-2.10 {the file identifier stays in the clear} -constraints qpdf -body {
+    # /ID is not encrypted (7.6.2, NOTE 2) - a reader compares it before it
+    # has a key. Pinned here, so the file can be checked against the value
+    # the writer holds.
+    set path [::tclpdfTest::scratch encrypt-id.pdf]
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    [$doc writer] id [binary format H* 00112233445566778899aabbccddeeff]
+    $doc encrypt -user secret
+    $doc page add
+    $doc text "x" -at {20 700}
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    regexp {/ID \[<00112233445566778899aabbccddeeff> <00112233445566778899aabbccddeeff>\]} $bytes
+} -result 1
+
+#
+# --- the encryption dictionary ----------------------------------------------
+#
+
+test encrypt-3.1 {the dictionary says what the standard asks it to} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret -permissions {print copy}
+    $doc page add
+    $doc text "x" -at {20 700}
+    set path [::tclpdfTest::scratch encrypt-dict.pdf]
+    $doc write $path
+    file delete $path
+    set number [dict get [$doc state reservations] encrypt.dictionary]
+    set body [[$doc writer] body $number]
+    $doc destroy
+    lmap pattern {{/Filter /Standard} {/V 5} {/R 6} {/Length 256}
+            {/CFM /AESV3} {/AuthEvent /DocOpen} {/StmF /StdCF} {/StrF /StdCF}
+            {/P -3372} {/EncryptMetadata true}} {
+        expr {[string first $pattern $body] >= 0}
+    }
+} -result {1 1 1 1 1 1 1 1 1 1}
+
+test encrypt-3.2 {its own strings are direct, unencrypted and the right length} -body {
+    # 7.6.2: the strings of the encryption dictionary "shall not be
+    # encrypted" and shall be direct objects. Both halves are checked - that
+    # they are written inline rather than as a reference, and that they are
+    # the plain values the algorithms produced.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    $doc page add
+    $doc text "x" -at {20 700}
+    set path [::tclpdfTest::scratch encrypt-direct.pdf]
+    $doc write $path
+    file delete $path
+    set state [$doc state encrypt]
+    set body [[$doc writer] body [dict get [$doc state reservations] encrypt.dictionary]]
+    $doc destroy
+    set result {}
+    foreach {key length} {U 48 UE 32 O 48 OE 32 Perms 16} {
+        # Inline hex of exactly the right length, and no indirect reference
+        # anywhere in the entry.
+        lappend result [regexp "/$key <\[0-9a-f\]{[expr {$length * 2}]}>" $body]
+    }
+    lappend result [regexp {[0-9]+ 0 R} $body]
+    foreach key {u ue o oe perms} {
+        binary scan [dict get $state $key] H* hex
+        lappend result [regexp -nocase "/[string toupper $key] <$hex>" $body]
+    }
+    set result
+} -result {1 1 1 1 1 0 1 1 1 1 1}
+
+test encrypt-3.3 {/Encrypt is an indirect reference in the trailer} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    $doc page add
+    $doc text "x" -at {20 700}
+    set path [::tclpdfTest::scratch encrypt-trailer.pdf]
+    $doc write $path
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    set number [dict get [$doc state reservations] encrypt.dictionary]
+    $doc destroy
+    list [regexp "/Encrypt $number 0 R" $bytes] [regexp {trailer} $bytes]
+} -result {1 1}
+
+test encrypt-3.4 {encrypt state answers what was declared and keeps the keys} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    set answer [$doc encrypt -user secret -permissions {print} -metadata 0]
+    set state [$doc encrypt state]
+    $doc destroy
+    # No key, no U, no O, no password - and the same answer from the call
+    # and from the query.
+    list [expr {$answer eq $state}] [lsort [dict keys $state]] \
+        [dict get $state p] [dict get $state metadata]
+} -result {1 {metadata method p permissions revision version} -3388 0}
+
+test encrypt-3.5 {a document without encryption has no state and no trailer entry} -body {
+    set doc [tclpdf new -unit pt -format a4]
+    set result [list [$doc encrypt state] [$doc trailerEntry Encrypt] \
+        [$doc state stringEncryptor] [[$doc writer] encryptor]]
+    $doc destroy
+    set result
+} -result {{} {} {} {}}
+
+#
+# --- the refusals -----------------------------------------------------------
+#
+
+test encrypt-4.1 {PDF/A forbids encryption} -constraints haveTdom -body {
+    set doc [tclpdf new -unit pt -format a4]
+    $doc pdfa -part 3
+    set status [catch {$doc encrypt -user secret} message]
+    # And nothing was left behind by the refused call.
+    set after [list [$doc encrypt state] [$doc trailerEntry Encrypt]]
+    $doc destroy
+    list $status [string match "*PDF/A forbids encryption*6.1.3-2*" $message] $after
+} -result {1 1 {{} {}}}
+
+test encrypt-4.2 {a ZUGFeRD invoice is a PDF/A-3 document} -constraints {haveTdom haveInvoice} -body {
+    # ZUGFeRD before PDF/A in the checks, and this is what says so: an
+    # invoice answers to both states, and the message it gets has to be the
+    # one about invoices.
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font embed haus $::tclpdfTest::face
+    $doc text "Rechnung" -at {20 20} -family haus
+    $doc zugferd $::tclpdfTest::invoice
+    set status [catch {$doc encrypt -user secret} message]
+    $doc destroy
+    list $status [string match "*ZUGFeRD*forbids encryption*" $message]
+} -result {1 1}
+
+test encrypt-4.3 {a page with content is too late} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc page add
+    $doc text "x" -at {20 700}
+    set status [catch {$doc encrypt -user secret} message]
+    set after [$doc encrypt state]
+    $doc destroy
+    list $status [string match "*has to come before anything is drawn*page 1*" $message] $after
+} -result {1 1 {}}
+
+test encrypt-4.4 {an object already written is too late as well} -body {
+    # Measured, and not what was assumed: a picture and an ICC profile
+    # become objects during the write, but a form XObject and a tiling
+    # pattern become one AT THE CALL - [form create] fills two objects
+    # before a single page has been drawn on. That stream would stay in the
+    # clear, and no page count would notice it.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc form create logo -size {40 40} -script {}
+    set status [catch {$doc encrypt -user secret} message]
+    set after [$doc encrypt state]
+    $doc destroy
+    list $status [string match "*before anything is put into the document*" $message] $after
+} -result {1 1 {}}
+
+test encrypt-4.5 {an empty page and a reserved number are not "written"} -body {
+    # The other side of 4.3 and 4.4: [page add] takes an object number and
+    # leaves it empty, and that must not be mistaken for content.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc page add
+    $doc page add
+    set status [catch {$doc encrypt -user secret} message]
+    $doc destroy
+    list $status $message
+} -match glob -result {0 *AESV3*}
+
+test encrypt-4.6 {AESV3 needs PDF 2.0 and says so} -body {
+    set doc [tclpdf new -unit pt -format a4]
+    set status [catch {$doc encrypt -user secret} message]
+    set version [[$doc writer] version]
+    $doc destroy
+    list $status [string match "*AESV3*needs PDF 2.0*" $message] $version
+} -result {1 1 1.7}
+
+test encrypt-4.7 {a second call is refused} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    set status [catch {$doc encrypt -user anders} message]
+    $doc destroy
+    list $status [string match "*already encrypted*" $message]
+} -result {1 1}
+
+test encrypt-4.8 {an unknown permission is refused before a key is made} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    set status [catch {$doc encrypt -user secret -permissions {print drucken}} message]
+    set after [$doc encrypt state]
+    $doc destroy
+    list $status [string match {*unknown permission "drucken"*} $message] $after
+} -result {1 1 {}}
+
+test encrypt-4.9 {-metadata takes a boolean} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    set status [catch {$doc encrypt -metadata vielleicht} message]
+    $doc destroy
+    list $status [string match "*-metadata takes a boolean*" $message]
+} -result {1 1}
+
+test encrypt-4.10 {an unknown option names the four that exist} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    set status [catch {$doc encrypt -key [string repeat x 32]} message]
+    $doc destroy
+    # The point of the message: the private state is NOT among the options,
+    # so a key cannot be handed in and is not offered as one.
+    list $status [string match {*unknown option "-key" for encrypt*} $message] \
+        [string match "*-user -owner -permissions -metadata*" $message]
+} -result {1 1 1}
+
+test encrypt-4.12 {a language set before encrypt is refused, not silently lost} -body {
+  # Measured before the guard: [language] builds /Lang as finished syntax at
+  # the call, so it stayed in the clear inside an encrypted file - and a
+  # reader, decrypting what was never encrypted, showed /Lang () with no
+  # complaint from any tool. Refused rather than repaired.
+  set doc [tclpdf new -version 2.0]
+  $doc language de-DE
+  set code [catch {$doc encrypt -user secret -owner master} message]
+  $doc destroy
+  list $code [string match {*encrypt has to come before*language*} $message]
+} -result {1 1}
+
+test encrypt-4.13 {a link made before encrypt is refused} -body {
+  # Same road as 4.12: a link annotation is built at the call.
+  set doc [tclpdf new -version 2.0]
+  $doc page add
+  $doc link -at {10 10} -size {20 5} -url http://example.com
+  set code [catch {$doc encrypt -user secret -owner master} message]
+  $doc destroy
+  list $code [string match {*encrypt has to come before the first*link*} $message]
+} -result {1 1}
+
+test encrypt-4.14 {the same calls after encrypt are fine} -body {
+  # The refusals above are about ORDER, not about the calls themselves.
+  set doc [tclpdf new -version 2.0]
+  $doc encrypt -user secret -owner master
+  $doc language de-DE
+  $doc page add
+  $doc link -at {10 10} -size {20 5} -url http://example.com
+  set target [makeFile {} enc-order.pdf]
+  set code [catch {$doc write $target} message]
+  $doc destroy
+  set written [file size $target]
+  removeFile enc-order.pdf
+  list $code [expr {$written > 0}]
+} -result {0 1}
+
+test encrypt-4.11 {an unknown subcommand} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    set status [catch {$doc encrypt zustand} message]
+    $doc destroy
+    list $status [string match "*unknown encrypt subcommand*known is: state*" $message]
+} -result {1 1}
+
+#
+# --- writing twice ----------------------------------------------------------
+#
+
+test encrypt-5.1 {two writes give two valid files, and no second set of objects} -constraints qpdf -body {
+    # Byte identity is NOT promised under encryption and cannot be: every
+    # string and every stream carries a fresh initialisation vector, and a
+    # cipher that reused one would be the defect. What IS promised is the
+    # rest of the idempotence contract - the same objects, the same
+    # dictionary, both files openable.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    $doc page add
+    $doc text "Hallo" -at {60 700}
+    set first [::tclpdfTest::scratch encrypt-twice-a.pdf]
+    set second [::tclpdfTest::scratch encrypt-twice-b.pdf]
+    $doc write $first
+    set count [[$doc writer] count]
+    $doc write $second
+    set result [list [expr {[[$doc writer] count] == $count}] \
+        [expr {[::tclpdfTest::readBytes $first] eq [::tclpdfTest::readBytes $second]}] \
+        [catch {exec qpdf --password=secret --check $first}] \
+        [catch {exec qpdf --password=secret --check $second}]]
+    $doc destroy
+    file delete $first $second
+    set result
+} -result {1 0 0 0}
+
+test encrypt-5.2 {the encryption dictionary is written over, not written again} -body {
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    $doc page add
+    $doc text "Hallo" -at {60 700}
+    set path [::tclpdfTest::scratch encrypt-twice.pdf]
+    $doc write $path
+    set firstBody [[$doc writer] body \
+        [dict get [$doc state reservations] encrypt.dictionary]]
+    $doc write $path
+    set secondBody [[$doc writer] body \
+        [dict get [$doc state reservations] encrypt.dictionary]]
+    $doc destroy
+    file delete $path
+    # The four key values are made once, at the call - so the dictionary of
+    # the second write is the dictionary of the first, character for
+    # character.
+    expr {$firstBody eq $secondBody}
+} -result 1
+
+cleanupTests

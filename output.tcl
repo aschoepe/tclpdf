@@ -144,6 +144,14 @@ oo::define ::tclpdf::document::document {
       lappend trailerPairs Info [$tclpdfWriter ref [my WriteInfo]]
     }
 
+    # Whatever a subscriber put into the trailer - /Encrypt is the one this
+    # exists for. Last, so that /Root and /Info keep their place in the
+    # file; /Size and /ID are added after these by the writer, which is the
+    # only one that knows them.
+    dict for {key value} $tclpdfTrailer {
+      lappend trailerPairs $key $value
+    }
+
     return $trailerPairs
   }
 
@@ -234,7 +242,7 @@ oo::define ::tclpdf::document::document {
       if {$key eq "Trapped"} {
         lappend pairs $key [::tclpdf::pdfObj name $value]
       } else {
-        lappend pairs $key [::tclpdf::pdfObj str $value]
+        lappend pairs $key [my Str $value]
       }
     }
     return [$tclpdfWriter put [my reservation output.info] \

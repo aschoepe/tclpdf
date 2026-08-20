@@ -732,4 +732,244 @@ test document-resource-22.1 {resource refuses a category outside Table 34 by nam
       $read [string match {tclpdf:*not "Bogus"} $m2] $good $back
 } -result {1 1 1 1 0 /PDF}
 
+# --- the trailer entry point (7.5.5) ----------------------------------------
+#
+# The twin of catalogEntry. It exists so that /Encrypt has a way into the
+# file that does not mean touching output.tcl - the trailer was the one
+# dictionary in the document a subscriber could not reach.
+
+test document-trailer-23.1 {a trailer entry reaches the written trailer} -body {
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  set back [$doc trailerEntry Foo 42]
+  set path [::tclpdfTest::scratch document-trailer.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set trailer [string range $bytes [string last "trailer" $bytes] end]
+  list $back [regexp {/Foo 42} $trailer] [regexp {/Root} $trailer] \
+      [regexp {/Foo} [string range $bytes 0 [string last "trailer" $bytes]]]
+} -result {42 1 1 0}
+
+test document-trailer-23.2 {reading answers what was put in, and an unset key answers nothing} -body {
+  set doc [tclpdf new]
+  $doc trailerEntry Foo "42"
+  set there [$doc trailerEntry Foo]
+  set absent [$doc trailerEntry Bar]
+  $doc destroy
+  list $there $absent
+} -result {42 {}}
+
+test document-trailer-23.3 {an empty value removes the entry, as with catalogEntry} -body {
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc trailerEntry Foo 42
+  $doc trailerEntry Foo {}
+  set back [$doc trailerEntry Foo]
+  set path [::tclpdfTest::scratch document-trailer-gone.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $back [regexp {/Foo} $bytes]
+} -result {{} 0}
+
+test document-trailer-23.4 {a second value is refused in the same words as the twin} -body {
+  set doc [tclpdf new]
+  set trailer [catch {$doc trailerEntry K a b} m1]
+  set catalog [catch {$doc catalogEntry K a b} m2]
+  $doc destroy
+  list $trailer $catalog \
+      [string map {trailerEntry catalogEntry} $m1] $m2
+} -result {1 1 {tclpdf: catalogEntry takes a key and at most one value} {tclpdf: catalogEntry takes a key and at most one value}}
+
+# --- strings on their way into the file (ISO 32000-2, 7.6.2) ----------------
+#
+# A PDF is encrypted string by string, not as a file, so every string a
+# module writes into an object goes out through the document's own
+# constructors. A module reaching past them writes the one string in the
+# document a reader cannot decrypt - and nothing in the file says so.
+
+# Stands in for a cipher: it answers finished PDF syntax, which is what the
+# seam asks for, and marks what it saw.
+proc documentMarker {kind value} {
+  switch -- $kind {
+    str {return "(MARK:$value)"}
+    hexStr {return "<[binary encode hex $value]>"}
+    bytesStr {return "(BYTES:[string length $value])"}
+  }
+  return -code error "unknown kind $kind"
+}
+
+test document-strings-24.1 {every string a document writes goes through the seam} -body {
+  set doc [tclpdf new -unit pt -format a4 -compress 0]
+  # Set FIRST - see document-strings-24.4 for why that is not a detail of
+  # the test but the contract.
+  $doc state stringEncryptor documentMarker
+  $doc page add
+  $doc info Title "Bericht"
+  $doc language de-DE
+  $doc text "x" -at {20 700}
+  $doc link -at {20 690} -size {40 10} -page 0 -to {20 690} \
+      -tooltip "Hinweis"
+  $doc bookmark "Kapitel" -at {20 690}
+  $doc pageLabels -from 0 -style D -prefix "Blatt"
+  set path [::tclpdfTest::scratch document-strings.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Title, /Lang, the tooltip, the bookmark title and the label prefix -
+  # each of them went past pdfObj and through the document.
+  lmap want {Bericht de-DE Hinweis Kapitel Blatt} {
+    regexp "\\(MARK:$want\\)" $bytes
+  }
+} -result {1 1 1 1 1}
+
+test document-strings-24.2 {an indexed palette is a string too, and it takes the same way} -body {
+  # imagePng builds it in a namespace proc, which has no [my] - the way to
+  # build a string travels there as a command prefix.
+  set png [::tclpdfTest::png 2 2 8 3 \
+      [binary format cu* {0 0 1 0 1 0}] {} [binary format cu* {255 0 0 0 255 0}]]
+  set path [::tclpdfTest::scratch document-strings-palette.png]
+  set channel [open $path wb]
+  puts -nonewline $channel $png
+  close $channel
+  set doc [tclpdf new -unit pt -format a4 -compress 0]
+  $doc page add
+  $doc state stringEncryptor documentMarker
+  $doc image embed pic $path
+  $doc image place pic -at {20 700} -size {20 20}
+  set out [::tclpdfTest::scratch document-strings-palette.pdf]
+  $doc write $out
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $out]
+  file delete $path $out
+  # Six bytes of palette, and /Indexed still names it.
+  list [regexp {/Indexed /DeviceRGB 1 \(BYTES:6\)} $bytes] \
+      [regexp {/Indexed /DeviceRGB 1 \(} $bytes]
+} -result {1 1}
+
+test document-strings-24.3 {without an encryptor the seam is not there at all} -body {
+  # A prefix that reproduces pdfObj exactly has to give the same file as no
+  # prefix at all, byte for byte: that is what "pass-through" means, and it
+  # is what the byte-identity tests elsewhere in the suite rely on.
+  proc documentPlain {kind value} {
+    return [::tclpdf::pdfObj $kind $value]
+  }
+  set files {}
+  foreach prefix {{} documentPlain} {
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    [$doc writer] id [binary format H* 00112233445566778899aabbccddeeff]
+    $doc page add
+    $doc info Title "Bericht"
+    $doc state created 1234567890
+    $doc language de-DE
+    $doc text "x" -at {20 700}
+    $doc bookmark "Kapitel" -at {20 690}
+    if {$prefix ne {}} {
+      $doc state stringEncryptor $prefix
+    }
+    set path [::tclpdfTest::scratch document-strings-plain.pdf]
+    $doc write $path
+    $doc destroy
+    lappend files [::tclpdfTest::readBytes $path]
+    file delete $path
+  }
+  rename documentPlain {}
+  expr {[lindex $files 0] eq [lindex $files 1]}
+} -result 1
+
+test document-strings-24.4 {a string built at CALL time is built then, not at the write} -body {
+  # Measured, and the reason 24.1 sets the encryptor before anything else:
+  # [language] and [link] put FINISHED PDF syntax into the catalog and into
+  # the annotation the moment they are called, while [info], [bookmark] and
+  # [pageLabels] keep the value and build the string during the write. An
+  # encryptor installed in between therefore catches the second group and
+  # not the first.
+  #
+  # This is the contract as it stands, not an opinion about it: whoever
+  # switches encryption on has to do it before the document is filled, or
+  # move those two to build at write time.
+  set doc [tclpdf new -unit pt -format a4 -compress 0]
+  $doc page add
+  $doc info Title "Bericht"
+  $doc language de-DE
+  $doc link -at {20 690} -size {40 10} -page 0 -to {20 690} -tooltip "Hinweis"
+  $doc bookmark "Kapitel" -at {20 690}
+  $doc state stringEncryptor documentMarker
+  set path [::tclpdfTest::scratch document-strings-late.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # written at the write / written at the call
+  lmap want {Bericht Kapitel de-DE Hinweis} {
+    regexp "\\(MARK:$want\\)" $bytes
+  }
+} -result {1 1 0 0}
+
+test document-strings-24.5 {no module builds a string past the document unrecorded} -body {
+  # The measuring guard. Every direct call of pdfObj's three string
+  # constructors in the package is listed here with a reason; a new one that
+  # is not turns this test red, so that "should this string be encrypted?"
+  # is answered when it is written rather than by a reader who cannot open
+  # the file.
+  #
+  # The count is the check, not a pattern: a site removed is as much a
+  # decision as a site added, and both belong in this table.
+  set allowed {
+    document.tcl {3 {the seam itself - Str, HexStr and BytesStr are what everything else uses}}
+    writer.tcl {1 {/ID stays in the clear: the key is derived from it, so a reader needs it BEFORE it can decrypt (7.6.2)}}
+    text.tcl {5 {strings INSIDE a content stream - the stream is encrypted as a whole, a second pass would destroy it (7.6.2)}}
+    attach.tcl {1 {keyBytes only ASKS what the bytes would be, for the name tree order (7.9.6) - the answer never reaches the file}}
+    imagePng.tcl {3 {the default of the command prefix a namespace proc takes instead of [my]}}
+  }
+  # crypto.tcl and encrypt.tcl are not swept: the strings of the encryption
+  # dictionary itself are the ones 7.6.2 exempts, and that module is the one
+  # place that knows which those are.
+  set skip {crypto.tcl encrypt.tcl}
+
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set found {}
+  foreach file [lsort [glob -directory $root *.tcl]] {
+    set name [file tail $file]
+    if {$name in $skip} {
+      continue
+    }
+    set channel [open $file r]
+    set source [read $channel]
+    close $channel
+    set number 0
+    foreach line [split $source \n] {
+      incr number
+      if {[regexp {::tclpdf::pdfObj +(str|hexStr|bytesStr)\M} $line]} {
+        dict lappend found $name "$name:$number [string trim $line]"
+      }
+    }
+  }
+  set wrong {}
+  dict for {name lines} $found {
+    if {![dict exists $allowed $name]} {
+      lappend wrong "$name calls pdfObj's string constructors directly and is\
+          not in the list - use [my Str], [my HexStr] or [my BytesStr], or\
+          add the file with the reason: [join $lines {; }]"
+      continue
+    }
+    lassign [dict get $allowed $name] want -
+    if {[llength $lines] != $want} {
+      lappend wrong "$name: [llength $lines] direct calls, [list $want]\
+          recorded: [join $lines {; }]"
+    }
+  }
+  dict for {name entry} $allowed {
+    if {![dict exists $found $name]} {
+      lappend wrong "$name is listed with [lindex $entry 0] direct calls and\
+          has none - take it out of the list"
+    }
+  }
+  set wrong
+} -result {}
+
 cleanupTests

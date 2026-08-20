@@ -60,6 +60,13 @@ namespace eval ::tclpdf::attach {
 # of the file. Read back from the string object rather than encoded a second
 # time here, so the sort and the file cannot disagree.
 proc ::tclpdf::attach::keyBytes {name} {
+  # pdfObj DIRECTLY, and deliberately: this asks the string constructor a
+  # question - what bytes would this key be written as - and the answer never
+  # reaches the file. It is the sort order of the name tree (7.9.6), which is
+  # over the PLAIN key bytes; going through the document's constructor would
+  # sort an encrypted document by ciphertext and put the tree out of order
+  # for every reader. The key itself is written at [AttachCatalog], and that
+  # one does go through the document.
   set written [::tclpdf::pdfObj str $name]
   if {[string index $written 0] eq "<"} {
     return [binary decode hex [string range $written 1 end-1]]
@@ -256,7 +263,7 @@ oo::define ::tclpdf::document::document {
           Subtype [::tclpdf::pdfObj name [dict get $entry mime]]]
       set params [list Size [string length $bytes]]
       if {[dict get $entry date] ne {}} {
-        lappend params ModDate [::tclpdf::pdfObj str [dict get $entry date]]
+        lappend params ModDate [my Str [dict get $entry date]]
       }
       # /Params /Size is the UNCOMPRESSED length and has to be taken before
       # the filter runs.
@@ -271,14 +278,14 @@ oo::define ::tclpdf::document::document {
       # /F a byte string that every reader takes, /UF the text string with
       # the real name - see [fallbackName] for why the two can differ.
       set specPairs [list Type /Filespec \
-          F [::tclpdf::pdfObj str [::tclpdf::attach::fallbackName [dict get $entry name]]] \
-          UF [::tclpdf::pdfObj str [dict get $entry name]] \
+          F [my Str [::tclpdf::attach::fallbackName [dict get $entry name]]] \
+          UF [my Str [dict get $entry name]] \
           AFRelationship [::tclpdf::pdfObj name [dict get $entry relationship]] \
           EF [::tclpdf::pdfObj dictionary \
               [list F [$writer ref $streamNumber] \
                     UF [$writer ref $streamNumber]]]]
       if {[dict get $entry description] ne {}} {
-        lappend specPairs Desc [::tclpdf::pdfObj str [dict get $entry description]]
+        lappend specPairs Desc [my Str [dict get $entry description]]
       }
       set specNumber [my reservation attach.spec.$index]
       $writer put $specNumber [::tclpdf::pdfObj dictionary $specPairs]
@@ -307,7 +314,7 @@ oo::define ::tclpdf::document::document {
     }}} $specs]
     set pairs {}
     foreach entry $sorted {
-      lappend pairs [::tclpdf::pdfObj str [dict get $entry name]] \
+      lappend pairs [my Str [dict get $entry name]] \
           [$writer ref [dict get $entry spec]]
     }
     my catalogEntry Names [::tclpdf::pdfObj dictionary \

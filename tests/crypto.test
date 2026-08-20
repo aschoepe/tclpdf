@@ -1,0 +1,353 @@
+# crypto.test --
+#
+# Tests for the cryptographic primitives of the standard security handler.
+#
+# Every vector here is from the standard that defines it - FIPS 197 C.3 and
+# NIST SP 800-38A F.2 for AES, FIPS 180-4 for SHA-2 - and every one of them
+# was checked against openssl and shasum on 2026-08-20 before it was written
+# down, so a failure here means the code is wrong, not the vector.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::crypto
+
+# tcllib is the second opinion, not the implementation: it exists under 8.6
+# on this machine and NOT under 9.0, which is the whole reason this module is
+# written out by hand. Where it is missing the cross-check steps aside.
+testConstraint haveTcllibCrypto \
+    [expr {![catch {package require aes}] && ![catch {package require sha256}]}]
+
+proc cryptoHex {bytes} {
+  binary scan $bytes H* hex
+  return $hex
+}
+
+proc cryptoBin {hex} {
+  return [binary format H* $hex]
+}
+
+# The message of FIPS 180-4 that is 448 bits long: it is the shortest one that
+# forces the padding into a second block for SHA-256.
+set cryptoMessage448 "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+
+#
+# SHA-2 (FIPS 180-4)
+#
+
+test crypto-sha256-1.1 {the empty message} -body {
+  cryptoHex [::tclpdf::crypto::sha256 ""]
+} -result e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+test crypto-sha256-1.2 {"abc"} -body {
+  cryptoHex [::tclpdf::crypto::sha256 abc]
+} -result ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+
+test crypto-sha256-1.3 {the 448 bit message needs a second padding block} -body {
+  cryptoHex [::tclpdf::crypto::sha256 $cryptoMessage448]
+} -result 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+
+test crypto-sha256-1.4 {many blocks: 1000 bytes, checked against shasum -a 256} -body {
+  cryptoHex [::tclpdf::crypto::sha256 [string repeat a 1000]]
+} -result 41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3
+
+test crypto-sha256-1.5 {the digest is bytes, not a hexadecimal string} -body {
+  string length [::tclpdf::crypto::sha256 abc]
+} -result 32
+
+test crypto-sha256-1.6 {bytes above 127 are hashed as bytes} -body {
+  # A string operation that treats these as characters gives another digest,
+  # which is exactly the mistake this test is here to catch.
+  cryptoHex [::tclpdf::crypto::sha256 [cryptoBin 00ff80fe7f]]
+} -result b3f4e908d71ebe7da624d38481921d26526bae1e4774a316f6f2b464d57e851c
+
+test crypto-sha384-2.1 {the empty message} -body {
+  cryptoHex [::tclpdf::crypto::sha384 ""]
+} -result [string cat 38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da \
+    274edebfe76f65fbd51ad2f14898b95b]
+
+test crypto-sha384-2.2 {"abc"} -body {
+  cryptoHex [::tclpdf::crypto::sha384 abc]
+} -result [string cat cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed \
+    8086072ba1e7cc2358baeca134c825a7]
+
+test crypto-sha384-2.3 {the 448 bit message} -body {
+  cryptoHex [::tclpdf::crypto::sha384 $cryptoMessage448]
+} -result [string cat 3391fdddfc8dc7393707a65b1b4709397cf8b1d162af05abfe8f450de5f36bc6 \
+    b0455a8520bc4e6f5fe95b1fe3c8452b]
+
+test crypto-sha384-2.4 {many blocks, checked against shasum -a 384} -body {
+  cryptoHex [::tclpdf::crypto::sha384 [string repeat a 1000]]
+} -result [string cat f54480689c6b0b11d0303285d9a81b21a93bca6ba5a1b4472765dca4da45ee32 \
+    8082d469c650cd3b61b16d3266ab8ced]
+
+test crypto-sha384-2.5 {48 bytes, the truncation of SHA-512} -body {
+  string length [::tclpdf::crypto::sha384 abc]
+} -result 48
+
+test crypto-sha512-3.1 {the empty message} -body {
+  cryptoHex [::tclpdf::crypto::sha512 ""]
+} -result [string cat cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce \
+    47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e]
+
+test crypto-sha512-3.2 {"abc"} -body {
+  cryptoHex [::tclpdf::crypto::sha512 abc]
+} -result [string cat ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a \
+    2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f]
+
+test crypto-sha512-3.3 {the 448 bit message} -body {
+  cryptoHex [::tclpdf::crypto::sha512 $cryptoMessage448]
+} -result [string cat 204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c335 \
+    96fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445]
+
+test crypto-sha512-3.4 {many blocks, checked against shasum -a 512} -body {
+  cryptoHex [::tclpdf::crypto::sha512 [string repeat a 1000]]
+} -result [string cat 67ba5535a46e3f86dbfbed8cbbaf0125c76ed549ff8b0b9e03e0c88cf90fa634 \
+    fa7b12b47d77b694de488ace8d9a65967dc96df599727d3292a8d9d447709c97]
+
+test crypto-sha512-3.5 {64 bytes} -body {
+  string length [::tclpdf::crypto::sha512 abc]
+} -result 64
+
+test crypto-sha512-3.6 {a message that lands exactly on the block boundary} -body {
+  # 112 bytes is the last length whose padding still fits into the same
+  # 128 byte block; 113 forces a second one. Both must work.
+  list [string length [::tclpdf::crypto::sha512 [string repeat x 112]]] \
+      [expr {[::tclpdf::crypto::sha512 [string repeat x 112]] ne
+          [::tclpdf::crypto::sha512 [string repeat x 113]]}]
+} -result {64 1}
+
+#
+# AES-256 (FIPS 197, NIST SP 800-38A)
+#
+
+set cryptoFipsKey [cryptoBin 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f]
+set cryptoFipsPlain [cryptoBin 00112233445566778899aabbccddeeff]
+set cryptoZeroIv [cryptoBin 00000000000000000000000000000000]
+
+test crypto-aes-4.1 {the single block of FIPS 197 C.3} -body {
+  cryptoHex [::tclpdf::crypto::aesEncryptBlock $cryptoFipsKey $cryptoFipsPlain]
+} -result 8ea2b7ca516745bfeafc49904b496089
+
+test crypto-aes-4.2 {CBC over one block with a zero IV is the same block} -body {
+  # If it were not, the chaining would be adding something of its own.
+  cryptoHex [::tclpdf::crypto::aesEncrypt $cryptoFipsKey $cryptoZeroIv $cryptoFipsPlain]
+} -result 8ea2b7ca516745bfeafc49904b496089
+
+test crypto-aes-4.3 {the block of C.3 comes back} -body {
+  cryptoHex [::tclpdf::crypto::aesDecrypt $cryptoFipsKey $cryptoZeroIv \
+      [cryptoBin 8ea2b7ca516745bfeafc49904b496089]]
+} -result 00112233445566778899aabbccddeeff
+
+set cryptoCbcKey [cryptoBin 603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4]
+set cryptoCbcIv [cryptoBin 000102030405060708090a0b0c0d0e0f]
+set cryptoCbcPlain [cryptoBin [string cat \
+    6bc1bee22e409f96e93d7e117393172a ae2d8a571e03ac9c9eb76fac45af8e51 \
+    30c81c46a35ce411e5fbc1191a0a52ef f69f2445df4f9b17ad2b417be66c3710]]
+set cryptoCbcCipher [string cat \
+    f58c4c04d6e5f1ba779eabfb5f7bfbd6 9cfc4e967edb808d679f777bc6702c7d \
+    39f23369a9d9bacfa530e26304231461 b2eb05e2c39be9fcda6c19078c6a9d1b]
+
+test crypto-aes-5.1 {SP 800-38A F.2.5, four blocks encrypted} -body {
+  cryptoHex [::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoCbcIv $cryptoCbcPlain]
+} -result $cryptoCbcCipher
+
+test crypto-aes-5.2 {SP 800-38A F.2.6, the same four blocks decrypted} -body {
+  cryptoHex [::tclpdf::crypto::aesDecrypt $cryptoCbcKey $cryptoCbcIv \
+      [cryptoBin $cryptoCbcCipher]]
+} -result [cryptoHex $cryptoCbcPlain]
+
+test crypto-aes-5.3 {the chaining really chains} -body {
+  # Two identical plaintext blocks must not give two identical cipher blocks.
+  # ECB over the same input would, and that is the classic silent failure.
+  set doubled [string repeat [cryptoBin 00112233445566778899aabbccddeeff] 2]
+  set out [::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoCbcIv $doubled]
+  expr {[string range $out 0 15] ne [string range $out 16 31]}
+} -result 1
+
+test crypto-aes-5.4 {the IV changes the result} -body {
+  expr {[::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoCbcIv $cryptoFipsPlain] ne
+      [::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoZeroIv $cryptoFipsPlain]}
+} -result 1
+
+test crypto-aes-6.1 {round trip over every length that CBC allows} -body {
+  set failed {}
+  foreach length {16 32 48 64 160 1024 4096} {
+    set key [::tclpdf::crypto::random 32]
+    set iv [::tclpdf::crypto::random 16]
+    set data [::tclpdf::crypto::random $length]
+    set back [::tclpdf::crypto::aesDecrypt $key $iv \
+        [::tclpdf::crypto::aesEncrypt $key $iv $data]]
+    if {$back ne $data} {
+      lappend failed $length
+    }
+  }
+  set failed
+} -result {}
+
+test crypto-aes-6.2 {the ciphertext has the length of the plaintext} -body {
+  # No padding: whoever needs PKCS#5 adds it, this layer does not.
+  string length [::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoCbcIv \
+      [::tclpdf::crypto::random 64]]
+} -result 64
+
+test crypto-aes-6.3 {a key of all zero bytes is a key like any other} -body {
+  set key [cryptoBin [string repeat 00 32]]
+  set data [::tclpdf::crypto::random 32]
+  expr {[::tclpdf::crypto::aesDecrypt $key $cryptoZeroIv \
+      [::tclpdf::crypto::aesEncrypt $key $cryptoZeroIv $data]] eq $data}
+} -result 1
+
+#
+# The AES-128 of algorithm 2.B - internal, and only for the hardened hash
+#
+
+test crypto-aes2b-7.1 {SP 800-38A F.2.1, the AES-128 that ISO 32000-2 2.B needs} -body {
+  cryptoHex [::tclpdf::crypto::Aes128CbcNoPad \
+      [cryptoBin 2b7e151628aed2a6abf7158809cf4f3c] $cryptoCbcIv $cryptoCbcPlain]
+} -result [string cat 7649abac8119b246cee98e9b12e9197d 5086cb9b507219ee95db113a917678b2 \
+    73bed6b8e3c1743b7116e69e22229516 3ff1caa1681fac09120eca307586e1a7]
+
+test crypto-aes2b-7.2 {the public surface is AES-256 and nothing else} -body {
+  # The 128 bit path is reachable by its internal, capitalised name and
+  # nowhere else, so no caller picks it by accident. The ensemble lists what
+  # it knows when asked for something it does not - that list is the contract.
+  catch {::tclpdf::crypto aes128CbcNoPad} message
+  set message
+} -result {unknown or ambiguous subcommand "aes128CbcNoPad": must be aesDecrypt,\
+    aesEncrypt, aesEncryptBlock, random, sha256, sha384, or sha512}
+
+#
+# The refusals
+#
+
+test crypto-refuse-8.1 {a key that is not 32 bytes} -body {
+  ::tclpdf::crypto::aesEncrypt [::tclpdf::crypto::random 16] $cryptoCbcIv \
+      $cryptoFipsPlain
+} -returnCodes error -match glob -result {*32 bytes, not 16*}
+
+test crypto-refuse-8.2 {the same refusal on the way back} -body {
+  ::tclpdf::crypto::aesDecrypt [::tclpdf::crypto::random 24] $cryptoCbcIv \
+      $cryptoFipsPlain
+} -returnCodes error -match glob -result {*32 bytes, not 24*}
+
+test crypto-refuse-8.3 {a key that is not 32 bytes, single block} -body {
+  ::tclpdf::crypto::aesEncryptBlock [::tclpdf::crypto::random 31] $cryptoFipsPlain
+} -returnCodes error -match glob -result {*32 bytes, not 31*}
+
+test crypto-refuse-8.4 {an initialisation vector that is not 16 bytes} -body {
+  ::tclpdf::crypto::aesEncrypt $cryptoCbcKey [::tclpdf::crypto::random 8] \
+      $cryptoFipsPlain
+} -returnCodes error -match glob -result {*16 bytes, not 8*}
+
+test crypto-refuse-8.5 {data that is not a multiple of the block size} -body {
+  ::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoCbcIv [string repeat x 17]
+} -returnCodes error -match glob -result {*multiple of 16 bytes, not 17*}
+
+test crypto-refuse-8.6 {empty data has no block to encrypt} -body {
+  ::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoCbcIv ""
+} -returnCodes error -match glob -result {*multiple of 16 bytes, not 0*}
+
+test crypto-refuse-8.7 {a block that is not 16 bytes} -body {
+  ::tclpdf::crypto::aesEncryptBlock $cryptoCbcKey [string repeat x 15]
+} -returnCodes error -match glob -result {*block is 16 bytes, not 15*}
+
+test crypto-refuse-8.8 {the refusals carry a machine readable error code} -body {
+  # The text is not a contract, the code is - the same rule as for the four
+  # glyph refusals in afm.tcl and font.tcl.
+  set codes {}
+  catch {::tclpdf::crypto::aesEncrypt x $cryptoCbcIv $cryptoFipsPlain}
+  lappend codes $::errorCode
+  catch {::tclpdf::crypto::aesEncrypt $cryptoCbcKey x $cryptoFipsPlain}
+  lappend codes $::errorCode
+  catch {::tclpdf::crypto::aesEncrypt $cryptoCbcKey $cryptoCbcIv x}
+  lappend codes $::errorCode
+  set codes
+} -result {{TCLPDF CRYPTO KEYLENGTH 1} {TCLPDF CRYPTO IVLENGTH 1} {TCLPDF CRYPTO BLOCKLENGTH 1}}
+
+test crypto-refuse-8.9 {a negative count of random bytes} -body {
+  ::tclpdf::crypto::random -1
+} -returnCodes error -match glob -result {*non-negative integer*}
+
+test crypto-refuse-8.10 {a count that is not a number} -body {
+  ::tclpdf::crypto::random plenty
+} -returnCodes error -match glob -result {*non-negative integer*}
+
+#
+# Random bytes
+#
+
+test crypto-random-9.1 {the requested length comes back} -body {
+  set lengths {}
+  foreach n {1 16 32 48 1000} {
+    lappend lengths [string length [::tclpdf::crypto::random $n]]
+  }
+  set lengths
+} -result {1 16 32 48 1000}
+
+test crypto-random-9.2 {two calls differ} -body {
+  expr {[::tclpdf::crypto::random 32] ne [::tclpdf::crypto::random 32]}
+} -result 1
+
+test crypto-random-9.3 {the bytes are not all the same} -body {
+  # A channel that was not switched to binary, or a source that gives zeros,
+  # both show up here and nowhere else.
+  set bytes [::tclpdf::crypto::random 64]
+  binary scan $bytes cu* octets
+  expr {[llength [lsort -unique $octets]] > 8}
+} -result 1
+
+test crypto-random-9.4 {zero bytes are not an error} -body {
+  string length [::tclpdf::crypto::random 0]
+} -result 0
+
+test crypto-random-9.5 {the bytes are spread over the whole byte range} -body {
+  # 4096 bytes from a real source hit both halves of the range; a text
+  # channel that mangles CR and LF would not.
+  binary scan [::tclpdf::crypto::random 4096] cu* octets
+  set low 0
+  set high 0
+  foreach octet $octets {
+    if {$octet < 128} {
+      incr low
+    } else {
+      incr high
+    }
+  }
+  expr {$low > 1500 && $high > 1500}
+} -result 1
+
+#
+# The second opinion, where it exists
+#
+
+test crypto-tcllib-10.1 {tcllib hashes the same bytes to the same digest} \
+    -constraints haveTcllibCrypto -body {
+  set data [::tclpdf::crypto::random 3000]
+  expr {[::tclpdf::crypto::sha256 $data] eq [::sha2::sha256 -bin $data]}
+} -result 1
+
+test crypto-tcllib-10.2 {tcllib encrypts to the same ciphertext} \
+    -constraints haveTcllibCrypto -body {
+  set key [::tclpdf::crypto::random 32]
+  set iv [::tclpdf::crypto::random 16]
+  set data [::tclpdf::crypto::random 512]
+  expr {[::tclpdf::crypto::aesEncrypt $key $iv $data] eq
+      [::aes::aes -mode cbc -dir encrypt -key $key -iv $iv $data]}
+} -result 1
+
+test crypto-tcllib-10.3 {tcllib decrypts what this module encrypted} \
+    -constraints haveTcllibCrypto -body {
+  set key [::tclpdf::crypto::random 32]
+  set iv [::tclpdf::crypto::random 16]
+  set data [::tclpdf::crypto::random 512]
+  expr {[::aes::aes -mode cbc -dir decrypt -key $key -iv $iv \
+      [::tclpdf::crypto::aesEncrypt $key $iv $data]] eq $data}
+} -result 1
+
+cleanupTests

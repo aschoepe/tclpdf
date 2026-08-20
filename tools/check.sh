@@ -96,8 +96,22 @@ echo "=== 3. qpdf over every document ==="
 if have qpdf; then
   bad=""
   for f in examples/out/*.pdf; do
-    qpdf --check "$f" >/dev/null 2>&1 || bad="$bad $f"
+    # The encrypted example needs its password, and the password is the
+    # point: without one qpdf refuses the file, which is checked right
+    # after this loop rather than being papered over here.
+    case `basename "$f"` in
+      07.01-encryption.pdf) pw="--password=full" ;;
+      *) pw="" ;;
+    esac
+    qpdf $pw --check "$f" >/dev/null 2>&1 || bad="$bad $f"
   done
+  if test -f examples/out/07.01-encryption.pdf; then
+    if qpdf --check examples/out/07.01-encryption.pdf >/dev/null 2>&1; then
+      report_fail "qpdf read the encrypted example without a password"
+    else
+      report_pass "qpdf control: the encrypted example needs its password"
+    fi
+  fi
   if test -z "$bad"; then
     report_pass "qpdf: no complaint on any document"
   else

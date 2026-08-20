@@ -38,7 +38,7 @@ namespace eval ::tclpdf::writer {}
 
 oo::class create ::tclpdf::writer::pdf {
   variable tclpdfObjects tclpdfNext tclpdfVersion tclpdfId tclpdfRequired \
-      tclpdfCeiling
+      tclpdfCeiling tclpdfEncryptor
 
   # The PDF version is a parameter, not a constant: PDF/A-3 and therefore
   # ZUGFeRD require 1.7, while PDF/A-4f would want 2.0. Keeping it here makes
@@ -49,6 +49,7 @@ oo::class create ::tclpdf::writer::pdf {
     set tclpdfId {}
     set tclpdfRequired {}
     set tclpdfCeiling {}
+    set tclpdfEncryptor {}
     my version $version
   }
 
@@ -180,6 +181,30 @@ oo::class create ::tclpdf::writer::pdf {
       my require 1.2 "a FlateDecode stream (-compress 1, an embedded font, a\
           PNG picture, a compressed attachment)"
     }
+    # Encryption sits here and only here, between the filter check and the
+    # length: ISO 32000-2, 7.6.3.3 - "Stream data shall be encrypted after
+    # applying all stream encoding filters" - and /Length is then the length
+    # of the ENCRYPTED bytes. The other order writes a file whose /Length
+    # describes data no reader ever gets to see, which readers answer with
+    # anything from a blank page to a refusal.
+    #
+    # A metadata stream is MARKED rather than skipped. /EncryptMetadata
+    # false (7.6.2) leaves exactly this one stream in the clear, and whether
+    # a document does that is the encryptor's business - it knows what it
+    # put into /Encrypt. The writer only says which stream it is holding.
+    #
+    # Without an encryptor nothing happens here at all.
+    if {$tclpdfEncryptor ne {}} {
+      if {[dict exists $pairs Type] && [dict get $pairs Type] eq "/Metadata"} {
+        set data [{*}$tclpdfEncryptor $data metadata]
+      } else {
+        set data [{*}$tclpdfEncryptor $data]
+      }
+      # Asked again, because it is the encryptor's answer that reaches the
+      # channel now: a cipher handing back text rather than bytes would
+      # give a /Length in characters and a truncated file.
+      my CheckBytes $data
+    }
     lappend pairs Length [string length $data]
     return "[::tclpdf::pdfObj dictionary $pairs]\nstream\n$data\nendstream"
   }
@@ -231,6 +256,28 @@ oo::class create ::tclpdf::writer::pdf {
     return $tclpdfId
   }
 
+  # The command prefix every stream's data is handed to before it is measured
+  # and written - the seam encryption hangs in. Set with a prefix, read with
+  # no argument; the empty prefix, which is the default, means the writer
+  # writes what it was given.
+  #
+  # The contract, so that the two sides can be built apart:
+  #
+  #   {*}$prefix $data             -> the bytes to write for a normal stream
+  #   {*}$prefix $data metadata    -> the same for the /Metadata stream
+  #
+  # The answer must be bytes and may be of any length - /Length is taken
+  # from it, not from what went in. The prefix is called once per stream, in
+  # the order the objects are filled, and it is called for EVERY stream, the
+  # content streams and the embedded files included: a document is encrypted
+  # whole or not at all (7.6.2).
+  method encryptor {{cmdPrefix {}}} {
+    if {$cmdPrefix ne {}} {
+      set tclpdfEncryptor $cmdPrefix
+    }
+    return $tclpdfEncryptor
+  }
+
   # Write the whole file. The trailer pairs come from the document (/Root and
   # /Info); /Size and /ID are added here because only the writer knows them.
   method writeChannel {channel trailerPairs} {
@@ -272,6 +319,12 @@ oo::class create ::tclpdf::writer::pdf {
           [format "%010d 00000 n \n" [dict get $offsets $number]]]
     }
 
+    # /ID is written in the clear and stays that way even in an encrypted
+    # file (ISO 32000-2, 7.6.2): it is one of the inputs the encryption key
+    # is derived from, so a reader has to be able to read it BEFORE it can
+    # decrypt anything. Encrypting it would lock the file against its own
+    # password. This is why the string goes to pdfObj directly and not
+    # through a document-side redirection.
     set identifier [::tclpdf::pdfObj hexStr [my id]]
     lappend trailerPairs Size [expr {$tclpdfNext + 1}] \
         ID [::tclpdf::pdfObj arr [list $identifier $identifier]]

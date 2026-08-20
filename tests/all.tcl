@@ -46,6 +46,8 @@ package require tclpdf
 foreach tclpdfPkg {
     tclpdf::pdfObj
     tclpdf::filter
+    tclpdf::crypto
+    tclpdf::encrypt
     tclpdf::event
     tclpdf::writer
     tclpdf::color

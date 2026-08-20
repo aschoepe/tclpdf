@@ -148,6 +148,14 @@ oo::define ::tclpdf::document::document {
           order - a ZUGFeRD or Order-X document has exactly one"
     }
 
+    # A hybrid invoice is a PDF/A-3 document, and PDF/A forbids encryption -
+    # the same wall pdfa.tcl names, said here so the caller learns it at the
+    # call that meant the invoice rather than one level down.
+    if {[my state encrypt] ne {}} {
+      return -code error "tclpdf: a ZUGFeRD or Order-X document is a PDF/A-3\
+          document and PDF/A forbids encryption - this document is encrypted"
+    }
+
     # Every option is checked HERE, before the first call that changes the
     # document. This method makes three calls that each leave state behind
     # - pdfa, pdfa extension, attach - and a refusal from the last of them

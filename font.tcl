@@ -930,8 +930,8 @@ oo::define ::tclpdf::document::document {
         Type /Font Subtype [expr {$cff ? {/CIDFontType0} : {/CIDFontType2}}] \
         BaseFont [::tclpdf::pdfObj name $baseName] \
         CIDSystemInfo [::tclpdf::pdfObj dictionary [list \
-            Registry [::tclpdf::pdfObj str Adobe] \
-            Ordering [::tclpdf::pdfObj str Identity] \
+            Registry [my Str Adobe] \
+            Ordering [my Str Identity] \
             Supplement 0]] \
         FontDescriptor [$writer ref $descriptorNumber] \
         DW 1000 \

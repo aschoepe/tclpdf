@@ -1559,4 +1559,14 @@ test zugferd-14.1 {UTF-16 XML is refused for its encoding, not for a missing BT-
   set out
 } -result {1 1 1 1 1 1}
 
+test zugferd-encrypt-15.1 {a hybrid invoice refuses an encrypted document} -constraints haveInvoice -body {
+  # A ZUGFeRD document is PDF/A-3, and PDF/A forbids encryption. Said here
+  # so the caller learns it at the call that meant the invoice.
+  set doc [tclpdf new -version 2.0]
+  $doc encrypt -user secret -owner master
+  set code [catch {$doc zugferd $invoice} message]
+  $doc destroy
+  list $code [string match {*PDF/A forbids encryption*} $message]
+} -result {1 1}
+
 cleanupTests

@@ -45,7 +45,8 @@ oo::class create ::tclpdf::document::document {
   superclass ::tclpdf::event::emitter
 
   variable tclpdfWriter tclpdfOption tclpdfPages tclpdfCurrent \
-      tclpdfInfo tclpdfXmp tclpdfResources tclpdfCatalog tclpdfState tclpdfCanvas
+      tclpdfInfo tclpdfXmp tclpdfResources tclpdfCatalog tclpdfState \
+      tclpdfCanvas tclpdfTrailer
 
   constructor {args} {
     next
@@ -67,6 +68,7 @@ oo::class create ::tclpdf::document::document {
     set tclpdfXmp {}
     set tclpdfResources {}
     set tclpdfCatalog {}
+    set tclpdfTrailer {}
     set tclpdfCanvas {}
     set tclpdfInfo [dict create Producer "tclpdf [package provide tclpdf]"]
   }
@@ -360,6 +362,7 @@ oo::class create ::tclpdf::document::document {
       pattern pattern
       table table
       pdfa pdfa
+      encrypt encrypt
       xmpSchema xmp
       xmpRaw xmp
       zugferd zugferd
@@ -539,6 +542,87 @@ oo::class create ::tclpdf::document::document {
     return $value
   }
 
+  # -- strings on their way into the file ---------------------------------
+  #
+  # Every string a module writes into an OBJECT goes out through these three
+  # rather than calling pdfObj directly. The reason is encryption: a PDF is
+  # encrypted string by string and stream by stream (ISO 32000-2, 7.6.2),
+  # not as a file - so the string constructors are where a cipher has to sit,
+  # and a module reaching past them writes the one string in the document
+  # that a reader cannot decrypt.
+  #
+  # Without an encryptor these are pdfObj with one stack frame more; the
+  # state key is empty and stays empty until something sets it, so a
+  # document that is never encrypted pays a dict lookup per string.
+  #
+  # The encryptor is a command prefix and it is asked for the FINISHED PDF
+  # syntax, not for encrypted bytes to hand on to pdfObj:
+  #
+  #   {*}$prefix str      $text     -> a string object for that text
+  #   {*}$prefix hexStr   $bytes    -> a string object for those bytes
+  #   {*}$prefix bytesStr $bytes    -> a string object for those bytes
+  #
+  # Measured 2026-08-20, and the reason for that shape: [pdfObj str] decides
+  # between a literal string and UTF-16BE by looking at the value, so
+  # feeding it ciphertext turns six encrypted bytes into
+  # <feff008f002a000000c300ff0041> - the cipher's own bytes encoded a second
+  # time, which no reader can undo. Which spelling encrypted bytes get is
+  # the cipher's decision, exactly as the metadata question is at the
+  # stream seam.
+  method Str {value} {
+    set prefix [my state stringEncryptor]
+    if {$prefix eq {}} {
+      return [::tclpdf::pdfObj str $value]
+    }
+    return [{*}$prefix str $value]
+  }
+
+  method HexStr {bytes} {
+    set prefix [my state stringEncryptor]
+    if {$prefix eq {}} {
+      return [::tclpdf::pdfObj hexStr $bytes]
+    }
+    return [{*}$prefix hexStr $bytes]
+  }
+
+  method BytesStr {bytes} {
+    set prefix [my state stringEncryptor]
+    if {$prefix eq {}} {
+      return [::tclpdf::pdfObj bytesStr $bytes]
+    }
+    return [{*}$prefix bytesStr $bytes]
+  }
+
+  # A trailer entry - the same handle for the file trailer (7.5.5) that
+  # [catalogEntry] is for the catalog. The core writes /Root, /Info, /Size
+  # and /ID and nothing else; everything a trailer can otherwise carry -
+  # /Encrypt above all, which is the entry a reader looks for BEFORE it
+  # reads anything else - is a subscriber's business and reaches the file
+  # through here.
+  #
+  # Deliberately the twin of [catalogEntry] down to the error message: two
+  # entry points that behave differently in the corners are two things to
+  # learn instead of one. The value is PDF syntax, as everywhere a value is
+  # handed to pdfObj; an empty value REMOVES the key.
+  method trailerEntry {key args} {
+    if {[llength $args] == 0} {
+      if {[dict exists $tclpdfTrailer $key]} {
+        return [dict get $tclpdfTrailer $key]
+      }
+      return {}
+    }
+    if {[llength $args] > 1} {
+      return -code error "tclpdf: trailerEntry takes a key and at most one value"
+    }
+    set value [lindex $args 0]
+    if {$value eq {}} {
+      dict unset tclpdfTrailer $key
+      return {}
+    }
+    dict set tclpdfTrailer $key $value
+    return $value
+  }
+
   # The natural language of the document (14.9.2): a language tag as in
   # RFC 3066 - "de", "de-DE", "en-GB". Read with no argument.
   #
@@ -565,7 +649,7 @@ oo::class create ::tclpdf::document::document {
     }
     # /Lang in the catalog is PDF 1.4 (Reference 1.7, Table 3.25).
     my RequireVersion 1.4 "language"
-    my catalogEntry Lang [::tclpdf::pdfObj str $tag]
+    my catalogEntry Lang [my Str $tag]
     return $tag
   }
 

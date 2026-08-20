@@ -158,6 +158,16 @@ oo::define ::tclpdf::document::document {
           [llength [my state attachments]] attachment(s) - use part 3, which\
           admits any file"
     }
+    # The mirror image of the check in encrypt.tcl: PDF/A forbids encryption
+    # outright, and a validator says so in one line - veraPDF rule 6.1.3-2,
+    # "The keyword Encrypt shall not be used in the trailer dictionary".
+    # Said at whichever of the two calls comes second.
+    if {[my state encrypt] ne {}} {
+      return -code error "tclpdf: PDF/A forbids encryption and this document\
+          is encrypted (ISO 19005, the Encrypt keyword shall not be used in\
+          the trailer dictionary) - drop the \[\$doc encrypt\] call or the pdfa\
+          claim, they cannot both stand"
+    }
     # The mirror image of the check in ua.tcl: parts 2 and 3 are PDF 1.7
     # formats (ISO 19005-2/-3 build on ISO 32000-1), and PDF/UA-2 - or a
     # caller's [configure -version 2.0] - commits the file to 2.0. Said at
@@ -298,8 +308,8 @@ oo::define ::tclpdf::document::document {
     [my writer] put $intent [::tclpdf::pdfObj dictionary [list \
         Type /OutputIntent \
         S /GTS_PDFA1 \
-        OutputConditionIdentifier [::tclpdf::pdfObj str $identifier] \
-        Info [::tclpdf::pdfObj str $identifier] \
+        OutputConditionIdentifier [my Str $identifier] \
+        Info [my Str $identifier] \
         DestOutputProfile [[my writer] ref $number]]]
     my catalogEntry OutputIntents [::tclpdf::pdfObj arr \
         [list [[my writer] ref $intent]]]

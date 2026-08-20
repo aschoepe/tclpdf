@@ -125,7 +125,7 @@ oo::define ::tclpdf::document::document {
         lappend pairs S /[dict get $range style]
       }
       if {[dict get $range prefix] ne {}} {
-        lappend pairs P [::tclpdf::pdfObj str [dict get $range prefix]]
+        lappend pairs P [my Str [dict get $range prefix]]
       }
       # 1 is the default of Table 159 and is left out, like every other
       # default this package does not spell.

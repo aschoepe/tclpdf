@@ -288,4 +288,90 @@ test writer-3.2 {a channel that already carries a header gets offsets counted fr
       [string range $document 0 4] [writerMismatches $document]
 } -result [list "Content-Type: application/pdf\r\n\r\n" %PDF- {}]
 
+# --- the stream seam encryption hangs in (ISO 32000-2, 7.6.3.3) --------------
+
+test writer-4.1 {without an encryptor a stream is written exactly as handed in} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  set number [$pdf addStream {} "hello"]
+  set body [$pdf body $number]
+  set prefix [$pdf encryptor]
+  $pdf destroy
+  list $prefix $body
+} -result [list {} "<< /Length 5 >>\nstream\nhello\nendstream"]
+
+test writer-4.2 {the encryptor is set and read back like the identifier} -body {
+  set pdf [::tclpdf::writer::pdf new]
+  set before [$pdf encryptor]
+  set set [$pdf encryptor {apply {{data args} {return $data}}}]
+  set after [$pdf encryptor]
+  $pdf destroy
+  list $before [expr {$set eq $after}]
+} -result {{} 1}
+
+test writer-4.3 {the data goes through the encryptor and /Length is the encrypted length} -body {
+  # The point of the order: a cipher that changes the LENGTH - and a real one
+  # does, it pads - must be measured afterwards, or /Length describes bytes
+  # no reader ever sees.
+  proc writerPad {data args} {
+    return "$data........"
+  }
+  set pdf [::tclpdf::writer::pdf new]
+  set number [$pdf addStream {} "hello"]
+  set plain [$pdf body $number]
+  $pdf encryptor writerPad
+  set second [$pdf addStream {} "hello"]
+  set body [$pdf body $second]
+  $pdf destroy
+  rename writerPad {}
+  regexp {/Length (\d+)} $body -> length
+  list [regexp {/Length 5>?} $plain] $length \
+      [string match "*stream\nhello........\nendstream" $body]
+} -result {1 13 1}
+
+test writer-4.4 {encryption comes after the filter check, not instead of it} -body {
+  # The filter check is what a copied or compressed stream is measured
+  # against; hanging the cipher in front of it would let a Flate stream into
+  # a 1.1 file as long as the document was encrypted.
+  set pdf [::tclpdf::writer::pdf new 1.1]
+  $pdf encryptor {apply {{data args} {return $data}}}
+  try {
+    $pdf addStream {Filter /FlateDecode} [zlib compress "hello"]
+  } finally {
+    $pdf destroy
+  }
+} -returnCodes error -match glob -result {*FlateDecode stream*needs PDF 1.2*}
+
+test writer-4.5 {the metadata stream is handed over marked as such} -body {
+  # /EncryptMetadata false (7.6.2) leaves this one stream in the clear. The
+  # writer does not decide that - it says which stream it is holding, and
+  # the encryptor answers.
+  proc writerMark {data args} {
+    return "[join $args -]:$data"
+  }
+  set pdf [::tclpdf::writer::pdf new]
+  $pdf encryptor writerMark
+  set plainNumber [$pdf addStream {Type /XObject} "a"]
+  set metaNumber [$pdf addStream {Type /Metadata Subtype /XML} "b"]
+  set plain [$pdf body $plainNumber]
+  set meta [$pdf body $metaNumber]
+  $pdf destroy
+  rename writerMark {}
+  list [string match "*stream\n:a\n*" $plain] \
+      [string match "*stream\nmetadata:b\n*" $meta]
+} -result {1 1}
+
+test writer-4.6 {an encryptor answering with text rather than bytes is refused} -body {
+  proc writerText {data args} {
+    return [encoding convertfrom utf-8 [binary format H* e282ac]]
+  }
+  set pdf [::tclpdf::writer::pdf new]
+  $pdf encryptor writerText
+  try {
+    $pdf addStream {} "hello"
+  } finally {
+    $pdf destroy
+    rename writerText {}
+  }
+} -returnCodes error -match glob -result {*must be bytes, not text*}
+
 cleanupTests
