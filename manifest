@@ -1,5 +1,5 @@
-C Stage\s8b:\sdigital\ssignatures,\sinvisible\sand\svisible,\sin\sone\sand\sin\stwo\sstages\n\n-\ssign.tcl\s-\s$doc\ssign\swrites\sthe\ssignature\sdictionary,\sthe\swidget,\sthe\s/AcroForm\sentry\sand\sa\s/Contents\splaceholder\sof\sa\sfixed\ssize;\sbeforeWrite\sbuilds\sthe\sobjects\sand\safterWrite\sfills\s/ByteRange\sand\sthe\ssignature\sinto\sthe\sfinished\sfile,\sboth\sedits\slength-neutral\sand\schecked\sto\sbe\n-\sThe\scut:\stclpdf\sprepares,\sthe\ssignature\scomes\sfrom\soutside\s-\s-signer\sis\sa\scommand\sprefix\scalled\swith\sthe\sbytes\sto\ssign\sand\sanswering\sa\sCMS\sSignedData\sobject\sin\sDER,\sand\s::tclpdf::sign\sdigest\sand\sembed\sdo\sthe\ssame\sacross\stwo\sprocesses,\sfor\sa\skey\son\sa\scard,\sin\san\sHSM\sor\sbehind\sa\ssigning\sservice;\sdigest\sfills\sthe\s/M\splaceholder\sbefore\sit\shands\sout\sthe\sbytes,\sso\sthe\stime\sis\sthe\smoment\sof\ssigning\sand\sis\ssigned\swith\sthem\n-\s-subfilter\schooses\swhat\sthe\ssignature\sclaims\sto\sbe,\spkcs7\sby\sdefault\sand\scades\sfor\sa\sPAdES\sclaim\s-\sand\sa\scades\sdocument\swhose\sCMS\sobject\scarries\sa\ssigning-time\sattribute\sis\srefused:\sETSI\sEN\s319\s142-1,\sTable\s1\sforbids\sit\sthere,\swhile\sopenssl\sand\sBouncyCastle\swrite\sit\sunasked\n-\s-rect\sand\s-appearance\smake\sthe\sfield\svisible\sby\shanging\sa\sform\sXObject\sinto\sit\sas\s/AP;\sthe\smodule\sdraws\snothing\sitself,\sbecause\san\sappearance\sis\slayout\sand\slayout\sbelongs\sto\sthe\scaller.\sRefused:\sa\srectangle\swithout\san\sappearance,\san\sappearance\swithout\sa\srectangle,\sa\srectangle\swholly\soff\sthe\spage\n-\soutput.tcl\sasks\sstate\sneedsFile\sbefore\swriting\sto\sa\schannel,\sand\ssign.tcl\sis\sthe\sfirst\sto\sset\sit\s-\sa\ssignature\shas\sto\sread\sits\sown\sfile\sback,\sand\ssaying\sso\safter\sthe\sbytes\swent\sdown\sa\ssocket\sis\sa\ssentence\sspoken\stoo\slate\n-\sencrypt\srefuses\sa\sdocument\sbeing\ssigned\sand\ssign\srefuses\san\sencrypted\sone,\sin\swhichever\sorder\sthe\scalls\sare\smade;\sa\ssecond\ssignature,\sa\stimestamp\sand\sDocMDP\sare\sknowingly\sabsent\n-\stests/sign.test\sadds\s69\stests,\sexamples\s08.01\sand\s08.02\sshow\sboth\sstages\sof\sboth\skinds,\sand\scheck.sh\sgains\sa\spdfsig\ssection\sthat\sdemands\s"Total\sdocument\ssigned"\sand\sproves\sitself\son\sa\scopy\swith\sone\sbyte\schanged\sinside\sthe\ssigned\srange\n-\s000-tools.test\slists\spdfsig\sand\sopenssl,\sand\ssays\swhen\sthe\sopenssl\sit\sfound\sis\sLibreSSL\s-\swhich\shas\sno\s"cms\s-cades"\sand\swould\sskip\sthe\ssignature\stests\swithout\sa\sword\sabout\swhy\n-\sexamples/common.tcl\stakes\sthe\sopenssl\sscaffolding\sboth\ssignature\sexamples\sneed;\sthe\ssignature\sof\sthe\sGerman\sidentity\scard\sspecimen\sgoes\sin\sas\straced\spaths\sand\sthe\sspecimen\sportrait\sas\sa\sJPEG\scarrying\san\sICC\sprofile,\sboth\spublic\sdomain\sunder\ssection\s5\sof\sthe\scopyright\sact
-D 2026-08-20T19:26:37.386
+C A\ssignature\swith\sa\stimestamp\sis\sno\slonger\srefused,\sand\san\sexample\sfor\sthe\sICC\spath\n\n-\ssign.tcl\s-\sthe\scheck\sthat\srefuses\sa\ssigning-time\sunder\scades\sread\sthe\swhole\sDER\sand\sfound\sthe\sOID\sinside\san\sRFC\s3161\stimestamp\stoken\sas\swell,\sso\sit\srefused\sa\sPAdES\sB-T\ssignature\sthe\sstandard\sallows;\sit\snow\sreads\sthe\sORDER\sof\stwo\sOIDs,\ssince\sRFC\s5652\sputs\ssignedAttrs\sbefore\sunsignedAttrs\sand\sa\stime\sbehind\sthe\stoken\sbelongs\sto\sthe\stoken.\sWhat\sthat\scosts\sis\swritten\sat\sthe\scode:\san\sOID\sinside\sa\scertificate\swould\sstill\sbe\sread\sas\sthe\ssigner's\sown\n-\stests/sign.test\s-\sthe\sfour\scases\sas\ssynthetic\sbyte\sstrings\srather\sthan\sreal\sCMS\sobjects,\sfor\sboth\sthe\s-signer\sway\sand\sembed:\stime\salone,\stoken\sbefore\stime,\stime\sbefore\stoken,\sneither.\sThey\sneed\sno\sopenssl,\swhich\sis\sthe\spoint\s-\sthe\ssuite\scannot\smake\sa\stimestamp,\sand\sopenssl\scannot\seither\n-\sexamples/03.06-image-icc.tcl\s-\sthe\sICC\spath\sfor\spictures\shad\stests\sand\sno\sexample:\sthe\ssame\sphotograph\swith\sits\sprofile\skept\sand\swith\s-icc\s0,\swhat\simage\sinfo\ssays\sabout\seach,\sand\sthe\sprofile\sstream\sshared\srather\sthan\scopied.\sThe\ssecond\sdocument\sit\swrites\sis\sthe\ssharper\shalf\s-\sa\scolour\sphotograph\sinside\sa\sPDF/A\sfile\sunder\sa\sGREY\soutput\sintent,\sconforming\sbecause\sthe\spicture\sis\sbound\sto\sits\sown\sprofile,\sand\sthe\srefusal\sof\sthe\ssame\spage\swithout\sthe\sprofile\sis\smeasured\sat\srun\stime\sinstead\sof\sclaimed
+D 2026-08-20T20:44:14.937
 F Makefile.in cc6abf248f914790abc58db615d31f9d1811c4e3c285bb7266c9e4e0f48fdeb0
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -29,7 +29,7 @@ F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md b281f35b55af1
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md e74770aceab2bdfb54e8ac69b7aa32bbf1ce3d0158ad7cf125b5b3ceca689913
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 343ab802c41131f981debb4ec3f0ce031f8f3daf2fbb50fc0ff3dd34de626414
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md a1f46d81be120ab7929149095c63209a9b39c5bd514a3b1674cb5c67ae1c427c
+F doc/tclpdf.md d9328218a45e8236699e61ad3c2a38538aa05459dee7852780cd4bc810b880ee
 F document.tcl 1a3821cf1cdcb10321054fd115427abeada2be7500f173b774bfa1f6d3b7bdfa
 F encrypt.tcl 856fb9376988848939403ae293af6cf55efc9c14a9e5be16f37ca9b98768ef7d
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
@@ -60,6 +60,7 @@ F examples/03.02-gradients.tcl 55dcaec9a62445d8dce857b5d2d7390abc77d016b0070e9ed
 F examples/03.03-svg.tcl 8694a30e48f185b2dbcf52bd75e46036fe9b8a4522737675780ce37011b6150c
 F examples/03.04-barcodes.tcl 5dc837e13069a6abe31d6f46de1efbc83aaa2183ba63ca87b13f6b1a8d97ff94
 F examples/03.05-svg-text.tcl 1de337ff643e97ba03806b0e5f079c9c662958d3059bb40f23233c2369924b58
+F examples/03.06-image-icc.tcl d6f0bd74d6e4c18bfd53f5321f81639e70736e27413e7a66ff108a0418937d9d
 F examples/04.01-table-basics.tcl f2ee0fe8326397a1cf008837576d6dfdf873b960b9ae8b9caab2aa3f47013d03
 F examples/04.02-table-paging.tcl 42c41f0dca8b4c10be1342add4490b36e1a99437820ae604a089e97cc8ae56e6
 F examples/04.03-table-spans.tcl 1c333321e4725931fee7bd040e27adc5fb35c3431c6a91a9d0dbdbf503754694
@@ -292,7 +293,7 @@ F sfnt.tcl d3709b1e7ee8b2c23386c5ebcb70f915d7e8c405d5ef3af422e2cfc9c25831d3
 F shading.tcl 9dbad4baea2be6ae7651a65ecf7e4c6cc812a7ee97e7d0ac844f1814c47f2686
 F shape.tcl 23cfe32d2762ed14612799e53bd3c3eeafc17fb5ac2895d92735b5531ad47060
 F shaping.tcl bf505f5faed90d18f0dbd671e8b96192bbeed09c8c4147d7a0f5a2c07c75c24f
-F sign.tcl 2bcb292ceb57c0f9c389862e0a71f4d65fc8bc8062607e67f50f3fad2e5e8633
+F sign.tcl 218a09d80fb77e0b186d933d4728aa1882fd74b3501aff9ec15008d0d87246ca
 F structure.tcl 8756b14aa57709207e59da89ceab0032cf17b05c7af3bca59524c82388c9cf27
 F structureDest.tcl 4d36398bbee0977dc5057ebcb85205cbd7e9d1b7374ab29226ff68eb859f0b8e
 F structureReport.tcl 7de7aab9646e21333f6060dc06f6adfacc2804672656333b398ee193b9cf47bb
@@ -344,7 +345,7 @@ F tests/pdfVersion.test 091693c87b294240ffd2a64c45349c705b7f566f59549276ced88ad0
 F tests/pdfa.test 2c1245337b7613c06f65d576c330a1f8ad0b44b0d93835eab8cb7f249aeec048
 F tests/shading.test ba8847c479803fea20fe83ad5f58cc26a14f922f6ba94a2d8f8ea4e847021134
 F tests/shaping.test 208a519b59fbffbdb8e9eebb5259aa89e8a11c1e581eb6927826fba72d769323
-F tests/sign.test 4aee256d47569e187197bcfa0bb4950d3aae61409384307135570fa6c016d4ea
+F tests/sign.test 58d4b0c4f0fc8d59efd42254f704991eb5b554552dd00a383eaad0f1da9ade50
 F tests/structure.test 304662559f4151fa39d2d8cd35d79835da8dc640cbb1378c5a5e216a4c1fd108
 F tests/svg.test 7ab24f3222c3bdfffec3bc535bd3bdbcd05bddb2429d5759fbd3e814210582e2
 F tests/table.test 96bb74bf9da64ccd574138cec7a2ad255dd76e998a2643b473a2264af832ffd2
@@ -388,8 +389,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 70ccf21cdf234f7c23c389217c6db0b23a5007631fe9534b1d8e3cbce8e23ea8
 F zugferd.tcl eed0756f706877c6c8eac25f55b8eefe7ddb9c6bd34b56ea989540a9c02d1110
-P e301f13fb4954658e9e36c93caa32cc86852b358ed47c2f77bc325ed6d292bf2
-R 12cfc060319798fc6e72e7e40f6b7f7a
+P 4b3d4b84af45ce7734d8276168f3606b9f9ee7e18232f5c2c07ed67302dc8e3d
+R 5d5ab1734d098a41dd1b57f9bbebfc02
 U alex
-Z 9576198ea8d311a061cbfe437ff6aefc
+Z d8dc6d1d4c93ab4b24d29f6ac1b412ba
 # Remove this line to create a well-formed Fossil manifest.

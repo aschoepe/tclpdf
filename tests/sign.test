@@ -179,6 +179,30 @@ proc ::tclpdfTest::signFake {length bytes} {
   return [string repeat \xa5 $length]
 }
 
+# The two object identifiers the PAdES check reads, as DER: the signing-time
+# attribute 1.2.840.113549.1.9.5, and the RFC 3161 timestamp token attribute
+# id-smime-aa-timeStampToken 1.2.840.113549.1.9.16.2.14.
+proc ::tclpdfTest::signOid {which} {
+  switch -exact -- $which {
+    time {return [binary decode hex 06092a864886f70d010905]}
+    token {return [binary decode hex 060b2a864886f70d010910020e]}
+  }
+  error "no such OID: $which"
+}
+
+# An object that carries the named OIDs in the named order, padded so that
+# neither sits at an edge. It is not CMS and does not need to be: what is
+# under test is which OID comes first, and that is decided on bytes. Building
+# it here rather than signing something real also keeps the test away from
+# openssl, which cannot make a timestamp at all.
+proc ::tclpdfTest::signObject {args} {
+  set der [string repeat \xa5 16]
+  foreach which $args {
+    append der [signOid $which] [string repeat \xa5 16]
+  }
+  return $der
+}
+
 #
 # --- the prepared document --------------------------------------------------
 #
@@ -1049,6 +1073,39 @@ test sign-4.20 {-appearance names a form of this document, and the refusal lists
       [expr {$late ? $other : {}}]
 } -result {0 1 1 1 1 0 {}}
 
+test sign-4.21 {a timestamp token's own signing time leaves the PAdES claim alone} -body {
+  # The write way's half of what sign-5.13 asks of [embed]. A PAdES B-T
+  # signature carries an RFC 3161 timestamp token as an unsigned attribute,
+  # and that token is a SignedData of its own with a signing time of its own -
+  # the authority's. Refusing on the OID alone would refuse a signature the
+  # standard allows, so what decides is the order: signedAttrs stand before
+  # unsignedAttrs, so the signer's own time lies before any token and a
+  # token's time behind it.
+  set result {}
+  foreach {name der} [list \
+      onlyTime [::tclpdfTest::signObject time] \
+      tokenFirst [::tclpdfTest::signObject token time] \
+      timeFirst [::tclpdfTest::signObject time token] \
+      neither [::tclpdfTest::signObject]] {
+    foreach subFilter {cades pkcs7} {
+      set doc [::tclpdfTest::signDoc -version 2.0]
+      $doc sign -size 256 -subfilter $subFilter \
+          -signer [list apply {{der bytes} {return $der}} $der]
+      set path [::tclpdfTest::scratch sign-ts-$name-$subFilter.pdf]
+      set code [catch {$doc write $path} message options]
+      set signed [dict get [$doc sign state] signed]
+      $doc destroy
+      file delete $path
+      lappend result $name/$subFilter \
+          [expr {$code ? [dict get $options -errorcode] : "ok $signed"}]
+    }
+  }
+  set result
+} -result {onlyTime/cades {TCLPDF SIGN SIGNINGTIME} onlyTime/pkcs7 {ok 1}\
+    tokenFirst/cades {ok 1} tokenFirst/pkcs7 {ok 1}\
+    timeFirst/cades {TCLPDF SIGN SIGNINGTIME} timeFirst/pkcs7 {ok 1}\
+    neither/cades {ok 1} neither/pkcs7 {ok 1}}
+
 #
 # --- the two entry points on the finished file ------------------------------
 #
@@ -1277,6 +1334,44 @@ test sign-5.12 {embed refuses a signing-time attribute where the file claims PAd
       [string match "*-subfilter pkcs7*pyHanko*" $message] \
       $length
 } -result {1 {TCLPDF SIGN SIGNINGTIME} 1 1 1 1 51}
+
+test sign-5.13 {embed takes an object whose signing time belongs to a timestamp} -body {
+  # The same eight cases as sign-4.21, through the entry point that has no
+  # document object left and reads the claim out of the file. The accepted
+  # objects are 43 bytes with one OID in them and 72 with two, and the length
+  # [embed] answers is the proof that they went in whole.
+  set result {}
+  foreach {name der} [list \
+      onlyTime [::tclpdfTest::signObject time] \
+      tokenFirst [::tclpdfTest::signObject token time] \
+      timeFirst [::tclpdfTest::signObject time token] \
+      neither [::tclpdfTest::signObject]] {
+    foreach subFilter {cades pkcs7} {
+      set options [list -size 256]
+      if {$subFilter eq "cades"} {
+        lappend options -subfilter cades
+      }
+      set path [::tclpdfTest::signed sign-embed-ts-$name.pdf {*}$options]
+      set code [catch {::tclpdf::sign embed $path $der} answer detail]
+      # A refusal has to leave the room untouched, so that the document can
+      # still be signed by something else.
+      set hex [dict get [::tclpdfTest::signParse \
+          [::tclpdfTest::readBytes $path]] hex]
+      file delete $path
+      if {$code} {
+        lappend result $name/$subFilter [dict get $detail -errorcode] \
+            [expr {$hex eq [string repeat 0 512]}]
+      } else {
+        lappend result $name/$subFilter $answer \
+            [expr {$hex ne [string repeat 0 512]}]
+      }
+    }
+  }
+  set result
+} -result {onlyTime/cades {TCLPDF SIGN SIGNINGTIME} 1 onlyTime/pkcs7 43 1\
+    tokenFirst/cades 72 1 tokenFirst/pkcs7 72 1\
+    timeFirst/cades {TCLPDF SIGN SIGNINGTIME} 1 timeFirst/pkcs7 72 1\
+    neither/cades 16 1 neither/pkcs7 16 1}
 
 #
 # --- openssl and pdfsig: the real thing -------------------------------------

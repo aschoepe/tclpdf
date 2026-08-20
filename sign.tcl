@@ -80,7 +80,8 @@
 # baseline level, while "openssl cms -sign" and BouncyCastle add it unasked.
 # A DER carrying the attribute is refused under /ETSI.CAdES.detached - see
 # [NoSigningTime], which is the one place this module looks into the bytes it
-# is handed, and looks exactly one OID far.
+# is handed, and looks exactly two OIDs far: the attribute, and the RFC 3161
+# timestamp token whose own signing time a B-T signature legitimately carries.
 #
 # WHETHER THE FIELD IS VISIBLE IS THE CALLER'S CHOICE, and where it is,
 # THIS MODULE DOES NOT DRAW IT. Without -rect the widget is the invisible
@@ -186,6 +187,14 @@ namespace eval ::tclpdf::sign {
   # hexadecimal and decoded once, so that the value in the source is the one
   # the standards quote rather than eleven escape sequences.
   variable signingTimeOid [binary decode hex 06092a864886f70d010905]
+
+  # The object identifier of the RFC 3161 timestamp token attribute,
+  # id-smime-aa-timeStampToken, 1.2.840.113549.1.9.16.2.14, as DER: tag 06,
+  # length 0b, and the eleven bytes of the identifier. A PAdES B-T signature
+  # carries one, and everything inside it - including a signing time of its
+  # own - belongs to the timestamp authority rather than to the signer, which
+  # is what [NoSigningTime] tells the two apart by.
+  variable timeStampOid [binary decode hex 060b2a864886f70d010910020e]
 }
 
 #
@@ -436,17 +445,44 @@ proc ::tclpdf::sign::WriteDate {data range date what} {
 # THE SEARCH IS DELIBERATELY COARSE. It looks for the DER encoding of the
 # attribute's OID anywhere in the object and does not parse ASN.1: this module
 # does not understand CMS, and is not going to start understanding it for one
-# attribute. What that coarseness costs is a false positive it cannot tell
-# apart - the same OID inside an embedded RFC 3161 timestamp token rather than
-# among the signed attributes. Acceptable for this version because tclpdf
-# produces no timestamps; a caller whose object carries one assembled it
-# elsewhere and knows what is in it, and -subfilter pkcs7 is the way past.
+# attribute. What it does read is the ORDER of two OIDs, and that is enough to
+# tell the one case apart that a plain search gets wrong.
+#
+# A PAdES B-T signature carries an RFC 3161 timestamp token as an UNSIGNED
+# attribute, and that token is a CMS SignedData of its own with a signing time
+# of its own - the timestamp authority's, not the signer's. The outer
+# SignerInfo can be perfectly clean while the OID is in the object, so a
+# search that only asks WHETHER the OID occurs refuses a signature that the
+# standard allows.
+#
+# The order decides it, and it decides it structurally rather than by luck:
+# RFC 5652 defines SignerInfo with signedAttrs BEFORE unsignedAttrs, and DER
+# writes the fields in that order. So a signing time of the signer's own -
+# which is a signed attribute - always lies BEFORE the timestamp token, and
+# one that belongs to a token always lies behind it. The refusal therefore
+# stands only where the signing-time OID comes before the first timestamp
+# token, or where there is no token at all. A signer that sets both - an
+# outer signing time and a timestamp - still puts the outer one in front and
+# is still refused, which is right: the outer attribute is the forbidden one.
+#
+# THE PRICE OF NOT PARSING ASN.1, said rather than hidden: the certificates
+# stand in the DER before the SignerInfos, so an OID that appears in a
+# certificate appears before any token and is read as an outer signing time.
+# No certificate has a reason to carry this OID, but nothing here rules it
+# out - and -subfilter pkcs7 remains the way past for a caller whose object
+# is one this cannot judge.
 proc ::tclpdf::sign::NoSigningTime {der subFilter what} {
   if {$subFilter ne "/ETSI.CAdES.detached"} {
     return
   }
   variable signingTimeOid
-  if {[string first $signingTimeOid $der] < 0} {
+  variable timeStampOid
+  set time [string first $signingTimeOid $der]
+  if {$time < 0} {
+    return
+  }
+  set token [string first $timeStampOid $der]
+  if {$token >= 0 && $token < $time} {
     return
   }
   return -code error -errorcode {TCLPDF SIGN SIGNINGTIME} "tclpdf: the\
