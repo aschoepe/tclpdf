@@ -1,5 +1,5 @@
-C Retire\sthe\smeasured\spdf4tcl\scomparison\sin\sfavour\sof\sa\sshort\snotice\n\n-\sdoc/TCLPDF-VS-PDF4TCL.md\scarries\sa\sfriendly\snotice\sinstead\sof\sthe\sfeature\stable:\sthe\sactively\smaintained\sfork\sat\sgithub.com/gregnix/pdf4tcl\scloses\spublicly\snamed\sgaps\swithin\sa\sday,\sso\skeeping\sa\smeasured\slist\scurrent\swould\scost\snearly\sas\smuch\sas\sextending\sthe\ssoftware\s-\sthe\spage\snow\spoints\sthere,\snotes\sthat\stclpdf\sis\sMIT\sand\staking\swhat\sis\suseful\sis\swelcome,\sand\skeeps\sthe\sone\sstable\sstatement:\sthe\stwo\sprojects\scomplement\seach\sother\n-\sthe\sdated\ssnapshot\smeasured\sagainst\s0.9.4\sremains\sin\sthis\sfile's\searlier\srevisions
-D 2026-08-20T07:52:56.742
+C The\stwo\sround-4\sleftovers:\sabsolute\serror\sposition,\sno\sorphan\sprofile\sobject\n\n-\stextBlock\s-\sa\srefused\sglyph\snames\sits\sposition\sin\sthe\sstring\sas\shanded\sin\son\severy\sroad\sof\sthe\sparagraph\sbreaker,\sfound\sby\ssearching\sthat\sstring\srather\sthan\sby\soffset\sarithmetic,\sand\sthe\s-avoid\sroad\sno\slonger\sreports\sposition\szero;\sthe\smanual\sdrops\sits\sexception\ssentence\n-\simage\sand\simagePng\s-\san\salpha\sPNG\swith\san\sICC\sprofile\sdecodes\sbefore\sthe\sfirst\swriter\sobject,\sso\sa\sfailing\spicture\sleaves\sno\sorphan\sprofile\sobject\sbehind;\sthe\sversion\srefusal\snames\sthe\sthreshold\sthat\sactually\sapplies
+D 2026-08-20T07:59:27.566
 F Makefile.in 32a12f00edbc19d7303ba0653f6ffe6b7b94f17ddde8a3a9ef313a843dbfd517
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -28,7 +28,7 @@ F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md b281f35b55af1
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md e74770aceab2bdfb54e8ac69b7aa32bbf1ce3d0158ad7cf125b5b3ceca689913
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 343ab802c41131f981debb4ec3f0ce031f8f3daf2fbb50fc0ff3dd34de626414
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md 917ed2075e622e8d0eb557dfc6e56312aa31f5b67b189e4ed789892b871ce2bb
+F doc/tclpdf.md 21823189875c72b4e03c30d28bb6f195f685dd14c221079db94ec6256735c6c9
 F document.tcl 739b371d179b305c943007ac9a2fb765efed775ecc57c04f64ec2da7824b78e1
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
 F examples/00.01-hello-world.tcl 7ebcbd6467061066628f2b536cc6729baf1f9684da8c8bed0842c458e7b2bd68
@@ -255,9 +255,9 @@ F icc/LICENSE-ZLIB-bICC 334f239290b4b687eaf5bbccefa573eefe68e8e48878d71731f0487f
 F icc/README.md 9adf991171aea4835c64d9322e31192bc23357586183205e7ebeddee5e6a9509
 F icc/sRGB.icc af18780bd3a0b75630c372842563b9ae9f883c9ef0476c20f39a2aa14e60c3ef
 F icc/sRGB2014.icc 9e1c2496ceb618f80229e57b60a03f18615cbefe3e772b20e6ff72568fcbd87a
-F image.tcl 7da20c695b9c37e3207692d7399cec879659a69b394f896d18f55f7b3e7f9166
+F image.tcl c35a1debdb9fe2b55e918df320813a19de118c9d9e030a2c43f3d41aab537eeb
 F imageJpeg.tcl ee68ac5888c993f2ebdf56db744ae5455d8900aa77a076dc1801bf9e4d10d903
-F imagePng.tcl ccf828bf31beecda309ca90d815479287431034cb88d125710073620bd64b73f
+F imagePng.tcl 3888b2c829f3dcd317b3150c6ea99dfc0f98a9546d51569ebbecf18e63f74879
 F imagePngAlpha.tcl ec4cf73b28d781adae3ea9614e7e121b20ed8ed58fc1e8dbd08b09b2235eeaf0
 F import.tcl 17f6a337af2d69bf6aefb0e9e19bb3041493f80977501069f2c94ab36df35a62
 F io.tcl 3283fb3b0a0c86a656e2e7e2211a21f5feb188eba8ebb968b125e1099abc3c59
@@ -319,7 +319,7 @@ F tests/glyfOutline.test 68e1acd165e1ba2e2e5f3e8d731919054a52455069e116311a98cce
 F tests/graphics.test 290de8e9da3c1f34ecc4bd600322ffa01a92a4b65f6ddb6d2316ccfbd6b0436c
 F tests/gsubApply.test 5a1d9cba1dfeff3ad2b4d5fbe6d021c440d3828c304ccf6760c0bae42d74de65
 F tests/helper.tcl 4b20385ad4a62e35577fa73fbcbaccb48ac41824f1bf1dcc169edad2f8418523
-F tests/image.test d3b9679a14562db5969788194f0e03d7bf26d4ce1988118ea3df08cab2ef5df9
+F tests/image.test 37cfa141b124442ab86c0e6dbf3da39c19340ca8451e4d3d8a418e4826c1f5c2
 F tests/import.test c965de31f68ec0968174b6f2a5156319ea764b57db2e71bd5cc0b5c7f018843b
 F tests/joining.test 9ba3834dcf0dce5d3c025084ed9d88df24b00e4f85e59bca4c7cadb1ba84f276
 F tests/kern.test 038fab018040d486f28b65f4c0b86bf544793c81c455fc7b173e93484c789000
@@ -337,7 +337,7 @@ F tests/structure.test 304662559f4151fa39d2d8cd35d79835da8dc640cbb1378c5a5e216a4
 F tests/svg.test 7ab24f3222c3bdfffec3bc535bd3bdbcd05bddb2429d5759fbd3e814210582e2
 F tests/table.test 96bb74bf9da64ccd574138cec7a2ad255dd76e998a2643b473a2264af832ffd2
 F tests/text.test 00b79e044176f7d397219b8eb6dd91805a4e7f5576d53835b5d11e4d200df560
-F tests/textFlow.test f98eaa7c0bee8da093a54a711d7c61d51580e420107c7263cae8ecfb0cffd6d2
+F tests/textFlow.test 182a8d3ef15b08e733cbc7e74f8f13e50c77c6c376ac07948e1804129d4292c6
 F tests/textPath.test 4040bda16ed850862f4faea5c4d4490150f2de86ce9e1aea576732b09762b899
 F tests/type1.test 0c48b0fd4a3cfa2e89308e71b5dc9699d464377249833c996e011b4dfa527d49
 F tests/ua.test 08889b175198bdd1675e99703176b258a029c545125388790a4d16d974438b89
@@ -350,7 +350,7 @@ F tests/xmp.test 83a1bca5555bd439443f07097c86a2b4fe44aef1454c752d32b3d8f26eb7450
 F tests/zugferd.test 5392fbd930fc994ddeeda39b13196ddfb3aee42c48c996486c1bb155f0b71576
 F text.tcl 5859c03bc4bdd27282ac5e8f788b2fa21eaea4365d377d1b27f4b1bfcbdfbf98
 F textAvoid.tcl 9ddc54f52332482ae2478a85cd9350a26aa6fe8c7700357083cce4ccdedce833
-F textBlock.tcl 3aff5054ee1f1bfcf1506ec1f3d7ac55567c8d390225f587eb307a9cc25bfd29
+F textBlock.tcl 8a8bcca001e3deeffdca825bddc9bea1cd70738e3a1931f68faf57708f30584f
 F textPath.tcl 9b22359373ed6e0ddfd94ca031a654b5d8115af64c8164dfcf31c37564969142
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
@@ -376,8 +376,8 @@ F xObject.tcl d32c585141646d10450c705b587fb82a93b4a84e7fc09a3e679f9584def703ca
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl 70ccf21cdf234f7c23c389217c6db0b23a5007631fe9534b1d8e3cbce8e23ea8
 F zugferd.tcl 8992ed206187116fe68199f30b4306bbf9cb62636151ae79f96731ec4e6c2018
-P c55d5aab3f6c633d625a34e46d2575ed0927e4aaa6ff512dd14352f93df7467e
-R 49deeee01db9bebb9cfc60985a8dc318
+P 26d52f034cc26f3853626fcb1d20253e5462f2c6a3cd5c5cd87a9c868ff0fef3
+R ff80de5ab3e6a981694b9d212ef20eab
 U alex
-Z 86df5c6b75835d12d0dad77dc71e78db
+Z f0bdd7ed3536e53afa8d46d7dbad74b0
 # Remove this line to create a well-formed Fossil manifest.

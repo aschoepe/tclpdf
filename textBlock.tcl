@@ -358,7 +358,8 @@ oo::define ::tclpdf::document::document {
           set candidate "$current$glue$word"
           set candidateFrom $currentFrom
         }
-        if {[my TextBlockFits $candidate $width $arguments]} {
+        if {[my TextBlockFits $candidate $width $arguments \
+            $string $candidateFrom]} {
           set current $candidate
           set currentFrom $candidateFrom
           continue
@@ -372,9 +373,14 @@ oo::define ::tclpdf::document::document {
         # and a remainder can carry further offers. Closing the line and trying
         # again is therefore not a special case, it is the next round.
         while {1} {
-          set taken [my TextBlockHyphen $current $glue $word $width $arguments]
+          # Where what is measured next begins in the string: the line so far
+          # when there is one, the word otherwise. The offer road measures a
+          # head built from both, so it needs the same place.
+          set chunkFrom [expr {$current ne {} ? $currentFrom : $wordFrom}]
+          set taken [my TextBlockHyphen $current $glue $word $width $arguments \
+              $string $chunkFrom]
           if {[llength $taken]} {
-            set from [expr {$current ne {} ? $currentFrom : $wordFrom}]
+            set from $chunkFrom
             lassign $taken emit remainder
             # The head consumed this much of the word - measured on the word
             # itself rather than on the head, which carries the prefix and the
@@ -400,7 +406,8 @@ oo::define ::tclpdf::document::document {
           lassign [my TextBlockAsk $band $inParagraph $paragraphIndex $globalLine] \
               width offset running
           set current {}
-          if {[llength $taken] && [my TextBlockFits $word $width $arguments]} {
+          if {[llength $taken] && [my TextBlockFits $word $width $arguments \
+              $string $wordFrom]} {
             break
           }
         }
@@ -412,15 +419,18 @@ oo::define ::tclpdf::document::document {
         # marks as well.
         set marked $word
         if {[string first "\u00AD" $word] >= 0
-            && ![my TextBlockFits $word $width $arguments]} {
+            && ![my TextBlockFits $word $width $arguments \
+                $string $wordFrom]} {
           set word [string map [list "\u00AD" {}] $word]
         }
         # The word alone may still be too wide - a part number, a URL, a
         # column two millimetres across. Break it by character rather than
         # letting it run past the edge unnoticed.
-        while {![my TextBlockFits $word $width $arguments] && [string length $word] > 1} {
+        while {![my TextBlockFits $word $width $arguments \
+            $string $wordFrom] && [string length $word] > 1} {
           set take [string length $word]
-          while {$take > 1 && [my textWidth [string range $word 0 $take-1] {*}$arguments] > $width} {
+          while {$take > 1 && [my TextBlockMeasure [string range $word 0 $take-1] \
+              $arguments $string $wordFrom] > $width} {
             incr take -1
           }
           lappend lines [dict create text [string range $word 0 $take-1] \
@@ -464,8 +474,77 @@ oo::define ::tclpdf::document::document {
   # thin space the line ends on takes no room, as a plain space there takes
   # none. Measured with it, "aaa<thin>" fell to the character fallback in a
   # column that holds "aaa", and the thin space opened the next line.
-  method TextBlockFits {text width arguments} {
-    return [expr {[my textWidth [my TextBlockClose $text] {*}$arguments] <= $width}]
+  method TextBlockFits {text width arguments string base} {
+    return [expr {[my TextBlockMeasure [my TextBlockClose $text] $arguments \
+        $string $base] <= $width}]
+  }
+
+  # A measurement the breaker makes on a CHUNK of the block: the string as
+  # the caller handed it in travels with it, and base says where in that
+  # string the chunk begins. A glyph refusal thrown from inside carries a
+  # position counted in the chunk; the contract (manual, "Error codes") is
+  # the 0-based index in the caller's string, so it is rebased before it
+  # goes on. Everything else passes through untouched.
+  method TextBlockMeasure {text arguments string base} {
+    try {
+      return [my textWidth $text {*}$arguments]
+    } trap {TCLPDF FONT GLYPH} {message options} {
+      set position [my TextBlockLocate $arguments $string $base]
+      if {$position < 0} {
+        # The refused character is not one of the caller's: the only one the
+        # breaker adds is the hyphen it sets at an offer. Nothing in the
+        # string to point at, so the refusal travels as it was thrown.
+        return -options $options $message
+      }
+      my TextBlockRebase $message $options $position
+    }
+  }
+
+  # Where the refused character stands in the string: the first one from
+  # base on that the face refuses ON ITS OWN. Counting instead - chunk
+  # position plus base - is off wherever the chunk is not the string
+  # verbatim, and it is not in two places by design: a run of separators
+  # between two words is measured as the single space they are to the page,
+  # and the character fallback measures a word with its soft hyphens taken
+  # out. Asking the face again costs a measurement per character, on the
+  # road to a refusal only.
+  #
+  # The separators are skipped, because the breaker never hands one to a
+  # face - a tab HAS no glyph in the standard fourteen and would be found
+  # here instead of the character that was really refused. Everything the
+  # chunk did contain in front of the refusal was measured and accepted, so
+  # the first refusal from base on is the one that was thrown.
+  method TextBlockLocate {arguments string base} {
+    set length [string length $string]
+    for {set index $base} {$index < $length} {incr index} {
+      set char [string index $string $index]
+      if {[string first $char $::tclpdf::textBlock::separators] >= 0} {
+        continue
+      }
+      try {
+        my textWidth $char {*}$arguments
+      } trap {TCLPDF FONT GLYPH} {} {
+        return $index
+      }
+    }
+    return -1
+  }
+
+  # Throw a glyph refusal on with another position: the errorcode element,
+  # the number in the message and the one in -errorinfo, so that a caller
+  # who traps the code and one who reads the message are told the same
+  # place. The wording of the message is not a contract and is left as the
+  # font wrote it; the position in it is.
+  method TextBlockRebase {message options position} {
+    set code [dict get $options -errorcode]
+    dict set options -errorcode [lreplace $code 4 4 $position]
+    regsub {\(position \d+\)} $message "(position $position)" message
+    if {[dict exists $options -errorinfo]} {
+      regsub {\(position \d+\)} [dict get $options -errorinfo] \
+          "(position $position)" info
+      dict set options -errorinfo $info
+    }
+    return -options $options $message
   }
 
   # Ask the band about a line. Answers {width offset running}: running is the
@@ -504,7 +583,7 @@ oo::define ::tclpdf::document::document {
   # The hyphen that appears at the break is a real one (U+002D), so the line
   # ends the way a reader expects. What that costs is named in the manual:
   # extracting such a line yields the hyphen too.
-  method TextBlockHyphen {prefix glue word width arguments} {
+  method TextBlockHyphen {prefix glue word width arguments string base} {
     set parts [split $word "\u00AD"]
     if {[llength $parts] < 2} {
       return {}
@@ -519,7 +598,7 @@ oo::define ::tclpdf::document::document {
         # ends in a breakable space.
         set head "$prefix$glue$head"
       }
-      if {[my textWidth $head {*}$arguments] <= $width} {
+      if {[my TextBlockMeasure $head $arguments $string $base] <= $width} {
         return [list $head [join [lrange $parts $take end] "\u00AD"]]
       }
     }
@@ -542,10 +621,12 @@ oo::define ::tclpdf::document::document {
   # whole: the separators - a line feed or a tab has no glyph anywhere, and
   # the breaker sets the space of the page for them - and the breakable
   # spaces, which are set or stripped by where the lines happen to END, so
-  # no measurement in advance can say whether a face will be asked for one.
-  # A breakable space the break leaves inside a line is therefore still
-  # refused by the breaker itself, with the chunk's position - the one
-  # deliberate remainder of the old counting. Everything else sits inside a
+  # no measurement in advance can say whether a face will be asked for one -
+  # and measuring one here would refuse a document that is written today:
+  # U+200B ends a line in Helvetica without ever reaching a face. A
+  # breakable space the break leaves INSIDE a line is therefore refused by
+  # the breaker itself, and the breaker names the place in the caller's
+  # string as well (TextBlockMeasure). Everything else sits inside a
   # run, the position moved out by what stands in front of it; the
   # characters the measuring loops skip without setting - the soft hyphen,
   # the zero width space, the byte order mark - are counted by those loops
@@ -562,16 +643,11 @@ oo::define ::tclpdf::document::document {
       try {
         my textWidth [string range $string $from $to] {*}$arguments
       } trap {TCLPDF FONT GLYPH} {message options} {
-        set code [dict get $options -errorcode]
-        set position [expr {[lindex $code 4] + $from}]
-        dict set options -errorcode [lreplace $code 4 4 $position]
-        regsub {\(position \d+\)} $message "(position $position)" message
-        if {[dict exists $options -errorinfo]} {
-          regsub {\(position \d+\)} [dict get $options -errorinfo] \
-              "(position $position)" info
-          dict set options -errorinfo $info
-        }
-        return -options $options $message
+        # A run IS the string verbatim from $from on, so counting is exact
+        # here - TextBlockRebase does the throwing on, the same one the
+        # breaker's own measurements use.
+        my TextBlockRebase $message $options \
+            [expr {[lindex [dict get $options -errorcode] 4] + $from}]
       }
     }
     return
@@ -693,7 +769,12 @@ oo::define ::tclpdf::document::document {
     set widest 0
     foreach char [lsort -unique [split \
         [regsub -all "\[$::tclpdf::textBlock::separators\]" $string {}] {}]] {
-      set width [my textWidth $char {*}$arguments]
+      # Measured one character at a time and in sorted order, so a refusal
+      # thrown here always says "position 0". The characters this reaches
+      # that the pre-measurement does not are the breakable spaces; the
+      # place they hold in the caller's string is looked up like the
+      # breaker's (TextBlockMeasure).
+      set width [my TextBlockMeasure $char $arguments $string 0]
       if {$width > $widest} {
         set widest $width
       }

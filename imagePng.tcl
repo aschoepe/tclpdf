@@ -233,6 +233,23 @@ proc ::tclpdf::imagePng::space {parsed {base {}}} {
   return $base
 }
 
+# Put the profile-anchored colour space into stream pairs that were built
+# without one, and give the pairs back. The other entries and their order
+# are untouched, and so is a soft mask: coverage is not colour, it stays
+# /DeviceGray.
+#
+# This exists because the caller cannot hand the base to [streams]. Building
+# an ICCBased array means creating the profile object, and [streams] is the
+# last call that can refuse the picture - a damaged alpha channel dies
+# decoding in there. Written first, the profile stream stayed in the file
+# after such a refusal (measured 2026-08-20), against the rule that a
+# refused call leaves nothing behind. So the picture decodes first and is
+# anchored second.
+proc ::tclpdf::imagePng::anchor {pairs parsed base} {
+  dict set pairs ColorSpace [space $parsed $base]
+  return $pairs
+}
+
 # The /DecodeParms for the pass-through way. The reader is told to reverse
 # exactly the filtering the encoder applied; 15 means "PNG optimum", which
 # covers all five per-row filter types (Table 10).
@@ -323,11 +340,13 @@ proc ::tclpdf::imagePng::transparency {parsed} {
 #
 # Returns a dict with "data" and "pairs", plus "maskData" and "maskPairs" when
 # a soft mask is called for. Which of the three ways a file takes is decided
-# here and nowhere else - the caller only creates objects. "base" is handed
-# on to [space]; a soft mask stays /DeviceGray regardless, because the mask
-# is coverage, not colour.
-proc ::tclpdf::imagePng::streams {parsed {base {}}} {
-  set pairs [list ColorSpace [space $parsed $base] \
+# here and nowhere else - the caller only creates objects, and creates them
+# only once this has returned, because this is where a picture can still be
+# refused. The colour space comes out on the device space of the file; a
+# picture travelling with an ICC profile is anchored afterwards, by
+# [anchor].
+proc ::tclpdf::imagePng::streams {parsed} {
+  set pairs [list ColorSpace [space $parsed] \
       BitsPerComponent [dict get $parsed bitDepth]]
 
   if {[hasAlpha $parsed]} {

@@ -545,12 +545,15 @@ oo::define ::tclpdf::document::document {
       set data [dict get $image bytes]
     } else {
       set space [::tclpdf::imagePng device $parsed]
-      set base {}
-      if {[dict get $parsed icc] ne {}} {
-        set base [my ImageProfileBase $parsed]
-        set space ICCBased
-      }
-      set streams [::tclpdf::imagePng streams $parsed $base]
+      # [streams] runs before ANYTHING is written, the picture's ICC profile
+      # stream included: it is the last call that can refuse the picture, a
+      # damaged alpha channel dies decoding in there. So the profile is not
+      # handed in as the colour space base - it is put into the finished
+      # pairs afterwards, by [anchor]. Measured 2026-08-20: built first, the
+      # base left an orphaned profile stream behind whenever the decoding
+      # then failed, and a refused call has to leave nothing. The object
+      # numbers are the same either way, since [streams] creates none.
+      set streams [::tclpdf::imagePng streams $parsed]
       # What the picture needs of the file (Reference 1.7, Table 4.39): a
       # colour key /Mask is PDF 1.3, a soft mask 1.4, sixteen bits per
       # component 1.5. The FlateDecode filter every PNG carries is checked
@@ -570,7 +573,15 @@ oo::define ::tclpdf::document::document {
       if {[dict get $parsed bitDepth] == 16} {
         my RequireVersion 1.5 "a 16-bit PNG picture"
       }
-      lappend pairs {*}[dict get $streams pairs]
+      # The profile object last of the checks and first of the objects: by
+      # here nothing can refuse the picture any more.
+      set streamPairs [dict get $streams pairs]
+      if {[dict get $parsed icc] ne {}} {
+        set streamPairs [::tclpdf::imagePng anchor $streamPairs $parsed \
+            [my ImageProfileBase $parsed]]
+        set space ICCBased
+      }
+      lappend pairs {*}$streamPairs
       set data [dict get $streams data]
       if {[dict exists $streams maskData]} {
         # The soft mask is a greyscale image of its own, the same size, and

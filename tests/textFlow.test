@@ -1552,6 +1552,115 @@ test textFlow-10.5 {paragraphs in front count too: the string as handed in is th
   list [string first "☃" $text] [dict get $opts -errorcode]
 } -result {46 {TCLPDF FONT GLYPH U+2603 46 Helvetica}}
 
+# -- the one class the pre-measurement leaves to the breaker: breakable spaces
+#
+# The invisible characters are written as escapes below on purpose: a literal
+# U+2000 in a test file is a space to every eye and a different test to the
+# machine.
+
+test textFlow-10.6 {a breakable space without a glyph names the index in the string as handed in} -body {
+  # U+2000..U+200A, U+205F and U+3000 may END a line, and one that does is
+  # never set - so the pre-measurement skips the class (the reasons are with
+  # TextBlockPremeasure) and the breaker is where a face is asked for one.
+  # Met inside a line it used to be refused with the position in the chunk
+  # under measurement: index 67 came back as 3. Every road, the one that
+  # measures its widest character for a shape included.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set positions {}
+  foreach char [list \u2000 \u3000] {
+    set text [flowBadAt 67 $char]
+    foreach arguments [list \
+        [list text $text -at {20 30} -width 30] \
+        [list textHeight $text -width 30] \
+        [list textLines $text -width 25] \
+        [list text $text -at {20 30} -width 30 -height max \
+            -avoid {{rect {25 35} {8 8}}}]] {
+      try {
+        $doc {*}$arguments -family helvetica -size 10
+      } trap {TCLPDF FONT GLYPH} {- opts} {
+        lappend positions [lindex [dict get $opts -errorcode] 4]
+      }
+    }
+  }
+  $doc destroy
+  list [llength $positions] [lsort -unique $positions]
+} -result {8 67}
+
+test textFlow-10.7 {and it stands where it stands with an embedded face too} -constraints haveFlowFont -body {
+  # DejaVu Sans carries U+2000 (measured) but not the ideographic space, so
+  # U+3000 is the character the two faces can be held against each other on -
+  # and they break the text in different places, which is what used to move
+  # the number.
+  set doc [tclpdf new -unit mm]
+  $doc font embed body $::flowFont
+  $doc page add
+  set text [flowBadAt 67 \u3000]
+  set codes {}
+  foreach family {helvetica body} {
+    try {
+      $doc text $text -at {20 30} -width 30 -family $family -size 10
+    } trap {TCLPDF FONT GLYPH} {- opts} {
+      lappend codes [lrange [dict get $opts -errorcode] 2 4]
+    }
+  }
+  $doc destroy
+  set codes
+} -result {{GLYPH U+3000 67} {GLYPH U+3000 67}}
+
+test textFlow-10.8 {a chunk the breaker did not measure verbatim names the index all the same} -body {
+  # Counting - the position in the chunk plus where the chunk began - falls
+  # short in two places by design, and both stand in front of the refusal
+  # here: a RUN of separators between two words is measured as the single
+  # space it is to the page (33 instead of 35, measured), and the character
+  # fallback measures a long word with its soft hyphens taken out (16
+  # instead of 18). The tabs in the third string are the other trap: a tab
+  # has no glyph in any of the standard fourteen, so looking for the refused
+  # character without skipping the separators would find one of THEM.
+  # Each answer carries the index the string has and the one that was named.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set answers {}
+  foreach {width text} [list \
+      30 "Wort  und  weiter  noch  mehr  Text\u3000hier und da und dort" \
+      10 "Donau\u00ADdampf\u00ADschiff\u3000fahrt" \
+      30 "Wort\tund\tweiter\tnoch\tmehr\tText\u3000hier und da"] {
+    try {
+      $doc text $text -at {20 30} -width $width -family helvetica -size 10
+    } trap {TCLPDF FONT GLYPH} {- opts} {
+      lappend answers [list [string first \u3000 $text] \
+          [lindex [dict get $opts -errorcode] 4]]
+    }
+  }
+  $doc destroy
+  set answers
+} -result {{35 35} {18 18} {30 30}}
+
+test textFlow-10.9 {a breakable space the line ends on is still not refused} -body {
+  # The other side of the exception, and the reason the pre-measurement
+  # leaves the class alone: a breakable space at the END of a line - the end
+  # of the text, the end of a paragraph - never reaches a face, and the
+  # standard fourteen have a glyph for none of them. U+200B is not set
+  # anywhere, inside a line either. Measuring the class in advance would
+  # refuse documents that are written today, which is what this holds down.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set codes {}
+  foreach text [list "Ein kurzer Text am Ende\u2000" \
+      "Erste Zeile mit Text\u2000\nZweite Zeile hier" \
+      "Ein kurzer Text am Ende\u3000" \
+      "Zusammen\u200Bgesetztes\u200BWort in einer schmalen Spalte"] {
+    lappend codes [catch {$doc text $text -at {20 30} -width 25}]
+  }
+  set path [::tclpdfTest::scratch flowBreakableEnd.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $codes [string range $bytes 0 4] [string match {*%%EOF*} $bytes]
+} -result {{0 0 0 0} %PDF- 1}
+
 # -- brackets and ghost marks: what an error or an empty page leaves behind
 
 test textFlow-11.1 {a glyph refusal in a paginated tagged block closes the page's bracket} -constraints haveFlowFont -body {
