@@ -21,6 +21,21 @@
 #
 #   $doc image draw assets/photo.jpg -at {20 70} -size {80 60}
 #
+# A picture need not stay a picture. Embedded with -stencil 1 a one-bit file
+# becomes an image mask (8.9.6.2): it carries no colour of its own, and every
+# placement paints the fill colour then in force through its bits. Embedded
+# with -mask <alias> a picture wears a SECOND embedded picture as its mask -
+# a stencil becomes the /Mask of explicit masking (8.9.6.3), a greyscale
+# picture the /SMask of a soft mask (11.6.5.2). Both are decided at the
+# embedding, because both decide what the XObject IS:
+#
+#   $doc image embed stamp logo.png -stencil 1
+#   $doc style -fill {0.7 0.1 0.1}
+#   $doc image place stamp -at {20 20} -width 40   ;# painted red
+#
+#   $doc image embed fade vignette.png
+#   $doc image embed photo photo.jpg -mask fade
+#
 # An embedded picture becomes a PDF object the FIRST time it is placed, not
 # when it is embedded. A caller who embeds a logo and then takes a different
 # branch does not pay for it - the same rule the font module follows.
@@ -92,11 +107,13 @@ oo::define ::tclpdf::document::document {
       set path [lindex $args 0]
       set args [lrange $args 1 end]
     }
-    set options [::tclpdf::option parse {type auto data {} icc 1} $args \
-        "image embed"]
-    if {![string is boolean -strict [dict get $options icc]]} {
-      return -code error "tclpdf: -icc of image embed takes a boolean, not\
-          \"[dict get $options icc]\""
+    set options [::tclpdf::option parse {type auto data {} icc 1 stencil 0 \
+        mask {} interpolate 0 invert 0} $args "image embed"]
+    foreach name {icc stencil interpolate invert} {
+      if {![string is boolean -strict [dict get $options $name]]} {
+        return -code error "tclpdf: -$name of image embed takes a boolean, not\
+            \"[dict get $options $name]\""
+      }
     }
     set images [my state images]
     if {[dict exists $images $alias]} {
@@ -121,6 +138,68 @@ oo::define ::tclpdf::document::document {
             auto, jpeg, png"
       }
     }
+    # -stencil turns the picture into an image mask (8.9.6.2): what reaches
+    # the page is not the picture but the current fill colour, through the
+    # bits that are set. Decided HERE, at the embedding, because it decides
+    # what the XObject IS - a stencil has no colour space, so it cannot be
+    # made one at a placement. [stencilInk] refuses whatever cannot be one
+    # bit per sample and reports why; JPEG is refused before it, with its
+    # own reason.
+    if {[dict get $options stencil]} {
+      if {$type ne "png"} {
+        return -code error "tclpdf: a stencil mask is one bit per sample (ISO\
+            32000-2, Table 87: with ImageMask true BitsPerComponent shall be\
+            1), and a DCTDecode filter always delivers 8-bit samples (Table\
+            87) - a stencil has to be a 1-bit PNG, not a JPEG"
+      }
+      ::tclpdf::imagePng stencilInk $parsed
+      # An image mask has no ColorSpace entry at all (Table 87: "shall not be
+      # specified"), so a profile in the file has nothing to anchor and is
+      # left behind rather than refused - [image info] reports icc 0 for it.
+      dict set parsed icc {}
+    } elseif {[dict get $options invert]} {
+      # Outside a stencil the reversal is a Decode array over the samples,
+      # and Table 87 fixes its length at twice the number of components: two
+      # numbers exist only for a one-component picture. That is the picture
+      # a soft mask is made of, which is what this is for.
+      if {[my ImageDevice $type $parsed] ne "DeviceGray"} {
+        return -code error "tclpdf: -invert reverses a picture of ONE\
+            component - a stencil mask or a greyscale picture - and\
+            \"$alias\" is [my ImageDevice $type $parsed]; a Decode array is\
+            twice as long as the picture has components (ISO 32000-2, Table\
+            87)"
+      }
+    }
+    # -mask names a SECOND embedded picture as this one's mask. Which of the
+    # two masking mechanisms that is depends on what the named picture is,
+    # and the difference is not a detail of syntax: a stencil mask is
+    # all-or-nothing and becomes /Mask (8.9.6.3, explicit masking), a
+    # greyscale picture is coverage and becomes /SMask (11.6.5.2, soft-mask
+    # images). The refusals below are Table 143, which says what a soft-mask
+    # image may be: DeviceGray, and neither masked nor soft-masked itself.
+    if {[dict get $options mask] ne {}} {
+      set maskAlias [dict get $options mask]
+      if {![dict exists $images $maskAlias]} {
+        return -code error "tclpdf: -mask of image embed names no embedded\
+            image \"$maskAlias\" - known are: [join [dict keys $images] {, }];\
+            the mask has to be embedded before the picture that wears it"
+      }
+      if {[dict get $options stencil]} {
+        return -code error "tclpdf: \"$alias\" is a stencil mask and cannot\
+            wear a mask of its own - with ImageMask true the Mask entry shall\
+            not be present (ISO 32000-2, Table 87), and a stencil has no\
+            colour for a soft mask to cover"
+      }
+      if {$type eq "png" && ([::tclpdf::imagePng hasAlpha $parsed]
+          || [::tclpdf::imagePng transparency $parsed] ne "none")} {
+        return -code error "tclpdf: \"$alias\" carries its own transparency\
+            and already reaches the file with a mask on it - a second one\
+            would replace it (ISO 32000-2, Table 87: an SMask entry overrides\
+            the image's Mask entry); mask a picture that has none, or leave\
+            the one it brought"
+      }
+      my ImageMaskCheck $maskAlias [dict get $images $maskAlias]
+    }
     # An embedded ICC profile (JPEG APP2, PNG iCCP) becomes the picture's
     # /ICCBased colour space instead of the bare device space - unless
     # -icc 0 says to leave it behind. A kept profile is held to what
@@ -139,9 +218,7 @@ oo::define ::tclpdf::document::document {
               -icc 0 embeds it without the profile"
         }
         lassign $inspected profileSpace profileComponents
-        set device [expr {$type eq "jpeg"
-            ? [::tclpdf::imageJpeg space [dict get $parsed components]]
-            : [::tclpdf::imagePng device $parsed]}]
+        set device [my ImageDevice $type $parsed]
         if {$profileSpace ne [dict get \
             {DeviceGray GRAY DeviceRGB RGB DeviceCMYK CMYK} $device]} {
           return -code error "tclpdf: the ICC profile in $source describes\
@@ -153,9 +230,67 @@ oo::define ::tclpdf::document::document {
       }
     }
     dict set images $alias [dict create type $type parsed $parsed \
-        bytes $bytes path $path object {}]
+        bytes $bytes path $path object {} \
+        stencil [expr {[dict get $options stencil] ? 1 : 0}] \
+        mask [dict get $options mask] \
+        interpolate [expr {[dict get $options interpolate] ? 1 : 0}] \
+        invert [expr {[dict get $options invert] ? 1 : 0}]]
     my state images $images
     return $alias
+  }
+
+  # The device colour space a picture's samples are in - DeviceGray, DeviceRGB
+  # or DeviceCMYK - whichever of the two formats it is. Two callers ask, the
+  # profile check and the mask check, and a second copy of the [expr] is how
+  # they would come to disagree about a palette PNG.
+  method ImageDevice {type parsed} {
+    if {$type eq "jpeg"} {
+      return [::tclpdf::imageJpeg space [dict get $parsed components]]
+    }
+    return [::tclpdf::imagePng device $parsed]
+  }
+
+  # May this embedded picture serve as another one's mask?
+  #
+  # A stencil may always: it becomes /Mask and is the very thing 8.9.6.3
+  # asks for, "an image mask, as described in 8.9.6.2, which serves as an
+  # explicit mask for the primary (base) image".
+  #
+  # Anything else becomes /SMask, and Table 143 lists what a soft-mask image
+  # dictionary may hold: ColorSpace "Required; shall be DeviceGray", Mask
+  # "shall be absent", SMask "shall be absent". Each of the three is a way a
+  # picture can fail here, and each is refused with the way out rather than
+  # with the clause alone - an RGB picture is the caller's mistake, a grey
+  # picture with a profile or with transparency of its own is one step from
+  # being usable.
+  method ImageMaskCheck {alias image} {
+    if {[dict get $image stencil]} {
+      return
+    }
+    set parsed [dict get $image parsed]
+    set device [my ImageDevice [dict get $image type] $parsed]
+    if {$device ne "DeviceGray"} {
+      return -code error "tclpdf: \"$alias\" is a $device picture and cannot\
+          be a soft mask - the colour space of a soft-mask image shall be\
+          DeviceGray (ISO 32000-2, Table 143), because a mask is coverage\
+          rather than colour; embed it as a greyscale picture, or with\
+          -stencil 1 if it is one bit per sample"
+    }
+    if {[dict get $parsed icc] ne {}} {
+      return -code error "tclpdf: \"$alias\" carries an ICC profile, so its\
+          colour space would be /ICCBased, and a soft-mask image shall be\
+          DeviceGray (ISO 32000-2, Table 143) - embed the mask with -icc 0"
+    }
+    if {[dict get $image type] eq "png"
+        && ([::tclpdf::imagePng hasAlpha $parsed]
+            || [::tclpdf::imagePng transparency $parsed] ne "none")} {
+      return -code error "tclpdf: \"$alias\" has transparency of its own, so\
+          it would reach the file with a mask on it - and in a soft-mask\
+          image Mask and SMask shall both be absent (ISO 32000-2, Table 143);\
+          a mask says how much of the picture shows and needs no transparency\
+          besides"
+    }
+    return
   }
 
   # Which format is this? Decided by the magic bytes, not by the file name -
@@ -213,7 +348,10 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options opacity] ne {}} {
       set alpha [my GraphicsOpacity [dict get $options opacity]]
     }
-    if {[dict get $image object] eq {}} {
+    # Asked of the RESOURCE, not of the object: a picture serving as another
+    # one's mask already has an object and no resource name, and reading the
+    # object alone left [ImagePlace] naming a resource the page never got.
+    if {![dict exists $image resource]} {
       # ImageWrite registers the resource in the state itself, so the local
       # copy has to be refreshed - not doing so is how a place ends up naming
       # a resource that the dictionary already has.
@@ -229,8 +367,13 @@ oo::define ::tclpdf::document::document {
     # on, which may not be the one a caller looks at. And recorded here,
     # after the last value that can be refused, so that a placement that
     # never happened leaves no record. A soft mask is DeviceGray, which
-    # every intent admits, and is not recorded.
-    my ColourSpaceUsed [dict get $image space] "image place"
+    # every intent admits, and is not recorded. Nor is a stencil mask, which
+    # has no colour space at all (Table 87: with ImageMask true ColorSpace
+    # "shall not be specified") - what it paints is the fill colour, and that
+    # was recorded when the colour was set.
+    if {[dict get $image space] ne {}} {
+      my ColourSpaceUsed [dict get $image space] "image place"
+    }
 
     # A picture XObject is a unit square with its origin at the BOTTOM left, so
     # the matrix carries both the size and the flip to the top-left convention
@@ -254,17 +397,9 @@ oo::define ::tclpdf::document::document {
     # becomes when NOBODY judged, and that is the one case that has to be
     # remembered - see [undescribedGraphics] below.
     #
-    # The bounding box goes with the Figure. Not required by the letter of
-    # the standard, but the Best Practice Guide names it as what the reading
-    # tools rely on to find a figure on the page - and here it costs nothing,
-    # because the four values were computed two lines up.
-    lassign [my GraphicMark image "image place" [dict get $options alt] \
-        [dict get $options artifact] $top [list $left $top $width $height]] \
-        mark element
-    my save
-    if {$alpha ne {}} {
-      my content "[::tclpdf::pdfObj name $alpha] gs\n"
-    }
+    # The matrix is built BEFORE the mark, because the Figure's box is read
+    # off it. Only arithmetic moved up here - everything that can be refused
+    # was decided further above, so nothing is written before its check.
     set matrix [::tclpdf::geometry multiply \
         [list $w 0 0 $h 0 0] [::tclpdf::geometry translate $x $y]]
     if {[dict get $options rotate] != 0} {
@@ -275,6 +410,25 @@ oo::define ::tclpdf::document::document {
           [list $w 0 0 $h 0 0] [::tclpdf::geometry multiply \
               [::tclpdf::geometry rotate [dict get $options rotate]] \
               [::tclpdf::geometry translate $x $y]]]
+    }
+
+    # The bounding box goes with the Figure. Not required by the letter of
+    # the standard, but the Best Practice Guide names it as what the reading
+    # tools rely on to find a figure on the page.
+    #
+    # It is read off the MATRIX rather than off -at and -width, and an image
+    # XObject is the unit square, so those are the corners that go through it.
+    # Measured on 2026-08-21, before this was so: a picture placed with
+    # -rotate 30 declared a box that left ink outside it on two sides and
+    # claimed page on a third - 14.8.5.4.3 asks for the rectangle that
+    # completely encloses the visible content. Without a rotation the answer
+    # is the placement rectangle, as before.
+    lassign [my GraphicMark image "image place" [dict get $options alt] \
+        [dict get $options artifact] $top [my PlacedBox 1 1 $matrix]] \
+        mark element
+    my save
+    if {$alpha ne {}} {
+      my content "[::tclpdf::pdfObj name $alpha] gs\n"
     }
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
     my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
@@ -460,7 +614,9 @@ oo::define ::tclpdf::document::document {
     set result [dict create type [dict get $image type] \
         path [dict get $image path] \
         bytes [string length [dict get $image bytes]] \
-        width [dict get $parsed width] height [dict get $parsed height]]
+        width [dict get $parsed width] height [dict get $parsed height] \
+        stencil [dict get $image stencil] mask [dict get $image mask] \
+        interpolate [dict get $image interpolate]]
     if {[dict get $image type] eq "png"} {
       dict set result colorType [dict get $parsed colorType]
       dict set result bitDepth [dict get $parsed bitDepth]
@@ -470,8 +626,13 @@ oo::define ::tclpdf::document::document {
       # PNG-side classification below it is about tRNS chunks and calls a
       # channel "none". Measured 2026-08-17: a caller reading "transparency
       # none" for a picture that plainly has soft edges was misled.
-      dict set result transparency [expr {[::tclpdf::imagePng hasAlpha $parsed]
-          ? "softMask" : [::tclpdf::imagePng transparency $parsed]}]
+      # A stencil answers "stencil" and neither of the other three: its bits
+      # ARE the transparency, so no /Mask array and no /SMask is written for
+      # it - the tRNS chunk it may carry reaches the file as nothing at all
+      # (Table 87: with ImageMask true the Mask entry shall not be present).
+      dict set result transparency [expr {[dict get $image stencil] ? "stencil"
+          : ([::tclpdf::imagePng hasAlpha $parsed]
+              ? "softMask" : [::tclpdf::imagePng transparency $parsed])}]
     } else {
       dict set result components [dict get $parsed components]
       dict set result bitDepth [dict get $parsed bitsPerComponent]
@@ -526,10 +687,39 @@ oo::define ::tclpdf::document::document {
   # Turn the parsed picture into PDF objects and register the resource. Called
   # once per image, on first placement.
   method ImageWrite {alias image} {
+    set number [my ImageObject $alias $image]
+    set resourceName Im[my ImageCount]
+    my resource XObject $resourceName [[my writer] ref $number]
+    set images [my state images]
+    dict set images $alias resource $resourceName
+    my state images $images
+    return $number
+  }
+
+  # The picture's own object, created once and reused - the half of
+  # [ImageWrite] that a picture serving as another one's mask needs too. A
+  # mask is named by a dictionary entry and never by a page, so it gets an
+  # object and NO resource name; giving it one would put an XObject into the
+  # page's resources that no content stream mentions.
+  method ImageObject {alias image} {
+    if {[dict get $image object] ne {}} {
+      return [dict get $image object]
+    }
     set parsed [dict get $image parsed]
     set pairs [list Type /XObject Subtype /Image \
         Width [dict get $parsed width] Height [dict get $parsed height]]
-    if {[dict get $image type] eq "jpeg"} {
+    if {[dict get $image stencil]} {
+      # An image mask (8.9.6.2): the bits do not carry colour, they decide
+      # where the current fill colour reaches the page. So there is no
+      # ColorSpace entry to build, nothing to anchor a profile to, and
+      # nothing for [ImagePlace] to hold against a PDF/A output intent -
+      # the paint it lets through was recorded when the colour was set.
+      set streams [::tclpdf::imagePng stencilStreams $parsed \
+          [dict get $image invert]]
+      lappend pairs {*}[dict get $streams pairs]
+      set data [dict get $streams data]
+      set space {}
+    } elseif {[dict get $image type] eq "jpeg"} {
       set space [::tclpdf::imageJpeg space [dict get $parsed components]]
       set colourSpace /$space
       if {[dict get $parsed icc] ne {}} {
@@ -601,11 +791,50 @@ oo::define ::tclpdf::document::document {
         lappend pairs SMask [[my writer] ref $maskNumber]
       }
     }
+    # -invert outside a stencil, where [stencilStreams] has written the
+    # Decode array already: the two numbers that reverse a one-component
+    # picture (Table 87 - the array is twice as long as the picture has
+    # components, and only a greyscale one gets this far; the check is at
+    # the embedding). What it is for is a mask drawn the other way round,
+    # where the ink is the part that shows.
+    if {![dict get $image stencil] && [dict get $image invert]} {
+      lappend pairs Decode [::tclpdf::pdfObj arr {1 0}]
+    }
+    # A hint and nothing more: 8.9.5.3 says Interpolate "is a way for a PDF to
+    # declare to a PDF processor that a specific image might render better if
+    # interpolation is used", and that "a PDF processor may ignore it". Only
+    # written when it is asked for - Table 87 gives it the default false, and
+    # a dictionary that repeats a default says nothing.
+    if {[dict get $image interpolate]} {
+      lappend pairs Interpolate true
+    }
+    # The mask a caller named. Which entry it becomes was decided at the
+    # embedding, by what the named picture is: a stencil mask is
+    # all-or-nothing and goes into /Mask (8.9.6.3, "the Mask entry in an image
+    # dictionary may be an image mask ... which serves as an explicit mask for
+    # the primary (base) image"), a greyscale picture is coverage and goes
+    # into /SMask (11.6.5.2, soft-mask images). Table 87 dates the first at
+    # PDF 1.3 and the second at 1.4.
+    #
+    # The two pictures need not be the same size - "the base image and the
+    # image mask need not have the same resolution ... but since all images
+    # shall be defined on the unit square in user space, their boundaries on
+    # the page will coincide" (8.9.6.3), and Table 143 says the same of a
+    # soft-mask image's Width and Height. So nothing here compares them.
+    if {[dict get $image mask] ne {}} {
+      set maskAlias [dict get $image mask]
+      set maskImage [dict get [my state images] $maskAlias]
+      if {[dict get $maskImage stencil]} {
+        my RequireVersion 1.3 "a picture masked by a stencil"
+        set key Mask
+      } else {
+        my RequireVersion 1.4 "a picture with a soft mask of its own"
+        set key SMask
+      }
+      lappend pairs $key [[my writer] ref [my ImageObject $maskAlias $maskImage]]
+    }
     set number [[my writer] addStream $pairs $data]
-    set resourceName Im[my ImageCount]
-    my resource XObject $resourceName [[my writer] ref $number]
     set images [my state images]
-    dict set images $alias resource $resourceName
     dict set images $alias object $number
     # The space of the samples - DeviceGray, DeviceRGB, DeviceCMYK, or
     # ICCBased for a picture travelling with its profile - kept for

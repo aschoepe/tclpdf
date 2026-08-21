@@ -78,6 +78,48 @@ test font-1.4 {something that is not a font at all} -body {
   ::tclpdf::sfnt parse "not a font file at all, really"
 } -returnCodes error -match glob -result {*not a TrueType or OpenType font*}
 
+# A TrueType collection, built rather than found - the same reason as the
+# CID-keyed CFF face further down: the collections on this machine are macOS
+# system fonts and may not be checked in. A collection is a whole sfnt of its
+# own: the tag "ttcf", a version, the number of faces and one offset to each
+# face's table directory. The refusal hangs on the tag alone, so the header is
+# all it takes - and the header is what a real file starts with.
+proc fontMakeCollectionHeader {{faces 2}} {
+  set header [binary format a4II ttcf 0x00020000 $faces]
+  # The offsets a real file would carry: the first directory begins right
+  # after the header, the second one an arbitrary distance further on.
+  for {set i 0} {$i < $faces} {incr i} {
+    append header [binary format I [expr {12 + 4 * $faces + $i * 0x1000}]]
+  }
+  return $header
+}
+
+test font-1.5 {a TrueType collection is refused, and says how to get on} -body {
+  ::tclpdf::sfnt parse [fontMakeCollectionHeader]
+} -returnCodes error -match glob -result {*TrueType collection*extract the single face*}
+
+test font-1.5a {and it is the tag that decides, not the rest of the header} -body {
+  # The same bytes with the tag of a plain TrueType file: the parse gets past
+  # the signature and fails further in, on a table directory that is none.
+  # Without this the collection test would still pass if the refusal came out
+  # of some other branch by accident.
+  set bytes [fontMakeCollectionHeader]
+  set plain [string replace $bytes 0 3 [binary format I 0x00010000]]
+  set message {}
+  catch {::tclpdf::sfnt parse $plain} message
+  list [string match {*TrueType collection*} $message] \
+      [string match {tclpdf:*} $message]
+} -result {0 1}
+
+test font-1.6 {a table directory that ends in the middle is named, not crashed on} -body {
+  # Found by the test above: binary scan fills what it can and leaves the rest
+  # of its variables unset, so a directory that is cut short used to fail with
+  # "can't read position: no such variable" - a raw Tcl error where every
+  # refusal of this package begins with tclpdf:. Twelve bytes: the TrueType
+  # tag, two announced tables, and nothing behind them.
+  ::tclpdf::sfnt parse [binary format ISuSuSuSu 0x00010000 2 0 0 0]
+} -returnCodes error -match glob -result {*table directory is cut short*announces 2 tables*}
+
 test font-2.1 {the cmap maps characters to glyphs} -constraints haveFont -body {
   set parsed [::tclpdf::sfnt read $fontRegular]
   set cmap [dict get $parsed cmap]

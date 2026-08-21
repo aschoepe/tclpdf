@@ -1412,4 +1412,183 @@ test text-17.4 {a caught refusal changes nothing - stream and resources as if ne
   list [string equal {*}$streams] [string equal {*}$bodies]
 } -result {1 1}
 
+
+# --- the text rendering mode ------------------------------------------------
+#
+# ISO 32000-2, 9.3.6, "Text rendering mode", Table 104: the eight modes, of
+# which this package writes the four that paint (0 to 3) and refuses the four
+# that clip (4 to 7). The operator is "N Tr" (Table 103), the mode is text
+# state (Tmode, Table 102) and therefore survives ET, which is what the guard
+# tests below are about.
+
+test text-18.1 {the four painting modes write their number, and fill writes none} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 20
+  set modes {}
+  foreach word {fill stroke fillStroke invisible} y {20 40 60 80} {
+    $doc text $word -at [list 20 $y] -render $word
+  }
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  foreach line [split $content \n] {
+    if {[regexp {^([0-9]) Tr$} $line -> number]} {
+      lappend modes $number
+    }
+  }
+  # Three numbers for four calls: mode 0 is the initial value of Tr and is
+  # not written, which is what keeps the bytes of an ordinary document.
+  list $modes [regexp -all {Tr} $content]
+} -result {{1 2 3} 3}
+
+test text-18.2 {a mode is guarded - it does not leak into the next line} -body {
+  # Tmode is text state and survives ET (9.3, Table 102), exactly like Tc: a
+  # heading set with -render stroke would otherwise leave "1 Tr" in force and
+  # the paragraph under it would come out hollow.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 20
+  $doc text "hollow" -at {20 20} -render stroke
+  $doc text "solid" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # The q wraps the whole text object, it does not cross it (9.4.1), and the
+  # second call is not bracketed at all.
+  list [regexp {q\nBT\n/FHelvetica 20 Tf\n1 Tr\n} $content] \
+      [regexp -all -line {^q$} $content] \
+      [regexp {ET\nQ\nBT\n/FHelvetica 20 Tf\n0 g\n} $content]
+} -result {1 1 1}
+
+test text-18.3 {-stroke and -strokeWidth go out as RG and w, and only where they act} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 20
+  $doc text "outline" -at {20 20} -render stroke -stroke {1 0 0} -strokeWidth 0.4
+  # The same two options in a mode that does not stroke: 9.3.6 says the
+  # stroking colour is consulted when the mode calls for stroking, so writing
+  # them here would be dead bytes that still change the graphics state.
+  $doc text "filled" -at {20 40} -render fill -stroke {1 0 0} -strokeWidth 0.4
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set width {}
+  foreach line [split $content \n] {
+    if {[regexp {^([0-9.]+) w$} $line -> value]} {
+      lappend width $value
+    }
+  }
+  # The width is a LINE width and is read in user space (9.3.6), so 0.4 mm is
+  # 0.4 * 72 / 25.4 points and does not scale with the font size.
+  list [regexp -all {1 0 0 RG} $content] [llength $width] \
+      [expr {abs([lindex $width 0] - 0.4 * 72 / 25.4) < 0.0001}]
+} -result {1 1 1}
+
+test text-18.4 {the four clipping modes are refused, each by its own name} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  set named 0
+  foreach word {fillClip strokeClip fillStrokeClip clip} {
+    lappend codes [catch {$doc text "x" -at {10 10} -render $word} message]
+    if {[string match "*-render $word is a clipping mode*9.3.6*" $message]} {
+      incr named
+    }
+  }
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Refused before anything is written: no BT, no Tr, nothing.
+  list $codes $named [regexp -all {BT} $content]
+} -result {{1 1 1 1} 4 0}
+
+test text-18.5 {an unknown word is refused with the list of the ones there are} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc text "x" -at {10 10} -render outline} message]
+  $doc destroy
+  list $code $message
+} -result {1 {tclpdf: -render is fill, stroke, fillStroke or invisible, not "outline"}}
+
+test text-18.6 {-strokeWidth is refused where it is written, in [font] and per call} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set first [catch {$doc font -strokeWidth -0.2} one]
+  set second [catch {$doc text "x" -at {10 10} -strokeWidth foo} two]
+  # Zero is a width and means the thinnest line the device can draw
+  # (8.4.3.2), and the empty string leaves whatever [style] set in force.
+  set third [catch {$doc font -strokeWidth 0}]
+  set fourth [catch {$doc font -strokeWidth {}}]
+  # Refused means nothing was stored - the state is what it was.
+  set state [dict get [$doc font] strokeWidth]
+  $doc destroy
+  list $first [string match {*-strokeWidth is a line width of 0 or more*} $one] \
+      $second [string match {*-strokeWidth*foo*} $two] $third $fourth $state
+} -result {1 1 1 1 0 0 {}}
+
+test text-18.7 {the mode reaches every line of a paragraph} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc text "Ein Absatz, der ueber mehrere Zeilen laeuft und dabei\
+      umgebrochen wird." -at {20 20} -width 60 -render fillStroke \
+      -stroke black -strokeWidth 0.2
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set lines [regexp -all {Tj} $content]
+  # One BT/ET per line, and every one of them carries the mode: the block
+  # road hands each line to the same TextRun the single line uses.
+  list [expr {$lines > 1}] [expr {[regexp -all {2 Tr} $content] == $lines}] \
+      [expr {[regexp -all {0 G} $content] == $lines}]
+} -result {1 1 1}
+
+test text-18.8 {invisible text is drawn and still extracts - the OCR case} \
+    -constraints havePdfToText -body {
+  # Mode 3 paints nothing, but "the e and f components of Tm shall be updated
+  # for each glyph drawn when using text rendering mode 3" (9.3.6): the text
+  # is positioned, measured and extractable, it is only not painted.
+  set path [::tclpdfTest::scratch render-invisible.pdf]
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 14
+  $doc text "Rechnung 4711" -at {20 30} -render invisible
+  $doc write $path
+  $doc destroy
+  set text [exec pdftotext $path -]
+  # In the WRITTEN file, not only in the buffer: uncompressed, so the
+  # operator can be read out of the bytes that went to disk.
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [string match {*Rechnung 4711*} $text] [regexp {3 Tr} $bytes]
+} -result {1 1}
+
+test text-18.9 {a refused mode leaves the stream and the state as they were} -body {
+  # The check runs before the mark is taken and before the first byte goes
+  # out, like every other value of a text call.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc text "eins" -at {10 10}
+  set before [::tclpdfTest::content $doc]
+  catch {$doc text "kaputt" -at {10 20} -render clip}
+  set after [::tclpdfTest::content $doc]
+  set state [dict get [$doc font] render]
+  $doc destroy
+  list [string equal $before $after] $state
+} -result {1 fill}
+
+test text-18.10 {-render is font state - set once, in force until changed} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 20 -render stroke -stroke {0 0 1} \
+      -strokeWidth 0.3
+  $doc text "eins" -at {20 20}
+  $doc text "zwei" -at {20 40}
+  # Per call, over the state, and without changing it.
+  $doc text "drei" -at {20 60} -render fill
+  set content [::tclpdfTest::content $doc]
+  set state [$doc font]
+  $doc destroy
+  list [regexp -all {1 Tr} $content] [regexp -all {0 0 1 RG} $content] \
+      [dict get $state render] [dict get $state stroke] \
+      [dict get $state strokeWidth]
+} -result {2 2 stroke {0 0 1} 0.3}
+
 cleanupTests

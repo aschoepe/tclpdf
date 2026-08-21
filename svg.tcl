@@ -187,11 +187,19 @@ oo::define ::tclpdf::document::document {
     }
     set root [::tclpdf::xml parse $markup]
     try {
+      # Where the drawing will land, worked out before the mark: a Figure
+      # carries the area it covers as an attribute (ISO 32000-2, 14.8.5.4.3),
+      # and an attribute is fixed when the element is OPENED, which is what
+      # the mark does. Handed on to [SvgRoot] rather than computed twice, so
+      # that the box and the drawing's own matrix are the same numbers and
+      # not two computations that agree today.
+      set fit [my SvgFit $root $options]
       lassign [my GraphicMark svg svg [dict get $options alt] \
           [dict get $options artifact] [expr {[dict get $options at] eq {} ?
-          0 : [lindex [dict get $options at] 1]}]] mark element
+          0 : [lindex [dict get $options at] 1]}] \
+          [dict get $fit area]] mark element
       try {
-        return [my SvgRoot $root $options]
+        return [my SvgRoot $root $options $fit]
       } finally {
         my GraphicUnmark $mark $element
       }
@@ -200,22 +208,22 @@ oo::define ::tclpdf::document::document {
     }
   }
 
-  method SvgRoot {root options} {
-    if {[::tclpdf::xml name $root] ni {svg svg:svg}} {
-      return -code error "tclpdf: this is not an SVG document - the root\
-          element is \"[::tclpdf::xml name $root]\""
-    }
-    my state svgSkipped {}
-
+  # Where a drawing lands, before a stroke of it is written: the viewBox, the
+  # rectangle asked for, and the fit of the one into the other. Its own method
+  # because the Figure's bounding box has to be known BEFORE the mark opens
+  # the element - see [SvgDraw] - while the matrix built from the same numbers
+  # is not written until [SvgRoot].
+  #
+  # Answers a dictionary: box {x y width height} is the viewBox in its own
+  # units, extent {width height} and at {left top} the rectangle asked for in
+  # the document unit, scale the factor onto it, inset {x y} and drawn
+  # {width height} the fit in points, and area {left top width height} where
+  # the drawing ACTUALLY ends up, in the document unit.
+  method SvgFit {root options} {
     lassign [my SvgViewBox $root] boxX boxY boxWidth boxHeight
     lassign [my SvgExtent $root $options $boxWidth $boxHeight] width height
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
 
-    # Everything is drawn inside one q/Q pair with a single matrix that maps
-    # the viewBox onto the requested rectangle. The y axis is flipped HERE and
-    # nowhere else: SVG counts downwards from the top left, PDF upwards from
-    # the bottom left, and doing it per element is how half a drawing ends up
-    # mirrored.
     # Fit, do not distort. The default of preserveAspectRatio is
     # "xMidYMid meet": the drawing keeps its proportions, is scaled until it
     # fits the rectangle in BOTH directions, and is centred in what is left
@@ -230,18 +238,49 @@ oo::define ::tclpdf::document::document {
     set requestedHeight [my distance $height]
     set scale [expr {min($requestedWidth / double($boxWidth),
         $requestedHeight / double($boxHeight))}]
-    set scaleX $scale
-    set scaleY $scale
     set drawnWidth [expr {$boxWidth * $scale}]
     set drawnHeight [expr {$boxHeight * $scale}]
     # What is left over is split evenly - that is the "Mid" in xMidYMid.
     set insetX [expr {($requestedWidth - $drawnWidth) / 2.0}]
     set insetY [expr {($requestedHeight - $drawnHeight) / 2.0}]
     set unit [my cget -unit]
-    lassign [my coords \
-        [expr {$left + [::tclpdf::geometry fromPoints $insetX $unit]}] \
-        [expr {$top + $height -
-            [::tclpdf::geometry fromPoints $insetY $unit]}]] originX originY
+    # The area is the FITTED rectangle, not the one asked for: once a drawing
+    # is fitted rather than stretched it is smaller than the rectangle and
+    # sits centred in it, and the empty bands beside it are not the figure.
+    return [dict create \
+        box [list $boxX $boxY $boxWidth $boxHeight] \
+        extent [list $width $height] at [list $left $top] scale $scale \
+        inset [list $insetX $insetY] drawn [list $drawnWidth $drawnHeight] \
+        area [list \
+            [expr {$left + [::tclpdf::geometry fromPoints $insetX $unit]}] \
+            [expr {$top + [::tclpdf::geometry fromPoints $insetY $unit]}] \
+            [::tclpdf::geometry fromPoints $drawnWidth $unit] \
+            [::tclpdf::geometry fromPoints $drawnHeight $unit]]]
+  }
+
+  method SvgRoot {root options fit} {
+    if {[::tclpdf::xml name $root] ni {svg svg:svg}} {
+      return -code error "tclpdf: this is not an SVG document - the root\
+          element is \"[::tclpdf::xml name $root]\""
+    }
+    my state svgSkipped {}
+
+    lassign [dict get $fit box] boxX boxY boxWidth boxHeight
+    lassign [dict get $fit drawn] drawnWidth drawnHeight
+    lassign [dict get $fit area] areaLeft areaTop areaWidth areaHeight
+    set scaleX [dict get $fit scale]
+    set scaleY [dict get $fit scale]
+
+    # Everything is drawn inside one q/Q pair with a single matrix that maps
+    # the viewBox onto the requested rectangle. The y axis is flipped HERE and
+    # nowhere else: SVG counts downwards from the top left, PDF upwards from
+    # the bottom left, and doing it per element is how half a drawing ends up
+    # mirrored.
+    #
+    # The origin is the BOTTOM left corner of the area the drawing was fitted
+    # into - the same rectangle the Figure carries, read off [SvgFit] rather
+    # than added up a second time from the corner and the inset.
+    lassign [my coords $areaLeft [expr {$areaTop + $areaHeight}]] originX originY
 
     my state svgDepth 0
     my SvgSave
@@ -284,12 +323,9 @@ oo::define ::tclpdf::document::document {
     # Where the drawing ACTUALLY ended up, not what was asked for: once it is
     # fitted rather than stretched it is smaller than the rectangle and sits
     # centred in it, and a caller placing a caption underneath needs to know
-    # where.
-    return [list \
-        [expr {$left + [::tclpdf::geometry fromPoints $insetX $unit]}] \
-        [expr {$top + [::tclpdf::geometry fromPoints $insetY $unit]}] \
-        [::tclpdf::geometry fromPoints $drawnWidth $unit] \
-        [::tclpdf::geometry fromPoints $drawnHeight $unit]]
+    # where. The same four numbers the Figure got as its bounding box - one
+    # area, worked out once in [SvgFit].
+    return [dict get $fit area]
   }
 
   # Decode a document according to its XML declaration, UTF-8 by default.

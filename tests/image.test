@@ -1162,6 +1162,8 @@ set srgbIcc [file join $iccDir sRGB.icc]
 set cmykIcc [file join $iccDir ISOcoated_v2_bas.ICC]
 testConstraint haveSrgbIcc [file exists $srgbIcc]
 testConstraint haveCmykIcc [file exists $cmykIcc]
+set greyIcc [file join $iccDir ISOcoated_v2_grey1c_bas.ICC]
+testConstraint haveGreyIcc [file exists $greyIcc]
 
 # Splice an iCCP chunk into a PNG built by ::tclpdfTest::png: name, NUL,
 # method 0, the profile deflated (PNG 11.3.3.2), placed right after IHDR -
@@ -1477,5 +1479,361 @@ test image-form-16.1 {image draw -alt inside form create opens no Figure} -const
   # one Figure - the placement's - and nothing undescribed
   list [llength $structure] [dict get [lindex $structure 0] alt] $missing
 } -result {1 {the form} {}}
+
+# --- stencil masks and the mask a caller names --------------------------------
+#
+# ISO 32000-2, 8.9.6.2 (stencil masking), 8.9.6.3 (explicit masking), 11.6.5.2
+# with Table 143 (soft-mask images), 8.9.5.3 (image interpolation) and Table 87
+# for what the image dictionary may and may not hold.
+
+# A 1-bit greyscale picture, four pixels wide: 0110 - the middle two are the
+# ink under the PNG rule that 0 is black. One filter byte, one data byte,
+# the four low bits unused.
+proc stencilPng {{bits 0x60}} {
+  return [::tclpdfTest::png 4 1 1 0 [binary format cc 0 $bits]]
+}
+
+# The same four pixels as a palette picture. "first" and "second" are the two
+# PLTE entries as RGB triples, "trns" the tRNS body or {}.
+proc stencilPalettePng {first second {trns {}}} {
+  return [::tclpdfTest::png 4 1 1 3 [binary format cc 0 0x60] $trns \
+      "[binary format ccc {*}$first][binary format ccc {*}$second]"]
+}
+
+test image-stencil-18.1 {a 1-bit greyscale picture becomes an image mask} -body {
+  # Table 87: with ImageMask true, ColorSpace "shall not be specified",
+  # BitsPerComponent "shall be 1", and the Decode array "shall be either
+  # [0 1] or [1 0]". The data is the pass-through - a stencil is never
+  # decoded.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed stamp -data [stencilPng] -stencil 1
+  $doc image place stamp -at {20 20} -width 40
+  set used [dict keys [$doc colourSpacesUsed]]
+  set path [::tclpdfTest::scratch stencil.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/ImageMask true} $bytes] [regexp {/BitsPerComponent 1} $bytes] \
+      [regexp {/Decode \[0 1\]} $bytes] [regexp {/ColorSpace} $bytes] \
+      [regexp {/Mask} $bytes] $used
+} -result {1 1 1 0 0 {}}
+
+test image-stencil-18.2 {-invert reverses which bit paints} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed stamp -data [stencilPng] -stencil 1 -invert 1
+  $doc image place stamp -at {20 20} -width 40
+  set path [::tclpdfTest::scratch stencil-invert.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Decode \[1 0\]} $bytes] [regexp {/Decode \[0 1\]} $bytes]
+} -result {1 0}
+
+test image-stencil-18.3 {a palette stencil takes its ink from the darker entry} -body {
+  # The bit of a palette picture is an index and says nothing by itself.
+  # Black first, white second: index 0 is the ink, so Decode stays [0 1].
+  # The other way round it has to flip - the same file, the palette
+  # reversed.
+  list [::tclpdf::imagePng stencilInk [::tclpdf::imagePng parse \
+          [stencilPalettePng {0 0 0} {255 255 255}]]] \
+      [::tclpdf::imagePng stencilInk [::tclpdf::imagePng parse \
+          [stencilPalettePng {255 255 255} {0 0 0}]]]
+} -result {0 1}
+
+test image-stencil-18.4 {a tRNS chunk decides the ink before the palette does} -body {
+  # PNG 11.3.2.1: one alpha byte per palette entry. Where exactly one of the
+  # two is fully transparent, the author has already said which half is
+  # nothing - the OTHER one is the ink, whatever the two colours are. Here
+  # both entries are black, so the palette alone could not decide.
+  list [::tclpdf::imagePng stencilInk [::tclpdf::imagePng parse \
+          [stencilPalettePng {0 0 0} {0 0 0} "\x00\xff"]]] \
+      [::tclpdf::imagePng stencilInk [::tclpdf::imagePng parse \
+          [stencilPalettePng {0 0 0} {0 0 0} "\xff\x00"]]]
+} -result {1 0}
+
+test image-stencil-18.5 {a tRNS chunk on a stencil reaches the file as nothing} -body {
+  # Table 87: with ImageMask true the Mask entry "shall not be present". The
+  # colour key such a file would otherwise get is not written, and [image
+  # info] says so rather than reporting a transparency the file does not
+  # carry.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed stamp -data [stencilPalettePng {0 0 0} {255 255 255} "\x00\xff"] \
+      -stencil 1
+  set info [$doc image info stamp]
+  $doc image place stamp -at {20 20} -width 40
+  set path [::tclpdfTest::scratch stencil-trns.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [dict get $info transparency] [dict get $info stencil] \
+      [regexp {/Mask} $bytes] [regexp {/Indexed} $bytes]
+} -result {stencil 1 0 0}
+
+test image-stencil-18.6 {a picture that cannot be one bit per sample is refused} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  set answers {}
+  # 8 bits per sample
+  lappend answers [catch {$doc image embed a -data [::tclpdfTest::png 1 1 8 0 \
+      "\x00\x40"] -stencil 1} m1]
+  # a JPEG: DCTDecode always delivers 8-bit samples (Table 87)
+  lappend answers [catch {$doc image embed b $photo -stencil 1} m2]
+  # 1 bit, but three samples per pixel
+  lappend answers [catch {$doc image embed c -data [::tclpdfTest::png 1 1 1 2 \
+      "\x00\x80"] -stencil 1} m3]
+  $doc destroy
+  list $answers [string match {*one bit per sample*carries 8*1-bit image*} $m1] \
+      [string match {*DCTDecode*1-bit PNG, not a JPEG*} $m2] \
+      [string match {*one sample per pixel*colour type 2*} $m3]
+} -result {{1 1 1} 1 1 1}
+
+test image-stencil-18.7 {a stencil records no colour space, so a CMYK intent admits it} \
+    -constraints {haveCmykIcc haveTdom} -body {
+  # ISO 19005-2, 6.2.4.3 judges the DEVICE colour spaces a document paints
+  # against its output intent, and a DeviceRGB picture is refused under a
+  # CMYK one (image-icc-17.9). A stencil has no colour space at all, so
+  # there is nothing to judge - what reaches the page is the fill colour,
+  # and that one is recorded where it is set.
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B -profile $cmykIcc
+  $doc page add
+  $doc image embed stamp -data [stencilPng] -stencil 1
+  $doc style -fill {cmyk 0 1 1 0}
+  $doc image place stamp -at {20 20} -width 40 -artifact 1
+  set used [lsort [dict keys [$doc colourSpacesUsed]]]
+  set path [::tclpdfTest::scratch stencil-pdfa.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  file delete $path
+  list $code $used
+} -result {0 DeviceCMYK}
+
+test image-mask-18.8 {a greyscale picture named with -mask becomes the /SMask} -body {
+  # 11.6.5.2 and Table 143: a soft-mask image is a subsidiary image XObject
+  # in the SMask entry, DeviceGray, with no mask of its own. Table 87 dates
+  # the entry at PDF 1.4.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed cover -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      -mask cover
+  $doc image place pic -at {20 20} -width 40
+  set floor [catch {$doc configure -version 1.3} message]
+  set path [::tclpdfTest::scratch soft-mask.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/SMask \d+ 0 R} $bytes] [regexp -all {/ColorSpace /DeviceGray} $bytes] \
+      $floor [string match {*soft mask*needs PDF 1.4*} $message]
+} -result {1 1 1 1}
+
+test image-mask-18.9 {a stencil named with -mask becomes the /Mask} -body {
+  # 8.9.6.3: "the Mask entry in an image dictionary may be an image mask ...
+  # which serves as an explicit mask for the primary (base) image". Table 87
+  # dates it at PDF 1.3, and an explicit mask is not a soft one - no /SMask
+  # is written.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed cut -data [stencilPng] -stencil 1
+  $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      -mask cut
+  $doc image place pic -at {20 20} -width 40
+  set floor [catch {$doc configure -version 1.2} message]
+  set path [::tclpdfTest::scratch explicit-mask.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/Mask \d+ 0 R} $bytes] [regexp {/SMask} $bytes] \
+      [regexp {/ImageMask true} $bytes] $floor \
+      [string match {*masked by a stencil*needs PDF 1.3*} $message]
+} -result {1 0 1 1 1}
+
+test image-mask-18.10 {the mask gets an object and no page resource} -body {
+  # A mask is named by a dictionary entry, never by a content stream. An
+  # XObject resource for it would be an entry no operator mentions - and
+  # asking for the OBJECT rather than the resource is what let [image place]
+  # name a resource the page never got.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed cover -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      -mask cover
+  $doc image place pic -at {20 20} -width 40
+  set path [::tclpdfTest::scratch mask-resource.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # one XObject in the page resources, and one Do in the content
+  list [regexp -all {/Im\d+ \d+ 0 R} $bytes] [regexp -all {Do} $bytes]
+} -result {1 1}
+
+test image-mask-18.11 {a mask that is also placed keeps one object} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed cover -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      -mask cover
+  $doc image place pic -at {20 20} -width 40
+  $doc image place cover -at {20 80} -width 40
+  set path [::tclpdfTest::scratch mask-placed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # two resources now, and still only the two image streams
+  list [regexp -all {/Im\d+ \d+ 0 R} $bytes] \
+      [regexp -all {/Subtype /Image} $bytes]
+} -result {2 2}
+
+test image-mask-18.12 {two pictures may wear the same mask, and it travels once} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed cover -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  set grey [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  $doc image embed one -data $grey -mask cover
+  $doc image embed two -data $grey -mask cover -interpolate 1
+  $doc image place one -at {20 20} -width 40
+  $doc image place two -at {20 80} -width 40
+  set path [::tclpdfTest::scratch mask-shared.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # three image objects: the two pictures and the one mask
+  list [regexp -all {/Subtype /Image} $bytes] [regexp -all {/SMask \d+ 0 R} $bytes] \
+      [regexp -all {/Interpolate true} $bytes]
+} -result {3 2 1}
+
+test image-mask-18.13 {what may not be a soft mask, and what the refusal offers} -constraints haveImages -body {
+  set doc [tclpdf new]
+  $doc page add
+  set pic [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  set answers {}
+  # an RGB picture is not coverage
+  $doc image embed rgb -data $pic
+  lappend answers [catch {$doc image embed a -data $pic -mask rgb} m1]
+  # a grey picture with an alpha channel of its own would carry an SMask
+  $doc image embed alpha -data [::tclpdfTest::png 1 1 8 4 "\x00\x40\x80"]
+  lappend answers [catch {$doc image embed b -data $pic -mask alpha} m2]
+  # a grey picture with a colour key of its own would carry a /Mask
+  $doc image embed keyed -data [::tclpdfTest::png 1 1 8 0 "\x00\x40" "\x00\x40"]
+  lappend answers [catch {$doc image embed c -data $pic -mask keyed} m3]
+  # a name nobody embedded
+  lappend answers [catch {$doc image embed d -data $pic -mask nowhere} m4]
+  # and a stencil wears no mask at all
+  $doc image embed cut -data [stencilPng] -stencil 1
+  lappend answers [catch {$doc image embed e -data [stencilPng] -stencil 1 \
+      -mask cut} m5]
+  $doc destroy
+  list $answers [string match {*DeviceRGB picture*Table 143*-stencil 1*} $m1] \
+      [string match {*transparency of its own*Table 143*} $m2] \
+      [string match {*transparency of its own*Table 143*} $m3] \
+      [string match {*names no embedded image*known are*} $m4] \
+      [string match {*stencil mask and cannot*Table 87*} $m5]
+} -result {{1 1 1 1 1} 1 1 1 1 1}
+
+test image-mask-18.14 {a mask with a profile is refused naming -icc 0, which then works} \
+    -constraints haveGreyIcc -body {
+  # Table 143: the colour space of a soft-mask image "shall be DeviceGray".
+  # A profile would make it /ICCBased - so the picture is one step from
+  # being usable, and the refusal says which step.
+  set png [::tclpdfTest::pngWithIccp [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"] \
+      [::tclpdf::io read $greyIcc]]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set pic [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  $doc image embed tagged -data $png
+  set code [catch {$doc image embed a -data $pic -mask tagged} message]
+  $doc image embed plain -data $png -icc 0
+  $doc image embed b -data $pic -mask plain
+  $doc image place b -at {20 20} -width 40
+  set path [::tclpdfTest::scratch mask-icc.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $code [string match {*ICC profile*Table 143*-icc 0*} $message] \
+      [regexp {/SMask \d+ 0 R} $bytes]
+} -result {1 1 1}
+
+test image-mask-18.15 {a picture that brings its own transparency wears no second mask} -body {
+  # Table 87: an SMask entry "shall override ... the image's Mask entry, if
+  # any". A picture with an alpha channel already has one, and a second
+  # would silently replace it - refused instead.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed cover -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  set code [catch {$doc image embed pic -mask cover \
+      -data [::tclpdfTest::png 1 1 8 6 "\x00\x10\x20\x30\x40"]} message]
+  $doc destroy
+  list $code [string match {*its own transparency*Table 87*} $message]
+} -result {1 1}
+
+test image-mask-18.16 {-interpolate is written only when it is asked for} -body {
+  # 8.9.5.3, and Table 87 gives Interpolate the default false: a dictionary
+  # that repeats a default says nothing.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set pic [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  $doc image embed plain -data $pic
+  $doc image embed smooth -data $pic -interpolate 1
+  $doc image place plain -at {20 20} -width 40
+  $doc image place smooth -at {20 80} -width 40
+  set info [list [dict get [$doc image info plain] interpolate] \
+      [dict get [$doc image info smooth] interpolate]]
+  set path [::tclpdfTest::scratch interpolate.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $info [regexp -all {/Interpolate true} $bytes] \
+      [regexp {/Interpolate false} $bytes]
+} -result {{0 1} 1 0}
+
+test image-mask-18.17 {-invert outside a stencil is a Decode array, and only where one fits} -body {
+  # Table 87: the Decode array's length is twice the number of colour
+  # components, so [1 0] exists for a one-component picture and nowhere
+  # else.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [catch {$doc image embed rgb -invert 1 \
+      -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]} message]
+  $doc image embed grey -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"] -invert 1
+  $doc image place grey -at {20 20} -width 40
+  set path [::tclpdfTest::scratch invert-grey.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $code [string match {*ONE component*DeviceRGB*Table 87*} $message] \
+      [regexp {/Decode \[1 0\]} $bytes]
+} -result {1 1 1}
+
+test image-mask-18.18 {the four options take booleans, and [image info] reports them} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set answers {}
+  foreach name {stencil interpolate invert icc} {
+    lappend answers [catch {$doc image embed x-$name -data [stencilPng] \
+        -$name maybe} message]
+    lappend answers [string match "*-$name of image embed takes a boolean*" $message]
+  }
+  $doc image embed cover -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  $doc image embed pic -mask cover -interpolate 1 \
+      -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  set info [$doc image info pic]
+  $doc destroy
+  list $answers [dict get $info stencil] [dict get $info mask] \
+      [dict get $info interpolate]
+} -result {{1 1 1 1 1 1 1 1} 0 cover 1}
 
 cleanupTests

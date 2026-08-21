@@ -454,4 +454,96 @@ proc ::tclpdf::imagePng::PaletteKey {trns} {
   return $ranges
 }
 
+# Which sample value of a one-bit picture is the INK - the value that marks
+# the page when the file is written as a stencil mask.
+#
+# ISO 32000-2, 8.9.6.2 "Stencil masking": an image mask is monochrome, one bit
+# per sample, and its samples "designate places on the page that should either
+# be marked with the current colour or masked out". With the default Decode
+# array [0 1] a sample of 0 marks the page and a 1 leaves it alone; [1 0]
+# reverses that. Table 87 puts the same two conditions on the dictionary: with
+# ImageMask true "the value of BitsPerComponent, if present, shall be 1", and
+# the Decode array "shall be either [0 1] or [1 0]".
+#
+# So the only question a PNG has to answer is which of its two values the
+# author drew WITH, and it is answered from the file rather than left to the
+# caller to discover by looking at the result:
+#
+#   colour type 0   one bit per sample, 0 is black (PNG 6.1) - the dark half
+#                   is the ink, so the ink is 0.
+#   colour type 3   the bit is a palette index and says nothing by itself. If
+#                   a tRNS chunk makes exactly one of the two entries fully
+#                   transparent (PNG 11.3.2.1), the author already said which
+#                   half is nothing: the OTHER one is the ink. Otherwise the
+#                   darker entry is.
+#
+# The rule is the same sentence in both cases - the dark half of the picture
+# is the ink - and [image embed -invert 1] reverses whatever it decided.
+#
+# Refuses what cannot be a stencil at all, by name: an image mask is one bit
+# per sample and nothing else.
+proc ::tclpdf::imagePng::stencilInk {parsed} {
+  if {[dict get $parsed bitDepth] != 1} {
+    return -code error "tclpdf: a stencil mask is one bit per sample (ISO\
+        32000-2, 8.9.6.2, and Table 87: with ImageMask true BitsPerComponent\
+        shall be 1), and this PNG carries [dict get $parsed bitDepth] -\
+        re-save it as a 1-bit image"
+  }
+  switch -- [dict get $parsed colorType] {
+    0 {return 0}
+    3 {}
+    default {
+      return -code error "tclpdf: a stencil mask has one sample per pixel, and\
+          this PNG is colour type [dict get $parsed colorType] with\
+          [dict get $parsed channels] - only greyscale and palette pictures\
+          become stencils"
+    }
+  }
+  # A palette of one entry says nothing either way; index 0 is then the ink,
+  # which is the greyscale rule.
+  set palette [dict get $parsed palette]
+  if {[string length $palette] < 6} {
+    return 0
+  }
+  binary scan $palette cu* rgb
+  set trns [dict get $parsed transparency]
+  if {$trns ne {}} {
+    binary scan $trns cu* alphas
+    set clear [lsearch -all -exact [lrange $alphas 0 1] 0]
+    if {[llength $clear] == 1} {
+      return [expr {1 - [lindex $clear 0]}]
+    }
+  }
+  # Luminance by the usual weights - a plain sum calls a saturated red as
+  # dark as a mid grey, and the two halves of a stencil are usually not both
+  # neutral.
+  lassign $rgb r0 g0 b0 r1 g1 b1
+  set first [expr {0.299 * $r0 + 0.587 * $g0 + 0.114 * $b0}]
+  set second [expr {0.299 * $r1 + 0.587 * $g1 + 0.114 * $b1}]
+  return [expr {$second < $first ? 1 : 0}]
+}
+
+# The stream and the dictionary entries of a picture written as a stencil mask
+# (8.9.6.2).
+#
+# The data is the IDAT pass-through, exactly as for an ordinary picture
+# without an alpha channel - a stencil is the cheap way in, never a decode.
+# What differs is the dictionary, and it differs by what Table 87 forbids:
+# ImageMask true, no ColorSpace ("shall not be specified"), no Mask ("shall not
+# be present for image masks"), BitsPerComponent 1, and a Decode array of
+# exactly [0 1] or [1 0]. A tRNS chunk therefore reaches the file as nothing at
+# all; it has already been read, by [stencilInk], for the one thing it can
+# still say here - which half of the picture is nothing.
+proc ::tclpdf::imagePng::stencilStreams {parsed {invert 0}} {
+  set ink [stencilInk $parsed]
+  if {$invert} {
+    set ink [expr {1 - $ink}]
+  }
+  set decode [expr {$ink == 0 ? {0 1} : {1 0}}]
+  return [dict create data [dict get $parsed idat] pairs [list \
+      ImageMask true BitsPerComponent 1 \
+      Decode [::tclpdf::pdfObj arr $decode] \
+      Filter /FlateDecode DecodeParms [decodeParms $parsed]]]
+}
+
 package provide tclpdf::imagePng 1.4

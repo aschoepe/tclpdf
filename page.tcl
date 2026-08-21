@@ -420,6 +420,42 @@ oo::define ::tclpdf::document::document {
   #
   # Doing this per call site is how a document ends up with half its content
   # upside down, which is why every topical module goes through here.
+  # The rectangle a placement covers, in the caller's system: the upright box
+  # around the four corners of a width x height area put through the matrix
+  # that goes into the stream. Both callers of it - [FormPlace] in xObject.tcl
+  # with the form's own size, [ImagePlace] in image.tcl with the unit square,
+  # since an image XObject IS the unit square - need the same answer, and a
+  # second copy of the arithmetic is how the two would drift apart.
+  #
+  # Why the corners rather than the rectangle asked for: ISO 32000-2,
+  # 14.8.5.4.3 asks a /BBox for "the rectangle that completely encloses" the
+  # visible content. Under a rotation the rectangle asked for does neither -
+  # it leaves part of the content outside and claims page the content never
+  # covers - and nothing downstream can tell that the numbers are wrong.
+  # The turned hull has no error term: for a rotated rectangle the upright box
+  # around its four corners encloses it exactly.
+  #
+  # The way back into the caller's system runs through [coords] rather than
+  # around it: [my coords 0 0] IS the caller's origin in PDF points, media box
+  # offset and page height included, and inside a form it is the form's own
+  # origin. Subtracting it and converting back is the inverse of the one
+  # conversion this package has.
+  method PlacedBox {width height matrix} {
+    lassign [my coords 0 0] zeroX zeroY
+    set unit [my cget -unit]
+    set xs {}
+    set ys {}
+    foreach {cornerX cornerY} [list 0 0 $width 0 $width $height 0 $height] {
+      lassign [::tclpdf::geometry apply $matrix $cornerX $cornerY] pointX pointY
+      lappend xs [::tclpdf::geometry fromPoints [expr {$pointX - $zeroX}] $unit]
+      lappend ys [::tclpdf::geometry fromPoints [expr {$zeroY - $pointY}] $unit]
+    }
+    set left [::tcl::mathfunc::min {*}$xs]
+    set top [::tcl::mathfunc::min {*}$ys]
+    return [list $left $top [expr {[::tcl::mathfunc::max {*}$xs] - $left}] \
+        [expr {[::tcl::mathfunc::max {*}$ys] - $top}]]
+  }
+
   method coords {x y {index {}}} {
     # Inside a form the mirror axis is the FORM's height, not the page's -
     # otherwise everything drawn into a form lands off its bounding box, and

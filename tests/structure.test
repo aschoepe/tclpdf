@@ -832,6 +832,150 @@ test structure-12.5 {a Figure from a picture carries its bounding box} -body {
       [regexp {/BBox \[56\.6\d+ \d+\.\d+ \d+\.\d+ 756\.8\d+\]} $bytes]
 } -result {1 1}
 
+test structure-12.6 {a Figure from a form placement carries the placed rectangle} -body {
+  # The same attribute a picture gets, from the other end: a form is placed
+  # by a matrix, and the rectangle the matrix puts it on is what the Figure
+  # has to name (ISO 32000-2, 14.8.5.4.3 - the box that encloses the visible
+  # content). -scale belongs to it: a form placed at 1.5 covers half again
+  # as much page, and a box of the unscaled size would name the wrong area.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc form create logo -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill blue
+  }
+  $doc form place logo -at {20 30} -alt "Logo"
+  $doc form place logo -at {20 80} -scale 1.5 -alt "Logo, gross"
+  set path [::tclpdfTest::scratch form-bbox.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # A4 is 841.89 pt high and a millimetre is 2.8346 pt: 20 mm from the left
+  # is 56.69, 30 mm from the top is 841.89-85.04 = 756.85, and the form's
+  # 20 mm of height put the bottom edge at 841.89-141.73 = 700.16. At 1.5 the
+  # 40x20 mm form covers 60x30 mm, so the box is 170.08 pt wide and reaches
+  # from 615.12 down to 530.08.
+  lmap {-> numbers} [regexp -all -inline \
+      {/O /Layout /BBox \[([^\]]*)\]} $bytes] {
+    lmap number $numbers {format %.2f $number}
+  }
+} -result {{56.69 700.16 170.08 756.85} {56.69 530.08 226.77 615.12}}
+
+test structure-12.7 {a turned form gets the box around the turned form} -body {
+  # -rotate is the case where a rectangle of the placed size would be a
+  # half-truth: it would leave part of the figure outside the box and cover
+  # page that is not the figure, and nothing downstream could tell. 14.8.5.4.3
+  # says the box shall enclose the visible content COMPLETELY, so the four
+  # corners go through the same matrix the stream gets and the box is the
+  # upright one around them.
+  #
+  # A 40x20 mm form turned by 30 degrees about its bottom left corner: the
+  # hull is 40*cos30 + 20*sin30 = 44.64 mm wide and 40*sin30 + 20*cos30 =
+  # 37.32 mm high - wider AND higher than the form itself, which is what
+  # makes the difference visible at all.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc form create logo -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill blue
+  }
+  $doc form place logo -at {80 140} -rotate 30 -alt "Logo, gedreht"
+  set path [::tclpdfTest::scratch form-bbox-rotate.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/O /Layout /BBox \[([^\]]*)\]} $bytes -> box
+  lassign $box left bottom right top
+  # The corner given is the bottom left of the UNTURNED form, at 80 mm from
+  # the left and 160 mm from the top. Turning about that corner takes the
+  # figure 10 mm to the LEFT of it (20 mm of height times sin 30) and up to
+  # 122.68 mm from the top, above the 140 mm -at named. Both lie outside the
+  # rectangle an unturned box would have written, which is what the hull is
+  # for. A4 is 841.89 pt high and a millimetre is 2.8346 pt.
+  list [format %.2f [expr {($right - $left) / 2.8346457}]] \
+      [format %.2f [expr {($top - $bottom) / 2.8346457}]] \
+      [format %.2f [expr {$left / 2.8346457}]] \
+      [format %.2f [expr {(841.8898 - $top) / 2.8346457}]]
+} -result {44.64 37.32 70.00 122.68}
+
+test structure-12.9 {a turned picture gets the box around the turned picture} \
+    -constraints haveImage -body {
+  # The same question as 12.7, on the other placement road, and it was wrong
+  # here until 2026-08-21: [image place] wrote the rectangle of -at and
+  # -width whatever the rotation was. Measured on a picture turned by 30
+  # degrees, the declared box left ink outside it on two sides and claimed
+  # 15 pt of page on a third. The box is read off the matrix now, through the
+  # unit square, because an image XObject IS the unit square.
+  #
+  # A 40 mm wide picture of 4:3 is 30 mm high. Turned by 30 degrees about its
+  # bottom left corner the hull is 40*cos30 + 30*sin30 = 49.64 mm wide and
+  # 40*sin30 + 30*cos30 = 45.98 mm high.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc image embed shot $::image
+  $doc image place shot -at {80 140} -width 40 -rotate 30 -alt "Bild, gedreht"
+  set path [::tclpdfTest::scratch image-bbox-rotate.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/O /Layout /BBox \[([^\]]*)\]} $bytes -> box
+  lassign $box left bottom right top
+  # Wider and higher than the picture itself, and reaching left of the corner
+  # that was named - both outside the rectangle written before.
+  list [expr {($right - $left) / 2.8346457 > 40}] \
+      [expr {($top - $bottom) / 2.8346457 > 30}] \
+      [expr {$left / 2.8346457 < 80}]
+} -result {1 1 1}
+
+test structure-12.9a {and an unturned picture keeps the box it always had} \
+    -constraints haveImage -body {
+  # The guard against fixing the rotation at the price of everything else:
+  # without a rotation the hull through the matrix and the rectangle of -at
+  # and -width are the same four numbers, and every existing tagged document
+  # has to stay byte for byte as it was.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc image embed shot $::image
+  $doc image place shot -at {80 140} -width 40 -alt "Bild, gerade"
+  set path [::tclpdfTest::scratch image-bbox-plain.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/O /Layout /BBox \[([^\]]*)\]} $bytes -> box
+  lassign $box left bottom right top
+  list [format %.5f $left] [format %.5f $right] \
+      [format %.2f [expr {(841.8898 - $top) / 2.8346457}]]
+} -result {226.77165 340.15748 140.00}
+
+test structure-12.8 {a Figure from a drawing carries the fitted rectangle} -body {
+  # An SVG is fitted into the rectangle asked for, not stretched to it - so
+  # a 2:1 drawing in a 60x60 mm square is drawn 60x30 mm and centred, and the
+  # empty bands above and below it are not the figure. The box names where the
+  # drawing ENDED UP, which is also what [svg] answers.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  set area [$doc svg -data \
+      {<svg viewBox="0 0 100 50"><rect width="100" height="50" fill="#cde"/></svg>} \
+      -at {20 100} -size {60 60} -alt "Eine Zeichnung"]
+  set path [::tclpdfTest::scratch svg-bbox.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # 15 mm of inset above and below: the drawing runs from 115 to 145 mm from
+  # the top, which is 841.89-325.98 = 515.91 down to 841.89-411.02 = 430.87.
+  regexp {/O /Layout /BBox \[([^\]]*)\]} $bytes -> box
+  list [lmap number $area {format %.2f $number}] \
+      [lmap number $box {format %.2f $number}]
+} -result {{20.00 115.00 60.00 30.00} {56.69 430.87 226.77 515.91}}
+
 # --- structure destinations -----------------------------------------------
 
 test structure-14.1 {a link may point at an element instead of a page} -body {

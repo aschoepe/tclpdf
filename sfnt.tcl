@@ -74,7 +74,17 @@ proc ::tclpdf::sfnt::parse {bytes} {
   set tables {}
   for {set index 0} {$index < $numTables} {incr index} {
     set offset [expr {12 + $index * 16}]
-    binary scan $bytes @${offset}a4IuIuIu name checksum position length
+    # binary scan fills what it can and leaves the rest of the variables
+    # unset, reporting how many it filled. Without that count a file whose
+    # directory is cut short reads a table entry that is not there and fails
+    # on an unset variable - a raw Tcl error where this package promises a
+    # message of its own.
+    if {[binary scan $bytes @${offset}a4IuIuIu \
+            name checksum position length] != 4} {
+      return -code error "tclpdf: the font's table directory is cut short -\
+          it announces $numTables tables and the file ends inside entry\
+          [expr {$index + 1}]"
+    }
     dict set tables $name [list $position $length]
   }
   # cmap is NOT required: a subset built by subset.tcl deliberately carries

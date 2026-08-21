@@ -29,7 +29,54 @@ package require tclpdf::document 1.0-
 namespace eval ::tclpdf::text {
   # Which options describe the font state rather than one call.
   variable stateOptions {family style size color spacing wordSpacing
-      stretch leading rise kerning ligatures unshaped}
+      stretch leading rise kerning ligatures unshaped render stroke
+      strokeWidth}
+
+  # The text rendering mode (ISO 32000-2, 9.3.6, "Text rendering mode",
+  # Table 104 - Table 106 in ISO 32000-1) by the word a caller writes for it.
+  # The number is what goes into the stream as "N Tr" (Table 103 - Text state
+  # operators, initial value 0); it is a text state parameter, Tmode
+  # (Table 102), so it survives ET like Tc and Ts and has to be guarded the
+  # same way - see TextRun.
+  #
+  # Words rather than the numbers themselves, for the reason every other value
+  # list in this package has words: "3" says nothing at the call site and
+  # nothing in a diff, "invisible" says both. The mapping is one way only -
+  # the numbers never appear in the API.
+  variable renderModes {
+    fill 0 stroke 1 fillStroke 2 invisible 3
+    fillClip 4 strokeClip 5 fillStrokeClip 6 clip 7
+  }
+
+  # The four modes this package REFUSES, by name rather than by silence, and
+  # the reason - which is a property of the mode, not of the effort spent on
+  # it (measured against 9.3.6):
+  #
+  #   1. A clipping mode does not paint into the page, it turns the glyph
+  #      outlines into a CLIPPING PATH that takes effect at ET and "remains
+  #      in effect until a previous clipping path is restored by an
+  #      invocation of the Q operator" (9.3.6). So the clip outlives the text
+  #      call by design, and the caller has to say where it ends.
+  #   2. Every text run of this package sits in its own BT/ET, and one that
+  #      sets any text state of its own sits in its own q/Q as well (TextRun,
+  #      below). The Q would throw the clip away in the same breath that made
+  #      it; leaving the q/Q out instead would leak the mode - "7 Tr" is text
+  #      state and would clip every later text on the page to nothing.
+  #   3. And a paragraph cannot work at all: the clipping path at ET is "the
+  #      intersection of this path with the previous clipping path" (9.3.6),
+  #      and a block writes one BT/ET per LINE. Two lines would intersect to
+  #      the empty set, which paints nothing and reports nothing.
+  #
+  # Half of that - a single line, unguarded, with the caller wrapping its own
+  # [save]/[restore] around it - would be a feature that works for [text]
+  # without -width and silently produces an empty page for every other text
+  # call. So it is refused where the word is written, with the reason named.
+  variable renderClipModes {fillClip strokeClip fillStrokeClip clip}
+
+  # The modes that stroke the outlines (Table 104, modes 1 and 2), which are
+  # the ones -stroke and -strokeWidth reach: "if it calls for stroking, the
+  # current stroking colour shall be used" (9.3.6).
+  variable renderStrokeModes {1 2}
 
   # Options that describe ONE LINE, with their defaults. They travel with the
   # text wherever it is measured, broken or drawn - so they are carried in the
@@ -67,6 +114,12 @@ oo::define ::tclpdf::document::document {
   #   -rise        baseline shift (Ts) in points, for super- and subscript
   #   -kerning     apply the pair kerning of an embedded font, 0 or 1
   #   -ligatures   apply the standard ligatures of an embedded font, 0 or 1
+  #   -render      how the glyphs are painted (9.3.6): fill, stroke,
+  #                fillStroke or invisible
+  #   -stroke      the outline colour of the stroking modes
+  #   -strokeWidth the outline width of the stroking modes, in the document
+  #                unit - a line width, and read in USER space (9.3.6), so it
+  #                does not scale with the font size
   #
   # Both are ON by default: they are what the type designer intended, and a
   # package that leaves them off ships worse typography than the font offers.
@@ -476,10 +529,19 @@ oo::define ::tclpdf::document::document {
     # Only when a style colour IS in force - a document without [style]
     # keeps its bytes.
     set byTJ [my TextTJ $font $state]
+    # The rendering mode is text state (Tmode, Table 102), so it leaks past ET
+    # exactly as Tc and Ts do and belongs in the guard beside them: a heading
+    # set with -render stroke would otherwise leave "1 Tr" in force and the
+    # body under it would come out hollow, with nothing in its own call to
+    # explain it. The stroke colour and the stroke width leak the same way -
+    # they are graphics state - and they only ever go out in a stroking mode,
+    # which is guarded already, so the mode alone decides.
+    set mode [dict get $::tclpdf::text::renderModes [dict get $state render]]
     set guarded [expr {[dict get $state spacing] != 0
         || ([dict get $state wordSpacing] != 0 && !$byTJ)
         || [dict get $state rise] != 0
         || [dict get $state stretch] != 100
+        || $mode != 0
         || ([dict get $state color] ne {} && [my streamState styleFill] ne {})}]
     # Everything that can still refuse is resolved BEFORE the first byte goes
     # into the stream. The colour used to be resolved after "q" and "BT" were
@@ -504,13 +566,49 @@ oo::define ::tclpdf::document::document {
       set colour [::tclpdf::color operator [::tclpdf::color parse \
           [my GraphicsColour [dict get $state color] text]] fill]\n
     }
+    # The outline of the stroking modes, through the road every shape takes
+    # rather than a second implementation of it: [GraphicsStyle] checks the
+    # colour and the width, translates a {pattern name}, records the colour
+    # space for the PDF/A intent check and produces the operators [style]
+    # produces - "RG" and "w", the same bytes a stroked rectangle gets. Asked
+    # with guard 0, so it writes nothing itself and takes no marked-content
+    # bracket: that is what [style] passes, and a text run is not a shape.
+    #
+    # Only in a mode that strokes. In the others the operators would be dead
+    # bytes that still change the graphics state, and 9.3.6 is explicit about
+    # which colour is consulted: the stroking colour when the mode calls for
+    # stroking, the nonstroking one when it calls for filling.
+    #
+    # graphics is required HERE and not at the head of the file, like
+    # textBlock further up: a document that never strokes its text never
+    # loads it.
+    set stroking {}
+    if {$mode in $::tclpdf::text::renderStrokeModes
+        && ([dict get $state stroke] ne {}
+            || [dict get $state strokeWidth] ne {})} {
+      package require tclpdf::graphics
+      set stroking [my GraphicsStyle [list stroke [dict get $state stroke] \
+          width [dict get $state strokeWidth]] 0 text]
+    }
     if {$guarded} {
       my content "q\n"
     }
     my content "BT\n"
     my content "$resource [::tclpdf::pdfObj num $size] Tf\n"
+    # "N Tr" (Table 103). Written only when it differs from the initial value
+    # of 0, which is what keeps the bytes of every document that never asks
+    # for a mode exactly as they were.
+    if {$mode != 0} {
+      my content "$mode Tr\n"
+    }
     if {$colour ne {}} {
       my content $colour
+    }
+    # Inside the text object, beside the fill colour that has always stood
+    # there: 9.4.1 lets the general graphics state and the colour operators
+    # appear in a text object, and "w" is one of the general ones (Table 50).
+    if {$stroking ne {}} {
+      my content $stroking
     }
     foreach {key operator} {spacing Tc wordSpacing Tw rise Ts} {
       if {$key eq "wordSpacing" && $byTJ} {
@@ -1065,14 +1163,48 @@ oo::define ::tclpdf::document::document {
           return -code error "tclpdf: -$name takes a boolean, not \"$value\""
         }
       }
-      color {
-        # The empty string leaves the fill colour of the stream in force -
-        # that is what TextRun reads it as - so only a non-empty value has
-        # to parse. The parser's own message is the one the drawing would
-        # have raised; it only comes at the call that wrote the colour now,
-        # not at the next text.
+      color - stroke {
+        # The empty string leaves the colour of the stream in force - that is
+        # what TextRun reads it as - so only a non-empty value has to parse.
+        # The parser's own message is the one the drawing would have raised;
+        # it only comes at the call that wrote the colour now, not at the
+        # next text.
         if {$value ne {}} {
           ::tclpdf::color parse $value
+        }
+      }
+      strokeWidth {
+        # The empty string means "whatever line width is in force", which is
+        # the initial value of 1.0 user space unit (Table 51 - device-
+        # independent graphics state parameters) unless a [style] set one.
+        # Zero is a width and means the thinnest line the device can render,
+        # one device pixel (8.4.3.2); below zero is not a width at all - the
+        # parameter "shall be a non-negative number". Same rule and same
+        # numbers as -width in [style], said here because the option is
+        # written here and a caller must not have to run a text call to find
+        # out that the value was refused.
+        if {$value ne {} && (![string is double -strict $value]
+            || $value < 0)} {
+          return -code error "tclpdf: -strokeWidth is a line width of 0 or\
+              more in the document unit, not \"$value\""
+        }
+      }
+      render {
+        # The clipping modes first, so that the word a caller wrote is
+        # answered with the reason it cannot have it rather than with a list
+        # it is already in. See renderClipModes at the head of this file.
+        if {$value in $::tclpdf::text::renderClipModes} {
+          return -code error "tclpdf: -render $value is a clipping mode\
+              (9.3.6, modes 4 to 7), and tclpdf does not write those: the\
+              glyph outlines become a clipping path at ET that stays in\
+              force until the next Q, this package sets one BT/ET per line\
+              inside its own q/Q, and a second line would be clipped to the\
+              intersection with the first, which is empty - available are\
+              fill, stroke, fillStroke and invisible"
+        }
+        if {![dict exists $::tclpdf::text::renderModes $value]} {
+          return -code error "tclpdf: -render is fill, stroke, fillStroke or\
+              invisible, not \"$value\""
         }
       }
     }
@@ -1084,7 +1216,8 @@ oo::define ::tclpdf::document::document {
       my state text [dict create \
           family helvetica style {} size 12 color black spacing 0 \
           wordSpacing 0 stretch 100 leading {} rise 0 kerning 1 \
-          ligatures 1 unshaped 0 resolved Helvetica]
+          ligatures 1 unshaped 0 render fill stroke {} strokeWidth {} \
+          resolved Helvetica]
     }
     return
   }

@@ -153,9 +153,9 @@ back to 1.9 MB, and the source archive from 8.2 MB back to about 1.5 MB.
 
 ## images/ — 120 KB
 
-Generated for this project, free of third-party rights. Four raster files, one
-per code path that stage 3 has to handle separately, and one vector file for
-stage 6. All raster images are 640 × 480.
+Generated for this project, free of third-party rights. One raster file per code
+path that stage 3 has to handle separately, plus one vector file for stage 6.
+All raster images are 640 × 480 except `sample-stencil.png`, which is 300 × 300.
 
 | File | Size | What it really is | Exercises |
 | --- | --- | --- | --- |
@@ -163,6 +163,8 @@ stage 6. All raster images are 640 × 480.
 | `sample-gray.jpg` | 29 011 B | baseline JPEG (SOF0), **1 component** | the grey path, where `/DeviceGray` must be chosen instead of `/DeviceRGB` |
 | `sample-indexed.png` | 11 269 B | PNG, 8 bit, **colour type 3** (palette) | `/Indexed` with the PLTE chunk carried over |
 | `sample-rgba.png` | 40 215 B | PNG, 8 bit, **colour type 6** (RGBA) | the alpha path via `/SMask` — the one measured bottleneck (Paeth unfiltering) |
+| `sample-stencil.png` | 1 507 B | PNG, **1 bit**, colour type 0 (greyscale), 300 × 300 | the stencil mask (`/ImageMask true`, ISO 32000-2, 8.9.6.2) — a picture with no colour space, painted in whatever fill colour is in force |
+| `sample-vignette.png` | 34 181 B | PNG, 8 bit, colour type 0 (greyscale), 640 × 480 | the mask a caller names (`-mask`) — reaches the file as the `/SMask` of another picture (11.6.5.2, Table 143: a soft-mask image is DeviceGray) |
 | `sample-vector.svg` | 2 262 B | SVG 1.1 | stage 6, deferred |
 | `erika-mustermann.jpg` | 119 541 B | baseline JPEG (SOF0), 3 components, sRGB, **with an embedded ICC profile** (APP2, 3 160 B) — beside Exif, XMP and a Photoshop segment | the ICCBased path for pictures: the profile becomes the image colour space instead of the bare device name |
 | `signature-mustermann.svg` | 14 754 B | SVG 1.1, one filled path with 10 contours | the appearance of a visible signature (stage 8) — public domain, see below |

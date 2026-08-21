@@ -191,6 +191,31 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options opacity] ne {}} {
       set alpha [my GraphicsOpacity [dict get $options opacity]]
     }
+    # -at names the TOP left corner, like rect - so the placement matches how
+    # the rest of the API is used, even though the form's own origin is at its
+    # bottom left.
+    #
+    # The whole placement is worked out HERE, above the mark, and still nothing
+    # is written. The mark needs it: a Figure carries the rectangle it covers
+    # as an attribute (ISO 32000-2, 14.8.5.4.3), and an attribute is fixed when
+    # the element is OPENED - which is what the mark does. Of the two ways out
+    # this is the harmless one; the other, marking after the invocation, would
+    # put the BDC behind the content it is supposed to bracket. Everything that
+    # can be refused was refused above, so what stands here is arithmetic.
+    lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] x y
+    set heightUnit [::tclpdf::geometry fromPoints [dict get $form height] \
+        [my cget -unit]]
+    lassign [my coords $x [expr {$y + $heightUnit * $scale}]] px py
+    set matrix [::tclpdf::geometry translate $px $py]
+    if {[dict get $options rotate] != 0} {
+      set matrix [::tclpdf::geometry multiply \
+          [::tclpdf::geometry rotate [dict get $options rotate]] $matrix]
+    }
+    if {$scale != 1} {
+      set matrix [::tclpdf::geometry multiply \
+          [::tclpdf::geometry scale $scale] $matrix]
+    }
+
     # The invocation is content on the page: a Figure when -alt describes it,
     # an artifact otherwise. Unmarked content is a defect under PDF/UA, and a
     # reusable block is decoration more often than not.
@@ -201,37 +226,51 @@ oo::define ::tclpdf::document::document {
     # [undescribedGraphics]. The marking itself is [GraphicMark] in image.tcl,
     # shared with the picture and the drawing; the top edge of -at is where
     # the placement begins, so that a destination at the Figure can name the
-    # place on the page.
+    # place on the page, and [FormBox] is the area the Figure covers.
     lassign [my GraphicMark form "form place" [dict get $options alt] \
-        [dict get $options artifact] [expr {[dict get $options at] eq {} ?
-        0 : [lindex [dict get $options at] 1]}]] mark element
-    lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] x y
-
-    # -at names the TOP left corner, like rect - so the placement matches how
-    # the rest of the API is used, even though the form's own origin is at its
-    # bottom left.
-    set height [dict get $form height]
-    set heightUnit [::tclpdf::geometry fromPoints $height [my cget -unit]]
-    lassign [my coords $x [expr {$y + $heightUnit * [dict get $options scale]}]] px py
+        [dict get $options artifact] $y [my FormBox $form $matrix]] mark element
 
     my save
     if {$alpha ne {}} {
       my content "[::tclpdf::pdfObj name $alpha] gs\n"
-    }
-    set matrix [::tclpdf::geometry translate $px $py]
-    if {[dict get $options rotate] != 0} {
-      set matrix [::tclpdf::geometry multiply \
-          [::tclpdf::geometry rotate [dict get $options rotate]] $matrix]
-    }
-    if {[dict get $options scale] != 1} {
-      set matrix [::tclpdf::geometry multiply \
-          [::tclpdf::geometry scale [dict get $options scale]] $matrix]
     }
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
     my content "[::tclpdf::pdfObj name [dict get $form resource]] Do\n"
     my restore
     my GraphicUnmark $mark $element
     return $name
+  }
+
+  # The area a placement covers, as {left top width height} in the document
+  # unit and counted from the top - the bounding box its Figure carries. ISO
+  # 32000-2, 14.8.5.4.3 asks for "the rectangle that completely encloses its
+  # visible content", and for a form that rectangle is the form's own BBox
+  # where it lands on the page.
+  #
+  # Worked out by putting the form's four corners through the VERY matrix that
+  # goes into the stream, rather than by repeating the placement arithmetic:
+  # the box cannot then drift from the drawing, and -rotate is covered without
+  # a case of its own. A turned form gets the upright box AROUND the turned
+  # one, which is what "completely encloses" asks for. Writing the untouched
+  # rectangle instead would leave part of the figure outside the box and cover
+  # page that is not the figure, and nothing downstream can tell that the four
+  # numbers are the wrong ones. Leaving the attribute off whenever -rotate is
+  # given was the other candidate, and it is defensible - but it says nothing
+  # in exactly the case where saying it exactly costs four points through a
+  # matrix, and the corners of a rectangle turned in the plane have no error
+  # term.
+  #
+  # The corners come out in PDF points and go back through the inverse of
+  # [coords] - [coords 0 0] IS the caller's origin in PDF points, media box
+  # offset and page height included. The attribute is given in the document
+  # unit and counted from the top, which is the one spelling structure.tcl
+  # converts, for every bbox alike.
+  # The area the invocation covers, for the Figure's /BBox. The arithmetic
+  # itself is [PlacedBox] in page.tcl, shared with the picture: a form is
+  # placed through its own size, a picture through the unit square, and the
+  # rest is the same question.
+  method FormBox {form matrix} {
+    return [my PlacedBox [dict get $form width] [dict get $form height] $matrix]
   }
 
   method FormSize {name} {
