@@ -461,6 +461,50 @@ test type3-4.9 {right to left is refused with the encoding named} -body {
   list $code [string match {*Differences*} $err]
 } -result {1 1}
 
+# A character beyond the BMP, built from its UTF-8 bytes and NOT written as
+# \U0001F600: that escape yields U+FFFD under Tcl 8.6 - measured on
+# 2026-08-21 with 8.6.18 - and every test using it would silently be about
+# the replacement character instead.
+set type3Astral [encoding convertfrom utf-8 \xF0\x9F\x98\x80]
+
+test type3-4.11 {a character beyond the BMP is ONE character under both interpreters} -body {
+  # Tcl 8.6 stores such a character as a surrogate pair, where [string
+  # length] answers 2 - which used to refuse under 8.6 every character
+  # [font glyph] took under 9. Measured against a colour emoji face:
+  # 1314 of its 1499 characters lie beyond the BMP.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set name [$doc font glyph marks $type3Astral -width 600 -script {}]
+  set codes [dict get [$doc state fonts] marks codes]
+  $doc destroy
+  list $name [dict get $codes $type3Astral]
+} -result {u1F600 255}
+
+test type3-4.12 {and the same character reaches that glyph when it is set} -body {
+  # The other half: the code that draws has to find the glyph the code that
+  # defined it stored, under both interpreters. The ToUnicode entry is the
+  # assertion that says which glyph was reached - U+1F600 goes into a
+  # UTF-16 map as the surrogate pair D83D DE00.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks $type3Astral -width 600 -script {}
+  $doc font -family marks -size 12
+  $doc text $type3Astral -at {20 30}
+  set width [$doc textWidth $type3Astral]
+  set path [::tclpdfTest::scratch type3-4.12.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  regexp {/ToUnicode (\d+) 0 R} $body -> number
+  set map [::tclpdfTest::streamOf [$doc writer] $number]
+  $doc destroy
+  file delete $path
+  # 600 units at 0.001 and 12 pt: 7.2 pt, which is 2.54 mm.
+  list [regexp {/Differences \[255 /u1F600\]} $body] \
+      [regexp {<FF> <D83DDE00>} $map] [format %.4f $width]
+} -result {1 1 2.5400}
+
 # -- the script --------------------------------------------------------------
 
 test type3-5.1 {the script runs in the caller's frame} -body {

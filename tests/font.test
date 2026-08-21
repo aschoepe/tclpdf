@@ -2198,5 +2198,85 @@ test font-19.2 {the two kinds this module writes still take their own roads} \
   set result
 } -result {1 1 1 1}
 
+# A face whose characters all reach an EMPTY outline - what a colour font
+# (COLR/CPAL, CBDT, sbix, SVG) looks like from the outside. Built rather than
+# found, in the manner of the cmap fixtures above: the loca table of a real
+# face is filled with zeros, so every glyph begins and ends in the same place
+# and nothing else about the file changes. That is the point of building it
+# this way - the fixture carries no colour table at all, so a refusal it
+# provokes can only hang on the outlines.
+proc fontBlankOutlines {source target} {
+  set bytes [::tclpdfTest::readBytes $source]
+  binary scan $bytes @4Su count
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {12 + $index * 16}]
+    binary scan $bytes @${at}a4IuIuIu tag checksum offset length
+    if {$tag eq "loca"} {
+      set bytes [string replace $bytes $offset [expr {$offset + $length - 1}] \
+          [string repeat \x00 $length]]
+    }
+  }
+  set channel [open $target wb]
+  puts -nonewline $channel $bytes
+  close $channel
+  return $target
+}
+
+test font-20.1 {a face that draws nothing is refused at the embed} \
+    -constraints haveFont -body {
+  # The defect this guards against was measured with a colour emoji face:
+  # font embed, text and write all reported success, pdftotext gave the code
+  # point back, pdffonts showed a clean subset - and the page was blank,
+  # because the pictures sit in a table this package does not write. No tool
+  # make check runs sees it, so it is refused where the face goes in.
+  set path [fontBlankOutlines $fontRegular \
+      [::tclpdfTest::scratch blank-outlines.ttf]]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc font embed blank $path} message options]
+  $doc destroy
+  file delete $path
+  list $code [lrange [dict get $options -errorcode] 0 3] \
+      [string match {*draws nothing*EMPTY outline*} $message]
+} -result {1 {TCLPDF FONT OUTLINES blank} 1}
+
+test font-20.2 {and the same face with its outlines intact goes in} \
+    -constraints haveFont -body {
+  # The control: the fixture differs from this file in the loca table and in
+  # nothing else, so a refusal that fired here would be about something else.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc font embed body $fontRegular} message]
+  $doc destroy
+  list $code $message
+} -result {0 body}
+
+test font-20.3 {an empty outline of its own says nothing - the space has one} \
+    -constraints haveFont -body {
+  # The case the check must NOT trip over: a face where single characters
+  # draw nothing is the ordinary case, not a broken one. Measured in this
+  # face: 61 of its 5918 characters have no outline, the space among them.
+  # It takes ALL of them to make a face that draws nothing.
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set loca [dict get $parsed loca]
+  set cmap [dict get $parsed cmap]
+  set empty 0
+  dict for {code glyph} $cmap {
+    if {[lindex $loca [expr {$glyph + 1}]] <= [lindex $loca $glyph]} {
+      incr empty
+    }
+  }
+  set space [dict get $cmap 32]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc font embed body $fontRegular} message]
+  $doc font -family body -size 12
+  $doc text "a b" -at {20 40}
+  $doc destroy
+  list [expr {[lindex $loca [expr {$space + 1}]]
+          <= [lindex $loca $space]}] [expr {$empty > 0}] \
+      [expr {$empty < [dict size $cmap]}] $code
+} -result {1 1 1 0}
+
 
 cleanupTests

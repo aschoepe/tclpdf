@@ -185,7 +185,17 @@ oo::define ::tclpdf::document::document {
           glyphs come out of its font file - \[font glyph\] draws the glyphs\
           of a Type 3 font, which is what \[font define\] makes"
     }
-    if {[string length $char] != 1} {
+    # ONE CHARACTER, counted in code points and not in string elements.
+    # [string length] counts the second under Tcl 8.6: a character beyond the
+    # BMP is stored there as a surrogate pair and measures 2, so this used to
+    # refuse under 8.6 what it took under 9 - measured on 2026-08-21 against
+    # the 1499 characters of a colour emoji face, 1314 of which lie beyond the
+    # BMP. [split {}] counts code points under both, measured with 8.6.18 and
+    # 9.0.4: it hands the pair back as ONE element, and [scan %c] reads the
+    # real code point out of it - 128512 for U+1F600 either way, which is what
+    # the character code, the glyph name and the ToUnicode map below are built
+    # from.
+    if {[llength [split $char {}]] != 1} {
       return -code error "tclpdf: \[font glyph\] takes the ONE character the\
           glyph is drawn for, not \"$char\""
     }

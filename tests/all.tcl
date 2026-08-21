@@ -89,6 +89,8 @@ foreach tclpdfPkg {
     tclpdf::gdef
     tclpdf::kernGpos
     tclpdf::markPos
+    tclpdf::glyfPath
+    tclpdf::colr
     tclpdf::hyphenate
     tclpdf::kern
     tclpdf::gsubApply

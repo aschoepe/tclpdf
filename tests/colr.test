@@ -1,0 +1,457 @@
+# colr.test --
+#
+# The colour tables of a colour font: COLR version 0 and CPAL.
+#
+# NO COLOUR FONT IS SHIPPED WITH THE PACKAGE, and none is downloaded here.
+# The one real version 0 font that could serve - Twemoji Mozilla - has its
+# artwork under CC-BY 4.0 while this package is MIT, so it stays out of the
+# tree; every other colour font measured on this machine is COLR version 1,
+# whose version 0 part is empty. The fixture below builds the tables instead,
+# which is cheap because COLR version 0 and CPAL are flat arrays of fixed
+# width: 50 bytes of COLR for two base glyphs of three layers each, 30 bytes
+# of CPAL for one palette of four colours.
+#
+# The whole font around them is built too, because the module reads through
+# [::tclpdf::sfnt table] and therefore wants a parsed font rather than a byte
+# string. It is assembled by [::tclpdf::subset::Assemble], which already puts
+# an sfnt file together with a valid table directory and checksums - the
+# second consumer of that code shares it rather than owning a second copy.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::subset
+package require tclpdf::colr
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+set fontPlain [file join $assets DejaVuSans.ttf]
+testConstraint havePlain [file exists $fontPlain]
+
+# --- the fixture -----------------------------------------------------------
+
+# A COLR version 0 table (ISO/IEC 14496-22, 5.7.11).
+#
+#   records   list of {glyph firstLayerIndex numLayers}
+#   layers    list of {glyph paletteIndex}, in z-order, bottom first
+#   overrides name/value pairs that replace a computed header field, so that a
+#             damaged table is written by naming the ONE field that is wrong
+#             instead of by patching bytes at an offset counted by hand
+proc colrTable {records layers {overrides {}}} {
+  set version 0
+  set numBase [llength $records]
+  set numLayers [llength $layers]
+  set baseOffset 14
+  set layerOffset [expr {14 + $numBase * 6}]
+  foreach {key value} $overrides {
+    set $key $value
+  }
+  set table [binary format SuSuIuIuSu $version $numBase $baseOffset \
+      $layerOffset $numLayers]
+  foreach record $records {
+    append table [binary format SuSuSu {*}$record]
+  }
+  foreach layer $layers {
+    append table [binary format SuSu {*}$layer]
+  }
+  return $table
+}
+
+# A CPAL table (ISO/IEC 14496-22, 5.7.12).
+#
+#   version   0 or 1 - decides the LAYOUT; [overrides version n] writes a
+#             different number into the field without moving anything
+#   entries   numPaletteEntries, the colour count every palette has
+#   starts    one colour record index per palette; overlapping values are
+#             legal and are what makes two palettes share colours
+#   colors    the colour record array, each entry {blue green red alpha}
+#   types     the version 1 palette type flags, or {} for no type array
+proc cpalTable {version entries starts colors {types {}} {overrides {}}} {
+  set numPalettes [llength $starts]
+  set numRecords [llength $colors]
+  set typeOffset 0
+  set first [expr {12 + $numPalettes * 2}]
+  if {$version == 1} {
+    # The three version 1 offsets sit behind the colorRecordIndices array.
+    incr first 12
+    if {[llength $types]} {
+      set typeOffset $first
+      incr first [expr {$numPalettes * 4}]
+    }
+  }
+  set layout $version
+  foreach {key value} $overrides {
+    set $key $value
+  }
+  set table [binary format SuSuSuSuIu $version $entries $numPalettes \
+      $numRecords $first]
+  foreach start $starts {
+    append table [binary format Su $start]
+  }
+  if {$layout == 1} {
+    append table [binary format IuIuIu $typeOffset 0 0]
+    foreach type $types {
+      append table [binary format Iu $type]
+    }
+  }
+  foreach color $colors {
+    append table [binary format cccc {*}$color]
+  }
+  return $table
+}
+
+# A whole font around the two tables: the four tables [::tclpdf::sfnt parse]
+# insists on, and nothing else. There are no outlines - this module never
+# looks at one.
+proc colrFont {colr cpal {numGlyphs 12}} {
+  set head [binary format IuIuIuIu 0x00010000 0x00010000 0 0x5F0F3CF5]
+  append head [binary format SuSu 0 1000]
+  append head [binary format WuWu 0 0]
+  append head [binary format SSSS 0 -200 1000 800]
+  append head [binary format SuSuSSS 0 8 2 0 0]
+  set hhea [binary format Iu 0x00010000]
+  append hhea [binary format SSS 800 -200 0]
+  append hhea [binary format Su 1000]
+  append hhea [binary format SSS 0 0 1000]
+  append hhea [binary format SSS 1 0 0]
+  append hhea [binary format SSSS 0 0 0 0]
+  append hhea [binary format SSu 0 $numGlyphs]
+  set maxp [binary format Iu 0x00010000]
+  append maxp [binary format Su $numGlyphs]
+  append maxp [string repeat \x00 26]
+  set hmtx {}
+  for {set glyph 0} {$glyph < $numGlyphs} {incr glyph} {
+    append hmtx [binary format SuS 1000 0]
+  }
+  set tables [dict create head $head hhea $hhea maxp $maxp hmtx $hmtx]
+  if {$colr ne {}} {
+    dict set tables COLR $colr
+  }
+  if {$cpal ne {}} {
+    dict set tables CPAL $cpal
+  }
+  return [::tclpdf::sfnt parse [::tclpdf::subset::Assemble $tables]]
+}
+
+# The two base glyphs of every fixture below. Glyph 4 has an outline layer in
+# the TEXT colour on top of two palette colours, glyph 8 three palette
+# colours; they deliberately share no layer records, so a wrong first index
+# cannot pass by accident.
+set colrRecords {{4 0 3} {8 3 3}}
+set colrLayers {{5 0} {6 1} {7 0xFFFF} {9 3} {10 2} {11 0}}
+
+# blue green red alpha. Red, a green that is not 0x00ff00, a blue at half
+# alpha, and a grey - the grey is there because an achromatic entry comes back
+# as {gray ...} rather than {rgb ...}.
+set colrColors {{0 0 255 255} {0 170 0 255} {255 0 0 128} {128 128 128 255}}
+
+proc colrFixture {} {
+  return [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 0 4 {0} $::colrColors]]
+}
+
+# The -errorcode of a refusal, so that a test asserts the CONTRACT rather than
+# the wording of a message.
+proc colrRefusal {script} {
+  if {[catch {uplevel 1 $script} result options] == 0} {
+    return "no error: $result"
+  }
+  return [dict get $options -errorcode]
+}
+
+# --- reading the tables ----------------------------------------------------
+
+test colr-1.1 {the fixture is a font, and it is a colour font} -body {
+  set font [colrFixture]
+  list [dict get $font numGlyphs] [::tclpdf::colr has $font]
+} -result {12 1}
+
+test colr-1.2 {a font without COLR and CPAL is not a colour font} \
+    -constraints havePlain -body {
+  ::tclpdf::colr has [::tclpdf::sfnt read $::fontPlain]
+} -result 0
+
+test colr-1.3 {a font with COLR but no CPAL still answers has 0} -body {
+  # 5.7.11: a COLR without a CPAL beside it is not supported. [has] says so
+  # before [build] has to refuse it.
+  ::tclpdf::colr has [colrFont [colrTable $::colrRecords $::colrLayers] {}]
+} -result 0
+
+test colr-1.4 {build reports the palette shape} -body {
+  set state [::tclpdf::colr build [colrFixture]]
+  list [dict get $state version] [dict get $state entries] \
+      [llength [dict get $state palettes]] [dict get $state types]
+} -result {0 4 1 {}}
+
+test colr-1.5 {build collects every base glyph record} -body {
+  dict get [::tclpdf::colr build [colrFixture]] glyphs
+} -result {4 {0 3} 8 {3 3}}
+
+test colr-1.6 {the fixture tables have the measured size} -body {
+  # Flat arrays of fixed width, which is the reason this fixture is cheap:
+  # COLR is 14 + 6 per base glyph + 4 per layer, CPAL version 0 is 12 + 2 per
+  # palette + 4 per colour record.
+  list [string length [colrTable $::colrRecords $::colrLayers]] \
+      [string length [cpalTable 0 4 {0} $::colrColors]]
+} -result {50 30}
+
+# --- the layers of a base glyph --------------------------------------------
+
+test colr-2.1 {the layers of a base glyph, bottom first} -body {
+  ::tclpdf::colr layers [::tclpdf::colr build [colrFixture]] 4
+} -result {{5 0} {6 1} {7 65535}}
+
+test colr-2.2 {the second base glyph reads from its own first index} -body {
+  ::tclpdf::colr layers [::tclpdf::colr build [colrFixture]] 8
+} -result {{9 3} {10 2} {11 0}}
+
+test colr-2.3 {a glyph that is not a base glyph has no layers} -body {
+  # An answer, not a failure: most glyphs of a colour font are layers.
+  set state [::tclpdf::colr build [colrFixture]]
+  list [::tclpdf::colr layers $state 5] [::tclpdf::colr layers $state 99]
+} -result {{} {}}
+
+test colr-2.4 {a base glyph record of no layers is empty, not an error} -body {
+  # Pointless but not damaged: the record is inside the table and reaches past
+  # nothing. Refusing it would turn a harmless oddity into a dead font.
+  set font [colrFont [colrTable {{4 0 3} {8 3 0}} $::colrLayers] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  set state [::tclpdf::colr build $font]
+  list [dict get $state glyphs] [::tclpdf::colr layers $state 8]
+} -result {{4 {0 3} 8 {3 0}} {}}
+
+test colr-2.5 {two base glyphs may share layer records} -body {
+  # 5.7.11 allows a base glyph record to point partway into another one's
+  # z-order, which is how a font reuses a common background.
+  set font [colrFont [colrTable {{4 0 3} {8 1 2}} $::colrLayers] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  set state [::tclpdf::colr build $font]
+  ::tclpdf::colr layers $state 8
+} -result {{6 1} {7 65535}}
+
+# --- resolving a palette index ---------------------------------------------
+
+test colr-3.1 {a palette entry is a colour and an alpha} -body {
+  set state [::tclpdf::colr build [colrFixture]]
+  list [::tclpdf::colr color $state 0 0] [::tclpdf::colr color $state 0 1]
+} -result {{{rgb {1.0 0.0 0.0}} 1.0} {{rgb {0.0 0.6666666666666666 0.0}} 1.0}}
+
+test colr-3.2 {alpha comes out beside the colour, not inside it} -body {
+  # In PDF the opacity is not part of the colour at all - it belongs in an
+  # ExtGState - so it is kept as a separate number.
+  ::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 0 2
+} -result {{rgb {0.0 0.0 1.0}} 0.5019607843137255}
+
+test colr-3.3 {an achromatic entry collapses to grey} -body {
+  # What [::tclpdf::color parse] does with any grey, and the reason a palette
+  # entry goes through it: the entry is then the same kind of value as every
+  # other colour in the package, and goes out as "0.5 g".
+  ::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 0 3
+} -result {{gray 0.5019607843137255} 1.0}
+
+test colr-3.4 {0xFFFF is the text colour and not palette entry 65535} -body {
+  # THE trap of this table: read as an index it points past every palette
+  # there is, and a reader that clamps or wraps draws the wrong colour
+  # without ever failing. The empty string is the answer, and it is not an
+  # error.
+  set state [::tclpdf::colr build [colrFixture]]
+  lassign [lindex [::tclpdf::colr layers $state 4] 2] glyph index
+  list $index [::tclpdf::colr color $state 0 $index]
+} -result {65535 {}}
+
+test colr-3.5 {palettes may overlap in the colour record array} -body {
+  # 5.7.12: the colour records of two palettes may share entries, which is why
+  # the colours are resolved through the starting index instead of by slicing
+  # the array into equal blocks.
+  set colors [linsert $::colrColors end {0 255 255 255}]
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 0 4 {0 1} $colors]]
+  set state [::tclpdf::colr build $font]
+  list [llength [dict get $state palettes]] \
+      [::tclpdf::colr color $state 1 0] [::tclpdf::colr color $state 1 3]
+} -result {2 {{rgb {0.0 0.6666666666666666 0.0}} 1.0} {{rgb {1.0 1.0 0.0}} 1.0}}
+
+# --- CPAL version 1 --------------------------------------------------------
+
+test colr-4.1 {version 1 brings the palette type flags} -body {
+  # 0x0001 usable on a light background, 0x0002 on a dark one - not mutually
+  # exclusive, so a palette may carry both.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 1 4 {0 0} $::colrColors {1 3}]]
+  set state [::tclpdf::colr build $font]
+  list [dict get $state version] [dict get $state types]
+} -result {1 {1 3}}
+
+test colr-4.2 {version 1 without a type array has no types} -body {
+  # offsetPaletteTypeArray is 0 when the font provides none, and that is not a
+  # damaged table.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 1 4 {0} $::colrColors]]
+  set state [::tclpdf::colr build $font]
+  list [dict get $state version] [dict get $state types] \
+      [::tclpdf::colr color $state 0 0]
+} -result {1 {} {{rgb {1.0 0.0 0.0}} 1.0}}
+
+test colr-4.3 {the palette label arrays are deliberately not read} -body {
+  # Name table IDs for a palette picker. This package has no user interface to
+  # put them in, so the state carries no key for them.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 1 4 {0 0} $::colrColors {1 2}]]
+  lsort [dict keys [::tclpdf::colr build $font]]
+} -result {colr entries glyphs layerOffset layerRecords palettes types version}
+
+# --- refusals --------------------------------------------------------------
+#
+# Half the worth of a table reader: damaged or unsupported material has to be
+# refused BY NAME, because a reader that quietly returns nothing is
+# indistinguishable from a font that has no colour glyphs.
+
+test colr-5.1 {COLR version 1 is refused by name} -body {
+  # Not "no colour glyphs": a version 1 table hangs a paint graph off every
+  # base glyph, and every font that has one would otherwise look empty.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers {version 1}] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR VERSION COLR 1}
+
+test colr-5.2 {COLR version 1 names the version in its message} -body {
+  set font [colrFont [colrTable $::colrRecords $::colrLayers {version 1}] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  catch {::tclpdf::colr build $font} message
+  string match {*version 1*version 0*} $message
+} -result 1
+
+test colr-5.3 {a version 0 table with no base glyphs is refused} -body {
+  # Nothing to draw, and the caller cannot tell an empty answer from a font it
+  # never meant to ask about.
+  set font [colrFont [colrTable {} {}] [cpalTable 0 4 {0} $::colrColors]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR EMPTY COLR}
+
+test colr-5.3a {the version is refused before the empty base glyph array} -body {
+  # Not academic: the COLR header of Noto Color Emoji reads version 1 AND
+  # numBaseGlyphRecords 0, so both refusals apply to it and only the version
+  # says anything useful about why nothing can be drawn.
+  set font [colrFont [colrTable {} {} {version 1}] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR VERSION COLR 1}
+
+test colr-5.4 {a COLR without a CPAL is refused} -body {
+  colrRefusal {::tclpdf::colr build \
+      [colrFont [colrTable $::colrRecords $::colrLayers] {}]}
+} -result {TCLPDF COLR MISSING CPAL}
+
+test colr-5.5 {a font without COLR is refused} -body {
+  colrRefusal {::tclpdf::colr build [colrFont {} [cpalTable 0 4 {0} $::colrColors]]}
+} -result {TCLPDF COLR MISSING COLR}
+
+test colr-5.6 {a base glyph whose layers run past the layer array} -body {
+  # Both numbers are inside the table and their SUM is not: without this check
+  # the reader walks off the end of the layer array into whatever follows it.
+  set font [colrFont [colrTable {{4 0 3} {8 4 3}} $::colrLayers] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR LAYERS 8 4 3 6}
+
+test colr-5.7 {a base glyph array that does not fit in the table} -body {
+  set font [colrFont [colrTable $::colrRecords $::colrLayers {baseOffset 40}] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR TRUNCATED COLR}
+
+test colr-5.8 {a layer array that does not fit in the table} -body {
+  set font [colrFont [colrTable $::colrRecords $::colrLayers {layerOffset 200}] \
+      [cpalTable 0 4 {0} $::colrColors]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR TRUNCATED COLR}
+
+test colr-5.9 {a COLR table cut short inside its own header} -body {
+  # The header is 14 bytes and this one is 6, so the very first Offset32 is
+  # already outside the table.
+  set colr [string range [colrTable $::colrRecords $::colrLayers] 0 5]
+  colrRefusal {::tclpdf::colr build \
+      [colrFont $colr [cpalTable 0 4 {0} $::colrColors]]}
+} -result {TCLPDF COLR TRUNCATED COLR}
+
+test colr-5.10 {a CPAL version tclpdf does not read} -body {
+  # 5.7.12 defines 0 and 1. Anything else is a table of unknown shape, and
+  # reading its header as if it were version 0 would invent palettes.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 0 4 {0} $::colrColors {} {version 2}]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR VERSION CPAL 2}
+
+test colr-5.11 {an empty CPAL table is refused} -body {
+  # 5.7.12: at least one palette, at least one colour record per palette. A
+  # font that states none is saying its colour glyphs have no colours.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 0 4 {0} $::colrColors {} {numPalettes 0}]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR EMPTY CPAL}
+
+test colr-5.12 {a colour record array that does not fit in the table} -body {
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 0 4 {0} $::colrColors {} {numRecords 40}]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR TRUNCATED CPAL}
+
+test colr-5.13 {a palette that starts too late in the colour records} -body {
+  # numColorRecords must be at least max(colorRecordIndices) +
+  # numPaletteEntries (5.7.12). Unchecked, palette 1 here would read the four
+  # bytes behind the array as a colour.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 0 4 {0 2} $::colrColors]]
+  colrRefusal {::tclpdf::colr build $font}
+} -result {TCLPDF COLR RECORDS 1 2 4 4}
+
+test colr-5.14 {a version 1 type array that does not fit in the table} -body {
+  # The message is asserted as well as the code here, because reading the
+  # array without the bound would raise the same code from the generic read
+  # check - and say only "an offset points past its end", which does not tell
+  # anybody WHICH of the four arrays of a version 1 CPAL was wrong.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers] \
+      [cpalTable 1 4 {0 0} $::colrColors {1 2} {typeOffset 200}]]
+  set code [colrRefusal {::tclpdf::colr build $font}]
+  catch {::tclpdf::colr build $font} message
+  list $code [string match {*palette type array*offset 200*} $message]
+} -result {{TCLPDF COLR TRUNCATED CPAL} 1}
+
+test colr-5.15 {a CPAL table cut short inside its own header} -body {
+  set cpal [string range [cpalTable 0 4 {0} $::colrColors] 0 5]
+  colrRefusal {::tclpdf::colr build \
+      [colrFont [colrTable $::colrRecords $::colrLayers] $cpal]}
+} -result {TCLPDF COLR TRUNCATED CPAL}
+
+test colr-5.16 {a palette that is not there} -body {
+  colrRefusal {::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 1 0}
+} -result {TCLPDF COLR PALETTE 1 1}
+
+test colr-5.17 {an entry that is not there} -body {
+  # 4 is one past the last of four entries - and unlike 0xFFFF it is not a
+  # sentinel, so it is a mistake and says so.
+  colrRefusal {::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 0 4}
+} -result {TCLPDF COLR ENTRY 4 4}
+
+test colr-5.18 {a refusal is trappable by prefix} -body {
+  # What the -errorcode contract is for: one prefix catches every way this
+  # module can say no, without reading a single message.
+  set answer {not trapped}
+  try {
+    ::tclpdf::colr build [colrFont [colrTable {} {}] \
+        [cpalTable 0 4 {0} $::colrColors]]
+  } trap {TCLPDF COLR} {} {
+    set answer trapped
+  }
+  set answer
+} -result trapped
+
+cleanupTests

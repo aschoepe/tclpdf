@@ -1,0 +1,355 @@
+# glyfPath.test --
+#
+# Turning the outline of a TrueType glyph into PDF path operators.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::io
+package require tclpdf::glyfOutline
+package require tclpdf::glyfPath
+source [file join [file dirname [info script]] helper.tcl]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set fonts [file join $here examples assets fonts]
+
+proc glyfPathFace {name} {
+  return [::tclpdf::sfnt parse [::tclpdf::io read [file join $::fonts {*}$name]]]
+}
+
+# An outline as [glyfOutline parse] returns one, built by hand. Every case
+# this module has to survive can be written down in four short lists, and a
+# hand-built outline says which case is meant - a glyph number out of a font
+# does not, and stops saying it when the font is updated.
+proc glyfPathOutline {ends flags xs ys} {
+  return [dict create type simple ends $ends flags $flags x $xs y $ys \
+      bounds {0 0 0 0} instructions {}]
+}
+
+# The operators of a stream as a flat list, so a test can name the shape it
+# expects instead of matching whitespace.
+proc glyfPathLines {stream} {
+  return [lmap line [split [string trim $stream] \n] {string trim $line}]
+}
+
+test glyfPath-1.1 {a contour of on-curve points only becomes lines} -body {
+  # The simplest possible outline, and the one that fixes the shape of the
+  # output: one moveto, a lineto per further point, and the closing h - the
+  # line back to the start is NOT written, because closepath draws it.
+  glyfPathLines [::tclpdf::glyfPath operators \
+      [glyfPathOutline {3} {1 1 1 1} {0 100 100 0} {0 0 100 100}]]
+} -result {{0 0 m} {100 0 l} {100 100 l} {0 100 l} h}
+
+test glyfPath-1.2 {font units go out unscaled and therefore as integers} -body {
+  # The scale sits in the /FontMatrix of the Type 3 font, not here. That is
+  # not only a division saved: font units are integers, so an unscaled stream
+  # is exact and short, while text space would write 0.05127 for every one.
+  set stream [::tclpdf::glyfPath operators \
+      [glyfPathOutline {2} {1 1 1} {0 1000 500} {0 0 750}]]
+  regexp -all {[0-9]+\.} $stream
+} -result 0
+
+test glyfPath-1.3 {one off-curve point becomes a cubic, exactly} -body {
+  # Degree elevation, and the numbers say it is exact rather than fitted:
+  # from (0,0) over (50,100) to (100,0), both control points sit two thirds
+  # of the way from their end point towards the quadratic one.
+  glyfPathLines [::tclpdf::glyfPath operators \
+      [glyfPathOutline {2} {1 0 1} {0 50 100} {0 100 0}]]
+} -result {{0 0 m} {33.33333 66.66667 66.66667 66.66667 100 0 c} h}
+
+test glyfPath-1.4 {two off-curve points in a row imply an on-curve point} -body {
+  # The point the format does not store. Taking the points at face value
+  # here loses one segment of every rounded glyph - measured over
+  # DejaVuSans, 1669 of its 3583 simple glyphs contain such a pair.
+  #
+  # Between (30,100) and (70,100) the implied point is (50,100), and the
+  # first curve has to END there: 30 + 2/3*(30-50) = 36.66667 is its second
+  # control point.
+  glyfPathLines [::tclpdf::glyfPath operators \
+      [glyfPathOutline {3} {1 0 0 1} {0 30 70 100} {0 100 100 0}]]
+} -result {{0 0 m} {20 66.66667 36.66667 100 50 100 c}\
+    {63.33333 100 80 66.66667 100 0 c} h}
+
+test glyfPath-1.5 {a contour may begin with an off-curve point} -body {
+  # Point zero is a control point here. Starting the path there would put
+  # the pen on a point the outline never passes through and shift every
+  # segment by one; the contour is rotated onto its first on-curve point
+  # instead, which is (100,0).
+  glyfPathLines [::tclpdf::glyfPath operators \
+      [glyfPathOutline {2} {0 1 1} {50 100 0} {100 0 0}]]
+} -result {{100 0 m} {0 0 l} {33.33333 66.66667 66.66667 66.66667 100 0 c} h}
+
+test glyfPath-1.6 {a contour without any on-curve point starts at a midpoint} -body {
+  # Four off-curve points and nothing else - a circle whose four joints are
+  # all implied. There is no point to start at, so the start is the midpoint
+  # between the last point and the first, and the path is curves only.
+  set stream [::tclpdf::glyfPath operators \
+      [glyfPathOutline {3} {0 0 0 0} {0 100 100 0} {0 0 100 100}]]
+  list [lindex [glyfPathLines $stream] 0] \
+      [llength [regexp -all -inline {(?m)^.* c$} $stream]] \
+      [llength [regexp -all -inline {(?m)^.* l$} $stream]]
+} -result {{0 50 m} 4 0}
+
+test glyfPath-1.7 {a second contour is a second subpath, closed on its own} -body {
+  # The "O": an outer contour and a counter, wound against each other. Two
+  # m/h pairs in ONE path, filled nonzero by the caller - that is what makes
+  # the counter a hole. Two separate paths, or an even-odd fill, would draw
+  # this one glyph correctly and fail on the next overlapping one.
+  set stream [::tclpdf::glyfPath operators \
+      [glyfPathOutline {3 7} {1 1 1 1 1 1 1 1} {0 100 100 0 25 75 75 25} \
+          {0 0 100 100 25 25 75 75}]]
+  list [llength [regexp -all -inline {(?m)^.* m$} $stream]] \
+      [llength [regexp -all -inline {(?m)^h$} $stream]] \
+      [lindex [glyfPathLines $stream] 5]
+} -result {2 2 {25 25 m}}
+
+test glyfPath-1.8 {a glyph with no outline yields no operators} -body {
+  # A space. Not the same as a glyph with zero contours, and neither may
+  # produce a stray moveto.
+  list [::tclpdf::glyfPath operators [dict create type empty bytes {}]] \
+      [::tclpdf::glyfPath operators [glyfPathOutline {} {} {} {}]]
+} -result {{} {}}
+
+test glyfPath-1.9 {a one-point contour is dropped} -body {
+  # It encloses no area, so filling it draws nothing - but it would still
+  # cost a moveto and a closepath in every glyph stream. Real fonts carry
+  # them: 14 glyphs of DejaVuSans have such a stray point.
+  glyfPathLines [::tclpdf::glyfPath operators \
+      [glyfPathOutline {3 4} {1 1 1 1 1} {0 100 100 0 500} {0 0 100 100 500}]]
+} -result {{0 0 m} {100 0 l} {100 100 l} {0 100 l} h}
+
+test glyfPath-1.10 {the segments are also available unformatted} -body {
+  # What [operators] writes, before it is written: the start point and one
+  # entry per segment. A caller that wants to measure or transform the
+  # outline should not have to parse the stream back.
+  ::tclpdf::glyfPath contours [glyfPathOutline {2} {1 0 1} {0 60 120} {0 120 0}]
+} -result {{{0 0} {c 40.0 80.0 80.0 80.0 120 0}}}
+
+test glyfPath-1.11 {the transform is applied before the curves are built} -body {
+  # A command prefix called with x and y, as svgPath uses one. It runs on the
+  # POINTS, so implied midpoints and elevated control points are computed in
+  # the target coordinates - for an affine map that is the same curve, and it
+  # costs one call per point instead of three per curve.
+  proc glyfPathScale {x y} {return [list [expr {$x / 1000.0}] [expr {$y / 1000.0}]]}
+  glyfPathLines [::tclpdf::glyfPath operators \
+      [glyfPathOutline {2} {1 0 1} {0 50 100} {0 100 0}] glyfPathScale]
+} -result {{0 0 m} {0.03333 0.06667 0.06667 0.06667 0.1 0 c} h}
+
+test glyfPath-1.12 {only the on-curve bit of a flag is about the shape} -body {
+  # [glyfOutline] keeps OVERLAP_SIMPLE (0x40) in the same list. Reading the
+  # flag as a whole would make every point of a glyph carrying it off-curve.
+  glyfPathLines [::tclpdf::glyfPath operators \
+      [glyfPathOutline {2} {0x41 0x41 0x41} {0 100 50} {0 0 100}]]
+} -result {{0 0 m} {100 0 l} {50 100 l} h}
+
+test glyfPath-1.13 {a composite glyph is refused rather than drawn empty} -body {
+  # It has no points of its own. Assembling components is [glyfOutline]'s
+  # subject; silently returning nothing here would put an invisible glyph
+  # into a document and blame the font.
+  catch {::tclpdf::glyfPath operators \
+      [dict create type composite components {} bounds {0 0 0 0}]} message
+  string match {*composite*} $message
+} -result 1
+
+test glyfPath-1.14 {something that is not an outline says so} -body {
+  catch {::tclpdf::glyfPath operators {a b}} message
+  string match {*not a parsed glyph outline*} $message
+} -result 1
+
+test glyfPath-2.1 {a real glyph draws closed contours} -body {
+  # The counter-check against a shipped font: capital O of Roboto has an
+  # outer contour and a counter, and every subpath of the result opens with
+  # a moveto and ends with a closepath.
+  set font [glyfPathFace {google Roboto-Regular.ttf}]
+  set glyph [::tclpdf::glyfOutline parse [::tclpdfTest::glyph $font \
+      [dict get [dict get $font cmap] 79]]]
+  set operators [glyfPathLines [::tclpdf::glyfPath operators $glyph]]
+  set opened 0
+  set closed 0
+  set previous h
+  foreach line $operators {
+    set operator [lindex $line end]
+    if {$operator eq "m"} {
+      incr opened
+      # A moveto may only follow a closepath - otherwise a subpath was left
+      # hanging and the fill runs into the next one.
+      if {$previous ne "h"} {
+        return "unclosed subpath before: $line"
+      }
+    } elseif {$operator eq "h"} {
+      incr closed
+    }
+    set previous $operator
+  }
+  list [llength [dict get $glyph ends]] $opened $closed \
+      [lindex $operators end] \
+      [lsort -unique [lmap line $operators {lindex $line end}]]
+} -result {2 2 2 h {c h l m}}
+
+test glyfPath-2.2 {the path stays inside the box the font states} -body {
+  # Against [glyfOutline bounds], which measures the POINTS. Every number the
+  # path carries is a convex combination of those points - on-curve points
+  # unchanged, implied midpoints halfway, elevated control points two thirds
+  # of the way - so the path can never leave that box. If it does, a control
+  # point was built from the wrong pair.
+  set font [glyfPathFace {DejaVuSans.ttf}]
+  set outside 0
+  set checked 0
+  set glyphCount [expr {[llength [dict get $font loca]] - 1}]
+  for {set id 0} {$id < $glyphCount} {incr id} {
+    set data [::tclpdfTest::glyph $font $id]
+    if {$data eq {}} continue
+    set glyph [::tclpdf::glyfOutline parse $data]
+    if {[dict get $glyph type] ne "simple"} continue
+    set path [::tclpdf::glyfPath contours $glyph]
+    if {![llength $path]} continue
+    incr checked
+    set xs {}
+    set ys {}
+    foreach contour $path {
+      lassign [lindex $contour 0] x y
+      lappend xs $x
+      lappend ys $y
+      foreach segment [lrange $contour 1 end] {
+        foreach {x y} [lrange $segment 1 end] {
+          lappend xs $x
+          lappend ys $y
+        }
+      }
+    }
+    lassign [::tclpdf::glyfOutline bounds [dict create $id $glyph] $id] \
+        xMin yMin xMax yMax
+    if {[::tcl::mathfunc::min {*}$xs] < $xMin ||
+        [::tcl::mathfunc::min {*}$ys] < $yMin ||
+        [::tcl::mathfunc::max {*}$xs] > $xMax ||
+        [::tcl::mathfunc::max {*}$ys] > $yMax} {
+      incr outside
+    }
+  }
+  list [expr {$checked > 1000}] $outside
+} -result {1 0}
+
+test glyfPath-2.3 {the box is not only respected but filled} -body {
+  # Containment alone would also hold for a path that draws a third of the
+  # glyph. Capital O of DejaVuSans reaches every side of its box exactly,
+  # because its extremes are on-curve points - which is what a hinted font
+  # does, and what makes this a check rather than a formality.
+  set font [glyfPathFace {DejaVuSans.ttf}]
+  set id [dict get [dict get $font cmap] 79]
+  set glyph [::tclpdf::glyfOutline parse [::tclpdfTest::glyph $font $id]]
+  set xs {}
+  set ys {}
+  foreach contour [::tclpdf::glyfPath contours $glyph] {
+    lassign [lindex $contour 0] x y
+    lappend xs $x
+    lappend ys $y
+    foreach segment [lrange $contour 1 end] {
+      foreach {x y} [lrange $segment 1 end] {
+        lappend xs $x
+        lappend ys $y
+      }
+    }
+  }
+  set box [::tclpdf::glyfOutline bounds [dict create $id $glyph] $id]
+  set path [list [::tcl::mathfunc::min {*}$xs] [::tcl::mathfunc::min {*}$ys] \
+      [::tcl::mathfunc::max {*}$xs] [::tcl::mathfunc::max {*}$ys]]
+  lmap a $path b $box {expr {int($a) - $b}}
+} -result {0 0 0 0}
+
+test glyfPath-2.4 {contours that begin off-curve are real, and drawn} -body {
+  # Measured, because the two hard cases are easy to dismiss as theory: of the
+  # contours of DejaVuSans, 571 begin with an off-curve point and 94 have no
+  # on-curve point at all. Each of them has to start where the outline really
+  # passes - on the contour's first on-curve point, or, where there is none,
+  # halfway between its last point and its first.
+  set font [glyfPathFace {DejaVuSans.ttf}]
+  set beginsOffCurve 0
+  set noneOnCurve 0
+  set wrong 0
+  set glyphCount [expr {[llength [dict get $font loca]] - 1}]
+  for {set id 0} {$id < $glyphCount} {incr id} {
+    set data [::tclpdfTest::glyph $font $id]
+    if {$data eq {}} continue
+    set glyph [::tclpdf::glyfOutline parse $data]
+    if {[dict get $glyph type] ne "simple"} continue
+    set flags [dict get $glyph flags]
+    set xs [dict get $glyph x]
+    set ys [dict get $glyph y]
+    set path [::tclpdf::glyfPath contours $glyph]
+    set start 0
+    set index 0
+    foreach end [dict get $glyph ends] {
+      set first $start
+      set start [expr {$end + 1}]
+      if {$end - $first + 1 < 2} continue
+      set contour [lmap flag [lrange $flags $first $end] {expr {$flag & 1}}]
+      set began [lindex $path $index 0]
+      incr index
+      if {[lindex $contour 0]} continue
+      incr beginsOffCurve
+      set on [lsearch -exact $contour 1]
+      if {$on < 0} {
+        incr noneOnCurve
+        set expected [list \
+            [expr {([lindex $xs $end] + [lindex $xs $first]) / 2.0}] \
+            [expr {([lindex $ys $end] + [lindex $ys $first]) / 2.0}]]
+      } else {
+        set expected [list [lindex $xs [expr {$first + $on}]] \
+            [lindex $ys [expr {$first + $on}]]]
+      }
+      if {[lindex $began 0] != [lindex $expected 0] ||
+          [lindex $began 1] != [lindex $expected 1]} {
+        incr wrong
+      }
+    }
+  }
+  list $beginsOffCurve $noneOnCurve $wrong
+} -result {571 94 0}
+
+test glyfPath-2.5 {a whole face converts without a stray operator} -body {
+  # Over every simple glyph of Roboto: only m, l, c and h appear, every
+  # subpath is opened by exactly one moveto and ended by exactly one
+  # closepath, and every operator carries the number of coordinates it takes.
+  set font [glyfPathFace {google Roboto-Regular.ttf}]
+  set widths {m 2 l 2 c 6 h 0}
+  set wrong {}
+  set glyphs 0
+  set glyphCount [expr {[llength [dict get $font loca]] - 1}]
+  for {set id 0} {$id < $glyphCount} {incr id} {
+    set data [::tclpdfTest::glyph $font $id]
+    if {$data eq {}} continue
+    set glyph [::tclpdf::glyfOutline parse $data]
+    if {[dict get $glyph type] ne "simple"} continue
+    incr glyphs
+    set subpaths 0
+    set closes 0
+    foreach line [glyfPathLines [::tclpdf::glyfPath operators $glyph]] {
+      set operator [lindex $line end]
+      if {![dict exists $widths $operator]} {
+        lappend wrong "$id: $line"
+        continue
+      }
+      if {[llength $line] - 1 != [dict get $widths $operator]} {
+        lappend wrong "$id: $line"
+      }
+      if {$operator eq "m"} {
+        incr subpaths
+      } elseif {$operator eq "h"} {
+        incr closes
+      }
+    }
+    if {$subpaths != $closes} {
+      lappend wrong "$id: $subpaths subpaths, $closes closed"
+    }
+  }
+  list [expr {$glyphs > 500}] $wrong
+} -result {1 {}}
+
+cleanupTests

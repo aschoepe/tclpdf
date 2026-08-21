@@ -43,6 +43,8 @@ package ifneeded @PACKAGE_NAME@::joiningData 1.0 [list source [file join $dir jo
 package ifneeded @PACKAGE_NAME@::kern 1.0 [list source [file join $dir kern.tcl]]
 package ifneeded @PACKAGE_NAME@::liga 1.2 [list source [file join $dir liga.tcl]]
 package ifneeded @PACKAGE_NAME@::kernGpos 1.2 [list source [file join $dir kernGpos.tcl]]
+package ifneeded @PACKAGE_NAME@::colr 1.0 [list source [file join $dir colr.tcl]]
+package ifneeded @PACKAGE_NAME@::glyfPath 1.0 [list source [file join $dir glyfPath.tcl]]
 package ifneeded @PACKAGE_NAME@::markPos 1.0 [list source [file join $dir markPos.tcl]]
 package ifneeded @PACKAGE_NAME@::hyphenate 1.0 [list source [file join $dir hyphenate.tcl]]
 package ifneeded @PACKAGE_NAME@::otLayout 1.2 [list source [file join $dir otLayout.tcl]]

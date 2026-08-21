@@ -111,6 +111,21 @@ oo::define ::tclpdf::document::document {
             CID, not by glyph index; convert it to TrueType or to a name-keyed\
             CFF"
       }
+      # A face that draws nothing, refused here rather than embedded: the
+      # file that comes out of it is valid, extractable and blank, and the
+      # reasoning is at [FontDrawsNothing].
+      if {[my FontDrawsNothing $parsed]} {
+        return -code error \
+            -errorcode [list TCLPDF FONT OUTLINES $alias $path] \
+            "tclpdf: \"[file tail $path]\" draws nothing - every character it\
+            covers has an EMPTY outline. That is what a colour font looks\
+            like from the outside: its pictures sit in a table of its own\
+            (COLR/CPAL, CBDT, sbix, SVG) which this package does not write,\
+            and a document embedding it would come out blank with nothing\
+            reporting it. Embed a monochrome face instead - Noto Emoji for\
+            Noto Color Emoji - or draw the symbols with \[font define\] and\
+            \[font glyph\] as a Type 3 font"
+      }
       lassign [my FontAxes $parsed $options $path] coordinates axes
       dict set fonts $alias [dict create \
           kind truetype \
@@ -134,6 +149,62 @@ oo::define ::tclpdf::document::document {
       my onSelf resources FontWrite
     }
     return $alias
+  }
+
+  # Has this face an outline for anything a caller could write?
+  #
+  # A COLOUR FONT keeps its pictures in a table of its own - COLR/CPAL,
+  # CBDT/CBLC, sbix or SVG - and leaves the glyf entry of every character it
+  # covers EMPTY. This package writes outlines and none of those tables, so
+  # such a face passes every gate there is and produces a blank page. Measured
+  # on 2026-08-21 with NotoColorEmoji-Regular: [font embed], [text] and
+  # [write] all reported success, pdftotext gave the code point back and
+  # pdffonts showed a clean subset, and no tool [make check] runs said a word.
+  # That is why this is a refusal at the embed and not a warning - a warning
+  # is only useful to someone who already knows what to look for.
+  #
+  # THE TEST IS THE EMPTY OUTLINE, NOT THE COLOUR TABLE. A colour font that
+  # carries real monochrome fallback outlines draws them, and refusing it for
+  # its COLR table would take a working face away. A face with no colour
+  # table at all whose outlines are all empty is just as blank and is refused
+  # for the same one reason.
+  #
+  # THE QUESTION IS ASKED OF THE CHARACTERS, not of every glyph in the file.
+  # The layer glyphs of a COLRv1 face DO have outlines - measured, 37831 of
+  # its 41863 glyphs - and nothing a caller writes reaches one: text goes
+  # through the cmap to a base glyph, and every one of those is empty
+  # (measured: 1499 of 1499 characters).
+  #
+  # ONE empty outline says nothing, and must not: U+0020 has none in any face
+  # measured (DejaVu Sans 61 of 5918 characters, Noto Emoji 43 of 1503, the
+  # space among them in both). It takes ALL of them - and the walk stops at
+  # the first outline it finds, which for an ordinary face is one of the
+  # first characters it looks at.
+  #
+  # A CFF face is not asked. Its outlines live in the CFF table, which this
+  # package never walks - see sfnt.tcl - so there is nothing to measure here.
+  method FontDrawsNothing {parsed} {
+    if {[dict get $parsed outlines] ne "truetype"} {
+      return 0
+    }
+    set loca [dict get $parsed loca]
+    set cmap [dict get $parsed cmap]
+    if {![llength $loca] || ![dict size $cmap]} {
+      # Nothing to compare, or a face whose characters this package cannot
+      # reach at all - neither of those is this question.
+      return 0
+    }
+    # loca holds numGlyphs + 1 offsets, so glyph n is empty where the offset
+    # behind it does not lie behind its own (ISO/IEC 14496-22, 5.3.3). A
+    # glyph number the table does not cover has no outline either.
+    set last [expr {[llength $loca] - 1}]
+    dict for {code glyph} $cmap {
+      if {$glyph < $last && [lindex $loca [expr {$glyph + 1}]]
+          > [lindex $loca $glyph]} {
+        return 0
+      }
+    }
+    return 1
   }
 
   # Where on the axes a variable font is to be embedded: a list of two - the
