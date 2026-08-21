@@ -33,9 +33,12 @@
 #
 # WHAT IS BEING SHOWN, beyond "it breaks words": the guards. A hyphenator
 # without them sets "A-bend", breaks a part number in half and hyphenates a
-# URL. The last block of the second page runs a handful of words through
-# [::tclpdf::hyphenate word] and prints what came back, the refused ones
-# included - that command exists for exactly this, checking and showing.
+# URL. Each page closes with a handful of words of its own language run through
+# [::tclpdf::hyphenate word], the refused ones included with the reason beside
+# them - that command exists for exactly this, checking and showing. The guards
+# themselves know no language; what the two pattern files decide is how much of
+# a word has to stay on each side, and that is read back rather than written
+# here.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -213,6 +216,50 @@ proc pair {doc y title text tag} {
     return [expr {max($left, $right)}]
 }
 
+# -- the specimens -----------------------------------------------------------
+
+# The words, the language they are read in, and what makes each one worth
+# printing. Kept as data so that the page and the console say the same thing,
+# and split by language so that each page carries its own.
+set germanWords {
+    de-DE Silbentrennung        "the ordinary case"
+    de-DE Donaudampfschiff      "a compound, taken apart at its joints"
+    de-DE Schifffahrt           "three f, and the break between the second and the third"
+    de-DE Abend                 "refused: the left minimum, or it would read A-bend"
+    de-DE A4-Blatt              "refused: a digit in the word"
+}
+set englishWords {
+    en-US hyphenation           "the ordinary case"
+    en-US representation        "five pieces out of patterns of three letters"
+    en-US into                  "refused: shorter than -min"
+    en-US WWW                   "refused: capitals throughout"
+    en-US hyphenation.txt       "refused: a dot left inside the word"
+}
+set specimens [concat $germanWords $englishWords]
+
+# One block of specimens under its own heading. Both pages go through here, so
+# the two cannot drift apart in layout while saying the same kind of thing.
+proc specimenBlock {doc y heading intro rows} {
+    $doc font -family helvetica -style bold -size 10 -color {0.20 0.30 0.45}
+    $doc text $heading -at [list 20 $y]
+    $doc font -family helvetica -style {} -size 9 -color {0.35 0.35 0.35}
+    set y [$doc text $intro -at [list 20 [expr {$y + 5}]] -width 170]
+    set y [expr {$y + 3}]
+    foreach {tag word note} $rows {
+        set shown $word
+        if {$tag in $::tags} {
+            set shown [join [::tclpdf::hyphenate word $tag $word] "-"]
+        }
+        $doc font -family courier -style {} -size 9 -color black
+        $doc text $tag -at [list 20 $y]
+        $doc text $shown -at [list 38 $y]
+        $doc font -family helvetica -style {} -size 8.5 -color {0.45 0.45 0.45}
+        $doc text $note -at [list 110 $y]
+        set y [expr {$y + 5}]
+    }
+    return $y
+}
+
 # -- page one: German --------------------------------------------------------
 
 set y [openPage $doc "Automatic hyphenation" "The pair below is the same\
@@ -221,6 +268,13 @@ set y [openPage $doc "Automatic hyphenation" "The pair below is the same\
     patterns - the caller loads them, because every published set carries its\
     own licence and this package is MIT. English follows on the second page."]
 set y [pair $doc [expr {$y + 8}] "German" $german de-DE]
+
+set y [specimenBlock $doc [expr {$y + 10}] \
+    "Where the breaks are, and where they are refused" \
+    "\[::tclpdf::hyphenate word\] answers the pieces a word falls into, shown\
+    here with hyphens between them. A word that comes back whole was refused by\
+    one of the guards, and the reason stands beside it - without those, a\
+    hyphenator sets \"A-bend\" and breaks a part number in half." $germanWords]
 
 # The footer is drawn per PAGE, not per document - it writes on whichever page
 # is current when it is called, so a page that is finished gets its footer
@@ -238,45 +292,15 @@ set y [openPage $doc "Automatic hyphenation - English" "The same comparison\
     they refuse to, stands below it."]
 set y [pair $doc [expr {$y + 8}] "English" $english en-US]
 
-$doc font -family helvetica -style bold -size 10 -color {0.20 0.30 0.45}
-set y [expr {$y + 10}]
-$doc text "Where the breaks are, and where they are refused" -at [list 20 $y]
-
-$doc font -family helvetica -style {} -size 9 -color {0.35 0.35 0.35}
-set y [$doc text "\[::tclpdf::hyphenate word\] answers the pieces a word falls\
-    into, shown here with hyphens between them. A word that comes back whole\
-    was refused by one of the guards, and the reason stands beside it - without\
-    those, a hyphenator sets \"A-bend\" and breaks a part number in half." \
-    -at [list 20 [expr {$y + 5}]] -width 170]
-
-# The words, the language they are read in, and what makes each one worth
-# printing. Kept as data so that the page and the console say the same thing.
-set specimens {
-    de-DE Silbentrennung        "the ordinary case"
-    de-DE Donaudampfschiff      "a compound, taken apart at its joints"
-    de-DE Schifffahrt           "three f, and the break between the second and the third"
-    de-DE Abend                 "refused: the left minimum, or it would read A-bend"
-    de-DE A4-Blatt              "refused: a digit in the word"
-    en-US hyphenation           "the ordinary case"
-    en-US representation        "five pieces out of patterns of three letters"
-    en-US into                  "refused: shorter than -min"
-    en-US WWW                   "refused: capitals throughout"
-    en-US hyphenation.txt       "refused: a dot left inside the word"
-}
-
-set y [expr {$y + 3}]
-foreach {tag word note} $specimens {
-    set shown $word
-    if {$tag in $tags} {
-        set shown [join [::tclpdf::hyphenate word $tag $word] "-"]
-    }
-    $doc font -family courier -style {} -size 9 -color black
-    $doc text $tag -at [list 20 $y]
-    $doc text $shown -at [list 38 $y]
-    $doc font -family helvetica -style {} -size 8.5 -color {0.45 0.45 0.45}
-    $doc text $note -at [list 110 $y]
-    set y [expr {$y + 5}]
-}
+# The guards are the same code for both languages; what differs is the two
+# minima, and they are DATA - they come out of the pattern file itself, which
+# is why they are read back rather than written here.
+set y [specimenBlock $doc [expr {$y + 10}] \
+    "The same guards, on English words" \
+    "The guards do not know a language: the same rules that keep \"Abend\"\
+    whole keep \"into\" whole. What the file decides is how much of a word has\
+    to stay on each side, and the console line above says what each of the two\
+    brought with it." $englishWords]
 
 exampleFooter $doc
 $doc write $target
