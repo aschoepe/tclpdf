@@ -86,5 +86,6 @@ package ifneeded @PACKAGE_NAME@::xObject 1.3 [list source [file join $dir xObjec
 package ifneeded @PACKAGE_NAME@::crypto 1.0 [list source [file join $dir crypto.tcl]]
 package ifneeded @PACKAGE_NAME@::encrypt 1.0 [list source [file join $dir encrypt.tcl]]
 package ifneeded @PACKAGE_NAME@::sign 1.0 [list source [file join $dir sign.tcl]]
+package ifneeded @PACKAGE_NAME@::update 1.0 [list source [file join $dir update.tcl]]
 package ifneeded @PACKAGE_NAME@::import 1.0 [list source [file join $dir import.tcl]]
 package ifneeded @PACKAGE_NAME@::zugferd 1.3 [list source [file join $dir zugferd.tcl]]

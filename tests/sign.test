@@ -1619,6 +1619,460 @@ test sign-7.3 {a VISIBLE signature validates, and the same file without /AP does
       [regexp {clause="6.3.3" testNumber="1" status="failed"} $bad]
 } -result {0 1 1 1 1 1}
 
+#
+# --- a further signature on a finished file ---------------------------------
+#
+# [::tclpdf::sign add] writes an incremental update (7.5.6) onto a file that
+# is already finished. What the tests here turn on is what only this way can
+# get wrong: the bytes of the older revision have to stay where they are, the
+# new /ByteRange has to reach the very end of the file, and the field has to
+# arrive in the /Fields array of the catalog and in the /Annots of its page -
+# an appended dictionary that stands in neither is a signature no form-aware
+# reader finds.
+#
+
+# A finished, signed file to append to. Signed by the fake signer, so that
+# everything about the STRUCTURE of a second signature is measured on a
+# machine that has no openssl; the real thing follows under the constraint
+# further down.
+proc ::tclpdfTest::signBase {name {size 512}} {
+  set doc [signDoc -version 2.0]
+  $doc sign -size $size -signer [list ::tclpdfTest::signFake 64]
+  set path [scratch $name]
+  $doc write $path
+  $doc destroy
+  return $path
+}
+
+# Every /ByteRange in a file, as a list of four-number lists - the tests below
+# have to speak about the older signature and the newer one at once, and
+# [signParse] answers about one.
+proc ::tclpdfTest::signRanges {data} {
+  set result {}
+  foreach {whole numbers} [regexp -all -inline {/ByteRange \[([0-9 ]*)\]} $data] {
+    set list {}
+    foreach word [regexp -all -inline {[0-9]+} $numbers] {
+      # [scan] rather than [expr]: "0000000010" is octal to Tcl.
+      lappend list [scan $word %d]
+    }
+    lappend result $list
+  }
+  return $result
+}
+
+# How many checks veraPDF performed, which is the number that has to MOVE
+# when a signature is added: its rules for ISO 19005-3, 6.4.3 apply once per
+# signature, so a count standing still would mean it never saw the second one.
+proc ::tclpdfTest::signChecks {report} {
+  if {![regexp {passedChecks="([0-9]+)"} $report -> count]} {
+    return 0
+  }
+  return $count
+}
+
+test sign-8.1 {a second signature is appended and the first bytes do not move} -body {
+  set path [::tclpdfTest::signBase sign-add-bytes.pdf]
+  set first [::tclpdfTest::readBytes $path]
+  set state [::tclpdf::sign add $path -size 512 \
+      -signer [list ::tclpdfTest::signFake 64] -reason "Gegenzeichnung"]
+  set both [::tclpdfTest::readBytes $path]
+  file delete $path
+  set length [string length $first]
+  # The promise, and the counter-proof beside it: the same comparison one byte
+  # out of step has to FAIL, or it is not comparing anything.
+  list [string equal $first [string range $both 0 [expr {$length - 1}]]] \
+      [string equal $first [string range $both 1 $length]] \
+      [expr {[string length $both] > $length}] \
+      [expr {[string length $both] - $length == [dict get $state appended]}] \
+      [llength [regexp -all -inline {%%EOF} $both]] \
+      [llength [::tclpdfTest::signRanges $both]] \
+      [dict get $state field] [dict get $state signed]
+} -result {1 0 1 1 2 2 Signature2 1}
+
+test sign-8.2 {the new /ByteRange reaches the end of the closing %%EOF} -body {
+  # The hardest of the rules, ISO 32000-2, 12.8.1: the range runs "from the
+  # '%PDF-' comment at the beginning of the PDF document to the end of the
+  # '%%EOF' comment, possibly followed by an optional EOL marker, terminating
+  # the incremental update that adds the digital signature dictionary". One
+  # byte short of it and a reader says "Not total document signed" with
+  # nothing being cryptographically wrong - so the arithmetic is recomputed
+  # here from the positions in the file rather than read back from the call.
+  set path [::tclpdfTest::signBase sign-add-range.pdf]
+  ::tclpdf::sign add $path -size 512 -signer [list ::tclpdfTest::signFake 64]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  set ranges [::tclpdfTest::signRanges $data]
+  lassign [lindex $ranges end] a b c d
+  # Where the gap is: the LAST /Contents in the file, which is the new one.
+  set at [string last {/Contents <} $data]
+  set gap [expr {$at + 10}]
+  set after [expr {[string first > $data $gap] + 1}]
+  list $a [expr {$b == $gap}] [expr {$c == $after}] \
+      [expr {$c + $d == [string length $data]}] \
+      [string range $data end-5 end] \
+      [expr {$c + $d == [string length $data] - 1}]
+} -result [list 0 1 1 1 "%%EOF\n" 0]
+
+test sign-8.3 {the older signature keeps covering its own revision} -body {
+  # And that is not a defect but the mechanism: pdfsig reports "Not total
+  # document signed" for it, which says the file has grown since - not that
+  # anything about it is wrong. What must not happen is the old array being
+  # rewritten, so it is compared against what it said before.
+  set path [::tclpdfTest::signBase sign-add-old.pdf]
+  set before [lindex [::tclpdfTest::signRanges \
+      [::tclpdfTest::readBytes $path]] 0]
+  set size [file size $path]
+  ::tclpdf::sign add $path -size 512 -signer [list ::tclpdfTest::signFake 64]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  lassign [::tclpdfTest::signRanges $data] old new
+  lassign $old - - c d
+  lassign $new - - e f
+  list [expr {$old eq $before}] [expr {$c + $d == $size}] \
+      [expr {$e + $f == [string length $data]}] \
+      [expr {$c + $d < $e + $f}]
+} -result {1 1 1 1}
+
+test sign-8.4 {the catalog and the page get a second copy, and the first stays} -body {
+  set path [::tclpdfTest::signBase sign-add-objects.pdf]
+  set before [::tclpdfTest::readBytes $path]
+  regexp {/AcroForm << /Fields \[([0-9]+) 0 R\]} $before -> firstWidget
+  regexp {/Annots \[([0-9]+) 0 R\]} $before -> firstAnnot
+  ::tclpdf::sign add $path -size 512 -signer [list ::tclpdfTest::signFake 64]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Both spellings are in the file now: the old one-entry arrays, which the
+  # first signature covers and which may not change, and the new two-entry
+  # ones the appended cross-reference section points at.
+  list [regexp "/AcroForm << /Fields \\\[$firstWidget 0 R\\\] /SigFlags 3 >>" $data] \
+      [regexp "/AcroForm << /Fields \\\[ $firstWidget 0 R \[0-9\]+ 0 R \\\] /SigFlags 3 >>" $data] \
+      [regexp "/Annots \\\[$firstAnnot 0 R\\\]" $data] \
+      [regexp "/Annots \\\[ $firstAnnot 0 R \[0-9\]+ 0 R \\\]" $data] \
+      [expr {$firstWidget == $firstAnnot}] \
+      [llength [regexp -all -inline {/Type /Sig\M} $data]] \
+      [llength [regexp -all -inline {/FT /Sig\M} $data]]
+} -result {1 1 1 1 1 2 2}
+
+test sign-8.5 {a file that was never signed gains an /AcroForm of its own} -body {
+  # The other half of the same call: no /AcroForm in the file at all, and the
+  # widget still has to end up in a /Fields array - which means writing one.
+  set doc [::tclpdfTest::signDoc]
+  set path [::tclpdfTest::scratch sign-add-virgin.pdf]
+  $doc write $path
+  $doc destroy
+  set before [::tclpdfTest::readBytes $path]
+  set state [::tclpdf::sign add $path -size 512 \
+      -signer [list ::tclpdfTest::signFake 64] -name "Erika Mustermann"]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/AcroForm} $before] [dict get $state field] \
+      [regexp {/AcroForm << /Fields \[ [0-9]+ 0 R \] /SigFlags 3 >>} $data] \
+      [regexp {/FT /Sig} $data] [regexp {/Name \(Erika Mustermann\)} $data] \
+      [regexp {/Rect \[0 0 0 0\]} $data] [regexp {/F 4\M} $data]
+} -result {0 Signature1 1 1 1 1 1}
+
+test sign-8.6 {-page names the page the widget sits on} -body {
+  set doc [tclpdf new -unit pt -format a4 -version 2.0]
+  $doc page add
+  $doc text "Seite 1" -at {60 700}
+  $doc page add
+  $doc text "Seite 2" -at {60 700}
+  set path [::tclpdfTest::scratch sign-add-page.pdf]
+  $doc write $path
+  $doc destroy
+  ::tclpdf::sign add $path -size 512 -page 1 \
+      -signer [list ::tclpdfTest::signFake 64]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Which page object the widget names, and which one gained the annotation:
+  # the two have to be the same, and it has to be the page /Kids names second
+  # - a widget on the wrong page is a signature that shows up nowhere.
+  regexp {<< /Type /Annot /Subtype /Widget [^>]*>>} $data widget
+  regexp {/V ([0-9]+) 0 R} $widget -> value
+  regexp {/P ([0-9]+) 0 R} $widget -> named
+  regexp {/Kids \[([^\]]*)\]} $data -> kids
+  set second [lindex $kids 3]
+  set first [lindex $kids 0]
+  regexp {([0-9]+) 0 obj\n<< /Type /Page [^>]*/Annots} $data -> annotated
+  list [expr {$named == $annotated}] [expr {$named == $second}] \
+      [expr {$named == $first}] [llength $kids] \
+      [regexp "/Annots \\\[ \[0-9\]+ 0 R \\\]" $data] \
+      [expr {$value > $named}]
+} -result {1 1 0 6 1 1}
+
+test sign-8.7 {the field name: chosen, kept, and refused when it is taken} -body {
+  set path [::tclpdfTest::signBase sign-add-names.pdf]
+  set second [::tclpdf::sign add $path -size 512 \
+      -signer [list ::tclpdfTest::signFake 64]]
+  set third [::tclpdf::sign add $path -size 512 \
+      -signer [list ::tclpdfTest::signFake 64] -field "Gegenzeichnung"]
+  set fourth [::tclpdf::sign add $path -size 512 \
+      -signer [list ::tclpdfTest::signFake 64]]
+  set taken [catch {::tclpdf::sign add $path -size 512 -field "Gegenzeichnung"} message]
+  set size [file size $path]
+  set after [file size $path]
+  file delete $path
+  # A partial field name has to be unique among its siblings (12.7.4.2), so
+  # the default counts past the ones the file already carries and an explicit
+  # one that collides is refused - without writing anything, which is what the
+  # unchanged file size says.
+  list [dict get $second field] [dict get $third field] \
+      [dict get $fourth field] $taken \
+      [string match "*already carries a signature field named*12.7.4.2*" $message] \
+      [string match "*Signature1, Signature2, Gegenzeichnung*" $message] \
+      [expr {$size == $after}]
+} -result {Signature2 Gegenzeichnung Signature3 1 1 1 1}
+
+test sign-8.8 {a signature still waiting for its value is the one thing refused} -body {
+  # Because [digest] and [embed] reach the NEWEST signature of a file: one
+  # left unfilled underneath a second could never be completed, and signing it
+  # first would sign bytes the second one then changes. So the file is left
+  # exactly as it was - which is checked, not assumed.
+  set path [::tclpdfTest::signed sign-add-unfilled.pdf -size 512]
+  set before [::tclpdfTest::readBytes $path]
+  set code [catch {::tclpdf::sign add $path -size 512} message]
+  set after [::tclpdfTest::readBytes $path]
+  # And the way out works: fill it, then append.
+  ::tclpdf::sign embed $path [::tclpdfTest::signFake 64 {}]
+  set second [catch {::tclpdf::sign add $path -size 512 \
+      -signer [list ::tclpdfTest::signFake 64]}]
+  set count [llength [::tclpdfTest::signRanges [::tclpdfTest::readBytes $path]]]
+  file delete $path
+  list $code [string match "*still waiting for its value*embed*" $message] \
+      [string equal $before $after] $second $count
+} -result {1 1 1 0 2}
+
+test sign-8.9 {the refusals that do not depend on openssl} -body {
+  set path [::tclpdfTest::signBase sign-add-refusals.pdf]
+  set doc [::tclpdfTest::signDoc]
+  set old [::tclpdfTest::scratch sign-add-17.pdf]
+  $doc write $old
+  $doc destroy
+  set size [file size $path]
+  set result {}
+  foreach {label script} [list \
+      version {::tclpdf::sign add $old -subfilter cades -size 512} \
+      subfilter {::tclpdf::sign add $path -subfilter pades -size 512} \
+      size {::tclpdf::sign add $path -size 0} \
+      page {::tclpdf::sign add $path -page 9 -size 512} \
+      index {::tclpdf::sign add $path -page -1 -size 512} \
+      date {::tclpdf::sign add $path -date gestern -size 512} \
+      signer {::tclpdf::sign add $path -signer "\{unbalanced" -size 512} \
+      option {::tclpdf::sign add $path -key geheim}] {
+    dict set result $label [list [catch $script message] $message]
+  }
+  # And not one of them wrote anything: both files are the length they were.
+  set unchanged [expr {$size == [file size $path]}]
+  file delete $path $old
+  list $unchanged [lsort -unique [lmap {label answer} $result {lindex $answer 0}]] \
+      [string match "*states version 1.7 in its header*2.0*7.5.6 NOTE 4*" \
+          [lindex [dict get $result version] 1]] \
+      [string match "*sign add -subfilter is the signature profile*" \
+          [lindex [dict get $result subfilter] 1]] \
+      [string match "*sign add -size is the number of bytes reserved*" \
+          [lindex [dict get $result size] 1]] \
+      [string match "*sign add -page 9 names a page*does not have*1 page*" \
+          [lindex [dict get $result page] 1]] \
+      [string match "*sign add -page is a page index counted from 0*" \
+          [lindex [dict get $result index] 1]] \
+      [string match "*sign add -date takes a PDF date*" \
+          [lindex [dict get $result date] 1]] \
+      [string match "*sign add -signer is a command prefix*" \
+          [lindex [dict get $result signer] 1]] \
+      [string match {*unknown option "-key" for sign add*} \
+          [lindex [dict get $result option] 1]]
+} -result {1 1 1 1 1 1 1 1 1 1}
+
+test sign-8.10 {the two-stage way after add reaches the NEW signature} -body {
+  # Which is what [Locate] taking the last of several /ByteRange entries is
+  # for: the file now has two, and the one still waiting is the newest.
+  set path [::tclpdfTest::signBase sign-add-stage.pdf]
+  set old [lindex [::tclpdfTest::signRanges [::tclpdfTest::readBytes $path]] 0]
+  set state [::tclpdf::sign add $path -size 512]
+  set job [::tclpdf::sign digest $path]
+  set data [::tclpdfTest::readBytes $path]
+  set length [::tclpdf::sign embed $path [::tclpdfTest::signFake 64 {}]]
+  set filled [::tclpdfTest::readBytes $path]
+  file delete $path
+  lassign [::tclpdfTest::signRanges $filled] first second
+  # The bytes handed out are the whole file bar the gap, the time of signing
+  # was written into the NEW dictionary, and the old signature's array is
+  # still what it was.
+  list [dict get $state signed] \
+      [expr {[dict get $job byteRange] eq $second}] \
+      [expr {$first eq $old}] \
+      [expr {[string length [dict get $job bytes]]
+          == [string length $data] - 2 - 2 * [dict get $job size]}] \
+      [string match {D:*} [dict get $job date]] $length \
+      [llength [regexp -all -inline {/M \(D:} $filled]]
+} -result {0 1 1 1 1 64 2}
+
+test sign-8.11 {an /AcroForm, a /Fields and an /Annots of their own} -constraints qpdf -body {
+  # The other spelling, and the one a foreign file is likely to have: the form
+  # dictionary, its field array and the page's annotation array are each an
+  # object of their own. Each has to be replaced where the file keeps it -
+  # writing a second copy of the catalog instead would leave the array
+  # everything else still points at unchanged.
+  #
+  # Built with the update module itself, because no tclpdf document writes it
+  # that way; and qpdf is asked afterwards whether what came out is a file.
+  package require tclpdf::update
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set path [::tclpdfTest::scratch sign-add-indirect.pdf]
+  $doc write $path
+  $doc destroy
+  set upd [::tclpdf::update open $path]
+  regexp {^([0-9]+)} [$upd trailer Root] -> catalog
+  regexp {/Pages ([0-9]+) 0 R} [$upd body $catalog] -> pages
+  regexp {/Kids \[\s*([0-9]+) 0 R} [$upd body $pages] -> page
+  set fields [$upd add "\[ \]"]
+  set form [$upd add "<< /Fields [$upd ref $fields] /SigFlags 1 >>"]
+  set annots [$upd add "\[ \]"]
+  $upd replace $catalog [string map [list ">>" \
+      " /AcroForm [$upd ref $form] >>"] [$upd body $catalog]]
+  $upd replace $page [string map [list ">>" \
+      " /Annots [$upd ref $annots] >>"] [$upd body $page]]
+  $upd write
+  $upd destroy
+  ::tclpdf::sign add $path -size 512 -signer [list ::tclpdfTest::signFake 64]
+  ::tclpdf::sign add $path -size 512 -signer [list ::tclpdfTest::signFake 64]
+  set data [::tclpdfTest::readBytes $path]
+  set code [catch {exec qpdf --check $path} report]
+  file delete $path
+  # The two arrays grew, in their own objects, and /SigFlags went to 3 in the
+  # form dictionary rather than in the catalog.
+  list $code [string match "*No syntax or stream encoding errors*" $report] \
+      [regexp "$fields 0 obj\n\\\[ \[0-9\]+ 0 R \[0-9\]+ 0 R \\\]" $data] \
+      [regexp "$annots 0 obj\n\\\[ \[0-9\]+ 0 R \[0-9\]+ 0 R \\\]" $data] \
+      [regexp "$form 0 obj\n<< /Fields $fields 0 R /SigFlags 3 >>" $data] \
+      [llength [::tclpdfTest::signRanges $data]]
+} -result {0 1 1 1 1 2}
+
+test sign-8.12 {a catalog and a page inside an object stream} -constraints qpdf -body {
+  # 29 of 32 foreign files in the reference stock use cross-reference streams,
+  # and with them object streams - so the objects that have to be replaced are
+  # compressed ones. The classic table this update appends overrides them,
+  # which is measured here rather than assumed: qpdf reads the file, and the
+  # new /AcroForm is the one in plain sight.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set plain [::tclpdfTest::scratch sign-add-plain.pdf]
+  $doc write $plain
+  $doc destroy
+  set path [::tclpdfTest::scratch sign-add-compressed.pdf]
+  exec qpdf --object-streams=generate $plain $path
+  set before [::tclpdfTest::readBytes $path]
+  ::tclpdf::sign add $path -size 512 -signer [list ::tclpdfTest::signFake 64]
+  set data [::tclpdfTest::readBytes $path]
+  set code [catch {exec qpdf --check $path} report]
+  file delete $plain $path
+  list [regexp {/ObjStm} $before] [regexp {/AcroForm} $before] $code \
+      [string match "*No syntax or stream encoding errors*" $report] \
+      [regexp {/AcroForm << /Fields \[ [0-9]+ 0 R \] /SigFlags 3 >>} $data] \
+      [regexp {/Annots \[ [0-9]+ 0 R \]} $data]
+} -result {1 0 0 1 1 1}
+
+test sign-8.13 {a CMS object that does not fit is refused, and nothing is written} -body {
+  set path [::tclpdfTest::signBase sign-add-space.pdf]
+  set before [::tclpdfTest::readBytes $path]
+  set code [catch {::tclpdf::sign add $path -size 16 \
+      -signer [list ::tclpdfTest::signFake 64]} message options]
+  set after [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The file is untouched, and that is the point of building the appendix
+  # before writing it: a signer that fails leaves no half-appended revision
+  # behind.
+  list $code [dict get $options -errorcode] [string equal $before $after] \
+      [llength [::tclpdfTest::signRanges $after]]
+} -result {1 {TCLPDF SIGN SPACE 64 16} 1 1}
+
+test sign-8.14 {pdfsig calls both valid and the newer one total} -constraints {signing pdfsig} -body {
+  # The measurement nothing on this side can make: poppler recomputes both
+  # digests over the ranges the file itself states. "Not total document
+  # signed" for the older signature is the CORRECT answer - it covers its own
+  # revision, and the file has grown since.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 4096 -signer ::tclpdfTest::signWith -name "Erika Mustermann" \
+      -field "Freigabe"
+  set path [::tclpdfTest::scratch sign-add-real.pdf]
+  $doc write $path
+  $doc destroy
+  ::tclpdf::sign add $path -size 4096 -signer ::tclpdfTest::signWith \
+      -name "Max Mustermann" -reason "Gegenzeichnung" -field "Gegenzeichnung"
+  set report [::tclpdfTest::signReport $path]
+  # And the counter-proof: one byte inside the FIRST revision, which both
+  # signatures cover. Both have to notice.
+  set fh [open $path r+b]
+  seek $fh 100
+  set original [read $fh 1]
+  seek $fh 100
+  puts -nonewline $fh [expr {$original eq "X" ? "Y" : "X"}]
+  close $fh
+  set broken [::tclpdfTest::signReport $path]
+  file delete $path
+  list [llength [regexp -all -inline {Signature #} $report]] \
+      [llength [regexp -all -inline {Signature is Valid} $report]] \
+      [string match "*Signature Field Name: Freigabe*" $report] \
+      [string match "*Signature Field Name: Gegenzeichnung*" $report] \
+      [llength [regexp -all -inline {Not total document signed} $report]] \
+      [llength [regexp -all -inline {\n  - Total document signed} $report]] \
+      [llength [regexp -all -inline {Digest Mismatch} $broken]] \
+      [llength [regexp -all -inline {Signature is Valid} $broken]]
+} -result {2 2 1 1 1 1 2 0}
+
+test sign-8.15 {a byte changed only in the update leaves the older signature alone} -constraints {signing pdfsig} -body {
+  # The other direction, and it is what an incremental update is FOR: the old
+  # signature covers its own revision and nothing else, so a change in the new
+  # one cannot reach it.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 4096 -signer ::tclpdfTest::signWith
+  set path [::tclpdfTest::scratch sign-add-later.pdf]
+  $doc write $path
+  $doc destroy
+  set first [file size $path]
+  ::tclpdf::sign add $path -size 4096 -signer ::tclpdfTest::signWith \
+      -reason "Gegenzeichnung"
+  # A byte inside the appended revision: the /Reason string, which is text
+  # and lies in the second signature's first range.
+  set data [::tclpdfTest::readBytes $path]
+  set at [string first {(Gegenzeichnung)} $data]
+  set fh [open $path r+b]
+  seek $fh [expr {$at + 1}]
+  puts -nonewline $fh "X"
+  close $fh
+  set report [::tclpdfTest::signReport $path]
+  file delete $path
+  list [expr {$at > $first}] \
+      [llength [regexp -all -inline {Signature is Valid} $report]] \
+      [llength [regexp -all -inline {Digest Mismatch} $report]]
+} -result {1 1 1}
+
+test sign-8.16 {a PDF/A-3b document survives being signed twice} -constraints {haveTdom haveFace signing verapdf} -body {
+  # Measured 2026-08-21 on the ZUGFeRD example: 2407 checks without a
+  # signature, 2472 with one, 2536 with two - and 0 failed at every step.
+  # The rules that come with a signature are those of ISO 19005-3, 6.4.3, and
+  # they apply once per signature; what must NOT happen is a failed check, and
+  # what must not happen either is the number standing still, which would mean
+  # veraPDF never saw the second signature at all.
+  set doc [::tclpdfTest::signArchival]
+  set path [::tclpdfTest::scratch sign-add-pdfa.pdf]
+  $doc write $path
+  $doc destroy
+  set counts {}
+  set states {}
+  catch {exec verapdf -f 3b $path 2>@1} report
+  lappend counts [::tclpdfTest::signChecks $report]
+  foreach name {"Erika Mustermann" "Max Mustermann"} {
+    ::tclpdf::sign add $path -size 4096 -signer ::tclpdfTest::signWith -name $name
+    catch {exec verapdf -f 3b $path 2>@1} report
+    lappend counts [::tclpdfTest::signChecks $report]
+    lappend states [regexp {isCompliant="true"} $report] \
+        [regexp {failedChecks="0"} $report]
+  }
+  file delete $path
+  list $states [expr {[lindex $counts 0] < [lindex $counts 1]}] \
+      [expr {[lindex $counts 1] < [lindex $counts 2]}]
+} -result {{1 1 1 1} 1 1}
+
 # The certificates go with the rest of the scratch files: they are made at
 # load time, not by a test, so nothing else would remove them.
 file delete -force $::tclpdfTest::signDir

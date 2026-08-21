@@ -36,6 +36,30 @@ package require tclpdf::pdfObj 1.0-
 
 namespace eval ::tclpdf::writer {}
 
+# Every number that was reserved got a body - asked of a dict of number ->
+# body, and answering nothing or throwing.
+#
+# A namespace proc rather than a method, because there are two object stores
+# in this package and the question is the same for both: the writer below
+# fills numbers 1..N of a file it writes whole, and update.tcl fills the
+# numbers an incremental update adds to a finished file (7.5.6). A number
+# reserved and never filled would be written as an empty object and silently
+# break every reference pointing at it, whichever of the two wrote it - so the
+# check, and the sentence it refuses with, exist once.
+proc ::tclpdf::writer::checkComplete {objects} {
+  set missing {}
+  dict for {number body} $objects {
+    if {$body eq {}} {
+      lappend missing $number
+    }
+  }
+  if {[llength $missing]} {
+    return -code error "tclpdf: object(s) reserved but never written:\
+        [join $missing {, }]"
+  }
+  return
+}
+
 oo::class create ::tclpdf::writer::pdf {
   variable tclpdfObjects tclpdfNext tclpdfVersion tclpdfId tclpdfRequired \
       tclpdfCeiling tclpdfEncryptor
@@ -205,8 +229,12 @@ oo::class create ::tclpdf::writer::pdf {
       # give a /Length in characters and a truncated file.
       my CheckBytes $data
     }
-    lappend pairs Length [string length $data]
-    return "[::tclpdf::pdfObj dictionary $pairs]\nstream\n$data\nendstream"
+    # The dictionary, the /Length and the two keywords come from pdfObj: the
+    # same three lines stood here and would have stood a second time in
+    # update.tcl, which appends stream objects to a finished file without this
+    # class around it. What is left here is what only the writer can do - the
+    # filter check, the encryption seam and the two byte checks around it.
+    return [::tclpdf::pdfObj stream $pairs $data]
   }
 
   method count {} {
@@ -359,32 +387,15 @@ oo::class create ::tclpdf::writer::pdf {
     return $path
   }
 
-  # A number reserved and never filled would be written as an empty object and
-  # silently break every reference pointing at it.
+  # A number reserved and never filled - see [checkComplete] above.
   method CheckComplete {} {
-    set missing {}
-    dict for {number body} $tclpdfObjects {
-      if {$body eq {}} {
-        lappend missing $number
-      }
-    }
-    if {[llength $missing]} {
-      return -code error "tclpdf: object(s) reserved but never written: [join $missing {, }]"
-    }
-    return
+    return [::tclpdf::writer::checkComplete $tclpdfObjects]
   }
 
-  # Stream data must be bytes. A string holding characters above U+00FF would
-  # give a /Length in characters while the channel writes something else - the
-  # file then looks right and is truncated.
+  # Stream data must be bytes - see [::tclpdf::pdfObj checkBytes], which is
+  # where the check lives because an incremental update needs the same one.
   method CheckBytes {data} {
-    # The range is written as escapes rather than as literal characters:
-    # Tcl 8.6 reads this file through the system encoding and Tcl 9 as
-    # UTF-8, so a literal would not mean the same thing in both.
-    if {[regexp {[^\u0000-\u00ff]} $data]} {
-      return -code error "tclpdf: stream data must be bytes, not text - encode it first"
-    }
-    return
+    return [::tclpdf::pdfObj checkBytes $data]
   }
 }
 

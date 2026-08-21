@@ -158,6 +158,47 @@ proc ::tclpdf::pdfObj::arr {items} {
   return \[[join $items " "]\]
 }
 
+# A stream object's body (7.3.8): the dictionary, the keyword, the data, the
+# keyword. /Length is computed HERE and nowhere else - it is the byte count of
+# the data exactly as it is written, and getting it wrong produces a file that
+# opens in some readers and not in others.
+#
+# The data is taken as it is: whatever encoding, compression or encryption was
+# to be applied has been applied by the caller, because only the caller knows
+# what the stream is. What this proc guarantees is that the number in the
+# dictionary describes the bytes that follow it.
+#
+# It lives in the infrastructure rather than in the writer because there is a
+# second writer of streams: an incremental update (update.tcl) appends objects
+# to a finished file without the writer's numbering around it, and a stream
+# whose /Length is computed in a second place is a stream that will one day be
+# computed differently.
+proc ::tclpdf::pdfObj::stream {pairs data} {
+  lappend pairs Length [string length $data]
+  return "[dictionary $pairs]\nstream\n$data\nendstream"
+}
+
+# Stream data must be bytes. A string holding characters above U+00FF would
+# give a /Length in characters while the channel writes something else - the
+# file then looks right and is truncated.
+#
+# Asked by whoever is about to MEASURE the data, which is not always the same
+# moment as building the body: the writer asks before and after the encryptor
+# has had it, an update asks once. So it stands beside [stream] rather than
+# inside it - a check folded into the body builder would be a second and third
+# pass over a 40 MB image for the writer, and it would still not cover the
+# moment the writer needs it at.
+proc ::tclpdf::pdfObj::checkBytes {data} {
+  # The range is written as escapes rather than as literal characters:
+  # Tcl 8.6 reads this file through the system encoding and Tcl 9 as UTF-8,
+  # so a literal would not mean the same thing in both.
+  if {[regexp {[^\u0000-\u00ff]} $data]} {
+    return -code error "tclpdf: stream data must be bytes, not text -\
+        encode it first"
+  }
+  return
+}
+
 # A date string (7.9.4): D:YYYYMMDDHHmmSSOHH'mm'.
 #
 # ISO 32000-2 struck the apostrophe AFTER the offset minutes, so 2.0 wants

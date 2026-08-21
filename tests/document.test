@@ -925,6 +925,11 @@ test document-strings-24.5 {no module builds a string past the document unrecord
     text.tcl {5 {strings INSIDE a content stream - the stream is encrypted as a whole, a second pass would destroy it (7.6.2)}}
     attach.tcl {1 {keyBytes only ASKS what the bytes would be, for the name tree order (7.9.6) - the answer never reaches the file}}
     imagePng.tcl {3 {the default of the command prefix a namespace proc takes instead of [my]}}
+    sign.tcl {3 {a signature dictionary is never in an encrypted document - measured in both
+        directions: encrypt refuses a document being signed, sign refuses an encrypted one, and
+        an update refuses an encrypted file at the reader. The three sites sit in the namespace
+        proc that builds the dictionary for both roads, the document and an update session,
+        which is why they cannot go through [my Str]}}
   }
   # crypto.tcl and encrypt.tcl are not swept: the strings of the encryption
   # dictionary itself are the ones 7.6.2 exempts, and that module is the one

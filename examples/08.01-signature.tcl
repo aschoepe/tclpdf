@@ -146,26 +146,6 @@ proc checkCommands {name} {
         "    -content bytes.bin -binary -noverify"]]
 }
 
-# A paragraph on the CONSOLE, wrapped by hand. Used for the one thing this
-# script prints that is longer than a line: the sentence tclpdf refuses a
-# PAdES claim with, which is worth reading in full because it names the way
-# out. [regexp] rather than [foreach word $text] on purpose - the message has
-# quotation marks in it and would not parse as a list.
-proc consoleParagraph {text {width 74}} {
-    set line "   "
-    foreach word [regexp -all -inline {\S+} $text] {
-        if {[string length $line] + [string length $word] >= $width} {
-            puts $line
-            set line "   "
-        }
-        append line " " $word
-    }
-    if {[string trim $line] ne {}} {
-        puts $line
-    }
-    return
-}
-
 # What an unfilled placeholder means HERE, which is not what it means for the
 # visible field of 08.02 - so the sentence stands in the example and the frame
 # around it ([exampleNotSigned]: the heading and the red) is shared.
@@ -375,7 +355,7 @@ if {$signer ne {}} {
     if {[catch {$doc write $attempt} message options]} {
         puts "  -subfilter cades with openssl: refused,\
             [dict get $options -errorcode]"
-        consoleParagraph $message
+        exampleConsoleParagraph $message
     } else {
         puts "  -subfilter cades with openssl: written, which means this\
             openssl left the signing-time attribute out"

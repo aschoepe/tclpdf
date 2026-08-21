@@ -418,6 +418,7 @@ proc ::tclpdf::import::Put {valueVar key item} {
 # The reader handle is a dict in the caller's variable:
 #   bytes     the whole file
 #   path      for error messages
+#   startxref the offset the chain started at - the newest section
 #   xref      num -> {o offset} | {c objstmNum indexInStream}
 #   trailer   the merged trailer/xref-stream dictionary (parsed)
 #   objects   cache num -> {value hasStream data}
@@ -434,6 +435,13 @@ proc ::tclpdf::import::Open {path} {
         return -code error "tclpdf: $path carries no startxref - not a PDF,\
             or a truncated one"
     }
+    # Where the newest cross-reference section is. Kept in the reader
+    # because a second consumer needs it and must not look for it a second
+    # time: update.tcl writes an incremental update whose trailer carries a
+    # /Prev naming the previous section (7.5.6), and that has to be the very
+    # offset this reader started its chain at - two searches that could
+    # disagree would put a /Prev where nothing was read.
+    dict set reader startxref $offset
     set seen {}
     while {$offset ne {}} {
         if {[dict exists $seen $offset]} {

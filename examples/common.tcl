@@ -176,11 +176,12 @@ proc exampleIccFacts {path} {
 # What the two signature examples share
 # ---------------------------------------------------------------------------
 #
-# 08.01 (an invisible signature) and 08.02 (a visible one) show two different
-# things about the same mechanism, and both need the same outside world to
-# show it: a test CA, an end certificate under it, a command prefix that
-# answers a CMS object, and a way to ask openssl what it thinks of its own
-# work. All of that stood twice, line for line, until it moved here.
+# 08.01 (an invisible signature), 08.02 (a visible one) and 08.03 (a second
+# signature appended to a finished file) show three different things about the
+# same mechanism, and all three need the same outside world to show it: a test
+# CA, an end certificate under it, a command prefix that answers a CMS object,
+# and a way to ask openssl what it thinks of its own work. All of that stood
+# twice, line for line, until it moved here.
 #
 # NOTHING BELOW RUNS WHILE THIS FILE IS SOURCED. All 49 examples load it and
 # 47 of them have nothing to do with signatures, so there is no [package
@@ -243,15 +244,24 @@ proc exampleCertificates {dir} {
         -days 3650 -nodes -subj "/C=DE/O=tclpdf test/CN=tclpdf test CA" \
         -addext "basicConstraints=critical,CA:TRUE" \
         -addext "keyUsage=critical,keyCertSign,cRLSign"
-    exampleRun openssl req -newkey rsa:2048 \
-        -keyout [file join $dir leaf.key] -out [file join $dir leaf.csr] \
-        -nodes -subj "/C=DE/O=tclpdf test/CN=Erika Mustermann"
     exampleWriteBinary [file join $dir leaf.cnf] \
         "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,nonRepudiation\n"
-    exampleRun openssl x509 -req -in [file join $dir leaf.csr] \
-        -CA [file join $dir ca.pem] -CAkey [file join $dir ca.key] \
-        -CAcreateserial -out [file join $dir leaf.pem] -days 730 \
-        -extfile [file join $dir leaf.cnf]
+    # TWO end certificates under the one CA, because a document signed twice is
+    # signed by two PEOPLE - and a reader takes the name from the CERTIFICATE,
+    # not from /Name (Table 255 asks for /Name only "when it is not possible to
+    # extract the name from the signature"). With one certificate for both,
+    # Acrobat shows the same person twice however the dictionaries are filled,
+    # which is exactly the wrong lesson for an example about countersigning.
+    # A loop rather than a second copy of the block: the two differ in a name.
+    foreach {stem person} {leaf "Erika Mustermann" second "Max Mustermann"} {
+        exampleRun openssl req -newkey rsa:2048 \
+            -keyout [file join $dir $stem.key] -out [file join $dir $stem.csr] \
+            -nodes -subj "/C=DE/O=tclpdf test/CN=$person"
+        exampleRun openssl x509 -req -in [file join $dir $stem.csr] \
+            -CA [file join $dir ca.pem] -CAkey [file join $dir ca.key] \
+            -CAcreateserial -out [file join $dir $stem.pem] -days 730 \
+            -extfile [file join $dir leaf.cnf]
+    }
     return
 }
 
@@ -270,13 +280,21 @@ proc exampleCertificates {dir} {
 #
 # Both files stay where they are afterwards on purpose - [exampleOpensslVerify]
 # needs exactly these two, the detached content and the signature over it.
-proc exampleOpensslSigner {dir extra bytes} {
+proc exampleOpensslSigner {dir extra stem bytes} {
     exampleWriteBinary [file join $dir content.bin] $bytes
     exampleRun openssl cms -sign -binary -in [file join $dir content.bin] \
-        -signer [file join $dir leaf.pem] -inkey [file join $dir leaf.key] \
+        -signer [file join $dir $stem.pem] -inkey [file join $dir $stem.key] \
         -certfile [file join $dir ca.pem] {*}$extra -md sha256 \
         -outform DER -out [file join $dir signature.der]
     return [exampleReadBinary [file join $dir signature.der]]
+}
+
+# The prefix for a signer other than the first - "second" is the countersigner
+# of example 8.4. The first one comes ready-made from [exampleSigningSetup];
+# this is for a script that needs a SECOND person, and it exists so that no
+# example has to know how the prefix is put together.
+proc exampleSigner {dir {stem leaf} {extra {}}} {
+    return [list exampleOpensslSigner $dir $extra $stem]
 }
 
 # What openssl says about its own work, checked against the test CA. Not a
@@ -318,7 +336,7 @@ proc exampleSigningSetup {{extra {}}} {
         return [list {} {} "openssl is here but would not make the\
             certificates: [lindex [split $message \n] 0]"]
     }
-    return [list $dir [list exampleOpensslSigner $dir $extra] {}]
+    return [list $dir [exampleSigner $dir leaf $extra] {}]
 }
 
 # The closing lines of a signature example: throw the test certificates away
@@ -347,6 +365,30 @@ proc exampleSignatureChecks {name {extra {}}} {
         "pdfsig $name" \
         "qpdf --check $name" \
         "pdfsig -dump $name"] $extra]
+}
+
+# A paragraph on the CONSOLE, wrapped by hand. For the one thing a signature
+# example prints that is longer than a line: the sentence tclpdf refuses
+# something with, which is worth reading in full because it names the way out.
+# 08.01 prints the refusal of a PAdES claim openssl cannot keep, 08.03 the one
+# that comes back when a second signature is asked for over a first that is
+# still waiting for its value.
+#
+# [regexp] rather than [foreach word $text] on purpose - a message has
+# quotation marks in it and would not parse as a list.
+proc exampleConsoleParagraph {text {width 74}} {
+    set line "   "
+    foreach word [regexp -all -inline {\S+} $text] {
+        if {[string length $line] + [string length $word] >= $width} {
+            puts $line
+            set line "   "
+        }
+        append line " " $word
+    }
+    if {[string trim $line] ne {}} {
+        puts $line
+    }
+    return
 }
 
 # Running text on a page of prose, top down. Both signature examples set the

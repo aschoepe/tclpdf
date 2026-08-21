@@ -1,0 +1,609 @@
+# update.test --
+#
+# Writing an incremental update onto an existing file (ISO 32000-2, 7.5.6):
+# the appended body, the cross-reference section that carries entries only
+# for what changed, the added trailer with its own /Prev and %%EOF - and the
+# one promise the whole module stands on, that the original bytes are still
+# the first bytes of the result.
+#
+# The fixtures are built here rather than shipped: the classic-table files
+# come from tclpdf itself, and the cross-reference-stream flavour is produced
+# at test time by qpdf from the classic one - which is also what makes the
+# hybrid question measurable rather than arguable.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::update
+package require tclpdf::import
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint pdfinfo [expr {[auto_execok pdfinfo] ne {}}]
+
+# One A4 page written by tclpdf itself: a classic cross-reference table, a
+# standard face, a content stream behind FlateDecode - a small file with one
+# of everything an update has to carry forward.
+# Every fixture this file makes is remembered here and removed at the end -
+# a test that writes 40 PDFs into the temporary directory and leaves them
+# there hides the next one that writes a file it did not mean to.
+set ::tclpdfTest::updateFiles {}
+
+proc ::tclpdfTest::fixture {name} {
+    set path [scratch $name]
+    lappend ::tclpdfTest::updateFiles $path
+    return $path
+}
+
+proc ::tclpdfTest::original {name} {
+    set path [fixture $name]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    $doc text "Original page" -at {60 700} -size 18
+    $doc rect -at {40 40} -size {200 100} -fill #cccccc
+    $doc write $path
+    $doc destroy
+    return $path
+}
+
+# The page object's number, found the way a caller would find it: through the
+# trailer's /Root, the catalog's /Pages and the first kid. Nothing here may
+# depend on which numbers tclpdf happens to hand out.
+proc ::tclpdfTest::pageNumber {upd} {
+    regexp {^(\d+)} [$upd trailer Root] -> catalog
+    regexp {/Pages (\d+) 0 R} [$upd body $catalog] -> pages
+    regexp {/Kids \[\s*(\d+) 0 R} [$upd body $pages] -> page
+    return $page
+}
+
+# The whole file, and the part of it the update appended.
+proc ::tclpdfTest::tail {path base} {
+    return [string range [::tclpdfTest::readBytes $path] $base end]
+}
+
+#
+# ---------------------------------------------------------------------------
+# 1 - the appended section
+# ---------------------------------------------------------------------------
+#
+
+test update-1.1 {the original bytes stand unchanged at the front, byte for byte} -body {
+    set path [::tclpdfTest::original update-1.1.pdf]
+    set before [::tclpdfTest::readBytes $path]
+    set upd [::tclpdf::update open $path]
+    $upd add "<< /Type /Annot /Subtype /Text /Rect \[10 10 20 20\] /F 4 >>"
+    $upd write
+    $upd destroy
+    set after [::tclpdfTest::readBytes $path]
+    list [string equal $before [string range $after 0 [expr {[string length $before] - 1}]]] \
+        [expr {[string length $after] > [string length $before]}]
+} -result {1 1}
+
+test update-1.2 {the cross-reference section carries entries only for what was written} -body {
+    set path [::tclpdfTest::original update-1.2.pdf]
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    set first [$upd add "<< /Kind (one) >>"]
+    set second [$upd add "<< /Kind (two) >>"]
+    $upd write
+    $upd destroy
+    set appendix [::tclpdfTest::tail $path $base]
+    regexp {xref\n(.*?)trailer} $appendix -> section
+    # The free head, then one subsection of two - and nothing about the seven
+    # objects the file already had. The two offsets are where the objects
+    # really are, counted from the start of the whole file (7.5.4).
+    set expected "0 1\n0000000000 65535 f \n$first 2\n"
+    foreach number [list $first $second] {
+        append expected [format "%010d 00000 n \n" \
+            [expr {$base + [string first "$number 0 obj" $appendix]}]]
+    }
+    list [string equal $section $expected] \
+        [regexp "\n1 1\n" $section]
+} -result {1 0}
+
+test update-1.3 {the added trailer carries the previous entries except Prev, and a Prev of its own} -body {
+    set path [::tclpdfTest::original update-1.3.pdf]
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    set prev [$upd prev]
+    $upd add "<< /Kind (one) >>"
+    $upd write
+    $upd destroy
+    set appendix [::tclpdfTest::tail $path $base]
+    regexp {trailer\n(<<.*?>>)\nstartxref\n(\d+)\n} $appendix -> trailer startxref
+    list [regexp {/Root 3 0 R} $trailer] [regexp {/Info 7 0 R} $trailer] \
+        [regexp "/Prev $prev\\M" $trailer] \
+        [expr {$startxref > $base}]
+} -result {1 1 1 1}
+
+test update-1.4 {every trailer ends in its own %%EOF} -body {
+    set path [::tclpdfTest::original update-1.4.pdf]
+    set upd [::tclpdf::update open $path]
+    $upd add "<< /Kind (one) >>"
+    $upd write
+    $upd destroy
+    llength [regexp -all -inline {%%EOF} [::tclpdfTest::readBytes $path]]
+} -result 2
+
+test update-1.5 {/Size is one greater than the highest number the file now defines} -body {
+    set path [::tclpdfTest::original update-1.5.pdf]
+    set upd [::tclpdf::update open $path]
+    set was [$upd count]
+    $upd add "<< /Kind (one) >>"
+    $upd add "<< /Kind (two) >>"
+    set base [$upd base]
+    $upd write
+    set now [$upd count]
+    $upd destroy
+    regexp {/Size (\d+)} [::tclpdfTest::tail $path $base] -> size
+    list $was $now $size
+} -result {7 9 10}
+
+test update-1.6 {consecutive numbers become one subsection, a gap starts a new one} -body {
+    set path [::tclpdfTest::original update-1.6.pdf]
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    set page [::tclpdfTest::pageNumber $upd]
+    # The page object (1) and two new ones (8, 9): two runs, as in H.7.
+    $upd replace $page [$upd body $page]
+    $upd add "<< /Kind (one) >>"
+    $upd add "<< /Kind (two) >>"
+    $upd write
+    $upd destroy
+    regexp -all -inline {^\d+ \d+$} [split [::tclpdfTest::tail $path $base] \n]
+    set heads {}
+    foreach line [split [::tclpdfTest::tail $path $base] \n] {
+        if {[regexp {^(\d+) (\d+)$} $line]} {
+            lappend heads $line
+        }
+    }
+    set heads
+} -result {{0 1} {1 1} {8 2}}
+
+test update-1.7 {a file that does not end in a line break gets one before the appendix} -body {
+    set path [::tclpdfTest::original update-1.7.pdf]
+    # Trim the final newline the way a transport might have: the file is then
+    # still a PDF and its last byte is "F".
+    set bytes [::tclpdfTest::readBytes $path]
+    set bytes [string trimright $bytes "\n"]
+    ::tclpdf::io write $path $bytes
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    $upd add "<< /Kind (one) >>"
+    $upd write
+    $upd destroy
+    set appendix [::tclpdfTest::tail $path $base]
+    list [string equal "\n" [string index $appendix 0]] \
+        [string range $appendix 1 7] \
+        [string equal $bytes [string range [::tclpdfTest::readBytes $path] 0 [expr {$base - 1}]]]
+} -result {1 {8 0 obj} 1}
+
+test update-1.8 {qpdf and pdfinfo read the continued file} -constraints {qpdf pdfinfo} -body {
+    set path [::tclpdfTest::original update-1.8.pdf]
+    set upd [::tclpdf::update open $path]
+    set page [::tclpdfTest::pageNumber $upd]
+    set annot [$upd add "<< /Type /Annot /Subtype /Text /Rect \[44 616 162 735\]\
+        /Contents (Update #1) /F 4 >>"]
+    set array [$upd add "\[ [$upd ref $annot] \]"]
+    set body [$upd body $page]
+    $upd replace $page [string map [list ">>" "/Annots [$upd ref $array] >>"] $body]
+    $upd write
+    $upd destroy
+    set check [exec qpdf --check $path]
+    set info [exec pdfinfo $path]
+    list [regexp {No syntax or stream encoding errors} $check] \
+        [regexp {Pages:\s+1} $info]
+} -result {1 1}
+
+#
+# ---------------------------------------------------------------------------
+# 2 - replacing: both copies stay, the new one counts
+# ---------------------------------------------------------------------------
+#
+
+test update-2.1 {the old copy of a replaced object is still in the file, and the new one is what a reader gets} -constraints qpdf -body {
+    set path [::tclpdfTest::original update-2.1.pdf]
+    set upd [::tclpdf::update open $path]
+    set page [::tclpdfTest::pageNumber $upd]
+    set old [$upd body $page]
+    $upd replace $page [string map {">>" "/Rotate 90 >>"} $old]
+    $upd write
+    $upd destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    list [llength [regexp -all -inline "$page 0 obj" $bytes]] \
+        [regexp {/Rotate 90} [exec qpdf --show-object=$page $path]] \
+        [regexp {/Rotate} $old]
+} -result {2 1 0}
+
+test update-2.2 {an object the file does not define cannot be replaced} -body {
+    set path [::tclpdfTest::original update-2.2.pdf]
+    set upd [::tclpdf::update open $path]
+    set code [catch {$upd replace 4711 "<< >>"} message]
+    $upd destroy
+    list $code [regexp {defines no object 4711} $message]
+} -result {1 1}
+
+test update-2.3 {an object stream and a cross-reference stream are refused by name} -constraints qpdf -body {
+    set path [::tclpdfTest::original update-2.3.pdf]
+    set streamed [::tclpdfTest::fixture update-2.3-xs.pdf]
+    exec qpdf --object-streams=generate $path $streamed
+    set upd [::tclpdf::update open $streamed]
+    # Object 1 is the object stream qpdf writes first, and the last object is
+    # its cross-reference stream; both are found by their /Type rather than
+    # by their number.
+    set found {}
+    for {set number 1} {$number <= [$upd count]} {incr number} {
+        if {![$upd defines $number]} continue
+        catch {$upd replace $number "<< >>"} message
+        if {[regexp {is an object stream} $message]} {
+            lappend found ObjStm
+        }
+        if {[regexp {is a cross-reference stream} $message]} {
+            lappend found XRef
+        }
+    }
+    $upd destroy
+    lsort -unique $found
+} -result {ObjStm XRef}
+
+test update-2.4 {an object at a generation other than 0 is refused} -body {
+    set path [::tclpdfTest::original update-2.4.pdf]
+    # Written by hand: the same seven objects, with object 2 at generation 3.
+    set bytes [::tclpdfTest::readBytes $path]
+    set bytes [string map {"2 0 obj" "2 3 obj"} $bytes]
+    ::tclpdf::io write $path $bytes
+    set upd [::tclpdf::update open $path]
+    set code [catch {$upd replace 2 "<< >>"} message]
+    $upd destroy
+    list $code [regexp {generation 3} $message]
+} -result {1 1}
+
+test update-2.5 {body answers the file's version until the update has one of its own} -body {
+    set path [::tclpdfTest::original update-2.5.pdf]
+    set upd [::tclpdf::update open $path]
+    set page [::tclpdfTest::pageNumber $upd]
+    set fromFile [$upd body $page]
+    $upd replace $page "<< /Type /Page /Mine (yes) >>"
+    set fromUpdate [$upd body $page]
+    $upd destroy
+    list [regexp {/Type /Page} $fromFile] [regexp {/MediaBox} $fromFile] \
+        $fromUpdate
+} -result {1 1 {<< /Type /Page /Mine (yes) >>}}
+
+test update-2.6 {a stream object comes back with its data and its filter untouched} -body {
+    set path [::tclpdfTest::original update-2.6.pdf]
+    set upd [::tclpdf::update open $path]
+    set page [::tclpdfTest::pageNumber $upd]
+    regexp {/Contents (\d+) 0 R} [$upd body $page] -> content
+    set body [$upd body $content]
+    $upd destroy
+    # The body is reusable as it stands: dictionary, keyword, the compressed
+    # bytes, keyword - and the compressed bytes are still deflate.
+    set data [string range $body [expr {[string first "stream\n" $body] + 7}] \
+        [expr {[string last "\nendstream" $body] - 1}]]
+    list [regexp {/Filter /FlateDecode} $body] \
+        [regexp {/Length ([0-9]+)} $body -> length] \
+        [expr {$length == [string length $data]}] \
+        [regexp {Original page} [zlib decompress $data]]
+} -result {1 1 1 1}
+
+#
+# ---------------------------------------------------------------------------
+# 3 - numbering
+# ---------------------------------------------------------------------------
+#
+
+test update-3.1 {new numbers start where the file's /Size ends and count up} -body {
+    set path [::tclpdfTest::original update-3.1.pdf]
+    set upd [::tclpdf::update open $path]
+    set size [expr {[$upd count] + 1}]
+    set numbers [list [$upd add "<< >>"] [$upd add "<< >>"] [$upd reserve]]
+    $upd put [lindex $numbers 2] "<< >>"
+    $upd destroy
+    list $numbers [expr {[lindex $numbers 0] == $size}]
+} -result {{8 9 10} 1}
+
+test update-3.2 {a number reserved and never filled is refused at the write} -body {
+    set path [::tclpdfTest::original update-3.2.pdf]
+    set upd [::tclpdf::update open $path]
+    $upd reserve
+    set code [catch {$upd write} message]
+    $upd destroy
+    list $code [regexp {reserved but never written: [0-9]+} $message]
+} -result {1 1}
+
+test update-3.3 {put refuses a number this update did not reserve} -body {
+    set path [::tclpdfTest::original update-3.3.pdf]
+    set upd [::tclpdf::update open $path]
+    set code [catch {$upd put 3 "<< >>"} message]
+    $upd destroy
+    list $code [regexp {never reserved by this update} $message]
+} -result {1 1}
+
+test update-3.4 {ref answers for an object of the file and for one of the update, and refuses the rest} -body {
+    set path [::tclpdfTest::original update-3.4.pdf]
+    set upd [::tclpdf::update open $path]
+    set added [$upd add "<< >>"]
+    set result [list [$upd ref 3] [$upd ref $added] [catch {$upd ref 99}]]
+    $upd destroy
+    set result
+} -result {{3 0 R} {8 0 R} 1}
+
+test update-3.5 {an update that changes nothing is refused rather than written} -body {
+    set path [::tclpdfTest::original update-3.5.pdf]
+    set before [::tclpdfTest::readBytes $path]
+    set upd [::tclpdf::update open $path]
+    set code [catch {$upd write} message]
+    $upd destroy
+    list $code [regexp {changes nothing} $message] \
+        [string equal $before [::tclpdfTest::readBytes $path]]
+} -result {1 1 1}
+
+#
+# ---------------------------------------------------------------------------
+# 4 - the added trailer
+# ---------------------------------------------------------------------------
+#
+
+test update-4.1 {a trailer entry set here wins over the one the file states} -body {
+    set path [::tclpdfTest::original update-4.1.pdf]
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    regexp {^(\d+)} [$upd trailer Root] -> was
+    set catalog [$upd add [string map [list "/Pages" "/PageMode /UseThumbs /Pages"] \
+        [$upd body $was]]]
+    $upd trailer Root [$upd ref $catalog]
+    $upd write
+    $upd destroy
+    regexp {trailer\n<<(.*?)>>\nstartxref} [::tclpdfTest::tail $path $base] -> trailer
+    list [regexp "/Root $catalog 0 R" $trailer] [regexp "/Root $was 0 R" $trailer]
+} -result {1 0}
+
+test update-4.2 {/Size and /Prev belong to the update and cannot be set} -body {
+    set path [::tclpdfTest::original update-4.2.pdf]
+    set upd [::tclpdf::update open $path]
+    set result [list [catch {$upd trailer Size 4711}] [catch {$upd trailer Prev 0}]]
+    $upd destroy
+    set result
+} -result {1 1}
+
+test update-4.3 {the keys of a cross-reference stream never travel into the added trailer} -constraints qpdf -body {
+    set path [::tclpdfTest::original update-4.3.pdf]
+    set streamed [::tclpdfTest::fixture update-4.3-xs.pdf]
+    exec qpdf --object-streams=generate $path $streamed
+    set upd [::tclpdf::update open $streamed]
+    set base [$upd base]
+    # What the previous trailer states, read through the reader: the stream's
+    # own dictionary keys are in there, and none of them may come out again.
+    set carried [$upd trailer]
+    $upd add "<< /Kind (one) >>"
+    $upd write
+    $upd destroy
+    regexp {trailer\n<<(.*?)>>\nstartxref} [::tclpdfTest::tail $streamed $base] -> trailer
+    list [dict exists $carried Type] [dict exists $carried W] \
+        [regexp {/Type|/Filter|/DecodeParms|/W |/Index|/XRefStm} $trailer] \
+        [regexp {/Root} $trailer]
+} -result {0 0 0 1}
+
+test update-4.4 {/ID keeps its permanent half and changes its changing one} -body {
+    set path [::tclpdfTest::original update-4.4.pdf]
+    regexp {/ID \[<([0-9a-f]+)> <([0-9a-f]+)>\]} [::tclpdfTest::readBytes $path] \
+        -> was1 was2
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    $upd add "<< /Kind (one) >>"
+    $upd write
+    $upd destroy
+    regexp {/ID \[ <([0-9a-f]+)> <([0-9a-f]+)> \]} [::tclpdfTest::tail $path $base] \
+        -> now1 now2
+    list [string equal $was1 $was2] [string equal $was1 $now1] \
+        [string equal $was2 $now2] [string length $now2]
+} -result {1 1 0 32}
+
+test update-4.5 {an entry set to the empty value is left out of the added trailer} -body {
+    set path [::tclpdfTest::original update-4.5.pdf]
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    $upd trailer Info {}
+    $upd add "<< /Kind (one) >>"
+    $upd write
+    $upd destroy
+    regexp {trailer\n<<(.*?)>>\nstartxref} [::tclpdfTest::tail $path $base] -> trailer
+    list [regexp {/Info} $trailer] [regexp {/Root} $trailer]
+} -result {0 1}
+
+test update-4.6 {the same update written twice comes out byte-identical} -body {
+    set path [::tclpdfTest::original update-4.6.pdf]
+    set first [::tclpdfTest::fixture update-4.6-a.pdf]
+    set second [::tclpdfTest::fixture update-4.6-b.pdf]
+    set upd [::tclpdf::update open $path]
+    $upd add "<< /Kind (one) >>"
+    $upd write $first
+    $upd write $second
+    $upd destroy
+    string equal [::tclpdfTest::readBytes $first] [::tclpdfTest::readBytes $second]
+} -result 1
+
+test update-4.7 {a caller can pin the changing identifier} -body {
+    set path [::tclpdfTest::original update-4.7.pdf]
+    set upd [::tclpdf::update open $path]
+    set base [$upd base]
+    $upd id [binary decode hex 000102030405060708090a0b0c0d0e0f]
+    $upd add "<< /Kind (one) >>"
+    $upd write
+    $upd destroy
+    regexp {<([0-9a-f]{32})> \]} [::tclpdfTest::tail $path $base] -> pinned
+    set pinned
+} -result 000102030405060708090a0b0c0d0e0f
+
+#
+# ---------------------------------------------------------------------------
+# 5 - a file whose cross-reference is a stream
+# ---------------------------------------------------------------------------
+#
+# The measured question: 29 of 32 foreign files use a cross-reference stream,
+# and this module appends a classic table onto whatever it finds. What has to
+# hold is that a reader takes the classic entry over the compressed object it
+# overrides - otherwise the update would be written and not seen.
+#
+
+test update-5.1 {a classic update onto a cross-reference-stream file: the new copy is the one a reader gets} -constraints {qpdf pdfinfo} -body {
+    set path [::tclpdfTest::original update-5.1.pdf]
+    set streamed [::tclpdfTest::fixture update-5.1-xs.pdf]
+    exec qpdf --object-streams=generate $path $streamed
+    set before [::tclpdfTest::readBytes $streamed]
+    set upd [::tclpdf::update open $streamed]
+    set page [::tclpdfTest::pageNumber $upd]
+    # The page object of such a file lives INSIDE an object stream - which is
+    # the case that decides the question; update-5.2 measures that it does.
+    $upd replace $page [string map {">>" "/Rotate 180 >>"} [$upd body $page]]
+    $upd write
+    $upd destroy
+    set after [::tclpdfTest::readBytes $streamed]
+    list [string equal $before [string range $after 0 [expr {[string length $before] - 1}]]] \
+        [regexp {No syntax or stream encoding errors} [exec qpdf --check $streamed]] \
+        [regexp {/Rotate 180} [exec qpdf --show-object=$page $streamed]] \
+        [regexp {Page rot:\s+180} [exec pdfinfo $streamed]]
+} -result {1 1 1 1}
+
+test update-5.2 {the page object of such a file really is a compressed one before the update} -constraints qpdf -body {
+    set path [::tclpdfTest::original update-5.2.pdf]
+    set streamed [::tclpdfTest::fixture update-5.2-xs.pdf]
+    exec qpdf --object-streams=generate $path $streamed
+    set reader [::tclpdf::import::Open $streamed]
+    set upd [::tclpdf::update open $streamed]
+    set page [::tclpdfTest::pageNumber $upd]
+    $upd destroy
+    lindex [dict get $reader xref $page] 0
+} -result c
+
+test update-5.3 {tclpdf reads its own update back, newest section first} -body {
+    set path [::tclpdfTest::original update-5.3.pdf]
+    set upd [::tclpdf::update open $path]
+    set page [::tclpdfTest::pageNumber $upd]
+    $upd replace $page [string map {">>" "/Rotate 270 >>"} [$upd body $page]]
+    $upd write
+    $upd destroy
+    set again [::tclpdf::update open $path]
+    set body [$again body $page]
+    set prev [$again prev]
+    $again destroy
+    list [regexp {/Rotate 270} $body] [expr {$prev > 0}]
+} -result {1 1}
+
+#
+# ---------------------------------------------------------------------------
+# 6 - refusals
+# ---------------------------------------------------------------------------
+#
+
+test update-6.1 {an encrypted file is refused} -body {
+    set path [::tclpdfTest::fixture update-6.1.pdf]
+    # AES-256 is /V 5 /R 6, which is PDF 2.0 (Table 20) - the document has to
+    # say so before it can be encrypted at all.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    $doc page add
+    $doc text "Secret" -at {60 700} -size 18
+    $doc write $path
+    $doc destroy
+    set code [catch {::tclpdf::update open $path} message]
+    list $code [regexp {is encrypted} $message]
+} -result {1 1}
+
+test update-6.2 {a file without a startxref is refused} -body {
+    set path [::tclpdfTest::fixture update-6.2.pdf]
+    ::tclpdf::io write $path "%PDF-1.7\nnothing here\n"
+    list [catch {::tclpdf::update open $path} message] \
+        [regexp {carries no startxref} $message]
+} -result {1 1}
+
+test update-6.3 {a file whose trailer has no /Root is refused} -body {
+    set path [::tclpdfTest::original update-6.3.pdf]
+    set bytes [::tclpdfTest::readBytes $path]
+    set bytes [string map {"/Root 3 0 R " ""} $bytes]
+    ::tclpdf::io write $path $bytes
+    list [catch {::tclpdf::update open $path} message] \
+        [regexp {no /Root in its trailer} $message]
+} -result {1 1}
+
+#
+# ---------------------------------------------------------------------------
+# 7 - stream objects in an update
+# ---------------------------------------------------------------------------
+#
+
+test update-7.1 {an added stream gets its /Length from the bytes as written} -constraints qpdf -body {
+    set path [::tclpdfTest::original update-7.1.pdf]
+    set upd [::tclpdf::update open $path]
+    set data [zlib compress "1 0 0 RG 5 w 100 100 m 400 400 l S\n"]
+    set number [$upd addStream {Filter /FlateDecode} $data]
+    $upd trailer Marker [$upd ref $number]
+    $upd write
+    $upd destroy
+    list [regexp "/Length [string length $data]\\M" [::tclpdfTest::readBytes $path]] \
+        [regexp {No syntax or stream encoding errors} [exec qpdf --check $path]]
+} -result {1 1}
+
+test update-7.2 {a content stream can be replaced, and the page then draws the new one} -constraints qpdf -body {
+    set path [::tclpdfTest::original update-7.2.pdf]
+    set upd [::tclpdf::update open $path]
+    set page [::tclpdfTest::pageNumber $upd]
+    regexp {/Contents (\d+) 0 R} [$upd body $page] -> content
+    $upd replaceStream $content {} "1 0 0 RG 5 w 100 100 m 400 400 l S\n"
+    $upd write
+    $upd destroy
+    list [regexp {No syntax or stream encoding errors} [exec qpdf --check $path]] \
+        [regexp {400 l S} [exec qpdf --show-object=$content \
+            --filtered-stream-data $path]]
+} -result {1 1}
+
+test update-7.3 {stream data must be bytes, and text is refused before anything is written} -body {
+    set path [::tclpdfTest::original update-7.3.pdf]
+    set before [::tclpdfTest::readBytes $path]
+    set upd [::tclpdf::update open $path]
+    set code [catch {$upd addStream {} "a character above U+00FF: \u20ac"} message]
+    $upd destroy
+    list $code [regexp {must be bytes, not text} $message] \
+        [string equal $before [::tclpdfTest::readBytes $path]]
+} -result {1 1 1}
+
+#
+# ---------------------------------------------------------------------------
+# 8 - one update onto another
+# ---------------------------------------------------------------------------
+#
+
+test update-8.1 {a second update chains onto the first: three %%EOF, two Prev, the original still first} -constraints qpdf -body {
+    set path [::tclpdfTest::original update-8.1.pdf]
+    set before [::tclpdfTest::readBytes $path]
+    foreach rotation {90 180} {
+        set upd [::tclpdf::update open $path]
+        set page [::tclpdfTest::pageNumber $upd]
+        set body [$upd body $page]
+        regsub {/Rotate \d+ } $body {} body
+        $upd replace $page [string map [list ">>" "/Rotate $rotation >>"] $body]
+        $upd write
+        $upd destroy
+    }
+    set after [::tclpdfTest::readBytes $path]
+    list [string equal $before [string range $after 0 [expr {[string length $before] - 1}]]] \
+        [llength [regexp -all -inline {%%EOF} $after]] \
+        [llength [regexp -all -inline {/Prev } $after]] \
+        [llength [regexp -all -inline "$page 0 obj" $after]] \
+        [regexp {/Rotate 180} [exec qpdf --show-object=$page $path]] \
+        [regexp {No syntax or stream encoding errors} [exec qpdf --check $path]]
+} -result {1 3 2 3 1 1}
+
+foreach tclpdfFixture $::tclpdfTest::updateFiles {
+    file delete $tclpdfFixture
+}
+unset -nocomplain tclpdfFixture
+
+cleanupTests

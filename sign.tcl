@@ -123,9 +123,12 @@
 #   that dictionary. Buildable, unmeasured; the mirror check sits in
 #   encrypt.tcl.
 #
-#   A second signature. That needs an incremental update (7.5.6) with its
-#   own xref section and its own %%EOF, and this package writes a file in
-#   one piece.
+#   A second signature IN ONE DOCUMENT. That needs an incremental update
+#   (7.5.6) with its own xref section and its own %%EOF, and this package
+#   writes a file in one piece - so it happens on the FINISHED file instead,
+#   through [::tclpdf::sign add], which is the third entry point below and
+#   the only way a signature can be added without moving the bytes the first
+#   one covers.
 #
 # PDF/A and ZUGFeRD are NOT refused: ISO 19005-3 clause 6.4.3 states three
 # requirements ON signatures, which would be pointless if it forbade them.
@@ -221,10 +224,24 @@ namespace eval ::tclpdf::sign {
 # "what" names the thing being read in the error messages - a file name for
 # the two-stage way, "the document just written" for the write.
 proc ::tclpdf::sign::Locate {data what} {
-  # Every /ByteRange in the file, not the first: two of them mean either a
-  # second signature - which this module does not write - or a stray one in
-  # a content stream, and both are cases where guessing produces a file that
-  # looks signed and verifies nowhere.
+  # Every /ByteRange in the file, and the LAST of them is the one meant.
+  #
+  # Until 2026-08-21 a second one was refused here, because a file this
+  # module had written carried exactly one and a second meant a signature
+  # from elsewhere that guessing would have got wrong. [::tclpdf::sign add]
+  # is what changed that: it appends a further signature as an incremental
+  # update, so a file with two of them is now one of ours, and [digest] and
+  # [embed] have to reach the one that is still waiting for its value.
+  #
+  # WHY THE LAST ONE IS THE RIGHT ONE, and it is a property of 7.5.6 rather
+  # than a habit: an incremental update appends. Every object it writes lies
+  # behind every byte the file had before, so the newest signature dictionary
+  # is always the one furthest into the file - and the older ones are
+  # finished, since [add] refuses to append onto a signature whose value is
+  # still the reserved zeros. What this does NOT do is search for a
+  # dictionary that is unfilled: a caller who prepares two signatures and
+  # then fills the first would be signing bytes that the second still
+  # changes, and there is no order in which that works.
   set positions {}
   set from 0
   while {1} {
@@ -238,15 +255,10 @@ proc ::tclpdf::sign::Locate {data what} {
   if {![llength $positions]} {
     return -code error "tclpdf: $what carries no signature - there is no\
         /ByteRange in it. A document is prepared for signing by\
-        \[\$doc sign\] before it is written"
+        \[\$doc sign\] before it is written, and a finished file gains a\
+        further signature through \[::tclpdf::sign add\]"
   }
-  if {[llength $positions] > 1} {
-    return -code error "tclpdf: $what carries [llength $positions]\
-        /ByteRange entries and a signature written here is one - a second\
-        signature needs an incremental update (ISO 32000-2, 7.5.6), which\
-        tclpdf does not write"
-  }
-  set at [lindex $positions 0]
+  set at [lindex $positions end]
 
   set open [string first \[ $data $at]
   set close [string first \] $data $open]
@@ -551,6 +563,116 @@ proc ::tclpdf::sign::Der {der} {
 
 #
 # ---------------------------------------------------------------------------
+# The objects a signature is made of
+# ---------------------------------------------------------------------------
+#
+# The signature dictionary, the field and the moment - built here rather than
+# in the method that writes them, because there are TWO writers of them: the
+# document's own [SignWrite], which puts them into a file being written whole,
+# and [add], which puts the same objects into an incremental update on a
+# finished one. Two builders would be two places where the order of the keys
+# is decided, and that order is not cosmetic: [Locate] finds the placeholders
+# by searching the finished file for them, and /M has to stand behind the
+# reserved room or it falls outside the bytes the signature covers.
+#
+# The strings go through [pdfObj str] rather than through the document's own
+# [Str], which asks the encryptor first. The two are the same thing wherever
+# a signature exists: [$doc sign] refuses an encrypted document and
+# [$doc encrypt] refuses a signed one, so a document with a signature
+# dictionary in it never has a string encryptor.
+#
+
+# The signature dictionary (Table 255), as the body of one object.
+#
+# Every value in it is a DIRECT object, which 12.8.1 says twice and which has
+# teeth: a /Contents written as "7 0 R" would put the signature outside the
+# dictionary the digest covers.
+#
+# /SubFilter, /ByteRange and /Contents stand next to each other and in this
+# order - the file is searched for them afterwards, and [Locate] expects to
+# find each just beside the one before it. /M comes last, and that too is
+# required rather than tidy: everything behind the reserved room lies in the
+# second range, so the entry that gets filled in later is inside what the
+# signature covers.
+#
+# /Contents is written as raw syntax rather than as a hexadecimal string: the
+# value is the one string 7.6.2 exempts from encryption, and it is not a value
+# at all yet but the room for one.
+proc ::tclpdf::sign::Dictionary {values} {
+  variable byteRangePlaceholder
+  set pairs [list \
+      Type /Sig \
+      Filter /Adobe.PPKLite \
+      SubFilter [dict get $values subFilter] \
+      ByteRange $byteRangePlaceholder \
+      Contents <[string repeat 0 [expr {2 * [dict get $values size]}]]>]
+  foreach {key entry} {name Name reason Reason location Location
+      contact ContactInfo} {
+    if {[dict get $values $key] ne {}} {
+      lappend pairs $entry [::tclpdf::pdfObj str [dict get $values $key]]
+    }
+  }
+  if {[dict get $values date] ne {}} {
+    lappend pairs M [::tclpdf::pdfObj str [dict get $values date]]
+  }
+  return [::tclpdf::pdfObj dictionary $pairs]
+}
+
+# The signature field and its widget annotation, in ONE object: a signature
+# field never refers to more than one annotation (12.7.5.5), and 12.5.6.19
+# lets the two dictionaries be merged in exactly that case.
+#
+# "value" and "page" are the references to the signature dictionary and to the
+# page, "rect" the rectangle of a visible field and "appearance" the reference
+# to its form XObject - all four as PDF syntax, because where they come from
+# differs between the two writers and none of it is decided here.
+#
+# Without a rectangle the widget is the invisible signature of the standard's
+# own example (12.8.5.3): /Rect [0 0 0 0], which Table 166 is the one
+# exception for - it needs no appearance stream, and there is none.
+#
+# /F 4 in both cases, and it is not the invisibility that asks for it:
+# veraPDF rule 6.3.2-2 wants Print set and Hidden, Invisible, NoView and
+# ToggleNoView clear of EVERY annotation, so a visible field carries the same
+# flags as the invisible one.
+proc ::tclpdf::sign::Widget {field value page rect appearance} {
+  set annotation [list \
+      Type /Annot \
+      Subtype /Widget \
+      FT /Sig \
+      T [::tclpdf::pdfObj str $field] \
+      V $value]
+  if {$rect eq {}} {
+    lappend annotation Rect [::tclpdf::pdfObj arr {0 0 0 0}]
+  } else {
+    lappend annotation Rect $rect \
+        AP [::tclpdf::pdfObj dictionary [list N $appearance]]
+  }
+  lappend annotation F 4 P $page
+  return [::tclpdf::pdfObj dictionary $annotation]
+}
+
+# What goes into /M, the time of signing, for a file of this version.
+#
+# "now" is the moment of SIGNING, and the two ways of signing reach it
+# differently: where a signer signs the document as it is written, the moment
+# is the write and the value is written outright; where there is none, the
+# signing happens elsewhere and later, and what goes in is the placeholder
+# that [::tclpdf::sign digest] writes the real time over. An explicit date is
+# the caller's own statement and is written as it stands; the empty string
+# keeps the entry out altogether.
+proc ::tclpdf::sign::Moment {date signer version} {
+  if {$date ne "now"} {
+    return $date
+  }
+  if {$signer eq {}} {
+    return [DatePlaceholder $version]
+  }
+  return [::tclpdf::pdfObj date {} $version]
+}
+
+#
+# ---------------------------------------------------------------------------
 # The two-stage way
 # ---------------------------------------------------------------------------
 #
@@ -650,6 +772,492 @@ proc ::tclpdf::sign::embed {path der} {
 
 #
 # ---------------------------------------------------------------------------
+# The options both entry points check
+# ---------------------------------------------------------------------------
+#
+# [$doc sign] and [::tclpdf::sign add] take the same options and refuse the
+# same values, so the sentences that explain them exist once. "what" is the
+# call being made - "sign" or "sign add" - and is the only difference between
+# the two readings.
+#
+
+# Which /SubFilter, and with it which claim the file makes about itself.
+# Table 255 leaves a writer exactly two values: /adbe.pkcs7.detached arrived
+# with PDF 1.6, /ETSI.CAdES.detached - PAdES - with 2.0, and neither is
+# deprecated. The two that are deprecated for writers, adbe.x509.rsa_sha1 and
+# adbe.pkcs7.sha1, are not offered at all ("PDF writers shall not use this
+# value"), which is why the error names the ones that exist rather than the
+# one that was asked for.
+#
+# It is a CHOICE and not a consequence of the file version. tclpdf read it off
+# the version until 2026-08-20, and that coupling was built so that a PDF/A-3
+# invoice - written as 1.7 at most - stays signable; but what came out of it
+# was a PAdES claim made by the file format rather than by anybody, on
+# documents whose signer then broke it (see [NoSigningTime]). The default is
+# the value that claims less.
+proc ::tclpdf::sign::SubFilter {value what} {
+  switch -- $value {
+    pkcs7 {return /adbe.pkcs7.detached}
+    cades {return /ETSI.CAdES.detached}
+  }
+  return -code error "tclpdf: $what -subfilter is the signature profile and\
+      takes \"pkcs7\" for /adbe.pkcs7.detached (PDF 1.6, and the default) or\
+      \"cades\" for /ETSI.CAdES.detached (PDF 2.0, and the claim to be a\
+      PAdES signature - ETSI EN 319 142-1), not \"$value\""
+}
+
+# How much room is reserved for the signature value.
+proc ::tclpdf::sign::Size {value what} {
+  if {![string is integer -strict $value] || $value < 1} {
+    return -code error "tclpdf: $what -size is the number of bytes reserved\
+        for the signature and takes a positive integer, not \"$value\".\
+        Measured: a CMS object with an RSA-2048 certificate and its issuer\
+        is 2599 bytes, one with ECDSA P-256 2209 - the default of 16384\
+        leaves room for a timestamp and a longer chain"
+  }
+  return $value
+}
+
+# Which page the widget sits on, counted as [page current] counts.
+proc ::tclpdf::sign::PageIndex {value what} {
+  if {![string is integer -strict $value] || $value < 0} {
+    return -code error "tclpdf: $what -page is a page index counted from 0,\
+        as \"page current\" counts, not \"$value\""
+  }
+  return $value
+}
+
+# The command prefix that answers the CMS object. Only its SHAPE is checked
+# here - whether it is callable at all is answered when it is called, and by
+# then there is a file to point at.
+proc ::tclpdf::sign::Signer {value what} {
+  if {[catch {llength $value}]} {
+    return -code error "tclpdf: $what -signer is a command prefix, called as\
+        \"{*}\$prefix \$bytes\" and answering a CMS SignedData object in\
+        DER - \"$value\" is not a well-formed list"
+  }
+  return $value
+}
+
+#
+# ---------------------------------------------------------------------------
+# A further signature on a finished file
+# ---------------------------------------------------------------------------
+#
+#   ::tclpdf::sign add invoice.pdf -signer mySigner -reason "Countersigned"
+#
+# A second signature - or a third - onto a file that is already finished, and
+# a first one onto a file this package did not write. It goes in as an
+# incremental update (ISO 32000-2, 7.5.6): every byte the file had stays where
+# it is, and everything new is appended behind the last %%EOF. That is not one
+# way of doing it among several, it is the only one - a signature covers the
+# bytes of the file it sits in, so anything that rewrites the file breaks the
+# signature already there.
+#
+# A PACKAGE COMMAND, NOT A DOCUMENT METHOD, and it stands beside [digest] and
+# [embed] for the reason those two do: the subject is a finished file on disk,
+# addressed by its path. There is no document object for it and there cannot
+# be one - what the objects of a foreign file mean, and what else points at
+# them, is exactly the knowledge a reader does not have. [$doc sign] is the
+# call for a document being written; this is the call for a file that exists.
+#
+# IT IS CALLED "add" AND NOT "append" for a reason worth writing down: a proc
+# named ::tclpdf::sign::append would shadow the core [append] command for
+# every other proc in this namespace, and four of them build strings with it.
+# The name that reads best is the name that breaks the module.
+#
+# WHAT IT WRITES, and it is more than the signature dictionary. Measured on a
+# doubly signed file made by pyHanko (2026-08-21): the dictionary, the field
+# and its widget are NEW objects, and two objects the file already has get a
+# second copy - the CATALOG, whose /AcroForm has to list the new field and
+# carry /SigFlags 3, and the PAGE the widget sits on, whose /Annots has to
+# name it. Appending the dictionary alone produces a field that stands in no
+# /Fields array, which is a signature no form-aware reader finds. Where the
+# file has no /AcroForm at all - because it was never signed - one is written.
+#
+# THE /ByteRange OF THE NEW SIGNATURE COVERS THE WHOLE FILE, and 12.8.1 says
+# how far exactly: "from the '%PDF-' comment at the beginning of the PDF
+# document to the end of the '%%EOF' comment, possibly followed by an optional
+# EOL marker, terminating the incremental update that adds the digital
+# signature dictionary". Since this call appends exactly one update and that
+# update's %%EOF is the last thing in the file, the range is the whole file
+# minus the value of /Contents - the same arithmetic [Range] does for a
+# document written in one piece. One byte short of it and pdfsig turns from
+# "Total document signed" to "Not total document signed" without anything
+# being cryptographically wrong.
+#
+# THE OLDER SIGNATURE STAYS VALID and keeps covering ITS OWN revision, which
+# is what 7.5.6 makes possible and what nothing here may disturb: the appended
+# bytes lie outside its ranges, and its own bytes are not touched. pdfsig then
+# reports "Not total document signed" for it - and that is the CORRECT answer
+# for an older signature on a file that has grown since, not a defect.
+#
+# WHAT IS NOT BUILT HERE, each refused by name rather than written wrong:
+#
+#   A VISIBLE field. What a visible field shows is a form XObject, and drawing
+#   one takes a document: a font, a unit, a layout. This call has a file and
+#   no document, so -rect and -appearance are not offered at all. A first
+#   signature that is to be visible is written with [$doc sign -rect].
+#
+#   RAISING THE FILE'S VERSION. The header is inside the bytes that stay
+#   untouched, so a file below the version floor of the /SubFilter asked for
+#   is refused rather than raised. 7.5.6 NOTE 4 describes the one way to raise
+#   it - a /Version entry in a replaced catalog - and it is not written here
+#   behind the caller's back: on a PDF/A file, which is a profile of ISO
+#   32000-1, that entry would break the profile.
+#
+#   A SECOND SIGNATURE ONTO AN UNFINISHED ONE. A file whose newest signature
+#   still holds the reserved zeros is refused: [digest] and [embed] reach the
+#   NEWEST signature of a file, so filling the older one afterwards is not
+#   possible, and signing it BEFORE would sign bytes this update then changes.
+#   Finish that signature first, then add the next.
+#
+#   A DOCUMENT TIMESTAMP (/Type /DocTimeStamp) and a certification (/DocMDP).
+#   Both are dictionaries of their own with their own rules, and neither is
+#   what this call writes.
+#
+
+# Answers what was written, as a dictionary: field, page, size, subFilter,
+# date, signed, byteRange, length (the CMS object's size, empty where none was
+# written) and appended (how many bytes the update added).
+proc ::tclpdf::sign::add {path args} {
+  # Required HERE rather than at the head of this file, and it is the point of
+  # the split: a document that signs itself needs no PDF reader, and pulling
+  # import.tcl and update.tcl into every signing script would be a dependency
+  # nobody asked for. A file that is signed a second time cannot avoid them.
+  package require tclpdf::update 1.0-
+
+  set options [::tclpdf::option parse {
+    signer {} size 16384 name {} reason {} location {} contact {}
+    date now field {} page 0 subfilter pkcs7
+  } $args "sign add"]
+  set subFilter [SubFilter [dict get $options subfilter] "sign add"]
+  set size [Size [dict get $options size] "sign add"]
+  set page [PageIndex [dict get $options page] "sign add"]
+  set signer [Signer [dict get $options signer] "sign add"]
+  set date [dict get $options date]
+  if {$date ni {{} now} && [::tclpdf::document::parseDate $date] eq {}} {
+    return -code error "tclpdf: sign add -date takes a PDF date such as\
+        D:20260818120000+02'00' (ISO 32000-1, 7.9.4), \"now\" - which is the\
+        default and means the moment of signing - or the empty string for no\
+        /M at all, not \"$date\""
+  }
+
+  set data [::tclpdf::io read $path]
+  set what "\"$path\""
+
+  # The version floor of the /SubFilter, read off the file's own header
+  # because that is where the version of a file stands and an update cannot
+  # move it.
+  set version [HeaderVersion $data]
+  set floor [expr {$subFilter eq "/ETSI.CAdES.detached" ? "2.0" : "1.6"}]
+  if {[package vcompare $version $floor] < 0} {
+    return -code error "tclpdf: $what states version $version in its header\
+        and $subFilter needs $floor (ISO 32000-2, Table 255) - an incremental\
+        update cannot raise it, because the header is inside the bytes it\
+        leaves untouched. 7.5.6 NOTE 4 names the one way, a /Version entry in\
+        the catalog, and this call does not write it: on a PDF/A file that\
+        entry would break the profile"
+  }
+
+  # A signature that is still waiting for its value, and why that is the end
+  # of the road rather than something to work around - see the head of this
+  # section.
+  #
+  # Read off the whole file rather than through [Locate], and each half of
+  # that is deliberate. THE WHOLE FILE, because an unfilled signature ANYWHERE
+  # in it can no longer be filled once this update is appended - [embed]
+  # reaches the newest one - so an older one waiting for its value is the same
+  # dead end as the newest. NOT THROUGH [Locate], because the signature found
+  # here may be a foreign one: [Locate] reads the dictionary tclpdf writes,
+  # with /SubFilter, /ByteRange and /Contents in that order and next to each
+  # other, and a file that has been through qpdf has them in another. What
+  # says it beyond doubt is the value itself - a /Contents that is nothing but
+  # zeros between its delimiters is reserved room and not a signature, since
+  # every DER object begins with 0x30.
+  if {[regexp {/Contents[[:space:]]*<0+>} $data]} {
+    return -code error "tclpdf: a signature of $what is still waiting for its\
+        value - its /Contents holds nothing but the reserved zeros. Put the\
+        CMS object in with \[::tclpdf::sign embed\] first: appending a further\
+        signature now would cover those zeros, and the object that belongs\
+        there could never be written without breaking it"
+  }
+
+  set upd [::tclpdf::update open $path]
+  try {
+    if {[$upd base] != [string length $data]} {
+      return -code error "tclpdf: $what changed while it was being signed -\
+          it was [string length $data] bytes and the update read [$upd base]"
+    }
+
+    set catalog [Number [$upd trailer Root] $what "the trailer's /Root"]
+    set catalogValue [Value [$upd body $catalog]]
+    set pageNumber [PageNumber $upd $catalogValue $page $what]
+
+    # The field's partial name has to be unique among its siblings
+    # (12.7.4.2), and the one name a caller would otherwise take is the one
+    # the signature already there took. So the default is the first free name
+    # of the form the readers use, and a name that is taken is refused rather
+    # than written twice.
+    set taken [FieldNames $upd $catalogValue]
+    set field [dict get $options field]
+    if {$field eq {}} {
+      set number 1
+      while {"Signature$number" in $taken} {
+        incr number
+      }
+      set field "Signature$number"
+    } elseif {$field in $taken} {
+      return -code error "tclpdf: $what already carries a signature field\
+          named \"$field\" - a partial field name has to be unique among its\
+          siblings (ISO 32000-2, 12.7.4.2). Taken are: [join $taken {, }].\
+          Leave -field out and the first free name of the form Signature<n>\
+          is used"
+    }
+
+    # The two new objects: the dictionary with both placeholders in it, and
+    # the field merged with its widget. Written through the same two builders
+    # the document's own write uses, into the numbering of the file being
+    # continued - which is what makes an update session speak the writer's
+    # vocabulary in the first place.
+    set signature [$upd add [Dictionary [dict create \
+        subFilter $subFilter size $size \
+        name [dict get $options name] reason [dict get $options reason] \
+        location [dict get $options location] \
+        contact [dict get $options contact] \
+        date [Moment $date $signer $version]]]]
+    set widget [$upd add [Widget $field [$upd ref $signature] \
+        [$upd ref $pageNumber] {} {}]]
+
+    # And the two objects that already exist and now say something more.
+    Enlist $upd $catalog $catalogValue $widget
+    Annotate $upd $pageNumber $widget
+
+    # The appendix rather than [$upd write]: the file is written ONCE, with
+    # the two patches already in it. A signer that fails - and one that
+    # cannot fit its object into the reserved room is a signer that fails -
+    # then leaves the file exactly as it found it, instead of leaving a
+    # prepared signature nobody asked for behind.
+    set appended [$upd appendix]
+  } finally {
+    $upd destroy
+  }
+
+  append data $appended
+  set length [string length $data]
+  set located [Locate $data $what]
+  set byteRange [Range $data $located]
+  set data [WriteRange $data $located $byteRange]
+  if {[string length $data] != $length} {
+    return -code error "tclpdf: writing /ByteRange into $what changed the file\
+        length, which cannot be - it describes its own file"
+  }
+
+  set signed 0
+  set derLength {}
+  if {$signer ne {}} {
+    set der [uplevel #0 [list {*}$signer [Bytes $data $byteRange]]]
+    if {$der eq {}} {
+      return -code error "tclpdf: the -signer prefix answered nothing - it\
+          has to answer a CMS SignedData object in DER, which is what\
+          \"openssl cms -sign -outform DER\" writes"
+    }
+    Der $der
+    NoSigningTime $der $subFilter $what
+    set data [Fill $data $located $der]
+    if {[string length $data] != $length} {
+      return -code error "tclpdf: writing the signature into $what changed the\
+          file length, which cannot be - the /ByteRange describes its own file"
+    }
+    set signed 1
+    set derLength [string length $der]
+  }
+  ::tclpdf::io write $path $data
+  return [dict create field $field page $page size $size subFilter $subFilter \
+      date [dict get $options date] signed $signed byteRange $byteRange \
+      length $derLength appended [string length $appended]]
+}
+
+# An object body as a parsed value, and back again.
+#
+# The parser is import.tcl's own, run over the syntax [$upd body] hands back
+# rather than over the file: an update session answers with the object as the
+# file has it, and reading it with regular expressions is how a /Fields array
+# that happens to be an indirect reference becomes a silent mistake. The map
+# [Serialize] renumbers references through is the identity here - an update
+# writes into the file's own numbering, so every number stays the one it was.
+proc ::tclpdf::sign::Value {body} {
+  set position 0
+  return [::tclpdf::import::Parse $body position]
+}
+
+proc ::tclpdf::sign::Syntax {value} {
+  set map {}
+  foreach number [::tclpdf::import::Refs $value] {
+    dict set map $number $number
+  }
+  return [::tclpdf::import::Serialize $value $map]
+}
+
+# The object number a reference names, from PDF syntax or from a parsed value.
+proc ::tclpdf::sign::Number {reference what which} {
+  if {[lindex $reference 0] eq "r"} {
+    return [lindex [lindex $reference 1] 0]
+  }
+  if {[regexp {^\s*([0-9]+)\s+[0-9]+\s+R\s*$} $reference -> number]} {
+    return $number
+  }
+  return -code error "tclpdf: $which of $what is \"$reference\" and an\
+      indirect reference was needed - the file is not one an update can be\
+      appended to"
+}
+
+# One level of indirection resolved: a value that is a reference, read back as
+# the object it names.
+proc ::tclpdf::sign::Direct {upd value} {
+  if {[lindex $value 0] ne "r"} {
+    return $value
+  }
+  return [Value [$upd body [lindex [lindex $value 1] 0]]]
+}
+
+# The object number of the page at that index, counted from 0 as [page
+# current] counts, by walking the page tree the way 7.7.3.4 describes it.
+#
+# The NUMBER rather than the dictionary, which is what [import::Page] answers
+# and why that one is not used here: the widget needs a /P pointing at the
+# page, and the page needs a second copy of itself with /Annots in it.
+proc ::tclpdf::sign::PageNumber {upd catalogValue index what} {
+  set node [Number [::tclpdf::import::Get $catalogValue Pages] $what \
+      "the /Pages entry of the catalog"]
+  set remaining [expr {$index + 1}]
+  set total 0
+  while {1} {
+    set value [Value [$upd body $node]]
+    if {[lindex [::tclpdf::import::Get $value Type] 1] eq "Page"} {
+      return $node
+    }
+    if {!$total} {
+      set total [lindex [Direct $upd \
+          [::tclpdf::import::Get $value Count]] 1]
+    }
+    set kids [Direct $upd [::tclpdf::import::Get $value Kids]]
+    set descended 0
+    foreach kid [lindex $kids 1] {
+      set number [Number $kid $what "a /Kids entry of the page tree"]
+      set child [Value [$upd body $number]]
+      if {[lindex [::tclpdf::import::Get $child Type] 1] eq "Pages"} {
+        set count [lindex [Direct $upd \
+            [::tclpdf::import::Get $child Count]] 1]
+      } else {
+        set count 1
+      }
+      if {$remaining <= $count} {
+        set node $number
+        set descended 1
+        break
+      }
+      incr remaining -$count
+    }
+    if {!$descended} {
+      return -code error "tclpdf: sign add -page $index names a page $what\
+          does not have - it has $total page[expr {$total == 1 ? {} : {s}}].\
+          The signature widget sits on a page, and that page has to exist"
+    }
+  }
+}
+
+# The /AcroForm of the file, as {value number}: the parsed dictionary and, for
+# one that stands in the catalog as a reference, the object it lives in - the
+# empty string where it is written into the catalog itself or is not there at
+# all. Both spellings occur; tclpdf writes the direct one, and the file that
+# was measured for this used the other.
+proc ::tclpdf::sign::AcroForm {upd catalogValue} {
+  set entry [::tclpdf::import::Get $catalogValue AcroForm]
+  if {$entry eq {}} {
+    return [list [list d {}] {}]
+  }
+  if {[lindex $entry 0] eq "r"} {
+    set number [lindex [lindex $entry 1] 0]
+    return [list [Value [$upd body $number]] $number]
+  }
+  return [list $entry {}]
+}
+
+# The partial names of the fields the file already has - the /T of every entry
+# in /Fields. Only the top level is read, and that is what 12.7.4.2 asks for:
+# a name has to be unique among its SIBLINGS.
+proc ::tclpdf::sign::FieldNames {upd catalogValue} {
+  lassign [AcroForm $upd $catalogValue] form
+  set fields [Direct $upd [::tclpdf::import::Get $form Fields]]
+  set names {}
+  foreach entry [lindex $fields 1] {
+    set value [Direct $upd $entry]
+    set name [::tclpdf::import::Get $value T]
+    if {[lindex $name 0] eq "s"} {
+      lappend names [lindex $name 1]
+    }
+  }
+  return $names
+}
+
+# The new field into /AcroForm /Fields, and /SigFlags 3 with it.
+#
+# /SigFlags 3 is SignaturesExist and AppendOnly (Table 225): the document has
+# a signature field, and it may only be written on incrementally. It is SET
+# rather than merged, because a file that carries a signature and says
+# otherwise says something that is no longer true.
+#
+# Which object gets the second copy follows the file: an /AcroForm that stands
+# in the catalog is written back with the catalog, one behind a reference is
+# written back on its own, and a /Fields array of its own is a third. Each is
+# replaced exactly where the file keeps it, which is what leaves everything
+# else pointing at what it pointed at.
+proc ::tclpdf::sign::Enlist {upd catalog catalogValue widget} {
+  lassign [AcroForm $upd $catalogValue] form number
+  set entry [::tclpdf::import::Get $form Fields]
+  set fields [Direct $upd $entry]
+  if {$fields eq {}} {
+    set fields [list a {}]
+  }
+  set items [lindex $fields 1]
+  lappend items [list r [list $widget 0]]
+  if {[lindex $entry 0] eq "r"} {
+    $upd replace [lindex [lindex $entry 1] 0] [Syntax [list a $items]]
+  } else {
+    ::tclpdf::import::Put form Fields [list a $items]
+  }
+  ::tclpdf::import::Put form SigFlags [list n 3]
+  if {$number ne {}} {
+    $upd replace $number [Syntax $form]
+    return
+  }
+  ::tclpdf::import::Put catalogValue AcroForm $form
+  $upd replace $catalog [Syntax $catalogValue]
+  return
+}
+
+# The widget into the page's /Annots, in the second copy of the page object -
+# or, where the array is an object of its own, in the second copy of that.
+proc ::tclpdf::sign::Annotate {upd number widget} {
+  set value [Value [$upd body $number]]
+  set entry [::tclpdf::import::Get $value Annots]
+  set annots [Direct $upd $entry]
+  if {$annots eq {}} {
+    set annots [list a {}]
+  }
+  set items [lindex $annots 1]
+  lappend items [list r [list $widget 0]]
+  if {[lindex $entry 0] eq "r"} {
+    $upd replace [lindex [lindex $entry 1] 0] [Syntax [list a $items]]
+    return
+  }
+  ::tclpdf::import::Put value Annots [list a $items]
+  $upd replace $number [Syntax $value]
+  return
+}
+#
+# ---------------------------------------------------------------------------
 # The document's side
 # ---------------------------------------------------------------------------
 #
@@ -681,40 +1289,12 @@ oo::define ::tclpdf::document::document {
       date now field Signature1 page 0 subfilter pkcs7 rect {} appearance {}
     } $args "sign"]
 
-    # Which /SubFilter, and with it which claim the document makes about
-    # itself. Table 255 leaves a writer exactly two values: /adbe.pkcs7.detached
-    # arrived with PDF 1.6, /ETSI.CAdES.detached - PAdES - with 2.0, and
-    # neither is deprecated. The two that are deprecated for writers,
-    # adbe.x509.rsa_sha1 and adbe.pkcs7.sha1, are not offered at all ("PDF
-    # writers shall not use this value"), which is why the error names the
-    # ones that exist rather than the one that was asked for.
-    #
-    # It is a CHOICE and not a consequence of the file version. tclpdf read
-    # it off the version until 2026-08-20, and that coupling was built so
-    # that a PDF/A-3 invoice - written as 1.7 at most - stays signable; but
-    # what came out of it was a PAdES claim made by the file format rather
-    # than by anybody, on documents whose signer then broke it (see
-    # [NoSigningTime]). The default is the value that claims less.
-    switch -- [dict get $options subfilter] {
-      pkcs7 {set subFilter /adbe.pkcs7.detached}
-      cades {set subFilter /ETSI.CAdES.detached}
-      default {
-        return -code error "tclpdf: sign -subfilter is the signature profile\
-            and takes \"pkcs7\" for /adbe.pkcs7.detached (PDF 1.6, and the\
-            default) or \"cades\" for /ETSI.CAdES.detached (PDF 2.0, and the\
-            claim to be a PAdES signature - ETSI EN 319 142-1), not\
-            \"[dict get $options subfilter]\""
-      }
-    }
-
-    set size [dict get $options size]
-    if {![string is integer -strict $size] || $size < 1} {
-      return -code error "tclpdf: sign -size is the number of bytes reserved\
-          for the signature and takes a positive integer, not \"$size\".\
-          Measured: a CMS object with an RSA-2048 certificate and its issuer\
-          is 2599 bytes, one with ECDSA P-256 2209 - the default of 16384\
-          leaves room for a timestamp and a longer chain"
-    }
+    # Which /SubFilter, how much room, which page and what the signer is:
+    # the four checks [::tclpdf::sign add] makes word for word, and they are
+    # made in one place - see [SubFilter] for what the value decides.
+    set subFilter [::tclpdf::sign::SubFilter \
+        [dict get $options subfilter] sign]
+    set size [::tclpdf::sign::Size [dict get $options size] sign]
     if {[dict get $options field] eq {}} {
       return -code error "tclpdf: sign -field is the name of the signature\
           field and cannot be empty - a field dictionary without a partial\
@@ -729,11 +1309,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options date] ni {{} now}} {
       my CheckDate [dict get $options date] "sign -date"
     }
-    set page [dict get $options page]
-    if {![string is integer -strict $page] || $page < 0} {
-      return -code error "tclpdf: sign -page is a page index counted from 0,\
-          as \"page current\" counts, not \"$page\""
-    }
+    set page [::tclpdf::sign::PageIndex [dict get $options page] sign]
     # The two halves of a visible field. Each is useless without the other,
     # and each without the other is a mistake that shows up nowhere until a
     # validator or a reader is asked - so it is named here. See the head of
@@ -777,17 +1353,15 @@ oo::define ::tclpdf::document::document {
             into"
       }
     }
-    if {[catch {llength [dict get $options signer]}]} {
-      return -code error "tclpdf: sign -signer is a command prefix, called as\
-          \"{*}\$prefix \$bytes\" and answering a CMS SignedData object in\
-          DER - \"[dict get $options signer]\" is not a well-formed list"
-    }
+    ::tclpdf::sign::Signer [dict get $options signer] sign
 
     if {[my state sign] ne {}} {
       return -code error "tclpdf: this document is already being signed -\
-          sign is called once. A second signature has to be appended as an\
-          incremental update (ISO 32000-2, 7.5.6) so that the first one\
-          keeps the bytes it covers, and tclpdf writes a file in one piece"
+          sign is called once, because a document is written in one piece and\
+          a second signature has to be appended as an incremental update (ISO\
+          32000-2, 7.5.6) so that the first one keeps the bytes it covers.\
+          Write this document, then put the second signature on the finished\
+          file with \[::tclpdf::sign add\]"
     }
     # The mirror of this check sits in encrypt.tcl, so that whichever call
     # comes second is the one that says so. 7.6.2 takes exactly the
@@ -893,35 +1467,10 @@ oo::define ::tclpdf::document::document {
     set sigNumber [my reservation sign.dictionary]
     set widgetNumber [my reservation sign.widget]
 
-    # The signature dictionary (Table 255). Every value in it is a DIRECT
-    # object, which 12.8.1 says twice and which has teeth: a /Contents
-    # written as "7 0 R" would put the signature outside the dictionary the
-    # digest covers.
+    # The signature dictionary (Table 255), built by the one builder both
+    # writers use - see [::tclpdf::sign::Dictionary] for what stands in it
+    # and in which order.
     #
-    # /SubFilter, /ByteRange and /Contents stand next to each other and in
-    # this order - the file is searched for them afterwards, and [Locate]
-    # expects to find each just beside the one before it. /M comes last, and
-    # that too is required rather than tidy: everything behind the reserved
-    # room lies in the second range, so the entry that gets filled in later
-    # is inside what the signature covers.
-    #
-    # /Contents is written as raw syntax rather than through [my HexStr]:
-    # the value is the one string 7.6.2 exempts from encryption, and it is
-    # not a value at all yet but the room for one.
-    #
-    set pairs [list \
-        Type /Sig \
-        Filter /Adobe.PPKLite \
-        SubFilter [dict get $current subFilter] \
-        ByteRange $::tclpdf::sign::byteRangePlaceholder \
-        Contents <[string repeat 0 [expr {2 * [dict get $current size]}]]>]
-    foreach {option key} {name Name reason Reason location Location
-        contact ContactInfo} {
-      if {[dict get $current $option] ne {}} {
-        lappend pairs $key [my Str [dict get $current $option]]
-      }
-    }
-
     # /M, the time of signing, and it is written ALWAYS - the one thing the
     # two ways of signing may not differ in.
     #
@@ -949,51 +1498,25 @@ oo::define ::tclpdf::document::document {
     #
     # The file version decides how the zone offset is spelled, as it does
     # for /CreationDate: 2.0 dropped the apostrophe after the minutes.
-    set date [dict get $current date]
-    if {$date eq "now"} {
-      if {[dict get $current signer] eq {}} {
-        set date [::tclpdf::sign::DatePlaceholder [[my writer] version]]
-      } else {
-        set date [::tclpdf::pdfObj date {} [[my writer] version]]
-      }
-    }
-    if {$date ne {}} {
-      lappend pairs M [my Str $date]
-    }
-    [my writer] put $sigNumber [::tclpdf::pdfObj dictionary $pairs]
+    set date [::tclpdf::sign::Moment [dict get $current date] \
+        [dict get $current signer] [[my writer] version]]
+    [my writer] put $sigNumber [::tclpdf::sign::Dictionary \
+        [dict merge $current [dict create date $date]]]
 
-    # Field and widget in ONE object: a signature field never refers to more
-    # than one annotation (12.7.5.5), and 12.5.6.19 lets the two dictionaries
-    # be merged in exactly that case.
-    set annotation [list \
-        Type /Annot \
-        Subtype /Widget \
-        FT /Sig \
-        T [my Str [dict get $current field]] \
-        V [[my writer] ref $sigNumber]]
-    if {[dict get $current rect] eq {}} {
-      # The invisible signature of the standard's own example (12.8.5.3):
-      # a rectangle of no area, which Table 166 is the one exception for -
-      # it needs no appearance stream, and there is none.
-      lappend annotation Rect [::tclpdf::pdfObj arr {0 0 0 0}]
-    } else {
-      # The visible one: the caller's rectangle, and in it the form XObject
-      # the caller drew. Both are worked out here rather than at the sign
-      # call, for the reason -page is - the page and the form may both come
-      # after it, and the write is where everything exists at once.
-      lappend annotation \
-          Rect [my SignRectangle $page [dict get $current rect]] \
-          AP [::tclpdf::pdfObj dictionary [list \
-              N [my SignAppearance [dict get $current appearance]]]]
+    # The rectangle of a visible field and the form XObject shown in it are
+    # worked out here rather than at the sign call, for the reason -page is -
+    # the page and the form may both come after it, and the write is where
+    # everything exists at once.
+    set rect {}
+    set appearance {}
+    if {[dict get $current rect] ne {}} {
+      set rect [my SignRectangle $page [dict get $current rect]]
+      set appearance [my SignAppearance [dict get $current appearance]]
     }
-    # /F 4 in both cases, and it is not the invisibility that asks for it:
-    # veraPDF rule 6.3.2-2 wants Print set and Hidden, Invisible, NoView and
-    # ToggleNoView clear of EVERY annotation, so a visible field carries the
-    # same flags as the invisible one.
-    lappend annotation \
-        F 4 \
-        P [[my writer] ref [dict get [my Page $page] number]]
-    [my writer] put $widgetNumber [::tclpdf::pdfObj dictionary $annotation]
+    [my writer] put $widgetNumber [::tclpdf::sign::Widget \
+        [dict get $current field] [[my writer] ref $sigNumber] \
+        [[my writer] ref [dict get [my Page $page] number]] \
+        $rect $appearance]
 
     # Into the page's /Annots, the same scratch state link.tcl uses - once,
     # however often the document is written.

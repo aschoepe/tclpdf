@@ -49,6 +49,7 @@ foreach tclpdfPkg {
     tclpdf::crypto
     tclpdf::encrypt
     tclpdf::sign
+    tclpdf::update
     tclpdf::event
     tclpdf::writer
     tclpdf::color
