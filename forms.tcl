@@ -41,8 +41,10 @@
 #             than the isolated letters.
 #
 # Standard ligatures (liga) come after all of this, in font.tcl, and only when
-# the caller asked for them. GPOS mark attachment does not happen at all,
-# which is why shaping.tcl still refuses Arabic that carries vowel signs.
+# the caller asked for them. GPOS mark attachment comes after those, out of
+# markPos.tcl and on the run this file produced - which is why Arabic that
+# carries vowel signs is set rather than refused: the harakat and the dots
+# ccmp detached are both marks with anchors, and the anchors are read.
 #
 # WHAT IS NOT REACHED, measured on this face rather than assumed. Of the nine
 # lookups its rlig feature names for the default Arabic language system, ONE
@@ -126,44 +128,15 @@ proc ::tclpdf::forms::build {font {script arab}} {
       return {}
     }
   }
-  # The filter that leaves out mark glyphs, kept for [marks] - built here
-  # because this is where GDEF is read, and reading it a second time per
-  # string is the kind of thing that turns a check into a cost. 0x0008 is
-  # ignoreMarks; the filter it produces is empty for a face whose GDEF does
-  # not classify, and then no glyph can be recognised as a mark either.
-  return [dict create stages $stages \
-      markFilter [::tclpdf::gdef filter $gdef 0x0008]]
-}
-
-# Does this run hold glyphs the face means to PLACE rather than to advance?
-#
-# The question that decides whether the shaping above is enough, and it can
-# only be asked afterwards. A face may write beh as an undotted skeleton plus
-# a dot glyph of its own - NotoNaskhArabic-Variable does, through ccmp - and
-# that dot has a zero advance and an anchor in GPOS. tclpdf does not read
-# GPOS mark attachment, so it would draw the dot at the pen position instead
-# of at the anchor.
-#
-# Measured on that face, in font units of 1000: the dot below beh belongs 90
-# to the right and 31 down, the two dots of teh marbuta 91 to the right and
-# 294 DOWN - a third of an em. Rendered at 28 pt the dots of teh marbuta sit
-# above the letter before it, and the word reads as a different word. That is
-# a wrong line that looks like a right one, so the caller is told rather than
-# served.
-#
-# A face that carries whole letters - DejaVu Sans, measured - produces no mark
-# glyph here and needs none of this.
-proc ::tclpdf::forms::marks {prepared run} {
-  set filter [dict get $prepared markFilter]
-  if {$filter eq {}} {
-    return 0
-  }
-  foreach entry $run {
-    if {[::tclpdf::gdef ignored $filter [lindex $entry 0]]} {
-      return 1
-    }
-  }
-  return 0
+  # STAGES ALONE. This used to carry a mark filter beside them, so that a
+  # caller could ask afterwards whether the shaping had produced glyphs the
+  # face means to PLACE rather than to advance - the undotted skeleton and the
+  # separate dot that ccmp makes of a beh in NotoNaskhArabic-Variable. That
+  # question decided a refusal, because a dot the package could not place
+  # landed at the pen position instead of at its anchor. markPos.tcl places it
+  # now, font.tcl no longer refuses such a face, and the filter went with the
+  # question: it had no other reader.
+  return [dict create stages $stages]
 }
 
 # Substitute the contextual forms into a glyph run.
@@ -206,4 +179,4 @@ proc ::tclpdf::forms::apply {prepared run} {
   return $result
 }
 
-package provide tclpdf::forms 1.0
+package provide tclpdf::forms 1.1

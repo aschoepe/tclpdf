@@ -14,7 +14,7 @@ $doc font embed bodyBold $ttfBold
 $doc font -family body -size 10 -color black
 ```
 
-The drawing does not change; a second, invisible layer says what the marks **are**. `text` becomes a `P`, `table` a `Table` with `TR`/`TH`/`TD` (fills and rules artifacts), `image`/`svg`/`form place` a `Figure` with `-alt` or an artifact without. `structure` is for the grouping a writer cannot infer.
+The drawing does not change; a second, invisible tree beside it says what the marks **are** (nothing to do with `layer`, which is optional content - `07-patterns-forms.md`). `text` becomes a `P`, `table` a `Table` with `TR`/`TH`/`TD` (fills and rules artifacts), `image`/`svg`/`form place` a `Figure` with `-alt` or an artifact without. `structure` is for the grouping a writer cannot infer.
 
 ## Headings, sections, what a text is
 

@@ -10,6 +10,17 @@
 # rounded box with a rule through it. No outline format can do that, and no
 # font editor is needed to make one.
 #
+# A drawn font never stands alone. It is there for the characters a real face
+# has NOT got - a mark, a symbol, a box, a logo - so the words around it come
+# out of an embedded face, and this page is set that way: DejaVu Sans for the
+# text, three drawn glyphs among it. That combination is where the trap sat.
+# Every font of a document lives in one list, whatever kind it is, and each
+# module writes its own entries out of that list at write time; the font module
+# used to walk past a drawn entry, take it for a font file and die on a key
+# that a drawn font has not got - "key \"parsed\" not known in dictionary", at
+# [write], from six levels down. A document with only a drawn font in it never
+# met that, which is why this example did not either until it embedded a face.
+#
 # What it buys, on this page: a checklist whose boxes are TEXT. They sit on the
 # baseline, they take the font size, they are measured by [textWidth], they
 # break with the line, and they are copied and searched as the characters they
@@ -48,11 +59,17 @@ package require tclpdf::type3
 source [file join $here common.tcl]
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "02.11-type3.pdf"}]
+set assets [file join $here assets]
 
 set doc [tclpdf new -unit mm]
 $doc info Title "A font whose glyphs are drawn"
 $doc info Author "tclpdf example 2.11"
 $doc page add
+
+# The face the words are set in. It has nothing to do with the drawn font and
+# everything to do with what a drawn font is FOR: the two stand side by side in
+# one document, one list of fonts, and both are written out of it.
+$doc font embed body [file join $assets fonts DejaVuSans.ttf]
 
 set y 20
 exampleHeading $doc y "A font whose glyphs are drawn"
@@ -60,6 +77,10 @@ examplePara $doc y "The three marks in the list below are not letters of any\
     face. They are a Type 3 font: each glyph is a little content stream in this\
     file, drawn with the same calls that draw the page. They set as text,\
     measure as text and extract as text."
+examplePara $doc y "Every word on this page is set in an EMBEDDED face, DejaVu\
+    Sans, and the marks come from the drawn one. That is the ordinary way a\
+    Type 3 font is used - it exists for what the real face has not got - so the\
+    two kinds share one document, one font list and one write."
 
 # -- the font ---------------------------------------------------------------
 #
@@ -98,9 +119,9 @@ $doc font glyph ballot ☒ -width 900 -script {
 # -- the list ---------------------------------------------------------------
 #
 # The mark and the wording are ONE line of text, in two faces: the box comes
-# from the drawn font, the words from Helvetica. [textWidth] measures the mark
-# in the drawn font exactly as it measures a letter, so the wording starts at
-# the same distance behind every mark without a number in the script.
+# from the drawn font, the words from the embedded one. [textWidth] measures
+# the mark in the drawn font exactly as it measures a letter, so the wording
+# starts at the same distance behind every mark without a number in the script.
 
 set rows {
   ☑ "Kern: pages, streams, graphics primitives, the standard faces"
@@ -116,13 +137,13 @@ foreach {mark wording} $rows {
   $doc font -family ballot -size 11 -color {0 0 0}
   $doc text $mark -at [list 20 $y]
   set gap [$doc textWidth $mark]
-  $doc font -family helvetica -style {} -size 11 -color {0.1 0.1 0.15}
+  $doc font -family body -size 11 -color {0.1 0.1 0.15}
   $doc text $wording -at [list [expr {20 + $gap + 2}] $y]
   set y [expr {$y + 7}]
 }
 
 set y [expr {$y + 4}]
-$doc font -family helvetica -style {} -size 11
+$doc font -family body -size 11
 examplePara $doc y "The same three glyphs at four sizes - a font, not a\
     drawing, so the size is the font size and nothing is scaled by hand:"
 
@@ -148,30 +169,58 @@ $doc text "☑" -at [list 40 [expr {$y + 6}]]
 $doc font -family ballot -size 14 -color {0.75 0.35 0.15}
 $doc text "☑" -at [list 50 [expr {$y + 6}]]
 set y [expr {$y + 14}]
-$doc font -family helvetica -style {} -size 9 -color {0.45 0.45 0.5}
+$doc font -family body -size 9 -color {0.45 0.45 0.5}
 $doc text "blue, orange, blue, orange - the tick keeps its green either way" \
     -at [list 20 $y]
+set y [expr {$y + 12}]
+
+# -- both kinds in one line -------------------------------------------------
+#
+# A sentence that changes face in the middle of itself: the words out of the
+# font file, the mark out of this document. Nothing here knows which is which -
+# both are [text], both are measured with [textWidth], and the pen moves on by
+# what was measured either way.
+
+$doc font -family body -size 11 -color {0.1 0.1 0.15}
+set x 20
+foreach {face piece} {
+  body "Signed off "  ballot "☑"  body " on the day, "
+  body "still open "  ballot "☐"  body " on the next."
+} {
+  $doc font -family $face -size 11
+  $doc text $piece -at [list $x $y]
+  set x [expr {$x + [$doc textWidth $piece]}]
+}
+set y [expr {$y + 5}]
+$doc font -family body -size 9 -color {0.45 0.45 0.5}
+$doc text "one line, two fonts, two kinds of font - and one write that has to\
+    tell them apart" -at [list 20 $y]
 set y [expr {$y + 10}]
 
 # -- check it yourself ------------------------------------------------------
 
-$doc font -family helvetica -style {} -size 10 -color {0 0 0}
+$doc font -family body -size 10 -color {0 0 0}
 exampleHeading $doc y "Check it yourself"
 examplePara $doc y "The first command shows the font dictionary: no font file\
     anywhere, a /CharProcs entry per glyph, and a /Widths array in glyph units\
     rather than in thousandths of the em. The second prints one of those glyph\
     streams - the d0 or d1 line first, then ordinary drawing operators. The\
     third is the one that matters for a reader: the marks come back out as the\
-    characters they stand for, which is what /ToUnicode is written for."
+    characters they stand for, which is what /ToUnicode is written for. The\
+    last one is the point of this page as a test: two fonts, of two kinds, in\
+    one file - a Type 3 without a font program and a subset of DejaVu Sans\
+    with one."
 exampleCommandBlock $doc y [list \
     "qpdf --qdf --object-streams=disable [file tail $target] - | grep -A12 Type3" \
     "qpdf --qdf --object-streams=disable [file tail $target] - | grep -B2 -A8 ' d0'" \
     "pdftotext [file tail $target] - | head -12" \
     "pdffonts [file tail $target]"]
 
-# The footer asks the document for its fonts, and it has to set its own line -
-# the drawn font has three glyphs and no letters.
-exampleFooter $doc helvetica
+# The footer asks the document for its fonts and now names both of them - the
+# embedded face by its family, the drawn one by its alias, because a Type 3
+# font has no file to read a family out of. It has to set its own line: the
+# drawn font has three glyphs and no letters.
+exampleFooter $doc body
 
 $doc write $target
 puts "  written: $target ([file size $target] bytes)"

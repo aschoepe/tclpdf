@@ -36,6 +36,16 @@ testConstraint haveLatin [file exists $latinFace]
 # with the examples.
 testConstraint haveHebrew [file exists $latinFace]
 
+# A supplementary-plane character is one character to Tcl 9 and a replacement
+# character to Tcl 8.6's \U escape - measured: "\U0001E900" scans as U+FFFD
+# in 8.6. Decoded from its UTF-8 bytes it is the right character in both, so
+# that is how the tests below spell such a character.
+proc smp {code} {
+  return [encoding convertfrom utf-8 [binary format cccc \
+      [expr {0xF0 | ($code >> 18)}] [expr {0x80 | (($code >> 12) & 0x3F)}] \
+      [expr {0x80 | (($code >> 6) & 0x3F)}] [expr {0x80 | ($code & 0x3F)}]]]
+}
+
 test shaping-1.1 {a script that needs shaping is found, with its position} -body {
   # The position counts characters from zero, exactly as the missing-glyph
   # message does - two messages about the same string should point at it the
@@ -88,11 +98,11 @@ test shaping-1.4 {the scripts that must be refused, and why} -body {
 } -result {Arabic Arabic Hebrew Hebrew Syriac Syriac Thaana Thaana Devanagari Devanagari Bengali Bengali Tamil Tamil Thai Thai Lao Lao Myanmar Myanmar Khmer Khmer}
 
 test shaping-1.6 {Tibetan marks are refused, Tibetan letters are not} -body {
-  # Measured 2026-08-17 on Noto Serif Tibetan: a vowel sign or a subjoined
-  # letter is a combining mark that GPOS would place over or under its base;
-  # set as a glyph in sequence it lands beside the NEXT letter - the o of
-  # "bod" over the d, the ka under the d of "skad". So the marks are cut out
-  # of the block like the Hebrew nikud, and the letters stay.
+  # Mark attachment did NOT lift this one, and the reason is measured rather
+  # than assumed - see shaping-8.1 to shaping-8.4 below, which are the four
+  # halves of it. In short: HarfBuzz sets a Tibetan stack by SUBSTITUTING one
+  # precomposed glyph for the letter and the mark (GSUB abvs, blws), and no
+  # anchor can produce a glyph the cmap does not lead to.
   set found {}
   foreach {name text} [list \
       letters "ཀཁག" tsheg "བོད" subjoined "བཀྲ" digits "༡༢༣" halanta "ཀ྄"] {
@@ -100,7 +110,7 @@ test shaping-1.6 {Tibetan marks are refused, Tibetan letters are not} -body {
     lappend found $name [expr {[llength $finding] ? "[lindex $finding 2]/[lindex $finding 3]" : "-"}]
   }
   set found
-} -result {letters - tsheg {Tibetan/mark placement} subjoined {Tibetan/mark placement} digits - halanta {Tibetan/mark placement}}
+} -result {letters - tsheg {Tibetan/stacked forms out of GSUB} subjoined {Tibetan/stacked forms out of GSUB} digits - halanta {Tibetan/stacked forms out of GSUB}}
 
 test shaping-1.5 {the presentation forms are caught as well} -body {
   # Someone who has already shaped their text by hand into the Arabic
@@ -174,7 +184,7 @@ test shaping-2.6 {a Tibetan vowel sign is refused with the face in hand, and -un
   set code [catch {$doc text "བོད" -at {20 20} -family tib} message]
   set forced [catch {$doc text "བོད" -at {20 30} -family tib -unshaped 1}]
   $doc destroy
-  list $code [regexp {Tibetan} $message] [regexp {mark placement} $message] $forced
+  list $code [regexp {Tibetan} $message] [regexp {stacked forms} $message] $forced
 } -result {1 1 1 0}
 
 test shaping-3.1 {a finding says which of the two things is missing} -body {
@@ -186,9 +196,13 @@ test shaping-3.1 {a finding says which of the two things is missing} -body {
   # The nikud is asked for under rtl: under ltr the LETTER in front of it is
   # already a finding, and the first offender is what comes back.
   set nikud [::tclpdf::shaping needed "בָ" rtl]
+  # A Kharoshthi vowel sign in the place the nikud used to hold: still a
+  # finding of kind "shaping", because such a mark has to be REORDERED before
+  # it can be placed, and reordering is what this package does not have.
+  set kharoshthi [::tclpdf::shaping needed "[smp 0x10A10][smp 0x10A01]" rtl]
   list [lindex $hebrew 4] [lindex $arabic 4] [lindex $nikud 4] \
-      [lindex $nikud 3] [lindex $nikud 0]
-} -result {ordering forms shaping {mark placement} 1}
+      [lindex $kharoshthi 4] [lindex $kharoshthi 3] [lindex $kharoshthi 0]
+} -result {ordering forms {} shaping {mark reordering} 1}
 
 test shaping-3.2 {under rtl only the ordering findings fall away} -body {
   # And the walk CONTINUES past them: a Hebrew line with one Arabic word in
@@ -205,11 +219,11 @@ test shaping-3.3 {the message names the way out that exists} -body {
   # isolated-glyph escape hatch when one option would set the line correctly.
   set ordering [::tclpdf::shaping message [::tclpdf::shaping needed "א"]]
   set cursive [::tclpdf::shaping message [::tclpdf::shaping needed "ب"]]
-  # A mark is the case where -unshaped 1 IS the only way past, and it has to
-  # keep saying so. Asked with forms 1, which is what the caller passes once
-  # the face has said it can shape - without it the walk stops on the LETTER
-  # and never reaches the vowel sign.
-  set mark [::tclpdf::shaping message [::tclpdf::shaping needed "بَ" rtl 1]]
+  # A mark that has to be reordered is the case where -unshaped 1 IS the only
+  # way past, and it has to keep saying so. The Arabic fatha used to stand
+  # here and no longer can: mark attachment places it, so the line is set.
+  set mark [::tclpdf::shaping message \
+      [::tclpdf::shaping needed "[smp 0x10A10][smp 0x10A01]" rtl]]
   list [string match {*-direction rtl*} $ordering] \
       [string match {*-unshaped*} $ordering] \
       [string match {*-direction rtl*} $cursive] \
@@ -234,19 +248,21 @@ test shaping-4.1 {Hebrew is refused until the direction is given} \
       $measured $measuredRtl [regexp {Tj|TJ} $content]
 } -result {1 1 0 1 0 1}
 
-test shaping-4.2 {nikud stays refused, direction or not} -constraints haveHebrew -body {
-  # The points are combining marks and this package does not place marks, so
-  # -direction rtl would produce a line whose vowels sit beside their letters.
-  # Refusing it is the same rule as everywhere else here.
-  set doc [tclpdf new -unit mm]
+test shaping-4.2 {nikud are set with their letters, not refused} -constraints haveHebrew -body {
+  # This used to be a refusal: the points are combining marks, and a mark the
+  # package could not place landed beside its letter instead of under it.
+  # markPos.tcl places them, so the whole word goes through - and what has to
+  # be checked is not that nothing threw but that something MOVED. The
+  # offsets ride in TJ arrays beside the glyphs; markPos-9.x pins the numbers.
+  set doc [tclpdf new -unit mm -compress 0]
   $doc page add
   $doc font embed heb $::latinFace
   set code [catch {$doc text "שָׁלוֹם" -at {20 20} -family heb -direction rtl} message]
-  set open [catch {$doc text "שָׁלוֹם" -at {20 30} -family heb -unshaped 1}]
+  set measured [catch {$doc textWidth "שָׁלוֹם" -family heb -direction rtl}]
+  set content [::tclpdfTest::content $doc]
   $doc destroy
-  list $code [string match {*mark placement*} $message] \
-      [string match {*-unshaped 1*} $message] $open
-} -result {1 1 1 0}
+  list $code $message $measured [regexp {TJ} $content]
+} -result {0 {} 0 1}
 
 test shaping-4.3 {Arabic with the direction and a face that can set it} \
     -constraints haveHebrew -body {
@@ -263,24 +279,22 @@ test shaping-4.3 {Arabic with the direction and a face that can set it} \
   list $drawn $measured [regexp {Tj|TJ} $content]
 } -result {0 0 1}
 
-test shaping-4.4 {a face whose dots are separate glyphs is refused} \
+test shaping-4.4 {a face whose dots are separate glyphs is set, not refused} \
     -constraints haveArabic -body {
-  # Noto Naskh Arabic reaches its forms through ccmp, which writes a letter
-  # as a skeleton plus a dot glyph of its own - and that dot is placed by
-  # GPOS mark attachment, which this package does not read. Measured on this
-  # face, the two dots of teh marbuta belong 294 font units lower than where
-  # they would be drawn, which at 28 pt puts them over the letter in front.
-  # So the line is refused, and the message says what is in the way.
-  set doc [tclpdf new -unit mm]
+  # Noto Naskh Arabic reaches its forms through ccmp, which writes a letter as
+  # a skeleton plus a dot glyph of its own. That dot is placed by GPOS mark
+  # attachment, and until markPos.tcl existed the line was refused for it -
+  # measured on this face, the two dots of teh marbuta belong 294 font units
+  # lower than the pen leaves them, which at 28 pt puts them over the letter
+  # in front. Now they are placed and the line is set.
+  set doc [tclpdf new -unit mm -compress 0]
   $doc page add
   $doc font embed ar $::arabicFace
   set code [catch {$doc text "مرحبا" -at {190 20} -family ar -direction rtl} message]
-  set open [catch {$doc text "مرحبا" -at {190 30} -family ar -direction rtl \
-      -unshaped 1}]
+  set content [::tclpdfTest::content $doc]
   $doc destroy
-  list $code [string match {*mark glyphs*} $message] \
-      [string match {*-unshaped 1*} $message] $open
-} -result {1 1 1 0}
+  list $code $message [regexp {TJ} $content]
+} -result {0 {} 1}
 
 test shaping-4.5 {a face with no forms at all is refused differently} \
     -constraints haveTibetan -body {
@@ -296,19 +310,24 @@ test shaping-4.5 {a face with no forms at all is refused differently} \
   list $code [string match {*no contextual forms*} $message]
 } -result {1 1}
 
-test shaping-4.6 {Arabic with vowel signs stays refused} -constraints haveHebrew -body {
-  # The forms are only half of Arabic. A fatha is a combining mark, mark
-  # placement is GPOS, and this package does not read it - so a vowelled line
-  # is refused on the vowel even in a face that shapes. The walk has to get
-  # PAST the letters to find it, which is the second pass in font.tcl.
-  set doc [tclpdf new -unit mm]
+test shaping-4.6 {Arabic with vowel signs is set} \
+    -constraints {haveHebrew haveArabic} -body {
+  # The fatha used to be the second half of the Arabic refusal: the forms came
+  # out of the face and the vowel sign did not, so a vowelled line was refused
+  # on the vowel. Mark attachment places it and the refusal is gone.
+  #
+  # Asked of BOTH faces on purpose - DejaVu Sans writes whole letters, Noto
+  # Naskh writes skeletons plus separate dots, which are the two roads a face
+  # can take to the same word, and neither is refused any more.
+  set doc [tclpdf new -unit mm -compress 0]
   $doc page add
-  $doc font embed ar $::latinFace
-  set code [catch {$doc text "مَرحبا" -at {190 20} -family ar -direction rtl} message]
+  $doc font embed whole $::latinFace
+  $doc font embed split $::arabicFace
+  set a [catch {$doc text "مَرحبا" -at {190 20} -family whole -direction rtl} first]
+  set b [catch {$doc text "مَرحبا" -at {190 30} -family split -direction rtl} second]
   $doc destroy
-  list $code [string match {*U+064E*} $message] \
-      [string match {*mark placement*} $message]
-} -result {1 1 1}
+  list $a $first $b $second
+} -result {0 {} 0 {}}
 
 test shaping-2.6 {the standard fourteen are unaffected} -constraints haveLatin -body {
   # WinAnsi has none of these characters, so the standard faces could never
@@ -319,16 +338,6 @@ test shaping-2.6 {the standard fourteen are unaffected} -constraints haveLatin -
   $doc destroy
   set code
 } -result 0
-
-# A supplementary-plane character is one character to Tcl 9 and a replacement
-# character to Tcl 8.6's \U escape - measured: "\U0001E900" scans as U+FFFD
-# in 8.6. Decoded from its UTF-8 bytes it is the right character in both, so
-# that is how the tests below spell such a character.
-proc smp {code} {
-  return [encoding convertfrom utf-8 [binary format cccc \
-      [expr {0xF0 | ($code >> 18)}] [expr {0x80 | (($code >> 12) & 0x3F)}] \
-      [expr {0x80 | (($code >> 6) & 0x3F)}] [expr {0x80 | ($code & 0x3F)}]]]
-}
 
 test shaping-5.1 {the joining scripts the list used to miss are refused, in both directions} -body {
   # Measured 2026-08-18: U+0860, U+0872, U+1820 passed as needing nothing,
@@ -351,13 +360,16 @@ test shaping-5.1 {the joining scripts the list used to miss are refused, in both
       [::tclpdf::shaping message [::tclpdf::shaping needed "\u1820"]]]
 } -result {{SyriacSup/ltr Syriac/shaping SyriacSup/rtl Syriac/shaping ArabicExtB/ltr Arabic/forms ArabicExtB/rtl Arabic/forms Mongolian/ltr Mongolian/shaping Mongolian/rtl Mongolian/shaping PhagsPa/ltr Phags-pa/shaping PhagsPa/rtl Phags-pa/shaping} 1 0}
 
-test shaping-5.2 {an Arabic Extended-B mark is a mark, by joining type} -body {
-  # U+0898 is transparent in the joining table, so the cursive road turns it
-  # into a mark finding as it does for a fatha - the same rule reaching the
-  # new block through the same table.
-  lassign [::tclpdf::shaping needed "\u0872\u0898" rtl 1] position code system what kind
-  list $position [format %04X $code] $system $kind
-} -result {1 0898 Arabic shaping}
+test shaping-5.2 {an Arabic Extended-B mark is set like any other harakah} -body {
+  # U+0898 is transparent in the joining table, and the cursive road used to
+  # turn every transparent character into a mark finding. It no longer does:
+  # a mark on the cursive road is placed by markPos.tcl, so this block goes
+  # through with the rest of Arabic. What still turns a transparent character
+  # into a finding is the ORDERING road, and only for the four scripts of
+  # [reorderedMarks] - shaping-6.3 holds on to those.
+  list [::tclpdf::shaping needed "\u0872\u0898" rtl 1] \
+      [lindex [::tclpdf::shaping needed "\u0872\u0898" rtl] 4]
+} -result {{} forms}
 
 test shaping-5.3 {the cursive scripts of the supplementary planes are refused} -body {
   # Measured 2026-08-18: Adlam, Hanifi Rohingya, Sogdian and Manichaean
@@ -489,7 +501,7 @@ test shaping-6.3 {their combining marks stay refused under rtl, found by joining
     lappend found $name "$what/$kind"
   }
   set found
-} -result {KharoshthiVowel {mark placement/shaping} KharoshthiVirama {mark placement/shaping} GarayVowel {mark placement/shaping} YezidiMark {mark placement/shaping} MendeDigit {mark placement/shaping}}
+} -result {KharoshthiVowel {mark reordering/shaping} KharoshthiVirama {mark reordering/shaping} GarayVowel {mark reordering/shaping} YezidiMark {mark reordering/shaping} MendeDigit {mark reordering/shaping}}
 
 test shaping-6.4 {what sits beside them must not be caught} -body {
   # The tripwire for the too-wide direction. Old Italic and Gothic are
@@ -544,6 +556,157 @@ test shaping-6.5 {the one such block a bundled face carries, refused and then se
   $doc destroy
   list $refused [string match {*-direction rtl*} $message] $drawn \
       [expr {$glyphs eq $reversed}]
+} -result {1 1 0 1}
+
+# --- what mark attachment lifted, and what it did not ----------------------
+#
+# Every number below was measured against hb-shape of HarfBuzz 14.3.1 on
+# 2026-08-21. The refusals in this section fell together on one day, so they
+# are held together here: a later hand that widens the list again has to
+# argue with these, and the counter-tests beside them say where the line is.
+
+test shaping-7.1 {the marks that used to be cut out of their blocks are set} -body {
+  # Three blocks were cut in three - bases, marks, bases - because their marks
+  # needed a placement this package did not do. They are one line each again.
+  #
+  #   hb-shape DejaVuSans.ttf -u 05D0,05B7   [uni05B7=0@79,0+0|uni05D0=0+1369]
+  #
+  # Thaana and Samaritan have NO face here to measure that way - no font under
+  # ~/src or ~/Downloads carries either script, measured 2026-08-21 - so what
+  # is claimed for them is the mechanism, not a rendering: the same
+  # markPos.tcl reads the same GPOS lookups whatever the script, and the
+  # Hebrew, Arabic and Tibetan numbers are what say that it does.
+  set found {}
+  foreach {name text} [list \
+      nikud "אַ" varika "וﬞ" thaana "ހަ" samaritan "ࠀࠖ"] {
+    set finding [::tclpdf::shaping needed $text rtl]
+    lappend found $name [expr {[llength $finding] ? "refused [lindex $finding 3]" : "set"}]
+  }
+  set found
+} -result {nikud set varika set thaana set samaritan set}
+
+test shaping-7.2 {and they are still refused without the direction} -body {
+  # The bases always needed -direction rtl and still do. Dropping the mark
+  # refusal must not have dropped the ordering one with it: a nikud in a
+  # left-to-right line is a Hebrew character like any other.
+  set found {}
+  foreach {name text} [list nikud "אַ" thaana "ހަ" samaritan "ࠀࠖ"] {
+    lassign [::tclpdf::shaping needed $text] - - system what kind
+    lappend found $name "$system/$kind"
+  }
+  set found
+} -result {nikud Hebrew/ordering thaana Thaana/ordering samaritan Samaritan/ordering}
+
+test shaping-7.3 {a mark of a cursive block is no longer a finding} -body {
+  # The Arabic harakat are found by Joining_Type rather than by range, and
+  # that rule used to turn every one of them into a refusal. Now it applies
+  # to the ordering road alone. Asked with forms 1, which is what font.tcl
+  # passes once the face has said it can shape.
+  set found {}
+  foreach {name text} [list fatha "بَ" shadda "بّ" superAlef "بٰ" \
+      hamzaAbove "بٔ" smallHigh "بۘ" extendedA "بࣤ" ] {
+    set finding [::tclpdf::shaping needed $text rtl 1]
+    lappend found $name [expr {[llength $finding] ? "refused" : "set"}]
+  }
+  set found
+} -result {fatha set shadda set superAlef set hamzaAbove set smallHigh set extendedA set}
+
+test shaping-7.4 {the four ordering scripts whose marks stay refused, and only those} -body {
+  # The tripwire for the too-wide direction of THIS change. Kharoshthi feels
+  # exactly like Arabic - a right-to-left script whose vowel signs are a
+  # scatter of transparent characters - and it is not: nothing here reorders,
+  # and no face on this machine carries the script to measure it on. So its
+  # marks stay refused while the harakat pass, and the two must not drift
+  # together by accident.
+  set refused {}
+  set set_ {}
+  foreach {name code} [list Kharoshthi 0x10A01 Garay 0x10D69 Yezidi 0x10EAB \
+      MendeKikakui 0x1E8D0] {
+    lappend refused $name [expr {
+        [::tclpdf::shaping needed [smp $code] rtl] ne {} ? "refused" : "SET"}]
+  }
+  # Their LETTERS are unaffected, and so is every other ordering block: the
+  # refusal is on the mark, not on the script.
+  foreach {name code} [list Kharoshthi 0x10A10 Garay 0x10D40 Yezidi 0x10E80 \
+      MendeKikakui 0x1E800 Phoenician 0x10900 OldTurkic 0x10C00] {
+    lappend set_ $name [expr {
+        [::tclpdf::shaping needed [smp $code] rtl] eq {} ? "set" : "REFUSED"}]
+  }
+  list $refused $set_
+} -result {{Kharoshthi refused Garay refused Yezidi refused MendeKikakui refused} {Kharoshthi set Garay set Yezidi set MendeKikakui set Phoenician set OldTurkic set}}
+
+test shaping-8.1 {Tibetan: a single mark on a single letter would be right} \
+    -constraints haveTibetan -body {
+  # The half that DOES work, and the reason this refusal had to be measured
+  # rather than reasoned about. 160 of 160 letter-and-mark pairs of Noto Serif
+  # Tibetan agree with hb-shape to the font unit; the two below are the ones
+  # the earlier measurement named.
+  #
+  #   hb-shape NotoSerifTibetan-Variable.ttf -u 0F56,0F7C
+  #     -> [uni0F56=0+641|uni0F7C=0@-681,0+0]
+  #   hb-shape NotoSerifTibetan-Variable.ttf -u 0F40,0F72
+  #     -> [uni0F40=0+704|uni0F72=0@-614,0+0]
+  package require tclpdf::sfnt
+  package require tclpdf::markPos
+  set parsed [::tclpdf::sfnt read $::tibetanFace]
+  set state [::tclpdf::markPos build $parsed]
+  set found {}
+  foreach {base mark} {0x0F56 0x0F7C 0x0F40 0x0F72} {
+    set glyphs [list [dict get [dict get $parsed cmap] [expr {$base}]] \
+        [dict get [dict get $parsed cmap] [expr {$mark}]]]
+    lappend found [lindex [::tclpdf::markPos offsets $state $glyphs] 1]
+  }
+  set found
+} -result {{-681 0} {-614 0}}
+
+test shaping-8.2 {Tibetan: the subjoined letters are a SUBSTITUTION, not a placement} \
+    -constraints haveTibetan -body {
+  # And that is why the refusal stays. HarfBuzz sets "skad" as TWO glyphs -
+  # the sa and one precomposed stack for ka-plus-da - where the cmap plus mark
+  # attachment gives three. No anchor can produce a glyph the cmap does not
+  # lead to, so this is GSUB (abvs, blws) and out of reach.
+  #
+  #   hb-shape NotoSerifTibetan-Variable.ttf -u 0F66,0F90        -> [1088=0+909]
+  #   hb-shape NotoSerifTibetan-Variable.ttf -u 0F66,0F90,0F51   -> [1088=0+909|22=0+717]
+  package require tclpdf::sfnt
+  set parsed [::tclpdf::sfnt read $::tibetanFace]
+  set glyphs {}
+  foreach code {0x0F66 0x0F90} {
+    lappend glyphs [dict get [dict get $parsed cmap] [expr {$code}]]
+  }
+  # Two glyphs out of the cmap where HarfBuzz has one, and the one it has is
+  # neither of them.
+  list [llength $glyphs] [expr {1088 in $glyphs}]
+} -result {2 0}
+
+test shaping-8.3 {Tibetan: so every mark of the block stays in the list} -body {
+  # Cut by hand rather than by Joining_Type, because Tibetan is not a joining
+  # script and the table has nothing to say about it. The ranges are the
+  # marks; the letters, the tsheg and the digits between them are not in the
+  # list at all - shaping-1.3 and shaping-1.6 hold on to that from the other
+  # side.
+  set found {}
+  foreach code {0x0F18 0x0F35 0x0F3E 0x0F71 0x0F72 0x0F7C 0x0F84 0x0F86 \
+      0x0F90 0x0FB2 0x0FBC 0x0FC6} {
+    lassign [::tclpdf::shaping needed [format %c $code]] - - system what kind
+    lappend found [format %04X $code] $kind
+  }
+  set found
+} -result {0F18 shaping 0F35 shaping 0F3E shaping 0F71 shaping 0F72 shaping 0F7C shaping 0F84 shaping 0F86 shaping 0F90 shaping 0FB2 shaping 0FBC shaping 0FC6 shaping}
+
+test shaping-8.4 {Tibetan: and the message names the substitution, not the placement} \
+    -constraints haveTibetan -body {
+  # Naming the wrong obstacle sends the reader looking in the wrong place.
+  # It used to say "mark placement", which is now done and would have them
+  # hunting a bug that is not there.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed tib $::tibetanFace
+  set code [catch {$doc text "བོད" -at {20 20} -family tib} message]
+  $doc destroy
+  list $code [string match {*stacked forms out of GSUB*} $message] \
+      [string match {*mark placement*} $message] \
+      [string match {*-unshaped 1*} $message]
 } -result {1 1 0 1}
 
 cleanupTests

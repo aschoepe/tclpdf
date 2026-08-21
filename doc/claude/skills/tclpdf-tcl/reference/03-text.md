@@ -55,6 +55,61 @@ puts "lines:  [llength [$doc textLines $body -width 80]]"
 
 Where a line breaks: at ASCII white space, U+2000..U+200A, U+3000, U+200B (zero width space, drawn by every face) and the rest of UAX #14's BA class; **never** at U+00A0, U+2007, U+202F. A tab or a stray CR is set as a space. U+FEFF is dropped. Extracting a line that took a soft-hyphen offer yields the hyphen too.
 
+## Hyphenation: the patterns come from the caller
+
+```tcl
+package require tclpdf::hyphenate      ;# a package command, so it is required here
+
+# tclpdf ships NO pattern files, and that is a licence decision: every
+# published set carries terms of its own (LGPL, LPPL, BSD-style) and this
+# package is MIT. The caller loads the file from wherever the machine keeps
+# it - /usr/share/hyphen/ on most Linux systems, a LibreOffice dictionary
+# extension on macOS and Windows - and the licence stays with the file.
+# $hyphenPatterns is a libhyphen .dic; assets.tcl says where it points.
+if {[info exists hyphenPatterns] && [file exists $hyphenPatterns]} {
+    # -left/-right are how many letters must stay on either side of a break.
+    # PASS -left 2 -right 2 FOR GERMAN: the file states neither, and the TeX
+    # default of 3 on the right refuses the two-letter endings German breaks
+    # off every day. -exceptions are written with - at the breaks and are
+    # looked up before the patterns.
+    ::tclpdf::hyphenate load de $hyphenPatterns -left 2 -right 2 \
+        -exceptions {Wachs-tu-be Ur-in-stinkt}
+    puts "loaded: [::tclpdf::hyphenate languages]"
+    puts [::tclpdf::hyphenate languages de]        ;# tag patterns exceptions left right min
+
+    # Where a word may break, as the pieces it falls into - for checking a
+    # pattern file, and the same answer the line breaker uses. A word that may
+    # not be broken comes back whole, which is also the answer for "no break
+    # was found": neither is a failure.
+    puts "word:      [::tclpdf::hyphenate word de Silbentrennung]"
+    puts "exception: [::tclpdf::hyphenate word de Wachstube]"
+    puts "left as it is: [::tclpdf::hyphenate word de www.example.org]"
+
+    # -hyphenate 1 uses the language the DOCUMENT declares - so declare it.
+    # Anything that is not the literal 0 or 1 is a language tag: "de-AT", and
+    # "no" is Norwegian rather than a false value.
+    $doc language de
+    set german "Die Silbentrennung eines Flie\u00dftextes in einer schmalen Spalte ist der\
+        Unterschied zwischen einer Absatzgestaltung und einem Flickenteppich aus\
+        Wortzwischenr\u00e4umen."
+    $doc font -family body -size 9
+    $doc text $german -at {110 200} -width 38 -align justify -anchor top
+    $doc text $german -at {152 200} -width 38 -align justify -anchor top -hyphenate 1
+    puts "without: [llength [$doc textLines $german -width 38]] lines,\
+        with: [llength [$doc textLines $german -width 38 -hyphenate 1]] lines"
+
+    # A language that is not loaded is REFUSED by name, rather than set
+    # unhyphenated in silence.
+    if {[catch {$doc textLines $german -width 38 -hyphenate fr} message]} {
+        puts "not loaded: $message"
+    }
+} else {
+    puts "no pattern file here - point \$hyphenPatterns at one in assets.tcl"
+}
+```
+
+What hyphenation buys is the word spaces of a narrow justified column, not usually a line. Soft hyphens the text already carries **win outright** over the patterns - it is one source or the other, never both. The hyphen that appears at a break is a real U+002D; in a tagged document it sits in a `Span` with an empty `ActualText`, so extracting the line gives the word back whole. `-hyphenate` is taken by `textLines` and `textHeight` as well, so a block is measured the way it will be set.
+
 ## Flowing around shapes
 
 ```tcl

@@ -39,6 +39,78 @@ $doc image place fromBytes -at {50 70} -width 25
 
 An ICC profile inside the file (JPEG APP2, PNG iCCP) becomes the picture's `/ICCBased` space, shared with `icc embed` and the output intent - `-icc 0` embeds the picture without it. A progressive JPEG and an interlaced PNG are refused with the reason - re-save. `-alt`/`-artifact` matter in tagged documents (see `09-tagged-ua.md`); in an untagged one they change nothing.
 
+## A picture as a stencil, and a picture as a mask
+
+```tcl
+# Scaffolding, not tclpdf: a minimal PNG writer, so this page needs no asset
+# of its own. A stencil has to be ONE BIT per sample, and a soft mask has to
+# be greyscale without alpha and without an ICC profile - two files most
+# picture collections do not happen to carry.
+proc refPngChunk {type data} {
+    return [binary format I [string length $data]]$type$data[binary format I [zlib crc32 $type$data]]
+}
+proc refPng {path depth colour width height rows} {
+    set png "\x89PNG\r\n\x1a\n"
+    append png [refPngChunk IHDR [binary format IIccccc $width $height $depth $colour 0 0 0]]
+    append png [refPngChunk IDAT [zlib compress [join $rows ""] 9]]
+    append png [refPngChunk IEND ""]
+    set channel [open $path wb]
+    puts -nonewline $channel $png
+    close $channel
+}
+
+# A ring, 32 x 32, one bit per sample: 0 is black and is the ink.
+set rows {}
+for {set y 0} {$y < 32} {incr y} {
+    set bits ""
+    for {set x 0} {$x < 32} {incr x} {
+        set d [expr {hypot($x - 15.5, $y - 15.5)}]
+        append bits [expr {($d < 15 && $d > 9) ? 0 : 1}]
+    }
+    lappend rows \x00[binary format B32 $bits]
+}
+refPng [file join $out ref-05-ring.png] 1 0 32 32 $rows
+
+# A vignette, 64 x 64, eight bits per sample, greyscale: white in the middle,
+# black at the edge - coverage, not colour.
+set rows {}
+for {set y 0} {$y < 64} {incr y} {
+    set line ""
+    for {set x 0} {$x < 64} {incr x} {
+        set d [expr {hypot($x - 31.5, $y - 31.5) / 31.5}]
+        append line [binary format c [expr {int(255 * (1.0 - min(1.0, $d)))}]]
+    }
+    lappend rows \x00$line
+}
+refPng [file join $out ref-05-vignette.png] 8 0 64 64 $rows
+
+# -stencil 1: the picture has no colour of its own (ImageMask true, and then
+# Table 87 forbids it a ColorSpace at all). Every placement paints the FILL
+# COLOUR then in force through the bits of the file - one embedding, one
+# object, any number of placements in any number of colours.
+$doc image embed ring [file join $out ref-05-ring.png] -stencil 1
+$doc image embed hole [file join $out ref-05-ring.png] -stencil 1 -invert 1   ;# the other bit is the ink
+$doc style -fill crimson
+$doc image place ring -at {20 205} -size {20 20}
+$doc style -fill {0.15 0.30 0.55}
+$doc image place ring -at {45 205} -size {20 20}
+$doc image place hole -at {70 205} -size {20 20}
+$doc style -fill black
+
+# -mask names a SECOND embedded picture as this one's mask. What it becomes
+# depends on what that picture is: a -stencil is all-or-nothing and becomes
+# /Mask (the base shows or it does not), anything else is coverage and becomes
+# /SMask (the base FADES). The mask is embedded first, gets an object of its
+# own and no page resource, and two pictures may share one.
+$doc image embed fade [file join $out ref-05-vignette.png]
+$doc image embed faded $jpeg -mask fade -interpolate 1     ;# -interpolate: a hint, nothing more
+$doc image place photo -at {100 205} -width 40
+$doc image place faded -at {145 205} -width 40
+puts [$doc image info ring]        ;# ... stencil 1 mask {} interpolate 0 bitDepth 1 ...
+```
+
+The two need not be the same size - every image is defined on the unit square, so their edges coincide on the page. Refused, each naming the reason: a JPEG as a stencil (`DCTDecode` always delivers 8 bits), a PNG that is not one bit per sample and one sample per pixel, a mask that is not greyscale or that carries an ICC profile (`-icc 0` is the way out) or transparency of its own, a picture that already brings its own alpha channel asked to wear a second mask, and a stencil asked to wear one at all. Under `pdfa` a stencil passes under **every** output intent: it brings no colour space to be judged - what is judged is the fill colour it lets through.
+
 ## SVG: real vectors, not a picture
 
 ```tcl

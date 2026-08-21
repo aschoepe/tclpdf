@@ -107,6 +107,15 @@ fi
 # in .fossil-settings/ignore-glob so that neither a commit nor an archive picks
 # them up. Do not remove either one.
 #
+# examples/assets/languages holds hyphenation patterns, and it is the licence
+# case in its third shape: not restricted like the Adobe fonts and not huge like
+# the jar, but simply NOT MIT. hyph_de_DE.dic is LGPL over LPPL, hyph_en_US.dic
+# BSD-style over the plain TeX table, and the fifty other files of that
+# repository carry a third set of terms each. That is exactly why tclpdf ships
+# no patterns and makes the caller load them; putting the test data into the
+# tarball would undo the decision. The tests SKIP and the example says so on
+# its page when the directory is empty, which is what a fresh checkout has.
+#
 # tools/Mustang-CLI-*.jar is the same shape of problem in the smaller: the
 # ZUGFeRD validator "make check" runs is a SEPARATE PROJECT under Apache 2.0
 # and a 59 MB jar that whoever wants that check downloads themselves. It is
@@ -127,6 +136,7 @@ tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude="${PACKAGE_NAME}/examples/out" \
     --exclude="${PACKAGE_NAME}/examples/tmp" \
     --exclude="${PACKAGE_NAME}/examples/assets/fonts/adobe-standard-14" \
+    --exclude="${PACKAGE_NAME}/examples/assets/languages" \
     --exclude="${PACKAGE_NAME}/docs" \
     --exclude="${PACKAGE_NAME}/.fslckout" \
     --exclude="${PACKAGE_NAME}/.fossil-settings" \

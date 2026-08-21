@@ -44,6 +44,9 @@ if {![info exists out]} { puts stderr "assets file sets no \$out"; exit 2 }
 # tree. Keeps "the code" and "what it produced" apart at a glance.
 set scripts [file dirname [file normalize $out]]
 file mkdir $out $scripts
+# $hyphenPatterns is deliberately NOT in this list: the package ships no
+# hyphenation patterns (licence), so the file may well not be there, and
+# 03-text.md checks for it and says so instead of failing.
 foreach name {ttf ttfBold otf type1 variable jpeg png svgFile iccRgb iccCmyk invoiceXml orderXml} {
     if {[info exists $name] && ![file exists [set $name]]} {
         puts stderr "asset \$$name does not exist: [set $name]"

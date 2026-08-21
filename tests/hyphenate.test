@@ -1,0 +1,584 @@
+# hyphenate.test --
+#
+# Liang hyphenation: the patterns, the guards that keep it from setting
+# "A-bend", and the line breaker taking the offers it computes.
+#
+# WHERE THE EXPECTED VALUES COME FROM. Not from running this code and writing
+# down what it said - that pins a bug as firmly as a feature. Two independent
+# sources were used and both are named at the test that rests on them:
+#
+#   * the dictionaries. Duden for German, Merriam-Webster for English. Where a
+#     pattern file disagrees with the dictionary the test says so and pins the
+#     FILE, because the file is what was loaded - see hyphenate-3.4.
+#   * pyphen 0.18.1, a Python implementation of the same libhyphen format with
+#     its own copy of the dictionaries, run over every word below on
+#     2026-08-21. It agreed on all of them but one, and that one is recorded at
+#     hyphenate-2.6: pyphen runs libhyphen's compound level as well, and on
+#     "Urinstinkt" that level is WRONG where the plain Liang table is right.
+#
+# THE PATTERNS ARE NOT PART OF THIS PACKAGE and are not in the repository.
+# Every test that needs one carries a constraint and SKIPS without it, the way
+# "make check" skips a validator that is not installed. See
+# examples/assets/languages/README for where the files come from and under
+# which licences.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::text
+package require tclpdf::textBlock
+package require tclpdf::hyphenate
+source [file join [file dirname [info script]] helper.tcl]
+
+set hyphenAssets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets languages]
+set hyphenGerman [file join $hyphenAssets hyph_de_DE.dic]
+set hyphenEnglish [file join $hyphenAssets hyph_en_US.dic]
+testConstraint haveGermanPatterns [file exists $hyphenGerman]
+testConstraint haveEnglishPatterns [file exists $hyphenEnglish]
+
+# hyph_de_DE.dic states COMPOUNDLEFTHYPHENMIN and COMPOUNDRIGHTHYPHENMIN but
+# neither LEFTHYPHENMIN nor RIGHTHYPHENMIN, so German is loaded with 2 and 2
+# here. Without them the module falls back to the plain TeX 2 and 3, and a
+# right minimum of 3 refuses the two letter endings German breaks off every
+# day. hyph_en_US.dic states both and is loaded as it stands - which is half
+# the point of reading the minima out of the file at all.
+if {[file exists $hyphenGerman]} {
+  ::tclpdf::hyphenate load de-DE $hyphenGerman -left 2 -right 2
+}
+if {[file exists $hyphenEnglish]} {
+  ::tclpdf::hyphenate load en-US $hyphenEnglish
+}
+
+# [$doc text] keeps its own copy of the block option list (text.tcl), so
+# -hyphenate reaches a DRAWN paragraph only once that copy carries it too.
+# Measured rather than assumed, so that the tests below say SKIP instead of
+# failing on a build where the two lists have not been brought into step.
+proc hyphenBlockOption {} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set answer [expr {![catch {
+    $doc text "Wort" -at {20 20} -width 50 -hyphenate 0
+  }]}]
+  $doc destroy
+  return $answer
+}
+testConstraint haveBlockHyphenate [hyphenBlockOption]
+
+# The word with its breaks made visible, which is how a dictionary prints one.
+proc hyphenShow {language string} {
+  return [join [::tclpdf::hyphenate word $language $string] -]
+}
+
+proc hyphenDoc {{arguments {}}} {
+  set doc [tclpdf new -unit mm {*}$arguments]
+  $doc page add
+  $doc font -family helvetica -size 10
+  return $doc
+}
+
+# One German paragraph, used by every block test below. Plain ASCII on
+# purpose: what is being measured is where the lines break, and an umlaut in a
+# standard face would only add a second thing that can go wrong.
+set hyphenParagraph "Die Silbentrennung ist eine Verbesserung fuer jede\
+    schmale Spalte, weil ein zu langes Wort sonst zeichenweise umbricht oder\
+    eine Zeile halb leer laesst."
+
+# --- 1. what a load produces -------------------------------------------------
+
+test hyphenate-1.1 {a loaded language is listed under the tag it was given} \
+    -constraints {haveGermanPatterns haveEnglishPatterns} -body {
+  lsort [::tclpdf::hyphenate languages]
+} -result {de-DE en-US}
+
+test hyphenate-1.2 {the German file states no minima, so the load call sets them} \
+    -constraints haveGermanPatterns -body {
+  # 8718 patterns is the LAST table of the file - dehyphn.tex - and not the
+  # 69133 compound entries in front of NEXTLEVEL. Counted by the module,
+  # cross-checked against "grep -c" over the file below the NEXTLEVEL line.
+  ::tclpdf::hyphenate languages de-DE
+} -result {tag de-DE patterns 8718 exceptions 0 left 2 right 2 min 5}
+
+test hyphenate-1.3 {the English file states its own minima and they are used} \
+    -constraints haveEnglishPatterns -body {
+  # LEFTHYPHENMIN 2 and RIGHTHYPHENMIN 3 stand in lines 2 and 3 of
+  # hyph_en_US.dic. Nothing in the load call says so.
+  ::tclpdf::hyphenate languages en-US
+} -result {tag en-US patterns 11125 exceptions 0 left 2 right 3 min 5}
+
+test hyphenate-1.4 {a tag resolves by primary subtag} \
+    -constraints haveGermanPatterns -body {
+  # A document set in de-AT or plain de is hyphenated by the de-DE patterns:
+  # the tables of a language differ far less between its regions than they do
+  # between languages, and refusing here would mean loading the same file
+  # under four names.
+  list [hyphenShow de Silbentrennung] [hyphenShow de-AT Silbentrennung] \
+      [hyphenShow DE-ch Silbentrennung]
+} -result {Sil-ben-tren-nung Sil-ben-tren-nung Sil-ben-tren-nung}
+
+test hyphenate-1.5 {a language nobody loaded is refused by name} -body {
+  set code [catch {::tclpdf::hyphenate word fr-FR bibliotheque} message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*fr-FR*} $message]
+} -result {1 {TCLPDF HYPHENATE LANGUAGE fr-FR} 1}
+
+test hyphenate-1.6 {a file that is not a pattern file is refused at the load} -body {
+  # The first line of a .dic is an encoding name. A file whose first line is
+  # something else either names an encoding Tcl has never heard of - refused
+  # here - or, worse, names one by accident and turns every line after it into
+  # a pattern. The second refusal below is the one that catches that.
+  set path [file join [temporaryDirectory] hyphen-notadic.txt]
+  set channel [open $path w]
+  puts $channel "Klingon"
+  puts $channel "some prose that is not a pattern"
+  close $channel
+  set firstCode [catch {::tclpdf::hyphenate load xx $path} first]
+  set path2 [file join [temporaryDirectory] hyphen-empty.dic]
+  set channel [open $path2 w]
+  puts $channel "UTF-8"
+  puts $channel "# nothing but a comment"
+  close $channel
+  set secondCode [catch {::tclpdf::hyphenate load xx $path2} second]
+  file delete $path $path2
+  list $firstCode [string match {*Klingon*} $first] \
+      $secondCode [string match {*no hyphenation patterns*} $second]
+} -result {1 1 1 1}
+
+test hyphenate-1.7 {a tag that is not a language tag is refused} -body {
+  catch {::tclpdf::hyphenate load "de DE" /nonexistent} message
+  string match {*not a language tag*} $message
+} -result 1
+
+# --- 2. German ---------------------------------------------------------------
+
+test hyphenate-2.1 {the word the feature is named after} \
+    -constraints haveGermanPatterns -body {
+  # Duden: Sil|ben|tren|nung.
+  hyphenShow de-DE Silbentrennung
+} -result Sil-ben-tren-nung
+
+test hyphenate-2.2 {a compound the patterns take apart at its joints} \
+    -constraints haveGermanPatterns -body {
+  # Duden: Do|nau|dampf|schiff. There is no word list behind this - the joints
+  # come out of 8718 patterns of at most a few letters each.
+  hyphenShow de-DE Donaudampfschiff
+} -result Do-nau-dampf-schiff
+
+test hyphenate-2.3 {the long one} -constraints haveGermanPatterns -body {
+  # Duden: Bun|des|aus|bil|dungs|för|de|rungs|ge|setz. Ten syllables, and the
+  # umlaut has to survive the ISO8859-1 file being read as ISO8859-1: a
+  # pattern read through the wrong encoding simply never matches, so the word
+  # would come back with the breaks around "för" missing and nothing else
+  # would look wrong.
+  hyphenShow de-DE Bundesausbildungsförderungsgesetz
+} -result Bun-des-aus-bil-dungs-för-de-rungs-ge-setz
+
+test hyphenate-2.4 {the reformed triple consonant} \
+    -constraints haveGermanPatterns -body {
+  # Duden: Schiff|fahrt. The 2006 spelling keeps all three f, and the break
+  # goes between the second and the third.
+  hyphenShow de-DE Schifffahrt
+} -result Schiff-fahrt
+
+test hyphenate-2.5 {a two letter ending is broken off, which is what -right 2 is for} \
+    -constraints haveGermanPatterns -body {
+  # Duden: Ei|sen, Ver|bes|se|rung. "Eisen" is the shorter proof: with the
+  # plain TeX right minimum of 3 it would come back whole.
+  list [hyphenShow de-DE Eisen] [hyphenShow de-DE Verbesserung]
+} -result {Ei-sen Ver-bes-se-rung}
+
+test hyphenate-2.6 {the compound that the compound level gets wrong} \
+    -constraints haveGermanPatterns -body {
+  # Duden: Ur|in|s|tinkt - the word is Ur + Instinkt. pyphen 0.18.1, which
+  # runs libhyphen's compound level over the 69133 entries in front of
+  # NEXTLEVEL, answers "Urin-stinkt" instead, which is the other reading of
+  # the same letters and the reason the word is a standing German joke. The
+  # plain Liang table this module reads gets it right, and that is a fact
+  # about the DATA rather than a claim about this code - it is pinned here so
+  # that a later switch to the compound level cannot pass unnoticed.
+  hyphenShow de-DE Urinstinkt
+} -result Ur-in-stinkt
+
+test hyphenate-2.7 {punctuation belongs to the sentence, not to the word} \
+    -constraints haveGermanPatterns -body {
+  # Brackets, quotes and a comma are stripped off the ends before the patterns
+  # see anything, and put back where they stood. The pieces have to
+  # concatenate back to the string CHARACTER FOR CHARACTER, because the line
+  # breaker counts their lengths to walk through the paragraph - a piece list
+  # that loses a comma moves every position after it.
+  set answers {}
+  foreach word [list Silbentrennung, (Silbentrennung) {"Silbentrennung"}] {
+    lappend answers [hyphenShow de-DE $word] \
+        [expr {[join [::tclpdf::hyphenate word de-DE $word] {}] eq $word}]
+  }
+  set answers
+} -result {Sil-ben-tren-nung, 1 (Sil-ben-tren-nung) 1 {"Sil-ben-tren-nung"} 1}
+
+test hyphenate-2.8 {a word with a hyphen is broken in its parts, never at the hyphen} \
+    -constraints haveGermanPatterns -body {
+  # A break AT the existing hyphen would end the line in two of them. Each
+  # part is hyphenated as a word of its own, which is exactly right for a
+  # compound member: "Adresse" alone breaks Adres-se, and so does the tail of
+  # "E-Mail-Adresse".
+  list [hyphenShow de-DE E-Mail-Adresse] [hyphenShow de-DE Adresse]
+} -result {E-Mail-Adres-se Adres-se}
+
+# --- 3. English --------------------------------------------------------------
+
+test hyphenate-3.1 {the word the algorithm is usually shown on} \
+    -constraints haveEnglishPatterns -body {
+  # Merriam-Webster: hy·phen·a·tion. The plain TeX table offers three of those
+  # four places - it does not split "a·tion" - which is a subset of the
+  # dictionary's breaks and therefore never wrong, only cautious.
+  hyphenShow en-US hyphenation
+} -result hy-phen-ation
+
+test hyphenate-3.2 {a word the table and the dictionary agree on completely} \
+    -constraints haveEnglishPatterns -body {
+  # Merriam-Webster: al·go·rithm, rep·re·sen·ta·tion, ty·pog·ra·phy.
+  list [hyphenShow en-US algorithm] [hyphenShow en-US representation] \
+      [hyphenShow en-US typography]
+} -result {al-go-rithm rep-re-sen-ta-tion ty-pog-ra-phy}
+
+test hyphenate-3.3 {the right minimum of 3 keeps two letter tails on the line} \
+    -constraints {haveEnglishPatterns haveGermanPatterns} -body {
+  # English does not break "-ed" or "-er" off; German breaks "-en" off all day.
+  # The two languages are loaded with different minima and the same word shows
+  # it: "Eisen" is a German word, but run through the English patterns and the
+  # English minimum it keeps its tail.
+  list [hyphenShow en-US justification] [hyphenShow en-US difficult] \
+      [hyphenShow en-US Eisen]
+} -result {jus-ti-fi-ca-tion dif-fi-cult Eisen}
+
+test hyphenate-3.4 {the file decides, not the code} \
+    -constraints haveEnglishPatterns -body {
+  # Merriam-Webster: dem·o·crat·ic. hyph_en_US.dic offers ONE break and puts
+  # it elsewhere: "demo-cratic". pyphen 0.18.1 answers the same, so this is
+  # the pattern file speaking and not a defect here. It is pinned because it
+  # is the standing reminder that loading a different table changes the
+  # output - which is the whole reason the tables are not shipped.
+  hyphenShow en-US democratic
+} -result demo-cratic
+
+# --- 4. the brakes -----------------------------------------------------------
+
+test hyphenate-4.1 {A-bend does not happen} -constraints haveGermanPatterns -body {
+  # The patterns DO offer that break - the 2006 reform allows it and Duden
+  # prints A|bend. It is refused by the left minimum of 2, and it is the
+  # standing example of why a hyphenator without minima is unusable: a single
+  # letter left hanging at the end of a line reads as a typesetting fault
+  # whatever the rules say.
+  list [hyphenShow de-DE Abend] [hyphenShow de-DE Ofen]
+} -result {Abend Ofen}
+
+test hyphenate-4.2 {a word with a digit in it is left alone} \
+    -constraints {haveGermanPatterns haveEnglishPatterns} -body {
+  # A part number, a version, a size, a year. None of them is a word of the
+  # language and the patterns would break them where no reader expects it.
+  # The digit is looked for in the whole word rather than in the letters left
+  # after the punctuation has been stripped off the ends - measured, because
+  # the trailing "2" of "version2" was being stripped as punctuation and the
+  # word came back "ver-sion2".
+  list [hyphenShow de-DE A4-Blatt] [hyphenShow en-US version2] \
+      [hyphenShow de-DE 20-jaehrige] [hyphenShow en-US 1234567890]
+} -result {A4-Blatt version2 20-jaehrige 1234567890}
+
+test hyphenate-4.3 {a word in capitals throughout is left alone} \
+    -constraints {haveGermanPatterns haveEnglishPatterns} -body {
+  # An abbreviation, not a word: WWW, DIN, ISO, PDF. The test is that the
+  # word has a lower case form and is not written in it - which is why a
+  # capitalised word like "Silbentrennung" is unaffected.
+  list [hyphenShow en-US WWW] [hyphenShow de-DE ISO] [hyphenShow en-US PDF] \
+      [hyphenShow de-DE Silbentrennung]
+} -result {WWW ISO PDF Sil-ben-tren-nung}
+
+test hyphenate-4.4 {a URL, an address and a file name are left alone} \
+    -constraints haveEnglishPatterns -body {
+  # What they have in common is a dot, a slash, a colon or an at sign left
+  # INSIDE the word once the punctuation has been taken off its ends - which
+  # is a cheaper and a more reliable test than trying to recognise a scheme.
+  list [hyphenShow en-US https://example.com/hyphenation] \
+      [hyphenShow en-US hyphenation@example.com] \
+      [hyphenShow en-US hyphenation.txt]
+} -result {https://example.com/hyphenation hyphenation@example.com hyphenation.txt}
+
+test hyphenate-4.5 {a short word is left alone whatever the patterns say} \
+    -constraints haveEnglishPatterns -body {
+  # -min 5 by default. "into" would otherwise come back as "in-to", which is
+  # correct and pointless: no column is narrow enough for that break to buy
+  # anything, and it costs a hyphen.
+  list [hyphenShow en-US into] [hyphenShow en-US only] [hyphenShow en-US into]
+} -result {into only into}
+
+test hyphenate-4.6 {the caller may move the minima} \
+    -constraints haveEnglishPatterns -body {
+  # The same file, loaded twice under different names. What changes is not the
+  # patterns but where their offers are allowed to be taken.
+  ::tclpdf::hyphenate load en-loose $::hyphenEnglish -left 2 -right 2 -min 4
+  set answers [list [hyphenShow en-loose into] [hyphenShow en-US into]]
+  ::tclpdf::hyphenate load en-tight $::hyphenEnglish -left 4 -right 4
+  lappend answers [hyphenShow en-tight hyphenation] [hyphenShow en-US hyphenation]
+} -result {in-to into hyphen-ation hy-phen-ation}
+
+test hyphenate-4.7 {an exception beats the patterns} \
+    -constraints haveGermanPatterns -body {
+  # "Wachstube" is a Wach-stube or a Wachs-tube depending on what it means,
+  # and no pattern file can know which. The .dic format has no exception
+  # block - what TeX writes as \hyphenation{} it encodes as whole-word
+  # patterns - so the exceptions come in on the load call.
+  ::tclpdf::hyphenate load de-guard $::hyphenGerman -left 2 -right 2 \
+      -exceptions {Wachs-tu-be}
+  list [hyphenShow de-guard Wachstube] [hyphenShow de-DE Wachstube] \
+      [dict get [::tclpdf::hyphenate languages de-guard] exceptions]
+} -result {Wachs-tu-be Wachstu-be 1}
+
+# --- 5. the marks the caller brought -----------------------------------------
+
+test hyphenate-5.1 {a word carrying a soft hyphen is not computed at all} \
+    -constraints haveGermanPatterns -body {
+  # Whoever put the mark there knew this word - a name, a compound the
+  # patterns get wrong, a place a translator chose. Mixing the two sources
+  # would produce breaks neither of them asked for, so it is one source or
+  # the other. The word comes back as ONE piece: no computed offer was added,
+  # and the mark itself is still in it for the breaker to find.
+  set marked "Sil­bentrennung"
+  set pieces [::tclpdf::hyphenate word de-DE $marked]
+  list [llength $pieces] [expr {[lindex $pieces 0] eq $marked}] \
+      [llength [::tclpdf::hyphenate word de-DE Silbentrennung]]
+} -result {1 1 4}
+
+test hyphenate-5.2 {one mark anywhere in the word is enough} \
+    -constraints haveGermanPatterns -body {
+  # Not "the marks are merged with the computed ones where they agree": a
+  # single mark switches the whole word over. A caller who marked one place
+  # of a word marked the place that matters to them.
+  llength [::tclpdf::hyphenate word de-DE "Donaudampf­schiff"]
+} -result 1
+
+# --- 6. the block ------------------------------------------------------------
+
+test hyphenate-6.1 {a paragraph is unchanged unless hyphenation is asked for} \
+    -constraints haveGermanPatterns -body {
+  # THE MOST IMPORTANT TEST IN THIS FILE. -hyphenate defaults to 0, and a
+  # document that is set today has to come out of tomorrow's package with the
+  # same bytes. The line list IS the breaker's whole output - everything the
+  # drawing does downstream is a function of it - so two identical lists mean
+  # two identical content streams.
+  set doc [hyphenDoc]
+  set plain [$doc textLines $::hyphenParagraph -width 45]
+  set off [$doc textLines $::hyphenParagraph -width 45 -hyphenate 0]
+  $doc destroy
+  list [expr {$plain eq $off}] $plain
+} -result {1 {{Die Silbentrennung ist eine} {Verbesserung fuer jede} {schmale Spalte, weil ein zu} {langes Wort sonst} {zeichenweise umbricht oder} {eine Zeile halb leer laesst.}}}
+
+test hyphenate-6.2 {-hyphenate 1 takes the language the document declares} \
+    -constraints haveGermanPatterns -body {
+  set doc [hyphenDoc]
+  $doc language de-DE
+  set lines [$doc textLines $::hyphenParagraph -width 45 -hyphenate 1]
+  set named [$doc textLines $::hyphenParagraph -width 45 -hyphenate de-DE]
+  $doc destroy
+  list [expr {$lines eq $named}] $lines
+} -result {1 {{Die Silbentrennung ist eine} {Verbesserung fuer jede} {schmale Spalte, weil ein zu} {langes Wort sonst zeichen-} {weise umbricht oder eine} {Zeile halb leer laesst.}}}
+
+test hyphenate-6.3 {a narrow column is where it pays} \
+    -constraints haveGermanPatterns -body {
+  # The narrower the column the more often a word has to be broken, and the
+  # bigger the difference between the two settings. Four lines become three,
+  # and the one-word line "Silbentrennung" - which fills half of a 28 mm
+  # column and leaves the rest white - is gone.
+  set doc [hyphenDoc]
+  set off [$doc textLines "Die Silbentrennung ist eine Verbesserung." -width 28]
+  set on [$doc textLines "Die Silbentrennung ist eine Verbesserung." \
+      -width 28 -hyphenate de-DE]
+  $doc destroy
+  list $off $on
+} -result {{Die Silbentrennung {ist eine} Verbesserung.} {{Die Silbentren-} {nung ist eine Ver-} besserung.}}
+
+test hyphenate-6.4 {the language is refused before a byte is written} \
+    -constraints {haveGermanPatterns haveBlockHyphenate} -body {
+  # A language nobody loaded is NOT quietly set unhyphenated: that produces a
+  # document that looks like the one that was asked for and is not. The
+  # refusal carries the contract error code, and it happens before the mark
+  # of the paragraph is opened - so the stream is untouched afterwards.
+  set doc [hyphenDoc {-compress 0}]
+  $doc tagged 1
+  set before [::tclpdfTest::content $doc]
+  set code [catch {
+    $doc text $::hyphenParagraph -at {20 30} -width 45 -hyphenate fr-FR
+  } message options]
+  set after [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [dict get $options -errorcode] [expr {$before eq $after}]
+} -result {1 {TCLPDF HYPHENATE LANGUAGE fr-FR} 1}
+
+test hyphenate-6.5 {-hyphenate 1 without a document language is refused} -body {
+  set doc [hyphenDoc]
+  set code [catch {$doc textLines $::hyphenParagraph -width 45 -hyphenate 1} \
+      message options]
+  $doc destroy
+  list $code [dict get $options -errorcode] [string match {*language de-DE*} $message]
+} -result {1 {TCLPDF HYPHENATE UNSET} 1}
+
+test hyphenate-6.6 {the measurement and the drawing break the same text the same way} \
+    -constraints haveGermanPatterns -body {
+  # [textHeight] and [text] have to agree, or a caller who asked whether the
+  # block still fits gets an answer about a different block. Ten lines at
+  # 32 mm without hyphenation, nine with it, and the height has to follow the
+  # line count exactly - one leading per line, the same leading either way.
+  set doc [hyphenDoc]
+  set off [$doc textHeight $::hyphenParagraph -width 32]
+  set on [$doc textHeight $::hyphenParagraph -width 32 -hyphenate de-DE]
+  set offLines [llength [$doc textLines $::hyphenParagraph -width 32]]
+  set onLines [llength [$doc textLines $::hyphenParagraph -width 32 -hyphenate de-DE]]
+  $doc destroy
+  list $offLines $onLines [expr {$off > $on}] \
+      [expr {abs($off / double($offLines) - $on / double($onLines)) < 0.001}]
+} -result {10 9 1 1}
+
+test hyphenate-6.7 {English in the same paragraph machinery} \
+    -constraints haveEnglishPatterns -body {
+  # The same block code, a different table and different minima. Eleven lines
+  # become ten, three of them ending on a computed hyphen, and not one line of
+  # the unhyphenated setting ends on one - which is what makes the three the
+  # feature and not an accident of the text.
+  set doc [hyphenDoc]
+  set text "Automatic hyphenation is a considerable improvement for any\
+      narrow column, because an overlong word would otherwise break by\
+      character or leave a line half empty."
+  set off [$doc textLines $text -width 32]
+  set on [$doc textLines $text -width 32 -hyphenate en-US]
+  $doc destroy
+  list [llength $off] [llength $on] \
+      [llength [lsearch -all -glob $off {*-}]] \
+      [llength [lsearch -all -glob $on {*-}]]
+} -result {11 10 0 3}
+
+# --- 7. the drawn paragraph --------------------------------------------------
+
+test hyphenate-7.1 {a computed break is bracketed as a break, not as text} \
+    -constraints {haveGermanPatterns haveBlockHyphenate} -body {
+  # ISO 32000-1, 14.8.2.6: extracting the line has to give the word back
+  # whole, so the hyphen the breaker put there sits in a Span with an EMPTY
+  # ActualText. That was already true of a break taken at a soft hyphen; a
+  # computed break travels the same road and therefore gets it for nothing -
+  # which is the reason the two sources were joined in TextBlockHyphen rather
+  # than beside it.
+  set doc [hyphenDoc {-compress 0}]
+  $doc tagged 1
+  $doc language de-DE
+  $doc text "Silbentrennung hier." -at {20 20} -width 22 -hyphenate 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Three shows instead of one: the head, the hyphen inside the bracket, the
+  # tail. That is what the bracket costs and the whole of what it costs -
+  # both shows sit in the same text object, so no position is recomputed.
+  list [regexp {/Span <</ActualText <FEFF>>> BDC} $stream] \
+      [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}] \
+      [regexp {\(Silbentren\)} $stream] [regexp {\(-\)} $stream]
+} -result {1 1 1 1}
+
+test hyphenate-7.2 {an untagged document gets no bracket, as before} \
+    -constraints {haveGermanPatterns haveBlockHyphenate} -body {
+  # The bracket means nothing without a tree, and writing it anyway would
+  # change the bytes of every existing document that hyphenates.
+  set doc [hyphenDoc {-compress 0}]
+  $doc language de-DE
+  $doc text "Silbentrennung hier." -at {20 20} -width 22 -hyphenate 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {ActualText} $stream] [regexp {\(Silbentren-\)} $stream]
+} -result {0 1}
+
+test hyphenate-7.3 {the drawn paragraph is untouched with hyphenation off} \
+    -constraints haveBlockHyphenate -body {
+  # The other half of 6.1, one level down: the same paragraph drawn with the
+  # option absent and drawn with it set to 0 has to produce the same stream,
+  # byte for byte, patterns loaded or not.
+  set doc [hyphenDoc {-compress 0}]
+  $doc text $::hyphenParagraph -at {20 30} -width 45
+  set plain [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [hyphenDoc {-compress 0}]
+  $doc text $::hyphenParagraph -at {20 30} -width 45 -hyphenate 0
+  set off [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {$plain eq $off}] [regexp -- {-\)} $plain]
+} -result {1 0}
+
+test hyphenate-7.4 {justification and hyphenation together} \
+    -constraints {haveGermanPatterns haveBlockHyphenate} -body {
+  # What hyphenation is FOR: a justified column whose word spaces stop
+  # gaping. Measured on the stream - the word spacing a justified line needs
+  # is written as "N Tw", and the largest one of the paragraph is the widest
+  # gap a reader sees.
+  set widest {}
+  foreach hyphenate {0 de-DE} {
+    set doc [hyphenDoc {-compress 0}]
+    $doc text $::hyphenParagraph -at {20 30} -width 45 -align justify \
+        -hyphenate $hyphenate
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    set most 0
+    foreach {- value} [regexp -all -inline {([-0-9.]+) Tw} $stream] {
+      if {$value > $most} {
+        set most $value
+      }
+    }
+    lappend widest $most
+  }
+  # Strictly narrower, not merely different.
+  expr {[lindex $widest 1] < [lindex $widest 0]}
+} -result 1
+
+# --- 8. the orphan the breaker used to leave ---------------------------------
+
+test hyphenate-8.1 {a word that fits on the fresh line is not broken} \
+    -constraints haveGermanPatterns -body {
+  # The breaker used to close a full line and then hyphenate the next word
+  # although the new line had room for all of it. Measured before the fix, at
+  # 45 mm: the second line came out as "Verbesse-" and nothing else - 16 mm in
+  # a 45 mm column, with the rest of the sentence below it. The defect
+  # predates automatic hyphenation; it needed a paragraph with offers in it to
+  # become visible, and with computed offers every second paragraph has them.
+  #
+  # Every line but the last has to fill at least two thirds of the column.
+  set doc [hyphenDoc]
+  set lines [$doc textLines $::hyphenParagraph -width 45 -hyphenate de-DE]
+  set short {}
+  foreach line [lrange $lines 0 end-1] {
+    set width [$doc textWidth [string map {- {}} $line]]
+    if {$width < 30} {
+      lappend short $line
+    }
+  }
+  $doc destroy
+  set short
+} -result {}
+
+test hyphenate-8.2 {the same, for the offers the text brought itself} \
+    -constraints haveBlockHyphenate -body {
+  # The fix is in the shared loop, so it holds for a soft hyphen as well -
+  # and that is a CHANGE to how a paragraph carrying marks is broken. It is
+  # made rather than preserved because the old lines were wrong: a 16 mm line
+  # in a 45 mm column is not a break, it is an orphan.
+  set doc [hyphenDoc]
+  set marked "Die Sil­ben­tren­nung ist eine\
+      Ver­bes­se­rung fuer jede schmale Spalte."
+  set lines [$doc textLines $marked -width 45]
+  set widths {}
+  foreach line [lrange $lines 0 end-1] {
+    lappend widths [expr {[$doc textWidth [string map [list "­" {}] $line]] > 30}]
+  }
+  $doc destroy
+  set widths
+} -result {1 1}
+
+::tcltest::cleanupTests
+return

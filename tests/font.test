@@ -2043,4 +2043,160 @@ test font-17.3 {a mixed line keeps PDF/A-3B - both faces embedded and subset} \
 } -result ok
 
 
+# -- GPOS mark attachment ----------------------------------------------------
+#
+# What comes back out of [FontRunMarks], which is the one thing font.tcl adds
+# to the reader in markPos.tcl: the same answer in the unit a TJ number is
+# written in, and NOTHING at all for a run that has no mark to place. The
+# second half is what keeps every document without marks at the bytes it had.
+#
+# Every number below was read twice - once out of this package and once out of
+# hb-shape (HarfBuzz 14.3.1), which is what a browser sets the same text with.
+# The font units are stated in the comments because that is the unit the font
+# and hb-shape speak; the thousandths beside them are the same number divided
+# by the em.
+
+set markFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google Roboto-Regular.ttf]
+testConstraint haveMarkChain [file exists $markFace]
+set arabicFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google NotoNaskhArabic-Variable.ttf]
+testConstraint haveArabic [file exists $arabicFace]
+
+# The marks of a string, as the drawing side gets them. Both methods are
+# internal and stay so - the object is asked to export them for the length of
+# the test, the same device table.test uses for [TableGroupSpan].
+proc fontMarksOf {doc alias text {direction ltr}} {
+    oo::objdefine $doc export FontRun FontRunMarks
+    return [$doc FontRunMarks $alias [$doc FontRun $alias $text 0 0 $direction]]
+}
+
+test font-18.1 {a combining mark is placed where the anchors say} -constraints haveFont -body {
+  # DejaVu Sans, "b" + U+0300: hb-shape puts the grave at -510,373 font units
+  # from the pen, and the em is 2048 - so -249.0234375 and 182.12890625
+  # thousandths. Untouched, the grave would be drawn at the pen, which for a
+  # glyph of zero advance means on top of whatever comes next.
+  set doc [tclpdf new]
+  $doc font embed body $fontRegular
+  set marks [fontMarksOf $doc body "b\u0300"]
+  $doc destroy
+  set marks
+} -result {{0 0} {-249.0234375 182.12890625}}
+
+test font-18.2 {the offset of a mark on a mark adds to the one below it} \
+    -constraints haveMarkChain -body {
+  # Roboto, "b" + U+0300 + U+0301: hb-shape gives 14,321 and 50,672 font
+  # units, em 2048. The second number is the chain - the acute hangs on the
+  # grave and inherits where the grave went, which is what stacks a Vietnamese
+  # tone mark above a vowel sign instead of through it.
+  set doc [tclpdf new]
+  $doc font embed body $markFace
+  set marks [fontMarksOf $doc body "b\u0300\u0301"]
+  $doc destroy
+  set marks
+} -result {{0 0} {6.8359375 156.73828125} {24.4140625 328.125}}
+
+test font-18.3 {a run with nothing to place answers with nothing} -constraints haveFont -body {
+  # The empty answer is the contract, not a shortcut: [TextEmit] writes no
+  # operator for it, and that is what keeps a document of ordinary prose at
+  # the bytes it had before this existed. A single glyph never has a mark
+  # either - a mark needs something in front of it.
+  set doc [tclpdf new]
+  $doc font embed body $fontRegular
+  set marks [list [fontMarksOf $doc body "Marz"] [fontMarksOf $doc body "b"]]
+  $doc destroy
+  set marks
+} -result {{} {}}
+
+test font-18.4 {a placed mark does not change the width of the run} -constraints haveFont -body {
+  # Mark attachment moves a glyph, not the pen: the offset is written in front
+  # of the mark and taken back behind it, and the combining acute has an
+  # advance of 0. So the three spellings of the same word - none, precomposed,
+  # decomposed - have to measure the same to the last bit.
+  set doc [tclpdf new]
+  $doc font embed body $fontRegular
+  oo::objdefine $doc export FontRun FontRunWidth
+  set widths {}
+  foreach text [list "Marz" "M\u00E1rz" "Ma\u0301rz"] {
+    lappend widths [$doc FontRunWidth body [$doc FontRun body $text] 20]
+  }
+  $doc destroy
+  list [expr {[lindex $widths 0] == [lindex $widths 1]}] \
+      [expr {[lindex $widths 1] == [lindex $widths 2]}] [lindex $widths 0]
+} -result {1 1 48.232421875}
+
+test font-18.5 {a face that writes its dots as glyphs is no longer refused} \
+    -constraints haveArabic -body {
+  # NotoNaskhArabic writes beh as a skeleton plus a separate dot, and this
+  # run was refused outright while nothing could place that dot. It now comes
+  # back four glyphs long - three letters and the dot - with the dot the only
+  # one carrying an offset. hb-shape puts it at 70,-31 from the ORIGIN of the
+  # letter, which behind an advance of 275 is -205,-31 from the pen; the em is
+  # 1000, so the thousandths are the font units.
+  set doc [tclpdf new]
+  $doc font embed body $arabicFace
+  oo::objdefine $doc export FontRun FontRunMarks
+  set run [$doc FontRun body "\u0628\u0633\u0645" 0 0 rtl]
+  set marks [$doc FontRunMarks body $run]
+  $doc destroy
+  list [llength $run] [lmap item $run {lindex $item 0}] $marks
+} -result {4 {19 322 34 75} {{0 0} {-205.0 -31.0} {0 0} {0 0}}}
+
+# --- an entry that is not this module's --------------------------------------
+#
+# [state fonts] holds every font of the document, whatever module made it: the
+# type3 module (type3.tcl) writes its own entries out of the same dictionary
+# on the same event. The font module walks all of them and used to ask only
+# whether an entry was "type1", letting everything else fall into the sfnt
+# road - so a document with a drawn font beside an embedded face died at write
+# time on [dict get $entry parsed], with a bare Tcl "key not known in
+# dictionary" naming nothing a caller could act on. The mixed document itself
+# is written in type3.test; what is checked here is the dispatch.
+
+test font-19.1 {a kind with no way of being written is refused by name} \
+    -constraints haveFont -body {
+  # Poked into the state rather than embedded, because every kind this package
+  # HAS now has a road - which is the point. The next kind added without one
+  # has to arrive as this message and not as a dict lookup six levels down.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed body $fontRegular
+  $doc font -family body -size 12
+  $doc text "written" -at {20 40}
+  set fonts [$doc state fonts]
+  dict set fonts body kind sixteenthCentury
+  $doc state fonts $fonts
+  set code [catch {$doc write [::tclpdfTest::scratch font-19.1.pdf]} message options]
+  $doc destroy
+  file delete [::tclpdfTest::scratch font-19.1.pdf]
+  list $code [dict get $options -errorcode] \
+      [string match {tclpdf: the font "body" is of kind "sixteenthCentury"*} $message]
+} -result {1 {TCLPDF FONT KIND sixteenthCentury body} 1}
+
+test font-19.2 {the two kinds this module writes still take their own roads} \
+    -constraints {haveFont haveType1} -body {
+  # Both roads through the one switch, in one document: the sfnt face comes
+  # out as a Type 0 with FontFile2, the Type 1 program as a simple font with
+  # FontFile. A dispatcher that sent both down the same road would still write
+  # a file, and only the objects say which.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed sfnt $fontRegular
+  $doc font embed old $type1Face
+  $doc font -family sfnt -size 12
+  $doc text "TrueType" -at {20 40}
+  $doc font -family old -size 12
+  $doc text "Type 1" -at {20 60}
+  set path [::tclpdfTest::scratch font-19.2.pdf]
+  $doc write $path
+  set result [list [llength [::tclpdfTest::objects $doc {/Subtype /Type0}]] \
+      [llength [::tclpdfTest::objects $doc /FontFile2]] \
+      [llength [::tclpdfTest::objects $doc {/Subtype /Type1}]] \
+      [llength [::tclpdfTest::objects $doc {/FontFile }]]]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 1 1 1}
+
+
 cleanupTests

@@ -15,6 +15,7 @@ fonts/     four families, five faces, plus their licences    (stage 2)
            adobe-afm/, the metrics afmData.tcl is built from (build)
 images/    JPEG and PNG covering each code path, plus SVG    (stages 3 and 6)
 xml/       two ZUGFeRD profiles, to attach and to detect     (stage 5)
+languages/ hyphenation patterns, German and English         (stage 1)
 ```
 
 The sRGB ICC profile does **not** belong here. It is not example data but part
@@ -222,6 +223,29 @@ The XML is read and embedded **byte for byte**. A silent line-ending
 conversion in an attachment is something no validator reports — measured on the
 reference corpus, 8 of 61 files differ from their published counterparts in
 nothing but CRLF against LF.
+
+---
+
+## languages/ — 1.2 MB, and the one directory here that does **not** travel
+
+Hyphenation patterns for `tclpdf::hyphenate`, German and American English, in
+the libhyphen `.dic` format. Their own `README` carries the origin URL, the
+version, the licence and the encoding of each file; read that one before
+adding a third language.
+
+They are the exception to everything the section above says about shipping.
+`examples/assets/languages/` is listed in `.fossil-settings/ignore-glob` and
+excluded in `tools/archive.sh`, exactly like `tools/Mustang-CLI-*.jar` — so
+neither a commit nor **any** archive picks them up, the source one included.
+The reason is the same one that keeps patterns out of the package itself:
+`hyph_de_DE.dic` is LGPL over LPPL and `hyph_en_US.dic` BSD-style over the
+plain TeX table, tclpdf is MIT, and the whole point of the loading interface is
+that the licence stays with the file.
+
+A fresh checkout therefore has this directory empty. `tests/hyphenate.test`
+reports SKIP for the cases that need patterns and
+`examples/01.14-hyphenation.tcl` sets its paragraphs unhyphenated and says so
+on the page — nothing fails.
 
 ---
 

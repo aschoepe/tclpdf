@@ -18,9 +18,12 @@
 # a paragraph is never justified either, which is why the loop below treats it
 # separately instead of running the same code over every line.
 #
-# No hyphenation. A word longer than the column is broken by character rather
-# than pushed over the edge, and that break is a fallback, not typography -
-# proper hyphenation needs language data and is a feature of its own.
+# Hyphenation is OFF unless asked for, and it is asked for per block with
+# -hyphenate. Two things can offer a break inside a word: the soft hyphens the
+# text already carries, and the patterns of tclpdf::hyphenate - and where a
+# word carries marks of its own, those win outright (TextBlockHyphen). Without
+# either, a word longer than the column is broken by character rather than
+# pushed over the edge, and that break is a fallback, not typography.
 #
 # A line breaks at ASCII white space, and after the spaces of Unicode that
 # UAX #14 lets a line break at; the no-break spaces are characters of the
@@ -52,7 +55,7 @@ namespace eval ::tclpdf::textBlock {
   variable options {at {} rotate 0 align left width {} anchor baseline
       height {} paginate 0 columns 1 gutter {} balance 0
       indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-      avoid {} avoidMargin 0 tag P expansion {}}
+      avoid {} avoidMargin 0 tag P expansion {} hyphenate 0}
 
   # Where a line may break. Two classes, told apart by what happens to the
   # character when the line breaks there:
@@ -259,7 +262,62 @@ oo::define ::tclpdf::document::document {
       package require tclpdf::textAvoid
       my TextAvoidCheck [dict get $options avoid] [dict get $options avoidMargin]
     }
+    # Asked here as well as in TextBlockLines, and for the reason the whole
+    # method exists: a language nobody loaded has to be refused BEFORE the
+    # mark of a tagged paragraph is written, not from inside the breaker.
+    my TextBlockHyphenate $options
     return $options
+  }
+
+  # Which language this block is hyphenated in - empty for a block that is
+  # not, which is every block that does not say otherwise.
+  #
+  #   -hyphenate 0     off; the default, and what every existing document was
+  #                    set with, so nothing about its bytes changes
+  #   -hyphenate 1     on, in the language the document declares ([language])
+  #   -hyphenate de-AT on, in that language whatever the document declares
+  #
+  # ONLY the two literal values 0 and 1 are the switch; anything else is a
+  # language tag. Reading the value with [string is boolean] would have been
+  # the house habit and is wrong exactly once: "no" is a Tcl false AND the
+  # RFC 3066 tag for Norwegian, so -hyphenate no would have silently turned
+  # hyphenation off for the one language whose name says otherwise.
+  #
+  # The refusal is the point of the whole option. A caller who says
+  # -hyphenate de-DE on a machine where no German patterns were loaded gets
+  # TCLPDF HYPHENATE LANGUAGE and can decide - fall back, load, or let it
+  # through - because the alternative is a document that is quietly set
+  # unhyphenated and looks like the one that was asked for.
+  method TextBlockHyphenate {options} {
+    if {![dict exists $options hyphenate]} {
+      # A DRAWN paragraph arrives with the option list [text] built, and that
+      # is text.tcl's own copy of the list above rather than the list itself.
+      # A key this dictionary does not carry cannot have been given a value
+      # either - [option parse] would have refused the option - so the answer
+      # is the one -hyphenate 0 gives.
+      return {}
+    }
+    set value [dict get $options hyphenate]
+    if {$value eq {} || $value eq "0"} {
+      return {}
+    }
+    if {$value eq "1"} {
+      set value [my language]
+      if {$value eq {}} {
+        return -code error -errorcode {TCLPDF HYPHENATE UNSET} \
+            "tclpdf: -hyphenate 1 breaks words in the language the document\
+            declares, and this one declares none - say \[\$doc language\
+            de-DE\] first, or name the language on the block itself\
+            (-hyphenate de-DE)"
+      }
+    }
+    # Loaded only when asked for, the way -avoid loads textAvoid: a caller
+    # who never hyphenates does not pay for the module, and the two are
+    # topics of their own - neither requires the other.
+    package require tclpdf::hyphenate
+    # Answers what is loaded for the tag, or throws TCLPDF HYPHENATE LANGUAGE.
+    ::tclpdf::hyphenate languages $value
+    return $value
   }
 
   # The width of a block: a positive number, or the refusal in the words
@@ -311,7 +369,7 @@ oo::define ::tclpdf::document::document {
   # plain tail of the original: the line before the cut says where it stops,
   # and nothing has to be put back together from lines - which turned a soft
   # hyphen into a hard one and a word broken by character into several words.
-  method TextBlockBreak {string arguments band} {
+  method TextBlockBreak {string arguments band {language {}}} {
     set lines {}
     set paragraphIndex 0
     set globalLine 0
@@ -378,7 +436,7 @@ oo::define ::tclpdf::document::document {
           # head built from both, so it needs the same place.
           set chunkFrom [expr {$current ne {} ? $currentFrom : $wordFrom}]
           set taken [my TextBlockHyphen $current $glue $word $width $arguments \
-              $string $chunkFrom]
+              $string $chunkFrom $language]
           if {[llength $taken]} {
             set from $chunkFrom
             lassign $taken emit remainder
@@ -406,8 +464,22 @@ oo::define ::tclpdf::document::document {
           lassign [my TextBlockAsk $band $inParagraph $paragraphIndex $globalLine] \
               width offset running
           set current {}
-          if {[llength $taken] && [my TextBlockFits $word $width $arguments \
-              $string $wordFrom]} {
+          # The line is closed. Whatever is left of the word goes back to the
+          # breaker as soon as it fits ON THE FRESH LINE - and the check is
+          # made whether or not this round took an offer.
+          #
+          # It used to be made only after a break was taken, and the case it
+          # missed is the common one: a line that is nearly full, then a long
+          # word that fits nowhere in the rest of it. The line was closed on
+          # what it held - right - and the loop then went round again and
+          # hyphenated the word although the fresh line had room for all of
+          # it. Measured on "Die Silbentrennung ist eine Verbesserung fuer
+          # jede schmale Spalte" at 45 mm: the second line came out as
+          # "Verbesse-" and nothing else, 16 mm in a 45 mm column, with the
+          # rest of the sentence below it. That is not a break, it is an
+          # orphan, and it was there before automatic hyphenation existed -
+          # it just took a paragraph with soft hyphens in it to see.
+          if {[my TextBlockFits $word $width $arguments $string $wordFrom]} {
             break
           }
         }
@@ -575,16 +647,44 @@ oo::define ::tclpdf::document::document {
   # The longest beginning of a word that still fits WITH a hyphen after it, and
   # what is left over. Empty when no offer in the word is small enough.
   #
-  # U+00AD is an offer, not a character: "you may break here". tclpdf does not
-  # hyphenate by itself - that needs language data and is a feature of its own -
-  # but text arriving from elsewhere often carries the marks already, and until
-  # now they were either set as a visible hyphen or refused outright.
+  # TWO SOURCES OF AN OFFER, and this method is where they meet:
+  #
+  # U+00AD is an offer, not a character: "you may break here". Text arriving
+  # from a database, an XML file or an editor often carries the marks already,
+  # and until this existed they were either set as a visible hyphen or refused
+  # outright.
+  #
+  # The patterns of tclpdf::hyphenate compute the same offers for a word that
+  # carries none, in the language -hyphenate named. Which source an offer came
+  # from is of no interest below: what the loop needs is a list of pieces to
+  # try from the back, and both sources hand it one.
+  #
+  # A WORD THAT CARRIES MARKS IS NEVER COMPUTED. Whoever put them there knew
+  # this word - it may be a name, a compound the patterns get wrong, or a
+  # place a translator chose - and mixing the two sources would produce breaks
+  # neither of them asked for. The mark road is therefore taken as soon as
+  # there is one mark in the word, and the pattern road only when there is
+  # none.
+  #
+  # The two differ in ONE character, and it is the reason "mark" is a variable
+  # rather than a constant: what is left over has to be the tail of the word
+  # verbatim, because the caller counts its length to advance through the
+  # string. The marks the split took out are put back for that; a computed
+  # break took nothing out and puts nothing back.
   #
   # The hyphen that appears at the break is a real one (U+002D), so the line
-  # ends the way a reader expects. What that costs is named in the manual:
-  # extracting such a line yields the hyphen too.
-  method TextBlockHyphen {prefix glue word width arguments string base} {
-    set parts [split $word "\u00AD"]
+  # ends the way a reader expects, and it is bracketed as a break rather than
+  # as text - see "hyphen 1" in the breaker above and TextRun in text.tcl.
+  method TextBlockHyphen {prefix glue word width arguments string base {language {}}} {
+    set mark "\u00AD"
+    if {[string first $mark $word] >= 0} {
+      set parts [split $word $mark]
+    } elseif {$language ne {}} {
+      set parts [::tclpdf::hyphenate word $language $word]
+      set mark {}
+    } else {
+      return {}
+    }
     if {[llength $parts] < 2} {
       return {}
     }
@@ -599,7 +699,7 @@ oo::define ::tclpdf::document::document {
         set head "$prefix$glue$head"
       }
       if {[my TextBlockMeasure $head $arguments $string $base] <= $width} {
-        return [list $head [join [lrange $parts $take end] "\u00AD"]]
+        return [list $head [join [lrange $parts $take end] $mark]]
       }
     }
     return {}
@@ -715,7 +815,8 @@ oo::define ::tclpdf::document::document {
           [my TextBlockWidest $string $arguments] $band]
     }
 
-    set lines [my TextBlockBreak $string $arguments $band]
+    set lines [my TextBlockBreak $string $arguments $band \
+        [my TextBlockHyphenate $options]]
 
     # Which lines close their paragraph - decided on the WHOLE text, before
     # anything is held back for a height limit. A line that ends a column is
@@ -1359,4 +1460,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.8
+package provide tclpdf::textBlock 1.9

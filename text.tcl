@@ -251,7 +251,7 @@ oo::define ::tclpdf::document::document {
     set defaults {at {} rotate 0 align left width {} anchor baseline
         height {} paginate 0 columns 1 gutter {} balance 0
         indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-        avoid {} avoidMargin 0 tag P expansion {}}
+        avoid {} avoidMargin 0 tag P expansion {} hyphenate 0}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -1135,6 +1135,10 @@ oo::define ::tclpdf::document::document {
     set run [my FontRun $font $string [dict get $state ligatures] \
         [dict get $state unshaped] [dict get $state direction]]
     set adjustments [my TextAdjust $font $state $run $byTJ]
+    # Where the combining marks of the run belong, read in the same logical
+    # order the kerning was: a mark hangs on a glyph BEFORE it, so the answer
+    # cannot be given after the line has been turned round.
+    set marks [my FontRunMarks $font $run]
     # THE REORDERING, and this is the only place it happens: after the run has
     # been built and after everything that reads it in logical order - the
     # ligatures inside FontRun, the kerning inside TextAdjust - and before a
@@ -1143,10 +1147,11 @@ oo::define ::tclpdf::document::document {
     set lead 0
     set mirrored {}
     if {[dict get $state direction] eq "rtl"} {
-      lassign [my TextReorder $run $adjustments] run adjustments lead
+      lassign [my TextReorder $run $adjustments $marks] run adjustments lead \
+          marks
       set mirrored [my TextMirrored $run]
     }
-    return [my TextEmit $font $run $adjustments $lead $mirrored]
+    return [my TextEmit $font $state $run $adjustments $lead $mirrored $marks]
   }
 
   # The run and its adjustments in the order they are DRAWN, for a
@@ -1185,7 +1190,11 @@ oo::define ::tclpdf::document::document {
   # between them is the one the logical pair had. A shaper avoids the question
   # by shaping each run separately and kerning across none of them; doing that
   # here would change the width of the line after it was measured.
-  method TextReorder {run adjustments} {
+  # THE MARK OFFSETS travel with the glyphs by being reordered exactly as they
+  # are - a mark that has been moved to another place in the line must take
+  # its offset along, or the accent ends up over whichever glyph inherited its
+  # position. That alone is not enough, and [TextCluster] is the rest of it.
+  method TextReorder {run adjustments marks} {
     # One code point per glyph, and for a glyph that stands for several - a
     # ligature - the list of them: bidi.tcl treats the list as a letter of
     # its last code point's kind and never as a number. It used to be handed
@@ -1193,9 +1202,16 @@ oo::define ::tclpdf::document::document {
     # letter at all for W2: measured, "\u0644\u0627 12%" set a European
     # 12% where fribidi --rtl sets the Arabic "%12".
     set codes [lmap item $run {lindex $item 1}]
+    # Which glyphs hang on the one before them, which is all [TextCluster]
+    # asks: a glyph GPOS moved is a glyph that was placed against its
+    # neighbour, and how far it was moved decides nothing about where in the
+    # line the two belong.
+    set attached [lmap offset $marks {
+      expr {[lindex $offset 0] != 0 || [lindex $offset 1] != 0}
+    }]
     set order {}
     set gaps {}
-    foreach piece [my TextPieces $codes rtl] {
+    foreach piece [my TextCluster [my TextPieces $codes rtl] $attached rtl] {
       lassign $piece from to
       for {set index $from} {$index <= $to} {incr index} {
         lappend order $index
@@ -1203,8 +1219,12 @@ oo::define ::tclpdf::document::document {
       }
     }
     set drawn {}
+    set placed {}
     foreach index $order {
       lappend drawn [lindex $run $index]
+      if {[llength $marks]} {
+        lappend placed [lindex $marks $index]
+      }
     }
     set moved {}
     set lead 0
@@ -1216,16 +1236,77 @@ oo::define ::tclpdf::document::document {
         lappend moved [expr {$gap < 0 ? 0 : [lindex $adjustments $gap]}]
       }
     }
-    return [list $drawn $moved $lead]
+    return [list $drawn $moved $lead $placed]
+  }
+
+  # The same pieces with every mark joined to what it hangs on: a piece whose
+  # FIRST position is ATTACHED - hangs on the position before it - is merged
+  # with its logical predecessor.
+  #
+  # "attached" is one flag per position, and a positionally aligned list of
+  # them or nothing at all, exactly as [FontRunMarks] answers. WHICH question
+  # produced the flags is the caller's business and the two callers ask
+  # different ones: [TextReorder] has a glyph run and a GPOS offset per glyph,
+  # [textPath] has characters and their advances. The joining rule is the same
+  # either way, and it is here so that a cluster on a curve and a cluster in a
+  # right-to-left line cannot be defined differently.
+  #
+  # THE ORDER the pieces arrive in is what "the piece before it" means, hence
+  # the direction: a right-to-left list is already in DRAWING order, which is
+  # the reverse of the logical one, so the predecessor is the piece that
+  # FOLLOWS in the list. It is walked logically and turned back at the end
+  # rather than written twice.
+  #
+  # WHY a mark may not be turned round with the rest of the line. The offset a
+  # mark carries is stated at ITS pen position and was computed by walking
+  # back over everything between the base and the mark (markPos.tcl). Reverse
+  # the two and that walk points the wrong way: the mark is then drawn BEFORE
+  # its base, its pen position is a whole base-advance further left, and the
+  # accent lands beside the letter.
+  #
+  # Measured, NotoNaskhArabic, U+0628 U+064E - which shapes to three glyphs,
+  # skeleton + dot + fatha. HarfBuzz 14.3.1 sets the dot at +308 and the fatha
+  # at +266 from the pen of a right-to-left line; this package computes -464
+  # and -506 in logical order, and the base advance is 772. Kept together, the
+  # base is drawn first and the two marks land at 772-464 = 308 and
+  # 772-506 = 266. Turned round, both would be 772 units too far left.
+  #
+  # Nothing else moves. A mark of zero advance contributes nothing to the
+  # width of the piece it joins, so every other glyph of the line stays where
+  # it was - only the two show operators inside the cluster swap places.
+  method TextCluster {pieces attached direction} {
+    if {![llength $attached]} {
+      return $pieces
+    }
+    set reversed [expr {$direction eq "rtl"}]
+    if {$reversed} {
+      set pieces [lreverse $pieces]
+    }
+    set result {}
+    foreach piece $pieces {
+      set from [lindex $piece 0]
+      # The test is on the FIRST position, so a chain of marks folds one piece
+      # at a time into the same cluster. A mark at position 0 has nothing to
+      # hang on and stays a piece of its own.
+      if {$from > 0 && [lindex $attached $from] && [llength $result]} {
+        lset result end 1 [lindex $piece 1]
+        continue
+      }
+      lappend result $piece
+    }
+    if {$reversed} {
+      set result [lreverse $result]
+    }
+    return $result
   }
 
   # The pieces of a line in the order they are DRAWN, as {first last} index
   # pairs over the positions given.
   #
   # Two callers, one answer: [TextShow] reorders a glyph run in one go,
-  # [textPath] walks a path placing one glyph at a time, and if the two built
-  # this order separately a number would come out one way along a straight
-  # baseline and the other way along a curve.
+  # [textPath] walks a path placing one cluster at a time, and if the two
+  # built this order separately a number would come out one way along a
+  # straight baseline and the other way along a curve.
   method TextPieces {codes direction} {
     if {$direction ne "rtl"} {
       set pieces {}
@@ -1274,7 +1355,30 @@ oo::define ::tclpdf::document::document {
   # the span "(שלום)" comes back as ")שלום(", with it as it was written. Same
   # device as the break hyphen above, and for the same reason - the drawn
   # glyph and the character are not the same thing.
-  method TextEmit {font run adjustments lead mirrored} {
+  # A POSITIONED MARK breaks the run in the same way, and needs no operator
+  # the stream does not already have. Across the baseline it is "Ts", the rise
+  # (9.3.5), which is text state and therefore has to stand outside the show
+  # operator - so the mark gets a piece of its own, exactly as a mirrored
+  # glyph does. Along it there is nothing to invent at all: a number in a TJ
+  # array moves the pen, so the offset goes in front of the mark and the same
+  # amount comes back out behind it. The mark is then drawn away from the pen
+  # while the pen has not moved, which is what mark attachment means, and the
+  # line comes out as wide as [FontRunWidth] measured it - including for a
+  # mark whose advance is not zero, because giving back what was taken leaves
+  # that advance untouched.
+  #
+  # SIGNS. A TJ number is SUBTRACTED from the advance (9.4.3), so a mark that
+  # belongs 249 thousandths to the left is written as +249 in front of it and
+  # -249 behind - the same rule the kerning goes through in [TextAdjust], and
+  # the amount behind is added to the kerning that was already going there
+  # rather than written as a second number.
+  #
+  # UNITS. The offsets arrive in thousandths of the em, which is what a TJ
+  # number is written in and takes no conversion at all. Ts is the exception:
+  # it is in unscaled text space units and is NOT multiplied by the font size
+  # the way a glyph is, so the vertical offset - and only it - is turned into
+  # points here, at this one place.
+  method TextEmit {font state run adjustments lead mirrored marks} {
     if {![llength $run]} {
       # An empty line still writes its show operator: it is what an empty
       # paragraph line has always produced, and leaving it out would change
@@ -1282,7 +1386,13 @@ oo::define ::tclpdf::document::document {
       # every string inside a content stream - see [TextShow].
       return "[::tclpdf::pdfObj bytesStr [my FontRunEncode $font {}]] Tj\n"
     }
-    # {actualText tokens} per piece, where a token is {glyph item} or
+    # The rise the CALLER asked for, which is what every piece but a mark is
+    # set at and what the last one puts back. Not zero: [TextRun] has already
+    # written a -rise into the stream, and a superscript that happens to carry
+    # an accent has to stay a superscript.
+    set base [dict get $state rise]
+    set size [dict get $state size]
+    # {actualText rise tokens} per piece, where a token is {glyph item} or
     # {gap number}. The gap AFTER a mirrored glyph opens the next piece,
     # which a TJ array takes as its first element.
     set segments {}
@@ -1292,26 +1402,65 @@ oo::define ::tclpdf::document::document {
     }
     set count [llength $run]
     for {set index 0} {$index < $count} {incr index} {
-      if {[dict exists $mirrored $index]} {
-        lappend segments [list {} $tokens]
+      set value [lindex $adjustments $index]
+      if {$value eq {}} {
+        set value 0
+      }
+      set dx 0
+      set dy 0
+      if {[llength $marks]} {
+        lassign [lindex $marks $index] dx dy
+      }
+      if {$dx != 0 || $dy != 0} {
+        lappend segments [list {} $base $tokens]
         set tokens {}
-        lappend segments [list [dict get $mirrored $index] \
+        set own {}
+        if {$dx != 0} {
+          lappend own [list gap [expr {-$dx}]]
+        }
+        lappend own [list glyph [lindex $run $index]]
+        set back [expr {$value + $dx}]
+        if {$back != 0} {
+          lappend own [list gap $back]
+        }
+        # A mark is never a bracket, so the two conditions do not meet in any
+        # face measured - asked together all the same, because a piece can
+        # carry both and dropping one silently would be the harder defect.
+        set actual {}
+        if {[dict exists $mirrored $index]} {
+          set actual [dict get $mirrored $index]
+        }
+        lappend segments [list $actual [expr {$base + $dy * $size / 1000.0}] \
+            $own]
+        continue
+      }
+      if {[dict exists $mirrored $index]} {
+        lappend segments [list {} $base $tokens]
+        set tokens {}
+        lappend segments [list [dict get $mirrored $index] $base \
             [list [list glyph [lindex $run $index]]]]
       } else {
         lappend tokens [list glyph [lindex $run $index]]
       }
-      set value [lindex $adjustments $index]
-      if {$value ne {} && $value != 0} {
+      if {$value != 0} {
         lappend tokens [list gap $value]
       }
     }
-    lappend segments [list {} $tokens]
+    lappend segments [list {} $base $tokens]
     set result {}
+    set current $base
     foreach segment $segments {
-      lassign $segment actual tokens
+      lassign $segment actual rise tokens
       set body [my TextTokens $font $tokens]
       if {$body eq {}} {
         continue
+      }
+      # Only when it CHANGES, which is what keeps a line without marks at the
+      # bytes it has always had: every piece of such a line asks for the rise
+      # that is already in force, and nothing is written.
+      if {$rise != $current} {
+        append result "[::tclpdf::pdfObj num $rise] Ts\n"
+        set current $rise
       }
       if {$actual eq {}} {
         append result $body
@@ -1319,6 +1468,12 @@ oo::define ::tclpdf::document::document {
       }
       append result "/Span <</ActualText\
           <FEFF[format %04X $actual]>>> BDC\n" $body "EMC\n"
+    }
+    # Ts outlives ET - it is text state (9.3.1), like Tc and Tw - so a mark at
+    # the end of the line must still put it back before anything else is
+    # drawn. Back to the caller's rise, not to zero.
+    if {$current != $base} {
+      append result "[::tclpdf::pdfObj num $base] Ts\n"
     }
     return $result
   }
@@ -1630,4 +1785,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.14
+package provide tclpdf::text 1.15

@@ -1,0 +1,607 @@
+# markPos.test --
+#
+# GPOS mark attachment: where a combining mark ends up.
+#
+# Every number below was measured twice - once out of the font by this package
+# and once out of HarfBuzz 14.3.1, which ships as hb-shape and is what a
+# browser positions the same text with. Where the two disagree the test says
+# so in as many words; there is exactly one such place, and it is a font whose
+# GDEF contradicts itself.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::otLayout
+package require tclpdf::gdef
+package require tclpdf::markPos
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts]
+set fontDejaVu [file join $assets DejaVuSans.ttf]
+set fontRoboto [file join $assets google Roboto-Regular.ttf]
+set fontRobotoVar [file join $assets google Roboto-Variable.ttf]
+set fontLiberation [file join $assets liberation-fonts LiberationSans-Regular.ttf]
+set fontNoto [file join $assets google NotoSans-Variable.ttf]
+set fontArimo [file join $assets google Arimo-Variable.ttf]
+set fontNaskh [file join $assets google NotoNaskhArabic-Variable.ttf]
+
+testConstraint haveDejaVu [file exists $fontDejaVu]
+testConstraint haveRoboto [file exists $fontRoboto]
+testConstraint haveRobotoVar [file exists $fontRobotoVar]
+testConstraint haveLiberation [file exists $fontLiberation]
+testConstraint haveNoto [file exists $fontNoto]
+testConstraint haveArimo [file exists $fontArimo]
+testConstraint haveNaskh [file exists $fontNaskh]
+
+# The glyphs of a list of code points, through the font's own cmap. The code
+# points are written in hex for readability and the map is keyed by number, so
+# each one is normalised before it is looked up.
+proc markGlyphs {parsed codes} {
+    set glyphs {}
+    foreach code $codes {
+        lappend glyphs [dict get [dict get $parsed cmap] [expr {$code}]]
+    }
+    return $glyphs
+}
+
+# The offsets of a string of code points, in FONT UNITS - the unit the font,
+# the specification and hb-shape all state their numbers in.
+proc markOffsets {path codes} {
+    set parsed [::tclpdf::sfnt read $path]
+    return [::tclpdf::markPos offsets [::tclpdf::markPos build $parsed] \
+        [markGlyphs $parsed $codes]]
+}
+
+# The anchor of one mark glyph WITH its format, once per subtable of a lookup
+# that covers the glyph: {format x y}.
+#
+# Test scaffolding on purpose. markPos.tcl throws the format away - that is
+# its whole point - so a test claiming a format 3 anchor reads exactly like a
+# format 1 one has to be able to see that a format 3 was there at all.
+proc markAnchorFormats {parsed index glyph} {
+    set gpos [::tclpdf::sfnt table $parsed GPOS]
+    set lookup [::tclpdf::otLayout lookup $gpos $index]
+    set found {}
+    foreach pair [::tclpdf::otLayout typedSubtables $gpos $lookup {4 5 6} 9] {
+        lassign $pair type offset
+        set coverage [::tclpdf::otLayout coverage $gpos [expr {$offset +
+            [::tclpdf::otLayout u16 $gpos [expr {$offset + 2}]]}]]
+        if {![dict exists $coverage $glyph]} {
+            continue
+        }
+        set array [expr {$offset +
+            [::tclpdf::otLayout u16 $gpos [expr {$offset + 8}]]}]
+        set record [expr {$array + 2 + [dict get $coverage $glyph] * 4}]
+        set at [::tclpdf::otLayout u16 $gpos [expr {$record + 2}]]
+        if {$at == 0} {
+            continue
+        }
+        set anchor [expr {$array + $at}]
+        lappend found [list [::tclpdf::otLayout u16 $gpos $anchor] \
+            {*}[::tclpdf::otLayout anchor $gpos $anchor]]
+    }
+    return $found
+}
+
+# --- the anchor table, on bytes this file wrote itself --------------------
+
+test markPos-1.1 {an anchor of format 1 is its two design coordinates} -body {
+    ::tclpdf::otLayout anchor [binary format SSS 1 -2 256] 0
+} -result {-2 256}
+
+test markPos-1.2 {format 2 reads the same and drops the contour point} -body {
+    # HarfBuzz ignores anchorPoint and takes the design coordinate, measured;
+    # so does this. The extra field must not shift the two that matter.
+    ::tclpdf::otLayout anchor [binary format SSSSu 2 -2 256 4] 0
+} -result {-2 256}
+
+test markPos-1.3 {format 3 reads the same and drops the device offsets} -body {
+    ::tclpdf::otLayout anchor [binary format SSSSuSu 3 -2 256 12 18] 0
+} -result {-2 256}
+
+test markPos-1.4 {an anchor is read where it stands, not at the start} -body {
+    set bytes [binary format a6SSS {} 1 -2 256]
+    ::tclpdf::otLayout anchor $bytes 6
+} -result {-2 256}
+
+test markPos-1.5 {a format this reader does not know gives nothing} -body {
+    # Not a guess and not an error: a later specification may add a format,
+    # and a mark without an anchor is simply not attached.
+    list [::tclpdf::otLayout anchor [binary format SSS 4 -2 256] 0] \
+        [::tclpdf::otLayout anchor [binary format SSS 0 -2 256] 0]
+} -result {{} {}}
+
+test markPos-1.6 {a truncated anchor is a named failure, not a raw Tcl error} -body {
+    # Four bytes where six are needed. An unchecked [binary scan] would leave
+    # the variable empty and let "" travel on as a coordinate.
+    set bytes [binary format SS 1 -2]
+    set code [catch {::tclpdf::otLayout anchor $bytes 0} result options]
+    list $code [dict get $options -errorcode] [string match {tclpdf: *} $result]
+} -result {1 {TCLPDF LAYOUT RANGE} 1}
+
+# --- the anchor table, on the fonts ---------------------------------------
+
+test markPos-1.7 {DejaVu carries one anchor in two formats and means the same} -constraints haveDejaVu -body {
+    # The combining grave has a format 1 anchor in one subtable of lookup 13
+    # and a format 2 anchor - the one with the contour point - in another.
+    # Both say -512, 1147, which is what makes the contour point ignorable.
+    set parsed [::tclpdf::sfnt read $fontDejaVu]
+    markAnchorFormats $parsed 13 [lindex [markGlyphs $parsed 0x0300] 0]
+} -result {{1 -512 1147} {2 -512 1147}}
+
+test markPos-1.8 {a variable font packs the same anchor as format 3} -constraints {haveRoboto haveRobotoVar} -body {
+    # The strongest anchor test there is: the same design, once as format 1
+    # and once as format 3 with two VariationIndex offsets hanging off it.
+    # Same numbers, so the offsets are rightly overlooked at the default
+    # instance - and the price of ignoring them is confined to an instanced
+    # face, which is what otLayout::anchor says.
+    set plain [::tclpdf::sfnt read $fontRoboto]
+    set variable_ [::tclpdf::sfnt read $fontRobotoVar]
+    list [markAnchorFormats $plain 4 [lindex [markGlyphs $plain 0x0300] 0]] \
+        [markAnchorFormats $variable_ 4 \
+            [lindex [markGlyphs $variable_ 0x0300] 0]]
+} -result {{{1 -530 1290}} {{3 -530 1290}}}
+
+# --- the placement rule ---------------------------------------------------
+
+test markPos-2.1 {DejaVu places the grave where HarfBuzz places it} -constraints haveDejaVu -body {
+    # hb-shape DejaVuSans.ttf -u 0062,0300 -> [b=0+1300|Grave=0@-510,373+0]
+    # "b" and not "A": HarfBuzz composes A + U+0300 into Agrave before GPOS
+    # ever runs, so the pair would prove nothing.
+    markOffsets $fontDejaVu {0x0062 0x0300}
+} -result {{0 0} {-510 373}}
+
+test markPos-2.2 {Roboto places the grave where HarfBuzz places it} -constraints haveRoboto -body {
+    # hb-shape Roboto-Regular.ttf -u 0062,0300
+    #   -> [gid70=0+1150|gid168=0@14,321+0]
+    markOffsets $fontRoboto {0x0062 0x0300}
+} -result {{0 0} {14 321}}
+
+test markPos-2.3 {the arithmetic is the specification's, term by term} -constraints haveDejaVu -body {
+    # A + U+0300 in DejaVu, with every term of
+    #   dx = baseAnchor.x - markAnchor.x - advance(A)
+    #   dy = baseAnchor.y - markAnchor.y
+    # written out: -189 = 700 - (-512) - 1401, 373 = 1520 - 1147.
+    set parsed [::tclpdf::sfnt read $fontDejaVu]
+    lassign [markGlyphs $parsed {0x0041 0x0300}] base mark
+    set offsets [::tclpdf::markPos offsets [::tclpdf::markPos build $parsed] \
+        [list $base $mark]]
+    list [dict get $parsed unitsPerEm] [::tclpdf::sfnt advance $parsed $base] \
+        [lindex $offsets 1]
+} -result {2048 1401 {-189 373}}
+
+test markPos-2.4 {and again in a face that puts the accent on the other side} -constraints haveRoboto -body {
+    # Roboto: markAnchor (-530, 1290), baseAnchor (672, 1601),
+    # advance(A) = 1336 -> dx = 672 + 530 - 1336 = -134, dy = 311.
+    set parsed [::tclpdf::sfnt read $fontRoboto]
+    lassign [markGlyphs $parsed {0x0041 0x0300}] base mark
+    list [::tclpdf::sfnt advance $parsed $base] \
+        [lindex [::tclpdf::markPos offsets \
+            [::tclpdf::markPos build $parsed] [list $base $mark]] 1]
+} -result {1336 {-134 311}}
+
+test markPos-2.5 {a variable font positions like its static twin} -constraints {haveRoboto haveRobotoVar} -body {
+    # Same face, same numbers, format 1 anchors against format 3 ones.
+    # hb-shape agrees on both files.
+    list [markOffsets $fontRoboto {0x0062 0x0300}] \
+        [markOffsets $fontRobotoVar {0x0062 0x0300}]
+} -result {{{0 0} {14 321}} {{0 0} {14 321}}}
+
+test markPos-2.6 {the run answers in thousandths of the em} -constraints haveDejaVu -body {
+    # The unit a TJ number is written in, and the one kern.tcl already uses -
+    # so that measuring and drawing cannot drift apart between two
+    # conversions. -510 * 1000 / 2048 = -249.0234375, 373 -> 182.12890625.
+    set parsed [::tclpdf::sfnt read $fontDejaVu]
+    set run {}
+    foreach glyph [markGlyphs $parsed {0x0062 0x0300}] code {0x0062 0x0300} {
+        lappend run [list $glyph [list $code]]
+    }
+    set offsets [::tclpdf::markPos run [::tclpdf::markPos build $parsed] $run]
+    lassign [lindex $offsets 1] dx dy
+    list [llength $offsets] [lindex $offsets 0] \
+        [expr {abs($dx - -249.0234375) < 1e-9}] \
+        [expr {abs($dy - 182.12890625) < 1e-9}]
+} -result {2 {0 0} 1 1}
+
+# --- looking back for the base -------------------------------------------
+
+test markPos-3.1 {the second of two marks looks past the first to the base} -constraints haveDejaVu -body {
+    # hb-shape DejaVuSans.ttf -u 0062,0300,0301
+    #   -> [b=0+1300|Grave=0@-510,373+0|acutecomb=0@-510,373+0]
+    # Both marks land in the same place, which can only happen if the acute
+    # looked PAST the grave and found the "b". Every mark lookup in this face
+    # sets lookupFlag 0, so taking the previous visible glyph would hand the
+    # acute a grave that no baseCoverage lists.
+    markOffsets $fontDejaVu {0x0062 0x0300 0x0301}
+} -result {{0 0} {-510 373} {-510 373}}
+
+test markPos-3.2 {a later lookup replaces an earlier attachment} -constraints haveDejaVu -body {
+    # Why 3.1 comes out that way, and it is not a coincidence: in DejaVu the
+    # mkmk lookup is index 4 and the mark lookups are 12 and 13, so mkmk runs
+    # FIRST, stacks the acute on the grave, and the mark-to-base lookup then
+    # overwrites that answer. Attachment assigns, it does not accumulate -
+    # HarfBuzz does the same, measured.
+    set parsed [::tclpdf::sfnt read $fontDejaVu]
+    set gpos [::tclpdf::sfnt table $parsed GPOS]
+    set order {}
+    foreach index [::tclpdf::otLayout featureLookups $gpos {mark mkmk}] {
+        lappend order $index [::tclpdf::otLayout u16 $gpos \
+            [::tclpdf::otLayout lookup $gpos $index]]
+    }
+    set order
+} -result {4 6 12 5 13 4}
+
+# --- mark to mark, and the chain -----------------------------------------
+
+test markPos-4.1 {a mark on a mark inherits the offset of the mark below} -constraints haveRoboto -body {
+    # hb-shape Roboto-Regular.ttf -u 0062,0300,0301
+    #   -> [gid70=0+1150|gid168=0@14,321+0|gid169=0@50,672+0]
+    # Roboto orders its lookups the other way round from DejaVu - mark 3, 4
+    # then mkmk 5, 6 - so the mkmk answer is the last word and the chain
+    # shows: the acute's own offset against the grave is 36, 351, and the
+    # grave's own 14, 321 is added to it.
+    markOffsets $fontRoboto {0x0062 0x0300 0x0301}
+} -result {{0 0} {14 321} {50 672}}
+
+test markPos-4.2 {without the mark below, the same acute sits lower} -constraints haveRoboto -body {
+    # The control for 4.1: on the bare "b" the acute is at 50, 321
+    # (hb-shape -u 0062,0301 -> [gid70=0+1150|gid169=0@50,321+0]), so the
+    # 672 above is the chain and not the anchor.
+    markOffsets $fontRoboto {0x0062 0x0301}
+} -result {{0 0} {50 321}}
+
+# --- mark to ligature -----------------------------------------------------
+
+test markPos-5.1 {a mark attaches to a ligature component} -constraints haveDejaVu -body {
+    # DejaVu's one reachable type 5 lookup (index 12) has a single covered
+    # glyph, U+00E7, with one component and one mark class.
+    # hb-shape DejaVuSans.ttf -u 00E7,0323
+    #   -> [ccedilla=0+1126|dotbelowcomb=0@64,-429+0]
+    markOffsets $fontDejaVu {0x00E7 0x0323}
+} -result {{0 0} {64 -429}}
+
+test markPos-5.2 {and the lookup really is a type 5 one} -constraints haveDejaVu -body {
+    # Otherwise 5.1 would pass on the mark-to-base path and prove nothing.
+    set parsed [::tclpdf::sfnt read $fontDejaVu]
+    set gpos [::tclpdf::sfnt table $parsed GPOS]
+    set lookup [::tclpdf::otLayout lookup $gpos 12]
+    set typed [::tclpdf::otLayout typedSubtables $gpos $lookup {4 5 6} 9]
+    lassign [::tclpdf::markPos::Subtable $gpos 5 \
+        [lindex [lindex $typed 0] 1]] type coverage records ligatures anchors
+    # One ligature, one component, one class: the anchor 678, -430 wrapped
+    # once per level.
+    list [::tclpdf::otLayout u16 $gpos $lookup] $type [dict size $ligatures] \
+        $anchors
+} -result {5 5 1 {{{{678 -430}}}}}
+
+test markPos-5.3 {a third glyph after the ligature still finds its own base} -constraints haveDejaVu -body {
+    # hb-shape DejaVuSans.ttf -u 00E7,0323,0300
+    #   -> [ccedilla=0+1126|dotbelowcomb=0@64,-429+0|gravecomb=0@64,0+0]
+    markOffsets $fontDejaVu {0x00E7 0x0323 0x0300}
+} -result {{0 0} {64 -429} {64 0}}
+
+# --- what the lookup flag leaves out --------------------------------------
+
+test markPos-6.1 {Roboto filters its mkmk lookups by a mark filtering set} -constraints haveRoboto -body {
+    # The font behind test 4.1: both of its mkmk lookups set 0x0010 and name
+    # a set, so the chain there is reached THROUGH the filtering path, not
+    # around it.
+    set parsed [::tclpdf::sfnt read $fontRoboto]
+    set gpos [::tclpdf::sfnt table $parsed GPOS]
+    set seen {}
+    foreach index [::tclpdf::otLayout featureLookups $gpos mkmk] {
+        set lookup [::tclpdf::otLayout lookup $gpos $index]
+        lappend seen [format 0x%04X [::tclpdf::otLayout lookupFlag $gpos $lookup]] \
+            [::tclpdf::otLayout markFilteringSet $gpos $lookup]
+    }
+    set seen
+} -result {0x0010 0 0x0010 2}
+
+test markPos-6.2 {Liberation Sans filters by mark attachment type} -constraints haveLiberation -body {
+    # The other of the three mechanisms, and it is in the shipped set: one
+    # mark-to-base lookup with type 1 and both mkmk lookups with types 2
+    # and 3.
+    set parsed [::tclpdf::sfnt read $fontLiberation]
+    set gpos [::tclpdf::sfnt table $parsed GPOS]
+    set flags {}
+    foreach index [::tclpdf::otLayout featureLookups $gpos {mark mkmk}] {
+        set flag [::tclpdf::otLayout lookupFlag $gpos \
+            [::tclpdf::otLayout lookup $gpos $index]]
+        if {$flag & 0xFF00} {
+            lappend flags [format 0x%04X $flag]
+        }
+    }
+    set flags
+} -result {0x0100 0x0200 0x0300}
+
+test markPos-6.3 {and it positions the mark where HarfBuzz does} -constraints haveLiberation -body {
+    # hb-shape LiberationSans-Regular.ttf -u 0061,0328,0301
+    #   -> [aogonek=0+1139|acutecomb=0@-364,-340+0]
+    # and -u 0041,0323,0301 -> [Adotbelow=0+1366|acutecomb=0@-411,0+0].
+    # Both are given here as the composed glyph plus the acute, because that
+    # is what HarfBuzz has by the time GPOS runs.
+    list [markOffsets $fontLiberation {0x0105 0x0301}] \
+        [markOffsets $fontLiberation {0x1EA0 0x0301}]
+} -result {{{0 0} {-364 -340}} {{0 0} {-411 0}}}
+
+test markPos-6.4 {a plain unfiltered lookup still reaches its mark} -constraints haveLiberation -body {
+    # hb-shape LiberationSans-Regular.ttf -u 0062,0300
+    #   -> [b=0+1139|gravecomb=0@-262,0+0]
+    markOffsets $fontLiberation {0x0062 0x0300}
+} -result {{0 0} {-262 0}}
+
+test markPos-6.5 {where this reader and HarfBuzz part company, and why} -constraints haveLiberation -body {
+    # THE ONE DIVERGENCE, measured: hb-shape -u 0062,0300,0301 leaves the
+    # acute at 0,0, this reader stacks it on the grave at -297,420.
+    #
+    # The cause is in the font, not in either reader. Liberation Sans gives
+    # gravecomb and acutecomb GDEF glyph class 1 - BASE GLYPH - while its
+    # markAttachClassDef puts both in mark attachment class 2. HarfBuzz
+    # refuses a mark-to-mark attachment whose mark2 is not a GDEF mark and
+    # therefore drops the whole lookup; the specification names no such
+    # condition (S. 227: the mark2 is "the glyph preceding the mark1 glyph in
+    # glyph string order (skipping glyphs according to LookupFlags)", and the
+    # subtable "applies precisely when that mark2 glyph is covered by
+    # mark2Coverage").
+    #
+    # The specification wins here, and the result is also the one the font's
+    # own mkmk lookup was written to produce: the accents stack instead of
+    # both landing on the baseline. Changing this is a decision, not a fix,
+    # and this test is where it would have to be argued.
+    markOffsets $fontLiberation {0x0062 0x0300 0x0301}
+} -result {{0 0} {-262 0} {-297 420}}
+
+# --- more than one feature at a time --------------------------------------
+
+test markPos-7.1 {abvm and blwm are not folklore} -constraints haveNoto -body {
+    # Noto Sans carries mark attachment under four feature tags, and the two
+    # Indic ones name lookups that "mark" alone never reaches - eight above
+    # the base and four below.
+    set gpos [::tclpdf::sfnt table [::tclpdf::sfnt read $fontNoto] GPOS]
+    list [::tclpdf::otLayout featureLookups $gpos abvm] \
+        [::tclpdf::otLayout featureLookups $gpos blwm]
+} -result {{6 7 8 9 10 11 12 13} {14 15 16 17}}
+
+test markPos-7.2 {the four tags come back as one list in lookup order} -constraints haveNoto -body {
+    # Not four lists to be merged by the caller: the specification applies
+    # lookups in the order of the LOOKUP LIST, and a second caller sorting
+    # them again would be the copy this change exists to avoid.
+    set gpos [::tclpdf::sfnt table [::tclpdf::sfnt read $fontNoto] GPOS]
+    set all [::tclpdf::otLayout featureLookups $gpos {mark mkmk abvm blwm}]
+    set merged {}
+    foreach tag {mark mkmk abvm blwm} {
+        foreach index [::tclpdf::otLayout featureLookups $gpos $tag] {
+            lappend merged $index
+        }
+    }
+    list [expr {$all eq [lsort -integer -unique $merged]}] [llength $all] \
+        [lrange $all 0 3]
+} -result {1 30 {6 7 8 9}}
+
+test markPos-7.3 {one tag still means one tag} -constraints haveDejaVu -body {
+    # The callers that were there first pass a bare tag, and a bare tag is a
+    # list of one. kernGpos.tcl and gsubApply.tcl must not notice this change.
+    set gpos [::tclpdf::sfnt table [::tclpdf::sfnt read $fontDejaVu] GPOS]
+    list [::tclpdf::otLayout featureLookups $gpos kern] \
+        [::tclpdf::otLayout featureLookups $gpos {kern}] \
+        [::tclpdf::otLayout featureLookups $gpos {kern mark}]
+} -result {{14 15} {14 15} {12 13 14 15}}
+
+test markPos-7.4 {an extension lookup is followed to what it wraps} -constraints haveNoto -body {
+    # Three of Noto Sans's mark lookups are type 9 wrappers. If they were
+    # skipped the marks behind them would simply never be placed, silently.
+    set gpos [::tclpdf::sfnt table [::tclpdf::sfnt read $fontNoto] GPOS]
+    set wrapped 0
+    set inner {}
+    foreach index [::tclpdf::otLayout featureLookups $gpos {mark mkmk abvm blwm}] {
+        set lookup [::tclpdf::otLayout lookup $gpos $index]
+        if {[::tclpdf::otLayout u16 $gpos $lookup] != 9} {
+            continue
+        }
+        incr wrapped
+        foreach pair [::tclpdf::otLayout typedSubtables $gpos $lookup {4 5 6} 9] {
+            lappend inner [lindex $pair 0]
+        }
+    }
+    list $wrapped [lsort -unique $inner]
+} -result {3 4}
+
+test markPos-7.5 {and the Devanagari marks land where HarfBuzz puts them} -constraints haveNoto -body {
+    # hb-shape NotoSans-Variable.ttf -u 0915,0941,0902
+    #   -> [uni0915=0+768|uni0941=0@-221,0+0|uni0902=0@-221,0+0]
+    # One below the base and one above it, so both feature tags are on the
+    # path at once.
+    markOffsets $fontNoto {0x0915 0x0941 0x0902}
+} -result {{0 0} {-221 0} {-221 0}}
+
+# --- what a broken or bare font does --------------------------------------
+
+test markPos-8.1 {a font without GPOS has no marks and no complaint} -body {
+    set parsed [dict create bytes {} tables {} numGlyphs 1 unitsPerEm 1000 cmap {}]
+    set state [::tclpdf::markPos build $parsed]
+    list $state [::tclpdf::markPos offsets $state {1 2 3}]
+} -result {{} {{0 0} {0 0} {0 0}}}
+
+test markPos-8.2 {a truncated GPOS costs the marks, not the document} -constraints haveDejaVu -body {
+    # The layout tables are the part of a font most likely to arrive damaged.
+    # A bounds check that raised would turn a bad font into a refused
+    # document; TCLPDF LAYOUT RANGE is absorbed here and the text is then set
+    # the way a font without these lookups would set it.
+    set parsed [::tclpdf::sfnt read $fontDejaVu]
+    lassign [dict get $parsed tables GPOS] position length
+    dict set parsed tables GPOS [list $position 24]
+    set code [catch {::tclpdf::markPos build $parsed} state]
+    list $code $state
+} -result {0 {}}
+
+test markPos-8.3 {a run of fewer than two glyphs answers in shape} -constraints haveDejaVu -body {
+    # Positionally aligned with the run, always: a caller that indexes the
+    # answer by glyph must never have to check its length first.
+    set parsed [::tclpdf::sfnt read $fontDejaVu]
+    set state [::tclpdf::markPos build $parsed]
+    lassign [markGlyphs $parsed {0x0062}] glyph
+    list [::tclpdf::markPos run $state {}] \
+        [::tclpdf::markPos run $state [list [list $glyph {98}]]] \
+        [::tclpdf::markPos offsets $state {}]
+} -result {{} {{0 0}} {}}
+
+test markPos-8.4 {a glyph nothing attaches to keeps its zero} -constraints haveDejaVu -body {
+    # Two ordinary letters: covered by nothing, moved by nothing.
+    markOffsets $fontDejaVu {0x0062 0x0063}
+} -result {{0 0} {0 0}}
+
+# --- the script a mark lookup hangs off -------------------------------------
+#
+# A combining mark belongs to the script of its LETTER, and this module never
+# sees the letters. otLayout::langSys picks ONE script by name and that is
+# right for the kerning; for the marks it left whole scripts unread. What
+# follows is the two halves of the answer: the second tier reaches them, and
+# it never overrules the first.
+
+test markPos-9.1 {the resolved script alone does not reach the Hebrew lookups} \
+    -constraints haveDejaVu -body {
+    # The measurement that made this necessary. DejaVu Sans hangs its Hebrew
+    # mark lookups off "hebr", and the Latin path never sees them - so every
+    # nikud came out at offset zero, drawn at the pen position beside its
+    # letter.
+    set gpos [::tclpdf::sfnt table [::tclpdf::sfnt read $fontDejaVu] GPOS]
+    set tags {mark mkmk abvm blwm}
+    set latin [::tclpdf::otLayout featureLookups $gpos $tags]
+    set hebrew [::tclpdf::otLayout featureLookups $gpos $tags hebr]
+    set every [::tclpdf::otLayout featureLookupsAnyScript $gpos $tags]
+    set shared {}
+    foreach index $hebrew {
+        if {$index in $latin} {
+            lappend shared $index
+        }
+    }
+    set missing {}
+    foreach index [concat $latin $hebrew] {
+        if {$index ni $every} {
+            lappend missing $index
+        }
+    }
+    list $latin $hebrew $shared $missing $every
+} -result {{4 12 13} {5 6 7 8 9} {} {} {0 1 2 3 4 5 6 7 8 9 10 11 12 13}}
+
+test markPos-9.2 {every script is one script table each, by tag} \
+    -constraints haveDejaVu -body {
+    # The walk the two readers share. Twenty scripts in this face, "latn"
+    # among them, and the offsets are what [langSys] and
+    # [featureLookupsAnyScript] both start from.
+    set gpos [::tclpdf::sfnt table [::tclpdf::sfnt read $fontDejaVu] GPOS]
+    set byTag [::tclpdf::otLayout scripts $gpos]
+    list [dict size $byTag] [lrange [dict keys $byTag] 0 3] \
+        [expr {[dict exists $byTag latn] && [dict exists $byTag hebr]}]
+} -result {20 {DFLT arab armn brai} 1}
+
+test markPos-9.3 {so the nikud land where HarfBuzz puts them} \
+    -constraints haveDejaVu -body {
+    # hb-shape DejaVuSans.ttf -u 05D0,05B7
+    #   -> [uni05B7=0@79,0+0|uni05D0=0+1369]
+    # HarfBuzz prints a right-to-left run in VISUAL order, so the patah at 79
+    # and the alef at 0 are 79 units apart: the point sits 79 units right of
+    # the letter's origin. markPos answers in the LOGICAL frame, walking back
+    # over the alef's own advance of 1369 - so 79 - 1369 = -1290.
+    #
+    # hb-shape DejaVuSans.ttf -u 05D1,05BC
+    #   -> [uni05BC=0@-200,0+0|uni05D1=0+1184]   -200 - 1184 = -1384
+    list [lindex [markOffsets $fontDejaVu {0x05D0 0x05B7}] 1] \
+        [lindex [markOffsets $fontDejaVu {0x05D1 0x05BC}] 1]
+} -result {{-1290 0} {-1384 0}}
+
+test markPos-9.4 {and so does the Hebrew of a second face} \
+    -constraints haveLiberation -body {
+    # Liberation Sans hangs sixteen mark lookups off "hebr" against ten off
+    # "latn", so the two tiers really are two here.
+    #
+    # hb-shape LiberationSans-Regular.ttf -u 05D0,05B7
+    #   -> [1263=0@660,0+0|1280=0+1286]          660 - 1286 = -626
+    lindex [markOffsets $fontLiberation {0x05D0 0x05B7}] 1
+} -result {-626 0}
+
+test markPos-9.5 {a fallback lookup never overrules the resolved script} \
+    -constraints haveArimo -body {
+    # The reason this is two tiers and not one list. Arimo's CYRILLIC mark
+    # lookup covers U+0300 and the capital schwa U+018F both, and stands
+    # AFTER the Latin one in the lookup list - so a single list, where the
+    # last lookup wins, moved the grave 57 units away from where HarfBuzz
+    # puts it. Seven pairs in this one face.
+    #
+    # hb-shape Arimo-Variable.ttf -u 018F,0300 -> [875=0+1541|729=0@-464,0+0]
+    # hb-shape Arimo-Variable.ttf -u 018F,0301 -> [875=0+1541|730=0@-486,0+0]
+    # hb-shape Arimo-Variable.ttf -u 01DD,0300 -> [950=0+1139|729=0@-292,-340+0]
+    list [lindex [markOffsets $fontArimo {0x018F 0x0300}] 1] \
+        [lindex [markOffsets $fontArimo {0x018F 0x0301}] 1] \
+        [lindex [markOffsets $fontArimo {0x01DD 0x0300}] 1]
+} -result {{-464 0} {-486 0} {-292 -340}}
+
+test markPos-9.6 {and the Latin marks of every face are untouched by the second tier} \
+    -constraints {haveDejaVu haveRoboto haveLiberation haveArimo} -body {
+    # The tripwire. Reading more of the table must not move a mark the package
+    # already placed correctly - measured over the 26 faces of
+    # examples/assets/fonts, 343 567 base-and-mark pairs of which 292 687 had
+    # an answer before, and not one of them changed. These four are the ones
+    # the file measures elsewhere, so a change would show up here first.
+    list [lindex [markOffsets $fontDejaVu {0x0062 0x0300}] 1] \
+        [lindex [markOffsets $fontRoboto {0x0062 0x0300}] 1] \
+        [lindex [markOffsets $fontLiberation {0x0062 0x0300}] 1] \
+        [lindex [markOffsets $fontArimo {0x0062 0x0300}] 1]
+} -result {{-510 373} {14 321} {-262 0} {-212 0}}
+
+test markPos-9.7 {the Arabic harakat sit where HarfBuzz sits them} \
+    -constraints haveNaskh -body {
+    # The other refusal that mark attachment lifted, and the one that needs
+    # the SHAPED run: the cmap glyph for beh is not a base of any mark lookup
+    # - ccmp splits it into an undotted skeleton and a dot first, and the
+    # fatha attaches to the skeleton.
+    #
+    # hb-shape NotoNaskhArabic-Variable.ttf -u 0628,064E
+    #   -> [uni064E=0@266,-280+0|dotbelowar=0@308,-31+0|uni066E=0+772]
+    # Measured from the base origin: the dot 308-772 = -464, the fatha
+    # 266-772 = -506.
+    package require tclpdf::forms
+    set parsed [::tclpdf::sfnt read $fontNaskh]
+    set run {}
+    foreach code {0x0628 0x064E} {
+        set code [expr {$code}]
+        lappend run [list [dict get [dict get $parsed cmap] $code] [list $code]]
+    }
+    set run [::tclpdf::forms apply [::tclpdf::forms build $parsed] $run]
+    ::tclpdf::markPos offsets [::tclpdf::markPos build $parsed] \
+        [lmap entry $run {lindex $entry 0}]
+} -result {{0 0} {-464 -31} {-506 -280}}
+
+test markPos-9.8 {a face whose scripts share their lookups gains nothing and loses nothing} \
+    -constraints haveNaskh -body {
+    # Noto Naskh Arabic names the same 26 mark lookups under every one of its
+    # five scripts, so the second tier is EMPTY here - and the harakat above
+    # were reached by the resolved script all along. Worth pinning: it is what
+    # says that 9.7 measures the placement and not the tiering.
+    set gpos [::tclpdf::sfnt table [::tclpdf::sfnt read $fontNaskh] GPOS]
+    set tags {mark mkmk abvm blwm}
+    set resolved [::tclpdf::otLayout featureLookups $gpos $tags]
+    list [expr {$resolved eq [::tclpdf::otLayout featureLookupsAnyScript $gpos $tags]}] \
+        [llength $resolved] [dict keys [::tclpdf::otLayout scripts $gpos]]
+} -result {1 26 {DFLT arab cyrl grek latn}}
+
+test markPos-9.9 {a table with no script at all still answers} -body {
+    # A GPOS whose script list is empty: [langSys] has nothing to prefer and
+    # nothing to fall back on, and neither has the walk over every script.
+    # Both have to come back empty rather than reach past the end of it.
+    set table [binary format SSSSS 0x0001 0 10 12 14][binary format SSS 0 0 0]
+    list [::tclpdf::otLayout scripts $table] \
+        [::tclpdf::otLayout langSys $table] \
+        [::tclpdf::otLayout featureLookupsAnyScript $table {mark}] \
+        [::tclpdf::otLayout featureLookups $table {mark}]
+} -result {{} {} {} {}}
+
+cleanupTests

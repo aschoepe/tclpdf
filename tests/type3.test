@@ -33,6 +33,14 @@ set type1Face [file join [file dirname [file dirname [info script]]] examples \
     assets fonts urw-core35-fonts NimbusSans-Regular.t1]
 testConstraint haveType1 [file exists $type1Face]
 
+# A TrueType face, for the documents that carry a drawn font AND an embedded
+# one - which is the ordinary case rather than an exotic one: a Type 3 font
+# exists for the characters a real face has no glyph for, so it always stands
+# beside one.
+set trueTypeFace [file join [file dirname [file dirname [info script]]] examples \
+    assets fonts DejaVuSans.ttf]
+testConstraint haveTrueType [file exists $trueTypeFace]
+
 # The written objects a test looks at - the font object is the one carrying
 # /Subtype /Type3. The walk itself is in helper.tcl, because a third copy of
 # it is a copy too many.
@@ -742,6 +750,137 @@ test type3-7.6 {no font bounding box is claimed unless one is stated} -body {
   # lly 800-0-900 = -100, urx 700, ury 800.
   lsort $boxes
 } -result {{0 -100 700 800} {0 0 0 0}}
+
+# -- beside an embedded face -------------------------------------------------
+#
+# A drawn font and an embedded one share ONE state dictionary, and each module
+# writes its own entries out of it on the same event. Every test above writes
+# documents whose only font is drawn, so nothing ever asked what the font
+# module does when it walks past an entry that is not its own: it took it for
+# an sfnt face and died on [dict get $entry parsed] with a bare Tcl "key
+# \"parsed\" not known in dictionary". These write the file - the fault is at
+# write time and is invisible to a test that only reads the content stream.
+
+test type3-7.7 {a drawn font and an embedded face in one document} \
+    -constraints haveTrueType -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed body $::trueTypeFace
+  $doc font define marks -ascent 800
+  $doc font glyph marks ✓ -width 600 -script {
+    $doc path -segments {{move 60 300} {line 240 480} {line 540 120}} \
+        -stroke black -width 90
+  }
+  $doc font -family body -size 12
+  $doc text "an embedded face" -at {20 30}
+  $doc font -family marks -size 12
+  $doc text "✓" -at {20 40}
+  set path [::tclpdfTest::scratch type3-7.7.pdf]
+  $doc write $path
+  # Both fonts as OBJECTS in the file, not just a write that did not throw:
+  # the drawn one with its glyph streams, the embedded one with its program.
+  set drawn [type3Object $doc]
+  set embedded [lindex [::tclpdfTest::objects $doc {/Subtype /Type0}] 0]
+  set program [::tclpdfTest::objects $doc /FontFile2]
+  set size [file size $path]
+  $doc destroy
+  file delete $path
+  list [string match {*/CharProcs*} $drawn] \
+      [string match {*/Encoding /Identity-H*} $embedded] \
+      [llength $program] [expr {$size > 0}]
+} -result {1 1 1 1}
+
+test type3-7.8 {and the other way round - the drawn font defined first} \
+    -constraints haveTrueType -body {
+  # The two modules hook the same event, and which one runs first follows the
+  # order the fonts were created in. Both orders have to write both fonts.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks ✓ -width 600 -script {
+    $doc rect -at {0 0} -size {600 800} -fill black
+  }
+  $doc font embed body $::trueTypeFace
+  $doc font -family marks -size 12
+  $doc text "✓" -at {20 30}
+  $doc font -family body -size 12
+  $doc text "an embedded face" -at {20 40}
+  set path [::tclpdfTest::scratch type3-7.8.pdf]
+  $doc write $path
+  set result [list [llength [type3Objects $doc]] \
+      [llength [::tclpdfTest::objects $doc {/Subtype /Type0}]] \
+      [llength [::tclpdfTest::objects $doc /FontFile2]]]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 1 1}
+
+test type3-7.9 {a drawn font beside an embedded Type 1 face} \
+    -constraints haveType1 -body {
+  # The third kind of entry in the same dictionary, and the one whose road the
+  # font module tested for by name.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed body $::type1Face
+  $doc font define marks -ascent 800
+  $doc font glyph marks ✓ -width 600 -script {
+    $doc rect -at {0 0} -size {600 800} -fill black
+  }
+  $doc font -family body -size 12
+  $doc text "an embedded face" -at {20 30}
+  $doc font -family marks -size 12
+  $doc text "✓" -at {20 40}
+  set path [::tclpdfTest::scratch type3-7.9.pdf]
+  $doc write $path
+  set result [list [llength [type3Objects $doc]] \
+      [llength [::tclpdfTest::objects $doc /FontFile]]]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 1}
+
+test type3-7.10 {such a document is written twice the same} \
+    -constraints haveTrueType -body {
+  # The idempotence of 7.3, with the second module writing as well: a slot
+  # taken twice would show up as a second set of objects here first.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed body $::trueTypeFace
+  $doc font define marks -ascent 800
+  $doc font glyph marks ✓ -width 600 -script {
+    $doc rect -at {0 0} -size {600 800} -fill black
+  }
+  $doc font -family body -size 12
+  $doc text "an embedded face" -at {20 30}
+  $doc font -family marks -size 12
+  $doc text "✓" -at {20 40}
+  lassign [::tclpdfTest::writeTwice $doc type3-7.10] first second
+  $doc destroy
+  list [string equal $first $second] \
+      [regexp -all {/Subtype /Type3} $second] \
+      [regexp -all {/FontFile2} $second]
+} -result {1 1 1}
+
+test type3-7.11 {qpdf finds nothing wrong with the mixed document} \
+    -constraints {qpdf haveTrueType} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed body $::trueTypeFace
+  $doc font define marks -ascent 800
+  $doc font glyph marks ✓ -width 600 -script {
+    $doc rect -at {0 0} -size {600 800} -fill black
+  }
+  $doc font -family body -size 12
+  $doc text "an embedded face" -at {20 30}
+  $doc font -family marks -size 12
+  $doc text "✓" -at {20 40}
+  set path [::tclpdfTest::scratch type3-7.11.pdf]
+  $doc write $path
+  $doc destroy
+  set code [catch {exec qpdf --check $path 2>@1} report]
+  file delete $path
+  list $code [string match {*No syntax or stream encoding errors*} $report]
+} -result {0 1}
 
 # -- what the outside world makes of it --------------------------------------
 

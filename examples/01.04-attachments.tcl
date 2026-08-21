@@ -101,7 +101,6 @@ $doc link -at [list 20 $summaryTop] \
 # is what an outline of many reports in one viewer wants.
 set report [$doc bookmark "Report SR-2026-114" -open 0]
 $doc bookmark "Summary" -at [list 20 $summaryTop] -parent $report
-$doc bookmark "Attachments" -at {20 250} -parent $report
 
 # The raw data, built here and attached from memory rather than from a file -
 # -data exists for exactly this case.
@@ -146,12 +145,62 @@ $doc attach -data "Specimen batch 7841 was stored at room temperature for\
     48 h before measuring.\n" -name note.txt -mime text/plain \
     -relationship Unspecified -description "A note on the specimen"
 
+exampleFooter $doc
+
+# ---------------------------------------------------------------------------
+# Page 2: what is attached, and under which relationship
+# ---------------------------------------------------------------------------
+#
+# A page of its own, because the list belongs to the reader rather than to the
+# report: a viewer shows attachments in a pane the reader has to know about,
+# and a document that carries five files without ever saying so on paper is
+# one printout away from losing them.
+
+$doc page add
+$doc bookmark "Attachments" -at {20 22} -parent $report
+
+$doc font -family helvetica -style bold -size 15
+$doc text "Attached files" -at {20 22}
+$doc font -style {} -size 9
+$doc text "Five files travel with this report" -at {20 29}
+$doc line -from {20 33} -to {190 33} -stroke {0.6 0.6 0.65} -width 0.3
+
+$doc font -size 10
+set y [$doc text "Every attachment names a RELATIONSHIP - what the file is to\
+    the document it rides in. The five values below are the whole vocabulary\
+    ISO 32000-2 gives for it (Table 43), and a reader that sorts attachments\
+    goes by them rather than by the file name." \
+    -at {20 42} -width 170 -align justify -anchor top]
+
+# The rows carry what was written above; the check below is what makes them
+# trustworthy. A list beside the data always drifts - so it is measured
+# against the document rather than believed.
+set listed {
+    {readings.csv Data "The twenty individual readings"}
+    {procedure.txt Supplement "Method and conditions"}
+    {01.04-attachments.tcl Source "The script this report was made with"}
+    {summary.txt Alternative "The summary table as plain text"}
+    {note.txt Unspecified "A note on the specimen"}
+}
+set named {}
+foreach row $listed {
+    lappend named [lindex $row 0]
+}
+if {[lsort $named] ne [lsort [$doc attachments]]} {
+    # Never reached, and it says so if it ever is: the table on this page
+    # would then be describing a document other than this one.
+    return -code error "the table lists [join [lsort $named] {, }] but the\
+        document carries [join [lsort [$doc attachments]] {, }]"
+}
+
+$doc table -at [list 20 [expr {$y + 6}]] -width 170 -theme grid \
+    -head {{File Relationship "What it holds"}} -body $listed \
+    -columns {{width 45} {width 35} {}}
+
 $doc font -size 8
-$doc text "Five files are attached to this document: readings.csv with the raw\
-    measurements, procedure.txt with the method, summary.txt with the table\
-    above as text, note.txt with a remark on the specimen, and the script this\
-    report was made with." \
-    -at {20 250} -width 170
+$doc text "summary.txt is attached uncompressed, so it can be read straight\
+    out of the PDF with a text editor - open this file in one and search for\
+    the word Readings." -at {20 250} -width 170
 
 exampleFooter $doc
 

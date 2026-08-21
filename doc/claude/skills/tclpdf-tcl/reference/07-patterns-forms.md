@@ -1,4 +1,4 @@
-# Gradients, tiling patterns, form XObjects
+# Gradients, tiling patterns, form XObjects, layers
 
 ## Gradients drawn directly
 
@@ -137,6 +137,58 @@ $doc font -color black -style {}      ;# the font state is document state, not p
 ```
 
 Every form is an isolated transparency group: `-opacity` on the placement fades it as **one** object, and shapes overlapping inside it do not add up. The group names no colour space, so a form stays valid under any PDF/A output intent. Below `-version 1.4` there are no groups. `-alt`/`-artifact` on the placement matter in tagged documents.
+
+## Layers: optional content
+
+```tcl
+# A layer is an optional content group - what a reader shows as a checkbox in
+# its layer panel (PDF 1.5; an older -version is refused). -title is what that
+# panel shows; without it the alias stands in. -visible 0 starts it off, and
+# the state belongs to the CONFIGURATION, so it can be changed after drawing.
+$doc page add
+$doc layer create german -title "German"
+$doc layer create english -title "English" -visible 0
+$doc layer create draft -title "Draft stamp" -visible 0
+
+# At most one of a radio set is on at a time (/RBGroups): two or more names,
+# each a layer of this document. One language per layer is the usual case.
+$doc layer radio {german english}
+
+# The default configuration itself. The name may NOT be empty - ISO 19005-2/-3,
+# 6.9 requires one, and an empty one fails veraPDF's check 6.9-1.
+$doc layer configure -title "Invoice" -listMode AllPages
+
+# layer draw brackets what the script draws with /OC ... BDC ... EMC. The
+# script runs in the frame that called it, so $doc is in reach; the bracket is
+# closed even when the script fails. Layers nest, and so do their brackets.
+$doc font -family helvetica -size 12 -color black
+$doc layer draw german -script {
+    $doc text "Rechnung 4711" -at {20 30}
+}
+$doc layer draw english -script {
+    $doc text "Invoice 4711" -at {20 30}
+}
+
+# Placing a form inside a bracket is how a reusable block is made optional -
+# the form is stored once and the LAYER decides whether it is shown.
+$doc layer draw draft -script {
+    $doc form place stamp -at {150 26}
+}
+
+puts "layers: [$doc layer names]"
+puts "german on: [$doc layer state german], draft on: [$doc layer state draft]"
+$doc layer state draft 1                 ;# read with no value, set with one
+puts [$doc layer configure]              ;# title and listMode, read back
+
+# A BRACKET OPENS AND CLOSES IN ONE CONTENT STREAM: a script that adds a page,
+# or that otherwise leaves the stream it began in, is refused by name - and
+# what it drew before that is still closed properly.
+if {[catch {$doc layer draw german -script {$doc page add}} message]} {
+    puts "refused, as it should be: $message"
+}
+```
+
+`/OCProperties` is written for you, with every group in `/OCGs` and a default configuration `/D` carrying `/Order`, `/ON`, `/OFF`, `/RBGroups` and `/ListMode`. `/Order` lists every group, which is what ISO 19005-2/-3, 6.9 asks - so a **PDF/A document with layers stays conforming**. What is not offered: an `/OC` entry on an XObject or on an annotation - bracket the placement instead, and a link cannot be put into a layer at all. A page taken over with `pdf import` keeps the layers it brought (`12-import-update-info.md`).
 
 ```tcl
 $doc write [file join $out ref-07-patterns-forms.pdf]

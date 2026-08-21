@@ -88,6 +88,8 @@ foreach tclpdfPkg {
     tclpdf::otLayout
     tclpdf::gdef
     tclpdf::kernGpos
+    tclpdf::markPos
+    tclpdf::hyphenate
     tclpdf::kern
     tclpdf::gsubApply
     tclpdf::liga

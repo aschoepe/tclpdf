@@ -12,15 +12,15 @@
 # TWO OF THE LINES RUN RIGHT TO LEFT and they are not the same case. Hebrew
 # needs nothing but the order, so -direction rtl sets it correctly and the
 # text extracts as it was written. Arabic needs the order AND the contextual
-# forms, and tclpdf sets both - but only in a face that carries whole
-# letters. Noto Naskh Arabic, the face in the table, writes a letter as an
-# undotted skeleton plus a separate dot glyph placed by GPOS mark attachment,
-# which this package does not read, so that line is REFUSED unless the call
-# says -unshaped 1 - which this script does, and the line then comes out as
-# isolated forms in the right order. The same words are set once more in
-# DejaVu Sans, shaped, with -direction rtl and nothing else, followed by an
-# invoice line whose numbers keep their own order and whose brackets are
-# mirrored. The notes on the page say so.
+# forms, and tclpdf sets both, in any face that carries the three positional
+# features. Noto Naskh Arabic, the face in the table, writes a letter as an
+# undotted skeleton and hangs the dots on it as separate glyphs, which the
+# GPOS mark attachment places on their anchors; while that attachment was
+# missing the face was refused, and it is set here with -direction rtl and
+# nothing else. The same words are set once more in DejaVu Sans, which draws
+# whole letters, followed by an invoice line whose numbers keep their own
+# order and whose brackets are mirrored. The notes on the page say so.
+# Example 02.12 puts a vocalised word in both kinds of face side by side.
 #
 # WHY THIS IS AFFORDABLE. The source files add up to 15 MB, the Japanese face
 # alone being 8.7 MB for its 17 103 glyphs. What lands in the document is a
@@ -84,10 +84,13 @@ set profile [file join [file dirname $here] icc sRGB.icc]
 # god), KI (earth), LUGAL (king), E2 (house), URU (city), A (water), UD (sun,
 # day), GISH (tree, wood), EN (lord), KA (mouth), LU2 (man), SAL (woman), DISH
 # (one) and U (ten) - not the first code points of the block, which are A
-# and its compounds. Tibetan shows its letters only: the vowel signs and the
-# subjoined letters are combining marks that need GPOS placement, and set as
-# glyphs in sequence they land beside the next letter (measured, shaping.tcl),
-# so [text] refuses them like the Hebrew nikud.
+# and its compounds. Tibetan shows its letters only, and not because
+# of mark placement: a single vowel sign on a single letter is placed here
+# exactly as HarfBuzz places it. A Tibetan syllable is a STACK, which a
+# shaper builds by substituting letter and mark for one precomposed glyph
+# through the GSUB features abvs and blws - "skad" is two glyphs there and
+# three here - and an anchor cannot supply a glyph the character map does not
+# lead to (measured, shaping.tcl), so [text] refuses the stacking marks.
 # The hieroglyphs are the ones people know: the wedjat eye (Gardiner D10),
 # ankh (S34), scarab (L1), owl (G17), falcon (G5), vulture (G1), quail chick
 # (G43), reed (M17), water (N35), sun (N5), cobra (I10), lion (E23), seated man
@@ -98,7 +101,7 @@ set faces {
       "Grüße aus Bochum - Ελλάδα - Москва - Łódź - Plzeň"
   jp       google/NotoSansJP-Regular.ttf         {Japanese}
       "日本語のテキスト ひらがな カタカナ 漢字 東京 一二三四五"
-  tibetan  google/NotoSerifTibetan-Variable.ttf  {Tibetan - the thirty letters; vowel signs and stacks need mark placement and are refused}
+  tibetan  google/NotoSerifTibetan-Variable.ttf  {Tibetan - the thirty letters; the stacked syllables need GSUB substitution and are refused}
       "ཀ ཁ ག ང ཅ ཆ ཇ ཉ ཏ ཐ ད ན པ ཕ བ མ ཙ ཚ ཛ ཝ ཞ ཟ འ ཡ ར ལ ཤ ས ཧ ཨ"
   symbols  google/NotoSansSymbols-Variable.ttf   {Symbols}
       "☥ ☦ ☪ ☮ ☯ ☸ ☺ ☽ ☿ ♀ ♂ ♃ ♄ ♈ ♉ ♊ ♪ ♫ ⚐ ⚑ ⛰ ⛽"
@@ -135,8 +138,8 @@ foreach {alias file what line} $faces {
   $doc font embed $alias [file join $fonts $file]
 }
 
-# Nicht in der Liste oben: die Musikschrift setzt keine Zeile, sie liefert die
-# Zeichen fuer das gezeichnete Notensystem weiter unten.
+# Not in the list above: the music face sets no line of its own, it supplies
+# the characters for the drawn stave further down.
 $doc font embed music [file join $fonts google NotoMusic-Regular.ttf]
 
 $doc font -family sans -size 15 -color {0.20 0.30 0.45}
@@ -160,21 +163,21 @@ foreach {alias file what line} $faces {
   # Not every face has every character of its own sample - a symbol picked
   # from the wrong block would stop the whole document, and saying which one
   # is more useful than a document that does not exist.
-  # The two right-to-left lines are refused unless the call says what to do
-  # about them, and they need different things - which is the point of having
-  # both on this page.
+  # The two right-to-left lines are refused without -direction rtl, and they
+  # need different things behind it - which is the point of having both on
+  # this page.
   #
   # Hebrew needs the ORDER and nothing else, so -direction rtl is the whole
   # answer: the glyphs the cmap gives are the ones the reader expects, and
   # reversing the run puts them where they belong.
   #
-  # Arabic needs the order AND the contextual forms. tclpdf sets both since
-  # the cursive forms arrived - but not with THIS face: Noto Naskh Arabic
-  # writes a letter as an undotted skeleton plus a separate dot glyph, and
-  # placing that dot is GPOS mark attachment, which this package does not
-  # read. So the line is refused unless the caller says -unshaped 1, and the
-  # same words in a face that carries whole letters are set below. See the
-  # note under the lines.
+  # Arabic needs the order AND the contextual forms, and tclpdf sets both -
+  # in this face too, which is worth a word. Noto Naskh Arabic writes a
+  # letter as an undotted skeleton plus separate dot glyphs, and placing
+  # those dots is GPOS mark attachment; while that was missing, the face was
+  # refused for it. It is read now, so this line needs -direction rtl and
+  # nothing else, exactly like the Hebrew one. The same words in a face that
+  # carries whole letters are set below. See the note under the lines.
   #
   # Both are anchored at the RIGHT margin, and that is not decoration: with
   # -direction rtl the default -align left means the edge the line STARTS at
@@ -189,11 +192,9 @@ foreach {alias file what line} $faces {
     set at 190
   }
   if {$alias eq "arabic"} {
-    # -unshaped is a FONT option, so it is set on [font] here, where it
-    # stays in force like -size does, and turned off again below once the
-    # line is drawn; -direction is a property of the LINE, and stays on the
-    # [text] call.
-    $doc font -unshaped 1
+    # The same two settings the Hebrew line gets. -unshaped stood here while
+    # this face was refused; it is gone, because a line that can be shaped
+    # must not be drawn as isolated glyphs.
     set extra {-direction rtl}
     set at 190
   }
@@ -201,7 +202,6 @@ foreach {alias file what line} $faces {
     $doc font -family sans -size 7 -color {0.65 0.20 0.20}
     $doc text "not set: $message" -at [list 20 [expr {$y + 7}]] -width 170
   }
-  $doc font -unshaped 0
   set y [expr {$y + 17}]
 }
 
@@ -241,7 +241,9 @@ set y [expr {$y + 9}]
 
 # THE SAME WORDS IN THE OTHER FACE, and this is the point of the section: the
 # forms are not a property of the package alone. DejaVu Sans carries whole
-# Arabic letters, so -direction rtl is the whole answer for it.
+# Arabic letters, Noto Naskh Arabic a skeleton with its dots hung on by GPOS,
+# and -direction rtl is the whole answer for both - which it has not always
+# been for the second.
 #
 # THE SECOND LINE is an invoice line, and it is there for what a right-to-left
 # line does NOT reverse: the invoice number, the amount with its separators
@@ -282,9 +284,11 @@ $doc text "Measured, not asserted. The shapes come out of the init, medi and\
     Unicode says they must, and \"(\" is drawn with the glyph of \")\"; a\
     line that MIXES the two directions is refused instead: deciding where\
     such a run goes is the bidi algorithm, and this package has none. What is\
-    still missing in Arabic is the rest of a shaper - the ligatures reached\
-    through chaining lookups, and the mark placement of GPOS, which is why\
-    nikud, Devanagari and Thai stay refused." \
+    still missing in Arabic is one piece of a shaper: the ligatures reached\
+    through chaining lookups. The vowel signs are no longer among them -\
+    nikud and harakat are combining marks, and marks are placed from the\
+    anchors of the face. What stays refused needs something an anchor cannot\
+    give: the Tibetan stacks, the Indic conjuncts, Thai." \
     -at [list 20 $y] -width 170
 set y [expr {$y + 30}]
 

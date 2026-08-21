@@ -427,9 +427,10 @@ oo::define ::tclpdf::document::document {
         if {[my FontLayoutState $alias forms] eq {}} {
           return -code error [::tclpdf::shaping message $finding $alias]
         }
-        # Kept, not just noted: the character it names is what a message about
-        # the face has to point at, and the second walk below ends at {}.
-        set cursive $finding
+        # Noted, not kept: all that is still asked of the finding below is
+        # that there WAS one, because the second walk ends at {} and the run
+        # is no longer refused for the marks it carries.
+        set cursive 1
         set finding [::tclpdf::shaping needed $text $direction 1]
       }
       if {[llength $finding]} {
@@ -522,17 +523,15 @@ oo::define ::tclpdf::document::document {
     # joined shapes cannot be found before those shapes exist, and a standard
     # ligature that fired on the isolated letters would have hidden them.
     if {[llength $cursive]} {
-      set state [my FontLayoutState $alias forms]
-      set run [::tclpdf::forms apply $state $run]
-      # The shaping is only half an answer for a face that writes its letters
-      # as a skeleton plus separate dots: those dots are placed by GPOS mark
-      # attachment, which this package does not read, and drawing them at the
-      # pen position puts them beside the letter they belong to. Asked of the
-      # RESULT rather than of the face, because it is the result that either
-      # holds such a glyph or does not.
-      if {[::tclpdf::forms marks $state $run]} {
-        return -code error [::tclpdf::shaping message $cursive $alias marks]
-      }
+      # A face that writes its letters as a skeleton plus separate dots comes
+      # out of this LONGER than it went in, and the dots it added are placed
+      # by GPOS mark attachment - [FontRunMarks] reads it and text.tcl draws
+      # them where the anchors say. Until that existed such a run was refused
+      # here, because a dot drawn at the pen position lands beside the letter
+      # it belongs to instead of under it. Measured in NotoNaskhArabic on the
+      # run U+0628 U+064E, which shapes to three glyphs: the dot belongs 464
+      # units to the LEFT of where the pen leaves it and the fatha 506.
+      set run [::tclpdf::forms apply [my FontLayoutState $alias forms] $run]
     }
     if {$ligatures && [llength $run] > 1} {
       set run [::tclpdf::liga apply [my FontLayoutState $alias liga] $run]
@@ -589,6 +588,20 @@ oo::define ::tclpdf::document::document {
   # A ligature contributes ITS advance, not the sum of the advances of the
   # characters it replaced - which is the whole point of measuring the run
   # rather than the string.
+  #
+  # A POSITIONED MARK adds nothing here, and that is deliberate. Mark
+  # attachment moves a glyph, it does not move the pen: [TextEmit] shifts the
+  # mark and gives the same amount straight back, so the run is as wide with
+  # the offsets as without them. Measured in DejaVu Sans at 20 pt: "Marz", the
+  # same word with a precomposed U+00E1, and the same word again with a plus
+  # U+0301 all come to 48.232421875 pt, and the combining acute has an advance
+  # of 0.
+  #
+  # The other half of that is the honest one: an anchor has an X as well, and
+  # this method does NOT measure it. That is right while the X only displaces
+  # the mark - and whoever ever makes it a real change of advance has to
+  # change the measuring and the drawing in the same breath, or a line comes
+  # out wider than it was measured and justified text frays at the margin.
   method FontRunWidth {alias run size {kerning 0}} {
     set parsed [dict get [my state fonts] $alias parsed]
     set units [dict get $parsed unitsPerEm]
@@ -632,6 +645,41 @@ oo::define ::tclpdf::document::document {
       lappend adjustments [expr {$value * 1000.0 / $units}]
     }
     return $adjustments
+  }
+
+  # Where the combining marks of a run belong: one {dx dy} per glyph in
+  # thousandths of the em, positionally aligned with the run, and {} for a run
+  # that has no mark to place.
+  #
+  # The same shape as [FontRunKern] above and for the same reason - a second
+  # list beside the run rather than a wider tuple, so that everything already
+  # reading {glyph codes} goes on reading it.
+  #
+  # {} rather than a list of zeroes when nothing moves, and that is not
+  # tidiness: it is what lets [TextEmit] write the bytes it has always written
+  # for text without marks. A run of Latin prose asks this question, gets {},
+  # and no operator is added anywhere.
+  #
+  # The offsets are LOGICAL, like everything else built here: they say where a
+  # mark sits when the glyphs are drawn in the order the run holds them. A
+  # right-to-left line draws them in another order, and text.tcl keeps a mark
+  # with the glyph it hangs on for exactly that reason - see [TextCluster].
+  method FontRunMarks {alias run} {
+    if {[llength $run] < 2} {
+      return {}
+    }
+    set state [my FontLayoutState $alias markPos]
+    if {$state eq {}} {
+      return {}
+    }
+    set offsets [::tclpdf::markPos run $state $run]
+    foreach offset $offsets {
+      lassign $offset dx dy
+      if {$dx != 0 || $dy != 0} {
+        return $offsets
+      }
+    }
+    return {}
   }
 
   # One prepared layout table of a face, read once and kept.
@@ -839,10 +887,44 @@ oo::define ::tclpdf::document::document {
         FontFile $fontFileRef]
   }
 
+  # Which road an entry takes at write time - ONE switch over the kinds, and
+  # a default that refuses.
+  #
+  # [state fonts] is shared: the type3 module (type3.tcl) puts its own
+  # entries into the same dictionary and writes them itself, on the same
+  # event. This used to ask only whether the kind was "type1" and let
+  # everything else fall into the sfnt road below, so a document that had a
+  # drawn font AND an embedded face - the ordinary case, since a Type 3 font
+  # exists for the characters a real face has no glyph for - died at write
+  # time on [dict get $entry parsed] with a bare Tcl "key \"parsed\" not
+  # known in dictionary", from six levels down and naming nothing a caller
+  # could act on. A kind with no road here now says so by its name.
   method FontWriteOne {alias entry} {
-    if {[dict get $entry kind] eq "type1"} {
-      return [my FontWriteType1 $alias $entry]
+    set kind [dict get $entry kind]
+    switch -exact -- $kind {
+      type1 {
+        my FontWriteType1 $alias $entry
+      }
+      truetype {
+        my FontWriteSfnt $alias $entry
+      }
+      type3 {
+        # Not this module's. [Type3Write] walks the same dictionary and
+        # writes it, and doing it here as well would write it twice.
+      }
+      default {
+        return -code error -errorcode [list TCLPDF FONT KIND $kind $alias] \
+            "tclpdf: the font \"$alias\" is of kind \"$kind\", which has no\
+            way of being written - the kinds this package writes are\
+            truetype, type1 and type3"
+      }
     }
+    return
+  }
+
+  # An sfnt face - TrueType outlines or CFF - as a Type 0 font with
+  # Identity-H and a ToUnicode CMap.
+  method FontWriteSfnt {alias entry} {
     set writer [my writer]
     set parsed [dict get $entry parsed]
     set used [dict get $entry used]
@@ -1314,4 +1396,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.10
+package provide tclpdf::font 1.11

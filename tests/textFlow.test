@@ -518,9 +518,15 @@ test textFlow-4.3 {the breaker takes the offer and sets a real hyphen} -constrai
   $doc page add
   set lines [$doc textLines $::flowSoft -family body -size 11 -width 90]
   $doc destroy
-  # Every line but the last ends on the hyphen the breaker put there.
+  # The first line ends on the hyphen the breaker put there. The last one
+  # does NOT, and that is the point: "Verbesserung." measures 78.885 pt in a
+  # column of 90, so it fits on a line of its own and an offer inside it is
+  # not taken. Until 2026-08-21 the breaker asked whether the remainder fit
+  # only AFTER accepting an offer, and split a word that the fresh line would
+  # have carried whole - measured at 45 mm, a line reading "Verbesse-" and
+  # nothing else, 16 mm in a 45 mm column.
   list [lindex $lines 0] [lindex $lines end]
-} -result {{Die Silbentren-} rung.}
+} -result [list {Die Silbentren-} "Ver­bes­se­rung."]
 
 test textFlow-4.4 {the same text without the marks is broken by character} -constraints haveFlowFont -body {
   # The control for 4.3: whatever ends those lines has to come from the marks

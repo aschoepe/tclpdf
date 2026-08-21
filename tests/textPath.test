@@ -377,4 +377,266 @@ test textPath-8.1 {segments are refused as path refuses them - kind, first move,
   list $out [expr {$fromTextPath eq $fromPath}] $drawn
 } -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} 1 0}
 
+# -- combining marks: the cluster on the path ---------------------------------
+#
+# This module takes the string apart, and that is what makes marks its own
+# problem. A combining mark placed ALONE has no base left in its run, so GPOS
+# has nothing to attach it to; and its advance is 0, so it used to land on the
+# character AFTER it. Measured before these tests existed, DejaVu Sans at 20
+# points, "Ma" + U+0301 + "rz" on a straight path: the acute and the "r" both
+# came out at x 86.20463.
+#
+# So a mark is bound to its base BEFORE the loop runs, and what the loop
+# places is the CLUSTER. Inside it nothing new happens at all: the ordinary
+# text road writes the same "Ts" and the same TJ pair it writes on a straight
+# baseline, and it does so inside the cluster's own text matrix - which is
+# what turns the offsets along with the glyph on a curve.
+
+set markFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint haveMarkFace [file exists $markFace]
+set markArabic [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google NotoNaskhArabic-Variable.ttf]
+testConstraint haveMarkArabic [file exists $markArabic]
+
+# A document with one embedded face, set at 20 points - four of the tests
+# below want exactly this and nothing else.
+proc markDoc {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::markFace
+  $doc font -family face -size 20
+  return $doc
+}
+
+# The text object that carries a mark, as {matrix rise gap}: the matrix it was
+# drawn under, the rise the mark was lifted by, and the TJ number written in
+# front of it.
+#
+# [::tclpdfTest::starts] cannot answer this and is not meant to: it reads the
+# POSITION out of a Td or a Tm and drops the rotation, which is the whole
+# subject of the curve test below.
+proc markPlace {stream} {
+  set matrix {1 0 0 1 0 0}
+  set rise 0
+  foreach line [split $stream \n] {
+    if {[regexp {^([-0-9.]+) ([-0-9.]+) Td$} $line -> x y]} {
+      set matrix [list 1 0 0 1 $x $y]
+    }
+    if {[regexp {^([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+) Tm$} \
+        $line -> a b c d e f]} {
+      set matrix [list $a $b $c $d $e $f]
+    }
+    if {[regexp {^([-0-9.]+) Ts$} $line -> value] && $value != 0} {
+      set rise $value
+    }
+    if {[regexp {^\[([-0-9.]+) \(} $line -> gap]} {
+      return [list $matrix $rise $gap]
+    }
+  }
+  return {}
+}
+
+# Where a mark sits relative to the glyph it hangs on, in PAGE space: the
+# text-space offset the stream carries, taken through the matrix of its own
+# text object. Returned as {length direction}, because that is what a rotation
+# leaves alone and what it changes.
+proc markVector {stream size} {
+  lassign [markPlace $stream] matrix rise gap
+  lassign $matrix a b c d
+  # A TJ number is SUBTRACTED from the advance, so the offset is its negative,
+  # and it is in thousandths of the text space; the rise is in points already.
+  set dx [expr {-$gap * $size / 1000.0}]
+  set vx [expr {$a * $dx + $c * $rise}]
+  set vy [expr {$b * $dx + $d * $rise}]
+  return [list [expr {hypot($vx, $vy)}] \
+      [expr {atan2($vy, $vx) * 180.0 / acos(-1)}]]
+}
+
+test textPath-9.1 {a combining mark sits on its base, not on the letter after it} \
+    -constraints haveMarkFace -body {
+  # The defect this section was written for. Five characters, four clusters:
+  # the acute has no place of its own on the path any more, it is shown inside
+  # the text object of the "a" - and the "r" stands where it always stood.
+  set doc [markDoc]
+  $doc textPath "Ma\u0301rz" -segments {{move 20 100} {line 120 100}}
+  set stream [$doc page content]
+  $doc destroy
+  # Four places on the path and four text objects for five glyphs - and the
+  # matrix the acute is drawn under is the one of the "a" at 73.94877, not the
+  # one of the "r" it used to be lying on.
+  list [::tclpdfTest::starts $stream] [regexp -all {BT} $stream] \
+      [::tclpdfTest::glyphIds $stream] [lindex [markPlace $stream] 0]
+} -result {{56.69291 73.94877 86.20463 94.42729} 4 {48 68 690 85 93}\
+    {1 0 0 1 73.94877 558.4252}}
+
+test textPath-9.2 {precomposed and decomposed set the same line} \
+    -constraints haveMarkFace -body {
+  # The strongest test there is here, because it needs no outside reference:
+  # U+00E1 is one glyph and "a" + U+0301 is two, and the reader may not be
+  # able to tell which was written. Every letter therefore has to stand at the
+  # same place in both, and the call has to answer the same length.
+  set doc [markDoc]
+  set total [$doc textPath "M\u00E1rz" -segments {{move 20 100} {line 120 100}}]
+  set precomposed [::tclpdfTest::starts [$doc page content]]
+  $doc destroy
+  set doc [markDoc]
+  set again [$doc textPath "Ma\u0301rz" -segments {{move 20 100} {line 120 100}}]
+  set decomposed [::tclpdfTest::starts [$doc page content]]
+  $doc destroy
+  list [expr {$precomposed eq $decomposed}] [expr {$total == $again}] $precomposed
+} -result {1 1 {56.69291 73.94877 86.20463 94.42729}}
+
+test textPath-9.3 {a cluster on a path writes what plain text writes} \
+    -constraints haveMarkFace -body {
+  # Where the placement comes from, and the reason this module builds no
+  # arithmetic of its own: the cluster goes down the ordinary text road, so
+  # the rise and the TJ pair are written by [TextEmit] - the one place in the
+  # package that turns thousandths into points. A straight path starting at
+  # the anchor of a plain [text] call must therefore produce the very same
+  # bytes, operator for operator.
+  set doc [markDoc]
+  $doc textPath "b\u0300" -segments {{move 20 100} {line 120 100}}
+  set onPath [$doc page content]
+  $doc destroy
+  set doc [markDoc]
+  $doc text "b\u0300" -at {20 100}
+  set plain [$doc page content]
+  $doc destroy
+  list [expr {$onPath eq $plain}] [markPlace $onPath]
+} -result {1 {{1 0 0 1 56.69291 558.4252} 3.64258 249.02344}}
+
+test textPath-9.4 {a mark on a curve turns with the glyph it hangs on} \
+    -constraints haveMarkFace -body {
+  # On a straight path a wrong rotation is invisible, so the answer is asked
+  # of a curve. The offset is written in TEXT space - "Ts" is a text state
+  # parameter and a TJ number moves the pen - so the cluster's own matrix
+  # turns it: the vector from the base to the mark has to keep its LENGTH and
+  # to swing by exactly the tangent angle of the path. Anything computed in
+  # page space would keep the direction instead.
+  #
+  # Measured, DejaVu Sans at 20 points, "b" + U+0300: the offset is 6.17037
+  # points long and points 143.81927 degrees on a straight line; on this curve
+  # the tangent under the "b" is 26.71034 degrees.
+  set doc [markDoc]
+  $doc textPath "b\u0300" -segments {{move 20 100} {line 120 100}}
+  lassign [markVector [$doc page content] 20] straightLength straightDirection
+  $doc destroy
+  set doc [markDoc]
+  $doc textPath "Mb\u0300x" -segments {{move 20 60} {curve 60 30 120 90 170 55}}
+  set stream [$doc page content]
+  $doc destroy
+  lassign [markVector $stream 20] curveLength curveDirection
+  lassign [markPlace $stream] matrix
+  set tangent [expr {atan2([lindex $matrix 1], [lindex $matrix 0])
+      * 180.0 / acos(-1)}]
+  list [format %.5f $straightLength] [format %.5f $straightDirection] \
+      [format %.5f $tangent] \
+      [expr {abs($curveLength - $straightLength) < 1e-5}] \
+      [expr {abs($curveDirection - $straightDirection - $tangent) < 1e-5}]
+} -result {6.17037 143.81927 26.71034 1 1}
+
+test textPath-9.5 {a mark costs the path nothing} -constraints haveMarkFace -body {
+  # A combining mark has no advance, so the cursor may not move for it: every
+  # other glyph of the line has to stand where it stands without the mark.
+  # Asked on a curve, where a wrong step would also change the ANGLE of every
+  # glyph after it and not only its place.
+  set curve {{move 20 60} {curve 60 30 120 90 170 55}}
+  set doc [markDoc]
+  $doc textPath "Mb\u0300x" -segments $curve
+  set stream [$doc page content]
+  set withMark [list [::tclpdfTest::starts $stream] \
+      [::tclpdfTest::starts $stream y]]
+  $doc destroy
+  set doc [markDoc]
+  $doc textPath "Mbx" -segments $curve
+  set stream [$doc page content]
+  set without [list [::tclpdfTest::starts $stream] \
+      [::tclpdfTest::starts $stream y]]
+  $doc destroy
+  list [expr {$withMark eq $without}] $without
+} -result {1 {{56.69291 71.18147 82.55873} {671.81102 681.16333 686.83339}}}
+
+test textPath-9.6 {a line without a mark writes not one token more} \
+    -constraints haveMarkFace -body {
+  # The promise the clusters were built under, and the reason the pieces are
+  # taken apart again into one cluster per character: a line with nothing to
+  # join comes out exactly as it did - one text object per character, a plain
+  # Tj in each, no rise anywhere and no TJ array.
+  set doc [markDoc]
+  $doc textPath "Marz" -segments {{move 20 100} {line 120 100}}
+  set stream [$doc page content]
+  $doc destroy
+  list [::tclpdfTest::starts $stream] [::tclpdfTest::glyphIds $stream] \
+      [regexp -all {BT} $stream] [regexp {Ts} $stream] [regexp {TJ} $stream]
+} -result {{56.69291 73.94877 86.20463 94.42729} {48 68 85 93} 4 0 0}
+
+test textPath-9.7 {the characters that are never drawn are not marks} \
+    -constraints haveMarkFace -body {
+  # A soft hyphen, a zero width space and a byte order mark have no advance
+  # either, and measuring cannot tell them from a combining mark - so they are
+  # named. Folding one into the cluster in front of it would change the bytes
+  # of every document that carries one, and it hangs on nothing: it keeps the
+  # text object of its own it has always had, with the empty show operator
+  # every encoder in the package produces for it.
+  set doc [markDoc]
+  $doc textPath "a\u00ADb" -segments {{move 20 100} {line 120 100}}
+  set stream [$doc page content]
+  $doc destroy
+  list [::tclpdfTest::starts $stream] [::tclpdfTest::glyphIds $stream] \
+      [regexp -all {BT} $stream]
+} -result {{56.69291 68.94877 68.94877} {68 {} 69} 3}
+
+test textPath-9.8 {-spacing counts the glyphs of a cluster, not the clusters} \
+    -constraints haveMarkFace -body {
+  # Tc is written into the text object of the cluster as well, so a cluster of
+  # two glyphs is one gap wider than its base - and the cursor has to take
+  # that gap along or the drawn line is narrower than [textWidth] measured it.
+  # The visible half is the alignment: with -align right the last glyph has to
+  # end at the end of the path whether the accent was written as one character
+  # or as two.
+  set doc [markDoc]
+  $doc textPath "Ma\u0301rz" -segments {{move 20 100} {line 120 100}} \
+      -spacing 3 -align right
+  set decomposed [::tclpdfTest::starts [$doc page content]]
+  set width [$doc textWidth "Ma\u0301rz" -spacing 3]
+  # The span drawn: from the first glyph to the last, which is the measured
+  # width less the advance of the last glyph - every gap in between is drawn,
+  # the one inside the cluster included.
+  set drawn [expr {[lindex $decomposed end] - [lindex $decomposed 0]}]
+  set expected [expr {($width - [$doc textWidth "z"]) * 72.0 / 25.4}]
+  $doc destroy
+  set doc [markDoc]
+  $doc textPath "M\u00E1rz" -segments {{move 20 100} {line 120 100}} \
+      -spacing 3 -align right
+  set precomposed [::tclpdfTest::starts [$doc page content]]
+  $doc destroy
+  list [expr {abs($drawn - $expected) < 0.001}] \
+      [expr {[lindex $decomposed end] == [lindex $precomposed end]}] \
+      $decomposed
+} -result {1 1 {279.92506 300.18092 318.43678 329.65943}}
+
+test textPath-9.9 {a right-to-left cluster keeps its base and its mark together} \
+    -constraints haveMarkArabic -body {
+  # The pieces of a right-to-left line are turned round, and a mark may not
+  # travel on its own when they are: its offset was computed by walking back
+  # over its base, so drawn first it would land a whole advance too far left.
+  # [TextCluster] is what holds the two together, and it is the same call the
+  # straight baseline makes - which is the point of it being one method.
+  #
+  # -unshaped, because Arabic mark placement is refused at the shaping gate
+  # and this test is about the ORDER, not about the shapes: the fatha U+064E
+  # follows its beh in the same show operator, and the sin drawn before them
+  # sits further along the path - the path runs on while the reading runs back.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed face $::markArabic
+  $doc textPath "\u0628\u064E\u0633" -segments {{move 20 100} {line 120 100}} \
+      -family face -size 20 -direction rtl -unshaped 1
+  set stream [$doc page content]
+  $doc destroy
+  list [::tclpdfTest::starts $stream] [::tclpdfTest::glyphIds $stream]
+} -result {{304.45748 324.71748} {32 {379 614}}}
+
+
 cleanupTests

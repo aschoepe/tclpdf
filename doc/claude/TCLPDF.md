@@ -17,8 +17,8 @@ It sits under `doc/` rather than `.claude/` for the same reason: `.claude/` is t
 ## Installing the skill in a project
 
 1. Copy `skills/tclpdf-tcl/` to `<project>/.claude/skills/tclpdf-tcl/` (or wherever the agent loads skills from). Nothing in it refers to a path outside the directory except through `assets.tcl`.
-2. Edit `assets.tcl`: the font, image, ICC and XML files the snippets refer to, the output directory, and - if the package is not installed - `lappend auto_path` to where `pkgIndex.tcl` sits. The variable names are the contract with the reference files; the values are the project's.
-3. Run `tclsh check.tcl assets.tcl`. Every reference file has to PASS, `qpdf --check` has to be silent, and veraPDF has to report 0 failed checks on the files that claim PDF/A or PDF/UA. A SKIP means a tool is missing, not that a check passed.
+2. Edit `assets.tcl`: the font, image, ICC, XML and hyphenation files the snippets refer to, the output directory, and - if the package is not installed - `lappend auto_path` to where `pkgIndex.tcl` sits. The variable names are the contract with the reference files; the values are the project's. `$hyphenPatterns` is the one that may point at nothing: the package ships no pattern files, and the reference checks before it uses them.
+3. Run `tclsh check.tcl assets.tcl`. Every reference file has to PASS, `qpdf --check` has to be silent, and veraPDF has to report 0 failed checks on the files that claim PDF/A or PDF/UA. A SKIP means a tool is missing, not that a check passed. Two snippets say on their own console line that they did less than they could: `11-encryption-signatures.md` without `openssl` on the PATH leaves its signatures unfilled, and `03-text.md` without a pattern file sets its column unhyphenated. Both still PASS - what they demonstrate is the call, and the call ran.
 4. Put that command where the project runs its checks. A snippet that stops running after a package update is a snippet a reader will copy and fail with.
 
 ## The prompt
@@ -28,7 +28,7 @@ You are writing Tcl that creates PDF documents with the tclpdf package.
 
 Before writing any tclpdf call, open the skill "tclpdf-tcl" and take the
 snippet for that call from its reference files (reference/01-document.md
-through reference/10-pdfa-zugferd.md). Copy the snippet, then adapt it.
+through reference/12-import-update-info.md). Copy the snippet, then adapt it.
 Do not write a tclpdf call from memory of jsPDF, ReportLab, FPDF, pdf4tcl
 or any other PDF library - the option names, the coordinate origin, the
 unit of -size and the refusals differ, and the same mistakes come back
@@ -56,11 +56,23 @@ The rules that decide most calls:
 - Claims are explicit: pdfa, ua, zugferd. They need every face embedded
   (the standard fourteen are out), a title and a language, colours that
   fit the output intent, and tdom for the XMP packet.
+- encrypt and sign are declared the same way and are refused together;
+  encrypt has to be the first call, needs -version 2.0, and excludes
+  every PDF/A claim. tclpdf never holds a key: a signature comes from a
+  -signer command prefix that answers a CMS object in DER.
+- Whatever addresses a FINISHED file - pdf import, ::tclpdf::pdf info,
+  ::tclpdf::update open, ::tclpdf::sign digest/embed/add - refuses an
+  encrypted one (pdf info is the exception), and each of the package
+  commands needs its own package require: tclpdf::importInfo,
+  tclpdf::update, tclpdf::sign, tclpdf::hyphenate.
+- tclpdf ships no hyphenation patterns; the caller loads a libhyphen .dic
+  with ::tclpdf::hyphenate load before -hyphenate can be asked for.
 
 When the document claims PDF/A, PDF/UA or is a hybrid invoice, say how it
 is validated: qpdf --check, verapdf -f <the claimed flavour> or --flavour
-ua1/ua2, and Mustang for ZUGFeRD/Factur-X/Order-X. "It opens in a viewer"
-is not a check.
+ua1/ua2, and Mustang for ZUGFeRD/Factur-X/Order-X; pdfsig for a signed
+file and qpdf --show-encryption for an encrypted one. "It opens in a
+viewer" is not a check.
 
 The manual (tclpdf.md / tclpdf.n) is the authority where the reference
 and your memory disagree; the reference is the authority where the manual
@@ -70,7 +82,7 @@ the user asks why a call looks the way it does.
 
 ## What the skill is not
 
-It is not the manual: it does not describe options exhaustively, it shows one working call per feature and points at the manual for the rest. It is not a validator: nothing in it replaces `qpdf`, veraPDF and Mustang, and it says so at every claim. And it is not a way round the refusals: tclpdf refusing a call is the design - a missing glyph, a colour the output intent does not admit, a mixed-direction line - and the right answer to a refusal is a different call, never `catch`.
+It is not the manual: it does not describe options exhaustively, it shows one working call per feature and points at the manual for the rest. It is not a validator: nothing in it replaces `qpdf`, veraPDF, Mustang and `pdfsig`, and it says so at every claim. It holds no key and verifies no signature either - what a signature is worth is decided by the trust store of whoever opens the document. And it is not a way round the refusals: tclpdf refusing a call is the design - a missing glyph, a colour the output intent does not admit, a mixed-direction line - and the right answer to a refusal is a different call, never `catch`.
 
 ## Keeping it current
 

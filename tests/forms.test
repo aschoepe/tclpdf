@@ -40,8 +40,9 @@ set assets [file join [file dirname [file dirname [file normalize [info script]]
 # needed. DejaVu Sans carries whole Arabic letters and reaches their forms
 # with Single substitutions; Noto Naskh Arabic writes a letter as a skeleton
 # plus separate dots and reaches the forms with Multiple substitutions. The
-# first is what this package can set, the second is what it refuses - and
-# neither case is visible in the other face.
+# second used to be the case this package refused, because the dots it
+# detaches are placed by GPOS mark attachment; both are set now, and neither
+# design's behaviour is visible in the other face.
 set wholeFace [file join $assets DejaVuSans.ttf]
 set splitFace [file join $assets google NotoNaskhArabic-Variable.ttf]
 set plainFace [file join $assets google Roboto-Regular.ttf]
@@ -115,8 +116,8 @@ test forms-1.2 {a face without them is not prepared at all} \
 
 test forms-1.3 {the splitting face is prepared too, ccmp and all} \
     -constraints haveSplit -body {
-  # It is refused later, for its marks - not here. Reading it has to work, or
-  # the refusal would be an accident rather than a decision.
+  # Its dots are placed afterwards, by markPos.tcl - not here. Reading it has
+  # to work either way, or what happens to the dots would never be reached.
   set state [::tclpdf::forms build [formsParsed $::splitFace]]
   set tags {}
   foreach {tag mark lookups} [dict get $state stages] {
@@ -266,26 +267,55 @@ test forms-4.3 {the run comes back with two elements per entry} \
   lsort -unique $lengths
 } -result 2
 
-# --- the mark glyphs that decide whether a face can be used -----------------
+# --- the mark glyphs a splitting face produces ------------------------------
 
-test forms-5.1 {the splitting face is recognised by its mark glyphs} \
+test forms-5.1 {the splitting face still produces mark glyphs, and they are placed} \
     -constraints haveSplit -body {
-  # The dots ccmp produces are GDEF class 3, and placing them is GPOS mark
-  # attachment - which this package does not read. Asked of the RESULT, so
-  # that a face is judged by what it actually produced for this text.
+  # [forms marks] used to live here: it answered whether the shaping had
+  # produced glyphs the face means to PLACE rather than to advance - the dots
+  # ccmp detaches, GDEF class 3 - and font.tcl refused such a face because it
+  # could not place them. markPos.tcl places them, the refusal went, and the
+  # command went with it: nothing in the package asked the question any more.
+  #
+  # What the command used to prove is proved here directly instead, because
+  # the FACT was never the dead part: this face does detach its dots, and the
+  # anchors do move them. hb-shape NotoNaskhArabic-Variable.ttf -u 0628,064E
+  #   -> [uni064E=0@266,-280+0|dotbelowar=0@308,-31+0|uni066E=0+772]
+  # so, measured from the base origin and in the logical frame markPos
+  # answers in: the dot 308-772 = -464, the fatha 266-772 = -506.
+  package require tclpdf::markPos
   set parsed [formsParsed $::splitFace]
   set state [::tclpdf::forms build $parsed]
-  ::tclpdf::forms marks $state \
-      [::tclpdf::forms apply $state [formsRun $parsed "مرحبا"]]
-} -result 1
+  set run [::tclpdf::forms apply $state [formsRun $parsed "بَ"]]
+  set glyphs [lmap entry $run {lindex $entry 0}]
+  set marks [::tclpdf::gdef filter [::tclpdf::gdef build $parsed] 0x0008]
+  set classed {}
+  foreach glyph $glyphs {
+    lappend classed [::tclpdf::gdef ignored $marks $glyph]
+  }
+  list $classed [::tclpdf::markPos offsets \
+      [::tclpdf::markPos build $parsed] $glyphs]
+} -result {{0 1 1} {{0 0} {-464 -31} {-506 -280}}}
 
-test forms-5.2 {a face with whole letters produces no mark} \
+test forms-5.2 {a face with whole letters produces no mark and needs none} \
     -constraints haveWhole -body {
+  # The other design, and the counter-test: DejaVu Sans writes whole Arabic
+  # letters, so nothing in the shaped run is a mark and nothing is moved.
+  package require tclpdf::markPos
   set parsed [formsParsed $::wholeFace]
   set state [::tclpdf::forms build $parsed]
-  ::tclpdf::forms marks $state \
-      [::tclpdf::forms apply $state [formsRun $parsed "مرحبا"]]
-} -result 0
+  set run [::tclpdf::forms apply $state [formsRun $parsed "مرحبا"]]
+  set glyphs [lmap entry $run {lindex $entry 0}]
+  set marks [::tclpdf::gdef filter [::tclpdf::gdef build $parsed] 0x0008]
+  set anyMark 0
+  foreach glyph $glyphs {
+    if {[::tclpdf::gdef ignored $marks $glyph]} {
+      set anyMark 1
+    }
+  }
+  list $anyMark [lsort -unique [::tclpdf::markPos offsets \
+      [::tclpdf::markPos build $parsed] $glyphs]]
+} -result {0 {{0 0}}}
 
 # --- through the document ---------------------------------------------------
 

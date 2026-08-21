@@ -2012,4 +2012,150 @@ test text-19.17 {a character that occurs twice is set from the same face both ti
       [expr {abs($measured - $drawn) < 0.0001}]
 } -result {{/FEbody /FEjp /FEbody /FEjp /FEbody} {2 1 2 6} 1}
 
+
+# -- GPOS mark attachment in the stream --------------------------------------
+#
+# What the content stream looks like once a mark has to be placed. The reader
+# is markPos.tcl and is tested there against hb-shape; what is asked here is
+# the OUTPUT: which operators are written, in which order, with which numbers,
+# and - the other half of it - that a line without a mark writes not one token
+# more than it did before any of this existed.
+#
+# Two operators do the whole job and both were already in the stream. Across
+# the baseline it is "Ts", which is text state and therefore has to stand
+# outside the show operator. Along it there is nothing new at all: a TJ number
+# moves the pen, so the offset goes in front of the mark and the same amount
+# comes back out behind it.
+
+set arabicFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google NotoNaskhArabic-Variable.ttf]
+testConstraint haveArabic [file exists $arabicFace]
+
+# A content stream as the operators that place text, in the order they were
+# written: {glyphs {id ...}} for a show operator, {gap n} for a TJ number,
+# {rise n} for a Ts. [::tclpdfTest::shows] cannot answer this - it reads the
+# show operators alone, and where a mark was lifted is exactly what stands
+# between two of them.
+proc textMarkOps {stream} {
+    set result {}
+    foreach line [split $stream \n] {
+        if {[regexp {^(-?[0-9.]+) Ts$} $line -> value]} {
+            lappend result [list rise $value]
+            continue
+        }
+        if {![string match {*Tj} $line] && ![string match {*TJ} $line]} {
+            continue
+        }
+        foreach token [regexp -all -inline \
+                {\((?:[^()\\]|\\.)*\)|-?[0-9]+(?:\.[0-9]+)?} $line] {
+            if {[string index $token 0] eq "("} {
+                lappend result [list glyphs [::tclpdfTest::glyphsOf $token]]
+            } else {
+                lappend result [list gap $token]
+            }
+        }
+    }
+    return $result
+}
+
+# One line of text in one embedded face, as those operators.
+proc textMarkLine {face text args} {
+    set doc [tclpdf new]
+    $doc font embed body $face
+    $doc page add
+    $doc text $text -at {20 30} -family body -size 20 {*}$args
+    set content [::tclpdfTest::content $doc]
+    $doc destroy
+    return $content
+}
+
+test text-20.1 {a mark is lifted by Ts and set back by the pen} -constraints haveFace -body {
+  # DejaVu Sans, "b" + U+0300. hb-shape puts the grave at -510,373 font units
+  # and the em is 2048, so -249.02344 thousandths across and 182.12891 up -
+  # the latter as a rise of 182.12891 / 1000 * 20 = 3.64258 points, because Ts
+  # is in unscaled text space units and is NOT multiplied by the font size.
+  #
+  # The two gaps are the same amount with opposite signs: a TJ number is
+  # subtracted from the advance, so +249 walks the pen back to where the mark
+  # belongs and -249 gives it back. The pen therefore ends where it would have
+  # ended without the mark, which is why the line measures the same.
+  textMarkOps [textMarkLine $textFace "b\u0300"]
+} -result {{glyphs 69} {rise 3.64258} {gap 249.02344} {glyphs 689} {gap -249.02344} {rise 0}}
+
+test text-20.2 {a mark on a mark gets its own rise} -constraints haveKerning -body {
+  # Roboto, "b" + U+0300 + U+0301: 14,321 and 50,672 font units out of
+  # hb-shape, em 2048. The acute hangs on the grave, so its rise is the
+  # higher of the two and each mark needs a piece of its own - one Ts cannot
+  # serve two heights.
+  textMarkOps [textMarkLine $kernFace "b\u0300\u0301"]
+} -result {{glyphs 70} {rise 3.13477} {gap -6.83594} {glyphs 168} {gap 6.83594}\
+    {rise 6.5625} {gap -24.41406} {glyphs 169} {gap 24.41406} {rise 0}}
+
+test text-20.3 {a line without a mark writes not one token more} -constraints haveFace -body {
+  # The promise this feature was built under. Nothing may be written
+  # unconditionally - no "0 Ts" in front of every line, no TJ array where a Tj
+  # did - so a word with no mark in it comes out as the single show operator
+  # it always was, and the whole stream holds no Ts at all.
+  set content [textMarkLine $textFace "Marz"]
+  list [textMarkOps $content] [regexp {Ts} $content] [regexp {TJ} $content]
+} -result {{{glyphs {48 68 85 93}}} 0 0}
+
+test text-20.4 {a mark gives the caller's own rise back, not zero} -constraints haveFace -body {
+  # -rise 5 is a superscript, and a superscript that happens to carry an
+  # accent has to stay one. So the mark is lifted from the caller's value
+  # (5 + 3.64258) and the piece behind it is set back to 5 - a plain "0 Ts"
+  # there would drop the rest of the line onto the baseline, and Ts outlives
+  # ET, so it would drop everything drawn after it as well.
+  textMarkOps [textMarkLine $textFace "b\u0300" -rise 5]
+} -result {{rise 5} {glyphs 69} {rise 8.64258} {gap 249.02344} {glyphs 689}\
+    {gap -249.02344} {rise 5}}
+
+test text-20.5 {a mark stays with the letter it hangs on in a rtl line} \
+    -constraints haveArabic -body {
+  # NotoNaskhArabic writes beh as a skeleton plus a separate dot glyph, which
+  # is why this line was refused outright until GPOS mark attachment could be
+  # read. The offset is stated at the pen position of the MARK and was
+  # computed by walking back over the base, so turning the two round would
+  # point that walk the wrong way: the dot would be drawn before its letter,
+  # a whole advance further left. It is therefore kept with its base while the
+  # pieces around it are reversed - see [TextCluster].
+  #
+  # Measured against hb-shape --direction=rtl on the same string: the dot sits
+  # at 70,-31 from the letter it belongs to, and the letter's advance is 275,
+  # so from the pen it is -205,-31. The em is 1000, so those are also the
+  # thousandths, and the rise is -31 / 1000 * 20 = -0.62 points.
+  textMarkOps [textMarkLine $arabicFace "\u0628\u0633\u0645" -direction rtl]
+} -result {{glyphs {75 34 19}} {rise -0.62} {gap 205} {glyphs 322} {gap -205} {rise 0}}
+
+test text-20.6 {a standard face is never asked about marks} -body {
+  # The three faces [TextShowOne] branches off with a bare Tj - the standard
+  # fourteen, Type 3 and Type 1 - never see a glyph run and can carry no mark.
+  # Their bytes have to be what they always were: one show operator, no array,
+  # no rise.
+  set doc [tclpdf new]
+  $doc page add
+  $doc text "\u00E9" -at {20 30} -family helvetica -size 20
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {Ts} $content] [regexp {TJ} $content] \
+      [lindex [regexp -inline {\(.*\) Tj} $content] 0]
+} -result {0 0 {(\351) Tj}}
+
+
+test text-20.7 {a number run and a cluster live in the same right-to-left line} \
+    -constraints haveArabic -body {
+  # The two rules that reorder a line meet here and pull opposite ways: a run
+  # of digits keeps its own order while the pieces around it are turned round,
+  # and a mark keeps its base while everything else moves. [TextCluster] is
+  # handed the pieces of the first and has to leave them alone - it joins a
+  # mark to what it hangs on, never a digit to its neighbour.
+  #
+  # Measured: the glyphs of 4711 stand in that order at the head of the drawn
+  # line, and the dot of the beh still sits 205 thousandths behind its letter,
+  # exactly as it does in the line without the number.
+  textMarkOps [textMarkLine $arabicFace "\u0628\u0633\u0645 4711" -direction rtl]
+} -result {{glyphs {117 120 114 114 3 75 34 19}} {rise -0.62} {gap 205}\
+    {glyphs 322} {gap -205} {rise 0}}
+
+
 cleanupTests

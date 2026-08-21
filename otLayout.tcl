@@ -124,19 +124,7 @@ proc ::tclpdf::otLayout::langSys {table {preferred {}}} {
   if {![llength $preferred]} {
     set preferred {latn DFLT}
   }
-  set scriptList [u16 $table 4]
-  set count [u16 $table $scriptList]
-  set byTag {}
-  set firstOffset {}
-  for {set index 0} {$index < $count} {incr index} {
-    set record [expr {$scriptList + 2 + $index * 6}]
-    set name [tag $table $record]
-    set offset [expr {$scriptList + [u16 $table [expr {$record + 4}]]}]
-    dict set byTag $name $offset
-    if {$firstOffset eq {}} {
-      set firstOffset $offset
-    }
-  }
+  set byTag [scripts $table]
   set script {}
   foreach name $preferred {
     if {[dict exists $byTag $name]} {
@@ -144,20 +132,61 @@ proc ::tclpdf::otLayout::langSys {table {preferred {}}} {
       break
     }
   }
-  if {$script eq {} && $firstOffset ne {}} {
-    set script $firstOffset
+  if {$script eq {} && [dict size $byTag]} {
+    set script [lindex [dict values $byTag] 0]
   }
   if {$script eq {}} {
     return {}
   }
-  set defaultOffset [u16 $table $script]
-  if {$defaultOffset == 0} {
-    return {}
-  }
-  return [expr {$script + $defaultOffset}]
+  return [Default $table $script]
 }
 
-# The lookup indices of every feature with this tag, in lookup order.
+# Every script table of this GSUB or GPOS, as a dict tag -> offset, in the
+# order the script list gives them.
+#
+# Public because a caller may have to look at all of them. Which one is right
+# for a piece of text is a question this file cannot answer - it never sees
+# the text - and the two callers answer it differently: [langSys] picks one by
+# name, markPos.tcl takes them all and lets the coverage tables decide. Both
+# need the same walk, and writing it twice is how the two would drift.
+proc ::tclpdf::otLayout::scripts {table} {
+  set scriptList [u16 $table 4]
+  set count [u16 $table $scriptList]
+  set byTag {}
+  for {set index 0} {$index < $count} {incr index} {
+    set record [expr {$scriptList + 2 + $index * 6}]
+    dict set byTag [tag $table $record] \
+        [expr {$scriptList + [u16 $table [expr {$record + 4}]]}]
+  }
+  return $byTag
+}
+
+# The default language system of a script table, or {} when it names none.
+#
+# The default is the only one this package reads. A language-specific system -
+# the Turkish or the Romanian variant of "latn" - would need a language API to
+# choose by, and there is none; what a font puts only there is not reached.
+proc ::tclpdf::otLayout::Default {table script} {
+  set offset [u16 $table $script]
+  if {$offset == 0} {
+    return {}
+  }
+  return [expr {$script + $offset}]
+}
+
+# The lookup indices of every feature with one of these tags, in lookup order.
+#
+# WANTED is a LIST of feature tags, and one tag is a list of one - which is how
+# the callers that name a single feature go on working unchanged. A feature tag
+# is four ASCII characters and none of the registered ones contains a space, so
+# reading the argument as a list cannot split a tag in two.
+#
+# More than one tag at a time is not a convenience. Mark attachment is spread
+# over "mark", "mkmk" and, in the Indic faces, "abvm" and "blwm", and the
+# specification applies lookups in the order of the LOOKUP LIST, not feature by
+# feature (S. 217). Asking per tag and joining the answers afterwards would
+# have every caller repeat that sort, and a caller that repeats it slightly
+# differently positions the marks of one font in the wrong order.
 #
 # A font may carry more than one record for the same tag, so this collects all
 # of them rather than stopping at the first. The required feature is checked
@@ -173,24 +202,67 @@ proc ::tclpdf::otLayout::featureLookups {table wanted {preferred {}}} {
   if {$langSys eq {}} {
     return {}
   }
+  return [Lookups $table $wanted [list $langSys]]
+}
+
+# The same, but over the default language system of EVERY script in the table.
+#
+# There is one caller and one reason (markPos.tcl): a combining mark hangs off
+# the script of the LETTER it belongs to, and this package has no script API to
+# name that script with. The Hebrew nikud of DejaVu Sans sit in lookups 5 to 9,
+# reachable only from "hebr"; [featureLookups] takes "latn" and reaches 4, 12
+# and 13, so every point came out at offset zero - drawn at the pen position,
+# beside its letter instead of under it. Measured 2026-08-21.
+#
+# This answer is NOT a drop-in replacement for [featureLookups] and the caller
+# does not use it as one. Where two scripts cover the same mark glyph with
+# different anchors the later lookup wins, and that need not be the right one:
+# measured on Arimo, its Cyrillic mark lookup covers U+0300 and U+018F both,
+# stands after the Latin one, and moves the grave over the capital schwa 57
+# units away from where HarfBuzz puts it - seven such pairs in that one face.
+# markPos.tcl therefore keeps the two apart and uses what this adds only where
+# [featureLookups] had nothing to say. That division of labour is the caller's
+# and is explained there.
+#
+# Only useful for a feature whose lookups are per script. Asking it for
+# kerning would be wrong for the opposite reason - see [langSys], where taking
+# DFLT before latn loses the Latin pair kerning of DejaVu Sans.
+proc ::tclpdf::otLayout::featureLookupsAnyScript {table wanted} {
+  set all {}
+  dict for {name script} [scripts $table] {
+    set langSys [Default $table $script]
+    if {$langSys ne {}} {
+      lappend all $langSys
+    }
+  }
+  if {![llength $all]} {
+    return {}
+  }
+  return [Lookups $table $wanted $all]
+}
+
+# The lookup indices of the wanted features, over a list of language systems.
+proc ::tclpdf::otLayout::Lookups {table wanted langSysList} {
   set featureList [u16 $table 6]
-  set required [u16 $table [expr {$langSys + 2}]]
-  set count [u16 $table [expr {$langSys + 4}]]
-  set features {}
-  if {$required != 0xFFFF} {
-    lappend features $required
-  }
-  for {set index 0} {$index < $count} {incr index} {
-    lappend features [u16 $table [expr {$langSys + 6 + $index * 2}]]
-  }
   set featureCount [u16 $table $featureList]
+  set features {}
+  foreach langSys $langSysList {
+    set required [u16 $table [expr {$langSys + 2}]]
+    set count [u16 $table [expr {$langSys + 4}]]
+    if {$required != 0xFFFF} {
+      lappend features $required
+    }
+    for {set index 0} {$index < $count} {incr index} {
+      lappend features [u16 $table [expr {$langSys + 6 + $index * 2}]]
+    }
+  }
   set indices {}
-  foreach featureIndex $features {
+  foreach featureIndex [lsort -integer -unique $features] {
     if {$featureIndex >= $featureCount} {
       continue
     }
     set record [expr {$featureList + 2 + $featureIndex * 6}]
-    if {[tag $table $record] ne $wanted} {
+    if {[tag $table $record] ni $wanted} {
       continue
     }
     set feature [expr {$featureList + [u16 $table [expr {$record + 4}]]}]
@@ -398,4 +470,46 @@ proc ::tclpdf::otLayout::classDef {table offset} {
   return $classes
 }
 
-package provide tclpdf::otLayout 1.1
+# --- the anchor table ------------------------------------------------------
+
+# An anchor point as {x y} in design units, or {} when the format is not one
+# of the three the specification defines (S. 240-241).
+#
+# This sits here rather than in markPos.tcl because it has a second reader
+# waiting: cursive attachment, GPOS lookup type 3, reads the very same table
+# for its entry and exit points, and that is the lookup forms.tcl needs the
+# day Arabic joining stops being drawn at the pen position. A copy over there
+# would be the duplicate this package does not keep.
+#
+# All three formats begin with the same six bytes - format, x, y - and only
+# those are read:
+#
+#   - Format 2 adds a contour point index. HarfBuzz ignores it and takes the
+#     design coordinate, measured; so does this. The field exists to let a
+#     hinted rasterizer move the anchor with the hinted outline, and a
+#     producer that writes glyphs into a PDF has no rasterizer to ask. Over
+#     the 77 faces measured here it occurs 37 times among 94 547 anchors, all
+#     37 of them in DejaVu Sans and DejaVu Sans Bold.
+#   - Format 3 adds two offsets to Device or VariationIndex tables. Not one
+#     of the 47 651 non-NULL offsets measured is a real Device table; every
+#     single one carries deltaFormat 0x8000, which makes it a VariationIndex,
+#     and they occur only in variable fonts. Resolving one means resolving the
+#     item variation store in GDEF, whose arithmetic already exists once as
+#     ::tclpdf::varFont::Scalar and must not exist twice. The price of leaving
+#     it: in a face instanced by varFont.tcl the anchors stay where the
+#     default instance put them, so a mark on a very heavy or very condensed
+#     instance can sit a few units off. That is a line of documentation, not
+#     a defect - the coordinates themselves are the ones the font ships.
+#
+# The coordinates are SIGNED - a mark anchor is regularly to the left of and
+# below the origin - which is why this reads them with [s16] and not [u16].
+proc ::tclpdf::otLayout::anchor {table offset} {
+  set format [u16 $table $offset]
+  if {$format < 1 || $format > 3} {
+    return {}
+  }
+  return [list [s16 $table [expr {$offset + 2}]] \
+      [s16 $table [expr {$offset + 4}]]]
+}
+
+package provide tclpdf::otLayout 1.2

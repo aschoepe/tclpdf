@@ -27,6 +27,14 @@ set iccCmyk  [file join $root icc ISOcoated_v2_bas.ICC]
 set invoiceXml [file join $assets xml zugferd-en16931.xml]
 set orderXml   [file join $assets xml order-x-comfort.xml]
 
+# Hyphenation patterns for one language - a libhyphen .dic file, the format
+# LibreOffice, Hunspell and the hyphen library install. THE PACKAGE SHIPS
+# NONE (licence: every published set has terms of its own, tclpdf is MIT), so
+# this path may well not exist here: 03-text.md checks before it uses it and
+# says so when it is missing. On most Linux systems /usr/share/hyphen/ holds
+# them; on macOS and Windows a LibreOffice dictionary extension does.
+set hyphenPatterns [file join $assets languages hyph_de_DE.dic]
+
 # Where the PDFs go, and - one level up - the scripts check.tcl extracts:
 # examples/tmp/reference/check-*.tcl beside examples/tmp/reference/out/*.pdf.
 # Under "tmp" because that is what it is: nothing here is a source file, and

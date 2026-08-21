@@ -132,6 +132,31 @@ $doc rect -at {110 255} -size {40 12} -stroke {separation All {gray 0}} -width 1
 
 One name is one ink: a name appearing again must carry the same alternate. The alternate is never another separation or a pattern; under PDF/A it follows the output intent like every colour.
 
+### Lab - a colour as it was measured
+
+```tcl
+# {lab L a b}: L* from 0 to 100, a* and b* over the range the space names.
+# The numbers are NOT 0..1 like every other space here - a Lab colour clamped
+# to that range would come out black.
+$doc rect -at {20 272} -size {24 10} -fill {lab 54.29 80.81 69.88}      ;# the red of sRGB, as a measurement
+$doc rect -at {48 272} -size {24 10} -fill {lab 87.73 -86.18 83.18}
+
+# The two parameters of the space are options OF THE COLOUR, not of the shape:
+# -whitePoint (D50 by default, the illuminant of every printed measurement)
+# and -range (the standard's own {-100 100 -100 100}). Components outside the
+# range are CLAMPED, as the standard prescribes - sRGB blue has a b* of
+# -112.05 and needs the wider range prepress uses.
+$doc rect -at {76 272} -size {24 10} -fill {lab 32.30 79.20 -107.86 -range {-128 127 -128 127}}
+
+# The point of the space is the spot colour: a plate with the measurement
+# behind its name instead of a CMYK guess. Tint 0 is L* 100 - paper, not ink.
+$doc rect -at {104 272} -size {24 10} -fill {separation "Spot Red" {lab 48.3 68.5 47.3} 0.6}
+$doc font -family helvetica -size 8 -color {lab 30 0 0}
+$doc text "Lab text" -at {134 279}
+```
+
+Lab is device independent, so `pdfa` admits it under **every** output intent - where a bare `{rgb ...}` is refused under a CMYK press intent. A gradient cannot take one, for the same reason it cannot take an ICC based colour: a shading names its space by family, and a Lab space is an array. `Lab` and `Lab` plus eight hexadecimal digits are the names this writer gives its own Lab spaces - not to be used for a separation or an `icc embed` alias. (PDF 1.1.)
+
 ### ICC based colours
 
 ```tcl

@@ -11,15 +11,24 @@
 #   $doc textPath "Bochum - Essen - Duisburg" \
 #       -segments {{move 20 60} {curve 60 30 120 90 170 55}} -align center
 #
-# A seal, a banner, a label following a road on a map: the string is set glyph
-# by glyph, each one turned by the tangent of the curve at its own position.
+# A seal, a banner, a label following a road on a map: the string is set
+# cluster by cluster, each one turned by the tangent of the curve at its own
+# position.
 #
 # PDF has no operator for this - there is no "draw along a path". What it does
 # have is one text matrix per show operation, which is enough: walk the path,
-# place each glyph where its share of the arc length falls, rotate it by the
+# place each cluster where its share of the arc length falls, rotate it by the
 # direction the path takes there. The work is therefore not in the drawing but
 # in the ARC LENGTH, because glyph widths are measured along the curve and a
 # Bezier has no closed form for it.
+#
+# A CLUSTER, not a glyph, and that is the one thing this module may not take
+# apart. A combining mark has no advance and no place of its own: it is set
+# against the glyph it hangs on, which GPOS can only do while the two are in
+# the same run. Handed on singly the mark loses its base, and it used to land
+# on the character after it - see [TextPathAttached] for the measurement. So a
+# base and the marks that follow it travel together, and inside the cluster
+# the ordinary text road does the work.
 #
 # So the curve is flattened into short straight pieces once, and everything
 # after that is arithmetic on a polyline. The flattening is fine enough that
@@ -101,21 +110,25 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: -offset takes a distance in the document\
           unit, not \"$offset\""
     }
-    # -spacing has no operator here: on a path every glyph is placed by hand,
-    # and Tc only applies to a text object that runs on a straight line. So
-    # the gap has to go into the cursor, once BETWEEN each pair - which is
+    # -spacing has no operator here: on a path every cluster is placed by
+    # hand, and Tc only applies to a text object that runs on a straight line.
+    # So the gap has to go into the cursor, once BETWEEN each pair - which is
     # exactly the count [textWidth] uses for the whole string, and what kept
     # the two apart until now: the alignment measured a length that never got
     # drawn, 44.3715 against 32.7298 mm at -spacing 3.
+    #
+    # Counted per GLYPH, not per cluster: [textWidth] counts every glyph of
+    # the string, and a cluster of two writes its own Tc inside its own text
+    # object. Both halves are in the loop below.
     #
     # In the document unit, because the cursor is: the option is in points
     # like every other font size.
     set gap [::tclpdf::geometry fromPoints [dict get $state spacing] \
         [my cget -unit]]
 
-    # One bracket around the whole run. Text on a path is placed glyph by
-    # glyph, so bracketing inside the loop would make one element per letter -
-    # a reader would announce them singly. -tag works as it does on [text].
+    # One bracket around the whole run. Text on a path is placed cluster by
+    # cluster, so bracketing inside the loop would make one element per letter
+    # - a reader would announce them singly. -tag works as it does on [text].
     #
     # Opened HERE, after the path, the width and the alignment have all been
     # accepted: opened first, a path too short for text left the BDC standing
@@ -126,28 +139,57 @@ oo::define ::tclpdf::document::document {
       set mark [my StructureMark [dict get $options tag]]
       my content [my StructureBegin $mark]
     }
-    # The characters in the order they are DRAWN. Along a straight baseline
-    # [TextShow] turns the whole glyph run round in one go; here each glyph is
-    # placed by hand, so the loop walks the same pieces instead - which is why
-    # both ask [TextPieces] for them. A number keeps its own order inside a
-    # right-to-left line on a path exactly as it does on a baseline.
     set characters [split $string {}]
-    set order {}
-    foreach piece [my TextPieces [lmap char $characters {scan $char %c}] \
-        [dict get $state direction]] {
+    set overrides [my TextPathOverrides $options]
+    # Every character measured ONCE, in logical order, before anything is
+    # placed. The loop needs the advance anyway, and the same number answers
+    # the other question this has to ask first - see [TextPathAttached].
+    set widths [lmap char $characters {my textWidth $char {*}$overrides}]
+    set attached [my TextPathAttached $characters $widths]
+
+    # The CLUSTERS in the order they are DRAWN. Along a straight baseline
+    # [TextShow] turns the whole glyph run round in one go; here each cluster
+    # is placed by hand, so the loop walks the same pieces instead - which is
+    # why both ask [TextPieces] for them, and both join a mark to its base
+    # through [TextCluster]. A number keeps its own order inside a
+    # right-to-left line on a path exactly as it does on a baseline.
+    #
+    # [TextCluster] answers in whole PIECES, and a piece may be a run of
+    # digits; the pieces are therefore taken apart again into one cluster per
+    # character, with the marks left hanging on the character before them.
+    # Taking them apart is what keeps the bytes of every line without a mark:
+    # each of its clusters is one character, exactly as before.
+    set direction [dict get $state direction]
+    set pieces [my TextPieces [lmap char $characters {scan $char %c}] $direction]
+    set clusters {}
+    foreach piece [my TextCluster $pieces $attached $direction] {
       lassign $piece from to
       for {set index $from} {$index <= $to} {incr index} {
-        lappend order $index
+        if {$index > $from && [lindex $attached $index]} {
+          lset clusters end 1 $index
+        } else {
+          lappend clusters [list $index $index]
+        }
       }
     }
     set first 1
-    foreach index $order {
-      set char [lindex $characters $index]
+    foreach cluster $clusters {
+      lassign $cluster from to
       if {!$first} {
         set cursor [expr {$cursor + $gap}]
       }
       set first 0
-      set advance [my textWidth $char {*}[my TextPathOverrides $options]]
+      # The path advances by the width of the BASE, not of the cluster: a
+      # combining mark has no advance of its own - measured, DejaVu Sans, the
+      # acute of U+0301 is 0 - and the marks are drawn INSIDE the base's own
+      # text object, where the ordinary text road places them.
+      set advance [lindex $widths $from]
+      # The character spacing, though, is written between every pair of
+      # GLYPHS, and [TextRun] writes a "Tc" into the text object of the
+      # cluster as well - so the gaps a cluster holds internally travel with
+      # the cursor. Left out, the drawn line comes out narrower than
+      # [textWidth] measured it and -align center drifts by exactly that much.
+      set step [expr {$advance + $gap * ($to - $from)}]
       # The glyph is placed at its own MIDDLE and turned there: measuring the
       # angle at the left edge tips every letter slightly into the curve, and
       # on a tight radius the line visibly fans out.
@@ -164,9 +206,9 @@ oo::define ::tclpdf::document::document {
             - sin($radians) * $offset}]
         set py [expr {$y + sin($radians) * $advance / 2.0
             - cos($radians) * $offset}]
-        my TextRun $char $state $px $py $angle
+        my TextRun [string range $string $from $to] $state $px $py $angle
       }
-      set cursor [expr {$cursor + $advance}]
+      set cursor [expr {$cursor + $step}]
     }
     if {[llength $mark]} {
       my content [my StructureEnd $mark]
@@ -175,6 +217,40 @@ oo::define ::tclpdf::document::document {
   }
 
   # -- internals ----------------------------------------------------------
+
+  # Which characters of the string hang on the one before them: one flag per
+  # character, in logical order - the shape [TextCluster] reads.
+  #
+  # WHY THIS QUESTION HAS TO BE ASKED AT ALL. Everywhere else in the package a
+  # line reaches the font as a whole, and GPOS mark attachment then places a
+  # combining mark against the glyph it hangs on. This module takes the string
+  # apart, and a mark handed on ALONE has no base left in its run: there is
+  # nothing for GPOS to attach it to. Measured before the clusters existed,
+  # DejaVu Sans, "Ma" + U+0301 + "rz" on a straight path - the acute and the
+  # "r" both came out at x 86.20463, the accent lying on the letter after it.
+  # So the mark is bound to its base BEFORE the loop runs, and the cluster is
+  # what gets placed.
+  #
+  # THE TEST IS THE ADVANCE, and it is the one the package already treats as
+  # what makes a character a combining mark: [FontRunWidth] says so in as many
+  # words - "the combining acute has an advance of 0". It is asked through
+  # [textWidth], so it holds for every kind of face without a second road -
+  # a TrueType face answers out of its hmtx, the standard fourteen out of the
+  # shipped metrics, a Type 1 out of its AFM, a Type 3 out of its glyph space.
+  #
+  # The exception is named rather than measured, because measuring cannot tell
+  # it apart: the three characters of [neverDrawn] have no advance either and
+  # are not marks. A soft hyphen folded into the cluster in front of it would
+  # change the bytes of a document that has one, and it hangs on nothing.
+  # A flag for EVERY position, including the zeroes - unlike [FontRunMarks],
+  # which answers {} for a run without a mark. The loop that takes the pieces
+  # apart again indexes this list per character, and an answer that is
+  # sometimes empty would have to be read two ways.
+  method TextPathAttached {characters widths} {
+    return [lmap char $characters width $widths {
+      expr {$width == 0 && $char ni $::tclpdf::text::neverDrawn}
+    }]
+  }
 
   # Only the font options, without the ones textPath owns - [textWidth] would
   # refuse -segments.
@@ -293,4 +369,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.6
+package provide tclpdf::textPath 1.7

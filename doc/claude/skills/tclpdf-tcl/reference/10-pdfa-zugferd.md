@@ -165,6 +165,9 @@ java -jar Mustang-CLI.jar --action validate --source invoice.pdf    # ZUGFeRD/Or
 pdffonts out.pdf                           # every face embedded, subset tags
 pdftotext out.pdf - | head                 # what a reader extracts
 pdfinfo -struct-text out.pdf               # the structure tree
+pdfsig out.pdf                             # a signature, its ranges and what openssl thinks of it
 ```
 
 `veraPDF` does not see everything - a null byte in a font name is caught by qpdf only; a wrong printed page number by nobody.
+
+**What an archivable document may still do**: it may be **signed** (`11-encryption-signatures.md` - measured: `isCompliant true`, 0 failed checks, and the embedded invoice byte-identical to the unsigned file's), it may carry **layers** (`/Order` is written for every group, which is what ISO 19005-2/-3, 6.9 asks), it may use **Lab** colours under any output intent, and it may carry a **Type 3** font, where the question of embedding does not arise. What it may **not** do is be encrypted: `pdfa` and `encrypt` are refused together in whichever order they are called. A page taken over with `pdf import` is not judged by the claim - validate the result.
