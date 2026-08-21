@@ -1,0 +1,684 @@
+# layer.test --
+#
+# Optional content - what readers call layers (ISO 32000-2, 8.11).
+#
+# Three questions carry this file, and each of them is a way the feature can
+# be wrong while the file still opens: does the bracket in the content stream
+# close where it opened, do the marks of a TAGGED document and the layer
+# bracket nest rather than cross (14.6.1), and does the catalogue entry
+# survive a page imported from a foreign file that brought layers of its own.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::layer
+source [file join [file dirname [info script]] helper.tcl]
+
+# The body of every object the writer holds that is an optional content
+# group, in object order. Reads the writer rather than the file: the objects
+# exist before [write] runs, and a test about what was BUILT should not have
+# to go through a file to see it.
+proc layerGroups {doc} {
+  set writer [$doc writer]
+  set result {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match {*/Type /OCG*} $body]} {
+      lappend result $number $body
+    }
+  }
+  return $result
+}
+
+# Whether every marked-content bracket in a stream closes before the one it
+# sits in does - the question 14.6.1 asks and the one thing a second BDC
+# inside a first can get wrong. Answers the nesting as a list of tags in the
+# order they were OPENED, innermost last per bracket, or an error text.
+#
+# Written as a stack rather than by counting BDC and EMC: a stream with the
+# right COUNT of each and the wrong order passes a count and is broken.
+proc layerNesting {stream} {
+  set stack {}
+  set opened {}
+  foreach line [split $stream \n] {
+    if {[regexp {^/([A-Za-z0-9]+) .*BDC$} $line -> tag]} {
+      lappend stack $tag
+      lappend opened [join $stack /]
+    } elseif {[string trim $line] eq "EMC"} {
+      if {![llength $stack]} {
+        return "EMC without BDC"
+      }
+      set stack [lrange $stack 0 end-1]
+    }
+  }
+  if {[llength $stack]} {
+    return "still open: $stack"
+  }
+  return $opened
+}
+
+# A document with two layers of its own, written to a scratch file - the
+# FOREIGN file the import tests take a page out of. Answers the path.
+proc layerForeignFile {name} {
+  set path [::tclpdfTest::scratch $name]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create alpha -title "Foreign alpha"
+  $doc layer create beta -title "Foreign beta" -visible 0
+  $doc layer draw alpha -script {
+    $doc rect -at {10 10} -size {40 10} -fill {0.8 0.9 0.8}
+  }
+  $doc layer draw beta -script {
+    $doc rect -at {10 30} -size {40 10} -fill {0.9 0.8 0.8}
+  }
+  $doc write $path
+  $doc destroy
+  return $path
+}
+
+# -- the group ------------------------------------------------------------
+
+test layer-1.1 {a layer is an OCG object with a title} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create draft -title "Draft stamp"
+  set groups [layerGroups $doc]
+  $doc destroy
+  list [llength $groups] [regexp {/Name \(Draft stamp\)} [lindex $groups 1]]
+} -result {2 1}
+
+test layer-1.2 {without a title the alias is the name a reader shows} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create Entwurf
+  set body [lindex [layerGroups $doc] 1]
+  $doc destroy
+  regexp {/Name \(([^)]*)\)} $body -> name
+  set name
+} -result Entwurf
+
+test layer-1.3 {the group is a Properties resource, and the stream names it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create one
+  $doc layer create two
+  $doc layer draw two -script {$doc text "x" -at {20 20}}
+  set names [dict keys [$doc resource Properties]]
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  list $names [lindex [regexp -inline {/OC /OC\d+ BDC} $stream] 0]
+} -result {{OC1 OC2} {/OC /OC2 BDC}}
+
+test layer-1.4 {a duplicate name is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create draft
+  try {
+    $doc layer create draft
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*a layer named "draft" already exists*}
+
+test layer-1.5 {drawing into an unknown layer lists the known ones} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create vorhanden
+  try {
+    $doc layer draw fehlt -script {}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*no layer named "fehlt"*vorhanden*}
+
+test layer-1.6 {-visible takes a boolean} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc layer create draft -visible vielleicht
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-visible of layer create is a boolean*}
+
+test layer-1.7 {-intent is checked, and written as name or array} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create a -intent Design
+  $doc layer create b -intent {View Design}
+  set bodies [lmap {number body} [layerGroups $doc] {set body}]
+  set refused [catch {$doc layer create c -intent Ansicht} message]
+  $doc destroy
+  list [lindex [regexp -inline {/Intent \S+} [lindex $bodies 0]] 0] \
+      [lindex [regexp -inline {/Intent \[[^]]*\]} [lindex $bodies 1]] 0] \
+      $refused [string match {*-intent of layer create is View or Design*} $message]
+} -result {{/Intent /Design} {/Intent [/View /Design]} 1 1}
+
+test layer-1.8 {a layer without -intent writes none} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create plain
+  set body [lindex [layerGroups $doc] 1]
+  $doc destroy
+  string match {*/Intent*} $body
+} -result 0
+
+# -- the bracket ----------------------------------------------------------
+
+test layer-2.1 {the bracket encloses what the script drew, and closes} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  $doc layer draw draft -script {
+    $doc rect -at {20 20} -size {30 10} -fill {0.5 0.5 0.5}
+  }
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  list [lindex [split $stream \n] 0] \
+      [lindex [split [string trimright $stream \n] \n] end] \
+      [layerNesting $stream]
+} -result {{/OC /OC1 BDC} EMC OC}
+
+test layer-2.2 {an empty script writes no bracket at all} -body {
+  # A "/OC /OC1 BDC EMC" around nothing is marked content with no content -
+  # the defect the type area and the text block each produced once.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  $doc layer draw draft -script {}
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  set stream
+} -result {}
+
+test layer-2.3 {a script that fails still closes the bracket, and re-raises} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  set code [catch {
+    $doc layer draw draft -script {
+      $doc text "a" -at {20 20}
+      error "boom"
+    }
+  } message]
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  list $code $message [layerNesting $stream]
+} -result {1 boom OC}
+
+test layer-2.4 {a page added inside the script is refused, and the bracket closes} -body {
+  # The EMC goes on the page the BDC is on, so the file stays well formed -
+  # and the refusal says that what came after the break is not in the layer.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  set code [catch {
+    $doc layer draw draft -script {
+      $doc text "a" -at {20 20}
+      $doc page add
+      $doc text "b" -at {20 20}
+    }
+  } message]
+  set first [layerNesting [::tclpdfTest::content $doc 0]]
+  set second [layerNesting [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  list $code [string match {*added a page*} $message] $first $second
+} -result {1 1 OC {}}
+
+test layer-2.5 {layers nest, and so do their brackets} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create outer
+  $doc layer create inner
+  $doc layer draw outer -script {
+    $doc text "a" -at {20 20}
+    $doc layer draw inner -script {$doc text "b" -at {20 30}}
+  }
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  layerNesting $stream
+} -result {OC OC/OC}
+
+test layer-2.6 {a bracket inside a form lands in the form's own stream} -body {
+  # 8.11.3.2 lists a form's content stream among the streams a bracket may
+  # sit in, and the /Properties resource is reachable there because a form
+  # points its /Resources at the document's shared dictionary.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc layer create draft
+  $doc form create logo -size {40 20} -script {
+    $doc layer draw draft -script {
+      $doc rect -at {0 0} -size {40 20} -fill {1 0 0}
+    }
+  }
+  $doc form place logo -at {10 10}
+  set writer [$doc writer]
+  set form {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[string match {*/Subtype /Form*} [$writer body $number]]} {
+      set form [$writer body $number]
+    }
+  }
+  set page [::tclpdfTest::content $doc 0]
+  $doc destroy
+  list [string match {*/OC /OC1 BDC*} $form] [string match {*BDC*} $page]
+} -result {1 0}
+
+test layer-2.8 {a script that leaves the content stream is refused} -body {
+  # The other way out of "one bracket, one stream": a script that pushes a
+  # drawing surface and does not pop it. Nobody writes that on purpose, and
+  # the refusal is what keeps a BDC from being closed in a stream it never
+  # opened in.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  set code [catch {
+    $doc layer draw draft -script {
+      $doc text "a" -at {20 20}
+      $doc canvas push 100 100
+    }
+  } message]
+  catch {$doc canvas pop}
+  $doc destroy
+  list $code [string match {*left the content stream it began in*} $message]
+} -result {1 1}
+
+test layer-2.7 {two brackets for the same layer are two brackets} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  $doc layer draw draft -script {$doc text "a" -at {20 20}}
+  $doc layer draw draft -script {$doc text "b" -at {20 30}}
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  layerNesting $stream
+} -result {OC OC}
+
+# -- the catalogue --------------------------------------------------------
+
+test layer-3.1 {OCProperties lists every group, and D says which are on} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create shown
+  $doc layer create hidden -visible 0
+  $doc layer draw shown -script {$doc text "a" -at {20 20}}
+  ::tclpdfTest::writeTwice $doc layer-catalog
+  set entry [$doc catalogEntry OCProperties]
+  set groups [lmap {number body} [layerGroups $doc] {set number}]
+  $doc destroy
+  list [llength [::tclpdf::layer::groupReferences $entry]] \
+      [lindex [regexp -inline {/Name \([^)]*\)} $entry] 0] \
+      [regexp {/OFF \[[^]]*[0-9]+ 0 R[^]]*\]} $entry] \
+      [llength $groups]
+} -result {2 {/Name (Default)} 1 2}
+
+test layer-3.2 {Order holds every group, which is what PDF/A asks} -body {
+  # ISO 19005-2/-3, 6.9 (veraPDF 6.9-3): where /Order is present it shall
+  # reference all the OCGs in the file.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  foreach name {a b c} {
+    $doc layer create $name
+    $doc layer draw $name -script [list $doc text $name -at {20 20}]
+  }
+  ::tclpdfTest::writeTwice $doc layer-order
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  regexp {/Order \[([^]]*)\]} $entry -> order
+  list [llength [::tclpdf::layer::groupReferences $entry]] \
+      [llength [regexp -all -inline {\d+ 0 R} $order]]
+} -result {3 3}
+
+test layer-3.3 {visibility can still be changed after the drawing} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft -visible 0
+  $doc layer draw draft -script {$doc text "a" -at {20 20}}
+  set before [$doc layer state draft]
+  $doc layer state draft 1
+  set after [$doc layer state draft]
+  ::tclpdfTest::writeTwice $doc layer-state
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  list $before $after [string match {*/OFF*} $entry]
+} -result {0 1 0}
+
+test layer-3.4 {layer state takes a boolean and one value at most} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create draft
+  set messages {}
+  foreach call {{state draft vielleicht} {state draft 1 0} {state fehlt}} {
+    catch {$doc layer {*}$call} message
+    lappend messages $message
+  }
+  $doc destroy
+  list [string match {*takes a boolean*} [lindex $messages 0]] \
+      [string match {*at most one value*} [lindex $messages 1]] \
+      [string match {*no layer named "fehlt"*} [lindex $messages 2]]
+} -result {1 1 1}
+
+test layer-3.5 {a radio group becomes RBGroups} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create german
+  $doc layer create english -visible 0
+  $doc layer radio {german english}
+  $doc layer draw german -script {$doc text "a" -at {20 20}}
+  ::tclpdfTest::writeTwice $doc layer-radio
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  regexp {/RBGroups \[\[([^]]*)\]\]} $entry -> members
+  llength [regexp -all -inline {\d+ 0 R} $members]
+} -result 2
+
+test layer-3.6 {a radio group of one, of a stranger, or of a twin is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create a
+  $doc layer create b
+  set messages {}
+  foreach members {{a} {a fehlt} {a a}} {
+    catch {$doc layer radio $members} message
+    lappend messages $message
+  }
+  $doc destroy
+  list [string match {*two or more layer names*} [lindex $messages 0]] \
+      [string match {*no layer named "fehlt"*} [lindex $messages 1]] \
+      [string match {*appears twice in the same radio group*} [lindex $messages 2]]
+} -result {1 1 1}
+
+test layer-3.7 {the configuration carries a Name and a ListMode} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  $doc layer draw draft -script {$doc text "a" -at {20 20}}
+  $doc layer configure -title "Default view" -listMode VisiblePages
+  ::tclpdfTest::writeTwice $doc layer-config
+  set entry [$doc catalogEntry OCProperties]
+  set state [$doc layer configure]
+  $doc destroy
+  list [lindex [regexp -inline {/Name \([^)]*\)} $entry] 0] \
+      [lindex [regexp -inline {/ListMode /\w+} $entry] 0] $state
+} -result {{/Name (Default view)} {/ListMode /VisiblePages} {title {Default view} listMode VisiblePages}}
+
+test layer-3.8 {an empty configuration name is refused, and says why} -body {
+  # ISO 19005-2/-3, 6.9 (veraPDF 6.9-1): every configuration dictionary shall
+  # carry a non-empty /Name. Measured: with "/Name ()" in the file veraPDF
+  # 1.30 fails exactly that check.
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create draft
+  try {
+    $doc layer configure -title {}
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*may not be empty*19005*6.9*}
+
+test layer-3.9 {an unknown ListMode is refused by name} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc layer create draft
+  try {
+    $doc layer configure -listMode Alle
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*-listMode of layer configure is AllPages or VisiblePages*}
+
+test layer-3.10 {no AS in the configuration, ever} -body {
+  # veraPDF 6.9-4. Nothing writes it, and nothing offers to - the check is
+  # here so that a later feature which adds usage dictionaries has to come
+  # past this line.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  $doc layer draw draft -script {$doc text "a" -at {20 20}}
+  ::tclpdfTest::writeTwice $doc layer-as
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  list [string match {*/AS*} $entry] [string match {*/BaseState*} $entry]
+} -result {0 0}
+
+test layer-3.11 {no layer, no OCProperties - but a declared one counts} -body {
+  # Two halves of one rule. A document that never asks about layers gets no
+  # catalogue key, and asking about them is not creating one - [layer names]
+  # on a layer-free document must stay a question. A layer that was DECLARED
+  # and never drawn into does get the key: an empty layer a reader offers to
+  # switch is a legitimate thing to write, and the group has to be in /OCGs
+  # for the reader to see it at all (8.11.4.2).
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc text "a" -at {20 20}
+  set asked [$doc layer names]
+  ::tclpdfTest::writeTwice $doc layer-none
+  set none [$doc catalogEntry OCProperties]
+  $doc destroy
+
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create unused
+  ::tclpdfTest::writeTwice $doc layer-unused
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  list $asked $none [llength [::tclpdf::layer::groupReferences $entry]]
+} -result {{} {} 1}
+
+test layer-3.12 {two writes come out byte for byte the same} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft -visible 0
+  $doc layer create draft2
+  $doc layer radio {draft draft2}
+  $doc layer draw draft -script {$doc text "a" -at {20 20}}
+  lassign [::tclpdfTest::writeTwice $doc layer-twice] first second
+  $doc destroy
+  string equal $first $second
+} -result 1
+
+# -- with a structure tree ------------------------------------------------
+
+test layer-4.1 {a layer inside a tagged document nests, it does not cross} -body {
+  # 14.6.1: marked content has to nest. 8.11.3.2 says the same in its own
+  # words and recommends the optional content bracket be the INNER one where
+  # the two would overlap - here they never overlap, because a leaf's bracket
+  # is written and closed by the one call that draws it.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc language en
+  $doc page add
+  $doc layer create draft
+  $doc structure Sect -script {
+    $doc layer draw draft -script {
+      $doc text "Hello" -at {20 20} -tag H1
+      $doc rect -at {20 40} -size {30 10} -fill {0.8 0.8 0.9}
+    }
+    $doc text "outside" -at {20 60}
+  }
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  layerNesting $stream
+} -result {OC OC/H1 OC/Artifact P}
+
+test layer-4.2 {the MCIDs of a tagged page are untouched by the bracket} -body {
+  # The layer bracket carries no MCID and must not consume one - a number
+  # skipped here is a leaf the ParentTree cannot reach.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc language en
+  $doc page add
+  $doc layer create draft
+  $doc layer draw draft -script {$doc text "a" -at {20 20}}
+  $doc text "b" -at {20 30}
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  regexp -all -inline {/MCID (\d+)} $stream
+} -result {{/MCID 0} 0 {/MCID 1} 1}
+
+# -- the import seam ------------------------------------------------------
+
+test layer-5.1 {an imported page keeps its layers, and so does this one} -body {
+  # The case the whole catalogue arrangement exists for: import.tcl writes
+  # /OCProperties while the page is being taken over, this module rewrites it
+  # on the catalog event - and neither may lose the other's groups.
+  set path [layerForeignFile layer-foreign.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create own
+  $doc layer draw own -script {$doc text "mine" -at {20 100}}
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  ::tclpdfTest::writeTwice $doc layer-import
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  regexp {/Order \[([^]]*)\]} $entry -> order
+  list [llength [::tclpdf::layer::groupReferences $entry]] \
+      [llength [regexp -all -inline {\d+ 0 R} $order]]
+} -result {3 3}
+
+test layer-5.2 {a write, a further import and a second write lose nothing} -body {
+  # import.tcl reads the entry back with its own parser and writes a reduced
+  # one; the next catalog run has to rebuild the full one out of that.
+  set path [layerForeignFile layer-foreign2.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create own
+  $doc layer draw own -script {$doc text "mine" -at {20 100}}
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  ::tclpdfTest::writeTwice $doc layer-import-a
+  set after [llength [::tclpdf::layer::groupReferences \
+      [$doc catalogEntry OCProperties]]]
+  $doc pdf import sheet2 $path
+  $doc form place sheet2 -at {100 0}
+  ::tclpdfTest::writeTwice $doc layer-import-b
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  regexp {/Order \[([^]]*)\]} $entry -> order
+  list $after [llength [::tclpdf::layer::groupReferences $entry]] \
+      [llength [regexp -all -inline {\d+ 0 R} $order]]
+} -result {3 5 5}
+
+test layer-5.3 {a foreign group is not counted twice} -body {
+  set path [layerForeignFile layer-foreign3.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create own
+  $doc layer draw own -script {$doc text "mine" -at {20 100}}
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  # Three writes: every catalog run reads its own previous entry back.
+  foreach name {a b c} {
+    $doc write [::tclpdfTest::scratch layer-thrice-$name.pdf]
+  }
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  foreach name {a b c} {
+    file delete [::tclpdfTest::scratch layer-thrice-$name.pdf]
+  }
+  file delete $path
+  llength [::tclpdf::layer::groupReferences $entry]
+} -result 3
+
+test layer-5.4 {the reference reader takes the OCGs array and nothing else} -body {
+  # The one place this module reads PDF syntax back. It has to find the
+  # top-level /OCGs array and stop there - the /ON and /Order arrays below it
+  # hold the same references and would double every group.
+  list [::tclpdf::layer::groupReferences \
+          "<< /OCGs \[3 0 R 4 0 R\] /D << /ON \[3 0 R 4 0 R\] >> >>"] \
+      [::tclpdf::layer::groupReferences \
+          "<< /D << /ON \[1 0 R 2 0 R\] >> /OCGs \[7 0 R\] >>"] \
+      [::tclpdf::layer::groupReferences "<< /D << /Name (x) >> >>"] \
+      [::tclpdf::layer::groupReferences {}] \
+      [::tclpdf::layer::groupReferences "<< /OCGs \[\n  7 0 R\n\] >>"]
+} -result {{{3 0 R} {4 0 R}} {{7 0 R}} {} {} {{7 0 R}}}
+
+# -- versions and spelling ------------------------------------------------
+
+test layer-6.1 {optional content is PDF 1.5, and an older document is told} -body {
+  set doc [tclpdf new -version 1.4]
+  $doc page add
+  try {
+    $doc layer create draft
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob -result {*layer needs PDF 1.5*1.4*}
+
+test layer-6.2 {an unknown subcommand lists the known ones} -body {
+  set doc [tclpdf new]
+  $doc page add
+  try {
+    $doc layer erzeuge x
+  } finally {
+    $doc destroy
+  }
+} -returnCodes error -match glob \
+    -result {*unknown layer subcommand "erzeuge"*create, draw, names, state, radio, configure*}
+
+test layer-6.3 {layer names answers in the order they were declared} -body {
+  set doc [tclpdf new]
+  $doc page add
+  foreach name {c a b} {
+    $doc layer create $name
+  }
+  set names [$doc layer names]
+  $doc destroy
+  set names
+} -result {c a b}
+
+test layer-6.4 {an empty script needs no page, a drawing one is refused} -body {
+  # The order of the two checks in [LayerDraw] is the point: nothing is
+  # written for an empty script, so it has no stream to want, while a script
+  # that draws is refused before the BDC goes anywhere.
+  set doc [tclpdf new]
+  $doc layer create draft
+  set quiet [catch {$doc layer draw draft -script {}}]
+  set loud [catch {$doc layer draw draft -script {set x 1}} message]
+  $doc destroy
+  list $quiet $loud [string match {*no such page*} $message]
+} -result {0 1 1}
+
+# -- PDF/A ----------------------------------------------------------------
+
+test layer-7.1 {a PDF/A-3B document with layers stays conforming} \
+    -constraints haveTdom -body {
+  # The four requirements of ISO 19005-2/-3, 6.9 met by construction, checked
+  # here on the objects and, where veraPDF is installed, by veraPDF itself:
+  # measured 2026-08-21 with veraPDF 1.30, 542 passed checks and 0 failed,
+  # the four 6.9 rules among them. Mutating the file by hand fails each of them - an
+  # empty /Name fails 6.9-1, a shortened /Order fails 6.9-3, an /AS fails
+  # 6.9-4 - so the passes are earned rather than absent.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set doc [tclpdf new -unit mm]
+  $doc language en
+  $doc page add
+  $doc font embed face [file join $root examples assets fonts DejaVuSans.ttf]
+  $doc font -family face -size 11 -color black
+  $doc layer create german -title "German"
+  $doc layer create english -title "English" -visible 0
+  $doc layer radio {german english}
+  $doc layer draw german -script {$doc text "Rechnung" -at {20 30}}
+  $doc layer draw english -script {$doc text "Invoice" -at {20 30}}
+  $doc pdfa -part 3 -conformance B -profile [file join $root icc sRGB.icc]
+  set path [::tclpdfTest::scratch layer-pdfa.pdf]
+  $doc write $path
+  set verdict [::tclpdfTest::verapdf $path 3b]
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  list $verdict [string match {*/AS*} $entry] \
+      [string match {*/Name (Default)*} $entry] \
+      [llength [::tclpdf::layer::groupReferences $entry]]
+} -result {ok 0 1 2}
+
+cleanupTests

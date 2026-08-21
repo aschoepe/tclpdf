@@ -399,4 +399,4 @@ oo::class create ::tclpdf::writer::pdf {
   }
 }
 
-package provide tclpdf::writer 1.3
+package provide tclpdf::writer 1.4

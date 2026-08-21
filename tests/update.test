@@ -476,7 +476,7 @@ test update-5.2 {the page object of such a file really is a compressed one befor
     set path [::tclpdfTest::original update-5.2.pdf]
     set streamed [::tclpdfTest::fixture update-5.2-xs.pdf]
     exec qpdf --object-streams=generate $path $streamed
-    set reader [::tclpdf::import::Open $streamed]
+    set reader [::tclpdf::importRead::Open $streamed]
     set upd [::tclpdf::update open $streamed]
     set page [::tclpdfTest::pageNumber $upd]
     $upd destroy

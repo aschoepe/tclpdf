@@ -1945,4 +1945,102 @@ test font-16.9 {a format 4 cmap entry on a surrogate code point never enters the
   list [dict exists $cmap 55296] [dict get $cmap 65]
 } -result {0 36}
 
+# --- two faces in one line: what the file then holds --------------------------
+#
+# The fallback chain of text.tcl decides WHICH face sets which character; what
+# has to be true here is that each of them is written as the face it is - its
+# own subset, its own widths, its own ToUnicode map. A map that carried the
+# other face's characters would extract the line as noise while every
+# validator called the file clean, which is the defect class this whole
+# module is careful about.
+
+set jpFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google NotoSansJP-Regular.ttf]
+testConstraint haveJpFace [expr {[file exists $jpFace] && [file exists $fontRegular]}]
+
+# The ToUnicode CMap of every font object of a written document, by the
+# BaseFont name the object carries.
+proc fontToUnicodeMaps {doc} {
+  set writer [$doc writer]
+  set maps {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {![regexp {/ToUnicode (\d+) 0 R} $body -> map]} {
+      continue
+    }
+    regexp {/BaseFont /(?:[A-Z]{6}\+)?(\S+?)[ />]} $body -> name
+    dict set maps $name [::tclpdfTest::streamOf $writer $map]
+  }
+  return $maps
+}
+
+test font-17.1 {each face of a mixed line gets its own object and its own ToUnicode map} \
+    -constraints haveJpFace -body {
+  set path [::tclpdfTest::scratch font-chain.pdf]
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $fontRegular
+  $doc font embed jp $jpFace
+  $doc page add
+  $doc font -family body -size 12 -fallback jp
+  $doc text "Rechnung 東京" -at {20 40}
+  $doc write $path
+  set maps [fontToUnicodeMaps $doc]
+  $doc destroy
+  file delete $path
+  # U+006E (the n of Rechnung) belongs to DejaVu and U+6771 (東) to Noto Sans
+  # JP, and neither map may know the other's character: the maps are per font
+  # and a glyph number means nothing outside the face it came from.
+  list [lsort [dict keys $maps]] \
+      [regexp {<006E>} [dict get $maps DejaVuSans]] \
+      [regexp {<6771>} [dict get $maps DejaVuSans]] \
+      [regexp {<6771>} [dict get $maps NotoSansJP-Regular]] \
+      [regexp {<006E>} [dict get $maps NotoSansJP-Regular]]
+} -result {{DejaVuSans NotoSansJP-Regular} 1 0 1 0}
+
+test font-17.2 {a face the chain never needs costs the file nothing} \
+    -constraints haveJpFace -body {
+  # The reason a chain may be long: an embedded face that nothing falls back
+  # to reserves no object and appears in no resource dictionary, because
+  # [FontResource] is what reserves one and only the drawing calls it. So the
+  # document is byte for byte the one written without the chain.
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $fontRegular
+  $doc font embed jp $jpFace
+  $doc page add
+  $doc font -family body -size 12 -fallback jp
+  $doc text "Rechnung 4711" -at {20 40}
+  set withChain [::tclpdfTest::scratch font-chain-unused.pdf]
+  $doc write $withChain
+  set bytes [::tclpdfTest::readBytes $withChain]
+  set resources [dict keys [$doc resource Font]]
+  set number [dict get [$doc state fonts] jp number]
+  $doc destroy
+  file delete $withChain
+  list $resources $number [regexp {NotoSansJP} $bytes]
+} -result {FEbody {} 0}
+
+test font-17.3 {a mixed line keeps PDF/A-3B - both faces embedded and subset} \
+    -constraints {haveJpFace haveTdom} -body {
+  # Asked of veraPDF, which is the only thing here that reads the file as the
+  # standard does. A missing width, a font program left out for one of the two
+  # faces or a ToUnicode map on the wrong object are all rule failures there.
+  set path [::tclpdfTest::scratch font-chain-pdfa.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc info Title "Two faces in one line"
+  $doc page add
+  $doc font embed body $fontRegular
+  $doc font embed jp $jpFace
+  $doc font -family body -size 12 -fallback jp
+  $doc text "Rechnung 4711 東京 Tokyo" -at {20 30}
+  $doc pdfa -part 3 -conformance B \
+      -profile [file join [file dirname [file dirname [file normalize [info script]]]] \
+          icc sRGB.icc] -identifier "sRGB IEC61966-2.1"
+  $doc write $path
+  $doc destroy
+  set report [::tclpdfTest::verapdf $path 3b]
+  file delete $path
+  set report
+} -result ok
+
+
 cleanupTests

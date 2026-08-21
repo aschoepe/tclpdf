@@ -22,6 +22,15 @@
 #   changes the design without asking. Every one of those is discovered by a
 #   reader, weeks later, on paper.
 #
+#   ASKED FOR, it is a different matter, and that is what -fallback is: a
+#   chain of faces written into the call, so the change of design is a
+#   decision of the document rather than a repair the writer made behind the
+#   caller's back. The two answers stand on the page below, one under the
+#   other - the trap swaps the WHOLE LINE to the text face over one missing
+#   letter, the chain swaps the CHARACTER and leaves the rest in the display
+#   face. Which is right is a question about the document; what is wrong is
+#   only the silent version of either.
+#
 #   The writer is the last place in the chain that still knows what was meant.
 #   So it says so, names the character and the position, and lets the caller
 #   decide - which is what the loop below does, in four lines. The same facts
@@ -91,6 +100,11 @@ $doc text "Menu of the day" -at {20 46}
 #
 # Try the display face; if tclpdf refuses, take the text face for that line.
 # The refusal names the character, so the record below can say WHY.
+#
+# The lines it cannot set are kept: the same ones are set again further down,
+# with a chain, and the two halves of the page are then the same sentences
+# decided twice.
+set mixed {}
 set record {}
 set y 58
 foreach {dish price} $dishes {
@@ -106,6 +120,7 @@ foreach {dish price} $dishes {
         $doc font -family body -size 11
         $doc text $dish -at [list 20 $y]
         lappend record [list $dish "DejaVu Sans" "no glyph for $codepoint"]
+        lappend mixed $dish
     }
     $doc font -family body -size 11
     # -align decimal belongs to tables, where a column knows what the column
@@ -126,12 +141,48 @@ $doc table -at [list 20 [expr {$y + 12}]] -width 170 -theme striped \
     -columns {{} {width 38} {width 52}}
 
 $doc font -family body -size 8
-$doc text "Niconne carries [dict get [$doc font info script] characters]\
+# The y a paragraph returns is the one under its last line, so what follows
+# does not have to be placed by counting rows by hand.
+set y [$doc text "Niconne carries [dict get [$doc font info script] characters]\
     characters against DejaVu Sans with\
     [dict get [$doc font info body] characters]. Both Polish dishes above are\
     Polish; one sets and one does not. Coverage is a property of the file, and\
     the only way to know it is to ask the file." \
-    -at [list 20 [expr {$y + 12 + 12 + [llength $record] * 8}]] -width 170
+    -at [list 20 [expr {$y + 24 + [llength $record] * 8}]] -width 170]
+
+# -- the same menu, decided per character ------------------------------------
+#
+# [font -fallback] names the faces that may set what the family cannot. Each
+# character goes to the first face in the chain that has it, so Niconne keeps
+# every letter it carries and DejaVu Sans supplies the two or three it does
+# not - the line stays a display line with a few borrowed letters instead of
+# turning into body text.
+#
+# The chain is consulted ONLY where the family has no glyph, so a line that
+# Niconne can set whole is set exactly as it is above: same face, same bytes.
+# And what no face in the chain has is refused as before, which is why this is
+# an addition to this example rather than a contradiction of it.
+#
+# Measured on this page: the line is drawn in two faces, so the file carries
+# two font resources for it and a reader sees two designs in one word. Look at
+# "Bigos z zurawina" below and above - the same sentence, decided twice.
+$doc font -family bodyBold -size 10
+$doc text "The same lines, decided per character" -at [list 20 [expr {$y + 10}]]
+
+$doc font -family body -size 8
+set y [$doc text "Above, one missing letter costs the whole line its face.\
+    With -fallback the display face keeps everything it has, and only the\
+    letters it lacks come from DejaVu Sans." \
+    -at [list 20 [expr {$y + 15}]] -width 170]
+
+set chainY [expr {$y + 8}]
+foreach dish $mixed {
+    # The chain travels with the font state like -size or -kerning, so it
+    # reaches [textWidth], the line breaker and a table cell as well.
+    $doc font -family script -size 14 -fallback body
+    $doc text $dish -at [list 20 $chainY]
+    set chainY [expr {$chainY + 10}]
+}
 
 exampleFooter $doc body
 
@@ -142,4 +193,6 @@ foreach entry $record {
     if {[lindex $entry 1] ne "Niconne"} { incr fallback }
 }
 puts "  [llength $record] dishes, $fallback needed the text face"
+puts "  the same [llength $mixed] set again with -fallback: the display face\
+    keeps every letter it has"
 $doc destroy

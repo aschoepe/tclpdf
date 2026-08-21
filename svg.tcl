@@ -458,4 +458,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.6
+package provide tclpdf::svg 1.7

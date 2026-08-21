@@ -91,6 +91,24 @@ proc ::tclpdfTest::png {width height depth colorType rows {trns {}} {plte {}}} {
   return $png
 }
 
+# The bodies of every object whose text matches a pattern - what a test reads
+# when it has to check what went into the FILE rather than what the API said.
+#
+# The same loop stands in graphics.test and font.test, which is one copy too
+# many already; those two do further work inside it and can move here when
+# somebody looks at them.
+proc ::tclpdfTest::objects {doc pattern} {
+  set writer [$doc writer]
+  set bodies {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match "*$pattern*" $body]} {
+      lappend bodies $body
+    }
+  }
+  return $bodies
+}
+
 # A scratch path inside the tcltest temporary directory.
 proc ::tclpdfTest::scratch {name} {
   return [file join [::tcltest::temporaryDirectory] $name]
@@ -127,6 +145,26 @@ proc ::tclpdfTest::writes {doc name} {
   return [list $code $written]
 }
 
+# veraPDF over a written file: "ok" when it says the document keeps the
+# profile it was asked about, its whole report when it does not, and "ok"
+# where veraPDF is not installed - a missing tool is a SKIP in this tree, not
+# a failure.
+#
+# The same seven lines stood in five test files (color, image twice, pdfa,
+# sign) before this proc existed, each with its own idea of which flag to
+# pass and what to do with the report. What "flavour" takes is what verapdf's
+# -f takes: 3b, 3a, 2b, ua1.
+proc ::tclpdfTest::verapdf {path flavour} {
+  if {[auto_execok verapdf] eq {}} {
+    return ok
+  }
+  catch {exec verapdf -f $flavour $path 2>@1} report
+  if {[regexp {failedChecks="0"} $report]} {
+    return ok
+  }
+  return $report
+}
+
 # One list of tokens per show operator in a content stream: a string in
 # parentheses stays one token, a TJ number is one token of its own. Reading
 # them with a plain [split] is what a first attempt does, and it breaks on the
@@ -144,6 +182,39 @@ proc ::tclpdfTest::shows {stream} {
     }
     lappend result [regexp -all -inline \
         {\((?:[^()\\]|\\.)*\)|-?[0-9]+(?:\.[0-9]+)?} $line]
+  }
+  return $result
+}
+
+# The two-byte glyph numbers inside ONE string token of a show operator.
+#
+# Three lines that look like nothing and are the trap of this file: the glyph
+# bytes are a PDF string, so a byte that happens to be a parenthesis or a
+# backslash arrives escaped, and reading the token as it stands gives a glyph
+# number that is off by one byte from there on. [subst] with both switches is
+# what undoes it - with both, because the bytes are arbitrary and a "$" or a
+# "[" in them is not a substitution. Written once here; every caller that
+# reads glyphs out of a stream goes through it.
+proc ::tclpdfTest::glyphsOf {token} {
+  binary scan [subst -nocommands -novariables \
+      [string range $token 1 end-1]] Su* glyphs
+  return $glyphs
+}
+
+# The GLYPH NUMBERS of a stream, one list per show operator, with the
+# adjustments left out - what a test about which face drew how many glyphs
+# asks for.
+proc ::tclpdfTest::glyphIds {stream} {
+  set result {}
+  foreach tokens [shows $stream] {
+    set ids {}
+    foreach token $tokens {
+      if {[string index $token 0] ne "("} {
+        continue
+      }
+      lappend ids {*}[glyphsOf $token]
+    }
+    lappend result $ids
   }
   return $result
 }
@@ -183,8 +254,7 @@ proc ::tclpdfTest::drawn {doc alias stream} {
         lappend result [list gap $token]
         continue
       }
-      binary scan [subst -nocommands -novariables \
-          [string range $token 1 end-1]] Su* glyphs
+      set glyphs [glyphsOf $token]
       set text {}
       foreach glyph $glyphs {
         append text [expr {[dict exists $back $glyph] ?

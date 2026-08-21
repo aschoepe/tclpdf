@@ -922,7 +922,7 @@ test document-strings-24.5 {no module builds a string past the document unrecord
   set allowed {
     document.tcl {3 {the seam itself - Str, HexStr and BytesStr are what everything else uses}}
     writer.tcl {1 {/ID stays in the clear: the key is derived from it, so a reader needs it BEFORE it can decrypt (7.6.2)}}
-    text.tcl {5 {strings INSIDE a content stream - the stream is encrypted as a whole, a second pass would destroy it (7.6.2)}}
+    text.tcl {6 {strings INSIDE a content stream - the stream is encrypted as a whole, a second pass would destroy it (7.6.2)}}
     attach.tcl {1 {keyBytes only ASKS what the bytes would be, for the name tree order (7.9.6) - the answer never reaches the file}}
     imagePng.tcl {3 {the default of the command prefix a namespace proc takes instead of [my]}}
     sign.tcl {3 {a signature dictionary is never in an encrypted document - measured in both

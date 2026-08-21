@@ -1591,4 +1591,425 @@ test text-18.10 {-render is font state - set once, in force until changed} -body
       [dict get $state strokeWidth]
 } -result {2 2 stroke {0 0 1} 0.3}
 
+# --- the fallback chain -------------------------------------------------------
+#
+# -fallback names the faces that may set what -family cannot. What has to hold
+# is that the line is MEASURED over the same segments it is DRAWN over: the
+# faces of a line are decided once, in TextSegments, and both roads walk that
+# answer. A width taken over the line and drawn over the segments would differ
+# by every kerning pair at a boundary, which is the defect textPath had twice
+# and which no reader and no validator reports.
+
+set jpFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google NotoSansJP-Regular.ttf]
+testConstraint haveJpFace [expr {[file exists $jpFace] && [file exists $textFace]}]
+
+# A display face with a RAGGED coverage - 283 characters, Latin-1 and a
+# handful of Latin Extended-A - which is what makes it the honest partner for
+# a chain: the gap does not follow a language. See examples/02.04.
+set ragged [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google Niconne-Regular.ttf]
+testConstraint haveRagged [expr {[file exists $ragged] && [file exists $textFace]}]
+
+# A document with the two faces of the mixed case, ready to draw on.
+proc textChainDocument {} {
+  set doc [tclpdf new -unit pt]
+  $doc font embed body $::textFace
+  $doc font embed jp $::jpFace
+  $doc page add
+  return $doc
+}
+
+# The resource names of the Tf operators of a stream, in the order they are
+# written - which face set which piece, read off the stream rather than
+# assumed.
+proc textChainFaces {stream} {
+  set faces {}
+  foreach line [split $stream \n] {
+    if {[regexp {^(/\S+) [0-9.]+ Tf$} $line -> name]} {
+      lappend faces $name
+    }
+  }
+  return $faces
+}
+
+# The width a content stream really DRAWS, in points: every glyph advance out
+# of the face its own Tf named, less every TJ adjustment. The one measurement
+# that can contradict [textWidth] - it reads the bytes, not the code that
+# produced them - and the only one that sees a boundary between two faces at
+# all.
+proc textChainDrawn {doc stream} {
+  package require tclpdf::sfnt
+  set size 0
+  set face {}
+  set total 0.0
+  foreach line [split $stream \n] {
+    if {[regexp {^/FE(\S+) ([0-9.]+) Tf$} $line -> alias points]} {
+      set face $alias
+      set size $points
+      continue
+    }
+    if {![string match {*Tj} $line] && ![string match {*TJ} $line]} {
+      continue
+    }
+    foreach token [regexp -all -inline \
+        {\((?:[^()\\]|\\.)*\)|-?[0-9]+(?:\.[0-9]+)?} $line] {
+      if {[string index $token 0] ne "("} {
+        set total [expr {$total - $token * $size / 1000.0}]
+        continue
+      }
+      binary scan [subst -nocommands -novariables \
+          [string range $token 1 end-1]] Su* glyphs
+      set parsed [dict get [$doc state fonts] $face parsed]
+      set units [dict get $parsed unitsPerEm]
+      foreach glyph $glyphs {
+        set total [expr {$total + [::tclpdf::sfnt advance $parsed $glyph]
+            * $size / double($units)}]
+      }
+    }
+  }
+  return $total
+}
+
+# How many glyphs each show operator of a stream writes - the two-byte glyph
+# numbers of the embedded road counted, not the characters they stand for.
+proc textChainGlyphs {stream} {
+  return [lmap ids [::tclpdfTest::glyphIds $stream] {llength $ids}]
+}
+
+# One text object per element: everything between a BT and its ET, which is
+# one LINE in this package - the block methods write one per line.
+proc textChainBlocks {stream} {
+  set blocks {}
+  set current {}
+  set inside 0
+  foreach line [split $stream \n] {
+    if {$line eq "BT"} {
+      set inside 1
+      set current {}
+      continue
+    }
+    if {$line eq "ET"} {
+      set inside 0
+      lappend blocks [join $current \n]
+      continue
+    }
+    if {$inside} {
+      lappend current $line
+    }
+  }
+  return $blocks
+}
+
+test text-19.1 {a chain sets the line in both faces, each piece in its own} \
+    -constraints haveJpFace -body {
+  # The mailing-list case: a European invoice line with a Japanese place name
+  # in it. Without the chain this is the missing-glyph refusal.
+  set doc [textChainDocument]
+  $doc font -family body -size 12 -fallback jp
+  $doc text "Rechnung 4711 東京 ok" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  textChainFaces $content
+} -result {/FEbody /FEjp /FEbody}
+
+test text-19.2 {each character goes to the FIRST face that has it, not to the last one used} \
+    -constraints haveJpFace -body {
+  # The sticky version of this rule is a defect, and it was measured on the
+  # way here: asking only whether the face IN USE has the character left the
+  # whole tail of "日本語 ok" in the Japanese face, because that face has a
+  # space, an o and a k as well. The line then reads in two designs and
+  # nothing says why.
+  set doc [textChainDocument]
+  $doc font -family body -size 12 -fallback jp
+  $doc text "日本語 ok" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Three glyphs in the Japanese face and three in the family: the space, the
+  # o and the k came back. Stuck, it would be one show of six.
+  list [textChainFaces $content] [textChainGlyphs $content]
+} -result {{/FEbody /FEjp /FEbody} {3 3}}
+
+test text-19.3 {measured and drawn are the same width across a face boundary} \
+    -constraints haveJpFace -body {
+  # THE test of this feature. The width is read back out of the stream, glyph
+  # by glyph, out of the face each Tf names - so a segmentation that measured
+  # one line and drew another shows up here as a difference, whatever else
+  # agrees.
+  set doc [textChainDocument]
+  set answers {}
+  foreach kerning {1 0} {
+    foreach line {"Rechnung 4711 東京 ok" "日本語" "AVATAR 日本 AVATAR"} {
+      $doc page add
+      $doc font -family body -size 12 -fallback jp -kerning $kerning
+      set measured [$doc textWidth $line]
+      $doc text $line -at {20 40}
+      set drawn [textChainDrawn $doc [::tclpdfTest::content $doc]]
+      lappend answers [expr {abs($measured - $drawn) < 0.0001}]
+    }
+  }
+  $doc destroy
+  lsort -unique $answers
+} -result 1
+
+test text-19.4 {a line the family can set writes the bytes it wrote without a chain} \
+    -constraints haveJpFace -body {
+  # The promise the whole arrangement rests on: the chain is consulted only
+  # where the family has no glyph. So a chain set once for a document cannot
+  # change a table, a page number or an SVG drawing that never needed it -
+  # same resource, same Tf, same show operator, byte for byte.
+  set doc [textChainDocument]
+  $doc font -family body -size 12 -fallback jp
+  $doc text "Rechnung 4711 fuer Berlin" -at {20 40} -width 300
+  set with [::tclpdfTest::content $doc]
+  $doc page add
+  $doc font -family body -size 12 -fallback {}
+  $doc text "Rechnung 4711 fuer Berlin" -at {20 40} -width 300
+  set without [::tclpdfTest::content $doc]
+  $doc destroy
+  string equal $with $without
+} -result 1
+
+test text-19.5 {kerning ends at a face boundary, and the measurement says so too} \
+    -constraints haveRagged -body {
+  # DejaVu Sans kerns T against Č by 5.86 points at 100 points; Niconne has
+  # the T and not the Č. So the pair falls apart at the boundary - there is
+  # no table in either face that knows a pair of the other's glyphs - and the
+  # line is exactly as wide as its two pieces are.
+  set doc [tclpdf new -unit pt]
+  $doc font embed script $ragged
+  $doc font embed body $textFace
+  $doc page add
+  set chain [$doc textWidth "TČ" -family script -fallback body -size 100]
+  set pieces [expr {[$doc textWidth "T" -family script -size 100]
+      + [$doc textWidth "Č" -family body -size 100]}]
+  set kerned [$doc textWidth "TČ" -family body -size 100]
+  set apart [$doc textWidth "TČ" -family body -size 100 -kerning 0]
+  $doc font -family script -size 100 -fallback body
+  $doc text "TČ" -at {20 200}
+  set drawn [textChainDrawn $doc [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [expr {abs($chain - $pieces) < 0.0001}] \
+      [expr {abs($chain - $drawn) < 0.0001}] \
+      [expr {$apart - $kerned > 5.8 && $apart - $kerned < 5.9}]
+} -result {1 1 1}
+
+test text-19.6 {the line breaker measures the fallback, so every line fits} \
+    -constraints haveJpFace -body {
+  # The breaker measures through [textWidth], which walks the segments - so a
+  # Japanese word inside a German paragraph is counted at its own face's
+  # widths. Counted at the family's, the line would be broken against a width
+  # nothing set, and the page would be over the margin with nothing to say so.
+  set doc [textChainDocument]
+  $doc font -family body -size 11 -fallback jp
+  set text "Ein Absatz mit japanischen Woertern wie 東京 und 大阪 darin,\
+      der ueber mehrere Zeilen laeuft und dabei den Umbrecher beschaeftigt."
+  set lines [$doc textLines $text -width 200]
+  $doc text $text -at {20 400} -width 200
+  set drawn {}
+  set fits {}
+  foreach line $lines {
+    lappend fits [expr {[$doc textWidth $line] <= 200}]
+  }
+  $doc destroy
+  list [expr {[llength $lines] > 3}] [lsort -unique $fits]
+} -result {1 1}
+
+test text-19.7 {a justified mixed line reaches the margin exactly} \
+    -constraints haveJpFace -body {
+  # Word spacing on the embedded road is written as TJ numbers rather than as
+  # Tw (see TextTJ), and the spaces of a mixed line belong to whichever face
+  # has them - the family, in every face there is. Measured off the stream:
+  # every full line of the block is exactly the band wide.
+  set doc [textChainDocument]
+  $doc font -family body -size 11 -fallback jp
+  set text "Ein Absatz mit japanischen Woertern wie 東京 und 大阪 darin,\
+      der ueber mehrere Zeilen laeuft und dabei den Umbrecher beschaeftigt."
+  $doc text $text -at {20 400} -width 200 -align justify
+  set full {}
+  foreach block [textChainBlocks [::tclpdfTest::content $doc]] {
+    lappend full [format %.3f [textChainDrawn $doc $block]]
+  }
+  $doc destroy
+  # The last line of a justified block is not stretched; every other one is
+  # the band wide.
+  lsort -unique [lrange $full 0 end-1]
+} -result 200.000
+
+test text-19.8 {a character no face in the chain has is refused, with the chain named} \
+    -constraints haveJpFace -body {
+  # The refusal the chain does not remove, in the shape the manual promises
+  # under "Error codes": the position is the 0-based index in the string as
+  # handed in - through the line breaker as well, which measures chunks of its
+  # own and has to rebase what it catches.
+  set doc [textChainDocument]
+  $doc font -family body -size 11 -fallback jp
+  set answers {}
+  foreach call {textWidth text} {
+    set code [catch {$doc $call "abc ཀ def" -at {20 40}} message options]
+    lappend answers [dict get $options -errorcode]
+  }
+  set code [catch {$doc text "aaa bbb ccc ཀ ddd" -at {20 60} -width 100} \
+      message options]
+  lappend answers [dict get $options -errorcode]
+  $doc destroy
+  set answers
+} -result {{TCLPDF FONT GLYPH U+0F40 4 {body jp}} {TCLPDF FONT GLYPH U+0F40 4 {body jp}} {TCLPDF FONT GLYPH U+0F40 12 {body jp}}}
+
+test text-19.9 {-fallback and -direction rtl do not go together} \
+    -constraints haveJpFace -body {
+  # A right-to-left line decides its drawing order across the WHOLE line, and
+  # a face change inside it would reorder only its own piece. Refused rather
+  # than quietly not applied - and refused at the one gate every measuring and
+  # drawing road passes, so the same message comes from a width, a line and a
+  # paragraph alike.
+  set doc [textChainDocument]
+  set measured [catch {$doc textWidth "שלום" \
+      -family body -direction rtl -fallback jp} measuredMessage]
+  set drawn [catch {$doc text "שלום" -at {20 40} \
+      -family body -direction rtl -fallback jp} drawnMessage]
+  # Without the chain the same line is set as it always was.
+  set plain [catch {$doc text "שלום" -at {20 60} \
+      -family body -direction rtl -fallback {}}]
+  $doc destroy
+  list $measured $drawn $plain \
+      [string match {*-fallback and -direction rtl*} $measuredMessage] \
+      [string match {*-fallback and -direction rtl*} $drawnMessage]
+} -result {1 1 0 1 1}
+
+test text-19.10 {-fallback is checked where it is written, and changes nothing when refused} \
+    -body {
+  # A chain is written once and read at every gap, so a misspelt name would
+  # otherwise be reported by whichever line first holds a character the family
+  # lacks - or by no line at all.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font -family helvetica -size 12
+  set refused [catch {$doc font -fallback {nosuchface}} message]
+  set state [dict get [$doc font] fallback]
+  $doc destroy
+  list $refused $state [string match {*neither an embedded face nor a standard one*} $message]
+} -result {1 {} 1}
+
+test text-19.11 {a standard face may lead a chain, and the encodings do not mix up} \
+    -constraints haveJpFace -body {
+  # Helvetica is addressed by single bytes through WinAnsiEncoding and the
+  # embedded face by two-byte glyph numbers. Each segment writes its own kind
+  # of string, and the euro sign - WinAnsi 0x80 - stays with the standard face.
+  set doc [textChainDocument]
+  $doc font -family helvetica -size 12 -fallback {body jp}
+  $doc text "Preis 12 € 日" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  set width [$doc textWidth "Preis 12 € 日"]
+  $doc destroy
+  list [textChainFaces $content] [expr {$width > 0}] \
+      [regexp {\(Preis 12 \\200 \) Tj} $content]
+} -result {{/FHelvetica /FEjp /FHelvetica} 1 1}
+
+test text-19.12 {the face a run switched to is not left in force} \
+    -constraints haveJpFace -body {
+  # A text object holds one Tf at a time, and a hyphenated line shows three
+  # pieces inside one BT: the word, the break hyphen in a span of its own, and
+  # the rest. A Tf left standing from the last segment of the first piece
+  # would set the hyphen in the wrong face - and a hyphen looks like a hyphen
+  # in both.
+  set doc [textChainDocument]
+  $doc font -family body -size 12 -fallback jp
+  $doc text "日本" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  textChainFaces $content
+} -result {/FEbody /FEjp /FEbody}
+
+test text-19.13 {ligatures still form inside a segment} \
+    -constraints haveJpFace -body {
+  # A chain must not cost the typography of the pieces it does not touch: the
+  # ffi of "office" is one glyph in DejaVu Sans, so the run is four glyphs
+  # long with the chain exactly as it is without it - and -spacing, which is
+  # charged per glyph, therefore charges the same.
+  set doc [textChainDocument]
+  $doc font -family body -size 12
+  set plain [$doc textWidth "office" -spacing 3]
+  set chained [$doc textWidth "office" -spacing 3 -fallback jp]
+  $doc text "office" -at {20 40} -fallback jp
+  set glyphs [textChainGlyphs [::tclpdfTest::content $doc]]
+  $doc destroy
+  # Six characters, four glyphs: o, ffi, c, e. A chain that cut the line
+  # character by character would write six, and -spacing would then charge
+  # five gaps where three are drawn.
+  list [expr {abs($plain - $chained) < 0.0001}] $glyphs
+} -result {1 4}
+
+test text-19.14 {the whole mixed line comes back out of the file, in order} \
+    -constraints {haveJpFace havePdfToText} -body {
+  # Each face carries its own ToUnicode map, and a reader walks them in the
+  # order the shows are written. Asked of poppler rather than of the package:
+  # nothing inside can say what comes back out.
+  set path [::tclpdfTest::scratch text-fallback.pdf]
+  set doc [textChainDocument]
+  $doc font -family body -size 12 -fallback jp
+  $doc text "Rechnung 4711 東京 Tokyo" -at {20 40}
+  $doc write $path
+  $doc destroy
+  set text [exec pdftotext $path -]
+  file delete $path
+  string trim [lindex [split $text \n] 0]
+} -result "Rechnung 4711 東京 Tokyo"
+
+
+test text-19.15 {a character no face draws does not cut a segment in two} \
+    -constraints haveJpFace -body {
+  # The soft hyphen, the zero width space and the byte order mark reach no
+  # face at all - every encoder drops them. Asking the chain about one would
+  # answer "the family has it", because every face has it, and a soft hyphen
+  # offered inside a Japanese word would then close the segment around it,
+  # write a Tf and an empty show for a character that draws nothing, and open
+  # the same segment again.
+  set doc [textChainDocument]
+  $doc font -family body -size 12 -fallback jp
+  $doc text "東­京" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  set with [$doc textWidth "東­京"]
+  set without [$doc textWidth "東京"]
+  $doc destroy
+  list [textChainFaces $content] [textChainGlyphs $content] \
+      [expr {abs($with - $without) < 0.0001}]
+} -result {{/FEbody /FEjp /FEbody} 2 1}
+
+test text-19.16 {a table cell measures and draws through the chain} \
+    -constraints haveJpFace -body {
+  # The table measures its columns with [textWidth] and draws them with
+  # [text], both through the font state - so the chain reaches a cell without
+  # the table knowing anything about it. What must not happen is a column
+  # measured at the family's widths and drawn at another face's.
+  set doc [textChainDocument]
+  $doc font -family body -size 10 -fallback jp
+  $doc table -at {20 60} -width 300 -head {{Ware Ort}} \
+      -style {family body} -headStyle {family body} \
+      -body {{Schrauben 東京} {Muttern "大阪 Osaka"}}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {[llength [lsearch -all [textChainFaces $content] /FEjp]] == 2}] \
+      [expr {[lsearch [textChainFaces $content] /FEbody] >= 0}]
+} -result {1 1}
+
+test text-19.17 {a character that occurs twice is set from the same face both times} \
+    -constraints haveJpFace -body {
+  # The decision is per character and is remembered for the length of the
+  # call, so the second 東 has to reach the same face as the first. A memo
+  # that answered differently the second time would send the character to a
+  # family that has no glyph for it - which is the refusal, not a wrong glyph,
+  # so it fails loudly. It is a repetition either way: Japanese text repeats
+  # its characters as every text does.
+  set doc [textChainDocument]
+  $doc font -family body -size 12 -fallback jp
+  set measured [$doc textWidth "東京 東京 Tokyo"]
+  $doc text "東京 東京 Tokyo" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  set drawn [textChainDrawn $doc $content]
+  $doc destroy
+  list [textChainFaces $content] [textChainGlyphs $content] \
+      [expr {abs($measured - $drawn) < 0.0001}]
+} -result {{/FEbody /FEjp /FEbody /FEjp /FEbody} {2 1 2 6} 1}
+
 cleanupTests

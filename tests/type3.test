@@ -1,0 +1,890 @@
+# type3.test --
+#
+# Type 3 fonts: glyphs that are content streams (ISO 32000-2, 9.6.4).
+#
+# The two things that decide whether such a font is right are invisible to
+# every validator: whether the FontMatrix maps the glyph to the size that was
+# asked for, and whether the width that was measured is the width that was
+# drawn. Both are checked here against the file, not against the API.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::type3
+# For [font info] of a Type 3 alias, which goes through the font module's
+# dispatcher, and for [fontsWithoutProgram], which a PDF/A document asks.
+package require tclpdf::font
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint pdftotext [expr {[auto_execok pdftotext] ne {}}]
+testConstraint pdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+
+set srgbIcc [file join [file dirname [file dirname [info script]]] icc sRGB.icc]
+testConstraint haveSrgbIcc [file exists $srgbIcc]
+
+set type1Face [file join [file dirname [file dirname [info script]]] examples \
+    assets fonts urw-core35-fonts NimbusSans-Regular.t1]
+testConstraint haveType1 [file exists $type1Face]
+
+# The written objects a test looks at - the font object is the one carrying
+# /Subtype /Type3. The walk itself is in helper.tcl, because a third copy of
+# it is a copy too many.
+proc type3Objects {doc {pattern {/Subtype /Type3}}} {
+  return [::tclpdfTest::objects $doc $pattern]
+}
+
+proc type3Object {doc {pattern {/Subtype /Type3}}} {
+  return [lindex [type3Objects $doc $pattern] 0]
+}
+
+# The decoded stream of the glyph for one character - what a reader executes.
+proc type3Stream {doc alias char} {
+  set entry [dict get [$doc state fonts] $alias]
+  set code [dict get $entry codes $char]
+  set writer [$doc writer]
+  set name [dict get $entry glyphs $code name]
+  set font [type3Object $doc]
+  if {![regexp "/$name (\\d+) 0 R" $font -> number]} {
+    return {}
+  }
+  return [::tclpdfTest::streamOf $writer $number]
+}
+
+# A document with one square glyph, which is what most of these tests need:
+# the square fills the frame exactly, so its size on the page is the size the
+# font matrix promises.
+proc type3Square {doc alias {scale 0.001} {units 1000}} {
+  $doc font define $alias -matrix [list $scale 0 0 $scale 0 0] \
+      -ascent $units
+  $doc font glyph $alias s -width $units -script \
+      "\$doc rect -at {0 0} -size {$units $units} -fill black"
+  return
+}
+
+# -- what the file holds -----------------------------------------------------
+
+test type3-1.1 {the font dictionary carries the glyphs} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks -ascent 750
+  $doc font glyph marks + -width 800 -script {
+    $doc rect -at {100 335} -size {600 80} -fill black
+  }
+  $doc font -family marks -size 24
+  $doc text "+" -at {20 40}
+  set path [::tclpdfTest::scratch type3-1.1.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  $doc destroy
+  file delete $path
+  list [string match {*/Type /Font*} $body] \
+      [string match {*/Subtype /Type3*} $body] \
+      [string match {*/CharProcs << /uni002B *} $body] \
+      [string match {*/Differences \[43 /uni002B\]*} $body] \
+      [string match {*/FirstChar 43*} $body] \
+      [string match {*/LastChar 43*} $body] \
+      [regexp {/FontMatrix \[0\.001} $body]
+} -result {1 1 1 1 1 1 1}
+
+test type3-1.2 {a glyph description starts with d0 and then draws} -body {
+  # "The stream shall include as its first operator either d0 or d1"
+  # (Table 110). wx is the advance in glyph space, wy shall be 0.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks x -width 640 -script {
+    $doc rect -at {0 0} -size {600 800} -fill black
+  }
+  $doc font -family marks -size 10
+  $doc text "x" -at {20 40}
+  set path [::tclpdfTest::scratch type3-1.2.pdf]
+  $doc write $path
+  set stream [type3Stream $doc marks x]
+  $doc destroy
+  file delete $path
+  list [lindex [split $stream \n] 0] [regexp {re} $stream]
+} -result {{640 0 d0} 1}
+
+test type3-1.3 {-color text writes d1 with the box in glyph space} -body {
+  # The script counts y downwards from the top of the frame, glyph space
+  # counts it upwards from the baseline: with -ascent 800 a box {50 100 700
+  # 500} is llx 50, lly 800-100-500 = 200, urx 750, ury 700. The four numbers
+  # are deliberately all different, so a box handed through unmirrored comes
+  # out as different numbers rather than by accident as the same ones.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks x -width 640 -color text -bbox {50 100 700 500} \
+      -script {$doc rect -at {50 100} -size {700 500} -fill black}
+  $doc font -family marks -size 10
+  $doc text "x" -at {20 40}
+  set path [::tclpdfTest::scratch type3-1.3.pdf]
+  $doc write $path
+  set stream [type3Stream $doc marks x]
+  $doc destroy
+  file delete $path
+  lindex [split $stream \n] 0
+} -result {640 0 50 200 750 700 d1}
+
+test type3-1.4 {-color text without a box is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set code [catch {$doc font glyph marks x -width 600 -color text -script {}} err]
+  $doc destroy
+  list $code [string match {*-bbox*} $err] [string match {*d1*} $err]
+} -result {1 1 1}
+
+test type3-1.5 {an unknown -color word is refused, not taken as a colour} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set code [catch {$doc font glyph marks x -width 600 -color red -script {}} err]
+  $doc destroy
+  list $code [string match {*own*} $err] [string match {*text*} $err]
+} -result {1 1 1}
+
+# -- the font matrix ---------------------------------------------------------
+
+test type3-2.1 {the same glyph at three matrices measures the same} -body {
+  # 1000 units at 0.001, 2000 at 0.0005, 500 at 0.002 - all one em, so all
+  # the same advance at the same size. A font that is out by a factor of 1000
+  # is a mistake no validator reports.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  type3Square $doc thousand 0.001 1000
+  type3Square $doc twoThousand 0.0005 2000
+  type3Square $doc fiveHundred 0.002 500
+  set widths {}
+  foreach alias {thousand twoThousand fiveHundred} {
+    lappend widths [format %.4f [$doc textWidth s -family $alias -size 72]]
+  }
+  lappend widths [format %.4f [$doc textWidth s -family thousand -size 36]]
+  $doc destroy
+  set widths
+} -result {72.0000 72.0000 72.0000 36.0000}
+
+test type3-2.2 {and comes out the same size on the page} \
+    -constraints pdftoppm -body {
+  # Measured in PIXELS, because the arithmetic above and the arithmetic in
+  # the file are the same arithmetic: only a renderer says whether the glyph
+  # really covers one inch at 72 pt.
+  # In MILLIMETRES, and that is the second half of the measurement: the
+  # drawing methods write the document unit converted to points, so without
+  # the "cm" in front of the glyph every square would come out 2.83 times too
+  # large - and the arithmetic above would still say 72.
+  set doc [tclpdf new -unit mm]
+  $doc page add -format {100 100}
+  type3Square $doc thousand 0.001 1000
+  type3Square $doc twoThousand 0.0005 2000
+  type3Square $doc fiveHundred 0.002 500
+  set x 5
+  foreach alias {thousand twoThousand fiveHundred} {
+    $doc font -family $alias -size 72
+    $doc text s -at [list $x 50]
+    incr x 30
+  }
+  set path [::tclpdfTest::scratch type3-2.2.pdf]
+  $doc write $path
+  $doc destroy
+  set stem [::tclpdfTest::scratch type3-2.2]
+  exec pdftoppm -r 72 -gray -singlefile $path $stem
+  set channel [open $stem.pgm]
+  fconfigure $channel -translation binary
+  set bytes [read $channel]
+  close $channel
+  file delete $path $stem.pgm
+  # P5, three header numbers, then one byte per pixel.
+  regexp {^P5\s+(\d+)\s+(\d+)\s+(\d+)\s} $bytes -> width height max
+  set start [string length [lindex [regexp -inline \
+      {^P5\s+\d+\s+\d+\s+\d+\s} $bytes] 0]]
+  # The columns that carry any dark pixel, grouped into runs - one run per
+  # square - and the height of each run.
+  set dark {}
+  for {set column 0} {$column < $width} {incr column} {
+    set rows {}
+    for {set row 0} {$row < $height} {incr row} {
+      binary scan $bytes @[expr {$start + $row * $width + $column}]cu value
+      if {$value < 128} {
+        lappend rows $row
+      }
+    }
+    if {[llength $rows]} {
+      lappend dark [list $column [llength $rows]]
+    }
+  }
+  set boxes {}
+  set run {}
+  set previous {}
+  foreach entry $dark {
+    lassign $entry column rows
+    if {$previous ne {} && $column != $previous + 1} {
+      lappend boxes [list [llength $run] [lindex $run 0]]
+      set run {}
+    }
+    lappend run $rows
+    set previous $column
+  }
+  lappend boxes [list [llength $run] [lindex $run 0]]
+  set boxes
+} -result {{72 72} {72 72} {72 72}}
+
+test type3-2.3 {a matrix that scales nowhere is refused} -body {
+  set doc [tclpdf new -unit mm]
+  set results {}
+  foreach matrix {{0 0 0 0.001 0 0} {-0.001 0 0 0.001 0 0}} {
+    lappend results [catch {$doc font define bad -matrix $matrix}]
+  }
+  lappend results [catch {$doc font define bad -matrix {0.001 0 0}}]
+  lappend results [catch {$doc font define bad -matrix {a 0 0 0.001 0 0}}]
+  $doc destroy
+  set results
+} -result {1 1 1 1}
+
+# -- measuring and drawing agree ---------------------------------------------
+
+test type3-3.1 {textWidth is the sum of the Widths array} -body {
+  # The defect this guards against has happened once already, in textPath: it
+  # measured with kerning and drew without. Here the two roads have to answer
+  # the same because they are the same road.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  foreach {char width} {a 300 b 700 c 1000} {
+    $doc font glyph marks $char -width $width -script \
+        "\$doc rect -at {0 0} -size {$width 400} -fill black"
+  }
+  $doc font -family marks -size 10
+  $doc text "abc" -at {20 40}
+  set measured [$doc textWidth "abc"]
+  set path [::tclpdfTest::scratch type3-3.1.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  regexp {/FirstChar (\d+)} $body -> first
+  set widths {}
+  if {[regexp {(\d+) 0 R} [lindex [regexp -inline {/Widths (\d+ 0 R)} $body] 1] \
+      -> number]} {
+    regexp {\[(.*)\]} [[$doc writer] body $number] -> widths
+  }
+  $doc destroy
+  file delete $path
+  # a is 97, b 98, c 99, and FirstChar is 97: the array is the three widths
+  # in order, and 10 pt through a 0.001 matrix makes 20 points of text.
+  list [format %.4f $measured] $first [regexp -all -inline -- {[0-9]+} $widths]
+} -result {20.0000 97 {300 700 1000}}
+
+test type3-3.2 {the drawn string is the codes the encoding names} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks A -width 600 -script {}
+  $doc font glyph marks B -width 600 -script {}
+  $doc font -family marks -size 12
+  $doc text "AB" -at {20 30}
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  ::tclpdfTest::shows $stream
+} -result {(AB)}
+
+test type3-3.3 {word spacing goes out as Tw, not as a TJ array} -body {
+  # A Type 3 font is addressed by single bytes, so byte 32 stands alone and
+  # Tw reaches it. Taken for a glyph-addressed face it would write neither -
+  # the Tw is suppressed for those and the adjustment goes into a TJ array
+  # that [TextShow] never builds here.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks a -width 600 -script {}
+  $doc font glyph marks " " -width 400 -script {}
+  $doc font -family marks -size 12 -wordSpacing 5
+  $doc text "a a" -at {20 30}
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  list [regexp {5 Tw} $stream] [regexp {TJ} $stream]
+} -result {1 0}
+
+test type3-3.4 {and an embedded Type 1 face gets its Tw back too} \
+    -constraints haveType1 -body {
+  # The same defect, one kind over: an embedded Type 1 face is single-byte as
+  # well and used to take the TJ road, where [TextShow] writes a plain Tj -
+  # so the word spacing was measured and never drawn. Measured on the stream
+  # before 2026-08-21: no Tw at all.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed t1 $::type1Face
+  $doc font -family t1 -size 12 -wordSpacing 5
+  $doc text "a b" -at {20 30}
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  list [regexp {5 Tw} $stream] [regexp {TJ} $stream]
+} -result {1 0}
+
+test type3-3.5 {-anchor top hangs the line from the type 3 ascent} -body {
+  # The ascent of a drawn font is the frame its glyphs were drawn in, through
+  # the same scale as a width: 800 units at 0.001 and 20 pt is 16 pt.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks a -width 600 -script {}
+  $doc font -family marks -size 20
+  $doc text "a" -at {20 100} -anchor baseline
+  $doc text "a" -at {20 100} -anchor top
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc 0] y]
+  $doc destroy
+  format %.2f [expr {[lindex $ys 0] - [lindex $ys 1]}]
+} -result {16.00}
+
+# -- the encoding ------------------------------------------------------------
+
+test type3-4.1 {a character in the encoding's range keeps its own code} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks A -width 600 -script {}
+  $doc font glyph marks ÿ -width 600 -script {}
+  set codes [dict get [$doc state fonts] marks codes]
+  $doc destroy
+  list [dict get $codes A] [dict get $codes ÿ]
+} -result {65 255}
+
+test type3-4.2 {a character outside it takes the highest free code} -body {
+  # 256 slots, and U+2713 does not fit in any of them by its own number.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks ✓ -width 600 -script {}
+  $doc font glyph marks ✗ -width 600 -script {}
+  set codes [dict get [$doc state fonts] marks codes]
+  $doc destroy
+  list [dict get $codes ✓] [dict get $codes ✗]
+} -result {255 254}
+
+test type3-4.3 {and does not take one that is already spoken for} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks ÿ -width 600 -script {}
+  $doc font glyph marks ✓ -width 600 -script {}
+  set codes [dict get [$doc state fonts] marks codes]
+  $doc destroy
+  list [dict get $codes ÿ] [dict get $codes ✓]
+} -result {255 254}
+
+test type3-4.4 {the glyph name says what the glyph is for} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set names [list [$doc font glyph marks A -width 600 -script {}] \
+      [$doc font glyph marks ✓ -width 600 -script {}] \
+      [$doc font glyph marks ✗ -width 600 -name cross -script {}]]
+  $doc destroy
+  set names
+} -result {uni0041 uni2713 cross}
+
+test type3-4.5 {a character or a name given twice is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks A -width 600 -name one -script {}
+  set again [catch {$doc font glyph marks A -width 600 -script {}} first]
+  set name [catch {$doc font glyph marks B -width 600 -name one -script {}} second]
+  $doc destroy
+  list $again [string match {*U+0041*} $first] $name \
+      [string match {*"one"*} $second]
+} -result {1 1 1 1}
+
+test type3-4.6 {a name that is not a name is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set results {}
+  foreach name {{a b} a/b a(b {<x>}} {
+    lappend results [catch {$doc font glyph marks A -width 600 -name $name \
+        -script {}}]
+  }
+  $doc destroy
+  set results
+} -result {1 1 1 1}
+
+test type3-4.7 {a character the font has no glyph for carries the error code} -body {
+  # The same -errorcode every other missing glyph carries, so one handler
+  # covers a standard face, an embedded face and a drawn one.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks a -width 600 -script {}
+  $doc font -family marks -size 12
+  set code [catch {$doc text "aXa" -at {20 30}} message options]
+  $doc destroy
+  list $code [dict get $options -errorcode]
+} -result {1 {TCLPDF FONT GLYPH U+0058 1 marks}}
+
+test type3-4.8 {the three characters that never reach a font} -body {
+  # A soft hyphen, a zero width space and a byte order mark: offers and
+  # marks, not characters to set - the same rule afm.tcl and font.tcl follow.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks a -width 600 -script {}
+  $doc font -family marks -size 12
+  $doc text "a­a​a﻿" -at {20 30}
+  set width [$doc textWidth "a­a​a﻿"]
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  # Three glyphs of 600 units at 0.001 and 12 pt: 21.6 pt, which is
+  # 7.62 mm - the three marks contribute nothing to either number.
+  list [::tclpdfTest::shows $stream] [format %.4f $width]
+} -result {(aaa) 7.6200}
+
+test type3-4.9 {right to left is refused with the encoding named} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks a -width 600 -script {}
+  set code [catch {$doc text "a" -at {20 30} -family marks -direction rtl} err]
+  $doc destroy
+  list $code [string match {*Differences*} $err]
+} -result {1 1}
+
+# -- the script --------------------------------------------------------------
+
+test type3-5.1 {the script runs in the caller's frame} -body {
+  # [form create] uses "uplevel #0" and cannot see a document in a local
+  # variable; [layer draw] and this take the caller's frame. Measured under
+  # both interpreters on 2026-08-21.
+  proc type3Local {} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc font define marks -ascent 800
+    $doc font glyph marks a -width 600 -script {
+      $doc rect -at {0 0} -size {600 800} -fill black
+    }
+    $doc font -family marks -size 12
+    $doc text "a" -at {20 30}
+    set path [::tclpdfTest::scratch type3-5.1.pdf]
+    $doc write $path
+    set stream [type3Stream $doc marks a]
+    $doc destroy
+    file delete $path
+    return $stream
+  }
+  set stream [type3Local]
+  rename type3Local {}
+  regexp {re} $stream
+} -result 1
+
+test type3-5.2 {the glyph is drawn in glyph units whatever the document unit} -body {
+  # The drawing methods write the document unit converted to points, so a
+  # document in mm gets a "cm" in front of the glyph that scales those points
+  # back - without it the same script would draw the glyph 2.83 times too
+  # large. A document in pt needs none and gets none.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  type3Square $doc points
+  $doc font -family points -size 10
+  $doc text "s" -at {20 40}
+  set path [::tclpdfTest::scratch type3-5.2a.pdf]
+  $doc write $path
+  set inPoints [type3Stream $doc points s]
+  $doc destroy
+  file delete $path
+
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  type3Square $doc millimetres
+  $doc font -family millimetres -size 10
+  $doc text "s" -at {20 40}
+  set path [::tclpdfTest::scratch type3-5.2b.pdf]
+  $doc write $path
+  set inMillimetres [type3Stream $doc millimetres s]
+  $doc destroy
+  file delete $path
+
+  # Both must paint the same square in glyph space: 0 0 1000 1000.
+  list [regexp {cm} $inPoints] \
+      [regexp {^0\.352778 0 0 0\.352778 0 0 cm$} \
+          [lindex [split $inMillimetres \n] 1]] \
+      [regexp {0 0 1000 1000 re} $inPoints] \
+      [regexp {2834\.6.* 2834\.6.* re} $inMillimetres]
+} -result {0 1 1 1}
+
+test type3-5.3 {a script that fails leaves no half glyph behind} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set code [catch {$doc font glyph marks a -width 600 -script {
+    error "no"
+  }}]
+  # The canvas has to be back where it was, or everything drawn afterwards
+  # would go into the glyph instead of onto the page.
+  set depth [$doc canvas depth]
+  set glyphs [dict size [dict get [$doc state fonts] marks glyphs]]
+  $doc destroy
+  list $code $depth $glyphs
+} -result {1 0 0}
+
+test type3-5.4 {a glyph may be drawn while a form is being built} -body {
+  # The canvas stack nests: [FormBegin] pushes on top of whatever is there and
+  # [FormEnd] pops its own. Without that the glyph would collect the form's
+  # content, or the form the glyph's.
+  set ::type3Doc [tclpdf new -unit mm -compress 0]
+  $::type3Doc page add
+  $::type3Doc font define marks -ascent 800
+  # [form create] runs its script at the global level, hence the global
+  # variable - which is the difference this file's own -script does not have.
+  $::type3Doc form create block -size {40 20} -script {
+    set ::type3Inside [$::type3Doc font glyph marks a -width 600 -script {
+      $::type3Doc rect -at {0 0} -size {600 800} -fill black
+    }]
+    $::type3Doc rect -at {0 0} -size {40 20} -fill blue
+  }
+  $::type3Doc form place block -at {10 10}
+  set glyphs [dict size [dict get [$::type3Doc state fonts] marks glyphs]]
+  # The stack is back where it was: the glyph took its own canvas and the
+  # form kept its own, or everything after this would go into the wrong one.
+  set depth [$::type3Doc canvas depth]
+  # And the two streams did not run into each other: the form has the blue
+  # rectangle, the glyph the black square.
+  set form [::tclpdfTest::content $::type3Doc 0]
+  $::type3Doc destroy
+  list $::type3Inside $glyphs $depth [regexp {XO1 Do} $form]
+} -result {uni0061 1 0 1}
+
+# -- resources ---------------------------------------------------------------
+
+test type3-6.1 {what a glyph uses lands in the font's own Resources} -body {
+  # 7.8.3: "Content streams that define the glyph descriptions of a Type 3
+  # font shall include a Resources entry in the Type 3 font dictionary
+  # specifying all the resources used by all the content streams in the
+  # CharProcs dictionary of a Type 3 font."
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks a -width 800 -script {
+    $doc rect -at {0 0} -size {800 800} -fill blue -opacity 0.5
+  }
+  $doc font -family marks -size 12
+  $doc text "a" -at {20 30}
+  set path [::tclpdfTest::scratch type3-6.1.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  $doc destroy
+  file delete $path
+  regexp {/Resources << /ExtGState << /GS\S+ \d+ 0 R >> >>} $body
+} -result 1
+
+test type3-6.2 {and nothing else does} -body {
+  # The shortcut - pointing at the one shared resource dictionary, as a form
+  # XObject may - puts the font inside itself. Measured with veraPDF 1.30.2
+  # on 2026-08-21: StackOverflowError, no report at all, while qpdf and
+  # poppler said nothing.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks a -width 800 -script {
+    $doc rect -at {0 0} -size {800 800} -fill black
+  }
+  $doc font -family helvetica -size 12
+  $doc text "the page uses a standard face too" -at {20 20}
+  $doc font -family marks -size 12
+  $doc text "a" -at {20 30}
+  set path [::tclpdfTest::scratch type3-6.2.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  $doc destroy
+  file delete $path
+  # No font in it, and above all not this one.
+  list [regexp {/Resources << >>} $body] \
+      [regexp {/Resources << /Font} $body]
+} -result {1 0}
+
+test type3-6.3 {a glyph set in its own font is refused} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks a -width 800 -script {
+    $doc rect -at {0 0} -size {800 800} -fill black
+  }
+  $doc font -family marks -size 12
+  $doc text "a" -at {20 30}
+  # Now a glyph that sets text in the font it belongs to - a description that
+  # invokes itself, which no reader can end.
+  $doc font glyph marks b -width 800 -script {
+    $doc text "a" -at {0 800} -family marks -size 400
+  }
+  set result [::tclpdfTest::writes $doc type3-6.3.pdf]
+  $doc destroy
+  set result
+} -result {1 0}
+
+# -- writing -----------------------------------------------------------------
+
+test type3-7.1 {a font defined and never used writes no object} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks a -width 600 -script {}
+  $doc font -family helvetica -size 12
+  $doc text "no type 3 here" -at {20 30}
+  set path [::tclpdfTest::scratch type3-7.1.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  $doc destroy
+  file delete $path
+  set body
+} -result {}
+
+test type3-7.2 {a font used with no glyphs at all is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  # An empty string still writes its show operator, so the font becomes a
+  # resource and reserves its object - and then has nothing to write.
+  $doc text "" -at {20 30} -family marks -size 12
+  set result [::tclpdfTest::writes $doc type3-7.2.pdf]
+  $doc destroy
+  set result
+} -result {1 0}
+
+test type3-7.3 {the same document written twice is the same bytes} -body {
+  # The write events fire on every write: a builder that adds objects instead
+  # of filling reserved ones grows the file each time, and the earlier glyphs
+  # are then referenced by nothing.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks a -width 600 -script {
+    $doc rect -at {0 0} -size {600 800} -fill black
+  }
+  $doc font -family marks -size 12
+  $doc text "a" -at {20 30}
+  lassign [::tclpdfTest::writeTwice $doc type3-7.3] first second
+  $doc destroy
+  list [string equal $first $second] \
+      [regexp -all {/Subtype /Type3} $second]
+} -result {1 1}
+
+test type3-7.4 {the ToUnicode map is one byte wide} -body {
+  # A Type 3 font is addressed by single bytes. A two-byte codespace, which
+  # is what the Identity-H road needs, maps nothing at all here - and no
+  # validator says a word about it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks ✓ -width 600 -name qqzz -script {}
+  $doc font -family marks -size 12
+  $doc text "✓" -at {20 30}
+  set path [::tclpdfTest::scratch type3-7.4.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  regexp {/ToUnicode (\d+) 0 R} $body -> number
+  set map [::tclpdfTest::streamOf [$doc writer] $number]
+  $doc destroy
+  file delete $path
+  list [regexp {<00> <FF>} $map] [regexp {<FF> <2713>} $map]
+} -result {1 1}
+
+test type3-7.5 {the descriptor says what a Type 3 descriptor has to say} -body {
+  # Table 120: FontBBox, Ascent, Descent, CapHeight and StemV are "required
+  # EXCEPT for Type 3 fonts". What is left is Type, FontName, Flags and
+  # ItalicAngle, and the flags say symbolic - the encoding is this font's own.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks a -width 600 -script {}
+  $doc font -family marks -size 12
+  $doc text "a" -at {20 30}
+  set path [::tclpdfTest::scratch type3-7.5.pdf]
+  $doc write $path
+  set body [type3Object $doc /FontDescriptor]
+  regexp {/FontDescriptor (\d+) 0 R} [type3Object $doc] -> number
+  set descriptor [[$doc writer] body $number]
+  $doc destroy
+  file delete $path
+  list [regexp {/Type /FontDescriptor} $descriptor] \
+      [regexp {/FontName /marks} $descriptor] \
+      [regexp {/Flags 4} $descriptor] \
+      [regexp {/FontBBox} $descriptor]
+} -result {1 1 1 0}
+
+test type3-7.6 {no font bounding box is claimed unless one is stated} -body {
+  # Table 110: "If all four elements of the rectangle are zero, a PDF
+  # processor shall make no assumptions about glyph sizes based on the font
+  # bounding box. If any element is non-zero, the font bounding box shall be
+  # accurate."
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define plain
+  $doc font glyph plain a -width 600 -script {}
+  $doc font define stated -ascent 800 -bbox {0 0 700 900}
+  $doc font glyph stated a -width 600 -script {}
+  $doc font -family plain -size 12
+  $doc text "a" -at {20 30}
+  $doc font -family stated -size 12
+  $doc text "a" -at {20 40}
+  set path [::tclpdfTest::scratch type3-7.6.pdf]
+  $doc write $path
+  set boxes {}
+  foreach body [type3Objects $doc] {
+    regexp {/FontBBox \[([^\]]*)\]} $body -> box
+    lappend boxes [regexp -all -inline -- {-?[0-9.]+} $box]
+  }
+  $doc destroy
+  file delete $path
+  # -bbox {0 0 700 900} in a frame of 800 above the baseline: llx 0,
+  # lly 800-0-900 = -100, urx 700, ury 800.
+  lsort $boxes
+} -result {{0 -100 700 800} {0 0 0 0}}
+
+# -- what the outside world makes of it --------------------------------------
+
+test type3-8.1 {the text comes back out} -constraints pdftotext -body {
+  # Without /ToUnicode it does not: measured on 2026-08-21 with poppler
+  # 26.08.0, the same file with the key removed and a glyph name no list
+  # knows extracted the two check marks as U+00FF, the raw character code.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks ✓ -width 700 -name qqzz -script {
+    $doc line -from {100 500} -to {300 700} -stroke black -width 90
+    $doc line -from {300 700} -to {600 200} -stroke black -width 90
+  }
+  $doc font -family marks -size 20
+  $doc text "✓✓" -at {20 40}
+  set path [::tclpdfTest::scratch type3-8.1.pdf]
+  $doc write $path
+  $doc destroy
+  set text [exec pdftotext $path -]
+  file delete $path
+  string trim $text
+} -result "✓✓"
+
+test type3-8.2 {qpdf finds nothing wrong with the file} -constraints qpdf -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks a -width 600 -color text -bbox {0 0 600 800} -script {
+    $doc rect -at {0 0} -size {600 800} -fill black
+  }
+  $doc font -family marks -size 12
+  $doc text "a" -at {20 30}
+  set path [::tclpdfTest::scratch type3-8.2.pdf]
+  $doc write $path
+  $doc destroy
+  set code [catch {exec qpdf --check $path 2>@1} report]
+  file delete $path
+  list $code [string match {*No syntax or stream encoding errors*} $report]
+} -result {0 1}
+
+test type3-8.3 {a drawn font keeps a PDF/A declaration} \
+    -constraints {haveTdom haveSrgbIcc} -body {
+  # Type 3 is allowed in PDF/A and the question of embedding does not arise:
+  # the glyphs ARE the file. What did arise is the package's own check, which
+  # walks every font resource for a /FontFile - a Type 3 font has none and
+  # can have none.
+  set doc [tclpdf new -unit mm]
+  $doc info Title "Type 3 under PDF/A"
+  $doc page add
+  $doc font define marks -ascent 750
+  $doc font glyph marks + -width 800 -script {
+    $doc rect -at {100 335} -size {600 80} -fill black
+  }
+  $doc font -family marks -size 24 -color {0 0 0}
+  $doc text "+" -at {20 40}
+  $doc pdfa -part 3 -conformance B -profile $::srgbIcc
+  set path [::tclpdfTest::scratch type3-8.3.pdf]
+  set code [catch {$doc write $path}]
+  set missing [$doc fontsWithoutProgram]
+  set report [::tclpdfTest::verapdf $path 3b]
+  $doc destroy
+  file delete $path
+  list $code $missing $report
+} -result {0 {} ok}
+
+# -- what the state and the reports say ---------------------------------------
+
+test type3-9.1 {font names and font info answer for a drawn font} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks -matrix {0.0005 0 0 0.0005 0 0}
+  $doc font glyph marks a -width 600 -script {}
+  $doc font glyph marks b -width 600 -script {}
+  set info [$doc font info marks]
+  set names [$doc font names]
+  $doc destroy
+  list $names [dict get $info family] [dict get $info glyphs] \
+      [dict get $info unitsPerEm] [dict get $info fsType]
+} -result {marks marks 2 2000.0 {}}
+
+test type3-9.2 {an alias that is already taken is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set code [catch {$doc font define marks} err]
+  $doc destroy
+  list $code [string match {*already exists*} $err]
+} -result {1 1}
+
+test type3-9.3 {a glyph for a font that is not a drawn one is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set unknown [catch {$doc font glyph nowhere a -width 600 -script {}} first]
+  $doc destroy
+  list $unknown [string match {*font define*} $first]
+} -result {1 1}
+
+test type3-4.10 {an encoding holds 255 glyphs and no more} -body {
+  # Single bytes, and code 0 is not handed out: 255 slots. The 256th glyph is
+  # refused rather than silently overwriting one.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  for {set code 1} {$code <= 255} {incr code} {
+    $doc font glyph marks [format %c $code] -width 600 -script {}
+  }
+  set full [catch {$doc font glyph marks ✓ -width 600 -script {}} err]
+  set count [dict size [dict get [$doc state fonts] marks glyphs]]
+  $doc destroy
+  list $count $full [string match {*255 glyphs*} $err]
+} -result {255 1 1}
+
+test type3-9.5 {the package's own font check knows a Type 3 font} -body {
+  # It walks the font resources for a /FontFile - and a Type 3 font has none
+  # and can have none, because its glyphs ARE the file (9.6.4). Without the
+  # exemption a drawn font ruled out every PDF/A and PDF/UA document.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  $doc font glyph marks a -width 600 -script {}
+  $doc font -family marks -size 12
+  $doc text "a" -at {20 30}
+  set path [::tclpdfTest::scratch type3-9.5.pdf]
+  $doc write $path
+  set missing [$doc fontsWithoutProgram]
+  $doc destroy
+  file delete $path
+  set missing
+} -result {}
+
+test type3-9.4 {a glyph is drawn for ONE character} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font define marks
+  set results {}
+  foreach char {{} ab} {
+    lappend results [catch {$doc font glyph marks $char -width 600 -script {}}]
+  }
+  lappend results [catch {$doc font glyph marks a -width x -script {}}]
+  lappend results [catch {$doc font glyph marks a -width -3 -script {}}]
+  $doc destroy
+  set results
+} -result {1 1 1 1}
+
+cleanupTests

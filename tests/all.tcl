@@ -50,6 +50,8 @@ foreach tclpdfPkg {
     tclpdf::encrypt
     tclpdf::sign
     tclpdf::update
+    tclpdf::layer
+    tclpdf::type3
     tclpdf::event
     tclpdf::writer
     tclpdf::color
@@ -69,7 +71,9 @@ foreach tclpdfPkg {
     tclpdf::leader
     tclpdf::pageNumber
     tclpdf::xObject
+    tclpdf::importRead
     tclpdf::import
+    tclpdf::importInfo
     tclpdf::io
     tclpdf::attach
     tclpdf::sfnt

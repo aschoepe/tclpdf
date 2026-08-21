@@ -340,12 +340,18 @@ oo::class create ::tclpdf::document::document {
       reservation output
       writeChannel output
       form xObject
+      FormBegin xObject
+      FormEnd xObject
+      layer layer
       pdf import
       attach attach
       attachments attach
       attachmentsWithoutDescription attach
       font text
       fontsWithoutProgram font
+      FontKind font
+      FontResource font
+      FontToUnicode font
       text text
       textWidth text
       textLines textBlock
@@ -777,4 +783,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.8
+package provide tclpdf::document 1.9

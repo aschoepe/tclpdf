@@ -20,6 +20,9 @@ namespace import -force tcltest::*
 
 package require tclpdf
 package require tclpdf::import
+# The inventory is its own package since 2026-08-21; both stand on
+# tclpdf::importRead, and the tests of both live in this file for now.
+package require tclpdf::importInfo
 source [file join [file dirname [info script]] helper.tcl]
 
 testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
@@ -45,36 +48,36 @@ proc ::tclpdfTest::template {{pages 1}} {
 
 test import-1.1 {a literal string that looks like a reference stays a string} -body {
     set pos 0
-    ::tclpdf::import::Parse {(see 5 0 R for details)} pos
+    ::tclpdf::importRead::Parse {(see 5 0 R for details)} pos
 } -result {s {see 5 0 R for details}}
 
 test import-1.2 {references and plain numbers are told apart by lookahead} -body {
     set pos 0
-    set a [::tclpdf::import::Parse {[3 0 R 3 0 4]} pos]
+    set a [::tclpdf::importRead::Parse {[3 0 R 3 0 4]} pos]
     set pos 0
-    set b [::tclpdf::import::Parse {<< /A 3 0 R /B 3 >>} pos]
+    set b [::tclpdf::importRead::Parse {<< /A 3 0 R /B 3 >>} pos]
     list $a $b
 } -result {{a {{r {3 0}} {n 3} {n 0} {n 4}}} {d {A {r {3 0}} B {n 3}}}}
 
 test import-1.3 {nested dictionaries, arrays, hex strings, booleans, null} -body {
     set pos 0
-    ::tclpdf::import::Parse {<< /D << /X [<AB> true null] >> /N /Nm >>} pos
+    ::tclpdf::importRead::Parse {<< /D << /X [<AB> true null] >> /N /Nm >>} pos
 } -result {d {D {d {X {a {{h AB} {b true} {z {}}}}}} N {nm Nm}}}
 
 test import-1.4 {string escapes: parentheses, octal, line continuation} -body {
     set pos 0
-    ::tclpdf::import::Parse "(a\\(b\\)c \\101 d\\\ne)" pos
+    ::tclpdf::importRead::Parse "(a\\(b\\)c \\101 d\\\ne)" pos
 } -result {s {a(b)c A de}}
 
 test import-1.5 {serializing renumbers references and re-escapes strings} -body {
     set pos 0
-    set value [::tclpdf::import::Parse {<< /K [7 0 R (x\(y)] >>} pos]
-    ::tclpdf::import::Serialize $value {7 12}
+    set value [::tclpdf::importRead::Parse {<< /K [7 0 R (x\(y)] >>} pos]
+    ::tclpdf::importRead::Serialize $value {7 12}
 } -result {<< /K [ 12 0 R (x\(y) ] >>}
 
 test import-1.6 {comments are whitespace} -body {
     set pos 0
-    ::tclpdf::import::Parse "%note\n42" pos
+    ::tclpdf::importRead::Parse "%note\n42" pos
 } -result {n 42}
 
 # --- the classic round trip ------------------------------------------------
@@ -208,7 +211,10 @@ test import-3.6 {a missing file is refused by name} -body {
 # A classic-table file from a list of object bodies, byte for byte - the
 # boilerplate of [handcrafted], extracted when the norm-review fixtures
 # would have been its fourth copy.
-proc ::tclpdfTest::buildpdf {name objects} {
+# "extra" is written into the trailer beside /Size and /Root - for the
+# fixtures whose point is an entry that hangs off the trailer rather than off
+# the catalog, /Info being the one that has one.
+proc ::tclpdfTest::buildpdf {name objects {extra {}}} {
     set out "%PDF-1.4\n"
     set offsets {}
     set number 0
@@ -222,7 +228,7 @@ proc ::tclpdfTest::buildpdf {name objects} {
     foreach offset $offsets {
         append out [format "%010d %05d n \n" $offset 0]
     }
-    append out "trailer\n<< /Size [expr {$number + 1}] /Root 1 0 R >>\n"
+    append out "trailer\n<< /Size [expr {$number + 1}] /Root 1 0 R $extra >>\n"
     append out "startxref\n$xref\n%%EOF\n"
     set path [scratch $name]
     set channel [open $path wb]
@@ -468,11 +474,11 @@ test import-8.3 {/Fl#61teDecode is FlateDecode and gets decoded} -body {
 
 test import-8.4 {a # without two hex digits stays literal; Serialize re-escapes} -body {
     set pos 0
-    set a [::tclpdf::import::Parse {/A#5x} pos]
+    set a [::tclpdf::importRead::Parse {/A#5x} pos]
     set pos 0
-    set b [::tclpdf::import::Parse {/B#} pos]
-    list $a $b [::tclpdf::import::Serialize {nm {A B}} {}] \
-        [::tclpdf::import::Serialize {nm A#5x} {}]
+    set b [::tclpdf::importRead::Parse {/B#} pos]
+    list $a $b [::tclpdf::importRead::Serialize {nm {A B}} {}] \
+        [::tclpdf::importRead::Serialize {nm A#5x} {}]
 } -result {{nm A#5x} {nm B#} /A#20B /A#235x}
 
 # --- optional content: merging and OCMD (8.11.4.2, Table 98) -----------------
@@ -579,9 +585,9 @@ test import-12.1 {a /Length overshooting the stream is refused, not copied as ga
 
 test import-13.1 {a raw 0xA0 byte is a regular character and does not split a name} -body {
     set pos 0
-    set token [::tclpdf::import::Parse "/Na\xA0me 1" pos]
+    set token [::tclpdf::importRead::Parse "/Na\xA0me 1" pos]
     list [lindex $token 0] [expr {[lindex $token 1] eq "Na\xA0me"}] \
-        [::tclpdf::import::Serialize $token {}]
+        [::tclpdf::importRead::Serialize $token {}]
 } -result {nm 1 /Na#A0me}
 
 # --- /Rotate as a real, or not a multiple of 90 (defective files) ------------
@@ -690,5 +696,529 @@ test import-15.2 {the copied stream carries one /Length, the writer's, and its b
     file delete $fixture
     set found
 } -result [list 1 1 "q 1 0 0 1 0 0 cm Q"]
+
+# --- the inventory: what a finished file says about itself -----------------
+#
+# [::tclpdf::pdf info|pages|fonts|metadata] stand on the reader above, so what
+# is worth testing here is not that it reads - the sections before this one do
+# that - but that it ANSWERS: the right value out of the right entry, and an
+# empty one rather than a guess where the file says nothing. The fixtures are
+# handcrafted wherever the answer turns on a corner (a text string in three
+# encodings, a face reachable only through an annotation, a cross-reference
+# chain that runs forwards), and written by tclpdf itself wherever the point
+# is that a real document comes back the way it went in.
+
+set inventoryFont [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts DejaVuSans.ttf]
+testConstraint haveFont [file exists $inventoryFont]
+
+test import-16.1 {info answers out of the trailer, the catalog and page one} -body {
+    set path [::tclpdfTest::scratch import-info.pdf]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc info Title "Ein Bericht"
+    $doc info Author "Erika Mustermann"
+    $doc page add
+    $doc text "one" -at {50 50}
+    $doc page add
+    $doc text "two" -at {50 50}
+    $doc write $path
+    $doc destroy
+    set facts [::tclpdf::pdf info $path]
+    set result [list [dict get $facts pages] [dict get $facts encrypted] \
+        [dict get $facts revisions] [dict get $facts sections] \
+        [dict get $facts xref] [dict get $facts tagged] \
+        [dict get $facts form] [dict get $facts xmp] \
+        [dict get $facts info Title] [dict get $facts info Author] \
+        [expr {[dict get $facts bytes] == [file size $path]}] \
+        [lmap number [dict get $facts size] {format %.2f $number}]]
+    file delete $path
+    set result
+} -result {2 0 1 1 table 0 none 0 {Ein Bericht} {Erika Mustermann} 1\
+        {595.28 841.89}}
+
+test import-16.2 {every key is there, also for a file that says nothing} -body {
+    # No title, no metadata, no form, no attachment: those keys answer empty
+    # rather than being absent, which is what lets a caller read a field
+    # without first asking whether it exists.
+    set fixture [::tclpdfTest::handcrafted]
+    set facts [::tclpdf::pdf info $fixture]
+    set missing {}
+    foreach key {path bytes version catalogVersion xref sections revisions id
+            encrypted encryption pages size info xmp pdfa pdfua tagged form
+            outputIntents attachments signatures} {
+        if {![dict exists $facts $key]} {
+            lappend missing $key
+        }
+    }
+    set result [list $missing [dict get $facts version] \
+        [dict get $facts catalogVersion] [dict get $facts info] \
+        [dict get $facts pdfa] [dict get $facts attachments] \
+        [dict get $facts pages] [dict get $facts size] \
+        [dict get $facts id]]
+    file delete $fixture
+    set result
+} -result {{} 1.4 {} {} {} {} 1 {400 500} {}}
+
+test import-16.3 {a title in UTF-16BE comes back as characters} -body {
+    # Non-ASCII forces the UTF-16BE form on the writing side (7.9.2.2), so
+    # this is the round trip of one encoder through one decoder. Written with
+    # \u escapes rather than the characters themselves: what this checks must
+    # not depend on the encoding this test file happens to be read in.
+    set title "Gr\u00F6\u00DFenma\u00DFstab \u20AC"
+    set path [::tclpdfTest::scratch import-info-utf16.pdf]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc info Title $title
+    $doc page add
+    $doc write $path
+    $doc destroy
+    set found [dict get [::tclpdf::pdf info $path] info Title]
+    file delete $path
+    list [string equal $found $title] [string length $found]
+} -result {1 15}
+
+test import-16.4 {a literal string is PDFDocEncoding, not Latin-1} -body {
+    # 0x95 is Lslash and 0xA0 the Euro sign in PDFDocEncoding (Annex D.2),
+    # where Latin-1 has a control character and a no-break space; 0xE4 is
+    # a-dieresis in both. The hexadecimal string with the byte order mark is
+    # the same kind of value written the other way and must decode as text
+    # just as a literal one does.
+    set fixture [::tclpdfTest::buildpdf import-info-pdfdoc.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /Title (\x95\xA0\xE4) /Author <FEFF00C4004100E4> >>"] \
+        "/Info 5 0 R"]
+    set facts [::tclpdf::pdf info $fixture]
+    set result [list [dict get $facts info Title] \
+        [dict get $facts info Author]]
+    file delete $fixture
+    set result
+} -result [list "\u0141\u20AC\u00E4" "\u00C4A\u00E4"]
+
+test import-16.5 {an archivable document reports its claim, its intent and its annex} \
+        -constraints {haveTdom haveFont} -body {
+    set path [::tclpdfTest::scratch import-info-pdfa.pdf]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc font embed body $::inventoryFont
+    $doc pdfa -part 3 -conformance B
+    $doc info Title "An archivable document"
+    $doc attach -data "<x/>" -name daten.xml -mime text/xml \
+        -relationship Data -description "the data"
+    $doc page add
+    $doc font -family body -size 12
+    $doc text "archivable" -at {50 50}
+    $doc write $path
+    $doc destroy
+    set facts [::tclpdf::pdf info $path]
+    set intent [lindex [dict get $facts outputIntents] 0]
+    set annex [lindex [dict get $facts attachments] 0]
+    set packet [::tclpdf::pdf metadata $path]
+    set result [list [dict get $facts pdfa] [dict get $facts pdfua] \
+        [dict get $facts xmp] [dict get $intent subtype] \
+        [expr {[dict get $intent identifier] ne {}}] \
+        [dict get $intent profile] [dict get $annex name] \
+        [dict get $annex description] [dict get $annex relationship] \
+        [dict get $annex mime] [dict get $annex size] \
+        [string match "<?xpacket*" $packet] \
+        [string match "*pdfaid:part*" $packet]]
+    file delete $path
+    set result
+} -result {3B {} 1 GTS_PDFA1 1 1 daten.xml {the data} Data text/xml 4 1 1}
+
+test import-16.6 {a claim written as an attribute is read like an element} -body {
+    # Both spellings are legal RDF and both occur in the wild; the scan finds
+    # either. The second packet states the same kind of claim as attributes on
+    # the rdf:Description.
+    set element {<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF
+xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>
+</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>}
+    set attribute {<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF
+xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"
+xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/"
+pdfaid:part="2" pdfaid:conformance="U" pdfuaid:part="1"/>
+</rdf:RDF></x:xmpmeta><?xpacket end="w"?>}
+    set result {}
+    foreach packet [list $element $attribute] {
+        set fixture [::tclpdfTest::buildpdf import-info-claim.pdf [list \
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R >>" \
+            "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+            "<< /Length 3 >>\nstream\nq Q\nendstream" \
+            "<< /Type /Metadata /Subtype /XML /Length [string length $packet] >>\
+                \nstream\n$packet\nendstream"]]
+        set facts [::tclpdf::pdf info $fixture]
+        lappend result [dict get $facts pdfa] [dict get $facts pdfua] \
+            [dict get $facts xmp] \
+            [string equal [::tclpdf::pdf metadata $fixture] $packet]
+        file delete $fixture
+    }
+    set result
+} -result {3B {} 1 1 2U 1 1 1}
+
+test import-16.7 {a tagged document says so, an untagged one says no} -body {
+    # /MarkInfo /Marked is the catalog's own statement (14.7.1) - what it does
+    # NOT say is whether the structure tree behind it is any good, which is
+    # veraPDF's and ua.tcl's question rather than this one's.
+    set result {}
+    foreach marked {true false} {
+        set fixture [::tclpdfTest::buildpdf import-marked.pdf [list \
+            "<< /Type /Catalog /Pages 2 0 R\
+                /MarkInfo << /Marked $marked >> >>" \
+            "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+            "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+        lappend result [dict get [::tclpdf::pdf info $fixture] tagged]
+        file delete $fixture
+    }
+    set fixture [::tclpdfTest::handcrafted]
+    lappend result [dict get [::tclpdf::pdf info $fixture] tagged]
+    file delete $fixture
+    set result
+} -result {1 0 0}
+
+test import-17.1 {pages: the boxes as written, the extent as a viewer shows it} -body {
+    # The CropBox is what a viewer shows, bounded by the MediaBox (14.11.2.2),
+    # and a /Rotate of 90 swaps the extent: the page comes out landscape
+    # although both its boxes are portrait.
+    set fixture [::tclpdfTest::buildpdf import-pages-boxes.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R 5 0 R\] /Count 2\
+            /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R\
+            /CropBox \[20 30 380 430\] /Rotate 90 >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"]]
+    set pages [::tclpdf::pdf pages $fixture]
+    file delete $fixture
+    list [llength $pages] [lindex $pages 0] [lindex $pages 1]
+} -result {2 {number 1 mediabox {0 0 400 500} cropbox {20 30 380 430} rotate 90\
+        width 400 height 360} {number 2 mediabox {0 0 400 500} cropbox {}\
+        rotate 0 width 400 height 500}}
+
+test import-17.2 {a page whose /Rotate is unusable is named, not silently squared} -body {
+    set fixture [::tclpdfTest::buildpdf import-pages-rotate.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Rotate 45 /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set result [catch {::tclpdf::pdf pages $fixture} message]
+    file delete $fixture
+    list $result $message
+} -match glob -result {1 {tclpdf: *page 1 carries /Rotate 45, which is not a\
+        multiple of 90}}
+
+test import-18.1 {fonts: a standard face and an embedded subset, told apart} \
+        -constraints haveFont -body {
+    set path [::tclpdfTest::scratch import-fonts.pdf]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc font embed haus $::inventoryFont
+    $doc page add
+    $doc font -family helvetica -size 12
+    $doc text "standard" -at {50 50}
+    $doc font -family haus -size 12
+    $doc text "embedded" -at {50 80}
+    $doc write $path
+    $doc destroy
+    set found {}
+    foreach face [::tclpdf::pdf fonts $path] {
+        lappend found [list [dict get $face subtype] [dict get $face cid] \
+            [regsub {^[A-Z]{6}\+} [dict get $face basefont] {}] \
+            [dict get $face subset] [dict get $face embedded] \
+            [dict get $face file] [dict get $face encoding] \
+            [dict get $face pages]]
+    }
+    file delete $path
+    lsort $found
+} -result {{Type0 CIDFontType2 DejaVuSans 1 1 FontFile2 Identity-H 1}\
+        {Type1 {} Helvetica 0 0 {} WinAnsiEncoding 1}}
+
+test import-18.2 {a face used only in an annotation's appearance is found} -body {
+    # pdffonts does not report this one - measured on a foreign form whose 35
+    # checkbox appearances all name ZapfDingbats - and the file uses it all
+    # the same: an unembedded face inside an appearance stream is as missing
+    # on the other machine as one in the page content.
+    set appearance "BT /ZaDb 9 Tf (4) Tj ET"
+    set stream "<< /Type /XObject /Subtype /Form /BBox \[0 0 12 12\]\
+        /Resources << /Font << /ZaDb 9 0 R >> >>\
+        /Length [string length $appearance] >>\nstream\n$appearance\nendstream"
+    set fixture [::tclpdfTest::buildpdf import-fonts-annot.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots \[5 0 R\]\
+            /Resources << /Font << /F1 8 0 R >> >> >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[10 10 22 22\]\
+            /AP << /N << /Off 6 0 R /On 6 0 R >> /D 7 0 R >> >>" \
+        $stream $stream \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /Name /ZaDb >>"]]
+    set found {}
+    foreach face [::tclpdf::pdf fonts $fixture] {
+        lappend found [list [dict get $face object] \
+            [dict get $face basefont] [dict get $face embedded] \
+            [dict get $face pages]]
+    }
+    file delete $fixture
+    lsort $found
+} -result {{8 Helvetica 0 1} {9 ZapfDingbats 0 1}}
+
+test import-18.3 {a Type 3 face names itself through its descriptor} -body {
+    # /BaseFont is not for Type 3 (9.6.5), so the name every reader shows is
+    # the descriptor's /FontName - and its glyphs, being content streams of
+    # this file, count as embedded.
+    set glyph "10 0 0 0 10 10 d1 0 0 10 10 re f"
+    set fixture [::tclpdfTest::buildpdf import-fonts-type3.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R\
+            /Resources << /Font << /T3 5 0 R >> >> >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /Type /Font /Subtype /Type3 /Name /Kaesten\
+            /FontBBox \[0 0 10 10\] /FontMatrix \[0.001 0 0 0.001 0 0\]\
+            /CharProcs << /kasten 6 0 R >> /FirstChar 97 /LastChar 97\
+            /Widths \[10\] /FontDescriptor 7 0 R\
+            /Encoding << /Type /Encoding /Differences \[97 /kasten\] >> >>" \
+        "<< /Length [string length $glyph] >>\nstream\n$glyph\nendstream" \
+        "<< /Type /FontDescriptor /FontName /ABCDEF+Kaesten /Flags 4 >>"]]
+    set face [lindex [::tclpdf::pdf fonts $fixture] 0]
+    file delete $fixture
+    list [dict get $face subtype] [dict get $face basefont] \
+        [dict get $face subset] [dict get $face embedded] \
+        [dict get $face file] [dict get $face differences] \
+        [dict get $face encoding]
+} -result {Type3 ABCDEF+Kaesten 1 1 CharProcs 1 {}}
+
+test import-19.1 {an encrypted file is answered out of its trailer} -body {
+    set path [::tclpdfTest::scratch import-encrypted.pdf]
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user geheim -owner nochgeheimer -permissions {print}
+    $doc info Title "Not readable without the key"
+    $doc page add
+    $doc text "secret" -at {50 50}
+    $doc write $path
+    $doc destroy
+    set facts [::tclpdf::pdf info $path]
+    file delete $path
+    # /P is handed on as the number it is; which bits it has is encrypt.tcl's
+    # business and is tested there, so what is checked here is that a number
+    # arrives at all.
+    list [dict get $facts encrypted] \
+        [dict remove [dict get $facts encryption] p] \
+        [string is entier -strict [dict get $facts encryption p]] \
+        [dict get $facts pages] [dict get $facts size] \
+        [dict get $facts info] [dict get $facts xmp] \
+        [llength [dict get $facts id]] [dict get $facts revisions] \
+        [dict get $facts version]
+} -result {1 {filter Standard subfilter {} v 5 r 6 length 256 method AESV3}\
+        1 {} {} {} 0 2 1 2.0}
+
+test import-19.2 {what needs the key is refused by name, not answered wrongly} -body {
+    set path [::tclpdfTest::scratch import-encrypted-refused.pdf]
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user geheim -owner nochgeheimer
+    $doc page add
+    $doc text "secret" -at {50 50}
+    $doc write $path
+    $doc destroy
+    set result {}
+    foreach subcommand {pages fonts metadata} {
+        lappend result [catch {::tclpdf::pdf $subcommand $path} message] \
+            [string match "*is encrypted*" $message]
+    }
+    file delete $path
+    set result
+} -result {1 1 1 1 1 1}
+
+test import-20.1 {revisions: a section appended behind the file counts} -body {
+    set base [::tclpdfTest::buildpdf import-revisions.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set bytes [::tclpdfTest::readBytes $base]
+    regexp {startxref\s+(\d+)\s+%%EOF} $bytes -> first
+
+    # An incremental update (7.5.6): one changed object and a section of its
+    # own, appended - so its offset is HIGHER than the one its /Prev names.
+    set update $bytes
+    set offset [string length $update]
+    append update "3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R\
+        /Rotate 90 >>\nendobj\n"
+    set second [string length $update]
+    append update "xref\n0 1\n0000000000 65535 f \n3 1\n"
+    append update [format "%010d 00000 n \n" $offset]
+    append update "trailer\n<< /Size 5 /Root 1 0 R /Prev $first >>\n"
+    append update "startxref\n$second\n%%EOF\n"
+    set updated [::tclpdfTest::scratch import-revisions-updated.pdf]
+    set channel [open $updated wb]
+    puts -nonewline $channel $update
+    close $channel
+
+    set facts [::tclpdf::pdf info $updated]
+    set page [lindex [::tclpdf::pdf pages $updated] 0]
+    set result [list [dict get [::tclpdf::pdf info $base] revisions] \
+        [dict get $facts sections] [dict get $facts revisions] \
+        [dict get $page rotate]]
+    file delete $base $updated
+    set result
+} -result {1 2 2 90}
+
+test import-20.2 {a chain that runs forwards is one revision, not two} -body {
+    # The shape a LINEARIZED file arrives in (Annex F): the section a reader
+    # starts at lies at the front of the file and chains FORWARDS to the main
+    # one at the end. Two sections, written in one go - one revision. The
+    # front section here carries no entries of its own, which is legal and is
+    # all this question turns on.
+    #
+    # /Prev is written into a fixed-width field and filled in afterwards: the
+    # offset it has to name depends on how long the section naming it is.
+    set objects [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]
+    set out "%PDF-1.4\n"
+    set front [string length $out]
+    append out "xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 5\
+        /Root 1 0 R /Prev @@@@@@@@@@ >>\n"
+    set offsets {}
+    set number 0
+    foreach body $objects {
+        lappend offsets [string length $out]
+        append out "[incr number] 0 obj\n$body\nendobj\n"
+    }
+    set main [string length $out]
+    append out "xref\n0 [expr {$number + 1}]\n"
+    append out [format "%010d %05d f \n" 0 65535]
+    foreach offset $offsets {
+        append out [format "%010d %05d n \n" $offset 0]
+    }
+    append out "trailer\n<< /Size [expr {$number + 1}] /Root 1 0 R >>\n"
+    append out "startxref\n$front\n%%EOF\n"
+    # The placeholder is ten characters wide and so is what replaces it -
+    # trailing spaces inside the dictionary are white space (7.2.2).
+    set out [string map [list @@@@@@@@@@ [format %-10s $main]] $out]
+    set path [::tclpdfTest::scratch import-revisions-forward.pdf]
+    set channel [open $path wb]
+    puts -nonewline $channel $out
+    close $channel
+    set facts [::tclpdf::pdf info $path]
+    file delete $path
+    list [dict get $facts sections] [dict get $facts revisions] \
+        [dict get $facts pages]
+} -result {2 1 1}
+
+test import-21.1 {signatures: what the field claims, and whether it covers the file} -body {
+    # A signature that no longer reaches the last byte of the file is one the
+    # file was written on after signing. That is arithmetic over /ByteRange
+    # (12.8.1) and it is the one thing about a signature this reader decides;
+    # whether the digest holds is pdfsig's business. The name is the field
+    # widget the field draws itself with is not a second field, and it is
+    # the field that carries the signature dictionary (12.7.4.2).
+    set contents [string repeat 0 512]
+    set fixture [::tclpdfTest::buildpdf import-signature.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[5 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots \[6 0 R\] >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /FT /Sig /T (Freigabe) /Kids \[6 0 R\] /V 7 0 R >>" \
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect \[0 0 0 0\] >>" \
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\
+            /Name (Erika Mustermann) /Reason (Approved) /Location (Bochum)\
+            /M (D:20260821101228+02'00') /ByteRange \[0 100 900 200\]\
+            /Contents <$contents> >>"]]
+    set facts [::tclpdf::pdf info $fixture]
+    set signature [lindex [dict get $facts signatures] 0]
+    file delete $fixture
+    list [dict get $facts form] [llength [dict get $facts signatures]] \
+        [dict get $signature field] [dict get $signature filter] \
+        [dict get $signature subfilter] [dict get $signature name] \
+        [dict get $signature reason] [dict get $signature location] \
+        [dict get $signature date] [dict get $signature byterange] \
+        [dict get $signature whole]
+} -result {AcroForm 1 Freigabe Adobe.PPKLite adbe.pkcs7.detached\
+        {Erika Mustermann} Approved Bochum D:20260821101228+02'00'\
+        {0 100 900 200} 0}
+
+test import-21.2 {a signature reaching the last byte says so} -body {
+    # The same field over a file whose /ByteRange ends exactly at its length,
+    # which is what a signer writes.
+    set fixture [::tclpdfTest::buildpdf import-signature-whole.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[5 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /FT /Sig /T (Freigabe) /V 6 0 R >>" \
+        "<< /Type /Sig /ByteRange \[0 10 20 30 \] >>"]]
+    set size [file size $fixture]
+    set bytes [string map [list "\[0 10 20 30 \]" \
+        [format {[0 10 %d %d]} [expr {$size - 40}] 40]] \
+        [::tclpdfTest::readBytes $fixture]]
+    set channel [open $fixture wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    set signature [lindex [dict get [::tclpdf::pdf info $fixture] signatures] 0]
+    set range [dict get $signature byterange]
+    file delete $fixture
+    list [dict get $signature field] [dict get $signature whole] \
+        [dict get $signature subfilter] \
+        [expr {[lindex $range 2] + [lindex $range 3] == $size}]
+} -result {Freigabe 1 {} 1}
+
+test import-22.1 {a file that is not one is refused with its name} -body {
+    set path [::tclpdfTest::scratch import-nonsense.txt]
+    set channel [open $path wb]
+    puts -nonewline $channel "this is not a PDF"
+    close $channel
+    set result [catch {::tclpdf::pdf info $path} message]
+    file delete $path
+    list $result $message
+} -match glob -result {1 {tclpdf: *carries no startxref*}}
+
+test import-22.1a {a file that is not there is refused by name} -body {
+    set result {}
+    foreach subcommand {info pages fonts metadata} {
+        lappend result [catch {::tclpdf::pdf $subcommand \
+            [::tclpdfTest::scratch import-absent.pdf]} message] $message
+    }
+    lsort -unique $result
+} -match glob -result {1 {tclpdf: no file "*import-absent.pdf"}}
+
+test import-22.2 {a broken stream is refused naming the file, not by zlib} -body {
+    # Without this the answer is zlib's own "stream error": three words, no
+    # file, no place. One of 106 foreign files measured arrives that way.
+    set broken [string range [::tclpdf::filter encodeFlate "q Q"] 0 3]
+    set fixture [::tclpdfTest::buildpdf import-broken-stream.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 99 99\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "<< /Type /Metadata /Subtype /XML /Filter /FlateDecode\
+            /Length [string length $broken] >>\nstream\n$broken\nendstream"]]
+    set result [catch {::tclpdf::pdf metadata $fixture} message]
+    file delete $fixture
+    list $result $message
+} -match glob -result {1 {tclpdf: *import-broken-stream.pdf: the metadata\
+        stream is a /FlateDecode stream this package cannot decode:*}}
+
+test import-22.3 {the cross-reference flavour is the newest section's} \
+        -constraints qpdf -body {
+    # A hybrid file keeps the classic table its newest section is written in,
+    # although a stream completes it (7.5.8.4); a file qpdf has converted
+    # answers "stream".
+    set classic [::tclpdfTest::handcrafted]
+    set streamed [::tclpdfTest::scratch import-flavour-stream.pdf]
+    exec qpdf --object-streams=generate $classic $streamed
+    set result [list [dict get [::tclpdf::pdf info $classic] xref] \
+        [dict get [::tclpdf::pdf info $streamed] xref]]
+    file delete $classic $streamed
+    set result
+} -result {table stream}
 
 cleanupTests

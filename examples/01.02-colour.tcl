@@ -16,6 +16,9 @@
 #   ICCBased      numbers anchored to an ICC profile instead of to the device -
 #                 measured over 539 foreign PDFs, 302 carry one; the profile is
 #                 registered once under an alias and travels in the file once
+#   Lab           a colour as it was MEASURED, anchored to a white point - the
+#                 space the pressroom asks for, and the way to give a spot
+#                 colour its real value instead of a CMYK guess (page 2)
 #
 # Colour names come from a table in the package, not from Tk. [winfo rgb]
 # would have done the job and would have pulled in a windowing system to
@@ -137,6 +140,126 @@ $doc font -size 8
 $doc text "A hexadecimal value works too: #f0a is short for #ff00aa, not for\
     #f00a00." -at [list 20 [expr {$y + 22}]] -width 170
 $doc rect -at [list 20 [expr {$y + 26}]] -size {24 8} -fill #f0a
+
+# -- Lab: the colour as it was measured --------------------------------------
+#
+# Its own page rather than a sixth swatch on the one before, because Lab is
+# the only space here whose PARAMETERS are worth showing: the same three
+# numbers are a different colour under a different white point, and a value
+# outside the range is pulled back into it without a word. Both are visible
+# further down.
+#
+# This is also where the decision NOT to ship a colour catalogue is paid for.
+# The named colours of a spot colour system are licensed data; what the
+# pressroom actually needs is the measurement behind the name, and that is
+# three numbers the caller has - out of a colour book, or off a
+# spectrophotometer.
+$doc page add
+
+$doc font -family helvetica -style bold -size 13 -color black
+$doc text "Lab" -at {20 22}
+$doc font -style {} -size 8
+$doc text "L* runs from 0 to 100, a* from green to red and b* from blue to\
+    yellow; both of those run over the range the space names, -100 to 100\
+    unless -range says otherwise (ISO 32000-2, 8.6.5.4). The numbers are not\
+    0..1 like every other space on the page before - a Lab colour clamped to\
+    that range would come out black." -at {20 29} -width 170
+
+# -- the two axes ------------------------------------------------------------
+
+$doc font -style bold -size 10
+$doc text "L*, at a* 0 and b* 0" -at {20 48}
+set x 20
+foreach L {0 10 20 30 40 50 60 70 80 90 100} {
+    $doc rect -at [list $x 53] -size {14 12} -fill [list lab $L 0 0]
+    incr x 15
+}
+
+$doc font -style bold -size 10
+$doc text "a* and b* at L* 60" -at {20 78}
+set x 20
+foreach {a b label} {-60 0 "a -60" -30 0 "a -30" 0 0 "0 0" 30 0 "a 30" 60 0 "a 60"
+        0 -60 "b -60" 0 -30 "b -30" 0 30 "b 30" 0 60 "b 60"} {
+    $doc rect -at [list $x 83] -size {17 12} -fill [list lab 60 $a $b]
+    $doc font -style {} -size 6
+    $doc text $label -at [list $x 99]
+    incr x 19
+}
+
+# -- the white point ---------------------------------------------------------
+
+# WhitePoint is required by Table 64 and constrained by it: Xw and Zw
+# positive, Yw exactly 1.0. The package defaults to D50, the illuminant of
+# the ICC profile connection space and of every printed measurement (ISO
+# 13655) - which is what a colour book gives. The example in 8.6.5.4 uses the
+# D65 point instead, right for a value converted out of sRGB, and -whitePoint
+# takes it.
+$doc font -style bold -size 10
+$doc text "The same three numbers under two white points" -at {20 114}
+$doc font -style {} -size 8
+$doc text "Left the default D50, right the D65 point of the example in\
+    8.6.5.4. Nothing about the colour changed - only the light it is measured\
+    under, and that is a property of the SPACE, not of the value."\
+    -at {20 119} -width 170
+
+set x 20
+foreach {L a b} {54.29 80.82 69.88  87.82 -79.28 80.98  29.57 68.30 -112.05} {
+    $doc rect -at [list $x 132] -size {24 14} -fill [list lab $L $a $b]
+    $doc rect -at [list [expr {$x + 26}] 132] -size {24 14} \
+        -fill [list lab $L $a $b -whitePoint {0.9505 1.0 1.0890}]
+    $doc font -size 6
+    $doc text "D50 / D65" -at [list $x 149]
+    incr x 58
+}
+
+# -- what the range does -----------------------------------------------------
+
+$doc font -style bold -size 10
+$doc text "Outside the range, and the way past it" -at {20 162}
+$doc font -style {} -size 8
+$doc text "The third pair above is sRGB blue, whose b* is -112.05 - outside\
+    the default range, so it is pulled back to -100. The standard says to do\
+    that silently: \"Component values falling outside the specified range\
+    shall be adjusted to the nearest valid value without error indication\".\
+    The wider range of the example in 8.6.5.4 lets it through."\
+    -at {20 167} -width 170
+
+$doc rect -at {20 186} -size {24 14} -fill {lab 29.57 68.30 -112.05}
+$doc rect -at {46 186} -size {24 14} \
+    -fill {lab 29.57 68.30 -112.05 -range {-128 127 -128 127}}
+$doc font -size 6
+$doc text "default range / -range {-128 127 -128 127}" -at {20 203}
+
+# -- the spot colour ---------------------------------------------------------
+
+# The point of the whole page. A separation says WHICH plate; its alternate
+# says what a reader without that ink should paint instead - and a measured
+# Lab value is a far better answer there than a CMYK guess. Tint 0 is no ink
+# at all, which in Lab is L* 100: paper, not black.
+$doc font -style bold -size 10
+$doc text "A spot colour with a Lab alternate" -at {20 216}
+$doc font -style {} -size 8
+$doc text "One plate, eleven coverages. The name is what the pressroom will\
+    call it; the three numbers are what it measured. No colour catalogue is\
+    shipped with this package - the data is licensed - and this is the way\
+    that needs none." -at {20 221} -width 170
+
+set x 20
+for {set n 0} {$n <= 10} {incr n} {
+    $doc rect -at [list $x 238] -size {14 12} \
+        -fill [list separation "Spot Red" {lab 48.3 68.5 47.3} [expr {$n / 10.0}]]
+    incr x 15
+}
+$doc font -size 6
+$doc text "separation \"Spot Red\" {lab 48.3 68.5 47.3}, tint 0 to 1" -at {20 255}
+
+$doc font -style {} -size 8
+$doc text "Lab is device independent like an ICC based colour, so PDF/A\
+    admits it under every output intent - measured with veraPDF: the page\
+    above passes 3B under an sRGB, a grey and a CMYK intent alike, where the\
+    same colours as {rgb ...} are refused under the CMYK one. A gradient\
+    cannot take a Lab colour: a shading names its space by family in its\
+    dictionary, and a Lab space is an array." -at {20 264} -width 170
 
 # -- blend modes -------------------------------------------------------------
 

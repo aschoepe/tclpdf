@@ -1088,15 +1088,15 @@ proc ::tclpdf::sign::add {path args} {
 # writes into the file's own numbering, so every number stays the one it was.
 proc ::tclpdf::sign::Value {body} {
   set position 0
-  return [::tclpdf::import::Parse $body position]
+  return [::tclpdf::importRead::Parse $body position]
 }
 
 proc ::tclpdf::sign::Syntax {value} {
   set map {}
-  foreach number [::tclpdf::import::Refs $value] {
+  foreach number [::tclpdf::importRead::Refs $value] {
     dict set map $number $number
   }
-  return [::tclpdf::import::Serialize $value $map]
+  return [::tclpdf::importRead::Serialize $value $map]
 }
 
 # The object number a reference names, from PDF syntax or from a parsed value.
@@ -1128,27 +1128,27 @@ proc ::tclpdf::sign::Direct {upd value} {
 # and why that one is not used here: the widget needs a /P pointing at the
 # page, and the page needs a second copy of itself with /Annots in it.
 proc ::tclpdf::sign::PageNumber {upd catalogValue index what} {
-  set node [Number [::tclpdf::import::Get $catalogValue Pages] $what \
+  set node [Number [::tclpdf::importRead::Get $catalogValue Pages] $what \
       "the /Pages entry of the catalog"]
   set remaining [expr {$index + 1}]
   set total 0
   while {1} {
     set value [Value [$upd body $node]]
-    if {[lindex [::tclpdf::import::Get $value Type] 1] eq "Page"} {
+    if {[lindex [::tclpdf::importRead::Get $value Type] 1] eq "Page"} {
       return $node
     }
     if {!$total} {
       set total [lindex [Direct $upd \
-          [::tclpdf::import::Get $value Count]] 1]
+          [::tclpdf::importRead::Get $value Count]] 1]
     }
-    set kids [Direct $upd [::tclpdf::import::Get $value Kids]]
+    set kids [Direct $upd [::tclpdf::importRead::Get $value Kids]]
     set descended 0
     foreach kid [lindex $kids 1] {
       set number [Number $kid $what "a /Kids entry of the page tree"]
       set child [Value [$upd body $number]]
-      if {[lindex [::tclpdf::import::Get $child Type] 1] eq "Pages"} {
+      if {[lindex [::tclpdf::importRead::Get $child Type] 1] eq "Pages"} {
         set count [lindex [Direct $upd \
-            [::tclpdf::import::Get $child Count]] 1]
+            [::tclpdf::importRead::Get $child Count]] 1]
       } else {
         set count 1
       }
@@ -1173,7 +1173,7 @@ proc ::tclpdf::sign::PageNumber {upd catalogValue index what} {
 # all. Both spellings occur; tclpdf writes the direct one, and the file that
 # was measured for this used the other.
 proc ::tclpdf::sign::AcroForm {upd catalogValue} {
-  set entry [::tclpdf::import::Get $catalogValue AcroForm]
+  set entry [::tclpdf::importRead::Get $catalogValue AcroForm]
   if {$entry eq {}} {
     return [list [list d {}] {}]
   }
@@ -1189,11 +1189,11 @@ proc ::tclpdf::sign::AcroForm {upd catalogValue} {
 # a name has to be unique among its SIBLINGS.
 proc ::tclpdf::sign::FieldNames {upd catalogValue} {
   lassign [AcroForm $upd $catalogValue] form
-  set fields [Direct $upd [::tclpdf::import::Get $form Fields]]
+  set fields [Direct $upd [::tclpdf::importRead::Get $form Fields]]
   set names {}
   foreach entry [lindex $fields 1] {
     set value [Direct $upd $entry]
-    set name [::tclpdf::import::Get $value T]
+    set name [::tclpdf::importRead::Get $value T]
     if {[lindex $name 0] eq "s"} {
       lappend names [lindex $name 1]
     }
@@ -1215,7 +1215,7 @@ proc ::tclpdf::sign::FieldNames {upd catalogValue} {
 # else pointing at what it pointed at.
 proc ::tclpdf::sign::Enlist {upd catalog catalogValue widget} {
   lassign [AcroForm $upd $catalogValue] form number
-  set entry [::tclpdf::import::Get $form Fields]
+  set entry [::tclpdf::importRead::Get $form Fields]
   set fields [Direct $upd $entry]
   if {$fields eq {}} {
     set fields [list a {}]
@@ -1225,14 +1225,14 @@ proc ::tclpdf::sign::Enlist {upd catalog catalogValue widget} {
   if {[lindex $entry 0] eq "r"} {
     $upd replace [lindex [lindex $entry 1] 0] [Syntax [list a $items]]
   } else {
-    ::tclpdf::import::Put form Fields [list a $items]
+    ::tclpdf::importRead::Put form Fields [list a $items]
   }
-  ::tclpdf::import::Put form SigFlags [list n 3]
+  ::tclpdf::importRead::Put form SigFlags [list n 3]
   if {$number ne {}} {
     $upd replace $number [Syntax $form]
     return
   }
-  ::tclpdf::import::Put catalogValue AcroForm $form
+  ::tclpdf::importRead::Put catalogValue AcroForm $form
   $upd replace $catalog [Syntax $catalogValue]
   return
 }
@@ -1241,7 +1241,7 @@ proc ::tclpdf::sign::Enlist {upd catalog catalogValue widget} {
 # or, where the array is an object of its own, in the second copy of that.
 proc ::tclpdf::sign::Annotate {upd number widget} {
   set value [Value [$upd body $number]]
-  set entry [::tclpdf::import::Get $value Annots]
+  set entry [::tclpdf::importRead::Get $value Annots]
   set annots [Direct $upd $entry]
   if {$annots eq {}} {
     set annots [list a {}]
@@ -1252,7 +1252,7 @@ proc ::tclpdf::sign::Annotate {upd number widget} {
     $upd replace [lindex [lindex $entry 1] 0] [Syntax [list a $items]]
     return
   }
-  ::tclpdf::import::Put value Annots [list a $items]
+  ::tclpdf::importRead::Put value Annots [list a $items]
   $upd replace $number [Syntax $value]
   return
 }
@@ -1672,4 +1672,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.0
+package provide tclpdf::sign 1.1

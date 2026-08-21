@@ -546,4 +546,4 @@ proc ::tclpdf::imagePng::stencilStreams {parsed {invert 0}} {
       Filter /FlateDecode DecodeParms [decodeParms $parsed]]]
 }
 
-package provide tclpdf::imagePng 1.4
+package provide tclpdf::imagePng 1.5

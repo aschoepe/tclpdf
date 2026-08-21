@@ -349,6 +349,11 @@ oo::define ::tclpdf::document::document {
     if {![dict exists $fonts $alias]} {
       return -code error "tclpdf: no embedded font named \"$alias\""
     }
+    # A Type 3 font has no file to ask - its glyphs are content streams in
+    # this very document - so the module that made it answers instead.
+    if {[dict get $fonts $alias kind] eq "type3"} {
+      return [my Type3Info $alias]
+    }
     if {[dict get $fonts $alias kind] eq "type1"} {
       set metrics [dict get $fonts $alias metrics]
       # No fsType: a Type 1 program carries no embedding permission at all.
@@ -668,8 +673,15 @@ oo::define ::tclpdf::document::document {
   # CIDToGIDMap. Measured before this: two embeds, one FontDescriptor,
   # pdffonts listing one face. Anything injective would do; keeping the alias
   # readable in the file is worth the escape.
-  method FontResource {alias} {
-    set name FE$alias
+  #
+  # The PREFIX is a parameter because a second kind of font registers itself
+  # the same way: a Type 3 font (type3.tcl) has an entry in the same state
+  # dictionary and needs the same object reserved on first use, and only the
+  # name it goes into the resource dictionary under differs. Written twice
+  # the two would drift - one of them would learn something about a second
+  # write and the other would not.
+  method FontResource {alias {prefix FE}} {
+    set name $prefix$alias
     if {[my resource Font $name] eq {}} {
       set fonts [my state fonts]
       set entry [dict get $fonts $alias]
@@ -1191,7 +1203,13 @@ oo::define ::tclpdf::document::document {
 
   # The ToUnicode CMap (9.10.3). Without it the text is glyph numbers and
   # cannot be copied or searched - and no tool reports the omission.
-  method FontToUnicode {used} {
+  # BYTES is the width of a character code in the font this map belongs to:
+  # two for the Identity-H road below, one for a Type 3 font (type3.tcl),
+  # which is addressed by single bytes. It decides the codespace range and
+  # how wide the source of a bfchar is written - both have to match the font
+  # or the reader maps nothing at all, and no validator says a word about it.
+  method FontToUnicode {used {bytes 2}} {
+    set width [expr {2 * $bytes}]
     set lines {}
     foreach glyph [lsort -integer [dict keys $used]] {
       set cid $glyph
@@ -1210,13 +1228,14 @@ oo::define ::tclpdf::document::document {
           append target [format %04X $code]
         }
       }
-      lappend lines "<[format %04X $cid]> <$target>"
+      lappend lines "<[format %0*X $width $cid]> <$target>"
     }
     set map "/CIDInit /ProcSet findresource begin\n"
     append map "12 dict begin\nbegincmap\n"
     append map "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
     append map "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
-    append map "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+    append map "1 begincodespacerange\n<[string repeat 0 $width]>\
+        <[string repeat F $width]>\nendcodespacerange\n"
     # bfchar takes at most 100 entries per block (9.10.3).
     set total [llength $lines]
     for {set start 0} {$start < $total} {incr start 100} {
@@ -1274,6 +1293,15 @@ oo::define ::tclpdf::document::document {
     if {[regexp {/FontFile[23]?\s} $body]} {
       return 1
     }
+    # A Type 3 font never has one and never needs one: its glyphs ARE in the
+    # file, as the content streams of its CharProcs dictionary (ISO 32000-2,
+    # 9.6.4). Without this line every PDF/A and PDF/UA document with a drawn
+    # font was refused for a font program that cannot exist - measured, the
+    # message named the resource, because there is no /BaseFont to read
+    # either.
+    if {[string match {*/Subtype /Type3*} $body]} {
+      return 1
+    }
     foreach reference [regexp -all -inline {(\d+) 0 R} $body] {
       if {![string is integer -strict $reference]} {
         continue
@@ -1286,4 +1314,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.9
+package provide tclpdf::font 1.10

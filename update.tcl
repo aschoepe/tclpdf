@@ -189,7 +189,7 @@ package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::io 1.0-
-package require tclpdf::import 1.0-
+package require tclpdf::importRead 1.0-
 package require tclpdf::writer 1.0-
 package require tclpdf::crypto 1.0-
 
@@ -217,7 +217,7 @@ oo::class create ::tclpdf::update::Session {
     # The reader does the reading AND the refusing: a file without a
     # startxref, a circular /Prev chain and an encrypted file are all its
     # errors, and they are the same three an update has to make.
-    set tclpdfReader [::tclpdf::import::Open $path]
+    set tclpdfReader [::tclpdf::importRead::Open $path]
     set tclpdfPath $path
     set tclpdfBase [string length [dict get $tclpdfReader bytes]]
     set tclpdfPrev [dict get $tclpdfReader startxref]
@@ -227,7 +227,7 @@ oo::class create ::tclpdf::update::Session {
     set tclpdfId {}
 
     set trailer [dict get $tclpdfReader trailer]
-    if {[::tclpdf::import::Get $trailer Root] eq {}} {
+    if {[::tclpdf::importRead::Get $trailer Root] eq {}} {
       return -code error "tclpdf: $path has no /Root in its trailer - an\
           update carries the previous trailer forward, and there is no\
           document to carry"
@@ -239,7 +239,7 @@ oo::class create ::tclpdf::update::Session {
     # whose /Size is too small would otherwise have this update hand out a
     # number it already uses, and the two objects would be one.
     set tclpdfHigh 0
-    set size [::tclpdf::import::Get $trailer Size]
+    set size [::tclpdf::importRead::Get $trailer Size]
     if {[lindex $size 0] eq "n" && [string is entier -strict [lindex $size 1]]} {
       set tclpdfHigh [expr {[lindex $size 1] - 1}]
     }
@@ -373,7 +373,7 @@ oo::class create ::tclpdf::update::Session {
     if {![dict exists $tclpdfReader xref $number]} {
       return -code error "tclpdf: no such object: $number"
     }
-    lassign [::tclpdf::import::Object tclpdfReader $number] value hasStream data
+    lassign [::tclpdf::importRead::Object tclpdfReader $number] value hasStream data
     set body [my Text $value]
     if {$hasStream} {
       append body "\nstream\n$data\nendstream"
@@ -569,10 +569,10 @@ oo::class create ::tclpdf::update::Session {
   # file's own numbering, so every number stays the one it was.
   method Text {value} {
     set map {}
-    foreach number [::tclpdf::import::Refs $value] {
+    foreach number [::tclpdf::importRead::Refs $value] {
       dict set map $number $number
     }
-    return [::tclpdf::import::Serialize $value $map]
+    return [::tclpdf::importRead::Serialize $value $map]
   }
 
   # Whether that object may be given a second copy - the questions the head
@@ -594,8 +594,8 @@ oo::class create ::tclpdf::update::Session {
           update writes generation 0 - the two are different objects, not two\
           versions of one"
     }
-    set type [lindex [::tclpdf::import::Get \
-        [lindex [::tclpdf::import::Object tclpdfReader $number] 0] Type] 1]
+    set type [lindex [::tclpdf::importRead::Get \
+        [lindex [::tclpdf::importRead::Object tclpdfReader $number] 0] Type] 1]
     if {$type eq "ObjStm"} {
       return -code error "tclpdf: object $number of\
           \"[file tail $tclpdfPath]\" is an object stream - replacing it\

@@ -332,14 +332,16 @@ test color-separation-6.1 {an empty separation name is refused} -body {
   set result
 } -result {1 1 {} {}}
 
-test color-separation-6.2 {an alternate that is not a device space is refused before anything is recorded} -body {
+test color-separation-6.2 {an alternate that is not a device or CIE-based space is refused before anything is recorded} -body {
+  # A separation and a pattern are the special spaces 8.6.6.4 rules out; a
+  # Lab alternate is admitted and has tests of its own below (8.x).
   set doc [tclpdf new -compress 0]
   $doc page add
   set codes {}
   foreach alternate {{separation Bar {cmyk 0 0 0 1}} {pattern sky}} {
     lappend codes [catch {$doc rect -at {1 1} -size {2 2} \
         -fill [list separation Foo $alternate]} message]
-    lappend codes [string match {*alternate of separation "Foo" is a device colour*8.6.6.4*} $message]
+    lappend codes [string match {*alternate of separation "Foo" is a device or CIE-based colour*8.6.6.4*} $message]
   }
   set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
       [$doc state separations] [$doc resource ColorSpace]]
@@ -499,13 +501,7 @@ test color-icc-7.10 {veraPDF, where present: 3B passes with ICC colour under the
   set path [::tclpdfTest::scratch icc-verapdf.pdf]
   $doc write $path
   $doc destroy
-  set result ok
-  if {[auto_execok verapdf] ne {}} {
-    catch {exec verapdf -f 3b $path 2>@1} report
-    if {![regexp {failedChecks="0"} $report]} {
-      set result $report
-    }
-  }
+  set result [::tclpdfTest::verapdf $path 3b]
   file delete $path
   set result
 } -result ok
@@ -598,5 +594,373 @@ test color-separation-6.5 {a refused redefinition records nothing} -body {
   list $code [string match {*already defined*one name*} $message] \
       [dict exists $spaces DeviceCMYK] [dict exists $spaces DeviceRGB]
 } -result {1 1 0 1}
+
+# -- the Lab colour space (8.6.5.4) ------------------------------------------
+#
+# {lab L a b} paints in a CIE 1976 L*a*b* space, and the same colour may be
+# the alternate of a separation - which is how prepress specifies a spot
+# colour, and why this package can do without a licensed colour catalogue.
+# The space is device INDEPENDENT, so PDF/A admits it under every output
+# intent - measured with veraPDF 1.30.2, see 8.11 - and the pixels it
+# produces are measured with pdftoppm in 8.13, because a Lab colour that
+# comes out grey is a fault no validator reports.
+
+testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+
+# The colour of one pixel of a rendered page, as {r g b} 0..255. Rendered as
+# a PPM rather than a PNG: P6 is a header and the bytes, and reading it needs
+# nothing but [scan]. x and y are in the document unit of the page, from the
+# top left corner, and the resolution is the one pdftoppm was given.
+proc ::tclpdfTest::pixel {path x y {dpi 20}} {
+  set stem [::tclpdfTest::scratch [file rootname [file tail $path]]-ppm]
+  exec {*}[auto_execok pdftoppm] -r $dpi $path $stem
+  set ppm [glob $stem-*.ppm]
+  set bytes [::tclpdfTest::readBytes [lindex $ppm 0]]
+  file delete {*}$ppm
+  # P6, width, height, maximum - whitespace separated, then the raw triples.
+  regexp {^P6\s+(\d+)\s+(\d+)\s+(\d+)\s} $bytes header width height -
+  set offset [string length $header]
+  set column [expr {int($x * $dpi / 25.4)}]
+  set row [expr {int($y * $dpi / 25.4)}]
+  set start [expr {$offset + ($row * $width + $column) * 3}]
+  binary scan [string range $bytes $start [expr {$start + 2}]] cu3 rgb
+  return $rgb
+}
+
+# A one-page document in the given colours, written and read back. The Lab
+# counterpart of [separationDocument] above; it takes the whole list of
+# fills so that one page can carry several spaces.
+proc ::tclpdfTest::labDocument {name colours args} {
+  set doc [tclpdf new -unit mm {*}$args]
+  $doc page add
+  set x 10
+  foreach colour $colours {
+    $doc rect -at [list $x 10] -size {25 25} -fill $colour
+    incr x 30
+  }
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch $name.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  return [list $bytes $content $path]
+}
+
+test color-lab-8.1 {the components, the defaults, and the clamping the standard prescribes} -body {
+  # L* is 0..100 and a*/b* the space's own Range - "Component values falling
+  # outside the specified range shall be adjusted to the nearest valid value
+  # without error indication" (ISO 32000-2, 8.6.5.4 and Table 64). So they
+  # are clamped, not refused, and NOT clamped to 0..1 like a device
+  # component: an L* of 53.24 that came back as 1 would paint every Lab
+  # colour black.
+  list [::tclpdf::color parse {lab 53.24 80.09 67.2}] \
+      [::tclpdf::color parse {lab 150 -300 400}] \
+      [lindex [::tclpdf::color parse {lab 60 -140 130 -range {-128 127 -128 127}}] 1 0]
+} -result {{lab {{53.24 80.09 67.2} {0.9642 1.0 0.8249} {-100.0 100.0 -100.0 100.0}}}\
+ {lab {{100 -100.0 100.0} {0.9642 1.0 0.8249} {-100.0 100.0 -100.0 100.0}}}\
+ {60 -128.0 127.0}}
+
+test color-lab-8.2 {a negative a* is a component, not an option} -body {
+  # The components are the first THREE words and the options begin after
+  # them. Splitting at the first leading dash instead would read the a* of
+  # -40 as an option name and the colour as one component.
+  list [lindex [::tclpdf::color parse {lab 30 -40 -20}] 1 0] \
+      [::tclpdf::color operator [::tclpdf::color parse {lab 30 -40 -20}] fill]
+} -result {{30 -40 -20} {/Lab cs
+30 -40 -20 scn}}
+
+test color-lab-8.3 {fill and stroke, and the resource name the space gets} -body {
+  # The default space keeps the readable name; another one is named from its
+  # parameters, because [operator] has the colour and no document and still
+  # has to hit the entry [LabColourUsed] registered. Two colours in the same
+  # non-default space must get the SAME name.
+  set wide {-128 127 -128 127}
+  set one [::tclpdf::color operator [::tclpdf::color parse [list lab 50 20 -30 -range $wide]] fill]
+  set two [::tclpdf::color operator [::tclpdf::color parse [list lab 10 0 0 -range $wide]] stroke]
+  list [::tclpdf::color operator [::tclpdf::color parse {lab 50 20 -30}] fill] \
+      [::tclpdf::color operator [::tclpdf::color parse {lab 50 20 -30}] stroke] \
+      [regexp {^/Lab[0-9A-F]{8} cs} $one] \
+      [expr {[lindex [split $one] 0] eq [lindex [split $two] 0]}] \
+      [expr {[lindex [split $one] 0] ne "/Lab"}]
+} -result {{/Lab cs
+50 20 -30 scn} {/Lab CS
+50 20 -30 SCN} 1 1 1}
+
+test color-lab-8.4 {two spellings of one white point are one space} -body {
+  # {0.9642 1 0.8249} and the default {0.9642 1.0 0.8249} are the same
+  # numbers; kept as strings they would be two spaces with two resource
+  # entries and two objects for one colour.
+  list [::tclpdf::color operator [::tclpdf::color parse \
+          {lab 50 0 0 -whitePoint {0.9642 1 0.8249}}] fill] \
+      [::tclpdf::color operator [::tclpdf::color parse \
+          {lab 50 0 0 -range {-100 100 -100 100}}] fill]
+} -result {{/Lab cs
+50 0 0 scn} {/Lab cs
+50 0 0 scn}}
+
+test color-lab-8.5 {the white point is checked against Table 64, not corrected} -body {
+  # "The numbers XW and ZW shall be positive, and YW shall be 1.0"
+  # (ISO 32000-2, 8.6.5.4, Table 64). A wrong white point is not a stray
+  # value but a wrong space: every colour in it comes out shifted and
+  # nothing says so, which is why this one is refused where a component is
+  # clamped.
+  lmap spec {{lab 50 0 0 -whitePoint {0.9505 0.9 1.089}}
+      {lab 50 0 0 -whitePoint {0 1 1}}
+      {lab 50 0 0 -whitePoint {0.95 1 0}}
+      {lab 50 0 0 -whitePoint {0.95 1}}
+      {lab 50 0 0 -whitePoint {a b c}}
+      {lab 50 0 0 -range {-100 100 -100}}
+      {lab 50 0 0 -range {100 -100 -100 100}}
+      {lab 50 0 0 -whitePoint}} {
+    catch {::tclpdf::color parse $spec}
+  }
+} -result {1 1 1 1 1 1 1 1}
+
+test color-lab-8.6 {the refusals say which rule was broken} -body {
+  set messages {}
+  foreach spec {{lab 50 0 0 -whitePoint {0.9505 0.9 1.089}}
+      {lab 50 0 0 -whitePoint {0 1 1}}
+      {lab 50 0 0 -range {100 -100 -100 100}}
+      {lab 50 0} {lab 50 0 0 -gamma 2.2}} {
+    catch {::tclpdf::color parse $spec} message
+    lappend messages $message
+  }
+  lmap {message pattern} [list [lindex $messages 0] {*Yw of -whitePoint shall be 1.0*Table 64*} \
+      [lindex $messages 1] {*Xw and Zw of -whitePoint shall be positive*Table 64*} \
+      [lindex $messages 2] {*-range runs from the smaller value to the larger*} \
+      [lindex $messages 3] {*lab needs exactly 3 components*} \
+      [lindex $messages 4] {*unknown option "-gamma" for a Lab colour*}] {
+    string match $pattern $message
+  }
+} -result {1 1 1 1 1}
+
+test color-lab-8.7 {the colour space object, the resource entry, and one object for fill, stroke and text} -body {
+  # [/Lab << /WhitePoint [...] /Range [...] >>] (8.6.5.4). BlackPoint is
+  # left out: Table 64 makes it optional with the default [0 0 0], and there
+  # is nothing to put there that the caller has not measured.
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc rect -at {20 20} -size {40 20} -fill {lab 53.24 80.09 67.2} \
+      -stroke {lab 30 20 -40}
+  $doc font -family helvetica -size 10 -color {lab 50 0 0}
+  $doc text "spot" -at {20 60}
+  set content [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch lab-object.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {\[/Lab << /WhitePoint \[0.9642 1 0.8249\] /Range \[-100 100 -100 100\] >>\]} $bytes] \
+      [regexp {/ColorSpace << /Lab \d+ 0 R >>} $bytes] \
+      [regexp "/Lab cs\n53.24 80.09 67.2 scn" $content] \
+      [regexp "/Lab CS\n30 20 -40 SCN" $content] \
+      [regexp "/Lab cs\n50 0 0 scn" $content]
+} -result {1 1 1 1 1}
+
+test color-lab-8.8 {two different Lab spaces are two objects, one space is one} -body {
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc rect -at {20 20} -size {20 20} -fill {lab 50 20 -30}
+  $doc rect -at {50 20} -size {20 20} -fill {lab 60 10 -10}
+  $doc rect -at {80 20} -size {20 20} -fill {lab 50 20 -30 -range {-128 127 -128 127}}
+  set path [::tclpdfTest::scratch lab-two.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {\[/Lab <<} $bytes] \
+      [regexp -all {/Range \[-100 100 -100 100\]} $bytes] \
+      [regexp -all {/Range \[-128 127 -128 127\]} $bytes]
+} -result {2 1 1}
+
+test color-lab-8.9 {a separation with a Lab alternate: the array, C0, and the function's Range} -body {
+  # The three things a Lab alternate changes about the tint transform, and
+  # nothing else. Tint 0 is NO ink, and in Lab that is L* 100 - paper. With
+  # the {0 0 0} of a device space there it would be BLACK, and a 20 % tint
+  # of a spot colour would come out dark grey. /Range is written because Lab
+  # values leave 0..1: without it a reader may clip the function's output to
+  # the range it assumes and flatten the colour.
+  lassign [::tclpdfTest::labDocument lab-sep \
+      {{separation {PANTONE 485 C} {lab 48.3 68.5 47.3} 0.6}}] bytes content path
+  file delete $path
+  list [regexp {\[/Separation /PANTONE#20485#20C \d+ 0 R \d+ 0 R\]} $bytes] \
+      [regexp -all {/C0 \[100 0 0\] /C1 \[48.3 68.5 47.3\] /N 1 /Range \[0 100 -100 100 -100 100\]} $bytes] \
+      [regexp "/PANTONE#20485#20C cs\n0.6 scn" $content] \
+      [regexp -all {\[/Lab <<} $bytes]
+} -result {1 1 1 1}
+
+test color-lab-8.10 {a Lab colour and a separation over the same space share one object} -body {
+  # The alternate is an object, not a name, and the same space painted
+  # directly must not write a second one - the rule [IccProfileObject]
+  # follows for a profile.
+  lassign [::tclpdfTest::labDocument lab-shared \
+      {{lab 48.3 68.5 47.3} {separation Spot {lab 48.3 68.5 47.3} 1}}] bytes content path
+  file delete $path
+  # The device alternate for contrast: it stays a NAME, no object at all.
+  lassign [::tclpdfTest::labDocument lab-shared-device \
+      {{separation Spot {cmyk 0 1 1 0} 1}}] plain - plainPath
+  file delete $plainPath
+  list [regexp -all {\[/Lab <<} $bytes] [regexp {/ColorSpace << /Lab \d+ 0 R /Spot \d+ 0 R >>} $bytes] \
+      [regexp -all {\[/Lab <<} $plain] [regexp {/Separation /Spot /DeviceCMYK} $plain]
+} -result {1 1 0 1}
+
+test color-lab-8.11 {a gradient cannot take a Lab colour, and the refusal writes nothing} -body {
+  # A shading names its space by FAMILY in its dictionary; a Lab space is an
+  # array, so "/ColorSpace /Lab" would be a colour space that does not
+  # exist. Refused where the stops are collected, before any object.
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  set code [catch {$doc shading axial -at {20 20} -size {40 20} \
+      -colors {{lab 50 20 -30} white}} message]
+  set result [list $code [string match {*Lab colour cannot stand here*8.6.5.4*} $message] \
+      [::tclpdfTest::content $doc] [$doc colourSpacesUsed]]
+  $doc destroy
+  set result
+} -result {1 1 {} {}}
+
+test color-lab-8.12 {the names of the Lab spaces are reserved, both ways} -body {
+  # Separations, ICC aliases and Lab spaces share the ColorSpace resource
+  # dictionary. A separation called Lab would take the entry a Lab colour
+  # paints through - one of them would silently be the other's colour.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list [catch {$doc rect -at {1 1} -size {2 2} -fill {separation Lab {cmyk 0 0 0 1}}} m1] \
+      [catch {$doc rect -at {1 1} -size {2 2} -fill {separation Lab3D5BF5F7 {cmyk 0 0 0 1}}} m2] \
+      [catch {$doc icc embed Lab [file join [file dirname [file dirname [file normalize [info script]]]] icc sRGB.icc]} m3]]
+  # A name that only begins with those three letters is nobody's business.
+  lappend codes [catch {$doc rect -at {1 1} -size {2 2} -fill {separation Label {cmyk 0 0 0 1}}} m4]
+  set spaces [$doc colourSpacesUsed]
+  $doc destroy
+  list $codes [string match {*how this writer names a Lab colour space*} $m1] \
+      [string match {*how this writer names a Lab colour space*} $m2] \
+      [string match {*cannot be the alias of an ICC profile*} $m3] \
+      [dict exists $spaces DeviceCMYK]
+} -result {{1 1 1 0} 1 1 1 1}
+
+test color-lab-8.13 {Lab is PDF 1.1, said at the call, and a refused colour does not pin the floor} -body {
+  # "PDF 1.1 supports three CIE-based colour space families, named CalGray,
+  # CalRGB, and Lab" (ISO 32000-2, 8.6.5.1).
+  set doc [tclpdf new -version 1.0 -unit mm]
+  $doc page add
+  set code [catch {$doc rect -at {1 1} -size {2 2} -fill {lab 50 0 0}} message]
+  set spaces [$doc colourSpacesUsed]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set refused [catch {$doc rect -at {1 1} -size {2 2} -fill {lab 50 0 0 -whitePoint {1 2 3}}}]
+  set lowered [catch {$doc configure -version 1.0}]
+  $doc configure -version 1.7
+  $doc rect -at {1 1} -size {2 2} -fill {lab 50 0 0}
+  set pinned [catch {$doc configure -version 1.0} second]
+  $doc destroy
+  list $code [string match {*a Lab colour needs PDF 1.1*} $message] $spaces \
+      $refused $lowered $pinned [string match {*a Lab colour*needs PDF 1.1*} $second]
+} -result {1 1 {} 1 0 1 1}
+
+test color-lab-8.14 {under every output intent: Lab passes where DeviceRGB is refused} \
+    -constraints {haveCmykIcc haveTdom} -body {
+  # Lab is anchored to a white point rather than to a device, so ISO 19005-2
+  # 6.2.4.3 does not judge it - the same standing ICCBased has. Measured
+  # 2026-08-21 with veraPDF 1.30.2 under all three shipped profiles: the Lab
+  # page and the Lab separation alternate come out failedChecks="0" under
+  # the sRGB, the grey and the CMYK intent, while the same page as DeviceRGB
+  # under the CMYK intent fails 6.2.4.3-2 twice.
+  set fine {}
+  foreach profile [list $cmykIcc $srgbIcc] {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc pdfa -part 3 -profile $profile
+    $doc rect -at {20 20} -size {40 20} -fill {lab 53.24 80.09 67.2} \
+        -stroke {lab 30 20 -40}
+    $doc rect -at {20 50} -size {40 20} \
+        -fill {separation {PANTONE 485 C} {lab 48.3 68.5 47.3} 0.6}
+    lappend fine [::tclpdfTest::writes $doc lab-intent.pdf]
+    $doc destroy
+  }
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc rect -at {20 20} -size {40 20} -fill {rgb 0.9 0.1 0.1}
+  set code [catch {$doc write [::tclpdfTest::scratch lab-intent-rgb.pdf]} message]
+  $doc destroy
+  file delete [::tclpdfTest::scratch lab-intent-rgb.pdf]
+  list $fine $code [string match {*cannot carry DeviceRGB*} $message]
+} -result {{{0 1} {0 1}} 1 1}
+
+test color-lab-8.15 {veraPDF, where present: 3B passes with a Lab colour and a Lab alternate under the CMYK intent} \
+    -constraints {haveCmykIcc haveTdom} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc rect -at {20 20} -size {40 20} -fill {lab 53.24 80.09 67.2} \
+      -stroke {lab 30 20 -40}
+  $doc rect -at {20 50} -size {40 20} \
+      -fill {separation {PANTONE 485 C} {lab 48.3 68.5 47.3} 0.6}
+  set path [::tclpdfTest::scratch lab-verapdf.pdf]
+  $doc write $path
+  $doc destroy
+  set result [::tclpdfTest::verapdf $path 3b]
+  file delete $path
+  set result
+} -result ok
+
+test color-lab-8.16 {a second write is byte-identical} -body {
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc rect -at {20 20} -size {40 20} -fill {lab 53.24 80.09 67.2}
+  $doc rect -at {20 50} -size {40 20} -fill {separation Spot {lab 48.3 68.5 47.3} 0.6}
+  lassign [::tclpdfTest::writeTwice $doc lab-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] [regexp -all {\[/Lab <<} $first]
+} -result {1 1}
+
+test color-lab-8.17 {what actually comes out: the pixels of a Lab colour} \
+    -constraints havePdftoppm -body {
+  # The measurement no validator makes. A Lab colour that reached the page
+  # as grey or black - a component clamped to 0..1, a tint transform whose
+  # C0 is black, a colour space object nobody wrote - passes qpdf and
+  # veraPDF alike and is simply the wrong colour. Measured 2026-08-21 with
+  # pdftoppm at 20 dpi, poppler 25.x:
+  #
+  #   {lab 100 0 0}                  255 255 255   paper
+  #   {lab 50 0 0}                   119 119 119   middle grey
+  #   {lab 54.29 80.81 69.89}        255   0   0   sRGB red, the D50 value
+  #   the same as a separation, 1    219  33  40   the ink
+  #   the same as a separation, 0.5  250 157 141   half way to PAPER
+  #
+  # The last two are what C0 decides: with {0 0 0} there the half tint comes
+  # out dark instead of light.
+  lassign [::tclpdfTest::labDocument lab-pixels \
+      {{lab 100 0 0} {lab 50 0 0} {lab 54.29 80.81 69.89}
+       {separation Spot {lab 48.3 68.5 47.3} 1}
+       {separation Spot {lab 48.3 68.5 47.3} 0.5}}] bytes content path
+  set pixels {}
+  for {set n 0} {$n < 5} {incr n} {
+    lappend pixels [::tclpdfTest::pixel $path [expr {10 + $n * 30 + 12}] 22]
+  }
+  file delete $path
+  lassign $pixels white grey red full half
+  list $white $grey $red \
+      [expr {[lindex $full 0] > 150 && [lindex $full 1] < 100 && [lindex $full 2] < 100}] \
+      [expr {[lindex $half 0] > [lindex $full 0] && [lindex $half 1] > [lindex $full 1]}]
+} -result {{255 255 255} {119 119 119} {255 0 0} 1 1}
+
+test color-lab-8.18 {the standard's default Range clamps a saturated blue, and -range lets it through} \
+    -constraints havePdftoppm -body {
+  # Table 64 gives Range the default [-100 100 -100 100], and sRGB blue is
+  # b* -112.05 in this space - outside it. Clamped, it renders (71 0 234)
+  # instead of (0 0 255): b* alone is out of range, and b* alone is pulled
+  # back. The standard's default is kept anyway, because a caller who never
+  # wrote -range should get the range the standard promises, and the wider
+  # [-128 127 -128 127] of the example in 8.6.5.4 is one option away.
+  # Measured 2026-08-21 with pdftoppm.
+  lassign [::tclpdfTest::labDocument lab-clamped \
+      {{lab 29.57 68.30 -112.05}
+       {lab 29.57 68.30 -112.05 -range {-128 127 -128 127}}}] bytes content path
+  set clamped [::tclpdfTest::pixel $path 22 22]
+  set wide [::tclpdfTest::pixel $path 52 22]
+  file delete $path
+  list $clamped $wide
+} -result {{71 0 234} {0 0 255}}
 
 cleanupTests

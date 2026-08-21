@@ -30,7 +30,7 @@ namespace eval ::tclpdf::text {
   # Which options describe the font state rather than one call.
   variable stateOptions {family style size color spacing wordSpacing
       stretch leading rise kerning ligatures unshaped render stroke
-      strokeWidth}
+      strokeWidth fallback}
 
   # The text rendering mode (ISO 32000-2, 9.3.6, "Text rendering mode",
   # Table 104 - Table 106 in ISO 32000-1) by the word a caller writes for it.
@@ -78,6 +78,16 @@ namespace eval ::tclpdf::text {
   # current stroking colour shall be used" (9.3.6).
   variable renderStrokeModes {1 2}
 
+  # The three characters that never reach a face: a soft hyphen is an offer to
+  # break that the breaker has already taken or dropped, a zero width space is
+  # a break opportunity, and a byte order mark is what a file read without
+  # stripping it carries in front of its first word. All three are skipped by
+  # every encoder in the package - [afm encodeWidths], [FontRun], [Type3Encode]
+  # - and they are named here because the fallback chain has to know them
+  # BEFORE an encoder sees them: a character nothing draws must not decide
+  # which face a segment is set in.
+  variable neverDrawn "\u00AD \u200B \uFEFF"
+
   # Options that describe ONE LINE, with their defaults. They travel with the
   # text wherever it is measured, broken or drawn - so they are carried in the
   # same dictionary as the font state - but they never enter the STORED state:
@@ -114,6 +124,8 @@ oo::define ::tclpdf::document::document {
   #   -rise        baseline shift (Ts) in points, for super- and subscript
   #   -kerning     apply the pair kerning of an embedded font, 0 or 1
   #   -ligatures   apply the standard ligatures of an embedded font, 0 or 1
+  #   -fallback    the faces that may set what -family cannot, in order -
+  #                see "the fallback chain" below
   #   -render      how the glyphs are painted (9.3.6): fill, stroke,
   #                fillStroke or invisible
   #   -stroke      the outline colour of the stroking modes
@@ -142,6 +154,25 @@ oo::define ::tclpdf::document::document {
         embed {return [my FontEmbed {*}[lrange $args 1 end]]}
         names {return [my FontNames]}
         info {return [my FontInfo {*}[lrange $args 1 end]]}
+      }
+    }
+    # "font define" and "font glyph" make a Type 3 font, whose glyphs are
+    # content streams rather than a font program - a separate module again,
+    # and one a document that embeds files never loads.
+    #
+    # The frame the -script of a glyph has to run in is taken HERE and handed
+    # on, as [layer draw] takes it: it is the CALLER's, so that a document
+    # held in a local variable is visible inside the script. "uplevel #0"
+    # would see the global namespace only, and [form create] pays for that
+    # to this day.
+    if {[lindex $args 0] in {define glyph}} {
+      package require tclpdf::type3
+      switch -- [lindex $args 0] {
+        define {return [my Type3Define {*}[lrange $args 1 end]]}
+        glyph {
+          return [my Type3Glyph [expr {[info level] - 1}] \
+              {*}[lrange $args 1 end]]
+        }
       }
     }
     set defaults {}
@@ -434,6 +465,171 @@ oo::define ::tclpdf::document::document {
     return [dict exists [my state fonts] $name]
   }
 
+  # -- the fallback chain ---------------------------------------------------
+  #
+  # A line is ONE face, and a character that face has no glyph for is an error
+  # (font.tcl, FontRun). -fallback names the faces that may set what -family
+  # cannot, in order; the line then falls into SEGMENTS - one stretch of
+  # characters per face, each with its own Tf, its own glyph run, its own
+  # widths and its own ToUnicode map. What no face in the chain has is the
+  # error it always was.
+  #
+  # WHY AN OPTION OF ITS OWN, and not a list in -family. An alias may contain
+  # a space - [FontResource] escapes one into the resource name for exactly
+  # that reason - so "a b" is already a legal family name, and reading it as a
+  # chain would set the text in a face called "a" and say nothing. The two
+  # also have different lifetimes: the family changes with every heading, the
+  # chain is written once for the document. It is font state like the rest, so
+  # it reaches everything the state reaches through the same lineOptions list:
+  # a paragraph, a table cell, textPath, leader, pageNumbers.
+  #
+  # THE CHAIN IS CONSULTED ONLY WHERE THE FAMILY HAS NO GLYPH, and that is the
+  # whole of the rule. Text the family can set produces the bytes it produced
+  # before this option existed - same resource, same Tf, same show operator -
+  # whether or not a chain is in force. So a chain set once for the document
+  # cannot change a table, an SVG drawing or a page number that never needed
+  # it, and the option can only turn what was an error into text.
+  #
+  # PER CHARACTER, not per word and not per script: each character is set by
+  # the FIRST face in the chain that has it, and the decision does not depend
+  # on its neighbours. So the same character is always set from the same face,
+  # which is what makes a measurement repeatable. The consequence is worth
+  # naming: in "日本 語" the space comes from the family rather than from the
+  # Japanese face, because the family has one - so that line is three segments
+  # and not one. Letting a neutral character stick to the face beside it is
+  # what a shaper does; it would make the segments depend on what stands
+  # around them, and two calls measuring the same word inside two different
+  # sentences could then answer differently.
+  #
+  # KERNING AND LIGATURES END AT A SEGMENT BOUNDARY. A pair whose two glyphs
+  # come from two faces does not exist - there is no table to look it up in -
+  # and the measurement sees exactly that, because it walks the same segments:
+  # [TextPoints] sums one prepared run per segment and [TextShow] draws those
+  # same runs. That is the property the whole arrangement turns on. A width
+  # measured over the line but drawn over the segments would differ by every
+  # pair at a boundary, which is the defect [textPath] had twice.
+
+  # The faces of a line, the family first, resolved as [font -family] resolves
+  # them - so a chain may name a standard family, and -style applies to it
+  # exactly as it applies to the family.
+  method TextChain {state} {
+    set chain [list [dict get $state resolved]]
+    foreach name [dict get $state fallback] {
+      set face [my TextResolve $name [dict get $state style]]
+      # A face named twice would be asked twice and could never answer
+      # differently the second time.
+      if {$face ni $chain} {
+        lappend chain $face
+      }
+    }
+    return $chain
+  }
+
+  # Can this face set this character?
+  #
+  # Asked of the very code that would have to write it - [afm encode] for a
+  # standard face, [FontType1Encode] for an embedded Type 1 face,
+  # [Type3Encode] for a drawn font, the character map for a TrueType or
+  # OpenType face - rather than of a second opinion about what a face
+  # contains. A coverage test that answered differently from the encoder
+  # beside it would open a segment the encoder then refuses, or close one it
+  # would have set, and either way the message would name the wrong face.
+  #
+  # The three characters that never reach a face at all count as covered by
+  # every one of them: nothing is drawn for them, so no face can lack them.
+  method TextCovers {alias char} {
+    if {$char in $::tclpdf::text::neverDrawn} {
+      return 1
+    }
+    if {![my TextEmbedded $alias]} {
+      return [expr {![catch {::tclpdf::afm encode $alias $char}]}]
+    }
+    switch -- [my FontKind $alias] {
+      type3 {return [expr {![catch {my Type3Encode $alias $char}]}]}
+      type1 {return [expr {![catch {my FontType1Encode $alias $char}]}]}
+    }
+    return [dict exists [my state fonts] $alias parsed cmap [scan $char %c]]
+  }
+
+  # The line as {face text} pieces, in the order they are set.
+  #
+  # Without a chain there is one piece and no character is looked at here at
+  # all: the encoders do that work as they always have, and this call costs a
+  # list of two.
+  method TextSegments {state string} {
+    set chain [my TextChain $state]
+    if {[llength $chain] < 2} {
+      return [list [list [lindex $chain 0] $string]]
+    }
+    set segments {}
+    set face [lindex $chain 0]
+    set piece {}
+    set position 0
+    # Which face a character goes to, remembered for the length of this call.
+    # The answer depends on the character and on the chain and on nothing else
+    # - that is what "per character, not per context" above buys - so asking a
+    # face twice about the same letter can only get the same answer, and a
+    # paragraph of 3000 characters holds some thirty distinct ones.
+    #
+    # Measured, breaking such a paragraph to 150 mm with DejaVu Sans: 144 ms
+    # without a chain, 187 ms with one and no memo, 169 ms with it. The line
+    # breaker measures the same characters over and over, which is where both
+    # the cost and the saving are.
+    #
+    # Local to the call, not kept with the document: a measurement leaves
+    # nothing behind, not even a cache - and a face embedded between two calls
+    # is then seen by the second one.
+    set decided {}
+    foreach char [split $string {}] {
+      # A character nothing draws stays where it stands. Asking the chain
+      # about one would answer "the family has it" - every face has it - and a
+      # soft hyphen in the middle of a Japanese word would then close the
+      # segment around it, put a Tf and an empty show operator in the stream
+      # for a character that draws nothing, and open the same segment again.
+      if {$char in $::tclpdf::text::neverDrawn} {
+        append piece $char
+        incr position
+        continue
+      }
+      if {[dict exists $decided $char]} {
+        set found [dict get $decided $char]
+      } else {
+        set found {}
+        foreach candidate $chain {
+          if {[my TextCovers $candidate $char]} {
+            set found $candidate
+            break
+          }
+        }
+        dict set decided $char $found
+      }
+      if {$found eq {}} {
+        # The refusal the chain did not remove, in the shape every other
+        # missing glyph is refused in (manual, "Error codes"): the position is
+        # the 0-based index in the string as handed in, and the last element
+        # names the faces that were asked - all of them, because naming only
+        # the first would send the caller looking at a face whose gap the
+        # chain was written to close.
+        set u U+[format %04X [scan $char %c]]
+        return -code error \
+            -errorcode [list TCLPDF FONT GLYPH $u $position $chain] \
+            "tclpdf: none of the fonts [join $chain {, }] has a glyph for\
+            $u (position $position) - add a face that has it to -fallback"
+      }
+      if {$found ne $face} {
+        if {$piece ne {}} {
+          lappend segments [list $face $piece]
+          set piece {}
+        }
+        set face $found
+      }
+      append piece $char
+      incr position
+    }
+    lappend segments [list $face $piece]
+    return $segments
+  }
+
   # Bytes for the content stream: WinAnsi for a standard font, two-byte glyph
   # numbers for an embedded one.
   # Bytes for a standard face. An embedded one never comes through here:
@@ -478,7 +674,11 @@ oo::define ::tclpdf::document::document {
     }
     set font [dict get $state resolved]
     if {[my TextEmbedded $font]} {
-      set ascent [my FontAscender $font [dict get $state size]]
+      if {[my FontKind $font] eq "type3"} {
+        set ascent [my Type3Ascender $font [dict get $state size]]
+      } else {
+        set ascent [my FontAscender $font [dict get $state size]]
+      }
     } else {
       set ascent [expr {[dict get [::tclpdf::afm descriptor $font] Ascender]
           * [dict get $state size] / 1000.0}]
@@ -698,9 +898,20 @@ oo::define ::tclpdf::document::document {
   # archival document was never justified - and nothing reported it, because
   # the file is valid either way and the difference is a few millimetres at the
   # end of each line.
+  #
+  # An embedded TYPE 1 face and a TYPE 3 font are addressed by single bytes,
+  # so byte 32 does stand alone in their strings and Tw works for them exactly
+  # as it does for a standard face. They must therefore NOT take this road:
+  # [TextShow] writes a plain Tj for both, so the adjustments a TJ array would
+  # have carried are never written - and because this said yes, the Tw was
+  # suppressed as well. Measured on an embedded Type 1 face before 2026-08-21:
+  # "-wordSpacing 5" moved nothing at all, while [textWidth] counted it, so a
+  # justified paragraph in such a face came out short of the right margin with
+  # nothing in the stream to explain it.
   method TextTJ {font state} {
     return [expr {[dict get $state wordSpacing] != 0
-        && [dict get $state size] > 0 && [my TextEmbedded $font]}]
+        && [dict get $state size] > 0 && [my TextEmbedded $font]
+        && [my FontKind $font] ni {type1 type3}}]
   }
 
   # What has to be written after each character, in thousandths of the text
@@ -781,8 +992,32 @@ oo::define ::tclpdf::document::document {
   # do not change what the glyphs measure, and the caller that wants them adds
   # them - [textWidth] does, an SVG drawing does not, because SVG says nothing
   # about them.
+  #
+  # Over the SEGMENTS of the line, which is one when no -fallback chain is in
+  # force. Both numbers add up over them: a width is a sum, and the glyph
+  # count is what -spacing is charged per, which does not care which face drew
+  # the glyph. The kerning of each segment is looked up inside it, exactly as
+  # [TextShow] writes it - see "the fallback chain" above.
   method TextPoints {state string} {
-    set font [dict get $state resolved]
+    set segments [my TextSegments $state $string]
+    if {[llength $segments] == 1} {
+      return [my TextPointsOne [lindex $segments 0 0] $state \
+          [lindex $segments 0 1]]
+    }
+    set points 0
+    set count 0
+    foreach segment $segments {
+      lassign [my TextPointsOne [lindex $segment 0] $state \
+          [lindex $segment 1]] segmentPoints segmentCount
+      set points [expr {$points + $segmentPoints}]
+      incr count $segmentCount
+    }
+    return [list $points $count]
+  }
+
+  # The same for ONE face: the whole line where nothing falls back, one
+  # segment of it where something does.
+  method TextPointsOne {font state string} {
     if {![my TextEmbedded $font]} {
       # No kerning and no ligatures for the standard fourteen: the metrics this
       # package ships carry widths per byte value, not the AFM kerning pairs.
@@ -791,6 +1026,12 @@ oo::define ::tclpdf::document::document {
       # be the worse answer. One glyph per character, so the two counts agree.
       return [list [::tclpdf::afm stringWidth $font $string \
           [dict get $state size]] [string length $string]]
+    }
+    # A Type 3 font carries its widths in glyph space, and type3.tcl is the
+    # one place that turns them into points - the same call the drawing makes,
+    # so the two cannot answer differently.
+    if {[my FontKind $font] eq "type3"} {
+      return [my Type3Points $font $string [dict get $state size]]
     }
     # A Type 1 face is embedded but single-byte: its widths are in the AFM
     # beside it, one per code, and there is no glyph run to build. Kerning and
@@ -837,15 +1078,57 @@ oo::define ::tclpdf::document::document {
   # time, which would leave the file unreadable with no reader able to say
   # why. The rule is the object boundary - a string in an object dictionary
   # is encrypted on its own, a string in a stream travels with the stream.
+  #
+  # One "Tf" per SEGMENT where a -fallback chain reaches into the line, and
+  # nothing at all where it does not: a line the family can set writes the
+  # bytes it wrote before the option existed, because [TextRun] has already
+  # written the family's Tf and no segment asks for another.
+  #
+  # WHAT THIS METHOD LEAVES BEHIND is the face it was called with. A text
+  # object holds ONE Tf at a time and a line may show more than one piece
+  # inside it - a hyphenated line shows three - so a Tf left standing from the
+  # last segment would set the next piece in the wrong face.
   method TextShow {font state string byTJ} {
+    set segments [my TextSegments $state $string]
+    if {[llength $segments] == 1 && [lindex $segments 0 0] eq $font} {
+      return [my TextShowOne $font $state $string $byTJ]
+    }
+    set size [::tclpdf::pdfObj num [dict get $state size]]
+    set current $font
+    set result {}
+    foreach segment $segments {
+      lassign $segment face piece
+      if {$face ne $current} {
+        append result "[my TextResource $face] $size Tf\n"
+        set current $face
+      }
+      append result [my TextShowOne $face $state $piece $byTJ]
+    }
+    if {$current ne $font} {
+      append result "[my TextResource $font] $size Tf\n"
+    }
+    return $result
+  }
+
+  # The show operators for one face: the whole line where nothing falls back,
+  # one segment of it where something does.
+  method TextShowOne {font state string byTJ} {
     if {![my TextEmbedded $font]} {
       return "[::tclpdf::pdfObj bytesStr [my TextEncode $font $string]] Tj\n"
+    }
+    # A Type 3 font is addressed by single bytes through its /Differences
+    # encoding - one code per character, no glyph run, no kerning and no
+    # ligatures, because it has neither table.
+    if {[my FontKind $font] eq "type3"} {
+      # Inside the content stream - see the head of [TextShow].
+      return "[::tclpdf::pdfObj bytesStr [binary format cu* \
+          [my Type3Encode $font $string]]] Tj\n"
     }
     # An embedded Type 1 face goes out as single bytes, like a standard face,
     # and for the same reason: it is addressed through an encoding rather than
     # by glyph number. Word spacing reaches it through Tw as it does there.
     if {[my FontKind $font] eq "type1"} {
-      # Inside the content stream - see the head of this method.
+      # Inside the content stream - see the head of [TextShow].
       return "[::tclpdf::pdfObj bytesStr [binary format cu* \
           [my FontType1Encode $font $string]]] Tj\n"
     }
@@ -1078,6 +1361,9 @@ oo::define ::tclpdf::document::document {
   # from carrying 20 identical font objects.
   method TextResource {font} {
     if {[my TextEmbedded $font]} {
+      if {[my FontKind $font] eq "type3"} {
+        return [my Type3Resource $font]
+      }
       return [my FontResource $font]
     }
     set name F[string map {- {}} $font]
@@ -1163,6 +1449,28 @@ oo::define ::tclpdf::document::document {
           return -code error "tclpdf: -$name takes a boolean, not \"$value\""
         }
       }
+      fallback {
+        # Every face named has to exist HERE, where the chain is written, and
+        # not at the first character that needs it: a chain is written once
+        # and read at every gap, so a misspelt alias would be reported by
+        # whichever line first held a character the family lacks - or by no
+        # line at all, in a document that never falls back. Which is to say
+        # the faces have to be embedded before the chain names them.
+        if {[catch {llength $value}]} {
+          return -code error "tclpdf: -fallback takes a list of faces, not\
+              \"$value\""
+        }
+        foreach name $value {
+          if {[my TextEmbedded $name]} {
+            continue
+          }
+          if {[catch {::tclpdf::afm resolve $name} reason]} {
+            return -code error "tclpdf: -fallback names \"$name\", which is\
+                neither an embedded face nor a standard one - embed it with\
+                \[font embed\] first ($reason)"
+          }
+        }
+      }
       color - stroke {
         # The empty string leaves the colour of the stream in force - that is
         # what TextRun reads it as - so only a non-empty value has to parse.
@@ -1217,7 +1525,7 @@ oo::define ::tclpdf::document::document {
           family helvetica style {} size 12 color black spacing 0 \
           wordSpacing 0 stretch 100 leading {} rise 0 kerning 1 \
           ligatures 1 unshaped 0 render fill stroke {} strokeWidth {} \
-          resolved Helvetica]
+          fallback {} resolved Helvetica]
     }
     return
   }
@@ -1276,11 +1584,39 @@ oo::define ::tclpdf::document::document {
     # through the same encoding.
     if {[dict get $state direction] eq "rtl"} {
       set family [dict get $state family]
-      if {![my TextEmbedded $family] || [my FontKind $family] eq "type1"} {
+      if {![my TextEmbedded $family] || [my FontKind $family] in {type1 type3}} {
+        # Which encoding it is addressed through, named exactly: the standard
+        # fourteen and an embedded Type 1 face go through WinAnsiEncoding, a
+        # Type 3 font through the /Differences array it was drawn with, and a
+        # caller who has to fix the call is helped by the right one.
+        set through [expr {[my TextEmbedded $family]
+            && [my FontKind $family] eq "type3"
+            ? {its own /Differences encoding}
+            : {WinAnsiEncoding}}]
         return -code error "tclpdf: -direction rtl needs a TrueType or\
             OpenType face embedded with \[font embed\] - \"$family\" is\
-            addressed through WinAnsiEncoding, which has no right-to-left\
-            letters"
+            addressed through $through, which has no right-to-left letters"
+      }
+      # A chain and a right-to-left line do not go together, and this is the
+      # gate every measuring and drawing road passes, so it is said once here
+      # rather than at the character that would need the second face.
+      #
+      # The order the glyphs are DRAWN in is decided across the whole line -
+      # the reordering of [TextShow], the bidi segments that keep a number
+      # running the other way, the mirrored brackets that each need a span of
+      # their own - and a face change cuts the line into pieces that would
+      # each be turned round inside themselves. The line would come out with
+      # its pieces in the wrong places, which is a defect nobody who cannot
+      # read the script would ever see. Refused rather than ignored: a chain
+      # that quietly did nothing here is how a caller learns the wrong thing
+      # about their own document. The way out is one call per face, which is
+      # what the mixed-line refusal asks for anyway.
+      if {[dict get $state fallback] ne {}} {
+        return -code error "tclpdf: -fallback and -direction rtl do not go\
+            together - the drawing order of a right-to-left line is decided\
+            across the whole line, and a face change inside it would reorder\
+            only its own piece; set the pieces as separate calls, or give\
+            -fallback {} for this one"
       }
     }
     if {$changed} {
@@ -1294,4 +1630,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.13
+package provide tclpdf::text 1.14

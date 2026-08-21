@@ -359,10 +359,16 @@ oo::define ::tclpdf::document::document {
   # that paints; judged here. All offending spaces in one message, like the
   # fonts, and each with the calls that used it - a refusal that says "a
   # colour somewhere" sends the caller reading every line of the script.
-  # ICCBased stands in the same record and is deliberately not judged: it
-  # carries its own profile, so it fits under every intent - measured with
-  # veraPDF, an ICC sRGB fill under the CMYK intent passes 3B where the same
-  # colour as DeviceRGB fails 6.2.4.3.
+  # ICCBased and Lab stand in the same record and are deliberately not
+  # judged: neither is anchored to a device - the one carries its own
+  # profile, the other its white point - so both fit under every intent.
+  # Measured with veraPDF: an ICC sRGB fill under the CMYK intent passes 3B
+  # where the same colour as DeviceRGB fails 6.2.4.3, and on 2026-08-21 a
+  # Lab fill, a Lab stroke and a separation with a Lab alternate came out
+  # failedChecks="0" under all three shipped profiles - sRGB, grey and CMYK -
+  # while the same page as DeviceRGB under the CMYK intent fails 6.2.4.3-2.
+  # So the loop below stays a loop over the DEVICE spaces, and the record
+  # holds Lab as a fact rather than as a case to answer.
   #
   # The alternative would be to write /DefaultRGB and /DefaultCMYK colour
   # space resources, which the clause also admits. That would let a caller
@@ -534,4 +540,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.8
+package provide tclpdf::pdfa 1.9

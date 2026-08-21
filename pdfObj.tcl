@@ -243,4 +243,4 @@ proc ::tclpdf::pdfObj::Utf16Be {value} {
   return $result
 }
 
-package provide tclpdf::pdfObj 1.3
+package provide tclpdf::pdfObj 1.4

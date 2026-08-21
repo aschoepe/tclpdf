@@ -19,11 +19,42 @@
 # It is offered because 23.1 % of the measured corpus uses it, not because it
 # is the better choice for screen output.
 #
+# -- how a Lab colour is spelled, and why (8.6.5.4) -------------------------
+#
+# {lab 53.2 80.1 67.2} - three numbers, like {rgb ...} and {cmyk ...}, and
+# the two parameters of the SPACE as options behind them:
+#
+#     {lab L a b ?-whitePoint {Xw Yw Zw}? ?-range {amin amax bmin bmax}?}
+#
+# Three reasons for that shape rather than a registration call of its own:
+#
+#   - A Lab colour is a colour, not a resource. The alternative would have
+#     been [lab define alias ...] plus {lab alias L a b}, the road [icc
+#     embed] takes - but a profile is a FILE the caller has to hand over
+#     once, while a Lab space is two short arrays with defaults that cover
+#     nearly every use. A registration for something nobody has to configure
+#     is ceremony.
+#   - The values are what a caller has. A spot colour arrives as three
+#     numbers out of a colour book or a measurement, and the whole point of
+#     this posting is that a catalogue of such numbers is NOT shipped: the
+#     explicit way in has to be the short one.
+#   - The two options are only ever the space, never the colour, so no
+#     component can be mistaken for one - and a* is routinely negative,
+#     which is why the components are the first THREE words and the options
+#     start after them rather than at the first leading dash.
+#
+# The resource name of the space is derived from its parameters, not counted
+# up: [operator] gets nothing but the colour and has to name the same
+# resource that [LabColourUsed] registered. The default space is "Lab", any
+# other one "Lab" and eight hexadecimal digits over its parameters - which is
+# why neither a separation nor an ICC alias may take those names.
+#
 
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::io 1.0-
+package require tclpdf::option 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::color {
@@ -73,6 +104,36 @@ namespace eval ::tclpdf::color {
     turquoise 40e0d0 violet ee82ee wheat f5deb3 white ffffff
     whitesmoke f5f5f5 yellow ffff00 yellowgreen 9acd32
   }
+
+  # The two parameters of a Lab colour space, and the values a colour that
+  # names neither of them gets (8.6.5.4, Table 64 - the table is numbered 64
+  # in ISO 32000-2:2020, not 65).
+  #
+  # WhitePoint is REQUIRED by the table and constrained by it: "The numbers
+  # XW and ZW shall be positive, and YW shall be 1.0." There is no default in
+  # the standard, so this one is a decision, and it is D50 - the illuminant
+  # of the ICC profile connection space, and the one every printed colour is
+  # measured under (ISO 13655). Lab values for a spot colour come out of a
+  # colour book or off a spectrophotometer, and both are D50; a D65 white
+  # point would silently shift every one of them. The example in 8.6.5.4
+  # writes the D65 point [0.9505 1.00 1.0890] instead, which is the right
+  # default for a colour converted from sRGB - hence -whitePoint.
+  #
+  # Range is optional and its default is the standard's own: "Default value:
+  # [-100 100 -100 100]". The wider [-128 127 -128 127] of the example in
+  # 8.6.5.4 is the usual choice in prepress, and -range takes it; what is not
+  # done is quietly widening the default, because a value outside Range is
+  # clamped rather than refused ("Component values falling outside the
+  # specified range shall be adjusted to the nearest valid value without
+  # error indication") and a caller who never said -range should get the
+  # range the standard says they get.
+  #
+  # Both are written in the form [Double] produces, decimal point and all:
+  # the default space is recognised by comparing the two lists as strings
+  # (see [labResource]), and {-100 100 -100 100} typed as -range would
+  # otherwise be a second space with the same numbers in it.
+  variable labWhitePoint {0.9642 1.0 0.8249}
+  variable labRange {-100.0 100.0 -100.0 100.0}
 }
 
 # Resolve a colour specification into a canonical {space values} pair.
@@ -89,6 +150,7 @@ namespace eval ::tclpdf::color {
 #   {cmyk 0 1 1 0}
 #   {separation Name alternateSpace tint}
 #   {icc alias components...}
+#   {lab 53.2 80.1 67.2}  and the space's own -whitePoint / -range
 #
 # Components are 0..1, not 0..255. That is the PDF convention and mixing the
 # two is the classic source of a picture that comes out white.
@@ -136,18 +198,26 @@ proc ::tclpdf::color::parse {spec} {
         return -code error "tclpdf: a separation needs a name -\
             {separation Name alternate ?tint?}"
       }
-      # The alternate is a DEVICE space (8.6.6.4: "an alternate colour
-      # space ... any device or CIE-based colour space, but not another
-      # special colour space"): a separation, a pattern, an indexed space
+      # The alternate is a device or CIE-based space (8.6.6.4: "the alternate
+      # colour space, which may be any device or CIE-based colour space but
+      # may not be another special colour space (Pattern, Indexed,
+      # Separation, or DeviceN)"): a separation, a pattern, an indexed space
       # cannot stand in. Refused here, before anything is recorded - a
       # separation over a separation used to be recorded as a use of the
       # colour space "Separation" and die a line later, looking up its
       # "no ink" colour.
+      #
+      # Lab is admitted since 2026-08-21 and is the reason the whole space
+      # exists here: a spot colour is specified to the press as Lab, not as
+      # a CMYK approximation. ICCBased is not - it would be legal by 8.6.6.4,
+      # but the tint transform would then have to know the profile's
+      # component count and its "no ink", which is the profile's business
+      # and not this module's.
       set parsedAlternate [parse $alternate]
-      if {[lindex $parsedAlternate 0] ni {gray rgb cmyk}} {
+      if {[lindex $parsedAlternate 0] ni {gray rgb cmyk lab}} {
         return -code error "tclpdf: the alternate of separation\
-            \"$separationName\" is a device colour - grey, RGB or CMYK - not\
-            {$alternate} (ISO 32000-1, 8.6.6.4)"
+            \"$separationName\" is a device or CIE-based colour - grey, RGB,\
+            CMYK or Lab - not {$alternate} (ISO 32000-1, 8.6.6.4)"
       }
       if {$tint eq {}} {
         set tint 1
@@ -173,6 +243,13 @@ proc ::tclpdf::color::parse {spec} {
       }
       return [list icc [list $alias \
           [lmap value [lrange $spec 2 end] {Clamp $value}]]]
+    }
+    lab {
+      # {lab L a b ?-whitePoint {Xw Yw Zw}? ?-range {amin amax bmin bmax}?} -
+      # a colour in a CIE 1976 L*a*b* space (8.6.5.4). Why the components
+      # come first and the space follows as options is argued at the head of
+      # this file.
+      return [list lab [LabColour [lrange $spec 1 end]]]
     }
   }
 
@@ -219,17 +296,16 @@ proc ::tclpdf::color::operator {parsed {which fill}} {
       }
       return "$prefix\n[::tclpdf::pdfObj num $tint] $code"
     }
-    icc {
-      # Like a separation: the alias is the resource entry [ColourUsed]
-      # provides, followed by the components in the profile's space.
-      set alias [lindex $values 0]
-      set code scn
-      set prefix "[::tclpdf::pdfObj name $alias] cs"
-      if {$which eq "stroke"} {
-        set prefix "[::tclpdf::pdfObj name $alias] CS"
-        set code SCN
-      }
-      return "$prefix\n$numbers $code"
+    icc - lab {
+      # Like a separation: a resource entry [ColourUsed] provides, followed
+      # by the components in that space. The entry is named by the caller
+      # for a profile - the alias - and derived from the space's own
+      # parameters for Lab, because [operator] is handed the colour and
+      # nothing else and still has to hit the name that was registered.
+      set entry [expr {$space eq "icc" ? [lindex $values 0] : [labResource $values]}]
+      set marker [expr {$which eq "stroke" ? "CS" : "cs"}]
+      set code [expr {$which eq "stroke" ? "SCN" : "scn"}]
+      return "[::tclpdf::pdfObj name $entry] $marker\n$numbers $code"
     }
     default {
       return -code error "tclpdf: unknown colour space \"$space\""
@@ -294,17 +370,21 @@ oo::define ::tclpdf::document::document {
     if {[lindex $parsed 0] eq "icc"} {
       return [my IccColourUsed $parsed $what $spec]
     }
+    if {[lindex $parsed 0] eq "lab"} {
+      return [my LabColourUsed $parsed $what $spec]
+    }
     if {[lindex $parsed 0] ne "separation"} {
       my ColourSpaceUsed [::tclpdf::color space $parsed] $what
       return $spec
     }
     lassign [lindex $parsed 1] name alternate tint
-    # These four never refer to the ColorSpace resources (8.6.8, cs): a
+    # Some names never refer to the ColorSpace resources (8.6.8, cs): a
     # separation called Pattern would write "/Pattern cs" and mean the
-    # pattern space, silently.
-    if {$name in {DeviceGray DeviceRGB DeviceCMYK Pattern}} {
+    # pattern space, silently, and one called Lab would take the entry a Lab
+    # colour paints through.
+    if {[set why [::tclpdf::color::Reserved $name]] ne {}} {
       return -code error "tclpdf: \"$name\" cannot be the name of a\
-          separation - it names a colour space family (ISO 32000-1, 8.6.8)"
+          separation - $why"
     }
     # Separations and ICC profiles share the ColorSpace resource dictionary,
     # so one name cannot be both - the second definition would silently
@@ -333,21 +413,40 @@ oo::define ::tclpdf::document::document {
     # The alternate is what a reader without the plate paints, so it counts
     # as a use of that space (ISO 19005-2, 6.2.4.4) - and it is recorded
     # under the separation's name, because that is the colour the caller
-    # wrote and has to change.
-    my ColourSpaceUsed [::tclpdf::color space $alternate] \
-        "separation \"$name\" in $what"
+    # wrote and has to change. A Lab alternate is an ARRAY rather than a
+    # family name, so the record is named here; [space] refuses it on
+    # purpose, see there.
+    my ColourSpaceUsed [expr {$space eq "lab" ? "Lab" :
+        [::tclpdf::color space $alternate]}] "separation \"$name\" in $what"
     if {[dict exists $known $name]} {
       return $spec
     }
-    set none [dict get {gray 1 rgb {1 1 1} cmyk {0 0 0 0}} $space]
-    set function [[my writer] add [::tclpdf::pdfObj dictionary [list \
-        FunctionType 2 \
-        Domain [::tclpdf::pdfObj arr {0 1}] \
-        C0 [::tclpdf::pdfObj arr $none] \
-        C1 [::tclpdf::pdfObj arr [lmap value $components {::tclpdf::pdfObj num $value}]] \
-        N 1]]]
+    # The tint transform, and the alternate as it stands in the Separation
+    # array. A Lab alternate differs in three ways and in no other: tint 0 is
+    # L* 100 - paper, not ink, and not the {0 0 0} that would print a light
+    # tint of a spot colour black; the alternate is an object, shared with
+    # any Lab colour of the same space; and the function says its /Range,
+    # because Lab values leave 0..1 and a reader clipping to the function's
+    # implicit range would flatten the colour.
+    set pairs [list FunctionType 2 Domain [::tclpdf::pdfObj arr {0 1}]]
+    if {$space eq "lab"} {
+      lassign $components values whitePoint range
+      set none {100 0 0}
+      set alternateSpace [[my writer] ref [my LabSpaceObject $whitePoint $range]]
+      set tail [list N 1 Range [::tclpdf::pdfObj arr \
+          [lmap value [list 0 100 {*}$range] {::tclpdf::pdfObj num $value}]]]
+    } else {
+      set none [dict get {gray 1 rgb {1 1 1} cmyk {0 0 0 0}} $space]
+      set values $components
+      set alternateSpace /[::tclpdf::color space $alternate]
+      set tail {N 1}
+    }
+    lappend pairs C0 [::tclpdf::pdfObj arr $none] \
+        C1 [::tclpdf::pdfObj arr [lmap value $values {::tclpdf::pdfObj num $value}]] \
+        {*}$tail
+    set function [[my writer] add [::tclpdf::pdfObj dictionary $pairs]]
     set object [[my writer] add [::tclpdf::pdfObj arr [list /Separation \
-        [::tclpdf::pdfObj name $name] /[::tclpdf::color space $alternate] \
+        [::tclpdf::pdfObj name $name] $alternateSpace \
         [[my writer] ref $function]]]]
     # Under the separation's own name: that is what [operator] writes after
     # "cs", and the resource dictionary escapes it the same way.
@@ -394,12 +493,12 @@ oo::define ::tclpdf::document::document {
     if {$alias eq {}} {
       return -code error "tclpdf: icc embed needs an alias and a file name"
     }
-    # These four never refer to the ColorSpace resources (8.6.8, cs): an
-    # alias called Pattern would write "/Pattern cs" and mean the pattern
-    # space, silently - the same trap as a separation of that name.
-    if {$alias in {DeviceGray DeviceRGB DeviceCMYK Pattern}} {
+    # The same reserved names as a separation, for the same reason: an alias
+    # called Pattern would write "/Pattern cs" and mean the pattern space,
+    # silently, and one called Lab would collide with a Lab colour's entry.
+    if {[set why [::tclpdf::color::Reserved $alias]] ne {}} {
       return -code error "tclpdf: \"$alias\" cannot be the alias of an ICC\
-          profile - it names a colour space family (ISO 32000-1, 8.6.8)"
+          profile - $why"
     }
     set known [my state iccProfiles]
     if {[dict exists $known $alias]} {
@@ -485,8 +584,53 @@ oo::define ::tclpdf::document::document {
     return $number
   }
 
-  # Record one use of a colour space: DeviceGray, DeviceRGB, DeviceCMYK or
-  # ICCBased, by the call named in "what", on the current page. Called by
+  # -- Lab colour spaces (8.6.5.4) ----------------------------------------
+  #
+  # A Lab space is [/Lab << /WhitePoint [...] /Range [...] >>] and holds no
+  # data of its own, which is what makes it the space prepress asks for: a
+  # spot colour is handed to the press as three measured numbers, and a
+  # colour catalogue is deliberately not shipped here (the data is
+  # licensed), so the explicit road has to be open. Like ICCBased and unlike
+  # the device spaces it is anchored to a white point rather than to a
+  # device, so PDF/A admits it under every output intent - measured with
+  # veraPDF 1.30.2, see [PdfaCheckColour] in pdfa.tcl.
+
+  # The worker behind a {lab ...} colour in [ColourUsed]. Nothing here can be
+  # refused - [parse] has checked the white point, the range and the count -
+  # so the order is only version, record, objects.
+  method LabColourUsed {parsed what spec} {
+    lassign [lindex $parsed 1] - whitePoint range
+    # "PDF 1.1 supports three CIE-based colour space families, named
+    # CalGray, CalRGB, and Lab" (ISO 32000-2, 8.6.5.1).
+    my RequireVersion 1.1 "a Lab colour"
+    my ColourSpaceUsed Lab "lab in $what"
+    # Under the derived name: that is what [operator] writes before "cs", and
+    # the entry is set again on every colour of the space rather than guarded
+    # by a flag - it is the same object each time, and one lookup less to
+    # keep in step.
+    my resource ColorSpace [::tclpdf::color labResource [lindex $parsed 1]] \
+        [[my writer] ref [my LabSpaceObject $whitePoint $range]]
+    return $spec
+  }
+
+  # The colour space object of one Lab space, written ONCE per document
+  # however many roads it arrives by - a painted colour and any number of
+  # separations that take it as their alternate. Keyed by the parameters,
+  # which are what makes two Lab spaces the same space.
+  method LabSpaceObject {whitePoint range} {
+    set known [my state labSpaces]
+    set key [list $whitePoint $range]
+    if {[dict exists $known $key]} {
+      return [dict get $known $key]
+    }
+    set object [[my writer] add [::tclpdf::color labArray $whitePoint $range]]
+    dict set known $key $object
+    my state labSpaces $known
+    return $object
+  }
+
+  # Record one use of a colour space: DeviceGray, DeviceRGB, DeviceCMYK,
+  # ICCBased or Lab, by the call named in "what", on the current page. Called by
   # [ColourUsed] for every painted colour, by image.tcl for a picture's
   # colour space and by shading.tcl for a gradient's - each site names its
   # own space, so no module reads another's structures.
@@ -592,10 +736,142 @@ proc ::tclpdf::color::space {parsed} {
       # answer, and is told so instead of receiving "/ICCBased" and
       # writing it as if it were /DeviceRGB.
       return -code error "tclpdf: an ICC based colour cannot stand here -\
-          gradients and separation alternates take grey, RGB or CMYK"
+          a gradient names its space by family, and takes grey, RGB or CMYK"
+    }
+    lab {
+      # Same answer for the same reason: a Lab space is the array
+      # [/Lab << ... >>] (8.6.5.4), not a family name, so it cannot stand
+      # where a name is written. A separation alternate CAN be Lab - that
+      # road does not come through here but builds the array itself, see
+      # [ColourUsed].
+      return -code error "tclpdf: a Lab colour cannot stand here - a gradient\
+          names its space by family, and a Lab space is an array (ISO\
+          32000-2, 8.6.5.4); give the stops in grey, RGB or CMYK"
     }
   }
   return -code error "tclpdf: unknown colour space \"[lindex $parsed 0]\""
+}
+
+# The /ColorSpace resource entry a Lab colour paints through. Derived from
+# the space's PARAMETERS rather than counted up, because [operator] is given
+# a colour and no document and has to name the entry [LabColourUsed] made.
+# The default space keeps the readable name; any other gets the CRC of its
+# parameters, which is stable within a document and across two writes of it.
+proc ::tclpdf::color::labResource {values} {
+  variable labWhitePoint
+  variable labRange
+  lassign $values - whitePoint range
+  if {$whitePoint eq $labWhitePoint && $range eq $labRange} {
+    return Lab
+  }
+  return "Lab[format %08X [zlib crc32 [list $whitePoint $range]]]"
+}
+
+# The colour space object itself: [/Lab << /WhitePoint [...] /Range [...] >>]
+# (8.6.5.4). BlackPoint is not written - Table 64 makes it optional with the
+# default [0.0 0.0 0.0], and there is nothing this package could put there
+# that a caller has not measured.
+proc ::tclpdf::color::labArray {whitePoint range} {
+  return [::tclpdf::pdfObj arr [list /Lab [::tclpdf::pdfObj dictionary [list \
+      WhitePoint [::tclpdf::pdfObj arr [lmap value $whitePoint {::tclpdf::pdfObj num $value}]] \
+      Range [::tclpdf::pdfObj arr [lmap value $range {::tclpdf::pdfObj num $value}]]]]]]
+}
+
+# The three components of a Lab colour and the space they are in, out of what
+# the caller wrote after the keyword: {{L a b} {Xw Yw Zw} {amin amax bmin bmax}}.
+#
+# The components are the first three words and the options follow them,
+# because a* and b* are routinely NEGATIVE - splitting at the first leading
+# dash would read "-30" as an option and the colour as two components.
+proc ::tclpdf::color::LabColour {arguments} {
+  variable labWhitePoint
+  variable labRange
+  if {[llength $arguments] < 3} {
+    return -code error "tclpdf: lab needs exactly 3 components - L, a and b -\
+        got [llength $arguments]: \"$arguments\""
+  }
+  set options [::tclpdf::option parse [list whitePoint $labWhitePoint \
+      range $labRange] [lrange $arguments 3 end] "a Lab colour"]
+  set whitePoint [LabWhitePoint [dict get $options whitePoint]]
+  set range [LabRange [dict get $options range]]
+  return [list [LabComponents [lrange $arguments 0 2] $range] $whitePoint $range]
+}
+
+# The white point, checked against Table 64: "An array of three numbers
+# [XW YW ZW] ... The numbers XW and ZW shall be positive, and YW shall be
+# 1.0." Refused rather than corrected - unlike a component, which the same
+# subclause says to clamp silently, a wrong white point is not a stray value
+# but a wrong space, and every colour in it comes out shifted with nothing
+# to show for it.
+proc ::tclpdf::color::LabWhitePoint {value} {
+  if {[llength $value] != 3} {
+    return -code error "tclpdf: -whitePoint is three numbers {Xw Yw Zw}, got\
+        [llength $value]: \"$value\""
+  }
+  set value [lmap number $value {Double $number -whitePoint}]
+  lassign $value x y z
+  if {$x <= 0 || $z <= 0} {
+    return -code error "tclpdf: Xw and Zw of -whitePoint shall be positive\
+        (ISO 32000-2, 8.6.5.4, Table 64), got \"$value\""
+  }
+  if {$y != 1.0} {
+    return -code error "tclpdf: Yw of -whitePoint shall be 1.0 (ISO 32000-2,\
+        8.6.5.4, Table 64), got \"$y\""
+  }
+  return $value
+}
+
+# The range of a* and b*, [amin amax bmin bmax] by Table 64. An inverted pair
+# is refused: it is not a range the standard describes, and clamping against
+# it would put every colour on one edge without a word.
+proc ::tclpdf::color::LabRange {value} {
+  if {[llength $value] != 4} {
+    return -code error "tclpdf: -range is four numbers {amin amax bmin bmax},\
+        got [llength $value]: \"$value\""
+  }
+  set value [lmap number $value {Double $number -range}]
+  lassign $value aMin aMax bMin bMax
+  if {$aMin > $aMax || $bMin > $bMax} {
+    return -code error "tclpdf: -range runs from the smaller value to the\
+        larger, {amin amax bmin bmax}, got \"$value\""
+  }
+  return $value
+}
+
+# L* against 0..100 and a*, b* against the space's own range. Clamped, not
+# refused, and that is the standard's instruction rather than this package's
+# habit: "Component values falling outside the specified range shall be
+# adjusted to the nearest valid value without error indication" (8.6.5.4,
+# said twice - for L* in the prose and for a*/b* in Table 64).
+proc ::tclpdf::color::LabComponents {values range} {
+  lassign $range aMin aMax bMin bMax
+  lassign $values l a b
+  return [list [Pin $l 0 100] [Pin $a $aMin $aMax] [Pin $b $bMin $bMax]]
+}
+
+# A number and nothing else, kept as a double so that two spellings of one
+# white point - {0.9642 1 0.8249} and {0.9642 1.0 0.8249} - are one space and
+# get one resource entry rather than two.
+proc ::tclpdf::color::Double {value option} {
+  if {![string is double -strict $value]} {
+    return -code error "tclpdf: $option takes numbers, got \"$value\""
+  }
+  return [expr {double($value)}]
+}
+
+# Names that may not be given to a separation or to an ICC alias, and the
+# reason in the caller's words. Both live in the SAME /ColorSpace resource
+# dictionary as the spaces below, so a clash is not a duplicate name but a
+# silently different colour. One list, because it was two identical ones.
+proc ::tclpdf::color::Reserved {name} {
+  if {$name in {DeviceGray DeviceRGB DeviceCMYK Pattern}} {
+    return "it names a colour space family (ISO 32000-1, 8.6.8)"
+  }
+  if {[regexp {^Lab([0-9A-F]{8})?$} $name]} {
+    return "it is how this writer names a Lab colour space (ISO 32000-2,\
+        8.6.5.4)"
+  }
+  return {}
 }
 
 # The component values of a parsed colour, without the space.
@@ -605,6 +881,9 @@ proc ::tclpdf::color::Numbers {space values} {
   }
   if {$space eq "icc"} {
     return [lindex $values 1]
+  }
+  if {$space eq "lab"} {
+    return [lindex $values 0]
   }
   return $values
 }
@@ -666,16 +945,23 @@ proc ::tclpdf::color::Components {space values count} {
 # Components outside 0..1 are clamped rather than refused: a rounding error in
 # a calculated colour should not abort a document.
 proc ::tclpdf::color::Clamp {value} {
+  return [Pin $value 0 1]
+}
+
+# A component against the range its space gives it - 0..1 for the device
+# spaces, 0..100 and the space's own /Range for Lab. The value is returned as
+# it was written when it is inside, so that {rgb 0.2 ...} still says 0.2.
+proc ::tclpdf::color::Pin {value low high} {
   if {![string is double -strict $value]} {
     return -code error "tclpdf: colour component is not a number: \"$value\""
   }
-  if {$value < 0} {
-    return 0
+  if {$value < $low} {
+    return $low
   }
-  if {$value > 1} {
-    return 1
+  if {$value > $high} {
+    return $high
   }
   return $value
 }
 
-package provide tclpdf::color 1.4
+package provide tclpdf::color 1.5

@@ -317,4 +317,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xObject 1.3
+package provide tclpdf::xObject 1.4
