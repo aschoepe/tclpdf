@@ -20,6 +20,10 @@ package require tclpdf::image
 package require tclpdf::imageJpeg
 package require tclpdf::imagePng
 package require tclpdf::imagePngAlpha
+package require tclpdf::imageTiff
+# For the strips of the built TIFF fixtures below - a Deflate strip in a TIFF
+# is the same zlib stream a /FlateDecode is.
+package require tclpdf::filter
 source [file join [file dirname [info script]] helper.tcl]
 
 set assets [file join [file dirname [file dirname [file normalize [info script]]]] \
@@ -642,7 +646,7 @@ test image-data-7.6 {data that is not an image says so without a file name} -con
   } finally {
     $doc destroy
   }
-} -returnCodes error -match glob -result {*passed with -data*neither a JPEG nor a PNG*}
+} -returnCodes error -match glob -result {*passed with -data*neither a JPEG, a PNG nor a TIFF*}
 
 # --- decoration on purpose, or by default -------------------------------
 #
@@ -1835,5 +1839,767 @@ test image-mask-18.18 {the four options take booleans, and [image info] reports 
   list $answers [dict get $info stencil] [dict get $info mask] \
       [dict get $info interpolate]
 } -result {{1 1 1 1 1 1 1 1} 0 cover 1}
+
+# -- what a file says about its own resolution -------------------------------
+#
+# A picture placed without a size is drawn at its natural size, and the
+# natural size is pixels over resolution. Until 2026-08-21 the resolution was
+# always 72 dpi, whatever the file said: a 200 dpi scan 1728 pixels wide came
+# out 610 mm wide instead of 219 mm - wider than any sheet it could be printed
+# on. The tests below measure both halves of the fix: that the statement is
+# read, and that "no statement" stays distinguishable from "72 dpi".
+
+# A PNG with a pHYs chunk (PNG 11.3.5.3), spliced in after IHDR - eight bytes
+# of signature and twenty-five of header - which is where the format wants it,
+# before IDAT. "body" replaces the nine bytes for the damaged-chunk case.
+proc physPng {ppuX ppuY unit {body {}} {png {}}} {
+  if {$body eq {}} {
+    set body [binary format IIc $ppuX $ppuY $unit]
+  }
+  if {$png eq {}} {
+    set png [::tclpdfTest::png 2 1 8 2 "\x00\xff\x00\x00\x00\x00\xff"]
+  }
+  set chunk "[binary format I [string length $body]]pHYs$body"
+  append chunk [binary format I [zlib crc32 "pHYs$body"]]
+  return "[string range $png 0 32]$chunk[string range $png 33 end]"
+}
+
+# A JPEG made of nothing but the segments given and a minimal 16 x 16 SOF0 -
+# enough for [parse], which reads the frame header and stops at the scan.
+proc resolutionJpeg {segments} {
+  return "\xff\xd8[join $segments {}][binary format H* ffc0000b080010001001011100]"
+}
+
+# An APP0 JFIF segment (JFIF 1.02, Annex A): identifier, version, the density
+# unit - 0 none, 1 inch, 2 centimetre - the two densities and an empty
+# thumbnail.
+proc jfifSegment {xDensity yDensity units} {
+  set body "JFIF\x00[binary format ccc 1 2 $units][binary format SS $xDensity $yDensity]\x00\x00"
+  return "\xff\xe0[binary format S [expr {[string length $body] + 2}]]$body"
+}
+
+# An APP1 Exif segment: a TIFF header in the byte order asked for, one
+# directory of three tags - XResolution (282), YResolution (283) and
+# ResolutionUnit (296) - and the two rationals behind it. Every offset counts
+# from the header, which begins after "Exif\0\0": the directory at 8, its
+# three entries at 10, 22 and 34, the end marker at 46, the rationals at 50
+# and 58.
+proc exifSegment {order x y unit} {
+  set s [expr {$order eq "II" ? "s" : "S"}]
+  set l [expr {$order eq "II" ? "i" : "I"}]
+  set tiff "$order[binary format $s 42][binary format $l 8]"
+  append tiff [binary format $s 3]
+  append tiff [binary format $s$s$l$l 282 5 1 50]
+  append tiff [binary format $s$s$l$l 283 5 1 58]
+  append tiff [binary format $s$s$l$s$s 296 3 1 $unit 0]
+  append tiff [binary format $l 0]
+  append tiff [binary format $l$l [expr {round($x * 100)}] 100]
+  append tiff [binary format $l$l [expr {round($y * 100)}] 100]
+  set body "Exif\x00\x00$tiff"
+  return "\xff\xe1[binary format S [expr {[string length $body] + 2}]]$body"
+}
+
+test image-resolution-19.1 {a pHYs chunk in metres is read as dots per inch} -body {
+  # 7874 pixels per metre is what a 200 dpi writer puts in the chunk: an inch
+  # is 0.0254 m exactly, so 200 dpi is 7874.0157 ppm and the integer that
+  # fits is 7874 - which reads back as 199.9996 dpi, not as 200.
+  set doc [tclpdf new]
+  $doc image embed scan -data [physPng 7874 7874 1]
+  set info [$doc image info scan]
+  $doc destroy
+  list [dict get $info resolution] [format %.4f [dict get $info xResolution]] \
+      [format %.4f [dict get $info yResolution]] [dict get $info pixelAspect]
+} -result {pHYs 199.9996 199.9996 1.0}
+
+test image-resolution-19.2 {a PNG without pHYs says nothing, which is not 72} -body {
+  # The distinction the whole group is about. A file that carries no chunk
+  # makes no claim, and [image info] leaves the field empty rather than
+  # filling in the 72 that the sizing will assume.
+  set doc [tclpdf new]
+  $doc image embed plain -data [::tclpdfTest::png 2 1 8 2 \
+      "\x00\xff\x00\x00\x00\x00\xff"]
+  set info [$doc image info plain]
+  $doc destroy
+  list [dict get $info resolution] [dict get $info xResolution] \
+      [dict get $info yResolution] [dict get $info pixelAspect]
+} -result {none {} {} 1.0}
+
+test image-resolution-19.3 {pHYs unit 0 is a ratio between the axes and no measure} -body {
+  # Unit 0 (PNG 11.3.5.3) says the two numbers are a pixel aspect ratio.
+  # Reading them as a resolution would make this picture four times as wide
+  # as it is - so the numbers come back as an aspect and the resolution
+  # stays empty.
+  set doc [tclpdf new]
+  $doc image embed ratio -data [physPng 4 1 0]
+  set info [$doc image info ratio]
+  $doc destroy
+  list [dict get $info resolution] [dict get $info xResolution] \
+      [dict get $info pixelAspect]
+} -result {pHYs {} 0.25}
+
+test image-resolution-19.4 {a pHYs chunk of zero pixels per metre states nothing} -body {
+  # Measured on 2026-08-21: 12 of the 781 PNG files carrying a pHYs chunk
+  # under ~/src and ~/Downloads write unit 1 with zero pixels per metre.
+  # Taken at its word it would divide by zero; taken as what it is, it is a
+  # file that says nothing.
+  set doc [tclpdf new -unit pt]
+  $doc image embed zero -data [physPng 0 0 1]
+  set info [$doc image info zero]
+  set size [$doc image size zero]
+  $doc destroy
+  list [dict get $info resolution] [dict get $info xResolution] $size
+} -result {none {} {2.0 1.0}}
+
+test image-resolution-19.5 {a pHYs chunk that is not nine bytes is a damaged file} -body {
+  # The length is fixed at 4 + 4 + 1. None of the 781 real chunks measured
+  # disagrees, so a shorter one is damage rather than a dialect.
+  set code [catch {::tclpdf::imagePng parse [physPng 0 0 0 "\x00\x00\x1e\xc2"]} message]
+  list $code [string match {*damaged PNG*pHYs chunk is 4 bytes, expected 9*} $message]
+} -result {1 1}
+
+test image-resolution-19.6 {a JFIF density is read, in inches and in centimetres} -body {
+  # Units 1 is dots per inch as it stands; units 2 is per centimetre, and
+  # 118 of those are 299.72 dpi.
+  set doc [tclpdf new]
+  $doc image embed inch -data [resolutionJpeg [list [jfifSegment 300 300 1]]]
+  $doc image embed metric -data [resolutionJpeg [list [jfifSegment 118 118 2]]]
+  set result {}
+  foreach alias {inch metric} {
+    set info [$doc image info $alias]
+    lappend result [dict get $info resolution] \
+        [format %.2f [dict get $info xResolution]]
+  }
+  $doc destroy
+  set result
+} -result {JFIF 300.00 JFIF 299.72}
+
+test image-resolution-19.7 {JFIF units 0 is a ratio, and {1 1} is not one dot per inch} -body {
+  # The trap, and it is not hypothetical: both sample JPEGs in
+  # examples/assets/images carry units 0 with density 1 x 1, as 544 of the
+  # 4586 JFIF-bearing files under ~/src and ~/Downloads do. Read as a
+  # resolution, one dot per inch would place a 640-pixel picture sixteen
+  # metres wide.
+  set doc [tclpdf new -unit mm]
+  $doc image embed unitless -data [resolutionJpeg [list [jfifSegment 1 1 0]]]
+  set info [$doc image info unitless]
+  set size [$doc image size unitless]
+  $doc destroy
+  list [dict get $info resolution] [dict get $info xResolution] \
+      [dict get $info pixelAspect] [lmap value $size {format %.2f $value}]
+} -result {JFIF {} 1.0 {5.64 5.64}}
+
+test image-resolution-19.8 {Exif answers where JFIF is silent, in either byte order} -body {
+  # 2777 of the 7452 JPEG files measured on 2026-08-21 - 37 per cent - name
+  # a resolution ONLY in Exif, and 2236 of those name something other than
+  # 72 dpi. Unit 2 is the inch, unit 3 the centimetre, and a missing
+  # ResolutionUnit means the inch.
+  set doc [tclpdf new]
+  set result {}
+  foreach {alias order x unit} {little II 300 2 big MM 300 2 metric MM 118 3} {
+    $doc image embed $alias -data [resolutionJpeg \
+        [list [exifSegment $order $x $x $unit]]]
+    set info [$doc image info $alias]
+    lappend result [dict get $info resolution] \
+        [format %.2f [dict get $info xResolution]]
+  }
+  $doc destroy
+  set result
+} -result {Exif 300.00 Exif 300.00 Exif 299.72}
+
+test image-resolution-19.9 {where both speak, an absolute measure wins - and Exif wins over JFIF} -body {
+  # Measured on 2026-08-21: 77 of the 4586 files carrying both disagree, and
+  # ImageMagick's [identify] answers with the Exif figure in each one looked
+  # at - the recurring shape is an encoder's default 72 in APP0 beside the
+  # figure somebody meant in Exif. But a segment that gives only a ratio
+  # never displaces one that gives a measure, whichever way round they come.
+  set doc [tclpdf new]
+  $doc image embed both -data [resolutionJpeg \
+      [list [jfifSegment 72 72 1] [exifSegment II 300 300 2]]]
+  $doc image embed ratioExif -data [resolutionJpeg \
+      [list [jfifSegment 150 150 1] [exifSegment II 300 300 1]]]
+  $doc image embed ratioJfif -data [resolutionJpeg \
+      [list [jfifSegment 144 144 0] [exifSegment II 144 144 2]]]
+  set result {}
+  foreach alias {both ratioExif ratioJfif} {
+    set info [$doc image info $alias]
+    lappend result [dict get $info resolution] \
+        [format %.2f [dict get $info xResolution]]
+  }
+  $doc destroy
+  set result
+} -result {Exif 300.00 JFIF 150.00 Exif 144.00}
+
+test image-resolution-19.10 {a broken Exif block leaves the picture placeable} -body {
+  # Metadata beside a picture that embeds perfectly well. A file that is
+  # wrong about its own resolution must not become a file that cannot be
+  # used - so this one is read as a file that says nothing, and the JFIF
+  # density beside it still answers.
+  set doc [tclpdf new]
+  $doc image embed junk -data [resolutionJpeg [list "\xff\xe1\x00\x0aExif\x00\x00XY"]]
+  # A directory offset past the end of the segment: II, magic 42, and then
+  # 100 in a block eight bytes long.
+  $doc image embed cut -data [resolutionJpeg \
+      [list "\xff\xe1\x00\x10Exif\x00\x00II\x2a\x00\x64\x00\x00\x00"]]
+  $doc image embed beside -data [resolutionJpeg \
+      [list "\xff\xe1\x00\x0aExif\x00\x00XY" [jfifSegment 200 200 1]]]
+  set result {}
+  foreach alias {junk cut beside} {
+    set info [$doc image info $alias]
+    lappend result [dict get $info resolution] [dict get $info xResolution]
+  }
+  $doc destroy
+  set result
+} -result {none {} none {} JFIF 200.0}
+
+test image-resolution-19.11 {the natural size follows the file, and -dpi overrules it} -body {
+  # The measurement the whole thing exists for: a 200 dpi scan 1728 pixels
+  # wide is 219 mm wide, and was 610 mm - off any sheet - while every file
+  # was taken for 72 dpi. -dpi still overrules, and -dpi auto asks for the
+  # file's own figure back.
+  # One bit per pixel: 216 bytes and a filter byte to the row, and the whole
+  # 497 kB of it compresses to a few hundred bytes.
+  set rows [string repeat [string repeat \x00 217] 2292]
+  set scan [physPng 7874 7874 1 {} [::tclpdfTest::png 1728 2292 1 0 $rows]]
+  set doc [tclpdf new -unit mm]
+  $doc image embed scan -data $scan
+  set own [$doc image size scan]
+  set forced [$doc image size scan -dpi 72]
+  set asked [$doc image size scan -dpi auto]
+  $doc destroy
+  list [lmap value $own {format %.1f $value}] \
+      [lmap value $forced {format %.1f $value}] \
+      [lmap value $asked {format %.1f $value}]
+} -result {{219.5 291.1} {609.6 808.6} {219.5 291.1}}
+
+test image-resolution-19.12 {a placement without a size uses it too} -constraints haveImages -body {
+  # [image size] answering right while [place] draws something else is the
+  # failure this pins - the matrix is what reaches the page.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image embed dense -data [physPng 7874 7874 1]
+  $doc image place dense -at {10 10}
+  $doc image place dense -at {10 10} -dpi 72
+  set matrices [regexp -all -inline {([-0-9. ]+) cm} [::tclpdfTest::content $doc]]
+  $doc destroy
+  set result {}
+  foreach {- matrix} $matrices {
+    lappend result [lmap number [lrange $matrix 0 3] {format %.2f $number}]
+  }
+  set result
+} -result {{0.72 0.00 0.00 0.36} {2.00 0.00 0.00 1.00}}
+
+test image-resolution-19.13 {a pixel aspect ratio is used, and never makes a picture bigger} -body {
+  # With no measure to go on the assumption is still 72 dpi, and the ratio
+  # decides which axis it belongs to: the one with the LARGER pixels keeps
+  # the size it would have had, the other loses paper. A 2 x 1 picture whose
+  # pixels are four times as tall as they are wide is half a point wide and
+  # one point tall, never eight.
+  set doc [tclpdf new -unit pt]
+  $doc image embed narrow -data [physPng 4 1 0]
+  $doc image embed wide -data [physPng 1 4 0]
+  $doc image embed square -data [physPng 1 1 0]
+  set result {}
+  foreach alias {narrow wide square} {
+    lappend result [lmap value [$doc image size $alias] {format %.2f $value}]
+  }
+  $doc destroy
+  set result
+} -result {{0.50 1.00} {2.00 0.25} {2.00 1.00}}
+
+test image-resolution-19.14 {the sample files answer, and their sizes are what they were} -constraints haveImages -body {
+  # The pin against the change reaching documents that never asked for it.
+  # Of the files this package ships, one states a resolution (erika: Exif 72
+  # dpi), two state a bare ratio (the JPEGs: JFIF units 0, 1 x 1) and the
+  # PNGs state nothing at all - so every one of them is placed exactly where
+  # it was before the file's statement was ever read.
+  set doc [tclpdf new -unit mm]
+  $doc image embed photo $photo
+  $doc image embed rgba $rgba
+  $doc image embed erika [file join $assets erika-mustermann.jpg]
+  set result {}
+  foreach alias {photo rgba erika} {
+    set info [$doc image info $alias]
+    lappend result [dict get $info resolution] \
+        [lmap value [$doc image size $alias] {format %.2f $value}]
+  }
+  $doc destroy
+  set result
+} -result {JFIF {225.78 169.33} none {225.78 169.33} Exif {148.17 190.50}}
+
+
+# --- TIFF: one file, several images -------------------------------------------
+#
+# NO TIFF FILE IS SHIPPED WITH THE PACKAGE. The fixtures here are built out of
+# the same four procedures imageTiff.test and imageTiffStreams.test use, which
+# is both cheaper and sharper than a sample file: a picture with three strips,
+# a picture with three hundred, a picture whose resolution is a bare ratio -
+# no collection of files holds all of those, and each is a few dozen bytes.
+#
+# What imageTiff.tcl and imageTiffStreams.tcl answer is tested in their own
+# files. What is tested HERE is the half this module owns: which format the
+# bytes are, what the picture becomes in the document, and the one thing about
+# TIFF that reaches the API - that a striped picture is SEVERAL image XObjects
+# and is placed as a stack of them.
+
+# A greyscale TIFF of "rows" rows and four columns, deflated one strip at a
+# time - which is what makes it a stack: a zlib stream ends where the strip
+# ends, so the strips cannot be joined. Every sample of a row is the row's own
+# number, so a test can say which rows a part holds.
+proc tiffStack {rows perStrip args} {
+  set data {}
+  set offsets {}
+  set counts {}
+  set at 8
+  for {set row 0} {$row < $rows} {incr row $perStrip} {
+    set raw {}
+    for {set r $row} {$r < $row + $perStrip && $r < $rows} {incr r} {
+      append raw [binary format cccc $r $r $r $r]
+    }
+    set packed [::tclpdf::filter encodeFlate $raw]
+    lappend offsets $at
+    lappend counts [string length $packed]
+    incr at [string length $packed]
+    append data $packed
+  }
+  return [::tclpdfTest::tiffOne {259 3 8} [list 257 3 $rows] \
+      [list 278 3 $perStrip] [list 273 4 $offsets] [list 279 4 $counts] \
+      {*}$args -data $data]
+}
+
+# The matrices of the cm operators of a content stream, in the order they were
+# written - what a stack of parts comes out as.
+proc placements {text} {
+  set result {}
+  foreach line [split $text \n] {
+    if {[regexp {^([-0-9. ]+) cm$} [string trim $line] -> numbers]} {
+      lappend result $numbers
+    }
+  }
+  return $result
+}
+
+test image-tiff-20.1 {a TIFF is recognised by its bytes, in either order} -body {
+  # The name never decides: in a corpus of 197 files called .tif or .tiff one
+  # is a JPEG and two are mail text.
+  set doc [tclpdf new]
+  $doc image embed big -data [::tclpdfTest::tiffOne -order MM]
+  $doc image embed little -data [::tclpdfTest::tiffOne -order II]
+  set result [list [dict get [$doc image info big] type] \
+      [dict get [$doc image info little] type]]
+  $doc destroy
+  set result
+} -result {tiff tiff}
+
+test image-tiff-20.2 {something that is none of the three formats} -body {
+  set doc [tclpdf new]
+  set code [catch {$doc image embed junk -data "MM but not a TIFF at all"} message]
+  $doc destroy
+  list $code [string match {*neither a JPEG, a PNG nor a TIFF*} $message]
+} -result {1 1}
+
+test image-tiff-20.3 {-type tiff is taken as told} -body {
+  # The bytes decide by default; -type is for the caller who knows better,
+  # and it has to know "tiff" now.
+  set doc [tclpdf new]
+  $doc image embed named -data [::tclpdfTest::tiffOne] -type tiff
+  set result [dict get [$doc image info named] type]
+  $doc destroy
+  set result
+} -result tiff
+
+test image-tiff-20.3a {an unknown -type names the three that are known} -body {
+  set doc [tclpdf new]
+  set code [catch {$doc image embed wrong -data [::tclpdfTest::tiffOne] -type gif} message]
+  $doc destroy
+  list $code [string match {*auto, jpeg, png, tiff*} $message]
+} -result {1 1}
+
+test image-tiff-20.4 {what image info adds for a TIFF} -body {
+  # Two facts that are TIFF's alone and that decide how the picture reaches
+  # the file: the compression of its strips, and how many strips there are.
+  set doc [tclpdf new]
+  $doc image embed pic -data [tiffStack 12 4]
+  set info [$doc image info pic]
+  $doc destroy
+  list [dict get $info type] [dict get $info compression] \
+      [dict get $info strips] [dict get $info rowsPerStrip] \
+      [dict get $info space] [dict get $info components] \
+      [dict get $info bitDepth] [dict get $info alpha]
+} -result {tiff deflate 3 4 DeviceGray 1 8 0}
+
+test image-tiff-20.5 {the file's resolution is read, and the size follows it} -body {
+  # The fixture states 300 dpi in both directions, so four pixels are
+  # 4/300 inch = 0.3387 mm.
+  set doc [tclpdf new -unit mm]
+  $doc image embed pic -data [::tclpdfTest::tiffOne]
+  set info [$doc image info pic]
+  set size [lmap value [$doc image size pic] {format %.4f $value}]
+  $doc destroy
+  list [dict get $info resolution] [dict get $info xResolution] \
+      [dict get $info pixelAspect] $size
+} -result {XResolution 300.0 1.0 {0.3387 0.3387}}
+
+test image-tiff-20.6 {ResolutionUnit 3 counts per centimetre} -body {
+  # 100 pixels per centimetre are 254 dpi (TIFF 6.0, ResolutionUnit).
+  set doc [tclpdf new -unit mm]
+  $doc image embed pic -data [::tclpdfTest::tiffOne {296 3 3} \
+      {282 5 {100 1}} {283 5 {100 1}}]
+  set info [$doc image info pic]
+  $doc destroy
+  list [dict get $info xResolution] [dict get $info resolution]
+} -result {254.0 XResolution}
+
+test image-tiff-20.7 {ResolutionUnit 1 is a ratio and no measure} -body {
+  # Two numbers that say how the axes stand to each other and nothing about
+  # paper. The dpi fields stay EMPTY - empty is not 72, and a caller laying
+  # out around the picture has to be able to tell the two apart.
+  set doc [tclpdf new -unit mm]
+  $doc image embed pic -data [::tclpdfTest::tiffOne {296 3 1} \
+      {282 5 {2 1}} {283 5 {1 1}}]
+  set info [$doc image info pic]
+  $doc destroy
+  list [dict get $info xResolution] [dict get $info yResolution] \
+      [dict get $info resolution] [dict get $info pixelAspect]
+} -result {{} {} XResolution 0.5}
+
+test image-tiff-20.8 {a file that states nothing says so, and 72 is assumed} -body {
+  set doc [tclpdf new -unit mm]
+  $doc image embed pic -data [::tclpdfTest::tiffOne {282 5 {0 1}} {283 5 {0 1}}]
+  set info [$doc image info pic]
+  set size [lmap value [$doc image size pic] {format %.4f $value}]
+  $doc destroy
+  list [dict get $info xResolution] [dict get $info resolution] \
+      [dict get $info pixelAspect] $size
+} -result {{} none 1.0 {1.4111 1.4111}}
+
+test image-tiff-20.9 {a picture in one part is one XObject, placed like any other} -body {
+  # The common case: 80 of 194 measured files are single-stripped, and so is
+  # every uncompressed and PackBits file however many strips it has.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [::tclpdfTest::tiffOne]
+  $doc image place pic -at {20 20} -width 40
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength [placements $content]] [regexp -all {Do} $content]
+} -result {1 1}
+
+test image-tiff-20.10 {a stateful compression becomes one XObject per strip} -body {
+  # Deflate begins afresh in every strip - a zlib stream ends where the strip
+  # ends - so the strips cannot be concatenated and each becomes an image.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [tiffStack 12 4]
+  $doc image place pic -at {20 20} -size {40 30}
+  set path [::tclpdfTest::scratch tiff-stack.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # three images, three resources, three Do - and every part carries the rows
+  # it holds as its own /Height
+  list [regexp -all {/Subtype /Image} $bytes] \
+      [regexp -all {/Im\d+ \d+ 0 R} $bytes] [regexp -all { Do} $bytes] \
+      [regexp -all {/Height 4} $bytes] [regexp -all {/Width 4} $bytes]
+} -result {3 3 3 3 3}
+
+test image-tiff-20.11 {the parts stack downwards and meet exactly} -body {
+  # THE question of the stack: no gap between two parts and no row drawn
+  # twice. Each part is placed with the height its rows are worth, and the
+  # bottom of one is the top of the next - checked on the matrices as they
+  # were written, not on a rendering.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [tiffStack 12 4]
+  $doc image place pic -at {20 20} -size {40 30}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set report {}
+  set previous {}
+  foreach matrix [placements $content] {
+    lassign $matrix a b c d e f
+    if {$previous ne {}} {
+      # the top of this part against the bottom of the one above it
+      lappend report [format %.4f [expr {$f + $d - $previous}]]
+    }
+    set previous $f
+    lappend report [format %.4f $d]
+  }
+  set report
+} -result {28.3465 0.0000 28.3465 0.0000 28.3465}
+
+test image-tiff-20.12 {the stack covers the placed rectangle exactly} -body {
+  # The three parts together are the height that was asked for, and the
+  # lowest of them sits where a single image would have sat.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [tiffStack 12 4]
+  $doc image place pic -at {20 20} -size {40 30}
+  set stack [placements [::tclpdfTest::content $doc]]
+  $doc image embed one -data [::tclpdfTest::tiffOne]
+  $doc image place one -at {20 20} -size {40 30}
+  set both [placements [::tclpdfTest::content $doc]]
+  $doc destroy
+  set single [lindex $both end]
+  set top [lindex $stack 0]
+  set bottom [lindex $stack end]
+  list [format %.4f [expr {[lindex $top 5] + [lindex $top 3]
+          - ([lindex $single 5] + [lindex $single 3])}]] \
+      [format %.4f [expr {[lindex $bottom 5] - [lindex $single 5]}]] \
+      [format %.4f [expr {[lindex $top 0] - [lindex $single 0]}]]
+} -result {0.0000 0.0000 0.0000}
+
+test image-tiff-20.13 {every part gets its own q, because cm concatenates} -body {
+  # Without one the second part would be placed inside the first part's
+  # coordinates and the third inside the second's - each further down and
+  # each smaller than the one before.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [tiffStack 12 4]
+  $doc image place pic -at {20 20} -size {40 30}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # one q for the placement and one per part, and as many Q as q
+  list [regexp -all {(^|\n)q(\n|$)} $content] [regexp -all {(^|\n)Q(\n|$)} $content]
+} -result {4 4}
+
+test image-tiff-20.14 {a stateless compression is joined into one image} -body {
+  # Uncompressed strips carry no state, so however many there are they are
+  # one stream and one XObject - measured on a 15-strip file, exactly
+  # 320 x 240 x 3 bytes.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [::tclpdfTest::tiffOne {278 3 1} \
+      {273 4 {8 12 16 20}} {279 4 {4 4 4 4}}]
+  $doc image place pic -at {20 20} -width 40
+  set info [$doc image info pic]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [dict get $info strips] [llength [placements $content]]
+} -result {4 1}
+
+test image-tiff-20.15 {LZW never reaches the file - it arrives as Flate} -body {
+  # ISO 19005-3, 6.1.7.2 forbids /LZWDecode outright, and the picture's
+  # stream is built when it is first placed while [pdfa] may be declared
+  # afterwards - so a passed-through LZW stream could not be repaired later.
+  # The fixture is a literal-coded LZW stream of the bytes 0 to 15.
+  set packed [binary format H* 800000202018100a0603820120a058301a0e07c040]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [::tclpdfTest::tiffOne {259 3 5} \
+      [list 279 4 [string length $packed]] -data $packed]
+  $doc image place pic -at {20 20} -width 40
+  set path [::tclpdfTest::scratch tiff-lzw.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/LZWDecode} $bytes] [regexp -all {/FlateDecode} $bytes]
+} -result {0 1}
+
+test image-tiff-20.16 {over the strip limit the picture is refused, not stacked} -body {
+  # 13 of 194 measured files lie above the line and the largest has 1922
+  # strips. A page carrying that many /Do operators is not a picture any
+  # more, so it is refused by name - and nothing is written for it.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed pic -data [tiffStack 300 1]
+  set code [::tclpdfTest::refusal {$doc image place pic -at {20 20} -width 40}]
+  set message {}
+  catch {$doc image place pic -at {20 20} -width 40} message
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string match {*300 strips*} $message] \
+      [string match {*at most 256*} $message] [string match {*Do*} $content]
+} -result {{TCLPDF TIFF STRIPS} 1 1 0}
+
+test image-tiff-20.17 {a stack of images cannot be another picture's mask} -body {
+  # Mask and SMask name a single image XObject (Table 87, Table 143). The
+  # picture is greyscale and would be a lawful soft mask if it were one
+  # image, so the refusal has to come from the stack and nothing else.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed cover -data [tiffStack 12 4]
+  $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      -mask cover
+  set code [::tclpdfTest::refusal {$doc image place pic -at {20 20} -width 40}]
+  $doc destroy
+  set code
+} -result {TCLPDF TIFF STACKED}
+
+test image-tiff-20.18 {a stack already placed is refused as a mask too} -body {
+  # Regression, measured while this was being built: a striped TIFF placed on
+  # an earlier page has its objects already, so the call that builds them is
+  # never reached a second time - and the picture went into the file as the
+  # /SMask of its FIRST strip, four rows covering the whole picture, with
+  # nothing anywhere saying so.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed cover -data [tiffStack 12 4]
+  $doc image place cover -at {20 20} -width 40
+  $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      -mask cover
+  set code [::tclpdfTest::refusal {$doc image place pic -at {20 60} -width 40}]
+  $doc destroy
+  set code
+} -result {TCLPDF TIFF STACKED}
+
+test image-tiff-20.19 {a stack cannot wear a mask either} -body {
+  # The mask would be drawn over each part in turn rather than over the
+  # picture: every part is an image of its own on the unit square.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed cover -data [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  $doc image embed pic -data [tiffStack 12 4] -mask cover
+  set code [::tclpdfTest::refusal {$doc image place pic -at {20 20} -width 40}]
+  $doc destroy
+  set code
+} -result {TCLPDF TIFF STACKED}
+
+test image-tiff-20.20 {a TIFF in one part may be a soft mask} -body {
+  # The other side of the same rule: one image, DeviceGray, no profile and no
+  # transparency of its own - Table 143 asks for nothing else.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed cover -data [::tclpdfTest::tiffOne]
+  $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      -mask cover
+  $doc image place pic -at {20 20} -width 40
+  set path [::tclpdfTest::scratch tiff-mask.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/SMask \d+ 0 R} $bytes] [regexp -all {/Subtype /Image} $bytes]
+} -result {1 2}
+
+test image-tiff-20.21 {a stencil is a PNG, and the refusal says why not a TIFF} -body {
+  set doc [tclpdf new]
+  set code [catch {$doc image embed stamp -data [::tclpdfTest::tiffOne {258 3 1} \
+      {262 3 0} {279 4 4}] -stencil 1} message]
+  $doc destroy
+  list $code [string match {*ONE-BIT PNG*} $message] \
+      [string match {*stacked XObjects*} $message]
+} -result {1 1 1}
+
+test image-tiff-20.22 {WhiteIsZero reaches the file as a Decode array} -body {
+  # Photometric 0 says a zero sample is white; DeviceGray says it is black.
+  # Only /Decode reconciles the two.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [::tclpdfTest::tiffOne {262 3 0}]
+  $doc image place pic -at {20 20} -width 40
+  set path [::tclpdfTest::scratch tiff-decode.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp -all {/Decode \[1 0\]} $bytes
+} -result 1
+
+test image-tiff-20.23 {-invert turns that array round rather than adding a second} -body {
+  # A WhiteIsZero picture already reverses its samples, and reversing them
+  # twice is the picture as it was. So -invert settles the array once: a
+  # BlackIsZero picture gains one, a WhiteIsZero picture loses the one it
+  # had - and neither ends up with two /Decode entries in one dictionary.
+  set result {}
+  foreach {photometric} {1 0} {
+    set doc [tclpdf new -compress 0]
+    $doc page add
+    $doc image embed pic -data [::tclpdfTest::tiffOne [list 262 3 $photometric]] \
+        -invert 1
+    $doc image place pic -at {20 20} -width 40
+    set path [::tclpdfTest::scratch tiff-invert.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend result [regexp -all {/Decode \[1 0\]} $bytes]
+  }
+  set result
+} -result {1 0}
+
+test image-tiff-20.24 {a palette TIFF becomes an Indexed colour space} -body {
+  # TIFF writes the ramps 16 bits wide and one after the other, which is
+  # neither the order nor the width PDF reads; imageTiff hands them on as the
+  # 8-bit triples an /Indexed lookup string is made of.
+  set map {}
+  foreach shade {0 65535 0 65535} {lappend map $shade}
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [::tclpdfTest::tiffOne {258 3 1} {262 3 3} \
+      {279 4 4} [list 320 3 {0 65535 0 65535 0 0}]]
+  $doc image place pic -at {20 20} -width 40
+  set path [::tclpdfTest::scratch tiff-indexed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/ColorSpace \[/Indexed /DeviceRGB 1 } $bytes
+} -result 1
+
+test image-tiff-20.25 {sixteen bits per component pin the version floor} -body {
+  # Reference 1.7, Table 4.39: 16 bits per component is PDF 1.5, whatever
+  # format the samples came out of.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed pic -data [::tclpdfTest::tiffOne {258 3 16} {279 4 32}]
+  $doc image place pic -at {20 20} -width 40
+  set floor [catch {$doc configure -version 1.4} message]
+  $doc destroy
+  list $floor [string match {*16-bit TIFF picture*needs PDF 1.5*} $message]
+} -result {1 1}
+
+test image-tiff-20.26 {a rotated stack turns as one picture} -body {
+  # The parts are placed in the PICTURE's unit square and then handed to the
+  # matrix that put the picture on the page, so -rotate reaches all three
+  # without a second copy of the arithmetic anywhere.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [tiffStack 12 4]
+  $doc image place pic -at {20 20} -size {40 30} -rotate 90
+  set matrices [placements [::tclpdfTest::content $doc]]
+  $doc destroy
+  # every part is turned, and the three are still one behind the other along
+  # the turned axis: with a right angle the b and c terms carry the size
+  list [llength $matrices] \
+      [lmap matrix $matrices {format %.4f [lindex $matrix 0]}] \
+      [lmap matrix $matrices {format %.4f [lindex $matrix 3]}]
+} -result {3 {0.0000 0.0000 0.0000} {0.0000 0.0000 0.0000}}
+
+test image-tiff-20.27 {the same TIFF placed twice is stored once} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed pic -data [tiffStack 12 4]
+  $doc image place pic -at {20 20} -width 40
+  $doc page add
+  $doc image place pic -at {20 20} -width 40
+  set path [::tclpdfTest::scratch tiff-twice.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # three image objects and three resource names for six placements: the
+  # resources are the document's, so a picture placed on a second page needs
+  # neither a second object nor a second name
+  list [regexp -all {/Subtype /Image} $bytes] [regexp -all {/Im\d+ \d+ 0 R} $bytes] \
+      [regexp -all { Do} $bytes]
+} -result {3 3 6}
+
+test image-tiff-20.28 {the shipped example file is what the example says it is} \
+    -constraints haveImages -body {
+  set scan [file join $assets sample-scan.tiff]
+  if {![file exists $scan]} {
+    return "sample-scan.tiff is missing"
+  }
+  set doc [tclpdf new -unit mm]
+  $doc image embed scan $scan
+  set info [$doc image info scan]
+  set size [lmap value [$doc image size scan] {format %.2f $value}]
+  $doc destroy
+  list [dict get $info width] [dict get $info height] \
+      [dict get $info compression] [dict get $info strips] \
+      [dict get $info rowsPerStrip] [dict get $info xResolution] $size
+} -result {640 480 deflate 30 16 200.0 {81.28 60.96}}
 
 cleanupTests

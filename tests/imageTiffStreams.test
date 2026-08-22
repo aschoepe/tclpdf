@@ -1,0 +1,562 @@
+# imageTiffStreams.test --
+#
+# The strips of a TIFF as PDF image streams: which filter reads them, what it
+# has to be told, and the four places where the bytes are not the file's own.
+#
+# NO TIFF FILE IS SHIPPED WITH THE PACKAGE and none is read from the machine.
+# Every fixture is built here, out of the same builder imageTiff.test uses -
+# which is the point: a stream test wants a file with a Predictor and three
+# strips and a FillOrder of 2, and no collection of sample files holds all the
+# combinations while a fixture is a dozen bytes.
+#
+# What a fixture cannot show is whether the PICTURE is right, and that is the
+# question this module lives or dies by: neither qpdf nor veraPDF notices a
+# fax turned into its own negative. That was measured separately, against 87
+# real files rendered through poppler and compared against libtiff pixel by
+# pixel, and it is not something a test file can carry.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::imageTiff
+package require tclpdf::filter
+package require tclpdf::pdfObj
+# Until the package index lists this module, load it from the package
+# directory - the test has to run before the registration is made and after.
+if {[catch {package require tclpdf::imageTiffStreams 1.0}]} {
+  source [file join [file dirname [file dirname [file normalize [info script]]]] \
+      imageTiffStreams.tcl]
+}
+source [file join [file dirname [info script]] helper.tcl]
+
+# --- the fixture -----------------------------------------------------------
+#
+
+# The streams of a picture built with [::tclpdfTest::tiffOne]: everything up to the first
+# option replaces or adds an entry of [::tclpdfTest::tiffBase], and "-data" puts the picture
+# where [::tclpdfTest::tiffBase] points its first strip, at offset 8. A -data of its own
+# wins over the one [::tclpdfTest::tiffOne] passes, because [::tclpdfTest::tiffFile] reads its options
+# into an array and the last one written stands.
+proc streamsOf {args} {
+  set bytes [::tclpdfTest::tiffOne {*}$args]
+  return [::tclpdf::imageTiffStreams streams $bytes \
+      [::tclpdf::imageTiff parse $bytes]]
+}
+
+# One part of a result, or the only one.
+proc partOf {result {index 0}} {
+  return [lindex [dict get $result parts] $index]
+}
+
+# The bytes of one part, with the Flate taken off again where there is any -
+# so that a test compares samples with samples.
+proc samplesOf {result {index 0}} {
+  set data [dict get [partOf $result $index] data]
+  if {[dict get $result filter] eq "FlateDecode"} {
+    return [::tclpdf::filter decodeFlate $data]
+  }
+  return $data
+}
+
+# A valid LZW stream that needs no encoder: clear, every byte as a code of
+# its own, end of data. The decoder builds table entries that are never used,
+# which is legal and is what an encoder that never finds a match produces.
+# Good for up to about 250 bytes - beyond that the code width would change.
+proc lzwLiteral {data} {
+  set bits [format %09b 256]
+  binary scan $data cu* values
+  foreach value $values {
+    append bits [format %09b $value]
+  }
+  append bits [format %09b 257]
+  while {[string length $bits] % 8} {
+    append bits 0
+  }
+  return [binary format B* $bits]
+}
+
+# The bits of every byte turned round, worked out here the slow and obvious
+# way so that the fast way in the module is checked against something else.
+proc reversedBytes {data} {
+  set out {}
+  binary scan $data cu* values
+  foreach value $values {
+    set reversed 0
+    for {set bit 0} {$bit < 8} {incr bit} {
+      if {$value & (1 << $bit)} {
+        set reversed [expr {$reversed | (1 << (7 - $bit))}]
+      }
+    }
+    append out [binary format c $reversed]
+  }
+  return $out
+}
+
+# Sixteen bytes of samples - a 4 x 4 greyscale picture at eight bits.
+set ::samples [binary format c* {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16}]
+
+# --- uncompressed ----------------------------------------------------------
+
+test imageTiffStreams-1.1 {an uncompressed picture becomes one Flate stream} -body {
+    # The strips carry no state, so they are joined; the bytes are deflated
+    # rather than written out raw, which for 71 of 194 measured files is the
+    # difference between a stream of 230 400 bytes and one of 7 500.
+    set result [streamsOf -data $::samples]
+    list [dict get $result filter] [dict get $result passThrough] \
+        [dict get $result stacked] [llength [dict get $result parts]] \
+        [samplesOf $result]
+} -result [list FlateDecode 0 0 1 $::samples]
+
+test imageTiffStreams-1.2 {the part says which rows it holds} -body {
+    set part [partOf [streamsOf -data $::samples]]
+    list [dict get $part row] [dict get $part rows]
+} -result {0 4}
+
+test imageTiffStreams-1.3 {the filter is named in the part's own entries} -body {
+    dict get [partOf [streamsOf -data $::samples]] pairs
+} -result {Filter /FlateDecode}
+
+test imageTiffStreams-1.4 {several strips are joined into one picture} -body {
+    # Uncompressed is stateless, so this is the case where concatenating is
+    # right - measured on a 15-strip file, 320 x 240 x 3 = 230 400 bytes.
+    samplesOf [streamsOf {273 4 {8 12 16 20}} {279 4 {4 4 4 4}} {278 3 1} \
+        -data $::samples]
+} -result $::samples
+
+test imageTiffStreams-1.5 {a file too short for its own size is refused} -body {
+    ::tclpdfTest::refusal {streamsOf {279 4 12} -data $::samples}
+} -result {TCLPDF TIFF DAMAGED}
+
+test imageTiffStreams-1.6 {a strip padded past the last row is cut off} -body {
+    # A writer may pad its last strip to a full RowsPerStrip. The surplus is
+    # dropped rather than left to shift the picture.
+    string length [samplesOf [streamsOf {279 4 24} \
+        -data [binary format c* {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 0 0 0 0 0 0 0 0}]]]
+} -result 16
+
+test imageTiffStreams-1.7 {WhiteIsZero samples are inverted by a Decode array} -body {
+    # The description says so and this module writes it out; the same fact
+    # travels as BlackIs1 on a CCITT stream, and writing both would invert
+    # the picture twice.
+    dict get [dict get [partOf [streamsOf {262 3 0} -data $::samples]] pairs] Decode
+} -result {[1 0]}
+
+test imageTiffStreams-1.8 {a BlackIsZero picture gets no Decode array} -body {
+    dict exists [dict get [partOf [streamsOf -data $::samples]] pairs] Decode
+} -result 0
+
+# --- FillOrder -------------------------------------------------------------
+
+test imageTiffStreams-2.1 {FillOrder 2 turns the bits in every byte round} -body {
+    # PDF has no parameter for this. Measured on a fax: passed through as it
+    # stands, poppler stops with "CCITTFax row is wrong length (1729)"; after
+    # the reversal the same stream decodes without a word.
+    samplesOf [streamsOf {266 3 2} -data $::samples]
+} -result [reversedBytes $::samples]
+
+test imageTiffStreams-2.2 {FillOrder 1 is left alone} -body {
+    # The counter-check that matters: 193 of 194 measured files say 1, and
+    # reversing those would produce the same kind of unreadable stream.
+    samplesOf [streamsOf {266 3 1} -data $::samples]
+} -result $::samples
+
+test imageTiffStreams-2.3 {a CCITT strip is turned round in place} -body {
+    set result [streamsOf {259 3 4} {258 3 1} {266 3 2} {279 4 8} \
+        -data [string range $::samples 0 7]]
+    list [dict get $result filter] [dict get $result passThrough] \
+        [dict get [partOf $result] data]
+} -result [list CCITTFaxDecode 0 [reversedBytes [string range $::samples 0 7]]]
+
+test imageTiffStreams-2.4 {FillOrder 2 under a compression is refused by name} -body {
+    # The reversal would have to happen to the CODED bytes, before the
+    # decompression - a different thing for every compression, and not one of
+    # the 194 measured files asks for it.
+    ::tclpdfTest::refusal {streamsOf {259 3 5} {266 3 2} \
+        -data [lzwLiteral $::samples]}
+} -result {TCLPDF TIFF FILLORDER}
+
+# --- 16-bit samples --------------------------------------------------------
+
+test imageTiffStreams-3.1 {16-bit samples from a little-endian file are swapped} -body {
+    # PDF reads a 16-bit sample high byte first (8.9.5.2); a TIFF says in its
+    # header which order it uses, and 5 of 194 measured files are 16-bit and
+    # little-endian.
+    set data [binary format su* {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16}]
+    binary scan [samplesOf [streamsOf {258 3 16} {279 4 32} -data $data \
+        -order II]] Su* values
+    set values
+} -result {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16}
+
+test imageTiffStreams-3.2 {a big-endian file is already in PDF's order} -body {
+    set data [binary format Su* {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16}]
+    samplesOf [streamsOf {258 3 16} {279 4 32} -data $data]
+} -result [binary format Su* {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16}]
+
+test imageTiffStreams-3.3 {16-bit PackBits in a little-endian file is refused} -body {
+    # The samples would have to be turned round, which means unpacking them,
+    # which would be a decoder written for a case no measured file is.
+    ::tclpdfTest::refusal {streamsOf {258 3 16} {259 3 32773} {279 4 32} \
+        -data [string repeat \x00 32] -order II}
+} -result {TCLPDF TIFF BYTEORDER}
+
+# --- PackBits --------------------------------------------------------------
+
+# Four rows of four bytes, each row a literal run: the control byte says "four
+# bytes follow" and the row follows. What every PackBits writer does with data
+# that does not repeat.
+proc packBitsRows {data {between {}}} {
+    set out {}
+    foreach {a b c d} [split $data {}] {
+        append out \x03$a$b$c$d$between
+    }
+    return $out
+}
+
+test imageTiffStreams-4.1 {PackBits is PDF's RunLengthDecode} -body {
+    # The same run coding under two names (TIFF 6.0 section 9 against ISO
+    # 32000-2, 7.4.5), so the strips go in as they stand - with the EOD that
+    # TIFF does not write and PDF wants.
+    set packed [packBitsRows $::samples]
+    set result [streamsOf {259 3 32773} [list 279 4 [string length $packed]] \
+        -data $packed]
+    list [dict get $result filter] [dict get $result passThrough] \
+        [expr {[dict get [partOf $result] data] eq "$packed\x80"}]
+} -result {RunLengthDecode 1 1}
+
+test imageTiffStreams-4.2 {the stream a reader gets back is the picture} -body {
+    # The fixture is only a fixture if it decodes to what went in.
+    set packed [packBitsRows $::samples]
+    set data [dict get [partOf [streamsOf {259 3 32773} \
+        [list 279 4 [string length $packed]] -data $packed]] data]
+    set out {}
+    set at 0
+    while {$at < [string length $data]} {
+        binary scan [string index $data $at] cu control
+        if {$control == 128} break
+        append out [string range $data [expr {$at + 1}] [expr {$at + $control + 1}]]
+        incr at [expr {$control + 2}]
+    }
+    set out
+} -result $::samples
+
+test imageTiffStreams-4.3 {a no-op byte is dropped, because PDF reads it as EOD} -body {
+    # TIFF calls 128 a no-op and skips it; PDF calls it end of data and stops
+    # there. One in the middle of a strip would lose the rest of the picture.
+    set packed [packBitsRows $::samples \x80]
+    set data [dict get [partOf [streamsOf {259 3 32773} \
+        [list 279 4 [string length $packed]] -data $packed]] data]
+    list [string length $packed] [string length $data] \
+        [expr {$data eq "[packBitsRows $::samples]\x80"}]
+} -result {24 21 1}
+
+test imageTiffStreams-4.4 {a run reaching past the end of its strip is refused} -body {
+    ::tclpdfTest::refusal {streamsOf {259 3 32773} {279 4 3} -data \x03ab}
+} -result {TCLPDF TIFF DAMAGED}
+
+test imageTiffStreams-4.5 {a repeat run with nothing to repeat is refused} -body {
+    ::tclpdfTest::refusal {streamsOf {259 3 32773} {279 4 1} -data \xfe}
+} -result {TCLPDF TIFF DAMAGED}
+
+test imageTiffStreams-4.6 {a repeat run passes through} -body {
+    set packed \xfd\x41\x03abcd
+    set result [streamsOf {259 3 32773} [list 279 4 [string length $packed]] \
+        -data $packed]
+    dict get [partOf $result] data
+} -result "\xfd\x41\x03abcd\x80"
+
+test imageTiffStreams-4.7 {PackBits strips are joined - the coding carries no state} -body {
+    set packed [packBitsRows $::samples]
+    set half [expr {[string length $packed] / 2}]
+    set result [streamsOf {259 3 32773} [list 273 4 [list 8 [expr {8 + $half}]]] \
+        [list 279 4 [list $half $half]] {278 3 2} -data $packed]
+    list [llength [dict get $result parts]] \
+        [expr {[dict get [partOf $result] data] eq "$packed\x80"}]
+} -result {1 1}
+
+# --- LZW -------------------------------------------------------------------
+
+test imageTiffStreams-5.1 {the LZW fixture is a stream a decoder accepts} -body {
+    ::tclpdf::filter decodeLzw [lzwLiteral $::samples]
+} -result $::samples
+
+test imageTiffStreams-5.2 {LZW is unpacked and written out again as Flate} -body {
+    # PDF/A forbids /LZWDecode outright (ISO 19005-3, 6.1.7.2), the stream is
+    # built when the picture is placed and [pdfa] may be declared afterwards,
+    # and the Flate that replaces it measured smaller than the LZW it
+    # replaced - 0.924 of it over four real files.
+    set packed [lzwLiteral $::samples]
+    set result [streamsOf {259 3 5} [list 279 4 [string length $packed]] \
+        -data $packed]
+    list [dict get $result filter] [dict get $result passThrough] \
+        [llength [dict get $result parts]] [samplesOf $result]
+} -result [list FlateDecode 0 1 $::samples]
+
+test imageTiffStreams-5.3 {unpacking makes a stateful picture one image again} -body {
+    # Every stateful compression restarts in every strip - measured on a
+    # 50-strip file, the concatenated stream decodes exactly to line 50. Once
+    # the strips are unpacked that is over, and they become one stream.
+    set first [lzwLiteral [string range $::samples 0 7]]
+    set second [lzwLiteral [string range $::samples 8 15]]
+    set result [streamsOf {259 3 5} \
+        [list 273 4 [list 8 [expr {8 + [string length $first]}]]] \
+        [list 279 4 [list [string length $first] [string length $second]]] \
+        {278 3 2} -data $first$second]
+    list [llength [dict get $result parts]] [dict get $result stacked] \
+        [samplesOf $result]
+} -result [list 1 0 $::samples]
+
+test imageTiffStreams-5.4 {the predictor travels with the stream} -body {
+    # /Predictor 2 IS TIFF Predictor 2 in PDF (ISO 32000-2, Table 10 - the
+    # PNG family is 10 to 15), so the differenced bytes are re-compressed as
+    # they are and the reader undoes the differencing. Measured through
+    # poppler: pixel for pixel what libtiff makes of the same file.
+    set packed [lzwLiteral $::samples]
+    set result [streamsOf {259 3 5} {317 3 2} [list 279 4 [string length $packed]] \
+        -data $packed]
+    dict get [dict get [partOf $result] pairs] DecodeParms
+} -result {<< /Predictor 2 /Colors 1 /BitsPerComponent 8 /Columns 4 >>}
+
+test imageTiffStreams-5.5 {a picture without a predictor gets no DecodeParms} -body {
+    set packed [lzwLiteral $::samples]
+    dict exists [dict get [partOf [streamsOf {259 3 5} \
+        [list 279 4 [string length $packed]] -data $packed]] pairs] DecodeParms
+} -result 0
+
+test imageTiffStreams-5.6 {at 16 bits little-endian the predictor is undone here} -body {
+    # The differencing is per component and in the file's byte order; once
+    # the samples are swapped for PDF that order is gone, so this is the one
+    # case where the predictor cannot travel with the stream.
+    set values {1000 1050 1100 1150 2000 2050 2100 2150}
+    set differenced {}
+    foreach {a b c d} $values {
+        lappend differenced $a [expr {$b - $a}] [expr {$c - $b}] [expr {$d - $c}]
+    }
+    set packed [lzwLiteral [binary format su* $differenced]]
+    set result [streamsOf {258 3 16} {259 3 5} {317 3 2} {257 3 2} {278 3 2} \
+        [list 279 4 [string length $packed]] -data $packed -order II]
+    binary scan [samplesOf $result] Su* out
+    list [dict exists [dict get [partOf $result] pairs] DecodeParms] $out
+} -result [list 0 {1000 1050 1100 1150 2000 2050 2100 2150}]
+
+# --- Deflate ---------------------------------------------------------------
+
+test imageTiffStreams-6.1 {Deflate strips go into the PDF as they stand} -body {
+    # A TIFF Deflate strip is a zlib stream and so is a /FlateDecode stream -
+    # nothing to do but say so.
+    set packed [::tclpdf::filter encodeFlate $::samples]
+    set result [streamsOf {259 3 8} [list 279 4 [string length $packed]] \
+        -data $packed]
+    list [dict get $result filter] [dict get $result passThrough] \
+        [expr {[dict get [partOf $result] data] eq $packed}]
+} -result {FlateDecode 1 1}
+
+test imageTiffStreams-6.2 {every strip becomes an image of its own} -body {
+    # The zlib stream ends where the strip ends and the next one begins a new
+    # one, so these must not be concatenated. The rows say where each part
+    # belongs on the page.
+    set first [::tclpdf::filter encodeFlate [string range $::samples 0 7]]
+    set second [::tclpdf::filter encodeFlate [string range $::samples 8 15]]
+    set result [streamsOf {259 3 8} \
+        [list 273 4 [list 8 [expr {8 + [string length $first]}]]] \
+        [list 279 4 [list [string length $first] [string length $second]]] \
+        {278 3 2} -data $first$second]
+    list [dict get $result stacked] [llength [dict get $result parts]] \
+        [dict get [partOf $result 0] row] [dict get [partOf $result 0] rows] \
+        [dict get [partOf $result 1] row] [dict get [partOf $result 1] rows] \
+        [::tclpdf::filter decodeFlate [dict get [partOf $result 1] data]]
+} -result [list 1 2 0 2 2 2 [string range $::samples 8 15]]
+
+test imageTiffStreams-6.3 {a short last strip says how short it is} -body {
+    # Three rows at two rows per strip: the second part holds one row, and a
+    # caller that stacks the parts has to know it.
+    set first [::tclpdf::filter encodeFlate [string range $::samples 0 7]]
+    set second [::tclpdf::filter encodeFlate [string range $::samples 8 11]]
+    set result [streamsOf {257 3 3} {259 3 8} \
+        [list 273 4 [list 8 [expr {8 + [string length $first]}]]] \
+        [list 279 4 [list [string length $first] [string length $second]]] \
+        {278 3 2} -data $first$second]
+    list [dict get [partOf $result 1] row] [dict get [partOf $result 1] rows]
+} -result {2 1}
+
+test imageTiffStreams-6.4 {a Deflate predictor is handed to the reader} -body {
+    set packed [::tclpdf::filter encodeFlate $::samples]
+    set result [streamsOf {259 3 8} {317 3 2} [list 279 4 [string length $packed]] \
+        {262 3 2} {258 3 {8 8 8}} {277 3 3} -data $packed]
+    dict get [dict get [partOf $result] pairs] DecodeParms
+} -result {<< /Predictor 2 /Colors 3 /BitsPerComponent 8 /Columns 4 >>}
+
+test imageTiffStreams-6.5 {16 bits little-endian are taken apart and put back} -body {
+    # zlib in both directions is cheap, so the one thing PDF cannot express -
+    # the byte order of a 16-bit sample - is dealt with in the bytes.
+    set data [binary format su* {1 2 3 4 5 6 7 8}]
+    set packed [::tclpdf::filter encodeFlate $data]
+    set result [streamsOf {258 3 16} {259 3 8} {257 3 2} {278 3 2} \
+        [list 279 4 [string length $packed]] -data $packed -order II]
+    binary scan [samplesOf $result] Su* values
+    list [dict get $result passThrough] [llength [dict get $result parts]] $values
+} -result {0 1 {1 2 3 4 5 6 7 8}}
+
+# --- JPEG ------------------------------------------------------------------
+
+# A strip and the shared tables of a TIFF 6.0 Technote 2 JPEG. Neither is a
+# file a decoder would accept: the strip has no tables, the tables have no
+# picture.
+set ::jpegTables "\xff\xd8TABLES\xff\xd9"
+set ::jpegStrip "\xff\xd8STRIP"
+# The APP14 Adobe segment this module writes in front of both: marker, length,
+# "Adobe", version 100, three flag words, and the transform.
+set ::adobe [binary format H* ffee000e41646f626500640000000000]
+
+test imageTiffStreams-7.1 {a strip, its tables and the Adobe marker become one JPEG} -body {
+    # Measured: fifteen separate streams, one per strip, each with its own SOI
+    # and SOF0, plus one JPEGTables block they all share. Put together without
+    # the APP14 segment the picture comes out green and magenta, because the
+    # components of a TIFF strip are numbered 0, 1, 2 where a JFIF file writes
+    # 1, 2, 3 and no decoder can then tell RGB from YCbCr.
+    set result [streamsOf {259 3 7} {262 3 2} {258 3 {8 8 8}} {277 3 3} \
+        [list 279 4 [string length $::jpegStrip]] [list 347 7 $::jpegTables] \
+        -data $::jpegStrip]
+    list [dict get $result filter] [dict get $result passThrough] \
+        [dict get [partOf $result] data]
+} -result [list DCTDecode 0 "\xff\xd8${::adobe}TABLESSTRIP"]
+
+test imageTiffStreams-7.2 {YCbCr says so in the transform byte} -body {
+    # Photometric 6 inside a JPEG is the one case where the codec converts and
+    # nothing in this package has to: the marker says transform 1 and the
+    # decoder does the rest.
+    set result [streamsOf {259 3 7} {262 3 6} {258 3 {8 8 8}} {277 3 3} \
+        [list 279 4 [string length $::jpegStrip]] [list 347 7 $::jpegTables] \
+        -data $::jpegStrip]
+    binary scan [string range [dict get [partOf $result] data] 2 17] H* marker
+    set marker
+} -result ffee000e41646f626500640000000001
+
+test imageTiffStreams-7.3 {a CMYK JPEG gets no Adobe marker} -body {
+    # The same marker means something further for four components - Adobe's
+    # writers store such data inverted - and no measured file is one, so
+    # nothing is claimed about it.
+    set result [streamsOf {259 3 7} {262 3 5} {258 3 {8 8 8 8}} {277 3 4} \
+        [list 279 4 [string length $::jpegStrip]] [list 347 7 $::jpegTables] \
+        -data $::jpegStrip]
+    dict get [partOf $result] data
+} -result "\xff\xd8TABLESSTRIP"
+
+test imageTiffStreams-7.4 {a file without shared tables carries them per strip} -body {
+    set result [streamsOf {259 3 7} {262 3 2} {258 3 {8 8 8}} {277 3 3} \
+        [list 279 4 [string length $::jpegStrip]] -data $::jpegStrip]
+    dict get [partOf $result] data
+} -result "\xff\xd8${::adobe}STRIP"
+
+test imageTiffStreams-7.5 {every strip is an image of its own} -body {
+    # Which is what it already is, down to its own SOF0 with its own height.
+    set two "$::jpegStrip$::jpegStrip"
+    set result [streamsOf {259 3 7} {262 3 2} {258 3 {8 8 8}} {277 3 3} \
+        {273 4 {8 15}} {279 4 {7 7}} {278 3 2} [list 347 7 $::jpegTables] \
+        -data $two]
+    list [llength [dict get $result parts]] [dict get [partOf $result 1] row] \
+        [dict get [partOf $result 1] rows]
+} -result {2 2 2}
+
+test imageTiffStreams-7.6 {a strip that is not a JPEG is refused} -body {
+    ::tclpdfTest::refusal {streamsOf {259 3 7} {262 3 2} {258 3 {8 8 8}} \
+        {277 3 3} {279 4 5} [list 347 7 $::jpegTables] -data STRIP}
+} -result {TCLPDF TIFF JPEG}
+
+test imageTiffStreams-7.7 {tables that are not a JPEG are refused} -body {
+    ::tclpdfTest::refusal {streamsOf {259 3 7} {262 3 2} {258 3 {8 8 8}} \
+        {277 3 3} [list 279 4 [string length $::jpegStrip]] {347 7 TABLES} \
+        -data $::jpegStrip}
+} -result {TCLPDF TIFF JPEG}
+
+# --- CCITT -----------------------------------------------------------------
+
+# Eight bytes standing in for a coded fax. Nothing here decodes them - which
+# is the point of the whole way: the most expensive decoder in the package is
+# the one that turns out not to be needed.
+set ::fax [binary format H* 0123456789abcdef]
+
+test imageTiffStreams-8.1 {Group 4 goes in as it stands} -body {
+    set result [streamsOf {259 3 4} {258 3 1} {279 4 8} -data $::fax]
+    list [dict get $result filter] [dict get $result passThrough] \
+        [dict get [partOf $result] data]
+} -result [list CCITTFaxDecode 1 $::fax]
+
+test imageTiffStreams-8.2 {the filter is told K, the width and the rows} -body {
+    set result [streamsOf {259 3 4} {258 3 1} {279 4 8} -data $::fax]
+    dict get [dict get [partOf $result] pairs] DecodeParms
+} -result {<< /K -1 /Columns 4 /Rows 4 /BlackIs1 true >>}
+
+test imageTiffStreams-8.3 {BlackIs1 follows the photometric, not its name} -body {
+    # THE POLARITY IS THE REVERSE OF WHAT THE NAME SUGGESTS: a plain fax is
+    # WhiteIsZero and wants BlackIs1 FALSE. Measured on two files that
+    # disagree with each other, 0.876 against 0.876 and 0.4418 against
+    # 0.4418; the other way round gives the exact negative, which qpdf and
+    # veraPDF both call a flawless document.
+    set result [streamsOf {259 3 4} {258 3 1} {262 3 0} {279 4 8} -data $::fax]
+    list [dict get [dict get [partOf $result] pairs] DecodeParms] \
+        [dict exists [dict get [partOf $result] pairs] Decode]
+} -result {{<< /K -1 /Columns 4 /Rows 4 >>} 0}
+
+test imageTiffStreams-8.4 {modified Huffman is K 0 with every row byte-aligned} -body {
+    set result [streamsOf {259 3 2} {258 3 1} {279 4 8} -data $::fax]
+    dict get [dict get [partOf $result] pairs] DecodeParms
+} -result {<< /K 0 /Columns 4 /Rows 4 /BlackIs1 true /EncodedByteAlign true >>}
+
+test imageTiffStreams-8.5 {a two-dimensional Group 3 file says K 1} -body {
+    set result [streamsOf {259 3 3} {258 3 1} {292 4 1} {279 4 8} -data $::fax]
+    dict get [dict get [partOf $result] pairs] DecodeParms
+} -result {<< /K 1 /Columns 4 /Rows 4 /BlackIs1 true >>}
+
+test imageTiffStreams-8.6 {fill bits before an EOL are EncodedByteAlign} -body {
+    set result [streamsOf {259 3 3} {258 3 1} {292 4 4} {279 4 8} -data $::fax]
+    dict get [dict get [partOf $result] pairs] DecodeParms
+} -result {<< /K 0 /Columns 4 /Rows 4 /BlackIs1 true /EncodedByteAlign true >>}
+
+test imageTiffStreams-8.7 {a fax in strips becomes one image per strip} -body {
+    # Group 4 codes every row against the one above it and starts afresh in
+    # every strip, so these cannot be joined - and every part is told how many
+    # rows it holds, which is what /Rows means.
+    set result [streamsOf {259 3 4} {258 3 1} {257 3 3} {273 4 {8 12}} \
+        {279 4 {4 4}} {278 3 2} -data $::fax]
+    list [llength [dict get $result parts]] \
+        [dict get [dict get [partOf $result 0] pairs] DecodeParms] \
+        [dict get [partOf $result 1] row] \
+        [dict get [dict get [partOf $result 1] pairs] DecodeParms]
+} -result {2 {<< /K -1 /Columns 4 /Rows 2 /BlackIs1 true >>} 2 {<< /K -1 /Columns 4 /Rows 1 /BlackIs1 true >>}}
+
+# --- the shape of the answer -----------------------------------------------
+
+test imageTiffStreams-9.1 {the result says what it is} -body {
+    lsort [dict keys [streamsOf -data $::samples]]
+} -result {filter parts passThrough stacked}
+
+test imageTiffStreams-9.2 {every part says the same four things} -body {
+    lsort [dict keys [partOf [streamsOf -data $::samples]]]
+} -result {data pairs row rows}
+
+test imageTiffStreams-9.3 {the parts cover the picture exactly once} -body {
+    # What a caller stacking them relies on: no gap between two parts and no
+    # row counted twice.
+    set first [::tclpdf::filter encodeFlate [string range $::samples 0 7]]
+    set second [::tclpdf::filter encodeFlate [string range $::samples 8 11]]
+    set result [streamsOf {257 3 3} {259 3 8} \
+        [list 273 4 [list 8 [expr {8 + [string length $first]}]]] \
+        [list 279 4 [list [string length $first] [string length $second]]] \
+        {278 3 2} -data $first$second]
+    set row 0
+    foreach part [dict get $result parts] {
+        if {[dict get $part row] != $row} {
+            return "part at [dict get $part row], expected $row"
+        }
+        incr row [dict get $part rows]
+    }
+    set row
+} -result 3
+
+cleanupTests

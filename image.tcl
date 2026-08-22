@@ -1,16 +1,16 @@
 #
 # tclpdf - PDF generation for Tcl
 #
-# image - placing JPEG and PNG pictures (8.9.5)
+# image - placing JPEG, PNG and TIFF pictures (8.9.5)
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
 # See the file "license.terms" for information on usage and redistribution
 # of this file (MIT License).
 #
-# The public face of the image topic. Reading the two formats happens in
-# imageJpeg.tcl, imagePng.tcl and imagePngAlpha.tcl, which nothing outside
-# this file loads.
+# The public face of the image topic. Reading the three formats happens in
+# imageJpeg.tcl, imagePng.tcl, imagePngAlpha.tcl, imageTiff.tcl and
+# imageTiffStreams.tcl, which nothing outside this file loads.
 #
 # Usage:
 #
@@ -42,7 +42,25 @@
 #
 # Two conventions that hold everywhere in this package: -at names the TOP left
 # corner, and sizes are in the document unit. Pixels only appear when a size
-# has to be derived, and then through -dpi.
+# has to be derived, and then through the resolution: the one the FILE states
+# where it states one, 72 dpi where it does not, and whatever -dpi says when a
+# caller says it. A 200 dpi scan 1728 pixels wide is 219 mm wide and is placed
+# that wide; read as 72 dpi it would have been 610 mm and off the sheet.
+#
+# What the file said and what was assumed are two different answers, and
+# [image info] keeps them apart - see [ImageInfo].
+#
+# ONE TIFF MAY BECOME SEVERAL IMAGE XOBJECTS, and that is the one place where
+# this module treats a format specially. Every stateful compression restarts
+# in every strip, so the strips of such a file cannot be joined into one
+# stream - imageTiffStreams.tcl hands back one part per strip instead, each
+# with the rows it holds. They are placed as n cm/Do pairs inside the ONE
+# q ... Q of the placement (see [ImageStack]), not wrapped in a form XObject:
+# 80 of 194 measured files are single-stripped and both real scans have one
+# strip per page, so the stack is the exception and stays local. A form
+# XObject would also cost the picture the ability to be another one's /SMask.
+#
+# Above [stripLimit] parts the picture is refused rather than stacked.
 #
 
 package require Tcl 8.6.11-
@@ -54,6 +72,8 @@ package require tclpdf::geometry 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::imageJpeg 1.0-
 package require tclpdf::imagePng 1.0-
+package require tclpdf::imageTiff 1.0-
+package require tclpdf::imageTiffStreams 1.0-
 # For [IccInspect] and [IccProfileObject]: a picture's embedded profile goes
 # through the same reader and the same one-stream-per-profile registry as a
 # registered colour space and the PDF/A output intent.
@@ -61,11 +81,19 @@ package require tclpdf::color 1.0-
 package require tclpdf::graphics 1.0-
 package require tclpdf::document 1.0-
 
-namespace eval ::tclpdf::image {}
+namespace eval ::tclpdf::image {
+  # How many image XObjects one TIFF may be stacked out of. A stateful
+  # compression restarts in every strip, so a striped file becomes one
+  # XObject per strip - and a page holding two thousand of them is not a
+  # picture any more, it is a denial of service with a /Do in front of it.
+  # 13 of 194 measured files lie above this line and the largest has 1922
+  # strips; both real scans in that corpus have ONE strip per page.
+  variable stripLimit 256
+}
 
 oo::define ::tclpdf::document::document {
 
-  # $doc image embed <alias> ?path? ?-data bytes? ?-type auto|jpeg|png?
+  # $doc image embed <alias> ?path? ?-data bytes? ?-type auto|jpeg|png|tiff?
   # $doc image place <alias> ?-at {x y}? ?-size {w h}? ...
   # $doc image draw  ?path? ?-data bytes? ?-at {x y}? ...
   # $doc image info  <alias>
@@ -133,9 +161,10 @@ oo::define ::tclpdf::document::document {
     switch -- $type {
       jpeg {set parsed [::tclpdf::imageJpeg parse $bytes]}
       png {set parsed [::tclpdf::imagePng parse $bytes]}
+      tiff {set parsed [::tclpdf::imageTiff parse $bytes]}
       default {
         return -code error "tclpdf: unknown image type \"$type\" - known are:\
-            auto, jpeg, png"
+            auto, jpeg, png, tiff"
       }
     }
     # -stencil turns the picture into an image mask (8.9.6.2): what reaches
@@ -143,14 +172,28 @@ oo::define ::tclpdf::document::document {
     # bits that are set. Decided HERE, at the embedding, because it decides
     # what the XObject IS - a stencil has no colour space, so it cannot be
     # made one at a placement. [stencilInk] refuses whatever cannot be one
-    # bit per sample and reports why; JPEG is refused before it, with its
-    # own reason.
+    # bit per sample and reports why; JPEG and TIFF are refused before it,
+    # each with its own reason.
     if {[dict get $options stencil]} {
-      if {$type ne "png"} {
+      if {$type eq "jpeg"} {
         return -code error "tclpdf: a stencil mask is one bit per sample (ISO\
             32000-2, Table 87: with ImageMask true BitsPerComponent shall be\
             1), and a DCTDecode filter always delivers 8-bit samples (Table\
             87) - a stencil has to be a 1-bit PNG, not a JPEG"
+      }
+      if {$type eq "tiff"} {
+        # Not a rule of the format - a bilevel TIFF is one bit per sample and
+        # could be a stencil. It is a rule of this package: a striped TIFF
+        # reaches the file as SEVERAL XObjects (see [ImageStack]), and a
+        # /Mask entry names exactly one; and the polarity of a bilevel TIFF
+        # travels as Photometric or as BlackIs1 rather than as the ink
+        # [stencilInk] picks out of a palette. Saying so is cheaper than a
+        # stencil that is right for one file and inverted for the next.
+        return -code error "tclpdf: -stencil 1 makes an image mask out of a\
+            ONE-BIT PNG, and \"$alias\" is a TIFF - a striped TIFF becomes\
+            several stacked XObjects and a Mask entry names one image (ISO\
+            32000-2, 8.9.6.3); convert it to a 1-bit PNG for a stencil, or\
+            place it as the picture it is"
       }
       ::tclpdf::imagePng stencilInk $parsed
       # An image mask has no ColorSpace entry at all (Table 87: "shall not be
@@ -190,6 +233,10 @@ oo::define ::tclpdf::document::document {
             not be present (ISO 32000-2, Table 87), and a stencil has no\
             colour for a soft mask to cover"
       }
+      # Only a PNG can arrive with transparency of its own: a JPEG has none,
+      # and a TIFF that has any is an ExtraSamples file, which imageTiff
+      # refuses by name at the parse above - PDF carries no alpha inside an
+      # image and this package splits none out.
       if {$type eq "png" && ([::tclpdf::imagePng hasAlpha $parsed]
           || [::tclpdf::imagePng transparency $parsed] ne "none")} {
         return -code error "tclpdf: \"$alias\" carries its own transparency\
@@ -244,8 +291,9 @@ oo::define ::tclpdf::document::document {
   # profile check and the mask check, and a second copy of the [expr] is how
   # they would come to disagree about a palette PNG.
   method ImageDevice {type parsed} {
-    if {$type eq "jpeg"} {
-      return [::tclpdf::imageJpeg space [dict get $parsed components]]
+    switch -- $type {
+      jpeg {return [::tclpdf::imageJpeg space [dict get $parsed components]]}
+      tiff {return [::tclpdf::imageTiff device $parsed]}
     }
     return [::tclpdf::imagePng device $parsed]
   }
@@ -281,6 +329,10 @@ oo::define ::tclpdf::document::document {
           colour space would be /ICCBased, and a soft-mask image shall be\
           DeviceGray (ISO 32000-2, Table 143) - embed the mask with -icc 0"
     }
+    # A TIFF is not asked: it cannot carry transparency of its own (an
+    # ExtraSamples file is refused at the parse). What it CAN be is a stack
+    # of XObjects, and a soft mask is one image - that is refused where the
+    # stack becomes known, in [TiffStreams], before anything is written.
     if {[dict get $image type] eq "png"
         && ([::tclpdf::imagePng hasAlpha $parsed]
             || [::tclpdf::imagePng transparency $parsed] ne "none")} {
@@ -307,15 +359,23 @@ oo::define ::tclpdf::document::document {
     if {$first == 0xff && $second == 0xd8} {
       return jpeg
     }
+    # Both byte orders, and BigTIFF too - which [signature] answers for on
+    # purpose, so that [parse] can refuse it as the BigTIFF it is rather than
+    # this line calling it "not a picture". Measured over 197 files named
+    # .tif or .tiff: one is a JPEG and two are mail text, which is why the
+    # order here is bytes first and never the name.
+    if {[::tclpdf::imageTiff signature $bytes] ne {}} {
+      return tiff
+    }
     set what [expr {$path ne {} ? "\"$path\"" :
         "the data passed with -data ([string length $bytes] bytes)"}]
-    return -code error "tclpdf: $what is neither a JPEG nor a PNG - tclpdf\
-        writes those two formats"
+    return -code error "tclpdf: $what is neither a JPEG, a PNG nor a TIFF -\
+        tclpdf writes those three formats"
   }
 
   method ImagePlace {alias args} {
     set options [::tclpdf::option parse {
-      at {} size {} width {} height {} scale {} rotate 0 opacity {} dpi 72
+      at {} size {} width {} height {} scale {} rotate 0 opacity {} dpi {}
       alt {} artifact {}
     } $args "image place"]
     set images [my state images]
@@ -430,11 +490,57 @@ oo::define ::tclpdf::document::document {
     if {$alpha ne {}} {
       my content "[::tclpdf::pdfObj name $alpha] gs\n"
     }
-    my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
-    my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
+    if {[dict exists $image parts]} {
+      my ImageStack $image $matrix
+    } else {
+      my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
+      my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
+    }
     my restore
     my GraphicUnmark $mark $element
     return $alias
+  }
+
+  # A picture that is several images, put back together on the page.
+  #
+  # This is the whole of decision (a): n cm/Do pairs, each in a q ... Q of
+  # its own, inside the ONE q ... Q the placement already opened - and no
+  # form XObject around them. The stack stays where it is used, which is
+  # where it belongs: 80 of 194 measured files are single-stripped and both
+  # real scans have one strip per page, so a stack is the exception. The
+  # price of the other way would have been paid by every picture: a form
+  # XObject cannot be another image's /SMask.
+  #
+  # Each part is an image on the unit square like any other (8.9.5), so the
+  # arithmetic is done in the PICTURE's unit square and then handed to the
+  # matrix that put the picture on the page. That is what makes -rotate,
+  # -scale and the flip to the top-left convention come out right for a
+  # stack without a second copy of any of it: the parts know nothing about
+  # the page.
+  #
+  #   fraction  how much of the picture's height this part is
+  #   offset    how far its BOTTOM edge sits above the picture's bottom -
+  #             the rows are counted from the top and y runs up, so the two
+  #             are each other's complement
+  #
+  # A q of its own per part, because "cm" concatenates: without it the second
+  # part would be placed inside the first part's coordinates, and the third
+  # inside the second's.
+  method ImageStack {image matrix} {
+    set rows [dict get [dict get $image parsed] height]
+    foreach part [dict get $image parts] {
+      set fraction [expr {double([dict get $part rows]) / $rows}]
+      set offset [expr {1.0
+          - double([dict get $part row] + [dict get $part rows]) / $rows}]
+      set placement [::tclpdf::geometry multiply \
+          [list 1 0 0 $fraction 0 $offset] $matrix]
+      my save
+      my content "[join [lmap number $placement {
+          ::tclpdf::pdfObj num $number}] { }] cm\n"
+      my content "[::tclpdf::pdfObj name [dict get $part resource]] Do\n"
+      my restore
+    }
+    return
   }
 
   # The marking every placed graphic gets, in one place: a picture, a drawing
@@ -638,18 +744,95 @@ oo::define ::tclpdf::document::document {
       dict set result bitDepth [dict get $parsed bitsPerComponent]
       dict set result alpha 0
     }
+    if {[dict get $image type] eq "tiff"} {
+      # The two facts that are TIFF's alone and that decide how the picture
+      # reaches the file: which compression its strips are in, and how many
+      # strips there are. Both are read off the tags, so they answer before
+      # the picture has been placed - which is when a caller wants them, one
+      # placement being the thing that can refuse an over-striped file.
+      dict set result compression [dict get $parsed compressionName]
+      dict set result strips [dict get $parsed stripCount]
+      dict set result rowsPerStrip [dict get $parsed rowsPerStrip]
+      dict set result space [dict get $parsed space]
+    }
     # The size of the ICC profile that will travel with the picture, 0 when
     # the file carries none or -icc 0 left it behind - so a caller can see
     # which of the two a placement will get.
     dict set result icc [string length [dict get $parsed icc]]
+    # What the file says about how large its pixels are:
+    #
+    #   xResolution    dots per inch, or EMPTY when the file gives no
+    #   yResolution    absolute measure - which is not the same as 72
+    #   resolution     pHYs, JFIF, Exif or none: who said it
+    #   pixelAspect    the width of one pixel over its height, 1.0 unless
+    #                  the file says otherwise
+    #
+    # An empty xResolution beside "resolution none" is a file that says
+    # nothing, and a placement then assumes 72 dpi. An empty xResolution
+    # beside a named source is a file that gave a ratio between the axes
+    # and no measure (PNG pHYs unit 0, JFIF units 0, Exif unit 1) - the
+    # ratio is in pixelAspect and is used, the 72 is still assumed. Two
+    # cases, two answers, and neither of them writes 72 into a field the
+    # file never filled.
+    set resolution [my ImageResolution $image]
+    dict set result xResolution [dict get $resolution x]
+    dict set result yResolution [dict get $resolution y]
+    dict set result resolution [dict get $resolution source]
+    dict set result pixelAspect [dict get $resolution aspect]
     return $result
+  }
+
+  # What the file says about its own resolution - the two formats answer in
+  # the same shape, and this is the one place that knows which of them is
+  # being asked. {source x y aspect}; see the two [resolution] procs.
+  method ImageResolution {image} {
+    switch -- [dict get $image type] {
+      png {return [::tclpdf::imagePng resolution [dict get $image parsed]]}
+      tiff {return [my TiffResolution [dict get $image parsed]]}
+    }
+    return [::tclpdf::imageJpeg resolution [dict get $image parsed]]
+  }
+
+  # What a TIFF says about its own resolution, in the shape the other two
+  # formats answer in - {source x y aspect}.
+  #
+  # imageTiff already did the reading and the arithmetic, including the
+  # centimetres of ResolutionUnit 3; what is left here is the one thing the
+  # shapes disagree about. imageTiff always hands out a number in xDpi so
+  # that arithmetic downstream has one, and says beside it whether to believe
+  # it; this shape says "nobody knows" by leaving the field EMPTY, so that
+  # [image info] can tell a file that states 72 dpi from one that states
+  # nothing. So resolutionKnown decides whether the number is passed on at
+  # all.
+  #
+  # ResolutionUnit 1 is the middle case both shapes have: two numbers that
+  # are a ratio between the axes and no measure at all. The ratio survives as
+  # the pixel aspect, which is the width of one pixel over its height - a
+  # pixel is 1/XResolution wide and 1/YResolution high, so the ratio is the
+  # other way up from the resolutions.
+  method TiffResolution {parsed} {
+    if {[dict get $parsed resolutionKnown]} {
+      return [dict create source XResolution \
+          x [dict get $parsed xDpi] y [dict get $parsed yDpi] \
+          aspect [expr {double([dict get $parsed yDpi])
+              / [dict get $parsed xDpi]}]]
+    }
+    if {[dict get $parsed resolutionUnit] == 1
+        && [dict get $parsed xResolution] > 0
+        && [dict get $parsed yResolution] > 0} {
+      return [dict create source XResolution x {} y {} \
+          aspect [expr {double([dict get $parsed yResolution])
+              / [dict get $parsed xResolution]}]]
+    }
+    return [dict create source none x {} y {} aspect 1.0]
   }
 
   # How large a picture would come out, in the document unit, with the same
   # options [place] takes. What a caller needs to lay out around it - and the
   # only way to ask, since the sizing itself is private.
   #
-  #   $doc image size logo                  -> natural size at 72 dpi
+  #   $doc image size logo                  -> natural size, the file's own
+  #                                            resolution or 72 dpi
   #   $doc image size logo -width 40        -> {40 <proportional height>}
   #   $doc image size logo -dpi 300         -> the size at 300 dpi
   method ImageSize {alias args} {
@@ -658,12 +841,13 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: no image named \"$alias\""
     }
     return [my ImageExtent [dict get $images $alias] [::tclpdf::option parse \
-        {size {} width {} height {} scale {} dpi 72} $args "image size"] "image size"]
+        {size {} width {} height {} scale {} dpi {}} $args "image size"] "image size"]
   }
 
   # The size to draw at, in the document unit. Given nothing, a pixel is taken
-  # to be 1/dpi of an inch - with the default of 72 that is one PDF point,
-  # which is the only assumption the format itself makes.
+  # to be 1/dpi of an inch, and the dpi is the file's own where the file
+  # states one - a 200 dpi scan comes out 200 dpi large. -dpi overrules it;
+  # -dpi auto, which is the default, asks for the file's own again.
   #
   # The sizing options are refused here, before anything reads them, and
   # for [image size] as for [image place] - a size that cannot be placed is
@@ -671,26 +855,88 @@ oo::define ::tclpdf::document::document {
   # zero, a -size of exactly two numbers (geometry.tcl, checkFit). "what"
   # names the call for the refusal.
   method ImageExtent {image options what} {
+    # "auto" and the empty string are the same request - the file's own
+    # resolution - and neither is a number [checkFit] could weigh, so the
+    # word goes before the check rather than through it.
+    if {[dict get $options dpi] eq "auto"} {
+      dict set options dpi {}
+    }
     ::tclpdf::geometry checkFit $options $what
     set parsed [dict get $image parsed]
     set pixelWidth [dict get $parsed width]
     set pixelHeight [dict get $parsed height]
     set unit [my cget -unit]
+    lassign [my ImageDpi $image [dict get $options dpi]] xdpi ydpi
     set naturalWidth [::tclpdf::geometry fromPoints \
-        [expr {$pixelWidth * 72.0 / [dict get $options dpi]}] $unit]
+        [expr {$pixelWidth * 72.0 / $xdpi}] $unit]
     set naturalHeight [::tclpdf::geometry fromPoints \
-        [expr {$pixelHeight * 72.0 / [dict get $options dpi]}] $unit]
+        [expr {$pixelHeight * 72.0 / $ydpi}] $unit]
 
     return [my fitExtent $naturalWidth $naturalHeight $options]
   }
 
+  # The two resolutions a natural size is derived from - across and down,
+  # because a picture may state a different one for each. -dpi, where it was
+  # given, is both of them; otherwise the file's own, and 72 where the file
+  # states none.
+  #
+  # 72 dpi is an ASSUMPTION, and it is only ever made here, at the sizing.
+  # Nothing writes it into what the file said: [image info] reports an empty
+  # xResolution for a file that gave no measure, so that a caller can tell
+  # "the file says 72" from "nobody knows".
+  #
+  # A file may give a ratio between the axes without giving a measure. The
+  # ratio is honoured by putting the 72 on the axis with the LARGER pixels,
+  # so that a picture never comes out bigger than the plain assumption would
+  # have made it - the other axis then gets more dpi and less paper.
+  method ImageDpi {image dpi} {
+    if {$dpi ne {}} {
+      return [list $dpi $dpi]
+    }
+    set resolution [my ImageResolution $image]
+    if {[dict get $resolution x] ne {}} {
+      return [list [dict get $resolution x] [dict get $resolution y]]
+    }
+    set aspect [dict get $resolution aspect]
+    if {$aspect < 1.0} {
+      return [list [expr {72.0 / $aspect}] 72.0]
+    } elseif {$aspect > 1.0} {
+      return [list 72.0 [expr {72.0 * $aspect}]]
+    }
+    return {72.0 72.0}
+  }
+
   # Turn the parsed picture into PDF objects and register the resource. Called
   # once per image, on first placement.
+  #
+  # A striped TIFF is several objects and therefore several resources - one
+  # name per part, in the order the parts stand in, so that [ImageStack] can
+  # walk them from the top of the picture down. The parts are read back OUT
+  # of the state rather than from the local copy: [ImageObject] wrote them
+  # there, and a stale copy is how a placement comes to name a resource the
+  # document never got.
   method ImageWrite {alias image} {
     set number [my ImageObject $alias $image]
+    set images [my state images]
+    set image [dict get $images $alias]
+    if {[dict exists $image parts]} {
+      set parts {}
+      foreach part [dict get $image parts] {
+        set name Im[my ImageCount]
+        my resource XObject $name [[my writer] ref [dict get $part object]]
+        dict set part resource $name
+        lappend parts $part
+      }
+      dict set images $alias parts $parts
+      # The first part's name stands in the resource field as well, so that
+      # everything asking "has this picture been written yet" reads one
+      # answer. What a placement paints is the parts, never this name.
+      dict set images $alias resource [dict get [lindex $parts 0] resource]
+      my state images $images
+      return $number
+    }
     set resourceName Im[my ImageCount]
     my resource XObject $resourceName [[my writer] ref $number]
-    set images [my state images]
     dict set images $alias resource $resourceName
     my state images $images
     return $number
@@ -701,8 +947,24 @@ oo::define ::tclpdf::document::document {
   # mask is named by a dictionary entry and never by a page, so it gets an
   # object and NO resource name; giving it one would put an XObject into the
   # page's resources that no content stream mentions.
-  method ImageObject {alias image} {
+  #
+  # A striped TIFF becomes SEVERAL objects here, one per part, and the
+  # number that comes back is the first of them; the whole list, with the
+  # rows each part holds, is left in the state under "parts". "asMask" says
+  # this object is about to be another picture's /Mask or /SMask, which is
+  # the one thing a stack cannot be - [TiffStreams] refuses it there, before
+  # any of the parts is written.
+  method ImageObject {alias image {asMask 0}} {
     if {[dict get $image object] ne {}} {
+      # Written already - but a picture that was PLACED on an earlier page and
+      # is only now asked for as a mask has never been through [TiffStreams],
+      # so the question has to be put again here. Measured while this was
+      # being built: a striped TIFF placed on page 1 and then named with
+      # -mask went into the file as the /SMask of its FIRST strip, sixteen
+      # rows covering the whole picture, and nothing anywhere said so.
+      if {[dict exists $image parts]} {
+        my TiffStackCheck $alias $image [dict get $image parsed] $asMask
+      }
       return [dict get $image object]
     }
     set parsed [dict get $image parsed]
@@ -733,6 +995,54 @@ oo::define ::tclpdf::document::document {
         lappend pairs Decode [::tclpdf::pdfObj arr {1 0 1 0 1 0 1 0}]
       }
       set data [dict get $image bytes]
+    } elseif {[dict get $image type] eq "tiff"} {
+      # -invert on a TIFF is decided BEFORE the streams are built, and it is
+      # not a second Decode array beside the one the file may already need:
+      # a WhiteIsZero picture already reverses its samples, and reversing
+      # them twice is the picture as it was. So the array is settled once,
+      # here, and travels through [streams] with the part it belongs to.
+      # Table 87 fixes its length at twice the number of components, and the
+      # check at the embedding has already held this picture to one.
+      if {[dict get $image invert]} {
+        if {[dict get $parsed decode] eq {}} {
+          dict set parsed decode {1 0}
+        } else {
+          dict set parsed decode {}
+        }
+      }
+      # The strips, as the streams of one image or of a stack of them. Like
+      # the PNG way this runs before ANYTHING is written - it is the last
+      # call that can refuse the picture, and all three refusals of
+      # [TiffStreams] hang off what it answers - so the profile object below
+      # is built afterwards rather than handed in as a base.
+      set tiffParts [my TiffStreams $alias $image $parsed $asMask]
+      set space [::tclpdf::imageTiff device $parsed]
+      set base /$space
+      if {[dict get $parsed icc] ne {}} {
+        set base [my ImageProfileBase $parsed]
+        set space ICCBased
+      }
+      if {[dict get $parsed space] eq "Indexed"} {
+        # The lookup of a palette image as PDF reads it: 8-bit RGB triples in
+        # one string, and a hival that is the last index (8.6.6.3). imageTiff
+        # has already turned the file's three 16-bit ramps into that shape.
+        # The string goes through the document's own constructor, because
+        # every string in an encrypted document is encrypted (7.6.2).
+        set palette [dict get $parsed palette]
+        set colourSpace "\[/Indexed $base\
+            [expr {[string length $palette] / 3 - 1}] [my BytesStr $palette]\]"
+      } else {
+        set colourSpace $base
+      }
+      lappend pairs ColorSpace $colourSpace \
+          BitsPerComponent [dict get $parsed bitsPerComponent]
+      # Sixteen bits per component is PDF 1.5, whatever format the samples
+      # came out of (Reference 1.7, Table 4.39) - and after [streams], which
+      # is where a 16-bit little-endian file is either turned round or
+      # refused: a refused picture must not pin the version floor.
+      if {[dict get $parsed bitsPerComponent] == 16} {
+        my RequireVersion 1.5 "a 16-bit TIFF picture"
+      }
     } else {
       set space [::tclpdf::imagePng device $parsed]
       # [streams] runs before ANYTHING is written, the picture's ICC profile
@@ -797,7 +1107,8 @@ oo::define ::tclpdf::document::document {
     # components, and only a greyscale one gets this far; the check is at
     # the embedding). What it is for is a mask drawn the other way round,
     # where the ink is the part that shows.
-    if {![dict get $image stencil] && [dict get $image invert]} {
+    if {![dict get $image stencil] && [dict get $image invert]
+        && [dict get $image type] ne "tiff"} {
       lappend pairs Decode [::tclpdf::pdfObj arr {1 0}]
     }
     # A hint and nothing more: 8.9.5.3 says Interpolate "is a way for a PDF to
@@ -831,11 +1142,36 @@ oo::define ::tclpdf::document::document {
         my RequireVersion 1.4 "a picture with a soft mask of its own"
         set key SMask
       }
-      lappend pairs $key [[my writer] ref [my ImageObject $maskAlias $maskImage]]
+      lappend pairs $key \
+          [[my writer] ref [my ImageObject $maskAlias $maskImage 1]]
     }
-    set number [[my writer] addStream $pairs $data]
+    if {[info exists tiffParts]} {
+      # One object per part: each carries the rows it holds as its own
+      # /Height and its own /Filter, because the parts of a stack share
+      # neither a stream nor a compression state. What is kept beside them is
+      # what [ImageStack] needs to put the picture back together - where each
+      # part begins, counted from the top, and how tall it is.
+      set records {}
+      foreach part $tiffParts {
+        set partPairs $pairs
+        dict set partPairs Height [dict get $part rows]
+        lappend partPairs {*}[dict get $part pairs]
+        lappend records [dict create \
+            object [[my writer] addStream $partPairs [dict get $part data]] \
+            row [dict get $part row] rows [dict get $part rows]]
+      }
+      set number [dict get [lindex $records 0] object]
+    } else {
+      set number [[my writer] addStream $pairs $data]
+    }
     set images [my state images]
     dict set images $alias object $number
+    # Only a picture that really is several images carries a parts list. A
+    # single-part TIFF is written, placed and masked exactly as a PNG is,
+    # and nothing downstream has to know which format it came from.
+    if {[info exists records] && [llength $records] > 1} {
+      dict set images $alias parts $records
+    }
     # The space of the samples - DeviceGray, DeviceRGB, DeviceCMYK, or
     # ICCBased for a picture travelling with its profile - kept for
     # [ImagePlace] to record; for an Indexed picture it is the base. The
@@ -844,6 +1180,80 @@ oo::define ::tclpdf::document::document {
     dict set images $alias space $space
     my state images $images
     return $number
+  }
+
+  # The strips of a TIFF as the streams of PDF images - and the three things
+  # this package will not do with a stack of them. Nothing has been written
+  # when it answers, so every refusal here leaves the file as it was.
+  #
+  # A picture in ONE part is a picture like any other and none of the three
+  # applies to it: 80 of the 194 measured files are single-stripped, and an
+  # uncompressed, a PackBits or an LZW file is one part however many strips
+  # it has, because those carry no state and are joined into one stream.
+  #
+  #   the limit    over [stripLimit] parts the picture is refused rather than
+  #                stacked - see the namespace variable for the count
+  #   as a mask    Mask and SMask name ONE image XObject (Table 87, Table 143)
+  #   with a mask  the mask would cover every part instead of the picture,
+  #                since each part is an image of its own on the unit square
+  #
+  # The way out is the same for all three and is named in each message: a
+  # RowsPerStrip that holds the whole picture makes it one image again.
+  method TiffStreams {alias image parsed asMask} {
+    set streams [::tclpdf::imageTiffStreams streams \
+        [dict get $image bytes] $parsed]
+    set parts [dict get $streams parts]
+    if {[llength $parts] < 2} {
+      return $parts
+    }
+    set count [llength $parts]
+    set limit $::tclpdf::image::stripLimit
+    if {$count > $limit} {
+      return -code error -errorcode {TCLPDF TIFF STRIPS} \
+          "tclpdf: [my TiffStackIs $alias $parsed] - tclpdf stacks at most\
+          $limit of them, and this picture wants $count; [my TiffStackFix\
+          $parsed], or with no compression or PackBits, whose strips carry no\
+          state and are joined into a single stream"
+    }
+    my TiffStackCheck $alias $image $parsed $asMask
+    return $parts
+  }
+
+  # The two things a stack of images cannot be. Asked from [TiffStreams] when
+  # the objects are built, and again from [ImageObject] for a picture whose
+  # objects already exist - a picture placed on page 1 and named with -mask on
+  # page 2 comes past the second door only.
+  method TiffStackCheck {alias image parsed asMask} {
+    if {$asMask} {
+      return -code error -errorcode {TCLPDF TIFF STACKED} \
+          "tclpdf: [my TiffStackIs $alias $parsed], and a mask is ONE image -\
+          the Mask and SMask entries of an image dictionary name a single\
+          image XObject (ISO 32000-2, Table 87 and Table 143); [my\
+          TiffStackFix $parsed], or mask with a PNG"
+    }
+    if {[dict get $image mask] ne {}} {
+      return -code error -errorcode {TCLPDF TIFF STACKED} \
+          "tclpdf: [my TiffStackIs $alias $parsed], so it cannot wear -mask\
+          \"[dict get $image mask]\" - every part is an image of its own on\
+          the unit square (ISO 32000-2, 8.9.6.3), so the mask would be drawn\
+          over each of them in turn instead of over the picture; [my\
+          TiffStackFix $parsed]"
+    }
+    return
+  }
+
+  # What all three refusals begin with, and what all three offer as the way
+  # out - written once, because three copies of a sentence are three chances
+  # for two of them to say something the third does not.
+  method TiffStackIs {alias parsed} {
+    return "\"$alias\" is a [dict get $parsed compressionName]-compressed\
+        TIFF in [dict get $parsed stripCount] strips, and a compression that\
+        begins afresh in every strip becomes one image XObject per strip"
+  }
+
+  method TiffStackFix {parsed} {
+    return "re-save it with RowsPerStrip [dict get $parsed height], which puts\
+        the whole picture in one strip"
   }
 
   # The ICCBased colour space of a picture's embedded profile, as the PDF
@@ -874,4 +1284,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.8
+package provide tclpdf::image 1.9

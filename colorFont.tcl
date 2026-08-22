@@ -10,8 +10,15 @@
 #
 #   package require tclpdf::colorFont
 #   $doc colorFont signs signs.ttf -chars "⚠✅"
-#   $doc font -family signs -size 14
+#   $doc font -family body -size 14 -fallback signs
 #   $doc text "⚠ mind the step"
+#
+# The -fallback is not decoration. A font built here holds the characters that
+# were ASKED for and nothing else - not a space, not a letter - because that is
+# what -chars says and what a 255-glyph font can hold. So the words come out of
+# a face and the symbols out of this one, which is the arrangement a drawn font
+# has always been for; [font -family signs] alone is for a line that is nothing
+# but symbols.
 #
 # THE JOINT, and nothing else. Three modules make a colour font a document,
 # and this is the third: colr.tcl reads which layers a base glyph has and what
@@ -142,6 +149,13 @@ package require tclpdf::option 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::color 1.0-
+# For [GraphicsOpacity], the ExtGState a translucent layer needs. Named here
+# rather than left to the lazy dispatcher in document.tcl: that one maps
+# PUBLIC methods to topics and knows nothing of [GraphicsOpacity], so a
+# translucent layer used to die with "unknown method" - measured 2026-08-21
+# against Twemoji Mozilla's U+1F3AF, whose second layer is at alpha 0.2.
+# shape.tcl, image.tcl and xObject.tcl name it the same way.
+package require tclpdf::graphics 1.0-
 package require tclpdf::sfnt 1.0-
 package require tclpdf::colr 1.0-
 package require tclpdf::glyfOutline 1.0-
@@ -322,9 +336,10 @@ oo::define ::tclpdf::document::document {
             -errorcode [list TCLPDF COLORFONT COMPOSITE $u $layerGlyph $alias] \
             "tclpdf: layer glyph $layerGlyph of character $u is a COMPOSITE\
             glyph - it draws other glyphs rather than an outline of its own,\
-            and tclpdf assembles those only when a face is embedded. Measured\
-            over the 33179 layers of Twemoji Mozilla, none is a composite;\
-            a face that needs it cannot be drawn as a colour font here"
+            and tclpdf assembles those only when a face is embedded. The\
+            layers of a colour glyph are normally drawn shapes rather than\
+            letters with accents, so this is unusual; set this character with\
+            an embedded face instead"
       }
       set operators [::tclpdf::glyfPath operators $outline]
       if {$operators eq {}} {
@@ -421,4 +436,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFont 1.0
+package provide tclpdf::colorFont 1.1

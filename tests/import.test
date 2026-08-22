@@ -1221,4 +1221,76 @@ test import-22.3 {the cross-reference flavour is the newest section's} \
     set result
 } -result {table stream}
 
+# --- LZW content streams (roadmap item 7) -----------------------------------
+#
+# LZW was the general-purpose filter before PDF 1.2, and until the TIFF work
+# brought a decoder into the package an LZW content stream was refused by
+# name. The bytes below were produced by an independent encoder and checked
+# back through [::tclpdf::filter decodeLzw] before they were written down - a
+# fixture nobody can read by eye has to say where it came from.
+#
+# ELEVEN lines, not one, and that is the point of the fixture: /EarlyChange
+# decides when the code width grows, and a short stream never reaches the
+# first boundary, so the parameter would be untestable. Measured: with four to
+# ten lines both values decode the same bytes; from eleven on the wrong one
+# fails outright.
+
+proc ::tclpdfTest::lzwpage {{extra {}}} {
+    set stream [binary format H* [string cat \
+        80108A82017920CA6C3B080623210150CC20190C040341B448A86410 \
+        0A0D86937194411237C3CE8688F1B0F4771018CDE6E3A1965829869A \
+        840452A02A050483422150C8744224341A4F2311A8E4786220908824 \
+        72593CA6572D97CC667359BC160F0985C361F11898C8690DA1C6E3B1 \
+        0A448A4820934A2552C971D26054994D26D03AB4EAB33DAE0D06036B \
+        0466C51E19D969567B4D3AD951B854EE738ABCEEB53E100CC7038BED \
+        12C75FA4D2ED14DB5D42DD52B955673589E56E24331BC5AC345100D7 \
+        059AC2E76DB6FB8D52E9A3C75E34E35A15FB597CCCE13394FD9E836D \
+        8CBB697203319D7E2FBEB18DF5FC2B571311B5C5DD7498FAE0CC637C \
+        E7E5A3D94E0D33AB87CFE2743B7C6DDF4D101CE53C37F100E7A7E6C3 \
+        67B698AD17B794AE0641C354E828C902CCFC364EBAA68080]]
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1\
+        /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+        /Resources << /Font << /Helv 4 0 R >> >> >>"
+    lappend objects "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    lappend objects "<< /Length [string length $stream] /Filter /LZWDecode\
+        $extra >>\nstream\n$stream\nendstream"
+    return [::tclpdfTest::buildpdf import-lzw.pdf $objects]
+}
+
+test import-23.1 {an LZW content stream is read} -body {
+    set fixture [::tclpdfTest::lzwpage]
+    # -compress 0 keeps the merged content readable for the assertions.
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import lzw $fixture
+    $doc form place lzw -at {0 0}
+    set size [$doc form size lzw]
+    set path [::tclpdfTest::scratch import-lzw-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    # The LAST line, not the first: everything up to the first width change
+    # decodes the same however the parameter is read.
+    list $size [regexp {line 0 of the lzw content} $bytes] \
+        [regexp {line 10 of the lzw content} $bytes]
+} -result {{400.0 500.0} 1 1}
+
+test import-23.2 {/EarlyChange reaches the decoder} -body {
+    # The one parameter that changes the bytes without changing the length in
+    # any way a reader would notice. Declared wrongly, this stream cannot be
+    # decoded at all - if it decodes, the parameter never arrived.
+    set fixture [::tclpdfTest::lzwpage "/DecodeParms << /EarlyChange 0 >>"]
+    set doc [tclpdf new]
+    $doc page add
+    set failed [catch {$doc pdf import lzw $fixture} message]
+    $doc destroy
+    file delete $fixture
+    list $failed [string match {*/LZWDecode stream this package cannot decode*} $message]
+} -result {1 1}
+
+
 cleanupTests

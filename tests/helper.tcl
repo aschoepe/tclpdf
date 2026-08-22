@@ -329,3 +329,199 @@ proc ::tclpdfTest::glyphRun {parsed text} {
   }
   return $run
 }
+
+# The -errorcode of a refusal, or a line saying there was none. Every parser in
+# the package refuses damaged input by name rather than half-reading it, so its
+# test file asks the same question over and over: WHICH refusal came back. The
+# answer has to be the code, not the message - a message may be reworded, the
+# code is the contract. Written to return a string in both cases so that a test
+# comparing against an expected code reports the unexpected success as a
+# result, not as an error somewhere else.
+proc ::tclpdfTest::refusal {script} {
+  if {[catch {uplevel 1 $script} result options] == 0} {
+    return "no error: $result"
+  }
+  return [dict get $options -errorcode]
+}
+
+# --- TIFF fixtures ---------------------------------------------------------
+#
+# Here rather than in imageTiff.test because imageTiffStreams.test builds its
+# pictures out of the same four procedures, and a second copy of a byte layout
+# is the copy that gets fixed last.
+
+# The bytes of one field's values, in the file's byte order.
+proc ::tclpdfTest::tiffValues {order type values} {
+  set big [expr {$order eq "MM"}]
+  switch -- $type {
+    2 - 7 {return $values}
+    1 - 6 {return [binary format c* $values]}
+    3 - 8 {return [binary format [expr {$big ? "S*" : "s*"}] $values]}
+    4 - 9 - 13 {return [binary format [expr {$big ? "I*" : "i*"}] $values]}
+    5 - 10 {
+      set result {}
+      foreach {top bottom} $values {
+        append result [binary format [expr {$big ? "II" : "ii"}] $top $bottom]
+      }
+      return $result
+    }
+  }
+  # A type the format does not define - written as it stands, so that a
+  # fixture can carry one and the reader can be seen to step over it.
+  return $values
+}
+
+# How many values a field holds - which is not the same as how many bytes.
+proc ::tclpdfTest::tiffCount {type values} {
+  switch -- $type {
+    2 - 7 {return [string length $values]}
+    5 - 10 {return [expr {[llength $values] / 2}]}
+  }
+  return [llength $values]
+}
+
+# A whole TIFF file.
+#
+# "directories" is a list of directories, each a list of entries. Everything
+# is laid out in one order: header, image data at offset 8, then the overflow
+# value areas of every directory, then the directories themselves. The next
+# pointer of each one names the following directory, and of the last one is 0
+# unless -next says otherwise.
+proc ::tclpdfTest::tiffFile {directories args} {
+  array set option {-order MM -version 42 -data {} -next {} -first {}}
+  array set option $args
+  set order $option(-order)
+  set big [expr {$order eq "MM"}]
+  set short [expr {$big ? "S" : "s"}]
+  set long [expr {$big ? "I" : "i"}]
+
+  # Where the overflow area of each directory begins, and where each
+  # directory itself does. Both are wanted before a single entry is written,
+  # because an entry either holds its values or points at them.
+  set at [expr {8 + [string length $option(-data)]}]
+  set bases {}
+  set blobs {}
+  foreach entries $directories {
+    set blob {}
+    foreach entry $entries {
+      lassign $entry tag type values
+      set payload [::tclpdfTest::tiffValues $order $type $values]
+      if {[string length $payload] > 4} {
+        append blob $payload
+      }
+    }
+    lappend bases $at
+    lappend blobs $blob
+    incr at [string length $blob]
+  }
+  set offsets {}
+  foreach entries $directories {
+    lappend offsets $at
+    incr at [expr {2 + 12 * [llength $entries] + 4}]
+  }
+
+  set file "$order[binary format $short $option(-version)]"
+  append file [binary format $long \
+      [expr {$option(-first) ne {} ? $option(-first) : [lindex $offsets 0]}]]
+  append file $option(-data)
+  append file [join $blobs {}]
+
+  set index 0
+  foreach entries $directories base $bases {
+    append file [binary format $short [llength $entries]]
+    set used 0
+    foreach entry $entries {
+      lassign $entry tag type values
+      set payload [::tclpdfTest::tiffValues $order $type $values]
+      append file [binary format ${short}${short}${long} \
+          $tag $type [::tclpdfTest::tiffCount $type $values]]
+      if {[string length $payload] > 4} {
+        append file [binary format $long [expr {$base + $used}]]
+        incr used [string length $payload]
+      } else {
+        append file $payload
+        append file [string repeat \x00 [expr {4 - [string length $payload]}]]
+      }
+    }
+    incr index
+    if {$index < [llength $directories]} {
+      append file [binary format $long [lindex $offsets $index]]
+    } elseif {$option(-next) ne {}} {
+      append file [binary format $long $option(-next)]
+    } else {
+      append file [binary format $long 0]
+    }
+  }
+  return $file
+}
+
+# The tags of a plain 4 x 4 greyscale image, 8 bits, one strip of 16 bytes at
+# offset 8. Every test that is about one tag starts here and replaces that one
+# tag, so that what is being tested is the only thing that differs.
+proc ::tclpdfTest::tiffBase {} {
+  return [list \
+      [list 256 3 4] \
+      [list 257 3 4] \
+      [list 258 3 8] \
+      [list 259 3 1] \
+      [list 262 3 1] \
+      [list 273 4 8] \
+      [list 277 3 1] \
+      [list 278 3 4] \
+      [list 279 4 16] \
+      [list 282 5 {300 1}] \
+      [list 283 5 {300 1}] \
+      [list 284 3 1] \
+      [list 296 3 2]]
+}
+
+# The same entries with some replaced or added, kept in ascending tag order
+# the way the format asks for.
+proc ::tclpdfTest::tiffWith {entries args} {
+  foreach entry $args {
+    set index [lsearch -exact -index 0 $entries [lindex $entry 0]]
+    if {$index >= 0} {
+      set entries [lreplace $entries $index $index $entry]
+    } else {
+      lappend entries $entry
+    }
+  }
+  return [lsort -integer -index 0 $entries]
+}
+
+# The same entries with some tags left out.
+proc ::tclpdfTest::tiffWithout {entries args} {
+  foreach tag $args {
+    set index [lsearch -exact -index 0 $entries $tag]
+    if {$index >= 0} {
+      set entries [lreplace $entries $index $index]
+    }
+  }
+  return $entries
+}
+
+# Sixty-four bytes of picture, so that a strip offset has somewhere to point.
+set ::tiffData [string repeat \xa5 64]
+
+# A file from one directory, with the base tags and the changes handed in.
+# Everything up to the first option is an entry; the rest goes to [::tclpdfTest::tiffFile].
+proc ::tclpdfTest::tiffOne {args} {
+  set entries {}
+  set options {}
+  set index 0
+  foreach item $args {
+    if {[string match -* $item]} {
+      set options [lrange $args $index end]
+      break
+    }
+    lappend entries $item
+    incr index
+  }
+  return [::tclpdfTest::tiffFile [list [::tclpdfTest::tiffWith [::tclpdfTest::tiffBase] {*}$entries]] \
+      -data $::tiffData {*}$options]
+}
+
+# The -errorcode of a refusal, so that a test asserts the CONTRACT rather than
+# the wording of a message.
+
+# --- the signature ---------------------------------------------------------

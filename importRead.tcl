@@ -711,6 +711,15 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
             ASCIIHexDecode - AHx {
                 set decoder decodeAsciiHex
             }
+            LZWDecode - LZW {
+                # LZW was the general-purpose filter before PDF 1.2, and it
+                # came back into reach with the TIFF work: the decoder that
+                # reads an LZW-compressed scan reads an LZW content stream
+                # too. /EarlyChange is read below, since it is the one
+                # parameter that changes the bytes without changing the
+                # length in any way a reader would notice.
+                set decoder decodeLzw
+            }
             default {
                 return -code error "tclpdf: [dict get $reader path]: $what\
                     uses filter /$name, which this import cannot decode"
@@ -722,18 +731,38 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
         # files measured on 2026-08-21 arrives that way: an InDesign
         # hybrid-reference file whose /XRefStm ends before its deflate stream
         # does. Refused rather than salvaged, as everywhere in this reader.
-        if {[catch {::tclpdf::filter::$decoder $data} decoded]} {
+        # The parameters are read BEFORE the decoder runs, because LZW needs
+        # one of them: /EarlyChange decides when the code width grows, and the
+        # wrong value does not fail - it returns fewer bytes, correct up to
+        # the first width change and wrong after it.
+        set p [Resolve reader [lindex $parmsList $i]]
+        set extra {}
+        if {$decoder eq "decodeLzw" && $p ne {} && [lindex $p 0] eq "d"} {
+            set early [lindex [Resolve reader [Get $p EarlyChange]] 1]
+            if {$early ne {}} {
+                set extra [list $early]
+            }
+        }
+        if {[catch {::tclpdf::filter::$decoder $data {*}$extra} decoded]} {
             return -code error "tclpdf: [dict get $reader path]: $what is a\
                 /$name stream this package cannot decode: $decoded"
         }
         set data $decoded
-        set p [Resolve reader [lindex $parmsList $i]]
         if {$p ne {} && [lindex $p 0] eq "d"} {
             set predictor [lindex [Resolve reader [Get $p Predictor]] 1]
             if {$predictor ne {} && $predictor > 1} {
                 set columns [lindex [Resolve reader [Get $p Columns]] 1]
                 if {$columns eq {}} {set columns 1}
-                set data [Predictor $data $columns $predictor]
+                set colors [lindex [Resolve reader [Get $p Colors]] 1]
+                if {$colors eq {}} {set colors 1}
+                set depth [lindex [Resolve reader [Get $p BitsPerComponent]] 1]
+                if {$depth eq {}} {set depth 8}
+                # Shared with the image side rather than kept here: the local
+                # copy read neither /Colors nor /BitsPerComponent and was
+                # quietly wrong for anything but one 8-bit component.
+                set data [::tclpdf::filter decodePredictor $data \
+                    -predictor $predictor -columns $columns -colors $colors \
+                    -bitspercomponent $depth]
             }
         }
         incr i
@@ -741,77 +770,6 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
     return $data
 }
 
-# The PNG row predictors (RFC 2083 via ISO 32000, 7.4.4.4) - what
-# cross-reference streams are compressed with in practice. Colors is 1 and
-# bits per component 8 for every xref stream this reads, so a pixel is one
-# byte. Predictor 2 (TIFF) reduces to Sub with that geometry.
-proc ::tclpdf::importRead::Predictor {data columns predictor} {
-    if {$predictor == 2} {
-        set out {}
-        set prev [lrepeat $columns 0]
-        binary scan $data cu* all
-        set row {}
-        foreach byte $all {
-            lappend row $byte
-            if {[llength $row] == $columns} {
-                set line {}
-                set left 0
-                foreach b $row {
-                    set left [expr {($b + $left) & 0xff}]
-                    lappend line $left
-                }
-                append out [binary format c* $line]
-                set row {}
-            }
-        }
-        return $out
-    }
-    set out {}
-    set stride [expr {$columns + 1}]
-    set prior [lrepeat $columns 0]
-    binary scan $data cu* all
-    for {set at 0} {$at + $stride <= [llength $all]} {incr at $stride} {
-        set tag [lindex $all $at]
-        set row [lrange $all [expr {$at + 1}] [expr {$at + $columns}]]
-        set line {}
-        set left 0
-        set i 0
-        foreach b $row {
-            set up [lindex $prior $i]
-            set upLeft [expr {$i ? [lindex $prior [expr {$i - 1}]] : 0}]
-            switch -- $tag {
-                0 {set value $b}
-                1 {set value [expr {$b + $left}]}
-                2 {set value [expr {$b + $up}]}
-                3 {set value [expr {$b + (($left + $up) / 2)}]}
-                4 {
-                    set p [expr {$left + $up - $upLeft}]
-                    set pa [expr {abs($p - $left)}]
-                    set pb [expr {abs($p - $up)}]
-                    set pc [expr {abs($p - $upLeft)}]
-                    if {$pa <= $pb && $pa <= $pc} {
-                        set value [expr {$b + $left}]
-                    } elseif {$pb <= $pc} {
-                        set value [expr {$b + $up}]
-                    } else {
-                        set value [expr {$b + $upLeft}]
-                    }
-                }
-                default {
-                    return -code error "tclpdf: unknown PNG predictor row\
-                        tag $tag in cross-reference stream"
-                }
-            }
-            set value [expr {$value & 0xff}]
-            set left $value
-            lappend line $value
-            incr i
-        }
-        append out [binary format c* $line]
-        set prior $line
-    }
-    return $out
-}
 
 # ------------------------------------------------------------- page lookup
 
@@ -962,4 +920,4 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
 
 # ------------------------------------------------------------ the takeover
 
-package provide tclpdf::importRead 1.0
+package provide tclpdf::importRead 1.1

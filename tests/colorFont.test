@@ -1,0 +1,733 @@
+# colorFont.test --
+#
+# A COLR version 0 colour font as a Type 3 font.
+#
+# NO COLOUR FONT IS SHIPPED WITH THE PACKAGE, and none is downloaded here -
+# the same reason colr.test states: the one real version 0 face that could
+# serve, Twemoji Mozilla, has its artwork under CC-BY 4.0 while this package
+# is MIT. So the fixture below builds a colour face from nothing: eleven
+# glyphs, two palettes, seven layer records, 700 bytes. It is assembled the
+# way colr.test assembles its tables - flat arrays of fixed width, handed to
+# [::tclpdf::subset::Assemble], which already writes a table directory with
+# checksums - and it carries the four tables that module does not need and
+# this one does: cmap, loca, glyf and outlines to put in them.
+#
+# THE FIXTURE IS SHAPED LIKE A REAL COLOUR FACE, and that matters for one
+# test in particular: every glyph the cmap reaches has an EMPTY outline, and
+# the drawing sits in the layer glyphs, which the cmap does not reach. That is
+# what Twemoji Mozilla looks like from the outside (measured 2026-08-21: all
+# 3689 base glyphs have a glyf entry of length 0), and it is what makes
+# [font embed] refuse the face while this module takes it - which colorFont-1.4
+# and -1.5 check against each other rather than assume.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::subset
+package require tclpdf::glyfOutline
+package require tclpdf::colr
+package require tclpdf::colorFont
+# For [font embed] and [font info], which colorFont-1.3 and -1.4 ask.
+package require tclpdf::font
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint pdftotext [expr {[auto_execok pdftotext] ne {}}]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set plainFace [file join $here examples assets fonts DejaVuSans.ttf]
+testConstraint havePlain [file exists $plainFace]
+set srgbIcc [file join $here icc sRGB.icc]
+testConstraint haveSrgbIcc [file exists $srgbIcc]
+
+# --- the fixture -----------------------------------------------------------
+
+# The characters the fixture maps, so a test names what it means rather than
+# an escape. They sit in the private use area on purpose: a colour font's
+# symbols are its own, and nothing else in this file has to know the numbers.
+set cfTwoColours \uE000
+set cfSentinel \uE001
+set cfTranslucent \uE002
+set cfAllEmpty \uE003
+set cfComposite \uE004
+set cfNotBase \uE005
+
+# glyf bytes for one simple glyph, from contours of {x y ?onCurve?} points.
+# Written through [glyfOutline compose], which is the writer this package
+# already has - packing flags and deltas a second time here would be the same
+# logic twice, and wrong in a way no test would show.
+proc cfOutline {contours} {
+  set ends {}
+  set flags {}
+  set xs {}
+  set ys {}
+  set count 0
+  foreach contour $contours {
+    foreach point $contour {
+      lassign $point x y on
+      lappend flags [expr {$on eq {} ? 1 : $on}]
+      lappend xs $x
+      lappend ys $y
+      incr count
+    }
+    lappend ends [expr {$count - 1}]
+  }
+  return [::tclpdf::glyfOutline compose [dict create type simple ends $ends \
+      flags $flags x $xs y $ys instructions {} bounds {0 0 0 0}]]
+}
+
+# A composite glyph drawing one other glyph at the origin. 0x0002 is
+# ARGS_ARE_XY_VALUES; there is no transform, so no bytes follow the arguments.
+proc cfComposite {glyph} {
+  return [::tclpdf::glyfOutline compose [dict create type composite \
+      bounds {0 0 1000 1000} instructions {} \
+      components [list [list 0x0002 $glyph {0 0} {}]]]]
+}
+
+# A COLR version 0 table (ISO/IEC 14496-22, 5.7.11): a header, one record per
+# base glyph, one record per layer. 14 + 6 per base glyph + 4 per layer.
+proc cfColr {records layers} {
+  set numBase [llength $records]
+  set table [binary format SuSuIuIuSu 0 $numBase 14 \
+      [expr {14 + $numBase * 6}] [llength $layers]]
+  foreach record $records {
+    append table [binary format SuSuSu {*}$record]
+  }
+  foreach layer $layers {
+    append table [binary format SuSu {*}$layer]
+  }
+  return $table
+}
+
+# A CPAL version 0 table (5.7.12). The colour records are {blue green red
+# alpha}, in that order, and the palettes are windows into that one array -
+# which is why two palettes here cost one extra colour rather than four.
+proc cfCpal {entries starts colours} {
+  set table [binary format SuSuSuSuIu 0 $entries [llength $starts] \
+      [llength $colours] [expr {12 + [llength $starts] * 2}]]
+  foreach start $starts {
+    append table [binary format Su $start]
+  }
+  foreach colour $colours {
+    append table [binary format cccc {*}$colour]
+  }
+  return $table
+}
+
+# A cmap, format 12 - one group per character, which is longer than format 4
+# and short enough to read. [sfnt parse] prefers platform 3 encoding 10 over
+# everything else, so this is the subtable it takes.
+proc cfCmap {map} {
+  set groups {}
+  set count 0
+  foreach code [lsort -integer [dict keys $map]] {
+    append groups [binary format IuIuIu $code $code [dict get $map $code]]
+    incr count
+  }
+  set subtable [binary format SuSuIuIuIu 12 0 [expr {16 + $count * 12}] 0 $count]
+  append subtable $groups
+  return [binary format SuSuSuSuIu 0 1 3 10 12]$subtable
+}
+
+# The whole face around the tables: 1000 units to the em, an ascender of 800,
+# an advance of 1000 for every glyph, and a 32-bit loca so an offset needs no
+# halving. Every glyph is padded to four bytes, which loca then reflects.
+proc cfFont {glyphs map colr cpal} {
+  set count [llength $glyphs]
+  set head [binary format IuIuIuIu 0x00010000 0x00010000 0 0x5F0F3CF5]
+  append head [binary format SuSu 0 1000]
+  append head [binary format WuWu 0 0]
+  append head [binary format SSSS 0 -200 1000 800]
+  # macStyle, lowestRecPPEM, fontDirectionHint, indexToLocFormat 1, format 0.
+  append head [binary format SuSuSSS 0 8 2 1 0]
+  set hhea [binary format Iu 0x00010000]
+  append hhea [binary format SSS 800 -200 0]
+  append hhea [binary format Su 1000]
+  append hhea [binary format SSS 0 0 1000]
+  append hhea [binary format SSS 1 0 0]
+  append hhea [binary format SSSS 0 0 0 0]
+  append hhea [binary format SSu 0 $count]
+  set maxp [binary format Iu 0x00010000]
+  append maxp [binary format Su $count]
+  append maxp [string repeat \x00 26]
+  set hmtx {}
+  set glyf {}
+  set loca {}
+  foreach data $glyphs {
+    append hmtx [binary format SuS 1000 0]
+    append loca [binary format Iu [string length $glyf]]
+    append glyf $data
+    while {[string length $glyf] % 4} {
+      append glyf \x00
+    }
+  }
+  append loca [binary format Iu [string length $glyf]]
+  return [::tclpdf::subset::Assemble [dict create head $head hhea $hhea \
+      maxp $maxp hmtx $hmtx loca $loca glyf $glyf cmap [cfCmap $map] \
+      COLR $colr CPAL $cpal]]
+}
+
+# The face this file measures against.
+#
+#   0  .notdef, empty
+#   1  a square           layer
+#   2  a triangle         layer
+#   3  a bar              layer
+#   4  nothing at all     layer, and the one that makes a base glyph blank
+#   5  a composite        layer, drawing glyph 1
+#   6..10  base glyphs, all with an empty outline of their own
+#   11 a plain glyph with no COLR record and no outline
+#
+# The two palettes overlap by three colours, which is what a palette IS - a
+# window into one colour record array - so palette 1 answers green where
+# palette 0 answers red for the same entry.
+proc cfFixture {} {
+  set glyphs [list {} \
+      [cfOutline {{{100 100} {900 100} {900 900} {100 900}}}] \
+      [cfOutline {{{200 150} {800 150} {500 750}}}] \
+      [cfOutline {{{150 400} {850 400} {850 600} {150 600}}}] \
+      {} [cfComposite 1] {} {} {} {} {} {}]
+  set map [dict create 0xE000 6 0xE001 7 0xE002 8 0xE003 9 0xE004 10 \
+      0xE005 11 0x1F600 6]
+  # base glyph -> first layer, layer count
+  set records {{6 0 2} {7 2 2} {8 4 1} {9 5 1} {10 6 1}}
+  # layer glyph -> palette entry. 0xFFFF is the sentinel: the text colour.
+  set layers {{1 0} {2 1} {1 2} {3 0xFFFF} {1 3} {4 0} {5 0}}
+  # blue green red alpha - red, green, blue, red at half alpha, and a grey.
+  set colours {{0 0 255 255} {0 170 0 255} {255 0 0 255} {0 0 255 128} \
+      {128 128 128 255}}
+  return [cfFont $glyphs $map [cfColr $records $layers] \
+      [cfCpal 4 {0 1} $colours]]
+}
+
+# The face as a file, for the tests that take the path rather than -data.
+proc cfFile {name} {
+  set path [::tclpdfTest::scratch $name]
+  set channel [open $path wb]
+  puts -nonewline $channel [cfFixture]
+  close $channel
+  return $path
+}
+
+# The glyph stream of one character, as the reader will execute it. Read out
+# of the document rather than out of the written file, so a test can look at
+# it without writing - the written form is checked separately, in section 4.
+proc cfStream {doc alias char} {
+  set entry [dict get [$doc state fonts] $alias]
+  return [dict get $entry glyphs [dict get $entry codes $char] stream]
+}
+
+# The operators of a stream as a flat list, so a test names the shape it means
+# instead of matching white space. Same shape as glyfPath.test's.
+proc cfLines {stream} {
+  return [lmap line [split [string trim $stream] \n] {string trim $line}]
+}
+
+
+# A document with the fixture in it under the alias "marks".
+proc cfDocument {chars args} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc colorFont marks -data [cfFixture] -chars $chars {*}$args
+  return $doc
+}
+
+# --- the face and the font --------------------------------------------------
+
+test colorFont-1.1 {the fixture is a colour face and becomes a family} -body {
+  # The call answers the alias, so that it can be handed straight to
+  # [font -family]; what it leaves behind is a font of three glyphs.
+  set doc [cfDocument $cfTwoColours$cfSentinel$cfTranslucent]
+  set alias [$doc font names]
+  set info [$doc font info marks]
+  $doc destroy
+  list $alias [dict get $info glyphs] [dict get $info characters] \
+      [dict get $info unitsPerEm]
+} -result {marks 3 3 1000.0}
+
+test colorFont-1.2 {a path and -data build the same font} -body {
+  # -data is there for the face that never was a file: one built in memory,
+  # one out of a database, one out of an archive. It has to produce the same
+  # glyph, or the two roads have drifted.
+  set path [cfFile colorFont-1.2.ttf]
+  set fromFile [tclpdf new -unit mm -compress 0]
+  $fromFile page add
+  $fromFile colorFont marks $path -chars $cfTwoColours
+  set one [cfStream $fromFile marks $cfTwoColours]
+  set fromData [cfDocument $cfTwoColours]
+  set two [cfStream $fromData marks $cfTwoColours]
+  $fromFile destroy
+  $fromData destroy
+  file delete $path
+  expr {$one eq $two}
+} -result 1
+
+test colorFont-1.3 {a colour font is a family like any other} -body {
+  # The point of the whole road: nothing downstream has to know that this
+  # family is drawn. [textWidth] measures it, [font -size] scales it, and the
+  # advance is the face's own - 1000 units at 1/1000 of the em, so one
+  # character is exactly the font size wide.
+  set doc [cfDocument $cfTwoColours]
+  $doc font -family marks -size 12
+  set width [$doc textWidth $cfTwoColours]
+  set double [$doc font -family marks -size 24; $doc textWidth $cfTwoColours]
+  $doc destroy
+  # In mm: 12 pt = 4.2333 mm.
+  list [format %.4f $width] [format %.4f [expr {$double / $width}]]
+} -result {4.2333 2.0000}
+
+test colorFont-1.4 {font embed refuses this very face} -body {
+  # The refusal this module's material always triggers: every character the
+  # face covers has an empty outline, so an embedded copy would come out
+  # blank with nothing reporting it. Checked here so that -1.5 below means
+  # something: the two hand the SAME bytes to the two roads.
+  set path [cfFile colorFont-1.4.ttf]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc font embed blank $path}]
+  $doc destroy
+  file delete $path
+  lrange $code 0 2
+} -result {TCLPDF FONT OUTLINES}
+
+test colorFont-1.5 {the same face goes into the document through colorFont} -body {
+  # [FontDrawsNothing] is asked in [FontEmbed] and nowhere else, so the road
+  # through [font define] is not affected by the refusal above. Measured
+  # rather than assumed - the same file, the other call.
+  set path [cfFile colorFont-1.5.ttf]
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set alias [$doc colorFont marks $path -chars $cfTwoColours]
+  set drawn [regexp {(?m)^f$} [cfStream $doc marks $cfTwoColours]]
+  $doc destroy
+  file delete $path
+  list $alias $drawn
+} -result {marks 1}
+
+test colorFont-1.6 {a character named twice is built once} -body {
+  # Not a truncation: what comes out is exactly the font that was asked for.
+  # Letting [font glyph] refuse the repeat would turn a harmless list into an
+  # error.
+  set doc [cfDocument $cfTwoColours$cfSentinel$cfTwoColours]
+  set info [$doc font info marks]
+  $doc destroy
+  dict get $info glyphs
+} -result 2
+
+test colorFont-1.7 {a character beyond the BMP reaches its glyph} -body {
+  # Counted in CODE POINTS. Under Tcl 8.6 U+1F600 is stored as a surrogate
+  # pair and [string length] says 2, which is what used to make [font glyph]
+  # refuse it; [split {}] hands it back as ONE element under both
+  # interpreters, and that is how this module counts.
+  #
+  # Written as UTF-8 bytes rather than as an escape or a literal, because
+  # neither of those survives both interpreters: \U0001F600 reads as U+FFFD
+  # under 8.6 (measured 2026-08-21 with 8.6.18), and a literal depends on the
+  # encoding this file happens to be read in. [encoding convertfrom] answers
+  # the surrogate pair under 8.6 and the single character under 9, which is
+  # exactly what each of them calls one character.
+  set doc [cfDocument [encoding convertfrom utf-8 "\xF0\x9F\x98\x80"]]
+  set entry [dict get [$doc state fonts] marks]
+  set codes [dict keys [dict get $entry glyphs]]
+  set stream [lindex [dict values [dict get $entry glyphs]] 0]
+  $doc destroy
+  # One glyph, addressed by a code the encoding has room for rather than by
+  # its own code point, and the layers of base glyph 6 in it.
+  list [llength $codes] [expr {[lindex $codes 0] <= 255}] \
+      [llength [regexp -all -inline {(?m)^f$} $stream]]
+} -result {1 1 2}
+
+test colorFont-1.8 {-palette chooses which palette the layers are read through} -body {
+  # The two palettes of the fixture overlap: entry 0 is red in palette 0 and
+  # green in palette 1. Same glyph, same layers, other colours.
+  set zero [cfDocument $cfTwoColours]
+  set one [cfDocument $cfTwoColours -palette 1]
+  set first [lsearch -inline [cfLines [cfStream $zero marks $cfTwoColours]] *rg]
+  set second [lsearch -inline [cfLines [cfStream $one marks $cfTwoColours]] *rg]
+  $zero destroy
+  $one destroy
+  list $first $second
+} -result {{1 0 0 rg} {0 0.66667 0 rg}}
+
+# --- the glyph streams ------------------------------------------------------
+
+test colorFont-2.1 {a glyph description begins with d0, not d1} -body {
+  # d1 "specifies only shape, not colour", and the norm then IGNORES any
+  # operator that sets a colour (9.6.4, Table 111) - which is every operator
+  # this module writes. d0 is what [font glyph] writes by default (-color
+  # own) and what this keeps.
+  set doc [cfDocument $cfTwoColours]
+  set first [lindex [cfLines [cfStream $doc marks $cfTwoColours]] 0]
+  $doc destroy
+  set first
+} -result {1000 0 d0}
+
+test colorFont-2.2 {every layer sits in its own q/Q, bottom first} -body {
+  # A colour operator holds until it is changed, so without the bracket a
+  # layer that sets no colour would inherit the one under it. Bottom first
+  # is the z-order the format stores (5.7.11) and the order they are painted
+  # in: the square is layer 0 and the triangle covers it.
+  set doc [cfDocument $cfTwoColours]
+  set lines [cfLines [cfStream $doc marks $cfTwoColours]]
+  $doc destroy
+  list [llength [lsearch -all -exact $lines q]] \
+      [llength [lsearch -all -exact $lines Q]] \
+      [lindex $lines [expr {[lsearch -exact $lines q] + 2}]] \
+      [lindex $lines end-1]
+} -result {2 2 {100 100 m} f}
+
+test colorFont-2.3 {the fill is nonzero - "f", never "f*"} -body {
+  # TrueType winds an outer contour one way and an inner one the other, and
+  # that is what makes a counter a hole. Even-odd parts company where
+  # contours OVERLAP, which in a colour font is not the exception.
+  set doc [cfDocument $cfTwoColours$cfSentinel$cfTranslucent]
+  set streams {}
+  foreach char [list $cfTwoColours $cfSentinel $cfTranslucent] {
+    append streams [cfStream $doc marks $char]
+  }
+  $doc destroy
+  list [llength [regexp -all -inline {(?m)^f$} $streams]] \
+      [regexp {f\*} $streams]
+} -result {5 0}
+
+test colorFont-2.4 {a sentinel layer gets no colour operator at all} -body {
+  # 0xFFFF does not name a palette entry: it means "whatever colour the text
+  # has" (ISO/IEC 14496-22, 5.7.11), and under d0 that is the fill colour in
+  # force when the glyph is invoked. So the second layer of this glyph has a
+  # q, a path and an f, and nothing between the q and the path.
+  set doc [cfDocument $cfSentinel]
+  set lines [cfLines [cfStream $doc marks $cfSentinel]]
+  $doc destroy
+  set second [lsearch -all -exact $lines q]
+  list [llength [lsearch -all -inline $lines *rg]] \
+      [lindex $lines [expr {[lindex $second 1] + 1}]]
+} -result {1 {150 400 m}}
+
+test colorFont-2.5 {an opaque layer costs no ExtGState} -body {
+  # /ca lives in an ExtGState (11.6.6), which is a resource and an object.
+  # An opaque entry must cost neither - measured over Twemoji Mozilla's 1063
+  # palette entries, 1048 are fully opaque.
+  set doc [cfDocument $cfTwoColours]
+  set stream [cfStream $doc marks $cfTwoColours]
+  set states [$doc resource ExtGState]
+  $doc destroy
+  list [regexp {gs} $stream] [dict size $states]
+} -result {0 0}
+
+test colorFont-2.6 {a translucent layer gets one, in the font's own Resources} -body {
+  # The other 15 of those 1063. The resource comes from [GraphicsOpacity],
+  # one per distinct value for the whole document, and has to reach the Type
+  # 3 font's /Resources - 7.8.3 asks for "all the resources used by all the
+  # content streams in the CharProcs dictionary", and the page's dictionary
+  # is not that.
+  #
+  # This is also the test that would have caught the module reaching for
+  # [GraphicsOpacity] without loading graphics.tcl: the lazy dispatcher in
+  # document.tcl maps public methods to topics and knows nothing of it, so
+  # the call died with "unknown method" - measured 2026-08-21.
+  set doc [cfDocument $cfTranslucent]
+  $doc font -family marks -size 18
+  $doc text $cfTranslucent -at {20 40}
+  set path [::tclpdfTest::scratch colorFont-2.6.pdf]
+  $doc write $path
+  set lines [cfLines [cfStream $doc marks $cfTranslucent]]
+  set name [lindex [dict keys [$doc resource ExtGState]] 0]
+  set font [lindex [::tclpdfTest::objects $doc {/Subtype /Type3}] 0]
+  $doc destroy
+  file delete $path
+  list [lsearch -inline $lines *gs] \
+      [string match "*/ExtGState << /$name *" $font]
+} -result {{/GS0_50196f gs} 1}
+
+test colorFont-2.7 {font units go out unscaled, the FontMatrix carries the em} -body {
+  # The numbers in the stream are the integers the face stores, and the
+  # /FontMatrix is 1/unitsPerEm. Doing it the other way would write
+  # 0.1 for every coordinate and lose the exactness for nothing.
+  set doc [cfDocument $cfTwoColours]
+  $doc font -family marks -size 18
+  $doc text $cfTwoColours -at {20 40}
+  set path [::tclpdfTest::scratch colorFont-2.7.pdf]
+  $doc write $path
+  set stream [cfStream $doc marks $cfTwoColours]
+  set font [lindex [::tclpdfTest::objects $doc {/Subtype /Type3}] 0]
+  $doc destroy
+  file delete $path
+  list [regexp {(?m)^100 100 m$} $stream] \
+      [regexp {/FontMatrix \[0\.001 0 0 0\.001 0 0\]} $font]
+} -result {1 1}
+
+test colorFont-2.8 {the unit correction is written only outside pt} -body {
+  # A glyph script draws through the document unit, so [Type3Stream] prefixes
+  # the stream with a "cm" that scales POINTS back to glyph units. These
+  # operators are glyph units already, so this module writes that
+  # correction's inverse - one operator, and none at all in a pt document.
+  set points [tclpdf new -unit pt -compress 0]
+  $points page add
+  $points colorFont marks -data [cfFixture] -chars $cfTwoColours
+  set inPoints [cfLines [cfStream $points marks $cfTwoColours]]
+  set millimetres [cfDocument $cfTwoColours]
+  set inMillimetres [cfLines [cfStream $millimetres marks $cfTwoColours]]
+  $points destroy
+  $millimetres destroy
+  # In pt: d0 and then the path. In mm: d0, type3's correction, its inverse,
+  # and the two multiply back to 1.
+  set undo [lindex $inMillimetres 1]
+  set redo [lindex $inMillimetres 2]
+  list [lindex $inPoints 1] [llength [lsearch -all -inline $inPoints *cm]] \
+      [llength [lsearch -all -inline $inMillimetres *cm]] \
+      [format %.5f [expr {[lindex $undo 0] * [lindex $redo 0]}]]
+} -result {q 0 2 1.00000}
+
+test colorFont-2.9 {an empty layer costs nothing and does not break the glyph} -body {
+  # The format allows a layer with no outline and a face may carry one. It
+  # draws nothing either way, so it gets no q/Q and no colour - but a base
+  # glyph whose layers are ALL like that is refused, see colorFont-3.5.
+  set doc [cfDocument $cfSentinel]
+  set lines [cfLines [cfStream $doc marks $cfSentinel]]
+  $doc destroy
+  # Two layers, two brackets, no stray operator between them.
+  list [llength [lsearch -all -exact $lines q]] \
+      [llength [lsearch -all -exact $lines h]]
+} -result {2 2}
+
+# --- what is refused, and by which code -------------------------------------
+
+test colorFont-3.1 {a face without COLR and CPAL} -constraints havePlain -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks $::plainFace -chars A}]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT TABLES marks}
+
+test colorFont-3.2 {a character the face has no glyph for} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] -chars X}]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT CHAR U+0058 marks}
+
+test colorFont-3.3 {a glyph that is not a colour base glyph} -body {
+  # The interesting refusal: most glyphs of a colour font are layers or
+  # plain outlines, and asking for one of those would otherwise produce a
+  # blank glyph rather than an error.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] \
+      -chars $::cfNotBase}]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT BASE U+E005 11 marks}
+
+test colorFont-3.4 {a layer that is a composite glyph} -body {
+  # [glyfPath] refuses composites by name, because assembling components is
+  # glyfOutline's subject. Whether that matters was measured rather than
+  # assumed: of Twemoji Mozilla's 33179 layer glyphs, 33179 are simple and
+  # NONE is a composite - the layers of a colour glyph are drawn shapes, not
+  # letters with accents. The refusal is named all the same.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] \
+      -chars $::cfComposite}]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT COMPOSITE U+E004 5 marks}
+
+test colorFont-3.5 {a base glyph whose layers all draw nothing} -body {
+  # The blank-page trap of [font embed] one level down, refused for the same
+  # reason: the document would be valid, extractable and empty.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] \
+      -chars $::cfAllEmpty}]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT EMPTY U+E003 marks}
+
+test colorFont-3.6 {more than 255 characters} -body {
+  # A Type 3 font is addressed by single bytes and holds at most 255 glyphs
+  # (9.6.5.3). The limit is checked before the face is even read, so the
+  # 256th character is a refusal and not a silent truncation.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set chars {}
+  for {set code 0x2000} {[llength [split $chars {}]] < 256} {incr code} {
+    append chars [subst [format {\u%04x} $code]]
+  }
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] -chars $chars}]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT LIMIT 256}
+
+test colorFont-3.7 {a palette the face has not got} -body {
+  # Checked before anything is built. [colr color] would refuse a wrong
+  # number too, but only on the first layer that is not the sentinel - a
+  # glyph that takes the text colour throughout would get away with it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] \
+      -chars $::cfTwoColours -palette 5}]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT PALETTE 5 2}
+
+test colorFont-3.8 {the call needs a name, a face and -chars} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set answers {}
+  foreach script {
+      {$doc colorFont}
+      {$doc colorFont marks -chars A}
+      {$doc colorFont marks -data [cfFixture]}
+  } {
+    catch $script message
+    lappend answers [string match {tclpdf: colorFont needs *} $message]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1}
+
+test colorFont-3.9 {a refused call leaves no half-built font behind} -body {
+  # Pass one reads and refuses; nothing about the document is touched. So a
+  # call naming one character the face has not got leaves neither a family
+  # with no glyphs in it nor an ExtGState for a layer that never reached a
+  # stream.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] \
+      -chars $::cfTranslucent$::cfNotBase}]
+  set fonts [dict keys [$doc state fonts]]
+  set states [dict size [$doc resource ExtGState]]
+  $doc destroy
+  list [lindex $code 1] $fonts $states
+} -result {COLORFONT {} 0}
+
+test colorFont-3.10 {what colr refuses keeps its own code} -body {
+  # A COLR version 1 table, which this reads none of. The refusal comes from
+  # colr.tcl and is passed through undressed, so a caller trapping TCLPDF
+  # COLR gets the same answer whether it read the tables itself or through
+  # this.
+  set colr [cfColr {{6 0 1}} {{1 0}}]
+  set version1 [string replace $colr 0 1 [binary format Su 1]]
+  set face [cfFont [list {} \
+      [cfOutline {{{100 100} {900 100} {900 900}}}] {} {} {} {} {}] \
+      [dict create 0xE000 6] $version1 \
+      [cfCpal 1 {0} {{0 0 255 255}}]]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data $face -chars $::cfTwoColours}]
+  $doc destroy
+  lrange $code 0 1
+} -result {TCLPDF COLR}
+
+# --- the written document ---------------------------------------------------
+
+test colorFont-4.1 {the font dictionary is a Type 3 font with no font file} -body {
+  set doc [cfDocument $cfTwoColours$cfSentinel]
+  $doc font -family marks -size 18
+  $doc text $cfTwoColours$cfSentinel -at {20 40}
+  set path [::tclpdfTest::scratch colorFont-4.1.pdf]
+  $doc write $path
+  set font [lindex [::tclpdfTest::objects $doc {/Subtype /Type3}] 0]
+  $doc destroy
+  file delete $path
+  list [string match {*/Type /Font*} $font] \
+      [string match {*/CharProcs <<*/uniE000 *} $font] \
+      [string match {*/CharProcs <<*/uniE001 *} $font] \
+      [string match {*/ToUnicode *} $font] \
+      [regexp {FontFile} $font]
+} -result {1 1 1 1 0}
+
+test colorFont-4.2 {the characters come back out of the file} \
+    -constraints pdftotext -body {
+  # /ToUnicode falls out of the construction: [font glyph] takes the
+  # CHARACTER, so the map cannot disagree with the codes. Private use area
+  # characters are what pdftotext reports back, byte for byte.
+  set doc [cfDocument $cfTwoColours$cfSentinel]
+  $doc font -family marks -size 18
+  $doc text $cfTwoColours$cfSentinel -at {20 40}
+  set path [::tclpdfTest::scratch colorFont-4.2.pdf]
+  $doc write $path
+  $doc destroy
+  catch {exec pdftotext $path -} text
+  file delete $path
+  string trim [lindex [split $text \n] 0]
+} -result "$cfTwoColours$cfSentinel"
+
+test colorFont-4.3 {qpdf reads the file back without a complaint} \
+    -constraints qpdf -body {
+  set doc [cfDocument $cfTwoColours$cfSentinel$cfTranslucent]
+  $doc font -family marks -size 24
+  $doc text $cfTwoColours$cfSentinel$cfTranslucent -at {20 40}
+  set path [::tclpdfTest::scratch colorFont-4.3.pdf]
+  $doc write $path
+  $doc destroy
+  set failed [catch {exec qpdf --check $path 2>@1} report]
+  file delete $path
+  list $failed [regexp {No syntax or stream encoding errors} $report]
+} -result {0 1}
+
+test colorFont-4.4 {a colour font keeps PDF/A-3B, alpha and all} \
+    -constraints haveSrgbIcc -body {
+    # Parts 2 and 3 permit transparency; part 1 forbids it and is refused by
+    # [pdfa] anyway. The translucent glyph is in on purpose: it is the one
+    # thing in this module that adds an ExtGState, and an ExtGState in a
+    # Type 3 font's own /Resources is the arrangement a validator is most
+    # likely to disagree with.
+    set doc [tclpdf new -unit mm]
+    $doc info Title "A colour font"
+    $doc pdfa -part 3 -conformance b -profile $::srgbIcc
+    $doc page add
+    $doc colorFont marks -data [cfFixture] \
+        -chars $::cfTwoColours$::cfSentinel$::cfTranslucent
+    $doc font -family marks -size 24 -color {0.1 0.2 0.6}
+    $doc text $::cfTwoColours$::cfSentinel$::cfTranslucent -at {20 40}
+    set path [::tclpdfTest::scratch colorFont-4.4.pdf]
+    $doc write $path
+    $doc destroy
+    set report [::tclpdfTest::verapdf $path 3b]
+    file delete $path
+    set report
+} -result ok
+
+test colorFont-4.5 {the same document written twice is the same file} -body {
+  # Everything this module creates goes through [reservation] and
+  # [GraphicsOpacity], both of which answer the same name the second time.
+  set doc [cfDocument $cfTwoColours$cfTranslucent]
+  $doc font -family marks -size 18
+  $doc text $cfTwoColours$cfTranslucent -at {20 40}
+  lassign [::tclpdfTest::writeTwice $doc colorFont-4.5] first second
+  $doc destroy
+  expr {$first eq $second}
+} -result 1
+
+test colorFont-4.6 {a colour font and an embedded face in one document} \
+    -constraints havePlain -body {
+  # The ordinary case rather than an exotic one: a colour font exists for the
+  # symbols a real face has not got, so the two always stand side by side -
+  # one font list, one write, two kinds of font, and -fallback reaches from
+  # the words into the symbols without the caller splitting the string.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed body $::plainFace
+  $doc colorFont marks -data [cfFixture] -chars $::cfTwoColours
+  $doc font -family body -size 12 -fallback marks
+  $doc text "mind the step $::cfTwoColours" -at {20 30}
+  set path [::tclpdfTest::scratch colorFont-4.6.pdf]
+  $doc write $path
+  set type3 [llength [::tclpdfTest::objects $doc {/Subtype /Type3}]]
+  set truetype [llength [::tclpdfTest::objects $doc {/FontFile2}]]
+  $doc destroy
+  file delete $path
+  list $type3 $truetype
+} -result {1 1}
+
+cleanupTests

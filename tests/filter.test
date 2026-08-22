@@ -88,4 +88,329 @@ test filter-asciihex-3.3 {the end marker is honoured, trailing junk ignored} -bo
   set hex
 } -result 48656c6c6f
 
+
+# The one stream in this file that no line of it produced: 340 bytes of the
+# sequence (n*n + 7n + 13) mod 251 - which barely compresses and therefore
+# reaches the first code width change - run through the LZW encoder of libtiff
+# 4.7.2. The plaintext is regenerated rather than written out.
+set filterLzwStream [binary format H* [join {
+    800342a1f158e4925b37a153ab769bc42c382e20954d4028ccc6956481078765
+    93c06a775d8189c98720dd0ed919221c03f4dbe4bcc014a3dee66691156a2c50
+    06d26124704522184e09d5e3e65175da840eacca0ea458b99c750f310e220661
+    fc68e64f9682ed14915434dc529c07a0c6c2ad00571802dc6c251a18d6521d89
+    8260277385accd633057cbd5f3058ccd6b385dc0209898765235a1946c27182c
+    6057402adb00c1e9c14adc0d15524d10b9693ee61a1fd982038b103c75670b91
+    6ea282cc3a8476975943e5789d3818488451c124986d402c5a915a4667ba3c52
+    c02f3e5363f7022064d9438ddc8982701976771abc164761e0119295318cc0ad
+    455208b8380b3c5a6b74ea14de5b248e4561f0a8340e03008040607814120c84
+    2148621c882248a22c8c2348e23c902449224c942549625c982649a26c9c2749
+    e27ca0284a228ca4294a629ca82a4aa2acac0b4808
+} {}]]
+
+proc filterLzwSample {} {
+  set out {}
+  for {set n 0} {$n < 340} {incr n} {
+    append out [binary format c [expr {($n * $n + 7 * $n + 13) % 251}]]
+  }
+  return $out
+}
+
+# --- LZWDecode -------------------------------------------------------------
+
+# Pack a list of code/width pairs into bytes, high-order bit first (7.4.4.2),
+# and pad the last byte with zeros. The width is written out for every single
+# code instead of being derived: these streams exist to test the one point
+# where an encoder and a decoder can disagree about it, so the test has to be
+# able to say what the encoder wrote.
+proc filterLzwPack {pairs} {
+  set bits {}
+  foreach {code width} $pairs {
+    append bits [format %0${width}b $code]
+  }
+  append bits [string repeat 0 [expr {(8 - [string length $bits] % 8) % 8}]]
+  return [binary format B* $bits]
+}
+
+# A run of single-byte codes: after the first one, every code adds a table
+# entry, so 254 of them are what it takes to reach the first width change.
+proc filterLzwBytes {count width} {
+  set pairs {}
+  for {set n 0} {$n < $count} {incr n} {
+    lappend pairs [expr {$n % 251}] $width
+  }
+  return $pairs
+}
+
+proc filterLzwPlain {count} {
+  set out {}
+  for {set n 0} {$n < $count} {incr n} {
+    append out [binary format c [expr {$n % 251}]]
+  }
+  return $out
+}
+
+# The -errorcode of a refusal, so that a test asserts the CONTRACT rather than
+# the wording of a message.
+proc filterRefusal {script} {
+  if {[catch {uplevel 1 $script} result options] == 0} {
+    return "no error: $result"
+  }
+  return [dict get $options -errorcode]
+}
+
+test filter-lzw-4.1 {the worked example of 7.4.4.2} -body {
+  # Example 2 of the specification: the codes 256, 45, 258, 258, 65, 259, 66,
+  # 257 pack into these nine bytes and stand for the ten input bytes. It is
+  # the shortest stream that uses a code in the very step that defines it -
+  # the case that looks like a bug in every LZW decoder ever written.
+  binary scan [::tclpdf::filter decodeLzw [binary format H* 800B6050220C0C8501]] cu* out
+  set out
+} -result {45 45 45 45 45 65 45 45 45 66}
+
+test filter-lzw-4.2 {codes below 256 stand for themselves} -body {
+  set pairs [list 256 9]
+  lappend pairs {*}[filterLzwBytes 200 9] 257 9
+  ::tclpdf::filter decodeLzw [filterLzwPack $pairs]
+} -result [filterLzwPlain 200]
+
+test filter-lzw-4.3 {a clear code starts the table over} -body {
+  # A B, then entry 258 (= A B), then clear, then C D and entry 258 again -
+  # which now means C D. The letters differ on purpose: with the same ones on
+  # both sides of the clear a decoder that never empties its table gives the
+  # right answer by accident, and the test would pass over the defect.
+  set pairs {256 9 65 9 66 9 258 9 256 9 67 9 68 9 258 9 257 9}
+  ::tclpdf::filter decodeLzw [filterLzwPack $pairs]
+} -result ABABCDCD
+
+test filter-lzw-4.4 {a stream from an outside encoder, early change 1} -body {
+  # 340 bytes of the sequence (n*n + 7n + 13) mod 251, compressed by libtiff
+  # 4.7.2. An outside encoder is the point: everything else here checks the
+  # decoder against streams this test built itself.
+  ::tclpdf::filter decodeLzw $filterLzwStream
+} -result [filterLzwSample]
+
+test filter-lzw-4.5 {early change 0 on that stream is wrong, and wrong LATE} -body {
+  # The trap of /EarlyChange. The first 257 bytes come out right - everything
+  # up to the first width change - and only then does the stream turn into
+  # something else, 300 bytes instead of 340. A short stream never reaches
+  # the point at all and decodes correctly with either setting.
+  set wrong [::tclpdf::filter decodeLzw $filterLzwStream 0]
+  set right [filterLzwSample]
+  set at 0
+  while {$at < [string length $wrong] &&
+      [string index $wrong $at] eq [string index $right $at]} {
+    incr at
+  }
+  list [expr {$wrong eq $right}] $at [string length $wrong]
+} -result {0 257 300}
+
+test filter-lzw-4.6 {a stream that needs early change 0} -body {
+  # The other direction, which no TIFF supplies: an encoder that postpones
+  # the width change as long as possible writes ONE more code at nine bits.
+  # Read with the default the same bytes give something else entirely.
+  set pairs [list 256 9]
+  lappend pairs {*}[filterLzwBytes 255 9] 258 10 257 10
+  set stream [filterLzwPack $pairs]
+  set want [filterLzwPlain 255][binary format cc 0 1]
+  set late [::tclpdf::filter decodeLzw $stream 0]
+  set early [catch {::tclpdf::filter decodeLzw $stream 1} other]
+  list [expr {$late eq $want}] [expr {$early || $other ne $want}]
+} -result {1 1}
+
+test filter-lzw-4.7 {an EOD marker one bit narrower than expected} -body {
+  # The encoder adds a table entry with every code, the decoder only from the
+  # second code on - so where the input ends exactly at a width change, the
+  # decoder has made one entry the encoder never made, widens, and reads the
+  # nine-bit EOD as ten bits. One strip in 1922 of a measured file ends this
+  # way. The trailing byte is what a strip carries as padding and what makes
+  # the wrong code readable at all.
+  set pairs [list 256 9]
+  lappend pairs {*}[filterLzwBytes 254 9] 257 9
+  set stream [filterLzwPack $pairs][binary format c 0]
+  ::tclpdf::filter decodeLzw $stream
+} -result [filterLzwPlain 254]
+
+test filter-lzw-4.8 {a stream that stops without EOD keeps what it has} -body {
+  # Common enough in the wild that refusing would cost more than it protects.
+  ::tclpdf::filter decodeLzw [filterLzwPack {256 9 65 9 66 9}]
+} -result AB
+
+test filter-lzw-4.9 {a code no table entry defines is refused} -body {
+  filterRefusal {::tclpdf::filter decodeLzw [filterLzwPack {256 9 65 9 300 9}]}
+} -result {TCLPDF FILTER LZW CODE 300}
+
+test filter-lzw-4.10 {the first code after a clear must stand for a byte} -body {
+  filterRefusal {::tclpdf::filter decodeLzw [filterLzwPack {256 9 400 9}]}
+} -result {TCLPDF FILTER LZW CODE 400}
+
+test filter-lzw-4.11 {early change is 0 or 1} -body {
+  filterRefusal {::tclpdf::filter decodeLzw [filterLzwPack {256 9 65 9}] 2}
+} -result {TCLPDF FILTER LZW EARLYCHANGE 2}
+
+test filter-lzw-4.12 {a code that straddles the reader's block boundary} -body {
+  # The decoder walks its input in 64 KB blocks, which nothing outside it can
+  # see - unless a code straddles the boundary and loses its upper bits. This
+  # stream is 104 KB long and states the width changes itself: 254 codes fit
+  # into nine bits, then 512 into ten and 1024 into eleven, after which the
+  # width stays at twelve. Any bit lost at a boundary changes the length.
+  set pairs [list 256 9]
+  set n 0
+  foreach {count width} {254 9 512 10 1024 11 68210 12} {
+    for {set i 0} {$i < $count} {incr i} {
+      lappend pairs [expr {$n % 251}] $width
+      incr n
+    }
+  }
+  set stream [filterLzwPack $pairs]
+  list [expr {[string length $stream] > 65536}] \
+      [string length [::tclpdf::filter decodeLzw $stream]]
+} -result {1 70000}
+
+# --- predictors ------------------------------------------------------------
+
+# Hex in, hex out - a predictor is a byte transformation and reads best that
+# way. Everything else about the geometry goes in as options.
+proc filterPredict {hex args} {
+  binary scan [::tclpdf::filter decodePredictor [binary format H* $hex] {*}$args] H* out
+  return $out
+}
+
+test filter-predictor-5.1 {predictor 1 hands the bytes back untouched} -body {
+  filterPredict 00ff8000dead -predictor 1 -columns 6
+} -result 00ff8000dead
+
+test filter-predictor-5.2 {TIFF predictor 2, one component of eight bits} -body {
+  # The running sum of 7.4.4.4: each sample is the difference to the one on
+  # its left. 01 01 01 01 -> 01 02 03 04.
+  filterPredict 01010101 -predictor 2 -columns 4
+} -result 01020304
+
+test filter-predictor-5.3 {a row does not predict from the row above it} -body {
+  # Three columns, two rows. The left neighbour of the first sample in a row
+  # is outside the image and therefore zero (7.4.4.4), not the last sample of
+  # the row before - which is what makes rows independent under predictor 2.
+  filterPredict 010101050505 -predictor 2 -columns 3
+} -result 010203050a0f
+
+test filter-predictor-5.4 {TIFF predictor 2 wraps around at 256} -body {
+  # ff + 02 is 01, not 101 - the sum runs modulo the component width. This
+  # states the rule rather than catching a slip: "binary format c" truncates
+  # to eight bits anyway, so a sum that forgot to wrap would come out the
+  # same, and so would a sixteen-bit one. Only below eight bits does it
+  # matter, because there the samples are packed again by hand - 5.8 and 5.9
+  # are the tests that catch a missing wrap.
+  filterPredict ff020202 -predictor 2 -columns 4
+} -result ff010305
+
+test filter-predictor-5.5 {TIFF predictor 2 over three and four components} -body {
+  # RGB and CMYK: the neighbour is not the byte before but the same component
+  # of the sample before - three or four bytes back. 108 of 194 TIFF files
+  # measured here carry predictor 2, and none of them is single-component.
+  list [filterPredict 0102030a141e -predictor 2 -colors 3 -columns 2] \
+      [filterPredict 010203040a141e28 -predictor 2 -colors 4 -columns 2]
+} -result {0102030b1621 010203040b16212c}
+
+test filter-predictor-5.6 {TIFF predictor 2 over sixteen-bit components} -body {
+  # 00ff + 0002 is 0101: the carry crosses the byte boundary inside one
+  # component, which is exactly what a byte-wise predictor would get wrong.
+  filterPredict 00ff0002 -predictor 2 -bitspercomponent 16 -columns 2
+} -result 00ff0101
+
+test filter-predictor-5.7 {sixteen bits little end first give a different image} -body {
+  # The same four bytes, read the other way round: ff00 + 0200 is 0100. PDF
+  # stores the high byte first and that is the default; a TIFF says in its
+  # header which order it uses, and for predictor 2 the difference is not a
+  # detail but a different image.
+  list [filterPredict 00ff0002 -predictor 2 -bitspercomponent 16 -columns 2 \
+          -byteorder big] \
+      [filterPredict 00ff0002 -predictor 2 -bitspercomponent 16 -columns 2 \
+          -byteorder little]
+} -result {00ff0101 00ff0001}
+
+test filter-predictor-5.8 {TIFF predictor 2 over four-bit components} -body {
+  # Four samples to the byte pair: 1 2 3 4 becomes 1 3 6 a. Under eight bits
+  # the samples do not fall on byte boundaries, so the row is taken apart and
+  # put back together - libtiff refuses this combination outright, so there
+  # is no outside encoder to compare against, only the arithmetic.
+  list [filterPredict 1234 -predictor 2 -bitspercomponent 4 -columns 4] \
+      [filterPredict f111 -predictor 2 -bitspercomponent 4 -columns 4]
+} -result {136a f012}
+
+test filter-predictor-5.9 {TIFF predictor 2 over two-bit and one-bit components} -body {
+  # 01 01 01 01 in two bits each is 55 and sums to 1 2 3 0 - the wrap is at
+  # four, not at 256. In one bit the same stream is eight ones and the sum
+  # alternates.
+  list [filterPredict 55 -predictor 2 -bitspercomponent 2 -columns 4] \
+      [filterPredict ff -predictor 2 -bitspercomponent 1 -columns 8]
+} -result {6c aa}
+
+test filter-predictor-5.10 {the PNG row tags, one byte per sample} -body {
+  # Row 1 is None and stands for itself, then Sub, Up and Average over the
+  # same three differences. The last vector is Average over an ODD sum: half
+  # of left plus above, rounded DOWN. Rounding the other way is off by one on
+  # every second sample and shows up as a gradient drifting away over a wide
+  # image and nowhere else, so the even sums above would let it through.
+  list [filterPredict 000a141e -predictor 12 -columns 3] \
+      [filterPredict 000a141e01010101 -predictor 12 -columns 3] \
+      [filterPredict 000a141e02010101 -predictor 12 -columns 3] \
+      [filterPredict 000a141e03010101 -predictor 12 -columns 3] \
+      [filterPredict 0001020303000000 -predictor 12 -columns 3]
+} -result {0a141e 0a141e010203 0a141e0b151f 0a141e060e17 010203000102}
+
+test filter-predictor-5.11 {Paeth picks each of its three neighbours in turn} -body {
+  # The tag that cannot be checked with one vector: Paeth takes whichever of
+  # left, above and upper left the plane through them comes closest to. The
+  # first row picks above (there is nothing to its left), the second left,
+  # the third upper left - one case each, and a wrong comparison drops out.
+  list [filterPredict 000a0a0a04050000 -predictor 14 -columns 3] \
+      [filterPredict 00141304010001 -predictor 14 -columns 2]
+} -result {0a0a0a0f0f0f 14131514}
+
+test filter-predictor-5.12 {a PNG Sub over three components looks three bytes back} -body {
+  # The PNG group predicts a byte from the corresponding byte of the previous
+  # SAMPLE, so with three components the left neighbour is three bytes back -
+  # the same distance as under predictor 2, reached by a different rule.
+  filterPredict 010102030a141e -predictor 11 -colors 3 -columns 2
+} -result 0102030b1621
+
+test filter-predictor-5.13 {a PNG row of a single bit per component} -body {
+  # Under eight bits per component a sample is narrower than a byte, and the
+  # PNG group does not care: the neighbour is the byte before. Sub over two
+  # bytes of ff gives ff fe.
+  filterPredict 01ffff -predictor 15 -bitspercomponent 1 -columns 16
+} -result fffe
+
+test filter-predictor-5.14 {an unknown predictor is refused} -body {
+  list [filterRefusal {::tclpdf::filter decodePredictor xx -predictor 3}] \
+      [filterRefusal {::tclpdf::filter decodePredictor xx -predictor peaceful}]
+} -result {{TCLPDF FILTER PREDICTOR 3} {TCLPDF FILTER PREDICTOR peaceful}}
+
+test filter-predictor-5.15 {an impossible geometry is refused} -body {
+  list [filterRefusal {::tclpdf::filter decodePredictor xx -predictor 2 -colors 0}] \
+      [filterRefusal {::tclpdf::filter decodePredictor xx -predictor 2 \
+          -bitspercomponent 12}] \
+      [filterRefusal {::tclpdf::filter decodePredictor xx -predictor 2 -columns 0}] \
+      [filterRefusal {::tclpdf::filter decodePredictor xx -predictor 2 \
+          -byteorder middle}]
+} -result {{TCLPDF FILTER PREDICTOR COLORS 0} {TCLPDF FILTER PREDICTOR DEPTH 12}\
+    {TCLPDF FILTER PREDICTOR COLUMNS 0} {TCLPDF FILTER PREDICTOR BYTEORDER middle}}
+
+test filter-predictor-5.16 {an unknown PNG row tag is refused} -body {
+  filterRefusal {::tclpdf::filter decodePredictor [binary format H* 05010101] \
+      -predictor 15 -columns 3}
+} -result {TCLPDF FILTER PREDICTOR TAG 5}
+
+test filter-predictor-5.17 {an unknown option names the ones that exist} -body {
+  catch {::tclpdf::filter decodePredictor xx -colours 3} message
+  set message
+} -match glob -result {*unknown option "-colours"*-predictor -colors -bitspercomponent -columns -byteorder*}
+
+test filter-predictor-5.18 {an incomplete last row is left out, not guessed} -body {
+  # Both families work in whole rows. Five bytes with a row of three are one
+  # full row and two bytes that no reader can place - LZW streams from the
+  # wild carry such a tail as padding.
+  list [filterPredict 0101010101 -predictor 2 -columns 3] \
+      [filterPredict 000a141e0a -predictor 12 -columns 3]
+} -result {010203 0a141e}
+
 cleanupTests

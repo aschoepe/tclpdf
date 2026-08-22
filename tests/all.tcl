@@ -91,6 +91,9 @@ foreach tclpdfPkg {
     tclpdf::markPos
     tclpdf::glyfPath
     tclpdf::colr
+    tclpdf::colorFont
+    tclpdf::imageTiff
+    tclpdf::imageTiffStreams
     tclpdf::hyphenate
     tclpdf::kern
     tclpdf::gsubApply

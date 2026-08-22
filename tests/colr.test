@@ -160,12 +160,6 @@ proc colrFixture {} {
 
 # The -errorcode of a refusal, so that a test asserts the CONTRACT rather than
 # the wording of a message.
-proc colrRefusal {script} {
-  if {[catch {uplevel 1 $script} result options] == 0} {
-    return "no error: $result"
-  }
-  return [dict get $options -errorcode]
-}
 
 # --- reading the tables ----------------------------------------------------
 
@@ -319,7 +313,7 @@ test colr-5.1 {COLR version 1 is refused by name} -body {
   # base glyph, and every font that has one would otherwise look empty.
   set font [colrFont [colrTable $::colrRecords $::colrLayers {version 1}] \
       [cpalTable 0 4 {0} $::colrColors]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR VERSION COLR 1}
 
 test colr-5.2 {COLR version 1 names the version in its message} -body {
@@ -333,7 +327,7 @@ test colr-5.3 {a version 0 table with no base glyphs is refused} -body {
   # Nothing to draw, and the caller cannot tell an empty answer from a font it
   # never meant to ask about.
   set font [colrFont [colrTable {} {}] [cpalTable 0 4 {0} $::colrColors]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR EMPTY COLR}
 
 test colr-5.3a {the version is refused before the empty base glyph array} -body {
@@ -342,16 +336,16 @@ test colr-5.3a {the version is refused before the empty base glyph array} -body 
   # says anything useful about why nothing can be drawn.
   set font [colrFont [colrTable {} {} {version 1}] \
       [cpalTable 0 4 {0} $::colrColors]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR VERSION COLR 1}
 
 test colr-5.4 {a COLR without a CPAL is refused} -body {
-  colrRefusal {::tclpdf::colr build \
+  ::tclpdfTest::refusal {::tclpdf::colr build \
       [colrFont [colrTable $::colrRecords $::colrLayers] {}]}
 } -result {TCLPDF COLR MISSING CPAL}
 
 test colr-5.5 {a font without COLR is refused} -body {
-  colrRefusal {::tclpdf::colr build [colrFont {} [cpalTable 0 4 {0} $::colrColors]]}
+  ::tclpdfTest::refusal {::tclpdf::colr build [colrFont {} [cpalTable 0 4 {0} $::colrColors]]}
 } -result {TCLPDF COLR MISSING COLR}
 
 test colr-5.6 {a base glyph whose layers run past the layer array} -body {
@@ -359,26 +353,26 @@ test colr-5.6 {a base glyph whose layers run past the layer array} -body {
   # the reader walks off the end of the layer array into whatever follows it.
   set font [colrFont [colrTable {{4 0 3} {8 4 3}} $::colrLayers] \
       [cpalTable 0 4 {0} $::colrColors]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR LAYERS 8 4 3 6}
 
 test colr-5.7 {a base glyph array that does not fit in the table} -body {
   set font [colrFont [colrTable $::colrRecords $::colrLayers {baseOffset 40}] \
       [cpalTable 0 4 {0} $::colrColors]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR TRUNCATED COLR}
 
 test colr-5.8 {a layer array that does not fit in the table} -body {
   set font [colrFont [colrTable $::colrRecords $::colrLayers {layerOffset 200}] \
       [cpalTable 0 4 {0} $::colrColors]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR TRUNCATED COLR}
 
 test colr-5.9 {a COLR table cut short inside its own header} -body {
   # The header is 14 bytes and this one is 6, so the very first Offset32 is
   # already outside the table.
   set colr [string range [colrTable $::colrRecords $::colrLayers] 0 5]
-  colrRefusal {::tclpdf::colr build \
+  ::tclpdfTest::refusal {::tclpdf::colr build \
       [colrFont $colr [cpalTable 0 4 {0} $::colrColors]]}
 } -result {TCLPDF COLR TRUNCATED COLR}
 
@@ -387,7 +381,7 @@ test colr-5.10 {a CPAL version tclpdf does not read} -body {
   # reading its header as if it were version 0 would invent palettes.
   set font [colrFont [colrTable $::colrRecords $::colrLayers] \
       [cpalTable 0 4 {0} $::colrColors {} {version 2}]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR VERSION CPAL 2}
 
 test colr-5.11 {an empty CPAL table is refused} -body {
@@ -395,13 +389,13 @@ test colr-5.11 {an empty CPAL table is refused} -body {
   # font that states none is saying its colour glyphs have no colours.
   set font [colrFont [colrTable $::colrRecords $::colrLayers] \
       [cpalTable 0 4 {0} $::colrColors {} {numPalettes 0}]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR EMPTY CPAL}
 
 test colr-5.12 {a colour record array that does not fit in the table} -body {
   set font [colrFont [colrTable $::colrRecords $::colrLayers] \
       [cpalTable 0 4 {0} $::colrColors {} {numRecords 40}]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR TRUNCATED CPAL}
 
 test colr-5.13 {a palette that starts too late in the colour records} -body {
@@ -410,7 +404,7 @@ test colr-5.13 {a palette that starts too late in the colour records} -body {
   # bytes behind the array as a colour.
   set font [colrFont [colrTable $::colrRecords $::colrLayers] \
       [cpalTable 0 4 {0 2} $::colrColors]]
-  colrRefusal {::tclpdf::colr build $font}
+  ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR RECORDS 1 2 4 4}
 
 test colr-5.14 {a version 1 type array that does not fit in the table} -body {
@@ -420,25 +414,25 @@ test colr-5.14 {a version 1 type array that does not fit in the table} -body {
   # anybody WHICH of the four arrays of a version 1 CPAL was wrong.
   set font [colrFont [colrTable $::colrRecords $::colrLayers] \
       [cpalTable 1 4 {0 0} $::colrColors {1 2} {typeOffset 200}]]
-  set code [colrRefusal {::tclpdf::colr build $font}]
+  set code [::tclpdfTest::refusal {::tclpdf::colr build $font}]
   catch {::tclpdf::colr build $font} message
   list $code [string match {*palette type array*offset 200*} $message]
 } -result {{TCLPDF COLR TRUNCATED CPAL} 1}
 
 test colr-5.15 {a CPAL table cut short inside its own header} -body {
   set cpal [string range [cpalTable 0 4 {0} $::colrColors] 0 5]
-  colrRefusal {::tclpdf::colr build \
+  ::tclpdfTest::refusal {::tclpdf::colr build \
       [colrFont [colrTable $::colrRecords $::colrLayers] $cpal]}
 } -result {TCLPDF COLR TRUNCATED CPAL}
 
 test colr-5.16 {a palette that is not there} -body {
-  colrRefusal {::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 1 0}
+  ::tclpdfTest::refusal {::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 1 0}
 } -result {TCLPDF COLR PALETTE 1 1}
 
 test colr-5.17 {an entry that is not there} -body {
   # 4 is one past the last of four entries - and unlike 0xFFFF it is not a
   # sentinel, so it is a mistake and says so.
-  colrRefusal {::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 0 4}
+  ::tclpdfTest::refusal {::tclpdf::colr color [::tclpdf::colr build [colrFixture]] 0 4}
 } -result {TCLPDF COLR ENTRY 4 4}
 
 test colr-5.18 {a refusal is trappable by prefix} -body {

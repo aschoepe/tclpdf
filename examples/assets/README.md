@@ -165,6 +165,7 @@ All raster images are 640 × 480 except `sample-stencil.png`, which is 300 × 30
 | `sample-indexed.png` | 11 269 B | PNG, 8 bit, **colour type 3** (palette) | `/Indexed` with the PLTE chunk carried over |
 | `sample-rgba.png` | 40 215 B | PNG, 8 bit, **colour type 6** (RGBA) | the alpha path via `/SMask` — the one measured bottleneck (Paeth unfiltering) |
 | `sample-stencil.png` | 1 507 B | PNG, **1 bit**, colour type 0 (greyscale), 300 × 300 | the stencil mask (`/ImageMask true`, ISO 32000-2, 8.9.6.2) — a picture with no colour space, painted in whatever fill colour is in force |
+| `sample-scan.tiff` | 12 396 B | TIFF, 8 bit greyscale, 200 dpi, Deflate with predictor 2, `RowsPerStrip` 16 | the multi-strip case: a stateful compression restarts in every strip, so this one picture becomes **30** image XObjects stacked by the placement. Drawn here rather than taken from a real scan, and its sky is a smooth ramp because that is where a seam would show first |
 | `sample-vignette.png` | 34 181 B | PNG, 8 bit, colour type 0 (greyscale), 640 × 480 | the mask a caller names (`-mask`) — reaches the file as the `/SMask` of another picture (11.6.5.2, Table 143: a soft-mask image is DeviceGray) |
 | `sample-vector.svg` | 2 262 B | SVG 1.1 | stage 6, deferred |
 | `erika-mustermann.jpg` | 119 541 B | baseline JPEG (SOF0), 3 components, sRGB, **with an embedded ICC profile** (APP2, 3 160 B) — beside Exif, XMP and a Photoshop segment | the ICCBased path for pictures: the profile becomes the image colour space instead of the bare device name |
