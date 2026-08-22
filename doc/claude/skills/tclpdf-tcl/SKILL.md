@@ -1,7 +1,7 @@
 ---
 name: tclpdf-tcl
 description: >
-  Reference code for every documented tclpdf call - the pure-Tcl PDF package (text, fonts, hyphenation, tables, images, SVG, gradients, forms, layers, links, tagged PDF, PDF/UA, PDF/A, ZUGFeRD/Factur-X/Order-X, encryption, digital signatures, importing and reading a foreign PDF). Use whenever writing or reviewing Tcl that creates a PDF with tclpdf, or when a tclpdf call fails, is refused, or a validator (veraPDF, qpdf, Mustang, pdfsig) rejects the file. Trigger on "tclpdf", "$doc text", "$doc table", "font embed", "pdfa", "zugferd", "tagged", "ua 1", "PDF/A", "PDF/UA", "Factur-X", "Order-X", "$doc sign", "encrypt", "pdf import", "layer create", "hyphenate", "PDF erzeugen mit Tcl". Copy from the reference files instead of reinventing a call.
+  Reference code for every documented tclpdf call - the pure-Tcl PDF package (text, fonts, fallback chains, colour fonts, hyphenation, tables, images in JPEG/PNG/TIFF, SVG, gradients, forms, layers, links, tagged PDF, PDF/UA, PDF/A, ZUGFeRD/Factur-X/Order-X, encryption, digital signatures, importing and reading a foreign PDF). Use whenever writing or reviewing Tcl that creates a PDF with tclpdf, or when a tclpdf call fails, is refused, or a validator (veraPDF, qpdf, Mustang, pdfsig) rejects the file. Trigger on "tclpdf", "$doc text", "$doc table", "font embed", "colorFont", "-fallback", "image embed", "TIFF", "-dpi", "pdfa", "zugferd", "tagged", "ua 1", "PDF/A", "PDF/UA", "Factur-X", "Order-X", "$doc sign", "encrypt", "pdf import", "TCLPDF IMPORT", "layer create", "hyphenate", "PDF erzeugen mit Tcl". Copy from the reference files instead of reinventing a call.
 ---
 
 # tclpdf: reference code, not recollection
@@ -28,6 +28,7 @@ set type1    [file join $assets fonts NimbusSans-Regular.t1]    ;# with its .afm
 set variable [file join $assets fonts Roboto-Variable.ttf]      ;# a variable font
 set jpeg     [file join $assets images photo.jpg]
 set png      [file join $assets images logo.png]
+set tiff     [file join $assets images scan.tiff]         ;# any TIFF
 set svgFile  [file join $assets images drawing.svg]
 set iccRgb   /path/to/tclpdf/icc/sRGB2014.icc
 set iccCmyk  /path/to/tclpdf/icc/ISOcoated_v2_bas.ICC
@@ -55,17 +56,17 @@ set out      /path/to/out
 | file | covers |
 | --- | --- |
 | `reference/01-document.md` | new/configure/cget, page add/size/box/typeArea, coords/distance/extent, page content, write/writeChannel, events on/off, reservation |
-| `reference/02-fonts.md` | font state, the standard 14, embed TTF/OTF/Type 1/variable, `-fallback` chains, font info/names, missing glyphs, kerning/ligatures/combining marks, `-render` modes, RTL and the writing systems, Type 3 (`font define`/`font glyph`) |
+| `reference/02-fonts.md` | font state, the standard 14, embed TTF/OTF/Type 1/variable, `-fallback` chains, font info/names, missing glyphs, kerning/ligatures/combining marks, `-render` modes, RTL and the writing systems, Type 3 (`font define`/`font glyph`), colour fonts (`colorFont`, COLR/CPAL) |
 | `reference/03-text.md` | one line, paragraph, indents, soft hyphens, `-hyphenate` and `::tclpdf::hyphenate`, -avoid, -height/-height max, -paginate, -columns/-balance, leader, textPath, pageNumbers, textWidth/Height/Lines |
 | `reference/04-graphics.md` | line/rect/circle/ellipse/polygon/curve/path, clip, save/restore, opacity, blend, style, transform, colour forms, separations, Lab, icc embed |
-| `reference/05-images-svg.md` | image embed/place/draw/info/size, -data, `-stencil`/`-mask`/`-invert`/`-interpolate`, svg file/-data/info/size, SVG text faces, barcodes through tzint |
+| `reference/05-images-svg.md` | image embed/place/draw/info/size, -data, JPEG/PNG/TIFF, `-dpi auto` and where a natural size comes from, TIFF strips and stacking, `-stencil`/`-mask`/`-invert`/`-interpolate`, svg file/-data/info/size, SVG text faces, barcodes through tzint |
 | `reference/06-tables.md` | head/body/foot, cell dictionaries, spans, columns (width/weight/align/decimal), styles/themes, rtl cells, -top/-bottom, repeated head, the four hooks, table layout |
 | `reference/07-patterns-forms.md` | shading axial/radial, stops/extend, shading pattern, pattern create (-step/-unit/-origin/-matrix), the stream rule, form create/place, layers (`layer create/draw/state/radio/configure`) |
 | `reference/08-navigation-metadata.md` | attach, link, bookmark, destination/OpenAction, catalogEntry, info, language, xmpSchema, xmpRaw, metadata, viewerPreferences, pageLabels |
 | `reference/09-tagged-ua.md` | tagged, structure, -tag, headings, lists, Figure/-alt/-artifact, Link, -expansion, artifacts and their kinds, ua / ua state |
 | `reference/10-pdfa-zugferd.md` | pdfa (parts, conformance, profiles, the colour rule), pdfa extension, zugferd, Order-X, zugferd profile/state, the validator commands |
 | `reference/11-encryption-signatures.md` | encrypt (AES-256, permissions by name), sign (invisible and visible, one- and two-stage), sign state, `::tclpdf::sign digest`/`embed`/`add` |
-| `reference/12-import-update-info.md` | pdf import, `::tclpdf::pdf info`/`pages`/`fonts`/`metadata`, `::tclpdf::update open` and the incremental update |
+| `reference/12-import-update-info.md` | pdf import, `::tclpdf::pdf info`/`pages`/`fonts`/`metadata`, `::tclpdf::update open` and the incremental update, the `TCLPDF IMPORT` error class |
 
 Each file is one runnable script top to bottom (`check.tcl` beside this file runs them all - see below).
 
@@ -93,10 +94,13 @@ Each file is one runnable script top to bottom (`check.tcl` beside this file run
 - **tzint's status is three-valued** (0 ok, 1-4 warning with a good symbol, 5+ nothing) and on failure the target variable is left as it was - test the status, never the variable.
 - **`-version` gates features**: `opacity` needs 1.4, shading 1.3, embedded fonts 1.2; a `1.0`/`1.1` document needs `-compress 0`. Nothing is raised silently except by `pdfa`/`ua`.
 - **`image embed` of a PNG with alpha is ~100x the cost** of a JPEG or a PNG without; a browser canvas should send `image/jpeg`. Progressive JPEG and interlaced PNG are refused - re-save.
+- **The default is `-dpi auto`, not 72.** A placement without `-width`/`-height`/`-size` comes out at the resolution the *file* states (`pHYs`, JFIF, Exif, TIFF `XResolution`), and 72 only where it states none. `image info` answers `xResolution`/`yResolution` **empty** when the file says nothing - empty is not 72 - and `resolution` says which segment the number came from; for a JPEG that states it twice, **Exif wins over JFIF**.
+- **A TIFF goes in like any other picture, but may become several.** A compression that carries state from row to row (Deflate, CCITT, JPEG-in-TIFF) begins afresh in every strip, so the picture is one image XObject **per strip**; `image info` answers `strips`. Such a stack can neither be a `-mask` nor wear one (`TCLPDF TIFF STACKED`), and above 256 strips it is refused outright (`TCLPDF TIFF STRIPS`) - re-save with a `RowsPerStrip` that holds the whole picture. `-stencil` stays a PNG option.
 - **`page box media {} 0`** reads another page's box - the empty value comes before the index.
 - **`-leading {}`** restores the default; `-leading 0` is refused. **`-stretch`/`-size` 0** is refused.
 - **`metadata xml`** freezes the packet as given - after it, title and claims are no longer mirrored into XMP.
 - **`-fallback` is not a rescue from a missing glyph, it is a chain you name.** Every face in it has to be embedded already, and a character no face has is refused exactly as before. Not together with `-direction rtl`.
+- **A colour font cannot be embedded, it has to be redrawn.** A face whose pictures live in a `COLR`/`CPAL`, `CBDT`, `sbix` or `SVG` table leaves every outline empty, so `font embed` refuses it (`TCLPDF FONT OUTLINES`) rather than write a valid, extractable, blank document. `colorFont alias path -chars "..."` draws the `COLR` v0 layers into a Type 3 font instead and gives back the alias; it holds **only** the characters asked for - not a letter, not a space - so it lives in a `-fallback` chain, and the chain is tried in order, which means the symbol face goes first.
 - **A Type 3 font has exactly the characters it was given** - the space among them. `font glyph ballot " " -width 400 -script {}` or a string with a blank in it is refused.
 - **`-render stroke` needs `-stroke`**, and `-strokeWidth` is a **line** width in the document unit, not a font weight: the same 0.3 mm at every size.
 - **tclpdf ships no hyphenation patterns** (licence). Load a libhyphen `.dic` with `::tclpdf::hyphenate load`, pass `-left 2 -right 2` for German, and know that `-hyphenate 1` needs `language` set. An unloaded language is refused, never set unhyphenated in silence.
@@ -106,6 +110,7 @@ Each file is one runnable script top to bottom (`check.tcl` beside this file run
 - **`encrypt` comes first** - before the first page and before `language` and `link` - needs `-version 2.0`, and cannot stand with `pdfa`, `zugferd` or `sign`.
 - **`sign` prepares; the CMS object comes from a `-signer` prefix** that answers DER. `writeChannel` is refused for a signed document, a second `sign` on one document is refused (`::tclpdf::sign add` does that on the file), and `cades` is a promise `openssl cms -sign` cannot keep.
 - **`pdf import`, `::tclpdf::pdf ...` and `::tclpdf::update open` refuse an encrypted file** - `pdf info` is the one exception and answers it. `pdf import` does not judge what it takes over: a claim covers what this document draws.
+- **The message is not a contract, the `-errorcode` is.** `trap {TCLPDF IMPORT}` catches all sixteen refusals the PDF reader produces (`FILE`, `SYNTAX`, `DEPTH`, `XREF`, `OBJECT`, `OBJSTM`, `RECURSION`, `STREAM`, `FILTER`, `PREDICTOR`, `ROOT`, `PAGES`, `BOX`, `ROTATE`, `ENCRYPTED`, `SERIALIZE`) from all four commands at once, and a refusal registers nothing. Match a class, never a wording.
 - **`::tclpdf::pdf`, `::tclpdf::update` and `::tclpdf::sign` need their own `package require`** (`tclpdf::importInfo`, `tclpdf::update`, `tclpdf::sign`) - `package require tclpdf` alone does not bring them.
 
 ## Checking a document

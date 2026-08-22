@@ -1,4 +1,4 @@
-% tclpdf(n) 1.1.1 | Tcl Package Documentation
+% tclpdf(n) 1.2 | Tcl Package Documentation
 % Alexander Schoepe
 % 2026
 
@@ -10,7 +10,7 @@ tclpdf - PDF generation for Tcl
 
 **package require Tcl 8.6.11-**
 
-**package require tclpdf 1.1**
+**package require tclpdf 1.2**
 
 # DESCRIPTION
 
@@ -1164,6 +1164,10 @@ Every refusal is a Tcl error whose message begins with `tclpdf:` and names what 
 
 : What the TIFF reader itself refuses, one class rather than an entry apiece: `SIGNATURE` (not a TIFF at all — measured in a real holding, two of them were mail texts named `.tif`), `BIGTIFF`, `TILED`, `PLANAR`, `ALPHA`, `COMPRESSION`, `PHOTOMETRIC`, `DEPTH`, `SAMPLES`, `SAMPLEFORMAT`, `PREDICTOR`, `FILLORDER`, `BYTEORDER`, `JPEG`, `DIRECTORY`, `CIRCULAR`, `RANGE` and `DAMAGED`. Each names what the file is and what it would have to be re-saved as; `trap {TCLPDF TIFF}` catches the lot.
 
+**TCLPDF IMPORT** *…*
+
+: What the PDF reader refuses in a foreign file, one class rather than an entry apiece: `FILE`, `SYNTAX`, `DEPTH`, `XREF`, `OBJECT`, `OBJSTM`, `RECURSION`, `STREAM`, `FILTER`, `PREDICTOR`, `ROOT`, `PAGES`, `BOX`, `ROTATE`, `ENCRYPTED` and `SERIALIZE`. `trap {TCLPDF IMPORT}` catches every one of them, and they reach the caller from **pdf import**, from **pdf info**, **pages**, **fonts** and **metadata**, and from **::tclpdf::update open** alike — the four commands share one reader. A damaged or hostile file is the case they exist for: a cross-reference chain that runs in a circle, an object stream that contains itself, a `/Length` that points at its own object, a page tree that names itself among its children, an array whose bracket never closes. Each of those used to end in a loop that did not return or in a raw Tcl error naming an operand instead of the file; naming the file and what is wrong with it is the whole point of the class.
+
 **TCLPDF HYPHENATE LANGUAGE** *tag*
 
 : No hyphenation patterns are loaded for *tag* — thrown by **::tclpdf::hyphenate word** and **::tclpdf::hyphenate languages** *tag*, and by every block that names an unloaded language with **-hyphenate**, before a byte of it reaches the stream. *tag* is the spelling that was asked for, not one it might have resolved to. The refusal is the point: a block whose language is missing could only be set unhyphenated, and that produces a document which looks like the one that was asked for and is not. A handler has three ways on — load the file, fall back to another language, or set the block without **-hyphenate** and know that it did.
@@ -1179,6 +1183,36 @@ Every refusal is a Tcl error whose message begins with `tclpdf:` and names what 
 **TCLPDF SIGN SIGNINGTIME**
 
 : A CMS object states the time of signing where the document claims to be a PAdES signature — thrown by **write** where a **sign -signer** prefix handed back such an object, and by **::tclpdf::sign embed** for the same reason, in both cases only under **sign -subfilter cades**. The code carries no further words: there is one way into it and one way out of it, and neither needs a number. ETSI EN 319 142-1, Table 1 puts the `signing-time` attribute at "shall not be present" for every PAdES baseline level, while requiring the time in `/M`, which this package writes. The check looks for the attribute's object identifier, 1.2.840.113549.1.9.5, in the DER as a byte pattern; it does not parse ASN.1, and it is the one place this package looks inside the object at all. **A signature that carries an RFC 3161 timestamp token is not caught by it**, which matters because that is what a PAdES B-T signature is: such a token holds a `SignedData` of its own with a `signingTime` inside it, and refusing on that would refuse the very objects the profile asks for. The two are told apart by position — RFC 5652 puts `signedAttrs` before `unsignedAttrs`, so an outer signing time always stands *before* the first token identifier (1.2.840.113549.1.9.16.2.14) and one belonging to a token always after it — and the refusal falls only where the time comes first or where there is no token at all. An object that carries both is refused as before. The price of that coarseness is stated rather than hidden: certificates stand before the `SignerInfo`s in a DER, so this identifier inside a *certificate* would be read as an outer signing time; `-subfilter pkcs7` is the way past it. A handler has two ways on: have the object made by a signer that leaves the attribute out — pyHanko and the EU DSS library do, `openssl cms -sign` and BouncyCastle cannot — or write the document with **-subfilter pkcs7**, which claims no PAdES and takes the object as it is. Note what the coarseness costs: the same identifier inside an embedded RFC 3161 timestamp token would be refused too, and this package produces no such token, so an object carrying one was assembled elsewhere by someone who knows what is in it.
+
+# STANDARDS
+
+These are the documents the package is written against, and — where a validator exists for one — the documents every release is measured against. A profile a document claims is checked on every run of `make check`: veraPDF for PDF/A and PDF/UA, Mustangproject for the electronic invoices, qpdf over every document, pdfsig over every signed one.
+
+**The file itself**
+
+: **ISO 32000-1:2008** (PDF 1.7) is what a document declares by default, and **ISO 32000-2:2020** (PDF 2.0) what `tclpdf new -version 2.0` declares. The version is a property of the document rather than a constant of the writer: encryption in the revision PDF 2.0 prescribes and a CAdES signature need 2.0, PDF/A-3 and therefore ZUGFeRD need 1.7.
+
+**Archiving and accessibility**
+
+: **ISO 19005-2** and **ISO 19005-3** for PDF/A parts 2 and 3, conformance levels B, U and A. **ISO 14289-1** (PDF/UA-1) and **ISO 14289-2** (PDF/UA-2), with **ISO/TS 32005** for the structure namespaces PDF/UA-2 requires, and the **WTPDF 1.0** profile of the PDF Association for well-tagged documents. The XMP packet follows **ISO 16684-1** (XMP part 1).
+
+**Electronic invoices**
+
+: **EN 16931** as the semantic model, in the syntax of **ZUGFeRD 2.3 / Factur-X 1.07** and **Order-X 1.0**, carried in a PDF/A-3 document as **ISO 19005-3** and the ZUGFeRD technical specification require. The attachment relationship follows Table 43 of ISO 32000-2.
+
+**Signatures**
+
+: **ETSI EN 319 142-1** (PAdES baseline profiles) and **ETSI EN 319 122-1** (CAdES), over **RFC 5652** (CMS) and **RFC 3161** (timestamp tokens). The signature dictionary itself is ISO 32000-2, 12.8.
+
+**Fonts**
+
+: **ISO/IEC 14496-22:2019** (Open Font Format, the ISO edition of OpenType) for the sfnt tables, the character map, GSUB and GPOS, the variable-font tables and `COLR`/`CPAL`. Beside it Adobe's own specifications for what that standard does not cover: the **Type 1 Font Format**, **Technical Note #5176** (the Compact Font Format), **Technical Note #5902** (PostScript name generation), the **Adobe Font Metrics** of the fourteen standard faces, and the **Adobe Glyph List**. Right-to-left text follows **UAX #9**, hyphenation Liang's algorithm in the pattern format of libhyphen.
+
+**Pictures**
+
+: **ISO/IEC 10918-1** (JPEG) with the **JFIF** and **Exif 2.32** application segments, the **PNG specification** (ISO/IEC 15948) including its predictors, and **TIFF 6.0** with **Technote 2** for JPEG-compressed strips. Colour follows the **ICC** specification for embedded profiles, and CIE **L\*a\*b\*** as ISO 32000-2, 8.6.5.4 states it.
+
+**Language and country codes** follow **RFC 3066** where a document, a block or a hyphenation pattern set names a language.
 
 # SEE ALSO
 

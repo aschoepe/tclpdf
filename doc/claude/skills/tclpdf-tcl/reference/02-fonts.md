@@ -254,3 +254,208 @@ $marks destroy
 ```
 
 At most 255 glyphs, addressed as single bytes, so `-direction rtl` is refused as it is for every face addressed through an encoding. Under PDF/A the question of embedding does not arise - the glyphs **are** the file - and such a document passes B, U and A, PDF/UA included.
+
+## A colour font: the layers of a COLR face, drawn as Type 3
+
+`colorFont` is the other road out of the refusal above. A face whose pictures sit in a `COLR`/`CPAL` table leaves the outline of every character it covers empty, so `font embed` refuses it (`TCLPDF FONT OUTLINES`) rather than write a document that is valid, extractable and blank. `colorFont` reads the layers and their palette colours out of the face and draws each of them into a **Type 3** glyph - the section above, built by the package instead of by hand - and returns the alias, which from then on is a family like any other.
+
+```tcl
+# Scaffolding, not tclpdf: a COLR version 0 face assembled in memory, because
+# NO COLOUR FONT SHIPS WITH THIS PACKAGE (the faces that carry one are emoji
+# artwork under a licence of its own) and a caller normally hands the call a
+# file that came out of a font editor. Two of the commands below are NOT part
+# of the API - [glyfOutline compose] writes the point array of one glyph,
+# [subset::Assemble] puts a table directory with checksums round a set of
+# tables - because assembling a font is not what this package is for.
+package require tclpdf::glyfOutline
+package require tclpdf::subset
+
+# One glyph as glyf bytes, from contours of {x y} points; straight lines only.
+proc refFaceGlyph {contours} {
+    set ends {}
+    set flags {}
+    set xs {}
+    set ys {}
+    set count 0
+    foreach contour $contours {
+        foreach point $contour {
+            lassign $point x y
+            lappend flags 1                       ;# 1 is ON_CURVE, a corner
+            lappend xs $x
+            lappend ys $y
+            incr count
+        }
+        lappend ends [expr {$count - 1}]
+    }
+    return [::tclpdf::glyfOutline compose [dict create type simple \
+        ends $ends flags $flags x $xs y $ys instructions {} bounds {0 0 0 0}]]
+}
+
+# COLR version 0 (ISO/IEC 14496-22, 5.7.11): a header, one record per base
+# glyph saying where its layers begin and how many there are, and the layer
+# records - each a glyph number and a palette index, bottom of the stack first.
+proc refFaceColr {records layers} {
+    set base [llength $records]
+    set table [binary format SuSuIuIuSu 0 $base 14 [expr {14 + $base * 6}] \
+        [llength $layers]]
+    foreach record $records { append table [binary format SuSuSu {*}$record] }
+    foreach layer $layers { append table [binary format SuSu {*}$layer] }
+    return $table
+}
+
+# CPAL (5.7.12): the colours the layers point into. A colour record is FOUR
+# BYTES IN THE ORDER blue, green, red, alpha - not red first, which is the
+# mistake the format invites.
+proc refFaceCpal {colours} {
+    set table [binary format SuSuSuSuIu 0 [llength $colours] 1 \
+        [llength $colours] 14]
+    append table [binary format Su 0]
+    foreach colour $colours { append table [binary format cccc {*}$colour] }
+    return $table
+}
+
+# A cmap, format 12: one group per character.
+proc refFaceCmap {map} {
+    set groups {}
+    set count 0
+    foreach code [lsort -integer [dict keys $map]] {
+        append groups [binary format IuIuIu $code $code [dict get $map $code]]
+        incr count
+    }
+    set subtable [binary format SuSuIuIuIu 12 0 [expr {16 + $count * 12}] 0 \
+        $count]
+    return [binary format SuSuSuSuIu 0 1 3 10 12]$subtable$groups
+}
+
+# The file round all of it: 1000 units to the em, an ascender of 750, an
+# advance of 1000 for every glyph, loca 32-bit, every glyph padded to four.
+proc refFaceFile {glyphs map colr cpal} {
+    set count [llength $glyphs]
+    set head [binary format IuIuIuIu 0x00010000 0x00010000 0 0x5F0F3CF5]
+    append head [binary format SuSu 0 1000]
+    append head [binary format WuWu 0 0]
+    append head [binary format SSSS 0 -200 1000 800]
+    append head [binary format SuSuSSS 0 8 2 1 0]
+    set hhea [binary format Iu 0x00010000]
+    append hhea [binary format SSS 750 -250 0]
+    append hhea [binary format Su 1000]
+    append hhea [binary format SSS 0 0 1000]
+    append hhea [binary format SSS 1 0 0]
+    append hhea [binary format SSSS 0 0 0 0]
+    append hhea [binary format SSu 0 $count]
+    set maxp [binary format Iu 0x00010000]
+    append maxp [binary format Su $count]
+    append maxp [string repeat \x00 26]
+    set hmtx {}
+    set glyf {}
+    set loca {}
+    foreach data $glyphs {
+        append hmtx [binary format SuS 1000 0]
+        append loca [binary format Iu [string length $glyf]]
+        append glyf $data
+        while {[string length $glyf] % 4} { append glyf \x00 }
+    }
+    append loca [binary format Iu [string length $glyf]]
+    return [::tclpdf::subset::Assemble [dict create head $head hhea $hhea \
+        maxp $maxp hmtx $hmtx loca $loca glyf $glyf cmap [refFaceCmap $map] \
+        COLR $colr CPAL $cpal]]
+}
+
+# The LAYER glyphs are ordinary outlines and the cmap does not reach them; the
+# BASE glyphs - 6 and 7, one per character - are EMPTY, and the COLR records
+# say which layers each is made of. That is the whole format, and it is why
+# such a face embeds blank.
+set refFaceGlyphs [list \
+    {} \
+    [refFaceGlyph {{{500 715} {900 45} {100 45}}}] \
+    [refFaceGlyph {{{455 240} {545 240} {545 570} {455 570}} \
+                   {{455 95} {545 95} {545 185} {455 185}}}] \
+    [refFaceGlyph {{{823 514} {634 703} {366 703} {177 514} \
+                    {177 246} {366 57} {634 57} {823 246}}}] \
+    [refFaceGlyph {{{250 390} {400 240} {690 520} {690 640} {400 370} {250 510}}}] \
+    [refFaceGlyph {{{868 469} {679 658} {411 658} {222 469} \
+                    {222 201} {411 12} {679 12} {868 201}}}] \
+    {} {}]
+set refFaceRecords {{6 0 2} {7 2 3}}
+set refFaceLayers {{1 0} {2 1} {5 3} {3 2} {4 0xFFFF}}
+set refFaceColours {{0 178 255 255} {35 35 40 255} {64 140 25 255} {70 60 60 64}}
+set refFaceMap [dict create 0x26A0 6 0x2714 7]
+
+set facePath [file join $out ref-02-marks.ttf]
+set channel [open $facePath wb]
+puts -nonewline $channel [refFaceFile $refFaceGlyphs $refFaceMap \
+    [refFaceColr $refFaceRecords $refFaceLayers] [refFaceCpal $refFaceColours]]
+close $channel
+puts "the scaffolding built a [file size $facePath]-byte colour face"
+```
+
+```tcl
+# From here on it is the package again. A document of its own, because a
+# colour font stands on nothing else.
+set symbols [tclpdf new -unit mm]
+$symbols page add
+$symbols font embed body $ttf              ;# the words: a colour font has none
+
+# THE CALL. The alias comes first and the file after it, the way [image embed]
+# takes them; -chars names the characters to build a glyph for, -palette the
+# palette to draw the layers through (0 by default, and a face may carry
+# several). What comes back is the alias, so it can be handed straight on.
+set face [$symbols colorFont marks $facePath -chars "⚠✔" -palette 0]
+puts [$symbols font info $face]     ;# a Type 3 font: no font program, no fsType
+
+# -data instead of a path, for a face that never was a file - one out of a
+# database, one out of an archive. The two roads produce the same font.
+set channel [open $facePath rb]
+set faceBytes [read $channel]
+close $channel
+$symbols colorFont fromBytes -data $faceBytes -chars "✔"
+
+$symbols font -family $face -size 24 -color {0.10 0.45 0.20}
+$symbols text "⚠✔" -at {20 30}
+puts "the warning sign is\
+    [format %.2f [$symbols textWidth "⚠" -family $face -size 24]] mm wide"
+
+# A palette index of 0xFFFF is a SENTINEL, not an index: that layer takes the
+# colour of the TEXT. The tick is one, so it follows -color while the disc
+# behind it stays green - which is what a two-colour logo as a character needs.
+set x 20
+foreach colour {{0 0 0} {0.75 0.35 0.10} {0.55 0.15 0.55}} {
+    $symbols font -family $face -size 24 -color $colour
+    $symbols text "✔" -at [list $x 50]
+    set x [expr {$x + [$symbols textWidth "✔"] + 4}]
+}
+
+# A colour font holds the characters that were asked for and NOTHING else -
+# not a letter, not a space - so it stands beside a real face, and -fallback
+# is how the two meet. The chain is tried IN ORDER: the face of symbols goes
+# FIRST when the marks are to be seen in colour, because DejaVu Sans has a
+# warning sign and a tick of its own and would otherwise answer first.
+$symbols font -family $face -size 11 -color {0.1 0.1 0.15} -fallback body
+$symbols text "⚠ Delivery 2026-0414 is overdue; the goods left the\
+    warehouse on the 3rd ✔ and were refused at the door on the 9th." \
+    -at {20 70} -width 170
+$symbols font -fallback {}
+```
+
+```tcl
+# The refusals, each naming what the face is and what to do instead.
+foreach {label script} [list \
+        "an ordinary face"     [list $symbols colorFont plain $ttf -chars "A"] \
+        "a character it lacks" [list $symbols colorFont other $facePath -chars "A"] \
+        "a palette it lacks"   [list $symbols colorFont other $facePath \
+                                    -chars "✔" -palette 3] \
+        "embedding it instead" [list $symbols font embed wrong $facePath]] {
+    try {
+        {*}$script
+        puts "$label: went through, which it should not have"
+    } on error {message options} {
+        puts "$label -> [dict get $options -errorcode]"
+    }
+}
+$symbols write [file join $out ref-02-colour-font.pdf]
+$symbols destroy
+```
+
+`TCLPDF COLORFONT TABLES` is a face without `COLR` and `CPAL`, `CHAR` a character the face has no glyph for, `BASE` one whose glyph is not a colour base glyph, `EMPTY` a base glyph whose layers all draw nothing, `PALETTE` a `-palette` the face does not have, `LIMIT` the 256th character (a Type 3 font is addressed by single bytes), `COMPOSITE` a layer that is a composite glyph. What the `COLR` reader itself refuses keeps its own `TCLPDF COLR` codes - `MISSING`, `VERSION`, `EMPTY`, `TRUNCATED`, `LAYERS`, `RECORDS`, `PALETTE`, `ENTRY` - and is passed through unchanged, so `trap {TCLPDF COLORFONT}` does **not** catch those.
+
+**COLR version 1 is not read** - it is a different format, a paint graph per base glyph with gradients, transforms and composition. A palette entry may carry an alpha byte, and a translucent layer then costs an `ExtGState` while an opaque one costs nothing; under PDF/A parts 2 and 3 that is admissible, and part 1 forbids transparency and is refused by `pdfa` anyway. What this is for is the two-colour mark that has to behave like a character - a tick in a table column, an amber warning sign in a line of text, a logo in a letterhead: it moves with the line, takes the font size, is measured by `textWidth`, breaks with the paragraph and comes back out of `pdftotext` as the character it stands for.

@@ -119,3 +119,56 @@ puts "now: [dict get $facts info] - [dict get $facts revisions] revisions,\
 The update is always written as a **classic cross-reference table**, also onto a file whose own is a stream - measured: qpdf, pdfinfo, pdftotext and pyHanko all read such a file, a replaced object overrides even a compressed one inside an object stream, and a PDF/A document stays conformant. `/Info` and the metadata stream are never rewritten by an update this package makes on its own, so a PDF/A or ZUGFeRD claim survives untouched - an update that writes fresh metadata without the `pdfaid` properties turns an archivable invoice into an ordinary PDF file. Of `/ID` the permanent first string is kept and the second recomputed, which makes the same update repeatable byte for byte.
 
 Refused by name rather than written wrong: an **encrypted** file, an object at a generation other than 0, an object stream or a cross-reference stream as the target of `replace`, and **deleting** an object - nothing in an update says what still points at the object being dropped, and a dangling reference produces a file that opens with pieces missing.
+
+## When the file is not what it claims: the `TCLPDF IMPORT` class
+
+The four commands above share one reader, so they share one error class. Every refusal it produces carries an `-errorcode` beginning `TCLPDF IMPORT`, and `trap {TCLPDF IMPORT}` catches all sixteen of them: `FILE`, `SYNTAX`, `DEPTH`, `XREF`, `OBJECT`, `OBJSTM`, `RECURSION`, `STREAM`, `FILTER`, `PREDICTOR`, `ROOT`, `PAGES`, `BOX`, `ROTATE`, `ENCRYPTED` and `SERIALIZE`. A damaged or hostile file is what they exist for - a cross-reference chain that runs in a circle, an object stream that contains itself, a `/Length` that points at its own object, a page tree that names itself among its children - and each of those would otherwise end in a loop that does not return, or in a raw Tcl error naming an operand instead of the file.
+
+```tcl
+# Two files to be refused. The damaged one is deliberately NOT named ref-*.pdf,
+# because that is the pattern check.tcl hands to qpdf.
+set channel [open [file join $out ref-12-letterhead.pdf] rb]
+set bytes [read $channel]
+close $channel
+set channel [open [file join $out broken-12.pdf] wb]
+puts -nonewline $channel $bytes
+puts -nonewline $channel "startxref\n999999\n%%EOF\n"    ;# the LAST one is read
+close $channel
+
+set locked [tclpdf new -unit mm -version 2.0]
+$locked encrypt -user {} -owner secret
+$locked page add
+$locked font -family helvetica -size 10
+$locked text "not to be imported" -at {20 20}
+$locked write [file join $out ref-12-locked.pdf]
+$locked destroy
+
+set doc [tclpdf new -unit mm]
+$doc page add
+foreach {label script} [list \
+        "no such file"     [list $doc pdf import a [file join $out nothing.pdf]] \
+        "a bent offset"    [list $doc pdf import b [file join $out broken-12.pdf]] \
+        "an encrypted one" [list $doc pdf import c [file join $out ref-12-locked.pdf]] \
+        "page 9 of 2"      [list $doc pdf import d \
+                                [file join $out ref-12-letterhead.pdf] -page 9] \
+        "reading it"       [list ::tclpdf::pdf fonts [file join $out ref-12-locked.pdf]] \
+        "continuing it"    [list ::tclpdf::update open [file join $out ref-12-locked.pdf]]] {
+    try {
+        {*}$script
+        puts "$label: went through, which it should not have"
+    } trap {TCLPDF IMPORT} {message options} {
+        puts "$label -> [dict get $options -errorcode]"
+    }
+}
+
+# The one exception, and it is deliberate: [pdf info] ANSWERS an encrypted file
+# instead of refusing it, because an inventory is the caller for which
+# "encrypted, revision 6, AES-256" is the answer.
+set facts [::tclpdf::pdf info [file join $out ref-12-locked.pdf]]
+puts "locked: encrypted [dict get $facts encrypted],\
+    version [dict get $facts version], [dict get $facts encryption]"
+# pages, size, info and the rest stay EMPTY - they are behind the encryption.
+$doc destroy
+```
+
+The message is not a contract and may be sharpened in any release; the `-errorcode` is one. Handle a class, not a wording: `trap {TCLPDF IMPORT ENCRYPTED}` is the case a batch skips with a note, `trap {TCLPDF IMPORT PAGES}` the one where the caller asked for a page the file does not have, and `trap {TCLPDF IMPORT}` the catch-all that keeps a run over a directory of foreign files going. Note that `pdf import` refuses **before** anything is registered, so a caught refusal leaves no half-built form behind and the document can carry on.

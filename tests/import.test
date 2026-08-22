@@ -1779,4 +1779,22 @@ test import-24.19 {a refused object can be asked for again without being called 
 } -result {{1 1 {TCLPDF IMPORT STREAM}} {1 1 {TCLPDF IMPORT STREAM}}}
 
 
+test import-24.20 {a missing file is refused with the class code} -body {
+  # The message always named itself and the path; the code did not exist, so
+  # the one refusal a caller meets first was the one [trap {TCLPDF IMPORT}]
+  # could not catch. Both roads to the reader are asked, since they check the
+  # path in two different places.
+  set gone [::tclpdfTest::scratch no-such-file.pdf]
+  file delete $gone
+  set codes {}
+  catch {::tclpdf::pdf info $gone} message options
+  lappend codes [dict get $options -errorcode]
+  set doc [tclpdf new]
+  catch {$doc pdf import x $gone} message options
+  lappend codes [dict get $options -errorcode]
+  $doc destroy
+  set codes
+} -result {{TCLPDF IMPORT FILE} {TCLPDF IMPORT FILE}}
+
+
 cleanupTests

@@ -61,7 +61,8 @@ proc ::tclpdf::pdf::metadata {path} {
 # before it opens anything, for the same reason.
 proc ::tclpdf::pdf::Reader {path {tolerateEncrypted 0}} {
   if {![file exists $path]} {
-    return -code error "tclpdf: no file \"$path\""
+    return -code error -errorcode {TCLPDF IMPORT FILE} \
+        "tclpdf: no file \"$path\""
   }
   return [Open $path $tolerateEncrypted]
 }
@@ -748,4 +749,4 @@ namespace eval ::tclpdf::pdf {
   unset tclpdfTable tclpdfCode tclpdfTarget
 }
 
-package provide tclpdf::importInfo 1.0
+package provide tclpdf::importInfo 1.1

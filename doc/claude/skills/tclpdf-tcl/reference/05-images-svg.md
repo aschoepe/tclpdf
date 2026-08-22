@@ -39,6 +39,73 @@ $doc image place fromBytes -at {50 70} -width 25
 
 An ICC profile inside the file (JPEG APP2, PNG iCCP) becomes the picture's `/ICCBased` space, shared with `icc embed` and the output intent - `-icc 0` embeds the picture without it. A progressive JPEG and an interlaced PNG are refused with the reason - re-save. `-alt`/`-artifact` matter in tagged documents (see `09-tagged-ua.md`); in an untagged one they change nothing.
 
+## The natural size, and where it comes from
+
+```tcl
+# -dpi decides what "neither -width nor -height nor -size" means: a pixel is
+# 1/dpi of an inch. THE DEFAULT IS -dpi auto - the resolution the FILE itself
+# states (a PNG pHYs chunk, a JPEG JFIF density, an Exif resolution, a TIFF
+# XResolution with its ResolutionUnit) - and 72 only where the file states
+# none, which is one pixel one point as before.
+foreach alias {photo logo} {
+    set what [$doc image info $alias]
+    puts "$alias: [dict get $what width] x [dict get $what height] px,\
+        resolution from [dict get $what resolution],\
+        x [dict get $what xResolution] y [dict get $what yResolution],\
+        pixelAspect [dict get $what pixelAspect],\
+        natural [lmap n [$doc image size $alias] {format %.1f $n}] mm"
+}
+# -dpi n overrides whatever the file says, and places a scan at the size it
+# was scanned from (the logo goes down at 300 dpi in the first block above).
+puts "logo at 300 dpi: [lmap n [$doc image size logo -dpi 300] {format %.1f $n}] mm"
+```
+
+`xResolution` and `yResolution` are in dpi and are **empty when the file states none** - empty is not 72: 72 is what a placement falls back on, while empty is the file saying nothing, and a caller laying out around a picture must not confuse the two. `resolution` names where the number came from - `pHYs`, `JFIF`, `Exif`, `XResolution` or `none`. **A JPEG may state a resolution twice and state it differently, and then Exif wins**: a file whose JFIF header says 72 and whose Exif block says 300 is placed at 300 and answers `Exif`, which is the recurring shape in real files - an encoder's default left standing beside a figure somebody meant. A segment that gives only a ratio between the axes never displaces one that gives a measure; that ratio arrives as `pixelAspect` and is applied to the 72.
+
+## A TIFF, and the strips it is made of
+
+```tcl
+# A TIFF goes in like a JPEG or a PNG - image embed, place, size, info, -data,
+# -mask, tagged or not. A document of its own here only because a scan brings
+# its own size and takes the page. What the format costs is visible in one
+# place: [image info] answers "strips".
+set scan [tclpdf new -unit mm]
+$scan page add
+$scan image embed page $tiff
+set what [$scan image info page]
+puts "[dict get $what compression], [dict get $what strips] strips of\
+    [dict get $what rowsPerStrip] rows, [dict get $what space],\
+    [dict get $what bitDepth] bit, [dict get $what xResolution] dpi"
+
+# 640 pixels at the 200 dpi the file states are 81 mm of paper. Read as 72 they
+# would be 226 mm and off the sheet - a scan is not a screenshot.
+puts "-dpi auto: [lmap n [$scan image size page] {format %.1f $n}] mm,\
+    -dpi 72: [lmap n [$scan image size page -dpi 72] {format %.1f $n}] mm"
+$scan image place page -at {20 20}                  ;# its own size, no options
+$scan image place page -at {110 20} -width 80 -rotate 2 -opacity 0.7
+
+# A compression that carries state from one row to the next begins afresh in
+# every strip, so the strips cannot be joined and the picture becomes ONE IMAGE
+# XOBJECT PER STRIP - here 30 of them, written as 30 cm/Do pairs inside the one
+# q ... Q of each placement. Uncompressed, PackBits and LZW files carry no such
+# state and arrive as a single image however many strips they have.
+# What a stack cannot be: a mask, or the wearer of one - /Mask and /SMask name
+# a SINGLE image XObject, and a mask over a stack would be drawn over each part
+# in turn instead of over the picture.
+$scan image embed wearer $jpeg -mask page
+try {
+    $scan image place wearer -at {20 100} -width 40
+} trap {TCLPDF TIFF STACKED} {message options} {
+    puts "[dict get $options -errorcode]: [string range $message 0 90]..."
+}
+$scan write [file join $out ref-05-tiff.pdf]
+$scan destroy
+```
+
+Every compression that occurs has a PDF filter that undoes it - Deflate is `/FlateDecode`, PackBits `/RunLengthDecode`, CCITT Group 3 and 4 `/CCITTFaxDecode`, TIFF 6.0 Technote 2 JPEG `/DCTDecode` - so the strips are passed through, Group 4 fax data included. Five things are not the file's own bytes: **LZW** is unpacked and written out as Flate, always, because ISO 19005-3, 6.1.7.2 forbids `/LZWDecode` and the stream is built long before `pdfa` may be declared; an uncompressed file is deflated; a `FillOrder 2` fax has its bits turned round; a 16-bit file is unpacked where its samples are little-endian or carry Predictor 2; and a JPEG-in-TIFF is assembled from the bare strip and the tables tag rather than copied. Grey, RGB, palette (`/Indexed` over DeviceRGB) and CMYK at 1, 2, 4, 8 or 16 bits are taken, an embedded ICC profile becomes the `/ICCBased` space, and a `WhiteIsZero` picture gets the `/Decode` array that reconciles it with DeviceGray. **Several IFDs are not several pages** - the primary image is embedded and the rest are passed over in silence, so a multi-page fax reaches the page as its first page.
+
+Refused by name, each saying what the file is and what to re-save it as: BigTIFF, tiled, separate colour planes, an alpha channel (`ExtraSamples` - PDF carries no alpha inside an image), YCbCr outside a JPEG stream, and any depth, sample format or predictor PDF cannot be told about - all of them `TCLPDF TIFF ...`, so `trap {TCLPDF TIFF}` catches the lot. Above 256 strips the picture is refused with `TCLPDF TIFF STRIPS` rather than stacked. The way out of the stacking refusals is always the same and is named in the message: re-save with a `RowsPerStrip` that holds the whole picture. `-stencil 1` stays a PNG option - a bilevel TIFF is placed as the picture it is.
+
 ## A picture as a stencil, and a picture as a mask
 
 ```tcl
@@ -148,8 +215,8 @@ if {![catch {package require tzint 1.3-}]} {
         if {$rc != 0} { puts "  note: [dict get $info error]" }
         return $rc
     }
-    encode markup "tclpdf 1.1" -barcode code128
-    $doc svg -data $markup -at {20 150} -height 16 -alt "Code 128: tclpdf 1.1"
+    encode markup "tclpdf 1.2" -barcode code128
+    $doc svg -data $markup -at {20 150} -height 16 -alt "Code 128: tclpdf 1.2"
 
     encode markup "https://example.org/" -barcode qrcode
     $doc svg -data $markup -at {90 150} -height 20 -alt "QR: https://example.org/"

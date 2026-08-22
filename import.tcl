@@ -88,7 +88,8 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: a form named \"$alias\" already exists"
     }
     if {![file exists $path]} {
-      return -code error "tclpdf: pdf import: no file \"$path\""
+      return -code error -errorcode {TCLPDF IMPORT FILE} \
+          "tclpdf: pdf import: no file \"$path\""
     }
 
     set reader [::tclpdf::importRead::Open $path]
@@ -596,4 +597,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.2
+package provide tclpdf::import 1.3
