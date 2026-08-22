@@ -159,6 +159,54 @@ test type3-1.5 {an unknown -color word is refused, not taken as a colour} -body 
   list $code [string match {*own*} $err] [string match {*text*} $err]
 } -result {1 1 1}
 
+test type3-1.6 {a d1 glyph may not place an image} -body {
+  # Table 111 on d1: the glyph description "shall not include an image,
+  # however, an image mask is acceptable". A d1 glyph declares that it
+  # specifies only shape and not colour, and a reader may ignore every colour
+  # operator in it - an image brings colours no operator sets, so what comes
+  # out is at the reader's discretion. Measured on 2026-08-22 before this
+  # refusal existed: poppler painted the picture in full colour.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc image embed photo -data [::tclpdfTest::png 2 2 8 2 \
+      [binary format cH*cH* 0 ff000000ff00 0 0000ffffff00]]
+  $doc font define marks -ascent 750
+  set code [catch {$doc font glyph marks a -width 800 -color text \
+      -bbox {0 0 800 750} -script {
+        $doc image place photo -at {0 0} -width 800
+      }} err]
+  # And the glyph did not survive the refusal either: what was refused is not
+  # in the font.
+  set glyphs [dict size [dict get [$doc state fonts] marks glyphs]]
+  $doc destroy
+  list $code $glyphs [string match {*image mask*} $err] \
+      [string match {*Table 111*} $err]
+} -result {1 0 1 1}
+
+test type3-1.7 {a stencil mask in a d1 glyph, and a picture in a d0 one} -body {
+  # Both halves of the same sentence. A stencil mask has no colour of its own
+  # - Table 87 forbids it a ColorSpace - and paints the colour in force, which
+  # is precisely what a shape-only glyph is for, so d1 takes it. And d0 says
+  # the glyph brings its own colour, so the rule does not apply there at all.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  # 0110 in one bit, four pixels wide: the two middle ones are the ink.
+  $doc image embed stamp -data [::tclpdfTest::png 4 1 1 0 \
+      [binary format cc 0 0x60]] -stencil 1
+  $doc image embed photo -data [::tclpdfTest::png 2 2 8 2 \
+      [binary format cH*cH* 0 ff000000ff00 0 0000ffffff00]]
+  $doc font define marks -ascent 750
+  set stencil [catch {$doc font glyph marks a -width 800 -color text \
+      -bbox {0 0 800 750} -script {
+        $doc image place stamp -at {0 0} -width 800
+      }} first]
+  set own [catch {$doc font glyph marks b -width 800 -script {
+        $doc image place photo -at {0 0} -width 800
+      }} second]
+  $doc destroy
+  list $stencil $own
+} -result {0 0}
+
 # -- the font matrix ---------------------------------------------------------
 
 test type3-2.1 {the same glyph at three matrices measures the same} -body {
@@ -255,6 +303,58 @@ test type3-2.3 {a matrix that scales nowhere is refused} -body {
   $doc destroy
   set results
 } -result {1 1 1 1}
+
+test type3-2.4 {a matrix that is not invertible is refused} -body {
+  # A font matrix maps glyph space to text space, and a mapping has to be
+  # invertible or every glyph collapses onto a line or a point. a > 0 rules
+  # out the common degenerate case and nothing else: a vertical scale of zero
+  # and a shear that folds the vertical axis away both passed it, and both
+  # write a FontMatrix no reader can lay text out with.
+  #
+  # THE LAST ONE is the reason the determinant is taken on the ROUNDED
+  # numbers: the FontMatrix goes into the file with six decimal places, so a
+  # positive scale below 5e-7 is written as a zero, and the file then carries
+  # a singular matrix that no validator objects to while the API never saw
+  # one.
+  set doc [tclpdf new -unit mm]
+  set results {}
+  foreach matrix {{0.001 0 0 0 0 0} {0.001 0.001 0.001 0.001 0 0}
+      {0.0000001 0 0 0.0000001 0 0}} {
+    lappend results [catch {$doc font define bad -matrix $matrix} err]
+  }
+  # And what IS invertible goes through, a mirrored vertical axis included:
+  # d below zero turns the glyph over, which is a mapping like any other.
+  lappend results [catch {$doc font define fine -matrix {0.001 0 0 -0.001 0 0}}]
+  $doc destroy
+  lappend results [string match {*singular*} $err]
+} -result {1 1 1 0 1}
+
+test type3-2.5 {the ascent is measured against the VERTICAL scale} -body {
+  # The ascent is a height, so it maps to text space through matrix[3] and
+  # not through matrix[0], which is what turns a WIDTH into an advance. The
+  # two are equal in every diagonal matrix, so only a font whose scales
+  # differ can tell them apart - and the default ascent hid the mistake
+  # completely, because 0.8/matrix[0] scaled by matrix[0] gives 0.8 whichever
+  # factor is used. So the ascent is stated here.
+  #
+  # 500 glyph units at a vertical scale of 0.002 and 20 pt is 20 pt; through
+  # the horizontal 0.001 it would be 10.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -matrix {0.001 0 0 0.002 0 0} -ascent 500
+  $doc font glyph marks a -width 600 -script {}
+  $doc font -family marks -size 20
+  $doc text "a" -at {20 100} -anchor baseline
+  $doc text "a" -at {20 100} -anchor top
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc 0] y]
+  # The default ascent takes the same factor: 0.8 of the VERTICAL em, which
+  # at 0.002 is 400 glyph units rather than the 800 the horizontal would give.
+  $doc font define other -matrix {0.001 0 0 0.002 0 0}
+  set default [dict get [$doc state fonts] other ascent]
+  $doc destroy
+  list [format %.2f [expr {[lindex $ys 0] - [lindex $ys 1]}]] \
+      [format %.1f $default]
+} -result {20.00 400.0}
 
 # -- measuring and drawing agree ---------------------------------------------
 
@@ -676,6 +776,69 @@ test type3-6.3 {a glyph set in its own font is refused} -body {
   set result
 } -result {1 0}
 
+test type3-6.4 {a resource name that has to be escaped still reaches Resources} -body {
+  # The names are read back out of the WRITTEN glyph stream, where [pdfObj
+  # name] has already escaped them: a separation the caller named "Pantone
+  # 877 C" stands there as /Pantone#20877#20C. The resource dictionary is
+  # keyed by the raw name, so the raw key was matched against the escaped
+  # stream name, found nothing, and every resource whose name carried a space
+  # or a delimiter fell out of the font's /Resources - against 7.8.3, which
+  # asks for ALL the resources the glyph streams use, and 9.6.4 step d, which
+  # is where a reader looks them up.
+  #
+  # Not a curiosity: the name comes from the CALLER - a separation, an ICC
+  # space, a font alias - and a space in it is ordinary. Measured 2026-08-22
+  # as a PDF/A-3B document: veraPDF isCompliant false before, true after.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -ascent 750
+  $doc font glyph marks + -width 800 -script {
+    $doc rect -at {100 100} -size {600 600} \
+        -fill {separation "Pantone 877 C" {cmyk 0 0 0 0.2} 0.8}
+  }
+  $doc font -family marks -size 200
+  $doc text "+" -at {60 400}
+  set path [::tclpdfTest::scratch type3-6.4.pdf]
+  $doc write $path
+  set body [type3Object $doc]
+  set stream [type3Stream $doc marks +]
+  $doc destroy
+  file delete $path
+  # The stream names it escaped, and the font's own Resources carry it under
+  # the same spelling.
+  list [regexp {/Pantone#20877#20C cs} $stream] \
+      [regexp {/ColorSpace << /Pantone#20877#20C \d+ 0 R >>} $body]
+} -result {1 1}
+
+test type3-6.5 {and the self-reference is still caught through an escaped alias} -body {
+  # The same escaping used to walk past the check above this one: a font
+  # aliased "a b" is registered as the resource "T3a b" and written /T3a#20b,
+  # so the stream name never matched the raw key, the entry was skipped, and
+  # with it the refusal - what came out was a dangling /T3a#20b reference to
+  # an object the font's Resources did not carry. The alias without the space
+  # was refused all along, which is what makes this a one-character
+  # difference between a refusal and a broken file.
+  set results {}
+  foreach alias {ab {a b}} {
+    set doc [tclpdf new -unit pt -compress 0]
+    $doc page add
+    $doc font define $alias -ascent 800
+    $doc font glyph $alias X -width 800 -script {
+      $doc rect -at {0 0} -size {500 500} -fill black
+    }
+    $doc font -family $alias -size 40
+    $doc text "X" -at {20 40}
+    # A glyph that sets text in the font it belongs to.
+    $doc font glyph $alias Y -width 800 -script "
+      \$doc font -family [list $alias] -size 100
+      \$doc text \"X\" -at {0 700}
+    "
+    lappend results [lindex [::tclpdfTest::writes $doc type3-6.5.pdf] 0]
+    $doc destroy
+  }
+  set results
+} -result {1 1}
+
 # -- writing -----------------------------------------------------------------
 
 test type3-7.1 {a font defined and never used writes no object} -body {
@@ -1069,5 +1232,31 @@ test type3-9.4 {a glyph is drawn for ONE character} -body {
   $doc destroy
   set results
 } -result {1 1 1 1}
+
+test type3-9.6 {font glyph needs -script, and an empty one is a space} -body {
+  # The asymmetry this closes: -bbox is refused when -color text needs it and
+  # -width is refused when it is not a number, but an omitted -script was not
+  # refused at all. What came out was a glyph holding its width operator and
+  # nothing else - a blank mark that sets, measures and extracts, with
+  # neither pdftotext nor qpdf nor veraPDF reporting it. That is the shape
+  # this package refuses by name elsewhere (TCLPDF FONT OUTLINES, TCLPDF
+  # COLORFONT EMPTY), and the manual's own synopsis writes -script without
+  # the brackets an optional argument gets.
+  #
+  # An EMPTY body stays legal, and has to: a glyph that advances and draws
+  # nothing is a space, and a drawn font that carries one is doing what
+  # /Widths is for.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  set missing [catch {$doc font glyph marks a -width 600} err]
+  set empty [catch {$doc font glyph marks " " -width 400 -script {}}]
+  set glyphs [dict size [dict get [$doc state fonts] marks glyphs]]
+  # And the space is a glyph like any other: a width operator, d0, no marks.
+  set stream [string trim [dict get [$doc state fonts] marks glyphs \
+      [dict get [$doc state fonts] marks codes " "] stream]]
+  $doc destroy
+  list $missing $empty $glyphs $stream [string match {*-script*} $err]
+} -result {1 0 1 {400 0 d0} 1}
 
 cleanupTests

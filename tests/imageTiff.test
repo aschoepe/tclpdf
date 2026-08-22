@@ -114,10 +114,12 @@ test imageTiff-2.7 {BlackIsZero needs none} -body {
   dict get [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne]] decode
 } -result {}
 
-test imageTiff-2.8 {orientation and fill order are reported as they stand} -body {
-  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {274 3 6} {266 3 2}]]
+test imageTiff-2.8 {the fill order is reported as it stands} -body {
+  # Orientation is reported too, and only ever as the 1 that every readable
+  # file says - anything else is refused, see imageTiff-9.18.
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {266 3 2}]]
   list [dict get $parsed orientation] [dict get $parsed fillOrder]
-} -result {6 2}
+} -result {1 2}
 
 test imageTiff-2.9 {a missing BitsPerSample means one bit per sample} -body {
   set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffFile \
@@ -131,8 +133,10 @@ test imageTiff-3.1 {every compression a PDF filter can undo has a name} -body {
   set result {}
   foreach {value name} {1 none 2 ccittRle 3 ccittG3 4 ccittG4 5 lzw 7 jpeg
       8 deflate 32773 packBits 32946 deflate} {
+    # One bit per sample throughout, because three of the nine are CCITT and
+    # a fax is bilevel or it is not a fax (imageTiff-4.11).
     lappend result [dict get [::tclpdf::imageTiff parse \
-        [::tclpdfTest::tiffOne [list 259 3 $value]]] compressionName]
+        [::tclpdfTest::tiffOne [list 259 3 $value] {258 3 1}]] compressionName]
   }
   set result
 } -result {none ccittRle ccittG3 ccittG4 lzw jpeg deflate packBits deflate}
@@ -152,7 +156,7 @@ test imageTiff-3.4 {only the two stateless compressions may have their strips jo
   set result {}
   foreach value {1 32773 5 8 4 7} {
     lappend result [::tclpdf::imageTiff stateful [::tclpdf::imageTiff parse \
-        [::tclpdfTest::tiffOne [list 259 3 $value]]]]
+        [::tclpdfTest::tiffOne [list 259 3 $value] {258 3 1}]]]
   }
   set result
 } -result {0 0 1 1 1 1}
@@ -187,44 +191,50 @@ test imageTiff-4.1 {WhiteIsZero means BlackIs1 false} -body {
   # not reasoned: white fraction 0.876 against a reference 0.876 this way
   # round, and 0.5582 - the exact negative - the other. A plain fax is
   # WhiteIsZero and wants BlackIs1 FALSE.
-  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 0}]]
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 0} \
+      {258 3 1}]]
   list [dict get $parsed blackIs1] [dict get $parsed ccittK]
 } -result {0 -1}
 
 test imageTiff-4.2 {BlackIsZero means BlackIs1 true} -body {
-  dict get [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 1}]] blackIs1
+  dict get [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 1} \
+      {258 3 1}]] blackIs1
 } -result 1
 
 test imageTiff-4.3 {a CCITT stream carries no Decode array beside BlackIs1} -body {
   # Both say the same thing, and writing both inverts the picture twice.
-  dict get [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 0}]] decode
+  dict get [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 0} \
+      {258 3 1}]] decode
 } -result {}
 
 test imageTiff-4.4 {Group 4 is K -1} -body {
-  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 0}]]
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 4} {262 3 0} \
+      {258 3 1}]]
   list [dict get $parsed ccittK] [dict get $parsed encodedByteAlign] \
       [dict get $parsed columns]
 } -result {-1 0 4}
 
 test imageTiff-4.5 {Group 3 one-dimensional is K 0} -body {
-  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 3} {262 3 0}]]
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 3} {262 3 0} \
+      {258 3 1}]]
   list [dict get $parsed ccittK] [dict get $parsed encodedByteAlign]
 } -result {0 0}
 
 test imageTiff-4.6 {T4Options bit 0 turns on the mixed two-dimensional mode} -body {
   dict get [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 3} {262 3 0} \
-      {292 4 1}]] ccittK
+      {258 3 1} {292 4 1}]] ccittK
 } -result 1
 
 test imageTiff-4.7 {T4Options bit 2 is EncodedByteAlign} -body {
   # Fill bits were added so that every EOL ends on a byte boundary.
   set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 3} {262 3 0} \
-      {292 4 4}]]
+      {258 3 1} {292 4 4}]]
   list [dict get $parsed ccittK] [dict get $parsed encodedByteAlign]
 } -result {0 1}
 
 test imageTiff-4.8 {modified Huffman rows always start on a byte boundary} -body {
-  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 2} {262 3 0}]]
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {259 3 2} {262 3 0} \
+      {258 3 1}]]
   list [dict get $parsed ccittK] [dict get $parsed encodedByteAlign]
 } -result {0 1}
 
@@ -239,12 +249,29 @@ test imageTiff-4.10 {FillOrder 2 is reported and NOT acted on here} -body {
   # made poppler give up with "CCITTFax row is wrong length". The bits are
   # turned round where the strip data is walked, not in the reader - so the
   # reader's job is to say so, and the strip bytes must come back untouched.
-  set file [::tclpdfTest::tiffOne {259 3 4} {262 3 0} {266 3 2}]
+  set file [::tclpdfTest::tiffOne {259 3 4} {262 3 0} {258 3 1} {266 3 2}]
   set parsed [::tclpdf::imageTiff parse $file]
   list [dict get $parsed fillOrder] \
       [expr {[::tclpdf::imageTiff strip $file $parsed 0] eq
           [string range $::tiffData 0 15]}]
 } -result {2 1}
+
+test imageTiff-4.11 {a fax over eight-bit samples is a file at odds with itself} -body {
+  # A CCITTFaxDecode filter puts out one bit per pixel whatever the image
+  # dictionary claims (ISO 32000-2, 7.4.6): T.4 and T.6 code runs of black
+  # and white and know no other sample. Taken at its word the file would
+  # reach the PDF as /CCITTFaxDecode with /BitsPerComponent 8 - a picture
+  # eight times too narrow for its own data.
+  ::tclpdfTest::refusal {::tclpdf::imageTiff parse \
+      [::tclpdfTest::tiffOne {259 3 4} {262 3 0}]}
+} -result {TCLPDF TIFF CCITT 0 8}
+
+test imageTiff-4.12 {and one over colour samples just as much} -body {
+  # PhotometricInterpretation 2 is RGB, which a fax has no code for. Refused
+  # on the photometric even though the depth is right.
+  ::tclpdfTest::refusal {::tclpdf::imageTiff parse \
+      [::tclpdfTest::tiffOne {259 3 4} {262 3 2} {258 3 {1 1 1}} {277 3 3}]}
+} -result {TCLPDF TIFF CCITT 2 1}
 
 # --- the strips -------------------------------------------------------------
 
@@ -368,6 +395,22 @@ test imageTiff-6.5 {a resolution of zero is no resolution} -body {
   list [dict get $parsed resolutionKnown] [dict get $parsed xDpi]
 } -result {0 72.0}
 
+test imageTiff-6.6 {a unit the format does not define is no resolution either} -body {
+  # TIFF 6.0 defines three units and no more: 1 (none), 2 (inch), 3 (cm).
+  # A 0 - written by encoders that mean "none" - or anything else is not a
+  # measure, and reading it as inches would be the made-up figure
+  # "resolutionKnown 0" exists to avoid: it decides how large a placement
+  # without -width comes out, so the guess would be millimetres of paper.
+  set result {}
+  foreach unit {0 4 42} {
+    set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne \
+        {282 5 {200 1}} {283 5 {200 1}} [list 296 3 $unit]]]
+    lappend result [dict get $parsed resolutionKnown] [dict get $parsed xDpi] \
+        [dict get $parsed xResolution]
+  }
+  set result
+} -result {0 72.0 200.0 0 72.0 200.0 0 72.0 200.0}
+
 # --- the ICC profile and the palette ----------------------------------------
 
 test imageTiff-7.1 {an ICC profile comes out byte for byte} -body {
@@ -410,6 +453,32 @@ test imageTiff-7.5 {a ColorMap of the wrong length is damaged} -body {
   ::tclpdfTest::refusal {::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {258 3 2} {262 3 3} \
       {279 4 4} {320 3 {0 0 0 0 0 0}}]}
 } -result {TCLPDF TIFF DAMAGED}
+
+test imageTiff-7.5a {a 16-bit palette is refused: an /Indexed hival is at most 255} -body {
+  # ISO 32000-2, 8.6.6.3: hival "shall be no greater than 255", so a PDF
+  # palette holds 256 colours at most - and TIFF 6.0 writes palette images at
+  # 4 or 8 bits anyway. Written out as it stands the picture becomes
+  # "/Indexed /DeviceRGB 65535", which pdfimages rejects with "Bad Indexed
+  # color space (invalid indexHigh 65535)". The ColorMap of such a file is
+  # 3 x 65536 entries, and it is refused before a single one is read.
+  set map [lrepeat [expr {3 * 65536}] 0]
+  ::tclpdfTest::refusal {::tclpdf::imageTiff parse [::tclpdfTest::tiffOne \
+      {258 3 16} {262 3 3} {279 4 32} [list 320 3 $map]]}
+} -result {TCLPDF TIFF PALETTE 16}
+
+test imageTiff-7.5b {a four-bit palette is read - it is what TIFF writes} -body {
+  # The depth TIFF 6.0 names beside 8, and sixteen colours are well inside
+  # what an /Indexed space names.
+  set map {}
+  foreach ramp {0 1 2} {
+    for {set index 0} {$index < 16} {incr index} {
+      lappend map [expr {$index * 4369}]
+    }
+  }
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {258 3 4} \
+      {262 3 3} {279 4 8} [list 320 3 $map]]]
+  list [dict get $parsed space] [string length [dict get $parsed palette]]
+} -result {Indexed 48}
 
 test imageTiff-7.6 {an image that is not a palette has no palette} -body {
   dict get [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne]] palette
@@ -592,6 +661,30 @@ test imageTiff-9.16 {every refusal is trappable by one prefix} -body {
   }
   set answer
 } -result trapped
+
+test imageTiff-9.18 {a turned or mirrored picture is refused by name} -body {
+  # A PDF image draws its rows as they stand, so an Orientation other than 1
+  # would place the picture turned or mirrored without a word - the one
+  # defect in this module no validator can see, because the file is perfect
+  # either way. Undoing it means turning the samples round, and for a striped
+  # picture undoing the strips as well; none of the 194 measured files asks
+  # for it. The unknown value is refused with the same code.
+  set result {}
+  foreach orientation {2 3 6 8 9} {
+    lappend result [::tclpdfTest::refusal {::tclpdf::imageTiff parse \
+        [::tclpdfTest::tiffOne [list 274 3 $orientation]]}]
+  }
+  set result
+} -result {{TCLPDF TIFF ORIENTATION 2} {TCLPDF TIFF ORIENTATION 3}\
+    {TCLPDF TIFF ORIENTATION 6} {TCLPDF TIFF ORIENTATION 8}\
+    {TCLPDF TIFF ORIENTATION 9}}
+
+test imageTiff-9.19 {the refusal says what the file is, not only that it is wrong} -body {
+  set message {}
+  catch {::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {274 3 6}]} message
+  list [string match {*turned by 90 degrees*} $message] \
+      [string match {*re-save it with the first row at the top*} $message]
+} -result {1 1}
 
 test imageTiff-9.17 {a field type the format does not define is stepped over} -body {
   # TIFF 6.0 section 2 asks a reader to skip what it does not know; the entry

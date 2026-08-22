@@ -239,11 +239,23 @@ oo::define ::tclpdf::document::document {
       # or the glyph frame has no height.
       set ascent [expr {$upem * 4 / 5}]
     }
-    my font define $alias -matrix [list $scale 0 0 $scale 0 0] -ascent $ascent
+    # The glyph streams before [font define], not during the glyph loop after
+    # it: [ColorFontStream] resolves every layer's colour through [ColourUsed]
+    # and every alpha through [GraphicsOpacity], and both can REFUSE - a PDF/A
+    # document whose output intent does not admit the colour, say. Built after
+    # [font define] a refusal on the third glyph would leave a family with the
+    # alias taken and no glyphs a caller could finish or retry; built here it
+    # throws before the family exists.
+    set streams {}
     foreach record $built {
-      my font glyph $alias [dict get $record char] \
-          -width [dict get $record width] \
-          -script [list my content [my ColorFontStream $record $alias]]
+      lappend streams [list [dict get $record char] [dict get $record width] \
+          [my ColorFontStream $record $alias]]
+    }
+    my font define $alias -matrix [list $scale 0 0 $scale 0 0] -ascent $ascent
+    foreach stream $streams {
+      lassign $stream char width body
+      my font glyph $alias $char -width $width \
+          -script [list my content $body]
     }
     return $alias
   }
@@ -321,10 +333,11 @@ oo::define ::tclpdf::document::document {
     if {![llength $layers]} {
       return -code error \
           -errorcode [list TCLPDF COLORFONT BASE $u $glyph $alias] \
-          "tclpdf: character $u is glyph $glyph of the face and that glyph is\
-          not a colour base glyph - it has no entry in the \"COLR\" table.\
-          Most glyphs of a colour font are layers or plain outlines; set this\
-          one with an embedded face instead"
+          "tclpdf: character $u is glyph $glyph of the face and the \"COLR\"\
+          table draws no colour layers for it - it is either not a base glyph\
+          or a base glyph with an empty layer list. Most glyphs of a colour\
+          font are layers or plain outlines; set this one with an embedded\
+          face instead"
     }
     set drawn {}
     foreach layer $layers {
@@ -436,4 +449,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFont 1.1
+package provide tclpdf::colorFont 1.2

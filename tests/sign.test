@@ -175,8 +175,13 @@ proc ::tclpdfTest::signed {name args} {
 # A signer that answers bytes without being able to sign anything: enough to
 # exercise the reserved space, the state and the length neutrality of the
 # second patch, on a machine that has no openssl at all.
+#
+# The FIRST BYTE is 0x30 and has to be: a CMS SignedData object is an ASN.1
+# SEQUENCE, every one of those begins with that tag, and the module refuses
+# anything that does not (test sign-5.14). The rest is filler, because none
+# of these tests reads it.
 proc ::tclpdfTest::signFake {length bytes} {
-  return [string repeat \xa5 $length]
+  return \x30[string repeat \xa5 [expr {$length - 1}]]
 }
 
 # The two object identifiers the PAdES check reads, as DER: the signing-time
@@ -196,7 +201,7 @@ proc ::tclpdfTest::signOid {which} {
 # it here rather than signing something real also keeps the test away from
 # openssl, which cannot make a timestamp at all.
 proc ::tclpdfTest::signObject {args} {
-  set der [string repeat \xa5 16]
+  set der \x30[string repeat \xa5 15]
   foreach which $args {
     append der [signOid $which] [string repeat \xa5 16]
   }
@@ -448,7 +453,7 @@ test sign-1.12 {-date writes the time it is given, and -date {} keeps /M out} -b
       -signer [list ::tclpdfTest::signFake 20]]
   set data [::tclpdfTest::readBytes $path]
   file delete $path
-  lappend result [regexp {/M } $data] [regexp {/Contents <a5a5} $data]
+  lappend result [regexp {/M } $data] [regexp {/Contents <30a5} $data]
 } -result {1 0 1}
 
 test sign-1.13 {/M lies inside the bytes the signature covers} -body {
@@ -962,7 +967,7 @@ test sign-4.16 {a signer that states the time in the CMS object breaks the PAdES
   set doc [::tclpdfTest::signDoc -version 2.0]
   $doc sign -size 256 -subfilter cades \
       -signer [list apply {{attribute bytes} {
-        return [string repeat \xa5 20]$attribute
+        return \x30[string repeat \xa5 19]$attribute
       }} $attribute]
   set path [::tclpdfTest::scratch sign-cades-time.pdf]
   set code [catch {$doc write $path} message options]
@@ -976,7 +981,7 @@ test sign-4.16 {a signer that states the time in the CMS object breaks the PAdES
   # And the same signer under the default, which claims no PAdES.
   set doc [::tclpdfTest::signDoc -version 2.0]
   $doc sign -size 256 -signer [list apply {{attribute bytes} {
-    return [string repeat \xa5 20]$attribute
+    return \x30[string repeat \xa5 19]$attribute
   }} $attribute]
   set plain [::tclpdfTest::scratch sign-pkcs7-time.pdf]
   set second [catch {$doc write $plain} other]
@@ -1106,6 +1111,108 @@ test sign-4.21 {a timestamp token's own signing time leaves the PAdES claim alon
     timeFirst/cades {TCLPDF SIGN SIGNINGTIME} timeFirst/pkcs7 {ok 1}\
     neither/cades {ok 1} neither/pkcs7 {ok 1}}
 
+test sign-4.22 {-rect refuses NaN and an infinity, which "string is double" takes} -body {
+  # [string is double] says yes to NaN and to Inf, and NaN fails every
+  # comparison there is - "NaN <= 0" is FALSE - so the width and height check
+  # below it waved them through as well. What they hit was the write, as a
+  # raw Tcl sentence about a non-numeric floating-point value, and by then
+  # the state was set and the call could not be made again.
+  set result {}
+  foreach rect {{10 10 NaN 20} {10 10 Inf 20} {10 10 20 -Inf} {NaN 10 20 20}
+      {10 10 1e400 20}} {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    set code [catch {$doc sign -size 256 -rect $rect \
+        -appearance sigbox} message]
+    lappend result $code [expr {[$doc sign state] eq {}}] \
+        [string match "*numbers a PDF can hold*" $message]
+    $doc destroy
+  }
+  # Every one of the fifteen answers is a 1: refused, nothing left behind,
+  # and the sentence that says which values a PDF can hold.
+  lsort -unique $result
+} -result 1
+
+test sign-4.23 {-subfilter cades and -date {} cannot both stand} -body {
+  # ETSI EN 319 142-1, Table 1 has the entry with the key M at "shall be
+  # present" for every baseline level, and its note g) says what belongs
+  # there: the claimed UTC time of the signature. -date {} is the call that
+  # keeps /M out, so the two claims contradict each other.
+  #
+  # The other half of that same table row - the signing-time attribute
+  # "shall not be present" - is refused rather than repaired as well (see
+  # sign-4.16), and one line of one table gets one kind of answer.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  set code [catch {$doc sign -size 256 -subfilter cades -date {}} message]
+  set after [$doc sign state]
+  # And the three neighbours that stand: no /M is the caller's business
+  # where nothing claims PAdES, and cades takes "now" as well as a date of
+  # the caller's own.
+  set ok [list [catch {$doc sign -size 256 -date {}}]]
+  $doc destroy
+  foreach options {{-subfilter cades} {-subfilter cades -date
+      D:20260101120000+01'00'}} {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    lappend ok [catch {$doc sign -size 256 {*}$options}]
+    $doc destroy
+  }
+  list $code $after \
+      [string match "*ETSI EN 319 142-1, Table 1*shall be present*" $message] \
+      $ok
+} -result {1 {} 1 {0 0 0}}
+
+test sign-4.24 {a caller's string cannot take the signature away from the dictionary} -body {
+  # -reason, -name, -location and -contact go into the file as they were
+  # written, and the builder writes them BEHIND /ByteRange and /Contents. So
+  # a string spelling out a signature dictionary of its own was the LAST
+  # /ByteRange in the file - and the last one was the one taken.
+  #
+  # Measured before it was refused: the CMS object went into the string, the
+  # real /Contents kept its zeros, [sign state] reported signed 1, and
+  # neither qpdf --check nor pdfsig had anything to say about it.
+  set decoy "/SubFilter /adbe.pkcs7.detached /ByteRange \[0 0 0\
+      0[string repeat { } 26]\] /Contents <[string repeat 0 200]>"
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 256 -signer [list ::tclpdfTest::signFake 40] -reason $decoy
+  set path [::tclpdfTest::scratch sign-decoy.pdf]
+  set code [catch {$doc write $path} message]
+  set signed [dict get [$doc sign state] signed]
+  set data [::tclpdfTest::readBytes $path]
+  $doc destroy
+  file delete $path
+  # Refused, nothing signed, and the reserved room untouched - so the same
+  # document is written again without the decoy and nothing is lost.
+  list $code $signed \
+      [string match "*waiting for their value*inside a STRING*" $message] \
+      [regexp -all "/Contents <[string repeat 0 512]>" $data]
+} -result {1 0 1 1}
+
+test sign-4.25 {a signer that fails leaves the PREPARED document behind} -body {
+  # [add] promises in so many words that a signer which fails "leaves the
+  # file exactly as it found it", and the write way promised the opposite
+  # without saying so: the bytes are patched in memory and written at the
+  # end, so an error in the signing step left on disk what [write] had put
+  # there - a file whose /ByteRange is still the placeholder, which is the
+  # one thing [digest] refuses by name. The document was then signable
+  # neither here nor anywhere else.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 4 -signer [list ::tclpdfTest::signFake 100]
+  set path [::tclpdfTest::scratch sign-prepared.pdf]
+  set code [catch {$doc write $path} message options]
+  set state [$doc sign state]
+  $doc destroy
+  set found [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]]
+  # What is on disk is the prepared document: /ByteRange filled in, the room
+  # still zeros - and the two-stage way takes it from there.
+  set job [::tclpdf::sign digest $path]
+  set length [::tclpdf::sign embed $path \x30[string repeat \xa5 3]]
+  file delete $path
+  list $code [dict get $options -errorcode] [dict get $state signed] \
+      [expr {[lindex [dict get $state byteRange] 1] > 0}] \
+      [dict get $found hex] \
+      [expr {[dict get $job byteRange] eq [dict get $found byteRange]}] \
+      $length
+} -result {1 {TCLPDF SIGN SPACE 100 4} 0 1 00000000 1 4}
+
 #
 # --- the two entry points on the finished file ------------------------------
 #
@@ -1165,7 +1272,7 @@ test sign-5.4 {embed writes into the gap without moving a byte} -body {
   set path [::tclpdfTest::signed sign-embed.pdf -size 256]
   set before [file size $path]
   set beforeBytes [dict get [::tclpdf::sign digest $path] bytes]
-  set der [string repeat \xa5 40]
+  set der \x30[string repeat \xa5 39]
   set length [::tclpdf::sign embed $path $der]
   set data [::tclpdfTest::readBytes $path]
   set afterBytes [dict get [::tclpdf::sign digest $path] bytes]
@@ -1175,11 +1282,12 @@ test sign-5.4 {embed writes into the gap without moving a byte} -body {
       [expr {$beforeBytes eq $afterBytes}] \
       [string range $hex 0 79] [string length $hex] \
       [string range $hex 80 end]
-} -result [list 40 1 1 [string repeat a5 40] 512 [string repeat 0 432]]
+} -result [list 40 1 1 30[string repeat a5 39] 512 [string repeat 0 432]]
 
 test sign-5.5 {embed refuses a DER that does not fit, with the same code} -body {
   set path [::tclpdfTest::signed sign-embed-big.pdf -size 16]
-  set code [catch {::tclpdf::sign embed $path [string repeat \xa5 17]} message options]
+  set code [catch {::tclpdf::sign embed $path \x30[string repeat \xa5 16]} \
+      message options]
   # And the file is untouched by the refusal.
   set hex [dict get [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]] hex]
   file delete $path
@@ -1198,7 +1306,8 @@ test sign-5.6 {embed refuses a file that was changed after it was written} -body
   set fh [open $path ab]
   puts -nonewline $fh "0123456789"
   close $fh
-  set code [catch {::tclpdf::sign embed $path [string repeat \xa5 40]} message]
+  set code [catch {::tclpdf::sign embed $path \x30[string repeat \xa5 39]} \
+      message]
   # And the refusal left the file alone: the reservation is still zeros.
   set hex [dict get [::tclpdfTest::signParse [::tclpdfTest::readBytes $path]] hex]
   file delete $path
@@ -1314,7 +1423,7 @@ test sign-5.12 {embed refuses a signing-time attribute where the file claims PAd
   # The DER here is not a CMS object and does not need to be: the check is a
   # search for eleven bytes and says so in its own comment.
   set attribute [binary decode hex 06092a864886f70d010905]
-  set der [string repeat \xa5 20]$attribute[string repeat \xa5 20]
+  set der \x30[string repeat \xa5 19]$attribute[string repeat \xa5 20]
   set path [::tclpdfTest::signed sign-embed-cades.pdf -size 256 -subfilter cades]
   set code [catch {::tclpdf::sign embed $path $der} message options]
   # And the refusal left the file alone - the room is still zeros, so the
@@ -1372,6 +1481,43 @@ test sign-5.13 {embed takes an object whose signing time belongs to a timestamp}
     tokenFirst/cades 72 1 tokenFirst/pkcs7 72 1\
     timeFirst/cades {TCLPDF SIGN SIGNINGTIME} 1 timeFirst/pkcs7 72 1\
     neither/cades 16 1 neither/pkcs7 16 1}
+
+test sign-5.14 {embed refuses something that is not a DER object at all} -body {
+  # Measured before it was checked: [::tclpdf::sign embed $path "hello"]
+  # wrote 68656c6c6f into the room, answered 5, and every structural check
+  # called the result signed. A CMS SignedData object is an ASN.1 SEQUENCE
+  # and begins with the byte 0x30 - the same byte [add] reads a reserved
+  # /Contents by, which is why the check is a single [string index] and not a
+  # parser.
+  set path [::tclpdfTest::signed sign-embed-nonder.pdf -size 256]
+  set code [catch {::tclpdf::sign embed $path hello} message]
+  set empty [catch {::tclpdf::sign embed $path {}} second]
+  set hex [dict get [::tclpdfTest::signParse \
+      [::tclpdfTest::readBytes $path]] hex]
+  file delete $path
+  list $code [string match "*begins with the byte 0x30*" $message] \
+      [string match "*0x68*" $message] $empty \
+      [string match "*the signature is empty*" $second] \
+      [expr {$hex eq [string repeat 0 512]}]
+} -result {1 1 1 1 1 1}
+
+test sign-5.15 {a second embed does not write over the first signature} -body {
+  # The room is filled once. Before this refusal a second [embed] replaced a
+  # good signature with another one without a word - and the file went on
+  # looking exactly as sound as it had.
+  set path [::tclpdfTest::signed sign-embed-twice.pdf -size 256]
+  set first [::tclpdf::sign embed $path \x30[string repeat \xa5 39]]
+  set code [catch {::tclpdf::sign embed $path \x30[string repeat \x5a 39]} \
+      message]
+  set hex [dict get [::tclpdfTest::signParse \
+      [::tclpdfTest::readBytes $path]] hex]
+  # And [digest] still answers about the finished file - it reads, and a
+  # signed file answers the question which bytes it says are signed.
+  set job [::tclpdf::sign digest $path]
+  file delete $path
+  list $first $code [string match "*waiting for its value*" $message] \
+      [string range $hex 0 5] [dict get $job size] [dict get $job date]
+} -result {40 1 1 30a5a5 256 {}}
 
 #
 # --- openssl and pdfsig: the real thing -------------------------------------
@@ -2072,6 +2218,78 @@ test sign-8.16 {a PDF/A-3b document survives being signed twice} -constraints {h
   list $states [expr {[lindex $counts 0] < [lindex $counts 1]}] \
       [expr {[lindex $counts 1] < [lindex $counts 2]}]
 } -result {{1 1 1 1} 1 1}
+
+test sign-8.17 {a field name written as hexadecimal is a name like any other} -body {
+  # [pdfObj str] writes a string of pure ASCII as a literal and EVERY other
+  # one as UTF-16BE in hexadecimal, so a field name with an umlaut stands in
+  # the file as <feff004d00fc...>. [FieldNames] read the literal spelling
+  # only, so the uniqueness 12.7.4.2 asks for was not checked for exactly the
+  # names a caller is most likely to collide on: the same name went in twice
+  # and no reader can tell the two fields apart.
+  set path [::tclpdfTest::scratch sign-add-hexname.pdf]
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 256 -field "Müller" \
+      -signer [list ::tclpdfTest::signFake 40]
+  $doc write $path
+  $doc destroy
+  set hex [regexp {/T <feff004d00fc006c006c00650072>} \
+      [::tclpdfTest::readBytes $path]]
+  set taken [catch {::tclpdf::sign add $path -size 256 -field "Müller" \
+      -signer [list ::tclpdfTest::signFake 40]} message]
+  # And the name it does not have goes in, alongside the one it has - the
+  # refusal is about the collision and not about the spelling.
+  set added [::tclpdf::sign add $path -size 256 -field "Schöpe" \
+      -signer [list ::tclpdfTest::signFake 40]]
+  set names [llength [regexp -all -inline {/T <feff} \
+      [::tclpdfTest::readBytes $path]]]
+  file delete $path
+  list $hex $taken [string match "*Taken are: Müller*" $message] \
+      [dict get $added field] $names
+} -result [list 1 1 1 "Schöpe" 2]
+
+test sign-8.18 {the two spellings of a text string, as the module reads them} -body {
+  # The decoder under sign-8.17, on its own and against the writer it is the
+  # counterpart of: what [pdfObj str] produces has to come back out of it
+  # unchanged, whichever of the two spellings that was. The third case is the
+  # one no tclpdf file carries and every foreign one may - an ASCII name
+  # written as hexadecimal all the same.
+  set result {}
+  foreach text [list Signature1 "Müller" "äöü"] {
+    set written [::tclpdf::pdfObj str $text]
+    if {[string index $written 0] eq "<"} {
+      set value [list h [string range $written 1 end-1]]
+    } else {
+      set value [list s [string range $written 1 end-1]]
+    }
+    lappend result [expr {[::tclpdf::sign::Text $value] eq $text}]
+  }
+  # The spelling a foreign producer may choose for a plain ASCII name.
+  lappend result [::tclpdf::sign::Text [list h \
+      [binary encode hex [::tclpdf::pdfObj::Utf16Be Signature1]]]] \
+      [::tclpdf::sign::Text [list h "5369676e6174757265 31"]] \
+      [::tclpdf::sign::Text {nm Signature1}]
+} -result {1 1 1 Signature1 Signature1 {}}
+
+test sign-8.19 {sign add refuses -subfilter cades with -date {} as well} -body {
+  # The same table row as sign-4.23, on the other entry point: both take the
+  # same options and refuse the same values, which is what [Claim] exists
+  # for.
+  set path [::tclpdfTest::signed sign-add-cades-nodate.pdf -size 256 \
+      -signer [list ::tclpdfTest::signFake 40]]
+  set size [file size $path]
+  set code [catch {::tclpdf::sign add $path -size 256 -subfilter cades \
+      -date {}} message]
+  # The refusal left the file alone - nothing was appended to it.
+  set untouched [file size $path]
+  # And the same call with a time in it goes through - on a 2.0 file, which
+  # is what /ETSI.CAdES.detached needs.
+  set added [::tclpdf::sign add $path -size 256 -subfilter cades \
+      -signer [list ::tclpdfTest::signFake 40]]
+  set grew [expr {[file size $path] > $size}]
+  file delete $path
+  list $code [string match "*shall be present*" $message] \
+      [expr {$size == $untouched}] $grew [dict get $added subFilter]
+} -result {1 1 1 1 /ETSI.CAdES.detached}
 
 # The certificates go with the rest of the scratch files: they are made at
 # load time, not by a test, so nothing else would remove them.

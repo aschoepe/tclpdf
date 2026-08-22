@@ -73,13 +73,21 @@
 # already there by reading the entry back with its own parser. This module
 # therefore does two things: it builds its entry on the catalog event, which
 # is after every import, and it reads the groups already in the entry out of
-# it and carries them along - into /OCGs, into /Order and into /ON, which is
-# the state import gave them. So the two are not two writers fighting over
-# one key: whoever writes last has both halves. Measured (2026-08-21): a
-# document with one layer of its own that imports a page with two foreign
-# ones writes /OCGs with all three, and a write, then a further import, then
-# a second write comes out with all three again - the import's reduced entry
-# is the input of the next catalog run and is rebuilt from it.
+# it and carries them along - into /OCGs, into /Order, and into /ON or /OFF
+# according to the state that same entry gives them, which is the state they
+# had in the file they were imported from. So the two are not two writers
+# fighting over one key: whoever writes last has both halves. Measured
+# (2026-08-21): a document with one layer of its own that imports a page
+# with two foreign ones writes /OCGs with all three, and a write, then a
+# further import, then a second write comes out with all three again - the
+# import's reduced entry is the input of the next catalog run and is rebuilt
+# from it.
+#
+# A document that imports layers and declares NONE of its own never reaches
+# this module at all - nothing hooks it onto the catalog event then - which
+# is why the entry import.tcl writes has to be conforming on its own, /Name
+# included. It is (measured 2026-08-22 with veraPDF: 6.9-1 passes on a
+# PDF/A-3B document whose only layers are imported ones).
 #
 # PDF/A. ISO 19005-2 and -3 have four requirements in clause 6.9 (NOT 6.1.13,
 # which is the implementation limits), and veraPDF spells them out:
@@ -123,20 +131,26 @@ namespace eval ::tclpdf::layer {
   variable listModes {AllPages VisiblePages}
 }
 
-# The indirect references in the /OCGs array of an optional content
-# properties dictionary, as PDF syntax ("5 0 R"), or {} when there is no such
+# The indirect references in one array of an optional content properties
+# dictionary - /OCGs, every group in the file, or /OFF, the ones that start
+# out switched off - as PDF syntax ("5 0 R"), or {} when there is no such
 # array.
 #
 # This reads back what import.tcl put into the catalogue - and what this
 # module itself put there on an earlier write. A full parser is not needed
 # and would be the wrong tool: the entry has exactly two producers and both
-# write one flat array of references under /OCGs, so what is wanted is the
-# first bracketed list after that key. import.tcl has a real parser for the
-# same job and cannot be borrowed - a topic does not require another topic -
+# write one flat array of references per key, so what is wanted is the first
+# bracketed list after that key. import.tcl has a real parser for the same
+# job and cannot be borrowed - a topic does not require another topic -
 # which is why this is the small half of the question rather than a copy of
 # the large one.
-proc ::tclpdf::layer::groupReferences {entry} {
-  set at [string first /OCGs $entry]
+#
+# "The first list after the key" is safe because both producers write the
+# configuration's /Name last: it is the one value in the entry that a caller
+# dictates, and a title reading "/OFF [4 0 R]" in front of the real array
+# would be taken for it.
+proc ::tclpdf::layer::groupReferences {entry {key OCGs}} {
+  set at [string first /$key $entry]
   if {$at < 0} {
     return {}
   }
@@ -278,11 +292,17 @@ oo::define ::tclpdf::document::document {
   # and then says so - the content after the page break was NOT in the layer,
   # and silence about that is a document that looks right and is not.
   #
-  # An empty script writes nothing at all. "/OC /OC1 BDC EMC" around nothing
+  # An empty script writes nothing at all, and SO DOES A MISSING ONE - the
+  # two are the same call, deliberately, and [layer draw draft] on its own is
+  # a no-op that answers the layer's name. "/OC /OC1 BDC EMC" around nothing
   # is a bracket with no content, which is what the standard's DP operator
   # exists for; writing it as an empty pair instead is the defect this
   # package has already paid for twice, in the type area and in the text
-  # block.
+  # block. Refusing the missing -script instead would buy nothing: the alias
+  # is checked either way, so the typo that matters - a layer that does not
+  # exist - is still refused by name, and the precedent in this package is
+  # [form create], where an empty -script is a form with no content and said
+  # so in as many words.
   method LayerDraw {level name args} {
     set options [::tclpdf::option parse {script {}} $args "layer draw"]
     set record [my LayerRecord $name]
@@ -296,13 +316,29 @@ oo::define ::tclpdf::document::document {
     set page [expr {$depth ? {} : [my PageIndex {}]}]
     my content "/OC [::tclpdf::pdfObj name [dict get $record resource]] BDC\n"
     set failed [catch {uplevel #$level [dict get $options script]} result info]
-    if {[my canvas depth] != $depth} {
+    # BOTH ways out close the bracket, which is what this method exists for -
+    # the refusal below used to be written BEFORE the EMC and left the BDC
+    # standing, and an unclosed BDC swallows every drawing that follows it.
+    # A drawing surface the script pushed and did not pop is popped here:
+    # what it collected goes nowhere in any case (nothing will ever finish
+    # that form), and while it is on the stack it is where [content] writes,
+    # so the EMC would land in it instead of in the stream the BDC is in.
+    # A script that popped the surface the bracket began in cannot be helped
+    # that way - that stream is gone, and writing the EMC into whatever is
+    # current now would close a bracket in a stream that never opened one.
+    set escaped [expr {[my canvas depth] != $depth}]
+    while {[my canvas depth] > $depth} {
+      my canvas pop
+    }
+    set now [expr {$depth ? {} : [my PageIndex {}]}]
+    if {[my canvas depth] == $depth} {
+      my content "EMC\n" $page
+    }
+    if {$escaped} {
       return -code error "tclpdf: the -script of layer \"$name\" left the\
           content stream it began in - a /OC bracket opens and closes in one\
           stream (ISO 32000-2, 8.11.3.2)"
     }
-    set now [expr {$depth ? {} : [my PageIndex {}]}]
-    my content "EMC\n" $page
     if {$failed} {
       return -options $info $result
     }
@@ -334,6 +370,9 @@ oo::define ::tclpdf::document::document {
     }
     dict set layers $name visible [expr {$value ? 1 : 0}]
     my state layers $layers
+    if {[dict get $layers $name visible]} {
+      my LayerExclusive $name
+    }
     return [dict get $layers $name visible]
   }
 
@@ -358,7 +397,43 @@ oo::define ::tclpdf::document::document {
     set groups [my state layerRadio]
     lappend groups $members
     my state layerRadio $groups
+    # "Mutually exclusive" is a statement about the STATE as well as about
+    # the switching (Table 99): a configuration whose /ON array holds two
+    # members of one radio set describes a state the reader it is written
+    # for cannot produce. Two layers created without -visible 0 - which is
+    # the default and the usual way a language pair is declared - were
+    # exactly that. So the set is made exclusive here, at the call that
+    # declares it: the FIRST member that is on stays on, the rest go off,
+    # and [layer state] reports what the file will say rather than something
+    # the write silently corrects.
+    set layers [my state layers]
+    foreach name $members {
+      if {[dict get $layers $name visible]} {
+        my LayerExclusive $name
+        break
+      }
+    }
     return $members
+  }
+
+  # Switch off every OTHER member of every radio group this layer is in -
+  # the one place the exclusivity is enforced, called from where a group is
+  # declared and from where a member is switched on.
+  method LayerExclusive {name} {
+    set layers [my state layers]
+    set changed 0
+    foreach group [my state layerRadio] {
+      if {$name ni $group} continue
+      foreach member $group {
+        if {$member eq $name || ![dict get $layers $member visible]} continue
+        dict set layers $member visible 0
+        set changed 1
+      }
+    }
+    if {$changed} {
+      my state layers $layers
+    }
+    return
   }
 
   # The default configuration dictionary's own settings. Read with no
@@ -425,22 +500,34 @@ oo::define ::tclpdf::document::document {
         lappend off $reference
       }
     }
-    # The groups an import brought. They keep the state it gave them, which
-    # is ON, and they go into /Order as well - /Order must list every group
-    # in the file or a PDF/A validator reports it (veraPDF 6.9-3), and a
-    # group missing from /Order is one no reader offers to switch.
+    # The groups an import brought. They keep the state THE FILE THEY CAME
+    # FROM gave them: import.tcl reads that file's default configuration and
+    # writes the result into this entry, and the entry is where it is read
+    # back from here - the same seam the /OCGs array travels over, for the
+    # same reason (see the head of this file). A group the entry does not
+    # name as off is on, which is what a group is unless a configuration
+    # says otherwise (Table 99, /BaseState).
+    #
+    # They go into /Order as well - /Order must list every group in the file
+    # or a PDF/A validator reports it (veraPDF 6.9-3), and a group missing
+    # from /Order is one no reader offers to switch.
+    set entry [my catalogEntry OCProperties]
+    set hidden [::tclpdf::layer::groupReferences $entry OFF]
     set foreign {}
-    foreach reference \
-        [::tclpdf::layer::groupReferences [my catalogEntry OCProperties]] {
+    foreach reference [::tclpdf::layer::groupReferences $entry] {
       if {$reference in $mine} continue
       lappend foreign $reference
+      if {$reference in $hidden} {
+        lappend off $reference
+        continue
+      }
+      lappend on $reference
     }
     set all [concat $mine $foreign]
 
     set config [my LayerConfigure]
-    set pairs [list Name [my Str [dict get $config title]] \
-        Order [::tclpdf::pdfObj arr $all] \
-        ON [::tclpdf::pdfObj arr [concat $on $foreign]]]
+    set pairs [list Order [::tclpdf::pdfObj arr $all] \
+        ON [::tclpdf::pdfObj arr $on]]
     if {[llength $off]} {
       lappend pairs OFF [::tclpdf::pdfObj arr $off]
     }
@@ -456,6 +543,12 @@ oo::define ::tclpdf::document::document {
     if {[dict get $config listMode] ne {}} {
       lappend pairs ListMode [::tclpdf::pdfObj name [dict get $config listMode]]
     }
+    # The /Name goes LAST - import.tcl writes it last as well, and the
+    # comment there says why: it is the one value in the configuration a
+    # caller dictates, and [groupReferences] takes the first /OCGs and the
+    # first /OFF it finds. A title reading "/OFF [4 0 R]" in front of them
+    # would be read as one of them.
+    lappend pairs Name [my Str [dict get $config title]]
     # No /BaseState: its default is ON, /ON and /OFF are written out in full,
     # and Table 99 permits the value ON alone in the default configuration
     # anyway - a key that may only ever hold its own default is one to leave
@@ -467,4 +560,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::layer 1.0
+package provide tclpdf::layer 1.1

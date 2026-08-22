@@ -1754,4 +1754,40 @@ test textFlow-11.4 {a shape over only part of the page still marks and draws bel
       [regexp -all {EMC} $stream] [expr {[flowLines $stream] > 0}]
 } -result {1 1 1 1}
 
+# --- 12. an offer that consumes nothing ------------------------------------
+
+test textFlow-12.1 {a hyphenation offer that eats none of the word is refused} -body {
+  # THE LOOP THAT CLOSES A LINE AND COMES BACK is the one place where this
+  # has to be caught: it takes the head an offer proposes, closes the line on
+  # it and returns with what is left of the word - so an offer whose head
+  # consumes NOTHING leaves the word exactly as it was and the loop goes
+  # round for ever, writing a hyphen per turn. Reproduced through the
+  # caller's own -exceptions, which are taken exactly as written, minima and
+  # all: a leading marker says "break in front of the first letter", and
+  # [hyphenate word] duly answers {{} ababab}.
+  #
+  # A pattern file stating LEFTHYPHENMIN 0 produced the same offer and is
+  # refused at the load now (hyphenate.tcl); this is the second brake, and it
+  # is the one that does not depend on where the offer came from.
+  package require tclpdf::hyphenate
+  set path [file join [temporaryDirectory] flow-brake.dic]
+  set channel [open $path w]
+  fconfigure $channel -encoding utf-8 -translation lf
+  puts $channel "UTF-8\nLEFTHYPHENMIN 2\nRIGHTHYPHENMIN 2\nx1x"
+  close $channel
+  ::tclpdf::hyphenate load zz-flow $path -exceptions {-ababab}
+  file delete $path
+  set offer [::tclpdf::hyphenate word zz-flow ababab]
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 12
+  # 14 mm is narrower than the word, so the breaker asks for an offer, gets
+  # the empty one, and has to fall through to the character fallback.
+  $doc text ababab -at {20 40} -width 14 -hyphenate zz-flow
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lindex $offer 0] [llength $offer] [expr {[flowLines $stream] > 0}] \
+      [expr {[flowLines $stream] < 10}]
+} -result {{} 2 1 1}
+
 cleanupTests

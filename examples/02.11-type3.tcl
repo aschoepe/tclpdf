@@ -90,12 +90,20 @@ examplePara $doc y "Every word on this page is set in an EMBEDDED face, DejaVu\
 
 $doc font define ballot -ascent 750
 
-# The empty box: an outline in the colour of the TEXT, so a heading in blue
-# gets blue boxes. That is what -color text is for - d1, "the glyph description
-# specifies only shape, not colour". Its bounding box has to be stated, and
-# has to hold everything the script paints, the width of the stroke included.
-$doc font glyph ballot ☐ -width 900 -color text -bbox {30 20 700 700} -script {
-  $doc rect -at {60 50} -size {640 640} -stroke black -width 60 -radius 60
+# The empty box: a frame in the colour of the TEXT, so a heading in blue gets
+# blue boxes. That is what -color text is for - d1, "the glyph description
+# specifies only shape, not colour": the reader paints it in the current
+# colour. But only what a glyph FILLS follows the text colour - a stroke takes
+# the current STROKE colour, which setting the text colour never touches, so a
+# stroked outline would come out black whatever the text was set to. The frame
+# is therefore a FILLED ring: an outer rectangle and an inner one, painted
+# even-odd so the middle stays open. Its bounding box has to be stated and to
+# hold everything the script paints.
+$doc font glyph ballot ☐ -width 900 -color text -bbox {60 50 640 640} -script {
+  $doc path -segments {
+    {move 60 50} {line 700 50} {line 700 690} {line 60 690} {close}
+    {move 120 110} {line 640 110} {line 640 630} {line 120 630} {close}
+  } -fill black -rule evenodd
 }
 
 # The ticked box: the same outline with a tick through it, and the tick in a
@@ -159,6 +167,11 @@ examplePara $doc y "The colour of the empty box follows the text, because that\
     glyph is written with the d1 operator: it describes shape only, and the\
     reader paints it in whatever colour the text has. The two coloured ones use\
     d0 and bring their own."
+examplePara $doc y "What follows the text is what the glyph FILLS. Setting the\
+    text colour sets the fill colour and nothing else, so a d1 glyph drawn with\
+    a stroke comes out in the stroke colour - black, whatever the text was set\
+    to. The empty box above is therefore a filled ring: an outer rectangle and\
+    an inner one, painted with the even-odd rule so the middle stays open."
 
 $doc font -family ballot -size 14 -color {0.15 0.35 0.75}
 $doc text "☐" -at [list 20 [expr {$y + 6}]]
@@ -170,8 +183,8 @@ $doc font -family ballot -size 14 -color {0.75 0.35 0.15}
 $doc text "☑" -at [list 50 [expr {$y + 6}]]
 set y [expr {$y + 14}]
 $doc font -family body -size 9 -color {0.45 0.45 0.5}
-$doc text "blue, orange, blue, orange - the tick keeps its green either way" \
-    -at [list 20 $y]
+$doc text "blue, orange - then the same two colours asked of a d0 glyph,\
+    which ignores them" -at [list 20 $y]
 set y [expr {$y + 12}]
 
 # -- both kinds in one line -------------------------------------------------

@@ -757,6 +757,14 @@ proc ::tclpdf::color::space {parsed} {
 # a colour and no document and has to name the entry [LabColourUsed] made.
 # The default space keeps the readable name; any other gets the CRC of its
 # parameters, which is stable within a document and across two writes of it.
+# The mapping from parameters to name is by design a hash (CRC32) and so is
+# NOT injective: two distinct parameter sets can land on the same name, with
+# probability 2^-32. Chosen knowingly - a document carrying enough distinct
+# non-default Lab spaces for that to matter is not one this package writes.
+# So the rule that a resource name is a KEY holds here only with that
+# reservation: the key is a fingerprint of the parameters, not the parameters
+# themselves, and it is the one place in the package where two different
+# things may be given one name.
 proc ::tclpdf::color::labResource {values} {
   variable labWhitePoint
   variable labRange
@@ -964,4 +972,4 @@ proc ::tclpdf::color::Pin {value low high} {
   return $value
 }
 
-package provide tclpdf::color 1.5
+package provide tclpdf::color 1.6

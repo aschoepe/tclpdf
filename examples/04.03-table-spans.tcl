@@ -108,8 +108,10 @@ for {set n 1} {$n <= 10} {incr n} {
     lappend columns {width 26 align decimal}
 }
 set body {}
+set stationDay 13
 foreach station {North East South West} {
-    set row [list $station "2026-07-1[string index $station 0]"]
+    set row [list $station "2026-07-[format %02d $stationDay]"]
+    incr stationDay
     for {set n 1} {$n <= 10} {incr n} {
         lappend row [format %.2f [expr {12.0 + $n * 1.37 +
             [string length $station]}]]
@@ -149,6 +151,9 @@ $doc text "The shift roster below is long enough that the break falls right\
 # below it the break falls before the block and above it after, and either way
 # the page would look the same whether the fix is there or not.
 set roster {}
+# The three shifts of a day, each with its own hours - the Night shift runs
+# over midnight, as it does on a real roster.
+set shiftHours {Early "6:00 - 14:00" Late "14:00 - 22:00" Night "22:00 - 6:00"}
 # One day per NAME: the week turns after seven days. Counted per shift it
 # turned after seven SHIFTS, and Wednesday afternoon was already week 2.
 set day 0
@@ -157,13 +162,14 @@ foreach name {Monday Tuesday Wednesday Thursday Friday Saturday Sunday
     incr day
     foreach shift {Early Late Night} {
         lappend roster [list "$name, week [expr {($day - 1) / 7 + 1}]" $shift \
-            "R. Neumann" "6:00 - 14:00"]
+            "R. Neumann" [dict get $shiftHours $shift]]
     }
 }
 # The block that must not be torn: one name covering a weekend of six shifts.
-lappend roster [list {text "Weekend cover" rowSpan 6} Early "K. Wagner" "6:00 - 14:00"]
+lappend roster [list {text "Weekend cover" rowSpan 6} Early "K. Wagner" \
+    [dict get $shiftHours Early]]
 foreach shift {Late Night Early Late Night} {
-    lappend roster [list $shift "K. Wagner" "6:00 - 14:00"]
+    lappend roster [list $shift "K. Wagner" [dict get $shiftHours $shift]]
 }
 
 $doc table -at {20 40} -width 170 -theme grid \

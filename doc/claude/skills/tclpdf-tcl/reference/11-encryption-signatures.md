@@ -46,20 +46,27 @@ $doc destroy
 `qpdf --show-encryption ref-11-encrypted.pdf` reads it back - `R = 6`, `AESv3`, and the permission bits one by one. Two things stay readable on purpose: the file identifier `/ID`, which a reader compares before it has any key, and the strings of the encryption dictionary itself. A second `write` of an encrypted document is **not** byte-identical: every string and stream takes a fresh initialisation vector, and reusing one would be the mistake.
 
 ```tcl
-# The three refusals, each measured here rather than described.
+# The four refusals, each measured here rather than described. An empty -user
+# is allowed and is often what is wanted - but then -owner has to say
+# something, or both passwords would be empty and every reader would open the
+# file as its owner, with every permission granted.
+set doc [tclpdf new -unit mm -version 2.0]
+if {[catch {$doc encrypt -user {}} message]} { puts "no owner: $message" }
+$doc destroy
+
 set doc [tclpdf new -unit mm]                       ;# 1.7
-if {[catch {$doc encrypt -user {}} message]} { puts "version: $message" }
+if {[catch {$doc encrypt -user {} -owner secret} message]} { puts "version: $message" }
 $doc destroy
 
 set doc [tclpdf new -unit mm -version 2.0]
 $doc page add
 $doc font -family helvetica -size 10
 $doc text "already drawn" -at {20 20}
-if {[catch {$doc encrypt -user {}} message]} { puts "too late: $message" }
+if {[catch {$doc encrypt -user {} -owner secret} message]} { puts "too late: $message" }
 $doc destroy
 
 set doc [tclpdf new -unit mm -version 2.0]
-$doc encrypt -user {}
+$doc encrypt -user {} -owner secret
 if {[catch {$doc pdfa -part 3} message]} { puts "pdfa: $message" }
 $doc destroy
 ```

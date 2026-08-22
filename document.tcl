@@ -328,6 +328,7 @@ oo::class create ::tclpdf::document::document {
       opacity graphics
       blend graphics
       GraphicsColour graphics
+      GraphicsOpacity graphics
       line shape
       rect shape
       circle shape
@@ -348,6 +349,7 @@ oo::class create ::tclpdf::document::document {
       attachments attach
       attachmentsWithoutDescription attach
       font text
+      colorFont colorFont
       fontsWithoutProgram font
       FontKind font
       FontResource font
@@ -783,4 +785,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.9
+package provide tclpdf::document 1.10

@@ -109,7 +109,28 @@ if have qpdf; then
       07.01-encryption.pdf) pw="--password=full" ;;
       *) pw="" ;;
     esac
-    qpdf $pw --check "$f" >/dev/null 2>&1 || bad="$bad $f"
+    # qpdf's ONE tolerated warning, and only this one. ISO 32000-2 Table 20
+    # allows /Length in the encryption dictionary "only if V is 2 or 3" and
+    # deprecates it in 2.0; encrypt writes revision 6, so the entry does not
+    # belong there and is not written. qpdf 12.4.0 reads it unconditionally
+    # anyway, warns "dictionary key /Length: ... type null" and exits 3.
+    # Writing a withdrawn entry to silence a tool would be the wrong way
+    # round, so the warning is matched by its exact text - anything else qpdf
+    # has to say still fails the run, and so does exit status 2 (an error
+    # rather than a warning).
+    out=`qpdf $pw --check "$f" 2>&1`
+    status=$?
+    if test $status -ne 0; then
+      # Only lines that BEGIN with WARNING: - qpdf's closing line says
+      # "operation succeeded with warnings" and a case-insensitive grep for
+      # the word matches it too, which would make every tolerated file fail.
+      left=`printf '%s\n' "$out" | grep '^WARNING:' | grep -v 'dictionary key /Length'`
+      if test $status -eq 3 && test -z "$left"; then
+        :
+      else
+        bad="$bad $f"
+      fi
+    fi
   done
   if test -f examples/out/07.01-encryption.pdf; then
     if qpdf --check examples/out/07.01-encryption.pdf >/dev/null 2>&1; then

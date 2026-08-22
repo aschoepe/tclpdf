@@ -931,6 +931,21 @@ test document-strings-24.5 {no module builds a string past the document unrecord
         proc that builds the dictionary for both roads, the document and an update session,
         which is why they cannot go through [my Str]}}
   }
+  # The FOURTH string door, and the one that cost a violation: an object body
+  # copied out of a foreign file is written by [importRead::Serialize], which
+  # builds its own literals and therefore walks past the three constructors
+  # above. Until 2026-08-22 an imported page put its strings into an encrypted
+  # document in the CLEAR - the layer names of 01.13 stood readable in the file
+  # and reached a reader as empty. The guard above could not see it, because it
+  # only ever looked for pdfObj. So this table sweeps the serialiser too.
+  set allowedSerialize {
+    import.tcl {2 {one site hands a name that is ALREADY encrypted straight back out, the other
+        is ImportSerialize, which sends every string of the value through the document seams
+        first - that is the fix, and it has to stay the only way in}}
+    update.tcl {1 {an update session refuses an encrypted file at the reader, so no encryptor
+        is ever running when this one writes}}
+    sign.tcl {1 {same reason as the signature dictionary above: never in an encrypted document}}
+  }
   # crypto.tcl and encrypt.tcl are not swept: the strings of the encryption
   # dictionary itself are the ones 7.6.2 exempts, and that module is the one
   # place that knows which those are.
@@ -938,6 +953,7 @@ test document-strings-24.5 {no module builds a string past the document unrecord
 
   set root [file dirname [file dirname [file normalize [info script]]]]
   set found {}
+  set serialised {}
   foreach file [lsort [glob -directory $root *.tcl]] {
     set name [file tail $file]
     if {$name in $skip} {
@@ -951,6 +967,11 @@ test document-strings-24.5 {no module builds a string past the document unrecord
       incr number
       if {[regexp {::tclpdf::pdfObj +(str|hexStr|bytesStr)\M} $line]} {
         dict lappend found $name "$name:$number [string trim $line]"
+      }
+      # The serialiser is counted per FILE that calls it, not inside its own.
+      if {$name ne "importRead.tcl"
+          && [regexp {::tclpdf::importRead::Serialize\M} $line]} {
+        dict lappend serialised $name "$name:$number [string trim $line]"
       }
     }
   }
@@ -974,7 +995,56 @@ test document-strings-24.5 {no module builds a string past the document unrecord
           has none - take it out of the list"
     }
   }
+  dict for {name lines} $serialised {
+    if {![dict exists $allowedSerialize $name]} {
+      lappend wrong "$name serialises a foreign object body and is not in the\
+          list - send its strings through the document seams first, or add the\
+          file with the reason: [join $lines {; }]"
+      continue
+    }
+    lassign [dict get $allowedSerialize $name] want -
+    if {[llength $lines] != $want} {
+      lappend wrong "$name: [llength $lines] serialiser calls, [list $want]\
+          recorded: [join $lines {; }]"
+    }
+  }
+  dict for {name entry} $allowedSerialize {
+    if {![dict exists $serialised $name]} {
+      lappend wrong "$name is listed with [lindex $entry 0] serialiser calls\
+          and has none - take it out of the list"
+    }
+  }
   set wrong
 } -result {}
+
+# --- the lazy dispatcher covers every documented method ---------------------
+
+test document-lazy-14.1 {a documented document method loads its own topic} -body {
+  # The manual describes [$doc colorFont] like any other method, and it was
+  # the ONE that did not load: colorFont.tcl hooked itself on with oo::define
+  # and never entered the topic table, so the call answered "unknown method"
+  # until the caller had guessed "package require tclpdf::colorFont" - and the
+  # package is not named after the method it provides, so guessing was the
+  # only way. The refusal below is the module speaking, which is the proof
+  # that it was loaded.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc colorFont} message]
+  $doc destroy
+  list $code [string match {*unknown method*} $message] \
+      [string match {tclpdf: colorFont *} $message]
+} -result {1 0 1}
+
+test document-lazy-14.2 {a private method of another topic loads it too} -body {
+  # GraphicsOpacity was missing from the table for the same reason, and the
+  # cost was one level down: a translucent colour-font layer died with
+  # "unknown method" INSIDE the write, where no caller could see why.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc GraphicsOpacity} message]
+  $doc destroy
+  list $code [string match {*unknown method*} $message]
+} -result {1 0}
+
 
 cleanupTests

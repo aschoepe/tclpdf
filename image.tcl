@@ -189,7 +189,8 @@ oo::define ::tclpdf::document::document {
         # travels as Photometric or as BlackIs1 rather than as the ink
         # [stencilInk] picks out of a palette. Saying so is cheaper than a
         # stencil that is right for one file and inverted for the next.
-        return -code error "tclpdf: -stencil 1 makes an image mask out of a\
+        return -code error -errorcode {TCLPDF TIFF STENCIL} \
+            "tclpdf: -stencil 1 makes an image mask out of a\
             ONE-BIT PNG, and \"$alias\" is a TIFF - a striped TIFF becomes\
             several stacked XObjects and a Mask entry names one image (ISO\
             32000-2, 8.9.6.3); convert it to a 1-bit PNG for a stencil, or\
@@ -329,8 +330,24 @@ oo::define ::tclpdf::document::document {
           colour space would be /ICCBased, and a soft-mask image shall be\
           DeviceGray (ISO 32000-2, Table 143) - embed the mask with -icc 0"
     }
-    # A TIFF is not asked: it cannot carry transparency of its own (an
-    # ExtraSamples file is refused at the parse). What it CAN be is a stack
+    # The same clause, and the entry the transparency check below cannot
+    # see: a picture EMBEDDED WITH -mask reaches the file wearing an /SMask
+    # or a /Mask of its own, whatever format it is, and Table 143 has both
+    # absent in a soft-mask image. The check below asks the PNG bytes what
+    # transparency the file brought; this one asks what the caller put on
+    # top. Measured on 2026-08-22, before this stood here: a JPEG embedded
+    # with -mask became another picture's soft mask without a word, and the
+    # mask of a mask is a dictionary entry no reader is required to follow.
+    if {[dict get $image mask] ne {}} {
+      return -code error "tclpdf: \"$alias\" was embedded with a mask of its\
+          own (-mask [dict get $image mask]), so it reaches the file with a\
+          Mask or an SMask entry - and in a soft-mask image both shall be\
+          absent (ISO 32000-2, Table 143); embed the picture a second time\
+          without -mask to use it as a mask, or mask with a picture that\
+          wears none"
+    }
+    # A TIFF is not asked about transparency: it cannot carry any of its own
+    # (an ExtraSamples file is refused at the parse). What it CAN be is a stack
     # of XObjects, and a soft mask is one image - that is refused where the
     # stack becomes known, in [TiffStreams], before anything is written.
     if {[dict get $image type] eq "png"
@@ -809,7 +826,10 @@ oo::define ::tclpdf::document::document {
   # are a ratio between the axes and no measure at all. The ratio survives as
   # the pixel aspect, which is the width of one pixel over its height - a
   # pixel is 1/XResolution wide and 1/YResolution high, so the ratio is the
-  # other way up from the resolutions.
+  # other way up from the resolutions. A unit outside the three TIFF 6.0
+  # defines is not that case and gets no ratio either: 1 SAYS "a ratio, no
+  # measure", while an 0 or a 42 says nothing at all about what the two
+  # numbers count, and "source none" is the honest answer to that.
   method TiffResolution {parsed} {
     if {[dict get $parsed resolutionKnown]} {
       return [dict create source XResolution \
@@ -1284,4 +1304,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.9
+package provide tclpdf::image 1.10

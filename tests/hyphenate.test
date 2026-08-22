@@ -580,5 +580,208 @@ test hyphenate-8.2 {the same, for the offers the text brought itself} \
   set widths
 } -result {1 1}
 
+# --- 9. what the pattern FILE says about the minima ------------------------
+
+# A .dic written on the fly, so that a file stating nonsense can be handed to
+# [load] without one having to exist on the machine.
+proc hyphenWrite {name lines} {
+  set path [file join [temporaryDirectory] $name]
+  set channel [open $path w]
+  fconfigure $channel -encoding utf-8 -translation lf
+  puts $channel [join $lines \n]
+  close $channel
+  return $path
+}
+
+test hyphenate-9.1 {LEFTHYPHENMIN 0 in the file is refused at the load} -body {
+  # The caller's -left has always been refused below 1; the file's own
+  # directive was taken as it stood. LEFTHYPHENMIN 0 let a break be offered in
+  # FRONT of the first letter: [word] then answered with an empty first piece,
+  # and a paragraph set with -hyphenate never returned, because the line
+  # breaker closed a line on a head that had consumed nothing of the word and
+  # came back with the same word. Two brakes now, and this is the first.
+  set path [hyphenWrite hyphen-left0.dic {UTF-8 {LEFTHYPHENMIN 0} \
+      {RIGHTHYPHENMIN 3} .1ab}]
+  set code [catch {::tclpdf::hyphenate load zz $path} message]
+  file delete $path
+  list $code [string match {*LEFTHYPHENMIN*} $message] \
+      [string match {*whole number of 1 or more*} $message]
+} -result {1 1 1}
+
+test hyphenate-9.2 {a negative or non-numeric minimum is named, not a Tcl error} -body {
+  # "-3" reached expr as an operand and "zwei" reached it as a non-numeric
+  # string, so the load died with ARITH DOMAIN or "can't use empty string as
+  # operand" from somewhere inside the module - a message that says nothing
+  # about the file the caller passed.
+  set answers {}
+  foreach {name value} {hyphen-neg.dic -3 hyphen-word.dic zwei} {
+    set path [hyphenWrite $name [list UTF-8 "LEFTHYPHENMIN $value" \
+        {RIGHTHYPHENMIN 2} a1b]]
+    set code [catch {::tclpdf::hyphenate load zz $path} message]
+    file delete $path
+    lappend answers $code [string match "tclpdf: *" $message] \
+        [string match "*\"$value\"*" $message]
+  }
+  set answers
+} -result {1 1 1 1 1 1}
+
+test hyphenate-9.3 {RIGHTHYPHENMIN is checked the same way} -body {
+  set path [hyphenWrite hyphen-right0.dic {UTF-8 {LEFTHYPHENMIN 2} \
+      {RIGHTHYPHENMIN 0} a1b}]
+  set code [catch {::tclpdf::hyphenate load zz $path} message]
+  file delete $path
+  list $code [string match {*RIGHTHYPHENMIN*} $message]
+} -result {1 1}
+
+test hyphenate-9.4 {a file that states sound minima still loads} -body {
+  # The guard must not cost the files that are right, and a file that states
+  # NEITHER directive is right as well - that is hyph_de_DE.dic.
+  set path [hyphenWrite hyphen-fine.dic {UTF-8 {LEFTHYPHENMIN 3} \
+      {RIGHTHYPHENMIN 4} a1b}]
+  ::tclpdf::hyphenate load zz $path
+  set stated [::tclpdf::hyphenate languages zz]
+  file delete $path
+  set path [hyphenWrite hyphen-silent.dic {UTF-8 a1b}]
+  ::tclpdf::hyphenate load zz $path
+  set silent [::tclpdf::hyphenate languages zz]
+  file delete $path
+  list [dict get $stated left] [dict get $stated right] \
+      [dict get $silent left] [dict get $silent right]
+} -result {3 4 2 3}
+
+# --- 10. letters, not characters -------------------------------------------
+
+# The same word twice: precomposed, and with every umlaut written as its
+# letter followed by U+0308.
+proc hyphenDecompose {word} {
+  return [string map [list ä a\u0308 ö o\u0308 ü u\u0308 \
+      Ä A\u0308 Ö O\u0308 Ü U\u0308] $word]
+}
+
+test hyphenate-10.1 {a decomposed word breaks where the composed one breaks} \
+    -constraints haveGermanPatterns -body {
+  # Duden: her|über. The decomposed spelling used to give "he-rü-ber" - not a
+  # variant, a mistake, and one no pattern file can be blamed for: the
+  # patterns are written with one character per umlaut, so none of them
+  # matched and none of them vetoed.
+  list [hyphenShow de-DE herüber] \
+      [string map [list u\u0308 ü] [hyphenShow de-DE [hyphenDecompose herüber]]]
+} -result {her-über her-über}
+
+test hyphenate-10.2 {and the pieces still join back to what was handed in} \
+    -constraints haveGermanPatterns -body {
+  # The contract of [word]: the pieces concatenate to the word character for
+  # character. The composition happens inside, and the positions are counted
+  # back out of it, so what comes back is the CALLER's spelling and not a
+  # normalised one.
+  set word [hyphenDecompose Bundesausbildungsförderungsgesetz]
+  set pieces [::tclpdf::hyphenate word de-DE $word]
+  list [expr {[join $pieces {}] eq $word}] [llength $pieces]
+} -result {1 10}
+
+test hyphenate-10.3 {a break never falls between a letter and its mark} \
+    -constraints haveGermanPatterns -body {
+  # A combining mark is a character and not a letter, and a piece that BEGINS
+  # with one is a piece that starts in the middle of a letter. Over every
+  # German word with an umlaut in it there were 218 such words; there are
+  # none.
+  set bad 0
+  foreach word {für Bär möglich Übung Größe Fräulein Hörspiel süß über} {
+    foreach piece [::tclpdf::hyphenate word de-DE [hyphenDecompose $word]] {
+      if {[string index $piece 0] eq "\u0308"} {
+        incr bad
+      }
+    }
+  }
+  set bad
+} -result 0
+
+test hyphenate-10.4 {the minima count letters, so a mark cannot pad them out} \
+    -constraints haveGermanPatterns -body {
+  # With left 2 counted in CHARACTERS, "ö" plus its mark stood for two letters
+  # and a first piece of one letter was allowed. Counted in letters it is one,
+  # and the break is not offered.
+  set short 0
+  foreach word {Öfen Übung öde} {
+    set pieces [::tclpdf::hyphenate word de-DE [hyphenDecompose $word]]
+    set first [string map [list "\u0308" {}] [lindex $pieces 0]]
+    if {[llength $pieces] > 1 && [string length $first] < 2} {
+      incr short
+    }
+  }
+  set short
+} -result 0
+
+test hyphenate-10.5 {a word ending in a marked letter keeps that letter} \
+    -constraints haveGermanPatterns -body {
+  # The core of a word is what stands between its outermost LETTERS, and a
+  # combining mark is not one - so the walk inwards from the end stepped over
+  # the mark of the last letter and hyphenated a different word. Measured
+  # here as the two spellings agreeing, which they cannot do if the mark is
+  # left outside.
+  set word Systemmenü
+  list [hyphenShow de-DE $word] \
+      [string map [list u\u0308 ü] [hyphenShow de-DE [hyphenDecompose $word]]]
+} -result {Sy-stem-me-nü Sy-stem-me-nü}
+
+test hyphenate-10.6 {an exception is found in either spelling} \
+    -constraints haveGermanPatterns -body {
+  # The exception list is composed at the load for the same reason the word is
+  # composed at the lookup: written one way and asked the other, it would
+  # never be found.
+  ::tclpdf::hyphenate load ex-DE $::hyphenGerman -left 2 -right 2 \
+      -exceptions {Fär-ber-ei}
+  set answer [list [hyphenShow ex-DE Färberei] \
+      [string map [list a\u0308 ä] [hyphenShow ex-DE [hyphenDecompose Färberei]]]]
+  ::tclpdf::hyphenate load ex-DE $::hyphenGerman -left 2 -right 2
+  set answer
+} -result {Fär-ber-ei Fär-ber-ei}
+
+test hyphenate-10.7 {a word without a mark is untouched by any of it} \
+    -constraints {haveGermanPatterns haveEnglishPatterns} -body {
+  # The whole point of the fast path: a text that carries no combining mark -
+  # which is every text this package has ever been handed - must come out
+  # exactly as it did.
+  list [hyphenShow de-DE Silbentrennung] [hyphenShow en-US hyphenation] \
+      [hyphenShow de-DE Donaudampfschiff]
+} -result {Sil-ben-tren-nung hy-phen-ation Do-nau-dampf-schiff}
+
+test hyphenate-10.8 {a mark the table cannot compose is still not a letter} -body {
+  # THE COMPOSITION IS NOT THE WHOLE ANSWER, and this is where the other half
+  # shows: U+0316 composes with nothing, so it survives into the word the
+  # patterns see - and it is still a mark, still part of the letter in front
+  # of it, still not a letter of its own.
+  #
+  # The file below breaks between d and e, and the word carries the mark at
+  # its end. Counted in LETTERS the word has five and the right minimum of two
+  # forbids the break; counted in characters it has six, the minimum is met by
+  # the mark, and the line would end with a single letter and an accent on it
+  # after the hyphen.
+  set path [hyphenWrite hyphen-mark.dic {UTF-8 {LEFTHYPHENMIN 2} \
+      {RIGHTHYPHENMIN 2} d1e}]
+  ::tclpdf::hyphenate load zz $path
+  set answer [::tclpdf::hyphenate word zz "abcde\u0316"]
+  file delete $path
+  list [llength $answer] [expr {[join $answer {}] eq "abcde\u0316"}]
+} -result {1 1}
+
+test hyphenate-10.9 {such a mark belongs to the word, not to the punctuation} -body {
+  # The core of a word is what stands between its outermost LETTERS, found by
+  # walking in from both ends over everything that is not one - and a
+  # combining mark is not one, so the walk stepped over the mark of the LAST
+  # letter and handed the patterns a word that ended one character earlier.
+  # The file below has a pattern anchored at the word end ("d1e."), which is
+  # exactly what such a slip turns on: with the mark left outside, the word
+  # appears to end in "e" and the break fires; with it inside, the word ends
+  # in a letter that carries an accent and it does not.
+  set path [hyphenWrite hyphen-edge.dic {UTF-8 {LEFTHYPHENMIN 2} \
+      {RIGHTHYPHENMIN 1} d1e.}]
+  ::tclpdf::hyphenate load zz $path
+  set marked [::tclpdf::hyphenate word zz "abcde\u0316"]
+  set plain [::tclpdf::hyphenate word zz abcde]
+  file delete $path
+  list [llength $marked] [join $plain -]
+} -result {1 abcd-e}
+
 ::tcltest::cleanupTests
 return

@@ -164,6 +164,11 @@ proc ::tclpdf::filter::decodeAsciiHex {text} {
 # code copies this list instead of filling 256 entries again.
 namespace eval ::tclpdf::filter {
   variable LzwRoots {}
+  # [variable n] first: without it an unqualified [set n] at the top of a
+  # namespace eval falls back to a global n of the same name where one exists,
+  # so [package require tclpdf::filter] would overwrite - and then [unset] -
+  # the caller's ::n. Declared here, the loop counter stays in this namespace.
+  variable n
   for {set n 0} {$n < 256} {incr n} {
     lappend LzwRoots [binary format c $n]
   }
@@ -376,6 +381,22 @@ proc ::tclpdf::filter::decodePredictor {bytes args} {
   return [PredictorPng $bytes $rowBytes [expr {($colors * $depth + 7) / 8}]]
 }
 
+# The one refusal every predictor shares: a last row that stops short. The
+# loops step a whole row at a time and leave anything shorter untouched, which
+# would drop the tail silently and hand back a picture missing its foot - so a
+# leftover is refused by name instead, for the public filter and the import
+# path alike. Data taken from a TIFF has been cut to a whole number of rows by
+# [Fit] before it arrives here, so this only ever fires on a damaged stream.
+proc ::tclpdf::filter::PredictorRows {start total stride} {
+  if {$start < $total} {
+    return -code error -errorcode {TCLPDF FILTER PREDICTOR ROW} \
+        "tclpdf: the predictor data ends in a partial row - [expr {$total -
+        $start}] bytes stand where a row is $stride, and a short last row would\
+        decode to a shifted picture"
+  }
+  return
+}
+
 # TIFF Predictor 2 for eight-bit components - 108 of 194 TIFF files measured
 # here use it, and every one of those has eight-bit components. A row is a
 # running sum per component, so the value COLORS bytes back is the predictor.
@@ -392,6 +413,7 @@ proc ::tclpdf::filter::PredictorTiff8 {bytes colors rowBytes} {
     }
     append out [binary format c* $line]
   }
+  PredictorRows $start $total $rowBytes
   return $out
 }
 
@@ -417,6 +439,7 @@ proc ::tclpdf::filter::PredictorTiff16 {bytes colors rowBytes order} {
     }
     append out [binary format $write $line]
   }
+  PredictorRows $start $total $rowBytes
   return $out
 }
 
@@ -448,6 +471,7 @@ proc ::tclpdf::filter::PredictorTiffPacked {bytes colors columns depth rowBytes}
     append packed [string repeat 0 [expr {$rowBytes * 8 - [string length $packed]}]]
     append out [binary format B* $packed]
   }
+  PredictorRows $start $total $rowBytes
   return $out
 }
 
@@ -512,6 +536,7 @@ proc ::tclpdf::filter::PredictorPng {bytes rowBytes bpp} {
     append out [binary format c* $line]
     set prior $line
   }
+  PredictorRows $start $total $stride
   return $out
 }
-package provide tclpdf::filter 1.1
+package provide tclpdf::filter 1.2

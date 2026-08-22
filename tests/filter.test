@@ -363,7 +363,7 @@ test filter-predictor-5.11 {Paeth picks each of its three neighbours in turn} -b
   # first row picks above (there is nothing to its left), the second left,
   # the third upper left - one case each, and a wrong comparison drops out.
   list [filterPredict 000a0a0a04050000 -predictor 14 -columns 3] \
-      [filterPredict 00141304010001 -predictor 14 -columns 2]
+      [filterPredict 001413040100 -predictor 14 -columns 2]
 } -result {0a0a0a0f0f0f 14131514}
 
 test filter-predictor-5.12 {a PNG Sub over three components looks three bytes back} -body {
@@ -405,12 +405,34 @@ test filter-predictor-5.17 {an unknown option names the ones that exist} -body {
   set message
 } -match glob -result {*unknown option "-colours"*-predictor -colors -bitspercomponent -columns -byteorder*}
 
-test filter-predictor-5.18 {an incomplete last row is left out, not guessed} -body {
-  # Both families work in whole rows. Five bytes with a row of three are one
-  # full row and two bytes that no reader can place - LZW streams from the
-  # wild carry such a tail as padding.
-  list [filterPredict 0101010101 -predictor 2 -columns 3] \
-      [filterPredict 000a141e0a -predictor 12 -columns 3]
-} -result {010203 0a141e}
+test filter-namespace-6.1 {loading the module leaves the caller's global n alone} -body {
+  # The LZW root table is built with a [for] counter named n. Without a
+  # [variable n] at the top of the namespace eval, an unqualified [set n]
+  # falls back to a global n where one exists - so requiring the package
+  # would overwrite, then unset, the caller's ::n. Sourced into a child
+  # interpreter that has one, ::n has to come out untouched.
+  set child [interp create]
+  $child eval [list set ::auto_path $::auto_path]
+  $child eval {set ::n MARKER}
+  $child eval [list source [file join \
+      [file dirname [file dirname [file normalize [info script]]]] filter.tcl]]
+  set result [list [$child eval {info exists ::n}] \
+      [$child eval {expr {[info exists ::n] ? [set ::n] : {GONE}}}]]
+  interp delete $child
+  set result
+} -result {1 MARKER}
+
+test filter-predictor-5.18 {an incomplete last row is refused, not dropped} -body {
+  # Both families work in whole rows, and a tail shorter than one would once
+  # be dropped without a word - a picture missing its foot that no validator
+  # sees. Refused by name instead. Five bytes with a row of three are one
+  # full row and two bytes that belong to no row; the PNG family counts the
+  # tag byte, so a row of three is four bytes in the stream. Data taken from a
+  # TIFF never reaches here short - [Fit] cuts it to whole rows first.
+  list [filterRefusal {::tclpdf::filter decodePredictor [binary format H* 0101010101] \
+          -predictor 2 -columns 3}] \
+      [filterRefusal {::tclpdf::filter decodePredictor [binary format H* 000a141e0a] \
+          -predictor 12 -columns 3}]
+} -result {{TCLPDF FILTER PREDICTOR ROW} {TCLPDF FILTER PREDICTOR ROW}}
 
 cleanupTests

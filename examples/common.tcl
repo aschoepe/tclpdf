@@ -44,8 +44,9 @@ proc exampleFooter {doc {family {}} {colour {0.45 0.45 0.5}}} {
     # this file in every footer.
     set script [file tail [info script]]
 
+    set aliases [$doc font names]
     set fonts {}
-    foreach alias [$doc font names] {
+    foreach alias $aliases {
         lappend fonts [dict get [$doc font info $alias] family]
     }
     # An "if", not an "expr": expr normalises what it returns, and a value that
@@ -59,12 +60,37 @@ proc exampleFooter {doc {family {}} {colour {0.45 0.45 0.5}}} {
     }
 
     lassign [$doc page size] width height
-    if {$family ne {}} {
-        $doc font -family $family -style {}
+
+    # The footer leaves NO state of its own behind. It sets a face, a size and
+    # a colour, and font state carries from one page to the next - so without
+    # this the next page began in the footer's grey and its face (Courier or
+    # Helvetica-Bold, whichever the page happened to end on). Read the caller's
+    # state, restore it at the end, and the footer is transparent to the page.
+    set saved [$doc font]
+    dict unset saved resolved
+
+    # The footer's own face, CHOSEN here rather than inherited. Inherited, it
+    # took whatever the page happened to end on: Courier after a block of code
+    # (03.06, 03.07, 06.03, 08.01, 08.03), Helvetica-Bold after a heading
+    # (01.06), and in 03.08 a different face on each of the two pages of one
+    # document. Nobody chose any of that.
+    #
+    # Helvetica where a standard face is allowed at all. Where the document
+    # embeds faces it may be an archivable one, and PDF/A refuses a standard
+    # font outright - measured: with Helvetica forced here, 05.01, 05.02 and
+    # 05.13 stop at "PDF/A requires every font to be embedded". So there the
+    # first face the document embedded sets the line, which is the body face
+    # in every example that gets this far.
+    if {$family eq {}} {
+        if {[llength $aliases]} {
+            set family [lindex $aliases 0]
+        } else {
+            set family helvetica
+        }
     }
     # The colour is a parameter for one reason: a document under a CMYK
     # output intent (05.09) may not paint DeviceRGB, footer included.
-    $doc font -size 6 -color $colour
+    $doc font -family $family -style {} -size 6 -color $colour
     # A footer that names twelve faces (02.09) is wider than the page and ran
     # off its left edge - measured 243 mm on A4. Where the list does not fit
     # between the margins, the count stands in for it; the page that embeds
@@ -78,6 +104,14 @@ proc exampleFooter {doc {family {}} {colour {0.45 0.45 0.5}}} {
     $doc text "$script - $fonts" \
         -at [list [expr {$width - 10}] [expr {$height - 7}]] -align right \
         -tag Artifact
+
+    # Put the caller's font state back, so a footer drawn on one page leaves
+    # the next to begin exactly as it would have without it.
+    set restore {}
+    dict for {key value} $saved {
+        lappend restore -$key $value
+    }
+    $doc font {*}$restore
 }
 
 # What an archivable example reports when it is done: the level it declared

@@ -421,11 +421,31 @@ proc ::tclpdf::otLayout::coverage {table offset} {
     }
     2 {
       set count [u16 $table [expr {$offset + 2}]]
+      # THE RANGES ARE SORTED AND THEY DO NOT OVERLAP - the specification
+      # says so of this format ("Array of glyph ranges - ordered by
+      # startGlyphID", 6.2.2), and reading it as a promise is what bounds the
+      # work. Unbounded it is not a promise but the whole cost: every record
+      # may name up to 65 536 glyphs, so a table of 68 000 records that all
+      # say 0..65535 - which is what a truncated or hostile table looks like
+      # once it is read as data - spends four thousand million turns of this
+      # loop. Measured on a 400 KB table built that way: eight minutes,
+      # growing, and not a word to say why. With the ranges walked in order
+      # no glyph is written twice and the loop cannot run past 65 536 turns
+      # whatever the table says.
+      set previous -1
       for {set index 0} {$index < $count} {incr index} {
         set record [expr {$offset + 4 + $index * 6}]
         set start [u16 $table $record]
         set end [u16 $table [expr {$record + 2}]]
         set at [u16 $table [expr {$record + 4}]]
+        # An empty range (end before start) and a range that reaches back
+        # into one already read are both nonsense, and nonsense is skipped
+        # rather than expanded: startCoverageIndex is written in the record,
+        # so leaving a record out costs the following ones nothing.
+        if {$start > $end || $start <= $previous} {
+          continue
+        }
+        set previous $end
         for {set glyph $start} {$glyph <= $end} {incr glyph} {
           dict set glyphs $glyph [expr {$at + $glyph - $start}]
         }
@@ -453,11 +473,20 @@ proc ::tclpdf::otLayout::classDef {table offset} {
     }
     2 {
       set count [u16 $table [expr {$offset + 2}]]
+      # Sorted and non-overlapping, exactly as in [coverage] above and for the
+      # same two reasons: the specification says so of the ClassRangeRecords
+      # (6.2.3), and it is what keeps a nonsense table from costing minutes
+      # instead of milliseconds.
+      set previous -1
       for {set index 0} {$index < $count} {incr index} {
         set record [expr {$offset + 4 + $index * 6}]
         set start [u16 $table $record]
         set end [u16 $table [expr {$record + 2}]]
         set class [u16 $table [expr {$record + 4}]]
+        if {$start > $end || $start <= $previous} {
+          continue
+        }
+        set previous $end
         if {$class == 0} {
           continue
         }
@@ -512,4 +541,4 @@ proc ::tclpdf::otLayout::anchor {table offset} {
       [s16 $table [expr {$offset + 4}]]]
 }
 
-package provide tclpdf::otLayout 1.2
+package provide tclpdf::otLayout 1.3

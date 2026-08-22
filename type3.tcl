@@ -116,15 +116,30 @@ oo::define ::tclpdf::document::document {
       }
     }
     # The horizontal scale is what turns a width in glyph units into an
-    # advance, and it is also the em this module measures its defaults
-    # against. Zero or below is not a scale: every glyph would advance
+    # advance. Zero or below is not a scale: every glyph would advance
     # nowhere or backwards, and /Widths would say one thing while the text
-    # did another.
+    # did another. (The VERTICAL scale, matrix[3], governs the ascent - a
+    # vertical measure - and is what [Type3Ascender] uses below.)
     if {[lindex $matrix 0] <= 0} {
       return -code error "tclpdf: the first number of -matrix is the\
           horizontal scale from glyph space to text space and has to be above\
           zero - 0.001 for the usual 1000-unit glyph space, not\
           \"[lindex $matrix 0]\""
+    }
+    # A font matrix maps glyph space to text space and a mapping has to be
+    # invertible: a singular one (determinant ad - bc zero) collapses every
+    # glyph onto a line or a point and no reader can lay text out with it.
+    # a > 0 above rules out the common degenerate case but not, say, a shear
+    # that folds the vertical axis away. Tested on the numbers AS THEY WILL BE
+    # WRITTEN - rounded to the six places the FontMatrix carries - so that a
+    # scale small enough to round to zero (below 5e-7) is refused here rather
+    # than written as a singular matrix a validator would pass.
+    lassign [lmap number $matrix {expr {round($number * 1e6) / 1e6}}] a b c d
+    if {$a * $d - $b * $c == 0} {
+      return -code error "tclpdf: -matrix of font define maps glyph space to\
+          text space and has to be invertible, but {$matrix} is singular\
+          (determinant zero to the six places a FontMatrix is written in) -\
+          such a matrix flattens every glyph to nothing"
     }
     # THE ONE NUMBER a caller has to remember: how far above the baseline the
     # script's frame begins, in glyph units. It is where {0 0} sits inside
@@ -140,7 +155,17 @@ oo::define ::tclpdf::document::document {
     # no option: it reads as if it did something.
     set ascent [dict get $options ascent]
     if {$ascent eq {}} {
-      set ascent [expr {0.8 / [lindex $matrix 0]}]
+      # 0.8 of the VERTICAL em: the ascent is a vertical measure, so it is
+      # counted against matrix[3] (the vertical scale), the same factor
+      # [Type3Ascender] turns it back into points with. With the default
+      # diagonal matrix a == d, so this is unchanged for the common case.
+      #
+      # The MAGNITUDE of that scale, because -ascent is a count of glyph
+      # units and those are never negative: a matrix with d below zero is a
+      # glyph space turned over, which is invertible and therefore allowed,
+      # and 0.8/d would hand such a font a default the check below then
+      # refuses - naming an option the caller never wrote.
+      set ascent [expr {0.8 / abs([lindex $matrix 3])}]
     }
     if {![string is double -strict $ascent] || $ascent < 0} {
       return -code error "tclpdf: -ascent of font define is the height of the\
@@ -207,6 +232,26 @@ oo::define ::tclpdf::document::document {
     if {![string is double -strict $width] || $width < 0} {
       return -code error "tclpdf: -width of font glyph is the advance in\
           glyph units, 0 or more, not \"$width\""
+    }
+    # -script IS REQUIRED, and the asymmetry it used to have with -bbox is why
+    # this stands here: an omitted -bbox under -color text is refused below, an
+    # omitted -script was not refused at all. What came out was a glyph holding
+    # nothing but its width operator - a blank mark that sets, measures and
+    # extracts, with neither a reader nor a validator reporting it. That is the
+    # very shape this package refuses elsewhere by name: a face whose outlines
+    # are all empty (TCLPDF FONT OUTLINES), a colour glyph whose layers all
+    # draw nothing (TCLPDF COLORFONT EMPTY).
+    #
+    # An EMPTY body is a different thing and stays legal: a glyph that advances
+    # and draws nothing is a space, and a Type 3 font carrying one is doing
+    # what /Widths is for. [option parse] cannot tell the two apart - both
+    # arrive as the empty string - so the arguments are read once more for the
+    # option's presence, exactly as [structure] reads them for its own -script.
+    if {"script" ni [lmap {option value} $args {string trimleft $option -}]} {
+      return -code error "tclpdf: font glyph needs -script, the body that draws\
+          the glyph - a glyph drawn by nothing sets and measures as a blank\
+          mark with nothing reporting it. A glyph meant to advance and draw\
+          nothing, a space, takes an empty -script {}"
     }
     if {[dict get $options color] ni {own text}} {
       return -code error "tclpdf: -color of font glyph is own - the glyph\
@@ -342,12 +387,63 @@ oo::define ::tclpdf::document::document {
     if {$failed} {
       return -options $info $result
     }
+    if {$color eq "text"} {
+      my Type3RefuseImage $alias $content
+    }
     if {$factor != 1.0} {
       set scale [::tclpdf::pdfObj num [expr {1.0 / $factor}] 6]
       append stream "$scale 0 0 $scale 0 0 cm\n"
     }
     append stream $content
     return $stream
+  }
+
+  # A d1 glyph "shall not include an image, other than an image mask" (ISO
+  # 32000-2, 9.6.4, Table 111). d1 declares that the glyph specifies only
+  # shape, not colour, and a reader is free to ignore its colour operators; an
+  # image carries its own colour and would come out at the reader's discretion.
+  # An image mask is exempt - it is a stencil painted in the current colour,
+  # which is the one thing a shape-only glyph is meant to hold.
+  #
+  # Read off the glyph's own content: an image is placed with a "<name> Do",
+  # and the name is one this document registered for a NON-stencil picture (a
+  # stencil mask carries the "stencil" flag). A form XObject is a Do as well
+  # but is not an image, so it does not match, and neither does a mask placed
+  # as a stencil.
+  #
+  # THE GLYPH'S OWN CONTENT, and no further: a picture placed inside a form
+  # XObject that the glyph then places is not caught. Reaching it would mean
+  # reading the form's stream back out of the writer, inflating it and walking
+  # every form it places in turn - and a form carries no content in the state,
+  # only its resource name and its size. Named here rather than left as a
+  # surprise: the direct case is the one a caller writes, and it is refused.
+  method Type3RefuseImage {alias content} {
+    set placed {}
+    foreach {whole name} [regexp -all -inline \
+        {/([^\s/\[\]<>(){}%]+)\s+Do} $content] {
+      dict set placed $name 1
+    }
+    if {![dict size $placed]} {
+      return
+    }
+    dict for {imageAlias image} [my state images] {
+      if {[dict get $image stencil]} {
+        continue
+      }
+      set parts [expr {[dict exists $image parts]
+          ? [dict get $image parts] : [list $image]}]
+      foreach part $parts {
+        if {[dict exists $part resource]
+            && [dict exists $placed [dict get $part resource]]} {
+          return -code error "tclpdf: a -color text glyph of the Type 3 font\
+              \"$alias\" places the image \"$imageAlias\" - a d1 glyph\
+              specifies only shape and shall not include an image other than\
+              an image mask (ISO 32000-2, 9.6.4, Table 111); draw it with\
+              -color own, or place the image through a stencil mask"
+        }
+      }
+    }
+    return
   }
 
   # -- what the text module asks ------------------------------------------
@@ -422,8 +518,12 @@ oo::define ::tclpdf::document::document {
   # width.
   method Type3Ascender {alias size} {
     set entry [dict get [my state fonts] $alias]
+    # matrix[3], the VERTICAL scale: the ascent is a height in glyph units, so
+    # it maps to text space through the vertical factor of the font matrix, not
+    # the horizontal one a width uses. With the default diagonal matrix the two
+    # are equal; they part only under an explicit -matrix whose scales differ.
     return [expr {[dict get $entry ascent]
-        * [lindex [dict get $entry matrix] 0] * $size}]
+        * [lindex [dict get $entry matrix] 3] * $size}]
   }
 
   # What the file says about itself, in the shape [font info] answers for an
@@ -571,7 +671,15 @@ oo::define ::tclpdf::document::document {
         Properties} {
       set inner {}
       dict for {name value} [my resource $category] {
-        if {![dict exists $names $name]} {
+        # The names read out of the stream are ESCAPED - [pdfObj name] wrote
+        # them, so a resource keyed "Pantone 877 C" appears there as
+        # "Pantone#20877#20C". The dictionary key is the raw name, so it is
+        # escaped the same way before the lookup; matching the raw key against
+        # the escaped stream name found nothing and dropped every resource
+        # whose name carried a space or a delimiter (a caller-aliased
+        # separation, ICC space or font) out of /Resources.
+        set written [string range [::tclpdf::pdfObj name $name] 1 end]
+        if {![dict exists $names $written]} {
           continue
         }
         if {$category eq "Font" && $name eq "T3$alias"} {

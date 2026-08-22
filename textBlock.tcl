@@ -437,6 +437,22 @@ oo::define ::tclpdf::document::document {
           set chunkFrom [expr {$current ne {} ? $currentFrom : $wordFrom}]
           set taken [my TextBlockHyphen $current $glue $word $width $arguments \
               $string $chunkFrom $language]
+          # AN OFFER THAT CONSUMES NOTHING IS NOT AN OFFER, and this loop is
+          # where that has to be said: it closes a line on the head it took
+          # and comes back with what is left of the word, so a head that
+          # leaves the word as it was turns "while 1" into a machine that
+          # writes a page of hyphens and never returns. It is not a
+          # hypothetical - a pattern file stating LEFTHYPHENMIN 0 offered a
+          # break in front of the first letter, and [hyphenate word] answered
+          # {{} ababab}. That file is refused at the load now (hyphenate.tcl),
+          # and this is the second brake: the offer may come from the
+          # caller's own -exceptions just as well ("-Ur-in-stinkt"), and no
+          # reading of a pattern file can be trusted to make a line breaker
+          # terminate.
+          if {[llength $taken]
+              && [string length [lindex $taken 1]] >= [string length $word]} {
+            set taken {}
+          }
           if {[llength $taken]} {
             set from $chunkFrom
             lassign $taken emit remainder
@@ -1460,4 +1476,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.9
+package provide tclpdf::textBlock 1.10

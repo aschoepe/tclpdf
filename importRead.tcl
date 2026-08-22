@@ -92,7 +92,8 @@ proc ::tclpdf::importRead::ParseString {bytes posVar} {
     while 1 {
         set c [string index $bytes $pos]
         if {$c eq {}} {
-            return -code error "tclpdf: unterminated string in imported PDF"
+            return -code error -errorcode {TCLPDF IMPORT SYNTAX} \
+                "tclpdf: unterminated string in imported PDF"
         }
         incr pos
         switch -- $c {
@@ -155,8 +156,20 @@ proc ::tclpdf::importRead::ParseToken {bytes posVar} {
 # bare keyword (obj, endobj, stream, R ...) when one is met instead of an
 # object - the callers that expect one look at it, everyone else treats it
 # as an error.
-proc ::tclpdf::importRead::Parse {bytes posVar} {
+#
+# "depth" guards the recursion. Arrays and dictionaries nest, so a value
+# built entirely of open brackets recurses once per bracket, and a hostile
+# file can drive that past Tcl's own recursion limit - the raw "too many
+# nested evaluations" is not a named refusal. The cap sits well below that
+# limit (measured: Parse reaches ~900 levels before Tcl stops it) and far
+# above any nesting a real document carries, and Serialize/Refs walk the
+# same structure, so capping the depth here caps all three.
+proc ::tclpdf::importRead::Parse {bytes posVar {depth 0}} {
     upvar 1 $posVar pos
+    if {$depth > 500} {
+        return -code error -errorcode {TCLPDF IMPORT DEPTH} "tclpdf: imported\
+            PDF nests arrays or dictionaries deeper than this reader follows"
+    }
     SkipWs $bytes pos
     set c [string index $bytes $pos]
     switch -glob -- $c {
@@ -193,11 +206,27 @@ proc ::tclpdf::importRead::Parse {bytes posVar} {
             set items {}
             while 1 {
                 SkipWs $bytes pos
-                if {[string index $bytes $pos] eq "\]"} {
+                set c [string index $bytes $pos]
+                if {$c eq "\]"} {
                     incr pos
                     return [list a $items]
                 }
-                lappend items [Parse $bytes pos]
+                # A truncated or corrupt array never meets its "]": at the end
+                # of the file, or before a delimiter that ParseToken cannot
+                # consume, pos would stop moving and lappend would run without
+                # bound. Refuse by name rather than loop.
+                if {$c eq {}} {
+                    return -code error -errorcode {TCLPDF IMPORT SYNTAX} \
+                        "tclpdf: unterminated array in imported PDF"
+                }
+                set before $pos
+                set item [Parse $bytes pos [expr {$depth + 1}]]
+                if {$pos == $before} {
+                    return -code error -errorcode {TCLPDF IMPORT SYNTAX} \
+                        "tclpdf: array in imported PDF holds an unreadable\
+                        token"
+                }
+                lappend items $item
             }
         }
         < {
@@ -206,16 +235,22 @@ proc ::tclpdf::importRead::Parse {bytes posVar} {
                 set pairs {}
                 while 1 {
                     SkipWs $bytes pos
+                    if {[string index $bytes $pos] eq {}} {
+                        return -code error -errorcode {TCLPDF IMPORT SYNTAX} \
+                            "tclpdf: unterminated dictionary in imported PDF"
+                    }
                     if {[string range $bytes $pos [expr {$pos + 1}]] eq ">>"} {
                         incr pos 2
                         return [list d $pairs]
                     }
-                    set key [Parse $bytes pos]
+                    set key [Parse $bytes pos [expr {$depth + 1}]]
                     if {[lindex $key 0] ne "nm"} {
-                        return -code error "tclpdf: dictionary key is not a\
-                            name in imported PDF"
+                        return -code error -errorcode {TCLPDF IMPORT SYNTAX} \
+                            "tclpdf: dictionary key is not a name in imported\
+                            PDF"
                     }
-                    lappend pairs [lindex $key 1] [Parse $bytes pos]
+                    lappend pairs [lindex $key 1] \
+                        [Parse $bytes pos [expr {$depth + 1}]]
                 }
             }
             incr pos
@@ -223,8 +258,8 @@ proc ::tclpdf::importRead::Parse {bytes posVar} {
             while {[string index $bytes $pos] ne ">"} {
                 incr pos
                 if {$pos >= [string length $bytes]} {
-                    return -code error "tclpdf: unterminated hex string in\
-                        imported PDF"
+                    return -code error -errorcode {TCLPDF IMPORT SYNTAX} \
+                        "tclpdf: unterminated hex string in imported PDF"
                 }
             }
             set hex [string range $bytes $start [expr {$pos - 1}]]
@@ -287,13 +322,18 @@ proc ::tclpdf::importRead::EscapeName {name} {
 # Writes a parsed object back as PDF syntax; every reference is renumbered
 # through the map (old number -> new number). A reference to an object that
 # was never copied names itself - it means the closure walk has a hole.
-proc ::tclpdf::importRead::Serialize {value map} {
+proc ::tclpdf::importRead::Serialize {value map {depth 0}} {
+    if {$depth > 500} {
+        return -code error -errorcode {TCLPDF IMPORT DEPTH} "tclpdf: imported\
+            object nests deeper than this reader serializes"
+    }
     lassign $value type payload
     switch -- $type {
         d {
             set out "<<"
             foreach {key item} $payload {
-                append out " /" [EscapeName $key] " " [Serialize $item $map]
+                append out " /" [EscapeName $key] " " \
+                    [Serialize $item $map [expr {$depth + 1}]]
             }
             append out " >>"
             return $out
@@ -301,7 +341,7 @@ proc ::tclpdf::importRead::Serialize {value map} {
         a {
             set out "\["
             foreach item $payload {
-                append out " " [Serialize $item $map]
+                append out " " [Serialize $item $map [expr {$depth + 1}]]
             }
             append out " \]"
             return $out
@@ -328,33 +368,39 @@ proc ::tclpdf::importRead::Serialize {value map} {
         r {
             lassign $payload number -
             if {![dict exists $map $number]} {
-                return -code error "tclpdf: reference to object $number,\
-                    which the import never reached"
+                return -code error \
+                    -errorcode {TCLPDF IMPORT SERIALIZE} "tclpdf: reference\
+                    to object $number, which the import never reached"
             }
             return "[dict get $map $number] 0 R"
         }
         default {
-            return -code error "tclpdf: cannot serialize \"$type\""
+            return -code error -errorcode {TCLPDF IMPORT SERIALIZE} \
+                "tclpdf: cannot serialize \"$type\""
         }
     }
 }
 
 # All object numbers a parsed value refers to.
-proc ::tclpdf::importRead::Refs {value} {
+proc ::tclpdf::importRead::Refs {value {depth 0}} {
+    if {$depth > 500} {
+        return -code error -errorcode {TCLPDF IMPORT DEPTH} "tclpdf: imported\
+            object nests deeper than this reader walks for references"
+    }
     lassign $value type payload
     switch -- $type {
         r {return [list [lindex $payload 0]]}
         d {
             set found {}
             foreach {- item} $payload {
-                lappend found {*}[Refs $item]
+                lappend found {*}[Refs $item [expr {$depth + 1}]]
             }
             return $found
         }
         a {
             set found {}
             foreach item $payload {
-                lappend found {*}[Refs $item]
+                lappend found {*}[Refs $item [expr {$depth + 1}]]
             }
             return $found
         }
@@ -401,11 +447,12 @@ proc ::tclpdf::importRead::Open {path {tolerateEncrypted 0}} {
     set bytes [read $channel]
     close $channel
     set reader [dict create bytes $bytes path $path xref {} \
-        trailer {d {}} objects {} buffers {} sections {} flavour {}]
+        trailer {d {}} objects {} buffers {} sections {} flavour {} \
+        inprogress {}]
     if {![regexp {startxref\s+(\d+)\s+%%EOF\s*$} \
             [string range $bytes end-1023 end] -> offset]} {
-        return -code error "tclpdf: $path carries no startxref - not a PDF,\
-            or a truncated one"
+        return -code error -errorcode {TCLPDF IMPORT FILE} "tclpdf: $path\
+            carries no startxref - not a PDF, or a truncated one"
     }
     # Where the newest cross-reference section is. Kept in the reader
     # because a second consumer needs it and must not look for it a second
@@ -417,8 +464,8 @@ proc ::tclpdf::importRead::Open {path {tolerateEncrypted 0}} {
     set seen {}
     while {$offset ne {}} {
         if {[dict exists $seen $offset]} {
-            return -code error "tclpdf: $path: circular cross-reference\
-                chain"
+            return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf: $path:\
+                circular cross-reference chain"
         }
         dict set seen $offset 1
         # Every section of the chain is kept, newest first: how many there
@@ -428,10 +475,27 @@ proc ::tclpdf::importRead::Open {path {tolerateEncrypted 0}} {
         set offset [Section reader $offset]
     }
     if {!$tolerateEncrypted && [Get [dict get $reader trailer] Encrypt] ne {}} {
-        return -code error "tclpdf: $path is encrypted - encrypted files\
-            are not imported"
+        return -code error -errorcode {TCLPDF IMPORT ENCRYPTED} "tclpdf: $path\
+            is encrypted - encrypted files are not imported"
     }
     return $reader
+}
+
+# The /Prev of a trailer, validated as the byte offset it has to be: an
+# integer of zero or more (Table 15). A string, name or real would otherwise
+# travel on as an offset and blow up as a raw Tcl index or arithmetic error.
+proc ::tclpdf::importRead::PrevOffset {readerVar previous} {
+    upvar 1 $readerVar reader
+    if {$previous eq {}} {
+        return {}
+    }
+    set offset [lindex $previous 1]
+    if {[lindex $previous 0] ne "n" || ![string is entier -strict $offset]
+            || $offset < 0} {
+        return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+            [dict get $reader path]: /Prev is not a byte offset"
+    }
+    return $offset
 }
 
 # One cross-reference section, classic or stream; returns the /Prev offset
@@ -473,25 +537,39 @@ proc ::tclpdf::importRead::ClassicSection {readerVar pos} {
             if {$hybrid ne {}} {
                 StreamSection reader [lindex $hybrid 1]
             }
-            if {$previous eq {}} {
-                return {}
-            }
-            return [lindex $previous 1]
+            return [PrevOffset reader $previous]
         }
         set first [ParseToken $bytes pos]
         SkipWs $bytes pos
         set count [ParseToken $bytes pos]
-        if {![string is entier -strict $first]
-                || ![string is entier -strict $count]} {
-            return -code error "tclpdf: [dict get $reader path]: unreadable\
-                cross-reference line at $pos"
+        if {![string is entier -strict $first] || $first < 0
+                || ![string is entier -strict $count] || $count < 0} {
+            return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+                [dict get $reader path]: unreadable cross-reference line at\
+                $pos"
+        }
+        # A subsection promises "count" entries of twenty bytes each; a count
+        # that would run past the end of the file is corrupt (or hostile), and
+        # walking it drives "string range" onto an out-of-range index with a
+        # raw Tcl message. Reject it against the bytes that remain.
+        if {$count > ([string length $bytes] - $pos) / 20} {
+            return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+                [dict get $reader path]: cross-reference subsection at $pos\
+                promises $count entries, more than the file can hold"
         }
         SkipWs $bytes pos
         for {set i 0} {$i < $count} {incr i} {
             set entry [string range $bytes $pos [expr {$pos + 19}]]
-            if {[string index $entry 17] eq "n"} {
+            set kind [string index $entry 17]
+            if {$kind eq "n"} {
                 Enter reader [expr {$first + $i}] \
                     [list o [scan [string range $entry 0 9] %d]]
+            } elseif {$kind eq "f"} {
+                # A free entry is recorded, not skipped: the newest section
+                # wins (7.5.6), so an object freed by an incremental update
+                # (7.5.4) must shadow the live entry an older section still
+                # carries - otherwise the withdrawn object comes back to life.
+                Enter reader [expr {$first + $i}] f
             }
             incr pos 20
         }
@@ -503,23 +581,78 @@ proc ::tclpdf::importRead::StreamSection {readerVar pos} {
     set bytes [dict get $reader bytes]
     lassign [ObjectAt reader $pos] value hasStream data
     if {!$hasStream || [lindex [Get $value Type] 1] ne "XRef"} {
-        return -code error "tclpdf: [dict get $reader path]: no\
-            cross-reference at offset $pos"
+        return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+            [dict get $reader path]: no cross-reference at offset $pos"
     }
     set data [DecodeStream reader $value $data "cross-reference stream"]
+    # /W is required and lists exactly three non-negative field widths
+    # (7.5.8.2, Table 17). Missing or short, the field arithmetic below runs
+    # on empty operands with a raw Tcl error; all-zero, it encodes nothing
+    # and would enter one bogus entry per object.
+    set wval [Get $value W]
+    if {[lindex $wval 0] ne "a" || [llength [lindex $wval 1]] != 3} {
+        return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+            [dict get $reader path]: cross-reference stream at $pos has no\
+            usable /W - three field widths are required"
+    }
     set w {}
-    foreach item [lindex [Get $value W] 1] {
-        lappend w [lindex $item 1]
+    foreach item [lindex $wval 1] {
+        set width [lindex $item 1]
+        if {[lindex $item 0] ne "n" || ![string is entier -strict $width]
+                || $width < 0} {
+            return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+                [dict get $reader path]: cross-reference stream at $pos has a\
+                /W field width that is not a non-negative integer"
+        }
+        lappend w $width
     }
     lassign $w w0 w1 w2
     set record [expr {$w0 + $w1 + $w2}]
+    if {$record == 0} {
+        return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+            [dict get $reader path]: cross-reference stream at $pos has\
+            /W \[0 0 0\], which encodes nothing"
+    }
+    # /Index is a list of {first count} pairs, and /Size stands in for it
+    # where it is absent (7.5.8.2, Table 17). Every one of those numbers has
+    # to be a non-negative integer: Tcl compares a non-numeric operand as a
+    # STRING, so a count spelt /Foo makes "$i < $count" true for every $i and
+    # the entry loop below never ends - measured, not feared.
+    set indexValue [Get $value Index]
     set index {}
-    if {[Get $value Index] ne {}} {
-        foreach item [lindex [Get $value Index] 1] {
+    if {$indexValue ne {}} {
+        if {[lindex $indexValue 0] ne "a"
+                || [llength [lindex $indexValue 1]] % 2} {
+            return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+                [dict get $reader path]: cross-reference stream at $pos has\
+                an /Index that is not pairs of numbers"
+        }
+        foreach item [lindex $indexValue 1] {
             lappend index [lindex $item 1]
         }
     } else {
         set index [list 0 [lindex [Get $value Size] 1]]
+    }
+    foreach number $index {
+        if {![string is entier -strict $number] || $number < 0} {
+            return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+                [dict get $reader path]: cross-reference stream at $pos names\
+                a subsection start or count that is not a non-negative\
+                integer"
+        }
+    }
+    # The decoded stream must hold one "record" of bytes for every entry the
+    # /Index announces. Too short, "binary scan" over an exhausted string
+    # leaves "byte" at its previous value and the reader reports offsets that
+    # are silently wrong - refuse instead of guessing.
+    set entries 0
+    foreach {- count} $index {
+        incr entries $count
+    }
+    if {[string length $data] < $entries * $record} {
+        return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+            [dict get $reader path]: cross-reference stream at $pos is shorter\
+            than its /W and /Index require"
     }
     set at 0
     foreach {first count} $index {
@@ -539,17 +672,20 @@ proc ::tclpdf::importRead::StreamSection {readerVar pos} {
                 set type 1
             }
             switch -- $type {
+                0 {
+                    # Type 0 is a free entry (7.5.8.3); it is recorded, not
+                    # skipped, so it shadows a live entry an older section
+                    # carries for the same object - the free-object counterpart
+                    # of the classic 'f' line above.
+                    Enter reader [expr {$first + $i}] f
+                }
                 1 {Enter reader [expr {$first + $i}] [list o $f2]}
                 2 {Enter reader [expr {$first + $i}] [list c $f2 $f3]}
             }
         }
     }
     Merge reader $value
-    set previous [Get $value Prev]
-    if {$previous eq {}} {
-        return {}
-    }
-    return [lindex $previous 1]
+    return [PrevOffset reader [Get $value Prev]]
 }
 
 proc ::tclpdf::importRead::Enter {readerVar number entry} {
@@ -572,19 +708,28 @@ proc ::tclpdf::importRead::Merge {readerVar trailer} {
     dict set reader trailer [list d $have]
 }
 
-# The object at a byte offset: value, stream flag, raw stream bytes.
-proc ::tclpdf::importRead::ObjectAt {readerVar offset} {
+# The object at a byte offset: value, stream flag, raw stream bytes. When
+# "expect" names the number the cross-reference promised at this offset, the
+# "num gen obj" header is checked against it: an offset that lands on a
+# different object is a corrupt (or forged) cross-reference, and reading the
+# wrong object there is the silent-wrong-answer this reader refuses (7.5.4).
+proc ::tclpdf::importRead::ObjectAt {readerVar offset {expect {}}} {
     upvar 1 $readerVar reader
     set bytes [dict get $reader bytes]
     set pos $offset
     SkipWs $bytes pos
-    ParseToken $bytes pos
+    set found [ParseToken $bytes pos]
     SkipWs $bytes pos
     ParseToken $bytes pos
     SkipWs $bytes pos
     if {[ParseToken $bytes pos] ne "obj"} {
-        return -code error "tclpdf: [dict get $reader path]: no object at\
-            offset $offset"
+        return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
+            [dict get $reader path]: no object at offset $offset"
+    }
+    if {$expect ne {} && $found ne $expect} {
+        return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
+            [dict get $reader path]: the cross-reference points object $expect\
+            at offset $offset, where object $found is written"
     }
     set value [Parse $bytes pos]
     SkipWs $bytes pos
@@ -601,8 +746,9 @@ proc ::tclpdf::importRead::ObjectAt {readerVar offset} {
     }
     set length [lindex $length 1]
     if {![string is entier -strict $length]} {
-        return -code error "tclpdf: [dict get $reader path]: stream at\
-            offset $offset has no usable /Length"
+        return -code error -errorcode {TCLPDF IMPORT STREAM} "tclpdf:\
+            [dict get $reader path]: stream at offset $offset has no usable\
+            /Length"
     }
     set data [string range $bytes $pos [expr {$pos + $length - 1}]]
     # /Length must land exactly on the end of the data: behind it, after an
@@ -613,9 +759,9 @@ proc ::tclpdf::importRead::ObjectAt {readerVar offset} {
     if {[string index $bytes $tail] eq "\r"} {incr tail}
     if {[string index $bytes $tail] eq "\n"} {incr tail}
     if {[string range $bytes $tail [expr {$tail + 8}]] ne "endstream"} {
-        return -code error "tclpdf: [dict get $reader path]: the stream at\
-            offset $offset declares /Length $length but does not end at\
-            endstream"
+        return -code error -errorcode {TCLPDF IMPORT STREAM} "tclpdf:\
+            [dict get $reader path]: the stream at offset $offset declares\
+            /Length $length but does not end at endstream"
     }
     return [list $value 1 $data]
 }
@@ -628,38 +774,92 @@ proc ::tclpdf::importRead::Object {readerVar number} {
         return [dict get $reader objects $number]
     }
     if {![dict exists $reader xref $number]} {
-        return -code error "tclpdf: [dict get $reader path]: object $number\
-            is referenced but not in the cross-reference"
+        return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
+            [dict get $reader path]: object $number is referenced but not in\
+            the cross-reference"
     }
+    # An object being read must not, directly or through an object stream,
+    # ask to be read again: a /Length that refers to its own stream object,
+    # or an object stream that names itself as its own container, would
+    # otherwise recurse until Tcl's stack gives out (7.3.8.2, 7.5.7). The
+    # marker is set for the whole resolution and comes off again below; a
+    # legitimate second reference hits the cache above and never re-enters
+    # here.
+    if {[dict exists $reader inprogress $number]} {
+        return -code error -errorcode {TCLPDF IMPORT RECURSION} "tclpdf:\
+            [dict get $reader path]: object $number refers to itself"
+    }
+    dict set reader inprogress $number 1
     set entry [dict get $reader xref $number]
-    switch -- [lindex $entry 0] {
-        o {
-            set object [ObjectAt reader [lindex $entry 1]]
-        }
-        c {
-            lassign $entry - container index
-            if {![dict exists $reader buffers $container]} {
-                lassign [Object reader $container] value hasStream data
-                if {!$hasStream} {
-                    return -code error "tclpdf: [dict get $reader path]:\
-                        object stream $container has no stream"
+    # The marker comes off whichever way this leaves, refusal included: a
+    # caller that catches one refusal and asks for the same object again
+    # would otherwise be told it refers to itself.
+    try {
+        switch -- [lindex $entry 0] {
+            o {
+                set object [ObjectAt reader [lindex $entry 1] $number]
+            }
+            f {
+                # A freed object resolves to null (7.3.10): a reference to an
+                # object the file does not define is the null object, never
+                # the stale bytes an older cross-reference section pointed at.
+                set object [list {z {}} 0 {}]
+            }
+            c {
+                lassign $entry - container index
+                if {![dict exists $reader buffers $container]} {
+                    lassign [Object reader $container] value hasStream data
+                    if {!$hasStream} {
+                        return -code error -errorcode {TCLPDF IMPORT OBJSTM} \
+                            "tclpdf: [dict get $reader path]: object stream\
+                            $container has no stream"
+                    }
+                    set data [DecodeStream reader $value $data "object stream"]
+                    # /N and /First are required integers (7.5.7, Table 16).
+                    # Without them the header walk below runs "2 * $n" and
+                    # "$first + ..." on names or on nothing and dies with a
+                    # raw Tcl message naming an operand instead of the file.
+                    set n [lindex [Resolve reader [Get $value N]] 1]
+                    set first [lindex [Resolve reader [Get $value First]] 1]
+                    if {![string is entier -strict $n] || $n < 0
+                            || ![string is entier -strict $first]
+                            || $first < 0} {
+                        return -code error -errorcode {TCLPDF IMPORT OBJSTM} \
+                            "tclpdf: [dict get $reader path]: object stream\
+                            $container has no usable /N and /First"
+                    }
+                    dict set reader buffers $container [list $data $first $n]
                 }
-                set data [DecodeStream reader $value $data "object stream"]
-                dict set reader buffers $container \
-                    [list $data [lindex [Get $value First] 1] \
-                        [lindex [Get $value N] 1]]
+                lassign [dict get $reader buffers $container] data first n
+                # The cross-reference says object "number" is the index-th of
+                # the stream; a stream of n objects has none beyond n - 1, and
+                # asking for one reads an empty offset out of the header.
+                if {![string is entier -strict $index] || $index < 0
+                        || $index >= $n} {
+                    return -code error -errorcode {TCLPDF IMPORT OBJSTM} \
+                        "tclpdf: [dict get $reader path]: object $number is\
+                        said to be number $index of object stream $container,\
+                        which holds $n"
+                }
+                set pos 0
+                set header {}
+                for {set i 0} {$i < 2 * $n} {incr i} {
+                    SkipWs $data pos
+                    lappend header [ParseToken $data pos]
+                }
+                set offset [lindex $header [expr {2 * $index + 1}]]
+                if {![string is entier -strict $offset] || $offset < 0} {
+                    return -code error -errorcode {TCLPDF IMPORT OBJSTM} \
+                        "tclpdf: [dict get $reader path]: the header of\
+                        object stream $container carries no offset for\
+                        object $number"
+                }
+                set pos [expr {$first + $offset}]
+                set object [list [Parse $data pos] 0 {}]
             }
-            lassign [dict get $reader buffers $container] data first n
-            set pos 0
-            set header {}
-            for {set i 0} {$i < 2 * $n} {incr i} {
-                SkipWs $data pos
-                lappend header [ParseToken $data pos]
-            }
-            set pos [expr {$first + [lindex $header \
-                [expr {2 * $index + 1}]]}]
-            set object [list [Parse $data pos] 0 {}]
         }
+    } finally {
+        dict unset reader inprogress $number
     }
     dict set reader objects $number $object
     return $object
@@ -687,8 +887,11 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
     if {[lindex $filter 0] eq "nm"} {
         set filters [list [lindex $filter 1]]
     } elseif {[lindex $filter 0] eq "a"} {
+        # A filter in a chain may itself be an indirect reference (7.4); read
+        # it through Resolve so a name arrives, not a raw {num gen} that no
+        # switch arm below matches.
         foreach item [lindex $filter 1] {
-            lappend filters [lindex $item 1]
+            lappend filters [lindex [Resolve reader $item] 1]
         }
     }
     set parms [Resolve reader [Get $value DecodeParms]]
@@ -721,8 +924,9 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
                 set decoder decodeLzw
             }
             default {
-                return -code error "tclpdf: [dict get $reader path]: $what\
-                    uses filter /$name, which this import cannot decode"
+                return -code error -errorcode {TCLPDF IMPORT FILTER} "tclpdf:\
+                    [dict get $reader path]: $what uses filter /$name, which\
+                    this import cannot decode"
             }
         }
         # A stream whose bytes the decoder refuses names the FILE and what
@@ -744,8 +948,9 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
             }
         }
         if {[catch {::tclpdf::filter::$decoder $data {*}$extra} decoded]} {
-            return -code error "tclpdf: [dict get $reader path]: $what is a\
-                /$name stream this package cannot decode: $decoded"
+            return -code error -errorcode {TCLPDF IMPORT FILTER} "tclpdf:\
+                [dict get $reader path]: $what is a /$name stream this\
+                package cannot decode: $decoded"
         }
         set data $decoded
         if {$p ne {} && [lindex $p 0] eq "d"} {
@@ -757,12 +962,27 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
                 if {$colors eq {}} {set colors 1}
                 set depth [lindex [Resolve reader [Get $p BitsPerComponent]] 1]
                 if {$depth eq {}} {set depth 8}
+                # /Columns is a byte count per row and has to be a positive
+                # integer: zero or a non-number would drive the predictor's
+                # own row arithmetic onto a raw error with no file named.
+                if {![string is entier -strict $columns] || $columns < 1} {
+                    return -code error -errorcode {TCLPDF IMPORT PREDICTOR} \
+                        "tclpdf: [dict get $reader path]: $what carries a\
+                        predictor /Columns that is not a positive integer"
+                }
                 # Shared with the image side rather than kept here: the local
                 # copy read neither /Colors nor /BitsPerComponent and was
-                # quietly wrong for anything but one 8-bit component.
-                set data [::tclpdf::filter decodePredictor $data \
-                    -predictor $predictor -columns $columns -colors $colors \
-                    -bitspercomponent $depth]
+                # quietly wrong for anything but one 8-bit component. Wrapped
+                # in the same file-naming mantle as the decoder above, so a
+                # predictor that refuses names the file and what was read.
+                if {[catch {::tclpdf::filter decodePredictor $data \
+                        -predictor $predictor -columns $columns \
+                        -colors $colors -bitspercomponent $depth} unfiltered]} {
+                    return -code error -errorcode {TCLPDF IMPORT PREDICTOR} \
+                        "tclpdf: [dict get $reader path]: $what carries a\
+                        predictor this package cannot apply: $unfiltered"
+                }
+                set data $unfiltered
             }
         }
         incr i
@@ -779,7 +999,29 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
 proc ::tclpdf::importRead::Page {readerVar number} {
     upvar 1 $readerVar reader
     set root [Resolve reader [Get [dict get $reader trailer] Root]]
-    set node [Resolve reader [Get $root Pages]]
+    # The catalog and its page tree have to be dictionaries (7.7.2, 7.7.3):
+    # a missing /Root, or a /Root that resolves to a stream, otherwise walks
+    # into an empty node and reports "has  pages" with a hole where the count
+    # should be.
+    if {[lindex $root 0] ne "d"} {
+        return -code error -errorcode {TCLPDF IMPORT ROOT} "tclpdf:\
+            [dict get $reader path] has no usable /Root catalogue"
+    }
+    set pagesRef [Get $root Pages]
+    set node [Resolve reader $pagesRef]
+    if {[lindex $node 0] ne "d"} {
+        return -code error -errorcode {TCLPDF IMPORT PAGES} "tclpdf:\
+            [dict get $reader path]: the catalogue has no /Pages tree"
+    }
+    # Which nodes the walk has already entered. A page tree is a tree
+    # (7.7.3.1); a node that names itself, or an ancestor, among its /Kids is
+    # a ring, and the descent below would follow it for ever. Only nodes
+    # reached through a reference can repeat - a directly written value
+    # cannot contain itself.
+    set seen {}
+    if {[lindex $pagesRef 0] eq "r"} {
+        dict set seen [lindex [lindex $pagesRef 1] 0] 1
+    }
     set inherited {}
     set remaining $number
     while 1 {
@@ -807,10 +1049,28 @@ proc ::tclpdf::importRead::Page {readerVar number} {
             set child [Resolve reader $kid]
             if {[lindex [Get $child Type] 1] eq "Pages"} {
                 set count [lindex [Resolve reader [Get $child Count]] 1]
+                # /Count is a non-negative integer (7.7.3.2, Table 30). A
+                # name or a string compares as a STRING in the test below,
+                # which would send the walk down a branch on a whim.
+                if {![string is entier -strict $count] || $count < 0} {
+                    return -code error -errorcode {TCLPDF IMPORT PAGES} \
+                        "tclpdf: [dict get $reader path]: a node of the page\
+                        tree carries a /Count that is not a non-negative\
+                        integer"
+                }
             } else {
                 set count 1
             }
             if {$remaining <= $count} {
+                if {[lindex $kid 0] eq "r"} {
+                    set kidNumber [lindex [lindex $kid 1] 0]
+                    if {[dict exists $seen $kidNumber]} {
+                        return -code error -errorcode {TCLPDF IMPORT PAGES} \
+                            "tclpdf: [dict get $reader path]: the page tree\
+                            runs in a circle at object $kidNumber"
+                    }
+                    dict set seen $kidNumber 1
+                }
                 set node $child
                 set descended 1
                 break
@@ -819,8 +1079,17 @@ proc ::tclpdf::importRead::Page {readerVar number} {
         }
         if {!$descended} {
             set total [lindex [Resolve reader [Get [Resolve reader \
-                [Get $root Pages]] Count]] 1]
-            return -code error "tclpdf: [dict get $reader path] has $total\
+                $pagesRef] Count]] 1]
+            # A tree that does not say how many pages it holds is named as
+            # such: without this the message read "has  pages", with a hole
+            # where the number belongs.
+            if {![string is entier -strict $total]} {
+                return -code error -errorcode {TCLPDF IMPORT PAGES} "tclpdf:\
+                    [dict get $reader path] does not say how many pages it\
+                    has - there is no page $number"
+            }
+            return -code error -errorcode {TCLPDF IMPORT PAGES} "tclpdf:\
+                [dict get $reader path] has $total\
                 page[expr {$total == 1 ? {} : {s}}] - there is no page\
                 $number"
         }
@@ -836,9 +1105,24 @@ proc ::tclpdf::importRead::Box {readerVar pageDict key} {
     if {$box eq {}} {
         return {}
     }
+    # A rectangle is an array of four numbers (7.9.5). Fewer, or an entry that
+    # is a name, a string or a non-finite real, otherwise reaches expr as an
+    # empty or non-numeric operand and dies with a raw Tcl message.
+    if {[lindex $box 0] ne "a" || [llength [lindex $box 1]] < 4} {
+        return -code error -errorcode {TCLPDF IMPORT BOX} "tclpdf:\
+            [dict get $reader path]: /$key is not an array of four numbers"
+    }
     set edges {}
-    foreach item [lindex $box 1] {
-        lappend edges [lindex [Resolve reader $item] 1]
+    foreach item [lrange [lindex $box 1] 0 3] {
+        set edge [Resolve reader $item]
+        set v [lindex $edge 1]
+        if {[lindex $edge 0] ne "n" || ![string is double -strict $v]
+                || $v != $v || $v == Inf || $v == -Inf} {
+            return -code error -errorcode {TCLPDF IMPORT BOX} "tclpdf:\
+                [dict get $reader path]: /$key holds a coordinate that is not\
+                a finite number"
+        }
+        lappend edges $v
     }
     lassign $edges a b c d
     return [list [expr {min($a, $c)}] [expr {min($b, $d)}] \
@@ -868,7 +1152,8 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
     # from DIFFERENT nodes of the page tree.
     set media [Box reader $pageDict MediaBox]
     if {$media eq {}} {
-        return -code error "tclpdf: $path: page $number has no MediaBox"
+        return -code error -errorcode {TCLPDF IMPORT BOX} "tclpdf: $path: page\
+            $number has no MediaBox"
     }
     set crop [Box reader $pageDict CropBox]
     if {$crop eq {}} {
@@ -880,9 +1165,9 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
             [expr {min($mx1, $cx1)}] [expr {min($my1, $cy1)}]]
         lassign $edges x0 y0 x1 y1
         if {$x0 >= $x1 || $y0 >= $y1} {
-            return -code error "tclpdf: $path: the CropBox of page $number\
-                does not intersect its MediaBox - nothing of the page is\
-                visible"
+            return -code error -errorcode {TCLPDF IMPORT BOX} "tclpdf:\
+                $path: the CropBox of page $number does not intersect its\
+                MediaBox - nothing of the page is visible"
         }
     }
     lassign $edges x0 y0 x1 y1
@@ -901,13 +1186,16 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
                     && ![catch {expr {$raw == entier($raw)}} whole] && $whole} {
                 set raw [expr {entier($raw)}]
             } else {
-                return -code error "tclpdf: $path: page $number carries\
-                    /Rotate \"$raw\", which is not usable as a multiple of 90"
+                return -code error \
+                    -errorcode {TCLPDF IMPORT ROTATE} "tclpdf: $path: page\
+                    $number carries /Rotate \"$raw\", which is not usable\
+                    as a multiple of 90"
             }
         }
         if {$raw % 90 != 0} {
-            return -code error "tclpdf: $path: page $number carries /Rotate\
-                $raw, which is not a multiple of 90"
+            return -code error -errorcode {TCLPDF IMPORT ROTATE} "tclpdf:\
+                $path: page $number carries /Rotate $raw, which is not a\
+                multiple of 90"
         }
         set rotate [expr {($raw % 360 + 360) % 360}]
     }
@@ -920,4 +1208,4 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
 
 # ------------------------------------------------------------ the takeover
 
-package provide tclpdf::importRead 1.1
+package provide tclpdf::importRead 1.2

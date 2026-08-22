@@ -265,7 +265,7 @@ $doc table -at [list 20 $at] -width 35 -theme plain -decimal , \
 $doc table -at [list 60 $at] -width 35 -theme plain \
     -head {{"-decimal . (wrong)"}} -body $figures -columns {{align decimal}}
 $doc table -at [list 100 $at] -width 35 -theme plain \
-    -head {{"align right"}} -body $figures -columns {{align right}}
+    -head {{{text "align right"}}} -body $figures -columns {{align right}}
 
 # -- a footed table in the same style --------------------------------------
 

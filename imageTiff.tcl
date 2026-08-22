@@ -57,9 +57,9 @@
 #
 # Failures carry an -errorcode beginning {TCLPDF TIFF}: RANGE and DAMAGED for
 # a broken file, and one word per refusal (BIGTIFF, TILED, PLANAR, ALPHA,
-# COMPRESSION, PHOTOMETRIC, DEPTH, SAMPLES, SAMPLEFORMAT, PREDICTOR,
-# CIRCULAR, DIRECTORY, SIGNATURE). The code is the contract, the message text
-# is not.
+# COMPRESSION, PHOTOMETRIC, DEPTH, SAMPLES, SAMPLEFORMAT, PREDICTOR, PALETTE,
+# ORIENTATION, CCITT, CIRCULAR, DIRECTORY, SIGNATURE). The code is the
+# contract, the message text is not.
 #
 
 package require Tcl 8.6.11-
@@ -452,6 +452,29 @@ proc ::tclpdf::imageTiff::Head {bytes entries order} {
     return -code error -errorcode {TCLPDF TIFF DAMAGED} \
         "tclpdf: damaged TIFF - the IFD has no PhotometricInterpretation"
   }
+  # Orientation says where row 0 and column 0 of the samples belong on the
+  # paper: 1 is the top left corner and the way every other format this
+  # package reads stores its rows, and the other seven turn the picture,
+  # mirror it, or both (TIFF 6.0, Orientation). A PDF image is drawn as the
+  # rows stand, so a file that says anything else would come out turned or
+  # mirrored without a word - the one defect in this module that no
+  # validator can see, because the file is perfect either way. Refused by
+  # name, like the tiled and planar layouts above: reading it would mean
+  # turning the samples round, which for a striped picture means undoing the
+  # strips as well. None of the 194 measured files says anything but 1.
+  set orientation [Get $bytes $entries $order orientation 1]
+  if {$orientation != 1} {
+    set names {2 {mirrored left to right} 3 {turned by 180 degrees}
+        4 {mirrored top to bottom} 5 {transposed} 6 {turned by 90 degrees}
+        7 {transposed the other way} 8 {turned by 270 degrees}}
+    set what [expr {[dict exists $names $orientation] ?
+        [dict get $names $orientation] : "stored in an unknown orientation"}]
+    return -code error -errorcode [list TCLPDF TIFF ORIENTATION $orientation] \
+        "tclpdf: this TIFF is $what (Orientation $orientation) - a PDF image\
+        draws the rows as they stand, so tclpdf would place it that way\
+        without a word; re-save it with the first row at the top (Orientation\
+        1)"
+  }
   return [dict create \
       width $width \
       height $height \
@@ -460,7 +483,7 @@ proc ::tclpdf::imageTiff::Head {bytes entries order} {
       compression $compression \
       compressionName [dict get $schemes $compression] \
       predictor $predictor \
-      orientation [Get $bytes $entries $order orientation 1] \
+      orientation $orientation \
       fillOrder [Get $bytes $entries $order fillOrder 1]]
 }
 
@@ -522,6 +545,23 @@ proc ::tclpdf::imageTiff::Samples {bytes entries order head} {
 proc ::tclpdf::imageTiff::Palette {bytes entries order photometric depth} {
   if {$photometric != 3} {
     return {}
+  }
+  # An /Indexed colour space names its last index, and that number "shall be
+  # no greater than 255" (ISO 32000-2, 8.6.6.3) - a palette PDF can write
+  # holds at most 256 colours, whatever the samples that index it are. TIFF
+  # 6.0 says the same of its own palette images (BitsPerSample 4 or 8), so a
+  # 16-bit one is outside both; refused by name here rather than written as
+  # "/Indexed /DeviceRGB 65535", which is a colour space no reader accepts -
+  # measured with pdfimages: "Bad Indexed color space (invalid indexHigh
+  # 65535)". Depths of 1 and 2 stay allowed: they are as far outside TIFF's
+  # own list as they are inside PDF's limit, and they draw correctly.
+  if {$depth > 8} {
+    return -code error -errorcode [list TCLPDF TIFF PALETTE $depth] \
+        "tclpdf: this TIFF is a palette image of $depth bits per sample, so\
+        its ColorMap holds [expr {1 << $depth}] colours - an /Indexed colour\
+        space names at most 256 (ISO 32000-2, 8.6.6.3: hival shall be no\
+        greater than 255), and TIFF 6.0 writes palette images at 4 or 8 bits;\
+        re-save it as an 8-bit palette image, or as an RGB one"
   }
   set map [GetAll $bytes $entries $order colorMap]
   set count [expr {1 << $depth}]
@@ -602,17 +642,23 @@ proc ::tclpdf::imageTiff::Strips {bytes entries order head} {
 # places every picture at 72 dpi, so a 200 dpi scan 1728 pixels wide - 219 mm
 # of paper - comes out 610 mm wide.
 #
-# ResolutionUnit 1 says the two numbers are an aspect ratio and nothing more.
-# There is then no dpi to report, and the caller is told so rather than handed
-# a made-up one: 72 stands in the field so that arithmetic downstream has a
+# ResolutionUnit 1 says the two numbers are an aspect ratio and nothing more,
+# and a unit outside the three the format defines says nothing at all. There
+# is then no dpi to report, and the caller is told so rather than handed a
+# made-up one: 72 stands in the field so that arithmetic downstream has a
 # number, and "resolutionKnown 0" says not to believe it.
 proc ::tclpdf::imageTiff::Resolution {bytes entries order} {
   set unit [Get $bytes $entries $order resolutionUnit 2]
   set x [Get $bytes $entries $order xResolution 0]
   set y [Get $bytes $entries $order yResolution 0]
-  set known [expr {$unit != 1 && $x > 0 && $y > 0}]
-  # Unit 3 counts per centimetre; everything else that reports at all counts
-  # per inch (TIFF 6.0, ResolutionUnit).
+  # TIFF 6.0 defines three units and no more: 1 (none), 2 (inch), 3 (cm).
+  # Only the last two are a measure, so only those give a dpi. A file that
+  # writes 0 - or 42 - says nothing this reader can turn into inches, and
+  # calling it inches would be a made-up number of exactly the kind
+  # "resolutionKnown 0" exists to avoid: it decides how large a placement
+  # without -width comes out, so a guess there is millimetres of paper.
+  set known [expr {$unit in {2 3} && $x > 0 && $y > 0}]
+  # Unit 3 counts per centimetre, unit 2 per inch.
   set factor [expr {$unit == 3 ? 2.54 : 1.0}]
   return [dict create \
       xResolution $x \
@@ -707,6 +753,26 @@ proc ::tclpdf::imageTiff::Ccitt {bytes entries order head} {
   if {$scheme ni {ccittRle ccittG3 ccittG4}} {
     return {}
   }
+  # A fax is bilevel and nothing else: T.4 and T.6 code runs of white and
+  # black, and a CCITTFaxDecode filter puts out one bit per pixel whatever
+  # the image dictionary claims (ISO 32000-2, 7.4.6, Table 11 - the filter's
+  # own Columns and Rows describe a bitmap). A file that says CCITT and 8
+  # bits, or CCITT and RGB, was written by something that meant one of the
+  # two; taking the tags at their word gives /BitsPerComponent 8 over a
+  # one-bit stream, which every reader draws as a picture 8 times too narrow
+  # or as nothing at all. Both scans in the measured corpus are bilevel
+  # WhiteIsZero, and no measured file disagrees.
+  set depth [dict get $head bitsPerComponent]
+  set photometric [dict get $head photometric]
+  if {$depth != 1 || $photometric ni {0 1}} {
+    return -code error -errorcode [list TCLPDF TIFF CCITT $photometric $depth] \
+        "tclpdf: this TIFF says it is $scheme-compressed, which codes runs of\
+        black and white, and describes its samples as\
+        [expr {$depth != 1 ? "$depth bits per sample" : "PhotometricInterpretation\
+        $photometric"}] - a CCITTFaxDecode filter delivers one bit per pixel\
+        of a bilevel picture (ISO 32000-2, 7.4.6); the file disagrees with\
+        itself, re-save it as a bilevel fax or with another compression"
+  }
   set result [dict create \
       blackIs1 [expr {[dict get $head photometric] == 1}] \
       columns [dict get $head width]]
@@ -771,4 +837,4 @@ proc ::tclpdf::imageTiff::stateful {parsed} {
   return [expr {[dict get $parsed compressionName] ni {none packBits}}]
 }
 
-package provide tclpdf::imageTiff 1.0
+package provide tclpdf::imageTiff 1.1

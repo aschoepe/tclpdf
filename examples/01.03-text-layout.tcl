@@ -148,7 +148,7 @@ $doc text "Rotation" -at [list 20 $y]
 $doc font -style {} -size 9
 foreach angle {0 30 60 90} {
     $doc text "rotated $angle degrees" \
-        -at [list [expr {24 + $angle * 0.55}] [expr {$y + 26}]] -rotate $angle
+        -at [list [expr {24 + $angle * 1.15}] [expr {$y + 26}]] -rotate $angle
 }
 
 # A whole PARAGRAPH turned, not just a line: -width and -rotate together. The

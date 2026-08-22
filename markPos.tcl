@@ -378,6 +378,24 @@ proc ::tclpdf::markPos::Attach {state subtables visible at glyphs} {
       # see [LigatureArray]. The last one, and the comment there says why.
       set byClass [lindex $byClass end]
     }
+    # Two ways a font can leave this row without the anchor the mark asks for,
+    # and both used to be answered by [lindex] handing back the empty string
+    # from beyond the end of a list - which reads like a NULL offset and is
+    # not one:
+    #
+    #   the mark names a CLASS the subtable does not have. markClass is
+    #   bounded by markClassCount (6.3.3), and a row holds exactly that many
+    #   anchors, so a larger class is a mark this subtable cannot place;
+    #
+    #   the LigatureAttach has NO COMPONENTS at all - componentCount 0, so
+    #   there is no row to take the last of (see [LigatureArray]).
+    #
+    # Either way the next subtable gets its turn, which is what a mark without
+    # an anchor is entitled to here. Said in one line rather than left to an
+    # index that happens to be out of range.
+    if {$class >= [llength $byClass]} {
+      continue
+    }
     set partnerAnchor [lindex $byClass $class]
     if {$partnerAnchor eq {}} {
       continue
@@ -451,15 +469,25 @@ proc ::tclpdf::markPos::Subtable {gpos type offset} {
   if {[::tclpdf::otLayout u16 $gpos $offset] != 1} {
     return {}
   }
-  set markCoverage [expr {$offset +
-      [::tclpdf::otLayout u16 $gpos [expr {$offset + 2}]]}]
-  set partnerCoverage [expr {$offset +
-      [::tclpdf::otLayout u16 $gpos [expr {$offset + 4}]]}]
+  # THE FOUR OFFSETS ARE REQUIRED, and an offset of 0 in this header does not
+  # mean "the table starts here" - it means the table is not there. Every
+  # offset in these four fields is counted from the beginning of the subtable
+  # (6.3.3), so 0 would point at the subtable's own format field: taken at
+  # face value the reader found a coverage table of format 1 with 8 entries in
+  # the header bytes, matched a glyph against them and produced an anchor out
+  # of the offsets themselves. An invented anchor is worse than none, so a
+  # subtable that leaves any of the four out is left alone whole - the same
+  # answer an unknown format gets.
+  set positions {}
+  foreach field {2 4 8 10} {
+    set at [::tclpdf::otLayout u16 $gpos [expr {$offset + $field}]]
+    if {$at == 0} {
+      return {}
+    }
+    lappend positions [expr {$offset + $at}]
+  }
+  lassign $positions markCoverage partnerCoverage markArray partnerArray
   set classCount [::tclpdf::otLayout u16 $gpos [expr {$offset + 6}]]
-  set markArray [expr {$offset +
-      [::tclpdf::otLayout u16 $gpos [expr {$offset + 8}]]}]
-  set partnerArray [expr {$offset +
-      [::tclpdf::otLayout u16 $gpos [expr {$offset + 10}]]}]
   if {$classCount == 0} {
     return {}
   }
@@ -533,6 +561,9 @@ proc ::tclpdf::markPos::LigatureArray {gpos offset classCount} {
     }
     set attach [expr {$offset + $at}]
     set components [::tclpdf::otLayout u16 $gpos $attach]
+    # componentCount 0 leaves the ligature with no row at all. Kept as the
+    # empty list it is - [Attach] says in as many words what that means for a
+    # mark that lands on such a ligature.
     set rows {}
     for {set component 0} {$component < $components} {incr component} {
       # The ComponentRecord offsets are counted from the LigatureAttach
@@ -561,4 +592,4 @@ proc ::tclpdf::markPos::AnchorRow {gpos base record classCount} {
   return $row
 }
 
-package provide tclpdf::markPos 1.0
+package provide tclpdf::markPos 1.1

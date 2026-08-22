@@ -628,6 +628,53 @@ test colorFont-3.10 {what colr refuses keeps its own code} -body {
   lrange $code 0 1
 } -result {TCLPDF COLR}
 
+test colorFont-3.11 {nor does a refusal in the SECOND pass} -body {
+  # Pass one reads the face and refuses what it cannot draw (3.9); pass two
+  # turns the layers into streams, and THAT can refuse too - every layer's
+  # colour goes through [ColourUsed] and every translucent one through
+  # [GraphicsOpacity], which is where a document that may not carry the
+  # feature says so. Built after [font define], a refusal on the third glyph
+  # left a family behind with the alias taken and no glyphs in it: the caller
+  # could neither finish it nor build it again under the same name.
+  #
+  # The probe is a document written as PDF 1.3, where /ca is not yet a thing
+  # (Reference 1.7, Table 4.8): the translucent layer is refused, and it is
+  # the SECOND character, so the first one has already been through pass two.
+  set doc [tclpdf new -unit mm -version 1.3 -compress 0]
+  $doc page add
+  set code [catch {$doc colorFont marks -data [cfFixture] \
+      -chars $cfTwoColours$cfTranslucent} err]
+  set fonts [dict keys [$doc state fonts]]
+  # And the alias is free: the same call can be made again once the document
+  # can hold what it asks for.
+  $doc configure -version 1.7
+  $doc colorFont marks -data [cfFixture] -chars $cfTwoColours$cfTranslucent
+  set again [dict get [$doc font info marks] glyphs]
+  $doc destroy
+  list $code $fonts [string match {*opacity*1.4*} $err] $again
+} -result {1 {} 1 2}
+
+test colorFont-3.12 {a base glyph with an empty layer list is named for what it is} -body {
+  # The refusal covers two cases and used to describe only one of them: a
+  # glyph with no COLR record at all (colorFont-3.3), and a glyph that HAS a
+  # record whose layer count is zero. The second is a base glyph, so "it has
+  # no entry in the COLR table" was simply untrue about it - and the message
+  # is what a caller has to act on, since the error code carries no more than
+  # the numbers.
+  set face [cfFont [list {} \
+      [cfOutline {{{100 100} {900 100} {900 900}}}] {} {} {} {} {}] \
+      [dict create 0xE000 6] [cfColr {{6 0 0}} {{1 0}}] \
+      [cfCpal 1 {0} {{0 0 255 255}}]]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data $face \
+      -chars $::cfTwoColours}]
+  catch {$doc colorFont marks -data $face -chars $::cfTwoColours} err
+  $doc destroy
+  list $code [string match {*no colour layers*} $err] \
+      [string match {*no entry in*} $err]
+} -result {{TCLPDF COLORFONT BASE U+E000 6 marks} 1 0}
+
 # --- the written document ---------------------------------------------------
 
 test colorFont-4.1 {the font dictionary is a Type 3 font with no font file} -body {

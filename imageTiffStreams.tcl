@@ -68,13 +68,23 @@
 # gave exactly 320 x 240 x 3 = 230 400 bytes), and unpacked LZW is stateless
 # by then and joins them.
 #
-# The predictor travels with the stream rather than being undone: /Predictor
-# 2 in /DecodeParms IS TIFF Predictor 2 (ISO 32000-2, Table 10 - the PNG
-# family is 10 to 15), and 108 of the 194 files use it. Rendered through
-# poppler the passed-through predictor comes out pixel for pixel identical to
-# what libtiff makes of the same file. It is undone here in exactly one case:
-# 16-bit components in a little-endian file, where the difference has to be
-# taken in the file's byte order and PDF has no way of saying so.
+# The predictor travels with the stream rather than being undone, AT EIGHT
+# BITS AND BELOW: /Predictor 2 in /DecodeParms IS TIFF Predictor 2 (ISO
+# 32000-2, Table 10 - the PNG family is 10 to 15), and 108 of the 194 files
+# use it. Rendered through poppler the passed-through predictor comes out pixel
+# for pixel identical to what libtiff makes of the same file. It is undone here
+# in two cases, both of which need the decoded bytes in hand: a 16-bit
+# little-endian file, whose samples PDF reads the wrong way round, and ANY
+# 16-bit Predictor-2 file, whose per-component difference no reader undoes
+# correctly at that depth - poppler and CoreGraphics render a passed-through
+# 16-bit /Predictor 2 as coloured noise (RMSE 0.37 against 0.02 once resolved),
+# the same failure the 16-bit colour key is decoded to avoid (doc/tclpdf.md).
+# The difference is resolved in the file's own byte order and the samples then
+# travel plain.
+#
+# Predictor 2 alongside no compression or PackBits is refused: PDF undoes a
+# predictor only for Flate and LZW data, and neither an uncompressed strip nor
+# a RunLengthDecode one has anywhere to carry it.
 #
 # 16-BIT LITTLE-ENDIAN. PDF reads a 16-bit sample high byte first (8.9.5.2);
 # a TIFF says in its header which order it uses, and 5 of the 194 files are
@@ -165,6 +175,7 @@ proc ::tclpdf::imageTiffStreams::streams {bytes parsed} {
 # state - so they are joined into one stream. Deflated on the way out, see
 # the file header.
 proc ::tclpdf::imageTiffStreams::Raw {bytes parsed} {
+  NoPredictor $parsed
   set data [Join $bytes $parsed]
   if {[dict get $parsed fillOrder] == 2} {
     set data [Reverse $data]
@@ -193,10 +204,27 @@ proc ::tclpdf::imageTiffStreams::Raw {bytes parsed} {
 # normally copies the strip byte for byte and only proves that it may.
 proc ::tclpdf::imageTiffStreams::PackBits {bytes parsed} {
   Reachable $parsed
+  NoPredictor $parsed
   set data {}
+  # What the runs WOULD decode to, counted while they are walked. The bytes
+  # themselves stay coded - this is the one way to hold a PackBits file to
+  # its own tags without unpacking it, and [Fit] cannot be used because it
+  # wants the samples in hand.
+  set decoded 0
   for {set index 0} {$index < [dict get $parsed stripCount]} {incr index} {
-    append data [Runs [::tclpdf::imageTiff strip $bytes $parsed $index] $index]
+    append data [Runs [::tclpdf::imageTiff strip $bytes $parsed $index] \
+        $index decoded]
   }
+  set wanted [Wanted $parsed]
+  if {$decoded < $wanted} {
+    return -code error -errorcode {TCLPDF TIFF DAMAGED} \
+        "tclpdf: damaged TIFF - [dict get $parsed width] x\
+        [dict get $parsed height] pixels want $wanted bytes of samples, and\
+        the PackBits runs decode to $decoded"
+  }
+  # Surplus is not refused, for the reason [Fit] gives: a writer may pad its
+  # last strip. Nor is it cut off - a RunLengthDecode stream declares no
+  # length, and a reader takes Width x Height samples and stops.
   append data \x80
   return [One $parsed RunLengthDecode $data {} 1]
 }
@@ -227,7 +255,7 @@ proc ::tclpdf::imageTiffStreams::Lzw {bytes parsed} {
 # round, which means having them, which for zlib is cheap in both directions.
 proc ::tclpdf::imageTiffStreams::Deflate {bytes parsed} {
   Reachable $parsed
-  if {[Swapped $parsed]} {
+  if {[Unpacked $parsed]} {
     set data {}
     for {set index 0} {$index < [dict get $parsed stripCount]} {incr index} {
       append data [::tclpdf::filter decodeFlate \
@@ -313,22 +341,30 @@ proc ::tclpdf::imageTiffStreams::Ccitt {bytes parsed} {
 # --- what the ways have in common ------------------------------------------
 
 # The result of a compression that ends up as one deflated stream of samples:
-# unpacked LZW, and Deflate that had to be taken apart for its byte order.
+# unpacked LZW, and Deflate that had to be taken apart for its byte order or
+# its 16-bit predictor.
 #
-# The predictor is undone here and only here. It cannot travel with the
-# stream in this one case: TIFF Predictor 2 at 16 bits takes the difference
-# per component, so it has to be undone in the byte order the file was
-# written in - and once the samples are swapped for PDF, that order is gone.
+# The predictor is undone here and only here, and only at 16 bits. TIFF
+# Predictor 2 at 16 bits takes the difference per component in the file's own
+# byte order, and no reader undoes it there: poppler and CoreGraphics render a
+# passed-through 16-bit /Predictor 2 as coloured noise (measured RMSE 0.37
+# against 0.02 once it is resolved), the same failure the 16-bit colour key is
+# decoded to avoid (doc/tclpdf.md). So it is resolved in the file's order here,
+# after which the samples are ordinary and travel without a predictor. At eight
+# bits and below the predictor travels with the stream as before - the reader
+# undoes it correctly and re-differencing every pixel in Tcl is avoided.
 proc ::tclpdf::imageTiffStreams::Repacked {parsed data} {
   set parms [Predictor $parsed]
+  if {[llength $parms] && [dict get $parsed bitsPerComponent] == 16} {
+    set data [::tclpdf::filter decodePredictor $data -predictor 2 \
+        -colors [dict get $parsed components] -bitspercomponent 16 \
+        -columns [dict get $parsed width] \
+        -byteorder [expr {[dict get $parsed byteOrder] eq "MM" ? "big" : "little"}]]
+    set parms {}
+  }
+  # A little-endian file's 16-bit samples are then turned into the order PDF
+  # reads (high byte first, 8.9.5.2); a big-endian file is already in it.
   if {[Swapped $parsed]} {
-    if {[llength $parms]} {
-      set data [::tclpdf::filter decodePredictor $data -predictor 2 \
-          -colors [dict get $parsed components] \
-          -bitspercomponent [dict get $parsed bitsPerComponent] \
-          -columns [dict get $parsed width] -byteorder little]
-      set parms {}
-    }
     set data [Swap $data]
   }
   return [One $parsed FlateDecode [::tclpdf::filter encodeFlate $data] \
@@ -392,19 +428,34 @@ proc ::tclpdf::imageTiffStreams::Join {bytes parsed} {
   return $data
 }
 
-# How many bytes of samples the picture is, and the check that the strips
-# hold them. A row occupies a whole number of bytes on both sides (TIFF 6.0
-# and ISO 32000-2, 8.9.5.2 agree), so this is arithmetic and not a guess.
+# How many bytes of samples the picture is. A row occupies a whole number of
+# bytes on both sides (TIFF 6.0 and ISO 32000-2, 8.9.5.2 agree), so this is
+# arithmetic and not a guess. Two callers ask, and a second copy of the
+# expression is how they would come to disagree about a 1-bit row: [Fit],
+# which holds the samples, and [PackBits], which only ever counts what its
+# runs would produce.
+proc ::tclpdf::imageTiffStreams::Wanted {parsed} {
+  set rowBytes [expr {([dict get $parsed width]
+      * [dict get $parsed samplesPerPixel]
+      * [dict get $parsed bitsPerComponent] + 7) / 8}]
+  return [expr {$rowBytes * [dict get $parsed height]}]
+}
+
+# The check that the strips hold the samples the tags promise, for the ways
+# that have the samples in hand: uncompressed, unpacked LZW, and Deflate
+# taken apart for its byte order or its predictor. The three that pass their
+# strips through cannot be held to it at any price worth paying - a Deflate
+# strip would have to be inflated, which is what passing it through avoids, a
+# JPEG strip decoded, and a CCITT strip is a run-length code whose length
+# says nothing about the picture; PackBits is the one that CAN be counted
+# without unpacking, and is, in [PackBits] itself.
 #
 # Too few is a damaged file and is refused. Too many is not: a writer may pad
 # its last strip to a full RowsPerStrip, and a decoder that was asked for a
 # strip gives back what it decoded - the surplus is cut off rather than
 # shifting the picture.
 proc ::tclpdf::imageTiffStreams::Fit {data parsed} {
-  set rowBytes [expr {([dict get $parsed width]
-      * [dict get $parsed samplesPerPixel]
-      * [dict get $parsed bitsPerComponent] + 7) / 8}]
-  set wanted [expr {$rowBytes * [dict get $parsed height]}]
+  set wanted [Wanted $parsed]
   set have [string length $data]
   if {$have < $wanted} {
     return -code error -errorcode {TCLPDF TIFF DAMAGED} \
@@ -426,6 +477,18 @@ proc ::tclpdf::imageTiffStreams::Swapped {parsed} {
       && [dict get $parsed byteOrder] eq "II"}]
 }
 
+# Must the samples be taken apart and re-deflated here rather than passed
+# through with the strip's own bytes? Two reasons, and both need the decoded
+# bytes in hand: a little-endian 16-bit file, whose samples PDF reads the wrong
+# way round, and a 16-bit Predictor-2 file of EITHER byte order, whose
+# per-component differencing no reader undoes correctly at that depth (see
+# [Repacked]). LZW is always taken apart anyway; this decides it for Deflate.
+proc ::tclpdf::imageTiffStreams::Unpacked {parsed} {
+  return [expr {[dict get $parsed bitsPerComponent] == 16
+      && ([dict get $parsed byteOrder] eq "II"
+          || [dict get $parsed predictor] == 2)}]
+}
+
 # The two layouts that cannot be passed through and would need a decoder this
 # package does not have. Neither occurs in the measured corpus; both are
 # refused by name rather than drawn wrong.
@@ -435,6 +498,24 @@ proc ::tclpdf::imageTiffStreams::Swapped {parsed} {
 # different thing from the reversal in [Ccitt] and is not the same for two
 # compressions. TIFF 6.0 recommends the tag only for bilevel data, and 193 of
 # the 194 measured files say FillOrder 1 - the one that does not is a fax.
+# Predictor 2 belongs with a compression that undoes it: PDF resolves the
+# difference only for Flate and LZW data (Table 8), and both are the
+# compressions differencing was meant to help. An uncompressed or PackBits
+# strip that also carries Predictor 2 has nowhere to say so - RunLengthDecode
+# takes no Predictor parameter, and undoing it in the bytes would be a decoder
+# written for a case no measured file is. Refused by name rather than written
+# as the differenced samples it would otherwise become. Called from [Raw] and
+# [PackBits] only; LZW and Deflate carry the predictor themselves.
+proc ::tclpdf::imageTiffStreams::NoPredictor {parsed} {
+  if {[dict get $parsed predictor] == 2} {
+    return -code error -errorcode {TCLPDF TIFF PREDICTOR} \
+        "tclpdf: this TIFF is [dict get $parsed compressionName]-compressed and\
+        carries Predictor 2 - PDF undoes a predictor only for Flate and LZW\
+        data; re-save it without a predictor, or with LZW or Deflate"
+  }
+  return
+}
+
 proc ::tclpdf::imageTiffStreams::Reachable {parsed} {
   if {[dict get $parsed fillOrder] == 2} {
     return -code error -errorcode {TCLPDF TIFF FILLORDER} \
@@ -488,7 +569,8 @@ proc ::tclpdf::imageTiffStreams::Swap {data} {
 
 # One PackBits strip, walked: the no-op bytes dropped and the runs checked
 # against the length of the strip. See [PackBits] for why the walk exists.
-proc ::tclpdf::imageTiffStreams::Runs {data index} {
+proc ::tclpdf::imageTiffStreams::Runs {data index decodedVar} {
+  upvar 1 $decodedVar decoded
   set out {}
   set at 0
   set total [string length $data]
@@ -505,6 +587,7 @@ proc ::tclpdf::imageTiffStreams::Runs {data index} {
             reaches past the end of the strip"
       }
       append out [string range $data $at $end]
+      incr decoded [expr {$control + 1}]
       set at [expr {$end + 1}]
     } else {
       if {$at + 1 >= $total} {
@@ -513,6 +596,7 @@ proc ::tclpdf::imageTiffStreams::Runs {data index} {
             no byte to repeat"
       }
       append out [string range $data $at [expr {$at + 1}]]
+      incr decoded [expr {257 - $control}]
       incr at 2
     }
   }
@@ -560,4 +644,4 @@ proc ::tclpdf::imageTiffStreams::Adobe {parsed} {
   return [binary format a2Sa5SSSc "\xff\xee" 14 Adobe 100 0 0 $transform]
 }
 
-package provide tclpdf::imageTiffStreams 1.0
+package provide tclpdf::imageTiffStreams 1.1

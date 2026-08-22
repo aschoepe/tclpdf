@@ -1,0 +1,337 @@
+# importLayer.test --
+#
+# What a page taken over from a foreign file puts into THIS document: the
+# strings of the copied objects, the catalogue entry a foreign layer needs,
+# and what is left behind when the takeover is refused half way.
+#
+# Three questions carry this file, and each of them is a way the import can
+# be wrong while every validator stays quiet: does a copied string go
+# through the same seam as every other string in the document - which is
+# what makes it ciphertext in an encrypted file (ISO 32000-2, 7.6.2) - does
+# the optional content configuration an import writes stand on its own,
+# /Name included (ISO 19005-2/-3, 6.9-1), and does a refused import leave
+# the document exactly as it found it.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::import
+package require tclpdf::layer
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+
+# THE FOREIGN PAGE, byte for byte - one fixture with three knobs, because
+# every test here wants the same page and differs in one thing about it.
+#
+#   5 0 R  "Sichtbar"  in the file's /ON     literal string
+#   6 0 R  the hex one in the file's /OFF    hexadecimal string
+#
+# Both names are text strings (7.9.2.2) written the two ways the syntax
+# allows, so that the road a copied string takes is measured on both. The
+# page carries no font: what a validator has to say about the result is then
+# about the layers and nothing else.
+#
+#   -hex          the second name, as hexadecimal digits
+#   -filter       a /Filter on the content stream
+#   -properties   more entries for the page's /Properties
+proc importLayerForeign {name args} {
+  set knobs [dict merge {-hex 566572737465636b74 -filter {} -properties {}} \
+      $args]
+  set filter [dict get $knobs -filter]
+  set stream "/OC /oc1 BDC 0 0 1 rg 10 10 80 40 re f EMC"
+  if {$filter ne {}} {
+    set filter " /Filter $filter"
+    set stream "xxxx"
+  }
+  set bodies [list \
+      "<< /Type /Catalog /Pages 2 0 R\
+          /OCProperties << /OCGs \[5 0 R 6 0 R\]\
+              /D << /ON \[5 0 R\] /OFF \[6 0 R\] /Name (Foreign view) >> >> >>" \
+      "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+      "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\] /Contents 4 0 R\
+          /Resources << /Properties << /oc1 5 0 R /oc2 6 0 R\
+              [dict get $knobs -properties] >> >> >>" \
+      "<< /Length [string length $stream]$filter >>\nstream\n$stream\nendstream" \
+      "<< /Type /OCG /Name (Sichtbar) >>" \
+      "<< /Type /OCG /Name <[dict get $knobs -hex]> >>"]
+  set out "%PDF-1.5\n"
+  set entries {}
+  foreach body $bodies {
+    lappend entries [format "%010d 00000 n \n" [string length $out]]
+    append out "[llength $entries] 0 obj\n$body\nendobj\n"
+  }
+  set startxref [string length $out]
+  append out "xref\n0 [expr {[llength $entries] + 1}]\n"
+  append out "0000000000 65535 f \n" [join $entries {}]
+  append out "trailer\n<< /Size [expr {[llength $entries] + 1}] /Root 1 0 R >>\n"
+  append out "startxref\n$startxref\n%%EOF\n"
+  package require tclpdf::io
+  set path [::tclpdfTest::scratch $name]
+  ::tclpdf::io write $path $out
+  return $path
+}
+
+# The body of every copied optional content group, in object order.
+proc importLayerGroups {doc} {
+  return [::tclpdfTest::objects $doc "/Type /OCG"]
+}
+
+# -- the strings of a copied object ---------------------------------------
+
+test importLayer-1.1 {a copied string comes out as the string it was} -body {
+  # The unencrypted road, and the yardstick for the encrypted one below: a
+  # literal string stays literal, a hexadecimal one stays hexadecimal, and
+  # the bytes are the ones the foreign file had.
+  set path [importLayerForeign import-layer-plain.pdf]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  set groups [importLayerGroups $doc]
+  $doc destroy
+  file delete $path
+  list [llength $groups] \
+      [lsearch -glob $groups {*/Name (Sichtbar)*}] \
+      [lsearch -glob $groups {*/Name <566572737465636b74>*}]
+} -result {2 0 1}
+
+test importLayer-1.2 {in an encrypted document a copied string is ciphertext} -body {
+  # THE FINDING. A copied object body went straight to the writer, past the
+  # seam every other string in the document goes through, so the layer names
+  # of an imported page stood in the clear in a file whose /Encrypt says
+  # there are no clear strings - and a reader that decrypted the file got the
+  # cipher of a string that was never encrypted.
+  set path [importLayerForeign import-layer-cipher.pdf]
+  set doc [tclpdf new -unit pt -format a4 -version 2.0]
+  $doc encrypt -user geheim
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  set groups [importLayerGroups $doc]
+  set out [::tclpdfTest::scratch import-layer-cipher-out.pdf]
+  $doc write $out
+  set bytes [::tclpdfTest::readBytes $out]
+  $doc destroy
+  file delete $path $out
+  list [llength $groups] \
+      [regexp -all {/Name <[0-9a-f]+>} [join $groups " "]] \
+      [string first "Sichtbar" $bytes] \
+      [string first "566572737465636b74" $bytes]
+} -result {2 2 -1 -1}
+
+test importLayer-1.3 {and it decrypts back into the string it was} \
+    -constraints qpdf -body {
+  # The end-to-end half of 1.2: what a reader gets after decryption is the
+  # foreign file's own text, not an empty string.
+  set path [importLayerForeign import-layer-round.pdf]
+  set doc [tclpdf new -unit pt -format a4 -version 2.0]
+  $doc encrypt -user geheim
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  set out [::tclpdfTest::scratch import-layer-round-out.pdf]
+  set plain [::tclpdfTest::scratch import-layer-round-plain.pdf]
+  $doc write $out
+  $doc destroy
+  exec qpdf --password=geheim --decrypt $out $plain
+  set bytes [::tclpdfTest::readBytes $plain]
+  file delete $path $out $plain
+  # qpdf is free to respell a hexadecimal string as a literal one on its way
+  # out - what is asked here is that the TEXT survives, not the spelling.
+  list [regexp {/Name \(Sichtbar\)} $bytes] \
+      [regexp {/Name (\(Versteckt\)|<566572737465636b74>)} $bytes]
+} -result {1 1}
+
+test importLayer-1.4 {white space inside a hexadecimal string is ignored} -body {
+  # 7.3.4.3: white space is not a digit and not an error either, and an odd
+  # number of digits means a trailing zero - the same clause.
+  set path [importLayerForeign import-layer-space.pdf -hex "4142\n43 4"]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc pdf import sheet $path
+  set groups [importLayerGroups $doc]
+  $doc destroy
+  file delete $path
+  lsearch -inline -glob $groups {*/Name <*}
+} -match glob -result {*/Name <41424340>*}
+
+test importLayer-1.5 {a hexadecimal string that is not hexadecimal is refused} -body {
+  set path [importLayerForeign import-layer-nothex.pdf -hex 41ZZ]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  set code [catch {$doc pdf import sheet $path} message info]
+  $doc destroy
+  file delete $path
+  list $code [string match {tclpdf: *hexadecimal digit*} $message] \
+      [dict get $info -errorcode]
+} -result {1 1 {TCLPDF IMPORT SYNTAX}}
+
+# -- the configuration an import writes -----------------------------------
+
+test importLayer-2.1 {an imported layer brings a configuration with a Name} -body {
+  # ISO 19005-2/-3, 6.9-1: every optional content configuration dictionary
+  # shall have a non-empty /Name. layer.tcl writes one - but layer.tcl only
+  # runs when the document declared a layer of its OWN, and a document that
+  # merely imports one never reaches it. veraPDF reported that as 6.9-1
+  # failed and no other tool said a word.
+  set path [importLayerForeign import-layer-name.pdf]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  list [regexp {/Name \(([^)]+)\)} $entry -> name] $name \
+      [llength [::tclpdf::layer::groupReferences $entry]] \
+      [llength [::tclpdf::layer::groupReferences $entry Order]]
+} -result {1 Default 2 2}
+
+test importLayer-2.2 {a name the document already carries is kept} -body {
+  # The merge road: the entry is read back with the reader's own parser, and
+  # what the caller named the configuration is not replaced by the default.
+  set path [importLayerForeign import-layer-name2.pdf]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc layer create own -title Own
+  $doc layer configure -title "The view"
+  ::tclpdfTest::writeTwice $doc import-layer-name2-out
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  list [regexp {/Name \(([^)]+)\)} $entry -> name] $name
+} -result {1 {The view}}
+
+test importLayer-2.3 {a PDF/A-3B document whose only layers are imported} \
+    -constraints haveTdom -body {
+  # The measurement behind 2.1, with the tool that found it.
+  set path [importLayerForeign import-layer-pdfa.pdf]
+  set out [::tclpdfTest::scratch import-layer-pdfa-out.pdf]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc pdfa -part 3 -conformance B -profile [file join \
+      [file dirname [file dirname [file normalize [info script]]]] icc sRGB.icc]
+  $doc info Title "Imported layers"
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  $doc write $out
+  $doc destroy
+  set report [::tclpdfTest::verapdf $out 3b]
+  file delete $path $out
+  set report
+} -result ok
+
+# -- what a refused import leaves behind ----------------------------------
+
+test importLayer-3.1 {a content stream that cannot be decoded changes nothing} -body {
+  # The check-before-write pattern of the earlier review rounds, one layer
+  # out: the refusal used to fall AFTER the copied objects were in the writer
+  # and after /OCProperties was in the catalogue, so a caught [pdf import]
+  # left the document carrying the layers and the orphaned resources of a
+  # page it never got.
+  set path [importLayerForeign import-layer-badfilter.pdf \
+      -filter /RunLengthDecode]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc text "before" -at {20 20} -size 10
+  set before [[$doc writer] count]
+  set code [catch {$doc pdf import sheet $path} message]
+  set state [list [$doc state forms] [$doc catalogEntry OCProperties]]
+  set grew [expr {[[$doc writer] count] - $before}]
+  lassign [::tclpdfTest::writes $doc import-layer-badfilter-out.pdf] written exists
+  $doc destroy
+  file delete $path
+  list $code [string match {tclpdf: *cannot decode*} $message] $grew $state \
+      $written $exists
+} -result {1 1 0 {{} {}} 0 1}
+
+test importLayer-3.2 {a resource the file does not hold changes nothing either} -body {
+  # The same rule for the other side of the read: an object number the
+  # cross-reference does not know. While the reading and the writing were
+  # interleaved, the numbers of the objects already copied were RESERVED and
+  # never filled - and a reserved object that never gets a body makes the
+  # WRITE fail, for a document that could otherwise still have been written.
+  set path [importLayerForeign import-layer-missing.pdf \
+      -properties "/oc3 99 0 R"]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc text "before" -at {20 20} -size 10
+  set before [[$doc writer] count]
+  set code [catch {$doc pdf import sheet $path} message]
+  set grew [expr {[[$doc writer] count] - $before}]
+  lassign [::tclpdfTest::writes $doc import-layer-missing-out.pdf] written exists
+  $doc destroy
+  file delete $path
+  list $code [string match {tclpdf: *} $message] $grew $written $exists
+} -result {1 1 0 0 1}
+
+# -- the state a foreign group brings with it ------------------------------
+
+test importLayer-4.1 {a group the foreign file hides stays hidden} -body {
+  # Switching everything on was the simple answer and the wrong one: a draft
+  # stamp the foreign document hides comes out as a stamp across the imported
+  # page, and nothing in this package's API could switch it off again.
+  set path [importLayerForeign import-layer-state.pdf]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  list [llength [::tclpdf::layer::groupReferences $entry]] \
+      [::tclpdf::layer::groupReferences $entry ON] \
+      [::tclpdf::layer::groupReferences $entry OFF]
+} -result {2 {{2 0 R}} {{3 0 R}}}
+
+test importLayer-4.2 {and stays hidden when this document has layers too} -body {
+  # The other writer of the same entry: layer.tcl rebuilds it on every
+  # catalog event and reads the state of the foreign groups out of it.
+  set path [importLayerForeign import-layer-state2.pdf]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc layer create own -title Own
+  $doc layer draw own -script {$doc text "mine" -at {20 20}}
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  ::tclpdfTest::writeTwice $doc import-layer-state2-out
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  list [llength [::tclpdf::layer::groupReferences $entry]] \
+      [llength [::tclpdf::layer::groupReferences $entry ON]] \
+      [llength [::tclpdf::layer::groupReferences $entry OFF]]
+} -result {3 2 1}
+
+test importLayer-4.3 {two writes and a second import keep the states} -body {
+  # Idempotence, which is where a state read back out of the entry could get
+  # lost: every catalog run reads its own previous entry.
+  set path [importLayerForeign import-layer-state3.pdf]
+  set doc [tclpdf new -unit pt -format a4]
+  $doc page add
+  $doc layer create own -title Own
+  $doc layer draw own -script {$doc text "mine" -at {20 20}}
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  ::tclpdfTest::writeTwice $doc import-layer-state3-a
+  $doc pdf import sheet2 $path
+  $doc form place sheet2 -at {0 40}
+  ::tclpdfTest::writeTwice $doc import-layer-state3-b
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  list [llength [::tclpdf::layer::groupReferences $entry]] \
+      [llength [::tclpdf::layer::groupReferences $entry ON]] \
+      [llength [::tclpdf::layer::groupReferences $entry OFF]]
+} -result {5 3 2}
+
+cleanupTests

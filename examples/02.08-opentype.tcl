@@ -96,9 +96,12 @@ $doc text "What the whole face costs" -at [list 20 $y]
 set y [expr {$y + 7}]
 
 $doc font -family sans -size 8 -color {0.35 0.35 0.35}
-$doc text "Read off the files themselves. A subset of a few words is a\
-    fraction of either - which is the argument for the TrueType form where a\
-    face is used for a heading and nothing else." -at [list 20 $y] -width 170
+$doc text "Read off the files themselves - what is on disk, before anything\
+    is embedded. The CFF form goes into the document whole, so its column is\
+    also what it costs there; the TrueType form is subsetted, so a heading of\
+    a few words costs a fraction of the figure below. That is the argument for\
+    the TrueType form where a face sets one line and nothing else."\
+    -at [list 20 $y] -width 170
 set y [expr {$y + 12}]
 
 set rows {}
@@ -110,7 +113,7 @@ foreach base {NimbusSans-Regular NimbusRoman-Regular} {
 $doc font -family sans -size 8 -color black
 set y [$doc table -at [list 20 $y] -width 170 -theme grid \
     -style {family sans size 8} -headStyle {family sansBold size 8} \
-    -head {{Face {as .otf (embedded whole)} {as .ttf (subsetted on use)}}} \
+    -head {{Face {the .otf file} {the .ttf file}}} \
     -body $rows \
     -columns {{align left} {align right} {align right}}]
 set y [expr {$y + 8}]

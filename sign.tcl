@@ -82,6 +82,10 @@
 # [NoSigningTime], which is the one place this module looks into the bytes it
 # is handed, and looks exactly two OIDs far: the attribute, and the RFC 3161
 # timestamp token whose own signing time a B-T signature legitimately carries.
+# The OTHER half of that same table row is the entry with the key M, which
+# "shall be present" at every baseline level - so "-date {}", the one call
+# that keeps /M out, is refused under cades as well ([Claim]). One line of one
+# table, and the same kind of answer to both halves of it.
 #
 # WHETHER THE FIELD IS VISIBLE IS THE CALLER'S CHOICE, and where it is,
 # THIS MODULE DOES NOT DRAW IT. Without -rect the widget is the invisible
@@ -223,25 +227,39 @@ namespace eval ::tclpdf::sign {
 #
 # "what" names the thing being read in the error messages - a file name for
 # the two-stage way, "the document just written" for the write.
-proc ::tclpdf::sign::Locate {data what} {
-  # Every /ByteRange in the file, and the LAST of them is the one meant.
-  #
-  # Until 2026-08-21 a second one was refused here, because a file this
-  # module had written carried exactly one and a second meant a signature
-  # from elsewhere that guessing would have got wrong. [::tclpdf::sign add]
-  # is what changed that: it appends a further signature as an incremental
-  # update, so a file with two of them is now one of ours, and [digest] and
-  # [embed] have to reach the one that is still waiting for its value.
-  #
-  # WHY THE LAST ONE IS THE RIGHT ONE, and it is a property of 7.5.6 rather
-  # than a habit: an incremental update appends. Every object it writes lies
-  # behind every byte the file had before, so the newest signature dictionary
-  # is always the one furthest into the file - and the older ones are
-  # finished, since [add] refuses to append onto a signature whose value is
-  # still the reserved zeros. What this does NOT do is search for a
-  # dictionary that is unfilled: a caller who prepares two signatures and
-  # then fills the first would be signing bytes that the second still
-  # changes, and there is no order in which that works.
+#
+# WHICH /ByteRange IS MEANT, and the answer changed on 2026-08-22. It used to
+# be decided by POSITION - the last one in the file - which is right for a
+# file that holds nothing but signature dictionaries and wrong for every
+# other one: /Reason, /Name, /Location and /ContactInfo are written into the
+# file as the caller spelled them, so a caller string spelling out a
+# /SubFilter, a /ByteRange and a /Contents of its own stands BEHIND the real
+# dictionary (the builder writes those four entries last) and was taken for
+# the newer signature. The consequence was not a broken file but a signed
+# one: the CMS object went into the string, the real /Contents kept its
+# zeros, [sign state] reported success and no structural check saw anything.
+#
+# What decides it now is the VALUE, which is the criterion [add] has used
+# from the start: reserved room is nothing but zeros between the delimiters,
+# and a signature never is - every DER object begins with 0x30. All four
+# callers of this want the one signature that is still waiting for its value,
+# so that is what is looked for, and finding two of them is refused rather
+# than guessed at. The order of 7.5.6 still holds for everything else: an
+# incremental update appends, so older signatures are the ones further
+# forward, and they are finished, since [add] refuses to append onto one that
+# is not.
+#
+# "unfilled" is what separates the three WRITING callers from the one reading
+# one. [add], [embed] and the document's own afterWrite put a value into the
+# room, so for them a file whose signatures all have theirs is a refusal
+# rather than a target - that is where a second [embed] used to overwrite a
+# good signature without a word. [digest] answers which bytes a file states
+# as signed, which is a question a finished file answers too, so it asks with
+# a 0 and gets the newest signature whether or not it is still waiting. The
+# refusal for TWO waiting signatures stands in both cases: handing out bytes
+# to be signed from a dictionary that may not be the right one is the same
+# mistake, whoever asked.
+proc ::tclpdf::sign::Locate {data what {unfilled 1}} {
   set positions {}
   set from 0
   while {1} {
@@ -258,8 +276,70 @@ proc ::tclpdf::sign::Locate {data what} {
         \[\$doc sign\] before it is written, and a finished file gains a\
         further signature through \[::tclpdf::sign add\]"
   }
-  set at [lindex $positions end]
 
+  # Each occurrence read on its own; one that does not read as a signature
+  # dictionary is not a candidate rather than an error, because a file of
+  # ours may legitimately carry such a thing - inside a string.
+  set readable {}
+  set reserved {}
+  foreach at $positions {
+    if {[catch {Entry $data $at $what} located]} {
+      continue
+    }
+    lappend readable $located
+    if {[Waiting $data $located]} {
+      lappend reserved $located
+    }
+  }
+  if {![llength $readable]} {
+    # Not one of them reads as a signature dictionary. The message is the one
+    # [Entry] makes for the last occurrence - it names the part that is
+    # missing, which is what a caller can do something with.
+    return [Entry $data [lindex $positions end] $what]
+  }
+  if {![llength $reserved] && !$unfilled} {
+    # The reading caller: no room left to fill, so what is meant is the
+    # newest signature the file has - which is the last one, by 7.5.6.
+    return [lindex $readable end]
+  }
+  if {![llength $reserved]} {
+    return -code error "tclpdf: no signature of $what is waiting for its\
+        value - every /Contents in it holds one already. The value goes into\
+        the room reserved for it exactly once, and a second one written over\
+        it would destroy the first: reserved room is nothing but zeros\
+        between the delimiters, and a signature is never that, since every\
+        DER object begins with 0x30. A FURTHER signature is appended with\
+        \[::tclpdf::sign add\]"
+  }
+  if {[llength $reserved] > 1} {
+    return -code error "tclpdf: [llength $reserved] signatures of $what are\
+        waiting for their value, and this module prepares one at a time -\
+        \[::tclpdf::sign add\] refuses to append onto a signature that has\
+        none yet. So one of these /ByteRange entries stands inside a STRING\
+        rather than in a signature dictionary: -reason, -name, -location and\
+        -contact go into the file as they were written, and one written like\
+        a signature dictionary would decide where the signature goes.\
+        Refused rather than guessed at"
+  }
+  return [lindex $reserved 0]
+}
+
+# Whether the /Contents this entry describes is still the reserved room.
+#
+# The whole criterion is in one line and in [add]'s own words: reserved room
+# is zeros, and a DER object begins with 0x30, so a value that is nothing but
+# zeros is room and anything else is a signature.
+proc ::tclpdf::sign::Waiting {data located} {
+  set at [dict get $located contents]
+  return [regexp {^0+$} [string range $data [expr {$at + 1}] \
+      [expr {$at + [dict get $located hexLength]}]]]
+}
+
+# One occurrence of /ByteRange read as the signature dictionary around it, or
+# an error naming what is not there. Split out of [Locate] so that reading
+# one and CHOOSING among several are two things - the choice has to be able
+# to pass over an occurrence without the whole call failing.
+proc ::tclpdf::sign::Entry {data at what} {
   set open [string first \[ $data $at]
   set close [string first \] $data $open]
   if {$open < 0 || $close < 0 || $close <= $open} {
@@ -552,13 +632,68 @@ proc ::tclpdf::sign::Describes {data located what} {
 # The range is written as escapes rather than as literal characters, as
 # writer.tcl does and for the same reason: Tcl 8.6 reads this file through the
 # system encoding and Tcl 9 as UTF-8.
+#
+# AND IT HAS TO BE ONE. That check is a single byte, and it is the one [add]
+# already reads a reserved /Contents by: DER writes a CMS ContentInfo as a
+# SEQUENCE, a SEQUENCE is tag 0x30, so every DER object of this kind begins
+# with that byte. It is not an ASN.1 parser and is not meant to be - this
+# module does not understand CMS - but it catches what otherwise reaches the
+# file unremarked: a signer, or a caller of [embed], handing over something
+# that is not a signature at all. Measured before it was checked: "hello"
+# went into a document as 68656c6c6f and every structural check called the
+# result signed.
 proc ::tclpdf::sign::Der {der} {
   if {[regexp {[^\u0000-\u00ff]} $der]} {
     return -code error "tclpdf: the signature is text, not bytes - it has to\
         be a CMS SignedData object in DER, and a character above 0xff cannot\
         be a byte of one"
   }
+  if {$der eq {}} {
+    return -code error "tclpdf: the signature is empty - what belongs here is\
+        a CMS SignedData object in DER, which is what \"openssl cms -sign\
+        -outform DER\" writes"
+  }
+  if {[string index $der 0] ne "\u0030"} {
+    return -code error "tclpdf: the signature is not a DER object - a CMS\
+        SignedData object (12.8.3.3.1) is written as an ASN.1 SEQUENCE and\
+        every one of those begins with the byte 0x30. This one begins with\
+        0x[format %02x [scan [string index $der 0] %c]]. \"openssl cms\
+        -sign -outform DER\" writes what belongs here"
+  }
   return
+}
+
+# The signer called, its answer checked, and the file with the answer in it.
+#
+# The whole of the signing step, and it exists once because there are two
+# callers of it - the document's own afterWrite and [add] - and every check
+# in it is one neither of them may be the one to forget. Answers the patched
+# bytes and the length of the DER object.
+#
+# It does not write anything: whoever called it decides what to do with a
+# file whose signer failed, and the two answer that differently (see
+# [SignAfterWrite]).
+proc ::tclpdf::sign::Signed {data located byteRange length signer what} {
+  set der [uplevel #0 [list {*}$signer [Bytes $data $byteRange]]]
+  if {$der eq {}} {
+    return -code error "tclpdf: the -signer prefix answered nothing - it\
+        has to answer a CMS SignedData object in DER, which is what\
+        \"openssl cms -sign -outform DER\" writes"
+  }
+  # A signer that answers text rather than bytes, or something that is no DER
+  # object at all, would be hexadecimal nonsense in the file and nothing
+  # before a verifier would say so.
+  Der $der
+  # And a signer that states the time of signing in the CMS object takes a
+  # PAdES claim away from the document it was made for. Said here rather than
+  # left to a validator.
+  NoSigningTime $der [dict get $located subFilter] $what
+  set data [Fill $data $located $der]
+  if {[string length $data] != $length} {
+    return -code error "tclpdf: writing the signature into $what changed the\
+        file length, which cannot be - the /ByteRange describes its own file"
+  }
+  return [list $data [string length $der]]
 }
 
 #
@@ -712,7 +847,10 @@ proc ::tclpdf::sign::digest {path args} {
   }
   set data [::tclpdf::io read $path]
   set what "\"$path\""
-  set located [Locate $data $what]
+  # 0: a file that is already signed answers this question as well, and
+  # answering it is all this call then does - there is no placeholder left to
+  # write over, so the file is not touched.
+  set located [Locate $data $what 0]
   Prepared $located $what
   set byteRange [Describes $data $located $what]
 
@@ -720,8 +858,14 @@ proc ::tclpdf::sign::digest {path args} {
   # written with a -date naming a time of its own, or with -date {} and no
   # entry at all, and both are the caller's own statement about the time -
   # not something to be overwritten by a second call that knows less.
+  #
+  # AND ONLY WHILE THE VALUE IS STILL TO COME. A file whose /Contents already
+  # holds a CMS object has had these very bytes signed, and /M lies among
+  # them: writing the time into it now would destroy the signature that
+  # covers it. Such a file is answered about and not touched - which is what
+  # is left of this call once there is nothing to prepare.
   set range [LocateDate $data $located $what]
-  if {[llength $range]} {
+  if {[llength $range] && [Waiting $data $located]} {
     if {$date eq "now"} {
       set date [::tclpdf::pdfObj date {} [HeaderVersion $data]]
     }
@@ -804,6 +948,35 @@ proc ::tclpdf::sign::SubFilter {value what} {
       takes \"pkcs7\" for /adbe.pkcs7.detached (PDF 1.6, and the default) or\
       \"cades\" for /ETSI.CAdES.detached (PDF 2.0, and the claim to be a\
       PAdES signature - ETSI EN 319 142-1), not \"$value\""
+}
+
+# What the /SubFilter and the date have to say to one another.
+#
+# ETSI EN 319 142-1, Table 1 puts "the entry with the key M in the Signature
+# Dictionary" at "shall be present" for every baseline level - B-B, B-T, B-LT
+# and B-LTA alike - and its note g) spells out what belongs there: "the
+# generator shall include the claimed UTC time of the signature". A document
+# that claims PAdES and states no time is therefore not one, and "-date {}"
+# is precisely the call that states none.
+#
+# REFUSED RATHER THAN OVERRULED. "-date {}" is the caller saying that no time
+# is to be stated - ISO 32000-2, Table 255 read to the letter, which
+# recommends /M only where the signature itself carries no time - and writing
+# one anyway would answer a request with its opposite. The other half of the
+# same table row is already refused this way and not repaired either: a CMS
+# object stating a signing time is turned away under cades ([NoSigningTime])
+# rather than stripped. One line of one table, one kind of answer.
+proc ::tclpdf::sign::Claim {subFilter date what} {
+  if {$subFilter ne "/ETSI.CAdES.detached" || $date ne {}} {
+    return
+  }
+  return -code error "tclpdf: $what -date {} keeps /M out of the signature\
+      dictionary and -subfilter cades claims a PAdES signature, where ETSI\
+      EN 319 142-1, Table 1 has the M entry at \"shall be present\" for every\
+      baseline level - it is where the claimed time of signing stands (note\
+      g). The two cannot both stand: leave -date at \"now\", which means the\
+      moment of signing, name a time of your own, or write the document with\
+      -subfilter pkcs7, which claims no PAdES"
 }
 
 # How much room is reserved for the signature value.
@@ -942,6 +1115,7 @@ proc ::tclpdf::sign::add {path args} {
         default and means the moment of signing - or the empty string for no\
         /M at all, not \"$date\""
   }
+  Claim $subFilter $date "sign add"
 
   set data [::tclpdf::io read $path]
   set what "\"$path\""
@@ -1056,21 +1230,12 @@ proc ::tclpdf::sign::add {path args} {
   set signed 0
   set derLength {}
   if {$signer ne {}} {
-    set der [uplevel #0 [list {*}$signer [Bytes $data $byteRange]]]
-    if {$der eq {}} {
-      return -code error "tclpdf: the -signer prefix answered nothing - it\
-          has to answer a CMS SignedData object in DER, which is what\
-          \"openssl cms -sign -outform DER\" writes"
-    }
-    Der $der
-    NoSigningTime $der $subFilter $what
-    set data [Fill $data $located $der]
-    if {[string length $data] != $length} {
-      return -code error "tclpdf: writing the signature into $what changed the\
-          file length, which cannot be - the /ByteRange describes its own file"
-    }
+    # No catch around it, and that is the promise this call makes: nothing has
+    # been written yet, so a signer that fails leaves the file exactly as it
+    # found it - the update is thrown away with the error.
+    lassign [Signed $data $located $byteRange $length $signer $what] \
+        data derLength
     set signed 1
-    set derLength [string length $der]
   }
   ::tclpdf::io write $path $data
   return [dict create field $field page $page size $size subFilter $subFilter \
@@ -1193,12 +1358,89 @@ proc ::tclpdf::sign::FieldNames {upd catalogValue} {
   set names {}
   foreach entry [lindex $fields 1] {
     set value [Direct $upd $entry]
-    set name [::tclpdf::importRead::Get $value T]
-    if {[lindex $name 0] eq "s"} {
-      lappend names [lindex $name 1]
+    set name [Text [::tclpdf::importRead::Get $value T]]
+    if {$name ne {}} {
+      lappend names $name
     }
   }
   return $names
+}
+
+# The text a /T holds, whichever of the two ways it is written in.
+#
+# BOTH ARE NEEDED, and reading only the literal one was the hole: [pdfObj str]
+# writes a string of pure ASCII as a literal and EVERY other one as UTF-16BE
+# in hexadecimal, so a field named "Freigabe" arrives here as {s Freigabe} and
+# one whose name carries an umlaut as {h feff...}. A reader that knows only
+# {s ...} does not see the second at all - and then the uniqueness 12.7.4.2
+# asks for is not checked for exactly the names a caller is most likely to
+# collide on, nor is the free "Signature<n>" counted correctly. A foreign
+# file may write a plain ASCII name that way too, and then it was the
+# numbering that walked past a taken name.
+#
+# The counterpart of [::tclpdf::pdfObj::Utf16Be], which writes what this
+# reads. importInfo.tcl carries a reader's full version of the same thing -
+# the PDFDocEncoding table, and tolerance for the UTF-16LE that files in the
+# wild carry - and it is not reached for here: [add] would then require a
+# whole PDF reader package to compare two field names, and what has to be
+# read back is what a WRITER produced. Anything that is neither spelling is
+# compared as the bytes it is, which is what a foreign file gets.
+proc ::tclpdf::sign::Text {value} {
+  switch -- [lindex $value 0] {
+    s {
+      set bytes [lindex $value 1]
+    }
+    h {
+      # An odd number of digits is read as if a 0 followed (7.3.4.3), and
+      # white space between them is not part of the string.
+      set hex [regsub -all {[^0-9A-Fa-f]} [lindex $value 1] {}]
+      if {[string length $hex] % 2} {
+        append hex 0
+      }
+      set bytes [binary decode hex $hex]
+    }
+    default {
+      return {}
+    }
+  }
+  if {[string range $bytes 0 1] ne "\u00FE\u00FF"} {
+    return $bytes
+  }
+  # UTF-16BE behind the byte order mark 7.9.2.2 asks for. Combined by hand
+  # rather than through an encoding name, because the two interpreters do not
+  # offer the same one - and the surrogate pair is put back together the way
+  # [Utf16Be] took it apart, with the result checked: where [format %c]
+  # cannot hold the combined value, the two halves ARE what this interpreter
+  # means by that character.
+  binary scan [string range $bytes 2 end] Su* units
+  set out {}
+  set high {}
+  foreach unit $units {
+    if {$high ne {}} {
+      if {$unit >= 0xDC00 && $unit <= 0xDFFF} {
+        set code [expr {0x10000 + (($high - 0xD800) << 10) + ($unit - 0xDC00)}]
+        set char [format %c $code]
+        if {[scan $char %c] == $code} {
+          append out $char
+        } else {
+          append out [format %c%c $high $unit]
+        }
+        set high {}
+        continue
+      }
+      append out [format %c $high]
+      set high {}
+    }
+    if {$unit >= 0xD800 && $unit <= 0xDBFF} {
+      set high $unit
+      continue
+    }
+    append out [format %c $unit]
+  }
+  if {$high ne {}} {
+    append out [format %c $high]
+  }
+  return $out
 }
 
 # The new field into /AcroForm /Fields, and /SigFlags 3 with it.
@@ -1309,6 +1551,9 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options date] ni {{} now}} {
       my CheckDate [dict get $options date] "sign -date"
     }
+    # And what the two say to one another: a PAdES claim without a time of
+    # signing is not one (ETSI EN 319 142-1, Table 1).
+    ::tclpdf::sign::Claim $subFilter [dict get $options date] sign
     set page [::tclpdf::sign::PageIndex [dict get $options page] sign]
     # The two halves of a visible field. Each is useless without the other,
     # and each without the other is a mistake that shows up nowhere until a
@@ -1339,10 +1584,23 @@ oo::define ::tclpdf::document::document {
             corner of the signature field and its size, in the unit of the\
             document, as \"link -at\" and \"rect -at\" count - not \"$rect\""
       }
+      # A NUMBER A PDF CAN HOLD, which is more than [string is double] asks.
+      # NaN and Inf pass that test and then fail no comparison either - "NaN
+      # <= 0" is false, so the width and height check below waves them
+      # through as well. What they hit is the write, and there it is a raw
+      # Tcl sentence about a non-numeric floating-point value - by which time
+      # the state is set and the call cannot be made again. So the rule that
+      # decides whether a number has a PDF spelling at all is asked here,
+      # where the answer still costs nothing: [pdfObj num] refuses NaN, both
+      # infinities and everything beyond the PDF real range of about
+      # +/-3.403e38 (ISO 32000-1, Annex C.2).
       foreach value $rect {
-        if {![string is double -strict $value]} {
-          return -code error "tclpdf: sign -rect is {x y w h} in numbers,\
-              not \"$rect\""
+        if {![string is double -strict $value]
+            || [catch {::tclpdf::pdfObj num $value}]} {
+          return -code error "tclpdf: sign -rect is {x y w h} in numbers a\
+              PDF can hold - not \"$rect\". NaN, an infinity and anything\
+              beyond about +/-3.403e38 have no PDF spelling (ISO 32000-1,\
+              Annex C.2)"
         }
       }
       lassign $rect left top width height
@@ -1641,29 +1899,32 @@ oo::define ::tclpdf::document::document {
     set signed 0
     set derLength {}
     if {[dict get $current signer] ne {}} {
-      set der [uplevel #0 [list {*}[dict get $current signer] \
-          [::tclpdf::sign::Bytes $data $byteRange]]]
-      if {$der eq {}} {
-        return -code error "tclpdf: the -signer prefix answered nothing - it\
-            has to answer a CMS SignedData object in DER, which is what\
-            \"openssl cms -sign -outform DER\" writes"
+      # THE FILE IS WRITTEN EITHER WAY, and that is what a failing signer
+      # cost until 2026-08-22. The bytes are patched in memory and go out at
+      # the end, so an error anywhere in the signing step used to leave the
+      # file as [write] had put it there - with the /ByteRange placeholder
+      # still in it, which [Prepared] refuses by name: the document could
+      # then be neither signed here nor handed to the two-stage way, and
+      # [add] promises the opposite for the same failure ("leaves the file
+      # exactly as it found it").
+      #
+      # What is on disk after a failure now is the PREPARED document - the
+      # /ByteRange filled in, the reserved room still zeros - which is
+      # exactly the file a write without -signer produces. So the signer can
+      # be tried again through [::tclpdf::sign digest] and [embed] without
+      # writing the document a second time, and the error itself is passed
+      # on untouched, options and all: a caller reacting to
+      # "-errorcode {TCLPDF SIGN SPACE ...}" still gets it.
+      if {[catch {::tclpdf::sign::Signed $data $located $byteRange $length \
+          [dict get $current signer] "the document just written"} \
+          result options]} {
+        ::tclpdf::io write $path $data
+        my state sign [dict merge $current [dict create signed 0 \
+            byteRange $byteRange length {}]]
+        return -options $options $result
       }
-      # A signer that answers text rather than bytes would be hexadecimal
-      # nonsense in the file, and nothing before a verifier would say so.
-      ::tclpdf::sign::Der $der
-      # And a signer that states the time of signing in the CMS object takes
-      # a PAdES claim away from the document it was made for. Said here
-      # rather than left to a validator: the file on disk still holds its
-      # placeholder, so the way out is one option away.
-      ::tclpdf::sign::NoSigningTime $der [dict get $current subFilter] \
-          "the document just written"
-      set data [::tclpdf::sign::Fill $data $located $der]
-      if {[string length $data] != $length} {
-        return -code error "tclpdf: writing the signature changed the file\
-            length, which cannot be - /ByteRange describes its own file"
-      }
+      lassign $result data derLength
       set signed 1
-      set derLength [string length $der]
     }
     ::tclpdf::io write $path $data
     my state sign [dict merge $current [dict create signed $signed \
@@ -1672,4 +1933,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.1
+package provide tclpdf::sign 1.2

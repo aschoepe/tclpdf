@@ -289,6 +289,28 @@ test layer-2.8 {a script that leaves the content stream is refused} -body {
   list $code [string match {*left the content stream it began in*} $message]
 } -result {1 1}
 
+test layer-2.9 {and the bracket it opened is closed all the same} -body {
+  # The other half of 2.8. The refusal used to be written BEFORE the EMC and
+  # left the BDC standing, and an unclosed BDC swallows every drawing that
+  # follows it - the manual promises the close on BOTH ways out. The drawing
+  # surface the script left open is popped here, because while it is on the
+  # stack it is where [content] writes and the EMC would land in IT.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  set code [catch {
+    $doc layer draw draft -script {
+      $doc text "a" -at {20 20}
+      $doc canvas push 100 100
+    }
+  } message]
+  set depth [$doc canvas depth]
+  set stream [::tclpdfTest::content $doc 0]
+  $doc destroy
+  list $code $depth [layerNesting $stream] \
+      [regexp -all {BDC} $stream] [regexp -all {EMC} $stream]
+} -result {1 0 OC 1 1}
+
 test layer-2.7 {two brackets for the same layer are two brackets} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
@@ -393,6 +415,45 @@ test layer-3.6 {a radio group of one, of a stranger, or of a twin is refused} -b
       [string match {*no layer named "fehlt"*} [lindex $messages 1]] \
       [string match {*appears twice in the same radio group*} [lindex $messages 2]]
 } -result {1 1 1}
+
+test layer-3.13 {a radio group starts with at most one member on} -body {
+  # Table 99: the members of an /RBGroups set are mutually exclusive, and a
+  # configuration whose /ON array holds two of them describes a state the
+  # reader it is written for cannot produce. Two layers declared without
+  # -visible 0 - the default, and the usual way a language pair is written -
+  # were exactly that. The FIRST member that is on stays on.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create german
+  $doc layer create english
+  $doc layer radio {german english}
+  ::tclpdfTest::writeTwice $doc layer-radio-exclusive
+  set entry [$doc catalogEntry OCProperties]
+  set states [list [$doc layer state german] [$doc layer state english]]
+  $doc destroy
+  list $states [llength [::tclpdf::layer::groupReferences $entry ON]] \
+      [llength [::tclpdf::layer::groupReferences $entry OFF]]
+} -result {{1 0} 1 1}
+
+test layer-3.14 {switching one member on switches the others off} -body {
+  # The state can still be changed after the group is declared, so the rule
+  # has to hold there too - and it holds in the STATE, not only in the file:
+  # [layer state] would otherwise answer 1 for a layer the write puts in
+  # /OFF. A layer in no radio group is untouched by any of it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create german
+  $doc layer create english -visible 0
+  $doc layer create draft
+  $doc layer radio {german english}
+  $doc layer state english 1
+  set after [list [$doc layer state german] [$doc layer state english] \
+      [$doc layer state draft]]
+  $doc layer state german 1
+  set again [list [$doc layer state german] [$doc layer state english]]
+  $doc destroy
+  list $after $again
+} -result {{0 1 1} {1 0}}
 
 test layer-3.7 {the configuration carries a Name and a ListMode} -body {
   set doc [tclpdf new -unit mm]
@@ -647,6 +708,22 @@ test layer-6.4 {an empty script needs no page, a drawing one is refused} -body {
   $doc destroy
   list $quiet $loud [string match {*no such page*} $message]
 } -result {0 1 1}
+
+test layer-6.5 {layer draw without a -script is a no-op, and says so} -body {
+  # Decided rather than left open: [layer draw draft] on its own writes
+  # nothing, answers the layer's name, and is the same call as one with an
+  # empty -script. The alias is checked either way, so the typo that matters
+  # is still refused by name; the precedent is [form create], where an empty
+  # -script is a form with no content.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc layer create draft
+  set answer [$doc layer draw draft]
+  set stream [::tclpdfTest::content $doc 0]
+  set unknown [catch {$doc layer draw fehlt} message]
+  $doc destroy
+  list $answer $stream $unknown [string match {*no layer named "fehlt"*} $message]
+} -result {draft {} 1 1}
 
 # -- PDF/A ----------------------------------------------------------------
 

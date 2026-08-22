@@ -86,7 +86,7 @@ $doc font -family bodyBold -size 15
 $doc text "Invoice 471113" -at {20 25}
 $doc font -family body -size 9
 $doc text "Lieferant GmbH to Kunden AG Mitte, 20 February 2026" -at {20 33}
-$doc text "Total including VAT: EUR 23.98" -at {20 39}
+$doc text "Total including VAT: EUR 23.54" -at {20 39}
 
 $doc font -size 8
 $doc text "The same invoice is attached to this file as XML, and the file is\

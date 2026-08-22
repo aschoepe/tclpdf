@@ -350,6 +350,32 @@ oo::define ::tclpdf::document::document {
     # permission costs a message and not a key.
     set p [::tclpdf::encrypt flags [dict get $options permissions]]
 
+    # An empty -user together with no -owner leaves BOTH passwords empty, and
+    # that is refused rather than written. Without -owner the user password
+    # serves as the owner password too (see below, where that is decided), so
+    # with an empty -user there is no owner password either - and the empty
+    # password is the one every reader tries first: it authenticates as the
+    # OWNER (algorithm 12, 7.6.4.4.11), and an owner is not subject to /P at
+    # all. Every permission the call withholds would stand in the file and be
+    # lifted by everyone who opened it, and what would be left is a document
+    # encrypted under a key anyone can derive.
+    #
+    # An empty -user BESIDE an owner password is the useful case and stays:
+    # the document opens for everyone and the owner password is what lifts
+    # the restrictions. That is the one the manual recommends, and the pair of
+    # empty ones is what it says is not offered.
+    if {[dict get $options user] eq {} && [dict get $options owner] eq {}} {
+      return -code error "tclpdf: encrypt with an empty -user and no -owner\
+          would leave both passwords empty, and the empty password is the\
+          first one every reader tries: it opens the document as its OWNER\
+          (ISO 32000-2, 7.6.4.4.11), and an owner is not subject to /P - so\
+          every permission withheld here would be lifted by everyone who\
+          opens the file. Name an -owner password, which is what lifts the\
+          restrictions for whoever knows it; an empty -user beside it is\
+          allowed and is usually what is wanted, since the document then\
+          opens for everyone"
+    }
+
     if {[my state encrypt] ne {}} {
       return -code error "tclpdf: this document is already encrypted -\
           encrypt is called once. A second call would replace the file key,\
@@ -472,7 +498,9 @@ oo::define ::tclpdf::document::document {
     # password opens it, and the permissions are what the file says. The
     # alternative - an empty owner password - would hand every reader full
     # rights, since an empty owner password is the one every reader tries
-    # first.
+    # first. Where the user password is empty as well this rule would produce
+    # exactly that empty owner password, which is why the check above refuses
+    # the pair outright.
     if {[dict get $options owner] eq {}} {
       set owner $user
     } else {
@@ -522,6 +550,28 @@ oo::define ::tclpdf::document::document {
   # Runs on beforeWrite and is idempotent: the reservation hands back the
   # same object number on a second write, the four key values come out of the
   # state unchanged, and the trailer entry is set to what it already said.
+  #
+  # THERE IS NO /Length HERE, and its absence is the entry Table 20 asks for.
+  # The table offers /Length for /V 2 and /V 3 only, as "the length of the
+  # file encryption key, in bits ... a multiple of 8 in the range 40 to 128",
+  # and PDF 2.0 deprecates it outright - while [encrypt] requires version
+  # 2.0, so every dictionary this writes lands in a file the entry was
+  # withdrawn from. A "/Length 256" stated bits where the table allows at
+  # most 128 and stated them for a revision that has no such entry; it came
+  # from a port of revision 4, where /V 2 made it right.
+  #
+  # The /Length of the crypt filter below is a different entry and stays:
+  # Table 25 asks it of a crypt filter dictionary, and there it is the key
+  # length in BYTES - 32 for AES-256.
+  #
+  # WHAT LEAVING IT OUT COSTS, measured rather than left to be found later:
+  # qpdf writes /Length 256 into its own /V 5 dictionaries and reads the
+  # entry back unconditionally, so "qpdf --check" on a file without it says
+  # "dictionary key /Length: operation for integer attempted on object of
+  # type null: returning 0" and exits 3 (qpdf 12.4.0). That is qpdf talking
+  # about its own reading and not about this file: --decrypt,
+  # --show-encryption, pdfinfo and every reader open the document without a
+  # word, and Table 20 is unambiguous about which of the two is right.
   method EncryptWrite {} {
     set current [my state encrypt]
     set number [my reservation encrypt.dictionary]
@@ -529,7 +579,6 @@ oo::define ::tclpdf::document::document {
         Filter /Standard \
         V 5 \
         R 6 \
-        Length 256 \
         CF [::tclpdf::pdfObj dictionary [list \
             StdCF [::tclpdf::pdfObj dictionary [list \
                 CFM /AESV3 AuthEvent /DocOpen Length 32]]]] \
@@ -591,4 +640,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::encrypt 1.0
+package provide tclpdf::encrypt 1.1

@@ -593,6 +593,175 @@ test markPos-9.8 {a face whose scripts share their lookups gains nothing and los
         [llength $resolved] [dict keys [::tclpdf::otLayout scripts $gpos]]
 } -result {1 26 {DFLT arab cyrl grek latn}}
 
+# --- the subtable header, on bytes this file wrote itself -------------------
+
+# A MarkToBase (type 4) or MarkToLigature (type 5) subtable, assembled here so
+# that a header no font this package ships would ever carry can be handed to
+# the reader. The glyph numbers are DejaVu's b and its combining grave, so the
+# result can be run through [markPos offsets] with the real font behind it and
+# the advance that walk subtracts is the real one.
+#
+# The options say what to break: a 0 in one of the four offset fields of the
+# header - which means "not present", not "starts here" - a mark class beyond
+# markClassCount, or a LigatureAttach with no components at all.
+proc markBytes {args} {
+    set o [dict merge {type 4 markCoverage 1 baseCoverage 1 markArray 1 \
+        baseArray 1 class 0 classCount 1 components 1} $args]
+    set classCount [dict get $o classCount]
+    set components [dict get $o components]
+    # Where each piece lands, counted from the start of the subtable.
+    set atMarkCoverage 12
+    set atBaseCoverage 18
+    set atMarkArray 24
+    set atPartnerArray 30
+    if {[dict get $o type] == 5} {
+        set atAttach [expr {$atPartnerArray + 4}]
+        set partner [binary format SuSu 1 [expr {$atAttach - $atPartnerArray}]]
+        append partner [binary format Su $components]
+        set atMarkAnchor [expr {$atAttach + 2 + $components * $classCount * 2}]
+    } else {
+        set partner [binary format Su 1]
+        set atAttach $atPartnerArray
+        set atMarkAnchor [expr {$atPartnerArray + 2 + $classCount * 2}]
+    }
+    set atBaseAnchor [expr {$atMarkAnchor + 6}]
+    # One anchor offset per class, counted from the array (or, for type 5,
+    # from the LigatureAttach); class 0 carries the anchor, the rest are NULL.
+    for {set class 0} {$class < $classCount * max(1, $components)} {incr class} {
+        if {[dict get $o type] == 5 && $components == 0} break
+        append partner [binary format Su [expr {$class == 0 ?
+            $atBaseAnchor - $atAttach : 0}]]
+    }
+    set bytes [binary format SuSuSuSuSuSu 1 \
+        [expr {[dict get $o markCoverage] ? $atMarkCoverage : 0}] \
+        [expr {[dict get $o baseCoverage] ? $atBaseCoverage : 0}] \
+        $classCount \
+        [expr {[dict get $o markArray] ? $atMarkArray : 0}] \
+        [expr {[dict get $o baseArray] ? $atPartnerArray : 0}]]
+    append bytes [binary format SuSuSu 1 1 689]
+    append bytes [binary format SuSuSu 1 1 69]
+    append bytes [binary format SuSuSu 1 [dict get $o class] \
+        [expr {$atMarkAnchor - $atMarkArray}]]
+    append bytes $partner
+    # Pad up to where the anchors were promised, then the anchors themselves.
+    append bytes [string repeat \x00 [expr {$atMarkAnchor - [string length $bytes]}]]
+    append bytes [binary format SSS 1 -100 200]
+    append bytes [binary format SSS 1 300 400]
+    return $bytes
+}
+
+test markPos-10.1 {the hand-built subtable places the mark, as a control} \
+    -constraints haveDejaVu -body {
+    # Every test below breaks one field of THIS table, so it has to work
+    # first. The base anchor is 300,400 and the mark's -100,200, so the mark
+    # belongs 400 to the right and 200 up of the base's origin - less the
+    # 1300 unit advance of DejaVu's b, which the walk back subtracts.
+    set parsed [::tclpdf::sfnt read $::fontDejaVu]
+    set state [dict create font $parsed units 2048 marks {} \
+        lookups [list [list {} [list [::tclpdf::markPos::Subtable \
+            [markBytes] 4 0]] 0]]]
+    ::tclpdf::markPos offsets $state {69 689}
+} -result {{0 0} {-900 200}}
+
+test markPos-10.2 {a NULL offset in the subtable header is not an offset of 0} \
+    -constraints haveDejaVu -body {
+    # Every offset in those four fields is counted from the beginning of the
+    # subtable (6.3.3), so 0 would point at the subtable's own format field:
+    # read as a coverage table it is format 1 with 8 entries, and the reader
+    # matched glyphs against the header bytes and built an anchor out of the
+    # offsets themselves. An invented anchor is worse than none, so the whole
+    # subtable is left alone - the same answer an unknown format gets.
+    lmap field {markCoverage baseCoverage markArray baseArray} {
+        ::tclpdf::markPos::Subtable [markBytes $field 0] 4 0
+    }
+} -result {{} {} {} {}}
+
+test markPos-10.3 {a mark class beyond markClassCount attaches nothing} \
+    -constraints haveDejaVu -body {
+    # markClass is bounded by markClassCount (6.3.3). A larger one used to be
+    # answered by [lindex] handing back the empty string from beyond the end
+    # of the anchor row - which reads exactly like the NULL offset the format
+    # does allow, and is not one.
+    set parsed [::tclpdf::sfnt read $::fontDejaVu]
+    set state [dict create font $parsed units 2048 marks {} \
+        lookups [list [list {} [list [::tclpdf::markPos::Subtable \
+            [markBytes class 5] 4 0]] 0]]]
+    ::tclpdf::markPos offsets $state {69 689}
+} -result {{0 0} {0 0}}
+
+test markPos-10.4 {a LigatureAttach with no components attaches nothing} \
+    -constraints haveDejaVu -body {
+    # componentCount 0 leaves the ligature without a single anchor row, so
+    # there is no last one to take. Same guard, same reason: it must not read
+    # like a NULL offset.
+    set parsed [::tclpdf::sfnt read $::fontDejaVu]
+    set answers {}
+    foreach components {1 0} {
+        set state [dict create font $parsed units 2048 marks {} \
+            lookups [list [list {} [list [::tclpdf::markPos::Subtable \
+                [markBytes type 5 components $components] 5 0]] 0]]]
+        lappend answers [lindex [::tclpdf::markPos offsets $state {69 689}] 1]
+    }
+    set answers
+} -result {{-900 200} {0 0}}
+
+# --- coverage and class ranges, on bytes this file wrote itself ------------
+
+test markPos-11.1 {a range format 2 coverage reads its ranges} -body {
+    # The control: three sorted ranges, each with its own starting coverage
+    # index, which is what the parallel arrays are numbered by.
+    set bytes [binary format SuSu 2 2]
+    append bytes [binary format SuSuSu 10 12 0]
+    append bytes [binary format SuSuSu 20 21 3]
+    ::tclpdf::otLayout coverage $bytes 0
+} -result {10 0 11 1 12 2 20 3 21 4}
+
+test markPos-11.2 {an empty or overlapping range is skipped, not expanded} -body {
+    # "Array of glyph ranges - ordered by startGlyphID" (6.2.2), and reading
+    # that as a promise is what bounds the work: every record may name up to
+    # 65 536 glyphs, so a table whose records all say 0..65535 spends four
+    # thousand million turns of the loop. Measured on a 400 KB table built
+    # that way: eight minutes, growing, and not a word to say why.
+    #
+    # An end before the start is nonsense of the other kind and is skipped as
+    # well - unskipped it simply produced no glyphs, which is the same answer
+    # by accident rather than by decision.
+    set bytes [binary format SuSu 2 3]
+    append bytes [binary format SuSuSu 10 12 0]
+    append bytes [binary format SuSuSu 30 20 3]
+    append bytes [binary format SuSuSu 11 40 3]
+    ::tclpdf::otLayout coverage $bytes 0
+} -result {10 0 11 1 12 2}
+
+test markPos-11.3 {a nonsense range table costs milliseconds, not minutes} -body {
+    # 4000 records that all claim every glyph there is - 24 KB of table.
+    # Bounded, the whole thing is one range and 65 536 turns; unbounded it is
+    # 262 million, and measured on this machine the two are 10 milliseconds
+    # and 14 seconds. A real one of these was 400 KB and took eight minutes
+    # without a word. The limit below is a thousand times the honest cost and
+    # a seventh of the dishonest one, so it says something either way.
+    set count 4000
+    set bytes [binary format SuSu 2 $count]
+    for {set index 0} {$index < $count} {incr index} {
+        append bytes [binary format SuSuSu 0 65535 0]
+    }
+    set started [clock milliseconds]
+    set glyphs [::tclpdf::otLayout coverage $bytes 0]
+    set spent [expr {[clock milliseconds] - $started}]
+    list [dict size $glyphs] [expr {$spent < 2000}]
+} -result {65536 1}
+
+test markPos-11.4 {the same rule for a class definition} -body {
+    # ClassRangeRecords are sorted and do not overlap either (6.2.3). Class 0
+    # is still the class a glyph has by not being named, so a record naming it
+    # writes nothing - but it does close its range for the records after it.
+    set bytes [binary format SuSu 2 3]
+    append bytes [binary format SuSuSu 10 12 1]
+    append bytes [binary format SuSuSu 11 20 2]
+    append bytes [binary format SuSuSu 30 31 0]
+    ::tclpdf::otLayout classDef $bytes 0
+} -result {10 1 11 1 12 1}
+
 test markPos-9.9 {a table with no script at all still answers} -body {
     # A GPOS whose script list is empty: [langSys] has nothing to prefer and
     # nothing to fall back on, and neither has the walk over every script.

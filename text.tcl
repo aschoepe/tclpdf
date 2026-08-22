@@ -199,6 +199,20 @@ oo::define ::tclpdf::document::document {
   # overriding -family/-style/-size.
   method textWidth {string args} {
     my TextInit
+    # WHAT MAY BE NAMED HERE are the font options and nothing else: this
+    # measures a string, it does not place one, so -at, -align, -width, -tag
+    # and -hyphenate have no meaning for it. They used to be taken in silence
+    # - a caller measuring a paragraph with "-hyphenate de-DE" was handed the
+    # width of the unbroken line and nothing said the option had been dropped,
+    # and a misspelt "-siz 14" measured at the document's size. The list is
+    # [lineOptions], which is exactly what [TextMerge] below honours, so the
+    # gate and the road behind it cannot fall out of step; the refusal is
+    # [option parse]'s, so it names what there is.
+    set known {}
+    foreach name $::tclpdf::text::lineOptions {
+      dict set known $name {}
+    }
+    ::tclpdf::option parse $known $args "textWidth"
     # A string with line breaks in it is not one line, and measuring it as one
     # was wrong in both directions. It used to add the lines together - a table
     # cell of two lines asked for a column wide enough to hold both side by
@@ -323,7 +337,19 @@ oo::define ::tclpdf::document::document {
       # Measured before the mark as well: the width is where a character the
       # face has no glyph for is reported, and the drawing below meets the
       # same glyph run and cannot fail on it afterwards.
-      set lineWidth [my textWidth $string {*}$args]
+      #
+      # The FONT options alone travel over: [textWidth] measures and takes
+      # nothing else (see the gate at its head), while [text] has just
+      # accepted a longer list - -at, -align, -tag and the rest, which say
+      # where the line goes and not how wide it is. Every one of them has
+      # already been checked by [option parse] above, so this only picks.
+      set fontArgs {}
+      foreach {option value} $args {
+        if {[string trimleft $option -] in $::tclpdf::text::lineOptions} {
+          lappend fontArgs $option $value
+        }
+      }
+      set lineWidth [my textWidth $string {*}$fontArgs]
       switch -- [my TextAlign [dict get $options align] $state] {
         left {set shift 0}
         right {set shift $lineWidth}
@@ -1147,8 +1173,8 @@ oo::define ::tclpdf::document::document {
     set lead 0
     set mirrored {}
     if {[dict get $state direction] eq "rtl"} {
-      lassign [my TextReorder $run $adjustments $marks] run adjustments lead \
-          marks
+      lassign [my TextReorder $font $run $adjustments $marks] run adjustments \
+          lead marks
       set mirrored [my TextMirrored $run]
     }
     return [my TextEmit $font $state $run $adjustments $lead $mirrored $marks]
@@ -1194,7 +1220,7 @@ oo::define ::tclpdf::document::document {
   # are - a mark that has been moved to another place in the line must take
   # its offset along, or the accent ends up over whichever glyph inherited its
   # position. That alone is not enough, and [TextCluster] is the rest of it.
-  method TextReorder {run adjustments marks} {
+  method TextReorder {font run adjustments marks} {
     # One code point per glyph, and for a glyph that stands for several - a
     # ligature - the list of them: bidi.tcl treats the list as a letter of
     # its last code point's kind and never as a number. It used to be handed
@@ -1203,12 +1229,14 @@ oo::define ::tclpdf::document::document {
     # 12% where fribidi --rtl sets the Arabic "%12".
     set codes [lmap item $run {lindex $item 1}]
     # Which glyphs hang on the one before them, which is all [TextCluster]
-    # asks: a glyph GPOS moved is a glyph that was placed against its
-    # neighbour, and how far it was moved decides nothing about where in the
-    # line the two belong.
-    set attached [lmap offset $marks {
-      expr {[lindex $offset 0] != 0 || [lindex $offset 1] != 0}
-    }]
+    # asks - and it is asked of the CHARACTER rather than of the placement.
+    # See [TextAttached]: how far GPOS moved a glyph decides nothing about
+    # where in the line the two belong, and a mark the face does not anchor
+    # is not moved at all.
+    set attached [my TextAttached $font $run $marks]
+    # And where the ones the face does NOT anchor belong, which only a
+    # right-to-left line has to ask - see [TextUnplaced].
+    set marks [my TextUnplaced $font $run $attached $marks]
     set order {}
     set gaps {}
     foreach piece [my TextCluster [my TextPieces $codes rtl] $attached rtl] {
@@ -1237,6 +1265,115 @@ oo::define ::tclpdf::document::document {
       }
     }
     return [list $drawn $moved $lead $placed]
+  }
+
+  # Which glyphs of a run are MARKS: one flag per glyph, positionally aligned
+  # with it, in whatever order the run is in.
+  #
+  # THE QUESTION USED TO BE ANSWERED BY THE GPOS OFFSET, and that was the
+  # defect: a glyph the face moved counted as a mark and every other glyph as
+  # a letter. A mark the face does not anchor is moved by nothing, so it
+  # became a piece of its own in a right-to-left line, and the mark AFTER it
+  # hung on that piece instead of on the base - measured, LiberationSans,
+  # U+05D0 U+05C1 U+05B0 set with -direction rtl: the sheva came out 1286 font
+  # units, 0.63 em, from where hb-shape puts it, which is one letter width.
+  # Nothing was moved wrongly; the wrong glyph was called a letter.
+  #
+  # So a mark is recognised by having NO ADVANCE OF ITS OWN, which is what
+  # this package already treats as the mark of a mark: [textPath] asks exactly
+  # this on the other road (see [TextPathAttached]) and [FontRunWidth] says it
+  # in as many words - "the combining acute has an advance of 0". A glyph GPOS
+  # did move is a mark as well, whatever its advance: by anchoring it the face
+  # has said so.
+  #
+  # The three characters of [neverDrawn] have no advance either and are not
+  # marks - they are named rather than measured, exactly as textPath names
+  # them, because measuring cannot tell them apart.
+  #
+  # THE LIMIT, and it is the same one on both roads: a SPACING combining mark
+  # - Unicode general category Mc, a Devanagari matra with a width of its own -
+  # that the face does not anchor either is still taken for a letter here. The
+  # package has no Unicode mark table to ask, the advance is all there is, and
+  # every face measured anchors those marks. The neighbouring question, the
+  # canonical ORDER of two marks on one letter (UAX #15), is not answered here
+  # at all - see the head of [TextCluster].
+  method TextAttached {font run marks} {
+    set parsed [dict get [my state fonts] $font parsed]
+    # The code points rather than the characters: under Tcl 8.6 [format %c]
+    # cannot write an astral character, and a run may hold one.
+    set never [lmap character $::tclpdf::text::neverDrawn {scan $character %c}]
+    set flags {}
+    set index 0
+    foreach item $run {
+      lassign $item glyph codes
+      set flag 0
+      if {[llength $marks]} {
+        lassign [lindex $marks $index] dx dy
+        set flag [expr {$dx != 0 || $dy != 0}]
+      }
+      if {!$flag && [my FontAdvance $font $parsed $glyph] == 0
+          && [llength $codes] == 1 && [lindex $codes 0] ni $never} {
+        set flag 1
+      }
+      lappend flags $flag
+      incr index
+    }
+    return $flags
+  }
+
+  # Where a mark the face does not anchor belongs in a RIGHT-TO-LEFT line: at
+  # the pen its BASE was drawn at, which is not the pen that follows it.
+  #
+  # A mark with no anchor has no offset, and "no offset" means "draw at the
+  # pen" - which is right in a left-to-right line, where the pen after the
+  # base is the base's own end and the mark lands on it. Turn the line round
+  # and it stops being right, and not by a little: the pen of a right-to-left
+  # reading runs the other way, so what follows the base logically sits at the
+  # base's LEFT edge. Measured against hb-shape, LiberationSans, U+05D0 U+05C1
+  # U+05B0: the shin dot belongs at the alef's origin and the alef is 1286
+  # units wide.
+  #
+  # The offset written for it is [markPos]'s own formula with an anchor
+  # difference of zero - minus the advances between the base and the mark -
+  # which is what makes this a completion of the mark offsets rather than a
+  # second idea about them. In thousandths of the em, like every other one.
+  #
+  # ONLY where something changes: a run whose marks are all anchored comes
+  # back as it went in, and a run that had no offsets at all and gains none
+  # comes back as {} - so a right-to-left line without an unanchored mark
+  # keeps the bytes it has always had.
+  method TextUnplaced {font run attached marks} {
+    if {![llength $attached]} {
+      return $marks
+    }
+    set parsed [dict get [my state fonts] $font parsed]
+    set units [dict get $parsed unitsPerEm]
+    set count [llength $run]
+    set filled $marks
+    if {![llength $filled]} {
+      set filled [lrepeat $count [list 0 0]]
+    }
+    # The advances between the base of the cluster and the glyph being looked
+    # at, in font units. Reset at every glyph that is not a mark.
+    set walked 0
+    set any 0
+    for {set index 0} {$index < $count} {incr index} {
+      if {![lindex $attached $index]} {
+        set walked 0
+      } else {
+        lassign [lindex $filled $index] dx dy
+        if {$dx == 0 && $dy == 0 && $walked != 0} {
+          lset filled $index [list [expr {-$walked * 1000.0 / $units}] 0]
+          set any 1
+        }
+      }
+      set walked [expr {$walked + [my FontAdvance $font $parsed \
+          [lindex [lindex $run $index] 0]]}]
+    }
+    if {!$any && ![llength $marks]} {
+      return {}
+    }
+    return $filled
   }
 
   # The same pieces with every mark joined to what it hangs on: a piece whose
@@ -1274,6 +1411,20 @@ oo::define ::tclpdf::document::document {
   # Nothing else moves. A mark of zero advance contributes nothing to the
   # width of the piece it joins, so every other glyph of the line stays where
   # it was - only the two show operators inside the cluster swap places.
+  #
+  # WHAT IS KNOWINGLY LEFT OPEN: the CANONICAL ORDER of the marks inside the
+  # cluster (UAX #15). Two marks on one letter are canonically equivalent in
+  # either order when their combining classes differ, and a shaper sorts them
+  # by that class before it looks up an anchor; this package takes them as the
+  # caller wrote them. The cluster therefore comes out right - the marks stay
+  # with their base, which is what this method is for - but a face that
+  # anchors only the sorted order places the second mark by the first instead
+  # of by the base. Measured over the non-canonical orders of Hebrew and
+  # Arabic against hb-shape: most agree to the unit, the rest differ by up to
+  # a mark width. Sorting them would mean a combining-class table, which this
+  # package does not carry, and it would silently reorder what the caller
+  # wrote; a caller who wants the shaper's answer writes the marks in
+  # canonical order.
   method TextCluster {pieces attached direction} {
     if {![llength $attached]} {
       return $pieces
@@ -1392,6 +1543,49 @@ oo::define ::tclpdf::document::document {
     # an accent has to stay a superscript.
     set base [dict get $state rise]
     set size [dict get $state size]
+    # CHARACTER SPACING, and the mark is the one thing in the line that must
+    # not have it. Tc is added to the pen after EVERY glyph shown - 9.4.4,
+    # tx = ((w0 - Tj/1000) x Tfs + Tc + Tw) x Th - while a mark offset is
+    # computed from the ADVANCES alone: markPos.tcl walks back over the
+    # advances between the base and the mark and knows nothing of the text
+    # state. So a mark written at the pen that follows its base comes out one
+    # Tc too far right, the second mark of a letter two Tc, and "-spacing"
+    # slid every accent off its letter - measured, DejaVu Sans, "b" + U+0300:
+    # the stream for -spacing 10 was byte for byte the one for -spacing 0
+    # except for the "10 Tc" at its head, and 10 points is most of the letter.
+    #
+    # The gap in FRONT of the mark therefore carries the Tc back and the gap
+    # behind gives the same amount forward again, so the pen after the cluster
+    # is where it always was and the line stays as wide as [FontRunWidth]
+    # measured it. Counted per glyph drawn since the base, which is what the
+    # pen has collected.
+    #
+    # IN TJ UNITS, and that is what makes the compensation exact at any
+    # horizontal scaling: a TJ number and Tc are both multiplied by Th in the
+    # formula above, so the factor cancels and -stretch needs no second
+    # thought.
+    #
+    # TW IS NOT COMPENSATED, and that is not an oversight. Word spacing
+    # applies to the single-byte code 32 and to nothing else (9.3.3); this
+    # road is only ever taken by a face addressed through Identity-H, where
+    # every code is two bytes, so Tw moves nothing here whether it stands in
+    # the stream or not. See [TextTJ], which is the other half of the same
+    # fact. Measured with -wordSpacing 12 across a word boundary: the mark
+    # stays on its letter.
+    set step 0
+    if {[dict get $state spacing] != 0 && $size > 0} {
+      set step [expr {[dict get $state spacing] * 1000.0 / $size}]
+    }
+    # Only when there is a Tc to undo: a line without -spacing asks nothing
+    # of the font and keeps the bytes it has always had.
+    set attached {}
+    if {$step != 0} {
+      set attached [my TextAttached $font $run $marks]
+    }
+    # How many glyphs the pen has passed since the base of the cluster; -1
+    # until the first letter, so that a run OPENING with a mark - which hangs
+    # on nothing - carries nothing back.
+    set since -1
     # {actualText rise tokens} per piece, where a token is {glyph item} or
     # {gap number}. The gap AFTER a mirrored glyph opens the next piece,
     # which a TJ array takes as its first element.
@@ -1411,15 +1605,27 @@ oo::define ::tclpdf::document::document {
       if {[llength $marks]} {
         lassign [lindex $marks $index] dx dy
       }
-      if {$dx != 0 || $dy != 0} {
+      set carry 0
+      if {$step != 0} {
+        if {[lindex $attached $index]} {
+          if {$since >= 0} {
+            incr since
+            set carry [expr {$since * $step}]
+          }
+        } else {
+          set since 0
+        }
+      }
+      if {$dx != 0 || $dy != 0 || $carry != 0} {
         lappend segments [list {} $base $tokens]
         set tokens {}
         set own {}
-        if {$dx != 0} {
-          lappend own [list gap [expr {-$dx}]]
+        set ahead [expr {$carry - $dx}]
+        if {$ahead != 0} {
+          lappend own [list gap $ahead]
         }
         lappend own [list glyph [lindex $run $index]]
-        set back [expr {$value + $dx}]
+        set back [expr {$value + $dx - $carry}]
         if {$back != 0} {
           lappend own [list gap $back]
         }
@@ -1785,4 +1991,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.15
+package provide tclpdf::text 1.16

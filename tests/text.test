@@ -16,6 +16,8 @@ namespace import -force tcltest::*
 
 package require tclpdf
 package require tclpdf::text
+# The pen walk of section 21 needs the advances the font itself states.
+package require tclpdf::sfnt
 source [file join [file dirname [info script]] helper.tcl]
 
 set textFace [file join [file dirname [file dirname [file normalize [info script]]]] \
@@ -30,6 +32,11 @@ testConstraint haveType1 [file exists $type1Face]
 set kernFace [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts google Roboto-Regular.ttf]
 testConstraint haveKerning [file exists $kernFace]
+# A face with Hebrew marks that it does NOT anchor in every order - which is
+# what section 21 needs to ask which glyph a mark is.
+set liberationFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts liberation-fonts LiberationSans-Regular.ttf]
+testConstraint haveLiberation [file exists $liberationFace]
 # A reader from outside, for the tests that ask what comes back OUT of the
 # file: nothing inside this package can answer that.
 testConstraint havePdfToText [expr {[auto_execok pdftotext] ne {}}]
@@ -1845,10 +1852,14 @@ test text-19.8 {a character no face in the chain has is refused, with the chain 
   set doc [textChainDocument]
   $doc font -family body -size 11 -fallback jp
   set answers {}
-  foreach call {textWidth text} {
-    set code [catch {$doc $call "abc ཀ def" -at {20 40}} message options]
-    lappend answers [dict get $options -errorcode]
-  }
+  # Two calls rather than one loop over both: [textWidth] measures and takes
+  # font options only - it refuses -at by name - while [text] needs the point
+  # to set the line at. The refusal under test is the glyph's, and both roads
+  # have to report it the same way.
+  set code [catch {$doc textWidth "abc ཀ def"} message options]
+  lappend answers [dict get $options -errorcode]
+  set code [catch {$doc text "abc ཀ def" -at {20 40}} message options]
+  lappend answers [dict get $options -errorcode]
   set code [catch {$doc text "aaa bbb ccc ཀ ddd" -at {20 60} -width 100} \
       message options]
   lappend answers [dict get $options -errorcode]
@@ -2156,6 +2167,186 @@ test text-20.7 {a number run and a cluster live in the same right-to-left line} 
   textMarkOps [textMarkLine $arabicFace "\u0628\u0633\u0645 4711" -direction rtl]
 } -result {{glyphs {117 120 114 114 3 75 34 19}} {rise -0.62} {gap 205}\
     {glyphs 322} {gap -205} {rise 0}}
+# -- character spacing and the mark ------------------------------------------
 
+# Where each glyph of a line is DRAWN, in font units, with the text state
+# honoured: Tc is added to the pen after every glyph shown (9.4.4) and a TJ
+# number is subtracted from it. The face is set at its own em, so a font unit
+# is a point here and the numbers are the font's own.
+#
+# Scaffolding rather than a second implementation: what is being asked is
+# whether the OFFSET BETWEEN a mark and its base survives the text state, and
+# no existing helper walks the pen.
+proc textMarkDrawn {face text args} {
+    set parsed [::tclpdf::sfnt read $face]
+    set doc [tclpdf new -unit pt]
+    $doc page add
+    $doc font embed body $face
+    $doc text $text -at {0 100} -family body \
+        -size [dict get $parsed unitsPerEm] {*}$args
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    set pen 0.0
+    set spacing 0.0
+    set drawn {}
+    foreach line [split $stream \n] {
+        set line [string trim $line]
+        if {[regexp {^(-?[0-9.]+) Tc$} $line -> value]} {
+            set spacing $value
+            continue
+        }
+        if {![string match {*Tj} $line] && ![string match {*TJ} $line]} {
+            continue
+        }
+        foreach token [lindex [::tclpdfTest::shows $line] 0] {
+            if {[string index $token 0] ne "("} {
+                # A TJ number is SUBTRACTED from the advance (9.4.3).
+                set pen [expr {$pen - $token * [dict get $parsed unitsPerEm]
+                    / 1000.0}]
+                continue
+            }
+            foreach glyph [::tclpdfTest::glyphsOf $token] {
+                lappend drawn [list $glyph [format %.3f $pen]]
+                set pen [expr {$pen + [::tclpdf::sfnt advance $parsed $glyph]
+                    + $spacing}]
+            }
+        }
+    }
+    return $drawn
+}
+
+# The distance from the first glyph drawn to every later one - which is what a
+# mark on a letter is, and what may not change when the line is spaced out.
+proc textMarkSpread {drawn} {
+    set base [lindex [lindex $drawn 0] 1]
+    return [lmap glyph [lrange $drawn 1 end] {
+        set gap [expr {[lindex $glyph 1] - $base}]
+        # A thousandth of a font unit is not a difference, and without this a
+        # gap of exactly zero comes out of the arithmetic as "-0.000".
+        format %.3f [expr {abs($gap) < 0.0005 ? 0.0 : $gap}]
+    }]
+}
+
+# How far the LAST glyph drawn stands from the one in front of it - which is
+# what a mark on its base is, and the one distance the text state may not
+# change. The spread of the whole line does change with -spacing: that is what
+# -spacing is for.
+proc textMarkHang {drawn} {
+    return [format %.3f [expr {[lindex [lindex $drawn end] 1]
+        - [lindex [lindex $drawn end-1] 1]}]]
+}
+
+test text-21.1 {-spacing does not slide the mark off its letter} \
+    -constraints haveFace -body {
+  # Tc is added to the pen after EVERY glyph (9.4.4), a mark offset is
+  # computed from the ADVANCES alone (markPos.tcl), and the mark is written at
+  # the pen that follows its base - so it came out one Tc too far right.
+  # Measured before the fix: the stream for -spacing 10 was byte for byte the
+  # one for -spacing 0 except for the "10 Tc" at its head, and DejaVu's grave
+  # sat 10 points beside the b instead of over it.
+  #
+  # 790 font units is where hb-shape puts the grave of "b" - the b's advance
+  # of 1300 less the 510 the anchor pulls back - and that number may not
+  # depend on the text state at all.
+  set answers {}
+  foreach options {{} {-spacing 10} {-spacing -5} {-stretch 50}
+      {-spacing 10 -stretch 50} {-spacing 10 -rise 4}} {
+    lappend answers [textMarkSpread [textMarkDrawn $::textFace "b̀" \
+        {*}$options]]
+  }
+  lsort -unique $answers
+} -result 790.000
+
+test text-21.2 {the second mark of a letter carries two Tc, not one} \
+    -constraints haveKerning -body {
+  # The pen has passed TWO glyphs since the base by the time the second mark
+  # is written, so the amount to give back is twice the character spacing.
+  # Counted per glyph drawn since the base - which is what [TextEmit] does and
+  # what a single correction would have got wrong by exactly one Tc.
+  set plain [textMarkSpread [textMarkDrawn $::kernFace "b̀́"]]
+  set spaced [textMarkSpread [textMarkDrawn $::kernFace "b̀́" \
+      -spacing 12]]
+  list [llength $plain] [string equal $plain $spaced]
+} -result {2 1}
+
+test text-21.3 {a word space between the letters changes nothing either} \
+    -constraints haveFace -body {
+  # -wordSpacing is NOT compensated, and this is the measurement that says it
+  # need not be: word spacing applies to the single-byte code 32 (9.3.3), an
+  # embedded face is addressed through Identity-H where no byte 32 stands
+  # alone, and the width is produced by a TJ number instead - which lands
+  # BEFORE the base, not between the base and its mark.
+  set plain [textMarkSpread [textMarkDrawn $::textFace "a b̀"]]
+  set spaced [textMarkSpread [textMarkDrawn $::textFace "a b̀" \
+      -wordSpacing 12]]
+  # The mark is the last of the four glyphs; the gap in front of the b is what
+  # the word spacing widens.
+  list [expr {[lindex $plain end] - [lindex $plain end-1]}] \
+      [expr {[lindex $spaced end] - [lindex $spaced end-1]}]
+} -result {790.0 790.0}
+
+test text-21.4 {a right-to-left line spaced out keeps its cluster together} \
+    -constraints haveArabic -body {
+  # The same question on the other road: the pieces of the line are turned
+  # round, the cluster is not, and the Tc between the base and its dot has to
+  # be given back there as well.
+  # The DOT of the beh is the last glyph drawn and its skeleton the one
+  # before it, so the hang of the cluster is what has to survive; the letters
+  # around it move apart, which is what -spacing was asked for.
+  set plain [textMarkHang [textMarkDrawn $::arabicFace "بسم" \
+      -direction rtl]]
+  set spaced [textMarkHang [textMarkDrawn $::arabicFace \
+      "بسم" -direction rtl -spacing 30]]
+  list $plain [string equal $plain $spaced]
+} -result {70.000 1}
+
+test text-21.5 {a line without -spacing keeps the bytes it always had} \
+    -constraints haveFace -body {
+  # The compensation may cost nothing where there is no Tc: the tokens of a
+  # spaced line differ, those of an unspaced one may not. Same shape as
+  # text-20.3, one layer down.
+  textMarkOps [textMarkLine $::textFace "b̀"]
+} -result {{glyphs 69} {rise 3.64258} {gap 249.02344} {glyphs 689} {gap -249.02344} {rise 0}}
+
+test text-21.6 {an unanchored mark between two marks does not shift the second} \
+    -constraints haveLiberation -body {
+  # WHICH GLYPH IS A MARK used to be answered by the GPOS offset: a glyph the
+  # face had moved was a mark and every other glyph a letter. LiberationSans
+  # anchors neither the shin dot U+05C1 nor the sheva U+05B0 in this order, so
+  # the dot counted as a LETTER, became a piece of its own in the reversed
+  # line, and the sheva hung on it instead of on the alef - 1286 font units,
+  # 0.63 em, from where hb-shape puts it, which is one letter width.
+  #
+  # hb-shape --direction=rtl --script=hebr on the same three code points puts
+  # the alef at 0 with an advance of 1286, the shin dot at 0 - the alef's own
+  # origin, because a mark with no anchor sits at the pen of a reading that
+  # runs the other way - and the sheva at 660. Those three numbers, and the
+  # middle one is the one that used to drag the third along with it.
+  set drawn [textMarkDrawn $::liberationFace "אְׁ" \
+      -direction rtl]
+  list [llength $drawn] [textMarkSpread $drawn]
+} -result {3 {0.000 660.000}}
+
+test text-21.7 {textWidth takes font options and refuses the rest} -body {
+  # [textWidth] measures a string; where it goes, how it is aligned, what tag
+  # it carries and whether it may be hyphenated are not its business. All of
+  # them used to be swallowed without a word - a paragraph measured with
+  # "-hyphenate de-DE" came back as the unbroken line, and "-siz 14" measured
+  # at the document's size. Same pattern as the option gates of round 3.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 12
+  set answers {}
+  foreach option {-hyphenate -at -width -align -tag -siz} {
+    lappend answers [catch {$doc textWidth "Rechnung" $option x}]
+  }
+  # And the ones it does take still work.
+  lappend answers [expr {[$doc textWidth Rechnung -size 24] >
+      [$doc textWidth Rechnung -size 12]}]
+  lappend answers [catch {$doc textWidth Rechnung -family times -spacing 2 \
+      -direction ltr}]
+  $doc destroy
+  set answers
+} -result {1 1 1 1 1 1 1 0}
 
 cleanupTests

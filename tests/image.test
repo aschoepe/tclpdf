@@ -1769,6 +1769,32 @@ test image-mask-18.14 {a mask with a profile is refused naming -icc 0, which the
       [regexp {/SMask \d+ 0 R} $bytes]
 } -result {1 1 1}
 
+test image-mask-18.14a {a picture with a mask of its own may not become a mask} -body {
+  # Table 143 lists three entries a soft-mask image may not have, and the
+  # third is the one the transparency check above cannot see: Mask and SMask
+  # "shall be absent". A picture embedded with -mask reaches the file wearing
+  # one, whatever format it is - the file brought no transparency, the CALLER
+  # put it there. Measured on 2026-08-22, before this check stood: a grey
+  # picture with -mask became another picture's soft mask without a word, and
+  # so did a JPEG, which brings no transparency of any kind.
+  set doc [tclpdf new]
+  $doc page add
+  set grey [::tclpdfTest::png 2 1 8 0 "\x00\x00\xff"]
+  $doc image embed cover -data $grey
+  # a grey picture that itself wears a soft mask
+  $doc image embed masked -data $grey -mask cover
+  set code [catch {$doc image embed pic -mask masked \
+      -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]} message]
+  # and one that wears an explicit (stencil) mask
+  $doc image embed cut -data [stencilPng] -stencil 1
+  $doc image embed stencilled -data $grey -mask cut
+  set second [catch {$doc image embed two -mask stencilled \
+      -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]} other]
+  $doc destroy
+  list $code $second [string match {*mask of its own*Table 143*} $message] \
+      [string match {*mask of its own*Table 143*} $other]
+} -result {1 1 1 1}
+
 test image-mask-18.15 {a picture that brings its own transparency wears no second mask} -body {
   # Table 87: an SMask entry "shall override ... the image's Mask entry, if
   # any". A picture with an alpha channel already has one, and a second
@@ -2262,6 +2288,24 @@ test image-tiff-20.7 {ResolutionUnit 1 is a ratio and no measure} -body {
       [dict get $info resolution] [dict get $info pixelAspect]
 } -result {{} {} XResolution 0.5}
 
+test image-tiff-20.7a {a ResolutionUnit the format does not define states nothing} -body {
+  # TIFF 6.0 has three units - 1 (none), 2 (inch), 3 (cm) - and a 0 is
+  # neither a measure nor the declared ratio that unit 1 is. Read as inches
+  # (which it was until 2026-08-22, everything but 1 falling through to the
+  # inch case) a file saying "200, unit 0" would place a 1728-pixel scan at
+  # 219 mm; read as a ratio it would claim something the file never said. So
+  # the dpi fields stay empty and "resolution" answers none, exactly as for a
+  # file that carries no resolution at all - which is what this one is.
+  set doc [tclpdf new -unit mm]
+  $doc image embed pic -data [::tclpdfTest::tiffOne {296 3 0} \
+      {282 5 {200 1}} {283 5 {200 1}}]
+  set info [$doc image info pic]
+  set size [lmap value [$doc image size pic] {format %.4f $value}]
+  $doc destroy
+  list [dict get $info xResolution] [dict get $info yResolution] \
+      [dict get $info resolution] [dict get $info pixelAspect] $size
+} -result {{} {} none 1.0 {1.4111 1.4111}}
+
 test image-tiff-20.8 {a file that states nothing says so, and 72 is assumed} -body {
   set doc [tclpdf new -unit mm]
   $doc image embed pic -data [::tclpdfTest::tiffOne {282 5 {0 1}} {283 5 {0 1}}]
@@ -2474,13 +2518,18 @@ test image-tiff-20.20 {a TIFF in one part may be a soft mask} -body {
 } -result {1 2}
 
 test image-tiff-20.21 {a stencil is a PNG, and the refusal says why not a TIFF} -body {
+  # And it carries the code the manual promises: "trap {TCLPDF TIFF} catches
+  # the lot" is a contract, and this refusal is the one that reached the
+  # caller without a code until 2026-08-22 - a caller trapping the prefix saw
+  # every other TIFF refusal and not this one.
   set doc [tclpdf new]
   set code [catch {$doc image embed stamp -data [::tclpdfTest::tiffOne {258 3 1} \
-      {262 3 0} {279 4 4}] -stencil 1} message]
+      {262 3 0} {279 4 4}] -stencil 1} message options]
   $doc destroy
   list $code [string match {*ONE-BIT PNG*} $message] \
-      [string match {*stacked XObjects*} $message]
-} -result {1 1 1}
+      [string match {*stacked XObjects*} $message] \
+      [dict get $options -errorcode]
+} -result {1 1 1 {TCLPDF TIFF STENCIL}}
 
 test image-tiff-20.22 {WhiteIsZero reaches the file as a Decode array} -body {
   # Photometric 0 says a zero sample is white; DeviceGray says it is black.

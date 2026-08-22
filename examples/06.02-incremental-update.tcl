@@ -39,20 +39,35 @@ source [file join $here common.tcl]
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "06.02-incremental-update.pdf"}]
 
+# The one line that stands inside the tinted box, on every one of the three
+# pages. It is a variable because the three pages are written by two different
+# roads - [text] here, hand-written stream operators in [appendPage] - and two
+# copies of the sentence would sooner or later be two different sentences.
+# Free of parentheses and backslashes, which a literal string in a content
+# stream would have to escape.
+set boxLine "Every revision of this file ends in its own %%EOF."
+
 # -- revision 1: an ordinary document, written the ordinary way -------------
 
 set doc [tclpdf new -unit pt -format a4]
 $doc info Title "tclpdf example: an incremental update"
 $doc page add
+# tclpdf counts y from the TOP; the raw stream operators that write the two
+# appended pages below count from the BOTTOM (PDF's own convention). So this
+# first page - written the ordinary way - is placed against the page height,
+# so that its heading, paragraph and box land byte-for-place where the raw
+# "60 760 Td", "60 730 Td" and "60 640 475 60 re" put them on pages 2 and 3.
+lassign [$doc page size] pageWidth pageHeight
 $doc font -family helvetica -style bold -size 20
-$doc text "Revision 1" -at {60 760}
+$doc text "Revision 1" -at [list 60 [expr {$pageHeight - 760}]]
 $doc font -style {} -size 11
 $doc text "This page was written by tclpdf in the ordinary way, in one\
     piece. The two pages behind it were appended afterwards, without a\
-    single byte of this one being rewritten." -at {60 730} -width 475
-$doc rect -at {60 640} -size {475 60} -fill #efe8f6
+    single byte of this one being rewritten." \
+    -at [list 60 [expr {$pageHeight - 730}]] -width 475
+$doc rect -at [list 60 [expr {$pageHeight - 700}]] -size {475 60} -fill #efe8f6
 $doc font -size 10
-$doc text "Every revision of this file ends in its own %%EOF." -at {75 670}
+$doc text $boxLine -at [list 75 [expr {$pageHeight - 670}]]
 exampleFooter $doc
 $doc write $target
 $doc destroy
@@ -88,7 +103,13 @@ proc firstKid {upd pages} {
 # Add one page to the file, with one line of text on it. Four objects change:
 # the new page, its content stream, and - because a page tree has to name its
 # kids and count them - a second copy of the page tree node.
+#
+# The sheet is the same sheet page 1 is: heading, paragraph, tinted box and
+# the line inside it, at the same coordinates. Only the way it is written
+# differs, which is the whole point of the example - so anything that differs
+# BESIDES that would be read as a difference the update caused.
 proc appendPage {path heading line} {
+    set note $::boxLine
     set upd [::tclpdf::update open $path]
     set pages [pageTree $upd]
     set model [$upd body [firstKid $upd $pages]]
@@ -103,7 +124,8 @@ proc appendPage {path heading line} {
     set page [$upd reserve]
     set content [$upd addStream {} "BT /$face 20 Tf 60 760 Td ($heading) Tj ET\n\
         BT /$face 11 Tf 60 730 Td ($line) Tj ET\n\
-        0.93 0.91 0.96 rg 60 640 475 60 re f\n"]
+        0.93 0.91 0.96 rg 60 640 475 60 re f\n\
+        BT /$face 10 Tf 0 g 75 670 Td ($note) Tj ET\n"]
     # Built through the same infrastructure the package writes everything
     # with: the keys become names, the values are PDF syntax already.
     $upd put $page [::tclpdf::pdfObj dictionary [list \
@@ -156,7 +178,10 @@ if {!$unchanged} {
     # moved is not an incremental update, whatever else is right about it.
     return -code error "tclpdf: the original bytes did not survive the update"
 }
-puts "  trailers in the file: [llength [regexp -all -inline {%%EOF} $bytes]],\
+# Counted on "startxref", not on "%%EOF": the appended pages carry their
+# content stream uncompressed, so the sentence printed inside their box - which
+# names %%EOF - would be counted as a revision. Five for three, measured.
+puts "  trailers in the file: [llength [regexp -all -inline {startxref} $bytes]],\
     each with its own cross-reference section"
 puts "  written: $target"
 

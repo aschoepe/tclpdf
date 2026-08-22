@@ -628,6 +628,19 @@ test textPath-9.9 {a right-to-left cluster keeps its base and its mark together}
   # and this test is about the ORDER, not about the shapes: the fatha U+064E
   # follows its beh in the same show operator, and the sin drawn before them
   # sits further along the path - the path runs on while the reading runs back.
+  #
+  # The result read {379 614} until 2026-08-22 - the fatha, glyph 379, drawn
+  # in FRONT of its beh, glyph 614 - which is what the comment above says must
+  # not happen. Unshaped, this face anchors neither of them (markPos answers
+  # {0 0} for the pair), and the cluster was held together by the GPOS offset
+  # alone, so with no offset the two were turned round like any other pair of
+  # letters. A mark drawn before its base sits at the pen its base has not
+  # left yet - the whole letter width away from where it belongs. What the
+  # test pinned was the defect. The beh is drawn first now, and the fatha
+  # follows it in a TJ array that walks the pen back over the beh's advance:
+  # a mark with no anchor belongs at the pen of a RIGHT-TO-LEFT reading,
+  # which is the base's own origin and not its far end - hb-shape puts it
+  # there too. Two show operators for the cluster, still one text object.
   set doc [tclpdf new -unit mm -compress 0]
   $doc page add
   $doc font embed face $::markArabic
@@ -636,7 +649,7 @@ test textPath-9.9 {a right-to-left cluster keeps its base and its mark together}
   set stream [$doc page content]
   $doc destroy
   list [::tclpdfTest::starts $stream] [::tclpdfTest::glyphIds $stream]
-} -result {{304.45748 324.71748} {32 {379 614}}}
+} -result {{304.45748 324.71748} {32 614 379}}
 
 
 cleanupTests

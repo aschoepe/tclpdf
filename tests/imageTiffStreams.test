@@ -264,11 +264,35 @@ test imageTiffStreams-4.5 {a repeat run with nothing to repeat is refused} -body
 } -result {TCLPDF TIFF DAMAGED}
 
 test imageTiffStreams-4.6 {a repeat run passes through} -body {
-    set packed \xfd\x41\x03abcd
+    # Twice four repeated bytes and twice four literal ones: the sixteen
+    # samples the 4 x 4 fixture asks for, in the two run shapes PackBits has.
+    set packed \xfd\x41\x03abcd\xfd\x41\x03abcd
     set result [streamsOf {259 3 32773} [list 279 4 [string length $packed]] \
         -data $packed]
     dict get [partOf $result] data
-} -result "\xfd\x41\x03abcd\x80"
+} -result "\xfd\x41\x03abcd\xfd\x41\x03abcd\x80"
+
+test imageTiffStreams-4.7 {runs that decode to less than the picture are refused} -body {
+    # The check [Fit] makes for the ways that hold their samples, made here
+    # for the one way that never does: the runs are counted as they are
+    # walked, which costs nothing because the walk happens anyway. Eight
+    # bytes of samples where the tags promise sixteen is a truncated picture,
+    # and a reader given one draws the rest from whatever follows.
+    set packed \xfd\x41\x03abcd
+    ::tclpdfTest::refusal {streamsOf {259 3 32773} \
+        [list 279 4 [string length $packed]] -data $packed}
+} -result {TCLPDF TIFF DAMAGED}
+
+test imageTiffStreams-4.8 {a padded last strip is not refused, and not cut either} -body {
+    # The other half of [Fit]'s rule: a writer may pad its last strip, and a
+    # RunLengthDecode stream declares no length - the reader takes Width x
+    # Height samples and stops. Four rows of four plus one row too many.
+    set packed [packBitsRows "$::samples\x01\x02\x03\x04"]
+    set result [streamsOf {259 3 32773} [list 279 4 [string length $packed]] \
+        -data $packed]
+    list [dict get $result passThrough] \
+        [expr {[dict get [partOf $result] data] eq "$packed\x80"}]
+} -result {1 1}
 
 test imageTiffStreams-4.7 {PackBits strips are joined - the coding carries no state} -body {
     set packed [packBitsRows $::samples]
@@ -344,6 +368,25 @@ test imageTiffStreams-5.6 {at 16 bits little-endian the predictor is undone here
     list [dict exists [dict get [partOf $result] pairs] DecodeParms] $out
 } -result [list 0 {1000 1050 1100 1150 2000 2050 2100 2150}]
 
+test imageTiffStreams-5.7 {at 16 bits big-endian the predictor is undone here too} -body {
+    # The trap V14 named: a big-endian file is already in PDF's byte order, so
+    # nothing swaps it - and the passed-through /Predictor 2 at 16 bits then
+    # renders as noise, because no reader undoes the per-component difference
+    # at that depth. So it is resolved here in the file's own (big) order and
+    # the samples travel plain, with no DecodeParms left for the reader.
+    set values {1000 1050 1100 1150 2000 2050 2100 2150}
+    set differenced {}
+    foreach {a b c d} $values {
+        lappend differenced $a [expr {$b - $a}] [expr {$c - $b}] [expr {$d - $c}]
+    }
+    set packed [lzwLiteral [binary format Su* $differenced]]
+    set result [streamsOf {258 3 16} {259 3 5} {317 3 2} {257 3 2} {278 3 2} \
+        [list 279 4 [string length $packed]] -data $packed]
+    binary scan [samplesOf $result] Su* out
+    list [dict get $result passThrough] \
+        [dict exists [dict get [partOf $result] pairs] DecodeParms] $out
+} -result [list 0 0 {1000 1050 1100 1150 2000 2050 2100 2150}]
+
 # --- Deflate ---------------------------------------------------------------
 
 test imageTiffStreams-6.1 {Deflate strips go into the PDF as they stand} -body {
@@ -401,6 +444,40 @@ test imageTiffStreams-6.5 {16 bits little-endian are taken apart and put back} -
     binary scan [samplesOf $result] Su* values
     list [dict get $result passThrough] [llength [dict get $result parts]] $values
 } -result {0 1 {1 2 3 4 5 6 7 8}}
+
+test imageTiffStreams-6.6 {a 16-bit big-endian Deflate predictor is taken apart, not passed on} -body {
+    # V14 on the Deflate path: a big-endian 16-bit file needs no byte swap, so
+    # before the fix it went through with /Predictor 2 for the reader to undo -
+    # which no reader does correctly at 16 bits. Now the strip is inflated, the
+    # difference undone in the file's order, and the samples re-deflated plain.
+    set values {1000 1050 1100 1150 2000 2050 2100 2150}
+    set differenced {}
+    foreach {a b c d} $values {
+        lappend differenced $a [expr {$b - $a}] [expr {$c - $b}] [expr {$d - $c}]
+    }
+    set packed [::tclpdf::filter encodeFlate [binary format Su* $differenced]]
+    set result [streamsOf {258 3 16} {259 3 8} {317 3 2} {257 3 2} {278 3 2} \
+        [list 279 4 [string length $packed]] -data $packed]
+    binary scan [samplesOf $result] Su* out
+    list [dict get $result passThrough] \
+        [dict exists [dict get [partOf $result] pairs] DecodeParms] $out
+} -result [list 0 0 {1000 1050 1100 1150 2000 2050 2100 2150}]
+
+# --- predictor 2 where PDF cannot carry it ---------------------------------
+
+test imageTiffStreams-6.7 {predictor 2 on an uncompressed file is refused} -body {
+    # PDF undoes a predictor only for Flate and LZW data; an uncompressed
+    # strip has nowhere to carry it, and drawing the differenced samples as
+    # they stand would be a shifted picture no validator sees.
+    ::tclpdfTest::refusal {streamsOf {317 3 2} -data $::samples}
+} -result {TCLPDF TIFF PREDICTOR}
+
+test imageTiffStreams-6.8 {predictor 2 on a PackBits file is refused} -body {
+    # RunLengthDecode takes no Predictor parameter at all.
+    set data [packBitsRows $::samples]
+    ::tclpdfTest::refusal {streamsOf {259 3 32773} {317 3 2} \
+        [list 279 4 [string length $data]] -data $data}
+} -result {TCLPDF TIFF PREDICTOR}
 
 # --- JPEG ------------------------------------------------------------------
 

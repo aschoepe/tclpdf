@@ -48,6 +48,61 @@ set ::tclpdfTest::face [file join $::tclpdfTest::root examples assets fonts \
 testConstraint haveInvoice [expr {[file exists $::tclpdfTest::invoice]
     && [file exists $::tclpdfTest::face]}]
 
+# "qpdf --check" over an encrypted file, with the ONE complaint this package
+# knowingly earns taken out - and only that one.
+#
+# ISO 32000-2, Table 20 offers /Length "(Optional; PDF 1.4; only if V is 2 or
+# 3; deprecated in PDF 2.0)", with a value "in the range 40 to 128", so a
+# /V 5 dictionary has no such entry - see the head of [EncryptWrite]. qpdf
+# writes /Length 256 into its own /V 5 files all the same and reads the entry
+# back whether the version allows it or not, so over a file without it it
+# says
+#
+#   WARNING: ... dictionary key /Length: operation for integer attempted on
+#   object of type null: returning 0
+#
+# and leaves with status 3. That is qpdf describing its own reading, not the
+# file: --decrypt, --show-encryption, pdfinfo and every reader open the
+# document without a word, and the two tools that judge conformance -
+# veraPDF for the profiles, the table itself for the entry - are on the other
+# side.
+#
+# A FILTER AND NOT A BLINDFOLD: every OTHER warning and every error comes
+# back, and an exit status that means an error rather than a warning is left
+# as it was - so the two tests that use qpdf as their oracle still go red for
+# everything else.
+#
+# Answers {status complaints}: the status with a warnings-only exit turned
+# into success where the known entry was all of it, and the list of the
+# warning and error lines that were not it.
+proc ::tclpdfTest::encryptQpdf {path args} {
+    set status [catch {exec qpdf {*}$args --check $path} output options]
+    # qpdf leaves with 3 when it only warned and with 2 when it found an
+    # error, and [exec] puts that number into -errorcode. The difference is
+    # the whole point of this filter.
+    set exit {}
+    if {[lindex [dict get $options -errorcode] 0] eq "CHILDSTATUS"} {
+        set exit [lindex [dict get $options -errorcode] 2]
+    }
+    set complaints {}
+    set known 0
+    foreach line [split $output \n] {
+        if {[string match \
+                {WARNING:*dictionary key /Length: operation for integer*} \
+                $line]} {
+            set known 1
+            continue
+        }
+        if {[string match WARNING:* $line] || [string match *ERROR* $line]} {
+            lappend complaints $line
+        }
+    }
+    if {$status && $exit == 3 && $known && ![llength $complaints]} {
+        set status 0
+    }
+    return [list $status $complaints]
+}
+
 # An encrypted document with one line of text on one page. Written by the
 # tests that need a file rather than by each of them building its own: an
 # [encrypt] call runs algorithm 2.B four times and costs the better part of
@@ -333,14 +388,14 @@ test encrypt-2.7 {a page without content is an empty stream, and qpdf takes it} 
     $doc page add
     $doc write $path
     $doc destroy
-    set status [catch {exec qpdf --password=secret --check $path} output]
+    lassign [::tclpdfTest::encryptQpdf $path --password=secret] status \
+        complaints
     # The stream as it stands in the file: a 16-byte vector and one pad
     # block, and /Length saying 32.
     set bytes [::tclpdfTest::readBytes $path]
     file delete $path
-    list $status [string match "*No syntax or stream encoding errors*" $output] \
-        [regexp {/Length 32 >>\nstream} $bytes]
-} -result {0 1 1}
+    list $status $complaints [regexp {/Length 32 >>\nstream} $bytes]
+} -result {0 {} 1}
 
 test encrypt-2.8 {an attachment with null bytes survives byte for byte} -constraints qpdf -body {
     set path [::tclpdfTest::scratch encrypt-attach.pdf]
@@ -407,12 +462,12 @@ test encrypt-3.1 {the dictionary says what the standard asks it to} -body {
     set number [dict get [$doc state reservations] encrypt.dictionary]
     set body [[$doc writer] body $number]
     $doc destroy
-    lmap pattern {{/Filter /Standard} {/V 5} {/R 6} {/Length 256}
+    lmap pattern {{/Filter /Standard} {/V 5} {/R 6}
             {/CFM /AESV3} {/AuthEvent /DocOpen} {/StmF /StdCF} {/StrF /StdCF}
             {/P -3372} {/EncryptMetadata true}} {
         expr {[string first $pattern $body] >= 0}
     }
-} -result {1 1 1 1 1 1 1 1 1 1}
+} -result {1 1 1 1 1 1 1 1 1}
 
 test encrypt-3.2 {its own strings are direct, unencrypted and the right length} -body {
     # 7.6.2: the strings of the encryption dictionary "shall not be
@@ -475,6 +530,34 @@ test encrypt-3.5 {a document without encryption has no state and no trailer entr
     $doc destroy
     set result
 } -result {{} {} {} {}}
+
+test encrypt-3.6 {no /Length in the dictionary, and the crypt filter keeps its own} -body {
+    # ISO 32000-2, Table 20 offers /Length "(Optional; PDF 1.4; only if V is
+    # 2 or 3; deprecated in PDF 2.0)" with a value "in the range 40 to 128" -
+    # so a /V 5 dictionary has none, and a "/Length 256" in one stated bits
+    # where the table allows at most 128, for a revision that has no such
+    # entry. [encrypt] requires PDF 2.0, so every dictionary this module
+    # writes lands in a file the entry was withdrawn from.
+    #
+    # The crypt filter's own /Length is a DIFFERENT entry and stays: Table 25
+    # asks it of a crypt filter dictionary, where it is the key length in
+    # BYTES - 32 for AES-256.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -user secret
+    $doc page add
+    set path [::tclpdfTest::scratch encrypt-nolength.pdf]
+    $doc write $path
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    set body [[$doc writer] body \
+        [dict get [$doc state reservations] encrypt.dictionary]]
+    $doc destroy
+    # In the object AND in the file - the dictionary is not encrypted, so the
+    # two say the same thing and both are asked.
+    list [regexp {/Length 256} $body] [regexp {/Length 256} $bytes] \
+        [regexp {/CFM /AESV3 /AuthEvent /DocOpen /Length 32} $body] \
+        [llength [regexp -all -inline {/Length 32} $body]]
+} -result {0 0 1 1}
 
 #
 # --- the refusals -----------------------------------------------------------
@@ -617,6 +700,37 @@ test encrypt-4.14 {the same calls after encrypt are fine} -body {
   list $code [expr {$written > 0}]
 } -result {0 1}
 
+test encrypt-4.15 {an empty user password with no owner password is refused} -body {
+    # Without -owner the user password is the owner password as well
+    # (encrypt-2.6), so with an empty -user BOTH are empty - and the empty
+    # password is the first one every reader tries: it authenticates as the
+    # OWNER (7.6.4.4.11), and an owner is not subject to /P. Every permission
+    # the call withholds would stand in the file and be lifted by everyone
+    # who opened it.
+    #
+    # Measured before the refusal: "encrypt -permissions {print}" with
+    # neither password produced P -3392, and qpdf answered "Supplied password
+    # is owner password" to the empty one.
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    set code [catch {$doc encrypt -permissions {print}} message]
+    # Nothing was applied: a refused call leaves the document as it was.
+    set after [list [$doc encrypt state] [$doc state stringEncryptor]]
+    $doc destroy
+    # The three that are refused - the pair is what decides it, not the
+    # permissions - and the two that stand, where an owner password or a user
+    # password holds the restriction.
+    set result {}
+    foreach options {{} {-permissions all} {-user {}}
+            {-permissions {print} -owner full} {-permissions {print}
+            -user secret}} {
+        set doc [tclpdf new -unit pt -format a4 -version 2.0]
+        lappend result [catch {$doc encrypt {*}$options}]
+        $doc destroy
+    }
+    list $code $after [string match "*empty -user and no -owner*" $message] \
+        [string match "*7.6.4.4.11*" $message] $result
+} -result {1 {{} {}} 1 1 {1 1 1 0 0}}
+
 test encrypt-4.11 {an unknown subcommand} -body {
     set doc [tclpdf new -unit pt -format a4 -version 2.0]
     set status [catch {$doc encrypt zustand} message]
@@ -645,8 +759,8 @@ test encrypt-5.1 {two writes give two valid files, and no second set of objects}
     $doc write $second
     set result [list [expr {[[$doc writer] count] == $count}] \
         [expr {[::tclpdfTest::readBytes $first] eq [::tclpdfTest::readBytes $second]}] \
-        [catch {exec qpdf --password=secret --check $first}] \
-        [catch {exec qpdf --password=secret --check $second}]]
+        [lindex [::tclpdfTest::encryptQpdf $first --password=secret] 0] \
+        [lindex [::tclpdfTest::encryptQpdf $second --password=secret] 0]]
     $doc destroy
     file delete $first $second
     set result

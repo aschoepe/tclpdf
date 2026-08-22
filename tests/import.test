@@ -237,6 +237,71 @@ proc ::tclpdfTest::buildpdf {name objects {extra {}}} {
     return $path
 }
 
+# One field of a cross-reference stream entry: "value" as "width" big-endian
+# bytes (7.5.8.3). Width 0 produces no bytes, which is how /W [0 ...] is spelt.
+proc ::tclpdfTest::field {value width} {
+    set out {}
+    for {set i [expr {$width - 1}]} {$i >= 0} {incr i -1} {
+        append out [binary format c [expr {($value >> (8 * $i)) & 0xFF}]]
+    }
+    return $out
+}
+
+# A file whose newest (and only) cross-reference section is a stream (7.5.8):
+# objects 1..n written plainly, then an xref stream as object n+1. "w" is the
+# /W to declare, "encode" the widths the bytes are actually written with -
+# the two differ where the point is a /W that lies. "mangle truncate" drops
+# the last three bytes of the stream so it no longer covers every entry, and
+# "mangle nowidths" leaves /W out altogether, which is how a file missing the
+# required entry is spelt.
+proc ::tclpdfTest::buildxref {name objects {w {1 4 2}} {extra {}} {mangle {}}
+        {encode {}}} {
+    set out "%PDF-1.5\n"
+    set offsets {}
+    set number 0
+    foreach body $objects {
+        lappend offsets [string length $out]
+        append out "[incr number] 0 obj\n$body\nendobj\n"
+    }
+    set xrefnum [expr {$number + 1}]
+    set xrefoff [string length $out]
+    if {$encode eq {}} {
+        set encode $w
+    }
+    lassign $encode w0 w1 w2
+    set data {}
+    append data [field 0 $w0] [field 0 $w1] [field 65535 $w2]
+    foreach offset $offsets {
+        append data [field 1 $w0] [field $offset $w1] [field 0 $w2]
+    }
+    append data [field 1 $w0] [field $xrefoff $w1] [field 0 $w2]
+    if {$mangle eq "truncate"} {
+        set data [string range $data 0 end-3]
+    }
+    set widths "/W \[[join $w { }]\] "
+    if {$mangle eq "nowidths"} {
+        set widths {}
+    }
+    set dict "<< /Type /XRef /Size [expr {$xrefnum + 1}] /Root 1 0 R\
+        $widths/Length [string length $data] $extra >>"
+    append out "$xrefnum 0 obj\n$dict\nstream\n$data\nendstream\nendobj\n"
+    append out "startxref\n$xrefoff\n%%EOF\n"
+    set path [scratch $name]
+    set ch [open $path wb]
+    puts -nonewline $ch $out
+    close $ch
+    return $path
+}
+
+# What a script under test raises: {code tclpdf? errorcode}. "tclpdf?" is 1
+# when the message opens with "tclpdf:", the guarantee of doc/tclpdf.md - so a
+# refusal reads {1 1 {TCLPDF ...}} and a clean run {0 0 {}}.
+proc ::tclpdfTest::refuse {script} {
+    set code [catch {uplevel 1 $script} msg opts]
+    return [list $code [string match {tclpdf:*} $msg] \
+        [dict get $opts -errorcode]]
+}
+
 proc ::tclpdfTest::handcrafted {} {
     set objects {}
     lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
@@ -1007,7 +1072,8 @@ test import-19.1 {an encrypted file is answered out of its trailer} -body {
     file delete $path
     # /P is handed on as the number it is; which bits it has is encrypt.tcl's
     # business and is tested there, so what is checked here is that a number
-    # arrives at all.
+    # arrives at all. /Length belongs to V 2 and 3 (Table 20) and is not
+    # written at V 5, so that key arrives empty.
     list [dict get $facts encrypted] \
         [dict remove [dict get $facts encryption] p] \
         [string is entier -strict [dict get $facts encryption p]] \
@@ -1015,7 +1081,7 @@ test import-19.1 {an encrypted file is answered out of its trailer} -body {
         [dict get $facts info] [dict get $facts xmp] \
         [llength [dict get $facts id]] [dict get $facts revisions] \
         [dict get $facts version]
-} -result {1 {filter Standard subfilter {} v 5 r 6 length 256 method AESV3}\
+} -result {1 {filter Standard subfilter {} v 5 r 6 length {} method AESV3}\
         1 {} {} {} 0 2 1 2.0}
 
 test import-19.2 {what needs the key is refused by name, not answered wrongly} -body {
@@ -1291,6 +1357,426 @@ test import-23.2 {/EarlyChange reaches the decoder} -body {
     file delete $fixture
     list $failed [string match {*/LZWDecode stream this package cannot decode*} $message]
 } -result {1 1}
+
+
+# --- hostile and broken files: a refusal, never a loop or a raw error -------
+#
+# A file from outside is not a friend. Every fixture below is a plausible
+# corruption or a deliberate attack, and each of them used to end in a raw
+# Tcl message, an endless loop or a recursion crash rather than in a refusal
+# that begins with "tclpdf:" - the guarantee of doc/tclpdf.md, "Error codes".
+# [refuse] checks all three at once: that it refused, that the message opens
+# with "tclpdf:", and which -errorcode it carries.
+
+# The three objects every one of these files needs: a catalogue, a page tree
+# and one page.
+proc ::tclpdfTest::threePages {} {
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 200\] >>"
+    return $objects
+}
+
+test import-24.1 {a truncated or corrupt array or dictionary is refused, not looped over} -body {
+    # The first is the whole point: before this, an array without its "]"
+    # made [Parse] append for ever - measured at 4.4 GB after 14 seconds.
+    set out {}
+    foreach bytes [list {[0 0 595 842} {[1 2 )]} "<< /A 1" {<< 5 /A >>} \
+            {(no end} {<AB} ] {
+        set pos 0
+        lappend out [::tclpdfTest::refuse {
+            ::tclpdf::importRead::Parse $bytes pos
+        }]
+    }
+    lsort -unique $out
+} -result {{1 1 {TCLPDF IMPORT SYNTAX}}}
+
+test import-24.2 {nesting deeper than the reader follows is refused, not a stack crash} -body {
+    set pos 0
+    set deep "[string repeat {[} 5000][string repeat {]} 5000]"
+    set parsed [::tclpdfTest::refuse {
+        ::tclpdf::importRead::Parse $deep pos
+    }]
+    # Serialize and Refs walk the same structure and are capped with it.
+    set value {n 1}
+    for {set i 0} {$i < 600} {incr i} {
+        set value [list a [list $value]]
+    }
+    list $parsed [::tclpdfTest::refuse {
+        ::tclpdf::importRead::Serialize $value {}
+    }] [::tclpdfTest::refuse {
+        ::tclpdf::importRead::Refs $value
+    }]
+} -result {{1 1 {TCLPDF IMPORT DEPTH}} {1 1 {TCLPDF IMPORT DEPTH}}\
+    {1 1 {TCLPDF IMPORT DEPTH}}}
+
+# A file plus an incremental update (7.5.4) that FREES object 4, the page's
+# content stream - written once as a classic table and once as a
+# cross-reference stream, because the two flavours record a free entry
+# differently (an "f" line, 7.5.4; a type 0 record, 7.5.8.3).
+proc ::tclpdfTest::freedFixture {name flavour} {
+    set objects [threePages]
+    lset objects 2 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 200\]\
+        /Contents 4 0 R >>"
+    set body "BT /F1 24 Tf 40 100 Td (WITHDRAWN) Tj ET"
+    lappend objects "<< /Length [string length $body]\
+        >>\nstream\n$body\nendstream"
+    set bytes [readBytes [buildpdf $name $objects]]
+    regexp {startxref\s+(\d+)\s+%%EOF} $bytes -> prev
+    set at [string length $bytes]
+    if {$flavour eq "table"} {
+        append bytes "xref\n0 1\n0000000000 65535 f \n"
+        append bytes "4 1\n0000000000 00001 f \n"
+        append bytes "trailer\n<< /Size 6 /Root 1 0 R /Prev $prev >>\n"
+    } else {
+        set data {}
+        append data [field 0 1] [field 0 4] [field 0 2]
+        append data [field 1 1] [field $at 4] [field 0 2]
+        append bytes "5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /Prev\
+            $prev /W \[1 4 2\] /Index \[4 1 5 1\] /Length\
+            [string length $data] >>\nstream\n$data\nendstream\nendobj\n"
+    }
+    append bytes "startxref\n$at\n%%EOF\n"
+    set path [scratch $name]
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    return $path
+}
+
+test import-24.3 {an object freed by an incremental update stays freed - classic table} -body {
+    set path [::tclpdfTest::freedFixture import-freed-table.pdf table]
+    set reader [::tclpdf::importRead::Open $path]
+    # The newest section wins (7.5.6), and it says the object is gone: the
+    # entry is a free one and the reference resolves to null (7.3.10), not to
+    # the withdrawn stream the older section still points at.
+    set entry [dict get $reader xref 4]
+    set object [lindex [::tclpdf::importRead::Object reader 4] 0]
+    file delete $path
+    list $entry $object
+} -result {f {z {}}}
+
+test import-24.4 {the same withdrawal written as a cross-reference stream} -body {
+    set path [::tclpdfTest::freedFixture import-freed-stream.pdf stream]
+    set reader [::tclpdf::importRead::Open $path]
+    set entry [dict get $reader xref 4]
+    set object [lindex [::tclpdf::importRead::Object reader 4] 0]
+    file delete $path
+    list $entry $object
+} -result {f {z {}}}
+
+test import-24.5 {a cross-reference stream needs three usable field widths (7.5.8.2)} -body {
+    set objects [::tclpdfTest::threePages]
+    set out {}
+    # missing, two long, four long, a name instead of a width, and the
+    # all-zero /W that encodes nothing at all
+    foreach {name w encode} [list \
+            import-w-none.pdf {1 4 2} {} \
+            import-w-two.pdf {1 4} {1 4 2} \
+            import-w-four.pdf {1 4 2 1} {1 4 2} \
+            import-w-name.pdf {1 /x 2} {1 4 2} \
+            import-w-zero.pdf {0 0 0} {}] {
+        set mangle [expr {$name eq "import-w-none.pdf" ? "nowidths" : {}}]
+        set path [::tclpdfTest::buildxref $name $objects $w {} $mangle $encode]
+        lappend out [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+        file delete $path
+    }
+    lsort -unique $out
+} -result {{1 1 {TCLPDF IMPORT XREF}}}
+
+test import-24.6 {a cross-reference stream shorter than /W and /Index require is refused} -body {
+    # Without this the exhausted [binary scan] leaves the previous byte
+    # standing and the reader reports offsets that are quietly wrong.
+    set path [::tclpdfTest::buildxref import-xref-short.pdf \
+        [::tclpdfTest::threePages] {1 4 2} {} truncate]
+    set result [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+    file delete $path
+    set result
+} -result {1 1 {TCLPDF IMPORT XREF}}
+
+test import-24.7 {/Index and /Size are pairs of non-negative integers, or refused} -body {
+    # The point is the loop, not the tidiness: Tcl compares a non-numeric
+    # operand as a STRING, so "$i < /Foo" is true for every $i and the entry
+    # loop never ends.
+    set objects [::tclpdfTest::threePages]
+    set out {}
+    foreach {name extra} {import-index-name.pdf {/Index [0 /Foo]}
+            import-index-odd.pdf {/Index [0]}
+            import-index-neg.pdf {/Index [-3 2]}} {
+        set path [::tclpdfTest::buildxref $name $objects {1 4 2} $extra]
+        lappend out [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+        file delete $path
+    }
+    # and the same through /Size, which stands in where /Index is absent
+    set path [::tclpdfTest::buildxref import-size-name.pdf $objects]
+    set bytes [string map {"/Size 5 " "/Size /Foo "} \
+        [::tclpdfTest::readBytes $path]]
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    lappend out [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+    file delete $path
+    lsort -unique $out
+} -result {{1 1 {TCLPDF IMPORT XREF}}}
+
+test import-24.8 {/Prev is a byte offset, not a string, a name or a real (Table 15)} -body {
+    set out {}
+    foreach value {(nonsense) /Foo -12 1e9 <414243>} {
+        set path [::tclpdfTest::buildpdf import-prev.pdf \
+            [::tclpdfTest::threePages]]
+        set bytes [string map [list "/Root 1 0 R " "/Root 1 0 R /Prev $value "] \
+            [::tclpdfTest::readBytes $path]]
+        set channel [open $path wb]
+        puts -nonewline $channel $bytes
+        close $channel
+        lappend out [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+        file delete $path
+    }
+    lsort -unique $out
+} -result {{1 1 {TCLPDF IMPORT XREF}}}
+
+test import-24.9 {a subsection promising more entries than the file holds is refused} -body {
+    set path [::tclpdfTest::buildpdf import-bigcount.pdf \
+        [::tclpdfTest::threePages]]
+    set bytes [string map {"xref\n0 4\n" "xref\n0 400000000\n"} \
+        [::tclpdfTest::readBytes $path]]
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    set result [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+    file delete $path
+    set result
+} -result {1 1 {TCLPDF IMPORT XREF}}
+
+test import-24.10 {a /Length that refers to its own stream object is refused (7.3.8.2)} -body {
+    set objects [::tclpdfTest::threePages]
+    lset objects 2 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 200\]\
+        /Contents 4 0 R >>"
+    lappend objects "<< /Length 4 0 R >>\nstream\nBT ET\nendstream"
+    set path [::tclpdfTest::buildpdf import-selflength.pdf $objects]
+    set reader [::tclpdf::importRead::Open $path]
+    set result [::tclpdfTest::refuse {::tclpdf::importRead::Object reader 4}]
+    file delete $path
+    set result
+} -result {1 1 {TCLPDF IMPORT RECURSION}}
+
+# An object stream (7.5.7) holding the page tree. "flaw self" makes object 2
+# say of itself that it lives inside object stream 2; "flaw index" points
+# object 3 at a slot the stream does not have.
+proc ::tclpdfTest::objstmFixture {name flaw} {
+    set out "%PDF-1.5\n"
+    set off1 [string length $out]
+    append out "1 0 obj\n<< /Type /Catalog /Pages 4 0 R >>\nendobj\n"
+    set page "<< /Type /Page /Parent 4 0 R /MediaBox \[0 0 200 200\] >>"
+    set tree "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>"
+    set header "3 0 4 [string length $page] "
+    set payload "$header$page$tree"
+    set off2 [string length $out]
+    append out "2 0 obj\n<< /Type /ObjStm /N 2 /First [string length $header]\
+        /Length [string length $payload] >>\nstream\n$payload\nendstream\nendobj\n"
+    set off5 [string length $out]
+    set data {}
+    append data [field 0 1] [field 0 4] [field 65535 2]
+    append data [field 1 1] [field $off1 4] [field 0 2]
+    if {$flaw eq "self"} {
+        append data [field 2 1] [field 2 4] [field 0 2]
+    } else {
+        append data [field 1 1] [field $off2 4] [field 0 2]
+    }
+    set slot [expr {$flaw eq "index" ? 7 : 0}]
+    append data [field 2 1] [field 2 4] [field $slot 2]
+    append data [field 2 1] [field 2 4] [field 1 2]
+    append data [field 1 1] [field $off5 4] [field 0 2]
+    append out "5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /W \[1 4 2\]\
+        /Length [string length $data] >>\nstream\n$data\nendstream\nendobj\n"
+    append out "startxref\n$off5\n%%EOF\n"
+    set path [scratch $name]
+    set channel [open $path wb]
+    puts -nonewline $channel $out
+    close $channel
+    return $path
+}
+
+test import-24.11 {an object stream that contains itself is refused (7.5.7)} -body {
+    set path [::tclpdfTest::objstmFixture import-objstm-self.pdf self]
+    set result [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    file delete $path
+    set result
+} -result {1 1 {TCLPDF IMPORT RECURSION}}
+
+test import-24.12 {an object said to be past the end of its object stream is refused} -body {
+    set path [::tclpdfTest::objstmFixture import-objstm-index.pdf index]
+    set result [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    # The message names the slot and how many the stream holds - which is
+    # what tells this refusal from the one about a header without an offset.
+    set message {}
+    catch {::tclpdf::pdf pages $path} message
+    file delete $path
+    list $result [string match {*number 7 of object stream 2, which holds 2*} \
+        $message]
+} -result {{1 1 {TCLPDF IMPORT OBJSTM}} 1}
+
+test import-24.13 {a rectangle is four finite numbers, or refused (7.9.5)} -body {
+    set out {}
+    foreach box {{[0 0 200]} {[0 0 /Foo 200]} {[0 0 (200) 200]}
+            {<< /a 1 >>} {[0 0 1e400 200]} {[0 0 200 4 0 R]}} {
+        set objects [::tclpdfTest::threePages]
+        lset objects 2 "<< /Type /Page /Parent 2 0 R /MediaBox $box >>"
+        # the last corner is written indirectly (7.3.10) and resolves to a
+        # name: the check has to run after the reference is followed
+        lappend objects "/Foo"
+        set path [::tclpdfTest::buildpdf import-box.pdf $objects]
+        lappend out [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+        file delete $path
+    }
+    lsort -unique $out
+} -result {{1 1 {TCLPDF IMPORT BOX}}}
+
+test import-24.14 {a catalogue that is not one, and a page tree that is not one} -body {
+    # /Root on a stream, /Root missing, a /Pages that is an array, and a
+    # tree that says nothing about how many pages it holds - the message for
+    # the last used to read "has  pages", with a hole where the number
+    # belongs. A stream object hands out its stream DICTIONARY, so a /Root
+    # pointing at one is a dictionary like any other and is caught one step
+    # later, at the /Pages that dictionary has not got.
+    set objects {}
+    lappend objects "<< /Length 5 >>\nstream\nhello\nendstream"
+    lappend objects "<< /Type /Pages /Kids \[\] /Count 0 >>"
+    set first [::tclpdfTest::buildpdf import-root-stream.pdf $objects]
+    set stream [::tclpdf::importRead::Open $first]
+    set a [::tclpdfTest::refuse {::tclpdf::importRead::Page stream 1}]
+    set path [::tclpdfTest::buildpdf import-root-none.pdf $objects]
+    set bytes [string map {"/Root 1 0 R " {}} [::tclpdfTest::readBytes $path]]
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    set none [::tclpdf::importRead::Open $path]
+    set b [::tclpdfTest::refuse {::tclpdf::importRead::Page none 1}]
+    # a catalogue whose /Pages is a stream, and a tree that says nothing
+    # about how many pages it has
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "\[1 2 3\]"
+    set second [::tclpdfTest::buildpdf import-pages-array.pdf $objects]
+    set tree [::tclpdf::importRead::Open $second]
+    set c [::tclpdfTest::refuse {::tclpdf::importRead::Page tree 1}]
+    set treeMessage {}
+    catch {::tclpdf::importRead::Page tree 1} treeMessage
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[\] >>"
+    set third [::tclpdfTest::buildpdf import-nocount.pdf $objects]
+    set silent [::tclpdf::importRead::Open $third]
+    set d [::tclpdfTest::refuse {::tclpdf::importRead::Page silent 1}]
+    set message {}
+    catch {::tclpdf::importRead::Page silent 1} message
+    file delete $first $path $second $third
+    list $a $b $c $d \
+        [string match {*catalogue has no /Pages tree*} $treeMessage] \
+        [string match {*does not say how many pages*} $message]
+} -result {{1 1 {TCLPDF IMPORT PAGES}} {1 1 {TCLPDF IMPORT ROOT}}\
+    {1 1 {TCLPDF IMPORT PAGES}} {1 1 {TCLPDF IMPORT PAGES}} 1 1}
+
+test import-24.15 {a page tree that runs in a circle is refused, not walked for ever} -body {
+    # 7.7.3.1: the page tree is a TREE. A node naming itself among its /Kids
+    # sent the walk down for ever, with /Count promising a page that is never
+    # reached.
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[2 0 R\] /Count 4 >>"
+    set path [::tclpdfTest::buildpdf import-ring.pdf $objects]
+    set a [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    file delete $path
+    # and a /Count that is not a number, which decides the same descent
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>"
+    lappend objects "<< /Type /Pages /Kids \[4 0 R\] /Count /Foo >>"
+    lappend objects "<< /Type /Page /Parent 3 0 R /MediaBox \[0 0 9 9\] >>"
+    set path [::tclpdfTest::buildpdf import-count.pdf $objects]
+    set b [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    file delete $path
+    list $a $b
+} -result {{1 1 {TCLPDF IMPORT PAGES}} {1 1 {TCLPDF IMPORT PAGES}}}
+
+test import-24.16 {a cross-reference entry pointing at another object is refused} -body {
+    # Following it silently is the worst answer a reader can give: the file
+    # opens, and the page it hands out is not the one the file describes.
+    set objects [::tclpdfTest::threePages]
+    lset objects 1 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>"
+    set path [::tclpdfTest::buildpdf import-wrongoffset.pdf $objects]
+    set bytes [::tclpdfTest::readBytes $path]
+    set two [string first "2 0 obj" $bytes]
+    set four [string first "4 0 obj" $bytes]
+    set bytes [string map [list [format "%010d %05d n \n" $two 0] \
+        [format "%010d %05d n \n" $four 0]] $bytes]
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    set result [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    file delete $path
+    set result
+} -result {1 1 {TCLPDF IMPORT OBJECT}}
+
+# A reader with nothing but a path and a cache, for the two decoding tests:
+# what they are about is the /Filter and the /DecodeParms, not the file
+# around them.
+proc ::tclpdfTest::bareReader {{objects {}}} {
+    return [dict create bytes {} path bare.pdf xref {} trailer {d {}} \
+        objects $objects buffers {} sections {} flavour {} inprogress {}]
+}
+
+test import-24.17 {a predictor whose /Columns is not a positive integer is refused} -body {
+    set reader [::tclpdfTest::bareReader]
+    set data [zlib compress [string repeat A 40]]
+    set out {}
+    foreach columns {{nm Foo} {n 0} {n -4} {s 8}} {
+        set value [list d [list Filter {nm FlateDecode} DecodeParms \
+            [list d [list Predictor {n 12} Columns $columns]]]]
+        lappend out [::tclpdfTest::refuse {
+            ::tclpdf::importRead::DecodeStream reader $value $data {a test stream}
+        }]
+    }
+    # and a predictor the shared decoder itself refuses names the file too
+    set value {d {Filter {nm FlateDecode} DecodeParms
+        {d {Predictor {n 12} Columns {n 4} BitsPerComponent {n 7}}}}}
+    lappend out [::tclpdfTest::refuse {
+        ::tclpdf::importRead::DecodeStream reader $value $data {a test stream}
+    }]
+    # The two refusals are told apart by their message: one is about the
+    # entry, the other about what the shared decoder made of it.
+    set value {d {Filter {nm FlateDecode} DecodeParms
+        {d {Predictor {n 12} Columns {nm Foo}}}}}
+    set message {}
+    catch {::tclpdf::importRead::DecodeStream reader $value $data \
+        {a test stream}} message
+    list [lsort -unique $out] \
+        [string match {*/Columns that is not a positive integer*} $message]
+} -result {{{1 1 {TCLPDF IMPORT PREDICTOR}}} 1}
+
+test import-24.18 {a filter named indirectly inside a chain is resolved (7.4)} -body {
+    # Unresolved, the chain carried the raw {9 0} of the reference, no switch
+    # arm matched it, and a perfectly ordinary Flate stream was refused as
+    # "filter /9 0".
+    set reader [::tclpdfTest::bareReader {9 {{nm FlateDecode} 0 {}}}]
+    set value {d {Filter {a {{r {9 0}}}}}}
+    ::tclpdf::importRead::DecodeStream reader $value [zlib compress hello] {x}
+} -result hello
+
+test import-24.19 {a refused object can be asked for again without being called self-referential} -body {
+    # The in-progress marker has to come off on the way out of a refusal too,
+    # or the second question is answered with the wrong refusal.
+    set objects [::tclpdfTest::threePages]
+    lappend objects "<< /Length /Foo >>\nstream\nBT ET\nendstream"
+    set path [::tclpdfTest::buildpdf import-badlength.pdf $objects]
+    set reader [::tclpdf::importRead::Open $path]
+    set first [::tclpdfTest::refuse {::tclpdf::importRead::Object reader 4}]
+    set again [::tclpdfTest::refuse {::tclpdf::importRead::Object reader 4}]
+    file delete $path
+    list $first $again
+} -result {{1 1 {TCLPDF IMPORT STREAM}} {1 1 {TCLPDF IMPORT STREAM}}}
 
 
 cleanupTests

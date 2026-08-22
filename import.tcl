@@ -104,124 +104,16 @@ oo::define ::tclpdf::document::document {
     set width [dict get $geometry width]
     set height [dict get $geometry height]
 
-    # Everything the page's resources reach is copied and renumbered; the
-    # content streams are NOT part of that closure - they are decoded and
-    # merged into the form below rather than copied.
-    set resources [::tclpdf::importRead::Get $pageDict Resources]
-    set writer [my writer]
-    set queue [::tclpdf::importRead::Refs $resources]
-    set map {}
-    set order {}
-    while {[llength $queue]} {
-      set queue [lassign $queue number]
-      if {[dict exists $map $number]} continue
-      dict set map $number [$writer reserve]
-      lappend order $number
-      lassign [::tclpdf::importRead::Object reader $number] value - -
-      lappend queue {*}[::tclpdf::importRead::Refs $value]
-    }
-    foreach number $order {
-      lassign [::tclpdf::importRead::Object reader $number] value hasStream data
-      if {$hasStream} {
-        # The raw bytes and their /Filter travel unchanged, and the object
-        # goes out through [stream] rather than being assembled here: that
-        # is the one place /Length is computed (writer.tcl) and the one
-        # place a stream's filters are checked against the document's PDF
-        # version. Building the body here meant a copied stream was the
-        # single stream in the document that passed neither - a second
-        # producer of /Length beside the writer's, and a FlateDecode
-        # resource that could land in a file whose header disowns the
-        # filter.
-        #
-        # /Length is dropped rather than restated: the writer sets it, and
-        # an indirect length object therefore need not come along.
-        # The parsed value is a dictionary whenever hasStream is true: a
-        # stream is only recognised as one when its /Length could be read
-        # out of a dictionary, so there is nothing else it could be here.
-        set pairs {}
-        foreach {key item} [lindex $value 1] {
-          if {$key eq "Length"} continue
-          lappend pairs $key [::tclpdf::importRead::Serialize $item $map]
-        }
-        $writer stream [dict get $map $number] $pairs $data
-      } else {
-        $writer put [dict get $map $number] \
-            [::tclpdf::importRead::Serialize $value $map]
-      }
-    }
-
-    # The resources dictionary itself: referenced and already part of the
-    # closure, or direct on the page and written as an object of its own.
-    if {[lindex $resources 0] eq "r"} {
-      set resourcesRef [$writer ref \
-          [dict get $map [lindex [lindex $resources 1] 0]]]
-    } elseif {[lindex $resources 0] eq "d"} {
-      set resourcesRef [$writer ref [$writer add \
-          [::tclpdf::importRead::Serialize $resources $map]]]
-    } else {
-      # A page without resources is legal; the form then carries an empty
-      # dictionary, which PDF/A asks for anyway (6.2.2).
-      set resourcesRef [$writer ref [$writer add "<< >>"]]
-    }
-
-    # An optional-content resource needs its catalog counterpart, or the
-    # file carries layers no viewer can configure. Table 98 allows an OCMD
-    # as a /Properties value; the catalog's /OCGs array takes the GROUPS
-    # behind it - its /OCGs, a reference or an array of them - never the
-    # OCMD itself (8.11.4.2 asks for every group in the document there).
-    set resolved [::tclpdf::importRead::Resolve reader $resources]
-    set properties [::tclpdf::importRead::Resolve reader \
-        [::tclpdf::importRead::Get $resolved Properties]]
-    set numbers {}
-    # A second import MERGES with what an earlier one put into the catalog
-    # rather than overwriting it; the entry is this module's own
-    # serialization, read back with its own parser. First come the groups
-    # already there, then the new ones, duplicates dropped by number.
-    set existing [my catalogEntry OCProperties]
-    if {$existing ne {}} {
-      set pos 0
-      set have [::tclpdf::importRead::Parse $existing pos]
-      foreach item [lindex [::tclpdf::importRead::Get $have OCGs] 1] {
-        if {[lindex $item 0] eq "r"} {
-          lappend numbers [lindex [lindex $item 1] 0]
-        }
-      }
-    }
-    if {[lindex $properties 0] eq "d"} {
-      foreach {- item} [lindex $properties 1] {
-        if {[lindex $item 0] ne "r"} continue
-        set entry [::tclpdf::importRead::Resolve reader $item]
-        if {[lindex [::tclpdf::importRead::Get $entry Type] 1] eq "OCMD"} {
-          set members [::tclpdf::importRead::Get $entry OCGs]
-          if {[lindex $members 0] eq "r"} {
-            set members [list $members]
-          } elseif {[lindex $members 0] eq "a"} {
-            set members [lindex $members 1]
-          } else {
-            set members {}
-          }
-          foreach member $members {
-            if {[lindex $member 0] eq "r"} {
-              lappend numbers \
-                  [dict get $map [lindex [lindex $member 1] 0]]
-            }
-          }
-        } else {
-          lappend numbers [dict get $map [lindex [lindex $item 1] 0]]
-        }
-      }
-    }
-    if {[llength $numbers]} {
-      set groups {}
-      set seen {}
-      foreach number $numbers {
-        if {[dict exists $seen $number]} continue
-        dict set seen $number 1
-        lappend groups "$number 0 R"
-      }
-      my catalogEntry OCProperties "<< /OCGs \[[join $groups { }]\]\
-          /D << /ON \[[join $groups { }]\] >> >>"
-    }
+    # NOTHING IS WRITTEN UNTIL EVERYTHING THAT COULD BE REFUSED IS READ.
+    # The last refusal on this road - a content stream in a filter this
+    # package cannot decode - used to fall AFTER the copied objects were in
+    # the writer and after /OCProperties was in the catalogue, so a caught
+    # [pdf import] left the document carrying the layers and the orphaned
+    # resources of a page it never got (measured 2026-08-22). It is the
+    # check-before-write pattern of the earlier review rounds one layer
+    # further out, and here it costs nothing but the order of two blocks:
+    # the reader may say no as often as it likes, the document does not
+    # change before it has said yes.
 
     # The content: one stream or an array of streams whose CONCATENATION
     # is the page description (7.8.2) - decoded, joined, and stored behind
@@ -247,6 +139,218 @@ oo::define ::tclpdf::document::document {
           "the content stream"]
     }
     set content [join $pieces \n]
+
+    # Everything the page's resources reach, READ: object by object, the
+    # closure over the references. The content streams are not part of it -
+    # they are the block above, decoded and merged into the form rather than
+    # copied. Every object of the closure is read here and kept, because
+    # reading is where the reader refuses: a resource in an object stream
+    # that is not there, a broken cross-reference entry, a value nested
+    # deeper than the parser follows. Not one of those may leave a reserved
+    # object number behind - an object reserved and never filled makes the
+    # WRITE fail, for a document that could otherwise still be written.
+    set resources [::tclpdf::importRead::Get $pageDict Resources]
+    set queue [::tclpdf::importRead::Refs $resources]
+    set order {}
+    set copies {}
+    while {[llength $queue]} {
+      set queue [lassign $queue number]
+      if {[dict exists $copies $number]} continue
+      lassign [::tclpdf::importRead::Object reader $number] value hasStream data
+      dict set copies $number [list $value $hasStream $data]
+      lappend order $number
+      lappend queue {*}[::tclpdf::importRead::Refs $value]
+    }
+
+    # Which of the foreign optional content groups start out switched off,
+    # read while the reader is still the only thing being asked; the numbers
+    # they get in THIS document are known further down.
+    lassign [my ImportLayerStates reader] baseVisible foreignStates
+
+    # -- from here on the document changes --------------------------------
+    #
+    # [Refs] walked every value above and refused what it could not walk,
+    # and [ImportSerialize] walks the same values along the same branches -
+    # so the numbering below cannot run into a value the reading did not
+    # already accept.
+    set writer [my writer]
+    set map {}
+    foreach number $order {
+      dict set map $number [$writer reserve]
+    }
+    foreach number $order {
+      lassign [dict get $copies $number] value hasStream data
+      if {$hasStream} {
+        # The raw bytes and their /Filter travel unchanged, and the object
+        # goes out through [stream] rather than being assembled here: that
+        # is the one place /Length is computed (writer.tcl) and the one
+        # place a stream's filters are checked against the document's PDF
+        # version. Building the body here meant a copied stream was the
+        # single stream in the document that passed neither - a second
+        # producer of /Length beside the writer's, and a FlateDecode
+        # resource that could land in a file whose header disowns the
+        # filter.
+        #
+        # /Length is dropped rather than restated: the writer sets it, and
+        # an indirect length object therefore need not come along.
+        # The parsed value is a dictionary whenever hasStream is true: a
+        # stream is only recognised as one when its /Length could be read
+        # out of a dictionary, so there is nothing else it could be here.
+        set pairs {}
+        foreach {key item} [lindex $value 1] {
+          if {$key eq "Length"} continue
+          lappend pairs $key [my ImportSerialize $item $map]
+        }
+        $writer stream [dict get $map $number] $pairs $data
+      } else {
+        $writer put [dict get $map $number] [my ImportSerialize $value $map]
+      }
+    }
+
+    # The resources dictionary itself: referenced and already part of the
+    # closure, or direct on the page and written as an object of its own.
+    if {[lindex $resources 0] eq "r"} {
+      set resourcesRef [$writer ref \
+          [dict get $map [lindex [lindex $resources 1] 0]]]
+    } elseif {[lindex $resources 0] eq "d"} {
+      set resourcesRef [$writer ref [$writer add \
+          [my ImportSerialize $resources $map]]]
+    } else {
+      # A page without resources is legal; the form then carries an empty
+      # dictionary, which PDF/A asks for anyway (6.2.2).
+      set resourcesRef [$writer ref [$writer add "<< >>"]]
+    }
+
+    # An optional-content resource needs its catalog counterpart, or the
+    # file carries layers no viewer can configure. Table 98 allows an OCMD
+    # as a /Properties value; the catalog's /OCGs array takes the GROUPS
+    # behind it - its /OCGs, a reference or an array of them - never the
+    # OCMD itself (8.11.4.2 asks for every group in the document there).
+    set resolved [::tclpdf::importRead::Resolve reader $resources]
+    set properties [::tclpdf::importRead::Resolve reader \
+        [::tclpdf::importRead::Get $resolved Properties]]
+    set sources {}
+    set numbers {}
+    set hidden {}
+    set configName {}
+    # A second import MERGES with what an earlier one put into the catalog
+    # rather than overwriting it; the entry is this module's own
+    # serialization, read back with its own parser. First come the groups
+    # already there, then the new ones, duplicates dropped by number.
+    set existing [my catalogEntry OCProperties]
+    if {$existing ne {}} {
+      set pos 0
+      set have [::tclpdf::importRead::Parse $existing pos]
+      foreach item [lindex [::tclpdf::importRead::Get $have OCGs] 1] {
+        if {[lindex $item 0] eq "r"} {
+          lappend numbers [lindex [lindex $item 1] 0]
+        }
+      }
+      # And what that entry said about the groups in it: which of them start
+      # out switched off, and the configuration's name.
+      set config [::tclpdf::importRead::Get $have D]
+      foreach item [lindex [::tclpdf::importRead::Get $config OFF] 1] {
+        if {[lindex $item 0] eq "r"} {
+          lappend hidden [lindex [lindex $item 1] 0]
+        }
+      }
+      # The /Name as it stands, re-emitted and not rebuilt: in an encrypted
+      # document it is already ciphertext, and putting it through the string
+      # seam a second time would encrypt the cipher.
+      set name [::tclpdf::importRead::Get $config Name]
+      if {[lindex $name 0] in {s h} && [lindex $name 1] ne {}} {
+        set configName [::tclpdf::importRead::Serialize $name {}]
+      }
+    }
+    if {[lindex $properties 0] eq "d"} {
+      foreach {- item} [lindex $properties 1] {
+        if {[lindex $item 0] ne "r"} continue
+        set entry [::tclpdf::importRead::Resolve reader $item]
+        if {[lindex [::tclpdf::importRead::Get $entry Type] 1] eq "OCMD"} {
+          set members [::tclpdf::importRead::Get $entry OCGs]
+          if {[lindex $members 0] eq "r"} {
+            set members [list $members]
+          } elseif {[lindex $members 0] eq "a"} {
+            set members [lindex $members 1]
+          } else {
+            set members {}
+          }
+          foreach member $members {
+            if {[lindex $member 0] eq "r"} {
+              lappend sources [lindex [lindex $member 1] 0]
+            }
+          }
+        } else {
+          lappend sources [lindex [lindex $item 1] 0]
+        }
+      }
+    }
+    # A GROUP THAT WAS OFF IN THE FILE IT COMES FROM STAYS OFF. Switching
+    # everything on was the simple answer and the wrong one: a draft stamp
+    # the foreign document hides comes out as a stamp across the imported
+    # page, and nothing in this package's API could switch it off again.
+    # What an EARLIER import decided is in the entry read back above, and
+    # what THIS one decides is written into the entry below - the entry is
+    # the seam between the two writers of it, for the state of a group as
+    # much as for the group itself (layer.tcl reads both out of it).
+    foreach source $sources {
+      set number [dict get $map $source]
+      lappend numbers $number
+      if {[dict exists $foreignStates $source]} {
+        if {![dict get $foreignStates $source]} {
+          lappend hidden $number
+        }
+      } elseif {!$baseVisible} {
+        lappend hidden $number
+      }
+    }
+    if {[llength $numbers]} {
+      set groups {}
+      set on {}
+      set off {}
+      set seen {}
+      foreach number $numbers {
+        if {[dict exists $seen $number]} continue
+        dict set seen $number 1
+        set reference [$writer ref $number]
+        lappend groups $reference
+        if {$number in $hidden} {
+          lappend off $reference
+        } else {
+          lappend on $reference
+        }
+      }
+      # /Name, non-empty, on every configuration dictionary - ISO 19005-2
+      # and -3, 6.9-1, which veraPDF reports as failed when it is missing.
+      # It used to be missing here whenever the importing document had no
+      # layer of ITS own, because layer.tcl writes the name and layer.tcl
+      # only runs when [layer create] has hooked it onto the catalog event.
+      # The word is the one layer.tcl gives the default configuration when
+      # the caller names none, so a document that later grows a layer of
+      # its own does not rename its configuration behind the caller's back.
+      if {$configName eq {}} {
+        set configName [my Str Default]
+      }
+      # /Order lists every group as well - it is what the manual promises a
+      # document whose only layers came in with an import, and a group
+      # missing from /Order is one no reader offers to switch. Where /Order
+      # is present it shall reference all the groups (ISO 19005-2/-3,
+      # 6.9-3), which a copy of the /OCGs list is by construction.
+      set config [list Order [::tclpdf::pdfObj arr $groups] \
+          ON [::tclpdf::pdfObj arr $on]]
+      if {[llength $off]} {
+        lappend config OFF [::tclpdf::pdfObj arr $off]
+      }
+      # The name goes LAST, and layer.tcl writes it last for the same
+      # reason: it is the one value in the configuration that a caller
+      # dictates, and the small reader in layer.tcl looks for the first
+      # /OFF and the first /OCGs in the text. A title reading "/OFF [4 0 R]"
+      # would be found first if it stood in front of them.
+      lappend config Name $configName
+      my catalogEntry OCProperties [::tclpdf::pdfObj dictionary [list \
+          OCGs [::tclpdf::pdfObj arr $groups] \
+          D [::tclpdf::pdfObj dictionary $config]]]
+    }
 
     # The form: BBox in its own normalized space, the page's corner and a
     # /Rotate folded into /Matrix, so [form place] puts down what a viewer
@@ -292,6 +396,120 @@ oo::define ::tclpdf::document::document {
         width $width height $height]
     my state forms $forms
     return $alias
+  }
+
+  # -- an imported object body, in this document's syntax ------------------
+  #
+  # THE FOURTH STRING DOOR. A PDF is encrypted string by string and stream by
+  # stream (ISO 32000-2, 7.6.2), which is why every string a module writes
+  # goes out through [my Str], [my HexStr] or [my BytesStr] - the seam the
+  # cipher sits behind. The strings of an imported object never saw it: they
+  # come out of a foreign file already parsed, and [importRead::Serialize]
+  # writes them the way the syntax spells them, cipher or no cipher. In an
+  # encrypted document that produced the one thing worse than an unreadable
+  # file - a readable one: the layer names of an imported page stood in the
+  # clear in a file whose own strings were encrypted, and a reader that
+  # decrypted the file got the cipher of a string that was never encrypted
+  # (measured 2026-08-22: /Name (German) legible in the file, /Name () after
+  # [qpdf --decrypt]). The copied STREAMS were put behind the seam on
+  # 2026-08-20; these are their object bodies.
+  #
+  # The strings are replaced BEFORE the value is serialized, rather than the
+  # serializer being taught the seam: [importRead::Serialize] is the reader's
+  # and three topics stand on it, while which spelling an encrypted string
+  # gets is this document's business - the encryptor answers with finished
+  # PDF syntax (hexadecimal, always) exactly as it does at every other string
+  # in the document.
+  method ImportSerialize {value map} {
+    return [::tclpdf::importRead::Serialize [my ImportStrings $value] $map]
+  }
+
+  # The same value with every string in it replaced by the finished string
+  # object the document's seam hands back. It travels on as a node of type
+  # "n" - the reader's node for a number, whose payload is written out AS IT
+  # STANDS. That is what a finished object needs and the reason the seam can
+  # be reached from outside the serializer at all.
+  #
+  # Without an encryptor the result is byte for byte what the serializer
+  # would have written on its own: [pdfObj bytesStr] escapes the same three
+  # characters and the same range as the "s" branch there, and a hexadecimal
+  # string reappears as a hexadecimal string.
+  method ImportStrings {value {depth 0}} {
+    if {$depth > 500} {
+      # The serializer refuses this value on the next line anyway, with the
+      # named error the whole reader uses for it.
+      return $value
+    }
+    lassign $value type payload
+    switch -- $type {
+      s {
+        return [list n [my BytesStr $payload]]
+      }
+      h {
+        # 7.3.4.3: hexadecimal digits and white space, and an odd number of
+        # digits means a trailing zero - which is what [binary format H*]
+        # does with one. Anything else is not a hexadecimal string, and a
+        # raw Tcl error is not a refusal this package makes.
+        set hex [string map {" " {} "\n" {} "\r" {} "\t" {} "\f" {} "\x00" {}} \
+            $payload]
+        if {![string is xdigit -strict $hex] && $hex ne {}} {
+          return -code error -errorcode {TCLPDF IMPORT SYNTAX} "tclpdf: a\
+              hexadecimal string of the imported PDF holds something that is\
+              not a hexadecimal digit (ISO 32000-2, 7.3.4.3)"
+        }
+        return [list n [my HexStr [binary format H* $hex]]]
+      }
+      d {
+        set out {}
+        foreach {key item} $payload {
+          lappend out $key [my ImportStrings $item [expr {$depth + 1}]]
+        }
+        return [list d $out]
+      }
+      a {
+        return [list a [lmap item $payload {
+          my ImportStrings $item [expr {$depth + 1}]
+        }]]
+      }
+      default {
+        return $value
+      }
+    }
+  }
+
+  # Which optional content groups of the file being read start out switched
+  # OFF, as {defaultVisible {number visible ...}} over the SOURCE object
+  # numbers: the default configuration's /BaseState (Table 99, default ON)
+  # and the /ON and /OFF arrays that override it per group. A file without
+  # optional content, or one whose configuration is unreadable, answers "on,
+  # nothing listed" - the state every group of a well formed file has unless
+  # its configuration says otherwise.
+  method ImportLayerStates {readerVar} {
+    upvar 1 $readerVar reader
+    set root [::tclpdf::importRead::Resolve reader \
+        [::tclpdf::importRead::Get [dict get $reader trailer] Root]]
+    set properties [::tclpdf::importRead::Resolve reader \
+        [::tclpdf::importRead::Get $root OCProperties]]
+    set config [::tclpdf::importRead::Resolve reader \
+        [::tclpdf::importRead::Get $properties D]]
+    if {[lindex $config 0] ne "d"} {
+      return [list 1 {}]
+    }
+    set base [expr {
+      [lindex [::tclpdf::importRead::Get $config BaseState] 1] eq "OFF" ? 0 : 1
+    }]
+    set states {}
+    foreach {key visible} {ON 1 OFF 0} {
+      set array [::tclpdf::importRead::Resolve reader \
+          [::tclpdf::importRead::Get $config $key]]
+      if {[lindex $array 0] ne "a"} continue
+      foreach item [lindex $array 1] {
+        if {[lindex $item 0] eq "r"} {
+          dict set states [lindex [lindex $item 1] 0] $visible
+        }
+      }
+    }
+    return [list $base $states]
   }
 }
 
@@ -378,4 +596,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.1
+package provide tclpdf::import 1.2
