@@ -77,7 +77,10 @@
 # PAdES signature (ETSI EN 319 142-1). That claim costs something the caller
 # cannot see from here, so it is checked: Table 1 of that standard says the
 # signing-time attribute "shall not be present" in the CMS object at any
-# baseline level, while "openssl cms -sign" and BouncyCastle add it unasked.
+# baseline level, while a signer writes it unless told otherwise: "openssl
+# cms -sign" leaves it out with "-no_signing_time", which OpenSSL 3 has and
+# the LibreSSL shipped as /usr/bin/openssl on macOS does not; pyHanko and the
+# EU DSS library omit it by themselves, BouncyCastle adds it unasked.
 # A DER carrying the attribute is refused under /ETSI.CAdES.detached - see
 # [NoSigningTime], which is the one place this module looks into the bytes it
 # is handed, and looks exactly two OIDs far: the attribute, and the RFC 3161
@@ -581,12 +584,13 @@ proc ::tclpdf::sign::NoSigningTime {der subFilter what} {
       signature for $what carries a signing-time attribute (OID\
       1.2.840.113549.1.9.5) and $subFilter claims a PAdES signature, where\
       ETSI EN 319 142-1, Table 1 says that attribute shall not be present -\
-      the time of signing belongs in /M, which tclpdf writes. \"openssl cms\
-      -sign\" and BouncyCastle add the attribute unasked and offer no switch\
-      to leave it out, so neither can produce a PAdES signature. Write the\
-      document with \"sign -subfilter pkcs7\", which claims no PAdES, or have\
-      it signed by something that leaves the attribute out - pyHanko and the\
-      EU DSS library do"
+      the time of signing belongs in /M, which tclpdf writes. A signer writes\
+      the attribute unless told otherwise: \"openssl cms -sign\" leaves it out\
+      with \"-no_signing_time\", which OpenSSL 3 has and LibreSSL does not,\
+      while BouncyCastle adds it unasked. Write the document with \"sign\
+      -subfilter pkcs7\", which claims no PAdES, or have it signed by\
+      something that leaves the attribute out - pyHanko and the EU DSS\
+      library do so by themselves"
 }
 
 # A file whose /ByteRange is still the placeholder was never written through

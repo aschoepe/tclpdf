@@ -97,6 +97,28 @@ proc ::tclpdfTest::signWith {bytes} {
 testConstraint signing [expr {[auto_execok openssl] ne {}
     && ![catch {::tclpdfTest::signPki}]}]
 
+# The same signer, told to leave the signing-time attribute out. Only OpenSSL
+# 3 has the switch; the LibreSSL that ships as /usr/bin/openssl on macOS does
+# not, which is why this is a constraint of its own rather than a flag on the
+# call above - and why the report of 000-tools names which openssl is here.
+proc ::tclpdfTest::signWithoutTime {bytes} {
+  variable signDir
+  set in [file join $signDir signed.bin]
+  set out [file join $signDir signature-notime.der]
+  set fh [open $in wb]
+  puts -nonewline $fh $bytes
+  close $fh
+  exec openssl cms -sign -binary -in $in -signer [file join $signDir leaf.pem] \
+      -inkey [file join $signDir leaf.key] -certfile [file join $signDir ca.pem] \
+      -cades -no_signing_time -md sha256 -outform DER -out $out \
+      2> [file join $signDir openssl.log]
+  return [readBytes $out]
+}
+
+testConstraint signingPades [expr {[testConstraint signing]
+    && ![catch {exec openssl cms -help 2>@1} help]
+    && [string first -no_signing_time $help] >= 0}]
+
 # Whether openssl accepts the CMS object over the bytes it was made for.
 # -purpose any because the certificate is a signing one and not a mail one,
 # which is the purpose "cms -verify" checks by default.
@@ -1635,11 +1657,11 @@ test sign-6.6 {a signed file is still a structurally sound PDF} -constraints {si
 test sign-6.7 {openssl and -subfilter cades cannot both stand, and it is openssl} -constraints signing -body {
   # The measurement behind the refusal, made with the real thing rather than
   # with eleven bytes: "openssl cms -sign" writes a signing-time attribute
-  # into every object it makes and has no switch to leave it out, so this
-  # openssl - the one the tests above sign with - cannot produce a PAdES
-  # signature. That is a property of openssl and not of tclpdf, which is
-  # exactly what the refusal says and why the way out it names is a different
-  # signer or a different -subfilter.
+  # into every object it makes unless it is told not to, and [signWith] does
+  # not tell it - so this object cannot stand under a PAdES claim. That is a
+  # property of the CALL and not of tclpdf, which is why the ways out the
+  # refusal names are a different signer, a different -subfilter, or the
+  # switch that leaves the attribute out. sign-6.8 takes that last way.
   #
   # Both ways in, because a caller meets one or the other and never both.
   set doc [::tclpdfTest::signDoc -version 2.0]
@@ -1664,6 +1686,26 @@ test sign-6.7 {openssl and -subfilter cades cannot both stand, and it is openssl
       [dict get $job subFilter] [expr {$length > 0}]
 } -result [list 1 {TCLPDF SIGN SIGNINGTIME} 1 {TCLPDF SIGN SIGNINGTIME} 1 \
     /ETSI.CAdES.detached 1]
+
+test sign-6.8 {an openssl told to omit the attribute signs under the PAdES claim} -constraints signingPades -body {
+  # The other half of 6.7, and the reason its refusal is about the call and
+  # not about openssl: with "-no_signing_time" the same program makes an
+  # object that holds under /ETSI.CAdES.detached. Both ways in, as above.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -size 4096 -subfilter cades -signer ::tclpdfTest::signWithoutTime
+  set path [::tclpdfTest::scratch sign-cades-pades.pdf]
+  set write [catch {$doc write $path} message]
+  set size [expr {[file exists $path] ? [file size $path] : 0}]
+  $doc destroy
+  file delete $path
+  set two [::tclpdfTest::signed sign-cades-pades-stage.pdf -size 4096 \
+      -subfilter cades]
+  set der [::tclpdfTest::signWithoutTime [dict get \
+      [::tclpdf::sign digest $two] bytes]]
+  set embed [catch {::tclpdf::sign embed $two $der} length]
+  file delete $two
+  list $write [expr {$size > 0}] $embed [expr {$length > 0}]
+} -result {0 1 0 1}
 
 #
 # --- PDF/A ------------------------------------------------------------------

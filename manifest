@@ -1,5 +1,5 @@
-C Version\s1.2\n\n-\sconfigure.ac,\stclpdf.tcl\s-\sthe\spackage\sversion\sis\s1.2\n-\spkgIndex.tcl.in\s-\sthe\smodule\slines\sare\sin\salphabetical\sorder\sagain;\sthe\sones\sadded\sover\sthe\slast\sstages\shad\sbeen\sappended\srather\sthan\ssorted\sin\n-\sdoc/tclpdf.md\s-\sa\sSTANDARDS\ssection:\sthe\sdocuments\sthe\spackage\sis\swritten\sagainst\sand,\swhere\sa\svalidator\sexists,\smeasured\sagainst\son\severy\srun\s-\sthe\sfile\sitself,\sarchiving\sand\saccessibility,\selectronic\sinvoices,\ssignatures,\sfonts\sand\spictures,\seach\swith\swhat\sit\scovers\shere\n-\sdoc/tclpdf.md\s-\sthe\sTCLPDF\sIMPORT\serror\scodes,\sthe\ssixteen\ssubclasses\sthe\sreader\srefuses\sa\sforeign\sfile\swith\n-\simport.tcl,\simportInfo.tcl\s-\sa\sfile\sthat\sis\snot\sthere\swas\srefused\swith\sa\smessage\sand\swithout\sa\scode,\sso\sthe\sone\srefusal\sa\scaller\smeets\sfirst\swas\sthe\sone\sa\strap\scould\snot\scatch\n-\sdoc/claude\s-\sthe\sskill\sreference\sgains\sthe\sfour\sfeatures\sit\sdid\snot\shave:\sa\scolour\sfont\sdrawn\sas\sType\s3,\sa\sTIFF\sand\sthe\sstrips\sit\sis\smade\sof,\sthe\snatural\ssize\sa\spicture\sstates\sabout\sitself,\sand\sthe\simport\serror\scodes.\sassets.tcl\snames\sa\sTIFF\snow,\sas\sit\salready\snamed\sa\sJPEG\sand\sa\sPNG
-D 2026-08-22T17:14:42.725
+C Correct\swhat\sopenssl\scan\sand\scannot\sdo\sunder\sa\sPAdES\sclaim\n\n-\ssign.tcl\s-\sthe\srefusal\sof\sa\ssigning-time\sattribute\ssaid\sopenssl\sand\sBouncyCastle\soffer\sno\sswitch\sto\sleave\sit\sout\sand\stherefore\scannot\sproduce\sa\sPAdES\ssignature.\sMeasured\swith\sOpenSSL\s3.6.3:\s"cms\s-sign\s-cades\s-no_signing_time"\smakes\san\sobject\sthis\spackage\stakes\sunder\s/ETSI.CAdES.detached,\sand\sthe\ssame\ssigner\swithout\sthe\sswitch\sis\srefused.\sThe\smessage,\sthe\smodule\scomment,\sthe\smanual\sand\sthe\sskill\sreference\snow\ssay\swhat\sthe\sswitch\sis\sand\sthat\sthe\sLibreSSL\sshipped\sas\s/usr/bin/openssl\son\smacOS\shas\snone\n-\stests/sign.test\s-\ssign-6.8\ssigns\swith\sthat\sswitch\sand\swrites\sthe\sdocument\sboth\sways\sin,\sguarded\sby\sthe\snew\sconstraint\ssigningPades\sso\sa\smachine\swithout\ssuch\san\sopenssl\sskips\srather\sthan\sfails;\ssign-6.7\skeeps\sthe\sother\shalf\sand\sits\scomment\ssays\swhich\sof\sthe\stwo\sproperties\sit\smeasures
+D 2026-08-22T22:14:55.239
 F Makefile.in cc6abf248f914790abc58db615d31f9d1811c4e3c285bb7266c9e4e0f48fdeb0
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -30,10 +30,10 @@ F doc/claude/skills/tclpdf-tcl/reference/07-patterns-forms.md beab974a84c04017d3
 F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md b281f35b55af15529dc27f97f6cc00e09c50c1fdb85e3137a2a249c9efa5817b
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md e80dcefb46eabcb338236beb5133fd700a3207d048c9b3fda9a6c35747bc8cbf
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md f2ac58b80453006e13a2a6a63d42c01d42cff1012cc7ae90a5a4e9cb7329be6e
-F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 0e82b6c35f8d2fd7080a5d5ddbf285302500f4f9e447ab22fa0ec8a4d1adac20
+F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md f0212a9b794a005e38e90d6cb3ea9dd5de3fe4b9da3a611e4170c46df9e279aa
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md a7f8533338116431e7fb69fcc2c637a30693fd1f2c544bbac886d8a535a5fb6c
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md 959d0e8116ca6f4fbe3b77858868e864e0438ba55fd4716f6c45ffbdd5d8e258
+F doc/tclpdf.md 38c8b2a4ac581a1a368071e0ecc345a5ae674f9cda70ca9350ea43fcf3d59d90
 F document.tcl 609fe64b654581966394557302a1701992ba8448484d0cfa38cb9c7282bf3e69
 F encrypt.tcl 52fdeb17d3dac1daef41a51ea63bb522881940875b30aee6c64c085b928341d9
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
@@ -321,7 +321,7 @@ F sfnt.tcl 8d0c517b1515d95d10cc6b70b341e12a54649142271a00ceb4047e69baadbe88
 F shading.tcl 9a9233268829bdb921f01d784932077622a64978e356c8edd387fc0d274680c7
 F shape.tcl 82879e3938ecb8caec701c8cf2facb53877441ab9245f0b46a8fd6fd57f47282
 F shaping.tcl b79179cc0b62cda276814e78b39e070236ede3ba71097e6d9d81a723138a1892
-F sign.tcl 08a2c4f8050c71a8a78e95a016f9217408b3a173fa74efbad7f3c05e5d6ea072
+F sign.tcl 648d67da96e1c27fcb1af54afcbac251f12718804b8c077d3fd1dbce45b09229
 F structure.tcl fc6391ffe1d0baea43183789b3025bcdf85e8d0ce6b1983d0ec61deed0ea2eb0
 F structureDest.tcl d1bcec84de069eb4a54274e64ff7ab64aa464f905e4b5562329af8b0cf40c21a
 F structureReport.tcl 7de7aab9646e21333f6060dc06f6adfacc2804672656333b398ee193b9cf47bb
@@ -382,7 +382,7 @@ F tests/pdfVersion.test 091693c87b294240ffd2a64c45349c705b7f566f59549276ced88ad0
 F tests/pdfa.test 2c1245337b7613c06f65d576c330a1f8ad0b44b0d93835eab8cb7f249aeec048
 F tests/shading.test ba8847c479803fea20fe83ad5f58cc26a14f922f6ba94a2d8f8ea4e847021134
 F tests/shaping.test 2782df5ad77b4d09adaa5ce270cb511b84b2f42702daed2e31517f4e845702e2
-F tests/sign.test 9ea34f76265903e88c0452a00ddf999d18710563b9864b153ee0fe399cb73d63
+F tests/sign.test 707c84a61d86a2a4abfe681cb93d1ec60e4ccd74477cf7b81f326b4f97a450f2
 F tests/structure.test 32aff1d60077aac37719bbabaea237be74325fbe859d0fb75850812db6bbfa0a
 F tests/svg.test 7ab24f3222c3bdfffec3bc535bd3bdbcd05bddb2429d5759fbd3e814210582e2
 F tests/table.test 96bb74bf9da64ccd574138cec7a2ad255dd76e998a2643b473a2264af832ffd2
@@ -430,8 +430,8 @@ F xObject.tcl f02aff5892e9e62dde6c653eeb4bf4af411c3ca45449be3192df9b6640e23bdd
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl e95e02822457e12a1e1dedbd34aa19c1db20482afdf99528aace75f13beed557
 F zugferd.tcl 0014cea02c7863376ca453d4c86ad9303dbeae967395d971ae4e9931e9e19d07
-P 7c8f62ca7319eb067efa668f5f6f2fc820bb77bbbd6a3a69e685aefddc1ab30b
-R 0eb4209b2457598663d3f0ee67a9a6b5
+P 7e1f8fe1cec3fda8309dffead8ed60d454d25d3507f8455fd9f5da961e25460c
+R f5331e8695b18dd98a9844b2ed7f89ff
 U alex
-Z 1396d12b73a763c568a3c2fec56e5c25
+Z c42aa84abe4c6a2e49d992a7e831dd6e
 # Remove this line to create a well-formed Fossil manifest.
