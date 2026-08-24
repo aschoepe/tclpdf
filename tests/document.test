@@ -925,6 +925,11 @@ test document-strings-24.5 {no module builds a string past the document unrecord
     text.tcl {6 {strings INSIDE a content stream - the stream is encrypted as a whole, a second pass would destroy it (7.6.2)}}
     attach.tcl {1 {keyBytes only ASKS what the bytes would be, for the name tree order (7.9.6) - the answer never reaches the file}}
     imagePng.tcl {3 {the default of the command prefix a namespace proc takes instead of [my]}}
+    image.tcl {1 {the lookup string of a palette written INTO an inline image (8.9.7) - the
+        same reason text.tcl has six: a string in a content stream is not encrypted on its
+        own, the stream around it is (7.6.2), and a doubly encrypted palette is a picture
+        in the wrong colours. The image XObject way through the same [TiffSpace] passes
+        [my BytesStr] and is encrypted like every other string in an object}}
     sign.tcl {3 {a signature dictionary is never in an encrypted document - measured in both
         directions: encrypt refuses a document being signed, sign refuses an encrypted one, and
         an update refuses an encrypted file at the reader. The three sites sit in the namespace
@@ -1045,6 +1050,66 @@ test document-lazy-14.2 {a private method of another topic loads it too} -body {
   $doc destroy
   list $code [string match {*unknown method*} $message]
 } -result {1 0}
+
+test document-lazy-14.3 {a method whose module is not loaded yet finds its topic} -body {
+  # [initialView] is a public method of viewerPreferences.tcl, [fitCheck],
+  # [fitAnchor] and [fitExtent] are the shared arithmetic in page.tcl that
+  # [image place] reaches through, and [AnnotationOnPage] is the one place in
+  # output.tcl that hangs an annotation on a page - link, note, field and
+  # signature all go through it. Each is called before anything else has
+  # pulled its module in, so each needs a line in the table. Without one the
+  # call is "unknown method", either at the caller's own call or INSIDE a
+  # placement or a [link], where nobody could see why: measured 2026-08-24,
+  # example 01.04 died with 'unknown method "AnnotationOnPage"' while four
+  # test files stayed green.
+  #
+  # A CHILD INTERPRETER APIECE, and that is what makes this a measurement:
+  # [oo::define] adds the methods to the CLASS, so the first test in a file
+  # that adds a page or writes a document defines them for every test after
+  # it - which is exactly why the four files above did not catch it. Measured
+  # by deleting the lines: in one interpreter this test passed either way.
+  # The same reason and the same remedy as xmp-11.1.
+  #
+  # The reading is the MESSAGE, not the code: half of these calls are meant
+  # to fail on their arguments once they are found (a value that is no page
+  # mode, a missing argument), and what is being measured is that they are
+  # found at all. [AnnotationOnPage] is not exported - a private method
+  # called from outside is out of reach either way - so the object exports it
+  # for the length of the measurement, which changes nothing about the
+  # lookup that is under test.
+  set out {}
+  foreach call {
+    {initialView -pageMode Nonsense} fitCheck fitAnchor fitExtent
+    {AnnotationOnPage 0 {1 0 R}}
+  } {
+    set child [interp create]
+    $child eval [list set ::auto_path $::auto_path]
+    lappend out [$child eval [list apply {{call} {
+      package require tclpdf
+      set doc [tclpdf new]
+      oo::objdefine $doc export [lindex $call 0]
+      catch {$doc {*}$call} message
+      expr {![string match {*unknown method*} $message]}
+    }} $call]]
+    interp delete $child
+  }
+  set out
+} -result {1 1 1 1 1}
+
+test document-lazy-14.4 {an /OpenAction destination goes through the one Destination} -body {
+  # [initialView -page] does not build a destination array of its own: it
+  # calls the same [Destination] that [destination], [link] and [bookmark]
+  # call, so the four cannot come to disagree about what /Fit or /XYZ looks
+  # like. The two spellings below have to produce the same array.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc page add
+  set byHand [$doc destination 1 -to {20 40} -zoom 1]
+  $doc initialView -page 1 -to {20 40} -zoom 1
+  set fromView [$doc catalogEntry OpenAction]
+  $doc destroy
+  list [expr {$byHand eq $fromView}] [string match {*/XYZ*} $fromView]
+} -result {1 1}
 
 
 cleanupTests

@@ -33,6 +33,10 @@
 #                             pattern without knowing about it
 #   coords, distance          document unit to points, y from the top
 #   extent, fitExtent         sizes, and fitting a natural size into a box
+#   fitCheck, fitAnchor       -fit {w h} with -fitMode, and the -align and
+#                             -valign that say where in that box the thing
+#                             sits - one piece of arithmetic, since an anchor
+#                             is the same sum against a box of no size
 #
 
 package require Tcl 8.6.11-
@@ -440,7 +444,14 @@ oo::define ::tclpdf::document::document {
   # offset and page height included, and inside a form it is the form's own
   # origin. Subtracting it and converting back is the inverse of the one
   # conversion this package has.
-  method PlacedBox {width height matrix} {
+  # A CLIP narrows it. A placement that covers a box has been cut back to that
+  # box (image place -fitMode cover), so the rectangle that "completely
+  # encloses the visible content" is what is left of the placement inside the
+  # clip - the placement itself would claim page on the sides the clip took
+  # away. Both rectangles are upright and in the caller's system, so the
+  # intersection is exact; an empty one comes back as a box of no size at the
+  # clip's corner, which is what a placement entirely outside its box covers.
+  method PlacedBox {width height matrix {clip {}}} {
     lassign [my coords 0 0] zeroX zeroY
     set unit [my cget -unit]
     set xs {}
@@ -452,8 +463,22 @@ oo::define ::tclpdf::document::document {
     }
     set left [::tcl::mathfunc::min {*}$xs]
     set top [::tcl::mathfunc::min {*}$ys]
-    return [list $left $top [expr {[::tcl::mathfunc::max {*}$xs] - $left}] \
-        [expr {[::tcl::mathfunc::max {*}$ys] - $top}]]
+    set right [::tcl::mathfunc::max {*}$xs]
+    set bottom [::tcl::mathfunc::max {*}$ys]
+    if {[llength $clip] == 4} {
+      lassign $clip clipLeft clipTop clipWidth clipHeight
+      set left [expr {max($left, $clipLeft)}]
+      set top [expr {max($top, $clipTop)}]
+      set right [expr {min($right, $clipLeft + $clipWidth)}]
+      set bottom [expr {min($bottom, $clipTop + $clipHeight)}]
+      if {$right < $left} {
+        set right $left
+      }
+      if {$bottom < $top} {
+        set bottom $top
+      }
+    }
+    return [list $left $top [expr {$right - $left}] [expr {$bottom - $top}]]
   }
 
   method coords {x y {index {}}} {
@@ -500,6 +525,24 @@ oo::define ::tclpdf::document::document {
   # width is given and the other does not. Extracted when the second consumer
   # appeared - the copy in the image module was already three branches deep.
   method fitExtent {naturalWidth naturalHeight options} {
+    # -fit names a BOX and keeps the proportions, which is the one sizing
+    # option that cannot be worked out from the natural size alone: the box
+    # decides the factor, and which of its two edges decides it is what
+    # -fitMode says. It stands before -size because it is the same question
+    # answered with an aspect ratio kept - a caller who gave both is refused
+    # in [fitCheck] long before this runs.
+    if {[dict exists $options fit] && [dict get $options fit] ne {}} {
+      lassign [dict get $options fit] boxWidth boxHeight
+      set across [expr {$boxWidth / double($naturalWidth)}]
+      set down [expr {$boxHeight / double($naturalHeight)}]
+      # contain takes the SMALLER factor, so both edges fit and the thing is
+      # whole; cover takes the larger, so both edges are covered and what
+      # sticks out is cut off by the caller of this - see [ImagePlace].
+      set factor [expr {[dict get $options fitMode] eq "cover"
+          ? max($across, $down) : min($across, $down)}]
+      return [list [expr {$naturalWidth * $factor}] \
+          [expr {$naturalHeight * $factor}]]
+    }
     if {[dict get $options size] ne {}} {
       return [dict get $options size]
     }
@@ -520,6 +563,186 @@ oo::define ::tclpdf::document::document {
     }
     return [list $naturalWidth $naturalHeight]
   }
+
+  # -- fitting into a box, and where in it the thing sits -------------------
+  #
+  # THE SAME TWO WORDS THE REST OF THE PACKAGE ALREADY USES. Which point of a
+  # thing the given coordinate names is asked twice, once per axis, and both
+  # questions have an answer in this package already: [text] says -align
+  # left|center|right for the horizontal one (without -width, "left starts
+  # there, right ends there, center is centred on it"), and a table cell says
+  # valign top|middle|bottom for the vertical one. So a picture says the same,
+  # with the same words and the same values.
+  #
+  # NOT -anchor, although that is what a picture's nine positions are usually
+  # called: [text] has an -anchor already and it means baseline or top - one
+  # AXIS, not a corner. An -anchor top on a picture would have to mean "top
+  # edge, centred across", and the same word would then place a line of text
+  # without touching its x and a picture with its x moved. One word, two
+  # senses, in one package: a caller could only find that out by trying it.
+  # -align/-valign has no such reading, and it buys the nine positions from
+  # two options a reader of this manual has already met.
+  #
+  # -fit {w h} is the box. It and the anchor are ONE piece of arithmetic and
+  # not two: the corner is [at] + fraction * (box - drawn) on each axis, and
+  # WITHOUT a box that is a box of no size, which puts the same fractions to
+  # work as the plain anchor - 0 leaves the corner where it was, 1 pulls the
+  # thing fully left of or above it, 0.5 halves it. One formula, so an anchor
+  # and an anchor inside a box cannot drift apart.
+
+  # What -fit, -fitMode, -align and -valign have to be before [fitExtent] and
+  # [fitAnchor] read them. Refused HERE, at the call, like every other sizing
+  # option (geometry.tcl, checkFit) - the two run side by side because they
+  # answer for different options, not because either is a copy. "what" names
+  # the call for the refusal ("image place").
+  method fitCheck {options what} {
+    set fit [expr {[dict exists $options fit] ? [dict get $options fit] : {}}]
+    if {$fit ne {}} {
+      if {[catch {llength $fit} count] || $count != 2} {
+        return -code error -errorcode [list TCLPDF FIT BOX $fit $what] \
+            "tclpdf: -fit of $what is a box {width height}, not \"$fit\""
+      }
+      foreach value $fit {
+        if {![string is double -strict $value] || $value <= 0} {
+          return -code error -errorcode [list TCLPDF FIT BOX $fit $what] \
+              "tclpdf: -fit of $what takes lengths above zero, not\
+              \"$value\""
+        }
+      }
+      # A box already says how large the thing comes out, and so does each of
+      # these. Given both, one of them would have to win in silence - and
+      # whichever won, the other is a sentence the caller wrote and nothing
+      # read. -dpi is not among them: it says how large a PIXEL is, which is
+      # what the natural proportions are made of, and those are what -fit
+      # keeps.
+      foreach key {size width height scale} {
+        if {[dict exists $options $key] && [dict get $options $key] ne {}} {
+          return -code error -errorcode [list TCLPDF FIT SIZE $key $what] \
+              "tclpdf: -fit of $what fits into a box and -$key sets the size,\
+              so the two contradict each other - fit into the box, or give\
+              the size and place it yourself"
+        }
+      }
+    }
+    set mode [expr {[dict exists $options fitMode] ?
+        [dict get $options fitMode] : {}}]
+    if {$mode ne {}} {
+      if {$mode ni {contain cover}} {
+        return -code error -errorcode [list TCLPDF FIT MODE $mode $what] \
+            "tclpdf: -fitMode of $what is contain (the whole of it inside the\
+            box) or cover (the whole box covered, what sticks out cut off),\
+            not \"$mode\""
+      }
+      if {$fit eq {}} {
+        return -code error -errorcode [list TCLPDF FIT MODE $mode $what] \
+            "tclpdf: -fitMode of $what says how to fill a box and no box was\
+            given - add -fit {width height}"
+      }
+    }
+    foreach {option key} {-align align -valign valign} {
+      if {![dict exists $options $key]} {
+        continue
+      }
+      if {[my FitFraction $key [dict get $options $key]] eq {}} {
+        return -code error \
+            -errorcode [list TCLPDF FIT ALIGN $option \
+                [dict get $options $key] $what] \
+            "tclpdf: $option of $what is\
+            [expr {$key eq "align" ? "left, center or right" :
+                "top, middle or bottom"}] - not\
+            \"[dict get $options $key]\""
+      }
+    }
+    # A TURNED THING IS PLACED BY ITS CORNER, and these three describe an
+    # UPRIGHT box - so the two say different things about where the thing
+    # ends up, and neither of them is wrong on its own. Measured before this
+    # refusal stood: a picture fitted into a 40 by 40 box at {20 20} and
+    # turned by 90 degrees came out entirely beside that box, because the
+    # turn happens about the corner the fitting had just moved; and a covered
+    # box was cut by a rectangle standing at an angle to the picture, so
+    # neither promise held - the box was not covered in its corners and the
+    # picture was cut where nobody asked.
+    #
+    # Refused rather than defined one way or the other. Turning the clip with
+    # the picture would need a path of four corners and would still leave the
+    # box's own corners bare; leaving it upright cuts a picture nobody aimed
+    # there. The way out is one call: [image size] takes -fit and answers the
+    # fitted size, and -size with -rotate turns that about -at as it always
+    # has.
+    #
+    # -align left and -valign top are NOT given up by this: they are what a
+    # placement does anyway, so a caller who spells them out beside -rotate
+    # gets exactly what the words say. Only a value that MOVES the corner is
+    # refused, which is why the fractions are compared rather than the words.
+    if {[dict exists $options rotate]
+        && [string is double -strict [dict get $options rotate]]
+        && [dict get $options rotate] != 0} {
+      set turned {}
+      if {$fit ne {}} {
+        lappend turned -fit
+      }
+      foreach {option key} {-align align -valign valign} {
+        if {[dict exists $options $key]
+            && [my FitFraction $key [dict get $options $key]] != 0} {
+          lappend turned $option
+        }
+      }
+      if {[llength $turned]} {
+        return -code error \
+            -errorcode [list TCLPDF FIT ROTATE [dict get $options rotate] \
+                $what] \
+            "tclpdf: -rotate of $what turns the placement about the point -at\
+            names, and [join $turned { and }] [expr {[llength $turned] > 1 ?
+                "place it" : "places it"}] in an upright box - a turned\
+            placement leaves that box, and a covered box would be cut by a\
+            rectangle standing at an angle to it; ask for the fitted size\
+            (\"image size\" takes -fit and answers it) and give it with\
+            -size, which -rotate turns about -at as before"
+      }
+    }
+    return
+  }
+
+  # How far along an axis the given point sits on the thing: 0 at its leading
+  # edge, 1 at its trailing one. Answers EMPTY for a value that is neither,
+  # which is what [fitCheck] refuses on - so the list of accepted words stands
+  # once and the check and the arithmetic cannot disagree about it.
+  #
+  # "centre" is taken beside "center" because [text] takes it for -align.
+  method FitFraction {which value} {
+    if {$which eq "align"} {
+      switch -- $value {
+        left {return 0}
+        center - centre {return 0.5}
+        right {return 1}
+      }
+      return {}
+    }
+    switch -- $value {
+      top {return 0}
+      middle {return 0.5}
+      bottom {return 1}
+    }
+    return {}
+  }
+
+  # The top left corner a placement actually starts at, in the document unit:
+  # the given point, moved by where in the box the thing was asked to sit.
+  # Without -fit the box has no size and the move is the plain anchor.
+  method fitAnchor {at width height options} {
+    lassign $at left top
+    set boxWidth 0
+    set boxHeight 0
+    if {[dict exists $options fit] && [dict get $options fit] ne {}} {
+      lassign [dict get $options fit] boxWidth boxHeight
+    }
+    set across [my FitFraction align [expr {[dict exists $options align]
+        ? [dict get $options align] : "left"}]]
+    set down [my FitFraction valign [expr {[dict exists $options valign]
+        ? [dict get $options valign] : "top"}]]
+    return [list [expr {$left + $across * ($boxWidth - $width)}] \
+        [expr {$top + $down * ($boxHeight - $height)}]]
+  }
 }
 
-package provide tclpdf::page 1.3
+package provide tclpdf::page 1.4

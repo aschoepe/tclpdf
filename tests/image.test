@@ -2651,4 +2651,778 @@ test image-tiff-20.28 {the shipped example file is what the example says it is} 
       [dict get $info rowsPerStrip] [dict get $info xResolution] $size
 } -result {640 480 deflate 30 16 200.0 {81.28 60.96}}
 
+# --- inline images (8.9.7) -------------------------------------------------
+#
+# A picture written INTO the content stream instead of beside it: BI, an
+# abbreviated dictionary, ID, the bytes, EI. It has no object number, no
+# entry in the page's resources and no way of being used twice - which is
+# the whole of its case, and the reason it is ASKED for with -inline rather
+# than chosen by size behind the caller's back.
+#
+# What most of these turn on is the abbreviations of Table 92 and Table 93,
+# because they are the one thing that makes an inline image different from
+# any other, and the one thing a reader cannot guess: /W not /Width, /Fl not
+# /FlateDecode, and /I in both roles - Interpolate as a key, Indexed as a
+# colour space value.
+
+# A tiny RGB picture, two pixels of red and green, that fits inside the 4096
+# bytes an inline image may carry - which most of the shipped assets do not.
+proc inlinePng {{depth 8} {colorType 2} {rows "\x00\xff\x00\x00\x00\xff\x00"}} {
+  return [::tclpdfTest::png 2 1 $depth $colorType $rows]
+}
+
+# The BI ... EI of a content stream: the dictionary line and the data,
+# without the operators around them. Answers {} when there is none.
+proc inlineImage {text} {
+  if {![regexp "BI\n(\[^\n\]*)\nID (.*)\nEI\n" $text -> pairs data]} {
+    return {}
+  }
+  return [list $pairs $data]
+}
+
+test image-inline-21.1 {a picture goes into the content stream} -body {
+  # 8.9.7: BI, the dictionary, ID, one white-space character, the data, EI.
+  # And no /Do and no XObject resource, because there is no object to name.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+  set text [::tclpdfTest::content $doc]
+  set path [::tclpdfTest::scratch inline.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {BI\n} $text] [regexp -all {\nEI\n} $text] \
+      [regexp { Do} $text] [regexp {/XObject} $bytes] \
+      [lindex [inlineImage $text] 0]
+} -result {1 1 0 0 {/W 2 /H 1 /CS /RGB /BPC 8 /F /Fl /DP << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 2 >>}}
+
+test image-inline-21.2 {the keys are the abbreviations of Table 92} -body {
+  # The whole point of the exercise. An inline image dictionary holds the
+  # entries of Table 92 under their SHORT names - a /Width or a
+  # /BitsPerComponent in there is not a longer spelling of the same thing,
+  # it is an entry the reader has no case for. Type, Subtype and Length have
+  # no place in it at all.
+  #
+  # The abbreviations stop at the image dictionary: what stands INSIDE the
+  # /DP dictionary is a filter's own parameters, and Table 92 says nothing
+  # about those - /Predictor and /BitsPerComponent keep their names there,
+  # in the same line that calls the picture's depth /BPC.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+  set pairs [lindex [inlineImage [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  regsub {<<.*>>} $pairs {} outer
+  list [regexp {/Width|/Height|/BitsPerComponent|/ColorSpace|/Filter|/DecodeParms} \
+          $outer] \
+      [regexp {/Type|/Subtype|/Length} $pairs] \
+      [regexp {/DP << /Predictor 15 /Colors 3 /BitsPerComponent 8} $pairs]
+} -result {0 0 1}
+
+test image-inline-21.3 {-interpolate is /I, and the picture is still /RGB} -body {
+  # The quirk worth a test of its own: /I is Interpolate as a KEY and
+  # Indexed as a colour space VALUE, and both may stand in one dictionary.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng] -interpolate 1
+  $doc image place pic -at {20 20} -width 20 -inline 1
+  set pairs [lindex [inlineImage [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  list [string match {*/CS /RGB*} $pairs] [string match {*/I true*} $pairs]
+} -result {1 1}
+
+test image-inline-21.4 {a palette picture is /CS [/I /RGB hival lookup]} -body {
+  # Table 93 abbreviates the head of the array AND its base, and leaves the
+  # hival and the lookup string alone.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image draw -data [::tclpdfTest::png 4 1 1 3 [binary format cc 0 0x60] {} \
+      "[binary format ccc 255 0 0][binary format ccc 0 0 255]"] \
+      -at {20 20} -width 20 -inline 1
+  set pairs [lindex [inlineImage [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  string match {*/CS \[/I /RGB 1 (\\377\\000\\000\\000\\000\\377)\]*} $pairs
+} -result 1
+
+test image-inline-21.5 {a greyscale picture is /CS /G} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image draw -data [inlinePng 8 0 "\x00\x40\x80"] -at {20 20} -width 20 \
+      -inline 1
+  set pairs [lindex [inlineImage [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  string match {*/CS /G*} $pairs
+} -result 1
+
+test image-inline-21.6 {a JPEG keeps its bytes and is /F /DCT} -body {
+  # The pass-through is the same one an image XObject gets - what changes is
+  # where the bytes end up, not what they are.
+  set jpeg [resolutionJpeg {}]
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image draw -data $jpeg -at {20 20} -width 20 -inline 1
+  lassign [inlineImage [::tclpdfTest::content $doc]] pairs data
+  $doc destroy
+  list $pairs [string equal $data $jpeg]
+} -result {{/W 16 /H 16 /CS /G /BPC 8 /F /DCT} 1}
+
+test image-inline-21.7 {the three abbreviation tables answer for themselves} -body {
+  # Unit tests for the maps, so that a colour space or a filter this package
+  # does not currently produce is still known to be right when it does.
+  list [::tclpdf::image::inlineSpace /DeviceCMYK] \
+      [::tclpdf::image::inlineSpace /DeviceGray] \
+      [::tclpdf::image::inlineSpace {[/Indexed /DeviceCMYK 3 (abc)]}] \
+      [::tclpdf::image::inlineFilter /CCITTFaxDecode] \
+      [::tclpdf::image::inlineFilter /RunLengthDecode] \
+      [::tclpdf::image::inlineFilter /ASCII85Decode] \
+      [::tclpdf::image::inlinePairs {Width 3 Decode {[1 0]} ImageMask true}]
+} -result {/CMYK /G {[/I /CMYK 3 (abc)]} /CCF /RL /A85 {W 3 D {[1 0]} IM true}}
+
+test image-inline-21.8 {an entry outside Table 91 is refused by name} -body {
+  # The backstop under the refusals above: whatever a format reader learns
+  # to write next, an entry an inline image cannot hold is named rather
+  # than written out and left for a reader to trip over.
+  set code [catch {::tclpdf::image::inlinePairs {Width 3 SMask {4 0 R}}} \
+      message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*Table 91*SMask*shall be ignored*image XObject*} $message]
+} -result {1 {TCLPDF IMAGE INLINE ENTRY SMask} 1}
+
+test image-inline-21.9 {an ICCBased space cannot be abbreviated} -body {
+  set code [catch {::tclpdf::image::inlineSpace {[/ICCBased 7 0 R]}} \
+      message options]
+  list $code [lrange [dict get $options -errorcode] 0 3] \
+      [string match {*CIE-based*8.9.7*} $message]
+} -result {1 {TCLPDF IMAGE INLINE SPACE} 1}
+
+test image-inline-21.10 {the filters an inline image may not use} -body {
+  # JPXDecode, JBIG2Decode and Crypt are missing from Table 92 because 8.9.7
+  # forbids them, and the message says which of the two reasons it is - a
+  # filter that is merely unknown gets the other sentence.
+  set jpx [catch {::tclpdf::image::inlineFilter /JPXDecode} message options]
+  set made [catch {::tclpdf::image::inlineFilter /MadeUpDecode} second]
+  list $jpx [dict get $options -errorcode] \
+      [string match {*shall not be used with inline images*} $message] \
+      $made [string match {*Table 92 and there is none for*} $second] \
+      [::tclpdf::image::inlineFilter {[/ASCII85Decode /LZWDecode]}]
+} -result {1 {TCLPDF IMAGE INLINE FILTER /JPXDecode} 1 1 1 {[/A85 /LZW]}}
+
+test image-inline-21.11 {a stencil goes inline and paints the fill colour} -body {
+  # The picture inline images exist for: one bit per sample, a few dozen
+  # bytes, painted in whatever colour is in force. Table 87 still applies -
+  # ImageMask true, BitsPerComponent 1, a Decode array of [0 1] or [1 0] -
+  # and there is no colour space at all, so nothing is recorded against a
+  # PDF/A output intent either.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed stamp -data [stencilPng] -stencil 1
+  $doc style -fill {0.7 0.1 0.1}
+  $doc image place stamp -at {20 20} -width 20 -inline 1
+  set pairs [lindex [inlineImage [::tclpdfTest::content $doc]] 0]
+  set used [dict keys [$doc colourSpacesUsed]]
+  $doc destroy
+  list [string match {*/IM true*} $pairs] [string match {*/BPC 1*} $pairs] \
+      [string match {*/D \[0 1\]*} $pairs] [string match {*/CS *} $pairs] $used
+} -result {1 1 1 0 DeviceRGB}
+
+test image-inline-21.12 {-invert reaches an inline picture too} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng 8 0 "\x00\x40\x80"] -invert 1
+  $doc image place pic -at {20 20} -width 20 -inline 1
+  set pairs [lindex [inlineImage [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  string match {*/D \[1 0\]*} $pairs
+} -result 1
+
+test image-inline-21.13 {an uncompressed TIFF goes inline} -body {
+  # One strip, or several that are joined - a TIFF that reaches the file as
+  # ONE image is a picture like any other and may be written inline.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image draw -data [::tclpdfTest::tiffOne] -at {20 20} -width 20 -inline 1
+  set pairs [lindex [inlineImage [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  list [string match {*/W 4 /H 4*} $pairs] [string match {*/CS /G*} $pairs] \
+      [string match {*/F /Fl*} $pairs]
+} -result {1 1 1}
+
+test image-inline-21.14 {a striped TIFF is several images and BI ... EI is one} \
+    -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed scan -data [tiffStack 8 2]
+  set code [catch {$doc image place scan -at {20 20} -width 20 -inline 1} \
+      message options]
+  set text [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [dict get $options -errorcode] \
+      [string match {*4 strips*ONE image*RowsPerStrip 8*} $message] \
+      [string length $text]
+} -result {1 {TCLPDF IMAGE INLINE STACKED} 1 0}
+
+test image-inline-21.15 {over 4096 bytes the picture is refused, never switched} \
+    -constraints haveImages -body {
+  # The one decision this package will not make quietly. A picture over the
+  # line could be written as an XObject and would come out valid - and a
+  # caller who asked for BI ... EI and got a /Do would have no way of
+  # noticing. The message names both numbers and the way out.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed photo $photo
+  set code [catch {$doc image place photo -at {20 20} -width 20 -inline 1} \
+      message options]
+  set text [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [dict get $options -errorcode] \
+      [string match {*8.9.7*leave -inline off*} $message] [string length $text]
+} -result {1 {TCLPDF IMAGE INLINE SIZE 30774 4096} 1 0}
+
+test image-inline-21.16 {the line itself, at the byte} -body {
+  # The limit lowered rather than a fixture built to sit on it: what is
+  # tested is the comparison, and a 4097-byte PNG would test the same thing
+  # with four kilobytes of test data.
+  set saved $::tclpdf::image::inlineLimit
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng]
+  $doc image place pic -at {20 20} -width 20 -inline 1
+  set size [string length [lindex \
+      [inlineImage [::tclpdfTest::content $doc]] 1]]
+  $doc page add
+  set ::tclpdf::image::inlineLimit $size
+  set exact [catch {$doc image place pic -at {20 20} -width 20 -inline 1}]
+  set ::tclpdf::image::inlineLimit [expr {$size - 1}]
+  set over [catch {$doc image place pic -at {20 40} -width 20 -inline 1} \
+      message options]
+  set ::tclpdf::image::inlineLimit $saved
+  $doc destroy
+  list $size $exact $over [dict get $options -errorcode]
+} -result {15 0 1 {TCLPDF IMAGE INLINE SIZE 15 14}}
+
+test image-inline-21.17 {a picture with transparency of its own} -body {
+  # Table 92 has neither Mask nor SMask, and an SMask would be an indirect
+  # reference besides, which a content stream shall not contain (7.8.2).
+  # Three ways a PNG can bring transparency, and all three say so.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed keyed -data [::tclpdfTest::png 2 1 8 0 "\x00\x40\x80" "\x00\x40"]
+  $doc image embed partly -data [stencilPalettePng {0 0 0} {255 255 255} "\x00\x80"]
+  set result {}
+  foreach alias {keyed partly} {
+    catch {$doc image place $alias -at {20 20} -width 20 -inline 1} message \
+        options
+    lappend result [dict get $options -errorcode] \
+        [string match {*Table 91*leave -inline off*} $message]
+  }
+  $doc destroy
+  set result
+} -result {{TCLPDF IMAGE INLINE MASK colourKey} 1 {TCLPDF IMAGE INLINE MASK softMask} 1}
+
+test image-inline-21.18 {an alpha channel, and a mask a caller put on} \
+    -constraints haveImages -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed rgba $rgba
+  $doc image embed fade -data [inlinePng 8 0 "\x00\x40\x80"]
+  $doc image embed worn -data [inlinePng 8 0 "\x00\x40\x80"] -mask fade
+  set result {}
+  foreach alias {rgba worn} {
+    catch {$doc image place $alias -at {20 20} -width 20 -inline 1} message \
+        options
+    lappend result [dict get $options -errorcode]
+  }
+  $doc destroy
+  set result
+} -result {{TCLPDF IMAGE INLINE MASK alpha} {TCLPDF IMAGE INLINE MASK}}
+
+test image-inline-21.19 {an ICC profile cannot travel inline} -constraints \
+    {haveImages haveSrgbIcc} -body {
+  # /ICCBased is an array naming a stream object, and a content stream shall
+  # not contain indirect references (7.8.2). The message names -icc 0, which
+  # is the way to write the picture inline in its device space.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed tagged -data [::tclpdfTest::pngWithIccp [inlinePng] \
+      [::tclpdfTest::readBytes $srgbIcc]]
+  set code [catch {$doc image place tagged -at {20 20} -width 20 -inline 1} \
+      message options]
+  $doc destroy
+  list $code [dict get $options -errorcode] \
+      [string match {*7.8.2*-icc 0*} $message]
+} -result {1 {TCLPDF IMAGE INLINE ICC} 1}
+
+test image-inline-21.20 {a refusal leaves the document exactly as it was} \
+    -constraints haveImages -body {
+  # -opacity makes an ExtGState as it is read, and [ImageWrite] creates
+  # objects - so an inline picture is built BEFORE either, and a refusal
+  # must leave no object, no resource, no recorded colour space and no
+  # half-open q behind it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed photo $photo
+  set before [[$doc writer] count]
+  set code [catch {$doc image place photo -at {20 20} -width 20 -inline 1 \
+      -opacity 0.5}]
+  set after [[$doc writer] count]
+  set text [::tclpdfTest::content $doc]
+  set used [dict keys [$doc colourSpacesUsed]]
+  $doc destroy
+  list $code [expr {$after - $before}] [string length $text] $used
+} -result {1 0 0 {}}
+
+test image-inline-21.21 {-inline takes a boolean} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image embed pic -data [inlinePng]
+  set code [catch {$doc image place pic -at {20 20} -inline maybe} message \
+      options]
+  $doc destroy
+  list $code [dict get $options -errorcode] [string match {*boolean*} $message]
+} -result {1 {TCLPDF IMAGE INLINE BOOLEAN maybe} 1}
+
+test image-inline-21.22 {placed twice inline, the bytes travel twice} -body {
+  # What -inline COSTS, said out loud: an inline image cannot be reused,
+  # which is why it is asked for rather than chosen by size. The same
+  # picture placed once inline and once as an XObject gets both.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng]
+  $doc image place pic -at {20 20} -width 20 -inline 1
+  $doc image place pic -at {20 40} -width 20 -inline 1
+  $doc image place pic -at {20 60} -width 20
+  $doc image place pic -at {20 80} -width 20
+  set text [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {BI\n} $text] [regexp -all { Do} $text] \
+      [regexp -all {/CS /RGB} $text]
+} -result {2 2 2}
+
+test image-inline-21.23 {the placement arithmetic is the one a Do gets} -body {
+  # An inline image is drawn on the same unit square an image XObject is
+  # (8.9.5), so -width, -rotate and -opacity come out identically - the two
+  # differ in where the bytes are, not in how the picture is placed.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng]
+  $doc image place pic -at {20 20} -width 20 -rotate 30 -opacity 0.4 -inline 1
+  set inline [placements [::tclpdfTest::content $doc]]
+  $doc page add
+  $doc image place pic -at {20 20} -width 20 -rotate 30 -opacity 0.4
+  set plain [placements [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [string equal $inline $plain] [llength $inline]
+} -result {1 1}
+
+test image-inline-21.24 {an inline picture counts for the PDF/A intent} \
+    -constraints {haveTdom haveCmykIcc} -body {
+  # A picture's colour space counts like a painted colour whether it sits in
+  # an object or in the stream (ISO 19005-2, 6.2.4.3) - the record names the
+  # placement, and an inline placement is one.
+  set doc [tclpdf new -unit mm]
+  $doc info Title "inline"
+  $doc page add
+  $doc pdfa -part 2 -conformance B -profile $cmykIcc
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+  set used [dict keys [$doc colourSpacesUsed]]
+  lassign [::tclpdfTest::writes $doc inline-intent.pdf] code written
+  $doc destroy
+  list $used $code $written
+} -result {DeviceRGB 1 0}
+
+test image-inline-21.25 {inline in a tagged document is a Figure or an artifact} \
+    -body {
+  # -alt and -artifact work on the placement, not on the object, so they
+  # reach an inline picture unchanged: the marked-content sequence wraps
+  # BI ... EI exactly as it wraps a /Do.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1 \
+      -alt "Zwei Farbpunkte"
+  $doc image draw -data [inlinePng] -at {20 40} -width 20 -inline 1 -artifact 1
+  set text [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {/Figure <</MCID [0-9]+>> BDC} $text] \
+      [regexp -all {/Artifact <</Type /Layout>> BDC} $text] \
+      [regexp -all {BI\n} $text]
+} -result {1 1 2}
+
+test image-inline-21.26a {the Length key is PDF 2.0 and only 2.0} -body {
+  # 8.9.7: /L "shall be present on all inline images" and is new to PDF 2.0 -
+  # the length of the data between ID and EI, excluding the white space that
+  # delimits them. A 1.x file gets none: the key did not exist there, and the
+  # clause's own note says a processor will not meet it in an older file.
+  set result {}
+  foreach version {1.7 2.0} {
+    set doc [tclpdf new -unit mm -compress 0 -version $version]
+    $doc page add
+    $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+    lassign [inlineImage [::tclpdfTest::content $doc]] pairs data
+    $doc destroy
+    if {[regexp {/L ([0-9]+)} $pairs -> length]} {
+      lappend result [expr {$length == [string length $data] ? "L=exact"
+          : "L=$length for [string length $data] bytes"}]
+    } else {
+      lappend result "no L"
+    }
+  }
+  set result
+} -result {{no L} L=exact}
+
+test image-inline-21.26b {the size refusal quotes the clause as it reads} -body {
+  # 8.9.7 says SHOULD, not shall - twice. The line is the standard's
+  # recommendation and the refusal is this package's decision, and the
+  # message says so rather than claiming a requirement that is not there.
+  set saved $::tclpdf::image::inlineLimit
+  set ::tclpdf::image::inlineLimit 4
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  catch {$doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1} \
+      message
+  set ::tclpdf::image::inlineLimit $saved
+  $doc destroy
+  list [string match {*should be used only for small images*} $message] \
+      [string match {*tclpdf holds to that line*} $message]
+} -result {1 1}
+
+test image-inline-21.26c {veraPDF takes an inline picture under PDF/A} \
+    -constraints {haveTdom haveSrgbIcc} -body {
+  # Measured, because the clause could have gone either way: PDF/A says
+  # nothing that shuts an inline image out, and veraPDF reads the abbreviated
+  # dictionary as an image dictionary like any other. ISO 19005-2, 6.2.8 even
+  # names it - "for an inline image, the I key shall have a value of false" -
+  # so the rules that hold for an image XObject hold here, and the picture
+  # below keeps the profile it claims.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -conformance B -profile $srgbIcc
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+  set path [::tclpdfTest::scratch inline-pdfa.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  set report [expr {$code ? $message : [::tclpdfTest::verapdf $path 3b]}]
+  file delete $path
+  list $code $report
+} -result {0 ok}
+
+test image-inline-21.26 {qpdf reads the picture back out of the stream} -body {
+  # The one check no amount of reading the standard replaces: a reader that
+  # is not this package parses BI ... ID ... EI, finds the end of the binary
+  # data, and hands back the picture. Measured with qpdf, which normalises
+  # the stream and would refuse a length it cannot determine.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+  set path [::tclpdfTest::scratch inline-read.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The dictionary reaches the FILE as it was written - the content stream
+  # is the only place it could be, so finding it there is finding it in the
+  # stream.
+  list [regexp {BI\n/W 2 /H 1 /CS /RGB /BPC 8 /F /Fl} $bytes] \
+      [regexp {/XObject} $bytes]
+} -result {1 0}
+
+# -- fitting into a box, and the two anchors --------------------------------
+#
+# -at names the top left corner of the box a picture goes into; -align and
+# -valign say where in that box the picture sits; -fit gives the box and
+# -fitMode says whether the picture goes INSIDE it or COVERS it. Without -fit
+# the box has no size, and the two anchors are then the plain "which corner
+# does -at name" that a caller used to do with arithmetic of their own.
+#
+# The sums themselves are page.test's; what is checked here is what reaches
+# the file - the matrix, the clip, the Figure's box - and, where a renderer is
+# installed, WHERE THE INK LANDS. A picture that is meant to be fitted and is
+# two millimetres out passes every structural check there is.
+
+testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+
+# 40 by 10 pixels, the left half red and the right half blue - so that a
+# rendering says not only that the picture is there but which way round and
+# how far it reaches. The proportions are 4:1, which no box in these tests
+# has, so contain and cover always differ.
+proc fitPng {} {
+  set rows {}
+  for {set y 0} {$y < 10} {incr y} {
+    append rows [binary format c 0]
+    for {set x 0} {$x < 40} {incr x} {
+      append rows [binary format ccc {*}[expr {$x < 20 ? {255 0 0} : {0 0 255}}]]
+    }
+  }
+  return [::tclpdfTest::png 40 10 8 2 $rows]
+}
+
+test image-fit-22.1 {image size answers the fitted size, both ways} -body {
+  # 40 x 10 pixels at 72 dpi are 40 x 10 pt. Into a 40 x 40 box: contain
+  # scales by 1 and cover by 4.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  set out [list [$doc image size pic] [$doc image size pic -fit {40 40}] \
+      [$doc image size pic -fit {40 40} -fitMode contain] \
+      [$doc image size pic -fit {40 40} -fitMode cover]]
+  $doc destroy
+  set out
+} -result {{40.0 10.0} {40.0 10.0} {40.0 10.0} {160.0 40.0}}
+
+test image-fit-22.2 {the anchors move the placement matrix and nothing else} -body {
+  # The cm of an image XObject is "w 0 0 h x y" with x y the BOTTOM left
+  # corner in PDF points. The picture is 40 x 10 pt; at {100 100} on a 200 pt
+  # page the top left corner is y = 200-100 = 100, so the bottom left is 90.
+  # -align right moves x by -40, -valign bottom moves the bottom edge to 100.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  $doc image place pic -at {100 100} -artifact 1
+  $doc image place pic -at {100 100} -align right -artifact 1
+  $doc image place pic -at {100 100} -align center -valign middle -artifact 1
+  $doc image place pic -at {100 100} -valign bottom -artifact 1
+  set matrices [regexp -all -inline {([-0-9. ]+) cm} [::tclpdfTest::content $doc]]
+  $doc destroy
+  set out {}
+  foreach {whole numbers} $matrices {
+    lappend out [lrange $numbers 4 5]
+  }
+  set out
+} -result {{100 90} {60 90} {80 95} {100 100}}
+
+test image-fit-22.3 {cover clips to the box, contain does not} -body {
+  # A clip is a "re W n" inside the placement's own q ... Q. Only cover needs
+  # one: contain leaves the picture inside the box by construction.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  $doc image place pic -at {20 20} -fit {40 40} -artifact 1
+  set contain [::tclpdfTest::content $doc]
+  $doc image place pic -at {20 100} -fit {40 40} -fitMode cover -artifact 1
+  set both [::tclpdfTest::content $doc]
+  $doc destroy
+  # the clip stands before the cm, in the page's own coordinates: 20 pt from
+  # the left, 200-140 = 60 pt up, 40 by 40.
+  list [regexp {W n} $contain] \
+      [regexp {q\n20 60 40 40 re W n\n[-0-9. ]+ cm\n/Im1 Do\nQ} $both]
+} -result {0 1}
+
+test image-fit-22.4 {a Figure covering a box declares the box, not the picture} -body {
+  # ISO 32000-2, 14.8.5.4.3 asks for the rectangle that completely encloses
+  # the VISIBLE content, and under cover most of the picture is not visible -
+  # a box of the placement itself would claim four times the page it covers.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  $doc image place pic -at {20 20} -fit {40 40} -fitMode cover \
+      -align center -valign middle -alt "a covered box"
+  set path [::tclpdfTest::scratch image-fit-bbox.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/O /Layout /BBox \[([^\]]*)\]} $bytes -> box
+  lassign $box left bottom right top
+  # 20 pt from the left and 40 wide; 20 pt from the top of a 200 pt page is
+  # 180, and 40 down from there is 140.
+  list [format %.1f $left] [format %.1f $bottom] [format %.1f $right] \
+      [format %.1f $top]
+} -result {20.0 140.0 60.0 180.0}
+
+test image-fit-22.5 {image draw takes the box and the anchors too} -body {
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc image draw -data [fitPng] -at {100 100} -fit {40 40} -align right \
+      -artifact 1
+  set matrices [regexp -all -inline {([-0-9. ]+) cm} [::tclpdfTest::content $doc]]
+  $doc destroy
+  # contain makes it 40 x 10 again, -align right pulls it 0 mm - it already
+  # fills the box across - and -valign top leaves the top edge at 100, so the
+  # bottom edge is at 200-110 = 90.
+  lrange [lindex $matrices 1] 4 5
+} -result {100 90}
+
+test image-fit-22.6 {the refusals, at image place and at image size alike} -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  set out {}
+  foreach call {
+    {image place pic -at {10 10} -fit {40}}
+    {image place pic -at {10 10} -fit {40 0}}
+    {image place pic -at {10 10} -fit {40 40} -width 20}
+    {image place pic -at {10 10} -fit {40 40} -fitMode meet}
+    {image place pic -at {10 10} -fitMode cover}
+    {image place pic -at {10 10} -align middle}
+    {image place pic -at {10 10} -valign center}
+    {image size pic -fit {40 40} -scale 2}
+    {image size pic -fitMode cover}
+  } {
+    lappend out [lindex [::tclpdfTest::refuse [list $doc {*}$call]] 2]
+  }
+  $doc destroy
+  set out
+} -result {{TCLPDF FIT BOX 40 {image place}} {TCLPDF FIT BOX {40 0} {image place}}\
+    {TCLPDF FIT SIZE width {image place}} {TCLPDF FIT MODE meet {image place}}\
+    {TCLPDF FIT MODE cover {image place}}\
+    {TCLPDF FIT ALIGN -align middle {image place}}\
+    {TCLPDF FIT ALIGN -valign center {image place}}\
+    {TCLPDF FIT SIZE scale {image size}} {TCLPDF FIT MODE cover {image size}}}
+
+test image-fit-22.7 {a refused placement writes nothing at all} -body {
+  # The rule the whole module keeps: everything that can be refused is refused
+  # before the mark, the q and the clip are out. A -fit checked after the save
+  # would leave an open q and, for cover, a clipping path over the rest of the
+  # page.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  catch {$doc image place pic -at {10 10} -fit {40 40} -fitMode meet}
+  catch {$doc image place pic -at {10 10} -align middle}
+  set stream [::tclpdfTest::content $doc]
+  set missing [llength [$doc undescribedGraphics]]
+  $doc destroy
+  list [string length $stream] $missing
+} -result {0 0}
+
+test image-fit-22.8 {where the ink lands, measured} -constraints havePdftoppm -body {
+  # The check no reading of the operators replaces. Five placements on one A4
+  # page, fourteen points read out of ONE rendering:
+  #
+  #   contain at {20 20} in 40x40      -> 40 x 10 at the box's top left
+  #   the same, centred                -> pushed 15 mm down, 0 across
+  #   cover at {60 100} in 40x40       -> 160 x 40, centred, clipped to the box
+  #   -width 40 -align right at 150    -> the right edge on x = 150
+  #   -width 40 -valign bottom at 200  -> the bottom edge on y = 200
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  $doc image place pic -at {20 20} -fit {40 40} -artifact 1
+  $doc image place pic -at {20 60} -fit {40 40} -align center -valign middle \
+      -artifact 1
+  $doc image place pic -at {60 100} -fit {40 40} -fitMode cover \
+      -align center -valign middle -artifact 1
+  $doc image place pic -at {150 160} -width 40 -align right -artifact 1
+  $doc image place pic -at {60 200} -width 40 -valign bottom -artifact 1
+  set path [::tclpdfTest::scratch image-fit-ink.pdf]
+  $doc write $path
+  $doc destroy
+  set red {255 0 0}
+  set blue {0 0 255}
+  set white {255 255 255}
+  # Two probes a millimetre either side of every edge that the arithmetic
+  # decides, which is what makes this a measurement rather than a sighting:
+  # with points five millimetres inside the ink a picture could sit two
+  # millimetres off its box and every one of them would still read the same
+  # colour. Measured 2026-08-24 - a centre fraction of 0.45 instead of 0.5,
+  # two millimetres on a forty millimetre box, moved nothing this test saw
+  # until the pairs below stood here. The last four are the same thought for
+  # a shift that no EDGE shows: the red/blue seam of the covered picture, and
+  # the far edge of the right-aligned one, which is where a wrong -align
+  # fraction moves the picture inside a clip that stays where it was.
+  set points {{30 25} {50 25} {30 35} {30 80} {30 65} {70 120} {90 120}
+      {50 120} {110 120} {115 165} {145 165} {155 165} {65 195} {65 205}
+      {19 25} {21 25} {59 25} {61 25} {39 25} {41 25} {30 19} {30 21}
+      {30 29} {30 31} {30 74} {30 76} {30 84} {30 86}
+      {59 120} {61 120} {99 120} {101 120} {70 99} {70 101} {70 139}
+      {70 141} {149 165} {151 165} {65 199} {65 201} {79 120} {81 120}
+      {109 165} {111 165}}
+  set seen [::tclpdfTest::pixels $path $points -dpi 72 -unit mm]
+  file delete $path
+  set out {}
+  foreach colour $seen {
+    lappend out [dict get [list $red red $blue blue $white white] $colour]
+  }
+  set out
+} -result {red blue white red white red blue white white red blue white red white\
+    white red blue white red blue white red red white white red red white\
+    white red blue white white red red white blue white red white\
+    red blue white red}
+
+test image-fit-22.9 {qpdf reads a clipped placement back} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  $doc image place pic -at {20 20} -fit {40 40} -fitMode cover -artifact 1
+  set path [::tclpdfTest::scratch image-fit-qpdf.pdf]
+  $doc write $path
+  $doc destroy
+  set code 0
+  if {[auto_execok qpdf] ne {}} {
+    set code [catch {exec qpdf --check $path}]
+  }
+  file delete $path
+  set code
+} -result 0
+
+test image-fit-22.10 {a box and a turn cannot both hold, and the way out} -body {
+  # The box and the anchors are upright and -rotate turns about -at, so the
+  # two describe different places. Refused at the call, and the way the
+  # message names is measured here: [image size] answers the fitted size, and
+  # -size takes it - one line for a caller who really wants a turned picture
+  # scaled to a box.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc image embed pic -data [fitPng]
+  set refusals {}
+  foreach call {
+    {image place pic -at {20 20} -fit {40 40} -rotate 90}
+    {image place pic -at {20 20} -fit {40 40} -fitMode cover -align center \
+        -rotate 30}
+    {image place pic -at {20 20} -width 40 -align right -rotate 15}
+  } {
+    lappend refusals [lindex [::tclpdfTest::refuse [list $doc {*}$call]] 2]
+  }
+  # Nothing of the three reached the page - not a q, not a clip, not a mark.
+  set written [string length [::tclpdfTest::content $doc]]
+  # The way out: the fitted size, given as a size, turned as ever.
+  $doc image place pic -at {20 20} -size [$doc image size pic -fit {40 40}] \
+      -rotate 90 -artifact 1
+  set matrices [regexp -all -inline {([-0-9. ]+) cm} [::tclpdfTest::content $doc]]
+  $doc destroy
+  list $refusals $written [lrange [lindex $matrices 1] 0 3]
+} -result {{{TCLPDF FIT ROTATE 90 {image place}}\
+    {TCLPDF FIT ROTATE 30 {image place}}\
+    {TCLPDF FIT ROTATE 15 {image place}}} 0 {0 40 -10 0}}
+
+# -- what the samples are in -------------------------------------------------
+
+test image-space-23.1 {image info names the colour space of all three formats} \
+    -constraints haveImages -body {
+  # It used to answer this for a TIFF only, and a caller laying out around a
+  # JPEG or a PNG had to work it out from components or colour type - which
+  # is what this package does when it writes the file. A palette is called a
+  # palette rather than resolved to the space its entries are in: that is
+  # what the FILE holds, and /Indexed is what the stream carries.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed colour $photo
+  $doc image embed grey $gray
+  $doc image embed pal $indexed
+  $doc image embed alpha $rgba
+  set out [lmap alias {colour grey pal alpha} {
+    dict get [$doc image info $alias] space
+  }]
+  $doc destroy
+  set out
+} -result {DeviceRGB DeviceGray Indexed DeviceRGB}
+
+test image-space-23.2 {a stencil has no colour space, and says so} -body {
+  # Table 87: with ImageMask true the ColorSpace entry "shall not be
+  # specified" - what a stencil paints is the fill colour in force. An empty
+  # answer is the same "nobody said" an absent resolution gives.
+  set doc [tclpdf new]
+  $doc page add
+  $doc image embed bits -data [::tclpdfTest::png 4 1 1 0 \
+      [binary format cc 0 0x60]] -stencil 1
+  $doc image embed plain -data [::tclpdfTest::png 4 1 1 0 \
+      [binary format cc 0 0x60]]
+  set out [list [dict get [$doc image info bits] space] \
+      [dict get [$doc image info plain] space]]
+  $doc destroy
+  set out
+} -result {{} DeviceGray}
+
 cleanupTests

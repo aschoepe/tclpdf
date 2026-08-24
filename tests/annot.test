@@ -1,0 +1,868 @@
+# annot.test --
+#
+# The annotations that carry a remark: the note, the rubber stamp, and the
+# four text markups.
+#
+# What is checked here is what a validator cannot see and what a rendering
+# cannot prove on its own: that the dictionary carries the entries the norm
+# names, that the quadrilaterals land on the words they mark, that a
+# document with a claim refuses what would break it - and that a refused call
+# leaves nothing behind. The other half of the proof is in examples/out,
+# where veraPDF and pdftoppm say whether the file is right; the two halves
+# are worth nothing apart.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::annot
+package require tclpdf::annotMark
+source [file join [file dirname [info script]] helper.tcl]
+
+# PDF/UA embeds every face, the standard fourteen included (7.21.4 Note 5), so
+# the one test that writes a UA document needs a real font file.
+set annotFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans.ttf]
+testConstraint haveFace [file exists $annotFace]
+
+# The body of an object as it stands in the writer - the annotation
+# dictionary, before the file is written.
+proc annotBody {doc number} {
+  return [[$doc writer] body $number]
+}
+
+# Write a document to a scratch file, hand back the bytes, and remove the file
+# WHATEVER HAPPENS - a test that fails halfway through would otherwise leave a
+# PDF standing in the tree, which is how one of them ends up in a check-in.
+proc annotBytes {doc name} {
+  set path [::tclpdfTest::scratch $name]
+  try {
+    $doc write $path
+    return [::tclpdfTest::readBytes $path]
+  } finally {
+    file delete $path
+  }
+}
+
+# A document with one page and a face, which almost every test below wants.
+proc annotDoc {args} {
+  set doc [tclpdf new -unit mm {*}$args]
+  $doc page add
+  $doc font -family helvetica -size 11
+  return $doc
+}
+
+# The numbers in an array key of an object body, as a flat list.
+proc annotNumbers {body key} {
+  if {![regexp "/$key\\s*\\\[(\[^\\\]\]*)\\\]" $body -> inside]} {
+    return {}
+  }
+  return $inside
+}
+
+# --- the dispatcher ------------------------------------------------------
+
+test annot-1.1 {an unknown kind is refused and the known ones named} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot scribble -at {20 20}} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] \
+      [string match "*note, stamp, highlight, underline, strikeout, squiggly*" $err]
+} -result {1 {TCLPDF ANNOT KIND scribble} 1}
+
+test annot-1.2 {the refusal points at the two annotations that live elsewhere} -body {
+  set doc [annotDoc]
+  catch {$doc annot scribble} err
+  $doc destroy
+  expr {[string match "*link*" $err] && [string match "*field*" $err]}
+} -result 1
+
+test annot-1.3 {a markup kind loads its own module} -body {
+  # The dispatcher's table carries the package name, so the caller never
+  # requires annotMark by hand. Measured by the method it adds being there.
+  set doc [annotDoc]
+  $doc text "x" -at {20 20}
+  $doc annot highlight -text "x" -at {20 20}
+  set has [expr {"AnnotMarkup" in [info object methods $doc -all -private]}]
+  $doc destroy
+  set has
+} -result 1
+
+# --- the note ------------------------------------------------------------
+
+test annot-2.1 {a note is a Text annotation with a symbol and its text} -body {
+  set doc [annotDoc]
+  set number [$doc annot note -at {150 20} -contents "Please check" -title "Alex"]
+  set body [annotBody $doc $number]
+  $doc destroy
+  list [string match "*/Subtype /Text*" $body] \
+      [string match "*/Name /Note*" $body] \
+      [string match "*/Contents *" $body] \
+      [string match "*/T *" $body]
+} -result {1 1 1 1}
+
+test annot-2.2 {the note is closed unless it is asked to be open} -body {
+  set doc [annotDoc]
+  set shut [$doc annot note -at {150 20} -contents "a"]
+  set open [$doc annot note -at {150 40} -contents "a" -open 1]
+  set bodies [list [annotBody $doc $shut] [annotBody $doc $open]]
+  $doc destroy
+  list [string match "*/Open*" [lindex $bodies 0]] \
+      [string match "*/Open true*" [lindex $bodies 1]]
+} -result {0 1}
+
+test annot-2.3 {print, no zoom, no rotate - the 28 of Table 167} -body {
+  set doc [annotDoc]
+  set number [$doc annot note -at {150 20} -contents "a"]
+  set body [annotBody $doc $number]
+  $doc destroy
+  regexp {/F 28\M} $body
+} -result 1
+
+test annot-2.4 {a note without text is refused, and the norm is named} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot note -at {150 20}} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*/Contents*" $err]
+} -result {1 {TCLPDF ANNOT NOTE CONTENTS} 1}
+
+test annot-2.5 {a symbol outside Table 174 is refused with the list} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot note -at {150 20} -contents "a" -icon Smiley} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] \
+      [string match "*Comment, Key, Note, Help, NewParagraph, Paragraph, Insert*" $err] \
+      [string match "*-appearance*" $err]
+} -result {1 {TCLPDF ANNOT NOTE ICON Smiley} 1 1}
+
+test annot-2.6 {every symbol of Table 174 is taken} -body {
+  set doc [annotDoc]
+  set written {}
+  foreach icon {Comment Key Note Help NewParagraph Paragraph Insert} {
+    lappend written [regexp "/Name /$icon\\M" \
+        [annotBody $doc [$doc annot note -at {150 20} -contents "a" -icon $icon]]]
+  }
+  $doc destroy
+  lsort -unique $written
+} -result 1
+
+test annot-2.7 {the default box is the 20 points a reader draws its symbol in} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot note -at {20 20} -contents "a"]]
+  $doc destroy
+  lassign [annotNumbers $body Rect] x0 y0 x1 y1
+  list [expr {round($x1 - $x0)}] [expr {round($y1 - $y0)}]
+} -result {20 20}
+
+test annot-2.8 {-open takes a boolean} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot note -at {20 20} -contents "a" -open maybe} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT NOTE OPEN maybe}}
+
+# --- the stamp -----------------------------------------------------------
+
+test annot-3.1 {a stamp a reader draws itself is a name and a rectangle} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot stamp -at {120 60} -size {40 15} \
+      -name Approved -contents "Approved"]]
+  $doc destroy
+  list [string match "*/Subtype /Stamp*" $body] \
+      [string match "*/Name /Approved*" $body] \
+      [string match "*/AP*" $body]
+} -result {1 1 0}
+
+test annot-3.2 {a name outside Table 181 is refused with the fourteen} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot stamp -at {120 60} -size {40 15} \
+      -name Wonderful} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] \
+      [string match "*Approved, Experimental, NotApproved*ForPublicRelease*" $err]
+} -result {1 {TCLPDF ANNOT STAMP NAME Wonderful} 1}
+
+test annot-3.3 {neither -name nor -appearance is refused} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot stamp -at {120 60} -size {40 15}} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT STAMP NAME}}
+
+test annot-3.4 {both of them is refused, because the appearance would win} -body {
+  set doc [annotDoc]
+  $doc form create s -size {40 15} -script {}
+  set code [catch {$doc annot stamp -at {120 60} -name Draft -appearance s} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*Table 166*" $err]
+} -result {1 {TCLPDF ANNOT STAMP BOTH} 1}
+
+test annot-3.5 {an appearance of one's own becomes /AP /N} -body {
+  set doc [annotDoc]
+  $doc form create house -size {40 15} -script {}
+  set body [annotBody $doc [$doc annot stamp -at {120 60} -appearance house \
+      -contents "Approved"]]
+  $doc destroy
+  regexp {/AP <<\s*/N \d+ 0 R\s*>>} $body
+} -result 1
+
+test annot-3.6 {without -size the stamp takes the form's own} -body {
+  # 40 by 15 mm, which is what the rectangle has to come out as - the numbers
+  # are not repeated at the annot call and so cannot disagree with the form.
+  set doc [annotDoc]
+  $doc form create house -size {40 15} -script {}
+  set body [annotBody $doc [$doc annot stamp -at {120 60} -appearance house]]
+  $doc destroy
+  lassign [annotNumbers $body Rect] x0 y0 x1 y1
+  list [expr {round(($x1 - $x0) / 72.0 * 25.4)}] \
+      [expr {round(($y1 - $y0) / 72.0 * 25.4)}]
+} -result {40 15}
+
+test annot-3.7 {a stamp a reader draws needs a size, and says so} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot stamp -at {120 60} -name Draft} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*-size*" $err]
+} -result {1 {TCLPDF ANNOT STAMP SIZE} 1}
+
+test annot-3.8 {an unknown form is refused, and the known ones named} -body {
+  set doc [annotDoc]
+  $doc form create house -size {40 15} -script {}
+  set code [catch {$doc annot stamp -at {120 60} -size {40 15} \
+      -appearance elsewhere} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*house*" $err]
+} -result {1 {TCLPDF ANNOT APPEARANCE elsewhere} 1}
+
+# --- the text markups ----------------------------------------------------
+
+test annot-4.1 {the four kinds write the four subtypes} -body {
+  set doc [annotDoc]
+  set subtypes {}
+  foreach kind {highlight underline strikeout squiggly} {
+    set body [annotBody $doc [$doc annot $kind -quads {{20 20 40 5}}]]
+    regexp {/Subtype /(\w+)} $body -> subtype
+    lappend subtypes $subtype
+  }
+  $doc destroy
+  set subtypes
+} -result {Highlight Underline StrikeOut Squiggly}
+
+test annot-4.2 {every markup draws its own appearance} -body {
+  set doc [annotDoc]
+  set drawn {}
+  foreach kind {highlight underline strikeout squiggly} {
+    lappend drawn [regexp {/AP <<\s*/N \d+ 0 R\s*>>} \
+        [annotBody $doc [$doc annot $kind -quads {{20 20 40 5}}]]]
+  }
+  $doc destroy
+  lsort -unique $drawn
+} -result 1
+
+test annot-4.3 {the highlight blends Multiply, or the words vanish under it} -body {
+  # Written uncompressed, so that the operators of the appearance can be read
+  # rather than only the dictionary around them.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set number [$doc annot highlight -quads {{20 20 40 5}}]
+  regexp {/AP <<\s*/N (\d+) 0 R\s*>>} [annotBody $doc $number] -> ap
+  set stream [annotBody $doc $ap]
+  set used {}
+  regexp {/(\S+) gs} $stream -> used
+  set states [$doc resource ExtGState]
+  regexp {(\d+) 0 R} [dict get $states $used] -> state
+  set body [annotBody $doc $state]
+  $doc destroy
+  list [string match "*re*f*" $stream] [string match "*/BM /Multiply*" $body]
+} -result {1 1}
+
+test annot-4.4 {QuadPoints hold eight numbers per quadrilateral} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot highlight \
+      -quads {{20 20 40 5} {20 26 30 5}}]]
+  $doc destroy
+  llength [annotNumbers $body QuadPoints]
+} -result 16
+
+test annot-4.5 {the corners go out as a Z - upper left, upper right, lower left, lower right} -body {
+  # The trap of 12.5.6.10: the text of ISO 32000-1 describes a loop, every
+  # producer writes a Z, and a file written as a loop has its highlights
+  # drawn as bow ties.
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot highlight -quads {{20 20 40 5}}]]
+  $doc destroy
+  lassign [annotNumbers $body QuadPoints] x1 y1 x2 y2 x3 y3 x4 y4
+  list [expr {$x1 == $x3}] [expr {$x2 == $x4}] [expr {$y1 == $y2}] \
+      [expr {$y3 == $y4}] [expr {$y1 > $y3}] [expr {$x2 > $x1}]
+} -result {1 1 1 1 1 1}
+
+test annot-4.6 {the rectangle contains every quadrilateral} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot highlight \
+      -quads {{20 20 40 5} {60 30 30 5}}]]
+  $doc destroy
+  lassign [annotNumbers $body Rect] left bottom right top
+  set inside 1
+  foreach {x y} [annotNumbers $body QuadPoints] {
+    if {$x < $left - 0.001 || $x > $right + 0.001
+        || $y < $bottom - 0.001 || $y > $top + 0.001} {
+      set inside 0
+    }
+  }
+  set inside
+} -result 1
+
+test annot-4.7 {-text and -quads are exclusive, and one of them is needed} -body {
+  set doc [annotDoc]
+  set both [catch {$doc annot highlight -text "a" -at {20 20} \
+      -quads {{20 20 10 5}}} -> optsBoth]
+  set none [catch {$doc annot highlight} -> optsNone]
+  $doc destroy
+  list [dict get $optsBoth -errorcode] [dict get $optsNone -errorcode]
+} -result {{TCLPDF ANNOT QUADS BOTH highlight} {TCLPDF ANNOT QUADS NONE highlight}}
+
+test annot-4.8 {-text needs the -at the text call was given} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -text "a"} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT QUADS AT highlight}}
+
+test annot-4.9 {the measured quad is as wide as the text that was drawn} -body {
+  set doc [annotDoc]
+  set text "the amount due"
+  $doc text $text -at {20 40}
+  set body [annotBody $doc [$doc annot highlight -text $text -at {20 40}]]
+  set width [$doc textWidth $text]
+  $doc destroy
+  lassign [annotNumbers $body Rect] x0 y0 x1 y1
+  # Both in points, to a hundredth of one.
+  expr {abs(($x1 - $x0) - $width * 72.0 / 25.4) < 0.01}
+} -result 1
+
+test annot-4.10 {the measured quad stands on the baseline it was given} -body {
+  # The top edge is one ascent above the baseline and the bottom one descent
+  # below it - Helvetica at 11 pt: 0.718 and 0.207 of the size.
+  set doc [annotDoc]
+  $doc text "Hg" -at {20 40}
+  set body [annotBody $doc [$doc annot highlight -text "Hg" -at {20 40}]]
+  $doc destroy
+  lassign [annotNumbers $body Rect] x0 y0 x1 y1
+  set baseline [expr {841.89 - 40 * 72.0 / 25.4}]
+  list [expr {abs($y1 - ($baseline + 0.718 * 11)) < 0.05}] \
+      [expr {abs($y0 - ($baseline - 0.207 * 11)) < 0.05}]
+} -result {1 1}
+
+test annot-4.11 {-anchor top counts the same way [text] does} -body {
+  set doc [annotDoc]
+  set baseline [annotBody $doc [$doc annot highlight -text "Hg" -at {20 40}]]
+  set topped [annotBody $doc [$doc annot highlight -text "Hg" -at {20 40} \
+      -anchor top]]
+  $doc destroy
+  lassign [annotNumbers $baseline Rect] -> -> -> topOfBaseline
+  lassign [annotNumbers $topped Rect] -> -> -> topOfTopped
+  # -anchor top puts the TOP of the line at -at, so its box sits one ascent
+  # lower on the page - 0.718 * 11 pt.
+  expr {abs(($topOfBaseline - $topOfTopped) - 0.718 * 11) < 0.05}
+} -result 1
+
+test annot-4.12 {-align repeats what the text call said} -body {
+  set doc [annotDoc]
+  set left [annotBody $doc [$doc annot highlight -text "Hg" -at {60 40}]]
+  set right [annotBody $doc [$doc annot highlight -text "Hg" -at {60 40} \
+      -align right]]
+  set middle [annotBody $doc [$doc annot highlight -text "Hg" -at {60 40} \
+      -align center]]
+  set width [expr {[$doc textWidth "Hg"] * 72.0 / 25.4}]
+  $doc destroy
+  lassign [annotNumbers $left Rect] leftEdge
+  lassign [annotNumbers $right Rect] rightEdge
+  lassign [annotNumbers $middle Rect] middleEdge
+  list [expr {abs(($leftEdge - $rightEdge) - $width) < 0.01}] \
+      [expr {abs(($leftEdge - $middleEdge) - $width / 2.0) < 0.01}]
+} -result {1 1}
+
+test annot-4.13 {an unknown -align is refused and justify is named} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -text "a" -at {20 20} \
+      -align justify} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*-quads*" $err]
+} -result {1 {TCLPDF ANNOT QUADS ALIGN justify} 1}
+
+test annot-4.14 {-text marks one line and says where the lines come from} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -text "one\ntwo" -at {20 20}} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*-lines*" $err]
+} -result {1 {TCLPDF ANNOT QUADS LINES highlight} 1}
+
+test annot-4.14a {a paragraph is marked line by line, as one annotation} -body {
+  # -lines takes what [textLines] answered: one quadrilateral per line, one
+  # leading apart, and ONE annotation for the passage - which is what
+  # /QuadPoints is an array for.
+  set doc [annotDoc]
+  set paragraph "Die Lieferung erfolgt frei Haus. Beanstandungen sind\
+      innerhalb von zwoelf Werktagen schriftlich anzuzeigen."
+  set lines [$doc textLines $paragraph -width 80]
+  $doc text $paragraph -at {20 40} -width 80
+  set body [annotBody $doc [$doc annot highlight -at {20 40} -lines $lines]]
+  $doc destroy
+  list [llength $lines] [expr {[llength [annotNumbers $body QuadPoints]] / 8}]
+} -result {3 3}
+
+test annot-4.14b {the quads step down by the leading the block used} -body {
+  set doc [annotDoc]
+  set paragraph "Die Lieferung erfolgt frei Haus. Beanstandungen sind\
+      innerhalb von zwoelf Werktagen schriftlich anzuzeigen."
+  set lines [$doc textLines $paragraph -width 80]
+  set body [annotBody $doc [$doc annot highlight -at {20 40} -lines $lines]]
+  $doc destroy
+  set tops {}
+  foreach {x1 y1 x2 y2 x3 y3 x4 y4} [annotNumbers $body QuadPoints] {
+    lappend tops $y1
+  }
+  # 11 pt at the default leading of 1.2, downwards on the page.
+  list [expr {abs(([lindex $tops 0] - [lindex $tops 1]) - 11 * 1.2) < 0.01}] \
+      [expr {abs(([lindex $tops 1] - [lindex $tops 2]) - 11 * 1.2) < 0.01}]
+} -result {1 1}
+
+test annot-4.14c {each quad is as wide as its own line} -body {
+  set doc [annotDoc]
+  set lines {"Die Lieferung erfolgt" "frei Haus."}
+  set body [annotBody $doc [$doc annot highlight -at {20 40} -lines $lines]]
+  set widths [lmap line $lines {expr {[$doc textWidth $line] * 72.0 / 25.4}}]
+  $doc destroy
+  set measured {}
+  foreach {x1 y1 x2 y2 x3 y3 x4 y4} [annotNumbers $body QuadPoints] {
+    lappend measured [expr {$x2 - $x1}]
+  }
+  list [expr {abs([lindex $measured 0] - [lindex $widths 0]) < 0.01}] \
+      [expr {abs([lindex $measured 1] - [lindex $widths 1]) < 0.01}] \
+      [expr {[lindex $measured 0] > [lindex $measured 1]}]
+} -result {1 1 1}
+
+test annot-4.14d {-leading overrides the state's own} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot highlight -at {20 40} \
+      -lines {"eins" "zwei"} -leading 10]]
+  $doc destroy
+  set tops {}
+  foreach {x1 y1 x2 y2 x3 y3 x4 y4} [annotNumbers $body QuadPoints] {
+    lappend tops $y1
+  }
+  expr {abs(([lindex $tops 0] - [lindex $tops 1]) - 10 * 72.0 / 25.4) < 0.01}
+} -result 1
+
+test annot-4.14e {-lines takes the dictionaries of [textLines -hyphens 1] too} -body {
+  set doc [annotDoc]
+  set paragraph "Betriebskostenabrechnung und Nebenkostenabrechnung fuer 2026"
+  set plain [$doc textLines $paragraph -width 50]
+  set rich [$doc textLines $paragraph -width 50 -hyphens 1]
+  set a [annotBody $doc [$doc annot highlight -at {20 40} -lines $plain]]
+  set b [annotBody $doc [$doc annot highlight -at {20 40} -lines $rich]]
+  $doc destroy
+  expr {[annotNumbers $a QuadPoints] eq [annotNumbers $b QuadPoints]}
+} -result 1
+
+test annot-4.14f {two roads at once are refused, and all three are named} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -at {20 20} -lines {a} \
+      -quads {{20 20 10 5}}} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] \
+      [string match "*-lines and -quads*" $err]
+} -result {1 {TCLPDF ANNOT QUADS BOTH highlight} 1}
+
+test annot-4.14g {a leading that is not a length is refused} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -at {20 20} -lines {a b} \
+      -leading 0} -> opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT QUADS LEADING 0}}
+
+test annot-4.14h {-lines with nothing in it marks nothing, and says so} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -at {20 20} -lines {{} {}}} -> opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT QUADS EMPTYLINES highlight}}
+
+test annot-4.15 {a quad of no area is refused} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -quads {{20 20 40 0}}} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT QUADS EMPTY {20 20 40 0}}}
+
+test annot-4.16 {a quad that is not four numbers is refused} -body {
+  set doc [annotDoc]
+  set shape [catch {$doc annot highlight -quads {{20 20 40}}} -> optsShape]
+  set number [catch {$doc annot highlight -quads {{20 20 40 x}}} -> optsNumber]
+  $doc destroy
+  list [dict get $optsShape -errorcode] [dict get $optsNumber -errorcode]
+} -result {{TCLPDF ANNOT QUADS SHAPE {20 20 40}} {TCLPDF ANNOT QUADS NUMBER x}}
+
+test annot-4.17 {the highlight is yellow and the three lines are red} -body {
+  set doc [annotDoc]
+  set colours {}
+  foreach kind {highlight underline strikeout squiggly} {
+    set body [annotBody $doc [$doc annot $kind -quads {{20 20 40 5}}]]
+    lappend colours [annotNumbers $body C]
+  }
+  $doc destroy
+  list [lindex $colours 0] [lsort -unique [lrange $colours 1 end]]
+} -result {{1 0.92 0.23} {{0.85 0.15 0.15}}}
+
+test annot-4.18 {a colour of one's own is taken, in all three spaces} -body {
+  set doc [annotDoc]
+  set grey [annotBody $doc [$doc annot highlight -quads {{20 20 40 5}} \
+      -colour 0.5]]
+  set rgb [annotBody $doc [$doc annot highlight -quads {{20 20 40 5}} \
+      -colour {0.1 0.2 0.3}]]
+  set cmyk [annotBody $doc [$doc annot highlight -quads {{20 20 40 5}} \
+      -colour {cmyk 0 0.1 0.2 0.3}]]
+  $doc destroy
+  list [annotNumbers $grey C] [annotNumbers $rgb C] [annotNumbers $cmyk C]
+} -result {0.5 {0.1 0.2 0.3} {0 0.1 0.2 0.3}}
+
+test annot-4.19 {a colour space /C has no spelling for is refused} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot highlight -quads {{20 20 40 5}} \
+      -colour {separation Spot {0.1 0.2 0.3} 1}} err opts]
+  $doc destroy
+  list $code [lrange [dict get $opts -errorcode] 0 2] \
+      [string match "*Table 166*" $err]
+} -result {1 {TCLPDF ANNOT COLOURSPACE} 1}
+
+test annot-4.20 {a squiggly underline needs PDF 1.4, the other three 1.3} -body {
+  # Measured on a document set BELOW both, so that the floor each kind pins
+  # is visible: a 1.7 document is above them and nothing moves.
+  # A 1.3 document takes the three that came with 1.3 and refuses the one
+  # that came with 1.4 - which is what says the version was asked for at all.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  $doc annot underline -quads {{20 20 40 5}}
+  set code [catch {$doc annot squiggly -quads {{20 30 40 5}}} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*1.4*" $err]
+} -result {1 {TCLPDF VERSION 1.4} 1}
+
+# --- what every annotation has -------------------------------------------
+
+test annot-5.1 {an annotation is registered on the page it was drawn on} -body {
+  set doc [annotDoc]
+  $doc annot note -at {20 20} -contents "one"
+  $doc page add
+  $doc annot note -at {20 20} -contents "two"
+  set annots [$doc state annots]
+  $doc destroy
+  list [dict keys $annots] [llength [dict get $annots 0]] \
+      [llength [dict get $annots 1]]
+} -result {{0 1} 1 1}
+
+test annot-5.2 {the border is zero, or a reader draws a frame nobody asked for} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot note -at {20 20} -contents "a"]]
+  $doc destroy
+  expr {[string first {/Border [0 0 0]} $body] >= 0}
+} -result 1
+
+test annot-5.3 {-opacity becomes /CA, which is a PDF 1.4 entry} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot note -at {20 20} -contents "a" \
+      -opacity 0.4]]
+  $doc destroy
+  set older [tclpdf new -unit mm -version 1.3]
+  $older page add
+  set code [catch {$older annot note -at {20 20} -contents "a" \
+      -opacity 0.4} -> opts]
+  $older destroy
+  list [string match "*/CA 0.4*" $body] $code [dict get $opts -errorcode]
+} -result {1 1 {TCLPDF VERSION 1.4}}
+
+test annot-5.4 {an opacity outside 0..1 is refused} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot note -at {20 20} -contents "a" \
+      -opacity 1.5} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT OPACITY 1.5}}
+
+test annot-5.5 {no date unless one is given, so a script writes the same bytes twice} -body {
+  set doc [annotDoc]
+  set without [annotBody $doc [$doc annot note -at {20 20} -contents "a"]]
+  set with [annotBody $doc [$doc annot note -at {20 20} -contents "a" \
+      -date 1767225600]]
+  $doc destroy
+  list [string match "*/M *" $without] \
+      [string match "*/M (D:2026*" $with] \
+      [string match "*/CreationDate (D:2026*" $with]
+} -result {0 1 1}
+
+test annot-5.6 {a date that is not a time is refused} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot note -at {20 20} -contents "a" \
+      -date yesterday} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT DATE yesterday}}
+
+test annot-5.7 {-colour and -color are one option, and both at once is refused} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot note -at {20 20} -contents "a" \
+      -color {0.1 0.2 0.3}]]
+  set code [catch {$doc annot note -at {20 20} -contents "a" \
+      -colour 0.5 -color 0.5} -> opts]
+  $doc destroy
+  list [annotNumbers $body C] $code [lrange [dict get $opts -errorcode] 0 2]
+} -result {{0.1 0.2 0.3} 1 {TCLPDF ANNOT COLOUR}}
+
+test annot-5.8 {a rectangle with no area is refused} -body {
+  set doc [annotDoc]
+  set code [catch {$doc annot stamp -at {20 20} -size {40 0} \
+      -name Draft} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT RECT EMPTY {40 0}}}
+
+# --- the structure tree --------------------------------------------------
+
+test annot-6.1 {a tagged document puts every annotation in an Annot element} -body {
+  # veraPDF checks it by name: ISO 14289-1, 7.18.1 test 1, "An annotation,
+  # excluding annotations of subtype Widget, PrinterMark or Link, shall be
+  # nested within an Annot tag".
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 11
+  $doc structure P -script {
+    $doc text "the amount due" -at {20 40}
+    $doc annot highlight -text "the amount due" -at {20 40} -contents "a"
+  }
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  expr {"Annot" in $types}
+} -result 1
+
+test annot-6.2 {the annotation carries the StructParent back} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 11
+  set number 0
+  $doc structure P -script {
+    $doc text "x" -at {20 40}
+    set number [$doc annot highlight -text "x" -at {20 40} -contents "a"]
+  }
+  set body [annotBody $doc $number]
+  $doc destroy
+  regexp {/StructParent \d+} $body
+} -result 1
+
+test annot-6.3 {the element reaches the annotation through an OBJR} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 11
+  set number 0
+  $doc structure P -script {
+    $doc text "x" -at {20 40}
+    set number [$doc annot highlight -text "x" -at {20 40} -contents "a"]
+  }
+  set kids {}
+  foreach element [$doc state structure] {
+    if {[dict get $element type] eq "Annot"} {
+      set kids [dict get $element kids]
+    }
+  }
+  $doc destroy
+  list [llength $kids] [lindex $kids 0 0] [expr {[lindex $kids 0 1] == $number}]
+} -result {1 objr 1}
+
+test annot-6.4 {an untagged document writes no StructParent at all} -body {
+  set doc [annotDoc]
+  set body [annotBody $doc [$doc annot note -at {20 20} -contents "a"]]
+  $doc destroy
+  string match "*/StructParent*" $body
+} -result 0
+
+# --- the conformance claims ----------------------------------------------
+
+test annot-7.1 {PDF/A refuses a note that leaves the picture to the reader} -constraints haveTdom -body {
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B
+  $doc page add
+  set code [catch {$doc annot note -at {20 20} -contents "a"} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*6.3.3*" $err] \
+      [string match "*form create*" $err]
+} -result {1 {TCLPDF ANNOT PDFA Text} 1 1}
+
+test annot-7.2 {and refuses the same stamp} -constraints haveTdom -body {
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B
+  $doc page add
+  set code [catch {$doc annot stamp -at {20 20} -size {40 15} \
+      -name Draft} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT PDFA Stamp}}
+
+test annot-7.3 {a refused call leaves the document as it was} -constraints haveTdom -body {
+  # Nothing registered on the page, nothing remembered, and no object
+  # written: after a refused call the file has to look as if it never
+  # happened.
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B
+  $doc page add
+  set before [[$doc writer] count]
+  catch {$doc annot note -at {20 20} -contents "a"}
+  set after [[$doc writer] count]
+  set annots [$doc state annots]
+  set records [$doc state annotations]
+  $doc destroy
+  list [expr {$before == $after}] $annots $records
+} -result {1 {} {}}
+
+test annot-7.4 {the claim may come after the annotation - the write says so} -constraints haveTdom -body {
+  set doc [annotDoc]
+  $doc annot note -at {20 20} -contents "a"
+  $doc pdfa -part 3 -conformance B
+  set code [catch {annotBytes $doc annot-7.4.pdf} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT PDFA Text}}
+
+test annot-7.5 {an appearance of one's own passes the claim} -constraints haveTdom -body {
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B
+  $doc page add
+  $doc form create icon -size {6 6} -script {}
+  set body [annotBody $doc [$doc annot note -at {20 20} -contents "a" \
+      -appearance icon -size {6 6}]]
+  $doc destroy
+  regexp {/AP <<\s*/N \d+ 0 R\s*>>} $body
+} -result 1
+
+test annot-7.6 {a markup needs nothing - it drew its own} -constraints haveTdom -body {
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B
+  $doc page add
+  $doc font -family helvetica -size 11
+  set body [annotBody $doc [$doc annot highlight -quads {{20 40 40 5}}]]
+  $doc destroy
+  regexp {/AP <<\s*/N \d+ 0 R\s*>>} $body
+} -result 1
+
+test annot-7.7 {PDF/UA needs a description on every annotation} -constraints haveTdom -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc language en
+  $doc ua -part 1
+  $doc page add
+  set code [catch {$doc annot stamp -at {20 20} -size {40 15} \
+      -name Draft} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*7.18.1*" $err] \
+      [string match "*-contents*" $err]
+} -result {1 {TCLPDF ANNOT UA CONTENTS Stamp} 1 1}
+
+test annot-7.8 {and it is asked for under part 2 as well} -constraints haveTdom -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc language en
+  $doc ua -part 2
+  $doc page add
+  set code [catch {$doc annot stamp -at {20 20} -size {40 15} \
+      -name Draft} -> opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode]
+} -result {1 {TCLPDF ANNOT UA CONTENTS Stamp}}
+
+test annot-7.9 {PDF/UA needs the annotation in the tree} -constraints haveTdom -body {
+  # The element is made at the call, so the only way to miss it is to write
+  # the annotation while the document is not yet tagged - which the claim
+  # then catches at the write.
+  set doc [annotDoc]
+  $doc annot stamp -at {20 20} -size {40 15} -name Draft -contents "Draft"
+  $doc language en
+  $doc ua -part 1
+  set code [catch {annotBytes $doc annot-7.9.pdf} err opts]
+  $doc destroy
+  list $code [dict get $opts -errorcode] [string match "*tagged 1*" $err]
+} -result {1 {TCLPDF ANNOT UA STRUCTURE Stamp} 1}
+
+test annot-7.10 {a PDF/UA document with descriptions and a tree is written} -constraints {haveTdom haveFace} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc language en
+  $doc info Title "Annotations"
+  $doc page add
+  $doc font embed face $::annotFace
+  $doc font -family face -size 11
+  $doc ua -part 1
+  $doc structure P -script {
+    $doc text "the amount due" -at {20 40}
+    $doc annot highlight -text "the amount due" -at {20 40} \
+        -contents "the amount due"
+  }
+  set data [annotBytes $doc annot-7.10.pdf]
+  $doc destroy
+  string match "%PDF-*" $data
+} -result 1
+
+# --- what the file looks like --------------------------------------------
+
+test annot-8.1 {the annotation reaches the page's /Annots array} -body {
+  set doc [annotDoc]
+  $doc annot note -at {20 20} -contents "a"
+  set data [annotBytes $doc annot-8.1.pdf]
+  $doc destroy
+  regexp {/Annots \[\d+ 0 R\]} $data
+} -result 1
+
+test annot-8.2 {the appearance is not offered as an XObject resource} -body {
+  # An appearance is reached through /AP and through nothing else; a name in
+  # the resource dictionary would offer the band to any content stream.
+  set doc [annotDoc]
+  set before [llength [dict keys [$doc resource XObject]]]
+  $doc annot highlight -quads {{20 20 40 5}}
+  set after [llength [dict keys [$doc resource XObject]]]
+  $doc destroy
+  expr {$before == $after}
+} -result 1
+
+test annot-8.3 {the appearance stream carries its own Resources} -body {
+  # PDF/A 6.2.2: a content stream that references another object must have
+  # its own Resources dictionary; inheriting is valid PDF and forbidden
+  # there.
+  set doc [annotDoc]
+  set number [$doc annot highlight -quads {{20 20 40 5}}]
+  regexp {/AP <<\s*/N (\d+) 0 R\s*>>} [annotBody $doc $number] -> ap
+  set body [annotBody $doc $ap]
+  $doc destroy
+  list [string match "*/Subtype /Form*" $body] \
+      [string match "*/BBox*" $body] \
+      [string match "*/Resources *" $body]
+} -result {1 1 1}
+
+test annot-8.4 {a second write does not write the appearance a second time} -body {
+  # The idempotence contract: everything built at write time goes through a
+  # reservation, and the appearance is built at the call - so two writes
+  # produce the same object count.
+  set doc [annotDoc]
+  $doc annot highlight -quads {{20 20 40 5}}
+  set first [annotBytes $doc annot-8.4.pdf]
+  set second [annotBytes $doc annot-8.4.pdf]
+  $doc destroy
+  expr {[string length $first] == [string length $second]}
+} -result 1
+
+cleanupTests

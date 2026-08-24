@@ -864,8 +864,8 @@ test text-direction-12.6 {a direction that is neither is refused} -body {
   # line, not to the face.
   set onFont [catch {$doc font -direction rtl} three]
   $doc destroy
-  list $drawing [string match {*must be ltr or rtl*} $one] \
-      $measuring [string match {*must be ltr or rtl*} $two] \
+  list $drawing [string match {*must be ltr, rtl or ttb*} $one] \
+      $measuring [string match {*must be ltr, rtl or ttb*} $two] \
       $onFont [string match {*unknown option "-direction"*} $three]
 } -result {1 1 1 1 1 1}
 
@@ -2498,5 +2498,296 @@ test text-22.7 {the word comes back out of the file without the break hyphen} \
   # the word is whole. Without the bracket this reads "Betriebskostenab-".
   join [lrange [split [string trim $text] \n] 0 1] {}
 } -result "Betriebskostenabrechnung"
+
+# -- vertical writing: the line ---------------------------------------------
+#
+# -direction ttb sets ONE COLUMN, running down the page from -at. What it is
+# not is the paragraph road turned ninety degrees: there is no line breaker
+# here, no leading, no second column. A document that wants columns places
+# them itself, one [text] call each, and the refusals below say so by name
+# rather than drawing a vertical line into a horizontal paragraph's positions.
+#
+# The face is Noto Sans JP - the only one in this tree with vertical metrics.
+# What makes it a specimen rather than a sample is U+3031, whose advance
+# HEIGHT is 2000 against a width of 1000: every measurement below that comes
+# out square would have been taken from hmtx.
+
+test text-vertical-1.1 {a vertical line is drawn through Identity-V} \
+    -constraints haveJpFace -body {
+  # The writing mode is a property of the FONT OBJECT (9.7.4.3), so the only
+  # thing that changes in the stream is the name in front of Tf. Everything
+  # else - Td, Tj, the two-byte codes - is what a horizontal line writes.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  $doc text "日本" -at {20 200} -family jp -size 12
+  $doc text "日本" -at {60 200} -family jp -size 12 -direction ttb
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set faces {}
+  foreach line [split $stream \n] {
+    if {[regexp {^(/\S+) [0-9.]+ Tf$} $line -> name]} {
+      lappend faces $name
+    }
+  }
+  # THE SAME GLYPHS in both lines: the writing mode is not a different set of
+  # letters, and a face that substituted here would be doing GSUB's job.
+  list $faces [::tclpdfTest::glyphIds $stream]
+} -result {{/FEjp /FVjp} {{6316 6552} {6316 6552}}}
+
+test text-vertical-1.2 {a vertical line is measured down it, not across} \
+    -constraints haveJpFace -body {
+  # THE CORE OF THE WHOLE FEATURE. U+3031 is 1000 units wide and 2000 tall,
+  # so at 12 pt the horizontal pair measures 24 pt and the vertical one 36.
+  # A vertical extent taken from hmtx would answer 24 for both - and the text
+  # would render, and every validator would call the file clean.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  set across [$doc textWidth "〱日" -family jp -size 12]
+  set down [$doc textWidth "〱日" -family jp -size 12 -direction ttb]
+  $doc destroy
+  list $across $down
+} -result {24.0 36.0}
+
+test text-vertical-1.3 {the glyphs step down by the vertical advance} \
+    -constraints haveJpFace -body {
+  # Read off the stream: one Tj with two glyphs in it, and the SECOND glyph
+  # placed by the font's own advance rather than by anything written here.
+  # What can be checked from the outside is that no TJ adjustment was needed
+  # for it - the metric is in /W2 and /DW2, where a reader takes it from.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  $doc text "〱日" -at {60 200} -family jp -size 12 -direction ttb
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # ONE Td, one Tj, and nothing between the glyphs: the metric is in /W2 and
+  # /DW2, and a package that had to write the step itself would be writing
+  # down what the font already says.
+  list [llength [::tclpdfTest::starts $stream x]] \
+      [::tclpdfTest::starts $stream x] [regexp {TJ} $stream] [regexp {Tj} $stream]
+} -result {1 60 0 1}
+
+test text-vertical-1.4 {-align shifts a vertical line along its own axis} \
+    -constraints haveJpFace -body {
+  # left starts at -at, right ends there, center is centred on it - the same
+  # three meanings as a horizontal line, on the axis the line actually runs
+  # along. The shift goes in as the LIFT, because that is TextRun's offset
+  # along y; the offset ACROSS the column stays zero, since the glyph's
+  # position vector already centres it on x (9.4.4).
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  foreach align {left center right} {
+    $doc text "〱日" -at {60 200} -family jp -size 12 -direction ttb -align $align
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The extent is 36 pt, so centre starts 18 above -at and right 36 above -
+  # "above" in PDF space, which is where a column that ENDS at -at has to
+  # begin. Read as steps, so the page height does not enter the assertion.
+  list [::tclpdfTest::steps [::tclpdfTest::starts $stream y]] \
+      [::tclpdfTest::starts $stream x]
+} -result {{-18.00 -18.00} {60 60 60}}
+
+test text-vertical-1.5 {-stretch does not lengthen a vertical line} \
+    -constraints haveJpFace -body {
+  # Tz scales the HORIZONTAL displacement and nothing else: 9.4.4 puts the
+  # factor on tx and leaves ty without it. Measuring it into the extent would
+  # have put -align right a whole line off the page at -stretch 200.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  set plain [$doc textWidth "日本" -family jp -size 12 -direction ttb]
+  set wide [$doc textWidth "日本" -family jp -size 12 -direction ttb -stretch 200]
+  set acrossWide [$doc textWidth "日本" -family jp -size 12 -stretch 200]
+  $doc destroy
+  list $plain $wide $acrossWide
+} -result {24.0 24.0 48.0}
+
+test text-vertical-1.6 {-spacing does lengthen a vertical line} \
+    -constraints haveJpFace -body {
+  # The other half of the same rule, and the reason it has to be measured
+  # rather than assumed: Tc appears in BOTH formulas of 9.4.4, so character
+  # spacing opens the column exactly as it opens a line.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  set plain [$doc textWidth "日本語" -family jp -size 12 -direction ttb]
+  set spaced [$doc textWidth "日本語" -family jp -size 12 -direction ttb -spacing 3]
+  $doc destroy
+  list $plain $spaced
+} -result {36.0 42.0}
+
+test text-vertical-1.7 {pair kerning is turned off for a vertical line} \
+    -constraints {haveJpFace haveKerning} -body {
+  # The pairs in GPOS "kern" are horizontal: they say how much closer A and V
+  # stand SIDE BY SIDE, and adding that to a vertical advance answers a
+  # question nobody asked. Turned off in TextMerge - the one gate both the
+  # measuring and the drawing road pass - so the two cannot disagree about it.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed kern $::kernFace
+  set across [$doc textWidth "AV" -family kern -size 20]
+  set acrossPlain [$doc textWidth "AV" -family kern -size 20 -kerning 0]
+  set down [$doc textWidth "AV" -family kern -size 20 -direction ttb]
+  $doc text "AV" -at {60 200} -family kern -size 20 -direction ttb
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # The horizontal pair IS kerned, so the two widths differ; the vertical
+  # line writes a plain Tj with no adjustment in it at all.
+  list [expr {$across != $acrossPlain}] $down [regexp {TJ} $stream]
+} -result {1 40.0 0}
+
+test text-vertical-1.8 {a vertical line extracts in the order it was written} \
+    -constraints {haveJpFace havePdfToText} -body {
+  # The check that the ToUnicode map was not turned round with the glyphs. A
+  # vertical line whose map follows the drawing renders perfectly and gives
+  # the text back backwards, and no validator says a word.
+  set doc [tclpdf new -unit pt -format a5]
+  $doc page add
+  $doc font embed jp $::jpFace
+  $doc text "日本語の縦書き" -at {200 300} -family jp -size 14 -direction ttb
+  set path [::tclpdfTest::scratch text-vertical-extract.pdf]
+  $doc write $path
+  $doc destroy
+  set text [exec pdftotext $path -]
+  file delete $path
+  string trim [lindex [split $text \n] 0]
+} -result {日本語の縦書き}
+
+test text-vertical-1.9 {the vertical forms reach the stream} \
+    -constraints haveJpFace -body {
+  # Brackets, the ideographic comma and the ellipsis are OTHER GLYPHS in a
+  # vertical line - the GSUB feature vert, applied through the same machinery
+  # the ligatures use. Asserted on the drawn glyph numbers, because that is
+  # where a rotation-instead-of-substitution would show.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  $doc text "「日」…" -at {20 200} -family jp -size 12
+  $doc text "「日」…" -at {60 200} -family jp -size 12 -direction ttb
+  set glyphs [::tclpdfTest::glyphIds [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The kanji in the middle is the control, and a kanji is the right control:
+  # measured, Noto Sans JP lists every hiragana in its vert feature - the
+  # kana get vertical forms with adjusted metrics - so a kana would have
+  # changed too and proved nothing about the coverage being honoured.
+  list [lindex $glyphs 0] [lindex $glyphs 1] \
+      [expr {[lindex $glyphs 0 1] eq [lindex $glyphs 1 1]}]
+} -result {{1150 6316 1151 479} {15229 6316 15230 15211} 1}
+
+test text-vertical-2.1 {ttb needs a face that has a vertical writing mode} \
+    -constraints haveFace -body {
+  # The standard fourteen and an embedded Type 1 face are addressed through
+  # WinAnsiEncoding, which is a horizontal encoding and has no vertical CMap
+  # to name. Refused rather than accepted, because accepted it did nothing -
+  # the writing mode lives on the Type 0 road, which a standard face never
+  # takes, so "-direction ttb" on Helvetica set the line across the page in
+  # silence.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set drawing [catch {$doc text "Bochum" -at {20 20} -direction ttb} one options]
+  set code [dict get $options -errorcode]
+  set measuring [catch {$doc textWidth "Bochum" -direction ttb} two]
+  $doc destroy
+  list $drawing [string match {*WinAnsiEncoding*} $one] \
+      [lrange $code 0 2] $measuring [string match {*font embed*} $two]
+} -result {1 1 {TCLPDF FONT VERTICAL} 1 1}
+
+test text-vertical-2.2 {ttb and a block do not go together} \
+    -constraints haveJpFace -body {
+  # -width breaks lines by width and steps them down by the leading, which is
+  # the direction a vertical line already runs in. Refused BY NAME rather
+  # than drawn: the glyphs would have been the right ones, in a horizontal
+  # paragraph's positions, and it renders.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  set code [catch {$doc text "日本語の縦書き" -at {20 200} -family jp -size 12 \
+      -direction ttb -width 100} message options]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*ONE vertical line*} $message]
+} -result {1 {TCLPDF TEXT VERTICAL} 1}
+
+test text-vertical-2.3 {-anchor top and ttb do not go together} \
+    -constraints haveJpFace -body {
+  # "The top of the letters at y" is what -align left already means for a
+  # vertical line, so -anchor top would be a second name for it or a second,
+  # contradicting one. Refused rather than quietly read as baseline.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  set code [catch {$doc text "日本" -at {20 200} -family jp -size 12 \
+      -direction ttb -anchor top} message options]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*-align left, right or center*} $message]
+} -result {1 {TCLPDF TEXT VERTICAL} 1}
+
+test text-vertical-2.4 {a face with no vmtx sets a vertical line all the same} \
+    -constraints haveFace -body {
+  # NOT refused: ISO 32000-2 9.7.4.3 defines the case and gives it a default
+  # of one em per glyph. So DejaVu Sans sets a column of square cells - which
+  # is the only defined answer - and the file says /DW2 and no /W2, because
+  # every glyph in it wants exactly the default.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed body $::textFace
+  $doc text "Ja" -at {60 200} -family body -size 10 -direction ttb
+  set extent [$doc textWidth "Ja" -family body -size 10 -direction ttb]
+  set path [::tclpdfTest::scratch text-vertical-nometric.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $extent [regexp {/DW2 \[880 -1000\]} $bytes] [regexp {/W2} $bytes] \
+      [regexp {/Encoding /Identity-V} $bytes]
+} -result {20.0 1 0 1}
+
+test text-vertical-2.4a {ttb and a path do not go together} \
+    -constraints haveJpFace -body {
+  # Measured before this refusal existed: the call reported success and drew
+  # a perfectly ordinary HORIZONTAL line. It could not do otherwise - a
+  # vertical advance accumulates INSIDE a show operator and a path writes one
+  # per cluster, so the one thing the writing mode does never happens. An
+  # option that is accepted and does nothing is the defect shape this module
+  # refuses on sight.
+  package require tclpdf::textPath
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed jp $::jpFace
+  set code [catch {$doc textPath "日本語" \
+      -segments {{move 20 60} {line 180 60}} -family jp -size 12 \
+      -direction ttb} message options]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # And nothing was drawn: the refusal comes before the first byte.
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*a path do not go together*} $message] [regexp {Tj} $stream]
+} -result {1 {TCLPDF TEXT VERTICAL} 1 0}
+
+test text-vertical-2.5 {a refused vertical call leaves nothing behind} \
+    -constraints haveJpFace -body {
+  # The house rule of this module: after a refused call the stream, the tree
+  # and the state have to look as if the call never happened. -anchor top is
+  # refused before the mark is opened, so the stream that follows is the one
+  # the good call wrote and nothing else.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed jp $::jpFace
+  catch {$doc text "日本" -at {20 200} -family jp -size 12 \
+      -direction ttb -anchor top}
+  catch {$doc text "日本" -at {20 200} -family jp -size 12 \
+      -direction ttb -width 50}
+  $doc text "日本" -at {60 200} -family jp -size 12 -direction ttb
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {BT} $stream] [regexp -all {ET} $stream] \
+      [::tclpdfTest::starts $stream x]
+} -result {1 1 60}
+
 
 cleanupTests

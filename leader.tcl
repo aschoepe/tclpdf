@@ -101,6 +101,23 @@ oo::define ::tclpdf::document::document {
   method LeaderDraw {options} {
     lassign [dict get $options at] x y
     set width [dict get $options width]
+    # A leader row is a horizontal measurement from end to end: -width is the
+    # distance the row spans, [textWidth] measures the two ends along the same
+    # axis, and the fill is repeated across the room that is left. In a
+    # vertical line every one of those is an answer about the other axis, so
+    # the row would be measured across the page and drawn down it. Refused
+    # rather than drawn, for the same reason [textPath] refuses it: an option
+    # that is accepted and then means something else is worse than one that is
+    # not offered. A vertical row of leaders is a column of [text] calls the
+    # caller places, since the spacing is his to decide either way.
+    if {[dict get $options direction] eq "ttb"} {
+      return -code error -errorcode {TCLPDF TEXT DIRECTION ttb leader} \
+          "tclpdf: leader takes no -direction ttb - a leader row measures its\
+          two ends and its fill along the line, and in a vertical line that is\
+          the length down the page rather than a width across it, so the row\
+          would be measured on one axis and drawn on the other. Set the pieces\
+          as separate text calls down the column, or leave the row horizontal"
+    }
     set font [my LeaderFont $options]
     # The ends normally say nothing: an element is already open around them and
     # they join it. Only -tag Artifact has to reach them, or the row would be
@@ -201,4 +218,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::leader 1.2
+package provide tclpdf::leader 1.3

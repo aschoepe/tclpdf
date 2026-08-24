@@ -258,6 +258,28 @@ oo::define ::tclpdf::document::document {
     return [$tclpdfWriter put [my reservation output.info] \
         [::tclpdf::pdfObj dictionary $pairs]]
   }
+  # One annotation onto one page's /Annots, for every module that makes one -
+  # link.tcl, annot.tcl, field.tcl, sign.tcl. The array itself is written a
+  # few lines above out of [state annots]; how an entry gets in there is this
+  # file's business too, and it was four copies of the same three lines until
+  # 2026-08-24.
+  #
+  # IDEMPOTENT, and that is the one thing the four copies disagreed about: a
+  # module that registers when the CALL is made adds each annotation once
+  # whatever happens, but one that registers on the write event runs again on
+  # every [write], and the second run would list the same widget twice. Both
+  # kinds are here, so the test belongs in the shared road rather than in the
+  # two callers that happen to need it.
+  method AnnotationOnPage {page reference} {
+    set annots [my state annots]
+    if {![dict exists $annots $page]
+        || $reference ni [dict get $annots $page]} {
+      dict lappend annots $page $reference
+      my state annots $annots
+    }
+    return
+  }
+
 }
 
-package provide tclpdf::output 1.6
+package provide tclpdf::output 1.7

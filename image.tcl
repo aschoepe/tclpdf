@@ -21,6 +21,29 @@
 #
 #   $doc image draw assets/photo.jpg -at {20 70} -size {80 60}
 #
+#   $doc image place logo -at {190 20} -width 40 -align right
+#   $doc image place photo -at {20 40} -fit {80 50} -fitMode cover \
+#       -align center -valign middle
+#
+# -at names the top left corner of the box a picture goes into, as it names
+# the top left corner of a [rect]; -align and -valign say where in that box
+# the picture sits, in the words the rest of this package already uses for
+# the two axes. Without -fit the box has no size, so the same two options are
+# the plain anchor - a logo whose RIGHT edge is to sit on the type area's
+# right margin is -at {190 20} -align right, and nobody has to measure the
+# picture first. See [fitAnchor] and [fitCheck] in page.tcl.
+#
+# A picture need not become an object at all. Placed with -inline 1 it is
+# written INTO the content stream (8.9.7) - BI, an abbreviated dictionary,
+# ID, the bytes, EI - with no object number, no entry in the page's resources
+# and no way of being used twice. That is the case for it and the whole of
+# its cost, and it is why -inline is ASKED for rather than decided by size
+# here: whether a picture occurs once is something the caller knows and the
+# writer does not. See [ImageInline].
+#
+#   $doc image embed seal seal.png -stencil 1
+#   $doc image place seal -at {20 20} -width 20 -inline 1
+#
 # A picture need not stay a picture. Embedded with -stencil 1 a one-bit file
 # becomes an image mask (8.9.6.2): it carries no colour of its own, and every
 # placement paints the fill colour then in force through its bits. Embedded
@@ -89,12 +112,139 @@ namespace eval ::tclpdf::image {
   # 13 of 194 measured files lie above this line and the largest has 1922
   # strips; both real scans in that corpus have ONE strip per page.
   variable stripLimit 256
+
+  # How much image data one inline image may carry.
+  #
+  # 8.9.7 says it twice and says SHOULD both times: the inline format "should
+  # be used only for small images (4096 bytes or less)", and "the value of
+  # the Length key should not exceed 4096 bytes". So the line is a
+  # recommendation of the standard and the refusal above it is this package's
+  # decision - taken because an inline image is worse than an image XObject
+  # in every way but one, and the exception is exactly the picture that is
+  # smaller than the machinery around it: a bullet, a rule, a seal, a fax
+  # stamp, for which an object, an entry in the page's resources and a line
+  # in the cross-reference table cost more than the picture itself. Above the
+  # line the caller is almost certainly mistaken, and the way out is one
+  # option away - so the picture is refused rather than quietly written the
+  # other way, which a caller who asked for BI ... EI and got a /Do would
+  # have no way to notice.
+  variable inlineLimit 4096
+
+  # Table 91: the entries an inline image object holds, and nothing else -
+  # "entries other than those listed shall be ignored" (8.9.7), which is why
+  # what cannot be expressed here is refused rather than written out in full
+  # and left for a reader to drop on the floor. Intent is the one entry with
+  # no abbreviation; Length is PDF 2.0 and is written only into a 2.0 file,
+  # where 8.9.7 says it "shall be present on all inline images".
+  #
+  # Type, Subtype, Mask and SMask are not in the table, and an SMask could
+  # not be there anyway: it names a stream object, and a content stream shall
+  # contain no indirect references (7.8.2).
+  variable inlineKeys {
+    BitsPerComponent BPC ColorSpace CS Decode D DecodeParms DP Filter F
+    Height H ImageMask IM Intent Intent Interpolate I Length L Width W
+  }
+
+  # Table 92, the colour space half. /I is the quirk worth knowing: as a KEY
+  # it is Interpolate, as a colour space VALUE it is Indexed, and the two may
+  # stand in one dictionary. 8.9.7 admits nothing else - "it shall not be a
+  # CIE-based colour space or a special colour space, with the exception of a
+  # limited form of Indexed colour space whose base colour space is a device
+  # space".
+  variable inlineSpaces {/DeviceGray /G /DeviceRGB /RGB /DeviceCMYK /CMYK}
+
+  # Table 92, the filter half. Only /Fl, /DCT, /RL and /CCF are ever written
+  # by this package - the three ASCII filters and /LZW stand here because the
+  # table has them, not because anything produces one. The three that are
+  # ABSENT from the table are absent on purpose: JPXDecode, JBIG2Decode and
+  # Crypt "shall not be used with inline images".
+  variable inlineFilters {
+    /ASCIIHexDecode /AHx /ASCII85Decode /A85 /LZWDecode /LZW
+    /FlateDecode /Fl /RunLengthDecode /RL /CCITTFaxDecode /CCF
+    /DCTDecode /DCT
+  }
+}
+
+# The image dictionary of an XObject, written the way an inline image writes
+# it: abbreviated keys, abbreviated colour space and filter names. The same
+# pairs the format readers hand to [ImageObject] go through here, which is
+# why nothing about a picture is decided twice - what an inline image cannot
+# express is refused, and everything else comes out of the ONE place that
+# knows what a JPEG, a PNG or a TIFF turns into.
+proc ::tclpdf::image::inlinePairs {pairs} {
+  variable inlineKeys
+  set result {}
+  foreach {key value} $pairs {
+    if {![dict exists $inlineKeys $key]} {
+      return -code error -errorcode [list TCLPDF IMAGE INLINE ENTRY $key] \
+          "tclpdf: an inline image object holds the entries of ISO 32000-2,\
+          Table 91 and $key is not one of them - entries other than those\
+          listed shall be ignored (8.9.7), so writing it out in full would\
+          not carry it, it would lose it; leave -inline off and the picture\
+          goes into the file as an image XObject, whose dictionary has room\
+          for it (Table 87)"
+    }
+    switch -- $key {
+      ColorSpace {set value [inlineSpace $value]}
+      Filter {set value [inlineFilter $value]}
+    }
+    lappend result [dict get $inlineKeys $key] $value
+  }
+  return $result
+}
+
+# A colour space as an inline image names it (Table 92). A device space
+# becomes its abbreviation; an /Indexed array keeps its hival and its lookup
+# string and has its head and its base abbreviated. An ICCBased array never
+# reaches here - 8.9.7 admits no CIE-based space, and the picture is refused
+# where it is built, with the way out in the message.
+proc ::tclpdf::image::inlineSpace {value} {
+  variable inlineSpaces
+  if {[dict exists $inlineSpaces $value]} {
+    return [dict get $inlineSpaces $value]
+  }
+  if {[regexp {^\[/Indexed (/Device[A-Za-z]+) (.+)$} $value -> base rest]
+      && [dict exists $inlineSpaces $base]} {
+    return "\[/I [dict get $inlineSpaces $base] $rest"
+  }
+  return -code error -errorcode [list TCLPDF IMAGE INLINE SPACE $value] \
+      "tclpdf: the colour space of an inline image is a device space or a\
+      limited Indexed space over one, and shall not be a CIE-based or a\
+      special colour space (ISO 32000-2, 8.9.7) - \"$value\" is neither of\
+      the two admitted; leave -inline off and the picture goes into the file\
+      as an image XObject, which may name any colour space"
+}
+
+# A filter as an inline image names it (Table 92) - one name, or the array of
+# them 8.9.7's own example shows ("/F [/A85 /LZW]"), which this package does
+# not currently produce and reads anyway rather than refusing what the
+# standard prints.
+proc ::tclpdf::image::inlineFilter {value} {
+  variable inlineFilters
+  if {[string index $value 0] eq "\["} {
+    return "\[[join [lmap name [string range $value 1 end-1] {
+        inlineFilter $name}] { }]\]"
+  }
+  if {[dict exists $inlineFilters $value]} {
+    return [dict get $inlineFilters $value]
+  }
+  # The three that are missing from Table 92 are missing because they are
+  # forbidden, and saying which of the two it is saves the caller the search.
+  if {$value in {/JPXDecode /JBIG2Decode /Crypt}} {
+    set why "$value shall not be used with inline images"
+  } else {
+    set why "an inline image names its filter by the abbreviations of ISO\
+        32000-2, Table 92 and there is none for \"$value\""
+  }
+  return -code error -errorcode [list TCLPDF IMAGE INLINE FILTER $value] \
+      "tclpdf: $why (ISO 32000-2, 8.9.7) - leave -inline off and the picture\
+      goes into the file as an image XObject"
 }
 
 oo::define ::tclpdf::document::document {
 
   # $doc image embed <alias> ?path? ?-data bytes? ?-type auto|jpeg|png|tiff?
-  # $doc image place <alias> ?-at {x y}? ?-size {w h}? ...
+  # $doc image place <alias> ?-at {x y}? ?-size {w h}? ?-inline bool? ...
   # $doc image draw  ?path? ?-data bytes? ?-at {x y}? ...
   # $doc image info  <alias>
   # $doc image names
@@ -299,6 +449,27 @@ oo::define ::tclpdf::document::document {
     return [::tclpdf::imagePng device $parsed]
   }
 
+  # The same question one step out, and the one [image info] answers: the
+  # space of the SAMPLES, with a palette called a palette instead of being
+  # resolved to the space its entries are in. [ImageDevice] deliberately
+  # resolves it - the profile check and the mask check both ask what the
+  # numbers mean, and an /Indexed picture's numbers are RGB - while a caller
+  # laying out around a picture is being told what the file holds.
+  method ImageSpaceName {image} {
+    if {[dict get $image stencil]} {
+      return {}
+    }
+    set parsed [dict get $image parsed]
+    switch -- [dict get $image type] {
+      png {
+        return [expr {[dict get $parsed colorType] == 3 ? "Indexed"
+            : [::tclpdf::imagePng device $parsed]}]
+      }
+      tiff {return [dict get $parsed space]}
+    }
+    return [::tclpdf::imageJpeg space [dict get $parsed components]]
+  }
+
   # May this embedded picture serve as another one's mask?
   #
   # A stencil may always: it becomes /Mask and is the very thing 8.9.6.3
@@ -393,7 +564,8 @@ oo::define ::tclpdf::document::document {
   method ImagePlace {alias args} {
     set options [::tclpdf::option parse {
       at {} size {} width {} height {} scale {} rotate 0 opacity {} dpi {}
-      alt {} artifact {}
+      fit {} fitMode {} align left valign top
+      alt {} artifact {} inline 0
     } $args "image place"]
     set images [my state images]
     if {![dict exists $images $alias]} {
@@ -419,8 +591,51 @@ oo::define ::tclpdf::document::document {
           degrees, not \"[dict get $options rotate]\""
     }
     lassign [my ImageExtent $image $options "image place"] width height
+    # -at names the top left corner of the BOX, exactly as it names the top
+    # left corner of a [rect]; -align and -valign then say where in that box
+    # the picture sits. Without -fit the box has no size, and the same sum is
+    # the plain anchor: -align right puts the picture's right edge on the x
+    # that was given. The arithmetic is [fitAnchor] in page.tcl, shared so
+    # that an anchor and an anchor inside a box cannot come apart.
+    #
+    # A COVERED BOX IS CUT BACK TO THE BOX. -fitMode cover scales the picture
+    # until both edges are covered, which leaves it hanging over the box on
+    # one axis - the box is what the caller asked to see, so the overhang is
+    # clipped away rather than drawn across whatever stands beside it. The
+    # rectangle is the one -at and -fit name, before the anchor moved the
+    # picture inside it.
+    set clip {}
+    if {[dict get $options fit] ne {}
+        && [dict get $options fitMode] eq "cover"} {
+      set clip [list $left $top {*}[dict get $options fit]]
+    }
+    lassign [my fitAnchor [list $left $top] $width $height $options] left top
     my GraphicCheck image "image place" [dict get $options alt] \
         [dict get $options artifact]
+    # The one option value in this module that carries a code of its own, and
+    # it earns it: a caller who traps {TCLPDF IMAGE INLINE} to fall back on an
+    # XObject wants the mistyped boolean in that class too, rather than as the
+    # single bare error left in the way.
+    if {![string is boolean -strict [dict get $options inline]]} {
+      return -code error -errorcode [list TCLPDF IMAGE INLINE BOOLEAN \
+          [dict get $options inline]] \
+          "tclpdf: -inline of image place takes a boolean, not\
+          \"[dict get $options inline]\""
+    }
+    set inline [expr {[dict get $options inline] ? 1 : 0}]
+    # The picture written INTO the stream (8.9.7) rather than beside it. Built
+    # HERE, before the ExtGState of -opacity is made and before the first
+    # resource is touched, because every refusal an inline image can make -
+    # the 4096 bytes, a mask, a profile, a stack - has to leave the document
+    # exactly as it was. It creates no object and takes no resource name, so
+    # a picture placed inline five times travels five times: that is what the
+    # caller asked for, and it is why -inline is asked for rather than
+    # decided here.
+    set inlineText {}
+    set space {}
+    if {$inline} {
+      lassign [my ImageInline $alias $image] inlineText space
+    }
     set alpha {}
     if {[dict get $options opacity] ne {}} {
       set alpha [my GraphicsOpacity [dict get $options opacity]]
@@ -428,12 +643,15 @@ oo::define ::tclpdf::document::document {
     # Asked of the RESOURCE, not of the object: a picture serving as another
     # one's mask already has an object and no resource name, and reading the
     # object alone left [ImagePlace] naming a resource the page never got.
-    if {![dict exists $image resource]} {
-      # ImageWrite registers the resource in the state itself, so the local
-      # copy has to be refreshed - not doing so is how a place ends up naming
-      # a resource that the dictionary already has.
-      my ImageWrite $alias $image
-      set image [dict get [my state images] $alias]
+    if {!$inline} {
+      if {![dict exists $image resource]} {
+        # ImageWrite registers the resource in the state itself, so the local
+        # copy has to be refreshed - not doing so is how a place ends up naming
+        # a resource that the dictionary already has.
+        my ImageWrite $alias $image
+        set image [dict get [my state images] $alias]
+      }
+      set space [dict get $image space]
     }
 
     # A picture's colour space counts like a painted colour for the PDF/A
@@ -448,8 +666,8 @@ oo::define ::tclpdf::document::document {
     # has no colour space at all (Table 87: with ImageMask true ColorSpace
     # "shall not be specified") - what it paints is the fill colour, and that
     # was recorded when the colour was set.
-    if {[dict get $image space] ne {}} {
-      my ColourSpaceUsed [dict get $image space] "image place"
+    if {$space ne {}} {
+      my ColourSpaceUsed $space "image place"
     }
 
     # A picture XObject is a unit square with its origin at the BOTTOM left, so
@@ -501,17 +719,35 @@ oo::define ::tclpdf::document::document {
     # completely encloses the visible content. Without a rotation the answer
     # is the placement rectangle, as before.
     lassign [my GraphicMark image "image place" [dict get $options alt] \
-        [dict get $options artifact] $top [my PlacedBox 1 1 $matrix]] \
+        [dict get $options artifact] $top [my PlacedBox 1 1 $matrix $clip]] \
         mark element
     my save
+    # Inside the q, so the enclosing Q takes it back again: a clipping path
+    # holds until the graphics state it was set in is restored (8.5.4), and
+    # one left standing would cut everything drawn on the page after the
+    # picture. Before the "cm" because it is stated in the page's own
+    # coordinates, not in the picture's unit square.
+    if {$clip ne {}} {
+      my clip -at [lrange $clip 0 1] -size [lrange $clip 2 3]
+    }
     if {$alpha ne {}} {
       my content "[::tclpdf::pdfObj name $alpha] gs\n"
     }
-    if {[dict exists $image parts]} {
+    if {!$inline && [dict exists $image parts]} {
+      # A stack carries the matrix into every part and writes its own "cm"
+      # for each of them, which is why the one below is not written here.
       my ImageStack $image $matrix
     } else {
       my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
-      my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
+      # An inline image is drawn on the same unit square an image XObject is
+      # drawn on (8.9.5), so the matrix carries the size, the flip and the
+      # rotation exactly as it does for a "Do" - the two differ in where the
+      # bytes are, not in how the picture is placed.
+      if {$inline} {
+        my content $inlineText
+      } else {
+        my content "[::tclpdf::pdfObj name [dict get $image resource]] Do\n"
+      }
     }
     my restore
     my GraphicUnmark $mark $element
@@ -558,6 +794,190 @@ oo::define ::tclpdf::document::document {
       my restore
     }
     return
+  }
+
+  # A picture written into the content stream (8.9.7): BI, an abbreviated
+  # dictionary, ID, the bytes, EI. Answers {text space} - the operators to
+  # append where a "Do" would otherwise stand, and the colour space of the
+  # samples for the PDF/A intent check.
+  #
+  # NOTHING is written and no object is created, so every refusal below leaves
+  # the document exactly as it was - which is the reason the version floor is
+  # raised last, after the byte count has been weighed: a picture that is
+  # refused must not pin the file to PDF 1.5 on its way out.
+  method ImageInline {alias image} {
+    lassign [my ImageInlineStreams $alias $image] pairs data space version
+    set limit $::tclpdf::image::inlineLimit
+    set size [string length $data]
+    if {$size > $limit} {
+      return -code error \
+          -errorcode [list TCLPDF IMAGE INLINE SIZE $size $limit] \
+          "tclpdf: \"$alias\" carries $size bytes of image data, and ISO\
+          32000-2, 8.9.7 says an inline image should be used only for small\
+          images ($limit bytes or less) - tclpdf holds to that line rather\
+          than writing a picture the standard advises against; leave -inline\
+          off and it goes into the file as an image XObject, which has no\
+          such limit and is the cheaper way in for anything this size anyway"
+    }
+    if {$version ne {}} {
+      my RequireVersion {*}$version
+    }
+    # /L is PDF 2.0, and in a 2.0 file 8.9.7 says it "shall be present on all
+    # inline images": the length of the data between ID and EI, excluding the
+    # white space that delimits them. In a 1.x file it is written NOT AT ALL -
+    # the key did not exist, and Note 1 of that clause says a processor will
+    # not encounter it there. Asked of the writer at this moment, which is
+    # when the picture is written; the version cannot be lowered afterwards
+    # (see [version] in writer.tcl), so what is written here stays true.
+    if {[package vcompare [[my writer] version] 2.0] >= 0} {
+      lappend pairs Length $size
+    }
+    set text "BI\n"
+    # Each entry is built as ONE string and the strings are joined. Handing
+    # [join] a list of two-element pairs instead puts Tcl's own braces round
+    # any value that holds a space - the /DP dictionary of a PNG does - and
+    # a brace is PDF syntax for nothing at all.
+    set entries {}
+    foreach {key value} [::tclpdf::image::inlinePairs $pairs] {
+      lappend entries "/$key $value"
+    }
+    append text [join $entries { }]
+    # "ID shall be followed by a single white-space character, and the next
+    # character shall be interpreted as the first byte of image data"
+    # (8.9.7) - so exactly one space here, whatever the filter is, and the
+    # EI preceded by one, so that it cannot run into the last data byte.
+    append text "\nID " $data "\nEI\n"
+    return [list $text $space]
+  }
+
+  # The dictionary and the data of an inline picture, and what an inline
+  # picture cannot be. Answers {pairs data space version}, with pairs under
+  # their FULL names - [inlinePairs] abbreviates them, and holding them
+  # against Table 92 there rather than here is what keeps the two halves from
+  # drifting apart.
+  #
+  # The three format branches are the ones [ImageObject] takes, minus
+  # everything the refusals above have already cut away: no profile, no mask,
+  # no stack, and therefore no object to create on the way. What is left is
+  # which reader to ask, and the readers are the same ones - a picture does
+  # not become a different picture for being written in a different place.
+  #
+  # Five things an inline image cannot be, each refused by name:
+  #
+  #   masked              /Mask and /SMask are not in Table 91, and an SMask
+  #                       is an indirect reference besides, which a content
+  #                       stream shall not contain (7.8.2)
+  #   transparent         the same entry from the other side: a picture that
+  #                       brings an alpha channel, a transparent colour or a
+  #                       partly transparent palette needs one of them
+  #   ICC tagged          /ICCBased is an array naming a stream object - the
+  #                       same indirect reference, for the same reason
+  #   a stack             a striped TIFF is several images and BI ... EI is
+  #                       one
+  #   over the limit      weighed in [ImageInline], where the bytes are known
+  method ImageInlineStreams {alias image} {
+    set type [dict get $image type]
+    set parsed [dict get $image parsed]
+    if {[dict get $image mask] ne {}} {
+      return -code error -errorcode {TCLPDF IMAGE INLINE MASK} \
+          "tclpdf: \"$alias\" wears -mask \"[dict get $image mask]\", and\
+          a mask is a second image named by an entry an inline image object\
+          has no room for - ISO 32000-2, Table 91 lists what it holds and\
+          8.9.7 says entries other than those shall be IGNORED, so a Mask\
+          written into one would not be a mask, it would be nothing; a soft\
+          mask would be an indirect reference besides, which a content stream\
+          shall not contain (7.8.2). Leave -inline off and the picture goes\
+          into the file as an image XObject, mask and all"
+    }
+    if {[dict get $parsed icc] ne {}} {
+      return -code error -errorcode {TCLPDF IMAGE INLINE ICC} \
+          "tclpdf: \"$alias\" travels with an ICC profile, so its colour\
+          space is /ICCBased - and the colour space of an inline image shall\
+          not be a CIE-based one (ISO 32000-2, 8.9.7); it would be an\
+          indirect reference into the bargain, which a content stream shall\
+          not contain (7.8.2). Embed it with -icc 0 to write it inline in its\
+          device colour space, or leave -inline off and the profile travels\
+          with it"
+    }
+    if {$type eq "png" && ![dict get $image stencil]} {
+      set way [expr {[::tclpdf::imagePng hasAlpha $parsed] ? "alpha"
+          : [::tclpdf::imagePng transparency $parsed]}]
+      if {$way ne "none"} {
+        return -code error -errorcode [list TCLPDF IMAGE INLINE MASK $way] \
+            "tclpdf: \"$alias\" carries transparency of its own ([dict get\
+            {alpha {an alpha channel} colourKey {a transparent colour}\
+            softMask {a partly transparent palette}} $way]), so it reaches\
+            the file with a Mask or an SMask entry - and an inline image\
+            object holds neither, so it would be ignored rather than carried\
+            (ISO 32000-2, Table 91 and 8.9.7); leave -inline off, or embed a\
+            picture without transparency"
+      }
+    }
+    set pairs [list Width [dict get $parsed width] \
+        Height [dict get $parsed height]]
+    set version {}
+    if {[dict get $image stencil]} {
+      # The classic inline image, and the one this is worth having for: a
+      # one-bit stamp of a few dozen bytes, painted in the fill colour. It
+      # has no colour space at all (Table 87), so there is none to record.
+      set streams [::tclpdf::imagePng stencilStreams $parsed \
+          [dict get $image invert]]
+      lappend pairs {*}[dict get $streams pairs]
+      set data [dict get $streams data]
+      set space {}
+    } elseif {$type eq "jpeg"} {
+      set space [::tclpdf::imageJpeg space [dict get $parsed components]]
+      lappend pairs ColorSpace /$space \
+          BitsPerComponent [dict get $parsed bitsPerComponent] \
+          Filter /DCTDecode
+      if {[::tclpdf::imageJpeg inverted $parsed]} {
+        lappend pairs Decode [::tclpdf::pdfObj arr {1 0 1 0 1 0 1 0}]
+      }
+      set data [dict get $image bytes]
+    } elseif {$type eq "tiff"} {
+      set parsed [my TiffInvert $parsed [dict get $image invert]]
+      set parts [dict get [::tclpdf::imageTiffStreams streams \
+          [dict get $image bytes] $parsed] parts]
+      if {[llength $parts] > 1} {
+        return -code error -errorcode {TCLPDF IMAGE INLINE STACKED} \
+            "tclpdf: [my TiffStackIs $alias $parsed], and BI ... ID ... EI\
+            is ONE image (ISO 32000-2, 8.9.7) - [my TiffStackFix $parsed], or\
+            leave -inline off and the parts go into the file as the image\
+            XObjects they are"
+      }
+      set space [::tclpdf::imageTiff device $parsed]
+      # The lookup string of a palette goes in through pdfObj rather than
+      # through [BytesStr]: a string inside a content stream is NOT encrypted
+      # on its own, the stream it sits in is (ISO 32000-2, 7.6.2), and a
+      # doubly encrypted palette is a picture in the wrong colours.
+      lappend pairs ColorSpace \
+          [my TiffSpace $parsed /$space {::tclpdf::pdfObj bytesStr}] \
+          BitsPerComponent [dict get $parsed bitsPerComponent]
+      lappend pairs {*}[dict get [lindex $parts 0] pairs]
+      set data [dict get [lindex $parts 0] data]
+      if {[dict get $parsed bitsPerComponent] == 16} {
+        set version {1.5 "a 16-bit TIFF picture"}
+      }
+    } else {
+      # Same reason as the TIFF palette above - the default bytesStr of
+      # [streams] is pdfObj's, so this is the call that does NOT hand the
+      # document's encrypting one in.
+      set streams [::tclpdf::imagePng streams $parsed]
+      lappend pairs {*}[dict get $streams pairs]
+      set data [dict get $streams data]
+      set space [::tclpdf::imagePng device $parsed]
+      if {[dict get $parsed bitDepth] == 16} {
+        set version {1.5 "a 16-bit PNG picture"}
+      }
+    }
+    if {![dict get $image stencil] && [dict get $image invert]
+        && $type ne "tiff"} {
+      lappend pairs Decode [::tclpdf::pdfObj arr {1 0}]
+    }
+    if {[dict get $image interpolate]} {
+      lappend pairs Interpolate true
+    }
+    return [list $pairs $data $space $version]
   }
 
   # The marking every placed graphic gets, in one place: a picture, a drawing
@@ -770,8 +1190,23 @@ oo::define ::tclpdf::document::document {
       dict set result compression [dict get $parsed compressionName]
       dict set result strips [dict get $parsed stripCount]
       dict set result rowsPerStrip [dict get $parsed rowsPerStrip]
-      dict set result space [dict get $parsed space]
     }
+    # WHAT THE SAMPLES ARE IN, for all three formats alike - the name a
+    # resource dictionary would carry for them: DeviceGray, DeviceRGB,
+    # DeviceCMYK, or Indexed for a palette. A TIFF has answered this since it
+    # was taken in; a JPEG and a PNG had to be worked out from components or
+    # colour type by a caller who wanted to lay out around the picture, and
+    # working it out is exactly what this package does when it writes the
+    # file. One answer, one place.
+    #
+    # It says what the SAMPLES are, not what the ColorSpace entry of the
+    # stream ends up being: with a profile in the file (icc above zero) the
+    # picture reaches the page as /ICCBased over this space, and for a
+    # palette as /Indexed over it. A stencil has no colour space at all -
+    # Table 87 says ColorSpace "shall not be specified" where ImageMask is
+    # true, what it paints is the fill colour in force - so it answers empty,
+    # which is the same "nobody said" that an absent resolution answers with.
+    dict set result space [my ImageSpaceName $image]
     # The size of the ICC profile that will travel with the picture, 0 when
     # the file carries none or -icc 0 left it behind - so a caller can see
     # which of the two a placement will get.
@@ -861,7 +1296,8 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: no image named \"$alias\""
     }
     return [my ImageExtent [dict get $images $alias] [::tclpdf::option parse \
-        {size {} width {} height {} scale {} dpi {}} $args "image size"] "image size"]
+        {size {} width {} height {} scale {} dpi {} fit {} fitMode {}} \
+        $args "image size"] "image size"]
   }
 
   # The size to draw at, in the document unit. Given nothing, a pixel is taken
@@ -882,6 +1318,10 @@ oo::define ::tclpdf::document::document {
       dict set options dpi {}
     }
     ::tclpdf::geometry checkFit $options $what
+    # The box and the two anchors, checked in the same breath and before
+    # anything is read - [fitCheck] in page.tcl, beside the arithmetic that
+    # uses them.
+    my fitCheck $options $what
     set parsed [dict get $image parsed]
     set pixelWidth [dict get $parsed width]
     set pixelHeight [dict get $parsed height]
@@ -1016,20 +1456,9 @@ oo::define ::tclpdf::document::document {
       }
       set data [dict get $image bytes]
     } elseif {[dict get $image type] eq "tiff"} {
-      # -invert on a TIFF is decided BEFORE the streams are built, and it is
-      # not a second Decode array beside the one the file may already need:
-      # a WhiteIsZero picture already reverses its samples, and reversing
-      # them twice is the picture as it was. So the array is settled once,
-      # here, and travels through [streams] with the part it belongs to.
-      # Table 87 fixes its length at twice the number of components, and the
-      # check at the embedding has already held this picture to one.
-      if {[dict get $image invert]} {
-        if {[dict get $parsed decode] eq {}} {
-          dict set parsed decode {1 0}
-        } else {
-          dict set parsed decode {}
-        }
-      }
+      # -invert BEFORE the streams are built, and not as a second Decode
+      # array beside the one the file may already need - see [TiffInvert].
+      set parsed [my TiffInvert $parsed [dict get $image invert]]
       # The strips, as the streams of one image or of a stack of them. Like
       # the PNG way this runs before ANYTHING is written - it is the last
       # call that can refuse the picture, and all three refusals of
@@ -1042,19 +1471,11 @@ oo::define ::tclpdf::document::document {
         set base [my ImageProfileBase $parsed]
         set space ICCBased
       }
-      if {[dict get $parsed space] eq "Indexed"} {
-        # The lookup of a palette image as PDF reads it: 8-bit RGB triples in
-        # one string, and a hival that is the last index (8.6.6.3). imageTiff
-        # has already turned the file's three 16-bit ramps into that shape.
-        # The string goes through the document's own constructor, because
-        # every string in an encrypted document is encrypted (7.6.2).
-        set palette [dict get $parsed palette]
-        set colourSpace "\[/Indexed $base\
-            [expr {[string length $palette] / 3 - 1}] [my BytesStr $palette]\]"
-      } else {
-        set colourSpace $base
-      }
-      lappend pairs ColorSpace $colourSpace \
+      # The string goes through the document's own constructor, because every
+      # string in an encrypted document is encrypted (7.6.2) - the one place
+      # an inline image differs, see [ImageInlineStreams].
+      lappend pairs ColorSpace [my TiffSpace $parsed $base \
+          [list [self namespace]::my BytesStr]] \
           BitsPerComponent [dict get $parsed bitsPerComponent]
       # Sixteen bits per component is PDF 1.5, whatever format the samples
       # came out of (Reference 1.7, Table 4.39) - and after [streams], which
@@ -1262,6 +1683,43 @@ oo::define ::tclpdf::document::document {
     return
   }
 
+  # The PDF colour space of a parsed TIFF over a given base: the base itself,
+  # or the /Indexed array of a palette image - 8-bit RGB triples in one
+  # string with a hival that is the last index (8.6.6.3), which is the shape
+  # imageTiff has already turned the file's three 16-bit ramps into.
+  #
+  # "bytesStr" is the command prefix that makes the lookup string, because
+  # the two callers need different ones: an image XObject's string is
+  # encrypted with the document, an inline image's is not - the content
+  # stream around it already is (7.6.2).
+  method TiffSpace {parsed base bytesStr} {
+    if {[dict get $parsed space] ne "Indexed"} {
+      return $base
+    }
+    set palette [dict get $parsed palette]
+    return "\[/Indexed $base [expr {[string length $palette] / 3 - 1}]\
+        [{*}$bytesStr $palette]\]"
+  }
+
+  # -invert on a TIFF, decided BEFORE the streams are built, and not as a
+  # second Decode array beside the one the file may already need: a
+  # WhiteIsZero picture already reverses its samples, and reversing them
+  # twice is the picture as it was. So the array is settled once, here, and
+  # travels through [streams] with the part it belongs to. Table 87 fixes
+  # its length at twice the number of components, and the check at the
+  # embedding has already held this picture to one.
+  method TiffInvert {parsed invert} {
+    if {!$invert} {
+      return $parsed
+    }
+    if {[dict get $parsed decode] eq {}} {
+      dict set parsed decode {1 0}
+    } else {
+      dict set parsed decode {}
+    }
+    return $parsed
+  }
+
   # What all three refusals begin with, and what all three offer as the way
   # out - written once, because three copies of a sentence are three chances
   # for two of them to say something the third does not.
@@ -1304,4 +1762,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.10
+package provide tclpdf::image 1.11

@@ -1790,4 +1790,132 @@ test textFlow-12.1 {a hyphenation offer that eats none of the word is refused} -
       [expr {[flowLines $stream] < 10}]
 } -result {{} 2 1 1}
 
+# --- 13. which line ends on a break hyphen ---------------------------------
+#
+# [textLines] answers strings, and a string cannot say whether the "-" it ends
+# on is a break this breaker made or a character of the text. Both happen in
+# one paragraph: "Betriebskostenab-" is a break, "Nord-" is the word. Whoever
+# draws the lines himself needs the difference, because a break hyphen has to
+# be bracketed with [text -breakHyphen] (ISO 32000-1, 14.8.2.6) and a real one
+# must not be. -hyphens 1 is that half of the pair.
+
+package require tclpdf::hyphenate
+
+set flowLanguages [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets languages]
+set flowGerman [file join $flowLanguages hyph_de_DE.dic]
+testConstraint haveGermanPatterns [file exists $flowGerman]
+testConstraint havePdfToText [expr {[auto_execok pdftotext] ne {}}]
+
+# hyph_de_DE.dic states no LEFTHYPHENMIN and no RIGHTHYPHENMIN, so German is
+# loaded with 2 and 2 here - the same as tests/hyphenate.test does it, and for
+# the same reason: the TeX fallback of 3 on the right refuses the two letter
+# endings German breaks off every day.
+if {[file exists $flowGerman]} {
+  ::tclpdf::hyphenate load de-DE $flowGerman -left 2 -right 2
+}
+
+# The paragraph both cases live in. At 35 mm in 9 pt Helvetica the first line
+# ends on a hyphen the breaker put there, and the SECOND ends on a hyphen the
+# text always had.
+set flowHyphenBody "Die Betriebskostenabrechnung fuer die Nord- und Suedseite\
+    kommt per E-Mail."
+
+proc flowHyphenDoc {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 9 -leading 12
+  return $doc
+}
+
+test textFlow-13.1 {-hyphens 1 tells the two hyphens of one paragraph apart} \
+    -constraints haveGermanPatterns -body {
+  set doc [flowHyphenDoc]
+  set lines [$doc textLines $::flowHyphenBody -width 35 -hyphenate de-DE \
+      -hyphens 1]
+  $doc destroy
+  # Every element a dictionary of exactly two keys, and the flag where the
+  # string cannot say it: line 1 ends on a break, line 2 on the "-" of
+  # "Nord-". Both lines end on the same character.
+  list [lmap line $lines {dict keys $line}] \
+      [lmap line $lines {dict get $line hyphen}] \
+      [lmap line $lines {string index [dict get $line text] end}]
+} -result {{{text hyphen} {text hyphen} {text hyphen} {text hyphen}} {1 0 0 0} {- - t .}}
+
+test textFlow-13.2 {without the option the answer is the list of strings it always was} \
+    -constraints haveGermanPatterns -body {
+  # The regression guard for four releases of callers: [textLines] without
+  # -hyphens answers strings, and -hyphens 0 answers the same strings. The
+  # texts are the same either way - only the wrapping differs.
+  set doc [flowHyphenDoc]
+  set plain [$doc textLines $::flowHyphenBody -width 35 -hyphenate de-DE]
+  set said [$doc textLines $::flowHyphenBody -width 35 -hyphenate de-DE \
+      -hyphens 0]
+  set asked [$doc textLines $::flowHyphenBody -width 35 -hyphenate de-DE \
+      -hyphens 1]
+  $doc destroy
+  list [expr {$plain eq $said}] \
+      [expr {$plain eq [lmap line $asked {dict get $line text}]}] \
+      [lindex $plain 0]
+} -result {1 1 {Die Betriebskostenab-}}
+
+test textFlow-13.3 {the measuring calls agree about -hyphens, textWidth refuses it} -body {
+  set doc [flowHyphenDoc]
+  set answers {}
+  # [textHeight] takes it and measures the same block: one option list serves
+  # the height and the lines.
+  lappend answers [expr {[$doc textHeight $::flowHyphenBody -width 35] ==
+      [$doc textHeight $::flowHyphenBody -width 35 -hyphens 1]}]
+  # And a value that is no boolean is refused by BOTH, with the code, before
+  # either answers anything.
+  foreach method {textLines textHeight} {
+    set caught [catch {$doc $method $::flowHyphenBody -width 35 \
+        -hyphens maybe} message options]
+    lappend answers $caught [string match {*-hyphens takes a boolean*} $message] \
+        [lrange [dict get $options -errorcode] 0 3]
+  }
+  # [textWidth] measures a string and lays nothing out, so it refuses the
+  # option by NAME, as it refuses -width and -hyphenate.
+  set caught [catch {$doc textWidth "Rechnung" -hyphens 1} message options]
+  lappend answers $caught [string match {*unknown option "-hyphens"*} $message] \
+      [lrange [dict get $options -errorcode] 0 3]
+  $doc destroy
+  set answers
+} -result {1 1 1 {TCLPDF TEXT HYPHENS maybe} 1 1 {TCLPDF TEXT HYPHENS maybe} 1 1\
+    {TCLPDF OPTION UNKNOWN -hyphens}}
+
+test textFlow-13.4 {the whole circle: break here, draw with -breakHyphen, extract whole} \
+    -constraints {haveGermanPatterns havePdfToText} -body {
+  # What the pair is for, end to end. The lines are broken here, drawn one at
+  # a time - which is what a caller does who places every line himself - and
+  # read back with poppler. -layout, because the default mode REFLOWS and
+  # guesses: it joins a line ending in "-" to the next and drops the hyphen,
+  # which is right for a break and wrong for "Nord-". Only -layout reports
+  # what the file says.
+  set result {}
+  foreach use {1 0} {
+    set path [::tclpdfTest::scratch textflow-hyphens-$use.pdf]
+    set doc [flowHyphenDoc]
+    $doc tagged 1
+    set y 20
+    foreach line [$doc textLines $::flowHyphenBody -width 35 \
+        -hyphenate de-DE -hyphens 1] {
+      set hyphen [expr {$use ? [dict get $line hyphen] : 0}]
+      $doc text [dict get $line text] -at [list 20 $y] -breakHyphen $hyphen
+      incr y 6
+    }
+    $doc write $path
+    $doc destroy
+    set text [exec pdftotext -layout $path -]
+    file delete $path
+    # Read the way a reader joins broken lines: the white space out, the
+    # hyphens as the file has them.
+    regsub -all {\s+} [string trim $text] {} squeezed
+    lappend result [string match {*Betriebskostenabrechnung*} $squeezed] \
+        [string match {*Nord-und*} $squeezed] \
+        [string match {*E-Mail.*} $squeezed]
+  }
+  set result
+} -result {1 1 1 0 1 1}
+
 cleanupTests

@@ -12,8 +12,11 @@
 # DCTDecode for JPEG, which is pass-through and therefore not a filter at all.
 # The two ASCII filters here are not for size - they make a stream readable in
 # a text editor, which is worth a lot while debugging and costs 25 % (Ascii85)
-# or 100 % (AsciiHex) in size. Everything else - LZW, CCITT, JBIG2, RunLength -
-# is only needed for READING foreign PDFs and belongs to stage 7.
+# or 100 % (AsciiHex) in size. Everything else is only needed for READING - a
+# foreign PDF, or a TIFF written by somebody else - and that is why LZW is a
+# decoder with no encoder beside it. JBIG2 and RunLength are not read either
+# way, and CCITT is read next door: [decodeCcitt] at the foot of this file is
+# the entry point, filterCcitt.tcl is the 600 lines behind it.
 #
 # Every procedure takes and returns bytes, never text. A caller that hands in a
 # string with characters above U+00FF has already made a mistake somewhere else.
@@ -539,4 +542,22 @@ proc ::tclpdf::filter::PredictorPng {bytes rowBytes bpp} {
   PredictorRows $start $total $stride
   return $out
 }
-package provide tclpdf::filter 1.2
+
+# ----------------------------------------------------------- CCITTFaxDecode
+
+# CCITTFaxDecode (7.4.6) is read, never written, and reading it takes 600
+# lines: the code tables of T.4 and the two-dimensional row decoder of T.6.
+# They stand in filterCcitt.tcl, and this procedure is the door to them - it
+# requires the module when it is called, so a document that never sees a fax
+# never reads a table entry, and a caller keeps the spelling it always used.
+# The same lazy step is taken by imagePng for its alpha path and by shading
+# for its meshes.
+#
+# What the options mean, and why every one of Table 11 is taken rather than
+# the two that matter, is written down in filterCcitt.tcl.
+proc ::tclpdf::filter::decodeCcitt {bytes args} {
+  package require tclpdf::filterCcitt 1.0-
+  tailcall ::tclpdf::filterCcitt decode $bytes {*}$args
+}
+
+package provide tclpdf::filter 1.3

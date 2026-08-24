@@ -569,3 +569,52 @@ proc ::tclpdfTest::refuse {script} {
     return [list $code [string match {tclpdf:*} $msg] \
         [dict get $opts -errorcode]]
 }
+
+# The colour of one or more points of a rendered page, each as {r g b} 0..255.
+# Rendered as a PPM rather than a PNG: P6 is a header and the bytes, and
+# reading it needs nothing but [binary scan].
+#
+# ONE rendering for all the points, because a mesh or a gradient has to be
+# judged at its corners AND in the middle, and rendering the same page once
+# per point is both slower and - if the renderer ever wobbles - a comparison
+# of two different pictures.
+#
+# -unit is the unit the POINTS are in, and it is the whole reason this used to
+# be two procedures: a page of this package is laid out in millimetres, while
+# a shading test speaks in the PDF points its shading dictionary is written
+# in. Getting it wrong does not fail, it reads the wrong pixel.
+proc ::tclpdfTest::pixels {path points args} {
+  set dpi 72
+  set unit pt
+  foreach {option value} $args {
+    switch -- $option {
+      -dpi {set dpi $value}
+      -unit {set unit $value}
+      default {error "unknown option \"$option\" - known are -dpi -unit"}
+    }
+  }
+  set per [expr {$unit eq "mm" ? 25.4 : 72.0}]
+  set stem [::tclpdfTest::scratch [file rootname [file tail $path]]-ppm]
+  exec {*}[auto_execok pdftoppm] -r $dpi $path $stem
+  set ppm [glob $stem-*.ppm]
+  set bytes [::tclpdfTest::readBytes [lindex $ppm 0]]
+  file delete {*}$ppm
+  # P6, width, height, maximum - whitespace separated, then the raw triples.
+  regexp {^P6\s+(\d+)\s+(\d+)\s+(\d+)\s} $bytes header width height -
+  set offset [string length $header]
+  set result {}
+  foreach point $points {
+    lassign $point x y
+    set column [expr {int($x * $dpi / $per)}]
+    set row [expr {int($y * $dpi / $per)}]
+    set start [expr {$offset + ($row * $width + $column) * 3}]
+    binary scan [string range $bytes $start [expr {$start + 2}]] cu3 rgb
+    lappend result $rgb
+  }
+  return $result
+}
+
+# One point, in millimetres - the shape the colour tests have always used.
+proc ::tclpdfTest::pixel {path x y {dpi 20}} {
+  return [lindex [::tclpdfTest::pixels $path [list [list $x $y]] -dpi $dpi -unit mm] 0]
+}

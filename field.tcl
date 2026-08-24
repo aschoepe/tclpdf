@@ -1234,7 +1234,7 @@ oo::define ::tclpdf::document::document {
     $writer put [dict get $record widget] [::tclpdf::pdfObj dictionary $pairs]
 
     set reference [$writer ref [dict get $record widget]]
-    my FieldAnnot $page $reference
+    my AnnotationOnPage $page $reference
     my FieldEnlist $reference
     return $own
   }
@@ -1279,7 +1279,7 @@ oo::define ::tclpdf::document::document {
       lappend widget {*}$pairs
       $writer put [dict get $entry widget] [::tclpdf::pdfObj dictionary $widget]
       set reference [$writer ref [dict get $entry widget]]
-      my FieldAnnot $page $reference
+      my AnnotationOnPage $page $reference
       lappend kids $reference
     }
 
@@ -1382,15 +1382,6 @@ oo::define ::tclpdf::document::document {
 
   # Into the page's /Annots, the same scratch state link.tcl and sign.tcl use
   # - once, however often the document is written.
-  method FieldAnnot {page reference} {
-    set annots [my state annots]
-    if {![dict exists $annots $page]
-        || $reference ni [dict get $annots $page]} {
-      dict lappend annots $page $reference
-      my state annots $annots
-    }
-    return
-  }
 
   # What a build may and may not answer - point 4 of the contract at the head
   # of this file, and the same check for the field's pairs and for a kid's.

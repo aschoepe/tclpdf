@@ -1759,4 +1759,127 @@ test import-24.20 {a missing file is refused with the class code} -body {
 } -result {{TCLPDF IMPORT FILE} {TCLPDF IMPORT FILE}}
 
 
+
+# --- CCITT content streams (roadmap item 7) ---------------------------------
+#
+# CCITTFaxDecode is the filter of a scanned attachment, and until this decoder
+# it was the refusal a scan ran into: a page whose content or whose pixels are
+# fax-coded could not be taken over at all. What a scan carries in practice
+# was counted on 2026-08-24 over 25232 PDF files here - 1681 of them name the
+# filter, and of 11398 fax images in them every single one is Group 4.
+#
+# A page content stream coded as fax is not what anybody writes, and that is
+# exactly why the fixture below can exist: the bytes of a content stream are
+# a bitmap like any other, so the operators were handed to the encoder of
+# libtiff 4.7.2 as a 64 by 7 one-bit picture and what came back is a Group 4
+# stream that decodes to the operators again. Nothing here was coded by this
+# package - it has no fax encoder.
+
+proc ::tclpdfTest::ccittpage {{parms {/Columns 64 /Rows 7 /K -1 /BlackIs1 true}} {extra {}}} {
+    set stream [binary format H* [string cat \
+        23a368ba23a23a368fa23b23a3198cc22e8fe12b049342911d11d2b4caffe3a1 \
+        b685b0c17add6c8ffa088e8208548f8229d0d11d28549b488e81024c8ea3dc45 \
+        4c6b0784b682d85d27f91d0409c6914385c20b686be90223a0688eb11da17118 \
+        008008]]
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1\
+        /MediaBox \[0 0 300 200\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+        /Resources << /Font << /F1 4 0 R >> >> >>"
+    lappend objects "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    lappend objects "<< /Length [string length $stream] /Filter /CCITTFaxDecode\
+        /DecodeParms << $parms >> $extra >>\nstream\n$stream\nendstream"
+    return [::tclpdfTest::buildpdf import-ccitt.pdf $objects]
+}
+
+test import-25.1 {a CCITT content stream is read} -body {
+    set fixture [::tclpdfTest::ccittpage]
+    # -compress 0 keeps the merged content readable for the assertion.
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import fax $fixture
+    $doc form place fax -at {0 0}
+    set size [$doc form size fax]
+    set path [::tclpdfTest::scratch import-ccitt-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    list $size [regexp {\(ccitt content\) Tj} $bytes]
+} -result {{300.0 200.0} 1}
+
+test import-25.2 {/BlackIs1 reaches the decoder} -body {
+    # The parameter that changes every bit and no length: read with the
+    # default the same stream decodes to the complement of the operators,
+    # which is 56 bytes of something that is not an operator anywhere. The
+    # import does not refuse it - a content stream may hold anything - so the
+    # assertion is that the text is GONE, not that anything failed.
+    set fixture [::tclpdfTest::ccittpage {/Columns 64 /Rows 7 /K -1}]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import fax $fixture
+    $doc form place fax -at {0 0}
+    set path [::tclpdfTest::scratch import-ccitt-flip.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path $fixture
+    regexp {\(ccitt content\) Tj} $bytes
+} -result 0
+
+test import-25.3 {a fax stream shorter than it declares is refused naming the file} -body {
+    # /Rows says 40 and the stream holds seven, which is the shape a
+    # truncated scan arrives in. The refusal has to carry the FILE and what
+    # was being read - the decoder's own sentence alone says "the fax data"
+    # and leaves the reader to guess which file that was.
+    set fixture [::tclpdfTest::ccittpage {/Columns 64 /Rows 40 /K -1 /BlackIs1 true}]
+    set doc [tclpdf new]
+    $doc page add
+    set answer [::tclpdfTest::refuse {$doc pdf import fax $fixture}]
+    catch {$doc pdf import again $fixture} message
+    $doc destroy
+    file delete $fixture
+    list $answer [string match {*import-ccitt.pdf*/CCITTFaxDecode stream this\
+        package cannot decode*7 of the 40 rows*} $message]
+} -result {{1 1 {TCLPDF IMPORT FILTER}} 1}
+
+test import-25.5 {where /Rows is silent the height of the image stands in} -body {
+    # /Rows is optional (Table 11) and an image says the same thing in
+    # /Height, which is not. Taken from there, a stream that stops early is
+    # caught; taken from nowhere, it would quietly deliver fewer rows than
+    # the picture has and nothing downstream would know. Declared at 40 with
+    # seven in the stream, so the fallback shows by refusing.
+    set fixture [::tclpdfTest::ccittpage {/Columns 64 /K -1 /BlackIs1 true} \
+        {/Height 40}]
+    set doc [tclpdf new]
+    $doc page add
+    catch {$doc pdf import fax $fixture} message
+    $doc destroy
+    file delete $fixture
+    string match {*7 of the 40 rows*} $message
+} -result 1
+
+test import-25.4 {a filter this package still cannot read is refused by name} -body {
+    # The other side of the same switch. Four filters are read now - Flate,
+    # LZW, the two ASCII ones - and CCITT is the fifth; everything else has
+    # to arrive as a refusal that names the filter, not as a stream of bytes
+    # nobody decoded.
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1\
+        /MediaBox \[0 0 200 200\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"
+    lappend objects "<< /Length 4 /Filter /JBIG2Decode >>\nstream\nxxxx\nendstream"
+    set fixture [::tclpdfTest::buildpdf import-jbig2.pdf $objects]
+    set doc [tclpdf new]
+    $doc page add
+    set answer [::tclpdfTest::refuse {$doc pdf import x $fixture}]
+    catch {$doc pdf import y $fixture} message
+    $doc destroy
+    file delete $fixture
+    list $answer [string match {*uses filter /JBIG2Decode, which this import\
+        cannot decode*} $message]
+} -result {{1 1 {TCLPDF IMPORT FILTER}} 1}
+
 cleanupTests

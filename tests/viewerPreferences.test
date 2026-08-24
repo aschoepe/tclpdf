@@ -19,6 +19,11 @@ package require tclpdf
 package require tclpdf::viewerPreferences
 source [file join [file dirname [info script]] helper.tcl]
 
+set here [file dirname [file dirname [file normalize [info script]]]]
+set face [file join $here examples assets fonts DejaVuSans.ttf]
+set srgbIcc [file join $here icc sRGB.icc]
+testConstraint haveFace [expr {[file exists $face] && [file exists $srgbIcc]}]
+
 proc drawn {} {
   set doc [tclpdf new -unit mm -compress 0]
   $doc page add
@@ -253,5 +258,254 @@ test viewerPreferences-4.1 {the catalog subscription is made once, and survives 
   list $emptied [expr {$again - $once}] [regexp -all {/ViewerPreferences} $bytes] \
       [regexp -all {/HideToolbar true} $bytes] [regexp -all {/DisplayDocTitle} $bytes]
 } -result {{} 0 1 1 0}
+
+# -- the initial view (Table 28) ---------------------------------------------
+#
+# /PageMode, /PageLayout and /OpenAction: which panel a reader shows, how it
+# arranges the pages, and where it puts the reader first. Catalogue entries,
+# not viewer preferences - which is why they are a command of their own and
+# not three more options of the one above. See the head of viewerPreferences.tcl.
+
+test viewerPreferences-initialView-5.1 {the three entries reach the catalogue} -body {
+  set doc [drawn]
+  $doc page add
+  $doc initialView -pageMode UseThumbs -pageLayout TwoColumnLeft -page 1
+  set path [::tclpdfTest::scratch iv-basic.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/PageMode /UseThumbs} $bytes] \
+      [regexp {/PageLayout /TwoColumnLeft} $bytes] \
+      [regexp {/OpenAction \[\d+ 0 R /Fit\]} $bytes]
+} -result {1 1 1}
+
+test viewerPreferences-initialView-5.2 {-to and -zoom make it an XYZ destination} -body {
+  # The same three words [destination] and [link] use, read by the same
+  # method - so a bookmark and an open action pointing at one place are
+  # written from one piece of code. 20 mm from the left is 56.69 pt; 40 mm
+  # from the top of A4 is 841.89 - 113.39.
+  set doc [drawn]
+  $doc page add
+  $doc initialView -page 1 -to {20 40} -zoom 1.5
+  set path [::tclpdfTest::scratch iv-xyz.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/OpenAction \[\d+ 0 R /XYZ 56\.6\d+ 728\.5\d+ 1\.5\]} $bytes
+} -result 1
+
+test viewerPreferences-initialView-5.3 {calls accumulate and the command answers what is set} -body {
+  set doc [drawn]
+  $doc initialView -pageMode UseOutlines
+  set first [$doc initialView]
+  $doc initialView -pageLayout OneColumn
+  set second [$doc initialView]
+  $doc initialView -pageMode UseNone
+  set third [$doc initialView]
+  $doc destroy
+  list $first $second $third
+} -result {{pageMode UseOutlines} {pageMode UseOutlines pageLayout OneColumn}\
+    {pageMode UseNone pageLayout OneColumn}}
+
+test viewerPreferences-initialView-5.4 {a page not added yet is resolved at the write} -body {
+  # A forward /OpenAction takes the road a forward link takes: an object
+  # reserved now and filled when every page is there.
+  set doc [drawn]
+  $doc initialView -page 2
+  $doc page add
+  $doc page add
+  set path [::tclpdfTest::scratch iv-forward.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/OpenAction \d+ 0 R} $bytes
+} -result 1
+
+test viewerPreferences-initialView-5.5 {a page that never comes is named at the write} -body {
+  set doc [drawn]
+  $doc initialView -page 7
+  set out [::tclpdfTest::refuse {$doc write [::tclpdfTest::scratch iv-never.pdf]}]
+  catch {file delete [::tclpdfTest::scratch iv-never.pdf]}
+  $doc destroy
+  lrange $out 0 1
+} -result {1 1}
+
+test viewerPreferences-initialView-5.6 {the caller's page mode wins over the outline's} -body {
+  # [bookmark] sets /PageMode /UseOutlines only where nothing else has
+  # (outline.tcl), and a caller who asked for thumbnails beside their
+  # bookmarks gets thumbnails. This is why the entry is written at the CALL
+  # and not at the write.
+  set doc [drawn]
+  $doc initialView -pageMode UseThumbs
+  $doc bookmark "Anfang" -page 0
+  set path [::tclpdfTest::scratch iv-outline.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {/PageMode /UseThumbs} $bytes] [regexp {/PageMode /UseOutlines} $bytes] \
+      [regexp {/Type /Outlines} $bytes]
+} -result {1 0 1}
+
+test viewerPreferences-initialView-5.7 {and without one the outline still opens its pane} -body {
+  # The guard the other way round: nothing about the old behaviour changes
+  # for a document that says nothing.
+  set doc [drawn]
+  $doc bookmark "Anfang" -page 0
+  set path [::tclpdfTest::scratch iv-outline-default.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/PageMode /UseOutlines} $bytes
+} -result 1
+
+test viewerPreferences-initialView-5.8 {every value is checked, and each refusal carries its code} -body {
+  set doc [drawn]
+  set out {}
+  foreach call {
+    {initialView -pageMode Nonsense}
+    {initialView -pageLayout Nonsense}
+    {initialView -pageMode UseNone -pageLayout Nonsense}
+    {initialView -page -1}
+    {initialView -page x}
+    {initialView -page 1.0}
+    {initialView -to {20 40}}
+    {initialView -zoom 2}
+    {initialView -page 0 -zoom -1}
+    {initialView -page 0 -to 20}
+    {initialView -nonFullScreenPageMode UseNone}
+  } {
+    lappend out [lindex [::tclpdfTest::refuse [list $doc {*}$call]] 2]
+  }
+  $doc destroy
+  set out
+} -result {{TCLPDF INITIALVIEW PAGEMODE Nonsense} {TCLPDF INITIALVIEW PAGELAYOUT Nonsense}\
+    {TCLPDF INITIALVIEW PAGELAYOUT Nonsense} {TCLPDF INITIALVIEW PAGE -1}\
+    {TCLPDF INITIALVIEW PAGE x} {TCLPDF INITIALVIEW PAGE 1.0}\
+    {TCLPDF INITIALVIEW PAGE {}} {TCLPDF INITIALVIEW PAGE {}}\
+    {TCLPDF INITIALVIEW ZOOM -1} {TCLPDF OPTION POINT -to initialView}\
+    {TCLPDF OPTION UNKNOWN -nonFullScreenPageMode initialView}}
+
+test viewerPreferences-initialView-5.9 {a refused call leaves the catalogue untouched} -body {
+  # A good -pageMode beside a misspelt -pageLayout must write neither, or the
+  # document carries half of what was asked for and the caller saw an error.
+  set doc [drawn]
+  catch {$doc initialView -pageMode UseThumbs -pageLayout Nonsense}
+  set state [$doc initialView]
+  set path [::tclpdfTest::scratch iv-partial.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $state [regexp {/PageMode} $bytes] [regexp {/PageLayout} $bytes]
+} -result {{} 0 0}
+
+test viewerPreferences-initialView-5.10 {the four young values raise the version floor} -body {
+  # Table 28: UseOC is PDF 1.5, UseAttachments 1.6, and the two TwoPage
+  # layouts 1.5. The KEYS that hold them are as old as the catalogue.
+  #
+  # The MESSAGE is read, not only the error code: a test that asks for a
+  # refusal and takes any refusal cannot tell a version floor from a typo in
+  # the test itself. Measured 2026-08-24 - with the floor silently dropped
+  # the call still failed, on the line after it, and the test stayed green.
+  set out {}
+  foreach {version call value} {
+    1.4 {initialView -pageMode UseOC} 1.5
+    1.4 {initialView -pageMode UseAttachments} 1.6
+    1.5 {initialView -pageMode UseAttachments} 1.6
+    1.4 {initialView -pageLayout TwoPageLeft} 1.5
+    1.4 {initialView -pageLayout TwoPageRight} 1.5
+    1.4 {initialView -pageMode FullScreen} {}
+    1.4 {initialView -pageLayout TwoColumnRight} {}
+  } {
+    set doc [tclpdf new -version $version]
+    $doc page add
+    set code [catch {$doc {*}$call} message]
+    if {$value eq {}} {
+      lappend out $code
+    } else {
+      lappend out [expr {$code && [string match \
+          "*[lrange $call 0 2] needs PDF $value*" $message]}]
+    }
+    $doc destroy
+  }
+  # And the other half of a floor: where the value IS admitted, the document
+  # cannot be written as anything older afterwards.
+  set doc [tclpdf new -version 1.6]
+  $doc page add
+  $doc initialView -pageMode UseAttachments -pageLayout TwoPageLeft
+  lappend out [catch {$doc configure -version 1.5}] \
+      [catch {$doc configure -version 1.6}]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 0 0 1 0}
+
+test viewerPreferences-initialView-5.11 {viewerPreferences and initialView keep their own dictionaries} -body {
+  # -nonFullScreenPageMode is a VIEWER PREFERENCE and -pageMode a catalogue
+  # entry; the two overlap in four of six words and mean different things.
+  # Neither command may answer for the other, and the UA check reads the
+  # first of the two.
+  set doc [drawn]
+  $doc viewerPreferences -nonFullScreenPageMode UseThumbs
+  $doc initialView -pageMode FullScreen
+  set preferences [$doc viewerPreferences]
+  set view [$doc initialView]
+  set path [::tclpdfTest::scratch iv-apart.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $preferences $view [regexp {/NonFullScreenPageMode /UseThumbs} $bytes] \
+      [regexp {/PageMode /FullScreen} $bytes]
+} -result {{nonFullScreenPageMode UseThumbs} {pageMode FullScreen} 1 1}
+
+test viewerPreferences-initialView-5.12 {qpdf reads the catalogue back} -body {
+  set doc [drawn]
+  $doc page add
+  $doc initialView -pageMode UseThumbs -pageLayout TwoColumnLeft -page 1 \
+      -to {20 40}
+  set path [::tclpdfTest::scratch iv-qpdf.pdf]
+  $doc write $path
+  $doc destroy
+  set code 0
+  if {[auto_execok qpdf] ne {}} {
+    set code [catch {exec qpdf --check $path}]
+  }
+  file delete $path
+  set code
+} -result 0
+
+test viewerPreferences-initialView-5.13 {a destination in /OpenAction keeps PDF/A} \
+    -constraints haveFace -body {
+  # MEASURED with veraPDF 1.30, 2026-08-24: an /OpenAction holding a
+  # DESTINATION passes PDF/A-3B, and so does /PageMode /FullScreen. What does
+  # not is an ACTION of the wrong type - a /Launch and a /JavaScript open
+  # action each failed clause 6.5.1, test 1 ("The Launch, Sound, Movie,
+  # ResetForm, ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView
+  # and JavaScript actions shall not be permitted"). That is why this command
+  # writes a destination and leaves an action to [catalogEntry OpenAction]:
+  # an -action option would be a promise half of whose values break the
+  # moment [pdfa] is declared.
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B -profile $srgbIcc
+  $doc page add
+  $doc font embed body $face
+  $doc font -family body -size 12
+  $doc text "Seite eins" -at {20 20}
+  $doc page add
+  $doc text "Seite zwei" -at {20 20}
+  $doc initialView -pageMode FullScreen -pageLayout TwoColumnLeft -page 1 \
+      -to {20 40}
+  set path [::tclpdfTest::scratch iv-pdfa.pdf]
+  $doc write $path
+  $doc destroy
+  set report [::tclpdfTest::verapdf $path 3b]
+  file delete $path
+  set report
+} -result ok
 
 cleanupTests

@@ -45,7 +45,9 @@ package require tclpdf
 # TEA_ADD_TCL_SOURCES in configure.ac and the module pairs in pkgIndex.tcl.in.
 foreach tclpdfPkg {
     tclpdf::pdfObj
+    tclpdf::pdfFunction
     tclpdf::filter
+    tclpdf::filterCcitt
     tclpdf::crypto
     tclpdf::encrypt
     tclpdf::sign
@@ -110,11 +112,14 @@ foreach tclpdfPkg {
     tclpdf::imagePngAlpha
     tclpdf::image
     tclpdf::shading
+    tclpdf::shadingMesh
     tclpdf::pattern
     tclpdf::tableLayout
     tclpdf::tableDraw
     tclpdf::table
     tclpdf::link
+    tclpdf::annot
+    tclpdf::annotMark
     tclpdf::outline
     tclpdf::xml
     tclpdf::svgPath

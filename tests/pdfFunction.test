@@ -1,0 +1,287 @@
+# pdfFunction.test --
+#
+# The PDF function types, 7.10: who writes the dictionary, what goes in it,
+# and what a type 4 body is read for.
+#
+# The module exists because two places wrote a function of their own - the
+# tint transform of a colour space and the colour run of a shading - and had
+# already begun to differ over /Domain and /Range. So these tests are as much
+# about the two callers meeting here as about the dictionaries themselves.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::pdfFunction
+package require tclpdf::color
+package require tclpdf::shading
+source [file join [file dirname [info script]] helper.tcl]
+
+# The builders are methods of the document and start with a capital, which
+# TclOO does not export - the same reason [onSelf] exists in document.tcl.
+# A test that wants to call one asks for it by name.
+proc functionDocument {args} {
+  set doc [tclpdf new {*}$args]
+  $doc page add
+  oo::objdefine $doc export FunctionExponential FunctionStitching \
+      FunctionCalculator
+  return $doc
+}
+
+# The body of the object a builder just wrote.
+proc functionBody {doc number} {
+  return [[$doc writer] body $number]
+}
+
+# -- 1. type 2, the exponential function (7.10.3) ---------------------------
+
+test pdfFunction-1.1 {a type 2 runs from C0 to C1 over 0..1, and says no more} -body {
+  # /Domain [0 1] and /N 1 are written rather than asked for: a tint runs
+  # from 0 to 1 and so does the parameter of a gradient segment, and both
+  # callers mean LINEAR. /Range is optional for a type 2 (Table 39) and is
+  # left out where it carries no decision - an entry a reader has to parse
+  # for nothing.
+  set doc [functionDocument -compress 0]
+  set number [$doc FunctionExponential {1 1 1} {0.2 0.4 0.9}]
+  set body [functionBody $doc $number]
+  $doc destroy
+  list $body [regexp {/Range} $body]
+} -result {{<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0.2 0.4 0.9] /N 1 >>} 0}
+
+test pdfFunction-1.2 {a Range is written when the caller has one to say} -body {
+  # The Lab alternate of a separation: its values leave 0..1 in every
+  # component, and a reader clipping to the implicit range would flatten the
+  # colour. It is the one caller that passes a range, and it is why the
+  # argument exists at all.
+  set doc [functionDocument -compress 0]
+  set number [$doc FunctionExponential {100 0 0} {55 30 -20} \
+      {0 100 -100 100 -100 100}]
+  set body [functionBody $doc $number]
+  $doc destroy
+  set body
+} -result {<< /FunctionType 2 /Domain [0 1] /C0 [100 0 0] /C1 [55 30 -20] /N 1 /Range [0 100 -100 100 -100 100] >>}
+
+test pdfFunction-1.3 {every number goes through [pdfObj num]} -body {
+  # The latent fault of one of the two places this module replaces: it put
+  # its /Domain and /Range into the array as bare Tcl values, and only got
+  # away with it because every value it ever wrote was 0 or 1. Tcl writes a
+  # small number in exponential notation, a reader reads "1e-05" as three
+  # tokens, and the object is corrupt (7.3.3).
+  list [::tclpdf::pdfFunction numbers {1e-5 0.5 1 -0}] \
+      [::tclpdf::pdfFunction unitRange 3] \
+      [catch {::tclpdf::pdfFunction numbers {0 x}}]
+} -result {{0.00001 0.5 1 0} {0 1 0 1 0 1} 1}
+
+# -- 2. type 3, the stitching function (7.10.4) -----------------------------
+
+test pdfFunction-2.1 {a type 3 stitches sub-functions and derives its Encode} -body {
+  # /Encode is derived rather than passed: every sub-function is written over
+  # 0..1, so each subdomain maps onto 0 1. An array out of step with the
+  # number of functions is a file a reader answers by painting nothing, and
+  # deriving it makes that impossible.
+  set doc [functionDocument -compress 0]
+  set first [$doc FunctionExponential {1 0 0} {1 1 0}]
+  set second [$doc FunctionExponential {1 1 0} {0 0.5 0}]
+  set number [$doc FunctionStitching [list $first $second] {0.25}]
+  set body [functionBody $doc $number]
+  $doc destroy
+  list $body [regexp "/Functions \\\[$first 0 R $second 0 R\\\]" $body]
+} -result {{<< /FunctionType 3 /Domain [0 1] /Functions [2 0 R 3 0 R] /Bounds [0.25] /Encode [0 1 0 1] >>} 1}
+
+test pdfFunction-2.2 {a bound too few is refused, not written} -body {
+  # k functions need k-1 bounds (Table 40). The count is the one thing about
+  # a stitching function that can be checked without knowing what it paints.
+  set doc [functionDocument -compress 0]
+  set first [$doc FunctionExponential {0 0 0} {1 1 1}]
+  set second [$doc FunctionExponential {1 1 1} {0 0 0}]
+  set before [[$doc writer] count]
+  set codes [list [catch {$doc FunctionStitching [list $first $second] {}} a] \
+      [catch {$doc FunctionStitching [list $first $second] {0.3 0.6}} b]]
+  set grew [expr {[[$doc writer] count] - $before}]
+  $doc destroy
+  list $codes $grew [string match {tclpdf: a stitching function of 2 functions needs 1 bounds*} $a]
+} -result {{1 1} 0 1}
+
+# -- 3. type 4, the PostScript calculator (7.10.5) --------------------------
+
+test pdfFunction-3.1 {a type 4 is a stream, and the outer braces are written here} -body {
+  # The one function type that is a stream rather than a dictionary, and the
+  # one place the braces of the body are written. Both callers used to wrap
+  # their own - one inside the code generator, one at the call - which is two
+  # answers to "who wraps it".
+  set doc [functionDocument -compress 0]
+  set number [$doc FunctionCalculator {0 1 0 1} \
+      [::tclpdf::pdfFunction unitRange 3] {pop 0 0.5}]
+  set body [functionBody $doc $number]
+  $doc destroy
+  list [regexp {^<< /FunctionType 4 /Domain \[0 1 0 1\] /Range \[0 1 0 1 0 1\] /Length 13 >>} $body] \
+      [regexp "stream\n(.*)\nendstream" $body -> data] $data
+} -result {1 1 {{ pop 0 0.5 }}}
+
+test pdfFunction-3.2 {it is deflated with everything else when the document compresses} -body {
+  # A type 4 goes through [streamObject], so it is a stream like any other
+  # and learns a new filter when the document does.
+  set doc [functionDocument]
+  set number [$doc FunctionCalculator {0 1} [::tclpdf::pdfFunction unitRange 4] \
+      {dup dup dup 0.1 mul exch 0.2 mul exch 0.3 mul exch 0.4 mul}]
+  set body [functionBody $doc $number]
+  set data [::tclpdfTest::streamOf [$doc writer] $number]
+  $doc destroy
+  list [regexp {/Filter /FlateDecode} $body] $data
+} -result {1 {{ dup dup dup 0.1 mul exch 0.2 mul exch 0.3 mul exch 0.4 mul }}}
+
+# -- 4. reading a type 4 body -----------------------------------------------
+
+test pdfFunction-4.1 {Table 42 and nothing else} -body {
+  # A type 4 function is NOT PostScript: no dictionary, no name, no procedure
+  # other than the branches of if and ifelse - which is why the list can be
+  # written out and counted.
+  set operators [::tclpdf::pdfFunction operators]
+  list [llength $operators] [lsearch -exact $operators mul] \
+      [expr {"def" in $operators}] [expr {"sqrt" in $operators}] \
+      [expr {"atan" in $operators}] [expr {"ifelse" in $operators}]
+} -result {42 14 0 1 1 1}
+
+test pdfFunction-4.2 {what a body is refused for, in the caller's words} -body {
+  # The four faults that can be decided by READING a body. Whether the right
+  # NUMBER of values is left on the stack cannot be: [if], [ifelse] and
+  # [roll] make that depend on the values.
+  #
+  # The subject and the errorcode are the caller's, because the two callers
+  # are not alike - one reads what a script wrote, the other reads what this
+  # package generated - and a message that named the wrong one would send the
+  # reader to the wrong place.
+  set code [list TCLPDF TEST FUNCTION]
+  set faults {}
+  foreach {body pattern} {
+    {pop 0 wobble}   {*"wobble" is not an operator*}
+    {pop 0 0.5 \}}   {*closes a brace that was never opened*}
+    {pop 0 \{ 0.5}   {*leaves 1 brace open*}
+    {\{ pop 0 0.5 \}} {*carries the outer braces*}
+    {  }             {*is empty*}
+  } {
+    lappend faults [::tclpdfTest::refuse \
+        {::tclpdf::pdfFunction checkCalculator [subst $body] "the body of X" $code}]
+    lappend faults [string match $pattern \
+        [lindex [split [catch {::tclpdf::pdfFunction checkCalculator \
+            [subst $body] "the body of X" $code} message] \n] 0]$message]
+  }
+  set faults
+} -result [list {1 1 {TCLPDF TEST FUNCTION}} 1 {1 1 {TCLPDF TEST FUNCTION}} 1 \
+    {1 1 {TCLPDF TEST FUNCTION}} 1 {1 1 {TCLPDF TEST FUNCTION}} 1 \
+    {1 1 {TCLPDF TEST FUNCTION}} 1]
+
+test pdfFunction-4.3 {a body that is right comes back unchanged} -body {
+  # Numbers pass as numbers, the branches of if and ifelse nest, and the
+  # checker hands the body on so it can stand in an expression.
+  set body {2 copy add 2 div 3 1 roll pop pop dup 1 exch sub 0.5}
+  list [::tclpdf::pdfFunction checkCalculator $body "the body of X" {TCLPDF TEST}] \
+      [::tclpdf::pdfFunction checkCalculator \
+          {dup 0.5 lt {pop 0} {pop 1} ifelse 0 0} "the body of X" {TCLPDF TEST}]
+} -result [list {2 copy add 2 div 3 1 roll pop pop dup 1 exch sub 0.5} \
+    {dup 0.5 lt {pop 0} {pop 1} ifelse 0 0}]
+
+test pdfFunction-4.4 {generated code is read the same way as written code} -body {
+  # The decision this test exists for: the tint transform of a DeviceN space
+  # is assembled token by token inside this package, and it is checked all
+  # the same. The failure mode of a wrong token there is the worst one here -
+  # a valid PDF whose spot colours paint nothing at all, which qpdf and
+  # veraPDF both pass - and reading a hundred tokens costs nothing next to
+  # writing the stream.
+  set inks {{Orange {cmyk 0 0.45 1 0}} {Green {cmyk 0.8 0 0.7 0.1}}}
+  set subject "the tint transform generated for a DeviceN colour space"
+  set checked {}
+  foreach space {cmyk rgb gray} {
+    set colourants [lindex [::tclpdf::color parse \
+        [list devicen [lmap ink $inks {
+          list [lindex $ink 0] [list $space {*}[lrepeat \
+              [dict get {gray 1 rgb 3 cmyk 4} $space] 0.5]]
+        }]]] 1 0]
+    lappend checked [expr {[::tclpdf::pdfFunction checkCalculator \
+        [::tclpdf::color devicenFunction $space $colourants] $subject \
+        {TCLPDF TEST}] eq [::tclpdf::color devicenFunction $space $colourants]}]
+  }
+  set checked
+} -result {1 1 1}
+
+test pdfFunction-4.5 {the colour module actually asks - measured, not assumed} -body {
+  # A test of the CALL, not of the checker: the generator is replaced by one
+  # that writes a word no calculator knows, and the DeviceN fill has to be
+  # refused over it. Without the check the document would be written, would
+  # pass qpdf and veraPDF, and would paint nothing where the spot colours
+  # are.
+  set original [info body ::tclpdf::color::devicenFunction]
+  proc ::tclpdf::color::devicenFunction {space colourants} {
+    return "0 index wobble 2 1 roll pop"
+  }
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  set refused [::tclpdfTest::refuse {$doc rect -at {20 20} -size {20 10} -fill \
+      {devicen {{A {cmyk 0 0.45 1 0}} {B {cmyk 0.8 0 0.7 0.1}}} {1 0.5}}}]
+  set streams [llength [::tclpdfTest::objects $doc {/FunctionType 4}]]
+  $doc destroy
+  proc ::tclpdf::color::devicenFunction {space colourants} $original
+  list $refused $streams
+} -result {{1 1 {TCLPDF COLOUR DEVICEN FUNCTION}} 0}
+
+# -- 5. the two callers, in one place ---------------------------------------
+
+test pdfFunction-5.1 {a separation and a gradient write the same kind of type 2} -body {
+  # What the module is for. Before it, these two dictionaries were built in
+  # two files: one wrote its C0 as bare Tcl values, the other through
+  # [pdfObj num]; one could add a /Range, the other could not. They now come
+  # out of one builder and read alike.
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc rect -at {20 20} -size {20 10} -fill {separation Gold {cmyk 0 0.2 0.6 0.1} 1}
+  $doc shading axial -at {20 40} -size {60 20} -colors {white steelblue}
+  set bodies [::tclpdfTest::objects $doc /FunctionType]
+  $doc destroy
+  list [llength $bodies] [lsort $bodies]
+} -result {2 {{<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.2 0.6 0.1] /N 1 >>} {<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0.27451 0.5098 0.70588] /N 1 >>}}}
+
+test pdfFunction-5.2 {a DeviceN and a function shading write the same kind of type 4} -body {
+  # Both are streams, both carry /Domain and /Range, and both have their
+  # braces put on in the same place. The arities differ, and that is the
+  # point: a tint transform is n in and m out, a function shading is 2 in.
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc rect -at {20 20} -size {20 10} -fill \
+      {devicen {{A {cmyk 0 0.45 1 0}} {B {cmyk 0.8 0 0.7 0.1}}} {1 0.5}}
+  $doc shading function -at {20 40} -size {40 40} -space rgb \
+      -expression {pop 0 0.5}
+  set heads [lmap body [::tclpdfTest::objects $doc {/FunctionType 4}] {
+    lindex [split $body \n] 0
+  }]
+  $doc destroy
+  lsort $heads
+} -result {{<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1] /Length 97 >>} {<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1] /Length 13 >>}}
+
+test pdfFunction-5.3 {two equal functions are two objects, and that is on purpose} -body {
+  # Measured rather than assumed: nothing pools functions. Two identical
+  # gradients write two identical type 2 dictionaries, and a separation
+  # writes its transform once because the SEPARATION is remembered by name,
+  # not because the function was recognised.
+  #
+  # Pooling them would save one object per repetition and would renumber
+  # every object after the first - a byte-for-byte change to every file that
+  # has ever contained two equal gradients, which is a decision of its own
+  # and not a side effect of moving the builder. It is not made here.
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc shading axial -at {20 20} -size {60 20} -colors {white steelblue}
+  $doc shading axial -at {20 50} -size {60 20} -colors {white steelblue}
+  $doc rect -at {20 80} -size {20 10} -fill {separation Gold {cmyk 0 0.2 0.6 0.1} 1}
+  $doc rect -at {50 80} -size {20 10} -fill {separation Gold {cmyk 0 0.2 0.6 0.1} 0.4}
+  set bodies [::tclpdfTest::objects $doc /FunctionType]
+  $doc destroy
+  list [llength $bodies] [expr {[lindex $bodies 0] eq [lindex $bodies 1]}] \
+      [llength [lsort -unique $bodies]]
+} -result {3 1 2}
+
+cleanupTests

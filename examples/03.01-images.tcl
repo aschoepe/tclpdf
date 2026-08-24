@@ -18,6 +18,10 @@
 #   PNG with alpha   the only computed path: decompress, un-filter, split the
 #                    channel out into an /SMask
 #
+# The third page shows the fifth way in, which is not a format at all but a
+# place: an INLINE image, written into the content stream instead of beside
+# it - no object, no reuse, and at most 4096 bytes.
+#
 # Only the last one costs anything. Measured on this machine: the 640x480 RGBA
 # file below takes about a third of a second, the other three are a file read.
 #
@@ -288,6 +292,91 @@ $doc font -family helvetica -style bold -size 10 -color black
 $doc text "Which format to ask the browser for" -at [list 20 [expr {$y + 72}]]
 $doc font -style {} -size 8
 $doc text "canvas.toDataURL() gives PNG with an alpha channel, which is the    only path that has to be computed rather than passed through. For a chart    on a white ground the channel carries nothing, and asking for image/jpeg    instead turns the most expensive way in into the cheapest."     -at [list 20 [expr {$y + 78}]] -width 170
+
+exampleFooter $doc
+
+# -- the picture that has no object ----------------------------------------
+#
+# An INLINE image (ISO 32000-2, 8.9.7) is written into the content stream
+# itself: BI, an abbreviated dictionary, ID, the bytes, EI. It has no object
+# number, no entry in the page's resources and no line in the cross-reference
+# table - and it cannot be reused, because there is nothing to point at.
+#
+# That is its whole case, and its whole cost. For a seal, a bullet, a rule or
+# a fax stamp of a few hundred bytes the machinery around an image XObject
+# weighs more than the picture; for anything larger it does not, which is why
+# the standard stops at 4096 bytes of image data and why this package refuses
+# a picture over that line instead of quietly writing it the other way.
+#
+# -inline is asked for rather than decided by size, and the reason is on this
+# page: the same picture is placed three times below, and each placement
+# carries its own copy of the bytes. Whether a picture occurs once is
+# something the caller knows and the writer does not.
+
+$doc page add
+
+$doc font -family helvetica -style bold -size 15 -color black
+$doc text "The picture that has no object" -at {20 22}
+$doc font -style {} -size 8
+$doc text "An inline image is written into the content stream: BI, an abbreviated dictionary, ID, the bytes, EI. No object, no resource entry, no reuse - and at most 4096 bytes of image data (ISO 32000-2, 8.9.7). The abbreviations are the whole of it: /W not /Width, /BPC not /BitsPerComponent, /Fl not /FlateDecode, /G not /DeviceGray." -at {20 30} -width 170
+
+# The classic inline picture: one bit per sample, painted in whatever fill
+# colour is in force. -stencil is decided at the embedding, -inline at the
+# placement - the first says what the picture IS, the second where it goes.
+$doc image embed seal [file join $images sample-stencil.png] -stencil 1
+$doc font -style bold -size 9
+$doc text "A stencil, three times, in three colours" -at {20 48}
+set x 20
+foreach colour {{0.75 0.15 0.15} {0.15 0.4 0.7} {0.2 0.5 0.25}} {
+  $doc style -fill $colour
+  $doc image place seal -at [list $x 54] -width 30 -inline 1
+  incr x 35
+}
+$doc style -fill black
+
+# The same file without -stencil: a one-bit greyscale picture, /CS /G and
+# /BPC 1, still passed through as /Fl. Beside it the same picture as an image
+# XObject, which is what leaving -inline off gives.
+$doc image embed grey [file join $images sample-stencil.png]
+$doc image place grey -at {125 54} -width 30 -inline 1
+$doc image place grey -at {160 54} -width 30
+
+$doc font -style {} -size 7 -color {0.35 0.35 0.4}
+$doc text "three inline stencils - three copies of the bytes" -at {20 88} -width 100
+$doc text "inline, /CS /G" -at {125 88}
+$doc text "an XObject" -at {160 88}
+
+# What actually stands in the stream. Read back out of the page buffer, which
+# is the same text the file gets.
+$doc font -family helvetica -style bold -size 9 -color black
+$doc text "What the content stream holds" -at {20 100}
+set stream [$doc page content]
+regexp "BI\n(\[^\n\]*)\n" $stream -> dictionary
+$doc font -family courier -size 7
+$doc text "BI" -at {20 106}
+$doc text $dictionary -at {20 110} -width 170
+$doc text "ID <binary> EI" -at {20 118}
+
+# The two refusals, in the words the package uses. Neither picture is written
+# the other way behind the caller's back: an inline image that quietly became
+# an XObject would be a request the caller could not tell had been ignored.
+$doc font -family helvetica -style bold -size 9
+$doc text "What is refused, and why" -at {20 130}
+$doc font -style {} -size 7 -color {0.3 0.3 0.35}
+set y 136
+foreach alias {photo keyed} {
+  if {[catch {$doc image place $alias -at {20 200} -width 20 -inline 1} why]} {
+    $doc text $why -at [list 20 $y] -width 170
+    puts "  $alias inline: [lindex [split $why -] 0]"
+    incr y 14
+  }
+}
+$doc font -family helvetica -size 8 -color black
+$doc text "The way out is the same in both cases and is named in the message: leave -inline off and the picture goes into the file as an image XObject, which has no limit and no such restrictions. What the package will not do is make that choice silently." -at [list 20 [expr {$y + 2}]] -width 170
+
+puts "  inline dictionary: $dictionary"
+puts "  inline images on this page: [regexp -all "BI\n" [$doc page content]],\
+    image XObjects: [regexp -all { Do} [$doc page content]]"
 
 exampleFooter $doc
 

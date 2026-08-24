@@ -845,14 +845,17 @@ test table-15.3 {an unknown direction on a cell is refused like any other key} \
       -body {{{text a directon rtl} b}}} one]
   set style [catch {$doc table -at {20 30} -width 170 -body {{a b}} \
       -style {directon rtl}} two]
-  # And a direction that is neither ltr nor rtl reaches the same check every
-  # other call comes through.
+  # And a direction that is none of the three reaches the same check every
+  # other call comes through. The list gained "ttb" on 2026-08-24 with
+  # vertical writing; a table refuses that one for a reason of its own - the
+  # block road breaks lines by width - and says so in its own words, which
+  # is what [table-15.4] measures.
   set wrong [catch {$doc table -at {20 30} -width 170 -body {{a b}} \
       -style {direction sideways}} three]
   $doc destroy
   list $cell [string match {*unknown cell key "directon"*direction*} $one] \
       $style [string match {*unknown style key "directon"*} $two] \
-      $wrong [string match {*must be ltr or rtl*} $three]
+      $wrong [string match {*must be ltr, rtl or ttb*} $three]
 } -result {1 1 1 1 1 1}
 
 
@@ -1660,5 +1663,28 @@ test table-25.6 {the word comes back out of a tagged table whole} \
   # bracket this reads "Die Betriebskostenab-rechnung wird nach der".
   string trim [join [lrange $lines 0 1] {}]
 } -result "Die Betriebskostenabrechnung wird nach der"
+
+# A table refuses a vertical direction, and not because a face is missing.
+# The block road breaks lines by width and stacks them down the page, and
+# both of those are answers about the other axis in a vertical line - so the
+# refusal has to come from the road, not from the font. Measured with a face
+# that HAS vertical metrics, or the font check would answer first and this
+# test would pass without the rule it is here for.
+set tableJpFace [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts google NotoSansJP-Regular.ttf]
+testConstraint haveJpFace [file exists $tableJpFace]
+
+test table-15.4 {a table refuses -direction ttb in its own words} -constraints haveJpFace -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed jp $::tableJpFace
+  set code [catch {$doc table -at {20 30} -width 170 -body {{a b}} \
+      -style {direction ttb family jp}} message options]
+  $doc destroy
+  list $code [dict get $options -errorcode] \
+      [string match {*sets ONE vertical line*} $message] \
+      [string match {*needs a TrueType*} $message]
+} -result {1 {TCLPDF TEXT VERTICAL block} 1 0}
+
 
 cleanupTests

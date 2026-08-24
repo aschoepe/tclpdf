@@ -607,25 +607,6 @@ test color-separation-6.5 {a refused redefinition records nothing} -body {
 
 testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
 
-# The colour of one pixel of a rendered page, as {r g b} 0..255. Rendered as
-# a PPM rather than a PNG: P6 is a header and the bytes, and reading it needs
-# nothing but [scan]. x and y are in the document unit of the page, from the
-# top left corner, and the resolution is the one pdftoppm was given.
-proc ::tclpdfTest::pixel {path x y {dpi 20}} {
-  set stem [::tclpdfTest::scratch [file rootname [file tail $path]]-ppm]
-  exec {*}[auto_execok pdftoppm] -r $dpi $path $stem
-  set ppm [glob $stem-*.ppm]
-  set bytes [::tclpdfTest::readBytes [lindex $ppm 0]]
-  file delete {*}$ppm
-  # P6, width, height, maximum - whitespace separated, then the raw triples.
-  regexp {^P6\s+(\d+)\s+(\d+)\s+(\d+)\s} $bytes header width height -
-  set offset [string length $header]
-  set column [expr {int($x * $dpi / 25.4)}]
-  set row [expr {int($y * $dpi / 25.4)}]
-  set start [expr {$offset + ($row * $width + $column) * 3}]
-  binary scan [string range $bytes $start [expr {$start + 2}]] cu3 rgb
-  return $rgb
-}
 
 # A one-page document in the given colours, written and read back. The Lab
 # counterpart of [separationDocument] above; it takes the whole list of
@@ -962,5 +943,345 @@ test color-lab-8.18 {the standard's default Range clamps a saturated blue, and -
   file delete $path
   list $clamped $wide
 } -result {{71 0 234} {0 0 255}}
+
+# -- DeviceN colour spaces (8.6.6.5) -----------------------------------------
+#
+# {devicen {{Name colour} ...} {tint ...}} paints n named plates at once. The
+# difference to a separation is one function: 8.6.6.4 transforms ONE tint,
+# 8.6.6.5 transforms n of them, and a type 2 or type 3 function takes a
+# single input by definition (7.10.3, 7.10.4) - so the space brings a
+# function type with it, type 4, the PostScript calculator. What the tests
+# below turn on is that function: its arity, its arithmetic, and what it
+# paints when a reader evaluates it (9.14, with pdftoppm).
+#
+# The grey press profile, for the intent that admits neither of the two
+# alternates a DeviceN colour can fall back to here.
+set greyIcc [file join [file dirname [file dirname [file normalize \
+    [info script]]]] icc ISOcoated_v2_grey1c_bas.ICC]
+testConstraint haveGreyIcc [file exists $greyIcc]
+
+# The two plates every test below crosses, and their colours at full tint.
+set devicenInks {{Orange {cmyk 0 0.45 1 0}} {Green {cmyk 0.8 0 0.7 0.1}}}
+
+test color-devicen-9.1 {the colourants, the tints and the one alternate space} -body {
+  # A grey colourant is promoted into the space of the coloured ones - the
+  # same road a grey shading stop takes, and the reason "white" beside a CMYK
+  # plate is not an error. The tints default to full ink, like a separation's,
+  # and are clamped like every other component.
+  list [::tclpdf::color parse {devicen {{Orange {cmyk 0 0.45 1 0}}}}] \
+      [::tclpdf::color parse {devicen {{Orange {cmyk 0 0.45 1 0}} {Deep 0.2}} {0.5 1.4}}]
+} -result {{devicen {{{Orange {cmyk {0 0.45 1 0}}}} 1 cmyk}}\
+ {devicen {{{Orange {cmyk {0 0.45 1 0}}} {Deep {cmyk {0 0 0 0.8}}}} {0.5 1} cmyk}}}
+
+test color-devicen-9.2 {what is refused about a DeviceN colour, and under which code} -body {
+  # Everything here is decided by the colour alone, so it is refused in
+  # [parse] - before a document is touched. The two special colourants are
+  # the interesting pair: All is legal in a separation and ruled out here
+  # ("The special name All, used by Separation colour spaces, shall not be
+  # used"), None is legal here and may even repeat, where every other name
+  # may not.
+  lmap spec {
+    {devicen {{A {cmyk 0 0 0 1}}} {1} extra}
+    {devicen {}}
+    {devicen {{A}}}
+    {devicen {{All {cmyk 0 0 0 1}}}}
+    {devicen {{None {cmyk 0 0 0 1}}}}
+    {devicen {{None} {None}}}
+    {devicen {{A {cmyk 0 0 0 1}} {A {cmyk 0 0 0 1}}}}
+    {devicen {{A {rgb 1 0 0}} {B {cmyk 0 0 0 1}}}}
+    {devicen {{A {lab 50 0 0}}}}
+    {devicen {{A {separation B {cmyk 0 0 0 1}}}}}
+    {devicen {{A {cmyk 0 0 0 1}}} {1 1}}
+  } {::tclpdfTest::refusal {::tclpdf::color parse $spec}}
+} -result {{TCLPDF COLOUR DEVICEN SPEC} {TCLPDF COLOUR DEVICEN EMPTY}\
+ {TCLPDF COLOUR DEVICEN COLOURANT A} {TCLPDF COLOUR DEVICEN ALL}\
+ {TCLPDF COLOUR DEVICEN NONE} {TCLPDF COLOUR DEVICEN BLANK}\
+ {TCLPDF COLOUR DEVICEN DUPLICATE A} {TCLPDF COLOUR DEVICEN MIXED {cmyk rgb}}\
+ {TCLPDF COLOUR DEVICEN ALTERNATE A} {TCLPDF COLOUR DEVICEN ALTERNATE A}\
+ {TCLPDF COLOUR DEVICEN TINTS 1 2}}
+
+test color-devicen-9.3 {33 colourants are refused by number} -body {
+  # "The maximum number of entries in the names array ... may be subject to
+  # implementation limits" (8.6.6.5); Annex C.2 names 32. 32 goes through.
+  set plates [lmap n [lrange {0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18
+      19 20 21 22 23 24 25 26 27 28 29 30 31 32} 0 end] {
+    list Ink$n [list cmyk 0 0 0 [expr {$n / 40.0}]]
+  }]
+  list [string match {no error:*} [::tclpdfTest::refusal \
+          {::tclpdf::color parse [list devicen [lrange $plates 0 31]]}]] \
+      [::tclpdfTest::refusal {::tclpdf::color parse [list devicen $plates]}]
+} -result {1 {TCLPDF COLOUR DEVICEN COUNT 33}}
+
+test color-devicen-9.4 {the operator: one tint per colourant, and an entry named after the SPACE} -body {
+  # The resource name is derived from the colourants, not counted up and not
+  # derived from the tints: [operator] is handed the colour and no document
+  # and has to hit the entry [DeviceNColourUsed] registered - and two colours
+  # of one space must hit the same one.
+  set first [::tclpdf::color parse [list devicen $devicenInks {0.6 0.3}]]
+  set second [::tclpdf::color parse [list devicen $devicenInks {1 1}]]
+  set other [::tclpdf::color parse {devicen {{Orange {cmyk 0 0.45 1 0}}} {1}}]
+  set entry [::tclpdf::color devicenResource [lindex $first 1]]
+  list [::tclpdf::color operator $first fill] \
+      [::tclpdf::color operator $second stroke] \
+      [regexp {^DeviceN[0-9A-F]{8}$} $entry] \
+      [expr {$entry eq [::tclpdf::color devicenResource [lindex $second 1]]}] \
+      [expr {$entry eq [::tclpdf::color devicenResource [lindex $other 1]]}]
+} -result [list "/[::tclpdf::color devicenResource [lindex [::tclpdf::color parse \
+    [list devicen $devicenInks {0.6 0.3}]] 1]] cs\n0.6 0.3 scn" \
+    "/[::tclpdf::color devicenResource [lindex [::tclpdf::color parse \
+    [list devicen $devicenInks {1 1}]] 1]] CS\n1 1 SCN" 1 1 0]
+
+test color-devicen-9.5 {the colour space array, the attributes and the resource entry} -body {
+  # [/DeviceN names alternate tintTransform attributes] - the five-element
+  # form of 8.6.6.5. /Colorants holds each plate ON ITS OWN, which is the one
+  # thing the combined transform cannot say: "the alternate colour space and
+  # tint transformation function of a Separation colour space describe the
+  # appearance of that colourant alone, whereas those of a DeviceN colour
+  # space describe only the appearance of its colourants in combination".
+  lassign [::tclpdfTest::separationDocument devicen-object \
+      [list devicen $devicenInks {0.6 0.3}]] bytes content
+  list [regexp {\[/DeviceN \[/Orange /Green\] /DeviceCMYK \d+ 0 R << /Subtype /DeviceN /Colorants << /Orange \d+ 0 R /Green \d+ 0 R >> >>\]} $bytes] \
+      [regexp {/ColorSpace << /DeviceN[0-9A-F]{8} \d+ 0 R >>} $bytes] \
+      [regexp "/DeviceN\[0-9A-F\]{8} cs\n0.6 0.3 scn" $content] \
+      [regexp -all {\[/Separation /Orange /DeviceCMYK} $bytes]
+} -result {1 1 1 1}
+
+test color-devicen-9.6 {the tint transform: a type 4 function of n inputs and m outputs} -body {
+  # The heart of the space. A type 2 function interpolates "one input value"
+  # (7.10.3) and a type 3 stitches "1-input functions" (7.10.4), so neither
+  # can serve two colourants; type 4 is what the standard itself points at
+  # for this case (7.10.5.1, NOTE 1). Domain has one interval per colourant
+  # and Range one per component of the alternate - a function with fewer
+  # inputs than the space has colourants is a broken space, and nothing
+  # downstream would say so.
+  #
+  # The arithmetic is subtractive here: ink amounts add, and /Range clips the
+  # sum ("Output values outside the declared range shall be clipped", Table
+  # 38) - which is what a press does when two solids overprint. The stack is
+  # unwound with the manoeuvre of the standard's own EXAMPLE 4,
+  # "{ 5 3 roll pop pop }".
+  lassign [::tclpdfTest::separationDocument devicen-function \
+      [list devicen $devicenInks {1 1}]] bytes content
+  list [regexp {/FunctionType 4 /Domain \[0 1 0 1\] /Range \[0 1 0 1 0 1 0 1\]} $bytes] \
+      [::tclpdf::color devicenFunction cmyk \
+          [lindex [::tclpdf::color parse [list devicen $devicenInks]] 1 0]] \
+      [::tclpdf::color devicenFunction cmyk \
+          {{A {cmyk {1 0 0 0}}} {B {cmyk {0 1 0 0}}} {C {cmyk {0 0 1 0}}}}]
+} -result [list 1 \
+    "0 index 0.8 mul 2 index 0.45 mul 3 index 3 index 0.7 mul add 3 index 0.1 mul 6 4 roll pop pop" \
+    "2 index 2 index 2 index 0 7 4 roll pop pop pop"]
+
+test color-devicen-9.7 {an RGB alternate multiplies where a CMYK one adds} -body {
+  # The fault this test exists for: in a space that counts LIGHT, adding the
+  # contributions makes two half tints lighter than one, and no ink at all
+  # comes out black instead of white. Transmittances multiply -
+  # prod (1 - t*(1-C)) - so every tint at 0 leaves 1, and one plate at full
+  # tint reproduces its own colour exactly. Measured in 9.14.
+  list [::tclpdf::color devicenFunction rgb \
+          {{A {rgb {0.85 0.1 0.2}}} {B {rgb {0.1 0.4 0.9}}}}] \
+      [::tclpdf::color devicenFunction gray {{A {gray 0.2}}}]
+} -result [list \
+    "1 index 0.15 mul 1 exch sub 1 index 0.9 mul 1 exch sub mul 2 index 0.9 mul 1 exch sub 2 index 0.6 mul 1 exch sub mul 3 index 0.8 mul 1 exch sub 3 index 0.1 mul 1 exch sub mul 5 3 roll pop pop" \
+    "0 index 0.8 mul 1 exch sub 2 1 roll pop"]
+
+test color-devicen-9.8 {None is named, is not a colourant, and tints nothing} -body {
+  # "The colour component name None ... indicates that the corresponding
+  # colour component shall never be painted on the page" (8.6.6.5), and it
+  # may repeat where no other name may. Its component IS handed to the tint
+  # transform ("those components shall be passed to the tint transformation
+  # function, which may use them as desired") and this writer uses it for
+  # nothing: a plate that is never painted must not tint the fallback colour
+  # either. So it stands in the names array, has no entry in /Colorants, and
+  # does not appear in the code - which is why the function below reads the
+  # same as a two-colourant one except for the arity.
+  lassign [::tclpdfTest::separationDocument devicen-none \
+      {devicen {{Orange {cmyk 0 0.45 1 0}} {None} {None} {Green {cmyk 0.8 0 0.7 0.1}}}
+       {1 1 1 0.5}}] bytes content
+  list [regexp {\[/DeviceN \[/Orange /None /None /Green\] /DeviceCMYK} $bytes] \
+      [regexp {/Colorants << /Orange \d+ 0 R /Green \d+ 0 R >>} $bytes] \
+      [regexp {/Domain \[0 1 0 1 0 1 0 1\]} $bytes] \
+      [::tclpdf::color devicenFunction cmyk [lindex \
+          [::tclpdf::color parse {devicen {{Orange {cmyk 0 0.45 1 0}} {None} {None}
+              {Green {cmyk 0.8 0 0.7 0.1}}}}] 1 0]]
+} -result [list 1 1 1 \
+    "0 index 0.8 mul 4 index 0.45 mul 5 index 3 index 0.7 mul add 3 index 0.1 mul 8 4 roll pop pop pop pop"]
+
+test color-devicen-9.9 {one name, one plate - across the two colour spaces} -body {
+  # A DeviceN colourant and a separation of the same name are the same plate,
+  # and PDF/A-2 6.2.4.4 does not allow one name to carry two definitions. So
+  # both go through the same register: the Separation object is written once
+  # and the /Colorants entry points at the very object the separation paints
+  # through, and a colourant that contradicts an existing separation is
+  # refused - naming the colour that stands, since that is what the caller
+  # has to change.
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc rect -at {10 10} -size {10 10} -fill {separation Orange {cmyk 0 0.45 1 0} 1}
+  set clash [::tclpdfTest::refusal {$doc rect -at {30 10} -size {10 10} \
+      -fill {devicen {{Orange {cmyk 0 0.9 0.9 0}} {Green {cmyk 0.8 0 0.7 0.1}}} {1 1}}}]
+  $doc rect -at {50 10} -size {10 10} \
+      -fill [list devicen $devicenInks {1 1}]
+  set path [::tclpdfTest::scratch devicen-share.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $clash [regexp -all {\[/Separation /Orange } $bytes] \
+      [regexp -all {\[/Separation /Green } $bytes]
+} -result {{TCLPDF COLOUR COLOURANT ALTERNATE Orange} 1 1}
+
+test color-devicen-9.10 {the names of the DeviceN spaces are reserved, both ways} -body {
+  # Separations, ICC aliases, Lab spaces and DeviceN spaces share the
+  # /ColorSpace resource dictionary. A separation called DeviceN1234ABCD
+  # would take the entry a DeviceN colour paints through, silently.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes [list \
+      [::tclpdfTest::refusal {$doc rect -at {1 1} -size {2 2} \
+          -fill {separation DeviceN1234ABCD {cmyk 0 0 0 1}}}] \
+      [::tclpdfTest::refusal {$doc rect -at {1 1} -size {2 2} \
+          -fill {devicen {{Pattern {cmyk 0 0 0 1}}} {1}}}] \
+      [::tclpdfTest::refusal {$doc rect -at {1 1} -size {2 2} \
+          -fill {devicen {{DeviceN {cmyk 0 0 0 1}}} {1}}}] \
+      [string match {no error:*} [::tclpdfTest::refusal {$doc rect \
+          -at {1 1} -size {2 2} \
+          -fill {devicen {{DeviceNames {cmyk 0 0 0 1}}} {1}}}]]]
+  set spaces [$doc colourSpacesUsed]
+  $doc destroy
+  list $codes [dict exists $spaces DeviceCMYK]
+} -result {{{TCLPDF COLOUR COLOURANT RESERVED DeviceN1234ABCD}\
+ {TCLPDF COLOUR COLOURANT RESERVED Pattern}\
+ {TCLPDF COLOUR COLOURANT RESERVED DeviceN} 1} 1}
+
+test color-devicen-9.11 {PDF 1.6, said at the call, and a refused colour does not pin the floor} -body {
+  # The space itself is PDF 1.3, but every entry of the attributes dictionary
+  # is marked PDF 1.6 in Table 70 - and this writer always writes /Subtype
+  # and /Colorants, so that is the floor. Said at the call with the number to
+  # raise the document to, rather than by quietly dropping the dictionary in
+  # an older file.
+  set doc [tclpdf new -version 1.5 -unit mm]
+  $doc page add
+  set code [catch {$doc rect -at {1 1} -size {2 2} \
+      -fill [list devicen $devicenInks {1 1}]} message]
+  set spaces [$doc colourSpacesUsed]
+  set entries [$doc resource ColorSpace]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc rect -at {1 1} -size {2 2} -fill [list devicen $devicenInks {1 1}]
+  set pinned [catch {$doc configure -version 1.5} second]
+  $doc destroy
+  list $code [string match {*a DeviceN colour*needs PDF 1.6*} $message] \
+      $spaces $entries $pinned \
+      [string match {*a DeviceN colour*needs PDF 1.6*} $second]
+} -result {1 1 {} {} 1 1}
+
+test color-devicen-9.12 {the output intent judges the ALTERNATE space} \
+    -constraints {haveCmykIcc haveGreyIcc} -body {
+  # The check that is easy to miss and expensive later: a DeviceN colour
+  # falls back to its alternate space, so ISO 19005-2 6.2.4.3 holds that
+  # space against the output intent exactly as it does a separation's
+  # (6.2.4.4). A CMYK alternate under a grey intent is refused, and the
+  # message names the colourants rather than "a colour somewhere". Measured
+  # with veraPDF 1.30.2: with the record suppressed, the same file fails
+  # 6.2.4.3-3 three times over.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -profile $greyIcc
+  $doc rect -at {20 20} -size {25 25} -fill [list devicen $devicenInks {0.7 0.3}]
+  set grey [::tclpdfTest::writes $doc devicen-grey.pdf]
+  set spaces [$doc colourSpacesUsed]
+  $doc destroy
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc rect -at {20 20} -size {25 25} -fill [list devicen $devicenInks {0.7 0.3}]
+  set cmyk [::tclpdfTest::writes $doc devicen-cmyk.pdf]
+  $doc destroy
+  list $grey $cmyk [dict get $spaces DeviceCMYK users]
+} -result {{1 0} {0 1} {{devicen {Orange Green} in rect on page 1}}}
+
+test color-devicen-9.13 {veraPDF, where present: 3B passes with a DeviceN colour under the CMYK intent} \
+    -constraints {haveCmykIcc haveTdom} -body {
+  # /Colorants is required here, not optional: ISO 19005-2/-3 6.2.4.4 - "For
+  # any spot colour used in a DeviceN or NChannel colour space, an entry in
+  # the Colorants dictionary shall be present". Measured 2026-08-24 with
+  # veraPDF 1.30.2: leaving the dictionary out fails this very document
+  # 6.2.4.4-1 with "A colorant of the DeviceN or NChannel color space is not
+  # defined in the Colorants dictionary". The second rectangle carries a None
+  # component, which needs no entry and gets none - and passes.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc pdfa -part 3 -profile $cmykIcc
+  $doc rect -at {20 20} -size {25 25} -fill [list devicen $devicenInks {0.7 0.3}] \
+      -stroke [list devicen $devicenInks {1 1}]
+  $doc rect -at {20 60} -size {25 25} \
+      -fill {devicen {{Orange {cmyk 0 0.45 1 0}} {None}} {1 1}}
+  set path [::tclpdfTest::scratch devicen-verapdf.pdf]
+  $doc write $path
+  $doc destroy
+  set result [::tclpdfTest::verapdf $path 3b]
+  file delete $path
+  set result
+} -result ok
+
+test color-devicen-9.14 {a second write is byte-identical, and one space is one object} -body {
+  set doc [tclpdf new -compress 0 -unit mm]
+  $doc page add
+  $doc rect -at {20 20} -size {20 20} -fill [list devicen $devicenInks {0.5 0.5}]
+  $doc rect -at {50 20} -size {20 20} -fill [list devicen $devicenInks {1 0}]
+  lassign [::tclpdfTest::writeTwice $doc devicen-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] [regexp -all {\[/DeviceN } $first] \
+      [regexp -all {/FunctionType 4} $first]
+} -result {1 1 1}
+
+test color-devicen-9.15 {what actually comes out: the pixels of a DeviceN colour} \
+    -constraints havePdftoppm -body {
+  # The measurement no validator makes, and the one the tint transform
+  # decides. A DeviceN colour that reached the page black, or as paper, or as
+  # the wrong plate - a function whose stack is unwound in the wrong order, a
+  # C0 that is ink instead of paper, an RGB alternate whose contributions are
+  # added - passes qpdf and veraPDF alike and is simply the wrong colour.
+  # Measured 2026-08-24 with pdftoppm at 20 dpi, poppler 25.x:
+  #
+  #   orange plate alone, as a separation   247 146 16
+  #   the same plate as one of two          247 146 16   the guideline of
+  #                                                      8.6.6.5, met
+  #   green plate alone                      47 167 107
+  #   both at full tint                      63 111 53   darker than either
+  #   an RGB DeviceN at no tint at all      255 255 255  paper, not black
+  #   its first plate alone                 217  25  51  {rgb 0.85 0.1 0.2}
+  #
+  # The fifth is the one that fails if the RGB contributions are added rather
+  # than multiplied; the second is the one that fails if None is let into the
+  # transform, since it is painted with a None plate at full tint beside it.
+  set rgbInks {{Ruby {rgb 0.85 0.1 0.2}} {Sky {rgb 0.1 0.4 0.9}}}
+  lassign [::tclpdfTest::labDocument devicen-pixels [list \
+      {separation Orange {cmyk 0 0.45 1 0} 1} \
+      {devicen {{Orange {cmyk 0 0.45 1 0}} {None} {Green {cmyk 0.8 0 0.7 0.1}}} {1 1 0}} \
+      [list devicen $devicenInks {0 1}] \
+      [list devicen $devicenInks {1 1}] \
+      [list devicen $rgbInks {0 0}] \
+      [list devicen $rgbInks {1 0}]]] bytes content path
+  set pixels {}
+  for {set n 0} {$n < 6} {incr n} {
+    lappend pixels [::tclpdfTest::pixel $path [expr {10 + $n * 30 + 12}] 22]
+  }
+  file delete $path
+  set pixels
+} -result {{247 146 16} {247 146 16} {47 167 107} {63 111 53} {255 255 255} {217 25 51}}
+
+test color-devicen-9.16 {a gradient cannot take a DeviceN colour} -body {
+  # Same answer as ICCBased and Lab, and the same reason: a shading names its
+  # colour space by family in its dictionary, and a DeviceN space is an
+  # array.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc shading axial -at {10 10} -size {40 20} \
+      -colors [list white [list devicen $devicenInks {1 1}]]} message]
+  $doc destroy
+  list $code [string match {*DeviceN colour cannot stand here*8.6.6.5*} $message]
+} -result {1 1}
 
 cleanupTests

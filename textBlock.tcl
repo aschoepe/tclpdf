@@ -25,6 +25,11 @@
 # either, a word longer than the column is broken by character rather than
 # pushed over the edge, and that break is a fallback, not typography.
 #
+# The hyphen such a break puts at the end of a line is not a character of the
+# text, and a caller who draws the lines himself has to say so. Which lines
+# carry one is asked for with [textLines -hyphens 1] here, and said with
+# [text -breakHyphen] in text.tcl - two halves of one thing.
+#
 # A line breaks at ASCII white space, and after the spaces of Unicode that
 # UAX #14 lets a line break at; the no-break spaces are characters of the
 # word they stand in - the two classes and the reasons are with them below.
@@ -47,6 +52,13 @@ namespace eval ::tclpdf::textBlock {
   # and -height is left out of one on purpose: the height of a block is what it
   # would take WITHOUT a limit, that is what a limit is compared against.
   #
+  # -hyphens is the one entry that runs the other way: it belongs to the
+  # MEASURING calls and [text] does not take it, because it says what the
+  # answer of [textLines] looks like and a drawing has no answer of that
+  # shape. It costs the shared list nothing - a caller who asks for the
+  # hyphens draws his lines one at a time with [text -breakHyphen], which is
+  # a line call and never sees a block option list.
+  #
   # An option outside this list is an error, not silence. Until now the two
   # measuring methods handed everything but the width on to the font state,
   # which ignores what it does not know: [textHeight $text -width 60 -indent 10]
@@ -55,7 +67,8 @@ namespace eval ::tclpdf::textBlock {
   variable options {at {} rotate 0 align left width {} anchor baseline
       height {} paginate 0 columns 1 gutter {} balance 0
       indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-      avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0}
+      avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0
+      hyphens 0}
 
   # Where a line may break. Two classes, told apart by what happens to the
   # character when the line breaks there:
@@ -104,30 +117,64 @@ oo::define ::tclpdf::document::document {
 
   # Break a string into lines that fit a width, in the document unit.
   # Explicit newlines are honoured and start a new paragraph.
+  #
+  # Answers a list of STRINGS, which is the shape four releases of callers
+  # read and which stays whatever else is added here: counting lines,
+  # measuring a column, filling a listbox all want nothing else.
+  #
+  # With -hyphens 1 every element is a DICTIONARY instead - {text ... hyphen
+  # ...}: the line, and whether the "-" it ends on is a break this breaker put
+  # there or a character of the text. A string cannot carry that difference,
+  # and neither can the caller work it out afterwards - "E-Mail" ends a line
+  # in a "-" that is a character, and only the breaker knows which of the two
+  # it made. Whoever draws these lines himself needs it, because a break
+  # hyphen is not a character of the text (ISO 32000-1, 14.8.2.6) and has to
+  # be bracketed as such, and [text -breakHyphen] is the other half of exactly
+  # this. The whole circle is four lines:
+  #
+  #   foreach line [$doc textLines $body -width 60 -hyphens 1] {
+  #     $doc text [dict get $line text] -at [list $x $y] \
+  #         -breakHyphen [dict get $line hyphen]
+  #     set y [expr {$y + 5}]
+  #   }
+  #
+  # A DICTIONARY rather than the pair {text hyphen} the package passes around
+  # internally, for two reasons. It says what it holds where it is read -
+  # [dict get $line hyphen] against [lindex $line 1] - and it is the shape
+  # that can gain a key without a caller noticing, while a longer pair silently
+  # changes what [lassign] and [foreach {a b}] see. The pair stays internal
+  # (TextLinesBroken) precisely because it is not promised anything.
   method textLines {string args} {
-    return [lmap line [my TextLinesBroken $string {*}$args] {lindex $line 0}]
-  }
-
-  # The lines of [textLines], each with the one thing about it the STRING
-  # cannot carry: whether the "-" the line ends on is a break the breaker put
-  # there, or a character of the text. Every element is {text hyphen}.
-  #
-  # The public method drops the flag because that is the shape four releases
-  # of callers read, and it is the right shape for what it is used for -
-  # counting lines, measuring a column, filling a listbox. But whoever DRAWS
-  # these lines himself needs the flag: a break hyphen is not a character of
-  # the text (14.8.2.6), and only the breaker knows which of the two a "-" at
-  # the end of a line is. The table is that caller - it breaks here and draws
-  # in tableDraw.tcl, one [text] per line - and without this the hyphen went
-  # out as an ordinary character, so a tagged table extracted as
-  # "Betriebskostenab-rechnung".
-  #
-  # Internal because the pair shape is not a public promise; what a caller
-  # outside the package needs is the other half, -breakHyphen on [text], and
-  # that one is documented.
-  method TextLinesBroken {string args} {
     my TextInit
     set options [my TextBlockOptions $args textLines]
+    set lines [my TextBlockBroken $string $options]
+    if {![dict get $options hyphens]} {
+      return [lmap line $lines {lindex $line 0}]
+    }
+    return [lmap line $lines {
+      dict create text [lindex $line 0] hyphen [lindex $line 1]
+    }]
+  }
+
+  # The lines of [textLines] as pairs {text hyphen} - the shape the package
+  # uses among itself, from the arguments [textLines] takes.
+  #
+  # The table is the caller: it breaks here and draws in tableDraw.tcl, one
+  # [text] per line, and without the flag the hyphen went out as an ordinary
+  # character, so a tagged table extracted as "Betriebskostenab-rechnung".
+  #
+  # Internal because the pair shape is not a public promise. What a caller
+  # outside the package asks for is [textLines -hyphens 1], and that one
+  # answers dictionaries.
+  method TextLinesBroken {string args} {
+    my TextInit
+    return [my TextBlockBroken $string [my TextBlockOptions $args textLines]]
+  }
+
+  # The ONE road from a parsed option list to broken lines with their flag -
+  # both methods above sit on it, so the public shape and the internal one
+  # cannot come to disagree about where a line ends.
+  method TextBlockBroken {string options} {
     lassign [my TextBlockLines $string $options] lines
     return [lmap line $lines {
       list [dict get $line text] [dict get $line hyphen]
@@ -182,6 +229,18 @@ oo::define ::tclpdf::document::document {
     }
     my TextBlockWidth [dict get $options width]
     my TextBlockDistances $options
+    # Checked in BOTH measuring calls although only [textLines] reads it: a
+    # caller builds one option list, asks [textHeight] whether the block still
+    # fits and then asks [textLines] for the lines - and a mistyped value has
+    # to be refused at the first of the two, not at the second. What the
+    # option does there is nothing, which is a different thing from being
+    # allowed to be nonsense.
+    if {![string is boolean -strict [dict get $options hyphens]]} {
+      return -code error -errorcode [list TCLPDF TEXT HYPHENS \
+          [dict get $options hyphens] $context] \
+          "tclpdf: -hyphens takes a boolean, not\
+          \"[dict get $options hyphens]\""
+    }
     # A measurement has no limit: see the note on the option list above.
     dict set options height {}
     return $options

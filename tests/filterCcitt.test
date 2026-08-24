@@ -1,0 +1,386 @@
+# filterCcitt.test --
+#
+# Tests for the fax codings of ITU-T T.4 and T.6 - CCITTFaxDecode. They stood
+# in filter.test until the decoder moved into a module of its own; the test
+# names keep their old numbering so that a run picked out by name still finds
+# them, and the tests still call the decoder the way every caller does,
+# through [::tclpdf::filter decodeCcitt] - which is also what checks that the
+# bridge in filter.tcl loads the module.
+#
+# Every fixture here is foreign data. The picture is a 59 by 40 stencil lifted
+# out of a printed magazine page - object 748 of a file in the local corpus, a
+# scan of small print with an EncodedByteAlign fax stream behind it - and the
+# three streams beside it are that same picture handed to the encoder of
+# libtiff 4.7.2 as Group 4, as Group 3 one-dimensional and as Group 3
+# two-dimensional. Nothing here was coded by this package: it has no fax
+# encoder and is not going to get one.
+#
+# The picture is written out as a picture. A fax decoder that is wrong is
+# wrong in a way one can SEE - a row too short, a colour inverted, a page
+# sheared - and a fixture of 640 hex digits hides exactly that.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::filter
+package require tclpdf::filterCcitt
+
+# What a refusal answers with. The same six lines stand in filter.test: a test
+# file has to run on its own, and the two files no longer share a namespace.
+proc filterCcittRefusal {script} {
+  if {[catch {uplevel 1 $script} result options] == 0} {
+    return "no error: $result"
+  }
+  return [dict get $options -errorcode]
+}
+
+proc filterCcittPicture {} {
+  set art {
+    .........#............#....................................
+    .........#...........#.....................................
+    ..........#.................................#..............
+    ..........#..............................#..#..............
+    ..........#.........##...##..#.....#..#..#..#...#..........
+    ....................#........#....#...#..#..#..#...........
+    ................#.......##....#...........#.#..##..........
+    ........................#..............#..#....#...........
+    .........#....#......#..#...#..#.......#..#....#...........
+    .........#.#.............#....##...#......#.....#..........
+    .........#...........#...............#.....................
+    ........#............#................#....................
+    ...........................................................
+    ...........................................................
+    ...........................................................
+    ...........................................................
+    ...........######........................####.##...........
+    ...........##..##............#............##...#...........
+    ...........##..###..##...#..#..##..#..#...##...............
+    ...........##..###..##......#...#.##......##...............
+    ...........##..##...##......##....##......##.#.............
+    ...........######...##......###....###....####.............
+    ...........##..###..##.......####...###...##...............
+    ...........##...##..##........###....###..##...............
+    ...........##...##..##..........#.....##..##...............
+    ...........##..###..##...#..#...#.#...##..##....#..........
+    ..........#######....##.#...#..#..##..#..########..........
+    ...........................................................
+    .###...............................................##.#....
+    ##..##.............................................##..##..
+    ##...#..######..######.###..##...#........###......##...###
+    ##......##...#..##...#..##..##...#...#.....##......##...###
+    ####....##......##......##...#......##.....##......##...###
+    .####...##......##......##..###.....###....##......##....##
+    ..####..####....####.....##..##......##....##......##....##
+    ...###..####....##.#.....##..###.....##....##......##...###
+    .....##.##......##.......###..##...#.###...##......##...###
+    #....#..##.......#........##..##......##...##......##...###
+    ##...#..###..#..##...#....#...##..#...###..##...#..##..##..
+    #.###...###.##..###.##............#....##..#####...####....
+  }
+  set bits {}
+  foreach line [split $art \n] {
+    set line [string trim $line]
+    if {$line eq {}} {
+      continue
+    }
+    # A row is padded out to a whole number of bytes and the padding is not
+    # picture, so it is zero (7.4.6). 59 pixels are eight bytes with five bits
+    # to spare, which is why this fixture is 59 wide and not 64.
+    append bits [string map {. 0 # 1} $line][string repeat 0 5]
+  }
+  return [binary format B* $bits]
+}
+
+# Group 4, the coding that actually arrives: of 25232 PDF files here 1681 name
+# /CCITTFaxDecode, and of 11398 fax images counted in them 11398 carry /K -1.
+set filterCcittG4 [binary format H* [join {
+    344485d2b2848ad3040be6998cba388102f30a343a5fa5352131b2901771a104
+    0b1a9a2368102cc22ebfe08108b042a610eca3e26884448e84696ca10223e504
+    54323f9de484d3fb2f984917cba2eb1fe3ba8febb1f23ac7db0e3ceef61b70bb
+    eedffc3bfd7308bac8ebcdaa14da5a574871111111191e21591d5045fd85dcb9
+    17223c5f308ced878cf19e2fe613fc3c71dc57f6ff4efddb870db77fdf84475d
+    fea1b858db840aff26aab77c5ffbecba530ab2eaf0453d05a04b5b511de0e1c0
+    040040
+} {}]]
+
+set filterCcittG3 [binary format H* [join {
+    001a2210a800d1210b0009d092d0004e80d3ad0004ea9c6eb13a74ea11c00442
+    9ab509d3a748001a97f690874f9c00542d13ab48001a2b5c9d4275e9d5a4000d
+    10e8357c2e588e0034485aa2e0033442a9080014a0014a0014a0014a00141286
+    3e800146f9088e1200051bcfc274fba751ea0028de7f9421fef500146fc7ddfd
+    8e830014147d5d6c300146f3fee28f5001471bf3ae7f5001471be759bfa800a3
+    79f84ea10ea37ed1c004e3bc7509d3ee9c53800a50008f0563ab00135df04df7
+    00135e139390f3f0a77710009afdc27e13efc2859f710009abbfbee1779f7100
+    08ee3efb7b2bfbbc005dbbb79bfddfdde00313bbc759bd9dfdc400398ff7f3f0
+    87a3ee200135569ff53dfee3ee200135e13ce9f856a37513f09f7dc004d50f44
+    3ef0f90af73876
+} {}]]
+
+set filterCcittG32d [binary format H* [join {
+    001d110854005a50019d092d00058205c006754e37589d3a7508e0021a1d2fd2
+    800ea5fda421d3e70010d082058d4007456b93a84ebd3ab48001608108b042a6
+    10eca3800e890b545c00496ca100034a001400694002800d04a18fa00053bc90
+    9a7800d1bcfc274fba751ea002fc7751e00346fc7ddfd8e8300147db0e3800d1
+    bcffb8a3d4005beedf001a38df3acdfd4005ae6117591d79b50019c778ea13a7
+    dd38a700108888888c0063c158eac004822fec2800cd784e4e43cfc29ddc4002
+    c678cf17f309fc0066aefefb85de7dc40026ff4efdc006edddbcdfeefeef0013
+    f088ebbfd400798ff7f3f087a3ee200113555bbe2ff800cd784f3a7e15a8dd44
+    fc27df70015025ada88ef070e0
+} {}]]
+
+# The stream as it stands in the foreign PDF - /Columns 59 /Rows 40 /K -1
+# /BlackIs1 false /EncodedByteAlign true /EndOfLine false - and the only one
+# of the four that this package did not put through libtiff first.
+set filterCcittAligned [binary format H* [join {
+    344485d280650915a0c102e0cd331974710205e6141a1d2fd2803523fb290177
+    1a1040b1a83446d02059845d7fc1021160854c21d947ca11d508c04b65081118
+    8080802822a191f89de484d3c0ecbe61245f2e8bac60fc7751e0ebb1f23a808f
+    b61c709ddec36e14df76f8fc3bf0d7308bac8ebcda80429b4b4ae90e2941b823
+    c42b23a84117f614dcb917223c5f308ced86c678cf17f309fc878e3b8afe6ff4
+    efdc6e1c36ddff7e111d77fa800dc2c6dc2057f826aab77c5ff0becba530ab2e
+    af0453d050a04b5b511de0e1c0001001
+} {}]]
+
+# Bits in, bytes out. A fax stream is written as a bit string in the tests
+# below because that is what the codes are, and a hex constant would hide
+# which code stands where.
+proc filterCcittBits {bits} {
+  append bits [string repeat 0 [expr {(8 - [string length $bits] % 8) % 8}]]
+  return [binary format B* $bits]
+}
+
+test filter-ccitt-7.1 {Group 4, pixel for pixel against libtiff} -body {
+  # Checked twice over before it was written down: bit for bit against
+  # libtiff 4.7.2 over this picture, and bit for bit against libtiff over 400
+  # fax streams taken out of 40 foreign PDF files - 558 megapixels, all 400
+  # identical.
+  ::tclpdf::filter decodeCcitt $filterCcittG4 -columns 59 -rows 40 -k -1 \
+      -blackis1 1
+} -result [filterCcittPicture]
+
+test filter-ccitt-7.2 {Group 3 one-dimensional, the terminating and makeup codes} -body {
+  # /K 0: every row is a chain of white and black runs and nothing refers to
+  # the row above. No file in the corpus uses it; the tables it exercises are
+  # the same ones Group 4 falls back on in horizontal mode.
+  ::tclpdf::filter decodeCcitt $filterCcittG3 -columns 59 -rows 40 -k 0 \
+      -blackis1 1
+} -result [filterCcittPicture]
+
+test filter-ccitt-7.3 {Group 3 two-dimensional, one tag bit per row} -body {
+  # /K above zero: each row says in the bit behind its end-of-line code
+  # whether it is coded one- or two-dimensionally. The value of /K itself is
+  # the encoder's promise about how often a one-dimensional row comes, and a
+  # decoder that reads the tag bit does not need it - which is why 4 here is
+  # not a magic number but any positive one.
+  ::tclpdf::filter decodeCcitt $filterCcittG32d -columns 59 -rows 40 -k 4 \
+      -blackis1 1
+} -result [filterCcittPicture]
+
+test filter-ccitt-7.4 {/EncodedByteAlign, and what it costs to miss it} -body {
+  # The parameter that cannot be guessed and cannot be ignored: the rows of
+  # this stream each begin on a byte boundary, and read without that the
+  # third row already runs onto a code that is none. 29 fax images in the
+  # corpus carry it, all of them in two files, all of them Group 4.
+  list [::tclpdf::filter decodeCcitt $filterCcittAligned -columns 59 -rows 40 \
+          -k -1 -blackis1 1 -encodedbytealign 1] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt $filterCcittAligned \
+          -columns 59 -rows 40 -k -1 -blackis1 1}]
+} -result [list [filterCcittPicture] {TCLPDF FILTER CCITT CODE}]
+
+test filter-ccitt-7.5 {/BlackIs1 decides the polarity, and false means 0 is black} -body {
+  # THE TRAP of this filter. The default is false and false means a 0 bit is
+  # BLACK, so a decoder that writes 1 for black by reflex hands back the
+  # negative of the page - and nothing downstream notices, because a negative
+  # is a perfectly well-formed image. The two readings have to be each
+  # other's opposite in every pixel and identical in the padding, which is
+  # not picture and stays zero either way.
+  set black1 [::tclpdf::filter decodeCcitt $filterCcittG4 -columns 59 \
+      -rows 40 -k -1 -blackis1 1]
+  set black0 [::tclpdf::filter decodeCcitt $filterCcittG4 -columns 59 \
+      -rows 40 -k -1]
+  binary scan $black1 B* one
+  binary scan $black0 B* zero
+  set opposite 1
+  set padding 1
+  for {set row 0} {$row < 40} {incr row} {
+    set at [expr {$row * 64}]
+    for {set column 0} {$column < 59} {incr column} {
+      if {[string index $one [expr {$at + $column}]] eq
+          [string index $zero [expr {$at + $column}]]} {
+        set opposite 0
+      }
+    }
+    if {[string range $one [expr {$at + 59}] [expr {$at + 63}]] ne 00000 ||
+        [string range $zero [expr {$at + 59}] [expr {$at + 63}]] ne 00000} {
+      set padding 0
+    }
+  }
+  list $opposite $padding
+} -result {1 1}
+
+test filter-ccitt-7.6 {the end-of-block code ends the stream where /Rows is silent} -body {
+  # /Rows is optional and this stream ends with EOFB - two end-of-line codes
+  # back to back (T.6 2.2.1). Without them the decoder would read the padding
+  # of the last byte as the beginning of row 41.
+  ::tclpdf::filter decodeCcitt $filterCcittG4 -columns 59 -k -1 -blackis1 1
+} -result [filterCcittPicture]
+
+test filter-ccitt-7.7 {a stream that ends before its rows are full is refused} -body {
+  # Cut short by 40 bytes. The refusal is the point: what comes out otherwise
+  # is a picture missing its foot, and every validator downstream agrees with
+  # it. Both refusals name a way on - the first says how to take the page as
+  # far as it goes, the second says how to take what is there.
+  set cut [string range $filterCcittG4 0 end-40]
+  list [filterCcittRefusal {::tclpdf::filter decodeCcitt $cut -columns 59 -rows 40 \
+          -k -1}] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt $cut -columns 59 -rows 40 \
+          -k -1 -damagedrowsbeforeerror 1}] \
+      [expr {[string length [::tclpdf::filter decodeCcitt $cut -columns 59 \
+          -k -1 -damagedrowsbeforeerror 1]] / 8}]
+} -result {{TCLPDF FILTER CCITT SHORT} {TCLPDF FILTER CCITT TRUNCATED} 35}
+
+test filter-ccitt-7.8 {a code that is none is refused, not skipped} -body {
+  # Eight zeros and a one spell no white code: the shared makeup codes are
+  # the only ones with that many leading zeros and they carry a one in the
+  # eighth place.
+  filterCcittRefusal {::tclpdf::filter decodeCcitt \
+      [filterCcittBits 000000001111111111111111] -columns 59 -k 0}
+} -result {TCLPDF FILTER CCITT CODE}
+
+test filter-ccitt-7.9 {zero-length runs are bounded, not walked for ever} -body {
+  # THE ENDLESS LOOP this decoder is written against. Horizontal mode with
+  # two runs of zero advances the bit reader by 21 bits and the row by no
+  # pixel at all, so a stream of them is read for ever by a decoder that
+  # trusts its data - and a corrupt stream is exactly where it happens. A row
+  # of 59 pixels holds at most 59 colour changes, and the 61st pass is
+  # therefore not a row but a loop.
+  filterCcittRefusal {::tclpdf::filter decodeCcitt \
+      [filterCcittBits [string repeat 001001101010000110111 70]] \
+      -columns 59 -k -1}
+} -result {TCLPDF FILTER CCITT LOOP}
+
+test filter-ccitt-7.10 {a two-dimensional extension code is refused, not guessed at} -body {
+  # 0000001 introduces the extensions of T.4 table 4, uncompressed mode among
+  # them. Read as run lengths they give a page that looks decoded and is
+  # noise, so the decoder says so instead.
+  filterCcittRefusal {::tclpdf::filter decodeCcitt \
+      [filterCcittBits 00000010000000100000001] -columns 59 -k -1}
+} -result {TCLPDF FILTER CCITT EXTENSION}
+
+test filter-ccitt-7.11 {/EndOfLine true and a row that begins without one} -body {
+  # Group 4 carries no end-of-line codes, so a stream declared with them and
+  # coded without is a declaration that is wrong - and the message says which
+  # of the two to change.
+  filterCcittRefusal {::tclpdf::filter decodeCcitt $filterCcittG4 -columns 59 \
+      -rows 40 -k -1 -endofline 1}
+} -result {TCLPDF FILTER CCITT EOL}
+
+test filter-ccitt-7.12 {-damagedrowsbeforeerror carries on past a damaged row} -body {
+  # One byte of the Group 3 stream turned over. With the default the decode
+  # stops at row 24 and says so; with room for four damaged rows it picks
+  # itself up at the next end-of-line code and delivers the rest - the 23
+  # rows in front of the damage identical to the picture, and one row fewer
+  # in total because the damaged row swallowed the next one's beginning.
+  set at 150
+  binary scan [string index $filterCcittG3 $at] cu byte
+  set broken [string replace $filterCcittG3 $at $at \
+      [binary format c [expr {$byte ^ 0x5a}]]]
+  set strict [filterCcittRefusal {::tclpdf::filter decodeCcitt $broken \
+      -columns 59 -rows 40 -k 0 -blackis1 1}]
+  set got [::tclpdf::filter decodeCcitt $broken -columns 59 -k 0 -blackis1 1 \
+      -damagedrowsbeforeerror 4]
+  set want [filterCcittPicture]
+  set agree 0
+  while {$agree * 8 < [string length $got] &&
+      [string range $got [expr {$agree * 8}] [expr {$agree * 8 + 7}]] eq
+      [string range $want [expr {$agree * 8}] [expr {$agree * 8 + 7}]]} {
+    incr agree
+  }
+  list $strict [expr {[string length $got] / 8}] $agree
+} -result {{TCLPDF FILTER CCITT CODE} 39 23}
+
+test filter-ccitt-7.13 {a stream that holds no row at all} -body {
+  # Zeros to the end are the padding of a last byte, not a row, and an empty
+  # stream is no different. Neither is walked over in silence.
+  list [filterCcittRefusal {::tclpdf::filter decodeCcitt {} -columns 59 -k -1}] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt \
+          [filterCcittBits 0000000000000000] -columns 59 -k -1}]
+} -result {{TCLPDF FILTER CCITT EMPTY} {TCLPDF FILTER CCITT EMPTY}}
+
+test filter-ccitt-7.14 {impossible parameters are refused} -body {
+  # -columns has an upper bound that the coding does not: a /Columns of a
+  # million out of a foreign file turns a few kilobytes of fax into gigabytes
+  # of pixels, and 65536 is a metre and a half of paper at 1200 dpi.
+  list [filterCcittRefusal {::tclpdf::filter decodeCcitt xx -columns 0}] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt xx -columns 100000}] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt xx -rows -1}] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt xx -k sideways}] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt xx -blackis1 maybe}] \
+      [filterCcittRefusal {::tclpdf::filter decodeCcitt xx \
+          -damagedrowsbeforeerror -1}]
+} -result {{TCLPDF FILTER CCITT COLUMNS 0} {TCLPDF FILTER CCITT COLUMNS 100000}\
+    {TCLPDF FILTER CCITT ROWS -1} {TCLPDF FILTER CCITT K sideways}\
+    {TCLPDF FILTER CCITT BLACKIS1 maybe}\
+    {TCLPDF FILTER CCITT DAMAGEDROWS -1}}
+
+test filter-ccitt-7.15 {an unknown option names the ones that exist} -body {
+  catch {::tclpdf::filter decodeCcitt xx -column 59} message
+  set message
+} -match glob -result {*unknown option "-column"*-columns -rows -k -blackis1\
+    -encodedbytealign -endofline -endofblock -damagedrowsbeforeerror*}
+
+# A picture 2600 pixels wide and six rows tall, made of runs that no row of 59
+# can reach: the terminating codes go up to 63 and everything above is a
+# makeup code plus a terminating one, and above 1728 the makeup codes are the
+# ones T.4 4.1.4 shares between white and black. Handed to libtiff 4.7.2 as
+# Group 4 and as Group 3, and 36 and 43 bytes came back - which is the other
+# half of what makes this fixture worth having: the runs are stated here, so
+# what the decoder must produce can be read rather than trusted.
+set filterCcittRuns {
+  {2599 1} {0 2600} {1728 872} {2560 40} {100 1900 600} {64 64 128 192 2152}
+}
+
+set filterCcittWideG4 [binary format H* [join {
+    526a03e0d85366a04d06c203e6a0d8762a030150b4280dcecd40f0dcc8d43243
+    78008008
+} {}]]
+
+set filterCcittWideG3 [binary format H* [join {
+    00101f2840026a03e0d80029b3502683600080f9a836000ec540602a3428001d
+    9a81e1bc8d432437014290
+} {}]]
+
+# Runs to pixels. White first, as every fax row begins (T.4 4.1.1) - so a row
+# that starts black opens with a white run of zero, which row two below does.
+proc filterCcittRunRows {rows columns} {
+  set bits {}
+  foreach runs $rows {
+    set bit 0
+    foreach run $runs {
+      append bits [string repeat $bit $run]
+      set bit [expr {$bit ? 0 : 1}]
+    }
+    append bits [string repeat 0 [expr {(8 - $columns % 8) % 8}]]
+  }
+  return [binary format B* $bits]
+}
+
+test filter-ccitt-7.16 {makeup codes, and the ones both colours share} -body {
+  # A run of 2599 is a shared makeup code for 2560, a makeup code is not a
+  # run on its own, and a decoder that returns after the first code it
+  # recognises decodes 39 pixels where 2599 stand. Only a row wider than 63
+  # reaches the makeup codes at all, which is why this fixture is 2600 wide
+  # and the picture above is 59.
+  list [::tclpdf::filter decodeCcitt $filterCcittWideG4 -columns 2600 \
+          -rows 6 -k -1 -blackis1 1] \
+      [::tclpdf::filter decodeCcitt $filterCcittWideG3 -columns 2600 \
+          -rows 6 -k 0 -blackis1 1]
+} -result [list [filterCcittRunRows $filterCcittRuns 2600] \
+    [filterCcittRunRows $filterCcittRuns 2600]]
+
+cleanupTests

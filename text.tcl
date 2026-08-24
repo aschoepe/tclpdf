@@ -248,7 +248,15 @@ oo::define ::tclpdf::document::document {
     # room at all.
     set spaces [expr {max(0, [llength [split $string { }]] - 1)}]
     set points [expr {$points + [dict get $state wordSpacing] * $spaces}]
-    set points [expr {$points * [dict get $state stretch] / 100.0}]
+    # Tz scales the HORIZONTAL displacement and nothing else: ISO 32000-2,
+    # 9.4.4 puts the factor on tx and leaves ty without it. So a vertical
+    # line is exactly as long at -stretch 200 as at 100 - the glyphs get
+    # twice as wide, the column does not get twice as long - and multiplying
+    # here would have measured a line twice the length of the one drawn, with
+    # -align right putting it a whole line off the page.
+    if {[dict get $state direction] ne "ttb"} {
+      set points [expr {$points * [dict get $state stretch] / 100.0}]
+    }
     return [::tclpdf::geometry fromPoints $points [my cget -unit]]
   }
 
@@ -306,6 +314,21 @@ oo::define ::tclpdf::document::document {
     # the stream, the tree and the state have to look as if the call never
     # happened - so the order is: check, then mark, then draw.
     set state [my TextMerge $args]
+    # A VERTICAL line is ONE line, and -anchor says where the y of -at lands
+    # on it - baseline or one ascent higher. Both are offsets along y, and
+    # along y is where a vertical line writes: "the top of the letters at y"
+    # is what -align left already means there, so -anchor top would be either
+    # a second name for it or a second, contradicting one. Refused rather
+    # than quietly read as baseline, which is what the same option does at
+    # [TextAnchor] for a value it does not know.
+    if {[dict get $state direction] eq "ttb"
+        && [dict get $options anchor] eq "top"} {
+      return -code error -errorcode [list TCLPDF TEXT VERTICAL anchor] \
+          "tclpdf: -anchor top places the top of the letters at y, and a\
+          vertical line already begins at y - use -align left, right or\
+          center to say where -at sits on the column, and -anchor baseline\
+          (the default) here"
+    }
     set width [dict get $options width]
     if {[dict get $options paginate] && $width eq {}} {
       return -code error "tclpdf: -paginate breaks a paragraph over pages, and\
@@ -392,6 +415,25 @@ oo::define ::tclpdf::document::document {
               justify, not \"[dict get $options align]\""
         }
       }
+      # THE TWO OFFSETS SWAP AXES WITH THE WRITING DIRECTION, and this is the
+      # one place that knows it. [TextRun] takes a shift ALONG the baseline
+      # and a lift ACROSS it, and lays both into the text matrix so that
+      # -rotate turns them with the line - see the comment at TextLift. For a
+      # vertical line the baseline runs down the page, so what was computed
+      # above as a shift along x is a shift along y, and it goes in as the
+      # LIFT with its sign turned round: TextRun writes "py - lift", and a
+      # centred column has to START half its length ABOVE the anchor.
+      #
+      # The shift across the column is 0 and stays 0: the glyph's position
+      # vector puts its x at half the horizontal advance (9.4.4), so a
+      # vertical line is already centred on the x of -at without anything
+      # being written for it.
+      if {[dict get $state direction] eq "ttb"} {
+        set lift [expr {-$shift}]
+        set shift 0
+      } else {
+        set lift [my TextLift $state [dict get $options anchor]]
+      }
     }
     # Tagged PDF: ONE call is one piece of marked content, so a paragraph of
     # five lines becomes one P holding one mark rather than five. The bracket
@@ -442,7 +484,12 @@ oo::define ::tclpdf::document::document {
       # for -anchor top and one ascent above the baseline otherwise - so
       # that a destination at the element can name the place on the page.
       set top [lindex $at 1]
-      if {[dict get $options anchor] ne "top"} {
+      # A VERTICAL line already begins at y - the first glyph hangs from it -
+      # so there is no ascent to climb back over, and asking [TextLift] for
+      # one would run into the refusal there. -anchor top is refused for such
+      # a line further up, which is why only the direction is asked here.
+      if {[dict get $options anchor] ne "top"
+          && [dict get $state direction] ne "ttb"} {
         set top [expr {$top - [my TextLift $state top]}]
       }
       set mark [my StructureMark [dict get $options tag] Layout $top]
@@ -468,8 +515,7 @@ oo::define ::tclpdf::document::document {
         # [option parse] hands on what the caller wrote, and "yes" reaching
         # the stream road would be read as a string there.
         my TextRun $string $state $x $y [dict get $options rotate] $shift \
-            [my TextLift $state [dict get $options anchor]] \
-            [expr {[dict get $options breakHyphen] ? 1 : 0}]
+            $lift [expr {[dict get $options breakHyphen] ? 1 : 0}]
       }
     } result info]
     if {[llength $mark]} {
@@ -730,7 +776,27 @@ oo::define ::tclpdf::document::document {
   # offset has to act on x at that angle. Same defect the alignment shift had,
   # one axis over, and the same cure: hand it to TextRun and let the text
   # matrix carry it.
+  # A VERTICAL line never asks this, and that is what makes this the right
+  # place to refuse one. "One ascent below the anchor" is an offset along y,
+  # and along y is where a vertical line WRITES - the offset it needs runs
+  # across the column instead, and [text] computes it there rather than here.
+  #
+  # So everything that still arrives here with -direction ttb is a road that
+  # has not been taught the direction: the paragraph in textBlock.tcl, which
+  # breaks lines by width and steps them down by the leading. Every drawing
+  # path of that module passes through here on its way to [TextRun], so one
+  # refusal covers -width, -columns, -paginate and the table alike - and
+  # covers them by NAME rather than by drawing a vertical line's glyphs into
+  # a horizontal paragraph's positions, which is what it did before.
   method TextLift {state anchor} {
+    if {[dict get $state direction] eq "ttb"} {
+      return -code error -errorcode [list TCLPDF TEXT VERTICAL block] \
+          "tclpdf: -direction ttb sets ONE vertical line and the block road\
+          is horizontal - it breaks lines by width and steps them down by the\
+          leading, which is the direction a vertical line already runs in.\
+          Set each column with its own \[text\] call at its own -at, or drop\
+          -direction ttb for this block"
+    }
     if {[my TextAnchor $anchor] ne "top"} {
       return 0
     }
@@ -815,7 +881,7 @@ oo::define ::tclpdf::document::document {
     # same order. The font resource is resolved first, as it was written
     # first, so the registration order and with it every generated resource
     # name stays what it was.
-    set resource [my TextResource $font]
+    set resource [my TextResource $font [dict get $state direction]]
     set colour {}
     if {[dict get $state color] ne {}} {
       # Through GraphicsColour, the road every shape takes: a spot colour
@@ -1181,6 +1247,16 @@ oo::define ::tclpdf::document::document {
     # to say which scripts may pass at all.
     set run [my FontRun $font $string [dict get $state ligatures] \
         [dict get $state unshaped] [dict get $state direction]]
+    # A VERTICAL line is measured DOWN it, out of vmtx, and the number that
+    # comes back is an extent along the writing direction rather than a width
+    # across the page. Everything above this line - the alignment shift, the
+    # -spacing charged per glyph, the balance of a column - works on "how far
+    # the line reaches", and that is the same question in both directions; it
+    # is only the axis it is asked about that turns.
+    if {[dict get $state direction] eq "ttb"} {
+      return [list [my FontRunHeight $font $run [dict get $state size]] \
+          [llength $run]]
+    }
     return [list [my FontRunWidth $font $run [dict get $state size] \
         [dict get $state kerning]] [llength $run]]
   }
@@ -1225,13 +1301,15 @@ oo::define ::tclpdf::document::document {
     foreach segment $segments {
       lassign $segment face piece
       if {$face ne $current} {
-        append result "[my TextResource $face] $size Tf\n"
+        append result "[my TextResource $face [dict get $state direction]]\
+            $size Tf\n"
         set current $face
       }
       append result [my TextShowOne $face $state $piece $byTJ]
     }
     if {$current ne $font} {
-      append result "[my TextResource $font] $size Tf\n"
+      append result "[my TextResource $font [dict get $state direction]]\
+          $size Tf\n"
     }
     return $result
   }
@@ -1264,7 +1342,18 @@ oo::define ::tclpdf::document::document {
     # Where the combining marks of the run belong, read in the same logical
     # order the kerning was: a mark hangs on a glyph BEFORE it, so the answer
     # cannot be given after the line has been turned round.
-    set marks [my FontRunMarks $font $run]
+    #
+    # NOT IN A VERTICAL LINE. A GPOS anchor is measured from the pen of
+    # HORIZONTAL writing, and in vertical writing the pen sits at the glyph's
+    # vertical origin instead - a point that is neither the same place nor a
+    # fixed distance from it. Applying the offsets there puts the accent
+    # beside the letter rather than over it, silently, and the same reasoning
+    # that turns the kerning off in [TextMerge] applies: an offset for the
+    # other axis is not a smaller error than no offset.
+    set marks {}
+    if {[dict get $state direction] ne "ttb"} {
+      set marks [my FontRunMarks $font $run]
+    }
     # THE REORDERING, and this is the only place it happens: after the run has
     # been built and after everything that reads it in logical order - the
     # ligatures inside FontRun, the kerning inside TextAdjust - and before a
@@ -1559,6 +1648,29 @@ oo::define ::tclpdf::document::document {
   # built this order separately a number would come out one way along a
   # straight baseline and the other way along a curve.
   method TextPieces {codes direction} {
+    # A PATH IS THE ONE ROAD THAT REACHES HERE WITH ttb, and it is refused
+    # here for that reason. The ordinary vertical line never asks this
+    # question - [TextShowOne] reorders only a right-to-left run - so this is
+    # textPath.tcl and nothing else, and textPath.tcl draws one Tm per
+    # cluster along a curve it has already measured horizontally.
+    #
+    # Measured before this refusal existed: "textPath -direction ttb" drew a
+    # perfectly ordinary HORIZONTAL line and reported success. It could not do
+    # otherwise - a vertical advance accumulates INSIDE a show operator, and a
+    # path puts every cluster in a show operator of its own, so the one thing
+    # the writing mode does never happens. The option was accepted and did
+    # nothing, which is the shape of defect this module refuses on sight.
+    #
+    # What a caller who wants this actually wants is a path that RUNS
+    # downwards, which is a matter of -segments and not of the writing mode.
+    if {$direction eq "ttb"} {
+      return -code error -errorcode [list TCLPDF TEXT VERTICAL path] \
+          "tclpdf: -direction ttb and a path do not go together - a vertical\
+          advance accumulates inside one show operator and a path writes one\
+          per cluster, so the line would come out horizontal. Give -segments\
+          that run downwards for a falling line, or set the column with\
+          \[text\] -direction ttb"
+    }
     if {$direction ne "rtl"} {
       set pieces {}
       set count [llength $codes]
@@ -1820,10 +1932,23 @@ oo::define ::tclpdf::document::document {
   # Register a font as a page resource and return its name. One resource per
   # font, reused across the document - that is what keeps a 20-page report
   # from carrying 20 identical font objects.
-  method TextResource {font} {
+  # DIRECTION reaches here because the writing mode is a property of the FONT
+  # OBJECT and of nothing else: Identity-H and Identity-V are two CMaps over
+  # the same glyphs, and PDF has no operator that switches between them. A
+  # vertical line is therefore drawn with a second Type 0 font over the same
+  # descendant - see [FontVerticalResource] - and the only thing that changes
+  # in the content stream is the name in front of "Tf".
+  #
+  # The default is ltr, which is what every caller outside this module passes
+  # by passing nothing: field.tcl writes a /DA string, svgElement.tcl draws
+  # SVG text, and neither has a vertical writing mode to ask about.
+  method TextResource {font {direction ltr}} {
     if {[my TextEmbedded $font]} {
       if {[my FontKind $font] eq "type3"} {
         return [my Type3Resource $font]
+      }
+      if {$direction eq "ttb"} {
+        return [my FontVerticalResource $font]
       }
       return [my FontResource $font]
     }
@@ -2032,9 +2157,41 @@ oo::define ::tclpdf::document::document {
     # Checked here rather than at each call: this is the one gate every
     # measuring and drawing road passes, and a misspelt direction that reached
     # the drawing would simply set the line the other way round in silence.
-    if {[dict get $state direction] ni {ltr rtl}} {
-      return -code error "tclpdf: -direction must be ltr or rtl, not\
+    if {[dict get $state direction] ni {ltr rtl ttb}} {
+      return -code error "tclpdf: -direction must be ltr, rtl or ttb, not\
           \"[dict get $state direction]\""
+    }
+    # A VERTICAL line, and the same gate for the same reason as the
+    # right-to-left one below: the writing mode is a property of the Type 0
+    # font's CMap (ISO 32000-2, 9.7.4.3), and only an embedded sfnt face has
+    # one. The standard fourteen and an embedded Type 1 face are addressed
+    # through WinAnsiEncoding, a Type 3 font through its own /Differences -
+    # neither has a vertical CMap to name, so "-direction ttb" on Helvetica
+    # would have set the line across the page in silence.
+    if {[dict get $state direction] eq "ttb"} {
+      set family [dict get $state family]
+      if {![my TextEmbedded $family] || [my FontKind $family] in {type1 type3}} {
+        set through [expr {[my TextEmbedded $family]
+            && [my FontKind $family] eq "type3"
+            ? {its own /Differences encoding}
+            : {WinAnsiEncoding}}]
+        return -code error \
+            -errorcode [list TCLPDF FONT VERTICAL $family] \
+            "tclpdf: -direction ttb needs a TrueType or OpenType face\
+            embedded with \[font embed\] - \"$family\" is addressed through\
+            $through, which has no vertical writing mode; embed a face with\
+            \[font embed\] for this text"
+      }
+      # PAIR KERNING IS TURNED OFF HERE, in the one gate every measuring and
+      # drawing road passes, so that the measurement and the drawing cannot
+      # disagree about it. The pairs in GPOS "kern" are horizontal: they say
+      # how much closer A and V stand side by side, and adding that to a
+      # VERTICAL advance moves the glyphs by a number that answers a question
+      # nobody asked. A face that kerns vertically names the feature "vkrn",
+      # which this package does not read. Turned off rather than refused,
+      # because -kerning is on by default and refusing it would mean every
+      # vertical call had to carry "-kerning 0".
+      dict set state kerning 0
     }
     # A right-to-left line needs a face that has right-to-left letters, and
     # the standard fourteen have none: WinAnsi. Refused rather than accepted,

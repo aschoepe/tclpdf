@@ -923,6 +923,17 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
                 # length in any way a reader would notice.
                 set decoder decodeLzw
             }
+            CCITTFaxDecode - CCF {
+                # A page content stream coded as fax is not what the filter
+                # is for, and a scanned page carries its fax in an image
+                # rather than in its content - but the refusal below is the
+                # one place where a filter this package cannot read is
+                # named, so the decoder that reads a scan's pixels answers
+                # here too. Every parameter of Table 11 is handed over
+                # below; /Columns and /K are the two that decide whether
+                # anything comes out at all.
+                set decoder decodeCcitt
+            }
             default {
                 return -code error -errorcode {TCLPDF IMPORT FILTER} "tclpdf:\
                     [dict get $reader path]: $what uses filter /$name, which\
@@ -945,6 +956,36 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
             set early [lindex [Resolve reader [Get $p EarlyChange]] 1]
             if {$early ne {}} {
                 set extra [list $early]
+            }
+        }
+        # CCITT needs its parameters for the same reason and more so: the
+        # geometry is not in the data. A fax stream says nothing about how
+        # wide its rows are, so a missing or wrong /Columns does not fail -
+        # it decodes rows of the WRONG width and hands back a picture that
+        # is sheared, which is why every one of Table 11 is passed on rather
+        # than a chosen few.
+        if {$decoder eq "decodeCcitt"} {
+            if {$p ne {} && [lindex $p 0] eq "d"} {
+                foreach {key option} {Columns -columns Rows -rows K -k
+                        BlackIs1 -blackis1 EncodedByteAlign -encodedbytealign
+                        EndOfLine -endofline EndOfBlock -endofblock
+                        DamagedRowsBeforeError -damagedrowsbeforeerror} {
+                    set item [Resolve reader [Get $p $key]]
+                    if {$item eq {}} {
+                        continue
+                    }
+                    lappend extra $option [lindex $item 1]
+                }
+            }
+            # /Rows is optional (Table 11) and an image says the same thing
+            # in /Height, which is not optional. Taken from there where the
+            # parameters are silent, so that a stream ending early is caught
+            # rather than quietly delivering fewer rows than the picture has.
+            if {![dict exists $extra -rows]} {
+                set height [lindex [Resolve reader [Get $value Height]] 1]
+                if {$height ne {}} {
+                    lappend extra -rows $height
+                }
             }
         }
         if {[catch {::tclpdf::filter::$decoder $data {*}$extra} decoded]} {
@@ -1208,4 +1249,4 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
 
 # ------------------------------------------------------------ the takeover
 
-package provide tclpdf::importRead 1.2
+package provide tclpdf::importRead 1.3

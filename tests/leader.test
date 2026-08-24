@@ -366,4 +366,24 @@ test leader-5.3 {an artifact kind the standard does not know is refused, and the
   list $code [regexp {unknown artifact type "Foo"} $message] [string length $content]
 } -result {1 1 0}
 
+# A vertical leader row is refused, not drawn. Every measurement a leader
+# makes - the two ends, the room between them, the repeated fill - is an
+# answer about the axis the line runs on, and in a vertical line that axis
+# is the other one: the row would be measured across the page and drawn down
+# it. The refusal names the way out rather than leaving the caller with a
+# picture nobody can explain.
+test leader-9.1 {a vertical row is refused, and the horizontal one still draws} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set refused [catch {$doc leader "Kapitel" "12" -at {20 20} -width 60 \
+      -fill "." -direction ttb} message options]
+  set code [dict get $options -errorcode]
+  set fine [catch {$doc leader "Kapitel" "12" -at {20 40} -width 60 -fill "."}]
+  $doc destroy
+  list $refused $code $fine \
+      [string match {*measures its two ends*} $message] \
+      [string match {*separate text calls*} $message]
+} -result {1 {TCLPDF TEXT DIRECTION ttb leader} 0 1 1}
+
+
 cleanupTests

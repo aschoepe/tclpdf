@@ -199,6 +199,173 @@ foreach {x label} {20 "-step {5 5} on a 2 mm tile" 65 "-size {0.25 0.25} -unit i
     $doc text $label -at [list $x 266]
 }
 
+# -- page two: the five other shading types --------------------------------
+#
+# Types 2 and 3 above say where a colour run GOES and let the reader work out
+# every point between the stops. The five here say it differently: type 1 as a
+# calculation over a rectangle, types 4 to 7 as the points themselves - a
+# stream of vertices or patches with a colour at each, packed as binary
+# numbers. A mesh paints only where its triangles are, so unlike a gradient it
+# needs no rectangle to be clipped to.
+
+$doc page add
+$doc font -family helvetica -style bold -size 15 -color black
+$doc text "Shading types 1 and 4 to 7" -at {20 22}
+$doc font -style {} -size 9
+$doc text "A gradient runs between stops. These five hold their colours\
+    themselves: one as a calculation over the area, four as a mesh of points -\
+    triangles, a lattice of rows, and the two kinds of curved patch." \
+    -at {20 30} -width 170
+
+# A caption under a panel, and the frame around it - three lines that would
+# otherwise stand six times.
+proc shadingPanel {doc x y w h title note} {
+    $doc rect -at [list $x $y] -size [list $w $h] \
+        -stroke {0.75 0.75 0.8} -width 0.3
+    $doc font -family helvetica -style bold -size 7 -color black
+    $doc text $title -at [list $x [expr {$y + $h + 5}]]
+    $doc font -style {} -size 6.5 -color {0.35 0.35 0.4}
+    $doc text $note -at [list $x [expr {$y + $h + 9}]] -width $w
+}
+
+# -- type 1: the colour as a calculation ------------------------------------
+#
+# The function is a PostScript calculator (ISO 32000-2, 7.10.5): x and y
+# arrive on the stack in domain coordinates, and what is left when it ends is
+# the colour. This one is a ripple in each direction - sin over both axes,
+# which is a picture no run between stops can make.
+$doc shading function -at {20 44} -size {80 50} -space rgb \
+    -expression {exch 720 mul sin 1 add 2 div exch 720 mul sin 1 add 2 div 0.4}
+shadingPanel $doc 20 44 80 50 "type 1, function-based" \
+    "-expression is the body of a PostScript calculator function: it takes x\
+    and y and leaves one number per component."
+
+# -- type 4: free-form triangles, as a fan ----------------------------------
+#
+# An edge flag of 2 keeps the FIRST vertex of the previous triangle and adds
+# one new one, which is exactly a fan around a common centre: three vertices
+# for the first triangle and one for each after it.
+set vertices {{150 69 white}}
+set hues {{0.85 0.20 0.20} {0.90 0.55 0.15} {0.85 0.80 0.15}
+          {0.35 0.70 0.25} {0.15 0.60 0.60} {0.20 0.35 0.80}
+          {0.50 0.25 0.75} {0.80 0.25 0.55}}
+set index 0
+foreach hue $hues {
+    set angle [expr {$index * 360.0 / [llength $hues]}]
+    set radians [expr {$angle * acos(-1) / 180.0}]
+    set point [list [expr {150 + 38 * cos($radians)}] \
+        [expr {69 + 23 * sin($radians)}] $hue]
+    # The first two rim points complete the first triangle and carry flag 0;
+    # every one after them continues the fan with flag 2.
+    lappend vertices [expr {$index < 2 ? $point : [linsert $point end 2]}]
+    incr index
+}
+# The fan has to close: the last triangle runs back to the first rim point.
+lappend vertices [linsert [lindex $vertices 1] end 2]
+$doc shading triangles -vertices $vertices
+shadingPanel $doc 110 44 80 50 "type 4, free-form Gouraud triangles" \
+    "A vertex is {x y colour}; a fourth word is the edge flag - 2 keeps the\
+    centre and makes the strip a fan."
+
+# -- type 5: the lattice ----------------------------------------------------
+#
+# The same vertices without the flags, read as rows of a fixed width. A grid
+# is what most meshes are, and this is the type that says so in one number.
+set vertices {}
+set palette {{0.10 0.25 0.50} {0.20 0.55 0.65} {0.55 0.80 0.65} {0.95 0.95 0.70}
+             {0.30 0.45 0.65} {0.95 0.75 0.35} {0.90 0.45 0.25} {0.65 0.20 0.30}
+             {0.15 0.30 0.45} {0.45 0.60 0.55} {0.85 0.60 0.40} {0.35 0.15 0.25}}
+set index 0
+foreach colour $palette {
+    set column [expr {$index % 4}]
+    set row [expr {$index / 4}]
+    # The middle row is drawn in, so the lattice is a grid rather than a
+    # rectangle - the rows are what it is made of, not the corners.
+    set inset [expr {$row == 1 ? 9 : 0}]
+    lappend vertices [list \
+        [expr {20 + $inset + $column * (80 - 2 * $inset) / 3.0}] \
+        [expr {109 + $row * 25}] $colour]
+    incr index
+}
+$doc shading lattice -perRow 4 -vertices $vertices
+shadingPanel $doc 20 109 80 50 "type 5, lattice-form Gouraud triangles" \
+    "-perRow says how many vertices a row holds; the reader makes the\
+    triangles between two rows itself."
+
+# -- types 6 and 7: the two kinds of patch ----------------------------------
+#
+# Twelve control points run round the boundary, four cubic edges with the
+# corners shared, and one colour per corner. A tensor patch adds four INTERIOR
+# points, which is the whole of the difference between the two - the same
+# boundary, and the inside shaped rather than interpolated.
+#
+# The boundary below bulges: the two middle points of each edge are pushed out
+# of the straight line, which a Coons patch follows and no gradient can.
+proc shadingPatchBoundary {left top width height bulge} {
+    set right [expr {$left + $width}]
+    set bottom [expr {$top + $height}]
+    set midX [expr {$left + $width / 2.0}]
+    set midY [expr {$top + $height / 2.0}]
+    return [list \
+        [list $left $top] \
+        [list [expr {$left - $bulge}] [expr {$top + $height / 3.0}]] \
+        [list [expr {$left - $bulge}] [expr {$top + 2 * $height / 3.0}]] \
+        [list $left $bottom] \
+        [list [expr {$left + $width / 3.0}] [expr {$bottom + $bulge}]] \
+        [list [expr {$left + 2 * $width / 3.0}] [expr {$bottom + $bulge}]] \
+        [list $right $bottom] \
+        [list [expr {$right + $bulge}] [expr {$top + 2 * $height / 3.0}]] \
+        [list [expr {$right + $bulge}] [expr {$top + $height / 3.0}]] \
+        [list $right $top] \
+        [list [expr {$left + 2 * $width / 3.0}] [expr {$top - $bulge}]] \
+        [list [expr {$left + $width / 3.0}] [expr {$top - $bulge}]]]
+}
+
+set corners {{0.95 0.85 0.30} {0.85 0.25 0.25} {0.20 0.30 0.65} {0.25 0.65 0.45}}
+$doc shading coons -patches [list [list \
+    points [shadingPatchBoundary 122 117 56 34 7] colors $corners]]
+shadingPanel $doc 110 109 80 50 "type 6, Coons patch" \
+    "Twelve control points round the boundary - four cubic edges - and one\
+    colour per corner."
+
+# The same boundary and the same corner colours; only the four interior points
+# differ, and they are what the four extra numbers of a tensor patch buy. Left
+# where a Coons patch would put them - at the thirds - they change nothing;
+# pulled together towards one corner, as here, they squeeze the colour field
+# that way. Measured with poppler: the effect is real but wants a real
+# displacement, and interior points near their natural places are invisible.
+$doc shading tensor -patches [list [list \
+    points [concat [shadingPatchBoundary 32 182 56 34 7] \
+        {{72 207} {72 212} {83 212} {83 207}}] colors $corners]]
+shadingPanel $doc 20 174 80 50 "type 7, tensor-product patch" \
+    "The same boundary and the same corners; the four interior points are\
+    pulled to one corner, and the field is squeezed with them."
+
+# -- a mesh as a pattern ----------------------------------------------------
+#
+# Every shading type can be registered as a pattern, and then any shape can be
+# filled with it - the mesh is cut to the shape instead of the other way
+# round.
+$doc shading pattern wing triangles -vertices {
+    {110 174 {0.95 0.75 0.20}} {190 174 {0.20 0.45 0.75}} {110 224 {0.85 0.25 0.35}}
+    {190 224 {0.15 0.55 0.45} 1}}
+$doc circle -at {150 199} -radius 24 -fill {pattern wing} \
+    -stroke {0.35 0.35 0.4} -width 0.4
+shadingPanel $doc 110 174 80 50 "a mesh as a pattern" \
+    "shading pattern registers any of the seven; the shape is then filled\
+    with it, mesh and all."
+
+$doc font -family helvetica -style bold -size 10 -color black
+$doc text "What the mesh types cost" -at {20 244}
+$doc font -style {} -size 8
+$doc text "The four mesh types write their points as a binary stream: two\
+    bytes per coordinate over the bounding box of the mesh itself, one byte\
+    per colour component, one for the edge flag. A vertex is eight bytes in\
+    RGB, a Coons patch sixty-one - so a mesh of a thousand triangles is a few\
+    kilobytes, deflated with everything else. The colours share one space, the\
+    way the stops of a gradient do: a grey corner among coloured ones is\
+    promoted rather than refused." -at {20 250} -width 170
+
 exampleFooter $doc
 
 $doc write $target

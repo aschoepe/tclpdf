@@ -28,6 +28,8 @@
 #                    a variable face also the bounding box and the hhea
 #                    summary of advance, bearings and extent)
 #   hmtx loca glyf   rebuilt from the chosen glyphs
+#   vhea vmtx        rebuilt likewise, and ONLY where the face has them - the
+#                    metric of vertical writing, which most faces carry none of
 #   cvt fpgm prep    copied unchanged when present - the hinting programs,
 #                    dropped only because they are not needed at all sizes
 #
@@ -138,6 +140,42 @@ proc ::tclpdf::subset::build {font glyphs {instanced {}}} {
 
   set tables [dict create glyf $glyf loca $locaBytes hmtx $hmtx \
       head [Head $font] hhea [Hhea $font $count] maxp [Maxp $font $count]]
+
+  # vmtx and vhea, and only for a face that has them.
+  #
+  # PDF does NOT read them - the vertical displacement of a glyph comes from
+  # /W2 and /DW2 in the CID font (ISO 32000-2, 9.7.4.3), which font.tcl writes
+  # from the same numbers. They are rebuilt all the same, for the reason the
+  # bearings in hmtx above are written properly: the embedded file is a font,
+  # and a font whose vhea announces 16776 vertical metrics over a vmtx holding
+  # eleven is broken for everything that opens it as one. Dropping BOTH would
+  # be consistent too - the cheaper answer, and the one that throws away what
+  # the face knows the moment anything but Acrobat looks at the file.
+  if {[::tclpdf::sfnt hasVertical $font]} {
+    set vmtx {}
+    foreach glyph $order {
+      set advance [::tclpdf::sfnt verticalAdvance $font $glyph]
+      set bearing [::tclpdf::sfnt verticalBearing $font $glyph]
+      # A face with VORG and no vmtx has an origin per glyph and no height:
+      # the em is what /DW2 would give it, and the same number here keeps the
+      # file and the PDF saying one thing.
+      if {$advance eq {}} {
+        set advance [dict get $font unitsPerEm]
+      }
+      if {$bearing eq {}} {
+        set bearing 0
+      }
+      append vmtx [binary format SuS $advance $bearing]
+    }
+    dict set tables vmtx $vmtx
+    dict set tables vhea [Vhea $font $count]
+    # VORG is carried over ONLY when it can be rewritten in the new numbering:
+    # its keys are glyph ids, and copying it unchanged would point every entry
+    # at whatever glyph inherited that number.
+    if {[dict exists $font vertical origins]} {
+      dict set tables VORG [Vorg $font $order]
+    }
+  }
   foreach optional {cvt fpgm prep} {
     # The table tags are four characters: "cvt " carries a trailing space.
     set tag [format %-4s $optional]
@@ -293,6 +331,43 @@ proc ::tclpdf::subset::Hhea {font count} {
   return $hhea
 }
 
+# vhea, with numOfLongVerMetrics matched to the vmtx written beside it - the
+# same correction Hhea makes at the same offset, because vhea is hhea with the
+# axes exchanged and keeps that field in the same place (ISO/IEC 14496-22).
+proc ::tclpdf::subset::Vhea {font count} {
+  set vhea [::tclpdf::sfnt table $font vhea]
+  if {[string length $vhea] < 36} {
+    # A face whose vhea is too short to correct: writing the vmtx without a
+    # header that describes it would be worse than writing neither.
+    return -code error "tclpdf: the font's \"vhea\" table is\
+        [string length $vhea] bytes and cannot describe its vertical metrics"
+  }
+  return [string replace $vhea 34 35 [binary format Su $count]]
+}
+
+# VORG in the new numbering. The default stays as it was - it describes the
+# face, not a glyph - and only the glyphs that travel keep an entry of their
+# own, renumbered. The entries must be sorted by glyph id (the format says
+# so, and a reader is entitled to search them).
+proc ::tclpdf::subset::Vorg {font order} {
+  set origins [dict get $font vertical origins]
+  set entries {}
+  set new 0
+  foreach glyph $order {
+    if {[dict exists $origins $glyph]} {
+      lappend entries [list $new [dict get $origins $glyph]]
+    }
+    incr new
+  }
+  set entries [lsort -integer -index 0 $entries]
+  set bytes [binary format SuSuSSu 1 0 \
+      [dict get $font vertical originDefault] [llength $entries]]
+  foreach entry $entries {
+    append bytes [binary format SuS {*}$entry]
+  }
+  return $bytes
+}
+
 proc ::tclpdf::subset::Maxp {font count} {
   set maxp [::tclpdf::sfnt table $font maxp]
   return [string replace $maxp 4 5 [binary format Su $count]]
@@ -373,4 +448,4 @@ proc ::tclpdf::subset::Checksum {data} {
   return $sum
 }
 
-package provide tclpdf::subset 1.2
+package provide tclpdf::subset 1.3

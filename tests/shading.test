@@ -48,6 +48,12 @@ test shading-1.2 {a radial gradient is shading type 3 with six coordinates} -bod
 test shading-1.3 {more than two colours are stitched} -body {
   # PDF has no multi-stop function: a gradient through three colours is a type
   # 3 that stitches two type 2 segments together.
+  #
+  # /Encode and /N are read as well, and not for form's sake: an Encode of
+  # 1 0 runs that segment backwards and an exponent other than 1 bends the
+  # run, and both are files every validator passes and every reader paints
+  # differently from what was asked for. Measured 2026-08-24: before this
+  # line the two entries were in no test of this file at all.
   set doc [tclpdf new]
   $doc page add
   $doc shading axial -at {20 20} -size {60 20} -colors {red yellow green}
@@ -57,8 +63,9 @@ test shading-1.3 {more than two colours are stitched} -body {
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
   list [regexp {/FunctionType 3} $bytes] [regexp -all {/FunctionType 2} $bytes] \
-      [regexp {/Bounds \[} $bytes]
-} -result {1 2 1}
+      [regexp {/Bounds \[} $bytes] [regexp {/Encode \[0 1 0 1\]} $bytes] \
+      [regexp -all {/N 1} $bytes]
+} -result {1 2 1 1 2}
 
 test shading-1.4 {a shading is clipped to its rectangle} -body {
   # [sh] floods the whole clipping region, so without a clip a gradient meant
@@ -740,5 +747,620 @@ test shading-9.4 {a refused pattern does not pin the floor, an accepted one does
   $doc destroy
   list $codes [string match {*pattern*needs PDF 1.2*} $message]
 } -result {{1 1 1 0 1} 1}
+
+# -- 10. shading type 1, the colour as a calculation ------------------------
+#
+# The one shading whose colour is not a run between stops but a FUNCTION over
+# a rectangle. It needs a function of two inputs, which neither a type 2 nor a
+# type 3 function is (7.10.2), so it brings the PostScript calculator, type 4,
+# with it.
+
+testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+
+# The colours of several points of one rendering, in PDF points - the shape
+# a shading is judged in, since a mesh has to be right at its corners AND in
+# its middle. The reader itself lives in tests/helper.tcl, where the colour
+# tests reach it too; only the unit differs between the two callers.
+proc shadingPixels {path points {dpi 72}} {
+  return [::tclpdfTest::pixels $path $points -dpi $dpi -unit pt]
+}
+
+# Whether a measured colour is the one asked for, within what a rasteriser
+# does to an edge: poppler samples a Gouraud corner a little inside the
+# triangle and answers 247 where the vertex says 255.
+proc shadingNear {measured wanted {tolerance 12}} {
+  foreach got $measured want $wanted {
+    if {abs($got - $want) > $tolerance} {
+      return [list $measured $wanted]
+    }
+  }
+  return ok
+}
+
+test shading-10.1 {a function shading is type 1 with a PostScript calculator} -body {
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading function -at {0 0} -size {200 200} -space rgb \
+      -expression {pop 0 0.5}
+  set shading [shadingLastBody $doc /ShadingType]
+  set function [shadingLastBody $doc /FunctionType]
+  $doc destroy
+  list [regexp {/ShadingType 1} $shading] [shadingEntry $shading Domain] \
+      [shadingEntry $shading Matrix] [regexp {/ColorSpace /DeviceRGB} $shading] \
+      [regexp {/FunctionType 4} $function] [shadingEntry $function Range] \
+      [regexp "stream\n\\{ pop 0 0.5 \\}\nendstream" $function]
+} -result {1 {/Domain [0 1 0 1]} {/Matrix [200 0 0 200 0 0]} 1 1 {/Range [0 1 0 1 0 1]} 1}
+
+test shading-10.2 {the matrix maps the domain onto -at and -size} -body {
+  # -at and -size say where the shading goes, in the two options every other
+  # kind uses; the matrix is derived from them rather than asked for a second
+  # time. On a 200 pt page the rectangle {20 30} by {60 40} is x 20..80 and,
+  # after the y mirror, y 130..170 - and the domain's y runs UP the page,
+  # which is what a caller writing a calculation expects.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading function -at {20 30} -size {60 40} -space gray -expression {pop}
+  set plain [shadingLastBody $doc /ShadingType]
+  $doc shading function -at {20 30} -size {60 40} -space cmyk \
+      -domain {-1 1 0 2} -expression {pop pop 0 0 0 1}
+  set shifted [shadingLastBody $doc /ShadingType]
+  set function [shadingLastBody $doc /FunctionType]
+  $doc destroy
+  list [shadingEntry $plain Matrix] [regexp {/ColorSpace /DeviceGray} $plain] \
+      [shadingEntry $shifted Domain] [shadingEntry $shifted Matrix] \
+      [regexp {/Range \[0 1 0 1 0 1 0 1\]} $function]
+} -result {{/Matrix [60 0 0 40 20 130]} 1 {/Domain [-1 1 0 2]} {/Matrix [30 0 0 20 50 130]} 1}
+
+test shading-10.3 {the calculation reaches the page, and its axes are the right way round} \
+    -constraints havePdftoppm -body {
+  # The measurement no validator makes. A type 1 shading whose matrix is
+  # singular, whose domain is empty or whose function returns the wrong
+  # number of components is a valid file and a blank rectangle - qpdf and
+  # veraPDF both pass it. Measured 2026-08-24, poppler 25.x at 72 dpi:
+  # "pop 0 0.5" is (x, 0, 0.5), so red rises with x and nothing changes down
+  # the page; the second one is (0, 0.5, y), and y rises UPWARDS.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading function -at {0 0} -size {200 200} -space rgb \
+      -expression {pop 0 0.5}
+  set alongX [::tclpdfTest::scratch shading-fn-x.pdf]
+  $doc write $alongX
+  $doc destroy
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading function -at {0 0} -size {200 200} -space rgb \
+      -expression {exch pop 0 exch 0.5 exch}
+  set alongY [::tclpdfTest::scratch shading-fn-y.pdf]
+  $doc write $alongY
+  $doc destroy
+  set x [shadingPixels $alongX {{5 100} {100 100} {195 100} {100 5} {100 195}}]
+  set y [shadingPixels $alongY {{100 5} {100 100} {100 195}}]
+  file delete $alongX $alongY
+  list [shadingNear [lindex $x 0] {6 0 128}] [shadingNear [lindex $x 1] {128 0 128}] \
+      [shadingNear [lindex $x 2] {249 0 128}] \
+      [expr {[lindex $x 3] eq [lindex $x 1] && [lindex $x 4] eq [lindex $x 1]}] \
+      [shadingNear [lindex $y 0] {0 128 249}] [shadingNear [lindex $y 2] {0 128 6}]
+} -result {ok ok ok 1 ok ok}
+
+test shading-10.4 {what a function shading refuses, and nothing is left behind} -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc page add
+  set objects [[$doc writer] count]
+  set codes {}
+  foreach {call pattern} [list \
+      {-space rgb} {*needs -expression*} \
+      [list -space rgb -expression "  "] {*needs -expression*} \
+      [list -expression "pop 0 0.5"] {*-space of shading function is gray, rgb or cmyk*} \
+      [list -space hsv -expression "pop 0 0.5"] {*-space of shading function is gray, rgb or cmyk*} \
+      [list -space rgb -expression "pop 0 wobble"] {*"wobble" is not an operator*} \
+      [list -space rgb -expression "pop 0 0.5 \}"] {*closes a brace that was never opened*} \
+      [list -space rgb -expression "pop 0 \{ 0.5"] {*leaves 1 brace open*} \
+      [list -space rgb -expression "\{ pop 0 0.5 \}"] {*carries the outer braces*} \
+      [list -space rgb -expression "pop 0 0.5" -domain {0 1 0}] {*-domain of shading function is {x0 x1 y0 y1}*} \
+      [list -space rgb -expression "pop 0 0.5" -domain {0 1 0 x}] {*-domain of shading function takes numbers*} \
+      [list -space rgb -expression "pop 0 0.5" -domain {1 1 0 1}] {*x0 below x1 and y0 below y1*} \
+      [list -space rgb -expression "pop 0 0.5" -domain {0 1 1 0}] {*x0 below x1 and y0 below y1*}] {
+    lappend codes [catch {$doc shading function -at {0 0} -size {50 50} \
+        {*}$call} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
+      [expr {[[$doc writer] count] - $objects}]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} {} 0}
+
+test shading-10.5 {a refused function shading does not pin the version floor} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set refused [catch {$doc shading function -at {0 0} -size {10 10} \
+      -space rgb -expression {pop 0 nonsuch}}]
+  set lowered [catch {$doc configure -version 1.2}]
+  $doc destroy
+  set doc [tclpdf new]
+  $doc page add
+  $doc shading function -at {0 0} -size {10 10} -space rgb -expression {pop 0 0.5}
+  set pinned [catch {$doc configure -version 1.2} message]
+  $doc destroy
+  list $refused $lowered $pinned [string match {*shading*needs PDF 1.3*} $message]
+} -result {1 0 1 1}
+
+# -- 11. shading type 4, free-form Gouraud triangles ------------------------
+
+test shading-11.1 {a triangle mesh is a stream of packed vertices} -body {
+  # One vertex is a flag, two 16 bit coordinates and one 8 bit component per
+  # colour: 1 + 4 + 3 = 8 bytes for RGB, three of them for a triangle. The
+  # widths are what make every field a whole number of bytes.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading triangles -vertices {{20 180 red} {180 180 green} {100 20 blue}}
+  set body [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [regexp {/ShadingType 4} $body] [regexp {/BitsPerCoordinate 16} $body] \
+      [regexp {/BitsPerComponent 8} $body] [regexp {/BitsPerFlag 8} $body] \
+      [shadingEntry $body Decode] [shadingEntry $body Length] \
+      [regexp {/VerticesPerRow} $body]
+} -result {1 1 1 1 {/Decode [20 180 20 180 0 1 0 1 0 1]} {/Length 24} 0}
+
+test shading-11.2 {every corner carries its own colour, and the middle the mixture} \
+    -constraints havePdftoppm -body {
+  # A mesh that comes out as one flat colour - a Decode range that collapses,
+  # a coordinate written little endian, colours packed before the points - is
+  # a file both qpdf and veraPDF pass. Only the pixels say so. Measured
+  # 2026-08-24 with poppler 25.x at 72 dpi.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading triangles -vertices {{20 180 red} {180 180 green} {100 20 blue}}
+  set path [::tclpdfTest::scratch shading-triangles.pdf]
+  $doc write $path
+  $doc destroy
+  set pixels [shadingPixels $path {{24 176} {176 176} {100 26} {100 130} {5 5}}]
+  file delete $path
+  lassign $pixels red green blue middle outside
+  list [shadingNear $red {247 2 4}] [shadingNear $green {4 124 4}] \
+      [shadingNear $blue {4 4 243}] [shadingNear $middle {88 44 80} 20] \
+      [shadingNear $outside {255 255 255} 2]
+} -result {ok ok ok ok ok}
+
+test shading-11.3 {an edge flag continues the previous triangle} -body {
+  # What makes type 4 free-form: flag 1 or 2 adds ONE vertex to the triangle
+  # before it instead of three. Four vertices, one strip, and the stream holds
+  # four records rather than six.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading triangles -vertices {
+    {20 180 red} {180 180 green} {20 20 blue} {180 20 yellow 1}}
+  set body [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingEntry $body Length] [regexp {/ShadingType 4} $body]
+} -result {{/Length 32} 1}
+
+test shading-11.4 {what a triangle mesh refuses} -body {
+  # Four vertices with the flags left at 0 is the ordinary mistake, and it is
+  # the one no reader reports: poppler draws the first triangle and drops the
+  # fourth vertex, qpdf and veraPDF say nothing.
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc page add
+  set objects [[$doc writer] count]
+  set codes {}
+  foreach {vertices pattern} {
+    {{20 180 red} {180 180 green}} {*needs -vertices, at least three*}
+    {{20 180 red} {180 180 green} {100 20 blue} {50 50 yellow}} {*vertex 3 of shading triangles begins a triangle*three vertices with edge flag 0*}
+    {{20 180 red 1} {180 180 green} {100 20 blue}} {*first vertex of shading triangles has edge flag 1*no previous triangle*}
+    {{20 180 red} {180 180 green} {100 20 blue 3}} {*edge flag of vertex 2 of shading triangles is 0, 1 or 2*}
+    {{20 180} {180 180 green} {100 20 blue}} {*vertex 0 of shading triangles is {x y colour}*}
+    {{20 180 red x} {180 180 green} {100 20 blue}} {*edge flag of vertex 0*}
+    {{x 180 red} {180 180 green} {100 20 blue}} {*the x of vertex 0 of shading triangles is a number*}
+    {{20 y red} {180 180 green} {100 20 blue}} {*the y of vertex 0 of shading triangles is a number*}
+    {{20 180 red} {180 180 {cmyk 0 1 1 0}} {100 20 blue}} {*one*colour space*}
+    {{20 180 nosuchcolour} {180 180 green} {100 20 blue}} {*unknown colour*}
+  } {
+    lappend codes [catch {$doc shading triangles -vertices $vertices} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
+      [expr {[[$doc writer] count] - $objects}]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} {} 0}
+
+# -- 12. shading type 5, the lattice ----------------------------------------
+
+test shading-12.1 {a lattice mesh has rows instead of flags} -body {
+  # Table 80: /VerticesPerRow says where a row ends, and there is no
+  # /BitsPerFlag at all - writing one would describe a field the stream does
+  # not hold. 4 + 3 bytes per vertex, six of them.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading lattice -perRow 3 -vertices {
+    {20 180 red} {100 160 yellow} {180 180 green}
+    {20 20 blue} {100 40 magenta} {180 20 cyan}}
+  set body [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [regexp {/ShadingType 5} $body] [shadingEntry $body VerticesPerRow] \
+      [regexp {/BitsPerFlag} $body] [shadingEntry $body Length]
+} -result {1 {/VerticesPerRow 3} 0 {/Length 42}}
+
+test shading-12.2 {the four corners of a lattice are the four colours} \
+    -constraints havePdftoppm -body {
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading lattice -perRow 2 -vertices {
+    {20 20 red} {180 20 green} {20 180 blue} {180 180 yellow}}
+  set path [::tclpdfTest::scratch shading-lattice.pdf]
+  $doc write $path
+  $doc destroy
+  set pixels [shadingPixels $path {{22 22} {178 22} {22 178} {178 178}}]
+  file delete $path
+  lassign $pixels red green blue yellow
+  list [shadingNear $red {247 2 4}] [shadingNear $green {0 126 4}] \
+      [shadingNear $blue {0 2 251}] [shadingNear $yellow {251 253 0}]
+} -result {ok ok ok ok}
+
+test shading-12.3 {what a lattice mesh refuses} -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc page add
+  set objects [[$doc writer] count]
+  set square {{20 20 red} {180 20 green} {20 180 blue} {180 180 yellow}}
+  set codes {}
+  foreach {call pattern} [list \
+      [list -perRow {} -vertices $square] {*-perRow of shading lattice is a whole number of 2 or more*} \
+      [list -perRow 1 -vertices $square] {*-perRow of shading lattice is a whole number of 2 or more*} \
+      [list -perRow 2.5 -vertices $square] {*-perRow of shading lattice is a whole number of 2 or more*} \
+      [list -perRow 3 -vertices $square] {*has 4 vertices, which is not a whole number of rows of 3*} \
+      [list -perRow 4 -vertices $square] {*has one row of 4 vertices*at least two*} \
+      [list -perRow 2 -vertices {{20 20 red 1} {180 20 green} {20 180 blue} {180 180 yellow}}] {*carries an edge flag, and a lattice mesh has none*}] {
+    lappend codes [catch {$doc shading lattice {*}$call} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
+      [expr {[[$doc writer] count] - $objects}]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1} {} {} 0}
+
+# -- 13. shading types 6 and 7, the patches ---------------------------------
+
+# The boundary of a square patch: four cubic edges, corners shared, running
+# from the top left down the left side and round. Twelve points, and the four
+# interior ones of a tensor patch after them.
+proc shadingSquare {{interior 0}} {
+  set points {{20 20} {20 73} {20 127} {20 180} {73 180} {127 180} {180 180}
+      {180 127} {180 73} {180 20} {127 20} {73 20}}
+  if {$interior} {
+    lappend points {73 73} {73 127} {127 127} {127 73}
+  }
+  return $points
+}
+
+test shading-13.1 {a Coons patch has twelve control points, a tensor patch sixteen} -body {
+  # 1 flag + 12 points at 4 bytes + 4 colours at 3 = 61 bytes for a Coons
+  # patch, and four more points make 77 for a tensor one.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading coons -patches [list [list points [shadingSquare] \
+      colors {red green blue yellow}]]
+  set coons [shadingLastBody $doc /ShadingType]
+  $doc shading tensor -patches [list [list points [shadingSquare 1] \
+      colors {red green blue yellow}]]
+  set tensor [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [regexp {/ShadingType 6} $coons] [shadingEntry $coons Length] \
+      [regexp {/BitsPerFlag 8} $coons] \
+      [regexp {/ShadingType 7} $tensor] [shadingEntry $tensor Length] \
+      [shadingEntry $tensor Decode]
+} -result {1 {/Length 61} 1 1 {/Length 77} {/Decode [20 180 20 180 0 1 0 1 0 1]}}
+
+test shading-13.2 {the corner colours sit at the corners of the patch} \
+    -constraints havePdftoppm -body {
+  # The colours belong to control points 1, 4, 7 and 10 - the corners the
+  # boundary passes through, in the order it passes them (Figure 46). Written
+  # in the wrong order they land on the wrong corners, which no validator
+  # sees. Measured 2026-08-24, poppler 25.x at 72 dpi: the middle is the
+  # average of the four, {128 96 64}.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading coons -patches [list [list points [shadingSquare] \
+      colors {red green blue yellow}]]
+  set path [::tclpdfTest::scratch shading-coons.pdf]
+  $doc write $path
+  $doc destroy
+  set pixels [shadingPixels $path {{23 23} {23 177} {177 177} {177 23} {100 100}}]
+  file delete $path
+  lassign $pixels red green blue yellow middle
+  list [shadingNear $red {251 6 0}] [shadingNear $green {4 124 4}] \
+      [shadingNear $blue {4 6 247}] [shadingNear $yellow {251 247 4}] \
+      [shadingNear $middle {128 96 64} 20]
+} -result {ok ok ok ok ok}
+
+test shading-13.3 {what a patch mesh refuses} -body {
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc page add
+  set objects [[$doc writer] count]
+  set colours {red green blue yellow}
+  set codes {}
+  foreach {kind patches pattern} [list \
+      coons {} {*needs -patches*} \
+      coons [list [list points [lrange [shadingSquare] 0 10] colors $colours]] \
+          {*patch 0 of shading coons has 11 control points and a coons patch has 12*} \
+      tensor [list [list points [shadingSquare] colors $colours]] \
+          {*patch 0 of shading tensor has 12 control points and a tensor patch has 16*} \
+      coons [list [list points [shadingSquare] colors {red green blue}]] \
+          {*patch 0 of shading coons has 3 colours*one per corner, four in all*} \
+      coons [list [list points [shadingSquare] color $colours]] \
+          {*unknown patch key "color"*} \
+      coons [list [list points [shadingSquare]]] \
+          {*patch 0 of shading coons has no "colors"*} \
+      coons [list [list points [lreplace [shadingSquare] 0 0 {20 20 20}] colors $colours]] \
+          {*control point 0 of patch 0 of shading coons is a point {x y}*} \
+      coons [list [list points [lreplace [shadingSquare] 1 1 {x 73}] colors $colours]] \
+          {*the x of control point 1 of patch 0 of shading coons is a number*} \
+      coons [list [list points [shadingSquare] colors {red green blue {cmyk 0 1 1 0}}]] \
+          {*one*colour space*}] {
+    lappend codes [catch {$doc shading $kind -patches $patches} message]
+    lappend codes [string match $pattern $message]
+  }
+  set result [list $codes [::tclpdfTest::content $doc] [$doc colourSpacesUsed] \
+      [expr {[[$doc writer] count] - $objects}]]
+  $doc destroy
+  set result
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} {} 0}
+
+# -- 14. what the four stream types share -----------------------------------
+
+test shading-14.1 {Decode is the bounding box of the mesh, and never empty} -body {
+  # The integers in the stream are spread over the range /Decode names, so a
+  # mesh two points wide inside an A4 Decode would quantise to a handful of
+  # positions - which is why the box comes from the points that are there.
+  # A mesh on a straight line has no extent across it, and two equal Decode
+  # numbers collapse every coordinate on that axis onto one: the file is
+  # valid and the page is empty.
+  set doc [tclpdf new -unit pt -format {600 600} -compress 0]
+  $doc page add
+  $doc shading triangles -vertices {{10 590 red} {30 590 green} {20 570 blue}}
+  set small [shadingLastBody $doc /ShadingType]
+  $doc shading triangles -vertices {{10 590 red} {20 590 green} {30 590 blue}}
+  set flat [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingEntry $small Decode] [shadingEntry $flat Decode]
+} -result {{/Decode [10 30 10 30 0 1 0 1 0 1]} {/Decode [10 30 10 11 0 1 0 1 0 1]}}
+
+test shading-14.2 {one colour space over the whole mesh, and grey is promoted} -body {
+  # The same rule the stops of a gradient follow, and it has to be the same
+  # one: the dictionary names the space ONCE. A grey corner among coloured
+  # ones is promoted rather than refused - three components per vertex then,
+  # which is what the /Length says.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading triangles -vertices {{20 180 white} {180 180 steelblue} {100 20 black}}
+  set promoted [shadingLastBody $doc /ShadingType]
+  $doc shading triangles -vertices {{20 180 white} {180 180 black} {100 20 gray}}
+  set grey [shadingLastBody $doc /ShadingType]
+  $doc shading triangles -vertices {
+      {20 180 {cmyk 1 0 0 0}} {180 180 {cmyk 0 1 0 0}} {100 20 white}}
+  set cmyk [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [regexp {/ColorSpace /DeviceRGB} $promoted] [shadingEntry $promoted Length] \
+      [regexp {/ColorSpace /DeviceGray} $grey] [shadingEntry $grey Length] \
+      [regexp {/ColorSpace /DeviceCMYK} $cmyk] [shadingEntry $cmyk Length]
+} -result {1 {/Length 24} 1 {/Length 18} 1 {/Length 27}}
+
+test shading-14.3 {a mesh bounds itself, and a rectangle still clips it} -body {
+  # [sh] floods the clip for a gradient, which is why -at and -size are
+  # required there. A mesh paints only its own triangles, so the rectangle is
+  # optional - and where it is given it is a clip like any other.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading triangles -vertices {{20 180 red} {180 180 green} {100 20 blue}}
+  set free [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading triangles -at {50 50} -size {100 100} \
+      -vertices {{20 180 red} {180 180 green} {100 20 blue}}
+  set clipped [::tclpdfTest::content $doc]
+  set half [catch {$doc shading triangles -at {50 50} \
+      -vertices {{20 180 red} {180 180 green} {100 20 blue}}} message]
+  set gradient [catch {$doc shading axial -colors {red blue}} second]
+  $doc destroy
+  list [regexp {re W n} $free] [regexp {sh} $free] [regexp {re W n} $clipped] \
+      $half [string match {*shading triangles needs -at {x y} and -size {w h}*} $message] \
+      $gradient [string match {*shading axial needs -at {x y} and -size {w h}*} $second]
+} -result {0 1 1 1 1 1 1}
+
+test shading-14.4 {the stream is deflated when the document compresses} -body {
+  # A mesh of any size is the one shading whose bulk is data rather than
+  # dictionary, and it goes through the same [streamObject] every content
+  # stream does - so it follows -compress instead of having an idea of its
+  # own.
+  set vertices {}
+  for {set index 0} {$index < 60} {incr index} {
+    lappend vertices [list [expr {10 + $index}] [expr {20 + $index % 7}] red]
+  }
+  set sizes {}
+  foreach compress {0 1} {
+    set doc [tclpdf new -unit pt -format {200 200} -compress $compress]
+    $doc page add
+    $doc shading lattice -perRow 3 -vertices $vertices
+    set body [shadingLastBody $doc /ShadingType]
+    $doc destroy
+    lappend sizes [regexp {/FlateDecode} $body] \
+        [lindex [regexp -inline {/Length (\d+)} $body] 1]
+  }
+  lassign $sizes plainFilter plainLength flateFilter flateLength
+  list $plainFilter $plainLength $flateFilter [expr {$flateLength < $plainLength}]
+} -result {0 420 1 1}
+
+test shading-14.5 {a mesh can be a pattern, and fills any shape} -body {
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading pattern hill coons -patches [list [list points [shadingSquare] \
+      colors {red green blue yellow}]]
+  $doc circle -at {100 100} -radius 70 -fill {pattern hill}
+  set content [::tclpdfTest::content $doc]
+  set names [$doc shading names]
+  set path [::tclpdfTest::scratch shading-mesh-pattern.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list $names [regexp {/PatternType 2} $bytes] [regexp {/ShadingType 6} $bytes] \
+      [regexp {/Pattern cs} $content] [regexp {/Sp1 scn} $content]
+} -result {hill 1 1 1 1}
+
+test shading-14.6 {the colour space of a mesh is on record like a painted one} -body {
+  # ISO 19005-2, 6.2.4.3 judges a shading's space like a fill's, and pdfa
+  # holds the record against the output intent when the file is written - so
+  # a mesh has to be in it, under the call that made it.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading triangles -vertices {{20 180 red} {180 180 green} {100 20 blue}}
+  $doc shading pattern p tensor -patches [list [list points [shadingSquare 1] \
+      colors {{cmyk 1 0 0 0} {cmyk 0 1 0 0} {cmyk 0 0 1 0} {cmyk 0 0 0 1}}]]
+  set used [$doc colourSpacesUsed]
+  $doc destroy
+  list [dict get $used DeviceRGB users] [dict get $used DeviceCMYK users]
+} -result {{{shading triangles on page 1}} {{shading pattern "p" on page 1}}}
+
+test shading-14.7 {an unknown kind names the seven} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set direct [catch {$doc shading spiral -at {0 0} -size {10 10}} first]
+  set pattern [catch {$doc shading pattern p spiral -at {0 0} -size {10 10}} second]
+  set code {}
+  catch {$doc shading spiral} - options
+  set code [dict get $options -errorcode]
+  $doc destroy
+  list $direct [string match {*axial, radial, function, triangles, lattice, coons, tensor, pattern, names*} $first] \
+      $pattern [string match {*axial, radial, function, triangles, lattice, coons, tensor*} $second] \
+      $code
+} -result {1 1 1 1 {TCLPDF SHADING KIND spiral}}
+
+test shading-14.8 {each kind takes its own options and refuses the others} -body {
+  # One dictionary of every option there is would accept -perRow on a
+  # gradient and -angle on a mesh, write neither, and say nothing.
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  set codes {}
+  foreach {call pattern} {
+    {axial -at {0 0} -size {10 10} -colors {red blue} -perRow 2} {*unknown option "-perRow" for shading axial*}
+    {triangles -angle 90 -vertices {{1 1 red} {2 2 green} {3 3 blue}}} {*unknown option "-angle" for shading triangles*}
+    {lattice -perRow 2 -stops {0 1} -vertices {{1 1 red} {2 2 green} {3 3 blue} {4 4 red}}} {*unknown option "-stops" for shading lattice*}
+    {function -at {0 0} -size {10 10} -space rgb -expression {pop 0 0.5} -extend {1 1}} {*unknown option "-extend" for shading function*}
+    {coons -vertices {}} {*unknown option "-vertices" for shading coons*}
+  } {
+    lappend codes [catch {$doc shading {*}$call} message]
+    lappend codes [string match $pattern $message]
+  }
+  $doc destroy
+  set codes
+} -result {1 1 1 1 1 1 1 1 1 1}
+
+test shading-14.9 {a refused mesh does not pin the version floor, an accepted one does} -body {
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  set refused [catch {$doc shading lattice -perRow 5 \
+      -vertices {{1 1 red} {2 2 green} {3 3 blue}}}]
+  set lowered [catch {$doc configure -version 1.2}]
+  $doc destroy
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc shading triangles -vertices {{1 1 red} {2 2 green} {3 3 blue}}
+  set pinned [catch {$doc configure -version 1.2} message]
+  $doc destroy
+  list $refused $lowered $pinned [string match {*shading*needs PDF 1.3*} $message]
+} -result {1 0 1 1}
+
+test shading-14.10 {a mesh under -matrix reads its points as they stand} -body {
+  # The rule of [ShadingCoords] for types 2 and 3, and it has to be the same
+  # one: with a matrix the caller has said which space the numbers are in, and
+  # putting them through [coords] as well applies the transform twice. Read
+  # off the Decode, which is the bounding box in whatever space that is: on a
+  # 200 pt page the mirrored y of 20..180 is 20..180 again, so the test uses
+  # a rectangle that is not symmetric.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading triangles -vertices {{20 40 red} {180 40 green} {100 100 blue}}
+  set mapped [shadingLastBody $doc /ShadingType]
+  $doc shading pattern raw triangles -matrix {1 0 0 1 0 0} \
+      -vertices {{20 40 red} {180 40 green} {100 100 blue}}
+  set raw [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingEntry $mapped Decode] [shadingEntry $raw Decode]
+} -result {{/Decode [20 180 100 160 0 1 0 1 0 1]} {/Decode [20 180 40 100 0 1 0 1 0 1]}}
+
+# The raw bytes of a stream object's data, as hexadecimal. Read out of the
+# body rather than out of the file: with -compress 0 what the writer holds is
+# what goes into the file, and a regexp would have to be told that the data is
+# binary and may hold anything at all, "endstream" included - so the fences
+# are found by position, from the front and from the back.
+proc shadingStreamHex {body} {
+  set start [expr {[string first "stream\n" $body] + 7}]
+  set end [expr {[string last "\nendstream" $body] - 1}]
+  binary scan [string range $body $start $end] H* hex
+  return $hex
+}
+
+test shading-14.11 {the packing, byte for byte} -body {
+  # The one test that pins the encoding itself rather than what a renderer
+  # makes of it, and it is needed: a coordinate written little endian, or the
+  # colours packed before the points, still draws a mesh. Measured against
+  # the PIXELS both survive a lattice and a patch - a vertex at a corner of
+  # the bounding box encodes to 0000 or ffff, and those two are the same
+  # either way round.
+  #
+  # A triangle on a 200 pt page, {20 180} {180 180} {100 20} in document
+  # coordinates, so {20 20} {180 20} {100 180} after the y mirror. The
+  # bounding box is 20..180 on both axes, which is what /Decode says, so two
+  # corners encode to 0000 and ffff and the middle one to 8000 - the value a
+  # byte swap moves. Every record is the flag, then x and y big endian, then
+  # one byte per colour component: red ff0000, "green" 008000 as the name
+  # list has it, blue 0000ff.
+  #
+  # The lattice below is the same encoding without the flag byte, and its
+  # white corner is a grey promoted to RGB - ffffff rather than one ff.
+  #
+  # [MeshStream] is shared by all four stream types, so this pins the packing
+  # of every one of them; what the others add is a field, and their /Length
+  # says whether it is there.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading triangles -vertices {{20 180 red} {180 180 green} {100 20 blue}}
+  set triangle [shadingLastBody $doc /ShadingType]
+  $doc shading lattice -perRow 2 -vertices {
+    {20 180 red} {180 180 green} {20 20 blue} {180 20 white}}
+  set lattice [shadingLastBody $doc /ShadingType]
+  $doc destroy
+  list [shadingStreamHex $triangle] [shadingStreamHex $lattice]
+} -result {0000000000ff000000ffff0000008000008000ffff0000ff 00000000ff0000ffff00000080000000ffff0000ffffffffffffffff}
+
+test shading-14.12 {a shading refused over the version records no colour space} -body {
+  # The record is what pdfa holds against the output intent when the file is
+  # written, and it names the CALL - so a call that was refused must not be in
+  # it, or a document whose only RGB was a shading the version threw out is
+  # refused at the write for a colour that never reached the page. The version
+  # is therefore the last thing asked, after every value and before the
+  # record: the two lines are one line apart and swapping them says nothing.
+  set wrong {}
+  foreach call {
+    {triangles -vertices {{20 180 red} {180 180 green} {100 20 blue}}}
+    {lattice -perRow 2 -vertices {{20 20 red} {180 20 green} {20 180 blue} {180 180 red}}}
+    {function -at {0 0} -size {50 50} -space rgb -expression {pop 0 0.5}}
+    {axial -at {0 0} -size {50 50} -colors {red blue}}
+  } {
+    set doc [tclpdf new -unit pt -format {200 200} -version 1.2]
+    $doc page add
+    set objects [[$doc writer] count]
+    set code [catch {$doc shading {*}$call} message]
+    set left [list $code [string match {*needs PDF 1.3*} $message] \
+        [$doc colourSpacesUsed] [expr {[[$doc writer] count] - $objects}] \
+        [::tclpdfTest::content $doc]]
+    $doc destroy
+    if {$left ne {1 1 {} 0 {}}} {
+      lappend wrong [list $call $left]
+    }
+  }
+  set wrong
+} -result {}
 
 cleanupTests

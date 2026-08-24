@@ -47,7 +47,11 @@
 # up: [operator] gets nothing but the colour and has to name the same
 # resource that [LabColourUsed] registered. The default space is "Lab", any
 # other one "Lab" and eight hexadecimal digits over its parameters - which is
-# why neither a separation nor an ICC alias may take those names.
+# why neither a separation nor an ICC alias may take those names. A DeviceN
+# space is named the same way for the same reason - "DeviceN" and eight
+# hexadecimal digits over its colourants - and its names are reserved
+# likewise; how a DeviceN colour is spelled, and what its tint transform
+# computes, is argued where the space is built, further down.
 #
 
 package require Tcl 8.6.11-
@@ -55,6 +59,7 @@ package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::option 1.0-
+package require tclpdf::pdfFunction 1.0-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::color {
@@ -149,6 +154,7 @@ namespace eval ::tclpdf::color {
 #   {rgb 1 0 0}
 #   {cmyk 0 1 1 0}
 #   {separation Name alternateSpace tint}
+#   {devicen {{Name colour} ...} {tint ...}}
 #   {icc alias components...}
 #   {lab 53.2 80.1 67.2}  and the space's own -whitePoint / -range
 #
@@ -224,6 +230,18 @@ proc ::tclpdf::color::parse {spec} {
       }
       return [list separation [list $separationName $parsedAlternate [Clamp $tint]]]
     }
+    devicen {
+      # {devicen {{Name colour} ...} ?{tint ...}?} - several named colourants
+      # painted at once (8.6.6.5). A colourant is written the way a
+      # separation is: the name of the plate and the colour that plate
+      # paints at full tint. That is deliberate and not a second spelling -
+      # a DeviceN space IS a row of separations, 8.6.6.5 says so itself
+      # ("a Separation colour space can be defined as a DeviceN colour space
+      # with only one component"), and the same words in the same order mean
+      # the same thing here. The tints follow in the order of the names,
+      # which is the order scn takes them in, and default to full ink.
+      return [list devicen [DeviceNColour [lrange $spec 1 end]]]
+    }
     pattern {
       # {pattern Name} - a tiling or shading pattern standing in for a
       # colour (8.7.3.1). The name is the RESOURCE name; translating a
@@ -296,13 +314,19 @@ proc ::tclpdf::color::operator {parsed {which fill}} {
       }
       return "$prefix\n[::tclpdf::pdfObj num $tint] $code"
     }
-    icc - lab {
+    icc - lab - devicen {
       # Like a separation: a resource entry [ColourUsed] provides, followed
       # by the components in that space. The entry is named by the caller
       # for a profile - the alias - and derived from the space's own
-      # parameters for Lab, because [operator] is handed the colour and
-      # nothing else and still has to hit the name that was registered.
-      set entry [expr {$space eq "icc" ? [lindex $values 0] : [labResource $values]}]
+      # parameters for Lab and for DeviceN, because [operator] is handed the
+      # colour and nothing else and still has to hit the name that was
+      # registered. A DeviceN colour puts one tint per colourant there, in
+      # the order of the names (8.6.6.5).
+      set entry [switch -- $space {
+        icc {lindex $values 0}
+        lab {labResource $values}
+        devicen {devicenResource $values}
+      }]
       set marker [expr {$which eq "stroke" ? "CS" : "cs"}]
       set code [expr {$which eq "stroke" ? "SCN" : "scn"}]
       return "[::tclpdf::pdfObj name $entry] $marker\n$numbers $code"
@@ -356,12 +380,11 @@ oo::define ::tclpdf::document::document {
   # A pattern is not a colour and carries no space of its own; whatever its
   # tile or shading paints was recorded when the pattern was made.
   #
-  # The separation object is [/Separation /Name alternate tintTransform]: the
-  # alternate is the device space of the colour given, the transform a type
-  # 2 function from tint 0 to tint 1. Tint 0 is NO ink - and what "no ink"
-  # looks like depends on the alternate: 0 0 0 0 in CMYK, but 1 1 1 in RGB
-  # and 1 in grey, because those two count light, not ink. Get that wrong and
-  # a light tint of a varnish comes out as a dark grey.
+  # The four spaces that need an object of their own - ICCBased, Lab,
+  # Separation and DeviceN - are answered by a method apiece below. What they
+  # have in common is the order: everything that can be refused is refused
+  # before the first record, the version floor and the first object, so that
+  # a rejected colour leaves the document exactly as it was.
   method ColourUsed {spec what} {
     set parsed [::tclpdf::color parse $spec]
     if {[lindex $parsed 0] eq "pattern"} {
@@ -373,39 +396,15 @@ oo::define ::tclpdf::document::document {
     if {[lindex $parsed 0] eq "lab"} {
       return [my LabColourUsed $parsed $what $spec]
     }
+    if {[lindex $parsed 0] eq "devicen"} {
+      return [my DeviceNColourUsed $parsed $what $spec]
+    }
     if {[lindex $parsed 0] ne "separation"} {
       my ColourSpaceUsed [::tclpdf::color space $parsed] $what
       return $spec
     }
     lassign [lindex $parsed 1] name alternate tint
-    # Some names never refer to the ColorSpace resources (8.6.8, cs): a
-    # separation called Pattern would write "/Pattern cs" and mean the
-    # pattern space, silently, and one called Lab would take the entry a Lab
-    # colour paints through.
-    if {[set why [::tclpdf::color::Reserved $name]] ne {}} {
-      return -code error "tclpdf: \"$name\" cannot be the name of a\
-          separation - $why"
-    }
-    # Separations and ICC profiles share the ColorSpace resource dictionary,
-    # so one name cannot be both - the second definition would silently
-    # shadow the first in every "cs" that follows. The mirror check sits in
-    # [IccEmbed].
-    if {[dict exists [my state iccProfiles] $name]} {
-      return -code error "tclpdf: \"$name\" already names an ICC profile -\
-          a separation cannot reuse it"
-    }
-    lassign $alternate space components
-    set known [my state separations]
-    # One name, one plate: the same name with another alternate would be
-    # a second object under the first one's resource entry, and PDF/A-2
-    # 6.2.4.4 forbids two definitions of one separation outright. Checked
-    # before anything is recorded: a refused redefinition must leave no
-    # record and no version floor.
-    if {[dict exists $known $name] && [dict get $known $name] ne $alternate} {
-      return -code error "tclpdf: separation \"$name\" is already defined\
-          with the alternate {[join [dict get $known $name]]} - one name,\
-          one alternate colour"
-    }
+    my SeparationCheck $name $alternate separation
     # The Separation colour space is PDF 1.2 (Reference 1.7, Table 4.12) -
     # past the last refusal, before the record and the objects, the same
     # order as [IccColourUsed] below.
@@ -416,44 +415,243 @@ oo::define ::tclpdf::document::document {
     # wrote and has to change. A Lab alternate is an ARRAY rather than a
     # family name, so the record is named here; [space] refuses it on
     # purpose, see there.
-    my ColourSpaceUsed [expr {$space eq "lab" ? "Lab" :
+    my ColourSpaceUsed [expr {[lindex $alternate 0] eq "lab" ? "Lab" :
         [::tclpdf::color space $alternate]}] "separation \"$name\" in $what"
-    if {[dict exists $known $name]} {
-      return $spec
+    # Under the separation's own name: that is what [operator] writes after
+    # "cs", and the resource dictionary escapes it the same way. Set on every
+    # colour of the space rather than only on the first, like [LabColourUsed]
+    # does - it is the same reference each time, and one lookup less to keep
+    # in step.
+    my resource ColorSpace $name \
+        [[my writer] ref [my SeparationObject $name $alternate]]
+    return $spec
+  }
+
+  # -- one colourant: the checks, and the object (8.6.6.4) ----------------
+  #
+  # Split off from [ColourUsed] when DeviceN arrived, because a DeviceN
+  # colourant is a separation in every respect that matters here: it takes a
+  # name out of the same namespace, it may not contradict a separation of the
+  # same name, and 8.6.6.5 asks for its Separation array in the /Colorants
+  # attribute. Two copies of these three refusals is how the two would drift
+  # apart. "noun" is the word the message uses - "separation" or "colourant" -
+  # because a caller who wrote a DeviceN colour is not helped by a message
+  # about separations.
+
+  # Everything that can be refused about one colourant. Nothing is recorded
+  # and nothing is written here: a refused colour must leave no state, no
+  # object and no version floor.
+  method SeparationCheck {name alternate noun} {
+    # Some names never refer to the ColorSpace resources (8.6.8, cs): a
+    # separation called Pattern would write "/Pattern cs" and mean the
+    # pattern space, silently, and one called Lab would take the entry a Lab
+    # colour paints through.
+    if {[set why [::tclpdf::color::Reserved $name]] ne {}} {
+      return -code error \
+          -errorcode [list TCLPDF COLOUR COLOURANT RESERVED $name] \
+          "tclpdf: \"$name\" cannot be the name of a $noun - $why"
     }
-    # The tint transform, and the alternate as it stands in the Separation
-    # array. A Lab alternate differs in three ways and in no other: tint 0 is
-    # L* 100 - paper, not ink, and not the {0 0 0} that would print a light
-    # tint of a spot colour black; the alternate is an object, shared with
-    # any Lab colour of the same space; and the function says its /Range,
-    # because Lab values leave 0..1 and a reader clipping to the function's
-    # implicit range would flatten the colour.
-    set pairs [list FunctionType 2 Domain [::tclpdf::pdfObj arr {0 1}]]
+    # Separations and ICC profiles share the ColorSpace resource dictionary,
+    # so one name cannot be both - the second definition would silently
+    # shadow the first in every "cs" that follows. The mirror check sits in
+    # [IccEmbed].
+    if {[dict exists [my state iccProfiles] $name]} {
+      return -code error \
+          -errorcode [list TCLPDF COLOUR COLOURANT ICC $name] \
+          "tclpdf: \"$name\" already names an ICC profile - a $noun cannot\
+          reuse it"
+    }
+    # One name, one plate: the same name with another alternate would be
+    # a second object under the first one's resource entry, and PDF/A-2
+    # 6.2.4.4 forbids two definitions of one separation outright. It holds
+    # ACROSS the two spaces, which is why both go through here: a DeviceN
+    # colourant called Gold and a separation called Gold are the same plate,
+    # and the /Colorants dictionary of the one would contradict the other.
+    set known [my state separations]
+    if {[dict exists $known $name] && [dict get $known $name] ne $alternate} {
+      return -code error \
+          -errorcode [list TCLPDF COLOUR COLOURANT ALTERNATE $name] \
+          "tclpdf: $noun \"$name\" is already defined with the alternate\
+          {[join [dict get $known $name]]} - one name, one alternate colour"
+    }
+    return
+  }
+
+  # The [/Separation /Name alternate tintTransform] object of one colourant,
+  # written ONCE per document however many roads it arrives by - a painted
+  # spot colour and the /Colorants entry of any number of DeviceN spaces.
+  # The caller adds the resource entry if the colour is painted through the
+  # name; a DeviceN colourant does not, because nothing writes "/Gold cs" for
+  # it.
+  #
+  # The tint transform is a type 2 exponential from tint 0 to tint 1. Tint 0
+  # is NO ink - and what "no ink" looks like depends on the alternate: 0 0 0 0
+  # in CMYK, but 1 1 1 in RGB and 1 in grey, because those two count light,
+  # not ink. Get that wrong and a light tint of a varnish comes out as a dark
+  # grey. A Lab alternate differs in three ways and in no other: tint 0 is
+  # L* 100 - paper, not ink, and not the {0 0 0} that would print a light
+  # tint of a spot colour black; the alternate is an object, shared with any
+  # Lab colour of the same space; and the function says its /Range, because
+  # Lab values leave 0..1 and a reader clipping to the function's implicit
+  # range would flatten the colour.
+  method SeparationObject {name alternate} {
+    set objects [my state separationObjects]
+    if {[dict exists $objects $name]} {
+      return [dict get $objects $name]
+    }
+    lassign $alternate space components
+    set functionRange {}
     if {$space eq "lab"} {
       lassign $components values whitePoint range
       set none {100 0 0}
       set alternateSpace [[my writer] ref [my LabSpaceObject $whitePoint $range]]
-      set tail [list N 1 Range [::tclpdf::pdfObj arr \
-          [lmap value [list 0 100 {*}$range] {::tclpdf::pdfObj num $value}]]]
+      set functionRange [list 0 100 {*}$range]
     } else {
       set none [dict get {gray 1 rgb {1 1 1} cmyk {0 0 0 0}} $space]
       set values $components
       set alternateSpace /[::tclpdf::color space $alternate]
-      set tail {N 1}
     }
-    lappend pairs C0 [::tclpdf::pdfObj arr $none] \
-        C1 [::tclpdf::pdfObj arr [lmap value $values {::tclpdf::pdfObj num $value}]] \
-        {*}$tail
-    set function [[my writer] add [::tclpdf::pdfObj dictionary $pairs]]
+    set function [my FunctionExponential $none $values $functionRange]
     set object [[my writer] add [::tclpdf::pdfObj arr [list /Separation \
         [::tclpdf::pdfObj name $name] $alternateSpace \
         [[my writer] ref $function]]]]
-    # Under the separation's own name: that is what [operator] writes after
-    # "cs", and the resource dictionary escapes it the same way.
-    my resource ColorSpace $name [[my writer] ref $object]
+    dict set objects $name $object
+    my state separationObjects $objects
+    set known [my state separations]
     dict set known $name $alternate
     my state separations $known
+    return $object
+  }
+
+  # -- DeviceN colour spaces (8.6.6.5) ------------------------------------
+  #
+  # The worker behind a {devicen ...} colour in [ColourUsed]: check, record,
+  # and write the objects once. What is refused about the colour ITSELF - the
+  # names, the counts, the alternate - is refused in [parse] before this is
+  # reached; what is refused here is what only the document knows, and it is
+  # the same three questions a separation answers, asked of every colourant.
+  #
+  # -- the attributes dictionary, and what goes in it ---------------------
+  #
+  # /Attributes is optional (Table 70), and everything in it is optional
+  # unless /Subtype is /NChannel. What this writer puts there is /Subtype
+  # /DeviceN and /Colorants, and nothing else:
+  #
+  #   /Subtype /DeviceN   the default, written out. It is the claim that this
+  #                       dictionary is NOT the NChannel contract - under
+  #                       /NChannel a reader may expect /Colorants to hold
+  #                       every spot colourant and /Process to describe the
+  #                       process ones, and both become required. Saying
+  #                       which of the two contracts a dictionary is under
+  #                       costs one name.
+  #   /Colorants          the one thing the tint transform cannot say. "The
+  #                       alternate colour space and tint transformation
+  #                       function of a Separation colour space describe the
+  #                       appearance of that colourant ALONE, whereas those
+  #                       of a DeviceN colour space describe only the
+  #                       appearance of its colourants IN COMBINATION"
+  #                       (8.6.6.5). This package is handed each colourant's
+  #                       own colour - that is how a DeviceN colour is
+  #                       spelled here - so the information exists and is
+  #                       written rather than thrown away; the arrays are the
+  #                       very objects a separation of the same name uses.
+  #
+  # And /Colorants is not the courtesy it looks like: under PDF/A it is
+  # REQUIRED. ISO 19005-2/-3 6.2.4.4 - "For any spot colour used in a DeviceN
+  # or NChannel colour space, an entry in the Colorants dictionary shall be
+  # present" - measured 2026-08-24 with veraPDF 1.30.2, which fails the same
+  # document 6.2.4.4-1 the moment the dictionary is left out, with
+  # "A colorant of the DeviceN or NChannel color space is not defined in the
+  # Colorants dictionary". A None component needs no entry, and gets none:
+  # the same file passes 3B with a None colourant in the names array. So a
+  # writer that only wrote the four-element array would produce DeviceN
+  # colours that are legal PDF and no legal PDF/A - and this package writes
+  # PDF/A.
+  #
+  # NOT written: /Process, which is required only under /NChannel and would
+  # need the process components to stand in colour space order in the names
+  # array; and /MixingHints, whose /Solidities and /DotGain are measured ink
+  # behaviour this package has no source for, and whose /PrintingOrder
+  # becomes required the moment /Solidities appears.
+  #
+  # The price is a version floor: every entry of Table 70 is marked PDF 1.6,
+  # so a DeviceN colour written by this package needs a 1.6 document although
+  # the space itself is 1.3. Said at the call, with the number to raise the
+  # document to, rather than by quietly dropping the dictionary in an older
+  # file - what a reader gets would then depend on the order in which the
+  # script set the version, and in a PDF/A document the file it got would be
+  # invalid.
+  method DeviceNColourUsed {parsed what spec} {
+    lassign [lindex $parsed 1] colourants tints space
+    set names [lmap colourant $colourants {lindex $colourant 0}]
+    foreach colourant $colourants {
+      lassign $colourant name alternate
+      # None names no plate and gets no entry anywhere: it is never painted,
+      # it may repeat, and it cannot collide with anything.
+      if {$name eq "None"} {
+        continue
+      }
+      my SeparationCheck $name $alternate colourant
+    }
+    my RequireVersion 1.6 "a DeviceN colour with its attributes dictionary"
+    # The alternate is what a reader without the plates paints, so it counts
+    # as a use of that space (ISO 19005-2, 6.2.4.4) - the same record a
+    # separation leaves, and the reason the output intent check in pdfa.tcl
+    # judges a DeviceN colour without knowing that DeviceN exists: a CMYK
+    # alternate under a grey intent is refused because DeviceCMYK is in the
+    # record, named by the colourants the caller has to change.
+    my ColourSpaceUsed [::tclpdf::color space [list $space]] \
+        "devicen {[join $names { }]} in $what"
+    set entry [::tclpdf::color devicenResource [lindex $parsed 1]]
+    set known [my state devicenSpaces]
+    if {![dict exists $known $entry]} {
+      dict set known $entry [my DeviceNSpaceObject $colourants $space]
+      my state devicenSpaces $known
+    }
+    # Under the derived name, for the reason [labResource] gives: [operator]
+    # is handed the colour and no document, and still has to name the entry
+    # that was registered here.
+    my resource ColorSpace $entry [[my writer] ref [dict get $known $entry]]
     return $spec
+  }
+
+  # The colour space array [/DeviceN names alternate tintTransform
+  # attributes] and the two objects under it, written once per space.
+  method DeviceNSpaceObject {colourants space} {
+    set names {}
+    set colorants {}
+    foreach colourant $colourants {
+      lassign $colourant name alternate
+      lappend names [::tclpdf::pdfObj name $name]
+      if {$name eq "None"} {
+        continue
+      }
+      lappend colorants $name \
+          [[my writer] ref [my SeparationObject $name $alternate]]
+    }
+    # The transform is generated and READ BACK before it is written: the code
+    # comes out of this package rather than out of a script, and the failure
+    # mode of a wrong token in it is the worst one here - a valid PDF whose
+    # spot colours paint nothing at all, which qpdf and veraPDF both pass.
+    # See [checkCalculator] in pdfFunction.tcl.
+    #
+    # A type 4 function is a STREAM, so it is deflated with everything else.
+    # /Range is not decoration: it is required for a type 4 function
+    # (Table 38), and it is what clips the sum of two solid inks back to 1.
+    set components [dict get {gray 1 rgb 3 cmyk 4} $space]
+    set code [::tclpdf::pdfFunction checkCalculator \
+        [::tclpdf::color devicenFunction $space $colourants] \
+        "the tint transform generated for a DeviceN colour space" \
+        [list TCLPDF COLOUR DEVICEN FUNCTION]]
+    set function [my FunctionCalculator \
+        [::tclpdf::pdfFunction unitRange [llength $colourants]] \
+        [::tclpdf::pdfFunction unitRange $components] $code]
+    return [[my writer] add [::tclpdf::pdfObj arr [list /DeviceN \
+        [::tclpdf::pdfObj arr $names] \
+        /[::tclpdf::color space [list $space]] \
+        [[my writer] ref $function] \
+        [::tclpdf::pdfObj dictionary [list Subtype /DeviceN \
+            Colorants [::tclpdf::pdfObj dictionary $colorants]]]]]]
   }
 
   # -- ICC based colour spaces (8.6.5.5) ----------------------------------
@@ -728,6 +926,17 @@ proc ::tclpdf::color::space {parsed} {
     cmyk {return DeviceCMYK}
     separation {return Separation}
     pattern {return Pattern}
+    devicen {
+      # Same answer as ICCBased and Lab, and the same reason: a DeviceN
+      # space is the array [/DeviceN [...] alternate function attributes]
+      # (8.6.6.5), not a family name, so it cannot stand where a name is
+      # written. A gradient in a DeviceN space would be legal by 8.7.4.5 and
+      # is not built: the shading dictionary would have to carry the space
+      # itself and its stops one tint per colourant.
+      return -code error "tclpdf: a DeviceN colour cannot stand here - a\
+          gradient names its space by family, and a DeviceN space is an\
+          array (ISO 32000-2, 8.6.6.5); give the stops in grey, RGB or CMYK"
+    }
     icc {
       # An ICC colour has no family NAME that could stand in a resource or
       # a shading dictionary - its space is an object, written by
@@ -867,6 +1076,273 @@ proc ::tclpdf::color::Double {value option} {
   return [expr {double($value)}]
 }
 
+# -- DeviceN: n colourants and one function of n values (8.6.6.5) ------------
+#
+# A DeviceN colour names n colourants and paints a tint of each; the space
+# carries ONE function that turns those n tints into the alternate space.
+# That function is the whole difference to a separation, and it is the reason
+# this is not "a separation with several names": 8.6.6.4 needs a transform of
+# one value, which is the type 2 exponential [SeparationObject] writes, and
+# 8.6.6.5 needs one of n values ("It shall be called with n tint values and
+# returns m colour component values").
+#
+# Type 2 and type 3 are one-input BY DEFINITION - "an exponential
+# interpolation of one input value and n output values" (7.10.3), "a
+# stitching of the subdomains of several 1-input functions" (7.10.4) - so
+# neither can be stretched. The missing function type is the work, and it is
+# type 4, the PostScript calculator (7.10.5), which the standard itself
+# points at for exactly this case: "a tint transformation function for a
+# hexachrome (six-component) DeviceN colour space with an alternative colour
+# space of DeviceCMYK requires a 6-in, 4-out function. If such a function
+# were sampled with m values for each input variable, the number of samples,
+# 4 x m^6, could be prohibitively large" (7.10.5.1, NOTE 1). Type 0, the
+# sampled function, is the other way in and is the one that note advises
+# against; it is not written here.
+#
+# -- what the function computes, and why ------------------------------------
+#
+# Every colourant arrives the way a separation arrives: a name and the colour
+# it paints at FULL tint. What the transform has to answer is what n of them
+# look like TOGETHER, and that depends on what the alternate space counts:
+#
+#   cmyk   ink. Amounts add: out_j = sum_i (t_i * C_ij), and the /Range of
+#          the function clips the sum to 1 ("Output values outside the
+#          declared range shall be clipped", Table 38) - which is what a
+#          press does when two solids overprint.
+#   rgb    light, and grey with it. Transmittances multiply:
+#          out_j = prod_i (1 - t_i * (1 - C_ij)). All tints at 0 leave 1 -
+#          paper - and one colourant at full tint reproduces its own colour
+#          exactly. Adding here would be the classic fault: two half tints
+#          would come out LIGHTER than one.
+#
+# Both are exact at the corners a caller can check - no ink, and one plate
+# alone - and an approximation in between, which is all a tint transform ever
+# is (NOTE 3: "PDF processors can use their own blending algorithms").
+#
+# A Lab alternate is refused, and that is a deliberate cut. 8.6.6.5 admits it
+# ("any device or CIE-based colour space"), and [separation] takes it because
+# a spot colour is measured that way - but Lab is an APPEARANCE, and there is
+# no way to combine two appearances without a colour engine this package does
+# not have. Whatever such a function returned would be invented. The way out
+# is named in the refusal: give the colourants in CMYK, or paint each plate
+# on its own with {separation Name {lab ...} tint}.
+
+# The colourants, the tints and the alternate space of a DeviceN colour, out
+# of what the caller wrote after the keyword:
+#
+#   {{{Name parsedColour} ...} {tint ...} gray|rgb|cmyk}
+#
+# A None colourant carries the empty colour: it is never painted (8.6.6.5),
+# so it has nothing to paint, and it contributes nothing to the transform.
+proc ::tclpdf::color::DeviceNColour {arguments} {
+  if {[llength $arguments] > 2} {
+    return -code error -errorcode [list TCLPDF COLOUR DEVICEN SPEC] \
+        "tclpdf: a DeviceN colour is {devicen {{Name colour} ...} ?{tint\
+        ...}?} - the colourants in one word and the tints in one more, got\
+        [llength $arguments] words after the keyword: \"$arguments\""
+  }
+  lassign $arguments colourants tints
+  set count [llength $colourants]
+  if {$count == 0} {
+    return -code error -errorcode [list TCLPDF COLOUR DEVICEN EMPTY] \
+        "tclpdf: a DeviceN colour needs at least one colourant, each written\
+        as {Name colour} - and the colourant None as {None}"
+  }
+  # "The maximum number of entries in the names array ... may be subject to
+  # implementation limits" (8.6.6.5), and Annex C.2 names the number every
+  # reader was built for. Refused rather than written, for the reason a
+  # stacked TIFF above 256 strips is: a file no reader opens is worse than a
+  # call that says so.
+  if {$count > 32} {
+    return -code error -errorcode [list TCLPDF COLOUR DEVICEN COUNT $count] \
+        "tclpdf: $count colourants in one DeviceN colour space - 32 is the\
+        number readers are built for (ISO 32000-2, Annex C.2, \"Number of\
+        spot colours\"); use fewer plates, or several colour spaces"
+  }
+  set names {}
+  set parsed {}
+  set spaces {}
+  set painted 0
+  foreach colourant $colourants {
+    lassign $colourant name colour
+    if {[llength $colourant] > 2 || $name eq {}
+        || ([llength $colourant] != 2 && $name ne "None")} {
+      return -code error \
+          -errorcode [list TCLPDF COLOUR DEVICEN COLOURANT $colourant] \
+          "tclpdf: a colourant of a DeviceN colour is {Name colour} - the\
+          plate and what it paints at full tint - or {None} for the colourant\
+          that is never painted, not \"$colourant\""
+    }
+    # All and None are the two special colourants of 8.6.6.4, and DeviceN
+    # takes exactly one of them. "The special name All, used by Separation
+    # colour spaces, shall not be used" (8.6.6.5) - it means every plate at
+    # once, which cannot be one component among n. None may be repeated,
+    # where every other name may not.
+    if {$name eq "All"} {
+      return -code error -errorcode [list TCLPDF COLOUR DEVICEN ALL] \
+          "tclpdf: All is the colourant of a registration mark and 8.6.6.5\
+          rules it out of a DeviceN colour space - paint it on its own, as\
+          {separation All alternate tint}"
+    }
+    if {$name eq "None"} {
+      if {[llength $colourant] == 2} {
+        return -code error -errorcode [list TCLPDF COLOUR DEVICEN NONE] \
+            "tclpdf: the colourant None is never painted (ISO 32000-2,\
+            8.6.6.5), so it has no colour to give - write it as {None}"
+      }
+      lappend names None
+      lappend parsed [list None {}]
+      continue
+    }
+    if {$name in $names} {
+      return -code error \
+          -errorcode [list TCLPDF COLOUR DEVICEN DUPLICATE $name] \
+          "tclpdf: the colourant \"$name\" is named twice in one DeviceN\
+          colour space - \"The component names shall all be different from\
+          one another, except for the name None\" (ISO 32000-2, 8.6.6.5)"
+    }
+    # The same cut 8.6.6.4 makes for a separation, and one more: no Lab, for
+    # the reason given at the head of this section.
+    set alternate [parse $colour]
+    if {[lindex $alternate 0] ni {gray rgb cmyk}} {
+      return -code error \
+          -errorcode [list TCLPDF COLOUR DEVICEN ALTERNATE $name] \
+          "tclpdf: the colourant \"$name\" of a DeviceN colour paints a\
+          grey, an RGB or a CMYK colour, not {$colour} - the tint transform\
+          combines the plates, and combining a Lab or an ICC based colour\
+          needs a colour engine this package does not have (ISO 32000-2,\
+          8.6.6.5); paint that plate on its own with {separation \"$name\"\
+          {...} tint}"
+    }
+    incr painted
+    lappend names $name
+    lappend parsed [list $name $alternate]
+    if {[lindex $alternate 0] ne "gray"} {
+      lappend spaces [lindex $alternate 0]
+    }
+  }
+  # "A DeviceN colour space whose component colourant names are all None
+  # shall always discard its output ... it shall never revert to the
+  # alternate colour space" (8.6.6.5). It paints nothing, and it names no
+  # colour this writer could give the alternate space and the transform -
+  # both of which the array requires whether a reader uses them or not.
+  if {$painted == 0} {
+    return -code error -errorcode [list TCLPDF COLOUR DEVICEN BLANK] \
+        "tclpdf: every colourant of this DeviceN colour is None, so it paints\
+        nothing and names no alternate colour space (ISO 32000-2, 8.6.6.5) -\
+        leave the drawing out, or name a plate that paints"
+  }
+  # One transform, one output space. A grey colourant is promoted into the
+  # space of the coloured ones, the way a grey shading stop is - "white" and
+  # "#808080" parse as grey, and refusing them beside a CMYK plate would be
+  # absurd.
+  set spaces [lsort -unique $spaces]
+  if {[llength $spaces] > 1} {
+    return -code error \
+        -errorcode [list TCLPDF COLOUR DEVICEN MIXED $spaces] \
+        "tclpdf: the colourants of a DeviceN colour paint into ONE alternate\
+        colour space and these name [join $spaces { and }] - the tint\
+        transform has one output space (ISO 32000-2, 8.6.6.5); give every\
+        colourant in the same space"
+  }
+  set space [expr {[llength $spaces] ? [lindex $spaces 0] : "gray"}]
+  set parsed [lmap colourant $parsed {
+    if {[lindex $colourant 1] eq {}} {
+      set colourant
+    } else {
+      list [lindex $colourant 0] [promote [lindex $colourant 1] $space]
+    }
+  }]
+  # One tint per colourant, in the order of the names - which is the order
+  # scn takes them in ("Operand values supplied to SCN or scn shall be
+  # interpreted as colour component values in the order in which the colours
+  # are given in the names array"). A count that does not match is a colour
+  # whose operator would have the wrong number of operands, which no reader
+  # and no validator reports: the page comes out in the wrong colour.
+  if {[llength $tints] == 0} {
+    set tints [lrepeat $count 1]
+  }
+  if {[llength $tints] != $count} {
+    return -code error \
+        -errorcode [list TCLPDF COLOUR DEVICEN TINTS $count [llength $tints]] \
+        "tclpdf: a DeviceN colour takes one tint per colourant, in the order\
+        of the names (ISO 32000-2, 8.6.6.5) - [join $names {, }] is $count\
+        colourant[expr {$count == 1 ? {} : {s}}] and \"$tints\" is\
+        [llength $tints] tint[expr {[llength $tints] == 1 ? {} : {s}}]"
+  }
+  return [list $parsed [lmap value $tints {Clamp $value}] $space]
+}
+
+# The /ColorSpace resource entry a DeviceN colour paints through. Derived
+# from the space's PARAMETERS - the colourants and their alternate - and not
+# from the tints, because two colours in one space share one entry and one
+# object. Same construction and same caveat as [labResource]: the name is a
+# CRC32 fingerprint, so it is not injective, and two spaces could in
+# principle collide at 2^-32.
+proc ::tclpdf::color::devicenResource {values} {
+  lassign $values colourants - space
+  return "DeviceN[format %08X [zlib crc32 [list $colourants $space]]]"
+}
+
+# The tint transform as PostScript calculator code (7.10.5): n tints in, the
+# m components of the alternate space out.
+#
+# The stack holds t0 ... t(n-1), t(n-1) on top. Each output is computed with
+# [index] copies of the inputs, so the inputs survive until the end; then the
+# whole stack is rolled by m and the n inputs are popped off the top - the
+# manoeuvre of the standard's own example, "{ 5 3 roll pop pop }" (8.6.6.5,
+# EXAMPLE 4). The index of t_i is counted from the top and therefore depends
+# on what is already lying above it: the j outputs finished so far, plus the
+# partial result of the output being built.
+proc ::tclpdf::color::devicenFunction {space colourants} {
+  set count [llength $colourants]
+  set components [dict get {gray 1 rgb 3 cmyk 4} $space]
+  set subtractive [expr {$space eq "cmyk"}]
+  set code {}
+  for {set j 0} {$j < $components} {incr j} {
+    set terms 0
+    for {set i 0} {$i < $count} {incr i} {
+      set alternate [lindex $colourants $i 1]
+      # None is passed to the transform ("those components shall be passed to
+      # the tint transformation function, which may use them as desired") and
+      # this one uses them for nothing: a component that is never painted
+      # must not tint the approximation either.
+      if {$alternate eq {}} {
+        continue
+      }
+      set value [lindex $alternate 1 $j]
+      set factor [expr {$subtractive ? $value : 1.0 - $value}]
+      # A plate that contributes nothing to this component - no ink of it in
+      # CMYK, full transmittance in RGB - is left out of the code entirely.
+      if {$factor == 0} {
+        continue
+      }
+      set index [expr {($count - 1 - $i) + $j + $terms}]
+      lappend code $index index
+      if {$factor != 1} {
+        lappend code [::tclpdf::pdfObj num $factor] mul
+      }
+      if {!$subtractive} {
+        lappend code 1 exch sub
+      }
+      if {$terms} {
+        lappend code [expr {$subtractive ? "add" : "mul"}]
+      }
+      incr terms
+    }
+    if {$terms == 0} {
+      lappend code [expr {$subtractive ? 0 : 1}]
+    }
+  }
+  lappend code [expr {$count + $components}] $components roll
+  for {set i 0} {$i < $count} {incr i} {
+    lappend code pop
+  }
+  # WITHOUT the outer braces: they belong to the function body and are
+  # written by [FunctionCalculator], in the one place that writes a type 4.
+  return [join $code { }]
+}
+
 # Names that may not be given to a separation or to an ICC alias, and the
 # reason in the caller's words. Both live in the SAME /ColorSpace resource
 # dictionary as the spaces below, so a clash is not a duplicate name but a
@@ -878,6 +1354,10 @@ proc ::tclpdf::color::Reserved {name} {
   if {[regexp {^Lab([0-9A-F]{8})?$} $name]} {
     return "it is how this writer names a Lab colour space (ISO 32000-2,\
         8.6.5.4)"
+  }
+  if {[regexp {^DeviceN([0-9A-F]{8})?$} $name]} {
+    return "it is how this writer names a DeviceN colour space (ISO 32000-2,\
+        8.6.6.5)"
   }
   return {}
 }
@@ -892,6 +1372,9 @@ proc ::tclpdf::color::Numbers {space values} {
   }
   if {$space eq "lab"} {
     return [lindex $values 0]
+  }
+  if {$space eq "devicen"} {
+    return [lindex $values 1]
   }
   return $values
 }
@@ -972,4 +1455,4 @@ proc ::tclpdf::color::Pin {value low high} {
   return $value
 }
 
-package provide tclpdf::color 1.6
+package provide tclpdf::color 1.7

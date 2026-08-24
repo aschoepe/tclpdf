@@ -93,7 +93,7 @@ oo::define ::tclpdf::document::document {
         [my writer] put $number [::tclpdf::pdfObj dictionary $pairs]
       }
     }
-    my LinkRegister [my page current] [[my writer] ref $number]
+    my AnnotationOnPage [my page current] [[my writer] ref $number]
     return $number
   }
 
@@ -193,12 +193,6 @@ oo::define ::tclpdf::document::document {
   # Annotations are collected per page and picked up when the page is
   # written. Kept in the scratch state rather than pushed into output.tcl, so
   # that a document without links costs nothing.
-  method LinkRegister {page reference} {
-    set annots [my state annots]
-    dict lappend annots $page $reference
-    my state annots $annots
-    return
-  }
 }
 
-package provide tclpdf::link 1.5
+package provide tclpdf::link 1.6

@@ -464,4 +464,251 @@ test page-args-9.1 {page typeArea and page size take one optional index, and say
   set out
 } -result {1 1 4 4 1 1 2 2}
 
+# -- fitting into a box, and where in it the thing sits ----------------------
+#
+# The arithmetic that [image place] -fit, -fitMode, -align and -valign is made
+# of. Tested here rather than only through a picture for the reason at the head
+# of this file: a defect in the sum shows up as a photograph two millimetres
+# out three modules away, and the pixels that catch it (image.test) say nothing
+# about which of the three options was wrong.
+
+test page-fitbox-10.1 {contain takes the smaller factor, so the whole of it fits} -body {
+  # 100 x 50 into 40 x 40: across is 0.4, down is 0.8, and contain takes the
+  # 0.4 - which is what makes both edges fit.
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width {} height {} scale {}
+      fit {40 40} fitMode contain}]
+  $doc destroy
+  pageRound $size
+} -result {40.000 20.000}
+
+test page-fitbox-10.2 {cover takes the larger factor, so the box is covered} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width {} height {} scale {}
+      fit {40 40} fitMode cover}]
+  $doc destroy
+  pageRound $size
+} -result {80.000 40.000}
+
+test page-fitbox-10.3 {an empty -fitMode is contain} -body {
+  # The default is EMPTY rather than the word, so that "-fitMode contain"
+  # without a box can be told from a caller who never mentioned it - see
+  # page-fitbox-12.4. It has to mean contain here all the same.
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {} width {} height {} scale {}
+      fit {40 40} fitMode {}}]
+  $doc destroy
+  pageRound $size
+} -result {40.000 20.000}
+
+test page-fitbox-10.4 {a box of the same shape fills exactly, either way round} -body {
+  # 100 x 50 into 60 x 30 is one factor, not two, so contain and cover have
+  # nothing to choose between and both answer the box itself.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach mode {contain cover} {
+    lappend out {*}[pageRound [$doc fitExtent 100 50 \
+        [list size {} width {} height {} scale {} fit {60 30} fitMode $mode]]]
+  }
+  $doc destroy
+  set out
+} -result {60.000 30.000 60.000 30.000}
+
+test page-fitbox-10.5 {-fit stands before -size, -width, -height and -scale} -body {
+  # Not because it wins a contest - those four are refused beside it in
+  # [fitCheck] - but so that a dict carrying both cannot come out of the
+  # wrong branch if a caller ever reaches this method directly.
+  set doc [tclpdf new]
+  $doc page add
+  set size [$doc fitExtent 100 50 {size {200 200} width 90 height 90 scale 3
+      fit {40 40} fitMode contain}]
+  $doc destroy
+  pageRound $size
+} -result {40.000 20.000}
+
+test page-anchor-11.1 {without a box the two options are the plain anchor} -body {
+  # A box of no size: the corner moves by -fraction * the thing's own extent,
+  # so "right" puts its right edge on the x that was given and "bottom" its
+  # bottom edge on the y.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach {align valign} {left top center middle right bottom} {
+    lappend out {*}[pageRound [$doc fitAnchor {100 100} 40 10 \
+        [list fit {} align $align valign $valign]]]
+  }
+  $doc destroy
+  set out
+} -result {100.000 100.000 80.000 95.000 60.000 90.000}
+
+test page-anchor-11.2 {inside a box the leftover is what is split} -body {
+  # 40 x 10 in a 60 x 40 box at {100 100}: centred leaves 10 at each side and
+  # 15 above and below, trailing leaves 20 and 30.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach {align valign} {left top center middle right bottom} {
+    lappend out {*}[pageRound [$doc fitAnchor {100 100} 40 10 \
+        [list fit {60 40} align $align valign $valign]]]
+  }
+  $doc destroy
+  set out
+} -result {100.000 100.000 110.000 115.000 120.000 130.000}
+
+test page-anchor-11.3 {a covered box has a NEGATIVE leftover, and the same sum} -body {
+  # 160 x 40 covering a 40 x 40 box at {60 100}: centred, the picture starts
+  # 60 mm to the LEFT of the box and hangs out on both sides - which is what
+  # the clip in image.tcl then cuts away.
+  set doc [tclpdf new]
+  $doc page add
+  set corner [$doc fitAnchor {60 100} 160 40 \
+      {fit {40 40} align center valign middle}]
+  $doc destroy
+  pageRound $corner
+} -result {0.000 100.000}
+
+test page-anchor-11.4 {"centre" is taken beside "center", as [text] takes it} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set out [list [$doc fitAnchor {100 100} 40 10 {fit {} align centre valign top}] \
+      [$doc fitAnchor {100 100} 40 10 {fit {} align center valign top}]]
+  $doc destroy
+  expr {[lindex $out 0] eq [lindex $out 1]}
+} -result 1
+
+test page-anchor-11.5 {an absent option is the default, not an error} -body {
+  # [fitAnchor] is reached from [image place], where the dict always carries
+  # all four - but a dict without them has to mean the top left corner rather
+  # than fail on a [dict get].
+  set doc [tclpdf new]
+  $doc page add
+  set corner [$doc fitAnchor {30 40} 20 10 {}]
+  $doc destroy
+  pageRound $corner
+} -result {30.000 40.000}
+
+test page-fitcheck-12.1 {a box is two lengths above zero} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach value {{} {40} {40 20 10} {40 x} {40 0} {-1 20}} {
+    if {$value eq {}} {
+      continue
+    }
+    lappend out [::tclpdfTest::refuse [list $doc fitCheck \
+        [list fit $value fitMode {} align left valign top] "image place"]]
+  }
+  $doc destroy
+  set out
+} -result {{1 1 {TCLPDF FIT BOX 40 {image place}}}\
+    {1 1 {TCLPDF FIT BOX {40 20 10} {image place}}}\
+    {1 1 {TCLPDF FIT BOX {40 x} {image place}}}\
+    {1 1 {TCLPDF FIT BOX {40 0} {image place}}}\
+    {1 1 {TCLPDF FIT BOX {-1 20} {image place}}}}
+
+test page-fitcheck-12.2 {a good box passes and says nothing} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set out [catch {$doc fitCheck \
+      {fit {40 20} fitMode cover align center valign bottom} "image place"} \
+      message]
+  $doc destroy
+  list $out $message
+} -result {0 {}}
+
+test page-fitcheck-12.3 {-fit and a size option contradict each other} -body {
+  # Both say how large the thing comes out. One would have to win in silence.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach key {size width height scale} {
+    lappend out [lindex [::tclpdfTest::refuse [list $doc fitCheck \
+        [list fit {40 20} $key 30 fitMode {} align left valign top] \
+        "image place"]] 2]
+  }
+  $doc destroy
+  set out
+} -result {{TCLPDF FIT SIZE size {image place}} {TCLPDF FIT SIZE width {image place}}\
+    {TCLPDF FIT SIZE height {image place}} {TCLPDF FIT SIZE scale {image place}}}
+
+test page-fitcheck-12.4 {-fitMode is a word from the list, and needs a box} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set out [list \
+      [lindex [::tclpdfTest::refuse [list $doc fitCheck \
+          {fit {40 20} fitMode meet align left valign top} "image place"]] 2] \
+      [lindex [::tclpdfTest::refuse [list $doc fitCheck \
+          {fit {} fitMode cover align left valign top} "image place"]] 2]]
+  $doc destroy
+  set out
+} -result {{TCLPDF FIT MODE meet {image place}} {TCLPDF FIT MODE cover {image place}}}
+
+test page-fitcheck-12.5 {-align and -valign take the words of their own axis} -body {
+  # The two lists do NOT overlap: "middle" is not an -align and "center" is
+  # not a -valign, so a caller who mixed the axes is told which axis they are
+  # on rather than being placed somewhere plausible.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach {align valign} {middle top left center justify top left baseline} {
+    lappend out [lindex [::tclpdfTest::refuse [list $doc fitCheck \
+        [list fit {} fitMode {} align $align valign $valign] \
+        "image place"]] 2]
+  }
+  $doc destroy
+  set out
+} -result {{TCLPDF FIT ALIGN -align middle {image place}}\
+    {TCLPDF FIT ALIGN -valign center {image place}}\
+    {TCLPDF FIT ALIGN -align justify {image place}}\
+    {TCLPDF FIT ALIGN -valign baseline {image place}}}
+
+test page-fitcheck-12.6 {a turned placement is not placed in an upright box} -body {
+  # -fit, -align and -valign describe an UPRIGHT box, and -rotate turns the
+  # placement about the corner they just moved. Measured before the refusal
+  # stood: a picture fitted into a 40 by 40 box at {20 20} and turned by 90
+  # degrees came out entirely beside that box ("0 40 -30 0 20 150 cm"), and a
+  # covered box was clipped by a rectangle standing at an angle to the
+  # picture - so neither the box nor the anchor meant what it says.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach options {
+    {fit {40 40} fitMode {} align left valign top rotate 90}
+    {fit {40 40} fitMode cover align center valign top rotate 30}
+    {fit {} fitMode {} align right valign top rotate 15}
+    {fit {} fitMode {} align left valign bottom rotate -15}
+  } {
+    lappend out [lindex [::tclpdfTest::refuse [list $doc fitCheck $options \
+        "image place"]] 2]
+  }
+  $doc destroy
+  set out
+} -result {{TCLPDF FIT ROTATE 90 {image place}}\
+    {TCLPDF FIT ROTATE 30 {image place}}\
+    {TCLPDF FIT ROTATE 15 {image place}}\
+    {TCLPDF FIT ROTATE -15 {image place}}}
+
+test page-fitcheck-12.7 {the words that do not move the corner stand beside -rotate} -body {
+  # -align left and -valign top are what a placement does anyway, so spelling
+  # them out beside -rotate gets exactly what the words say - the fractions
+  # are compared, not the words, which is why "centre" would be refused and
+  # "left" is not. And a rotation of zero is no rotation.
+  set doc [tclpdf new]
+  $doc page add
+  set out {}
+  foreach options {
+    {fit {} fitMode {} align left valign top rotate 90}
+    {fit {40 40} fitMode {} align left valign top rotate 0}
+    {fit {40 40} fitMode cover align centre valign middle}
+  } {
+    lappend out [catch {$doc fitCheck $options "image place"}]
+  }
+  $doc destroy
+  set out
+} -result {0 0 0}
+
 cleanupTests

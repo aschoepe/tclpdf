@@ -336,6 +336,8 @@ oo::class create ::tclpdf::document::document {
       distance page
       extent page
       fitExtent page
+      fitCheck page
+      fitAnchor page
       save graphics
       restore graphics
       transform graphics
@@ -355,6 +357,7 @@ oo::class create ::tclpdf::document::document {
       write output
       reservation output
       writeChannel output
+      AnnotationOnPage output
       form xObject
       FormBegin xObject
       FormEnd xObject
@@ -395,6 +398,7 @@ oo::class create ::tclpdf::document::document {
       zugferd zugferd
       link link
       linksWithoutContents link
+      annot annot
       pageNumbers pageNumber
       pageLabels pageLabel
       textPath textPath
@@ -402,6 +406,7 @@ oo::class create ::tclpdf::document::document {
       bookmarks outline
       svg svg
       viewerPreferences viewerPreferences
+      initialView viewerPreferences
       ua ua
       tagged structure
       structure structure

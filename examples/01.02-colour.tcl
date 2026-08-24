@@ -19,6 +19,9 @@
 #   Lab           a colour as it was MEASURED, anchored to a white point - the
 #                 space the pressroom asks for, and the way to give a spot
 #                 colour its real value instead of a CMYK guess (page 2)
+#   DeviceN       several named plates at once, with one function that says
+#                 what they look like together - the space high-fidelity
+#                 printing is done in (page 3)
 #
 # Colour names come from a table in the package, not from Tk. [winfo rgb]
 # would have done the job and would have pulled in a windowing system to
@@ -260,6 +263,85 @@ $doc text "Lab is device independent like an ICC based colour, so PDF/A\
     same colours as {rgb ...} are refused under the CMYK one. A gradient\
     cannot take a Lab colour: a shading names its space by family in its\
     dictionary, and a Lab space is an array." -at {20 264} -width 170
+
+# -- DeviceN: several plates at once -----------------------------------------
+
+# A separation is one plate. A DeviceN colour space is n of them, and it is
+# not the same thing said n times: the space carries ONE function that turns
+# n tints into the alternate colour space, so what it describes is how the
+# inks look TOGETHER. Six colourants is the real case - PANTONE Hexachrome,
+# CMYK plus orange and green - and two is enough to see it.
+$doc page add
+
+$doc font -family helvetica -style bold -size 15 -color black
+$doc text "DeviceN" -at {20 22}
+
+$doc font -style {} -size 8
+$doc text "Each colourant is written the way a separation is: the name of the\
+    plate and the colour it paints at full tint. The tints follow in the same\
+    order, one per name. Below, an orange and a green plate crossed - the top\
+    row and the left column are each plate on its own, and every other square\
+    is the two of them overprinting." -at {20 29} -width 170
+
+set inks {{Orange {cmyk 0 0.45 1 0}} {Green {cmyk 0.8 0 0.7 0.1}}}
+
+$doc font -size 6
+$doc text "Green" -at {20 46}
+set x 32
+foreach tint {0 0.2 0.4 0.6 0.8 1} {
+    $doc text "Orange $tint" -at [list $x 46]
+    incr x 24
+}
+
+set y 48
+foreach green {0 0.2 0.4 0.6 0.8 1} {
+    $doc font -size 6
+    $doc text $green -at [list 20 [expr {$y + 9}]]
+    set x 32
+    foreach orange {0 0.2 0.4 0.6 0.8 1} {
+        $doc rect -at [list $x $y] -size {22 14} \
+            -fill [list devicen $inks [list $orange $green]]
+        incr x 24
+    }
+    incr y 18
+}
+
+# The guideline of 8.6.6.5: a colourant should look the same whether it is
+# painted through a separation or as one component of a DeviceN space. It
+# does here, because both transforms are built from the same colour - the
+# left square below is the separation, the right one the DeviceN space with
+# the other plate at zero.
+$doc font -style bold -size 10
+$doc text "One plate, two ways" -at {20 164}
+$doc rect -at {20 170} -size {24 14} -fill {separation Orange {cmyk 0 0.45 1 0} 1}
+$doc rect -at {48 170} -size {24 14} -fill [list devicen $inks {1 0}]
+$doc rect -at {80 170} -size {24 14} \
+    -fill {devicen {{Orange {cmyk 0 0.45 1 0}} {None} {Green {cmyk 0.8 0 0.7 0.1}}} {1 1 0}}
+$doc font -style {} -size 6
+$doc text "separation Orange" -at {20 188}
+$doc text "devicen, green 0" -at {48 188}
+$doc text "with a None plate at 1" -at {80 188}
+
+$doc font -style {} -size 8
+$doc text "None is the third colourant of the square on the right, at full\
+    tint - and it changes nothing: a component named None is never painted\
+    (ISO 32000-2, 8.6.6.5) and this writer keeps it out of the fallback\
+    colour as well. All, which a separation may be, is refused here: it means\
+    every plate at once and cannot be one component among several. Both are\
+    the standard's rules, and they differ from the ones for a separation."\
+    -at {20 196} -width 170
+
+$doc text "The tint transform is a type 4 function - PostScript calculator\
+    code - because a type 2 or type 3 function takes ONE input by definition\
+    and this one needs n. Ink amounts add and are clipped by the function's\
+    own /Range; in an RGB or grey alternate, where the numbers count light\
+    rather than ink, they multiply instead, so no ink at all leaves paper.\
+    The space also carries a /Colorants attribute holding each plate on its\
+    own - the one thing a combined transform cannot say - which is why a\
+    DeviceN colour is written as PDF 1.6 here. Under PDF/A the alternate\
+    space is what the output intent judges: these plates fall back to CMYK,\
+    so the document needs a CMYK intent, exactly as a separation with a CMYK\
+    alternate does." -at {20 218} -width 170
 
 # -- blend modes -------------------------------------------------------------
 

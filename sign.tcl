@@ -1782,13 +1782,8 @@ oo::define ::tclpdf::document::document {
 
     # Into the page's /Annots, the same scratch state link.tcl uses - once,
     # however often the document is written.
-    set annots [my state annots]
     set reference [[my writer] ref $widgetNumber]
-    if {![dict exists $annots $page]
-        || $reference ni [dict get $annots $page]} {
-      dict lappend annots $page $reference
-      my state annots $annots
-    }
+    my AnnotationOnPage $page $reference
 
     # /SigFlags 3 is SignaturesExist and AppendOnly (Table 225): the document
     # has a signature field, and it may only be written on incrementally.
