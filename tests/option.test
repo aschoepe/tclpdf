@@ -1,0 +1,170 @@
+# option.test --
+#
+# The shared reader of -name value arguments: what it refuses, and the
+# -errorcode every refusal carries.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf::option
+package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
+
+#
+# --- what the parser reads --------------------------------------------------
+#
+
+test option-1.1 {defaults come back filled in} -body {
+  ::tclpdf::option parse {width 1 color black} {-color red}
+} -result {width 1 color red}
+
+test option-1.2 {a name is taken with or without its dash} -body {
+  list [::tclpdf::option parse {width 1} {-width 3}] \
+      [::tclpdf::option parse {width 1} {width 3}]
+} -result {{width 3} {width 3}}
+
+test option-1.3 {partition keeps what it does not know} -body {
+  ::tclpdf::option partition {width 1} {-width 3 -family Helvetica}
+} -result {{width 3} {-family Helvetica}}
+
+#
+# --- the codes --------------------------------------------------------------
+#
+# Every refusal of this module carries an -errorcode below TCLPDF OPTION. It is
+# the code a mistake in the CALL carries, whatever the command was: a misspelt
+# option name used to arrive as NONE, which made the commonest mistake of all
+# the one a handler could not see, while every wrong VALUE around it was
+# already trappable.
+#
+
+test option-2.1 {an unknown option names the case, the spelling and the context} -body {
+  ::tclpdfTest::refusal {::tclpdf::option parse {rect {} page {}} {-recht 1} \
+      "field text"}
+} -result {TCLPDF OPTION UNKNOWN -recht {field text}}
+
+test option-2.2 {and still names the options that exist} -body {
+  set code [catch {::tclpdf::option parse {rect {} page {}} {-recht 1} \
+      "field text"} message options]
+  list $code $message [dict get $options -errorcode]
+} -result {1 {tclpdf: unknown option "-recht" for field text - known are: -rect -page} {TCLPDF OPTION UNKNOWN -recht {field text}}}
+
+test option-2.3 {the context is empty where the caller passed none} -body {
+  ::tclpdfTest::refusal {::tclpdf::option parse {width 1} {-widht 3}}
+} -result {TCLPDF OPTION UNKNOWN -widht {}}
+
+test option-2.4 {an odd number of words} -body {
+  list [::tclpdfTest::refusal {::tclpdf::option parse {width 1} {-width} text}] \
+      [::tclpdfTest::refusal {::tclpdf::option partition {width 1} {-width}}]
+} -result {{TCLPDF OPTION PAIRS text} {TCLPDF OPTION PAIRS {}}}
+
+test option-2.5 {a value that is no dictionary, and a key that is not there} -body {
+  list [::tclpdfTest::refusal {
+        ::tclpdf::option keys {a b c} {text align} "cell key" table
+      }] \
+      [::tclpdfTest::refusal {
+        ::tclpdf::option keys {valgin top} {text align} "cell key" table
+      }]
+} -result {{TCLPDF OPTION DICT {cell key} table} {TCLPDF OPTION KEY valgin {cell key} table}}
+
+test option-2.6 {a point that was not given, and one that is not two numbers} -body {
+  list [::tclpdfTest::refusal {::tclpdf::option point {} -at text}] \
+      [::tclpdfTest::refusal {::tclpdf::option point {20 30 40} -at text}]
+} -result {{TCLPDF OPTION REQUIRED -at text} {TCLPDF OPTION POINT -at text}}
+
+test option-2.7 {one prefix catches every way a call can be wrong} -body {
+  # What the class is for: a handler traps the shape of the call in one place
+  # instead of matching six English sentences.
+  set caught {}
+  foreach script {
+    {::tclpdf::option parse {width 1} {-widht 3}}
+    {::tclpdf::option parse {width 1} {-width}}
+    {::tclpdf::option partition {width 1} {-width}}
+    {::tclpdf::option keys {a b c} {text} "cell key"}
+    {::tclpdf::option keys {valgin top} {text} "cell key"}
+    {::tclpdf::option point {} -at text}
+    {::tclpdf::option point {20 30 40} -at text}
+  } {
+    lappend caught [try {
+      eval $script
+    } trap {TCLPDF OPTION} {-> options} {
+      lindex [dict get $options -errorcode] 2
+    }]
+  }
+  set caught
+} -result {UNKNOWN PAIRS PAIRS DICT KEY REQUIRED POINT}
+
+#
+# --- and the same from a real command ---------------------------------------
+#
+# The parser is asked through by some sixty calls out of thirty-nine modules,
+# so the code has to arrive at the caller of the COMMAND, not only at the
+# caller of [option parse].
+#
+
+test option-3.1 {a mistyped option of a drawing command} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc text "x" -at {20 20} -colour red}]
+  $doc destroy
+  set code
+} -result {TCLPDF OPTION UNKNOWN -colour text}
+
+test option-3.2 {a mistyped option of a command that passes no context} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc clip -att {10 10} -size {20 20}}]
+  $doc destroy
+  set code
+} -result {TCLPDF OPTION UNKNOWN -att {}}
+
+test option-3.3 {a mistyped option of the document itself} -body {
+  ::tclpdfTest::refusal {tclpdf new -unit mm -formt a4}
+} -result {TCLPDF OPTION UNKNOWN -formt {the document}}
+
+test option-3.4 {an option left without its value} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc text "x" -at {20 20} -size}]
+  $doc destroy
+  set code
+} -result {TCLPDF OPTION PAIRS text}
+
+test option-3.5 {the point options of a drawing command} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  set missing [::tclpdfTest::refusal {$doc text "x"}]
+  set wrong [::tclpdfTest::refusal {$doc text "x" -at 20}]
+  $doc destroy
+  list $missing $wrong
+} -result {{TCLPDF OPTION REQUIRED -at text} {TCLPDF OPTION POINT -at text}}
+
+test option-3.6 {a mistyped key of a table cell} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  set code [::tclpdfTest::refusal {
+    $doc table -at {20 20} -width 100 \
+        -body {{{text A valgin top}}}
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF OPTION KEY valgin {cell key} table}
+
+test option-3.7 {a refused call leaves the document as it was} -body {
+  # The code is put on where the refusal already was, so nothing about what a
+  # refused call writes may have moved: the stream is what it was before.
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  $doc text "one" -at {20 20}
+  set before [::tclpdfTest::content $doc]
+  catch {$doc text "two" -at {20 30} -colour red}
+  set after [::tclpdfTest::content $doc]
+  $doc destroy
+  expr {$before eq $after}
+} -result 1
+
+cleanupTests

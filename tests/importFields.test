@@ -153,7 +153,7 @@ test importFields-1.4 {a missing file is refused with the reader's class code} -
 test importFields-1.5 {-xfa is a boolean, and an unknown option names the known ones} -body {
     list [::tclpdfTest::refuse {::tclpdf::pdf fields /tmp/x.pdf -xfa maybe}] \
         [::tclpdfTest::refuse {::tclpdf::pdf fields /tmp/x.pdf -deep 1}]
-} -result {{1 1 {TCLPDF IMPORT OPTION}} {1 1 NONE}}
+} -result {{1 1 {TCLPDF IMPORT OPTION}} {1 1 {TCLPDF OPTION UNKNOWN -deep {pdf fields}}}}
 
 # --- the six type words ----------------------------------------------------
 

@@ -1,6 +1,12 @@
 # field.test --
 #
-# Interactive form fields (ISO 32000-2, 12.7) - the core and the text field.
+# Interactive form fields (ISO 32000-2, 12.7) - the CORE, and no field type:
+# the field tree, the widget annotation, /DA and /DR, the structure tree and
+# the contract every type attaches through. The text field has its own file,
+# tests/fieldText.test, as the button and the choice fields do; what is left
+# here uses [$doc field text] the way a core test needs SOME field to be
+# measurable - and it never says [package require tclpdf::fieldText], because
+# the types table loading the module by itself is one of the things measured.
 #
 # Four questions carry this file, and each of them is a way a form can be
 # wrong while the file still opens:
@@ -12,11 +18,11 @@
 #   of the /DA and looks it up in the /Font of the resource dictionary /DR
 #   points at.
 #
-#   Is the appearance stream shaped the way 12.7.4.3 prescribes - the frame
-#   OUTSIDE the /Tx bracket, the value inside it, a /BBox of the widget's own
-#   size and no /Matrix? A reader that sets a new value replaces the stream
-#   from /Tx BMC to the matching EMC, so what is drawn outside survives and
-#   what is drawn inside does not.
+#   Is the appearance stream the core hands a type a form XObject of the
+#   widget's own size - a /BBox from the /Rect, no /Matrix on top of it, and
+#   the document's own /Resources rather than an inherited dictionary? What a
+#   type then PAINTS into it is that type's question, and the text field's
+#   answer is measured in tests/fieldText.test.
 #
 #   Do a signature and a text field share ONE /AcroForm? Two modules writing
 #   one catalogue key is a document with two field trees, of which a reader
@@ -194,25 +200,6 @@ test field-1.4 {the appearance stream is shaped as 12.7.4.3 prescribes} -body {
       [expr {[string first "ET" $stream] < [string first "EMC" $stream]}]
 } -result {1 1 0 1 1 1 1 1}
 
-test field-1.5 {the frame is outside the /Tx bracket, the value inside it} -body {
-  # A reader that sets a new value "shall then replace the existing contents
-  # of the appearance stream from /Tx BMC to the matching EMC" (12.7.4.3).
-  # So everything that has to survive a value change - the background, the
-  # frame - is drawn BEFORE the mark, and the value after it. Drawn inside,
-  # a field would lose its frame at the first keystroke.
-  set doc [fieldDoc]
-  $doc field text customer -rect {20 40 80 8} -value "Muster" \
-      -background {0.9 0.9 1} -border {0 0 0} -borderWidth 0.5
-  $doc write [::tclpdfTest::scratch field-frame.pdf]
-  set stream [fieldAppearance $doc customer]
-  file delete [::tclpdfTest::scratch field-frame.pdf]
-  $doc destroy
-  set mark [string first "/Tx BMC" $stream]
-  list [expr {[string first "0.9 0.9 1 rg" $stream] < $mark}] \
-      [expr {[string first " re\nS" $stream] < $mark}] \
-      [expr {[string first "(Muster) Tj" $stream] > $mark}]
-} -result {1 1 1}
-
 test field-1.6 {the widget goes into the page's /Annots, with /Tabs /S} -body {
   # An annotation "shall be referenced from the Annots array of only one
   # page" (12.5.2), and PDF/UA wants /Tabs on every page that has one - which
@@ -269,103 +256,8 @@ test field-1.8 {qpdf reads the field table back} -constraints qpdf -body {
 } -result {1 1 1 1 1 1 1 1 1}
 
 #
-# --- the options ------------------------------------------------------------
+# --- -page, the default and the state ---------------------------------------
 #
-
-test field-2.1 {-align becomes /Q, and 0 is left out} -body {
-  # /Q 0 is left-aligned and is the default (Table 228) - a key that may only
-  # ever hold its own default is one to leave out.
-  set result {}
-  foreach {align expected} {left {} center 1 right 2} {
-    set doc [fieldDoc]
-    $doc field text f -rect {20 40 80 8} -align $align
-    $doc write [::tclpdfTest::scratch field-q.pdf]
-    set widget [fieldWidget $doc f]
-    file delete [::tclpdfTest::scratch field-q.pdf]
-    $doc destroy
-    if {[regexp {/Q ([0-9])} $widget -> value]} {
-      lappend result $value
-    } else {
-      lappend result {}
-    }
-  }
-  set result
-} -result {{} 1 2}
-
-test field-2.2 {-multiline sets bit 13 and turns the line feed into a return} -body {
-  # Table 231: Multiline is bit 13, so /Ff 4096. And 12.7.4.3 spells a line
-  # break in a field value as a CARRIAGE RETURN - a value handed to a reader
-  # with \n in it shows as one long line and nothing says why.
-  set doc [fieldDoc]
-  $doc field text remark -rect {20 40 80 20} -multiline 1 \
-      -value "Zeile eins\nZeile zwei"
-  $doc write [::tclpdfTest::scratch field-multi.pdf]
-  set widget [fieldWidget $doc remark]
-  set stream [fieldAppearance $doc remark]
-  file delete [::tclpdfTest::scratch field-multi.pdf]
-  $doc destroy
-  list [regexp {/Ff 4096\M} $widget] \
-      [regexp {/V \(Zeile eins\\rZeile zwei\)} $widget] \
-      [regexp {\n} $widget] \
-      [llength [regexp -all -inline {Tj} $stream]]
-} -result {1 1 0 2}
-
-test field-2.3 {the flags of Table 227 and Table 231} -body {
-  # The bit positions, each on its own: ReadOnly 1, Required 2, NoExport 3,
-  # Multiline 13, Password 14. The value of bit n is 2^(n-1), which is the
-  # trap in the table - /Ff 1 is ReadOnly, not bit 1 of a zero-based count.
-  set result {}
-  foreach {option expected} {readonly 1 required 2 noexport 4
-      multiline 4096 password 8192} {
-    set doc [fieldDoc]
-    $doc field text f -rect {20 40 80 8} -$option 1
-    $doc write [::tclpdfTest::scratch field-ff.pdf]
-    set widget [fieldWidget $doc f]
-    file delete [::tclpdfTest::scratch field-ff.pdf]
-    $doc destroy
-    regexp {/Ff ([0-9]+)} $widget -> value
-    lappend result [expr {$value == $expected}]
-  }
-  # And two of them together, so that the bits are OR-ed rather than the last
-  # one winning.
-  set doc [fieldDoc]
-  $doc field text f -rect {20 40 80 8} -readonly 1 -required 1
-  $doc write [::tclpdfTest::scratch field-ff2.pdf]
-  set widget [fieldWidget $doc f]
-  file delete [::tclpdfTest::scratch field-ff2.pdf]
-  $doc destroy
-  lappend result [regexp {/Ff 3\M} $widget]
-} -result {1 1 1 1 1 1}
-
-test field-2.4 {-default, -maxlen and -tooltip} -body {
-  set doc [fieldDoc]
-  $doc field text f -rect {20 40 80 8} -default "Vorgabe" -maxlen 20 \
-      -tooltip "Was hier hingehoert"
-  $doc write [::tclpdfTest::scratch field-dv.pdf]
-  set widget [fieldWidget $doc f]
-  file delete [::tclpdfTest::scratch field-dv.pdf]
-  $doc destroy
-  list [regexp {/DV \(Vorgabe\)} $widget] [regexp {/MaxLen 20\M} $widget] \
-      [regexp {/TU \(Was hier hingehoert\)} $widget] [regexp {/V } $widget]
-} -result {1 1 1 0}
-
-test field-2.5 {-border and -background become /MK and /BS, and are drawn} -body {
-  # /MK is NOT a substitute for /AP: Table 191 calls it material "used in
-  # constructing a dynamic appearance stream" - the reader's raw material,
-  # not the picture. So both are written AND drawn. The array length is what
-  # says which colour space it is in (Table 192): 1 grey, 3 RGB, 4 CMYK.
-  set doc [fieldDoc]
-  $doc field text f -rect {20 40 80 8} -border {0 0 0} -background 0.9 \
-      -borderWidth 0.5
-  $doc write [::tclpdfTest::scratch field-mk.pdf]
-  set widget [fieldWidget $doc f]
-  set stream [fieldAppearance $doc f]
-  file delete [::tclpdfTest::scratch field-mk.pdf]
-  $doc destroy
-  list [regexp {/BC \[0 0 0\]} $widget] [regexp {/BG \[0.9\]} $widget] \
-      [regexp {/BS << /W 1.41732 /S /S >>} $widget] \
-      [regexp {0.9 g} $stream] [regexp { re\nS} $stream]
-} -result {1 1 1 1 1}
 
 test field-2.6 {-page puts the widget on the page it names} -body {
   # The page index counts from zero, as it does for [sign -page] and for
@@ -382,38 +274,6 @@ test field-2.6 {-page puts the widget on the page it names} -body {
   # when it was written.
   llength [regexp -all -inline {/Annots \[[0-9]+ 0 R\]} $data]
 } -result {2}
-
-test field-2.7 {a password field has no value at all} -body {
-  # Table 231, the NOTE under Password: "it is imperative that PDF processors
-  # never store the value of the text field in the PDF file if this flag is
-  # set". So there is no /V, no /DV, and the appearance shows the frame and
-  # nothing else - which is what a password box is supposed to look like.
-  set doc [fieldDoc]
-  $doc field text pin -rect {20 40 40 8} -password 1 -border {0 0 0}
-  $doc write [::tclpdfTest::scratch field-pw.pdf]
-  set widget [fieldWidget $doc pin]
-  set stream [fieldAppearance $doc pin]
-  file delete [::tclpdfTest::scratch field-pw.pdf]
-  $doc destroy
-  list [regexp {/Ff 8192\M} $widget] [regexp {/V } $widget] \
-      [regexp {Tj} $stream] [regexp {/AP << /N} $widget]
-} -result {1 0 0 1}
-
-test field-2.8 {an empty field still gets its appearance stream} -body {
-  # Table 166 under /AP: "Every annotation (including those whose Subtype
-  # value is Widget, as used for form fields) ... shall have at least one
-  # appearance dictionary", and the two exceptions do not cover a widget. An
-  # empty field is the usual state of a blank form, and veraPDF fails one
-  # without an /AP under clause 6.3.3 in every PDF/A part.
-  set doc [fieldDoc]
-  $doc field text f -rect {20 40 80 8}
-  $doc write [::tclpdfTest::scratch field-empty.pdf]
-  set widget [fieldWidget $doc f]
-  set dict [fieldAppearanceDict $doc f]
-  file delete [::tclpdfTest::scratch field-empty.pdf]
-  $doc destroy
-  list [regexp {/AP << /N [0-9]+ 0 R >>} $widget] [regexp {/BBox} $dict]
-} -result {1 1}
 
 test field-2.9 {field default sets the document-wide /DA} -body {
   set doc [fieldDoc]
@@ -441,29 +301,6 @@ test field-2.10 {field list and field state} -body {
       [dict get $state data maxlen] [dict exists $state widget]
 } -result {{one two} Tx 0 5 0}
 
-test field-2.11 {the field keeps its font whatever the document does later} -body {
-  # The appearance is drawn at WRITE time, and the document's text state then
-  # is whatever the last [font] call left behind. Read from there, a field
-  # came out in the courier of a command block set three paragraphs further
-  # down the page - measured 2026-08-23 on example 9.1, where every field was
-  # monospaced and the /DA said Helvetica. So the font is settled when the
-  # field is declared and travels with it: what the /DA names and what the
-  # appearance stream sets have to be the same font, or a reader redrawing
-  # the value changes the look of the field.
-  set doc [fieldDoc]
-  $doc field text f -rect {20 40 80 8} -value "Muster" -family helvetica
-  $doc font -family courier -size 24 -color {1 0 0}
-  $doc write [::tclpdfTest::scratch field-font.pdf]
-  set widget [fieldWidget $doc f]
-  set stream [fieldAppearance $doc f]
-  file delete [::tclpdfTest::scratch field-font.pdf]
-  $doc destroy
-  regexp {/DA \(/(\S+) (\S+) Tf ([^)]*)\)} $widget -> daFont daSize daColour
-  regexp {/(\S+) (\S+) Tf} $stream -> apFont apSize
-  list [expr {$daFont eq $apFont}] [expr {$daSize eq $apSize}] $daFont \
-      $daSize [string trim $daColour] [regexp {Courier} $stream]
-} -result {1 1 FHelvetica 10 {0 g} 0}
-
 #
 # --- the refusals -----------------------------------------------------------
 #
@@ -487,40 +324,6 @@ test field-3.1 {every refusal carries an errorcode under TCLPDF FIELD} -body {
     {TCLPDF FIELD MAXLEN 0} {TCLPDF FIELD SIZE 0}\
     {TCLPDF FIELD BORDERWIDTH -1} {TCLPDF FIELD BOOLEAN readonly}\
     {TCLPDF FIELD COLOUR color}}
-
-test field-3.2 {a value longer than -maxlen, and a line break in one line} -body {
-  set doc [fieldDoc]
-  set codes {}
-  lappend codes [::tclpdfTest::refusal {
-    $doc field text f -rect {20 40 80 8} -maxlen 3 -value "zu lang"
-  }]
-  lappend codes [::tclpdfTest::refusal {
-    $doc field text f -rect {20 40 80 8} -value "eins\nzwei"
-  }]
-  # With -multiline the same value is fine.
-  lappend codes [catch {
-    $doc field text ok -rect {20 60 80 20} -multiline 1 -value "eins\nzwei"
-  }]
-  $doc destroy
-  set codes
-} -result {{TCLPDF FIELD LENGTH value 7 3} {TCLPDF FIELD LINES value} 0}
-
-test field-3.3 {-password rules out -multiline and any value} -body {
-  set doc [fieldDoc]
-  set codes {}
-  lappend codes [::tclpdfTest::refusal {
-    $doc field text f -rect {20 40 80 8} -password 1 -multiline 1
-  }]
-  lappend codes [::tclpdfTest::refusal {
-    $doc field text f -rect {20 40 80 8} -password 1 -value geheim
-  }]
-  lappend codes [::tclpdfTest::refusal {
-    $doc field text f -rect {20 40 80 8} -password 1 -default geheim
-  }]
-  $doc destroy
-  set codes
-} -result {{TCLPDF FIELD COMBINATION} {TCLPDF FIELD PASSWORD value}\
-    {TCLPDF FIELD PASSWORD default}}
 
 test field-3.4 {the field name: no period, and no second field under it} -body {
   # 12.7.4.2: the fully qualified name is built out of the partial names with
@@ -729,7 +532,7 @@ test field-4.4 {register refuses a reserved word and a word already taken} -body
   lappend codes [::tclpdfTest::refusal {::tclpdf::field register {} tclpdf::x}]
   # The same package under the same word again is a no-op, not a refusal - a
   # module may be sourced twice.
-  lappend codes [catch {::tclpdf::field register text tclpdf::field}]
+  lappend codes [catch {::tclpdf::field register text tclpdf::fieldText}]
   set codes
 } -result {{TCLPDF FIELD REGISTER RESERVED state} {TCLPDF FIELD REGISTER TAKEN text}\
     {TCLPDF FIELD REGISTER NAME} 0}
@@ -1428,7 +1231,7 @@ test field-7.18 {-contents runs in step with -widgets, or is refused} -body {
   set doc [fieldDoc]
   oo::objdefine $doc export FieldDeclare
   set code [::tclpdfTest::refusal {
-    $doc FieldDeclare rate -type Btn -build FieldTextBuild -kid FieldTextBuild \
+    $doc FieldDeclare rate -type Btn -build FieldStubBuild -kid FieldStubKid \
         -widgets {{{20 40 5 5}} {{20 50 5 5}} {{20 60 5 5}}} \
         -contents {"the first" "the second"}
   }]

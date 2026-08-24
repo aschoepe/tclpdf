@@ -52,6 +52,7 @@ foreach tclpdfPkg {
     tclpdf::field
     tclpdf::fieldButton
     tclpdf::fieldChoice
+    tclpdf::fieldText
     tclpdf::update
     tclpdf::layer
     tclpdf::type3

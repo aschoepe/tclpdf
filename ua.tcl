@@ -710,4 +710,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.4
+package provide tclpdf::ua 1.5

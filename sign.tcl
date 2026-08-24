@@ -1908,4 +1908,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.2
+package provide tclpdf::sign 1.3

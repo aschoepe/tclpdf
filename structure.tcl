@@ -1203,4 +1203,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structure 1.4
+package provide tclpdf::structure 1.5

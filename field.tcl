@@ -11,19 +11,26 @@
 # Usage:
 #
 #   $doc field text customer -rect {20 40 80 8} -value "Erika Mustermann"
-#   $doc field text remark   -rect {20 55 80 25} -multiline 1 -align left
 #   $doc field list                          ;# the names, in declaration order
 #   $doc field state customer                ;# what was declared
 #   $doc field default -family times -size 9 ;# the document-wide /DA
 #
-# WHAT THIS FILE IS. The core of the form topic and nothing of any single
-# field TYPE beyond the first one: the field tree (/AcroForm with /Fields),
-# the widget annotation on the page, the default appearance string (/DA),
-# the default resources (/DR), and the write-time machinery that keeps all
-# of it idempotent. The text field lives here because a core with no field
-# in it cannot be measured; every further type - check box, radio button,
-# choice, list, push button - is a MODULE OF ITS OWN and attaches through
-# the contract below. This file does not grow by one of them.
+# WHAT THIS FILE IS. The core of the form topic and NO FIELD TYPE AT ALL: the
+# field tree (/AcroForm with /Fields), the widget annotation on the page, the
+# default appearance string (/DA), the default resources (/DR), the structure
+# tree the widgets hang in, and the write-time machinery that keeps all of it
+# idempotent. Every type - text field, check box, radio button, list box,
+# combo box, push button - is a MODULE OF ITS OWN (fieldText.tcl,
+# fieldButton.tcl, fieldChoice.tcl) and attaches through the contract below.
+# This file does not grow by one of them.
+#
+# The text field lived here while there was only one type, because a core
+# with no field in it cannot be measured. It moved out to fieldText.tcl once
+# there were three, and what the move brought to light is written down in
+# point 5 below: three methods that every type already called - [FieldFont],
+# [FieldBorderEntries] and [FieldColourArray] - and that the contract had
+# never named, because while the text field was in this file they looked like
+# its own rather than like the core's.
 #
 # EVERY FIELD DRAWS ITS OWN /AP, AND /NeedAppearances IS NEVER WRITTEN. That
 # is the one decision the whole module is built around, and both halves of it
@@ -104,9 +111,10 @@
 # THE CONTRACT FOR A FURTHER FIELD TYPE
 # ---------------------------------------------------------------------------
 #
-# A field type is a topical module - fieldCheck.tcl, fieldChoice.tcl - that
-# requires this one and adds ONE public method to the document class. Six
-# points, and nothing outside them is this file's business:
+# A field type is a topical module - fieldText.tcl, fieldButton.tcl,
+# fieldChoice.tcl - that requires this one and adds ONE public method to the
+# document class. Six points, and nothing outside them is this file's
+# business:
 #
 # 1. REGISTER. At load time:
 #
@@ -122,8 +130,9 @@
 #
 # 2. THE ENTRY. The method is Field<Subcommand> with the subcommand's first
 #    letter capitalised - "check" is [FieldCheck] - and it takes the field's
-#    name and -options, exactly as [FieldText] below does. It parses its own
-#    options, refuses what it cannot build, and then declares the field.
+#    name and -options, exactly as [FieldText] in fieldText.tcl does. It
+#    parses its own options, refuses what it cannot build, and then declares
+#    the field.
 #
 # 3. DECLARE. One call, and it is what makes the field exist:
 #
@@ -223,6 +232,34 @@
 #    field and slot, so the second write fills the same one rather than
 #    adding a copy.
 #
+#    THREE MORE METHODS ARE THE CORE'S AND EVERY TYPE USES THEM, and they are
+#    named here because they were not: while the text field stood in this
+#    file they read like its own, and each of the other two types found them
+#    only by reading it.
+#
+#      my FieldFont $family $style $size $colour $what
+#
+#    answers the /DA of ONE field - the dict has "da" in it - and the values
+#    that went into it, so the appearance can be painted in the very font the
+#    /DA names. Anything left empty falls back to [field default]. It is also
+#    the check: a family that does not resolve, or a colour with no /DA
+#    spelling, is refused HERE, at the call that named it, and $what is the
+#    wording the refusal uses.
+#
+#      my FieldBorderEntries $data ?pairs?
+#
+#    answers the /MK and /BS of Table 192 out of the three keys "border",
+#    "borderWidth" and "background" of the type's own record, and puts the
+#    type's own characteristics - the push button's /CA - inside the same /MK
+#    behind the frame. There is ONE /MK per widget, so a type that assembled
+#    it itself would be the second writer of a key it shares.
+#
+#      my FieldColourArray $spec
+#
+#    is the colour ARRAY /BC and /BG take, where the count of the numbers is
+#    what says which space it is in - not an operator, and the one place that
+#    refuses a space with no spelling there.
+#
 # 6. WHAT IS NOT THE TYPE'S. /AcroForm, /Fields, /SigFlags, /DA and /DR at
 #    the document level, /NeedAppearances, the page's /Annots, the object
 #    numbers of the field and of every widget under it, the version floor and
@@ -303,7 +340,7 @@ namespace eval ::tclpdf::field {
   # the same reason: the caller says what it wants, not which file it lives
   # in.
   variable types {
-    text tclpdf::field
+    text tclpdf::fieldText
     check tclpdf::fieldButton
     radio tclpdf::fieldButton
     button tclpdf::fieldButton
@@ -400,7 +437,9 @@ proc ::tclpdf::field::flags {names} {
 
 oo::define ::tclpdf::document::document {
 
-  # $doc field text <name> ...        a text field, see [FieldText]
+  # $doc field <type> <name> ...      a field, in the module registered for
+  #                                   <type> - text, check, radio, button,
+  #                                   listbox, combo
   # $doc field list                   the names, in declaration order
   # $doc field state <name>           what was declared for one field
   # $doc field default ?-family f? ?-style s? ?-size n? ?-color c?
@@ -485,196 +524,7 @@ oo::define ::tclpdf::document::document {
     return "known are: [join [lsort [concat $reserved [dict keys $types]]] {, }]"
   }
 
-  # -- the text field -------------------------------------------------------
-
-  # $doc field text <name> -rect {x y w h}
-  #     ?-page n? ?-value text? ?-default text? ?-maxlen n?
-  #     ?-align left|center|right? ?-multiline 0|1? ?-readonly 0|1?
-  #     ?-required 0|1? ?-noexport 0|1? ?-password 0|1?
-  #     ?-family f? ?-style s? ?-size n? ?-color c?
-  #     ?-border c? ?-borderWidth n? ?-background c? ?-tooltip text?
-  #
-  # -rect counts {x y w h} from the TOP left corner of the page in the unit
-  # of the document, exactly as "link -at" with "link -size" and "sign -rect"
-  # count. -page is the page INDEX and defaults to the current page.
-  #
-  # The name is the partial field name (/T, 12.7.4.2) and it is what an
-  # exported FDF, a JavaScript in a reader and a filled form all address the
-  # field by - so it is the caller's word, not a generated one.
-  method FieldText {name args} {
-    set options [::tclpdf::option parse {
-      rect {} page {} value {} default {} maxlen {} align left
-      multiline 0 readonly 0 required 0 noexport 0 password 0
-      family {} style {} size {} color {}
-      border {} borderWidth 0.4 background {} tooltip {}
-      contents {} label {}
-    } $args "field text"]
-
-    # EVERYTHING is checked before the field is declared. A refused call has
-    # to leave the document exactly as it was - the rule sign.tcl, encrypt.tcl
-    # and text.tcl all follow, and the one that keeps a second attempt from
-    # tripping over the leavings of the first.
-    foreach flag {multiline readonly required noexport password} {
-      set value [dict get $options $flag]
-      if {![string is boolean -strict $value]} {
-        return -code error -errorcode [list TCLPDF FIELD BOOLEAN $flag] \
-            "tclpdf: -$flag of field text is a boolean, not \"$value\""
-      }
-      dict set options $flag [expr {$value ? 1 : 0}]
-    }
-    if {[dict get $options align] ni {left center right}} {
-      return -code error -errorcode \
-          [list TCLPDF FIELD ALIGN [dict get $options align]] \
-          "tclpdf: -align of field text is left, center or right - the /Q of\
-          ISO 32000-2, Table 228 knows those three - not\
-          \"[dict get $options align]\""
-    }
-    set maxlen [dict get $options maxlen]
-    if {$maxlen ne {}} {
-      if {![string is integer -strict $maxlen] || $maxlen < 1} {
-        return -code error -errorcode [list TCLPDF FIELD MAXLEN $maxlen] \
-            "tclpdf: -maxlen of field text is the greatest number of\
-            characters the field takes and is 1 or more, not \"$maxlen\".\
-            Leave the option out for a field of unlimited length"
-      }
-    }
-    # Table 231: Password shall not be set where Multiline is. The two say
-    # opposite things about the same field - one echoes nothing, the other
-    # holds paragraphs - and a reader given both picks one without saying
-    # which.
-    if {[dict get $options password] && [dict get $options multiline]} {
-      return -code error -errorcode {TCLPDF FIELD COMBINATION} \
-          "tclpdf: -password and -multiline cannot both be set on one text\
-          field - ISO 32000-2, Table 231 forbids the pair, because a field\
-          that echoes nothing has no second line to echo it on. Drop one of\
-          the two"
-    }
-    # Table 231, the NOTE under Password: "it is imperative that PDF
-    # processors NEVER STORE THE VALUE of the text field in the PDF file if
-    # this flag is set". A password written into /V is a password in a file
-    # anyone can read with a text editor, and a package that took the value
-    # and quietly dropped it would be one whose refusals cannot be trusted
-    # either. So it is refused, and the reason is the reason.
-    foreach which {value default} {
-      if {[dict get $options password] && [dict get $options $which] ne {}} {
-        return -code error -errorcode [list TCLPDF FIELD PASSWORD $which] \
-            "tclpdf: -$which cannot be given for a password field - ISO\
-            32000-2, Table 231 says of the Password flag that a PDF processor\
-            shall never store the value of the field in the file, and /V is\
-            plain text in a file anyone can open. Drop -$which, or drop\
-            -password"
-      }
-    }
-    foreach which {value default} {
-      set text [dict get $options $which]
-      if {$text eq {}} continue
-      if {!([dict get $options multiline]) && [string first \n $text] >= 0} {
-        return -code error -errorcode [list TCLPDF FIELD LINES $which] \
-            "tclpdf: -$which of field text \"$name\" holds a line break and\
-            the field is not multiline - a single-line field shows one line\
-            (ISO 32000-2, 12.7.4.3). Pass -multiline 1, or take the break out"
-      }
-      if {$maxlen ne {} && [string length $text] > $maxlen} {
-        return -code error -errorcode \
-            [list TCLPDF FIELD LENGTH $which [string length $text] $maxlen] \
-            "tclpdf: -$which of field text \"$name\" is\
-            [string length $text] characters long and -maxlen says $maxlen -\
-            a value longer than the field admits is one a reader truncates\
-            the moment it is touched. Raise -maxlen, or shorten the text"
-      }
-    }
-    set size [dict get $options size]
-    if {$size ne {} && (![string is double -strict $size] || $size <= 0)} {
-      return -code error -errorcode [list TCLPDF FIELD SIZE $size] \
-          "tclpdf: -size of field text is a font size in points above zero,\
-          not \"$size\""
-    }
-    set borderWidth [dict get $options borderWidth]
-    if {![string is double -strict $borderWidth] || $borderWidth < 0} {
-      return -code error -errorcode [list TCLPDF FIELD BORDERWIDTH $borderWidth] \
-          "tclpdf: -borderWidth of field text is a line width of 0 or more in\
-          the unit of the document, not \"$borderWidth\". Use 0 for a field\
-          with no frame"
-    }
-    # The three colours go through the colour module HERE, where the call can
-    # still be refused, rather than at write time inside an appearance stream
-    # nobody is looking at.
-    foreach which {color border background} {
-      if {[dict get $options $which] eq {}} continue
-      if {[catch {::tclpdf::color parse [dict get $options $which]} parsed]} {
-        return -code error -errorcode [list TCLPDF FIELD COLOUR $which] \
-            "tclpdf: -$which of field text \"$name\" is not a colour this\
-            package reads: $parsed"
-      }
-    }
-    # The default appearance string is built now for the same reason: it
-    # names a font, and a family that does not resolve has to be refused at
-    # the call that named it.
-    set font [my FieldFont [dict get $options family] \
-        [dict get $options style] $size [dict get $options color] \
-        "field text \"$name\""]
-
-    # The option names and the flag names of Table 227 and Table 231, in one
-    # place. "flagName" rather than "name": the field's own name is in scope
-    # here, and a loop variable called "name" took it over - measured, the
-    # second field of a document was refused as a duplicate of "Password".
-    set flagNames {}
-    foreach {flag flagName} {readonly ReadOnly required Required
-        noexport NoExport multiline Multiline password Password} {
-      if {[dict get $options $flag]} {
-        lappend flagNames $flagName
-      }
-    }
-
-    my FieldDeclare $name -type Tx -build FieldTextBuild \
-        -rect [dict get $options rect] -page [dict get $options page] \
-        -tooltip [dict get $options tooltip] \
-        -contents [dict get $options contents] \
-        -label [dict get $options label] \
-        -flags [::tclpdf::field flags $flagNames] \
-        -data [dict create \
-            value [dict get $options value] \
-            default [dict get $options default] \
-            maxlen $maxlen \
-            align [dict get $options align] \
-            multiline [dict get $options multiline] \
-            password [dict get $options password] \
-            da [dict get $font da] \
-            size [dict get $font size] \
-            family [dict get $font family] style [dict get $font style] \
-            color [dict get $font colour] \
-            border [dict get $options border] \
-            borderWidth $borderWidth \
-            background [dict get $options background]]
-    return $name
-  }
-
-  # The pairs of ONE text field, at write time. Point 4 of the contract.
-  method FieldTextBuild {name record} {
-    set data [dict get $record data]
-    set pairs [list FT /Tx DA [my Str [dict get $data da]]]
-    if {[dict get $data align] ne "left"} {
-      # /Q 0 is the default and is left out where it applies - a key that may
-      # only ever hold its own default is one to leave out (Table 228).
-      lappend pairs Q [expr {[dict get $data align] eq "center" ? 1 : 2}]
-    }
-    if {[dict get $data maxlen] ne {}} {
-      lappend pairs MaxLen [dict get $data maxlen]
-    }
-    foreach {key which} {V value DV default} {
-      set text [dict get $data $which]
-      if {$text eq {}} continue
-      # A line break inside a field value is a CARRIAGE RETURN (12.7.4.3),
-      # not the line feed a Tcl script writes. Converted here, once, on the
-      # way into the file: a reader given \n shows one long line and nothing
-      # says why.
-      lappend pairs $key [my Str [string map [list \n \r] $text]]
-    }
-    lappend pairs {*}[my FieldBorderEntries $data]
-    lappend pairs AP [::tclpdf::pdfObj dictionary [list \
-        N [my FieldAppearanceStream $record N {my FieldTextPaint $record}]]]
-    return $pairs
-  }
+  # -- the core -------------------------------------------------------------
 
   # /MK, the appearance characteristics (Table 192) - the border colour in
   # /BC and the background in /BG. Written beside the /AP rather than instead
@@ -733,114 +583,6 @@ oo::define ::tclpdf::document::document {
       ::tclpdf::pdfObj num $value
     }]]
   }
-
-  # What the field SHOWS. Runs inside the appearance stream's own canvas, so
-  # {0 0} is the top left corner of the widget and the document unit is in
-  # force - the same system the caller draws a page in.
-  method FieldTextPaint {record} {
-    set data [dict get $record data]
-    lassign [dict get $record extent] width height
-    set borderWidth [dict get $data borderWidth]
-    set hasBorder [expr {[dict get $data border] ne {} && $borderWidth > 0}]
-
-    # Background and frame first and OUTSIDE the /Tx bracket: the bracket
-    # marks the variable text (12.7.4.3), and a frame is not text.
-    if {[dict get $data background] ne {}} {
-      my rect -at {0 0} -size [list $width $height] \
-          -fill [dict get $data background]
-    }
-    if {$hasBorder} {
-      # Inset by half the line width, so the stroke lands INSIDE the widget
-      # rather than half outside its bounding box - a stroke straddles the
-      # path it follows (8.4.3.2), and the half outside is clipped away by
-      # the /BBox with nothing to say it happened.
-      set half [expr {$borderWidth / 2.0}]
-      my rect -at [list $half $half] \
-          -size [list [expr {$width - $borderWidth}] \
-              [expr {$height - $borderWidth}]] \
-          -stroke [dict get $data border] -width $borderWidth
-    }
-
-    # The text. An empty field still gets its stream - a widget annotation
-    # without /AP /N is what veraPDF rule 6.3.3-1 fails, and an empty field
-    # is the usual state of a blank form.
-    # A password field never carries a value (see [FieldText]), so there is
-    # never anything to draw in one - which is the appearance a password box
-    # is supposed to have.
-    set text [dict get $data value]
-    if {$text eq {}} {
-      return
-    }
-
-    # The padding between the frame and the first glyph. One point on top of
-    # the border, which is what a reader leaves and what keeps a descender
-    # off the rule below it.
-    set padding [expr {$borderWidth
-        + [::tclpdf::geometry fromPoints 1 [my cget -unit]]}]
-    set inner [expr {$width - 2 * $padding}]
-    if {$inner <= 0} {
-      # A field too narrow to hold anything between its own frames. Nothing
-      # is drawn rather than something drawn outside the box: the /BBox would
-      # clip it away in any case, and a stream that paints outside its own
-      # bounding box is a stream no two readers agree on.
-      return
-    }
-    set size [dict get $data size]
-    set sizeUnit [::tclpdf::geometry fromPoints $size [my cget -unit]]
-    # EVERY value is named, none inherited. This runs at write time, where
-    # the document's text state is whatever the last [font] call left behind
-    # - which in the example was the courier of a command block three
-    # paragraphs further down the page, and every field came out in it. The
-    # appearance has to be set in the font the /DA names, and those are the
-    # values [FieldFont] settled when the field was declared.
-    set font [list -size $size -family [dict get $data family] \
-        -style [dict get $data style] -color [dict get $data color]]
-
-    # 12.7.4.3 prescribes the shape of the stream, and the order in it is
-    # not free: /Tx BMC ... q ... BT ... ET ... Q ... EMC. The mark is not
-    # cosmetic - a reader that later sets a new value "shall then replace the
-    # existing contents of the appearance stream FROM /Tx BMC TO THE MATCHING
-    # EMC", and where the mark is missing "the new contents shall be appended
-    # to the end of the original stream": the old text then stays standing
-    # under the new one. Which is also why the frame and the background are
-    # drawn OUTSIDE the bracket, above - they are not the value, and a reader
-    # replacing the value must not take them with it.
-    my content "/Tx BMC\n"
-    # Clipped to the inside of the frame, so a value wider than the field
-    # ends at the frame instead of running over it. The clip is a graphics
-    # state change and is taken back with the q/Q the norm puts inside the
-    # bracket for exactly this reason.
-    my save
-    my clip -at [list $padding $padding] \
-        -size [list $inner [expr {$height - 2 * $padding}]]
-    if {[dict get $data multiline]} {
-      # From the top down, as a reader fills a multiline field.
-      my text $text -at [list $padding $padding] -anchor top \
-          -width $inner -align [dict get $data align] {*}$font
-    } else {
-      # One line, vertically centred in the field. The letters are treated as
-      # a box one font size tall - close enough for a form field, exact for
-      # none, and the alternative is asking every face for its ascender to
-      # place a single line of a widget that a reader will re-centre by its
-      # own rule the moment the field is edited.
-      set top [expr {($height - $sizeUnit) / 2.0}]
-      if {$top < $padding} {
-        set top $padding
-      }
-      switch -- [dict get $data align] {
-        center {set x [expr {$width / 2.0}]}
-        right {set x [expr {$width - $padding}]}
-        default {set x $padding}
-      }
-      my text $text -at [list $x $top] -anchor top \
-          -align [dict get $data align] {*}$font
-    }
-    my restore
-    my content "EMC\n"
-    return
-  }
-
-  # -- the core -------------------------------------------------------------
 
   # Declare a field. Point 3 of the contract at the head of this file.
   method FieldDeclare {name args} {
@@ -1816,7 +1558,7 @@ oo::define ::tclpdf::document::document {
   # "its size shall be computed as an implementation dependent function"
   # (12.7.4.3) - and a package that draws the appearance itself would then
   # not know what a reader redrawing it will do. [FieldDefault] and
-  # [FieldText] both refuse a size of zero for this reason.
+  # [FieldText] in fieldText.tcl both refuse a size of zero for this reason.
   method FieldFont {family style size colour what} {
     set current [my state fieldDefault]
     if {$current eq {}} {

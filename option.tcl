@@ -15,6 +15,28 @@
 # and the next does not. This module exists so that there is one behaviour and
 # one wording.
 #
+# Every refusal made here carries an -errorcode below TCLPDF OPTION, so that
+# [trap {TCLPDF OPTION}] catches a mistake in the CALL - a misspelt option
+# name, a value the option cannot take - as one class, wherever in the package
+# it was made. Without them a mistyped option was the one refusal in the
+# package that arrived as NONE, so a handler written against a module's own
+# class caught every wrong value and no wrong name: the case a script is most
+# likely to hit was the case it could not see. The second word says which
+# mistake it was, then come the facts: the option or key that was named, and
+# last the context the caller passed, empty where it passed none.
+#
+#   TCLPDF OPTION PAIRS    context             an odd number of words
+#   TCLPDF OPTION UNKNOWN  option context      no such option
+#   TCLPDF OPTION DICT     what context        a dictionary was expected
+#   TCLPDF OPTION KEY      key what context    no such dictionary key
+#   TCLPDF OPTION REQUIRED option context      an option that has to be given
+#   TCLPDF OPTION POINT    option context      not the {x y} a point needs
+#
+# The class word stands where the hierarchy stands in every other code of this
+# package, and the caller's own spelling is a fact behind it rather than the
+# class itself: a code of TCLPDF OPTION -recht would read the mistyped word as
+# a class of its own, and no prefix below TCLPDF OPTION could then be trapped.
+#
 
 package require Tcl 8.6.11-
 
@@ -35,13 +57,15 @@ namespace eval ::tclpdf::option {
 # worth passing wherever a caller may have several option sets in play.
 proc ::tclpdf::option::parse {defaults arguments {context {}}} {
   if {[llength $arguments] % 2} {
-    return -code error "tclpdf: options come in pairs[Where $context], got\
-        \"$arguments\""
+    return -code error -errorcode [list TCLPDF OPTION PAIRS $context] \
+        "tclpdf: options come in pairs[Where $context], got \"$arguments\""
   }
   foreach {option value} $arguments {
     set name [string trimleft $option -]
     if {![dict exists $defaults $name]} {
-      return -code error "tclpdf: unknown option \"$option\"[Where $context] -\
+      return -code error \
+          -errorcode [list TCLPDF OPTION UNKNOWN $option $context] \
+          "tclpdf: unknown option \"$option\"[Where $context] -\
           known are: -[join [dict keys $defaults] { -}]"
     }
     dict set defaults $name $value
@@ -55,7 +79,8 @@ proc ::tclpdf::option::parse {defaults arguments {context {}}} {
 # options on. Returns a two-element list: the filled defaults, and the rest.
 proc ::tclpdf::option::partition {defaults arguments} {
   if {[llength $arguments] % 2} {
-    return -code error "tclpdf: options come in pairs, got \"$arguments\""
+    return -code error -errorcode {TCLPDF OPTION PAIRS {}} \
+        "tclpdf: options come in pairs, got \"$arguments\""
   }
   set rest {}
   foreach {option value} $arguments {
@@ -85,12 +110,15 @@ proc ::tclpdf::option::partition {defaults arguments} {
 # glyph for. Same standard, same place to say so.
 proc ::tclpdf::option::keys {value known what {context {}}} {
   if {[catch {dict size $value}]} {
-    return -code error "tclpdf: $what[Where $context] takes a dictionary of\
+    return -code error -errorcode [list TCLPDF OPTION DICT $what $context] \
+        "tclpdf: $what[Where $context] takes a dictionary of\
         key value pairs, got \"$value\""
   }
   dict for {key ->} $value {
     if {$key ni $known} {
-      return -code error "tclpdf: unknown $what \"$key\"[Where $context] -\
+      return -code error \
+          -errorcode [list TCLPDF OPTION KEY $key $what $context] \
+          "tclpdf: unknown $what \"$key\"[Where $context] -\
           known are: [join $known { }]"
     }
   }
@@ -109,12 +137,15 @@ proc ::tclpdf::option::keys {value known what {context {}}} {
 # differently.
 proc ::tclpdf::option::point {value option context} {
   if {$value eq {}} {
-    return -code error "tclpdf: $context needs $option {x y}"
+    return -code error \
+        -errorcode [list TCLPDF OPTION REQUIRED $option $context] \
+        "tclpdf: $context needs $option {x y}"
   }
   if {[catch {llength $value} count] || $count != 2
       || ![string is double -strict [lindex $value 0]]
       || ![string is double -strict [lindex $value 1]]} {
-    return -code error "tclpdf: $option takes two numbers {x y}, got\
+    return -code error -errorcode [list TCLPDF OPTION POINT $option $context] \
+        "tclpdf: $option takes two numbers {x y}, got\
         \"$value\" - for a computed position use \[list \$x \$y\], braces do\
         not substitute"
   }
@@ -128,4 +159,4 @@ proc ::tclpdf::option::Where {context} {
   return " for $context"
 }
 
-package provide tclpdf::option 1.1
+package provide tclpdf::option 1.2

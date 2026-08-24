@@ -617,11 +617,11 @@ proc ::tclpdf::pdf::Face {readerVar item page stateVar} {
 # ---------------------------------------------------------------- the fields
 
 # THE FIELDS OF AN INTERACTIVE FORM (12.7) AND THE VALUES THAT STAND IN THEM -
-# the reading half of what field.tcl, fieldButton.tcl and fieldChoice.tcl
-# write, and the answer to the only question a filled-in form is ever asked:
-# what did the sender type. Until this existed the answer needed another
-# program - "qpdf --json --json-key=acroform", or PDFBox through a Java
-# runtime - for a walk this reader was making anyway.
+# the reading half of what field.tcl, fieldText.tcl, fieldButton.tcl and
+# fieldChoice.tcl write, and the answer to the only question a filled-in
+# form is ever asked: what did the sender type. Until this existed the
+# answer needed another program - "qpdf --json --json-key=acroform", or
+# PDFBox through a Java runtime - for a walk this reader was making anyway.
 #
 # THE WORDS OF "type" ARE THE SUBCOMMANDS OF [$doc field]: text, check, radio,
 # button, listbox and combo, not the /FT names Tx, Btn and Ch. The two halves
@@ -1209,4 +1209,4 @@ namespace eval ::tclpdf::pdf {
   unset tclpdfTable tclpdfCode tclpdfTarget
 }
 
-package provide tclpdf::importInfo 1.1
+package provide tclpdf::importInfo 1.2

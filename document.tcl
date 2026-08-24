@@ -803,4 +803,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.10
+package provide tclpdf::document 1.11
