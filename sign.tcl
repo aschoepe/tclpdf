@@ -1793,58 +1793,29 @@ oo::define ::tclpdf::document::document {
     # /SigFlags 3 is SignaturesExist and AppendOnly (Table 225): the document
     # has a signature field, and it may only be written on incrementally.
     # Optional by Table 224 and set in the standard's own example.
-    my catalogEntry AcroForm [::tclpdf::pdfObj dictionary [list \
-        Fields [::tclpdf::pdfObj arr [list $reference]] \
-        SigFlags 3]]
+    #
+    # Handed to the FIELD core rather than written here. /AcroForm is one
+    # catalogue key and a document may hold a signature AND text fields, so
+    # it has one writer - field.tcl, which collects whatever was enlisted and
+    # writes the single entry on the catalog event. This module contributes
+    # its widget and its flags and nothing else; what a document with only a
+    # signature in it comes out as is unchanged, and tests/sign.test measures
+    # exactly that.
+    my FieldEnlist $reference -sigflags 3
     return
   }
 
   # Where a visible field sits, as the four numbers /Rect takes.
   #
-  # THE ONE THING THIS METHOD IS FOR IS THE ORIGIN. A caller counts y from
-  # the top of the page and a PDF counts it from the bottom, so the two
-  # corners go through [coords] - the single place in this package where the
-  # unit and the origin are converted, and the one link.tcl sends an
-  # annotation's rectangle through for exactly this reason. -rect names the
-  # TOP left corner and a size, as "link -at" with "link -size" does, so the
-  # lower left corner of the PDF rectangle is the one at y + height.
-  #
-  # The page is passed rather than left to default: [coords] without an index
-  # takes the CURRENT page, which at write time is the last one added, while
-  # the signature widget sits on the page -page names.
+  # The arithmetic itself is [FieldRectangle] in field.tcl, shared with every
+  # other form field: a signature widget and a text field ask the same
+  # question of the same page - where does {x y w h} counted from the top
+  # left corner land, and does it land on the page at all - and two copies of
+  # that answer are two answers waiting to differ. What stays here is the
+  # WORDING, because a caller who wrote "sign -rect" has to read "sign -rect"
+  # back.
   method SignRectangle {page rect} {
-    lassign $rect left top width height
-    lassign [my coords $left [expr {$top + $height}] $page] x0 y0
-    lassign [my coords [expr {$left + $width}] $top $page] x1 y1
-    # A rectangle STICKING OUT is allowed - nothing else in this package
-    # takes the page edge for a boundary, a MediaBox need not start at zero,
-    # and a field at the very edge is the caller's business. One entirely
-    # BESIDE the page is refused, and it is the same refusal as -appearance
-    # without -rect: an appearance nothing ever paints. This is the case
-    # where the two most likely mistakes show up - a y counted from the
-    # bottom, or a -rect in millimetres on a document set to points.
-    lassign [dict get [my Page $page] boxes media] mediaX0 mediaY0 \
-        mediaX1 mediaY1
-    if {$x1 <= $mediaX0 || $x0 >= $mediaX1
-        || $y1 <= $mediaY0 || $y0 >= $mediaY1} {
-      # Both rectangles in the message, and both in points: the numbers the
-      # caller wrote are in the message as well, so the comparison that
-      # explains the mistake is there to be made.
-      set where [join [lmap number [list $x0 $y0 $x1 $y1] {
-        ::tclpdf::pdfObj num $number
-      }]]
-      set box [join [lmap number [list $mediaX0 $mediaY0 $mediaX1 $mediaY1] {
-        ::tclpdf::pdfObj num $number
-      }]]
-      return -code error "tclpdf: sign -rect {$rect} puts the signature\
-          field at $where in points, which is entirely outside page $page -\
-          its media box is $box. A visible field has to have area on the\
-          page it names: -rect counts {x y w h} from the TOP left corner of\
-          the page, in the unit of the document"
-    }
-    return [::tclpdf::pdfObj arr [list \
-        [::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] \
-        [::tclpdf::pdfObj num $x1] [::tclpdf::pdfObj num $y1]]]
+    return [my FieldRectangle $page $rect "sign -rect"]
   }
 
   # The reference to the form XObject a visible field shows.

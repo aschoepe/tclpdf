@@ -388,7 +388,149 @@ else
   report_skip "pdfsig (poppler) not installed"
 fi
 
-echo "=== 8. the manual is no older than what it is made from ==="
+echo "=== 8. every document that carries an interactive form ==="
+
+# Two yardsticks, and they answer different questions. qpdf reads the field
+# table out of the file - name, type, value, /TU, the widget behind each field
+# - and that is the structural promise. PDFBox USES a field: setValue() writes
+# into it and builds the appearance stream from /DA against /DR the way a
+# viewer would, and refuses when the two disagree. Measured on a file whose
+# /DA names a font missing from /DR: "qpdf --check" reports no error at all,
+# and "qpdf --generate-appearances" even writes an /AP calling the font that
+# is not there. Only PDFBox says no - and /DA drifting away from /DR is the
+# likeliest mistake a form writer makes, so the structural half alone would be
+# the comfortable half.
+#
+# /NeedAppearances must be false, and this package does not write the entry at
+# all: ISO 32000-2 withdrew it, and PDF/A forbids the value true outright
+# (6.4.1). A file that sets it has handed the drawing to the viewer, and a
+# viewer that does not oblige shows an empty box.
+#
+# WHICH documents, again not a list kept here: the ones that carry a form, and
+# pdfinfo says so in one line. So a new form example is picked up the day it is
+# written. The signature examples are already in this set - a signature field
+# IS a form field - and their deliberately invisible widgets are why a widget
+# of zero width or height is not asked for an appearance here.
+#
+# What is NOT used: pdftotext. Measured, it prints the value of a field that
+# has no /AP at all, because poppler works the appearance out for itself. That
+# check would be green on a file that opens empty in Acrobat - worse than no
+# check.
+forms=""
+finder=""
+if have pdfinfo; then
+  finder=pdfinfo
+  for f in examples/out/*.pdf; do
+    # The encrypted example answers nothing without its password and is
+    # therefore not in this set; it carries no form either.
+    case `pdfinfo "$f" 2>/dev/null | sed -n 's/^Form:[ 	]*//p'` in
+      AcroForm*) forms="$forms $f" ;;
+    esac
+  done
+elif have qpdf; then
+  # Second choice, and only because the first is missing: qpdf answers the
+  # same question, but reading the whole field table to learn whether there is
+  # one is a detour.
+  finder=qpdf
+  for f in examples/out/*.pdf; do
+    qpdf --json --json-key=acroform "$f" 2>/dev/null |
+        grep -q '"hasacroform": true' || continue
+    forms="$forms $f"
+  done
+fi
+
+if test -z "$finder"; then
+  report_skip "interactive forms - neither pdfinfo nor qpdf is here to find them"
+elif test -z "$forms"; then
+  # Not a pass: nothing was checked. Saying so is the whole difference.
+  echo "  note  no document carries an interactive form ($finder found none)"
+else
+  if have qpdf; then
+    for f in $forms; do
+      json=`qpdf --json --json-key=acroform "$f" 2>/dev/null`
+      base=`basename "$f"`
+      fields=`printf '%s\n' "$json" | grep -c '"fullname":'`
+      types=`printf '%s\n' "$json" | grep -c '"fieldtype":'`
+      case "$json" in
+        *'"hasacroform": true'*) ;;
+        *)
+          report_fail "qpdf acroform $base: pdfinfo saw a form, qpdf does not"
+          continue
+          ;;
+      esac
+      case "$json" in
+        *'"needappearances": false'*) ;;
+        *)
+          report_fail "qpdf acroform $base: needappearances is not false"
+          continue
+          ;;
+      esac
+      if test "$fields" -lt 1; then
+        report_fail "qpdf acroform $base: a form with no fields in it"
+      elif test "$types" -ne "$fields"; then
+        report_fail "qpdf acroform $base: $fields field(s), only $types with a type"
+      else
+        report_pass "qpdf acroform $base: $fields field(s), needappearances false"
+      fi
+    done
+  else
+    report_skip "the field table of `echo $forms | wc -w | tr -d ' '` form document(s) - qpdf not installed"
+  fi
+
+  # The same jar as the ZUGFeRD section above, and the same condition: it is
+  # here or the step is skipped, never quietly passed. No build step either -
+  # java runs tools/formcheck.java straight from source against the PDFBox
+  # inside the jar.
+  #
+  # One call for all of them, because each one would otherwise pay for a JVM
+  # start of its own; every document gets its own verdict line, and a FAIL
+  # line carries the first fault of that file with it.
+  if test -n "$mustang" && have java; then
+    out=`java -cp "$mustang" tools/formcheck.java $forms 2>/dev/null`
+    for f in $forms; do
+      base=`basename "$f"`
+      line=`printf '%s\n' "$out" | grep "^OK  *$base:" | head -1`
+      if test -n "$line"; then
+        report_pass "PDFBox $base: `printf '%s' "$line" | sed 's/^OK  *[^:]*: *//'`"
+        continue
+      fi
+      line=`printf '%s\n' "$out" | grep "^FAIL  *$base:" | head -1`
+      if test -n "$line"; then
+        report_fail "PDFBox $base: `printf '%s' "$line" | sed 's/^FAIL  *[^:]*: *//'`"
+      else
+        report_fail "PDFBox $base: no verdict at all - did java run?"
+      fi
+    done
+
+    # The control line. A checker that cannot say no checks nothing, so hand
+    # it a document with no form in it and require a refusal. It proves the
+    # jar was found, the class loaded and the file really read - not that the
+    # /DA test bites, which no example can prove without shipping a broken
+    # one. That proof belongs to a mutation run by hand, and it was made:
+    # a good form passes, one with /DA naming a font missing from /DR fails,
+    # and one with a visible widget without /AP fails - while qpdf --check
+    # calls all three of them faultless.
+    victim=""
+    for f in examples/out/*.pdf; do
+      case " $forms " in
+        *" $f "*) continue ;;
+      esac
+      victim="$f"
+      break
+    done
+    if test -z "$victim"; then
+      report_skip "the form control - every document carries a form, none is left over"
+    elif java -cp "$mustang" tools/formcheck.java "$victim" >/dev/null 2>&1; then
+      report_fail "formcheck passed `basename $victim`, which has no form - the check is not working"
+    else
+      report_pass "formcheck control: a document without a form is refused"
+    fi
+  else
+    report_skip "PDFBox (java plus tools/Mustang-CLI-*.jar) not available"
+  fi
+fi
+
+echo "=== 9. the manual is no older than what it is made from ==="
 
 # Neither doc/tclpdf.n nor doc/tclpdf.html is under version control: both are
 # built by "make all" and travel in the source archive. That is exactly why
@@ -410,7 +552,7 @@ for made in doc/tclpdf.n doc/tclpdf.html; do
   fi
 done
 
-echo "=== 9. the reference code of the tclpdf-tcl skill runs ==="
+echo "=== 10. the reference code of the tclpdf-tcl skill runs ==="
 
 # doc/claude/skills/tclpdf-tcl/reference/*.md is the code a reader - or an
 # agent - copies, so it has to keep running against the package as it is;

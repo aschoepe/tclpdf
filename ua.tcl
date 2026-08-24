@@ -47,6 +47,11 @@
 #                one that fell into artifact by default was never judged
 #   links        7.18.5 - Contents on every annotation, and every one
 #                inside a Link element (Matterhorn 28-011)
+#   form fields  7.18.1 with ISO 32000-2 14.9.3 - a description on every
+#                field (/TU), one per WIDGET where a field has several
+#                (UA-2 8.10.2.4), and every widget inside the Form
+#                structure element the field core makes for it (7.18.4,
+#                UA-2 8.10.1)
 #   viewer       7.1 - DisplayDocTitle, set by this module, is still on
 #
 # What it sets rather than demands: DisplayDocTitle, the pdfuaid schema, and
@@ -421,6 +426,7 @@ oo::define ::tclpdf::document::document {
     lappend problems {*}[my UaCheckLists]
     lappend problems {*}[my UaCheckGraphics]
     lappend problems {*}[my UaCheckLinks]
+    lappend problems {*}[my UaCheckFields]
     lappend problems {*}[my UaCheckAttachments]
     if {[llength $problems] == 1} {
       return -code error "tclpdf: PDF/UA cannot be claimed - [lindex $problems 0]"
@@ -546,6 +552,78 @@ oo::define ::tclpdf::document::document {
           one nested in a Link[expr {$two ? { or a Reference} : {}}]\
           ([expr {$two ? {8.2.5.20} : {7.18.5}}]); draw the text and the\
           link inside \[\$doc structure Link -script ...\]"
+    }
+    return $problems
+  }
+
+  # The form. Three rules, and all three are about the same thing: a widget
+  # annotation is a control someone operates without seeing it, so it has to
+  # say what it is and it has to sit somewhere in the reading order.
+  #
+  # The facts come from field.tcl, which owns the field table; what is UA's
+  # own is the objection. A form with no description at all is perfectly
+  # legal in a document that makes no claim, which is why none of this is
+  # refused at [$doc field ...].
+  #
+  # There is no check for the Form structure element itself beyond the third
+  # one: the core makes one per widget for every field of a tagged document
+  # (see [FieldStructure] in field.tcl), so the only way a widget ends up
+  # outside the tree is a field declared before [$doc tagged 1].
+  method UaCheckFields {} {
+    if {[my state fields] eq {}} {
+      return {}
+    }
+    set problems {}
+    # /TU, the accessible name of the field. ISO 32000-2, 14.9.3: an
+    # alternative name "shall be used in place of the actual field name" and
+    # "shall be specified using the TU entry"; ISO 14289-1, 7.18.1 makes an
+    # alternative description mandatory for every annotation that has no
+    # Contents. Refused rather than filled in with the field name, which is
+    # the one thing 14.9.3 says the alternative name replaces - and a form
+    # whose fields announce themselves as "iban" and "plz2" is the reason
+    # the standard has the entry at all.
+    set missing [my fieldsWithoutDescription]
+    if {[llength $missing]} {
+      lappend problems "[join $missing {, }] [expr {[llength $missing] > 1 ?
+          {are form fields} : {is a form field}}] without a description -\
+          PDF/UA reads /TU as the field's accessible name (7.18.1 with ISO\
+          32000-2, 14.9.3), and the field name is not it; pass -tooltip to\
+          \[\$doc field\]"
+    }
+    # /Contents or a Lbl per WIDGET, and PART 2 ONLY. ISO 14289-2, 8.10.2.3
+    # asks for it of every widget; ISO 14289-1 has no such clause and is
+    # content with the field's /TU (7.18.1), which is measured and not
+    # assumed - veraPDF 1.30 passes a UA-1 form whose widgets carry neither.
+    # Demanding it under part 1 as well would be this package inventing a
+    # rule, which is the one thing a conformance check may not do.
+    if {[dict get [my state ua] part] == 2} {
+      set widgets [my fieldWidgetsWithoutDescription]
+      if {[llength $widgets]} {
+        set named [lmap entry $widgets {
+          expr {[lindex $entry 1] eq {} ? [lindex $entry 0] :
+              [format "%s widget %d" [lindex $entry 0] \
+                  [expr {[lindex $entry 1] + 1}]]}
+        }]
+        lappend problems "[join $named {, }] [expr {[llength $named] > 1 ?
+            {have} : {has}}] neither a label nor a description - PDF/UA-2\
+            wants one or the other on every widget annotation (8.10.2.3), and\
+            the field's /TU is not it (8.10.2.4). Pass -label {script} to draw\
+            the label into the widget's own Form element, or -contents to\
+            describe it; the buttons of \[\$doc field radio\] take theirs as\
+            the third word of -buttons, {value {x y w h} description}"
+      }
+    }
+    # And in the tree. A widget outside it is invisible to a reader that
+    # follows the structure, and veraPDF says so: ISO 14289-1, 7.18.4 test 1,
+    # "A Widget annotation shall be nested within a Form tag".
+    set outside [my fieldsOutsideStructure]
+    if {[llength $outside]} {
+      lappend problems "[join $outside {, }] [expr {[llength $outside] > 1 ?
+          {are form fields} : {is a form field}}] whose widgets are outside\
+          the structure tree - every one is enclosed by a Form structure\
+          element (7.18.4; ISO 14289-2, 8.10.1), and the package makes it at\
+          the call that declares the field. A field declared before \[\$doc\
+          tagged 1\] misses it; move the switch up, right after \[tclpdf new\]"
     }
     return $problems
   }

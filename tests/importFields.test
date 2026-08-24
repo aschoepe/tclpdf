@@ -1,0 +1,638 @@
+# importFields.test --
+#
+# The fields of a foreign interactive form, read with [::tclpdf::pdf fields]:
+# the field tree and what is inherited down it, the six type words, the four
+# shapes of /V, the export values behind /Opt, the flags by name, the widgets
+# and the pages they sit on, and the two refusals.
+#
+# The fixtures are handcrafted byte for byte rather than written by this
+# package. That is the point of the file: a form tclpdf wrote is a form that
+# obeys tclpdf, and every corner worth reading - a value written onto the
+# widget instead of the field, a partial name that is empty, a flag bit no
+# table names, an /Opt whose entries are of two different shapes - comes from
+# files it did not write. Every one of them below was found in a foreign
+# document on the machine this was built on before it was written down here.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::importInfo
+package require tclpdf::field
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+
+# The form every test below reads, and it holds one of everything:
+#
+#   customer        a text field merged with its widget, its value in UTF-16BE
+#                   with the byte order mark of 7.9.2.2, ReadOnly and Multiline
+#   address         a node that carries a name, a type and a flag and NO widget
+#                   of its own - 12.7.4.2's non-terminal field
+#   address.street  a kid that names itself, so a field, inheriting /FT and /Ff
+#   address.city    the same, without an appearance stream
+#   rate            a radio set: one field, three widget kids without /T, and
+#                   the widgets on TWO pages
+#   interests       a list box whose /Opt mixes both shapes of entry and whose
+#                   selection is stated by /I
+#   salutation      a combo box that says which option is chosen by /V alone,
+#                   with a flag bit that no table in 12.7 names
+#   reset           a push button carrying a /V, which 12.7.5.2.2 gives it none
+#   news            a check box, its on state a NAME and also its widget's /AS
+proc ::tclpdfTest::formFixture {} {
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R /AcroForm\
+        << /Fields \[5 0 R 6 0 R 9 0 R 13 0 R 14 0 R 15 0 R 16 0 R\]\
+        /DA (/Helv 0 Tf 0 g) >> >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R 4 0 R\] /Count 2\
+        /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Annots \[5 0 R 7 0 R 8 0 R\
+        10 0 R 13 0 R 14 0 R 15 0 R 16 0 R\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Annots \[11 0 R 12 0 R\] >>"
+    # 4097 = ReadOnly | Multiline. <FEFF...> is "Ueber" with an umlaut.
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 10 100 30\]\
+        /FT /Tx /T (customer) /TU (Who) /Ff 4097\
+        /V <FEFF00DC006200650072> /DV (plain)\
+        /AP << /N 17 0 R >> /P 3 0 R >>"
+    # 8388608 = DoNotScroll, on the parent, so both kids answer it.
+    lappend objects "<< /FT /Tx /T (address) /Ff 8388608 /Kids \[7 0 R 8 0 R\] >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 40 100 60\]\
+        /T (street) /Parent 6 0 R /V (Musterweg 1) /AP << /N 17 0 R >> >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 70 100 90\]\
+        /T (city) /Parent 6 0 R >>"
+    # 49152 = NoToggleToOff | Radio.
+    lappend objects "<< /FT /Btn /T (rate) /Ff 49152 /V /full /DV /Off\
+        /Kids \[10 0 R 11 0 R 12 0 R\] >>"
+    foreach state {full Off Off} {
+        lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 10 20 20\]\
+            /Parent 9 0 R /AS /$state\
+            /AP << /N << /full 17 0 R /Off 17 0 R >> >> >>"
+    }
+    # 2097152 = MultiSelect. /Opt mixes a plain string with two-element
+    # arrays, and /I names the selection by position (Table 234).
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[200 10 300 60\]\
+        /FT /Ch /T (interests) /Ff 2097152\
+        /Opt \[ (books) \[(kids) (Kinder)\] \[(help) (Ehrenamt)\] \]\
+        /V \[ (books) (Ehrenamt) \] /I \[0 2\] /AP << /N 17 0 R >> >>"
+    # 2147876864 = Combo | Edit | bit 32, and nothing in 12.7 names bit 32.
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[200 100 300 120\]\
+        /FT /Ch /T (salutation) /Ff 2147876864\
+        /Opt \[ \[(F) (Frau)\] \[(H) (Herr)\] \] /V (Frau)\
+        /AP << /N 17 0 R >> >>"
+    # 65536 = Pushbutton. The /V is what a push button may not have.
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[200 200 220 220\]\
+        /FT /Btn /T (reset) /Ff 65536 /V (ignored) /AS /Off\
+        /AP << /N << /Off 17 0 R >> >> >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[200 240 220 260\]\
+        /FT /Btn /T (news) /V /yes /DV /Off /AS /yes\
+        /AP << /N << /yes 17 0 R /Off 17 0 R >> >> >>"
+    lappend objects "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\]\
+        /Length 0 >>\nstream\n\nendstream"
+    return [::tclpdfTest::buildpdf importfields-form.pdf $objects]
+}
+
+# One record out of the answer, by name.
+proc ::tclpdfTest::formField {fields name} {
+    foreach field $fields {
+        if {[dict get $field name] eq $name} {
+            return $field
+        }
+    }
+    return {}
+}
+
+proc ::tclpdfTest::formKeys {field args} {
+    set out {}
+    foreach key $args {
+        lappend out [dict get $field $key]
+    }
+    return $out
+}
+
+# --- the answer as a whole -------------------------------------------------
+
+test importFields-1.1 {every field of the tree, in the order the file lists it} -body {
+    set path [::tclpdfTest::formFixture]
+    lmap field [::tclpdf::pdf fields $path] {
+        dict get $field name
+    }
+} -cleanup {file delete $path} -result {customer address address.street address.city rate interests\
+        salutation reset news}
+
+test importFields-1.2 {every key is there on every record, always} -body {
+    set path [::tclpdfTest::formFixture]
+    set missing {}
+    foreach field [::tclpdf::pdf fields $path] {
+        foreach key {name partial object type value default flags options
+                selected tooltip readonly required pages widgets appearance} {
+            if {![dict exists $field $key]} {
+                lappend missing [dict get $field name] $key
+            }
+        }
+    }
+    set missing
+} -cleanup {file delete $path} -result {}
+
+test importFields-1.3 {a file with no interactive form answers nothing, not an error} -body {
+    set path [::tclpdfTest::buildpdf importfields-plain.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>"]]
+    ::tclpdf::pdf fields $path
+} -cleanup {file delete $path} -result {}
+
+test importFields-1.4 {a missing file is refused with the reader's class code} -body {
+    ::tclpdfTest::refuse {::tclpdf::pdf fields /no/such/form.pdf}
+} -result {1 1 {TCLPDF IMPORT FILE}}
+
+test importFields-1.5 {-xfa is a boolean, and an unknown option names the known ones} -body {
+    list [::tclpdfTest::refuse {::tclpdf::pdf fields /tmp/x.pdf -xfa maybe}] \
+        [::tclpdfTest::refuse {::tclpdf::pdf fields /tmp/x.pdf -deep 1}]
+} -result {{1 1 {TCLPDF IMPORT OPTION}} {1 1 NONE}}
+
+# --- the six type words ----------------------------------------------------
+
+test importFields-2.1 {/FT and /Ff together give the word the writing half uses} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    lmap name {customer address.street rate interests salutation reset news} {
+        dict get [::tclpdfTest::formField $fields $name] type
+    }
+} -cleanup {file delete $path} -result {text text radio listbox combo button check}
+
+test importFields-2.2 {a node without /FT anywhere above it has no type} -body {
+    set path [::tclpdfTest::buildpdf importfields-notype.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>" \
+        "<< /T (group) /Kids \[\] >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] type value
+} -cleanup {file delete $path} -result {{} {}}
+
+test importFields-2.3 {a /FT this package does not build travels as it stands} -body {
+    set path [::tclpdfTest::buildpdf importfields-alien.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>" \
+        "<< /FT /Zx /T (odd) /V (text) >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] type value
+} -cleanup {file delete $path} -result {Zx text}
+
+# --- /V, four data types ---------------------------------------------------
+
+test importFields-3.1 {a text value is a string, and UTF-16BE is decoded by the mark} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    ::tclpdfTest::formKeys [::tclpdfTest::formField $fields customer] \
+        value default
+} -cleanup {file delete $path} -result [list Über plain]
+
+test importFields-3.2 {a check box and a radio set answer the NAME, without its slash} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    list [::tclpdfTest::formKeys [::tclpdfTest::formField $fields news] \
+            value default selected] \
+        [::tclpdfTest::formKeys [::tclpdfTest::formField $fields rate] \
+            value default selected]
+} -cleanup {file delete $path} -result {{yes Off yes} {full Off full}}
+
+test importFields-3.3 {/Off is the reserved name, so nothing is selected} -body {
+    set path [::tclpdfTest::buildpdf importfields-off.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /FT /Btn\
+            /T (news) /V /Off /AS /Off >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] \
+        type value selected
+} -cleanup {file delete $path} -result {check Off {}}
+
+test importFields-3.4 {a push button has no value, even where the file writes one} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    ::tclpdfTest::formKeys [::tclpdfTest::formField $fields reset] \
+        type value selected
+} -cleanup {file delete $path} -result {button {} {}}
+
+test importFields-3.5 {a signature field says that it is signed, not what it claims} -constraints {
+} -body {
+    set path [::tclpdfTest::buildpdf importfields-sig.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 0 0\] /FT /Sig\
+            /T (Signature1) /V 5 0 R >>" \
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached\
+            /ByteRange \[0 100 200 300\] >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] type value
+} -cleanup {file delete $path} -result {signature signed}
+
+test importFields-3.6 {a signature field with no /V is a field waiting for one} -body {
+    set path [::tclpdfTest::buildpdf importfields-unsigned.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 0 0\] /FT /Sig\
+            /T (Signature1) >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] type value
+} -cleanup {file delete $path} -result {signature {}}
+
+test importFields-3.7 {a choice field answers the DISPLAY text, as the file holds it} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    list [dict get [::tclpdfTest::formField $fields interests] value] \
+        [dict get [::tclpdfTest::formField $fields salutation] value]
+} -cleanup {file delete $path} -result {{books Ehrenamt} Frau}
+
+# --- /Opt and the export values --------------------------------------------
+
+test importFields-4.1 {both shapes of an /Opt entry come back as export and display} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    dict get [::tclpdfTest::formField $fields interests] options
+} -cleanup {file delete $path} -result {{books books} {kids Kinder} {help Ehrenamt}}
+
+test importFields-4.2 {/I names the selection by position, and wins where it is there} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    dict get [::tclpdfTest::formField $fields interests] selected
+} -cleanup {file delete $path} -result {books help}
+
+test importFields-4.3 {without /I the display text is matched against /Opt} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    list [dict get [::tclpdfTest::formField $fields salutation] options] \
+        [dict get [::tclpdfTest::formField $fields salutation] selected]
+} -cleanup {file delete $path} -result {{{F Frau} {H Herr}} F}
+
+test importFields-4.4 {a typed value matching no option is the value, not a hole} -body {
+    set path [::tclpdfTest::buildpdf importfields-edit.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /FT /Ch\
+            /T (city) /Ff 393216 /Opt \[ (Bochum) (Essen) \]\
+            /V (Herne) >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] \
+        type value selected
+} -cleanup {file delete $path} -result {combo Herne Herne}
+
+test importFields-4.5 {an /I outside the /Opt array is dropped, not answered} -body {
+    set path [::tclpdfTest::buildpdf importfields-badindex.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /FT /Ch\
+            /T (city) /Opt \[ (Bochum) (Essen) \] /V (Essen) /I \[9\] >>"]]
+    dict get [lindex [::tclpdf::pdf fields $path] 0] selected
+} -cleanup {file delete $path} -result {Essen}
+
+# The case /I was invented for, and the only one where the two roads part:
+# Table 234 makes it needed "when two or more elements in the Opt array have
+# different names but the same export value" - or, as here, the same DISPLAYED
+# text, which /V then names twice over and decides nothing.
+test importFields-4.6 {where two options show the same text, only /I decides} -body {
+    set path [::tclpdfTest::buildpdf importfields-ambiguous.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /FT /Ch\
+            /T (branch) /Opt \[ \[(north) (Office)\] \[(south) (Office)\] \]\
+            /V (Office) /I \[1\] >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] \
+        value selected options
+} -cleanup {file delete $path} -result {Office south {{north Office} {south Office}}}
+
+# --- the flags -------------------------------------------------------------
+
+test importFields-5.1 {the set bits by name, in bit order, and the two shortcuts} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    list [::tclpdfTest::formKeys [::tclpdfTest::formField $fields customer] \
+            flags readonly required] \
+        [dict get [::tclpdfTest::formField $fields rate] flags] \
+        [dict get [::tclpdfTest::formField $fields interests] flags]
+} -cleanup {file delete $path} -result {{{ReadOnly Multiline} 1 0} {NoToggleToOff Radio} MultiSelect}
+
+test importFields-5.2 {bit 26 is RichText on a text field and RadiosInUnison on a button} -body {
+    set path [::tclpdfTest::buildpdf importfields-bit26.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm\
+            << /Fields \[4 0 R 5 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>" \
+        "<< /FT /Tx /T (rich) /Ff 33554432 >>" \
+        "<< /FT /Btn /T (set) /Ff 33587200 >>"]]
+    lmap field [::tclpdf::pdf fields $path] {dict get $field flags}
+} -cleanup {file delete $path} -result {RichText {Radio RadiosInUnison}}
+
+test importFields-5.3 {a bit no table names is reported, not swallowed} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    dict get [::tclpdfTest::formField $fields salutation] flags
+} -cleanup {file delete $path} -result {Combo Edit bit32}
+
+test importFields-5.4 {an /Ff that is not an integer counts as no flags at all} -body {
+    set path [::tclpdfTest::buildpdf importfields-badff.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>" \
+        "<< /FT /Tx /T (odd) /Ff /Radio >>"]]
+    ::tclpdfTest::formKeys [lindex [::tclpdf::pdf fields $path] 0] \
+        flags readonly required
+} -cleanup {file delete $path} -result {{} 0 0}
+
+# The two tables are deliberately not one - see [FieldFlagNames] - and this is
+# what keeps them from drifting apart: every name the WRITER knows has to be
+# the name this reader gives that bit for at least one field type.
+test importFields-5.5 {the reader's flag names agree with the writer's, bit for bit} -body {
+    set writer [set ::tclpdf::field::flagBits]
+    set reader [set ::tclpdf::pdf::fieldFlagCommon]
+    foreach {- table} [set ::tclpdf::pdf::fieldFlagByType] {
+        set reader [dict merge $reader $table]
+    }
+    set wrong {}
+    foreach {name bit} $writer {
+        if {![dict exists $reader $bit]} {
+            lappend wrong "$name: the reader names no bit $bit"
+            continue
+        }
+    }
+    foreach {bit name} $reader {
+        if {![dict exists $writer $name] || [dict get $writer $name] != $bit} {
+            lappend wrong "$name: reader bit $bit, writer\
+                [expr {[dict exists $writer $name]
+                    ? [dict get $writer $name] : {none}}]"
+        }
+    }
+    set wrong
+} -result {}
+
+# --- the field tree --------------------------------------------------------
+
+test importFields-6.1 {the fully qualified name is the chain joined with dots} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    ::tclpdfTest::formKeys [::tclpdfTest::formField $fields address.street] \
+        name partial value
+} -cleanup {file delete $path} -result {address.street street {Musterweg 1}}
+
+test importFields-6.2 {/FT and /Ff are inherited down /Kids, a name is not} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    list [::tclpdfTest::formKeys [::tclpdfTest::formField $fields address] \
+            type flags widgets] \
+        [::tclpdfTest::formKeys \
+            [::tclpdfTest::formField $fields address.city] type flags]
+} -cleanup {file delete $path} -result {{text DoNotScroll {}} {text DoNotScroll}}
+
+test importFields-6.3 {an inheritable entry travels down, never sideways} -body {
+    # The trap this catches: a walk that keeps what it inherited in one
+    # variable answers the second kid with the first kid's value.
+    set path [::tclpdfTest::buildpdf importfields-siblings.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm\
+            << /Fields \[4 0 R 5 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>" \
+        "<< /FT /Tx /T (first) /V (typed) /Ff 4096 >>" \
+        "<< /FT /Tx /T (second) >>"]]
+    lmap field [::tclpdf::pdf fields $path] {
+        ::tclpdfTest::formKeys $field name value flags
+    }
+} -cleanup {file delete $path} -result {{first typed Multiline} {second {} {}}}
+
+test importFields-6.4 {a kid without /T is a widget, not a field (12.7.4.2)} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    set rate [::tclpdfTest::formField $fields rate]
+    list [llength $fields] [dict get $rate partial] \
+        [llength [dict get $rate widgets]]
+} -cleanup {file delete $path} -result {9 rate 3}
+
+test importFields-6.5 {a /Kids ring is walked once, not for ever} -body {
+    set path [::tclpdfTest::buildpdf importfields-ring.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>" \
+        "<< /FT /Tx /T (loop) /Kids \[4 0 R 5 0 R\] >>" \
+        "<< /T (kid) /Kids \[4 0 R\] >>"]]
+    lmap field [::tclpdf::pdf fields $path] {dict get $field name}
+} -cleanup {file delete $path} -result {loop loop.kid}
+
+# The one the foreign documents taught, and the one qpdf reads differently:
+# a producer that writes /V onto the WIDGET rather than onto the field.
+# 12.7.4.2 says the widget is not a field, Table 226 makes /V a field entry,
+# and PDFBox reads it as this does - so the field's own /V is the answer, and
+# an empty one stays empty.
+test importFields-6.6 {a /V on the widget is not the field's value} -body {
+    set path [::tclpdfTest::buildpdf importfields-widgetvalue.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm\
+            << /Fields \[4 0 R 6 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[5 0 R 7 0 R\] >>" \
+        "<< /FT /Tx /T (silent) /Kids \[5 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /Parent 4 0 R\
+            /V (on the widget) >>" \
+        "<< /FT /Tx /T (loud) /V (on the field) /Kids \[7 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 20 10 30\] /Parent 6 0 R\
+            /V (contradicted) >>"]]
+    lmap field [::tclpdf::pdf fields $path] {
+        ::tclpdfTest::formKeys $field name value
+    }
+} -cleanup {file delete $path} -result {{silent {}} {loud {on the field}}}
+
+# --- the widgets and their pages -------------------------------------------
+
+test importFields-7.1 {one field, three widgets, and they sit on two pages} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    set rate [::tclpdfTest::formField $fields rate]
+    list [dict get $rate pages] [llength [dict get $rate widgets]] \
+        [lmap widget [dict get $rate widgets] {dict get $widget state}] \
+        [lmap widget [dict get $rate widgets] {dict get $widget page}]
+} -cleanup {file delete $path} -result {{1 2} 3 {full Off Off} {1 2 2}}
+
+test importFields-7.2 {a merged field-widget is its own widget, with its rectangle} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    set customer [::tclpdfTest::formField $fields customer]
+    list [llength [dict get $customer widgets]] \
+        [dict get $customer pages] \
+        [dict get [lindex [dict get $customer widgets] 0] rect]
+} -cleanup {file delete $path} -result {1 1 {10 10 100 30}}
+
+test importFields-7.3 {"appearance" is 1 only where EVERY widget carries /AP /N} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    lmap name {customer address.street address.city address rate} {
+        dict get [::tclpdfTest::formField $fields $name] appearance
+    }
+} -cleanup {file delete $path} -result {1 1 0 {} 1}
+
+test importFields-7.4 {a widget no page lists has no page, and says so} -body {
+    set path [::tclpdfTest::buildpdf importfields-orphan.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /FT /Tx\
+            /T (nowhere) /V (typed) >>"]]
+    set field [lindex [::tclpdf::pdf fields $path] 0]
+    list [dict get $field pages] [dict get $field value] \
+        [dict get [lindex [dict get $field widgets] 0] page]
+} -cleanup {file delete $path} -result {{} typed {}}
+
+# The widget WITHOUT the appearance stands FIRST on purpose: a reading that
+# simply kept the last widget's answer would say 1 for this field.
+test importFields-7.5 {one widget without /AP is enough to make it 0} -body {
+    set path [::tclpdfTest::buildpdf importfields-halfdrawn.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\] >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[5 0 R 6 0 R\] >>" \
+        "<< /FT /Btn /T (rate) /Ff 32768 /V /a /Kids \[5 0 R 6 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /Parent 4 0 R\
+            /AS /a >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 20 10 30\] /Parent 4 0 R\
+            /AS /Off /AP << /N << /a 7 0 R /Off 7 0 R >> >> >>" \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\]\
+            /Length 0 >>\nstream\n\nendstream"]]
+    set field [lindex [::tclpdf::pdf fields $path] 0]
+    list [dict get $field appearance] \
+        [lmap widget [dict get $field widgets] {dict get $widget appearance}]
+} -cleanup {file delete $path} -result {0 {0 1}}
+
+# --- the tooltip -----------------------------------------------------------
+
+test importFields-8.1 {/TU is the field's, and empty where the file writes none} -body {
+    set path [::tclpdfTest::formFixture]
+    set fields [::tclpdf::pdf fields $path]
+    lmap name {customer address.street} {
+        dict get [::tclpdfTest::formField $fields $name] tooltip
+    }
+} -cleanup {file delete $path} -result {Who {}}
+
+# --- the two refusals ------------------------------------------------------
+
+test importFields-9.1 {an XFA form is refused, and -xfa 1 asks for the shadow copy} -body {
+    set path [::tclpdfTest::buildpdf importfields-xfa.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields \[4 0 R\]\
+            /XFA 5 0 R >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 400 500\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>" \
+        "<< /Type /Annot /Subtype /Widget /Rect \[0 0 10 10\] /FT /Tx\
+            /T (shadow) /V (a copy) >>" \
+        "<< /Length 0 >>\nstream\n\nendstream"]]
+    list [::tclpdfTest::refuse {::tclpdf::pdf fields $path}] \
+        [lmap field [::tclpdf::pdf fields $path -xfa 1] {
+            ::tclpdfTest::formKeys $field name value
+        }] \
+        [dict get [::tclpdf::pdf info $path] form]
+} -cleanup {file delete $path} -result {{1 1 {TCLPDF IMPORT XFA}} {{shadow {a copy}}} XFA}
+
+# A field name and a text value are strings, and 7.6.2 encrypts strings. What
+# survives is measured rather than assumed: /FT and /Ff come through, /T and
+# /V do not - so the refusal is the only honest answer, and [pdf info] is
+# where an encrypted file still says what it can.
+test importFields-9.2 {an encrypted file is refused, not answered with cipher text} -body {
+    # AES-256 needs PDF 2.0, and the encryptor has to be told before anything
+    # is written - both are the document's own rules, not this test's.
+    set path {}
+    set doc [tclpdf new -unit pt -format a4 -version 2.0]
+    $doc encrypt -owner geheim
+    $doc page add
+    $doc field text customer -rect {20 40 80 8} -value "Erika Mustermann"
+    set path [::tclpdfTest::scratch importfields-encrypted.pdf]
+    $doc write $path
+    $doc destroy
+    list [::tclpdfTest::refuse {::tclpdf::pdf fields $path}] \
+        [dict get [::tclpdf::pdf info $path] encrypted]
+} -cleanup {file delete $path} -result {{1 1 {TCLPDF IMPORT ENCRYPTED}} 1}
+
+# --- against the writing half ----------------------------------------------
+
+# The round trip that matters: what [$doc field ...] wrote is what [pdf
+# fields] reads back, in the same words. Written here rather than in the field
+# modules' own tests because it is the READER that is under test.
+test importFields-10.1 {a form this package wrote reads back as it was declared} -body {
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    $doc field default -family helvetica -size 10
+    $doc field text customer -rect {20 40 80 8} -value "Erika Mustermann" \
+        -tooltip "Who" -readonly 1
+    $doc field check news -rect {20 55 5 5} -checked 1 -export yes
+    $doc field radio rate -tooltip "Which" -buttons {
+        {full {20 65 5 5}} {reduced {40 65 5 5}}} -value full
+    $doc field combo salutation -rect {20 75 40 8} \
+        -options {{F Frau} {H Herr}} -value F
+    $doc field listbox interests -rect {20 90 40 20} \
+        -options {{books Lesungen} {help Ehrenamt}} -value books
+    $doc field button reset -rect {20 115 30 8} -caption "Reset" -action reset
+    set path [::tclpdfTest::scratch importfields-written.pdf]
+    $doc write $path
+    $doc destroy
+    lmap field [::tclpdf::pdf fields $path] {
+        ::tclpdfTest::formKeys $field name type value selected readonly
+    }
+} -cleanup {file delete $path} -result {{customer text {Erika Mustermann} {} 1}\
+        {news check yes yes 0}\
+        {rate radio full full 0}\
+        {salutation combo Frau F 0}\
+        {interests listbox Lesungen books 0}\
+        {reset button {} {} 0}}
+
+# --- against qpdf ----------------------------------------------------------
+
+# The independent reading. qpdf enumerates WIDGETS where this enumerates
+# FIELDS, so a radio set of three buttons is three rows there and one record
+# here, and a non-terminal field appears here and not there; what has to agree
+# is the name, the type behind /FT plus /Ff, and the flag integer.
+test importFields-11.1 {name, type and flags agree with qpdf's own reading} -constraints qpdf -body {
+    set path [::tclpdfTest::formFixture]
+
+    # qpdf answers with warnings on a handcrafted file - a page without
+    # /Resources, and the flag integer of "salutation", which is larger than
+    # its own int and comes back clamped to INT_MAX. Its exit status is then
+    # 3, so the output is taken rather than the status, and the clamped field
+    # is left out of the comparison below by name.
+    catch {exec qpdf --json --json-key=acroform $path} json
+    # qpdf prints its keys alphabetically, so these three stand in this order
+    # and next to each other: fieldflags, fieldtype, fullname.
+    set seen {}
+    foreach {- flags kind name} [regexp -all -inline \
+            {"fieldflags": (-?[0-9]+),\s+"fieldtype": "/([A-Za-z]+)",\s+"fullname": "([^"]*)"} \
+            $json] {
+        dict set seen $name [list $kind $flags]
+    }
+    if {![dict size $seen]} {
+        return "qpdf answered nothing this test could read"
+    }
+    set wrong {}
+    foreach field [::tclpdf::pdf fields $path] {
+        set name [dict get $field name]
+        if {$name eq "salutation"} continue
+        if {![dict exists $seen $name]} {
+            # qpdf lists only fields that have a widget.
+            if {[llength [dict get $field widgets]]} {
+                lappend wrong "$name: qpdf does not list it"
+            }
+            continue
+        }
+        lassign [dict get $seen $name] kind flags
+        if {[::tclpdf::pdf::FieldType $kind $flags] ne [dict get $field type]} {
+            lappend wrong "$name: type [dict get $field type] against qpdf\
+                $kind/$flags"
+        }
+        if {[::tclpdf::pdf::FieldFlagNames $kind $flags]
+                ne [dict get $field flags]} {
+            lappend wrong "$name: flags [dict get $field flags] against qpdf\
+                $flags"
+        }
+    }
+    set wrong
+} -cleanup {file delete $path} -result {}
+
+::tcltest::cleanupTests
+return

@@ -1,5 +1,5 @@
-C Correct\swhat\sopenssl\scan\sand\scannot\sdo\sunder\sa\sPAdES\sclaim\n\n-\ssign.tcl\s-\sthe\srefusal\sof\sa\ssigning-time\sattribute\ssaid\sopenssl\sand\sBouncyCastle\soffer\sno\sswitch\sto\sleave\sit\sout\sand\stherefore\scannot\sproduce\sa\sPAdES\ssignature.\sMeasured\swith\sOpenSSL\s3.6.3:\s"cms\s-sign\s-cades\s-no_signing_time"\smakes\san\sobject\sthis\spackage\stakes\sunder\s/ETSI.CAdES.detached,\sand\sthe\ssame\ssigner\swithout\sthe\sswitch\sis\srefused.\sThe\smessage,\sthe\smodule\scomment,\sthe\smanual\sand\sthe\sskill\sreference\snow\ssay\swhat\sthe\sswitch\sis\sand\sthat\sthe\sLibreSSL\sshipped\sas\s/usr/bin/openssl\son\smacOS\shas\snone\n-\stests/sign.test\s-\ssign-6.8\ssigns\swith\sthat\sswitch\sand\swrites\sthe\sdocument\sboth\sways\sin,\sguarded\sby\sthe\snew\sconstraint\ssigningPades\sso\sa\smachine\swithout\ssuch\san\sopenssl\sskips\srather\sthan\sfails;\ssign-6.7\skeeps\sthe\sother\shalf\sand\sits\scomment\ssays\swhich\sof\sthe\stwo\sproperties\sit\smeasures
-D 2026-08-22T22:14:55.239
+C Interactive\sform\sfields,\sand\sreading\sone\sback\n\n-\sfield.tcl\s-\sthe\sAcroForm\score\sand\sthe\stext\sfield:\sthe\sfield\stree,\s/AcroForm\son\sthe\sevent\sbus,\sthe\sdocument\sDA\sand\sDR,\san\sappearance\sstream\sdrawn\sfor\severy\swidget,\sand\sa\sdeclaration\sthat\stakes\sseveral\swidgets\sfor\sone\sfield.\sNeedAppearances\sis\snot\swritten\sat\sall\n-\sfieldButton.tcl\s-\scheck\sbox,\sradio\sgroup\sand\spush\sbutton.\sA\sradio\sfield\sis\sone\sfield\swith\sKids\swhose\swidgets\scarry\sno\sT,\sand\sunder\sa\sPDF/A\sclaim\sa\sreset\saction\sis\srefused\sat\sthe\swrite\n-\sfieldChoice.tcl\s-\slist\sbox\sand\scombo\sbox;\sOpt\skeeps\sexport\svalue\sand\sdisplay\stext\sapart,\sV\sholds\sthe\sdisplay\stext\n-\sfield.tcl,\sstructure.tcl,\sua.tcl\s-\sa\stagged\sdocument\sencloses\severy\swidget\sin\sa\sForm\selement\sof\sits\sown\swith\sOBJR\sand\sStructParent.\s-tooltip\sis\srequired\sunder\sa\sUA\sclaim,\s-contents\sdescribes\sone\swidget,\s-label\sdraws\sthe\slabel\sinside\sthe\sForm\selement\sand\sneeds\sPDF\s2.0\n-\simportInfo.tcl\s-\s::tclpdf::pdf\sfields\sanswers\sthe\sfields\sof\sa\sfinished\sform\swith\sthe\sreader\sthis\spackage\salready\shas:\sthe\stype\sin\sthe\swords\sthe\swriting\sside\stakes,\sthe\svalue\sper\sthe\stype\sit\sbelongs\sto,\sthe\sflags\sby\sname,\sthe\swidgets\sand\stheir\spages.\sAn\sencrypted\sfile\sis\srefused\srather\sthan\sanswered\swith\srubbish,\sand\san\sXFA\sone\sneeds\s-xfa\n-\ssign.tcl\s-\s/AcroForm\shas\sone\swriter\sagain,\sand\sthe\ssignature\srectangle\sgoes\sthrough\sthe\sshared\sarithmetic\n-\sdocument.tcl\s-\sthe\sversion\srefusal\scarries\san\serrorcode;\severy\sRequireVersion\scaller\sgains\sone\n-\stools/formcheck.java,\stools/check.sh\s-\sa\snew\ssection\sover\severy\sdocument\sthat\scarries\sa\sform:\sqpdf\sfor\sthe\sstructure,\sPDFBox\sfor\swhether\sa\sfield\scan\sbe\sfilled\sat\sall\n-\stests/helper.tcl\s-\sthe\shandcrafted-file\sfixtures\smove\sout\sof\stests/import.test,\swhich\sis\swhere\sa\ssecond\stest\sfile\sneeded\sthem\n-\sexamples\s09.01\sto\s09.04,\sthe\slast\sof\sthem\sthe\ssame\sfield\stypes\sin\san\sappearance\sof\stheir\sown,\sand\sa\stest\sfile\sper\smodule\n-\sdoc/tclpdf.md\s-\sthe\sform\sfield\ssection,\sthe\sreader\sentry,\sand\sthe\sTCLPDF\sFIELD\sand\sTCLPDF\sVERSION\serror\scodes;\sthe\sTCLPDF\sIMPORT\sclass\sgains\sthe\stwo\ssub-codes\sit\slacked\n-\sdoc/claude\s-\sa\sskill\schapter\sfor\sform\sfields,\swriting\sand\sreading\n-\sknown\sopen:\sa\sradio\sset\scannot\sspan\spages\sthrough\s-buttons,\s-label\sis\srefused\son\sany\sfield\swith\smore\sthan\sone\swidget,\sand\sa\smisspelt\soption\sname\sis\sstill\srefused\swithout\san\serrorcode
+D 2026-08-24T09:29:45.046
 F Makefile.in cc6abf248f914790abc58db615d31f9d1811c4e3c285bb7266c9e4e0f48fdeb0
 F README e0bfb2cc90f6823d6897ad316546951acb831f2bb9635723304fa1182a7bc1d0
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -11,13 +11,13 @@ F bidiData.tcl fb4b333f0221b0af49e0bf47d9c05941e33d3291236241715fced64e574b4099
 F color.tcl 3e5f201949ef117495006fd8f1a852de5344f7dc2a13978c8bec625988b585dc
 F colorFont.tcl 44d617449f33b397b2ef4d64ee36731214ce81ac9f69ad225d19adabe7d8eb09
 F colr.tcl b4fd3107c4d32ada75f23cf1aad5d0c9111f6b033a786f74d903e425aec79ac3
-F configure 70620da330626b9ee7c91150f30d949be458db81b275fe4d7f0b9c2e04070dba x
-F configure.ac 7b31ac9568266072bdfc7dab051a97a977913cc3f8c87424e6513e2b336e19d2
+F configure 01d7ed379003477fef06145b5947653e691169e8132722688980a3adaa9e0186 x
+F configure.ac f9f5d0010527f3b2642a3e944a750e9522064986e3ab0db53f81a1e5ff842896
 F crypto.tcl 851746f7541be0efb73f7d4da5cd63ca0e2ca7b3d00a9ef4f054af52cba572d2
 F doc/PLUGINS.md 3febfcf9e854715bb2a437011973dd2a3d57943f062747858aa5edbfd56f6023
 F doc/TCLPDF-VS-PDF4TCL.md 6c339a524e8f47f0473a9541a6e54181508f7beb0bdd2cced87f534d3224f025
 F doc/claude/TCLPDF.md 3beaeeafae10631c847dbb9466b350b294dfbc3a15579357d576f894c94314e9
-F doc/claude/skills/tclpdf-tcl/SKILL.md 43bdd221351322b46781c60c70a9f44801b088288586161f77254b67f5187440
+F doc/claude/skills/tclpdf-tcl/SKILL.md c5b40c5bd575087fa24a274b09c779cec3b47babd832defbde767a61b0f46ba6
 F doc/claude/skills/tclpdf-tcl/assets.tcl d1681f2a12cb2c22aa08f19dcfe2f205ebba7f7b9c5b589dc63f83751b006d9b
 F doc/claude/skills/tclpdf-tcl/check.tcl 5f8407a531926378bddf82475ca1b49478edba5c173233767f9e0cee450e5271
 F doc/claude/skills/tclpdf-tcl/reference/01-document.md 6825d89cd506272a6341133fd23c1affa0d69128f0a2c7ce1f827faaed22c6ba
@@ -31,10 +31,11 @@ F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md b281f35b55af1
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md e80dcefb46eabcb338236beb5133fd700a3207d048c9b3fda9a6c35747bc8cbf
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md f2ac58b80453006e13a2a6a63d42c01d42cff1012cc7ae90a5a4e9cb7329be6e
 F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md f0212a9b794a005e38e90d6cb3ea9dd5de3fe4b9da3a611e4170c46df9e279aa
-F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md a7f8533338116431e7fb69fcc2c637a30693fd1f2c544bbac886d8a535a5fb6c
+F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md c903cd48b9f66b8d8450ae6dd50ea96a4b588de520025095bdd47958713fbfbe
+F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md 1c861f286ea397c940ad83f6c3a8be7a46ee356bbef71bc4ddc51c6df0f3da00
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md 38c8b2a4ac581a1a368071e0ecc345a5ae674f9cda70ca9350ea43fcf3d59d90
-F document.tcl 609fe64b654581966394557302a1701992ba8448484d0cfa38cb9c7282bf3e69
+F doc/tclpdf.md cd2ba963e42519d7246fa35bf47b8c53f937d16ee22e179f78d9071a072656d1
+F document.tcl fb997acb45960bf0f40218fc2c3898a1d30eb318c2f184691906d46bfdbd9274
 F encrypt.tcl 52fdeb17d3dac1daef41a51ea63bb522881940875b30aee6c64c085b928341d9
 F event.tcl fd307861a28ba3af7ab40534970d16e4b51e2759bda9aa6095f3c0c3748e3ef4
 F examples/00.01-hello-world.tcl 7ebcbd6467061066628f2b536cc6729baf1f9684da8c8bed0842c458e7b2bd68
@@ -100,6 +101,10 @@ F examples/08.01-signature.tcl dd08e8925ac637a131fedd614147fb5aafbaa6562b1d10222
 F examples/08.02-signature-visible.tcl 5b48c3a41077d6da40a9cc827ecde98a77b7cffb6cdf38c4409148246e24a133
 F examples/08.03-second-signature.tcl 0a346ca2d63f55c844811f46a753f626f5f08a96e60b5d01cbd2a16ebb0e4152
 F examples/08.04-zugferd-signed.tcl c26651d345cb414bf2e68f43f93d79eadced5a33d6b999f278af8caa436d6790
+F examples/09.01-form-fields.tcl 1515d744371f48d1ca4b2557ccfca70982c359edcb148e2d707fbd7ee321ddbd
+F examples/09.02-form-application.tcl 924d1441ad137fa575a3d8c6209f24831e347decf8974a83a0f1b1a2780edc12
+F examples/09.03-form-read.tcl 4335a34a05537adfce5f367f36bf9aac2784e72df90501eb078c825625228b5c
+F examples/09.04-form-design.tcl 27fae3a5c439b5bce1e2a7acec35aa56a23160057f91b75894d6f0e266b9b344
 F examples/assets/README.md c098cb01dcc0a321cca3f128d71138f3673fe4aa79702c0dc0553c7aead369b6
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
@@ -269,6 +274,9 @@ F examples/assets/xml/order-x-comfort.xml 35f15c337414112a8e33a3e768de03c7b5763e
 F examples/assets/xml/zugferd-en16931.xml 53e2b6f8ac1759ab26e77f42e7d4262cf3ee333afee47581d2248efebc1aae40
 F examples/assets/xml/zugferd-minimum.xml c8acc70758fdbbcee9f3446b8ca4df9f2561242a46a6cd3cab62ee7f26466476
 F examples/common.tcl f002bb98d99b983e7a9af8994c2d2e85f37e34bd8bcabc853b56101d406dd741
+F field.tcl e81e55ec84298943ee6fcd3e488f184f2b0e8b8b3a6722bd0d65bdfd9dc9f7a0
+F fieldButton.tcl a5ead93cb11b0e25fbd7af0b1c7572bd333d9b3534b9a5f638922502c0a9641c
+F fieldChoice.tcl 09d7e6dbc5aa177b3ec944c18b0ff37d8275efceef6d1550f812510c731e6524
 F filter.tcl a21629e25d5b67ec2a21f5a2f2c9c6303a07d04a933ffe211376a0d158e251f5
 F font.tcl 0295b4a9e52ede48eb0203ec94ea42ce2ffbdf84e5f680ce65d57c064b4d213f
 F forms.tcl 1d9bbc6eab77d2c2918938550fa59f51dbd8136d23a2f6affad45f626451004c
@@ -293,7 +301,7 @@ F imagePngAlpha.tcl 48d8b1525dac075245ca3f3b07348af7a94748911f18d236547dae9bd7da
 F imageTiff.tcl 4afa46fbd6f5473fea14777cdf3b43dcfd6ea58a5b54e24849b44257e691c62f
 F imageTiffStreams.tcl 5b857267847b0ba791cb739dafd67037624a81666e6b3be39c0c3c40cb77ea85
 F import.tcl 96a8981a2a96b503abdf8d155487766be3314077280b27646f0be4738cf450da
-F importInfo.tcl c8b481d5297369f1907d81c3c3fbbd13baff9e2a0920dd927a0138dce92abe46
+F importInfo.tcl 4c6d9418195e91557aa8672a7d9a2ed25cef29d853990ad622f42d1450ae63f2
 F importRead.tcl 4cedd539253ff0089674070e749195785274a2ebe6b2b9125247f2a2289eef9f
 F io.tcl 3283fb3b0a0c86a656e2e7e2211a21f5feb188eba8ebb968b125e1099abc3c59
 F joining.tcl dc3b951a953ca221e6ca9098e5c1fa9f98a0bde39414b1bfc3fb5887326c7371
@@ -316,13 +324,13 @@ F pageNumber.tcl 35986b98f21323e6e0197d43d31f874dbe7fd274e7c55cd91706825b433edda
 F pattern.tcl c5a7f0c953f4f3e884e5ea52679f5823c35b5aec4336234833b1b527d23f8df3
 F pdfObj.tcl d975570a1bec5f7d86795b173c936bdcbc096b0e0a3c7f7103c0d496259e0c6b
 F pdfa.tcl 47f4c20cc30d66807cbc8ba50574af71488667c16d0df55c650367bb34686294
-F pkgIndex.tcl.in d6e117ec305e5db2747583473d23abb0b65830f0e05a46308ddfb572715b803b
+F pkgIndex.tcl.in ec74f7c7e3d479fcbe00c15036a123e3391b6b634c6001e5608e25b9c19847e2
 F sfnt.tcl 8d0c517b1515d95d10cc6b70b341e12a54649142271a00ceb4047e69baadbe88
 F shading.tcl 9a9233268829bdb921f01d784932077622a64978e356c8edd387fc0d274680c7
 F shape.tcl 82879e3938ecb8caec701c8cf2facb53877441ab9245f0b46a8fd6fd57f47282
 F shaping.tcl b79179cc0b62cda276814e78b39e070236ede3ba71097e6d9d81a723138a1892
-F sign.tcl 648d67da96e1c27fcb1af54afcbac251f12718804b8c077d3fd1dbce45b09229
-F structure.tcl fc6391ffe1d0baea43183789b3025bcdf85e8d0ce6b1983d0ec61deed0ea2eb0
+F sign.tcl d1f6718a9100a195f770ff2ddec7e24e604399cf940c858da88f1105513f6601
+F structure.tcl 20a8ee4afb9e2fbc85566b2e9b0e18bf1e65281e4e4b9d88b56f26c8b76833f9
 F structureDest.tcl d1bcec84de069eb4a54274e64ff7ab64aa464f905e4b5562329af8b0cf40c21a
 F structureReport.tcl 7de7aab9646e21333f6060dc06f6adfacc2804672656333b398ee193b9cf47bb
 F structureWrite.tcl 5ab3bafbf4c1d9376ed263a402f6e60b3bf06d69bf38d9d238d132e7e7a25669
@@ -341,7 +349,7 @@ F tclconfig/tcl.m4 24841be70516af95124d989e9b9a9fb07879fdc9cf2248c4ce6fc7aa3a5ae
 F tclpdf.tcl 169567b9dfb7112a9b3c1694eb139c86f88e5e4bf4fd939eab8d5ae685e90445
 F tests/000-tools.test a34212d4211e2a058407007db81dafe473ca4ae292f0689f2401dcee19eb2e52
 F tests/afm.test 4bf0aaff4783c493fb8ecc7528e226e710bb1eca1ce43668989caa4971bbb027
-F tests/all.tcl dc5dfdf37a25d86911aafd2f34e60eed6dece968bfda131934e288d4b11500a1
+F tests/all.tcl 316637416e2a4757c730bd508f428476ad5362cc7ddda8a417ecf95e61bd1f04
 F tests/attach.test 38f6824956c1ca91d1a4a596dd161426df294aa5bd94ba350e3af67a6f51c7bc
 F tests/barcode.test 6864fa9e33ce7259155d0ed3ac6f4a30e248627987ff6338a771c5215af4c48f
 F tests/bidi.test ff69564a49dab8ba6cfc157a07e486783b2114686a54bfdd8cc55cbb0371e7a3
@@ -352,6 +360,9 @@ F tests/crypto.test a22e6b1d56f804f2224f81fe0ff591a1fe99da34ec17015dbebfe832ef38
 F tests/document.test 7907c045efc4574f1131c0156897554349cd413f8ead003f52244e3d6d0fa7c9
 F tests/encrypt.test 13a0c664256fba2db63f5b5ef04bdb3c8847cef795abc619ee213a7f71b1b4f6
 F tests/event.test 4f2421ec504f22faeceab45e576fe65165a87be7753503e98fac6800ce3384d3
+F tests/field.test e00feb1d4fa08050c2da9904e61b5e7d2eaf1e30c37e8d7a105d7aa015e13168
+F tests/fieldButton.test 02aa4ddbc9dca26be0c3a9115c9468ec484ac4f01d74eda1efd8ab02a4ab5c3a
+F tests/fieldChoice.test e90d1da8d2a4cab9657c5225739e55e05f6f95a6a939c904374817ddc905eefc
 F tests/filter.test d76b7a69156ad808a11fca3bb1908630915d013c91757de2df2923f9ae7e0cea
 F tests/font.test f990ed6763f469020de1f7605ad2ab0998d6f83a2cb19573ca94841a4b045ce9
 F tests/forms.test 29d44d0c14aafcf09bb8b297d616ea03c4fa1b5c1993fc3c6bedf8e016599707
@@ -361,12 +372,13 @@ F tests/glyfOutline.test 68e1acd165e1ba2e2e5f3e8d731919054a52455069e116311a98cce
 F tests/glyfPath.test 539152f1224b98417d8733922b426d78fddfa670429e126c1259bef42658fb8f
 F tests/graphics.test 290de8e9da3c1f34ecc4bd600322ffa01a92a4b65f6ddb6d2316ccfbd6b0436c
 F tests/gsubApply.test 5a1d9cba1dfeff3ad2b4d5fbe6d021c440d3828c304ccf6760c0bae42d74de65
-F tests/helper.tcl 55ea8a49ca5d86ed473c8dc4fef0b2b87173abca5b21d3eea5b46fc0d2ac1c4b
+F tests/helper.tcl 4e1e08fa4bea929b20446fad7b89af4bdc383cb7865577547eeb2c93ab7186ff
 F tests/hyphenate.test f1c82c2ad30e1f8944acce35e096106e6e28527a8ec7e5f1ee0bae032ce6ec1f
 F tests/image.test ab772a491ad87288678de4606b4d3f59b3fe81bf778a00e4118613a83ab3bf61
 F tests/imageTiff.test cc5bcda9250335cad7ccbfcb66df845879c0b77b8ed20eaf1ba94a1a2f46a1fc
 F tests/imageTiffStreams.test d0177cc94c57091c35d43063565740c9895a932a74d4d4082f7f1520cfec5792
-F tests/import.test 180746834f6e66909241a0f3ac9499d387cbcfeded7a628adf58ed184768bffe
+F tests/import.test a471eba01ec852da13389d7d6ecb41ddb0c60df4cdc8d3358bc919d4aa8a7881
+F tests/importFields.test b4a41a71fd104c7e3c93a7bc0f7cff9f93c79d909d42061043999052762c8f0c
 F tests/importLayer.test 7d044b343fc4e98f0b25472384e359c3c08769352946c43f4a674907936f0c8a
 F tests/joining.test 9ba3834dcf0dce5d3c025084ed9d88df24b00e4f85e59bca4c7cadb1ba84f276
 F tests/kern.test 038fab018040d486f28b65f4c0b86bf544793c81c455fc7b173e93484c789000
@@ -407,8 +419,9 @@ F textPath.tcl ee06a1d0d8a30a15dfddc03680b1dd65ee0fa5c757ae9fa886b7ae0fc049fe95
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
 F tools/archive.sh 0e66d1202193b8d23a90e7a2ec15e95e802f8df85cf54d15613ffdb401ec12a4 x
-F tools/check.sh 545fa7df7f58432226da8457487d79ca326050f45dfbea2ad00a7564d914d52b x
+F tools/check.sh a13e02769202aa20c3635680340d6bba37f5cbab38277dc8b7212202cf67d720 x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
+F tools/formcheck.java 6fcfc8b9b37f786b65123d3fc54a12ef7d23448c5bc0e3f93119c1e61def6f07
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
 F tools/mkafm.tcl a063c46cdce9e9dd1b270249fd72e1ccb253c30bcdb836c244fef6760c3956c0
 F tools/mkbidi.tcl 38025357e277d5fc206a7006ae2f3354b7765da5189fb55012efd5775931f76b
@@ -420,7 +433,7 @@ F tools/ucd/DerivedBidiClass.txt 6594e9e9b09f7d66eeac10d42a3716bb2f0271435a4dd72
 F tools/ucd/DerivedJoiningType.txt 81904371412bcba251233401eedb6e38999537184b54353d3c98186edf9608af
 F type1.tcl aa002e641098d99ec65d774063018b457587e0db1d3b098322c2181741fbb5f4
 F type3.tcl a9b10fe96ee025a462f882187f57d3ab312087c911df3e3e626fec2dbb8f8cb5
-F ua.tcl 5ce49a6708a1f205c2a6ed54da2f942a4a91cad0f62f95a78b42c35476cd8a08
+F ua.tcl 48123150e487ab483566036a727e914fbd5f66aba5574dd9bdcc83a0961dfc51
 F update.tcl 7d50049378e648aa9ed62e17befbaa26c4b9ea2d93bee0d6cbb6ce84a8f8e979
 F uv/template-download.html eb5ea7f8f3b3942c824177867f4deb396e54e12450701551a0130af770411035
 F varFont.tcl ba4068fa98a0ff11173548a8dd8ed117aae2eb503bf7b04eb96da158beba605b
@@ -430,8 +443,8 @@ F xObject.tcl f02aff5892e9e62dde6c653eeb4bf4af411c3ca45449be3192df9b6640e23bdd
 F xml.tcl d9f71d708bf9156d0deee6577751a4872a6029d2aca0f1d060fd1490113582b2
 F xmp.tcl e95e02822457e12a1e1dedbd34aa19c1db20482afdf99528aace75f13beed557
 F zugferd.tcl 0014cea02c7863376ca453d4c86ad9303dbeae967395d971ae4e9931e9e19d07
-P 7e1f8fe1cec3fda8309dffead8ed60d454d25d3507f8455fd9f5da961e25460c
-R f5331e8695b18dd98a9844b2ed7f89ff
+P 6b1501102094acc4001b8d92e2190d6b10cce7643dbab7a4f3783f4d3cc2dcb8
+R 414af22f9eac39eb89b2b89d2effa145
 U alex
-Z c42aa84abe4c6a2e49d992a7e831dd6e
+Z ee0d91cd940b09a552020e9034ea8a5c
 # Remove this line to create a well-formed Fossil manifest.

@@ -1,0 +1,1053 @@
+# fieldButton.test --
+#
+# The three button field types (ISO 32000-2, 12.7.5.2): check box, radio
+# button, push button.
+#
+# Five questions carry this file, and each of them is a way a button can be
+# wrong while the file still opens and every validator stays quiet:
+#
+#   Is /V a NAME, and is it the same name as /AS? 12.7.5.2.3 says both, and
+#   it says what happens when they differ - "the value of the AS key shall be
+#   used instead of the V key". A box whose /V says Yes and whose /AS says
+#   Off is a box that reports itself ticked and shows itself empty.
+#
+#   Does the radio field have the shape of the example in 12.7.5.2.4 - ONE
+#   field with /T, /V, /Ff and /Kids, and buttons that are widgets with no
+#   /T of their own? By 12.7.4.2 a dictionary without a partial field name
+#   "shall not be considered a field but simply a Widget annotation", so a
+#   /T on each button turns one radio field into four fields that all think
+#   they are the set.
+#
+#   Are BOTH states in /AP /N? The off appearance is optional by the letter
+#   of 12.7.5.2.3, and leaving it out is what makes the frame of an unticked
+#   box vanish - "displaying nothing" is what 12.5.5 permits a reader to do
+#   with a state it has no appearance for.
+#
+#   Does the push button keep away from /V and /DV, as 12.7.5.2.2 requires
+#   of a field that "retains no permanent value"? And does it carry an
+#   action only where an action can be measured - the reset action of
+#   12.7.6.3 and nothing else?
+#
+#   Do the /Ff bits say which of the three it is? 12.7.5.2.1: "For button
+#   fields, bits 15, 16, 17, and 26 shall indicate the intended behaviour of
+#   the button field. An interactive PDF processor shall follow the intended
+#   behaviour." A wrong bit is a check box that behaves like a radio button
+#   and a file that passes every syntax check.
+#
+# The last two tests hand the file to the two readers that answer questions
+# no regexp can: qpdf, which resolves the field tree and reports ischeckbox,
+# isradiobutton, fieldflags and the /AS of every widget, and PDFBox through
+# tools/formcheck.java, which builds a PDCheckBox, a PDRadioButton and a
+# PDPushButton out of the bytes and would refuse a widget with no /AP.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::field
+package require tclpdf::fieldButton
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint verapdf [expr {[auto_execok verapdf] ne {}}]
+testConstraint dejavu [file exists [file join [file dirname [file dirname \
+    [file normalize [info script]]]] examples assets fonts DejaVuSans.ttf]]
+testConstraint formcheck [expr {[auto_execok java] ne {}
+    && [file exists [file join [file dirname [file dirname \
+        [file normalize [info script]]]] tools Mustang-CLI-2.25.0.jar]]}]
+
+# A document with one page, in millimetres, so that every test does not
+# repeat the same three lines.
+proc buttonDoc {args} {
+  set doc [tclpdf new -unit mm -format a4 {*}$args]
+  $doc page add
+  return $doc
+}
+
+# Every object body of a written document that matches a glob. Reads what was
+# BUILT rather than what went to disk - the objects exist as soon as the write
+# run has been through beforeWrite, and a test about a dictionary should not
+# have to go through a file to see it.
+proc buttonBodies {doc pattern} {
+  set writer [$doc writer]
+  set found {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match $pattern $body]} {
+      lappend found $body
+    }
+  }
+  return $found
+}
+
+# The merged field/widget object of a check box or a push button.
+proc buttonWidget {doc name} {
+  return [lindex [buttonBodies $doc "*/Subtype /Widget*/T ($name)*"] 0]
+}
+
+# The PARENT of a radio field: the object that carries the name and the kids
+# and is not an annotation.
+proc buttonParent {doc name} {
+  return [lindex [buttonBodies $doc "*/T ($name)*/Kids *"] 0]
+}
+
+# The kid widgets of a radio field, in the order /Kids names them.
+proc buttonKids {doc name} {
+  set parent [buttonParent $doc $name]
+  if {![regexp {/Kids \[([^\]]*)\]} $parent -> refs]} {
+    return {}
+  }
+  set bodies {}
+  foreach {number generation keyword} $refs {
+    lappend bodies [[$doc writer] body $number]
+  }
+  return $bodies
+}
+
+# The decoded appearance stream an /AP entry points at.
+proc buttonStream {doc body key} {
+  # /AP << /N << /Yes 12 0 R /Off 13 0 R >> >>, or /AP << /N 19 0 R >> for a
+  # field with a single state.
+  if {![regexp "/$key (\[0-9\]+) 0 R" $body -> number]} {
+    return "no /$key in: $body"
+  }
+  return [::tclpdfTest::streamOf [$doc writer] $number]
+}
+
+# The object dictionary of the stream an /AP entry points at, undecoded.
+proc buttonStreamDict {doc body key} {
+  if {![regexp "/$key (\[0-9\]+) 0 R" $body -> number]} {
+    return {}
+  }
+  set object [[$doc writer] body $number]
+  return [string range $object 0 [expr {[string first "\nstream" $object] - 1}]]
+}
+
+# Write a document to a scratch file and hand back the path; the caller
+# removes it. Several tests need the real bytes - qpdf and PDFBox read files,
+# not writers.
+proc buttonFile {doc name} {
+  set path [::tclpdfTest::scratch $name]
+  $doc write $path
+  return $path
+}
+
+#
+# --- the structure ----------------------------------------------------------
+#
+
+test fieldButton-1.1 {a check box is one object with both states in /AP /N} -body {
+  # 12.7.5.2.3, EXAMPLE 1 is exactly this shape: a merged dictionary with
+  # /Type /Annot /Subtype /Widget /Rect ... /FT /Btn /T (...) /V /Yes /AS /Yes
+  # and /AP << /N << /Yes ... /Off ... >> >>. Neither Radio nor Pushbutton is
+  # set, which is what MAKES it a check box (12.7.5.2.1).
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  set path [buttonFile $doc button-check.pdf]
+  set widget [buttonWidget $doc paid]
+  file delete $path
+  $doc destroy
+  list [regexp {/Type /Annot} $widget] [regexp {/Subtype /Widget} $widget] \
+      [regexp {/FT /Btn} $widget] [regexp {/T \(paid\)} $widget] \
+      [regexp {/V /Yes\M} $widget] [regexp {/AS /Yes\M} $widget] \
+      [regexp {/AP << /N << /Yes [0-9]+ 0 R /Off [0-9]+ 0 R >> >>} $widget] \
+      [regexp {/Ff } $widget]
+} -result {1 1 1 1 1 1 1 0}
+
+test fieldButton-1.2 {an unticked box still carries both states} -body {
+  # The off appearance is optional by the letter of 12.7.5.2.3 and leaving it
+  # out is what makes the frame disappear: 12.5.5 lets a reader "provide
+  # reasonable behaviour (such as displaying nothing)" for a state it has no
+  # appearance for, and an empty form is a form of nothing but unticked boxes.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5}
+  set path [buttonFile $doc button-off.pdf]
+  set widget [buttonWidget $doc paid]
+  file delete $path
+  $doc destroy
+  list [regexp {/V /Off\M} $widget] [regexp {/AS /Off\M} $widget] \
+      [regexp {/AP << /N << /Yes [0-9]+ 0 R /Off [0-9]+ 0 R >> >>} $widget]
+} -result {1 1 1}
+
+test fieldButton-1.3 {-export names the on state in /V, /AS and /AP alike} -body {
+  # The on-state name is free (only /Off is reserved) and it is what an
+  # exported form carries as the value of the field - so it has to be the
+  # caller's word in all three places, or a reader selects an appearance that
+  # is not there.
+  set doc [buttonDoc]
+  $doc field check ship -rect {20 40 5 5} -export express -checked 1
+  set path [buttonFile $doc button-export.pdf]
+  set widget [buttonWidget $doc ship]
+  file delete $path
+  $doc destroy
+  list [regexp {/V /express\M} $widget] [regexp {/AS /express\M} $widget] \
+      [regexp {/AP << /N << /express [0-9]+ 0 R /Off [0-9]+ 0 R >> >>} $widget]
+} -result {1 1 1}
+
+test fieldButton-1.4 {-default writes /DV, and nothing writes it otherwise} -body {
+  # /DV is what the reset action of 12.7.6.3 puts /V back to; without it the
+  # action removes /V. Both are correct, so the key is written only where the
+  # caller said what the field is to fall back to.
+  set doc [buttonDoc]
+  $doc field check a -rect {20 40 5 5} -default 1
+  $doc field check b -rect {20 50 5 5} -default 0
+  $doc field check c -rect {20 60 5 5}
+  set path [buttonFile $doc button-dv.pdf]
+  set result [list [regexp {/DV /Yes\M} [buttonWidget $doc a]] \
+      [regexp {/DV /Off\M} [buttonWidget $doc b]] \
+      [regexp {/DV} [buttonWidget $doc c]]]
+  file delete $path
+  $doc destroy
+  set result
+} -result {1 1 0}
+
+test fieldButton-1.5 {a radio field is one field with kids, as 12.7.5.2.4 draws it} -body {
+  # The parent carries /FT, /T, /V, /Ff and /Kids and NOT ONE annotation key:
+  # a field with kids is not a widget, and the merge of 12.5.6.19 is for a
+  # field with exactly one widget. A /Subtype /Widget or a /Rect on this
+  # object would be a dictionary claiming to be an annotation that no page's
+  # /Annots names.
+  set doc [buttonDoc]
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} \
+      -value air
+  set path [buttonFile $doc button-radio.pdf]
+  set parent [buttonParent $doc ship]
+  file delete $path
+  $doc destroy
+  list [regexp {/FT /Btn} $parent] [regexp {/T \(ship\)} $parent] \
+      [regexp {/V /air\M} $parent] [regexp {/Ff 32768\M} $parent] \
+      [regexp {/Kids \[[0-9]+ 0 R [0-9]+ 0 R\]} $parent] \
+      [regexp {/Subtype} $parent] [regexp {/Rect} $parent] \
+      [regexp {/Type /Annot} $parent] [regexp {/AP} $parent]
+} -result {1 1 1 1 1 0 0 0 0}
+
+test fieldButton-1.6 {a radio button is a widget with no /T of its own} -body {
+  # 12.7.4.2: "A field dictionary that does not have a partial field name (T
+  # entry) of its own shall not be considered a field but simply a Widget
+  # annotation." That is what makes two buttons ONE field. Each carries its
+  # own /AP /N with its OWN on-state name plus /Off, and an /AS that says
+  # which of the two it is showing.
+  set doc [buttonDoc]
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} \
+      -value air
+  set path [buttonFile $doc button-kids.pdf]
+  lassign [buttonKids $doc ship] first second
+  file delete $path
+  $doc destroy
+  list [regexp {/Subtype /Widget} $first] [regexp {/T \(} $first] \
+      [regexp {/Parent [0-9]+ 0 R} $first] [regexp {/AS /air\M} $first] \
+      [regexp {/AP << /N << /air [0-9]+ 0 R /Off [0-9]+ 0 R >> >>} $first] \
+      [regexp {/AS /Off\M} $second] \
+      [regexp {/AP << /N << /sea [0-9]+ 0 R /Off [0-9]+ 0 R >> >>} $second]
+} -result {1 0 1 1 1 1 1}
+
+test fieldButton-1.7 {the page's /Annots holds the buttons, not the field} -body {
+  # A widget annotation sits on a page and the radio FIELD does not - it is
+  # not an annotation at all. A parent in /Annots is an entry a reader walks
+  # into looking for a /Rect that is not there.
+  set doc [buttonDoc]
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}}
+  set path [buttonFile $doc button-annots.pdf]
+  set parent [buttonParent $doc ship]
+  regexp {/Kids \[([^\]]*)\]} $parent -> refs
+  set kids {}
+  foreach {number generation keyword} $refs {
+    lappend kids $number
+  }
+  set page [lindex [buttonBodies $doc "*/Type /Page*/Annots *"] 0]
+  regexp {/Annots \[([^\]]*)\]} $page -> annots
+  set listed {}
+  foreach {number generation keyword} $annots {
+    lappend listed $number
+  }
+  file delete $path
+  $doc destroy
+  list [llength $kids] [expr {[lsort -integer $listed] eq [lsort -integer $kids]}]
+} -result {2 1}
+
+test fieldButton-1.8 {a push button has no value and carries its caption in /MK} -body {
+  # 12.7.5.2.2: "Because this type of field retains no permanent value, it
+  # shall not use the V and DV entries in the field dictionary." The caption
+  # goes into /MK /CA (Table 192), which "may be used with any type of button
+  # field" but is only ever NEEDED here - a push button has one state, so a
+  # reader that rebuilds its appearance has nothing else to build it from,
+  # and that is also why the /DA goes with it.
+  set doc [buttonDoc]
+  $doc field button clear -rect {120 260 30 8} -caption "Clear"
+  set path [buttonFile $doc button-push.pdf]
+  set widget [buttonWidget $doc clear]
+  file delete $path
+  $doc destroy
+  # /AP /N is a SUBDICTIONARY even here, where 12.5.5 would take the stream
+  # directly: PDF/A wants one for every /Btn widget (veraPDF 6.4.1-1,
+  # measured), and Table 166 then makes /AS required. A push button has no on
+  # state, so the one entry is the one name the standard reserves.
+  #
+  # /CA stands in the SAME /MK as the frame, and that is the whole reason
+  # [FieldBorderEntries] takes extra pairs: there is one /MK per widget, and
+  # a module that needed one more key in it used to reassemble the frame and
+  # the background alongside.
+  list [regexp {/FT /Btn} $widget] [regexp {/Ff 65536\M} $widget] \
+      [regexp {/V } $widget] [regexp {/DV } $widget] \
+      [regexp {/AS /Off\M} $widget] \
+      [regexp {/MK << /BC \[0\] /CA \(Clear\) >>} $widget] \
+      [regexp {/BS << /W [0-9.]+ /S /S >>} $widget] \
+      [regexp {/DA \(/F[A-Za-z]+ 10 Tf 0 g\)} $widget] \
+      [regexp {/AP << /N << /Off [0-9]+ 0 R >> >>} $widget]
+} -result {1 1 0 0 1 1 1 1 1}
+
+#
+# --- the flags --------------------------------------------------------------
+#
+
+test fieldButton-2.1 {the /Ff bits of Table 229 say which button this is} -body {
+  # 12.7.5.2.1: "For button fields, bits 15, 16, 17, and 26 shall indicate the
+  # intended behaviour of the button field." Bit 15 NoToggleToOff = 16384,
+  # bit 16 Radio = 32768, bit 17 Pushbutton = 65536, bit 26 RadiosInUnison =
+  # 33554432 - and bits 1 to 3 are ReadOnly, Required and NoExport from
+  # Table 227.
+  set doc [buttonDoc -version 1.7]
+  $doc field check plain -rect {20 40 5 5}
+  $doc field check locked -rect {20 50 5 5} -readonly 1 -required 1 -noexport 1
+  $doc field radio one -buttons {{a {20 60 5 5}}}
+  $doc field radio two -buttons {{a {20 70 5 5}}} -notoggle 1 -value a
+  $doc field radio three -buttons {{a {20 80 5 5}} {a {20 90 5 5}}} -unison 1
+  $doc field button go -rect {120 260 30 8} -caption Go
+  $doc field button off -rect {120 240 30 8} -caption Off -readonly 1
+  set path [buttonFile $doc button-flags.pdf]
+  set result {}
+  foreach name {plain locked go off} {
+    set widget [buttonWidget $doc $name]
+    if {[regexp {/Ff (-?[0-9]+)} $widget -> value]} {
+      lappend result $value
+    } else {
+      lappend result 0
+    }
+  }
+  foreach name {one two three} {
+    regexp {/Ff (-?[0-9]+)} [buttonParent $doc $name] -> value
+    lappend result $value
+  }
+  file delete $path
+  $doc destroy
+  set result
+} -result {0 7 65536 65537 32768 49152 33587200}
+
+test fieldButton-2.2 {RadiosInUnison is PDF 1.5 and says so} -body {
+  # Table 229 marks bit 26 "(PDF 1.5)". A flag written into a file that
+  # claims 1.4 is a flag a reader of that version is entitled to ignore, so
+  # the floor is raised where the flag is asked for - and refused where the
+  # document was pinned lower.
+  set doc [buttonDoc -version 1.4]
+  set refused [::tclpdfTest::refusal {
+    $doc field radio ship -buttons {{a {20 60 5 5}} {a {20 70 5 5}}} -unison 1
+  }]
+  $doc destroy
+  set doc [buttonDoc]
+  $doc field radio ship -buttons {{a {20 60 5 5}} {a {20 70 5 5}}} -unison 1
+  set version [[$doc writer] version]
+  $doc destroy
+  # [refusal] answers "no error: ..." where nothing was refused, so the test
+  # asks for the absence of that sentence rather than for a non-empty string -
+  # a check that passes either way is not a check.
+  list [string match {no error:*} $refused] [expr {$version >= 1.5}]
+} -result {0 1}
+
+#
+# --- the appearance ---------------------------------------------------------
+#
+
+test fieldButton-3.1 {an appearance is a form XObject of the widget's size} -body {
+  # 12.7.4.3 puts the lower left corner of the box at (0, 0) and takes its
+  # top and right from the /Rect; a /Matrix on top of that would be a second
+  # scaling the algorithm of 12.5.5 does not expect. /Resources is the
+  # document's own, which PDF/A 6.2.2 requires of every content stream that
+  # names another object.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  set path [buttonFile $doc button-bbox.pdf]
+  set dict [buttonStreamDict $doc [buttonWidget $doc paid] Yes]
+  file delete $path
+  $doc destroy
+  # 5 mm square in points.
+  list [regexp {/Subtype /Form} $dict] \
+      [regexp {/BBox \[0 0 14.17323 14.17323\]} $dict] \
+      [regexp {/Matrix} $dict] [regexp {/Resources [0-9]+ 0 R} $dict]
+} -result {1 1 0 1}
+
+test fieldButton-3.2 {the frame is in both states, the mark only in the on one} -body {
+  # What separates the two streams IS the mark. A frame in only one of them
+  # is a box that changes shape when it is ticked; a mark in both is a box
+  # that cannot be untieked. And there is no /Tx BMC bracket: 12.7.4.3
+  # prescribes it for VARIABLE TEXT, which a button has none of - the mark is
+  # not a value a reader replaces out of /V.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  set path [buttonFile $doc button-states.pdf]
+  set widget [buttonWidget $doc paid]
+  set on [buttonStream $doc $widget Yes]
+  set off [buttonStream $doc $widget Off]
+  file delete $path
+  $doc destroy
+  list [regexp {re\nS} $on] [regexp {re\nS} $off] \
+      [regexp { m\n} $on] [regexp { m\n} $off] \
+      [regexp {BMC} $on] [expr {[string length $on] > [string length $off]}]
+} -result {1 1 1 0 0 1}
+
+test fieldButton-3.3 {each of the four marks draws its own shape} -body {
+  # Paths, not ZapfDingbats: a tick is two line segments, a cross is two
+  # lines, a dot is four Bezier arcs - and eight of them here, because a dot
+  # brings a ROUND frame with it (a dot in a square box is a check box drawn
+  # wrong) - and a square is one "re" filled beside the "re" the frame is
+  # stroked with. The test asks for the operator only that shape produces.
+  set doc [buttonDoc]
+  foreach mark {check cross circle square} {
+    $doc field check $mark -rect {20 40 5 5} -checked 1 -mark $mark
+  }
+  set path [buttonFile $doc button-marks.pdf]
+  set streams {}
+  foreach mark {check cross circle square} {
+    lappend streams [buttonStream $doc [buttonWidget $doc $mark] Yes]
+  }
+  file delete $path
+  $doc destroy
+  lassign $streams check cross circle square
+  list [regexp -all { l\n} $check] [regexp -all { l\n} $cross] \
+      [regexp -all { c\n} $circle] [regexp -all { re\nf\n} $square]
+} -result {2 2 8 1}
+
+test fieldButton-3.4 {-markSize sets the mark and the box still bounds it} -body {
+  # The mark is centred and never wider than the box between its own frames:
+  # a stream that paints outside its own /BBox is clipped away with nothing
+  # to say it happened, so an oversized mark is brought back to the box
+  # rather than drawn and lost.
+  set doc [buttonDoc]
+  $doc field check small -rect {20 40 10 10} -checked 1 -mark square -markSize 2
+  $doc field check huge -rect {20 60 10 10} -checked 1 -mark square -markSize 99
+  set path [buttonFile $doc button-marksize.pdf]
+  set small [buttonStream $doc [buttonWidget $doc small] Yes]
+  set huge [buttonStream $doc [buttonWidget $doc huge] Yes]
+  file delete $path
+  $doc destroy
+  # 2 mm centred in a 10 mm box, and a mark asked to be 99 mm brought back to
+  # 10 mm less the two 0.4 mm frames - both in points, as the filled "re".
+  list [regexp {11.33858 11.33858 5.66929 5.66929 re\nf} $small] \
+      [regexp {1.13386 1.13386 26.07874 26.07874 re\nf} $huge]
+} -result {1 1}
+
+test fieldButton-3.5 {/MK tells the colour space by counting the array} -body {
+  # Table 192: /BC and /BG are number arrays whose LENGTH is the colour space
+  # - 1 is DeviceGray, 3 DeviceRGB, 4 DeviceCMYK. /MK does not replace /AP;
+  # it is what a reader builds a dynamic appearance out of, and a box whose
+  # frame is only in the stream loses the frame the moment one is rebuilt.
+  set doc [buttonDoc]
+  $doc field check grey -rect {20 40 5 5} -border 0.5 -background 0.9
+  $doc field check rgb -rect {20 50 5 5} -border {1 0 0} -background {0 0 1}
+  $doc field check cmyk -rect {20 60 5 5} -border {0 1 1 0}
+  $doc field check bare -rect {20 70 5 5} -border {} -borderWidth 0
+  set path [buttonFile $doc button-mk.pdf]
+  set result [list \
+      [regexp {/MK << /BC \[0.5\] /BG \[0.9\] >>} [buttonWidget $doc grey]] \
+      [regexp {/MK << /BC \[1 0 0\] /BG \[0 0 1\] >>} [buttonWidget $doc rgb]] \
+      [regexp {/MK << /BC \[0 1 1 0\] >>} [buttonWidget $doc cmyk]] \
+      [regexp {/BS << /W 1.13386 /S /S >>} [buttonWidget $doc grey]] \
+      [regexp {/MK} [buttonWidget $doc bare]]]
+  file delete $path
+  $doc destroy
+  set result
+} -result {1 1 1 1 0}
+
+#
+# --- the reset action -------------------------------------------------------
+#
+
+test fieldButton-4.1 {-action reset writes the one form action that is declarative} -body {
+  # 12.7.6.3, Table 241/242: the reset action puts /V back to /DV and removes
+  # /V where there is none. /Flags is left out - bit 1 clear means "the
+  # Fields array specifies which fields to reset", which is what -fields
+  # says, and a key that may only hold its own default is one to leave out.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5}
+  $doc field button all -rect {120 260 30 8} -caption "Reset" -action reset
+  $doc field button some -rect {120 240 30 8} -caption "Reset paid" \
+      -action reset -fields paid
+  $doc field button none -rect {120 220 30 8} -caption "Nothing"
+  set path [buttonFile $doc button-reset.pdf]
+  set result [list \
+      [regexp {/A << /Type /Action /S /ResetForm >>} [buttonWidget $doc all]] \
+      [regexp {/A << /Type /Action /S /ResetForm /Fields \[\(paid\)\] >>} \
+          [buttonWidget $doc some]] \
+      [regexp {/Flags} [buttonWidget $doc some]] \
+      [regexp {/A <<} [buttonWidget $doc none]]]
+  file delete $path
+  $doc destroy
+  set result
+} -result {1 1 0 0}
+
+test fieldButton-4.2 {PDF/A and the reset action are refused together} -body {
+  # Measured 2026-08-23 with veraPDF against 3B: a push button carrying /A
+  # fails 6.3.3-3 ("A Widget annotation dictionary shall not contain the A or
+  # AA keys") and 6.5.1-1 (ResetForm among the actions "shall not be
+  # permitted") at once. The refusal is at the WRITE because a document
+  # declares its profile and its fields in either order - so both orders are
+  # measured here.
+  set doc [buttonDoc]
+  $doc pdfa -part 3 -conformance b
+  $doc field button clear -rect {120 260 30 8} -caption Clear -action reset
+  set late [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch button-pdfa.pdf]
+  }]
+  $doc destroy
+  set doc [buttonDoc]
+  $doc field button clear -rect {120 260 30 8} -caption Clear -action reset
+  $doc pdfa -part 3 -conformance b
+  set early [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch button-pdfa.pdf]
+  }]
+  catch {file delete [::tclpdfTest::scratch button-pdfa.pdf]}
+  $doc destroy
+  list [lrange $late 0 4] [lrange $early 0 4]
+} -constraints haveTdom -result {{TCLPDF FIELD BUTTON PDFA clear} {TCLPDF FIELD BUTTON PDFA clear}}
+
+#
+# --- the refusals -----------------------------------------------------------
+#
+
+test fieldButton-5.1 {an on state may not be called Off} -body {
+  set doc [buttonDoc]
+  set result [::tclpdfTest::refusal {
+    $doc field check paid -rect {20 40 5 5} -export Off
+  }]
+  $doc destroy
+  set result
+} -match glob -result {TCLPDF FIELD BUTTON EXPORT Off*}
+
+test fieldButton-5.2 {an on state is not empty} -body {
+  set doc [buttonDoc]
+  set result [::tclpdfTest::refusal {
+    $doc field check paid -rect {20 40 5 5} -export {}
+  }]
+  $doc destroy
+  set result
+} -match glob -result {TCLPDF FIELD BUTTON EXPORT*}
+
+test fieldButton-5.3 {two buttons under one name need RadiosInUnison} -body {
+  # Table 229 on bit 26: "a group of radio buttons within a radio button
+  # field that use the same value for the on state will turn on and off in
+  # unison". Without the flag the same arrangement is two buttons lighting up
+  # together with nothing in the file to say why - so it is refused, and
+  # allowed the moment the flag is asked for.
+  set doc [buttonDoc]
+  set refused [::tclpdfTest::refusal {
+    $doc field radio ship -buttons {{a {20 60 5 5}} {a {20 70 5 5}}}
+  }]
+  $doc field radio unison -buttons {{a {20 60 5 5}} {a {20 70 5 5}}} -unison 1
+  $doc destroy
+  set refused
+} -match glob -result {TCLPDF FIELD BUTTON UNISON a*}
+
+test fieldButton-5.35 {NoToggleToOff needs something to be on} -body {
+  # Table 229: "(Radio buttons only) If set, exactly one radio button shall be
+  # selected at all times." A set written with the flag and nothing selected
+  # opens in the one state the flag forbids, and the click that would leave it
+  # is the one the flag takes away.
+  set doc [buttonDoc]
+  set result [::tclpdfTest::refusal {
+    $doc field radio ship -buttons {{air {20 60 5 5}}} -notoggle 1
+  }]
+  $doc field radio ok -buttons {{air {20 60 5 5}}} -notoggle 1 -value air
+  $doc destroy
+  set result
+} -result {TCLPDF FIELD BUTTON NOTOGGLE}
+
+test fieldButton-5.4 {-value names a button of the set} -body {
+  # 12.7.5.2.4: /V holds "a name object corresponding to the appearance state
+  # of whichever child field is currently in the on state" - a name no button
+  # answers to selects nothing, and shows nothing, and says nothing.
+  set doc [buttonDoc]
+  set result [::tclpdfTest::refusal {
+    $doc field radio ship -buttons {{air {20 60 5 5}}} -value train
+  }]
+  $doc destroy
+  set result
+} -match glob -result {TCLPDF FIELD BUTTON VALUE value train*}
+
+test fieldButton-5.5 {a radio field needs its buttons, and they are pairs} -body {
+  set doc [buttonDoc]
+  set empty [::tclpdfTest::refusal {$doc field radio ship}]
+  set shape [::tclpdfTest::refusal {
+    $doc field radio ship -buttons {{air}}
+  }]
+  set rect [::tclpdfTest::refusal {
+    $doc field radio ship -buttons {{air {20 60 0 5}}}
+  }]
+  $doc destroy
+  list $empty [lrange $shape 0 3] [lrange $rect 0 2]
+} -match glob -result {{TCLPDF FIELD BUTTON BUTTONS} {TCLPDF FIELD BUTTON BUTTONS} {TCLPDF FIELD RECT}}
+
+test fieldButton-5.6 {a push button takes the reset action and no other} -body {
+  # The submit action needs a server, the import action a reader's file
+  # dialogue, and an ECMAScript action has its effects defined in another
+  # standard entirely - no tool on this machine could measure whether any of
+  # the three does what it claims, so none of them is built.
+  set doc [buttonDoc]
+  set submit [::tclpdfTest::refusal {
+    $doc field button go -rect {120 260 30 8} -caption Go -action submit
+  }]
+  set orphan [::tclpdfTest::refusal {
+    $doc field button go -rect {120 260 30 8} -caption Go -fields paid
+  }]
+  set dotted [::tclpdfTest::refusal {
+    $doc field button go -rect {120 260 30 8} -caption Go -action reset \
+        -fields {a.b}
+  }]
+  $doc destroy
+  list $submit [lrange $orphan 0 3] [lrange $dotted 0 3]
+} -match glob -result {{TCLPDF FIELD BUTTON ACTION submit} {TCLPDF FIELD BUTTON FIELDS} {TCLPDF FIELD BUTTON FIELDS}}
+
+test fieldButton-5.7 {a push button needs a caption, and one line of it} -body {
+  set doc [buttonDoc]
+  set missing [::tclpdfTest::refusal {
+    $doc field button go -rect {120 260 30 8}
+  }]
+  set broken [::tclpdfTest::refusal {
+    $doc field button go -rect {120 260 30 8} -caption "two\nlines"
+  }]
+  $doc destroy
+  list $missing $broken
+} -result {{TCLPDF FIELD BUTTON CAPTION} {TCLPDF FIELD BUTTON CAPTION}}
+
+test fieldButton-5.8 {the mark, its size and the booleans are checked at the call} -body {
+  # A refused call has to leave the document exactly as it was - the rule
+  # field.tcl states and the one that keeps a second attempt from tripping
+  # over the leavings of the first. So everything is checked before the field
+  # is declared, and the document still has no field afterwards.
+  set doc [buttonDoc]
+  set mark [::tclpdfTest::refusal {
+    $doc field check paid -rect {20 40 5 5} -mark tick
+  }]
+  set size [::tclpdfTest::refusal {
+    $doc field check paid -rect {20 40 5 5} -markSize 0
+  }]
+  set boolean [::tclpdfTest::refusal {
+    $doc field check paid -rect {20 40 5 5} -checked maybe
+  }]
+  set default [::tclpdfTest::refusal {
+    $doc field check paid -rect {20 40 5 5} -default maybe
+  }]
+  set fields [$doc field list]
+  $doc destroy
+  list [lrange $mark 0 4] [lrange $size 0 4] [lrange $boolean 0 4] \
+      [lrange $default 0 4] $fields
+} -result {{TCLPDF FIELD BUTTON MARK tick} {TCLPDF FIELD BUTTON MARKSIZE 0} {TCLPDF FIELD BUTTON BOOLEAN checked} {TCLPDF FIELD BUTTON BOOLEAN default} {}}
+
+test fieldButton-5.9 {a name is taken only once, in BOTH directions} -body {
+  # Two fields under one partial field name resolve to one (12.7.4.2), and
+  # the second one's value is then unreachable with no validator saying a
+  # word.
+  #
+  # THE DIRECTION THAT MATTERS IS "radio" THEN "text". While the radio field
+  # built its objects itself it kept its own table, and the core could not
+  # see it: "text" then "radio" was caught, "radio" then "text" was not, and
+  # the document came out with two fields called ship. Now every radio field
+  # stands in the core's table like every other, so one question answers all
+  # four orders.
+  set doc [buttonDoc]
+  $doc field text ship -rect {20 40 80 8}
+  set overText [::tclpdfTest::refusal {
+    $doc field radio ship -buttons {{air {20 60 5 5}}}
+  }]
+  $doc field radio mode -buttons {{air {20 60 5 5}}}
+  set overRadio [::tclpdfTest::refusal {
+    $doc field radio mode -buttons {{sea {20 70 5 5}}}
+  }]
+  set textOverRadio [::tclpdfTest::refusal {
+    $doc field text mode -rect {20 80 80 8}
+  }]
+  set checkOverRadio [::tclpdfTest::refusal {
+    $doc field check mode -rect {20 90 5 5}
+  }]
+  $doc destroy
+  list [lrange $overText 0 3] [lrange $overRadio 0 3] \
+      [lrange $textOverRadio 0 3] [lrange $checkOverRadio 0 3]
+} -result {{TCLPDF FIELD TAKEN ship} {TCLPDF FIELD TAKEN mode}\
+    {TCLPDF FIELD TAKEN mode} {TCLPDF FIELD TAKEN mode}}
+
+test fieldButton-5.11 {a radio field is one of the document's fields} -body {
+  # "field list" and "field state" read the core's table, and while the radio
+  # field kept a table of its own it was in neither: a caller asking what the
+  # document had was told about every field but that one. The state of a
+  # field with several widgets answers its kids as well - what was declared
+  # for each of them, and no object numbers.
+  set doc [buttonDoc]
+  $doc field text customer -rect {20 40 80 8}
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} \
+      -value sea -tooltip "How to ship"
+  set names [$doc field list]
+  set state [$doc field state ship]
+  $doc destroy
+  list $names [dict get $state type] [dict get $state tooltip] \
+      [dict get [dict get $state data] state] \
+      [llength [dict get $state widgets]] \
+      [dict get [lindex [dict get $state widgets] 1] rect] \
+      [dict get [lindex [dict get $state widgets] 1] entry] \
+      [dict exists $state widget] [dict exists $state field] \
+      [dict exists [lindex [dict get $state widgets] 0] widget]
+} -result {{customer ship} Btn {How to ship} sea 2 {20 70 5 5} {value sea} 0 0 0}
+
+test fieldButton-5.10 {a widget needs a page that exists when the file is written} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  $doc field radio ship -buttons {{air {20 60 5 5}}} -page 3
+  set result [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch button-page.pdf]
+  }]
+  catch {file delete [::tclpdfTest::scratch button-page.pdf]}
+  $doc destroy
+  # The core's check, not this module's: a widget of a field with several is
+  # measured by the same [FieldMeasure] a merged field is, so the page that
+  # never came is named once and in one wording.
+  lrange $result 0 4
+} -result {TCLPDF FIELD PAGE 3}
+
+#
+# --- the write ---------------------------------------------------------------
+#
+
+test fieldButton-6.1 {every button survives a second write unchanged} -body {
+  # The write events fire on EVERY write, so anything that creates objects
+  # has to be idempotent: the radio field reserves its parent, its kids and
+  # four appearance streams, and a second write has to fill the same objects
+  # rather than add a second set.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} \
+      -value sea
+  $doc field button clear -rect {120 260 30 8} -caption Clear -action reset
+  lassign [::tclpdfTest::writeTwice $doc button-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] [expr {[string length $first] > 0}]
+} -result {1 1}
+
+test fieldButton-6.2 {qpdf resolves the field tree the way the standard reads it} -constraints qpdf -body {
+  # The one reader here that walks /AcroForm, follows /Kids and reports what
+  # it found: ischeckbox and isradiobutton come out of the /Ff bits, the
+  # value out of /V, and appearancestate out of each widget's /AS. A wrong
+  # bit or a /V that disagrees with an /AS shows up here and nowhere in the
+  # bytes.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} \
+      -value sea
+  $doc field button clear -rect {120 260 30 8} -caption Clear -action reset
+  set path [buttonFile $doc button-qpdf.pdf]
+  set json [exec qpdf --json --json-key=acroform $path]
+  file delete $path
+  $doc destroy
+  # No JSON parser is required for four facts: the keys are one per line and
+  # the values are literals.
+  set result {}
+  foreach key {ischeckbox isradiobutton} {
+    lappend result [regexp -all "\"$key\": true" $json]
+  }
+  lappend result [regexp -all {"fieldflags": 32768} $json]
+  lappend result [regexp -all {"fieldflags": 65536} $json]
+  lappend result [regexp -all {"value": "/sea"} $json]
+  lappend result [regexp -all {"appearancestate": "/sea"} $json]
+  lappend result [regexp {"needappearances": false} $json]
+  set result
+} -result {1 2 2 1 2 1 1}
+
+test fieldButton-6.3 {PDFBox builds all three field classes out of the bytes} -constraints formcheck -body {
+  # The reader that USES the fields: it makes a PDCheckBox, a PDRadioButton
+  # and a PDPushButton, counts the widgets of each, and reports a visible
+  # widget with no /AP - which is the one fault a regexp over the file cannot
+  # find, because the key that should be there is the one that is missing.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} \
+      -value air
+  $doc field button clear -rect {120 260 30 8} -caption Clear -action reset
+  set path [buttonFile $doc button-formcheck.pdf]
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set status [catch {exec java -cp [file join $root tools Mustang-CLI-2.25.0.jar] \
+      [file join $root tools formcheck.java] $path} output]
+  file delete $path
+  $doc destroy
+  list $status \
+      [regexp {name=paid type=Btn/PDCheckBox value=\[Yes\] tu=\[\] widgets=1 ap=yes} $output] \
+      [regexp {name=ship type=Btn/PDRadioButton value=\[air\] tu=\[\] widgets=2 ap=yes,yes} $output] \
+      [regexp {name=clear type=Btn/PDPushButton value=\[\] tu=\[\] widgets=1 ap=yes} $output] \
+      [regexp {ERROR} $output]
+} -result {0 1 1 1 0}
+
+test fieldButton-6.4 {a tooltip lands on the field, not on the buttons} -body {
+  # /TU is the alternate description and PDF/UA makes it the text a screen
+  # reader announces (ISO 14289-1, 7.18.1, which veraPDF checks by name). It
+  # describes the FIELD - "how do you want it shipped" - and a copy on each
+  # button would be that sentence read out four times.
+  set doc [buttonDoc]
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} \
+      -tooltip "How to ship"
+  set path [buttonFile $doc button-tu.pdf]
+  set parent [buttonParent $doc ship]
+  set kids [buttonKids $doc ship]
+  file delete $path
+  $doc destroy
+  list [regexp {/TU \(How to ship\)} $parent] \
+      [regexp {/TU} [lindex $kids 0]] [regexp {/TU} [lindex $kids 1]]
+} -result {1 0 0}
+
+test fieldButton-6.5 {a form of buttons validates as PDF/A-3B} -constraints {haveTdom dejavu} -body {
+  # The profile is where the two rules a button can break live, and neither
+  # of them is visible in the bytes: 6.4.1-1 wants /AP /N to be a
+  # subdictionary for EVERY /Btn widget - which a push button would not have
+  # by 12.5.5 alone - and 6.3.3-1 wants an appearance dictionary on every
+  # visible annotation at all, which is what the off state of an unticked box
+  # is for. The font is embedded because the /DA of the /AcroForm names one
+  # and PDF/A embeds every font; that is field.tcl's rule and not this
+  # module's, but a form of nothing but buttons still walks into it.
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set doc [tclpdf new -unit mm -format a4]
+  $doc pdfa -part 3 -conformance b
+  $doc font embed dejavu [file join $root examples assets fonts DejaVuSans.ttf]
+  $doc field default -family dejavu -size 9
+  $doc page add
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  $doc field check open -rect {20 50 5 5}
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} -value air
+  $doc field button clear -rect {120 260 30 8} -caption Clear
+  set path [::tclpdfTest::scratch button-a3b.pdf]
+  $doc write $path
+  set report [::tclpdfTest::verapdf $path 3b]
+  file delete $path
+  $doc destroy
+  set report
+} -result ok
+
+test fieldButton-6.6 {a form of nothing but buttons registers no font at all} -body {
+  # /DA names a font, naming a font REGISTERS it, and the /AcroForm's own /DA
+  # used to be built for every field alike - so a form of nothing but buttons
+  # put Helvetica into a document that had asked for no font whatever. Under
+  # a PDF/A declaration that is not a fault at the validator but a REFUSAL at
+  # the write ("PDF/A requires every font to be embedded, but Helvetica is a
+  # standard font"), for a font the caller never named and cannot embed
+  # without changing what the form looks like. 12.7.4.3 requires /DA of a
+  # field with variable text, which is /FT Tx and /FT Ch; a button has no
+  # text a reader sets.
+  set doc [tclpdf new -unit mm -format a4]
+  $doc pdfa -part 3 -conformance b
+  $doc page add
+  $doc field check paid -rect {20 40 5 5} -checked 1
+  $doc field check open -rect {20 50 5 5}
+  $doc field radio ship -buttons {{air {20 60 5 5}} {sea {20 70 5 5}}} -value air
+  set path [::tclpdfTest::scratch button-nofont.pdf]
+  set status [catch {$doc write $path} message]
+  set form [$doc catalogEntry AcroForm]
+  set report [::tclpdfTest::verapdf $path 3b]
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $status $report [regexp {/DA} $form] [regexp {/DR} $form] \
+      [regexp {/Fields} $form] [regexp {Helvetica} $data] \
+      [regexp {/Font} $data]
+} -result {0 ok 0 0 1 0 0}
+
+test fieldButton-6.7 {a push button still gets the /DR its own /DA needs} -body {
+  # The other half of the same rule: the document-level /DA goes with a field
+  # that has variable text, but /DR goes with any /DA there is - and the push
+  # button answers one of its own, because /MK /CA gives a reader something
+  # to rebuild the appearance from and a /DA naming a font that /DR does not
+  # have is the silent break field.tcl describes. A form of check boxes has
+  # neither key; add one push button and /DR appears without /DA.
+  set doc [buttonDoc]
+  $doc field check paid -rect {20 40 5 5}
+  set checks [$doc catalogEntry AcroForm]
+  $doc field button clear -rect {120 260 30 8} -caption Clear
+  set path [buttonFile $doc button-dr.pdf]
+  set both [$doc catalogEntry AcroForm]
+  set widget [buttonWidget $doc clear]
+  regexp {/DA \((/F[A-Za-z]+) } $widget -> resource
+  regexp {/DR ([0-9]+) 0 R} $both -> number
+  set dr [[$doc writer] body $number]
+  file delete $path
+  $doc destroy
+  # The write that produced $checks never happened - the entry is rebuilt on
+  # every write - so the check box form is read from the write below, where
+  # the push button is what brought the /DR in.
+  list [regexp {/DA} $both] [regexp {/DR} $both] \
+      [string match "*$resource *" $dr]
+} -result {0 1 1}
+
+#
+# --- accessibility: one Form element per BUTTON -----------------------------
+#
+# The radio field is the case ISO 14289-2, 8.10.1 is written against: "A Form
+# structure element shall enclose at most one widget annotation", with the
+# NOTE that "a Form structure element does not semantically equate to a form
+# field". Three buttons are one field and THREE elements, and a naive reading
+# makes one. The other half is 8.10.2.4: a /TU on the field cannot tell three
+# buttons apart, so each of them carries its own description.
+
+# A tagged document with an embeddable face, for the tests that make the UA
+# claim.
+proc buttonTaggedDoc {args} {
+  set doc [tclpdf new -unit mm -format a4 {*}$args]
+  $doc tagged 1
+  $doc info Title "A form"
+  $doc language en-GB
+  $doc page add
+  $doc font embed face [file join [file dirname [info script]] .. examples \
+      assets fonts DejaVuSans.ttf]
+  $doc font -family face -size 10 -color {0 0 0}
+  return $doc
+}
+
+test fieldButton-7.1 {three buttons are one field and three Form elements} -constraints {
+  dejavu
+} -body {
+  set doc [buttonTaggedDoc]
+  $doc field radio rate -tooltip "What you pay" -buttons {
+    {full {20 40 5 5} "The full rate"}
+    {reduced {20 50 5 5} "The reduced rate"}
+    {none {20 60 5 5} "No contribution"}
+  }
+  $doc write [::tclpdfTest::scratch button-ua-set.pdf]
+  set forms [buttonBodies $doc "*/S /Form*"]
+  set kids [buttonKids $doc rate]
+  set parent [buttonParent $doc rate]
+  set named [llength [buttonBodies $doc "*/T (rate)*"]]
+  file delete [::tclpdfTest::scratch button-ua-set.pdf]
+  $doc destroy
+  # Three elements, three widgets, ONE field - and every element holds
+  # exactly one object reference.
+  list [llength $forms] [llength $kids] $named \
+      [lsort -unique [lmap form $forms {
+        llength [regexp -all -inline {/Type /OBJR} $form]
+      }]] \
+      [regexp {/StructParent [0-9]+} [lindex $kids 0]] \
+      [regexp {/StructParent} $parent]
+} -result {3 3 1 1 1 0}
+
+test fieldButton-7.2 {each button carries its own /Contents} -constraints {
+  dejavu
+} -body {
+  # ISO 14289-2, 8.10.2.4: "When a form field dictionary has multiple widget
+  # annotations, a TU entry is often insufficient ... thus, a label, a
+  # Contents entry, or both, shall be present for each annotation." The
+  # export value will not do it - 8.10.3.2.3 NOTE: "Export values are
+  # intended for processing and are not intended to be descriptive."
+  set doc [buttonTaggedDoc]
+  $doc field radio ship -tooltip "How the goods travel" -buttons {
+    {air {20 40 5 5} "By air freight"}
+    {sea {20 50 5 5} "By sea freight"}
+  }
+  $doc write [::tclpdfTest::scratch button-ua-contents.pdf]
+  set kids [buttonKids $doc ship]
+  set parent [buttonParent $doc ship]
+  file delete [::tclpdfTest::scratch button-ua-contents.pdf]
+  $doc destroy
+  list [regexp {/Contents \(By air freight\)} [lindex $kids 0]] \
+      [regexp {/Contents \(By sea freight\)} [lindex $kids 1]] \
+      [regexp {/TU \(How the goods travel\)} $parent] \
+      [regexp {/Contents} $parent]
+} -result {1 1 1 0}
+
+test fieldButton-7.3 {a check box takes -contents and -label like every other field} -constraints {
+  dejavu
+} -body {
+  set doc [buttonTaggedDoc -version 2.0]
+  $doc field check paid -rect {20 40 5 5} -tooltip "Invoice settled" \
+      -contents "Tick when the invoice has been paid"
+  $doc field check seen -rect {20 50 5 5} -tooltip "Notice read" -label {
+    $doc text "I have read the notice" -at {30 52}
+  }
+  $doc write [::tclpdfTest::scratch button-ua-check.pdf]
+  set paid [buttonWidget $doc paid]
+  set forms [buttonBodies $doc "*/S /Form*"]
+  set labels [buttonBodies $doc "*/S /Lbl*"]
+  file delete [::tclpdfTest::scratch button-ua-check.pdf]
+  $doc destroy
+  list [regexp {/Contents \(Tick when the invoice has been paid\)} $paid] \
+      [llength $forms] [llength $labels]
+} -result {1 2 1}
+
+test fieldButton-7.4 {a button entry of four words is refused} -body {
+  # {value {x y w h} ?description?} and nothing further - a fourth word is
+  # a caller who meant something the option does not have.
+  set doc [buttonDoc]
+  set code [::tclpdfTest::refusal {
+    $doc field radio rate -buttons {{full {20 40 5 5} "The full rate" more}}
+  }]
+  $doc destroy
+  lrange $code 0 2
+} -result {TCLPDF FIELD BUTTON}
+
+test fieldButton-7.5 {-contents and -label are refused on a radio field, by name} -body {
+  # Both describe ONE widget and a radio field is the set. -contents is
+  # refused here, pointing at the third word of -buttons; -label is refused
+  # by the core, because a group's label is not a widget's label at all
+  # (ISO 14289-2, 8.10.2.2, second paragraph).
+  set doc [buttonDoc -version 2.0]
+  set contents [::tclpdfTest::refusal {
+    $doc field radio rate -buttons {{full {20 40 5 5}}} -contents "one"
+  }]
+  set label [::tclpdfTest::refusal {
+    $doc field radio pace -buttons {{fast {20 50 5 5}}} -label {
+      $doc text "Rate" -at {20 45}
+    }
+  }]
+  $doc destroy
+  list $contents $label
+} -result {{TCLPDF FIELD BUTTON CONTENTS} {TCLPDF FIELD DECLARE LABEL}}
+
+test fieldButton-7.6 {PDF/UA-2 names the button that has no description} -constraints {
+  dejavu
+} -body {
+  # The message names the button by its position in -buttons, counting from
+  # one, because the caller wrote them in that order and the export value is
+  # not what identifies it to a reader.
+  set doc [buttonTaggedDoc -version 2.0]
+  $doc field radio ship -tooltip "How the goods travel" -buttons {
+    {air {20 40 5 5} "By air freight"}
+    {sea {20 50 5 5}}
+  }
+  $doc ua -part 2
+  set text {}
+  catch {$doc write [::tclpdfTest::scratch button-ua-missing.pdf]} text
+  file delete [::tclpdfTest::scratch button-ua-missing.pdf]
+  $doc destroy
+  list [string match {*ship widget 2 has neither a label nor a description*} $text] \
+      [string match {*third word of -buttons*} $text]
+} -result {1 1}
+
+test fieldButton-7.7 {veraPDF accepts a radio set under UA-1 and UA-2} -constraints {
+  verapdf dejavu
+} -body {
+  set out {}
+  foreach part {1 2} {
+    set doc [expr {$part == 1 ? [buttonTaggedDoc] : [buttonTaggedDoc -version 2.0]}]
+    $doc structure H1 -script { $doc text "Membership" -at {20 25} }
+    $doc structure Sect -script {
+      $doc structure Lbl -script { $doc text "Rate" -at {20 38} }
+      $doc field radio rate -tooltip "What you pay" -buttons {
+        {full {45 38 5 5} "The full rate"}
+        {reduced {60 38 5 5} "The reduced rate"}
+      }
+    }
+    $doc ua -part $part
+    set path [::tclpdfTest::scratch button-ua-verapdf-$part.pdf]
+    $doc write $path
+    $doc destroy
+    lappend out [::tclpdfTest::verapdf $path ua$part]
+    file delete $path
+  }
+  set out
+} -result {ok ok}
+
+cleanupTests

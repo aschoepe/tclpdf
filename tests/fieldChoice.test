@@ -1,0 +1,727 @@
+# fieldChoice.test --
+#
+# The choice fields of ISO 32000-2, 12.7.5.4: the list box and the combo box.
+#
+# Four questions carry this file, and each of them is a way a choice field is
+# wrong while the document still opens in every reader:
+#
+#   Does /V hold the DISPLAYED text? 12.7.5.4 says it does - "as given in the
+#   field dictionary's Opt array ... the name string is the second of the two
+#   array elements" - and the export value, which is the first element, is
+#   the one a writer reaches for out of habit. A file with the export value
+#   in /V shows an empty field in a reader that cannot find it among the
+#   options.
+#
+#   Is /Opt built the way Table 234 builds it - a plain string where the
+#   option shows what it exports, a two-element array {export display} where
+#   it does not, and the export value FIRST?
+#
+#   Is /I there when /V cannot say what is selected - a multiple selection,
+#   or two options showing the same text - and left out when it would only
+#   repeat /V?
+#
+#   Do the flags of Table 233 mean what the options say: Combo apart from the
+#   list box, Edit only with Combo, DoNotSpellCheck only with both, and Sort
+#   over an array that was really sorted?
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::field
+package require tclpdf::fieldChoice
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+# PDFBox, out of the Mustang jar this tree already carries for the ZUGFeRD
+# check: the one reader here that USES a field rather than parsing it, and
+# therefore the only one that catches a /DA naming a font /DR has not got.
+set choiceJar [lindex [lsort [glob -nocomplain \
+    [file join [file dirname [info script]] .. tools Mustang-CLI-*.jar]]] end]
+testConstraint formcheck [expr {[auto_execok java] ne {} && $choiceJar ne {}
+    && [file exists [file join [file dirname [info script]] .. tools \
+        formcheck.java]]}]
+
+proc choiceDoc {args} {
+  set doc [tclpdf new -unit mm -format a4 {*}$args]
+  $doc page add
+  return $doc
+}
+
+# The widget annotation of one field, out of the writer.
+proc choiceWidget {doc name} {
+  set writer [$doc writer]
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match "*/Subtype /Widget*" $body]
+        && [string match "*/T ($name)*" $body]} {
+      return $body
+    }
+  }
+  return {}
+}
+
+# Declare the fields, write once to a scratch file, hand back the widget of
+# the field named first. Every test that only looks at the dictionary needs
+# these five lines and nothing else.
+proc choiceBuilt {script name} {
+  upvar 1 doc doc
+  set doc [choiceDoc]
+  uplevel 1 $script
+  set path [::tclpdfTest::scratch fieldChoice-built.pdf]
+  $doc write $path
+  file delete $path
+  set widget [choiceWidget $doc $name]
+  $doc destroy
+  return $widget
+}
+
+# The appearance stream of a field, decoded.
+proc choiceAppearance {doc name} {
+  set widget [choiceWidget $doc $name]
+  if {![regexp {/AP << /N ([0-9]+) 0 R} $widget -> number]} {
+    return "no /AP /N in: $widget"
+  }
+  return [::tclpdfTest::streamOf [$doc writer] $number]
+}
+
+# The dictionary of the appearance stream object, undecoded.
+proc choiceAppearanceDict {doc name} {
+  set widget [choiceWidget $doc $name]
+  if {![regexp {/AP << /N ([0-9]+) 0 R} $widget -> number]} {
+    return {}
+  }
+  set body [[$doc writer] body $number]
+  return [string range $body 0 [expr {[string first "\nstream" $body] - 1}]]
+}
+
+# The /Ff of a widget, or 0 where the key is absent - which is what its
+# absence means (Table 226, default 0).
+proc choiceFlags {widget} {
+  if {[regexp {/Ff (-?[0-9]+)} $widget -> value]} {
+    return $value
+  }
+  return 0
+}
+
+#
+# --- the structure ----------------------------------------------------------
+#
+
+test fieldChoice-1.1 {a list box is /FT /Ch with /Opt, and no Combo bit} -body {
+  # Table 233, bit 18: "If set, the field is a combo box; if clear, the field
+  # is a list box" - so a list box with no other flag writes no /Ff at all,
+  # and an absent /Ff is zero.
+  set widget [choiceBuilt {
+    $doc field listbox colour -rect {20 40 40 20} -options {red green blue}
+  } colour]
+  list [regexp {/Type /Annot} $widget] [regexp {/Subtype /Widget} $widget] \
+      [regexp {/FT /Ch} $widget] [regexp {/T \(colour\)} $widget] \
+      [regexp {/Opt \[\(red\) \(green\) \(blue\)\]} $widget] \
+      [choiceFlags $widget] \
+      [regexp {/AP << /N [0-9]+ 0 R >>} $widget] [regexp {/F 4\M} $widget]
+} -result {1 1 1 1 1 0 1 1}
+
+test fieldChoice-1.2 {a combo box is the same field with bit 18 set} -body {
+  set widget [choiceBuilt {
+    $doc field combo salutation -rect {20 40 40 8} -options {Mr Mrs Mx}
+  } salutation]
+  list [regexp {/FT /Ch} $widget] [choiceFlags $widget] \
+      [regexp {/AP << /N [0-9]+ 0 R >>} $widget]
+} -result {1 131072 1}
+
+test fieldChoice-1.3 {the /DA names a font that /DR resolves} -body {
+  # THE SEAM WHERE A FORM BREAKS, and it breaks in silence: a /DA naming a
+  # font that /DR does not have passes "qpdf --check" without a word and
+  # Acrobat then draws nothing. The test does what PDFBox does - reads the
+  # resource name out of the /DA and looks it up in the /Font of the
+  # dictionary /DR points at - for both shapes of the field.
+  set doc [choiceDoc]
+  $doc field listbox a -rect {20 40 40 20} -options {one two} -family helvetica
+  $doc field combo b -rect {20 70 40 8} -options {one two} \
+      -family times -style bold -size 12
+  $doc write [::tclpdfTest::scratch fieldChoice-dr.pdf]
+  set form [$doc catalogEntry AcroForm]
+  regexp {/DR ([0-9]+) 0 R} $form -> resources
+  set fonts [[$doc writer] body $resources]
+  set answers {}
+  foreach da [list [lindex [regexp -inline {/DA \(([^)]*)\)} \
+          [choiceWidget $doc a]] 1] \
+      [lindex [regexp -inline {/DA \(([^)]*)\)} [choiceWidget $doc b]] 1]] {
+    # "At a minimum, the string shall include a Tf operator along with its
+    # two operands" (12.7.4.3), and the size is never the auto-size zero.
+    if {![regexp {^/(\S+) (\S+) Tf } $da -> name size]} {
+      lappend answers "no Tf with two operands: $da"
+      continue
+    }
+    lappend answers [expr {[string match "*/Font <<*/$name *" $fonts]
+        && $size > 0}]
+  }
+  file delete [::tclpdfTest::scratch fieldChoice-dr.pdf]
+  $doc destroy
+  set answers
+} -result {1 1}
+
+test fieldChoice-1.4 {a second write produces the same file} -body {
+  # Every appearance stream and the widget itself come from [reservation],
+  # so the second write fills the same objects rather than adding copies.
+  set doc [choiceDoc]
+  $doc field listbox colour -rect {20 40 40 20} \
+      -options {{R red} {G green}} -value G
+  $doc field combo salutation -rect {20 70 40 8} -options {Mr Mrs} -editable 1
+  lassign [::tclpdfTest::writeTwice $doc fieldChoice-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] [expr {[string length $first] > 900}]
+} -result {1 1}
+
+#
+# --- /Opt, /V and /I --------------------------------------------------------
+#
+
+test fieldChoice-2.1 {an option that exports what it shows is one string} -body {
+  # Table 234: an entry is "either a text string representing one of the
+  # available options or an array consisting of two text strings: the
+  # option's export value and the text that shall be displayed". Where the
+  # two are the same, writing {red red} would say the same thing twice - and
+  # where they differ, the EXPORT value comes first.
+  set widget [choiceBuilt {
+    $doc field listbox colour -rect {20 40 40 20} -options {red {G green}}
+  } colour]
+  regexp {/Opt (\[.*\]) } $widget -> opt
+  set opt
+} -result {[(red) [(G) (green)]]}
+
+test fieldChoice-2.2 {/V is the DISPLAYED text, never the export value} -body {
+  # 12.7.5.4: "V is a text string representing the selected item, as given in
+  # the field dictionary's Opt array ... (For items represented in the Opt
+  # array by a two-element array, the name string is the second of the two
+  # array elements.)" The caller names the option by its export value, which
+  # is the option's identity; the file carries what the reader shows.
+  set widget [choiceBuilt {
+    $doc field listbox colour -rect {20 40 40 20} \
+        -options {{R red} {G green} {B blue}} -value G -default B
+  } colour]
+  list [regexp {/V \(green\)} $widget] [regexp {/V \(G\)} $widget] \
+      [regexp {/DV \(blue\)} $widget] [regexp {/DV \(B\)} $widget]
+} -result {1 0 1 0}
+
+test fieldChoice-2.3 {-value takes the displayed text as well} -body {
+  # The export value is tried first - it is the option's identity - and the
+  # displayed text after it, for the caller who has only that.
+  set widget [choiceBuilt {
+    $doc field combo colour -rect {20 40 40 8} \
+        -options {{R red} {G green}} -value green
+  } colour]
+  regexp {/V \(green\)} $widget
+} -result 1
+
+test fieldChoice-2.4 {a multiple selection is an array, with /I beside it} -body {
+  # "If multiple items are selected, V is an array of such strings"
+  # (12.7.5.4), and /I is "an array of integers, sorted in ascending order,
+  # representing the zero-based indices in the Opt array" (Table 234). The
+  # values are named out of order on purpose: the indices come out sorted.
+  set widget [choiceBuilt {
+    $doc field listbox colour -rect {20 40 40 20} \
+        -options {{R red} {G green} {B blue}} -multi 1 -value {B R}
+  } colour]
+  list [regexp {/V \[\(red\) \(blue\)\]} $widget] \
+      [regexp {/I \[0 2\]} $widget] [choiceFlags $widget]
+} -result {1 1 2097152}
+
+test fieldChoice-2.5 {/I is written as soon as two options show one text} -body {
+  # /V holds the displayed text, so two options showing the same text are two
+  # options /V names and neither of which it picks. /I is then the only entry
+  # that says which one is selected - and where the texts are distinct it
+  # would only repeat what /V already says, so it is left out.
+  set ambiguous [choiceBuilt {
+    $doc field listbox grade -rect {20 40 40 20} \
+        -options {{1 pass} {2 pass} {3 fail}} -index 1
+  } grade]
+  set plain [choiceBuilt {
+    $doc field listbox colour -rect {20 40 40 20} \
+        -options {{R red} {G green}} -value G
+  } colour]
+  list [regexp {/V \(pass\)} $ambiguous] [regexp {/I \[1\]} $ambiguous] \
+      [regexp {/V \(green\)} $plain] [regexp {/I} $plain]
+} -result {1 1 1 0}
+
+test fieldChoice-2.6 {-index names the option by its position} -body {
+  # Duplicates and the order the caller wrote them in are both taken out:
+  # Table 234 wants the indices "sorted in ascending order", and it is a
+  # numeric sort - in the string order 10 would come before 2.
+  set widget [choiceBuilt {
+    $doc field listbox n -rect {20 40 40 60} \
+        -options {a b c d e f g h i j k} -multi 1 -index {10 2 2}
+  } n]
+  list [regexp {/I \[2 10\]} $widget] [regexp {/V \[\(c\) \(k\)\]} $widget]
+} -result {1 1}
+
+test fieldChoice-2.7 {a display text of two words is one option in braces} -body {
+  # An entry of one word is the option, an entry of two is {export display} -
+  # the rule Table 234's own array uses. A text that is itself two words says
+  # so the way every nested Tcl list does, with a brace pair of its own. And
+  # -value takes it whole: a field that holds one selection is given one.
+  set widget [choiceBuilt {
+    $doc field listbox grade -rect {20 40 40 20} \
+        -options {{{very good}} good poor} -value {very good}
+  } grade]
+  list [regexp {/Opt \[\(very good\) \(good\) \(poor\)\]} $widget] \
+      [regexp {/V \(very good\)} $widget]
+} -result {1 1}
+
+test fieldChoice-2.8 {an editable combo takes a value outside its options} -body {
+  # That is what the Edit flag is for (Table 233, bit 19), and it is the one
+  # field where an unmatched value is a value rather than a mistake - no /I,
+  # because the value is in no /Opt position.
+  set widget [choiceBuilt {
+    $doc field combo salutation -rect {20 40 40 8} -options {Mr Mrs} \
+        -editable 1 -value "Prof Dr"
+  } salutation]
+  list [regexp {/V \(Prof Dr\)} $widget] [regexp {/I} $widget] \
+      [choiceFlags $widget]
+} -result {1 0 393216}
+
+test fieldChoice-2.9 {-sort sorts the array by what it shows, then sets the flag} -body {
+  # Table 233, bit 20: "This flag is intended for use by PDF writers, not by
+  # PDF readers. PDF readers shall display the options in the order in which
+  # they occur in the Opt array." A flag over an unsorted array achieves
+  # nothing in any reader - so the writer sorts, and by the DISPLAYED text,
+  # which is what the sorted order means to whoever reads it. The export
+  # values here run the other way on purpose: sorted by them the array would
+  # come out green, blue, red.
+  set widget [choiceBuilt {
+    $doc field listbox colour -rect {20 40 40 20} \
+        -options {{3 red} {1 green} {2 blue}} -sort 1 -value 3
+  } colour]
+  regexp {/Opt (\[.*?\]\])} $widget -> opt
+  list $opt [regexp {/V \(red\)} $widget] [choiceFlags $widget]
+} -result {{[[(2) (blue)] [(1) (green)] [(3) (red)]]} 1 524288}
+
+test fieldChoice-2.10 {/TI is the top index, and a zero is left out} -body {
+  # Table 234: "For scrollable list boxes, the top index (the index in the
+  # Opt array of the first option visible in the list). Default value: 0."
+  set shifted [choiceBuilt {
+    $doc field listbox n -rect {20 40 40 20} -options {a b c d e} -top 3
+  } n]
+  set plain [choiceBuilt {
+    $doc field listbox n -rect {20 40 40 20} -options {a b c d e} -top 0
+  } n]
+  list [regexp {/TI 3\M} $shifted] [regexp {/TI} $plain]
+} -result {1 0}
+
+#
+# --- the flags and the rest of the dictionary -------------------------------
+#
+
+test fieldChoice-3.1 {the flags of Table 227 and Table 233, by option} -body {
+  # Read back as one number per field, because a flag written into the wrong
+  # bit is a field that behaves plausibly and wrongly.
+  set doc [choiceDoc]
+  $doc field listbox a -rect {20 20 40 20} -options {x y} -readonly 1
+  $doc field listbox b -rect {20 50 40 20} -options {x y} -required 1
+  $doc field listbox c -rect {20 80 40 20} -options {x y} -noexport 1
+  $doc field listbox d -rect {20 110 40 20} -options {x y} -multi 1
+  $doc field listbox e -rect {20 140 40 20} -options {x y} -commit 1
+  $doc field combo f -rect {20 170 40 8} -options {x y} -editable 1 -spellcheck 0
+  $doc field combo g -rect {20 190 40 8} -options {x y} -sort 1
+  set path [::tclpdfTest::scratch fieldChoice-flags.pdf]
+  $doc write $path
+  file delete $path
+  set flags {}
+  foreach name {a b c d e f g} {
+    lappend flags [choiceFlags [choiceWidget $doc $name]]
+  }
+  $doc destroy
+  set flags
+} -result {1 2 4 2097152 67108864 4587520 655360}
+
+test fieldChoice-3.2 {-align becomes /Q, and 0 is left out} -body {
+  # /Q applies to every field with variable text, and a choice field is one
+  # (Table 228). /Q 0 is the default and is left out where it applies.
+  set doc [choiceDoc]
+  $doc field listbox a -rect {20 20 40 20} -options {x y} -align left
+  $doc field combo b -rect {20 50 40 8} -options {x y} -align center
+  $doc field combo c -rect {20 70 40 8} -options {x y} -align right
+  set path [::tclpdfTest::scratch fieldChoice-align.pdf]
+  $doc write $path
+  file delete $path
+  set answers {}
+  foreach {name pattern} {a {/Q} b {/Q 1\M} c {/Q 2\M}} {
+    lappend answers [regexp $pattern [choiceWidget $doc $name]]
+  }
+  $doc destroy
+  set answers
+} -result {0 1 1}
+
+test fieldChoice-3.3 {-border and -background become /MK and /BS} -body {
+  # /MK is not a replacement for the /AP - it is what a reader uses when it
+  # regenerates one, which it does the moment a selection is made. Without it
+  # a field with a drawn frame loses the frame at the first click.
+  set doc [choiceDoc]
+  $doc field listbox colour -rect {20 40 40 20} -options {red green} \
+      -border {0 0 0} -borderWidth 0.5 -background {0.9 0.9 0.9}
+  set path [::tclpdfTest::scratch fieldChoice-mk.pdf]
+  $doc write $path
+  set widget [choiceWidget $doc colour]
+  set stream [choiceAppearance $doc colour]
+  file delete $path
+  $doc destroy
+  list [regexp {/MK << /BC \[0 0 0\] /BG \[0.9 0.9 0.9\] >>} $widget] \
+      [regexp {/BS << /W 1.41732 /S /S >>} $widget] \
+      [expr {[string first "re" $stream] < [string first "/Tx BMC" $stream]}]
+} -result {1 1 1}
+
+test fieldChoice-3.4 {-tooltip and -page reach the core unchanged} -body {
+  set doc [choiceDoc]
+  $doc page add
+  $doc field listbox colour -rect {20 40 40 20} -options {red green} \
+      -page 0 -tooltip "Die Farbe"
+  set path [::tclpdfTest::scratch fieldChoice-page.pdf]
+  $doc write $path
+  file delete $path
+  set widget [choiceWidget $doc colour]
+  set first [dict get [$doc Page 0] number]
+  $doc destroy
+  list [regexp {/TU \(Die Farbe\)} $widget] \
+      [regexp "/P $first 0 R" $widget] \
+      [regexp {/FT /Ch} $widget]
+} -result {1 1 1}
+
+test fieldChoice-3.5 {field state and field list answer for a choice field} -body {
+  set doc [choiceDoc]
+  $doc field listbox colour -rect {20 40 40 20} -options {{R red} {G green}} \
+      -value G
+  set state [$doc field state colour]
+  set names [$doc field list]
+  $doc destroy
+  list $names [dict get $state type] \
+      [dict get $state data entries] [dict get $state data selection]
+} -result {colour Ch {{R red} {G green}} 1}
+
+#
+# --- what the field shows ---------------------------------------------------
+#
+
+test fieldChoice-4.1 {the appearance stream is shaped as 12.7.4.3 prescribes} -body {
+  # /Tx BMC ... EMC, a /BBox of the widget's own size, and NO /Matrix -
+  # 12.7.4.3 puts the lower left corner of the box at (0, 0) and takes its
+  # top and right from the /Rect.
+  set doc [choiceDoc]
+  $doc field listbox colour -rect {20 40 40 20} -options {red green} -value red
+  $doc write [::tclpdfTest::scratch fieldChoice-ap.pdf]
+  set stream [choiceAppearance $doc colour]
+  set dict [choiceAppearanceDict $doc colour]
+  file delete [::tclpdfTest::scratch fieldChoice-ap.pdf]
+  $doc destroy
+  # 40 mm x 20 mm in points.
+  list [regexp {/Subtype /Form} $dict] \
+      [regexp {/BBox \[0 0 113.38583 56.69291\]} $dict] \
+      [regexp {/Matrix} $dict] [regexp {/Resources [0-9]+ 0 R} $dict] \
+      [regexp {/Tx BMC} $stream] [regexp {EMC} $stream] \
+      [expr {[string first "/Tx BMC" $stream] < [string first "BT" $stream]}] \
+      [expr {[string first "ET" $stream] < [string first "EMC" $stream]}]
+} -result {1 1 0 1 1 1 1 1}
+
+test fieldChoice-4.2 {a list box draws its rows from /TI down} -body {
+  # The options a reader shows are the ones from the top index onwards, in
+  # the order of /Opt - so the first row drawn is the one -top names, and
+  # what stands above it is not drawn at all.
+  set doc [choiceDoc]
+  $doc field listbox n -rect {20 40 40 20} -options {a b c d e} -top 2
+  $doc write [::tclpdfTest::scratch fieldChoice-rows.pdf]
+  set stream [choiceAppearance $doc n]
+  file delete [::tclpdfTest::scratch fieldChoice-rows.pdf]
+  $doc destroy
+  list [::tclpdfTest::shows $stream] \
+      [expr {[string first "(c)" $stream] < [string first "(d)" $stream]}]
+} -result {{(c) (d) (e)} 1}
+
+test fieldChoice-4.3 {a selected row is laid on a coloured bar} -body {
+  # The bar is drawn INSIDE the /Tx bracket: it marks the value, and a reader
+  # that replaces the value from /Tx BMC to the matching EMC has to take the
+  # bar with it. Drawn before the text of the row, or it would cover it.
+  set doc [choiceDoc]
+  $doc field listbox n -rect {20 40 40 20} -options {a b c} -value b \
+      -highlight {1 0 0}
+  $doc write [::tclpdfTest::scratch fieldChoice-bar.pdf]
+  set stream [choiceAppearance $doc n]
+  file delete [::tclpdfTest::scratch fieldChoice-bar.pdf]
+  $doc destroy
+  list [regexp {1 0 0 rg} $stream] \
+      [expr {[string first "/Tx BMC" $stream] < [string first "1 0 0 rg" $stream]}] \
+      [expr {[string first "1 0 0 rg" $stream] < [string first "(b)" $stream]}] \
+      [::tclpdfTest::shows $stream]
+} -result {1 1 1 {(a) (b) (c)}}
+
+test fieldChoice-4.4 {a combo box draws the selected text and nothing else} -body {
+  # A closed drop-down shows one line. The arrow beside it is the reader's
+  # own furniture and has no place in the appearance stream.
+  set doc [choiceDoc]
+  $doc field combo salutation -rect {20 40 40 8} -options {Mr Mrs Mx} -value Mrs
+  $doc field combo empty -rect {20 60 40 8} -options {Mr Mrs Mx}
+  $doc write [::tclpdfTest::scratch fieldChoice-combo.pdf]
+  set stream [choiceAppearance $doc salutation]
+  set blank [choiceAppearance $doc empty]
+  file delete [::tclpdfTest::scratch fieldChoice-combo.pdf]
+  $doc destroy
+  # The empty one still gets its stream and its bracket: a widget without
+  # /AP /N is what veraPDF rule 6.3.3-1 fails, and a reader filling the field
+  # in replaces what stands between the marks - which it can only do if the
+  # marks are there.
+  list [::tclpdfTest::shows $stream] [::tclpdfTest::shows $blank] \
+      [regexp {/Tx BMC} $blank] [regexp {EMC} $blank]
+} -result {(Mrs) {} 1 1}
+
+#
+# --- the refusals -----------------------------------------------------------
+#
+
+test fieldChoice-4.5 {the field keeps its font whatever the document does later} -body {
+  # The appearance is drawn at WRITE time, and the document's text state then
+  # is whatever the last [font] call left behind - so a field read from there
+  # comes out in the face of the last paragraph on the page while its /DA
+  # still says Helvetica. What the /DA names and what the appearance stream
+  # sets have to be the same font, or a reader redrawing the value changes
+  # the look of the field.
+  set doc [choiceDoc]
+  $doc field listbox colour -rect {20 40 40 20} -options {red green} \
+      -value red -family helvetica
+  $doc font -family courier -size 24 -color {1 0 0}
+  $doc write [::tclpdfTest::scratch fieldChoice-font.pdf]
+  set widget [choiceWidget $doc colour]
+  set stream [choiceAppearance $doc colour]
+  file delete [::tclpdfTest::scratch fieldChoice-font.pdf]
+  $doc destroy
+  regexp {/DA \(/(\S+) (\S+) Tf ([^)]*)\)} $widget -> daFont daSize daColour
+  regexp {/(\S+) (\S+) Tf} $stream -> apFont apSize
+  list [expr {$daFont eq $apFont}] [expr {$daSize eq $apSize}] $daFont \
+      $daSize [string trim $daColour] [regexp {Courier} $stream]
+} -result {1 1 FHelvetica 10 {0 g} 0}
+
+test fieldChoice-5.1 {every refusal carries an errorcode under TCLPDF FIELD} -body {
+  set doc [choiceDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {$doc field listbox a -rect {20 40 40 20}}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y z} -value q}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y} -top 5}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y} -multi maybe}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y} -align middle}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y} -size 0}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y} -borderWidth -1}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y} -color nosuchhue}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y} -index 7}]
+  set names [$doc field list]
+  $doc destroy
+  # A refused call leaves the document exactly as it was: no field of any of
+  # the nine got as far as being declared.
+  list [lsort -unique [lmap code $codes {lrange $code 0 1}]] $names
+} -result {{{TCLPDF FIELD}} {}}
+
+test fieldChoice-5.2 {-options is required, and an entry is one or two words} -body {
+  set doc [choiceDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {}}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {red {a b c}}}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {red {}}}]
+  $doc destroy
+  list $codes
+} -result {{{TCLPDF FIELD OPTIONS} {TCLPDF FIELD OPTIONS 1} {TCLPDF FIELD OPTIONS 1}}}
+
+test fieldChoice-5.3 {a value the options do not offer names them} -body {
+  # And it names the way out: a value outside the list is what an editable
+  # combo box is for, and nothing else.
+  set doc [choiceDoc]
+  set code [catch {$doc field listbox colour -rect {20 40 40 20} \
+      -options {{R red} {G green}} -value yellow} message]
+  $doc destroy
+  list $code [string match {*"R" ("red"), "G" ("green")*} $message] \
+      [string match {*editable combo box*} $message]
+} -result {1 1 1}
+
+test fieldChoice-5.4 {two options under one word are refused, not guessed} -body {
+  # Which of them was meant is a question only the caller can answer, and
+  # -index is where he answers it - the same entry the file would need.
+  set doc [choiceDoc]
+  set code [catch {$doc field listbox grade -rect {20 40 40 20} \
+      -options {{1 pass} {2 pass}} -value pass} message]
+  set ok [$doc field listbox grade -rect {20 40 40 20} \
+      -options {{1 pass} {2 pass}} -index 1]
+  $doc destroy
+  list $code [string match {*-index*} $message] $ok
+} -result {1 1 grade}
+
+test fieldChoice-5.5 {one field, one selection - unless -multi says otherwise} -body {
+  # -value is ONE option on a field that holds one, so the only way to name
+  # two is -index - and a combo box is told that MultiSelect is a list box
+  # flag rather than sent after an option it does not have.
+  set doc [choiceDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox a -rect {20 40 40 20} -options {x y z} -index {0 1}}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field combo b -rect {20 40 40 8} -options {x y z} -index {0 1}}]
+  set combo [lindex [::tclpdfTest::refusal {
+    $doc field combo b -rect {20 40 40 8} -options {x y z} -index {0 1}}] end]
+  set ok [$doc field listbox a -rect {20 40 40 20} -options {x y z} \
+      -multi 1 -index {0 1}]
+  $doc destroy
+  list $codes $ok
+} -result {{{TCLPDF FIELD SELECT -index} {TCLPDF FIELD SELECT -index}} a}
+
+test fieldChoice-5.6 {the combinations Table 233 forbids, and the one it cannot express} -body {
+  # DoNotSpellCheck "shall not be used unless the Combo and Edit flags are
+  # both set"; -index counted in -options is not a position in a sorted
+  # array; and -value and -index both name the selection.
+  set doc [choiceDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {
+    $doc field combo a -rect {20 40 40 8} -options {x y} -spellcheck 0}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox b -rect {20 40 40 20} -options {x y} -sort 1 -index 0}]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field listbox c -rect {20 40 40 20} -options {x y} -value x -index 0}]
+  $doc destroy
+  set codes
+} -result {{TCLPDF FIELD COMBINATION} {TCLPDF FIELD COMBINATION} {TCLPDF FIELD COMBINATION}}
+
+test fieldChoice-5.7 {an option of one shape is not offered on the other} -body {
+  # -multi, -top and -highlight have no spelling on a combo box, -editable
+  # and -spellcheck none on a list box: an option that exists and does
+  # nothing is worse than one that is refused with the list.
+  set doc [choiceDoc]
+  set answers {}
+  foreach {kind rect option} {combo {20 40 40 8} -multi
+      combo {20 40 40 8} -top combo {20 40 40 8} -highlight
+      listbox {20 40 40 20} -editable listbox {20 40 40 20} -spellcheck} {
+    set code [catch {$doc field $kind a -rect $rect -options {x y} \
+        $option 1} message]
+    lappend answers [expr {$code && [string match "*unknown option*" $message]}]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1 1 1}
+
+test fieldChoice-5.8 {the two subcommands are registered and reachable} -body {
+  # Point 1 of the contract. "list" is the core's own word for the list of
+  # field names and is refused to any type by [register], which is why the
+  # two shapes are called listbox and combo.
+  list [dict get $::tclpdf::field::types listbox] \
+      [dict get $::tclpdf::field::types combo] \
+      [::tclpdfTest::refusal {::tclpdf::field register list tclpdf::fieldChoice}] \
+      [catch {::tclpdf::field register listbox tclpdf::fieldChoice}]
+} -result {tclpdf::fieldChoice tclpdf::fieldChoice\
+    {TCLPDF FIELD REGISTER RESERVED list} 0}
+
+#
+# --- what the tools say -----------------------------------------------------
+#
+
+test fieldChoice-6.1 {qpdf reads the choice fields back} -constraints qpdf -body {
+  # "qpdf --json --json-key=acroform" is the structural check for a form on
+  # this machine - "qpdf --check" says nothing about forms at all. What is
+  # asked here is what the file PROMISES: both fields are choice fields, the
+  # options come back as the texts a reader shows, and the value is the
+  # displayed text rather than the export value.
+  set doc [choiceDoc]
+  $doc field listbox colour -rect {20 40 40 20} \
+      -options {{R red} {G green} {B blue}} -value G -tooltip "Farbe"
+  $doc field combo salutation -rect {20 70 40 8} -options {Mr Mrs Mx} \
+      -value Mrs -editable 1
+  set path [::tclpdfTest::scratch fieldChoice-qpdf.pdf]
+  $doc write $path
+  $doc destroy
+  set report [exec qpdf --json --json-key=acroform $path]
+  file delete $path
+  list [regexp {"hasacroform": true} $report] \
+      [regexp {"needappearances": false} $report] \
+      [regexp -all {"ischoice": true} $report] \
+      [regexp {"choices": \[\s*"red",\s*"green",\s*"blue"\s*\]} $report] \
+      [regexp {"value": "u:green"} $report] [regexp {"value": "u:R"} $report] \
+      [regexp {"fieldflags": 393216} $report] \
+      [regexp {"alternativename": "Farbe"} $report]
+} -result {1 1 2 1 1 0 1 1}
+
+test fieldChoice-6.2 {PDFBox sees a list box, a combo box and every /AP} -constraints formcheck -body {
+  # The one reader here that USES the field: it resolves the /DA against the
+  # /DR the way a viewer would and reports a widget without an appearance.
+  # What it must answer is the class - PDListBox against PDComboBox - and the
+  # displayed text as the value, which is the whole point of 12.7.5.4.
+  set doc [choiceDoc]
+  $doc field listbox colour -rect {20 40 40 20} \
+      -options {{R red} {G green} {B blue}} -value G
+  $doc field combo salutation -rect {20 70 40 8} -options {Mr Mrs Mx} -value Mrs
+  set path [::tclpdfTest::scratch fieldChoice-pdfbox.pdf]
+  $doc write $path
+  $doc destroy
+  set tools [file join [file dirname [info script]] .. tools]
+  set jar [lindex [lsort [glob [file join $tools Mustang-CLI-*.jar]]] end]
+  set code [catch {exec java -cp $jar [file join $tools formcheck.java] $path} report]
+  file delete $path
+  list $code [regexp {type=Ch/PDListBox value=\[\[green\]\]} $report] \
+      [regexp {type=Ch/PDComboBox value=\[\[Mrs\]\]} $report] \
+      [regexp -all {ap=yes} $report] [regexp {ERROR} $report]
+} -result {0 1 1 2 0}
+
+#
+# --- accessibility ----------------------------------------------------------
+#
+# A choice field has one widget, so it takes the two descriptions every
+# single-widget field takes: /TU on the field (ISO 32000-2, 14.9.3) and
+# either a /Contents on the widget or a Lbl inside its Form structure
+# element (ISO 14289-2, 8.10.2.2 and 8.10.2.3). Nothing in fieldChoice.tcl
+# knows about any of that - it is the field core's, which is what this
+# measures: the type declares its field and gets the tree for it.
+
+test fieldChoice-8.1 {a tagged choice field gets a Form element and a StructParent} -body {
+  set doc [choiceDoc]
+  $doc tagged 1
+  $doc page add
+  $doc field listbox colour -rect {20 40 40 20} -tooltip "Pick a colour" \
+      -options {red green blue} -contents "The colour of the cover"
+  $doc write [::tclpdfTest::scratch choice-ua.pdf]
+  set widget [choiceWidget $doc colour]
+  set forms [::tclpdfTest::objects $doc "/S /Form"]
+  file delete [::tclpdfTest::scratch choice-ua.pdf]
+  $doc destroy
+  list [llength $forms] [regexp {/Type /OBJR} [lindex $forms 0]] \
+      [regexp {/StructParent [0-9]+} $widget] \
+      [regexp {/Contents \(The colour of the cover\)} $widget] \
+      [regexp {/TU \(Pick a colour\)} $widget]
+} -result {1 1 1 1 1}
+
+test fieldChoice-8.2 {-label puts the label inside the combo box's Form element} -body {
+  set doc [choiceDoc -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc field combo salutation -rect {45 38 30 8} -options {Mrs Mr Mx} \
+      -tooltip "How we address you" -label {
+        $doc text "Salutation" -at {20 40}
+      }
+  $doc write [::tclpdfTest::scratch choice-ua-label.pdf]
+  set form [lindex [::tclpdfTest::objects $doc "/S /Form"] 0]
+  set labels [::tclpdfTest::objects $doc "/S /Lbl"]
+  file delete [::tclpdfTest::scratch choice-ua-label.pdf]
+  $doc destroy
+  # The Lbl comes first in /K and the object reference second - the order of
+  # /K is the reading order.
+  list [llength $labels] \
+      [regexp {/K \[[0-9]+ 0 R << /Type /OBJR /Obj [0-9]+ 0 R /Pg [0-9]+ 0 R >>\]} $form]
+} -result {1 1}
+
+cleanupTests

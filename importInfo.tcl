@@ -17,6 +17,7 @@
 #
 package require Tcl 8.6.11-
 package require tclpdf::importRead 1.0-
+package require tclpdf::option 1.0-
 package require tclpdf::pdfObj 1.0-
 
 namespace eval ::tclpdf::pdf {
@@ -30,7 +31,7 @@ namespace eval ::tclpdf::pdf {
   namespace ensemble create
 }
 
-# The four entries. They are one-liners on purpose, and NOTHING written in
+# The five entries. They are one-liners on purpose, and NOTHING written in
 # this namespace may call [info] unqualified from now on: a procedure of that
 # name lives here and would answer instead. The work is in ::tclpdf::import,
 # where the reader is.
@@ -52,6 +53,23 @@ proc ::tclpdf::pdf::fonts {path} {
 proc ::tclpdf::pdf::metadata {path} {
   set reader [::tclpdf::pdf::Reader $path]
   return [::tclpdf::pdf::Metadata reader]
+}
+
+# The one entry that is not a one-liner, because it is the one that takes an
+# option. -xfa 1 asks for the /AcroForm shadow copy of an XFA form, which is
+# refused without it - see the head of "the fields" below.
+proc ::tclpdf::pdf::fields {path args} {
+  set options [::tclpdf::option parse {xfa 0} $args "pdf fields"]
+  set xfa [dict get $options xfa]
+  if {![string is boolean -strict $xfa]} {
+    return -code error -errorcode {TCLPDF IMPORT OPTION} "tclpdf: -xfa of\
+        \"pdf fields\" is a boolean, got \"$xfa\""
+  }
+  # No "tolerate encrypted" here, on purpose: [pdf info] can report what an
+  # encrypted file says out of its trailer, and a field cannot say anything
+  # out of one - its name and its value are strings.
+  set reader [::tclpdf::pdf::Reader $path]
+  return [::tclpdf::pdf::FieldInventory reader $xfa]
 }
 
 # The file, looked at before it is opened. These four commands are pointed at
@@ -333,54 +351,23 @@ proc ::tclpdf::pdf::NameTree {readerVar node seen} {
 # The signature fields of the interactive form (12.7.5.5), each with what its
 # signature dictionary claims. Whether the claim holds is not decided here -
 # see the head of this section.
+#
+# The walk is [FieldWalk] below, the one [pdf fields] uses: the field tree,
+# the inheritance of /FT down it and the rule that tells a field from a widget
+# are one piece of reading, and were written twice here until the reading half
+# of the form topic arrived and had to agree with this one.
 proc ::tclpdf::pdf::Signatures {readerVar acroform} {
   upvar 1 $readerVar reader
-  set state [dict create found {} seen {} \
-      bytes [string length [dict get $reader bytes]]]
-  Fields reader [Resolve reader [Get $acroform Fields]] {} {} state
-  return [dict get $state found]
-}
-
-# One level of the field tree. /FT and /T are inheritable down it (12.7.4.2):
-# a field may be split into a parent naming the type and kids carrying the
-# widgets, and the fully qualified name is the /T values of the chain joined
-# with dots.
-proc ::tclpdf::pdf::Fields {readerVar array type prefix stateVar} {
-  upvar 1 $readerVar reader $stateVar state
-  if {[lindex $array 0] ne "a"} {
-    return
+  set state [dict create nodes {} seen {} widgets {}]
+  FieldWalk reader [Resolve reader [Get $acroform Fields]] {d {}} {} state
+  set size [string length [dict get $reader bytes]]
+  set found {}
+  foreach node [dict get $state nodes] {
+    if {[Plain reader [Get [dict get $node inherited] FT]] ne "Sig"} continue
+    lappend found [SignatureField reader [dict get $node field] \
+        [dict get $node name] $size]
   }
-  foreach item [lindex $array 1] {
-    if {[lindex $item 0] eq "r"} {
-      set number [lindex [lindex $item 1] 0]
-      if {[dict exists $state seen $number]} continue
-      dict set state seen $number 1
-    }
-    set field [Resolve reader $item]
-    if {[lindex $field 0] ne "d"} continue
-    set kind [Plain reader [Get $field FT]]
-    if {$kind eq {}} {
-      set kind $type
-    }
-    set name [Text [Resolve reader [Get $field T]]]
-    if {$name eq {}} {
-      set name $prefix
-    } elseif {$prefix ne {}} {
-      set name $prefix.$name
-    }
-    # A node is a FIELD where it names itself: 12.7.4.2 permits a missing /T
-    # only for a widget annotation merged into a field, and the widgets a
-    # field hangs its /Kids on are not fields of their own. Without that test
-    # a signature over one field, drawn on one page, is answered twice - once
-    # for the field and once for its widget, the second time with every claim
-    # empty because the signature dictionary hangs off the field.
-    if {$kind eq "Sig" && [Get $field T] ne {}} {
-      dict lappend state found \
-          [SignatureField reader $field $name [dict get $state bytes]]
-    }
-    Fields reader [Resolve reader [Get $field Kids]] $kind $name state
-  }
-  return
+  return $found
 }
 
 proc ::tclpdf::pdf::SignatureField {readerVar field name size} {
@@ -625,6 +612,479 @@ proc ::tclpdf::pdf::Face {readerVar item page stateVar} {
       encoding [Plain reader $encoding] differences $differences \
       pages [list $page]]
   return
+}
+
+# ---------------------------------------------------------------- the fields
+
+# THE FIELDS OF AN INTERACTIVE FORM (12.7) AND THE VALUES THAT STAND IN THEM -
+# the reading half of what field.tcl, fieldButton.tcl and fieldChoice.tcl
+# write, and the answer to the only question a filled-in form is ever asked:
+# what did the sender type. Until this existed the answer needed another
+# program - "qpdf --json --json-key=acroform", or PDFBox through a Java
+# runtime - for a walk this reader was making anyway.
+#
+# THE WORDS OF "type" ARE THE SUBCOMMANDS OF [$doc field]: text, check, radio,
+# button, listbox and combo, not the /FT names Tx, Btn and Ch. The two halves
+# of the package then speak one language - what [$doc field combo ...] wrote
+# comes back as "combo" - and the caller who wants the raw name has /FT one
+# lookup away in any case. "signature" is the one word with no subcommand
+# behind it: a signature field is written by [$doc sign], and what its value
+# claims is answered by [pdf info] under "signatures".
+#
+# /V IS A DIFFERENT DATA TYPE IN EVERY FIELD TYPE, and a reader that treats
+# them alike answers nonsense. Table 226 says only "(various)"; the types are
+# in the four sections below it:
+#
+#   text        a text string (12.7.5.3)          -> the string
+#   check       a NAME, the on state or /Off      -> the name, without slash
+#   radio       a NAME, the on state or /Off      -> the name, without slash
+#   button      nothing at all (12.7.5.2.2)       -> empty
+#   listbox     the DISPLAY text, or an array of  -> the text, or a list of
+#   combo       display texts for a multi select     texts
+#   signature   a signature DICTIONARY (12.7.5.5) -> "signed", and [pdf info]
+#                                                    for what it claims
+#
+# The choice field is the trap: what stands in /V is the displayed text, and
+# the EXPORT value - the one a form submission carries - is the first element
+# of the matching /Opt entry and stands nowhere else in the field. "selected"
+# answers that value, so a caller never has to guess; "options" hands out both
+# halves as {export display} pairs, whether the file wrote the entry as one
+# string or as the two-element array of Table 234.
+#
+# EVERY KEY IS ALWAYS THERE, with an empty value where the file says nothing -
+# as everywhere in this file:
+#
+#   name        the fully qualified name (12.7.4.2): the partial names of the
+#               chain, joined with dots
+#   partial     the /T of this node alone
+#   object      the object number of the field dictionary; empty where the
+#               field stands directly in the array rather than as a reference
+#   type        text, check, radio, button, listbox, combo, signature; the raw
+#               /FT name where the file names a type this package does not
+#               know, and empty where the chain carries none at all
+#   value       /V, read as the type demands - the table above
+#   default     /DV, read the same way
+#   flags       the SET bits of /Ff by name, in bit order; an unnamed bit
+#               travels as "bit<n>" rather than being dropped
+#   options     /Opt as {export display} pairs, one per option
+#   selected    the EXPORT values in force
+#   tooltip     /TU, which is also the accessible name of the field (14.9.3)
+#   readonly    the ReadOnly flag as 0 or 1 - the one flag a caller asks about
+#               without wanting the whole list
+#   required    the Required flag, likewise
+#   pages       the page numbers this field's widgets sit on, ascending and
+#               without repeats
+#   widgets     one dictionary per widget annotation, in the order the file
+#               lists them: page, rect (the /Rect as it is written), state
+#               (its /AS name) and appearance (does it carry /AP /N)
+#   appearance  1 where EVERY widget carries /AP /N, 0 where one does not, and
+#               empty where the field has no widget at all. A widget without
+#               it is drawn by nobody unless the file asks the reader to draw,
+#               which is what /NeedAppearances does and 12.7.3 deprecates -
+#               with the one exception 12.5.2 makes for a rectangle degenerate
+#               in BOTH axes, which is how an invisible signature field is
+#               written and why those answer 0 here without anything being
+#               wrong with them
+#
+# MEASURED AGAINST TWO OTHER READERS, on 2026-08-23. Over 65 documents and 703
+# fields - 56 foreign forms found on this machine plus this package's own
+# examples - name, type, value, tooltip and widget count agree with Apache
+# PDFBox (through tools/formcheck.java) on every field but one kind, and that
+# one is deliberate: where a check box or a radio set carries NO /V at all,
+# PDFBox answers "Off" and this answers empty, because that is what the file
+# says. 12.7.5.2.3 makes /Off the off state and a missing value means the same
+# thing, so a caller who wants the question rather than the entry reads
+# "selected", which is empty in both cases.
+#
+# qpdf --json --json-key=acroform agrees on name, type and flags and differs
+# in three ways that are worth knowing, because all three are about WHAT IS
+# COUNTED rather than what is read: it enumerates WIDGETS, so a radio set of
+# three buttons is three rows there and one record here; it therefore omits a
+# field that has no widget, which PDFBox lists as this does; and its
+# "alternativename" falls back to the field's name where the file writes no
+# /TU, and reads that entry off the widget, so the /TU of a radio SET is lost
+# there and answered here.
+#
+# WHAT IS NOT ANSWERED, and why. The XFA data of an XFA form (Table 224): it
+# is an XML stream in a format defined outside ISO 32000, and the /AcroForm
+# fields underneath it are a shadow copy that need not agree with it - so an
+# XFA file is refused rather than half-answered, and -xfa 1 says "the shadow
+# copy is what I want". An ENCRYPTED file is refused by the reader itself: a
+# field name and a text value are STRINGS, and strings are the one thing every
+# security handler encrypts (7.6.2), so an answer would be cipher text with
+# the shape of a form. Measured on a 40-bit RC4 form: /FT, /Ff and /AS come
+# through - names and numbers are not encrypted - and every /T and /V is
+# binary rubbish. Half an answer with no way to tell which half is why the
+# refusal stands.
+
+proc ::tclpdf::pdf::FieldInventory {readerVar allowXfa} {
+  upvar 1 $readerVar reader
+  set acroform [Resolve reader [Get [Catalog reader] AcroForm]]
+  if {[lindex $acroform 0] ne "d"} {
+    return {}
+  }
+  if {[Get $acroform XFA] ne {} && !$allowXfa} {
+    return -code error -errorcode {TCLPDF IMPORT XFA} "tclpdf:\
+        [dict get $reader path] carries an XFA form (ISO 32000-2, Table 224,\
+        deprecated in PDF 2.0): its data lives in an XML stream in a format\
+        defined outside the PDF standard, and the /AcroForm fields beneath it\
+        are a shadow copy that need not agree with it. Ask for that copy with\
+        \"-xfa 1\" where it is what you want; \[::tclpdf::pdf info\] reports\
+        the form as XFA either way"
+  }
+  set state [dict create nodes {} seen {} widgets [WidgetPages reader]]
+  FieldWalk reader [Resolve reader [Get $acroform Fields]] {d {}} {} state
+  set out {}
+  foreach node [dict get $state nodes] {
+    lappend out [FieldRecord reader $node state]
+  }
+  return $out
+}
+
+# One level of the field tree, collecting every NODE THAT NAMES ITSELF.
+# 12.7.4.2: "A field dictionary that does not have a partial field name (T
+# entry) of its own shall not be considered a field but simply a Widget
+# annotation" - so the /Kids of a radio set are widgets, not four fields, and
+# the same walk has to tell the two apart by /T alone.
+#
+# /FT, /Ff, /V and /DV are INHERITABLE down the tree (Table 226), and they are
+# carried in "inherited" as the raw items rather than resolved here: a parent
+# may name the type and the kids the widgets, and a set of radio buttons keeps
+# its value on the parent while the kids answer /AS to it.
+proc ::tclpdf::pdf::FieldWalk {readerVar array inherited prefix stateVar} {
+  upvar 1 $readerVar reader $stateVar state
+  if {[lindex $array 0] ne "a"} {
+    return
+  }
+  foreach item [lindex $array 1] {
+    if {[lindex $item 0] eq "r"} {
+      set number [lindex [lindex $item 1] 0]
+      # A /Kids that points back at an ancestor is a ring, and a file with one
+      # exists: measured on a form written by jsPDF, "qpdf --json" answers
+      # "loop detected while traversing /AcroForm" on three of its objects.
+      if {[dict exists $state seen $number]} continue
+      dict set state seen $number 1
+      set object $number
+    } else {
+      set object {}
+    }
+    set field [Resolve reader $item]
+    if {[lindex $field 0] ne "d"} continue
+    # "inherited" is a PARSED DICTIONARY, {d {...}}, not a Tcl dict - so that
+    # [Get] reads it exactly as it reads the field itself, and one accessor
+    # answers both. It is copied per NODE and never written back into the
+    # loop's own variable: an inheritable entry travels DOWN the tree
+    # (12.7.4.2), and a sibling that took over the /V of the sibling before it
+    # would answer a value nobody ever wrote.
+    set carried $inherited
+    foreach key {FT Ff V DV} {
+      if {[Get $field $key] ne {}} {
+        Put carried $key [Get $field $key]
+      }
+    }
+    set partial [Text [Resolve reader [Get $field T]]]
+    set name $prefix
+    if {[Get $field T] ne {}} {
+      set name [expr {$prefix eq {} ? $partial : "$prefix.$partial"}]
+      dict lappend state nodes [dict create item $item object $object \
+          field $field name $name partial $partial inherited $carried]
+    }
+    FieldWalk reader [Resolve reader [Get $field Kids]] $carried $name state
+  }
+  return
+}
+
+# What one field says about itself. The order of the keys is the order of the
+# table at the head of this section.
+proc ::tclpdf::pdf::FieldRecord {readerVar node stateVar} {
+  upvar 1 $readerVar reader $stateVar state
+  set field [dict get $node field]
+  set inherited [dict get $node inherited]
+  set kind [Plain reader [Get $inherited FT]]
+  set bits [Plain reader [Get $inherited Ff]]
+  if {![string is entier -strict $bits]} {
+    set bits 0
+  }
+  set type [FieldType $kind $bits]
+  set options [FieldOptions reader $field]
+  set value [FieldValueText reader [Get $inherited V] $type]
+  set widgets [FieldWidgets reader $node state]
+  set pages {}
+  set appearance {}
+  foreach widget $widgets {
+    if {[dict get $widget page] ne {} && [dict get $widget page] ni $pages} {
+      lappend pages [dict get $widget page]
+    }
+    if {$appearance eq {} || $appearance} {
+      set appearance [dict get $widget appearance]
+    }
+  }
+  return [dict create name [dict get $node name] \
+      partial [dict get $node partial] object [dict get $node object] \
+      type $type value $value \
+      default [FieldValueText reader [Get $inherited DV] $type] \
+      flags [FieldFlagNames $kind $bits] options $options \
+      selected [FieldSelected reader $field $type $value $options] \
+      tooltip [Text [Resolve reader [Get $field TU]]] \
+      readonly [expr {($bits & 1) != 0}] \
+      required [expr {($bits & 2) != 0}] \
+      pages [lsort -integer $pages] widgets $widgets \
+      appearance $appearance]
+}
+
+# The word for a field type. /FT alone does not say it: three of the six
+# things a caller calls a field are one /FT told apart by /Ff (Table 229 for
+# the button, Table 233 for the choice), which is why the flags are read
+# before the type and not after it.
+proc ::tclpdf::pdf::FieldType {kind bits} {
+  switch -- $kind {
+    Tx {return text}
+    Sig {return signature}
+    Btn {
+      if {$bits & (1 << 16)} {return button}
+      if {$bits & (1 << 15)} {return radio}
+      return check
+    }
+    Ch {return [expr {$bits & (1 << 17) ? "combo" : "listbox"}]}
+  }
+  # A file may name a type this package does not build - and one that names
+  # none at all is legal for a node that only groups names (12.7.4.2). Both
+  # are reported as they stand rather than guessed at: the words above are
+  # lower case, so a raw /FT name is recognisable as one.
+  return $kind
+}
+
+# The set bits of /Ff by name. NOT the table of [::tclpdf::field flags], and
+# the reason is bit 26: it is RichText on a text field and RadiosInUnison on a
+# button (Tables 231 and 229), so the same number has two names and only the
+# field type says which. A writer is told the name and computes the bit, which
+# that collision does not trouble; a reader is handed the bit and must find
+# the name, and needs the type to do it. tests/importFields.test holds the two
+# tables against each other so the split cannot drift.
+proc ::tclpdf::pdf::FieldFlagNames {kind bits} {
+  variable fieldFlagCommon
+  variable fieldFlagByType
+  set names $fieldFlagCommon
+  if {[dict exists $fieldFlagByType $kind]} {
+    set names [dict merge $names [dict get $fieldFlagByType $kind]]
+  }
+  set out {}
+  for {set bit 1} {$bit <= 32} {incr bit} {
+    if {!($bits & (1 << ($bit - 1)))} continue
+    # A bit nobody names is REPORTED, not dropped: a foreign file that sets
+    # one is saying something, and "bit26 on a signature field" is a fact a
+    # caller can act on where "no flags" would be a lie.
+    lappend out [expr {[dict exists $names $bit]
+        ? [dict get $names $bit] : "bit$bit"}]
+  }
+  return $out
+}
+
+# /V or /DV as the field type demands - the table at the head of this section.
+proc ::tclpdf::pdf::FieldValueText {readerVar item type} {
+  upvar 1 $readerVar reader
+  set value [Resolve reader $item]
+  if {$value eq {}} {
+    return {}
+  }
+  switch -- $type {
+    button {
+      # 12.7.5.2.2 gives a push button no value at all: it holds no state, it
+      # only acts. A file that writes one anyway is not answered with it.
+      return {}
+    }
+    signature {
+      return [expr {[lindex $value 0] eq "d" ? "signed" : {}}]
+    }
+    listbox - combo {
+      # "or an array of text strings" (Table 234) - a multiple selection.
+      if {[lindex $value 0] eq "a"} {
+        set out {}
+        foreach entry [lindex $value 1] {
+          lappend out [Text [Resolve reader $entry]]
+        }
+        return $out
+      }
+    }
+  }
+  # A name for the two button types, a string for everything else - and the
+  # other way round where a file has it the other way round, because reading
+  # a name with [Text] answers empty and losing the value is worse than
+  # reporting it in the shape it was found in.
+  #
+  # A check box with no /V at all is answered EMPTY, not "Off". The two mean
+  # the same thing to a reader - 12.7.5.2.3 - and PDFBox fills the name in;
+  # this does not, because every other key in this answer is empty where the
+  # file is silent, and "selected" says the same thing without the guess.
+  if {[lindex $value 0] eq "nm"} {
+    return [lindex $value 1]
+  }
+  return [Text $value]
+}
+
+# /Opt as {export display} pairs. Table 234: an entry is "either a text string
+# representing one of the available options or an array consisting of two text
+# strings: the option's export value and the text that shall be displayed".
+# Where the file wrote one string, the two halves are the same string - which
+# is what the standard means by it, and it saves every caller the test.
+proc ::tclpdf::pdf::FieldOptions {readerVar field} {
+  upvar 1 $readerVar reader
+  set entries [Resolve reader [Get $field Opt]]
+  if {[lindex $entries 0] ne "a"} {
+    return {}
+  }
+  set out {}
+  foreach entry [lindex $entries 1] {
+    set entry [Resolve reader $entry]
+    if {[lindex $entry 0] eq "a"} {
+      set pair [lindex $entry 1]
+      set export [Text [Resolve reader [lindex $pair 0]]]
+      set display [expr {[llength $pair] > 1
+          ? [Text [Resolve reader [lindex $pair 1]]] : $export}]
+      lappend out [list $export $display]
+    } else {
+      set text [Text $entry]
+      lappend out [list $text $text]
+    }
+  }
+  return $out
+}
+
+# The EXPORT values in force. For a choice field that is the one thing /V does
+# not say - see the head of this section - and there are two roads to it:
+#
+#   /I, "the zero-based indices in the Opt array of the currently selected
+#   option items" (Table 234), which is exact and is written wherever /V is
+#   ambiguous, and
+#
+#   /V matched against the DISPLAY halves of /Opt, for the ordinary file that
+#   writes no /I.
+#
+# /I wins where it is there, because that is the entry the standard invented
+# for the case the other road cannot decide: two options showing the same text.
+# A value matching no option at all travels unchanged - an editable combo box
+# (the Edit flag) may hold anything its user typed, and that IS the value.
+#
+# For a check box and a radio button the export value is /V itself: it is the
+# name of the on state, and /Off - the one name 12.7.5.2.3 reserves - means
+# nothing is chosen. Everything else has no export value to give.
+proc ::tclpdf::pdf::FieldSelected {readerVar field type value options} {
+  upvar 1 $readerVar reader
+  switch -- $type {
+    check - radio {
+      return [expr {$value eq {} || $value eq "Off" ? {} : [list $value]}]
+    }
+    listbox - combo {}
+    default {return {}}
+  }
+  set indices [Resolve reader [Get $field I]]
+  if {[lindex $indices 0] eq "a"} {
+    set out {}
+    foreach entry [lindex $indices 1] {
+      set index [Plain reader $entry]
+      if {[string is entier -strict $index] && $index >= 0
+          && $index < [llength $options]} {
+        lappend out [lindex $options $index 0]
+      }
+    }
+    if {[llength $out]} {
+      return $out
+    }
+  }
+  set out {}
+  foreach text $value {
+    set export $text
+    foreach option $options {
+      if {[lindex $option 1] eq $text} {
+        set export [lindex $option 0]
+        break
+      }
+    }
+    lappend out $export
+  }
+  return $out
+}
+
+# The widget annotations of one field. Two shapes and both are normal
+# (12.7.4.2): the field IS its widget, everything in one dictionary, where it
+# has only one; or the field carries /Kids and each kid without a /T of its own
+# is one of its widgets. A radio set is the second shape and cannot be the
+# first - four buttons are four annotations and one field.
+proc ::tclpdf::pdf::FieldWidgets {readerVar node stateVar} {
+  upvar 1 $readerVar reader $stateVar state
+  set field [dict get $node field]
+  set items {}
+  # /Subtype is what says it, /Rect what betrays it: a merged field-widget
+  # written without /Subtype /Widget is out of line with Table 166 and occurs,
+  # and a field dictionary has no rectangle for any other reason.
+  if {[Plain reader [Get $field Subtype]] eq "Widget"
+      || [Get $field Rect] ne {}} {
+    lappend items [dict get $node item]
+  }
+  foreach kid [lindex [Resolve reader [Get $field Kids]] 1] {
+    set widget [Resolve reader $kid]
+    if {[lindex $widget 0] ne "d" || [Get $widget T] ne {}} continue
+    lappend items $kid
+  }
+  set out {}
+  foreach item $items {
+    set widget [Resolve reader $item]
+    set rect {}
+    foreach number [lindex [Resolve reader [Get $widget Rect]] 1] {
+      lappend rect [Plain reader $number]
+    }
+    set page {}
+    if {[dict exists $state widgets $item]} {
+      set page [dict get $state widgets $item]
+    }
+    lappend out [dict create page $page rect $rect \
+        state [Plain reader [Get $widget AS]] \
+        appearance [expr {[Get [Resolve reader [Get $widget AP]] N] ne {}}]]
+  }
+  return $out
+}
+
+# Which page each annotation stands on, keyed by the ITEM as the file wrote
+# it - a reference for the normal case, the parsed dictionary for the rare
+# annotation written directly into /Annots. Both are the same Tcl value in the
+# field tree and in the page's array, so one dictionary answers both.
+#
+# The page is looked up here rather than through the widget's /P (Table 166),
+# and the difference matters: /P names the page OBJECT, and turning an object
+# number into "page 3" needs the page tree walked anyway. A widget that no
+# page lists is answered with an empty page - it is in the file and in no
+# reader's window, and that is a fact worth having rather than a hole to fill
+# by guessing.
+proc ::tclpdf::pdf::WidgetPages {readerVar} {
+  upvar 1 $readerVar reader
+  set count [PageCount reader]
+  if {$count eq {}} {
+    return {}
+  }
+  set map {}
+  for {set number 1} {$number <= $count} {incr number} {
+    foreach item [lindex [Resolve reader [Get [Page reader $number] Annots]] 1] {
+      if {![dict exists $map $item]} {
+        dict set map $item $number
+      }
+    }
+  }
+  return $map
+}
+
+namespace eval ::tclpdf::pdf {
+  # The three flags every field type has (Table 227), and the ones each type
+  # has of its own (Tables 229, 231 and 233), by the bit position the standard
+  # counts from ONE: /Ff 1 is ReadOnly, not bit 1 of a zero-based count. See
+  # [FieldFlagNames] for why this is not the writer's table turned round.
+  variable fieldFlagCommon {1 ReadOnly 2 Required 3 NoExport}
+  variable fieldFlagByType {
+    Tx {13 Multiline 14 Password 21 FileSelect 23 DoNotSpellCheck
+        24 DoNotScroll 25 Comb 26 RichText}
+    Btn {15 NoToggleToOff 16 Radio 17 Pushbutton 26 RadiosInUnison}
+    Ch {18 Combo 19 Edit 20 Sort 22 MultiSelect 23 DoNotSpellCheck
+        27 CommitOnSelChange}
+  }
 }
 
 # -------------------------------------------------------------- the plumbing

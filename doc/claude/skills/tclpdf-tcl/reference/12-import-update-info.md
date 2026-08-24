@@ -4,7 +4,7 @@ Three things a document object cannot do, because their subject is a **file some
 
 ```tcl
 package require tclpdf
-package require tclpdf::importInfo    ;# ::tclpdf::pdf info|pages|fonts|metadata
+package require tclpdf::importInfo    ;# ::tclpdf::pdf info|pages|fonts|fields|metadata
 package require tclpdf::update        ;# ::tclpdf::update open
 package require tclpdf::pdfObj        ;# the object syntax an update writes with
 
@@ -66,7 +66,7 @@ puts "version [dict get $facts version], xref [dict get $facts xref],\
     tagged [dict get $facts tagged], encrypted [dict get $facts encrypted]"
 puts "info: [dict get $facts info]"
 
-# The three answers that cost more than the summary, which is why they are
+# The four answers that cost more than the summary, which is why they are
 # separate calls - measured on a 62 MB catalogue: info 52 ms, fonts 1.6 s,
 # because the latter walks every page and everything its resources reach.
 puts "page 1: [lindex [::tclpdf::pdf pages [file join $out ref-12-import.pdf]] 0]"
@@ -80,7 +80,7 @@ foreach face [::tclpdf::pdf fonts [file join $out ref-12-import.pdf]] {
 puts "xmp: [string length [::tclpdf::pdf metadata [file join $out ref-12-import.pdf]]] bytes"
 ```
 
-`revisions` is **not** `sections`: an incremental update appends its section, while a linearized file carries a second one at the *front* that chains forwards - so `revisions` is `sections` minus every forward step. `pdfa` and `pdfua` report what the packet **claims**, which is not a conformance: veraPDF decides that over hundreds of rules. An **encrypted** file is answered rather than refused - the one place in this package where that is so, because an inventory is the caller for which "encrypted, revision 6, AES-256" is the answer. Deliberately not answered: the text, words and colours of a page (that is rendering), whether a signature is *valid* (that is cryptography against a trust store), and annotations, outlines, page labels and the structure tree.
+`revisions` is **not** `sections`: an incremental update appends its section, while a linearized file carries a second one at the *front* that chains forwards - so `revisions` is `sections` minus every forward step. `pdfa` and `pdfua` report what the packet **claims**, which is not a conformance: veraPDF decides that over hundreds of rules. An **encrypted** file is answered rather than refused - the one place in this package where that is so, because an inventory is the caller for which "encrypted, revision 6, AES-256" is the answer. Deliberately not answered: the text, words and colours of a page (that is rendering), whether a signature is *valid* (that is cryptography against a trust store), and outlines, page labels, the structure tree and every annotation other than the form widgets `pdf fields` reports.
 
 ## Continuing a file: the incremental update
 

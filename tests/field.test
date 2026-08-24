@@ -1,0 +1,1536 @@
+# field.test --
+#
+# Interactive form fields (ISO 32000-2, 12.7) - the core and the text field.
+#
+# Four questions carry this file, and each of them is a way a form can be
+# wrong while the file still opens:
+#
+#   Does the /DA of a field name a font that /DR actually resolves? That is
+#   the seam where a freshly built form breaks, it breaks SILENTLY - qpdf
+#   waves it through - and the only tool on this machine that catches it is
+#   PDFBox. So the test does what PDFBox does: it reads the resource name out
+#   of the /DA and looks it up in the /Font of the resource dictionary /DR
+#   points at.
+#
+#   Is the appearance stream shaped the way 12.7.4.3 prescribes - the frame
+#   OUTSIDE the /Tx bracket, the value inside it, a /BBox of the widget's own
+#   size and no /Matrix? A reader that sets a new value replaces the stream
+#   from /Tx BMC to the matching EMC, so what is drawn outside survives and
+#   what is drawn inside does not.
+#
+#   Do a signature and a text field share ONE /AcroForm? Two modules writing
+#   one catalogue key is a document with two field trees, of which a reader
+#   sees whichever was written last.
+#
+#   Does the contract for further field types hold - a type that registers,
+#   declares, builds and draws, without touching the catalogue, and a build
+#   that reaches for a core key refused by name?
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::field
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint verapdf [expr {[auto_execok verapdf] ne {}}]
+
+# A document with one page, in millimetres, so that every test does not
+# repeat the same three lines.
+proc fieldDoc {args} {
+  set doc [tclpdf new -unit mm -format a4 {*}$args]
+  $doc page add
+  return $doc
+}
+
+# The body of the widget annotation of one field, out of the writer. Reads
+# what was BUILT rather than what was written to disk - the objects exist as
+# soon as the write run has been through beforeWrite, and a test about a
+# dictionary should not have to go through a file to see it.
+proc fieldWidget {doc name} {
+  set writer [$doc writer]
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match "*/Subtype /Widget*" $body]
+        && [string match "*/T ($name)*" $body]} {
+      return $body
+    }
+  }
+  return {}
+}
+
+# The /AcroForm entry of a document, as it stands in the catalogue.
+proc fieldAcroForm {doc} {
+  return [$doc catalogEntry AcroForm]
+}
+
+# The appearance stream of a field, decoded. The /AP /N of the widget names
+# the object; [streamOf] in helper.tcl unpacks it.
+proc fieldAppearance {doc name} {
+  set widget [fieldWidget $doc $name]
+  if {![regexp {/AP << /N ([0-9]+) 0 R} $widget -> number]} {
+    return "no /AP /N in: $widget"
+  }
+  return [::tclpdfTest::streamOf [$doc writer] $number]
+}
+
+# The dictionary of the appearance stream object, undecoded.
+proc fieldAppearanceDict {doc name} {
+  set widget [fieldWidget $doc $name]
+  if {![regexp {/AP << /N ([0-9]+) 0 R} $widget -> number]} {
+    return {}
+  }
+  set body [[$doc writer] body $number]
+  return [string range $body 0 [expr {[string first "\nstream" $body] - 1}]]
+}
+
+# Write a document to a scratch file, hand back the bytes, remove the file.
+proc fieldBytes {doc name} {
+  set path [::tclpdfTest::scratch $name]
+  $doc write $path
+  set data [::tclpdfTest::readBytes $path]
+  file delete $path
+  return $data
+}
+
+#
+# --- the structure ----------------------------------------------------------
+#
+
+test field-1.1 {a text field is one object: field and widget merged} -body {
+  # 12.5.6.19 permits the merge where a field has exactly one widget, which
+  # is every field this package writes. What has to be in it: the annotation
+  # half (Type, Subtype, Rect, F, P), the field half (FT, T) and the /AP the
+  # standard requires of every visible widget.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8} -value "Erika Mustermann"
+  $doc write [::tclpdfTest::scratch field-one.pdf]
+  set widget [fieldWidget $doc customer]
+  file delete [::tclpdfTest::scratch field-one.pdf]
+  $doc destroy
+  list [regexp {/Type /Annot} $widget] [regexp {/Subtype /Widget} $widget] \
+      [regexp {/FT /Tx} $widget] [regexp {/T \(customer\)} $widget] \
+      [regexp {/V \(Erika Mustermann\)} $widget] \
+      [regexp {/F 4\M} $widget] [regexp {/AP << /N [0-9]+ 0 R >>} $widget] \
+      [regexp {/P [0-9]+ 0 R} $widget]
+} -result {1 1 1 1 1 1 1 1}
+
+test field-1.2 {the /AcroForm carries /Fields, /DA and /DR - and no /NeedAppearances} -body {
+  # Table 224 marks /NeedAppearances deprecated in PDF 2.0, its absence means
+  # false, and this package draws every /AP itself - so the key is not
+  # written at all. /DA and /DR are: /DA is required on every field with
+  # variable text and inheritable, /DR is where its font name is resolved.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8}
+  $doc write [::tclpdfTest::scratch field-acroform.pdf]
+  set form [fieldAcroForm $doc]
+  file delete [::tclpdfTest::scratch field-acroform.pdf]
+  $doc destroy
+  list [regexp {/Fields \[[0-9]+ 0 R\]} $form] \
+      [regexp {/DA \(/F[A-Za-z]+ 10 Tf 0 g\)} $form] \
+      [regexp {/DR [0-9]+ 0 R} $form] \
+      [regexp {NeedAppearances} $form] [regexp {SigFlags} $form]
+} -result {1 1 1 0 0}
+
+test field-1.3 {the /DA names a font that /DR resolves} -body {
+  # THE SEAM WHERE A FORM BREAKS, and it breaks in silence: a /DA naming a
+  # font that /DR does not have passes "qpdf --check" without a word, and
+  # Acrobat then draws nothing. Measured 2026-08-23; PDFBox is the one tool
+  # here that catches it, with "Could not find font". This test does what
+  # PDFBox does - takes the resource name out of the /DA and looks it up in
+  # the /Font of the dictionary /DR points at - for the document /DA and for
+  # every field's own.
+  set doc [fieldDoc]
+  $doc field text a -rect {20 40 80 8} -family helvetica
+  $doc field text b -rect {20 60 80 8} -family times -style bold -size 12
+  $doc write [::tclpdfTest::scratch field-dr.pdf]
+  set form [fieldAcroForm $doc]
+  regexp {/DR ([0-9]+) 0 R} $form -> resources
+  set fonts [[$doc writer] body $resources]
+  set names {}
+  foreach da [list [lindex [regexp -inline {/DA \(([^)]*)\)} $form] 1] \
+      [lindex [regexp -inline {/DA \(([^)]*)\)} [fieldWidget $doc a]] 1] \
+      [lindex [regexp -inline {/DA \(([^)]*)\)} [fieldWidget $doc b]] 1]] {
+    # "At a minimum, the string shall include a Tf operator along with its
+    # two operands" (12.7.4.3) - so both operands are read out, and the size
+    # is checked not to be the auto-size zero.
+    if {![regexp {^/(\S+) (\S+) Tf } $da -> name size]} {
+      lappend names "no Tf with two operands: $da"
+      continue
+    }
+    lappend names [expr {[string match "*/Font <<*/$name *" $fonts]
+        && $size > 0}]
+  }
+  file delete [::tclpdfTest::scratch field-dr.pdf]
+  $doc destroy
+  set names
+} -result {1 1 1}
+
+test field-1.4 {the appearance stream is shaped as 12.7.4.3 prescribes} -body {
+  # /Tx BMC ... q ... BT ... ET ... Q ... EMC, a /BBox of the widget's own
+  # size, and NO /Matrix - 12.7.4.3 puts the lower left corner of the box at
+  # (0, 0) and takes its top and right from the /Rect, and a matrix on top of
+  # that would be a second scaling the algorithm of 12.5.5 does not expect.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8} -value "Muster"
+  $doc write [::tclpdfTest::scratch field-ap.pdf]
+  set stream [fieldAppearance $doc customer]
+  set dict [fieldAppearanceDict $doc customer]
+  file delete [::tclpdfTest::scratch field-ap.pdf]
+  $doc destroy
+  # 80 mm x 8 mm in points.
+  list [regexp {/Subtype /Form} $dict] \
+      [regexp {/BBox \[0 0 226.77165 22.67717\]} $dict] \
+      [regexp {/Matrix} $dict] \
+      [regexp {/Resources [0-9]+ 0 R} $dict] \
+      [regexp {/Tx BMC} $stream] [regexp {EMC} $stream] \
+      [expr {[string first "/Tx BMC" $stream] < [string first "BT" $stream]}] \
+      [expr {[string first "ET" $stream] < [string first "EMC" $stream]}]
+} -result {1 1 0 1 1 1 1 1}
+
+test field-1.5 {the frame is outside the /Tx bracket, the value inside it} -body {
+  # A reader that sets a new value "shall then replace the existing contents
+  # of the appearance stream from /Tx BMC to the matching EMC" (12.7.4.3).
+  # So everything that has to survive a value change - the background, the
+  # frame - is drawn BEFORE the mark, and the value after it. Drawn inside,
+  # a field would lose its frame at the first keystroke.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8} -value "Muster" \
+      -background {0.9 0.9 1} -border {0 0 0} -borderWidth 0.5
+  $doc write [::tclpdfTest::scratch field-frame.pdf]
+  set stream [fieldAppearance $doc customer]
+  file delete [::tclpdfTest::scratch field-frame.pdf]
+  $doc destroy
+  set mark [string first "/Tx BMC" $stream]
+  list [expr {[string first "0.9 0.9 1 rg" $stream] < $mark}] \
+      [expr {[string first " re\nS" $stream] < $mark}] \
+      [expr {[string first "(Muster) Tj" $stream] > $mark}]
+} -result {1 1 1}
+
+test field-1.6 {the widget goes into the page's /Annots, with /Tabs /S} -body {
+  # An annotation "shall be referenced from the Annots array of only one
+  # page" (12.5.2), and PDF/UA wants /Tabs on every page that has one - which
+  # output.tcl writes for links and now writes for fields, because both go
+  # through the same scratch state.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8}
+  set data [fieldBytes $doc field-annots.pdf]
+  $doc destroy
+  list [regexp {/Annots \[[0-9]+ 0 R\]} $data] [regexp {/Tabs /S} $data]
+} -result {1 1}
+
+test field-1.7 {a second write produces the same file} -body {
+  # The write events fire on EVERY write, so the widget's object number and
+  # every appearance stream come from [reservation] and are written over.
+  # Without that a document written twice carries two of each, the first set
+  # referenced by nothing.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8} -value "Muster" \
+      -background {0.9 0.9 1} -border {0 0 0}
+  $doc field text remark -rect {20 60 80 20} -multiline 1 -value "a\nb"
+  lassign [::tclpdfTest::writeTwice $doc field-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] \
+      [llength [regexp -all -inline {/Subtype /Widget} $first]]
+} -result {1 2}
+
+test field-1.8 {qpdf reads the field table back} -constraints qpdf -body {
+  # "qpdf --json --json-key=acroform" is the structural check for a form on
+  # this machine - "qpdf --check" says nothing about forms at all. What is
+  # asked here is what the file PROMISES: the form exists, needappearances is
+  # false, and every field comes back with its name, type, flags, quadding
+  # and value.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8} -value "Erika" \
+      -tooltip "Name des Kunden"
+  $doc field text amount -rect {20 60 40 8} -align right -value "42" -required 1
+  $doc field text remark -rect {20 80 80 20} -multiline 1
+  set path [::tclpdfTest::scratch field-qpdf.pdf]
+  $doc write $path
+  $doc destroy
+  set report [exec qpdf --json --json-key=acroform $path]
+  file delete $path
+  set result {}
+  lappend result [regexp {"hasacroform": true} $report]
+  lappend result [regexp {"needappearances": false} $report]
+  foreach {name pattern} {customer {"istext": true} amount {"quadding": 2}
+      remark {"fieldflags": 4096}} {
+    lappend result [regexp "\"fullname\": \"$name\"" $report]
+  }
+  lappend result [regexp {"quadding": 2} $report] \
+      [regexp {"fieldflags": 4096} $report] [regexp {"fieldflags": 2} $report] \
+      [regexp {"alternativename": "Name des Kunden"} $report]
+} -result {1 1 1 1 1 1 1 1 1}
+
+#
+# --- the options ------------------------------------------------------------
+#
+
+test field-2.1 {-align becomes /Q, and 0 is left out} -body {
+  # /Q 0 is left-aligned and is the default (Table 228) - a key that may only
+  # ever hold its own default is one to leave out.
+  set result {}
+  foreach {align expected} {left {} center 1 right 2} {
+    set doc [fieldDoc]
+    $doc field text f -rect {20 40 80 8} -align $align
+    $doc write [::tclpdfTest::scratch field-q.pdf]
+    set widget [fieldWidget $doc f]
+    file delete [::tclpdfTest::scratch field-q.pdf]
+    $doc destroy
+    if {[regexp {/Q ([0-9])} $widget -> value]} {
+      lappend result $value
+    } else {
+      lappend result {}
+    }
+  }
+  set result
+} -result {{} 1 2}
+
+test field-2.2 {-multiline sets bit 13 and turns the line feed into a return} -body {
+  # Table 231: Multiline is bit 13, so /Ff 4096. And 12.7.4.3 spells a line
+  # break in a field value as a CARRIAGE RETURN - a value handed to a reader
+  # with \n in it shows as one long line and nothing says why.
+  set doc [fieldDoc]
+  $doc field text remark -rect {20 40 80 20} -multiline 1 \
+      -value "Zeile eins\nZeile zwei"
+  $doc write [::tclpdfTest::scratch field-multi.pdf]
+  set widget [fieldWidget $doc remark]
+  set stream [fieldAppearance $doc remark]
+  file delete [::tclpdfTest::scratch field-multi.pdf]
+  $doc destroy
+  list [regexp {/Ff 4096\M} $widget] \
+      [regexp {/V \(Zeile eins\\rZeile zwei\)} $widget] \
+      [regexp {\n} $widget] \
+      [llength [regexp -all -inline {Tj} $stream]]
+} -result {1 1 0 2}
+
+test field-2.3 {the flags of Table 227 and Table 231} -body {
+  # The bit positions, each on its own: ReadOnly 1, Required 2, NoExport 3,
+  # Multiline 13, Password 14. The value of bit n is 2^(n-1), which is the
+  # trap in the table - /Ff 1 is ReadOnly, not bit 1 of a zero-based count.
+  set result {}
+  foreach {option expected} {readonly 1 required 2 noexport 4
+      multiline 4096 password 8192} {
+    set doc [fieldDoc]
+    $doc field text f -rect {20 40 80 8} -$option 1
+    $doc write [::tclpdfTest::scratch field-ff.pdf]
+    set widget [fieldWidget $doc f]
+    file delete [::tclpdfTest::scratch field-ff.pdf]
+    $doc destroy
+    regexp {/Ff ([0-9]+)} $widget -> value
+    lappend result [expr {$value == $expected}]
+  }
+  # And two of them together, so that the bits are OR-ed rather than the last
+  # one winning.
+  set doc [fieldDoc]
+  $doc field text f -rect {20 40 80 8} -readonly 1 -required 1
+  $doc write [::tclpdfTest::scratch field-ff2.pdf]
+  set widget [fieldWidget $doc f]
+  file delete [::tclpdfTest::scratch field-ff2.pdf]
+  $doc destroy
+  lappend result [regexp {/Ff 3\M} $widget]
+} -result {1 1 1 1 1 1}
+
+test field-2.4 {-default, -maxlen and -tooltip} -body {
+  set doc [fieldDoc]
+  $doc field text f -rect {20 40 80 8} -default "Vorgabe" -maxlen 20 \
+      -tooltip "Was hier hingehoert"
+  $doc write [::tclpdfTest::scratch field-dv.pdf]
+  set widget [fieldWidget $doc f]
+  file delete [::tclpdfTest::scratch field-dv.pdf]
+  $doc destroy
+  list [regexp {/DV \(Vorgabe\)} $widget] [regexp {/MaxLen 20\M} $widget] \
+      [regexp {/TU \(Was hier hingehoert\)} $widget] [regexp {/V } $widget]
+} -result {1 1 1 0}
+
+test field-2.5 {-border and -background become /MK and /BS, and are drawn} -body {
+  # /MK is NOT a substitute for /AP: Table 191 calls it material "used in
+  # constructing a dynamic appearance stream" - the reader's raw material,
+  # not the picture. So both are written AND drawn. The array length is what
+  # says which colour space it is in (Table 192): 1 grey, 3 RGB, 4 CMYK.
+  set doc [fieldDoc]
+  $doc field text f -rect {20 40 80 8} -border {0 0 0} -background 0.9 \
+      -borderWidth 0.5
+  $doc write [::tclpdfTest::scratch field-mk.pdf]
+  set widget [fieldWidget $doc f]
+  set stream [fieldAppearance $doc f]
+  file delete [::tclpdfTest::scratch field-mk.pdf]
+  $doc destroy
+  list [regexp {/BC \[0 0 0\]} $widget] [regexp {/BG \[0.9\]} $widget] \
+      [regexp {/BS << /W 1.41732 /S /S >>} $widget] \
+      [regexp {0.9 g} $stream] [regexp { re\nS} $stream]
+} -result {1 1 1 1 1}
+
+test field-2.6 {-page puts the widget on the page it names} -body {
+  # The page index counts from zero, as it does for [sign -page] and for
+  # [page current] - and a page named ahead of time is allowed: the check is
+  # made at the write, when every page exists.
+  set doc [fieldDoc]
+  $doc field text ahead -rect {20 40 80 8} -page 1
+  $doc field text here -rect {20 60 80 8} -page 0
+  $doc page add
+  set data [fieldBytes $doc field-page.pdf]
+  $doc destroy
+  # Two pages, and each one carries exactly one annotation - so the forward
+  # reference landed where it was sent and not on the page that was current
+  # when it was written.
+  llength [regexp -all -inline {/Annots \[[0-9]+ 0 R\]} $data]
+} -result {2}
+
+test field-2.7 {a password field has no value at all} -body {
+  # Table 231, the NOTE under Password: "it is imperative that PDF processors
+  # never store the value of the text field in the PDF file if this flag is
+  # set". So there is no /V, no /DV, and the appearance shows the frame and
+  # nothing else - which is what a password box is supposed to look like.
+  set doc [fieldDoc]
+  $doc field text pin -rect {20 40 40 8} -password 1 -border {0 0 0}
+  $doc write [::tclpdfTest::scratch field-pw.pdf]
+  set widget [fieldWidget $doc pin]
+  set stream [fieldAppearance $doc pin]
+  file delete [::tclpdfTest::scratch field-pw.pdf]
+  $doc destroy
+  list [regexp {/Ff 8192\M} $widget] [regexp {/V } $widget] \
+      [regexp {Tj} $stream] [regexp {/AP << /N} $widget]
+} -result {1 0 0 1}
+
+test field-2.8 {an empty field still gets its appearance stream} -body {
+  # Table 166 under /AP: "Every annotation (including those whose Subtype
+  # value is Widget, as used for form fields) ... shall have at least one
+  # appearance dictionary", and the two exceptions do not cover a widget. An
+  # empty field is the usual state of a blank form, and veraPDF fails one
+  # without an /AP under clause 6.3.3 in every PDF/A part.
+  set doc [fieldDoc]
+  $doc field text f -rect {20 40 80 8}
+  $doc write [::tclpdfTest::scratch field-empty.pdf]
+  set widget [fieldWidget $doc f]
+  set dict [fieldAppearanceDict $doc f]
+  file delete [::tclpdfTest::scratch field-empty.pdf]
+  $doc destroy
+  list [regexp {/AP << /N [0-9]+ 0 R >>} $widget] [regexp {/BBox} $dict]
+} -result {1 1}
+
+test field-2.9 {field default sets the document-wide /DA} -body {
+  set doc [fieldDoc]
+  set before [$doc field default]
+  $doc field default -family times -size 9 -color {0 0 0.6}
+  $doc field text f -rect {20 40 80 8}
+  $doc write [::tclpdfTest::scratch field-default.pdf]
+  set form [fieldAcroForm $doc]
+  set widget [fieldWidget $doc f]
+  file delete [::tclpdfTest::scratch field-default.pdf]
+  $doc destroy
+  list [dict get $before family] [dict get $before size] \
+      [regexp {/DA \(/FTimesRoman 9 Tf 0 0 0.6 rg\)} $form] \
+      [regexp {/DA \(/FTimesRoman 9 Tf 0 0 0.6 rg\)} $widget]
+} -result {helvetica 10 1 1}
+
+test field-2.10 {field list and field state} -body {
+  set doc [fieldDoc]
+  $doc field text one -rect {20 40 80 8} -value "eins"
+  $doc field text two -rect {20 60 80 8} -maxlen 5
+  set names [$doc field list]
+  set state [$doc field state two]
+  $doc destroy
+  list $names [dict get $state type] [dict get $state page] \
+      [dict get $state data maxlen] [dict exists $state widget]
+} -result {{one two} Tx 0 5 0}
+
+test field-2.11 {the field keeps its font whatever the document does later} -body {
+  # The appearance is drawn at WRITE time, and the document's text state then
+  # is whatever the last [font] call left behind. Read from there, a field
+  # came out in the courier of a command block set three paragraphs further
+  # down the page - measured 2026-08-23 on example 9.1, where every field was
+  # monospaced and the /DA said Helvetica. So the font is settled when the
+  # field is declared and travels with it: what the /DA names and what the
+  # appearance stream sets have to be the same font, or a reader redrawing
+  # the value changes the look of the field.
+  set doc [fieldDoc]
+  $doc field text f -rect {20 40 80 8} -value "Muster" -family helvetica
+  $doc font -family courier -size 24 -color {1 0 0}
+  $doc write [::tclpdfTest::scratch field-font.pdf]
+  set widget [fieldWidget $doc f]
+  set stream [fieldAppearance $doc f]
+  file delete [::tclpdfTest::scratch field-font.pdf]
+  $doc destroy
+  regexp {/DA \(/(\S+) (\S+) Tf ([^)]*)\)} $widget -> daFont daSize daColour
+  regexp {/(\S+) (\S+) Tf} $stream -> apFont apSize
+  list [expr {$daFont eq $apFont}] [expr {$daSize eq $apSize}] $daFont \
+      $daSize [string trim $daColour] [regexp {Courier} $stream]
+} -result {1 1 FHelvetica 10 {0 g} 0}
+
+#
+# --- the refusals -----------------------------------------------------------
+#
+
+test field-3.1 {every refusal carries an errorcode under TCLPDF FIELD} -body {
+  set doc [fieldDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {$doc field text f}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 80}}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 0 8}}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 80 8} -align middle}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 80 8} -maxlen 0}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 80 8} -size 0}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 80 8} -borderWidth -1}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 80 8} -readonly maybe}]
+  lappend codes [::tclpdfTest::refusal {$doc field text f -rect {20 40 80 8} -color nosuchcolour}]
+  $doc destroy
+  set codes
+} -result {{TCLPDF FIELD RECT {}} {TCLPDF FIELD RECT {20 40 80}}\
+    {TCLPDF FIELD RECT {20 40 0 8}} {TCLPDF FIELD ALIGN middle}\
+    {TCLPDF FIELD MAXLEN 0} {TCLPDF FIELD SIZE 0}\
+    {TCLPDF FIELD BORDERWIDTH -1} {TCLPDF FIELD BOOLEAN readonly}\
+    {TCLPDF FIELD COLOUR color}}
+
+test field-3.2 {a value longer than -maxlen, and a line break in one line} -body {
+  set doc [fieldDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {
+    $doc field text f -rect {20 40 80 8} -maxlen 3 -value "zu lang"
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field text f -rect {20 40 80 8} -value "eins\nzwei"
+  }]
+  # With -multiline the same value is fine.
+  lappend codes [catch {
+    $doc field text ok -rect {20 60 80 20} -multiline 1 -value "eins\nzwei"
+  }]
+  $doc destroy
+  set codes
+} -result {{TCLPDF FIELD LENGTH value 7 3} {TCLPDF FIELD LINES value} 0}
+
+test field-3.3 {-password rules out -multiline and any value} -body {
+  set doc [fieldDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {
+    $doc field text f -rect {20 40 80 8} -password 1 -multiline 1
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field text f -rect {20 40 80 8} -password 1 -value geheim
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc field text f -rect {20 40 80 8} -password 1 -default geheim
+  }]
+  $doc destroy
+  set codes
+} -result {{TCLPDF FIELD COMBINATION} {TCLPDF FIELD PASSWORD value}\
+    {TCLPDF FIELD PASSWORD default}}
+
+test field-3.4 {the field name: no period, and no second field under it} -body {
+  # 12.7.4.2: the fully qualified name is built out of the partial names with
+  # periods between them, so a period inside one names a parent that does not
+  # exist. And two fields under one name resolve to one - whichever a reader
+  # finds first answers for both.
+  set doc [fieldDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {$doc field text {} -rect {20 40 80 8}}]
+  lappend codes [::tclpdfTest::refusal {$doc field text a.b -rect {20 40 80 8}}]
+  $doc field text twice -rect {20 40 80 8}
+  lappend codes [::tclpdfTest::refusal {$doc field text twice -rect {20 60 80 8}}]
+  $doc destroy
+  set codes
+} -result {{TCLPDF FIELD NAME} {TCLPDF FIELD NAME a.b} {TCLPDF FIELD TAKEN twice}}
+
+test field-3.5 {a field cannot take the signature field's name} -body {
+  # Both would stand in the same /Fields array under one partial field name.
+  # sign.tcl builds its field without going through [FieldDeclare], so the
+  # clash is checked against its state rather than against the field table.
+  set doc [fieldDoc -version 2.0]
+  $doc sign -size 256 -field Unterschrift
+  set code [::tclpdfTest::refusal {
+    $doc field text Unterschrift -rect {20 40 80 8}
+  }]
+  set fine [catch {$doc field text anderes -rect {20 40 80 8}}]
+  $doc destroy
+  list $code $fine
+} -result {{TCLPDF FIELD TAKEN Unterschrift} 0}
+
+test field-3.6 {-rect refuses NaN and an infinity, which "string is double" takes} -body {
+  # Both pass [string is double] and fail no comparison either - "NaN <= 0"
+  # is false - so the width check would wave them through and the write would
+  # fail with a raw Tcl sentence about a non-numeric floating-point value.
+  set doc [fieldDoc]
+  set codes {}
+  foreach rect {{NaN 30 40 20} {20 Inf 40 20} {20 30 1e400 20}} {
+    lappend codes [::tclpdfTest::refusal {$doc field text f -rect $rect}]
+  }
+  $doc destroy
+  lsort -unique [lmap code $codes {lrange $code 0 2}]
+} -result {{TCLPDF FIELD RECT}}
+
+test field-3.7 {a rectangle entirely beside the page is refused at the write} -body {
+  # A rectangle STICKING OUT is allowed - a media box need not start at zero
+  # and a field at the very edge is the caller's business. One entirely
+  # BESIDE the page is an appearance nothing ever paints, and it is what a y
+  # counted from the wrong end or a -rect in the wrong unit produces.
+  set doc [fieldDoc]
+  $doc field text f -rect {300 30 40 20}
+  set code [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch field-off.pdf]
+  }]
+  file delete [::tclpdfTest::scratch field-off.pdf]
+  $doc destroy
+  set code
+} -result {TCLPDF FIELD RECT OUTSIDE 0}
+
+test field-3.8 {a page that never came is named at the write} -body {
+  set doc [fieldDoc]
+  $doc field text f -rect {20 40 80 8} -page 5
+  set code [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch field-nopage.pdf]
+  }]
+  file delete [::tclpdfTest::scratch field-nopage.pdf]
+  # And a document with no page at all refuses the declaration itself.
+  set empty [tclpdf new]
+  set none [catch {$empty field text f -rect {20 40 80 8}} message]
+  $empty destroy
+  $doc destroy
+  list $code $none [string match "*no such page*" $message]
+} -result {{TCLPDF FIELD PAGE 5} 1 1}
+
+test field-3.9 {an unknown subcommand names the ones there are} -body {
+  set doc [fieldDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {$doc field}]
+  lappend codes [::tclpdfTest::refusal {$doc field checkbox x}]
+  catch {$doc field checkbox x} message
+  lappend codes [::tclpdfTest::refusal {$doc field state nosuch}]
+  $doc destroy
+  list $codes [string match "*known are:*default*list*state*text*" $message]
+} -result {{{TCLPDF FIELD SUBCOMMAND} {TCLPDF FIELD SUBCOMMAND checkbox}\
+    {TCLPDF FIELD UNKNOWN nosuch}} 1}
+
+test field-3.10 {a refused call changes nothing} -body {
+  # A refused call has to leave the document exactly as it was - the rule
+  # sign.tcl and encrypt.tcl follow, and the one that keeps a second attempt
+  # from tripping over the leavings of the first.
+  set doc [fieldDoc]
+  catch {$doc field text f -rect {20 40 80 8} -align middle}
+  catch {$doc field text f -rect {20 40 80 8} -maxlen 3 -value "zu lang"}
+  set after [$doc field list]
+  # The name is still free, so the corrected call goes through.
+  set fine [catch {$doc field text f -rect {20 40 80 8} -value ok}]
+  $doc destroy
+  list $after $fine
+} -result {{} 0}
+
+#
+# --- the contract for further field types -----------------------------------
+#
+
+test field-4.1 {a field type registers, declares, builds and draws} -body {
+  # The whole contract in one test, and it is the one two further modules are
+  # written against: register, an entry method Field<Subcommand>, one
+  # [FieldDeclare] with -type and -build, a build that answers only its own
+  # pairs, and an appearance drawn through [FieldAppearanceStream].
+  ::tclpdf::field register probe tclpdf::field
+  oo::define ::tclpdf::document::document {
+    method FieldProbe {name args} {
+      set options [::tclpdf::option parse {rect {} state Off} $args "field probe"]
+      my FieldDeclare $name -type Btn -build FieldProbeBuild \
+          -rect [dict get $options rect] \
+          -flags [::tclpdf::field flags {Radio NoToggleToOff}] \
+          -data [dict create state [dict get $options state]]
+      return $name
+    }
+    method FieldProbeBuild {name record} {
+      set states {}
+      foreach slot {Off Yes} {
+        lappend states $slot [my FieldAppearanceStream $record $slot \
+            {my FieldProbePaint $record $slot}]
+      }
+      return [list FT /Btn V /[dict get $record data state] \
+          AS /[dict get $record data state] \
+          AP [::tclpdf::pdfObj dictionary [list \
+              N [::tclpdf::pdfObj dictionary $states]]]]
+    }
+    method FieldProbePaint {record slot} {
+      lassign [dict get $record extent] width height
+      my rect -at {0 0} -size [list $width $height] -stroke {0 0 0} -width 0.2
+      if {$slot eq "Yes"} {
+        my rect -at {1 1} -size [list [expr {$width - 2}] [expr {$height - 2}]] \
+            -fill {0 0 0}
+      }
+      return
+    }
+  }
+  set doc [fieldDoc]
+  $doc field probe agreed -rect {20 40 5 5} -state Yes
+  $doc write [::tclpdfTest::scratch field-probe.pdf]
+  set widget [fieldWidget $doc agreed]
+  file delete [::tclpdfTest::scratch field-probe.pdf]
+  $doc destroy
+  list [regexp {/FT /Btn} $widget] [regexp {/V /Yes} $widget] \
+      [regexp {/AS /Yes} $widget] \
+      [regexp {/AP << /N << /Off [0-9]+ 0 R /Yes [0-9]+ 0 R >> >>} $widget] \
+      [regexp {/Ff 49152\M} $widget] \
+      [regexp {/Type /Annot} $widget] [regexp {/T \(agreed\)} $widget]
+} -result {1 1 1 1 1 1 1}
+
+test field-4.2 {a build that reaches for a core key is refused by name} -body {
+  # Two writers over one key is a widget on the wrong page, a field under the
+  # wrong name or a flag set twice, and none of the three says which call did
+  # it - so the eight keys the core writes are refused where a build answers
+  # one of them.
+  oo::define ::tclpdf::document::document {
+    method FieldGreedyBuild {name record} {
+      return [list FT /Tx Rect [::tclpdf::pdfObj arr {0 0 1 1}]]
+    }
+    method FieldOddBuild {name record} {
+      return [list FT /Tx V]
+    }
+  }
+  # [FieldDeclare] is private, as it is meant to be - a field type calls it
+  # with [my] from inside its own method. Exported on the object here so that
+  # the test can stand in for that method without defining one per case.
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  $doc FieldDeclare greedy -type Tx -build FieldGreedyBuild -rect {20 40 80 8}
+  set greedy [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch field-greedy.pdf]
+  }]
+  file delete [::tclpdfTest::scratch field-greedy.pdf]
+  $doc destroy
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  $doc FieldDeclare odd -type Tx -build FieldOddBuild -rect {20 40 80 8}
+  set odd [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch field-odd.pdf]
+  }]
+  file delete [::tclpdfTest::scratch field-odd.pdf]
+  $doc destroy
+  list $greedy $odd
+} -result {{TCLPDF FIELD BUILD greedy Rect} {TCLPDF FIELD BUILD odd}}
+
+test field-4.3 {FieldDeclare refuses a type and a build it cannot use} -body {
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Text -build X -rect {20 40 80 8}
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Tx -rect {20 40 80 8}
+  }]
+  $doc destroy
+  set codes
+} -result {{TCLPDF FIELD DECLARE TYPE Text} {TCLPDF FIELD DECLARE BUILD}}
+
+test field-4.4 {register refuses a reserved word and a word already taken} -body {
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {::tclpdf::field register state tclpdf::x}]
+  lappend codes [::tclpdfTest::refusal {::tclpdf::field register text tclpdf::x}]
+  lappend codes [::tclpdfTest::refusal {::tclpdf::field register {} tclpdf::x}]
+  # The same package under the same word again is a no-op, not a refusal - a
+  # module may be sourced twice.
+  lappend codes [catch {::tclpdf::field register text tclpdf::field}]
+  set codes
+} -result {{TCLPDF FIELD REGISTER RESERVED state} {TCLPDF FIELD REGISTER TAKEN text}\
+    {TCLPDF FIELD REGISTER NAME} 0}
+
+test field-4.5 {the flag table, by name} -body {
+  # The value of bit n is 2^(n-1) (12.7.4.1), which is the trap the table
+  # exists for: /Ff 1 is ReadOnly, not bit 1 of a zero-based count.
+  list [::tclpdf::field flags {}] \
+      [::tclpdf::field flags ReadOnly] \
+      [::tclpdf::field flags {ReadOnly Required NoExport}] \
+      [::tclpdf::field flags Multiline] \
+      [::tclpdf::field flags {Radio Pushbutton}] \
+      [::tclpdfTest::refusal {::tclpdf::field flags Readonly}]
+} -result {0 1 7 4096 98304 {TCLPDF FIELD FLAG Readonly}}
+
+test field-4.6 {a registered type whose module provides nothing is named} -body {
+  ::tclpdf::field register absent tclpdf::field
+  set doc [fieldDoc]
+  set code [::tclpdfTest::refusal {$doc field absent x}]
+  $doc destroy
+  set code
+} -result {TCLPDF FIELD TYPE absent}
+
+#
+# --- the seam with sign.tcl -------------------------------------------------
+#
+
+test field-4.7 {a field type declares SEVERAL widgets, and the core writes them} -body {
+  # The second shape of point 3: ONE field with /Kids and N widget
+  # annotations beneath it, which is the only arrangement 12.7.4.2 leaves for
+  # a set of buttons - "a field dictionary that does not have a partial field
+  # name (T entry) of its own shall not be considered a field but simply a
+  # Widget annotation". What the core has to get right: /T, /TU, /Ff and the
+  # type's own pairs on the PARENT, which is no annotation and carries no
+  # /Subtype, no /Rect and no /P; /Type, /Subtype, /Rect, /F and /Parent on
+  # each kid, and no /T on any of them; and each kid in the /Annots of the
+  # page IT names, not of the field's.
+  ::tclpdf::field register pair tclpdf::field
+  oo::define ::tclpdf::document::document {
+    method FieldPair {name args} {
+      set options [::tclpdf::option parse {
+        widgets {} page {} value Off
+      } $args "field pair"]
+      my FieldDeclare $name -type Btn \
+          -build FieldPairBuild -kid FieldPairKid \
+          -widgets [dict get $options widgets] -page [dict get $options page] \
+          -tooltip "a pair" -flags [::tclpdf::field flags Radio] \
+          -data [dict create value [dict get $options value]]
+      return $name
+    }
+    method FieldPairBuild {name record} {
+      # The FIELD's pairs. It has no rectangle of its own, and the record
+      # says so: what it has is the records of its kids.
+      return [list FT /Btn V /[dict get $record data value] \
+          MaxLen [llength [dict get $record widgets]]]
+    }
+    method FieldPairKid {name record} {
+      # ONE widget's pairs. The kid's own dictionary came through -widgets
+      # untouched, and the FIELD's data is in the record beside it.
+      set state [dict get $record entry state]
+      set stream [my FieldAppearanceStream $record \
+          [dict get $record index].$state {my FieldPairPaint $record}]
+      return [list AS /$state AP [::tclpdf::pdfObj dictionary [list \
+          N [::tclpdf::pdfObj dictionary [list $state $stream]]]]]
+    }
+    method FieldPairPaint {record} {
+      lassign [dict get $record extent] width height
+      my rect -at {0 0} -size [list $width $height] -stroke {0 0 0} -width 0.2
+      return
+    }
+  }
+  set doc [fieldDoc]
+  $doc page add
+  # The second widget names page 1, the first leaves the page to the field.
+  $doc field pair ship -page 0 -value air \
+      -widgets {{{20 60 5 5} {} {state air}} {{20 70 5 5} 1 {state sea}}}
+  set data [fieldBytes $doc field-pair.pdf]
+  set writer [$doc writer]
+  regexp {/Fields \[([0-9]+) 0 R\]} [fieldAcroForm $doc] -> number
+  set parent [$writer body $number]
+  regexp {/Kids \[([^\]]*)\]} $parent -> refs
+  set kids {}
+  foreach {kid generation keyword} $refs {
+    lappend kids [$writer body $kid]
+  }
+  $doc destroy
+  list [regexp {/T \(ship\)} $parent] [regexp {/TU \(a pair\)} $parent] \
+      [regexp {/Ff 32768\M} $parent] [regexp {/FT /Btn} $parent] \
+      [regexp {/V /air} $parent] [regexp {/MaxLen 2\M} $parent] \
+      [regexp {/Subtype|/Rect|/P [0-9]} $parent] \
+      [llength $kids] \
+      [regexp {/Type /Annot} [lindex $kids 0]] \
+      [regexp "/Parent $number 0 R" [lindex $kids 0]] \
+      [regexp {/F 4\M} [lindex $kids 0]] \
+      [regexp {/T \(} [lindex $kids 0]] \
+      [regexp {/AS /air} [lindex $kids 0]] \
+      [regexp {/AS /sea} [lindex $kids 1]] \
+      [llength [regexp -all -inline {/Annots \[[0-9]+ 0 R\]} $data]]
+} -result {1 1 1 1 1 1 0 2 1 1 1 0 1 1 2}
+
+test field-4.8 {a field with several widgets survives a second write unchanged} -body {
+  # Every object number - the field's, each widget's, each appearance
+  # stream's - comes from [reservation], so a second write fills the same
+  # objects rather than adding a second set of them.
+  set doc [fieldDoc]
+  $doc field pair ship -value air \
+      -widgets {{{20 60 5 5} {} {state air}} {{20 70 5 5} {} {state sea}}}
+  lassign [::tclpdfTest::writeTwice $doc field-pair-twice] first second
+  $doc destroy
+  list [expr {$first eq $second}] \
+      [llength [regexp -all -inline {/Subtype /Widget} $first]] \
+      [llength [regexp -all -inline {/T \(ship\)} $first]]
+} -result {1 2 1}
+
+test field-4.9 {-widgets and -rect, -kid without -widgets, and an entry that is not one} -body {
+  # -rect and -widgets are exclusive; -kid belongs with -widgets and to
+  # nothing else; and a field with NEITHER rectangle nor widgets is refused
+  # by the -rect check, because that is the message the caller of a
+  # one-widget type needs.
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  set codes {}
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Btn -build B -kid K -rect {20 40 5 5} \
+        -widgets {{{20 40 5 5}}}
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Btn -build B -kid K -rect {20 40 5 5}
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Btn -build B -widgets {{{20 40 5 5}}}
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Btn -build B -kid K \
+        -widgets {{{20 40 5 5} 0 {} more}}
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Btn -build B -kid K -widgets {{{20 40 5}}}
+  }]
+  lappend codes [::tclpdfTest::refusal {
+    $doc FieldDeclare f -type Btn -build B -kid K -widgets {{{20 40 5 5} -1}}
+  }]
+  # Nothing of all that was declared - a refused call leaves the document
+  # exactly as it was, and an object number handed out for a field that is
+  # not there is the leaving that does not show.
+  lappend codes [$doc field list]
+  $doc destroy
+  set codes
+} -result {{TCLPDF FIELD DECLARE WIDGETS} {TCLPDF FIELD DECLARE KID}\
+    {TCLPDF FIELD DECLARE KID} {TCLPDF FIELD DECLARE WIDGET {{20 40 5 5} 0 {} more}}\
+    {TCLPDF FIELD RECT {20 40 5}} {TCLPDF FIELD PAGE -1} {}}
+
+test field-4.10 {the list of keys a build may answer is exhaustive} -body {
+  # Point 4 names the keys and the list IS the list: a key outside it is
+  # either a misspelling - which lands in the file, behaves plausibly and
+  # wrongly, and which no validator on this machine mentions - or a key of
+  # the standard this package has not built. Both are refused by name, and
+  # the refusal carries the list.
+  oo::define ::tclpdf::document::document {
+    method FieldStrayBuild {name record} {
+      return [list FT /Tx AP {} Lock {}]
+    }
+    method FieldTypoBuild {name record} {
+      return [list FT /Tx Ap {}]
+    }
+  }
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  $doc FieldDeclare stray -type Tx -build FieldStrayBuild -rect {20 40 80 8}
+  set stray [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch field-stray.pdf]
+  }]
+  catch {$doc write [::tclpdfTest::scratch field-stray.pdf]} message
+  file delete [::tclpdfTest::scratch field-stray.pdf]
+  $doc destroy
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  $doc FieldDeclare typo -type Tx -build FieldTypoBuild -rect {20 40 80 8}
+  set typo [::tclpdfTest::refusal {
+    $doc write [::tclpdfTest::scratch field-typo.pdf]
+  }]
+  file delete [::tclpdfTest::scratch field-typo.pdf]
+  $doc destroy
+  list $stray $typo [string match "*FT, V, DV, Q, MaxLen, Opt, I, TI, AS,\
+      MK, DA, AP, A, BS*" $message]
+} -result {{TCLPDF FIELD BUILD stray Lock} {TCLPDF FIELD BUILD typo Ap} 1}
+
+test field-4.11 {a type's own characteristics go into the /MK the core builds} -body {
+  # There is ONE /MK per widget, so a type with a characteristic of its own -
+  # the push button's /CA - would have had to reassemble the whole
+  # dictionary, frame and background included, to get its key in. It passes
+  # the pairs to [FieldBorderEntries] instead, and they land after the frame.
+  oo::define ::tclpdf::document::document {
+    method FieldMarkedBuild {name record} {
+      return [list FT /Tx {*}[my FieldBorderEntries [dict get $record data] \
+          [list CA [my Str "Press"]]]]
+    }
+  }
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  $doc FieldDeclare marked -type Tx -build FieldMarkedBuild \
+      -rect {20 40 80 8} -data {border {1 0 0} borderWidth 0.4 background {}}
+  $doc write [::tclpdfTest::scratch field-marked.pdf]
+  set widget [fieldWidget $doc marked]
+  file delete [::tclpdfTest::scratch field-marked.pdf]
+  $doc destroy
+  list [regexp {/MK << /BC \[1 0 0\] /CA \(Press\)>>|/MK << /BC \[1 0 0\] /CA \(Press\) >>} $widget] \
+      [regexp {/BS << /W 1.13386 /S /S >>} $widget]
+} -result {1 1}
+
+test field-4.12 {every widget annotation carries /F, on both roads} -body {
+  # Table 167 and 12.5.3: /F 4 is Print, and veraPDF fails a file without it
+  # on rule 6.3.2-1 - "all annotation dictionaries shall contain the F key".
+  # MEASURED, and this test exists because of it: the key fell out of the
+  # merged field while the kids of a field with several kept it, a PDF/A
+  # document went from valid to invalid, and the whole suite stayed green -
+  # because /F was only ever asked for as one of eight regexps about one
+  # field, and never counted against the widgets there are.
+  #
+  # It is counted here. Four widgets - two merged fields and the two kids of
+  # a third - so four annotations and four /F, and the PARENT of the field
+  # with kids has none, because it is not an annotation.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8}
+  $doc field text remark -rect {20 55 80 20} -multiline 1
+  $doc field pair ship -value air \
+      -widgets {{{20 80 5 5} {} {state air}} {{20 90 5 5} {} {state sea}}}
+  set data [fieldBytes $doc field-print.pdf]
+  set writer [$doc writer]
+  set parent {}
+  set widgets 0
+  set printed 0
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    set body [$writer body $number]
+    if {[string match {*/Subtype /Widget*} $body]} {
+      incr widgets
+      if {[regexp {/F 4\M} $body]} {
+        incr printed
+      }
+    }
+    if {[string match {*/Kids \[*} $body] && [string match {*/T (ship)*} $body]} {
+      set parent $body
+    }
+  }
+  $doc destroy
+  list $widgets $printed [regexp {/F 4\M} $parent] [regexp {/T \(ship\)} $parent]
+} -result {4 4 0 1}
+
+test field-5.1 {a signature alone writes the /AcroForm it always wrote} -body {
+  # /AcroForm has ONE writer now, and a document whose only field is the
+  # signature has to come out exactly as it did before this module existed:
+  # no /DA, no /DR, no /NeedAppearances - a signature field has no variable
+  # text and nothing to draw them for. tests/sign.test measures the same
+  # thing from the other side.
+  set doc [fieldDoc -version 2.0]
+  $doc sign -size 256
+  set data [fieldBytes $doc field-signonly.pdf]
+  $doc destroy
+  list [regexp {/AcroForm << /Fields \[[0-9]+ 0 R\] /SigFlags 3 >>} $data] \
+      [regexp {NeedAppearances} $data] [regexp {/DR } $data]
+} -result {1 0 0}
+
+test field-5.2 {a signature and text fields share one /AcroForm} -body {
+  # Two field trees in one document is a document of which a reader sees
+  # whichever was written last. The order the two modules declare in must not
+  # decide anything either, so a field is declared on both sides of the sign
+  # call.
+  set doc [fieldDoc -version 2.0]
+  $doc form create sigbox -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc field text customer -rect {20 40 80 8} -value "Erika"
+  $doc sign -size 256 -rect {20 100 40 20} -appearance sigbox
+  $doc field text amount -rect {20 60 40 8} -value "42"
+  set data [fieldBytes $doc field-signfields.pdf]
+  $doc destroy
+  list [llength [regexp -all -inline {/AcroForm} $data]] \
+      [regexp {/AcroForm << /Fields \[[0-9]+ 0 R [0-9]+ 0 R [0-9]+ 0 R\] /SigFlags 3 /DA \([^)]*\) /DR [0-9]+ 0 R >>} $data] \
+      [llength [regexp -all -inline {/FT /Tx} $data]] \
+      [llength [regexp -all -inline {/FT /Sig} $data]]
+} -result {1 1 2 1}
+
+test field-5.3 {enlisting is idempotent over two writes} -body {
+  # [FieldEnlist] is called on every write by both modules. The same
+  # reference twice has to be one entry, or the /Fields array grows by three
+  # per write and a reader sees each field several times.
+  set doc [fieldDoc -version 2.0]
+  $doc sign -size 256
+  $doc field text customer -rect {20 40 80 8}
+  lassign [::tclpdfTest::writeTwice $doc field-enlist] first second
+  $doc destroy
+  regexp {/Fields \[([^\]]*)\]} $second -> array
+  list [expr {$first eq $second}] [llength $array]
+} -result {1 6}
+
+test field-5.4 {sign -rect keeps its own wording through the shared method} -body {
+  # The arithmetic moved into field.tcl and the wording stayed with the call
+  # that asked - a caller who wrote "sign -rect" has to read "sign -rect"
+  # back, and one who wrote a field name has to read the field's name.
+  set doc [fieldDoc -version 2.0]
+  $doc form create sigbox -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -stroke {0 0 0} -width 0.4
+  }
+  $doc sign -size 256 -rect {300 30 40 20} -appearance sigbox
+  catch {$doc write [::tclpdfTest::scratch field-signoff.pdf]} signMessage
+  file delete [::tclpdfTest::scratch field-signoff.pdf]
+  $doc destroy
+  set doc [fieldDoc]
+  $doc field text betrag -rect {300 30 40 20}
+  catch {$doc write [::tclpdfTest::scratch field-fieldoff.pdf]} fieldMessage
+  file delete [::tclpdfTest::scratch field-fieldoff.pdf]
+  $doc destroy
+  list [string match {*sign -rect {300 30 40 20}*} $signMessage] \
+      [string match {*entirely outside page 0*} $signMessage] \
+      [string match {*field "betrag" -rect {300 30 40 20}*} $fieldMessage] \
+      [string match {*entirely outside page 0*} $fieldMessage]
+} -result {1 1 1 1}
+
+#
+# --- the version floor ------------------------------------------------------
+#
+
+test field-6.1 {a form field needs PDF 1.2, and says so at the call} -body {
+  # Interactive forms are PDF 1.2 (ISO 32000-1, Table 28 - /AcroForm), and so
+  # is the widget annotation that carries them. A document set lower is told
+  # so HERE, at the call that wanted it, rather than getting a catalogue key
+  # its own header disowns.
+  set old [tclpdf new -unit mm -format a4 -version 1.0]
+  $old page add
+  set code [catch {$old field text f -rect {20 40 80 8}} message]
+  set names [$old field list]
+  $old destroy
+  set doc [tclpdf new -unit mm -format a4 -version 1.2]
+  $doc page add
+  $doc field text f -rect {20 40 80 8}
+  set data [fieldBytes $doc field-version.pdf]
+  $doc destroy
+  list $code [string match "*needs PDF 1.2*" $message] $names \
+      [string range $data 0 7]
+} -result {1 1 {} %PDF-1.2}
+
+test field-6.2 {the version refusal carries an errorcode, like every other} -body {
+  # Every refusal this package makes carries an -errorcode - it is what a
+  # caller catches on instead of matching an English sentence - and the
+  # version refusal was the one that came back as NONE. The version asked for
+  # is in the code, because that is the number the document has to be raised
+  # to.
+  set doc [tclpdf new -unit mm -format a4 -version 1.1]
+  $doc page add
+  set field [::tclpdfTest::refusal {
+    $doc field text customer -rect {20 40 80 8}
+  }]
+  $doc destroy
+  # And the same for a feature of another module entirely, because the code
+  # is put on in [RequireVersion] and every module asks through it.
+  set doc [tclpdf new -unit mm -format a4 -version 1.3]
+  $doc page add
+  set other [::tclpdfTest::refusal {$doc opacity 0.5}]
+  $doc destroy
+  list $field $other
+} -result {{TCLPDF VERSION 1.2} {TCLPDF VERSION 1.4}}
+
+#
+# --- accessibility: the structure tree --------------------------------------
+#
+# PDF/UA-1, 7.18.4: "A Widget annotation shall be nested within a Form tag."
+# PDF/UA-2, 8.10.1 says it per WIDGET and spells out why - "A Form structure
+# element shall enclose at most one widget annotation ... a Form structure
+# element does not semantically equate to a form field" - so a radio field of
+# four buttons is four elements and one field, which is the case a naive
+# implementation gets wrong. What is measured here is the whole join: the
+# element, the object reference inside it, the /StructParent that points back,
+# and the two descriptions PDF/UA reads.
+
+# The bodies of the Form structure elements of a written document, and the
+# body of one Lbl, out of the writer.
+proc fieldElements {doc type} {
+  return [::tclpdfTest::objects $doc "/S /$type"]
+}
+
+# A tagged document with a font that may be embedded, so that the UA claim is
+# not refused for the standard 14 while the test is about something else.
+proc fieldTaggedDoc {args} {
+  set doc [tclpdf new -unit mm -format a4 {*}$args]
+  $doc tagged 1
+  $doc info Title "A form"
+  $doc language en-GB
+  $doc page add
+  $doc font embed face [file join [file dirname [info script]] .. examples \
+      assets fonts DejaVuSans.ttf]
+  $doc font -family face -size 10 -color {0 0 0}
+  $doc field default -family face -size 10 -color {0 0 0}
+  return $doc
+}
+
+test field-7.1 {a tagged field gets a Form element, an OBJR and a StructParent} -body {
+  # The three pieces of ISO 32000-2, 14.7.5.3 and 14.7.5.4: the element
+  # reaches the annotation through << /Type /OBJR /Obj ... /Pg ... >> in its
+  # /K, the annotation reaches the element back through /StructParent and the
+  # parent tree. Neither half alone is enough - see field-7.9.
+  set doc [fieldTaggedDoc]
+  $doc field text customer -rect {20 40 80 8} -tooltip "Your name"
+  $doc write [::tclpdfTest::scratch field-ua-one.pdf]
+  set forms [fieldElements $doc Form]
+  set widget [fieldWidget $doc customer]
+  file delete [::tclpdfTest::scratch field-ua-one.pdf]
+  $doc destroy
+  list [llength $forms] \
+      [regexp {/Type /OBJR} [lindex $forms 0]] \
+      [regexp {/Obj [0-9]+ 0 R} [lindex $forms 0]] \
+      [regexp {/Pg [0-9]+ 0 R} [lindex $forms 0]] \
+      [regexp {/StructParent [0-9]+} $widget] \
+      [regexp {/TU \(Your name\)} $widget]
+} -result {1 1 1 1 1 1}
+
+test field-7.2 {an untagged document gets neither element nor StructParent} -body {
+  # A document that makes no claim pays nothing for one: no element, and no
+  # key pointing into a parent tree that does not exist.
+  set doc [fieldDoc]
+  $doc field text customer -rect {20 40 80 8} -tooltip "Your name"
+  $doc write [::tclpdfTest::scratch field-ua-none.pdf]
+  set forms [fieldElements $doc Form]
+  set widget [fieldWidget $doc customer]
+  file delete [::tclpdfTest::scratch field-ua-none.pdf]
+  $doc destroy
+  list [llength $forms] [regexp {/StructParent} $widget]
+} -result {0 0}
+
+test field-7.3 {the Form element sits inside whatever element is open} -body {
+  # Reading order, which is what UA-1 7.18.1 asks of an annotation: the field
+  # is declared where it belongs on the page, and the element lands under the
+  # element that was open at the call - not in a heap at the end of the tree,
+  # which is what building it at write time would give.
+  set doc [fieldTaggedDoc]
+  $doc structure Sect -script {
+    $doc field text customer -rect {20 40 80 8} -tooltip "Your name"
+  }
+  $doc write [::tclpdfTest::scratch field-ua-open.pdf]
+  set form [lindex [fieldElements $doc Form] 0]
+  set sects [fieldElements $doc Sect]
+  # The Form's /P names an object, and the body of that object is the Sect.
+  regexp {/P ([0-9]+) 0 R} $form -> parent
+  set body [[$doc writer] body $parent]
+  file delete [::tclpdfTest::scratch field-ua-open.pdf]
+  $doc destroy
+  list [llength $sects] [string match "*/S /Sect*" $body] \
+      [regexp {/Type /OBJR} $form]
+} -result {1 1 1}
+
+test field-7.4 {-contents writes /Contents on the widget} -body {
+  # ISO 14289-2, 8.10.2.3: where a widget has no label, "a Contents entry
+  # shall be provided to supply description and context for the widget". It
+  # is an annotation key, so the core writes it and no field type may.
+  set doc [fieldTaggedDoc]
+  $doc field text customer -rect {20 40 80 8} -tooltip "Your name" \
+      -contents "The applicant's full name"
+  $doc write [::tclpdfTest::scratch field-ua-contents.pdf]
+  set widget [fieldWidget $doc customer]
+  file delete [::tclpdfTest::scratch field-ua-contents.pdf]
+  $doc destroy
+  regexp {/Contents \(The applicant's full name\)} $widget
+} -result 1
+
+test field-7.5 {-label puts a Lbl inside the Form element, before the OBJR} -body {
+  # ISO 14289-2, 8.10.2.2: the label "shall be enclosed in one or several Lbl
+  # structure elements, which shall in turn be a direct descendent of a Form
+  # structure element that also includes the object reference to the widget
+  # annotation". BEFORE it, because the order of /K is the reading order and
+  # a label announced after its control arrives too late.
+  set doc [fieldTaggedDoc -version 2.0]
+  set y 40
+  $doc field text customer -rect {45 38 60 8} -tooltip "Your name" -label {
+    $doc text "Name" -at [list 20 $y]
+  }
+  $doc write [::tclpdfTest::scratch field-ua-label.pdf]
+  set form [lindex [fieldElements $doc Form] 0]
+  set labels [fieldElements $doc Lbl]
+  file delete [::tclpdfTest::scratch field-ua-label.pdf]
+  $doc destroy
+  regexp {/K \[ ?([0-9]+) 0 R.*?/Type /OBJR} $form -> label
+  list [llength $labels] [expr {$label ne {}}] \
+      [regexp {/S /Lbl} [lindex $labels 0]]
+} -result {1 1 1}
+
+test field-7.6 {the -label script runs in the caller's scope} -body {
+  # The core runs it, from three frames down - so the level is taken at the
+  # [$doc field] call and reached through the state. Without that the script
+  # would see the field module's variables and not the caller's.
+  set doc [fieldTaggedDoc -version 2.0]
+  set caption "Name of the applicant"
+  set seen {}
+  $doc field text customer -rect {45 38 60 8} -tooltip "Your name" -label {
+    set seen $caption
+    $doc text $caption -at {20 40}
+  }
+  # And from inside a procedure, which is where a form is usually built - the
+  # level is absolute, so a caller three frames down is reached just as well.
+  proc fieldLabelInProc {doc} {
+    set inner "Drawn from a procedure"
+    $doc field text remark -rect {45 60 60 8} -tooltip "Remarks" -label {
+      $doc text $inner -at {20 62}
+    }
+    return $inner
+  }
+  set nested [fieldLabelInProc $doc]
+  rename fieldLabelInProc {}
+  $doc destroy
+  list $seen $nested
+} -result {{Name of the applicant} {Drawn from a procedure}}
+
+test field-7.17 {the first [$doc field] of a script reaches the caller too} -body {
+  # The first call on a document that has not seen a field arrives through
+  # [unknown] in document.tcl, which loads this topic and dispatches again -
+  # one frame more than every later call has. A fixed count would put the
+  # -label script one frame too deep exactly once per script.
+  # In a fresh interpreter, because within this file the topic is loaded from
+  # the first test on and [unknown] never fires again.
+  set here [file normalize [file dirname [file dirname [info script]]]]
+  set path [::tclpdfTest::scratch field-ua-first.tcl]
+  set channel [open $path w]
+  puts $channel [list lappend auto_path $here]
+  puts $channel {
+    package require tclpdf
+    set doc [tclpdf new -unit mm -format a4 -version 2.0]
+    $doc tagged 1
+    $doc page add
+    set caption "The very first field"
+    set seen "nothing"
+    $doc field text customer -rect {45 38 60 8} -label {set seen $caption}
+    $doc destroy
+    puts $seen
+  }
+  close $channel
+  set out [exec [info nameofexecutable] $path]
+  file delete $path
+  set out
+} -result {The very first field}
+
+test field-7.7 {-label needs PDF 2.0} -body {
+  # ISO 32000-2, Table 368 NOTE: "Form structure elements often include Lbl
+  # structure elements to mark up a form field's label (if any)." ISO
+  # 32000-1, Table 340 said the opposite - a Form without a PrintField Role
+  # attribute holds only the object reference - and veraPDF holds a 1.7 file
+  # to it (rule 7.18.4-2). So the floor is pinned at the call.
+  set doc [fieldTaggedDoc]
+  set code [::tclpdfTest::refusal {
+    $doc field text customer -rect {45 38 60 8} -label {$doc text "Name" -at {20 40}}
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF VERSION 2.0}
+
+test field-7.8 {a field declared before [tagged 1] is refused by [ua]} -body {
+  # The element is made at the call that declares the field, so a field
+  # declared before the switch has none - and the claim is refused naming the
+  # switch rather than a validator naming an object number.
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  $doc field text customer -rect {20 40 80 8} -tooltip "Your name"
+  $doc tagged 1
+  $doc info Title "A form"
+  $doc language en-GB
+  $doc font embed face [file join [file dirname [info script]] .. examples \
+      assets fonts DejaVuSans.ttf]
+  $doc ua -part 1
+  set text {}
+  set code [catch {$doc write [::tclpdfTest::scratch field-ua-early.pdf]} text]
+  file delete [::tclpdfTest::scratch field-ua-early.pdf]
+  $doc destroy
+  list $code [string match {*outside the structure tree*} $text] \
+      [string match {*tagged 1*} $text]
+} -result {1 1 1}
+
+test field-7.9 {a UA claim without a description is refused, naming -tooltip} -body {
+  # /TU is the accessible name of a field (ISO 32000-2, 14.9.3; UA-1 7.18.1
+  # makes an alternative description mandatory for an annotation without
+  # /Contents). Refused rather than filled in with the field name, which is
+  # the one thing 14.9.3 says the alternative name replaces.
+  set doc [fieldTaggedDoc]
+  $doc field text customer -rect {20 40 80 8}
+  $doc ua -part 1
+  set text {}
+  catch {$doc write [::tclpdfTest::scratch field-ua-tu.pdf]} text
+  file delete [::tclpdfTest::scratch field-ua-tu.pdf]
+  $doc destroy
+  list [string match {*customer is a form field without a description*} $text] \
+      [string match {*-tooltip*} $text]
+} -result {1 1}
+
+test field-7.10 {PDF/UA-2 wants a label or a description on every widget} -body {
+  # 8.10.2.3, and PART 2 ONLY: ISO 14289-1 has no such clause and is content
+  # with the field's /TU, which is measured - veraPDF 1.30 passes a UA-1 form
+  # whose widgets carry neither.
+  set one [fieldTaggedDoc]
+  $one field text customer -rect {20 40 80 8} -tooltip "Your name"
+  $one ua -part 1
+  set first [::tclpdfTest::writes $one field-ua-part1.pdf]
+  $one destroy
+  set two [fieldTaggedDoc -version 2.0]
+  $two field text customer -rect {20 40 80 8} -tooltip "Your name"
+  $two ua -part 2
+  set text {}
+  catch {$two write [::tclpdfTest::scratch field-ua-part2.pdf]} text
+  file delete [::tclpdfTest::scratch field-ua-part2.pdf]
+  $two destroy
+  list [lindex $first 0] \
+      [string match {*neither a label nor a description*} $text]
+} -result {0 1}
+
+test field-7.11 {/Contents and /StructParent are core keys a build may not answer} -body {
+  # Both are written for every widget alike, so a field type that answered
+  # one would be the second writer of a key - the case point 4 of the
+  # contract refuses by name.
+  oo::define ::tclpdf::document::document {
+    method FieldContentsBuild {name record} {
+      return [list FT /Tx Contents [my Str "mine"]]
+    }
+    method FieldParentBuild {name record} {
+      return [list FT /Tx StructParent 3]
+    }
+  }
+  set codes {}
+  set said {}
+  foreach build {FieldContentsBuild FieldParentBuild} {
+    set doc [fieldDoc]
+    oo::objdefine $doc export FieldDeclare
+    $doc FieldDeclare grabby -type Tx -build $build -rect {20 40 80 8}
+    set text {}
+    catch {$doc write [::tclpdfTest::scratch field-ua-core.pdf]} text options
+    lappend codes [dict get $options -errorcode]
+    # By NAME, not as a misspelling: the message has to say the key is the
+    # core's, or the caller looks for a typo that is not there.
+    lappend said [string match {*belongs to the field core*} $text]
+    file delete [::tclpdfTest::scratch field-ua-core.pdf]
+    $doc destroy
+  }
+  list $codes $said
+} -result {{{TCLPDF FIELD BUILD grabby Contents} {TCLPDF FIELD BUILD grabby StructParent}} {1 1}}
+
+test field-7.12 {a Lbl may stand beside a field, and not inside a paragraph} -body {
+  # The GROUP label of ISO 14289-2, 8.10.2.2: "the Lbl structure element(s)
+  # shall be contained within the parent structure element that also
+  # contains, directly or indirectly, the Form structure element for each
+  # widget". That parent is the caller's, so [$doc structure Lbl] has to be
+  # able to stand there - it could not before, because Lbl knew only the
+  # three homes a list item and a footnote give it. A P is still refused: a
+  # Lbl is a block element and a P holds text and inline markup.
+  set doc [fieldTaggedDoc]
+  set beside [catch {
+    $doc structure Sect -script {
+      $doc structure Lbl -script { $doc text "Shipping" -at {20 40} }
+      $doc field text how -rect {45 38 40 8} -tooltip "How to ship"
+    }
+  }]
+  set inside [catch {
+    $doc structure P -script {
+      $doc structure Lbl -script { $doc text "Name" -at {20 60} }
+    }
+  } message]
+  $doc destroy
+  list $beside $inside [string match {*form field goes where the field's Form*} $message]
+} -result {0 1 1}
+
+test field-7.13 {a field where no Form may stand is refused, naming the field} -body {
+  # An L takes LI and Caption and nothing else (Annex L), so the Form element
+  # cannot be made there. The refusal is rewrapped: [StructureOpen] would
+  # answer about a structure type the caller never named.
+  set doc [fieldTaggedDoc]
+  set code [::tclpdfTest::refusal {
+    $doc structure L -numbering Decimal -script {
+      $doc field text customer -rect {20 40 80 8} -tooltip "Your name"
+    }
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF FIELD STRUCTURE customer}
+
+test field-7.14 {a second write leaves the tree as it was} -body {
+  # The element is made at declare time and the write is idempotent, so two
+  # writes give one Form element and one identical file - the same contract
+  # field-1.7 checks for the widget itself.
+  set doc [fieldTaggedDoc -version 2.0]
+  $doc field text customer -rect {45 38 60 8} -tooltip "Your name" -label {
+    $doc text "Name" -at {20 40}
+  }
+  lassign [::tclpdfTest::writeTwice $doc field-ua-twice] first second
+  set forms [llength [fieldElements $doc Form]]
+  $doc destroy
+  list [expr {$first eq $second}] $forms \
+      [llength [regexp -all -inline {/Type /OBJR} $first]]
+} -result {1 1 1}
+
+test field-7.18 {-contents runs in step with -widgets, or is refused} -body {
+  # One description per widget: a list that is shorter names some widget
+  # nobody meant, and a list that is longer describes one that is not there.
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  set code [::tclpdfTest::refusal {
+    $doc FieldDeclare rate -type Btn -build FieldTextBuild -kid FieldTextBuild \
+        -widgets {{{20 40 5 5}} {{20 50 5 5}} {{20 60 5 5}}} \
+        -contents {"the first" "the second"}
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF FIELD DECLARE CONTENTS}
+
+test field-7.16 {the OBJR names the widget's page, not the current one} -body {
+  # An OBJR "has to name the page its annotation sits on" (ISO 32000-2,
+  # 14.7.5.3), and a field names its page with -page - which is not the page
+  # being drawn on. A link is the other way round and is what the method
+  # defaults to, so the field passes its own.
+  set doc [fieldTaggedDoc]
+  $doc page add
+  $doc field text early -rect {20 40 80 8} -page 0 -tooltip "On page one"
+  $doc field text late -rect {20 40 80 8} -tooltip "On page two"
+  $doc write [::tclpdfTest::scratch field-ua-page.pdf]
+  set pages {}
+  foreach name {early late} {
+    regexp {/P ([0-9]+) 0 R} [fieldWidget $doc $name] -> page
+    lappend pages $page
+  }
+  set objr {}
+  foreach form [fieldElements $doc Form] {
+    regexp {/Obj ([0-9]+) 0 R /Pg ([0-9]+) 0 R} $form -> widget page
+    lappend objr $page
+  }
+  file delete [::tclpdfTest::scratch field-ua-page.pdf]
+  $doc destroy
+  # Each OBJR names the page of the widget it refers to, and the two differ.
+  list [expr {$objr eq $pages}] \
+      [expr {[lindex $pages 0] ne [lindex $pages 1]}]
+} -result {1 1}
+
+test field-7.19 {each widget of a set gets the page IT sits on} -body {
+  # A field with -widgets may span pages - the second word of an entry is
+  # that widget's own page - and an OBJR "has to name the page its annotation
+  # sits on" (ISO 32000-2, 14.7.5.3). Taking the page being drawn on instead
+  # would put every reference of the set on the last page of the document.
+  oo::define ::tclpdf::document::document {
+    method FieldSpreadBuild {name record} { return {FT /Btn} }
+    method FieldSpreadKid {name record} {
+      return [list AP [::tclpdf::pdfObj dictionary [list \
+          N [my FieldAppearanceStream $record N {my rect -at {0 0} \
+              -size [dict get $record extent] -stroke {0 0 0} -width 0.2}]]]]
+    }
+  }
+  set doc [fieldTaggedDoc]
+  $doc page add
+  oo::objdefine $doc export FieldDeclare
+  $doc FieldDeclare rate -type Btn -build FieldSpreadBuild -kid FieldSpreadKid \
+      -page 0 -widgets {{{20 40 5 5} 0} {{20 40 5 5} 1}} \
+      -tooltip "What you pay" -contents {"On page one" "On page two"}
+  $doc write [::tclpdfTest::scratch field-ua-spread.pdf]
+  set widgets [lmap body [::tclpdfTest::objects $doc "/Subtype /Widget"] {
+    regexp {/P ([0-9]+) 0 R} $body -> page
+    set page
+  }]
+  set named [lmap form [fieldElements $doc Form] {
+    regexp {/Pg ([0-9]+) 0 R} $form -> page
+    set page
+  }]
+  file delete [::tclpdfTest::scratch field-ua-spread.pdf]
+  $doc destroy
+  list [llength $named] \
+      [expr {[lindex $widgets 0] ne [lindex $widgets 1]}] \
+      [expr {$named eq $widgets}]
+} -result {2 1 1}
+
+test field-7.15 {veraPDF accepts an accessible form, UA-1 and UA-2} -constraints {
+  verapdf
+} -body {
+  # The whole point, and the only tool on this machine that knows the UA
+  # rules at all. Part 1 describes its widgets with /Contents - a Lbl inside
+  # a Form is a 2.0 arrangement (field-7.7) - and part 2 with a label.
+  set out {}
+  foreach part {1 2} {
+    set doc [expr {$part == 1 ? [fieldTaggedDoc] : [fieldTaggedDoc -version 2.0]}]
+    $doc structure H1 -script { $doc text "Application" -at {20 25} }
+    if {$part == 1} {
+      $doc text "Name" -at {20 40}
+      $doc field text customer -rect {45 38 60 8} -tooltip "Your full name" \
+          -contents "The applicant's full name"
+    } else {
+      $doc field text customer -rect {45 38 60 8} -tooltip "Your full name" \
+          -label { $doc text "Name" -at {20 40} }
+    }
+    $doc structure Sect -script {
+      $doc structure Lbl -script { $doc text "Shipping" -at {20 55} }
+      $doc field radio ship -buttons {
+        {air {45 53 5 5} "By air freight"}
+        {sea {60 53 5 5} "By sea freight"}
+      } -value air -tooltip "How the goods travel"
+    }
+    $doc ua -part $part
+    set path [::tclpdfTest::scratch field-ua-verapdf-$part.pdf]
+    $doc write $path
+    $doc destroy
+    lappend out [::tclpdfTest::verapdf $path ua$part]
+    file delete $path
+  }
+  set out
+} -result {ok ok}
+
+cleanupTests

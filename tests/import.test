@@ -208,35 +208,6 @@ test import-3.6 {a missing file is refused by name} -body {
 # content string that contains "999 0 R" as text, an optional-content
 # resource. Byte for byte, so the parser meets the real thing.
 
-# A classic-table file from a list of object bodies, byte for byte - the
-# boilerplate of [handcrafted], extracted when the norm-review fixtures
-# would have been its fourth copy.
-# "extra" is written into the trailer beside /Size and /Root - for the
-# fixtures whose point is an entry that hangs off the trailer rather than off
-# the catalog, /Info being the one that has one.
-proc ::tclpdfTest::buildpdf {name objects {extra {}}} {
-    set out "%PDF-1.4\n"
-    set offsets {}
-    set number 0
-    foreach body $objects {
-        lappend offsets [string length $out]
-        append out "[incr number] 0 obj\n$body\nendobj\n"
-    }
-    set xref [string length $out]
-    append out "xref\n0 [expr {$number + 1}]\n"
-    append out [format "%010d %05d f \n" 0 65535]
-    foreach offset $offsets {
-        append out [format "%010d %05d n \n" $offset 0]
-    }
-    append out "trailer\n<< /Size [expr {$number + 1}] /Root 1 0 R $extra >>\n"
-    append out "startxref\n$xref\n%%EOF\n"
-    set path [scratch $name]
-    set channel [open $path wb]
-    puts -nonewline $channel $out
-    close $channel
-    return $path
-}
-
 # One field of a cross-reference stream entry: "value" as "width" big-endian
 # bytes (7.5.8.3). Width 0 produces no bytes, which is how /W [0 ...] is spelt.
 proc ::tclpdfTest::field {value width} {
@@ -291,15 +262,6 @@ proc ::tclpdfTest::buildxref {name objects {w {1 4 2}} {extra {}} {mangle {}}
     puts -nonewline $ch $out
     close $ch
     return $path
-}
-
-# What a script under test raises: {code tclpdf? errorcode}. "tclpdf?" is 1
-# when the message opens with "tclpdf:", the guarantee of doc/tclpdf.md - so a
-# refusal reads {1 1 {TCLPDF ...}} and a clean run {0 0 {}}.
-proc ::tclpdfTest::refuse {script} {
-    set code [catch {uplevel 1 $script} msg opts]
-    return [list $code [string match {tclpdf:*} $msg] \
-        [dict get $opts -errorcode]]
 }
 
 proc ::tclpdfTest::handcrafted {} {

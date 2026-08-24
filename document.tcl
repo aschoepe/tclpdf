@@ -176,8 +176,23 @@ oo::class create ::tclpdf::document::document {
   # see [require] there. Not raised behind the caller's back: whoever set
   # -version 1.3 said what the file may contain, and a feature that does not
   # fit is a mistake to name, not to paper over.
+  # THE CODE IS PUT ON HERE rather than in [require]. Every refusal this
+  # package makes carries an -errorcode - it is what a caller catches on
+  # instead of matching an English sentence - and the version refusal was the
+  # one that came back as NONE: a caller who wanted to answer "then write it
+  # as PDF 1.5" had to read the message to find out that was the fault.
+  # [require] is the writer's and is called from there as well; the document
+  # is where every topical module asks, so this is where the code goes on.
+  # The version asked for is in it, because that is the number the caller
+  # needs to raise the document to.
   method RequireVersion {version feature} {
-    return [$tclpdfWriter require $version $feature]
+    if {[catch {$tclpdfWriter require $version $feature} message options]} {
+      if {[dict get $options -errorcode] eq "NONE"} {
+        dict set options -errorcode [list TCLPDF VERSION $version]
+      }
+      return -options $options $message
+    }
+    return
   }
 
   # The counterpart: a claim that binds the file to a version AT MOST, made
@@ -372,6 +387,9 @@ oo::class create ::tclpdf::document::document {
       pdfa pdfa
       encrypt encrypt
       sign sign
+      field field
+      FieldEnlist field
+      FieldRectangle field
       xmpSchema xmp
       xmpRaw xmp
       zugferd zugferd

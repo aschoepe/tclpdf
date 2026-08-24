@@ -277,7 +277,13 @@ namespace eval ::tclpdf::structure {
   #
   # A Lbl is at home in a list item, but a Note carries one as well - the
   # footnote number (ISO 32000-1 14.8.4.3.3) - and so does its 2.0 successor
-  # FENote (ISO 32000-2 Table 368).
+  # FENote (ISO 32000-2 Table 368). The FORM is not in the list and belongs
+  # in it just as much - ISO 14289-2, 8.10.2.2 puts a widget's label inside
+  # the widget's own Form element, and a group's label beside it - but that
+  # rule cannot be written as a list of parent types, because a Form sits in
+  # almost anything and so therefore does a group's label. It is
+  # [StructureLabelHome] instead, and it covers the Form as well: naming it
+  # here too would be the same rule in two places.
   variable parentOf {
     LI    {L}
     Lbl   {LI Note FENote}
@@ -586,13 +592,25 @@ oo::define ::tclpdf::document::document {
         [dict get [lindex [my state structure] $parent] type]}]
     if {[dict exists $parentOf $type]} {
       set wanted [dict get $parentOf $type]
-      if {$parentType ni $wanted} {
+      if {$parentType ni $wanted
+          && ![my StructureLabelHome $type $parentType]} {
         set where "at the top level"
         if {$parentType ne {}} {
           set where "in a $parentType"
         }
-        return -code error "tclpdf: a $type belongs in [join $wanted { or }],\
+        set message "tclpdf: a $type belongs in [join $wanted { or }],\
             not $where (ISO 32000-2 Annex L)"
+        if {$type eq "Lbl"} {
+          append message ". A Lbl that labels a form field goes where the\
+              field's Form element goes - beside it, in a grouping element\
+              that holds both (ISO 14289-2, 8.10.2.2) - and a $parentType is\
+              not one: put the label and the field in a Sect, a Div inside\
+              one, or a table cell. A Div at the TOP level is not enough,\
+              measured: a validator reads through it and reports the Lbl\
+              against the Document, which may hold none (ISO/TS 32005,\
+              Table 5)"
+        }
+        return -code error $message
       }
     }
     # Inline markup needs something to be inside of - see inlineOnly.
@@ -643,6 +661,31 @@ oo::define ::tclpdf::document::document {
           not a $type - close it before starting one (ISO 32000-2 Annex L)"
     }
     return
+  }
+
+  # THE SECOND HOME OF A Lbl, and it is the form field's. ISO 14289-2,
+  # 8.10.2.2: the text that labels a widget annotation "shall be enclosed in
+  # one or several Lbl structure elements", and they sit in the same parent
+  # element that holds the widget's Form element - for a group of widgets, in
+  # the common parent of all their Form elements. So a Lbl goes wherever a
+  # Form goes, which is what this answers, and [parentOf] alone would refuse
+  # every one of them: it knows the list Lbl had before form fields existed.
+  #
+  # "Wherever a Form goes" is narrowed by one step: a Form is inline markup
+  # and may sit inside a P, a Lbl is a block and may not, so the pair needs a
+  # grouping element - a Div, a Sect, a table cell - to share. That is what
+  # the refusal above says, because it is the one thing the caller has to
+  # change.
+  #
+  # Nothing else uses the exception: the answer is 0 for every type but Lbl.
+  method StructureLabelHome {type parentType} {
+    if {$type ne "Lbl"} {
+      return 0
+    }
+    variable ::tclpdf::structure::childrenOf
+    variable ::tclpdf::structure::leafOnly
+    return [expr {![dict exists $childrenOf $parentType]
+        && $parentType ni $leafOnly}]
   }
 
   # Whether an inline element opened now would sit inside something that
@@ -700,13 +743,21 @@ oo::define ::tclpdf::document::document {
   # only one page existed - and key 1 was already the second page's. Both
   # then claimed the same ParentTree entry. Found by a test, not by a
   # validator: veraPDF reported nothing.
-  method StructureAnnotation {number} {
+  # The page is the CURRENT one where the caller names none, which is what a
+  # link wants - it is drawn on the page it points from. A widget annotation
+  # is not: a field names its page (-page, and -widgets names one per widget),
+  # so the page a form field's OBJR has to carry is the field's and not
+  # whichever page happens to be open when it is declared.
+  method StructureAnnotation {number {page {}}} {
     if {![my tagged]} {
       return {}
     }
     set element [my StructureCurrent]
     if {$element eq {}} {
       return {}
+    }
+    if {$page eq {}} {
+      set page [my page current]
     }
     set annotations [my state structureAnnots]
     set key [llength $annotations]
@@ -717,7 +768,7 @@ oo::define ::tclpdf::document::document {
     # (ISO 32000-2 14.7.5.3), and only now is it known which page that is.
     set elements [my state structure]
     set entry [lindex $elements $element]
-    dict lappend entry kids [list objr $number [my page current]]
+    dict lappend entry kids [list objr $number $page]
     lset elements $element $entry
     my state structure $elements
     return $key

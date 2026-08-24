@@ -49,6 +49,9 @@ foreach tclpdfPkg {
     tclpdf::crypto
     tclpdf::encrypt
     tclpdf::sign
+    tclpdf::field
+    tclpdf::fieldButton
+    tclpdf::fieldChoice
     tclpdf::update
     tclpdf::layer
     tclpdf::type3
