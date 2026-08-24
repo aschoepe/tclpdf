@@ -18,6 +18,38 @@ set tableFace [file join [file dirname [file dirname [file normalize [info scrip
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveTableFace [file exists $tableFace]
 
+# THE PATTERNS ARE NOT PART OF THIS PACKAGE and are not in the repository -
+# see the head of tests/hyphenate.test and examples/assets/languages/README.
+# Every test below that breaks a word carries this constraint and SKIPS
+# without the file; the tests that only check a REFUSAL carry none, because a
+# language nobody loaded is refused whether or not any other language was.
+#
+# hyph_de_DE.dic names no LEFTHYPHENMIN and no RIGHTHYPHENMIN, so German is
+# loaded with 2 and 2 here as it is there - without them the plain TeX right
+# minimum of 3 refuses the two letter endings German breaks off every day.
+set tableHyphens [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets languages hyph_de_DE.dic]
+testConstraint haveGermanPatterns [file exists $tableHyphens]
+# Required here rather than left to the first table that names a language,
+# and that is not tidiness. A package require that SOURCES a module for the
+# first time from inside [uplevel] empties the local variables of the frame
+# it was uplevelled into - measured on Tcl 8.6.18, 2026-08-24 - and
+# [::tclpdfTest::refuse] runs its script exactly that way. So table-24.6,
+# whose whole point is that the refusal arrives at the caller, lost the
+# variables it was comparing on a machine WITHOUT the pattern file and
+# passed on one with it. The module is part of the package and always there;
+# only the patterns are optional.
+package require tclpdf::hyphenate
+if {[file exists $tableHyphens]} {
+  ::tclpdf::hyphenate load de-DE $tableHyphens -left 2 -right 2
+}
+
+# One sentence of German prose in a narrow column: two compounds long enough
+# to leave a hole when they will not break, and short enough that the column
+# is wider than either of them - so what is measured is the WRAPPING, not the
+# character fallback that catches a word wider than its cell.
+set tableProse "Die Betriebskostenabrechnung wird nach der Wohnflaeche umgelegt."
+
 proc rows {count} {
   set result {}
   for {set n 1} {$n <= $count} {incr n} {
@@ -1289,5 +1321,200 @@ test table-23.1 {a decimal cell whose separator opens the line writes no empty s
   list [regexp {\(\) Tj} $stream] [regexp -all {\(,50\) Tj} $stream] \
       [regexp -all {\(1\) Tj} $stream]
 } -result {0 1 1}
+
+
+# --- hyphenating a cell ----------------------------------------------------
+#
+# A table is the one place in the package that wraps text the caller never
+# opened a block for, which is why -hyphenate had to be handed on rather than
+# simply taken. It is said as a STYLE key, so it can be said wherever a style
+# can - theme, section, column, cell - and a table with a German description
+# column beside an English note column is two words at the call.
+#
+# THE POINT OF THE WHOLE GROUP is table-24.2: the measuring and the drawing
+# have to agree. A table that measures three lines and sets four is a defect
+# nobody sees until a row overlaps the one under it.
+
+test table-24.1 {a cell whose style names a language is broken at a syllable} \
+    -constraints haveGermanPatterns -body {
+  # The expected break is the dictionary's: Be-triebs-kos-ten-ab-rech-nung
+  # (Duden), and the line takes the last offer that still fits.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 40 -theme plain \
+      -body [list [list $tableProse]] -columns {{width 40 hyphenate de-DE}}]
+  $doc destroy
+  dict get [lindex [dict get $layout body] 0 0] lines
+} -result {{Die Betriebskostenab-} {rechnung wird nach der} {Wohnflaeche umgelegt.}}
+
+test table-24.2 {a cell draws exactly the lines it was measured as} \
+    -constraints haveGermanPatterns -body {
+  # MEASURING AGAINST DRAWING, which is what an option handed on in one place
+  # and forgotten in the other breaks. Three answers: the strings in the
+  # stream are the strings the layout wrote down, the y the table returns is
+  # the top plus the height it measured, and there are as many shows as there
+  # were lines. Take -hyphenate out of TableMeasure and all three change at
+  # once.
+  set options [list -at {20 30} -width 40 -theme plain \
+      -body [list [list $tableProse]] -columns {{width 40 hyphenate de-DE}}]
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set layout [$doc table layout {*}$options]
+  set cell [lindex [dict get $layout body] 0 0]
+  set y [$doc table {*}$options]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set drawn [lmap tokens [::tclpdfTest::shows $stream] {
+    string range [lindex $tokens 0] 1 end-1
+  }]
+  list [expr {$drawn eq [dict get $cell lines]}] \
+      [expr {abs($y - (30 + [dict get $layout height])) < 0.001}] \
+      [llength $drawn]
+} -result {1 1 3}
+
+test table-24.3 {the same column, measured with and without the patterns} \
+    -constraints haveGermanPatterns -body {
+  # What the option is FOR, in numbers: the same sentence in the same 40 mm
+  # column. Without it the column has to split "Betriebskostenabrechnun|g" -
+  # the character fallback, because the word is wider than what is left of
+  # the line - and pays a fourth line for it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set result {}
+  foreach style {{} {hyphenate de-DE}} {
+    set layout [$doc table layout -width 40 -theme plain \
+        -body [list [list $tableProse]] \
+        -columns [list [list width 40 {*}$style]]]
+    lappend result [llength [dict get [lindex [dict get $layout body] 0 0] lines]] \
+        [format %.4f [dict get $layout height]]
+  }
+  $doc destroy
+  set result
+} -result {4 17.6050 3 13.9537}
+
+test table-24.4 {hyphenate is sayable at every level a style is} \
+    -constraints haveGermanPatterns -body {
+  # theme level (-style), section level (-bodyStyle), column level and cell
+  # level, each on its own, all four asked to do the same thing - and the
+  # answer is the same three lines every time.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set plain [list [list $tableProse]]
+  set styled [list [list [list text $tableProse style {hyphenate de-DE}]]]
+  set answers {}
+  foreach {rows spelling} [list \
+      $plain {-style {hyphenate de-DE} -columns {{width 40}}} \
+      $plain {-bodyStyle {hyphenate de-DE} -columns {{width 40}}} \
+      $plain {-columns {{width 40 hyphenate de-DE}}} \
+      $styled {-columns {{width 40}}}] {
+    set layout [$doc table layout -width 40 -theme plain -body $rows {*}$spelling]
+    lappend answers [llength [dict get [lindex [dict get $layout body] 0 0] lines]]
+  }
+  $doc destroy
+  set answers
+} -result {3 3 3 3}
+
+test table-24.5 {the more specific level wins over the more general} \
+    -constraints haveGermanPatterns -body {
+  # The table says German, the second column says off. Same sentence in both
+  # columns, same width: the first breaks, the second does not. This is the
+  # cascade of TableStyle doing it, not a rule of its own.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 80 -theme plain \
+      -style {hyphenate de-DE} \
+      -body [list [list $tableProse $tableProse]] \
+      -columns {{width 40} {width 40 hyphenate 0}}]
+  $doc destroy
+  set row [lindex [dict get $layout body] 0]
+  list [llength [dict get [lindex $row 0] lines]] \
+      [llength [dict get [lindex $row 1] lines]]
+} -result {3 4}
+
+test table-24.6 {an unloaded language refuses the table and leaves the page alone} -body {
+  # No constraint: "xx-YY" is unloaded on every machine, patterns or not.
+  #
+  # The refusal has to arrive at the CALLER with its code, not be swallowed
+  # in the layout loop - and it has to arrive before an operator does. The
+  # whole table is measured before its first cell is drawn, so the stream is
+  # the one that was there.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "vorher" -at {10 10} -family helvetica -size 9
+  set before [::tclpdfTest::content $doc]
+  set raised [::tclpdfTest::refuse {
+    $doc table -at {20 30} -width 40 -body {{"Wort"}} -style {hyphenate xx-YY}
+  }]
+  set after [::tclpdfTest::content $doc]
+  $doc destroy
+  list $raised [expr {$before eq $after}]
+} -result {{1 1 {TCLPDF HYPHENATE LANGUAGE xx-YY}} 1}
+
+test table-24.7 {hyphenate 1 in a table wants the document's language} -body {
+  # The other refusal of the option, and it reaches the caller the same way.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set raised [::tclpdfTest::refuse {
+    $doc table -at {20 30} -width 40 -body {{"Wort"}} -style {hyphenate 1}
+  }]
+  $doc destroy
+  set raised
+} -result {1 1 {TCLPDF HYPHENATE UNSET}}
+
+test table-24.8 {hyphenate 1 takes the language the document declares} \
+    -constraints haveGermanPatterns -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc language de-DE
+  set layout [$doc table layout -width 40 -theme plain \
+      -body [list [list $tableProse]] -style {hyphenate 1} \
+      -columns {{width 40}}]
+  $doc destroy
+  dict get [lindex [dict get $layout body] 0 0] lines
+} -result {{Die Betriebskostenab-} {rechnung wird nach der} {Wohnflaeche umgelegt.}}
+
+test table-24.9 {a mistyped hyphenate key is refused by name} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set caught [catch {$doc table layout -width 40 -body {{a}} \
+      -style {hyphenat de-DE}} message]
+  $doc destroy
+  list $caught [string match {*unknown style key "hyphenat"*hyphenate*} $message]
+} -result {1 1}
+
+test table-24.10 {a hyphenated table still measures its own column widths} \
+    -constraints haveGermanPatterns -body {
+  # The regression this feature invites: hyphenate is not a font option, and
+  # two of the three measuring call sites use [textWidth], which refuses a
+  # layout option BY NAME. Put it in TableFont and every table that named a
+  # language is refused instead of set. The natural widths and the decimal
+  # tails both go that road, so both are asked here.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 90 -theme plain \
+      -style {hyphenate de-DE} -decimal , \
+      -body [list [list $tableProse "1,50"] [list "Summe" "12,25"]] \
+      -columns {{} {width 25 align decimal}}]
+  $doc destroy
+  list [llength [dict get $layout widths]] \
+      [expr {[lindex [dict get $layout widths] 0] > 0}]
+} -result {2 1}
+
+test table-24.11 {a table that names no language is set the way it always was} -body {
+  # No constraint and no patterns needed: the default is 0, and the point is
+  # that nothing about an existing document's bytes changed. The same table
+  # written twice, once through a style that spells the default out.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {20 30} -width 40 -theme plain -body [list [list $tableProse]] \
+      -columns {{width 40}}
+  set plain [::tclpdfTest::content $doc]
+  $doc page add
+  $doc table -at {20 30} -width 40 -theme plain -body [list [list $tableProse]] \
+      -columns {{width 40 hyphenate 0}}
+  set spelled [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {$plain eq $spelled}] [regexp {\(Die\) Tj} $plain]
+} -result {1 1}
 
 cleanupTests

@@ -127,6 +127,15 @@ oo::define ::tclpdf::document::document {
   # direction is what made that concrete: a Hebrew cell measured without it is
   # not measured differently, it is REFUSED, and the refusal would name the
   # table rather than the cell.
+  #
+  # hyphenate is NOT in this list, and that is the same argument read the
+  # other way round. These four options say how wide a string is; hyphenate
+  # says where the LINES fall, which is a question only the one call site that
+  # wraps can ask. Two of the four sites here measure with [textWidth], and
+  # [textWidth] refuses a layout option by name - "-hyphenate" among them - so
+  # putting it here would not measure a column wrong, it would refuse every
+  # table that named a language. It is passed at TableMeasure and nowhere
+  # else.
   method TableFont {style} {
     return [list -family [dict get $style family] \
         -style [dict get $style fontStyle] -size [dict get $style size] \
@@ -336,8 +345,21 @@ oo::define ::tclpdf::document::document {
         if {$inner <= 0} {
           set inner 0.1
         }
+        # THE ONE PLACE IN THE PACKAGE THAT WRAPS TEXT THE CALLER NEVER OPENED
+        # A BLOCK FOR, and therefore the one place -hyphenate has to be handed
+        # on rather than taken from the caller's own [text] call. The lines
+        # this returns are what tableDraw.tcl puts on the page, one [text] per
+        # line, so what is measured here IS what is set - there is no second
+        # breaker downstream to keep in step with.
+        #
+        # An unloaded language is refused from inside [textLines] with
+        # TCLPDF HYPHENATE LANGUAGE. Nothing on this road catches it: the
+        # whole table is measured before its first cell is drawn, so the
+        # refusal leaves the page, the structure tree and the state as they
+        # were - the same promise the option and value checks make in
+        # table.tcl.
         set lines [my textLines [dict get $cell text] $inner \
-            {*}[my TableFont $style]]
+            {*}[my TableFont $style] -hyphenate [dict get $style hyphenate]]
         set leading [::tclpdf::geometry fromPoints \
             [expr {[dict get $style size] * [dict get $style leading]}] \
             [my cget -unit]]
@@ -532,4 +554,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableLayout 1.3
+package provide tclpdf::tableLayout 1.4

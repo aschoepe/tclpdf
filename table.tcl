@@ -91,9 +91,27 @@ namespace eval ::tclpdf::table {
   # CELL, not of the table: an invoice has a right-to-left description column
   # and a left-to-right amount column on the same row. Being a style key it
   # can be said at every level the others can - theme, section, column, cell.
+  #
+  # hyphenate is here for the same reason and one more. The reason: a table
+  # can hold columns in different languages - a German description beside an
+  # English note - and a language said once for the whole table cannot say
+  # that. The one more: a style key needs no plumbing at all. Adding the name
+  # to this list is what makes it sayable in -style, in -headStyle,
+  # -bodyStyle and -footStyle, in a -columns entry and in a cell's own style,
+  # because all four places check their keys against THIS list; and the
+  # cascade in TableStyle already gives the specific value precedence over
+  # the general one. A -hyphenate option beside -theme would have been a
+  # second road to the same place, with the table wide case cheap and the per
+  # column case impossible.
+  #
+  # The value is textBlock's, unchanged and unchecked here: 0 is off, 1 is
+  # the language the document declares, anything else is a language tag. Only
+  # the two literals are the switch - "no" is a Tcl false and the tag for
+  # Norwegian - and an unloaded language is refused by name where the cell is
+  # wrapped, see TableMeasure.
   variable defaults {
     family helvetica fontStyle {} size 9 leading 1.15 padding 1.5
-    fill {} color black align left valign top direction ltr
+    fill {} color black align left valign top direction ltr hyphenate 0
     border horizontal lineColor {0.6 0.6 0.6} lineWidth 0.1
   }
 }
@@ -768,4 +786,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.6
+package provide tclpdf::table 1.7

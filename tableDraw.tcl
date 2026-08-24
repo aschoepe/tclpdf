@@ -73,6 +73,30 @@ oo::define ::tclpdf::document::document {
     # two mirrorings are none.
     set state [dict create direction [dict get $style direction]]
     set align [my TextAlign [dict get $style align] $state]
+    # NO -hyphenate ON THESE CALLS, and that is measured rather than
+    # overlooked. The lines below were broken in TableMeasure, hyphens and
+    # all, and each is drawn as ONE line: [text] without -width never opens a
+    # breaker, so the option would reach a road that does not read it. Handed
+    # on here as well it changed not one byte of a tagged German table -
+    # compared qdf against qdf on 2026-08-24, 4138 bytes either way.
+    #
+    # The cell therefore cannot draw a break the measurement did not make.
+    # That is not a promise the two lists keep in step with each other; it is
+    # the same list. Where the package has been bitten before - the font
+    # options of TableFont - two lists existed and one grew a key. Here there
+    # is nothing to grow.
+    #
+    # WHAT THE TABLE DOES NOT DO, and a reader should know before looking for
+    # it: the break hyphen goes out as a plain U+002D. On the [text -width]
+    # road a tagged document brackets it in a Span with an empty ActualText
+    # (14.8.2.6) so that extraction gives the word back whole, and the table
+    # cannot, because that bracket is written by the breaker around a run it
+    # placed itself and this cell has only the finished string. Splitting the
+    # line to bracket the hyphen here would cost the kerning across the break
+    # and make the drawn line wider than the measured one - the very defect
+    # the paragraph above rules out. Extracting a hyphenated table cell gives
+    # "Betriebskostenab-rechnung"; that is the price of the option, and it is
+    # the manual's business as much as this comment's.
     foreach line $lines {
       switch -- $align {
         decimal {
