@@ -324,8 +324,8 @@ oo::define ::tclpdf::document::document {
 
   # Wrap every cell and work out how tall each row comes out.
   #
-  # Returns the grid with "lines" and "height" filled in per cell, and a list
-  # of row heights. A cell spanning rows does not stretch the row it starts
+  # Returns the grid with "lines", "hyphens" and "height" filled in per cell,
+  # and a list of row heights. A cell spanning rows does not stretch the row it starts
   # in - its height is shared out over the rows it covers, which is what keeps
   # a two-line spanning cell from doubling a one-line row.
   method TableMeasure {grid widths options {tails {}}} {
@@ -358,8 +358,17 @@ oo::define ::tclpdf::document::document {
         # refusal leaves the page, the structure tree and the state as they
         # were - the same promise the option and value checks make in
         # table.tcl.
-        set lines [my textLines [dict get $cell text] $inner \
+        #
+        # [TextLinesBroken] rather than [textLines], and that is the whole of
+        # the hyphen bracket in a table: the public method answers strings,
+        # and a string cannot say whether the "-" it ends on is a break or a
+        # character. The cell keeps both halves - the strings it draws and
+        # the flags it hands back to [text] - so the bracket the paragraph
+        # road writes is written here as well (14.8.2.6). Extraction of a
+        # tagged table gave "Betriebskostenab-rechnung" until it did.
+        set broken [my TextLinesBroken [dict get $cell text] $inner \
             {*}[my TableFont $style] -hyphenate [dict get $style hyphenate]]
+        set lines [lmap line $broken {lindex $line 0}]
         set leading [::tclpdf::geometry fromPoints \
             [expr {[dict get $style size] * [dict get $style leading]}] \
             [my cget -unit]]
@@ -372,6 +381,10 @@ oo::define ::tclpdf::document::document {
         dict set cell tail [expr {[dict exists $tails [dict get $cell column]] ?
             [dict get $tails [dict get $cell column]] : 0}]
         dict set cell lines $lines
+        # One flag per line, in step with them because both are read off the
+        # SAME answer of the breaker one statement apart - not two lists that
+        # have to be kept in step.
+        dict set cell hyphens [lmap line $broken {lindex $line 1}]
         dict set cell width $span
         dict set cell leading $leading
         dict set cell height $height

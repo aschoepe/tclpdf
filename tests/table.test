@@ -30,6 +30,9 @@ testConstraint haveTableFace [file exists $tableFace]
 set tableHyphens [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets languages hyph_de_DE.dic]
 testConstraint haveGermanPatterns [file exists $tableHyphens]
+# A reader from outside, for the tests that ask what comes back OUT of a
+# table: nothing inside this package can answer that.
+testConstraint havePdfToText [expr {[auto_execok pdftotext] ne {}}]
 # Required here rather than left to the first table that names a language,
 # and that is not tidiness. A package require that SOURCES a module for the
 # first time from inside [uplevel] empties the local variables of the frame
@@ -1516,5 +1519,146 @@ test table-24.11 {a table that names no language is set the way it always was} -
   $doc destroy
   list [expr {$plain eq $spelled}] [regexp {\(Die\) Tj} $plain]
 } -result {1 1}
+
+# --- 25. the break hyphen of a cell -----------------------------------------
+#
+# A cell is broken in TableMeasure and drawn line by line in tableDraw, one
+# [text] per line and never with -width. So the drawing has the finished
+# string and nothing else - and a string cannot say whether the "-" it ends on
+# is a break or a character of the text. The flags travel beside the lines and
+# reach [text] as -breakHyphen; ISO 32000-1, 14.8.2.6.
+
+test table-25.1 {a tagged hyphenated cell brackets its break hyphen} \
+    -constraints haveGermanPatterns -body {
+  # The line the breaker hyphenated shows three pieces, the other two one
+  # each: the bracket is written for the line that has a break, and for no
+  # other.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc language de-DE
+  $doc page add
+  $doc table -at {20 30} -width 40 -theme plain \
+      -body [list [list $tableProse]] -columns {{width 40 hyphenate de-DE}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {/Span <</ActualText <FEFF>>> BDC} $stream] \
+      [regexp {\(Die Betriebskostenab\) Tj} $stream] \
+      [regexp {\(-\) Tj} $stream] \
+      [regexp {\(Die Betriebskostenab-\) Tj} $stream]
+} -result {1 1 1 0}
+
+test table-25.2 {an untagged table keeps the bytes it always had} \
+    -constraints haveGermanPatterns -body {
+  # The bracket means nothing without a tree, so it is not written - the same
+  # rule the paragraph road follows, and what keeps every existing document
+  # byte for byte where it was.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc language de-DE
+  $doc page add
+  $doc table -at {20 30} -width 40 -theme plain \
+      -body [list [list $tableProse]] -columns {{width 40 hyphenate de-DE}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {ActualText} $stream] \
+      [regexp {\(Die Betriebskostenab-\) Tj} $stream]
+} -result {0 1}
+
+test table-25.3 {the bracket moves no line by a thousandth of a point} \
+    -constraints haveGermanPatterns -body {
+  # THE HARD CONDITION: the drawn line has to keep the width the column was
+  # measured with. The cell does NOT cut the string up - [text] does, inside
+  # one text object, after the position of the whole line has been computed -
+  # so every Td is the Td of the untagged table, for every alignment. Read off
+  # the stream rather than argued.
+  set result {}
+  foreach align {left right center} {
+    set coordinates {}
+    foreach tagged {0 1} {
+      set doc [tclpdf new -unit mm -compress 0]
+      if {$tagged} {
+        $doc tagged 1
+        $doc language de-DE
+      }
+      $doc page add
+      $doc table -at {20 30} -width 40 -theme plain \
+          -body [list [list $tableProse]] \
+          -columns [list [list width 40 align $align hyphenate de-DE]]
+      set stream [::tclpdfTest::content $doc]
+      $doc destroy
+      lappend coordinates [list [::tclpdfTest::starts $stream x] \
+          [::tclpdfTest::starts $stream y]]
+    }
+    lappend result [expr {[lindex $coordinates 0] eq [lindex $coordinates 1]}]
+  }
+  set result
+} -result {1 1 1}
+
+test table-25.4 {the flag belongs to the line, not to the cell} \
+    -constraints haveGermanPatterns -body {
+  # Three lines, one of them broken: two of the three [text] calls must be
+  # told 0. A cell that handed the same answer to all of them would bracket a
+  # hyphen that is a character of the text - "Nord-Sued" in the last line
+  # here - and extraction would swallow it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 40 -theme plain \
+      -body [list [list "$tableProse Nord-Sued"]] \
+      -columns {{width 40 hyphenate de-DE}}]
+  set cell [lindex [dict get $layout body] 0 0]
+  $doc destroy
+  list [llength [dict get $cell lines]] \
+      [llength [dict get $cell hyphens]] [dict get $cell hyphens]
+} -result {4 4 {1 0 0 0}}
+
+test table-25.5 {a decimal cell gives the flag to the tail, not to the head} \
+    -body {
+  # The decimal road draws a line as TWO calls, the head right-aligned to the
+  # separator and the tail left-aligned from it. -breakHyphen is refused for a
+  # string with no hyphen in it (text.tcl), so handing it to both would refuse
+  # the table the first time a decimal column broke a line that has the
+  # separator on it. The tail is what the line ENDS on, so the tail carries it.
+  #
+  # No patterns needed and none asked for: the offer is a soft hyphen the text
+  # brings with it, which is the breaker's other source. The line comes out as
+  # "1,234567-", so the head is "1" - a string with no hyphen anywhere in it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  set body [list [list "1,234567\u00AD89012345"]]
+  set columns {{width 22 align decimal}}
+  set layout [$doc table layout -width 22 -theme plain -decimal , \
+      -body $body -columns $columns]
+  set caught [catch {$doc table -at {20 30} -width 22 -theme plain -decimal , \
+      -body $body -columns $columns}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [dict get [lindex [dict get $layout body] 0 0] hyphens] $caught \
+      [regexp {\(1\) Tj} $stream] [regexp {\(,234567\) Tj} $stream] \
+      [regexp -all {/Span <</ActualText <FEFF>>> BDC} $stream]
+} -result {{1 0} 0 1 1 1}
+
+test table-25.6 {the word comes back out of a tagged table whole} \
+    -constraints {haveGermanPatterns havePdfToText} -body {
+  # THE POINT OF THE SECTION, asked of poppler rather than of the package.
+  # -layout, because the default mode reflows and GUESSES: it joins a line
+  # ending in "-" with the next one and drops the hyphen, which is right for a
+  # break and wrong for a real one - measured, "Nord- Suedseite" comes back as
+  # "NordSuedseite" there. -layout reports what the file says, and what the
+  # file says is what changed.
+  set path [::tclpdfTest::scratch table-breakhyphen.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc language de-DE
+  $doc page add
+  $doc table -at {20 30} -width 40 -theme plain \
+      -body [list [list $tableProse]] -columns {{width 40 hyphenate de-DE}}
+  $doc write $path
+  $doc destroy
+  set lines [split [string trim [exec pdftotext -layout $path -]] \n]
+  file delete $path
+  # The first two layout lines joined the way a reader joins them. Without the
+  # bracket this reads "Die Betriebskostenab-rechnung wird nach der".
+  string trim [join [lrange $lines 0 1] {}]
+} -result "Die Betriebskostenabrechnung wird nach der"
 
 cleanupTests

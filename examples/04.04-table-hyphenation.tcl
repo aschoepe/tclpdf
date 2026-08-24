@@ -195,10 +195,13 @@ lappend report "The patterns are not part of tclpdf and are loaded by the\
     caller with \[::tclpdf::hyphenate load de-DE <path> -left 2 -right 2\];\
     a language nobody loaded refuses the whole table by name rather than\
     setting it unhyphenated in silence."
-lappend report "One thing a cell does not do that a \[text -width\] paragraph\
-    does: its break hyphen is a plain U+002D and carries no empty ActualText\
-    in a tagged document, so extracting a broken cell gives the word with the\
-    hyphen in it. The table draws its cells line by line from what it\
+lappend report "A broken cell brackets its break hyphen the way a \[text\
+    -width\] paragraph does: in a tagged document the hyphen sits in a Span\
+    with an empty ActualText, so extracting the cell gives the word back\
+    whole. The line itself is never cut up here - it goes to \[text\] whole,\
+    and the splitting happens inside one text object after the position of\
+    the whole line has been computed, so the drawn line is as wide as the\
+    measured one. The table draws its cells line by line from what it\
     measured, which is what makes it impossible for the measuring and the\
     drawing to disagree about where the breaks fall."
 

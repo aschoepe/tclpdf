@@ -977,34 +977,54 @@ test fieldButton-7.3 {a check box takes -contents and -label like every other fi
       [llength $forms] [llength $labels]
 } -result {1 2 1}
 
-test fieldButton-7.4 {a button entry of four words is refused} -body {
-  # {value {x y w h} ?description?} and nothing further - a fourth word is
-  # a caller who meant something the option does not have.
+test fieldButton-7.4 {a bare fourth word in a button entry is refused} -body {
+  # {value {x y w h} ?description?} and then OPTIONS - so a fourth word that
+  # is not an option name is a caller who meant something the entry does not
+  # have, and the refusal quotes the form and what arrived. Three shapes of
+  # the same mistake: a bare word after the description, an option with no
+  # value, and a misspelt option name.
   set doc [buttonDoc]
-  set code [::tclpdfTest::refusal {
+  set fourth [::tclpdfTest::refusal {
     $doc field radio rate -buttons {{full {20 40 5 5} "The full rate" more}}
   }]
+  set odd [::tclpdfTest::refusal {
+    $doc field radio pace -buttons {{fast {20 50 5 5} "Fast" -page}}
+  }]
+  set message {}
+  catch {
+    $doc field radio ship -buttons {{air {20 60 5 5} "By air" -pge 1}}
+  } message options
   $doc destroy
-  lrange $code 0 2
-} -result {TCLPDF FIELD BUTTON}
+  list [lrange $fourth 0 2] [lrange $odd 0 2] \
+      [lrange [dict get $options -errorcode] 0 1] \
+      [string match {*unknown option "-pge"*} $message] \
+      [string match {*-buttons of field radio "ship"*} $message] \
+      [string match {*-page*} $message]
+} -result {{TCLPDF FIELD BUTTON} {TCLPDF FIELD BUTTON} {TCLPDF OPTION} 1 1 1}
 
 test fieldButton-7.5 {-contents and -label are refused on a radio field, by name} -body {
-  # Both describe ONE widget and a radio field is the set. -contents is
-  # refused here, pointing at the third word of -buttons; -label is refused
-  # by the core, because a group's label is not a widget's label at all
-  # (ISO 14289-2, 8.10.2.2, second paragraph).
+  # Both describe ONE widget and a radio field is the set, so both are
+  # refused here rather than by the core - the core knows nothing about
+  # -buttons, and the road out runs through it in both cases. -contents
+  # points at the third word of an entry; -label points at that entry's own
+  # -label for the caption BESIDE one button, and at [$doc structure Lbl] for
+  # the caption of the whole set, which is the second paragraph of ISO
+  # 14289-2, 8.10.2.2.
   set doc [buttonDoc -version 2.0]
   set contents [::tclpdfTest::refusal {
     $doc field radio rate -buttons {{full {20 40 5 5}}} -contents "one"
   }]
-  set label [::tclpdfTest::refusal {
+  set message {}
+  catch {
     $doc field radio pace -buttons {{fast {20 50 5 5}}} -label {
       $doc text "Rate" -at {20 45}
     }
-  }]
+  } message options
   $doc destroy
-  list $contents $label
-} -result {{TCLPDF FIELD BUTTON CONTENTS} {TCLPDF FIELD DECLARE LABEL}}
+  list $contents [dict get $options -errorcode] \
+      [string match {*-label {script}*} $message] \
+      [string match {*structure Lbl*} $message]
+} -result {{TCLPDF FIELD BUTTON CONTENTS} {TCLPDF FIELD BUTTON LABEL} 1 1}
 
 test fieldButton-7.6 {PDF/UA-2 names the button that has no description} -constraints {
   dejavu
@@ -1022,9 +1042,38 @@ test fieldButton-7.6 {PDF/UA-2 names the button that has no description} -constr
   catch {$doc write [::tclpdfTest::scratch button-ua-missing.pdf]} text
   file delete [::tclpdfTest::scratch button-ua-missing.pdf]
   $doc destroy
+  # The refusal has to name every road out, not one of them: the third word,
+  # -contents, and since a button may be labelled, that entry's own -label.
+  # Matching on all three is what makes this a test of the CONTRACT rather
+  # than of one turn of phrase - a message that drops one of the three ways
+  # leaves a caller stuck with a document that cannot claim what it claims.
+  # The refusal has to name every road out, not one of them: the third word,
+  # -contents, and since a button may be labelled, that entry's own -label.
+  # The three matches are anchored on the part that speaks about the BUTTONS
+  # - matching a bare "-label" would be met by the sentence above it, which
+  # is about a single-widget field, and the test would pass a message that
+  # left a radio caller with no way out at all.
   list [string match {*ship widget 2 has neither a label nor a description*} $text] \
-      [string match {*third word of -buttons*} $text]
-} -result {1 1}
+      [string match {*entry of -buttons*third word*} $text] \
+      [string match {*entry of -buttons*-contents*} $text] \
+      [string match {*entry's -label*} $text]
+} -result {1 1 1 1}
+
+# Write a document, hand the bytes to veraPDF once per profile named, and
+# remove the file. The document is destroyed either way - a test that stops
+# in the middle of the seven lines this replaces left both behind.
+#
+# Several profiles over ONE file rather than one call per profile, because
+# the interesting question about a labelled form is what the SAME bytes are
+# worth under UA-1 and under UA-2 (fieldButton-7.15).
+proc buttonVerapdf {doc name args} {
+  set path [::tclpdfTest::scratch $name]
+  $doc write $path
+  $doc destroy
+  set reports [lmap flavour $args {::tclpdfTest::verapdf $path $flavour}]
+  file delete $path
+  return $reports
+}
 
 test fieldButton-7.7 {veraPDF accepts a radio set under UA-1 and UA-2} -constraints {
   verapdf dejavu
@@ -1041,13 +1090,284 @@ test fieldButton-7.7 {veraPDF accepts a radio set under UA-1 and UA-2} -constrai
       }
     }
     $doc ua -part $part
-    set path [::tclpdfTest::scratch button-ua-verapdf-$part.pdf]
-    $doc write $path
-    $doc destroy
-    lappend out [::tclpdfTest::verapdf $path ua$part]
-    file delete $path
+    lappend out {*}[buttonVerapdf $doc button-ua-verapdf-$part.pdf ua$part]
   }
   set out
 } -result {ok ok}
+
+#
+# --- one field, several sheets ----------------------------------------------
+#
+
+# A form that asks the same question on every sheet and collects the answers
+# in ONE field: two buttons, one field, two pages. -unison 1 because both
+# carry the on-state name "yes" - Table 229 is what makes them switch
+# together, and without the flag they would be two buttons a reader turns on
+# at once for no stated reason (fieldButton-5.3).
+proc buttonSpreadDoc {args} {
+  set doc [buttonTaggedDoc {*}$args]
+  $doc page add
+  return $doc
+}
+
+test fieldButton-7.8 {a set puts each button on the page IT names} -constraints {
+  dejavu
+} -body {
+  # 12.7.5.2.4 has /Kids "an array of widget annotations", and nothing in it
+  # says they share a page - the core has taken a page per widget since the
+  # shape existed (field-7.19) and this is the module handing one through.
+  # Three things have to line up: the annotation's /P, the page's /Annots and
+  # the /Pg of the OBJR in that button's Form element.
+  set doc [buttonSpreadDoc]
+  $doc field radio read -tooltip "Confirm on every sheet" -unison 1 -buttons {
+    {yes {60 38 5 5} "Sheet one, read" -page 0}
+    {yes {60 38 5 5} "Sheet two, read" -page 1}
+  }
+  $doc write [::tclpdfTest::scratch button-ua-spread.pdf]
+  set kids [buttonKids $doc read]
+  set named [llength [buttonBodies $doc "*/T (read)*"]]
+  set pages [lmap kid $kids {
+    regexp {/P ([0-9]+) 0 R} $kid -> page
+    set page
+  }]
+  set objr [lmap form [buttonBodies $doc "*/S /Form*"] {
+    regexp {/Pg ([0-9]+) 0 R} $form -> page
+    set page
+  }]
+  # And each page carries its own button in /Annots, which is what puts the
+  # widget on the sheet at all.
+  set annots [lmap number $pages {
+    regexp -all {/Annots} [[$doc writer] body $number]
+  }]
+  file delete [::tclpdfTest::scratch button-ua-spread.pdf]
+  $doc destroy
+  list $named [llength $kids] \
+      [expr {[lindex $pages 0] ne [lindex $pages 1]}] \
+      [expr {$objr eq $pages}] $annots
+} -result {1 2 1 1 {1 1}}
+
+test fieldButton-7.9 {qpdf reads the spread set as one field on two pages} -constraints {
+  qpdf dejavu
+} -body {
+  # The reader that resolves the tree: "parent" on every button, an empty
+  # "partialname" - 12.7.4.2, a dictionary without a /T of its own "shall not
+  # be considered a field but simply a Widget annotation" - and
+  # "pageposfrom1" counting the sheet each one landed on.
+  set doc [buttonSpreadDoc]
+  $doc field radio read -tooltip "Confirm on every sheet" -unison 1 -buttons {
+    {yes {60 38 5 5} "Sheet one, read" -page 0}
+    {yes {60 38 5 5} "Sheet two, read" -page 1}
+  }
+  set path [buttonFile $doc button-spread-qpdf.pdf]
+  set json [exec qpdf --json --json-key=acroform $path]
+  file delete $path
+  $doc destroy
+  list [regexp -all {"isradiobutton": true} $json] \
+      [regexp -all {"parent": "[0-9]+ 0 R"} $json] \
+      [regexp -all {"partialname": ""} $json] \
+      [regexp {"pageposfrom1": 1} $json] [regexp {"pageposfrom1": 2} $json] \
+      [regexp -all {"fullname": "read"} $json]
+} -result {2 2 2 1 1 2}
+
+test fieldButton-7.10 {PDFBox uses the spread set as one radio button field} -constraints {
+  formcheck dejavu
+} -body {
+  # The reader that BUILDS the field rather than reading its bytes: one
+  # PDRadioButton with two widgets, and an appearance on each - a widget on a
+  # page the field did not name would be a widget PDFBox could not place.
+  set doc [buttonSpreadDoc]
+  $doc field radio read -tooltip "Confirm on every sheet" -unison 1 -buttons {
+    {yes {60 38 5 5} "Sheet one, read" -page 0}
+    {yes {60 38 5 5} "Sheet two, read" -page 1}
+  }
+  set path [buttonFile $doc button-spread-formcheck.pdf]
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  set status [catch {exec java -cp [file join $root tools Mustang-CLI-2.25.0.jar] \
+      [file join $root tools formcheck.java] $path} output]
+  file delete $path
+  $doc destroy
+  list $status \
+      [regexp {name=read type=Btn/PDRadioButton value=\[Off\] tu=\[Confirm on every sheet\] widgets=2 ap=yes,yes} $output] \
+      [regexp {ERROR} $output]
+} -result {0 1 0}
+
+test fieldButton-7.11 {a button's -label goes into that button's Form element} -constraints {
+  dejavu
+} -body {
+  # ISO 14289-2, 8.10.2.2: the Lbl "shall in turn be a direct descendent of a
+  # Form structure element that also includes the object reference to the
+  # widget annotation" - and with four buttons there are four of those, which
+  # is why the field as a whole cannot take a -label and each button can. The
+  # label goes in BEFORE the reference: the order of /K is the reading order.
+  set doc [buttonTaggedDoc -version 2.0]
+  set full "The full rate"
+  $doc structure Sect -script {
+    $doc structure Lbl -script { $doc text "What you pay" -at {20 35} }
+    $doc field radio rate -tooltip "What you pay" -buttons [list \
+        [list full {20 40 5 5} -label {$doc text $full -at {27 42}}] \
+        [list reduced {20 48 5 5} "The reduced rate"]]
+  }
+  $doc write [::tclpdfTest::scratch button-ua-label.pdf]
+  set forms [buttonBodies $doc "*/S /Form*"]
+  set labels [buttonBodies $doc "*/S /Lbl*"]
+  set kids [buttonKids $doc rate]
+  file delete [::tclpdfTest::scratch button-ua-label.pdf]
+  $doc destroy
+  # Two Form elements, one of them with the Lbl before its OBJR; two Lbl
+  # elements in the file, the group's and the button's; and the second button
+  # still described by its third word.
+  list [llength $forms] [llength $labels] \
+      [regexp {/K \[ ?[0-9]+ 0 R.*?/Type /OBJR} [lindex $forms 0]] \
+      [regexp {/K \[} [lindex $forms 1]] \
+      [regexp {/Contents \(The reduced rate\)} [lindex $kids 1]] \
+      [regexp {/Contents} [lindex $kids 0]]
+} -result {2 2 1 0 1 0}
+
+test fieldButton-7.12 {a button's label needs PDF 2.0, and its scope is the caller's} -body {
+  # The floor is the arrangement's - a Lbl inside a Form is what ISO 32000-1,
+  # Table 340 did not have (field-7.7) - and it does not ask how many widgets
+  # the field has. And the script is the CALLER's: it is run by the core,
+  # three frames down, so a caller's variable has to be in reach.
+  set doc [buttonDoc]
+  set code [::tclpdfTest::refusal {
+    $doc field radio rate -buttons {{full {20 40 5 5} -label {set x 1}}}
+  }]
+  $doc destroy
+  set two [buttonDoc -version 2.0]
+  $two tagged 1
+  set caption "The full rate"
+  set seen {}
+  $two field radio rate -buttons [list \
+      [list full {20 40 5 5} -label {
+        set seen $caption
+        $two text $caption -at {27 42}
+      }]]
+  $two destroy
+  list $code $seen
+} -result {{TCLPDF VERSION 2.0} {The full rate}}
+
+test fieldButton-7.13 {the first [$doc field] of a script labels a button too} -body {
+  # The trap field-7.17 found, from the other end: the first call on a
+  # document that has not seen a field arrives through [unknown] and has one
+  # frame more than every later call. A button's label script runs through
+  # the same machinery, so it is measured in a fresh interpreter as well -
+  # within this file the topic is loaded from the first test on and [unknown]
+  # never fires again.
+  #
+  # Written out here rather than shared with field-7.17 and fieldText-4.1 on
+  # purpose: what the three have in common is the SCAFFOLDING, and the script
+  # in the middle is the whole test. A helper that took the script would be
+  # six lines around one argument, and the fault it guards against is a frame
+  # count - which is exactly what another layer of frames would obscure.
+  set here [file normalize [file dirname [file dirname [info script]]]]
+  set path [::tclpdfTest::scratch button-ua-first.tcl]
+  set channel [open $path w]
+  puts $channel [list lappend auto_path $here]
+  puts $channel {
+    package require tclpdf
+    set doc [tclpdf new -unit mm -format a4 -version 2.0]
+    $doc tagged 1
+    $doc page add
+    set caption "The very first button"
+    set seen "nothing"
+    $doc field radio rate -buttons [list \
+        [list full {20 40 5 5} -label {set seen $caption}]]
+    $doc destroy
+    puts $seen
+  }
+  close $channel
+  set out [exec [info nameofexecutable] $path]
+  file delete $path
+  set out
+} -result {The very first button}
+
+test fieldButton-7.14 {the entry says page, label and description by name} -body {
+  # What tells a description from an option is the dash, and -contents is the
+  # way to give one that begins with one. Saying it twice is refused: both
+  # would become the one /Contents of that widget and one of them would be
+  # written and the other dropped. A page that is no page index is refused at
+  # the call that named it, before the document has been touched.
+  set doc [buttonTaggedDoc -version 2.0]
+  $doc field radio pick -tooltip "Pick one" -buttons {
+    {none {20 40 5 5} -contents "-- none of them --"}
+  }
+  set twice [::tclpdfTest::refusal {
+    $doc field radio rate -buttons {
+      {full {20 50 5 5} "The full rate" -contents "The full rate"}
+    }
+  }]
+  set page [::tclpdfTest::refusal {
+    $doc field radio pace -buttons {{fast {20 60 5 5} "Fast" -page -1}}
+  }]
+  $doc write [::tclpdfTest::scratch button-ua-named.pdf]
+  set kids [buttonKids $doc pick]
+  set known [llength [$doc field list]]
+  file delete [::tclpdfTest::scratch button-ua-named.pdf]
+  $doc destroy
+  # AND BEFORE ANYTHING HAS BEEN RECORDED. -unison is a PDF 1.5 flag and the
+  # floor for it is pinned further down in the same method, so a page checked
+  # only by the core - which runs last - would leave a REFUSED call having
+  # bound the document to 1.5. Measured on the one thing that shows it: the
+  # writer remembers the highest requirement so that the version can no
+  # longer be lowered past it, and after this refusal it may be. The same
+  # reason [FieldTaken] is asked twice.
+  set old [buttonDoc]
+  catch {
+    $old field radio rate -unison 1 -buttons {
+      {a {20 40 5 5} "One" -page -1}
+      {a {20 50 5 5} "Two"}
+    }
+  }
+  set lower [catch {$old configure -version 1.4}]
+  $old destroy
+  list [regexp {/Contents \(-- none of them --\)} [lindex $kids 0]] \
+      [lrange $twice 0 3] [string match {full*} [lindex $twice 4]] \
+      [lrange $page 0 2] $known $lower
+} -result {1 {TCLPDF FIELD BUTTON CONTENTS} 1 {TCLPDF FIELD PAGE} 1 0}
+
+test fieldButton-7.15 {veraPDF accepts a spread set and a labelled one} -constraints {
+  verapdf dejavu
+} -body {
+  # The only tool here that knows the UA rules. Three files: the set spread
+  # over two sheets under UA-1 and under UA-2, and the set with a label on
+  # every button under UA-2.
+  set out {}
+  foreach part {1 2} {
+    set doc [expr {$part == 1 ? [buttonSpreadDoc] :
+        [buttonSpreadDoc -version 2.0]}]
+    $doc structure H1 -script { $doc text "Notices" -at {20 25} }
+    $doc structure Sect -script {
+      $doc structure Lbl -script { $doc text "I have read it" -at {20 38} }
+      $doc field radio read -tooltip "Confirm on every sheet" -unison 1 \
+          -buttons {
+            {yes {60 38 5 5} "Sheet one, read" -page 0}
+            {yes {60 38 5 5} "Sheet two, read" -page 1}
+          }
+    }
+    $doc ua -part $part
+    lappend out {*}[buttonVerapdf $doc button-spread-verapdf-$part.pdf ua$part]
+  }
+  # The labelled set is UA-2 and UA-2 only, and that is not a gap in this
+  # test: -label pins the file at PDF 2.0, and ISO 14289-1, 6.1 makes UA-1 a
+  # PDF 1.7 format - [$doc ua -part 1] refuses the claim before a validator
+  # ever sees the file. Measured on the same bytes: veraPDF's UA-1 profile
+  # fails them under 7.18.4-2, "If the Form element omits a Role attribute
+  # ... it shall have only one child: an object reference", which is exactly
+  # the rule the 2.0 floor exists for. So the label is what a UA-1 form
+  # cannot have, and its /Contents is what it has instead (fieldButton-7.7).
+  set doc [buttonTaggedDoc -version 2.0]
+  $doc structure H1 -script { $doc text "Membership" -at {20 25} }
+  $doc structure Sect -script {
+    $doc structure Lbl -script { $doc text "What you pay" -at {20 35} }
+    $doc field radio rate -tooltip "What you pay" -buttons {
+      {full {20 40 5 5} -label {$doc text "The full rate" -at {27 42}}}
+      {reduced {20 48 5 5} -label {$doc text "The reduced rate" -at {27 50}}}
+    }
+  }
+  $doc ua -part 2
+  lassign [buttonVerapdf $doc button-label-verapdf.pdf ua2 ua1] good counter
+  lappend out $good [string match {*clause="7.18.4" testNumber="2"*} $counter]
+  set out
+} -result {ok ok ok 1}
 
 cleanupTests

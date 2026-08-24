@@ -1239,6 +1239,101 @@ test field-7.18 {-contents runs in step with -widgets, or is refused} -body {
   set code
 } -result {TCLPDF FIELD DECLARE CONTENTS}
 
+test field-7.20 {-labels runs in step with -widgets, or is refused} -body {
+  # The second list of point 3, and it is counted like the first: one script
+  # per widget, empty where a widget has no label of its own. A shorter list
+  # labels a widget nobody meant - the scripts would slide one place up.
+  set doc [fieldDoc -version 2.0]
+  oo::objdefine $doc export FieldDeclare
+  set code [::tclpdfTest::refusal {
+    $doc FieldDeclare rate -type Btn -build FieldStubBuild -kid FieldStubKid \
+        -widgets {{{20 40 5 5}} {{20 50 5 5}} {{20 60 5 5}}} \
+        -labels {{$doc text "one" -at {20 40}} {$doc text "two" -at {20 50}}}
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF FIELD DECLARE LABELS}
+
+test field-7.21 {-labels and -label are the two shapes of one field} -body {
+  # A field has either one widget or several, so the singular and the plural
+  # are never both right. -labels on a field declared with -rect says the one
+  # thing that helps: its label is -label.
+  set doc [fieldDoc -version 2.0]
+  oo::objdefine $doc export FieldDeclare
+  set plural [::tclpdfTest::refusal {
+    $doc FieldDeclare customer -type Tx -build FieldStubBuild \
+        -rect {20 40 80 8} -labels {{$doc text "Name" -at {20 40}}}
+  }]
+  # And the singular on a field with several widgets stays refused - the
+  # group's label is not a widget's label at all (ISO 14289-2, 8.10.2.2,
+  # second paragraph), and the message has to name both roads out.
+  set message {}
+  catch {
+    $doc FieldDeclare rate -type Btn -build FieldStubBuild -kid FieldStubKid \
+        -widgets {{{20 40 5 5}} {{20 50 5 5}}} \
+        -label {$doc text "Rate" -at {20 35}}
+  } message options
+  $doc destroy
+  list $plural [dict get $options -errorcode] \
+      [string match {*structure Lbl*} $message] \
+      [string match {*-labels*} $message]
+} -result {{TCLPDF FIELD DECLARE LABELS} {TCLPDF FIELD DECLARE LABEL} 1 1}
+
+test field-7.22 {a label on one widget of a set needs PDF 2.0 too} -body {
+  # The floor is the arrangement's, not the field's: a Lbl inside a Form is
+  # what ISO 32000-1, Table 340 did not have, and veraPDF holds a 1.7 file to
+  # it under 7.18.4-2 - measured, and it does not ask how many widgets the
+  # field has. A set of scripts that are all empty asks for nothing and
+  # raises nothing, which is what a radio field without labels passes.
+  set doc [fieldDoc]
+  oo::objdefine $doc export FieldDeclare
+  set code [::tclpdfTest::refusal {
+    $doc FieldDeclare rate -type Btn -build FieldStubBuild -kid FieldStubKid \
+        -widgets {{{20 40 5 5}} {{20 50 5 5}}} \
+        -labels {{$doc text "full" -at {27 40}} {}}
+  }]
+  set empty [catch {
+    $doc FieldDeclare pace -type Btn -build FieldStubBuild -kid FieldStubKid \
+        -widgets {{{20 60 5 5}} {{20 70 5 5}}} -labels {{} {}}
+  }]
+  $doc destroy
+  list $code $empty
+} -result {{TCLPDF VERSION 2.0} 0}
+
+test field-7.23 {each label lands in ITS widget's Form element, before the OBJR} -body {
+  # ISO 14289-2, 8.10.2.2: the Lbl "shall in turn be a direct descendent of a
+  # Form structure element that also includes the object reference to the
+  # widget annotation" - THAT widget's, not the field's, of which there is no
+  # element at all. So a set of two with one label has two Form elements and
+  # one Lbl, in the first of them, and it stands before the reference because
+  # the order of /K is the reading order.
+  oo::define ::tclpdf::document::document {
+    method FieldLabelledBuild {name record} { return {FT /Btn} }
+    method FieldLabelledKid {name record} {
+      return [list AP [::tclpdf::pdfObj dictionary [list \
+          N [my FieldAppearanceStream $record N {my rect -at {0 0} \
+              -size [dict get $record extent] -stroke {0 0 0} -width 0.2}]]]]
+    }
+  }
+  set doc [fieldTaggedDoc -version 2.0]
+  set caption "The full rate"
+  oo::objdefine $doc export FieldDeclare
+  $doc FieldDeclare rate -type Btn -build FieldLabelledBuild \
+      -kid FieldLabelledKid -widgets {{{20 40 5 5}} {{20 50 5 5}}} \
+      -tooltip "What you pay" -contents {"the full rate" "the reduced rate"} \
+      -labels [list {$doc text $caption -at {27 42}} {}]
+  $doc write [::tclpdfTest::scratch field-ua-labels.pdf]
+  set forms [fieldElements $doc Form]
+  set labels [fieldElements $doc Lbl]
+  file delete [::tclpdfTest::scratch field-ua-labels.pdf]
+  $doc destroy
+  list [llength $forms] [llength $labels] \
+      [regexp {/K \[ ?[0-9]+ 0 R.*?/Type /OBJR} [lindex $forms 0]] \
+      [regexp {/S /Lbl} [lindex $labels 0]] \
+      [regexp {/Type /OBJR} [lindex $forms 1]] \
+      [regexp {/K \[} [lindex $forms 1]]
+} -result {2 1 1 1 1 0}
+
 test field-7.16 {the OBJR names the widget's page, not the current one} -body {
   # An OBJR "has to name the page its annotation sits on" (ISO 32000-2,
   # 14.7.5.3), and a field names its page with -page - which is not the page

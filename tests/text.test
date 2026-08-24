@@ -2349,4 +2349,154 @@ test text-21.7 {textWidth takes font options and refuses the rest} -body {
   set answers
 } -result {1 1 1 1 1 1 1 0}
 
+# --- 22. the break hyphen of a line the CALLER broke ------------------------
+#
+# [text -width] breaks its own lines and knows which of them end on a hyphen
+# it put there; -breakHyphen is the same knowledge for a caller who broke the
+# lines himself and draws them one by one. The table is that caller
+# (tableDraw.tcl), and until this existed a hyphenated table cell extracted
+# with the hyphen in the word.
+
+test text-22.1 {a hand-broken line brackets its break hyphen like a paragraph} \
+    -body {
+  # ISO 32000-1, 14.8.2.6: the hyphen is not a character of the text, so it is
+  # shown inside a Span with an EMPTY ActualText. Three shows instead of one,
+  # all of them inside the SAME text object - no position is recomputed.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "Betriebskostenab-" -at {20 20} -breakHyphen 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {/Span <</ActualText <FEFF>>> BDC} $stream] \
+      [regexp {\(Betriebskostenab\) Tj} $stream] [regexp {\(-\) Tj} $stream] \
+      [regexp -all {BT} $stream]
+} -result {1 1 1 1}
+
+test text-22.2 {without the option, and untagged with it, nothing changes} -body {
+  # Two documents that must keep the bytes they always had: the one that never
+  # says -breakHyphen, and the one that says it without a tree to say it in.
+  set result {}
+  foreach {tagged option} {0 {} 1 {} 0 {-breakHyphen 1}} {
+    set doc [tclpdf new -unit mm -compress 0]
+    if {$tagged} {
+      $doc tagged 1
+    }
+    $doc page add
+    $doc text "Betriebskostenab-" -at {20 20} {*}$option
+    lappend result [regexp {\(Betriebskostenab-\) Tj} \
+        [::tclpdfTest::content $doc]]
+    $doc destroy
+  }
+  set result
+} -result {1 1 1}
+
+test text-22.3 {the split line ends where the whole line ends} \
+    -constraints haveFace -body {
+  # THE HARD CONDITION of the whole feature: a kerning pair lives inside ONE
+  # glyph run, so three shows in place of one drop the two pairs that straddle
+  # the hyphen - and [textWidth] measured the line as one run and counted
+  # them. The difference is put back as a TJ number at each of the two places
+  # it was lost; here it is read back out of the stream and added to what the
+  # three pieces measure. "Av-Wo" in DejaVu Sans is the case: both pairs kern.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font embed body $::textFace
+  $doc text "Av-Wo" -at {20 20} -family body -size 9 -breakHyphen 1
+  set stream [::tclpdfTest::content $doc]
+  set whole [$doc textWidth "Av-Wo" -family body -size 9]
+  set pieces 0
+  foreach piece {Av - Wo} {
+    set pieces [expr {$pieces + [$doc textWidth $piece -family body -size 9]}]
+  }
+  # The corrections: a TJ array that shows no string at all. In document units
+  # - a TJ number is thousandths of the text space and is SUBTRACTED.
+  set corrections 0
+  foreach line [split $stream \n] {
+    if {[regexp {^\[(-?[0-9.]+)\] TJ$} $line -> value]} {
+      set corrections [expr {$corrections
+          - [::tclpdf::geometry fromPoints [expr {$value * 9 / 1000.0}] mm]}]
+    }
+  }
+  $doc destroy
+  # Both pairs found, and the drawn line as wide as the measured one. The
+  # tolerance is what a TJ number rounds to in the stream, not slack: measured
+  # 7.9e-09 mm, eight picometres, and the split without the corrections is off
+  # by 0.0214 mm - six orders of magnitude apart.
+  list [expr {$corrections != 0}] \
+      [expr {abs($pieces + $corrections - $whole) < 1e-6}]
+} -result {1 1}
+
+test text-22.4 {a standard face writes no correction, because it kerns none} \
+    -body {
+  # The package does not kern the standard fourteen (TextPointsOne), so the
+  # split costs nothing there and not one byte is added. Said as a test rather
+  # than as a comment: this is what keeps every existing document that
+  # hyphenates in Helvetica at the bytes it has.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "Av-Wo" -at {20 20} -size 9 -breakHyphen 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {TJ} $stream] [regexp {\(Av\) Tj} $stream] \
+      [regexp {\(Wo\) Tj} $stream]
+} -result {0 1 1}
+
+test text-22.5 {-breakHyphen is refused where it cannot be true} -body {
+  # Three refusals, all of them before a byte reaches the stream: a value that
+  # is not a boolean, a paragraph whose own breaker decides per line, and a
+  # string with no hyphen to call a break.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set answers {}
+  foreach {arguments match} {
+    {-breakHyphen maybe} {*takes a boolean*}
+    {-width 40 -breakHyphen 1} {*line breaker decides*}
+    {-breakHyphen 1} {*has no hyphen in it*}
+  } {
+    set caught [catch {$doc text "Rechnung" -at {20 20} {*}$arguments} message]
+    lappend answers $caught [string match $match $message]
+  }
+  # And the stream is untouched by all three.
+  lappend answers [string length [::tclpdfTest::content $doc]]
+  $doc destroy
+  set answers
+} -result {1 1 1 1 1 1 0}
+
+test text-22.6 {a measuring call takes the option and ignores it} -body {
+  # The option list of a block is one list: a caller builds it once, asks
+  # [textHeight] whether it fits and hands the same list to [text]. Refusing
+  # -breakHyphen there would break exactly that.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set plain [$doc textHeight "Betriebskostenab- rechnung" -width 40]
+  set said [$doc textHeight "Betriebskostenab- rechnung" -width 40 \
+      -breakHyphen 0]
+  $doc destroy
+  expr {$plain == $said}
+} -result 1
+
+test text-22.7 {the word comes back out of the file without the break hyphen} \
+    -constraints havePdfToText -body {
+  # Asked of poppler rather than of the package. -layout, because the default
+  # mode REFLOWS and guesses: it joins a line that ends in "-" with the next
+  # one and drops the hyphen, which is right for a break and wrong for
+  # "Nord- Suedseite". -layout reports what the file says.
+  set path [::tclpdfTest::scratch text-breakhyphen.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc text "Betriebskostenab-" -at {20 20} -breakHyphen 1
+  $doc text "rechnung" -at {20 25}
+  $doc write $path
+  $doc destroy
+  set text [exec pdftotext -layout $path -]
+  file delete $path
+  # The two lines joined the way a reader joins them: the hyphen is gone, so
+  # the word is whole. Without the bracket this reads "Betriebskostenab-".
+  join [lrange [split [string trim $text] \n] 0 1] {}
+} -result "Betriebskostenabrechnung"
+
 cleanupTests

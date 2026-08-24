@@ -265,7 +265,7 @@ oo::define ::tclpdf::document::document {
     set defaults {at {} rotate 0 align left width {} anchor baseline
         height {} paginate 0 columns 1 gutter {} balance 0
         indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-        avoid {} avoidMargin 0 tag P expansion {} hyphenate 0}
+        avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -282,6 +282,10 @@ oo::define ::tclpdf::document::document {
     if {![string is boolean -strict [dict get $options paginate]]} {
       return -code error "tclpdf: -paginate takes a boolean, not\
           \"[dict get $options paginate]\""
+    }
+    if {![string is boolean -strict [dict get $options breakHyphen]]} {
+      return -code error "tclpdf: -breakHyphen takes a boolean, not\
+          \"[dict get $options breakHyphen]\""
     }
     # Checked here, before the mark below is opened - a wrong value used to
     # act as baseline in silence, so -anchor middle drew a baseline block and
@@ -306,6 +310,31 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options paginate] && $width eq {}} {
       return -code error "tclpdf: -paginate breaks a paragraph over pages, and\
           a paragraph needs -width"
+    }
+    # -breakHyphen says: the "-" this line ends on is a BREAK, put there by
+    # whoever broke the line, and not a character of the text. It is refused
+    # in two cases, both of them a caller saying something that cannot be
+    # true.
+    #
+    # With -width there IS a breaker, and it knows per line what a caller
+    # could only say for all of them - a paragraph of five lines has the
+    # hyphen on two of them. Taking the option there and letting the breaker
+    # win would be silence about a contradiction.
+    #
+    # And a string with no hyphen in it has no break hyphen to bracket. That
+    # is a typo or a line the caller closed himself and forgot the "-" on;
+    # either way nothing would happen, which is the kind of nothing that
+    # takes an afternoon to find in a stream.
+    if {[dict get $options breakHyphen]} {
+      if {$width ne {}} {
+        return -code error "tclpdf: -breakHyphen names the break hyphen of ONE\
+            line, and with -width the line breaker decides that for each line\
+            it makes"
+      }
+      if {[string first "-" $string] < 0} {
+        return -code error "tclpdf: -breakHyphen says the line ends on a break\
+            hyphen, and \"$string\" has no hyphen in it"
+      }
     }
     if {$width ne {}} {
       # The paragraph half of this topic. Loaded here rather than at the top
@@ -432,8 +461,15 @@ oo::define ::tclpdf::document::document {
       } else {
         # Answers nothing, as a single line always has: the y under a
         # paragraph is what the block road returns.
+        #
+        # The last argument is what makes a hand-broken line come out like a
+        # broken paragraph: the same bracket, written by the same code, from
+        # the same place in the text object. Normalised to 0/1 because
+        # [option parse] hands on what the caller wrote, and "yes" reaching
+        # the stream road would be read as a string there.
         my TextRun $string $state $x $y [dict get $options rotate] $shift \
-            [my TextLift $state [dict get $options anchor]]
+            [my TextLift $state [dict get $options anchor]] \
+            [expr {[dict get $options breakHyphen] ? 1 : 0}]
       }
     } result info]
     if {[llength $mark]} {
@@ -886,19 +922,51 @@ oo::define ::tclpdf::document::document {
       set at [string last "-" $string]
       set first [string range $string 0 $at-1]
       set second [string range $string $at+1 end]
+      # WHAT THE SPLIT COSTS, put back at the two places it is lost.
+      #
+      # Kerning is a property of a PAIR, and a pair only exists inside one
+      # glyph run: three shows in place of one drop the two pairs that
+      # straddle the hyphen. Nothing on the page says so - it is a fraction of
+      # a point - but [textWidth] measured the line as ONE run and counted
+      # them, so the drawn line came out wider than the measured one, and the
+      # table that measures a column with one and fills it with the other is
+      # exactly where that shows up. Measured with DejaVu Sans at 9 pt: the
+      # line "Av-" is 4.9253 mm as one run and 5.0105 mm as three, 0.085 mm
+      # of a column nobody accounted for.
+      #
+      # The two numbers go where the pairs were, so the hyphen and the tail
+      # stand where they would have stood - a single correction at the end of
+      # the line would give the same total and move both of them.
+      #
+      # A standard face writes neither: this package does not kern the
+      # standard fourteen (see TextPointsOne), so both numbers come out zero
+      # and not a byte changes.
+      set kernFirst [my TextBreakKern $state $first "-"]
+      set kernSecond [my TextBreakKern $state "$first-" $second]
       # The three pieces are drawn in the order the text cursor moves, and
       # that is always left to right. In a right-to-left line the piece BEHIND
       # the break hyphen is the one that sits on the left, so the two swap -
       # each piece is still reversed inside itself by TextShow.
+      #
+      # The corrections swap with them, and not because they belong to a
+      # piece: a pair kerned in the logical order appears between the same two
+      # glyphs on the page, and reversing the line reverses which side of the
+      # hyphen each of them lands on.
       if {[dict get $state direction] eq "rtl"} {
         lassign [list $second $first] first second
+        lassign [list $kernSecond $kernFirst] kernFirst kernSecond
       }
       my content [my TextShow $font $state $first $byTJ]
       # The empty ActualText is UTF-16 with nothing after the byte order mark.
       my content "/Span <</ActualText <FEFF>>> BDC\n"
+      # Inside the bracket: what the pen does on its way to the break hyphen
+      # is part of the break hyphen, and an empty ActualText covers a piece of
+      # content, not a piece of the text.
+      my content $kernFirst
       my content [my TextShow $font $state "-" $byTJ]
       my content "EMC\n"
       if {$second ne {}} {
+        my content $kernSecond
         my content [my TextShow $font $state $second $byTJ]
       }
     } else {
@@ -909,6 +977,38 @@ oo::define ::tclpdf::document::document {
       my content "Q\n"
     }
     return
+  }
+
+  # The kerning of the ONE pair that sits between two pieces of a line the
+  # drawing had to cut in half, as the TJ array that puts it back - empty when
+  # there is nothing to put back, which is the usual answer and the reason
+  # nothing is written then.
+  #
+  # Measured rather than looked up, and that is deliberate: the pair is found
+  # by asking what the two pieces measure TOGETHER and what they measure
+  # apart, so ligatures, the fallback chain and a face without a GPOS table
+  # all answer for themselves. Looking the pair up would mean finding the
+  # glyph the last character of the left piece became, which is the one thing
+  # a run does not hand back.
+  #
+  # SIGNS and UNITS: a TJ number is subtracted from the advance and counts in
+  # thousandths of the unscaled text space (9.4.3), so a pair that tightens -
+  # joined is narrower than the pieces - enters positive. -stretch needs no
+  # factor: Tz scales a TJ number exactly as it scales a glyph width.
+  method TextBreakKern {state left right} {
+    if {$left eq {} || $right eq {} || [dict get $state size] <= 0} {
+      return {}
+    }
+    lassign [my TextPoints $state $left$right] joined
+    lassign [my TextPoints $state $left] before
+    lassign [my TextPoints $state $right] after
+    set delta [expr {$joined - $before - $after}]
+    # A hair under a thousandth of a point is rounding, not a kerning pair.
+    if {abs($delta) < 1e-6} {
+      return {}
+    }
+    return "\[[::tclpdf::pdfObj num [expr {-1000.0 * $delta
+        / [dict get $state size]}]]\] TJ\n"
   }
 
   # Does this run have to produce its word spacing by hand?
@@ -1991,4 +2091,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.16
+package provide tclpdf::text 1.17

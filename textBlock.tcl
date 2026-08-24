@@ -55,7 +55,7 @@ namespace eval ::tclpdf::textBlock {
   variable options {at {} rotate 0 align left width {} anchor baseline
       height {} paginate 0 columns 1 gutter {} balance 0
       indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-      avoid {} avoidMargin 0 tag P expansion {} hyphenate 0}
+      avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0}
 
   # Where a line may break. Two classes, told apart by what happens to the
   # character when the line breaks there:
@@ -105,10 +105,33 @@ oo::define ::tclpdf::document::document {
   # Break a string into lines that fit a width, in the document unit.
   # Explicit newlines are honoured and start a new paragraph.
   method textLines {string args} {
+    return [lmap line [my TextLinesBroken $string {*}$args] {lindex $line 0}]
+  }
+
+  # The lines of [textLines], each with the one thing about it the STRING
+  # cannot carry: whether the "-" the line ends on is a break the breaker put
+  # there, or a character of the text. Every element is {text hyphen}.
+  #
+  # The public method drops the flag because that is the shape four releases
+  # of callers read, and it is the right shape for what it is used for -
+  # counting lines, measuring a column, filling a listbox. But whoever DRAWS
+  # these lines himself needs the flag: a break hyphen is not a character of
+  # the text (14.8.2.6), and only the breaker knows which of the two a "-" at
+  # the end of a line is. The table is that caller - it breaks here and draws
+  # in tableDraw.tcl, one [text] per line - and without this the hyphen went
+  # out as an ordinary character, so a tagged table extracted as
+  # "Betriebskostenab-rechnung".
+  #
+  # Internal because the pair shape is not a public promise; what a caller
+  # outside the package needs is the other half, -breakHyphen on [text], and
+  # that one is documented.
+  method TextLinesBroken {string args} {
     my TextInit
     set options [my TextBlockOptions $args textLines]
     lassign [my TextBlockLines $string $options] lines
-    return [lmap line $lines {dict get $line text}]
+    return [lmap line $lines {
+      list [dict get $line text] [dict get $line hyphen]
+    }]
   }
 
   # The height a block would occupy, without drawing it - for deciding whether
@@ -1476,4 +1499,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.10
+package provide tclpdf::textBlock 1.11

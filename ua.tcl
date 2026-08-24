@@ -609,8 +609,9 @@ oo::define ::tclpdf::document::document {
             wants one or the other on every widget annotation (8.10.2.3), and\
             the field's /TU is not it (8.10.2.4). Pass -label {script} to draw\
             the label into the widget's own Form element, or -contents to\
-            describe it; the buttons of \[\$doc field radio\] take theirs as\
-            the third word of -buttons, {value {x y w h} description}"
+            describe it; the buttons of \[\$doc field radio\] take theirs\
+            inside their own entry of -buttons, as the third word or as\
+            -contents, and their label as that entry's -label"
       }
     }
     # And in the tree. A widget outside it is invisible to a reader that

@@ -14,6 +14,9 @@
 #   $doc field radio ship   -buttons {{air {20 60 5 5} "By air freight"}
 #                                      {sea {20 70 5 5} "By sea freight"}} \
 #       -value air
+#   $doc field radio read   -unison 1 -buttons {
+#       {yes {20 80 5 5} "Sheet one, read" -page 0}
+#       {yes {20 80 5 5} "Sheet two, read" -page 1}}
 #   $doc field button clear -rect {150 260 30 8} -caption "Clear" \
 #       -action reset
 #
@@ -206,18 +209,19 @@ oo::define ::tclpdf::document::document {
 
   # -- the radio button -----------------------------------------------------
 
-  # $doc field radio <name> -buttons {{value {x y w h} ?description?} ...}
+  # $doc field radio <name>
+  #     -buttons {{value {x y w h} ?description? ?-option value ...?} ...}
   #     ?-page n? ?-value name? ?-default name?
   #     ?-unison 0|1? ?-notoggle 0|1?
   #     ?-mark check|cross|circle|square? ?-markSize n? ?-color c?
   #     ?-border c? ?-borderWidth n? ?-background c?
   #     ?-readonly 0|1? ?-required 0|1? ?-noexport 0|1? ?-tooltip text?
   #
-  # -buttons is the whole set: one {value {x y w h} ?description?} entry per
-  # button, in the order they are to stand in /Kids. The value is the name of
-  # that button's ON state and what an exported form carries when it is the
-  # one selected; the rectangle counts from the top left corner of the page
-  # like every other -rect in this package.
+  # -buttons is the whole set: one entry per button, in the order they are to
+  # stand in /Kids. The value is the name of that button's ON state and what
+  # an exported form carries when it is the one selected; the rectangle counts
+  # from the top left corner of the page like every other -rect in this
+  # package.
   #
   # The third word is the one thing PDF/UA needs and no other field type has
   # to give: the description of THAT BUTTON, written as /Contents on its
@@ -230,6 +234,31 @@ oo::define ::tclpdf::document::document {
   # "Export values are intended for processing and are not intended to be
   # descriptive." Left out where nothing is claimed; [$doc ua] refuses the
   # claim and names the button that has none.
+  #
+  # AND THEN OPTIONS, in the form every call of this package takes - see
+  # [FieldRadioEntry] for why the entry goes on in -name value pairs rather
+  # than in a fourth and a fifth word:
+  #
+  #   -page n         the page THIS button sits on, where it is not the
+  #                   field's own -page. One field, one exported value, and
+  #                   its buttons wherever the question is asked - a form
+  #                   that repeats "have you read the notice" on every sheet
+  #                   collects all the answers in one field, which is what
+  #                   12.7.5.2.4 has /Kids for.
+  #   -label {script} what the script draws becomes the VISIBLE caption of
+  #                   this button: a Lbl inside the Form structure element of
+  #                   this button and of no other (ISO 14289-2, 8.10.2.2).
+  #                   That is the piece -contents cannot give - a description
+  #                   is read out, a label is seen - and it needs PDF 2.0, for
+  #                   the reason field.tcl sets out at [FieldDeclare].
+  #   -contents text  the description, for a caller who would rather name it
+  #                   than count words - and the way to give one that begins
+  #                   with a dash.
+  #
+  # The label of the SET is none of the three. ISO 14289-2, 8.10.2.2 puts it
+  # in the element that holds every button's Form, which is the caller's own,
+  # so it is written as [$doc structure Lbl] beside the field - and -label on
+  # the call itself is refused, saying so.
   #
   # It is called -buttons rather than -options because "options" in this
   # package means the -name value pairs of a call, in every error message
@@ -260,6 +289,26 @@ oo::define ::tclpdf::document::document {
           in -buttons: {value {x y w h} description}. -tooltip describes the\
           set itself"
     }
+    # -label is refused for the same reason and NOT for the same one, which is
+    # why it says so here rather than being left to the core. A description is
+    # missing from the set; a LABEL of the set is a thing that exists and has
+    # a place of its own - ISO 14289-2, 8.10.2.2 puts a widget's label inside
+    # that widget's Form element and the group's label in the element that
+    # holds all of them, and the second of those is the caller's. So the
+    # refusal names both roads: the per-button one it is not, and the group
+    # one it may have meant.
+    if {[dict get $options label] ne {}} {
+      return -code error -errorcode {TCLPDF FIELD BUTTON LABEL} \
+          "tclpdf: field radio \"$name\" takes no -label - a label belongs to\
+          ONE widget and a radio field is the whole set, so ISO 14289-2,\
+          8.10.2.2 leaves it two places and neither of them is here. The\
+          caption BESIDE one button is that button's own -label, in its entry\
+          of -buttons: {value {x y w h} ?description? -label {script}}. The\
+          caption of the WHOLE SET goes \"within the parent structure element\
+          that also contains ... the Form structure element for each widget\",\
+          which is the element you opened: draw it in \[\$doc structure Lbl\]\
+          beside the field"
+    }
 
     # The name has to be free before anything else is settled. [FieldDeclare]
     # asks the same question again at the end of this method and is the one
@@ -282,14 +331,8 @@ oo::define ::tclpdf::document::document {
     set seen {}
     set checked {}
     foreach button $buttons {
-      if {[llength $button] < 2 || [llength $button] > 3} {
-        return -code error -errorcode [list TCLPDF FIELD BUTTON BUTTONS $button] \
-            "tclpdf: each entry of -buttons of field radio \"$name\" is\
-            {value {x y w h} ?description?} - the name of that button's on\
-            state, where it sits and what it is called for someone who cannot\
-            see it - not \"$button\""
-      }
-      lassign $button value rect description
+      lassign [my FieldRadioEntry $name $button] \
+          value rect description page label
       set value [my FieldButtonExport $value \
           "the value \"$value\" in -buttons of field radio \"$name\""]
       # Two buttons under one on-state name is not a mistake by itself - it
@@ -307,7 +350,8 @@ oo::define ::tclpdf::document::document {
             give the second button its own name"
       }
       dict set seen $value 1
-      lappend checked [list $value [my FieldRectCheck $name $rect] $description]
+      lappend checked [list $value [my FieldRectCheck $name $rect] \
+          $description $page $label]
     }
     foreach which {value default} {
       set wanted [dict get $options $which]
@@ -354,25 +398,119 @@ oo::define ::tclpdf::document::document {
     }
     # ONE field, N widgets - point 3 of the contract at the head of field.tcl,
     # in its second shape. Each entry of -widgets is {rect page data}: the
-    # button's rectangle, the field's page (empty, so the core takes -page)
-    # and the one thing that is the BUTTON's rather than the set's, its
-    # on-state name.
+    # button's rectangle, the page IT sits on (empty, so the core takes the
+    # field's -page) and the one thing that is the BUTTON's rather than the
+    # set's, its on-state name. The core has taken a page per widget since
+    # the shape existed - "so a set may span pages" - and this is the module
+    # handing one through: a set with buttons on three sheets is one field
+    # with one value, and the alternative is three fields a reader resolves
+    # separately.
     my FieldDeclare $name -type Btn \
         -build FieldRadioBuild -kid FieldRadioKid \
         -widgets [lmap button $checked {
-          lassign $button value rect
-          list $rect {} [dict create value $value]
+          lassign $button value rect description page
+          list $rect $page [dict create value $value]
         }] \
         -contents [lmap button $checked {lindex $button 2}] \
+        -labels [lmap button $checked {lindex $button 4}] \
         -page [dict get $options page] \
         -tooltip [dict get $options tooltip] \
-        -label [dict get $options label] \
         -flags [::tclpdf::field flags $flagNames] \
         -data [dict merge $options [dict create \
             buttons $checked \
             state [expr {[dict get $options value] eq {}
                 ? $::tclpdf::fieldButton::off : [dict get $options value]}]]]
     return $name
+  }
+
+  # ONE ENTRY OF -buttons, read into the five things it can say: the on-state
+  # name, the rectangle, the description, the page and the label script.
+  #
+  # THE FORM IS TWO WORDS, THEN A DESCRIPTION, THEN OPTIONS:
+  #
+  #   {value {x y w h} ?description? ?-page n? ?-label {script}? ?-contents t?}
+  #
+  # A FOURTH AND A FIFTH POSITION WOULD HAVE BEEN CHEAPER TO WRITE and is not
+  # what this package does anywhere else. Three reasons, and the third is the
+  # one that settles it:
+  #
+  #   Nobody can read {full {45 38 5 5} "The full rate" 2} and say what the 2
+  #   is. The third word already carries a meaning of its own, and a fourth
+  #   with a different one is a position a caller has to count to.
+  #
+  #   A position is a decision taken once. The next thing a button needs -
+  #   its own colour, its own mark - would be the fifth word, and then the
+  #   sixth, and a caller who wants only the last of them has to write empty
+  #   braces for the ones between. An option is added in one line and named
+  #   at the call.
+  #
+  #   The package HAS a form for this and one module for it: -name value
+  #   pairs, read by [::tclpdf::option parse], which is where "unknown option
+  #   \"-pge\" - known are: -contents -label -page" comes from. A table
+  #   column and a table cell take a DICTIONARY (table.tcl, tableLayout.tcl)
+  #   for the same job, and that would do here too - but a dictionary has no
+  #   place for the two words that already stand in front, so the entry would
+  #   have had to become one thing or the other altogether, and every -buttons
+  #   ever written would have had to be rewritten. This way the old form is
+  #   the new form with nothing after it.
+  #
+  # WHAT TELLS A DESCRIPTION FROM AN OPTION is the dash, and it is the only
+  # rule there is: the first word after the rectangle is the description
+  # unless it begins with one. So a description that DOES begin with a dash -
+  # "-- none --" is a real caption on a real form - is written as -contents,
+  # which is the same word every other field type uses for it. Everything
+  # after the description is -name value pairs and the name carries its dash;
+  # [option parse] is content without one, and here it may not be, because
+  # then a bare word would be an option in some entries and a description in
+  # others.
+  method FieldRadioEntry {name button} {
+    set form "{value {x y w h} ?description? ?-page n? ?-label {script}?\
+        ?-contents text?}"
+    set what "each entry of -buttons of field radio \"$name\" is $form - the\
+        name of that button's on state, where it sits, what it is called for\
+        someone who cannot see it, and then options in the form every call of\
+        this package takes"
+    set rest [lrange $button 2 end]
+    set description {}
+    if {[llength $rest] && [string index [lindex $rest 0] 0] ne "-"} {
+      set description [lindex $rest 0]
+      set rest [lrange $rest 1 end]
+    }
+    set named 1
+    foreach {option value} $rest {
+      if {[string index $option 0] ne "-"} {
+        set named 0
+        break
+      }
+    }
+    if {[llength $button] < 2 || [llength $rest] % 2 || !$named} {
+      return -code error -errorcode [list TCLPDF FIELD BUTTON BUTTONS $button] \
+          "tclpdf: $what - not \"$button\""
+    }
+    set entry [::tclpdf::option parse {page {} label {} contents {}} $rest \
+        "-buttons of field radio \"$name\""]
+    if {$description ne {} && [dict get $entry contents] ne {}} {
+      return -code error -errorcode [list TCLPDF FIELD BUTTON CONTENTS $button] \
+          "tclpdf: the button \"[lindex $button 0]\" of field radio \"$name\"\
+          is described twice - \"$description\" as the third word of its entry\
+          and \"[dict get $entry contents]\" as its -contents. Both become the\
+          one /Contents of that widget (ISO 32000-2, Table 166), so one of\
+          them would be written and the other silently dropped. Say it once"
+    }
+    if {$description eq {}} {
+      set description [dict get $entry contents]
+    }
+    # The page is checked HERE, at the call that named it, and not left to
+    # [FieldDeclare] at the end of this method: the version floor for -unison
+    # is raised between the two, and a call that is going to be refused must
+    # not have raised it. [FieldPageCheck] answers the current page for an
+    # empty one, which is not what an empty entry means here - it means the
+    # field's own -page, and the core fills that in.
+    if {[dict get $entry page] ne {}} {
+      my FieldPageCheck [dict get $entry page]
+    }
+    return [list [lindex $button 0] [lindex $button 1] $description \
+        [dict get $entry page] [dict get $entry label]]
   }
 
   # The pairs of the radio FIELD - the parent of 12.7.5.2.4, which carries

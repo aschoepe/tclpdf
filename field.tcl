@@ -70,7 +70,7 @@
 # the document cannot be measured doing. The reset action (12.7.6.3) is the
 # one form action that is purely declarative and would be admissible.
 #
-# PDF/UA, AND THE CALLER DOES NOTHING FOR IT BEYOND [$doc tagged 1]. Five
+# PDF/UA, AND THE CALLER DOES NOTHING FOR IT BEYOND [$doc tagged 1]. Six
 # pieces, and every one of them is the CORE's - a field type knows nothing
 # about the structure tree, which is the whole point of point 6:
 #
@@ -93,19 +93,24 @@
 #                [fieldsWithoutDescription], which ua.tcl judges.
 #   Contents     the accessible name of ONE WIDGET, from -contents, and only
 #                a field with several has one to give (ISO 14289-2, 8.10.2.4).
+#   Lbl          the VISIBLE caption of one widget, drawn by a script the
+#                caller gives: -label where the field has one widget, one
+#                script per widget in -labels where it has several. It lands
+#                inside that widget's own Form element and nowhere else
+#                (8.10.2.2), and it needs PDF 2.0 - see [FieldDeclare].
 #
 # /Tabs /S on every page carrying annotations is output.tcl's and was there
 # before this module: it writes it for every page that has any, and /S
 # satisfies UA-1 (7.18.3, where it is the only admissible value) and UA-2
 # (8.9.3.3, which also takes A and W) alike.
 #
-# The LABEL a caller draws beside a field is the caller's to mark: ISO
-# 14289-2, 8.10.2.2 wants it in one or more Lbl elements in the same parent
-# element that holds the Form, and [$doc structure Lbl] does that - the one
-# place where the two have to be arranged rather than derived, because the
-# package draws no field label of its own. The push button's -caption is not
-# one: it is painted INTO the widget's appearance, and 8.10.3.2.1 asks for a
-# /Contents reflecting the intent of /MK /CA instead.
+# THE LABEL OF A GROUP IS NOT THAT Lbl, and it is the caller's to arrange:
+# 8.10.2.2 wants that one in the parent element which holds every Form of the
+# set, and [$doc structure Lbl] beside the field does it - the one place where
+# the two have to be arranged rather than derived, because the package draws
+# no field label of its own. The push button's -caption is neither: it is
+# painted INTO the widget's appearance, and 8.10.3.2.1 asks for a /Contents
+# reflecting the intent of /MK /CA instead.
 #
 # ---------------------------------------------------------------------------
 # THE CONTRACT FOR A FURTHER FIELD TYPE
@@ -150,7 +155,7 @@
 #
 #      my FieldDeclare $name -type Btn -build FieldRadioBuild \
 #          -kid FieldRadioKid -widgets {{rect ?page? ?data?} ...} \
-#          ?-contents {text ...}? \
+#          ?-contents {text ...}? ?-labels {script ...}? \
 #          ?-page n? ?-tooltip text? ?-flags n? ?-data dict?
 #
 #    That is the shape of 12.7.5.2.4 - ONE field carrying /Kids, and the
@@ -177,6 +182,23 @@
 #    a field with four widgets describes none of the four - and a type that
 #    lets its caller name them passes them straight through. A field with one
 #    widget has -tooltip for the same job and -contents is refused for it.
+#
+#    -labels is the SECOND list running in step with -widgets, and it is to
+#    -label what -contents is to -tooltip: one script per widget, drawn into
+#    the Lbl inside THAT widget's own Form structure element. 8.10.2.4 names
+#    the two in one breath - "a label, a Contents entry, or both, shall be
+#    present for each annotation" - so the visible caption beside one button
+#    of a set has the same place to go as the invisible description does. A
+#    field with one widget says -label, and -labels is refused for it; the
+#    two are never both given, because a field has either one widget or
+#    several. Every script runs in the caller's scope, at the level [field]
+#    recorded, exactly as -label does - see [FieldStructureElement].
+#
+#    A LABEL FOR THE GROUP IS NEITHER OF THEM. 8.10.2.2 puts it in the
+#    element that holds all the widgets, which is the caller's own, and it is
+#    written as [$doc structure Lbl] beside the field. That is why -label on
+#    a field with several widgets stays refused: there are as many Form
+#    elements as widgets and no one of them is the group's.
 #
 #    What it does: checks the name against 12.7.4.2 (a partial field name
 #    holds no period), refuses a name already taken - by another field OR by
@@ -588,7 +610,7 @@ oo::define ::tclpdf::document::document {
   method FieldDeclare {name args} {
     set options [::tclpdf::option parse {
       type {} build {} kid {} rect {} widgets {} contents {} label {}
-      page {} tooltip {} flags 0 data {}
+      labels {} page {} tooltip {} flags 0 data {}
     } $args "field declare"]
     if {$name eq {}} {
       return -code error -errorcode {TCLPDF FIELD NAME} \
@@ -665,7 +687,29 @@ oo::define ::tclpdf::document::document {
           inside that widget's own Form structure element, and a label for the\
           whole group inside the element that holds all of them, which is the\
           one you opened. Draw the group's label in \[\$doc structure Lbl\]\
-          beside the field, and describe each widget with its own -contents"
+          beside the field, label each widget with its own script in -labels,\
+          and describe each of them with its own -contents"
+    }
+    # -labels is the same thing per widget, and the two options are the two
+    # shapes of one field: a field with one widget has -label, a field with
+    # several has -labels, and neither ever answers for the other.
+    if {[dict get $options labels] ne {} && $widgets eq {}} {
+      return -code error -errorcode {TCLPDF FIELD DECLARE LABELS} \
+          "tclpdf: -labels of field \"$name\" is one label script per widget\
+          and this field was declared with -rect, which is ONE widget - the\
+          field object itself (ISO 32000-2, 12.5.6.19). Its label is -label,\
+          in the singular, and it goes into the one Form structure element\
+          there is"
+    }
+    if {$widgets ne {}
+        && [llength [dict get $options labels]] != [llength $widgets]
+        && [dict get $options labels] ne {}} {
+      return -code error -errorcode {TCLPDF FIELD DECLARE LABELS} \
+          "tclpdf: -labels of field \"$name\" has\
+          [llength [dict get $options labels]] label script(s) and -widgets\
+          names [llength $widgets] widget(s) - the two lists run in step, one\
+          script per widget (ISO 14289-2, 8.10.2.2). Give every widget its\
+          own, empty where it has none, or leave -labels out altogether"
     }
     # AND IT IS A PDF 2.0 FEATURE, which is not pedantry but the difference
     # between the two editions of the standard. ISO 32000-2, Table 368 says of
@@ -684,7 +728,18 @@ oo::define ::tclpdf::document::document {
     # a widget's Form element to quiet a validator would be a false statement
     # about the document. So the floor is pinned instead, and a PDF/UA-1
     # document describes its widgets with -contents.
-    if {[dict get $options label] ne {}} {
+    #
+    # A widget of a SET is under the same rule and the floor is the same one:
+    # the Lbl sits inside a Form element there as well, and 7.18.4-2 does not
+    # ask how many widgets the field has.
+    set labelled [expr {[dict get $options label] ne {}}]
+    foreach script [dict get $options labels] {
+      if {$script ne {}} {
+        set labelled 1
+        break
+      }
+    }
+    if {$labelled} {
       my RequireVersion 2.0 "-label of a form field (the Lbl inside its Form\
           structure element, ISO 32000-2, Table 368)"
     }
@@ -724,7 +779,8 @@ oo::define ::tclpdf::document::document {
         }
         lappend entries [dict create index $index \
             rect [my FieldRectCheck $name $entryRect] \
-            page $entryPage entry $entryData label {} \
+            page $entryPage entry $entryData \
+            label [lindex [dict get $options labels] $index] \
             contents [lindex [dict get $options contents] $index]]
         incr index
       }
@@ -912,9 +968,10 @@ oo::define ::tclpdf::document::document {
   # each annotation".
   #
   # The label counted here is the widget's OWN - the Lbl inside its Form
-  # element, from -label. A group's label sits in the element around the
-  # whole field and 8.10.2.2 keeps the two apart, so it does not answer this
-  # question for any single widget.
+  # element, from -label on a field with one widget and from -labels on one
+  # of a set. A group's label sits in the element around the whole field and
+  # 8.10.2.2 keeps the two apart, so it does not answer this question for any
+  # single widget.
   method fieldWidgetsWithoutDescription {} {
     set missing {}
     dict for {name record} [my state fields] {

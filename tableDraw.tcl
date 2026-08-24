@@ -53,6 +53,23 @@ oo::define ::tclpdf::document::document {
     if {![llength $lines]} {
       return
     }
+    # One flag per line, saying whether the "-" that line ends on is a break
+    # the breaker made or a character of the text - see TableMeasure, which
+    # reads both off the same answer. Defaulted rather than demanded: a
+    # didParseCell hook may hand back a cell it built itself, and a cell
+    # without the key is a cell whose lines nobody hyphenated.
+    set hyphens {}
+    if {[dict exists $cell hyphens]} {
+      set hyphens [dict get $cell hyphens]
+    }
+    # A list of a different length is no list at all here: [foreach] over two
+    # lists pads the short one with the empty string, and an empty string is
+    # not a boolean, so the cell would be refused rather than drawn. A hook
+    # that rewrites the lines and leaves the flags where they were is the way
+    # that happens.
+    if {[llength $hyphens] != [llength $lines]} {
+      set hyphens [lrepeat [llength $lines] 0]
+    }
     set padding [dict get $style padding]
     set leading [dict get $cell leading]
     set textHeight [expr {[llength $lines] * $leading}]
@@ -86,18 +103,26 @@ oo::define ::tclpdf::document::document {
     # options of TableFont - two lists existed and one grew a key. Here there
     # is nothing to grow.
     #
-    # WHAT THE TABLE DOES NOT DO, and a reader should know before looking for
-    # it: the break hyphen goes out as a plain U+002D. On the [text -width]
-    # road a tagged document brackets it in a Span with an empty ActualText
-    # (14.8.2.6) so that extraction gives the word back whole, and the table
-    # cannot, because that bracket is written by the breaker around a run it
-    # placed itself and this cell has only the finished string. Splitting the
-    # line to bracket the hyphen here would cost the kerning across the break
-    # and make the drawn line wider than the measured one - the very defect
-    # the paragraph above rules out. Extracting a hyphenated table cell gives
-    # "Betriebskostenab-rechnung"; that is the price of the option, and it is
-    # the manual's business as much as this comment's.
-    foreach line $lines {
+    # -breakHyphen IS handed on, and it is the opposite case. A break hyphen
+    # is not a character of the text (14.8.2.6), so a tagged document sets it
+    # in a Span with an empty ActualText and extraction gives the word back
+    # whole. The breaker knows which lines end on one; the STRINGS do not,
+    # which is why the flags travel beside them from TableMeasure to here.
+    # Until they did, a tagged table extracted as "Betriebskostenab-rechnung".
+    #
+    # The line is NOT cut up here, and that is the point of doing it this way:
+    # the cutting happens inside [text], in the same text object, after the
+    # position of the line has been computed from the WHOLE string. So the
+    # drawn line starts where the measured one said it starts, at the same Td,
+    # for every alignment - which a cell that cut the string itself and made
+    # two calls could not promise.
+    foreach line $lines hyphen $hyphens {
+      # What [text] is told about the trailing hyphen. Kept in a variable
+      # rather than written into the calls: the option is refused for a
+      # string with no hyphen in it (text.tcl), and the decimal road below
+      # draws the HEAD of a line as a call of its own - a head that ends
+      # before the separator and carries no "-" at all.
+      set breakArg [list -breakHyphen $hyphen]
       switch -- $align {
         decimal {
           # The decimal separators line up, whatever comes before them. The
@@ -130,9 +155,12 @@ oo::define ::tclpdf::document::document {
                   -anchor top -align [my TextAlign right $state] \
                   {*}[my TableFont $style] -color [dict get $style color]
             }
+            # The TAIL carries the break, whatever the head looks like: the
+            # tail is what the line ends on.
             my text [string range $line $separator end] -at [list $at $top] \
                 -anchor top -align [my TextAlign left $state] \
-                {*}[my TableFont $style] -color [dict get $style color]
+                {*}[my TableFont $style] -color [dict get $style color] \
+                {*}$breakArg
             set top [expr {$top + $leading}]
             continue
           }
@@ -154,7 +182,7 @@ oo::define ::tclpdf::document::document {
       }
       my text $line -at [list $at $top] -anchor top \
           -align [my TextAlign $anchor $state] {*}[my TableFont $style] \
-          -color [dict get $style color]
+          -color [dict get $style color] {*}$breakArg
       set top [expr {$top + $leading}]
     }
     return
@@ -225,4 +253,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.5
+package provide tclpdf::tableDraw 1.6
