@@ -82,6 +82,45 @@ test errorcode-1.2 {the guard can find one - a counter-check} -body {
     set bare
 } -result 1
 
+# The first word of every -errorcode LITERAL in a module, wherever it is not
+# one of the two that may stand there. Its own procedure because errorcode-1.3
+# asks it of the whole tree and errorcode-1.4 asks it of a fixture, and the
+# fixture is worth nothing if the two ask different questions.
+#
+# THREE SPELLINGS, and all three are right - none of them is to be unified:
+#
+#     -errorcode [list TCLPDF FIELD ALIGN $value]     834 places
+#     -errorcode {TCLPDF COLORFONT ALIAS}             148 places
+#     -errorcode \                                      34 places
+#         [list TCLPDF STRUCTURE NAME duplicate name]
+#
+# Braces where no fact is substituted, [list] where one is, and the
+# continuation wherever the message is too long for one line - a thousand and
+# sixteen codes in all, counted 2026-08-25, beside the one deliberate TCL
+# LOOKUP COMMAND in tclpdf.tcl. Until that day this guard read the first shape
+# and nothing else, so a hundred and eighty-two of them were never looked at -
+# and it reported nothing, which reads exactly like a clean tree.
+#
+# The continuations are closed up before the scan, or the code that sits on the
+# line BELOW "-errorcode \" is not beside the switch to be found.
+#
+# Comments are read along with the code on purpose. A comment that quotes a
+# code - afm.tcl has one - either quotes it right or is wrong about the
+# package, and both are worth hearing about.
+proc errorcodeFirstWords {module text} {
+    regsub -all {\\\n[ \t]*} $text { } folded
+    set wrong {}
+    # "--" before the pattern: it begins with a dash and regexp would otherwise
+    # read it as an option of its own.
+    foreach {-> code} [regexp -all -inline -- \
+            {-errorcode\s+(?:\[list\s+|\{)\s*([A-Za-z_]+)} $folded] {
+        if {$code ni {TCLPDF TCL}} {
+            lappend wrong "$module: $code"
+        }
+    }
+    return $wrong
+}
+
 test errorcode-1.3 {every code begins with TCLPDF, or is one of Tcl's own} -body {
     # A code of another shape cannot be trapped by a script written against
     # this package. The one exception is deliberate and named here: the
@@ -89,16 +128,31 @@ test errorcode-1.3 {every code begins with TCLPDF, or is one of Tcl's own} -body
     # it carries Tcl's own code and behaves exactly like a mistyped command.
     set wrong {}
     ::tclpdfTest::eachModule module text {
-        # "--" before the pattern: it begins with a dash and regexp would
-        # otherwise read it as an option of its own.
-        foreach {-> code} [regexp -all -inline -- \
-                {-errorcode \[list ([A-Za-z_]+)} $text] {
-            if {$code ni {TCLPDF TCL}} {
-                lappend wrong "$module: $code"
-            }
-        }
+        lappend wrong {*}[errorcodeFirstWords $module $text]
     }
     set wrong
 } -result {}
+
+test errorcode-1.4 {the guard reads all three spellings - a counter-check} -body {
+    # errorcode-1.3 read ONE of them until 2026-08-25 - "-errorcode \[list" on
+    # a single line - and a hundred and eighty-two refusals therefore went past
+    # it unlooked at. It reported nothing, which read like a clean tree.
+    #
+    # So the shapes are put to it here, one bad code in each, and the guard has
+    # to name all three. Written as text rather than as three real refusals
+    # because what the guard reads is source, not a raised error.
+    errorcodeFirstWords module.tcl {
+        return -code error -errorcode [list WRONGONE TOPIC CLASS $fact] \
+            "tclpdf: the [list] spelling, where a fact is substituted"
+        return -code error -errorcode {WRONGTWO TOPIC CLASS} \
+            "tclpdf: the brace spelling, where none is"
+        return -code error \
+            -errorcode [list WRONGTHREE TOPIC CLASS] \
+            "tclpdf: the continuation, where the message is too long for one\
+            line and the code sits under the switch rather than beside it"
+        return -code error -errorcode [list TCLPDF TOPIC CLASS] \
+            "tclpdf: and this one is right, so it is not to be named"
+    }
+} -result {{module.tcl: WRONGONE} {module.tcl: WRONGTWO} {module.tcl: WRONGTHREE}}
 
 cleanupTests

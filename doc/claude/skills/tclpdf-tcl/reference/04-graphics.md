@@ -13,6 +13,8 @@ $doc rect -at {20 30} -size {40 20} -fill {0.9 0.92 0.96} -stroke steelblue -wid
 $doc rect -at {65 30} -size {40 20} -radius 3 -fill steelblue -opacity 0.5    ;# rounded corners
 $doc circle -at {130 40} -radius 10 -fill crimson -stroke black -width 0.3    ;# -at is the CENTRE
 $doc ellipse -at {160 40} -size {30 16} -fill {cmyk 0 0.16 1 0}               ;# -at is the CENTRE
+$doc arc -at {130 40} -radius 16 -start 30 -extent 120 -stroke crimson -width 1  ;# 0 is 3 o'clock, CCW
+$doc arc -at {160 40} -size {30 16} -extent 240 -style pieslice -fill plum      ;# arc|pieslice|chord
 $doc polygon -points {20 60 40 75 20 90} -fill navy                            ;# closed by default
 $doc polygon -points {50 60 70 75 50 90} -stroke navy -close 0                 ;# open
 $doc curve -from {90 90} -c1 {100 60} -c2 {120 60} -to {130 90} -stroke {0.2 0.5 0.3} -width 0.6
@@ -25,6 +27,8 @@ $doc path -segments {{move 20 100} {line 60 100} {line 60 130} {line 20 130} {cl
 ```
 
 Common options: `-fill`, `-stroke` (colours), `-width` (0 = thinnest line the device draws), `-dash` (lengths, or `none`/`solid`), `-cap` (`butt round square`), `-join` (`miter round bevel`), `-miter` (1 or more), `-opacity`, `-blend`. A refused shape - a point that is not a number, an unknown segment, an odd `-points` count - leaves nothing behind in the page. Points are `-at`/`-from`/`-to`/`-c1`/`-c2`, exactly two numbers each; segments are `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}`, `{close}` and begin with a `move`.
+
+`arc` takes the same `-radius` or `-size {w h}` as `ellipse` and `-at` is the centre. Angles are **degrees, 0 at three o'clock, growing counter-clockwise as the page is read** (90 points up); `-start` defaults to 0, `-extent` is required and may be negative, `360` is the whole ellipse and beyond ±360 - or exactly 0 - is refused. `-style` is `arc` (open), `pieslice` or `chord`. `-style arc` takes no `-fill`: PDF closes an open path before filling it, so the result would silently be a chord - write `-style chord` when that is what you mean.
 
 ## Clipping - always inside save/restore
 

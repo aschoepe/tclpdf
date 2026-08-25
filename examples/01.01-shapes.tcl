@@ -287,6 +287,142 @@ $doc line -from {180 184} -to {285 184} -dash solid
 $doc restore
 $doc text "-dash none / inherited from style -dash {2 1} / -dash solid" -at {180 190}
 
+# -- a third page, portrait: arcs ------------------------------------------
+
+# [arc] is the only shape here whose contract is an ANGLE, so the page is
+# built round the one thing that has to be read off a drawing rather than out
+# of a manual: which way the angles go.
+$doc page add -orientation portrait
+$doc font -size 9
+
+$doc text "arc - a piece of a circle or an ellipse" -at {20 22} -size 12
+$doc line -from {20 25} -to {190 25} -stroke {0.15 0.35 0.6} -width 1.2
+
+# -- the angle convention, on a dial ----------------------------------------
+
+# DEGREES, 0 AT THREE O'CLOCK, GROWING COUNTER-CLOCKWISE AS THE PAGE IS READ.
+# That is the Tk canvas convention. It is deliberately not the direction the
+# document's own y axis suggests - y counts downwards here, so somebody
+# thinking in raw coordinates would expect 90 to point down. Angles are read
+# off a drawing, and on a drawing 90 points up.
+$doc text "The angles: 0 at three o'clock, counter-clockwise as the page is read." \
+    -at {20 36}
+
+set cx 55
+set cy 75
+$doc circle -at [list $cx $cy] -radius 28 -stroke {0.8 0.8 0.8} -width 0.3 -dash {1 1}
+# The four quarter marks, each drawn as a short arc of its own so that the
+# tick really sits where the package puts that angle - a hand-placed tick
+# would only show where this script thinks it is.
+foreach {degrees label at} {0 "0" {88 75} 90 "90" {55 42} 180 "180" {20 75} 270 "270" {55 110}} {
+  $doc arc -at [list $cx $cy] -radius 28 -start [expr {$degrees - 1.5}] -extent 3 \
+      -stroke {0.2 0.35 0.55} -width 2
+  $doc text $label -at $at -align center
+}
+# And the sweep itself: -start 20, -extent 115, drawn thick, so the direction
+# is visible and not merely asserted.
+$doc arc -at [list $cx $cy] -radius 20 -start 20 -extent 115 \
+    -stroke crimson -width 2
+$doc text "-start 20 -extent 115" -at {55 78} -align center -size 8
+
+# -- the three styles, side by side -----------------------------------------
+
+# Same centre, same radius, same sweep - only -style differs. arc is the
+# curve alone and stays open; pieslice adds the two radii to the centre;
+# chord adds the straight line back to where the curve began.
+$doc text "-style: what closes the shape" -at {105 50}
+set x 118
+foreach style {arc pieslice chord} {
+  # The dotted circle is the whole ellipse the arc is a piece of, so that
+  # what each style ADDS to the curve can be seen against it.
+  $doc circle -at [list $x 75] -radius 14 -stroke {0.85 0.85 0.85} -width 0.2 -dash {1 1}
+  if {$style eq "arc"} {
+    # An open arc has no inside to fill - see the refusal at the foot of the
+    # page - so this one is stroked and nothing else.
+    $doc arc -at [list $x 75] -radius 14 -start 30 -extent 200 \
+        -stroke {0.2 0.35 0.55} -width 1.5
+  } else {
+    $doc arc -at [list $x 75] -radius 14 -start 30 -extent 200 -style $style \
+        -fill {0.75 0.85 0.95} -stroke {0.2 0.35 0.55} -width 1.5
+  }
+  $doc text "-style $style" -at [list $x 97] -align center -size 8
+  incr x 30
+}
+
+# -- -radius against -size --------------------------------------------------
+
+# As on [ellipse]: -radius draws a circular arc, -size {w h} an elliptical
+# one, and -size is the FULL width and height, not the radii. -at is the
+# CENTRE for both, which is the one place arc, circle and ellipse differ from
+# rect.
+$doc text "-radius is a circular arc, -size {w h} an elliptical one - -at is the CENTRE of both." \
+    -at {20 128}
+$doc arc -at {45 155} -radius 20 -start 0 -extent 270 -style pieslice \
+    -fill {1 0.85 0.6} -stroke {0.6 0.4 0.1} -width 0.6
+$doc text "-radius 20 -extent 270" -at {45 183} -align center
+$doc arc -at {120 155} -size {70 30} -start 0 -extent 270 -style pieslice \
+    -fill {1 0.85 0.6} -stroke {0.6 0.4 0.1} -width 0.6
+$doc text "-size {70 30} -extent 270" -at {120 183} -align center
+
+# A whole turn is allowed and is the whole ellipse: at 360 the two radii of a
+# pieslice have length zero, which is redundant rather than wrong.
+$doc arc -at {178 155} -size {30 30} -extent 360 -style pieslice \
+    -fill {0.8 0.9 0.8} -stroke {0.2 0.5 0.2} -width 0.6
+# The line to the centre is the two radii of the pieslice lying on top of one
+# another: at a whole turn the start and the end of the sweep coincide, so
+# both have length zero. Redundant, not wrong - and cheaper than a special
+# case in the check.
+$doc text "-extent 360, a whole turn" -at {178 183} -align center -size 8
+
+# -- a dial made of arcs ----------------------------------------------------
+
+# What the command is actually for: a ring gauge, drawn as one background arc
+# and one foreground arc over it. Nothing else in the package draws this -
+# an ellipse is all or nothing, and a path would need the Bezier arithmetic
+# spelled out by hand.
+$doc text "What it is for: a gauge is two arcs, a pie chart is a handful." -at {20 196}
+$doc save
+$doc style -cap round
+foreach {x share label} {40 0.72 "72 %" 86 0.35 "35 %" 132 0.93 "93 %"} {
+  # The track and the reading are the same call twice - only -extent differs,
+  # and it is the share of the same sweep. A negative -extent runs clockwise.
+  $doc arc -at [list $x 222] -radius 16 -start 210 -extent -240 \
+      -stroke {0.88 0.88 0.88} -width 5
+  $doc arc -at [list $x 222] -radius 16 -start 210 -extent [expr {-240 * $share}] \
+      -stroke {0.2 0.55 0.75} -width 5
+  $doc text $label -at [list $x 224] -align center -size 10
+}
+$doc restore
+
+# A pie chart: each slice a pieslice, each starting where the last one ended.
+# -extent is the share of the turn, so the shares add up in the call rather
+# than in the caller's head.
+set start 90
+foreach {share colour} {0.4 {0.85 0.35 0.1} 0.25 {0.2 0.55 0.75}
+    0.2 {0.95 0.75 0.2} 0.15 {0.45 0.65 0.35}} {
+  set extent [expr {$share * 360}]
+  $doc arc -at {175 222} -radius 17 -start $start -extent $extent -style pieslice \
+      -fill $colour -stroke white -width 0.8
+  set start [expr {$start + $extent}]
+}
+$doc text "40 / 25 / 20 / 15 %" -at {175 245} -align center -size 8
+
+# -- the one refusal that has a reason --------------------------------------
+
+# -style arc is an OPEN path, and PDF closes an open subpath implicitly
+# before it fills it (8.5.3.1). A filled -style arc would therefore come out
+# as a chord - drawn correctly, and not the shape that was asked for, with
+# nothing in the file to say so. Tk ignores -fill on an open arc without a
+# word. This package refuses instead, and names the two styles that mean it.
+$doc text "The one refusal worth showing: an open arc has no inside to fill." \
+    -at {20 252}
+catch {$doc arc -at {50 50} -radius 20 -extent 90 -style arc -fill red} message options
+$doc font -size 8
+$doc text "\$doc arc -at {50 50} -radius 20 -extent 90 -style arc -fill red" -at {20 258}
+$doc text $message -at {20 264} -width 170
+$doc text "-errorcode: [dict get $options -errorcode]" -at {20 276}
+$doc font -size 9
+
 exampleFooter $doc
 
 $doc write $target

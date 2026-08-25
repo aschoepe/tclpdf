@@ -268,4 +268,126 @@ test geometry-transform-10.5 {-translate with -rotate: the displacement is not t
   geometryRound $matrix
 } -result {0.00 1.00 -1.00 0.00 28.35 0.00}
 
+# -- the arc segmenter ---------------------------------------------------------
+#
+# [arcSegments] is the one place the Bezier approximation of an elliptical arc
+# is written, and it has two callers that reach it from different directions:
+# [svgPath::Arc] from SVG's endpoint parametrisation, [shape arc] from the
+# centre parametrisation. It is tested here rather than through either of
+# them, because what it answers is arithmetic and neither caller's output
+# shows it undisguised - one formats through a transform, the other mirrors
+# the y axis first.
+
+# Whether a point lies on the ellipse about {cx cy}: (x/rx)^2 + (y/ry)^2 = 1.
+proc arcOnEllipse {cx cy rx ry x y} {
+  set dx [expr {($x - $cx) / double($rx)}]
+  set dy [expr {($y - $cy) / double($ry)}]
+  return [format %.6f [expr {$dx * $dx + $dy * $dy}]]
+}
+
+set arcPi [expr {acos(-1)}]
+
+test geometry-arc-11.1 {a sweep is cut into quarter turns, no more} -body {
+    # One segment per quarter turn or less: beyond that the approximation
+    # departs from the ellipse visibly. 91 degrees is the case that decides
+    # whether the count rounds up rather than down.
+    set counts {}
+    foreach degrees {45 90 91 180 270 360 -90 -180 -360} {
+        lappend counts [llength [::tclpdf::geometry arcSegments 0 0 10 10 1 0 0 \
+            [expr {$degrees * $arcPi / 180.0}]]]
+    }
+    set counts
+} -result {1 1 2 2 3 4 1 2 4}
+
+test geometry-arc-11.2 {a sweep of nothing is no segments, not a division by zero} -body {
+    # Neither caller can reach it - svgPath turns a degenerate arc into a
+    # line, [arc] refuses -extent 0 - but the count it would be cut into is
+    # zero, and dividing the sweep by it used to be the answer.
+    ::tclpdf::geometry arcSegments 0 0 10 10 1 0 0 0
+} -result {}
+
+test geometry-arc-11.3 {the last segment ends ON the ellipse, at the end angle} -body {
+    # The control points may sit anywhere; the END of each segment is a point
+    # of the curve itself, and the last one is where the sweep stops. A
+    # segmenter that loses a fraction of a step per piece still passes a
+    # count test and fails this one.
+    set result {}
+    foreach {degrees start} {90 0 270 30 360 0 -120 200 37 -15} {
+        set delta [expr {$degrees * $arcPi / 180.0}]
+        set from [expr {$start * $arcPi / 180.0}]
+        set segments [::tclpdf::geometry arcSegments 40 25 30 12 1 0 $from $delta]
+        lassign [lindex $segments end] -> -> -> -> x y
+        lappend result [arcOnEllipse 40 25 30 12 $x $y]
+        # And it is the point at start+delta, not merely somewhere on the
+        # curve.
+        # abs, because -0.0 formats as "-0.000000" and the sign of a zero
+        # is not what this is asking about.
+        lappend result [format %.6f [expr {abs($x - (40 + 30 * cos($from + $delta)))}]] \
+            [format %.6f [expr {abs($y - (25 + 12 * sin($from + $delta)))}]]
+    }
+    set result
+} -result {1.000000 0.000000 0.000000 1.000000 0.000000 0.000000 1.000000 0.000000 0.000000 1.000000 0.000000 0.000000 1.000000 0.000000 0.000000}
+
+test geometry-arc-11.4 {the curve BETWEEN the ends follows the ellipse too} -body {
+    # The end points are on the ellipse whatever the control points do - and
+    # a mutation that replaced 4/3*tan(step/4) by the constant 0.5523 (right
+    # for a quarter turn, wrong for every other step) survived a test that
+    # only read the ends. So the middle is read here: the Bezier at t = 0.5,
+    # which is where a badly placed control point is furthest off.
+    #
+    # The tolerance is the approximation's own error, not a fudge: one
+    # segment per quarter turn stays within about 3 parts in 10000 of the
+    # radius, so 0.001 passes the right curve and fails a constant alpha,
+    # which for a 37 degree sweep is out by more than a hundredth.
+    set result {}
+    foreach degrees {37 90 200 -140} {
+        set delta [expr {$degrees * $arcPi / 180.0}]
+        set segments [::tclpdf::geometry arcSegments 0 0 30 12 1 0 0 $delta]
+        set fromX 30.0
+        set fromY 0.0
+        set worst 0
+        foreach segment $segments {
+            lassign $segment x1 y1 x2 y2 endX endY
+            # The cubic at t = 0.5: (P0 + 3*P1 + 3*P2 + P3) / 8.
+            set midX [expr {($fromX + 3 * $x1 + 3 * $x2 + $endX) / 8.0}]
+            set midY [expr {($fromY + 3 * $y1 + 3 * $y2 + $endY) / 8.0}]
+            set off [expr {abs([arcOnEllipse 0 0 30 12 $midX $midY] - 1.0)}]
+            if {$off > $worst} {
+                set worst $off
+            }
+            set fromX $endX
+            set fromY $endY
+        }
+        lappend result [expr {$worst < 0.001}]
+    }
+    set result
+} -result {1 1 1 1}
+
+test geometry-arc-11.5 {a negative sweep runs the other way round} -body {
+    # Same start, same size, opposite sign: the two arcs are mirror images
+    # about the axis through the start point, so their end points differ in
+    # the sign of the offset and in nothing else. A segmenter that takes the
+    # absolute value of the sweep - the obvious way to get the count - draws
+    # both of them the same way and this is what says so.
+    set up [::tclpdf::geometry arcSegments 0 0 10 10 1 0 0 [expr {$arcPi / 2}]]
+    set down [::tclpdf::geometry arcSegments 0 0 10 10 1 0 0 [expr {-$arcPi / 2}]]
+    lassign [lindex $up end] -> -> -> -> ux uy
+    lassign [lindex $down end] -> -> -> -> dx dy
+    list [format %.6f [expr {abs($ux)}]] [format %.6f $uy] \
+        [format %.6f [expr {abs($dx)}]] [format %.6f $dy]
+} -result {0.000000 10.000000 0.000000 -10.000000}
+
+test geometry-arc-11.6 {the frame may be turned, and then nothing is axis-aligned} -body {
+    # cosPhi and sinPhi tilt the ellipse. svgPath needs it for the rotation
+    # argument of an "A" command; [arc] hands in 1 and 0 and never sees it -
+    # which is exactly why it is tested here and not there. A quarter turn of
+    # a 20 by 10 ellipse tilted by 90 degrees ends where the untilted one
+    # would have started.
+    set quarter [expr {$arcPi / 2}]
+    set segments [::tclpdf::geometry arcSegments 0 0 20 10 \
+        [expr {cos($quarter)}] [expr {sin($quarter)}] 0 $quarter]
+    lassign [lindex $segments end] -> -> -> -> x y
+    list [format %.6f $x] [format %.6f [expr {abs($y)}]]
+} -result {-10.000000 0.000000}
+
 cleanupTests

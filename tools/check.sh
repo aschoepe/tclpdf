@@ -585,6 +585,38 @@ else
   report_skip "$reference/check.tcl not present"
 fi
 
+echo "=== 11. the error code table in the manual is the one the source makes ==="
+
+# The table under "Every topic and its classes" says of itself that it is
+# generated rather than kept by hand - which is only true as long as somebody
+# notices when it stops matching. Nobody did: measured 2026-08-25 it was short
+# of one whole topic (LAYOUT) and of classes in ten others, because the two
+# throwaway scripts that had produced it were never kept and it was hand-edited
+# in between. A generated table nobody compares is a hand-kept table.
+#
+# Not a timestamp like the manual pages above, but a comparison: doc/tclpdf.md
+# is a SOURCE, edited by hand every day, and its date says nothing about this
+# one section. tools/mkerrorcodes.tcl prints the rows that differ and names the
+# command that repairs them.
+#
+# Under one interpreter only. It reads Tcl sources as text and writes Markdown;
+# there is no byte-array question in it, and the answer was measured to be the
+# same under both.
+if have tclsh8.6; then
+  if out=`tclsh8.6 tools/mkerrorcodes.tcl --check 2>&1`; then
+    report_pass "`echo \"$out\" | tail -1`"
+    # A class the tool cannot read off the source is not a difference and does
+    # not fail the run - but it is the one thing this check cannot cover, so it
+    # is never swallowed either.
+    echo "$out" | grep '^mkerrorcodes:' | sed 's/^/        /'
+  else
+    report_fail "the error code table in doc/tclpdf.md has drifted - see below"
+    echo "$out" | head -30
+  fi
+else
+  report_skip "the error code table - tclsh8.6 not installed"
+fi
+
 echo "==="
 echo "passed $pass, failed $fail, skipped $skip"
 test $skip -eq 0 || echo "NOTE: $skip check(s) did not run - skipped is not passed"

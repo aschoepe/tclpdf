@@ -360,6 +360,7 @@ oo::class create ::tclpdf::document::document {
       GraphicsColour graphics
       GraphicsOpacity graphics
       line shape
+      arc shape
       rect shape
       circle shape
       ellipse shape
@@ -832,4 +833,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.13
+package provide tclpdf::document 1.14

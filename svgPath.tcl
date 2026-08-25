@@ -35,6 +35,7 @@
 
 package require Tcl 8.6.11-
 package require tclpdf::pdfObj 1.0-
+package require tclpdf::geometry 1.4-
 
 namespace eval ::tclpdf::svgPath {
   namespace export {[a-z]*}
@@ -270,40 +271,19 @@ proc ::tclpdf::svgPath::Arc {transform x0 y0 rx ry rotation large sweep x1 y1} {
     set delta [expr {$delta + 2 * $pi}]
   }
 
-  # Step 4: one Bezier segment per quarter turn or less. Beyond that the
-  # approximation visibly departs from the ellipse.
-  set segments [expr {int(ceil(abs($delta) / ($pi / 2)))}]
-  set step [expr {$delta / $segments}]
-  set alpha [expr {4.0 / 3 * tan($step / 4)}]
+  # Step 4: the curve itself - one Bezier segment per quarter turn or less.
+  # That arithmetic is not written here: [shape arc] needs exactly the same
+  # segments from the CENTRE parametrisation it is handed, so it lives in
+  # geometry, where neither of its two callers owns it. What stays here is
+  # steps 1 to 3, which are what the endpoint parametrisation costs.
   set result {}
-  set angle $startAngle
-  for {set n 0} {$n < $segments} {incr n} {
-    set next [expr {$angle + $step}]
-    lassign [Ellipse $centreX $centreY $rx $ry $cosPhi $sinPhi $angle] ax ay
-    lassign [Ellipse $centreX $centreY $rx $ry $cosPhi $sinPhi $next] bx by
-    lassign [Tangent $rx $ry $cosPhi $sinPhi $angle] dax day
-    lassign [Tangent $rx $ry $cosPhi $sinPhi $next] dbx dby
-    append result "[Point $transform [expr {$ax + $alpha * $dax}] \
-        [expr {$ay + $alpha * $day}]] \
-        [Point $transform [expr {$bx - $alpha * $dbx}] \
-        [expr {$by - $alpha * $dby}]] [Point $transform $bx $by] c\n"
-    set angle $next
+  foreach segment [::tclpdf::geometry::arcSegments $centreX $centreY $rx $ry \
+      $cosPhi $sinPhi $startAngle $delta] {
+    lassign $segment x1 y1 x2 y2 endX endY
+    append result "[Point $transform $x1 $y1] \
+        [Point $transform $x2 $y2] [Point $transform $endX $endY] c\n"
   }
   return $result
-}
-
-proc ::tclpdf::svgPath::Ellipse {cx cy rx ry cosPhi sinPhi angle} {
-  set x [expr {$rx * cos($angle)}]
-  set y [expr {$ry * sin($angle)}]
-  return [list [expr {$cx + $cosPhi * $x - $sinPhi * $y}] \
-      [expr {$cy + $sinPhi * $x + $cosPhi * $y}]]
-}
-
-proc ::tclpdf::svgPath::Tangent {rx ry cosPhi sinPhi angle} {
-  set x [expr {-$rx * sin($angle)}]
-  set y [expr {$ry * cos($angle)}]
-  return [list [expr {$cosPhi * $x - $sinPhi * $y}] \
-      [expr {$sinPhi * $x + $cosPhi * $y}]]
 }
 
 # The signed angle between two vectors.
@@ -368,4 +348,4 @@ proc ::tclpdf::svgPath::Point {transform x y} {
   return "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]"
 }
 
-package provide tclpdf::svgPath 1.1
+package provide tclpdf::svgPath 1.2

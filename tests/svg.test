@@ -193,6 +193,33 @@ test svg-2.6 {an arc becomes Bezier segments} -body {
   list [regexp -all { c\n} $out] [regexp {^0 0 m} $out]
 } -result {2 1}
 
+test svg-2.6.1 {and the CONTROL POINTS of those segments, not only their ends} -body {
+  # svg-2.6 counts segments, svg-2.8 reads the end point - and between them
+  # they leave the two control points of every "c" unread. Measured on
+  # 2026-08-25: swapping the first control point with the second inside the
+  # segment loop left all of svg.test green, while every arc in every drawing
+  # came out as an S-curve. So the numbers are pinned here.
+  #
+  # A half circle of radius 10 from {0 0} to {20 0}, swept the short way: two
+  # quarter segments, alpha = 4/3*tan(pi/8) = 0.552285, so the first control
+  # point is one alpha-radius up from the start and the second one an
+  # alpha-radius to the left of the top.
+  set out [::tclpdf::svgPath operators {M0 0 A10 10 0 0 1 20 0} $plain]
+  set numbers {}
+  foreach line [split $out \n] {
+    if {![string match {* c} $line]} {
+      continue
+    }
+    # regexp rather than [split]: the operands of a "c" are written with a
+    # double space between the first pair and the second, and [split] on it
+    # yields an empty element between them.
+    foreach value [regexp -all -inline -- {-?[0-9.]+} $line] {
+      lappend numbers [format %.3f $value]
+    }
+  }
+  set numbers
+} -result {0.000 -5.523 4.477 -10.000 10.000 -10.000 15.523 -10.000 20.000 -5.523 20.000 0.000}
+
 test svg-2.7 {an arc with a zero radius is a straight line} -body {
   ::tclpdf::svgPath operators {M0 0 A0 10 0 0 1 20 0} $plain
 } -result "0 0 m\n20 0 l\n"

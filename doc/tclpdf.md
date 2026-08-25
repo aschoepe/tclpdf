@@ -72,7 +72,7 @@ There is no other package that **tclpdf itself** loads. Barcodes look like an ex
 
 ## Coordinates and units
 
-Positions are given in the document unit, and **y counts from the top of the page downwards** — the opposite of PDF's own convention, which the package converts on the way out. `-at` names the **top left** corner of what is being placed — with one exception, `circle` and `ellipse`, where it is the centre, because that is how a circle is described. A form or a pattern script is no exception to the rule: inside them the origin is that object's own **top left** corner and y counts downwards, exactly as on the page — the conversion happens against the object's height instead of the page's. Every number written into the file is held to what a PDF real can carry (ISO 32000-1, Annex C.2, about ±3.403×10³⁸): a length or coordinate beyond that range is refused at the call — a reader would otherwise drop the whole content stream over it.
+Positions are given in the document unit, and **y counts from the top of the page downwards** — the opposite of PDF's own convention, which the package converts on the way out. `-at` names the **top left** corner of what is being placed — with one exception, `circle`, `ellipse` and `arc`, where it is the centre, because that is how a circle is described and where an angle is measured from. A form or a pattern script is no exception to the rule: inside them the origin is that object's own **top left** corner and y counts downwards, exactly as on the page — the conversion happens against the object's height instead of the page's. Every number written into the file is held to what a PDF real can carry (ISO 32000-1, Annex C.2, about ±3.403×10³⁸): a length or coordinate beyond that range is refused at the call — a reader would otherwise drop the whole content stream over it.
 
 *doc* **coords** *x y*
 
@@ -442,13 +442,15 @@ The refusal is the same rule the package applies to a character the face has no 
 
 *doc* **ellipse -at** *{x y}* **-size** *{w h}* ?**-fill** *c*?
 
+*doc* **arc -at** *{x y}* ( **-radius** *r* | **-size** *{w h}* ) ?**-start** *deg*? **-extent** *deg* ?**-style** *arc*|*pieslice*|*chord*?
+
 *doc* **polygon -points** *{x y x y ...}* ?**-close** *1*? ?**-fill** *c*?
 
 *doc* **curve -from** *{x y}* **-c1** *{x y}* **-c2** *{x y}* **-to** *{x y}*
 
 *doc* **path -segments** *list* ?**-fill** *c*? ?**-stroke** *c*? ?**-rule** *evenodd*?
 
-: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width, 0 or more — 0 is the thinnest line the device can draw), **-dash** (a pattern: a list of lengths of 0 or more, not all of them zero; `none` or `solid` for an unbroken line), **-cap** (`butt`, `round` or `square`), **-join** (`miter`, `round` or `bevel`), **-miter** (the miter limit: how far a pointed join may reach before it is cut to a bevel; 1 or more, and 1 bevels every join), **-opacity** and **-blend**. **-radius** is a length of 0 or more; on a rectangle it rounds the corners and 0 leaves them square. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside; anything else is refused. **-from**, **-to**, **-at**, **-c1**, **-c2** are exactly two numbers **-at** and **-size** are checked the way every other shape's are — two numbers each, and a third word is refused rather than silently dropped.. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates, and a path begins with a `move`. **-close** joins the end of a `polygon`, a `curve` or a `path` back to its start; a polygon is closed by default, the other two are not. `circle` and `ellipse` are one command under two names: either takes **-radius** for a circle or **-size** *{w h}* for an ellipse, and **-at** is the centre. A shape that is refused — a point that is not a number, an unknown segment, an odd count of **-points** — leaves nothing behind in the page: the check comes before the first byte is written.
+: The shapes. Common options are **-fill** and **-stroke** (a colour), **-width** (line width, 0 or more — 0 is the thinnest line the device can draw), **-dash** (a pattern: a list of lengths of 0 or more, not all of them zero; `none` or `solid` for an unbroken line), **-cap** (`butt`, `round` or `square`), **-join** (`miter`, `round` or `bevel`), **-miter** (the miter limit: how far a pointed join may reach before it is cut to a bevel; 1 or more, and 1 bevels every join), **-opacity** and **-blend**. **-radius** is a length of 0 or more; on a rectangle it rounds the corners and 0 leaves them square. **-rule** takes `nonzero` (the default) or `evenodd` and decides which parts of a self-intersecting path count as inside; anything else is refused. **-from**, **-to**, **-at**, **-c1**, **-c2** are exactly two numbers **-at** and **-size** are checked the way every other shape's are — two numbers each, and a third word is refused rather than silently dropped.. A segment of **-segments** is `{move x y}`, `{line x y}`, `{curve x1 y1 x2 y2 x y}` or `{close}`, in document coordinates, and a path begins with a `move`. **-close** joins the end of a `polygon`, a `curve` or a `path` back to its start; a polygon is closed by default, the other two are not. `circle` and `ellipse` are one command under two names: either takes **-radius** for a circle or **-size** *{w h}* for an ellipse, and **-at** is the centre. `arc` draws a piece of that same shape and takes the same pair — **-radius** for a circular arc, **-size** for an elliptical one, exactly one of the two — with **-at** the centre again. **Its angles are in degrees, 0 at three o'clock, and they grow counter-clockwise as the page is read**, so `90` points up: the Tk canvas convention, and deliberately not the direction the document's downward `y` would suggest. **-start** defaults to `0`; **-extent** is required and is how far the arc sweeps — negative runs the other way, `360` is the whole ellipse, and beyond ±360 is refused, as is `0`. **-style** is `arc` (the curve alone, left open), `pieslice` (plus the two radii to the centre) or `chord` (plus the straight line back to where the curve began); the default is `arc`. **`-style arc` takes no -fill**: an open path is closed implicitly before it is filled (8.5.3.1), so a filled open arc would come out as a chord without saying so — ask for **-style chord** when that is the shape you mean. There is no **-rotate**, as there is none on `ellipse`; turn the arc with **transform**. A shape that is refused — a point that is not a number, an unknown segment, an odd count of **-points** — leaves nothing behind in the page: the check comes before the first byte is written.
 
 *doc* **clip -at** *{x y}* **-size** *{w h}* ?**-rule** *evenodd*? / *doc* **clip -segments** *list* ?**-rule** *evenodd*?
 
@@ -1634,22 +1636,22 @@ tzint is a Tcl binding to the Zint barcode library, at <https://fossil.sowaswie.
 
 ### Every topic and its classes
 
-Read as `TCLPDF <topic> <class> <facts…>`. A topic without classes puts the facts straight after its name. This list is generated from the source rather than kept by hand: `tests/errorcode.test` fails if a refusal appears without a code, and if a code appears whose first word is neither `TCLPDF` nor Tcl's own.
+Read as `TCLPDF <topic> <class> <facts…>`. A topic without classes puts the facts straight after its name. This list is generated from the source rather than kept by hand, by `tools/mkerrorcodes.tcl`, and `make check` fails if it and the sources have drifted apart. Two further guards stand behind it: `tests/errorcode.test` fails if a refusal appears without a code, and if a code appears whose first word is neither `TCLPDF` nor Tcl's own.
 
 | topic | classes |
 | --- | --- |
 | `AFM` | `FAMILY` `FONT` `STYLE` |
-| `ANNOT` | `APPEARANCE` `BOX` `COLOUR` `COLOURSPACE` `DATE` `KIND` `LINE` `MODULE` `OPACITY` `PDFA` `POINTS` `QUADS` `RECT` `UA` `WIDTH` |
+| `ANNOT` | `APPEARANCE` `ATTACHMENT` `BOX` `COLOUR` `COLOURSPACE` `DATE` `KIND` `LINE` `MODULE` `NOTE` `OPACITY` `PDFA` `POINTS` `QUADS` `RECT` `STAMP` `STRUCTURE` `UA` `WIDTH` |
 | `ATTACH` | `ARGUMENT` `NAME` `STATE` |
-| `COLORFONT` | `BASE` `CHAR` `COMPOSITE` `EMPTY` `LIMIT` `PALETTE` `TABLES` |
+| `COLORFONT` | `ALIAS` `BASE` `CHAR` `CHARS` `COMPOSITE` `EMPTY` `LIMIT` `PALETTE` `SOURCE` `TABLES` |
 | `COLOUR` | `COLOURANT` `COMPONENTS` `DEVICEN` `HEX` `ICC` `LAB` `PROFILE` `SEPARATION` `SPACE` `SUBCOMMAND` `TARGET` `UNKNOWN` |
-| `COLR` | `ENTRY` `LAYERS` `PALETTE` `RECORDS` `TRUNCATED` `VERSION` |
+| `COLR` | `EMPTY` `ENTRY` `LAYERS` `MISSING` `PALETTE` `RECORDS` `TRUNCATED` `VERSION` |
 | `CRYPTO` | `BLOCKLENGTH` `COUNT` `IVLENGTH` `KEYLENGTH` `RANDOM` |
 | `DOCUMENT` | `ARGUMENT` `CATALOG` `DATE` `INFO` `LANGUAGE` `METADATA` `MODULE` `PAGE` `RESOURCE` `STATE` `TRAILER` |
 | `ENCRYPT` | `ARGUMENT` `KEY` `ORDER` `PASSWORD` `PERMISSION` `SEAM` `STATE` `SUBCOMMAND` |
 | `ENVIRONMENT` | the facts follow the topic directly |
 | `EVENT` | `CALLBACK` `NAME` |
-| `FIELD` | `BOOLEAN` `BORDERWIDTH` `BUILD` `BUTTON` `COLOUR` `COLOURSPACE` `FLAG` `FONT` `INDEX` `LINES` `MAXLEN` `NAME` `OPTIONS` `PAGE` `PASSWORD` `RECT` `REGISTER` `SELECT` `SIZE` `STRUCTURE` `SUBCOMMAND` `TAKEN` `TOP` `TYPE` `UNKNOWN` |
+| `FIELD` | `ALIGN` `BOOLEAN` `BORDERWIDTH` `BUILD` `BUTTON` `COLOUR` `COLOURSPACE` `COMBINATION` `DECLARE` `FLAG` `FONT` `INDEX` `LENGTH` `LINES` `MAXLEN` `NAME` `OPTIONS` `PAGE` `PASSWORD` `RECT` `REGISTER` `SELECT` `SIGFLAGS` `SIZE` `STRUCTURE` `SUBCOMMAND` `TAKEN` `TOP` `TYPE` `UNKNOWN` |
 | `FILTER` | `ASCII85` `CCITT` `LZW` `PREDICTOR` |
 | `FIT` | `ALIGN` `BOX` `MODE` `ROTATE` `SIZE` |
 | `FONT` | `ALIAS` `ARGUMENT` `AXES` `BIDI` `CIDKEYED` `DAMAGED` `EMBED` `ENCODING` `FALLBACK` `GLYPH` `INSTANCE` `KIND` `METRICS` `OUTLINES` `SHAPING` `SOURCE` `SUBSET` `TABLE` `UNSUPPORTED` `VERTICAL` |
@@ -1658,12 +1660,13 @@ Read as `TCLPDF <topic> <class> <facts…>`. A topic without classes puts the fa
 | `GEOMETRY` | `ARGUMENT` `FORMAT` `MATRIX` `MEASURE` `ORIENTATION` `SIZE` `UNIT` |
 | `GLYF` | `OUTLINE` |
 | `GRAPHICS` | `ARGUMENT` `BLEND` `OPACITY` `OVERPRINT` `POINT` `RESTORE` |
-| `HYPHENATE` | `ARGUMENT` `LANGUAGE` `PATTERNS` |
+| `HYPHENATE` | `ARGUMENT` `LANGUAGE` `PATTERNS` `UNSET` |
 | `IMAGE` | `ALIAS` `ARGUMENT` `FORMAT` `ICC` `INLINE` `INTERPOLATE` `INVERT` `JPEG` `MASK` `PNG` `SIZE` `SOFTMASK` `STENCIL` `SUBCOMMAND` |
-| `IMPORT` | `ARGUMENT` `FOREIGN` `NAME` `SUBCOMMAND` |
+| `IMPORT` | `ARGUMENT` `BOX` `DEPTH` `ENCRYPTED` `FILE` `FILTER` `FOREIGN` `NAME` `OBJECT` `OBJSTM` `OPTION` `PAGES` `PREDICTOR` `RECURSION` `ROOT` `ROTATE` `SERIALIZE` `STREAM` `SUBCOMMAND` `SYNTAX` `XFA` `XREF` |
 | `INITIALVIEW` | `PAGE` `ZOOM` |
 | `IO` | `DIRECTORY` `MISSING` |
 | `LAYER` | `ARGUMENT` `CONFIGURE` `NAME` `RADIO` `SCRIPT` `STATE` `SUBCOMMAND` |
+| `LAYOUT` | `RANGE` |
 | `LEADER` | `ARGUMENT` `FILL` |
 | `LINK` | `ARGUMENT` |
 | `OPTION` | `DICT` `KEY` `NUMBER` `PAIRS` `POINT` `REQUIRED` `UNKNOWN` |
@@ -1675,14 +1678,14 @@ Read as `TCLPDF <topic> <class> <facts…>`. A topic without classes puts the fa
 | `PATTERN` | `ARGUMENT` `NAME` `SPACE` `STEP` `SUBCOMMAND` |
 | `PDFA` | `ATTACHMENT` `COLOUR` `CONFORMANCE` `FONT` `PART` `PROFILE` `STATE` `SUBCOMMAND` |
 | `PDFOBJ` | `NAME` `NUMBER` `STREAM` |
-| `SHADING` | `ARGUMENT` `COLOURS` `DOMAIN` `EXPRESSION` `FLAG` `KIND` `NAME` `PATCH` `PATCHES` `PERROW` `RECT` `SIZE` `SPACE` `STOPS` `TRIANGLE` `VERTEX` `VERTICES` |
-| `SHAPE` | `ARGUMENT` `POINTS` `SEGMENTS` `SIZE` |
-| `SIGN` | `ARGUMENT` `CHANGED` `FIELD` `FOREIGN` `INTERNAL` `MANY` `NONE` `ROOM` `SIGNER` `STATE` |
-| `STRUCTURE` | `ARGUMENT` `ATTRIBUTE` `PLACE` `STATE` `TYPE` `VERSION` |
+| `SHADING` | `ARGUMENT` `COLOURS` `DOMAIN` `EXPRESSION` `FLAG` `KIND` `NAME` `PATCH` `PATCHES` `PATTERN` `PERROW` `RECT` `SIZE` `SPACE` `STOPS` `TRIANGLE` `VERTEX` `VERTICES` |
+| `SHAPE` | `ANGLE` `ARGUMENT` `POINTS` `SEGMENTS` `SIZE` |
+| `SIGN` | `ARGUMENT` `CHANGED` `FIELD` `FOREIGN` `INTERNAL` `MANY` `NONE` `ROOM` `SIGNER` `SIGNINGTIME` `SPACE` `STATE` |
+| `STRUCTURE` | `ARGUMENT` `ATTRIBUTE` `NAME` `PLACE` `STATE` `TYPE` `VERSION` |
 | `SVG` | `ARGUMENT` `PATH` `ROOT` |
 | `TABLE` | `ARGUMENT` `COLUMN` `DIRECTION` `ROOM` `SPAN` `STYLE` `SUBCOMMAND` `THEME` `WIDTH` |
 | `TEXT` | `ALIGN` `ANCHOR` `ARGUMENT` `AVOID` `BALANCE` `BLOCK` `BREAKHYPHEN` `COLUMNS` `DIRECTION` `FIT` `HYPHENS` `LINEFEED` `PAGINATE` `PATH` `RENDER` `VERTICAL` |
-| `TIFF` | `CCITT` `COMPRESSION` `DEPTH` `ORIENTATION` `PALETTE` `PHOTOMETRIC` `PREDICTOR` `SAMPLEFORMAT` `SAMPLES` |
+| `TIFF` | `ALPHA` `BIGTIFF` `BYTEORDER` `CCITT` `CIRCULAR` `COMPRESSION` `DAMAGED` `DEPTH` `DIRECTORY` `FILLORDER` `JPEG` `ORIENTATION` `PALETTE` `PHOTOMETRIC` `PLANAR` `PREDICTOR` `RANGE` `SAMPLEFORMAT` `SAMPLES` `SIGNATURE` `STACKED` `STENCIL` `STRIPS` `TILED` |
 | `TYPE3` | `ALIAS` `ARGUMENT` `BBOX` `EMPTY` `FULL` `GLYPH` `MATRIX` `RECURSION` |
 | `UA` | `ARGUMENT` `CLAIM` `PART` `STATE` `SUBCOMMAND` |
 | `UPDATE` | `EMPTY` `FOREIGN` `OBJECT` `TRAILER` |

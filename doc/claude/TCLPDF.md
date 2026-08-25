@@ -38,7 +38,7 @@ The rules that decide most calls:
 - $doc is created with [tclpdf new -unit mm] (mm, A4, portrait, PDF 1.7);
   [$doc page add] before drawing; [$doc write path] at the end.
 - y counts from the TOP; -at is the top left corner - except circle and
-  ellipse, where it is the centre. Font -size is always in POINTS.
+  ellipse and arc, where it is the centre. Font -size is always in POINTS.
 - [font] sets state that stays; every text call also takes the options
   per call. text without -width is one line and returns nothing; with
   -width it is a paragraph and returns the y below; with -height it

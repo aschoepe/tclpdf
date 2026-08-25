@@ -180,6 +180,176 @@ oo::define ::tclpdf::document::document {
     return
   }
 
+  # An arc of a circle or of an ellipse - a piece of what [ellipse] draws
+  # whole, and the shape a dial, a pie chart or a rounded joint is made of.
+  #
+  # -at is the CENTRE, as it is for ellipse and for the same reason; -radius
+  # draws a circular arc and -size {w h} an elliptical one, exactly one of
+  # the two, and both are read by [ShapeRadius] so the refusals are the ones
+  # ellipse already makes.
+  #
+  # THE ANGLES ARE IN DEGREES, 0 AT THREE O'CLOCK, AND THEY GROW
+  # COUNTER-CLOCKWISE AS THE PAGE IS READ - 90 points up. That is the Tk
+  # canvas convention, and it is the direction [geometry rotate] already
+  # turns in. It is deliberately NOT the direction the document's own y axis
+  # would suggest: y counts downwards there, so a caller who thought in raw
+  # coordinates would expect 90 to point down. Angles are read off a drawing,
+  # not off a coordinate system.
+  #
+  # -start defaults to 0, -extent is required. Tk gives -extent a default of
+  # 90; here the caller says how far the arc sweeps rather than being given a
+  # quarter turn nobody asked for - it is the one number that decides what
+  # the shape IS.
+  #
+  # -style is arc (the curve alone, open), pieslice (plus the two radii, so a
+  # wedge) or chord (plus the straight line back to the start).
+  #
+  # No -rotate: [ellipse] has none either, and an option that sits on one of
+  # two shapes that are otherwise the same pair is an inconsistency, not a
+  # feature. A turned ellipse is what [transform] is for. The segmenter
+  # underneath can do it - it takes the cosine and sine of the tilt - and is
+  # handed the untilted 1 and 0 here.
+  method arc {args} {
+    set options [::tclpdf::option parse {
+      at {} radius {} size {} start 0 extent {} style arc
+      fill {} stroke {} width {} dash {}
+      cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
+    } $args]
+    if {[dict get $options at] eq {}} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT arc] \
+          "tclpdf: arc needs -at {x y}"
+    }
+    if {[dict get $options radius] ne {}} {
+      set rx [my ShapeRadius [dict get $options radius] -radius]
+      set ry $rx
+    } elseif {[dict get $options size] ne {}} {
+      lassign [dict get $options size] width height
+      set rx [expr {[my ShapeRadius $width -size] / 2.0}]
+      set ry [expr {[my ShapeRadius $height -size] / 2.0}]
+    } else {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT arc] \
+          "tclpdf: arc needs -radius or -size {w h}"
+    }
+    if {[dict get $options extent] eq {}} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT extent] \
+          "tclpdf: arc needs -extent, the angle it sweeps\
+          in degrees"
+    }
+    # Both angles, and both of them numbers a trigonometric function can be
+    # asked about. "Inf" and "NaN" pass [string is double] and then throw
+    # from inside the arithmetic - the subtraction is the same question
+    # [geometry check] asks of a matrix, and for the same reason: a value
+    # with no PDF spelling (7.3.3) has to be turned away at the call.
+    foreach option {start extent} {
+      set value [dict get $options $option]
+      if {![string is double -strict $value] || [catch {expr {$value - $value}}]} {
+        return -code error -errorcode [list TCLPDF SHAPE ANGLE $option] \
+            "tclpdf: -$option of arc is an angle in degrees,\
+            not \"$value\""
+      }
+    }
+    set start [dict get $options start]
+    set extent [dict get $options extent]
+    # An -extent of 0 is not an empty drawing, it is a question with no
+    # answer: there is no curve, and the two ends of the sweep it would be
+    # cut into coincide. Refused rather than quietly writing a "m" and a
+    # painting operator over nothing.
+    if {$extent == 0} {
+      return -code error -errorcode [list TCLPDF SHAPE ANGLE zero] \
+          "tclpdf: -extent of arc is 0 - there is nothing\
+          to draw"
+    }
+    # Beyond a full turn the curve runs over itself, and what a reader makes
+    # of the overlap depends on the fill rule rather than on anything the
+    # caller said.
+    #
+    # 360 EXACTLY IS DRAWN, in all three styles. It is the whole ellipse, and
+    # a full pie is a figure someone means: a dial read all the way round, a
+    # ring closed. The start and the end of the sweep coincide there, so the
+    # two radii of a pieslice and the chord of a chord have length zero - the
+    # path is redundant, not wrong, and "h" closes it either way. A special
+    # case here would cost more than the line of nothing it saves.
+    if {abs($extent) > 360} {
+      return -code error -errorcode [list TCLPDF SHAPE ANGLE range] \
+          "tclpdf: -extent of arc is at most 360 degrees in\
+          either direction, not \"$extent\""
+    }
+    set style [dict get $options style]
+    if {$style ni {arc pieslice chord}} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT style] \
+          "tclpdf: -style of arc is arc, pieslice or chord,\
+          not \"$style\""
+    }
+    # AND THE ONE REFUSAL THAT IS NOT ABOUT A MALFORMED VALUE. -style arc is
+    # an OPEN path, and PDF closes an open subpath implicitly before it fills
+    # it (8.5.3.1) - so a filled -style arc would come out as a chord, drawn
+    # correctly, looking like a shape nobody asked for and with nothing in
+    # the file to explain it. Tk ignores -fill on an open arc without a word;
+    # silence is the wrong answer here, because the caller who wrote it meant
+    # one of the two closed styles and would never find out which.
+    #
+    # And this package is INCONSISTENT about it, deliberately: through [svg]
+    # it fills implicitly closed arcs all day - svgPath writes open subpaths
+    # and a "fill" in the drawing paints them under exactly this rule. The
+    # difference is who spoke. There the FILE said it, and SVG 1.1 prescribes
+    # the implicit close on fill itself, so obeying it is reading the document
+    # as written. Here the CALLER said it, and the caller has a word of their
+    # own for that very figure: -style chord. A silent detour to a shape that
+    # already has a name is not a service.
+    if {$style eq "arc" && [dict get $options fill] ne {}} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT fill] \
+          "tclpdf: -style arc takes no -fill - PDF closes an\
+          open path before filling it (8.5.3.1), so the result would silently\
+          be a chord; ask for -style chord or -style pieslice"
+    }
+    # Stroked in black unless told otherwise, as a line and a curve are: an
+    # arc with neither colour named would otherwise end in "n" and draw
+    # nothing at all.
+    if {[dict get $options stroke] eq {} && [dict get $options fill] eq {}
+        && [my streamState styleStroke] eq {} && [my streamState styleFill] eq {}} {
+      dict set options stroke black
+    }
+    # From here on the arithmetic is in PDF USER SPACE - [GraphicsPoint] has
+    # already mirrored the centre, and there y grows upwards, which is the
+    # frame the segmenter works in. That is why no angle is negated: the one
+    # inversion the caller's downward y costs was paid by [coords], and
+    # paying it twice would turn every arc the wrong way round. It is also
+    # why the radii may be used as they stand - [ShapeRadius] returns points,
+    # and points are what this frame measures in.
+    lassign [my GraphicsPoint [dict get $options at] -at arc] cx cy
+    set pi [expr {acos(-1)}]
+    set startAngle [expr {$start * $pi / 180.0}]
+    set delta [expr {$extent * $pi / 180.0}]
+    set N ::tclpdf::pdfObj
+    # Where the curve begins. Not read back out of the first segment: a
+    # segment carries its two control points and its END, and the start is
+    # the one point of the arc no "c" operand holds.
+    set beginX [expr {$cx + $rx * cos($startAngle)}]
+    set beginY [expr {$cy + $ry * sin($startAngle)}]
+    if {$style eq "pieslice"} {
+      # The subpath starts at the CENTRE, so the first radius is drawn as a
+      # line and the second one falls out of the closing "h" below.
+      set path "[$N num $cx] [$N num $cy] m\n"
+      append path "[$N num $beginX] [$N num $beginY] l\n"
+    } else {
+      set path "[$N num $beginX] [$N num $beginY] m\n"
+    }
+    foreach segment [::tclpdf::geometry::arcSegments $cx $cy $rx $ry 1 0 \
+        $startAngle $delta] {
+      lassign $segment x1 y1 x2 y2 endX endY
+      append path "[$N num $x1] [$N num $y1] [$N num $x2] [$N num $y2]\
+          [$N num $endX] [$N num $endY] c\n"
+    }
+    if {$style ne "arc"} {
+      # One "h" serves both closed styles, because both close back to where
+      # the subpath began: the centre for a pieslice, the start of the curve
+      # for a chord - which IS the chord.
+      append path "h\n"
+    }
+    my ShapePaint arc $options $path
+    return
+  }
+
   method polygon {args} {
     set options [::tclpdf::option parse {
       points {} fill {} stroke {} width {} dash {} close 1
@@ -453,4 +623,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shape 1.6
+package provide tclpdf::shape 1.7

@@ -1,0 +1,196 @@
+# tkcanvas.test --
+#
+# What examples/11.01-tk-canvas.tcl promises, and nothing beyond it: that it
+# runs where Tk is there, that the items it converts arrive in the page as
+# paths, and that it SKIPS where Tk is not - one line on the console, no
+# document, and an exit status of zero, so that "make examples" runs on past
+# it as it runs past a missing validator.
+#
+# The example is run as a CHILD PROCESS, the way tools/check.sh runs it, so
+# what is tested is the file that ships rather than a copy of its innards.
+#
+# Two things about Tk decided the shape of this file.
+#
+#   The CONSTRAINT is measured in a child process, not here. tests/all.tcl
+#   runs every file in ONE interpreter (-singleproc 1), and [package require
+#   Tk] leaves a main window behind in it - for every test file that follows,
+#   on a machine that may have no display at all. So the question "is there a
+#   Tk" is asked where the answer can be thrown away with the process.
+#
+#   The example ends in [exit], and that is not decoration either: loading Tk
+#   registers a main loop, and tclsh enters it when the script runs out
+#   instead of returning. A test that waited for such a child would wait for
+#   ever.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::filter
+package require tclpdf::io
+source [file join [file dirname [info script]] helper.tcl]
+
+set ::tkcanvasExample [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples 11.01-tk-canvas.tcl]
+
+# Is there a usable Tk - one that loads AND has a display to open? Asked in a
+# child interpreter of its own, so that neither the answer nor the main window
+# it needs to find it out survives into the suite. [exit 0] because the child
+# would otherwise sit in Tk's main loop.
+testConstraint haveTk [expr {![catch {exec [info nameofexecutable] << \
+    "package require Tk\nwm withdraw .\nexit 0"}]}]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+
+# Run a script as a child and answer {code output}. stderr is merged rather
+# than left to [exec], which turns any stderr output at all into an error -
+# here the OUTPUT is what a test wants to look at.
+proc ::tclpdfTest::runScript {args} {
+    set code [catch {exec [info nameofexecutable] {*}$args 2>@1} output]
+    return [list $code $output]
+}
+
+# The content streams of a written file, decoded and joined - the ones that
+# carry text, which for this document is the single page stream.
+#
+# The non-greedy quantifier is the trap here and cost an hour: Tcl decides the
+# greediness of a whole regular expression by its FIRST quantifier, so a
+# "stream\r?\n(.*?)\nendstream" is greedy in spite of the "*?" and swallows
+# the file from the first stream to the last. tclpdf writes "stream\n", so the
+# optional carriage return goes and the expression means what it says.
+proc ::tclpdfTest::pageContent {path} {
+    set content {}
+    foreach {- body} [regexp -all -inline {stream\n(.*?)\nendstream} \
+            [::tclpdf::io read $path]] {
+        if {[catch {::tclpdf::filter decodeFlate $body} text]} {
+            continue
+        }
+        if {[string match {*BT*} $text]} {
+            append content $text \n
+        }
+    }
+    return $content
+}
+
+# How often each operator occurs. The PDF strings are cut out first: a piece
+# of text with a space in it would otherwise be counted as a row of operators,
+# and "(text, anchored west) Tj" alone would add three.
+proc ::tclpdfTest::operatorCount {content} {
+    set counts {}
+    foreach token [regexp -all -inline {\S+} \
+            [regsub -all {\((?:[^()\\]|\\.)*\)} $content {}]] {
+        if {[string is double -strict $token] || [string match {\[*} $token]
+                || [string match {*\]} $token] || [string match {/*} $token]} {
+            continue
+        }
+        dict incr counts $token
+    }
+    return $counts
+}
+
+proc ::tclpdfTest::countsOf {content args} {
+    set counts [::tclpdfTest::operatorCount $content]
+    return [lmap operator $args {
+        expr {[dict exists $counts $operator] ?
+            [dict get $counts $operator] : 0}
+    }]
+}
+
+# The document the example writes, made ONCE and answered by path. Four tests
+# look at the same file and each of them has to stand on its own - a run
+# filtered to a single test would otherwise read a document nobody wrote.
+proc ::tclpdfTest::tkcanvasDocument {} {
+    variable tkcanvasWritten
+    set target [::tclpdfTest::scratch tkcanvas-example.pdf]
+    if {![info exists tkcanvasWritten]} {
+        file delete $target
+        set tkcanvasWritten [::tclpdfTest::runScript $::tkcanvasExample $target]
+    }
+    return $target
+}
+
+proc ::tclpdfTest::tkcanvasRun {} {
+    ::tclpdfTest::tkcanvasDocument
+    variable tkcanvasWritten
+    return $tkcanvasWritten
+}
+
+test tkcanvas-1.1 {the example runs and writes a document} -constraints haveTk -body {
+    set target [::tclpdfTest::tkcanvasDocument]
+    lassign [::tclpdfTest::tkcanvasRun] code output
+    # The size is not a measurement, it is a floor: a document that came out
+    # with the prose and none of the drawing would still open. What the script
+    # PRINTS is deliberately not asserted - measured on this machine, a Tk
+    # process now and then loses its buffered standard output on the way out,
+    # and the document is the promise, not the console line.
+    list $code [string range [::tclpdf::io read $target] 0 4] \
+        [expr {[file size $target] > 3000}]
+} -result {0 %PDF- 1}
+
+test tkcanvas-1.2 {qpdf reads what came out} -constraints {haveTk qpdf} -body {
+    set report [exec qpdf --check [::tclpdfTest::tkcanvasDocument] 2>@1]
+    expr {[string match {*No syntax or stream encoding errors found*} $report]
+        ? "ok" : $report}
+} -result ok
+
+test tkcanvas-1.3 {every item drawn arrives in the page as a path} -constraints haveTk -body {
+    set content [::tclpdfTest::pageContent [::tclpdfTest::tkcanvasDocument]]
+    # re  the widget's background and the one rectangle item
+    # d   the two dashed items - the oval and the red line
+    # c   the curves: four for the oval, the rest for the three arcs
+    # h   the three CLOSED subpaths: the polygon, the pieslice and the chord.
+    #     The fourth arc is -style arc and stays open, which is the whole
+    #     point of drawing all three of them
+    # B   filled and stroked: the background, the rectangle, the polygon, the
+    #     pieslice and the chord
+    # S   stroked only: the oval, the open arc and the two lines
+    # Do  the picture - once, and only once, because the bitmap item beside it
+    #     is skipped and leaves nothing behind
+    ::tclpdfTest::countsOf $content re d c h B S Do
+} -result {2 2 13 3 5 4 1}
+
+test tkcanvas-1.4 {the canvas text arrives as text, not as a picture of it} -constraints haveTk -body {
+    set content [::tclpdfTest::pageContent [::tclpdfTest::tkcanvasDocument]]
+    string match {*(text, anchored west) Tj*} $content
+} -result 1
+
+test tkcanvas-1.5 {without Tk the example skips: no document, status zero} -body {
+    # Tk is hidden from the child rather than uninstalled: the builtin is
+    # renamed and a stub answers exactly what a machine without Tk answers.
+    # Emptying auto_path was tried first and does not work - the module
+    # unknown handler is auto-loaded from the Tcl library directory, so
+    # [package require tclpdf] dies two lines before Tk is ever asked for.
+    set wrapper [::tclpdfTest::scratch tkcanvas-hide-tk.tcl]
+    set channel [open $wrapper w]
+    puts $channel {
+        rename package realPackage
+        proc package {args} {
+            if {[lindex $args 0] eq "require" && [lindex $args 1] eq "Tk"} {
+                return -code error "can't find package Tk"
+            }
+            return [uplevel 1 [linsert $args 0 realPackage]]
+        }
+        set example [lindex $argv 0]
+        set argv [lrange $argv 1 end]
+        set argc [llength $argv]
+        source $example
+    }
+    close $channel
+    set target [::tclpdfTest::scratch tkcanvas-skipped.pdf]
+    file delete $target
+    lassign [::tclpdfTest::runScript $wrapper $::tkcanvasExample $target] \
+        code output
+    file delete $wrapper
+    list $code [file exists $target] [string trim $output]
+} -result {0 0 {skipped: Tk is not available - can't find package Tk}}
+
+# The document is a test fixture, not an artefact: it goes when the file is
+# done with it, whether or not Tk was there to write one.
+file delete [::tclpdfTest::scratch tkcanvas-example.pdf]
+
+cleanupTests

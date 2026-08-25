@@ -1401,4 +1401,246 @@ test graphics-box-22.3 {a proper box still draws exactly what it drew before} -b
   list [regexp {10 75 30 5 re} $stream] [regexp {0 100 100 0 re W n} $stream]
 } -result {1 1}
 
+# -- arcs ----------------------------------------------------------------------
+#
+# An arc is the only shape here whose contract is an ANGLE, and an angle has a
+# direction. The convention is the Tk canvas one: degrees, 0 at three o'clock,
+# growing counter-clockwise AS THE PAGE IS READ. The document's own y counts
+# downwards, so there is exactly one place a sign can be lost, and
+# graphics-arc-23.2 is the test that finds it.
+
+test graphics-arc-23.1 {the three styles differ in what closes them} -body {
+    # arc is the curve alone and open; pieslice starts at the centre, runs out
+    # to the arc as a line and closes; chord closes straight back to where the
+    # curve began. All three share the same "c" segments - the difference is
+    # the two operators around them.
+    set result {}
+    foreach {style options} {
+        arc {-stroke black}
+        pieslice {-fill red}
+        chord {-fill red}
+    } {
+        set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+        $doc page add
+        $doc arc -at {100 100} -radius 40 -start 0 -extent 90 -style $style {*}$options
+        lappend result [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+        $doc destroy
+    }
+    set result
+} -result {{q G m c S Q} {q rg m l c h f Q} {q rg m c h f Q}}
+
+test graphics-arc-23.2 {90 degrees is UP on the page, not down} -body {
+    # THE TEST THAT CATCHES A SWAPPED Y AXIS. Everything else about an arc
+    # survives the mirror: the segment count, the operators, the radius. Only
+    # the direction does not, and a document counts y downwards while the file
+    # counts it upwards - so the sign is negated exactly once, in [coords],
+    # and negating it a second time turns every arc in the package the wrong
+    # way round while every other test still passes.
+    #
+    # Read in the file's own coordinates, where y grows UPWARDS: an arc from 0
+    # to 90 about {100 100} on a 200 pt page starts at three o'clock and has
+    # to end ABOVE the centre.
+    set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+    $doc page add
+    $doc arc -at {100 100} -radius 40 -start 0 -extent 90 -stroke black
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    # The "m" is the start, the last pair of the last "c" is the end.
+    regexp {([-0-9.]+) ([-0-9.]+) m} $stream -> startX startY
+    regexp {([-0-9.]+) ([-0-9.]+) c\n?$} [string trim $stream [format " \nSQ"]] \
+        -> endX endY
+    list [format %.2f $startX] [format %.2f $startY] \
+        [format %.2f $endX] [format %.2f $endY]
+} -result {140.00 100.00 100.00 140.00}
+
+test graphics-arc-23.3 {and the quarters go round in the right order} -body {
+    # The same question over the whole turn, so that a start angle handled
+    # differently from an extent cannot hide: 0 is right, 90 up, 180 left,
+    # 270 down - in file coordinates, y upwards.
+    set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+    $doc page add
+    set result {}
+    foreach start {0 90 180 270} {
+        $doc arc -at {100 100} -radius 40 -start $start -extent 10 -stroke black
+        set stream [::tclpdfTest::content $doc]
+        $doc page add
+        regexp {([-0-9.]+) ([-0-9.]+) m} $stream -> x y
+        lappend result [format %.0f $x] [format %.0f $y]
+    }
+    $doc destroy
+    set result
+} -result {140 100 100 140 60 100 100 60}
+
+test graphics-arc-23.4 {a quarter turn per segment, and no more} -body {
+    set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+    $doc page add
+    set counts {}
+    foreach extent {90 180 270 360 -360 45 91} {
+        $doc arc -at {100 100} -radius 40 -extent $extent -stroke black
+        set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+        $doc page add
+        lappend counts [llength [lsearch -all -exact $operators c]]
+    }
+    $doc destroy
+    set counts
+} -result {1 2 3 4 4 1 2}
+
+test graphics-arc-23.5 {-size draws an elliptical arc, -radius a circular one} -body {
+    # As on [ellipse], -size is the full width and height, so the radii are
+    # half of each. A half turn from 0 to 180 spans the whole width and its
+    # highest point is one half-height above the centre - which for a
+    # quarter-turn segmentation is a control point as well, so reading the
+    # extremes of every operand finds it exactly.
+    set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+    $doc page add
+    $doc arc -at {100 100} -size {60 20} -start 0 -extent 180 -stroke black
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    set xs {}
+    set ys {}
+    foreach line [split $stream \n] {
+        if {![regexp {[mc]$} $line]} {
+            continue
+        }
+        foreach {x y} [regexp -all -inline -- {-?[0-9]+\.?[0-9]*} $line] {
+            lappend xs $x
+            lappend ys $y
+        }
+    }
+    list [format %.2f [tcl::mathfunc::min {*}$xs]] \
+        [format %.2f [tcl::mathfunc::max {*}$xs]] \
+        [format %.2f [tcl::mathfunc::max {*}$ys]]
+} -result {70.00 130.00 110.00}
+
+test graphics-arc-23.6 {a whole turn is drawn, in every style} -body {
+    # 360 exactly is allowed and is the whole ellipse. In a pieslice the two
+    # radii then have length zero and in a chord the chord does, because the
+    # start and the end of the sweep coincide - redundant, not wrong, and
+    # cheaper than a special case in the check. What must hold is that all
+    # three still come out as four quarter segments and a painting operator.
+    set result {}
+    foreach {style options} {
+        arc {-stroke black}
+        pieslice {-fill red}
+        chord {-fill red}
+    } {
+        set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+        $doc page add
+        set code [catch {$doc arc -at {100 100} -radius 40 -extent 360 \
+            -style $style {*}$options}]
+        set stream [::tclpdfTest::content $doc]
+        $doc destroy
+        # The whole operator sequence, not just the count of "c": at 360 the
+        # zero-length radius of a pieslice is exactly what a well-meant
+        # special case would drop, and dropping it makes a pieslice
+        # indistinguishable from a chord. The "l" is what says it is still
+        # there.
+        lappend result $code [::tclpdfTest::operators $stream]
+    }
+    # And -360 as well: the other way round is a whole turn too.
+    set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+    $doc page add
+    lappend result [catch {$doc arc -at {100 100} -radius 40 -extent -360 \
+        -style pieslice -fill red}]
+    $doc destroy
+    set result
+} -result {0 {q G m c c c c S Q} 0 {q rg m l c c c c h f Q}\
+    0 {q rg m c c c c h f Q} 0}
+
+test graphics-arc-23.7 {an arc names itself in the colour space record} -body {
+    # "arc on page 1", not "a colour somewhere" - the word ShapePaint is
+    # given is what a PDF/A refusal quotes back.
+    set doc [tclpdf new -compress 0]
+    $doc page add
+    $doc arc -at {50 50} -radius 20 -extent 90 -style chord -fill {cmyk 1 0 0 0}
+    set used [$doc colourSpacesUsed]
+    $doc destroy
+    string match {*arc*} $used
+} -result 1
+
+test graphics-arc-23.8 {every refusal, its code, and an empty page after it} -body {
+    # The whole list in one place, because the property is the same for all of
+    # them: refused BEFORE the first byte, so the stream stays empty and no
+    # "q" is left open. Tagged as well as untagged - a refusal after the
+    # structure mark was taken leaves the mark open, which no reader reports.
+    set calls {
+        {{arc -radius 10 -extent 90} {TCLPDF SHAPE ARGUMENT arc}}
+        {{arc -at {5 5} -extent 90} {TCLPDF SHAPE ARGUMENT arc}}
+        {{arc -at {5 5} -radius 10} {TCLPDF SHAPE ARGUMENT extent}}
+        {{arc -at {5 5} -radius 10 -extent 0} {TCLPDF SHAPE ANGLE zero}}
+        {{arc -at {5 5} -radius 10 -extent 0.0} {TCLPDF SHAPE ANGLE zero}}
+        {{arc -at {5 5} -radius 10 -extent 361} {TCLPDF SHAPE ANGLE range}}
+        {{arc -at {5 5} -radius 10 -extent -361} {TCLPDF SHAPE ANGLE range}}
+        {{arc -at {5 5} -radius 10 -extent x} {TCLPDF SHAPE ANGLE extent}}
+        {{arc -at {5 5} -radius 10 -extent NaN} {TCLPDF SHAPE ANGLE extent}}
+        {{arc -at {5 5} -radius 10 -extent Inf} {TCLPDF SHAPE ANGLE extent}}
+        {{arc -at {5 5} -radius 10 -start y -extent 90} {TCLPDF SHAPE ANGLE start}}
+        {{arc -at {5 5} -radius 10 -extent 90 -style wedge} {TCLPDF SHAPE ARGUMENT style}}
+        {{arc -at {5 5} -radius 10 -extent 90 -style {}} {TCLPDF SHAPE ARGUMENT style}}
+        {{arc -at {5 5} -radius 10 -extent 90 -fill red} {TCLPDF SHAPE ARGUMENT fill}}
+        {{arc -at {5 5} -radius 10 -extent 90 -style arc -fill red} {TCLPDF SHAPE ARGUMENT fill}}
+        {{arc -at {5 5} -radius -2 -extent 90} {TCLPDF SHAPE ARGUMENT -radius}}
+        {{arc -at {5 5} -size {-2 2} -extent 90} {TCLPDF SHAPE ARGUMENT -size}}
+        {{arc -at {5 5 5} -radius 10 -extent 90} {TCLPDF GRAPHICS POINT -at}}
+    }
+    set wrong {}
+    foreach tagged {0 1} {
+        foreach pair $calls {
+            lassign $pair call expected
+            set doc [tclpdf new -compress 0]
+            $doc tagged $tagged
+            $doc page add
+            set code [catch {$doc {*}$call} -> options]
+            set balance [::tclpdfTest::balance [::tclpdfTest::content $doc]]
+            $doc destroy
+            if {$code != 1 || [dict get $options -errorcode] ne $expected
+                    || $balance ne {0 0 0 0 0}} {
+                lappend wrong [list tagged $tagged $call \
+                    code $code got [dict get $options -errorcode] \
+                    want $expected balance $balance]
+            }
+        }
+    }
+    set wrong
+} -result {}
+
+test graphics-arc-23.9 {a closed style takes the -fill an open one refuses} -body {
+    # The counter-measurement to the refusal above: it is -style arc that has
+    # no fill, not the shape.
+    set doc [tclpdf new -compress 0]
+    $doc page add
+    set codes {}
+    foreach call {
+        {arc -at {50 50} -radius 20 -extent 90 -style chord -fill red}
+        {arc -at {50 50} -radius 20 -extent 90 -style pieslice -fill red}
+        {arc -at {50 50} -radius 20 -extent 90 -style arc -stroke red}
+        {arc -at {50 50} -radius 20 -extent 90 -style chord -fill red -stroke black}
+    } {
+        lappend codes [catch {$doc {*}$call}]
+    }
+    $doc destroy
+    set codes
+} -result {0 0 0 0}
+
+test graphics-arc-23.10 {an arc with no colour at all is still drawn, in black} -body {
+    # As a line and a curve are. An open arc cannot be filled, so without this
+    # it would end in "n" and draw nothing, with no word about why.
+    set doc [tclpdf new -compress 0]
+    $doc page add
+    $doc arc -at {50 50} -radius 20 -extent 90
+    set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+    $doc destroy
+    list [expr {"S" in $operators}] [expr {"n" in $operators}]
+} -result {1 0}
+
+test graphics-arc-23.11 {an arc does not leak its line width either} -body {
+    set doc [tclpdf new]
+    $doc page add
+    $doc arc -at {50 50} -radius 20 -extent 90 -stroke black -width 3
+    $doc line -from {10 90} -to {60 90} -stroke black
+    set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+    $doc destroy
+    ::tclpdfTest::takenBack $operators w m
+} -result 1
+
 cleanupTests

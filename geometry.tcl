@@ -193,6 +193,81 @@ proc ::tclpdf::geometry::apply {matrix x y} {
   return [list [expr {$a * $x + $c * $y + $e}] [expr {$b * $x + $d * $y + $f}]]
 }
 
+# An elliptical arc as cubic Bezier segments - the ONE place that
+# approximation is written.
+#
+# PDF has no arc operator (8.5.2.1), so every arc anyone draws has to become
+# Bezier curves, and there is no exact conversion: a circular arc is not a
+# polynomial curve. What there is, is the standard approximation of SVG's
+# implementation notes F.6 - one segment per quarter turn or less, with the
+# control points placed 4/3*tan(step/4) of the tangent away from the ends.
+# That keeps the error under a thousandth of the radius per quarter, and it
+# is what every renderer does.
+#
+# It sits in geometry rather than in shape or in svgPath because it has two
+# consumers and belongs to neither: [svgPath::Arc] reaches it from SVG's
+# ENDPOINT parametrisation (start, end, radii, large, sweep - the centre has
+# to be recovered first), [shape arc] from the CENTRE parametrisation the
+# caller states directly. The recovery is what differs between the two; the
+# curve is what does not.
+#
+# The arc runs about {cx cy} with radii rx and ry, in a frame turned by phi -
+# handed in already as its cosine and sine, because both callers have them.
+# startAngle and delta are in RADIANS, and the angles are the ellipse's own
+# parameter, not the polar angle at the point: for rx != ry the two differ,
+# which is exactly what makes the curve an ellipse.
+#
+# Returns a LIST OF SEGMENTS, each {x1 y1 x2 y2 x y} - the six operands of a
+# "c", as plain numbers. No transformation and no number formatting: which
+# way the y axis of the caller points, and how a number is spelt in a content
+# stream, are the caller's business and differ between the two of them.
+#
+# A delta of zero returns no segments at all rather than dividing by the
+# count it would take to cover it. Neither caller can reach that - svgPath
+# turns a degenerate arc into a line before it gets here, [shape arc] refuses
+# an -extent of 0 - but a proc that answers "nothing to draw" with an
+# arithmetic error is a trap for the third consumer.
+proc ::tclpdf::geometry::arcSegments {cx cy rx ry cosPhi sinPhi startAngle delta} {
+  if {$delta == 0} {
+    return {}
+  }
+  set pi [expr {acos(-1)}]
+  # Beyond a quarter turn the approximation departs from the ellipse
+  # visibly, so the sweep is cut into as many equal pieces as it takes.
+  set count [expr {int(ceil(abs($delta) / ($pi / 2)))}]
+  set step [expr {$delta / $count}]
+  set alpha [expr {4.0 / 3 * tan($step / 4)}]
+  set result {}
+  set angle $startAngle
+  for {set n 0} {$n < $count} {incr n} {
+    set next [expr {$angle + $step}]
+    lassign [ArcPoint $cx $cy $rx $ry $cosPhi $sinPhi $angle] ax ay
+    lassign [ArcPoint $cx $cy $rx $ry $cosPhi $sinPhi $next] bx by
+    lassign [ArcTangent $rx $ry $cosPhi $sinPhi $angle] dax day
+    lassign [ArcTangent $rx $ry $cosPhi $sinPhi $next] dbx dby
+    lappend result [list [expr {$ax + $alpha * $dax}] [expr {$ay + $alpha * $day}] \
+        [expr {$bx - $alpha * $dbx}] [expr {$by - $alpha * $dby}] $bx $by]
+    set angle $next
+  }
+  return $result
+}
+
+# The point at a parameter angle, in the turned frame.
+proc ::tclpdf::geometry::ArcPoint {cx cy rx ry cosPhi sinPhi angle} {
+  set x [expr {$rx * cos($angle)}]
+  set y [expr {$ry * sin($angle)}]
+  return [list [expr {$cx + $cosPhi * $x - $sinPhi * $y}] \
+      [expr {$cy + $sinPhi * $x + $cosPhi * $y}]]
+}
+
+# And the derivative there - the direction the control points run in.
+proc ::tclpdf::geometry::ArcTangent {rx ry cosPhi sinPhi angle} {
+  set x [expr {-$rx * sin($angle)}]
+  set y [expr {$ry * cos($angle)}]
+  return [list [expr {$cosPhi * $x - $sinPhi * $y}] \
+      [expr {$sinPhi * $x + $cosPhi * $y}]]
+}
+
 # Whether a matrix collapses the space ONCE IT IS WRITTEN.
 #
 # THE FILE IS WHAT COUNTS, NOT THE VALUE HANDED IN. A PDF real is written in
@@ -304,4 +379,4 @@ proc ::tclpdf::geometry::checkFit {options what} {
   return
 }
 
-package provide tclpdf::geometry 1.3
+package provide tclpdf::geometry 1.4

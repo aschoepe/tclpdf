@@ -41,7 +41,7 @@ set out      /path/to/out
 ## The model in ten lines
 
 1. `set doc [tclpdf new -unit mm]` - mm, A4, portrait, PDF 1.7, compressed. `$doc page add` before drawing. `$doc write path` (repeatable, and byte-identical unless the document is signed or encrypted) or `writeChannel` (refused for a signed document). `$doc destroy`.
-2. **y counts from the top.** `-at` is the **top left** corner - except `circle`/`ellipse`, where it is the centre. Inside a form or pattern script the origin is that object's own top left.
+2. **y counts from the top.** `-at` is the **top left** corner - except `circle`/`ellipse`/`arc`, where it is the centre. Inside a form or pattern script the origin is that object's own top left.
 3. Positions are in the document unit; **font `-size` is always points**.
 4. `font` sets **state** that stays (family, style, size, colour, spacing, leading, kerning ...). Every text call takes the same options **per call** without changing the state.
 5. `text` without `-width` is one line and returns nothing (a `\n` in it is refused); with `-width` it is a paragraph and returns the **y below**; with `-height h|max` it returns `{y rest}`; with `-paginate 1` it adds pages itself and returns `{y rest page column}`.
@@ -58,7 +58,7 @@ set out      /path/to/out
 | `reference/01-document.md` | new/configure/cget, page add/size/box/typeArea, coords/distance/extent, page content, write/writeChannel, events on/off, reservation |
 | `reference/02-fonts.md` | font state, the standard 14, embed TTF/OTF/Type 1/variable/bare CFF, `-fallback` chains, font info/names, missing glyphs, kerning/ligatures/combining marks, `-render` modes, RTL and the writing systems, Type 3 (`font define`/`font glyph`), colour fonts (`colorFont`, COLR/CPAL), **vertical writing and breaking it into columns**, **what a font refusal says** (the seven `TCLPDF FONT` classes) |
 | `reference/03-text.md` | one line, paragraph, indents, soft hyphens, `-hyphenate` and `::tclpdf::hyphenate`, -avoid, -height/-height max, -paginate, -columns/-balance, leader, textPath, pageNumbers, textWidth/Height/Lines, **the four anchors**, **`-fit`/`-shrinkLimit` for one line**, **`-emergencyHyphen`** |
-| `reference/04-graphics.md` | line/rect/circle/ellipse/polygon/curve/path, clip, save/restore, opacity, blend, style, transform, colour forms, separations, Lab, icc embed |
+| `reference/04-graphics.md` | line/rect/circle/ellipse/arc/polygon/curve/path, clip, save/restore, opacity, blend, style, transform, colour forms, separations, Lab, icc embed |
 | `reference/05-images-svg.md` | image embed/place/draw/info/size, -data, JPEG/PNG/TIFF, `-dpi auto` and where a natural size comes from, TIFF strips and stacking, `-stencil`/`-mask`/`-invert`/`-interpolate`, svg file/-data/info/size, SVG text faces, barcodes through tzint, **`-fit` for a form and a drawing**, **what a drawing left out**, **`-interpolate` under PDF/A**, SVG clip-path and mask (clipping path and luminosity soft mask), preserveAspectRatio (ten alignments, meet/slice/none), font-weight, barcodes through tzint, -fit for a form and a drawing, -interpolate under PDF/A. |
 | `reference/06-tables.md` | head/body/foot, cell dictionaries, spans, columns (width/weight/align/decimal), styles/themes, rtl cells, -top/-bottom, repeated head, the four hooks, table layout |
 | `reference/07-patterns-forms.md` | shading axial/radial, stops/extend, shading pattern, pattern create (-step/-unit/-origin/-matrix), the stream rule, form create/place, layers (`layer create/draw/state/radio/configure`) |
