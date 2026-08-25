@@ -19,6 +19,9 @@ set ttfBold  [file join $assets fonts DejaVuSans-Bold.ttf]
 set otf      [file join $assets fonts urw-core35-fonts NimbusSans-Regular.otf]
 set type1    [file join $assets fonts urw-core35-fonts NimbusSans-Regular.t1]
 set variable [file join $assets fonts google Roboto-Variable.ttf]
+# A face with vertical metrics - vhea, vmtx and the GSUB feature "vert" - which
+# is what the vertical writing snippets need and what no Latin face carries.
+set jpTtf    [file join $assets fonts google NotoSansJP-Regular.ttf]
 set jpeg     [file join $assets images sample-photo.jpg]
 set png      [file join $assets images sample-rgba.png]
 set tiff     [file join $assets images sample-scan.tiff]

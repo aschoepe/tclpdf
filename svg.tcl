@@ -17,11 +17,25 @@
 # drawing, and it can neither be scaled nor searched.
 #
 # What is covered was decided by measurement, not by reading the standard:
-# 14995 SVG files on this machine, 300 of them in detail. <filter> and
-# <animate> occur ZERO times, <mask> twice, <style> three times, and
-# preserveAspectRatio not once. The elliptical arc is the most frequent path
-# command of all - ahead of moveto - and PDF has no arc operator, so that is
-# where the work went.
+# 14995 SVG files on this machine, 300 of them in detail. The elliptical arc
+# is the most frequent path command of all - ahead of moveto - and PDF has no
+# arc operator, so that is where the work went.
+#
+# THE FREQUENCIES THAT MEASUREMENT GAVE HAVE SINCE BEEN CORRECTED, and the
+# correction is worth more than the numbers. It read "<filter> and <animate>
+# occur ZERO times, <mask> twice" - and 95.5 % of that corpus is three icon
+# libraries (Tabler in two releases, FontAwesome), which are single-path
+# files by construction. Measured again on 2026-08-24 with those taken out,
+# 167 files remain, and in them: clipPath in 7.8 %, mask in 6.0 %, filter in
+# 4.2 %, use in 3.0 %, gradients in 3.6 %. Four of the seven files carrying a
+# <filter> are one publisher's logo.
+#
+# So the shape of the decision stands - a drawing here is paths, shapes,
+# groups, transforms, text and gradients - but the ones left out are NOT
+# absent from real work, and this module says so through [svg info] rather
+# than quietly. What that report was missing until the same day is described
+# at [SvgCountOnly]: everything under <defs> went uncounted, which is exactly
+# where a filter and a mask are declared.
 #
 #   shapes      path, rect (rx/ry included), circle, ellipse, line, polyline,
 #               polygon - all through the same painting code, so none of them
@@ -49,11 +63,12 @@
 #               style, and one level of inheritance through href
 #
 # NOT covered, and each for a reason rather than by omission: filters and
-# animation (absent from the corpus), masks and clip paths (twice in 14995),
-# CSS in a <style> block (three times), spreadMethod and gradientTransform
-# (never), and stop-opacity, which needs a luminosity soft mask - one
-# occurrence in the whole corpus, against a PDF/A risk that would have to be
-# measured first.
+# animation, masks and clip paths, CSS in a <style> block, spreadMethod and
+# gradientTransform, and stop-opacity, which needs a luminosity soft mask.
+# The frequencies these were once justified by are corrected above; what
+# keeps them out now is the work each would take, not a claim that nobody
+# uses them. Every one of them is counted and reported by [svg info], so a
+# caller can see what a drawing lost instead of finding out from the page.
 #
 # Known and open: a gradient whose axis runs in y comes out flat. The
 # coordinates written are correct - the matrix handed to the pattern maps x
@@ -140,7 +155,7 @@ oo::define ::tclpdf::document::document {
   method SvgDraw {path arguments} {
     set options [::tclpdf::option parse {
       data {} at {} size {} width {} height {} scale {} opacity {} alt {}
-      artifact {}
+      artifact {} fit {} fitMode {} align center valign middle
     } $arguments "svg"]
     if {$path ne {}} {
       # Read as bytes, then decode: an SVG is UTF-8 unless its declaration
@@ -182,6 +197,12 @@ oo::define ::tclpdf::document::document {
       my GraphicsPoint [dict get $options at] -at svg
     }
     ::tclpdf::geometry checkFit $options svg
+    # -fit and the anchors, through the same [fitCheck] the picture and the
+    # form use. Added on 2026-08-24: a drawing already fitted itself into the
+    # rectangle it was given - "xMidYMid meet", the default of
+    # preserveAspectRatio - but the rectangle had to be named as a size, and
+    # cover was not reachable at all.
+    my fitCheck $options svg
     if {[dict get $options opacity] ne {}} {
       dict set options opacity [my GraphicsOpacity [dict get $options opacity]]
     }
@@ -223,6 +244,20 @@ oo::define ::tclpdf::document::document {
     lassign [my SvgViewBox $root] boxX boxY boxWidth boxHeight
     lassign [my SvgExtent $root $options $boxWidth $boxHeight] width height
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
+
+    # THE ANCHOR MOVES THE CORNER, not the inset - which is where a first
+    # attempt at this went wrong on 2026-08-24. [fitExtent] has already cut
+    # the rectangle down to the fitted size by the time the inset is worked
+    # out, so there is nothing left over inside it to move: the room is in
+    # the BOX the caller named, between it and the fitted drawing. Same
+    # arithmetic and same defaults as a picture's, through the same method.
+    #
+    # center and middle are the defaults because "xMidYMid meet" is what a
+    # drawing did before this option existed - so a script written earlier
+    # writes the same bytes, and only a caller who names an edge moves it.
+    if {[dict get $options fit] ne {}} {
+      lassign [my fitAnchor [list $left $top] $width $height $options] left top
+    }
 
     # Fit, do not distort. The default of preserveAspectRatio is
     # "xMidYMid meet": the drawing keeps its proportions, is scaled until it
@@ -284,6 +319,18 @@ oo::define ::tclpdf::document::document {
 
     my state svgDepth 0
     my SvgSave
+    # A COVERED BOX IS CUT BACK TO THE BOX, exactly as a picture's and a form
+    # placement's are: -fitMode cover scales the drawing until both edges are
+    # covered, which leaves it hanging over the box on one axis, and the box
+    # is what the caller asked to see. The rectangle is the one -at and -fit
+    # name, before the anchor moved the drawing inside it. Inside the save,
+    # so the matching restore takes it back - a clipping path lasts to the
+    # end of the content stream otherwise.
+    if {[dict get $options fit] ne {} && [dict get $options fitMode] eq "cover"} {
+      lassign [expr {[dict get $options at] eq {} ? {0 0}
+          : [dict get $options at]}] clipLeft clipTop
+      my clip -at [list $clipLeft $clipTop] -size [dict get $options fit]
+    }
     if {[dict get $options opacity] ne {}} {
       my content "[::tclpdf::pdfObj name [dict get $options opacity]] gs\n"
     }
@@ -458,4 +505,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.7
+package provide tclpdf::svg 1.8

@@ -1829,6 +1829,59 @@ test image-mask-18.16 {-interpolate is written only when it is asked for} -body 
       [regexp {/Interpolate false} $bytes]
 } -result {{0 1} 1 0}
 
+# -interpolate under PDF/A, added on 2026-08-24. ISO 19005-2, 6.2.8: "The
+# Interpolate key shall not be present, or shall have a value of false".
+# veraPDF reports it, and the package used to write it under every profile
+# without a word - a pre-existing violation on both roads, the image XObject
+# and the inline image.
+#
+# Both ORDERS are tested, because the first attempt at this refused only at
+# the write and let "place, then pdfa" through: an image XObject is built on
+# first placement, not at write time.
+
+test image-mask-18.16a {-interpolate is refused when PDF/A is declared first} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc pdfa -part 3 -conformance B
+  set pic [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  $doc image embed smooth -data $pic -interpolate 1
+  set code [::tclpdfTest::refusalCode {$doc image place smooth -at {20 20} -width 40}]
+  $doc destroy
+  lrange $code 0 3
+} -constraints haveTdom -result {TCLPDF IMAGE INTERPOLATE PDFA}
+
+test image-mask-18.16b {and when it is declared after the picture is down} -body {
+  # The other order, which the first attempt at this let through. The picture
+  # is in the file by the time [pdfa] is called, so the declaration is what
+  # gives way - and it names the picture.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set pic [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  $doc image embed smooth -data $pic -interpolate 1
+  $doc image place smooth -at {20 20} -width 40
+  set code [::tclpdfTest::refusalCode {$doc pdfa -part 3 -conformance B}]
+  $doc destroy
+  list [lrange $code 0 3] [lindex $code 4]
+} -constraints haveTdom -result {{TCLPDF IMAGE INTERPOLATE PDFA} smooth}
+
+test image-mask-18.16c {a picture without -interpolate is untouched by the profile} -body {
+  # The counter-measurement: the refusal hangs on the option and not on the
+  # profile, so an ordinary picture in an ordinary PDF/A document is written
+  # exactly as before.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc pdfa -part 3 -conformance B
+  $doc image embed plain \
+      -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+  $doc image place plain -at {20 20} -width 40
+  set path [::tclpdfTest::scratch interpolate-pdfa.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Interpolate} $bytes
+} -constraints haveTdom -result 0
+
 test image-mask-18.17 {-invert outside a stencil is a Decode array, and only where one fits} -body {
   # Table 87: the Decode array's length is twice the number of colour
   # components, so [1 0] exists for a one-component picture and nowhere

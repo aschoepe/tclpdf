@@ -105,6 +105,26 @@ oo::define ::tclpdf::document::document {
     # [read]. The shipped profile is part of the installation, so its absence
     # is a broken installation and is named as one - it used to be degraded
     # to "no output intent" without a word.
+    # A picture already placed with -interpolate 1, inline or as an XObject.
+    # Both are down by now - an inline dictionary went into the content stream
+    # as it was drawn, and an image XObject is built on first placement - so
+    # the declaration is what gives way here, and it says which picture stands
+    # in the way.
+    #
+    # ISO 19005-2, 6.2.8: "The Interpolate key shall not be present, or shall
+    # have a value of false". veraPDF reports it, and until 2026-08-24 this
+    # package wrote it under every profile without a word.
+    set interpolated [my state imageInterpolated]
+    if {[llength $interpolated]} {
+      return -code error \
+          -errorcode [list TCLPDF IMAGE INTERPOLATE PDFA {*}$interpolated] \
+          "tclpdf: [join $interpolated {, }] [expr {[llength $interpolated] > 1
+              ? {were} : {was}}] already placed with\
+          -interpolate 1, and ISO 19005-2, 6.2.8 says the Interpolate key\
+          shall not be present or shall be false - the picture is in the file\
+          by now and cannot be taken back, so declare pdfa BEFORE placing it,\
+          or drop -interpolate"
+    }
     set profile [dict get $current profile]
     if {![file exists $profile]} {
       if {$profile eq $::tclpdf::pdfa::icc} {
@@ -540,4 +560,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.9
+package provide tclpdf::pdfa 1.10

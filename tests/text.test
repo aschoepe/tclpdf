@@ -385,21 +385,36 @@ test text-anchor-7.5 {a paragraph still returns the baseline below itself} -body
       [expr {abs($fromTop - (30 + $ascent + $height)) < 0.001}]
 } -result {1 1}
 
-test text-anchor-7.8 {a value other than baseline or top is refused} -body {
-  # The manual says "baseline or top". Anything else used to act as baseline
-  # in silence, so -anchor middle drew a baseline block and nobody was told.
+test text-anchor-7.8 {an anchor that is not one of the four is refused} -body {
+  # Anything unknown used to act as baseline in silence, so a misspelt anchor
+  # drew a baseline block and nobody was told. That is what this test has
+  # always been for; what changed on 2026-08-24 is the size of the list -
+  # middle and bottom are two of the four now, and only a word that is none
+  # of them is turned away.
   set doc [tclpdf new -unit mm]
   $doc page add
-  set codes [list [catch {$doc text "x" -at {10 10} -anchor middle} middle] \
-      [catch {$doc text "x" -at {10 10} -width 50 -anchor bottom} bottom] \
+  set accepted [list [catch {$doc text "x" -at {10 10} -anchor middle}] \
+      [catch {$doc text "x" -at {10 10} -width 50 -anchor bottom}]]
+  set codes [list [catch {$doc text "x" -at {10 10} -anchor sideways} one] \
       [catch {$doc textHeight "x" -width 50 -anchor xyz} measured]]
+  $doc destroy
+  # And the message names all four rather than the two it used to.
+  list $accepted $codes \
+      [string match {*baseline, top, middle or bottom, not "sideways"*} $one] \
+      [string match {*not "xyz"*} $measured]
+} -result {{0 0} {1 1} 1 1}
+
+test text-anchor-7.8a {a refused anchor writes nothing at all} -body {
+  # The other half of what 7.8 used to measure, kept apart now that the same
+  # call cannot both accept and refuse: the refusal comes before the first
+  # byte, so a document whose only text call was refused has no Tj in it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  catch {$doc text "x" -at {10 10} -anchor sideways}
   set content [::tclpdfTest::content $doc]
   $doc destroy
-  # Refused before anything reached the page, and the message names the two.
-  list $codes [string match {*must be baseline or top, not "middle"*} $middle] \
-      [string match {*not "bottom"*} $bottom] [string match {*not "xyz"*} $measured] \
-      [regexp {Tj} $content]
-} -result {{1 1 1} 1 1 1 0}
+  regexp {Tj} $content
+} -result 0
 
 test text-paragraph-7.6 {a rotated paragraph lays its lines side by side} -body {
   # They used to pile up on each other: the line advance ran down the page in
@@ -2788,6 +2803,139 @@ test text-vertical-2.5 {a refused vertical call leaves nothing behind} \
   list [regexp -all {BT} $stream] [regexp -all {ET} $stream] \
       [::tclpdfTest::starts $stream x]
 } -result {1 1 60}
+
+# -anchor middle and bottom (Z4) and -fit for one line (Z5), both built on
+# 2026-08-24. The anchors were reachable only as baseline and top; the fitting
+# was a recipe in examples/01.06 that every caller wrote again.
+
+proc anchorLine {anchor} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 20
+  $doc text "Typography" -at {20 100} -anchor $anchor
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Td, not Tm: an upright line is positioned with the shorter operator.
+  regexp {[0-9.]+ ([0-9.]+) Td} $content -> y
+  return $y
+}
+
+test text-anchor-30.1 {the four anchors stand in the order the words say} -body {
+  # top puts the ascender at y and so sits lowest on the page; bottom puts the
+  # descender there and sits highest. baseline and middle fall between.
+  set top [anchorLine top]
+  set middle [anchorLine middle]
+  set baseline [anchorLine baseline]
+  set bottom [anchorLine bottom]
+  list [expr {$top < $middle}] [expr {$middle < $baseline}] \
+      [expr {$baseline < $bottom}]
+} -result {1 1 1}
+
+test text-anchor-30.2 {middle is the box of the face, not the box of the ink} -body {
+  # The line's box is the ascender above the baseline and the descender below
+  # - the box a designer draws, not the one the ink happens to fill.
+  # Measuring the ink instead would put "Text" and "Type" at different
+  # heights, which is the opposite of what an anchor is for.
+  expr {[anchorLine middle] == [anchorLine middle]
+      && [anchorLine middle] != [anchorLine baseline]}
+} -result 1
+
+test text-anchor-30.3 {a word with no descender sits exactly where one with does} -body {
+  # The counter-measurement to 30.2, and the one that would fail if the ink
+  # were measured: "Ta" has nothing below the baseline and "Typography" has.
+  proc anchorOf {word} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc font -family helvetica -size 20
+    $doc text $word -at {20 100} -anchor bottom
+    set content [::tclpdfTest::content $doc]
+    $doc destroy
+    regexp {[0-9.]+ ([0-9.]+) Td} $content -> y
+    return $y
+  }
+  expr {[anchorOf "Ta"] == [anchorOf "Typography"]}
+} -result 1
+
+test text-anchor-30.4 {an unknown anchor names the four that exist} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc text "x" -at {20 20} -anchor sideways}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF TEXT ANCHOR sideways}
+
+
+proc fittedLine {args} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 20
+  $doc text "Rechnungsnummer 2026-0815" -at {20 40} {*}$args
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  set size 20
+  set stretch 100
+  regexp {/FHelvetica ([0-9.]+) Tf} $content -> size
+  regexp {([0-9.]+) Tz} $content -> stretch
+  return [list [format %.2f $size] [format %.2f $stretch]]
+}
+
+test text-fit-31.1 {a line that fits is left alone} -body {
+  # 97.25 mm at 20 pt, so a 100 mm box asks for nothing - and a dictionary
+  # that repeats a default says nothing, here as everywhere.
+  fittedLine -fit {100 8}
+} -result {20.00 100.00}
+
+test text-fit-31.2 {a little too wide is taken out of the letters} -body {
+  # 90 of 97.25 is 92.5 per cent, which is above the 85 the default allows -
+  # so the size is untouched and the face is narrowed. Narrowing a line by a
+  # few per cent is barely visible; a smaller size is visible at once beside
+  # its neighbours.
+  fittedLine -fit {90 8}
+} -result {20.00 92.54}
+
+test text-fit-31.3 {far too wide takes the rest out of the size} -body {
+  # 60 of 97.25 is 61.7 per cent, below the limit - so the letters keep
+  # exactly the narrowing allowed, 85, and the size comes down for the rest:
+  # 20 * 0.617 / 0.85.
+  fittedLine -fit {60 8}
+} -result {14.52 85.00}
+
+test text-fit-31.4 {-shrinkLimit says how far the letters may be narrowed} -body {
+  # 100 forbids narrowing altogether, so the whole reduction is a smaller
+  # size - which is what a caller setting text beside other text wants. 50
+  # allows more narrowing than the 61.7 per cent this line needs, so the size
+  # is left alone and the letters carry all of it.
+  list [fittedLine -fit {60 8} -shrinkLimit 100] \
+      [fittedLine -fit {60 8} -shrinkLimit 50]
+} -result {{12.34 100.00} {20.00 61.69}}
+
+test text-fit-31.5 {a box too low brings the size down on its own} -body {
+  # The height is a separate question, answered first: the line's box is the
+  # ascender plus the descender at the size in force, and a 3 mm box holds
+  # neither at 20 pt.
+  lindex [fittedLine -fit {100 3}] 0
+} -result 9.19
+
+test text-fit-31.6 {-fit and -width are different questions and refused together} -body {
+  # -fit puts ONE line into a box; -width breaks a paragraph into as many
+  # lines as it takes. Both name a rectangle and they do not mean the same
+  # thing by it.
+  set doc [tclpdf new]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc text "a b c" -at {20 20} \
+      -fit {40 10} -width 40}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF TEXT FIT WIDTH}
+
+test text-fit-31.7 {a -shrinkLimit outside the range is refused} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc text "a" -at {20 20} \
+      -fit {40 10} -shrinkLimit 0}]
+  $doc destroy
+  lrange $code 0 4
+} -result {TCLPDF TEXT FIT SHRINK 0}
 
 
 cleanupTests

@@ -141,6 +141,69 @@ puts "  named formats: [join [tclpdf formats] {, }]"
 $doc page add -format {88 55} -rotate 90
 diagonalStamp $doc "COPY" -color {0.25 0.35 0.65} -opacity 0.3 -share 0.7
 
+# THE RECIPE ABOVE IS AN OPTION SINCE 2026-08-24, and the stamp keeps doing it
+# by hand on purpose: what it works out is a size for a DIAGONAL, which -fit
+# does not do - the box it takes is upright. The two belong side by side, so
+# here is the same question in the form a caller usually has it: a line that
+# has to go into a given rectangle.
+#
+# -fit squeezes the letters up to -shrinkLimit (85 per cent by default) and
+# only then lowers the size, because a face narrowed by a few per cent is
+# barely visible in one line while a smaller size is visible at once beside
+# its neighbours.
+
+$doc page add
+$doc font -family helvetica -size 11
+$doc text "A line fitted into a box" -at {20 20}
+$doc font -size 8
+$doc text "Every line below is the same string at the same 20 pt, given a\
+    different box. The rectangle is drawn so the fit can be seen; the size\
+    and the narrowing the fitting chose are printed beside it." \
+    -at {20 26} -width 170
+
+set line "Rechnungsnummer 2026-0815"
+set y 40
+foreach box {{100 8} {90 8} {60 8} {40 8}} {
+  lassign $box boxWidth boxHeight
+  $doc rect -at [list 20 $y] -size $box -stroke {0.7 0.7 0.7} -width 0.2
+  $doc font -family helvetica -size 20
+  $doc text $line -at [list 20 $y] -fit $box -anchor top
+  # What the fitting chose, read back the way a caller would: the same
+  # arithmetic, asked of [textWidth] before the call.
+  $doc font -size 7
+  set natural [$doc textWidth $line -size 20]
+  $doc text "-fit $box - natural width [format %.1f $natural] mm" \
+      -at [list 125 [expr {$y + 4}]]
+  incr y 14
+}
+
+$doc font -size 8
+$doc text "-shrinkLimit 100 forbids narrowing altogether and takes the whole\
+    reduction out of the size - which is what a caller setting text beside\
+    other text at the same width wants:" -at [list 20 $y] -width 170
+incr y 12
+$doc rect -at [list 20 $y] -size {60 8} -stroke {0.7 0.7 0.7} -width 0.2
+$doc font -family helvetica -size 20
+$doc text $line -at [list 20 $y] -fit {60 8} -shrinkLimit 100 -anchor top
+
+# And the four anchors, which say what the y coordinate means. They measure
+# the FACE's line box - ascender above the baseline, descender below - and not
+# the ink the string happens to carry, which is what makes "Text" and "Type"
+# line up.
+incr y 16
+$doc font -size 8
+$doc text "-anchor, measured against the face's line box:" -at [list 20 $y]
+incr y 8
+$doc line -from [list 20 $y] -to [list 190 $y] -stroke {0.8 0.3 0.3} -width 0.2
+set x 22
+foreach anchor {baseline top middle bottom} {
+  $doc font -family helvetica -size 16
+  $doc text "Typo" -at [list $x $y] -anchor $anchor
+  $doc font -size 6
+  $doc text $anchor -at [list $x [expr {$y + 12}]]
+  incr x 42
+}
+
 exampleFooter $doc
 
 $doc write $target
@@ -157,4 +220,3 @@ for {set i 0} {$i < [$doc page count]} {incr i} {
     puts [format "  page %d: %.0f x %.0f mm, %d save/%d restore" \
         $i $width $height $saves $restores]
 }
-$doc destroy

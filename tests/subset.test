@@ -1,0 +1,107 @@
+# subset.test --
+#
+# The subsetter: what it builds, and what it refuses.
+#
+# A subset is the difference between a document that carries eighty characters
+# and one that carries a whole face - measured on DejaVuSans, 757 076 bytes for
+# an invoice. font.test drives the road end to end; this file measures the
+# module on its own, which is also where its three refusals get to say what
+# they are: until 2026-08-24 all three reached the caller as NONE.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::subset
+source [file join [file dirname [info script]] helper.tcl]
+
+set assets [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts]
+set fontRegular [file join $assets DejaVuSans.ttf]
+set otf [file join $assets urw-core35-fonts NimbusSans-Regular.otf]
+
+testConstraint haveFont [file exists $fontRegular]
+testConstraint haveOtf [file exists $otf]
+
+proc parsedFace {path} {
+  set channel [open $path rb]
+  set bytes [read $channel]
+  close $channel
+  return [::tclpdf::sfnt parse $bytes]
+}
+
+
+test subset-1.1 {a subset is smaller than the face it came from} -constraints haveFont -body {
+  # The whole reason the module exists, as a number rather than as a claim.
+  set font [parsedFace $::fontRegular]
+  set result [::tclpdf::subset build $font {0 36 37 38}]
+  set smaller [expr {[string length [dict get $result bytes]]
+      < [string length [dict get $font bytes]] / 10}]
+  list $smaller [dict get $result glyphs 0]
+} -result {1 0}
+
+test subset-1.2 {glyph 0 stays 0, because a reader may fall back on it} -constraints haveFont -body {
+  set result [::tclpdf::subset build [parsedFace $::fontRegular] {0 70 40}]
+  dict get $result glyphs 0
+} -result 0
+
+test subset-1.3 {a composite drags its parts in} -constraints haveFont -body {
+  # An a-umlaut is not an outline but a reference to "a" plus "dieresis". A
+  # subset that copies only the composite leaves those two behind and the
+  # glyph renders as nothing at all - in exactly the documents that carry
+  # German text.
+  set font [parsedFace $::fontRegular]
+  # Measured against a letter that is NOT composite, so the number says
+  # something: an "A" asked for alone brings .notdef and itself, an a-umlaut
+  # brings .notdef, itself, the "a" and the dieresis.
+  set plain [::tclpdf::subset build $font \
+      [list 0 [dict get $font cmap 65]]]
+  set composite [::tclpdf::subset build $font \
+      [list 0 [dict get $font cmap 228]]]
+  list [dict size [dict get $plain glyphs]] \
+      [dict size [dict get $composite glyphs]]
+} -result {2 4}
+
+
+test subset-2.1 {a CFF face cannot be subsetted, and says so as SUBSET} -constraints haveOtf -body {
+  # CFF outlines are charstrings in a table this package reads no further than
+  # its Top DICT, so there is no loca and no glyf to rewrite. The refusal is
+  # its own class: it is not damage and not an unsupported format, it is the
+  # one operation this face does not admit.
+  ::tclpdfTest::refusalCode {::tclpdf::subset build [parsedFace $::otf] {0 36}}
+} -result {TCLPDF FONT SUBSET outlines}
+
+test subset-2.2 {SUBSET is not DAMAGED, so a caller can tell them apart} -constraints haveOtf -body {
+  # The distinction that makes four classes worth having: a CFF face is
+  # perfectly sound and gets embedded whole, so a caller trapping DAMAGED to
+  # report a broken file must not see this one.
+  lindex [::tclpdfTest::refusalCode {::tclpdf::subset build [parsedFace $::otf] {0 36}}] 2
+} -result SUBSET
+
+test subset-2.3 {a face whose vhea is too short to correct is damage} -constraints haveFont -body {
+  # Writing a vmtx without a header that describes it would be worse than
+  # writing neither. Built rather than found: no face on this machine carries
+  # a vhea that short.
+  set font [parsedFace $::fontRegular]
+  set tables [dict get $font tables]
+  dict set tables vhea [list 0 8]
+  dict set font tables $tables
+  dict set font vertical [dict create advance 1000 metrics {}]
+  ::tclpdfTest::refusalCode {::tclpdf::subset build $font {0 36} }
+} -match glob -result {TCLPDF FONT *}
+
+
+test subset-3.1 {every refusal in the module carries a code} -body {
+  # The measurement that made this file necessary, kept as a test: a refusal
+  # with no -errorcode is invisible to trap.
+  ::tclpdfTest::refusalsWithoutCode subset.tcl
+} -result 0
+
+
+cleanupTests

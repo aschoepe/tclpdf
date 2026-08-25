@@ -322,15 +322,12 @@ oo::define ::tclpdf::document::document {
   # How far the current face reaches BELOW the baseline, in the document's
   # unit and at the size the text state holds.
   #
-  # THE MISSING TWIN OF [FontAscender], and it is written here only because
-  # font.tcl has no [FontDescender] to ask. The three branches are that
-  # method's, mirrored: an embedded sfnt face keeps the number in its own
-  # units per em, an embedded Type 1 face in the AFM beside it in 1/1000 em -
-  # where a zero counts as absent and the bounding box is the honest
-  # substitute, exactly as [FontAscender] treats the ascender - and one of the
-  # standard fourteen in the metrics this package ships. Where a
-  # [FontDescender] is added beside [FontAscender], this method becomes one
-  # line and should.
+  # THE EMBEDDED HALF IS [FontDescender] IN font.tcl, which is where it
+  # belongs and where it went on 2026-08-24 - this method said so itself
+  # before that, carrying all three branches of it and noting that it "becomes
+  # one line and should". What is left here is the part that is this module's
+  # own: a face this document never embedded, whose descender comes from the
+  # metrics the package ships, and the Type 3 refusal.
   #
   # A Type 3 face is refused rather than guessed at: its glyphs are content
   # streams with a font matrix of the caller's choosing, [Type3Ascender]
@@ -352,19 +349,8 @@ oo::define ::tclpdf::document::document {
           measure it carries is the box \[\$doc font type3\] was given. Pass\
           the rectangle to -quads instead"
     }
-    set entry [dict get [my state fonts] $font]
-    if {[dict get $entry kind] eq "type1"} {
-      set descender [dict get $entry metrics descender]
-      if {$descender eq {} || $descender == 0} {
-        set descender [lindex [dict get $entry metrics bbox] 1]
-      }
-      return [::tclpdf::geometry fromPoints \
-          [expr {abs($descender) * $size / 1000.0}] [my cget -unit]]
-    }
-    set parsed [dict get $entry parsed]
-    return [::tclpdf::geometry fromPoints \
-        [expr {abs([dict get $parsed descender]) * $size
-            / [dict get $parsed unitsPerEm]}] [my cget -unit]]
+    return [::tclpdf::geometry fromPoints [my FontDescender $font $size] \
+        [my cget -unit]]
   }
 
   # The smallest {x y w h} holding every quad.
@@ -434,33 +420,23 @@ oo::define ::tclpdf::document::document {
   # dictionary would offer the band to any content stream that cared to say
   # Do. Same rule [FieldAppearanceStream] follows.
   method AnnotMarkupAppearance {subtype number rect quads colour} {
-    lassign [my extent [list [dict get $rect width] [dict get $rect height]]] \
-        widthPoints heightPoints
+    # The form, the failure, the /Resources and the reservation are
+    # [AnnotAppearanceForm]'s in annot.tcl - shared since 2026-08-25, when
+    # the geometry annotations wanted the same thing and it would have been
+    # the fourth copy of it in the tree.
     set left [dict get $rect left]
     set top [dict get $rect top]
-    my FormBegin $widthPoints $heightPoints
-    set failed [catch {
+    # The script runs in THIS frame - [AnnotAppearanceForm] uplevels it - so
+    # "my" reaches the private drawing method and the locals above are in
+    # reach without being threaded through as arguments. The same arrangement
+    # [layer draw -script] uses.
+    return [my AnnotAppearanceForm $rect annot.ap.$number {
       foreach quad $quads {
         lassign $quad x y width height
         my AnnotMarkupShape $subtype [expr {$x - $left}] [expr {$y - $top}] \
             $width $height $colour
       }
-    } result info]
-    set content [my FormEnd]
-    if {$failed} {
-      return -options $info $result
-    }
-    set pairs [list Type /XObject Subtype /Form FormType 1 \
-        BBox [::tclpdf::pdfObj arr [list 0 0 \
-            [::tclpdf::pdfObj num $widthPoints] \
-            [::tclpdf::pdfObj num $heightPoints]]]]
-    # PDF/A 6.2.2: a content stream that references another object - here the
-    # ExtGState the blend mode needs - must have its OWN Resources
-    # dictionary; inheriting is valid PDF and forbidden there. The same one
-    # indirect object every page points at, so nothing is written twice.
-    lappend pairs Resources [[my writer] ref [my reservation output.resources]]
-    return [[my writer] ref \
-        [my streamObject $pairs $content [my reservation annot.ap.$number]]]
+    }]
   }
 
   # One quad, drawn. Everything is derived from the quad's own height, so a
@@ -518,4 +494,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annotMark 1.0
+package provide tclpdf::annotMark 1.1

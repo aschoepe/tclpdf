@@ -140,10 +140,25 @@ namespace eval ::tclpdf::annot {
   # its field types, and for the same reason: the dispatcher has to know the
   # word before the file that answers it is loaded.
   variable kinds {
-    highlight tclpdf::annotMark
-    underline tclpdf::annotMark
-    strikeout tclpdf::annotMark
-    squiggly  tclpdf::annotMark
+    highlight  tclpdf::annotMark
+    underline  tclpdf::annotMark
+    strikeout  tclpdf::annotMark
+    squiggly   tclpdf::annotMark
+    line       tclpdf::annotShape
+    square     tclpdf::annotShape
+    circle     tclpdf::annotShape
+    polygon    tclpdf::annotShape
+    polyline   tclpdf::annotShape
+    attachment tclpdf::annotShape
+  }
+
+  # Which method each module answers with. annotMark provides [AnnotMarkup]
+  # and annotShape [AnnotShape]; the dispatcher checks that the method is
+  # there before it calls, so a module that does not keep its side of the
+  # bargain says so by name rather than failing three frames down.
+  variable entries {
+    tclpdf::annotMark  AnnotMarkup
+    tclpdf::annotShape AnnotShape
   }
 }
 
@@ -164,17 +179,19 @@ oo::define ::tclpdf::document::document {
       stamp {return [my AnnotStamp {*}$args]}
       default {
         if {[dict exists $kinds $kind]} {
-          package require [dict get $kinds $kind]
+          variable ::tclpdf::annot::entries
+          set module [dict get $kinds $kind]
+          package require $module
           # Named rather than assumed: a module that answers the word it was
           # registered for is the whole contract, and one that does not has
           # to say so here rather than fail as an unknown method three frames
           # down. -private matters - the entry is not an exported method.
-          if {"AnnotMarkup" ni [info object methods [self] -all -private]} {
+          set entry [dict get $entries $module]
+          if {$entry ni [info object methods [self] -all -private]} {
             return -code error -errorcode [list TCLPDF ANNOT MODULE $kind] \
-                "tclpdf: the module [dict get $kinds $kind] does not provide\
-                \"annot $kind\""
+                "tclpdf: the module $module does not provide \"annot $kind\""
           }
-          return [my AnnotMarkup $kind {*}$args]
+          return [my $entry $kind {*}$args]
         }
         return -code error -errorcode [list TCLPDF ANNOT KIND $kind] \
             "tclpdf: unknown annotation \"$kind\" - known are: note, stamp,\
@@ -389,22 +406,52 @@ oo::define ::tclpdf::document::document {
   # The object number is reserved BEFORE the dictionary is written, because
   # the /StructParent that goes into it can only be asked for once the object
   # has a number - the same order [link] keeps, and for the same reason.
-  method AnnotWrite {subtype rect options pairs flags {quads {}}} {
+  # "builder", where it is given, is the name of a method and its leading
+  # arguments; [AnnotWrite] appends the appearance's own name, the rectangle
+  # and the options and calls it to get the /AP /N reference.
+  #
+  # THE APPEARANCE IS BUILT BEFORE THE NUMBER IS RESERVED, and that order is
+  # the fix of 2026-08-25 rather than a preference. It used to be the other
+  # way round, because the appearance was written under a reservation named
+  # after the annotation's object number - and a drawing script that raised
+  # then left that number reserved and never filled, so the NEXT [write] of
+  # the whole document died with "object(s) reserved but never written",
+  # although the caller had caught the error and carried on. Measured at
+  # "annot polygon" with a malformed colour and reproduced at "annot
+  # highlight", which had carried the defect since the markups were built;
+  # [annot note] and [annot stamp] were never affected, because everything
+  # they can refuse stands before the reservation.
+  #
+  # What the appearance needs is not the object number but a name that is the
+  # SAME on a second [write] of the same document - otherwise a rerun writes
+  # a second copy beside the first. A counter of its own gives that: the
+  # calls come in the same order every time, which is exactly what makes the
+  # object numbers stable too.
+  method AnnotWrite {subtype rect options pairs flags {quads {}} {builder {}}} {
     set record [dict create subtype $subtype number {} \
         page [my page current] contents [dict get $options contents] \
         appearance [expr {[dict get $options appearance] ne {}
-            || [llength $quads] > 0}] \
+            || [llength $quads] > 0 || [llength $builder] > 0}] \
         structured [expr {[my state tagged] eq "1"}]]
     my AnnotCheck $record
-    set number [[my writer] reserve]
+    set serial [my state annotSerial]
+    if {$serial eq {}} {
+      set serial 0
+    }
+    my state annotSerial [incr serial]
     set appearance {}
     if {[dict get $options appearance] ne {}} {
       set appearance [my AnnotAppearance [dict get $options appearance] \
           "annot [string tolower $subtype]"]
     } elseif {[llength $quads]} {
-      set appearance [my AnnotMarkupAppearance $subtype $number $rect $quads \
+      set appearance [my AnnotMarkupAppearance $subtype $serial $rect $quads \
           [dict get $options colour]]
+    } elseif {[llength $builder]} {
+      set appearance [my {*}$builder $serial $rect $options]
     }
+    # Nothing is reserved until here, so a refusal above leaves the writer as
+    # it was and the document still writes.
+    set number [[my writer] reserve]
     set all [list Type /Annot Subtype [::tclpdf::pdfObj name $subtype] \
         Rect [dict get $rect array] \
         Border [::tclpdf::pdfObj arr {0 0 0}] \
@@ -445,6 +492,53 @@ oo::define ::tclpdf::document::document {
     my AnnotationOnPage [my page current] [[my writer] ref $number]
     my AnnotRemember [dict set record number $number]
     return $number
+  }
+
+  # AN APPEARANCE STREAM, drawn by a script, in the annotation's own
+  # rectangle. The one place that builds one - three modules wanted it and
+  # each had written its own: annotMark for the bands, annotShape for the
+  # geometry, and the shape of it again in field.tcl and xObject.tcl.
+  #
+  # WHAT IT ARRANGES, and why it is not two lines at each call site:
+  #
+  #   the space    [FormBegin] mirrors [coords] against the form's height, so
+  #                every drawing method of the package works unchanged inside
+  #                the script and the geometry only has to move from the
+  #                page's origin to the rectangle's top left corner
+  #   the failure  a script that raises has to leave the form CLOSED, or the
+  #                next content written goes into a stream nobody will emit -
+  #                which is a page that silently loses everything after the
+  #                annotation
+  #   /Resources   PDF/A 6.2.2: a content stream that references another
+  #                object must carry its own, and inheriting is valid PDF and
+  #                forbidden there. The same one indirect object every page
+  #                points at, so nothing is written twice
+  #   the object   through the reservation named, so that a document written
+  #                twice writes over its own appearance instead of adding a
+  #                second one
+  #
+  # NOT registered as an /XObject resource: an appearance is reached through
+  # /AP and through nothing else, and a name in the resource dictionary would
+  # offer the picture to any content stream that cared to say Do. The same
+  # rule [FieldAppearanceStream] follows.
+  #
+  # Returns the reference to put under /AP /N.
+  method AnnotAppearanceForm {rect reservation script} {
+    lassign [my extent [list [dict get $rect width] [dict get $rect height]]] \
+        widthPoints heightPoints
+    my FormBegin $widthPoints $heightPoints
+    set failed [catch {uplevel 1 $script} result info]
+    set content [my FormEnd]
+    if {$failed} {
+      return -options $info $result
+    }
+    set pairs [list Type /XObject Subtype /Form FormType 1 \
+        BBox [::tclpdf::pdfObj arr [list 0 0 \
+            [::tclpdf::pdfObj num $widthPoints] \
+            [::tclpdf::pdfObj num $heightPoints]]] \
+        Resources [[my writer] ref [my reservation output.resources]]]
+    return [[my writer] ref \
+        [my streamObject $pairs $content [my reservation $reservation]]]
   }
 
   # One Annot structure element around one annotation, inside whatever
@@ -672,4 +766,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annot 1.0
+package provide tclpdf::annot 1.1

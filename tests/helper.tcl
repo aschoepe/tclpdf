@@ -618,3 +618,38 @@ proc ::tclpdfTest::pixels {path points args} {
 proc ::tclpdfTest::pixel {path x y {dpi 20}} {
   return [lindex [::tclpdfTest::pixels $path [list [list $x $y]] -dpi $dpi -unit mm] 0]
 }
+
+# The -errorcode of a refusal, or the string "no refusal" when the call went
+# through. A test that reported a missing refusal as an empty code would look
+# like a code mismatch and send the reader to the wrong place.
+#
+# Here rather than in one test file since 2026-08-24, when the font sub-modules
+# got the codes they had never carried: three files ask this question, and the
+# next one that refuses something will be the fourth.
+proc ::tclpdfTest::refusalCode {script} {
+  if {![catch {uplevel 1 $script} message options]} {
+    return "no refusal"
+  }
+  return [dict get $options -errorcode]
+}
+
+# How many refusals in a module reach a caller with no code at all. The
+# contract is that a documented class is trappable, and a bare "return -code
+# error" defeats it silently - the caller sees NONE and its trap never fires.
+# Counted in the source rather than by calling every refusal, because most of
+# them need a fixture that does not exist and the question is about the module
+# as a whole.
+proc ::tclpdfTest::refusalsWithoutCode {module} {
+  set path [file join [file dirname [file dirname [file normalize \
+      [info script]]]] $module]
+  set channel [open $path]
+  set text [read $channel]
+  close $channel
+  set bare 0
+  foreach line [split $text \n] {
+    if {[regexp {return -code error [^-]} $line]} {
+      incr bare
+    }
+  }
+  return $bare
+}

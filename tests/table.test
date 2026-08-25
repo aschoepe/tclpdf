@@ -847,9 +847,10 @@ test table-15.3 {an unknown direction on a cell is refused like any other key} \
       -style {directon rtl}} two]
   # And a direction that is none of the three reaches the same check every
   # other call comes through. The list gained "ttb" on 2026-08-24 with
-  # vertical writing; a table refuses that one for a reason of its own - the
-  # block road breaks lines by width - and says so in its own words, which
-  # is what [table-15.4] measures.
+  # vertical writing; a table refuses that one for a reason of its own - it
+  # sets its cells as horizontal blocks - and since 2026-08-25 it says so in
+  # its OWN words rather than borrowing [text]'s, which is what
+  # [table-15.4] measures.
   set wrong [catch {$doc table -at {20 30} -width 170 -body {{a b}} \
       -style {direction sideways}} three]
   $doc destroy
@@ -1682,9 +1683,36 @@ test table-15.4 {a table refuses -direction ttb in its own words} -constraints h
       -style {direction ttb family jp}} message options]
   $doc destroy
   list $code [dict get $options -errorcode] \
-      [string match {*sets ONE vertical line*} $message] \
+      [string match {*There is no vertical table*} $message] \
       [string match {*needs a TrueType*} $message]
-} -result {1 {TCLPDF TEXT VERTICAL block} 1 0}
+} -result {1 {TCLPDF TABLE DIRECTION ttb} 1 0}
+
+# The table's refusals carry error codes since 2026-08-25. They did not, and
+# the inconsistency was made on the same day: the vertical-direction refusal
+# was added WITH a code beside nine that had none, so a "trap {TCLPDF TABLE}"
+# would have caught exactly one of the ten.
+
+test table-code-17.1 {every refusal in the layout module carries a code} -body {
+  ::tclpdfTest::refusalsWithoutCode tableLayout.tcl
+} -result 0
+
+test table-code-17.2 {the classes say what went wrong} -body {
+  # Four classes, and they are told apart by what a caller would do about
+  # them: a span that does not fit, a column property, the widths not adding
+  # up, and a style value.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach script {
+    {$doc table -at {20 20} -width 100 -body {{{text a colSpan 9} b}}}
+    {$doc table -at {20 20} -width 100 -columns {{width nonsense}} -body {{a b}}}
+    {$doc table -at {20 20} -width 100 -style {align sideways} -body {{a b}}}
+  } {
+    lappend codes [lindex [::tclpdfTest::refusalCode $script] 1]
+  }
+  $doc destroy
+  lsort -unique $codes
+} -result TABLE
 
 
 cleanupTests

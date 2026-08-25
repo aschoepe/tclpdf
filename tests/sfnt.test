@@ -1,0 +1,234 @@
+# sfnt.test --
+#
+# The sfnt reader: what it refuses, and under which error code.
+#
+# This file exists for the codes rather than for the parsing - what a correct
+# face parses to is measured in font.test, which drives this module 134 times.
+# A refusal is the other half of the contract: it reaches a caller as an
+# -errorcode, and until 2026-08-24 every one of the thirty refusals in this
+# module arrived as NONE, so no "trap {TCLPDF FONT}" could see them.
+#
+# The damaged faces are BUILT rather than found. A collection, a CFF2 and a
+# truncated table are all cases a real file is not going to supply on demand,
+# and a fixture checked in for each would be a font this package may not
+# redistribute. Each one starts from the sfnt header, which is twelve bytes
+# and a table directory, and breaks exactly one thing.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+source [file join [file dirname [info script]] helper.tcl]
+
+set fontRegular [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts DejaVuSans.ttf]
+testConstraint haveFont [file exists $fontRegular]
+
+# An sfnt out of whole cloth: a header, a table directory and the tables. The
+# checksums are zero, which no reader here verifies - what is under test is
+# what the parser demands before it reads anything.
+proc sfntFile {tables {signature 0x00010000}} {
+  set count [expr {[llength $tables] / 2}]
+  set header [binary format IuSuSuSuSu $signature $count 0 0 0]
+  set offset [expr {12 + $count * 8 * 2}]
+  set directory {}
+  set body {}
+  foreach {tag data} $tables {
+    append directory [binary format a4IuIuIu $tag 0 $offset \
+        [string length $data]]
+    append body $data
+    # Every table starts on a four-byte boundary (OpenType, "Organization of
+    # an OpenType Font").
+    set padding [expr {(4 - [string length $data] % 4) % 4}]
+    append body [string repeat \x00 $padding]
+    incr offset [expr {[string length $data] + $padding}]
+  }
+  return $header$directory$body
+}
+
+# A head table that says what the parser reads out of it: the units per em at
+# offset 18, the bounding box at 36 and the loca format at 50.
+proc headTable {{unitsPerEm 1000}} {
+  set head [string repeat \x00 54]
+  return [string replace $head 18 19 [binary format Su $unitsPerEm]]
+}
+
+proc hheaTable {} {
+  return [string repeat \x00 36]
+}
+
+proc maxpTable {{numGlyphs 1}} {
+  set maxp [string repeat \x00 32]
+  return [string replace $maxp 4 5 [binary format Su $numGlyphs]]
+}
+
+# A whole face the builder above produces and the parser accepts. Every
+# refusal below is this face with one thing broken, which is what makes each
+# test a statement about the one thing rather than about the fixture.
+proc wholeFace {} {
+  return [sfntFile [list head [headTable] hhea [hheaTable] \
+      hmtx [string repeat \x00 4] maxp [maxpTable]]]
+}
+
+
+test sfnt-1.1 {a whole built face parses, so the fixtures below say something} -body {
+  dict get [::tclpdf::sfnt parse [wholeFace]] unitsPerEm
+} -result 1000
+
+test sfnt-1.2 {a file shorter than an sfnt header names its source} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse "not a font"}
+} -result {TCLPDF FONT SOURCE sfnt}
+
+test sfnt-1.3 {a file that is long enough but is not a font} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse [sfntFile {} 0x25504446]}
+} -result {TCLPDF FONT SOURCE sfnt}
+
+test sfnt-1.4 {a TrueType collection is refused as unsupported, not as damage} -body {
+  # "ttcf" - the tag alone decides, which is why a header is the whole
+  # fixture. The three collections on this machine are macOS system fonts and
+  # may not be checked in.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [binary format a4SuSuIu ttcf 1 0 2][string repeat \x00 8]}
+} -result {TCLPDF FONT UNSUPPORTED collection}
+
+test sfnt-1.5 {a table directory that ends inside an entry is damage} -body {
+  set face [wholeFace]
+  # Four tables announced, sixteen - the directory now reaches past the file.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse [string replace $face 4 5 \
+      [binary format Su 16]]}
+} -result {TCLPDF FONT DAMAGED directory}
+
+test sfnt-1.6 {a face without a required table names the table} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse [sfntFile [list hhea [hheaTable] \
+      hmtx [string repeat \x00 4] maxp [maxpTable]]]}
+} -result {TCLPDF FONT TABLE head}
+
+test sfnt-1.7 {an OTTO file without a CFF table is missing that one} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse [sfntFile [list head [headTable] \
+      hhea [hheaTable] hmtx [string repeat \x00 4] maxp [maxpTable]] \
+      0x4F54544F]}
+} -result {TCLPDF FONT TABLE {CFF }}
+
+test sfnt-1.8 {a face declaring no em is a metric refusal} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse [sfntFile [list head [headTable 0] \
+      hhea [hheaTable] hmtx [string repeat \x00 4] maxp [maxpTable]]]}
+} -result {TCLPDF FONT METRICS unitsPerEm}
+
+
+# The cmap road. A face with no usable Unicode subtable and one whose subtable
+# is in a format this package does not read are DIFFERENT answers - the first
+# says the face cannot be addressed at all, the second that this reader is the
+# limit. A caller that falls back to another face wants to tell them apart.
+
+# A cmap with one subtable: version, count, then platform, encoding and offset.
+# The cmap is read by [parse] rather than by a call of its own, so that is what
+# these three drive - a first draft asked a subcommand that does not exist and
+# was green anyway, because [parse] inside the argument had already raised the
+# refusal under test.
+proc cmapTable {format {platform 3} {encoding 1}} {
+  set subtable [binary format SuSuSu $format 0 0]
+  return [binary format SuSuSuSuIu 0 1 $platform $encoding 12]$subtable
+}
+
+test sfnt-2.1 {a face whose cmap holds nothing Unicode} -constraints haveFont -body {
+  set face [sfntFile [list head [headTable] hhea [hheaTable] \
+      hmtx [string repeat \x00 4] maxp [maxpTable] \
+      cmap [cmapTable 4 1 0]]]
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse $face}
+} -result {TCLPDF FONT ENCODING cmap}
+
+test sfnt-2.2 {a cmap format this reader does not know is unsupported} -body {
+  set face [sfntFile [list head [headTable] hhea [hheaTable] \
+      hmtx [string repeat \x00 4] maxp [maxpTable] cmap [cmapTable 6]]]
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse $face}
+} -result {TCLPDF FONT UNSUPPORTED cmap 6}
+
+test sfnt-2.3 {a format 12 cmap promising more groups than the file holds} -body {
+  # Format 12: format, reserved, length, language, then the group count. The
+  # count steers a loop, so it is checked before it is believed - a corrupt
+  # one read as unsigned would send the reader billions of groups past the
+  # end.
+  set sub [binary format SuSuIuIuIu 12 0 16 0 1000000]
+  set cmap [binary format SuSuSuSuIu 0 1 3 10 12]$sub
+  set face [sfntFile [list head [headTable] hhea [hheaTable] \
+      hmtx [string repeat \x00 4] maxp [maxpTable] cmap $cmap]]
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse $face}
+} -result {TCLPDF FONT DAMAGED cmap}
+
+
+# The bare CFF road, which is the one the codes were missing on when the
+# format was built on 2026-08-24: every refusal in it reached font.tcl, which
+# passed it on with no code at all.
+
+test sfnt-3.1 {a bare CFF too short to hold a header} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt cffFont "abc"}
+} -result {TCLPDF FONT SOURCE cff}
+
+test sfnt-3.2 {a CFF2 is a format of its own and is named as one} -body {
+  # Header version 2.0 - the variable-font CFF, a different table with a
+  # different charstring interpreter, not a damaged CFF.
+  # Eight bytes is the least this reader looks at, so the fixture is that
+  # long - a shorter one is refused as a source before the version is read.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt cffFont [binary format cccc 2 0 5 2][string repeat \x00 4]}
+} -result {TCLPDF FONT UNSUPPORTED cff2}
+
+test sfnt-3.3 {a header version that is neither 1 nor 2} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt cffFont [binary format cccc 9 0 4 2][string repeat \x00 4]}
+} -result {TCLPDF FONT SOURCE cff}
+
+test sfnt-3.4 {a CFF whose Top DICT INDEX is empty} -body {
+  # A correct header, a Name INDEX with one entry, and then a Top DICT INDEX
+  # declaring no entries - the face has no dictionary and no charstrings.
+  set header [binary format ccccc 1 0 4 2 0]
+  set nameIndex [binary format SucIucc 1 1 1 2 65]
+  set topIndex [binary format Su 0]
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt cffFont $header$nameIndex$topIndex}
+} -result {TCLPDF FONT DAMAGED cff}
+
+
+test sfnt-3.5 {a CFF2 reaches the CFF reader rather than the sfnt reader} -body {
+  # A regression against a defect measured on 2026-08-24: [isBareCff] asked
+  # for major version 1, so a CFF2 fell through to the sfnt reader and came
+  # back as "not a TrueType or OpenType font". The accurate refusal existed
+  # and could not be reached from [font embed] - which is where a caller
+  # stands. Asked here through the recogniser, and through the document in
+  # font.test, because the two are what the road is made of.
+  ::tclpdf::sfnt isBareCff [binary format cccc 2 0 5 0][string repeat \x00 4]
+} -result 1
+
+test sfnt-3.6 {and an sfnt is still not mistaken for one} -body {
+  # The four sfnt signatures all begin with a byte a CFF header cannot have.
+  list [::tclpdf::sfnt isBareCff [wholeFace]] \
+      [::tclpdf::sfnt isBareCff "OTTO[string repeat \x00 8]"] \
+      [::tclpdf::sfnt isBareCff "ttcf[string repeat \x00 8]"]
+} -result {0 0 0}
+
+
+test sfnt-4.1 {the classes are disjoint, so a trap on one catches only it} -body {
+  # The point of four classes rather than one: a caller that wants to fall
+  # back on another face traps UNSUPPORTED, one that wants to report a broken
+  # file traps DAMAGED, and neither sees the other.
+  set codes {}
+  foreach script {
+    {::tclpdf::sfnt parse "not a font"}
+    {::tclpdf::sfnt cffFont [binary format cccc 2 0 5 2][string repeat \x00 4]}
+  } {
+    lappend codes [lindex [::tclpdfTest::refusalCode $script] 2]
+  }
+  set codes
+} -result {SOURCE UNSUPPORTED}
+
+test sfnt-4.2 {every refusal in the module carries a code} -body {
+  # The measurement that made this file necessary, kept as a test: a refusal
+  # with no -errorcode is invisible to trap.
+  ::tclpdfTest::refusalsWithoutCode sfnt.tcl
+} -result 0
+
+
+cleanupTests

@@ -118,9 +118,22 @@ $doc text "embedded once, placed seven times - by width, turned, faded, by heigh
 $doc font -style bold -size 9
 $doc text "Gradients: shading types 2 and 3" -at {20 130}
 
+# THE SAME GRADIENT COSTS ONE OBJECT, however often it is drawn. Every PDF
+# function goes through one place, and one whose bytes match a function
+# already in the file is referenced again instead of repeated - the device the
+# ICC profiles already use. Measured below, and printed to the console: the
+# three swatches on this line are three different gradients and carry three
+# functions, while the row of ten identical ticks under them carries one.
 $doc shading axial -at {20 136} -size {50 20} -colors {white steelblue}
 $doc shading axial -at {80 136} -size {50 20} -colors {red yellow green} -angle 90
 $doc shading radial -at {140 136} -size {45 20} -colors {white {0.2 0.3 0.6}}
+
+# Ten of the same, which is what a table of shaded cells looks like from the
+# file's side.
+for {set tick 0} {$tick < 10} {incr tick} {
+  $doc shading axial -at [list [expr {20 + $tick * 17}] 160] -size {15 4} \
+      -colors {white steelblue}
+}
 
 $doc font -style {} -size 7
 $doc text "axial, two colours" -at {20 160}
@@ -388,4 +401,14 @@ puts "  source pictures together: [expr {[file size [file join $images sample-ph
     [file size [file join $images sample-keyed.png]] +
     [file size [file join $images sample-keyed16.png]] +
     [file size [file join $images sample-rgba.png]]}] bytes"
+
+# What the function pool saved, read out of the finished file: fourteen
+# shadings on these pages, and far fewer functions behind them - the ten
+# identical ticks share the one the first swatch wrote.
+set channel [open $target rb]
+set written [read $channel]
+close $channel
+puts "  shadings: [regexp -all {/ShadingType} $written], type 2 functions:\
+    [regexp -all {/FunctionType 2} $written], type 3:\
+    [regexp -all {/FunctionType 3} $written]"
 $doc destroy

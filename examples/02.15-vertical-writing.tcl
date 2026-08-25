@@ -243,6 +243,51 @@ exampleCommandBlock $doc y [list \
     "pdftotext -f 1 -l 1 [file tail $target] - | sed -n 1,6p" \
     "pdftoppm -f 1 -l 1 -r 150 -png [file tail $target] page"]
 
+# -- a prose text broken into columns ---------------------------------------
+#
+# The poem above is one column per LINE, because a poem has lines. A prose
+# text has none, and until 2026-08-25 the caller had to break it himself:
+# [text -width -direction ttb] was refused outright, since the block road
+# places its lines DOWN the page and a vertical text needs them placed LEFT.
+#
+# Breaking and placing are two questions, and the first one is answered now:
+# [textLines -direction ttb] returns the columns, with -width read as the
+# column HEIGHT - what the breaker asks of a candidate is "how far does this
+# reach", and that is answered along whichever axis the text writes. Placing
+# them is the loop below, which is also what decides that the columns run
+# right to left.
+
+$doc page add
+$doc font -family body -size 12 -color {0.20 0.30 0.45}
+$doc text "Prose, broken into columns" -at {20 25}
+$doc font -size 8 -color {0.40 0.40 0.45}
+$doc text "One call breaks it, one loop places it. -width is the column\
+    height; the columns come back in reading order and are set from the\
+    right. What is deliberately NOT built is the placing - see the manual\
+    under \"Vertical writing\" for why half of it would be worse than this\
+    loop." -at {20 32} -width 170
+
+set prose "日本語の縦書きでは、行は上から下へ進み、列は右から左へ並びます。\
+これは散文の例で、列の高さを指定すると、必要なだけの列に分かれます。"
+
+set columnHeight 90
+set columns [$doc textLines $prose -width $columnHeight -family jp -size 12 \
+    -direction ttb]
+
+set x 175
+foreach column $columns {
+    $doc text $column -at [list $x 50] -family jp -size 12 -direction ttb
+    set x [expr {$x - 9}]
+}
+
+$doc font -family body -size 8 -color {0.45 0.45 0.5}
+$doc text "[llength $columns] columns at a column height of $columnHeight mm.\
+    The same text at half that height needs\
+    [llength [$doc textLines $prose -width [expr {$columnHeight / 2}] \
+        -family jp -size 12 -direction ttb]] - which is the measurement that\
+    says -width is being read along the writing direction and not across it." \
+    -at [list 20 150] -width 170
+
 exampleFooter $doc body
 
 $doc write $target

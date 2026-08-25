@@ -51,7 +51,8 @@ proc ::tclpdf::sfnt::read {path} {
 
 proc ::tclpdf::sfnt::parse {bytes} {
   if {[string length $bytes] < 12} {
-    return -code error "tclpdf: not a font file - too short"
+    return -code error -errorcode [list TCLPDF FONT SOURCE sfnt] \
+        "tclpdf: not a font file - too short"
   }
   binary scan $bytes Iu tag
   # 0x00010000 is TrueType outlines, "true" is the old Apple spelling, "ttcf"
@@ -68,11 +69,13 @@ proc ::tclpdf::sfnt::parse {bytes} {
     set outlines cff
   }
   if {$signature eq "ttcf"} {
-    return -code error "tclpdf: this is a TrueType collection - extract the\
+    return -code error -errorcode [list TCLPDF FONT UNSUPPORTED collection] \
+        "tclpdf: this is a TrueType collection - extract the\
         single face you want first"
   }
   if {$outlines eq "truetype" && $tag != 0x00010000 && $signature ne "true"} {
-    return -code error "tclpdf: not a TrueType or OpenType font (signature\
+    return -code error -errorcode [list TCLPDF FONT SOURCE sfnt] \
+        "tclpdf: not a TrueType or OpenType font (signature\
         0x[format %08X $tag])"
   }
 
@@ -87,7 +90,8 @@ proc ::tclpdf::sfnt::parse {bytes} {
     # message of its own.
     if {[binary scan $bytes @${offset}a4IuIuIu \
             name checksum position length] != 4} {
-      return -code error "tclpdf: the font's table directory is cut short -\
+      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+          "tclpdf: the font's table directory is cut short -\
           it announces $numTables tables and the file ends inside entry\
           [expr {$index + 1}]"
     }
@@ -104,7 +108,8 @@ proc ::tclpdf::sfnt::parse {bytes} {
   }
   foreach required $requiredTables {
     if {![dict exists $tables $required]} {
-      return -code error "tclpdf: the font has no \"$required\" table and\
+      return -code error -errorcode [list TCLPDF FONT TABLE $required] \
+          "tclpdf: the font has no \"$required\" table and\
           cannot be embedded"
     }
   }
@@ -159,7 +164,8 @@ proc ::tclpdf::sfnt::ParseHead {bytes tables} {
   binary scan $bytes @[expr {$position + 44}]S macStyle
   binary scan $bytes @[expr {$position + 50}]S indexToLocFormat
   if {$unitsPerEm == 0} {
-    return -code error "tclpdf: the font declares unitsPerEm 0"
+    return -code error -errorcode [list TCLPDF FONT METRICS unitsPerEm] \
+        "tclpdf: the font declares unitsPerEm 0"
   }
   lassign [dict get $tables maxp] maxpPosition -
   binary scan $bytes @[expr {$maxpPosition + 4}]Su numGlyphs
@@ -403,14 +409,16 @@ proc ::tclpdf::sfnt::ParseCmap {bytes tables} {
     }
   }
   if {$best eq {}} {
-    return -code error "tclpdf: the font has no usable Unicode cmap"
+    return -code error -errorcode [list TCLPDF FONT ENCODING cmap] \
+        "tclpdf: the font has no usable Unicode cmap"
   }
   binary scan $bytes @${best}Su format
   switch -- $format {
     4 {return [CmapFormat4 $bytes $best]}
     12 {return [CmapFormat12 $bytes $best]}
     default {
-      return -code error "tclpdf: cmap format $format is not supported -\
+      return -code error -errorcode [list TCLPDF FONT UNSUPPORTED cmap $format] \
+          "tclpdf: cmap format $format is not supported -\
           tclpdf reads formats 4 and 12"
     }
   }
@@ -470,7 +478,8 @@ proc ::tclpdf::sfnt::CmapFormat12 {bytes position} {
   # the loop reading billions of groups past the end of the file.
   set room [expr {[string length $bytes] - $position - 16}]
   if {$nGroups * 12 > $room} {
-    return -code error "tclpdf: the cmap table is damaged - format 12\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cmap] \
+        "tclpdf: the cmap table is damaged - format 12\
         declares $nGroups groups where only $room bytes follow"
   }
   set map {}
@@ -481,12 +490,14 @@ proc ::tclpdf::sfnt::CmapFormat12 {bytes position} {
     # 0xFFFFFFFF would keep it running for four billion iterations. Unicode
     # ends at 0x10FFFF, so anything beyond is damage, not data.
     if {$start > $end} {
-      return -code error "tclpdf: the cmap table is damaged - format 12\
+      return -code error -errorcode [list TCLPDF FONT DAMAGED cmap] \
+          "tclpdf: the cmap table is damaged - format 12\
           group $group ends (0x[format %X $end]) before it starts\
           (0x[format %X $start])"
     }
     if {$end > 0x10FFFF} {
-      return -code error "tclpdf: the cmap table is damaged - format 12\
+      return -code error -errorcode [list TCLPDF FONT DAMAGED cmap] \
+          "tclpdf: the cmap table is damaged - format 12\
           group $group ends at 0x[format %X $end], beyond the last Unicode\
           code point 0x10FFFF"
     }
@@ -555,7 +566,8 @@ proc ::tclpdf::sfnt::ParseCffCidKeyed {bytes tables} {
   lassign [dict get $tables "CFF "] position length
   set cff [string range $bytes $position [expr {$position + $length - 1}]]
   if {[string length $cff] < 4} {
-    return -code error "tclpdf: the CFF table is too short to hold a font"
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF table is too short to hold a font"
   }
   binary scan $cff @2cu hdrSize
   lassign [CffIndex $cff $hdrSize] next -
@@ -563,7 +575,8 @@ proc ::tclpdf::sfnt::ParseCffCidKeyed {bytes tables} {
   if {$topDict eq {}} {
     # count 0: an INDEX with nothing in it. A CFF with no Top DICT describes
     # no font, so there is nothing to embed.
-    return -code error "tclpdf: the CFF table has an empty Top DICT INDEX -\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF table has an empty Top DICT INDEX -\
         it describes no font"
   }
   return [CffDictHasOperator $topDict 12 30]
@@ -581,21 +594,24 @@ proc ::tclpdf::sfnt::ParseCffCidKeyed {bytes tables} {
 # either yields glyph outlines cut in half rather than an error.
 proc ::tclpdf::sfnt::CffItems {cff at} {
   if {[binary scan $cff @${at}Su count] != 1} {
-    return -code error "tclpdf: the CFF table is truncated"
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF table is truncated"
   }
   if {$count == 0} {
     return [list [expr {$at + 2}] {}]
   }
   binary scan $cff @[expr {$at + 2}]cu offSize
   if {$offSize < 1 || $offSize > 4} {
-    return -code error "tclpdf: the CFF table has an INDEX with offSize\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF table has an INDEX with offSize\
         $offSize, which the format does not allow (1 to 4)"
   }
   set at [expr {$at + 3}]
   # offSize 3 has no binary-scan format, so every size is folded from bytes.
   if {[binary scan $cff @${at}cu[expr {($count + 1) * $offSize}] digits] != 1
       || [llength $digits] != ($count + 1) * $offSize} {
-    return -code error "tclpdf: the CFF table is truncated"
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF table is truncated"
   }
   set offsets {}
   set value 0
@@ -833,13 +849,33 @@ namespace eval ::tclpdf::sfnt {
 # is where the Name INDEX begins and cannot lie before the header's own end,
 # and offSize is 1 to 4 by the format. That is thin as signatures go - which is
 # why this is asked LAST, after every other format has said no.
+# Version 2 answers TRUE here, and that is the point rather than an oversight:
+# this asks "is this a bare CFF-shaped program", not "can it be read". A CFF2
+# that answered false fell through to the sfnt reader and was turned away as
+# "not a TrueType or OpenType font", so the refusal written for it in
+# [cffFont] - UNSUPPORTED cff2, which names the format and says why - could
+# not be reached through [font embed] at all. Measured on 2026-08-24: the
+# public road gave SOURCE sfnt for a CFF2 and the accurate answer existed
+# three functions away. The header of a CFF2 is the same four bytes with a
+# different major, so telling them apart is the reader's job and not this
+# one's.
 proc ::tclpdf::sfnt::isBareCff {bytes} {
   if {[string length $bytes] < 8} {
     return 0
   }
-  binary scan $bytes cucucucu major minor hdrSize offSize
-  return [expr {$major == 1 && $hdrSize >= 4 && $offSize >= 1 && $offSize <= 4
-      && $hdrSize < [string length $bytes]}]
+  binary scan $bytes cucucucu major minor hdrSize fourth
+  if {$hdrSize < 4 || $hdrSize >= [string length $bytes]} {
+    return 0
+  }
+  # The fourth byte is NOT the same field in the two versions: offSize in a
+  # CFF, the high half of topDictLength in a CFF2 - which is zero for every
+  # top dictionary under 256 bytes, so testing it as an offSize would have
+  # rejected most real CFF2 files and sent them back to the sfnt reader, which
+  # is the very detour this function was widened to end.
+  if {$major == 2} {
+    return 1
+  }
+  return [expr {$major == 1 && $fourth >= 1 && $fourth <= 4}]
 }
 
 # A bare CFF, read whole. The dict it answers with:
@@ -864,16 +900,19 @@ proc ::tclpdf::sfnt::isBareCff {bytes} {
 # is "how wide is /eacute", never "how wide is glyph 217".
 proc ::tclpdf::sfnt::cffFont {bytes} {
   if {[string length $bytes] < 8} {
-    return -code error "tclpdf: not a CFF font program - too short"
+    return -code error -errorcode [list TCLPDF FONT SOURCE cff] \
+        "tclpdf: not a CFF font program - too short"
   }
   binary scan $bytes cucucucu major minor hdrSize offSize
   if {$major == 2} {
-    return -code error "tclpdf: this is a CFF2 font program (header version\
+    return -code error -errorcode [list TCLPDF FONT UNSUPPORTED cff2] \
+        "tclpdf: this is a CFF2 font program (header version\
         2.$minor), which is the variable-font format and carries neither a\
         charset nor an encoding - tclpdf reads CFF 1"
   }
   if {$major != 1} {
-    return -code error "tclpdf: not a CFF font program (header version\
+    return -code error -errorcode [list TCLPDF FONT SOURCE cff] \
+        "tclpdf: not a CFF font program (header version\
         $major.$minor)"
   }
   lassign [CffItems $bytes $hdrSize] next names
@@ -881,7 +920,8 @@ proc ::tclpdf::sfnt::cffFont {bytes} {
   lassign [CffItems $bytes $next] next strings
   lassign [CffItems $bytes $next] next globalSubrs
   if {![llength $topDicts]} {
-    return -code error "tclpdf: the CFF font program has an empty Top DICT\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF font program has an empty Top DICT\
         INDEX - it describes no font"
   }
   set top [CffDict [lindex $topDicts 0]]
@@ -918,19 +958,22 @@ proc ::tclpdf::sfnt::cffFont {bytes} {
   }
   set scale [lindex $matrix 0]
   if {![string is double -strict $scale] || $scale <= 0} {
-    return -code error "tclpdf: the CFF font program states a FontMatrix\
+    return -code error -errorcode [list TCLPDF FONT METRICS fontMatrix] \
+        "tclpdf: the CFF font program states a FontMatrix\
         whose first element is \"$scale\" - the em cannot be measured from it"
   }
   dict set font unitsPerEm [expr {round(1.0 / $scale)}]
 
   if {![dict exists $top 17]} {
-    return -code error "tclpdf: the CFF font program has no CharStrings -\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF font program has no CharStrings -\
         it holds no outlines"
   }
   lassign [CffItems $bytes [lindex [dict get $top 17] 0]] - charStrings
   set numGlyphs [llength $charStrings]
   if {$numGlyphs == 0} {
-    return -code error "tclpdf: the CFF font program has an empty CharStrings\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF font program has an empty CharStrings\
         INDEX - it holds no outlines"
   }
   dict set font numGlyphs $numGlyphs
@@ -1020,7 +1063,8 @@ proc ::tclpdf::sfnt::CffString {sid strings} {
 # Glyph 0 is .notdef in every format and is never listed.
 proc ::tclpdf::sfnt::CffCharset {cff at numGlyphs strings} {
   if {$at == 1 || $at == 2} {
-    return -code error "tclpdf: the CFF font program uses the predefined\
+    return -code error -errorcode [list TCLPDF FONT UNSUPPORTED charset] \
+        "tclpdf: the CFF font program uses the predefined\
         [expr {$at == 1 ? {Expert} : {ExpertSubset}}] charset, which tclpdf\
         does not read - re-generate the font with a charset of its own"
   }
@@ -1032,7 +1076,8 @@ proc ::tclpdf::sfnt::CffCharset {cff at numGlyphs strings} {
     return $charset
   }
   if {[binary scan $cff @${at}cu format] != 1} {
-    return -code error "tclpdf: the CFF font program is truncated at its\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF font program is truncated at its\
         charset"
   }
   incr at
@@ -1040,7 +1085,8 @@ proc ::tclpdf::sfnt::CffCharset {cff at numGlyphs strings} {
   if {$format == 0} {
     while {$glyph < $numGlyphs} {
       if {[binary scan $cff @${at}Su sid] != 1} {
-        return -code error "tclpdf: the CFF font program's charset is cut\
+        return -code error -errorcode [list TCLPDF FONT DAMAGED charset] \
+            "tclpdf: the CFF font program's charset is cut\
             short - it names [expr {$glyph - 1}] of $numGlyphs glyphs"
       }
       dict set charset $glyph [CffString $sid $strings]
@@ -1050,7 +1096,8 @@ proc ::tclpdf::sfnt::CffCharset {cff at numGlyphs strings} {
     return $charset
   }
   if {$format != 1 && $format != 2} {
-    return -code error "tclpdf: the CFF font program has a charset of format\
+    return -code error -errorcode [list TCLPDF FONT UNSUPPORTED charset] \
+        "tclpdf: the CFF font program has a charset of format\
         $format, which the format does not define (0, 1 and 2)"
   }
   # Ranges: a first SID and how many FURTHER glyphs continue from it - one
@@ -1061,7 +1108,8 @@ proc ::tclpdf::sfnt::CffCharset {cff at numGlyphs strings} {
     if {[binary scan $cff @${at}Su sid] != 1
         || [binary scan $cff @[expr {$at + 2}][expr {$width == 1 ?
             {cu} : {Su}}] left] != 1} {
-      return -code error "tclpdf: the CFF font program's charset is cut short\
+      return -code error -errorcode [list TCLPDF FONT DAMAGED charset] \
+          "tclpdf: the CFF font program's charset is cut short\
           - it names [expr {$glyph - 1}] of $numGlyphs glyphs"
     }
     incr at [expr {2 + $width}]
@@ -1092,7 +1140,8 @@ proc ::tclpdf::sfnt::CffEncoding {cff at charset} {
     return {}
   }
   if {[binary scan $cff @${at}cu first] != 1} {
-    return -code error "tclpdf: the CFF font program is truncated at its\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: the CFF font program is truncated at its\
         encoding"
   }
   set format [expr {$first & 0x7f}]
@@ -1128,7 +1177,8 @@ proc ::tclpdf::sfnt::CffEncoding {cff at charset} {
       }
     }
   } else {
-    return -code error "tclpdf: the CFF font program has an encoding of\
+    return -code error -errorcode [list TCLPDF FONT UNSUPPORTED encoding] \
+        "tclpdf: the CFF font program has an encoding of\
         format $format, which the format does not define (0 and 1)"
   }
   # A supplement gives a SECOND code to a glyph already in the encoding, and
@@ -1468,4 +1518,4 @@ proc ::tclpdf::sfnt::NameString {bytes start length platform} {
   return $decoded
 }
 
-package provide tclpdf::sfnt 1.8
+package provide tclpdf::sfnt 1.9

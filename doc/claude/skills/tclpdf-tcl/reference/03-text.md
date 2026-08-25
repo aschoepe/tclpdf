@@ -27,6 +27,8 @@ puts "width: [$doc textWidth "ends on the point" -size 10] mm"
 
 The call without `-width` returns nothing. `-align` refers to the point; `centre` is accepted for `center`.
 
+
+
 ## A paragraph
 
 ```tcl
@@ -216,3 +218,73 @@ Each call is independent and takes the font options on its own. `%n` is the numb
 $doc write [file join $out ref-03-text.pdf]
 $doc destroy
 ```
+
+## The four anchors, and fitting a line into a box
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc font -family helvetica -size 16
+
+# -anchor says what y MEANS, and all four measure the FACE's line box - its
+# ascender above the baseline and its descender below - not the ink the string
+# happens to carry. That is what makes "Text" and "Type" line up.
+#
+#   baseline  the default
+#   top       the ascender sits at y
+#   middle    the line's box is centred on y
+#   bottom    the descender sits at y
+set x 20
+foreach anchor {baseline top middle bottom} {
+    $doc text "Typo" -at [list $x 40] -anchor $anchor
+    set x [expr {$x + 42}]
+}
+
+# -fit puts ONE line into a box: the letters are squeezed first, up to
+# -shrinkLimit (85 per cent by default), and only what is still missing comes
+# out of the size. A face narrowed a few per cent is barely visible in one
+# line; a smaller size is visible at once beside its neighbours.
+$doc font -size 20
+$doc text "Rechnungsnummer 2026-0815" -at {20 60} -fit {60 8}
+
+# -shrinkLimit 100 forbids narrowing and takes all of it out of the size,
+# which is what a caller setting text beside other text at one width wants.
+$doc text "Rechnungsnummer 2026-0815" -at {20 75} -fit {60 8} -shrinkLimit 100
+
+# The height is answered first and separately: a box too low brings the size
+# down, and the width is then worked out against the new size.
+$doc text "Rechnungsnummer 2026-0815" -at {20 90} -fit {100 3}
+```
+
+`-fit` and `-width` are refused together (`TCLPDF TEXT FIT WIDTH`): one puts a single line into a rectangle, the other breaks a paragraph into as many lines as it takes. There is no `-align`/`-valign` here — on a line `-align` already means the typographic alignment. An anchor that is none of the four is refused with `TCLPDF TEXT ANCHOR` rather than read as `baseline`.
+
+## The break of last resort
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc font -family helvetica -size 10
+
+# A word longer than the column is broken by CHARACTER rather than let run
+# past the edge. -emergencyHyphen marks that break - OFF by default, because
+# the words that reach this fallback are as often a part number, a file path
+# or a URL as a long word, and a hyphen inside one of those is a character the
+# reader copies and a wrong value.
+set word "Donaudampfschifffahrtsgesellschaftskapitaen"
+$doc text $word -at {20 20} -width 32
+$doc text $word -at {80 20} -width 32 -emergencyHyphen 1
+
+# The hyphen is measured WITH the piece rather than hung on after it, so the
+# marked lines carry one character fewer and the line stays inside the column.
+puts [$doc textLines $word -width 32 -emergencyHyphen 1]
+
+# -hyphens 1 reports which lines carry one, so a caller drawing them himself
+# can say so with [text -breakHyphen].
+foreach line [$doc textLines $word -width 32 -emergencyHyphen 1 -hyphens 1] {
+    puts "[dict get $line text] (break hyphen: [dict get $line hyphen])"
+}
+```
+
+A column too narrow to hold one letter *and* a hyphen drops the hyphen rather than the letter.

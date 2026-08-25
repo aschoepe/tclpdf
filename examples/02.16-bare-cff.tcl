@@ -178,6 +178,50 @@ $doc text "Set in the bare CFF, and half of it outside ASCII. Copy the line\
     each byte stands for, which is the job the missing cmap used to do." \
     -at [list 20 $y] -width 170
 
+# -- what a refusal says, and why the class matters --------------------------
+#
+# The readers behind "font embed" refuse in classes, and the class is the part
+# a script can act on: SOURCE says "wrong format, try another reader", DAMAGED
+# says "right format, broken file - stop", UNSUPPORTED says "sound file, this
+# package does not read it", SUBSET says "sound face, it just cannot be cut
+# down". Until 2026-08-24 all four arrived as no code at all, so a script had
+# to read the message - which the manual says is not a contract.
+
+set y [expr {$y + 22}]
+$doc font -family bare -size 11 -color black
+$doc text "What a refusal answers with" -at [list 20 $y]
+set y [expr {$y + 7}]
+
+$doc font -family bare -size 8 -color {0.35 0.35 0.35}
+
+# The class of the refusal, or the word "accepted" where none came. Written
+# out rather than trapped, because the point here is to SHOW the code.
+proc refusalClass {script} {
+  if {[catch {uplevel 1 $script} message options]} {
+    return [lindex [dict get $options -errorcode] 2]
+  }
+  return "accepted"
+}
+
+set cff2 "\x02\x00\x05\x02\x00\x00\x00\x00"
+foreach {what class} [list \
+    "a text file offered as a font" \
+        [refusalClass {$doc font embed no1 -data "not a font at all, really"}] \
+    "a CFF2, the variable-font format" \
+        [refusalClass {$doc font embed no2 -data $cff2}] \
+    "a TrueType collection" \
+        [refusalClass {$doc font embed no3 -data \
+            "ttcf\x00\x01\x00\x00\x00\x00\x00\x02[string repeat \x00 60]"}]] {
+  $doc text "$what  ->  $class" -at [list 20 $y] -width 170
+  set y [expr {$y + 5}]
+}
+
+$doc font -family bare -size 8 -color {0.45 0.45 0.45}
+$doc text "A script that tries a file through several readers retries on\
+    SOURCE and gives up on DAMAGED. That is the whole reason the two do not\
+    share a code." -at [list 20 $y] -width 170
+set y [expr {$y + 10}]
+
 # -- the declaration ---------------------------------------------------------
 
 $doc pdfa -part 3 -conformance U -profile $profile

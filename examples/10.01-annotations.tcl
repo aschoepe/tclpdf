@@ -197,6 +197,70 @@ $doc structure P -script {
 
 # -- what PDF/UA asks of an annotation --------------------------------------
 #
+# THE GEOMETRY ANNOTATIONS, added on 2026-08-25: a line, a rectangle, an
+# ellipse and the two poly kinds. The difference from drawing the same shapes
+# is not the picture but what it IS - a rectangle drawn with [rect] prints and
+# belongs to the page, while the same rectangle as an annotation carries an
+# author, a date and a description, and a reader lists it beside the other
+# remarks and lets the reader switch it off.
+#
+# Their appearance is drawn without being asked for, unlike a note's: the
+# picture follows entirely from the geometry, the colours and the width, so
+# there is nothing left for a reader to decide - and nothing that would fail
+# a PDF/A or PDF/UA claim for want of an /AP.
+
+$doc page add
+$doc font -family face -size 14 -color {0.20 0.30 0.45}
+$doc text "Remarks that have a shape" -at {20 25}
+$doc font -size 9 -color {0.35 0.35 0.35}
+$doc text "Each of the five below is an annotation and not a drawing: it has\
+    a description, it can be switched off, and a reader lists it with the\
+    others. -colour is the outline and -fill the inside; a line and a\
+    polyline have no inside, so an -fill on them writes none." \
+    -at {20 32} -width 170
+
+$doc annot line -from {20 55} -to {90 55} \
+    -contents "the correction runs to here"
+$doc annot square -at {20 65} -size {60 18} \
+    -contents "this block needs checking"
+$doc annot circle -at {100 65} -size {60 18} -fill {1 1 0.75} \
+    -contents "and this one is agreed"
+$doc annot polygon -points {{20 95} {70 88} {90 118} {35 122}} \
+    -fill {0.90 0.95 1} -contents "the area under discussion"
+$doc annot polyline -points {{110 95} {135 88} {155 118} {185 100}} \
+    -contents "the route the goods took"
+
+$doc font -size 8 -color {0.45 0.45 0.45}
+$doc text "line - square - circle (which is an ELLIPSE, the standard's word)\
+    - polygon - polyline" -at {20 130} -width 170
+
+# A FILE CLIPPED TO THE PLACE IT BELONGS. The attachment itself is [attach]'s
+# and travels once; this points at it. What it adds over the document's
+# attachment list is WHERE: a list is a file somebody has to know is there,
+# this is a paperclip at the paragraph it belongs to.
+$doc attach -data "Delivery note 2026-4711\nOne pallet, received.\n" \
+    -name lieferschein.txt -mime text/plain \
+    -description "the delivery note for the line above"
+$doc font -size 9 -color {0.20 0.30 0.45}
+$doc text "The delivery note belongs to this line" -at {20 145}
+
+# The icon is DRAWN here rather than left to the reader, and that is the point
+# of the block: without -appearance the picture is whichever paperclip the
+# reader has, exactly as it is for a note - and a document that claims PDF/A
+# or PDF/UA may not depend on the reader, so the annotation is refused. The
+# way through is the same one a house stamp takes: draw it with [form create]
+# and name it.
+set annotDoc $doc
+$doc form create paperclip -size {14 16} -script {
+  $annotDoc line -from {4 3} -to {4 12} -stroke {0.20 0.30 0.45} -width 1.1
+  $annotDoc line -from {4 3} -to {9 3} -stroke {0.20 0.30 0.45} -width 1.1
+  $annotDoc line -from {9 3} -to {9 13} -stroke {0.20 0.30 0.45} -width 1.1
+  $annotDoc line -from {9 13} -to {6.5 13} -stroke {0.20 0.30 0.45} -width 1.1
+}
+$doc annot attachment -at {180 143} -name lieferschein.txt \
+    -appearance paperclip \
+    -contents "the delivery note for this line"
+
 # Two things, and the caller does one of them: /Contents, the description a
 # reader announces - passed above as -contents on every single annotation -
 # and a place in the structure tree, which the package makes by itself. Every

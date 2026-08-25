@@ -89,6 +89,48 @@ $doc text "Second page - the same object three times, scaled, faded and turned" 
 # either. The disc's own -opacity 0.6 in the letterhead above is the other
 # half of the same rule: inside a group the alpha starts at 1, so the faded
 # placement fades the disc too, instead of the disc's 0.6 replacing the 0.4.
+# A BOX INSTEAD OF A FACTOR, built on 2026-08-24. Until then [form place]
+# knew -scale alone, so a caller with a letterhead and a box had to work the
+# factor out by hand from [form size] - the arithmetic that already stood in
+# the package for pictures. -fit takes the box and does it; contain puts the
+# whole form inside, cover covers the whole box and clips what hangs over.
+#
+# The seal below is 25 by 25 and the boxes are 30 by 18, so the two modes
+# differ visibly: contain leaves bands left and right, cover fills the box and
+# loses the top and bottom of the seal.
+$doc page add
+$doc font -family helvetica -size 10
+$doc text "A form fitted into a box" -at {20 20}
+$doc font -size 8
+$doc text "The box is drawn so the difference can be seen. Both placements\
+    name the same rectangle; only -fitMode differs." -at {20 26} -width 170
+
+$doc form create fitted -size {50 16} -script {
+  $doc rect -at {0 0} -size {50 16} -fill {0.15 0.35 0.6}
+  $doc circle -at {8 8} -radius 5 -fill {0.95 0.8 0.2}
+}
+set y 36
+foreach {mode label} {contain "-fitMode contain: the whole form is inside"
+    cover "-fitMode cover: the box is covered, the rest cut off"} {
+  $doc rect -at [list 20 $y] -size {30 18} -stroke {0.6 0.6 0.6} -width 0.2
+  $doc form place fitted -at [list 20 $y] -fit {30 18} -fitMode $mode \
+      -artifact 1
+  $doc text $label -at [list 56 [expr {$y + 8}]]
+  incr y 26
+}
+
+# The anchors, which only have something to move where the fitted form is
+# smaller than the box on one axis - which is what contain leaves.
+$doc text "-align and -valign, in the same 30 by 18 box:" -at [list 20 $y]
+incr y 6
+foreach {align valign} {left top center middle right bottom} {
+  $doc rect -at [list 20 $y] -size {30 18} -stroke {0.6 0.6 0.6} -width 0.2
+  $doc form place fitted -at [list 20 $y] -fit {30 18} -align $align \
+      -valign $valign -artifact 1
+  $doc text "-align $align -valign $valign" -at [list 56 [expr {$y + 8}]]
+  incr y 22
+}
+
 $doc form create seal -size {25 25} -script {
   $doc circle -at {10 10} -radius 10 -fill {0.15 0.35 0.6}
   $doc rect -at {8 8} -size {17 17} -fill {0.85 0.3 0.2}

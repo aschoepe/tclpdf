@@ -459,3 +459,61 @@ $symbols destroy
 `TCLPDF COLORFONT TABLES` is a face without `COLR` and `CPAL`, `CHAR` a character the face has no glyph for, `BASE` one whose glyph is not a colour base glyph, `EMPTY` a base glyph whose layers all draw nothing, `PALETTE` a `-palette` the face does not have, `LIMIT` the 256th character (a Type 3 font is addressed by single bytes), `COMPOSITE` a layer that is a composite glyph. What the `COLR` reader itself refuses keeps its own `TCLPDF COLR` codes - `MISSING`, `VERSION`, `EMPTY`, `TRUNCATED`, `LAYERS`, `RECORDS`, `PALETTE`, `ENTRY` - and is passed through unchanged, so `trap {TCLPDF COLORFONT}` does **not** catch those.
 
 **COLR version 1 is not read** - it is a different format, a paint graph per base glyph with gradients, transforms and composition. A palette entry may carry an alpha byte, and a translucent layer then costs an `ExtGState` while an opaque one costs nothing; under PDF/A parts 2 and 3 that is admissible, and part 1 forbids transparency and is refused by `pdfa` anyway. What this is for is the two-colour mark that has to behave like a character - a tick in a table column, an amber warning sign in a line of text, a logo in a letterhead: it moves with the line, takes the font size, is measured by `textWidth`, breaks with the paragraph and comes back out of `pdftotext` as the character it stands for.
+
+## Vertical writing, and breaking it into columns
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc font embed jp $jpTtf
+
+# -direction ttb writes /Identity-V over the same descendant and the same
+# embedded file - the writing mode is a property of the CMap, not a second
+# copy of the face. One call is ONE column.
+$doc text "日本語の縦書き" -at {175 30} -family jp -size 13 -direction ttb
+
+# A prose text is broken into columns by [textLines], where -width is the
+# column HEIGHT: what the breaker asks of a candidate is "how far does this
+# reach", and that is answered along whichever axis the text writes.
+set prose "日本語の縦書きでは、行は上から下へ進み、列は右から左へ並びます。"
+set columns [$doc textLines $prose -width 90 -family jp -size 12 -direction ttb]
+
+# Placing them is a loop - which is also what decides that the columns run
+# right to left.
+set x 160
+foreach column $columns {
+    $doc text $column -at [list $x 30] -family jp -size 12 -direction ttb
+    set x [expr {$x - 9}]
+}
+```
+
+`text -width -direction ttb` is **refused** (`TCLPDF TEXT VERTICAL block`): a horizontal block steps its lines *down* the page and a vertical one would have to step its columns *left*, and the height limit, the column balance, the flow around shapes and the table are all written along that one axis. The message names the two calls above. A table refuses the direction in its own words (`TCLPDF TABLE DIRECTION`) — there is no vertical table.
+
+## What a font refusal says
+
+```tcl
+package require tclpdf
+set doc [tclpdf new]
+$doc page add
+
+# The readers behind [font embed] refuse in CLASSES, and the class is the part
+# a script acts on:
+#
+#   SOURCE       wrong format - try another reader
+#   DAMAGED      right format, broken file - stop
+#   UNSUPPORTED  sound file, this package does not read it
+#   TABLE        a required table is missing (the word after it names it)
+#   SUBSET       sound face, it just cannot be cut down (a CFF)
+#   METRICS      the face states no em, or the AFM is missing
+#   ENCODING     no usable Unicode cmap
+try {
+    $doc font embed broken -data "not a font at all, really"
+} trap {TCLPDF FONT SOURCE} {message options} {
+    puts "wrong format: [lindex [dict get $options -errorcode] 3]"
+} trap {TCLPDF FONT DAMAGED} {message options} {
+    puts "broken file, no point retrying"
+}
+```
+
+`trap {TCLPDF FONT}` catches the lot. A `.ttc` is `UNSUPPORTED collection` — extract the single face first; a CFF2 is `UNSUPPORTED cff2`.

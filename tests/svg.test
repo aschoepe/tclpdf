@@ -1034,4 +1034,166 @@ test svg-refuse-12.2 {markup that does not parse leaves no open bracket and no d
       [regexp {/P <</MCID 0>> BDC} $stream]
 } -result {1 0 1 1}
 
+# The functional colour notation and the count under <defs>, both added on
+# 2026-08-24 after measuring the SVG on this machine with the three icon
+# libraries taken out - 167 files, which is a different corpus from the
+# 14 995 the module was built against and where clipPath, mask and filter are
+# twenty to forty times as common.
+
+test svg-rgb-20.1 {rgb() is read, in numbers and in per cent} -body {
+  # SVG 1.1, 11.13.1 lists it among the four ways of writing a colour, and a
+  # drawing using it used to be refused outright - "colour component is not
+  # a number: rgb(245," - so the whole file was lost. Six of the 167.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="4" height="4" fill="rgb(255, 136, 0)"/>
+      <rect x="5" y="0" width="4" height="4" fill="rgb(100%, 50%, 0%)"/>
+    </svg>} -at {10 10} -width 50
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # The same numbers "#ff8800" and "#ff8000" produce, which is the point:
+  # one notation reaching the one colour road.
+  list [regexp {1 0\.53333\d* 0 rg} $content] [regexp {1 0\.5 0 rg} $content]
+} -result {1 1}
+
+test svg-rgb-20.2 {an rgba() alpha reaches the opacity of the side it paints} -body {
+  # CSS Color 3 rather than SVG 1.1, and twice in the corpus. Dropping the
+  # fourth value would draw a translucent colour opaque, which is a wrong
+  # picture; refusing the file is no picture at all.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="9" height="9" fill="rgba(255, 136, 0, 0.5)"/>
+    </svg>} -at {10 10} -width 50
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # The colour is written plain and the alpha becomes an ExtGState - measured
+  # against the same rectangle written the long way round, so the test says
+  # "these two are the same drawing" rather than naming a resource spelling.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="9" height="9" fill="#ff8800" fill-opacity="0.5"/>
+    </svg>} -at {10 10} -width 50
+  set long [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {1 0\.53333\d* 0 rg} $content] [expr {$content eq $long}]
+} -result {1 1}
+
+test svg-rgb-20.3 {something that only looks like a function is still refused} -body {
+  # The translation hands back what it cannot read, so the refusal still
+  # comes from the colour module and still names the value - it does not
+  # silently paint black.
+  set doc [tclpdf new]
+  $doc page add
+  set code [catch {$doc svg -data {<svg viewBox="0 0 10 10"
+      xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="4" height="4" fill="rgb(oops)"/>
+    </svg>} -at {10 10} -width 50} message]
+  $doc destroy
+  list $code [string match {*rgb(oops)*} $message]
+} -result {1 1}
+
+test svg-defs-20.4 {what stands under defs is counted, not passed over} -body {
+  # Measured on a real logo out of the corpus: two filters, a mask and a
+  # clipPath in its <defs>, and [svg info] answered "image 1" - the one
+  # skipped element that happened to stand outside. A caller asking what was
+  # left out got a truthful-looking answer missing the three things that
+  # would have changed the picture.
+  set doc [tclpdf new]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+        <mask id="m"><rect width="10" height="10" fill="#fff"/></mask>
+      </defs>
+      <rect x="0" y="0" width="9" height="9" fill="#ff8800"/>
+    </svg>} -at {10 10} -width 50
+  set skipped [$doc svg info]
+  $doc destroy
+  list [dict exists $skipped filter] [dict exists $skipped mask] \
+      [dict exists $skipped feGaussianBlur]
+} -result {1 1 1}
+
+test svg-defs-20.5 {and what the package can draw is not counted as a loss} -body {
+  # A <g> or a <rect> under <defs> is reached through <use> or through the
+  # mask that owns it. Counting those would bury the entries that matter
+  # under the shapes they are made of - the first draft did, and read as if
+  # four different things had gone wrong instead of two.
+  set doc [tclpdf new]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <defs><g id="g"><rect width="4" height="4" fill="#ff8800"/></g></defs>
+      <use href="#g" x="1" y="1"/>
+    </svg>} -at {10 10} -width 50
+  set skipped [$doc svg info]
+  $doc destroy
+  list [dict exists $skipped g] [dict exists $skipped rect] [dict size $skipped]
+} -result {0 0 0}
+
+# -fit for a drawing, built on 2026-08-24. A drawing already fitted itself
+# into the rectangle it was given - "xMidYMid meet", the default of
+# preserveAspectRatio, which is why -align and -valign default to center and
+# middle here - but the rectangle had to be named as a size, and cover was not
+# reachable at all.
+
+proc fitSvg {args} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 60 20" xmlns="http://www.w3.org/2000/svg">
+      <rect width="60" height="20" fill="#3366cc"/></svg>} -artifact 1 {*}$args
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  return $content
+}
+
+test svg-fit-21.1 {-fit is the same drawing as the size and place it works out to} -body {
+  # 60 by 20 into a 40 by 40 box: contain takes the smaller factor, so the
+  # drawing comes out 40 by 13.333 - and it is CENTRED in the box, which is
+  # what -fit means and -size does not. So the equivalent by hand carries the
+  # offset too: (40 - 13.333) / 2 = 13.333 down from the corner. Byte for
+  # byte, which is the strongest form this can be stated in.
+  expr {[fitSvg -at {20 20} -fit {40 40}]
+      eq [fitSvg -at {20 33.333333333333336} -size {40 13.333333333333334}]}
+} -result 1
+
+test svg-fit-21.2 {cover covers the box and clips what hangs over} -body {
+  set content [fitSvg -at {20 20} -fit {40 40} -fitMode cover]
+  # 5.66929 is the cover factor 2 in points per millimetre - the matrix is
+  # written in the page's own unit, not the document's.
+  list [regexp {re W n} $content] [regexp {5\.66929 0 0 -5\.66929 } $content]
+} -result {1 1}
+
+test svg-fit-21.3 {contain clips nothing, because nothing sticks out} -body {
+  regexp {re W n} [fitSvg -at {20 20} -fit {40 40}]
+} -result 0
+
+test svg-fit-21.4 {the anchor moves the drawing inside the box} -body {
+  # The even split is what the drawing did before and still does by default,
+  # so the three answers differ only in the y of the matrix - and top has to
+  # sit above middle, which has to sit above bottom.
+  set ys {}
+  foreach where {top middle bottom} {
+    regexp {[0-9.]+ 0 0 -[0-9.]+ [0-9.]+ ([0-9.]+) cm} \
+        [fitSvg -at {20 20} -fit {40 40} -valign $where] -> y
+    lappend ys $y
+  }
+  lassign $ys top middle bottom
+  list [expr {$top > $middle}] [expr {$middle > $bottom}]
+} -result {1 1}
+
+test svg-fit-21.5 {a drawing without -fit is untouched by any of this} -body {
+  # The option was added beside, not instead of: a script written before this
+  # writes the same bytes, which is what the defaults center and middle are
+  # for - they are the even split spelled out.
+  expr {[fitSvg -at {20 20} -width 40] eq [fitSvg -at {20 20} -width 40 \
+      -align center -valign middle]}
+} -result 1
+
+test svg-fit-21.6 {-fit and -width contradict each other} -body {
+  ::tclpdfTest::refusalCode {fitSvg -at {20 20} -fit {40 40} -width 30}
+} -result {TCLPDF FIT SIZE width svg}
+
+
 cleanupTests

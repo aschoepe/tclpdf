@@ -9,10 +9,16 @@
 #
 #
 # What is covered was decided by measurement over 14995 SVG files on this
-# machine rather than by reading the standard front to back. In a sample of
-# 300, <filter> and <animate> occur zero times; the elliptical arc is the most
-# frequent path command of all, ahead of moveto - and PDF has no arc operator,
-# so every one of them becomes up to four Bezier segments.
+# machine rather than by reading the standard front to back: the elliptical
+# arc is the most frequent path command of all, ahead of moveto - and PDF has
+# no arc operator, so every one of them becomes up to four Bezier segments.
+#
+# The frequencies that measurement gave were corrected on 2026-08-24: 95.5 %
+# of that corpus is three icon libraries, which are single-path files by
+# construction. In the 167 files that remain, clipPath, mask and filter are
+# twenty to forty times as common as the first count suggested - so what this
+# module leaves out is left out for the work it would take, and [svg info]
+# reports every bit of it.
 #
 # Whatever is not covered is skipped and counted, and [$doc svg info] reports
 # it. Silence would be the wrong answer twice over: the format expects unknown

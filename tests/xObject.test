@@ -464,4 +464,82 @@ test xObject-refuse-7.2 {form place: -at, -scale and -rotate are checked before 
       [regexp {^/Artifact <</Type /Layout>> BDC\nq\n[-0-9. ]+ cm\n/XO1 Do\nQ\nEMC\n$} $stream]
 } -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} 1}
 
+# -fit for a form, built on 2026-08-24. Until then [form place] knew -scale
+# alone, so a caller with a letterhead and a box had to work the factor out by
+# hand from [form size] - the arithmetic that already stood in page.tcl for
+# pictures, in methods written to be shared.
+
+proc fitForm {args} {
+  # Global, because [form create -script] runs its body at level #0 - one of
+  # the four -script roads that do, while [structure] and [layer draw] see a
+  # local variable. Noted here rather than worked around silently.
+  global fitDoc
+  set fitDoc [tclpdf new -unit mm -compress 0]
+  set doc $fitDoc
+  $doc page add
+  $doc form create logo -size {60 20} -script {
+    $fitDoc rect -at {0 0} -size {60 20} -fill {rgb 0.2 0.4 0.9}
+  }
+  $doc form place logo -artifact 1 {*}$args
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  return $content
+}
+
+test xObject-fit-9.1 {contain takes the smaller factor, so the whole form is in} -body {
+  # 60 by 20 into 40 by 40: across is 0.667, down is 2, and contain takes the
+  # smaller - the form comes out 40 by 13.33 and nothing of it is outside.
+  set content [fitForm -at {20 20} -fit {40 40}]
+  regexp {([0-9.]+) 0 0 ([0-9.]+) } $content -> across down
+  list [format %.5f $across] [format %.5f $down]
+} -result {0.66667 0.66667}
+
+test xObject-fit-9.2 {cover takes the larger, and the overhang is clipped} -body {
+  # The other mode: the box is covered, the form hangs over it on one axis,
+  # and the box is what the caller asked to see - so what sticks out is cut
+  # away rather than drawn across whatever stands beside it.
+  set content [fitForm -at {20 20} -fit {40 40} -fitMode cover]
+  list [regexp {2 0 0 2 } $content] [regexp {re W n} $content]
+} -result {1 1}
+
+test xObject-fit-9.3 {contain does not clip, since nothing sticks out} -body {
+  # The counter-measurement to 9.2: a clip nobody needs would still cut a
+  # later drawing if the save around it were ever lost.
+  regexp {re W n} [fitForm -at {20 20} -fit {40 40}]
+} -result 0
+
+test xObject-fit-9.4 {the anchor puts the form in the box, as a picture's does} -body {
+  # -valign middle on a 13.33 mm form in a 40 mm box moves it down by
+  # (40 - 13.33) / 2 = 13.33 mm, so its top edge is at 33.33 mm and its
+  # bottom at 46.67 - which is 841.89 - 132.28 points up the page.
+  set content [fitForm -at {20 20} -fit {40 40} -align center -valign middle]
+  regexp {0\.66667 0 0 0\.66667 ([0-9.]+) ([0-9.]+) cm} $content -> x y
+  # x unchanged: the form is exactly as wide as the box after fitting, so
+  # -align center has nothing to move.
+  list [format %.2f $x] [format %.2f [expr {841.88976 - $y}]]
+} -result {56.69 132.28}
+
+test xObject-fit-9.5 {-fit and -scale contradict each other and are refused} -body {
+  # The same refusal the picture road makes, from the same [fitCheck]: a box
+  # already says how large the form comes out, and so does a factor.
+  lrange [::tclpdfTest::refusalCode {fitForm -at {20 20} -fit {40 40} -scale 2}] 0 3
+} -result {TCLPDF FIT SIZE scale}
+
+test xObject-fit-9.6 {a fitted box and -rotate are refused together} -body {
+  # A turned placement leaves the upright box it was fitted into, and a
+  # covered box would be cut by a rectangle standing at an angle to it.
+  lrange [::tclpdfTest::refusalCode {fitForm -at {20 20} -fit {40 40} -rotate 90}] 0 3
+} -result {TCLPDF FIT ROTATE 90}
+
+test xObject-fit-9.7 {-fitMode without a box says so} -body {
+  lrange [::tclpdfTest::refusalCode {fitForm -at {20 20} -fitMode cover}] 0 3
+} -result {TCLPDF FIT MODE cover}
+
+test xObject-fit-9.8 {-scale still works, and unchanged} -body {
+  # The option -fit was added beside, not instead of: a script written before
+  # this writes the same bytes.
+  regexp {1\.5 0 0 1\.5 } [fitForm -at {20 20} -scale 1.5]
+} -result 1
+
+
 cleanupTests

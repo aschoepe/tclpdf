@@ -153,3 +153,60 @@ $doc write [file join $out ref-08-navigation-metadata.pdf]
 puts "XMP packet: [string length [$doc metadata]] bytes, xpacket wrapper included"
 $doc destroy
 ```
+
+## Annotations that have a shape
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc font -family helvetica -size 10
+
+# The difference from DRAWING the same shape is not the picture but what it
+# is: a line drawn with [line] is content - it prints, and a reader can
+# neither switch it off nor ask who put it there - while the same line as an
+# annotation carries an author, a date and a description.
+#
+# -colour is the outline (/C, red by default), -fill the inside (/IC). A line
+# and a polyline have no inside, so an -fill on them writes none.
+$doc annot line -from {20 40} -to {90 40} -contents "the correction"
+$doc annot square -at {20 55} -size {60 18} -contents "this block"
+$doc annot circle -at {100 55} -size {60 18} -fill {1 1 0.75} -contents "agreed"
+$doc annot polygon -points {{20 85} {70 78} {90 108}} -fill {0.9 0.95 1} \
+    -contents "the area"
+$doc annot polyline -points {{110 85} {135 78} {155 108}} -contents "the route"
+
+# The appearance is drawn WITHOUT being asked for, unlike a note's: the
+# picture follows entirely from the geometry, the colours and the width - so
+# these pass PDF/A and PDF/UA where a note without -appearance does not.
+# /Rect grows by half the line width, since a reader may clip to it.
+```
+
+`circle` is the standard's word and means an **ellipse** inscribed in the rectangle. Square, circle and line are PDF 1.3; polygon and polyline are 1.5.
+
+## A file clipped to the place it belongs
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+set docGlobal $doc
+
+# The file travels ONCE: [attach] embeds it, and the annotation points at it
+# by the name that call gave it - not by a path.
+$doc attach -data "Delivery note 2026-4711\n" -name lieferschein.txt \
+    -mime text/plain -description "the delivery note for line 1"
+$doc annot attachment -at {180 40} -name lieferschein.txt \
+    -contents "the delivery note"
+
+# Without -appearance the picture is the READER's icon (-icon Graph,
+# Paperclip, PushPin or Tag), exactly as it is for [annot note] - so under a
+# claim that requires an appearance it is refused. Draw one and name it:
+$doc form create clip -size {14 16} -script {
+    $docGlobal line -from {4 3} -to {4 12} -stroke {0.2 0.3 0.45} -width 1.1
+}
+$doc annot attachment -at {180 60} -name lieferschein.txt -appearance clip \
+    -contents "the same, under PDF/A"
+```
+
+A name nothing was attached under is refused (`TCLPDF ANNOT ATTACHMENT UNKNOWN`). With `-appearance` no `/Name` is written at all: `/AP` wins over it (Table 166), and a `/Name` nothing draws is a statement with no reader.

@@ -120,6 +120,7 @@ foreach tclpdfPkg {
     tclpdf::link
     tclpdf::annot
     tclpdf::annotMark
+    tclpdf::annotShape
     tclpdf::outline
     tclpdf::xml
     tclpdf::svgPath

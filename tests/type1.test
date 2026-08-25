@@ -435,4 +435,44 @@ test type1-4.4 {an embedded face refuses the character its program lacks, whatev
       [dict get $info characters] [regexp -all {Tj} $content]
 } -result {1 1 217 1}
 
+# The error codes, added on 2026-08-24. Every refusal in this module used to
+# reach the caller as NONE, so a script could tell a damaged PFB from a file
+# that is not a Type 1 program at all only by reading the message - which the
+# manual says is not a contract.
+
+test type1-9.1 {a file too short to be a Type 1 program names its source} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::type1 parse "PFB"}
+} -result {TCLPDF FONT SOURCE type1}
+
+test type1-9.2 {something that is not a Type 1 program at all} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::type1 parse [string repeat "not a font " 8]}
+} -result {TCLPDF FONT SOURCE type1}
+
+# A PFB that starts correctly and then breaks its own structure. Sixty-four
+# bytes at least, since anything shorter is refused as a source before the
+# container is looked at - which is what a first draft of these tests got
+# wrong, reading a length limit as a structure check.
+proc damagedPfb {} {
+  return "\x80\x01[binary format iu 20][string repeat x 20][string repeat . 40]"
+}
+
+test type1-9.3 {a PFB whose segment marker is wrong is damage, not a wrong format} -body {
+  # 0x80 starts every PFB segment. A file that has the magic and then breaks
+  # its own structure is a damaged file of the right kind, and a caller that
+  # falls back on another format wants to know the difference.
+  ::tclpdfTest::refusalCode {::tclpdf::type1 parse [damagedPfb]}
+} -match glob -result {TCLPDF FONT DAMAGED *}
+
+test type1-9.4 {SOURCE and DAMAGED are different answers} -body {
+  # The distinction the codes exist for: one says "this is not the format",
+  # the other "this is the format, and it is broken".
+  list [lindex [::tclpdfTest::refusalCode {::tclpdf::type1 parse "PFB"}] 2] \
+      [lindex [::tclpdfTest::refusalCode {::tclpdf::type1 parse [damagedPfb]}] 2]
+} -result {SOURCE DAMAGED}
+
+test type1-9.5 {every refusal in the module carries a code} -body {
+  ::tclpdfTest::refusalsWithoutCode type1.tcl
+} -result 0
+
+
 cleanupTests

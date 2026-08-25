@@ -262,16 +262,20 @@ test pdfFunction-5.2 {a DeviceN and a function shading write the same kind of ty
   lsort $heads
 } -result {{<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1] /Length 97 >>} {<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1] /Length 13 >>}}
 
-test pdfFunction-5.3 {two equal functions are two objects, and that is on purpose} -body {
-  # Measured rather than assumed: nothing pools functions. Two identical
-  # gradients write two identical type 2 dictionaries, and a separation
-  # writes its transform once because the SEPARATION is remembered by name,
-  # not because the function was recognised.
-  #
+test pdfFunction-5.3 {two equal functions are ONE object} -body {
+  # THE DECISION THIS TEST USED TO RECORD AS DEFERRED WAS TAKEN ON
+  # 2026-08-25, and the test is kept rather than replaced so that the change
+  # is visible where the old claim stood. It read: "nothing pools functions.
+  # Two identical gradients write two identical type 2 dictionaries...
   # Pooling them would save one object per repetition and would renumber
   # every object after the first - a byte-for-byte change to every file that
-  # has ever contained two equal gradients, which is a decision of its own
-  # and not a side effect of moving the builder. It is not made here.
+  # has ever contained two equal gradients, which is a decision of its own."
+  #
+  # It is now made: pooled, in [FunctionPooled], the same device
+  # [IccProfileObject] already used for profiles - and the renumbering is the
+  # price, which is why the tests measure what a reader sees rather than the
+  # object numbers. A table with the same sheen on twenty cells carried
+  # twenty copies of each function before this.
   set doc [tclpdf new -compress 0 -unit mm]
   $doc page add
   $doc shading axial -at {20 20} -size {60 20} -colors {white steelblue}
@@ -280,8 +284,11 @@ test pdfFunction-5.3 {two equal functions are two objects, and that is on purpos
   $doc rect -at {50 80} -size {20 10} -fill {separation Gold {cmyk 0 0.2 0.6 0.1} 0.4}
   set bodies [::tclpdfTest::objects $doc /FunctionType]
   $doc destroy
-  list [llength $bodies] [expr {[lindex $bodies 0] eq [lindex $bodies 1]}] \
-      [llength [lsort -unique $bodies]]
-} -result {3 1 2}
+  # Two objects for three uses: the two equal gradients share one, and the
+  # separation's tint transform is the other. And no two of them are equal -
+  # which is the counter-measurement, since a pool that folded DIFFERENT
+  # functions together would also count two.
+  list [llength $bodies] [llength [lsort -unique $bodies]]
+} -result {2 2}
 
 cleanupTests

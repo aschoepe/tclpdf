@@ -68,7 +68,7 @@ namespace eval ::tclpdf::textBlock {
       height {} paginate 0 columns 1 gutter {} balance 0
       indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
       avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0
-      hyphens 0}
+      hyphens 0 emergencyHyphen 0}
 
   # Where a line may break. Two classes, told apart by what happens to the
   # character when the line breaks there:
@@ -175,7 +175,18 @@ oo::define ::tclpdf::document::document {
   # both methods above sit on it, so the public shape and the internal one
   # cannot come to disagree about where a line ends.
   method TextBlockBroken {string options} {
-    lassign [my TextBlockLines $string $options] lines
+    # No lift where nothing needs it: breaking a text into lines does not
+    # place them, so the one question a vertical block cannot answer is not
+    # asked - which is what lets [textLines -direction ttb] break a vertical
+    # text into columns.
+    #
+    # -avoid is the exception, and it is not academic: the band a shape leaves
+    # free is measured from the FIRST BASELINE, so the lift is part of the
+    # breaking there rather than only of the placing. Measured when this was
+    # first written without the exception: "-avoid ... -anchor top" quietly
+    # broke as if the anchor were the baseline, and textFlow-8.3 caught it.
+    set needsLift [expr {[dict get $options avoid] ne {}}]
+    lassign [my TextBlockLines $string $options $needsLift] lines
     return [lmap line $lines {
       list [dict get $line text] [dict get $line hyphen]
     }]
@@ -451,7 +462,7 @@ oo::define ::tclpdf::document::document {
   # plain tail of the original: the line before the cut says where it stops,
   # and nothing has to be put back together from lines - which turned a soft
   # hyphen into a hard one and a word broken by character into several words.
-  method TextBlockBreak {string arguments band {language {}}} {
+  method TextBlockBreak {string arguments band {language {}} {emergency 0}} {
     set lines {}
     set paragraphIndex 0
     set globalLine 0
@@ -596,15 +607,39 @@ oo::define ::tclpdf::document::document {
         # The word alone may still be too wide - a part number, a URL, a
         # column two millimetres across. Break it by character rather than
         # letting it run past the edge unnoticed.
+        #
+        # -emergencyHyphen puts a hyphen on such a break. OFF by default, and
+        # that is a decision rather than caution: the words that reach this
+        # fallback are as often a part number, a file path or a URL as they
+        # are a long word, and a hyphen inside one of those is not a
+        # typographic aid but a character the reader will copy and a wrong
+        # value. A caller who knows the column holds words says so.
+        #
+        # The hyphen needs ROOM, so it is measured with the piece rather than
+        # added after: taking as many characters as fit and then hanging a
+        # hyphen on them is how the line comes out one hyphen too wide.
         while {![my TextBlockFits $word $width $arguments \
             $string $wordFrom] && [string length $word] > 1} {
           set take [string length $word]
-          while {$take > 1 && [my TextBlockMeasure [string range $word 0 $take-1] \
+          set mark [expr {$emergency ? "-" : ""}]
+          while {$take > 1 && [my TextBlockMeasure \
+              "[string range $word 0 $take-1]$mark" \
               $arguments $string $wordFrom] > $width} {
             incr take -1
           }
-          lappend lines [dict create text [string range $word 0 $take-1] \
-              offset $offset width $width paragraph $paragraphIndex hyphen 0 \
+          # A piece of one character with a hyphen after it is two glyphs
+          # where the column holds one - the hyphen goes rather than the
+          # letter, since a line with nothing of the word on it says less
+          # than a line without the mark.
+          if {$take == 1 && $mark ne ""
+              && [my TextBlockMeasure "[string range $word 0 0]$mark" \
+                  $arguments $string $wordFrom] > $width} {
+            set mark ""
+          }
+          lappend lines [dict create \
+              text "[string range $word 0 $take-1]$mark" \
+              offset $offset width $width paragraph $paragraphIndex \
+              hyphen [expr {$mark ne ""}] \
               first [expr {$inParagraph == 0}] running $running from $wordFrom]
           incr inParagraph
           set globalLine [expr {$running + 1}]
@@ -860,7 +895,29 @@ oo::define ::tclpdf::document::document {
   # Returns {lines state leading lift}: the font state the block is set in,
   # its leading in the document unit, and how far below -at its first
   # baseline sits.
-  method TextBlockLines {string options} {
+  # A VERTICAL TEXT IS BROKEN HERE AND PLACED BY THE CALLER, since 2026-08-25.
+  #
+  # The breaker never needed the direction: what it asks of every candidate is
+  # "how far does this reach", and [textWidth] answers that along whichever
+  # axis the text writes - [FontRunHeight] for a vertical run, [FontRunWidth]
+  # for a horizontal one. So -width is the COLUMN HEIGHT for such a text, and
+  # the columns come back in reading order.
+  #
+  # What is NOT here, and is the reason [text -width -direction ttb] is still
+  # refused: PLACING them. A horizontal block steps its lines down by the
+  # leading, and a vertical one has to step its columns LEFT by it - the whole
+  # of [TextBlockPlace], the height limit, the column balance, the shapes to
+  # avoid and the table are written along the one axis, and turning them is
+  # the second half of this subject rather than a flag. The caller sets each
+  # column with its own [text] call, which is one loop and exactly what the
+  # refusal in [TextLift] now says.
+  #
+  # "lift" says whether the first baseline's offset below -at is wanted. It is
+  # for every road that DRAWS or measures a height; [textLines] wants neither,
+  # and asking for it there is what used to refuse a vertical block outright -
+  # see [TextLift], where the refusal is, and why breaking is a different
+  # question from placing.
+  method TextBlockLines {string options {lift 1}} {
     set width [dict get $options width]
     set arguments [my TextOverrides $options]
     # The whole string, measured once and first - a glyph refusal has to
@@ -877,7 +934,7 @@ oo::define ::tclpdf::document::document {
     # paragraph drew all of its lines on top of one another - measured, and
     # unreadable. As a lift the advance goes through the text matrix and turns
     # with the text, which is what makes the lines run across the page.
-    set lift [my TextLift $state [dict get $options anchor]]
+    set lift [expr {$lift ? [my TextLift $state [dict get $options anchor]] : 0}]
 
     # The band this paragraph is set in - built by TextBlockBand, which the
     # no-room answer of TextBlockNoRoom asks as well.
@@ -914,7 +971,7 @@ oo::define ::tclpdf::document::document {
     }
 
     set lines [my TextBlockBreak $string $arguments $band \
-        [my TextBlockHyphenate $options]]
+        [my TextBlockHyphenate $options] [dict get $options emergencyHyphen]]
 
     # Which lines close their paragraph - decided on the WHOLE text, before
     # anything is held back for a height limit. A line that ends a column is
@@ -1558,4 +1615,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.11
+package provide tclpdf::textBlock 1.12

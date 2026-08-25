@@ -190,8 +190,42 @@ $doc text "PDF/A-3B, output intent [file tail $intent]. The stamp below is the\
 
 $doc image embed stamp $stencil -stencil 1
 $doc image embed fade $vignette
+# -interpolate does NOT come along into the archivable twin, and that is the
+# point of this block rather than an omission: ISO 19005-2, 6.2.8 says the
+# Interpolate key "shall not be present, or shall have a value of false", and
+# veraPDF reports it. The refusal is measured here rather than described,
+# under both orders, since a script may declare the profile before or after
+# it places its pictures.
+set refused {}
+foreach order {declared-first placed-first} {
+  set probe [tclpdf new -unit mm]
+  $probe page add
+  if {$order eq "declared-first"} {
+    $probe pdfa -part 3 -conformance B -profile $intent
+  }
+  if {[catch {
+    $probe image embed smooth $grey -interpolate 1
+    $probe image place smooth -at {20 20} -width 30
+    if {$order eq "placed-first"} {
+      $probe pdfa -part 3 -conformance B -profile $intent
+    }
+  } message options]} {
+    lappend refused "$order: [lindex [dict get $options -errorcode] 2]"
+  } else {
+    lappend refused "$order: accepted, which this example did not expect"
+  }
+  $probe destroy
+}
+
 $doc image embed portrait $grey -mask fade
 $doc style -fill {gray 0.15}
+$doc font -family body -size 8 -color {gray 0.35}
+$doc text "What this document may not carry: -interpolate 1. ISO 19005-2,\
+    6.2.8 says the Interpolate key shall not be present or shall be false,\
+    and both orders are refused - [join $refused {; }]. Smoothing is the\
+    reader's decision, and an archive format takes it away so that the same\
+    file looks the same in twenty years." -at {20 108} -width 170
+
 $doc image place stamp -at {20 62} -size {40 40} -artifact 1
 $doc image place portrait -at {70 62} -size {53 40} -artifact 1
 

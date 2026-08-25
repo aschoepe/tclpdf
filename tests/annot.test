@@ -865,4 +865,66 @@ test annot-8.4 {a second write does not write the appearance a second time} -bod
   expr {[string length $first] == [string length $second]}
 } -result 1
 
+# A refused appearance used to leave the document unwritable, fixed 2026-08-25.
+
+test annot-dead-9.1 {a failed appearance leaves the document writable} -body {
+  # [AnnotWrite] used to reserve the object number BEFORE the appearance was
+  # drawn, because the appearance was written under a reservation named after
+  # that number. A drawing script that raised then left the number reserved
+  # and never filled - and the next [write] of the WHOLE document died with
+  # "object(s) reserved but never written", although the caller had caught
+  # the error and carried on.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc text "x" -at {20 20}
+  catch {$doc annot polygon -points {{20 120} {60 110} {80 140}} \
+      -colour {rgb 5 5 5 5}}
+  set path [::tclpdfTest::scratch annot-dead.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  catch {file delete $path}
+  list $code [string match {*never written*} $message]
+} -result {0 0}
+
+test annot-dead-9.2 {and the markups, which carried the defect since they were built} -body {
+  # The same measurement on [annot highlight] - where it had been since the
+  # text markups were written, and where it was reproduced before the fix.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "x" -at {20 20}
+  catch {$doc annot highlight -quads {{20 70 40 5}} -colour {rgb 5 5 5 5} \
+      -contents x}
+  set path [::tclpdfTest::scratch annot-dead2.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  catch {file delete $path}
+  list $code [string match {*never written*} $message]
+} -result {0 0}
+
+test annot-dead-9.3 {a document written twice writes one appearance, not two} -body {
+  # The reason the appearance is named at all: it goes under a reservation, so
+  # that a rerun writes OVER its own picture instead of adding a second one.
+  # The name is a counter of this module's own now rather than the object
+  # number - and a counter is stable across writes for the same reason the
+  # object numbers are: the calls come in the same order every time.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "the amount due" -at {20 60}
+  $doc annot highlight -text "the amount due" -at {20 60} -contents "check"
+  set first [::tclpdfTest::scratch annot-twice-1.pdf]
+  set second [::tclpdfTest::scratch annot-twice-2.pdf]
+  $doc write $first
+  $doc write $second
+  set one [::tclpdfTest::readBytes $first]
+  set two [::tclpdfTest::readBytes $second]
+  $doc destroy
+  file delete $first $second
+  # The same number of appearance streams both times, and the same file size.
+  list [regexp -all {/Subtype */Form} $one] [regexp -all {/Subtype */Form} $two] \
+      [expr {[string length $one] == [string length $two]}]
+} -result {1 1 1}
+
+
 cleanupTests

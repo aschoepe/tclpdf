@@ -273,7 +273,8 @@ oo::define ::tclpdf::document::document {
     set defaults {at {} rotate 0 align left width {} anchor baseline
         height {} paginate 0 columns 1 gutter {} balance 0
         indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
-        avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0}
+        avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0
+        fit {} shrinkLimit 85 emergencyHyphen 0}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -359,6 +360,13 @@ oo::define ::tclpdf::document::document {
             hyphen, and \"$string\" has no hyphen in it"
       }
     }
+    # A LINE FITTED INTO A BOX, built on 2026-08-24. The recipe was in
+    # examples/01.06 - measure with [textWidth], work out a factor, set
+    # -stretch or -size from it - and a recipe in an example is a thing every
+    # caller writes again, slightly differently. What it costs to have here
+    # is one method; what it saves is the trial-and-error loop that the
+    # example's own comment says nobody should write.
+    set state [my TextFitLine $string $options $state]
     if {$width ne {}} {
       # The paragraph half of this topic. Loaded here rather than at the top
       # of the file: textBlock requires text, so requesting it up front would
@@ -755,8 +763,9 @@ oo::define ::tclpdf::document::document {
   # than read as baseline. Returns the anchor, so a caller can test it in the
   # same breath.
   method TextAnchor {anchor} {
-    if {$anchor ni {baseline top}} {
-      return -code error "tclpdf: -anchor must be baseline or top, not\
+    if {$anchor ni {baseline top middle bottom}} {
+      return -code error -errorcode [list TCLPDF TEXT ANCHOR $anchor] \
+          "tclpdf: -anchor must be baseline, top, middle or bottom, not\
           \"$anchor\""
     }
     return $anchor
@@ -788,30 +797,177 @@ oo::define ::tclpdf::document::document {
   # refusal covers -width, -columns, -paginate and the table alike - and
   # covers them by NAME rather than by drawing a vertical line's glyphs into
   # a horizontal paragraph's positions, which is what it did before.
+  # -fit {w h} for ONE line: squeeze it horizontally first, and only lower the
+  # size when squeezing alone would go too far.
+  #
+  # THE ORDER IS THE POINT, and it is the typographer's rather than the
+  # arithmetic's. Narrowing a face by a few per cent is barely visible in a
+  # single line - a heading, a table cell, a stamp - while a smaller size is
+  # visible at once beside its neighbours. So the width is taken out of the
+  # letters up to -shrinkLimit (85 per cent by default, where the face still
+  # reads as itself), and only what is still missing is taken out of the size.
+  #
+  # THE HEIGHT IS A SEPARATE QUESTION and is answered after: the line's box is
+  # the face's ascender plus its descender at the size in force, and where the
+  # box is taller than the one given, the size comes down by that ratio too -
+  # which then leaves the width with room to spare, so the horizontal factor
+  # is worked out again against the new size rather than kept.
+  #
+  # Returns the STATE with size and stretch set to what the fit needs - the
+  # state and not the options, because that is what carries the font values
+  # from here on ([TextMerge] builds it, and the drawing reads it). A first
+  # attempt set them in the options and changed nothing at all.
+  #
+  # Nothing is drawn here and nothing is measured twice: [textWidth] answers
+  # for the state as it stands, and the factor scales linearly with the size -
+  # which is why one measurement is enough and the loop the example warns
+  # about is not needed.
+  method TextFitLine {string options state} {
+    set fit [dict get $options fit]
+    if {$fit eq {}} {
+      return $state
+    }
+    if {[dict get $options width] ne {}} {
+      return -code error -errorcode [list TCLPDF TEXT FIT WIDTH] \
+          "tclpdf: -fit puts ONE line into a box and -width breaks a\
+          paragraph into as many lines as it takes - the two are different\
+          questions about the same rectangle. Fit the line, or break the\
+          paragraph and give it -height"
+    }
+    # Only the BOX is checked through [fitCheck] - not the anchors, because
+    # -align already means something else here: for a line it is the
+    # typographic alignment, left, center, right or justify, and it has meant
+    # that since 1.0. So a fitted line has no -align/-valign of its own; the
+    # box is where the line goes, and -align says how it sits on the line's
+    # own width, which is what a caller means anyway.
+    my fitCheck [dict create fit $fit] text
+    lassign $fit boxWidth boxHeight
+    set size [dict get $state size]
+    set limit [dict get $options shrinkLimit]
+    if {![string is double -strict $limit] || $limit <= 0 || $limit > 100} {
+      return -code error -errorcode [list TCLPDF TEXT FIT SHRINK $limit] \
+          "tclpdf: -shrinkLimit is how far the letters may be narrowed before\
+          the size comes down instead, in per cent from above zero to 100,\
+          not \"$limit\""
+    }
+    # The height first, since it changes the size the width is measured at.
+    set font [dict get $state resolved]
+    set lineHeight [expr {[my TextFitAscent $font $size]
+        + [my TextFitDescent $font $size]}]
+    set boxHeightPoints [my distance $boxHeight]
+    if {$lineHeight > $boxHeightPoints && $lineHeight > 0} {
+      set size [expr {$size * $boxHeightPoints / double($lineHeight)}]
+      dict set state size $size
+    }
+    set natural [my distance [my textWidth $string -size $size -stretch 100 \
+        -family [dict get $state family] -style [dict get $state style]]]
+    set boxWidthPoints [my distance $boxWidth]
+    set stretch 100
+    if {$natural > $boxWidthPoints && $natural > 0} {
+      set factor [expr {$boxWidthPoints / double($natural)}]
+      if {$factor >= $limit / 100.0} {
+        set stretch [expr {$factor * 100.0}]
+      } else {
+        # Squeezing has reached its limit; the rest comes out of the size,
+        # and the letters keep exactly the narrowing that was allowed.
+        set stretch $limit
+        set size [expr {$size * $factor / ($limit / 100.0)}]
+      }
+    }
+    dict set state size $size
+    dict set state stretch $stretch
+    return $state
+  }
+
+  # The two halves of a line's box, each answered for whichever kind of face
+  # is in force. Separate from [TextLift]'s copies of the same question
+  # because that one returns a distance in the document unit and these two
+  # answer in points, which is what the fitting arithmetic works in.
+  method TextFitAscent {font size} {
+    if {![my TextEmbedded $font]} {
+      return [expr {[dict get [::tclpdf::afm descriptor $font] Ascender]
+          * $size / 1000.0}]
+    }
+    if {[my FontKind $font] eq "type3"} {
+      return [my Type3Ascender $font $size]
+    }
+    return [my FontAscender $font $size]
+  }
+
+  method TextFitDescent {font size} {
+    if {![my TextEmbedded $font]} {
+      return [expr {abs([dict get [::tclpdf::afm descriptor $font] Descender])
+          * $size / 1000.0}]
+    }
+    if {[my FontKind $font] eq "type3"} {
+      return 0
+    }
+    return [my FontDescender $font $size]
+  }
+
   method TextLift {state anchor} {
     if {[dict get $state direction] eq "ttb"} {
       return -code error -errorcode [list TCLPDF TEXT VERTICAL block] \
-          "tclpdf: -direction ttb sets ONE vertical line and the block road\
-          is horizontal - it breaks lines by width and steps them down by the\
-          leading, which is the direction a vertical line already runs in.\
-          Set each column with its own \[text\] call at its own -at, or drop\
+          "tclpdf: -direction ttb sets ONE vertical line, and the block road\
+          PLACES its lines down the page - which is the direction a vertical\
+          line already writes in. Breaking such a text into columns is a\
+          different question and is answered: \[\$doc textLines \$text -width\
+          \$columnHeight -direction ttb\] returns the columns, and each is set\
+          with its own \[text\] call at its own -at, moving leftwards. Or drop\
           -direction ttb for this block"
     }
-    if {[my TextAnchor $anchor] ne "top"} {
+    set anchor [my TextAnchor $anchor]
+    if {$anchor eq "baseline"} {
       return 0
     }
     set font [dict get $state resolved]
+    set size [dict get $state size]
     if {[my TextEmbedded $font]} {
       if {[my FontKind $font] eq "type3"} {
-        set ascent [my Type3Ascender $font [dict get $state size]]
+        set ascent [my Type3Ascender $font $size]
       } else {
-        set ascent [my FontAscender $font [dict get $state size]]
+        set ascent [my FontAscender $font $size]
       }
     } else {
       set ascent [expr {[dict get [::tclpdf::afm descriptor $font] Ascender]
-          * [dict get $state size] / 1000.0}]
+          * $size / 1000.0}]
     }
-    return [::tclpdf::geometry fromPoints $ascent [my cget -unit]]
+    if {$anchor eq "top"} {
+      return [::tclpdf::geometry fromPoints $ascent [my cget -unit]]
+    }
+    # bottom and middle need the OTHER edge of the line as well, which is the
+    # descender - added on 2026-08-24, and reachable at all only since
+    # [FontDescender] was put beside [FontAscender] the same day.
+    #
+    # WHAT THE TWO MEAN, said plainly because two readings are possible and
+    # only one of them is useful: the box of the line is the face's ascender
+    # above the baseline and its descender below, which is the box a designer
+    # draws and NOT the box the ink happens to fill. Measuring the ink instead
+    # would make the same line sit at different heights depending on whether
+    # it carries a "g" - so "Text" and "Type" would not line up, which is the
+    # opposite of what an anchor is for.
+    #
+    #   bottom   the descender sits at y, so the whole line is above it
+    #   middle   the line's box is centred on y
+    #
+    # A Type 3 face has no descender to read - its glyphs are content streams
+    # and the only vertical measure it carries is the box [font type3] was
+    # given, whose ascent [Type3Ascender] answers. Its descent is taken as
+    # zero rather than guessed at, which makes bottom the baseline for such a
+    # face and says so in the manual.
+    if {[my TextEmbedded $font] && [my FontKind $font] eq "type3"} {
+      set descent 0
+    } elseif {[my TextEmbedded $font]} {
+      set descent [my FontDescender $font $size]
+    } else {
+      set descent [expr {abs([dict get [::tclpdf::afm descriptor $font] \
+          Descender]) * $size / 1000.0}]
+    }
+    if {$anchor eq "bottom"} {
+      return [::tclpdf::geometry fromPoints [expr {-$descent}] [my cget -unit]]
+    }
+    return [::tclpdf::geometry fromPoints \
+        [expr {($ascent - $descent) / 2.0}] [my cget -unit]]
   }
 
   # One BT/ET block with one string in it.
@@ -2248,4 +2404,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.17
+package provide tclpdf::text 1.18

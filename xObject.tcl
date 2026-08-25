@@ -160,7 +160,8 @@ oo::define ::tclpdf::document::document {
 
   method FormPlace {name args} {
     set options [::tclpdf::option parse \
-        {at {} scale 1 rotate 0 opacity {} alt {} artifact {}} $args "form place"]
+        {at {} scale {} rotate 0 opacity {} alt {} artifact {} fit {} \
+            fitMode {} align left valign top} $args "form place"]
     set forms [my state forms]
     if {![dict exists $forms $name]} {
       return -code error "tclpdf: no form named \"$name\" - known are:\
@@ -178,10 +179,49 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options at] ne {}} {
       my GraphicsPoint [dict get $options at] -at "form place"
     }
+    # -fit and the anchors, checked by the same code the picture road uses -
+    # [fitCheck] in page.tcl. It is what refuses -fit beside -scale, a box
+    # that is not two lengths above zero, an unknown -fitMode, and the
+    # combination of a fitted box with -rotate, which places an upright box
+    # about a corner the turn then moves.
+    my fitCheck $options "form place"
     set scale [dict get $options scale]
+    if {$scale eq {}} {
+      set scale 1
+    }
     if {![string is double -strict $scale] || $scale <= 0} {
       return -code error "tclpdf: -scale of form place is a factor above zero,\
           not \"$scale\""
+    }
+    # A BOX INSTEAD OF A FACTOR. A form has one natural size, and fitting it
+    # into a box is the same arithmetic a picture uses - [fitExtent], which
+    # takes the smaller factor for contain and the larger for cover. One
+    # factor and not two: a form scaled unevenly is a distorted drawing, and
+    # neither mode asks for that.
+    #
+    # Built on 2026-08-24. Until then [form place] knew -scale alone, so a
+    # caller with a letterhead and a box had to work the factor out by hand
+    # from [form size] - which is the arithmetic that already stood here for
+    # pictures, in a method written to be shared.
+    set fit [dict get $options fit]
+    if {$fit ne {}} {
+      # Both sides in POINTS, which is what the form knows its own size in -
+      # [FormCreate] stored it that way. -fit arrives in the document unit
+      # like every other length, so it is converted once here rather than the
+      # factor being worked out in two units and one of them silently
+      # winning.
+      lassign [my extent $fit] boxWidth boxHeight
+      set naturalWidth [dict get $form width]
+      set naturalHeight [dict get $form height]
+      set across [expr {$boxWidth / double($naturalWidth)}]
+      set down [expr {$boxHeight / double($naturalHeight)}]
+      # contain takes the SMALLER factor, so the whole form is inside the box;
+      # cover the larger, so the box is covered and what sticks out is cut
+      # away below. The same rule [fitExtent] states for a picture, applied to
+      # the one factor a form can have - scaling a drawing unevenly is not
+      # what either mode asks for.
+      set scale [expr {[dict get $options fitMode] eq "cover"
+          ? max($across, $down) : min($across, $down)}]
     }
     if {![string is double -strict [dict get $options rotate]]} {
       return -code error "tclpdf: -rotate of form place is an angle in\
@@ -205,6 +245,24 @@ oo::define ::tclpdf::document::document {
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] x y
     set heightUnit [::tclpdf::geometry fromPoints [dict get $form height] \
         [my cget -unit]]
+    set widthUnit [::tclpdf::geometry fromPoints [dict get $form width] \
+        [my cget -unit]]
+    # A COVERED BOX IS CUT BACK TO THE BOX, exactly as a picture's is:
+    # -fitMode cover scales until both edges are covered, which leaves the
+    # form hanging over the box on one axis, and the box is what the caller
+    # asked to see. The rectangle is the one -at and -fit name, taken BEFORE
+    # the anchor moves the form inside it.
+    set clip {}
+    if {$fit ne {}} {
+      if {[dict get $options fitMode] eq "cover"} {
+        set clip [list $x $y {*}$fit]
+      }
+      # And the anchor, through the same [fitAnchor] the picture road uses,
+      # so that a form and a picture put into the same box with the same
+      # words end up in the same place.
+      lassign [my fitAnchor [list $x $y] [expr {$widthUnit * $scale}] \
+          [expr {$heightUnit * $scale}] $options] x y
+    }
     lassign [my coords $x [expr {$y + $heightUnit * $scale}]] px py
     set matrix [::tclpdf::geometry translate $px $py]
     if {[dict get $options rotate] != 0} {
@@ -231,6 +289,13 @@ oo::define ::tclpdf::document::document {
         [dict get $options artifact] $y [my FormBox $form $matrix]] mark element
 
     my save
+    # Inside the save, so the matching restore takes it back: a clipping path
+    # lasts to the end of the content stream otherwise, and everything drawn
+    # after this placement would be cut by a box that has nothing to do with
+    # it.
+    if {$clip ne {}} {
+      my clip -at [lrange $clip 0 1] -size [lrange $clip 2 3]
+    }
     if {$alpha ne {}} {
       my content "[::tclpdf::pdfObj name $alpha] gs\n"
     }
@@ -317,4 +382,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xObject 1.4
+package provide tclpdf::xObject 1.5

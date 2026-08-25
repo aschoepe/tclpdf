@@ -302,6 +302,40 @@ set y [specimenBlock $doc [expr {$y + 10}] \
     to stay on each side, and the console line above says what each of the two\
     brought with it." $englishWords]
 
+# WHAT HAPPENS WHERE THERE ARE NO PATTERNS AND NO SOFT HYPHENS, which is the
+# other half of this subject: a word longer than the column is broken by
+# character rather than let run past the edge. -emergencyHyphen puts a hyphen
+# on that break, and it is OFF by default - the words that reach this fallback
+# are as often a part number, a file path or a URL as a long word, and a
+# hyphen inside one of those is a character the reader copies and a wrong
+# value.
+
+$doc page add
+$doc font -family helvetica -style bold -size 14 -color {0.20 0.30 0.45}
+$doc text "The break of last resort" -at {20 25}
+$doc font -style {} -size 9 -color {0.35 0.35 0.35}
+$doc text "No language, no patterns, no soft hyphens - just a word wider than\
+    its column. The left column is what the breaker has always done; the right\
+    one is the same break with -emergencyHyphen 1. The marked lines carry one\
+    character FEWER: the hyphen is measured with the piece rather than hung on\
+    after it, so the line stays inside the column." -at {20 32} -width 170
+
+set specimen "Donaudampfschifffahrtsgesellschaftskapitaen"
+$doc font -size 8 -color {0.45 0.45 0.45}
+$doc text "plain" -at {20 50}
+$doc text "-emergencyHyphen 1" -at {80 50}
+$doc font -family helvetica -size 11 -color {0.1 0.1 0.1}
+$doc text $specimen -at {20 55} -width 32
+$doc text $specimen -at {80 55} -width 32 -emergencyHyphen 1
+
+# And a part number, which is why the option is off by default: the hyphen
+# would become part of a value somebody copies out of the page.
+$doc font -size 8 -color {0.45 0.45 0.45}
+$doc text "a part number - the reason the option is off by default:" \
+    -at {20 85} -width 170
+$doc font -size 11 -color {0.1 0.1 0.1}
+$doc text "DIN-EN-ISO-9001-2015-A1-2024-REV-C" -at {20 92} -width 32
+
 exampleFooter $doc
 $doc write $target
 $doc destroy

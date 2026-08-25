@@ -178,13 +178,15 @@ proc ::tclpdf::type1::glyphs {font} {
   set plain [Decrypt [dict get $font encrypted] 55665 4]
   set at [string first "/CharStrings" $plain]
   if {$at < 0} {
-    return -code error "tclpdf: damaged Type 1 program - no /CharStrings in\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED type1] \
+        "tclpdf: damaged Type 1 program - no /CharStrings in\
         the eexec section"
   }
   # "/CharStrings 315 dict dup begin" - the entries follow "begin".
   set at [string first "begin" $plain $at]
   if {$at < 0} {
-    return -code error "tclpdf: damaged Type 1 program - /CharStrings has\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED type1] \
+        "tclpdf: damaged Type 1 program - /CharStrings has\
         no begin"
   }
   incr at 5
@@ -230,7 +232,8 @@ proc ::tclpdf::type1::read {path} {
 
 proc ::tclpdf::type1::parse {bytes} {
   if {[string length $bytes] < 64} {
-    return -code error "tclpdf: not a Type 1 font program - too short"
+    return -code error -errorcode [list TCLPDF FONT SOURCE type1] \
+        "tclpdf: not a Type 1 font program - too short"
   }
   # 0x80 introduces a PFB segment. Anything else has to start with the
   # PostScript magic, or this is not a Type 1 program at all.
@@ -241,7 +244,8 @@ proc ::tclpdf::type1::parse {bytes} {
     set pieces [Boundaries $bytes]
   } else {
     binary scan [string range $bytes 0 3] H* signature
-    return -code error "tclpdf: not a Type 1 font program (starts with\
+    return -code error -errorcode [list TCLPDF FONT SOURCE type1] \
+        "tclpdf: not a Type 1 font program (starts with\
         0x$signature) - .pfb, .pfa and .t1 are read here"
   }
   lassign $pieces clear encrypted trailer
@@ -263,7 +267,8 @@ proc ::tclpdf::type1::Segments {bytes} {
   while {$at + 2 <= $total} {
     binary scan $bytes @${at}cucu marker type
     if {$marker != 0x80} {
-      return -code error "tclpdf: damaged PFB - expected a segment marker at\
+      return -code error -errorcode [list TCLPDF FONT DAMAGED pfb] \
+          "tclpdf: damaged PFB - expected a segment marker at\
           offset $at"
     }
     # Type 3 is "end of file" and carries no length.
@@ -271,12 +276,14 @@ proc ::tclpdf::type1::Segments {bytes} {
       break
     }
     if {$type != 1 && $type != 2} {
-      return -code error "tclpdf: damaged PFB - unknown segment type $type"
+      return -code error -errorcode [list TCLPDF FONT DAMAGED pfb] \
+          "tclpdf: damaged PFB - unknown segment type $type"
     }
     binary scan $bytes @[expr {$at + 2}]iu length
     set start [expr {$at + 6}]
     if {$start + $length > $total} {
-      return -code error "tclpdf: damaged PFB - a segment reaches past the\
+      return -code error -errorcode [list TCLPDF FONT DAMAGED pfb] \
+          "tclpdf: damaged PFB - a segment reaches past the\
           end of the file"
     }
     lappend pieces [string range $bytes $start [expr {$start + $length - 1}]]
@@ -286,7 +293,8 @@ proc ::tclpdf::type1::Segments {bytes} {
   # neighbours of the same kind is what the format intends, and the three
   # pieces PDF wants are clear, encrypted, clear.
   if {[llength $pieces] < 3} {
-    return -code error "tclpdf: damaged PFB - [llength $pieces] segments,\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED pfb] \
+        "tclpdf: damaged PFB - [llength $pieces] segments,\
         three are needed"
   }
   if {[llength $pieces] > 3} {
@@ -305,7 +313,8 @@ proc ::tclpdf::type1::Boundaries {bytes} {
   # than assumed.
   set eexec [string first "eexec" $bytes]
   if {$eexec < 0} {
-    return -code error "tclpdf: not a Type 1 font program - no eexec"
+    return -code error -errorcode [list TCLPDF FONT SOURCE type1] \
+        "tclpdf: not a Type 1 font program - no eexec"
   }
   set at [expr {$eexec + 5}]
   # Exactly the line ending and nothing more: CR, LF or CRLF. Not "skip all
@@ -336,7 +345,8 @@ proc ::tclpdf::type1::Boundaries {bytes} {
   # 64 without a break is the first line of the block there too.
   set zeros [string first [string repeat 0 64] $bytes]
   if {$zeros < 0 || [string first "cleartomark" $bytes] < $zeros} {
-    return -code error "tclpdf: damaged Type 1 program - no closing block of\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED type1] \
+        "tclpdf: damaged Type 1 program - no closing block of\
         zeros before cleartomark"
   }
   set encrypted [string range $bytes $at [expr {$zeros - 1}]]
@@ -351,7 +361,8 @@ proc ::tclpdf::type1::Boundaries {bytes} {
   if {[regexp {^[0-9A-Fa-f]{4}} $encrypted]} {
     regsub -all {[[:space:]]} $encrypted {} hex
     if {[regexp {[^0-9A-Fa-f]} $hex] || [string length $hex] % 2} {
-      return -code error "tclpdf: damaged Type 1 program - the eexec section\
+      return -code error -errorcode [list TCLPDF FONT DAMAGED type1] \
+          "tclpdf: damaged Type 1 program - the eexec section\
           starts as hexadecimal and does not stay so"
     }
     set encrypted [binary format H* $hex]
@@ -462,10 +473,11 @@ proc ::tclpdf::type1::metrics {path} {
     }
   }
   if {![dict size [dict get $metrics widths]]} {
-    return -code error "tclpdf: no character metrics in \"$path\" - is this\
+    return -code error -errorcode [list TCLPDF FONT METRICS afm] \
+        "tclpdf: no character metrics in \"$path\" - is this\
         an AFM file?"
   }
   return $metrics
 }
 
-package provide tclpdf::type1 1.2
+package provide tclpdf::type1 1.3

@@ -59,7 +59,8 @@ oo::define ::tclpdf::document::document {
         # came out as if the caller had written the span that fits - the
         # answer to a question nobody asked.
         if {$rowIndex + [dict get $cell rowSpan] > [llength $rows]} {
-          return -code error "tclpdf: a rowSpan of [dict get $cell rowSpan] in\
+          return -code error -errorcode [list TCLPDF TABLE SPAN row] \
+              "tclpdf: a rowSpan of [dict get $cell rowSpan] in\
               row [expr {$rowIndex + 1}] of the $section reaches past its last\
               row - the $section has [llength $rows] row(s)"
         }
@@ -112,7 +113,8 @@ oo::define ::tclpdf::document::document {
     foreach key {colSpan rowSpan} {
       if {![string is integer -strict [dict get $cell $key]] ||
           [dict get $cell $key] < 1} {
-        return -code error "tclpdf: $key must be a positive integer, got\
+        return -code error -errorcode [list TCLPDF TABLE SPAN $key] \
+            "tclpdf: $key must be a positive integer, got\
             \"[dict get $cell $key]\""
       }
     }
@@ -178,7 +180,8 @@ oo::define ::tclpdf::document::document {
       if {[lindex $starts $index] || $index < [llength $columns]} {
         continue
       }
-      return -code error "tclpdf: a colSpan reaches over column\
+      return -code error -errorcode [list TCLPDF TABLE SPAN column] \
+          "tclpdf: a colSpan reaches over column\
           [expr {$index + 1}], which no row has a cell in - a span covers the\
           columns of the table and adds none; describe the column in -columns\
           if it is meant to be there"
@@ -212,7 +215,8 @@ oo::define ::tclpdf::document::document {
       foreach key {width weight} {
         if {[dict exists $column $key]
             && ![string is double -strict [dict get $column $key]]} {
-          return -code error "tclpdf: a column $key is a number, not\
+          return -code error -errorcode [list TCLPDF TABLE COLUMN $key] \
+              "tclpdf: a column $key is a number, not\
               \"[dict get $column $key]\" - width in the document unit,\
               weight as a share of what the fixed widths leave; there is no\
               percent width"
@@ -238,7 +242,8 @@ oo::define ::tclpdf::document::document {
     set remaining [expr {$total - $fixed}]
     if {$remaining < 0} {
       if {![dict get $options horizontalBreak]} {
-        return -code error "tclpdf: the fixed column widths add up to $fixed,\
+        return -code error -errorcode [list TCLPDF TABLE WIDTH fixed] \
+            "tclpdf: the fixed column widths add up to $fixed,\
             which is more than the table width of $total - either widen the\
             table or pass -horizontalBreak 1"
       }
@@ -254,7 +259,8 @@ oo::define ::tclpdf::document::document {
     # page.
     if {$remaining <= 0 && [llength [lsearch -all -exact $widths {}]]} {
       set index [lsearch -exact $widths {}]
-      return -code error "tclpdf: the fixed column widths add up to $fixed\
+      return -code error -errorcode [list TCLPDF TABLE WIDTH fixed] \
+          "tclpdf: the fixed column widths add up to $fixed\
           and leave no room for column [expr {$index + 1}], which has no\
           width of its own - give it one or widen the table"
     }
@@ -539,13 +545,30 @@ oo::define ::tclpdf::document::document {
   # measured, so that a table with a mistyped value draws nothing at all.
   # size and family go through [text], which has its own word on both.
   method TableStyleCheck {style} {
+    # A VERTICAL TABLE IS REFUSED HERE AND IN THE TABLE'S OWN WORDS, since
+    # 2026-08-25. It used to be caught by [text] on the way through, which
+    # was right as long as that road refused every vertical block; now that
+    # the BREAKER takes the direction and only the PLACING does not, the
+    # refusal a table ran into came from [TextLift]'s anchor branch and
+    # talked about an -anchor the caller never gave. A cell that says
+    # "direction ttb" has to hear about tables.
+    if {[dict get $style direction] eq "ttb"} {
+      return -code error -errorcode [list TCLPDF TABLE DIRECTION ttb] \
+          "tclpdf: a table sets its cells as horizontal blocks - it breaks\
+          them by the column width and steps the lines down the row, which is\
+          the direction a vertical line already writes in. There is no\
+          vertical table: a page of columns is \[textLines -direction ttb\]\
+          for the breaking and one \[text\] call per column for the placing.\
+          Drop \"direction ttb\" from the style"
+    }
     foreach {key known} {
       align {left right center decimal}
       valign {top middle bottom}
       border {none all horizontal vertical outer}
     } {
       if {[dict get $style $key] ni $known} {
-        return -code error "tclpdf: unknown table $key\
+        return -code error -errorcode [list TCLPDF TABLE STYLE $key] \
+            "tclpdf: unknown table $key\
             \"[dict get $style $key]\" - known are: [join $known {, }]"
       }
     }
@@ -555,16 +578,18 @@ oo::define ::tclpdf::document::document {
     } {
       set value [dict get $style $key]
       if {![string is double -strict $value] || $value < 0} {
-        return -code error "tclpdf: a table $key is $what, not \"$value\""
+        return -code error -errorcode [list TCLPDF TABLE STYLE $key] \
+            "tclpdf: a table $key is $what, not \"$value\""
       }
     }
     set leading [dict get $style leading]
     if {![string is double -strict $leading] || $leading <= 0} {
-      return -code error "tclpdf: a table leading is a factor of the font\
+      return -code error -errorcode [list TCLPDF TABLE STYLE leading] \
+          "tclpdf: a table leading is a factor of the font\
           size above 0, not \"$leading\""
     }
     return $style
   }
 }
 
-package provide tclpdf::tableLayout 1.4
+package provide tclpdf::tableLayout 1.5

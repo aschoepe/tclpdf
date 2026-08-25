@@ -647,6 +647,37 @@ oo::define ::tclpdf::document::document {
         / [dict get $parsed unitsPerEm]}]
   }
 
+  # The descender of an embedded face, in points at the size asked for, as a
+  # POSITIVE distance below the baseline.
+  #
+  # The twin of [FontAscender], and written on 2026-08-24 because it was
+  # missing: annotMark.tcl carried the whole of it as a private method,
+  # having said so in its own comment - "where a [FontDescender] is added
+  # beside [FontAscender], this method becomes one line and should".
+  #
+  # Positive because that is the question callers ask - how far below the
+  # baseline does the line reach - while the faces disagree on the sign: hhea
+  # states it negative, an AFM may state either. Taking the absolute value
+  # here is what keeps every caller from having to know that.
+  #
+  # ZERO counts as absent, not as a measurement, for the same reason it does
+  # in [FontAscender]: the URW metrics in this tree write "Descender 0", the
+  # field being there and saying nothing, and the bounding box is measured
+  # from the same outlines and is the honest substitute.
+  method FontDescender {alias size} {
+    set entry [dict get [my state fonts] $alias]
+    if {[dict get $entry kind] eq "type1"} {
+      set descender [dict get $entry metrics descender]
+      if {$descender eq {} || $descender == 0} {
+        set descender [lindex [dict get $entry metrics bbox] 1]
+      }
+      return [expr {abs(double($descender)) * $size / 1000.0}]
+    }
+    set parsed [dict get $entry parsed]
+    return [expr {abs(double([dict get $parsed descender])) * $size
+        / [dict get $parsed unitsPerEm]}]
+  }
+
   # A Type 1 face is addressed by single bytes through WinAnsiEncoding, so it
   # is encoded by the same code as the standard fourteen - only the widths
   # come from its own metrics. [afm encodeWidths] is that shared road; what
@@ -2053,4 +2084,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.12
+package provide tclpdf::font 1.13

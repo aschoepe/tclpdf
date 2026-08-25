@@ -52,7 +52,8 @@ namespace eval ::tclpdf::subset {
 proc ::tclpdf::subset::build {font glyphs {instanced {}}} {
   set loca [dict get $font loca]
   if {![llength $loca]} {
-    return -code error "tclpdf: the font has no glyf/loca tables and cannot be\
+    return -code error -errorcode [list TCLPDF FONT SUBSET outlines] \
+        "tclpdf: the font has no glyf/loca tables and cannot be\
         subsetted"
   }
 
@@ -339,7 +340,8 @@ proc ::tclpdf::subset::Vhea {font count} {
   if {[string length $vhea] < 36} {
     # A face whose vhea is too short to correct: writing the vmtx without a
     # header that describes it would be worse than writing neither.
-    return -code error "tclpdf: the font's \"vhea\" table is\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED vhea] \
+        "tclpdf: the font's \"vhea\" table is\
         [string length $vhea] bytes and cannot describe its vertical metrics"
   }
   return [string replace $vhea 34 35 [binary format Su $count]]
@@ -433,7 +435,8 @@ proc ::tclpdf::subset::TableOffset {tags tables tag} {
     set length [string length [dict get $tables $candidate]]
     incr offset [expr {$length + (4 - $length % 4) % 4}]
   }
-  return -code error "tclpdf: no table $tag in the subset"
+  return -code error -errorcode [list TCLPDF FONT SUBSET table] \
+      "tclpdf: no table $tag in the subset"
 }
 
 # The table checksum: the sum of the 32-bit words, modulo 2^32.
@@ -448,4 +451,4 @@ proc ::tclpdf::subset::Checksum {data} {
   return $sum
 }
 
-package provide tclpdf::subset 1.3
+package provide tclpdf::subset 1.4

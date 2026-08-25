@@ -242,3 +242,71 @@ A Euro sign is a warning (rc 3) for `qrcode` and an error (rc 6) for `code128`. 
 $doc write [file join $out ref-05-images-svg.pdf]
 $doc destroy
 ```
+
+## Fitting a form or a drawing into a box
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+set docGlobal $doc                      ;# [form create -script] runs at level #0
+$doc form create badge -size {50 16} -script {
+    $docGlobal rect -at {0 0} -size {50 16} -fill {0.15 0.35 0.6}
+}
+
+# -fit names a BOX instead of a factor and keeps the proportions. Same words,
+# same arithmetic and same error codes as [image place]:
+#   contain  (default) the whole of it inside the box
+#   cover    the whole box covered, what hangs over is clipped
+$doc form place badge -at {20 20} -fit {30 18} -artifact 1
+$doc form place badge -at {60 20} -fit {30 18} -fitMode cover -artifact 1
+
+# -align/-valign say where in the box it sits (left/top by default for a form).
+$doc form place badge -at {100 20} -fit {30 18} -align center -valign middle \
+    -artifact 1
+
+# A drawing takes the same options. Its defaults are center/middle, because
+# that is "xMidYMid meet" - the default of preserveAspectRatio - written out,
+# so a script from before the option writes the same bytes.
+$doc svg -data {<svg viewBox="0 0 60 20" xmlns="http://www.w3.org/2000/svg">
+    <rect width="60" height="20" fill="rgb(51, 102, 204)"/></svg>} \
+    -at {20 50} -fit {40 40} -artifact 1
+```
+
+`-fit` and `-scale` contradict each other and are refused together (`TCLPDF FIT SIZE`), as are a fitted box and a `-rotate` that is not zero (`TCLPDF FIT ROTATE`): a turned placement leaves the upright box it was fitted into.
+
+## What a drawing left out
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc svg $svgFile -at {20 20} -width 60 -artifact 1
+
+# Whatever is not covered is skipped and COUNTED - filters, masks, clip paths,
+# a <style> block, animation. Everything under <defs> is counted too, which is
+# exactly where a filter and a mask are declared.
+puts "skipped: [$doc svg info]"
+```
+
+`rgb(r, g, b)` and `rgb(r%, g%, b%)` are read (SVG 1.1, 11.13.1); an `rgba()` alpha is multiplied into the opacity of the side it paints.
+
+## -interpolate under PDF/A
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc pdfa -part 3 -conformance B
+$doc page add
+
+# ISO 19005-2, 6.2.8: the Interpolate key shall not be present or shall be
+# false. Refused whichever order the script uses - a picture placed under a
+# standing declaration is turned away as it goes down, and a [pdfa] call after
+# the fact is turned away naming the pictures already in the file.
+try {
+    $doc image embed smooth $jpeg -interpolate 1
+    $doc image place smooth -at {20 20} -width 40
+} trap {TCLPDF IMAGE INTERPOLATE PDFA} {message options} {
+    puts "not under PDF/A: [lrange [dict get $options -errorcode] 3 end]"
+}
+```

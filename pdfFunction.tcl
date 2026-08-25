@@ -78,7 +78,7 @@ oo::define ::tclpdf::document::document {
       lappend pairs Range [::tclpdf::pdfObj arr \
           [::tclpdf::pdfFunction numbers $range]]
     }
-    return [[my writer] add [::tclpdf::pdfObj dictionary $pairs]]
+    return [my FunctionPooled $pairs]
   }
 
   # A type 3 function, the stitching function (7.10.4): k sub-functions laid
@@ -96,7 +96,8 @@ oo::define ::tclpdf::document::document {
   # by painting nothing.
   method FunctionStitching {functions bounds} {
     if {[llength $bounds] != [llength $functions] - 1} {
-      return -code error "tclpdf: a stitching function of [llength $functions]\
+      return -code error -errorcode [list TCLPDF FUNCTION BOUNDS] \
+          "tclpdf: a stitching function of [llength $functions]\
           functions needs [expr {[llength $functions] - 1}] bounds, got\
           [llength $bounds]"
     }
@@ -104,13 +105,13 @@ oo::define ::tclpdf::document::document {
     foreach function $functions {
       lappend encode 0 1
     }
-    return [[my writer] add [::tclpdf::pdfObj dictionary [list \
+    return [my FunctionPooled [list \
         FunctionType 3 \
         Domain [::tclpdf::pdfObj arr [::tclpdf::pdfFunction numbers {0 1}]] \
         Functions [::tclpdf::pdfObj arr \
             [lmap number $functions {[my writer] ref $number}]] \
         Bounds [::tclpdf::pdfObj arr [::tclpdf::pdfFunction numbers $bounds]] \
-        Encode [::tclpdf::pdfObj arr [::tclpdf::pdfFunction numbers $encode]]]]]
+        Encode [::tclpdf::pdfObj arr [::tclpdf::pdfFunction numbers $encode]]]]
   }
 
   # A type 4 function, the PostScript calculator (7.10.5). The body arrives
@@ -126,11 +127,51 @@ oo::define ::tclpdf::document::document {
   # The body is not checked here; see the head of this file for why, and
   # [checkCalculator] for what a check would look at.
   method FunctionCalculator {domain range body} {
-    return [my streamObject [list \
+    return [my FunctionPooled [list \
         FunctionType 4 \
         Domain [::tclpdf::pdfObj arr [::tclpdf::pdfFunction numbers $domain]] \
         Range [::tclpdf::pdfObj arr [::tclpdf::pdfFunction numbers $range]]] \
         "\{ $body \}"]
+  }
+
+  # ONE OBJECT PER DISTINCT FUNCTION, whichever of the three built it.
+  #
+  # Two gradients of the same colours used to write two identical type 2
+  # dictionaries, a stitching function over them two more, and a document
+  # with the same sheen on twenty cells carried twenty copies of each. The
+  # pool is the same device [IccProfileObject] in color.tcl already uses for
+  # profiles, and it is here rather than in each of the three builders for
+  # the reason those three exist at all: the deduplication has to be one
+  # answer, or the next function type added will be the one that is not
+  # pooled.
+  #
+  # THE KEY IS THE FINISHED PDF SYNTAX, not the arguments. That is what makes
+  # it exact: two calls that produce the same bytes ARE the same function,
+  # whatever road they came by, and two that differ anywhere - a stop, a
+  # range, a sub-function's object number - produce different bytes and are
+  # kept apart. A key built from the arguments would have to know which of
+  # them matter, which is a second place to get it wrong.
+  #
+  # WHAT IT CHANGES IN THE FILE: fewer objects, and every object number after
+  # the first repeat shifts down. A document written before this and one
+  # written after are the same drawing and not the same bytes - which is why
+  # the tests measure what a reader sees (how many function dictionaries the
+  # file holds, and that the shadings point at them) rather than the numbers.
+  method FunctionPooled {pairs {stream {}}} {
+    set body [::tclpdf::pdfObj dictionary $pairs]
+    set key "$stream\u0000$body"
+    set pool [my state functionPool]
+    if {[dict exists $pool $key]} {
+      return [dict get $pool $key]
+    }
+    if {$stream eq {}} {
+      set number [[my writer] add $body]
+    } else {
+      set number [my streamObject $pairs $stream]
+    }
+    dict set pool $key $number
+    my state functionPool $pool
+    return $number
   }
 }
 
@@ -231,4 +272,4 @@ proc ::tclpdf::pdfFunction::checkCalculator {body subject errorcode} {
   return $body
 }
 
-package provide tclpdf::pdfFunction 1.0
+package provide tclpdf::pdfFunction 1.1

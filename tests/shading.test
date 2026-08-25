@@ -1363,4 +1363,72 @@ test shading-14.12 {a shading refused over the version records no colour space} 
   set wrong
 } -result {}
 
+# The function pool, built on 2026-08-25. Two gradients of the same colours
+# used to write two identical type 2 dictionaries, a stitching function over
+# them two more, and a table with the same sheen on twenty cells carried
+# twenty copies of each. The same device [IccProfileObject] uses for profiles.
+
+proc functionCount {script} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  uplevel 1 [list apply {{doc script} {eval $script}} $doc $script]
+  set path [::tclpdfTest::scratch functionpool.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  return [list [regexp -all {/FunctionType 2} $bytes] \
+      [regexp -all {/ShadingType} $bytes]]
+}
+
+test shading-pool-50.1 {the same gradient five times writes one function} -body {
+  # Five shadings, one function - and the fifth shading still points at it,
+  # which is what the second number is for.
+  functionCount {
+    for {set i 0} {$i < 5} {incr i} {
+      $doc shading axial -at [list [expr {20 + $i * 30}] 20] -size {25 20} \
+          -colors {{1 0 0} {0 0 1}}
+    }
+  }
+} -result {1 5}
+
+test shading-pool-50.2 {a gradient that differs keeps its own function} -body {
+  # The counter-measurement: pooling that folded two DIFFERENT gradients into
+  # one would pass 50.1 and draw the wrong picture.
+  functionCount {
+    $doc shading axial -at {20 20} -size {25 20} -colors {{1 0 0} {0 0 1}}
+    $doc shading axial -at {60 20} -size {25 20} -colors {{0 1 0} {0 0 1}}
+  }
+} -result {2 2}
+
+test shading-pool-50.3 {a stop that differs in the fifth decimal is a different function} -body {
+  # The key is the finished PDF syntax, so two functions are the same only
+  # when their bytes are - which is exact, and is why a key built from the
+  # arguments was not used: it would have had to know which of them matter.
+  functionCount {
+    $doc shading axial -at {20 20} -size {25 20} -colors {{1 0 0} {0 0 1}}
+    $doc shading axial -at {60 20} -size {25 20} -colors {{1 0 0} {0 0 0.99999}}
+  }
+} -result {2 2}
+
+test shading-pool-50.4 {the drawing is unchanged, only the file is smaller} -body {
+  # What a reader sees has to be the same: the five shadings are still five
+  # shadings, each with its own coordinates, and each names a function.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  foreach x {20 60 100} {
+    $doc shading axial -at [list $x 20] -size {25 20} -colors {{1 0 0} {0 0 1}}
+  }
+  set path [::tclpdfTest::scratch functionpool2.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Three distinct shading dictionaries, one function, and every shading
+  # carries a /Function reference.
+  list [regexp -all {/ShadingType} $bytes] [regexp -all {/FunctionType 2} $bytes] \
+      [regexp -all {/Function } $bytes]
+} -result {3 1 3}
+
+
 cleanupTests

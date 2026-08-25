@@ -974,10 +974,55 @@ oo::define ::tclpdf::document::document {
         && $type ne "tiff"} {
       lappend pairs Decode [::tclpdf::pdfObj arr {1 0}]
     }
-    if {[dict get $image interpolate]} {
-      lappend pairs Interpolate true
-    }
+    lappend pairs {*}[my ImageInterpolateEntry $image $alias]
     return [list $pairs $data $space $version]
+  }
+
+  # Whether /Interpolate is written, and the one place that decides it.
+  #
+  # A HINT AND NOTHING MORE, on the PDF side: 8.9.5.3 says it "is a way for a
+  # PDF to declare to a PDF processor that a specific image might render
+  # better if interpolation is used", and that a processor "may ignore it".
+  # Only written where it was asked for - Table 87 gives it the default
+  # false, and a dictionary that repeats a default says nothing.
+  #
+  # UNDER PDF/A IT IS NOT A HINT BUT A VIOLATION. ISO 19005-2, 6.2.8 and
+  # ISO 19005-3 with it: "The Interpolate key shall not be present, or shall
+  # have a value of false" - and veraPDF reports it. Until 2026-08-24 this
+  # package wrote it anyway, in both places, so a document could claim PDF/A,
+  # pass its own checks and fail an external validator on a key the caller
+  # had asked for in good faith.
+  #
+  # ASKED ON BOTH ROADS, AND NEITHER CAN WAIT FOR THE WRITE. An inline
+  # picture's dictionary goes into the content stream as it is drawn, and an
+  # image XObject is built on FIRST PLACEMENT rather than at write time - a
+  # first draft of this refused only at the write, on the reasoning that a
+  # document declares PDF/A and embeds its pictures in either order, and
+  # measured on 2026-08-24 it let "place, then pdfa" through untouched.
+  #
+  # So the question is asked when the picture goes down, and what went down
+  # is remembered: [pdfa] asks the other way round for a picture already
+  # drawn. Between the two, both orders are covered and neither road writes
+  # a key the other has learnt to refuse.
+  method ImageInterpolateEntry {image what} {
+    if {![dict get $image interpolate]} {
+      return {}
+    }
+    # Remembered whatever the answer is: what the declaration has to know is
+    # that the picture went down asking for interpolation.
+    my state imageInterpolated \
+        [lsort -unique [concat [my state imageInterpolated] [list $what]]]
+    if {[my state pdfa] ne {}} {
+      return -code error -errorcode [list TCLPDF IMAGE INTERPOLATE PDFA $what] \
+          "tclpdf: \"$what\" was embedded with -interpolate 1 and this\
+          document claims PDF/A-[dict get [my state pdfa] part][dict get \
+          [my state pdfa] conformance], where ISO 19005-2, 6.2.8 says the\
+          Interpolate key shall not be present or shall be false - drop\
+          -interpolate, or drop the pdfa declaration. Smoothing is the\
+          reader's decision to make, and an archive format takes it away on\
+          purpose: the same file has to look the same in twenty years"
+    }
+    return [list Interpolate true]
   }
 
   # The marking every placed graphic gets, in one place: a picture, a drawing
@@ -1552,14 +1597,9 @@ oo::define ::tclpdf::document::document {
         && [dict get $image type] ne "tiff"} {
       lappend pairs Decode [::tclpdf::pdfObj arr {1 0}]
     }
-    # A hint and nothing more: 8.9.5.3 says Interpolate "is a way for a PDF to
-    # declare to a PDF processor that a specific image might render better if
-    # interpolation is used", and that "a PDF processor may ignore it". Only
-    # written when it is asked for - Table 87 gives it the default false, and
-    # a dictionary that repeats a default says nothing.
-    if {[dict get $image interpolate]} {
-      lappend pairs Interpolate true
-    }
+    # The same decision as the inline road takes, from the same place - see
+    # [ImageInterpolateEntry].
+    lappend pairs {*}[my ImageInterpolateEntry $image $alias]
     # The mask a caller named. Which entry it becomes was decided at the
     # embedding, by what the named picture is: a stencil mask is
     # all-or-nothing and goes into /Mask (8.9.6.3, "the Mask entry in an image
@@ -1762,4 +1802,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.11
+package provide tclpdf::image 1.12

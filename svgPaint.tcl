@@ -101,9 +101,7 @@ oo::define ::tclpdf::document::document {
         dict set style $key [list pattern $resolved]
       } else {
         dict set style $key none
-        set skipped [my state svgSkipped]
-        dict incr skipped gradient
-        my state svgSkipped $skipped
+        my SvgSkipped gradient
       }
     }
     set fill [dict get $style fill]
@@ -247,6 +245,64 @@ oo::define ::tclpdf::document::document {
 
   # Merge the element's own painting properties over the inherited ones. The
   # style="" attribute wins over presentation attributes (SVG 6.4).
+  # A colour in the FUNCTIONAL notation, translated into what this package
+  # writes. Everything else is handed on untouched: [color parse] already
+  # reads "#rgb", "#rrggbb" and the named colours, and this is the one
+  # spelling it does not.
+  #
+  # NOT A FLOURISH. SVG 1.1, 11.13.1 lists "rgb(255,255,255)" and
+  # "rgb(100%,100%,100%)" among the four ways of writing a colour, and until
+  # 2026-08-24 a drawing using it was refused OUTRIGHT - "colour component is
+  # not a number: rgb(245," - so the whole file was lost over a notation the
+  # standard names first. Measured over the SVG on this machine with the icon
+  # libraries taken out: 6 of 167 files, one of them a floor plan, none of
+  # them drawable.
+  #
+  # rgba() is CSS Color 3 rather than SVG 1.1, and it occurs twice in the same
+  # corpus. Its fourth value is a real alpha, so it is multiplied into the
+  # opacity property that belongs to the side it paints instead of being
+  # dropped - a translucent colour drawn opaque is a wrong picture, and a
+  # refused one is no picture at all.
+  #
+  # Returns a two-element list: the colour, and the alpha to fold in (1 where
+  # there is none). Anything it cannot read is handed back unchanged, so the
+  # refusal still comes from the colour module and still names the value.
+  method SvgColourValue {value} {
+    if {![regexp -nocase {^\s*rgba?\s*\((.*)\)\s*$} $value -> inside]} {
+      return [list $value 1]
+    }
+    set parts {}
+    foreach part [split [string map {, " "} $inside]] {
+      set part [string trim $part]
+      if {$part ne {}} {
+        lappend parts $part
+      }
+    }
+    if {[llength $parts] < 3} {
+      return [list $value 1]
+    }
+    set channels {}
+    foreach part [lrange $parts 0 2] {
+      if {[string index $part end] eq "%"} {
+        set number [string range $part 0 end-1]
+        if {![string is double -strict $number]} {
+          return [list $value 1]
+        }
+        lappend channels [expr {max(0.0, min(1.0, $number / 100.0))}]
+      } else {
+        if {![string is double -strict $part]} {
+          return [list $value 1]
+        }
+        lappend channels [expr {max(0.0, min(1.0, $part / 255.0))}]
+      }
+    }
+    set alpha 1
+    if {[llength $parts] > 3 && [string is double -strict [lindex $parts 3]]} {
+      set alpha [expr {max(0.0, min(1.0, double([lindex $parts 3])))}]
+    }
+    return [list [linsert $channels 0 rgb] $alpha]
+  }
+
   method SvgStyle {node inheritedStyle} {
     set style $inheritedStyle
     # opacity is not inherited but MULTIPLIED (SVG 1.1, 14.5): it applies to
@@ -272,6 +328,25 @@ oo::define ::tclpdf::document::document {
     foreach {-> key value} [regexp -all -inline {([-a-z]+)\s*:\s*([^;]+)} \
         [::tclpdf::xml attribute $node style]] {
       dict set style $key [string trim $value]
+    }
+    # The functional notation, resolved here so that everything downstream
+    # sees the one spelling the package writes - and so that an rgba() alpha
+    # reaches the opacity of the side it belongs to rather than being lost
+    # between them.
+    foreach {key opacityKey} {fill fill-opacity stroke stroke-opacity} {
+      set value [dict get $style $key]
+      if {$value eq {} || $value eq "none"} {
+        continue
+      }
+      lassign [my SvgColourValue $value] colour alpha
+      dict set style $key $colour
+      if {$alpha != 1} {
+        set was [dict get $style $opacityKey]
+        if {$was eq {} || ![string is double -strict $was]} {
+          set was 1
+        }
+        dict set style $opacityKey [expr {$was * $alpha}]
+      }
     }
     set own [dict get $style opacity]
     if {$own eq {} || ![string is double -strict $own]} {
@@ -451,4 +526,4 @@ oo::define ::tclpdf::document::document {
   # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.4
+package provide tclpdf::svgPaint 1.5

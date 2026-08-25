@@ -22,6 +22,18 @@
 package require Tcl 8.6.11-
 package require tclpdf::document 1.0-
 
+# The elements this module has a case for - the same names its switch takes,
+# in one place because [SvgCountOnly] has to know them too and a second copy
+# would be a second answer. What is NOT here is what [svg info] reports as
+# skipped, wherever it stands.
+namespace eval ::tclpdf::svgElement {
+  variable drawable {
+    svg g a switch defs symbol linearGradient radialGradient clipPath stop
+    title desc metadata style script use path rect circle ellipse line
+    polyline polygon text tspan
+  }
+}
+
 oo::define ::tclpdf::document::document {
 
   method SvgCollect {node defs} {
@@ -81,6 +93,18 @@ oo::define ::tclpdf::document::document {
       defs - symbol - linearGradient - radialGradient - clipPath -
       title - desc - metadata - style - script {
         # Collected or deliberately ignored, but never drawn where they stand.
+        #
+        # A <defs> is still WALKED, and that is the fix of 2026-08-24 rather
+        # than a change of mind about drawing it. Everything inside it was
+        # invisible to the count as well as to the page: a real logo out of
+        # the corpus carries two <filter>s, a <mask> and a <clipPath> in its
+        # <defs>, and [svg info] answered "image 1" - the one skipped element
+        # that happened to stand outside. A caller asking what was left out
+        # got a truthful-looking answer that was missing the three things
+        # that would have changed the picture.
+        if {$name eq "defs"} {
+          my SvgCountOnly $node
+        }
       }
       use {
         # A <use> renders its target as a group of its own (SVG 5.6), so its
@@ -103,9 +127,7 @@ oo::define ::tclpdf::document::document {
         my SvgText $node $style
       }
       default {
-        set skipped [my state svgSkipped]
-        dict incr skipped $name
-        my state svgSkipped $skipped
+        my SvgSkipped $name
       }
     }
 
@@ -133,6 +155,40 @@ oo::define ::tclpdf::document::document {
   # only on a version that has transparency (1.4) - on an older version the
   # factor stays multiplied down, and the gs it would need is refused with
   # the version in the message, as every alpha is.
+
+  # One element counted as skipped. The one place that touches the tally, so
+  # that the three callers cannot drift - the element switch, the paint road
+  # when it cannot resolve a reference, and the walk through <defs>.
+  method SvgSkipped {what} {
+    set skipped [my state svgSkipped]
+    dict incr skipped $what
+    my state svgSkipped $skipped
+  }
+
+  # Walk a subtree WITHOUT drawing it, counting what this package would not
+  # have drawn anyway. Everything under <defs> is reached by reference or not
+  # at all, so nothing here paints; the point is the tally, which is what
+  # [svg info] answers and what a caller checks before trusting a drawing.
+  #
+  # The elements this package DOES understand are not counted - a gradient in
+  # <defs> is used through url(#...) and is no omission. What is counted is
+  # what would have been counted anywhere else.
+  method SvgCountOnly {node} {
+    foreach child [::tclpdf::xml children $node] {
+      set name [lindex [split [::tclpdf::xml name $child] :] end]
+      # Only what this package would not have drawn WHEREVER it stood. A <g>
+      # or a <path> under <defs> is reached through <use> or through the mask
+      # that owns it, and counting those as omissions would bury the two
+      # entries that matter under the shapes they are made of - measured on a
+      # real logo, "filter 2 mask 1" came with "g 3 path 1" beside it and read
+      # as if four different things had gone wrong.
+      if {$name ni $::tclpdf::svgElement::drawable} {
+        my SvgSkipped $name
+      }
+      my SvgCountOnly $child
+    }
+  }
+
   method SvgGroupWanted {style} {
     return [expr {[dict get $style ownOpacity] < 1 &&
         [package vcompare [[my writer] version] 1.4] >= 0}]
@@ -473,4 +529,4 @@ oo::define ::tclpdf::document::document {
   # operators are the only description of the shape available here.
 }
 
-package provide tclpdf::svgElement 1.3
+package provide tclpdf::svgElement 1.4

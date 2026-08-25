@@ -3491,4 +3491,64 @@ test font-25.5 {the family a file states is handed back as it stands} \
 } -result {1 {Infinity   }}
 
 
+# The font entry of an alias - private state, reached here so that a test can
+# measure against what the face itself states rather than against a number
+# copied into the test.
+proc my_entry {doc alias} {
+  oo::objdefine $doc export state
+  return [dict get [$doc state fonts] $alias]
+}
+
+# [FontDescender] is private, as every method behind the facade is. Exported
+# onto the one object under test - the same way field.test reaches
+# [FieldDeclare] - because what is under test is the arithmetic, and driving
+# it through an annotation would measure the annotation instead.
+proc descenderOf {doc alias size} {
+  oo::objdefine $doc export FontDescender
+  return [$doc FontDescender $alias $size]
+}
+
+# [FontDescender], added on 2026-08-24 beside [FontAscender]. It lived in
+# annotMark.tcl until then, as a private method that said in its own comment
+# that it belonged here.
+
+test font-descender-1.1 {the descender is positive, whatever sign the face states} -constraints haveFont -body {
+  # hhea states it negative and an AFM may state either, so the sign is
+  # settled here rather than in every caller.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed sans $::fontRegular
+  set descent [descenderOf $doc sans 100]
+  $doc destroy
+  expr {$descent > 0}
+} -result 1
+
+test font-descender-1.2 {ascender and descender together are the face's line} -constraints haveFont -body {
+  # Measured against what the face itself states: hhea's two numbers scaled
+  # to the size asked for. A test that only asked "is it a number" would
+  # have passed on the sign error the positive-value rule exists to prevent.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed sans $::fontRegular
+  set parsed [dict get [my_entry $doc sans] parsed]
+  set units [dict get $parsed unitsPerEm]
+  set wanted [expr {abs(double([dict get $parsed descender])) * 100 / $units}]
+  set got [descenderOf $doc sans 100]
+  $doc destroy
+  expr {abs($got - $wanted) < 1e-9}
+} -result 1
+
+test font-descender-1.3 {a Type 1 face reads it from the AFM, and zero means absent} -constraints haveOtf -body {
+  # The URW metrics in this tree write "Descender 0" - the field is there and
+  # says nothing, so the bounding box is the honest substitute. The same rule
+  # [FontAscender] follows for the ascender.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed cff $::otf
+  set descent [descenderOf $doc cff 100]
+  $doc destroy
+  expr {$descent > 0}
+} -result 1
+
+
 cleanupTests

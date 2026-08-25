@@ -1,0 +1,251 @@
+# annotShape.test --
+#
+# The geometry annotations: line, square, circle, polygon, polyline, and the
+# file attachment.
+#
+# What these are is worth stating once, since the tests turn on it: a line
+# drawn with [$doc line] is CONTENT - it prints, and a reader can neither
+# switch it off nor ask who put it there. The same line as an ANNOTATION is a
+# remark on the page, with an author, a date and a description. So the tests
+# measure the annotation dictionary, not the picture.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::annot
+package require tclpdf::annotShape
+source [file join [file dirname [info script]] helper.tcl]
+
+set fontRegular [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts DejaVuSans.ttf]
+testConstraint haveFont [file exists $fontRegular]
+
+# A document with one shape annotation on it, written and read back. The
+# bytes are what a reader sees, which is what these are about.
+proc shapeDocument {script} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  uplevel 1 [string map [list @doc@ $doc] $script]
+  set path [::tclpdfTest::scratch annotshape.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  return $bytes
+}
+
+
+test annotShape-1.1 {the five kinds write the five subtypes} -body {
+  set bytes [shapeDocument {
+    @doc@ annot line -from {20 40} -to {90 40}
+    @doc@ annot square -at {20 60} -size {50 20}
+    @doc@ annot circle -at {20 90} -size {50 20}
+    @doc@ annot polygon -points {{20 120} {60 110} {80 140}}
+    @doc@ annot polyline -points {{100 120} {130 110} {160 140}}
+  }]
+  lmap subtype {/Line /Square /Circle /Polygon /PolyLine} {
+    regexp -all "\\$subtype\[^a-zA-Z\]" $bytes
+  }
+} -result {1 1 1 1 1}
+
+test annotShape-1.2 {every one of them carries an appearance} -body {
+  # Table 166 requires /AP of every annotation and veraPDF 6.3.3 fails a
+  # PDF/A file without one. Unlike a note's symbol the picture is fully
+  # determined - a line is its two endpoints, its colour and its width - so
+  # there is nothing to leave to a reader.
+  set bytes [shapeDocument {
+    @doc@ annot line -from {20 40} -to {90 40}
+    @doc@ annot square -at {20 60} -size {50 20}
+    @doc@ annot circle -at {20 90} -size {50 20}
+    @doc@ annot polygon -points {{20 120} {60 110} {80 140}}
+    @doc@ annot polyline -points {{100 120} {130 110} {160 140}}
+  }]
+  regexp -all {/AP} $bytes
+} -result 5
+
+test annotShape-1.3 {/Rect is grown by half the line width} -body {
+  # A line is drawn ON its path, so half its thickness lies outside the
+  # points, and a reader that clips to /Rect - which it may - cuts that half
+  # away. The two rectangles below are the same line at two widths, and the
+  # wider one has to be the larger rectangle.
+  proc rectOf {width} {
+    set bytes [shapeDocument [string map [list @w@ $width] {
+      @doc@ annot line -from {20 40} -to {90 40} -width @w@
+    }]]
+    regexp {/Rect \[ *([0-9.]+) +([0-9.]+) +([0-9.]+) +([0-9.]+)} $bytes \
+        -> left bottom right top
+    return [expr {$top - $bottom}]
+  }
+  expr {[rectOf 4] > [rectOf 1]}
+} -result 1
+
+test annotShape-2.1 {the closed kinds take a fill, the open ones do not} -body {
+  # /C is the outline, /IC the inside (Table 176). A line and a polyline have
+  # no inside, so an -fill on them writes no /IC - which is what keeps a
+  # reader from painting one.
+  set filled [shapeDocument {
+    @doc@ annot square -at {20 60} -size {50 20} -fill {1 1 0.7}
+  }]
+  set open [shapeDocument {
+    @doc@ annot line -from {20 40} -to {90 40} -fill {1 1 0.7}
+  }]
+  list [regexp {/IC} $filled] [regexp {/IC} $open]
+} -result {1 0}
+
+test annotShape-2.2 {a shape without -fill has no inside at all} -body {
+  # The default, and it is the useful one: a remark AROUND something has to
+  # let it show through.
+  regexp {/IC} [shapeDocument {
+    @doc@ annot square -at {20 60} -size {50 20}
+  }]
+} -result 0
+
+test annotShape-2.3 {the vertices are written for the two poly kinds} -body {
+  set bytes [shapeDocument {
+    @doc@ annot polygon -points {{20 120} {60 110} {80 140}}
+  }]
+  # Three points, six numbers.
+  regexp {/Vertices \[([^\]]*)\]} $bytes -> vertices
+  llength $vertices
+} -result 6
+
+test annotShape-2.4 {every kind states its line width in /BS} -body {
+  # A reader that draws the annotation itself needs it, and so does one that
+  # only reports the annotation's properties.
+  regexp {/BS} [shapeDocument {@doc@ annot line -from {20 40} -to {90 40}}]
+} -result 1
+
+
+test annotShape-3.1 {a line needs both its ends} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc annot line -from {20 40}}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF ANNOT LINE to}
+
+test annotShape-3.2 {a box kind needs a corner and an extent} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc annot square -at {20 60}}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF ANNOT BOX square}
+
+test annotShape-3.3 {a polygon of one point has no shape} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc annot polygon -points {{20 120}}}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF ANNOT POINTS polygon}
+
+test annotShape-3.4 {a line width of zero is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc annot line -from {20 40} \
+      -to {90 40} -width 0}]
+  $doc destroy
+  lrange $code 0 2
+} -result {TCLPDF ANNOT WIDTH}
+
+
+# The file attachment. It points at a file [attach] already embedded rather
+# than embedding a second copy - which is the whole reason the option is
+# -name and not a path.
+
+test annotShape-4.1 {the annotation points at an attached file} -body {
+  set bytes [shapeDocument {
+    @doc@ attach -data "the note" -name note.txt -mime text/plain
+    @doc@ annot attachment -at {180 28} -name note.txt
+  }]
+  # /EmbeddedFile appears twice - once as the stream's /Type and once in the
+  # name tree - which is attach.tcl's business and not this annotation's.
+  # What matters here is that there is exactly ONE embedded stream: the
+  # annotation points at the file rather than embedding a second copy.
+  list [regexp {/FileAttachment} $bytes] [regexp {/Paperclip} $bytes] \
+      [regexp -all {/Type */EmbeddedFile} $bytes]
+} -result {1 1 1}
+
+test annotShape-4.2 {a name nothing was attached under is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc annot attachment -at {20 20} \
+      -name nothing.txt}]
+  $doc destroy
+  lrange $code 0 4
+} -result {TCLPDF ANNOT ATTACHMENT UNKNOWN nothing.txt}
+
+test annotShape-4.3 {an icon outside Table 184 is refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc attach -data "x" -name x.txt -mime text/plain
+  set code [::tclpdfTest::refusalCode {$doc annot attachment -at {20 20} \
+      -name x.txt -icon Banana}]
+  $doc destroy
+  lrange $code 0 4
+} -result {TCLPDF ANNOT ATTACHMENT ICON Banana}
+
+test annotShape-4.4 {-appearance and the reader's icon are exclusive} -body {
+  # Table 166 makes /AP win, so writing both would put a /Name in the file
+  # that nothing ever draws.
+  set bytes [shapeDocument {
+    @doc@ attach -data "the note" -name note.txt -mime text/plain
+    # [form create -script] runs its body at level #0, so the document has to
+    # be reachable there - one of the four -script roads that do.
+    set ::annotShapeDoc @doc@
+    @doc@ form create clip -size {14 14} -script {
+      $::annotShapeDoc circle -at {2 2} -radius 5 -stroke {0.2 0.3 0.6} \
+          -width 1.2
+    }
+    @doc@ annot attachment -at {180 28} -name note.txt -appearance clip
+  }]
+  list [regexp {/Paperclip} $bytes] [regexp {/AP} $bytes]
+} -result {0 1}
+
+
+test annotShape-5.1 {a shape annotation passes PDF/A} -constraints {haveTdom haveFont} -body {
+  # The claim these were built to hold: an annotation with an appearance is
+  # what PDF/A asks for, and the appearance is drawn without the caller
+  # having to ask.
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B
+  $doc font embed body $::fontRegular
+  $doc font -family body -size 10
+  $doc page add
+  $doc text "Five remarks" -at {20 25}
+  $doc annot line -from {20 40} -to {90 40} -contents "the correction"
+  $doc annot square -at {20 60} -size {50 20} -contents "this block"
+  $doc annot circle -at {20 90} -size {50 20} -fill {1 1 0.7} -contents "here"
+  $doc annot polygon -points {{20 120} {60 110} {80 140}} -contents "the area"
+  $doc annot polyline -points {{100 120} {130 110} {160 140}} -contents "route"
+  set path [::tclpdfTest::scratch annotshape-pdfa.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Five annotations, five appearances, and the file says PDF/A.
+  list [regexp -all {/AP} $bytes] [regexp {pdfaid:part>3} $bytes]
+} -result {5 1}
+
+test annotShape-5.2 {an attachment without an appearance is refused under PDF/A} -constraints haveTdom -body {
+  # The same answer [annot note] gets, and for the same reason: the picture
+  # is the reader's icon, and drawing one here would replace the icon every
+  # reader knows with a drawing of ours. -appearance is the way through.
+  set doc [tclpdf new -unit mm]
+  $doc pdfa -part 3 -conformance B
+  $doc page add
+  $doc attach -data "x" -name x.txt -mime text/plain
+  set code [catch {$doc annot attachment -at {20 20} -name x.txt} message]
+  $doc destroy
+  list $code [string match {*no appearance stream*} $message]
+} -result {1 1}
+
+
+cleanupTests
