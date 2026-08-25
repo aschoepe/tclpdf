@@ -313,11 +313,13 @@ oo::define ::tclpdf::document::document {
     # method - which says nothing about the actual mistake.
     set at [::tclpdf::option point [dict get $options at] -at text]
     if {![string is boolean -strict [dict get $options paginate]]} {
-      return -code error "tclpdf: -paginate takes a boolean, not\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT paginate] \
+          "tclpdf: -paginate takes a boolean, not\
           \"[dict get $options paginate]\""
     }
     if {![string is boolean -strict [dict get $options breakHyphen]]} {
-      return -code error "tclpdf: -breakHyphen takes a boolean, not\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT breakHyphen] \
+          "tclpdf: -breakHyphen takes a boolean, not\
           \"[dict get $options breakHyphen]\""
     }
     # Checked here, before the mark below is opened - a wrong value used to
@@ -325,7 +327,8 @@ oo::define ::tclpdf::document::document {
     # nobody was told. See TextAnchor for the two values there are.
     my TextAnchor [dict get $options anchor]
     if {![::tclpdf::text::finite [dict get $options rotate]]} {
-      return -code error "tclpdf: -rotate takes an angle in degrees, not\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT rotate] \
+          "tclpdf: -rotate takes an angle in degrees, not\
           \"[dict get $options rotate]\""
     }
     # EVERYTHING that can be refused is refused HERE, before a byte reaches
@@ -356,7 +359,8 @@ oo::define ::tclpdf::document::document {
     }
     set width [dict get $options width]
     if {[dict get $options paginate] && $width eq {}} {
-      return -code error "tclpdf: -paginate breaks a paragraph over pages, and\
+      return -code error -errorcode [list TCLPDF TEXT PAGINATE width] \
+          "tclpdf: -paginate breaks a paragraph over pages, and\
           a paragraph needs -width"
     }
     # -breakHyphen says: the "-" this line ends on is a BREAK, put there by
@@ -375,12 +379,14 @@ oo::define ::tclpdf::document::document {
     # takes an afternoon to find in a stream.
     if {[dict get $options breakHyphen]} {
       if {$width ne {}} {
-        return -code error "tclpdf: -breakHyphen names the break hyphen of ONE\
+        return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN width] \
+            "tclpdf: -breakHyphen names the break hyphen of ONE\
             line, and with -width the line breaker decides that for each line\
             it makes"
       }
       if {[string first "-" $string] < 0} {
-        return -code error "tclpdf: -breakHyphen says the line ends on a break\
+        return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN hyphen] \
+            "tclpdf: -breakHyphen says the line ends on a break\
             hyphen, and \"$string\" has no hyphen in it"
       }
     }
@@ -414,7 +420,8 @@ oo::define ::tclpdf::document::document {
       # as a character the face has no glyph for, from inside the drawing,
       # which said nothing about the mistake and came after the mark.
       if {[string first \n $string] >= 0} {
-        return -code error "tclpdf: text sets one line, and the string has a\
+        return -code error -errorcode [list TCLPDF TEXT LINEFEED width] \
+            "tclpdf: text sets one line, and the string has a\
             line feed at position [string first \n $string] - give -width to\
             set a paragraph, which breaks at line feeds"
       }
@@ -442,10 +449,12 @@ oo::define ::tclpdf::document::document {
         center - centre {set shift [expr {$lineWidth / 2.0}]}
         justify {
           # Without a -width there is nothing to justify to.
-          return -code error "tclpdf: -align justify needs -width"
+          return -code error -errorcode [list TCLPDF TEXT ALIGN width] \
+              "tclpdf: -align justify needs -width"
         }
         default {
-          return -code error "tclpdf: -align must be left, right, center or\
+          return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
+              "tclpdf: -align must be left, right, center or\
               justify, not \"[dict get $options align]\""
         }
       }
@@ -2290,7 +2299,8 @@ oo::define ::tclpdf::document::document {
         # heading in the wrong weight with nothing to say why.
         foreach word [split [string tolower [join $value " "]] " ,-"] {
           if {$word ne {} && $word ni {bold italic oblique}} {
-            return -code error "tclpdf: -style takes bold, italic or oblique,\
+            return -code error -errorcode [list TCLPDF FONT ARGUMENT style] \
+                "tclpdf: -style takes bold, italic or oblique,\
                 alone or together, not \"$value\""
           }
         }
@@ -2301,33 +2311,38 @@ oo::define ::tclpdf::document::document {
         # range check of the shape "$value <= 0" waves it straight through -
         # see the proc at the head of this file.
         if {![::tclpdf::text::finite $value] || $value <= 0} {
-          return -code error "tclpdf: -size must be a positive number of\
+          return -code error -errorcode [list TCLPDF FONT ARGUMENT size] \
+              "tclpdf: -size must be a positive number of\
               points, not \"$value\""
         }
       }
       stretch {
         if {![::tclpdf::text::finite $value] || $value <= 0} {
-          return -code error "tclpdf: -stretch is a percentage above zero,\
+          return -code error -errorcode [list TCLPDF FONT ARGUMENT stretch] \
+              "tclpdf: -stretch is a percentage above zero,\
               100 being normal, not \"$value\""
         }
       }
       leading {
         if {$value ne {} && (![::tclpdf::text::finite $value]
             || $value <= 0)} {
-          return -code error "tclpdf: -leading is a line spacing in points\
+          return -code error -errorcode [list TCLPDF FONT ARGUMENT leading] \
+              "tclpdf: -leading is a line spacing in points\
               above zero - or empty for the default of 1.2 times the size -\
               not \"$value\""
         }
       }
       spacing - wordSpacing - rise {
         if {![::tclpdf::text::finite $value]} {
-          return -code error "tclpdf: -$name takes a number of points, not\
+          return -code error -errorcode [list TCLPDF FONT ARGUMENT $name] \
+              "tclpdf: -$name takes a number of points, not\
               \"$value\""
         }
       }
       kerning - ligatures - unshaped {
         if {![string is boolean -strict $value]} {
-          return -code error "tclpdf: -$name takes a boolean, not \"$value\""
+          return -code error -errorcode [list TCLPDF FONT ARGUMENT $name] \
+              "tclpdf: -$name takes a boolean, not \"$value\""
         }
       }
       fallback {
@@ -2338,7 +2353,8 @@ oo::define ::tclpdf::document::document {
         # line at all, in a document that never falls back. Which is to say
         # the faces have to be embedded before the chain names them.
         if {[catch {llength $value}]} {
-          return -code error "tclpdf: -fallback takes a list of faces, not\
+          return -code error -errorcode [list TCLPDF FONT FALLBACK list] \
+              "tclpdf: -fallback takes a list of faces, not\
               \"$value\""
         }
         foreach name $value {
@@ -2346,7 +2362,8 @@ oo::define ::tclpdf::document::document {
             continue
           }
           if {[catch {::tclpdf::afm resolve $name} reason]} {
-            return -code error "tclpdf: -fallback names \"$name\", which is\
+            return -code error -errorcode [list TCLPDF FONT FALLBACK $name] \
+                "tclpdf: -fallback names \"$name\", which is\
                 neither an embedded face nor a standard one - embed it with\
                 \[font embed\] first ($reason)"
           }
@@ -2374,7 +2391,8 @@ oo::define ::tclpdf::document::document {
         # out that the value was refused.
         if {$value ne {} && (![::tclpdf::text::finite $value]
             || $value < 0)} {
-          return -code error "tclpdf: -strokeWidth is a line width of 0 or\
+          return -code error -errorcode [list TCLPDF TEXT ARGUMENT strokeWidth] \
+              "tclpdf: -strokeWidth is a line width of 0 or\
               more in the document unit, not \"$value\""
         }
       }
@@ -2383,7 +2401,8 @@ oo::define ::tclpdf::document::document {
         # answered with the reason it cannot have it rather than with a list
         # it is already in. See renderClipModes at the head of this file.
         if {$value in $::tclpdf::text::renderClipModes} {
-          return -code error "tclpdf: -render $value is a clipping mode\
+          return -code error -errorcode [list TCLPDF TEXT RENDER clip] \
+              "tclpdf: -render $value is a clipping mode\
               (9.3.6, modes 4 to 7), and tclpdf does not write those: the\
               glyph outlines become a clipping path at ET that stays in\
               force until the next Q, this package sets one BT/ET per line\
@@ -2392,7 +2411,8 @@ oo::define ::tclpdf::document::document {
               fill, stroke, fillStroke and invisible"
         }
         if {![dict exists $::tclpdf::text::renderModes $value]} {
-          return -code error "tclpdf: -render is fill, stroke, fillStroke or\
+          return -code error -errorcode [list TCLPDF TEXT RENDER name] \
+              "tclpdf: -render is fill, stroke, fillStroke or\
               invisible, not \"$value\""
         }
       }
@@ -2453,7 +2473,8 @@ oo::define ::tclpdf::document::document {
     # measuring and drawing road passes, and a misspelt direction that reached
     # the drawing would simply set the line the other way round in silence.
     if {[dict get $state direction] ni {ltr rtl ttb}} {
-      return -code error "tclpdf: -direction must be ltr, rtl or ttb, not\
+      return -code error -errorcode [list TCLPDF TEXT DIRECTION name] \
+          "tclpdf: -direction must be ltr, rtl or ttb, not\
           \"[dict get $state direction]\""
     }
     # A VERTICAL line, and the same gate for the same reason as the
@@ -2520,7 +2541,8 @@ oo::define ::tclpdf::document::document {
             && [my FontKind $family] eq "type3"
             ? {its own /Differences encoding}
             : {WinAnsiEncoding}}]
-        return -code error "tclpdf: -direction rtl needs a TrueType or\
+        return -code error -errorcode [list TCLPDF TEXT DIRECTION rtl] \
+            "tclpdf: -direction rtl needs a TrueType or\
             OpenType face embedded with \[font embed\] - \"$family\" is\
             addressed through $through, which has no right-to-left letters"
       }
@@ -2539,7 +2561,8 @@ oo::define ::tclpdf::document::document {
       # about their own document. The way out is one call per face, which is
       # what the mixed-line refusal asks for anyway.
       if {[dict get $state fallback] ne {}} {
-        return -code error "tclpdf: -fallback and -direction rtl do not go\
+        return -code error -errorcode [list TCLPDF TEXT DIRECTION fallback] \
+            "tclpdf: -fallback and -direction rtl do not go\
             together - the drawing order of a right-to-left line is decided\
             across the whole line, and a face change inside it would reorder\
             only its own piece; set the pieces as separate calls, or give\
@@ -2557,4 +2580,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.18
+package provide tclpdf::text 1.19

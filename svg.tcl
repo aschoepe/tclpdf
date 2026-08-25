@@ -192,7 +192,8 @@ oo::define ::tclpdf::document::document {
     } elseif {[dict get $options data] ne {}} {
       set markup [dict get $options data]
     } else {
-      return -code error "tclpdf: svg needs a file name or -data"
+      return -code error -errorcode [list TCLPDF SVG ARGUMENT source] \
+          "tclpdf: svg needs a file name or -data"
     }
     # The handle has to be released whatever happens - a tdom document is not
     # freed by itself, and an error while drawing would otherwise leak the
@@ -471,7 +472,8 @@ oo::define ::tclpdf::document::document {
 
   method SvgRoot {root options fit} {
     if {[::tclpdf::xml name $root] ni {svg svg:svg}} {
-      return -code error "tclpdf: this is not an SVG document - the root\
+      return -code error -errorcode [list TCLPDF SVG ROOT element] \
+          "tclpdf: this is not an SVG document - the root\
           element is \"[::tclpdf::xml name $root]\""
     }
     lassign [dict get $fit box] boxX boxY boxWidth boxHeight
@@ -700,4 +702,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.9
+package provide tclpdf::svg 1.10

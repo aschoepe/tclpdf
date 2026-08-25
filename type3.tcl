@@ -101,17 +101,20 @@ oo::define ::tclpdf::document::document {
         {matrix {0.001 0 0 0.001 0 0} ascent {} bbox {}} $args \
         "font define"]
     if {[dict exists [my state fonts] $alias]} {
-      return -code error "tclpdf: a font named \"$alias\" already exists"
+      return -code error -errorcode [list TCLPDF TYPE3 ALIAS $alias] \
+          "tclpdf: a font named \"$alias\" already exists"
     }
     set matrix [dict get $options matrix]
     if {[llength $matrix] != 6} {
-      return -code error "tclpdf: -matrix of font define is six numbers\
+      return -code error -errorcode [list TCLPDF TYPE3 MATRIX shape] \
+          "tclpdf: -matrix of font define is six numbers\
           {a b c d e f} mapping glyph space to text space (ISO 32000-2,\
           Table 110), not \"$matrix\""
     }
     foreach number $matrix {
       if {![string is double -strict $number]} {
-        return -code error "tclpdf: -matrix of font define takes numbers,\
+        return -code error -errorcode [list TCLPDF TYPE3 MATRIX number] \
+            "tclpdf: -matrix of font define takes numbers,\
             not \"$number\""
       }
     }
@@ -121,7 +124,8 @@ oo::define ::tclpdf::document::document {
     # did another. (The VERTICAL scale, matrix[3], governs the ascent - a
     # vertical measure - and is what [Type3Ascender] uses below.)
     if {[lindex $matrix 0] <= 0} {
-      return -code error "tclpdf: the first number of -matrix is the\
+      return -code error -errorcode [list TCLPDF TYPE3 MATRIX scale] \
+          "tclpdf: the first number of -matrix is the\
           horizontal scale from glyph space to text space and has to be above\
           zero - 0.001 for the usual 1000-unit glyph space, not\
           \"[lindex $matrix 0]\""
@@ -136,7 +140,8 @@ oo::define ::tclpdf::document::document {
     # than written as a singular matrix a validator would pass.
     lassign [lmap number $matrix {expr {round($number * 1e6) / 1e6}}] a b c d
     if {$a * $d - $b * $c == 0} {
-      return -code error "tclpdf: -matrix of font define maps glyph space to\
+      return -code error -errorcode [list TCLPDF TYPE3 MATRIX singular] \
+          "tclpdf: -matrix of font define maps glyph space to\
           text space and has to be invertible, but {$matrix} is singular\
           (determinant zero to the six places a FontMatrix is written in) -\
           such a matrix flattens every glyph to nothing"
@@ -168,7 +173,8 @@ oo::define ::tclpdf::document::document {
       set ascent [expr {0.8 / abs([lindex $matrix 3])}]
     }
     if {![string is double -strict $ascent] || $ascent < 0} {
-      return -code error "tclpdf: -ascent of font define is the height of the\
+      return -code error -errorcode [list TCLPDF TYPE3 ARGUMENT ascent] \
+          "tclpdf: -ascent of font define is the height of the\
           glyph frame above the baseline, in glyph units, 0 or more - not\
           \"$ascent\""
     }
@@ -201,12 +207,14 @@ oo::define ::tclpdf::document::document {
         {width {} script {} name {} color own bbox {}} $args "font glyph"]
     set fonts [my state fonts]
     if {![dict exists $fonts $alias]} {
-      return -code error "tclpdf: no font named \"$alias\" - a Type 3 font is\
+      return -code error -errorcode [list TCLPDF TYPE3 ALIAS $alias] \
+          "tclpdf: no font named \"$alias\" - a Type 3 font is\
           created with \[font define\]"
     }
     set entry [dict get $fonts $alias]
     if {[dict get $entry kind] ne "type3"} {
-      return -code error "tclpdf: \"$alias\" is an embedded face and its\
+      return -code error -errorcode [list TCLPDF TYPE3 ALIAS $alias] \
+          "tclpdf: \"$alias\" is an embedded face and its\
           glyphs come out of its font file - \[font glyph\] draws the glyphs\
           of a Type 3 font, which is what \[font define\] makes"
     }
@@ -221,16 +229,19 @@ oo::define ::tclpdf::document::document {
     # the character code, the glyph name and the ToUnicode map below are built
     # from.
     if {[llength [split $char {}]] != 1} {
-      return -code error "tclpdf: \[font glyph\] takes the ONE character the\
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH char] \
+          "tclpdf: \[font glyph\] takes the ONE character the\
           glyph is drawn for, not \"$char\""
     }
     if {[dict exists $entry codes $char]} {
-      return -code error "tclpdf: font \"$alias\" already has a glyph for\
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH $char] \
+          "tclpdf: font \"$alias\" already has a glyph for\
           [my Type3Codepoint $char]"
     }
     set width [dict get $options width]
     if {![string is double -strict $width] || $width < 0} {
-      return -code error "tclpdf: -width of font glyph is the advance in\
+      return -code error -errorcode [list TCLPDF TYPE3 ARGUMENT width] \
+          "tclpdf: -width of font glyph is the advance in\
           glyph units, 0 or more, not \"$width\""
     }
     # -script IS REQUIRED, and the asymmetry it used to have with -bbox is why
@@ -248,13 +259,15 @@ oo::define ::tclpdf::document::document {
     # arrive as the empty string - so the arguments are read once more for the
     # option's presence, exactly as [structure] reads them for its own -script.
     if {"script" ni [lmap {option value} $args {string trimleft $option -}]} {
-      return -code error "tclpdf: font glyph needs -script, the body that draws\
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH script] \
+          "tclpdf: font glyph needs -script, the body that draws\
           the glyph - a glyph drawn by nothing sets and measures as a blank\
           mark with nothing reporting it. A glyph meant to advance and draw\
           nothing, a space, takes an empty -script {}"
     }
     if {[dict get $options color] ni {own text}} {
-      return -code error "tclpdf: -color of font glyph is own - the glyph\
+      return -code error -errorcode [list TCLPDF TYPE3 ARGUMENT color] \
+          "tclpdf: -color of font glyph is own - the glyph\
           brings its own colours (d0) - or text - it describes only its shape\
           and is painted in the colour of the text (d1, ISO 32000-2,\
           Table 111), not \"[dict get $options color]\""
@@ -269,7 +282,8 @@ oo::define ::tclpdf::document::document {
       # marks fall outside this bounding box, the result is
       # implementation-dependent." What the script paints cannot be measured
       # here, so the caller states it or takes d0.
-      return -code error "tclpdf: -color text needs -bbox {x y w h} - the\
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH bbox] \
+          "tclpdf: -color text needs -bbox {x y w h} - the\
           bounding box of a d1 glyph is binding (ISO 32000-2, Table 111) and\
           cannot be measured from a script"
     }
@@ -284,13 +298,15 @@ oo::define ::tclpdf::document::document {
           : [format uni%04X $code]}]
     }
     if {[string length $name] == 0 || [regexp {[\s()<>\[\]{}/%]} $name]} {
-      return -code error "tclpdf: -name of font glyph is a glyph name and\
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH name] \
+          "tclpdf: -name of font glyph is a glyph name and\
           cannot be empty or carry white space or a PDF delimiter, not\
           \"$name\""
     }
     foreach {other record} [dict get $entry glyphs] {
       if {[dict get $record name] eq $name} {
-        return -code error "tclpdf: font \"$alias\" already has a glyph named\
+        return -code error -errorcode [list TCLPDF TYPE3 GLYPH $name] \
+            "tclpdf: font \"$alias\" already has a glyph named\
             \"$name\" - a CharProcs key names one glyph (ISO 32000-2,\
             Table 110)"
       }
@@ -334,7 +350,8 @@ oo::define ::tclpdf::document::document {
         return $code
       }
     }
-    return -code error "tclpdf: the Type 3 font \"$alias\" has no free\
+    return -code error -errorcode [list TCLPDF TYPE3 FULL $alias] \
+        "tclpdf: the Type 3 font \"$alias\" has no free\
         character code left - such a font is addressed by single bytes and\
         holds at most 255 glyphs (ISO 32000-2, 9.6.5.3)"
   }
@@ -345,17 +362,20 @@ oo::define ::tclpdf::document::document {
   # top of the frame, glyph space counts it upwards from the baseline.
   method Type3Box {box ascent what} {
     if {[llength $box] != 4} {
-      return -code error "tclpdf: $what is {x y width height} in the\
+      return -code error -errorcode [list TCLPDF TYPE3 BBOX shape] \
+          "tclpdf: $what is {x y width height} in the\
           coordinates of the glyph script, not \"$box\""
     }
     foreach number $box {
       if {![string is double -strict $number]} {
-        return -code error "tclpdf: $what takes numbers, not \"$number\""
+        return -code error -errorcode [list TCLPDF TYPE3 BBOX number] \
+            "tclpdf: $what takes numbers, not \"$number\""
       }
     }
     lassign $box x y width height
     if {$width < 0 || $height < 0} {
-      return -code error "tclpdf: $what takes a width and a height of 0 or\
+      return -code error -errorcode [list TCLPDF TYPE3 BBOX size] \
+          "tclpdf: $what takes a width and a height of 0 or\
           more, not \"$width\" and \"$height\""
     }
     return [list $x [expr {$ascent - $y - $height}] [expr {$x + $width}] \
@@ -435,7 +455,8 @@ oo::define ::tclpdf::document::document {
       foreach part $parts {
         if {[dict exists $part resource]
             && [dict exists $placed [dict get $part resource]]} {
-          return -code error "tclpdf: a -color text glyph of the Type 3 font\
+          return -code error -errorcode [list TCLPDF TYPE3 GLYPH $imageAlias] \
+              "tclpdf: a -color text glyph of the Type 3 font\
               \"$alias\" places the image \"$imageAlias\" - a d1 glyph\
               specifies only shape and shall not include an image other than\
               an image mask (ISO 32000-2, 9.6.4, Table 111); draw it with\
@@ -563,7 +584,8 @@ oo::define ::tclpdf::document::document {
     set writer [my writer]
     set glyphs [dict get $entry glyphs]
     if {![dict size $glyphs]} {
-      return -code error "tclpdf: the Type 3 font \"$alias\" is used but has\
+      return -code error -errorcode [list TCLPDF TYPE3 EMPTY $alias] \
+          "tclpdf: the Type 3 font \"$alias\" is used but has\
           no glyphs - draw at least one with \[font glyph\]"
     }
     set codes [lsort -integer [dict keys $glyphs]]
@@ -687,7 +709,8 @@ oo::define ::tclpdf::document::document {
           # would invoke the very font description it is part of, and no
           # reader can end that. Refused here rather than written, because
           # what comes out is a file that hangs whoever opens it.
-          return -code error "tclpdf: a glyph of the Type 3 font \"$alias\"\
+          return -code error -errorcode [list TCLPDF TYPE3 RECURSION $alias] \
+              "tclpdf: a glyph of the Type 3 font \"$alias\"\
               sets text in that same font - a glyph description cannot invoke\
               the font it belongs to"
         }
@@ -733,4 +756,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::type3 1.0
+package provide tclpdf::type3 1.1

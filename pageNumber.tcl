@@ -58,15 +58,18 @@ oo::define ::tclpdf::document::document {
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "pageNumbers"]
     if {[dict get $options at] eq {}} {
-      return -code error "tclpdf: pageNumbers needs -at {x y}"
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT at] \
+          "tclpdf: pageNumbers needs -at {x y}"
     }
     if {[llength [dict get $options at]] != 2} {
-      return -code error "tclpdf: -at takes two numbers {x y}, got\
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT at] \
+          "tclpdf: -at takes two numbers {x y}, got\
           \"[dict get $options at]\""
     }
     if {![string is integer -strict [dict get $options from]]
         || [dict get $options from] < 1} {
-      return -code error "tclpdf: -from is a page number counted from 1, got\
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT from] \
+          "tclpdf: -from is a page number counted from 1, got\
           \"[dict get $options from]\""
     }
     # Both checked at the CALL. The number is drawn at write time, and a
@@ -75,11 +78,13 @@ oo::define ::tclpdf::document::document {
     # into the label as %m.
     set total [dict get $options total]
     if {$total ne {} && (![string is integer -strict $total] || $total < 1)} {
-      return -code error "tclpdf: -total is a page count of 1 or more, got\
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT total] \
+          "tclpdf: -total is a page count of 1 or more, got\
           \"$total\""
     }
     if {[dict get $options align] ni {left right center centre}} {
-      return -code error "tclpdf: -align must be left, right or center,\
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT align] \
+          "tclpdf: -align must be left, right or center,\
           not \"[dict get $options align]\""
     }
 
@@ -199,4 +204,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.4
+package provide tclpdf::pageNumber 1.5

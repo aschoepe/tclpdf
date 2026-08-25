@@ -61,11 +61,13 @@ oo::class create ::tclpdf::event::emitter {
   # used to be accepted without a word, and the subscriber then never ran.
   method on {event script} {
     if {$script eq {}} {
-      return -code error "tclpdf: empty callback for event \"$event\""
+      return -code error -errorcode [list TCLPDF EVENT CALLBACK $event] \
+          "tclpdf: empty callback for event \"$event\""
     }
     set known [my events]
     if {[llength $known] && $event ni $known} {
-      return -code error "tclpdf: there is no event \"$event\" - known are:\
+      return -code error -errorcode [list TCLPDF EVENT NAME $event] \
+          "tclpdf: there is no event \"$event\" - known are:\
           [join $known {, }]"
     }
     set token e[incr tclpdfNextToken]
@@ -130,4 +132,4 @@ oo::class create ::tclpdf::event::emitter {
   }
 }
 
-package provide tclpdf::event 1.2
+package provide tclpdf::event 1.3

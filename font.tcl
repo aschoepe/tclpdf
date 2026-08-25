@@ -121,12 +121,14 @@ oo::define ::tclpdf::document::document {
         {subset 1 metrics {} axes {} instance {} data {}} $args "font embed"]
     set fonts [my state fonts]
     if {[dict exists $fonts $alias]} {
-      return -code error "tclpdf: a font named \"$alias\" is already embedded"
+      return -code error -errorcode [list TCLPDF FONT ALIAS $alias] \
+          "tclpdf: a font named \"$alias\" is already embedded"
     }
     # Validated HERE, at the call. -subset used to be taken as given and to
     # fail at write time, in an "if" nowhere near the line that set it.
     if {![string is boolean -strict [dict get $options subset]]} {
-      return -code error "tclpdf: -subset takes a boolean, not\
+      return -code error -errorcode [list TCLPDF FONT ARGUMENT subset] \
+          "tclpdf: -subset takes a boolean, not\
           \"[dict get $options subset]\""
     }
     # The file says what it is; the extension does not. Read once and let both
@@ -181,7 +183,8 @@ oo::define ::tclpdf::document::document {
     # would embed something other than what the call describes.
     if {[string index $bytes 0] eq "\x80" || [string range $bytes 0 1] eq "%!"} {
       if {[dict get $options axes] ne {} || [dict get $options instance] ne {}} {
-        return -code error "tclpdf: $source is a Type 1 font\
+        return -code error -errorcode [list TCLPDF FONT AXES $source] \
+            "tclpdf: $source is a Type 1 font\
             program, which has no axes - -axes and -instance apply to a\
             variable TrueType face"
       }
@@ -195,18 +198,21 @@ oo::define ::tclpdf::document::document {
       # start with a byte a CFF header cannot have), and a Type 1 program is
       # already accounted for above.
       if {[dict get $options axes] ne {} || [dict get $options instance] ne {}} {
-        return -code error "tclpdf: $source is a CFF font program, which has\
+        return -code error -errorcode [list TCLPDF FONT AXES $source] \
+            "tclpdf: $source is a CFF font program, which has\
             no axes - -axes and -instance apply to a variable TrueType face"
       }
       if {[dict get $options metrics] ne {}} {
-        return -code error "tclpdf: -metrics names the AFM of a Type 1 font\
+        return -code error -errorcode [list TCLPDF FONT METRICS $source] \
+            "tclpdf: -metrics names the AFM of a Type 1 font\
             program - $source is a CFF font program and carries its own\
             metrics, widths and glyph names"
       }
       dict set fonts $alias [my FontEmbedCff $alias $path $source $bytes]
     } else {
       if {[dict get $options metrics] ne {}} {
-        return -code error "tclpdf: -metrics names the AFM of a Type 1 font\
+        return -code error -errorcode [list TCLPDF FONT METRICS $source] \
+            "tclpdf: -metrics names the AFM of a Type 1 font\
             program - $source is a TrueType or OpenType face and\
             carries its own metrics"
       }
@@ -352,7 +358,8 @@ oo::define ::tclpdf::document::document {
     }
     package require tclpdf::varFont 1.0-
     if {![::tclpdf::varFont isVariable $parsed]} {
-      return -code error "tclpdf: $source is not a variable font\
+      return -code error -errorcode [list TCLPDF FONT AXES $source] \
+          "tclpdf: $source is not a variable font\
           - it has no fvar table, so -axes and -instance have nothing to set"
     }
     if {$instance ne {}} {
@@ -369,11 +376,13 @@ oo::define ::tclpdf::document::document {
     }
     dict for {tag value} $axes {
       if {$tag ni $known} {
-        return -code error "tclpdf: $source has no axis \"$tag\"\
+        return -code error -errorcode [list TCLPDF FONT AXES $tag] \
+            "tclpdf: $source has no axis \"$tag\"\
             - it has: [join $known { }]"
       }
       if {![string is double -strict $value]} {
-        return -code error "tclpdf: the value for axis \"$tag\" must be a\
+        return -code error -errorcode [list TCLPDF FONT AXES $tag] \
+            "tclpdf: the value for axis \"$tag\" must be a\
             number, got \"$value\""
       }
       # Inside the axis, or refused. The normalisation clamps (varFont
@@ -385,7 +394,8 @@ oo::define ::tclpdf::document::document {
       # that the caller can pick a point that is on the axis.
       lassign [dict get $ranges $tag] minimum default maximum
       if {$value < $minimum || $value > $maximum} {
-        return -code error "tclpdf: the value $value for axis \"$tag\" is\
+        return -code error -errorcode [list TCLPDF FONT AXES $tag] \
+            "tclpdf: the value $value for axis \"$tag\" is\
             outside its range in $source - $tag runs from\
             [::tclpdf::pdfObj num $minimum] to [::tclpdf::pdfObj num $maximum]\
             (default [::tclpdf::pdfObj num $default])"
@@ -448,7 +458,8 @@ oo::define ::tclpdf::document::document {
         return $coordinates
       }
     }
-    return -code error "tclpdf: $source has no instance named\
+    return -code error -errorcode [list TCLPDF FONT INSTANCE $wanted] \
+        "tclpdf: $source has no instance named\
         \"$wanted\" - it has: [join $names {, }]"
   }
 
@@ -485,7 +496,8 @@ oo::define ::tclpdf::document::document {
       set metricsPath [file rootname $path].afm
     }
     if {![file readable $metricsPath]} {
-      return -code error "tclpdf: a Type 1 font needs its metrics -\
+      return -code error -errorcode [list TCLPDF FONT METRICS $metricsPath] \
+          "tclpdf: a Type 1 font needs its metrics -\
           \"$metricsPath\" is not readable. Put the AFM beside the font or\
           name it with -metrics"
     }
@@ -734,7 +746,8 @@ oo::define ::tclpdf::document::document {
   method FontInfo {alias} {
     set fonts [my state fonts]
     if {![dict exists $fonts $alias]} {
-      return -code error "tclpdf: no embedded font named \"$alias\""
+      return -code error -errorcode [list TCLPDF FONT ALIAS $alias] \
+          "tclpdf: no embedded font named \"$alias\""
     }
     set entry [dict get $fonts $alias]
     # A Type 3 font has no file to ask - its glyphs are content streams in
@@ -887,7 +900,8 @@ oo::define ::tclpdf::document::document {
       if {[llength $finding] && [lindex $finding 4] eq "forms"
           && $direction eq "rtl"} {
         if {[my FontLayoutState $alias forms] eq {}} {
-          return -code error [::tclpdf::shaping message $finding $alias]
+          return -code error -errorcode [list TCLPDF FONT SHAPING $finding] \
+              [::tclpdf::shaping message $finding $alias]
         }
         # Noted, not kept: all that is still asked of the finding below is
         # that there WAS one, because the second walk ends at {} and the run
@@ -896,7 +910,8 @@ oo::define ::tclpdf::document::document {
         set finding [::tclpdf::shaping needed $text $direction 1]
       }
       if {[llength $finding]} {
-        return -code error [::tclpdf::shaping message $finding]
+        return -code error -errorcode [list TCLPDF FONT SHAPING $finding] \
+            [::tclpdf::shaping message $finding]
       }
     }
     # Direction rather than script, and only a right-to-left line has either
@@ -917,7 +932,8 @@ oo::define ::tclpdf::document::document {
       if {!$unshaped} {
         set opposite [::tclpdf::bidi opposite $text $direction]
         if {[llength $opposite]} {
-          return -code error [::tclpdf::bidi message $opposite]
+          return -code error -errorcode [list TCLPDF FONT BIDI mixed] \
+              [::tclpdf::bidi message $opposite]
         }
       }
     }
@@ -2160,4 +2176,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.13
+package provide tclpdf::font 1.14

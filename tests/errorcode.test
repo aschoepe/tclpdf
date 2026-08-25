@@ -1,0 +1,104 @@
+# errorcode.test --
+#
+# One property, held for the whole tree: EVERY refusal this package makes
+# carries an -errorcode.
+#
+# Why it is a test and not a review note: on 2026-08-25 five hundred and
+# eleven refusals in forty-eight modules carried none, and they had
+# accumulated one module at a time. Nothing in the suite noticed, because
+# every one of them was individually harmless - a script that catches the
+# error still catches it, it just cannot tell WHICH error it caught without
+# reading the message. And the message is explicitly not a contract: the
+# manual says its wording "may be sharpened in any release", so a script
+# written against it breaks on a rewording nobody thought was a change.
+#
+# The guard is written over the SOURCE rather than by calling every refusal:
+# most of the five hundred need a fixture of their own - a damaged font, a
+# progressive JPEG, an encrypted document being signed - and the question
+# here is about the module as a whole, not about any one path through it.
+#
+# What it cannot see, and what therefore still needs a test of its own per
+# case: whether the code is the RIGHT one. This says only that there is one.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+source [file join [file dirname [info script]] helper.tcl]
+
+test errorcode-1.1 {every refusal in every module carries a code} -body {
+    set bare {}
+    ::tclpdfTest::eachModule module -> {
+        set count [::tclpdfTest::refusalsWithoutCode $module]
+        if {$count} {
+            lappend bare "$module: $count"
+        }
+    }
+    set bare
+} -result {}
+
+test errorcode-1.2 {the guard can find one - a counter-check} -body {
+    # A guard that reports nothing is worth nothing until it has been shown
+    # to find something. The fixture is written and read rather than mocked,
+    # because what the guard reads is a file.
+    set path [file join [temporaryDirectory] guard-fixture.tcl]
+    set channel [open $path w]
+    puts $channel {
+        proc withCode {} {
+            return -code error -errorcode {TCLPDF TEST ONE} "tclpdf: one"
+        }
+        proc withCodeWrapped {} {
+            return -code error \
+                -errorcode {TCLPDF TEST TWO} "tclpdf: two, on two lines"
+        }
+        proc withoutCode {} {
+            return -code error "tclpdf: three, and no code at all"
+        }
+    }
+    close $channel
+    # The helper takes a name relative to the source tree, so the fixture is
+    # read through a path of its own here.
+    set text [read [set f [open $path]]][close $f]
+    set lines [split $text \n]
+    set bare 0
+    for {set index 0} {$index < [llength $lines]} {incr index} {
+        set line [lindex $lines $index]
+        if {![string match {*return -code error*} $line]} {
+            continue
+        }
+        if {![string match {*-errorcode*} \
+                $line[lindex $lines [expr {$index + 1}]]]} {
+            incr bare
+        }
+    }
+    file delete $path
+    # Exactly one of the three is bare, and the wrapped one is NOT counted -
+    # which is the defect this guard had on 2026-08-25, when it read one line
+    # at a time and called every wrapped refusal bare.
+    set bare
+} -result 1
+
+test errorcode-1.3 {every code begins with TCLPDF, or is one of Tcl's own} -body {
+    # A code of another shape cannot be trapped by a script written against
+    # this package. The one exception is deliberate and named here: the
+    # unknown-command handler in tclpdf.tcl reproduces Tcl's own wording, so
+    # it carries Tcl's own code and behaves exactly like a mistyped command.
+    set wrong {}
+    ::tclpdfTest::eachModule module text {
+        # "--" before the pattern: it begins with a dash and regexp would
+        # otherwise read it as an option of its own.
+        foreach {-> code} [regexp -all -inline -- \
+                {-errorcode \[list ([A-Za-z_]+)} $text] {
+            if {$code ni {TCLPDF TCL}} {
+                lappend wrong "$module: $code"
+            }
+        }
+    }
+    set wrong
+} -result {}
+
+cleanupTests

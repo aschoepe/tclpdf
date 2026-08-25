@@ -20,7 +20,8 @@ namespace eval ::tclpdf {
   # dummy package of that name, Tcl 9 does not. So check for the command and
   # request nothing.
   if {![llength [info commands ::zlib]]} {
-    return -code error "tclpdf: the built-in command \"zlib\" is missing - this Tcl build was compiled without zlib"
+    return -code error -errorcode [list TCLPDF ENVIRONMENT zlib] \
+        "tclpdf: the built-in command \"zlib\" is missing - this Tcl build was compiled without zlib"
   }
 }
 
@@ -88,7 +89,8 @@ proc ::tclpdf::unknown {name args} {
       return [uplevel 1 [list ::tclpdf::$topic {*}$args]]
     }
   }
-  return -code error "invalid command name \"$name\""
+  return -code error -errorcode [list TCL LOOKUP COMMAND $name] \
+      "invalid command name \"$name\""
 }
 
 namespace eval ::tclpdf {

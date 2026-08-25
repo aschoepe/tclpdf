@@ -13,7 +13,7 @@
 # WHY IT IS AN EXAMPLE HERE and not a picture: every element of it is a
 # drawing instruction this package already had, except one. The tone scales
 # and colour bars are rectangles in CMYK, the ramps are Shading Type 2, the
-# screens are tiling patterns, the rosettes and targets are polygons, lines
+# screens are tiling patterns, the targets and rosettes are polygons, lines
 # and circles - and pdfimages finds no image at all in what comes out.
 #
 # THE ONE THING THAT HAD TO BE BUILT FOR IT IS OVERPRINT (8.6.7), and it is
@@ -24,6 +24,12 @@
 # rather than a preview: [$doc overprint -fill 1] writes /op true into the
 # graphics state, and from that moment the file MEANS something different
 # while looking identical.
+#
+# THE TWO PAGES, and the reason nothing is mixed between them. The first is
+# what a DENSITOMETER reads: flat patches, large enough to put an instrument
+# on - tone scales, ramps, colour bars, the slur gauge. The second is what a
+# LOUPE reads: figures that only mean something magnified - registration
+# marks, screens, rosettes, and the overprint pair.
 #
 # WHAT THIS FILE DOES NOT CLAIM. A real strip is a measured object: the
 # patches sit at densities a standard names (ISO 12647), the screen ruling is
@@ -66,13 +72,15 @@ set overprints {
     B {cmyk 1 1 0 0}
 }
 
+set black {cmyk 0 0 0 1}
+set allPlates {cmyk 1 1 1 1}
+
 # ---------------------------------------------------------------------------
 # The elements, each one a procedure - a strip is the same few figures
 # repeated per plate, and a copy per plate is how two of them come to differ.
 # ---------------------------------------------------------------------------
 
-# A tint of one plate: the same colour with every component scaled. Written
-# here once because four scales and four ramps want it.
+# A tint of one plate: the same colour with every component scaled.
 proc plateTint {solid percent} {
     lassign $solid -> c m y k
     return [list cmyk [expr {$c * $percent / 100.0}] \
@@ -80,29 +88,31 @@ proc plateTint {solid percent} {
         [expr {$k * $percent / 100.0}]]
 }
 
-# The four-square mark that sits at each end of the head bar: C and M above,
-# Y and K below. It is the smallest thing on the sheet that carries all four
-# plates, and the first place a missing plate shows.
-proc processMark {doc x y {side 3.2}} {
-    set squares {C {cmyk 1 0 0 0} M {cmyk 0 1 0 0}
-                 Y {cmyk 0 0 1 0} K {cmyk 0 0 0 1}}
-    set index 0
-    foreach {letter colour} $squares {
-        set column [expr {$index % 2}]
-        set row [expr {$index / 2}]
-        $doc rect -at [list [expr {$x + $column * $side}] \
-            [expr {$y + $row * $side}]] -size [list $side $side] -fill $colour
-        incr index
+# The page header: the four-square process mark at each end, the title, and a
+# rule under it. No filled bar behind the words - a bar in a tint of its own
+# is one more thing on the sheet that can print wrong, and the head of a
+# control strip should carry nothing an operator has to discount.
+proc pageHead {doc title} {
+    set squares {{cmyk 1 0 0 0} {cmyk 0 1 0 0} {cmyk 0 0 1 0} {cmyk 0 0 0 1}}
+    foreach x {20 182} {
+        set index 0
+        foreach colour $squares {
+            $doc rect -at [list [expr {$x + ($index % 2) * 4}] \
+                [expr {17 + ($index / 2) * 4}]] -size {4 4} -fill $colour
+            incr index
+        }
     }
-    return [expr {2 * $side}]
+    $doc font -family helvetica -style bold -size 13 -color black
+    $doc text $title -at {105 23} -align center
+    $doc line -from {20 27} -to {190 27} -stroke {cmyk 0 0 0 1} -width 0.5
+    return
 }
 
 # A star rosette: rays from one centre. What it is for is MOIRE - a rosette
 # printed through a screen shows a pattern where the ruling and the rays beat
 # against each other, and where that pattern sits says what the ruling is.
-# Drawn as filled wedges rather than as lines, because a line of a given
-# width is the same width everywhere and a ray has to narrow towards the
-# middle.
+# Filled wedges rather than lines: a line of a given width is that width
+# everywhere, and a ray has to narrow towards the middle.
 proc rosette {doc cx cy radius colour {rays 36}} {
     set step [expr {2 * 3.14159265358979 / $rays}]
     for {set i 0} {$i < $rays} {incr i 2} {
@@ -122,143 +132,192 @@ proc rosette {doc cx cy radius colour {rays 36}} {
     return
 }
 
-# The registration target: crosshair, two rings, and the plate letters around
-# it. Drawn ONCE in a colour that is all four plates at full strength, so
-# every plate carries the same figure - if they register the lines coincide,
-# and if they do not each plate shows its own edge as a coloured fringe.
-proc registrationTarget {doc cx cy radius} {
-    set all {cmyk 1 1 1 1}
-    $doc circle -at [list $cx $cy] -radius $radius -stroke $all -width 0.4
-    $doc circle -at [list $cx $cy] -radius [expr {$radius / 2.0}] \
-        -stroke $all -width 0.4
-    set reach [expr {$radius * 1.5}]
-    $doc line -from [list [expr {$cx - $reach}] $cy] \
-        -to [list [expr {$cx + $reach}] $cy] -stroke $all -width 0.3
-    $doc line -from [list $cx [expr {$cy - $reach}]] \
-        -to [list $cx [expr {$cy + $reach}]] -stroke $all -width 0.3
-    return
-}
-
-# The same target with the four plates drawn SEPARATELY, one ring each. On a
-# sheet in register the four rings are concentric; out of register the stack
-# opens up, and the direction it opens in names the plate that moved.
-proc separationTarget {doc cx cy radius plates} {
-    set step [expr {$radius / 4.5}]
-    set r $radius
-    foreach {letter colour} $plates {
-        $doc circle -at [list $cx $cy] -radius $r -stroke $colour -width 0.7
-        set r [expr {$r - $step}]
+# A wedge from one angle to another - four of them make a quartered target.
+# A fan of thin triangles, because PDF has no arc operator and a quarter
+# circle out of one polygon would be a triangle.
+proc wedge {doc cx cy radius from extent colour {steps 12}} {
+    set rad [expr {3.14159265358979 / 180.0}]
+    set step [expr {$extent * $rad / $steps}]
+    set start [expr {$from * $rad}]
+    for {set i 0} {$i < $steps} {incr i} {
+        set a0 [expr {$start + $i * $step}]
+        set a1 [expr {$start + ($i + 1) * $step}]
+        $doc polygon -points [list \
+            $cx $cy \
+            [expr {$cx + $radius * cos($a0)}] [expr {$cy + $radius * sin($a0)}] \
+            [expr {$cx + $radius * cos($a1)}] [expr {$cy + $radius * sin($a1)}]] \
+            -fill $colour -close 1
     }
     return
 }
 
+# The crosshair every registration figure sits in: two lines through the
+# centre, reaching past the figure, in all four plates at once.
+proc crosshair {doc cx cy reach} {
+    set all {cmyk 1 1 1 1}
+    $doc line -from [list [expr {$cx - $reach}] $cy] \
+        -to [list [expr {$cx + $reach}] $cy] -stroke $all -width 0.25
+    $doc line -from [list $cx [expr {$cy - $reach}]] \
+        -to [list $cx [expr {$cy + $reach}]] -stroke $all -width 0.25
+    return
+}
+
+# The four-square mark with a crosshair through it: C and M above, Y and K
+# below. The smallest figure on the sheet that carries all four plates, and
+# the first place a missing plate shows. "filled" draws solid squares, the
+# other form sets the letter in the plate's own colour on paper - which reads
+# at a glance where a filled mark reads only under a loupe.
+proc quadMark {doc cx cy {side 4} {filled 1}} {
+    set squares {{cmyk 1 0 0 0} {cmyk 0 1 0 0} {cmyk 0 0 1 0} {cmyk 0 0 0 1}}
+    set letters {C M Y K}
+    set left [expr {$cx - $side}]
+    set top [expr {$cy - $side}]
+    set index 0
+    foreach colour $squares letter $letters {
+        set x [expr {$left + ($index % 2) * $side}]
+        set y [expr {$top + ($index / 2) * $side}]
+        if {$filled} {
+            $doc rect -at [list $x $y] -size [list $side $side] -fill $colour
+        } else {
+            $doc font -family helvetica -style bold \
+                -size [expr {$side * 2.6}] -color $colour
+            $doc text $letter -at [list [expr {$x + $side / 2.0}] \
+                [expr {$y + $side * 0.8}]] -align center
+        }
+        incr index
+    }
+    crosshair $doc $cx $cy [expr {$side * 1.6}]
+    return
+}
+
 # ---------------------------------------------------------------------------
-# Page 1: the scales a densitometer reads
+# Page 1 - what a densitometer reads
 # ---------------------------------------------------------------------------
 
 set doc [tclpdf new -unit mm]
 $doc info Title "A press control strip"
 $doc page add
 
-# -- the head bar, with a process mark at each end --------------------------
-$doc rect -at {20 18} -size {170 10} -fill {cmyk 0 0 0 0.45}
-processMark $doc 21.5 19.5
-processMark $doc 182 19.5
-$doc font -family helvetica -style bold -size 11 -color white
-$doc text "Typographical marks and control scales (CMYK)" \
-    -at {105 24.5} -align center -anchor middle
-$doc font -style {} -size 8 -color black
-$doc text "Everything below is drawn - no picture is embedded and pdfimages\
-    lists none. The one thing this page needed that the package did not have\
-    is overprint, which is on page 2." -at {20 33} -width 170
+pageHead $doc "Typographical marks and control scales (CMYK)"
 
-# -- the tone scales, and the four ramps beside them ------------------------
+$doc font -family helvetica -style {} -size 8 -color black
+$doc text "Flat patches, large enough to put an instrument on. Everything is\
+    drawn - no picture is embedded and pdfimages lists none. What only means\
+    something under a loupe is on page 2." -at {20 33} -width 170
+
+# -- the tone scales --------------------------------------------------------
 #
 # Ten steps per plate, 100 down to 10 per cent, with the number INSIDE the
 # patch: a strip is read at arm's length and a caption underneath would be
-# lost. White numerals over the heavy end, black over the light one.
-set y 44
+# lost. White numerals over the heavy end, black over the light one. The
+# solid sits at the end of the row, where an instrument finds it first.
+set y 42
 foreach {letter solid} $plates {
     $doc font -style bold -size 9 -color black
     $doc text $letter -at [list 20 [expr {$y + 5}]]
     set x 25
     foreach tint {100 90 80 70 60 50 40 30 20 10} {
-        $doc rect -at [list $x $y] -size {13 11} -fill [plateTint $solid $tint]
+        $doc rect -at [list $x $y] -size {14.5 11} -fill [plateTint $solid $tint]
+        # White numerals over the heavy end - but the decision is about
+        # BRIGHTNESS, not about the amount of ink. Yellow at full strength is
+        # a light colour, and white numerals on it were unreadable at 90 dpi;
+        # cyan, magenta and black go dark enough to carry them. Seen, not
+        # reasoned out.
+        #
         # An if, not an expr with braces: expr hands back the braces with the
         # value, and "{1 1 1}" is not a colour.
-        if {$tint > 50} {
+        if {$tint > 50 && $letter ne "Y"} {
             $doc font -size 7 -color white
         } else {
             $doc font -size 7 -color black
         }
-        $doc text $tint -at [list [expr {$x + 6.5}] [expr {$y + 4}]] \
+        $doc text $tint -at [list [expr {$x + 7.25}] [expr {$y + 4}]] \
             -align center
-        set x [expr {$x + 14}]
+        set x [expr {$x + 15.5}]
     }
-    # The solid, and then the ramp: a Shading Type 2 from paper to full ink.
-    # The ramp shows where a screen breaks up and where it fills in, which
-    # ten discrete steps cannot.
-    $doc rect -at [list $x $y] -size {11 11} -fill $solid
-    $doc font -size 7 -color white
-    $doc text $letter -at [list [expr {$x + 5.5}] [expr {$y + 4}]] -align center
-    $doc shading axial -at [list [expr {$x + 13}] $y] -size {12 11} \
-        -colors [list {cmyk 0 0 0 0} $solid] -angle 0
+    $doc rect -at [list $x $y] -size {10 11} -fill $solid
+    if {$letter eq "Y"} {
+        $doc font -size 7 -color black
+    } else {
+        $doc font -size 7 -color white
+    }
+    $doc text $letter -at [list [expr {$x + 5}] [expr {$y + 4}]] -align center
     set y [expr {$y + 12}]
+}
+
+# -- the ramps ---------------------------------------------------------------
+#
+# A ramp is a Shading Type 2 from paper to solid, and it shows what ten
+# discrete steps cannot: where a screen breaks up at the light end and where
+# it fills in at the dark one. ACROSS the sheet rather than down it, so that
+# each bar has the length an instrument traverses.
+set y [expr {$y + 6}]
+$doc font -style bold -size 9 -color black
+$doc text "Continuous ramps - paper to solid, one bar per plate" \
+    -at [list 20 $y]
+set y [expr {$y + 5}]
+foreach {letter solid} $plates {
+    $doc font -style bold -size 8 -color black
+    $doc text $letter -at [list 20 [expr {$y + 5.5}]]
+    $doc shading axial -at [list 25 $y] -size {165 8} \
+        -colors [list {cmyk 0 0 0 0} $solid] -angle 0
+    set y [expr {$y + 10}]
 }
 
 # -- the colour bars --------------------------------------------------------
 #
 # The four inks and the three colours that only exist because two of them
-# overlap. Two rows, the second shifted by half a patch: a bar that is read
-# across the sheet finds an ink that runs heavy on one side, and the offset
-# row catches what falls between the patches of the first.
-set y [expr {$y + 6}]
+# overlap. One row: an offset second row catches what falls between the
+# patches of the first, which matters on a press and says nothing here.
+set y [expr {$y + 5}]
 $doc font -style bold -size 9 -color black
 $doc text "Colour bars - the inks, and what two of them make together" \
     -at [list 20 $y]
 set y [expr {$y + 5}]
 set bars {}
-foreach {letter colour} $plates { lappend bars $colour }
-foreach {letter colour} $overprints { lappend bars $colour }
-lappend bars {cmyk 0 0 0 1}
-foreach offset {0 5.5} {
-    set x [expr {20 + $offset}]
-    for {set repeat 0} {$repeat < 2} {incr repeat} {
-        foreach colour $bars {
-            $doc rect -at [list $x $y] -size {10 7} -fill $colour
-            set x [expr {$x + 10.5}]
-        }
+foreach {letter colour} $plates { lappend bars [list $letter $colour] }
+foreach {letter colour} $overprints { lappend bars [list $letter $colour] }
+lappend bars [list K $black]
+set x 20
+foreach pair $bars {
+    lassign $pair letter colour
+    $doc rect -at [list $x $y] -size {20.5 10} -fill $colour
+    # The same brightness rule as the tone scales: yellow carries a black
+    # letter, everything else a white one. Written out rather than computed
+    # from the ink values - a patch is either dark enough or it is not, and
+    # a formula here would have to guess what "dark enough" means on paper.
+    if {$letter eq "Y"} {
+        $doc font -style bold -size 7 -color black
+    } else {
+        $doc font -style bold -size 7 -color white
     }
-    set y [expr {$y + 8}]
+    $doc text $letter -at [list [expr {$x + 10.25}] [expr {$y + 6.5}]] \
+        -align center
+    set x [expr {$x + 21.25}]
 }
-# Plus the height of the line itself: [text] puts the BASELINE at y, so a
-# caption written at the y a bar ended on stands in the bar. Seen at 90 dpi.
-set y [expr {$y + 3}]
-$doc font -style {} -size 7
-$doc text "C M Y K, then R = M+Y, G = C+Y, B = C+M, and K again. The second\
-    row is offset by half a patch." -at [list 20 $y] -width 170
+set y [expr {$y + 14}]
+$doc font -style {} -size 7 -color black
+$doc text "C M Y K, then R = M+Y, G = C+Y, B = C+M, and K again." \
+    -at [list 20 $y]
 
 # -- slur and doubling ------------------------------------------------------
 #
 # The gauge nobody guesses from a screen. Fine lines ACROSS the direction of
-# travel and fine lines ALONG it, at the same width: if the sheet slurs, the
+# travel and fine lines ALONG it, at the same widths: if the sheet slurs, the
 # ones across thicken and the ones along do not. Doubling shows as a ghost
 # beside every line. The numbers name the ink coverage the block is printed
 # at, which is what makes two sheets comparable.
-set y [expr {$y + 8}]
+set y [expr {$y + 10}]
 $doc font -style bold -size 9 -color black
 $doc text "Slur and doubling gauge" -at [list 20 $y]
 set y [expr {$y + 8}]
 $doc font -style {} -size 6 -color black
-$doc text "100/100/100/100" -at [list 105 [expr {$y - 0.5}]] -align center
-set black {cmyk 0 0 0 1}
+$doc text "100/100/100/100" -at [list 105 [expr {$y - 1}]] -align center
 foreach width {0.15 0.3 0.6 1.0} {
     $doc line -from [list 20 $y] -to [list 90 $y] -stroke $black -width $width
-    $doc line -from [list 120 $y] -to [list 190 $y] -stroke $black \
-        -width $width
+    $doc line -from [list 120 $y] -to [list 190 $y] -stroke $black -width $width
     set y [expr {$y + 3}]
 }
-# The same widths turned ninety degrees, so the pair can be compared.
 set x 20
 foreach width {0.15 0.3 0.6 1.0} {
     for {set i 0} {$i < 14} {incr i} {
@@ -277,47 +336,85 @@ $doc text "Lines across the run and along it, at 0.15, 0.3, 0.6 and 1.0 mm.\
 exampleFooter $doc
 
 # ---------------------------------------------------------------------------
-# Page 2: the marks a loupe reads, and the switch no reader shows
+# Page 2 - what a loupe reads
 # ---------------------------------------------------------------------------
 
 $doc page add
-$doc font -family helvetica -style bold -size 13 -color black
-$doc text "Registration, screens, and overprint" -at {20 22}
+pageHead $doc "Registration, screens and overprint"
 
-# -- registration marks, four kinds -----------------------------------------
-$doc font -style {} -size 8
-$doc text "Four marks, each answering the same question a different way: do\
-    the plates land on top of one another?" -at {20 29} -width 170
+$doc font -family helvetica -style {} -size 8 -color black
+$doc text "Figures for a loupe. Every registration mark asks the same\
+    question a different way: do the four plates land on top of one another?\
+    Each row is a pair - a target and a four-square mark - and a misregister\
+    shows in both, as a coloured fringe in the one and as a step in the\
+    other." -at {20 33} -width 170
 
-set y 40
-$doc font -style bold -size 9
+# -- registration, four pairs -----------------------------------------------
+set y 46
+$doc font -style bold -size 9 -color black
 $doc text "Registration" -at [list 20 $y]
-set y [expr {$y + 4}]
 
-# 1: the classic target in all four plates at once
-registrationTarget $doc 32 [expr {$y + 10}] 6
-# 2: one ring per plate, concentric
-separationTarget $doc 70 [expr {$y + 10}] 7 $plates
-# 3: the four squares, which is the process mark again at a readable size
-processMark $doc 100 [expr {$y + 4}] 6
-# 4: a rosette in all four plates
-rosette $doc 145 [expr {$y + 10}] 8 {cmyk 1 1 1 1}
+set left 40
+set right 72
+set step 21
+set cy [expr {$y + 12}]
 
-$doc font -style {} -size 6.5 -color black
-foreach {x label} {32 "cmyk 1 1 1 1" 70 "one ring per plate"
-                   106 "the four plates" 145 "rosette, 36 rays"} {
-    $doc text $label -at [list $x [expr {$y + 22}]] -align center
+# 1: one ring per plate. In register they are concentric; out of register the
+#    stack opens up, and the direction it opens in names the plate that moved.
+set r 8
+foreach {letter colour} $plates {
+    $doc circle -at [list $left $cy] -radius $r -stroke $colour -width 1.1
+    set r [expr {$r - 1.8}]
 }
-set y [expr {$y + 28}]
+crosshair $doc $left $cy 9.5
+quadMark $doc $right $cy 4 0
+
+# 2: a quartered target, one plate per quadrant - a shift shows as a step
+#    where two quadrants meet.
+set cy [expr {$cy + $step}]
+set angle 90
+foreach {letter colour} $plates {
+    wedge $doc $left $cy 8 $angle 90 $colour
+    incr angle 90
+}
+crosshair $doc $left $cy 9.5
+quadMark $doc $right $cy 4 1
+
+# 3: a rosette per plate, one over the other - the moire figure.
+set cy [expr {$cy + $step}]
+foreach {letter colour} $plates {
+    rosette $doc $left $cy 8 $colour 20
+}
+crosshair $doc $left $cy 9.5
+quadMark $doc $right $cy 3 1
+
+# 4: the plain target, every plate drawing the same figure. If they register,
+#    the lines coincide and it stays black on white.
+set cy [expr {$cy + $step}]
+foreach radius {8 5.5 3} {
+    $doc circle -at [list $left $cy] -radius $radius -stroke $allPlates \
+        -width 0.4
+}
+$doc circle -at [list $left $cy] -radius 1.4 -fill $allPlates
+crosshair $doc $left $cy 9.5
+rosette $doc $right $cy 5.5 $allPlates 24
+
+$doc font -style {} -size 7 -color black
+$doc text "Top to bottom, on the left: one ring per plate; a quartered\
+    target, one plate to a quadrant; four rosettes over one another; and the\
+    plain target every plate draws alike. On the right the four-square mark -\
+    as outlined letters, then filled - and a rosette in all four plates." \
+    -at [list 95 [expr {$y + 6}]] -width 95
+
+set y [expr {$cy + 15}]
 
 # -- the screens ------------------------------------------------------------
 #
-# What a loupe is for. Each patch is ONE TILING PATTERN: the tile is drawn
-# once and repeated by the reader, so a field of thousands of dots costs the
-# file one small stream. A dot screen shows whether the press holds its
-# tones, a line screen whether it doubles, a cross screen whether it slurs in
-# one direction, and the rosette whether the four rulings beat.
-$doc font -style bold -size 9
+# Each patch is ONE TILING PATTERN: the tile is drawn once and repeated by
+# the reader, so a field of thousands of dots costs the file one small
+# stream. A dot screen shows whether the press holds its tones, a line screen
+# whether it doubles, a cross screen whether it slurs in one direction.
+$doc font -style bold -size 9 -color black
 $doc text "Screens - one tiling pattern per patch" -at [list 20 $y]
 set y [expr {$y + 5}]
 
@@ -337,18 +434,13 @@ foreach {letter solid} $plates {
             $doc rect -at {0 0} -size {0.5 1.6} -fill $solid
         }} $doc $solid]
     foreach screen {dots lines cross} {
-        $doc rect -at [list $x $y] -size {10 10} \
+        $doc rect -at [list $x $y] -size {11 11} \
             -fill [list pattern $screen$letter]
-        set x [expr {$x + 10.5}]
+        set x [expr {$x + 12}]
     }
     $doc font -style bold -size 7 -color black
-    $doc text $letter -at [list [expr {$x - 16}] [expr {$y + 14}]] -align center
-    # And a rosette in the plate's own colour beside its three screens. The
-    # widths add up: four plates of three patches and a rosette have to fit
-    # between 20 and 190 mm, which is 42.5 mm each. Measured, not guessed -
-    # the first arrangement put the K rosette off the right edge.
-    rosette $doc [expr {$x + 5}] [expr {$y + 5}] 4.5 $solid 24
-    set x [expr {$x + 11}]
+    $doc text $letter -at [list [expr {$x - 18}] [expr {$y + 15}]] -align center
+    set x [expr {$x + 6}]
 }
 set y [expr {$y + 20}]
 
@@ -356,33 +448,31 @@ set y [expr {$y + 20}]
 #
 # The one figure that cannot be a tiling pattern: a screen whose DOT GROWS
 # across the field. A tile is the same everywhere by definition, so this is
-# drawn dot by dot - which is also what a press does, and what the ramp above
-# only approximates with continuous tone.
+# drawn dot by dot - which is also what a press does.
 $doc font -style bold -size 9 -color black
 $doc text "Screened ramps - the dot grows, so no tile can do it" \
     -at [list 20 $y]
 set y [expr {$y + 5}]
 foreach {letter solid} $plates {
-    set columns 60
-    set rows 5
+    set columns 70
+    set rows 4
     for {set column 0} {$column < $columns} {incr column} {
-        # From nearly closed at the left to nearly open at the right.
         set coverage [expr {1.0 - double($column) / $columns}]
-        set radius [expr {0.9 * sqrt($coverage)}]
+        set radius [expr {0.85 * sqrt($coverage)}]
         for {set row 0} {$row < $rows} {incr row} {
             # Every other row offset by half a step: that is what makes a
             # screen a screen rather than a grid of dots.
             set shift [expr {$row % 2 ? 1.0 : 0.0}]
-            $doc circle -at [list [expr {20 + $column * 2.0 + $shift}] \
+            $doc circle -at [list [expr {25 + $column * 2.3 + $shift}] \
                 [expr {$y + $row * 1.9 + 1}]] -radius $radius -fill $solid
         }
     }
-    $doc font -size 7 -color black
-    $doc text $letter -at [list 145 [expr {$y + 5}]]
-    set y [expr {$y + 12}]
+    $doc font -style bold -size 7 -color black
+    $doc text $letter -at [list 20 [expr {$y + 5}]]
+    set y [expr {$y + 10}]
 }
 
-# -- overprint, the point of the whole page ---------------------------------
+# -- overprint --------------------------------------------------------------
 #
 # Two rows of the same three inks. In the first the magenta and yellow bars
 # knock the cyan out; in the second they overprint. On screen both rows look
@@ -390,36 +480,33 @@ foreach {letter solid} $plates {
 # overprinting and no validator reports it. The file differs, and the press
 # does.
 set y [expr {$y + 4}]
-$doc font -style bold -size 11 -color black
+$doc font -style bold -size 10 -color black
 $doc text "Overprint: the one thing no reader shows" -at [list 20 $y]
-set y [expr {$y + 6}]
-$doc font -style {} -size 8
+set y [expr {$y + 5}]
+$doc font -style {} -size 7.5
 $doc text "Both rows are a cyan bar with magenta and yellow across it. The\
     first knocks out, the second overprints - and comes off a press as a\
     different sheet: blue where the magenta crosses the cyan, green where the\
     yellow does, and no white edges where the plates shift." \
     -at [list 20 $y] -width 170
-set y [expr {$y + 14}]
+set y [expr {$y + 12}]
 
 foreach {label over} {"knocked out - the default" 0 "overprinted" 1} {
-    $doc rect -at [list 20 $y] -size {60 10} -fill {cmyk 1 0 0 0}
-    $doc rect -at [list 40 $y] -size {14 10} -fill {cmyk 0 1 0 0} \
+    $doc rect -at [list 20 $y] -size {60 9} -fill {cmyk 1 0 0 0}
+    $doc rect -at [list 40 $y] -size {14 9} -fill {cmyk 0 1 0 0} \
         -overprint $over
-    $doc rect -at [list 60 $y] -size {14 10} -fill {cmyk 0 0 1 0} \
+    $doc rect -at [list 60 $y] -size {14 9} -fill {cmyk 0 0 1 0} \
         -overprint $over
     $doc font -size 7 -color black
     $doc text "-overprint $over - $label" -at [list 86 [expr {$y + 3}]]
-    set y [expr {$y + 13}]
+    set y [expr {$y + 12}]
 }
 
-# And the trap in the same figure, said rather than left to be found: the
-# second row is the one a printer wants for black text and the one that
-# ruins a light colour.
-$doc font -size 7.5 -color {0.55 0.15 0.15}
-$doc text "Overprinting is right for black text and wrong for a light\
-    colour: yellow over cyan, overprinted, is green - the yellow was wanted\
-    and green comes out. Nothing on a screen will tell you." \
-    -at [list 20 $y] -width 170
+# The trap in the same figure, said rather than left to be found.
+$doc font -size 7 -color {cmyk 0 0.85 0.85 0.2}
+$doc text "Overprinting is right for black text and wrong for a light colour:\
+    yellow over cyan, overprinted, is green - the yellow was wanted and green\
+    comes out. Nothing on a screen will tell you." -at [list 20 $y] -width 170
 
 # What the file actually carries, read back out of it rather than asserted.
 set states [lsort [dict keys [$doc resource ExtGState]]]

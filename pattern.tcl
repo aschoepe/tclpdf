@@ -47,7 +47,8 @@ oo::define ::tclpdf::document::document {
       names {return [dict keys [my state patterns]]}
       size {return [my PatternSize {*}$args]}
       default {
-        return -code error "tclpdf: unknown pattern subcommand \"$subcommand\"\
+        return -code error -errorcode [list TCLPDF PATTERN SUBCOMMAND $subcommand] \
+            "tclpdf: unknown pattern subcommand \"$subcommand\"\
             - known are: create, names, size"
       }
     }
@@ -58,11 +59,13 @@ oo::define ::tclpdf::document::document {
       size {} step {} script {} unit {} matrix {} origin {}
     } $args "pattern create"]
     if {[dict get $options size] eq {}} {
-      return -code error "tclpdf: pattern create needs -size {width height}"
+      return -code error -errorcode [list TCLPDF PATTERN ARGUMENT size] \
+          "tclpdf: pattern create needs -size {width height}"
     }
     set patterns [my state patterns]
     if {[dict exists $patterns $name]} {
-      return -code error "tclpdf: a pattern named \"$name\" already exists"
+      return -code error -errorcode [list TCLPDF PATTERN NAME $name] \
+          "tclpdf: a pattern named \"$name\" already exists"
     }
     set unit [dict get $options unit]
     # Two numbers each, counted before they are read: -size {5} or -step
@@ -74,13 +77,15 @@ oo::define ::tclpdf::document::document {
     foreach key {size step} {
       set value [dict get $options $key]
       if {$value ne {} && [llength $value] != 2} {
-        return -code error "tclpdf: -$key of pattern \"$name\" is {width\
+        return -code error -errorcode [list TCLPDF PATTERN ARGUMENT $key] \
+            "tclpdf: -$key of pattern \"$name\" is {width\
             height}, not \"$value\""
       }
     }
     lassign [my extent [dict get $options size] $unit] widthPoints heightPoints
     if {$widthPoints <= 0 || $heightPoints <= 0} {
-      return -code error "tclpdf: -size of pattern \"$name\" is\
+      return -code error -errorcode [list TCLPDF PATTERN ARGUMENT size] \
+          "tclpdf: -size of pattern \"$name\" is\
           {[dict get $options size]} - a tile needs a width and a height above zero"
     }
     # The step is how far apart the tiles sit. Equal to the tile size they
@@ -97,7 +102,8 @@ oo::define ::tclpdf::document::document {
     # is permitted there and left alone.
     foreach {axis step} [list X $stepX Y $stepY] {
       if {$step == 0} {
-        return -code error "tclpdf: the ${axis} step of pattern \"$name\"\
+        return -code error -errorcode [list TCLPDF PATTERN STEP $axis] \
+            "tclpdf: the ${axis} step of pattern \"$name\"\
             is 0 - a step shall not be zero (ISO 32000-1 Table 75)"
       }
     }
@@ -184,12 +190,14 @@ oo::define ::tclpdf::document::document {
     set matrix [dict get $options matrix]
     set origin [dict get $options origin]
     if {$matrix ne {} && $origin ne {}} {
-      return -code error "tclpdf: pattern \"$name\" takes either -matrix or\
+      return -code error -errorcode [list TCLPDF PATTERN ARGUMENT matrix] \
+          "tclpdf: pattern \"$name\" takes either -matrix or\
           -origin, not both - a matrix carries its own translation"
     }
     if {$origin ne {}} {
       if {[llength $origin] != 2} {
-        return -code error "tclpdf: -origin of pattern \"$name\" is a point\
+        return -code error -errorcode [list TCLPDF PATTERN ARGUMENT origin] \
+            "tclpdf: -origin of pattern \"$name\" is a point\
             {x y}, not \"$origin\""
       }
       return [::tclpdf::geometry translate {*}[my coords {*}$origin]]
@@ -212,7 +220,8 @@ oo::define ::tclpdf::document::document {
   method PatternSize {name} {
     set patterns [my state patterns]
     if {![dict exists $patterns $name]} {
-      return -code error "tclpdf: no pattern named \"$name\""
+      return -code error -errorcode [list TCLPDF PATTERN NAME $name] \
+          "tclpdf: no pattern named \"$name\""
     }
     set pattern [dict get $patterns $name]
     set unit [my cget -unit]
@@ -275,7 +284,8 @@ oo::define ::tclpdf::document::document {
       if {$was != $now} {
         set there [expr {$was ? "a form or a pattern" : "the page"}]
         set here [expr {$now ? "a form or a pattern" : "the page"}]
-        return -code error "tclpdf: pattern \"$name\" was placed on $there and\
+        return -code error -errorcode [list TCLPDF PATTERN SPACE $name] \
+            "tclpdf: pattern \"$name\" was placed on $there and\
             cannot be used on $here - a pattern belongs to the space of the\
             stream that carries it (ISO 32000-2, 8.7.2), and the two cannot be\
             converted into each other because a form may be placed more than\
@@ -289,9 +299,10 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $shadings $name]} {
       return [dict get $shadings $name]
     }
-    return -code error "tclpdf: no pattern named \"$name\" - known are:\
+    return -code error -errorcode [list TCLPDF PATTERN NAME $name] \
+        "tclpdf: no pattern named \"$name\" - known are:\
         [join [concat [dict keys $patterns] [dict keys $shadings]] {, }]"
   }
 }
 
-package provide tclpdf::pattern 1.5
+package provide tclpdf::pattern 1.6

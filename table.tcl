@@ -126,7 +126,8 @@ oo::define ::tclpdf::document::document {
         layout {return [my TableLayout {*}[lrange $args 1 end]]}
         themes {return [dict keys $::tclpdf::table::themes]}
         default {
-          return -code error "tclpdf: unknown table subcommand\
+          return -code error -errorcode [list TCLPDF TABLE SUBCOMMAND unknown] \
+              "tclpdf: unknown table subcommand\
               \"[lindex $args 0]\" - known are: layout, themes; to draw a\
               table pass options starting with a dash"
         }
@@ -194,7 +195,8 @@ oo::define ::tclpdf::document::document {
     } $arguments "table"]
     if {![llength [dict get $options body]] &&
         ![llength [dict get $options head]]} {
-      return -code error "tclpdf: table needs -head or -body"
+      return -code error -errorcode [list TCLPDF TABLE ARGUMENT rows] \
+          "tclpdf: table needs -head or -body"
     }
     set options [my TableTheme $options]
 
@@ -214,18 +216,21 @@ oo::define ::tclpdf::document::document {
     foreach option {top bottom} {
       set value [dict get $options $option]
       if {$value ne {} && (![string is double -strict $value] || $value < 0)} {
-        return -code error "tclpdf: -$option takes a distance from the top of\
+        return -code error -errorcode [list TCLPDF TABLE ARGUMENT $option] \
+            "tclpdf: -$option takes a distance from the top of\
             the page in the document unit, not \"$value\""
       }
     }
     set minimum [dict get $options minRowHeight]
     if {![string is double -strict $minimum] || $minimum < 0} {
-      return -code error "tclpdf: -minRowHeight takes a height of 0 or more in\
+      return -code error -errorcode [list TCLPDF TABLE ARGUMENT minRowHeight] \
+          "tclpdf: -minRowHeight takes a height of 0 or more in\
           the document unit, not \"$minimum\""
     }
     set repeat [dict get $options repeatColumns]
     if {![string is integer -strict $repeat] || $repeat < 0} {
-      return -code error "tclpdf: -repeatColumns takes a number of leading\
+      return -code error -errorcode [list TCLPDF TABLE ARGUMENT repeatColumns] \
+          "tclpdf: -repeatColumns takes a number of leading\
           columns, 0 or more, not \"$repeat\""
     }
 
@@ -282,13 +287,15 @@ oo::define ::tclpdf::document::document {
     set bottom [dict get $options bottom]
     lassign [my page size] -> pageHeight
     if {$bottom > $pageHeight} {
-      return -code error "tclpdf: -bottom [format %g $bottom] lies below the\
+      return -code error -errorcode [list TCLPDF TABLE ROOM bottom] \
+          "tclpdf: -bottom [format %g $bottom] lies below the\
           foot of page [my page current], which is [format %g $pageHeight]\
           high - -bottom is where a breaking table stops, and has to be on the\
           page"
     }
     if {$bottom <= $top} {
-      return -code error "tclpdf: -bottom [format %g $bottom] is not below\
+      return -code error -errorcode [list TCLPDF TABLE ROOM bottom] \
+          "tclpdf: -bottom [format %g $bottom] is not below\
           -top [format %g $top] on page [my page current] - the table would\
           have no room between where it resumes and where it stops"
     }
@@ -301,7 +308,8 @@ oo::define ::tclpdf::document::document {
   method TablePrepare {arguments} {
     set options [my TableOptions $arguments]
     if {[dict get $options at] eq {}} {
-      return -code error "tclpdf: table needs -at {x y}"
+      return -code error -errorcode [list TCLPDF TABLE ARGUMENT at] \
+          "tclpdf: table needs -at {x y}"
     }
     set options [my TableArea $options]
     lassign [dict get $options at] left top
@@ -368,7 +376,8 @@ oo::define ::tclpdf::document::document {
   method TableTheme {options} {
     set name [dict get $options theme]
     if {![dict exists $::tclpdf::table::themes $name]} {
-      return -code error "tclpdf: unknown table theme \"$name\" - known are:\
+      return -code error -errorcode [list TCLPDF TABLE THEME $name] \
+          "tclpdf: unknown table theme \"$name\" - known are:\
           [join [dict keys $::tclpdf::table::themes] {, }]"
     }
     set theme [dict get $::tclpdf::table::themes $name]
@@ -574,7 +583,8 @@ oo::define ::tclpdf::document::document {
         set parts [list "[join [lrange $parts 0 end-1] {, }] and\
             [lindex $parts end]"]
       }
-      return -code error "tclpdf: what has to stand together on a page -\
+      return -code error -errorcode [list TCLPDF TABLE ROOM together] \
+          "tclpdf: what has to stand together on a page -\
           [lindex $parts 0] - is [format %.2f $needed] high, more than the\
           [format %.2f $room] between -top [format %g [dict get $options top]]\
           and -bottom [format %g [dict get $options bottom]] - a table is\
@@ -786,4 +796,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.7
+package provide tclpdf::table 1.8

@@ -37,11 +37,13 @@ oo::define ::tclpdf::document::document {
       at {} size {} url {} page {} to {} zoom {} tooltip {} structure {}
     } $args "link"]
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
-      return -code error "tclpdf: link needs -at {x y} and -size {w h}"
+      return -code error -errorcode [list TCLPDF LINK ARGUMENT rect] \
+          "tclpdf: link needs -at {x y} and -size {w h}"
     }
     if {[dict get $options url] eq {} && [dict get $options page] eq {}
         && [dict get $options structure] eq {}} {
-      return -code error "tclpdf: link needs -url, -page or -structure"
+      return -code error -errorcode [list TCLPDF LINK ARGUMENT target] \
+          "tclpdf: link needs -url, -page or -structure"
     }
     # Annotation flags (/F) and actions (/A, the URI link) are PDF 1.1
     # (Reference 1.7, Table 8.15 and 8.5); a 1.0 file has neither.
@@ -215,4 +217,4 @@ oo::define ::tclpdf::document::document {
   # that a document without links costs nothing.
 }
 
-package provide tclpdf::link 1.6
+package provide tclpdf::link 1.7

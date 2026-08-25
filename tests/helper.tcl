@@ -97,6 +97,39 @@ proc ::tclpdfTest::png {width height depth colorType rows {trns {}} {plte {}}} {
 # The same loop stands in graphics.test and font.test, which is one copy too
 # many already; those two do further work inside it and can move here when
 # somebody looks at them.
+# Every module of the package, with its source text - the loop three guards
+# were writing out for themselves.
+#
+#   ::tclpdfTest::eachModule name text {
+#       ... $name is "font.tcl", $text is what is in it ...
+#   }
+#
+# The generated pkgIndex.tcl is left out: it is not a module, it is written by
+# configure, and every guard that walked the tree had to exclude it by hand.
+# Sorted, so a failure lists the modules in the same order twice running.
+proc ::tclpdfTest::eachModule {nameVar textVar script} {
+  upvar 1 $nameVar name $textVar text
+  set root [file dirname [file dirname [file normalize [info script]]]]
+  foreach path [lsort [glob -directory $root *.tcl]] {
+    set name [file tail $path]
+    if {$name eq "pkgIndex.tcl"} {
+      continue
+    }
+    set channel [open $path r]
+    set text [read $channel]
+    close $channel
+    # 1 is "continue", 2 is "return" from the caller, and both have to reach
+    # it rather than stopping here: a guard that returns early out of this
+    # loop would otherwise return out of the loop only.
+    set code [catch {uplevel 1 $script} result options]
+    if {$code == 1 || $code == 2} {
+      dict incr options -level
+      return -options $options $result
+    }
+  }
+  return
+}
+
 proc ::tclpdfTest::objects {doc pattern} {
   set writer [$doc writer]
   set bodies {}

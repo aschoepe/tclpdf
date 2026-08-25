@@ -53,7 +53,8 @@ oo::define ::tclpdf::document::document {
     # one, because /ByteRange describes its own finished file).
     set objection [my state needsFile]
     if {$objection ne {}} {
-      return -code error $objection
+      return -code error -errorcode [list TCLPDF OUTPUT CHANNEL needsFile] \
+          $objection
     }
     set trailerPairs [my OutputBuild]
     $tclpdfWriter writeChannel $channel $trailerPairs
@@ -95,7 +96,8 @@ oo::define ::tclpdf::document::document {
   # is how two ways of writing end up producing different documents.
   method OutputBuild {} {
     if {![llength $tclpdfPages]} {
-      return -code error "tclpdf: the document has no pages"
+      return -code error -errorcode [list TCLPDF OUTPUT EMPTY pages] \
+          "tclpdf: the document has no pages"
     }
     my emit beforeWrite
 
@@ -282,4 +284,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::output 1.7
+package provide tclpdf::output 1.8

@@ -61,7 +61,8 @@ oo::define ::tclpdf::document::document {
     ::tclpdf::option point [dict get $options at] -at leader
     set width [dict get $options width]
     if {$width eq {}} {
-      return -code error "tclpdf: leader needs -width - the row is filled to\
+      return -code error -errorcode [list TCLPDF LEADER ARGUMENT width] \
+          "tclpdf: leader needs -width - the row is filled to\
           that width, and without it there is nothing to fill"
     }
     # Checked as [text] checks its width, and before anything is drawn: a
@@ -72,12 +73,14 @@ oo::define ::tclpdf::document::document {
     # and the row was laid out with a NaN width - see the proc for what that
     # costs downstream.
     if {![::tclpdf::text::finite $width] || $width <= 0} {
-      return -code error "tclpdf: -width must be a positive number, not\
+      return -code error -errorcode [list TCLPDF LEADER ARGUMENT width] \
+          "tclpdf: -width must be a positive number, not\
           \"$width\""
     }
     set gap [dict get $options gap]
     if {![::tclpdf::text::finite $gap] || $gap < 0} {
-      return -code error "tclpdf: -gap takes a distance of 0 or more, not\
+      return -code error -errorcode [list TCLPDF LEADER ARGUMENT gap] \
+          "tclpdf: -gap takes a distance of 0 or more, not\
           \"$gap\""
     }
     # One element for the whole row rather than one per end: the heading and
@@ -263,4 +266,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::leader 1.3
+package provide tclpdf::leader 1.4

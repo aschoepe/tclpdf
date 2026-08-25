@@ -193,7 +193,8 @@ oo::define ::tclpdf::document::document {
       switch -- [lindex $args 0] {
         state {return [my state ua]}
         default {
-          return -code error "tclpdf: unknown ua subcommand\
+          return -code error -errorcode [list TCLPDF UA SUBCOMMAND unknown] \
+              "tclpdf: unknown ua subcommand\
               \"[lindex $args 0]\" - known is: state"
         }
       }
@@ -213,19 +214,22 @@ oo::define ::tclpdf::document::document {
     # 14289-2 Table 1). Anything else would be written into the metadata as
     # given and mean nothing to a validator.
     if {![regexp {^\d{4}$} [dict get $current revision]]} {
-      return -code error "tclpdf: -revision takes a four-digit year, not\
+      return -code error -errorcode [list TCLPDF UA ARGUMENT revision] \
+          "tclpdf: -revision takes a four-digit year, not\
           \"[dict get $current revision]\" - pdfuaid:rev is the year of the\
           edition claimed (ISO 14289-2 Table 1), 2024 for the first"
     }
     variable ::tclpdf::ua::declarations
     foreach level [dict get $current wtpdf] {
       if {![dict exists $declarations $level]} {
-        return -code error "tclpdf: -wtpdf takes [join [dict keys $declarations]\
+        return -code error -errorcode [list TCLPDF UA ARGUMENT wtpdf] \
+            "tclpdf: -wtpdf takes [join [dict keys $declarations]\
             { and }], not \"$level\" (WTPDF 6.1.2 and 6.1.3)"
       }
     }
     if {[llength [dict get $current wtpdf]] && [dict get $current part] != 2} {
-      return -code error "tclpdf: -wtpdf goes with PDF/UA-2 - WTPDF is a 2.0\
+      return -code error -errorcode [list TCLPDF UA STATE wtpdf] \
+          "tclpdf: -wtpdf goes with PDF/UA-2 - WTPDF is a 2.0\
           specification, and its accessibility level is UA-2 plus a\
           declaration. Use \[\$doc ua -part 2 -wtpdf accessibility\]"
     }
@@ -236,7 +240,8 @@ oo::define ::tclpdf::document::document {
     # first, which left the writer at 2.0 after the refusal - measured, the
     # PDF/A-3 file that followed had a %PDF-2.0 header.
     if {[dict get $current part] == 2 && [my state pdfa] ne {}} {
-      return -code error "tclpdf: PDF/UA-2 needs PDF 2.0 and PDF/A-3 is a PDF\
+      return -code error -errorcode [list TCLPDF UA STATE pdfa3] \
+          "tclpdf: PDF/UA-2 needs PDF 2.0 and PDF/A-3 is a PDF\
           1.7 format - the two cannot be claimed by one file. Use ua -part 1\
           with PDF/A-3, which is the combination ZUGFeRD needs"
     }
@@ -269,7 +274,8 @@ oo::define ::tclpdf::document::document {
         my state structureNamespace 1
       }
       default {
-        return -code error "tclpdf: PDF/UA part must be 1 or 2, not\
+        return -code error -errorcode [list TCLPDF UA PART number] \
+            "tclpdf: PDF/UA part must be 1 or 2, not\
             \"[dict get $current part]\" - part 1 is ISO 14289-1 on the PDF\
             1.7 path, part 2 is ISO 14289-2 and needs PDF 2.0"
       }
@@ -434,10 +440,12 @@ oo::define ::tclpdf::document::document {
     lappend problems {*}[my UaCheckFields]
     lappend problems {*}[my UaCheckAttachments]
     if {[llength $problems] == 1} {
-      return -code error "tclpdf: PDF/UA cannot be claimed - [lindex $problems 0]"
+      return -code error -errorcode [list TCLPDF UA CLAIM problems] \
+          "tclpdf: PDF/UA cannot be claimed - [lindex $problems 0]"
     }
     if {[llength $problems]} {
-      return -code error "tclpdf: PDF/UA cannot be claimed, [llength $problems]\
+      return -code error -errorcode [list TCLPDF UA CLAIM problems] \
+          "tclpdf: PDF/UA cannot be claimed, [llength $problems]\
           reasons:\n  - [join $problems "\n  - "]"
     }
     return
@@ -814,4 +822,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.5
+package provide tclpdf::ua 1.6

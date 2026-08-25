@@ -236,7 +236,8 @@ oo::define ::tclpdf::document::document {
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $arguments $context]
     if {[dict get $options width] eq {}} {
-      return -code error "tclpdf: a text block needs -width"
+      return -code error -errorcode [list TCLPDF TEXT BLOCK width] \
+          "tclpdf: a text block needs -width"
     }
     my TextBlockWidth [dict get $options width]
     my TextBlockDistances $options
@@ -277,31 +278,36 @@ oo::define ::tclpdf::document::document {
     # same words, for a caller that reaches it directly - but a paragraph of
     # [text] has to be refused before its mark.
     if {[dict get $options align] ni {left right center centre justify}} {
-      return -code error "tclpdf: -align must be left, right, center or\
+      return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
+          "tclpdf: -align must be left, right, center or\
           justify, not \"[dict get $options align]\""
     }
     set height [dict get $options height]
     if {$height ne {} && $height ne "max"
         && (![::tclpdf::text::finite $height] || $height < 0)} {
-      return -code error "tclpdf: -height takes a distance of 0 or more, or\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT height] \
+          "tclpdf: -height takes a distance of 0 or more, or\
           \"max\" for the rest of the type area, not \"$height\""
     }
     set paginate [dict get $options paginate]
     if {![string is boolean -strict $paginate]} {
-      return -code error "tclpdf: -paginate takes a boolean, not \"$paginate\""
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT paginate] \
+          "tclpdf: -paginate takes a boolean, not \"$paginate\""
     }
     if {$paginate && $height ne {} && $height ne "max"} {
       # It used to be replaced by max in silence, so "-paginate 1 -height 20"
       # filled the page and the caller was not told that the 20 meant
       # nothing.
-      return -code error "tclpdf: -paginate fills each page to the bottom of\
+      return -code error -errorcode [list TCLPDF TEXT PAGINATE height] \
+          "tclpdf: -paginate fills each page to the bottom of\
           the type area, which is -height max - a height of $height has no\
           place beside it; leave -height out or say -height max"
     }
     if {[dict get $options rotate] != 0 && ($height eq "max" || $paginate)} {
       # The type area is a band down the page; a turned block does not run
       # down the page, so there is nothing to measure it against.
-      return -code error "tclpdf: -height max and -paginate set an upright\
+      return -code error -errorcode [list TCLPDF TEXT PAGINATE rotate] \
+          "tclpdf: -height max and -paginate set an upright\
           block against the type area - they cannot be combined with -rotate"
     }
     # Columns: a count, a gutter between them, and whether the last page
@@ -310,7 +316,8 @@ oo::define ::tclpdf::document::document {
     # column before the next one begins.
     set columns [dict get $options columns]
     if {![string is integer -strict $columns] || $columns < 1} {
-      return -code error "tclpdf: -columns takes a whole number of 1 or more,\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT columns] \
+          "tclpdf: -columns takes a whole number of 1 or more,\
           not \"$columns\""
     }
     set gutter [dict get $options gutter]
@@ -320,12 +327,14 @@ oo::define ::tclpdf::document::document {
           [::tclpdf::geometry toPoints 5 mm] [my cget -unit]]
       dict set options gutter $gutter
     } elseif {![::tclpdf::text::finite $gutter] || $gutter < 0} {
-      return -code error "tclpdf: -gutter takes a distance of 0 or more, not\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT gutter] \
+          "tclpdf: -gutter takes a distance of 0 or more, not\
           \"$gutter\""
     }
     set balance [dict get $options balance]
     if {![string is boolean -strict $balance]} {
-      return -code error "tclpdf: -balance takes a boolean, not \"$balance\""
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT balance] \
+          "tclpdf: -balance takes a boolean, not \"$balance\""
     }
     # Checked HERE with the other booleans, and not where it is read. It used
     # to be read raw at the emergency break in the line breaker, so
@@ -336,28 +345,33 @@ oo::define ::tclpdf::document::document {
     # list, and a key that is not there cannot have been given a value.
     if {[dict exists $options emergencyHyphen]
         && ![string is boolean -strict [dict get $options emergencyHyphen]]} {
-      return -code error "tclpdf: -emergencyHyphen takes a boolean, not\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT emergencyHyphen] \
+          "tclpdf: -emergencyHyphen takes a boolean, not\
           \"[dict get $options emergencyHyphen]\""
     }
     if {$columns > 1 && $height ne "max" && !$paginate} {
-      return -code error "tclpdf: -columns fills one column to the bottom of\
+      return -code error -errorcode [list TCLPDF TEXT COLUMNS height] \
+          "tclpdf: -columns fills one column to the bottom of\
           the type area before it begins the next - it needs -height max or\
           -paginate"
     }
     if {$balance && $columns == 1} {
-      return -code error "tclpdf: -balance evens out the columns of the last\
+      return -code error -errorcode [list TCLPDF TEXT BALANCE columns] \
+          "tclpdf: -balance evens out the columns of the last\
           page - it needs -columns of 2 or more"
     }
     if {$balance && [llength [dict get $options avoid]]} {
       # The balance is found by measuring the columns without drawing them,
       # and the shapes are positions on the page that would make each
       # column break differently - the measurement would lie.
-      return -code error "tclpdf: -balance measures the columns without the\
+      return -code error -errorcode [list TCLPDF TEXT BALANCE avoid] \
+          "tclpdf: -balance measures the columns without the\
           page - it cannot be combined with -avoid"
     }
     set width [dict get $options width]
     if {($width - $gutter * ($columns - 1)) / double($columns) <= 0} {
-      return -code error "tclpdf: $columns columns with a gutter of\
+      return -code error -errorcode [list TCLPDF TEXT COLUMNS width] \
+          "tclpdf: $columns columns with a gutter of\
           [format %g $gutter] leave no width inside -width [format %g $width]"
     }
     my TextBlockDistances $options
@@ -429,7 +443,8 @@ oo::define ::tclpdf::document::document {
   # both roads use.
   method TextBlockWidth {width} {
     if {![string is double -strict $width] || $width <= 0} {
-      return -code error "tclpdf: -width must be a positive number, not\
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT width] \
+          "tclpdf: -width must be a positive number, not\
           \"$width\""
     }
     return $width
@@ -446,7 +461,8 @@ oo::define ::tclpdf::document::document {
       # [text::finite] rather than [string is double]: see the proc in
       # text.tcl for what a NaN costs once it is past a check.
       if {![::tclpdf::text::finite $value]} {
-        return -code error "tclpdf: -$name takes a distance in the document\
+        return -code error -errorcode [list TCLPDF TEXT ARGUMENT $name] \
+            "tclpdf: -$name takes a distance in the document\
             unit, not \"$value\""
       }
     }
@@ -1274,7 +1290,8 @@ oo::define ::tclpdf::document::document {
           # A fresh page, the whole rest still there: not one line fits into
           # the type area. Going on would add pages for ever.
           lassign [my page typeArea] -> areaTop -> areaBottom
-          return -code error "tclpdf: text -paginate: not one line fits into\
+          return -code error -errorcode [list TCLPDF TEXT PAGINATE area] \
+              "tclpdf: text -paginate: not one line fits into\
               the type area of page [expr {[my page current] + 1}] - the area is\
               [format %g [expr {$areaBottom - $areaTop}]] high\
               ([format %g $areaTop] to [format %g $areaBottom]) and the leading\
@@ -1627,7 +1644,8 @@ oo::define ::tclpdf::document::document {
         my TextRun $drawn $stretched $x $y $rotate 0 $lift $hyphen
       }
       default {
-        return -code error "tclpdf: -align must be left, right, center or\
+        return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
+            "tclpdf: -align must be left, right, center or\
             justify, not \"$align\""
       }
     }
@@ -1658,4 +1676,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.12
+package provide tclpdf::textBlock 1.13

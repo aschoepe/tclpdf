@@ -55,10 +55,12 @@ proc ::tclpdf::geometry::toPoints {value {unit mm}} {
   variable units
   set key [string tolower $unit]
   if {![dict exists $units $key]} {
-    return -code error "tclpdf: unknown unit \"$unit\" - use pt, px, mm, cm or in"
+    return -code error -errorcode [list TCLPDF GEOMETRY UNIT $unit] \
+        "tclpdf: unknown unit \"$unit\" - use pt, px, mm, cm or in"
   }
   if {![string is double -strict $value]} {
-    return -code error "tclpdf: not a measurement: \"$value\""
+    return -code error -errorcode [list TCLPDF GEOMETRY MEASURE $value] \
+        "tclpdf: not a measurement: \"$value\""
   }
   return [expr {$value * [dict get $units $key]}]
 }
@@ -68,7 +70,8 @@ proc ::tclpdf::geometry::fromPoints {value {unit mm}} {
   variable units
   set key [string tolower $unit]
   if {![dict exists $units $key]} {
-    return -code error "tclpdf: unknown unit \"$unit\" - use pt, px, mm, cm or in"
+    return -code error -errorcode [list TCLPDF GEOMETRY UNIT $unit] \
+        "tclpdf: unknown unit \"$unit\" - use pt, px, mm, cm or in"
   }
   return [expr {$value / [dict get $units $key]}]
 }
@@ -100,7 +103,8 @@ proc ::tclpdf::geometry::pageSize {format {orientation portrait} {unit mm}} {
   } else {
     set key [string tolower $format]
     if {![dict exists $sizes $key]} {
-      return -code error "tclpdf: unknown page format \"$format\" -\
+      return -code error -errorcode [list TCLPDF GEOMETRY FORMAT $format] \
+          "tclpdf: unknown page format \"$format\" -\
           known are: [join [lsort [dict keys $sizes]] {, }]"
     }
     lassign [dict get $sizes $key] width height
@@ -123,7 +127,8 @@ proc ::tclpdf::geometry::pageSize {format {orientation portrait} {unit mm}} {
       }
     }
     default {
-      return -code error "tclpdf: orientation must be portrait or landscape,\
+      return -code error -errorcode [list TCLPDF GEOMETRY ORIENTATION $orientation] \
+          "tclpdf: orientation must be portrait or landscape,\
           not \"$orientation\""
     }
   }
@@ -231,16 +236,19 @@ proc ::tclpdf::geometry::singular {matrix} {
 # 1*4 - 2*2 is exactly 0 in floating point.
 proc ::tclpdf::geometry::check {matrix what} {
   if {[llength $matrix] != 6} {
-    return -code error "tclpdf: -matrix of $what is six numbers {a b c d e f},\
+    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX $what] \
+        "tclpdf: -matrix of $what is six numbers {a b c d e f},\
         not [llength $matrix]"
   }
   foreach number $matrix {
     if {![string is double -strict $number] || [catch {expr {$number - $number}}]} {
-      return -code error "tclpdf: -matrix of $what takes numbers, not \"$number\""
+      return -code error -errorcode [list TCLPDF GEOMETRY MATRIX $what] \
+          "tclpdf: -matrix of $what takes numbers, not \"$number\""
     }
   }
   if {[singular $matrix]} {
-    return -code error "tclpdf: -matrix of $what is singular ({$matrix}) -\
+    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX $what] \
+        "tclpdf: -matrix of $what is singular ({$matrix}) -\
         a*d - b*c must not be zero, or everything under it collapses onto a\
         line; a value below 0.00001 counts as zero here, because that is what\
         a PDF real holds (7.3.3) and what the file would say"
@@ -270,12 +278,14 @@ proc ::tclpdf::geometry::checkFit {options what} {
   if {[dict exists $options size] && [dict get $options size] ne {}} {
     set size [dict get $options size]
     if {[llength $size] != 2} {
-      return -code error "tclpdf: -size of $what is {width height}, not\
+      return -code error -errorcode [list TCLPDF GEOMETRY SIZE $what] \
+          "tclpdf: -size of $what is {width height}, not\
           \"$size\""
     }
     foreach value $size {
       if {![string is double -strict $value] || $value <= 0} {
-        return -code error "tclpdf: -size of $what takes lengths above zero,\
+        return -code error -errorcode [list TCLPDF GEOMETRY SIZE $what] \
+            "tclpdf: -size of $what takes lengths above zero,\
             not \"$value\""
       }
     }
@@ -286,11 +296,12 @@ proc ::tclpdf::geometry::checkFit {options what} {
     }
     set value [dict get $options $key]
     if {![string is double -strict $value] || $value <= 0} {
-      return -code error "tclpdf: -$key of $what is a $noun above zero, not\
+      return -code error -errorcode [list TCLPDF GEOMETRY ARGUMENT $key] \
+          "tclpdf: -$key of $what is a $noun above zero, not\
           \"$value\""
     }
   }
   return
 }
 
-package provide tclpdf::geometry 1.2
+package provide tclpdf::geometry 1.3

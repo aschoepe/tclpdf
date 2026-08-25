@@ -75,7 +75,8 @@ oo::define ::tclpdf::document::document {
         extension {return [my PdfaExtension {*}[lrange $args 1 end]]}
         state {return [my state pdfa]}
         default {
-          return -code error "tclpdf: unknown pdfa subcommand\
+          return -code error -errorcode [list TCLPDF PDFA SUBCOMMAND unknown] \
+              "tclpdf: unknown pdfa subcommand\
               \"[lindex $args 0]\" - known are: extension, state"
         }
       }
@@ -128,10 +129,12 @@ oo::define ::tclpdf::document::document {
     set profile [dict get $current profile]
     if {![file exists $profile]} {
       if {$profile eq $::tclpdf::pdfa::icc} {
-        return -code error "tclpdf: the sRGB profile shipped with the package\
+        return -code error -errorcode [list TCLPDF PDFA PROFILE $profile] \
+            "tclpdf: the sRGB profile shipped with the package\
             is missing at $profile - the installation is incomplete"
       }
-      return -code error "tclpdf: the ICC profile \"$profile\" does not exist"
+      return -code error -errorcode [list TCLPDF PDFA PROFILE $profile] \
+          "tclpdf: the ICC profile \"$profile\" does not exist"
     }
     # Stored NORMALIZED, so that the shipped profile is recognised however
     # its path was spelled: "-profile icc/sRGB.icc" from the package
@@ -157,13 +160,15 @@ oo::define ::tclpdf::document::document {
     # recipient, where nobody can tell any more which call caused it.
     switch -- [dict get $current part] {
       1 {
-        return -code error "tclpdf: PDF/A-1 forbids transparency, which\
+        return -code error -errorcode [list TCLPDF PDFA PART transparency] \
+            "tclpdf: PDF/A-1 forbids transparency, which\
             tclpdf writes through \"opacity\" and through PNG soft masks -\
             use part 2, which is PDF/A-1 plus everything that was missing"
       }
       2 - 3 {}
       default {
-        return -code error "tclpdf: PDF/A part must be 2 or 3 - part\
+        return -code error -errorcode [list TCLPDF PDFA PART number] \
+            "tclpdf: PDF/A part must be 2 or 3 - part\
             [dict get $current part] needs PDF 2.0, which tclpdf does not write"
       }
     }
@@ -173,7 +178,8 @@ oo::define ::tclpdf::document::document {
     # Part 3 was made for exactly that case. The mirror check sits in
     # attach.tcl for an attachment that arrives after the claim.
     if {[dict get $current part] == 2 && [llength [my state attachments]]} {
-      return -code error "tclpdf: PDF/A-2 admits no embedded file that is\
+      return -code error -errorcode [list TCLPDF PDFA ATTACHMENT part2] \
+          "tclpdf: PDF/A-2 admits no embedded file that is\
           not itself PDF/A (ISO 19005-2, 6.8), and this document carries\
           [llength [my state attachments]] attachment(s) - use part 3, which\
           admits any file"
@@ -183,7 +189,8 @@ oo::define ::tclpdf::document::document {
     # "The keyword Encrypt shall not be used in the trailer dictionary".
     # Said at whichever of the two calls comes second.
     if {[my state encrypt] ne {}} {
-      return -code error "tclpdf: PDF/A forbids encryption and this document\
+      return -code error -errorcode [list TCLPDF PDFA STATE encrypted] \
+          "tclpdf: PDF/A forbids encryption and this document\
           is encrypted (ISO 19005, the Encrypt keyword shall not be used in\
           the trailer dictionary) - drop the \[\$doc encrypt\] call or the pdfa\
           claim, they cannot both stand"
@@ -196,13 +203,15 @@ oo::define ::tclpdf::document::document {
     # 1.7 - so a 2.0 seen here always came from the caller, never from pdfa
     # itself.
     if {[my state ua] ne {} && [dict get [my state ua] part] == 2} {
-      return -code error "tclpdf: PDF/A-[dict get $current part] is a PDF 1.7\
+      return -code error -errorcode [list TCLPDF PDFA STATE ua2] \
+          "tclpdf: PDF/A-[dict get $current part] is a PDF 1.7\
           format and PDF/UA-2 needs PDF 2.0 - the two cannot be claimed by\
           one file. Use ua 1 with pdfa -part 3, which is the combination\
           ZUGFeRD needs"
     }
     if {[package vcompare [[my writer] version] 2.0] >= 0} {
-      return -code error "tclpdf: PDF/A-[dict get $current part] is a PDF 1.7\
+      return -code error -errorcode [list TCLPDF PDFA STATE version] \
+          "tclpdf: PDF/A-[dict get $current part] is a PDF 1.7\
           format and this document is set to PDF [[my writer] version] -\
           leave the version alone, pdfa raises it to 1.7 by itself"
     }
@@ -228,7 +237,8 @@ oo::define ::tclpdf::document::document {
         my PdfaCheckTagged $level
       }
       default {
-        return -code error "tclpdf: PDF/A conformance must be B, U or A, not\
+        return -code error -errorcode [list TCLPDF PDFA CONFORMANCE name] \
+            "tclpdf: PDF/A conformance must be B, U or A, not\
             \"[dict get $current conformance]\""
       }
     }
@@ -275,7 +285,8 @@ oo::define ::tclpdf::document::document {
     # to add a schema came out claiming PDF/A-3B - a claim its fonts and
     # colours had never been held to.
     if {[my state pdfa] eq {}} {
-      return -code error "tclpdf: pdfa extension needs a PDF/A declaration to\
+      return -code error -errorcode [list TCLPDF PDFA STATE undeclared] \
+          "tclpdf: pdfa extension needs a PDF/A declaration to\
           add to - call pdfa first"
     }
     # [xmpRaw] first, because it is the one that can refuse: a contribution
@@ -358,7 +369,8 @@ oo::define ::tclpdf::document::document {
   method PdfaCheckFonts {} {
     set missing [my fontsWithoutProgram]
     if {[llength $missing]} {
-      return -code error "tclpdf: PDF/A requires every font to be embedded,\
+      return -code error -errorcode [list TCLPDF PDFA FONT embedded] \
+          "tclpdf: PDF/A requires every font to be embedded,\
           but [join $missing {, }] [expr {[llength $missing] > 1 ?
           {are standard fonts} : {is a standard font}}] - embed a face with\
           \"font embed\" and use it, or drop the pdfa declaration"
@@ -426,7 +438,8 @@ oo::define ::tclpdf::document::document {
     set paint [dict get {GRAY grey RGB {RGB or grey} CMYK {CMYK or grey}} $intent]
     set profile [dict get {DeviceRGB {an RGB profile} DeviceCMYK {a CMYK profile}
         {DeviceRGB DeviceCMYK} {an RGB or CMYK profile}} $offending]
-    return -code error "tclpdf: PDF/A with the $intent output intent\
+    return -code error -errorcode [list TCLPDF PDFA COLOUR intent] \
+        "tclpdf: PDF/A with the $intent output intent\
         \"[file tail [dict get [my state pdfa] profile]]\" cannot carry\
         [join $offending { or }] (ISO 19005-2, 6.2.4.3) - used\
         [join $users {; }]; paint in $paint, or give $profile with pdfa\
@@ -453,7 +466,8 @@ oo::define ::tclpdf::document::document {
     if {$level ne "A" || [my state tagged] eq "1"} {
       return
     }
-    return -code error "tclpdf: PDF/A level A needs a tagged document -\
+    return -code error -errorcode [list TCLPDF PDFA CONFORMANCE tagged] \
+        "tclpdf: PDF/A level A needs a tagged document -\
         a structure tree and MarkInfo. Call \[\$doc tagged 1\] before\
         drawing, or use level U, which guarantees extractable text"
   }
@@ -475,7 +489,8 @@ oo::define ::tclpdf::document::document {
       return
     }
     set problems [my GraphicsUndescribed "ISO 19005 6.7.3"]
-    return -code error "tclpdf: PDF/A-[dict get [my state pdfa] part]A\
+    return -code error -errorcode [list TCLPDF PDFA CONFORMANCE reachable] \
+        "tclpdf: PDF/A-[dict get [my state pdfa] part]A\
         promises reachable content, and [llength $problems]\
         graphic[expr {[llength $problems] == 1 ? {} : {s}}] would go out as\
         [expr {[llength $problems] == 1 ? {an artifact} : {artifacts}}] a\
@@ -586,4 +601,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.10
+package provide tclpdf::pdfa 1.11

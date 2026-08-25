@@ -257,7 +257,8 @@ oo::define ::tclpdf::document::document {
       size {return [my ImageSize {*}$args]}
       names {return [dict keys [my state images]]}
       default {
-        return -code error "tclpdf: unknown image subcommand \"$subcommand\" -\
+        return -code error -errorcode [list TCLPDF IMAGE SUBCOMMAND $subcommand] \
+            "tclpdf: unknown image subcommand \"$subcommand\" -\
             known are: embed, place, draw, info, size, names"
       }
     }
@@ -276,7 +277,8 @@ oo::define ::tclpdf::document::document {
   # path that would have followed it.
   method ImageEmbed {args} {
     if {![llength $args]} {
-      return -code error "tclpdf: image embed needs a name"
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT name] \
+          "tclpdf: image embed needs a name"
     }
     set alias [lindex $args 0]
     set args [lrange $args 1 end]
@@ -289,20 +291,23 @@ oo::define ::tclpdf::document::document {
         mask {} interpolate 0 invert 0} $args "image embed"]
     foreach name {icc stencil interpolate invert} {
       if {![string is boolean -strict [dict get $options $name]]} {
-        return -code error "tclpdf: -$name of image embed takes a boolean, not\
+        return -code error -errorcode [list TCLPDF IMAGE ARGUMENT $name] \
+            "tclpdf: -$name of image embed takes a boolean, not\
             \"[dict get $options $name]\""
       }
     }
     set images [my state images]
     if {[dict exists $images $alias]} {
-      return -code error "tclpdf: an image named \"$alias\" is already embedded"
+      return -code error -errorcode [list TCLPDF IMAGE ALIAS $alias] \
+          "tclpdf: an image named \"$alias\" is already embedded"
     }
     if {$path ne {}} {
       set bytes [::tclpdf::io read $path]
     } elseif {[dict get $options data] ne {}} {
       set bytes [dict get $options data]
     } else {
-      return -code error "tclpdf: image embed needs a file name or -data"
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT source] \
+          "tclpdf: image embed needs a file name or -data"
     }
     set type [dict get $options type]
     if {$type eq "auto"} {
@@ -313,7 +318,8 @@ oo::define ::tclpdf::document::document {
       png {set parsed [::tclpdf::imagePng parse $bytes]}
       tiff {set parsed [::tclpdf::imageTiff parse $bytes]}
       default {
-        return -code error "tclpdf: unknown image type \"$type\" - known are:\
+        return -code error -errorcode [list TCLPDF IMAGE ARGUMENT type] \
+            "tclpdf: unknown image type \"$type\" - known are:\
             auto, jpeg, png, tiff"
       }
     }
@@ -326,7 +332,8 @@ oo::define ::tclpdf::document::document {
     # each with its own reason.
     if {[dict get $options stencil]} {
       if {$type eq "jpeg"} {
-        return -code error "tclpdf: a stencil mask is one bit per sample (ISO\
+        return -code error -errorcode [list TCLPDF IMAGE STENCIL $alias] \
+            "tclpdf: a stencil mask is one bit per sample (ISO\
             32000-2, Table 87: with ImageMask true BitsPerComponent shall be\
             1), and a DCTDecode filter always delivers 8-bit samples (Table\
             87) - a stencil has to be a 1-bit PNG, not a JPEG"
@@ -357,7 +364,8 @@ oo::define ::tclpdf::document::document {
       # numbers exist only for a one-component picture. That is the picture
       # a soft mask is made of, which is what this is for.
       if {[my ImageDevice $type $parsed] ne "DeviceGray"} {
-        return -code error "tclpdf: -invert reverses a picture of ONE\
+        return -code error -errorcode [list TCLPDF IMAGE INVERT $alias] \
+            "tclpdf: -invert reverses a picture of ONE\
             component - a stencil mask or a greyscale picture - and\
             \"$alias\" is [my ImageDevice $type $parsed]; a Decode array is\
             twice as long as the picture has components (ISO 32000-2, Table\
@@ -374,12 +382,14 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options mask] ne {}} {
       set maskAlias [dict get $options mask]
       if {![dict exists $images $maskAlias]} {
-        return -code error "tclpdf: -mask of image embed names no embedded\
+        return -code error -errorcode [list TCLPDF IMAGE MASK $maskAlias] \
+            "tclpdf: -mask of image embed names no embedded\
             image \"$maskAlias\" - known are: [join [dict keys $images] {, }];\
             the mask has to be embedded before the picture that wears it"
       }
       if {[dict get $options stencil]} {
-        return -code error "tclpdf: \"$alias\" is a stencil mask and cannot\
+        return -code error -errorcode [list TCLPDF IMAGE MASK $alias] \
+            "tclpdf: \"$alias\" is a stencil mask and cannot\
             wear a mask of its own - with ImageMask true the Mask entry shall\
             not be present (ISO 32000-2, Table 87), and a stencil has no\
             colour for a soft mask to cover"
@@ -390,7 +400,8 @@ oo::define ::tclpdf::document::document {
       # image and this package splits none out.
       if {$type eq "png" && ([::tclpdf::imagePng hasAlpha $parsed]
           || [::tclpdf::imagePng transparency $parsed] ne "none")} {
-        return -code error "tclpdf: \"$alias\" carries its own transparency\
+        return -code error -errorcode [list TCLPDF IMAGE MASK $alias] \
+            "tclpdf: \"$alias\" carries its own transparency\
             and already reaches the file with a mask on it - a second one\
             would replace it (ISO 32000-2, Table 87: an SMask entry overrides\
             the image's Mask entry); mask a picture that has none, or leave\
@@ -412,14 +423,16 @@ oo::define ::tclpdf::document::document {
         set source [expr {$path ne {} ? "\"$path\"" : "the picture data"}]
         if {[catch {my IccInspect [dict get $parsed icc] \
             "the ICC profile in $source"} inspected]} {
-          return -code error "$inspected - the picture itself is fine;\
+          return -code error -errorcode [list TCLPDF IMAGE FORMAT $source] \
+              "$inspected - the picture itself is fine;\
               -icc 0 embeds it without the profile"
         }
         lassign $inspected profileSpace profileComponents
         set device [my ImageDevice $type $parsed]
         if {$profileSpace ne [dict get \
             {DeviceGray GRAY DeviceRGB RGB DeviceCMYK CMYK} $device]} {
-          return -code error "tclpdf: the ICC profile in $source describes\
+          return -code error -errorcode [list TCLPDF IMAGE ICC $source] \
+              "tclpdf: the ICC profile in $source describes\
               $profileSpace, but the picture's samples are in $device - the\
               profile of an image colour space has to describe that space\
               (ISO 32000-1, 8.6.5.5); -icc 0 embeds the picture without it"
@@ -490,14 +503,16 @@ oo::define ::tclpdf::document::document {
     set parsed [dict get $image parsed]
     set device [my ImageDevice [dict get $image type] $parsed]
     if {$device ne "DeviceGray"} {
-      return -code error "tclpdf: \"$alias\" is a $device picture and cannot\
+      return -code error -errorcode [list TCLPDF IMAGE SOFTMASK $alias] \
+          "tclpdf: \"$alias\" is a $device picture and cannot\
           be a soft mask - the colour space of a soft-mask image shall be\
           DeviceGray (ISO 32000-2, Table 143), because a mask is coverage\
           rather than colour; embed it as a greyscale picture, or with\
           -stencil 1 if it is one bit per sample"
     }
     if {[dict get $parsed icc] ne {}} {
-      return -code error "tclpdf: \"$alias\" carries an ICC profile, so its\
+      return -code error -errorcode [list TCLPDF IMAGE SOFTMASK $alias] \
+          "tclpdf: \"$alias\" carries an ICC profile, so its\
           colour space would be /ICCBased, and a soft-mask image shall be\
           DeviceGray (ISO 32000-2, Table 143) - embed the mask with -icc 0"
     }
@@ -510,7 +525,8 @@ oo::define ::tclpdf::document::document {
     # with -mask became another picture's soft mask without a word, and the
     # mask of a mask is a dictionary entry no reader is required to follow.
     if {[dict get $image mask] ne {}} {
-      return -code error "tclpdf: \"$alias\" was embedded with a mask of its\
+      return -code error -errorcode [list TCLPDF IMAGE SOFTMASK $alias] \
+          "tclpdf: \"$alias\" was embedded with a mask of its\
           own (-mask [dict get $image mask]), so it reaches the file with a\
           Mask or an SMask entry - and in a soft-mask image both shall be\
           absent (ISO 32000-2, Table 143); embed the picture a second time\
@@ -524,7 +540,8 @@ oo::define ::tclpdf::document::document {
     if {[dict get $image type] eq "png"
         && ([::tclpdf::imagePng hasAlpha $parsed]
             || [::tclpdf::imagePng transparency $parsed] ne "none")} {
-      return -code error "tclpdf: \"$alias\" has transparency of its own, so\
+      return -code error -errorcode [list TCLPDF IMAGE SOFTMASK $alias] \
+          "tclpdf: \"$alias\" has transparency of its own, so\
           it would reach the file with a mask on it - and in a soft-mask\
           image Mask and SMask shall both be absent (ISO 32000-2, Table 143);\
           a mask says how much of the picture shows and needs no transparency\
@@ -557,7 +574,8 @@ oo::define ::tclpdf::document::document {
     }
     set what [expr {$path ne {} ? "\"$path\"" :
         "the data passed with -data ([string length $bytes] bytes)"}]
-    return -code error "tclpdf: $what is neither a JPEG, a PNG nor a TIFF -\
+    return -code error -errorcode [list TCLPDF IMAGE FORMAT $what] \
+        "tclpdf: $what is neither a JPEG, a PNG nor a TIFF -\
         tclpdf writes those three formats"
   }
 
@@ -569,7 +587,8 @@ oo::define ::tclpdf::document::document {
     } $args "image place"]
     set images [my state images]
     if {![dict exists $images $alias]} {
-      return -code error "tclpdf: no image named \"$alias\" - known are:\
+      return -code error -errorcode [list TCLPDF IMAGE ALIAS $alias] \
+          "tclpdf: no image named \"$alias\" - known are:\
           [join [dict keys $images] {, }]"
     }
     set image [dict get $images $alias]
@@ -587,7 +606,8 @@ oo::define ::tclpdf::document::document {
     }
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
     if {![string is double -strict [dict get $options rotate]]} {
-      return -code error "tclpdf: -rotate of image place is an angle in\
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT rotate] \
+          "tclpdf: -rotate of image place is an angle in\
           degrees, not \"[dict get $options rotate]\""
     }
     lassign [my ImageExtent $image $options "image place"] width height
@@ -602,7 +622,8 @@ oo::define ::tclpdf::document::document {
     # same [singular] does the judging - see there.
     if {[::tclpdf::geometry singular \
         [list [my distance $width] 0 0 [my distance $height] 0 0]]} {
-      return -code error "tclpdf: \"$alias\" comes out $width by $height\
+      return -code error -errorcode [list TCLPDF IMAGE SIZE $alias] \
+          "tclpdf: \"$alias\" comes out $width by $height\
           [my cget -unit] here, which is below the 0.00001 pt a PDF real\
           holds (7.3.3) - the placement would be written as \"0 0 0 0 x y\
           cm\", a matrix that collapses onto a point, and nothing of the\
@@ -1159,12 +1180,14 @@ oo::define ::tclpdf::document::document {
   # well, so the drawing and the form placement need nothing extra.
   method GraphicCheck {kind context alt artifact} {
     if {$artifact ne {} && ![string is boolean -strict $artifact]} {
-      return -code error "tclpdf: $context: -artifact takes a boolean, not\
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT artifact] \
+          "tclpdf: $context: -artifact takes a boolean, not\
           \"$artifact\""
     }
     if {$artifact ne {} && $artifact && $alt ne {}} {
       set noun [dict get {image picture svg drawing form placement} $kind]
-      return -code error "tclpdf: $context: -artifact and -alt contradict\
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT artifact] \
+          "tclpdf: $context: -artifact and -alt contradict\
           each other - a $noun is either decoration or described, not both"
     }
     return
@@ -1234,7 +1257,8 @@ oo::define ::tclpdf::document::document {
     lassign [::tclpdf::option partition {data {}} $args] own rest
     set data [dict get $own data]
     if {$path eq {} && $data eq {}} {
-      return -code error "tclpdf: image draw needs a file name or -data"
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT source] \
+          "tclpdf: image draw needs a file name or -data"
     }
     if {$path ne {}} {
       set alias [my ImageAlias $path]
@@ -1264,7 +1288,8 @@ oo::define ::tclpdf::document::document {
   method ImageInfo {alias} {
     set images [my state images]
     if {![dict exists $images $alias]} {
-      return -code error "tclpdf: no image named \"$alias\""
+      return -code error -errorcode [list TCLPDF IMAGE ALIAS $alias] \
+          "tclpdf: no image named \"$alias\""
     }
     set image [dict get $images $alias]
     set parsed [dict get $image parsed]
@@ -1407,7 +1432,8 @@ oo::define ::tclpdf::document::document {
   method ImageSize {alias args} {
     set images [my state images]
     if {![dict exists $images $alias]} {
-      return -code error "tclpdf: no image named \"$alias\""
+      return -code error -errorcode [list TCLPDF IMAGE ALIAS $alias] \
+          "tclpdf: no image named \"$alias\""
     }
     return [my ImageExtent [dict get $images $alias] [::tclpdf::option parse \
         {size {} width {} height {} scale {} dpi {} fit {} fitMode {}} \
@@ -1886,4 +1912,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.12
+package provide tclpdf::image 1.13

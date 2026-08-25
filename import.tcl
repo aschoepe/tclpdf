@@ -71,7 +71,8 @@ oo::define ::tclpdf::document::document {
     switch -- $subcommand {
       import {return [my PdfImport {*}$args]}
       default {
-        return -code error "tclpdf: unknown pdf subcommand \"$subcommand\" -\
+        return -code error -errorcode [list TCLPDF IMPORT SUBCOMMAND $subcommand] \
+            "tclpdf: unknown pdf subcommand \"$subcommand\" -\
             known is: import"
       }
     }
@@ -81,12 +82,14 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {page 1} $args "pdf import"]
     set page [dict get $options page]
     if {![string is entier -strict $page] || $page < 1} {
-      return -code error "tclpdf: -page of pdf import is a page number\
+      return -code error -errorcode [list TCLPDF IMPORT ARGUMENT page] \
+          "tclpdf: -page of pdf import is a page number\
           counted from 1, not \"$page\""
     }
     set forms [my state forms]
     if {[dict exists $forms $alias]} {
-      return -code error "tclpdf: a form named \"$alias\" already exists"
+      return -code error -errorcode [list TCLPDF IMPORT NAME $alias] \
+          "tclpdf: a form named \"$alias\" already exists"
     }
     if {![file exists $path]} {
       return -code error -errorcode {TCLPDF IMPORT FILE} \
@@ -134,7 +137,8 @@ oo::define ::tclpdf::document::document {
       set number [lindex [lindex $item 1] 0]
       lassign [::tclpdf::importRead::Object reader $number] value hasStream data
       if {!$hasStream} {
-        return -code error "tclpdf: $path: content object $number is not a\
+        return -code error -errorcode [list TCLPDF IMPORT FOREIGN $number] \
+            "tclpdf: $path: content object $number is not a\
             stream"
       }
       lappend pieces [::tclpdf::importRead::DecodeStream reader $value $data \
@@ -709,4 +713,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.4
+package provide tclpdf::import 1.5

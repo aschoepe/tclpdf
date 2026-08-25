@@ -68,18 +68,14 @@ test version-2.2 {no module requires a version no module provides} -constraints 
   # "package require tclpdf::sfnt 1.1-" is a promise that something provides
   # 1.1 or better. If sfnt is still at 1.0, the failure would otherwise reach
   # the user rather than the build.
-  set root [file dirname [file dirname [file normalize [info script]]]]
   set wrong {}
-  foreach file [glob -directory $root *.tcl] {
-    set channel [open $file r]
-    set source [read $channel]
-    close $channel
+  ::tclpdfTest::eachModule module source {
     foreach {-> name wanted} [regexp -all -inline \
         {package require (tclpdf::\w+) (\d+\.\d+)-} $source] {
       if {[catch {package require $name} have]} {
-        lappend wrong "[file tail $file] wants $name, which does not load"
+        lappend wrong "$module wants $name, which does not load"
       } elseif {[package vcompare $have $wanted] < 0} {
-        lappend wrong "[file tail $file] wants $name $wanted, but only $have exists"
+        lappend wrong "$module wants $name $wanted, but only $have exists"
       }
     }
   }

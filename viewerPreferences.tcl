@@ -156,14 +156,16 @@ oo::define ::tclpdf::document::document {
       }
       if {$option in $booleans} {
         if {![string is boolean -strict $value]} {
-          return -code error "tclpdf: viewerPreferences -$option takes a\
+          return -code error -errorcode [list TCLPDF VIEWERPREFERENCES ARGUMENT $option] \
+              "tclpdf: viewerPreferences -$option takes a\
               boolean, not \"$value\""
         }
         set value [expr {$value ? 1 : 0}]
       } elseif {[dict exists $values $option]} {
         set allowed [dict get $values $option]
         if {$value ni $allowed} {
-          return -code error "tclpdf: viewerPreferences -$option must be one\
+          return -code error -errorcode [list TCLPDF VIEWERPREFERENCES ARGUMENT $option] \
+              "tclpdf: viewerPreferences -$option must be one\
               of [join $allowed {, }] - not \"$value\""
         }
       } elseif {$option eq "numCopies"} {
@@ -175,7 +177,8 @@ oo::define ::tclpdf::document::document {
         # 0x3 and 2.0 are integers to [string is integer] and not to a
         # reader.
         if {![regexp {^[2-5]$} $value]} {
-          return -code error "tclpdf: viewerPreferences -numCopies takes an\
+          return -code error -errorcode [list TCLPDF VIEWERPREFERENCES ARGUMENT numCopies] \
+              "tclpdf: viewerPreferences -numCopies takes an\
               integer from 2 to 5 (ISO 32000-1, Table 150), not \"$value\""
         }
       }
@@ -362,4 +365,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::viewerPreferences 1.3
+package provide tclpdf::viewerPreferences 1.4

@@ -69,17 +69,20 @@ oo::define ::tclpdf::document::document {
     } $args "pageLabels"]
     set from [dict get $options from]
     if {![string is integer -strict $from] || $from < 0} {
-      return -code error "tclpdf: pageLabels needs -from, a page index counted\
+      return -code error -errorcode [list TCLPDF PAGELABEL ARGUMENT from] \
+          "tclpdf: pageLabels needs -from, a page index counted\
           from 0 - got \"$from\""
     }
     set style [dict get $options style]
     if {$style ni $styles} {
-      return -code error "tclpdf: pageLabels -style must be one of\
+      return -code error -errorcode [list TCLPDF PAGELABEL ARGUMENT style] \
+          "tclpdf: pageLabels -style must be one of\
           [join $styles {, }] - not \"$style\""
     }
     set start [dict get $options start]
     if {![string is integer -strict $start] || $start < 1} {
-      return -code error "tclpdf: pageLabels -start takes a positive integer,\
+      return -code error -errorcode [list TCLPDF PAGELABEL ARGUMENT start] \
+          "tclpdf: pageLabels -start takes a positive integer,\
           not \"$start\""
     }
     # Page labels are PDF 1.3 (Reference 1.7, 8.3.1).
@@ -117,7 +120,8 @@ oo::define ::tclpdf::document::document {
     set nums {}
     dict for {index range} $ranges {
       if {$index >= $pages} {
-        return -code error "tclpdf: pageLabels -from $index names a page the\
+        return -code error -errorcode [list TCLPDF PAGELABEL INDEX $index] \
+            "tclpdf: pageLabels -from $index names a page the\
             document does not have - it has $pages page(s)"
       }
       set pairs {}
@@ -142,4 +146,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageLabel 1.1
+package provide tclpdf::pageLabel 1.2

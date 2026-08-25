@@ -180,7 +180,8 @@ oo::define ::tclpdf::document::document {
       relationship {} description {}
     } $args "zugferd"]
     if {[my state zugferd] ne {}} {
-      return -code error "tclpdf: this document already carries an invoice or\
+      return -code error -errorcode [list TCLPDF ZUGFERD STATE invoice] \
+          "tclpdf: this document already carries an invoice or\
           order - a ZUGFeRD or Order-X document has exactly one"
     }
 
@@ -188,7 +189,8 @@ oo::define ::tclpdf::document::document {
     # the same wall pdfa.tcl names, said here so the caller learns it at the
     # call that meant the invoice rather than one level down.
     if {[my state encrypt] ne {}} {
-      return -code error "tclpdf: a ZUGFeRD or Order-X document is a PDF/A-3\
+      return -code error -errorcode [list TCLPDF ZUGFERD STATE encrypted] \
+          "tclpdf: a ZUGFeRD or Order-X document is a PDF/A-3\
           document and PDF/A forbids encryption - this document is encrypted"
     }
 
@@ -218,7 +220,8 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::zugferd::types
     set type [dict get $options type]
     if {$type ne {} && $type ni $types} {
-      return -code error "tclpdf: \"$type\" is not a document type - use one\
+      return -code error -errorcode [list TCLPDF ZUGFERD TYPE $type] \
+          "tclpdf: \"$type\" is not a document type - use one\
           of: [join $types {, }]"
     }
     set profile [dict get $options profile]
@@ -237,7 +240,8 @@ oo::define ::tclpdf::document::document {
     set family [expr {$type in [dict get $families order types] ? "order" : "invoice"}]
     set kind [dict get $families $family description]
     if {$read ne {} && $read ne $family} {
-      return -code error "tclpdf: BT-24 of this XML is an $read identifier\
+      return -code error -errorcode [list TCLPDF ZUGFERD PROFILE $profile] \
+          "tclpdf: BT-24 of this XML is an $read identifier\
           ($profile) and -type $type makes it an $kind - the two have to\
           agree; pass -profile to override the identifier, or the -type of\
           the $read family: [join [dict get $families $read types] {, }]"
@@ -246,13 +250,15 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options profile] ne {} && $profile ni $levels} {
       set other [expr {$family eq "order" ? "invoice" : "order"}]
       if {$profile in [dict get $families $other levels]} {
-        return -code error "tclpdf: \"$profile\" is a conformance level of\
+        return -code error -errorcode [list TCLPDF ZUGFERD PROFILE $profile] \
+            "tclpdf: \"$profile\" is a conformance level of\
             an [dict get $families $other description], and this document is\
             an $kind (-type $type) - its levels are: [join $levels {, }]; for\
             an [dict get $families $other description] pass -type\
             [join [dict get $families $other types] {, }]"
       }
-      return -code error "tclpdf: \"$profile\" is not a conformance level -\
+      return -code error -errorcode [list TCLPDF ZUGFERD PROFILE $profile] \
+          "tclpdf: \"$profile\" is not a conformance level -\
           use one of: [join $levels {, }]"
     }
 
@@ -270,18 +276,21 @@ oo::define ::tclpdf::document::document {
     if {$name ni $names} {
       set other [expr {$family eq "order" ? "invoice" : "order"}]
       if {$name in [dict get $families $other names]} {
-        return -code error "tclpdf: \"$name\" is the file name of an\
+        return -code error -errorcode [list TCLPDF ZUGFERD NAME $name] \
+            "tclpdf: \"$name\" is the file name of an\
             [dict get $families $other description], and this document is an\
             $kind (-type $type) - which is embedded as [join $names {, }]\
             (Order-X 1.0, 4.1.1 binds the name to the document); for an\
             [dict get $families $other description] pass -type\
             [join [dict get $families $other types] {, }]"
       }
-      return -code error "tclpdf: \"$name\" is not a file name the standards\
+      return -code error -errorcode [list TCLPDF ZUGFERD NAME $name] \
+          "tclpdf: \"$name\" is not a file name the standards\
           allow - use one of: [join $names {, }]"
     }
     if {$name in [my attachments]} {
-      return -code error "tclpdf: an attachment named \"$name\" already\
+      return -code error -errorcode [list TCLPDF ZUGFERD NAME $name] \
+          "tclpdf: an attachment named \"$name\" already\
           exists - names in the embedded file name tree have to be unique"
     }
     # fx:Version is the version of the standard the XML follows - "1.0" for
@@ -292,11 +301,13 @@ oo::define ::tclpdf::document::document {
     # write time.
     set version [dict get $options version]
     if {![regexp {^[0-9]+(\.[0-9]+)*$} $version]} {
-      return -code error "tclpdf: -version takes a version number such as\
+      return -code error -errorcode [list TCLPDF ZUGFERD ARGUMENT version] \
+          "tclpdf: -version takes a version number such as\
           1.0 - digits and dots - not \"$version\""
     }
     if {![string is boolean -strict [dict get $options compress]]} {
-      return -code error "tclpdf: -compress takes a boolean, not\
+      return -code error -errorcode [list TCLPDF ZUGFERD ARGUMENT compress] \
+          "tclpdf: -compress takes a boolean, not\
           \"[dict get $options compress]\""
     }
 
@@ -322,12 +333,14 @@ oo::define ::tclpdf::document::document {
         set relationship Alternative
       }
     } elseif {$relationship ni $::tclpdf::attach::relationships} {
-      return -code error "tclpdf: -relationship must be one of\
+      return -code error -errorcode [list TCLPDF ZUGFERD RELATIONSHIP $relationship] \
+          "tclpdf: -relationship must be one of\
           [join $::tclpdf::attach::relationships {, }] - not \"$relationship\""
     } elseif {$relationship ni $::tclpdf::zugferd::relationships} {
       set clause [expr {$family eq "order" ? {Order-X 1.0, 4.1.1}
           : {Factur-X 1.09.2, embedding rules}}]
-      return -code error "tclpdf: -relationship for $name is one of\
+      return -code error -errorcode [list TCLPDF ZUGFERD RELATIONSHIP $relationship] \
+          "tclpdf: -relationship for $name is one of\
           [join $::tclpdf::zugferd::relationships {, }] ($clause) - not\
           \"$relationship\", which is for the other attachments"
     }
@@ -397,12 +410,14 @@ proc ::tclpdf::zugferd::identify {bytes} {
   # the content for the encoding. The byte order mark is the giveaway.
   set bom [string range $bytes 0 1]
   if {$bom eq "\xFF\xFE" || $bom eq "\xFE\xFF"} {
-    return -code error "tclpdf: this XML is UTF-16 encoded - re-encode the\
+    return -code error -errorcode [list TCLPDF ZUGFERD XML encoding] \
+        "tclpdf: this XML is UTF-16 encoded - re-encode the\
         XML as UTF-8"
   }
   if {![regexp {GuidelineSpecifiedDocumentContextParameter>.*?<ram:ID>([^<]+)<} \
       $bytes -> identifier]} {
-    return -code error "tclpdf: this XML carries no BT-24 specification\
+    return -code error -errorcode [list TCLPDF ZUGFERD XML identifier] \
+        "tclpdf: this XML carries no BT-24 specification\
         identifier (GuidelineSpecifiedDocumentContextParameter) - it is not a\
         ZUGFeRD or Factur-X invoice or an Order-X order"
   }
@@ -416,7 +431,8 @@ proc ::tclpdf::zugferd::identify {bytes} {
   if {[string match {*xrechnung*} [string tolower $identifier]]} {
     return {invoice XRECHNUNG}
   }
-  return -code error "tclpdf: unknown BT-24 specification identifier\
+  return -code error -errorcode [list TCLPDF ZUGFERD XML $identifier] \
+      "tclpdf: unknown BT-24 specification identifier\
       \"$identifier\" - pass -profile to override. Guessing here is how an\
       EXTENDED invoice goes out labelled BASIC"
 }
@@ -494,4 +510,4 @@ proc ::tclpdf::zugferd::properties {name type version conformance {family invoic
   return $xml
 }
 
-package provide tclpdf::zugferd 1.3
+package provide tclpdf::zugferd 1.4

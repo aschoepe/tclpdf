@@ -102,12 +102,14 @@ oo::class create ::tclpdf::document::document {
     set area [dict get $options typeArea]
     if {$area ne {}} {
       if {[catch {llength $area} count] || $count ni {2 4}} {
-        return -code error "tclpdf: -typeArea takes {top bottom} or\
+        return -code error -errorcode [list TCLPDF DOCUMENT ARGUMENT typeArea] \
+            "tclpdf: -typeArea takes {top bottom} or\
             {top bottom left right}, got \"$area\""
       }
       foreach value $area {
         if {![string is double -strict $value] || $value < 0} {
-          return -code error "tclpdf: -typeArea takes distances of 0 or\
+          return -code error -errorcode [list TCLPDF DOCUMENT ARGUMENT typeArea] \
+              "tclpdf: -typeArea takes distances of 0 or\
               more, not \"$value\""
         }
       }
@@ -136,7 +138,8 @@ oo::class create ::tclpdf::document::document {
     # but got foo" out of the first write, a raw Tcl message naming no
     # option - or, for "-compress 2", to be silently taken as true.
     if {![string is boolean -strict [dict get $options compress]]} {
-      return -code error "tclpdf: -compress takes a boolean, not\
+      return -code error -errorcode [list TCLPDF DOCUMENT ARGUMENT compress] \
+          "tclpdf: -compress takes a boolean, not\
           \"[dict get $options compress]\""
     }
     if {[info exists tclpdfWriter]
@@ -159,7 +162,8 @@ oo::class create ::tclpdf::document::document {
   method cget {option} {
     set name [string trimleft $option -]
     if {![dict exists $tclpdfOption $name]} {
-      return -code error "tclpdf: unknown option \"$option\""
+      return -code error -errorcode [list TCLPDF DOCUMENT ARGUMENT $option] \
+          "tclpdf: unknown option \"$option\""
     }
     return [dict get $tclpdfOption $name]
   }
@@ -258,7 +262,8 @@ oo::class create ::tclpdf::document::document {
   # still reported, as "a destination".
   method Destination {page at zoom asker} {
     if {![string is integer -strict $page] || $page < 0} {
-      return -code error "tclpdf: no such page: $page - the document has\
+      return -code error -errorcode [list TCLPDF DOCUMENT PAGE $page] \
+          "tclpdf: no such page: $page - the document has\
           [llength $tclpdfPages] page(s)"
     }
     if {$page >= [llength $tclpdfPages]} {
@@ -281,7 +286,8 @@ oo::class create ::tclpdf::document::document {
     foreach entry [my state pendingDestinations] {
       lassign $entry number page at zoom asker
       if {$page >= [llength $tclpdfPages]} {
-        return -code error "tclpdf: [expr {$asker eq {} ? "a destination" : $asker}]\
+        return -code error -errorcode [list TCLPDF DOCUMENT PAGE $page] \
+            "tclpdf: [expr {$asker eq {} ? "a destination" : $asker}]\
             points at page $page and the document has\
             [llength $tclpdfPages] page(s) - add the page, or point elsewhere"
       }
@@ -434,7 +440,8 @@ oo::class create ::tclpdf::document::document {
       # and [info object methods -all] lists only the exported ones. Without
       # it the module loads correctly and the check below then denies it.
       if {$method ni [info object methods [self] -all -private]} {
-        return -code error "tclpdf: module $topic does not provide \"$method\""
+        return -code error -errorcode [list TCLPDF DOCUMENT MODULE $topic] \
+            "tclpdf: module $topic does not provide \"$method\""
       }
       return [my $method {*}$args]
     }
@@ -454,7 +461,8 @@ oo::class create ::tclpdf::document::document {
     # to land in the file without a word, as a dictionary no reader looks up.
     if {$category ni {ExtGState ColorSpace Pattern Shading XObject Font
         ProcSet Properties}} {
-      return -code error "tclpdf: resource category is ExtGState, ColorSpace,\
+      return -code error -errorcode [list TCLPDF DOCUMENT RESOURCE $category] \
+          "tclpdf: resource category is ExtGState, ColorSpace,\
           Pattern, Shading, XObject, Font, ProcSet or Properties, not\
           \"$category\""
     }
@@ -486,7 +494,8 @@ oo::class create ::tclpdf::document::document {
         return $name
       }
       default {
-        return -code error "tclpdf: resource takes a category, a name and at\
+        return -code error -errorcode [list TCLPDF DOCUMENT RESOURCE arguments] \
+            "tclpdf: resource takes a category, a name and at\
             most one value"
       }
     }
@@ -541,7 +550,8 @@ oo::class create ::tclpdf::document::document {
         return [lindex $args 0]
       }
       default {
-        return -code error "tclpdf: state takes a key and at most one value"
+        return -code error -errorcode [list TCLPDF DOCUMENT STATE arguments] \
+            "tclpdf: state takes a key and at most one value"
       }
     }
   }
@@ -570,7 +580,8 @@ oo::class create ::tclpdf::document::document {
       return {}
     }
     if {[llength $args] > 1} {
-      return -code error "tclpdf: catalogEntry takes a key and at most one value"
+      return -code error -errorcode [list TCLPDF DOCUMENT CATALOG arguments] \
+          "tclpdf: catalogEntry takes a key and at most one value"
     }
     set value [lindex $args 0]
     if {$value eq {}} {
@@ -651,7 +662,8 @@ oo::class create ::tclpdf::document::document {
       return {}
     }
     if {[llength $args] > 1} {
-      return -code error "tclpdf: trailerEntry takes a key and at most one value"
+      return -code error -errorcode [list TCLPDF DOCUMENT TRAILER arguments] \
+          "tclpdf: trailerEntry takes a key and at most one value"
     }
     set value [lindex $args 0]
     if {$value eq {}} {
@@ -683,7 +695,8 @@ oo::class create ::tclpdf::document::document {
       return [string range $current 1 end-1]
     }
     if {![regexp {^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$} $tag]} {
-      return -code error "tclpdf: \"$tag\" is not a language tag - expected\
+      return -code error -errorcode [list TCLPDF DOCUMENT LANGUAGE $tag] \
+          "tclpdf: \"$tag\" is not a language tag - expected\
           something like de, de-DE or en-GB (RFC 3066)"
     }
     # /Lang in the catalog is PDF 1.4 (Reference 1.7, Table 3.25).
@@ -709,7 +722,8 @@ oo::class create ::tclpdf::document::document {
       return {}
     }
     if {[llength $args] > 1} {
-      return -code error "tclpdf: info takes a key and at most one value"
+      return -code error -errorcode [list TCLPDF DOCUMENT INFO arguments] \
+          "tclpdf: info takes a key and at most one value"
     }
     set value [lindex $args 0]
     if {$value eq {}} {
@@ -725,7 +739,8 @@ oo::class create ::tclpdf::document::document {
       }
       Trapped {
         if {$value ni {True False Unknown}} {
-          return -code error "tclpdf: info Trapped takes True, False or\
+          return -code error -errorcode [list TCLPDF DOCUMENT INFO Trapped] \
+              "tclpdf: info Trapped takes True, False or\
               Unknown - a name, ISO 32000-1 Table 317 - not \"$value\""
         }
         # The key is PDF 1.3 (Reference 1.7, Table 10.2).
@@ -743,7 +758,8 @@ oo::class create ::tclpdf::document::document {
   # each names itself, so the message says which call was wrong.
   method CheckDate {value what} {
     if {[::tclpdf::document::parseDate $value] eq {}} {
-      return -code error "tclpdf: $what takes a PDF date such as\
+      return -code error -errorcode [list TCLPDF DOCUMENT DATE $what] \
+          "tclpdf: $what takes a PDF date such as\
           D:20260818120000+02'00' (ISO 32000-1, 7.9.4) - pdfObj date writes\
           one from a clock value - not \"$value\""
     }
@@ -755,7 +771,8 @@ oo::class create ::tclpdf::document::document {
   # generator that "helps" is precisely what breaks those.
   method metadata {args} {
     if {[llength $args] > 1} {
-      return -code error "tclpdf: metadata takes at most one XMP packet"
+      return -code error -errorcode [list TCLPDF DOCUMENT METADATA arguments] \
+          "tclpdf: metadata takes at most one XMP packet"
     }
     if {[llength $args] == 1} {
       # A metadata stream is PDF 1.4 (Reference 1.7, 10.2.2). Checked here
@@ -815,4 +832,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.12
+package provide tclpdf::document 1.13

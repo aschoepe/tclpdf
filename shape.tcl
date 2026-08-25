@@ -36,7 +36,8 @@ namespace eval ::tclpdf::shape {}
 #   counts, stated once here for every consumer.
 proc ::tclpdf::shape::checkSegments {segments} {
   if {![llength $segments]} {
-    return -code error "tclpdf: -segments is empty - a path needs at least\
+    return -code error -errorcode [list TCLPDF SHAPE SEGMENTS empty] \
+        "tclpdf: -segments is empty - a path needs at least\
         a {move x y}"
   }
   set operands {move 2 line 2 curve 6 close 0}
@@ -44,7 +45,8 @@ proc ::tclpdf::shape::checkSegments {segments} {
   foreach segment $segments {
     set kind [lindex $segment 0]
     if {![dict exists $operands $kind]} {
-      return -code error "tclpdf: unknown path segment \"$kind\" -\
+      return -code error -errorcode [list TCLPDF SHAPE SEGMENTS $kind] \
+          "tclpdf: unknown path segment \"$kind\" -\
           known are: move, line, curve, close"
     }
     # A path begins with a move: "l" and "c" extend from the current
@@ -52,14 +54,16 @@ proc ::tclpdf::shape::checkSegments {segments} {
     # may draw from wherever it happens to be, or nothing - so it is
     # refused here.
     if {$first && $kind ne "move"} {
-      return -code error "tclpdf: a path starts with {move x y}, not\
+      return -code error -errorcode [list TCLPDF SHAPE SEGMENTS move] \
+          "tclpdf: a path starts with {move x y}, not\
           {$segment}"
     }
     set first 0
     # The count is checked, not just the numbers: {line 3} would otherwise
     # pair its 3 with nothing and go out as one operand short.
     if {[llength $segment] - 1 != [dict get $operands $kind]} {
-      return -code error "tclpdf: path segment \"$kind\" takes\
+      return -code error -errorcode [list TCLPDF SHAPE SEGMENTS $kind] \
+          "tclpdf: path segment \"$kind\" takes\
           [dict get $operands $kind] numbers, not [expr {[llength $segment] - 1}]"
     }
     # The numbers themselves, through the one parser that owns the wording:
@@ -80,7 +84,8 @@ oo::define ::tclpdf::document::document {
       from {} to {} stroke {} width {} dash {} cap {} join {} miter {} opacity {} blend {} overprint {}
     } $args]
     if {[dict get $options from] eq {} || [dict get $options to] eq {}} {
-      return -code error "tclpdf: line needs -from {x y} and -to {x y}"
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT line] \
+          "tclpdf: line needs -from {x y} and -to {x y}"
     }
     # A line is drawn in black unless told otherwise - by its own -stroke, or
     # by the stroke colour [style] set before it.
@@ -105,7 +110,8 @@ oo::define ::tclpdf::document::document {
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
-      return -code error "tclpdf: rect needs -at {x y} and -size {w h}"
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT rect] \
+          "tclpdf: rect needs -at {x y} and -size {w h}"
     }
     lassign [my ShapeBox $options rect] x y w h
     set radius [my ShapeRadius [dict get $options radius] -radius]
@@ -131,7 +137,8 @@ oo::define ::tclpdf::document::document {
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
     if {[dict get $options at] eq {}} {
-      return -code error "tclpdf: ellipse needs -at {x y}"
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT ellipse] \
+          "tclpdf: ellipse needs -at {x y}"
     }
     if {[dict get $options radius] ne {}} {
       set rx [my ShapeRadius [dict get $options radius] -radius]
@@ -146,7 +153,8 @@ oo::define ::tclpdf::document::document {
       set rx [expr {[my ShapeRadius $width -size] / 2.0}]
       set ry [expr {[my ShapeRadius $height -size] / 2.0}]
     } else {
-      return -code error "tclpdf: ellipse needs -radius or -size {w h}"
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT ellipse] \
+          "tclpdf: ellipse needs -radius or -size {w h}"
     }
     lassign [my GraphicsPoint [dict get $options at] -at $what] cx cy
     # Four Bezier arcs. 0.5523 is the classic magic number: the control point
@@ -179,12 +187,14 @@ oo::define ::tclpdf::document::document {
     } $args]
     set points [dict get $options points]
     if {[llength $points] < 4} {
-      return -code error "tclpdf: polygon needs at least two points as {x y x y ...}"
+      return -code error -errorcode [list TCLPDF SHAPE POINTS count] \
+          "tclpdf: polygon needs at least two points as {x y x y ...}"
     }
     # Pairs, so an even count: an odd one leaves a lone x that used to go out
     # as "x  m" - an operator short of its operands, in a path already begun.
     if {[llength $points] % 2} {
-      return -code error "tclpdf: -points is a list of pairs {x y x y ...},\
+      return -code error -errorcode [list TCLPDF SHAPE POINTS pairs] \
+          "tclpdf: -points is a list of pairs {x y x y ...},\
           but [llength $points] numbers were given"
     }
     set path {}
@@ -209,7 +219,8 @@ oo::define ::tclpdf::document::document {
     } $args]
     foreach key {from c1 c2 to} {
       if {[dict get $options $key] eq {}} {
-        return -code error "tclpdf: curve needs -from, -c1, -c2 and -to"
+        return -code error -errorcode [list TCLPDF SHAPE ARGUMENT curve] \
+            "tclpdf: curve needs -from, -c1, -c2 and -to"
       }
     }
     # Stroked in black unless told otherwise, as a line is - by its own
@@ -271,7 +282,8 @@ oo::define ::tclpdf::document::document {
   # rounding at all, and neither is what anyone asked for.
   method ShapeRadius {value option} {
     if {![string is double -strict $value] || $value < 0} {
-      return -code error "tclpdf: $option is a length of 0 or more, not \"$value\""
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $option] \
+          "tclpdf: $option is a length of 0 or more, not \"$value\""
     }
     return [my distance $value]
   }
@@ -325,17 +337,20 @@ oo::define ::tclpdf::document::document {
     set hasRect [expr {[dict get $options at] ne {} || [dict get $options size] ne {}}]
     set hasPath [expr {[dict get $options segments] ne {}}]
     if {$hasRect && $hasPath} {
-      return -code error "tclpdf: clip takes either -at with -size or\
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT clip] \
+          "tclpdf: clip takes either -at with -size or\
           -segments, not both"
     }
     if {!$hasRect && !$hasPath} {
-      return -code error "tclpdf: clip needs -at {x y} with -size {w h},\
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT clip] \
+          "tclpdf: clip needs -at {x y} with -size {w h},\
           or -segments"
     }
     # The two rules of 8.5.3.3, and nothing else: a misspelt one used to
     # clip nonzero without a word.
     if {[dict get $options rule] ni {nonzero evenodd}} {
-      return -code error "tclpdf: -rule is nonzero or evenodd, not\
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT rule] \
+          "tclpdf: -rule is nonzero or evenodd, not\
           \"[dict get $options rule]\""
     }
     set operator W
@@ -356,7 +371,8 @@ oo::define ::tclpdf::document::document {
       return
     }
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
-      return -code error "tclpdf: clip needs -at {x y} and -size {w h}"
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT clip] \
+          "tclpdf: clip needs -at {x y} and -size {w h}"
     }
     lassign [my ShapeBox $options clip] x y w h
     my content "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
@@ -387,12 +403,14 @@ oo::define ::tclpdf::document::document {
     my GraphicsPoint [dict get $options at] -at $what
     set size [dict get $options size]
     if {[llength $size] != 2} {
-      return -code error "tclpdf: -size of $what is a size {w h}, not\
+      return -code error -errorcode [list TCLPDF SHAPE SIZE $what] \
+          "tclpdf: -size of $what is a size {w h}, not\
           \"$size\""
     }
     foreach value $size {
       if {![string is double -strict $value]} {
-        return -code error "tclpdf: -size of $what takes numbers, not\
+        return -code error -errorcode [list TCLPDF SHAPE SIZE $what] \
+            "tclpdf: -size of $what takes numbers, not\
             \"$value\""
       }
     }
@@ -435,4 +453,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shape 1.5
+package provide tclpdf::shape 1.6

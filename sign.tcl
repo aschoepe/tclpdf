@@ -274,7 +274,8 @@ proc ::tclpdf::sign::Locate {data what {unfilled 1}} {
     set from [expr {$at + 10}]
   }
   if {![llength $positions]} {
-    return -code error "tclpdf: $what carries no signature - there is no\
+    return -code error -errorcode [list TCLPDF SIGN NONE $what] \
+        "tclpdf: $what carries no signature - there is no\
         /ByteRange in it. A document is prepared for signing by\
         \[\$doc sign\] before it is written, and a finished file gains a\
         further signature through \[::tclpdf::sign add\]"
@@ -306,7 +307,8 @@ proc ::tclpdf::sign::Locate {data what {unfilled 1}} {
     return [lindex $readable end]
   }
   if {![llength $reserved]} {
-    return -code error "tclpdf: no signature of $what is waiting for its\
+    return -code error -errorcode [list TCLPDF SIGN NONE $what] \
+        "tclpdf: no signature of $what is waiting for its\
         value - every /Contents in it holds one already. The value goes into\
         the room reserved for it exactly once, and a second one written over\
         it would destroy the first: reserved room is nothing but zeros\
@@ -315,7 +317,8 @@ proc ::tclpdf::sign::Locate {data what {unfilled 1}} {
         \[::tclpdf::sign add\]"
   }
   if {[llength $reserved] > 1} {
-    return -code error "tclpdf: [llength $reserved] signatures of $what are\
+    return -code error -errorcode [list TCLPDF SIGN MANY $what] \
+        "tclpdf: [llength $reserved] signatures of $what are\
         waiting for their value, and this module prepares one at a time -\
         \[::tclpdf::sign add\] refuses to append onto a signature that has\
         none yet. So one of these /ByteRange entries stands inside a STRING\
@@ -346,7 +349,8 @@ proc ::tclpdf::sign::Entry {data at what} {
   set open [string first \[ $data $at]
   set close [string first \] $data $open]
   if {$open < 0 || $close < 0 || $close <= $open} {
-    return -code error "tclpdf: the /ByteRange of $what is not an array -\
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN ByteRange] \
+        "tclpdf: the /ByteRange of $what is not an array -\
         the file is not one tclpdf wrote"
   }
   set numbers {}
@@ -358,7 +362,8 @@ proc ::tclpdf::sign::Entry {data at what} {
     lappend numbers [scan $word %d]
   }
   if {[llength $numbers] != 4} {
-    return -code error "tclpdf: the /ByteRange of $what holds\
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN ByteRange] \
+        "tclpdf: the /ByteRange of $what holds\
         [llength $numbers] numbers and a signature written here holds four -\
         the file is not one tclpdf wrote"
   }
@@ -372,7 +377,8 @@ proc ::tclpdf::sign::Entry {data at what} {
   if {$key < 0 || $at - $key > $subFilterDistance
       || ![regexp {^/SubFilter (/[^][()<>{}/%[:space:]]+)} \
           [string range $data $key [expr {$at - 1}]] -> subFilter]} {
-    return -code error "tclpdf: the signature dictionary of $what has no\
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN SubFilter] \
+        "tclpdf: the signature dictionary of $what has no\
         /SubFilter in front of its /ByteRange - the file is not one tclpdf\
         wrote"
   }
@@ -380,18 +386,21 @@ proc ::tclpdf::sign::Entry {data at what} {
   variable contentsDistance
   set key [string first /Contents $data $close]
   if {$key < 0 || $key - $close > $contentsDistance} {
-    return -code error "tclpdf: the signature dictionary of $what has no\
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN Contents] \
+        "tclpdf: the signature dictionary of $what has no\
         /Contents next to its /ByteRange - the file is not one tclpdf wrote"
   }
   set from [string first < $data $key]
   set to [string first > $data $from]
   if {$from < 0 || $to < 0 || $to <= $from} {
-    return -code error "tclpdf: the /Contents of $what is not a hexadecimal\
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN Contents] \
+        "tclpdf: the /Contents of $what is not a hexadecimal\
         string - 12.8.3.3.1 requires one, with '<' and '>' delimiters"
   }
   set hexLength [expr {$to - $from - 1}]
   if {$hexLength == 0 || $hexLength % 2} {
-    return -code error "tclpdf: the /Contents of $what holds $hexLength\
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN Contents] \
+        "tclpdf: the /Contents of $what holds $hexLength\
         hexadecimal digits, which is not a whole number of bytes"
   }
   return [dict create byteRangeStart $open byteRangeEnd $close \
@@ -420,7 +429,8 @@ proc ::tclpdf::sign::WriteRange {data located byteRange} {
   set text \[[join $byteRange { }]
   set pad [expr {$room - 1 - [string length $text]}]
   if {$pad < 0} {
-    return -code error "tclpdf: the /ByteRange \[$byteRange\] does not fit\
+    return -code error -errorcode [list TCLPDF SIGN ROOM ByteRange] \
+        "tclpdf: the /ByteRange \[$byteRange\] does not fit\
         into the [expr {$room - 2}] characters reserved for it - the\
         document is larger than a signature written here can describe"
   }
@@ -504,7 +514,8 @@ proc ::tclpdf::sign::LocateDate {data located what} {
   set open [expr {$at + 3}]
   set close [string first ) $data $open]
   if {$close < 0} {
-    return -code error "tclpdf: the /M of $what is not a literal string -\
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN M] \
+        "tclpdf: the /M of $what is not a literal string -\
         the file is not one tclpdf wrote"
   }
   return [list [expr {$open + 1}] [expr {$close - 1}]]
@@ -518,7 +529,8 @@ proc ::tclpdf::sign::WriteDate {data range date what} {
   lassign $range from to
   set room [expr {$to - $from + 1}]
   if {[string length $date] != $room} {
-    return -code error "tclpdf: the signing time \"$date\" is\
+    return -code error -errorcode [list TCLPDF SIGN ROOM M] \
+        "tclpdf: the signing time \"$date\" is\
         [string length $date] characters and the /M entry of $what holds\
         $room - the date is written OVER the placeholder, inside the bytes\
         the signature covers, and nothing there may change length.\
@@ -597,7 +609,8 @@ proc ::tclpdf::sign::NoSigningTime {der subFilter what} {
 # [$doc write], and signing it would mean signing the four zeros as well.
 proc ::tclpdf::sign::Prepared {located what} {
   if {[lindex [dict get $located byteRange] 1] == 0} {
-    return -code error "tclpdf: the /ByteRange of $what is still the\
+    return -code error -errorcode [list TCLPDF SIGN STATE unwritten] \
+        "tclpdf: the /ByteRange of $what is still the\
         placeholder - the document was not written through \[\$doc write\],\
         and there is nothing that says which bytes to sign"
   }
@@ -619,7 +632,8 @@ proc ::tclpdf::sign::Describes {data located what} {
   set byteRange [dict get $located byteRange]
   set needed [Range $data $located]
   if {$byteRange ne $needed} {
-    return -code error "tclpdf: the /ByteRange of $what does not describe\
+    return -code error -errorcode [list TCLPDF SIGN CHANGED $what] \
+        "tclpdf: the /ByteRange of $what does not describe\
         this file - it says \[$byteRange\] and the file needs \[$needed\].\
         The file was changed after it was written"
   }
@@ -648,17 +662,20 @@ proc ::tclpdf::sign::Describes {data located what} {
 # result signed.
 proc ::tclpdf::sign::Der {der} {
   if {[regexp {[^\u0000-\u00ff]} $der]} {
-    return -code error "tclpdf: the signature is text, not bytes - it has to\
+    return -code error -errorcode [list TCLPDF SIGN SIGNER text] \
+        "tclpdf: the signature is text, not bytes - it has to\
         be a CMS SignedData object in DER, and a character above 0xff cannot\
         be a byte of one"
   }
   if {$der eq {}} {
-    return -code error "tclpdf: the signature is empty - what belongs here is\
+    return -code error -errorcode [list TCLPDF SIGN SIGNER empty] \
+        "tclpdf: the signature is empty - what belongs here is\
         a CMS SignedData object in DER, which is what \"openssl cms -sign\
         -outform DER\" writes"
   }
   if {[string index $der 0] ne "\u0030"} {
-    return -code error "tclpdf: the signature is not a DER object - a CMS\
+    return -code error -errorcode [list TCLPDF SIGN SIGNER der] \
+        "tclpdf: the signature is not a DER object - a CMS\
         SignedData object (12.8.3.3.1) is written as an ASN.1 SEQUENCE and\
         every one of those begins with the byte 0x30. This one begins with\
         0x[format %02x [scan [string index $der 0] %c]]. \"openssl cms\
@@ -680,7 +697,8 @@ proc ::tclpdf::sign::Der {der} {
 proc ::tclpdf::sign::Signed {data located byteRange length signer what} {
   set der [uplevel #0 [list {*}$signer [Bytes $data $byteRange]]]
   if {$der eq {}} {
-    return -code error "tclpdf: the -signer prefix answered nothing - it\
+    return -code error -errorcode [list TCLPDF SIGN SIGNER empty] \
+        "tclpdf: the -signer prefix answered nothing - it\
         has to answer a CMS SignedData object in DER, which is what\
         \"openssl cms -sign -outform DER\" writes"
   }
@@ -694,7 +712,8 @@ proc ::tclpdf::sign::Signed {data located byteRange length signer what} {
   NoSigningTime $der [dict get $located subFilter] $what
   set data [Fill $data $located $der]
   if {[string length $data] != $length} {
-    return -code error "tclpdf: writing the signature into $what changed the\
+    return -code error -errorcode [list TCLPDF SIGN INTERNAL length] \
+        "tclpdf: writing the signature into $what changed the\
         file length, which cannot be - the /ByteRange describes its own file"
   }
   return [list $data [string length $der]]
@@ -845,7 +864,8 @@ proc ::tclpdf::sign::digest {path args} {
   set options [::tclpdf::option parse {date now} $args "sign digest"]
   set date [dict get $options date]
   if {$date ne "now" && [::tclpdf::document::parseDate $date] eq {}} {
-    return -code error "tclpdf: sign digest -date takes a PDF date such as\
+    return -code error -errorcode [list TCLPDF SIGN ARGUMENT date] \
+        "tclpdf: sign digest -date takes a PDF date such as\
         D:20260818120000+02'00' (ISO 32000-1, 7.9.4) or \"now\", which is the\
         default and means the moment the bytes are handed out - not \"$date\""
   }
@@ -876,7 +896,8 @@ proc ::tclpdf::sign::digest {path args} {
     set length [string length $data]
     set data [WriteDate $data $range $date $what]
     if {[string length $data] != $length} {
-      return -code error "tclpdf: writing the signing time into $what changed\
+      return -code error -errorcode [list TCLPDF SIGN INTERNAL length] \
+          "tclpdf: writing the signing time into $what changed\
           the file length, which cannot be - the /ByteRange describes its own\
           file"
     }
@@ -911,7 +932,8 @@ proc ::tclpdf::sign::embed {path der} {
   NoSigningTime $der [dict get $located subFilter] $what
   set filled [Fill $data $located $der]
   if {[string length $filled] != [string length $data]} {
-    return -code error "tclpdf: writing the signature into $what changed the\
+    return -code error -errorcode [list TCLPDF SIGN INTERNAL length] \
+        "tclpdf: writing the signature into $what changed the\
         file length, which cannot be - the /ByteRange describes its own file"
   }
   ::tclpdf::io write $path $filled
@@ -948,7 +970,8 @@ proc ::tclpdf::sign::SubFilter {value what} {
     pkcs7 {return /adbe.pkcs7.detached}
     cades {return /ETSI.CAdES.detached}
   }
-  return -code error "tclpdf: $what -subfilter is the signature profile and\
+  return -code error -errorcode [list TCLPDF SIGN ARGUMENT subfilter] \
+      "tclpdf: $what -subfilter is the signature profile and\
       takes \"pkcs7\" for /adbe.pkcs7.detached (PDF 1.6, and the default) or\
       \"cades\" for /ETSI.CAdES.detached (PDF 2.0, and the claim to be a\
       PAdES signature - ETSI EN 319 142-1), not \"$value\""
@@ -974,7 +997,8 @@ proc ::tclpdf::sign::Claim {subFilter date what} {
   if {$subFilter ne "/ETSI.CAdES.detached" || $date ne {}} {
     return
   }
-  return -code error "tclpdf: $what -date {} keeps /M out of the signature\
+  return -code error -errorcode [list TCLPDF SIGN ARGUMENT date] \
+      "tclpdf: $what -date {} keeps /M out of the signature\
       dictionary and -subfilter cades claims a PAdES signature, where ETSI\
       EN 319 142-1, Table 1 has the M entry at \"shall be present\" for every\
       baseline level - it is where the claimed time of signing stands (note\
@@ -986,7 +1010,8 @@ proc ::tclpdf::sign::Claim {subFilter date what} {
 # How much room is reserved for the signature value.
 proc ::tclpdf::sign::Size {value what} {
   if {![string is integer -strict $value] || $value < 1} {
-    return -code error "tclpdf: $what -size is the number of bytes reserved\
+    return -code error -errorcode [list TCLPDF SIGN ARGUMENT size] \
+        "tclpdf: $what -size is the number of bytes reserved\
         for the signature and takes a positive integer, not \"$value\".\
         Measured: a CMS object with an RSA-2048 certificate and its issuer\
         is 2599 bytes, one with ECDSA P-256 2209 - the default of 16384\
@@ -998,7 +1023,8 @@ proc ::tclpdf::sign::Size {value what} {
 # Which page the widget sits on, counted as [page current] counts.
 proc ::tclpdf::sign::PageIndex {value what} {
   if {![string is integer -strict $value] || $value < 0} {
-    return -code error "tclpdf: $what -page is a page index counted from 0,\
+    return -code error -errorcode [list TCLPDF SIGN ARGUMENT page] \
+        "tclpdf: $what -page is a page index counted from 0,\
         as \"page current\" counts, not \"$value\""
   }
   return $value
@@ -1009,7 +1035,8 @@ proc ::tclpdf::sign::PageIndex {value what} {
 # then there is a file to point at.
 proc ::tclpdf::sign::Signer {value what} {
   if {[catch {llength $value}]} {
-    return -code error "tclpdf: $what -signer is a command prefix, called as\
+    return -code error -errorcode [list TCLPDF SIGN ARGUMENT signer] \
+        "tclpdf: $what -signer is a command prefix, called as\
         \"{*}\$prefix \$bytes\" and answering a CMS SignedData object in\
         DER - \"$value\" is not a well-formed list"
   }
@@ -1114,7 +1141,8 @@ proc ::tclpdf::sign::add {path args} {
   set signer [Signer [dict get $options signer] "sign add"]
   set date [dict get $options date]
   if {$date ni {{} now} && [::tclpdf::document::parseDate $date] eq {}} {
-    return -code error "tclpdf: sign add -date takes a PDF date such as\
+    return -code error -errorcode [list TCLPDF SIGN ARGUMENT date] \
+        "tclpdf: sign add -date takes a PDF date such as\
         D:20260818120000+02'00' (ISO 32000-1, 7.9.4), \"now\" - which is the\
         default and means the moment of signing - or the empty string for no\
         /M at all, not \"$date\""
@@ -1130,7 +1158,8 @@ proc ::tclpdf::sign::add {path args} {
   set version [HeaderVersion $data]
   set floor [expr {$subFilter eq "/ETSI.CAdES.detached" ? "2.0" : "1.6"}]
   if {[package vcompare $version $floor] < 0} {
-    return -code error "tclpdf: $what states version $version in its header\
+    return -code error -errorcode [list TCLPDF VERSION $floor] \
+        "tclpdf: $what states version $version in its header\
         and $subFilter needs $floor (ISO 32000-2, Table 255) - an incremental\
         update cannot raise it, because the header is inside the bytes it\
         leaves untouched. 7.5.6 NOTE 4 names the one way, a /Version entry in\
@@ -1154,7 +1183,8 @@ proc ::tclpdf::sign::add {path args} {
   # zeros between its delimiters is reserved room and not a signature, since
   # every DER object begins with 0x30.
   if {[regexp {/Contents[[:space:]]*<0+>} $data]} {
-    return -code error "tclpdf: a signature of $what is still waiting for its\
+    return -code error -errorcode [list TCLPDF SIGN STATE waiting] \
+        "tclpdf: a signature of $what is still waiting for its\
         value - its /Contents holds nothing but the reserved zeros. Put the\
         CMS object in with \[::tclpdf::sign embed\] first: appending a further\
         signature now would cover those zeros, and the object that belongs\
@@ -1164,7 +1194,8 @@ proc ::tclpdf::sign::add {path args} {
   set upd [::tclpdf::update open $path]
   try {
     if {[$upd base] != [string length $data]} {
-      return -code error "tclpdf: $what changed while it was being signed -\
+      return -code error -errorcode [list TCLPDF SIGN CHANGED $what] \
+          "tclpdf: $what changed while it was being signed -\
           it was [string length $data] bytes and the update read [$upd base]"
     }
 
@@ -1186,7 +1217,8 @@ proc ::tclpdf::sign::add {path args} {
       }
       set field "Signature$number"
     } elseif {$field in $taken} {
-      return -code error "tclpdf: $what already carries a signature field\
+      return -code error -errorcode [list TCLPDF SIGN FIELD $field] \
+          "tclpdf: $what already carries a signature field\
           named \"$field\" - a partial field name has to be unique among its\
           siblings (ISO 32000-2, 12.7.4.2). Taken are: [join $taken {, }].\
           Leave -field out and the first free name of the form Signature<n>\
@@ -1227,7 +1259,8 @@ proc ::tclpdf::sign::add {path args} {
   set byteRange [Range $data $located]
   set data [WriteRange $data $located $byteRange]
   if {[string length $data] != $length} {
-    return -code error "tclpdf: writing /ByteRange into $what changed the file\
+    return -code error -errorcode [list TCLPDF SIGN INTERNAL length] \
+        "tclpdf: writing /ByteRange into $what changed the file\
         length, which cannot be - it describes its own file"
   }
 
@@ -1276,7 +1309,8 @@ proc ::tclpdf::sign::Number {reference what which} {
   if {[regexp {^\s*([0-9]+)\s+[0-9]+\s+R\s*$} $reference -> number]} {
     return $number
   }
-  return -code error "tclpdf: $which of $what is \"$reference\" and an\
+  return -code error -errorcode [list TCLPDF SIGN FOREIGN $which] \
+      "tclpdf: $which of $what is \"$reference\" and an\
       indirect reference was needed - the file is not one an update can be\
       appended to"
 }
@@ -1329,7 +1363,8 @@ proc ::tclpdf::sign::PageNumber {upd catalogValue index what} {
       incr remaining -$count
     }
     if {!$descended} {
-      return -code error "tclpdf: sign add -page $index names a page $what\
+      return -code error -errorcode [list TCLPDF SIGN ARGUMENT page] \
+          "tclpdf: sign add -page $index names a page $what\
           does not have - it has $total page[expr {$total == 1 ? {} : {s}}].\
           The signature widget sits on a page, and that page has to exist"
     }
@@ -1520,7 +1555,8 @@ oo::define ::tclpdf::document::document {
       switch -- [lindex $args 0] {
         state {return [my SignState]}
         default {
-          return -code error "tclpdf: unknown sign subcommand\
+          return -code error -errorcode [list TCLPDF SIGN ARGUMENT subcommand] \
+              "tclpdf: unknown sign subcommand\
               \"[lindex $args 0]\" - known is: state"
         }
       }
@@ -1542,7 +1578,8 @@ oo::define ::tclpdf::document::document {
         [dict get $options subfilter] sign]
     set size [::tclpdf::sign::Size [dict get $options size] sign]
     if {[dict get $options field] eq {}} {
-      return -code error "tclpdf: sign -field is the name of the signature\
+      return -code error -errorcode [list TCLPDF SIGN ARGUMENT field] \
+          "tclpdf: sign -field is the name of the signature\
           field and cannot be empty - a field dictionary without a partial\
           field name is not a field at all, only a widget annotation (ISO\
           32000-2, 12.7.4.2)"
@@ -1566,7 +1603,8 @@ oo::define ::tclpdf::document::document {
     set rect [dict get $options rect]
     set appearance [dict get $options appearance]
     if {$rect ne {} && $appearance eq {}} {
-      return -code error "tclpdf: sign -rect makes the signature field\
+      return -code error -errorcode [list TCLPDF SIGN ARGUMENT appearance] \
+          "tclpdf: sign -rect makes the signature field\
           VISIBLE, and a visible field needs something to show - pass\
           -appearance with the name of a form XObject drawn beforehand with\
           \"form create\". Without one the field is an annotation with no\
@@ -1575,7 +1613,8 @@ oo::define ::tclpdf::document::document {
           signature of ISO 32000-2, 12.8.5.3"
     }
     if {$appearance ne {} && $rect eq {}} {
-      return -code error "tclpdf: sign -appearance is what a VISIBLE\
+      return -code error -errorcode [list TCLPDF SIGN ARGUMENT rect] \
+          "tclpdf: sign -appearance is what a VISIBLE\
           signature field shows, and without -rect {x y w h} the field has\
           no area on the page - an appearance stream is painted into the\
           rectangle of its annotation (ISO 32000-2, 12.5.5), and a rectangle\
@@ -1584,7 +1623,8 @@ oo::define ::tclpdf::document::document {
     }
     if {$rect ne {}} {
       if {[llength $rect] != 4} {
-        return -code error "tclpdf: sign -rect is {x y w h} - the top left\
+        return -code error -errorcode [list TCLPDF SIGN ARGUMENT rect] \
+            "tclpdf: sign -rect is {x y w h} - the top left\
             corner of the signature field and its size, in the unit of the\
             document, as \"link -at\" and \"rect -at\" count - not \"$rect\""
       }
@@ -1601,7 +1641,8 @@ oo::define ::tclpdf::document::document {
       foreach value $rect {
         if {![string is double -strict $value]
             || [catch {::tclpdf::pdfObj num $value}]} {
-          return -code error "tclpdf: sign -rect is {x y w h} in numbers a\
+          return -code error -errorcode [list TCLPDF SIGN ARGUMENT rect] \
+              "tclpdf: sign -rect is {x y w h} in numbers a\
               PDF can hold - not \"$rect\". NaN, an infinity and anything\
               beyond about +/-3.403e38 have no PDF spelling (ISO 32000-1,\
               Annex C.2)"
@@ -1609,7 +1650,8 @@ oo::define ::tclpdf::document::document {
       }
       lassign $rect left top width height
       if {$width <= 0 || $height <= 0} {
-        return -code error "tclpdf: sign -rect {$rect} has a width of $width\
+        return -code error -errorcode [list TCLPDF SIGN ARGUMENT rect] \
+            "tclpdf: sign -rect {$rect} has a width of $width\
             and a height of $height - a visible signature field needs both\
             above zero, or there is no area for its appearance to be painted\
             into"
@@ -1618,7 +1660,8 @@ oo::define ::tclpdf::document::document {
     ::tclpdf::sign::Signer [dict get $options signer] sign
 
     if {[my state sign] ne {}} {
-      return -code error "tclpdf: this document is already being signed -\
+      return -code error -errorcode [list TCLPDF SIGN STATE signing] \
+          "tclpdf: this document is already being signed -\
           sign is called once, because a document is written in one piece and\
           a second signature has to be appended as an incremental update (ISO\
           32000-2, 7.5.6) so that the first one keeps the bytes it covers.\
@@ -1631,7 +1674,8 @@ oo::define ::tclpdf::document::document {
     # other strings of the signature dictionary in it - buildable, and not
     # measured against a single reader.
     if {[my state encrypt] ne {}} {
-      return -code error "tclpdf: this document is encrypted, and tclpdf\
+      return -code error -errorcode [list TCLPDF SIGN STATE encrypted] \
+          "tclpdf: this document is encrypted, and tclpdf\
           does not sign an encrypted document - 7.6.2 exempts only the\
           /Contents string of a signature dictionary from encryption, not\
           the rest of it. Drop the \[\$doc encrypt\] call or the sign call,\
@@ -1721,7 +1765,8 @@ oo::define ::tclpdf::document::document {
     set current [my state sign]
     set page [dict get $current page]
     if {$page >= [my page count]} {
-      return -code error "tclpdf: sign -page $page names a page this document\
+      return -code error -errorcode [list TCLPDF SIGN ARGUMENT page] \
+          "tclpdf: sign -page $page names a page this document\
           does not have - it has [my page count] page(s). The signature\
           widget sits on a page, and that page has to exist when the file is\
           written"
@@ -1832,7 +1877,8 @@ oo::define ::tclpdf::document::document {
       } else {
         set known [join $known {, }]
       }
-      return -code error "tclpdf: sign -appearance names no form of this\
+      return -code error -errorcode [list TCLPDF SIGN ARGUMENT appearance] \
+          "tclpdf: sign -appearance names no form of this\
           document: \"$name\" - known are: $known. What a visible signature\
           field shows is a form XObject the caller draws beforehand with\
           \"form create\", under the name passed here"
@@ -1851,7 +1897,8 @@ oo::define ::tclpdf::document::document {
       # /ByteRange cannot be computed before the file is complete. Said
       # here because it is the first moment the two ways are told apart -
       # up to it, both build the same document.
-      return -code error "tclpdf: a signed document cannot be written to a\
+      return -code error -errorcode [list TCLPDF SIGN STATE channel] \
+          "tclpdf: a signed document cannot be written to a\
           channel - /ByteRange and the signature are written INTO the\
           finished file, and a channel cannot be read back. Write it with\
           \[\$doc write \$path\]; the two-stage way then hands the file on"
@@ -1862,7 +1909,8 @@ oo::define ::tclpdf::document::document {
     set byteRange [::tclpdf::sign::Range $data $located]
     set data [::tclpdf::sign::WriteRange $data $located $byteRange]
     if {[string length $data] != $length} {
-      return -code error "tclpdf: writing /ByteRange changed the file length,\
+      return -code error -errorcode [list TCLPDF SIGN INTERNAL length] \
+          "tclpdf: writing /ByteRange changed the file length,\
           which cannot be - it describes its own file"
     }
 
@@ -1903,4 +1951,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.3
+package provide tclpdf::sign 1.4

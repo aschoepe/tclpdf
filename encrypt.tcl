@@ -204,7 +204,8 @@ proc ::tclpdf::encrypt::userKeys {password fileKey} {
 proc ::tclpdf::encrypt::ownerKeys {password fileKey u} {
   variable zeroIv
   if {[string length $u] != 48} {
-    return -code error "tclpdf: the owner key needs the 48-byte U value of\
+    return -code error -errorcode [list TCLPDF ENCRYPT KEY owner] \
+        "tclpdf: the owner key needs the 48-byte U value of\
         algorithm 8, got [string length $u] bytes"
   }
   set salts [::tclpdf::crypto random 16]
@@ -256,7 +257,8 @@ proc ::tclpdf::encrypt::flags {names} {
   }
   foreach name $names {
     if {![dict exists $bits $name]} {
-      return -code error "tclpdf: unknown permission \"$name\" - known are:\
+      return -code error -errorcode [list TCLPDF ENCRYPT PERMISSION $name] \
+          "tclpdf: unknown permission \"$name\" - known are:\
           [join [dict keys $bits] { }], or \"all\""
     }
     set p [expr {$p | (1 << ([dict get $bits $name] - 1))}]
@@ -321,7 +323,8 @@ oo::define ::tclpdf::document::document {
       switch -- [lindex $args 0] {
         state {return [my EncryptState]}
         default {
-          return -code error "tclpdf: unknown encrypt subcommand\
+          return -code error -errorcode [list TCLPDF ENCRYPT SUBCOMMAND unknown] \
+              "tclpdf: unknown encrypt subcommand\
               \"[lindex $args 0]\" - known is: state"
         }
       }
@@ -343,7 +346,8 @@ oo::define ::tclpdf::document::document {
         {user {} owner {} permissions all metadata 1} $args "encrypt"]
 
     if {![string is boolean -strict [dict get $options metadata]]} {
-      return -code error "tclpdf: encrypt -metadata takes a boolean, not\
+      return -code error -errorcode [list TCLPDF ENCRYPT ARGUMENT metadata] \
+          "tclpdf: encrypt -metadata takes a boolean, not\
           \"[dict get $options metadata]\""
     }
     # Checked here, before anything is generated, so that a misspelled
@@ -365,7 +369,8 @@ oo::define ::tclpdf::document::document {
     # the restrictions. That is the one the manual recommends, and the pair of
     # empty ones is what it says is not offered.
     if {[dict get $options user] eq {} && [dict get $options owner] eq {}} {
-      return -code error "tclpdf: encrypt with an empty -user and no -owner\
+      return -code error -errorcode [list TCLPDF ENCRYPT PASSWORD empty] \
+          "tclpdf: encrypt with an empty -user and no -owner\
           would leave both passwords empty, and the empty password is the\
           first one every reader tries: it opens the document as its OWNER\
           (ISO 32000-2, 7.6.4.4.11), and an owner is not subject to /P - so\
@@ -377,7 +382,8 @@ oo::define ::tclpdf::document::document {
     }
 
     if {[my state encrypt] ne {}} {
-      return -code error "tclpdf: this document is already encrypted -\
+      return -code error -errorcode [list TCLPDF ENCRYPT STATE encrypted] \
+          "tclpdf: this document is already encrypted -\
           encrypt is called once. A second call would replace the file key,\
           and every string already written under the first one would be lost"
     }
@@ -393,12 +399,14 @@ oo::define ::tclpdf::document::document {
     # answers to BOTH states and would otherwise be told about a claim it
     # never made by name.
     if {[my state zugferd] ne {}} {
-      return -code error "tclpdf: a ZUGFeRD invoice is a PDF/A-3 document\
+      return -code error -errorcode [list TCLPDF ENCRYPT STATE zugferd] \
+          "tclpdf: a ZUGFeRD invoice is a PDF/A-3 document\
           and PDF/A forbids encryption (veraPDF rule 6.1.3-2) - an encrypted\
           invoice is one no bookkeeping software can read"
     }
     if {[my state pdfa] ne {}} {
-      return -code error "tclpdf: PDF/A forbids encryption - the Encrypt\
+      return -code error -errorcode [list TCLPDF ENCRYPT STATE pdfa] \
+          "tclpdf: PDF/A forbids encryption - the Encrypt\
           keyword shall not be used in the trailer dictionary (ISO 19005,\
           veraPDF rule 6.1.3-2). This document claims PDF/A-[dict get\
           [my state pdfa] part]"
@@ -411,7 +419,8 @@ oo::define ::tclpdf::document::document {
     # against no reader, so it is refused at whichever of the two calls
     # comes second rather than written and hoped for.
     if {[my state sign] ne {}} {
-      return -code error "tclpdf: this document is being signed, and tclpdf\
+      return -code error -errorcode [list TCLPDF ENCRYPT STATE signing] \
+          "tclpdf: this document is being signed, and tclpdf\
           does not encrypt a signed document - 7.6.2 exempts only the\
           /Contents string of a signature dictionary from encryption, not\
           the rest of it. Drop the \[\$doc sign\] call or the encrypt call,\
@@ -443,7 +452,8 @@ oo::define ::tclpdf::document::document {
     # number - [page add] takes one, and it stays empty until the write.
     for {set index 0} {$index < [my page count]} {incr index} {
       if {[my page content $index] ne {}} {
-        return -code error "tclpdf: encrypt has to come before anything is\
+        return -code error -errorcode [list TCLPDF ENCRYPT ORDER content] \
+            "tclpdf: encrypt has to come before anything is\
             drawn - page [expr {$index + 1}] already has content, and a\
             stream written before the cipher was installed stays in the\
             clear. Call \[\$doc encrypt\] right after \[tclpdf new\]"
@@ -458,19 +468,22 @@ oo::define ::tclpdf::document::document {
     # from any tool. Refused rather than repaired, which is the same rule the
     # page and object checks above follow.
     if {[my catalogEntry Lang] ne {}} {
-      return -code error "tclpdf: encrypt has to come before \[\$doc language\] -\
+      return -code error -errorcode [list TCLPDF ENCRYPT ORDER language] \
+          "tclpdf: encrypt has to come before \[\$doc language\] -\
           the language is written into the catalogue at that call and would\
           stay in the clear. Call \[\$doc encrypt\] right after \[tclpdf new\]"
     }
     if {[dict size [my state annots]]} {
-      return -code error "tclpdf: encrypt has to come before the first\
+      return -code error -errorcode [list TCLPDF ENCRYPT ORDER link] \
+          "tclpdf: encrypt has to come before the first\
           \[\$doc link\] - a link annotation is built at that call and its\
           text would stay in the clear. Call \[\$doc encrypt\] right after\
           \[tclpdf new\]"
     }
     for {set number 1} {$number <= [[my writer] count]} {incr number} {
       if {[[my writer] body $number] ne {}} {
-        return -code error "tclpdf: encrypt has to come before anything is\
+        return -code error -errorcode [list TCLPDF ENCRYPT ORDER object] \
+            "tclpdf: encrypt has to come before anything is\
             put into the document - object $number is already written (a\
             tiling pattern, a form XObject or an imported page), and it\
             would stay in the clear. Call \[\$doc encrypt\] right after\
@@ -631,7 +644,8 @@ oo::define ::tclpdf::document::document {
         set bytes $value
       }
       default {
-        return -code error "tclpdf: the string seam knows str, hexStr and\
+        return -code error -errorcode [list TCLPDF ENCRYPT SEAM $kind] \
+            "tclpdf: the string seam knows str, hexStr and\
             bytesStr, not \"$kind\""
       }
     }
@@ -640,4 +654,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::encrypt 1.1
+package provide tclpdf::encrypt 1.2

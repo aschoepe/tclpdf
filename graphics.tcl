@@ -54,7 +54,8 @@ oo::define ::tclpdf::document::document {
   method restore {} {
     set stack [my streamState styleStack]
     if {![llength $stack]} {
-      return -code error "tclpdf: restore without a save - the graphics state\
+      return -code error -errorcode [list TCLPDF GRAPHICS RESTORE empty] \
+          "tclpdf: restore without a save - the graphics state\
           stack of this stream is empty (8.4.2)"
     }
     my content "Q\n"
@@ -127,7 +128,8 @@ oo::define ::tclpdf::document::document {
       if {[dict get $options scale] ne {}} {
         set scale [dict get $options scale]
         if {[llength $scale] ni {1 2}} {
-          return -code error "tclpdf: -scale is one factor or {sx sy},\
+          return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT scale] \
+              "tclpdf: -scale is one factor or {sx sy},\
               not \"$scale\""
         }
         # A factor of zero makes the matrix singular: everything drawn under
@@ -135,7 +137,8 @@ oo::define ::tclpdf::document::document {
         # page from there. Negative is fine - that is a mirror.
         foreach factor $scale {
           if {![string is double -strict $factor] || $factor == 0} {
-            return -code error "tclpdf: -scale takes non-zero factors,\
+            return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT scale] \
+                "tclpdf: -scale takes non-zero factors,\
                 not \"$factor\""
           }
         }
@@ -327,10 +330,12 @@ oo::define ::tclpdf::document::document {
     set match [lsearch -exact -nocase $known $mode]
     if {$match < 0} {
       if {[string equal -nocase $mode Compatible]} {
-        return -code error "tclpdf: the blend mode Compatible is deprecated\
+        return -code error -errorcode [list TCLPDF GRAPHICS BLEND Compatible] \
+            "tclpdf: the blend mode Compatible is deprecated\
             and means Normal - name Normal instead"
       }
-      return -code error "tclpdf: unknown blend mode \"$mode\" - known are:\
+      return -code error -errorcode [list TCLPDF GRAPHICS BLEND $mode] \
+          "tclpdf: unknown blend mode \"$mode\" - known are:\
           [join $known {, }]"
     }
     # The spelling of the standard, whatever the caller typed: a name is a
@@ -353,13 +358,15 @@ oo::define ::tclpdf::document::document {
   # GraphicsStyle now emits, which is exactly the leak this separation ends.
   method GraphicsOpacity {value {which both}} {
     if {![string is double -strict $value] || $value < 0 || $value > 1} {
-      return -code error "tclpdf: opacity is a number from 0 to 1, not \"$value\""
+      return -code error -errorcode [list TCLPDF GRAPHICS OPACITY value] \
+          "tclpdf: opacity is a number from 0 to 1, not \"$value\""
     }
     # Refused rather than shrugged off: an unknown side used to produce an
     # ExtGState with neither ca nor CA - a resource that changes nothing, and
     # a call that did nothing without a word.
     if {$which ni {fill stroke both}} {
-      return -code error "tclpdf: opacity applies to fill, stroke or both,\
+      return -code error -errorcode [list TCLPDF GRAPHICS OPACITY $which] \
+          "tclpdf: opacity applies to fill, stroke or both,\
           not \"$which\""
     }
     # /ca and /CA are PDF 1.4 (Reference 1.7, Table 4.8). Checked after the
@@ -428,7 +435,8 @@ oo::define ::tclpdf::document::document {
     # been taken. Anything but the two names of 8.5.3.3 used to paint
     # nonzero without a word.
     if {[dict exists $options rule] && [dict get $options rule] ni {nonzero evenodd}} {
-      return -code error "tclpdf: -rule is nonzero or evenodd, not\
+      return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT rule] \
+          "tclpdf: -rule is nonzero or evenodd, not\
           \"[dict get $options rule]\""
     }
     if {[dict exists $options opacity] && [dict get $options opacity] ne {}} {
@@ -457,7 +465,8 @@ oo::define ::tclpdf::document::document {
       # (8.4.3.2); less than that is not a width.
       set width [dict get $options width]
       if {![string is double -strict $width] || $width < 0} {
-        return -code error "tclpdf: -width is a number of 0 or more, not \"$width\""
+        return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT width] \
+            "tclpdf: -width is a number of 0 or more, not \"$width\""
       }
       append result "[::tclpdf::pdfObj num [my distance $width]] w\n"
     }
@@ -472,7 +481,8 @@ oo::define ::tclpdf::document::document {
         set positive 0
         foreach number $dash {
           if {![string is double -strict $number] || $number < 0} {
-            return -code error "tclpdf: -dash takes lengths of 0 or more,\
+            return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT dash] \
+                "tclpdf: -dash takes lengths of 0 or more,\
                 not \"$number\""
           }
           if {$number > 0} {
@@ -480,7 +490,8 @@ oo::define ::tclpdf::document::document {
           }
         }
         if {!$positive} {
-          return -code error "tclpdf: -dash needs at least one length above\
+          return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT dash] \
+              "tclpdf: -dash needs at least one length above\
               zero - {[join $dash { }]} would draw nothing"
         }
         set lengths [lmap number $dash {::tclpdf::pdfObj num [my distance $number]}]
@@ -491,7 +502,8 @@ oo::define ::tclpdf::document::document {
       set caps {butt 0 round 1 square 2}
       set cap [dict get $options cap]
       if {![dict exists $caps $cap]} {
-        return -code error "tclpdf: line cap must be butt, round or square,\
+        return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT cap] \
+            "tclpdf: line cap must be butt, round or square,\
             not \"$cap\""
       }
       append result "[dict get $caps $cap] J\n"
@@ -500,7 +512,8 @@ oo::define ::tclpdf::document::document {
       set joins {miter 0 round 1 bevel 2}
       set style [dict get $options join]
       if {![dict exists $joins $style]} {
-        return -code error "tclpdf: line join must be miter, round or bevel,\
+        return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT join] \
+            "tclpdf: line join must be miter, round or bevel,\
             not \"$style\""
       }
       append result "[dict get $joins $style] j\n"
@@ -510,7 +523,8 @@ oo::define ::tclpdf::document::document {
       # under 1 (8.4.3.5) - 1 already bevels every join.
       set miter [dict get $options miter]
       if {![string is double -strict $miter] || $miter < 1} {
-        return -code error "tclpdf: -miter is a number of 1 or more, not \"$miter\""
+        return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT miter] \
+            "tclpdf: -miter is a number of 1 or more, not \"$miter\""
       }
       append result "[::tclpdf::pdfObj num $miter] M\n"
     }
@@ -564,7 +578,8 @@ oo::define ::tclpdf::document::document {
   # in the refusal ("-at of image place").
   method GraphicsPoint {value option what} {
     if {[llength $value] != 2} {
-      return -code error "tclpdf: $option of $what is a point {x y}, not\
+      return -code error -errorcode [list TCLPDF GRAPHICS POINT $option] \
+          "tclpdf: $option of $what is a point {x y}, not\
           \"$value\""
     }
     # AND TWO NUMBERS A PAGE HAS ROOM FOR. The shape is checked above, in
@@ -647,4 +662,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.6
+package provide tclpdf::graphics 1.7

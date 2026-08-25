@@ -124,7 +124,8 @@ oo::define ::tclpdf::document::document {
   method ShadingPattern {name kind args} {
     set shadings [my state shadings]
     if {[dict exists $shadings $name]} {
-      return -code error "tclpdf: a shading pattern named \"$name\" already exists"
+      return -code error -errorcode [list TCLPDF SHADING NAME $name] \
+          "tclpdf: a shading pattern named \"$name\" already exists"
     }
     if {$kind ni [my ShadingKinds]} {
       return -code error -errorcode [list TCLPDF SHADING KIND $kind] \
@@ -254,12 +255,14 @@ oo::define ::tclpdf::document::document {
       }
       set shape [expr {$noun eq "point" ? "{x y}" : "{w h}"}]
       if {[llength $value] != 2} {
-        return -code error "tclpdf: -$key of $what is a $noun $shape, not\
+        return -code error -errorcode [list TCLPDF SHADING ARGUMENT $key] \
+            "tclpdf: -$key of $what is a $noun $shape, not\
             \"$value\""
       }
       foreach number $value {
         if {![string is double -strict $number]} {
-          return -code error "tclpdf: -$key of $what takes numbers, not\
+          return -code error -errorcode [list TCLPDF SHADING ARGUMENT $key] \
+              "tclpdf: -$key of $what takes numbers, not\
               \"$number\""
         }
       }
@@ -282,7 +285,8 @@ oo::define ::tclpdf::document::document {
       set extend [dict get $options extend]
       if {[llength $extend] != 2 || ![string is boolean -strict [lindex $extend 0]]
           || ![string is boolean -strict [lindex $extend 1]]} {
-        return -code error "tclpdf: -extend of $what is two booleans\
+        return -code error -errorcode [list TCLPDF SHADING ARGUMENT extend] \
+            "tclpdf: -extend of $what is two booleans\
             {start end}, not \"$extend\""
       }
     }
@@ -330,12 +334,14 @@ oo::define ::tclpdf::document::document {
     set space [::tclpdf::color space [lindex $parsed 0]]
     foreach colour $parsed {
       if {[::tclpdf::color space $colour] ne $space} {
-        return -code error "tclpdf: all colours of a shading must be in one\
+        return -code error -errorcode [list TCLPDF SHADING SPACE $space] \
+            "tclpdf: all colours of a shading must be in one\
             colour space, got $space and [::tclpdf::color space $colour]"
       }
     }
     if {$space eq "Separation"} {
-      return -code error "tclpdf: a shading in a separation colour space is\
+      return -code error -errorcode [list TCLPDF SHADING SPACE separation] \
+          "tclpdf: a shading in a separation colour space is\
           not supported - give the alternate space directly"
     }
     # AND NOT A PATTERN. ISO 32000-2, 8.7.4.5.1 with Tables 78 and 80: the
@@ -370,7 +376,8 @@ oo::define ::tclpdf::document::document {
   method ShadingGradientObject {kind options what} {
     set colors [dict get $options colors]
     if {[llength $colors] < 2} {
-      return -code error "tclpdf: a shading needs at least two -colors"
+      return -code error -errorcode [list TCLPDF SHADING COLOURS count] \
+          "tclpdf: a shading needs at least two -colors"
     }
     lassign [my ShadingColours $colors $what] space parsed
     # The coordinates BEFORE the function object goes out: a refused corner
@@ -459,7 +466,8 @@ oo::define ::tclpdf::document::document {
     foreach {option value} [list -radius $radius \
         -innerRadius [dict get $options innerRadius]] {
       if {![string is double -strict $value] || $value < 0} {
-        return -code error "tclpdf: $option is a length of 0 or more, not \"$value\""
+        return -code error -errorcode [list TCLPDF SHADING ARGUMENT $option] \
+            "tclpdf: $option is a length of 0 or more, not \"$value\""
       }
     }
     if {$mapped} {
@@ -491,7 +499,8 @@ oo::define ::tclpdf::document::document {
       return $stops
     }
     if {[llength $stops] != $count} {
-      return -code error "tclpdf: -stops has [llength $stops] values but there\
+      return -code error -errorcode [list TCLPDF SHADING STOPS count] \
+          "tclpdf: -stops has [llength $stops] values but there\
           are $count colours"
     }
     # The inner stops become the Bounds of the stitching function, and
@@ -502,10 +511,12 @@ oo::define ::tclpdf::document::document {
     set previous {}
     foreach stop $stops {
       if {![string is double -strict $stop] || $stop < 0 || $stop > 1} {
-        return -code error "tclpdf: -stops are numbers from 0 to 1, not \"$stop\""
+        return -code error -errorcode [list TCLPDF SHADING STOPS range] \
+            "tclpdf: -stops are numbers from 0 to 1, not \"$stop\""
       }
       if {$previous ne {} && $stop <= $previous} {
-        return -code error "tclpdf: -stops must increase strictly:\
+        return -code error -errorcode [list TCLPDF SHADING STOPS order] \
+            "tclpdf: -stops must increase strictly:\
             [join $stops { }]"
       }
       set previous $stop
@@ -569,7 +580,8 @@ oo::define ::tclpdf::document::document {
     # a box small enough to round to nothing maps the whole domain onto a
     # point, and the shading covers nothing.
     if {[::tclpdf::geometry singular $matrix]} {
-      return -code error "tclpdf: the box -at and -size give $what is too\
+      return -code error -errorcode [list TCLPDF SHADING SIZE $what] \
+          "tclpdf: the box -at and -size give $what is too\
           small to place a shading in: its /Matrix comes out as\
           {[join [lmap value $matrix {::tclpdf::pdfObj num $value}] { }]},\
           which is singular, and a reader draws nothing under it. A PDF real\
@@ -703,4 +715,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.6
+package provide tclpdf::shading 1.7

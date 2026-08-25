@@ -64,11 +64,13 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
 
   set total [string length $bytes]
   if {$total < 4} {
-    return -code error "tclpdf: not a JPEG file - too short"
+    return -code error -errorcode [list TCLPDF IMAGE JPEG signature] \
+        "tclpdf: not a JPEG file - too short"
   }
   binary scan $bytes cucu first second
   if {$first != 0xff || $second != 0xd8} {
-    return -code error "tclpdf: not a JPEG file - it does not start with SOI"
+    return -code error -errorcode [list TCLPDF IMAGE JPEG signature] \
+        "tclpdf: not a JPEG file - it does not start with SOI"
   }
 
   set result [dict create adobe 0 transform -1 progressive 0 icc {} \
@@ -84,7 +86,8 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
   while {$offset + 1 < $total} {
     binary scan [string range $bytes $offset [expr {$offset + 1}]] cucu pad marker
     if {$pad != 0xff} {
-      return -code error "tclpdf: damaged JPEG - expected a marker at offset $offset"
+      return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED marker] \
+          "tclpdf: damaged JPEG - expected a marker at offset $offset"
     }
     # Padding: a stream may carry any number of 0xFF bytes before the marker.
     if {$marker == 0xff} {
@@ -100,7 +103,8 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
       break
     }
     if {$offset + 3 >= $total} {
-      return -code error "tclpdf: damaged JPEG - segment header runs past the end"
+      return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED segment] \
+          "tclpdf: damaged JPEG - segment header runs past the end"
     }
     binary scan [string range $bytes [expr {$offset + 2}] [expr {$offset + 3}]] Su length
     set body [string range $bytes [expr {$offset + 4}] [expr {$offset + 2 + $length - 1}]]
@@ -113,18 +117,21 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
     if {$marker >= 0xc0 && $marker <= 0xcf &&
         $marker != 0xc4 && $marker != 0xc8 && $marker != 0xcc} {
       if {$marker == $sofProgressive} {
-        return -code error "tclpdf: this is a progressive JPEG - tclpdf\
+        return -code error -errorcode [list TCLPDF IMAGE JPEG progressive] \
+            "tclpdf: this is a progressive JPEG - tclpdf\
             passes JPEG data through as it is and embeds only baseline and\
             extended sequential files; re-save it as a baseline JPEG, or\
             use PNG"
       }
       if {$marker == $sofLossless || $marker >= 0xc9} {
-        return -code error "tclpdf: this JPEG uses a coding method DCTDecode\
+        return -code error -errorcode [list TCLPDF IMAGE JPEG coding] \
+            "tclpdf: this JPEG uses a coding method DCTDecode\
             does not cover (marker [format 0x%02x $marker]) - re-save it as a\
             baseline JPEG"
       }
       if {$marker != $sofBaseline && $marker != $sofExtended} {
-        return -code error "tclpdf: unsupported JPEG frame type\
+        return -code error -errorcode [list TCLPDF IMAGE JPEG frame] \
+            "tclpdf: unsupported JPEG frame type\
             [format 0x%02x $marker]"
       }
       binary scan $body cuSuSucu precision height width components
@@ -167,11 +174,13 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
       # repeated number is its own mistake and is called one: "disagree
       # (segment 1 of 2 after 2 announced)" points at figures that agree.
       if {[dict exists $iccChunks $seq]} {
-        return -code error "tclpdf: damaged JPEG - ICC profile segment $seq\
+        return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED icc] \
+            "tclpdf: damaged JPEG - ICC profile segment $seq\
             of $iccCount appears twice"
       }
       if {$count != $iccCount || $seq < 1 || $seq > $iccCount} {
-        return -code error "tclpdf: damaged JPEG - the ICC profile segments\
+        return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED icc] \
+            "tclpdf: damaged JPEG - the ICC profile segments\
             disagree (segment $seq of $count after $iccCount announced)"
       }
       dict set iccChunks $seq [string range $body 14 end]
@@ -187,13 +196,15 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
   }
 
   if {![dict exists $result width]} {
-    return -code error "tclpdf: damaged JPEG - no start-of-frame marker found"
+    return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED frame] \
+        "tclpdf: damaged JPEG - no start-of-frame marker found"
   }
   if {$iccCount} {
     set profile {}
     for {set seq 1} {$seq <= $iccCount} {incr seq} {
       if {![dict exists $iccChunks $seq]} {
-        return -code error "tclpdf: damaged JPEG - the ICC profile is split\
+        return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED icc] \
+            "tclpdf: damaged JPEG - the ICC profile is split\
             over $iccCount APP2 segments and segment $seq is missing"
       }
       append profile [dict get $iccChunks $seq]
@@ -205,11 +216,13 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
   # or one whose height is to be defined by a DNL marker after the first
   # scan - which this module does not read either.
   if {[dict get $result width] <= 0 || [dict get $result height] <= 0} {
-    return -code error "tclpdf: damaged JPEG - the frame header says\
+    return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED frame] \
+        "tclpdf: damaged JPEG - the frame header says\
         [dict get $result width] x [dict get $result height] pixels"
   }
   if {[dict get $result components] ni {1 3 4}} {
-    return -code error "tclpdf: a JPEG with [dict get $result components]\
+    return -code error -errorcode [list TCLPDF IMAGE JPEG components] \
+        "tclpdf: a JPEG with [dict get $result components]\
         components cannot be mapped to a PDF colour space"
   }
   # DCTDecode delivers 8 bits per component and nothing else (Table 89): a
@@ -218,7 +231,8 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
   # them, and every reader would refuse the picture. Refused here instead,
   # with the reason.
   if {[dict get $result bitsPerComponent] != 8} {
-    return -code error "tclpdf: [dict get $result bitsPerComponent]-bit JPEG\
+    return -code error -errorcode [list TCLPDF IMAGE JPEG depth] \
+        "tclpdf: [dict get $result bitsPerComponent]-bit JPEG\
         is not supported by DCTDecode (ISO 32000-1 Table 89) - re-save it\
         with 8 bits per component"
   }
@@ -361,7 +375,8 @@ proc ::tclpdf::imageJpeg::space {components} {
     3 {return DeviceRGB}
     4 {return DeviceCMYK}
   }
-  return -code error "tclpdf: no PDF colour space for $components components"
+  return -code error -errorcode [list TCLPDF IMAGE JPEG components] \
+      "tclpdf: no PDF colour space for $components components"
 }
 
 # Does the image need /Decode [1 0 1 0 1 0 1 0]?
@@ -374,4 +389,4 @@ proc ::tclpdf::imageJpeg::inverted {parsed} {
   return [expr {[dict get $parsed components] == 4 && [dict get $parsed adobe]}]
 }
 
-package provide tclpdf::imageJpeg 1.5
+package provide tclpdf::imageJpeg 1.6

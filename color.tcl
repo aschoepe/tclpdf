@@ -175,7 +175,8 @@ proc ::tclpdf::color::parse {spec} {
     if {[dict exists $names $key]} {
       return [Achromatic [Hex [dict get $names $key]]]
     }
-    return -code error "tclpdf: unknown colour \"$single\""
+    return -code error -errorcode [list TCLPDF COLOUR UNKNOWN $single] \
+        "tclpdf: unknown colour \"$single\""
   }
 
   set head [string tolower [lindex $spec 0]]
@@ -201,7 +202,8 @@ proc ::tclpdf::color::parse {spec} {
       # know it is special.
       lassign $spec -> separationName alternate tint
       if {$separationName eq {}} {
-        return -code error "tclpdf: a separation needs a name -\
+        return -code error -errorcode [list TCLPDF COLOUR SEPARATION name] \
+            "tclpdf: a separation needs a name -\
             {separation Name alternate ?tint?}"
       }
       # The alternate is a device or CIE-based space (8.6.6.4: "the alternate
@@ -221,7 +223,8 @@ proc ::tclpdf::color::parse {spec} {
       # and not this module's.
       set parsedAlternate [parse $alternate]
       if {[lindex $parsedAlternate 0] ni {gray rgb cmyk lab}} {
-        return -code error "tclpdf: the alternate of separation\
+        return -code error -errorcode [list TCLPDF COLOUR SEPARATION $separationName] \
+            "tclpdf: the alternate of separation\
             \"$separationName\" is a device or CIE-based colour - grey, RGB,\
             CMYK or Lab - not {$alternate} (ISO 32000-1, 8.6.6.4)"
       }
@@ -256,7 +259,8 @@ proc ::tclpdf::color::parse {spec} {
       # values are clamped here like every other component.
       set alias [lindex $spec 1]
       if {$alias eq {}} {
-        return -code error "tclpdf: an ICC colour needs the alias of an\
+        return -code error -errorcode [list TCLPDF COLOUR ICC alias] \
+            "tclpdf: an ICC colour needs the alias of an\
             embedded profile - {icc alias components...}"
       }
       return [list icc [list $alias \
@@ -280,7 +284,8 @@ proc ::tclpdf::color::parse {spec} {
       return [list cmyk [lmap value $spec {Clamp $value}]]
     }
   }
-  return -code error "tclpdf: cannot read colour \"$spec\""
+  return -code error -errorcode [list TCLPDF COLOUR UNKNOWN $spec] \
+      "tclpdf: cannot read colour \"$spec\""
 }
 
 # The content stream operator for a parsed colour. "fill" and "stroke" differ
@@ -288,7 +293,8 @@ proc ::tclpdf::color::parse {spec} {
 proc ::tclpdf::color::operator {parsed {which fill}} {
   lassign $parsed space values
   if {$which ni {fill stroke}} {
-    return -code error "tclpdf: colour target must be fill or stroke, not \"$which\""
+    return -code error -errorcode [list TCLPDF COLOUR TARGET $which] \
+        "tclpdf: colour target must be fill or stroke, not \"$which\""
   }
   # A pattern has no component values at all, so it is answered before the
   # numbers are formatted - running a resource NAME through [num] would throw.
@@ -332,7 +338,8 @@ proc ::tclpdf::color::operator {parsed {which fill}} {
       return "[::tclpdf::pdfObj name $entry] $marker\n$numbers $code"
     }
     default {
-      return -code error "tclpdf: unknown colour space \"$space\""
+      return -code error -errorcode [list TCLPDF COLOUR SPACE $space] \
+          "tclpdf: unknown colour space \"$space\""
     }
   }
   if {$which eq "stroke"} {
@@ -677,7 +684,8 @@ oo::define ::tclpdf::document::document {
       embed {return [my IccEmbed {*}$args]}
       names {return [dict keys [my state iccProfiles]]}
       default {
-        return -code error "tclpdf: unknown icc subcommand \"$subcommand\" -\
+        return -code error -errorcode [list TCLPDF COLOUR SUBCOMMAND $subcommand] \
+            "tclpdf: unknown icc subcommand \"$subcommand\" -\
             known are: embed, names"
       }
     }
@@ -689,22 +697,26 @@ oo::define ::tclpdf::document::document {
   # disagree about what a profile describes.
   method IccEmbed {alias path} {
     if {$alias eq {}} {
-      return -code error "tclpdf: icc embed needs an alias and a file name"
+      return -code error -errorcode [list TCLPDF COLOUR ICC arguments] \
+          "tclpdf: icc embed needs an alias and a file name"
     }
     # The same reserved names as a separation, for the same reason: an alias
     # called Pattern would write "/Pattern cs" and mean the pattern space,
     # silently, and one called Lab would collide with a Lab colour's entry.
     if {[set why [::tclpdf::color::Reserved $alias]] ne {}} {
-      return -code error "tclpdf: \"$alias\" cannot be the alias of an ICC\
+      return -code error -errorcode [list TCLPDF COLOUR ICC $alias] \
+          "tclpdf: \"$alias\" cannot be the alias of an ICC\
           profile - $why"
     }
     set known [my state iccProfiles]
     if {[dict exists $known $alias]} {
-      return -code error "tclpdf: an ICC profile named \"$alias\" is already\
+      return -code error -errorcode [list TCLPDF COLOUR ICC $alias] \
+          "tclpdf: an ICC profile named \"$alias\" is already\
           embedded"
     }
     if {[dict exists [my state separations] $alias]} {
-      return -code error "tclpdf: \"$alias\" already names a separation - an\
+      return -code error -errorcode [list TCLPDF COLOUR ICC $alias] \
+          "tclpdf: \"$alias\" already names a separation - an\
           ICC profile cannot reuse it"
     }
     set bytes [::tclpdf::io read $path]
@@ -727,12 +739,14 @@ oo::define ::tclpdf::document::document {
       if {[llength [dict keys $known]]} {
         set hint " - known are: [join [dict keys $known] {, }]"
       }
-      return -code error "tclpdf: no ICC profile named \"$alias\" - register\
+      return -code error -errorcode [list TCLPDF COLOUR ICC $alias] \
+          "tclpdf: no ICC profile named \"$alias\" - register\
           it with \"icc embed\" first$hint"
     }
     set profile [dict get $known $alias]
     if {[llength $values] != [dict get $profile components]} {
-      return -code error "tclpdf: \"$alias\" is a [dict get $profile space]\
+      return -code error -errorcode [list TCLPDF COLOUR ICC $alias] \
+          "tclpdf: \"$alias\" is a [dict get $profile space]\
           profile and takes [dict get $profile components] component[expr\
           {[dict get $profile components] == 1 ? {} : {s}}], got\
           [llength $values]: \"$values\""
@@ -885,7 +899,8 @@ proc ::tclpdf::color::iccSpace {bytes profile} {
   # dropped into the message as it is. Quoting it here wrapped whole
   # descriptions in quotation marks; the caller knows what to call it.
   if {[string range $bytes 36 39] ne "acsp"} {
-    return -code error "tclpdf: $profile is not an ICC profile - the\
+    return -code error -errorcode [list TCLPDF COLOUR PROFILE $profile] \
+        "tclpdf: $profile is not an ICC profile - the\
         signature \"acsp\" is missing from its header"
   }
   set space [string trimright [string range $bytes 16 19]]
@@ -893,7 +908,8 @@ proc ::tclpdf::color::iccSpace {bytes profile} {
   if {![dict exists $spaces $space]} {
     # Worded for every caller alike - the output intent, [icc embed], a
     # picture's embedded profile all read through here.
-    return -code error "tclpdf: $profile describes colour space \"$space\" -\
+    return -code error -errorcode [list TCLPDF COLOUR PROFILE $profile] \
+        "tclpdf: $profile describes colour space \"$space\" -\
         a device space profile is needed: GRAY, RGB and CMYK"
   }
   return [list $space [dict get $spaces $space]]
@@ -933,7 +949,8 @@ proc ::tclpdf::color::space {parsed} {
       # written. A gradient in a DeviceN space would be legal by 8.7.4.5 and
       # is not built: the shading dictionary would have to carry the space
       # itself and its stops one tint per colourant.
-      return -code error "tclpdf: a DeviceN colour cannot stand here - a\
+      return -code error -errorcode [list TCLPDF COLOUR SPACE devicen] \
+          "tclpdf: a DeviceN colour cannot stand here - a\
           gradient names its space by family, and a DeviceN space is an\
           array (ISO 32000-2, 8.6.6.5); give the stops in grey, RGB or CMYK"
     }
@@ -944,7 +961,8 @@ proc ::tclpdf::color::space {parsed} {
       # a shading collecting its stops is the one caller - cannot use the
       # answer, and is told so instead of receiving "/ICCBased" and
       # writing it as if it were /DeviceRGB.
-      return -code error "tclpdf: an ICC based colour cannot stand here -\
+      return -code error -errorcode [list TCLPDF COLOUR SPACE icc] \
+          "tclpdf: an ICC based colour cannot stand here -\
           a gradient names its space by family, and takes grey, RGB or CMYK"
     }
     lab {
@@ -953,12 +971,14 @@ proc ::tclpdf::color::space {parsed} {
       # where a name is written. A separation alternate CAN be Lab - that
       # road does not come through here but builds the array itself, see
       # [ColourUsed].
-      return -code error "tclpdf: a Lab colour cannot stand here - a gradient\
+      return -code error -errorcode [list TCLPDF COLOUR SPACE lab] \
+          "tclpdf: a Lab colour cannot stand here - a gradient\
           names its space by family, and a Lab space is an array (ISO\
           32000-2, 8.6.5.4); give the stops in grey, RGB or CMYK"
     }
   }
-  return -code error "tclpdf: unknown colour space \"[lindex $parsed 0]\""
+  return -code error -errorcode [list TCLPDF COLOUR SPACE [lindex $parsed 0]] \
+      "tclpdf: unknown colour space \"[lindex $parsed 0]\""
 }
 
 # The /ColorSpace resource entry a Lab colour paints through. Derived from
@@ -1004,7 +1024,8 @@ proc ::tclpdf::color::LabColour {arguments} {
   variable labWhitePoint
   variable labRange
   if {[llength $arguments] < 3} {
-    return -code error "tclpdf: lab needs exactly 3 components - L, a and b -\
+    return -code error -errorcode [list TCLPDF COLOUR LAB components] \
+        "tclpdf: lab needs exactly 3 components - L, a and b -\
         got [llength $arguments]: \"$arguments\""
   }
   set options [::tclpdf::option parse [list whitePoint $labWhitePoint \
@@ -1022,17 +1043,20 @@ proc ::tclpdf::color::LabColour {arguments} {
 # to show for it.
 proc ::tclpdf::color::LabWhitePoint {value} {
   if {[llength $value] != 3} {
-    return -code error "tclpdf: -whitePoint is three numbers {Xw Yw Zw}, got\
+    return -code error -errorcode [list TCLPDF COLOUR LAB whitePoint] \
+        "tclpdf: -whitePoint is three numbers {Xw Yw Zw}, got\
         [llength $value]: \"$value\""
   }
   set value [lmap number $value {Double $number -whitePoint}]
   lassign $value x y z
   if {$x <= 0 || $z <= 0} {
-    return -code error "tclpdf: Xw and Zw of -whitePoint shall be positive\
+    return -code error -errorcode [list TCLPDF COLOUR LAB whitePoint] \
+        "tclpdf: Xw and Zw of -whitePoint shall be positive\
         (ISO 32000-2, 8.6.5.4, Table 64), got \"$value\""
   }
   if {$y != 1.0} {
-    return -code error "tclpdf: Yw of -whitePoint shall be 1.0 (ISO 32000-2,\
+    return -code error -errorcode [list TCLPDF COLOUR LAB whitePoint] \
+        "tclpdf: Yw of -whitePoint shall be 1.0 (ISO 32000-2,\
         8.6.5.4, Table 64), got \"$y\""
   }
   return $value
@@ -1043,13 +1067,15 @@ proc ::tclpdf::color::LabWhitePoint {value} {
 # it would put every colour on one edge without a word.
 proc ::tclpdf::color::LabRange {value} {
   if {[llength $value] != 4} {
-    return -code error "tclpdf: -range is four numbers {amin amax bmin bmax},\
+    return -code error -errorcode [list TCLPDF COLOUR LAB range] \
+        "tclpdf: -range is four numbers {amin amax bmin bmax},\
         got [llength $value]: \"$value\""
   }
   set value [lmap number $value {Double $number -range}]
   lassign $value aMin aMax bMin bMax
   if {$aMin > $aMax || $bMin > $bMax} {
-    return -code error "tclpdf: -range runs from the smaller value to the\
+    return -code error -errorcode [list TCLPDF COLOUR LAB range] \
+        "tclpdf: -range runs from the smaller value to the\
         larger, {amin amax bmin bmax}, got \"$value\""
   }
   return $value
@@ -1071,7 +1097,8 @@ proc ::tclpdf::color::LabComponents {values range} {
 # get one resource entry rather than two.
 proc ::tclpdf::color::Double {value option} {
   if {![string is double -strict $value]} {
-    return -code error "tclpdf: $option takes numbers, got \"$value\""
+    return -code error -errorcode [list TCLPDF COLOUR LAB $option] \
+        "tclpdf: $option takes numbers, got \"$value\""
   }
   return [expr {double($value)}]
 }
@@ -1418,7 +1445,8 @@ proc ::tclpdf::color::Hex {hex} {
     set hex $expanded
   }
   if {![regexp {^[0-9a-fA-F]{6}$} $hex]} {
-    return -code error "tclpdf: not a hexadecimal colour: \"$hex\""
+    return -code error -errorcode [list TCLPDF COLOUR HEX $hex] \
+        "tclpdf: not a hexadecimal colour: \"$hex\""
   }
   set result {}
   foreach {high low} [split $hex {}] {
@@ -1438,7 +1466,8 @@ proc ::tclpdf::color::Hex {hex} {
 # so {rgb 1 0 0 0} looked like it worked and meant something else.
 proc ::tclpdf::color::Components {space values count} {
   if {[llength $values] != $count} {
-    return -code error "tclpdf: $space needs exactly $count component[expr\
+    return -code error -errorcode [list TCLPDF COLOUR COMPONENTS $space] \
+        "tclpdf: $space needs exactly $count component[expr\
         {$count == 1 ? {} : {s}}], got [llength $values]: \"$values\""
   }
   return [lmap value $values {Clamp $value}]
@@ -1455,7 +1484,8 @@ proc ::tclpdf::color::Clamp {value} {
 # it was written when it is inside, so that {rgb 0.2 ...} still says 0.2.
 proc ::tclpdf::color::Pin {value low high} {
   if {![string is double -strict $value]} {
-    return -code error "tclpdf: colour component is not a number: \"$value\""
+    return -code error -errorcode [list TCLPDF COLOUR COMPONENTS number] \
+        "tclpdf: colour component is not a number: \"$value\""
   }
   if {$value < $low} {
     return $low
@@ -1466,4 +1496,4 @@ proc ::tclpdf::color::Pin {value low high} {
   return $value
 }
 
-package provide tclpdf::color 1.7
+package provide tclpdf::color 1.8

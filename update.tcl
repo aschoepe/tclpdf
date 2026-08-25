@@ -228,7 +228,8 @@ oo::class create ::tclpdf::update::Session {
 
     set trailer [dict get $tclpdfReader trailer]
     if {[::tclpdf::importRead::Get $trailer Root] eq {}} {
-      return -code error "tclpdf: $path has no /Root in its trailer - an\
+      return -code error -errorcode [list TCLPDF UPDATE FOREIGN Root] \
+          "tclpdf: $path has no /Root in its trailer - an\
           update carries the previous trailer forward, and there is no\
           document to carry"
     }
@@ -304,14 +305,17 @@ oo::class create ::tclpdf::update::Session {
   # cross-reference section of the update names an object that is not there.
   method release {number} {
     if {![dict exists $tclpdfBodies $number]} {
-      return -code error "tclpdf: object $number was never reserved by this\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: object $number was never reserved by this\
           update"
     }
     if {[dict get $tclpdfBodies $number] eq "null"} {
-      return -code error "tclpdf: object $number was already released"
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: object $number was already released"
     }
     if {[dict get $tclpdfBodies $number] ne {}} {
-      return -code error "tclpdf: object $number is already written and\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: object $number is already written and\
           cannot be released"
     }
     dict set tclpdfBodies $number null
@@ -321,7 +325,8 @@ oo::class create ::tclpdf::update::Session {
   # Fill a number this update reserved.
   method put {number body} {
     if {![dict exists $tclpdfBodies $number]} {
-      return -code error "tclpdf: object $number was never reserved by this\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: object $number was never reserved by this\
           update - a number the file already defines is written with\
           \"replace\""
     }
@@ -374,7 +379,8 @@ oo::class create ::tclpdf::update::Session {
   # pieces missing.
   method ref {number} {
     if {![my defines $number]} {
-      return -code error "tclpdf: no such object: $number - neither\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: no such object: $number - neither\
           \"[file tail $tclpdfPath]\" nor this update defines it"
     }
     return [::tclpdf::pdfObj ref $number]
@@ -398,7 +404,8 @@ oo::class create ::tclpdf::update::Session {
       }
     }
     if {![dict exists $tclpdfReader xref $number]} {
-      return -code error "tclpdf: no such object: $number"
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: no such object: $number"
     }
     lassign [::tclpdf::importRead::Object tclpdfReader $number] value hasStream data
     set body [my Text $value]
@@ -428,7 +435,8 @@ oo::class create ::tclpdf::update::Session {
       2 {
         lassign $args key value
         if {$key in {Size Prev}} {
-          return -code error "tclpdf: the added trailer's /$key is the\
+          return -code error -errorcode [list TCLPDF UPDATE TRAILER $key] \
+              "tclpdf: the added trailer's /$key is the\
               update's own - /Size counts the objects and /Prev names the\
               previous cross-reference section"
         }
@@ -436,7 +444,8 @@ oo::class create ::tclpdf::update::Session {
         return $value
       }
       default {
-        return -code error "tclpdf: wrong # args: should be \"trailer ?key?\
+        return -code error -errorcode [list TCLPDF UPDATE TRAILER arguments] \
+            "tclpdf: wrong # args: should be \"trailer ?key?\
             ?value?\""
       }
     }
@@ -460,7 +469,8 @@ oo::class create ::tclpdf::update::Session {
   method appendix {} {
     my CheckComplete
     if {![llength $tclpdfOrder] && ![dict size $tclpdfOverrides]} {
-      return -code error "tclpdf: this update changes nothing - an update\
+      return -code error -errorcode [list TCLPDF UPDATE EMPTY nothing] \
+          "tclpdf: this update changes nothing - an update\
           appends objects or trailer entries, and a file that gains neither\
           is better left as it is"
     }
@@ -606,17 +616,20 @@ oo::class create ::tclpdf::update::Session {
   # of this file answers.
   method CheckReplaceable {number} {
     if {![string is entier -strict $number] || $number < 1} {
-      return -code error "tclpdf: an object number is a positive integer, not\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: an object number is a positive integer, not\
           \"$number\""
     }
     if {![dict exists $tclpdfReader xref $number]} {
-      return -code error "tclpdf: \"[file tail $tclpdfPath]\" defines no\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: \"[file tail $tclpdfPath]\" defines no\
           object $number - an object the file does not have is written with\
           \"add\", which hands out a number of its own"
     }
     set generation [my Generation $number]
     if {$generation != 0} {
-      return -code error "tclpdf: object $number of\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: object $number of\
           \"[file tail $tclpdfPath]\" is at generation $generation, and this\
           update writes generation 0 - the two are different objects, not two\
           versions of one"
@@ -624,13 +637,15 @@ oo::class create ::tclpdf::update::Session {
     set type [lindex [::tclpdf::importRead::Get \
         [lindex [::tclpdf::importRead::Object tclpdfReader $number] 0] Type] 1]
     if {$type eq "ObjStm"} {
-      return -code error "tclpdf: object $number of\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: object $number of\
           \"[file tail $tclpdfPath]\" is an object stream - replacing it\
           would hide the objects compressed inside it, which the file's\
           cross-reference still points into"
     }
     if {$type eq "XRef"} {
-      return -code error "tclpdf: object $number of\
+      return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
+          "tclpdf: object $number of\
           \"[file tail $tclpdfPath]\" is a cross-reference stream - it is the\
           file's own bookkeeping, and an update writes its own"
     }
@@ -652,12 +667,14 @@ oo::class create ::tclpdf::update::Session {
     set head [string range [dict get $tclpdfReader bytes] $offset \
         [expr {$offset + 63}]]
     if {![regexp {^\s*(\d+)\s+(\d+)\s+obj\M} $head -> found generation]} {
-      return -code error "tclpdf: \"[file tail $tclpdfPath]\": no object\
+      return -code error -errorcode [list TCLPDF UPDATE FOREIGN $number] \
+          "tclpdf: \"[file tail $tclpdfPath]\": no object\
           header at offset $offset, where the cross-reference puts object\
           $number"
     }
     if {$found != $number} {
-      return -code error "tclpdf: \"[file tail $tclpdfPath]\": the\
+      return -code error -errorcode [list TCLPDF UPDATE FOREIGN $number] \
+          "tclpdf: \"[file tail $tclpdfPath]\": the\
           cross-reference puts object $number at offset $offset, and the\
           object there is $found"
     }
@@ -672,4 +689,4 @@ oo::class create ::tclpdf::update::Session {
   }
 }
 
-package provide tclpdf::update 1.0
+package provide tclpdf::update 1.1

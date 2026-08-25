@@ -71,7 +71,8 @@ oo::define ::tclpdf::document::document {
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "textPath"]
     if {![llength [dict get $options segments]]} {
-      return -code error "tclpdf: textPath needs -segments"
+      return -code error -errorcode [list TCLPDF TEXT PATH segments] \
+          "tclpdf: textPath needs -segments"
     }
     # The same refusals [path] gives, from the same place: a wrong operand
     # count or a non-number used to crash in the arc-length arithmetic
@@ -83,7 +84,8 @@ oo::define ::tclpdf::document::document {
     # Two POINTS, so four numbers - counting coordinates let a lone [move]
     # through, and the text then had nowhere to run.
     if {[llength $points] < 4} {
-      return -code error "tclpdf: a path for text needs at least two points"
+      return -code error -errorcode [list TCLPDF TEXT PATH points] \
+          "tclpdf: a path for text needs at least two points"
     }
     lassign [my TextPathLengths $points] lengths total
 
@@ -98,7 +100,8 @@ oo::define ::tclpdf::document::document {
       right {set cursor [expr {$total - $width}]}
       center - centre {set cursor [expr {($total - $width) / 2.0}]}
       default {
-        return -code error "tclpdf: -align must be left, right or center,\
+        return -code error -errorcode [list TCLPDF TEXT PATH align] \
+            "tclpdf: -align must be left, right or center,\
             not \"[dict get $options align]\""
       }
     }
@@ -107,7 +110,8 @@ oo::define ::tclpdf::document::document {
     if {![string is double -strict $offset]} {
       # Any sign - below the path is a place too - but a number, and said
       # so here: "abc" used to fail in Tcl's words from inside the loop.
-      return -code error "tclpdf: -offset takes a distance in the document\
+      return -code error -errorcode [list TCLPDF TEXT PATH offset] \
+          "tclpdf: -offset takes a distance in the document\
           unit, not \"$offset\""
     }
     # -spacing has no operator here: on a path every cluster is placed by
@@ -369,4 +373,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.7
+package provide tclpdf::textPath 1.8

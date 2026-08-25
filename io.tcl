@@ -39,10 +39,12 @@ namespace eval ::tclpdf::io {
 # Read a file as bytes.
 proc ::tclpdf::io::read {path} {
   if {![file exists $path]} {
-    return -code error "tclpdf: \"$path\" does not exist"
+    return -code error -errorcode [list TCLPDF IO MISSING $path] \
+        "tclpdf: \"$path\" does not exist"
   }
   if {[file isdirectory $path]} {
-    return -code error "tclpdf: \"$path\" is a directory, not a file"
+    return -code error -errorcode [list TCLPDF IO DIRECTORY $path] \
+        "tclpdf: \"$path\" is a directory, not a file"
   }
   set channel [open $path r]
   fconfigure $channel -translation binary
@@ -55,7 +57,8 @@ proc ::tclpdf::io::read {path} {
 # into memory to find out how wide it is.
 proc ::tclpdf::io::head {path count} {
   if {![file exists $path]} {
-    return -code error "tclpdf: \"$path\" does not exist"
+    return -code error -errorcode [list TCLPDF IO MISSING $path] \
+        "tclpdf: \"$path\" does not exist"
   }
   set channel [open $path r]
   fconfigure $channel -translation binary
@@ -73,4 +76,4 @@ proc ::tclpdf::io::write {path bytes} {
   return $path
 }
 
-package provide tclpdf::io 1.0
+package provide tclpdf::io 1.1

@@ -117,19 +117,22 @@ namespace eval ::tclpdf::glyfPath {
 # a stray moveto in a Type 3 glyph stream is noise a reader has to skip.
 proc ::tclpdf::glyfPath::contours {glyph {transform {}}} {
   if {![dict exists $glyph type]} {
-    return -code error "tclpdf: not a parsed glyph outline"
+    return -code error -errorcode [list TCLPDF GLYF OUTLINE parsed] \
+        "tclpdf: not a parsed glyph outline"
   }
   switch -- [dict get $glyph type] {
     empty {
       return {}
     }
     composite {
-      return -code error "tclpdf: a composite glyph has no outline of its own\
+      return -code error -errorcode [list TCLPDF GLYF OUTLINE composite] \
+          "tclpdf: a composite glyph has no outline of its own\
           - resolve its components into a simple outline first"
     }
     simple {}
     default {
-      return -code error "tclpdf: unknown glyph type\
+      return -code error -errorcode [list TCLPDF GLYF OUTLINE type] \
+          "tclpdf: unknown glyph type\
           \"[dict get $glyph type]\""
     }
   }
@@ -286,4 +289,4 @@ proc ::tclpdf::glyfPath::Numbers {values} {
   return [join [lmap value $values {::tclpdf::pdfObj num $value}] { }]
 }
 
-package provide tclpdf::glyfPath 1.0
+package provide tclpdf::glyfPath 1.1

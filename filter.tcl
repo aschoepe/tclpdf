@@ -119,7 +119,8 @@ proc ::tclpdf::filter::decodeAscii85 {text} {
 proc ::tclpdf::filter::Ascii85Group {digits} {
   set count [llength $digits]
   if {$count < 2} {
-    return -code error "tclpdf: truncated ASCII85 group"
+    return -code error -errorcode [list TCLPDF FILTER ASCII85 truncated] \
+        "tclpdf: truncated ASCII85 group"
   }
   for {set n $count} {$n < 5} {incr n} {
     lappend digits 84
@@ -560,4 +561,4 @@ proc ::tclpdf::filter::decodeCcitt {bytes args} {
   tailcall ::tclpdf::filterCcitt decode $bytes {*}$args
 }
 
-package provide tclpdf::filter 1.3
+package provide tclpdf::filter 1.4

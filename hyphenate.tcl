@@ -272,7 +272,8 @@ proc ::tclpdf::hyphenate::load {tag path args} {
       continue
     }
     if {![string is integer -strict $value] || $value < 1} {
-      return -code error "tclpdf: -$name takes a whole number of 1 or more,\
+      return -code error -errorcode [list TCLPDF HYPHENATE ARGUMENT $name] \
+          "tclpdf: -$name takes a whole number of 1 or more,\
           not \"$value\""
     }
   }
@@ -360,7 +361,8 @@ proc ::tclpdf::hyphenate::Tag {tag} {
   # The same shape [$doc language] takes, so that what is loaded and what a
   # document declares can be compared at all.
   if {![regexp {^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$} $tag]} {
-    return -code error "tclpdf: \"$tag\" is not a language tag - expected\
+    return -code error -errorcode [list TCLPDF HYPHENATE LANGUAGE $tag] \
+        "tclpdf: \"$tag\" is not a language tag - expected\
         something like de, de-DE or en-GB (RFC 3066)"
   }
   return $tag
@@ -412,7 +414,8 @@ proc ::tclpdf::hyphenate::Read {path} {
       set encoding [dict get $encodingNames $encoding]
     }
     if {$encoding ni [encoding names]} {
-      return -code error "tclpdf: [file tail $path] says it is written in\
+      return -code error -errorcode [list TCLPDF HYPHENATE PATTERNS encoding] \
+          "tclpdf: [file tail $path] says it is written in\
           \"$declared\", which this Tcl has no encoding for - a libhyphen\
           pattern file names its encoding on its first line"
     }
@@ -440,13 +443,15 @@ proc ::tclpdf::hyphenate::Read {path} {
   foreach {name directive} {left LEFTHYPHENMIN right RIGHTHYPHENMIN} {
     set value [dict get $data $name]
     if {$value ne {} && (![string is integer -strict $value] || $value < 1)} {
-      return -code error "tclpdf: [file tail $path] says $directive\
+      return -code error -errorcode [list TCLPDF HYPHENATE PATTERNS directive] \
+          "tclpdf: [file tail $path] says $directive\
           \"$value\", and that is the number of letters that must stay on one\
           side of a break - a whole number of 1 or more"
     }
   }
   if {![dict get $data patterns]} {
-    return -code error "tclpdf: [file tail $path] holds no hyphenation\
+    return -code error -errorcode [list TCLPDF HYPHENATE PATTERNS empty] \
+        "tclpdf: [file tail $path] holds no hyphenation\
         patterns - expected a libhyphen .dic file, whose first line is an\
         encoding name and whose remaining lines are patterns like \".a1be\""
   }
@@ -822,4 +827,4 @@ proc ::tclpdf::hyphenate::Pieces {data string} {
   return $pieces
 }
 
-package provide tclpdf::hyphenate 1.1
+package provide tclpdf::hyphenate 1.2

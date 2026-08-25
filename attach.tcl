@@ -145,28 +145,33 @@ oo::define ::tclpdf::document::document {
       # each character and says nothing - "中" became one byte 0x2D in the
       # file. Same rule as the writer's, said at the call.
       if {[regexp {[^\u0000-\u00ff]} $bytes]} {
-        return -code error "tclpdf: -data takes bytes, not text - encode it\
+        return -code error -errorcode [list TCLPDF ATTACH ARGUMENT data] \
+            "tclpdf: -data takes bytes, not text - encode it\
             first (encoding convertto utf-8 \$text)"
       }
     } else {
-      return -code error "tclpdf: attach needs a file name or -data"
+      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT source] \
+          "tclpdf: attach needs a file name or -data"
     }
     set name [dict get $options name]
     if {$name eq {}} {
-      return -code error "tclpdf: attach needs -name when given -data"
+      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT name] \
+          "tclpdf: attach needs -name when given -data"
     }
     # 7.11.2.1: in a file specification string "/" separates path
     # components and "\\" escapes, so neither can be part of a NAME - a
     # "dir/sub.txt" would be read as a path, and the name tree wants a name.
     if {[string first / $name] >= 0 || [string first \\ $name] >= 0} {
-      return -code error "tclpdf: -name must not contain \"/\" or \"\\\" -\
+      return -code error -errorcode [list TCLPDF ATTACH NAME $name] \
+          "tclpdf: -name must not contain \"/\" or \"\\\" -\
           they are path separators in a file specification (ISO 32000-1,\
           7.11.2.1) - not \"$name\""
     }
 
     variable ::tclpdf::attach::relationships
     if {[dict get $options relationship] ni $relationships} {
-      return -code error "tclpdf: -relationship must be one of\
+      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT relationship] \
+          "tclpdf: -relationship must be one of\
           [join $relationships {, }] - not \"[dict get $options relationship]\""
     }
     # /Subtype of the embedded file stream is the MIME type as a name
@@ -174,11 +179,13 @@ oo::define ::tclpdf::document::document {
     # an empty or a spaced value wrote a name a reader cannot use.
     if {![regexp {^[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+$} \
         [dict get $options mime]]} {
-      return -code error "tclpdf: -mime takes a media type such as text/xml\
+      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT mime] \
+          "tclpdf: -mime takes a media type such as text/xml\
           or application/pdf, not \"[dict get $options mime]\""
     }
     if {![string is boolean -strict [dict get $options compress]]} {
-      return -code error "tclpdf: -compress takes a boolean, not\
+      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT compress] \
+          "tclpdf: -compress takes a boolean, not\
           \"[dict get $options compress]\""
     }
     # /ModDate in the Params dictionary is a PDF date (Table 46) - the same
@@ -190,7 +197,8 @@ oo::define ::tclpdf::document::document {
     # that is not itself PDF/A (ISO 19005-2, 6.8), and a claim already made
     # is not quietly broken by an attachment that follows it.
     if {[my state pdfa] ne {} && [dict get [my state pdfa] part] == 2} {
-      return -code error "tclpdf: this document claims PDF/A-2, which admits\
+      return -code error -errorcode [list TCLPDF ATTACH STATE pdfa2] \
+          "tclpdf: this document claims PDF/A-2, which admits\
           no embedded file that is not itself PDF/A (ISO 19005-2, 6.8) -\
           declare pdfa -part 3, which admits any file"
     }
@@ -203,7 +211,8 @@ oo::define ::tclpdf::document::document {
     set attachments [my state attachments]
     foreach entry $attachments {
       if {[dict get $entry name] eq $name} {
-        return -code error "tclpdf: an attachment named\
+        return -code error -errorcode [list TCLPDF ATTACH NAME $name] \
+            "tclpdf: an attachment named\
             \"$name\" already exists - names in the embedded\
             file name tree have to be unique"
       }
@@ -329,4 +338,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.5
+package provide tclpdf::attach 1.6

@@ -184,7 +184,8 @@ oo::define ::tclpdf::document::document {
     # and the text ran straight through it, in silence. The shapes themselves
     # are read by the pattern below, which has no spelling for NaN.
     if {![::tclpdf::text::finite $margin]} {
-      return -code error "tclpdf: -avoidMargin takes a distance in the\
+      return -code error -errorcode [list TCLPDF TEXT AVOID margin] \
+          "tclpdf: -avoidMargin takes a distance in the\
           document unit, not \"$margin\""
     }
     foreach shape $shapes {
@@ -202,12 +203,14 @@ oo::define ::tclpdf::document::document {
               || [llength [lindex $shape 1]] != 2
               || [llength [lindex $shape 2]] != 2
               || [lsearch -not -regexp $numbers {^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$}] >= 0} {
-            return -code error "tclpdf: an avoided rectangle is\
+            return -code error -errorcode [list TCLPDF TEXT AVOID rect] \
+                "tclpdf: an avoided rectangle is\
                 {rect {x y} {width height} ?margin?}, got \"$shape\""
           }
           lassign [lindex $shape 2] width height
           if {$width <= 0 || $height <= 0} {
-            return -code error "tclpdf: an avoided rectangle needs a width\
+            return -code error -errorcode [list TCLPDF TEXT AVOID rect] \
+                "tclpdf: an avoided rectangle needs a width\
                 and a height above zero, got {$width $height} in \"$shape\""
           }
         }
@@ -215,16 +218,19 @@ oo::define ::tclpdf::document::document {
           if {[llength $shape] < 3 || [llength $shape] > 4
               || [llength [lindex $shape 1]] != 2
               || [lsearch -not -regexp $numbers {^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$}] >= 0} {
-            return -code error "tclpdf: an avoided circle is\
+            return -code error -errorcode [list TCLPDF TEXT AVOID circle] \
+                "tclpdf: an avoided circle is\
                 {circle {x y} radius ?margin?}, got \"$shape\""
           }
           if {[lindex $shape 2] <= 0} {
-            return -code error "tclpdf: an avoided circle needs a radius\
+            return -code error -errorcode [list TCLPDF TEXT AVOID circle] \
+                "tclpdf: an avoided circle needs a radius\
                 above zero, got [lindex $shape 2] in \"$shape\""
           }
         }
         default {
-          return -code error "tclpdf: -avoid takes {rect {x y} {w h}} and\
+          return -code error -errorcode [list TCLPDF TEXT AVOID shape] \
+              "tclpdf: -avoid takes {rect {x y} {w h}} and\
               {circle {x y} r}, not \"[lindex $shape 0]\""
         }
       }
@@ -233,4 +239,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textAvoid 1.2
+package provide tclpdf::textAvoid 1.3

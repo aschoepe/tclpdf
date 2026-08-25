@@ -69,7 +69,8 @@ proc ::tclpdf::svgPath::operators {data transform} {
       continue
     }
     if {[llength $arguments] % $step} {
-      return -code error "tclpdf: path command \"$command\" takes groups of\
+      return -code error -errorcode [list TCLPDF SVG PATH $command] \
+          "tclpdf: path command \"$command\" takes groups of\
           $step numbers, got [llength $arguments]"
     }
 
@@ -367,4 +368,4 @@ proc ::tclpdf::svgPath::Point {transform x y} {
   return "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]"
 }
 
-package provide tclpdf::svgPath 1.0
+package provide tclpdf::svgPath 1.1

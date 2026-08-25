@@ -57,7 +57,8 @@ oo::define ::tclpdf::document::document {
       names {return [dict keys [my state forms]]}
       size {return [my FormSize {*}$args]}
       default {
-        return -code error "tclpdf: unknown form subcommand \"$subcommand\" -\
+        return -code error -errorcode [list TCLPDF FORM SUBCOMMAND $subcommand] \
+            "tclpdf: unknown form subcommand \"$subcommand\" -\
             known are: create, place, names, size"
       }
     }
@@ -67,27 +68,31 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {size {} script {} unit {}} $args \
         "form create"]
     if {[dict get $options size] eq {}} {
-      return -code error "tclpdf: form create needs -size {width height}"
+      return -code error -errorcode [list TCLPDF FORM ARGUMENT size] \
+          "tclpdf: form create needs -size {width height}"
     }
     # An empty -script is allowed: a form with no content is a valid object
     # and useful as a placeholder. Only the size is genuinely required, since
     # the bounding box cannot be guessed from an empty script.
     set forms [my state forms]
     if {[dict exists $forms $name]} {
-      return -code error "tclpdf: a form named \"$name\" already exists"
+      return -code error -errorcode [list TCLPDF FORM NAME $name] \
+          "tclpdf: a form named \"$name\" already exists"
     }
     # Two lengths above zero, checked BEFORE the script runs - the same
     # check a tiling pattern makes: a form of no width has a BBox with no
     # inside and no reader draws it, and one number instead of two used to
     # run the script and fail afterwards, at the BBox.
     if {[llength [dict get $options size]] != 2} {
-      return -code error "tclpdf: -size of form \"$name\" is {width height},\
+      return -code error -errorcode [list TCLPDF FORM ARGUMENT size] \
+          "tclpdf: -size of form \"$name\" is {width height},\
           not \"[dict get $options size]\""
     }
     lassign [my extent [dict get $options size] [dict get $options unit]] \
         widthPoints heightPoints
     if {$widthPoints <= 0 || $heightPoints <= 0} {
-      return -code error "tclpdf: -size of form \"$name\" is\
+      return -code error -errorcode [list TCLPDF FORM ARGUMENT size] \
+          "tclpdf: -size of form \"$name\" is\
           {[dict get $options size]} - a form needs a width and a height above zero"
     }
 
@@ -164,7 +169,8 @@ oo::define ::tclpdf::document::document {
             fitMode {} align left valign top} $args "form place"]
     set forms [my state forms]
     if {![dict exists $forms $name]} {
-      return -code error "tclpdf: no form named \"$name\" - known are:\
+      return -code error -errorcode [list TCLPDF FORM NAME $name] \
+          "tclpdf: no form named \"$name\" - known are:\
           [join [dict keys $forms] {, }]"
     }
     set form [dict get $forms $name]
@@ -194,7 +200,8 @@ oo::define ::tclpdf::document::document {
     # a NaN factor went through this check untouched and died in the matrix
     # arithmetic below, in Tcl's own words.
     if {![::tclpdf::option finite $scale] || $scale <= 0} {
-      return -code error "tclpdf: -scale of form place is a factor above zero,\
+      return -code error -errorcode [list TCLPDF FORM ARGUMENT scale] \
+          "tclpdf: -scale of form place is a factor above zero,\
           not \"$scale\""
     }
     # A BOX INSTEAD OF A FACTOR. A form has one natural size, and fitting it
@@ -228,7 +235,8 @@ oo::define ::tclpdf::document::document {
           ? max($across, $down) : min($across, $down)}]
     }
     if {![string is double -strict [dict get $options rotate]]} {
-      return -code error "tclpdf: -rotate of form place is an angle in\
+      return -code error -errorcode [list TCLPDF FORM ARGUMENT rotate] \
+          "tclpdf: -rotate of form place is an angle in\
           degrees, not \"[dict get $options rotate]\""
     }
     set alpha {}
@@ -356,7 +364,8 @@ oo::define ::tclpdf::document::document {
   method FormSize {name} {
     set forms [my state forms]
     if {![dict exists $forms $name]} {
-      return -code error "tclpdf: no form named \"$name\""
+      return -code error -errorcode [list TCLPDF FORM NAME $name] \
+          "tclpdf: no form named \"$name\""
     }
     set form [dict get $forms $name]
     set unit [my cget -unit]
@@ -413,4 +422,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xObject 1.5
+package provide tclpdf::xObject 1.6

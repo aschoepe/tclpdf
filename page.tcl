@@ -70,7 +70,8 @@ oo::define ::tclpdf::document::document {
         return [dict get [my Page [lindex $args 0]] content]
       }
       default {
-        return -code error "tclpdf: unknown page subcommand \"$subcommand\" -\
+        return -code error -errorcode [list TCLPDF PAGE SUBCOMMAND $subcommand] \
+            "tclpdf: unknown page subcommand \"$subcommand\" -\
             known are: add, count, current, size, box, typeArea, content"
       }
     }
@@ -82,7 +83,8 @@ oo::define ::tclpdf::document::document {
   # which names a private method and not the public call.
   method PageOptionalIndex {subcommand arguments} {
     if {[llength $arguments] > 1} {
-      return -code error "tclpdf: page $subcommand takes one optional page\
+      return -code error -errorcode [list TCLPDF PAGE ARGUMENT $subcommand] \
+          "tclpdf: page $subcommand takes one optional page\
           index, got \"$arguments\""
     }
     return [lindex $arguments 0]
@@ -109,7 +111,8 @@ oo::define ::tclpdf::document::document {
         }
         rotate {set rotate $value}
         default {
-          return -code error "tclpdf: unknown option \"$option\" for page add"
+          return -code error -errorcode [list TCLPDF PAGE ARGUMENT $option] \
+              "tclpdf: unknown option \"$option\" for page add"
         }
       }
     }
@@ -117,13 +120,15 @@ oo::define ::tclpdf::document::document {
     # to die as "can't use empty string as operand of %" - a raw Tcl error
     # where this package promises a message of its own.
     if {![string is integer -strict $rotate]} {
-      return -code error "tclpdf: page rotation is a whole number of degrees,\
+      return -code error -errorcode [list TCLPDF PAGE ROTATE number] \
+          "tclpdf: page rotation is a whole number of degrees,\
           a multiple of 90, not \"$rotate\""
     }
     if {$rotate % 90} {
       # 7.7.3.3: only multiples of 90 are permitted, and a reader is free to
       # ignore anything else rather than to complain.
-      return -code error "tclpdf: page rotation must be a multiple of 90, got $rotate"
+      return -code error -errorcode [list TCLPDF PAGE ROTATE multiple] \
+          "tclpdf: page rotation must be a multiple of 90, got $rotate"
     }
     if {[llength $format] == 2 && !$stated} {
       set orientation {}
@@ -193,7 +198,8 @@ oo::define ::tclpdf::document::document {
     }
     lassign $margins top bottom left right
     if {$top + $bottom >= $height || $left + $right >= $width} {
-      return -code error "tclpdf: the type area leaves no room on a page of\
+      return -code error -errorcode [list TCLPDF PAGE TYPEAREA room] \
+          "tclpdf: the type area leaves no room on a page of\
           [format %g $width] by [format %g $height] - margins are\
           {[format %g $top] [format %g $bottom] [format %g $left]\
           [format %g $right]}"
@@ -206,7 +212,8 @@ oo::define ::tclpdf::document::document {
   method PageBox {name {value {}} {index {}}} {
     set known {media crop bleed trim art}
     if {$name ni $known} {
-      return -code error "tclpdf: unknown page box \"$name\" - known are:\
+      return -code error -errorcode [list TCLPDF PAGE BOX $name] \
+          "tclpdf: unknown page box \"$name\" - known are:\
           [join $known {, }]"
     }
     set position [my PageIndex $index]
@@ -221,7 +228,8 @@ oo::define ::tclpdf::document::document {
       }]
     }
     if {[llength $value] != 4} {
-      return -code error "tclpdf: a page box is {x0 y0 x1 y1}, got \"$value\""
+      return -code error -errorcode [list TCLPDF PAGE BOX shape] \
+          "tclpdf: a page box is {x0 y0 x1 y1}, got \"$value\""
     }
     set box [my extent $value]
     # Everything that can be refused is refused BEFORE the page is touched:
@@ -273,7 +281,8 @@ oo::define ::tclpdf::document::document {
   method PageBoxCorners {box what} {
     lassign $box x0 y0 x1 y1
     if {$x1 <= $x0 || $y1 <= $y0} {
-      return -code error "tclpdf: $what: x1 must exceed x0 and y1 must exceed\
+      return -code error -errorcode [list TCLPDF PAGE BOX $what] \
+          "tclpdf: $what: x1 must exceed x0 and y1 must exceed\
           y0 in {x0 y0 x1 y1}, got [my PageBoxText $box]"
     }
     return
@@ -291,7 +300,8 @@ oo::define ::tclpdf::document::document {
     # factor may miss it in the last binary digit.
     if {$width < 3 - 0.001 || $height < 3 - 0.001 \
         || $width > 14400 + 0.001 || $height > 14400 + 0.001} {
-      return -code error "tclpdf: $what: a page is between 3 and 14400 pt on\
+      return -code error -errorcode [list TCLPDF PAGE BOX $what] \
+          "tclpdf: $what: a page is between 3 and 14400 pt on\
           each side (ISO 32000-1 Annex C), got\
           [my PageBoxText [list $width $height]]"
     }
@@ -311,7 +321,8 @@ oo::define ::tclpdf::document::document {
     set slack 0.001
     if {$x0 < $mx0 - $slack || $y0 < $my0 - $slack \
         || $x1 > $mx1 + $slack || $y1 > $my1 + $slack} {
-      return -code error "tclpdf: page box $name [my PageBoxText $box] lies\
+      return -code error -errorcode [list TCLPDF PAGE BOX $name] \
+          "tclpdf: page box $name [my PageBoxText $box] lies\
           outside the media box [my PageBoxText $media] (ISO 32000-1 14.11.2)"
     }
     return
@@ -394,7 +405,8 @@ oo::define ::tclpdf::document::document {
       }
       pop {
         if {![llength $tclpdfCanvas]} {
-          return -code error "tclpdf: canvas pop without a matching push"
+          return -code error -errorcode [list TCLPDF PAGE CANVAS pop] \
+              "tclpdf: canvas pop without a matching push"
         }
         set canvas [lindex $tclpdfCanvas end]
         set tclpdfCanvas [lrange $tclpdfCanvas 0 end-1]
@@ -410,7 +422,8 @@ oo::define ::tclpdf::document::document {
         return [dict get [lindex $tclpdfCanvas end] height]
       }
       default {
-        return -code error "tclpdf: unknown canvas subcommand \"$subcommand\" -\
+        return -code error -errorcode [list TCLPDF PAGE CANVAS $subcommand] \
+            "tclpdf: unknown canvas subcommand \"$subcommand\" -\
             known are: push, pop, depth, height"
       }
     }
@@ -421,7 +434,8 @@ oo::define ::tclpdf::document::document {
       set index $tclpdfCurrent
     }
     if {$index < 0 || $index >= [llength $tclpdfPages]} {
-      return -code error "tclpdf: no such page: $index - the document has\
+      return -code error -errorcode [list TCLPDF PAGE INDEX $index] \
+          "tclpdf: no such page: $index - the document has\
           [llength $tclpdfPages] page(s), add one with \"page add\""
     }
     return $index
@@ -839,4 +853,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::page 1.4
+package provide tclpdf::page 1.5

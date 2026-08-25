@@ -42,7 +42,8 @@ namespace eval ::tclpdf::imagePngAlpha {
 # once for the three sites that decode, and rethrown as what it is.
 proc ::tclpdf::imagePngAlpha::Decode {parsed} {
   if {[catch {::tclpdf::filter decodeFlate [dict get $parsed idat]} data]} {
-    return -code error "tclpdf: damaged PNG - the image data does not decompress"
+    return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED IDAT] \
+        "tclpdf: damaged PNG - the image data does not decompress"
   }
   return $data
 }
@@ -59,7 +60,8 @@ proc ::tclpdf::imagePngAlpha::separate {parsed} {
   if {$depth ni {8 16}} {
     # The format only allows 8 and 16 for colour types 4 and 6, so this can
     # only be reached with a damaged file.
-    return -code error "tclpdf: a PNG with an alpha channel cannot have a bit\
+    return -code error -errorcode [list TCLPDF IMAGE PNG depth] \
+        "tclpdf: a PNG with an alpha channel cannot have a bit\
         depth of $depth"
   }
   set pixels [unfilter [Decode $parsed] \
@@ -106,7 +108,8 @@ proc ::tclpdf::imagePngAlpha::unfilter {raw width height depth channels} {
   set stride [expr {($width * $depth * $channels + 7) / 8}]
   set expected [expr {($stride + 1) * $height}]
   if {[string length $raw] < $expected} {
-    return -code error "tclpdf: damaged PNG - the image data is\
+    return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED IDAT] \
+        "tclpdf: damaged PNG - the image data is\
         [string length $raw] bytes, expected $expected"
   }
 
@@ -167,7 +170,8 @@ proc ::tclpdf::imagePngAlpha::unfilter {raw width height depth channels} {
         }
       }
       default {
-        return -code error "tclpdf: damaged PNG - filter type $filterType in\
+        return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED filter] \
+            "tclpdf: damaged PNG - filter type $filterType in\
             row $row is not one of the five defined"
       }
     }
@@ -229,7 +233,8 @@ proc ::tclpdf::imagePngAlpha::colourKeyMask {parsed} {
   if {$depth != 16 || $channels ni {1 3}} {
     # [transparency] routes only 16-bit greyscale and truecolor here; a /Mask
     # array serves every other depth, so this is a caller's mistake.
-    return -code error "tclpdf: a colour-key soft mask is built for 16-bit\
+    return -code error -errorcode [list TCLPDF IMAGE PNG colorkey] \
+        "tclpdf: a colour-key soft mask is built for 16-bit\
         greyscale and truecolor PNGs only, not depth $depth with $channels\
         channels"
   }
@@ -279,4 +284,4 @@ proc ::tclpdf::imagePngAlpha::Indices {line depth width} {
   return $indices
 }
 
-package provide tclpdf::imagePngAlpha 1.2
+package provide tclpdf::imagePngAlpha 1.3

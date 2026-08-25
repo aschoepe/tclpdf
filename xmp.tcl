@@ -152,7 +152,8 @@ proc ::tclpdf::xmp::declare {prefix uri tags} {
     if {![dom isNCName $tag] || [catch {namespace eval ::tclpdf::xmp \
         [list dom createNodeCmd -tagName $name -namespace $uri \
         elementNode $command]}]} {
-      return -code error "tclpdf: xmpSchema tag \"$tag\" is not a valid XML\
+      return -code error -errorcode [list TCLPDF XMP TAG $tag] \
+          "tclpdf: xmpSchema tag \"$tag\" is not a valid XML\
           name (schema $prefix)"
     }
     dict set commands [list $name $uri] $command
@@ -734,4 +735,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xmp 1.4
+package provide tclpdf::xmp 1.5

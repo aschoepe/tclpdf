@@ -69,7 +69,8 @@ proc ::tclpdf::imagePng::parse {bytes} {
   variable signature
 
   if {[string range $bytes 0 7] ne $signature} {
-    return -code error "tclpdf: not a PNG file - the signature does not match"
+    return -code error -errorcode [list TCLPDF IMAGE PNG signature] \
+        "tclpdf: not a PNG file - the signature does not match"
   }
   set total [string length $bytes]
   set offset 8
@@ -79,7 +80,8 @@ proc ::tclpdf::imagePng::parse {bytes} {
   while {$offset + 8 <= $total} {
     binary scan [string range $bytes $offset [expr {$offset + 7}]] Ia4 length type
     if {$length < 0 || $offset + 12 + $length > $total} {
-      return -code error "tclpdf: damaged PNG - chunk \"$type\" runs past the\
+      return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED $type] \
+          "tclpdf: damaged PNG - chunk \"$type\" runs past the\
           end of the file"
     }
     set body [string range $bytes [expr {$offset + 8}] \
@@ -89,11 +91,13 @@ proc ::tclpdf::imagePng::parse {bytes} {
         binary scan $body IIcucucucucu width height bitDepth colorType \
             compression filter interlace
         if {$compression != 0} {
-          return -code error "tclpdf: PNG compression method $compression is\
+          return -code error -errorcode [list TCLPDF IMAGE PNG compression] \
+              "tclpdf: PNG compression method $compression is\
               not defined by the format"
         }
         if {$filter != 0} {
-          return -code error "tclpdf: PNG filter method $filter is not defined\
+          return -code error -errorcode [list TCLPDF IMAGE PNG filter] \
+              "tclpdf: PNG filter method $filter is not defined\
               by the format"
         }
         dict set result width $width
@@ -116,7 +120,8 @@ proc ::tclpdf::imagePng::parse {bytes} {
         # The chunk is nine bytes and the length is fixed, so a shorter one
         # is a damaged file rather than a short reading: 4 + 4 + 1.
         if {[string length $body] != 9} {
-          return -code error "tclpdf: damaged PNG - the pHYs chunk is\
+          return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED pHYs] \
+              "tclpdf: damaged PNG - the pHYs chunk is\
               [string length $body] bytes, expected 9"
         }
         binary scan $body IuIucu ppuX ppuY unit
@@ -128,17 +133,20 @@ proc ::tclpdf::imagePng::parse {bytes} {
         # compression method the format defines.
         set zero [string first \0 $body]
         if {$zero < 0 || $zero + 2 > [string length $body]} {
-          return -code error "tclpdf: damaged PNG - the iCCP chunk has no\
+          return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED iCCP] \
+              "tclpdf: damaged PNG - the iCCP chunk has no\
               compression method"
         }
         binary scan [string index $body [expr {$zero + 1}]] cu method
         if {$method != 0} {
-          return -code error "tclpdf: PNG iCCP compression method $method is\
+          return -code error -errorcode [list TCLPDF IMAGE PNG iCCP] \
+              "tclpdf: PNG iCCP compression method $method is\
               not defined by the format"
         }
         if {[catch {zlib decompress \
             [string range $body [expr {$zero + 2}] end]} profile]} {
-          return -code error "tclpdf: damaged PNG - the iCCP chunk does not\
+          return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED iCCP] \
+              "tclpdf: damaged PNG - the iCCP chunk does not\
               decompress"
         }
         dict set result icc $profile
@@ -150,27 +158,32 @@ proc ::tclpdf::imagePng::parse {bytes} {
   }
 
   if {!$seenHeader} {
-    return -code error "tclpdf: damaged PNG - no IHDR chunk"
+    return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED IHDR] \
+        "tclpdf: damaged PNG - no IHDR chunk"
   }
   if {[dict get $result idat] eq {}} {
-    return -code error "tclpdf: damaged PNG - no image data"
+    return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED IDAT] \
+        "tclpdf: damaged PNG - no image data"
   }
   if {[dict get $result interlace] != 0} {
     # Adam7 rearranges the picture into seven passes, so neither the
     # pass-through way (the reader would un-filter one interleaved block) nor
     # the plain row walk applies. Refused with a name rather than producing a
     # scrambled image.
-    return -code error "tclpdf: this PNG is interlaced (Adam7), which tclpdf\
+    return -code error -errorcode [list TCLPDF IMAGE PNG interlaced] \
+        "tclpdf: this PNG is interlaced (Adam7), which tclpdf\
         does not read - re-save it without interlacing"
   }
   # A picture of no width or no height (PNG 11.2.2: both shall be non-zero)
   # went out as /Width 0, which Table 89 does not allow either.
   if {[dict get $result width] <= 0 || [dict get $result height] <= 0} {
-    return -code error "tclpdf: damaged PNG - the IHDR chunk says\
+    return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED IHDR] \
+        "tclpdf: damaged PNG - the IHDR chunk says\
         [dict get $result width] x [dict get $result height] pixels"
   }
   if {[dict get $result colorType] == 3 && [dict get $result palette] eq {}} {
-    return -code error "tclpdf: damaged PNG - a palette image without a PLTE chunk"
+    return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED PLTE] \
+        "tclpdf: damaged PNG - a palette image without a PLTE chunk"
   }
   # The palette is RGB triples (PNG 11.2.3: a length not divisible by 3 is
   # an error) and became a wrong /Indexed lookup as it stood; the tRNS of a
@@ -180,12 +193,14 @@ proc ::tclpdf::imagePng::parse {bytes} {
   if {[dict get $result colorType] == 3} {
     set entries [string length [dict get $result palette]]
     if {$entries % 3} {
-      return -code error "tclpdf: damaged PNG - the PLTE chunk is $entries\
+      return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED PLTE] \
+          "tclpdf: damaged PNG - the PLTE chunk is $entries\
           bytes, not a multiple of 3"
     }
     set trns [string length [dict get $result transparency]]
     if {$trns > $entries / 3} {
-      return -code error "tclpdf: damaged PNG - the tRNS chunk has $trns\
+      return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED tRNS] \
+          "tclpdf: damaged PNG - the tRNS chunk has $trns\
           entries for a palette of [expr {$entries / 3}]"
     }
   }
@@ -195,7 +210,8 @@ proc ::tclpdf::imagePng::parse {bytes} {
   set expected [switch -- [dict get $result colorType] 0 {expr 2} 2 {expr 6} default {expr 0}]
   set trns [string length [dict get $result transparency]]
   if {$expected && $trns && $trns != $expected} {
-    return -code error "tclpdf: damaged PNG - the tRNS chunk of a colour type\
+    return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED tRNS] \
+        "tclpdf: damaged PNG - the tRNS chunk of a colour type\
         [dict get $result colorType] image is $trns bytes, expected $expected"
   }
   return $result
@@ -210,7 +226,8 @@ proc ::tclpdf::imagePng::channels {colorType} {
     4 {return 2}
     6 {return 4}
   }
-  return -code error "tclpdf: PNG colour type $colorType is not defined by the format"
+  return -code error -errorcode [list TCLPDF IMAGE PNG colorType] \
+      "tclpdf: PNG colour type $colorType is not defined by the format"
 }
 
 # What the file says about how large its pixels are, as
@@ -272,7 +289,8 @@ proc ::tclpdf::imagePng::device {parsed} {
     0 - 4 {return DeviceGray}
     2 - 3 - 6 {return DeviceRGB}
   }
-  return -code error "tclpdf: PNG colour type [dict get $parsed colorType] is\
+  return -code error -errorcode [list TCLPDF IMAGE PNG colorType] \
+      "tclpdf: PNG colour type [dict get $parsed colorType] is\
       not defined by the format"
 }
 
@@ -544,7 +562,8 @@ proc ::tclpdf::imagePng::PaletteKey {trns} {
 # per sample and nothing else.
 proc ::tclpdf::imagePng::stencilInk {parsed} {
   if {[dict get $parsed bitDepth] != 1} {
-    return -code error "tclpdf: a stencil mask is one bit per sample (ISO\
+    return -code error -errorcode [list TCLPDF IMAGE PNG stencil] \
+        "tclpdf: a stencil mask is one bit per sample (ISO\
         32000-2, 8.9.6.2, and Table 87: with ImageMask true BitsPerComponent\
         shall be 1), and this PNG carries [dict get $parsed bitDepth] -\
         re-save it as a 1-bit image"
@@ -553,7 +572,8 @@ proc ::tclpdf::imagePng::stencilInk {parsed} {
     0 {return 0}
     3 {}
     default {
-      return -code error "tclpdf: a stencil mask has one sample per pixel, and\
+      return -code error -errorcode [list TCLPDF IMAGE PNG stencil] \
+          "tclpdf: a stencil mask has one sample per pixel, and\
           this PNG is colour type [dict get $parsed colorType] with\
           [dict get $parsed channels] - only greyscale and palette pictures\
           become stencils"
@@ -606,4 +626,4 @@ proc ::tclpdf::imagePng::stencilStreams {parsed {invert 0}} {
       Filter /FlateDecode DecodeParms [decodeParms $parsed]]]
 }
 
-package provide tclpdf::imagePng 1.6
+package provide tclpdf::imagePng 1.7

@@ -54,7 +54,8 @@ proc ::tclpdf::writer::checkComplete {objects} {
     }
   }
   if {[llength $missing]} {
-    return -code error "tclpdf: object(s) reserved but never written:\
+    return -code error -errorcode [list TCLPDF WRITER RESERVED unwritten] \
+        "tclpdf: object(s) reserved but never written:\
         [join $missing {, }]"
   }
   return
@@ -90,7 +91,8 @@ oo::class create ::tclpdf::writer::pdf {
       return $tclpdfVersion
     }
     if {[llength $args] > 1} {
-      return -code error "tclpdf: version takes one value, not \"$args\""
+      return -code error -errorcode [list TCLPDF WRITER ARGUMENT version] \
+          "tclpdf: version takes one value, not \"$args\""
     }
     set value [lindex $args 0]
     if {1} {
@@ -98,7 +100,8 @@ oo::class create ::tclpdf::writer::pdf {
       # no PDF 1.8 or 1.9 - the file would claim a version that does not
       # exist, which no reader complains about and no validator checks.
       if {$value ni {1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 2.0}} {
-        return -code error "tclpdf: there is no PDF version \"$value\" -\
+        return -code error -errorcode [list TCLPDF WRITER VERSION $value] \
+            "tclpdf: there is no PDF version \"$value\" -\
             known are 1.0 to 1.7 (ISO 32000-1) and 2.0 (ISO 32000-2)"
       }
       # Not below what the document already uses: [require] checked against
@@ -108,7 +111,8 @@ oo::class create ::tclpdf::writer::pdf {
       # at write time.
       if {$tclpdfRequired ne {}
           && [package vcompare $value [lindex $tclpdfRequired 0]] < 0} {
-        return -code error "tclpdf: this document already uses\
+        return -code error -errorcode [list TCLPDF VERSION [lindex $tclpdfRequired 0]] \
+            "tclpdf: this document already uses\
             [lindex $tclpdfRequired 1], which needs PDF\
             [lindex $tclpdfRequired 0] - it cannot be lowered to PDF $value"
       }
@@ -122,7 +126,8 @@ oo::class create ::tclpdf::writer::pdf {
       # is here, before the header exists.
       if {$tclpdfCeiling ne {}
           && [package vcompare $value [lindex $tclpdfCeiling 0]] > 0} {
-        return -code error "tclpdf: this document claims\
+        return -code error -errorcode [list TCLPDF VERSION [lindex $tclpdfCeiling 0]] \
+            "tclpdf: this document claims\
             [lindex $tclpdfCeiling 1], which is written as PDF\
             [lindex $tclpdfCeiling 0] at most - it cannot be raised to PDF\
             $value"
@@ -173,7 +178,8 @@ oo::class create ::tclpdf::writer::pdf {
   # counts, as the highest requirement is in [require].
   method limit {version feature} {
     if {[package vcompare $tclpdfVersion $version] > 0} {
-      return -code error "tclpdf: $feature is written as PDF $version at\
+      return -code error -errorcode [list TCLPDF VERSION $version] \
+          "tclpdf: $feature is written as PDF $version at\
           most - this document is written as PDF $tclpdfVersion"
     }
     if {$tclpdfCeiling eq {}
@@ -221,13 +227,16 @@ oo::class create ::tclpdf::writer::pdf {
   # Answers the number.
   method release {number} {
     if {![dict exists $tclpdfObjects $number]} {
-      return -code error "tclpdf: object $number was never reserved"
+      return -code error -errorcode [list TCLPDF WRITER OBJECT $number] \
+          "tclpdf: object $number was never reserved"
     }
     if {[dict get $tclpdfObjects $number] eq "null"} {
-      return -code error "tclpdf: object $number was already released"
+      return -code error -errorcode [list TCLPDF WRITER OBJECT $number] \
+          "tclpdf: object $number was already released"
     }
     if {[dict get $tclpdfObjects $number] ne {}} {
-      return -code error "tclpdf: object $number is already written and\
+      return -code error -errorcode [list TCLPDF WRITER OBJECT $number] \
+          "tclpdf: object $number is already written and\
           cannot be released"
     }
     dict set tclpdfObjects $number null
@@ -237,7 +246,8 @@ oo::class create ::tclpdf::writer::pdf {
   # Fill a reserved number.
   method put {number body} {
     if {![dict exists $tclpdfObjects $number]} {
-      return -code error "tclpdf: object $number was never reserved"
+      return -code error -errorcode [list TCLPDF WRITER OBJECT $number] \
+          "tclpdf: object $number was never reserved"
     }
     dict set tclpdfObjects $number $body
     return $number
@@ -330,7 +340,8 @@ oo::class create ::tclpdf::writer::pdf {
   # produces a file readers open and render with pieces missing.
   method ref {number} {
     if {![dict exists $tclpdfObjects $number]} {
-      return -code error "tclpdf: no such object: $number"
+      return -code error -errorcode [list TCLPDF WRITER OBJECT $number] \
+          "tclpdf: no such object: $number"
     }
     return [::tclpdf::pdfObj ref $number]
   }
@@ -338,7 +349,8 @@ oo::class create ::tclpdf::writer::pdf {
   # The stored body of an object - for tests and for diagnostics.
   method body {number} {
     if {![dict exists $tclpdfObjects $number]} {
-      return -code error "tclpdf: no such object: $number"
+      return -code error -errorcode [list TCLPDF WRITER OBJECT $number] \
+          "tclpdf: no such object: $number"
     }
     return [dict get $tclpdfObjects $number]
   }
@@ -482,4 +494,4 @@ oo::class create ::tclpdf::writer::pdf {
   }
 }
 
-package provide tclpdf::writer 1.4
+package provide tclpdf::writer 1.5

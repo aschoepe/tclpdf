@@ -202,7 +202,8 @@ oo::define ::tclpdf::document::document {
       radio {return [my LayerRadio {*}$args]}
       configure {return [my LayerConfigure {*}$args]}
       default {
-        return -code error "tclpdf: unknown layer subcommand \"$subcommand\" -\
+        return -code error -errorcode [list TCLPDF LAYER SUBCOMMAND $subcommand] \
+            "tclpdf: unknown layer subcommand \"$subcommand\" -\
             known are: create, draw, names, state, radio, configure"
       }
     }
@@ -217,21 +218,25 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {title {} visible 1 intent {}} $args \
         "layer create"]
     if {$name eq {}} {
-      return -code error "tclpdf: layer create needs a name"
+      return -code error -errorcode [list TCLPDF LAYER ARGUMENT name] \
+          "tclpdf: layer create needs a name"
     }
     set layers [my state layers]
     if {[dict exists $layers $name]} {
-      return -code error "tclpdf: a layer named \"$name\" already exists"
+      return -code error -errorcode [list TCLPDF LAYER NAME $name] \
+          "tclpdf: a layer named \"$name\" already exists"
     }
     if {![string is boolean -strict [dict get $options visible]]} {
-      return -code error "tclpdf: -visible of layer create is a boolean, not\
+      return -code error -errorcode [list TCLPDF LAYER ARGUMENT visible] \
+          "tclpdf: -visible of layer create is a boolean, not\
           \"[dict get $options visible]\""
     }
     variable ::tclpdf::layer::intents
     set intent [dict get $options intent]
     foreach word $intent {
       if {$word ni $intents} {
-        return -code error "tclpdf: -intent of layer create is\
+        return -code error -errorcode [list TCLPDF LAYER ARGUMENT intent] \
+            "tclpdf: -intent of layer create is\
             [join $intents { or }], or both (ISO 32000-2, Table 96), not\
             \"$word\""
       }
@@ -335,7 +340,8 @@ oo::define ::tclpdf::document::document {
       my content "EMC\n" $page
     }
     if {$escaped} {
-      return -code error "tclpdf: the -script of layer \"$name\" left the\
+      return -code error -errorcode [list TCLPDF LAYER SCRIPT $name] \
+          "tclpdf: the -script of layer \"$name\" left the\
           content stream it began in - a /OC bracket opens and closes in one\
           stream (ISO 32000-2, 8.11.3.2)"
     }
@@ -343,7 +349,8 @@ oo::define ::tclpdf::document::document {
       return -options $info $result
     }
     if {$now ne $page} {
-      return -code error "tclpdf: the -script of layer \"$name\" added a page\
+      return -code error -errorcode [list TCLPDF LAYER SCRIPT $name] \
+          "tclpdf: the -script of layer \"$name\" added a page\
           - a /OC bracket opens and closes on one page (ISO 32000-2,\
           8.11.3.2), so what was drawn after the break is not in the layer;\
           draw one bracket per page"
@@ -361,12 +368,14 @@ oo::define ::tclpdf::document::document {
       return [dict get $layers $name visible]
     }
     if {[llength $args] > 1} {
-      return -code error "tclpdf: layer state takes a name and at most one\
+      return -code error -errorcode [list TCLPDF LAYER STATE arguments] \
+          "tclpdf: layer state takes a name and at most one\
           value"
     }
     set value [lindex $args 0]
     if {![string is boolean -strict $value]} {
-      return -code error "tclpdf: layer state takes a boolean, not \"$value\""
+      return -code error -errorcode [list TCLPDF LAYER STATE value] \
+          "tclpdf: layer state takes a boolean, not \"$value\""
     }
     dict set layers $name visible [expr {$value ? 1 : 0}]
     my state layers $layers
@@ -381,7 +390,8 @@ oo::define ::tclpdf::document::document {
   # layer.
   method LayerRadio {members} {
     if {[llength $members] < 2} {
-      return -code error "tclpdf: layer radio takes two or more layer names -\
+      return -code error -errorcode [list TCLPDF LAYER RADIO members] \
+          "tclpdf: layer radio takes two or more layer names -\
           a radio group of one switches nothing (ISO 32000-2, Table 99), got\
           \"$members\""
     }
@@ -389,7 +399,8 @@ oo::define ::tclpdf::document::document {
     foreach name $members {
       my LayerRecord $name
       if {[dict exists $seen $name]} {
-        return -code error "tclpdf: layer \"$name\" appears twice in the same\
+        return -code error -errorcode [list TCLPDF LAYER RADIO $name] \
+            "tclpdf: layer \"$name\" appears twice in the same\
             radio group"
       }
       dict set seen $name 1
@@ -452,14 +463,16 @@ oo::define ::tclpdf::document::document {
     # /Name. Refused rather than written empty, because an empty one fails
     # veraPDF check 6.9-1 and there is nothing a reader could show for it.
     if {[dict get $options title] eq {}} {
-      return -code error "tclpdf: -title of layer configure is the /Name of\
+      return -code error -errorcode [list TCLPDF LAYER CONFIGURE title] \
+          "tclpdf: -title of layer configure is the /Name of\
           the default configuration and may not be empty - ISO 19005-2/-3,\
           6.9 requires it on every optional content configuration dictionary"
     }
     variable ::tclpdf::layer::listModes
     if {[dict get $options listMode] ne {}
         && [dict get $options listMode] ni $listModes} {
-      return -code error "tclpdf: -listMode of layer configure is\
+      return -code error -errorcode [list TCLPDF LAYER CONFIGURE listMode] \
+          "tclpdf: -listMode of layer configure is\
           [join $listModes { or }] (ISO 32000-2, Table 99), not\
           \"[dict get $options listMode]\""
     }
@@ -472,7 +485,8 @@ oo::define ::tclpdf::document::document {
   method LayerRecord {name} {
     set layers [my state layers]
     if {![dict exists $layers $name]} {
-      return -code error "tclpdf: no layer named \"$name\" - known are:\
+      return -code error -errorcode [list TCLPDF LAYER NAME $name] \
+          "tclpdf: no layer named \"$name\" - known are:\
           [join [dict keys $layers] {, }]"
     }
     return [dict get $layers $name]
@@ -560,4 +574,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::layer 1.1
+package provide tclpdf::layer 1.2

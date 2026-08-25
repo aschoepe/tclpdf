@@ -79,7 +79,8 @@ proc ::tclpdf::xml::parse {text} {
     set root [$document documentElement]
     if {$root eq {}} {
       $document delete
-      return -code error "tclpdf: no XML element found"
+      return -code error -errorcode [list TCLPDF XML EMPTY none] \
+          "tclpdf: no XML element found"
     }
     return [list tdom $document $root]
   }
@@ -255,7 +256,8 @@ proc ::tclpdf::xml::Parse {text} {
       set node [lindex $stack end]
       set stack [lrange $stack 0 end-1]
       if {[dict get $node name] ne $elementName} {
-        return -code error "tclpdf: XML is not well formed - \"$elementName\"\
+        return -code error -errorcode [list TCLPDF XML MALFORMED $elementName] \
+            "tclpdf: XML is not well formed - \"$elementName\"\
             closes \"[dict get $node name]\""
       }
       if {[llength $stack]} {
@@ -284,11 +286,13 @@ proc ::tclpdf::xml::Parse {text} {
   }
 
   if {[llength $stack]} {
-    return -code error "tclpdf: XML is not well formed - \"[dict get\
+    return -code error -errorcode [list TCLPDF XML MALFORMED unclosed] \
+        "tclpdf: XML is not well formed - \"[dict get\
         [lindex $stack end] name]\" is never closed"
   }
   if {$root eq {}} {
-    return -code error "tclpdf: no XML element found"
+    return -code error -errorcode [list TCLPDF XML EMPTY none] \
+        "tclpdf: no XML element found"
   }
   return $root
 }
@@ -317,4 +321,4 @@ proc ::tclpdf::xml::Unescape {text} {
   return [string map {&amp; &} $text]
 }
 
-package provide tclpdf::xml 1.0
+package provide tclpdf::xml 1.1

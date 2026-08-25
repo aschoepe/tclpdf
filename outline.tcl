@@ -57,7 +57,8 @@ oo::define ::tclpdf::document::document {
       set page [my page current]
     }
     if {$page < 0} {
-      return -code error "tclpdf: a bookmark needs a page - add one first"
+      return -code error -errorcode [list TCLPDF OUTLINE PAGE none] \
+          "tclpdf: a bookmark needs a page - add one first"
     }
     if {[dict get $options structure] eq {}} {
       # A negative or non-integer page is refused here; a page that does
@@ -65,7 +66,8 @@ oo::define ::tclpdf::document::document {
       # page added later - and if it never comes, the write says so, naming
       # this bookmark by its title. That is [Destination]'s asker argument.
       if {![string is integer -strict $page] || $page < 0} {
-        return -code error "tclpdf: no such page: $page - the document has\
+        return -code error -errorcode [list TCLPDF OUTLINE PAGE $page] \
+            "tclpdf: no such page: $page - the document has\
             [my page count] page(s)"
       }
       # Asked for NOW for the same reason as the structure destination
@@ -78,7 +80,8 @@ oo::define ::tclpdf::document::document {
     set id [llength $entries]
     set parent [dict get $options parent]
     if {$parent ne {} && ($parent < 0 || $parent >= $id)} {
-      return -code error "tclpdf: no such bookmark: $parent"
+      return -code error -errorcode [list TCLPDF OUTLINE PARENT $parent] \
+          "tclpdf: no such bookmark: $parent"
     }
     lappend entries [dict create title $title page $page \
         at [dict get $options at] parent $parent \
@@ -203,4 +206,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::outline 1.5
+package provide tclpdf::outline 1.6

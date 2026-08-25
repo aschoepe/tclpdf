@@ -1364,7 +1364,7 @@ Two calls write the document, and neither finishes it.
 
 ## Error codes
 
-Every refusal is a Tcl error whose message begins with `tclpdf:` and names what went wrong and where. A number that is not one — `NaN`, `Inf` — is turned away where it is read as a measurement rather than where the arithmetic later trips over it, so the message names the option the caller wrote. The wording of a message is **not** a contract — it may be sharpened in any release. Where a script is meant to handle a refusal programmatically, the error also carries a machine-readable `-errorcode`, and that **is** a contract: a Tcl list whose first word is `TCLPDF`, followed by a fixed hierarchy and then the facts of the case. `try` … `trap` matches such a list by prefix, so `trap {TCLPDF FONT GLYPH} {msg opts} {…}` handles the whole class below without reading the message; the full list is `[dict get $opts -errorcode]`. Only the codes documented here are contracts — other errors may carry codes of the same shape while they are still settling, and further codes may be added in later releases.
+Every refusal is a Tcl error whose message begins with `tclpdf:` and names what went wrong and where. A number that is not one — `NaN`, `Inf` — is turned away where it is read as a measurement rather than where the arithmetic later trips over it, so the message names the option the caller wrote. The wording of a message is **not** a contract — it may be sharpened in any release. Where a script is meant to handle a refusal programmatically, the error also carries a machine-readable `-errorcode`, and that **is** a contract: a Tcl list whose first word is `TCLPDF`, followed by a fixed hierarchy and then the facts of the case. `try` … `trap` matches such a list by prefix, so `trap {TCLPDF FONT GLYPH} {msg opts} {…}` handles the whole class below without reading the message; the full list is `[dict get $opts -errorcode]`. **Every refusal this package makes carries one**, measured over the whole tree and held there by a guard in the suite: on 2026-08-25 five hundred and eleven of them did not, and they had accumulated one module at a time — each of them individually harmless, together a coin toss over whether a given mistake could be handled at all. The **first two words** are the contract: `TCLPDF` and the topic. Where a topic has classes, the **third** word is one of them and is a contract too; what follows are the facts of the case, and those may grow. The codes described one by one below are the ones a script is most likely to want; the table at the end of this section lists every topic and every class in the package. Further codes may be added in later releases, and a class may gain members — a `trap` written against a prefix keeps working when that happens.
 
 **TCLPDF FONT GLYPH** *codepoint position fontname*
 
@@ -1631,6 +1631,69 @@ tdom, qpdf(1), veraPDF, pdffonts(1), pdftotext(1), tzint
 tdom builds the XMP metadata packet — every document that declares PDF/A, PDF/UA or ZUGFeRD needs it — and, where present, parses SVG in place of the built-in parser; see "Optional packages" at the top. Its home is <https://tdom.org>.
 
 tzint is a Tcl binding to the Zint barcode library, at <https://fossil.sowaswie.de/tzint>. It produces SVG, which `svg -data` draws — so barcodes need no code in this package and are not a dependency of it, but drawing one does need tzint installed. See the `Barcodes` section above.
+
+### Every topic and its classes
+
+Read as `TCLPDF <topic> <class> <facts…>`. A topic without classes puts the facts straight after its name. This list is generated from the source rather than kept by hand: `tests/errorcode.test` fails if a refusal appears without a code, and if a code appears whose first word is neither `TCLPDF` nor Tcl's own.
+
+| topic | classes |
+| --- | --- |
+| `AFM` | `FAMILY` `FONT` `STYLE` |
+| `ANNOT` | `APPEARANCE` `BOX` `COLOUR` `COLOURSPACE` `DATE` `KIND` `LINE` `MODULE` `OPACITY` `PDFA` `POINTS` `QUADS` `RECT` `UA` `WIDTH` |
+| `ATTACH` | `ARGUMENT` `NAME` `STATE` |
+| `COLORFONT` | `BASE` `CHAR` `COMPOSITE` `EMPTY` `LIMIT` `PALETTE` `TABLES` |
+| `COLOUR` | `COLOURANT` `COMPONENTS` `DEVICEN` `HEX` `ICC` `LAB` `PROFILE` `SEPARATION` `SPACE` `SUBCOMMAND` `TARGET` `UNKNOWN` |
+| `COLR` | `ENTRY` `LAYERS` `PALETTE` `RECORDS` `TRUNCATED` `VERSION` |
+| `CRYPTO` | `BLOCKLENGTH` `COUNT` `IVLENGTH` `KEYLENGTH` `RANDOM` |
+| `DOCUMENT` | `ARGUMENT` `CATALOG` `DATE` `INFO` `LANGUAGE` `METADATA` `MODULE` `PAGE` `RESOURCE` `STATE` `TRAILER` |
+| `ENCRYPT` | `ARGUMENT` `KEY` `ORDER` `PASSWORD` `PERMISSION` `SEAM` `STATE` `SUBCOMMAND` |
+| `ENVIRONMENT` | the facts follow the topic directly |
+| `EVENT` | `CALLBACK` `NAME` |
+| `FIELD` | `BOOLEAN` `BORDERWIDTH` `BUILD` `BUTTON` `COLOUR` `COLOURSPACE` `FLAG` `FONT` `INDEX` `LINES` `MAXLEN` `NAME` `OPTIONS` `PAGE` `PASSWORD` `RECT` `REGISTER` `SELECT` `SIZE` `STRUCTURE` `SUBCOMMAND` `TAKEN` `TOP` `TYPE` `UNKNOWN` |
+| `FILTER` | `ASCII85` `CCITT` `LZW` `PREDICTOR` |
+| `FIT` | `ALIGN` `BOX` `MODE` `ROTATE` `SIZE` |
+| `FONT` | `ALIAS` `ARGUMENT` `AXES` `BIDI` `CIDKEYED` `DAMAGED` `EMBED` `ENCODING` `FALLBACK` `GLYPH` `INSTANCE` `KIND` `METRICS` `OUTLINES` `SHAPING` `SOURCE` `SUBSET` `TABLE` `UNSUPPORTED` `VERTICAL` |
+| `FORM` | `ARGUMENT` `NAME` `SUBCOMMAND` |
+| `FUNCTION` | `BOUNDS` |
+| `GEOMETRY` | `ARGUMENT` `FORMAT` `MATRIX` `MEASURE` `ORIENTATION` `SIZE` `UNIT` |
+| `GLYF` | `OUTLINE` |
+| `GRAPHICS` | `ARGUMENT` `BLEND` `OPACITY` `OVERPRINT` `POINT` `RESTORE` |
+| `HYPHENATE` | `ARGUMENT` `LANGUAGE` `PATTERNS` |
+| `IMAGE` | `ALIAS` `ARGUMENT` `FORMAT` `ICC` `INLINE` `INTERPOLATE` `INVERT` `JPEG` `MASK` `PNG` `SIZE` `SOFTMASK` `STENCIL` `SUBCOMMAND` |
+| `IMPORT` | `ARGUMENT` `FOREIGN` `NAME` `SUBCOMMAND` |
+| `INITIALVIEW` | `PAGE` `ZOOM` |
+| `IO` | `DIRECTORY` `MISSING` |
+| `LAYER` | `ARGUMENT` `CONFIGURE` `NAME` `RADIO` `SCRIPT` `STATE` `SUBCOMMAND` |
+| `LEADER` | `ARGUMENT` `FILL` |
+| `LINK` | `ARGUMENT` |
+| `OPTION` | `DICT` `KEY` `NUMBER` `PAIRS` `POINT` `REQUIRED` `UNKNOWN` |
+| `OUTLINE` | `PAGE` `PARENT` |
+| `OUTPUT` | `CHANNEL` `EMPTY` |
+| `PAGE` | `ARGUMENT` `BOX` `CANVAS` `INDEX` `ROTATE` `SUBCOMMAND` `TYPEAREA` |
+| `PAGELABEL` | `ARGUMENT` `INDEX` |
+| `PAGENUMBER` | `ARGUMENT` |
+| `PATTERN` | `ARGUMENT` `NAME` `SPACE` `STEP` `SUBCOMMAND` |
+| `PDFA` | `ATTACHMENT` `COLOUR` `CONFORMANCE` `FONT` `PART` `PROFILE` `STATE` `SUBCOMMAND` |
+| `PDFOBJ` | `NAME` `NUMBER` `STREAM` |
+| `SHADING` | `ARGUMENT` `COLOURS` `DOMAIN` `EXPRESSION` `FLAG` `KIND` `NAME` `PATCH` `PATCHES` `PERROW` `RECT` `SIZE` `SPACE` `STOPS` `TRIANGLE` `VERTEX` `VERTICES` |
+| `SHAPE` | `ARGUMENT` `POINTS` `SEGMENTS` `SIZE` |
+| `SIGN` | `ARGUMENT` `CHANGED` `FIELD` `FOREIGN` `INTERNAL` `MANY` `NONE` `ROOM` `SIGNER` `STATE` |
+| `STRUCTURE` | `ARGUMENT` `ATTRIBUTE` `PLACE` `STATE` `TYPE` `VERSION` |
+| `SVG` | `ARGUMENT` `PATH` `ROOT` |
+| `TABLE` | `ARGUMENT` `COLUMN` `DIRECTION` `ROOM` `SPAN` `STYLE` `SUBCOMMAND` `THEME` `WIDTH` |
+| `TEXT` | `ALIGN` `ANCHOR` `ARGUMENT` `AVOID` `BALANCE` `BLOCK` `BREAKHYPHEN` `COLUMNS` `DIRECTION` `FIT` `HYPHENS` `LINEFEED` `PAGINATE` `PATH` `RENDER` `VERTICAL` |
+| `TIFF` | `CCITT` `COMPRESSION` `DEPTH` `ORIENTATION` `PALETTE` `PHOTOMETRIC` `PREDICTOR` `SAMPLEFORMAT` `SAMPLES` |
+| `TYPE3` | `ALIAS` `ARGUMENT` `BBOX` `EMPTY` `FULL` `GLYPH` `MATRIX` `RECURSION` |
+| `UA` | `ARGUMENT` `CLAIM` `PART` `STATE` `SUBCOMMAND` |
+| `UPDATE` | `EMPTY` `FOREIGN` `OBJECT` `TRAILER` |
+| `VERSION` | the facts follow the topic directly |
+| `VIEWERPREFERENCES` | `ARGUMENT` |
+| `WRITER` | `ARGUMENT` `OBJECT` `RESERVED` `VERSION` |
+| `XML` | `EMPTY` `MALFORMED` |
+| `XMP` | `CHAR` `RAW` `SURROGATE` `TAG` |
+| `ZUGFERD` | `ARGUMENT` `NAME` `PROFILE` `RELATIONSHIP` `STATE` `TYPE` `XML` |
+
+One refusal deliberately carries **no** `TCLPDF` code: an unknown subcommand of `tclpdf` itself answers with Tcl's own `TCL LOOKUP COMMAND`, in Tcl's own wording, so that a mistyped command behaves exactly as a mistyped command does everywhere else.
 
 # KEYWORDS
 

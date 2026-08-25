@@ -29,12 +29,14 @@ namespace eval ::tclpdf::pdfObj {
 # for small values.
 proc ::tclpdf::pdfObj::num {value {digits 5}} {
   if {![string is double -strict $value]} {
-    return -code error "tclpdf: not a number: \"$value\""
+    return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
+        "tclpdf: not a number: \"$value\""
   }
   set result [format %.*f $digits $value]
   # Infinity and NaN survive "string is double" but have no PDF spelling.
   if {[string match -nocase *inf* $result] || [string match -nocase *nan* $result]} {
-    return -code error "tclpdf: number has no PDF representation: \"$value\""
+    return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
+        "tclpdf: number has no PDF representation: \"$value\""
   }
   # Neither has a magnitude beyond what a PDF real holds (ISO 32000-1,
   # Annex C.2: about +/-3.403e38). Fixed notation writes it anyway, as a
@@ -42,7 +44,8 @@ proc ::tclpdf::pdfObj::num {value {digits 5}} {
   # an overflow, treats the object as null and drops the whole content
   # stream it appears in.
   if {abs($value) > 3.403e38} {
-    return -code error "tclpdf: number has no PDF representation: \"$value\"\
+    return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
+        "tclpdf: number has no PDF representation: \"$value\"\
         is beyond the PDF real range of about +/-3.403e38 (ISO 32000-1,\
         Annex C.2)"
   }
@@ -71,7 +74,8 @@ proc ::tclpdf::pdfObj::name {value} {
     # escaped (7.3.5) - writing "#00" would be well-formed syntax for a name
     # the standard says cannot exist.
     if {$code == 0} {
-      return -code error "tclpdf: a name must not contain a NUL character\
+      return -code error -errorcode [list TCLPDF PDFOBJ NAME nul] \
+          "tclpdf: a name must not contain a NUL character\
           (ISO 32000-1, 7.3.5)"
     }
     set char [format %c $code]
@@ -193,7 +197,8 @@ proc ::tclpdf::pdfObj::checkBytes {data} {
   # Tcl 8.6 reads this file through the system encoding and Tcl 9 as UTF-8,
   # so a literal would not mean the same thing in both.
   if {[regexp {[^\u0000-\u00ff]} $data]} {
-    return -code error "tclpdf: stream data must be bytes, not text -\
+    return -code error -errorcode [list TCLPDF PDFOBJ STREAM text] \
+        "tclpdf: stream data must be bytes, not text -\
         encode it first"
   }
   return
@@ -243,4 +248,4 @@ proc ::tclpdf::pdfObj::Utf16Be {value} {
   return $result
 }
 
-package provide tclpdf::pdfObj 1.4
+package provide tclpdf::pdfObj 1.5
