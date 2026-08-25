@@ -40,6 +40,19 @@
 # domain under section 5 paragraph 1 of the German copyright act; the file's
 # own header and examples/assets/README.md say the rest.
 #
+# WHO ERIKA MUSTERMANN IS, since the name means nothing outside Germany: she
+# is the German Jane Doe. "Mustermann" is "sample man", and the name has stood
+# on the specimen documents of the Bundesdruckerei since it first appeared in
+# the Bundesgesetzblatt in March 1983 - every German identity card, passport
+# and driving licence shown as a sample carries it, the way an English form
+# shows John Doe. So the hand below is a SPECIMEN hand: it is not a real
+# person's signature, it commits nobody, and the wording on the field says so
+# in as many words. That matters more here than in any other example, because
+# a signature is exactly the thing a reader is entitled to take seriously.
+#
+# The test certificate this example signs with carries the same name in its
+# CN, and 08.03 countersigns as "Max Mustermann" - the other half of the pair.
+#
 # BOTH HALVES ARE REQUIRED TOGETHER, and each without the other is refused.
 # -rect without -appearance is a visible annotation with no appearance
 # dictionary, which veraPDF rule 6.3.3-1 fails ("Every annotation ... shall
@@ -272,6 +285,34 @@ set fieldWidth 72
 
 set moment [clock seconds]
 
+# WHO SIGNS THIS, on the page rather than only in the source above. A visible
+# signature is the one thing in this tree a reader might take at face value,
+# so both documents say outright that the hand at the bottom is a specimen and
+# commits nobody.
+#
+# A procedure rather than the same twelve lines twice: this script writes TWO
+# documents, the one-stage and the two-stage one, and they are the same page
+# with a different middle. The first version of this block stood in the first
+# document only and the second document said nothing at all - which is the way
+# the two halves of an example drift apart.
+proc whoSigns {doc yName} {
+    upvar 1 $yName y
+    exampleHeading $doc y "Who signs this, and why it commits nobody"
+    examplePara $doc y "Erika Mustermann is the German Jane Doe: the\
+        placeholder name on the specimen documents of the Bundesdruckerei\
+        since it first appeared in the Bundesgesetzblatt in March 1983. Every\
+        German identity card, passport and driving licence shown as a sample\
+        carries it, the way an English form shows John Doe."
+    examplePara $doc y "The hand at the bottom right is the specimen signature\
+        of the identity card of the Personalausweisverordnung of 1 November\
+        2010 - an official work, in the public domain under section 5\
+        paragraph 1 of the German copyright act. It is drawn as real vectors,\
+        not as a picture of them. It is a SPECIMEN: it is nobody's signature,\
+        it declares nothing, and the certificate it is signed with comes from\
+        a test CA this script makes and throws away again."
+    return
+}
+
 set doc [tclpdf new -unit mm -version 2.0]
 
 $doc info Title "Signed specimen document, with a visible field"
@@ -292,6 +333,9 @@ examplePara $doc y "The signature in this file is the same one 08.01 makes: a\
 
 exampleHeading $doc y "Check it yourself"
 exampleCommandBlock $doc y [exampleSignatureChecks [file tail $target]]
+
+# Who signs it, on the page - on BOTH pages this script writes.
+whoSigns $doc y
 
 if {$signer eq {}} {
     exampleNotSigned $doc y $unsigned
@@ -355,6 +399,8 @@ examplePara $doc y "This document left tclpdf with the placeholder still in\
 
 exampleHeading $doc y "Check it yourself"
 exampleCommandBlock $doc y [exampleSignatureChecks [file tail $twoStage]]
+
+whoSigns $doc y
 
 if {$signer eq {}} {
     exampleNotSigned $doc y $unsigned

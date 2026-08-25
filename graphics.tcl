@@ -181,7 +181,7 @@ oo::define ::tclpdf::document::document {
   method style {args} {
     set options [::tclpdf::option parse {
       fill {} stroke {} width {} dash {} cap {} join {} miter {} opacity {}
-      blend {}
+      blend {} overprint {}
     } $args]
     my content [my GraphicsStyle $options 0 style]
     foreach which {fill stroke} {
@@ -211,6 +211,103 @@ oo::define ::tclpdf::document::document {
   method blend {mode} {
     set name [my GraphicsBlend $mode]
     my content "[::tclpdf::pdfObj name $name] gs\n"
+    return $name
+  }
+
+  # $doc overprint -fill 1 -stroke 1 -mode 1
+  #
+  # OVERPRINTING (8.6.7): whether what is painted here KNOCKS OUT what is
+  # under it on the other colourants, or leaves it standing. It is the one
+  # graphics state parameter that changes nothing a reader shows and
+  # everything a press prints.
+  #
+  # Black text on a cyan panel is the standing example. Knocked out - the
+  # default - the cyan plate is punched where the letters go, and the paper
+  # has to line up to a tenth of a millimetre or a white edge shows around
+  # every letter. Overprinted, the cyan runs on underneath and a misregister
+  # is invisible. That is why black text is set to overprint almost
+  # everywhere, and why this is worth having at all.
+  #
+  # AND THE TRAP, which is why control strips exist: overprinting a LIGHT
+  # colour is a mistake. Yellow over cyan, overprinted, is green - the yellow
+  # was wanted and green comes out. No viewer shows it, no validator reports
+  # it, and the proof is where it is found. This package writes what it is
+  # asked for and says so here rather than deciding for the caller.
+  #
+  # Three switches, and they are separate because they answer different
+  # questions:
+  #
+  #   -stroke   /OP,  what a stroke does           (PDF 1.2)
+  #   -fill     /op,  what a fill does             (PDF 1.3)
+  #   -mode     /OPM, what a ZERO in a CMYK value means (PDF 1.3): 0 leaves
+  #             the plate alone, 1 - "nonzero overprint" - paints it at
+  #             nought, which is how a caller sets one plate without
+  #             disturbing the rest
+  #
+  # An option left out is not written, so a call names what it means to
+  # change. A call that names nothing at all is refused rather than writing a
+  # resource that changes nothing - the lesson [GraphicsOpacity] already
+  # carries.
+  method overprint {args} {
+    set options [::tclpdf::option parse {fill {} stroke {} mode {}} \
+        $args overprint]
+    set name [my GraphicsOverprint $options]
+    my content "[::tclpdf::pdfObj name $name] gs\n"
+    return $name
+  }
+
+  # The resource without the operator, so a shape can put its "gs" inside its
+  # own q/Q - the same separation [GraphicsOpacity] makes, and for the same
+  # reason: an overprint that leaks into the rest of the page is worse than
+  # one that was never set, because nothing on screen shows it.
+  method GraphicsOverprint {options} {
+    set pairs {Type /ExtGState}
+    set name GO
+    foreach {option key} {stroke OP fill op} {
+      set value [dict get $options $option]
+      if {$value eq {}} {
+        continue
+      }
+      if {![string is boolean -strict $value]} {
+        return -code error \
+            -errorcode [list TCLPDF GRAPHICS OVERPRINT $option] \
+            "tclpdf: overprint -$option is true or false, not \"$value\""
+      }
+      set flag [expr {$value ? {true} : {false}}]
+      lappend pairs $key $flag
+      append name [string totitle $option] $flag
+    }
+    set mode [dict get $options mode]
+    if {$mode ne {}} {
+      # 0 or 1, and nothing else: Table 58 gives OPM those two values, and a
+      # 2 would be written into the file and mean whatever a reader made of
+      # it.
+      if {$mode ni {0 1}} {
+        return -code error -errorcode [list TCLPDF GRAPHICS OVERPRINT mode] \
+            "tclpdf: overprint -mode is 0 or 1, not \"$mode\" - 0 leaves a\
+            plate alone where its value is zero, 1 paints it at nought"
+      }
+      lappend pairs OPM $mode
+      append name Mode $mode
+    }
+    if {[llength $pairs] == 2} {
+      return -code error -errorcode [list TCLPDF GRAPHICS OVERPRINT NONE] \
+          "tclpdf: overprint takes at least one of -fill, -stroke and -mode -\
+          a call naming none of them would write a graphics state that\
+          changes nothing"
+    }
+    # /OP is PDF 1.2, /op and /OPM are 1.3 (Table 58). Asked for what the
+    # call actually writes rather than for the highest of the three: a
+    # document that only sets the stroke has no reason to be raised.
+    if {[dict get $options fill] ne {} || $mode ne {}} {
+      my RequireVersion 1.3 "overprint -fill and -mode"
+    } else {
+      my RequireVersion 1.2 "overprint -stroke"
+    }
+    if {[my resource ExtGState $name] eq {}} {
+      my resource ExtGState $name [[my writer] ref [[my writer] add \
+          [::tclpdf::pdfObj dictionary $pairs]]]
+    }
     return $name
   }
 
@@ -302,7 +399,7 @@ oo::define ::tclpdf::document::document {
   # [style] deliberately does NOT guard: its whole purpose is to set the state
   # until changed, which is what the manual promises.
   method GraphicsGuarded {options} {
-    foreach key {fill stroke width dash cap join miter opacity blend} {
+    foreach key {fill stroke width dash cap join miter opacity blend overprint} {
       if {[dict exists $options $key] && [dict get $options $key] ne {}} {
         return 1
       }
@@ -344,6 +441,16 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $options blend] && [dict get $options blend] ne {}} {
       append result "[::tclpdf::pdfObj name \
           [my GraphicsBlend [dict get $options blend]]] gs\n"
+    }
+    # -overprint on a shape is BOTH sides, since a shape that is filled and
+    # stroked in one call has no way of saying which it meant. The three
+    # switches apart are what [overprint] is for; here the question is only
+    # whether this shape knocks out what is under it.
+    if {[dict exists $options overprint]
+        && [dict get $options overprint] ne {}} {
+      set value [dict get $options overprint]
+      append result "[::tclpdf::pdfObj name [my GraphicsOverprint \
+          [dict create fill $value stroke $value mode {}]]] gs\n"
     }
     if {[dict exists $options width] && [dict get $options width] ne {}} {
       # Zero is allowed and means the thinnest line the device can draw
@@ -540,4 +647,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.5
+package provide tclpdf::graphics 1.6

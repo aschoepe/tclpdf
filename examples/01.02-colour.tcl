@@ -493,6 +493,94 @@ $doc style -width 0.2 -dash solid -cap butt -join miter -miter 10 \
 $doc rect -at {158 238} -size {30 12}
 $doc text "after the reset" -at {158 258}
 
+# ---------------------------------------------------------------------------
+# Page 6: why there are two colour models at all
+# ---------------------------------------------------------------------------
+#
+# The two diagrams every colour chapter opens with, drawn with the blend modes
+# rather than with pre-computed overlaps: three circles, one call each, and
+# the intersections come out of the arithmetic.
+#
+# WHAT THE TWO GROUNDS MEAN, and it is the whole lesson: additive mixing is
+# LIGHT and starts from BLACK - no light at all - so the diagram needs a black
+# panel under it and Screen to add. Subtractive mixing is INK and starts from
+# WHITE - bare paper - so its diagram stands on the page as it is and
+# Multiply takes away. Put the RGB circles on white paper and Screen paints
+# everything white, which is not a drawing error but the model saying that
+# there is nothing left to add.
+$doc page add
+$doc font -family helvetica -style bold -size 15 -color black
+$doc text "Why there are two colour models" -at {20 22}
+$doc font -style {} -size 9
+$doc text "Both diagrams are three circles and nothing else. What differs is\
+    the ground they stand on and the blend mode: light adds up from black,\
+    ink takes away from white." -at {20 29} -width 170
+
+# -- additive: light, from black --------------------------------------------
+$doc font -style bold -size 11
+$doc text "RGB - additive, light" -at {20 46}
+$doc font -style {} -size 8
+$doc text "Screen on a black panel. Where two lights overlap the result is\
+    brighter; all three make white." -at {20 52} -width 78
+
+$doc rect -at {20 58} -size {78 74} -fill black
+foreach {colour cx cy} {
+    {1 0 0}  59 82
+    {0 1 0}  70 102
+    {0 0 1}  48 102
+} {
+    $doc circle -at [list $cx $cy] -radius 20 -fill $colour -blend Screen
+}
+
+# -- subtractive: ink, from white -------------------------------------------
+$doc font -style bold -size 11
+$doc text "CMYK - subtractive, ink" -at {112 46}
+$doc font -style {} -size 8
+$doc text "Multiply on bare paper. Where two inks overlap less light comes\
+    back; all three make near black." -at {112 52} -width 78
+
+$doc rect -at {112 58} -size {78 74} -stroke {0.8 0.8 0.85} -width 0.2
+foreach {colour cx cy} {
+    {cmyk 1 0 0 0}  151 82
+    {cmyk 0 1 0 0}  162 102
+    {cmyk 0 0 1 0}  140 102
+} {
+    $doc circle -at [list $cx $cy] -radius 20 -fill $colour -blend Multiply
+}
+
+# -- and why the K is there -------------------------------------------------
+#
+# The one thing the diagram cannot show: the middle of the CMYK circles is a
+# muddy dark brown on paper, not black - three inks at full strength are 300
+# per cent coverage and still not neutral. That is what the fourth plate is
+# for, and it is worth a rule of real black beside the mixed one.
+$doc font -style bold -size 11
+$doc text "And why there is a fourth plate" -at {20 145}
+$doc font -style {} -size 8
+$doc text "The middle above is where C, M and Y meet at full strength. On\
+    paper that is not black but a dark muddy brown, at 300 per cent ink\
+    coverage - which no press will lay down on ordinary stock. The K plate\
+    gives a neutral black with one ink instead of three." -at {20 151} -width 170
+
+$doc rect -at {20 168} -size {40 14} -fill {cmyk 1 1 1 0}
+$doc rect -at {65 168} -size {40 14} -fill {cmyk 0 0 0 1}
+$doc font -size 7
+$doc text "cmyk 1 1 1 0 - three inks" -at {20 187}
+$doc text "cmyk 0 0 0 1 - one ink" -at {65 187}
+
+# AND THE TWO PATCHES LOOK ALIKE ON SCREEN, which is not a fault of the
+# drawing: a reader has no inks, so it converts both to RGB and lands on much
+# the same grey. Said on the page rather than left for the reader to wonder
+# about - a document that shows two swatches and claims they differ, while
+# they plainly do not, teaches the wrong thing.
+$doc font -size 8 -color {0.45 0.45 0.5}
+$doc text "On screen these two look alike, and that is the honest answer: a\
+    reader has no inks. It converts both to RGB and lands on much the same\
+    grey. The difference is on paper, and it is the reason a control strip is\
+    printed rather than previewed - see example 01.16." \
+    -at {20 196} -width 170
+$doc font -color black
+
 exampleFooter $doc
 
 $doc write $target

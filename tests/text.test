@@ -3077,6 +3077,29 @@ test text-fit-31.13 {a box that leaves nothing of the line is refused} -body {
   lrange $code 0 3
 } -result {TCLPDF TEXT FIT BOX}
 
+test text-fit-31.15 {a small box is FITTED, not refused - the other side of 31.13} -body {
+  # The counterpart to 31.13, and the reason it exists: 31.13 fixes where the
+  # refusal fires, this one fixes where it does NOT. TCLPDF TEXT FIT BOX is
+  # the last line of defence, at the point a size would round to nought in the
+  # content stream - it is not a judgement about a box being too small to
+  # read. A box of a tenth of a micrometre is still fitted, and the size
+  # written is not zero.
+  #
+  # Without this test the bound could be tightened to anything at all -
+  # "refuse under a millimetre" - and the suite would stay green while
+  # examples/01.15 says on its page that such a box is drawn.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 20
+  set fitted [catch {$doc text "Hallo" -at {20 20} -fit {0.0001 0.0001}}]
+  set stream [$doc page content]
+  $doc destroy
+  # Fitted without a word, and the size in the stream is a positive number
+  # rather than the "0 Tf" that 31.13 refuses.
+  list $fitted [regexp {/F\w+ (0|0\.0+) Tf} $stream] \
+      [regexp {/F\w+ [0-9.]+ Tf} $stream]
+} -result {0 0 1}
+
 test text-fit-31.14 {a box narrower than the spacing alone is refused, not approximated} -body {
   # The letters can be made smaller and the spacing between them cannot, so
   # below a certain box no size fits at all. Said, rather than answered with a

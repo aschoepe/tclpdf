@@ -493,6 +493,92 @@ test graphics-blend-9.6 {Compatible is refused, and says what to write instead} 
       [string match {*known are: Normal, Multiply*} $unknown]
 } -result {{1 1} 1 1}
 
+test graphics-overprint-16.1 {the three switches reach the file as OP, op and OPM} -body {
+  # 8.6.7 and Table 58. Three separate keys because they answer three
+  # different questions, and a call writes only what it names.
+  set doc [tclpdf new]
+  $doc page add
+  $doc overprint -stroke 1
+  $doc overprint -fill 1
+  $doc overprint -mode 1
+  set states [$doc resource ExtGState]
+  set written {}
+  foreach name [lsort [dict keys $states]] {
+    lappend written $name
+  }
+  set body [::tclpdfTest::objects $doc ExtGState]
+  $doc destroy
+  list $written [regexp -all {/OP true} $body] [regexp -all {/op true} $body] \
+      [regexp -all {/OPM 1} $body]
+} -result {{GOFilltrue GOMode1 GOStroketrue} 1 1 1}
+
+test graphics-overprint-16.2 {off is written as false, not left out} -body {
+  # A caller who switches overprinting OFF for one shape means it: leaving
+  # the key out would inherit whatever stood before.
+  set doc [tclpdf new]
+  $doc page add
+  $doc overprint -fill 0 -stroke 0
+  set body [::tclpdfTest::objects $doc ExtGState]
+  $doc destroy
+  list [regexp {/OP false} $body] [regexp {/op false} $body]
+} -result {1 1}
+
+test graphics-overprint-16.3 {a call that names nothing is refused} -body {
+  # The lesson GraphicsOpacity already carries: a resource that changes
+  # nothing, written by a call that did nothing, and no word about it.
+  set doc [tclpdf new]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc overprint}]
+  set states [dict size [$doc resource ExtGState]]
+  $doc destroy
+  list [lrange $code 0 3] $states
+} -result {{TCLPDF GRAPHICS OVERPRINT NONE} 0}
+
+test graphics-overprint-16.4 {a value that is not a boolean, and a mode that is not 0 or 1} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set values [list [::tclpdfTest::refusalCode {$doc overprint -fill maybe}] \
+      [::tclpdfTest::refusalCode {$doc overprint -mode 2}]]
+  $doc destroy
+  set values
+} -result {{TCLPDF GRAPHICS OVERPRINT fill} {TCLPDF GRAPHICS OVERPRINT mode}}
+
+test graphics-overprint-16.5 {the version asked for is the one the call writes} -body {
+  # /OP is PDF 1.2, /op and /OPM are 1.3 (Table 58). Asked separately, so a
+  # document that only sets the stroke is not raised for a key it never
+  # wrote. Measured against a document pinned BELOW each of them, which is
+  # the only way the difference shows: a fresh document already stands at
+  # 1.4 and would take all three without a word.
+  set low [tclpdf new -version 1.2]
+  $low page add
+  set strokeAt12 [catch {$low overprint -stroke 1}]
+  set fillAt12 [::tclpdfTest::refusalCode {$low overprint -fill 1}]
+  set modeAt12 [::tclpdfTest::refusalCode {$low overprint -mode 1}]
+  $low destroy
+  list $strokeAt12 [lrange $fillAt12 0 1] [lrange $modeAt12 0 1]
+} -result {0 {TCLPDF VERSION} {TCLPDF VERSION}}
+
+test graphics-overprint-16.6 {-overprint on a shape stays inside its own q/Q} -body {
+  # The whole reason the resource and the operator are separate: an overprint
+  # that leaked into the rest of the page would be invisible on screen and
+  # wrong on press.
+  set doc [tclpdf new]
+  $doc page add
+  $doc rect -at {10 10} -size {20 10} -fill {cmyk 1 0 0 0} -overprint 1
+  $doc rect -at {10 30} -size {20 10} -fill {cmyk 0 1 0 0}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # One gs, and it stands between the q and the Q of the first rectangle.
+  # Position rather than a pattern: the gs has to stand after the FIRST q and
+  # before the FIRST Q. A regexp over the whole stream would also pass if the
+  # operator stood in the second rectangle's bracket.
+  set gs [string first {gs} $content]
+  set open [string first "q\n" $content]
+  set close [string first "\nQ" $content]
+  list [regexp -all {gs} $content] \
+      [expr {$open < $gs && $gs < $close}]
+} -result {1 1}
+
 test graphics-pattern-4.1 {pattern size reports the tile} -body {
   # The other half of a facade that nothing called: [pattern create] is used
   # everywhere, [pattern size] by nothing.

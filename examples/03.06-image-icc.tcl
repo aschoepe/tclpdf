@@ -33,6 +33,23 @@
 # examples/assets/README.md. It is the only file in the tree with a profile in
 # it - 3 144 bytes of sRGB, beside Exif, XMP and a Photoshop segment.
 #
+# WHO ERIKA MUSTERMANN IS, since the name means nothing outside Germany: she
+# is the German Jane Doe. "Mustermann" is "sample man", and the name has stood
+# on the specimen documents of the Bundesdruckerei since it first appeared in
+# the Bundesgesetzblatt in March 1983 - every German identity card, passport
+# and driving licence shown as a sample carries it, the way an English form
+# shows John Doe. Her particulars move from specimen to specimen and are not
+# worth quoting from memory; the card this photograph comes from gives 12
+# August 1964 in Berlin, valid to 31 October 2020, number T22000129.
+#
+# THE SOURCES PART COMPANY ON ONE POINT and it is worth naming rather than
+# smoothing over: the German Wikipedia article says the photographs on these
+# specimens are of real Bundesdruckerei employees, while Wikimedia Commons
+# calls the person depicted fictitious. Nothing follows from that for the
+# licence - an official work stays one, and the file is published for reuse -
+# but it is why this package puts the photograph and the signature in a
+# signature field and an invoice and does not reproduce a whole identity card.
+#
 # Check with:  qpdf --qdf --object-streams=disable out.pdf - | grep -n ICCBased
 #              verapdf -f 3b out-pdfa.pdf
 #
@@ -106,6 +123,22 @@ $doc image place dropped -at {90 46} -width 62
 $doc font -style bold -size 8
 $doc text "profile kept: /ICCBased" -at {20 131}
 $doc text "-icc 0: /DeviceRGB" -at {90 131}
+
+# Who is in the picture, said ON THE PAGE and not only in the source above: a
+# reader outside Germany meets a face and a name and has no way of telling
+# whether this is somebody's passport photograph or a sample. Beside the
+# pictures rather than under them - the table below starts at 137 mm, and a
+# block set there ran underneath it. Seen at 90 dpi.
+$doc font -style {} -size 7 -color {0.35 0.35 0.4}
+$doc text "Erika Mustermann is the German Jane Doe: the placeholder name on\
+    the specimen documents of the Bundesdruckerei since it first appeared in\
+    the Bundesgesetzblatt in March 1983. Every German identity card, passport\
+    and driving licence shown as a sample carries it.\n\nThis is the passport\
+    photograph of the identity card specimen of the\
+    Personalausweisverordnung - an official work, in the public domain under\
+    section 5 paragraph 1 of the German copyright act, and published for\
+    reuse." -at {157 46} -width 33
+$doc font -color {0 0 0}
 
 # What the document says about the two, read back out of it rather than
 # repeated from the calls above - the one number that differs is [icc].
@@ -203,6 +236,15 @@ $doc image place portrait -at {20 62} -width 65
 $doc font -size 8
 $doc text "/ICCBased with /N 3: the [dict get [$doc image info portrait] icc]\
     bytes of sRGB the JPEG carried in its APP2 segment" -at {20 152} -width 65
+# Who is in the picture, on the page and not only in the source: a reader who
+# meets the name for the first time should not have to guess whether this is
+# somebody's passport photograph.
+$doc font -size 7
+$doc text "Erika Mustermann is the German Jane Doe - the placeholder name on\
+    every German specimen document since 1983. This is the passport\
+    photograph of the identity card specimen of the\
+    Personalausweisverordnung, an official work in the public domain."\
+    -at {20 162} -width 65
 $doc font -size 9
 $doc text "Nothing on this page is a device colour. The text is grey, which\
     ISO 19005-2 admits under any intent; the rule is the intent's own profile;\
