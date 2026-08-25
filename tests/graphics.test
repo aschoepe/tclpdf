@@ -1251,4 +1251,68 @@ test graphics-pattern-21.1 {pattern create -step {5} is refused before the scrip
   set result
 } -result {{1 1 1 1 1 1 1 1} 0 {} {} {}}
 
+# -- rect and clip check their box, like every other shape ---------------------
+
+test graphics-box-22.1 {rect and clip refuse a point that is not two numbers} -body {
+  # These two took -at and -size apart with a bare [lassign] and handed the
+  # pieces straight to arithmetic, so neither option was ever checked.
+  # Measured on 2026-08-25, before [ShapeBox]: "-at {a b}" came out as
+  # "can't use non-numeric string as operand of "+"" - not a tclpdf: message
+  # and no word about which option was meant - and "-at {20 20 30}" was
+  # ACCEPTED, with the third number dropped in silence and the rectangle
+  # drawn. [ellipse], [line] and [curve] went through [GraphicsPoint] all
+  # along; these two now do too.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set codes {}
+  foreach call {
+    {rect -at {20 20 30} -size {10 10}}
+    {clip -at {20 20 30} -size {10 10}}
+    {rect -at {20} -size {10 10}}
+    {clip -at {20} -size {10 10}}
+  } {
+    lappend codes [catch {$doc {*}$call} message]
+    lappend codes [string match {tclpdf: -at of * is a point {x y}*} $message]
+  }
+  # And a letter is a tclpdf: refusal rather than an arithmetic accident.
+  foreach call {{rect -at {a b} -size {10 10}} {clip -at {a b} -size {10 10}}} {
+    lappend codes [catch {$doc {*}$call} message]
+    lappend codes [string match {tclpdf: *} $message]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $stream
+} -result {{1 1 1 1 1 1 1 1 1 1 1 1} {}}
+
+test graphics-box-22.2 {and a size that is not two numbers} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set codes {}
+  foreach call {
+    {rect -at {20 20} -size {10}}
+    {clip -at {20 20} -size {10}}
+    {rect -at {20 20} -size {10 10 10}}
+    {rect -at {20 20} -size {10 wide}}
+  } {
+    lappend codes [catch {$doc {*}$call} message]
+    lappend codes [string match {tclpdf: -size of *} $message]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $stream
+} -result {{1 1 1 1 1 1 1 1} {}}
+
+test graphics-box-22.3 {a proper box still draws exactly what it drew before} -body {
+  # The counter-measurement: the check is a gate, not a change of arithmetic.
+  # A zero height stays allowed - a rectangle of no height is a line a stroke
+  # still draws, and "re" itself takes one (8.5.2.1).
+  set doc [tclpdf new -compress 0 -unit pt -format {100 100}]
+  $doc page add
+  $doc rect -at {10 20} -size {30 5} -stroke black
+  $doc clip -at {0 0} -size {100 0}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {10 75 30 5 re} $stream] [regexp {0 100 100 0 re W n} $stream]
+} -result {1 1}
+
 cleanupTests

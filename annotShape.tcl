@@ -285,11 +285,18 @@ oo::define ::tclpdf::document::document {
         lassign $corner x y
         lassign $far farX farY
         set size [list [expr {$farX - $x}] [expr {$farY - $y}]]
+        # [ellipse] TAKES ITS CENTRE, not its corner - shape.tcl says so in
+        # its own comment, and this line read it as a corner until the
+        # rendered example was looked at on 2026-08-25: the ellipse was drawn
+        # around the corner of its own BBox, so three quarters of it fell
+        # outside and the reader clipped them away. The square branch above
+        # is right because [rect] does take the corner.
+        set centre [list [expr {($x + $farX) / 2.0}] [expr {($y + $farY) / 2.0}]]
         if {$fill ne {}} {
-          my ellipse -at $corner -size $size -fill $fill -stroke $stroke \
+          my ellipse -at $centre -size $size -fill $fill -stroke $stroke \
               -width $width
         } else {
-          my ellipse -at $corner -size $size -stroke $stroke -width $width
+          my ellipse -at $centre -size $size -stroke $stroke -width $width
         }
       }
       polygon {

@@ -72,6 +72,23 @@ namespace eval ::tclpdf::type1 {
   # only the first AGL name would pick "nbspace" and "sfthyphen" where every
   # real AFM says "space" and "hyphen".
   #
+  # THE FIRST CANDIDATE OF A POSITION IS THE ANNEX D NAME - the name
+  # WinAnsiEncoding itself gives that byte (ISO 32000-1, D.2) - and the rest
+  # are the spellings faces are found to use instead. That is an invariant
+  # this table has to keep, because [differences] below reads it: where a face
+  # is addressed through /WinAnsiEncoding, a chosen name that is not the Annex
+  # D one has to be declared in a /Differences array or the reader looks up a
+  # name the embedded program does not carry and the glyph falls out - with
+  # /Widths still reserving its advance, so the line keeps its length and
+  # loses a character, and neither qpdf nor pdftotext says a word.
+  #
+  # Two positions had it the wrong way round until 2026-08-25: 152 offered
+  # "ilde" before "tilde" and 183 "middot" before "periodcentered", so a
+  # face carrying both got the name that is NOT WinAnsi's. Every face in this
+  # tree carries the Annex D spelling, so none of them needs a /Differences
+  # array today - which is exactly why the ordering has to be right rather
+  # than merely compensated for.
+  #
   # Built from cp1252 - which is what WinAnsiEncoding is - through Adobe's
   # glyph list in tools/agl/glyphlist.txt. Two positions carry a name the AGL
   # does not give them: 160 and 173 use the glyphs of space and hyphen, as
@@ -97,7 +114,7 @@ namespace eval ::tclpdf::type1 {
     136 {circumflex} 137 {perthousand} 138 {Scaron} 139 {guilsinglleft}
     140 {OE} 142 {Zcaron} 145 {quoteleft} 146 {quoteright}
     147 {quotedblleft} 148 {quotedblright} 149 {bullet} 150 {endash}
-    151 {emdash} 152 {ilde tilde} 153 {trademark} 154 {scaron}
+    151 {emdash} 152 {tilde ilde} 153 {trademark} 154 {scaron}
     155 {guilsinglright} 156 {oe} 158 {zcaron} 159 {Ydieresis}
     160 {space nbspace nonbreakingspace} 161 {exclamdown} 162 {cent}
     163 {sterling} 164 {currency} 165 {yen} 166 {brokenbar} 167 {section}
@@ -105,7 +122,7 @@ namespace eval ::tclpdf::type1 {
     172 {logicalnot} 173 {hyphen sfthyphen softhyphen} 174 {registered}
     175 {macron overscore} 176 {degree} 177 {plusminus} 178 {twosuperior}
     179 {threesuperior} 180 {acute} 181 {mu mu1} 182 {paragraph}
-    183 {middot periodcentered} 184 {cedilla} 185 {onesuperior}
+    183 {periodcentered middot} 184 {cedilla} 185 {onesuperior}
     186 {ordmasculine} 187 {guillemotright} 188 {onequarter} 189 {onehalf}
     190 {threequarters} 191 {questiondown} 192 {Agrave} 193 {Aacute}
     194 {Acircumflex} 195 {Atilde} 196 {Adieresis} 197 {Aring} 198 {AE}
@@ -147,6 +164,27 @@ proc ::tclpdf::type1::names {metrics {glyphs {}}} {
         dict set result $code $name
         break
       }
+    }
+  }
+  return $result
+}
+
+# The positions whose chosen glyph name is NOT the one WinAnsiEncoding gives
+# them, as a dict of code -> name: what has to go into a /Differences array
+# beside /BaseEncoding /WinAnsiEncoding.
+#
+# Empty for most faces, and that is the point of asking: a face whose every
+# name is the Annex D one is written with the bare /WinAnsiEncoding it was
+# always written with, and only a face that spells a glyph differently pays
+# for the array. The answer comes from [names] rather than from a second walk
+# of the table, so the name declared here is by construction the name the
+# width beside it was taken from.
+proc ::tclpdf::type1::differences {names} {
+  variable winAnsi
+  set result {}
+  foreach {code name} $names {
+    if {$name ne [lindex [dict get $winAnsi $code] 0]} {
+      dict set result $code $name
     }
   }
   return $result

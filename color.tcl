@@ -1317,7 +1317,18 @@ proc ::tclpdf::color::devicenFunction {space colourants} {
       if {$factor == 0} {
         continue
       }
-      set index [expr {($count - 1 - $i) + $j + $terms}]
+      # HOW DEEP THE TINT LIES, and the second summand is the whole of it.
+      # Below everything sit the count tints, the last one on top, so tint i
+      # is at depth count-1-i; above them are the j results already worked
+      # out for the earlier components. And above THOSE is at most ONE
+      # partial result for this component - never $terms of them, because
+      # add/mul folds the two together the moment the second term arrives.
+      # Counting them separately reached past the tints from the third
+      # contributing colourant on: measured 2026-08-25, three spot inks with
+      # the tints {0 0 1} painted WHITE, which is to say the third plate
+      # painted nothing at all. Two colourants were always right, and the
+      # tests had only ever used two.
+      set index [expr {($count - 1 - $i) + $j + ($terms ? 1 : 0)}]
       lappend code $index index
       if {$factor != 1} {
         lappend code [::tclpdf::pdfObj num $factor] mul

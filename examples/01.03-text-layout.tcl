@@ -110,14 +110,21 @@ $doc font -rise -1.6
 $doc text "lowered" -at [list 148 $y]
 $doc font -rise 0
 
+# EVERY PIECE STARTS WHERE THE ONE BEFORE IT ENDS, measured rather than
+# written down. The subscript used to sit on a fixed 24.6 and the O on a
+# fixed 27, which left about a millimetre of air on either side of the 2 -
+# "H 2 O" instead of "H2O", visible at 300 dpi. The comment below the
+# superscript already said that a fixed x had parked the other 2 on the c;
+# the same lesson had simply not been carried up two lines.
 set y [expr {$y + 12}]
-$doc text "H" -at [list 20 $y] -size 14
-$doc text "2" -at [list 24.6 $y] -size 9 -rise -1
-$doc text "O and E = mc" -at [list 27 $y] -size 14
-# The superscript starts where its prefix ends - measured, not guessed: a
-# fixed x used to park the 2 on the c.
-$doc text "2" -at [list [expr {27 + [$doc textWidth "O and E = mc" -size 14]}] $y] \
-    -size 9 -rise 3.5
+set x 20
+$doc text "H" -at [list $x $y] -size 14
+set x [expr {$x + [$doc textWidth "H" -size 14]}]
+$doc text "2" -at [list $x $y] -size 9 -rise -1
+set x [expr {$x + [$doc textWidth "2" -size 9]}]
+$doc text "O and E = mc" -at [list $x $y] -size 14
+set x [expr {$x + [$doc textWidth "O and E = mc" -size 14]}]
+$doc text "2" -at [list $x $y] -size 9 -rise 3.5
 $doc font -family helvetica -size 7
 $doc text "subscript and superscript through -rise" -at [list 62 $y]
 

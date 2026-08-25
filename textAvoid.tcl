@@ -178,7 +178,12 @@ oo::define ::tclpdf::document::document {
   # added to every one of them: "abc" there used to reach the band and fail
   # in Tcl's words.
   method TextAvoidCheck {shapes {margin 0}} {
-    if {![string is double -strict $margin]} {
+    # [text::finite] rather than [string is double]: NaN is a double to Tcl,
+    # and a NaN margin travelled into the band arithmetic where every
+    # comparison against it is false - the shape then narrowed no line at all
+    # and the text ran straight through it, in silence. The shapes themselves
+    # are read by the pattern below, which has no spelling for NaN.
+    if {![::tclpdf::text::finite $margin]} {
       return -code error "tclpdf: -avoidMargin takes a distance in the\
           document unit, not \"$margin\""
     }

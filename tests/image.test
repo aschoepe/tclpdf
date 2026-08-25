@@ -1882,6 +1882,47 @@ test image-mask-18.16c {a picture without -interpolate is untouched by the profi
   regexp {/Interpolate} $bytes
 } -constraints haveTdom -result 0
 
+test image-mask-18.16d {a refused interpolation leaves no orphaned soft mask} -body {
+  # The refusal came AFTER the alpha channel had been written as a stream of
+  # its own: the placement failed, the picture was never built, and the mask
+  # stayed in the file with nothing pointing at it. Measured on 2026-08-25 in
+  # an archive document: 2503 bytes of orphan, which "qpdf --qdf" drops - the
+  # proof that it is unreachable - while "qpdf --check" and veraPDF say
+  # nothing at all. The question is now asked at the top of [ImageObject],
+  # before the first object exists.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc pdfa -part 3 -conformance B
+  # Two pixels of RGBA, so the picture really does take the soft mask road.
+  set pic [::tclpdfTest::png 2 1 8 6 "\x00\xff\x00\x00\x80\x00\x00\xff\x40"]
+  $doc image embed smooth -data $pic -interpolate 1
+  set code [catch {$doc image place smooth -at {20 20} -width 40}]
+  set path [::tclpdfTest::scratch orphan-mask.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # Not one image object of any kind: neither the picture, which was refused,
+  # nor the mask it would have worn.
+  list $code [regexp -all {/Subtype /Image} $bytes]
+} -constraints haveTdom -result {1 0}
+
+test image-mask-18.16e {and the same picture without the refusal still wears one} -body {
+  # The counter-measurement: the mask road is untouched, so an ordinary RGBA
+  # picture still becomes two image objects, the picture and its /SMask.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set pic [::tclpdfTest::png 2 1 8 6 "\x00\xff\x00\x00\x80\x00\x00\xff\x40"]
+  $doc image embed smooth -data $pic
+  $doc image place smooth -at {20 20} -width 40
+  set path [::tclpdfTest::scratch kept-mask.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/Subtype /Image} $bytes] [regexp -all {/SMask } $bytes]
+} -result {2 1}
+
 test image-mask-18.17 {-invert outside a stencil is a Decode array, and only where one fits} -body {
   # Table 87: the Decode array's length is twice the number of colour
   # components, so [1 0] exists for a one-component picture and nowhere
@@ -3124,6 +3165,88 @@ test image-inline-21.26a {the Length key is PDF 2.0 and only 2.0} -body {
   set result
 } -result {{no L} L=exact}
 
+test image-inline-21.26d {a 1.x file carrying an inline picture cannot be raised to 2.0} -body {
+  # The other half of 21.26a, and the half that was missing until 2026-08-25.
+  # The /L decision is taken as the picture is DRAWN, and the comment that
+  # justified it said the version cannot be lowered afterwards - true, and
+  # beside the point, because it can be RAISED. Measured: -version 1.7, an
+  # inline picture, then "configure -version 2.0" gave a %PDF-2.0 header and
+  # no /L anywhere in the file, against 8.9.7 and against what the manual
+  # promises. The bytes are in the content stream by then, so the raise is
+  # what gives way - the same ceiling a PDF/A claim sets.
+  set doc [tclpdf new -unit mm -compress 0 -version 1.7]
+  $doc page add
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+  set code [catch {$doc configure -version 2.0} message]
+  set version [$doc cget -version]
+  $doc destroy
+  list $code [string match {*inline image drawn without the /L*} $message] $version
+} -result {1 1 1.7}
+
+test image-inline-21.26e {and a 2.0 file carrying one cannot be lowered} -body {
+  # The mirror of it, which is the same defect the other way round: the /L is
+  # in the stream, so a 1.x header would disown an entry the file contains.
+  # Without both halves the promise "only in a 2.0 file" holds in one
+  # direction only.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc page add
+  $doc image draw -data [inlinePng] -at {20 20} -width 20 -inline 1
+  set code [catch {$doc configure -version 1.7} message]
+  set version [$doc cget -version]
+  $doc destroy
+  list $code [string match {*inline image with the /L*} $message] $version
+} -result {1 1 2.0}
+
+test image-inline-21.26g {a document without an inline picture is not bound at all} -body {
+  # The counter-measurement: the ceiling comes from the picture, not from
+  # having a picture module loaded. An XObject placement leaves the version
+  # free in both directions.
+  set doc [tclpdf new -unit mm -compress 0 -version 1.7]
+  $doc page add
+  $doc image draw -data [inlinePng] -at {20 20} -width 20
+  $doc configure -version 2.0
+  set version [$doc cget -version]
+  $doc destroy
+  set version
+} -result 2.0
+
+test image-inline-21.26h {a picture refused for its size does not lock PDF/A out} -body {
+  # The record of "this picture went down asking for interpolation" was made
+  # BEFORE the 4096-byte line was weighed, so a picture that never reached
+  # the file put itself on the list - and [pdfa] then refused for ever after
+  # with a sentence that was not true of it ("the picture is in the file by
+  # now and cannot be taken back"). The caller had no way back. Measured on
+  # 2026-08-25; the module's own comment promises the opposite, that a
+  # refused inline picture leaves the document exactly as it was.
+  set saved $::tclpdf::image::inlineLimit
+  set ::tclpdf::image::inlineLimit 4
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed big -data [inlinePng] -interpolate 1
+  set refused [catch {$doc image place big -at {20 20} -width 20 -inline 1} message]
+  set ::tclpdf::image::inlineLimit $saved
+  # The document has to be exactly as it was: PDF/A still open, and the
+  # picture still absent from the list the declaration reads.
+  set declared [catch {$doc pdfa -part 3 -conformance B} report]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $refused [string match {*bytes of image data*} $message] $declared $stream
+} -constraints haveTdom -result {1 1 0 {}}
+
+test image-inline-21.26i {a picture that DID go down still binds the declaration} -body {
+  # The counter-measurement, and the reason the record exists at all: the
+  # order "place, then pdfa" is the one an earlier attempt let through. A
+  # picture that reached the file is still remembered and still refuses the
+  # declaration afterwards.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed small -data [inlinePng] -interpolate 1
+  $doc image place small -at {20 20} -width 20 -inline 1
+  set code [::tclpdfTest::refusalCode {$doc pdfa -part 3 -conformance B}]
+  $doc destroy
+  list [lrange $code 0 3] [lindex $code 4]
+} -constraints haveTdom -result {{TCLPDF IMAGE INTERPOLATE PDFA} small}
+
 test image-inline-21.26b {the size refusal quotes the clause as it reads} -body {
   # 8.9.7 says SHOULD, not shall - twice. The line is the standard's
   # recommendation and the refusal is this package's decision, and the
@@ -3477,5 +3600,46 @@ test image-space-23.2 {a stencil has no colour space, and says so} -body {
   $doc destroy
   set out
 } -result {{} DeviceGray}
+
+# -- a placement has to survive being written ---------------------------------
+
+test image-place-24.1 {a placement that rounds to nothing is refused} -body {
+  # [checkFit] holds -size, -scale and -dpi above zero, which is the number
+  # the caller wrote; this holds the number that reaches the FILE. A PDF real
+  # carries five decimals (7.3.3), so an extent below 0.00001 pt is written
+  # as 0 and the placement goes out as "0 0 0 0 x y cm" with the "Do" of the
+  # picture under it - the page collapsed onto a point, nothing visible, and
+  # nothing said. Measured on 2026-08-25: qpdf, veraPDF and poppler all took
+  # such a file without a word.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng]
+  set codes {}
+  foreach call {
+    {image place pic -at {20 20} -fit {0.0000001 0.0000001}}
+    {image place pic -at {20 20} -size {0.0000001 0.0000001}}
+    {image place pic -at {20 20} -scale 0.0000001}
+  } {
+    lappend codes [catch {$doc {*}$call} message]
+    lappend codes [string match {*0.00001 pt*} $message]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Nothing written: not the "q", not the mark, not the cm.
+  list $codes $stream
+} -result {{1 1 1 1 1 1} {}}
+
+test image-place-24.2 {a small but writable placement is left alone} -body {
+  # The counter-measurement, and the line this must not cross: 0.01 mm is
+  # 0.02835 pt, which the file holds exactly, so the picture is placed and
+  # the cm is not singular.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng]
+  $doc image place pic -at {20 20} -size {0.01 0.01}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {0.02835 0 0 0.02835 [0-9.]+ [0-9.]+ cm} $stream
+} -result 1
 
 cleanupTests

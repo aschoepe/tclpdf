@@ -31,6 +31,8 @@
 #   TCLPDF OPTION KEY      key what context    no such dictionary key
 #   TCLPDF OPTION REQUIRED option context      an option that has to be given
 #   TCLPDF OPTION POINT    option context      not the {x y} a point needs
+#   TCLPDF OPTION NUMBER   what context        NaN or Inf where a measurement
+#                                              was wanted
 #
 # The class word stands where the hierarchy stands in every other code of this
 # package, and the caller's own spelling is a fact behind it rather than the
@@ -148,6 +150,68 @@ proc ::tclpdf::option::point {value option context} {
         "tclpdf: $option takes two numbers {x y}, got\
         \"$value\" - for a computed position use \[list \$x \$y\], braces do\
         not substitute"
+  }
+  # And two numbers a page has room for. Kept apart from the shape above
+  # because the hint there is about braces, and a caller who arrived here with
+  # a NaN did not write braces - the value came out of an arithmetic of their
+  # own, a division by a width that was zero being the usual way. Same code:
+  # it is the same option that is wrong, and a handler trapping
+  # TCLPDF OPTION POINT wants both.
+  foreach coordinate $value {
+    if {![finite $coordinate]} {
+      return -code error \
+          -errorcode [list TCLPDF OPTION POINT $option $context] \
+          "tclpdf: $option takes two finite numbers {x y}, got \"$value\" -\
+          NaN and Inf are doubles to Tcl and name no point on a page"
+    }
+  }
+  return $value
+}
+
+# Is this a number something can be MEASURED in?
+#
+# [string is double -strict] does not answer that question: it is true for
+# "NaN" and for "Inf", both of which are doubles to Tcl and neither of which is
+# a length, a coordinate or a factor. What they cost when they get through is
+# silence. NaN compares false against everything, so a range check written as
+# "$value <= 0" and "$value > 100" waves it past - BOTH comparisons are false -
+# and it then travels through the arithmetic until [expr] refuses it as an
+# operand of "*", far from the call that wrote it, in Tcl's own words rather
+# than in this package's: measured on 2026-08-25, "image place -at {NaN 20}"
+# answered "can't use non-numeric floating-point value as operand of \"*\"",
+# against the promise that every refusal begins with "tclpdf:".
+#
+# Here rather than per module. The same predicate stood in text.tcl since
+# 2026-08-25 because that road hit the trap first; a second copy is how two
+# modules come to disagree about what a number is. This is the module every
+# other one already loads - it depends on nothing but Tcl - so it is where the
+# one copy belongs.
+#
+# Written as a COMPARISON rather than with an arithmetic function: [expr]
+# refuses NaN as an operand of "+" or of abs(), so a test that used one would
+# throw the very error it is meant to replace. Comparison is defined for it -
+# NaN is the one value not equal to itself (IEEE 754) - and the two bounds
+# catch Inf and -Inf, which compare perfectly well and place nothing.
+proc ::tclpdf::option::finite {value} {
+  if {![string is double -strict $value]} {
+    return 0
+  }
+  return [expr {$value == $value && $value < Inf && $value > -Inf}]
+}
+
+# The refusal that goes with it, so that the wording stands once as well.
+#
+# "what" names the value in the caller's terms ("-scale", "a length"), context
+# the call, as everywhere here. NOT the same refusal as [pdfObj num]'s "number
+# has no PDF representation": that one is the LAST line of defence, at the
+# moment a number is written, and it stays where it is - it also catches a
+# perfectly finite value beyond the PDF real range, which is a different
+# mistake. This one is made at the call, before anything is written.
+proc ::tclpdf::option::number {value what {context {}}} {
+  if {![finite $value]} {
+    return -code error -errorcode [list TCLPDF OPTION NUMBER $what $context] \
+        "tclpdf: $what[Where $context] is a finite number, not \"$value\" -\
+        NaN and Inf are doubles to Tcl and place nothing on a page"
   }
   return $value
 }

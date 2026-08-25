@@ -107,11 +107,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: rect needs -at {x y} and -size {w h}"
     }
-    lassign [dict get $options at] left top
-    lassign [dict get $options size] width height
-    lassign [my coords $left [expr {$top + $height}]] x y
-    set w [my distance $width]
-    set h [my distance $height]
+    lassign [my ShapeBox $options rect] x y w h
     set radius [my ShapeRadius [dict get $options radius] -radius]
     if {$radius > 0} {
       set path [my GraphicsRoundedRect $x $y $w $h $radius]
@@ -362,13 +358,48 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error "tclpdf: clip needs -at {x y} and -size {w h}"
     }
-    lassign [dict get $options at] left top
-    lassign [dict get $options size] width height
-    lassign [my coords $left [expr {$top + $height}]] x y
+    lassign [my ShapeBox $options clip] x y w h
     my content "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
-        [::tclpdf::pdfObj num [my distance $width]]\
-        [::tclpdf::pdfObj num [my distance $height]] re $operator n\n"
+        [::tclpdf::pdfObj num $w] [::tclpdf::pdfObj num $h] re $operator n\n"
     return
+  }
+
+  # The box -at and -size name, as the four operands of "re": the corner
+  # mirrored into PDF coordinates and the two lengths in points. Shared by
+  # [rect] and [clip], which describe the same rectangle in the same two
+  # words - and which each took it apart on their own until 2026-08-25.
+  #
+  # Both handed the pieces of a bare [lassign] straight to arithmetic, so
+  # neither option was ever checked: measured, "-at {a b}" came out as
+  # "can't use non-numeric string as operand of \"+\"" rather than a tclpdf:
+  # refusal naming the option, "-size {10}" as "can't use empty string as
+  # operand of \"+\"", and "-at {20 20 30}" was ACCEPTED with the third word
+  # dropped in silence. The manual says of the shapes that -at is exactly two
+  # numbers and that a refused shape leaves nothing behind in the page, and
+  # [ellipse], [line] and [curve] already held to it by going through
+  # [GraphicsPoint]. These two now go the same way.
+  #
+  # -size is held to the same count and to numbers, not to a sign: a
+  # rectangle of no height is a line a stroke still draws, and "re" itself
+  # takes a negative width (8.5.2.1). What it must not be is a word or a
+  # missing half.
+  method ShapeBox {options what} {
+    my GraphicsPoint [dict get $options at] -at $what
+    set size [dict get $options size]
+    if {[llength $size] != 2} {
+      return -code error "tclpdf: -size of $what is a size {w h}, not\
+          \"$size\""
+    }
+    foreach value $size {
+      if {![string is double -strict $value]} {
+        return -code error "tclpdf: -size of $what takes numbers, not\
+            \"$value\""
+      }
+    }
+    lassign [dict get $options at] left top
+    lassign $size width height
+    return [list {*}[my coords $left [expr {$top + $height}]] \
+        [my distance $width] [my distance $height]]
   }
 
   # A rectangle with rounded corners, as four lines and four arcs - returned,

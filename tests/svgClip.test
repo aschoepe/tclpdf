@@ -1,0 +1,523 @@
+# svgClip.test --
+#
+# What stays visible: clip-path and mask.
+#
+# Both properties are measured on the CONTENT STREAM rather than on the
+# picture, with one exception at the end - the mask, whose whole claim is
+# that a grey of 50 per cent comes out as an alpha of 50 per cent, and no
+# amount of reading operators shows that. There a rendered pixel is the only
+# honest evidence.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::xml
+package require tclpdf::svg
+package require tclpdf::svgClip
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+
+# One drawing, and what the page has to say about it: the operators written
+# and what [svg info] counted as lost.
+proc clipProbe {body} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
+      height=\"100\" viewBox=\"0 0 100 100\">$body</svg>" \
+      -at {20 20} -size {100 100}
+  set result [list [$doc page content] [$doc svg info]]
+  $doc destroy
+  return $result
+}
+
+# The clipping shape used throughout: the left half of the drawing.
+set halfDefs {<defs><clipPath id="h"><rect x="0" y="0" width="50" height="100"/></clipPath></defs>}
+
+
+test svgClip-1.1 {a clip-path writes a clipping path} -body {
+  lassign [clipProbe "$::halfDefs<rect x=\"0\" y=\"0\" width=\"100\"\
+      height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  list [regexp -all {W n} $content] $info
+} -result {1 {}}
+
+test svgClip-1.2 {the same drawing without the property writes none} -body {
+  # The mutation of 1.1: if this one also came back with a W, the test above
+  # would be measuring nothing.
+  lassign [clipProbe "$::halfDefs<rect x=\"0\" y=\"0\" width=\"100\"\
+      height=\"45\" fill=\"red\"/>"] content info
+  list [regexp -all {W n} $content] $info
+} -result {0 {}}
+
+test svgClip-1.3 {the property is read out of style= as well} -body {
+  # Where a style="" and an attribute disagree the style wins, which is what
+  # SvgStyle does for every other property - so clip-path may not be the one
+  # that only looks at attributes.
+  lassign [clipProbe "$::halfDefs<rect x=\"0\" y=\"0\" width=\"100\"\
+      height=\"45\" fill=\"red\" style=\"clip-path:url(#h)\"/>"] content info
+  regexp -all {W n} $content
+} -result 1
+
+test svgClip-1.4 {the clipping path is bracketed} -body {
+  # A clip that outlives its element paints everything after it into the
+  # same window - so it needs a bracket of its own, and the brackets have to
+  # balance. Measured as the DIFFERENCE against the same drawing without the
+  # property: exactly one q more, and one Q with it.
+  set with "$::halfDefs<rect x=\"0\" y=\"0\" width=\"100\" height=\"45\"\
+      fill=\"red\" clip-path=\"url(#h)\"/><rect x=\"0\" y=\"55\"\
+      width=\"100\" height=\"45\" fill=\"blue\"/>"
+  set without [string map {{ clip-path="url(#h)"} {}} $with]
+  set counts {}
+  foreach markup [list $without $with] {
+    lassign [clipProbe $markup] content ->
+    lappend counts [regexp -all -line {^q$} $content] \
+        [regexp -all -line {^Q$} $content]
+  }
+  lassign $counts openBefore closeBefore openAfter closeAfter
+  list [expr {$openBefore == $closeBefore}] [expr {$openAfter == $closeAfter}] \
+      [expr {$openAfter - $openBefore}]
+} -result {1 1 1}
+
+test svgClip-2.1 {clip-rule evenodd writes W*} -body {
+  lassign [clipProbe "<defs><clipPath id=\"h\"><path d=\"M0,0 H100 V100 H0 Z\"\
+      clip-rule=\"evenodd\"/></clipPath></defs><rect x=\"0\" y=\"0\"\
+      width=\"100\" height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  lindex [regexp -inline {W\*? n} $content] 0
+} -result {W* n}
+
+test svgClip-2.2 {without the rule it is the nonzero W} -body {
+  lassign [clipProbe "<defs><clipPath id=\"h\"><path d=\"M0,0 H100 V100 H0 Z\"\
+      /></clipPath></defs><rect x=\"0\" y=\"0\" width=\"100\" height=\"45\"\
+      fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  lindex [regexp -inline {W\*? n} $content] 0
+} -result {W n}
+
+test svgClip-2.3 {several shapes become subpaths of one path} -body {
+  # Two W n would NARROW the region to the intersection - PDF has no
+  # operator that widens one - so the union has to be written as one path.
+  lassign [clipProbe "<defs><clipPath id=\"h\"><rect x=\"0\" y=\"0\"\
+      width=\"20\" height=\"100\"/><rect x=\"80\" y=\"0\" width=\"20\"\
+      height=\"100\"/></clipPath></defs><rect x=\"0\" y=\"0\" width=\"100\"\
+      height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  list [regexp -all {W n} $content] [regexp -all {re$} [split $content \n]]
+} -result {1 0}
+
+# The winding rule of a clipping path, and where it is allowed to come from.
+# All three of these wrote W where W* belongs, and none of them said a word in
+# [svg info]: the hole in the shape was filled in rather than punched out, and
+# every checker called the page correct.
+
+test svgClip-2.4 {the referring element's clip-rule does not count} -body {
+  # SVG 1.1, 14.3.5: clip-rule applies to graphics elements WITHIN a
+  # clipPath, and the element doing the referring is not one of them - it is
+  # being clipped, not clipping. Asked there first, its nonzero overruled the
+  # evenodd on the shape that does carry the property.
+  lassign [clipProbe "<defs><clipPath id=\"h\"><path d=\"M0,0 H100 V100 H0 Z\"\
+      clip-rule=\"evenodd\"/></clipPath></defs><rect x=\"0\" y=\"0\"\
+      width=\"100\" height=\"45\" fill=\"red\" clip-rule=\"nonzero\"\
+      clip-path=\"url(#h)\"/>"] content info
+  list [lindex [regexp -inline {W\*? n} $content] 0] $info
+} -result {{W* n} {}}
+
+test svgClip-2.5 {clip-rule is inherited, so the clipPath's own counts} -body {
+  # SVG 1.1, 6.2. Saying it once on the <clipPath> instead of on every shape
+  # inside means the same thing - and looking only at the children's own
+  # attributes answered "no rule at all".
+  lassign [clipProbe "<defs><clipPath id=\"h\" clip-rule=\"evenodd\"><path\
+      d=\"M0,0 H100 V100 H0 Z\"/></clipPath></defs><rect x=\"0\" y=\"0\"\
+      width=\"100\" height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  list [lindex [regexp -inline {W\*? n} $content] 0] $info
+} -result {{W* n} {}}
+
+test svgClip-2.6 {and a shape's own rule beats the one it inherits} -body {
+  # The mutation of 2.5: if the clipPath's value were taken unconditionally
+  # rather than as the children's default, this one would come out W* too.
+  lassign [clipProbe "<defs><clipPath id=\"h\" clip-rule=\"evenodd\"><path\
+      d=\"M0,0 H100 V100 H0 Z\" clip-rule=\"nonzero\"/></clipPath></defs><rect\
+      x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#h)\"/>"] content info
+  list [lindex [regexp -inline {W\*? n} $content] 0] $info
+} -result {{W n} {}}
+
+test svgClip-2.7 {clip-rule out of style=, like every other property} -body {
+  # A declaration in style="" outranks the presentation attribute (SVG 6.4),
+  # which is what clip-path and mask have always done here - clip-rule was
+  # the one read straight off the attribute.
+  lassign [clipProbe "<defs><clipPath id=\"h\"><path d=\"M0,0 H100 V100 H0 Z\"\
+      style=\"clip-rule:evenodd\"/></clipPath></defs><rect x=\"0\" y=\"0\"\
+      width=\"100\" height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  list [lindex [regexp -inline {W\*? n} $content] 0] $info
+} -result {{W* n} {}}
+
+test svgClip-2.8 {the clip road is handed the node and nothing else} -body {
+  # It used to take the referring element's inherited style and never look at
+  # it. Looking would have been 14.3.5 all over again, so the argument went
+  # rather than the other way about.
+  info class definition ::tclpdf::document::document SvgClipEnter
+} -match glob -result {node *}
+
+test svgClip-2.9 {the clipPath inherits the rule from what encloses it} -body {
+  # SVG 1.1, 6.2 one level further up: a <g> or the <defs> may say it for
+  # everything below, and the clip road could not see it - the XML walk only
+  # ever went downwards, so this level answered "no rule" and wrote W.
+  lassign [clipProbe "<g clip-rule=\"evenodd\"><defs><clipPath id=\"h\"><path\
+      d=\"M0,0 H100 V100 H0 Z\"/></clipPath></defs></g><rect x=\"0\" y=\"0\"\
+      width=\"100\" height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  list [lindex [regexp -inline {W\*? n} $content] 0] $info
+} -result {{W* n} {}}
+
+test svgClip-2.10 {and it is only the default - a shape's own rule wins} -body {
+  # The mutation of 2.9: taken as the answer rather than as what the shapes
+  # start from, this one would come out W* as well.
+  lassign [clipProbe "<defs clip-rule=\"evenodd\"><clipPath id=\"h\"><path\
+      d=\"M0,0 H100 V100 H0 Z\" clip-rule=\"nonzero\"/></clipPath></defs><rect\
+      x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#h)\"/>"] content info
+  list [lindex [regexp -inline {W\*? n} $content] 0] $info
+} -result {{W n} {}}
+
+test svgClip-2.11 {the nearest ancestor rules, and its style= with it} -body {
+  # Inheritance stops at the first element that states the property, and a
+  # declaration in style="" is a statement like any other (SVG 6.4). Reading
+  # the outermost instead would answer nonzero here.
+  lassign [clipProbe "<g clip-rule=\"nonzero\"><defs style=\"clip-rule:evenodd\"\
+      ><clipPath id=\"h\"><path d=\"M0,0 H100 V100 H0 Z\"/></clipPath></defs\
+      ></g><rect x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#h)\"/>"] content info
+  list [lindex [regexp -inline {W\*? n} $content] 0] $info
+} -result {{W* n} {}}
+
+test svgClip-2.12 {both XML parsers walk up to the same answer} -body {
+  # The way up is where the two XML roads differ most: tdom asks the node,
+  # the parser in xml.tcl carries the chain of ancestors in the handle. Run
+  # under both through the shared helper, so the fallback is exercised on a
+  # machine that HAS tdom - otherwise it is exercised nowhere.
+  ::tclpdfTest::bothParsers {
+    lassign [clipProbe "<defs clip-rule=\"evenodd\"><clipPath id=\"h\"><path\
+        d=\"M0,0 H100 V100 H0 Z\"/></clipPath></defs><rect x=\"0\" y=\"0\"\
+        width=\"100\" height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+    expr {[regexp {W\* n} $content] ? "evenodd" : "nonzero"}
+  }
+} -result evenodd
+
+test svgClip-3.1 {objectBoundingBox units are reported, not guessed at} -body {
+  lassign [clipProbe "<defs><clipPath id=\"h\" clipPathUnits=\"objectBoundingBox\"\
+      ><rect x=\"0\" y=\"0\" width=\".5\" height=\"1\"/></clipPath></defs><rect\
+      x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#h)\"/>"] content info
+  list [regexp -all {W n} $content] $info
+} -result {0 {clipPathUnits 1}}
+
+test svgClip-3.2 {a reference to nothing is reported} -body {
+  lassign [clipProbe "<rect x=\"0\" y=\"0\" width=\"100\" height=\"45\"\
+      fill=\"red\" clip-path=\"url(#gone)\"/>"] content info
+  list [regexp -all {W n} $content] $info
+} -result {0 {clip-path 1}}
+
+test svgClip-3.3 {a transform on a clipping shape is reported} -body {
+  # Not one of the 188 clipPath elements measured on this machine carries
+  # one; dropping it silently would cut the wrong region.
+  lassign [clipProbe "<defs><clipPath id=\"h\"><rect x=\"0\" y=\"0\"\
+      width=\"50\" height=\"100\" transform=\"translate(10,0)\"/></clipPath>\
+      </defs><rect x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#h)\"/>"] content info
+  list [regexp -all {W n} $content] $info
+} -result {0 {clip-transform 1}}
+
+test svgClip-3.4 {a clipping shape this package cannot draw is reported} -body {
+  lassign [clipProbe "<defs><clipPath id=\"h\"><text x=\"0\" y=\"50\">no\
+      </text></clipPath></defs><rect x=\"0\" y=\"0\" width=\"100\"\
+      height=\"45\" fill=\"red\" clip-path=\"url(#h)\"/>"] content info
+  dict get $info clip-text
+} -result 1
+
+test svgClip-3.5 {clip-path pointing at something that is not one} -body {
+  lassign [clipProbe "<defs><linearGradient id=\"h\"/></defs><rect x=\"0\"\
+      y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#h)\"/>"] content info
+  list [regexp -all {W n} $content] $info
+} -result {0 {clip-path 1}}
+
+test svgClip-3.6 {a clipping rectangle is capped like a drawn one} -body {
+  # The clip road draws its shapes through the same [SvgShape] the page uses
+  # (svgElement.tcl), so an uncapped corner radius walked the CLIPPING REGION
+  # out of the rectangle it was supposed to be: rx="40" on a rectangle
+  # standing at x=10 and 20 wide put points at x = -10 and x = 50. Counted as
+  # path lines carrying a negative operand, because the drawing's own matrix
+  # carries one too and would answer for it.
+  lassign [clipProbe "<defs><clipPath id=\"h\"><rect x=\"10\" y=\"10\"\
+      width=\"20\" height=\"60\" rx=\"40\"/></clipPath></defs><rect x=\"0\"\
+      y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#h)\"/>"] content info
+  set outside 0
+  foreach line [split $content \n] {
+    if {[regexp {\s(?:m|l|c)$} $line] && [regexp {(?:^|\s)-} $line]} {
+      incr outside
+    }
+  }
+  list [regexp -all {W n} $content] $outside $info
+} -result {1 0 {}}
+
+
+# The mask. A luminosity soft mask in an ExtGState - the grey value IS the
+# alpha, and PDF works that out itself once the group says /S /Luminosity.
+
+test svgClip-4.1 {a mask writes a soft mask into an ExtGState} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><defs><mask id="m"
+      maskUnits="userSpaceOnUse"><rect x="0" y="0" width="100" height="100"
+      fill="#808080"/></mask></defs><rect x="0" y="0" width="100"
+      height="100" fill="blue" mask="url(#m)"/></svg>} -at {20 20} -size {100 100}
+  set path [::tclpdfTest::scratch svgclip-mask.pdf]
+  $doc write $path
+  set info [$doc svg info]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # /S /Luminosity is what makes the grey an alpha; /CS /DeviceGray is what
+  # gives it a luminosity to read (ISO 32000-1, 11.6.5.2) and is REQUIRED
+  # here, unlike in a plain transparency group.
+  list [regexp {/S */Luminosity} $bytes] [regexp {/CS */DeviceGray} $bytes] $info
+} -result {1 1 {}}
+
+test svgClip-4.2 {the two unit attributes have different defaults} -body {
+  # SVG 1.1, 14.4: maskContentUnits defaults to userSpaceOnUse - which is
+  # what this module draws - while maskUnits defaults to objectBoundingBox
+  # and governs the mask REGION, not its content. Read as one attribute,
+  # a mask with NO attribute was accepted and the written-out default was
+  # refused: exactly backwards, and this test held that state until the
+  # review of 2026-08-25.
+  #
+  # Without x/y/width/height the region is the whole object and then some,
+  # so maskUnits has nothing to decide and all three spellings mask.
+  lmap attributes {{} {maskUnits="objectBoundingBox"} {maskUnits="userSpaceOnUse"}} {
+    lassign [clipProbe "<defs><mask id=\"m\" $attributes><rect x=\"0\"\
+        y=\"0\" width=\"50\" height=\"100\" fill=\"#fff\"/></mask></defs>\
+        <rect x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"blue\"\
+        mask=\"url(#m)\"/>"] content info
+    expr {[regexp {svgMask[0-9]+ gs} $content] ? "masked" : "plain"}
+  }
+} -result {masked masked masked}
+
+test svgClip-4.6 {a region in the default units cannot be honoured} -body {
+  # x/y/width/height in fractions of the box of the element being masked -
+  # which is not known here. Reported, and the element is drawn whole.
+  lassign [clipProbe "<defs><mask id=\"m\" x=\"0\" y=\"0\" width=\"0.5\"\
+      height=\"1\"><rect x=\"0\" y=\"0\" width=\"100\" height=\"100\"\
+      fill=\"#fff\"/></mask></defs><rect x=\"0\" y=\"0\" width=\"100\"\
+      height=\"45\" fill=\"blue\" mask=\"url(#m)\"/>"] content info
+  list [regexp {gs} $content] $info
+} -result {0 {maskUnits 1}}
+
+test svgClip-4.7 {a region in user space becomes the BBox of the mask} -body {
+  # ISO 32000-1, 11.6.5.2: the BBox of the luminosity group IS the mask
+  # region. Taken from the content's extent until 2026-08-25, which threw
+  # the four attributes away without a word.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="50"
+      height="100"><rect x="0" y="0" width="100" height="100"
+      fill="#fff"/></mask></defs><rect x="0" y="0" width="100" height="100"
+      fill="green" mask="url(#m)"/></svg>} -at {20 20} -size {60 60}
+  set path [::tclpdfTest::scratch svgclip-region.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/BBox \[([^\]]*)\]} $bytes -> box
+  set box
+} -result {0 0 50 100}
+
+test svgClip-4.8 {maskContentUnits is the one that decides the drawing} -body {
+  lassign [clipProbe "<defs><mask id=\"m\" maskContentUnits=\"objectBoundingBox\">\
+      <rect x=\"0\" y=\"0\" width=\"1\" height=\"1\" fill=\"#fff\"/></mask>\
+      </defs><rect x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"blue\"\
+      mask=\"url(#m)\"/>"] content info
+  list [regexp {gs} $content] $info
+} -result {0 {maskContentUnits 1}}
+
+test svgClip-4.9 {the mask content inherits from its ancestors} -body {
+  # SVG 1.1, 6.2, and the initial value of fill is black. Handed an empty
+  # style the content started from no fill at all, painted nothing, and the
+  # mask was dropped as "draws nothing" - the element then went out UNMASKED.
+  lassign [clipProbe "<defs><mask id=\"m\" maskUnits=\"userSpaceOnUse\">\
+      <rect x=\"0\" y=\"0\" width=\"50\" height=\"100\"/></mask></defs>\
+      <rect x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"red\"\
+      mask=\"url(#m)\"/>"] content info
+  list [regexp {svgMask[0-9]+ gs} $content] $info
+} -result {1 {}}
+
+test svgClip-4.10 {two drawings with the same mask id get their own mask} -body {
+  # The cache is keyed on the SVG id, and two drawings in one document may
+  # each carry a mask called "m" that means something different. The same
+  # trap svgPaint.tcl records for the gradients.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  foreach {x colour} {0 red 50 blue} {
+    $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\
+        <defs><mask id=\"m\" maskUnits=\"userSpaceOnUse\"><rect x=\"$x\"\
+        y=\"0\" width=\"50\" height=\"100\" fill=\"#fff\"/></mask></defs>\
+        <rect width=\"100\" height=\"100\" fill=\"$colour\" mask=\"url(#m)\"/></svg>" \
+        -at [list 20 [expr {20 + $x}]] -size {60 60}
+  }
+  set names [lsort -unique [regexp -all -inline {/svgMask[0-9]+} [$doc page content]]]
+  $doc destroy
+  llength $names
+} -result 2
+
+test svgClip-4.3 {a mask that draws nothing would hide everything} -body {
+  # Reported rather than honoured: an empty mask is black, and black hides
+  # the element completely. An element that vanishes without a word is the
+  # failure this package keeps out.
+  lassign [clipProbe "<defs><mask id=\"m\"></mask></defs><rect x=\"0\" y=\"0\"\
+      width=\"100\" height=\"45\" fill=\"blue\" mask=\"url(#m)\"/>"] content info
+  dict get $info mask
+} -result 1
+
+test svgClip-4.4 {the same mask used twice is one resource} -body {
+  lassign [clipProbe "<defs><mask id=\"m\" maskUnits=\"userSpaceOnUse\"><rect\
+      x=\"0\" y=\"0\" width=\"100\" height=\"100\" fill=\"#808080\"/></mask>\
+      </defs><rect x=\"0\" y=\"0\" width=\"100\" height=\"45\" fill=\"blue\"\
+      mask=\"url(#m)\"/><rect x=\"0\" y=\"55\" width=\"100\" height=\"45\"\
+      fill=\"red\" mask=\"url(#m)\"/>"] content info
+  # Two uses, two gs operators, but the same resource name in both.
+  set names [lsort -unique [regexp -all -inline {/svgMask[0-9]+} $content]]
+  list [regexp -all {/svgMask[0-9]+ gs} $content] [llength $names]
+} -result {2 1}
+
+test svgClip-4.5 {a mask needs PDF 1.4} -body {
+  # Transparency is 1.4 (ISO 32000-1, 11.6.5), and the refusal names the
+  # version the way every other alpha does.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  set code [catch {$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg"
+      width="100" height="100" viewBox="0 0 100 100"><defs><mask id="m"
+      maskUnits="userSpaceOnUse"><rect x="0" y="0" width="100" height="100"
+      fill="#fff"/></mask></defs><rect x="0" y="0" width="100" height="100"
+      fill="blue" mask="url(#m)"/></svg>} -at {20 20} -size {100 100}} message]
+  $doc destroy
+  list $code [string match {*1.4*} $message]
+} -result {1 1}
+
+
+test svgClip-5.1 {both together: the clip cuts and the mask fades} -body {
+  lassign [clipProbe "$::halfDefs<defs><mask id=\"m\" maskUnits=\"userSpaceOnUse\">\
+      <rect x=\"0\" y=\"0\" width=\"100\" height=\"100\" fill=\"#808080\"/>\
+      </mask></defs><rect x=\"0\" y=\"0\" width=\"100\" height=\"45\"\
+      fill=\"blue\" clip-path=\"url(#h)\" mask=\"url(#m)\"/>"] content info
+  # The gs has to stand INSIDE the clip: an element that is both clipped and
+  # masked obeys both, and a mask set beside the clip would fade what the
+  # clip already threw away.
+  set clipAt [string first "W n" $content]
+  set maskAt [string first "svgMask" $content]
+  list [expr {$clipAt >= 0 && $maskAt > $clipAt}] $info
+} -result {1 {}}
+
+test svgClip-5.2 {a container clips its children as one} -body {
+  lassign [clipProbe "$::halfDefs<g clip-path=\"url(#h)\"><rect x=\"0\"\
+      y=\"0\" width=\"100\" height=\"45\" fill=\"red\"/><rect x=\"0\" y=\"55\"\
+      width=\"100\" height=\"45\" fill=\"blue\"/></g>"] content info
+  # One W for the group, not one per child.
+  list [regexp -all {W n} $content] $info
+} -result {1 {}}
+
+test svgClip-5.3 {clip-path is not inherited} -body {
+  # SVG 1.1, 14.3.5: a group carrying it must not clip each child a second
+  # time. Measured as the count: inherited, this would be three.
+  lassign [clipProbe "$::halfDefs<g clip-path=\"url(#h)\"><rect x=\"0\"\
+      y=\"0\" width=\"100\" height=\"45\" fill=\"red\"/><rect x=\"0\" y=\"55\"\
+      width=\"100\" height=\"45\" fill=\"blue\"/></g>"] content info
+  regexp -all {W n} $content
+} -result 1
+
+
+test svgClip-6.1 {the grey of a mask IS the alpha} -constraints havePdftoppm -body {
+  # The only claim in this file that operators cannot show. A 50 per cent
+  # grey over a blue rectangle on white paper has to composite to
+  # (127 127 255) - half the blue, half the page.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><defs><mask id="m"
+      maskUnits="userSpaceOnUse"><rect x="0" y="0" width="100" height="100"
+      fill="#808080"/></mask></defs><rect x="0" y="0" width="100"
+      height="100" fill="#0000ff" mask="url(#m)"/></svg>} -at {20 20} -size {100 100}
+  set path [::tclpdfTest::scratch svgclip-grey.pdf]
+  $doc write $path
+  $doc destroy
+  lassign [::tclpdfTest::pixel $path 70 70] red green blue
+  file delete $path
+  # Within a rounding step of half: readers differ by one in the last bit.
+  list [expr {abs($red - 127) <= 2}] [expr {abs($green - 127) <= 2}] \
+      [expr {$blue >= 250}]
+} -result {1 1 1}
+
+test svgClip-6.2 {a clipped shape ends where the clip does} -constraints havePdftoppm -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><defs><clipPath id="h"><rect x="0"
+      y="0" width="50" height="100"/></clipPath></defs><rect x="0" y="0"
+      width="100" height="100" fill="#ff0000"
+      clip-path="url(#h)"/></svg>} -at {20 20} -size {100 100}
+  set path [::tclpdfTest::scratch svgclip-cut.pdf]
+  $doc write $path
+  $doc destroy
+  # Left of the cut the red is there, right of it the page is bare.
+  # In millimetres: the drawing sits at 20..120, the cut halfway at 70.
+  set inside [::tclpdfTest::pixel $path 40 70]
+  set outside [::tclpdfTest::pixel $path 100 70]
+  file delete $path
+  list [lindex $inside 0] [lindex $inside 2] [lindex $outside 0]
+} -result {255 0 255}
+
+
+test svgClip-4.11 {a referenced subtree inherits from its ancestors} -constraints havePdftoppm -body {
+  # A <mask> is declared under <defs> and drawn where it is USED, so nothing
+  # walks into it: its content began from the bare initial values, and a
+  # mask under a <g fill="white"> painted BLACK - which in a luminosity mask
+  # means "hide everything". SVG 1.1, 6.2 makes fill inherited, and a
+  # reference does not break inheritance.
+  #
+  # MEASURED ON THE PAGE, not on the operators: both readings write the same
+  # gs, and what differs is whether anything survives it. Black hides, white
+  # shows - and the first version of this test looked for the gs and would
+  # have passed either way.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs><g fill="#ffffff"><mask id="m" maskUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="100" height="100"/></mask></g></defs>
+      <rect width="100" height="100" fill="#ff0000"
+      mask="url(#m)"/></svg>} -at {20 20} -size {60 60}
+  set path [::tclpdfTest::scratch svgclip-inherit.pdf]
+  $doc write $path
+  $doc destroy
+  lassign [::tclpdfTest::pixel $path 50 50] red green blue
+  file delete $path
+  # Red where the mask lets it through; white paper if the mask came out
+  # black, which is what no inheritance would mean.
+  list [expr {$red > 200}] [expr {$green < 60}] [expr {$blue < 60}]
+} -result {1 1 1}
+
+test svgClip-4.12 {and its own value still beats what it inherits} -body {
+  # The inherited value is where the subtree STARTS, not what it is forced
+  # to: a shape that names its own fill paints in that.
+  lassign [clipProbe "<defs><g fill=\"#000000\"><mask id=\"m\"\
+      maskUnits=\"userSpaceOnUse\"><rect x=\"0\" y=\"0\" width=\"50\"\
+      height=\"100\" fill=\"#ffffff\"/></mask></g></defs><rect width=\"100\"\
+      height=\"45\" fill=\"red\" mask=\"url(#m)\"/>"] content info
+  list [regexp {svgMask[0-9]+ gs} $content] $info
+} -result {1 {}}
+
+
+cleanupTests

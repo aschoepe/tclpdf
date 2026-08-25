@@ -136,7 +136,11 @@ $doc form create stamp -size {40 40} -script {
     $doc text "for press" -at {20 27} -align center
 }
 $doc form place stamp -at {130 175}
-$doc form place stamp -at {150 185} -opacity 0.5
+# Offset far enough that the two words stay readable. At {150 185} the two
+# 40 mm stamps overlapped by half, the first circle's ring ran straight
+# through the second word, and one read "A|PROVED". The point of the pair is
+# the half opacity, and that shows just as well where only the rims meet.
+$doc form place stamp -at {162 192} -opacity 0.5
 
 $doc font -family faceBold -size 10 -color $ink(text)
 $doc text "Released for print" -at {20 190}

@@ -81,6 +81,21 @@ proc grouped {value thousands decimal} {
 # shows nothing of the grouping, which is why the list has to contain figures
 # on both sides of it.
 set masses {"1234.50" "7.5" "0.125" "88" "-1000.05"}
+
+# THE TOTAL IS ADDED UP, not written down. It used to be a literal, and the
+# literal was the sum of the ABSOLUTE values - the negative row had been
+# added instead of subtracted, so the footer said 2330.175 where the column
+# adds up to 330.075. Nothing catches that: qpdf and veraPDF do not read
+# numbers, and a test would have to know the answer already. A reader with a
+# pocket calculator catches it, which is the worse way to find out.
+set massTotal 0
+foreach mass $masses {
+    set massTotal [expr {$massTotal + $mass}]
+}
+# Rounded to what the data carries - three decimals, from the 0.125 row.
+# Without this the sum comes out as 330.07500000000005, which is what binary
+# floating point makes of these five figures and is not what a bill says.
+set massTotal [format %.3f $massTotal]
 set parts {"bracket" "pin" "washer" "housing" "seal" "template"}
 
 proc massRows {thousands decimal} {
@@ -112,7 +127,7 @@ set y [$doc table -at {20 44} -width 170 -theme grid \
     -head {{Part Left Centre Right Mass}} \
     -body [massRows , .] \
     -foot [list [list {text "Total" colSpan 4 align right} \
-        [grouped 2330.175 , .]]] \
+        [grouped $massTotal , .]]] \
     -columns {{} {align left} {align center} {align right} {align decimal}}]
 
 # The heading over a decimal column is set flush right: there is nothing in
@@ -231,7 +246,7 @@ set y [$doc table -at {20 54} -width 170 -theme grid -decimal , \
     -head {{Part Left Centre Right Mass}} \
     -body [massRows . ,] \
     -foot [list [list {text "Total" colSpan 4 align right} \
-        [grouped 2330.175 . ,]]] \
+        [grouped $massTotal . ,]]] \
     -columns {{} {align left} {align center} {align right} {align decimal}}]
 
 # -- what it looks like with the wrong separator ----------------------------

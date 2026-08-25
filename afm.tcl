@@ -82,7 +82,8 @@ proc ::tclpdf::afm::resolve {family {style {}}} {
     }
   }
   if {![dict exists $families $key]} {
-    return -code error "tclpdf: unknown font \"$family\" - known families are:\
+    return -code error -errorcode [list TCLPDF AFM FAMILY $family] \
+        "tclpdf: unknown font \"$family\" - known families are:\
         [join [lsort [dict keys $families]] {, }]"
   }
   # Normalise the style: a list, a string, any order, any case.
@@ -105,7 +106,8 @@ proc ::tclpdf::afm::resolve {family {style {}}} {
   }
   set variants [dict get $families $key]
   if {![dict exists $variants $styleKey]} {
-    return -code error "tclpdf: font family \"$family\" has no style\
+    return -code error -errorcode [list TCLPDF AFM STYLE $family] \
+        "tclpdf: font family \"$family\" has no style\
         \"[join $style { }]\""
   }
   return [dict get $variants $styleKey]
@@ -244,7 +246,8 @@ proc ::tclpdf::afm::bytes {font text} {
 
 proc ::tclpdf::afm::Check {font} {
   if {![info exists ::tclpdf::afmData::widths($font)]} {
-    return -code error "tclpdf: \"$font\" is not one of the 14 standard fonts -\
+    return -code error -errorcode [list TCLPDF AFM FONT $font] \
+        "tclpdf: \"$font\" is not one of the 14 standard fonts -\
         known are: [join [fonts] {, }]"
   }
   return

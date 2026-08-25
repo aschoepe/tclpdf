@@ -98,6 +98,57 @@ test writer-1.6 {text instead of bytes in a stream is refused} -body {
   }
 } -returnCodes error -match glob -result {*must be bytes, not text*}
 
+test writer-1.7 {a released reservation lets the file be written after all} -body {
+  # The way out of writer-1.4 for a caller whose call refuses AFTER it has
+  # reserved: without it the document above is lost for good, although the
+  # caller caught the error and carried on. The number becomes the null
+  # object - 7.3.9 makes a reference to a non-existent object and one to null
+  # the same thing, so the file reads as if the number had never been handed
+  # out - and the cross-reference table stays the dense 1..N array 7.5.4 asks
+  # for.
+  set pdf [::tclpdf::writer::pdf new]
+  $pdf add "<< /Type /Catalog >>"
+  set number [$pdf reserve]
+  set answer [$pdf release $number]
+  set path [makeFile {} writer-released.pdf]
+  $pdf writeFile $path {Root {1 0 R}}
+  set bytes [::tclpdfTest::readBytes $path]
+  set count [$pdf count]
+  $pdf destroy
+  removeFile writer-released.pdf
+  regexp {xref\n0 3\n(.*)trailer} $bytes -> table
+  list $answer $count [string match "*2 0 obj\nnull\nendobj*" $bytes] \
+      [string length $table] [regexp -all {00000 n } $table]
+} -result {2 2 1 60 2}
+
+test writer-1.8 {a released number is never handed out a second time} -body {
+  # The one thing that makes [release] safe to offer: whether anything
+  # already refers to the number is something only the caller knows - a
+  # page's /Annots, an /OBJR in the structure tree - and the same number
+  # given to a second object would write a file that opens and means
+  # something else.
+  set pdf [::tclpdf::writer::pdf new]
+  set first [$pdf reserve]
+  $pdf release $first
+  set second [$pdf reserve]
+  $pdf destroy
+  list $first $second
+} -result {1 2}
+
+test writer-1.9 {release refuses what it cannot give back} -body {
+  # A number that was never reserved, and one that is already in the file:
+  # releasing the second would turn a written object into null, which is
+  # worse than the leak the method cures.
+  set pdf [::tclpdf::writer::pdf new]
+  set written [$pdf add "<< /Type /Catalog >>"]
+  set codes [list [catch {$pdf release 99} first] \
+      [catch {$pdf release $written} second]]
+  set body [$pdf body $written]
+  $pdf destroy
+  list $codes [string match {*object 99 was never reserved*} $first] \
+      [string match {*already written*} $second] $body
+} -result {{1 1} 1 1 {<< /Type /Catalog >>}}
+
 test writer-2.1 {the version is a parameter and reaches the header} -body {
   set pdf [::tclpdf::writer::pdf new 2.0]
   writerMinimal $pdf
@@ -216,6 +267,34 @@ test writer-2.9 {two documents get different identifiers} -body {
   $second destroy
   list $differ $length
 } -result {1 16}
+
+test writer-2.10 {the filter check can be asked before the stream is built} -body {
+  # [StreamBody] is the one place every stream passes through and therefore
+  # where the check belongs - but a caller that reserves numbers first and
+  # writes the streams into them afterwards has to ask BEFORE the first
+  # reservation, or a refusal it catches leaves numbers reserved and never
+  # written (import.tcl, measured 2026-08-25). Same sentence, same line, one
+  # step earlier - and nothing but FlateDecode has a floor here.
+  set old [::tclpdf::writer::pdf new 1.1]
+  set new [::tclpdf::writer::pdf new 1.2]
+  set refused {}
+  set results {}
+  set message {}
+  foreach filter {FlateDecode /FlateDecode {[ /FlateDecode ]}
+      {DCTDecode FlateDecode} DCTDecode {}} {
+    set code [catch {$old requireFilter $filter} answer]
+    if {$code && $message eq {}} {
+      set message $answer
+    }
+    lappend refused $code
+    lappend results [catch {$new requireFilter $filter}]
+  }
+  set count [$old count]
+  $old destroy
+  $new destroy
+  list $refused $results $count \
+      [string match {tclpdf: a FlateDecode stream*needs PDF 1.2*} $message]
+} -result {{1 1 1 1 0 0} {0 0 0 0 0 0} 0 1}
 
 # -- writing to a channel ---------------------------------------------------
 #
@@ -373,5 +452,37 @@ test writer-4.6 {an encryptor answering with text rather than bytes is refused} 
     rename writerText {}
   }
 } -returnCodes error -match glob -result {*must be bytes, not text*}
+
+test writer-release-3.1 {a reserved number can be given back} -body {
+  set writer [::tclpdf::writer::pdf new]
+  set number [$writer reserve]
+  set given [$writer release $number]
+  set twice [catch {$writer release $number} again]
+  set never [catch {$writer release 999}]
+  $writer destroy
+  list [expr {$given eq $number}] $twice \
+      [string match {*already released*} $again] $never
+} -result {1 1 1 1}
+
+test writer-release-3.2 {a written number is not released} -body {
+  set writer [::tclpdf::writer::pdf new]
+  set number [$writer reserve]
+  $writer put $number "<< /Type /Test >>"
+  set refused [catch {$writer release $number} message]
+  $writer destroy
+  list $refused [string match {*already written*} $message]
+} -result {1 1}
+
+test writer-version-3.3 {a version refusal from the writer carries its code} -body {
+  # [RequireVersion] in document.tcl used to put the code on afterwards,
+  # which covered every road through the document but not the ones that ask
+  # the writer itself - the filter floor of a copied stream reached the
+  # caller of [pdf import] as NONE.
+  set writer [::tclpdf::writer::pdf new 1.3]
+  set refused [catch {$writer require 1.4 "something"} message options]
+  $writer destroy
+  list $refused [dict get $options -errorcode]
+} -result {1 {TCLPDF VERSION 1.4}}
+
 
 cleanupTests

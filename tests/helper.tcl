@@ -109,6 +109,29 @@ proc ::tclpdfTest::objects {doc pattern} {
   return $bodies
 }
 
+# Run a script under BOTH XML parsers and answer the unique results: tdom
+# where it is installed, and the built-in one either way. A drawing has to
+# come out the same whichever parsed it, and without this the fallback is
+# only exercised on machines that happen to lack tdom - which is nowhere.
+#
+# Here rather than in one test file because a SECOND file wants it: svg.test
+# has asked since the parser split, svgClip.test since clip-rule learned to
+# look at its ancestors, and the answer to "do both parsers agree" is the
+# same question in both.
+proc ::tclpdfTest::bothParsers {script} {
+  set saved $::tclpdf::xml::haveTdom
+  set results {}
+  foreach mode {1 0} {
+    if {$mode && !$saved} {
+      continue
+    }
+    set ::tclpdf::xml::haveTdom $mode
+    lappend results [uplevel 1 $script]
+  }
+  set ::tclpdf::xml::haveTdom $saved
+  return [lsort -unique $results]
+}
+
 # A scratch path inside the tcltest temporary directory.
 proc ::tclpdfTest::scratch {name} {
   return [file join [::tcltest::temporaryDirectory] $name]
@@ -645,9 +668,21 @@ proc ::tclpdfTest::refusalsWithoutCode {module} {
   set channel [open $path]
   set text [read $channel]
   close $channel
+  # THE NEXT LINE COUNTS TOO. A refusal whose message is long enough is
+  # written as "return -code error \\" with the -errorcode on the line
+  # below, and looking at one line at a time called every one of those bare:
+  # measured 2026-08-25, afm.tcl came back as 6 where 3 is the truth, and
+  # colorFont.tcl as 7 where it is 3. A guard that overcounts is worse than
+  # none, because the number it reports cannot be used as a limit.
+  set lines [split $text \n]
   set bare 0
-  foreach line [split $text \n] {
-    if {[regexp {return -code error [^-]} $line]} {
+  for {set index 0} {$index < [llength $lines]} {incr index} {
+    set line [lindex $lines $index]
+    if {![string match {*return -code error*} $line]} {
+      continue
+    }
+    set pair $line[lindex $lines [expr {$index + 1}]]
+    if {![string match {*-errorcode*} $pair]} {
       incr bare
     }
   }

@@ -74,7 +74,8 @@
 # pieces, and every one of them is the CORE's - a field type knows nothing
 # about the structure tree, which is the whole point of point 6:
 #
-#   Form         one structure element PER WIDGET, made by [FieldStructure]
+#   Form         one structure element PER WIDGET, made by
+#                [FieldStructureOpen]/[FieldStructureKey]
 #                at the call that declares the field, inside whatever element
 #                is open there - which is what puts it in reading order. ISO
 #                14289-2, 8.10.1 is emphatic that it is not one per field:
@@ -91,13 +92,25 @@
 #   TU           the accessible name of the FIELD (14.9.3), from -tooltip.
 #                Required under a UA claim and refused without: see
 #                [fieldsWithoutDescription], which ua.tcl judges.
-#   Contents     the accessible name of ONE WIDGET, from -contents, and only
-#                a field with several has one to give (ISO 14289-2, 8.10.2.4).
+#   Contents     the accessible description of ONE WIDGET, from -contents -
+#                one string where the field has one widget, one string per
+#                widget where it has several (ISO 14289-2, 8.10.2.4). Every
+#                field takes it, because every field HAS a widget: the one
+#                with a single widget is written as one merged object
+#                (12.5.6.19) and that object is a widget annotation like any
+#                other. It is not the same key as the /TU beside it and does
+#                not stand in for it - 8.10.3.2.1 asks a push button, which
+#                has exactly one widget, for a /Contents "reflecting the
+#                intent" of its /MK /CA.
 #   Lbl          the VISIBLE caption of one widget, drawn by a script the
 #                caller gives: -label where the field has one widget, one
 #                script per widget in -labels where it has several. It lands
 #                inside that widget's own Form element and nowhere else
-#                (8.10.2.2), and it needs PDF 2.0 - see [FieldDeclare].
+#                (8.10.2.2), and it needs PDF 2.0 - see [FieldDeclare]. A
+#                script that draws NOTHING is no label: the widget counts as
+#                undescribed and needs -contents like any other, because an
+#                empty Lbl describes nothing and 8.10.2.3 asks for a label
+#                that is there and sufficient.
 #
 # /Tabs /S on every page carrying annotations is output.tcl's and was there
 # before this module: it writes it for every page that has any, and /S
@@ -176,12 +189,22 @@
 #    and a dictionary of that widget's own, which comes back untouched in the
 #    kid's record under "entry".
 #
-#    -contents belongs with -widgets too, and is a list running in step with
-#    it: the accessible description of each widget, written as /Contents on
-#    that annotation. It is the answer to ISO 14289-2, 8.10.2.4 - one /TU on
-#    a field with four widgets describes none of the four - and a type that
-#    lets its caller name them passes them straight through. A field with one
-#    widget has -tooltip for the same job and -contents is refused for it.
+#    -contents goes with -widgets as a LIST running in step with it: the
+#    accessible description of each widget, written as /Contents on that
+#    annotation. It is the answer to ISO 14289-2, 8.10.2.4 - one /TU on a
+#    field with four widgets describes none of the four - and a type that
+#    lets its caller name them passes them straight through.
+#
+#    A FIELD WITH ONE WIDGET TAKES IT TOO, as the one string that widget's
+#    /Contents is written from, and -tooltip does not stand in for it: /TU is
+#    the alternative NAME of the field (12.7.4.3) and /Contents the
+#    description of the annotation (Table 166), and 8.10.3.2.1 asks for both
+#    on a push button - a field with exactly one widget - where the /Contents
+#    is to reflect the intent of the /MK /CA drawn into it. The merged object
+#    of 12.5.6.19 is a widget annotation and carries every key one carries.
+#    The comment here said the opposite until 2026-08-25 while the code did
+#    what the manual documents for "field text", "field check" and "field
+#    button"; the sentence was the wrong half.
 #
 #    -labels is the SECOND list running in step with -widgets, and it is to
 #    -label what -contents is to -tooltip: one script per widget, drawn into
@@ -192,7 +215,7 @@
 #    field with one widget says -label, and -labels is refused for it; the
 #    two are never both given, because a field has either one widget or
 #    several. Every script runs in the caller's scope, at the level [field]
-#    recorded, exactly as -label does - see [FieldStructureElement].
+#    recorded, exactly as -label does - see [FieldStructureOpen].
 #
 #    A LABEL FOR THE GROUP IS NEITHER OF THEM. 8.10.2.2 puts it in the
 #    element that holds all the widgets, which is the caller's own, and it is
@@ -291,7 +314,7 @@
 #    THE STRUCTURE TREE IS THE CORE'S AS WELL, and a field type is not told
 #    that it exists: the Form element per widget, the OBJR inside it, the
 #    /StructParent on the annotation and the /Contents beside it are all made
-#    by [FieldStructure] and [FieldWidgetPairs] from what was declared. A
+#    by [FieldStructureOpen] and [FieldWidgetPairs] from what was declared. A
 #    type gets accessibility by declaring its field and nothing else - which
 #    is why the radio field, the one type with several widgets, has not a
 #    line about tagging in it.
@@ -507,7 +530,7 @@ oo::define ::tclpdf::document::document {
     }
     # THE CALLER'S SCOPE, taken here and nowhere else. A -label script is run
     # by the core, inside the Form structure element it makes for the widget
-    # (see [FieldStructureElement]), and by then the stack holds the field
+    # (see [FieldStructureOpen]), and by then the stack holds the field
     # type's own method and [FieldDeclare] between the two - so the level the
     # script has to run at is this method's CALLER, and only this method can
     # read it. [info level] answers the absolute level, which is what
@@ -756,7 +779,19 @@ oo::define ::tclpdf::document::document {
     set page [my FieldPageCheck [dict get $options page]]
     # EVERY widget is checked before the first object number is reserved: a
     # refused call has to leave the document exactly as it was, and a
-    # reservation is an object number handed out for a field that is not there.
+    # reservation is an object number handed out for a field that is not
+    # there - one that no [write] ever fills, which kills the WHOLE document
+    # ("object(s) reserved but never written") although the caller caught the
+    # refusal and carried on.
+    #
+    # The rectangle and the page are checked here; the structure tree is the
+    # third thing that can refuse, and it is not checked but DONE early - see
+    # [FieldStructureOpen] below, which opens the widget's Form element (and
+    # draws its label) before the reservation that goes with it. Until
+    # 2026-08-25 the whole structure tree ran AFTER the reservations, and
+    # this comment claimed the opposite of what the code did: a field
+    # declared where no Form may stand - inside an L, say - was refused
+    # correctly and left the document unwritable.
     set entries {}
     if {$widgets eq {}} {
       set rect [my FieldRectCheck $name $rect]
@@ -798,22 +833,66 @@ oo::define ::tclpdf::document::document {
         tooltip [dict get $options tooltip] \
         flags [dict get $options flags] \
         data [dict get $options data]]
+    # THE STRUCTURE ELEMENT OF A WIDGET IS OPENED, AND ITS LABEL DRAWN,
+    # BEFORE THAT WIDGET'S NUMBER IS RESERVED. Both of them can refuse - the
+    # element because a Form may not stand where the caller is, the label
+    # because it is the caller's own script - and between the open and the
+    # reservation stands nothing that can raise, which is the order annot.tcl
+    # keeps for the same reason and since the same day.
     if {$widgets eq {}} {
       dict set record rect $rect
       dict set record contents [dict get $options contents]
-      dict set record label [dict get $options label]
+      lassign [my FieldStructureOpen $name [dict get $options label]] id label
+      dict set record label $label
       dict set record widget [my reservation field.widget.$name]
+      dict set record structParent \
+          [my FieldStructureKey $id [dict get $record widget] $page]
     } else {
-      # The parent first, so that the field object a reader reaches through
-      # /Fields carries the lower number of the two - which is what makes the
-      # file read in the order the tree does.
-      dict set record field [my reservation field.field.$name]
-      dict set record widgets [lmap entry $entries {
-        dict set entry widget \
-            [my reservation field.widget.$name.[dict get $entry index]]
-      }]
+      # ONE WIDGET AT A TIME, AND THEREFORE ONE RESERVATION AT A TIME. The
+      # order above cannot be kept for a set: [StructureAnnotation] hangs the
+      # object reference into the element that is OPEN at that moment, so the
+      # elements cannot all be opened first - they would nest inside one
+      # another - and the label script of the k-th widget, which is the
+      # caller's own and may raise, therefore stands AFTER the numbers of the
+      # k-1 widgets before it and of the parent field.
+      #
+      # Which is why those numbers are given back. Reserved and never filled
+      # they would kill the whole document - "object(s) reserved but never
+      # written" at the next [write], although the caller caught the error and
+      # carried on (measured 2026-08-25 with a three-button radio field whose
+      # second label script raised: two numbers lost and the document
+      # unwritable). [release] on the writer is what a reservation is undone
+      # with; see there for why the number is not handed out a second time.
+      set built {}
+      set claimed {}
+      set code [catch {
+        foreach entry $entries {
+          lassign [my FieldStructureOpen $name [dict get $entry label]] id label
+          dict set entry label $label
+          if {[dict get $entry index] == 0} {
+            # The parent first, so that the field object a reader reaches
+            # through /Fields carries the lower number of them all - which is
+            # what makes the file read in the order the tree does. Not before
+            # the first widget's element though: that element is the one whose
+            # refusal answers for every widget of the field, because they all
+            # ask the same question of the same open element.
+            lappend claimed field.field.$name
+            dict set record field [my reservation field.field.$name]
+          }
+          lappend claimed field.widget.$name.[dict get $entry index]
+          dict set entry widget \
+              [my reservation field.widget.$name.[dict get $entry index]]
+          dict set entry structParent [my FieldStructureKey $id \
+              [dict get $entry widget] [dict get $entry page]]
+          lappend built $entry
+        }
+      } result outcome]
+      if {$code} {
+        my FieldRelease $claimed
+        return -options $outcome $result
+      }
+      dict set record widgets $built
     }
-    set record [my FieldStructure $record]
     set fields [my state fields]
     dict set fields $name $record
     my state fields $fields
@@ -822,6 +901,30 @@ oo::define ::tclpdf::document::document {
       my onSelf beforeWrite FieldWrite
     }
     return $name
+  }
+
+  # The object numbers of a field that is NOT going to exist, given back -
+  # by the KEYS they were reserved under, because a number lives in two
+  # places: the writer, where [release] gives it back, and the document's
+  # table of reservations, where the key would otherwise still name it. A key
+  # left behind is a number handed to the field a second declaration of the
+  # same name would build - the retry after the caught refusal - and that
+  # number is one this document has written null into. Both go, and the
+  # retry reserves afresh.
+  #
+  # This runs in an error path and is meant not to raise there: a number of
+  # this field is reserved and never written by construction - [FieldDeclare]
+  # writes nothing at all - so [release] has nothing to object to, and a
+  # key that was never reached is passed over rather than looked up.
+  method FieldRelease {keys} {
+    set numbers [my state reservations]
+    foreach key $keys {
+      if {![dict exists $numbers $key]} continue
+      [my writer] release [dict get $numbers $key]
+      dict unset numbers $key
+    }
+    my state reservations $numbers
+    return
   }
 
   # -- the structure tree ---------------------------------------------------
@@ -856,26 +959,15 @@ oo::define ::tclpdf::document::document {
   # an element made on beforeWrite would land after everything else - every
   # field of the form in a heap at the end of the tree, which is the reading
   # order nobody has.
-  method FieldStructure {record} {
-    if {![my tagged]} {
-      return $record
-    }
-    if {[dict exists $record widgets]} {
-      dict set record widgets [lmap entry [dict get $record widgets] {
-        dict set entry structParent [my FieldStructureElement \
-            [dict get $record name] [dict get $entry widget] \
-            [dict get $entry page] [dict get $entry label]]
-      }]
-      return $record
-    }
-    dict set record structParent [my FieldStructureElement \
-        [dict get $record name] [dict get $record widget] \
-        [dict get $record page] [dict get $record label]]
-    return $record
-  }
-
-  # One Form element around one widget, the Lbl the caller drew into it, and
-  # the /StructParent key that points back. The two halves of 14.7.5.4: the
+  # ONE WIDGET'S ELEMENT IN TWO HALVES, and the seam between them is the one
+  # place the widget's object number is reserved. [FieldStructureOpen] does
+  # everything that can still refuse - the Form element, and the caller's
+  # label script inside it - and [FieldStructureKey] does what needs the
+  # number: the object reference and the closing bracket. Nothing lies
+  # between them but the reservation, and a reservation cannot raise.
+  #
+  # One element around one widget, the Lbl the caller drew into it, and the
+  # /StructParent key that points back. The two halves of 14.7.5.4: the
   # element reaches the annotation through an object reference
   # << /Type /OBJR /Obj ... /Pg ... >> in its /K, and the annotation reaches
   # the element through the parent tree - "content items that are entire PDF
@@ -896,9 +988,27 @@ oo::define ::tclpdf::document::document {
   # The refusal is rewrapped rather than passed on: [StructureOpen] answers
   # about a structure type the caller never named, and the call that has to
   # change is the [$doc field ...] this came from.
-  method FieldStructureElement {name number page {label {}}} {
+  #
+  # ANSWERS {id label}: the element to close, {} in a document that is not
+  # tagged, and the label AS IT COUNTS - see below, which is not always the
+  # label that was passed in.
+  method FieldStructureOpen {name label} {
+    if {![my tagged]} {
+      return [list {} $label]
+    }
     if {[catch {my StructureOpen Form} id options]} {
-      if {[dict get $options -errorcode] ne "NONE"} {
+      # WHAT IS REWRAPPED IS WHAT THE TREE REFUSED. A refusal from
+      # [StructureOpen] that is about something else - the PDF version floor
+      # of a structure type, say - names its own case and is passed on with
+      # it. Told apart by the errorcode, and by TWO shapes of it: a refusal
+      # under TCLPDF STRUCTURE, which is the class structure.tcl gives every
+      # refusal of its own, and a refusal carrying none at all, which is
+      # what the same call answered before that class existed. Reading only
+      # the second made the whole rewrap dead code the day the codes were
+      # added, and TCLPDF FIELD STRUCTURE - a documented contract - was
+      # never thrown again.
+      set code [dict get $options -errorcode]
+      if {$code ne "NONE" && [lrange $code 0 1] ne {TCLPDF STRUCTURE}} {
         return -options $options $id
       }
       return -code error -errorcode [list TCLPDF FIELD STRUCTURE $name] \
@@ -928,6 +1038,30 @@ oo::define ::tclpdf::document::document {
         my StructureClose $id
         return -options $outcome $result
       }
+      # A LABEL IS WHAT WAS DRAWN, NOT THAT A SCRIPT WAS PASSED. The Lbl
+      # element holds a kid for every mark and every element the script made,
+      # and a script that made none - "-label { ; }", or one whose drawing
+      # sat behind an [if] that turned out false - leaves it empty. Counting
+      # the script alone made [fieldWidgetsWithoutDescription] report nothing
+      # about such a widget, so a document with an empty Lbl and no
+      # /Contents claimed PDF/UA-2 and was written; veraPDF then rejected it
+      # under clause 8.10.2.3, which is the one judgement this package is
+      # meant to make first. An empty label is therefore no label, and the
+      # widget needs -contents like any other undescribed one.
+      if {![llength [dict get [lindex [my state structure] $labelId] kids]]} {
+        set label {}
+      }
+    }
+    return [list $id $label]
+  }
+
+  # The other half: the object reference into the element opened above, and
+  # the /StructParent key the widget annotation carries back. {} where
+  # nothing was opened - an untagged document - which is what the record
+  # then holds and what [fieldsOutsideStructure] reads.
+  method FieldStructureKey {id number page} {
+    if {$id eq {}} {
+      return {}
     }
     set key [my StructureAnnotation $number $page]
     my StructureClose $id
@@ -1321,9 +1455,12 @@ oo::define ::tclpdf::document::document {
       lappend pairs Parent $parent
     }
     lappend pairs F 4
-    # /Contents is this WIDGET's description, and only a field with several
-    # of them has one to give: ISO 14289-2, 8.10.2.4. See [FieldDeclare] for
-    # why -contents goes with -widgets and nowhere else.
+    # /Contents is this WIDGET's description (ISO 14289-2, 8.10.2.4) - the
+    # one string of a field with a single widget, or that widget's own entry
+    # of the list on a field with several. Both arrive in the record under
+    # the same key, which is what lets the one writer of the annotation half
+    # write it for both; see [FieldDeclare] for why it is not the field's
+    # /TU.
     if {[dict exists $record contents] && [dict get $record contents] ne {}} {
       lappend pairs Contents [my Str [dict get $record contents]]
     }

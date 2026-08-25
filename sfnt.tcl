@@ -95,6 +95,34 @@ proc ::tclpdf::sfnt::parse {bytes} {
           it announces $numTables tables and the file ends inside entry\
           [expr {$index + 1}]"
     }
+    # A TAG APPEARS ONCE. The directory is a set, unique and sorted by tag
+    # (OpenType, "Organization of an OpenType Font"), and a second entry for
+    # a tag used to overwrite the first without a word - so a file could
+    # carry two "head" tables and the reader would silently use whichever
+    # came last. The sort order is NOT enforced beside it: files that keep
+    # the tags out of order are in circulation and read correctly here, so
+    # refusing them would cost more than it buys.
+    if {[dict exists $tables $name]} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+          "tclpdf: the font's table directory names \"$name\" twice, and a\
+          table directory is a set - there is no telling which of the two\
+          the file means"
+    }
+    # THE ENTRY HAS TO POINT INTO THE FILE. Every parser below reads its
+    # table through the offset out of this directory, and until this was
+    # checked a truncated file or a corrupt offset sent [binary scan] past
+    # the end, where it fills nothing and leaves its variables unset: what
+    # reached the caller was "can't read \"fixed\": no such variable" with
+    # errorCode TCL READ VARNAME, not a refusal of this package. Checked
+    # HERE, once, for every table rather than at each of the six reads - the
+    # directory is the one place a table's extent is established, and a guard
+    # per read would be six copies of one rule.
+    if {$position + $length > [string length $bytes]} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+          "tclpdf: damaged font - the \"$name\" table is declared at\
+          $position for $length bytes and the file is only\
+          [string length $bytes] bytes long"
+    }
     dict set tables $name [list $position $length]
   }
   # cmap is NOT required: a subset built by subset.tcl deliberately carries
@@ -157,8 +185,30 @@ proc ::tclpdf::sfnt::table {font name} {
   return [string range [dict get $font bytes] $position [expr {$position + $length - 1}]]
 }
 
+# Where a table starts, refused where the directory declares it too short for
+# the fixed fields the parser is about to read out of it.
+#
+# The extent check in [parse] settles that a table lies INSIDE the file; this
+# settles that it is long enough for its own format, which is the second half
+# of the same guarantee - a "head" declared as twenty bytes sits in the file
+# and still cannot hold what a head holds, and reading indexToLocFormat out of
+# it left [binary scan] with nothing to fill and the caller with an unset
+# variable. The refusal names the DIRECTORY rather than the table, because the
+# directory is where the length that is wrong was stated.
+proc ::tclpdf::sfnt::TableAt {tables tag wanted} {
+  lassign [dict get $tables $tag] position length
+  if {$length < $wanted} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+        "tclpdf: damaged font - the directory declares the \"$tag\" table as\
+        $length bytes, and a $tag table holds at least $wanted"
+  }
+  return $position
+}
+
 proc ::tclpdf::sfnt::ParseHead {bytes tables} {
-  lassign [dict get $tables head] position -
+  # 54 bytes is the whole of head, 6 the least a maxp can be (version 0.5,
+  # which is numGlyphs and nothing else).
+  set position [TableAt $tables head 54]
   binary scan $bytes @[expr {$position + 18}]Su unitsPerEm
   binary scan $bytes @[expr {$position + 36}]SSSS xMin yMin xMax yMax
   binary scan $bytes @[expr {$position + 44}]S macStyle
@@ -167,14 +217,14 @@ proc ::tclpdf::sfnt::ParseHead {bytes tables} {
     return -code error -errorcode [list TCLPDF FONT METRICS unitsPerEm] \
         "tclpdf: the font declares unitsPerEm 0"
   }
-  lassign [dict get $tables maxp] maxpPosition -
+  set maxpPosition [TableAt $tables maxp 6]
   binary scan $bytes @[expr {$maxpPosition + 4}]Su numGlyphs
   return [dict create unitsPerEm $unitsPerEm bbox [list $xMin $yMin $xMax $yMax] \
       macStyle $macStyle indexToLocFormat $indexToLocFormat numGlyphs $numGlyphs]
 }
 
 proc ::tclpdf::sfnt::ParseMetrics {bytes tables numGlyphs} {
-  lassign [dict get $tables hhea] position -
+  set position [TableAt $tables hhea 36]
   # The three numbers that make a line, in that order at offset 4: the
   # ascender, the descender (negative) and the gap BETWEEN two lines, which
   # is neither of the other two and which nothing here read until [font info]
@@ -194,6 +244,17 @@ proc ::tclpdf::sfnt::ParseMetrics {bytes tables numGlyphs} {
   # own, the gaps between letters go uneven rather than the line shifting as a
   # whole. Combining marks sit at negative x, so for them the error is most of
   # an em.
+  # THE PAIRS ARE NOT OPTIONAL, unlike the bearings behind them: hhea says how
+  # many there are and every one of them is a glyph's advance width. A file
+  # that ends inside them is cut short, and reading on gave an unset variable
+  # rather than a refusal. Measured against the FILE rather than against the
+  # declared table length, so that the widespread habit of declaring hmtx a
+  # few bytes short of its tail costs nothing.
+  if {$hmtxPosition + $numberOfHMetrics * 4 > [string length $bytes]} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+        "tclpdf: damaged font - hhea announces $numberOfHMetrics horizontal\
+        metrics and the file ends inside the \"hmtx\" table that holds them"
+  }
   set widths {}
   set bearings {}
   set last 0
@@ -275,7 +336,16 @@ proc ::tclpdf::sfnt::bearing {font glyph} {
 proc ::tclpdf::sfnt::ParseVertical {bytes tables numGlyphs} {
   set vertical {}
   if {[dict exists $tables vhea] && [dict exists $tables vmtx]} {
-    lassign [dict get $tables vhea] position -
+    # vhea is hhea with the axes exchanged and is the same 36 bytes; the
+    # number of long vertical metrics sits at its very end, so a shorter one
+    # cannot be read at all. Refused rather than passed over, and under the
+    # part subset.tcl already refuses a short vhea under.
+    lassign [dict get $tables vhea] position vheaLength
+    if {$vheaLength < 36} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED vhea] \
+          "tclpdf: the font's \"vhea\" table is $vheaLength bytes and cannot\
+          describe its vertical metrics"
+    }
     binary scan $bytes @[expr {$position + 4}]SS ascender descender
     # Offset 34, the same place hhea keeps numberOfHMetrics: vhea is that
     # header with the axes exchanged (ISO/IEC 14496-22, "vhea").
@@ -387,13 +457,21 @@ proc ::tclpdf::sfnt::verticalOriginY {font glyph yMax} {
 # Unicode to glyph id. Formats 4 (BMP) and 12 (full range) are read; a font
 # without either cannot be used for text.
 proc ::tclpdf::sfnt::ParseCmap {bytes tables} {
-  lassign [dict get $tables cmap] position -
+  # Four bytes of header: the version and the number of subtables.
+  set position [TableAt $tables cmap 4]
   binary scan $bytes @[expr {$position + 2}]Su numSubtables
   set best {}
   set bestScore -1
   for {set index 0} {$index < $numSubtables} {incr index} {
     set entry [expr {$position + 4 + $index * 8}]
-    binary scan $bytes @${entry}SuSuIu platform encoding subOffset
+    # The count steers the loop and is believed only as far as the file
+    # reaches: a cmap announcing more subtables than it holds used to read a
+    # record that is not there and fail on an unset variable.
+    if {[binary scan $bytes @${entry}SuSuIu platform encoding subOffset] != 3} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED cmap] \
+          "tclpdf: the font's cmap announces $numSubtables subtables and the\
+          file ends inside record [expr {$index + 1}]"
+    }
     # Preference: Windows/UCS-4 (3,10), Windows/BMP (3,1), Unicode (0,x).
     set score -1
     if {$platform == 3 && $encoding == 10} {
@@ -412,7 +490,14 @@ proc ::tclpdf::sfnt::ParseCmap {bytes tables} {
     return -code error -errorcode [list TCLPDF FONT ENCODING cmap] \
         "tclpdf: the font has no usable Unicode cmap"
   }
-  binary scan $bytes @${best}Su format
+  # The chosen record's own offset is a second thing the file states and may
+  # get wrong - it is counted from the start of the cmap table and may point
+  # anywhere, the end of the file included.
+  if {[binary scan $bytes @${best}Su format] != 1} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cmap] \
+        "tclpdf: the font's cmap points its subtable at offset $best, which is\
+        past the end of the file"
+  }
   switch -- $format {
     4 {return [CmapFormat4 $bytes $best]}
     12 {return [CmapFormat12 $bytes $best]}
@@ -525,6 +610,16 @@ proc ::tclpdf::sfnt::ParseLoca {bytes tables format numGlyphs} {
     return {}
   }
   lassign [dict get $tables loca] position -
+  # loca holds one offset per glyph plus a closing one, in the width head's
+  # indexToLocFormat names. A file that ends inside it is cut short; reading
+  # on gave an unset variable and, worse, a loca whose entries silently
+  # stopped would have cut every glyph past that point out of the subset.
+  set width [expr {$format == 0 ? 2 : 4}]
+  if {$position + ($numGlyphs + 1) * $width > [string length $bytes]} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+        "tclpdf: damaged font - maxp announces $numGlyphs glyphs and the file\
+        ends inside the \"loca\" table that locates them"
+  }
   set offsets {}
   for {set index 0} {$index <= $numGlyphs} {incr index} {
     if {$format == 0} {
@@ -873,6 +968,21 @@ proc ::tclpdf::sfnt::isBareCff {bytes} {
   # rejected most real CFF2 files and sent them back to the sfnt reader, which
   # is the very detour this function was widened to end.
   if {$major == 2} {
+    return 1
+  }
+  # A HEADER VERSION THIS READER DOES NOT KNOW is still a CFF header, and the
+  # answer a caller needs is which READER turned the file away (doc/tclpdf.md,
+  # TCLPDF FONT SOURCE): a bare CFF of version 3 used to fall through to the
+  # sfnt reader and come back as "not a TrueType or OpenType font", which
+  # sends a script looking for the wrong thing. [cffFont] names it a CFF and
+  # says which version it is.
+  #
+  # THE BOUND IS NOT DECORATION. Three bytes of a CFF header say anything at
+  # all, and the sfnt signatures begin with 0x00, "O" (OTTO) and "t" (true,
+  # ttcf) - read as a major version those are 0, 79 and 116. Admitting any
+  # non-zero major would claim every OTTO file for the CFF reader, so the
+  # recogniser stops one version past the two the format has.
+  if {$major == 3} {
     return 1
   }
   return [expr {$major == 1 && $fourth >= 1 && $fourth <= 4}]
@@ -1371,6 +1481,15 @@ proc ::tclpdf::sfnt::ParseOs2 {bytes tables} {
     return $os2
   }
   lassign [dict get $tables OS/2] position length
+  # A table too short for even the three fields read here counts as ABSENT
+  # rather than as a refusal, which is the answer this parser already gives a
+  # face with no OS/2 at all: nothing in it is required to embed a face, and
+  # turning a whole font away over a stub table would be the harsher of the
+  # two errors. Without the test the reads below fell off the end of the file
+  # and left their variables unset.
+  if {$length < 10} {
+    return $os2
+  }
   # version at 0, usWeightClass at 4 - xAvgCharWidth stands between them.
   binary scan $bytes @${position}Sux2Su version weightClass
   binary scan $bytes @[expr {$position + 8}]Su fsType
@@ -1452,12 +1571,22 @@ proc ::tclpdf::sfnt::ParseNames {bytes tables} {
   if {![dict exists $tables name]} {
     return {}
   }
-  lassign [dict get $tables name] position -
+  lassign [dict get $tables name] position length
+  if {$length < 6} {
+    return {}
+  }
   binary scan $bytes @[expr {$position + 2}]SuSu count stringOffset
   set names {}
   for {set index 0} {$index < $count} {incr index} {
     set at [expr {$position + 6 + $index * 12}]
-    binary scan $bytes @${at}SuSuSuSuSuSu platform encoding language nameId length offset
+    # A record the file does not reach is where the table ends, whatever it
+    # announced. NOT a refusal: the two names read here are what the face
+    # CALLS itself, the document writes a name of its own where they are
+    # missing, and no face is unusable for want of them.
+    if {[binary scan $bytes @${at}SuSuSuSuSuSu \
+            platform encoding language nameId length offset] != 6} {
+      break
+    }
     if {$nameId ni {1 6}} {
       continue
     }

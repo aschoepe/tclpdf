@@ -291,6 +291,33 @@ oo::class create ::tclpdf::update::Session {
     return $tclpdfHigh
   }
 
+  # Give a reserved number back, the way the writer does - same two
+  # refusals, same answer: the number is filled with the null object rather
+  # than handed out again, because whoever already points at it is the
+  # caller's business and 7.3.9 makes a reference to a missing object and a
+  # reference to null the same thing.
+  #
+  # An update session appends to a finished file and has nothing to take
+  # back from it - but it hands out numbers of its own for what it adds, and
+  # a refusal between [reserve] and [put] leaves the same hole here as it
+  # did in the writer: the increment stands, the body never comes, and the
+  # cross-reference section of the update names an object that is not there.
+  method release {number} {
+    if {![dict exists $tclpdfBodies $number]} {
+      return -code error "tclpdf: object $number was never reserved by this\
+          update"
+    }
+    if {[dict get $tclpdfBodies $number] eq "null"} {
+      return -code error "tclpdf: object $number was already released"
+    }
+    if {[dict get $tclpdfBodies $number] ne {}} {
+      return -code error "tclpdf: object $number is already written and\
+          cannot be released"
+    }
+    dict set tclpdfBodies $number null
+    return $number
+  }
+
   # Fill a number this update reserved.
   method put {number body} {
     if {![dict exists $tclpdfBodies $number]} {

@@ -606,4 +606,32 @@ foreach tclpdfFixture $::tclpdfTest::updateFiles {
 }
 unset -nocomplain tclpdfFixture
 
+test update-release-9.1 {a number this update reserved can be given back} -body {
+  # An update session appends to a finished file and has nothing to take
+  # back from it - but it hands out numbers of its own for what it adds, and
+  # a refusal between [reserve] and [put] leaves the same hole the writer
+  # had: the increment stands, the body never comes, and the update's own
+  # cross-reference names an object that is not there.
+  set base [::tclpdfTest::scratch update-release.pdf]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Grundlage" -at {20 20}
+  $doc write $base
+  $doc destroy
+  set session [::tclpdf::update open $base]
+  set number [$session reserve]
+  set given [$session release $number]
+  set twice [catch {$session release $number}]
+  set never [catch {$session release 9999}]
+  set written [$session reserve]
+  $session put $written "<< /Type /Test >>"
+  set afterWrite [catch {$session release $written} message]
+  $session destroy
+  file delete $base
+  list [expr {$given eq $number}] $twice $never $afterWrite \
+      [string match {*already written*} $message]
+} -result {1 1 1 1 1}
+
+
 cleanupTests

@@ -1431,4 +1431,94 @@ test shading-pool-50.4 {the drawing is unchanged, only the file is smaller} -bod
 } -result {3 1 3}
 
 
+# -- a shading is not painted in a pattern, and its box has a size ------------
+
+test shading-pattern-51.1 {a Pattern colour space is refused in every kind} -body {
+  # ISO 32000-2, 8.7.4.5.1 with Tables 78 and 80: the colour space of a
+  # shading "shall not be a Pattern colour space" - a shading is what a
+  # shading pattern is MADE of. Every other special space was already out:
+  # Lab, ICCBased and DeviceN never get past [::tclpdf::color space], and a
+  # separation is refused by name. {pattern <x>} parsed cleanly and answered
+  # "Pattern", so it walked into the dictionary. Measured on 2026-08-25:
+  # "/ColorSpace /Pattern" stood in the file, qpdf --check passed it, and
+  # poppler warned once and drew NOTHING.
+  #
+  # Both roads, because [ShadingColours] collects for all seven types: the
+  # stops of a gradient and the vertices of a mesh.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes {}
+  foreach call {
+    {shading axial -at {20 20} -size {60 60} -colors {{pattern 0.2} {pattern 0.9}}}
+    {shading radial -at {20 20} -size {60 60} -colors {{pattern 0.2} {pattern 0.9}}}
+    {shading triangles -at {20 20} -size {60 60}
+        -vertices {{20 20 {pattern 0.2}} {80 20 {pattern 0.5}} {50 80 {pattern 0.9}}}}
+  } {
+    lappend codes [::tclpdfTest::refusalCode {$doc {*}$call}]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lsort -unique $codes] [regexp {sh} $stream]
+} -result {{{TCLPDF SHADING PATTERN}} 0}
+
+test shading-pattern-51.2 {the refusal says what to do instead} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  catch {$doc shading axial -at {20 20} -size {60 60} \
+      -colors {{pattern 0.2} {pattern 0.9}}} message
+  $doc destroy
+  list [string match {*shall not be a Pattern colour space*} $message] \
+      [string match {*shading pattern*} $message]
+} -result {1 1}
+
+test shading-size-51.3 {-size of a shading is two lengths above zero} -body {
+  # The very check [image place] takes ([checkFit] in geometry.tcl).
+  # Measured on 2026-08-25, before it was asked here: "-size {0 0}" on a
+  # function shading wrote "/Matrix [0 0 0 85.03937 0 0]" - singular, so
+  # nothing is painted and no reader says why - and on an axial one a
+  # "0 0 re W n", a clipping path of no area with the "sh" inside it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes {}
+  foreach call {
+    {shading axial -at {20 20} -size {0 0} -colors {red blue}}
+    {shading axial -at {20 20} -size {60 -20} -colors {red blue}}
+    {shading function -at {20 20} -size {0 60} -space rgb -expression {1 0 0}}
+    {shading pattern p radial -at {20 20} -size {0 0} -colors {red blue}}
+  } {
+    lappend codes [catch {$doc {*}$call} message]
+    lappend codes [string match {tclpdf: -size of *takes lengths above zero*} $message]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $stream
+} -result {{1 1 1 1 1 1 1 1} {}}
+
+test shading-size-51.4 {a box too small to be written is refused as well} -body {
+  # The /Matrix of a type 1 shading is built from -at and -size, so it never
+  # goes through [::tclpdf::geometry check] - and it collapses the same way.
+  # A PDF real carries five decimals (7.3.3), so a box of 1e-7 mm rounds to
+  # nothing and the matrix comes out singular. Judged over the numbers that
+  # reach the file, which is what [singular] answers.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set code [catch {$doc shading function -at {20 20} -size {0.0000001 0.0000001} \
+      -space rgb -expression {1 0 0}} message]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string match {*singular*} $message] [string match {*0.00001 pt*} $message] \
+      $stream
+} -result {1 1 1 {}}
+
+test shading-size-51.5 {an ordinary box still paints exactly what it painted} -body {
+  # The counter-measurement: the two checks are gates and change no drawing.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc shading axial -at {20 20} -size {60 40} -colors {red blue}
+  $doc shading function -at {20 100} -size {40 40} -space rgb -expression {1 0 0}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {re W n} $stream] [regexp -all {sh} $stream]
+} -result {2 2}
+
 cleanupTests

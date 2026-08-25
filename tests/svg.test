@@ -27,24 +27,24 @@ set svgFace [file join [file dirname [file dirname [file normalize [info script]
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveFace [file exists $svgFace]
 
+set svgPhoto [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets images sample-photo.jpg]
+testConstraint havePhoto [file exists $svgPhoto]
+
+testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+
 # The identity transform the path module takes, spelled out once.
 set plain {apply {{x y} {list $x $y}}}
 
 # Which parser is in use. The XML tests below run against BOTH: tdom where it
 # is installed, and the built-in one either way - otherwise the fallback is
 # only exercised on machines that happen to lack tdom, which is nowhere.
+# The shared one, under the name this file has used since the parser split.
+# [uplevel 1] inside it then reaches THIS proc's caller, which is the test
+# body - one frame further than before, so the alias passes the script on
+# with an uplevel of its own rather than calling it directly.
 proc svgBothParsers {script} {
-    set saved $::tclpdf::xml::haveTdom
-    set results {}
-    foreach mode {1 0} {
-        if {$mode && !$saved} {
-            continue
-        }
-        set ::tclpdf::xml::haveTdom $mode
-        lappend results [uplevel 1 $script]
-    }
-    set ::tclpdf::xml::haveTdom $saved
-    return [lsort -unique $results]
+    return [::tclpdfTest::bothParsers [list uplevel 1 $script]]
 }
 
 # The results come back as a SET: one element means both parsers agreed, two
@@ -110,6 +110,52 @@ test svg-1.6 {find walks the whole tree} -body {
     set answer
   }
 } -result 2
+
+# The way UP, added on 2026-08-25 for the inherited properties of a <defs>
+# subtree: what a <clipPath> inherits stands on elements the downward walk
+# never reaches from it. Both parsers have to answer the same, and they get
+# there differently - tdom asks the node, the built-in parser carries the
+# chain in the handle.
+test svg-1.7 {parent climbs to the root and stops there} -body {
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<svg id="r"><g id="a"><rect id="b"/></g></svg>}]
+    set rect [lindex [::tclpdf::xml children \
+        [lindex [::tclpdf::xml children $root] 0]] 0]
+    set answer {}
+    for {set node $rect} {$node ne {}} {set node [::tclpdf::xml parent $node]} {
+      lappend answer [::tclpdf::xml attribute $node id]
+    }
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result {{b a r}}
+
+test svg-1.8 {a parent is a node like any other} -body {
+  # It has to answer name, attribute and children - and its children have to
+  # be the SIBLINGS, not a truncated set: the built-in parser attaches a
+  # child when the tag closes, so a chain gathered too early would hand back
+  # a parent that has forgotten half its content.
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<svg><g fill="red"><rect/><circle/><line/></g></svg>}]
+    set circle [lindex [::tclpdf::xml children \
+        [lindex [::tclpdf::xml children $root] 0]] 1]
+    set up [::tclpdf::xml parent $circle]
+    set answer [list [::tclpdf::xml name $up] \
+        [::tclpdf::xml attribute $up fill] \
+        [lmap child [::tclpdf::xml children $up] {::tclpdf::xml name $child}]]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result {{g red {rect circle line}}}
+
+test svg-1.9 {the root of a parse has no parent} -body {
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<svg><g/></svg>}]
+    set answer [::tclpdf::xml parent $root]
+    ::tclpdf::xml release $root
+    expr {$answer eq {}}
+  }
+} -result 1
 
 test svg-2.1 {the four basic commands} -body {
   ::tclpdf::svgPath operators {M10 20 L30 40 Z} $plain
@@ -1112,9 +1158,13 @@ test svg-defs-20.4 {what stands under defs is counted, not passed over} -body {
     </svg>} -at {10 10} -width 50
   set skipped [$doc svg info]
   $doc destroy
+  # THE MASK IS NO LONGER AMONG THEM, and that is the change of 2026-08-25
+  # rather than a hole in the count: a <mask> is drawn now (svgClip.tcl), so
+  # counting it as lost would be the untruthful answer. What is still
+  # counted is what is still lost - the filter, and the primitive in it.
   list [dict exists $skipped filter] [dict exists $skipped mask] \
       [dict exists $skipped feGaussianBlur]
-} -result {1 1 1}
+} -result {1 0 1}
 
 test svg-defs-20.5 {and what the package can draw is not counted as a loss} -body {
   # A <g> or a <rect> under <defs> is reached through <use> or through the
@@ -1194,6 +1244,518 @@ test svg-fit-21.5 {a drawing without -fit is untouched by any of this} -body {
 test svg-fit-21.6 {-fit and -width contradict each other} -body {
   ::tclpdfTest::refusalCode {fitSvg -at {20 20} -fit {40 40} -width 30}
 } -result {TCLPDF FIT SIZE width svg}
+
+
+
+# -- preserveAspectRatio ---------------------------------------------------
+#
+# The attribute occurs in NONE of the 15046 SVG files on this machine, and is
+# read anyway - because unlike an unknown element it fails silently. A file
+# saying "slice" and coming out centred leaves no trace in [svg info], on the
+# page, or anywhere else.
+
+# What the fitting made of one drawing: the two scale factors out of the
+# matrix, the area it reports, and whether it cut anything back.
+proc aspectProbe {attribute} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  # A wide viewBox into a square box, so every spelling lands differently.
+  set area [$doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\"\
+      width=\"200\" height=\"100\" viewBox=\"0 0 200 100\" $attribute><rect\
+      x=\"0\" y=\"0\" width=\"200\" height=\"100\" fill=\"red\"/></svg>" \
+      -at {20 20} -size {60 60}]
+  set content [$doc page content]
+  set info [$doc svg info]
+  $doc destroy
+  regexp {([-0-9.]+) 0 0 ([-0-9.]+) } $content -> scaleX scaleY
+  return [list $scaleX [expr {-$scaleY}] $area [regexp -all {W n} $content] $info]
+}
+
+test svg-aspect-30.1 {no attribute is xMidYMid meet} -body {
+  # The default has to write exactly what it wrote before the attribute was
+  # read at all - otherwise every drawing in the world moves.
+  expr {[aspectProbe {}] eq [aspectProbe {preserveAspectRatio="xMidYMid meet"}]}
+} -result 1
+
+test svg-aspect-30.2 {meet keeps the proportions and centres} -body {
+  lassign [aspectProbe {preserveAspectRatio="xMidYMid meet"}] scaleX scaleY area
+  # One factor for both axes, and the drawing centred in the 60 mm box: 200
+  # by 100 into 60 by 60 is 60 by 30, so 15 mm of air above and below.
+  list [expr {$scaleX == $scaleY}] $area
+} -result {1 {20.0 35.0 60.0 30.0}}
+
+test svg-aspect-30.3 {xMinYMin puts it in the near corner} -body {
+  lassign [aspectProbe {preserveAspectRatio="xMinYMin meet"}] -> -> area
+  lindex $area 1
+} -result 20.0
+
+test svg-aspect-30.4 {xMaxYMax puts it in the far one} -body {
+  lassign [aspectProbe {preserveAspectRatio="xMaxYMax meet"}] -> -> area
+  lindex $area 1
+} -result 50.0
+
+test svg-aspect-30.5 {none stretches, and only none} -body {
+  lassign [aspectProbe {preserveAspectRatio="none"}] scaleX scaleY area
+  # Two different factors and the whole box filled - the one spelling that
+  # turns a circle into an ellipse, because the file asked for it.
+  list [expr {$scaleX != $scaleY}] $area
+} -result {1 {20.0 20.0 60.0 60.0}}
+
+test svg-aspect-30.6 {slice covers the box and is cut back to it} -body {
+  lassign [aspectProbe {preserveAspectRatio="xMidYMid slice"}] scaleX scaleY area clip
+  # Covering a 60 mm box with a 2:1 drawing needs twice the factor meet
+  # would use, and what hangs over is clipped - a drawing that painted past
+  # its box would be worse than one that fell short.
+  lassign [aspectProbe {preserveAspectRatio="xMidYMid meet"}] meetX
+  list [expr {abs($scaleX - 2 * $meetX) < 0.001}] [expr {$scaleX == $scaleY}] $clip
+} -result {1 1 1}
+
+test svg-aspect-30.7 {slice crops from the side the alignment names} -body {
+  # MEASURED ON THE MATRIX, not on the returned area: since 2026-08-25 the
+  # area of a covered drawing is the box it was cut back to - the same on
+  # all three roads, which is what ISO 32000-2, 14.8.5.4.3 asks for and what
+  # the picture road always answered. WHERE the drawing sits under that box
+  # is in the translation of its cm, and that is what the alignment moves.
+  proc sliceOrigin {attribute} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\"\
+        height=\"100\" viewBox=\"0 0 200 100\" $attribute><rect width=\"200\"\
+        height=\"100\" fill=\"red\"/></svg>" -at {20 20} -size {60 60}
+    regexp {[-0-9.]+ 0 0 [-0-9.]+ ([-0-9.]+) [-0-9.]+ cm} [$doc page content] -> x
+    $doc destroy
+    return $x
+  }
+  # Min keeps the near edge where it is; Mid pulls the drawing back by half
+  # of what hangs over, so its origin sits further left.
+  expr {[sliceOrigin {preserveAspectRatio="xMidYMid slice"}]
+      < [sliceOrigin {preserveAspectRatio="xMinYMin slice"}]}
+} -result 1
+
+test svg-aspect-30.8 {a value in error falls back and is reported} -body {
+  # SVG 1.1, 7.8: a value in error is the default. Counted, because a
+  # drawing whose fitting differs from what it says is what reading the
+  # attribute was meant to prevent.
+  lassign [aspectProbe {preserveAspectRatio="sideways"}] -> -> area -> info
+  list $area $info
+} -result {{20.0 35.0 60.0 30.0} {preserveAspectRatio 1}}
+
+test svg-aspect-30.9 {the caller's own -fitMode wins over the file} -body {
+  # A script that asked for a covered box in THIS document must not have it
+  # undone by a drawing that happens to say meet.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="200"
+      height="100" viewBox="0 0 200 100" preserveAspectRatio="xMidYMid meet"
+      ><rect x="0" y="0" width="200" height="100" fill="red"/></svg>} \
+      -at {20 20} -fit {60 60} -fitMode cover
+  set clipped [regexp -all {W n} [$doc page content]]
+  $doc destroy
+  set clipped
+} -result 1
+
+test svg-aspect-30.10 {defer is accepted and passed over} -body {
+  # It applies to a <use> pointing at an <image>, which this package does
+  # not draw - so it is neither an error nor something to report.
+  lassign [aspectProbe {preserveAspectRatio="defer xMinYMin meet"}] -> -> area -> info
+  list [lindex $area 1] $info
+} -result {20.0 {}}
+
+
+# -- font-weight -----------------------------------------------------------
+
+# The font resource a drawing's text ended up in.
+proc weightProbe {markup {embed {}}} {
+  set doc [tclpdf new -unit mm -compress 0]
+  if {$embed ne {}} {
+    $doc font embed Probe $embed
+  }
+  $doc page add
+  $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
+      height=\"100\" viewBox=\"0 0 100 100\">$markup</svg>" -at {20 20} -size {60 60}
+  set names [lsort -unique [regexp -all -inline {/F[A-Za-z0-9+]+} [$doc page content]]]
+  set info [$doc svg info]
+  $doc destroy
+  return [list $names $info]
+}
+
+test svg-weight-31.1 {font-weight bold picks the bold cut} -body {
+  list [weightProbe {<text x="10" y="50" font-family="helvetica"
+          font-size="12">Hallo</text>}] \
+      [weightProbe {<text x="10" y="50" font-family="helvetica" font-size="12"
+          font-weight="bold">Hallo</text>}]
+} -result {{/FHelvetica {}} {/FHelveticaBold {}}}
+
+test svg-weight-31.2 {the numeric spellings, and where the line is} -body {
+  # CSS 2.1, 15.5 puts bold at 600 and up, which is where the corpus puts it
+  # too: 700 and 900 occur as bold, 400 and 500 as the normal weight.
+  lmap weight {400 500 600 700 900} {
+    lindex [lindex [weightProbe "<text x=\"10\" y=\"50\" font-family=\"helvetica\"\
+        font-size=\"12\" font-weight=\"$weight\">Hallo</text>"] 0] 0
+  }
+} -result {/FHelvetica /FHelvetica /FHelveticaBold /FHelveticaBold /FHelveticaBold}
+
+test svg-weight-31.3 {it is inherited and readable from style} -body {
+  list [lindex [weightProbe {<g font-weight="bold"><text x="10" y="50"
+          font-family="helvetica" font-size="12">Hallo</text></g>}] 0] \
+      [lindex [weightProbe {<text x="10" y="50" font-family="helvetica"
+          font-size="12" style="font-weight:bold">Hallo</text>}] 0]
+} -result {/FHelveticaBold /FHelveticaBold}
+
+test svg-weight-31.4 {a family with no bold cut is reported} -constraints haveFace -body {
+  # An embedded family has ONE cut per alias, and asking [TextResolve] for a
+  # bold hands the alias straight back - so the drawing came out light and
+  # said nothing. The caller sees it in [svg info] now.
+  lassign [weightProbe {<text x="10" y="50" font-family="Probe" font-size="12"
+      font-weight="bold">Hallo</text>} $::svgFace] names info
+  list [llength $names] $info
+} -result {1 {font-weight 1}}
+
+test svg-weight-31.5 {the document's own weight is not inherited by a drawing} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -style bold -size 10
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><text x="10" y="50"
+      font-family="helvetica" font-size="12">Hallo</text></svg>} \
+      -at {20 20} -size {60 60}
+  set names [lsort -unique [regexp -all -inline {/F[A-Za-z0-9+]+} [$doc page content]]]
+  $doc destroy
+  set names
+} -result /FHelvetica
+
+
+test svg-aspect-30.11 {the attribute works under -fit, not only under -size} -body {
+  # THE ORDER IS THE WHOLE OF IT: [fitExtent] cuts the named box down to the
+  # drawing's proportions, so by the time the scales are worked out both axes
+  # carry the same factor and meet, slice and none are the same arithmetic.
+  # Measured on 2026-08-25: under -fit, "none" wrote the same bytes as no
+  # attribute at all and "slice" wrote a clip around a drawing that fitted
+  # inside it. The attribute feeds the OPTIONS now, before the box is
+  # measured.
+  proc fitProbe {attribute} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    set area [$doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\"\
+        width=\"40\" height=\"20\" viewBox=\"0 0 40 20\" $attribute><rect\
+        width=\"40\" height=\"20\" fill=\"red\"/></svg>" -at {10 10} -fit {40 40}]
+    set clipped [regexp -all {W n} [$doc page content]]
+    $doc destroy
+    return [list $area $clipped]
+  }
+  list [fitProbe {}] [fitProbe {preserveAspectRatio="none"}] \
+      [fitProbe {preserveAspectRatio="xMidYMid slice"}] \
+      [fitProbe {preserveAspectRatio="xMinYMin meet"}]
+} -result {{{10.0 20.0 40.0 20.0} 0} {{10.0 10.0 40.0 40.0} 0}\
+    {{10 10.0 40 40.0} 1} {{10.0 10.0 40.0 20.0} 0}}
+
+test svg-aspect-30.12 {and the caller still wins under -fit} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  # The file says meet, the caller says cover: the caller's box is covered.
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="40"
+      height="20" viewBox="0 0 40 20" preserveAspectRatio="xMidYMid meet"
+      ><rect width="40" height="20" fill="red"/></svg>} \
+      -at {10 10} -fit {40 40} -fitMode cover
+  set clipped [regexp -all {W n} [$doc page content]]
+  $doc destroy
+  set clipped
+} -result 1
+
+
+# -- what a drawing that stops halfway leaves behind ------------------------
+#
+# [svg] passes an error on and unwinds ITS OWN brackets to zero (SvgRoot),
+# which works only as long as every bracket a drawing opens is one it counted.
+# A bare "q" written straight into the stream is not: the unwinding then
+# closes THAT one, the drawing's flipping matrix stays in force, and
+# everything set after the drawing comes out upside down and mirrored on a
+# page qpdf finds nothing wrong with.
+
+# One drawing that may fail, one thing drawn after it, and the page's bracket
+# count.
+proc svgAfter {markup} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  catch {$doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
+      height=\"100\" viewBox=\"0 0 100 100\">$markup</svg>" \
+      -at {20 20} -size {60 60}} error
+  set content [$doc page content]
+  $doc destroy
+  return [list [regexp -all {(^|\n)q(\n| )} $content] \
+      [regexp -all {(^|\n)Q(\n|$)} $content] \
+      [string match "*unknown colour*" $error]]
+}
+
+test svg-text-32.1 {a text whose paint is refused leaves no bracket open} -body {
+  # The paint is worked out BEFORE the flip is written, so the refusal
+  # reaches the caller with the stream as balanced as it was.
+  svgAfter {<text x="10" y="50" font-size="12" fill="notacolour">Hallo</text>}
+} -result {1 1 1}
+
+test svg-text-32.2 {the same text with a paint that parses} -body {
+  # The mutation of 32.1: two brackets, both closed, and no refusal - so 32.1
+  # is measuring the failure and not the arithmetic.
+  svgAfter {<text x="10" y="50" font-size="12" fill="red">Hallo</text>}
+} -result {2 2 0}
+
+test svg-text-32.3 {and what is drawn after it stands the right way up} \
+    -constraints havePdftoppm -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  catch {$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><text x="10" y="50" font-size="12"
+      fill="notacolour">Hallo</text></svg>} -at {20 20} -size {60 60}}
+  # A black bar well below the drawing. With the drawing's matrix left
+  # standing it is flipped and scaled off the page altogether, and the paper
+  # under it stays white.
+  $doc rect -at {20 150} -size {40 20} -fill black
+  set path [::tclpdfTest::scratch svg-after.pdf]
+  $doc write $path
+  $doc destroy
+  set inside [::tclpdfTest::pixel $path 40 160]
+  set above [::tclpdfTest::pixel $path 40 100]
+  file delete $path
+  list [lindex $inside 0] [lindex $above 0]
+} -result {0 255}
+
+test svg-text-32.4 {a paint server on text is DRAWN} -body {
+  # fill="url(#...)" on a <text> is ordinary SVG, and until 2026-08-25 this
+  # road could only report it: the resolution lived inside [SvgPaint] and
+  # worked from a path's box, which a line of glyphs is not. It is a building
+  # block now and the box is an argument, so the letters get their gradient
+  # and [svg info] has nothing to say.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><defs><linearGradient id="g"><stop
+      offset="0" stop-color="red"/><stop offset="1"
+      stop-color="blue"/></linearGradient></defs><text x="10" y="50"
+      font-size="12" fill="url(#g)">Hallo</text></svg>} -at {20 20} -size {60 60}
+  set content [$doc page content]
+  set info [$doc svg info]
+  $doc destroy
+  list [regexp -all {\(Hallo\) Tj} $content] \
+      [regexp -all {/Pattern cs} $content] [regexp -all {/Sp\d+ scn} $content] \
+      $info
+} -result {1 1 1 {}}
+
+test svg-text-32.5 {a paint server that resolves to nothing is still reported} -body {
+  # The mutation of 32.4, and the house rule unchanged: what cannot be
+  # honoured is set in the initial colour and counted, never refused and
+  # never guessed at. Two cases - an id nothing carries, and one that names
+  # something which is not a paint server at all.
+  set answers {}
+  foreach fill {url(#nothere) url(#r)} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
+        height=\"100\" viewBox=\"0 0 100 100\"><defs><rect id=\"r\" x=\"0\"\
+        y=\"0\" width=\"10\" height=\"10\"/></defs><text x=\"10\" y=\"50\"\
+        font-size=\"12\" fill=\"$fill\">Hallo</text></svg>" -at {20 20} -size {60 60}
+    set content [$doc page content]
+    lappend answers [list [regexp -all {\(Hallo\) Tj} $content] \
+        [regexp -all {/Pattern cs} $content] \
+        [regexp -all -line {^0 g$} $content] [$doc svg info]]
+    $doc destroy
+  }
+  set answers
+} -result {{1 0 1 {gradient 1}} {1 0 1 {gradient 1}}}
+
+test svg-text-32.6 {and the letters really carry the gradient} \
+    -constraints havePdftoppm -body {
+  # The proof no content stream can give: a pattern named in the right place
+  # still paints nothing if its matrix or its box are wrong, and a text set
+  # in black looks like a text set in a gradient to every operator count.
+  #
+  # One user unit is one millimetre here, so the two M sit from 25 mm to
+  # about 88 mm across the page with their baseline at 80 mm. The gradient
+  # runs red to blue over the line's own box, so the left stem has to come
+  # out red and the right stem blue - and black, which is what the old road
+  # painted, is neither.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><defs><linearGradient id="g"><stop
+      offset="0" stop-color="#ff0000"/><stop offset="1"
+      stop-color="#0000ff"/></linearGradient></defs><text x="5" y="60"
+      font-size="40" fill="url(#g)">MM</text></svg>} -at {20 20} -size {100 100}
+  set path [::tclpdfTest::scratch svg-textgrad.pdf]
+  $doc write $path
+  $doc destroy
+  lassign [::tclpdfTest::pixel $path 29 70 300] leftRed leftGreen leftBlue
+  lassign [::tclpdfTest::pixel $path 87 70 300] rightRed rightGreen rightBlue
+  file delete $path
+  list [expr {$leftRed > 200 && $leftBlue < 60}] \
+      [expr {$rightBlue > 200 && $rightRed < 60}] \
+      [expr {$leftGreen < 40 && $rightGreen < 40}]
+} -result {1 1 1}
+
+
+# -- the geometry the norm insists on ---------------------------------------
+
+proc shapeProbe {markup} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
+      height=\"100\" viewBox=\"0 0 100 100\">$markup</svg>" \
+      -at {20 20} -size {100 100}
+  set content [$doc page content]
+  set info [$doc svg info]
+  $doc destroy
+  return [list $content $info]
+}
+
+# The box every path POINT in a drawing falls into, in the drawing's own
+# coordinates - the operands of m, l and c alternate x and y whichever of the
+# three they belong to. A shape that leaves its own bounds says so here and
+# nowhere else: the page still looks plausible, and no checker objects.
+proc shapePoints {content} {
+  set xs {}
+  set ys {}
+  foreach line [split $content \n] {
+    if {![regexp {^\s*([-0-9.eE ]+)\s(?:m|l|c)$} $line -> numbers]} {
+      continue
+    }
+    set index 0
+    foreach number $numbers {
+      if {[incr index] % 2} {
+        lappend xs $number
+      } else {
+        lappend ys $number
+      }
+    }
+  }
+  if {![llength $xs]} {
+    return {}
+  }
+  set xs [lsort -real $xs]
+  set ys [lsort -real $ys]
+  return [list [lindex $xs 0] [lindex $ys 0] [lindex $xs end] [lindex $ys end]]
+}
+
+test svg-shape-33.1 {a corner radius is capped at half the side} -body {
+  # SVG 1.1, 9.2: "If rx is greater than half of the width of the rectangle,
+  # then set rx to half of the width." Uncapped, rx="40" on a rectangle 20
+  # wide put path points at x = -10 and x = 50 - outside the very shape they
+  # were rounding.
+  lassign [shapeProbe {<rect x="10" y="10" width="20" height="60" rx="40"
+      fill="red"/>}] content info
+  list [shapePoints $content] $info
+} -result {{10 10 30 70} {}}
+
+test svg-shape-33.2 {one radius stands in for the other} -body {
+  # SVG 1.1, 9.2: given ry alone, rx takes its value. Read as a plain zero,
+  # <rect ry="10"> came out square - an "re" and not one curve.
+  lassign [shapeProbe {<rect x="10" y="10" width="40" height="40" ry="10"
+      fill="red"/>}] content info
+  list [regexp -all -line {^.* re$} $content] \
+      [regexp -all -line {^.* c$} $content] [shapePoints $content] $info
+} -result {0 4 {10 10 50 50} {}}
+
+test svg-shape-33.3 {a zero radius rounds nothing and is no omission} -body {
+  # The other half of 9.2: rx="0" disables the ROUNDING, not the element.
+  lassign [shapeProbe {<rect x="10" y="10" width="40" height="40" rx="0"
+      fill="red"/>}] content info
+  list [regexp -all -line {^.* re$} $content] $info
+} -result {1 {}}
+
+test svg-shape-33.4 {a negative width is an error and is reported} -body {
+  # SVG 1.1, 9.2. Written through, it became an "re" with a negative operand
+  # and the rectangle grew the other way - which no reader complains about.
+  lassign [shapeProbe {<rect x="10" y="10" width="-20" height="40"
+      fill="red"/>}] content info
+  list [regexp -all -line {^.* re$} $content] $info
+} -result {0 {rect-size 1}}
+
+test svg-shape-33.5 {a zero width disables the element, and says nothing} -body {
+  # 9.2 again: "A value of zero disables rendering of the element" is the
+  # norm's own answer and not an omission, so nothing is counted.
+  lassign [shapeProbe {<rect x="10" y="10" width="0" height="40"
+      fill="red"/>}] content info
+  list [regexp -all -line {^.* re$} $content] $info
+} -result {0 {}}
+
+test svg-shape-33.6 {a negative radius on a circle is an error} -body {
+  # SVG 1.1, 9.3. Written through, r="-20" came out as a circle of radius 20
+  # - a shape the file never asked for.
+  lassign [shapeProbe {<circle cx="50" cy="50" r="-20" fill="red"/>}] content info
+  list [shapePoints $content] $info
+} -result {{} {circle-radius 1}}
+
+test svg-shape-33.7 {a zero radius disables the circle} -body {
+  # 9.3: "A value of zero disables rendering of the element." It used to be
+  # a path of three points on top of each other, which every reader draws as
+  # nothing and none of them mentions.
+  lassign [shapeProbe {<circle cx="50" cy="50" r="0" fill="red"/>}] content info
+  list [shapePoints $content] $info
+} -result {{} {}}
+
+test svg-shape-33.8 {and the ellipse takes the same two rules} -body {
+  lassign [shapeProbe {<ellipse cx="50" cy="50" rx="-20" ry="10"
+      fill="red"/>}] content negative
+  lassign [shapeProbe {<ellipse cx="50" cy="50" rx="20"
+      fill="red"/>}] zero empty
+  list [shapePoints $content] $negative [shapePoints $zero] $empty
+} -result {{} {ellipse-radius 1} {} {}}
+
+test svg-cover-30.13 {a covered drawing reports the box, not what hangs over it} -body {
+  # ISO 32000-2, 14.8.5.4.3 asks the BBox of a structure element for the
+  # rectangle enclosing the VISIBLE content, and what a clip cut away is not
+  # visible. Measured 2026-08-25: a 2:1 drawing covered into a 40 mm box
+  # answered a box reaching to x = -113 pt, over the left edge of the paper
+  # and four times as wide as what a reader sees - while the picture road at
+  # the same call answered the box itself. The same number is what [svg]
+  # hands the caller for the caption.
+  #
+  # All three roads are held against each other here, because the manual
+  # says they are the same arithmetic.
+  proc coverBox {what} {
+    set doc [tclpdf new -unit mm]
+    $doc tagged 1
+    $doc page add
+    set ::coverDoc $doc
+    switch -- $what {
+      image {
+        $doc image embed pic $::svgPhoto
+        $doc image place pic -at {20 20} -fit {40 40} -fitMode cover -alt photo
+      }
+      form {
+        $doc form create wide -size {80 20} -script {
+          $::coverDoc rect -at {0 0} -size {80 20} -fill red
+        }
+        $doc form place wide -at {20 20} -fit {40 40} -fitMode cover -alt wide
+      }
+      svg {
+        $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 200 50"><rect width="200" height="50"
+            fill="red"/></svg>} -at {20 20} -fit {40 40} -fitMode cover -alt bar
+      }
+    }
+    set path [::tclpdfTest::scratch svg-cover-$what.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    # The LAST /BBox in the file is the structure element's; a form carries
+    # one of its own, which is a different thing.
+    set boxes [regexp -all -inline {/BBox \[([^\]]*)\]} $bytes]
+    return [lindex $boxes end]
+  }
+  set image [coverBox image]
+  list [expr {[coverBox form] eq $image}] [expr {[coverBox svg] eq $image}] \
+      [expr {[lindex $image 0] > 0}]
+} -constraints havePhoto -result {1 1 1}
+
+test svg-cover-30.14 {and what the caller is handed back is that box} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set area [$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 200 50"><rect width="200" height="50" fill="red"/></svg>} \
+      -at {20 20} -fit {40 40} -fitMode cover]
+  $doc destroy
+  lmap value $area {expr {double($value)}}
+} -result {20.0 20.0 40.0 40.0}
 
 
 cleanupTests

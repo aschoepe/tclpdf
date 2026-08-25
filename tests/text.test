@@ -23,6 +23,11 @@ source [file join [file dirname [info script]] helper.tcl]
 set textFace [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveFace [file exists $textFace]
+
+# A second embedded face, for the chain the vertical gate has to walk.
+set textFaceBold [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts DejaVuSans-Bold.ttf]
+testConstraint haveFaceBold [file exists $textFaceBold]
 set type1Face [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts tsukurimashou OCRB.pfb]
 testConstraint haveType1 [file exists $type1Face]
@@ -2936,6 +2941,224 @@ test text-fit-31.7 {a -shrinkLimit outside the range is refused} -body {
   $doc destroy
   lrange $code 0 4
 } -result {TCLPDF TEXT FIT SHRINK 0}
+
+
+# What the sixth review round found in the fitting of a line (2026-08-25).
+# Three defects, each of them invisible in the numbers the stream carries and
+# plain on the page: the alignment was measured against a line that is not
+# drawn, the fit measured with other options than it draws with, and a
+# vertical line was "fitted" on the axis it does not run along.
+
+# Where the line STARTS, in points - which is where an alignment shows.
+proc fittedShift {align args} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 20
+  $doc text "Rechnungsbetrag gesamt" -at {50 50} -align $align \
+      -fit {50 8} {*}$args
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  return [format %.2f [lindex [::tclpdfTest::starts $content x] 0]]
+}
+
+# The width the line is actually DRAWN at: the size and the stretch out of the
+# stream, measured with the options the call was given.
+proc fittedWidth {box args} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 20
+  set string "Rechnungsbetrag gesamt"
+  $doc text $string -at {20 40} -fit [list $box 8] {*}$args
+  set content [::tclpdfTest::content $doc]
+  set size 20
+  set stretch 100
+  regexp {/FHelvetica ([0-9.]+) Tf} $content -> size
+  regexp {([0-9.]+) Tz} $content -> stretch
+  set width [$doc textWidth $string -size $size -stretch $stretch {*}$args]
+  $doc destroy
+  return [format %.2f $width]
+}
+
+test text-fit-31.8 {an aligned fitted line is shifted by the width it is DRAWN at} -body {
+    # -at is 50 mm = 141.73 pt and the box is 50 mm = 141.73 pt wide, so the
+    # centred line starts half a box to the left of it, 70.87, and the right
+    # aligned one a whole box, at 0. It used to be shifted by the UNFITTED
+    # width - 106.65 mm where 50 are drawn -, so the centred line moved 53.33
+    # mm instead of 25 and the right aligned one began at -18.855 pt, left of
+    # the sheet: at 300 dpi only the left aligned line was in its box.
+  list [fittedShift left] [fittedShift center] [fittedShift right]
+} -result {141.73 70.87 0.00}
+
+test text-fit-31.9 {the fit measures with the spacing it draws with} -body {
+  # -spacing and -wordSpacing are ABSOLUTE point values (Tc and Tw, 9.4.4):
+  # they do not shrink with the size, so the width is not proportional to it
+  # and the size cannot be divided out of the whole width. Measured before
+  # the fix: -size 20 -spacing 3 into a 50 mm box came out 63.89 mm, 27.8 per
+  # cent past the box. Every one of these has to land ON the box.
+  list [fittedWidth 50] [fittedWidth 50 -spacing 3] \
+      [fittedWidth 50 -wordSpacing 8] [fittedWidth 40 -spacing 2 -wordSpacing 5]
+} -result {50.00 50.00 50.00 40.00}
+
+test text-fit-31.10 {the spacing of the STATE is measured like the one of the call} -body {
+  # The same defect one road further out: the measurement used to name four
+  # options by hand, so a -spacing set in [font] was as invisible to it as one
+  # given per call.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 20 -spacing 3
+  set string "Rechnungsbetrag gesamt"
+  $doc text $string -at {20 40} -fit {50 8}
+  set content [::tclpdfTest::content $doc]
+  set size 20
+  set stretch 100
+  regexp {/FHelvetica ([0-9.]+) Tf} $content -> size
+  regexp {([0-9.]+) Tz} $content -> stretch
+  set width [$doc textWidth $string -size $size -stretch $stretch]
+  $doc destroy
+  format %.2f $width
+} -result 50.00
+
+test text-fit-31.11 {a face that kerns is measured kerned, or not, as it is drawn} \
+    -constraints haveKerning -body {
+  # -kerning is one of the four options the measurement never saw. Both calls
+  # have to land on their box - the one that kerns and the one that does not.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed kern $::kernFace
+  $doc font -family kern -size 20
+  set string "AVATAR Wave Rechnungsbetrag"
+  set widths {}
+  foreach kerning {1 0} {
+    $doc page add
+    $doc text $string -at {20 40} -fit {60 8} -kerning $kerning
+    set content [::tclpdfTest::content $doc]
+    set size 20
+    set stretch 100
+    regexp {/F\S+ ([0-9.]+) Tf} $content -> size
+    regexp {([0-9.]+) Tz} $content -> stretch
+    lappend widths [format %.2f [$doc textWidth $string -size $size \
+        -stretch $stretch -kerning $kerning]]
+  }
+  $doc destroy
+  set widths
+} -result {60.00 60.00}
+
+test text-fit-31.12 {a vertical line is not fitted, and the refusal says why} \
+    -constraints haveFace -body {
+  # -fit measures across the page and narrows the letters with Tz, and a
+  # column runs down the page while Tz does not touch it (9.4.4). It used to
+  # be accepted: a column 112.89 mm long "fitted" into a 40 mm box ran 73 mm
+  # past it, with a Tz in the stream that changed nothing. Refused like
+  # [leader] refuses the same direction, for the same reason.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font embed body $::textFace
+  set code [::tclpdfTest::refusalCode {$doc text "Rechnungsbetrag" \
+      -at {50 30} -family body -size 20 -direction ttb -fit {40 40}}]
+  set message {}
+  catch {$doc text "Rechnungsbetrag" -at {50 30} -family body -size 20 \
+      -direction ttb -fit {40 40}} message
+  $doc destroy
+  list [lrange $code 0 3] [string match {*textWidth -direction ttb*} $message]
+} -result {{TCLPDF TEXT VERTICAL fit} 1}
+
+test text-fit-31.13 {a box that leaves nothing of the line is refused} -body {
+  # The manual says a -size of zero or less is refused "rather than making the
+  # text vanish", and a computed one is no different: a content stream carries
+  # five decimals, so anything under 0.00001 pt is written as "0 Tf". Measured
+  # before the fix: -fit {1e-9 1e-9} wrote "/FHelvetica 0 Tf" and drew an
+  # empty page.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 20
+  set code [::tclpdfTest::refusalCode {$doc text "Hallo" -at {20 20} \
+      -fit {1e-9 1e-9}}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF TEXT FIT BOX}
+
+test text-fit-31.14 {a box narrower than the spacing alone is refused, not approximated} -body {
+  # The letters can be made smaller and the spacing between them cannot, so
+  # below a certain box no size fits at all. Said, rather than answered with a
+  # size that goes on falling while the line still sticks out.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 20
+  set message {}
+  catch {$doc text "Hallo Welt" -at {20 20} -fit {2 10} -spacing 5} message
+  set code [::tclpdfTest::refusalCode {$doc text "Hallo Welt" -at {20 20} \
+      -fit {2 10} -spacing 5}]
+  $doc destroy
+  list [lrange $code 0 3] [string match {*do not shrink with the letters*} $message]
+} -result {{TCLPDF TEXT FIT BOX} 1}
+
+test text-fit-31.15 {a box of NaN is refused in tclpdf's words} -body {
+  # "NaN" is a double to Tcl and compares false against everything, so the
+  # range check of the box waved it past and the arithmetic died in Tcl's own
+  # words, from inside a method the caller never named.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc text "Hallo" -at {20 20} \
+      -fit {20 NaN}}]
+  $doc destroy
+  lrange $code 0 2
+} -result {TCLPDF FIT BOX}
+
+test text-fit-31.16 {NaN is not a number for any of these, and each says so} -body {
+  # Every one of them used to be accepted: NaN passes [string is double], and
+  # a range check of the shape "$value <= 0" is false for it in both
+  # directions. What followed was either a size the writer refused pages
+  # later or a value that did nothing at all.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set answers {}
+  foreach {call pattern} {
+    {$doc text A -at {20 20} -rotate NaN} {-rotate takes an angle}
+    {$doc font -size NaN} {-size must be a positive number}
+    {$doc font -stretch NaN} {-stretch is a percentage}
+    {$doc font -spacing NaN} {-spacing takes a number of points}
+    {$doc font -wordSpacing NaN} {-wordSpacing takes a number of points}
+    {$doc font -rise NaN} {-rise takes a number of points}
+    {$doc font -leading NaN} {-leading is a line spacing}
+    {$doc font -strokeWidth NaN} {-strokeWidth is a line width}
+    {$doc text A -at {20 20} -fit {40 10} -shrinkLimit NaN} {-shrinkLimit is how far}
+  } {
+    lappend answers [catch $call message] [regexp -- $pattern $message]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1}
+
+
+test text-vertical-41.1 {ttb checks the whole fallback chain} -body {
+  # A face reached through -fallback sets the characters the family has no
+  # glyph for, with its own resource - so a standard face or a Type 1 in the
+  # chain drew its stretch ACROSS the page in the middle of a column, while
+  # [textWidth -direction ttb] measured it as if it ran down. An embedded
+  # Type 1 left an object number reserved that nothing ever filled.
+  set doc [tclpdf new -unit mm]
+  $doc font embed jp $::textFace
+  $doc page add
+  $doc font -family jp -size 14 -fallback helvetica
+  set refused [catch {$doc text "A" -at {20 20} -direction ttb} message]
+  set path [::tclpdfTest::scratch text-ttb-chain.pdf]
+  set wrote [catch {$doc write $path}]
+  $doc destroy
+  catch {file delete $path}
+  list $refused [string match {*-direction ttb needs a TrueType*} $message] $wrote
+} -constraints haveFace -result {1 1 0}
+
+test text-vertical-41.2 {a chain of TrueType faces goes through} -body {
+  set doc [tclpdf new -unit mm]
+  $doc font embed one $::textFace
+  $doc font embed two $::textFaceBold
+  $doc page add
+  $doc font -family one -size 14 -fallback two
+  set drawn [catch {$doc text "A" -at {20 20} -direction ttb}]
+  $doc destroy
+  set drawn
+} -constraints {haveFace haveFaceBold} -result 0
 
 
 cleanupTests

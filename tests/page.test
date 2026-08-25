@@ -711,4 +711,178 @@ test page-fitcheck-12.7 {the words that do not move the corner stand beside -rot
   set out
 } -result {0 0 0}
 
+test page-rotate-9.1 {a rotation that is not a number is named} -body {
+  # Asked BEFORE the modulo, which is where an empty string used to die as
+  # "can't use empty string as operand of %" - a raw Tcl error where this
+  # package promises a message of its own.
+  set doc [tclpdf new -unit mm]
+  set answers {}
+  foreach value {{} abc 1.5} {
+    lappend answers [catch {$doc page add -rotate $value} message]
+    lappend answers [string match {tclpdf:*} $message]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1 1 1 1}
+
+test page-rotate-9.2 {and a multiple of 90 still goes through} -body {
+  set doc [tclpdf new -unit mm]
+  set added [catch {$doc page add -rotate 90}]
+  $doc destroy
+  set added
+} -result 0
+
+
+# --- NaN and Inf on the way into points -------------------------------------
+#
+# [geometry toPoints] reads its value with [string is double -strict], which
+# is true for "NaN" and for "Inf". NaN then compares false against every range
+# check written as a comparison, so it travelled through this module untouched
+# and died in Tcl's own words far from the call that wrote it. [distance] is
+# the one conversion from the caller's unit into points, so it is where they
+# are turned away.
+
+test page-number-10.1 {a length that is a double and no number} -body {
+  # Measured on 2026-08-25 before the check stood: every one of these answered
+  # "can't use non-numeric floating-point value as operand of \"*\"".
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach value {NaN Inf -Inf} {
+    set code [catch {$doc distance $value} message]
+    lappend out $code [string match {tclpdf:*} $message]
+  }
+  lappend out [catch {$doc distance 20}]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 1 0}
+
+test page-number-10.2 {and the same for a coordinate, which runs through it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach value {NaN Inf} {
+    lappend out [::tclpdfTest::refusal {$doc coords $value 20}]
+    lappend out [::tclpdfTest::refusal {$doc coords 20 $value}]
+  }
+  $doc destroy
+  set out
+} -result {{TCLPDF OPTION NUMBER {a length} {}} {TCLPDF OPTION NUMBER {a length} {}}\
+    {TCLPDF OPTION NUMBER {a length} {}} {TCLPDF OPTION NUMBER {a length} {}}}
+
+test page-number-10.3 {a word is still not a measurement, in the old words} -body {
+  # The wording [geometry toPoints] has used since 1.0 stays where it was:
+  # three test files read it, and a caller who mistyped a variable name gets
+  # the message about the value rather than one about NaN. Only the double
+  # that is no number is new.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc distance abc} message]
+  $doc destroy
+  list $code [string match {*not a measurement*} $message]
+} -result {1 1}
+
+test page-number-10.4 {every drawing road refuses it, and before it writes} -body {
+  # The point of putting it in [distance]: the refusal is made once and every
+  # module that measures anything inherits it. The stream must be untouched
+  # afterwards - the value is turned away before the "q" and the mark.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc rect -at {10 10} -size {10 10}
+  set before [::tclpdfTest::content $doc]
+  set out {}
+  foreach call {
+    {rect -at {NaN 10} -size {10 10}}
+    {rect -at {10 10} -size {NaN 10}}
+    {rect -at {10 10} -size {10 10} -radius NaN}
+    {line -from {Inf 1} -to {10 10}}
+    {text x -at {10 NaN}}
+  } {
+    set code [catch {$doc {*}$call} message]
+    lappend out [expr {$code && [string match {tclpdf:*} $message]}]
+  }
+  lappend out [expr {$before eq [::tclpdfTest::content $doc]}]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 1}
+
+test page-number-10.5 {a page of NaN by NaN was accepted, because the limits are comparisons} -body {
+  # [PageBoxLimits] holds a page between 3 and 14400 pt, and NaN is false
+  # against both bounds - so the page went in and every coordinate on it came
+  # out NaN. Measured 2026-08-25.
+  set doc [tclpdf new -unit mm]
+  set out {}
+  foreach format {{NaN 200} {200 Inf} {NaN NaN}} {
+    set code [catch {$doc page add -format $format} message]
+    lappend out $code [string match {tclpdf:*-format*} $message]
+  }
+  lappend out [$doc page count]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 1 0}
+
+test page-number-10.6 {a page box too, and the page keeps the box it had} -body {
+  set doc [tclpdf new -unit mm -format a4]
+  $doc page add
+  set code [catch {$doc page box crop {10 10 NaN 200}} message]
+  set media [$doc page box media]
+  $doc destroy
+  list $code [string match {tclpdf:*} $message] [lindex $media 2]
+} -result {1 1 210.0}
+
+test page-number-10.7 {-fit takes lengths, and NaN is not one} -body {
+  # [fitCheck] read the box with [string is double -strict] and held it above
+  # zero with "$value <= 0", which is FALSE for NaN - so the box was waved
+  # past and died in the arithmetic. text.tcl had to repeat the check in its
+  # own words for exactly that reason.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach box {{NaN 40} {40 Inf} {-Inf 40}} {
+    lappend out [::tclpdfTest::refusal {$doc fitCheck [dict create fit $box] "image place"}]
+  }
+  $doc destroy
+  set out
+} -result {{TCLPDF FIT BOX {NaN 40} {image place}} {TCLPDF FIT BOX {40 Inf} {image place}}\
+    {TCLPDF FIT BOX {-Inf 40} {image place}}}
+
+test page-number-10.8 {an angle that is a double and no angle} -body {
+  # NaN is unequal to 0 - as it is to everything, itself included - so a NaN
+  # -rotate walked into the refusal about -fit and -rotate together and was
+  # reported as a combination of options; without -fit it walked past it and
+  # into cos(). All three roads that turn a placement come through [fitCheck].
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach options {{rotate NaN} {rotate Inf} {fit {40 40} rotate NaN}} {
+    lappend out [::tclpdfTest::refusal {$doc fitCheck $options "image place"}]
+  }
+  # A word is not an angle at all, and each road says so in its own words -
+  # this one is not judged here.
+  lappend out [catch {$doc fitCheck {rotate x} "image place"}]
+  $doc destroy
+  set out
+} -result {{TCLPDF OPTION NUMBER -rotate {image place}} {TCLPDF OPTION NUMBER -rotate {image place}}\
+    {TCLPDF OPTION NUMBER -rotate {image place}} 0}
+
+test page-number-10.9 {the sizing options, before the arithmetic reads them} -body {
+  # [geometry checkFit] holds these above zero, and "$value <= 0" is false for
+  # NaN - so they arrived in [fitExtent] and died as an operand of "*" or "/".
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  foreach options {
+    {size {NaN 10} width {} height {} scale {}}
+    {size {} width Inf height {} scale {}}
+    {size {} width {} height NaN scale {}}
+    {size {} width {} height {} scale NaN}
+  } {
+    lappend out [::tclpdfTest::refusal {$doc fitExtent 40 20 $options}]
+  }
+  lappend out [$doc fitExtent 40 20 {size {} width 20 height {} scale {}}]
+  $doc destroy
+  set out
+} -result {{TCLPDF OPTION NUMBER -size {}} {TCLPDF OPTION NUMBER -width {}}\
+    {TCLPDF OPTION NUMBER -height {}} {TCLPDF OPTION NUMBER -scale {}} {20 10.0}}
+
 cleanupTests

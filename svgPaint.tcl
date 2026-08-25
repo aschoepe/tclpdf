@@ -95,10 +95,9 @@ oo::define ::tclpdf::document::document {
       if {![string match "url(*" $value]} {
         continue
       }
-      set id [string trim [string range $value 4 end-1] "#'\" "]
-      set resolved [my SvgGradient $id]
+      set resolved [my SvgPaintServer $value [my state svgShapeBox]]
       if {$resolved ne {}} {
-        dict set style $key [list pattern $resolved]
+        dict set style $key $resolved
       } else {
         dict set style $key none
         my SvgSkipped gradient
@@ -211,6 +210,32 @@ oo::define ::tclpdf::document::document {
     return
   }
 
+  # A paint value that names a paint server - url(#id) - as the value to paint
+  # with: {pattern <resource>}, or the empty string when there is no such
+  # server or it cannot be honoured. The caller then reports it through
+  # [svg info] and paints something visible instead.
+  #
+  # THE BOX IS AN ARGUMENT rather than read from the state, and that is the
+  # whole reason this is a building block instead of four lines inside
+  # [SvgPaint]. A shape has its box the moment its operators exist; a line of
+  # text has none until it has been measured - and under the default
+  # gradientUnits="objectBoundingBox" that box IS the gradient's coordinate
+  # system, so whoever knows it has to say so. It is put into the state around
+  # the call, where [SvgGradient] has always looked for it.
+  method SvgPaintServer {value box} {
+    if {![string match "url(*" $value]} {
+      return {}
+    }
+    set saved [my state svgShapeBox]
+    my state svgShapeBox $box
+    set resolved [my SvgGradient [string trim [string range $value 4 end-1] "#'\" "]]
+    my state svgShapeBox $saved
+    if {$resolved eq {}} {
+      return {}
+    }
+    return [list pattern $resolved]
+  }
+
   # A stroke-dasharray as the lengths of a PDF dash array, or an empty list
   # for a solid line.
   #
@@ -316,7 +341,7 @@ oo::define ::tclpdf::document::document {
     dict set style opacity {}
     foreach key {fill stroke stroke-width stroke-linecap stroke-linejoin
         stroke-dasharray fill-opacity stroke-opacity fill-rule opacity
-        font-size font-family text-anchor} {
+        font-size font-family font-weight text-anchor} {
       if {![dict exists $style $key]} {
         dict set style $key {}
       }
@@ -384,11 +409,10 @@ oo::define ::tclpdf::document::document {
   # document-wide counter instead, and the reuse key is what actually makes
   # two uses interchangeable: the gradient plus every argument of the pattern.
   method SvgGradient {id} {
-    set defs [my state svgDefs]
-    if {![dict exists $defs $id]} {
+    set node [my SvgDefinition $id]
+    if {$node eq {}} {
       return {}
     }
-    set node [dict get $defs $id]
     set kind [string map {svg: {}} [::tclpdf::xml name $node]]
     if {$kind ni {linearGradient radialGradient}} {
       return {}
@@ -400,9 +424,9 @@ oo::define ::tclpdf::document::document {
     if {[llength $stops] < 2} {
       set reference [::tclpdf::xml attribute $node href \
           [::tclpdf::xml attribute $node xlink:href]]
-      set parent [string trimleft $reference #]
-      if {$parent ne {} && [dict exists $defs $parent]} {
-        set stops [my SvgStops [dict get $defs $parent]]
+      set inheritedFrom [my SvgDefinition [string trimleft $reference #]]
+      if {$inheritedFrom ne {}} {
+        set stops [my SvgStops $inheritedFrom]
       }
     }
     if {[llength $stops] < 2} {
@@ -526,4 +550,4 @@ oo::define ::tclpdf::document::document {
   # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.5
+package provide tclpdf::svgPaint 1.6

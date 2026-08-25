@@ -264,6 +264,17 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
+    # AND A SIZE IS A SIZE: two lengths ABOVE zero, the very check
+    # [image place] takes ([checkFit] in geometry.tcl, which reads -size out
+    # of the dict handed to it). Measured on 2026-08-25, before this stood
+    # here: "-size {0 0}" on a function shading wrote "/Matrix
+    # [0 0 0 85.03937 0 0]" - singular, so the shading covers nothing and no
+    # reader says why - and on an axial one a "0 0 re W n" clip, a clipping
+    # path of no area with the "sh" inside it. A negative one turned the
+    # rectangle inside out. Run AFTER the shape check above, which words its
+    # refusals in this module's own terms; what is left for [checkFit] here
+    # is the sign.
+    ::tclpdf::geometry checkFit $options $what
     # /Extend is two booleans (Table 78, Table 80): whether the gradient
     # goes on beyond its start and its end. One value used to pass the
     # start and fail on the missing end - after everything was written.
@@ -326,6 +337,29 @@ oo::define ::tclpdf::document::document {
     if {$space eq "Separation"} {
       return -code error "tclpdf: a shading in a separation colour space is\
           not supported - give the alternate space directly"
+    }
+    # AND NOT A PATTERN. ISO 32000-2, 8.7.4.5.1 with Tables 78 and 80: the
+    # ColorSpace of a shading dictionary "shall not be a Pattern colour
+    # space" - a shading is what a pattern is MADE of, and a shading painted
+    # in patterns has no way down to actual ink.
+    #
+    # This is the one special space that got through. Lab, ICCBased and
+    # DeviceN are refused by [::tclpdf::color space] before they arrive,
+    # Separation by the line above - and {pattern <name>} parses cleanly and
+    # answers "Pattern", so it walked straight into the dictionary. Measured
+    # on 2026-08-25: "/ColorSpace /Pattern" stood in the file, qpdf --check
+    # passed it, and poppler warned once and drew NOTHING. Asked here rather
+    # than in each builder because every one of the seven types collects its
+    # colours through this method - the stops of a gradient, the vertices of
+    # a mesh, the corners of a patch.
+    if {$space eq "Pattern"} {
+      return -code error -errorcode {TCLPDF SHADING PATTERN} \
+          "tclpdf: a shading cannot be painted in a pattern - ISO 32000-2,\
+          8.7.4.5.1 says the colour space of a shading shall not be a Pattern\
+          colour space, and a reader given one draws nothing at all. A shading\
+          is what a shading pattern is made of: build the gradient in device\
+          colours and register it with \"shading pattern\", rather than naming\
+          a pattern among its colours"
     }
     return [list $space $parsed]
   }
@@ -528,6 +562,20 @@ oo::define ::tclpdf::document::document {
     set domain [my ShadingDomain [dict get $options domain] $what]
     set expression [my ShadingExpression [dict get $options expression] $what]
     set matrix [my ShadingMatrix $options $domain]
+    # The /Matrix of a type 1 shading (Table 77) is built here rather than
+    # handed in, so [::tclpdf::geometry check] never sees it - but it is
+    # written into the file like any other and collapses the same way. Judged
+    # over the numbers that reach the file, which is what [singular] is for:
+    # a box small enough to round to nothing maps the whole domain onto a
+    # point, and the shading covers nothing.
+    if {[::tclpdf::geometry singular $matrix]} {
+      return -code error "tclpdf: the box -at and -size give $what is too\
+          small to place a shading in: its /Matrix comes out as\
+          {[join [lmap value $matrix {::tclpdf::pdfObj num $value}] { }]},\
+          which is singular, and a reader draws nothing under it. A PDF real\
+          holds five decimals (7.3.3), so an extent below 0.00001 pt is zero\
+          as far as the file is concerned"
+    }
     # Everything above can still refuse; from here on objects are written.
     my RequireVersion 1.3 "shading"
     my ColourSpaceUsed [lindex $space 0] $what

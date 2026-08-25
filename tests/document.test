@@ -944,9 +944,16 @@ test document-strings-24.5 {no module builds a string past the document unrecord
   # and reached a reader as empty. The guard above could not see it, because it
   # only ever looked for pdfObj. So this table sweeps the serialiser too.
   set allowedSerialize {
-    import.tcl {2 {one site hands a name that is ALREADY encrypted straight back out, the other
-        is ImportSerialize, which sends every string of the value through the document seams
-        first - that is the fix, and it has to stay the only way in}}
+    import.tcl {5 {every one of them serialises a value whose strings have ALREADY been through
+        [ImportStrings], which is the document seam - so a second pass would encrypt the
+        ciphertext. Where that happens changed on 2026-08-25: the conversion moved into the
+        reservation loop, because it carries the last refusal of the whole import and used to
+        fall with every number handed out (a caught [pdf import] left the document unwritable).
+        Three of the five read the converted value back out of the strings dict, the fourth is
+        the page's own /Resources converted at import.tcl:178, and the fifth is ImportSerialize
+        itself, still the only road for anything that has not been converted yet. The one that
+        does NOT go through the seam is the /Name of an optional content configuration: in an
+        encrypted document it is already ciphertext and is re-emitted as it stands}}
     update.tcl {1 {an update session refuses an encrypted file at the reader, so no encryptor
         is ever running when this one writes}}
     sign.tcl {1 {same reason as the signature dictionary above: never in an encrypted document}}
@@ -1110,6 +1117,28 @@ test document-lazy-14.4 {an /OpenAction destination goes through the one Destina
   $doc destroy
   list [expr {$byHand eq $fromView}] [string match {*/XYZ*} $fromView]
 } -result {1 1}
+
+
+test document-version-25.1 {an empty -version is a value, not the getter} -body {
+  # Written with a default argument, "version {}" fell into the getter, the
+  # setter never ran, and the answer was a variable that had never been set.
+  # [tclpdf new -version {}] died with a raw Tcl error and
+  # [configure -version {}] left [cget -version] answering the empty string
+  # over a file whose header said 1.3.
+  set refused [catch {tclpdf new -version {}} message]
+  set doc [tclpdf new -unit mm -version 1.3]
+  set second [catch {$doc configure -version {}} other]
+  set answer [$doc cget -version]
+  $doc destroy
+  list $refused [string match {tclpdf:*} $message] $second $answer
+} -result {1 1 1 1.3}
+
+test document-version-25.2 {the getter still answers without an argument} -body {
+  set doc [tclpdf new -unit mm -version 1.5]
+  set answer [$doc cget -version]
+  $doc destroy
+  set answer
+} -result 1.5
 
 
 cleanupTests

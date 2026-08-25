@@ -1456,10 +1456,17 @@ test structure-16.4 {a container without a mark of its own begins where its firs
 
 test structure-16.5 {without a position the page destination is a plain /Fit} -body {
   # A Link element that holds nothing but its annotation begins at an OBJR,
-  # which has a page and no position - and an element with no content at
-  # all has neither, and gets page 1 whatever page it was opened on. Both
-  # are written as /Fit on that page rather than an /XYZ with an invented
-  # coordinate.
+  # which has a page and no position; an element with no content at all has
+  # neither. Both are written as /Fit on their page rather than an /XYZ with
+  # an invented coordinate.
+  #
+  # WHICH PAGE THE EMPTY ONE GETS changed on 2026-08-25. It used to be page
+  # 1 whatever page the element was opened on - "a destination has to name
+  # SOME page and the first is the one a reader can least be misled by",
+  # which is true as far as it goes and rests on a premise that is not: an
+  # element with no content still has a place, namely the page it was
+  # DECLARED on, and structure.tcl records it. A link to a container on page
+  # three now goes to page three instead of to the front of the document.
   set doc [tclpdf new -unit mm -compress 0 -version 2.0]
   $doc tagged 1
   $doc page add
@@ -1476,10 +1483,13 @@ test structure-16.5 {without a position the page destination is a plain /Fit} -b
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
-  lassign [pageObjects $bytes] first second
+  lassign [pageObjects $bytes] first second third
   lassign [gotoTargets $bytes {/Subtype /Link [^>]*}] toEmpty .
   lassign [gotoTargets $bytes {/Title \(Zum Anker\) [^>]*}] toAnchor .
-  list [expr {$toEmpty eq "\[$first 0 R /Fit\]"}] \
+  # The empty Sect was opened on the third page, the Link element on the
+  # second - neither of them on the first, which is what the answer used to
+  # be for the empty one.
+  list [expr {$toEmpty eq "\[$third 0 R /Fit\]"}] \
       [expr {$toAnchor eq "\[$second 0 R /Fit\]"}]
 } -result {1 1}
 
@@ -2799,5 +2809,294 @@ test structure-33.4 {without a 2.0 construct the same document lowers without a 
   $doc destroy
   list $code $version
 } -result {0 1.7}
+
+# --- 34. a tag that says nothing -----------------------------------------
+
+test structure-34.1 {an empty tag with nothing open is refused, not dropped} -body {
+  # "-tag $tag" with an empty variable. Every other unusable tag is named
+  # and refused; this one used to fall through in silence and the text went
+  # onto the page outside the tree - a paragraph veraPDF calls clean and a
+  # screen reader never reaches.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set tag {}
+  set code [catch {$doc text "unsichtbar" -at {20 20} -tag $tag} err]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Refused, in tclpdf's words - and nothing drawn on the way out.
+  list $code [string match "tclpdf: -tag is empty*" $err] \
+      [string match "*BDC*" $stream]
+} -result {1 1 0}
+
+test structure-34.2 {the same empty tag inside an open element still marks} -body {
+  # The refusal is only where nothing would come of it. Drawn inside an open
+  # paragraph an empty tag means what no tag means, and the mark belongs to
+  # that paragraph - refusing here would break every caller that passes its
+  # tag through.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set tag {}
+  $doc structure P -script {$doc text "drin" -at {20 20} -tag $tag}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp -all {/P <</MCID \d+>> BDC} $stream
+} -result 1
+
+test structure-34.3 {an empty tag inside a container is refused as well} -body {
+  # A Sect holds elements and no mark, so the empty tag has no home here
+  # either - and used to be dropped just as silently.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set tag {}
+  set code [catch {
+    $doc structure Sect -script {$doc text "unsichtbar" -at {20 20} -tag $tag}
+  } err]
+  $doc destroy
+  list $code [string match "tclpdf: -tag is empty*" $err]
+} -result {1 1}
+
+test structure-34.4 {an artifact kind behind a structure type is refused} -body {
+  # "-tag {P Pagination}": the second word is read as the artifact kind and
+  # was then dropped, because only an artifact carries one at the bracket.
+  # Which of the two the caller meant is not for this module to guess.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc text "kopf" -at {20 20} -tag {P Pagination}} err]
+  $doc destroy
+  list $code [string match "tclpdf: -tag \"P Pagination\"*one word*" $err]
+} -result {1 1}
+
+test structure-34.5 {the artifact with a kind still passes} -body {
+  # The counter-direction: the list form is how an artifact names its kind,
+  # and it writes the same bracket as before.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc text "Seite 1" -at {20 20} -tag {Artifact Pagination Header}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {/Artifact <</Type /Pagination /Subtype /Header>> BDC} $stream
+} -result 1
+
+# --- 35. an attribute that is not a number -------------------------------
+
+test structure-35.1 {a bbox of non-numbers is refused in tclpdf's words} -body {
+  # The four values went straight into an addition, and the caller got Tcl's
+  # own "can't use non-numeric string as operand of +" - against the promise
+  # that every refusal of this package begins with "tclpdf:".
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {
+    $doc structure Figure -alt "ein Bild" -bbox {a b c d} -script {}
+  } err]
+  $doc destroy
+  list $code [string match "tclpdf: -bbox takes four numbers*" $err]
+} -result {1 1}
+
+test structure-35.2 {a bbox of numbers is written as before} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {
+    $doc structure Figure -alt "ein Bild" -bbox {20 20 30 10} -script {
+      $doc rect -at {20 20} -size {30 10} -fill black
+    }
+  } err]
+  $doc destroy
+  list $code $err
+} -result {0 {}}
+
+# --- 36. the error codes -------------------------------------------------
+#
+# Since 2026-08-25 every refusal of the four structure modules carries an
+# -errorcode, and the class is the contract: the message is prose and may be
+# reworded at any time, the code may not. Measured before: [structure
+# NoSuchType -script {}] answered with errorCode NONE, so a caller could tell
+# a misspelt type from a broken tree only by matching on the message.
+#
+# One test per class rather than one per refusal - what has to hold is that
+# the class says what a caller would DO about it, and that the third word
+# means the same thing everywhere inside its class. Plus one that counts the
+# refusals which still reach a caller with no code at all.
+
+# A document of the shape these tests need, the script run in it, and the
+# -errorcode of the refusal it makes. A fresh document every time and on
+# purpose: a refused call is meant to leave nothing behind, and a shared
+# document would prove the second code against the state the first left.
+proc structureRefusal {script args} {
+  set options [dict merge {-version 1.7 -tagged 1} $args]
+  set doc [tclpdf new -unit mm -version [dict get $options -version]]
+  if {[dict get $options -tagged]} {
+    $doc tagged 1
+  }
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [::tclpdfTest::refusalCode $script]
+  $doc destroy
+  return $code
+}
+
+test structure-code-36.1 {every refusal in the four modules carries a code} -body {
+  # Counted in the source, not by calling every one of them: most need a
+  # fixture of their own and the question is about the module as a whole.
+  lmap module {structure.tcl structureWrite.tcl structureDest.tcl \
+      structureReport.tcl} {
+    ::tclpdfTest::refusalsWithoutCode $module
+  }
+} -result {0 0 0 0}
+
+test structure-code-36.2 {TYPE - the word naming the type cannot be used} -body {
+  # The third word is the vocabulary the word was measured against, and
+  # never the word itself: structure types, artifact types, artifact
+  # subtypes, and what -tag takes on a drawing call.
+  lmap script {
+    {$doc structure NoSuchType -script {}}
+    {$doc text "x" -at {20 20} -tag {P Pagination}}
+    {$doc text "x" -at {20 30} -tag {Artifact NoSuch}}
+    {$doc text "x" -at {20 40} -tag {Artifact Layout Header}}
+  } {structureRefusal $script}
+} -result {{TCLPDF STRUCTURE TYPE structure} {TCLPDF STRUCTURE TYPE tag}\
+    {TCLPDF STRUCTURE TYPE artifact} {TCLPDF STRUCTURE TYPE subtype}}
+
+test structure-code-36.3 {PLACE - a known type where it may not stand} -body {
+  # The third word is the rule of Annex L that refused it, so a caller can
+  # tell "this type belongs elsewhere" from "this parent takes other
+  # children" without reading the prose.
+  lmap script {
+    {$doc structure TR -script {}}
+    {$doc structure Table -script {$doc structure P -script {}}}
+    {$doc structure Span -script {}}
+    {$doc structure P -script {$doc structure Sect -script {}}}
+    {$doc structure Table -script {
+      $doc structure THead -script {}
+      $doc structure THead -script {}
+    }}
+    {$doc structure Table -script {
+      $doc structure TR -script {}
+      $doc structure Caption -script {}
+    }}
+    {$doc structure P -script {
+      $doc structure Ruby -script {$doc structure RB -script {}}
+    }}
+  } {structureRefusal $script}
+} -result {{TCLPDF STRUCTURE PLACE parent} {TCLPDF STRUCTURE PLACE child}\
+    {TCLPDF STRUCTURE PLACE inline} {TCLPDF STRUCTURE PLACE leaf}\
+    {TCLPDF STRUCTURE PLACE duplicate} {TCLPDF STRUCTURE PLACE caption}\
+    {TCLPDF STRUCTURE PLACE sequence}}
+
+test structure-code-36.4 {ATTRIBUTE - the option, whatever is wrong with it} -body {
+  # The third word is the option without its dash, the way tableLayout.tcl
+  # names a style key: a wrong shape, a wrong value and an option on the
+  # wrong type are one thing to the caller - that option.
+  lmap script {
+    {$doc structure Figure -alt "x" -bbox {a b c d} -script {}}
+    {$doc structure P -lang de_DE -script {}}
+    {$doc structure P -scope Row -script {}}
+  } {structureRefusal $script}
+} -result {{TCLPDF STRUCTURE ATTRIBUTE bbox} {TCLPDF STRUCTURE ATTRIBUTE lang}\
+    {TCLPDF STRUCTURE ATTRIBUTE scope}}
+
+test structure-code-36.5 {VERSION - raising the version is the whole remedy} -body {
+  # Kept apart from TYPE and ATTRIBUTE although a type and an attribute
+  # value are what is refused: the caller does not have to change either of
+  # them, only the version - which is the one thing the code has to say.
+  lmap script {
+    {$doc structure Aside -script {}}
+    {$doc structure L -numbering Ordered -script {}}
+    {$doc link -at {20 16} -size {10 6} -structure ziel -tooltip "T"}
+  } {structureRefusal $script}
+} -result {{TCLPDF STRUCTURE VERSION type} {TCLPDF STRUCTURE VERSION attribute}\
+    {TCLPDF STRUCTURE VERSION destination}}
+
+test structure-code-36.6 {NAME - an identifier, and which of the two} -body {
+  # The third word is what is wrong with the identifier, the fourth which
+  # namespace it lives in - -name, this package's handle for destinations,
+  # or -id, the /ID of 14.7.2. The last one is the only refusal that comes
+  # from the writer, and it carries the same class.
+  lmap script {
+    {$doc structure Sect -name eins -script {}
+     $doc structure Sect -name eins -script {}}
+    {$doc structure P -id a -script {}
+     $doc structure P -id a -script {}}
+    {$doc link -at {20 40} -size {10 6} -structure fehlt -tooltip "T"
+     $doc write [::tclpdfTest::scratch structcode-missing.pdf]}
+  } {structureRefusal $script -version 2.0}
+} -result {{TCLPDF STRUCTURE NAME duplicate name}\
+    {TCLPDF STRUCTURE NAME duplicate id} {TCLPDF STRUCTURE NAME unknown name}}
+
+test structure-code-36.7 {STATE - the document, not the arguments} -body {
+  # The third word is the call the state refuses. All three are answered by
+  # doing something EARLIER, which is what sets them apart from ARGUMENT.
+  lmap script {
+    {$doc text "x" -at {20 20}
+     $doc tagged 1}
+    {$doc text "EU" -at {20 20} -expansion "European Union"}
+    {$doc link -at {20 16} -size {10 6} -structure ziel -tooltip "T"}
+  } {structureRefusal $script -tagged 0 -version 2.0}
+} -result {{TCLPDF STRUCTURE STATE tagged} {TCLPDF STRUCTURE STATE expansion}\
+    {TCLPDF STRUCTURE STATE destination}}
+
+test structure-code-36.8 {ARGUMENT - the call itself is malformed} -body {
+  # The third word is the argument at fault. A missing -script is not a
+  # tree problem and not a state problem: nothing about the document would
+  # make the call right.
+  lmap script {
+    {$doc structure P}
+    {$doc tagged maybe}
+    {$doc tagged 1 2}
+  } {structureRefusal $script}
+} -result {{TCLPDF STRUCTURE ARGUMENT script} {TCLPDF STRUCTURE ARGUMENT tagged}\
+    {TCLPDF STRUCTURE ARGUMENT tagged}}
+
+
+test structure-note-37.1 {the automatic Note id steps past what is taken} -body {
+  # The number is the element's position, so "Note7" is a name the CALLER
+  # may have put on an unrelated element with -id - and then the Note that
+  # happens to land in position 7 was refused for a duplicate nobody could
+  # see coming, in a value nobody chose.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set ::structureNoteDoc $doc
+  $doc structure P -id Note2 -script {
+    $::structureNoteDoc text "one" -at {20 20}
+  }
+  set second [catch {$doc structure Note -script {
+    $::structureNoteDoc text "two" -at {20 30}
+  }} message]
+  set path [::tclpdfTest::scratch structure-note.pdf]
+  set wrote [catch {$doc write $path}]
+  $doc destroy
+  catch {file delete $path}
+  unset ::structureNoteDoc
+  list $second $wrote
+} -result {0 0}
+
+test structure-note-37.2 {and an id the caller gives twice is still refused} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set ::structureNoteDoc $doc
+  $doc structure P -id mine -script {$::structureNoteDoc text "one" -at {20 20}}
+  set second [catch {$doc structure P -id mine -script {
+    $::structureNoteDoc text "two" -at {20 30}
+  }} message options]
+  $doc destroy
+  unset ::structureNoteDoc
+  list $second [lrange [dict get $options -errorcode] 0 3]
+} -result {1 {TCLPDF STRUCTURE NAME duplicate}}
+
 
 cleanupTests

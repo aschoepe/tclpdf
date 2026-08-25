@@ -282,7 +282,7 @@ oo::define ::tclpdf::document::document {
     }
     set height [dict get $options height]
     if {$height ne {} && $height ne "max"
-        && (![string is double -strict $height] || $height < 0)} {
+        && (![::tclpdf::text::finite $height] || $height < 0)} {
       return -code error "tclpdf: -height takes a distance of 0 or more, or\
           \"max\" for the rest of the type area, not \"$height\""
     }
@@ -319,13 +319,25 @@ oo::define ::tclpdf::document::document {
       set gutter [::tclpdf::geometry fromPoints \
           [::tclpdf::geometry toPoints 5 mm] [my cget -unit]]
       dict set options gutter $gutter
-    } elseif {![string is double -strict $gutter] || $gutter < 0} {
+    } elseif {![::tclpdf::text::finite $gutter] || $gutter < 0} {
       return -code error "tclpdf: -gutter takes a distance of 0 or more, not\
           \"$gutter\""
     }
     set balance [dict get $options balance]
     if {![string is boolean -strict $balance]} {
       return -code error "tclpdf: -balance takes a boolean, not \"$balance\""
+    }
+    # Checked HERE with the other booleans, and not where it is read. It used
+    # to be read raw at the emergency break in the line breaker, so
+    # "-emergencyHyphen maybe" was accepted by the call, drew whatever fitted,
+    # and died in Tcl's own words from inside an "if" the moment a word turned
+    # out too long for its line - a refusal that depends on the text. Asked
+    # with [dict exists] like -hyphenate below: [textLines] passes a shorter
+    # list, and a key that is not there cannot have been given a value.
+    if {[dict exists $options emergencyHyphen]
+        && ![string is boolean -strict [dict get $options emergencyHyphen]]} {
+      return -code error "tclpdf: -emergencyHyphen takes a boolean, not\
+          \"[dict get $options emergencyHyphen]\""
     }
     if {$columns > 1 && $height ne "max" && !$paginate} {
       return -code error "tclpdf: -columns fills one column to the bottom of\
@@ -431,7 +443,9 @@ oo::define ::tclpdf::document::document {
   method TextBlockDistances {options} {
     foreach name {indent indentRight firstIndent paragraphSpacing} {
       set value [dict get $options $name]
-      if {![string is double -strict $value]} {
+      # [text::finite] rather than [string is double]: see the proc in
+      # text.tcl for what a NaN costs once it is past a check.
+      if {![::tclpdf::text::finite $value]} {
         return -code error "tclpdf: -$name takes a distance in the document\
             unit, not \"$value\""
       }
@@ -1062,7 +1076,20 @@ oo::define ::tclpdf::document::document {
       set top [expr {[dict get $line running] * $leading + $spacings + $advance}]
       # Once one line has been held back, everything after it goes with it -
       # otherwise a short line would jump ahead of a long one.
-      if {[llength $rest] || ($limit ne {} && $top + $leading > $limit)} {
+      # A HAIR OF TOLERANCE ON THE COMPARISON, and it is not cosmetic. Both
+      # sides are sums of binary floating point numbers - the top is a
+      # running number times the leading plus whatever paragraph spacing came
+      # before it, the limit a height a caller gave or one [TextBalanceLimit]
+      # built out of the same leading - and "six lines of 4.23333 mm" comes
+      # out differently depending on which way it was added up. Measured:
+      # 5 * leading + leading was 25.400000000000002 against a limit of 25.4,
+      # the sixth line was held back for two parts in 10^16, and three
+      # balanced columns of eighteen lines came out 7/7/4 where 6/6/6 was
+      # there to be had. The tolerance is a millionth of a line: far below
+      # anything a page can show, far above any rounding a column of lines
+      # can accumulate.
+      if {[llength $rest] || ($limit ne {}
+          && $top + $leading > $limit + $leading * 1e-6)} {
         lappend rest $line
         continue
       }
@@ -1396,7 +1423,23 @@ oo::define ::tclpdf::document::document {
     if {$total > $maximum * $columns} {
       return {}
     }
-    set limit [expr {ceil($total / double($columns) / $leading) * $leading}]
+    # THE FIRST CANDIDATE IS COUNTED IN LINES, not in millimetres. It is the
+    # total height spread over n columns, rounded up to a whole line - and
+    # the rounding has to be done against a tolerance rather than by [ceil]
+    # alone, because the quotient is a ratio of two binary floating point
+    # numbers and lands beside the whole number it is. Measured: 18 lines
+    # over three columns gave 6.000000000000001, [ceil] answered 7, the
+    # candidate of seven lines succeeded at the first try - the last column
+    # takes the last line - and 6/6/6 was never tried at all. The block came
+    # out 7/7/4, three lines apart where the manual promises at most n-1 and
+    # only "when the line count does not divide"; here it divides. Two
+    # columns of twelve lines came out 7/5 the same way.
+    #
+    # The tolerance is relative to the quotient, which is a NUMBER OF LINES
+    # and grows with the block: an absolute epsilon that is right for six
+    # lines is too small for six hundred.
+    set steps [expr {$total / double($columns) / $leading}]
+    set limit [expr {ceil($steps - max(1.0, $steps) * 1e-9) * $leading}]
     while {$limit <= $maximum} {
       set rest $lines
       for {set column 0} {$column < $columns && [llength $rest]} {incr column} {

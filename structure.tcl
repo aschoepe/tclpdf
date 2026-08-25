@@ -50,6 +50,41 @@
 # action a link or a bookmark uses to point at an element. The type tables
 # below are shared with them under ::tclpdf::structure.
 #
+# EVERY REFUSAL CARRIES A CODE, and all four files share one space: a caller
+# traps "TCLPDF STRUCTURE ..." whichever of them refused. The message is prose
+# and no contract - the code is. Seven classes, cut by what the caller has to
+# DO about them:
+#
+#   TYPE       the word naming the type cannot be used here. The third word
+#              is the vocabulary it was measured against: structure (14.8.4
+#              and Annex M), artifact or subtype (Tables 330 and 331), tag
+#              (what -tag accepts on a drawing call).
+#   PLACE      a type the standard knows, in a place it does not allow. The
+#              third word is the rule that refused it: parent, child, inline,
+#              leaf, duplicate, caption, sequence.
+#   ATTRIBUTE  an option's value is wrong, or the option belongs on another
+#              type. The third word is the option without its dash: lang,
+#              scope, numbering, bbox, colSpan, rowSpan, expansion.
+#   VERSION    what was asked for needs a newer PDF version than the document
+#              has, and raising it is the whole remedy. The third word is
+#              what needs it: type, attribute, destination.
+#   NAME       an identifier. The third word is what is wrong with it,
+#              duplicate or unknown; the word after it names the namespace -
+#              name, this package's handle for destinations, or id, the /ID
+#              of 14.7.2.
+#   STATE      the document's state refuses the call, not its arguments: not
+#              tagged, tagged too late, closed out of order. The third word
+#              is the call at issue: tagged, element, expansion, destination.
+#   ARGUMENT   the call itself is malformed - a missing -script, a [tagged]
+#              that got no boolean. The third word is the argument at fault:
+#              tagged, script.
+#
+# WITHIN A CLASS THE THIRD WORD MEANS ONE THING, never two: a trap reading
+# [lindex $code 3] gets a placement rule from PLACE and an option name from
+# ATTRIBUTE, and nothing that is sometimes a standard's word and sometimes a
+# name the caller chose. That mixture is what the font modules were caught
+# with, and it makes the code no better than the message.
+#
 
 package require Tcl 8.6.11-
 package require TclOO
@@ -316,11 +351,13 @@ oo::define ::tclpdf::document::document {
       return [expr {$value eq {} ? 0 : $value}]
     }
     if {[llength $args] > 1} {
-      return -code error "tclpdf: tagged takes at most one value"
+      return -code error -errorcode [list TCLPDF STRUCTURE ARGUMENT tagged] \
+          "tclpdf: tagged takes at most one value"
     }
     set value [lindex $args 0]
     if {![string is boolean -strict $value]} {
-      return -code error "tclpdf: tagged takes a boolean, not \"$value\""
+      return -code error -errorcode [list TCLPDF STRUCTURE ARGUMENT tagged] \
+          "tclpdf: tagged takes a boolean, not \"$value\""
     }
     set value [expr {$value ? 1 : 0}]
     if {$value && [my state tagged] ne "1"} {
@@ -331,7 +368,8 @@ oo::define ::tclpdf::document::document {
       # page that exists but holds nothing yet is fine.
       for {set index 0} {$index < [my page count]} {incr index} {
         if {[my page content $index] ne {}} {
-          return -code error "tclpdf: tagged 1 has to come before anything is\
+          return -code error -errorcode [list TCLPDF STRUCTURE STATE tagged] \
+              "tclpdf: tagged 1 has to come before anything is\
               drawn - page [expr {$index + 1}] already has content, and\
               content drawn before the switch would stay outside the tree.\
               Call \[\$doc tagged 1\] right after \[tclpdf new\]"
@@ -369,7 +407,8 @@ oo::define ::tclpdf::document::document {
     # so the arguments themselves are asked, the way [configure] asks them
     # about -orientation.
     if {"script" ni [lmap {option value} $args {string trimleft $option -}]} {
-      return -code error "tclpdf: structure needs -script"
+      return -code error -errorcode [list TCLPDF STRUCTURE ARGUMENT script] \
+          "tclpdf: structure needs -script"
     }
     set script [dict get $options script]
     set id [my StructureOpen $type $options]
@@ -395,7 +434,8 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::structure::types
     variable ::tclpdf::structure::types20
     if {$type ni $types && $type ni $types20} {
-      return -code error "tclpdf: unknown structure type \"$type\" - the\
+      return -code error -errorcode [list TCLPDF STRUCTURE TYPE structure] \
+          "tclpdf: unknown structure type \"$type\" - the\
           standard types of ISO 32000-1 14.8.4 are: [join [lsort $types] {, }];\
           ISO 32000-2 adds [join [lsort $types20] {, }]"
     }
@@ -403,7 +443,8 @@ oo::define ::tclpdf::document::document {
     # a non-standard type without a role map, and mean nothing to a reader.
     if {$type in $types20 && $type ni $types} {
       if {[package vcompare [[my writer] version] 2.0] < 0} {
-        return -code error "tclpdf: \"$type\" is a structure type of ISO\
+        return -code error -errorcode [list TCLPDF STRUCTURE VERSION type] \
+            "tclpdf: \"$type\" is a structure type of ISO\
             32000-2 and this document is PDF [[my writer] version] - raise\
             the version, or use \[\$doc ua -part 2\], which does it"
       }
@@ -430,7 +471,9 @@ oo::define ::tclpdf::document::document {
     if {$name ne {}} {
       set named [my state structureNames]
       if {[dict exists $named $name]} {
-        return -code error "tclpdf: a structure element named\
+        return -code error -errorcode \
+            [list TCLPDF STRUCTURE NAME duplicate name] \
+            "tclpdf: a structure element named\
             \"$name\" already exists - a name has to be\
             unique, or a link would not know which one it means"
       }
@@ -443,7 +486,8 @@ oo::define ::tclpdf::document::document {
     # together.
     set lang [dict get $options lang]
     if {$lang ne {} && ![regexp {^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$} $lang]} {
-      return -code error "tclpdf: -lang \"$lang\" is not a language tag -\
+      return -code error -errorcode [list TCLPDF STRUCTURE ATTRIBUTE lang] \
+          "tclpdf: -lang \"$lang\" is not a language tag -\
           expected something like de, de-DE or en-GB (RFC 3066)"
     }
     if {[dict get $options expansion] ne {}} {
@@ -461,12 +505,26 @@ oo::define ::tclpdf::document::document {
     # nothing to decide about its value.
     set identifier [dict get $options id]
     if {$identifier eq {} && $type eq "Note"} {
-      set identifier "Note[expr {$id + 1}]"
+      # COUNTED PAST WHAT IS TAKEN, not derived once and hoped for. The
+      # number is the element's position, so "Note7" is a name the CALLER
+      # may have written on an unrelated element with -id - and then the
+      # Note that happens to land in position 7 was refused for a duplicate
+      # nobody could see coming, in a value nobody chose. Measured
+      # 2026-08-25: -id Note2 on a paragraph, then a Note, and the Note is
+      # turned away. It walks on instead until it finds a free one.
+      set known [my state structureIds]
+      set serial [expr {$id + 1}]
+      while {[dict exists $known "Note$serial"]} {
+        incr serial
+      }
+      set identifier "Note$serial"
     }
     if {$identifier ne {}} {
       set known [my state structureIds]
       if {[dict exists $known $identifier]} {
-        return -code error "tclpdf: a structure element with the id\
+        return -code error -errorcode \
+            [list TCLPDF STRUCTURE NAME duplicate id] \
+            "tclpdf: a structure element with the id\
             \"$identifier\" already exists - an id has to be unique in the\
             document (ISO 32000-1 14.7.2)"
       }
@@ -483,7 +541,13 @@ oo::define ::tclpdf::document::document {
       dict set known $identifier $id
       my state structureIds $known
     }
+    # THE PAGE THE ELEMENT WAS OPENED ON, kept for the one case where it is
+    # the only place it has: a container that ends up with no content
+    # anywhere below it. A structure destination to such an element used to
+    # send a reader to page 0 - not because the element had no place, but
+    # because nothing had written the one it did have down. Costs one key.
     lappend elements [dict create type $type parent $parent kids {} \
+        page [my page current] \
         alt [dict get $options alt] lang $lang \
         title [dict get $options title] \
         actualText [dict get $options actualText] \
@@ -516,7 +580,9 @@ oo::define ::tclpdf::document::document {
       lassign $definition owner key kind
       set allowed [dict get $attributeOn $option]
       if {$type ni $allowed} {
-        return -code error "tclpdf: -$option belongs on [join $allowed { or }],\
+        return -code error -errorcode \
+            [list TCLPDF STRUCTURE ATTRIBUTE $option] \
+            "tclpdf: -$option belongs on [join $allowed { or }],\
             not on a $type - it would be written and then ignored"
       }
       switch -- $kind {
@@ -529,14 +595,18 @@ oo::define ::tclpdf::document::document {
             # Written into a 1.7 file it would be a value no reader of that
             # file knows and ignore - the quiet mistake this check exists
             # for, in a file that validates.
-            return -code error "tclpdf: -$option $value is a value of ISO\
+            return -code error -errorcode \
+                [list TCLPDF STRUCTURE VERSION attribute] \
+                "tclpdf: -$option $value is a value of ISO\
                 32000-2 (Table 369) and this document is PDF\
                 [[my writer] version] - in a 1.7 file the values are\
                 [join $values {, }]; raise the version, or use\
                 \[\$doc ua -part 2\], which does it"
           }
           if {$value ni $values && $value ni $values20} {
-            return -code error "tclpdf: -$option must be one of\
+            return -code error -errorcode \
+                [list TCLPDF STRUCTURE ATTRIBUTE $option] \
+                "tclpdf: -$option must be one of\
                 [join $values {, }] - not \"$value\"[expr {
                 [llength $values20] ? "; ISO 32000-2 adds [join $values20 {, }]"
                 : {}}]"
@@ -551,17 +621,33 @@ oo::define ::tclpdf::document::document {
         }
         number {
           if {![string is integer -strict $value] || $value < 1} {
-            return -code error "tclpdf: -$option takes a positive integer,\
+            return -code error -errorcode \
+                [list TCLPDF STRUCTURE ATTRIBUTE $option] \
+                "tclpdf: -$option takes a positive integer,\
                 not \"$value\""
           }
           set object [::tclpdf::pdfObj num $value]
         }
         rectangle {
           if {[llength $value] != 4} {
-            return -code error "tclpdf: -$option takes four numbers\
+            return -code error -errorcode \
+                [list TCLPDF STRUCTURE ATTRIBUTE $option] \
+                "tclpdf: -$option takes four numbers\
                 {left top width height}, not \"$value\""
           }
           lassign $value left top width height
+          # The four have to be numbers before they are added up. Without
+          # this the sum below raised Tcl's own "can't use non-numeric string
+          # as operand of +", against the promise that every refusal of this
+          # package begins with "tclpdf:" and names what is wrong.
+          foreach number $value {
+            if {![string is double -strict $number]} {
+              return -code error -errorcode \
+                  [list TCLPDF STRUCTURE ATTRIBUTE $option] \
+                  "tclpdf: -$option takes four numbers\
+                  {left top width height} - \"$number\" is not a number"
+            }
+          }
           lassign [my coords $left [expr {$top + $height}]] x0 y0
           lassign [my coords [expr {$left + $width}] $top] x1 y1
           set object [::tclpdf::pdfObj arr [lmap number [list $x0 $y0 $x1 $y1] {
@@ -610,7 +696,8 @@ oo::define ::tclpdf::document::document {
               against the Document, which may hold none (ISO/TS 32005,\
               Table 5)"
         }
-        return -code error $message
+        return -code error -errorcode [list TCLPDF STRUCTURE PLACE parent] \
+            $message
       }
     }
     # Inline markup needs something to be inside of - see inlineOnly.
@@ -622,7 +709,8 @@ oo::define ::tclpdf::document::document {
       if {$parentType ne {}} {
         set where "in a $parentType"
       }
-      return -code error "tclpdf: a $type is inline markup and belongs inside\
+      return -code error -errorcode [list TCLPDF STRUCTURE PLACE inline] \
+          "tclpdf: a $type is inline markup and belongs inside\
           an element that holds text - a P, a heading, a cell, a Figure -\
           not $where (ISO 32005 Table 5)"
     }
@@ -632,7 +720,8 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $childrenOf $parentType]} {
       set allowed [dict get $childrenOf $parentType]
       if {$type ni $allowed} {
-        return -code error "tclpdf: a $parentType may not contain a $type -\
+        return -code error -errorcode [list TCLPDF STRUCTURE PLACE child] \
+            "tclpdf: a $parentType may not contain a $type -\
             it takes [join $allowed {, }] (ISO 32000-2 Annex L)"
       }
       # A Table holds at most ONE THead and ONE TFoot (Annex L gives both
@@ -644,7 +733,9 @@ oo::define ::tclpdf::document::document {
         foreach kid [dict get [lindex $elements $parent] kids] {
           if {[lindex $kid 0] eq "element" && [dict get [lindex $elements \
               [lindex $kid 1]] type] eq $type} {
-            return -code error "tclpdf: this Table already has a $type - a\
+            return -code error -errorcode \
+                [list TCLPDF STRUCTURE PLACE duplicate] \
+                "tclpdf: this Table already has a $type - a\
                 table holds at most one (ISO 32000-2 Annex L)"
           }
         }
@@ -657,7 +748,8 @@ oo::define ::tclpdf::document::document {
     # by this clause - a P names no parent, so a P in a P is still refused.
     if {$parentType in $leafOnly && $type ni $inline
         && ![dict exists $parentOf $type]} {
-      return -code error "tclpdf: a $parentType holds text and inline markup,\
+      return -code error -errorcode [list TCLPDF STRUCTURE PLACE leaf] \
+          "tclpdf: a $parentType holds text and inline markup,\
           not a $type - close it before starting one (ISO 32000-2 Annex L)"
     }
     return
@@ -791,7 +883,8 @@ oo::define ::tclpdf::document::document {
   method StructureClose {id} {
     set stack [my state structureStack]
     if {[lindex $stack end] ne $id} {
-      return -code error "tclpdf: structure elements closed out of order"
+      return -code error -errorcode [list TCLPDF STRUCTURE STATE element] \
+          "tclpdf: structure elements closed out of order"
     }
     my state structureStack [lrange $stack 0 end-1]
     if {$id eq [my state structureExpansionSpan]} {
@@ -831,7 +924,8 @@ oo::define ::tclpdf::document::document {
       if {$type eq "Table"} {
         set where "first or, in a 2.0 file, last"
       }
-      return -code error "tclpdf: the Caption of a $type has to be its $where\
+      return -code error -errorcode [list TCLPDF STRUCTURE PLACE caption] \
+          "tclpdf: the Caption of a $type has to be its $where\
           child, not child $position of [llength $kids] (ISO 32000-2 Annex L)"
     }
     return
@@ -863,7 +957,8 @@ oo::define ::tclpdf::document::document {
     if {$sequence in $wanted} {
       return
     }
-    return -code error "tclpdf: a $type holds exactly\
+    return -code error -errorcode [list TCLPDF STRUCTURE PLACE sequence] \
+        "tclpdf: a $type holds exactly\
         [join [lmap variant $wanted {join $variant +}] { or }]\
         (ISO 32000-2 Table 369) - this one holds [expr {
         [llength $sequence] ? [join $sequence +] : {nothing}}]"
@@ -935,6 +1030,19 @@ oo::define ::tclpdf::document::document {
     # the same as guessing at a value's shape, which this package has been
     # bitten by; the two vocabularies do not overlap.
     if {[llength $derived] > 1} {
+      # Only an artifact carries a kind. "-tag {P Pagination}" reads as if
+      # the paragraph were pagination, and the second word used to be taken
+      # and then dropped without a word, because the kind is read at the
+      # bracket and only an artifact has one there. Refused instead: the
+      # caller means either a P or a Pagination artifact, and nothing here
+      # can tell which.
+      if {[lindex $derived 0] ne "Artifact"} {
+        return -code error -errorcode [list TCLPDF STRUCTURE TYPE tag] \
+            "tclpdf: -tag \"$derived\" - a structure type is\
+            one word, and only an artifact takes a kind after it\
+            (\"Artifact type ?subtype?\"); write -tag [lindex $derived 0] or\
+            -tag {Artifact [lrange $derived 1 end]}"
+      }
       set artifact [lrange $derived 1 end]
       set derived [lindex $derived 0]
     }
@@ -990,7 +1098,8 @@ oo::define ::tclpdf::document::document {
     # open one, and the text drawn inside it becomes its P. Refused before
     # anything is claimed - no element, no MCID.
     if {$derived in $containers} {
-      return -code error "tclpdf: -tag $derived names a grouping type, which\
+      return -code error -errorcode [list TCLPDF STRUCTURE TYPE tag] \
+          "tclpdf: -tag $derived names a grouping type, which\
           holds elements and no text of its own - open it with \[\$doc\
           structure $derived -script ...\] and draw inside it"
     }
@@ -1026,7 +1135,28 @@ oo::define ::tclpdf::document::document {
       }
     }
     if {$element eq {} && $derived eq {}} {
-      return {}
+      # AN EMPTY TAG IS REFUSED, like every other tag this module cannot
+      # use. It is what "-tag $tag" writes when the variable is empty, and it
+      # was the one unusable value that fell through in silence: no element,
+      # no artifact, no bracket - the text went onto the page and the tree
+      # never heard of it. That is the failure this package is built against,
+      # because nothing shows it: qpdf is content, and veraPDF counted 764
+      # checks and 0 failures over a paragraph no screen reader reaches.
+      #
+      # Refused rather than read as "take the default", because that is how
+      # the other unusable values are answered - "NoSuchType", a grouping
+      # type, "{Artifact NoSuch}" are each named and refused - and because a
+      # caller who wants the default writes no -tag at all, which is P. An
+      # empty variable is a mistake at the call, and the call is where it is
+      # worth hearing about.
+      #
+      # Only here, where nothing would come of it. Drawn inside an open leaf
+      # an empty tag means what no tag means, "this is that element's text",
+      # and the mark landed on the open element above long before this.
+      return -code error -errorcode [list TCLPDF STRUCTURE TYPE tag] \
+          "tclpdf: -tag is empty and no element is open to\
+          hold the content - name a structure type, or \"Artifact\" for\
+          content that carries no meaning; without -tag the type is P"
     }
     if {$element eq {}} {
       # Created here, holds this one mark and is closed again - a paragraph
@@ -1086,7 +1216,8 @@ oo::define ::tclpdf::document::document {
   # [structure -expansion] and [text -expansion].
   method StructureExpansionGuard {} {
     if {[my state tagged] ne "1"} {
-      return -code error "tclpdf: -expansion needs a tagged document - the\
+      return -code error -errorcode [list TCLPDF STRUCTURE STATE expansion] \
+          "tclpdf: -expansion needs a tagged document - the\
           expanded form of an abbreviation is read from the structure tree.\
           Call \[\$doc tagged 1\] first"
     }
@@ -1107,7 +1238,9 @@ oo::define ::tclpdf::document::document {
   # a Span straight under a Sect is exactly the tree Annex L forbids.
   method StructureExpansion {derived expansion} {
     if {[lindex $derived 0] eq "Artifact"} {
-      return -code error "tclpdf: -expansion on an artifact - what is outside\
+      return -code error -errorcode \
+          [list TCLPDF STRUCTURE ATTRIBUTE expansion] \
+          "tclpdf: -expansion on an artifact - what is outside\
           the tree cannot carry an expanded form; drop -tag Artifact or\
           -expansion"
     }
@@ -1179,21 +1312,25 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::structure::artifactTypes
     variable ::tclpdf::structure::artifactSubtypes
     if {[llength $kind] > 2} {
-      return -code error "tclpdf: an artifact is \"Artifact type ?subtype?\",\
+      return -code error -errorcode [list TCLPDF STRUCTURE TYPE artifact] \
+          "tclpdf: an artifact is \"Artifact type ?subtype?\",\
           not \"Artifact $kind\""
     }
     lassign $kind type subtype
     if {$type ni $artifactTypes} {
-      return -code error "tclpdf: unknown artifact type \"$type\" - the\
+      return -code error -errorcode [list TCLPDF STRUCTURE TYPE artifact] \
+          "tclpdf: unknown artifact type \"$type\" - the\
           types of ISO 32000-1 Table 330 are: [join $artifactTypes {, }]"
     }
     if {$subtype ne {}} {
       if {$type ne "Pagination"} {
-        return -code error "tclpdf: only a Pagination artifact has a\
+        return -code error -errorcode [list TCLPDF STRUCTURE TYPE subtype] \
+            "tclpdf: only a Pagination artifact has a\
             subtype (ISO 32000-1 Table 331), not a $type"
       }
       if {$subtype ni $artifactSubtypes} {
-        return -code error "tclpdf: unknown artifact subtype \"$subtype\" -\
+        return -code error -errorcode [list TCLPDF STRUCTURE TYPE subtype] \
+            "tclpdf: unknown artifact subtype \"$subtype\" -\
             the subtypes of ISO 32000-1 Table 331 are:\
             [join $artifactSubtypes {, }]"
       }

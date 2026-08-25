@@ -115,10 +115,117 @@ test sfnt-1.7 {an OTTO file without a CFF table is missing that one} -body {
       0x4F54544F]}
 } -result {TCLPDF FONT TABLE {CFF }}
 
+# One field of one directory entry, rewritten: the offset at 8 and the length
+# at 12 of the sixteen-byte record. What every fixture below wants is a sound
+# face with exactly one number in its directory wrong, and reaching for that
+# number by hand in each of them is how the fixtures start disagreeing.
+proc entryField {face tag field value} {
+  binary scan $face @4Su count
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {12 + $index * 16}]
+    if {[string range $face $at [expr {$at + 3}]] ne $tag} {
+      continue
+    }
+    set start [expr {$at + ($field eq "offset" ? 8 : 12)}]
+    return [string replace $face $start [expr {$start + 3}] \
+        [binary format Iu $value]]
+  }
+  error "no \"$tag\" table in this face"
+}
+
 test sfnt-1.8 {a face declaring no em is a metric refusal} -body {
   ::tclpdfTest::refusalCode {::tclpdf::sfnt parse [sfntFile [list head [headTable 0] \
       hhea [hheaTable] hmtx [string repeat \x00 4] maxp [maxpTable]]]}
 } -result {TCLPDF FONT METRICS unitsPerEm}
+
+
+# A DIRECTORY THAT POINTS OUT OF THE FILE, which is the whole of the damage
+# behind the six raw Tcl errors measured on 2026-08-25: a table read through
+# an offset the file does not reach leaves [binary scan] with nothing to fill,
+# and what arrived was "can't read \"fixed\": no such variable" under
+# errorCode TCL READ VARNAME - a Tcl error where doc/tclpdf.md promises a
+# message beginning with "tclpdf:". They are all one defect and all one guard:
+# the directory is the single place a table's extent is stated.
+
+test sfnt-1.9 {a table entry pointing past the end of the file is damage} -body {
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [entryField [wholeFace] head offset 900000]}
+} -result {TCLPDF FONT DAMAGED directory}
+
+test sfnt-1.10 {and so is an entry whose LENGTH reaches past it} -body {
+  # The shape a cut-off file has: every offset is still right and the last
+  # tables are no longer there. Measured on a DejaVuSans truncated to 680 000
+  # bytes, which is where the raw error came from.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [entryField [wholeFace] maxp length 900000]}
+} -result {TCLPDF FONT DAMAGED directory}
+
+test sfnt-1.11 {a real face cut in half refuses by name} -constraints haveFont -body {
+  set bytes [::tclpdfTest::readBytes $::fontRegular]
+  set half [string range $bytes 0 [expr {[string length $bytes] / 2}]]
+  set code [::tclpdfTest::refusalCode {::tclpdf::sfnt parse $half}]
+  # The code AND that it is not a Tcl error: TCL READ VARNAME is what this
+  # test exists to keep out, and it would not show in a "TCLPDF FONT *" match.
+  list $code [expr {[lindex $code 0] eq "TCLPDF"}]
+} -result {{TCLPDF FONT DAMAGED directory} 1}
+
+test sfnt-1.12 {a table too short for its own format is damage as well} -body {
+  # Inside the file, and still unreadable: a head holds 54 bytes and
+  # indexToLocFormat sits in the last two of them.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [sfntFile [list head [string range [headTable] 0 19] hhea [hheaTable] \
+          hmtx [string repeat \x00 4] maxp [maxpTable]]]}
+} -result {TCLPDF FONT DAMAGED directory}
+
+test sfnt-1.13 {a tag named twice is refused rather than silently overwritten} -body {
+  # A table directory is a set (OpenType, "Organization of an OpenType
+  # Font"). The second entry used to overwrite the first without a word, so a
+  # file could carry two head tables and the reader picked whichever came
+  # last.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [sfntFile [list head [headTable] hhea [hheaTable] \
+          hmtx [string repeat \x00 4] maxp [maxpTable] head [headTable 500]]]}
+} -result {TCLPDF FONT DAMAGED directory}
+
+test sfnt-1.14 {an hmtx that ends inside its metrics} -body {
+  # hhea says how many advance widths hmtx holds, and every one of them is a
+  # glyph's width - unlike the bearings behind them, which a font may end
+  # early. numberOfHMetrics sits at offset 34.
+  set hhea [string replace [hheaTable] 34 35 [binary format Su 1000]]
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [sfntFile [list head [headTable] hhea $hhea \
+          hmtx [string repeat \x00 4] maxp [maxpTable]]]}
+} -result {TCLPDF FONT DAMAGED directory}
+
+test sfnt-1.15 {a loca that cannot locate the glyphs maxp announces} -body {
+  # One offset per glyph plus a closing one. Read past the end it gave an
+  # unset variable; read short it would have cut every glyph past that point
+  # out of the subset, which nothing downstream could notice.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [sfntFile [list head [headTable] hhea [hheaTable] \
+          hmtx [string repeat \x00 4] maxp [maxpTable 10] \
+          loca [string repeat \x00 4] glyf [string repeat \x00 4]]]}
+} -result {TCLPDF FONT DAMAGED directory}
+
+test sfnt-1.16 {an OS/2 too short to read counts as absent, not as damage} -body {
+  # Nothing in OS/2 is needed to embed a face - a face without one parses -
+  # so a stub table is passed over rather than turned into a refusal. What
+  # must NOT happen is the read running off the end.
+  set font [::tclpdf::sfnt parse [sfntFile [list head [headTable] \
+      hhea [hheaTable] hmtx [string repeat \x00 4] maxp [maxpTable] \
+      OS/2 [string repeat \x00 4]]]]
+  list [dict get $font fsType] [dict get $font os2 weightClass]
+} -result {{} 400}
+
+test sfnt-1.17 {a vhea too short to hold numOfLongVerMetrics is damage} -body {
+  # The count sits in the last two bytes of the 36, so a shorter vhea cannot
+  # be read at all - and subset.tcl, which rewrites that very field, is
+  # entitled to find it there.
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [sfntFile [list head [headTable] hhea [hheaTable] \
+          hmtx [string repeat \x00 4] maxp [maxpTable] \
+          vhea [string repeat \x00 8] vmtx [string repeat \x00 4]]]}
+} -result {TCLPDF FONT DAMAGED vhea}
 
 
 # The cmap road. A face with no usable Unicode subtable and one whose subtable
@@ -159,6 +266,23 @@ test sfnt-2.3 {a format 12 cmap promising more groups than the file holds} -body
   set face [sfntFile [list head [headTable] hhea [hheaTable] \
       hmtx [string repeat \x00 4] maxp [maxpTable] cmap $cmap]]
   ::tclpdfTest::refusalCode {::tclpdf::sfnt parse $face}
+} -result {TCLPDF FONT DAMAGED cmap}
+
+test sfnt-2.4 {a cmap announcing more subtables than it holds} -body {
+  # The count steers a loop and is believed only as far as the file reaches.
+  set cmap [binary format SuSuSuSuIu 0 5 3 1 12][binary format SuSuSu 4 0 0]
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [sfntFile [list head [headTable] hhea [hheaTable] \
+          hmtx [string repeat \x00 4] maxp [maxpTable] cmap $cmap]]}
+} -result {TCLPDF FONT DAMAGED cmap}
+
+test sfnt-2.5 {a cmap subtable offset that leaves the file} -body {
+  # The record's offset is counted from the start of the cmap table and is a
+  # second thing the file states and may get wrong.
+  set cmap [binary format SuSuSuSuIu 0 1 3 1 60000]
+  ::tclpdfTest::refusalCode {::tclpdf::sfnt parse \
+      [sfntFile [list head [headTable] hhea [hheaTable] \
+          hmtx [string repeat \x00 4] maxp [maxpTable] cmap $cmap]]}
 } -result {TCLPDF FONT DAMAGED cmap}
 
 
@@ -208,6 +332,21 @@ test sfnt-3.6 {and an sfnt is still not mistaken for one} -body {
       [::tclpdf::sfnt isBareCff "OTTO[string repeat \x00 8]"] \
       [::tclpdf::sfnt isBareCff "ttcf[string repeat \x00 8]"]
 } -result {0 0 0}
+
+
+test sfnt-3.7 {a CFF of an unknown header version reaches the CFF reader too} -body {
+  # The CFF2 fix of 2026-08-24 stopped at version 2, so a bare CFF of version
+  # 3 still fell through to the sfnt reader and came back as "not a TrueType
+  # or OpenType font" - the wrong reader named, and doc/tclpdf.md makes that
+  # third word the reader a script retries on. The recogniser stops one
+  # version past the two the format has, because the sfnt signatures read as
+  # majors 0, 79 and 116 and admitting any non-zero major would claim every
+  # OTTO file for the CFF reader.
+  set three [binary format cccc 3 0 4 2][string repeat \x00 4]
+  list [::tclpdf::sfnt isBareCff $three] \
+      [::tclpdfTest::refusalCode {::tclpdf::sfnt cffFont $three}] \
+      [::tclpdf::sfnt isBareCff "OTTO[string repeat \x00 8]"]
+} -result {1 {TCLPDF FONT SOURCE cff} 0}
 
 
 test sfnt-4.1 {the classes are disjoint, so a trap on one catches only it} -body {

@@ -460,6 +460,22 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: $option of $what is a point {x y}, not\
           \"$value\""
     }
+    # AND TWO NUMBERS A PAGE HAS ROOM FOR. The shape is checked above, in
+    # this module's own words - four test files read them, and the wording
+    # is a promise like any other. What was missing is the value: a NaN
+    # coordinate has the right shape, passes [string is double], and dies in
+    # the arithmetic of [coords] far from the call that wrote it. Asked here
+    # per coordinate rather than handed to option::point whole, so that both
+    # halves of the answer keep the words they had.
+    foreach coordinate $value {
+      # ONLY over what is a double at all. A word is not a coordinate
+      # either, but [geometry toPoints] has said so in its own words since
+      # the beginning and four test files read them; what was missing is the
+      # double that is not a number, and that is what this asks about.
+      if {[string is double -strict $coordinate]} {
+        ::tclpdf::option number $coordinate $option $what
+      }
+    }
     return [my coords {*}$value]
   }
 

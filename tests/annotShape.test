@@ -248,4 +248,22 @@ test annotShape-5.2 {an attachment without an appearance is refused under PDF/A}
 } -result {1 1}
 
 
+test annotShape-6.1 {the circle is drawn around its centre, not its corner} -body {
+  # [ellipse] takes its CENTRE - shape.tcl says so in its own comment - and
+  # this branch read it as a corner until the rendered example was looked at
+  # on 2026-08-25: three quarters of the ellipse fell outside its own BBox
+  # and the reader clipped them away. The square branch is right because
+  # [rect] does take the corner.
+  set bytes [shapeDocument {
+    @doc@ annot circle -at {20 60} -size {50 20} -fill {1 1 0.7}
+  }]
+  regexp {/BBox \[ *([0-9.]+) +([0-9.]+) +([0-9.]+) +([0-9.]+)} $bytes \
+      -> left bottom right top
+  # The first point of the ellipse is its leftmost, at half its height.
+  regexp {([0-9.]+) ([0-9.]+) m} $bytes -> x y
+  list [expr {$x >= $left && $x <= $right}] \
+      [expr {abs($y - ($bottom + $top) / 2.0) < 1}]
+} -result {1 1}
+
+
 cleanupTests

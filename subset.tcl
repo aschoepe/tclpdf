@@ -152,24 +152,28 @@ proc ::tclpdf::subset::build {font glyphs {instanced {}}} {
   # eleven is broken for everything that opens it as one. Dropping BOTH would
   # be consistent too - the cheaper answer, and the one that throws away what
   # the face knows the moment anything but Acrobat looks at the file.
+  #
+  # THE TWO HALVES ARE WRITTEN SEPARATELY, because a face may have either.
+  # "hasVertical" is true of a face that carries nothing but a VORG table -
+  # an origin per glyph and no heights at all - and such a face has no vhea
+  # to rewrite. Writing vmtx for it and then asking [Vhea] for the header
+  # meant refusing a perfectly sound font: TCLPDF FONT DAMAGED vhea, "is 0
+  # bytes", raised at WRITE time after [font info] had answered "vertical 1"
+  # and every [text] call had gone through - the document could not be
+  # written at all. The vertical metrics come from vhea and vmtx together
+  # (the header states how many pairs the table holds), so they are written
+  # together or not at all; VORG travels on its own.
   if {[::tclpdf::sfnt hasVertical $font]} {
-    set vmtx {}
-    foreach glyph $order {
-      set advance [::tclpdf::sfnt verticalAdvance $font $glyph]
-      set bearing [::tclpdf::sfnt verticalBearing $font $glyph]
-      # A face with VORG and no vmtx has an origin per glyph and no height:
-      # the em is what /DW2 would give it, and the same number here keeps the
-      # file and the PDF saying one thing.
-      if {$advance eq {}} {
-        set advance [dict get $font unitsPerEm]
+    if {[dict exists $font vertical advances]} {
+      set vmtx {}
+      foreach glyph $order {
+        append vmtx [binary format SuS \
+            [::tclpdf::sfnt verticalAdvance $font $glyph] \
+            [::tclpdf::sfnt verticalBearing $font $glyph]]
       }
-      if {$bearing eq {}} {
-        set bearing 0
-      }
-      append vmtx [binary format SuS $advance $bearing]
+      dict set tables vmtx $vmtx
+      dict set tables vhea [Vhea $font $count]
     }
-    dict set tables vmtx $vmtx
-    dict set tables vhea [Vhea $font $count]
     # VORG is carried over ONLY when it can be rewritten in the new numbering:
     # its keys are glyph ids, and copying it unchanged would point every entry
     # at whatever glyph inherited that number.
@@ -335,15 +339,15 @@ proc ::tclpdf::subset::Hhea {font count} {
 # vhea, with numOfLongVerMetrics matched to the vmtx written beside it - the
 # same correction Hhea makes at the same offset, because vhea is hhea with the
 # axes exchanged and keeps that field in the same place (ISO/IEC 14496-22).
+#
+# THE TABLE IS THERE AND IS LONG ENOUGH, and that is checked where the face is
+# read rather than here: [sfnt ParseVertical] reads numOfLongVerMetrics out of
+# the last two bytes of vhea, so it refuses a shorter one - TCLPDF FONT
+# DAMAGED vhea - before any of this runs, and a face with no vhea at all never
+# gets "vertical advances" and is not sent down this road. A second test here
+# would be a refusal no fixture can reach.
 proc ::tclpdf::subset::Vhea {font count} {
   set vhea [::tclpdf::sfnt table $font vhea]
-  if {[string length $vhea] < 36} {
-    # A face whose vhea is too short to correct: writing the vmtx without a
-    # header that describes it would be worse than writing neither.
-    return -code error -errorcode [list TCLPDF FONT DAMAGED vhea] \
-        "tclpdf: the font's \"vhea\" table is\
-        [string length $vhea] bytes and cannot describe its vertical metrics"
-  }
   return [string replace $vhea 34 35 [binary format Su $count]]
 }
 

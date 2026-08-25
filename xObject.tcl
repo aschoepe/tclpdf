@@ -189,7 +189,11 @@ oo::define ::tclpdf::document::document {
     if {$scale eq {}} {
       set scale 1
     }
-    if {![string is double -strict $scale] || $scale <= 0} {
+    # [option finite] and not [string is double -strict]: NaN is a double to
+    # Tcl and compares false against "<= 0" as it does against everything, so
+    # a NaN factor went through this check untouched and died in the matrix
+    # arithmetic below, in Tcl's own words.
+    if {![::tclpdf::option finite $scale] || $scale <= 0} {
       return -code error "tclpdf: -scale of form place is a factor above zero,\
           not \"$scale\""
     }
@@ -253,16 +257,26 @@ oo::define ::tclpdf::document::document {
     # asked to see. The rectangle is the one -at and -fit name, taken BEFORE
     # the anchor moves the form inside it.
     set clip {}
-    if {$fit ne {}} {
-      if {[dict get $options fitMode] eq "cover"} {
-        set clip [list $x $y {*}$fit]
-      }
-      # And the anchor, through the same [fitAnchor] the picture road uses,
-      # so that a form and a picture put into the same box with the same
-      # words end up in the same place.
-      lassign [my fitAnchor [list $x $y] [expr {$widthUnit * $scale}] \
-          [expr {$heightUnit * $scale}] $options] x y
+    if {$fit ne {} && [dict get $options fitMode] eq "cover"} {
+      set clip [list $x $y {*}$fit]
     }
+    # And the anchor, through the same [fitAnchor] the picture road uses, so
+    # that a form and a picture put into the same box with the same words end
+    # up in the same place.
+    #
+    # OUTSIDE the -fit branch, which is where it stood until 2026-08-25 and
+    # where it did nothing without a box: [fitCheck] takes -align and -valign
+    # on their own - it only checks the words - so "form place -align right"
+    # was accepted and silently ignored, while "image place -align right" at
+    # the same point moved the picture. Measured: three placements of a 40 mm
+    # form at -at {100 20} with -align left, center and right all wrote
+    # "cm" x = 283.46457, where the picture road wrote 283.46457, 226.77165
+    # and 170.07874. The manual promises the two roads the same arithmetic and
+    # says of the plain anchor that "without -fit the box has no size" - which
+    # is exactly what [fitAnchor] computes when it is asked, a box of no size
+    # putting the same fractions to work. So it is asked either way.
+    lassign [my fitAnchor [list $x $y] [expr {$widthUnit * $scale}] \
+        [expr {$heightUnit * $scale}] $options] x y
     lassign [my coords $x [expr {$y + $heightUnit * $scale}]] px py
     set matrix [::tclpdf::geometry translate $px $py]
     if {[dict get $options rotate] != 0} {
@@ -286,7 +300,7 @@ oo::define ::tclpdf::document::document {
     # the placement begins, so that a destination at the Figure can name the
     # place on the page, and [FormBox] is the area the Figure covers.
     lassign [my GraphicMark form "form place" [dict get $options alt] \
-        [dict get $options artifact] $y [my FormBox $form $matrix]] mark element
+        [dict get $options artifact] $y [my FormBox $form $matrix $clip]] mark element
 
     my save
     # Inside the save, so the matching restore takes it back: a clipping path
@@ -334,8 +348,9 @@ oo::define ::tclpdf::document::document {
   # itself is [PlacedBox] in page.tcl, shared with the picture: a form is
   # placed through its own size, a picture through the unit square, and the
   # rest is the same question.
-  method FormBox {form matrix} {
-    return [my PlacedBox [dict get $form width] [dict get $form height] $matrix]
+  method FormBox {form matrix {clip {}}} {
+    return [my PlacedBox [dict get $form width] [dict get $form height] \
+        $matrix $clip]
   }
 
   method FormSize {name} {
@@ -369,15 +384,31 @@ oo::define ::tclpdf::document::document {
   # runs, and [FormPlace] brackets the invocation instead - which is also the
   # arrangement the norm names first: the whole Do inside one sequence, and
   # none inside the XObject.
+  #
+  # THE SAVED FLAG IS A STACK, not one slot, because forms nest. [pattern]
+  # and the page number keep theirs in a local variable, which is the same
+  # thing where suspending and restoring sit in one method; here they are two,
+  # so the value has to travel, and one slot cannot hold two of them.
+  #
+  # What one slot did: the outer form saves 0 and sets 1, the inner form saves
+  # THAT 1 and sets 1, the inner end writes 1 back, the outer end writes the
+  # same 1 back - and the document is left suspended for good, without a mark
+  # from there on. Not a corner: an annotation draws its own appearance
+  # through a form (annot.tcl), so every annotation inside [form create]
+  # nests. Measured before the fix: "suspend nach annot im Form: 1", and the
+  # paragraph that followed had neither BDC nor EMC.
   method FormBegin {width height} {
-    my state structureFormSuspend [my state structureSuspend]
+    my state structureFormSuspend \
+        [linsert [my state structureFormSuspend] 0 [my state structureSuspend]]
     my state structureSuspend 1
     my canvas push $width $height
     return
   }
 
   method FormEnd {} {
-    my state structureSuspend [my state structureFormSuspend]
+    set saved [my state structureFormSuspend]
+    my state structureSuspend [lindex $saved 0]
+    my state structureFormSuspend [lrange $saved 1 end]
     return [my canvas pop]
   }
 }

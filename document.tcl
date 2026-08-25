@@ -315,6 +315,7 @@ oo::class create ::tclpdf::document::document {
   method unknown {method args} {
     set topics {
       SvgCollect svgElement
+      SvgCapture svgElement
       SvgElement svgElement
       SvgShape svgElement
       SvgUse svgElement
@@ -324,6 +325,11 @@ oo::class create ::tclpdf::document::document {
       SvgStyle svgPaint
       SvgGradient svgPaint
       SvgStops svgPaint
+      SvgClipEnter svgClip
+      SvgClipReference svgClip
+      SvgClipRuleOf svgClip
+      SvgClipOperators svgClip
+      SvgClipMask svgClip
       page page
       PageAdd page
       PageSize page
@@ -338,6 +344,7 @@ oo::class create ::tclpdf::document::document {
       fitExtent page
       fitCheck page
       fitAnchor page
+      boxClipped page
       save graphics
       restore graphics
       transform graphics
@@ -808,4 +815,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.11
+package provide tclpdf::document 1.12

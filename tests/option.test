@@ -167,4 +167,62 @@ test option-3.7 {a refused call leaves the document as it was} -body {
   expr {$before eq $after}
 } -result 1
 
+# --- NaN and Inf ------------------------------------------------------------
+
+test option-4.1 {finite tells a measurement from a double that is none} -body {
+  # [string is double -strict] is TRUE for NaN and for Inf, which is the trap
+  # the whole check exists for: both are doubles to Tcl and neither is a
+  # length, a coordinate or a factor.
+  set out {}
+  foreach value {0 1 -2.5 1e10 0.00001 NaN nan -NaN Inf inf -Inf abc {} { } 1x} {
+    lappend out [::tclpdf::option finite $value]
+  }
+  set out
+} -result {1 1 1 1 1 0 0 0 0 0 0 0 0 0 0}
+
+test option-4.2 {and it is written as a comparison for a reason} -body {
+  # [expr] REFUSES NaN as an operand of abs() or of "+", so a predicate built
+  # on one would throw the very error it replaces. Comparison is defined for
+  # it - NaN is the one value unequal to itself - which is what the proc uses.
+  list [catch {expr {abs("NaN")}}] [catch {expr {"NaN" == "NaN"}}] \
+      [::tclpdf::option finite NaN]
+} -result {1 0 0}
+
+test option-4.3 {a point of two doubles that are no numbers} -body {
+  # Measured before this check stood: "image place -at {NaN 20}" answered
+  # "can't use non-numeric floating-point value as operand of \"*\"" - a raw
+  # Tcl error against the promise that every refusal begins with "tclpdf:".
+  set out {}
+  foreach value {{NaN 20} {20 NaN} {Inf 20} {20 -Inf}} {
+    lappend out [::tclpdfTest::refusal {::tclpdf::option point $value -at text}]
+  }
+  lappend out [catch {::tclpdf::option point {20 30} -at text}]
+  set out
+} -result {{TCLPDF OPTION POINT -at text} {TCLPDF OPTION POINT -at text}\
+    {TCLPDF OPTION POINT -at text} {TCLPDF OPTION POINT -at text} 0}
+
+test option-4.4 {the same code as a point of the wrong shape, and its own words} -body {
+  # One class, because it is the same option that is wrong and a handler
+  # trapping TCLPDF OPTION POINT wants both - but not the same message: the
+  # hint about braces belongs to the value a caller typed, and a NaN came out
+  # of an arithmetic of their own.
+  set shape [catch {::tclpdf::option point {a b} -at text} first]
+  set number [catch {::tclpdf::option point {NaN 3} -at text} second]
+  list $shape $number [string match {*braces do not substitute*} $first] \
+      [string match {*braces do not substitute*} $second] \
+      [string match {tclpdf: -at takes two finite numbers*} $second]
+} -result {1 1 1 0 1}
+
+test option-4.5 {number refuses, names the value and carries a code} -body {
+  set out {}
+  foreach value {NaN Inf -Inf} {
+    lappend out [::tclpdfTest::refusal {::tclpdf::option number $value -size text}]
+  }
+  set code [catch {::tclpdf::option number NaN "a length"} message]
+  lappend out $code [string match {tclpdf: a length is a finite number*} $message]
+  lappend out [catch {::tclpdf::option number 42 -size text}]
+  set out
+} -result {{TCLPDF OPTION NUMBER -size text} {TCLPDF OPTION NUMBER -size text}\
+    {TCLPDF OPTION NUMBER -size text} 1 1 0}
+
 cleanupTests

@@ -475,4 +475,71 @@ test type1-9.5 {every refusal in the module carries a code} -body {
 } -result 0
 
 
+# WHICH NAME A POSITION IS ADDRESSED BY, and what has to be declared when it
+# is not WinAnsi's own.
+#
+# A face embedded as a Type 1 equivalent is addressed through
+# /WinAnsiEncoding, and [names] picks per position the first candidate the
+# face really carries. Where that is not the name Annex D gives the byte, the
+# reader looks up a glyph the embedded program has not got: it draws nothing,
+# while /Widths goes on reserving the advance. Nothing reports it - qpdf is
+# clean, pdftotext still answers the text - so the whole of the guarantee is
+# the pair of rules measured here: the Annex D name is preferred where the
+# face has it, and where it does not, [differences] says so.
+
+# What [names] and [differences] work on: the widths of a face, keyed by
+# glyph name. Nothing else of a metrics dictionary is read by either.
+proc metricsFor {args} {
+  set widths {}
+  foreach name $args {
+    dict set widths $name 500
+  }
+  return [dict create widths $widths]
+}
+
+test type1-10.1 {a face using WinAnsi's own names needs no Differences} -body {
+  set names [::tclpdf::type1 names [metricsFor A periodcentered bar tilde]]
+  list [dict get $names 65] [dict get $names 183] [dict get $names 124] \
+      [dict get $names 152] [::tclpdf::type1 differences $names]
+} -result {A periodcentered bar tilde {}}
+
+test type1-10.2 {a face that carries BOTH names is addressed by the Annex D one} -body {
+  # The order inside the table is the whole of this: it offered "ilde" before
+  # "tilde" and "middot" before "periodcentered" until 2026-08-25, so a face
+  # carrying both got the name WinAnsiEncoding does NOT use, and the glyph
+  # fell out of every line it stood in.
+  set names [::tclpdf::type1 names \
+      [metricsFor periodcentered middot bar verticalbar tilde ilde]]
+  list [dict get $names 183] [dict get $names 124] [dict get $names 152] \
+      [::tclpdf::type1 differences $names]
+} -result {periodcentered bar tilde {}}
+
+test type1-10.3 {a face that carries only the other spelling is declared} -body {
+  # The half the ordering cannot fix: the face has no "periodcentered" to
+  # prefer, so the byte is addressed by the name it does have - and that name
+  # has to reach the reader through /Differences.
+  set names [::tclpdf::type1 names [metricsFor middot verticalbar ilde]]
+  list [dict get $names 183] [::tclpdf::type1 differences $names]
+} -result {middot {124 verticalbar 152 ilde 183 middot}}
+
+test type1-10.4 {the two nbsp and soft-hyphen positions stay undeclared} -body {
+  # 160 and 173 borrow the glyphs of space and hyphen, which is what Annex D
+  # says of them - so a face with nothing but "space" and "hyphen" addresses
+  # them by those names and declares nothing. A face that has "nbspace" as
+  # well is the case the array is for.
+  list [::tclpdf::type1 differences [::tclpdf::type1 names \
+          [metricsFor space hyphen]]] \
+      [::tclpdf::type1 differences [::tclpdf::type1 names \
+          [metricsFor nbspace sfthyphen]]]
+} -result {{} {160 nbspace 173 sfthyphen}}
+
+test type1-10.5 {the width of a position belongs to the name it is addressed by} -body {
+  # [widths] reads [names] rather than deciding again, and that is what keeps
+  # the /Widths entry and the /Differences name talking about one glyph.
+  set metrics [dict create widths [dict create middot 111 verticalbar 222]]
+  set widths [::tclpdf::type1 widths $metrics]
+  list [lindex $widths 183] [lindex $widths 124]
+} -result {111 222}
+
+
 cleanupTests

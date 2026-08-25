@@ -21,20 +21,32 @@
 # is the most frequent path command of all - ahead of moveto - and PDF has no
 # arc operator, so that is where the work went.
 #
-# THE FREQUENCIES THAT MEASUREMENT GAVE HAVE SINCE BEEN CORRECTED, and the
-# correction is worth more than the numbers. It read "<filter> and <animate>
-# occur ZERO times, <mask> twice" - and 95.5 % of that corpus is three icon
+# THAT COUNT HAS BEEN CORRECTED TWICE, and the second correction is the
+# instructive one. The first reading was "<filter> and <animate> occur ZERO
+# times, <mask> twice" - taken over a corpus that is 95.5 % three icon
 # libraries (Tabler in two releases, FontAwesome), which are single-path
-# files by construction. Measured again on 2026-08-24 with those taken out,
-# 167 files remain, and in them: clipPath in 7.8 %, mask in 6.0 %, filter in
-# 4.2 %, use in 3.0 %, gradients in 3.6 %. Four of the seven files carrying a
-# <filter> are one publisher's logo.
+# files by construction. Taking those out left a SAMPLE of 167 files, and
+# percentages of it read as "clipPath 7.8 %, mask 6.0 %, filter 4.2 %" -
+# which became "twenty to forty times more frequent than first measured".
 #
-# So the shape of the decision stands - a drawing here is paths, shapes,
-# groups, transforms, text and gradients - but the ones left out are NOT
-# absent from real work, and this module says so through [svg info] rather
-# than quietly. What that report was missing until the same day is described
-# at [SvgCountOnly]: everything under <defs> went uncounted, which is exactly
+# Counted absolutely on 2026-08-25, over all 15046 SVG files on this machine
+# and in both spellings - the element and the attribute, which agree:
+#
+#   clipPath   33 files    inside them 184 rect, 3 path, 1 polygon; not one
+#                          carries a transform, and all 181 clipPathUnits
+#                          say userSpaceOnUse
+#   mask        4 files    all four maskUnits userSpaceOnUse
+#   filter      2 files    the same publisher's documentation logo twice,
+#                          and feColorMatrix is the only primitive in either
+#
+# The sample had excluded a 492-file collection in which 24 of the 33 clip
+# paths live: clip-path came out too LOW and the other two too high. What
+# follows from the real numbers is that the first two are worth building and
+# the third is not - a per-pixel operation PDF has no operator for, in two
+# files. Clip paths and masks are built (svgClip.tcl); filters are reported.
+#
+# What [svg info] was missing until 2026-08-24 is described at
+# [SvgCountOnly]: everything under <defs> went uncounted, which is exactly
 # where a filter and a mask are declared.
 #
 #   shapes      path, rect (rx/ry included), circle, ellipse, line, polyline,
@@ -51,28 +63,32 @@
 #               inside a style="" attribute, which wins
 #   geometry    transform (translate, scale, rotate about a point, skewX,
 #               skewY, matrix), viewBox
-#   fitting     the DEFAULT of preserveAspectRatio - xMidYMid meet: the
-#               drawing keeps its proportions and is centred in the rectangle
-#               asked for. The attribute itself is NOT read; its twenty
-#               spellings wait for the first drawing that carries one
+#   visibility  clip-path and mask, both as the device PDF has for them: a
+#               clipping path (W or W*, several shapes as subpaths of one)
+#               and a luminosity soft mask, where the grey value IS the
+#               alpha. userSpaceOnUse only - svgClip.tcl
+#   fitting     preserveAspectRatio, all ten alignments with meet and slice,
+#               and none. A caller's own -fitMode wins over the file's
 #   text        text and tspan, with font-size, font-family (a list, first
-#               name that resolves wins), text-anchor and fill
+#               name that resolves wins), font-weight (bold from 600 up),
+#               text-anchor and fill
 #   gradients   linearGradient and radialGradient through the shading module,
 #               with objectBoundingBox (the default) measured against the
 #               shape being filled, userSpaceOnUse, stops from attribute or
 #               style, and one level of inheritance through href
 #
 # NOT covered, and each for a reason rather than by omission: filters and
-# animation, masks and clip paths, CSS in a <style> block, spreadMethod and
-# gradientTransform, and stop-opacity, which needs a luminosity soft mask.
-# The frequencies these were once justified by are corrected above; what
-# keeps them out now is the work each would take, not a claim that nobody
-# uses them. Every one of them is counted and reported by [svg info], so a
-# caller can see what a drawing lost instead of finding out from the page.
+# animation, CSS in a <style> block, spreadMethod and gradientTransform, and
+# objectBoundingBox units for a clip path or a mask - which do not occur in
+# the corpus at all. Every one of them is counted and reported by
+# [svg info], so a caller can see what a drawing lost instead of finding out
+# from the page.
 #
-# Known and open: a gradient whose axis runs in y comes out flat. The
-# coordinates written are correct - the matrix handed to the pattern maps x
-# and not y. See docs/STAND.md.
+# THE ONE THING THAT IS NOT REPORTABLE that way is an attribute, which is
+# why preserveAspectRatio is read although no file on this machine carries
+# one: an unknown ELEMENT can be counted, an ignored ATTRIBUTE leaves no
+# trace anywhere. A drawing that said "slice" and came out centred looked
+# like a drawing that had simply been placed.
 #
 # Anything else is skipped in silence, which is the right behaviour for a
 # format where unknown elements are expected to be ignored (SVG 23.2) - but
@@ -109,7 +125,8 @@ namespace eval ::tclpdf::svg {
 
   variable inherited {
     fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray
-    fill-opacity stroke-opacity fill-rule font-size font-family text-anchor
+    fill-opacity stroke-opacity fill-rule font-size font-family font-weight
+    text-anchor
   }
 }
 
@@ -157,6 +174,15 @@ oo::define ::tclpdf::document::document {
       data {} at {} size {} width {} height {} scale {} opacity {} alt {}
       artifact {} fit {} fitMode {} align center valign middle
     } $arguments "svg"]
+    # WHICH OPTIONS THE CALLER NAMED, as opposed to which ones carry a
+    # default. preserveAspectRatio has to yield to the caller and only to the
+    # caller - and -align/-valign default to center/middle, so their VALUE
+    # cannot tell the two apart. Without this list the file could never
+    # decide anything, which is what made the attribute inert under -fit.
+    dict set options given [lmap word $arguments {
+      if {[string index $word 0] ne "-"} continue
+      string range $word 1 end
+    }]
     if {$path ne {}} {
       # Read as bytes, then decode: an SVG is UTF-8 unless its declaration
       # says otherwise (XML 4.3.3). Reading it as text would use the system
@@ -214,11 +240,16 @@ oo::define ::tclpdf::document::document {
       # the mark does. Handed on to [SvgRoot] rather than computed twice, so
       # that the box and the drawing's own matrix are the same numbers and
       # not two computations that agree today.
+      # The tally is cleared HERE and not in [SvgRoot], which is where it
+      # used to be: [SvgFit] reads preserveAspectRatio and can already have
+      # something to report, and a reset after it threw that away - the one
+      # refusal the attribute has went missing between the two calls.
+      my state svgSkipped {}
       set fit [my SvgFit $root $options]
       lassign [my GraphicMark svg svg [dict get $options alt] \
           [dict get $options artifact] [expr {[dict get $options at] eq {} ?
           0 : [lindex [dict get $options at] 1]}] \
-          [dict get $fit area]] mark element
+          [dict get $fit visible]] mark element
       try {
         return [my SvgRoot $root $options $fit]
       } finally {
@@ -240,9 +271,104 @@ oo::define ::tclpdf::document::document {
   # the document unit, scale the factor onto it, inset {x y} and drawn
   # {width height} the fit in points, and area {left top width height} where
   # the drawing ACTUALLY ends up, in the document unit.
+  # preserveAspectRatio, as the pair the fitting works with.
+  #
+  #   ?defer? <align> ?meet|slice?
+  #
+  # The caller's own options WIN over the file's: a script that says
+  # -fitMode cover has asked for a covered box in this document, and a
+  # drawing carrying "meet" must not quietly undo it. Without -fitMode the
+  # file decides, and without either it is the default of both - meet.
+  #
+  # "defer" applies to a <use> pointing at an <image>, which this package
+  # does not draw, so it is accepted and ignored rather than refused.
+  method SvgAspect {root options} {
+    set mode [dict get $options fitMode]
+    if {$mode ne {}} {
+      return [list xMidYMid [expr {$mode eq "cover" ? {slice} : {meet}}]]
+    }
+    set value [string trim [::tclpdf::xml attribute $root preserveAspectRatio]]
+    if {$value eq {}} {
+      return {xMidYMid meet}
+    }
+    set words [lrange [regexp -all -inline {[^\s]+} $value] 0 end]
+    if {[lindex $words 0] eq "defer"} {
+      set words [lrange $words 1 end]
+    }
+    set align [lindex $words 0]
+    set meetOrSlice [lindex $words 1]
+    if {$meetOrSlice eq {}} {
+      set meetOrSlice meet
+    }
+    # An unreadable value is the default, which is what SVG 1.1 asks for
+    # (7.8: "a value in error ... shall be the default"). Counted, because a
+    # drawing whose fitting silently differs from what it says is exactly
+    # what reading the attribute was meant to prevent.
+    if {$align ni {none xMinYMin xMidYMin xMaxYMin xMinYMid xMidYMid xMaxYMid
+        xMinYMax xMidYMax xMaxYMax} || $meetOrSlice ni {meet slice}} {
+      my SvgSkipped preserveAspectRatio
+      return {xMidYMid meet}
+    }
+    return [list $align $meetOrSlice]
+  }
+
+  # Which fraction of the leftover goes in front of the drawing, per axis.
+  # Min keeps the near edge, Max the far one, Mid splits it - and under
+  # slice the leftover is negative, so the same three fractions crop from
+  # the same three sides.
+  # The alignment as the two words [fitAnchor] takes, so that a named box is
+  # anchored by the same code a picture's is. "none" names no edge - it fills
+  # the box - and neither does the middle, which is already the default.
+  method SvgAspectEdges {align} {
+    if {$align eq "none"} {
+      return {{} {}}
+    }
+    if {![regexp {^x(Min|Mid|Max)Y(Min|Mid|Max)$} $align -> x y]} {
+      return {{} {}}
+    }
+    return [list [dict get {Min left Mid center Max right} $x] \
+        [dict get {Min top Mid middle Max bottom} $y]]
+  }
+
+  method SvgAspectShare {align} {
+    if {$align eq "none"} {
+      return {0 0}
+    }
+    set shares {Min 0 Mid 0.5 Max 1}
+    regexp {^x(Min|Mid|Max)Y(Min|Mid|Max)$} $align -> x y
+    return [list [dict get $shares $x] [dict get $shares $y]]
+  }
+
   method SvgFit {root options} {
     lassign [my SvgViewBox $root] boxX boxY boxWidth boxHeight
+    # THE ATTRIBUTE IS READ FIRST, and that order is the whole of it: with
+    # -fit, [fitExtent] has already cut the named box down to the drawing's
+    # proportions by the time the scales are worked out, so both axes carry
+    # the same factor and meet, slice and none become the same arithmetic.
+    # Measured on 2026-08-25: under -fit, "none" wrote the same bytes as no
+    # attribute at all and "slice" wrote a clip around a drawing that fitted
+    # inside it. The attribute feeds the OPTIONS instead, which is where the
+    # fitting already knows what to do with it.
+    lassign [my SvgAspect $root $options] align meetOrSlice
+    set given [expr {[dict exists $options given] ? [dict get $options given] : {}}]
+    if {[dict get $options fit] ne {}} {
+      if {"fitMode" ni $given} {
+        dict set options fitMode [expr {$meetOrSlice eq "slice" ? {cover} : {contain}}]
+      }
+      lassign [my SvgAspectEdges $align] edge vedge
+      if {$edge ne {} && "align" ni $given} {
+        dict set options align $edge
+      }
+      if {$vedge ne {} && "valign" ni $given} {
+        dict set options valign $vedge
+      }
+    }
     lassign [my SvgExtent $root $options $boxWidth $boxHeight] width height
+    if {$align eq "none" && [dict get $options fit] ne {}} {
+      # The one spelling that fills the named box on both axes rather than
+      # keeping the drawing's shape.
+      lassign [dict get $options fit] width height
+    }
     lassign [expr {[dict get $options at] eq {} ? {0 0} : [dict get $options at]}] left top
 
     # THE ANCHOR MOVES THE CORNER, not the inset - which is where a first
@@ -259,38 +385,88 @@ oo::define ::tclpdf::document::document {
       lassign [my fitAnchor [list $left $top] $width $height $options] left top
     }
 
-    # Fit, do not distort. The default of preserveAspectRatio is
-    # "xMidYMid meet": the drawing keeps its proportions, is scaled until it
-    # fits the rectangle in BOTH directions, and is centred in what is left
-    # over. Measured over 14995 files, the attribute itself never occurs -
-    # so only the default is implemented, and the twenty spellings of it are
-    # a TODO waiting for the first drawing that needs one.
+    # Fit, do not distort - and preserveAspectRatio is the attribute that
+    # says how. Its default is "xMidYMid meet": the drawing keeps its
+    # proportions, is scaled until it fits the rectangle in BOTH directions,
+    # and is centred in what is left over.
     #
-    # Distorting instead would turn a circle into an ellipse whenever the
-    # requested rectangle has a different shape than the viewBox, and there
-    # is no reading at which that is what the caller asked for.
+    # WHY IT IS READ AT ALL, given that it occurs in none of the 15046 files
+    # measured on this machine on 2026-08-25: because it fails SILENTLY. An
+    # element this package does not know is counted and [svg info] reports
+    # it; an ATTRIBUTE it ignores leaves no trace anywhere - the drawing
+    # simply comes out centred where the file said "slice" and cropped. That
+    # is the one kind of omission this package does not allow itself, and
+    # the arithmetic is the same min/max the pictures already use.
+    #
+    # Distorting is what "none" asks for and nothing else does: it turns a
+    # circle into an ellipse whenever the rectangle has a different shape
+    # than the viewBox, so it happens only where the file says so.
+    # (align and meetOrSlice come from the ONE reading at the top of this
+    # method. Asking a second time here would re-read the -fitMode that the
+    # top just derived from the attribute, and "none" would come back as
+    # "xMidYMid meet" - measured 2026-08-25, and the reason the attribute
+    # looked inert twice over.)
     set requestedWidth [my distance $width]
     set requestedHeight [my distance $height]
-    set scale [expr {min($requestedWidth / double($boxWidth),
-        $requestedHeight / double($boxHeight))}]
-    set drawnWidth [expr {$boxWidth * $scale}]
-    set drawnHeight [expr {$boxHeight * $scale}]
-    # What is left over is split evenly - that is the "Mid" in xMidYMid.
-    set insetX [expr {($requestedWidth - $drawnWidth) / 2.0}]
-    set insetY [expr {($requestedHeight - $drawnHeight) / 2.0}]
+    set fullX [expr {$requestedWidth / double($boxWidth)}]
+    set fullY [expr {$requestedHeight / double($boxHeight)}]
+    switch -- $align {
+      none {
+        # Each axis takes its own factor - the one case where the drawing
+        # is stretched, and the file asked for it.
+        set scaleX $fullX
+        set scaleY $fullY
+      }
+      default {
+        # meet fits inside the rectangle, slice covers it and hangs over.
+        set scaleX [expr {$meetOrSlice eq "slice" ? max($fullX, $fullY)
+            : min($fullX, $fullY)}]
+        set scaleY $scaleX
+      }
+    }
+    set scale $scaleX
+    set drawnWidth [expr {$boxWidth * $scaleX}]
+    set drawnHeight [expr {$boxHeight * $scaleY}]
+    # Where the leftover goes - or, under slice, which part is cut off. Min
+    # keeps the near edge, Max the far one, Mid splits it: that is the whole
+    # of the ten alignment spellings, one fraction per axis.
+    lassign [my SvgAspectShare $align] shareX shareY
+    set insetX [expr {($requestedWidth - $drawnWidth) * $shareX}]
+    set insetY [expr {($requestedHeight - $drawnHeight) * $shareY}]
     set unit [my cget -unit]
     # The area is the FITTED rectangle, not the one asked for: once a drawing
     # is fitted rather than stretched it is smaller than the rectangle and
     # sits centred in it, and the empty bands beside it are not the figure.
+    #
+    # AND UNDER SLICE IT IS CUT BACK, because there the drawing is LARGER
+    # than the box and hangs over it. What hangs over is clipped away in
+    # SvgRoot and no reader ever sees it, so 14.8.5.4.3 - the rectangle
+    # enclosing the visible content - does not include it. Measured
+    # 2026-08-25: a 2:1 drawing covered into a 40 mm box answered a box
+    # reaching to x = -113 pt, over the left edge of the paper, while the
+    # picture road at the same call answered the box. The same number is
+    # what [svg] hands the caller for the caption.
     return [dict create \
         box [list $boxX $boxY $boxWidth $boxHeight] \
         extent [list $width $height] at [list $left $top] scale $scale \
+        scaleX $scaleX scaleY $scaleY aspect [list $align $meetOrSlice] \
         inset [list $insetX $insetY] drawn [list $drawnWidth $drawnHeight] \
         area [list \
             [expr {$left + [::tclpdf::geometry fromPoints $insetX $unit]}] \
             [expr {$top + [::tclpdf::geometry fromPoints $insetY $unit]}] \
             [::tclpdf::geometry fromPoints $drawnWidth $unit] \
-            [::tclpdf::geometry fromPoints $drawnHeight $unit]]]
+            [::tclpdf::geometry fromPoints $drawnHeight $unit]] \
+        visible [my boxClipped [list \
+            [expr {$left + [::tclpdf::geometry fromPoints $insetX $unit]}] \
+            [expr {$top + [::tclpdf::geometry fromPoints $insetY $unit]}] \
+            [::tclpdf::geometry fromPoints $drawnWidth $unit] \
+            [::tclpdf::geometry fromPoints $drawnHeight $unit]] \
+            [expr {$meetOrSlice eq "slice"
+                ? [list {*}[expr {[dict get $options fit] eq {}
+                    ? [list $left $top] : [dict get $options at]}] \
+                  {*}[expr {[dict get $options fit] eq {}
+                    ? [list $width $height] : [dict get $options fit]}]]
+                : {}}]]]
   }
 
   method SvgRoot {root options fit} {
@@ -298,13 +474,13 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: this is not an SVG document - the root\
           element is \"[::tclpdf::xml name $root]\""
     }
-    my state svgSkipped {}
-
     lassign [dict get $fit box] boxX boxY boxWidth boxHeight
     lassign [dict get $fit drawn] drawnWidth drawnHeight
     lassign [dict get $fit area] areaLeft areaTop areaWidth areaHeight
-    set scaleX [dict get $fit scale]
-    set scaleY [dict get $fit scale]
+    # One factor per axis: they differ only where preserveAspectRatio says
+    # "none", which is the one spelling that stretches.
+    set scaleX [dict get $fit scaleX]
+    set scaleY [dict get $fit scaleY]
 
     # Everything is drawn inside one q/Q pair with a single matrix that maps
     # the viewBox onto the requested rectangle. The y axis is flipped HERE and
@@ -326,10 +502,19 @@ oo::define ::tclpdf::document::document {
     # name, before the anchor moved the drawing inside it. Inside the save,
     # so the matching restore takes it back - a clipping path lasts to the
     # end of the content stream otherwise.
-    if {[dict get $options fit] ne {} && [dict get $options fitMode] eq "cover"} {
+    # SLICE IS THE SAME CASE and is cut back the same way, whether the
+    # caller asked for it with -fitMode cover or the drawing asked for it
+    # with preserveAspectRatio. Without -fit there is no named box, so what
+    # is cut back to is the extent the drawing was given.
+    lassign [dict get $fit aspect] -> meetOrSlice
+    if {$meetOrSlice eq "slice"} {
       lassign [expr {[dict get $options at] eq {} ? {0 0}
           : [dict get $options at]}] clipLeft clipTop
-      my clip -at [list $clipLeft $clipTop] -size [dict get $options fit]
+      set clipSize [dict get $options fit]
+      if {$clipSize eq {}} {
+        set clipSize [dict get $fit extent]
+      }
+      my clip -at [list $clipLeft $clipTop] -size $clipSize
     }
     if {[dict get $options opacity] ne {}} {
       my content "[::tclpdf::pdfObj name [dict get $options opacity]] gs\n"
@@ -344,6 +529,12 @@ oo::define ::tclpdf::document::document {
     # page's default space and would otherwise sit outside the shape it fills.
     my state svgBox [list $boxX $boxY $boxWidth $boxHeight]
     my state svgGradients {}
+    # AND THE MASKS WITH THEM, for the reason svgPaint.tcl records for the
+    # gradients: the cache is keyed on the SVG id, and two drawings in one
+    # document may each carry a mask called "m" that means something
+    # different. Left standing, the second drawing was handed the first
+    # one's mask - measured 2026-08-25, both wrote /svgMask1.
+    my state svgMaskNames {}
     # No transparency group is being captured yet - and none may be left
     # over from a drawing that failed halfway.
     my state svgGroupStack {}
@@ -367,12 +558,16 @@ oo::define ::tclpdf::document::document {
         my SvgRestore
       }
     }
-    # Where the drawing ACTUALLY ended up, not what was asked for: once it is
-    # fitted rather than stretched it is smaller than the rectangle and sits
-    # centred in it, and a caller placing a caption underneath needs to know
-    # where. The same four numbers the Figure got as its bounding box - one
-    # area, worked out once in [SvgFit].
-    return [dict get $fit area]
+    # WHAT A READER SEES, not what was drawn - the two differ under slice,
+    # where the drawing is larger than the box and the rest is clipped away.
+    # Fitted rather than stretched it is the other way round: smaller than
+    # the rectangle and centred in it. Either way a caller placing a caption
+    # underneath needs the visible rectangle, and it is the same four
+    # numbers the Figure got as its bounding box. The box the drawing is
+    # PLACED in is the unclipped one, [dict get $fit area], and mixing the
+    # two up glues the drawing to the corner of its box - measured on
+    # 2026-08-25, caught by svg-aspect-30.7.
+    return [dict get $fit visible]
   }
 
   # Decode a document according to its XML declaration, UTF-8 by default.
@@ -505,4 +700,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.8
+package provide tclpdf::svg 1.9

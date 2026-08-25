@@ -113,6 +113,13 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
+    # Asked BEFORE the modulo, which is where an empty string or a word used
+    # to die as "can't use empty string as operand of %" - a raw Tcl error
+    # where this package promises a message of its own.
+    if {![string is integer -strict $rotate]} {
+      return -code error "tclpdf: page rotation is a whole number of degrees,\
+          a multiple of 90, not \"$rotate\""
+    }
     if {$rotate % 90} {
       # 7.7.3.3: only multiples of 90 are permitted, and a reader is free to
       # ignore anything else rather than to complain.
@@ -120,6 +127,20 @@ oo::define ::tclpdf::document::document {
     }
     if {[llength $format] == 2 && !$stated} {
       set orientation {}
+    }
+    # A size given as two numbers goes into [pageSize] and from there into
+    # [toPoints], which takes NaN for a double. The limits below are
+    # comparisons and NaN is false against all of them, so a page of NaN by
+    # NaN was accepted and every coordinate on it came out NaN - measured on
+    # 2026-08-25. Refused here, where the numbers are still the caller's.
+    if {[llength $format] == 2} {
+      foreach number $format {
+        # A word among the two is [pageSize]'s own refusal, as before - see
+        # [distance].
+        if {[string is double -strict $number]} {
+          ::tclpdf::option number $number "-format" "page add"
+        }
+      }
     }
     lassign [::tclpdf::geometry pageSize $format $orientation \
         [dict get $tclpdfOption unit]] width height
@@ -202,10 +223,7 @@ oo::define ::tclpdf::document::document {
     if {[llength $value] != 4} {
       return -code error "tclpdf: a page box is {x0 y0 x1 y1}, got \"$value\""
     }
-    set unit [dict get $tclpdfOption unit]
-    set box [lmap number $value {
-      ::tclpdf::geometry toPoints $number $unit
-    }]
+    set box [my extent $value]
     # Everything that can be refused is refused BEFORE the page is touched:
     # a box that fails halfway must not leave the page with a media box it
     # cannot hold.
@@ -465,19 +483,34 @@ oo::define ::tclpdf::document::document {
     set top [::tcl::mathfunc::min {*}$ys]
     set right [::tcl::mathfunc::max {*}$xs]
     set bottom [::tcl::mathfunc::max {*}$ys]
-    if {[llength $clip] == 4} {
-      lassign $clip clipLeft clipTop clipWidth clipHeight
-      set left [expr {max($left, $clipLeft)}]
-      set top [expr {max($top, $clipTop)}]
-      set right [expr {min($right, $clipLeft + $clipWidth)}]
-      set bottom [expr {min($bottom, $clipTop + $clipHeight)}]
-      if {$right < $left} {
-        set right $left
-      }
-      if {$bottom < $top} {
-        set bottom $top
-      }
+    return [my boxClipped [list $left $top [expr {$right - $left}] \
+        [expr {$bottom - $top}]] $clip]
+  }
+
+  # A box cut back to what a clipping rectangle leaves of it, both as
+  # {x y width height} in the document unit.
+  #
+  # Its own method because THREE roads need it and each of them answers a
+  # structure element with the result: a picture, a form and a drawing, all
+  # three of which may be placed with -fitMode cover and are then larger
+  # than the box the caller named. ISO 32000-2, 14.8.5.4.3 asks the BBox of
+  # an element for "the rectangle that completely encloses the VISIBLE
+  # content" - and what a clip cut away is not visible. Measured on
+  # 2026-08-25: a drawing covered into a 40 mm box reported a BBox reaching
+  # to x = -113 pt, over the left edge of the paper and four times as wide
+  # as what a reader sees, while the picture road at the same call reported
+  # the box itself. That number is also what [svg] and [form place] hand
+  # back to the caller, who sets the caption under it.
+  method boxClipped {box clip} {
+    if {[llength $clip] != 4} {
+      return $box
     }
+    lassign $box left top width height
+    lassign $clip clipLeft clipTop clipWidth clipHeight
+    set right [expr {max($left, min($left + $width, $clipLeft + $clipWidth))}]
+    set bottom [expr {max($top, min($top + $height, $clipTop + $clipHeight))}]
+    set left [expr {min($right, max($left, $clipLeft))}]
+    set top [expr {min($bottom, max($top, $clipTop))}]
     return [list $left $top [expr {$right - $left}] [expr {$bottom - $top}]]
   }
 
@@ -495,17 +528,43 @@ oo::define ::tclpdf::document::document {
       # not on the page, and no validator says a word about it.
       lassign [dict get $page boxes media] left -> -> height
     }
-    set unit [dict get $tclpdfOption unit]
-    return [list [expr {$left + [::tclpdf::geometry toPoints $x $unit]}] \
-        [expr {$height - [::tclpdf::geometry toPoints $y $unit]}]]
+    # Through [my distance] rather than around it, so that the one check a
+    # measurement gets is the one every measurement gets - see there.
+    return [list [expr {$left + [my distance $x]}] \
+        [expr {$height - [my distance $y]}]]
   }
 
   # A length in points - a width or a radius, which has no origin to mirror.
   # The unit defaults to the document's; passing one is for the modules that
   # let a caller override it per call.
+  # THE ONE GATE EVERY MEASUREMENT PASSES, and therefore the place the
+  # non-numbers are turned away at. [geometry toPoints] reads its value with
+  # [string is double -strict], which is true for "NaN" and for "Inf": NaN then
+  # compares false against every range check written as a comparison, travels
+  # on through the arithmetic, and surfaces as Tcl's own "can't use
+  # non-numeric floating-point value as operand of \"*\"" from inside a method
+  # the caller never named - measured on 2026-08-25 for -at, -size, -radius,
+  # -scale, -fit, -from/-to and page -format alike, every one of them a raw
+  # error against the promise that every refusal begins with "tclpdf:".
+  #
+  # Here rather than per module, and rather than at [pdfObj num]: this is the
+  # single conversion from the caller's unit into points, so a value refused
+  # here has not yet reached a matrix, a mark or a "q". [pdfObj num] keeps its
+  # own "number has no PDF representation" - that one stands at the moment of
+  # WRITING and also catches a perfectly finite value beyond the PDF real
+  # range, which is a different mistake and needs its own words.
   method distance {value {unit {}}} {
     if {$unit eq {}} {
       set unit [dict get $tclpdfOption unit]
+    }
+    # Only a value that IS a double is judged here. A word is not a
+    # measurement at all, and [geometry toPoints] has said so in those words
+    # since 1.0 - "not a measurement: \"a\"" - which is what the tests of
+    # three modules read and what a caller who mistyped a variable name sees.
+    # What was missing is the double that is no number, and that is what this
+    # line adds.
+    if {[string is double -strict $value]} {
+      ::tclpdf::option number $value "a length"
     }
     return [::tclpdf::geometry toPoints $value $unit]
   }
@@ -525,6 +584,24 @@ oo::define ::tclpdf::document::document {
   # width is given and the other does not. Extracted when the second consumer
   # appeared - the copy in the image module was already three branches deep.
   method fitExtent {naturalWidth naturalHeight options} {
+    # NaN AND Inf FIRST, because everything below this is arithmetic. The
+    # sizing options are checked by [geometry checkFit] before this runs, and
+    # that check is written as "$value <= 0" - false for NaN, which therefore
+    # arrives here and dies as an operand of "*" or of "/". Said here rather
+    # than in each of the three roads that call this (a picture, a drawing, a
+    # form), and with the option's own name, since that is what the caller
+    # wrote. -fit is not among them: [fitCheck] answers for the box.
+    foreach key {size width height scale} {
+      if {![dict exists $options $key] || [dict get $options $key] eq {}} {
+        continue
+      }
+      foreach value [dict get $options $key] {
+        # A word is [geometry checkFit]'s refusal, and it made it above.
+        if {[string is double -strict $value]} {
+          ::tclpdf::option number $value "-$key"
+        }
+      }
+    }
     # -fit names a BOX and keeps the proportions, which is the one sizing
     # option that cannot be worked out from the natural size alone: the box
     # decides the factor, and which of its two edges decides it is what
@@ -602,8 +679,14 @@ oo::define ::tclpdf::document::document {
         return -code error -errorcode [list TCLPDF FIT BOX $fit $what] \
             "tclpdf: -fit of $what is a box {width height}, not \"$fit\""
       }
+      # [option finite] and not [string is double -strict]: the latter is true
+      # for NaN, and NaN is false against "<= 0" as it is against every other
+      # comparison, so a box of NaN was waved past this and died in the
+      # arithmetic below it. text.tcl had to say so a second time in its own
+      # words for exactly that reason; with the check here the box is answered
+      # once, for every road that fits into one.
       foreach value $fit {
-        if {![string is double -strict $value] || $value <= 0} {
+        if {![::tclpdf::option finite $value] || $value <= 0} {
           return -code error -errorcode [list TCLPDF FIT BOX $fit $what] \
               "tclpdf: -fit of $what takes lengths above zero, not\
               \"$value\""
@@ -674,8 +757,19 @@ oo::define ::tclpdf::document::document {
     # placement does anyway, so a caller who spells them out beside -rotate
     # gets exactly what the words say. Only a value that MOVES the corner is
     # refused, which is why the fractions are compared rather than the words.
+    # An angle first, and a real one. NaN is a double to Tcl and is unequal to
+    # 0 - as it is to everything, itself included - so a NaN -rotate walked
+    # into the refusal below and was reported as a combination of options
+    # instead of as the value it is; without -fit it walked past it and into
+    # cos() and sin(). All three roads that turn a placement come through
+    # here, so the angle is answered once. Only a value that IS a double is
+    # judged here: a -rotate of "x" is not an angle at all, and each road says
+    # so in its own words already.
     if {[dict exists $options rotate]
-        && [string is double -strict [dict get $options rotate]]
+        && [string is double -strict [dict get $options rotate]]} {
+      ::tclpdf::option number [dict get $options rotate] "-rotate" $what
+    }
+    if {[dict exists $options rotate]
         && [dict get $options rotate] != 0} {
       set turned {}
       if {$fit ne {}} {

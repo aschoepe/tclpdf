@@ -77,8 +77,23 @@ oo::class create ::tclpdf::writer::pdf {
     my version $version
   }
 
-  method version {{value {}}} {
-    if {$value ne {}} {
+  # AN OMITTED ARGUMENT IS THE GETTER, an empty one is a value - and telling
+  # the two apart takes [llength], not a default. Written with a default,
+  # "version {}" fell into the getter, the setter never ran, and the answer
+  # was a variable that had never been set: [tclpdf new -version {}] died
+  # with "can't read tclpdfVersion" and [configure -version {}] left
+  # [cget -version] answering the empty string over a file whose header said
+  # 1.3. The empty string is not a PDF version, so it belongs in the list
+  # below like any other wrong value.
+  method version {args} {
+    if {![llength $args]} {
+      return $tclpdfVersion
+    }
+    if {[llength $args] > 1} {
+      return -code error "tclpdf: version takes one value, not \"$args\""
+    }
+    set value [lindex $args 0]
+    if {1} {
       # A list, not a pattern. The pattern let "1.9" through, and there is
       # no PDF 1.8 or 1.9 - the file would claim a version that does not
       # exist, which no reader complains about and no validator checks.
@@ -128,7 +143,16 @@ oo::class create ::tclpdf::writer::pdf {
   # asked for after that call passes where it failed before, which is right.
   method require {version feature} {
     if {[package vcompare $tclpdfVersion $version] < 0} {
-      return -code error "tclpdf: $feature needs PDF $version - this document\
+      # THE CODE IS SET HERE, not by the caller. [RequireVersion] in
+      # document.tcl put it on afterwards, which covered every road that
+      # goes through the document - but not the ones that ask the writer
+      # itself: the filter floor of a copied stream is the one that showed
+      # it, reaching the caller of [pdf import] as NONE where every other
+      # version refusal carries TCLPDF VERSION. The document method still
+      # fills in for anything that arrives without one, so nothing changes
+      # for the roads that already worked.
+      return -code error -errorcode [list TCLPDF VERSION $version] \
+          "tclpdf: $feature needs PDF $version - this document\
           is written as PDF $tclpdfVersion; create it with -version $version\
           or higher, or raise it with configure -version"
     }
@@ -168,6 +192,48 @@ oo::class create ::tclpdf::writer::pdf {
     return $tclpdfNext
   }
 
+  # A RESERVED NUMBER GIVEN BACK - the counterpart of [reserve], for the
+  # caller whose call refuses AFTER it has reserved. Without it such a caller
+  # has no way out: the number stays reserved and never filled, [CheckComplete]
+  # refuses the file, and the document can never be written again although the
+  # caller caught the error and carried on (measured 2026-08-25 at a form field
+  # with several widgets, whose label script is the caller's own and raises
+  # between one widget's reservation and the next).
+  #
+  # THE NUMBER IS NOT HANDED OUT AGAIN, and that is the whole safety of this
+  # method. Whether anything already refers to it is something only the caller
+  # can know - a page's /Annots, an /OBJR in the structure tree - and a number
+  # given to a SECOND object while a reference to the first still names it
+  # writes a file that opens and means something else. So the number is filled
+  # with the null object instead, and 7.3.9 says what that costs: "A reference
+  # to a non-existent object shall be treated the same as a reference to the
+  # null object", and a null value "shall be equivalent to omitting the entry".
+  # The file therefore reads exactly as it would have read had the number never
+  # existed, at fifteen bytes for an object nobody points at - and only in a
+  # document where a call was refused and caught.
+  #
+  # Refused for a number that was never reserved, and for one that is already
+  # written: giving back a number whose object is in the file would be worse
+  # than the leak it cures - the object would silently become null. That check
+  # is what makes this method safe to offer at all, and it is why [put] and
+  # [release] are the only two ways a body is ever set.
+  #
+  # Answers the number.
+  method release {number} {
+    if {![dict exists $tclpdfObjects $number]} {
+      return -code error "tclpdf: object $number was never reserved"
+    }
+    if {[dict get $tclpdfObjects $number] eq "null"} {
+      return -code error "tclpdf: object $number was already released"
+    }
+    if {[dict get $tclpdfObjects $number] ne {}} {
+      return -code error "tclpdf: object $number is already written and\
+          cannot be released"
+    }
+    dict set tclpdfObjects $number null
+    return $number
+  }
+
   # Fill a reserved number.
   method put {number body} {
     if {![dict exists $tclpdfObjects $number]} {
@@ -193,17 +259,34 @@ oo::class create ::tclpdf::writer::pdf {
     return [my put $number [my StreamBody $pairs $data]]
   }
 
-  # The one place every stream passes through - which makes it the place for
-  # the one filter check. FlateDecode exists since PDF 1.2 (PDF Reference
-  # 1.7, Table 3.5); the document's -compress, an embedded font program, a
-  # PNG picture and an attachment all deflate, and gating them each at their
-  # own site is how one of them would one day be forgotten.
-  method StreamBody {pairs data} {
-    my CheckBytes $data
-    if {[dict exists $pairs Filter]
-        && [string match *FlateDecode* [dict get $pairs Filter]]} {
+  # THE FILTER CHECK, on its own so that it can be asked BEFORE the stream is
+  # built. [StreamBody] below is the one place every stream passes through and
+  # therefore where the check belongs - but a caller that reserves numbers and
+  # writes the streams into them afterwards would learn of the refusal with
+  # every number already handed out, and a caught [pdf import] then left a
+  # document that could never be written (measured 2026-08-25, a page with a
+  # deflated resource imported into a -version 1.1 document). Such a caller
+  # asks here first; the answer is the same one and comes from the same line.
+  #
+  # $filter is the /Filter value in any of the shapes it is written in - a
+  # name, an array of names, or the bare list of names a reader hands back -
+  # because all the check does is look for the one filter that has a version
+  # floor. FlateDecode exists since PDF 1.2 (PDF Reference 1.7, Table 3.5);
+  # the document's -compress, an embedded font program, a PNG picture and an
+  # attachment all deflate, and gating them each at their own site is how one
+  # of them would one day be forgotten.
+  method requireFilter {filter} {
+    if {[string match *FlateDecode* $filter]} {
       my require 1.2 "a FlateDecode stream (-compress 1, an embedded font, a\
           PNG picture, a compressed attachment)"
+    }
+    return
+  }
+
+  method StreamBody {pairs data} {
+    my CheckBytes $data
+    if {[dict exists $pairs Filter]} {
+      my requireFilter [dict get $pairs Filter]
     }
     # Encryption sits here and only here, between the filter check and the
     # length: ISO 32000-2, 7.6.3.3 - "Stream data shall be encrypted after

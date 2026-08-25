@@ -67,12 +67,16 @@ oo::define ::tclpdf::document::document {
     # Checked as [text] checks its width, and before anything is drawn: a
     # negative width put the right hand end to the left of -at, and "abc"
     # failed in Tcl's words from inside the arithmetic below.
-    if {![string is double -strict $width] || $width <= 0} {
+    # [text::finite] rather than [string is double]: NaN is a double to Tcl
+    # and compares false against everything, so "$width <= 0" waved it past
+    # and the row was laid out with a NaN width - see the proc for what that
+    # costs downstream.
+    if {![::tclpdf::text::finite $width] || $width <= 0} {
       return -code error "tclpdf: -width must be a positive number, not\
           \"$width\""
     }
     set gap [dict get $options gap]
-    if {![string is double -strict $gap] || $gap < 0} {
+    if {![::tclpdf::text::finite $gap] || $gap < 0} {
       return -code error "tclpdf: -gap takes a distance of 0 or more, not\
           \"$gap\""
     }
@@ -145,6 +149,35 @@ oo::define ::tclpdf::document::document {
     set fillWidth 0
     if {$fill ne {}} {
       set fillWidth [my textWidth $fill {*}$font]
+      # A FILL THAT DOES NOT GET LONGER cannot be counted. "As many whole
+      # copies as fit" has an answer only while every further copy makes the
+      # run wider; -spacing is a number of points of EITHER sign, and once it
+      # takes as much off between two copies as one copy is wide, the run
+      # SHRINKS with every copy added, every count fits, and the loop below
+      # that grows the count while it still fits never ends. Measured: at
+      # -size 10 a full stop is 0.98 mm wide, at -spacing -3 ten of them
+      # measure 0.28 mm, and [leader] ran for eight seconds without drawing
+      # anything before it was stopped.
+      #
+      # Refused rather than capped at some number: a run that walks backwards
+      # over its own left hand end is not a row of leaders whatever the
+      # count, and a cap would put a silent, arbitrary number of overlapping
+      # marks on the page. A negative -spacing that still leaves the run
+      # growing - dots set tighter than the face sets them - is untouched by
+      # this, which is what the option is for.
+      #
+      # Measured as TWO copies against one rather than computed from the
+      # spacing: a fill is a STRING, and what happens between two copies of
+      # it is the business of the measurement - kerning across the seam, a
+      # ligature that forms there - not of arithmetic done here.
+      if {[my textWidth [string repeat $fill 2] {*}$font] <= $fillWidth} {
+        return -code error -errorcode [list TCLPDF LEADER FILL $fill] \
+            "tclpdf: a row of \"$fill\" does not get longer the more copies\
+            it holds - the spacing in force takes at least as much off\
+            between two copies as one copy is wide, so \"as many as fit\" has\
+            no answer and the count would run away. Give a -spacing that\
+            leaves the run growing, or a wider -fill"
+      }
     }
     # WHERE THE THREE PIECES SIT. The row has a leading end, a trailing end
     # and a fill between them, and "leading" is a matter of reading order: in
@@ -185,9 +218,21 @@ oo::define ::tclpdf::document::document {
           && [my textWidth [string repeat $fill $count] {*}$font] > $room} {
         incr count -1
       }
-      while {[my textWidth [string repeat $fill [expr {$count + 1}]] {*}$font]
-          <= $room} {
+      # The growth is guarded by the run itself, not only by the room: a copy
+      # that does not make the run longer ends the loop whatever the room
+      # says. The refusal above catches the case that matters - a fill whose
+      # run shrinks - and this keeps the loop bounded by construction, so a
+      # seam that behaves unevenly (a ligature forming across it, a kern) can
+      # never turn into a run that goes on for ever.
+      set reached [my textWidth [string repeat $fill $count] {*}$font]
+      while {1} {
+        set longer [my textWidth [string repeat $fill [expr {$count + 1}]] \
+            {*}$font]
+        if {$longer > $room || $longer <= $reached} {
+          break
+        }
         incr count
+        set reached $longer
       }
       # An artifact: the dots are decoration. Outside a tagged document the
       # option costs nothing, which is why it is not made conditional here.

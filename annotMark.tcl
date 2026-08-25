@@ -56,12 +56,22 @@ package require tclpdf::document 1.0-
 package require tclpdf::annot 1.0-
 
 namespace eval ::tclpdf::annotMark {
-  # The four kinds: the subcommand, its /Subtype, and the PDF version that
-  # first had it (12.5.6.10 - Squiggly came with 1.4, the other three with
-  # 1.3). The subcommands themselves are registered in annot.tcl, which is
-  # where the dispatcher has to know them before this file is loaded.
+  # The four kinds: the subcommand, its /Subtype, and the PDF version this
+  # package needs for it. Three of the four numbers are the standard's own
+  # (12.5.6.10 - Squiggly came with 1.4, the other three with 1.3); the
+  # subcommands are registered in annot.tcl, which is where the dispatcher
+  # has to know them before this file is loaded.
+  #
+  # HIGHLIGHT IS THE EXCEPTION AND SAYS 1.4, a floor this package adds
+  # rather than one the standard sets. /Highlight itself is 1.3; what needs
+  # 1.4 is the appearance drawn for it - a band under the Multiply blend
+  # mode, so that the words show through instead of being painted over
+  # (AnnotMarkAppearance). Written as 1.3 the refusal came out of [blend]
+  # halfway through the drawing, naming neither the annotation nor a way
+  # out, while underline and strikeout went through in the same document.
+  # A floor belongs where the caller can see it.
   variable markup {
-    highlight {Highlight 1.3}
+    highlight {Highlight 1.4}
     underline {Underline 1.3}
     strikeout {StrikeOut 1.3}
     squiggly  {Squiggly 1.4}

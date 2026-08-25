@@ -449,8 +449,37 @@ oo::define ::tclpdf::document::document {
     } elseif {[llength $builder]} {
       set appearance [my {*}$builder $serial $rect $options]
     }
-    # Nothing is reserved until here, so a refusal above leaves the writer as
-    # it was and the document still writes.
+    # EVERYTHING THAT CAN STILL REFUSE, worked out before the number exists.
+    # The appearance was moved above the reservation on 2026-08-25; these
+    # four were left behind, and each of them made a CAUGHT error kill the
+    # whole document - "object(s) reserved but never written" at the next
+    # write. Found in round 6 of the review, in the very method whose
+    # comment claimed the case was closed.
+    set colourArray {}
+    if {[dict get $options colour] ne {}} {
+      set colourArray [my AnnotColourArray [dict get $options colour]]
+    }
+    set alpha {}
+    if {[dict get $options opacity] ne {}} {
+      # /CA fades the WHOLE annotation, appearance and all (12.5.5), which is
+      # why the appearance streams are drawn opaque: an alpha in both places
+      # multiplies, and a highlight asked for at 0.5 came out at 0.25.
+      set alpha [my AnnotOpacity [dict get $options opacity]]
+      my RequireVersion 1.4 "-opacity of an annotation"
+    }
+    set stamp {}
+    if {[dict get $options date] ne {}} {
+      set stamp [my AnnotDate [dict get $options date]]
+    }
+    # The structure element is OPENED here for the same reason - whether an
+    # Annot may stand where the caller is does not depend on the number, and
+    # it is the one refusal of the four that used to leave a half-built tree
+    # behind as well. Only the reservation stands between the open and the
+    # close, and that cannot raise.
+    set structureId {}
+    if {[dict get $record structured]} {
+      set structureId [my AnnotStructureOpen]
+    }
     set number [[my writer] reserve]
     set all [list Type /Annot Subtype [::tclpdf::pdfObj name $subtype] \
         Rect [dict get $rect array] \
@@ -464,26 +493,22 @@ oo::define ::tclpdf::document::document {
       # (Table 170) - and a reader puts it in the title bar of the note.
       lappend all T [my Str [dict get $options title]]
     }
-    if {[dict get $options colour] ne {}} {
-      lappend all C [my AnnotColourArray [dict get $options colour]]
+    if {$colourArray ne {}} {
+      lappend all C $colourArray
     }
-    if {[dict get $options opacity] ne {}} {
-      # /CA fades the WHOLE annotation, appearance and all (12.5.5), which is
-      # why the appearance streams are drawn opaque: an alpha in both places
-      # multiplies, and a highlight asked for at 0.5 came out at 0.25.
-      lappend all CA [my AnnotOpacity [dict get $options opacity]]
-      my RequireVersion 1.4 "-opacity of an annotation"
+    if {$alpha ne {}} {
+      lappend all CA $alpha
     }
-    if {[dict get $options date] ne {}} {
-      set stamp [my AnnotDate [dict get $options date]]
+    if {$stamp ne {}} {
       lappend all M $stamp CreationDate $stamp
     }
     if {$appearance ne {}} {
       lappend all AP [::tclpdf::pdfObj dictionary [list N $appearance]]
     }
     lappend all {*}$pairs
-    if {[dict get $record structured]} {
-      set key [my AnnotStructure $number]
+    if {$structureId ne {}} {
+      set key [my StructureAnnotation $number]
+      my StructureClose $structureId
       if {$key ne {}} {
         lappend all StructParent $key
       }
@@ -551,9 +576,25 @@ oo::define ::tclpdf::document::document {
   # The refusal is rewrapped rather than passed on: [StructureOpen] answers
   # about a structure type the caller never named, and the call that has to
   # change is the [$doc annot ...] this came from.
-  method AnnotStructure {number} {
+  # The Annot element, opened on its own so that its refusal falls BEFORE
+  # the object number is reserved. The caller closes it once the number is
+  # known - StructureAnnotation needs it, the refusal does not.
+  method AnnotStructureOpen {} {
     if {[catch {my StructureOpen Annot} id info]} {
-      if {[dict get $info -errorcode] ne "NONE"} {
+      # WHICH REFUSAL GETS WRAPPED, and the test is what the caller can do
+      # about it. A NESTING refusal - an Annot may not stand here - is
+      # answered in this module's words, because the way out is to move the
+      # [annot] call, and the message says so. Everything else travels on
+      # untouched: a version floor, a document that is not tagged, a name
+      # already taken are the structure module's business and its message
+      # names the call to change.
+      #
+      # Written the other way round until 2026-08-25 - wrap what arrives
+      # WITHOUT a code - it worked only as long as structure.tcl had no
+      # codes at all. The moment its refusals got them, every one of them
+      # was passed through and the annotation's own wording was never seen.
+      if {[lrange [dict get $info -errorcode] 0 2] ne
+          {TCLPDF STRUCTURE PLACE}} {
         return -options $info $id
       }
       return -code error -errorcode {TCLPDF ANNOT STRUCTURE} \
@@ -563,9 +604,7 @@ oo::define ::tclpdf::document::document {
           7.18.1), and this package puts it in an Annot element (ISO 32000-1,\
           Table 337), so it has to be drawn somewhere an Annot may stand"
     }
-    set key [my StructureAnnotation $number]
-    my StructureClose $id
-    return $key
+    return $id
   }
 
   # A colour as the ARRAY /C takes (Table 166): one, three or four numbers,

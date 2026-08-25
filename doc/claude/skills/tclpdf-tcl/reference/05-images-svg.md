@@ -283,9 +283,9 @@ set doc [tclpdf new -unit mm]
 $doc page add
 $doc svg $svgFile -at {20 20} -width 60 -artifact 1
 
-# Whatever is not covered is skipped and COUNTED - filters, masks, clip paths,
-# a <style> block, animation. Everything under <defs> is counted too, which is
-# exactly where a filter and a mask are declared.
+# Whatever is not covered is skipped and COUNTED - filters, a <style> block,
+# animation, objectBoundingBox units. Everything under <defs> is counted too,
+# which is exactly where a filter is declared.
 puts "skipped: [$doc svg info]"
 ```
 
@@ -310,3 +310,95 @@ try {
     puts "not under PDF/A: [lrange [dict get $options -errorcode] 3 end]"
 }
 ```
+
+## Clip paths and masks
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+
+# clip-path becomes a PDF clipping path, mask a luminosity soft mask - the
+# grey value IS the alpha, so a gradient in the mask fades the shape, which
+# no single opacity value can do. Neither is an approximation and nothing is
+# rasterised.
+#
+# SEVERAL SHAPES IN ONE clipPath ARE SUBPATHS OF ONE PATH, because their
+# UNION is the window. Two clipping operators would narrow the region to the
+# overlap, and PDF has no operator that widens one again.
+$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"
+    viewBox="0 0 100 60">
+  <defs>
+    <clipPath id="window">
+      <rect x="0" y="0" width="46" height="60"/>
+      <rect x="54" y="0" width="46" height="60"/>
+    </clipPath>
+    <linearGradient id="ramp" x1="0" y1="0" x2="100" y2="0"
+        gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#000000"/>
+    </linearGradient>
+    <mask id="fade" maskUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="100" height="60" fill="url(#ramp)"/>
+    </mask>
+  </defs>
+  <g clip-path="url(#window)">
+    <circle cx="30" cy="30" r="28" fill="#c0392b"/>
+    <circle cx="70" cy="30" r="28" fill="#2980b9"/>
+  </g>
+  <rect x="0" y="40" width="100" height="20" fill="#16a085" mask="url(#fade)"/>
+</svg>} -at {20 20} -width 70 -artifact 1
+
+# Nothing lost: both properties are drawn.
+puts "clip and mask: \"[$doc svg info]\" (empty = nothing skipped)"
+```
+
+`clip-rule="evenodd"` writes `W*` instead of `W`. A mask needs PDF 1.4, and the same mask used twice is one resource.
+
+**What cannot be honoured is REPORTED and the element is then drawn whole** - visible and complete beats invisible or wrongly cut, and `svg info` says which happened: `objectBoundingBox` units (which occur in none of the 15046 SVG files measured), a reference to nothing, a transform on a clipping shape, a shape the package cannot draw, and a mask that draws nothing.
+
+## preserveAspectRatio, and why it is read at all
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+
+# A 2:1 drawing into a square box, once per spelling. meet fits it inside,
+# slice covers the box and is clipped back to it, none stretches.
+set y 20
+foreach spelling {{xMidYMid meet} {xMinYMin meet} {xMidYMid slice} none} {
+    set area [$doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\"
+        width=\"200\" height=\"100\" viewBox=\"0 0 200 100\"
+        preserveAspectRatio=\"$spelling\"><circle cx=\"100\" cy=\"50\"
+        r=\"45\" fill=\"#e67e22\"/></svg>" \
+        -at [list 20 $y] -size {40 40} -artifact 1]
+    puts [format "  %-16s -> %s" $spelling $area]
+    incr y 45
+}
+```
+
+It occurs in **none** of the 15046 SVG files on this machine and is read anyway, because unlike an unknown element it fails SILENTLY: an ignored attribute leaves no trace in `svg info`, on the page, or anywhere else - a drawing that said `slice` and came out centred looks like one that was simply placed. A value in error is the default (SVG 1.1, 7.8) and is reported. **The caller's own `-fitMode` wins over the file's.**
+
+## font-weight in a drawing
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+
+# bold, bolder, or a number - 600 and up is bold, the line CSS 2.1 15.5 draws.
+$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="150" height="40"
+    viewBox="0 0 150 40">
+  <text x="4" y="14" font-family="helvetica" font-size="11">normal</text>
+  <text x="4" y="30" font-family="helvetica" font-size="11"
+      font-weight="700">bold</text>
+</svg>} -at {20 20} -width 100 -artifact 1
+
+# A family with no bold cut of its own - every EMBEDDED one, since an alias
+# carries a single cut - is reported rather than quietly coming out light.
+# The way to a bold embedded face is to embed it under an alias of its own.
+puts "weights: \"[$doc svg info]\" (empty = every cut was there)"
+```
+
+The document's own weight is never inherited by a drawing: a drawing must not come out bold because the running text around it happens to be. `font-style` is not read.

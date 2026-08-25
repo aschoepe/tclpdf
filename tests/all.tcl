@@ -127,6 +127,7 @@ foreach tclpdfPkg {
     tclpdf::svg
     tclpdf::svgElement
     tclpdf::svgPaint
+    tclpdf::svgClip
     tclpdf::viewerPreferences
     tclpdf::pageLabel
     tclpdf::structure

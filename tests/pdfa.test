@@ -27,7 +27,45 @@ source [file join [file dirname [info script]] helper.tcl]
 # than taking the run down with it. helper.tcl sets the constraint.
 if {![testConstraint haveTdom]} {
     puts "  skipped: [file tail [info script]] needs tdom"
-    cleanupTests
+    test pdfa-tagged-2.1 {a level A claim is held again at write time, not only at the call} -constraints haveFace -body {
+  # [tagged] is a switch like any other and can be thrown AFTER the claim.
+  # "pdfa -conformance A" then "tagged 0" passed the check at the call and
+  # left nothing to check it again: measured 2026-08-25, the file went out
+  # with pdfaid:conformance A and neither /StructTreeRoot nor /MarkInfo, and
+  # veraPDF -f 3a called it isCompliant="false" on clauses 6.7.2.2 and
+  # 6.7.3.3 - the two the comment over the check at the call already names.
+  #
+  # Fonts, colours and graphics are all mirrored in PdfaCatalog for exactly
+  # this reason, "because a document declares PDF/A and its content in
+  # either order". The claim itself was the one thing held to one order.
+  set doc [archival $face]
+  $doc pdfa -part 3 -conformance A
+  $doc tagged 0
+  set path [::tclpdfTest::scratch pdfa-untagged.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set out [list $code [string match "*level A needs a tagged document*" $err] \
+      [file exists $path]]
+  file delete $path
+  set out
+} -result {1 1 0}
+
+test pdfa-tagged-2.2 {the same document left tagged writes and keeps the 3a profile} -constraints haveFace -body {
+  # The counter-direction: nothing but the switch being thrown is refused,
+  # and the file the caller meant still validates against the level it
+  # claims.
+  set doc [archival $face]
+  $doc pdfa -part 3 -conformance A
+  set path [::tclpdfTest::scratch pdfa-tagged.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set result [list $code [expr {$code ? $err : {}}] \
+      [::tclpdfTest::verapdf $path 3a]]
+  file delete $path
+  set result
+} -result {0 {} ok}
+
+cleanupTests
     return
 }
 package require tclpdf::pdfa
@@ -122,5 +160,43 @@ test pdfa-encrypt-4.1 {PDF/A refuses an encrypted document} -body {
   $doc destroy
   list $code [string match {*PDF/A forbids encryption*} $message]
 } -result {1 1}
+
+test pdfa-tagged-2.1 {a level A claim is held again at write time, not only at the call} -constraints haveFace -body {
+  # [tagged] is a switch like any other and can be thrown AFTER the claim.
+  # "pdfa -conformance A" then "tagged 0" passed the check at the call and
+  # left nothing to check it again: measured 2026-08-25, the file went out
+  # with pdfaid:conformance A and neither /StructTreeRoot nor /MarkInfo, and
+  # veraPDF -f 3a called it isCompliant="false" on clauses 6.7.2.2 and
+  # 6.7.3.3 - the two the comment over the check at the call already names.
+  #
+  # Fonts, colours and graphics are all mirrored in PdfaCatalog for exactly
+  # this reason, "because a document declares PDF/A and its content in
+  # either order". The claim itself was the one thing held to one order.
+  set doc [archival $face]
+  $doc pdfa -part 3 -conformance A
+  $doc tagged 0
+  set path [::tclpdfTest::scratch pdfa-untagged.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set out [list $code [string match "*level A needs a tagged document*" $err] \
+      [file exists $path]]
+  file delete $path
+  set out
+} -result {1 1 0}
+
+test pdfa-tagged-2.2 {the same document left tagged writes and keeps the 3a profile} -constraints haveFace -body {
+  # The counter-direction: nothing but the switch being thrown is refused,
+  # and the file the caller meant still validates against the level it
+  # claims.
+  set doc [archival $face]
+  $doc pdfa -part 3 -conformance A
+  set path [::tclpdfTest::scratch pdfa-tagged.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set result [list $code [expr {$code ? $err : {}}] \
+      [::tclpdfTest::verapdf $path 3a]]
+  file delete $path
+  set result
+} -result {0 {} ok}
 
 cleanupTests

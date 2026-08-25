@@ -45,6 +45,10 @@
 #   graphics     7.1, 7.3 - a picture, drawing or form placement is either
 #                described (-alt) or declared decoration (-artifact 1);
 #                one that fell into artifact by default was never judged
+#   described    7.3 / UA-2 8.2.5.28.2 for a Figure, 7.7 for a Formula
+#                under part 1 - an element the caller opened says what it
+#                holds, through -alt or -actualText; an empty -alt is not
+#                a description
 #   links        7.18.5 - Contents on every annotation, and every one
 #                inside a Link element (Matterhorn 28-011)
 #   form fields  7.18.1 with ISO 32000-2 14.9.3 - a description on every
@@ -425,6 +429,7 @@ oo::define ::tclpdf::document::document {
     lappend problems {*}[my UaCheckStructure]
     lappend problems {*}[my UaCheckLists]
     lappend problems {*}[my UaCheckGraphics]
+    lappend problems {*}[my UaCheckDescribed]
     lappend problems {*}[my UaCheckLinks]
     lappend problems {*}[my UaCheckFields]
     lappend problems {*}[my UaCheckAttachments]
@@ -489,6 +494,96 @@ oo::define ::tclpdf::document::document {
     return [my GraphicsUndescribed "7.1, 7.3"]
   }
 
+  # A Figure or a Formula that says nothing about what it holds.
+  #
+  # [UaCheckGraphics] above asks the other half of the same question and
+  # cannot answer this one: its record is filled by [GraphicMark] in
+  # image.tcl, so it knows about a picture, a drawing and a form placement
+  # and about nothing else. An element the CALLER opened - [$doc structure
+  # Figure -script ...] around a hand-drawn diagram, or [$doc text ... -tag
+  # Figure] - never passes through that record, and three documents of that
+  # shape were written with a PDF/UA claim and rejected by veraPDF
+  # (measured 2026-08-25: clause 7.3 test 1 and clause 7.7 test 1). That is
+  # the expensive kind of defect: the file says it is accessible, and the
+  # recipient's validator is the first thing that disagrees.
+  #
+  # WHAT COUNTS AS A DESCRIPTION is /Alt or /ActualText, which is veraPDF's
+  # test expression verbatim - "(Alt != null && Alt != '') || ActualText !=
+  # null" - and is why an EMPTY -alt does not count. It reads as a
+  # description and is none, and a document with one is refused by the
+  # validator exactly like a document with none.
+  #
+  # WHICH TYPES, and this is measured rather than reasoned:
+  #
+  #   Figure   both parts. UA-1 7.3 (Matterhorn 13-004), UA-2 8.2.5.28.2 -
+  #            veraPDF fails an undescribed Figure under either profile.
+  #   Formula  part 1 only. UA-1 7.7 (Matterhorn 09-004) fails it; veraPDF's
+  #            UA-2 profile passes the same document, so demanding it under
+  #            part 2 would be this package inventing a rule - the same line
+  #            [UaCheckFields] draws around the widget description.
+  #
+  # Read out of [state structure] rather than through [structureReport],
+  # which answers about headings, rows and lists and would have to grow a
+  # field for this; the shape of an element record is structure.tcl's, and
+  # the two names read here - alt and actualText - are the two the option
+  # of the same name fills.
+  method UaCheckDescribed {} {
+    if {![my tagged]} {
+      return {}
+    }
+    set clauses [dict create Figure [expr {[dict get [my state ua] part] == 2 ?
+        {8.2.5.28.2} : {7.3, Matterhorn 13-004}}]]
+    if {[dict get [my state ua] part] == 1} {
+      dict set clauses Formula "7.7, Matterhorn 09-004"
+    }
+    set elements [my state structure]
+    set problems {}
+    set index -1
+    foreach element $elements {
+      incr index
+      set type [dict get $element type]
+      if {![dict exists $clauses $type]} {
+        continue
+      }
+      if {[dict get $element alt] ne {} || [dict get $element actualText] ne {}} {
+        continue
+      }
+      set page [my UaElementPage $elements $index]
+      lappend problems "[expr {$page eq {} ? {} : "page $page: "}]a $type\
+          carries neither a description nor replacement text - PDF/UA needs\
+          -alt or -actualText on every one ([dict get $clauses $type]), and\
+          an empty -alt is not one; pass it to \[\$doc structure $type\], or\
+          to \[\$doc text -tag $type\] where the tag was derived"
+    }
+    return $problems
+  }
+
+  # The page an element first appears on, counted from 1, or {} for an
+  # element that has no content of its own anywhere - a placeholder a link
+  # points at. Depth first, because a Figure holding only a Caption and an
+  # image has its marks one level down.
+  #
+  # The kid of an element is {element id} or {mark page mcid y} (see
+  # [StructureAttach] in structure.tcl); the page in a mark is the index, as
+  # everywhere in the state, and becomes a page number here - the number the
+  # caller counts pages by is what a message has to name.
+  method UaElementPage {elements index} {
+    foreach kid [dict get [lindex $elements $index] kids] {
+      switch -- [lindex $kid 0] {
+        mark {
+          return [expr {[lindex $kid 1] + 1}]
+        }
+        element {
+          set page [my UaElementPage $elements [lindex $kid 1]]
+          if {$page ne {}} {
+            return $page
+          }
+        }
+      }
+    }
+    return {}
+  }
+
   # A list says how it is numbered, or that it is not (7.6, Matterhorn 16-001):
   # ListNumbering is mandatory on an ordered list, and a label a reader
   # cannot name is a number it cannot read out. Two directions, because the
@@ -525,8 +620,16 @@ oo::define ::tclpdf::document::document {
   # else is what a reader announces otherwise. The fact comes from link.tcl;
   # the document may have no links at all, and then the module was never
   # loaded and there is nothing to ask.
+  #
+  # Asked of [state links], the record link.tcl keeps of the links it made,
+  # and not of [state annots], which holds an indirect reference per
+  # annotation of every kind - a note, a stamp, a widget, a signature. A
+  # document whose only annotation is a note has no links, and this used to
+  # walk into the two questions all the same; what came back depended on
+  # whether the note's own text happened to contain the words "/Subtype
+  # /Link". See [LinkRecord] in link.tcl.
   method UaCheckLinks {} {
-    if {[my state annots] eq {}} {
+    if {[my state links] eq {}} {
       return {}
     }
     set problems {}

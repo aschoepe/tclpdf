@@ -542,4 +542,161 @@ test xObject-fit-9.8 {-scale still works, and unchanged} -body {
 } -result 1
 
 
+# --- 10. forms nest, and so does the suspended marking ------------------
+
+test xObject-10.1 {a form inside a form hands the marking back in order} -body {
+  # The saved flag used to live in ONE state slot: the outer form saved 0 and
+  # set 1, the inner saved that 1 and set 1, the inner end wrote 1 back and
+  # the outer end wrote the same 1 back. From there the document was
+  # suspended for good and nothing was ever marked again.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc form create outer -size {40 20} -script {
+    $doc form create nested -size {10 10} -script {
+      $doc rect -at {0 0} -size {10 10} -fill black
+    }
+  }
+  $doc structure P -script {$doc text "danach" -at {20 60}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp -all {/P <</MCID \d+>> BDC} $stream
+} -result 1
+
+test xObject-10.2 {an annotation inside a form nests too} -body {
+  # Not a corner case: an annotation draws its own appearance through a form
+  # (annot.tcl), so every annotation written inside [form create] is a nested
+  # form. Measured before the fix: no BDC and no EMC on the page at all.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc form create f -size {40 20} -script {
+    $doc annot square -at {2 2} -size {10 10}
+  }
+  $doc structure P -script {$doc text "danach" -at {20 60}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp -all {/P <</MCID \d+>> BDC} $stream
+} -result 1
+
+test xObject-10.3 {nothing inside the form is marked, before or after} -body {
+  # What the suspension is for, unchanged: the form's own stream carries no
+  # marked content, because an MCID is unique per stream and the page's
+  # counter does not reach in there.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc form create f -size {40 20} -script {
+    $doc form create nested -size {10 10} -script {
+      $doc text "innen" -at {1 5}
+    }
+    $doc text "aussen" -at {2 15}
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Nothing has been placed yet, so the page holds no bracket either.
+  expr {[string match "*BDC*" $stream] || [string match "*BMC*" $stream]}
+} -result 0
+
+
+# --- the anchor without a box -----------------------------------------------
+#
+# -align and -valign are the plain anchor when no -fit is given: the box has
+# no size, and the same sum puts the form's right edge on the x that was named
+# instead of its left. [fitCheck] took the two words on their own from the day
+# they existed - it only checks the words - so "form place -align right" was
+# accepted and did nothing, while "image place -align right" at the same point
+# moved the picture. The manual promises the two roads the same arithmetic.
+
+proc anchorForm {args} {
+  global anchorDoc
+  set anchorDoc [tclpdf new -unit mm -compress 0]
+  set doc $anchorDoc
+  $doc page add
+  $doc form create logo -size {40 20} -script {
+    $anchorDoc rect -at {0 0} -size {40 20} -fill {rgb 0.2 0.4 0.9}
+  }
+  foreach value [lindex $args 1] {
+    $doc form place logo -artifact 1 -at {100 20} [lindex $args 0] $value
+  }
+  set out {}
+  foreach line [split [::tclpdfTest::content $doc] \n] {
+    if {[regexp {^1 0 0 1 ([0-9.-]+) ([0-9.-]+) cm$} $line -> x y]} {
+      lappend out [list $x $y]
+    }
+  }
+  $doc destroy
+  return $out
+}
+
+test xObject-anchor-11.1 {-align without -fit moves the form across} -body {
+  # Measured on 2026-08-25 before the fix: all three wrote 283.46457. A 40 mm
+  # form at -at {100 20} is 100 mm from the left for "left", 80 for "center"
+  # and 60 for "right" - 283.46457, 226.77165 and 170.07874 points.
+  lmap pair [anchorForm -align {left center right}] {lindex $pair 0}
+} -result {283.46457 226.77165 170.07874}
+
+test xObject-anchor-11.2 {-valign without -fit moves it down} -body {
+  # The "cm" carries the BOTTOM edge, so a form pulled UP the page by the
+  # anchor has a LARGER y. 20 mm tall at -at {100 20}: bottom at 40, 30 and
+  # 20 mm from the top, which is 728.50, 756.85 and 785.20 points up.
+  lmap pair [anchorForm -valign {top middle bottom}] {lindex $pair 1}
+} -result {728.50394 756.85039 785.19685}
+
+testConstraint haveAnchorImage [file exists [file join [file dirname \
+    [file dirname [file normalize [info script]]]] examples assets images \
+    sample-indexed.png]]
+
+test xObject-anchor-11.3 {and it is the picture's arithmetic, at the same call} \
+    -constraints haveAnchorImage -body {
+  # The point of the whole finding: the two roads share [fitAnchor], so they
+  # have to answer the same x for the same words. The picture is placed with
+  # -size, which is what a form's natural size already is.
+  set images [file join [file dirname [file dirname [file normalize [info script]]]] \
+      examples assets images sample-indexed.png]
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed logo $images
+  foreach align {left center right} {
+    $doc image place logo -artifact 1 -at {100 20} -size {40 20} -align $align
+  }
+  set out {}
+  foreach line [split [::tclpdfTest::content $doc] \n] {
+    if {[regexp {cm$} $line]} {
+      lappend out [lindex [split $line] 4]
+    }
+  }
+  $doc destroy
+  set out
+} -result {283.46457 226.77165 170.07874}
+
+test xObject-anchor-11.4 {a covered box is still cut back to the box} -body {
+  # The clip has to stay bound to -fit, which is what the rearrangement could
+  # have broken: without a box there is nothing to cut back to.
+  list [regexp {re W n} [fitForm -at {20 20} -fit {40 40} -fitMode cover]] \
+      [regexp {re W n} [fitForm -at {20 20} -align right]]
+} -result {1 0}
+
+test xObject-anchor-11.5 {-scale NaN is a factor and no factor} -body {
+  # "$scale <= 0" is FALSE for NaN, so the factor went through this check
+  # untouched and died in the matrix arithmetic in Tcl's own words. Measured
+  # 2026-08-25.
+  global anchorDoc
+  set anchorDoc [tclpdf new -unit mm -compress 0]
+  set doc $anchorDoc
+  $doc page add
+  $doc form create logo -size {40 20} -script {}
+  set out {}
+  foreach value {NaN Inf -Inf} {
+    set code [catch {$doc form place logo -at {20 20} -scale $value} message]
+    lappend out $code [string match {tclpdf: -scale of form place is a factor*} $message]
+  }
+  lappend out [catch {$doc form place logo -at {20 20} -scale 2}]
+  $doc destroy
+  set out
+} -result {1 1 1 1 1 1 0}
+
 cleanupTests

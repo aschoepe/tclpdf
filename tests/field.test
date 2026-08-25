@@ -1431,4 +1431,180 @@ test field-7.15 {veraPDF accepts an accessible form, UA-1 and UA-2} -constraints
   set out
 } -result {ok ok}
 
+test field-7.24 {a field the structure tree refuses leaves the document writable} -body {
+  # THE SECOND HALF IS THE POINT. field-7.13 measures that the refusal comes;
+  # this one measures what it costs the document. The widget's object number
+  # used to be reserved BEFORE the Form element was opened, so a [$doc field]
+  # the caller had caught left behind a number no [write] ever fills - and the
+  # next [write] of the WHOLE document died with "object(s) reserved but never
+  # written", for a page that has nothing to do with the field.
+  set doc [fieldTaggedDoc]
+  set code [::tclpdfTest::refusal {
+    $doc structure L -numbering Decimal -script {
+      $doc structure LI -script { $doc text "One" -at {20 40} }
+      $doc field text customer -rect {20 50 80 8} -tooltip "Your name"
+    }
+  }]
+  $doc text "The document goes on" -at {20 70}
+  set written [::tclpdfTest::writes $doc field-refused-writes.pdf]
+  $doc destroy
+  list $code $written
+} -result {{TCLPDF FIELD STRUCTURE customer} {0 1}}
+
+test field-7.25 {a -label script that raises leaves the document writable} -body {
+  # The second door into the same defect: the Form element opens, and the
+  # caller's own label script is what refuses. It is run inside the element
+  # and therefore before the reservation as well - a field of ONE widget
+  # reserves nothing at all until its label has been drawn.
+  set doc [fieldTaggedDoc -version 2.0]
+  set code [catch {
+    $doc field text customer -rect {45 38 60 8} -tooltip "Your name" -label {
+      error "the label gives up"
+    }
+  } message]
+  # The tree is not half OPEN either - a P here would land inside the Form or
+  # the Lbl if either had been left standing, and it lands at the top level.
+  # The empty Form element itself STAYS, and that is the package's answer
+  # everywhere: [$doc structure P -script {error boom}] leaves an empty P
+  # behind in exactly the same way (measured), because nothing in
+  # structure.tcl takes an element back. Written down here so that a change
+  # to it is a decision and not a surprise.
+  $doc structure P -script { $doc text "The document goes on" -at {20 70} }
+  set written [::tclpdfTest::writes $doc field-label-raises.pdf]
+  set forms [fieldElements $doc Form]
+  $doc destroy
+  list $code $message $written [llength $forms] \
+      [regexp {/Type /OBJR} [lindex $forms 0]]
+} -result {1 {the label gives up} {0 1} 1 0}
+
+test field-7.26 {the first widget of a set reserves nothing before its label} -body {
+  # A field of SEVERAL widgets walks them one by one, and the first one's
+  # element is opened before the parent field object is reserved: it asks the
+  # same question of the same open element every other widget of the field
+  # will ask, so its refusal answers for all of them.
+  oo::define ::tclpdf::document::document {
+    method FieldRaisingBuild {name record} { return {FT /Btn} }
+    method FieldRaisingKid {name record} { return {} }
+  }
+  set doc [fieldTaggedDoc -version 2.0]
+  oo::objdefine $doc export FieldDeclare
+  set code [catch {
+    $doc FieldDeclare rate -type Btn -build FieldRaisingBuild \
+        -kid FieldRaisingKid -widgets {{{20 40 5 5}} {{20 50 5 5}}} \
+        -tooltip "What you pay" -contents {"the full rate" "the reduced rate"} \
+        -labels {{error "the first label gives up"} {}}
+  } message]
+  $doc text "The document goes on" -at {20 70}
+  set written [::tclpdfTest::writes $doc field-set-label-raises.pdf]
+  $doc destroy
+  list $code $message $written
+} -result {1 {the first label gives up} {0 1}}
+
+test field-7.28 {a label raising on a LATER widget gives the numbers back} -body {
+  # THE OTHER END OF field-7.26, and the one the order cannot cure. A set is
+  # walked one widget at a time because [StructureAnnotation] hangs the object
+  # reference into the element that is OPEN at that moment - the elements
+  # cannot all be opened first, they would nest inside one another - so the
+  # k-th widget's label script, which is the caller's own, runs AFTER the k-1
+  # widgets before it and the parent field have their object numbers. Those
+  # numbers used to stay reserved and never filled, and the next [write] of
+  # the whole document died with "object(s) reserved but never written",
+  # although the caller caught the error and carried on (measured 2026-08-25:
+  # two numbers lost on a three-button field whose second label gave up).
+  #
+  # They are given back instead - and given back means null, not free: see
+  # writer-1.8 for why a number that something may already point at is never
+  # handed to a second object. The Form element of the widget before it does
+  # point at one, and it is the empty elements of field-7.25 all over again.
+  oo::define ::tclpdf::document::document {
+    method FieldLaterBuild {name record} { return {FT /Btn} }
+    method FieldLaterKid {name record} { return {} }
+  }
+  set doc [fieldTaggedDoc -version 2.0]
+  oo::objdefine $doc export FieldDeclare
+  set before [[$doc writer] count]
+  set code [catch {
+    $doc FieldDeclare rate -type Btn -build FieldLaterBuild \
+        -kid FieldLaterKid \
+        -widgets {{{20 40 5 5}} {{20 50 5 5}} {{20 60 5 5}}} \
+        -tooltip "What you pay" -labels {{} {error "the second label gives up"} {}}
+  } message]
+  # Three numbers were handed out - the parent field and the first widget
+  # before the refusal, and neither is handed out again: the next reservation
+  # goes on where the counter stood.
+  set given {}
+  for {set number [expr {$before + 1}]} {$number <= [[$doc writer] count]} {incr number} {
+    lappend given [[$doc writer] body $number]
+  }
+  $doc text "The document goes on" -at {20 70}
+  # And a field really declared afterwards gets numbers of its own rather
+  # than the ones that were given back.
+  $doc field text customer -rect {20 80 60 8} -tooltip "Your name"
+  set written [::tclpdfTest::writes $doc field-set-later-label.pdf]
+  set widget [fieldWidget $doc customer]
+  set fields [$doc field list]
+  $doc destroy
+  list $code $message $given $written $fields \
+      [string match {*/Subtype /Widget*} $widget]
+} -result {1 {the second label gives up} {null null} {0 1} customer 1}
+
+test field-7.29 {-contents describes the one widget of a field too} -body {
+  # THE COMMENT WAS THE WRONG HALF. field.tcl said in two places that
+  # -contents belonged to -widgets and was refused for a field with one
+  # widget, while the code took it, the manual documented it for "field
+  # text", "field check" and "field button", and
+  # [fieldWidgetsWithoutDescription] counted it - measured 2026-08-25, and
+  # the behaviour is the half that is right: the merged object of ISO
+  # 32000-2, 12.5.6.19 IS a widget annotation and /Contents is an annotation
+  # key (Table 166). /TU does not stand in for it either - ISO 14289-2,
+  # 8.10.3.2.1 asks a push button, a field with exactly one widget, for a
+  # /Contents that reflects the intent of its /MK /CA.
+  #
+  # field-7.4 measures that the key is written; what is measured here is that
+  # the one widget with only a /Contents counts as DESCRIBED, which is the
+  # judgement 8.10.2.3 turns on.
+  set doc [fieldTaggedDoc -version 2.0]
+  $doc field text customer -rect {20 40 80 8} -tooltip "Your name" \
+      -contents "The applicant's full name"
+  set described [$doc fieldWidgetsWithoutDescription]
+  set state [$doc field state customer]
+  $doc ua -part 2
+  set written [::tclpdfTest::writes $doc field-one-contents.pdf]
+  $doc destroy
+  # And without it the same widget is undescribed, /TU and all.
+  set bare [fieldTaggedDoc -version 2.0]
+  $bare field text customer -rect {20 40 80 8} -tooltip "Your name"
+  set missing [$bare fieldWidgetsWithoutDescription]
+  $bare destroy
+  list $described [dict get $state contents] $written $missing
+} -result {{} {The applicant's full name} {0 1} {{customer {}}}}
+
+test field-7.27 {a -label that draws nothing is no label} -body {
+  # A LABEL IS WHAT WAS DRAWN, not that a script was passed. An empty Lbl
+  # describes nothing, and counting the script alone let a document with one
+  # claim PDF/UA-2 and be written - veraPDF then rejected it under 8.10.2.3
+  # ("if a label ... is not present, or if the label is insufficient, a
+  # Contents entry shall be provided"), which is the judgement this package
+  # is meant to make first. The widget is undescribed, and [ua] says so.
+  set doc [fieldTaggedDoc -version 2.0]
+  $doc field text customer -rect {45 38 60 8} -tooltip "Your name" -label { ; }
+  set missing [$doc fieldWidgetsWithoutDescription]
+  $doc ua -part 2
+  set text {}
+  catch {$doc write [::tclpdfTest::scratch field-empty-label.pdf]} text
+  file delete [::tclpdfTest::scratch field-empty-label.pdf]
+  $doc destroy
+  # And the same field with something drawn is a label, and writes.
+  set two [fieldTaggedDoc -version 2.0]
+  $two field text customer -rect {45 38 60 8} -tooltip "Your name" -label {
+    $two text "Name" -at {20 40}
+  }
+  set drawn [$two fieldWidgetsWithoutDescription]
+  $two ua -part 2
+  set written [::tclpdfTest::writes $two field-drawn-label.pdf]
+  $two destroy
+  list $missing [string match {*neither a label nor a description*} $text] \
+      $drawn $written
+} -result {{{customer {}}} 1 {} {0 1}}
+
 cleanupTests

@@ -1244,6 +1244,127 @@ test textFlow-7.7 {an avoided shape with a value that is not a number is refused
   set codes
 } -result {1 1 1 1 1 1}
 
+# How many lines each column of a page holds, left to right - which is what
+# "balanced" is about, and what a bottom in points does not say when two
+# columns differ by a whole line.
+proc flowColumnCounts {stream} {
+  set counts [dict create]
+  foreach x [flowStarts $stream] {
+    dict incr counts $x
+  }
+  set keys [lsort -real [dict keys $counts]]
+  return [lmap key $keys {dict get $counts $key}]
+}
+
+# A block of n one-line paragraphs, each of them short enough never to wrap.
+proc flowNumbered {n} {
+  set lines {}
+  for {set i 1} {$i <= $n} {incr i} {
+    lappend lines "Zeile $i"
+  }
+  return [join $lines "\n"]
+}
+
+# What a balanced page looks like when the line count DIVIDES by the number of
+# columns (2026-08-25). The manual promises columns "up to n-1 lines apart when
+# the line count does not divide" - so where it divides they are level, and a
+# binary rounding error must not decide the type area.
+
+test textFlow-7.8 {a line count that divides fills the columns evenly} -body {
+  # Measured before the fix: 18 lines over three columns came out 7/7/4 and
+  # 12 over two came out 7/5. Two roundings did it - the first candidate
+  # height was 18/3 = 6.000000000000001 lines, rounded UP to seven, and the
+  # comparison that places a line found 5 x leading + leading a hair larger
+  # than 6 x leading. Both are answered against a tolerance now.
+  # The leading matters to this test and is set on purpose: 12 points is
+  # 4.23333... mm, a number with no exact binary form, and it is out of such
+  # a leading that both roundings came. With a leading that happens to divide
+  # cleanly every one of these was already even before the fix.
+  set doc [tclpdf new -unit mm -typeArea {25 25 20 20}]
+  $doc font -family helvetica -size 8 -leading 12
+  set answers {}
+  foreach {columns count} {2 12 2 24 3 9 3 18 4 24} {
+    $doc page add
+    $doc text [flowNumbered $count] -at {20 30} -width 160 -anchor top \
+        -columns $columns -gutter 6 -balance 1 -height max
+    lappend answers [flowColumnCounts [::tclpdfTest::content $doc]]
+  }
+  # And the same question with the leading nobody set - 1.2 times the size.
+  $doc font -leading {}
+  foreach {columns count} {2 14 3 18} {
+    $doc page add
+    $doc text [flowNumbered $count] -at {20 30} -width 160 -anchor top \
+        -columns $columns -gutter 6 -balance 1 -height max
+    lappend answers [flowColumnCounts [::tclpdfTest::content $doc]]
+  }
+  $doc destroy
+  set answers
+} -result {{6 6} {12 12} {3 3 3} {6 6 6} {6 6 6 6} {7 7} {6 6 6}}
+
+test textFlow-7.9 {a line count that does not divide stays within n-1 lines} -body {
+  # The other half of the promise, and the one that keeps the fix honest: the
+  # tolerance must not push a line into a column that has no room for it.
+  set doc [tclpdf new -unit mm -typeArea {25 25 20 20}]
+  $doc font -family helvetica -size 8 -leading 12
+  set answers {}
+  foreach {columns count} {3 17 3 19 3 20 2 11 2 13 4 22} {
+    $doc page add
+    $doc text [flowNumbered $count] -at {20 30} -width 160 -anchor top \
+        -columns $columns -gutter 6 -balance 1 -height max
+    set counts [flowColumnCounts [::tclpdfTest::content $doc]]
+    set spread [expr {[::tcl::mathfunc::max {*}$counts]
+        - [::tcl::mathfunc::min {*}$counts]}]
+    set drawn 0
+    foreach one $counts {
+      incr drawn $one
+    }
+    lappend answers [expr {$drawn == $count && $spread <= $columns - 1}]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1 1 1 1}
+
+test textFlow-7.10 {-emergencyHyphen is checked at the call like the other booleans} -body {
+  # It used to be read raw at the emergency break inside the line breaker: the
+  # call was accepted, the block was drawn, and Tcl's own words came out of an
+  # "if" the moment a word turned out too long for its line - a refusal that
+  # depended on the text rather than on the option.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set refused [catch {$doc text "kurz und gut" -at {20 20} -width 60 \
+      -emergencyHyphen vielleicht} message]
+  set fine [catch {$doc text "kurz und gut" -at {20 40} -width 60 \
+      -emergencyHyphen 1}]
+  $doc destroy
+  list $refused [regexp -- {-emergencyHyphen takes a boolean} $message] $fine
+} -result {1 1 0}
+
+test textFlow-7.11 {NaN is not a distance for any of the block options} -body {
+  # NaN passes [string is double] and compares false against everything, so a
+  # check of the shape "$value < 0" let it through in both directions. What
+  # followed was silent: a NaN margin narrowed no line at all and the text ran
+  # straight through the shape it was told to avoid.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set answers {}
+  foreach {options pattern} {
+    {-indent NaN} {-indent takes a distance}
+    {-indentRight NaN} {-indentRight takes a distance}
+    {-firstIndent NaN} {-firstIndent takes a distance}
+    {-paragraphSpacing NaN} {-paragraphSpacing takes a distance}
+    {-height NaN} {-height takes a distance of 0 or more}
+    {-columns 2 -gutter NaN -height max} {-gutter takes a distance of 0 or more}
+    {-avoid {{rect {20 20} {10 10}}} -avoidMargin NaN} {-avoidMargin takes a distance}
+  } {
+    lappend answers [catch {$doc text "a b c" -at {20 20} -width 60 \
+        {*}$options} message] [regexp -- $pattern $message]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1 1 1 1 1 1 1 1 1 1 1 1}
+
 # --- the measuring calls take what text takes ---------------------------------
 #
 # The manual promises one option list for measuring and drawing. What only

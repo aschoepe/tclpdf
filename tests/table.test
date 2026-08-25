@@ -1715,4 +1715,67 @@ test table-code-17.2 {the classes say what went wrong} -body {
 } -result TABLE
 
 
+# --- 26. a cell refused half way through --------------------------------
+
+test table-26.1 {a refused cell closes its artifact bracket} -body {
+  # The fill and the rules of a cell are declared an artifact before they are
+  # drawn. When the drawing then refuses a value - an unknown colour is the
+  # short way there - the EMC used to be skipped, structureInArtifact stayed
+  # at 1, and from that point on EVERY mark of the document was suppressed.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -bodyStyle {fill nosuchcolour}}
+  set open [$doc state structureInArtifact]
+  $doc structure P -script {$doc text "danach" -at {20 60}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # No artifact left standing, the brackets balance, and the paragraph that
+  # follows still gets its own mark.
+  list $open [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}] \
+      [regexp -all {/P <</MCID \d+>> BDC} $stream]
+} -result {0 1 1}
+
+test table-26.2 {the refusal itself reaches the caller unchanged} -body {
+  # Closing the bracket must not swallow the error, nor replace it: what the
+  # drawing said is what the caller hears.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -bodyStyle {fill nosuchcolour}} err]
+  $doc destroy
+  list $code [string match "tclpdf: unknown colour*" $err]
+} -result {1 1}
+
+test table-26.3 {an untagged document is untouched by all this} -body {
+  # Without a tree there is no bracket to close, and the refusal travels the
+  # same road out.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set code [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -bodyStyle {fill nosuchcolour}} err]
+  $doc destroy
+  list $code [string match "tclpdf: unknown colour*" $err]
+} -result {1 1}
+
+test table-26.4 {a table that draws writes one artifact bracket per cell} -body {
+  # The counter-direction: the [catch] changed nothing about the good case -
+  # every cell still opens and closes its own artifact.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc table -at {20 20} -width 100 -head {{A B}} -body {{1 2}}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}] \
+      [expr {[regexp -all {/Artifact <<} $stream] >= 4}]
+} -result {1 1}
+
+
 cleanupTests

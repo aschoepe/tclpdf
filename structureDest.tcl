@@ -20,6 +20,9 @@
 # built while drawing, but a destination is something OTHER modules ask for
 # and hand on - it neither adds to the tree nor writes it.
 #
+# The refusals here carry the codes structure.tcl lists in its header: this
+# file refuses in the same space, under TCLPDF STRUCTURE.
+#
 
 package require Tcl 8.6.11-
 package require TclOO
@@ -78,12 +81,15 @@ oo::define ::tclpdf::document::document {
   # but never written" and no word about which call was at fault.
   method StructureDestinationGuard {caller} {
     if {[my state tagged] ne "1"} {
-      return -code error "tclpdf: $caller needs a tagged document - a\
+      return -code error -errorcode [list TCLPDF STRUCTURE STATE destination] \
+          "tclpdf: $caller needs a tagged document - a\
           structure destination points at an element of the tree. Call\
           \[\$doc tagged 1\] first"
     }
     if {[package vcompare [[my writer] version] 2.0] < 0} {
-      return -code error "tclpdf: a structure destination is a syntax of\
+      return -code error -errorcode \
+          [list TCLPDF STRUCTURE VERSION destination] \
+          "tclpdf: a structure destination is a syntax of\
           ISO 32000-2 (12.3.2.3) and this document is PDF\
           [[my writer] version] - raise the version, or use\
           \[\$doc ua -part 2\], which does it"

@@ -146,10 +146,15 @@ test xmp-3.2 {a malformed contribution fails at the call, not in a validator} -c
   # The whole reason for parsing it: an unclosed element used to travel into
   # the file, where qpdf and veraPDF both let it pass and only a human
   # reading the XMP would ever have found it.
+  #
+  # At the CALL, which is what this test has always been named after and
+  # what it did not measure until 2026-08-25: the parse happened at write
+  # time, so the refusal came from [write] - the call that made the mistake
+  # had long returned, and the contribution could not be taken back out.
   set doc [probe $face]
   $doc pdfa -part 3 -conformance B
-  $doc pdfa extension {<rdf:Description rdf:about=""><probe:open></rdf:Description>}
-  set code [catch {$doc write [::tclpdfTest::scratch xmp-broken.pdf]} err]
+  set code [catch {$doc pdfa extension \
+      {<rdf:Description rdf:about=""><probe:open></rdf:Description>}} err]
   $doc destroy
   list $code [string match "*not well formed XML*" $err]
 } -result {1 1}
@@ -607,11 +612,14 @@ test xmp-8.5 {only a PDF date is taken for CreationDate and ModDate, and a parti
     $doc info CreationDate $value
   }]
   $doc destroy
+  # "D:2019030405" gives an hour and no zone, and comes back as the DATE:
+  # XMP part 1, 8.2.1.4 has no form for a time nobody can place. See
+  # xmp-14.1, which is about that alone.
   list [lsort -unique $out] [llength $accepted] \
       [::tclpdf::xmp stampFromPdf D:2019] [::tclpdf::xmp stampFromPdf D:201903] \
       [::tclpdf::xmp stampFromPdf D:2019030405] [::tclpdf::xmp stampFromPdf D:20190304050607-05'30'] \
       [::tclpdf::xmp stampFromPdf D:20190304050607+02] [::tclpdf::xmp stampFromPdf junk]
-} -result {1 9 2019 2019-03 2019-03-04T05:00:00 2019-03-04T05:06:07-05:30 2019-03-04T05:06:07+02:00 {}}
+} -result {1 9 2019 2019-03 2019-03-04 2019-03-04T05:06:07-05:30 2019-03-04T05:06:07+02:00 {}}
 
 test xmp-8.6 {Trapped is a name in the dictionary, takes only its three values, and stays out of the packet} -constraints {haveFace haveTdom} -body {
   # Table 317: Trapped is a NAME - True, False, Unknown. It used to be
@@ -762,5 +770,287 @@ test xmp-11.2 {a tag that is no XML name is refused at the call, naming tag and 
   $doc destroy
   set out
 } -result {1 1 1 1}
+
+
+
+# --- the characters XML allows --------------------------------------------
+#
+# tdom's own text check is OFF around the text node command and has to be:
+# under Tcl 8.6 an astral character is a surrogate PAIR, which the check
+# refuses, and a legal emoji in a title would make the document unwritable.
+# What went off with it was the check on C0 control characters - and no
+# validator here objects to one: measured 2026-08-25, a packet carrying the
+# bytes 07, 0B and 00 got isCompliant="true" out of veraPDF -f 3b while
+# xmllint said "PCDATA invalid Char value 7". So the raw BYTES are what these
+# tests look at, and the characters are made with [format %c] rather than
+# written out - a pattern over a decoded string is what missed this twice
+# before.
+
+# The XMP packet of a written file, as BYTES: from the opening processing
+# instruction to the closing one. Needs a document written with -compress 0.
+proc packetBytes {path} {
+  set bytes [::tclpdfTest::readBytes $path]
+  set start [string first "<?xpacket begin=" $bytes]
+  set end [string first "<?xpacket end=" $bytes]
+  if {$start < 0 || $end < 0} {
+    return {}
+  }
+  return [string range $bytes $start [expr {$end + 18}]]
+}
+
+# Every byte in the packet that XML 1.0, 2.2 does not allow there: anything
+# below 0x20 but tab, newline and carriage return.
+proc strayBytes {bytes} {
+  set found {}
+  binary scan $bytes cu* values
+  foreach value $values {
+    if {$value < 0x20 && $value ni {9 10 13}} {
+      lappend found [format %02X $value]
+    }
+  }
+  return [lsort -unique $found]
+}
+
+test xmp-12.1 {a control character out of the Info dictionary is refused, and no file appears} -constraints {haveTdom haveFace} -body {
+  # U+0000 is the one that cannot even be escaped - XML has no way to write
+  # it at all - but none of the four may go out, and the message has to name
+  # which property carries it, because the caller's data is where it has to
+  # be fixed.
+  set out {}
+  foreach code {0 7 11 31} {
+    set doc [probe $face]
+    $doc info Title "a[format %c $code]b"
+    $doc pdfa -part 3 -conformance B
+    set path [::tclpdfTest::scratch xmp-control.pdf]
+    lappend out [catch {$doc write $path} message] \
+        [string match "tclpdf: dc:title*U+[format %04X $code]*XML 1.0, 2.2*" \
+            $message] \
+        [file exists $path]
+    $doc destroy
+    file delete $path
+  }
+  set out
+} -result {1 1 0 1 1 0 1 1 0 1 1 0}
+
+test xmp-12.2 {what the packet does carry are bytes XML allows, the astral character among them} -constraints {haveTdom haveFace} -body {
+  # The counter-direction, and the half the fix must not break: tab, newline,
+  # an ampersand and a character outside the BMP are all legal and all have
+  # to reach the file. As BYTES - under Tcl 8.6 the emoji is a surrogate pair
+  # in memory, and the question is whether it leaves as the four UTF-8 bytes
+  # F0 9F 98 80 or as the six of the two halves taken separately.
+  #
+  # The two interpreters spell it differently and both are right: 8.6 hands
+  # tdom a pair, which is serialised as the character and encoded to those
+  # four bytes; Tcl 9 holds the character whole and tdom writes the
+  # character reference "&#128512;". What must NOT appear either way is ED
+  # A0 BD, the first half of the pair encoded on its own - that is CESU-8,
+  # not UTF-8, and no reader takes it back.
+  set doc [probe $face]
+  $doc info Title "Preis[format %c 9]& Menge[format %c 10][encoding \
+      convertfrom utf-8 [binary decode hex f09f9880]]"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-legal.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [packetBytes $path]
+  set result [list [strayBytes $bytes] \
+      [expr {[string first [binary decode hex f09f9880] $bytes] >= 0
+          || [string first "&#128512;" $bytes] >= 0}] \
+      [expr {[string first [binary decode hex eda0bd] $bytes] >= 0}] \
+      [::tclpdfTest::verapdf $path 3b]]
+  file delete $path
+  set result
+} -result {{} 1 0 ok}
+
+test xmp-12.3 {an unpaired surrogate is refused rather than encoded as bytes that are not UTF-8} -constraints {haveTdom haveFace} -body {
+  # The two interpreters break differently and both badly. Tcl 8.6 encodes a
+  # lone U+D83D to the three bytes ED A0 BD, which is not UTF-8 and which no
+  # reader can take back; Tcl 9 throws out of [encoding convertto utf-8], so
+  # the caller sees a raw Tcl error from inside the writer. Refused at the
+  # packet instead, with the same words under both.
+  set doc [probe $face]
+  $doc info Title "lone [format %c 0xD83D] end"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-surrogate.pdf]
+  set code [catch {$doc write $path} message]
+  $doc destroy
+  set out [list $code \
+      [string match {tclpdf: dc:title*unpaired surrogate U+D83D*} $message] \
+      [file exists $path]]
+  file delete $path
+  set out
+} -result {1 1 0}
+
+test xmp-12.4 {a schema's own value is held to the same characters, naming its tag} -constraints haveTdom -body {
+  # Not only the Info dictionary: an [xmpSchema] callback answers with text
+  # that goes into the packet the same way, and a topic reading a control
+  # character out of somewhere else would put it there just as quietly.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  oo::objdefine $doc method ProbeControl {} {
+    return [list [list text alpha "x[format %c 7]y"]]
+  }
+  $doc xmpSchema myctl http://example.org/ctl/ {alpha} ProbeControl
+  set code [catch {$doc write [::tclpdfTest::scratch xmp-schema-ctl.pdf]} message]
+  $doc destroy
+  list $code [string match {tclpdf: myctl:alpha carries U+0007*} $message]
+} -result {1 1}
+
+# --- a prefix belongs to the document, not to the process -----------------
+
+test xmp-13.1 {two documents in one interpreter may label two URIs with one prefix} -constraints haveTdom -body {
+  # TWO documents in ONE interpreter, and that is the whole test. The element
+  # command is created with -namespace and was keyed by the tag name alone,
+  # so the second document skipped the declaration and kept the FIRST
+  # document's command: measured 2026-08-25, the second file carried
+  # <twice:beta xmlns:twice=".../ns-one/"> under an rdf:Description declaring
+  # ".../ns-TWO/" - the property stood in the namespace of a document that
+  # had already been closed. A single document is always right, which is why
+  # neither the suite nor a validator ever saw this; a server or a batch run
+  # is not a single document.
+  set out {}
+  foreach uri {http://example.org/ns-one/ http://example.org/ns-TWO/} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    oo::objdefine $doc method ProbeNs {} {return {{text beta gamma}}}
+    $doc xmpSchema twice $uri {beta} ProbeNs
+    set path [::tclpdfTest::scratch xmp-twice.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    # What the description declares, and whether the property carries a
+    # declaration of its OWN - which is what tdom writes when the element
+    # belongs to a namespace the surrounding scope does not have.
+    regexp {<rdf:Description xmlns:twice="([^"]*)"[^>]*>\s*<twice:beta([^>]*)>} \
+        $bytes -> declared attributes
+    lappend out $declared [string trim $attributes]
+  }
+  set out
+} -result {http://example.org/ns-one/ {} http://example.org/ns-TWO/ {}}
+
+# --- a time nobody can place ----------------------------------------------
+
+test xmp-14.1 {a PDF date without a zone loses its time rather than inventing one} -constraints haveTdom -body {
+  # XMP part 1, 8.2.1.4: the zone designator is optional only while there is
+  # no time at all. ISO 32000-1, 7.9.4 makes the relationship of a zoneless
+  # PDF time to UT unknown, so there is no offset to write - Z would claim
+  # UTC and the local offset would claim the machine that ran the job. The
+  # packet says the date and stops. veraPDF passes both spellings (measured
+  # 2026-08-25), so only a test holds this.
+  list [::tclpdf::xmp::stampFromPdf "D:20190301120000"] \
+      [::tclpdf::xmp::stampFromPdf "D:20190301120000Z"] \
+      [::tclpdf::xmp::stampFromPdf "D:20190301120000+02'00'"] \
+      [::tclpdf::xmp::stampFromPdf "D:2019030112"] \
+      [::tclpdf::xmp::stampFromPdf "D:20190301"]
+} -result {2019-03-01 2019-03-01T12:00:00Z 2019-03-01T12:00:00+02:00 2019-03-01\
+    2019-03-01}
+
+test xmp-14.2 {and the packet in the file says the same} -constraints {haveTdom haveFace} -body {
+  # "D:20190301120000" is the spelling many other generators use, so this is
+  # not a corner: it reached the packet as "2019-03-01T12:00:00", which is
+  # not an XMP date.
+  set doc [probe $face]
+  $doc info CreationDate "D:20190301120000"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-nozone.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [packetBytes $path]
+  set result [list [regexp {<xmp:CreateDate>([^<]*)<} $bytes -> stamp] $stamp \
+      [::tclpdfTest::verapdf $path 3b]]
+  file delete $path
+  set result
+} -result {1 2019-03-01 ok}
+
+test xmp-14.3 {ModDate is treated exactly as CreationDate is} -constraints {haveTdom haveFace} -body {
+  # The rule was built for one field and asserted for one field. It is one
+  # conversion for both - Table 317 pairs CreationDate with xmp:CreateDate
+  # and ModDate with xmp:ModifyDate, and [packet] puts both through
+  # [stampFromPdf] in the same loop - so the same document is asked about
+  # both at once: a zoneless time loses its time and keeps its date on either
+  # side, and a partial date stays as partial as it was given.
+  set doc [probe $face]
+  $doc info CreationDate "D:20190301120000"
+  $doc info ModDate "D:20200401133000"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-nozone-both.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [packetBytes $path]
+  regexp {<xmp:CreateDate>([^<]*)<} $bytes -> created
+  regexp {<xmp:ModifyDate>([^<]*)<} $bytes -> modified
+  set result [list $created $modified [::tclpdfTest::verapdf $path 3b]]
+  file delete $path
+  set result
+} -result {2019-03-01 2020-04-01 ok}
+
+test xmp-14.4 {and the partial dates, on both sides} -constraints haveTdom -body {
+  # Read through the same procedure both fields go through, so that a change
+  # that split them would have to be made twice to pass.
+  set out {}
+  foreach date {D:2019 D:201903 D:20190304 D:2019030405 D:20190304050607Z} {
+    lappend out [::tclpdf::xmp::stampFromPdf $date]
+  }
+  set out
+} -result {2019 2019-03 2019-03-04 2019-03-04 2019-03-04T05:06:07Z}
+
+test xmp-14.5 {the packet carries no third date} -constraints {haveTdom haveFace} -body {
+  # What the rule has to hold for: xmp:CreateDate and xmp:ModifyDate are the
+  # only date-bearing properties this package writes, so there is no field it
+  # could have missed. pdf:Trapped is deliberately absent (see the module),
+  # and xmp:MetadataDate is not written at all - measured 2026-08-25 by
+  # counting what a full PDF/A-3 packet holds.
+  set doc [probe $face]
+  $doc info CreationDate "D:20190301120000+02'00'"
+  $doc info ModDate "D:20200401133000+02'00'"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-dates.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [packetBytes $path]
+  file delete $path
+  # Every element whose name ends in "Date", named rather than counted, so a
+  # new one added later shows up here as a difference and not as a number.
+  lsort -unique [regexp -all -inline {<([A-Za-z]+:[A-Za-z]*Date)>} $bytes]
+} -result {<xmp:CreateDate> <xmp:ModifyDate> xmp:CreateDate xmp:ModifyDate}
+
+# --- a contribution the caller cannot take back ---------------------------
+
+test xmp-15.1 {a contribution that is not well formed fails at the call, and the document stays writable} -constraints {haveTdom haveFace} -body {
+  # The head of this module has promised since it was written that a raw
+  # contribution is parsed on the way IN and a malformed one fails at the
+  # call. It was not: the parse happened while the packet was built, so a
+  # broken one was accepted without a word, made every write from then on
+  # fail - and could not be taken back out, because nothing removes one.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  set result [list [catch {$doc pdfa extension {<rdf:Description>}} message] \
+      [string match {tclpdf: XMP contribution is not well formed XML*} $message] \
+      [llength [dict get [$doc pdfa state] extensions]]]
+  # A refused call leaves the document as it was - so this still writes.
+  lappend result {*}[::tclpdfTest::writes $doc xmp-extension.pdf]
+  $doc destroy
+  set result
+} -result {1 1 0 0 1}
+
+test xmp-15.2 {a well formed contribution is still taken, and reaches the packet} -constraints {haveTdom haveFace} -body {
+  # The counter-direction: the check refuses what is broken and nothing else.
+  # Not held against veraPDF - a property in a namespace of its own is what
+  # a PDF/A extension SCHEMA has to describe, and describing one is not what
+  # this test is about; zugferd.test writes the real thing.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa extension {<rdf:Description xmlns:probe="http://example.org/probe/"
+      rdf:about=""><probe:note>kept</probe:note></rdf:Description>}
+  set path [::tclpdfTest::scratch xmp-extension-ok.pdf]
+  $doc write $path
+  set bytes [packetBytes $path]
+  set result [list [llength [regexp -all -inline {<probe:note>kept<} $bytes]] \
+      [llength [dict get [$doc pdfa state] extensions]]]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 1}
 
 cleanupTests

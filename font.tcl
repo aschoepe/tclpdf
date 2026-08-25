@@ -140,7 +140,14 @@ oo::define ::tclpdf::document::document {
       # be looked at, the other is in the caller's hands. Refused rather than
       # ranked, in the same spirit as -metrics on a TrueType face three
       # paragraphs below.
-      return -code error -errorcode [list TCLPDF FONT SOURCE $alias] \
+      # NOT "SOURCE": doc/tclpdf.md makes the third word of that code the
+      # READER that turned the file away - sfnt, cff, type1 - and says a
+      # script trying a file through several readers RETRIES on it. Both
+      # refusals here are about the call rather than about the bytes, and no
+      # reader has seen anything yet; wearing SOURCE with the alias in the
+      # reader's place, they told such a script to try again with the same
+      # arguments, for ever.
+      return -code error -errorcode [list TCLPDF FONT EMBED $alias] \
           "tclpdf: font embed takes a file name or -data, not both -\
           \"$alias\" was given \"$path\" and\
           [string length [dict get $options data]] bytes besides; drop\
@@ -151,7 +158,7 @@ oo::define ::tclpdf::document::document {
     } elseif {[dict get $options data] ne {}} {
       set bytes [dict get $options data]
     } else {
-      return -code error -errorcode [list TCLPDF FONT SOURCE $alias] \
+      return -code error -errorcode [list TCLPDF FONT EMBED $alias] \
           "tclpdf: font embed needs a file name or -data - \"$alias\" names\
           the font in the document, not the font program"
     }
@@ -467,7 +474,11 @@ oo::define ::tclpdf::document::document {
         # -data and no -metrics: there is no file to look beside. Said here
         # rather than letting the lookup below report that "".afm" is not
         # readable, which names a file nobody asked for.
-        return -code error -errorcode [list TCLPDF FONT METRICS $alias] \
+        # "afm" and not the alias: the third word of METRICS names WHICH
+        # metric is missing or unusable, as it does in sfnt.tcl
+        # (unitsPerEm) and in type1.tcl, where the same class is raised over
+        # the same file. The alias is in the message, where it belongs.
+        return -code error -errorcode [list TCLPDF FONT METRICS afm] \
             "tclpdf: a Type 1 font needs its metrics, and a font passed with\
             -data has no file to look beside - name the AFM with -metrics"
       }
@@ -596,7 +607,10 @@ oo::define ::tclpdf::document::document {
       # WinAnsi calls them whatever else the face holds. Two is next to
       # nothing and is still not none, so both are embedded rather than
       # refused. It takes a face whose every glyph carries a private name.
-      return -code error -errorcode [list TCLPDF FONT ENCODING $alias $path] \
+      # "charset" and not the alias: sfnt.tcl raises ENCODING with "cmap",
+      # the table that could not address the face, and the CFF counterpart of
+      # a cmap is its charset - the glyph names this refusal is about.
+      return -code error -errorcode [list TCLPDF FONT ENCODING charset] \
           "tclpdf: $source is a CFF font program whose\
           [dict size [dict get $program charset]] glyphs carry none of the\
           glyph names WinAnsiEncoding is built from, so not one byte position\
@@ -1291,7 +1305,30 @@ oo::define ::tclpdf::document::document {
   # write of the same document, and a vertical font that took a fresh object
   # number on every write would leave the first one referenced by a resource
   # dictionary that no longer names it.
+  #
+  # A FACE THAT HAS NO VERTICAL WRITING MODE NEVER GETS A SLOT HERE, and that
+  # is the point of the test rather than a second opinion about the one in
+  # text.tcl. Identity-V is a CMap over GLYPH NUMBERS, so only a Type 0 font
+  # over an embedded sfnt face can name it; an embedded Type 1 program is
+  # addressed by single bytes through WinAnsiEncoding and a Type 3 font
+  # through its own /Differences, and neither has a second CMap to point at.
+  # Reserving an object for such a face was not merely useless, it made the
+  # DOCUMENT UNWRITABLE: [FontSlot] took a number, /FV<alias> went into the
+  # resource dictionary, and [FontWriteType1] - which knows nothing of a
+  # vertical twin - never filled it, so [write] died with "object  was never
+  # reserved" and errorCode NONE, which is neither a message nor a code this
+  # package promises. Measured on 2026-08-25 with a Type 1 face reached
+  # through -fallback on a "-direction ttb" line: the gate in text.tcl asks
+  # only about -family, so every face in the chain arrived here unchecked.
   method FontVerticalResource {alias} {
+    if {[my FontKind $alias] ne "truetype"} {
+      return -code error -errorcode [list TCLPDF FONT VERTICAL $alias] \
+          "tclpdf: a vertical line needs a TrueType or OpenType face embedded\
+          with \[font embed\] - \"$alias\" is an embedded\
+          [my FontKind $alias] font, which is addressed through an encoding\
+          rather than by glyph number and has no vertical writing mode; set\
+          the text that needs this face as a call of its own"
+    }
     set name FV$alias
     if {[my resource Font $name] eq {}} {
       my resource Font $name [[my writer] ref [my FontSlot $alias vertical]]
@@ -1415,9 +1452,48 @@ oo::define ::tclpdf::document::document {
         LastChar $last \
         Widths [$writer ref [$writer put [my FontSlot $alias widths] \
             [::tclpdf::pdfObj arr $entries]]] \
-        Encoding /WinAnsiEncoding \
+        Encoding [my FontType1Encoding $entry] \
         FontDescriptor [$writer ref $descriptorNumber]]]
     return
+  }
+
+  # The /Encoding of a face addressed by single bytes: the name
+  # /WinAnsiEncoding where the face's glyph names ARE WinAnsi's, and a
+  # dictionary with a /Differences array where they are not (ISO 32000-1,
+  # 9.6.6.1 and 9.6.6.2).
+  #
+  # WHY IT CANNOT BE THE BARE NAME EVERY TIME. A byte position is chosen by
+  # [type1 names], which keeps the first name the face really carries out of
+  # the candidates for that position - so a face spelling U+00B7 "middot"
+  # rather than "periodcentered", or the bar "verticalbar", is written with
+  # its own name and its own width. Declaring /WinAnsiEncoding and nothing
+  # else then tells the reader to look up "periodcentered" in a program that
+  # has no such charstring: the glyph is DROPPED, silently, while /Widths goes
+  # on reserving its advance. Measured on 2026-08-25 on a URW Type 1 face
+  # whose two charstrings were renamed to "middot" and "verticalbar": of
+  # "A·|A" the renderer drew the two A and nothing between them, while qpdf
+  # --check was clean and pdftotext still answered "A·|A" - the loss shows in
+  # the rendering and nowhere else, which is why font.test renders the page.
+  #
+  # The array is written the way 9.6.6.1 has it: a code, then the names of
+  # the codes running on from it, so consecutive positions share one number.
+  method FontType1Encoding {entry} {
+    set differences [::tclpdf::type1 differences [dict get $entry names]]
+    if {![dict size $differences]} {
+      return /WinAnsiEncoding
+    }
+    set array {}
+    set previous {}
+    foreach {code name} $differences {
+      if {$previous eq {} || $code != $previous + 1} {
+        lappend array $code
+      }
+      lappend array [::tclpdf::pdfObj name $name]
+      set previous $code
+    }
+    return [::tclpdf::pdfObj dictionary [list Type /Encoding \
+        BaseEncoding /WinAnsiEncoding \
+        Differences [::tclpdf::pdfObj arr $array]]]
   }
 
   method FontType1DescriptorPairs {entry baseName fontFileRef} {

@@ -91,7 +91,11 @@ $doc save
 $doc opacity 0.45
 $doc circle -at {70 195} -radius 22 -fill red
 $doc circle -at {90 195} -radius 22 -fill green
-$doc circle -at {80 210} -radius 22 -fill blue
+# The third circle sits at 206, not 210: at 210 its lower edge reached y =
+# 232 and the clipped hatch box below starts at 230, so a violet arc stuck
+# out of the box and the hatching ran across it. Two demonstrations that
+# have nothing to do with each other were touching - seen at 300 dpi.
+$doc circle -at {80 206} -radius 22 -fill blue
 $doc restore
 
 # -- transformation: rotated stamp ------------------------------------------

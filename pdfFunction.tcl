@@ -158,7 +158,15 @@ oo::define ::tclpdf::document::document {
   # the tests measure what a reader sees (how many function dictionaries the
   # file holds, and that the shadings point at them) rather than the numbers.
   method FunctionPooled {pairs {stream {}}} {
-    set body [::tclpdf::pdfObj dictionary $pairs]
+    return [my FunctionPool [::tclpdf::pdfObj dictionary $pairs] $stream $pairs]
+  }
+
+  # The pool itself, reached with the FINISHED syntax rather than the pairs -
+  # which is what lets an imported function in as well. A foreign function
+  # arrives as bytes and never had a pair list; building one back would mean
+  # parsing what the reader already parsed, and the key is the bytes either
+  # way.
+  method FunctionPool {body stream pairs} {
     set key "$stream\u0000$body"
     set pool [my state functionPool]
     if {[dict exists $pool $key]} {
@@ -272,4 +280,4 @@ proc ::tclpdf::pdfFunction::checkCalculator {body subject errorcode} {
   return $body
 }
 
-package provide tclpdf::pdfFunction 1.1
+package provide tclpdf::pdfFunction 1.2

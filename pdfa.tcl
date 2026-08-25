@@ -225,11 +225,7 @@ oo::define ::tclpdf::document::document {
     switch -- $level {
       B - U {}
       A {
-        if {[my state tagged] ne "1"} {
-          return -code error "tclpdf: PDF/A level A needs a tagged document -\
-              a structure tree and MarkInfo. Call \[\$doc tagged 1\] before\
-              drawing, or use level U, which guarantees extractable text"
-        }
+        my PdfaCheckTagged $level
       }
       default {
         return -code error "tclpdf: PDF/A conformance must be B, U or A, not\
@@ -282,10 +278,14 @@ oo::define ::tclpdf::document::document {
       return -code error "tclpdf: pdfa extension needs a PDF/A declaration to\
           add to - call pdfa first"
     }
+    # [xmpRaw] first, because it is the one that can refuse: a contribution
+    # that is not well formed XML is turned away there, at THIS call, and a
+    # refused call has to leave the document as it was. Recorded first, a
+    # broken extension stayed in [pdfa state] with nothing able to remove it.
+    my xmpRaw $xml
     set current [my state pdfa]
     dict lappend current extensions $xml
     my state pdfa $current
-    my xmpRaw $xml
     return
   }
 
@@ -433,6 +433,31 @@ oo::define ::tclpdf::document::document {
         -profile"
   }
 
+  # Level A only: the structural half of the claim - MarkInfo and the
+  # structure tree.
+  #
+  # Asked TWICE, at the [pdfa] call and again at catalog time, and the second
+  # is not a belt and braces: [tagged] is a switch like any other and can be
+  # thrown after the claim was made. "pdfa -conformance A" then "tagged 0"
+  # passed the check at the call, left nothing to check it again, and the
+  # file went out saying pdfaid:conformance A with neither /StructTreeRoot
+  # nor /MarkInfo - measured 2026-08-25, veraPDF -f 3a isCompliant="false"
+  # on clauses 6.7.2.2 and 6.7.3.3, the two the comment above the check at
+  # the call already names.
+  #
+  # It is the same reason the font, colour and graphics checks sit in
+  # PdfaCatalog: a document declares PDF/A and its content in either order,
+  # and only at catalog time do both orders look alike. The claim was the
+  # one thing held to one order.
+  method PdfaCheckTagged {level} {
+    if {$level ne "A" || [my state tagged] eq "1"} {
+      return
+    }
+    return -code error "tclpdf: PDF/A level A needs a tagged document -\
+        a structure tree and MarkInfo. Call \[\$doc tagged 1\] before\
+        drawing, or use level U, which guarantees extractable text"
+  }
+
   # Level A only: the accessibility half of the claim. A graphic nobody
   # described and nobody declared decoration is written as an artifact -
   # content a screen reader never sees (ISO 32000-1 14.8.2.2) - and the
@@ -479,6 +504,7 @@ oo::define ::tclpdf::document::document {
     # before or after the drawing - at catalog time both orders look alike.
     # The graphics check sits here for the same reason again: the record is
     # filled while drawing, whatever order [pdfa] and the drawing came in.
+    my PdfaCheckTagged [dict get [my state pdfa] conformance]
     my PdfaCheckFonts
     my PdfaCheckColour
     my PdfaCheckGraphics

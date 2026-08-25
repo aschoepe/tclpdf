@@ -3288,12 +3288,19 @@ test font-24.2 {neither a path nor -data} -constraints haveFont -body {
   # The alias names the font IN THE DOCUMENT, not the font program, and a
   # refusal that only said "needs a file name" would leave a caller looking
   # for the mistake in the name.
+  #
+  # THE CLASS IS "EMBED" AND NOT "SOURCE", changed on 2026-08-25: the third
+  # word of SOURCE is the reader that turned a file away, and the manual
+  # promises that a script trying a file through several readers RETRIES on
+  # that code. This refusal and the next are about the CALL - no reader has
+  # seen anything - and with the alias standing where a reader's name belongs
+  # they told such a script to retry the same arguments for ever.
   set doc [tclpdf new -unit pt]
   set code [catch {$doc font embed lonely} message options]
   $doc destroy
   list $code [dict get $options -errorcode] \
       [string match {*needs a file name or -data*} $message]
-} -result {1 {TCLPDF FONT SOURCE lonely} 1}
+} -result {1 {TCLPDF FONT EMBED lonely} 1}
 
 test font-24.3 {a path AND -data name two font programs for one alias} \
     -constraints haveCffTrio -body {
@@ -3306,7 +3313,7 @@ test font-24.3 {a path AND -data name two font programs for one alias} \
   $doc destroy
   list $code [dict get $options -errorcode] \
       [string match {*takes a file name or -data, not both*} $message]
-} -result {1 {TCLPDF FONT SOURCE both} 1}
+} -result {1 {TCLPDF FONT EMBED both} 1}
 
 test font-24.4 {a Type 1 program passed as bytes has no file to look beside} \
     -constraints haveType1 -body {
@@ -3325,7 +3332,7 @@ test font-24.4 {a Type 1 program passed as bytes has no file to look beside} \
   list $code [dict get $options -errorcode] \
       [string match {*no file to look beside*-metrics*} $message] \
       [dict get $info postScript] [dict get $info format]
-} -result {1 {TCLPDF FONT METRICS t1} 1 OCRB type1}
+} -result {1 {TCLPDF FONT METRICS afm} 1 OCRB type1}
 
 test font-24.5 {a refusal over bytes describes them instead of naming a file} \
     -constraints haveCffTrio -body {
@@ -3549,6 +3556,269 @@ test font-descender-1.3 {a Type 1 face reads it from the AFM, and zero means abs
   $doc destroy
   expr {$descent > 0}
 } -result 1
+
+
+# --- a Type 1 face whose glyph names are not WinAnsi's ----------------------
+#
+# No face in this tree needs a /Differences array: all of them call the
+# hundred-and-ninety-odd WinAnsi glyphs what Annex D calls them. The one that
+# does is therefore BUILT, out of a real URW face, by renaming two charstrings
+# in the eexec section and the two lines of the AFM that describe them - which
+# is the whole of what a face "carrying its own spelling" means to this
+# package. Two variants, because the two halves of the fix need different
+# faces: "only" carries middot and verticalbar alone, "both" carries them
+# beside periodcentered and bar.
+
+package require tclpdf::type1 1.0-
+
+set type1Base [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts urw-core35-fonts NimbusRoman-Regular.t1]
+testConstraint haveType1Base [file exists $type1Base]
+testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+
+# The eexec cipher, the other way round (Type 1 Font Format, 7.2). type1.tcl
+# reads fonts and so has only [Decrypt]; a test that builds one needs both.
+proc fontEncrypt {plain r} {
+  set c1 52845
+  set c2 22719
+  binary scan $plain cu* codes
+  set out {}
+  foreach p $codes {
+    set c [expr {$p ^ ($r >> 8)}]
+    lappend out $c
+    set r [expr {(($c + $r) * $c1 + $c2) & 0xFFFF}]
+  }
+  return [binary format c* $out]
+}
+
+# Where one CharStrings entry begins and ends: "/name length RD <bytes> ND",
+# walked exactly as [type1 glyphs] walks it - the bytes are encrypted and a
+# run of them will sooner or later spell "/A 5 RD ", so the entries are
+# counted through rather than searched for.
+proc fontEntryRange {plain name} {
+  set at [string first "/CharStrings" $plain]
+  set at [string first "begin" $plain $at]
+  incr at 5
+  set pattern {\s*/([^\s/{}()\[\]<>]+)\s+(\d+)\s+\S+\s}
+  while {[regexp -start $at -indices $pattern $plain whole nm len]} {
+    if {[lindex $whole 0] != $at} break
+    set found [string range $plain {*}$nm]
+    set stop [expr {[lindex $whole 1] + 1 + [string range $plain {*}$len]}]
+    regexp -start $stop -indices {\s*\S+} $plain token
+    set stop [lindex $token 1]
+    if {$found eq $name} {
+      return [list $at $stop]
+    }
+    set at [expr {$stop + 1}]
+  }
+  error "no charstring called \"$name\""
+}
+
+# The font program, as a PFB: three segments and the end marker.
+proc fontPfb {clear encrypted trailer} {
+  set out {}
+  append out [binary format cciu 0x80 1 [string length $clear]] $clear
+  append out [binary format cciu 0x80 2 [string length $encrypted]] $encrypted
+  append out [binary format cciu 0x80 1 [string length $trailer]] $trailer
+  append out [binary format cc 0x80 3]
+  return $out
+}
+
+# "only" renames the two charstrings, "both" copies them under the second
+# name and leaves the first where it was.
+proc fontRenamed {how} {
+  set font [::tclpdf::type1 parse [::tclpdfTest::readBytes $::type1Base]]
+  set plain [::tclpdf::type1::Decrypt [dict get $font encrypted] 55665 4]
+  foreach {from to} {periodcentered middot bar verticalbar} {
+    lassign [fontEntryRange $plain $from] start stop
+    set entry [string range $plain $start $stop]
+    set renamed [string map [list /$from /$to] $entry]
+    set plain [string replace $plain $start $stop \
+        [expr {$how eq "both" ? "$entry$renamed" : $renamed}]]
+  }
+  # The lead-in the format prescribes: four bytes of anything.
+  return [fontPfb [dict get $font clear] \
+      [fontEncrypt "tcl!$plain" 55665] [dict get $font trailer]]
+}
+
+# The AFM to go with it. A name the program carries and the metrics do not is
+# unwritable either way - [type1 names] maps a position only where both agree.
+proc fontRenamedAfm {how} {
+  set text [::tclpdfTest::readBytes [file rootname $::type1Base].afm]
+  set added {}
+  foreach {from to} {periodcentered middot bar verticalbar} {
+    foreach line [split $text \n] {
+      if {[regexp "; N $from ;" $line]} {
+        append added [regsub {^C\s+-?\d+\s+;} [string trim $line] "C -1 ;"] \n
+        break
+      }
+    }
+    set added [string map [list "N $from ;" "N $to ;"] $added]
+  }
+  if {$how eq "only"} {
+    set kept {}
+    foreach line [split $text \n] {
+      if {[regexp {; N (periodcentered|bar) ;} $line]} continue
+      lappend kept $line
+    }
+    set text [join $kept \n]
+  }
+  return [string map [list EndCharMetrics "${added}EndCharMetrics"] $text]
+}
+
+proc fontRenamedDoc {how} {
+  set path [::tclpdfTest::scratch renamed-$how.afm]
+  set channel [open $path w]
+  puts -nonewline $channel [fontRenamedAfm $how]
+  close $channel
+  set doc [tclpdf new -format a4 -unit mm]
+  $doc page add
+  $doc font embed odd -data [fontRenamed $how] -metrics $path
+  file delete $path
+  return $doc
+}
+
+test font-encoding-1.1 {the fixture face really carries its own spelling} \
+    -constraints haveType1Base -body {
+  # The fixture before the thing it is a fixture for: if the renaming did not
+  # take, every test below would pass for the wrong reason.
+  set doc [fontRenamedDoc only]
+  set names [dict get [my_entry $doc odd] names]
+  $doc destroy
+  list [dict get $names 183] [dict get $names 124]
+} -result {middot verticalbar}
+
+test font-encoding-1.2 {a face spelling a glyph its own way gets a /Differences} \
+    -constraints haveType1Base -body {
+  # /Encoding /WinAnsiEncoding alone told the reader to look up
+  # "periodcentered" in a program that has no such charstring: the glyph was
+  # dropped in silence while /Widths went on reserving its advance.
+  set doc [fontRenamedDoc only]
+  $doc text "A·|A" -at {20 20} -family odd -size 60
+  $doc write [::tclpdfTest::scratch encoding-only.pdf]
+  set font [lindex [::tclpdfTest::objects $doc {/Subtype /Type1}] 0]
+  $doc destroy
+  file delete [::tclpdfTest::scratch encoding-only.pdf]
+  list [string match {*/BaseEncoding /WinAnsiEncoding*} $font] \
+      [regexp {/Differences \[([^\]]*)\]} $font -> array] \
+      [string trim $array]
+} -result {1 1 {124 /verticalbar 183 /middot}}
+
+test font-encoding-1.3 {a face carrying BOTH names is addressed by WinAnsi's} \
+    -constraints haveType1Base -body {
+  # The half the array cannot fix and the ordering can: where the face has
+  # the Annex D name, that is the name to use, and then the bare
+  # /WinAnsiEncoding of before this change is still what gets written.
+  set doc [fontRenamedDoc both]
+  set names [dict get [my_entry $doc odd] names]
+  $doc text "A·|A" -at {20 20} -family odd -size 60
+  $doc write [::tclpdfTest::scratch encoding-both.pdf]
+  set font [lindex [::tclpdfTest::objects $doc {/Subtype /Type1}] 0]
+  $doc destroy
+  file delete [::tclpdfTest::scratch encoding-both.pdf]
+  list [dict get $names 183] [dict get $names 124] \
+      [string match {*/Encoding /WinAnsiEncoding*} $font] \
+      [string match {*Differences*} $font]
+} -result {periodcentered bar 1 0}
+
+test font-encoding-1.4 {and all four characters are actually drawn} \
+    -constraints {haveType1Base havePdftoppm} -body {
+  # THE ONLY CHECK THAT SEES THIS DEFECT. qpdf --check is clean either way and
+  # pdftotext answers "A.|A" either way, because the loss happens in the
+  # renderer: what is written is a name the font program has not got. So the
+  # page is rendered and the two columns the middle characters stand in are
+  # asked whether anything is there.
+  #
+  # The four glyphs are set at 60 pt from x = 20 mm on a baseline at y = 20:
+  # the two A end at 34.5 mm and begin again at 45.5, so everything found
+  # between those two is the dot or the bar and nothing else. Measured across
+  # a BAND rather than at a point - a middle dot is a few tenths of a
+  # millimetre and a test aimed at one pixel would be a test of this
+  # arithmetic - and the two halves are counted apart, so that one glyph
+  # coming back cannot cover for the other staying away.
+  set path [::tclpdfTest::scratch encoding-drawn.pdf]
+  set doc [fontRenamedDoc only]
+  $doc text "A·|A" -at {20 20} -family odd -size 60
+  $doc write $path
+  $doc destroy
+  set points {}
+  for {set x 355} {$x <= 455} {incr x 5} {
+    for {set y 40} {$y <= 180} {incr y 5} {
+      lappend points [list [expr {$x / 10.0}] [expr {$y / 10.0}]]
+    }
+  }
+  set dot 0
+  set bar 0
+  set index 0
+  foreach pixel [::tclpdfTest::pixels $path $points -dpi 300 -unit mm] {
+    if {[lindex $pixel 0] < 128} {
+      if {[lindex $points $index 0] < 40.0} {
+        incr dot
+      } else {
+        incr bar
+      }
+    }
+    incr index
+  }
+  file delete $path
+  list [expr {$dot > 0}] [expr {$bar > 0}]
+} -result {1 1}
+
+
+# --- a face that cannot be set vertically never reserves a vertical object --
+
+test font-vertical-2.1 {an embedded Type 1 face is refused a vertical resource} \
+    -constraints {haveFont haveType1} -body {
+  # Identity-V is a CMap over glyph numbers, so only a Type 0 font over an
+  # embedded sfnt face can name it. Reserving an object for a Type 1 face was
+  # not merely useless: /FV<alias> went into the resource dictionary,
+  # [FontWriteType1] never filled it, and the DOCUMENT could no longer be
+  # written - "object  was never reserved", errorCode NONE.
+  #
+  # The road in is -fallback: the gate in text.tcl asks only about -family,
+  # so a chain reaches this face on a "-direction ttb" line unchecked. U+02C6
+  # is the character for it - Noto Sans JP has no glyph for it and OCR-B has.
+  set doc [tclpdf new -format a4 -unit mm]
+  $doc page add
+  $doc font embed jp [file join [file dirname $::fontRegular] google \
+      NotoSansJP-Regular.ttf]
+  $doc font embed t1 $::type1Face
+  set code [catch {$doc text "日ˆ本" -at {20 20} -family jp \
+      -fallback t1 -direction ttb -size 12} message options]
+  # AND the document is still writable, which is the half that was lost.
+  set written [::tclpdfTest::writes $doc vertical-fallback.pdf]
+  $doc destroy
+  list $code [dict get $options -errorcode] $written
+} -result {1 {TCLPDF FONT VERTICAL t1} {0 1}}
+
+test font-vertical-2.2 {an sfnt face still gets one} -constraints haveFont -body {
+  # The other half, so the refusal cannot quietly become unconditional.
+  set doc [tclpdf new -format a4 -unit mm]
+  $doc page add
+  $doc font embed jp [file join [file dirname $::fontRegular] google \
+      NotoSansJP-Regular.ttf]
+  $doc text "日本" -at {20 20} -family jp -direction ttb -size 12
+  set stream [::tclpdfTest::content $doc]
+  set written [::tclpdfTest::writes $doc vertical-plain.pdf]
+  $doc destroy
+  list [string match {*/FVjp *} $stream] $written
+} -result {1 {0 1}}
+
+
+test font-source-3.1 {a bare CFF of an unknown version names the CFF reader} \
+    -constraints haveOtf -body {
+  # doc/tclpdf.md makes the third word of TCLPDF FONT SOURCE the reader that
+  # turned the file away, and says a script trying a file through several
+  # readers retries on that code. A version-3 CFF used to fall through to the
+  # sfnt reader and be called "not a TrueType or OpenType font" - the wrong
+  # reader, and the wrong thing to try next.
+  set bytes [::tclpdfTest::bareCff $::otf]
+  set doc [tclpdf new]
+  set code [::tclpdfTest::refusalCode {$doc font embed odd \
+      -data [string replace $bytes 0 0 \x03]}]
+  $doc destroy
+  set code
+} -result {TCLPDF FONT SOURCE cff}
 
 
 cleanupTests

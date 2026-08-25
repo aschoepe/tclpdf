@@ -1569,4 +1569,112 @@ test zugferd-encrypt-15.1 {a hybrid invoice refuses an encrypted document} -cons
   list $code [string match {*PDF/A forbids encryption*} $message]
 } -result {1 1}
 
+# --- what zugferd may and may not decide for the caller --------------------
+
+# The same document as [archivable], but tagged and with its paragraph in the
+# structure tree - what a level A claim needs. A PROC and not a few lines in
+# the test body, because [structure -script] runs its script with [uplevel 1]
+# and a tcltest body is not a frame that has one.
+proc archivableTagged {face} {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc language de-DE
+  $doc page add
+  $doc font embed haus $face
+  $doc structure P -script {
+    uplevel 1 [list $doc text "Rechnung" -at {20 20} -family haus]
+  }
+  return $doc
+}
+
+test zugferd-16.1 {a conformance level declared before the invoice survives it} -constraints {haveInvoice haveTdom} -body {
+  # PDF/A-3B is what an invoice needs and the right default. It was also
+  # passed UNCONDITIONALLY: a caller who had already said [pdfa -conformance
+  # A] got B back without a word - measured 2026-08-25, the structure tree
+  # was written all the same, so the file paid for level A and claimed
+  # level B. Factur-X 1.09.2 and Order-X 1.0, 4.1 ask for PDF/A-3 and leave
+  # the level open, so there is nothing here to overrule the caller with.
+  set doc [archivableTagged $face]
+  $doc pdfa -part 3 -conformance A
+  $doc zugferd $invoice
+  set path [::tclpdfTest::scratch zugferd-level-a.pdf]
+  $doc write $path
+  set level [dict get [$doc pdfa state] conformance]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set result [list $level [regexp {pdfaid:conformance>A<} $bytes] \
+      [regexp {/StructTreeRoot} $bytes] [::tclpdfTest::verapdf $path 3a]]
+  file delete $path
+  set result
+} -result {A 1 1 ok}
+
+test zugferd-16.2 {a document that declared nothing still gets 3B} -constraints {haveInvoice haveTdom} -body {
+  # The counter-direction, and the case every example is: nothing declared
+  # before the call, so the call decides, and it decides B.
+  set doc [archivable $face]
+  $doc zugferd $invoice
+  set level [dict get [$doc pdfa state] conformance]
+  set path [::tclpdfTest::scratch zugferd-level-b.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set result [list $level [regexp {pdfaid:conformance>B<} $bytes] \
+      [::tclpdfTest::verapdf $path 3b]]
+  file delete $path
+  set result
+} -result {B 1 ok}
+
+test zugferd-16.3 {Supplement and Unspecified are refused for an invoice as they are for an order} -constraints {haveInvoice haveTdom} -body {
+  # The invoice side never held -relationship against anything but the list
+  # attach.tcl owns, although the comment there and the manual both say the
+  # profile prescribes the value: "zugferd invoice.xml -relationship
+  # Supplement" went straight through. The two words describe an attachment
+  # standing BESIDE the document - a note, a drawing - and this XML is the
+  # document a second time. Neither veraPDF nor Mustangproject objects
+  # (measured 2026-08-25: both call such a file valid), so nothing but the
+  # writer is going to say it.
+  set out {}
+  foreach relationship {Supplement Unspecified} {
+    set doc [archivable $face]
+    lappend out [catch {$doc zugferd $invoice -relationship $relationship} err] \
+        [string match "*-relationship for factur-x.xml is one of Data, Source,\
+            Alternative (Factur-X 1.09.2, embedding rules) - not\
+            \"$relationship\"*" $err] \
+        [expr {[$doc zugferd state] eq {} && [$doc pdfa state] eq {}}]
+    $doc destroy
+  }
+  set out
+} -result {1 1 1 1 1 1}
+
+test zugferd-14.2 {the profile binds the DEFAULT, not the option} -constraints {haveInvoice haveIcc haveTdom} -body {
+  # Decided on 2026-08-25, and the measurement that decided it: an EN 16931
+  # invoice defaults to /Alternative because Factur-X names that for the
+  # fuller profiles, and an explicit -relationship Data on the same document
+  # goes through and is written. All three words are permitted for this file
+  # by one standard or the other - Order-X 4.1.1 lists them and prescribes
+  # none - and no tool objects either way: veraPDF calls the Data file PASS
+  # 3b and Mustangproject calls it valid. The option exists for the caller
+  # reproducing another generator's file; the default carries the standard.
+  # Only Supplement and Unspecified are refused, which zugferd-14.1 holds.
+  set out {}
+  foreach relationship {{} Data Source Alternative} {
+    set doc [archivable $face]
+    set arguments {}
+    if {$relationship ne {}} {
+      set arguments [list -relationship $relationship]
+    }
+    set profile [$doc zugferd $invoice -icc $icc {*}$arguments]
+    set path [::tclpdfTest::scratch zugferd-relationship.pdf]
+    $doc write $path
+    set state [$doc zugferd state]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    regexp {/AFRelationship /(\w+)} $bytes -> written
+    lappend out [list $profile [dict get $state relationship] $written]
+  }
+  set out
+} -result {{{EN 16931} Alternative Alternative} {{EN 16931} Data Data}\
+    {{EN 16931} Source Source} {{EN 16931} Alternative Alternative}}
+
 cleanupTests

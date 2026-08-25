@@ -724,6 +724,59 @@ test import-15.2 {the copied stream carries one /Length, the writer's, and its b
     set found
 } -result [list 1 1 "q 1 0 0 1 0 0 cm Q"]
 
+test import-15.3 {the refusal falls before the numbers, so the document writes on} -body {
+    # THE SECOND HALF OF import-15.1, and the half that was never measured:
+    # the refusal was right and the document was ruined all the same. The
+    # check sat in [writer stream], which the copied objects reach in the
+    # SECOND loop of the import - after every number of the resource closure
+    # has been reserved - so a [pdf import] the caller caught left numbers
+    # reserved and never filled, and the next [write] of the whole document
+    # died with "object(s) reserved but never written" (measured 2026-08-25:
+    # one number lost, and the document unwritable). The check is asked of
+    # the writer in the first loop now, before the reservation, and the
+    # sentence it answers with is the one import-15.1 reads.
+    #
+    # /Filter as an INDIRECT reference in the second document, because that
+    # is legal (7.4) and is what makes the reading a [Resolve] rather than a
+    # [lindex]: a filter the check cannot see is a deflated resource in a
+    # file whose header disowns the filter.
+    set stream [::tclpdf::filter encodeFlate "q Q"]
+    set direct [::tclpdfTest::buildpdf import-flate-writes.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /XObject << /Fm 4 0 R >> >> >>" \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\]\
+            /Filter /FlateDecode /Length [string length $stream] >>\
+            \nstream\n$stream\nendstream" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+    set indirect [::tclpdfTest::buildpdf import-flate-indirect.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /XObject << /Fm 4 0 R >> >> >>" \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\]\
+            /Filter 6 0 R /Length [string length $stream] >>\
+            \nstream\n$stream\nendstream" \
+        "<< /Length 3 >>\nstream\nq Q\nendstream" \
+        "/FlateDecode"]]
+    set answers {}
+    foreach fixture [list $direct $indirect] {
+        set doc [tclpdf new -unit pt -format a4 -version 1.1 -compress 0]
+        $doc page add
+        $doc text "the document goes on" -at {20 20}
+        set before [[$doc writer] count]
+        set code [catch {$doc pdf import alt $fixture} message]
+        set after [[$doc writer] count]
+        lappend answers $code [expr {$before == $after}] \
+            [string match {tclpdf: a FlateDecode stream *needs PDF 1.2*} $message] \
+            [::tclpdfTest::writes $doc import-flate-after.pdf]
+        $doc destroy
+        file delete $fixture
+    }
+    set answers
+} -result {1 1 1 {0 1} 1 1 1 {0 1}}
+
 # --- the inventory: what a finished file says about itself -----------------
 #
 # [::tclpdf::pdf info|pages|fonts|metadata] stand on the reader above, so what
@@ -1881,5 +1934,132 @@ test import-25.4 {a filter this package still cannot read is refused by name} -b
     list $answer [string match {*uses filter /JBIG2Decode, which this import\
         cannot decode*} $message]
 } -result {{1 1 {TCLPDF IMPORT FILTER}} 1}
+
+
+# -- the function pool reaches across an import ----------------------------
+
+test import-pool-40.1 {the same file imported twice brings one function} -body {
+  # A function is a VALUE: two identical ones are interchangeable, and the
+  # pool that already folds the package's own gradients together now takes
+  # the foreign ones as well. Measured before the change: two.
+  set source [tclpdfTest::scratch import-pool-source.pdf]
+  set src [tclpdf new -unit mm -compress 0]
+  $src page add
+  $src shading axial -at {10 10} -size {50 20} -colors {red blue}
+  $src write $source
+  $src destroy
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc pdf import first $source
+  $doc pdf import second $source
+  $doc form place first -at {10 10}
+  $doc form place second -at {10 80}
+  set path [::tclpdfTest::scratch import-pool.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path $source
+  regexp -all {/FunctionType} $bytes
+} -result 1
+
+test import-pool-40.2 {a function carrying a reference is copied whole} -body {
+  # The serialization of a value holding an indirect reference depends on
+  # the number map, and the map is not finished when the decision falls - so
+  # this one is not pooled, and must not be silently dropped either.
+  set source [tclpdfTest::scratch import-pool-ref.pdf]
+  set src [tclpdf new -unit mm -compress 0]
+  $src page add
+  # Three stops make a stitching function (type 3), whose parts are
+  # functions of their own.
+  $src shading axial -at {10 10} -size {50 20} -colors {red yellow blue}
+  $src write $source
+  $src destroy
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc pdf import once $source
+  $doc form place once -at {10 10}
+  set path [::tclpdfTest::scratch import-pool-ref-out.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path $source
+  # Whatever the source had, the copy has - nothing lost on the way.
+  expr {[regexp -all {/FunctionType} $bytes] >= 1}
+} -result 1
+
+
+# --- a refused import leaves the document writable --------------------------
+#
+# The reading refuses in a dozen places and every one of them is measured
+# above by its message. What is measured HERE is the other half: what the
+# refusal costs the document the caller carries on with. An object number
+# handed out for an object that never arrives makes the NEXT [write] of the
+# whole document fail with "object(s) reserved but never written" - a
+# document that has nothing to do with the file that was refused.
+
+test import-26.1 {a bad hex string in a resource leaves the document writable} -body {
+    # <4G> is not a hexadecimal string (7.3.4.3) and the import says so. The
+    # refusal used to fall in the SECOND loop, when every object of the
+    # closure already had its number: the caller caught it, went on drawing,
+    # and lost the whole document at [write].
+    set one "BT /Helv 12 Tf 20 100 Td (hi) Tj ET"
+    set fixture [::tclpdfTest::buildpdf import-badhex.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /Font << /Helv 4 0 R >> >> >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /XX <4G> >>" \
+        "<< /Length [string length $one] >>\nstream\n$one\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    set refused [catch {$doc pdf import bad $fixture} message]
+    # The document goes on and has to survive it.
+    $doc text "A page of its own" -at {40 700}
+    set path [::tclpdfTest::scratch import-badhex-out.pdf]
+    set written [catch {$doc write $path} outcome]
+    $doc destroy
+    # And what came out is a file, not a wreck: the objects the refused
+    # import had already numbered are gone, and nothing points at them.
+    set checked ok
+    if {[auto_execok qpdf] ne {}} {
+        set status [catch {exec qpdf --check $path} output]
+        if {$status || ![regexp {(?i)no syntax or stream encoding errors} \
+                $output]} {
+            set checked $output
+        }
+    }
+    file delete $fixture $path
+    list $refused [string match {*not a hexadecimal digit*} $message] \
+        $written $checked
+} -result {1 1 0 ok}
+
+test import-26.2 {the same in the page's own resources dictionary} -body {
+    # /Resources DIRECT on the page is not an object of the closure - it is
+    # written as an object of its own, after the closure is already in the
+    # writer. Its strings therefore used to be checked LAST of all, and the
+    # refusal left the copied resources of a page the document never got
+    # standing in the file: filled objects, so the write still worked, but
+    # dead weight nothing points at. Read once for the whole file, the check
+    # now falls before the first of them is copied.
+    set one "q Q"
+    set fixture [::tclpdfTest::buildpdf import-badhex-direct.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /Font << /Helv 4 0 R >> /XX <4G> >> >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica\
+            /Marker /LeftBehind >>" \
+        "<< /Length [string length $one] >>\nstream\n$one\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    set refused [catch {$doc pdf import bad $fixture} message]
+    set path [::tclpdfTest::scratch import-badhex-direct-out.pdf]
+    set written [catch {$doc write $path} outcome]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $fixture $path
+    list $refused [string match {*not a hexadecimal digit*} $message] \
+        $written [regexp {LeftBehind} $bytes]
+} -result {1 1 0 0}
 
 cleanupTests

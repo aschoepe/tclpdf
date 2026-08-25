@@ -26,8 +26,11 @@ set assets [file join [file dirname [file dirname [file normalize \
 set fontRegular [file join $assets DejaVuSans.ttf]
 set otf [file join $assets urw-core35-fonts NimbusSans-Regular.otf]
 
+set vertical [file join $assets google NotoSansJP-Regular.ttf]
+
 testConstraint haveFont [file exists $fontRegular]
 testConstraint haveOtf [file exists $otf]
+testConstraint haveVertical [file exists $vertical]
 
 proc parsedFace {path} {
   set channel [open $path rb]
@@ -84,17 +87,39 @@ test subset-2.2 {SUBSET is not DAMAGED, so a caller can tell them apart} -constr
   lindex [::tclpdfTest::refusalCode {::tclpdf::subset build [parsedFace $::otf] {0 36}}] 2
 } -result SUBSET
 
-test subset-2.3 {a face whose vhea is too short to correct is damage} -constraints haveFont -body {
-  # Writing a vmtx without a header that describes it would be worse than
-  # writing neither. Built rather than found: no face on this machine carries
-  # a vhea that short.
+test subset-2.3 {a face with VORG and no vmtx subsets, and keeps its VORG} -constraints haveFont -body {
+  # THE FACE IS SOUND and used to be refused: "hasVertical" is true of a face
+  # carrying nothing but a VORG table - an origin per glyph and no heights at
+  # all - and the subsetter then wrote a vmtx and asked [Vhea] for a header
+  # that does not exist. What came back was TCLPDF FONT DAMAGED vhea, "is 0
+  # bytes", raised at WRITE time, after [font info] had answered "vertical 1"
+  # and every [text] call had gone through: the document could not be written
+  # at all, over a table that is simply not there.
+  #
+  # The vertical dictionary is set to what [sfnt ParseVertical] produces for
+  # such a face - origins and a default, no advances - because no TrueType
+  # face on this machine carries VORG without vmtx; the CJK faces that carry
+  # VORG are CFF and are never subsetted.
   set font [parsedFace $::fontRegular]
-  set tables [dict get $font tables]
-  dict set tables vhea [list 0 8]
-  dict set font tables $tables
-  dict set font vertical [dict create advance 1000 metrics {}]
-  ::tclpdfTest::refusalCode {::tclpdf::subset build $font {0 36} }
-} -match glob -result {TCLPDF FONT *}
+  dict set font vertical [dict create originDefault 880 origins {0 800 36 780}]
+  set result [::tclpdf::subset build $font {0 36}]
+  set tables [dict get [::tclpdf::sfnt parse [dict get $result bytes]] tables]
+  # VORG travels, the pair that describes heights does not - and the whole of
+  # it is readable again, which is what "no vhea" has to mean here.
+  list [dict exists $tables VORG] [dict exists $tables vhea] \
+      [dict exists $tables vmtx]
+} -result {1 0 0}
+
+test subset-2.4 {a face with real vertical metrics still gets vhea and vmtx} -constraints haveVertical -body {
+  # The other half of the same rule, so that the fix above cannot be read as
+  # "stop writing vertical metrics": a face with vhea and vmtx keeps both,
+  # and the header is corrected to the number of pairs actually written.
+  set font [parsedFace $::vertical]
+  set result [::tclpdf::subset build $font {0 36 37}]
+  set subset [::tclpdf::sfnt parse [dict get $result bytes]]
+  list [dict exists [dict get $subset tables] vhea] \
+      [dict get $subset vertical numOfLongVerMetrics]
+} -result {1 3}
 
 
 test subset-3.1 {every refusal in the module carries a code} -body {

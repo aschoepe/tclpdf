@@ -927,4 +927,73 @@ test annot-dead-9.3 {a document written twice writes one appearance, not two} -b
 } -result {1 1 1}
 
 
+test annot-reserve-40.1 {a caught refusal leaves the document writable} -body {
+  # The appearance was moved above the reservation on 2026-08-25; four
+  # refusals were left behind, and each of them made a CAUGHT error kill the
+  # whole document at the next write. Found in round 6, in the very method
+  # whose comment claimed the case was closed.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set refused {}
+  foreach probe {{-opacity 5} {-date tomorrow} {-colour {1 2 3 4 5}}} {
+    lappend refused [catch {$doc annot note -at {20 20} -contents x {*}$probe}]
+  }
+  set path [::tclpdfTest::scratch annot-reserve.pdf]
+  set wrote [catch {$doc write $path} message]
+  $doc destroy
+  file delete $path
+  list $refused $wrote
+} -result {{1 1 1} 0}
+
+test annot-reserve-40.2 {and so does a refusal from the structure tree} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  # An Annot may not stand inside an L, and the refusal must not leave the
+  # number reserved or the element half open.
+  # [structure -script] runs its body at level #0, so the document has to be
+  # reachable there.
+  set ::annotReserveDoc $doc
+  set refused [catch {$doc structure L -script {
+    $::annotReserveDoc annot note -at {20 20} -contents x
+  }} message]
+  set path [::tclpdfTest::scratch annot-reserve-2.pdf]
+  set wrote [catch {$doc write $path}]
+  $doc destroy
+  file delete $path
+  unset ::annotReserveDoc
+  # Refused for the RIGHT reason - an Annot may not stand in an L - and the
+  # document still writes afterwards.
+  list $refused [string match {*structure tree*} $message] $wrote
+} -result {1 1 0}
+
+
+test annot-highlight-41.1 {highlight names its own version floor} -body {
+  # /Highlight itself is PDF 1.3, but the band this package draws for it
+  # runs under the Multiply blend mode so that the words show through - and
+  # that is 1.4. Written as 1.3 the refusal came out of [blend] halfway
+  # through the drawing, naming neither the annotation nor a way out, while
+  # underline and strikeout went through in the same document.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set answers {}
+  foreach kind {highlight underline strikeout} {
+    set failed [catch {$doc annot $kind -text hello -at {10 10}} message]
+    lappend answers $kind [expr {$failed ? [string match {*annot highlight*} $message] : "drawn"}]
+  }
+  $doc destroy
+  set answers
+} -result {highlight 1 underline drawn strikeout drawn}
+
+test annot-highlight-41.2 {and in a 1.4 document it is drawn} -body {
+  set doc [tclpdf new -unit mm -version 1.4]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set drawn [catch {$doc annot highlight -text hello -at {10 10}}]
+  $doc destroy
+  set drawn
+} -result 0
+
+
 cleanupTests

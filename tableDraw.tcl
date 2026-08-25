@@ -40,13 +40,29 @@ oo::define ::tclpdf::document::document {
       set art [my StructureMark Artifact]
       my content [my StructureBegin $art]
     }
-    if {[dict get $style fill] ne {}} {
-      my rect -at [list $x $y] -size [list $width $height] \
-          -fill [dict get $style fill]
-    }
-    my TableDrawBorder $style $x $y $width $height
+    # THE DRAWING IS BRACKETED, and that is the whole of it: the mark is
+    # written before the cell is painted, and a refusal in between - an
+    # unknown colour in the style is the everyday one - used to swallow the
+    # EMC. The document then carried an artifact bracket that never closed,
+    # every later mark of the DOCUMENT was suppressed (StructureMark returns
+    # empty while the flag stands), and veraPDF passed the file with 0 failed
+    # checks over 764 rules. Measured 2026-08-25: BDC=6 EMC=5, two paragraphs
+    # afterwards with no mark of their own.
+    #
+    # Same shape as pattern.tcl and pageNumber.tcl: what is opened is closed
+    # on both roads, and the error travels on unchanged.
+    set failed [catch {
+      if {[dict get $style fill] ne {}} {
+        my rect -at [list $x $y] -size [list $width $height] \
+            -fill [dict get $style fill]
+      }
+      my TableDrawBorder $style $x $y $width $height
+    } drawError drawOptions]
     if {[llength $art]} {
       my content [my StructureEnd $art]
+    }
+    if {$failed} {
+      return -options $drawOptions $drawError
     }
 
     set lines [dict get $cell lines]

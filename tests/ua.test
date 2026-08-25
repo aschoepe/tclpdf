@@ -986,4 +986,165 @@ test ua-15.9 {part 2 lets a Reference hold the link annotation, part 1 does not}
   list $one [string match "*not inside a Link structure element*" $err1] $two
 } -result {1 1 0}
 
+# --- what is a link, and what says so -------------------------------------
+#
+# Both questions of the link check used to be put to the serialised
+# annotation dictionary as text, and text is what an annotation is full of:
+# the link's own URI, the note's own /Contents. Each of the two tests could
+# be tripped from either side, and each mistake produced the opposite of what
+# a checker is for - one wrote a claim that veraPDF then rejected, the other
+# refused a document that was correct. The facts come from link.tcl's own
+# record now; link.test checks the record, these two check the consequence.
+
+test ua-16.1 {a URL containing the word Contents is no description} -constraints {haveFace haveTdom} -body {
+  # Written and accepted before 2026-08-25; veraPDF rejected the file under
+  # 7.18.1 test 2 and 7.18.5 test 2.
+  set doc [accessible $face]
+  $doc structure Link -script {
+    $doc text "Inhalt" -at {20 40}
+    $doc link -at {20 36} -size {40 6} -url https://example.org/Contents
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-link-uri.pdf]} err]
+  $doc destroy
+  list $code [string match "*1 link annotation without a description, on page 1*" $err]
+} -result {1 1}
+
+test ua-16.2 {a note that talks about links is no link} -constraints {haveFace haveTdom} -body {
+  # The write died with "1 link annotation is not inside a Link structure
+  # element" for a document that has no link at all - the note's own text
+  # was searched for the subtype. veraPDF passes the file (measured).
+  set doc [accessible $face]
+  $doc annot note -at {20 40} -contents "siehe /Subtype /Link im Text"
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-note-link.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+# --- a Figure or a Formula that says nothing -------------------------------
+#
+# The graphics check above knows about a picture, a drawing and a form
+# placement, because [GraphicMark] fills its record. An element the CALLER
+# opens passes through none of that, and three such documents were written
+# with a PDF/UA claim and rejected by veraPDF - 7.3 test 1 twice, once for
+# the empty -alt, and 7.7 test 1 for the Formula. veraPDF's test expression
+# is the one applied here: "(Alt != null && Alt != '') || ActualText != null".
+
+test ua-17.1 {a Figure the caller opened without -alt is refused} -constraints {haveFace haveTdom} -body {
+  set doc [accessible $face]
+  $doc structure Figure -script {
+    $doc text "Diagramm" -at {20 40}
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-figure.pdf]} err]
+  $doc destroy
+  list $code [string match "*page 1: a Figure carries neither a description\
+      nor replacement text*7.3*" $err] [string match "*-actualText*" $err]
+} -result {1 1 1}
+
+test ua-17.2 {an empty -alt is not a description} -constraints {haveFace haveTdom} -body {
+  # It reads like one and veraPDF rejects it exactly like none - Alt != ''
+  # is half of the test.
+  set doc [accessible $face]
+  $doc structure Figure -alt "" -script {
+    $doc text "Diagramm" -at {20 40}
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-figure-empty.pdf]} err]
+  $doc destroy
+  list $code [string match "*a Figure carries neither*" $err]
+} -result {1 1}
+
+test ua-17.3 {a Figure derived from -tag is refused the same way} -constraints {haveFace haveTdom} -body {
+  # [text -tag Figure] opens the element too, and the message names that
+  # road as well as the other.
+  set doc [accessible $face]
+  $doc text "Diagramm" -at {20 40} -tag Figure
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-figure-tag.pdf]} err]
+  $doc destroy
+  list $code [string match "*a Figure carries neither*" $err] \
+      [string match "*-tag Figure*" $err]
+} -result {1 1 1}
+
+test ua-17.4 {a described Figure passes, by -alt or by -actualText} -constraints {haveFace haveTdom} -body {
+  set doc [accessible $face]
+  $doc structure Figure -alt "Zwei Balken" -script {
+    $doc text "Diagramm" -at {20 40}
+  }
+  $doc structure Figure -actualText "Balken A, Balken B" -script {
+    $doc text "Diagramm" -at {20 60}
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-figure-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  file delete $path
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-17.5 {a Formula without either is refused under part 1 and passes part 2} -constraints {haveFace haveTdom} -body {
+  # UA-1 7.7 asks for Alt or ActualText on a Formula and veraPDF fails one
+  # that has neither; the UA-2 profile passes the same document, so part 2
+  # is not made to demand it - the line [UaCheckFields] draws around the
+  # widget description, drawn again.
+  set doc [accessible $face]
+  $doc structure Formula -script {
+    $doc text "E = mc2" -at {20 40}
+  }
+  $doc ua 1
+  set one [catch {$doc write [::tclpdfTest::scratch ua-formula.pdf]} err]
+  $doc destroy
+  set doc [accessible $face]
+  $doc structure Formula -script {
+    $doc text "E = mc2" -at {20 40}
+  }
+  $doc ua -part 2
+  set path [::tclpdfTest::scratch ua-formula2.pdf]
+  set two [catch {$doc write $path} err2]
+  $doc destroy
+  file delete $path
+  list $one [string match "*a Formula carries neither*7.7*" $err] $two
+} -result {1 1 0}
+
+test ua-17.6 {each undescribed element names its own page} -constraints {haveFace haveTdom} -body {
+  # One message per element, as the graphics check gives one per graphic:
+  # two on different pages are two calls to change.
+  set doc [accessible $face]
+  $doc structure Figure -script {
+    $doc text "Diagramm" -at {20 40}
+  }
+  $doc page add
+  $doc structure Figure -script {
+    $doc text "Diagramm" -at {20 40}
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-figure-two.pdf]} err]
+  $doc destroy
+  list $code [string match "*page 1: a Figure*" $err] \
+      [string match "*page 2: a Figure*" $err]
+} -result {1 1 1}
+
+test ua-17.7 {a picture inside an undescribed Figure is the Figure's complaint} -constraints {haveFace haveTdom} -body {
+  # The picture takes its description from the Figure it is drawn in (see
+  # [GraphicInFigure] in image.tcl), so an undescribed Figure around it is
+  # ONE problem, not two - and the one the caller can fix.
+  set doc [accessible $face]
+  $doc form create block -size {40 20} -script {
+    $doc rect -at {0 0} -size {40 20} -fill steelblue
+  }
+  $doc structure Figure -script {
+    $doc form place block -at {20 40}
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-figure-form.pdf]} err]
+  $doc destroy
+  list $code [regexp -all {a Figure carries neither} $err] \
+      [string match "*without -artifact 1*" $err]
+} -result {1 1 0}
+
+
 cleanupTests

@@ -75,10 +75,16 @@ namespace eval ::tclpdf::xmp {
     pdf     "http://ns.adobe.com/pdf/1.3/"
   }
 
-  # Which element commands have been declared. [dom createNodeCmd] overwrites
-  # silently when called twice, but the list keeps the work out of the second
-  # document in a process that writes many.
-  variable declared {}
+  # Which element commands have been declared, keyed by the PAIR of tag name
+  # and namespace URI: {name uri} -> command. [dom createNodeCmd] overwrites
+  # silently when called twice, and the dict keeps that work out of the
+  # second document in a process that writes many - but the key is the pair
+  # and not the name alone, and that is the whole point: see [declare].
+  variable commands {}
+
+  # Counts the second and every further URI one tag name is used with, so
+  # each pair gets an element command of its own.
+  variable serial 0
 
   # The text node command is created with tdom's text check OFF, and on
   # purpose: under Tcl 8.6 a character outside the BMP arrives as a surrogate
@@ -90,6 +96,14 @@ namespace eval ::tclpdf::xmp {
   # the check never fired. [dom createNodeCmd] captures the setting at
   # CREATION time - measured; toggling it around the build does nothing - so
   # it is toggled around this one line and restored for everyone else.
+  #
+  # What the switch costs is that tdom no longer refuses a C0 control
+  # character either, and XML 1.0, 2.2 allows none of them but tab, newline
+  # and carriage return - a "\x07" out of an Info entry went into the packet
+  # as the byte 07, where veraPDF said isCompliant="true" and xmllint said
+  # "PCDATA invalid Char value 7" (measured 2026-08-25). U+0000 cannot even
+  # be written as a character reference. [CheckText] below takes that half
+  # of the check back, keeping the surrogate pair this switch is here for.
   set textCheck [dom setTextCheck]
   dom setTextCheck 0
   dom createNodeCmd textNode Text
@@ -100,11 +114,35 @@ namespace eval ::tclpdf::xmp {
 # Declare the element commands for one schema. Called by [declare] below and
 # by every topic that contributes, through [xmpSchema].
 proc ::tclpdf::xmp::declare {prefix uri tags} {
-  variable declared
+  variable commands
+  variable serial
   foreach tag $tags {
     set name [expr {$prefix eq {} ? $tag : "$prefix:$tag"}]
-    if {$name in $declared} {
+    if {[dict exists $commands [list $name $uri]]} {
       continue
+    }
+    # A prefix is not a name. It is a label a DOCUMENT puts on a URI, and two
+    # documents in one process may label two different URIs with it - which
+    # is legal XML and was silently wrong here: keyed by the name alone, the
+    # second document skipped the declaration and kept the FIRST document's
+    # element command, whose -namespace is captured at creation. Measured
+    # 2026-08-25: the second document wrote
+    # <my:foo xmlns:my="http://example.com/one/"> under an rdf:Description
+    # declaring xmlns:my="http://example.com/TWO/" - the property stood in
+    # the namespace of a document that had already been written and closed.
+    # A single document is always right, which is why neither the suite nor
+    # a validator ever saw it; a server or a batch run is not.
+    #
+    # So the pair is the key, and each pair gets an element command of its
+    # own. The FIRST URI seen for a name keeps the plain command name, so a
+    # process that uses one URI per prefix - every normal one - builds
+    # exactly the commands it always did.
+    set command Tag_$name
+    foreach key [dict keys $commands] {
+      if {[lindex $key 0] eq $name} {
+        set command Tag_[incr serial]_$name
+        break
+      }
     }
     # Refused with the caller's words, by tdom's own validator: the raw
     # "Invalid tag name 'Tag_...'" out of [dom createNodeCmd] names an
@@ -113,11 +151,11 @@ proc ::tclpdf::xmp::declare {prefix uri tags} {
     # in the same call.
     if {![dom isNCName $tag] || [catch {namespace eval ::tclpdf::xmp \
         [list dom createNodeCmd -tagName $name -namespace $uri \
-        elementNode Tag_$name]}]} {
+        elementNode $command]}]} {
       return -code error "tclpdf: xmpSchema tag \"$tag\" is not a valid XML\
           name (schema $prefix)"
     }
-    lappend declared $name
+    dict set commands [list $name $uri] $command
   }
   return
 }
@@ -128,6 +166,123 @@ namespace eval ::tclpdf::xmp {
   declare dc [dict get $namespaces dc] {title creator description language}
   declare xmp [dict get $namespaces xmp] {CreateDate ModifyDate CreatorTool}
   declare pdf [dict get $namespaces pdf] {Producer Keywords}
+}
+
+# Hold one value against the characters XML allows (XML 1.0, 2.2:
+# #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]).
+# "where" names the place in the packet, so the caller learns which of their
+# values carries it.
+#
+# REFUSED, not repaired, and that is a decision rather than the easy way out.
+# A control character in a title is data the caller did not mean to send -
+# out of a database column, a scanned field, a CSV - and the two ways to
+# repair it both lie: dropping it hands out a title that is not the one that
+# was set, and a replacement character claims a character was there. The
+# packet exists to say what the document is. This is the same answer the
+# package gives for a character the font has no glyph for: the writer is the
+# last place in the chain that still knows what was meant, and it says so
+# instead of quietly deciding.
+#
+# The check is deliberately NOT tdom's own (see the note where the text node
+# command is created): that one refuses the surrogate PAIR Tcl 8.6 stores an
+# astral character as, and refusing a legal emoji in a title would be a
+# worse bug than the one being fixed. So the pair is walked here by hand -
+# a high surrogate followed by a low one is one character and passes, a lone
+# one does not. Under Tcl 8.6 a lone surrogate is encoded to the three bytes
+# ED A0 BD, which is not UTF-8 at all; under Tcl 9 [encoding convertto
+# utf-8] throws, and the caller would see a raw Tcl error out of the writer
+# instead of a tclpdf one (both measured 2026-08-25).
+#
+# Character by character rather than by a regular expression, because the
+# two interpreters do not agree on what a character is: Tcl 8.6 holds U+1F600
+# as D83D DE00 and Tcl 9 as one code point, so no single character class
+# reads both the same way. Metadata values are short - this is not a hot
+# path.
+proc ::tclpdf::xmp::CheckText {value where} {
+  set length [string length $value]
+  for {set index 0} {$index < $length} {incr index} {
+    set code [scan [string index $value $index] %c]
+    if {$code >= 0xD800 && $code <= 0xDBFF} {
+      set next [expr {$index + 1 < $length
+          ? [scan [string index $value [expr {$index + 1}]] %c] : -1}]
+      if {$next >= 0xDC00 && $next <= 0xDFFF} {
+        incr index
+        continue
+      }
+    } elseif {$code == 0x9 || $code == 0xA || $code == 0xD
+        || ($code >= 0x20 && $code < 0xD800)
+        || ($code >= 0xE000 && $code <= 0xFFFD)
+        || ($code >= 0x10000 && $code <= 0x10FFFF)} {
+      continue
+    }
+    if {$code >= 0xD800 && $code <= 0xDFFF} {
+      return -code error -errorcode [list TCLPDF XMP SURROGATE $where $code] \
+          "tclpdf: $where carries the unpaired surrogate\
+          U+[format %04X $code] - a character outside the BMP has to be a\
+          high surrogate followed by a low one, or it is not a character"
+    }
+    return -code error -errorcode [list TCLPDF XMP CHAR $where $code] \
+        "tclpdf: $where carries U+[format %04X $code], which XML does not\
+        allow in a document (XML 1.0, 2.2) - the XMP packet has to be well\
+        formed XML, and no escape can carry this character into it"
+  }
+  return
+}
+
+# A raw contribution, parsed - the caller owns the document that comes back
+# and has to delete it.
+#
+# It is parsed inside an rdf:RDF of its own rather than straight into the
+# tree, and that is not decoration. A contribution written for the packet may
+# use the prefixes that are in scope THERE - the Factur-X extension schema
+# says rdf:Bag and rdf:li without declaring rdf, because the rdf:RDF around
+# it always has. Parsed on its own it is not well formed; parsed in a wrapper
+# carrying the same declaration it is.
+# The element command for one tag of one schema - the pair of tag name and
+# namespace URI, never the name alone, see [declare]. A tag the schema never
+# declared used to surface as tdom's raw "invalid command name Tag_..." with
+# no word about which schema went wrong, so it is named here together with
+# what the schema did declare.
+proc ::tclpdf::xmp::Command {prefix tag uri} {
+  variable commands
+  set key [list "$prefix:$tag" $uri]
+  if {[dict exists $commands $key]} {
+    return [dict get $commands $key]
+  }
+  set known {}
+  foreach declared [dict keys $commands] {
+    lassign $declared name declaredUri
+    if {$declaredUri eq $uri && [string equal -length \
+        [string length "$prefix:"] "$prefix:" $name]} {
+      lappend known [string range $name [string length "$prefix:"] end]
+    }
+  }
+  return -code error -errorcode [list TCLPDF XMP TAG $prefix $tag] \
+      "tclpdf: unknown tag \"$tag\" for XMP schema \"$prefix\" - declared\
+      are: [join $known {, }]"
+}
+
+proc ::tclpdf::xmp::ParseRaw {xml} {
+  variable namespaces
+  if {[catch {dom parse "<rdf:RDF xmlns:rdf=\"[dict get $namespaces rdf]\"\
+      >$xml</rdf:RDF>"} fragment message]} {
+    return -code error -errorcode [list TCLPDF XMP RAW] \
+        "tclpdf: XMP contribution is not well formed XML -\
+        [dict get $message -errorinfo]"
+  }
+  return $fragment
+}
+
+# The same parse, thrown away again: the check that a contribution is well
+# formed, made where the call that produced it is still on the stack. Which
+# is what the head of this module has always promised and what [xmpRaw] did
+# not do - the parse happened at WRITE time, so a broken contribution was
+# taken silently and made the document unwritable from then on, with no way
+# to take it back out (measured 2026-08-25: "pdfa extension {<rdf:Description>}"
+# returned 0, and every [write] afterwards failed).
+proc ::tclpdf::xmp::CheckRaw {xml} {
+  [ParseRaw $xml] delete
+  return
 }
 
 # The moment as XMP wants it: ISO 8601 with the zone offset as +HH:MM, where
@@ -164,6 +319,17 @@ proc ::tclpdf::xmp::stamp {{seconds {}}} {
 # stays a date. A time is written with seconds and with the zone where the
 # PDF date has one - "Z" as Z, an offset as +HH:MM. A PDF date that gives
 # an hour and no minutes gets ":00" for them, as XMP has no shorter form.
+#
+# Where the PDF date gives a time and NO zone - "D:20190301120000", the
+# spelling half the generators in the wild use - the TIME IS DROPPED and the
+# date stays. 8.2.1.4 has no form for a time without a zone: the zone
+# designator is optional only while there is no time at all. And no zone can
+# be invented for it, because ISO 32000-1, 7.9.4 says the relationship of
+# such a time to UT is UNKNOWN - writing Z would claim UTC and writing the
+# local offset would claim the machine that happened to run the job. So the
+# packet says less rather than something that is not known: a date is a
+# legal XMP value, "2019-03-01T12:00:00" is not one (measured 2026-08-25:
+# veraPDF passes it all the same, which is why only a test holds this).
 proc ::tclpdf::xmp::stampFromPdf {date} {
   set fields [::tclpdf::document::parseDate $date]
   if {$fields eq {}} {
@@ -182,11 +348,11 @@ proc ::tclpdf::xmp::stampFromPdf {date} {
     append text - $month
     if {$day ne {}} {
       append text - $day
-      if {$hour ne {}} {
+      if {$hour ne {} && $sign ne {}} {
         append text T $hour : $minute : $second
         if {$sign eq "Z"} {
           append text Z
-        } elseif {$sign ne {}} {
+        } else {
           append text $sign $zoneHour : $zoneMinute
         }
       }
@@ -267,6 +433,23 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
     }
   }
 
+  # Everything a caller supplies is held against XML's own character set
+  # before a document exists, so a refusal leaves nothing to clean up and
+  # names the property rather than a line number in a validator's report.
+  # Values from the Info dictionary and from every schema method alike -
+  # both reach the packet as text, and tdom's own check is off for them
+  # (see the note at the text node command).
+  foreach {value where} [list \
+      $title "dc:title (the Info Title)" \
+      $author "dc:creator (the Info Author)" \
+      $subject "dc:description (the Info Subject)" \
+      $language "dc:language (the document language)" \
+      $creator "xmp:CreatorTool (the Info Creator)" \
+      $keywords "pdf:Keywords (the Info Keywords)" \
+      $producer "pdf:Producer (the Info Producer)"] {
+    CheckText $value $where
+  }
+
   # Every tag a schema method answers has to have been declared in the
   # [xmpSchema] call that registered the schema: the element commands exist
   # for declared tags only, and an undeclared one used to surface as tdom's
@@ -274,35 +457,39 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   # wrong. Checked up front, where the schema and its declared tags can both
   # be named - and before the document is created, so there is nothing to
   # clean up.
-  variable declared
+  #
+  # The lookup is by tag name AND the schema's URI, because that is what an
+  # element command belongs to (see [declare]); the resolved command names
+  # are carried into the build below, which must not go back to spelling
+  # "Tag_$prefix:$tag" - that name belongs to whichever URI claimed it first
+  # in this process.
+  set built {}
   foreach entry $descriptions {
     lassign $entry prefix uri items
-    set answered {}
+    CheckText $uri "the namespace URI of XMP schema \"$prefix\""
+    set resolved {}
     foreach item $items {
       lassign $item kind tag value
-      lappend answered $tag
       # A bag's resources carry tags of the same schema (see the build
-      # below), and they are held to the same declaration.
+      # below), and they are held to the same declaration and the same
+      # characters as the tag around them.
       if {$kind eq "bag"} {
+        set resources {}
         foreach resource $value {
+          set pairs {}
           foreach {resourceTag resourceValue} $resource {
-            lappend answered $resourceTag
+            CheckText $resourceValue "$prefix:$resourceTag"
+            lappend pairs [Command $prefix $resourceTag $uri] $resourceValue
           }
+          lappend resources $pairs
         }
+        set value $resources
+      } else {
+        CheckText $value "$prefix:$tag"
       }
+      lappend resolved [list $kind [Command $prefix $tag $uri] $value]
     }
-    foreach tag $answered {
-      if {"$prefix:$tag" ni $declared} {
-        set known {}
-        foreach name $declared {
-          if {[string equal -length [string length "$prefix:"] "$prefix:" $name]} {
-            lappend known [string range $name [string length "$prefix:"] end]
-          }
-        }
-        return -code error "tclpdf: unknown tag \"$tag\" for XMP schema\
-            \"$prefix\" - declared are: [join $known {, }]"
-      }
-    }
+    lappend built [list $prefix $uri $resolved]
   }
 
   # Only x and rdf are declared at the root; every other prefix is declared on
@@ -333,22 +520,22 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   # children were serialised against a scope that did not have it. Declared
   # first, it appears exactly once, which is the shape every other XMP writer
   # produces and the one a reader looking for "pdfaid:part>" survives.
-  foreach entry $descriptions {
+  foreach entry $built {
     lassign $entry prefix uri items
     Describe $rdf $prefix $uri {
       foreach item $items {
-        lassign $item kind tag value
+        lassign $item kind xmpTag value
         switch -- $kind {
           text {
-            Tag_${prefix}:$tag { Text $value }
+            $xmpTag { Text $value }
           }
           bag {
-            Tag_${prefix}:$tag {
+            $xmpTag {
               Tag_rdf:Bag {
                 foreach resource $value {
                   Tag_rdf:li rdf:parseType Resource {
-                    foreach {resourceTag resourceValue} $resource {
-                      Tag_${prefix}:$resourceTag { Text $resourceValue }
+                    foreach {xmpResourceTag resourceValue} $resource {
+                      $xmpResourceTag { Text $resourceValue }
                     }
                   }
                 }
@@ -400,22 +587,14 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
     # name; the packet stays inside the schema every validator knows.
   }
 
-  # Parsed, not appended as text: a raw contribution comes from a caller and
-  # a broken one has to fail here, where the call that produced it is still
-  # on the stack.
-  #
-  # It is parsed inside an rdf:RDF of its own rather than straight into the
-  # tree, and that is not decoration. A contribution written for this place
-  # may use the prefixes that are in scope AT this place - the Factur-X
-  # extension schema says rdf:Bag and rdf:li without declaring rdf, because
-  # the rdf:RDF around it always has. Parsed on its own it is not well formed;
-  # parsed in a wrapper carrying the same declaration it is.
+  # Parsed, not appended as text - see [ParseRaw]. A broken contribution has
+  # already been refused by [xmpRaw] at the call that made it; this parse is
+  # the one whose nodes are kept, and it still cleans up after itself for a
+  # contribution that reached the state some other way.
   foreach xml $raw {
-    if {[catch {dom parse "<rdf:RDF xmlns:rdf=\"[dict get $namespaces rdf]\"\
-        >$xml</rdf:RDF>"} fragment message]} {
+    if {[catch {ParseRaw $xml} fragment options]} {
       $document delete
-      return -code error "tclpdf: XMP contribution is not well formed XML -\
-          [dict get $message -errorinfo]"
+      return -options $options $fragment
     }
     foreach child [[$fragment documentElement] childNodes] {
       $rdf appendChild [$child cloneNode -deep]
@@ -494,6 +673,13 @@ oo::define ::tclpdf::document::document {
   # one triggered the build: the raw contribution was stored, the write
   # said nothing, and the file had no /Metadata at all.
   method xmpRaw {xml} {
+    # Parsed HERE, not at write time. The head of this module has promised
+    # since it was written that a raw contribution fails at the call, and it
+    # did not: the parse happened while the packet was built, so a broken
+    # contribution was accepted without a word, made every [write] fail from
+    # then on, and could not be taken back out again - the state holds no
+    # way to remove one. Measured 2026-08-25.
+    ::tclpdf::xmp::CheckRaw $xml
     set raw [my state xmpRaw]
     if {![llength $raw] && ![llength [my state xmpSchemas]]} {
       my onSelf catalog XmpCatalog

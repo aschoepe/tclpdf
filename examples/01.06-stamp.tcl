@@ -152,7 +152,13 @@ diagonalStamp $doc "COPY" -color {0.25 0.35 0.65} -opacity 0.3 -share 0.7
 # barely visible in one line while a smaller size is visible at once beside
 # its neighbours.
 
-$doc page add
+# BACK TO A4 FOR THIS ONE, and named rather than inherited: the A5 landscape
+# set above is 148 mm tall, and what follows - five fitted boxes, then the
+# four anchors - needs 144 mm before the footer, which sits 7 mm off the
+# bottom edge. Inherited, the last row of labels stood ON the footer, about
+# a millimetre apart, and the page still validated: nothing measures whether
+# two pieces of text overlap. Seen at 300 dpi, not computed.
+$doc page add -format a4 -orientation portrait
 $doc font -family helvetica -size 11
 $doc text "A line fitted into a box" -at {20 20}
 $doc font -size 8

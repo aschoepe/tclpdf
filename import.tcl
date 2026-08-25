@@ -59,6 +59,7 @@
 
 package require Tcl 8.6.11-
 package require tclpdf::importRead 1.0-
+package require tclpdf::pdfFunction 1.0-
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::option 1.0-
 package require tclpdf::document 1.0-
@@ -168,19 +169,77 @@ oo::define ::tclpdf::document::document {
     # they get in THIS document are known further down.
     lassign [my ImportLayerStates reader] baseVisible foreignStates
 
+    # The page's own resources dictionary, where it stands DIRECT on the page
+    # rather than as an object of the closure: its strings go through the
+    # document's seam here, with everything else that is still allowed to
+    # refuse, because the object it is written as is added further down among
+    # numbers that are already handed out. A reference is left as it is -
+    # [ImportStrings] hands back what it cannot be asked about.
+    set resourceStrings [my ImportStrings $resources]
+
     # -- from here on the document changes --------------------------------
     #
-    # [Refs] walked every value above and refused what it could not walk,
-    # and [ImportSerialize] walks the same values along the same branches -
-    # so the numbering below cannot run into a value the reading did not
-    # already accept.
+    # [Refs] walked every value above and refused what it could not walk, so
+    # the numbering below cannot run into a value the reading did not already
+    # accept - and every number is handed out only for an object whose
+    # strings have been through [ImportStrings] one line earlier, which is
+    # the last thing on this road that can still say no.
     set writer [my writer]
     set map {}
+    set pooled {}
+    set strings {}
     foreach number $order {
+      # A FUNCTION IS A VALUE, not a thing with an identity: two identical
+      # ones are interchangeable, and importing the same file twice used to
+      # bring the same function twice with it. It goes through the pool the
+      # gradients already use - and the decision falls HERE, before the
+      # number is reserved, because a reservation left unfilled makes the
+      # whole document unwritable. That defect has been had once (annot.tcl,
+      # 2026-08-25) and is not worth having twice.
+      lassign [dict get $copies $number] value hasStream
+      set reuse [my ImportPooledFunction $value $hasStream]
+      if {$reuse ne {}} {
+        dict set map $number $reuse
+        lappend pooled $number
+        continue
+      }
+      # THE STRINGS OF THE OBJECT, put through the document's seam BEFORE
+      # the number is reserved and for the same reason as the pool above.
+      # [ImportStrings] is the last refusal of the whole import - a
+      # hexadecimal string of the foreign file holding something that is not
+      # a hexadecimal digit (7.3.4.3) - and it used to fall in the loop
+      # below, with every number already handed out: a [pdf import] the
+      # caller had caught left the document unwritable, "object(s) reserved
+      # but never written" at the next [write] (measured 2026-08-25 on a
+      # file carrying <4G>). The conversion does not need the map, so it can
+      # be done here; only the serialization does, and that stays below.
+      dict set strings $number [my ImportStrings $value]
+      # AND THE FILTER OF A COPIED STREAM, asked of the writer here for the
+      # third time in this loop for the same reason. The check itself is the
+      # writer's and stays there - a FlateDecode resource may not land in a
+      # file whose header disowns the filter - but it used to be reached only
+      # through [stream] in the loop below, which runs after every number of
+      # the closure has been handed out: [pdf import] of a page with a
+      # deflated resource into a -version 1.1 document was refused correctly
+      # and left the document unwritable all the same, "object(s) reserved but
+      # never written" at the next [write] (measured 2026-08-25). The refusal
+      # is the same sentence either way; only its place has moved forward.
+      if {$hasStream} {
+        $writer requireFilter [my ImportStreamFilters reader $value]
+      }
       dict set map $number [$writer reserve]
     }
     foreach number $order {
+      if {$number in $pooled} {
+        # Already in the file, under a number this document gave it.
+        continue
+      }
       lassign [dict get $copies $number] value hasStream data
+      # The value with its strings already converted, from the loop above -
+      # [Serialize] is called rather than [ImportSerialize] because the
+      # string half of that pair has been done. Doing it twice would encrypt
+      # the ciphertext in an encrypted document.
+      set value [dict get $strings $number]
       if {$hasStream} {
         # The raw bytes and their /Filter travel unchanged, and the object
         # goes out through [stream] rather than being assembled here: that
@@ -200,11 +259,12 @@ oo::define ::tclpdf::document::document {
         set pairs {}
         foreach {key item} [lindex $value 1] {
           if {$key eq "Length"} continue
-          lappend pairs $key [my ImportSerialize $item $map]
+          lappend pairs $key [::tclpdf::importRead::Serialize $item $map]
         }
         $writer stream [dict get $map $number] $pairs $data
       } else {
-        $writer put [dict get $map $number] [my ImportSerialize $value $map]
+        $writer put [dict get $map $number] \
+            [::tclpdf::importRead::Serialize $value $map]
       }
     }
 
@@ -215,7 +275,7 @@ oo::define ::tclpdf::document::document {
           [dict get $map [lindex [lindex $resources 1] 0]]]
     } elseif {[lindex $resources 0] eq "d"} {
       set resourcesRef [$writer ref [$writer add \
-          [my ImportSerialize $resources $map]]]
+          [::tclpdf::importRead::Serialize $resourceStrings $map]]]
     } else {
       # A page without resources is legal; the form then carries an empty
       # dictionary, which PDF/A asks for anyway (6.2.2).
@@ -421,6 +481,58 @@ oo::define ::tclpdf::document::document {
   # gets is this document's business - the encryptor answers with finished
   # PDF syntax (hexadecimal, always) exactly as it does at every other string
   # in the document.
+  # A foreign object that may be reused rather than copied, or the empty
+  # string. Narrow on purpose, and each condition is a way it could go wrong:
+  #
+  #   a stream          a sampled (type 0) or PostScript (type 4) function
+  #                     carries one, and the pool would have to key on the
+  #                     bytes as well - the common gradient types 2 and 3 do
+  #                     not, so the cheap half is taken and the rest copied
+  #   not a dictionary  nothing else can be a function
+  #   no FunctionType   the only mark a function has (ISO 32000-1, 7.10)
+  #   any reference     the serialization of a value holding one depends on
+  #                     the map, and the map is not finished at this point.
+  #                     A function of type 3 referring to its parts through
+  #                     indirect objects is therefore copied whole
+  method ImportPooledFunction {value hasStream} {
+    if {$hasStream || [lindex $value 0] ne "d"} {
+      return {}
+    }
+    if {![dict exists [lindex $value 1] FunctionType]} {
+      return {}
+    }
+    if {[llength [::tclpdf::importRead::Refs $value]]} {
+      return {}
+    }
+    return [my FunctionPool [my ImportSerialize $value {}] {} {}]
+  }
+
+  # The filter names of a stream the import is about to copy, as a plain list
+  # - what the writer is asked about before the object's number is reserved.
+  #
+  # /Filter is a name or an array of them (7.3.8.2), and either the entry
+  # itself or a member of the array may be an indirect reference (7.4), which
+  # is why every one of them goes through [Resolve] - the same reading
+  # [DecodeStream] does to find out which decoder to run, asked here of a
+  # stream that is copied rather than decoded. A stream with no /Filter
+  # answers the empty list.
+  method ImportStreamFilters {readerVar value} {
+    upvar 1 $readerVar reader
+    set filter [::tclpdf::importRead::Resolve reader \
+        [::tclpdf::importRead::Get $value Filter]]
+    if {[lindex $filter 0] eq "nm"} {
+      return [list [lindex $filter 1]]
+    }
+    if {[lindex $filter 0] ne "a"} {
+      return {}
+    }
+    set names {}
+    foreach item [lindex $filter 1] {
+      lappend names [lindex [::tclpdf::importRead::Resolve reader $item] 1]
+    }
+    return $names
+  }
+
   method ImportSerialize {value map} {
     return [::tclpdf::importRead::Serialize [my ImportStrings $value] $map]
   }
@@ -597,4 +709,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.3
+package provide tclpdf::import 1.4

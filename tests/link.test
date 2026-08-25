@@ -1,0 +1,162 @@
+# link.test --
+#
+# Links - the clickable rectangle, and the two facts PDF/UA asks about it.
+#
+# The interesting half of this module is not the annotation dictionary, which
+# is four keys and a rectangle, but the two questions ua.tcl puts to it: does
+# every link carry a description, and is every one of them inside a Link
+# structure element. Both used to be answered by a regular expression over the
+# serialised annotation body, and both answers were wrong in both directions -
+# which is what most of this file is about.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
+package require tclpdf::link
+package require tclpdf::annot
+
+# A tagged document with one page and a font, which is all any of these needs.
+# No conformance claim: what is checked here are the facts, and ua.test checks
+# what is made of them.
+proc linked {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 12
+  return $doc
+}
+
+# --- what counts as a description -----------------------------------------
+
+test link-1.1 {a URL that contains the word Contents is not a description} -body {
+  # The seven characters "/Contents" inside the URI used to satisfy the
+  # check, because it read the serialised dictionary as text - and the text
+  # of a link contains its own address. The document was written with a
+  # PDF/UA claim and veraPDF rejected it under 7.18.1 and 7.18.5.
+  set doc [linked]
+  $doc structure Link -script {
+    $doc text "Inhalt" -at {20 40}
+    $doc link -at {20 36} -size {40 6} -url https://example.org/Contents
+  }
+  set missing [$doc linksWithoutContents]
+  $doc destroy
+  set missing
+} -result 1
+
+test link-1.2 {a tooltip is} -body {
+  set doc [linked]
+  $doc structure Link -script {
+    $doc text "Inhalt" -at {20 40}
+    $doc link -at {20 36} -size {40 6} -url https://example.org/Contents \
+        -tooltip "example.org"
+  }
+  set missing [$doc linksWithoutContents]
+  $doc destroy
+  set missing
+} -result {}
+
+test link-1.3 {every undescribed link is listed, by the page it is on} -body {
+  set doc [linked]
+  $doc link -at {20 36} -size {40 6} -url https://example.org/ -tooltip t
+  $doc link -at {20 46} -size {40 6} -url https://example.org/
+  $doc page add
+  $doc link -at {20 36} -size {40 6} -url https://example.org/
+  set missing [$doc linksWithoutContents]
+  $doc destroy
+  set missing
+} -result {1 2}
+
+# --- what counts as a link ------------------------------------------------
+
+test link-2.1 {a note quoting the words /Subtype /Link is not a link} -body {
+  # The other direction of the same mistake: the note's own /Contents was
+  # searched for the annotation's subtype, so a note that happens to talk
+  # about links counted as one. The write then died with "1 link annotation
+  # is not inside a Link structure element" for a link the document has not
+  # got - and there was no way to word the note that did not trip it.
+  set doc [linked]
+  $doc annot note -at {20 40} -contents "siehe /Subtype /Link im Text"
+  set answers [list [$doc linksWithoutContents] [$doc linksWithoutElement]]
+  $doc destroy
+  set answers
+} -result {{} {}}
+
+test link-2.2 {a real link outside a Link element is found, one inside is not} -body {
+  set doc [linked]
+  $doc link -at {20 26} -size {40 6} -url https://example.org/ -tooltip t
+  $doc structure P -script {
+    $doc text "Inhalt" -at {20 40}
+    $doc link -at {20 36} -size {40 6} -url https://example.org/ -tooltip t
+  }
+  $doc structure Link -script {
+    $doc text "Inhalt" -at {20 50}
+    $doc link -at {20 46} -size {40 6} -url https://example.org/ -tooltip t
+  }
+  set outside [$doc linksWithoutElement]
+  $doc destroy
+  set outside
+} -result {1 1}
+
+test link-2.3 {the types the caller accepts are the caller's} -body {
+  # UA-2 lets a Reference hold a link annotation as well, which is why
+  # [linksWithoutElement] takes the list rather than knowing it.
+  set doc [linked]
+  $doc structure P -script {
+    $doc structure Reference -script {
+      $doc text "see" -at {20 40}
+      $doc link -at {20 36} -size {40 6} -url https://example.org/ -tooltip t
+    }
+  }
+  set answers [list [$doc linksWithoutElement] \
+      [$doc linksWithoutElement {Link Reference}]]
+  $doc destroy
+  set answers
+} -result {1 {}}
+
+test link-2.4 {an untagged document is not asked which element a link joined} -body {
+  # There is no tree, so there is no element to have joined; the structure
+  # module may not even be loaded. Every link is outside one, and ua.tcl
+  # refuses the claim over the missing tree instead.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc link -at {20 36} -size {40 6} -url https://example.org/ -tooltip t
+  set outside [$doc linksWithoutElement]
+  $doc destroy
+  set outside
+} -result 1
+
+# --- the record itself ----------------------------------------------------
+
+test link-3.1 {a link is recorded once, however often the document is written} -body {
+  # The record is filled at the CALL, not on the write event - so a second
+  # [write] must not list the same link twice. The same contract
+  # [AnnotationOnPage] keeps, checked here because this record is the one
+  # ua.tcl counts its message from.
+  set doc [linked]
+  $doc link -at {20 36} -size {40 6} -url https://example.org/
+  set path [::tclpdfTest::scratch link-twice.pdf]
+  $doc write $path
+  set first [$doc linksWithoutContents]
+  $doc write $path
+  set second [$doc linksWithoutContents]
+  $doc destroy
+  file delete $path
+  list $first $second
+} -result {1 1}
+
+test link-3.2 {a document without links answers nothing, whatever else is on it} -body {
+  set doc [linked]
+  $doc annot note -at {20 40} -contents "eine Notiz"
+  set answers [list [$doc linksWithoutContents] [$doc linksWithoutElement]]
+  $doc destroy
+  set answers
+} -result {{} {}}
+
+cleanupTests

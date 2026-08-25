@@ -591,6 +591,23 @@ oo::define ::tclpdf::document::document {
           degrees, not \"[dict get $options rotate]\""
     }
     lassign [my ImageExtent $image $options "image place"] width height
+    # AND LARGE ENOUGH TO BE WRITTEN. [checkFit] held -size, -scale and -dpi
+    # above zero, which is the caller's number; this holds the number that
+    # reaches the FILE. A PDF real carries five decimals (7.3.3), so a
+    # placement below 0.00001 pt on either axis goes out as "0 0 0 0 x y cm"
+    # - a matrix that collapses the page onto a point, with the "Do" of the
+    # picture under it. Measured on 2026-08-25: "-fit {0.0000001 0.0000001}"
+    # wrote exactly that, and qpdf, veraPDF and poppler all took the file
+    # without a word. Same reasoning as [::tclpdf::geometry check], and the
+    # same [singular] does the judging - see there.
+    if {[::tclpdf::geometry singular \
+        [list [my distance $width] 0 0 [my distance $height] 0 0]]} {
+      return -code error "tclpdf: \"$alias\" comes out $width by $height\
+          [my cget -unit] here, which is below the 0.00001 pt a PDF real\
+          holds (7.3.3) - the placement would be written as \"0 0 0 0 x y\
+          cm\", a matrix that collapses onto a point, and nothing of the\
+          picture would reach the page; give it a size a reader can show"
+    }
     # -at names the top left corner of the BOX, exactly as it names the top
     # left corner of a [rect]; -align and -valign then say where in that box
     # the picture sits. Without -fit the box has no size, and the same sum is
@@ -819,19 +836,47 @@ oo::define ::tclpdf::document::document {
           off and it goes into the file as an image XObject, which has no\
           such limit and is the cheaper way in for anything this size anyway"
     }
+    # The PDF/A question, asked but NOT recorded: the record belongs to a
+    # picture that goes down, and the version floor below is raised for one
+    # too. See [ImageInterpolateCheck].
+    my ImageInterpolateCheck $image $alias
     if {$version ne {}} {
       my RequireVersion {*}$version
     }
     # /L is PDF 2.0, and in a 2.0 file 8.9.7 says it "shall be present on all
-    # inline images": the length of the data between ID and EI, excluding the
-    # white space that delimits them. In a 1.x file it is written NOT AT ALL -
-    # the key did not exist, and Note 1 of that clause says a processor will
-    # not encounter it there. Asked of the writer at this moment, which is
-    # when the picture is written; the version cannot be lowered afterwards
-    # (see [version] in writer.tcl), so what is written here stays true.
+    # inline images" (Table 91): the length of the data between ID and EI,
+    # excluding the white space that delimits them. In a 1.x file it is
+    # written NOT AT ALL - the key did not exist, and Note 1 of that clause
+    # says a processor will not encounter it there.
+    #
+    # ASKED OF THE WRITER AT THIS MOMENT, WHICH IS WHEN THE PICTURE IS
+    # WRITTEN - and that is only half an answer, because the version can
+    # still be RAISED afterwards. Measured on 2026-08-25: "-version 1.7", an
+    # inline picture, then "configure -version 2.0" gave a file whose header
+    # says %PDF-2.0 and which contains no /L anywhere, against the promise
+    # the manual makes. The bytes are in the content stream by then and
+    # nothing can put an entry into a dictionary that has already been
+    # written.
+    #
+    # So the 1.x file is BOUND to 1.x, the same way a PDF/A claim binds it
+    # (see [limit] in writer.tcl): the picture is a fact about the file, and
+    # a fact that only holds below 2.0 is a ceiling. A caller who wants both
+    # creates the document as 2.0, and then the entry is written here.
     if {[package vcompare [[my writer] version] 2.0] >= 0} {
       lappend pairs Length $size
+      # And the same fact the other way round: the entry is in the stream, so
+      # the file cannot be lowered under it either. Both halves are needed -
+      # a ceiling alone would still let "-version 2.0, inline picture,
+      # configure -version 1.7" write /L into a file whose header disowns it.
+      my RequireVersion 2.0 "an inline image with the /L that PDF 2.0 requires\
+          of one (ISO 32000-2, 8.9.7)"
+    } else {
+      my LimitVersion 1.7 "an inline image drawn without the /L that PDF 2.0\
+          requires of one (ISO 32000-2, 8.9.7)"
     }
+    # Nothing below this line can refuse the picture any more, so this is
+    # where the record goes down - see [ImageInterpolateEntry].
+    lappend pairs {*}[my ImageInterpolateEntry $image $alias]
     set text "BI\n"
     # Each entry is built as ONE string and the strings are joined. Handing
     # [join] a list of two-element pairs instead puts Tcl's own braces round
@@ -974,7 +1019,6 @@ oo::define ::tclpdf::document::document {
         && $type ne "tiff"} {
       lappend pairs Decode [::tclpdf::pdfObj arr {1 0}]
     }
-    lappend pairs {*}[my ImageInterpolateEntry $image $alias]
     return [list $pairs $data $space $version]
   }
 
@@ -1004,24 +1048,49 @@ oo::define ::tclpdf::document::document {
   # is remembered: [pdfa] asks the other way round for a picture already
   # drawn. Between the two, both orders are covered and neither road writes
   # a key the other has learnt to refuse.
+  # THE QUESTION AND THE RECORD ARE TWO CALLS, and the order they are made in
+  # is the whole of it. [ImageInterpolateCheck] refuses and remembers
+  # NOTHING, so it can be asked before the first byte is written;
+  # [ImageInterpolateEntry] remembers and answers the dictionary entry, so it
+  # is asked last, when the picture is certain to go down. Between them sit
+  # every other refusal each road still has to make.
+  #
+  # Measured on 2026-08-25, when the two were one call: an inline picture
+  # over the 4096-byte line was recorded as interpolated BEFORE that line was
+  # weighed, so a refused picture - one that never reached the file - locked
+  # the document out of [pdfa] afterwards, with a message ("the picture is in
+  # the file by now and cannot be taken back") that was not true and left the
+  # caller no way back. And on the XObject road the refusal came AFTER the
+  # soft mask had been written: 2503 bytes of alpha channel stayed in the
+  # file with nothing pointing at them, which qpdf --qdf drops and qpdf
+  # --check and veraPDF do not mention.
+  method ImageInterpolateCheck {image what} {
+    if {![dict get $image interpolate] || [my state pdfa] eq {}} {
+      return
+    }
+    return -code error -errorcode [list TCLPDF IMAGE INTERPOLATE PDFA $what] \
+        "tclpdf: \"$what\" was embedded with -interpolate 1 and this\
+        document claims PDF/A-[dict get [my state pdfa] part][dict get \
+        [my state pdfa] conformance], where ISO 19005-2, 6.2.8 says the\
+        Interpolate key shall not be present or shall be false - drop\
+        -interpolate, or drop the pdfa declaration. Smoothing is the\
+        reader's decision to make, and an archive format takes it away on\
+        purpose: the same file has to look the same in twenty years"
+  }
+
   method ImageInterpolateEntry {image what} {
     if {![dict get $image interpolate]} {
       return {}
     }
-    # Remembered whatever the answer is: what the declaration has to know is
-    # that the picture went down asking for interpolation.
+    # The refusal again, in case a road ever reaches here without having
+    # asked: the two questions have to give one answer, and asking twice
+    # costs a dict lookup.
+    my ImageInterpolateCheck $image $what
+    # Remembered only now: what the declaration has to know is that the
+    # picture WENT DOWN asking for interpolation, and a picture that was
+    # refused did not.
     my state imageInterpolated \
         [lsort -unique [concat [my state imageInterpolated] [list $what]]]
-    if {[my state pdfa] ne {}} {
-      return -code error -errorcode [list TCLPDF IMAGE INTERPOLATE PDFA $what] \
-          "tclpdf: \"$what\" was embedded with -interpolate 1 and this\
-          document claims PDF/A-[dict get [my state pdfa] part][dict get \
-          [my state pdfa] conformance], where ISO 19005-2, 6.2.8 says the\
-          Interpolate key shall not be present or shall be false - drop\
-          -interpolate, or drop the pdfa declaration. Smoothing is the\
-          reader's decision to make, and an archive format takes it away on\
-          purpose: the same file has to look the same in twenty years"
-    }
     return [list Interpolate true]
   }
 
@@ -1396,6 +1465,10 @@ oo::define ::tclpdf::document::document {
   # have made it - the other axis then gets more dpi and less paper.
   method ImageDpi {image dpi} {
     if {$dpi ne {}} {
+      # Read here, before anything divides by it - a NaN or an Inf is a
+      # double for Tcl and would have died in the arithmetic below, in words
+      # of Tcl's own and from a method the caller never named.
+      ::tclpdf::option number $dpi -dpi "image place"
       return [list $dpi $dpi]
     }
     set resolution [my ImageResolution $image]
@@ -1472,6 +1545,17 @@ oo::define ::tclpdf::document::document {
       }
       return [dict get $image object]
     }
+    # THE FIRST QUESTION OF ALL, because it is the only one that can be asked
+    # before anything exists. Everything below this line creates objects - an
+    # ICC profile stream on the JPEG road, a soft mask stream on the PNG one -
+    # and a refusal after that leaves them in the file as waste nothing points
+    # at. Asked here it costs a dict lookup; asked where the entry is built
+    # it cost 2503 bytes of orphaned alpha channel in an archive document,
+    # measured on 2026-08-25 with qpdf --qdf, which drops what is
+    # unreachable. The RECORD is not made here - see [ImageInterpolateCheck]
+    # for why the two are separate calls, and [streams] below for what can
+    # still refuse the picture after this point.
+    my ImageInterpolateCheck $image $alias
     set parsed [dict get $image parsed]
     set pairs [list Type /XObject Subtype /Image \
         Width [dict get $parsed width] Height [dict get $parsed height]]

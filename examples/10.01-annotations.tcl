@@ -251,11 +251,23 @@ $doc text "The delivery note belongs to this line" -at {20 145}
 # way through is the same one a house stamp takes: draw it with [form create]
 # and name it.
 set annotDoc $doc
+# A PAPERCLIP IS A BENT WIRE, and drawing it as four straight strokes with
+# right angles gave an open rectangle - at 300 dpi it read as the box a
+# reader draws for a glyph it does not have, which is the opposite of what
+# an icon should say. The two turns are what makes it one: a bend at the
+# bottom and a smaller one at the top, each a Bezier whose handles reach
+# two thirds of the way, which is the usual approximation of a half circle.
 $doc form create paperclip -size {14 16} -script {
-  $annotDoc line -from {4 3} -to {4 12} -stroke {0.20 0.30 0.45} -width 1.1
-  $annotDoc line -from {4 3} -to {9 3} -stroke {0.20 0.30 0.45} -width 1.1
-  $annotDoc line -from {9 3} -to {9 13} -stroke {0.20 0.30 0.45} -width 1.1
-  $annotDoc line -from {9 13} -to {6.5 13} -stroke {0.20 0.30 0.45} -width 1.1
+  set clip {0.20 0.30 0.45}
+  # Down the outer side, round the bottom, and up the other side.
+  $annotDoc line -from {4 3} -to {4 11} -stroke $clip -width 1.1
+  $annotDoc curve -from {4 11} -c1 {4 13.4} -c2 {9 13.4} -to {9 11} \
+      -stroke $clip -width 1.1
+  $annotDoc line -from {9 11} -to {9 5} -stroke $clip -width 1.1
+  # The inner turn at the top, and the short tail that ends inside the loop.
+  $annotDoc curve -from {9 5} -c1 {9 3.3} -c2 {6.4 3.3} -to {6.4 5} \
+      -stroke $clip -width 1.1
+  $annotDoc line -from {6.4 5} -to {6.4 9.5} -stroke $clip -width 1.1
 }
 $doc annot attachment -at {180 143} -name lieferschein.txt \
     -appearance paperclip \

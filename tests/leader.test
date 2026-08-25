@@ -386,4 +386,74 @@ test leader-9.1 {a vertical row is refused, and the horizontal one still draws} 
 } -result {1 {TCLPDF TEXT DIRECTION ttb leader} 0 1 1}
 
 
+# A fill whose run does not GROW (2026-08-25). "As many whole copies as fit"
+# has an answer only while every further copy makes the run longer; -spacing
+# is a number of points of either sign, and once it takes as much off between
+# two copies as one copy is wide, the run shrinks with every copy added, every
+# count fits, and the loop that grows the count never ends. Measured before
+# this: a single full stop at -size 10 is 0.98 mm wide, ten of them at
+# -spacing -3 measure 0.28 mm, and the call ran for eight seconds without
+# drawing anything before it was stopped.
+
+test leader-10.1 {a fill that gets SHORTER the more copies it holds is refused} -body {
+  # The test that hangs for ever if the guard is taken out - which is what
+  # makes it worth having: nothing about the stream would have said so.
+  set doc [leaderDoc]
+  set refused [catch {$doc leader "Summe" "42" -at {20 30} -width 120 \
+      -spacing -3} message options]
+  set code [dict get $options -errorcode]
+  $doc destroy
+  list $refused [lrange $code 0 3] \
+      [string match {*does not get longer*} $message] \
+      [string match {*or a wider -fill*} $message]
+} -result {1 {TCLPDF LEADER FILL .} 1 1}
+
+test leader-10.2 {a negative spacing that still leaves the run growing is drawn} -body {
+  # The counter-measurement: -spacing "takes a number of points of either
+  # sign", and dots set tighter than the face sets them are exactly what the
+  # sign is for. Only a run that does not advance at all is refused.
+  set doc [leaderDoc]
+  $doc leader "Summe" "42" -at {20 30} -width 120 -spacing -0.5
+  set shown [leaderShown [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength $shown] [lindex $shown 0] [lindex $shown 2] \
+      [string map {. {}} [lindex $shown 1]] \
+      [expr {[string length [lindex $shown 1]] > 0}]
+} -result {3 Summe 42 {} 1}
+
+test leader-10.3 {the dots stay inside the row whichever way the spacing goes} -body {
+  # What the count is FOR: the run of dots has to fit into the room between
+  # the two ends. Measured for a spacing of either sign and for none.
+  set doc [leaderDoc]
+  set answers {}
+  foreach spacing {0 -0.5 1} {
+    $doc page add
+    $doc leader "Summe" "42" -at {20 30} -width 120 -fill "." -spacing $spacing
+    set shown [leaderShown [::tclpdfTest::content $doc]]
+    set room [expr {120 - [$doc textWidth "Summe" -spacing $spacing]
+        - [$doc textWidth "42" -spacing $spacing] - 2}]
+    lappend answers [expr {[$doc textWidth [lindex $shown 1] \
+        -spacing $spacing] <= $room + 0.001}]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1}
+
+test leader-10.4 {NaN is not a width and not a gap} -body {
+  # Both used to pass their own check: NaN is a double to Tcl and compares
+  # false against everything, so "$width <= 0" and "$gap < 0" were both false
+  # and the row was laid out with it.
+  set doc [leaderDoc]
+  set answers {}
+  foreach {call pattern} {
+    {$doc leader a b -at {20 20} -width NaN} {-width must be a positive number}
+    {$doc leader a b -at {20 20} -width 50 -gap NaN} {-gap takes a distance}
+  } {
+    lappend answers [catch $call message] [regexp -- $pattern $message]
+  }
+  $doc destroy
+  set answers
+} -result {1 1 1 1}
+
+
 cleanupTests

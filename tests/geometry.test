@@ -120,7 +120,35 @@ test geometry-matrix-3.9 {check refuses a singular matrix} -body {
   # and no reader or validator says why.
   list [catch {::tclpdf::geometry check {1 2 2 4 0 0} {shading axial}} message] $message \
       [catch {::tclpdf::geometry check {0 0 0 0 0 0} transform}]
-} -result {1 {tclpdf: -matrix of shading axial is singular ({1 2 2 4 0 0}) - a*d - b*c must not be zero, or everything under it collapses onto a line} 1}
+} -result {1 {tclpdf: -matrix of shading axial is singular ({1 2 2 4 0 0}) -\
+    a*d - b*c must not be zero, or everything under it collapses onto a line;\
+    a value below 0.00001 counts as zero here, because that is what a PDF\
+    real holds (7.3.3) and what the file would say} 1}
+
+test geometry-matrix-3.10 {a matrix that is singular ONCE WRITTEN is refused too} -body {
+  # The check used to judge the value handed in and the file got the rounded
+  # number, and the two disagreed below 5e-6: a PDF real carries five
+  # decimals (7.3.3), so 0.000001 leaves this package as "0". Measured on
+  # 2026-08-25, before this stood here: {0.000001 0 0 0.000001 100 100} has a
+  # determinant of 1e-12, passed the check, and reached the page as
+  # "0 0 0 0 100 100 cm" - which is exactly the collapse the check exists to
+  # catch. [singular] answers the question of the numbers as they will be
+  # written; [check] asks it that way.
+  list [::tclpdf::geometry singular {0.000001 0 0 0.000001 100 100}] \
+      [catch {::tclpdf::geometry check {0.000001 0 0 0.000001 100 100} transform}] \
+      [catch {::tclpdf::geometry check {0.0001 0 0 0.0001 0 0} transform}]
+} -result {1 1 0}
+
+test geometry-matrix-3.11 {a small matrix is still not a singular one} -body {
+  # The counter-measurement, and the line this is NOT allowed to cross: a
+  # tolerance would refuse legitimate values. 0.001 is written as "0.001",
+  # so the file can hold it and the matrix is a small one, not a collapsed
+  # one - and only e and f, which translate, may round to nothing without
+  # any harm at all.
+  list [::tclpdf::geometry singular {0.001 0 0 0.001 0 0}] \
+      [::tclpdf::geometry singular {1 0 0 1 0.0000001 0.0000001}] \
+      [::tclpdf::geometry singular {0 1 1 0 0 0}]
+} -result {0 0 0}
 
 test geometry-9.1 {a size given as two numbers is taken as it stands} -body {
   # Regression: the default orientation used to be applied to an explicit

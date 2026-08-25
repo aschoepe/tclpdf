@@ -128,17 +128,22 @@ $doc shading axial -at {20 136} -size {50 20} -colors {white steelblue}
 $doc shading axial -at {80 136} -size {50 20} -colors {red yellow green} -angle 90
 $doc shading radial -at {140 136} -size {45 20} -colors {white {0.2 0.3 0.6}}
 
+# THE CAPTIONS BELONG TO THE THREE ABOVE, and until 2026-08-25 they sat at
+# y = 160 - exactly where the row of ten ticks starts. The commas and
+# descenders lay in the gradient, and a reader took the three lines for the
+# caption of the row rather than of the swatches. Seen at 300 dpi; nothing
+# measures whether two pieces of ink share a millimetre.
+$doc font -style {} -size 7
+$doc text "axial, two colours" -at {20 159}
+$doc text "axial, three colours (stitched)" -at {80 159}
+$doc text "radial" -at {140 159}
+
 # Ten of the same, which is what a table of shaded cells looks like from the
-# file's side.
+# file's side: ten shadings, one function between them.
 for {set tick 0} {$tick < 10} {incr tick} {
-  $doc shading axial -at [list [expr {20 + $tick * 17}] 160] -size {15 4} \
+  $doc shading axial -at [list [expr {20 + $tick * 17}] 161] -size {15 4} \
       -colors {white steelblue}
 }
-
-$doc font -style {} -size 7
-$doc text "axial, two colours" -at {20 160}
-$doc text "axial, three colours (stitched)" -at {80 160}
-$doc text "radial" -at {140 160}
 
 # A gradient as a fill: registered as a pattern, then usable on any shape.
 $doc shading pattern sky axial -at {20 168} -size {60 30} -colors {lightblue navy}

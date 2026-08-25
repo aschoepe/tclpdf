@@ -186,7 +186,8 @@ oo::define ::tclpdf::document::document {
   # that gets discovered rather than read.
   method colorFont {args} {
     if {![llength $args]} {
-      return -code error "tclpdf: colorFont needs a name for the font"
+      return -code error -errorcode {TCLPDF COLORFONT ALIAS} \
+          "tclpdf: colorFont needs a name for the font"
     }
     set alias [lindex $args 0]
     set args [lrange $args 1 end]
@@ -202,7 +203,8 @@ oo::define ::tclpdf::document::document {
     } elseif {[dict get $options data] ne {}} {
       set bytes [dict get $options data]
     } else {
-      return -code error "tclpdf: colorFont needs a file name or -data"
+      return -code error -errorcode {TCLPDF COLORFONT SOURCE} \
+          "tclpdf: colorFont needs a file name or -data"
     }
     set chars [my ColorFontChars [dict get $options chars]]
     set parsed [::tclpdf::sfnt parse $bytes]
@@ -273,7 +275,8 @@ oo::define ::tclpdf::document::document {
   # an error.
   method ColorFontChars {chars} {
     if {$chars eq {}} {
-      return -code error "tclpdf: colorFont needs -chars, the characters to\
+      return -code error -errorcode {TCLPDF COLORFONT CHARS} \
+          "tclpdf: colorFont needs -chars, the characters to\
           build colour glyphs for - a Type 3 font holds at most\
           $::tclpdf::colorFont::maximum of them, so there is no \"all\""
     }

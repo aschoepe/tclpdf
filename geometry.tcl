@@ -17,6 +17,11 @@
 #
 
 package require Tcl 8.6.11-
+# The singularity check below judges a matrix by the numbers that reach the
+# file, and pdfObj is what puts them there - see [singular]. Nothing else
+# here writes PDF, and pdfObj depends on nothing but Tcl, so this stays the
+# one-way street the infrastructure is meant to be.
+package require tclpdf::pdfObj 1.0-
 
 namespace eval ::tclpdf::geometry {
   namespace export {[a-z]*}
@@ -183,6 +188,29 @@ proc ::tclpdf::geometry::apply {matrix x y} {
   return [list [expr {$a * $x + $c * $y + $e}] [expr {$b * $x + $d * $y + $f}]]
 }
 
+# Whether a matrix collapses the space ONCE IT IS WRITTEN.
+#
+# THE FILE IS WHAT COUNTS, NOT THE VALUE HANDED IN. A PDF real is written in
+# fixed notation with five decimals (7.3.3, and [num] in pdfObj is the one
+# place that does it), so 0.000001 leaves this package as "0" - and
+# {0.000001 0 0 0.000001 100 100}, whose determinant is a perfectly non-zero
+# 1e-12, reaches the page as "0 0 0 0 100 100 cm". Measured on 2026-08-25:
+# it did, and with it "/Matrix [0 0 0 0 0 0]" in a tiling and in a shading
+# pattern (Tables 75 and 76). Everything under such a matrix is invisible
+# and no reader and no validator says why, which is the very case [check]
+# exists to catch - so the question is asked of the rounded numbers.
+#
+# This is not a tolerance smuggled in through the back door. A tolerance
+# would refuse values the file can hold; this refuses exactly those it
+# cannot, and {0.001 0 0 0.001 0 0} - a small matrix, not a singular one -
+# still passes, because "0.001" is what the file gets.
+#
+# Only a, b, c and d: e and f translate and cannot collapse anything.
+proc ::tclpdf::geometry::singular {matrix} {
+  lassign [lmap value [lrange $matrix 0 3] {::tclpdf::pdfObj num $value}] a b c d
+  return [expr {$a * $d - $b * $c == 0}]
+}
+
 # Refuse a matrix a caller hands in raw - the -matrix option of transform,
 # pattern create and shading - before it is written anywhere. Returns the
 # matrix; the error names the owner ("pattern \"hatch\"", "transform",
@@ -196,15 +224,11 @@ proc ::tclpdf::geometry::apply {matrix x y} {
 # filled with such a pattern comes out invisible, and neither a reader nor a
 # validator says why - it is a well-formed array in the right place.
 #
-# The determinant is compared with 0 exactly, not against a tolerance. The
-# case that has to be caught is the caller who wrote {1 2 2 4 0 0} - two
-# proportional columns, and 1*4 - 2*2 is exactly 0 in floating point. A small
-# determinant, on the other hand, is a small matrix, not a singular one:
-# {0.001 0 0 0.001 0 0} maps a coordinate space of thousands onto the page and
-# a reader inverts it without trouble; a tolerance would refuse exactly such
-# legitimate values while still letting through a rounded 1e-17 from a
-# computed matrix that is as good as singular. Neither error can be told from
-# the number alone, so only the exact case is refused.
+# The determinant is compared with 0 exactly, not against a tolerance - but
+# of the numbers as they will be WRITTEN, which is what [singular] is for and
+# where the reasoning for that sits. The case that has to be caught either
+# way is the caller who wrote {1 2 2 4 0 0}: two proportional columns, and
+# 1*4 - 2*2 is exactly 0 in floating point.
 proc ::tclpdf::geometry::check {matrix what} {
   if {[llength $matrix] != 6} {
     return -code error "tclpdf: -matrix of $what is six numbers {a b c d e f},\
@@ -215,11 +239,11 @@ proc ::tclpdf::geometry::check {matrix what} {
       return -code error "tclpdf: -matrix of $what takes numbers, not \"$number\""
     }
   }
-  lassign $matrix a b c d
-  if {$a * $d - $b * $c == 0} {
+  if {[singular $matrix]} {
     return -code error "tclpdf: -matrix of $what is singular ({$matrix}) -\
         a*d - b*c must not be zero, or everything under it collapses onto a\
-        line"
+        line; a value below 0.00001 counts as zero here, because that is what\
+        a PDF real holds (7.3.3) and what the file would say"
   }
   return $matrix
 }

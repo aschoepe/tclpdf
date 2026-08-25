@@ -105,6 +105,30 @@ namespace eval ::tclpdf::text {
   variable lineOptions [concat $stateOptions [dict keys $runOptions]]
 }
 
+# A REAL NUMBER, which is what every size, distance, angle and percentage in
+# this package means when it says "a number". [string is double -strict] does
+# not answer that question on its own: it is true for "NaN" and for "Inf",
+# both of which are doubles to Tcl and neither of which is a measurement.
+#
+# What they cost when they get through is silence. NaN compares false against
+# everything, so "$value <= 0" and "$value > 100" are BOTH false for it and a
+# range check waves it past; it then travels through the arithmetic - a size,
+# a leading, a rotation - until either [pdfObj num] refuses it far from the
+# call that wrote it, or it lands in the stream as a number no reader can use.
+# Measured: "-shrinkLimit NaN" passed its own check and produced a line at
+# size NaN.
+#
+# Written as a comparison rather than with an arithmetic function: expr
+# REFUSES NaN as an operand of "+" or of abs(), so a test that used one would
+# throw the very error it is meant to replace. Comparison is defined for it -
+# THE ONE THAT LIVES AT THE ROOT. This was written here first, on
+# 2026-08-25, and the same predicate went into option.tcl the same day when
+# the layout modules turned out not to be the only ones that needed it - a
+# NaN reaches the page through -at, -size, -format and -scale as readily as
+# through -leading. Two copies of a three-line predicate are two answers
+# waiting to differ, so this one is the name and option.tcl has the body.
+interp alias {} ::tclpdf::text::finite {} ::tclpdf::option finite
+
 oo::define ::tclpdf::document::document {
 
   # $doc font                                  -> the current state
@@ -300,7 +324,7 @@ oo::define ::tclpdf::document::document {
     # act as baseline in silence, so -anchor middle drew a baseline block and
     # nobody was told. See TextAnchor for the two values there are.
     my TextAnchor [dict get $options anchor]
-    if {![string is double -strict [dict get $options rotate]]} {
+    if {![::tclpdf::text::finite [dict get $options rotate]]} {
       return -code error "tclpdf: -rotate takes an angle in degrees, not\
           \"[dict get $options rotate]\""
     }
@@ -398,16 +422,18 @@ oo::define ::tclpdf::document::document {
       # face has no glyph for is reported, and the drawing below meets the
       # same glyph run and cannot fail on it afterwards.
       #
-      # The FONT options alone travel over: [textWidth] measures and takes
-      # nothing else (see the gate at its head), while [text] has just
-      # accepted a longer list - -at, -align, -tag and the rest, which say
-      # where the line goes and not how wide it is. Every one of them has
-      # already been checked by [option parse] above, so this only picks.
+      # MEASURED OUT OF THE STATE, not out of the arguments. The state is what
+      # the drawing below reads - [TextMerge] built it from the arguments and
+      # [TextFitLine] has just written the fitted size and stretch into it - so
+      # measuring the arguments instead measured a line nobody draws. With
+      # -fit that was visible on the page: the fitted line is drawn 50 mm wide,
+      # the shift for -align center was worked out from the UNFITTED 106.65 mm,
+      # and -align right put the start of the line 18.9 pt to the LEFT of the
+      # sheet. Same list as [LeaderFont] builds, and the same reason: whatever
+      # a line takes with it, it takes all of it.
       set fontArgs {}
-      foreach {option value} $args {
-        if {[string trimleft $option -] in $::tclpdf::text::lineOptions} {
-          lappend fontArgs $option $value
-        }
+      foreach name $::tclpdf::text::lineOptions {
+        lappend fontArgs -$name [dict get $state $name]
       }
       set lineWidth [my textWidth $string {*}$fontArgs]
       switch -- [my TextAlign [dict get $options align] $state] {
@@ -834,6 +860,26 @@ oo::define ::tclpdf::document::document {
           questions about the same rectangle. Fit the line, or break the\
           paragraph and give it -height"
     }
+    # A VERTICAL LINE IS NOT FITTED, and it is refused here rather than
+    # accepted and answered on the wrong axis - the same refusal [leader]
+    # makes for the same reason. Everything -fit is made of asks about a
+    # HORIZONTAL line: [textWidth] without -direction measures the extent
+    # across the page, the height it checks is the box of a horizontal line,
+    # and the -stretch it reaches for first does not act on a column at all,
+    # because Tz scales the horizontal displacement only (9.4.4) - the manual
+    # says as much under ttb. Measured before this refusal: a column 112.89 mm
+    # long was "fitted" into a 40 mm box and ran 73 mm past it, with a Tz in
+    # the stream that changed nothing. A column is brought to length with
+    # -size, which the caller works out from [textWidth -direction ttb] -
+    # one measurement on the right axis.
+    if {[dict get $state direction] eq "ttb"} {
+      return -code error -errorcode [list TCLPDF TEXT VERTICAL fit] \
+          "tclpdf: -fit puts a horizontal line into a box - it measures the\
+          width across the page and narrows the letters with -stretch, and a\
+          vertical line has its length down the page while Tz does not touch\
+          it (9.4.4). Measure the column with \[textWidth -direction ttb\]\
+          and set -size from it"
+    }
     # Only the BOX is checked through [fitCheck] - not the anchors, because
     # -align already means something else here: for a line it is the
     # typographic alignment, left, center, right or justify, and it has meant
@@ -842,9 +888,14 @@ oo::define ::tclpdf::document::document {
     # own width, which is what a caller means anyway.
     my fitCheck [dict create fit $fit] text
     lassign $fit boxWidth boxHeight
+    # (The box held two REAL numbers was checked a second time here, because
+    # [fitCheck] read them with [string is double] - true for NaN - and NaN
+    # compares false against everything, so "$value <= 0" waved it past.
+    # [fitCheck] itself asks now, with the same error code, so the second
+    # pass was doing nothing but repeating it.)
     set size [dict get $state size]
     set limit [dict get $options shrinkLimit]
-    if {![string is double -strict $limit] || $limit <= 0 || $limit > 100} {
+    if {![::tclpdf::text::finite $limit] || $limit <= 0 || $limit > 100} {
       return -code error -errorcode [list TCLPDF TEXT FIT SHRINK $limit] \
           "tclpdf: -shrinkLimit is how far the letters may be narrowed before\
           the size comes down instead, in per cent from above zero to 100,\
@@ -859,24 +910,108 @@ oo::define ::tclpdf::document::document {
       set size [expr {$size * $boxHeightPoints / double($lineHeight)}]
       dict set state size $size
     }
-    set natural [my distance [my textWidth $string -size $size -stretch 100 \
-        -family [dict get $state family] -style [dict get $state style]]]
+    # MEASURED WITH WHAT IT DRAWS WITH. The state is what the drawing reads,
+    # so the measurement takes the whole of it - -spacing, -wordSpacing,
+    # -kerning, -ligatures, -fallback and the rest - and not the four options
+    # this used to pick out by hand. Measured before: -kerning 0 was drawn and
+    # never measured, so a line fitted into a 60 mm box came out 63.05 mm.
+    set natural [my distance \
+        [my textWidth $string {*}[my TextFitArgs $state $size 100]]]
     set boxWidthPoints [my distance $boxWidth]
     set stretch 100
     if {$natural > $boxWidthPoints && $natural > 0} {
       set factor [expr {$boxWidthPoints / double($natural)}]
       if {$factor >= $limit / 100.0} {
+        # Tz scales the WHOLE displacement of the run, the character and word
+        # spacing included (9.4.4 puts the factor on tx, whatever tx is made
+        # of), so this factor is exact whatever else is in force: the line
+        # comes out at the width of the box.
         set stretch [expr {$factor * 100.0}]
       } else {
         # Squeezing has reached its limit; the rest comes out of the size,
         # and the letters keep exactly the narrowing that was allowed.
         set stretch $limit
-        set size [expr {$size * $factor / ($limit / 100.0)}]
+        # THE SIZE DOES NOT REACH ALL OF THE WIDTH, which is where the
+        # "one measurement is enough" of the manual has its boundary. The
+        # width scales linearly with the size, but only the part the GLYPHS
+        # make: -spacing and -wordSpacing are absolute point values (Tc and
+        # Tw, 9.4.4) and a smaller size does not make them smaller. So the
+        # width is
+        #
+        #     (glyphs(size) + flat) * stretch / 100
+        #
+        # with glyphs(size) proportional to the size and flat constant, and
+        # the size that fills the box exactly comes out of that equation in
+        # one step - a second measurement rather than a loop, and still no
+        # trial and error. Measured before this: -size 20 -spacing 3 into a
+        # 50 mm box was drawn 63.89 mm wide, 27.8 per cent past its box,
+        # because the flat part was divided as if it scaled too.
+        #
+        # The second measurement is taken only here, where it is needed:
+        # without the two spacings flat is zero and the first branch above
+        # has already answered exactly.
+        set glyphs [my distance \
+            [my textWidth $string {*}[my TextFitArgs $state $size 100 1]]]
+        set flat [expr {$natural - $glyphs}]
+        set room [expr {$boxWidthPoints * 100.0 / $limit - $flat}]
+        if {$glyphs > 0 && $room > 0} {
+          set size [expr {$size * $room / double($glyphs)}]
+        } else {
+          # The flat part alone is wider than the box: no size, however
+          # small, brings the line inside it, because the spacing between the
+          # letters does not shrink with them. Said rather than approximated
+          # - the alternative is a size that goes on falling and a line that
+          # still sticks out.
+          return -code error -errorcode [list TCLPDF TEXT FIT BOX $fit] \
+              "tclpdf: -fit cannot bring this line into a box $boxWidth\
+              [my cget -unit] wide: -spacing and -wordSpacing are absolute\
+              point values that do not shrink with the letters, and they\
+              alone take [format %.4g [::tclpdf::geometry fromPoints $flat \
+                  [my cget -unit]]] of it - give a wider box, or less\
+              spacing"
+        }
       }
+    }
+    # NOTHING IS FITTED TO NOTHING. A content stream carries five decimals
+    # (see [pdfObj num]), so a size below 0.00001 pt is written as "0 Tf" and
+    # the line disappears without a word - which is the very thing the manual
+    # refuses for a -size written by hand, "rather than making the text
+    # vanish". Measured before this: -fit {1e-9 1e-9} wrote "/FHelvetica 0
+    # Tf" and drew an empty page. A box that small is a computed number that
+    # came out wrong somewhere, not a wish.
+    if {![::tclpdf::text::finite $size] || ![::tclpdf::text::finite $stretch]
+        || $size <= 0 || $stretch <= 0
+        || [::tclpdf::pdfObj num $size] == 0
+        || [::tclpdf::pdfObj num $stretch] == 0} {
+      return -code error -errorcode [list TCLPDF TEXT FIT BOX $fit] \
+          "tclpdf: -fit {$fit} leaves nothing of the line - the size would\
+          come out at $size and the stretch at $stretch, and a content stream\
+          writes five decimals, so the text would be set at nought and\
+          disappear; give a box the line can be seen in"
     }
     dict set state size $size
     dict set state stretch $stretch
     return $state
+  }
+
+  # The line options of a state as [textWidth] takes them, with the size and
+  # the stretch of the moment written over them - and, with "flat", with the
+  # two ABSOLUTE spacings taken out, which is how [TextFitLine] separates the
+  # part of a width that scales with the size from the part that does not.
+  #
+  # Built out of [lineOptions] rather than out of a hand-written list, for the
+  # reason [LeaderFont] is: a line takes ALL of what it is set with when it is
+  # measured, or the measurement answers about a line nobody draws.
+  method TextFitArgs {state size stretch {flat 0}} {
+    set values [dict merge $state [dict create size $size stretch $stretch]]
+    if {$flat} {
+      set values [dict merge $values {spacing 0 wordSpacing 0}]
+    }
+    set args {}
+    foreach name $::tclpdf::text::lineOptions {
+      lappend args -$name [dict get $values $name]
+    }
+    return $args
   }
 
   # The two halves of a line's box, each answered for whichever kind of face
@@ -2161,19 +2296,23 @@ oo::define ::tclpdf::document::document {
         }
       }
       size {
-        if {![string is double -strict $value] || $value <= 0} {
+        # [text::finite] rather than [string is double] here and below: NaN
+        # is a double to Tcl and compares false against everything, so a
+        # range check of the shape "$value <= 0" waves it straight through -
+        # see the proc at the head of this file.
+        if {![::tclpdf::text::finite $value] || $value <= 0} {
           return -code error "tclpdf: -size must be a positive number of\
               points, not \"$value\""
         }
       }
       stretch {
-        if {![string is double -strict $value] || $value <= 0} {
+        if {![::tclpdf::text::finite $value] || $value <= 0} {
           return -code error "tclpdf: -stretch is a percentage above zero,\
               100 being normal, not \"$value\""
         }
       }
       leading {
-        if {$value ne {} && (![string is double -strict $value]
+        if {$value ne {} && (![::tclpdf::text::finite $value]
             || $value <= 0)} {
           return -code error "tclpdf: -leading is a line spacing in points\
               above zero - or empty for the default of 1.2 times the size -\
@@ -2181,7 +2320,7 @@ oo::define ::tclpdf::document::document {
         }
       }
       spacing - wordSpacing - rise {
-        if {![string is double -strict $value]} {
+        if {![::tclpdf::text::finite $value]} {
           return -code error "tclpdf: -$name takes a number of points, not\
               \"$value\""
         }
@@ -2233,7 +2372,7 @@ oo::define ::tclpdf::document::document {
         # numbers as -width in [style], said here because the option is
         # written here and a caller must not have to run a text call to find
         # out that the value was refused.
-        if {$value ne {} && (![string is double -strict $value]
+        if {$value ne {} && (![::tclpdf::text::finite $value]
             || $value < 0)} {
           return -code error "tclpdf: -strokeWidth is a line width of 0 or\
               more in the document unit, not \"$value\""
@@ -2325,8 +2464,22 @@ oo::define ::tclpdf::document::document {
     # neither has a vertical CMap to name, so "-direction ttb" on Helvetica
     # would have set the line across the page in silence.
     if {[dict get $state direction] eq "ttb"} {
-      set family [dict get $state family]
-      if {![my TextEmbedded $family] || [my FontKind $family] in {type1 type3}} {
+      # THE WHOLE CHAIN, not just the family. A face reached through
+      # -fallback sets the characters the family has no glyph for, and it
+      # sets them with its own resource - so a standard face or a Type 1 in
+      # the chain drew its stretch ACROSS the page in the middle of a
+      # column, while [textWidth -direction ttb] measured the same stretch
+      # as if it ran down. The rtl gate a few lines below refuses -fallback
+      # outright; this one has to look at every face it may reach, because
+      # a vertical run has a resource per face and each of them needs the
+      # vertical metrics. Measured 2026-08-25 with a Type 1 in the chain:
+      # the run came out diagonal, and an embedded Type 1 left an object
+      # number reserved that nothing ever filled.
+      foreach family [list [dict get $state family] \
+          {*}[dict get $state fallback]] {
+        if {[my TextEmbedded $family] && [my FontKind $family] ni {type1 type3}} {
+          continue
+        }
         set through [expr {[my TextEmbedded $family]
             && [my FontKind $family] eq "type3"
             ? {its own /Differences encoding}

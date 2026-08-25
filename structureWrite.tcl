@@ -20,6 +20,10 @@
 # The two private helpers below are here because only the writer asks them
 # anything - measured, not assumed.
 #
+# The one refusal here carries a code from the space structure.tcl lists in
+# its header - TCLPDF STRUCTURE NAME unknown name, for a destination that
+# names an element nobody created.
+#
 
 package require Tcl 8.6.11-
 package require TclOO
@@ -291,7 +295,9 @@ oo::define ::tclpdf::document::document {
     # known is not invented.
     dict for {name numbers} [my state structureDestinations] {
       if {![dict exists [my state structureNames] $name]} {
-        return -code error "tclpdf: no structure element is named \"$name\" -\
+        return -code error -errorcode \
+            [list TCLPDF STRUCTURE NAME unknown name] \
+            "tclpdf: no structure element is named \"$name\" -\
             a link or a bookmark points at it. Name one with\
             \[\$doc structure <type> -name $name ...\]"
       }
@@ -300,7 +306,12 @@ oo::define ::tclpdf::document::document {
           [$writer ref [dict get [lindex $elements $target] number]] /Fit]]
       lassign [my StructureFirstPosition $elements $target] page y
       if {$page eq {}} {
-        set page 0
+        # An element with no content anywhere below it - a container whose
+        # contents are still to come, or one that stayed empty. It still has
+        # a place: the page it was OPENED on, which structure.tcl records.
+        # Page 0 was the answer before, and it sent a reader to the front of
+        # the document for an element declared on page nine.
+        set page [dict get [lindex $elements $target] page]
       }
       set pageRef [$writer ref [dict get [my Page $page] number]]
       $writer put [dict get $numbers d] [::tclpdf::pdfObj arr [expr {$y eq {} ?

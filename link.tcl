@@ -94,6 +94,10 @@ oo::define ::tclpdf::document::document {
       }
     }
     my AnnotationOnPage [my page current] [[my writer] ref $number]
+    # Remembered as a record - see [LinkRecord], which says why the two UA
+    # questions may not be put to the serialised dictionary.
+    my LinkRecord [my page current] $number \
+        [expr {[dict get $options tooltip] ne {}}]
     return $number
   }
 
@@ -109,19 +113,11 @@ oo::define ::tclpdf::document::document {
   # created the link rather than anything structural.
   method linksWithoutContents {} {
     set missing {}
-    dict for {page references} [my state annots] {
-      foreach reference $references {
-        if {![regexp {(\d+) 0 R} $reference -> number]} {
-          continue
+    dict for {page links} [my state links] {
+      foreach link $links {
+        if {![dict get $link described]} {
+          lappend missing [expr {$page + 1}]
         }
-        set body [[my writer] body $number]
-        if {![regexp {/Subtype /Link\M} $body]} {
-          continue
-        }
-        if {[regexp {/Contents\M} $body]} {
-          continue
-        }
-        lappend missing [expr {$page + 1}]
       }
     }
     return $missing
@@ -141,25 +137,49 @@ oo::define ::tclpdf::document::document {
   # annotation joined is structure.tcl's to answer.
   method linksWithoutElement {{types Link}} {
     set missing {}
-    dict for {page references} [my state annots] {
-      foreach reference $references {
-        if {![regexp {(\d+) 0 R} $reference -> number]} {
-          continue
-        }
-        set body [[my writer] body $number]
-        if {![regexp {/Subtype /Link\M} $body]} {
-          continue
-        }
+    dict for {page links} [my state links] {
+      foreach link $links {
         # In an untagged document there is no element to have joined, and
         # the structure module is not asked - it may not even be loaded.
         if {[my state tagged] eq "1"
-            && [my StructureAnnotationOwner $number] in $types} {
+            && [my StructureAnnotationOwner [dict get $link number]] in $types} {
           continue
         }
         lappend missing [expr {$page + 1}]
       }
     }
     return $missing
+  }
+
+  # One link, remembered as a RECORD rather than looked up again later in the
+  # serialised annotation dictionary. Called once per [link], at the call,
+  # which is the only moment at which both facts are known for certain: that
+  # this annotation is a link, and whether a -tooltip filled its /Contents.
+  #
+  # Both questions used to be put to [[my writer] body $number] with a regular
+  # expression, and both answers were wrong in both directions - the body is
+  # text, and every string in it is text too:
+  #
+  #   /Contents      matched inside the URI of the link itself, so
+  #                  [link -url https://example.org/Contents] counted as
+  #                  described. veraPDF then failed the finished file under
+  #                  7.18.1 and 7.18.5 - the claim had already been made.
+  #   /Subtype /Link matched inside the /Contents of a NOTE quoting those
+  #                  words, so [annot note -contents "... /Subtype /Link ..."]
+  #                  counted as a link annotation. The write died with "1 link
+  #                  annotation is not inside a Link structure element" for a
+  #                  link the document does not have.
+  #
+  # [state annots] cannot answer either question: output.tcl keeps indirect
+  # references there ("12 0 R"), one list per page, and a reference says
+  # nothing about what it points at. So the module that makes the links keeps
+  # the list of the links - page -> list of {number N described 0|1} - which
+  # is also all ua.tcl needs to know that a document has any at all.
+  method LinkRecord {page number described} {
+    set links [my state links]
+    dict lappend links $page [dict create number $number described $described]
+    my state links $links
+    return
   }
 
   # The URI as the file may carry it: 7-bit ASCII (ISO 32000-1 Table 206),

@@ -116,10 +116,46 @@ namespace eval ::tclpdf::zugferd {
   }
   variable types {INVOICE ORDER ORDER_RESPONSE ORDER_CHANGE}
 
-  # The relationships Order-X 1.0, 4.1.1 allows for order-x.xml - Supplement
-  # and Unspecified are for the other attachments. Factur-X leaves the
-  # invoice's relationship to the profile, see the method.
-  variable orderRelationships {Data Source Alternative}
+  # The relationships that may stand on the XML this module embeds, for
+  # BOTH families. Order-X 1.0, 4.1.1 lists these three for order-x.xml and
+  # names no default; Factur-X 1.09.2 binds the invoice's to the profile -
+  # Data for MINIMUM and BASIC WL, Alternative for the fuller ones, see the
+  # method - and -relationship overrides that, which is what the manual
+  # promises and what a caller mirroring another generator needs.
+  #
+  # What the override may NOT say is Supplement or Unspecified, and that is
+  # the one thing the invoice side never checked: "zugferd invoice.xml
+  # -relationship Supplement" went through, although the manual names the
+  # three this list holds. The two words describe an attachment that stands
+  # BESIDE the document - a note, a drawing, something the standards do put
+  # in a hybrid file - and this XML is the document a second time. Neither
+  # veraPDF nor Mustangproject objects (measured 2026-08-25, both call the
+  # file valid), so nothing but the writer is going to say it.
+  #
+  # AND THE PROFILE BINDS THE DEFAULT, NOT THE OPTION. The question was put
+  # the other way round on 2026-08-25 - should "-relationship Data" on an
+  # EN 16931 invoice be refused, since Factur-X names Alternative for that
+  # profile? Measured first: it goes through, the file carries
+  # /AFRelationship /Data, veraPDF calls it PASS 3b and Mustangproject calls
+  # it valid. No tool decides this, so it is a decision and not a rule to
+  # look up, and it is decided the open way, for three reasons.
+  #
+  # These three words are the ones the standards allow FOR THIS FILE:
+  # Order-X 4.1.1 lists all three and prescribes none, and Factur-X picks
+  # two of them by profile - so none of the three is ever a value the format
+  # forbids here, which is exactly what separates them from the two above.
+  # Second, the option exists for the case a profile cannot foresee: a
+  # caller reproducing another generator's file, where the relationship is
+  # whatever that generator wrote, and a package that refuses it sends them
+  # back to [attach] to build the whole hybrid by hand. Third, a gate would
+  # answer a profile it has never heard of - a later revision, a family this
+  # module does not yet know - by refusing, which is the wrong way round for
+  # a writer whose files other people have to accept. So the default carries
+  # the standard, which is what a caller who says nothing gets; the option
+  # carries the exception, and a caller who names one has said so on
+  # purpose. What was written is reported by [zugferd state], which is where
+  # a caller checks what their file actually says.
+  variable relationships {Data Source Alternative}
 }
 
 oo::define ::tclpdf::document::document {
@@ -273,9 +309,11 @@ oo::define ::tclpdf::document::document {
     # Alternative for order-x.xml and prescribes none of them, and an
     # order's XML is data for processing - the sample PDFs of the
     # distribution split 12 Data, 6 Source, 6 Alternative. An explicit
-    # -relationship still wins - and is checked here against the list
-    # attach.tcl owns, not left to [attach] at the end; for order-x.xml
-    # against the three of 4.1.1 besides.
+    # -relationship still WINS over this default - the profile binds the
+    # default and not the option, decided on 2026-08-25 and reasoned out at
+    # [relationships] above - and is checked here against the list attach.tcl
+    # owns, not left to [attach] at the end; for order-x.xml against the
+    # three of 4.1.1 besides.
     set relationship [dict get $options relationship]
     if {$relationship eq {}} {
       if {$family eq "order" || $profile in {MINIMUM {BASIC WL}}} {
@@ -286,11 +324,12 @@ oo::define ::tclpdf::document::document {
     } elseif {$relationship ni $::tclpdf::attach::relationships} {
       return -code error "tclpdf: -relationship must be one of\
           [join $::tclpdf::attach::relationships {, }] - not \"$relationship\""
-    } elseif {$family eq "order" \
-        && $relationship ni $::tclpdf::zugferd::orderRelationships} {
+    } elseif {$relationship ni $::tclpdf::zugferd::relationships} {
+      set clause [expr {$family eq "order" ? {Order-X 1.0, 4.1.1}
+          : {Factur-X 1.09.2, embedding rules}}]
       return -code error "tclpdf: -relationship for $name is one of\
-          [join $::tclpdf::zugferd::orderRelationships {, }] (Order-X 1.0,\
-          4.1.1) - not \"$relationship\", which is for the other attachments"
+          [join $::tclpdf::zugferd::relationships {, }] ($clause) - not\
+          \"$relationship\", which is for the other attachments"
     }
 
     # PDF/A-3 first: the invoice rides on it, and the output intent has to be
@@ -299,7 +338,22 @@ oo::define ::tclpdf::document::document {
     # than after it. Without -icc the profile is the one [pdfa] uses by
     # default - the sRGB profile shipped with the package - and pdfa.tcl is
     # where a missing one is refused, so nothing is decided about it here.
-    set declaration [list -part 3 -conformance B]
+    #
+    # -conformance ONLY where nothing has been declared yet. B is the level
+    # every invoice reaches without a structure tree and the least the
+    # standards ask for, so it is the right default - but it was passed
+    # unconditionally, and a caller who had said [pdfa -conformance A]
+    # before the invoice got B back without a word: measured 2026-08-25,
+    # the structure tree was still written and the packet said
+    # pdfaid:conformance B - paid for, not claimed. Factur-X 1.09.2 and
+    # Order-X 1.0, 4.1 ask for PDF/A-3 and leave the level open, so there
+    # is nothing here to overrule the caller with. The PART is not left
+    # open: both standards name PDF/A-3, and [pdfa] refuses a part that
+    # cannot carry an attachment anyway.
+    set declaration [list -part 3]
+    if {[my state pdfa] eq {}} {
+      lappend declaration -conformance B
+    }
     if {[dict get $options icc] ne {}} {
       lappend declaration -profile [dict get $options icc]
     }
