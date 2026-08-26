@@ -47,7 +47,10 @@
 # In, which pours a gradient into a shape, and Soft Light, which is a PDF blend
 # mode under another name. Both of them are in a flag.
 #
-# THREE ROWS SHOW THE SKIN TONES on one icon at a time, because a ramp is the
+# THREE ROWS SHOW THE SKIN TONES on one icon at a time, each followed by ONE
+# EQUATION - the parts of the sequence, plus signs, an equals sign and the
+# glyph the face draws for them, so that "base + tone = toned base" is on the
+# page and not only in the caption - because a ramp is the
 # only way to SEE what a modifier does: the same builder, the same farmer and
 # the same thumb through the base and all five Fitzpatrick modifiers,
 # U+1F3FB to U+1F3FF. Two of the three are ZWJ sequences with the modifier in
@@ -184,6 +187,17 @@ set workerMid "👷🏽‍♀️"
 set workerMedDark "👷🏾‍♀️"
 set workerDark "👷🏿‍♀️"
 
+# THE PARTS ON THEIR OWN, for the equation under each ramp: the modifier by
+# itself (this face draws it as a swatch of the tone), the bare builder, the
+# female sign with its presentation selector, the bare person and the sheaf.
+# Each is a unit of its own here; joined, they are the sequences above.
+set toneMid "🏽"
+set builder "👷"
+set female "♀️"
+set person "🧑"
+set sheaf "🌾"
+set parts [list $toneMid $builder $female $person $sheaf]
+
 set crate 📦
 set lorry 🚚
 set tick ✅
@@ -212,7 +226,7 @@ $doc font embed body [file join $assets fonts DejaVuSans.ttf]
 # with, and not the seven the Scottish flag alone would be.
 set emoji [$doc colorFont emoji $facePath \
     -chars [join [concat [list $gallery] $singles $sequences $working \
-        $tones $workers $farmers] {}]]
+        $tones $workers $farmers $parts] {}]]
 
 # One row of emoji at $size POINTS, left to right, and the y below it in
 # millimetres. The two units are the reason this is a procedure rather than
@@ -235,6 +249,38 @@ proc emojiRow {doc yName family size marks} {
         $doc text $mark -at [list $x [expr {$y + $height * 0.92}]]
         set x [expr {$x + [$doc textWidth $mark] + 1.5}]
     }
+    set y [expr {$y + $height + 6}]
+    return
+}
+
+# One equation under a ramp: the parts of a sequence, a plus sign between
+# them, an equals sign, and the sequence - "base + tone = toned base". The
+# signs are set in the body face at the same y, so the reader sees what the
+# face was handed and what it drew for it; a viewer that re-sets the text from
+# its code points shows the left side twice and never the right.
+proc emojiEquation {doc yName family size parts result} {
+    upvar 1 $yName y
+    set height [expr {$size * 25.4 / 72.0}]
+    set y [expr {$y + 1}]
+    set baseline [expr {$y + $height * 0.92}]
+    set x 20
+    set first 1
+    foreach part $parts {
+        if {!$first} {
+            $doc font -family body -size [expr {$size * 0.75}] -color {0.45 0.45 0.5}
+            $doc text "+" -at [list $x $baseline]
+            set x [expr {$x + [$doc textWidth "+"] + 2}]
+        }
+        set first 0
+        $doc font -family $family -size $size
+        $doc text $part -at [list $x $baseline]
+        set x [expr {$x + [$doc textWidth $part] + 2}]
+    }
+    $doc font -family body -size [expr {$size * 0.75}] -color {0.45 0.45 0.5}
+    $doc text "=" -at [list $x $baseline]
+    set x [expr {$x + [$doc textWidth "="] + 2}]
+    $doc font -family $family -size $size
+    $doc text $result -at [list $x $baseline]
     set y [expr {$y + $height + 6}]
     return
 }
@@ -358,12 +404,14 @@ examplePara $doc y "A skin tone is not a picture. U+1F3FB to U+1F3FF are the\
 
 set y [expr {$y + 2}]
 emojiRow $doc y $emoji 24 $tones
+emojiEquation $doc y $emoji 24 [list $thumb $toneMid] $thumbMid
 emojiCaption $doc y "The base on its own, then the same base through all five\
     modifiers: U+1F44D, and U+1F44D followed by U+1F3FB, U+1F3FC, U+1F3FD,\
     U+1F3FE, U+1F3FF. Six units, eleven code points, six glyphs - every one\
     of them the same width, because a modifier adds nothing to the advance."
 
 emojiRow $doc y $emoji 24 $workers
+emojiEquation $doc y $emoji 24 [list $builder $toneMid $female] $workerMid
 emojiCaption $doc y "The same ramp on a ZWJ SEQUENCE, which is the case that\
     matters: the builder is U+1F477, a zero width joiner, the female sign\
     U+2640 and a presentation selector, and the modifier goes in as the\
@@ -374,6 +422,7 @@ emojiCaption $doc y "The same ramp on a ZWJ SEQUENCE, which is the case that\
     five pictures where the face draws one."
 
 emojiRow $doc y $emoji 24 $farmers
+emojiEquation $doc y $emoji 24 [list $person $toneMid $sheaf] $farmerMid
 emojiCaption $doc y "And once more with a shorter sequence around the tone:\
     a person, a sheaf of rice and the joiner between them. Six units of three\
     and four code points, six glyphs, one width. Every unit on this page was\

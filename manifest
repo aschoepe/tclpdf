@@ -1,5 +1,5 @@
-C Name\sthe\sorigin\sand\sthe\sterms\sof\sthe\sTcl\s9\slogo\n\n-\sexamples/assets/README.md\s-\sTcl9logo.svg\sis\sthe\sTcl/Tk\s9.0\slogo\sby\sValerie\sCarroll\swith\sSteve\sLanders,\staken\sunchanged\sfrom\sthe\spublished\sSVG,\sunder\sthe\sTcl\slicence\sas\sthe\swiki\spage\sthat\sintroduced\sit\ssays;\sthe\splaceholder\sasking\sthe\sauthor\sto\sconfirm\sthe\sterms\sis\sgone
-D 2026-08-26T20:41:30.392
+C One\sequation\sunder\seach\sskin-tone\sramp\sof\sthe\semoji\sexample\n\n-\sexamples/02.18-noto-color-emoji.tcl\s-\sunder\seach\sof\sthe\sthree\sramps\sa\sline\s"base\s+\stone\s=\stoned\sbase"\sout\sof\sthe\sface's\sown\sglyphs,\sthe\smodifier\son\sits\sown\sdrawn\sas\sthe\sswatch\sthe\sface\shas\sfor\sit,\sthe\sbuilder\sand\sthe\sfarmer\swith\stheir\sthird\spart,\sso\sthat\swhat\sthe\smodifier\sdoes\sstands\son\sthe\spage\sbeside\sthe\sramp\sthat\sshows\sit;\sthe\sfive\sparts\sjoin\sthe\scolour\sfont's\scharacter\slist
+D 2026-08-26T20:58:56.549
 F Makefile.in cc6abf248f914790abc58db615d31f9d1811c4e3c285bb7266c9e4e0f48fdeb0
 F README 5b0e257f5c6829a2a473a4f0df904bad9bd76e82df6d4f146eb4528436a2623e
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -81,7 +81,7 @@ F examples/02.14-colour-font.tcl fa9e4f16e2cd5d87b63a3cf4e324b4127951edf2e30b22b
 F examples/02.15-vertical-writing.tcl 4642c9440e57e4cff2c96693a0ab1bc968bde4683ee099fc7ede59fa2d972d4e
 F examples/02.16-bare-cff.tcl 9efeb8b5417afac5e22c9985aa87272c746ff09e01e4a266d2784da3c6f2f517
 F examples/02.17-colour-font-v1.tcl 06c9fd5f048acca745b7d67cdaebc768d83924f4b7876bb83d2f1c846c1bf097
-F examples/02.18-noto-color-emoji.tcl 5531d9d65e3425270c71bae6d28ea0bfcbeb8fcd4789d0f81e60bb82665c4938
+F examples/02.18-noto-color-emoji.tcl c6a69d83bf703b37c0262d6ee42da9bc64f3f140b16e2f5ba02cee1729cce8ed
 F examples/03.01-images.tcl 917a16e997ba36aed349805bd21ab79c01307cd80c0804762dd79ecf0512dc03
 F examples/03.02-gradients.tcl 407b29d2476b68ce91786c2f164eed38bc5e7c4f7172695575e27ed89d59c7c2
 F examples/03.03-svg.tcl 9c5321a3f1490f03508dc022f2c6545ba07618329d4564b8dfe05724c44c3800
@@ -491,8 +491,8 @@ F xObject.tcl 1ba69d50fac5b2630d829654c265bb75db87820a7c36e72087cc33a02b904254
 F xml.tcl f05589319f7f158e8b53cec91731498fe796825e72cd8b9353f99b0bafdeb757
 F xmp.tcl 044d7c5f38100b5ed4ae531a9bf38721caf5c43f89eb93559b3655763dfe72c7
 F zugferd.tcl 6e353d7c94f8dffd9d8c27b7f077ac1092dd1b35307391d9fa2245e035792ad1
-P a02c17a111f3f90218e1f45dbafe17f7b6cd0478149ef020c18508961498f62f
-R 87eed99d07f4be9c39ee57ddcbc47cd0
+P 051f014c92757b732f6b00ed6ad94b93bcfb88db70b55da050d380d8786221fd
+R acdc0efbca5c14400ae2113b8a3fb2e3
 U alex
-Z e7b1c9d0871b26252cd20299f67fca66
+Z 5850aa037e3b53e1bd404cbe1f753d2c
 # Remove this line to create a well-formed Fossil manifest.
