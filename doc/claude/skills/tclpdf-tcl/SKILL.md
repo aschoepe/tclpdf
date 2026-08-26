@@ -10,7 +10,7 @@ description: >
 
 This skill ships **with the tclpdf source**, so that anyone who fetches the package has a checked reference for writing their own PDFs. Checked literally: `check.tcl` beside this file runs every snippet on your machine against your copy of the package - see the end of this page.
 
-Every call the manual describes has a working snippet in `reference/`. **Copy the snippet, then adapt** - do not write a tclpdf call from memory of another PDF library.
+Every call the manual describes has a working snippet in `reference/`. **Copy the snippet, then adapt** - do not write a tclpdf call from memory of jsPDF, ReportLab, FPDF or pdf4tcl: the option names, the coordinate origin, the unit of `-size` and the refusals differ, and the same handful of mistakes come back every time (the trap list below).
 
 ## The one setup every snippet assumes
 

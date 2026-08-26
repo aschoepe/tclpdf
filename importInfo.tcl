@@ -858,7 +858,7 @@ proc ::tclpdf::pdf::FieldWalk {readerVar array inherited prefix stateVar} {
     if {[lindex $item 0] eq "r"} {
       set number [lindex [lindex $item 1] 0]
       # A /Kids that points back at an ancestor is a ring, and a file with one
-      # exists: measured on a form written by a JavaScript PDF library, "qpdf --json" answers
+      # exists: measured on a form written by jsPDF, "qpdf --json" answers
       # "loop detected while traversing /AcroForm" on three of its objects.
       if {[dict exists $state seen $number]} continue
       dict set state seen $number 1

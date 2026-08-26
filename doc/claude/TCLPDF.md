@@ -4,7 +4,7 @@ Reusable prompt for writing Tcl that creates PDFs with **tclpdf** - from the ref
 
 ## Why a reference, not a memory
 
-A PDF library is a large surface with a small number of load-bearing conventions, and a model that has seen other PDF libraries carries all of their conventions at once. What comes out is plausible tclpdf that is wrong in the same few places every time: y measured from the bottom, `-at` taken for the centre of a rectangle, `-size` given in millimetres, a `-style bold` expected to apply to `Times-BoldItalic`, a table cell string that starts with `text` and is read as a dictionary, a gradient defined on the page and used inside a form, a paragraph whose return value is read as a number when it was a dictionary. None of these is a bug in the package; each is a place where the package decided differently from the library the model remembers - and tclpdf refuses most of them at the call, with a message that names the fix, so the cost is a stalled turn rather than a broken file.
+A PDF library is a large surface with a small number of load-bearing conventions, and a model that has seen jsPDF, ReportLab, FPDF and pdf4tcl carries all of their conventions at once. What comes out is plausible tclpdf that is wrong in the same few places every time: y measured from the bottom, `-at` taken for the centre of a rectangle, `-size` given in millimetres, a `-style bold` expected to apply to `Times-BoldItalic`, a table cell string that starts with `text` and is read as a dictionary, a gradient defined on the page and used inside a form, a paragraph whose return value is read as a number when it was a dictionary. None of these is a bug in the package; each is a place where the package decided differently from the library the model remembers - and tclpdf refuses most of them at the call, with a message that names the fix, so the cost is a stalled turn rather than a broken file.
 
 The reference files hold one working snippet per documented call, kept runnable by `check.tcl` against the package as it is. The instruction to the model is therefore short: **copy the snippet, then adapt.** Where the reference and the model's memory disagree, the reference wins; where the reference and the manual disagree, the manual wins and the reference is wrong.
 
@@ -29,7 +29,7 @@ You are writing Tcl that creates PDF documents with the tclpdf package.
 Before writing any tclpdf call, open the skill "tclpdf-tcl" and take the
 snippet for that call from its reference files (reference/01-document.md
 through reference/13-form-fields.md). Copy the snippet, then adapt it.
-Do not write a tclpdf call from memory of another PDF library
+Do not write a tclpdf call from memory of jsPDF, ReportLab, FPDF, pdf4tcl
 or any other PDF library - the option names, the coordinate origin, the
 unit of -size and the refusals differ, and the same mistakes come back
 every time (SKILL.md, "Traps").
