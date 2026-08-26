@@ -137,8 +137,9 @@ package require tclpdf::colrPaint 1.0-
 # The bands of constant alpha a gradient's varying alpha becomes, and the clip
 # paths that carry them - see decision 4 above.
 package require tclpdf::colorFontBand 1.0-
+package require tclpdf::colorFontRegion 1.0-
 package require tclpdf::glyfOutline 1.0-
-package require tclpdf::glyfPath 1.0-
+package require tclpdf::glyfPath 1.2-
 package require tclpdf::pdfFunction 1.0-
 package require tclpdf::shading 1.0-
 package require tclpdf::document 1.0-
@@ -1665,11 +1666,10 @@ oo::define ::tclpdf::document::document {
       }
       set outline [my ColorFontPaintBinary $node $context]
       if {$outline ne {}} {
-        # A mask side that is a BINARY OUTLINE - shapes filled opaque and
-        # nothing else, so its alpha is 1 inside them and 0 outside. "In"
-        # such a mask is a CLIP PATH and nothing more. Nonzero winding, so
-        # that several shapes are their union, which is what stacking them
-        # in the mask amounted to.
+        # A mask side whose alpha is BINARY - 1 inside a set of outlines and
+        # 0 outside them. "In" such a mask is a CLIP PATH and nothing more.
+        # Which stacks qualify, and why the union of several outlines is a
+        # question rather than a concatenation, is [ColorFontPaintBinary].
         #
         # No group either: a clip applies to every fill of the source
         # separately and to their result alike, which a soft mask does not -
@@ -1742,40 +1742,167 @@ oo::define ::tclpdf::document::document {
     return {}
   }
 
-  # The outline of a sub-graph that is a BINARY MASK - alpha 1 inside its
-  # shapes and 0 outside - as path operators, or the empty string where it is
-  # anything else.
+  # The clip path of a sub-graph whose alpha is BINARY - 1 inside a set of
+  # outlines and 0 outside them - as path operators, or the empty string
+  # where it is anything else. This is what turns a Source In into a clip.
   #
-  # The rule is narrow on purpose, and the reason is that a mask which is
-  # ALMOST binary is not binary. Measured over Noto Color Emoji's 316 Source
-  # In tables: 2 backdrops are a stack of opaque shapes and take this path,
-  # 250 are a stack of opaque shapes with ONE translucent shape on top of
-  # them, and those 250 are refused here. Their alpha is 1 inside the opaque
-  # union and the translucent shape's alpha outside it, and whether that
-  # second region is empty is a question about where two outlines lie, not
-  # about what the graph says - so they keep the soft mask, which is exact
-  # whatever the answer.
+  # TWO KINDS OF STACK QUALIFY, and the second one is the flags.
+  #
+  #   - outlines filled OPAQUE and nothing else. Alpha 1 inside their union,
+  #     0 outside it, and nothing in between.
+  #   - the same with TRANSLUCENT shapes laid over them, PROVIDED each of
+  #     those lies inside the opaque union. Then the alpha is still 1 there
+  #     and still 0 outside, because outside the union there is nothing left
+  #     to be translucent. Measured over Noto Color Emoji's 316 Source In
+  #     tables: 250 are of this shape - the shimmer on a waving flag - and
+  #     rendered at 300 dpi, 227 of the 250 shapes do lie inside.
+  #
+  # A shape that sticks out keeps the soft mask. So does one whose outline
+  # winds both ways, for the reason below. Over the 316: 54 take the constant
+  # alpha above, 168 the clip here, 94 the mask - and of the 250, 166 reach
+  # the clip, 20 stick out and 64 hold an outline that winds both ways.
+  #
+  # THE UNION OF SEVERAL OUTLINES IS THE HARD PART. "W n" takes ONE path and
+  # two clips INTERSECT rather than unite, so the outlines go into one path
+  # under the nonzero rule - and that is their union only while none of them
+  # winds against another. Measured at 300 dpi: concatenating the 250 stacks
+  # as they stand differs from the true union in 120 of them, by as much as
+  # 1.8 million pixels of a 2133 by 2133 page. So each outline is asked which
+  # way it winds and the ones that disagree with the first are turned round,
+  # which leaves the area each of them fills exactly where it was; an outline
+  # that winds BOTH ways cannot be brought into line and ends the attempt.
+  # colorFontRegion.tcl holds that arithmetic and the measurements behind it.
+  #
+  # A SINGLE opaque outline skips all of it: one path is its own union.
   method ColorFontPaintBinary {node context} {
-    switch -- [dict get $node paint] {
-      glyph {
-        if {![my ColorFontPaintOpaque [dict get $node child] $context]} {
+    set shapes [my ColorFontPaintShapes $node $context \
+        [::tclpdf::geometry identity]]
+    if {![llength $shapes]} {
+      return {}
+    }
+    set opaque {}
+    set sheer {}
+    foreach shape $shapes {
+      set contours [my ColorFontPaintContours $context $shape]
+      if {$contours eq "composite"} {
+        # A shape that draws other glyphs. [ColorFontPaintPath] refuses one
+        # with an error where it is DRAWN, because there the glyph would come
+        # out wrong; here it only means the clip cannot be built, and the
+        # soft mask below draws the same picture.
+        return {}
+      }
+      if {![llength $contours]} {
+        # An outline the face has not got, or an empty one. It encloses no
+        # area, so it changes neither the union nor what lies inside it.
+        continue
+      }
+      if {[lindex $shape 2] >= 1} {
+        lappend opaque $contours
+      } else {
+        lappend sheer $contours
+      }
+    }
+    if {![llength $opaque]} {
+      return {}
+    }
+    set union {}
+    set body {}
+    if {[llength $opaque] == 1} {
+      set contours [lindex $opaque 0]
+      if {[llength $sheer]} {
+        set union [::tclpdf::colorFontRegion flatten $contours]
+      }
+      set body [::tclpdf::glyfPath render $contours]
+    } else {
+      set reference 0
+      foreach contours $opaque {
+        set polygons [::tclpdf::colorFontRegion flatten $contours]
+        set sign [::tclpdf::colorFontRegion sign $polygons]
+        if {$sign == 0} {
           return {}
         }
-        return [my ColorFontPaintPath $context [dict get $node glyph]]
+        if {$reference == 0} {
+          set reference $sign
+        } elseif {$sign != $reference} {
+          set contours [::tclpdf::colorFontRegion reverse $contours]
+          set polygons [::tclpdf::colorFontRegion flatten $contours]
+        }
+        if {[llength $sheer]} {
+          lappend union {*}$polygons
+        }
+        append body [::tclpdf::glyfPath render $contours]
       }
+    }
+    foreach contours $sheer {
+      if {![::tclpdf::colorFontRegion inside \
+          [::tclpdf::colorFontRegion flatten $contours] $union]} {
+        return {}
+      }
+    }
+    return $body
+  }
+
+  # The leaf shapes of a sub-graph that is nothing but FILLED OUTLINES: a
+  # list of {matrix glyph alpha}, bottom first, or the empty list where the
+  # graph holds anything else - a gradient, a composite, a fill without an
+  # outline around it.
+  #
+  # The matrix is the one the shape's own coordinates have to be written
+  # through, and it starts at the identity because the operators of this
+  # sub-graph are written in the space of the node it was called for. A
+  # transform is BAKED INTO THE COORDINATES here rather than written as a
+  # "cm": a clip path is one path, and a "cm" in the middle of it would move
+  # the subpaths after it and not the ones before.
+  method ColorFontPaintShapes {node context matrix} {
+    switch -- [dict get $node paint] {
       layers {
-        set body {}
+        set shapes {}
         foreach child [dict get $node children] {
-          set piece [my ColorFontPaintBinary $child $context]
-          if {$piece eq {}} {
+          set piece [my ColorFontPaintShapes $child $context $matrix]
+          if {![llength $piece]} {
             return {}
           }
-          append body $piece
+          lappend shapes {*}$piece
         }
-        return $body
+        return $shapes
+      }
+      transform {
+        if {[::tclpdf::geometry singular [dict get $node matrix]]} {
+          return {}
+        }
+        return [my ColorFontPaintShapes [dict get $node child] $context \
+            [::tclpdf::geometry multiply [dict get $node matrix] $matrix]]
+      }
+      glyph {
+        set child [dict get $node child]
+        if {[my ColorFontPaintOpaque $child $context]} {
+          return [list [list $matrix [dict get $node glyph] 1]]
+        }
+        set alpha [my ColorFontPaintUniform $child $context]
+        if {$alpha eq {}} {
+          return {}
+        }
+        return [list [list $matrix [dict get $node glyph] $alpha]]
       }
     }
     return {}
+  }
+
+  # The contours of one shape, through its own matrix: the shape
+  # [::tclpdf::glyfPath contours] returns, the empty list for an outline the
+  # face has not got, and the word "composite" for one that draws other
+  # glyphs instead of an outline of its own.
+  method ColorFontPaintContours {context shape} {
+    lassign $shape matrix glyph alpha
+    set outline [my ColorFontPaintOutline $context $glyph]
+    if {![dict size $outline] || [dict get $outline type] eq "empty"} {
+      return {}
+    }
+    if {[dict get $outline type] ne "simple"} {
+      return composite
+    }
+    return [::tclpdf::glyfPath contours $outline \
+        [list ::tclpdf::geometry apply $matrix]]
   }
 
   # Whether a sub-graph fills everything it is given, fully opaque. Only the
@@ -1812,4 +1939,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFontPaint 1.0
+package provide tclpdf::colorFontPaint 1.1

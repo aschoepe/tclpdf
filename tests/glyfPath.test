@@ -132,6 +132,19 @@ test glyfPath-1.10 {the segments are also available unformatted} -body {
   ::tclpdf::glyfPath contours [glyfPathOutline {2} {1 0 1} {0 60 120} {0 120 0}]
 } -result {{{0 0} {c 40.0 80.0 80.0 80.0 120 0}}}
 
+test glyfPath-1.10a {contours already in hand write the same operators} -body {
+  # [operators] is [render] over [contours], so a caller that has taken the
+  # contours apart - turned one round, dropped another - writes them through
+  # the same four lines rather than spelling a subpath a second time.
+  set outline [glyfPathOutline {2} {1 0 1} {0 60 120} {0 120 0}]
+  list [expr {[::tclpdf::glyfPath render \
+          [::tclpdf::glyfPath contours $outline]] \
+      eq [::tclpdf::glyfPath operators $outline]}] \
+      [glyfPathLines [::tclpdf::glyfPath render \
+          {{{0 0} {l 10 0} {l 10 10}}}]] \
+      [::tclpdf::glyfPath render {}]
+} -result {1 {{0 0 m} {10 0 l} {10 10 l} h} {}}
+
 test glyfPath-1.11 {the transform is applied before the curves are built} -body {
   # A command prefix called with x and y, as svgPath uses one. It runs on the
   # POINTS, so implied midpoints and elevated control points are computed in

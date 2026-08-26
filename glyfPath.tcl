@@ -271,8 +271,18 @@ proc ::tclpdf::glyfPath::Cubic {x0 y0 control x1 y1} {
 # "f", "B", or "W n" for a clip. See the note at the top of this file for why
 # "f*" is wrong even though it draws most glyphs correctly.
 proc ::tclpdf::glyfPath::operators {glyph {transform {}}} {
+  return [render [contours $glyph $transform]]
+}
+
+# The same operators for contours a caller already has - the shape [contours]
+# returns, whether it came from there or was worked on since.
+#
+# Split off from [operators] rather than written twice: a caller that turns a
+# contour round or drops one has the contours and not the glyph, and the four
+# lines that spell a subpath belong in one place.
+proc ::tclpdf::glyfPath::render {contours} {
   set result {}
-  foreach contour [contours $glyph $transform] {
+  foreach contour $contours {
     append result "[Numbers [lindex $contour 0]] m\n"
     foreach segment [lrange $contour 1 end] {
       append result "[Numbers [lrange $segment 1 end]] [lindex $segment 0]\n"
@@ -289,4 +299,4 @@ proc ::tclpdf::glyfPath::Numbers {values} {
   return [join [lmap value $values {::tclpdf::pdfObj num $value}] { }]
 }
 
-package provide tclpdf::glyfPath 1.1
+package provide tclpdf::glyfPath 1.2

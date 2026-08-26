@@ -1,0 +1,242 @@
+# colorFontRegion.test --
+#
+# What several filled outlines add up to under the nonzero winding rule.
+#
+# EVERYTHING HERE IS GEOMETRY, which is why this file needs no font and no
+# document: the module holds no state, reads no table and writes no object.
+# What the answers are used FOR - which Source In becomes a clip path and
+# which keeps its soft mask - is colorFontPaint.test's subject, at 5.5c to
+# 5.5f.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::colorFontRegion
+source [file join [file dirname [info script]] helper.tcl]
+
+# A rectangle as one contour, counter-clockwise, in the shape
+# [::tclpdf::glyfPath contours] returns.
+proc cfrBox {x0 y0 x1 y1} {
+  return [list [list [list $x0 $y0] [list l $x1 $y0] [list l $x1 $y1] \
+      [list l $x0 $y1]]]
+}
+
+# The same rectangle the other way round.
+proc cfrBoxBack {x0 y0 x1 y1} {
+  return [list [list [list $x0 $y0] [list l $x0 $y1] [list l $x1 $y1] \
+      [list l $x1 $y0]]]
+}
+
+interp alias {} cfrFlat {} ::tclpdf::colorFontRegion flatten
+interp alias {} cfrSign {} ::tclpdf::colorFontRegion sign
+interp alias {} cfrIn {} ::tclpdf::colorFontRegion inside
+
+# --- flattening ------------------------------------------------------------
+
+test colorFontRegion-1.1 {a straight contour keeps its points} -body {
+  cfrFlat [cfrBox 0 0 10 10]
+} -result {{{0 0} {10 0} {10 10} {0 10}}}
+
+test colorFontRegion-1.2 {a cubic is cut into straight pieces} -body {
+  # The count comes off the control polygon and is capped at both ends, so a
+  # curve of any size arrives as a polygon with the ends the font gave.
+  set polygons [cfrFlat {{{0 0} {c 0 100 100 100 100 0}}}]
+  list [llength $polygons] [expr {[llength [lindex $polygons 0]] >= 5}] \
+      [lindex $polygons 0 0] [lindex $polygons 0 end]
+} -result {1 1 {0 0} {100.0 0.0}}
+
+test colorFontRegion-1.3 {a contour of fewer than three points is dropped} -body {
+  # It encloses no area, so it changes no answer here and would only cost the
+  # winding test edges to walk.
+  list [llength [cfrFlat {{{0 0} {l 10 10}}}]] \
+      [llength [cfrFlat [cfrBox 0 0 10 10]]]
+} -result {0 1}
+
+test colorFontRegion-1.4 {the bounds are the box around every point} -body {
+  list [::tclpdf::colorFontRegion bounds [cfrFlat [cfrBox 5 -3 20 8]]] \
+      [::tclpdf::colorFontRegion bounds {}]
+} -result {{5 -3 20 8} {}}
+
+# --- the winding rule ------------------------------------------------------
+
+test colorFontRegion-2.1 {inside is nonzero and outside is nought} -body {
+  set region [::tclpdf::colorFontRegion region [cfrFlat [cfrBox 0 0 10 10]]]
+  list [::tclpdf::colorFontRegion winding $region 5 5] \
+      [::tclpdf::colorFontRegion winding $region 15 5] \
+      [::tclpdf::colorFontRegion winding $region 5 15]
+} -result {1 0 0}
+
+test colorFontRegion-2.2 {a contour the other way round winds the other way} -body {
+  set region [::tclpdf::colorFontRegion region \
+      [cfrFlat [cfrBoxBack 0 0 10 10]]]
+  ::tclpdf::colorFontRegion winding $region 5 5
+} -result {-1}
+
+test colorFontRegion-2.3 {two contours against each other add to nothing} -body {
+  # The whole reason [sign] exists: a positive outline over a negative one
+  # leaves a hole in a clip exactly where the union has ink.
+  set region [::tclpdf::colorFontRegion region \
+      [concat [cfrFlat [cfrBox 0 0 10 10]] [cfrFlat [cfrBoxBack 2 2 8 8]]]]
+  list [::tclpdf::colorFontRegion winding $region 5 5] \
+      [::tclpdf::colorFontRegion winding $region 1 1]
+} -result {0 1}
+
+test colorFontRegion-2.4 {the index answers as a full walk of the edges does} -body {
+  # The edges are bucketed by the y they span and a query reads one bucket.
+  # A box of a thousand edges has more buckets than a box of four, and both
+  # have to give the same answers.
+  set contour [list [list 0 0]]
+  for {set index 1} {$index <= 250} {incr index} {
+    lappend contour [list l $index 0]
+  }
+  for {set index 1} {$index <= 250} {incr index} {
+    lappend contour [list l 250 $index]
+  }
+  for {set index 249} {$index >= 0} {incr index -1} {
+    lappend contour [list l $index 250]
+  }
+  for {set index 249} {$index >= 1} {incr index -1} {
+    lappend contour [list l 0 $index]
+  }
+  set region [::tclpdf::colorFontRegion region [cfrFlat [list $contour]]]
+  set answers {}
+  foreach y {0.5 60.5 125.5 200.5 249.5} {
+    lappend answers [::tclpdf::colorFontRegion winding $region 125.5 $y] \
+        [::tclpdf::colorFontRegion winding $region -5 $y]
+  }
+  set answers
+} -result {1 0 1 0 1 0 1 0 1 0}
+
+# --- which way an outline winds --------------------------------------------
+
+test colorFontRegion-3.1 {a plain outline winds one way or the other} -body {
+  list [cfrSign [cfrFlat [cfrBox 0 0 10 10]]] \
+      [cfrSign [cfrFlat [cfrBoxBack 0 0 10 10]]] [cfrSign {}]
+} -result {1 -1 0}
+
+test colorFontRegion-3.2 {an outline with a hole still winds one way} -body {
+  # Outer contour one way, hole the other: the winding is 1 in the ink and 0
+  # in the hole, never below nought, so the answer is 1 and the outline can
+  # go into a clip beside its neighbours untouched.
+  cfrSign [concat [cfrFlat [cfrBox 0 0 10 10]] [cfrFlat [cfrBoxBack 2 2 8 8]]]
+} -result {1}
+
+test colorFontRegion-3.3 {an outline that winds both ways has no answer} -body {
+  # A bow tie: one contour crossing itself into two lobes of opposite
+  # winding. No direction brings it into line with a neighbour, so the caller
+  # keeps its soft mask.
+  cfrSign [cfrFlat {{{0 0} {l 10 10} {l 10 0} {l 0 10}}}]
+} -result {0}
+
+test colorFontRegion-3.4 {the answer is the winding and not the signed area} -body {
+  # The case the area gets wrong, and it is not invented: a stripe of a flag
+  # in Noto Color Emoji crosses itself into two lobes whose areas all but
+  # cancel - measured at -50.9 square units inside a bounding box of a
+  # million. Here the two lobes cancel exactly, so a test on the area would
+  # read nought and call the outline empty; the winding rule sees both lobes.
+  set bowTie {{{0 0} {l 10 10} {l 10 0} {l 0 10}}}
+  set area 0.0
+  foreach polygon [cfrFlat $bowTie] {
+    lassign [lindex $polygon end] x0 y0
+    foreach point $polygon {
+      lassign $point x1 y1
+      set area [expr {$area + ($x0 * $y1 - $x1 * $y0)}]
+      set x0 $x1
+      set y0 $y1
+    }
+  }
+  set region [::tclpdf::colorFontRegion region [cfrFlat $bowTie]]
+  list $area [::tclpdf::colorFontRegion winding $region 8 5] \
+      [::tclpdf::colorFontRegion winding $region 2 5] [cfrSign [cfrFlat $bowTie]]
+} -result {0.0 -1 1 0}
+
+# --- turning an outline round ----------------------------------------------
+
+test colorFontRegion-4.1 {a reversed contour runs backwards from the far end} -body {
+  ::tclpdf::colorFontRegion reverse {{{0 0} {l 10 0} {l 10 10} {l 0 10}}}
+} -result {{{0 10} {l 10 10} {l 10 0} {l 0 0}}}
+
+test colorFontRegion-4.2 {a cubic keeps its control points and swaps them} -body {
+  # The first control point belongs to the end the curve LEAVES, so turning
+  # the curve round exchanges the two. A reversal that kept their order would
+  # draw a different curve between the same two points.
+  ::tclpdf::colorFontRegion reverse {{{0 0} {c 1 2 3 4 10 10}}}
+} -result {{{10 10} {c 3 4 1 2 0 0}}}
+
+test colorFontRegion-4.3 {turning an outline round leaves its area where it was} -body {
+  # Which is the whole licence for doing it inside a clip path: the sign
+  # changes and the ink does not.
+  set box [cfrBox 0 0 10 10]
+  set back [::tclpdf::colorFontRegion reverse $box]
+  set one [::tclpdf::colorFontRegion region [cfrFlat $box]]
+  set two [::tclpdf::colorFontRegion region [cfrFlat $back]]
+  list [::tclpdf::colorFontRegion winding $one 5 5] \
+      [::tclpdf::colorFontRegion winding $two 5 5] \
+      [::tclpdf::colorFontRegion winding $two 15 5] \
+      [cfrSign [cfrFlat $back]]
+} -result {1 -1 0 -1}
+
+test colorFontRegion-4.4 {a hole stays a hole when the outline is turned} -body {
+  set outline [concat [cfrBox 0 0 10 10] [cfrBoxBack 2 2 8 8]]
+  set region [::tclpdf::colorFontRegion region \
+      [cfrFlat [::tclpdf::colorFontRegion reverse $outline]]]
+  list [::tclpdf::colorFontRegion winding $region 1 1] \
+      [::tclpdf::colorFontRegion winding $region 5 5]
+} -result {-1 0}
+
+# --- containment -----------------------------------------------------------
+
+test colorFontRegion-5.1 {a shape well inside another is inside it} -body {
+  cfrIn [cfrFlat [cfrBox 2 2 8 8]] [cfrFlat [cfrBox 0 0 10 10]]
+} -result {1}
+
+test colorFontRegion-5.2 {a shape reaching past it is not} -body {
+  list [cfrIn [cfrFlat [cfrBox 2 2 12 8]] [cfrFlat [cfrBox 0 0 10 10]]] \
+      [cfrIn [cfrFlat [cfrBox 20 20 30 30]] [cfrFlat [cfrBox 0 0 10 10]]]
+} -result {0 0}
+
+test colorFontRegion-5.3 {a shared boundary counts as inside} -body {
+  # The ordinary case rather than the exception: the shimmer of a flag is the
+  # flag's own outline with a second contour added, the same control points
+  # to the unit. A test that asked whether a VERTEX lies inside would be
+  # undefined on the boundary and would answer by rounding.
+  list [cfrIn [cfrFlat [cfrBox 0 0 10 10]] [cfrFlat [cfrBox 0 0 10 10]]] \
+      [cfrIn [cfrFlat [cfrBox 0 0 10 5]] [cfrFlat [cfrBox 0 0 10 10]]] \
+      [cfrIn [cfrFlat [cfrBox 0 0 10 10]] [cfrFlat [cfrBox 0 0 10 5]]]
+} -result {1 1 0}
+
+test colorFontRegion-5.4 {a hole of the outer shape is not inside it} -body {
+  # The condition the boundary of the inner shape cannot show: the inner
+  # shape lies within the outer one's outline and over the hole in it, so
+  # every probe along its own edge says yes and the answer is still no. Found
+  # from the OUTER shape's edges, which is why both are walked.
+  set ring [concat [cfrFlat [cfrBox 0 0 10 10]] [cfrFlat [cfrBoxBack 3 3 7 7]]]
+  list [cfrIn [cfrFlat [cfrBox 2 2 8 8]] $ring] \
+      [cfrIn [cfrFlat [cfrBox 1 1 2 2]] $ring]
+} -result {0 1}
+
+test colorFontRegion-5.5 {nothing is inside anything, and inside nothing} -body {
+  list [cfrIn {} [cfrFlat [cfrBox 0 0 10 10]]] [cfrIn {} {}] \
+      [cfrIn [cfrFlat [cfrBox 0 0 10 10]] {}]
+} -result {1 1 0}
+
+test colorFontRegion-5.6 {a union that cancels holds nothing} -body {
+  # Two outlines winding against each other are not their union, and this is
+  # what the caller must not walk into: the bar lies inside the square, but
+  # the square with a counter-wound neighbour concatenated onto it has a hole
+  # over the overlap. Turn the neighbour round and the bar is inside again.
+  set bar [cfrFlat [cfrBox 2 4 9 6]]
+  set square [cfrFlat [cfrBox 0 0 10 10]]
+  set other [cfrBoxBack 6 2 8 8]
+  list [cfrIn $bar [concat $square [cfrFlat $other]]] \
+      [cfrIn $bar [concat $square \
+          [cfrFlat [::tclpdf::colorFontRegion reverse $other]]]]
+} -result {0 1}
+
+cleanupTests

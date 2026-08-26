@@ -151,13 +151,25 @@ proc cpFont {glyphs map colr {colours {}}} {
 
 # The shapes every fixture below shares:
 #
-#   1  a square      2  a triangle    3  a bar
+#   1  a square      2  a triangle    3  a bar inside the square
 #   4  nothing       5  a composite   6, 7  base glyphs with empty outlines
+#   8  a bar that runs the OTHER way round, overlapping the square
+#   9  a bow tie - one contour crossing itself into two lobes of opposite
+#      winding    10  a small one, in a corner of the square and clear of the
+#      bar
+#
+# 8 and 9 are what the clip of a Source In is built and refused on: several
+# outlines go into one clip path, and the nonzero rule makes that their union
+# only while none of them winds against another. 8 can be turned round, 9
+# cannot.
 set cpShapes [list {} \
     [cpOutline {{{100 100} {900 100} {900 900} {100 900}}}] \
     [cpOutline {{{200 150} {800 150} {500 750}}}] \
     [cpOutline {{{150 400} {850 400} {850 600} {150 600}}}] \
-    {} [cpComposite 1] {} {}]
+    {} [cpComposite 1] {} {} \
+    [cpOutline {{{600 200} {600 800} {800 800} {800 200}}}] \
+    [cpOutline {{{100 100} {900 900} {900 100} {100 900}}}] \
+    [cpOutline {{{200 700} {400 880} {400 700} {200 880}}}]]
 
 # A face carrying one version 1 colour glyph, built from one paint.
 proc cpFace {paint {layers {}} {clips {}} {chars {}}} {
@@ -1080,25 +1092,90 @@ test colorFontPaint-5.5b {Source In over one flat alpha is one ca} -body {
       [lsearch -inline -glob $lines "*gs"] [lsearch -inline -glob $lines "*Do"]
 } -result {0 1 {/GS0_25098f gs} {/XO1 Do}}
 
-test colorFontPaint-5.5c {a backdrop that is nearly binary keeps the mask} -body {
-  # And this is the case the shortcut of 5.5 is deliberately narrow for: a
-  # stack of opaque shapes with ONE translucent shape on top of them. Its
-  # alpha is 1 inside the opaque union and the translucent shape's alpha
-  # outside it, so it is not binary - and whether that second region is empty
-  # is a question about where two outlines lie, not about what the graph
-  # says. The soft mask is exact whatever the answer.
+test colorFontPaint-5.5c {a translucent shape inside the union is a clip too} -body {
+  # A stack of opaque outlines with a TRANSLUCENT shape laid over it - the
+  # shimmer on a waving flag, and 250 of Noto Color Emoji's 316 Source In
+  # tables. Its alpha is 1 inside the opaque union and the shape's own alpha
+  # outside it, so the mask is binary exactly when the shape lies INSIDE the
+  # union - and then the clip of 5.5 is exact.
   #
-  # Measured over Noto Color Emoji: 250 of the 316 Source In tables have
-  # exactly this shape, 2 are a stack of opaque shapes alone (5.5) and 54 a
-  # bare PaintSolid (5.5b).
+  # The bar lies inside the square, so this one is a clip: no soft mask, no
+  # group, and the bar contributes no operators at all, because everything it
+  # covers is opaque underneath it.
   set doc [cpDocument {composite 5 {glyph 2 {solid 1 1.0}} {layers 0 2}} \
       layers [list {glyph 1 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
+  set lines [cpLines $doc $::cpMark]
+  set masks [::tclpdfTest::objects $doc "/S /Alpha"]
+  $doc destroy
+  list [llength $masks] [lsearch -all -inline -glob $lines "*gs"] \
+      [lsearch -all -inline -glob $lines "*Do"] \
+      [llength [lsearch -all -exact $lines "W"]] \
+      [lsearch -inline -glob $lines "150 400 *"]
+} -result {0 {} {} 2 {}}
+
+test colorFontPaint-5.5d {a translucent shape that sticks out keeps the mask} -body {
+  # The same stack with the opaque side made SMALLER than the translucent
+  # one: the bar reaches past the triangle, so outside the triangle the
+  # backdrop's alpha is 0.2 rather than 0, the mask is not binary, and a clip
+  # would paint the source at full strength where the font asks for a fifth
+  # of it. Measured over the 250: 24 are of this kind.
+  set doc [cpDocument {composite 5 {glyph 1 {solid 1 1.0}} {layers 0 2}} \
+      layers [list {glyph 2 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
   set lines [cpLines $doc $::cpMark]
   set masks [::tclpdfTest::objects $doc "/S /Alpha"]
   $doc destroy
   list [lsearch -inline -glob $lines "*gs"] [llength $masks] \
       [regexp {/TR} [lindex $masks 0]]
 } -result {{/GA1 gs} 1 0}
+
+test colorFontPaint-5.5e {outlines that wind against each other are turned round} -body {
+  # "W n" takes ONE path and two clips INTERSECT rather than unite, so
+  # several outlines go into one path under the nonzero rule - and that is
+  # their union only while none of them winds against another. Where one
+  # does, the winding numbers add to zero over the overlap and the clip has a
+  # hole exactly where the union has ink. Measured at 300 dpi over Noto Color
+  # Emoji's 250 stacks: concatenated as they stand, 120 of them differ from
+  # the true union.
+  #
+  # Shape 8 is the bar of shape 3 turned round and moved onto the square, so
+  # the fixture is exactly that case. What comes out is the square as
+  # written and shape 8 REVERSED - 800 200 first where the outline starts at
+  # 600 200 - which fills the same area and winds with the square instead of
+  # against it.
+  set doc [cpDocument {composite 5 {glyph 2 {solid 1 1.0}} {layers 0 3}} \
+      layers [list {glyph 1 {solid 0 1.0}} {glyph 8 {solid 0 1.0}} \
+          {glyph 3 {solid 1 0.2}}]]
+  set lines [cpLines $doc $::cpMark]
+  set masks [::tclpdfTest::objects $doc "/S /Alpha"]
+  $doc destroy
+  list [llength $masks] [llength [lsearch -all -exact $lines "W"]] \
+      [lrange $lines 2 6] [lrange $lines 7 11]
+} -result {0 2 {{100 100 m} {900 100 l} {900 900 l} {100 900 l} h}\
+    {{800 200 m} {800 800 l} {600 800 l} {600 200 l} h}}
+
+test colorFontPaint-5.5f {an outline that winds both ways keeps the mask} -body {
+  # Turning an outline round works only while the whole of it winds one way.
+  # Shape 9 is a bow tie: one contour crossing itself into two lobes of
+  # opposite winding, so no direction brings it into line with a neighbour
+  # and there is no clip path to be had. Not a fixture curiosity - one stripe
+  # of a flag in Noto Color Emoji is drawn exactly so, and its signed area
+  # comes to -50.9 units inside a bounding box of a million, which is why the
+  # decision is taken from the winding rule and not from the area.
+  #
+  # Shape 10 is that bow tie put in a corner of the square, clear of the bar,
+  # so that nothing but the refusal itself stands between this stack and a
+  # clip path.
+  # TWO opaque outlines, because a single one is its own union and never
+  # asks: the square would take the clip on its own, and the bow tie beside
+  # it is what refuses it.
+  set doc [cpDocument {composite 5 {glyph 2 {solid 1 1.0}} {layers 0 3}} \
+      layers [list {glyph 1 {solid 0 1.0}} {glyph 10 {solid 0 1.0}} \
+          {glyph 3 {solid 1 0.2}}]]
+  set lines [cpLines $doc $::cpMark]
+  set masks [::tclpdfTest::objects $doc "/S /Alpha"]
+  $doc destroy
+  list [lsearch -inline -glob $lines "*gs"] [llength $masks]
+} -result {{/GA1 gs} 1}
 
 test colorFontPaint-5.5a {a mask inside the masked side does not replace it} -body {
   # PDF does not COMPOSE soft masks, it REPLACES them: the graphics state
@@ -1110,16 +1187,17 @@ test colorFontPaint-5.5a {a mask inside the masked side does not replace it} -bo
   #
   # The source is a gradient that cannot be banded - a fading cone whose two
   # circles are not nested (4.10d) - so it carries a luminosity mask of its
-  # own, and the backdrop is the nearly-binary stack of 5.5c so that the
-  # composite keeps its alpha mask. The luminosity mask must not appear in
-  # the glyph stream at all, and the alpha mask must, with the form behind
+  # own, and the backdrop is the stack of 5.5d - a translucent bar reaching
+  # past the opaque triangle under it - so that the composite keeps its alpha
+  # mask instead of turning into a clip. The luminosity mask must not appear
+  # in the glyph stream at all, and the alpha mask must, with the form behind
   # it. Measured 2026-08-26 by rendering: without the group the Source In
   # drew the whole source and not its intersection with the backdrop.
   set doc [cpDocument [list composite 5 \
-      [list glyph 2 [list radial pad {{0.0 1 1.0} {1.0 1 0.2}} \
+      [list glyph 1 [list radial pad {{0.0 1 1.0} {1.0 1 0.2}} \
           {200 500} 0 {800 500} 100]] \
       {layers 0 2}] layers \
-      [list {glyph 1 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
+      [list {glyph 2 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
   set lines [cpLines $doc $::cpMark]
   set forms [::tclpdfTest::objects $doc /Transparency]
   $doc destroy
@@ -1144,12 +1222,13 @@ test colorFontPaint-5.6 {Source Out inverts the same mask with a TR} -body {
 
 test colorFontPaint-5.7 {Source Atop draws the backdrop and then masks} -body {
   # The backdrop straight into the stream, and the source "in" it after that.
-  # The backdrop here is the nearly-binary stack of 5.5c, so the "in" half
-  # keeps its soft mask and the source's colour goes into the group behind
-  # it - which is what makes the two halves tellable apart in one stream: the
-  # backdrop's own two colours stand in the glyph, the source's blue does not.
-  set doc [cpDocument {composite 9 {glyph 2 {solid 2 1.0}} {layers 0 2}} \
-      layers [list {glyph 1 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
+  # The backdrop here is the stack of 5.5d - a translucent bar reaching past
+  # the opaque triangle under it - so the "in" half keeps its soft mask and
+  # the source's colour goes into the group behind it, which is what makes
+  # the two halves tellable apart in one stream: the backdrop's own two
+  # colours stand in the glyph, the source's blue does not.
+  set doc [cpDocument {composite 9 {glyph 1 {solid 2 1.0}} {layers 0 2}} \
+      layers [list {glyph 2 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
   set lines [cpLines $doc $::cpMark]
   set forms [::tclpdfTest::objects $doc /Transparency]
   $doc destroy

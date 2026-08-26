@@ -44,6 +44,7 @@
 #
 
 set here [file dirname [file normalize [info script]]]
+lappend auto_path [file dirname $here]
 source [file join $here common.tcl]
 
 package require tclpdf

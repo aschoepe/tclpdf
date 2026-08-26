@@ -101,6 +101,7 @@ foreach tclpdfPkg {
     tclpdf::colorFont
     tclpdf::colorFontBand
     tclpdf::colorFontPaint
+    tclpdf::colorFontRegion
     tclpdf::imageTiff
     tclpdf::imageTiffStreams
     tclpdf::hyphenate
