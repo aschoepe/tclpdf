@@ -1026,6 +1026,45 @@ proc ::tclpdfTest::gsubLookup {type flag subtables} {
       $subtables {}]
 }
 
+# Lookup type 1, format 2: one glyph becomes one other.
+#
+#   0  format 2 | 2  coverage at 8 | 4  one glyph | 6  the substitute
+#   8  coverage format 1, one glyph
+#
+# Here since 2026-08-26: forms.test builds a face whose rlig and liga each
+# hold one of these, to show which of the two stages runs first.
+proc ::tclpdfTest::gsubSingle {from to} {
+  return [binary format Su* [list 2 8 1 $to 1 1 $from]]
+}
+
+# Lookup type 2, format 1: one glyph becomes several.
+#
+#   0  format 1 | 2  coverage at 8 | 4  one sequence | 6  sequence at 14
+#   8  coverage format 1, one glyph | 14  the sequence
+#
+# Here since colorFont.test needs one to show what it refuses: a "ccmp" that
+# takes a character apart cannot become a Type 3 glyph.
+proc ::tclpdfTest::gsubMultiple {from outputs} {
+  return [binary format Su* [list 1 8 1 14 1 1 $from [llength $outputs] \
+      {*}$outputs]]
+}
+
+# Lookup type 4, format 1: several glyphs become one.
+#
+#   0  format 1 | 2  coverage at 8 | 4  one set | 6  set at 14
+#   8  coverage format 1, the FIRST component
+#  14  ligature set: one ligature, at 14+4 = 18
+#  18  the ligature glyph, the component count, the components after the first
+#
+# Here rather than in gsubApply.test since 2026-08-26: colorFont.test builds a
+# face that forms SEQUENCES - a ZWJ family and a skin tone - and a ligature
+# subtable is what a sequence is made of. A second copy of the layout is the
+# copy that gets fixed last.
+proc ::tclpdfTest::gsubLigature {components to} {
+  return [binary format Su* [list 1 8 1 14 1 1 [lindex $components 0] 1 4 \
+      $to [llength $components] {*}[lrange $components 1 end]]]
+}
+
 # An extension subtable around another subtable: format 1, the type it wraps,
 # and a 32 bit offset from the start of the extension subtable itself.
 proc ::tclpdfTest::gsubExtension {type subtable} {

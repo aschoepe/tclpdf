@@ -123,6 +123,12 @@ fi
 # takes the working tree rather than the repository, so without this line it
 # would ride along in the source archive, quadrupling it and putting foreign
 # code into an MIT tarball without its licence.
+#
+# examples/assets/fonts/google/NotoColorEmoji-Regular.ttf is the same decision
+# again: a 25 MB OFL face kept in the working tree for example 02.18 and the
+# colour-font measurements, ignore-globbed so it never reaches a commit, and
+# excluded here so the source archive does not grow by a font whoever wants
+# that example downloads themselves (the example says where).
 
 # The source archive is taken through a staging copy for the same reason: the
 # tree itself is not touched, the copy gets the modes, and the tar takes the
@@ -142,6 +148,7 @@ tar --no-xattrs --no-mac-metadata --disable-copyfile \
     --exclude="${PACKAGE_NAME}/.fossil-settings" \
     --exclude="${PACKAGE_NAME}/.claude" \
     --exclude="${PACKAGE_NAME}/tools/Mustang-CLI-*.jar" \
+    --exclude="${PACKAGE_NAME}/examples/assets/fonts/google/NotoColorEmoji-Regular.ttf" \
     --exclude="${PACKAGE_NAME}/CLAUDE.md" \
     --exclude="${PACKAGE_NAME}/.gitattributes" \
     --exclude="${PACKAGE_NAME}/.vscode" \

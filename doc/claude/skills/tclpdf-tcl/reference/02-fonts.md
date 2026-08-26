@@ -152,7 +152,7 @@ $doc text "AVATAR office" -at {80 110} -kerning 0 -ligatures 0   ;# as an earlie
 $doc text "L E T T E R S P A C E D" -at {20 118} -spacing 1.5 -ligatures 0
 ```
 
-`-kerning` reads GPOS, else the `kern` table, and writes the amounts into the stream - `textWidth`, the breaker and the table all measure with it. `-spacing` opens gaps between **glyphs**, so switch ligatures off for letterspacing.
+`-kerning` reads GPOS, else the `kern` table, and writes the amounts into the stream - `textWidth`, the breaker and the table all measure with it. `-spacing` opens gaps between **glyphs**, so switch ligatures off for letterspacing. `-ligatures` reads **two** features and switches both: `liga` and `clig`, the contextual ligatures - the registry has both on by default and a shaper applies both unasked. `dlig` and `hlig` stay off, which is what the registry says; the required ligatures `rlig` of a cursive script belong to the shaping and are applied under `-direction rtl` whether or not `-ligatures` is on.
 
 ### Combining marks
 
@@ -226,7 +226,9 @@ $marks font define ballot -ascent 750
 # Inside -script the coordinates are GLYPH units, {0 0} is the top left of the
 # frame, y grows downwards - a page in miniature. -width is the advance and is
 # required. The character is what [text] will be given; the code, the glyph
-# name and the ToUnicode entry all follow from it.
+# name and the ToUnicode entry all follow from it. It may also be a whole
+# character SEQUENCE - then the glyph stands for all of it, with one advance
+# and one character code, and [text] finds it by the longest match.
 $marks font glyph ballot \u2610 -width 900 -color text -bbox {30 20 700 700} -script {
     $marks rect -at {50 50} -size {600 600} -stroke {0 0 0} -width 60
 }
@@ -242,10 +244,24 @@ $marks font glyph ballot \u2611 -width 900 -script {
 # was given, and a string with a blank in it is refused without this line.
 $marks font glyph ballot " " -width 400 -script {}
 
+# A glyph may stand for a SEQUENCE rather than for one character: one drawing,
+# one advance, one character code, and the whole sequence in /ToUnicode. That
+# is what an emoji face needs for a family or a flag, and what [colorFont]
+# below builds on. [text] finds it by the LONGEST match, so the pair below is
+# one glyph while either box on its own is still its own.
+$marks font glyph ballot "\u2611\u2610" -width 1500 -script {
+    $marks rect -at {50 50} -size {600 600} -stroke {0.10 0.35 0.15} -width 60
+    $marks rect -at {800 50} -size {600 600} -stroke {0 0 0} -width 60
+}
+
 # From here the alias is a family like any other.
 $marks font -family ballot -size 12
 $marks text "\u2611 \u2610 \u2611" -at {20 20}
 puts "one ballot box is [format %.2f [$marks textWidth "\u2611" -family ballot -size 12]] mm wide"
+puts "the pair is one glyph: [format %.2f [$marks textWidth "\u2611\u2610" \
+    -family ballot -size 12]] mm against [format %.2f [expr {
+        [$marks textWidth "\u2611" -family ballot -size 12]
+            + [$marks textWidth "\u2610" -family ballot -size 12]}]] mm apart"
 if {[catch {$marks text "\u2612" -at {20 30} -family ballot} message]} {
     puts "no such glyph: $message"
 }
@@ -253,11 +269,13 @@ $marks write [file join $out ref-02-type3.pdf]
 $marks destroy
 ```
 
-At most 255 glyphs, addressed as single bytes, so `-direction rtl` is refused as it is for every face addressed through an encoding. Under PDF/A the question of embedding does not arise - the glyphs **are** the file - and such a document passes B, U and A, PDF/UA included.
+At most 255 glyphs, addressed as single bytes, so `-direction rtl` is refused as it is for every face addressed through an encoding. A glyph may stand for a **sequence** of characters rather than for one - `font glyph fam "a\u200Db" -width 900 -script {...}` - which is what an emoji face needs and what `colorFont` below builds on: one drawing, one advance, and a `ToUnicode` entry carrying every code point back. Under PDF/A the question of embedding does not arise - the glyphs **are** the file - and such a document passes B, U and A, PDF/UA included.
 
 ## A colour font: the colour glyphs of a COLR face, drawn as Type 3
 
 `colorFont` is the other road out of the refusal above. A face whose pictures sit in a `COLR`/`CPAL` table leaves the outline of every character it covers empty, so `font embed` refuses it (`TCLPDF FONT OUTLINES`) rather than write a document that is valid, extractable and blank. `colorFont` reads the layers and their palette colours out of the face and draws each of them into a **Type 3** glyph - the section above, built by the package instead of by hand - and returns the alias, which from then on is a family like any other.
+
+**`-chars` takes text, and the package finds the sequences in it.** An emoji face draws a family, a skin-tone variant and a flag as **one** glyph each, and that glyph has no character of its own: it is a `GSUB` ligature over several, under the face's `ccmp` feature. So `-chars "👨‍👩‍👧👍🏽🇩🇪"` gives **three** glyphs, each one glyph with one width, and `pdftotext` gives the whole sequence back - joiners, modifiers and variation selectors included. Nobody takes the string apart beforehand: which characters belong together is a property of the face. A sequence is offered to a `-fallback` chain as one unit, and the longest *registered* sequence wins over the single characters it is made of - a unit longer than one character is only ever offered to a face that holds that very sequence as a glyph, so a plain family cannot jump the chain by being able to spell a stretch of letters.
 
 ```tcl
 # Scaffolding, not tclpdf: a COLR version 0 face assembled in memory, because
@@ -397,9 +415,10 @@ $symbols page add
 $symbols font embed body $ttf              ;# the words: a colour font has none
 
 # THE CALL. The alias comes first and the file after it, the way [image embed]
-# takes them; -chars names the characters to build a glyph for, -palette the
-# palette to draw the layers through (0 by default, and a face may carry
-# several). What comes back is the alias, so it can be handed straight on.
+# takes them; -chars is TEXT and names the characters AND character sequences
+# to build glyphs for, -palette the palette to draw the layers through (0 by
+# default, and a face may carry several). What comes back is the alias, so it
+# can be handed straight on.
 set face [$symbols colorFont marks $facePath -chars "⚠✔" -palette 0]
 puts [$symbols font info $face]     ;# a Type 3 font: no font program, no fsType
 

@@ -1219,19 +1219,34 @@ test type3-9.5 {the package's own font check knows a Type 3 font} -body {
   set missing
 } -result {}
 
-test type3-9.4 {a glyph is drawn for ONE character} -body {
+test type3-9.4 {a glyph is drawn for a character or a sequence, never for nothing} -body {
+  # "ab" IS TAKEN since 2026-08-26 and that is the point of this test rather
+  # than a hole in it: a glyph may stand for a character SEQUENCE, which is
+  # what a colour font needs for the family emoji and the flags. What is
+  # refused is the empty string - it names no character at all and would take
+  # a character code nothing could ever address.
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc font define marks
-  set results {}
-  foreach char {{} ab} {
-    lappend results [catch {$doc font glyph marks $char -width 600 -script {}}]
+  # The CODE of the empty refusal and not only that there was one: the derived
+  # glyph name of an empty text is empty too, so the name check would turn it
+  # away as well - with a message about -name, which the caller never wrote.
+  set results [list [::tclpdfTest::refusal {
+    $doc font glyph marks {} -width 600 -script {}
+  }]]
+  foreach text {ab} {
+    lappend results [catch {$doc font glyph marks $text -width 600 -script {}}]
   }
   lappend results [catch {$doc font glyph marks a -width x -script {}}]
   lappend results [catch {$doc font glyph marks a -width -3 -script {}}]
+  # And the sequence is addressable: the two letters together are ONE glyph
+  # with ONE width, while "a" alone is still a character the font has not got.
+  # The document is in mm, so 600 glyph units at size 10 are 6 pt.
+  lappend results [format %.4f [$doc textWidth "ab" -family marks -size 10]] \
+      [catch {$doc textWidth "a" -family marks -size 10}]
   $doc destroy
   set results
-} -result {1 1 1 1}
+} -result {{TCLPDF TYPE3 GLYPH char} 0 1 1 2.1167 1}
 
 test type3-9.6 {font glyph needs -script, and an empty one is a space} -body {
   # The asymmetry this closes: -bbox is refused when -color text needs it and
@@ -1258,5 +1273,284 @@ test type3-9.6 {font glyph needs -script, and an empty one is a space} -body {
   $doc destroy
   list $missing $empty $glyphs $stream [string match {*-script*} $err]
 } -result {1 0 1 {400 0 d0} 1}
+
+
+# --- a glyph for a SEQUENCE --------------------------------------------------
+#
+# [font glyph] takes one or more code points since 2026-08-26, because a colour
+# font needs it: the family emoji, the skin tones and the flags of an emoji
+# face are single glyphs a GSUB ligature makes out of several characters, and
+# no one of those characters has a glyph of its own to fall back on. What the
+# tests below hold is the three consequences - the character CODE, the glyph
+# NAME and the TEXT - and the rule that decides which sequence a string holds.
+
+# A document with a font of one square glyph per piece, the pieces given as
+# {text width} pairs.
+#
+# THE WIDTHS ARE DISTINCT ON PURPOSE, and they are how the tests below see
+# which glyph was chosen: [Type3Encode] is not a public method and asking it
+# directly would test a road no caller can take, while [textWidth] is exactly
+# the road every caller does take and goes through it.
+proc type3Sequences {args} {
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define marks -ascent 800
+  foreach {piece width} $args {
+    $doc font glyph marks $piece -width $width -script {
+      $doc rect -at {100 100} -size {500 500} -fill {0.2 0.4 0.8}
+    }
+  }
+  return $doc
+}
+
+test type3-10.1 {a sequence is one glyph with one code, one name, one width} -body {
+  # "ab" is two characters and ONE glyph: one character code, one entry in
+  # /Widths, one advance. The name is the component names joined by an
+  # underscore, which is what a real face calls its ligature glyphs.
+  set doc [type3Sequences a 700 ab 700]
+  set entry [dict get [$doc state fonts] marks]
+  set codes [dict get $entry codes]
+  set names [lmap code [lsort -integer [dict keys [dict get $entry glyphs]]] {
+    dict get $entry glyphs $code name
+  }]
+  set widths [list [$doc textWidth a -family marks -size 100] \
+      [$doc textWidth ab -family marks -size 100]]
+  $doc destroy
+  list [dict size $codes] [lsort $names] $widths
+} -result {2 {uni0061 uni0061_uni0062} {70.0 70.0}}
+
+test type3-10.2 {a sequence takes a free code, a character its own} -body {
+  # "a" is 97 and the encoding has room for it, so the string in the content
+  # stream stays readable - "(a) Tj", exactly as 9.6.4 has it. A sequence has
+  # no code point at all and takes the highest free code instead.
+  # THE ORDER MATTERS FOR THE MEASUREMENT and not for the answer: in the first
+  # font "a" takes 97 before "ab" is asked for, so a reader that took the code
+  # point of the FIRST character would land on a code already in use and fall
+  # through to the same 255 by accident. The second font asks for the sequence
+  # alone, where the two roads part.
+  set doc [type3Sequences a 700 ab 700]
+  set both [dict get [$doc state fonts] marks codes]
+  $doc destroy
+  set doc [type3Sequences ab 700]
+  set alone [dict get [$doc state fonts] marks codes]
+  $doc destroy
+  list [dict get $both a] [dict get $both ab] [dict get $alone ab]
+} -result {97 255 255}
+
+test type3-10.3 {the LONGEST sequence at a position wins} -body {
+  # The only rule that can be right: a font holding both "a" and "ab" would
+  # otherwise draw the "a" and then look for a glyph for the "b" it has not
+  # got. Measured through the codes, which is what is written into the stream.
+  # 100, 700 and 1300 glyph units, so that every answer is a different width
+  # and the numbers say which glyph was taken rather than only that one was.
+  set doc [type3Sequences a 100 ab 700 abc 1300]
+  set answers [lmap text {a ab abc aab} {
+    $doc textWidth $text -family marks -size 100
+  }]
+  $doc destroy
+  set answers
+} -result {10.0 70.0 130.0 80.0}
+
+test type3-10.4 {the whole sequence extracts, through one bfchar} -body {
+  # A bfchar may map one code to SEVERAL UTF-16 units (9.10.3). Without that
+  # a sequence would extract as one unknown character and the text would stop
+  # being copyable - which no validator anywhere reports.
+  set doc [type3Sequences ab 700]
+  $doc font -family marks -size 20
+  $doc text ab -at {20 30}
+  set path [::tclpdfTest::scratch type3-10.4.pdf]
+  $doc write $path
+  set map [join [::tclpdfTest::objects $doc beginbfchar] \n]
+  $doc destroy
+  file delete $path
+  lindex [regexp -inline {beginbfchar\s+<[0-9A-F]+> <([0-9A-F]+)>} $map] 1
+} -result 00610062
+
+test type3-10.5 {pdftotext gives the sequence back} -constraints pdftotext -body {
+  set doc [type3Sequences ab 700]
+  $doc font -family marks -size 20
+  $doc text ab -at {20 30}
+  set path [::tclpdfTest::scratch type3-10.5.pdf]
+  $doc write $path
+  $doc destroy
+  set text [string trim [exec pdftotext -enc UTF-8 $path -]]
+  file delete $path
+  set text
+} -result ab
+
+test type3-10.6 {a name longer than a PDF name holds is refused} -body {
+  # 127 bytes (ISO 32000-1, Annex C.2), and a sequence of two dozen
+  # components is the one thing here that can reach it. Refused rather than
+  # shortened: a truncated name may collide with the next one, and a CharProcs
+  # key names ONE glyph. -name is the way past it.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font define marks -ascent 800
+  set long [string repeat abcdefghij 3]
+  set code [::tclpdfTest::refusal {
+    $doc font glyph marks $long -width 700 -script {}
+  }]
+  set short [$doc font glyph marks $long -width 700 -name manyLetters -script {}]
+  $doc destroy
+  list $code $short
+} -result {{TCLPDF TYPE3 GLYPH name} manyLetters}
+
+test type3-10.7 {the fallback chain offers the sequence as one unit} \
+    -constraints haveTrueType -body {
+  # THE HALF THAT WOULD HAVE BEEN MISSED. The chain decides per character
+  # which face sets what; a sequence has to be offered as ONE piece or a font
+  # that draws "ab" as one glyph never gets asked for it, because the face in
+  # front of it has an "a". Read off the Tf operators of the stream.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font embed body $::trueTypeFace
+  $doc font define marks -ascent 800
+  $doc font glyph marks ab -width 700 -script {
+    $doc rect -at {100 100} -size {500 500} -fill {0.2 0.4 0.8}
+  }
+  $doc font -family body -size 12 -fallback marks
+  $doc text "x ab x" -at {20 30}
+  set faces {}
+  foreach line [split [::tclpdfTest::content $doc] \n] {
+    if {[regexp {^(/\S+) [0-9.]+ Tf$} $line -> name]} {
+      lappend faces $name
+    }
+  }
+  $doc destroy
+  set faces
+} -result {/FEbody /T3marks /FEbody}
+
+test type3-10.8 {the name limit counts BYTES, not characters} -body {
+  # ISO 32000-1, Annex C.2 puts the limit at 127 BYTES, and a name object is
+  # "a sequence of any characters (8-bit values) except null" (7.3.5) - a byte
+  # string, with the #xx form the way ONE such byte is written where it is not
+  # printable ASCII. So the count is over the UTF-8 of the name.
+  #
+  # Counted with [string length] until 2026-08-26, a -name of a hundred
+  # umlauts passed as "a hundred characters" and went into the file as two
+  # hundred bytes. The four cases below straddle the limit from both sides in
+  # both alphabets: 127 ASCII passes and 128 does not, 63 umlauts (126 bytes)
+  # passes and 64 (128 bytes) does not.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font define marks -ascent 800
+  set answers {}
+  foreach {char count} [list a 127 a 128 ä 63 ä 64] {
+    set name [string repeat $char $count]
+    lappend answers [catch {
+      $doc font glyph marks [format %c [expr {0x2600 + [llength $answers]}]] \
+          -width 700 -name $name -script {}
+    }]
+  }
+  $doc destroy
+  set answers
+} -result {0 1 0 1}
+
+test type3-10.9 {and the refusal says how many bytes it counted} -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font define marks -ascent 800
+  set message {}
+  catch {
+    $doc font glyph marks A -width 700 -name [string repeat ä 100] \
+        -script {}
+  } message
+  $doc destroy
+  list [string match {*200 bytes long*} $message] \
+      [string match {*Annex C.2*} $message]
+} -result {1 1}
+
+test type3-10.10 {a character that is never drawn is dropped BEFORE the match} \
+    -body {
+  # The manual promises a soft hyphen "stays invisible ... in the drawing and
+  # in the measurement alike". Trying the sequences first broke that for a
+  # font that happens to hold a glyph for U+00AD: the longest match found it
+  # and the mark was drawn AND measured - "A-B" came out 74.08 points wide
+  # against 42.33 for "AB". The three characters are dropped first now, as
+  # they were before sequences existed, so a glyph registered for one of them
+  # is unreachable - which is the promise rather than an oversight.
+  set doc [type3Sequences A 600 B 600 ­ 900]
+  set widths [list [$doc textWidth A­B -family marks -size 100] \
+      [$doc textWidth AB -family marks -size 100]]
+  $doc destroy
+  list [expr {[lindex $widths 0] == [lindex $widths 1]}] $widths
+} -result {1 {120.0 120.0}}
+
+test type3-10.11 {but one INSIDE a registered sequence is part of it} -body {
+  # The other side of 10.10, and the reason the drop cannot simply strip the
+  # three out of the string first: what is dropped is a character standing at
+  # the START of a unit, and a unit is looked for from the first character
+  # that is not one of the three. So a soft hyphen in the MIDDLE of a
+  # registered sequence is matched whole with it and never reaches the test at
+  # all - here "A<shy>B" is one glyph of 900 units, not two of 600.
+  set doc [type3Sequences A 600 B 600 A­B 900]
+  set widths [list [$doc textWidth A­B -family marks -size 100] \
+      [$doc textWidth AB -family marks -size 100]]
+  $doc destroy
+  set widths
+} -result {90.0 120.0}
+
+test type3-10.12 {a glyph script that defines a glyph does not lose it} -body {
+  # THE CODE IS HANDED OUT AFTER THE SCRIPT HAS RUN, against the register the
+  # script may have added to. It was handed out before until 2026-08-26, and a
+  # script that calls [font glyph] itself - which is how one glyph is built
+  # out of another - then got the same free code as its caller: measured with
+  # two symbols above U+00FF, both took 255, the outer glyph overwrote the
+  # inner one in /CharProcs, and the register said "cloud 255 sun 255" for a
+  # font that held one glyph.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks ☀ -width 500 -script {
+    $doc font glyph marks ☁ -width 500 -script {
+      $doc rect -at {0 0} -size {500 500} -fill black
+    }
+    $doc rect -at {0 0} -size {500 500} -fill black
+  }
+  set entry [dict get [$doc state fonts] marks]
+  set codes [dict get $entry codes]
+  set names [lsort [lmap {code record} [dict get $entry glyphs] {
+    dict get $record name
+  }]]
+  $doc destroy
+  list [dict size $codes] [llength [lsort -unique [dict values $codes]]] \
+      [dict size [dict get $entry glyphs]] $names
+} -result {2 2 2 {uni2600 uni2601}}
+
+test type3-10.13 {and a name the script took is refused for the caller} -body {
+  # The name check has the same freshness for the same reason: a nested glyph
+  # may have taken the name, and a CharProcs key names ONE glyph.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font define marks -ascent 800
+  set code [::tclpdfTest::refusal {
+    $doc font glyph marks ☀ -width 500 -name taken -script {
+      $doc font glyph marks ☁ -width 500 -name taken -script {}
+    }
+  }]
+  $doc destroy
+  lrange $code 0 2
+} -result {TCLPDF TYPE3 GLYPH}
+
+test type3-10.14 {a refusal at a variation selector says what a selector is} \
+    -body {
+  # The one character a caller can be refused for without knowing they wrote
+  # it: "✅" and "✅️" look identical in every editor there is,
+  # editors and databases put the selector in, and a font built for the one
+  # refuses the other with "no glyph for U+FE0F" - a character the caller
+  # cannot see. So the message says what a selector IS and how to register the
+  # spelling it belongs to.
+  set doc [type3Sequences ✅ 700]
+  set message {}
+  catch {$doc textWidth ✅️ -family marks -size 10} message
+  set plain {}
+  catch {$doc textWidth ⾀ -family marks -size 10} plain
+  $doc destroy
+  list [string match {*U+FE0F*} $message] \
+      [string match {*variation selector*} $message] \
+      [string match {*colorFont -chars*} $message] \
+      [string match {*variation selector*} $plain] \
+      [string match {*draw one with*} $plain]
+} -result {1 1 1 0 1}
 
 cleanupTests

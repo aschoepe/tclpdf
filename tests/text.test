@@ -2043,6 +2043,55 @@ test text-19.17 {a character that occurs twice is set from the same face both ti
       [expr {abs($measured - $drawn) < 0.0001}]
 } -result {{/FEbody /FEjp /FEbody /FEjp /FEbody} {2 1 2 6} 1}
 
+test text-19.18 {a longer unit is offered only to a face that REGISTERED it} \
+    -constraints haveJpFace -body {
+  # THE CHAIN ORDER IS THE PROMISE, and a sequence must not be able to break
+  # it. A Type 3 font with a sequence in it raises the reach of the chain, and
+  # while every unit of length reach..1 was offered to every face - the walk
+  # of 2026-08-26 - a STANDARD face could answer yes to a stretch it merely
+  # happens to be able to spell: [afm encode] takes a whole string, so
+  # Helvetica said yes to "He" at length two and beat the embedded face in
+  # front of it, which would have won at length one. Measured then: "Hello
+  # world" came out of Helvetica entire, "(Hello worl) Tj" under the wrong
+  # face, and 20.9338 mm instead of 23.7319 mm.
+  #
+  # So the line has to be set by the family alone, as it is with no chain at
+  # all, and it has to MEASURE the same either way.
+  set doc [textChainDocument]
+  # The Type 3 font holds a SEQUENCE, which is what raises the reach of the
+  # chain above one and puts the walk on the road this test is about.
+  $doc font define marks -ascent 800
+  $doc font glyph marks "ab" -width 700 -script {
+    $doc rect -at {100 100} -size {500 500} -fill black
+  }
+  $doc font -family body -size 12 -fallback {Helvetica marks}
+  set chained [$doc textWidth "Hello world"]
+  set plain [$doc textWidth "Hello world" -fallback {}]
+  $doc text "Hello world" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [textChainFaces $content] [expr {abs($chained - $plain) < 0.0001}]
+} -result {/FEbody 1}
+
+test text-19.19 {and the registered sequence still wins where it exists} \
+    -constraints haveJpFace -body {
+  # The control for 19.18: it must not pass because sequences stopped being
+  # offered at all. The Type 3 font holds "ab" as ONE glyph and the family has
+  # both letters of its own, so the chain order alone would give the whole
+  # line to the family - and the sequence is the one thing that may overrule
+  # it.
+  set doc [textChainDocument]
+  $doc font define marks -ascent 800
+  $doc font glyph marks "ab" -width 700 -script {
+    $doc rect -at {100 100} -size {500 500} -fill black
+  }
+  $doc font -family body -size 12 -fallback marks
+  $doc text "x ab x" -at {20 40}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  textChainFaces $content
+} -result {/FEbody /T3marks /FEbody}
+
 
 # -- GPOS mark attachment in the stream --------------------------------------
 #

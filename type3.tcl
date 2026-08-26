@@ -42,6 +42,39 @@
 # were named by the caller would need all three said by hand, and any two of
 # them could then disagree.
 #
+# AND A SEQUENCE IS A CHARACTER HERE. [font glyph] takes one or more code
+# points, and a glyph drawn for several of them is addressed by ONE character
+# code and advances ONCE - which is what a colour font needs and what nothing
+# else in this package could give it: the family emoji, the skin tones and the
+# flags of an emoji face are single glyphs a GSUB ligature makes out of a
+# handful of characters, and no one of those characters has a glyph of its own
+# to fall back on (colorFont.tcl, [ColorFontUnits]).
+#
+# Three things follow from it, and each of them is a decision:
+#
+#   THE CODE. A single character keeps its own code point where the encoding
+#   has room, as it always did. A sequence has no code point of its own and
+#   takes the highest free code, exactly as a character above 255 does.
+#
+#   THE NAME. The component names joined by an underscore - u1F468_u200D_u1F469
+#   - which is the convention a ligature glyph is named by in a real face.
+#   Longer than a PDF name may be (127 bytes, ISO 32000-1, Annex C.2) it is
+#   refused rather than truncated, and -name is the way past it.
+#
+#   THE TEXT. A bfchar may map one code to SEVERAL UTF-16 units (9.10.3), so
+#   the code of a sequence carries the WHOLE sequence back - the zero width
+#   joiners and the skin tone modifiers included - and pdftotext gives the
+#   caller what they wrote. That road was already there for the ligatures of
+#   an embedded face; nothing new is written for it.
+#
+# WHICH SEQUENCE A STRING HOLDS is decided by [Type3Encode] and by the LONGEST
+# MATCH: at every position the longest registered sequence wins. That is the
+# only rule that can be right - a font holding both an emoji and the family
+# that begins with it would otherwise draw the man and then refuse the joiner -
+# and it costs nothing where a font holds single characters alone, which is
+# every Type 3 font written by hand: the longest sequence is then one and the
+# walk is the dict lookup per character it was.
+#
 # THE SCRIPT draws exactly as a form XObject's script draws: {0 0} is the TOP
 # LEFT of the glyph's frame, y grows downwards, and every drawing method works
 # unchanged, because the canvas stack in the core redirects them (see
@@ -86,6 +119,10 @@ package require tclpdf::pdfObj 1.0-
 package require tclpdf::option 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
+# For [::tclpdf::text::selectorHint], the one sentence a glyph refusal at a
+# variation selector carries. A Type 3 font exists in order to be set, so the
+# text module is loaded by the time one is used anyway.
+package require tclpdf::text 1.0-
 
 namespace eval ::tclpdf::type3 {}
 
@@ -183,8 +220,13 @@ oo::define ::tclpdf::document::document {
       set bbox [my Type3Box $bbox $ascent "-bbox of font define"]
     }
     set fonts [my state fonts]
+    # REACH is the length of the longest sequence this font holds, in code
+    # points, and it is kept rather than worked out because [Type3Encode] asks
+    # for it once per character of every string measured and drawn. One until a
+    # glyph says otherwise: a font of single characters is walked exactly as it
+    # was before sequences existed.
     dict set fonts $alias [dict create kind type3 matrix $matrix \
-        ascent $ascent bbox $bbox glyphs {} codes {} number {}]
+        ascent $ascent bbox $bbox glyphs {} codes {} reach 1 number {}]
     my state fonts $fonts
     if {[my state type3Hooked] eq {}} {
       my state type3Hooked 1
@@ -197,12 +239,15 @@ oo::define ::tclpdf::document::document {
     return $alias
   }
 
-  # $doc font glyph <alias> <char> -width n -script {...}
+  # $doc font glyph <alias> <text> -width n -script {...}
   #                                ?-name g? ?-color own|text? ?-bbox {x y w h}?
+  #
+  # TEXT is the character the glyph is drawn for, or the character SEQUENCE -
+  # see the head of this file.
   #
   # LEVEL is the caller's frame, handed down from [font] - see the head of
   # this file.
-  method Type3Glyph {level alias char args} {
+  method Type3Glyph {level alias text args} {
     set options [::tclpdf::option parse \
         {width {} script {} name {} color own bbox {}} $args "font glyph"]
     set fonts [my state fonts]
@@ -218,25 +263,31 @@ oo::define ::tclpdf::document::document {
           glyphs come out of its font file - \[font glyph\] draws the glyphs\
           of a Type 3 font, which is what \[font define\] makes"
     }
-    # ONE CHARACTER, counted in code points and not in string elements.
-    # [string length] counts the second under Tcl 8.6: a character beyond the
-    # BMP is stored there as a surrogate pair and measures 2, so this used to
-    # refuse under 8.6 what it took under 9 - measured on 2026-08-21 against
-    # the 1499 characters of a colour emoji face, 1314 of which lie beyond the
-    # BMP. [split {}] counts code points under both, measured with 8.6.18 and
-    # 9.0.4: it hands the pair back as ONE element, and [scan %c] reads the
-    # real code point out of it - 128512 for U+1F600 either way, which is what
-    # the character code, the glyph name and the ToUnicode map below are built
-    # from.
-    if {[llength [split $char {}]] != 1} {
+    # COUNTED IN CODE POINTS and not in string elements. [string length]
+    # counts the second under Tcl 8.6: a character beyond the BMP is stored
+    # there as a surrogate pair and measures 2, so a count made with it used
+    # to refuse under 8.6 what it took under 9 - measured on 2026-08-21
+    # against the 1499 characters of a colour emoji face, 1314 of which lie
+    # beyond the BMP. [split {}] counts code points under both, measured with
+    # 8.6.18 and 9.0.4: it hands the pair back as ONE element, and [scan %c]
+    # reads the real code point out of it - 128512 for U+1F600 either way,
+    # which is what the character code, the glyph name and the ToUnicode map
+    # below are built from.
+    #
+    # ONE OR MORE of them: a sequence is a glyph here, see the head of this
+    # file. What is refused is the empty string, which names no character at
+    # all and would take a character code nothing could ever address.
+    set chars [split $text {}]
+    if {![llength $chars]} {
       return -code error -errorcode [list TCLPDF TYPE3 GLYPH char] \
-          "tclpdf: \[font glyph\] takes the ONE character the\
-          glyph is drawn for, not \"$char\""
+          "tclpdf: \[font glyph\] takes the character the glyph is drawn\
+          for, or the sequence of characters it stands for - not an empty\
+          string"
     }
-    if {[dict exists $entry codes $char]} {
-      return -code error -errorcode [list TCLPDF TYPE3 GLYPH $char] \
+    if {[dict exists $entry codes $text]} {
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH $text] \
           "tclpdf: font \"$alias\" already has a glyph for\
-          [my Type3Codepoint $char]"
+          [my Type3Codepoint $text]"
     }
     set width [dict get $options width]
     if {![string is double -strict $width] || $width < 0} {
@@ -289,13 +340,17 @@ oo::define ::tclpdf::document::document {
     }
     set name [dict get $options name]
     if {$name eq {}} {
-      # The Adobe convention: a glyph standing for U+0041 is called uni0041.
-      # Chosen over a serial number because it survives the file being read
-      # by something that has no ToUnicode map - and because a human opening
-      # the PDF can see what the glyph is for.
-      set code [scan $char %c]
-      set name [expr {$code > 0xFFFF ? [format u%05X $code]
-          : [format uni%04X $code]}]
+      # The Adobe convention: a glyph standing for U+0041 is called uni0041,
+      # one beyond the BMP uXXXXX, and a glyph standing for several is their
+      # names joined by an underscore - which is what a face calls its own
+      # ligature glyphs. Chosen over a serial number because it survives the
+      # file being read by something that has no ToUnicode map, and because a
+      # human opening the PDF can see what the glyph is for.
+      set name [join [lmap char $chars {
+        set point [scan $char %c]
+        expr {$point > 0xFFFF ? [format u%05X $point]
+            : [format uni%04X $point]}
+      }] _]
     }
     if {[string length $name] == 0 || [regexp {[\s()<>\[\]{}/%]} $name]} {
       return -code error -errorcode [list TCLPDF TYPE3 GLYPH name] \
@@ -303,6 +358,69 @@ oo::define ::tclpdf::document::document {
           cannot be empty or carry white space or a PDF delimiter, not\
           \"$name\""
     }
+    # A PDF name holds at most 127 BYTES (ISO 32000-1, Annex C.2), and a
+    # sequence of a dozen components is the one thing here that can reach it.
+    # Refused rather than shortened: a truncated name may collide with the
+    # next one, and a CharProcs key names ONE glyph.
+    #
+    # COUNTED IN BYTES AND NOT IN CHARACTERS. A name object is "a sequence of
+    # any characters (8-bit values) except null" (7.3.5) - a byte string, and
+    # the #xx form is how ONE such byte is written where it is not printable
+    # ASCII, not a byte of its own. So what the limit counts is the UTF-8 of
+    # the name, which is what [pdfObj name] escapes byte by byte. Counted with
+    # [string length] until 2026-08-26, a -name of a hundred umlauts passed as
+    # "a hundred characters" and went into the file as two hundred bytes -
+    # over the limit, and written out as six hundred escape characters.
+    set bytes [string length [encoding convertto utf-8 $name]]
+    if {$bytes > 127} {
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH name] \
+          "tclpdf: the glyph name built for [my Type3Codepoint $text] is\
+          $bytes bytes long and a PDF name holds at most\
+          127 (ISO 32000-1, Annex C.2) - state a shorter one with -name"
+    }
+    my Type3Named $alias $entry $name
+    set stream [my Type3Stream $level $alias $entry $width $bbox \
+        [dict get $options color] [dict get $options script]]
+    # Read back rather than kept from above: the script may have defined
+    # further glyphs of its own, and writing the entry this method started
+    # with would drop them.
+    #
+    # AND EVERYTHING THAT DEPENDS ON WHAT THE FONT HOLDS IS DECIDED FROM HERE
+    # ON, not from the entry this call began with. The character code was
+    # handed out before the script ran until 2026-08-26, and a script that
+    # calls [font glyph] itself - which is how one glyph is built out of
+    # another - then got the same free code as its caller: measured with two
+    # symbols above U+00FF, both took 255, the outer glyph overwrote the inner
+    # one in /CharProcs and the register said "cloud 255 sun 255" for a font
+    # that held a single glyph. The name check has the same freshness for the
+    # same reason - a nested glyph may have taken the name.
+    set fonts [my state fonts]
+    set entry [dict get $fonts $alias]
+    my Type3Named $alias $entry $name
+    if {[dict exists $entry codes $text]} {
+      return -code error -errorcode [list TCLPDF TYPE3 GLYPH $text] \
+          "tclpdf: font \"$alias\" already has a glyph for\
+          [my Type3Codepoint $text]"
+    }
+    set code [my Type3Code $alias $entry $text]
+    dict set entry glyphs $code [dict create name $name width $width \
+        chars $chars stream $stream]
+    dict set entry codes $text $code
+    if {[llength $chars] > [dict get $entry reach]} {
+      dict set entry reach [llength $chars]
+    }
+    dict set fonts $alias $entry
+    my state fonts $fonts
+    return $name
+  }
+
+  # Refuse a glyph name the font already carries.
+  #
+  # A method rather than a loop written twice, because it is asked twice: once
+  # before the glyph script runs, so that the ordinary collision is refused
+  # without drawing anything, and once after it against the register the
+  # script may have added to.
+  method Type3Named {alias entry name} {
     foreach {other record} [dict get $entry glyphs] {
       if {[dict get $record name] eq $name} {
         return -code error -errorcode [list TCLPDF TYPE3 GLYPH $name] \
@@ -311,20 +429,7 @@ oo::define ::tclpdf::document::document {
             Table 110)"
       }
     }
-    set code [my Type3Code $alias $entry $char]
-    set stream [my Type3Stream $level $alias $entry $width $bbox \
-        [dict get $options color] [dict get $options script]]
-    # Read back rather than kept from above: the script may have defined
-    # further glyphs of its own, and writing the entry this method started
-    # with would drop them.
-    set fonts [my state fonts]
-    set entry [dict get $fonts $alias]
-    dict set entry glyphs $code [dict create name $name width $width \
-        char $char stream $stream]
-    dict set entry codes $char $code
-    dict set fonts $alias $entry
-    my state fonts $fonts
-    return $name
+    return
   }
 
   # The character code a glyph is addressed by.
@@ -336,14 +441,22 @@ oo::define ::tclpdf::document::document {
   # an encoding has 256 slots and a symbol at U+26A0 has to sit in one of them
   # whatever its code point is. /ToUnicode carries the character back either
   # way, so nothing downstream depends on which of the two roads a glyph took.
-  method Type3Code {alias entry char} {
+  #
+  # A SEQUENCE has no code point of its own and therefore takes the second
+  # road always. The codes are handed out from the top down, so the glyphs of
+  # a colour font - which are nearly all of them sequences or characters far
+  # above 255 - fill 255 downwards and leave the low codes to whatever the
+  # caller may still want spelled readably.
+  method Type3Code {alias entry text} {
     set used {}
     foreach {code record} [dict get $entry glyphs] {
       dict set used $code 1
     }
-    set point [scan $char %c]
-    if {$point >= 1 && $point <= 255 && ![dict exists $used $point]} {
-      return $point
+    if {[llength [split $text {}]] == 1} {
+      set point [scan $text %c]
+      if {$point >= 1 && $point <= 255 && ![dict exists $used $point]} {
+        return $point
+      }
     }
     for {set code 255} {$code >= 1} {incr code -1} {
       if {![dict exists $used $code]} {
@@ -489,32 +602,86 @@ oo::define ::tclpdf::document::document {
   # A character the font has no glyph for is an error carrying the same
   # -errorcode as every other missing glyph, so one handler covers a standard
   # face, an embedded face and this.
+  # THE LONGEST SEQUENCE WINS at every position, and the walk is otherwise the
+  # one it was: with a font of single characters the longest sequence is one,
+  # the inner loop runs once, and this is the dict lookup per character it has
+  # always been.
   method Type3Encode {alias text} {
-    set glyphs [dict get [my state fonts] $alias codes]
+    set entry [dict get [my state fonts] $alias]
+    set glyphs [dict get $entry codes]
+    set reach [dict get $entry reach]
+    set chars [split $text {}]
+    set count [llength $chars]
     set codes {}
     set position 0
-    foreach char [split $text {}] {
+    while {$position < $count} {
       # The three characters that never reach a font: a soft hyphen is an
       # offer to break and the breaker has already put a real hyphen where it
       # took one, a zero width space is a break opportunity, and a byte order
       # mark is what a file read without stripping it carries. Same rule as
       # afm.tcl and font.tcl - a face is not asked for a glyph it should
-      # never draw.
+      # never draw. The zero width JOINER is not among them and never was - it
+      # is what holds a family emoji together.
+      #
+      # DROPPED BEFORE THE LONGEST MATCH IS TRIED, which is where it belongs
+      # and where it stood before 2026-08-26. Trying the sequences first let a
+      # Type 3 font that happens to hold a glyph for U+00AD draw and MEASURE
+      # it: the manual promises a soft hyphen "stays invisible ... in the
+      # drawing and in the measurement alike", and "A-B" came out 74.08 points
+      # wide against 42.33 for "AB". A glyph registered for one of the three
+      # is therefore unreachable, exactly as it was before, and that is the
+      # promise rather than an oversight.
+      #
+      # THE SEQUENCES DO NOT BREAK ON IT: what is dropped is a character that
+      # stands at the START of a unit, and a unit is looked for from the first
+      # character that is not one of the three. So one of the three INSIDE a
+      # registered sequence is part of that sequence and stays - it is matched
+      # whole, and never reaches this test at all.
+      set char [lindex $chars $position]
       if {$char in "­ ​ ﻿"} {
         incr position
         continue
       }
-      if {![dict exists $glyphs $char]} {
-        set u [my Type3Codepoint $char]
-        return -code error \
-            -errorcode [list TCLPDF FONT GLYPH $u $position $alias] \
-            "tclpdf: the Type 3 font \"$alias\" has no glyph for character $u\
-            (position $position) - draw one with \[font glyph\]"
+      set found 0
+      set longest [expr {min($reach, $count - $position)}]
+      for {set length $longest} {$length >= 1} {incr length -1} {
+        set piece [join [lrange $chars $position \
+            [expr {$position + $length - 1}]] {}]
+        if {[dict exists $glyphs $piece]} {
+          lappend codes [dict get $glyphs $piece]
+          incr position $length
+          set found 1
+          break
+        }
       }
-      lappend codes [dict get $glyphs $char]
-      incr position
+      if {$found} {
+        continue
+      }
+      set u [my Type3Codepoint $char]
+      # A variation selector gets its own advice: it is the character a caller
+      # can be refused for without knowing they wrote it - see
+      # [::tclpdf::text::selectorHint].
+      set hint [::tclpdf::text::selectorHint [scan $char %c]]
+      if {$hint eq {}} {
+        set hint " - draw one with \[font glyph\]"
+      }
+      return -code error \
+          -errorcode [list TCLPDF FONT GLYPH $u $position $alias] \
+          "tclpdf: the Type 3 font \"$alias\" has no glyph for character $u\
+          (position $position)$hint"
     }
     return $codes
+  }
+
+  # How many code points the longest sequence of this font holds, 1 for a font
+  # that holds single characters alone.
+  #
+  # Asked by text.tcl, where the fallback chain decides which face sets which
+  # character: a sequence is ONE unit and has to be offered to the chain as
+  # one, or the family emoji is taken apart into characters no face has. A
+  # chain whose every face answers 1 is walked exactly as it was.
+  method Type3Reach {alias} {
+    return [dict get [my state fonts] $alias reach]
   }
 
   # The width of a string in points, and how many glyphs it is.
@@ -561,9 +728,13 @@ oo::define ::tclpdf::document::document {
         characters [dict size [dict get $entry codes]]]
   }
 
-  # U+XXXX, the spelling the error code contract uses.
-  method Type3Codepoint {char} {
-    return U+[format %04X [scan $char %c]]
+  # U+XXXX, the spelling the error code contract uses - and one per code point
+  # for a sequence, separated by a space, so that "U+1F468 U+200D U+1F469"
+  # says which characters a refusal is about rather than only the first.
+  method Type3Codepoint {text} {
+    return [join [lmap char [split $text {}] {
+      format U+%04X [scan $char %c]
+    }]]
   }
 
   # -- writing ------------------------------------------------------------
@@ -629,9 +800,18 @@ oo::define ::tclpdf::document::document {
     # are its own invention: the codes mean nothing outside this one font.
     # Written unconditionally, for the same reason it is written for the
     # embedded faces.
+    #
+    # A bfchar may map one code to SEVERAL UTF-16 units (9.10.3), which is
+    # what makes a sequence extract as the sequence: the code of the family
+    # emoji carries all seven of its code points back, joiners included, and
+    # pdftotext gives the caller the string they wrote. [FontToUnicode] takes
+    # a LIST of code points per code and has done since the ligatures of an
+    # embedded face needed one.
     set used {}
     foreach code $codes {
-      dict set used $code [list [scan [dict get $glyphs $code char] %c]]
+      dict set used $code [lmap char [dict get $glyphs $code chars] {
+        scan $char %c
+      }]
     }
     set toUnicode [my streamObject {} [my FontToUnicode $used 1] \
         [my reservation type3.$alias.toUnicode]]
@@ -767,4 +947,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::type3 1.2
+package provide tclpdf::type3 1.3

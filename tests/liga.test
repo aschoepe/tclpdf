@@ -26,9 +26,15 @@ set assets [file join [file dirname [file dirname [file normalize [info script]]
     examples assets fonts]
 set fontLiga [file join $assets DejaVuSans.ttf]
 set fontNone [file join $assets google Niconne-Regular.ttf]
+# The only kind of face in this tree that carries "clig": the HelveticaLTStd
+# family, four faces, one chaining lookup each and no "liga" at all. Measured
+# 2026-08-26 over the 77 faces in examples/assets/fonts.
+set fontClig [file join $assets adobe-standard-14 HelveticaLTStd-Roman.otf]
 
 testConstraint haveLiga [file exists $fontLiga]
 testConstraint haveNone [file exists $fontNone]
+testConstraint haveClig [file exists $fontClig]
+testConstraint haveHbShape [expr {[auto_execok hb-shape] ne {}}]
 
 # A run as font.tcl builds it, without the ligatures applied yet. The building
 # itself is in helper.tcl - forms.test needs the same run.
@@ -306,5 +312,101 @@ test liga-3.10 {a standard face still counts per character} -body {
 # The lookups that SKIP glyphs while they match, and the run they leave
 # behind, are tested in gsubApply.test: the walk over the visible positions is
 # that module's and is shared with the cursive forms.
+
+
+# --- the contextual ligatures ------------------------------------------------
+#
+# "clig" came in on 2026-08-26 and what let it in is a lookup type: a
+# contextual ligature is a ligature with a rule about its surroundings, written
+# as a chaining lookup that names an ordinary one, and those were not read
+# before the contextual machine existed. The oracle is hb-shape, as it is for
+# the cursive forms: what a browser sets with this face is what this package
+# has to set.
+
+# The glyph numbers this package produces for a word, ligatures and all.
+proc ligaGlyphs {path text} {
+  set parsed [::tclpdf::sfnt read $path]
+  set glyphs {}
+  foreach entry [::tclpdf::liga apply [::tclpdf::liga build $parsed] \
+      [ligaRun $parsed $text]] {
+    lappend glyphs [lindex $entry 0]
+  }
+  return $glyphs
+}
+
+# The same word through hb-shape, with everything this package does NOT read
+# switched off - so that what is compared is the two readings of liga and
+# clig and not a list of features nobody claimed.
+proc ligaHarfBuzz {path text {features -ccmp,-locl,-rlig,-calt,-rclt}} {
+  set output [exec hb-shape --no-clusters --no-positions --no-glyph-names \
+      --features=$features $path $text]
+  return [split [string trim $output {[]}] |]
+}
+
+test liga-5.1 {a face whose only ligature feature is clig} -constraints haveClig -body {
+  # Four subtables in one chaining lookup, and no "liga" at all - so before
+  # this feature was read the face substituted nothing whatever.
+  set parsed [::tclpdf::sfnt read $::fontClig]
+  set gsub [::tclpdf::sfnt table $parsed GSUB]
+  set gdef [::tclpdf::gdef build $parsed]
+  list [llength [::tclpdf::otLayout featureLookups $gsub liga]] \
+      [llength [::tclpdf::otLayout featureLookups $gsub clig]] \
+      [llength [::tclpdf::liga build $parsed]]
+} -result {0 1 1}
+
+test liga-5.2 {fi and fl are drawn as the ligature the face has} \
+    -constraints {haveClig haveHbShape} -body {
+  # And the CONTEXT is what makes it a contextual ligature: two of the four
+  # subtables match an f that stands after another f and substitute nothing,
+  # so "ffi" keeps its letters where "fi" does not. Compared against hb-shape
+  # glyph by glyph rather than asserted, because a rule read the wrong way
+  # round would still produce a plausible-looking answer.
+  set answers {}
+  foreach word {fi fl ffi ffl fj} {
+    set ours [ligaGlyphs $::fontClig $word]
+    lappend answers [llength $ours] \
+        [expr {$ours eq [ligaHarfBuzz $::fontClig $word]}]
+  }
+  set answers
+} -result {1 1 1 1 3 1 3 1 2 1}
+
+test liga-5.3 {the ligature carries both characters back} \
+    -constraints haveClig -body {
+  # The same rule every ligature obeys: the glyph stands for all the
+  # characters it was made of, or the word stops being copyable. A contextual
+  # ligature is reached through a chaining lookup that names an ordinary one,
+  # so the bookkeeping happens one level down - which is exactly why it is
+  # worth a test of its own.
+  set parsed [::tclpdf::sfnt read $::fontClig]
+  set run [::tclpdf::liga apply [::tclpdf::liga build $parsed] \
+      [ligaRun $parsed fi]]
+  lmap entry $run {lindex $entry 1}
+} -result {{102 105}}
+
+test liga-5.4 {-ligatures 0 switches BOTH off} -constraints haveClig -body {
+  # The registry gives liga and clig the same default and the same job, and a
+  # caller who says "set this line without ligatures" means the letters are to
+  # stand apart - leaving the contextual half on would leave an fi in the
+  # middle of it. Measured through the glyph count in the stream, which is
+  # what a reader sees.
+  set counts {}
+  foreach ligatures {1 0} {
+    set doc [tclpdf new]
+    $doc font embed helvetica $::fontClig
+    $doc page add
+    # -kerning 0 so that the show operator is a plain Tj: this face kerns the
+    # pair and a TJ array would have the count spread over several strings.
+    $doc text "fifty" -at {20 20} -family helvetica -size 20 -kerning 0 \
+        -ligatures $ligatures
+    set content [::tclpdfTest::content $doc]
+    $doc destroy
+    # Two bytes per glyph inside the literal string of the show operator.
+    regexp {\((.*)\)\s*Tj} $content -> literal
+    set bytes [regsub -all {\\[0-7]{1,3}} $literal x]
+    lappend counts [expr {[string length $bytes] / 2}]
+  }
+  # five characters: four glyphs with the fi ligature, five without
+  set counts
+} -result {4 5}
 
 cleanupTests

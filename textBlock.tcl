@@ -635,8 +635,8 @@ oo::define ::tclpdf::document::document {
           set word [string map [list "\u00AD" {}] $word]
         }
         # The word alone may still be too wide - a part number, a URL, a
-        # column two millimetres across. Break it by character rather than
-        # letting it run past the edge unnoticed.
+        # column two millimetres across. Break it inside rather than letting
+        # it run past the edge unnoticed - by unit, see below.
         #
         # -emergencyHyphen puts a hyphen on such a break. OFF by default, and
         # that is a decision rather than caution: the words that reach this
@@ -648,26 +648,43 @@ oo::define ::tclpdf::document::document {
         # The hyphen needs ROOM, so it is measured with the piece rather than
         # added after: taking as many characters as fit and then hanging a
         # hyphen on them is how the line comes out one hyphen too wide.
+        #
+        # BY UNIT, NOT BY STRING ELEMENT, and that is what [TextUnits] is for.
+        # This loop counted with [string length] and cut with [string range]
+        # until 2026-08-26, and neither knows what one thing is here. A
+        # registered sequence is ONE glyph - cutting a family emoji at its
+        # third code point asks the face for a lone joiner, which measured as
+        # twelve lines for two emoji, three of them holding nothing but a
+        # joiner, and refused outright as "TCLPDF FONT GLYPH U+2764" where the
+        # cut fell between a heart and its variation selector. And under Tcl
+        # 8.6 a character beyond the BMP is stored as a surrogate PAIR, so an
+        # odd cut handed on half of one: [textLines] over four U+1F600 in a
+        # 5 mm column refused U+D83D, a code point that is not a character at
+        # all and that the caller never wrote - which breaks the promise of
+        # the error code contract that the code point named is the character.
+        # A unit is indivisible, and both faults are the same fault.
+        set units [my TextUnits [my TextMerge $arguments] $word]
         while {![my TextBlockFits $word $width $arguments \
-            $string $wordFrom] && [string length $word] > 1} {
-          set take [string length $word]
+            $string $wordFrom] && [llength $units] > 1} {
+          set take [llength $units]
           set mark [expr {$emergency ? "-" : ""}]
           while {$take > 1 && [my TextBlockMeasure \
-              "[string range $word 0 $take-1]$mark" \
+              "[join [lrange $units 0 $take-1] {}]$mark" \
               $arguments $string $wordFrom] > $width} {
             incr take -1
           }
-          # A piece of one character with a hyphen after it is two glyphs
+          # A piece of one unit with a hyphen after it is two glyphs
           # where the column holds one - the hyphen goes rather than the
           # letter, since a line with nothing of the word on it says less
           # than a line without the mark.
           if {$take == 1 && $mark ne ""
-              && [my TextBlockMeasure "[string range $word 0 0]$mark" \
+              && [my TextBlockMeasure "[lindex $units 0]$mark" \
                   $arguments $string $wordFrom] > $width} {
             set mark ""
           }
+          set piece [join [lrange $units 0 $take-1] {}]
           lappend lines [dict create \
-              text "[string range $word 0 $take-1]$mark" \
+              text "$piece$mark" \
               offset $offset width $width paragraph $paragraphIndex \
               hyphen [expr {$mark ne ""}] \
               first [expr {$inParagraph == 0}] running $running from $wordFrom]
@@ -675,10 +692,14 @@ oo::define ::tclpdf::document::document {
           set globalLine [expr {$running + 1}]
           lassign [my TextBlockAsk $band $inParagraph $paragraphIndex $globalLine] \
               width offset running
-          set consumed [my TextBlockConsumed $marked $take]
+          # The position in the caller's string is a string index and stays
+          # one - so what the units just consumed is measured back in string
+          # elements, which is what the piece itself carries.
+          set consumed [my TextBlockConsumed $marked [string length $piece]]
           incr wordFrom $consumed
           set marked [string range $marked $consumed end]
-          set word [string range $word $take end]
+          set word [string range $word [string length $piece] end]
+          set units [lrange $units $take end]
         }
         set current $word
         set currentFrom $wordFrom
@@ -1676,4 +1697,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.13
+package provide tclpdf::textBlock 1.14

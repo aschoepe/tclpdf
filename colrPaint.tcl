@@ -52,7 +52,12 @@
 #     exactly. Measured on 2026-08-26 against Noto Color Emoji, the only real
 #     version 1 face on this machine: itemVariationStoreOffset 0,
 #     varIndexMapOffset 0, no fvar table, and not one Var paint among the
-#     291486 paint tables its 3993 colour glyphs are built from.
+#     311486 paint nodes its 3993 colour glyphs are built from. That count is
+#     VISITS over the trees this module hands back, one walk per base glyph -
+#     so a paint table reached from two base glyphs is counted twice, and a
+#     component named by PaintColrGlyph is counted once per use, because it is
+#     expanded in place (see below). It is the number of paints the drawing
+#     side ever sees, which is what the sentence above is about.
 #   - The twenty transformation formats (12 to 31) are a translation, a scale,
 #     a rotation, a skew or a matrix, each optionally about a centre. Every
 #     one of them IS a matrix, and turning the angle into one here means the
@@ -596,4 +601,4 @@ proc ::tclpdf::colrPaint::Truncated {detail} {
       "tclpdf: the font's \"COLR\" table is cut short - $detail"
 }
 
-package provide tclpdf::colrPaint 1.0
+package provide tclpdf::colrPaint 1.1

@@ -143,6 +143,63 @@ proc faceCpal {colours} {
     return $table
 }
 
+# The GSUB table that forms the SEQUENCES, and it is the smallest one that can.
+#
+# A "ccmp" feature naming one ligature lookup per sequence, each lookup holding
+# one Ligature subtable (lookup type 4, format 1): a coverage table of the
+# FIRST component, and behind it the ligature glyph, how many components there
+# are, and the components after the first. That is the whole of the format an
+# emoji face uses for a family, a skin tone and a flag - the sequences are not
+# characters of Unicode with glyphs of their own, they are ligatures, and this
+# is what one looks like.
+#
+# ONE LOOKUP PER LIGATURE here, where a real face packs hundreds into one: a
+# lookup may hold many subtables and a subtable many ligature sets, and none of
+# that would be more readable in fifty lines of Tcl.
+proc faceLigature {components result} {
+    return [binary format Su* [list 1 8 1 14 1 1 [lindex $components 0] 1 4 \
+        $result [llength $components] {*}[lrange $components 1 end]]]
+}
+
+# One "ccmp" feature over one lookup per ligature, under the Latin script - a
+# script list, a feature list and a lookup list, which is what every GSUB table
+# is and what tclpdf walks to find the feature it was asked for.
+proc faceGsub {ligatures} {
+    # The lookups first, so that the offsets are MEASURED rather than worked
+    # out from the format - an offset arithmetic that is one word out reads
+    # the middle of a subtable and hands back plausible nonsense.
+    set built {}
+    foreach pair $ligatures {
+        lassign $pair components result
+        # type 4, no flags, one subtable, which begins 8 bytes in.
+        lappend built [binary format Su* {4 0 1 8}][faceLigature \
+            $components $result]
+    }
+    set count [llength $built]
+    set at [expr {2 + $count * 2}]
+    set offsets {}
+    foreach lookup $built {
+        lappend offsets $at
+        incr at [string length $lookup]
+    }
+    set lookupList [binary format Su* [list $count {*}$offsets]][join $built {}]
+    set indices {}
+    for {set index 0} {$index < $count} {incr index} {
+        lappend indices $index
+    }
+    # The language system names the one feature; the feature names every lookup.
+    set langSys [binary format Su* {0 0xFFFF 1 0}]
+    set scriptList [binary format Su 1][binary format a4 latn][binary format \
+        Su 8][binary format Su* {4 0}]$langSys
+    set featureList [binary format Su 1][binary format a4 ccmp][binary format \
+        Su 8][binary format Su* [list 0 $count {*}$indices]]
+    set header 10
+    return [binary format IuSuSuSu 0x00010000 $header \
+        [expr {$header + [string length $scriptList]}] \
+        [expr {$header + [string length $scriptList] \
+            + [string length $featureList]}]]$scriptList$featureList$lookupList
+}
+
 # A cmap, format 12: one group per character. Which characters a face has is
 # the one question every other module of this package asks it.
 proc faceCmap {map} {
@@ -160,7 +217,7 @@ proc faceCmap {map} {
 # The file around all of it: 1000 units to the em, an ascender of 750, and an
 # advance of 1000 for every glyph. loca is written 32-bit so no offset has to
 # be halved, and every glyph is padded to a four-byte boundary.
-proc faceFile {glyphs map colr cpal} {
+proc faceFile {glyphs map colr cpal {gsub {}}} {
     set count [llength $glyphs]
     set head [binary format IuIuIuIu 0x00010000 0x00010000 0 0x5F0F3CF5]
     append head [binary format SuSu 0 1000]
@@ -189,9 +246,13 @@ proc faceFile {glyphs map colr cpal} {
         }
     }
     append loca [binary format Iu [string length $glyf]]
-    return [::tclpdf::subset::Assemble [dict create head $head hhea $hhea \
+    set tables [dict create head $head hhea $hhea \
         maxp $maxp hmtx $hmtx loca $loca glyf $glyf cmap [faceCmap $map] \
-        COLR $colr CPAL $cpal]]
+        COLR $colr CPAL $cpal]
+    if {$gsub ne {}} {
+        dict set tables GSUB $gsub
+    }
+    return [::tclpdf::subset::Assemble $tables]
 }
 
 # The layer glyphs: ordinary outlines, in no particular order, and NOT reachable
@@ -211,16 +272,27 @@ set layerGlyphs [list \
     [faceGlyph {{{500 700} {500 60} {180 380}}}] \
     [faceGlyph {{{500 700} {820 380} {500 60}}}]]
 
-# The base glyphs - one per character, all of them empty - and the records that
-# say what each is made of. Glyph 3, the octagon, is used TWICE with different
-# palette entries: that is what a layer and a palette are for.
-lappend layerGlyphs {} {} {} {}
-set faceRecords {{9 0 2} {10 2 2} {11 4 2} {12 6 3}}
+# The base glyphs - one per character or per SEQUENCE, all of them empty - and
+# the records that say what each is made of. Glyph 3, the octagon, is used
+# TWICE with different palette entries: that is what a layer and a palette are
+# for.
+#
+# 9 to 12 are the four single marks. 13 to 15 are the three a SEQUENCE reaches
+# and nothing else does: no character maps to them, exactly as no character
+# maps to the family emoji of a real face. 16 to 19 are the joiner, the
+# modifier and the two indicators - they have a character each and no colour
+# record, because on their own they draw nothing and are not meant to.
+lappend layerGlyphs {} {} {} {} {} {} {} {} {} {} {}
+set faceRecords {{9 0 2} {10 2 2} {11 4 2} {12 6 3} \
+    {13 9 3} {14 12 2} {15 14 2}}
 set faceLayers {
     {1 0} {2 1}
     {3 2} {4 3}
     {3 4} {5 3}
     {6 6} {7 5} {8 0xFFFF}
+    {1 0} {2 1} {5 3}
+    {3 4} {4 3}
+    {6 4} {7 2}
 }
 
 # blue, green, red, alpha - the order the format stores them in.
@@ -234,7 +306,21 @@ set faceColours {
     {70 60 60 64}
 }
 
-set faceMap [dict create 0x26A0 9 0x2714 10 0x2716 11 0xE000 12]
+# The joiner is the REAL U+200D, because that is what an emoji face uses and
+# what a caller writes. The modifier and the two indicators are private use
+# characters: this face is invented, and inventing a skin tone for a tick would
+# be a claim about Unicode rather than about the format.
+set faceMap [dict create 0x26A0 9 0x2714 10 0x2716 11 0xE000 12 \
+    0x200D 16 0xE001 17 0xE002 18 0xE003 19]
+
+# The three sequences, as the ligatures they are: the components by GLYPH
+# number, because that is what a GSUB table names, and the base glyph each
+# reaches.
+set faceSequences {
+    {{9 16 11} 13}
+    {{10 17} 14}
+    {{18 19} 15}
+}
 
 # Written to a file, because that is how a caller meets a face and therefore
 # how this page should show the call. [colorFont] takes -data for the face that
@@ -243,7 +329,8 @@ set faceMap [dict create 0x26A0 9 0x2714 10 0x2716 11 0xE000 12]
 set workshop [exampleTempDirectory]
 set facePath [file join $workshop marks.ttf]
 exampleWriteBinary $facePath [faceFile $layerGlyphs $faceMap \
-    [faceColr $faceRecords $faceLayers] [faceCpal $faceColours]]
+    [faceColr $faceRecords $faceLayers] [faceCpal $faceColours] \
+    [faceGsub $faceSequences]]
 
 # --- the document -----------------------------------------------------------
 
@@ -251,6 +338,21 @@ set warning ⚠
 set tick ✔
 set cross ✖
 set logo \uE000
+
+# The characters a SEQUENCE is made of. The joiner is the real U+200D - the
+# character an emoji face joins a family with, and the one no face in the world
+# has a glyph worth drawing for. The other three are private use: a modifier
+# that stands where a skin tone stands in an emoji face, and two indicators
+# that mean something only as a pair, exactly as the two regional indicators of
+# a flag do.
+set joiner \u200D
+set modifier \uE001
+set indicatorOne \uE002
+set indicatorTwo \uE003
+
+set struck $warning$joiner$cross
+set toned $tick$modifier
+set flag $indicatorOne$indicatorTwo
 
 set doc [tclpdf new -unit mm]
 $doc info Title "A colour font, drawn as text"
@@ -264,7 +366,11 @@ $doc font embed body [file join $assets fonts DejaVuSans.ttf]
 # THE ONE CALL this page is about. The alias comes first and the file after it,
 # the way [image embed] takes them; -chars names the characters to build glyphs
 # for, and what comes back is the alias, so it can be handed straight on.
-set marks [$doc colorFont marks $facePath -chars "$warning$tick$cross$logo"]
+# -chars TAKES TEXT, not a list of characters, and that is the whole of the
+# sequence business from the outside: eleven characters go in, seven glyphs
+# come out, and which of them belong together was decided by the FACE.
+set marks [$doc colorFont marks $facePath \
+    -chars "$warning$tick$cross$logo$struck$toned$flag"]
 
 set y 20
 exampleHeading $doc y "A colour font, drawn as text"
@@ -294,6 +400,55 @@ $doc font -family body -size 9 -color {0.45 0.45 0.5}
 $doc text "two layers, two layers, two layers, three - and the tick and the\
     cross share one octagon glyph between them" -at [list 20 $y]
 set y [expr {$y + 10}]
+
+# -- the sequences -----------------------------------------------------------
+#
+# THE OTHER HALF OF WHAT A COLOUR FACE DOES, and the half that has no character
+# behind it. An emoji face draws a family, a skin tone and a flag as ONE glyph
+# each, and none of those glyphs has a code point: they are GSUB ligatures over
+# several characters, under the face's "ccmp" feature. This face carries three
+# of them, built above, and the page below is what comes out.
+
+$doc font -family body -size 10 -color {0 0 0}
+exampleHeading $doc y "Sequences: several characters, one glyph"
+examplePara $doc y "The three marks below are not in the face's character map\
+    at all. Each is reached by a SEQUENCE - a rule in the face's ccmp feature\
+    that says which characters, in which order, are drawn as which glyph. That\
+    is how an emoji face makes a family out of three people and two joiners, a\
+    skin tone out of a hand and a modifier, and a flag out of two regional\
+    indicators; the mechanism is the same whatever the artwork is."
+examplePara $doc y "The caller does not take the string apart. -chars is TEXT,\
+    the package applies the face's own ccmp to it, and every glyph that comes\
+    out is one glyph of the font. Which characters belong together is a\
+    property of the face - not of Unicode, and not of whoever wrote the call."
+
+set y [expr {$y + 2}]
+$doc font -family $marks -size 22 -color {0 0 0}
+set x 20
+foreach piece [list $struck $toned $flag] {
+    $doc text $piece -at [list $x [expr {$y + 8}]]
+    set x [expr {$x + [$doc textWidth $piece] + 4}]
+}
+set y [expr {$y + 14}]
+$doc font -family body -size 9 -color {0.45 0.45 0.5}
+$doc text "warning + U+200D + cross, tick + modifier, indicator + indicator -\
+    three glyphs the character map cannot reach" -at [list 20 $y]
+set y [expr {$y + 10}]
+
+# ONE GLYPH WITH ONE WIDTH, measured rather than claimed. The three characters
+# of the struck warning advance exactly as far as the one character of the
+# plain warning, because they ARE one glyph; the line breaker, the table cell
+# and textWidth all see that one number.
+$doc font -family $marks -size 22
+set one [$doc textWidth $warning]
+set three [$doc textWidth $struck]
+set apart [$doc textWidth "$warning$cross"]
+$doc font -family body -size 9 -color {0.45 0.45 0.5}
+set y [expr {[$doc text [format "measured at 22 pt: the warning alone is\
+    %.3f mm wide, the three characters of the sequence are %.3f mm - the same\
+    glyph, the same advance - while the two marks set side by side without\
+    the joiner are %.3f mm, which is two glyphs and two advances." \
+    $one $three $apart] -at [list 20 $y] -width 170] + 8}]
 
 # -- what it is for ----------------------------------------------------------
 
@@ -370,6 +525,12 @@ examplePara $doc y "One string, one call, two faces: -fallback names the faces\
     that may set what -family cannot, so the package decides per character\
     where each glyph comes from and the paragraph breaks around the marks\
     like any other character."
+examplePara $doc y "AND A SEQUENCE IS ONE UNIT IN THAT CHAIN. The withdrawn\
+    note near the end of each line is the three-character sequence from the\
+    page before, and no face has a glyph for the joiner in the middle of it -\
+    so the chain is asked for the LONGEST piece any of its faces can set, not\
+    for one character at a time. Without that the line would be refused where\
+    the joiner stands."
 examplePara $doc y "WHICH WAY ROUND MATTERS, and the two lines below are the\
     same sentence set both ways. The chain is tried IN ORDER, and DejaVu Sans\
     has a warning sign, a tick and a cross of its own - so with the words\
@@ -386,7 +547,8 @@ foreach {first second label} [list \
     $doc font -family $first -size 11 -color {0.1 0.1 0.15} -fallback $second
     set y [expr {[$doc text "$warning Delivery 2026-0414 is overdue. The goods\
         left the warehouse on the 3rd $tick and were refused at the door on\
-        the 9th $cross - please tell us what to do with them. $logo" \
+        the 9th $cross - please tell us what to do with them. $logo The\
+        delivery note was withdrawn $struck on the 11th." \
         -at [list 20 $y] -width 170] + 2}]
     $doc font -family body -size 9 -color {0.45 0.45 0.5} -fallback {}
     $doc text $label -at [list 20 $y]

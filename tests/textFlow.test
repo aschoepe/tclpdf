@@ -2132,6 +2132,81 @@ set jpFont [file join [file dirname [file dirname [file normalize \
     [info script]]]] examples assets fonts google NotoSansJP-Regular.ttf]
 testConstraint haveJp [file exists $jpFont]
 
+# -- what the character fallback may cut ------------------------------------
+#
+# It counted with [string length] and cut with [string range] until
+# 2026-08-26, and neither knows what ONE thing is here. Two faults, one cause:
+# a registered sequence is one glyph and cutting inside it asks the face for
+# characters nobody promised, and under Tcl 8.6 a character beyond the BMP is
+# stored as a surrogate PAIR, so an odd cut hands on half of one. It cuts at
+# UNIT boundaries now, which is what [TextUnits] answers.
+#
+# A Type 3 font rather than a colour face, so the tests need no asset: what
+# they turn on is that a font can hold a glyph for several code points, and
+# [font glyph] is where that comes from.
+
+# A font of ONE glyph for the two-character sequence "ab" and no glyph for
+# either letter on its own - so a cut inside the sequence is not merely wrong,
+# it is a refusal, and cannot pass unnoticed.
+proc flowSequenceDocument {} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font define seq -ascent 800
+    $doc font glyph seq "ab" -width 700 -script {
+        $doc rect -at {100 100} -size {500 500} -fill black
+    }
+    $doc font -family seq -size 10
+    return $doc
+}
+
+test textFlow-unit-42.1 {the character fallback cuts between sequences, never inside} -body {
+    # Two units in a column that holds one. Before the fix the loop took one
+    # STRING ELEMENT at a time and asked the font for "a" alone, which it has
+    # not got: TCLPDF FONT GLYPH U+0061.
+    set doc [flowSequenceDocument]
+    set lines [$doc textLines "abab" -width 3]
+    $doc destroy
+    list [llength $lines] $lines
+} -result {2 {ab ab}}
+
+test textFlow-unit-42.2 {a single unit wider than the column is set, not torn} -body {
+    # The rule an over-wide single CHARACTER has always followed: one line
+    # that says something beats no line at all. A unit is one thing in exactly
+    # the same way, so the two answers have to look alike - one line each,
+    # holding the whole thing.
+    set doc [flowSequenceDocument]
+    set sequence [$doc textLines "ab" -width 1]
+    $doc font -family helvetica -size 10
+    set character [$doc textLines "M" -width 1]
+    $doc destroy
+    list [llength $sequence] $sequence [llength $character] $character
+} -result {1 ab 1 M}
+
+test textFlow-unit-42.3 {a character beyond the BMP is never cut in half} -body {
+    # THE 8.6 HALF, and it is the same fault: [string range] counts surrogate
+    # halves under 8.6 and code points under 9, so the same call answered
+    # differently under the two interpreters - under 8.6 with a refusal naming
+    # U+D83D, which is not a character at all and which the caller never
+    # wrote. That breaks the promise of the error code contract that the code
+    # point named IS the character.
+    #
+    # The glyph is drawn for U+1F600, built from its UTF-8 bytes rather than
+    # written as \U0001F600: \U is broken under 8.6 and [format %c] answers
+    # U+FFFD there for anything beyond the BMP.
+    set grin [encoding convertfrom utf-8 [binary format H* f09f9880]]
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font define astral -ascent 800
+    $doc font glyph astral $grin -width 700 -script {
+        $doc rect -at {100 100} -size {500 500} -fill black
+    }
+    $doc font -family astral -size 10
+    set lines [$doc textLines [string repeat $grin 4] -width 4]
+    $doc destroy
+    list [llength [split $grin {}]] [llength $lines] \
+        [lsort -unique [lmap line $lines {llength [split $line {}]}]]
+} -result {1 4 1}
+
 test textFlow-vertical-41.1 {a vertical text breaks into columns} -constraints haveJp -body {
   set doc [tclpdf new -unit mm]
   $doc font embed jp $::jpFont

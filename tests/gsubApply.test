@@ -193,33 +193,17 @@ test gsubApply-3.3 {a skipped glyph keeps its own characters and its place} -bod
 # from here on needs two or three of them with different glyph numbers, and a
 # byte list copied five times is five places to fix.
 
-# Lookup type 1, format 2: one glyph becomes one other.
-#
-#   0  format 2 | 2  coverage at 8 | 4  one glyph | 6  the substitute
-#   8  coverage format 1, one glyph
-proc gsubSingle {from to} {
-  return [binary format Su* [list 2 8 1 $to 1 1 $from]]
-}
+# Lookup type 1, format 2: one glyph becomes one other. In helper.tcl since
+# forms.test builds a face whose two ligature features hold one each.
+interp alias {} gsubSingle {} ::tclpdfTest::gsubSingle
 
-# Lookup type 2, format 1: one glyph becomes several.
-#
-#   0  format 1 | 2  coverage at 8 | 4  one sequence | 6  sequence at 14
-#   8  coverage format 1, one glyph | 14  the sequence
-proc gsubMultiple {from outputs} {
-  return [binary format Su* [list 1 8 1 14 1 1 $from [llength $outputs] \
-      {*}$outputs]]
-}
+# Lookup type 2, format 1: one glyph becomes several. In helper.tcl since
+# colorFont.test builds one to show what a colour font refuses.
+interp alias {} gsubMultiple {} ::tclpdfTest::gsubMultiple
 
-# Lookup type 4, format 1: several glyphs become one.
-#
-#   0  format 1 | 2  coverage at 8 | 4  one set | 6  set at 14
-#   8  coverage format 1, the FIRST component
-#  14  ligature set: one ligature, at 14+4 = 18
-#  18  the ligature glyph, the component count, the components after the first
-proc gsubLigature {components to} {
-  return [binary format Su* [list 1 8 1 14 1 1 [lindex $components 0] 1 4 \
-      $to [llength $components] {*}[lrange $components 1 end]]]
-}
+# Lookup type 4, format 1: several glyphs become one. In helper.tcl since
+# colorFont.test builds sequence-forming faces out of the same layout.
+interp alias {} gsubLigature {} ::tclpdfTest::gsubLigature
 
 # Lookup type 5, format 1: a sequence written out as glyph IDs, and the
 # records that say what to apply where.

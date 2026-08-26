@@ -941,6 +941,26 @@ oo::define ::tclpdf::document::document {
     set cmap [dict get $entry parsed cmap]
     set run {}
     set position 0
+    # THE RUN IS BUILT IN THE ORDER THE CALLER WROTE, and where two marks sit
+    # on one letter that is a decision rather than an omission - the same one
+    # [TextCluster] in text.tcl states at length. HarfBuzz normalises first:
+    # two combining marks of different combining class are canonically
+    # equivalent in either order (UAX #15), and a shaper sorts them by that
+    # class before it looks anything up. This package has no combining-class
+    # table and does not sort, because sorting would silently rewrite what the
+    # caller wrote.
+    #
+    # WHAT THAT COSTS, measured 2026-08-26 against hb-shape over every ordered
+    # pair of the Arabic marks U+064B..U+0655, U+0670 and U+06D6..U+06ED on
+    # two bases: of 288 such words that DejaVu Sans can set, 114 come out in a
+    # different order than HarfBuzz gives, and of 2592 in Noto Naskh Arabic,
+    # 604 do. In every one of the 718 the glyphs are the SAME glyphs - the
+    # difference is a permutation and nothing else, so no mark is missing,
+    # none is drawn twice and none is a different shape. What does change is
+    # what stacks on what: mkmk attaches the second mark to the first, so with
+    # the two exchanged the pile is built the other way round and the marks
+    # sit in the other vertical order. A caller who wants the shaper's answer
+    # writes the marks in canonical order.
     foreach char [split $text {}] {
       set code [scan $char %c]
       # A soft hyphen is a permission, not a character: it says a word may be
@@ -1009,9 +1029,32 @@ oo::define ::tclpdf::document::document {
       # it belongs to instead of under it. Measured in NotoNaskhArabic on the
       # run U+0628 U+064E, which shapes to three glyphs: the dot belongs 464
       # units to the LEFT of where the pen leaves it and the fatha 506.
-      set run [::tclpdf::forms apply [my FontLayoutState $alias forms] $run]
-    }
-    if {$ligatures && [llength $run] > 1} {
+      #
+      # AND THE LIGATURES GO IN WITH IT, which is why the [liga] call below is
+      # an ELSE since 2026-08-26. liga.tcl resolves the LATIN language system,
+      # because a caller who switched a typographic option on told this package
+      # nothing about the script; forms.tcl was asked for the script and reads
+      # "liga" and "clig" under it, in the two stages HarfBuzz applies them
+      # in - rlig, then liga and clig.
+      # Running both over a cursive line would apply the Latin lookups to
+      # Arabic glyphs after the Arabic ones had already had their turn - a
+      # second pass over a run that is finished. What it COSTS is nothing for
+      # anything that gets this far, and that is measured rather than assumed
+      # - but not for the reason this comment gave until 2026-08-26. "No Latin
+      # ligature lookup covers an Arabic glyph" is not true: measured over
+      # 24 963 shaped runs, the Arabic corpus plus every Arabic letter written
+      # beside a pair of Latin ones in both orders, the extra pass changes 60
+      # of them. Every one of the 60 holds Latin letters, and every one of the
+      # 60 is refused BEFORE this line by [bidi opposite] above - a
+      # left-to-right character in a -direction rtl line needs the bidi
+      # algorithm, which this package has not got. So the zero holds for
+      # everything the package lets through here, which is what the line
+      # needs, and it holds because of the gate rather than because of the
+      # lookups. This remains a decision about which script is resolved and
+      # not a bug fix.
+      set run [::tclpdf::forms apply [my FontLayoutState $alias forms] $run \
+          $ligatures]
+    } elseif {$ligatures && [llength $run] > 1} {
       set run [::tclpdf::liga apply [my FontLayoutState $alias liga] $run]
     }
     # LAST, after everything else has settled which glyphs there are: vert
@@ -2176,4 +2219,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.14
+package provide tclpdf::font 1.15

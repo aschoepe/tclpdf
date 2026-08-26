@@ -88,6 +88,44 @@ namespace eval ::tclpdf::text {
   # which face a segment is set in.
   variable neverDrawn "\u00AD \u200B \uFEFF"
 
+  # The variation selectors: U+FE00 to U+FE0F and the supplement at U+E0100
+  # to U+E01EF. They are NOT in [neverDrawn] and must not be - a selector is
+  # part of the text and part of a registered sequence, and dropping it would
+  # take "\u2705\uFE0F" apart into a mark and nothing.
+  #
+  # WHAT THIS LIST IS FOR is a message and nothing else. A selector is the one
+  # character a caller can be refused for that they did not think they wrote:
+  # editors and databases put U+FE0F after an emoji, "\u2705" and
+  # "\u2705\uFE0F" look identical in every editor there is, and a colour font
+  # built for the one refuses the other with "no glyph for U+FE0F", which
+  # names a character the caller cannot see. So the refusal says what a
+  # selector IS and how to register the spelling - the same thing colorFont
+  # says on the way in, where the wording came from.
+  variable selectors {0xFE00 0xFE0F 0xE0100 0xE01EF}
+}
+
+# The sentence a glyph refusal at a variation selector carries, empty for
+# every other character.
+#
+# Here rather than in the two methods that need it - [TextSegments] for a
+# fallback chain and [Type3Encode] for one Type 3 font - because it is one
+# sentence and two copies of it drift apart. type3.tcl requires this module
+# for it, which costs nothing: a Type 3 font exists in order to be set.
+proc ::tclpdf::text::selectorHint {point} {
+  variable selectors
+  foreach {from to} $selectors {
+    if {$point >= $from && $point <= $to} {
+      return " - a variation selector modifies the character in FRONT of it\
+          and is part of the text rather than a character of its own, so it\
+          is registered with the spelling it belongs to: \[font glyph\] for\
+          one glyph, \[colorFont -chars\] for a colour face"
+    }
+  }
+  return {}
+}
+
+namespace eval ::tclpdf::text {
+
   # Options that describe ONE LINE, with their defaults. They travel with the
   # text wherever it is measured, broken or drawn - so they are carried in the
   # same dictionary as the font state - but they never enter the STORED state:
@@ -676,7 +714,7 @@ oo::define ::tclpdf::document::document {
     return $chain
   }
 
-  # Can this face set this character?
+  # Can this face set this piece?
   #
   # Asked of the very code that would have to write it - [afm encode] for a
   # standard face, [FontType1Encode] for an embedded Type 1 face,
@@ -688,18 +726,140 @@ oo::define ::tclpdf::document::document {
   #
   # The three characters that never reach a face at all count as covered by
   # every one of them: nothing is drawn for them, so no face can lack them.
-  method TextCovers {alias char} {
-    if {$char in $::tclpdf::text::neverDrawn} {
+  #
+  # PIECE IS ONE CHARACTER except where a Type 3 font holds sequences - see
+  # [TextReach]. The three encoders take a string and always did; the cmap
+  # question below is the one that had a single character built into it, and
+  # it answers no to anything longer, which is right: an embedded face is
+  # asked one character at a time because that is how [FontRun] reads it.
+  method TextCovers {alias piece} {
+    if {$piece in $::tclpdf::text::neverDrawn} {
       return 1
     }
     if {![my TextEmbedded $alias]} {
-      return [expr {![catch {::tclpdf::afm encode $alias $char}]}]
+      return [expr {![catch {::tclpdf::afm encode $alias $piece}]}]
     }
     switch -- [my FontKind $alias] {
-      type3 {return [expr {![catch {my Type3Encode $alias $char}]}]}
-      type1 {return [expr {![catch {my FontType1Encode $alias $char}]}]}
+      type3 {return [expr {![catch {my Type3Encode $alias $piece}]}]}
+      type1 {return [expr {![catch {my FontType1Encode $alias $piece}]}]}
     }
-    return [dict exists [my state fonts] $alias parsed cmap [scan $char %c]]
+    if {[llength [split $piece {}]] != 1} {
+      return 0
+    }
+    return [dict exists [my state fonts] $alias parsed cmap [scan $piece %c]]
+  }
+
+  # How many code points the longest unit any face in the chain can set holds.
+  #
+  # One for every chain that holds no Type 3 font with sequences in it, which
+  # is every chain this package could write before 2026-08-26 - and then
+  # [TextSegments] walks the line exactly as it did, one character at a time.
+  # A colour font built from an emoji face answers more: the family emoji is
+  # ONE glyph made of seven code points, and no face in the world has a glyph
+  # for the lone joiner in the middle of it, so offering the chain that joiner
+  # on its own would refuse a line the chain can set.
+  method TextReach {chain} {
+    set reach 1
+    foreach alias $chain {
+      if {[my TextEmbedded $alias] && [my FontKind $alias] eq "type3"} {
+        set have [my Type3Reach $alias]
+        if {$have > $reach} {
+          set reach $have
+        }
+      }
+    }
+    return $reach
+  }
+
+  # The faces of the chain that hold a REGISTER of units, each with its
+  # register - {alias codes} pairs in chain order.
+  #
+  # A Type 3 font is the only kind that has one: [font glyph] and the
+  # [colorFont] built on it are what put a unit longer than a single character
+  # into a font at all, and its "codes" dictionary is keyed by exactly the
+  # text each glyph stands for. Read once per call rather than per position,
+  # because the walk below asks it reach times per character.
+  method TextSequences {chain} {
+    set prepared {}
+    foreach alias $chain {
+      if {[my TextEmbedded $alias] && [my FontKind $alias] eq "type3"} {
+        lappend prepared [list $alias [dict get [my state fonts] $alias codes]]
+      }
+    }
+    return $prepared
+  }
+
+  # The registered sequence that starts at this position, as {unit face}, or
+  # two empty strings where none does.
+  #
+  # LONGEST FIRST, and among equals the first face of the chain: a face that
+  # draws the family of four is a better answer than one that draws the family
+  # of three and leaves a joiner and a child behind, and where two faces both
+  # hold the same sequence the chain order decides as it decides everything
+  # else.
+  #
+  # Length two and up. A single character is not a sequence and is not asked
+  # for here - it goes to the chain in order, through the encoders, which is
+  # the walk this package has always had.
+  method TextUnit {sequences chars position count reach} {
+    set longest [expr {min($reach, $count - $position)}]
+    for {set length $longest} {$length >= 2} {incr length -1} {
+      set unit [join [lrange $chars $position \
+          [expr {$position + $length - 1}]] {}]
+      foreach pair $sequences {
+        if {[dict exists [lindex $pair 1] $unit]} {
+          return [list $unit [lindex $pair 0]]
+        }
+      }
+    }
+    return [list {} {}]
+  }
+
+  # The string as the UNITS it will be set in: one element per glyph-bearing
+  # unit, a registered sequence counting as one however many code points it
+  # holds.
+  #
+  # WHAT A LINE MAY BE CUT AT. The character fallback of the line breaker used
+  # to count with [string length] and cut with [string range], which knows
+  # neither of the two things that make a character here: a registered
+  # sequence is one glyph and cutting inside it produces characters no face
+  # has, and under Tcl 8.6 a character beyond the BMP is stored as a surrogate
+  # pair, so a cut at an odd offset produces half of one. Both came out as a
+  # refusal naming a code point the caller never wrote - U+2764 between the
+  # heart and its selector, U+D83D in the middle of an emoji.
+  #
+  # No coverage question is asked here and none is needed: which face sets a
+  # unit does not change where the unit ENDS. So this costs a split and, where
+  # a font with sequences is in the chain, a dictionary lookup per position.
+  method TextUnits {state string} {
+    set chain [my TextChain $state]
+    set chars [split $string {}]
+    set reach [my TextReach $chain]
+    if {$reach < 2} {
+      # No face in the chain holds a sequence, so a unit is a code point -
+      # which [split {}] gives under both interpreters, surrogate pair or not.
+      return $chars
+    }
+    set sequences [my TextSequences $chain]
+    set count [llength $chars]
+    set units {}
+    set position 0
+    while {$position < $count} {
+      set char [lindex $chars $position]
+      if {$char in $::tclpdf::text::neverDrawn} {
+        lappend units $char
+        incr position
+        continue
+      }
+      set unit [lindex [my TextUnit $sequences $chars $position $count \
+          $reach] 0]
+      if {$unit eq {}} {
+        set unit $char
+      }
+      lappend units $unit
+      incr position [llength [split $unit {}]]
+    }
+    return $units
   }
 
   # The line as {face text} pieces, in the order they are set.
@@ -716,11 +876,44 @@ oo::define ::tclpdf::document::document {
     set face [lindex $chain 0]
     set piece {}
     set position 0
-    # Which face a character goes to, remembered for the length of this call.
+    # A REGISTERED SEQUENCE WINS OVER THE SINGLE CHARACTERS IT IS MADE OF,
+    # and that is the one place the chain order gives way - but only for a
+    # face that holds that very sequence as a glyph of its own. A colour font
+    # that draws the family emoji as ONE glyph is a better answer than a face
+    # that draws the man and leaves the joiner behind, and a sequence has no
+    # meaning taken apart, which a single character always has.
+    #
+    # ASKED OF THE REGISTER, NOT OF THE ENCODERS, and that is the whole
+    # difference to the walk of 2026-08-26. Offering every unit of length
+    # reach..1 to every face in turn let a face answer yes to a stretch it
+    # merely happens to be able to spell: [afm encode] takes a whole string,
+    # so Helvetica says yes to "Hello w" at length seven and beats the
+    # embedded face in front of it that would have won at length one. Measured
+    # with the chain {DejaVu Helvetica emoji}, "Hello world" came out of
+    # Helvetica entire - 20.9338 mm instead of 23.7319 mm, and "(Hello worl)
+    # Tj" under the wrong face - which contradicts the chain order the manual
+    # promises. A face that never registered "Hello w" as one glyph is now
+    # never asked about it, so a stretch of ordinary letters can no longer
+    # jump the chain, and only [font glyph] and [colorFont] put a unit longer
+    # than one character into the register at all.
+    #
+    # It is also what the walk costs: a sequence question is a dict lookup
+    # now, where it used to be up to reach encoder calls per position. Same
+    # paragraph of 3078 characters broken to 150 mm, with a colour font in the
+    # chain: 1004 ms before, 226 ms after - a chain of plain faces costs
+    # 190 ms and no chain at all costs 145 ms.
+    set reach [my TextReach $chain]
+    set sequences [my TextSequences $chain]
+    set chars [split $string {}]
+    set count [llength $chars]
+    # Which face a CHARACTER goes to, remembered for the length of this call.
     # The answer depends on the character and on the chain and on nothing else
     # - that is what "per character, not per context" above buys - so asking a
     # face twice about the same letter can only get the same answer, and a
-    # paragraph of 3000 characters holds some thirty distinct ones.
+    # paragraph of 3000 characters holds some thirty distinct ones. Single
+    # characters and no longer units: a unit is answered from the register
+    # above, which is a lookup already, and memoising the thousands of
+    # distinct stretches a long paragraph holds would cost more than it saves.
     #
     # Measured, breaking such a paragraph to 150 mm with DejaVu Sans: 144 ms
     # without a chain, 187 ms with one and no memo, 169 ms with it. The line
@@ -731,7 +924,8 @@ oo::define ::tclpdf::document::document {
     # nothing behind, not even a cache - and a face embedded between two calls
     # is then seen by the second one.
     set decided {}
-    foreach char [split $string {}] {
+    while {$position < $count} {
+      set char [lindex $chars $position]
       # A character nothing draws stays where it stands. Asking the chain
       # about one would answer "the family has it" - every face has it - and a
       # soft hyphen in the middle of a Japanese word would then close the
@@ -742,17 +936,22 @@ oo::define ::tclpdf::document::document {
         incr position
         continue
       }
-      if {[dict exists $decided $char]} {
-        set found [dict get $decided $char]
-      } else {
-        set found {}
-        foreach candidate $chain {
-          if {[my TextCovers $candidate $char]} {
-            set found $candidate
-            break
+      lassign [my TextUnit $sequences $chars $position $count $reach] unit found
+      if {$found eq {}} {
+        # No registered sequence starts here, so this is one character and the
+        # chain decides it strictly in order.
+        set unit $char
+        if {[dict exists $decided $char]} {
+          set found [dict get $decided $char]
+        } else {
+          foreach candidate $chain {
+            if {[my TextCovers $candidate $char]} {
+              set found $candidate
+              break
+            }
           }
+          dict set decided $char $found
         }
-        dict set decided $char $found
       }
       if {$found eq {}} {
         # The refusal the chain did not remove, in the shape every other
@@ -760,12 +959,22 @@ oo::define ::tclpdf::document::document {
         # the 0-based index in the string as handed in, and the last element
         # names the faces that were asked - all of them, because naming only
         # the first would send the caller looking at a face whose gap the
-        # chain was written to close.
-        set u U+[format %04X [scan $char %c]]
+        # chain was written to close. The character NAMED is the single one at
+        # the position, whatever longer units were tried there: it is the one
+        # no face has, and a sequence in the message would send the caller
+        # looking for a glyph nobody promised.
+        set point [scan $char %c]
+        set u U+[format %04X $point]
+        # A variation selector gets its own advice: the character the caller
+        # can be refused for without knowing they wrote it.
+        set hint [::tclpdf::text::selectorHint $point]
+        if {$hint eq {}} {
+          set hint " - add a face that has it to -fallback"
+        }
         return -code error \
             -errorcode [list TCLPDF FONT GLYPH $u $position $chain] \
             "tclpdf: none of the fonts [join $chain {, }] has a glyph for\
-            $u (position $position) - add a face that has it to -fallback"
+            $u (position $position)$hint"
       }
       if {$found ne $face} {
         if {$piece ne {}} {
@@ -774,8 +983,8 @@ oo::define ::tclpdf::document::document {
         }
         set face $found
       }
-      append piece $char
-      incr position
+      append piece $unit
+      incr position [llength [split $unit {}]]
     }
     lappend segments [list $face $piece]
     return $segments
@@ -2580,4 +2789,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.19
+package provide tclpdf::text 1.20

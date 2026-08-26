@@ -20,6 +20,45 @@
 # has always been for; [font -family signs] alone is for a line that is nothing
 # but symbols.
 #
+# -chars TAKES TEXT, AND THE PACKAGE FINDS THE SEQUENCES IN IT. An emoji face
+# draws a family, a skin tone and a flag as ONE glyph each, and that glyph has
+# no character of its own: it is a GSUB ligature over several. So -chars is
+# read as text rather than as a bag of characters, the "ccmp" feature of the
+# face is applied to it, and every glyph that comes out is one glyph of the
+# Type 3 font - carrying the WHOLE sequence as its text. A caller writes
+#
+#   $doc colorFont emoji NotoColorEmoji-Regular.ttf -chars "👨‍👩‍👧👍🏽🇩🇪"
+#
+# and gets three glyphs: the family, the thumb with its skin tone, and the
+# German flag. Nobody has to take the string apart first, and nobody could:
+# which characters belong together is a property of the FACE, not of Unicode
+# and not of the caller.
+#
+# WHY ccmp AND NOTHING ELSE. Measured 2026-08-26: Noto Color Emoji, 25.1 MB
+# and 3993 base glyphs of COLR version 1, carries exactly ONE GSUB feature,
+# and it is "ccmp" - four lookups, a ligature, a chaining contextual, a
+# ligature and a contextual. Every sequence an emoji face forms is under it.
+# That is also the right feature on principle: "ccmp" is compose and
+# decompose, which is never a typographic option a caller switches on and off,
+# while "liga" and its relatives are - a colour font built here would then
+# depend on a -ligatures nobody wrote in the call.
+#
+# WHAT COMES BACK IS COMPARED WITH hb-shape, which is the only oracle worth
+# having here: measured over the family emoji, the four-person family, the
+# skin tone modifiers, the flags of two countries, the Scottish tag sequence,
+# the keycap and the transgender flag, tclpdf picks the same glyph HarfBuzz
+# 14.3.1 picks, glyph number for glyph number.
+#
+# THE VARIATION SELECTORS ARE THE ONE SPECIAL CASE, and they are not one for
+# long. U+FE0F, the emoji presentation selector, sits inside half the real
+# sequences and Noto's cmap has no glyph for it at all - HarfBuzz replaces
+# such a default-ignorable with an invisible glyph and steps over it while
+# matching. Here it is DROPPED from the glyph run and ATTACHED to the codes of
+# the character before it, which comes to the same match and keeps the text:
+# the sequence extracts complete, selector and all, because the ligature that
+# follows merges the codes of everything it swallows. A selector with no
+# character in front of it attaches to the one behind.
+#
 # THE JOINT, and nothing else. This file reads no table, decodes no outline
 # and writes no PDF object - every one of those exists once, next door:
 # colr.tcl reads which layers a version 0 base glyph has and what colour each
@@ -141,16 +180,30 @@
 #     outline. That is the blank-page trap of [font embed] one level down, and
 #     it is refused for the same reason: the document would be valid,
 #     extractable and empty.
-#   - more than 255 characters. A Type 3 font is addressed by single bytes and
-#     holds at most 255 glyphs (9.6.5.3, and [Type3Code]); the limit is
-#     checked before the font is defined, so that the 256th character is a
-#     refusal and not a silent truncation.
+#   - more than 255 GLYPHS. A Type 3 font is addressed by single bytes and
+#     holds at most 255 of them (9.6.5.3, and [Type3Code]); the limit is
+#     checked after the sequences have been found and before the font is
+#     defined, so that the 256th glyph is a refusal and not a silent
+#     truncation. Counted in glyphs and not in characters, because a sequence
+#     of seven characters is one glyph - the two numbers part company as soon
+#     as an emoji face is in play.
+#   - a character the face takes APART. A "ccmp" lookup may substitute one
+#     glyph by several, and one of the pieces then carries the text while the
+#     others carry none ([gsubApply MultipleAt]). A Type 3 glyph is one
+#     drawing with one advance and cannot be two, so such a face is refused by
+#     name rather than drawn with a piece missing. No colour face measured
+#     here does it - Noto Color Emoji's ccmp holds ligatures and contextual
+#     lookups and no Multiple substitution at all - which is why it is a
+#     refusal and not a road.
 #
 # WHAT IS DELIBERATELY NOT DONE HERE:
 #
-#   - the ZWJ sequences of an emoji face. A family emoji is one base glyph
-#     reached through a GSUB ligature, and [gsubApply] reads the lookup type
-#     it needs; what is missing is the feature wiring, not this module.
+#   - a second Type 3 font under the hood for a document that wants more than
+#     255 glyphs of one colour face. The refusal above is the answer, and the
+#     road past it is the one this module was built around: [font -fallback]
+#     takes a list of faces, so two calls of [colorFont] with two aliases and
+#     both of them in the chain set what one cannot - without this module
+#     inventing a font the caller never named and cannot address.
 #   - a /FontBBox. [font define] writes four zeros without -bbox, which
 #     Table 110 reads as "make no assumptions"; a box computed from the layers
 #     would be a claim about glyphs that may still be added to the font.
@@ -177,7 +230,10 @@ package require tclpdf::colr 1.1-
 package require tclpdf::glyfOutline 1.0-
 package require tclpdf::glyfPath 1.0-
 package require tclpdf::document 1.0-
-package require tclpdf::type3 1.0-
+# 1.3 and not 1.0: a colour font builds a glyph for a character SEQUENCE, and
+# [font glyph] takes one only from that version on. The other requirements
+# here are unpinned because what this file asks of them has not moved.
+package require tclpdf::type3 1.3-
 
 namespace eval ::tclpdf::colorFont {
   # A Type 3 font is addressed by single bytes and code 0 is not used, so 255
@@ -222,7 +278,7 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode {TCLPDF COLORFONT SOURCE} \
           "tclpdf: colorFont needs a file name or -data"
     }
-    set chars [my ColorFontChars [dict get $options chars]]
+    set text [my ColorFontChars [dict get $options chars]]
     set parsed [::tclpdf::sfnt parse $bytes]
     if {![::tclpdf::colr has $parsed]} {
       return -code error -errorcode [list TCLPDF COLORFONT TABLES $alias] \
@@ -242,8 +298,8 @@ oo::define ::tclpdf::document::document {
     # font behind - not a family that exists with no glyphs in it, and not an
     # ExtGState for a layer that never reached a stream.
     set built {}
-    foreach char $chars {
-      lappend built [my ColorFontRead $parsed $state $palette $char $alias]
+    foreach unit [my ColorFontUnits $parsed $text $alias] {
+      lappend built [my ColorFontRead $parsed $state $palette $unit $alias]
     }
     # PASS TWO builds. The matrix is the face's own em, so the numbers in the
     # glyph streams are the integers the face stores; the ascent is the one
@@ -266,13 +322,13 @@ oo::define ::tclpdf::document::document {
     # throws before the family exists.
     set streams {}
     foreach record $built {
-      lappend streams [list [dict get $record char] [dict get $record width] \
+      lappend streams [list [dict get $record text] [dict get $record width] \
           [my ColorFontStream $record $alias]]
     }
     my font define $alias -matrix [list $scale 0 0 $scale 0 0] -ascent $ascent
     foreach stream $streams {
-      lassign $stream char width body
-      my font glyph $alias $char -width $width \
+      lassign $stream text width body
+      my font glyph $alias $text -width $width \
           -script [list my content $body]
     }
     return $alias
@@ -285,35 +341,185 @@ oo::define ::tclpdf::document::document {
   # beyond the BMP reachable at all (the same reason [font glyph] counts that
   # way - measured 2026-08-21, [string length] counts the pair as two).
   #
-  # A character named twice is built once. That is not a truncation: what
-  # comes out is exactly the font that was asked for, and the alternative -
-  # letting [font glyph] refuse the repeat - would turn a harmless list into
-  # an error.
+  # NO SPLITTING AND NO DEDUPLICATION HERE ANY MORE, and that is the whole of
+  # what this method lost on 2026-08-26. It used to hand back one character
+  # per element, which was right while a glyph was a character; a sequence is
+  # a glyph now, and which characters form one is a question only the face can
+  # answer - [ColorFontUnits] asks it. What is left is the refusal of an
+  # empty -chars, which is worth a method of its own for the same reason it
+  # always was: it is the first thing the call checks.
   method ColorFontChars {chars} {
     if {$chars eq {}} {
       return -code error -errorcode {TCLPDF COLORFONT CHARS} \
-          "tclpdf: colorFont needs -chars, the characters to\
-          build colour glyphs for - a Type 3 font holds at most\
-          $::tclpdf::colorFont::maximum of them, so there is no \"all\""
+          "tclpdf: colorFont needs -chars, the characters and character\
+          sequences to build colour glyphs for - a Type 3 font holds at most\
+          $::tclpdf::colorFont::maximum glyphs, so there is no \"all\""
+    }
+    return $chars
+  }
+
+  # The GLYPHS the face makes of that text, as {text glyph} pairs in the order
+  # they first occur - one pair per glyph of the Type 3 font.
+  #
+  # THIS IS WHERE A SEQUENCE BECOMES A GLYPH. The characters are looked up in
+  # the cmap one by one, exactly as [FontRun] does it, and the run is then put
+  # through the "ccmp" feature of the face - see the head of this file for why
+  # that feature and no other. Every entry that comes out is one glyph and
+  # carries the code points it stands for, so the run says both things at
+  # once: which glyph to draw, and which characters it is the text of.
+  #
+  # A GLYPH NAMED TWICE IS BUILT ONCE. That is not a truncation: what comes
+  # out is exactly the font that was asked for, and the alternative - letting
+  # [font glyph] refuse the repeat - would turn a harmless list into an error.
+  # Deduplicated by the TEXT rather than by the glyph: two sequences may well
+  # reach the same glyph in a face that has aliases for it, and dropping the
+  # second would leave a caller with text they cannot set.
+  #
+  # THE PRICE IS NAMED RATHER THAN HIDDEN. -chars "\u2705\u2705\uFE0F" - the
+  # same mark written with and without its variation selector - fills TWO of
+  # the 255 places with byte-for-byte identical glyph streams: measured, both
+  # come out 2760 bytes and equal. That is deliberate, and the reason is one
+  # place further on: /ToUnicode carries ONE spelling back per character code
+  # (bfchar maps a code to a string, not a string to a code), so a single
+  # place would have to choose which of the two the reader gets, and every
+  # copy of the other spelling would come back as the chosen one. Two places
+  # give "\u2705\uFE0F" back as itself and "\u2705" back as itself. A caller
+  # who does not need both spellings names one and pays nothing.
+  #
+  # THE BOUNDARY IS THE CALLER'S TO WATCH, and it is named here rather than
+  # discovered: -chars is one string, so two emoji written side by side are
+  # offered to the face side by side, and a face free to ligate them will.
+  # For every sequence Unicode defines that is what is wanted - a flag IS two
+  # regional indicators in a row, and nothing but their order says which flag.
+  # A caller who wants two glyphs where the face would make one asks twice,
+  # with two aliases.
+  method ColorFontUnits {parsed text alias} {
+    set cmap [dict get $parsed cmap]
+    set gsub [::tclpdf::sfnt table $parsed GSUB]
+    set run {}
+    set pending {}
+    set position 0
+    # The character each code point came in as, so that a unit can be spelled
+    # back out of the codes a substitution left. [format %c] would be the
+    # obvious way and is the wrong one: under Tcl 8.6 it cannot write a
+    # character beyond the BMP, which is where most of an emoji face lives.
+    # The characters are in hand here anyway.
+    set charOf {}
+    foreach char [split $text {}] {
+      set point [scan $char %c]
+      dict set charOf $point $char
+      if {![dict exists $cmap $point]} {
+        # A variation selector the face has no glyph for rides along with its
+        # neighbour instead of being looked up - see the head of this file.
+        # Anything else the face has not got is the refusal it always was.
+        if {[my ColorFontRides $point]} {
+          if {[llength $run]} {
+            set last [lindex $run end]
+            lset run end [list [lindex $last 0] \
+                [concat [lindex $last 1] $point]]
+          } else {
+            lappend pending $point
+          }
+          incr position
+          continue
+        }
+        set u U+[format %04X $point]
+        return -code error \
+            -errorcode [list TCLPDF COLORFONT CHAR $u $alias] \
+            "tclpdf: the face has no glyph for character $u (position\
+            $position of -chars), so there is no colour glyph to draw for it"
+      }
+      lappend run [list [dict get $cmap $point] [concat $pending $point]]
+      set pending {}
+      incr position
+    }
+    if {[llength $pending]} {
+      set u U+[format %04X [lindex $pending 0]]
+      return -code error -errorcode [list TCLPDF COLORFONT CHAR $u $alias] \
+          "tclpdf: -chars begins with the variation selector $u and the face\
+          has no glyph for it - a selector modifies the character in front of\
+          it, and there is none"
+    }
+    if {$gsub ne {}} {
+      # Loaded HERE and not at the top of the file, for the reason font.tcl
+      # loads its layout modules where it needs them: a face with no GSUB
+      # forms no sequences, and a document of such faces should not parse the
+      # substitution machinery to find that out.
+      package require tclpdf::gsubApply 1.0-
+      package require tclpdf::gdef 1.0-
+      set run [::tclpdf::gsubApply apply [::tclpdf::gsubApply feature $gsub \
+          ccmp [::tclpdf::gdef build $parsed] {}] $run]
     }
     set seen {}
-    set result {}
-    foreach char [split $chars {}] {
-      if {[dict exists $seen $char]} {
+    set units {}
+    # WHICH CHARACTER AND WHERE, for the refusal below - the same two facts
+    # the sister refusal COLORFONT CHAR names, and for the same reason: a
+    # caller reading "glyph 4711 stands for no character" has nothing to look
+    # up in the string they wrote. A Multiple substitution gives ALL the
+    # characters to the first of its outputs (gsubApply MultipleAt), so the
+    # entry that carries the text is the last one before the empty ones, and
+    # its place in -chars is what the code points consumed up to it come to.
+    set ownerCodes {}
+    set ownerAt 0
+    set consumed 0
+    foreach entry $run {
+      lassign $entry glyph codes
+      if {![llength $codes]} {
+        # A "ccmp" Multiple substitution took a character apart into several
+        # glyphs and gave the text to one of them. See the head of this file:
+        # a Type 3 glyph is one drawing with one advance and cannot be two.
+        set u [join [lmap point $ownerCodes {
+          format U+%04X $point
+        }]]
+        if {$u eq {}} {
+          # Nothing carried text before this glyph: the face gave the
+          # characters to an output that is not the first, which the format
+          # does not allow and nothing here can name.
+          set u "U+????"
+        }
+        return -code error \
+            -errorcode [list TCLPDF COLORFONT SPLIT $u $alias] \
+            "tclpdf: the \"ccmp\" feature of this face draws character $u\
+            (position $ownerAt of -chars) as SEVERAL glyphs (glyph $glyph is\
+            one of them and stands for no character of its own) - a Type 3\
+            glyph is one drawing with one advance, so this face cannot be\
+            built into a colour font; set it with \[font embed\] instead"
+      }
+      set ownerCodes $codes
+      set ownerAt $consumed
+      incr consumed [llength $codes]
+      set unitText [join [lmap point $codes {dict get $charOf $point}] {}]
+      if {[dict exists $seen $unitText]} {
         continue
       }
-      dict set seen $char 1
-      lappend result $char
+      dict set seen $unitText 1
+      lappend units [list $unitText $glyph]
     }
-    if {[llength $result] > $::tclpdf::colorFont::maximum} {
+    if {[llength $units] > $::tclpdf::colorFont::maximum} {
       return -code error \
-          -errorcode [list TCLPDF COLORFONT LIMIT [llength $result]] \
-          "tclpdf: -chars names [llength $result] characters and a Type 3\
-          font is addressed by single bytes, so it holds at most\
-          $::tclpdf::colorFont::maximum glyphs (ISO 32000-2, 9.6.5.3) - build\
-          a second font for the rest"
+          -errorcode [list TCLPDF COLORFONT LIMIT [llength $units]] \
+          "tclpdf: -chars comes to [llength $units] glyphs and a Type 3 font\
+          is addressed by single bytes, so it holds at most\
+          $::tclpdf::colorFont::maximum of them (ISO 32000-2, 9.6.5.3) -\
+          build a second font for the rest and name both in -fallback"
     }
-    return $result
+    return $units
+  }
+
+  # Does this character ride along with its neighbour where the face has no
+  # glyph for it?
+  #
+  # The variation selectors and nothing else: U+FE00 to U+FE0F and the
+  # supplement at U+E0100 to U+E01EF. They select a presentation of the
+  # character in front of them and draw nothing themselves, which is why a
+  # face is free to have no glyph for one - and why dropping it from the glyph
+  # run is what HarfBuzz does too, in the shape of an invisible glyph its
+  # matching steps over. Everything else the face has not got is a refusal:
+  # a character that draws nothing and was meant to is the blank-page trap
+  # this module refuses by name everywhere else.
+  method ColorFontRides {point} {
+    return [expr {($point >= 0xFE00 && $point <= 0xFE0F)
+        || ($point >= 0xE0100 && $point <= 0xE01EF)}]
   }
 
   # The palette to resolve the layers through, checked before anything is
@@ -332,23 +538,24 @@ oo::define ::tclpdf::document::document {
     return $palette
   }
 
-  # Everything one character needs, read out of the face: the base glyph, its
-  # advance, and its layers bottom first as {colour alpha operators}.
+  # Everything one glyph of the font needs, read out of the face: the base
+  # glyph, its advance, and its layers bottom first as {colour alpha
+  # operators}.
+  #
+  # UNIT is {text glyph} out of [ColorFontUnits] - one character or a whole
+  # sequence, and the glyph number the face draws it with. The cmap is not
+  # asked again here: it was asked there, and a sequence has no cmap entry to
+  # ask about.
   #
   # The colour is the empty string for the 0xFFFF sentinel and the alpha is
   # then absent as well - a layer that takes the text colour takes its alpha
   # with it.
-  method ColorFontRead {parsed state palette char alias} {
-    set point [scan $char %c]
-    set u U+[format %04X $point]
-    set cmap [dict get $parsed cmap]
-    if {![dict exists $cmap $point]} {
-      return -code error -errorcode [list TCLPDF COLORFONT CHAR $u $alias] \
-          "tclpdf: the face has no glyph for character $u, so there is no\
-          colour glyph to draw for it"
-    }
-    set glyph [dict get $cmap $point]
-    set common [dict create char $char glyph $glyph u $u parsed $parsed \
+  method ColorFontRead {parsed state palette unit alias} {
+    lassign $unit text glyph
+    set u [join [lmap char [split $text {}] {
+      format U+%04X [scan $char %c]
+    }]]
+    set common [dict create text $text glyph $glyph u $u parsed $parsed \
         state $state palette $palette \
         width [::tclpdf::sfnt advance $parsed $glyph]]
     # THE ORDER IS THE STANDARD'S, and it is the reason a version 1 face works
@@ -536,4 +743,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFont 1.3
+package provide tclpdf::colorFont 1.4

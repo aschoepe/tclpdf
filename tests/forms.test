@@ -17,11 +17,14 @@
 #
 # THE DIFFERENCES ARE TESTS TOO, at the end. They used to hold what this
 # package left out of rlig, so that the day somebody read the chaining lookups
-# they would go red and say where. That day came on 2026-08-26 and they now
-# hold the opposite: the chaining lookups ARE read, the lam-alef pair and the
-# wide medial variants come out as the face draws them, and what is left is
-# one difference of a different kind - a face whose Arabic ligatures hang off
-# the "arab" script, which liga.tcl does not resolve.
+# they would go red and say where. That day came on 2026-08-26 and they hold
+# the opposite since: the chaining lookups ARE read, the lam-alef pair and the
+# wide medial variants come out as the face draws them, and the last one of
+# them - a face whose Arabic ligatures hang off the "arab" script - fell the
+# same day, when forms.tcl took liga and clig into a closing stage of their
+# own under the script of the text. So
+# 3.3 now holds an EQUALITY and the switch that still turns it off; there is
+# no difference left in this file to keep.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -67,11 +70,15 @@ proc formsParsed {path} {
 interp alias {} formsRun {} ::tclpdfTest::glyphRun
 
 # The glyph numbers tclpdf produces for a word, in logical order.
-proc formsGlyphs {path text} {
+#
+# LIGATURES is the -ligatures of the caller and defaults to on, exactly as the
+# option does: the typographic ligatures of the face take part unless somebody
+# said not to. The required ones run either way.
+proc formsGlyphs {path text {ligatures 1}} {
   set parsed [formsParsed $path]
   set glyphs {}
   foreach entry [::tclpdf::forms apply [::tclpdf::forms build $parsed] \
-      [formsRun $parsed $text]] {
+      [formsRun $parsed $text] $ligatures] {
     lappend glyphs [lindex $entry 0]
   }
   return $glyphs
@@ -108,13 +115,20 @@ test forms-1.1 {a face with the positional features is prepared} \
   # was left out. Its output is unchanged for every word of the oracle below -
   # what it does here is decompose a few letters that the positional features
   # then find in the shape they expect.
+  #
+  # rlig LEFT THIS LIST on 2026-08-26 and did not leave the shaping: the
+  # ligatures are TWO stages of their own now - the required ones, then the
+  # typographic ones a caller may switch off - because -ligatures may not
+  # switch off a required ligature and because HarfBuzz pauses between the
+  # two. So the closing stages are asked for separately below.
   set state [::tclpdf::forms build [formsParsed $::wholeFace]]
   set tags {}
   foreach {tag mark lookups} [dict get $state stages] {
     lappend tags $tag
   }
-  set tags
-} -result {ccmp fina medi init rlig}
+  list $tags [expr {[llength [dict get $state closingRequired]] > 0}] \
+      [expr {[llength [dict get $state closingOptional]] > 0}]
+} -result {{ccmp fina medi init} 1 1}
 
 test forms-1.2 {a face without them is not prepared at all} \
     -constraints havePlain -body {
@@ -133,8 +147,73 @@ test forms-1.3 {the splitting face is prepared too, ccmp and all} \
   foreach {tag mark lookups} [dict get $state stages] {
     lappend tags $tag
   }
-  set tags
-} -result {ccmp fina medi init rlig}
+  list $tags [expr {[llength [dict get $state closingRequired]] > 0}] \
+      [expr {[llength [dict get $state closingOptional]] > 0}]
+} -result {{ccmp fina medi init} 1 1}
+
+# --- which of the two closing stages runs first -----------------------------
+
+# A face built here rather than found in the tree, because no face in the tree
+# can show this: in every one of them the rlig lookups have LOWER indices than
+# the liga ones, so a sort by index and a stage order agree and the difference
+# is invisible. The fixture numbers them the other way round on purpose.
+#
+#   lookup 0, 1, 2   the three positional forms, on a glyph nothing uses -
+#                    [forms build] refuses a face without them
+#   lookup 3         liga: glyph 10 becomes 30      <- the LOWER index
+#   lookup 4         rlig: glyph 10 becomes 40      <- the HIGHER index
+#   lookup 5         liga: glyph 11 becomes 31       (nothing in rlig)
+#
+# Whichever stage runs first wins on glyph 10, because after it the other no
+# longer matches. Measured against hb-shape with the same construction patched
+# into Noto Naskh Arabic - two new lookups at the end of its lookup list, the
+# lower one added to liga and the higher one to rlig: hb-shape --script=arab
+# answers the rlig substitute, and answers the liga one only with
+# --features=-rlig.
+proc formsStageFace {} {
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 99 98]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 99 97]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 99 96]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 30]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 40]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 11 31]]]] \
+      [dict create init {0} medi {1} fina {2} liga {3 5} rlig {4}] arab]
+  return [dict create bytes $gsub \
+      tables [dict create GSUB [list 0 [string length $gsub]]]]
+}
+
+# One hamza, which joins on neither side, so no positional feature touches it
+# and the closing stages are all that can act.
+proc formsStageGlyphs {glyph {ligatures 1}} {
+  set run [list [list $glyph [list 0x0621]]]
+  set out {}
+  foreach entry [::tclpdf::forms apply \
+      [::tclpdf::forms build [formsStageFace] arab] $run $ligatures] {
+    lappend out [lindex $entry 0]
+  }
+  return $out
+}
+
+test forms-1.4 {the required ligatures run before the typographic ones} -body {
+  # 40 is the rlig substitute and 30 the liga one. Sorting the two features
+  # into ONE stage by lookup index - which is what this package did until
+  # 2026-08-26 - answers 30, because lookup 3 stands before lookup 4.
+  formsStageGlyphs 10
+} -result 40
+
+test forms-1.5 {and -ligatures 0 leaves the required stage alone} -body {
+  # The other half of the promise: switching the typographic ligatures off
+  # must not touch rlig, so the answer is the same one.
+  formsStageGlyphs 10 0
+} -result 40
+
+test forms-1.6 {the typographic stage still runs where rlig has no rule} -body {
+  # The control: 1.4 must not pass because the liga stage is broken. Glyph 11
+  # is in liga alone, so it has to change with -ligatures on and stand with it
+  # off - or "rlig first" would be indistinguishable from "liga never".
+  list [formsStageGlyphs 11] [formsStageGlyphs 11 0]
+} -result {31 11}
 
 # --- the oracle -------------------------------------------------------------
 
@@ -241,26 +320,29 @@ test forms-3.2 {and the wide medial variants are selected} \
   list [llength $ours] [llength $full] $differing
 } -result {10 10 0}
 
-test forms-3.3 {what is left is a SCRIPT that is not resolved, not a lookup type} \
+test forms-3.3 {the ligatures of the resolved script, and the switch on them} \
     -constraints {haveWhole haveHbShape} -body {
-  # THE ONE DIFFERENCE THAT REMAINS, and it is of another kind entirely.
-  # DejaVu Sans draws lam followed by alef-with-madda as one glyph, and keeps
+  # THIS TEST HELD A DIFFERENCE UNTIL 2026-08-26 and now holds the equality.
+  # DejaVu Sans draws lam followed by alef-with-madda as ONE glyph and keeps
   # that ligature in the "liga" feature of the "arab" script - lookups 17 and
-  # 19, measured. liga.tcl resolves the LATIN language system, reaches lookup
-  # 18 alone, and never sees them; forms.tcl does not read liga at all. So the
-  # pair comes out as two joined letters: legible, and not what the face
-  # draws.
+  # 19, measured. liga.tcl resolves the LATIN language system and reaches
+  # lookup 18 alone, so the pair used to come out as two joined letters:
+  # legible, and not what the face draws. forms.tcl reads liga and clig under
+  # the script it was asked for since, in the two closing stages HarfBuzz
+  # applies them in, and the difference is gone - 66 words of the 7961
+  # measured over the three faces in this tree, 0 now.
   #
-  # Reading liga under the script of the text needs a script API this package
-  # has not got, which is why this is a test and not a fix. Four words of the
-  # 6415 measured on this face on 2026-08-26 differ for this reason and no
-  # other; the plain lam-alef of 2.2 is not among them, because that one is a
-  # required ligature and sits in rlig.
-  set ours [formsGlyphs $::wholeFace "لآ"]
-  list [llength $ours] \
-      [llength [formsHarfBuzz $::wholeFace "لآ"]] \
-      [expr {$ours eq [formsHarfBuzz $::wholeFace "لآ" -liga]}]
-} -result {2 1 1}
+  # AND -ligatures STILL SWITCHES IT, which is the second half of the promise
+  # and the reason both answers are written out. Off, the pair is the two
+  # joined letters again - what hb-shape gives for "-liga" - and the plain
+  # lam-alef of 2.2 is unaffected either way, because that one is a REQUIRED
+  # ligature and sits in rlig, which -ligatures may not switch off.
+  set with [formsGlyphs $::wholeFace "\u0644\u0622"]
+  set without [formsGlyphs $::wholeFace "\u0644\u0622" 0]
+  list [llength $with] [expr {$with eq [formsHarfBuzz $::wholeFace "\u0644\u0622"]}] \
+      [llength $without] \
+      [expr {$without eq [formsHarfBuzz $::wholeFace "\u0644\u0622" -liga]}]
+} -result {1 1 2 1}
 
 # --- what the substitutions do to the run -----------------------------------
 

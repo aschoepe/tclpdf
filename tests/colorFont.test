@@ -139,7 +139,10 @@ proc cfCmap {map} {
 # The whole face around the tables: 1000 units to the em, an ascender of 800,
 # an advance of 1000 for every glyph, and a 32-bit loca so an offset needs no
 # halving. Every glyph is padded to four bytes, which loca then reflects.
-proc cfFont {glyphs map colr cpal} {
+#
+# GSUB is optional and empty by default: the fixture above forms no sequences
+# and needs none, while the sequence face below is nothing but one.
+proc cfFont {glyphs map colr cpal {gsub {}}} {
   set count [llength $glyphs]
   set head [binary format IuIuIuIu 0x00010000 0x00010000 0 0x5F0F3CF5]
   append head [binary format SuSu 0 1000]
@@ -169,9 +172,13 @@ proc cfFont {glyphs map colr cpal} {
     }
   }
   append loca [binary format Iu [string length $glyf]]
-  return [::tclpdf::subset::Assemble [dict create head $head hhea $hhea \
+  set tables [dict create head $head hhea $hhea \
       maxp $maxp hmtx $hmtx loca $loca glyf $glyf cmap [cfCmap $map] \
-      COLR $colr CPAL $cpal]]
+      COLR $colr CPAL $cpal]
+  if {$gsub ne {}} {
+    dict set tables GSUB $gsub
+  }
+  return [::tclpdf::subset::Assemble $tables]
 }
 
 # The face this file measures against.
@@ -188,14 +195,21 @@ proc cfFont {glyphs map colr cpal} {
 # The two palettes overlap by three colours, which is what a palette IS - a
 # window into one colour record array - so palette 1 answers green where
 # palette 0 answers red for the same entry.
-proc cfFixture {} {
+#
+# MAP replaces the character map where a test needs a wider one - the limit of
+# 255 glyphs is only reachable with 256 characters in the face, and building a
+# second face beside this one for that alone would be the same twelve glyphs
+# twice.
+proc cfFixture {{map {}}} {
   set glyphs [list {} \
       [cfOutline {{{100 100} {900 100} {900 900} {100 900}}}] \
       [cfOutline {{{200 150} {800 150} {500 750}}}] \
       [cfOutline {{{150 400} {850 400} {850 600} {150 600}}}] \
       {} [cfComposite 1] {} {} {} {} {} {}]
-  set map [dict create 0xE000 6 0xE001 7 0xE002 8 0xE003 9 0xE004 10 \
-      0xE005 11 0x1F600 6]
+  if {![dict size $map]} {
+    set map [dict create 0xE000 6 0xE001 7 0xE002 8 0xE003 9 0xE004 10 \
+        0xE005 11 0x1F600 6]
+  }
   # base glyph -> first layer, layer count
   set records {{6 0 2} {7 2 2} {8 4 1} {9 5 1} {10 6 1}}
   # layer glyph -> palette entry. 0xFFFF is the sentinel: the text colour.
@@ -574,20 +588,35 @@ test colorFont-3.5 {a base glyph whose layers all draw nothing} -body {
   set code
 } -result {TCLPDF COLORFONT EMPTY U+E003 marks}
 
-test colorFont-3.6 {more than 255 characters} -body {
+test colorFont-3.6 {255 glyphs go in, the 256th is a refusal} -body {
   # A Type 3 font is addressed by single bytes and holds at most 255 glyphs
-  # (9.6.5.3). The limit is checked before the face is even read, so the
-  # 256th character is a refusal and not a silent truncation.
+  # (9.6.5.3). The limit is counted in GLYPHS and not in characters, and since
+  # 2026-08-26 it has to be: a sequence of seven characters is one glyph, so a
+  # count made before the face was asked would refuse -chars a face turns into
+  # a dozen glyphs. It is therefore checked after the sequences are found and
+  # before the font is defined - the 256th glyph is a refusal and not a silent
+  # truncation, and the 255th still goes in.
+  #
+  # The face is widened for it: 256 characters all drawn by the same base
+  # glyph, which is what makes the limit reachable at all with a fixture of
+  # twelve glyphs.
+  set map {}
+  set chars {}
+  for {set code 0xE000} {[dict size $map] < 256} {incr code} {
+    dict set map $code 6
+    append chars [format %c $code]
+  }
   set doc [tclpdf new -unit mm]
   $doc page add
-  set chars {}
-  for {set code 0x2000} {[llength [split $chars {}]] < 256} {incr code} {
-    append chars [subst [format {\u%04x} $code]]
-  }
-  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] -chars $chars}]
+  set full [::tclpdfTest::refusal {
+    $doc colorFont many -data [cfFixture $map] -chars $chars
+  }]
+  set fits [$doc colorFont fits -data [cfFixture $map] \
+      -chars [string range $chars 0 254]]
+  set glyphs [dict get [$doc font info fits] glyphs]
   $doc destroy
-  set code
-} -result {TCLPDF COLORFONT LIMIT 256}
+  list $full $fits $glyphs
+} -result {{TCLPDF COLORFONT LIMIT 256} fits 255}
 
 test colorFont-3.7 {a palette the face has not got} -body {
   # Checked before anything is built. [colr color] would refuse a wrong
@@ -798,5 +827,313 @@ test colorFont-4.6 {a colour font and an embedded face in one document} \
   file delete $path
   list $type3 $truetype
 } -result {1 1}
+
+
+# --- the face that forms SEQUENCES ------------------------------------------
+#
+# A second fixture, and it has to be a second one: the face above has no GSUB
+# at all, and a sequence is a GSUB ligature. This one is the smallest face
+# that can show what an emoji face does - three drawn shapes, five base
+# glyphs, and a "ccmp" feature with two ligatures in it:
+#
+#   man + ZWJ + woman  -> the family glyph
+#   thumb + skin tone  -> the thumb in that tone
+#
+# THE CODE POINTS ARE THE REAL ONES - U+1F468, U+200D, U+1F469, U+1F44D,
+# U+1F3FD - and not private use characters, which is a decision rather than
+# decoration: three of them lie beyond the BMP, so the walk that has to count
+# in code points rather than in string elements is exercised here under both
+# interpreters, and the joiner in the middle is the character no face in the
+# world has a glyph worth drawing for.
+#
+# BUILT FROM BYTES for the same reason cpAstral is (colorFontPaint.test): the
+# escape \U0001F468 yields U+FFFD under Tcl 8.6 and [format %c] cannot write
+# one either, so neither may appear in a test that has to pass under both.
+#
+# The glyphs, in order:
+#
+#   0  .notdef, empty
+#   1  a square    layer
+#   2  a triangle  layer
+#   3  a bar       layer
+#   4  man         base, the square
+#   5  woman       base, the triangle
+#   6  thumb       base, the bar
+#   7  family      base, square and triangle - what the ZWJ ligature reaches
+#   8  thumb+tone  base, bar and square - what the modifier ligature reaches
+#   9  the joiner  empty, and no COLR record: it draws nothing on its own,
+#                  which is exactly what it is for and what makes asking for
+#                  it alone a refusal
+#  10  the tone    the same
+proc cfCharacter {bytes} {
+  return [encoding convertfrom utf-8 [binary format c* $bytes]]
+}
+set cfMan [cfCharacter {0xF0 0x9F 0x91 0xA8}]
+set cfWoman [cfCharacter {0xF0 0x9F 0x91 0xA9}]
+set cfThumb [cfCharacter {0xF0 0x9F 0x91 0x8D}]
+set cfTone [cfCharacter {0xF0 0x9F 0x8F 0xBD}]
+set cfJoiner [cfCharacter {0xE2 0x80 0x8D}]
+# The emoji presentation selector U+FE0F, which this face has no glyph for -
+# the character that rides along with its neighbour instead of being looked
+# up.
+set cfSelector [cfCharacter {0xEF 0xB8 0x8F}]
+
+proc cfSequenceFace {} {
+  set glyphs [list {} \
+      [cfOutline {{{100 100} {900 100} {900 900} {100 900}}}] \
+      [cfOutline {{{200 150} {800 150} {500 750}}}] \
+      [cfOutline {{{150 400} {850 400} {850 600} {150 600}}}] \
+      {} {} {} {} {} {} {}]
+  set map [dict create 0x1F468 4 0x1F469 5 0x1F44D 6 0x200D 9 0x1F3FD 10]
+  # base glyph -> first layer, layer count
+  set records {{4 0 1} {5 1 1} {6 2 1} {7 3 2} {8 5 2}}
+  # layer glyph -> palette entry
+  set layers {{1 0} {2 1} {3 2} {1 0} {2 1} {3 2} {1 1}}
+  set colours {{0 0 255 255} {0 170 0 255} {255 0 0 255}}
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 4 0 [list \
+          [::tclpdfTest::gsubLigature {4 9 5} 7]]] \
+      [::tclpdfTest::gsubLookup 4 0 [list \
+          [::tclpdfTest::gsubLigature {6 10} 8]]]] \
+      [dict create ccmp {0 1}]]
+  return [cfFont $glyphs $map [cfColr $records $layers] \
+      [cfCpal 3 {0} $colours] $gsub]
+}
+
+# The characters each glyph of a font stands for, by character code.
+proc cfTextOf {doc alias} {
+  set entry [dict get [$doc state fonts] $alias]
+  set out {}
+  foreach code [lsort -integer [dict keys [dict get $entry glyphs]]] {
+    lappend out [dict get $entry glyphs $code chars]
+  }
+  return $out
+}
+
+# A list of characters as U+XXXX, so that a failure says WHICH character came
+# back rather than printing two lines that look alike.
+proc cfPoints {chars} {
+  return [lmap char $chars {format U+%04X [scan $char %c]}]
+}
+
+test colorFont-5.1 {the face turns the characters into sequences} -body {
+  # THE POINT OF THE WHOLE BUILD. Six characters go in and the face makes ONE
+  # glyph of the first three and one of the next two; the sixth forms nothing
+  # and stays a glyph of its own. Nobody took the string apart before the
+  # call - which characters belong together is the face's answer, not the
+  # caller's.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc colorFont emoji -data [cfSequenceFace] \
+      -chars $::cfMan$::cfJoiner$::cfWoman$::cfThumb$::cfTone$::cfWoman
+  set count [dict get [$doc font info emoji] glyphs]
+  set lengths [lsort -integer [lmap chars [cfTextOf $doc emoji] {
+    llength $chars
+  }]]
+  $doc destroy
+  list $count $lengths
+} -result {3 {1 2 3}}
+
+test colorFont-5.2 {a sequence is ONE glyph with ONE width} -body {
+  # Every glyph of the fixture advances 1000 units, so a sequence of three
+  # characters measures exactly what a single one measures - which is the
+  # promise the line breaker, the table cell and textWidth all rest on. The
+  # document is in points, so 1000 units at size 10 are 10 pt.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc colorFont emoji -data [cfSequenceFace] \
+      -chars $::cfMan$::cfJoiner$::cfWoman$::cfThumb$::cfTone
+  set family [$doc textWidth $::cfMan$::cfJoiner$::cfWoman \
+      -family emoji -size 10]
+  set thumb [$doc textWidth $::cfThumb$::cfTone -family emoji -size 10]
+  set both [$doc textWidth \
+      $::cfMan$::cfJoiner$::cfWoman$::cfThumb$::cfTone -family emoji -size 10]
+  $doc destroy
+  list $family $thumb $both
+} -result {10.0 10.0 20.0}
+
+test colorFont-5.3 {the sequence glyph draws what the ligature reached} -body {
+  # Glyph 7 is the family and carries TWO layers - the square in palette entry
+  # 0 and the triangle in entry 1 - where the man alone carries one. So the
+  # stream says WHICH glyph the ligature found, and not only that one was.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc colorFont emoji -data [cfSequenceFace] \
+      -chars $::cfMan$::cfJoiner$::cfWoman$::cfMan
+  set family [cfLines [cfStream $doc emoji $::cfMan$::cfJoiner$::cfWoman]]
+  set man [cfLines [cfStream $doc emoji $::cfMan]]
+  $doc destroy
+  list [llength [lsearch -all -inline $family f]] \
+      [llength [lsearch -all -inline $man f]] \
+      [lsearch -inline -glob $family "* rg"]
+} -result {2 1 {1 0 0 rg}}
+
+test colorFont-5.4 {the whole sequence is the text of the glyph} -body {
+  # A bfchar may map one code to several UTF-16 units (9.10.3): U+1F468 is a
+  # surrogate pair, U+200D one unit, U+1F469 a pair again - five units for the
+  # one code. Written out rather than counted, because the ORDER is the half a
+  # count would not catch.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc colorFont emoji -data [cfSequenceFace] \
+      -chars $::cfMan$::cfJoiner$::cfWoman
+  $doc font -family emoji -size 20
+  $doc text $::cfMan$::cfJoiner$::cfWoman -at {20 30}
+  set path [::tclpdfTest::scratch colorFont-5.4.pdf]
+  $doc write $path
+  set map [join [::tclpdfTest::objects $doc beginbfchar] \n]
+  $doc destroy
+  file delete $path
+  # After "beginbfchar" and not anywhere: the codespace range above it is two
+  # hex strings as well, and it is the first pair in the stream.
+  regexp -inline {beginbfchar\s+(<[0-9A-F]+> <[0-9A-F]+>)} $map
+} -result {{beginbfchar
+<FF> <D83DDC68200DD83DDC69>} {<FF> <D83DDC68200DD83DDC69>}}
+
+test colorFont-5.5 {pdftotext gives the sequence back} \
+    -constraints pdftotext -body {
+  # THE ONE MEASUREMENT THAT MATTERS TO A READER. The glyph is a drawing and
+  # the character code is an invention of this font; what makes the text
+  # copyable is the ToUnicode map alone, and no validator anywhere looks at
+  # it. So a reader is asked.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc colorFont emoji -data [cfSequenceFace] \
+      -chars $::cfMan$::cfJoiner$::cfWoman$::cfThumb$::cfTone
+  $doc font -family emoji -size 20
+  $doc text $::cfMan$::cfJoiner$::cfWoman$::cfThumb$::cfTone -at {20 30}
+  set path [::tclpdfTest::scratch colorFont-5.5.pdf]
+  $doc write $path
+  $doc destroy
+  set text [string trim [exec pdftotext -enc UTF-8 $path -]]
+  file delete $path
+  cfPoints [split $text {}]
+} -result {U+1F468 U+200D U+1F469 U+1F44D U+1F3FD}
+
+test colorFont-5.6 {a variation selector rides along with its neighbour} -body {
+  # U+FE0F draws nothing and this face has no glyph for it - HarfBuzz turns
+  # such a default-ignorable into an invisible glyph and steps over it, and
+  # here it is dropped from the glyph run and kept in the TEXT. So the man
+  # with a presentation selector is the man's glyph at the man's width, and
+  # the selector still extracts.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc colorFont emoji -data [cfSequenceFace] -chars $::cfMan$::cfSelector
+  set count [dict get [$doc font info emoji] glyphs]
+  set texts [cfTextOf $doc emoji]
+  set width [$doc textWidth $::cfMan$::cfSelector -family emoji -size 10]
+  $doc destroy
+  list $count [cfPoints [lindex $texts 0]] $width
+} -result {1 {U+1F468 U+FE0F} 10.0}
+
+test colorFont-5.7 {a selector with nothing in front of it rides forward} -body {
+  # A selector modifies the character BEFORE it, so where there is none it
+  # attaches to the one behind rather than being dropped: a caller who wrote
+  # it meant something, and dropping it would lose it from the text as well.
+  # A -chars of nothing but selectors has nothing to attach to at all and is
+  # refused by name.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc colorFont one -data [cfSequenceFace] -chars $::cfSelector$::cfMan
+  set texts [cfTextOf $doc one]
+  set count [dict get [$doc font info one] glyphs]
+  set code [::tclpdfTest::refusal {
+    $doc colorFont two -data [cfSequenceFace] -chars $::cfSelector
+  }]
+  $doc destroy
+  list $count [cfPoints [lindex $texts 0]] $code
+} -result {1 {U+FE0F U+1F468} {TCLPDF COLORFONT CHAR U+FE0F two}}
+
+test colorFont-5.8 {the joiner on its own draws nothing and is refused} -body {
+  # The characters of a real emoji face that draw nothing - the joiner, the
+  # variation selectors, the tags - fall into the blank-glyph trap this module
+  # refuses by name everywhere else, and asking for one alone lands there: no
+  # COLR record and an empty outline is a glyph that would set, measure and
+  # extract while painting nothing.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [::tclpdfTest::refusal {
+    $doc colorFont emoji -data [cfSequenceFace] -chars $::cfJoiner
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF COLORFONT EMPTY U+200D emoji}
+
+test colorFont-5.9 {the fallback chain offers the sequence as ONE unit} \
+    -constraints havePlain -body {
+  # THE HALF THAT WOULD HAVE BEEN MISSED. The chain decides per character
+  # which face sets what, and no face has a glyph for a lone joiner - so a
+  # family emoji in a line of words was refused until the chain learned to
+  # offer the longest unit any face in it can set. Read off the Tf operators
+  # of the stream rather than out of the state: three segments, the words from
+  # the embedded face, the sequence from the colour font, the full stop back.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font embed body $::plainFace
+  $doc colorFont emoji -data [cfSequenceFace] \
+      -chars $::cfMan$::cfJoiner$::cfWoman
+  $doc font -family body -size 12 -fallback emoji
+  $doc text "we $::cfMan$::cfJoiner$::cfWoman." -at {20 30}
+  set faces {}
+  foreach line [split [::tclpdfTest::content $doc] \n] {
+    if {[regexp {^(/\S+) [0-9.]+ Tf$} $line -> name]} {
+      lappend faces $name
+    }
+  }
+  $doc destroy
+  set faces
+} -result {/FEbody /T3emoji /FEbody}
+
+test colorFont-5.10 {a face that takes a character APART is refused by name} -body {
+  # A "ccmp" Multiple substitution turns one glyph into several and gives the
+  # text to one of them; a Type 3 glyph is one drawing with one advance and
+  # cannot be two. No colour face measured here does it, which is why this is
+  # a refusal and not a road - and why the face for it is built on the spot.
+  set glyphs [list {} \
+      [cfOutline {{{100 100} {900 100} {900 900} {100 900}}}] \
+      [cfOutline {{{200 150} {800 150} {500 750}}}] {} {} {}]
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 2 0 [list \
+          [::tclpdfTest::gsubMultiple 3 {4 5}]]]] [dict create ccmp 0]]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [::tclpdfTest::refusal {
+    $doc colorFont emoji -data [cfFont $glyphs [dict create 0x1F468 3] \
+        [cfColr {{3 0 1} {4 0 1} {5 1 1}} {{1 0} {2 0}}] \
+        [cfCpal 1 {0} {{0 0 255 255}}] $gsub] -chars $::cfMan
+  }]
+  $doc destroy
+  # The WHOLE code, not its first three elements: since 2026-08-26 it names
+  # the character that was taken apart and the message names its place in
+  # -chars, exactly as the sister refusal COLORFONT CHAR does - a caller told
+  # only "glyph 4 stands for no character" has nothing to look up in the
+  # string they wrote.
+  set code
+} -result {TCLPDF COLORFONT SPLIT U+1F468 emoji}
+
+test colorFont-5.11 {and the refusal says where in -chars it stands} -body {
+  # The position is counted in code points from the start of -chars, which is
+  # what makes it a place the caller can point at. One ordinary glyph in
+  # front of the split one, so the answer is 1 rather than 0 - a position
+  # that is always zero would prove nothing.
+  set glyphs [list {} \
+      [cfOutline {{{100 100} {900 100} {900 900} {100 900}}}] \
+      [cfOutline {{{200 150} {800 150} {500 750}}}] {} {} {}]
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 2 0 [list \
+          [::tclpdfTest::gsubMultiple 3 {4 5}]]]] [dict create ccmp 0]]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set message {}
+  catch {
+    $doc colorFont emoji -data [cfFont $glyphs \
+        [dict create 0x1F469 1 0x1F468 3] \
+        [cfColr {{1 0 1} {3 0 1} {4 0 1} {5 1 1}} {{1 0} {2 0}}] \
+        [cfCpal 1 {0} {{0 0 255 255}}] $gsub] -chars $::cfWoman$::cfMan
+  } message
+  $doc destroy
+  regexp {\(position (\d+) of -chars\)} $message -> where
+  set where
+} -result 1
 
 cleanupTests

@@ -1,0 +1,268 @@
+# notoemoji.test --
+#
+# What examples/02.18-noto-color-emoji.tcl promises, and nothing beyond it:
+# that it runs where the colour face is in the tree, that the character
+# SEQUENCES it sets come back out of the finished document unchanged, and that
+# it SKIPS where the face is not - one line on the console, no document, and
+# an exit status of zero, so that "make examples" runs on past it as it runs
+# past a missing validator.
+#
+# The example is run as a CHILD PROCESS, the way tools/check.sh runs it, so
+# what is tested is the file that ships rather than a copy of its innards.
+#
+# NO TEST HERE MAY REQUIRE THE FACE, and that is the shape of the file rather
+# than a remark about it. NotoColorEmoji-Regular.ttf is 25 MB of somebody
+# else's artwork; it is kept out of the repository and out of the source
+# archive, so a fresh clone has no such file and neither has anyone building
+# from a tarball. The six tests that need it carry a constraint and skip
+# without it. The last one needs the face to be ABSENT, which on the machine
+# that does have it would make it the one test nobody ever runs - so it hides
+# the file from the child instead of asking whether there is one, and
+# therefore runs everywhere.
+#
+# TWO OF THE SIX DO NOT LOOK AT THE DOCUMENT AT ALL. What the skin tone rows
+# of the page claim is a property of the FONT - n units give n glyphs of one
+# width - and that is measured where the caller measures it, through
+# [textWidth], rather than read back out of a content stream that can only
+# show what was already drawn.
+#
+# WHY THE FACE IS HIDDEN BY RENAMING [file] and not by copying the example
+# somewhere emptier. The example finds its assets relative to [info script]
+# and its package relative to that again, so a copy in a scratch directory
+# would fail at [package require tclpdf], several lines before it ever asks
+# about the face - and the test would pass for the wrong reason. Renaming the
+# builtin leaves the shipped file where it stands, with its auto_path, its
+# common.tcl and its DejaVu Sans all resolving, and answers exactly ONE
+# question differently: does that one path exist. That the example asks it at
+# all, and asks it about that path, is then part of what the test measures.
+# It is the same trick tkcanvas.test plays on [package require Tk], for the
+# same reason.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::io
+source [file join [file dirname [info script]] helper.tcl]
+
+set ::notoEmojiTree [file dirname [file dirname [file normalize [info script]]]]
+set ::notoEmojiExample [file join $::notoEmojiTree examples \
+    02.18-noto-color-emoji.tcl]
+set ::notoEmojiFace [file join $::notoEmojiTree examples assets fonts google \
+    NotoColorEmoji-Regular.ttf]
+
+testConstraint haveNotoColorEmoji [file exists $::notoEmojiFace]
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint pdftotext [expr {[auto_execok pdftotext] ne {}}]
+
+# The sequences the document is asked to give back. Written LITERALLY into
+# this file rather than as \U escapes or [format %c]: under Tcl 8.6 both of
+# those answer U+FFFD for a character beyond the BMP, which is where an emoji
+# face lives. A literal in a UTF-8 file is read correctly by both
+# interpreters - measured: [split] counts seven code points in the Scottish
+# flag under 8.6 as well as under 9.0, and [encoding convertto utf-8] answers
+# the same 28 bytes for it under both.
+set ::notoEmojiSequences [list \
+    👨‍👩‍👧‍👦 \
+    👍🏽 \
+    🇩🇪 \
+    🏴󠁧󠁢󠁳󠁣󠁴󠁿 \
+    👷🏽‍♀️ \
+    🧑🏽‍🌾]
+
+# THE THREE SKIN TONE RAMPS the example sets one row each: the same icon with
+# no modifier and then with all five Fitzpatrick modifiers, U+1F3FB to
+# U+1F3FF. Two of the three put the modifier INSIDE a zero width joiner
+# sequence, which is the case a longest match can get wrong - a match that
+# took the base and the tone and stopped there would leave the joiner behind
+# and refuse it.
+set ::notoEmojiThumbs [list 👍 \
+    👍🏻 \
+    👍🏼 \
+    👍🏽 \
+    👍🏾 \
+    👍🏿]
+set ::notoEmojiWorkers [list 👷‍♀️ \
+    👷🏻‍♀️ \
+    👷🏼‍♀️ \
+    👷🏽‍♀️ \
+    👷🏾‍♀️ \
+    👷🏿‍♀️]
+set ::notoEmojiFarmers [list 🧑‍🌾 \
+    🧑🏻‍🌾 \
+    🧑🏼‍🌾 \
+    🧑🏽‍🌾 \
+    🧑🏾‍🌾 \
+    🧑🏿‍🌾]
+
+# Run a script as a child and answer {code output}. stderr is merged rather
+# than left to [exec], which turns any stderr output at all into an error -
+# here the OUTPUT is what a test wants to look at.
+proc ::tclpdfTest::notoEmojiRun {args} {
+    set code [catch {exec [info nameofexecutable] {*}$args 2>@1} output]
+    return [list $code $output]
+}
+
+# The document the example writes, made ONCE and answered by path. Three tests
+# look at the same file and each of them has to stand on its own - a run
+# filtered to a single test would otherwise read a document nobody wrote.
+proc ::tclpdfTest::notoEmojiDocument {} {
+    variable notoEmojiWritten
+    set target [::tclpdfTest::scratch notoemoji-example.pdf]
+    if {![info exists notoEmojiWritten]} {
+        file delete $target
+        set notoEmojiWritten [::tclpdfTest::notoEmojiRun \
+            $::notoEmojiExample $target]
+    }
+    return $target
+}
+
+proc ::tclpdfTest::notoEmojiConsole {} {
+    ::tclpdfTest::notoEmojiDocument
+    variable notoEmojiWritten
+    return $notoEmojiWritten
+}
+
+test notoemoji-1.1 {the example runs and writes a document} \
+    -constraints haveNotoColorEmoji -body {
+  set target [::tclpdfTest::notoEmojiDocument]
+  lassign [::tclpdfTest::notoEmojiConsole] code output
+  # The glyph count is the one number worth asserting from the console, and
+  # it is the whole subject of the pages: 127 characters go in as one string
+  # and 56 glyphs come out, because the face joins them into sequences. A
+  # count of 127 would mean the sequences had been taken apart.
+  list $code [string range [::tclpdf::io read $target] 0 4] \
+      [string match {*56 glyphs out of 127 characters*} $output]
+} -result {0 %PDF- 1}
+
+test notoemoji-1.2 {qpdf reads what came out} \
+    -constraints {haveNotoColorEmoji qpdf} -body {
+  set report [exec qpdf --check [::tclpdfTest::notoEmojiDocument] 2>@1]
+  expr {[string match {*No syntax or stream encoding errors found*} $report]
+      ? "ok" : $report}
+} -result ok
+
+test notoemoji-1.3 {pdftotext gives the sequences back unchanged} \
+    -constraints {haveNotoColorEmoji pdftotext} -body {
+  # THE ONE MEASUREMENT THAT MATTERS TO A READER, and no validator anywhere
+  # makes it: what makes a drawn glyph copyable is its /ToUnicode entry, and
+  # for a sequence that entry has to carry every code point the ligature
+  # swallowed - the joiners of the family, the skin tone of the thumb, the
+  # two regional indicators of the flag, the six invisible tag characters of
+  # the Scottish one. So a reader is asked, and it is asked for the whole
+  # sequence rather than for the first character of it.
+  set text [exec pdftotext -enc UTF-8 \
+      [::tclpdfTest::notoEmojiDocument] - 2>@1]
+  lmap sequence $::notoEmojiSequences {
+      expr {[string first $sequence $text] >= 0}
+  }
+} -result {1 1 1 1 1 1}
+
+test notoemoji-1.4 {every emoji is a vector, no picture in the document} \
+    -constraints {haveNotoColorEmoji pdftotext} -body {
+  # pdfimages ships with pdftotext and is gated by the same constraint. A
+  # colour font that had come out as bitmaps would be listed here, and the
+  # page claims it is not: the header alone, and nothing under it.
+  set report [exec pdfimages -list [::tclpdfTest::notoEmojiDocument] 2>@1]
+  llength [lrange [split [string trim $report] \n] 2 end]
+} -result 0
+
+test notoemoji-2.1 {a skin tone ramp is one glyph per unit, all of one width} \
+    -constraints haveNotoColorEmoji -body {
+  # WHAT A RAMP HAS TO COME OUT AS, and the two halves are one claim: n units
+  # go in and n glyphs come out - not one glyph for the base and five loose
+  # modifiers, and not one glyph for all six - and every one of the n is the
+  # same width, because a skin tone modifier adds nothing to the advance.
+  #
+  # Measured in this process rather than read off the document: the widths
+  # are what [textWidth] answers, which is what the line breaker and the
+  # table columns see, and a document can only show what was drawn.
+  set units [concat $::notoEmojiThumbs $::notoEmojiWorkers \
+      $::notoEmojiFarmers]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set alias [$doc colorFont ramp $::notoEmojiFace -chars [join $units {}]]
+  set widths {}
+  foreach unit $units {
+    lappend widths [format %.6f [$doc textWidth $unit -family $alias -size 10]]
+  }
+  set glyphs [dict get [$doc font info $alias] glyphs]
+  $doc destroy
+  # 18 units, 18 glyphs, one distinct width. The code point counts are named
+  # too, or "18 units" would say nothing about the sequences being found: the
+  # eighteen are written with 11 + 29 + 23 code points - a base plus five
+  # toned ones, of two, five and four characters each.
+  list [llength $units] $glyphs [llength [lsort -unique $widths]] \
+      [llength [split [join $::notoEmojiThumbs {}] {}]] \
+      [llength [split [join $::notoEmojiWorkers {}] {}]] \
+      [llength [split [join $::notoEmojiFarmers {}] {}]]
+} -result {18 18 1 11 29 23}
+
+test notoemoji-2.2 {twice the size is exactly twice the width} \
+    -constraints haveNotoColorEmoji -body {
+  # The claim the double-size row on the first page makes: a colour glyph of
+  # this face is a PATH in a Type 3 glyph stream, so the only thing that
+  # changes between the two rows is the text matrix. If anything about the
+  # drawing depended on the size - a rounded advance, a rasterised picture -
+  # the two numbers would not be in that ratio.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set alias [$doc colorFont scale $::notoEmojiFace -chars \
+      [lindex $::notoEmojiFarmers 3]]
+  set unit [lindex $::notoEmojiFarmers 3]
+  set small [$doc textWidth $unit -family $alias -size 18]
+  set large [$doc textWidth $unit -family $alias -size 36]
+  $doc destroy
+  list [expr {$small > 0}] [expr {abs($large - 2 * $small) < 1e-9}]
+} -result {1 1}
+
+test notoemoji-1.5 {without the face the example skips: no document, status zero} -body {
+  # The face is hidden from the child rather than removed - see the head of
+  # this file. [file exists] answers 0 for exactly the one path the example
+  # asks about and for nothing else; every other use of [file], in the
+  # example and in everything it loads, goes through to the builtin.
+  set wrapper [::tclpdfTest::scratch notoemoji-hide-face.tcl]
+  set channel [open $wrapper w]
+  puts $channel {
+      rename file realFile
+      proc file {args} {
+          if {[lindex $args 0] eq "exists"
+                  && [lindex $args 1] eq $::notoEmojiHidden} {
+              return 0
+          }
+          return [uplevel 1 [linsert $args 0 realFile]]
+      }
+      set ::notoEmojiHidden [lindex $argv 0]
+      set example [lindex $argv 1]
+      set argv [lrange $argv 2 end]
+      set argc [llength $argv]
+      source $example
+  }
+  close $channel
+  set target [::tclpdfTest::scratch notoemoji-skipped.pdf]
+  file delete $target
+  lassign [::tclpdfTest::notoEmojiRun $wrapper $::notoEmojiFace \
+      $::notoEmojiExample $target] code output
+  file delete $wrapper
+  set lines [split [string trim $output] \n]
+  # One line, and it has to be useful to somebody who has just watched an
+  # example write nothing: what is missing, where it comes from, under which
+  # licence, and which directory to put it in.
+  list $code [file exists $target] [llength $lines] \
+      [string match "skipped: NotoColorEmoji-Regular.ttf is not in the tree*" \
+          [string trim [lindex $lines 0]]] \
+      [string match {*fonts.google.com*} $output] \
+      [string match {*Open Font License*} $output] \
+      [string match "*[file dirname $::notoEmojiFace]*" $output]
+} -result {0 0 1 1 1 1 1}
+
+# The document is a test fixture, not an artefact: it goes when the file is
+# done with it, whether or not the face was there to write one.
+file delete [::tclpdfTest::scratch notoemoji-example.pdf]
+
+cleanupTests

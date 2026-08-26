@@ -15,8 +15,9 @@
 # arrived there the same way - the second reader of the same bytes made the
 # first one a copy.
 #
-# ONLY the "liga" feature is read: standard ligatures, which the registry has
-# on by default. Not read, and each for a reason:
+# TWO features are read - "liga" and "clig" - because the registry has both of
+# them on by default and a shaper applies both without being asked. Not read,
+# and each for a reason:
 #
 #   rlig  required ligatures - Arabic lam-alef and relatives. They belong to
 #         the shaping of a cursive script rather than to a typographic option
@@ -25,14 +26,30 @@
 #   dlig  discretionary, hlig historical - both off by default in the
 #         registry, so a writer that switched them on would be overruling the
 #         type designer rather than following them.
-#   clig  contextual ligatures. The mechanism - lookup types 5 and 6 - is read
-#         since 2026-08-26, so the reason this line used to give is gone and
-#         the decision is now an open one rather than a settled one. What is
-#         known: of the 77 faces in examples/assets/fonts exactly four carry a
-#         clig feature (the HelveticaLTStd family), measured 2026-08-26, so
-#         nothing here can be measured against a face this package ships.
-#         Turning it on is a change to WHICH features are read and belongs
-#         with whoever decides that.
+#
+# clig CAME IN ON 2026-08-26, and what let it in is a lookup type. A
+# contextual ligature is a ligature with a rule about its surroundings, so it
+# is written as a chaining lookup that names an ordinary one; those were not
+# read before the contextual machine was built, and until then switching clig
+# on would have prepared a feature whose every lookup was dropped. Now it is
+# measured instead: of the 77 faces in examples/assets/fonts exactly four
+# carry a clig feature - the HelveticaLTStd family - and in all four it is one
+# chaining lookup, index 3, with four subtables. What it does there is the
+# case the feature exists for: f + i becomes the fi ligature and f + l the fl
+# one, EXCEPT after another f, where two of the four subtables match and
+# substitute nothing so that "ffi" keeps its letters. Those faces carry no
+# "liga" at all, so before this the fi of "acetifier" was two glyphs where
+# every other reader draws one - 5721 words of the 235 974 in
+# /usr/share/dict/words on the Roman alone. Measured against hb-shape over the
+# whole word list and every face in this tree that carries either feature: 29
+# faces, 6 843 246 word comparisons, 22 884 differences before and 0 after,
+# and all 22 884 of them the fi and fl of those four faces. Not one NEW
+# difference anywhere, which is what a before and an after are for.
+#
+# -ligatures SWITCHES BOTH, and that is not a shortcut. The registry gives the
+# two the same default and the same job; a caller who says "set this line
+# without ligatures" means the letters are to stand apart, and leaving the
+# contextual half on would leave an fi in the middle of it.
 #
 # The one thing this file still knows about the format is that a ligature
 # breaks the assumption every other part of the package was built on - that a
@@ -55,27 +72,36 @@ namespace eval ::tclpdf::liga {
 # Prepare a font for ligature substitution. The result is handed to [apply]
 # and is worth keeping: it walks the whole table once.
 #
+# BOTH TAGS IN ONE CALL, not one call each. A feature does not own its
+# lookups: two of them may name the same one, and the specification applies
+# lookups in the order of the LOOKUP LIST rather than feature by feature
+# (S. 217). [otLayout featureLookups] takes the list of tags and sorts the
+# union, which is the same thing HarfBuzz's map does with a stage - so asking
+# twice and joining the answers afterwards would be a second, private ordering
+# and a second chance to get it wrong.
+#
 # No script is named, so the lookups come out of the Latin language system -
 # which is the right one for a typographic option a caller switched on for
-# text this package does not otherwise identify. What it costs is measured:
-# DejaVu Sans keeps its Arabic ligatures under the "arab" script, so lam plus
-# alef-with-madda stays two glyphs where the face draws one. Four words of the
-# 6415 measured on that face; tests/forms.test holds the difference.
+# text this package does not otherwise identify. What that used to cost is
+# gone: DejaVu Sans keeps its Arabic ligatures under the "arab" script, and
+# forms.tcl now reads liga and clig under the script it was asked for, so a
+# cursive run never comes through here at all (font.tcl, [FontRun]).
 #
-# ONLY LIGATURE LOOKUPS are asked for, which since the chaining lookups exist
-# is a narrowing rather than a description: a contextual lookup in "liga"
-# would not be prepared here. No face in this tree has one - measured
-# 2026-08-26, all 51 liga subtables of the 25 faces that carry the feature are
-# type 4 - so the narrowing costs nothing that can be shown, and lifting it
-# would let a Multiple substitution into a feature the rule at
-# [gsubApply MultipleAt] was not measured for.
+# THE KINDS ASKED FOR are the ligature lookups and the two contextual ones.
+# Single and Multiple substitutions are still left out of the FEATURE, for the
+# reason at [gsubApply MultipleAt]: a Multiple substitution takes one glyph
+# apart into several, and the rule about which of the pieces carries the text
+# was measured on cursive faces. What a contextual rule reaches ON to is
+# prepared whatever its type - that is [prepare]'s doing and not a hole here -
+# because half a substitution is worse than none, and a contextual ligature is
+# exactly a chaining lookup naming an ordinary one.
 proc ::tclpdf::liga::build {font} {
   set gsub [::tclpdf::sfnt table $font GSUB]
   if {$gsub eq {}} {
     return {}
   }
-  return [::tclpdf::gsubApply feature $gsub liga [::tclpdf::gdef build $font] \
-      {} ligature]
+  return [::tclpdf::gsubApply feature $gsub {liga clig} \
+      [::tclpdf::gdef build $font] {} {ligature context chain}]
 }
 
 # Substitute in a glyph run.
@@ -90,4 +116,4 @@ proc ::tclpdf::liga::apply {prepared run} {
   return [::tclpdf::gsubApply apply $prepared $run]
 }
 
-package provide tclpdf::liga 1.3
+package provide tclpdf::liga 1.4

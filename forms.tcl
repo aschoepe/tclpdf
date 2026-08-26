@@ -36,13 +36,55 @@
 #             the character it came from. Running all four over the whole run
 #             would substitute a final form and then a medial one on top of
 #             it.
-#   4. rlig   required ligatures - lam-alef and relatives. AFTER the forms,
+#   4. rlig   the required ligatures, a stage of their own. AFTER the forms,
 #             which is why a lam-alef rule matches the joined shapes rather
 #             than the isolated letters.
+#   5. liga, clig - the typographic ligatures, ONE stage of two features and
+#             the last one. Together, because HarfBuzz collects them into one
+#             stage and a stage applies its lookups in LOOKUP ORDER rather
+#             than feature by feature.
 #
-# Standard ligatures (liga) come after all of this, in font.tcl, and only when
-# the caller asked for them. GPOS mark attachment comes after those, out of
-# markPos.tcl and on the run this file produced - which is why Arabic that
+# THAT LAST STAGE IS WHERE THE ARABIC LIGATURES CAME BACK. Until 2026-08-26 it
+# held rlig alone and liga.tcl read "liga" under the LATIN language system, so
+# a face that keeps its Arabic ligatures under the "arab" script kept them to
+# itself - DejaVu Sans draws lam plus alef-with-madda as one glyph, in "liga"
+# lookups 17 and 19 of that script, and this package drew two joined letters.
+# Resolving the script here costs nothing, because this module knows the
+# script: it was asked for it.
+#
+# WHY rlig STANDS ALONE AND liga AND clig SHARE A STAGE, measured in HarfBuzz
+# 14.3.1 rather than taken from its documentation. The three sat in ONE stage
+# here until 2026-08-26, sorted by lookup index, on the reading that HarfBuzz
+# collects them together. It does not: its Arabic shaper puts a pause after
+# rlig, so rlig is a stage and liga and clig are the next one, and a stage
+# boundary beats a lookup index.
+#
+# MEASURED BLACK-BOX rather than read off a trace. Noto Naskh Arabic was
+# patched with two single substitutions on U+0621, both new lookups at the end
+# of the lookup list: index 52, added to liga, turns it into ordfeminine, and
+# index 53, added to rlig, turns it into ordmasculine. Whichever runs first
+# wins, because after it the other no longer matches. hb-shape --script=arab
+# answers ordmasculine - the HIGHER index, from rlig - and answers ordfeminine
+# only with --features=-rlig. One sorted stage would have applied 52 first and
+# this package did, which is the fault.
+#
+# In the tree it is invisible, and that is a property of these faces and not
+# of the arrangement: DejaVu Sans has rlig at 14, 15, 16 and liga at 17, 19,
+# the Bold at 13, 14, 15 and 16, 18, and Noto Naskh Arabic at 28 to 40 and 42
+# - in every one of them the required ligatures come first by index anyway, so
+# the sort and the stage order agreed. A face that numbers them the other way
+# round is shaped wrong by a sort and right by a stage, and the stage is what
+# HarfBuzz does.
+#
+# THE CALLER CAN STILL SWITCH THEM OFF. -ligatures is a typographic option and
+# rlig is not: the required ligatures are part of the shaping, and a lam-alef
+# set as two letters that the face has a joined shape for is wrong rather than
+# plain. So the rlig stage always runs and the liga/clig stage runs only with
+# -ligatures on, which is what the two stages buy on top of correctness: the
+# switch is now the second stage being skipped rather than a second tag list
+# prepared for it. It is bit for bit what HarfBuzz does with
+# --features=-liga,-clig. GPOS mark attachment comes after either, out of
+# markPos.tcl and on the run this file produced, which is why Arabic that
 # carries vowel signs is set rather than refused: the harakat and the dots
 # ccmp detached are both marks with anchors, and the anchors are read.
 #
@@ -61,12 +103,18 @@
 # WHAT IS STILL NOT REACHED is a feature and not a lookup type:
 #
 #   locl  see above - localised forms need a language to choose by.
-#   liga  standard ligatures are not this file's, and liga.tcl reads them
-#         under the LATIN language system. DejaVu Sans keeps its Arabic
-#         ligatures in "liga" under the "arab" script (lookups 17 and 19,
-#         measured), so lam + alef-with-madda comes out as two joined letters
-#         where the face draws one glyph - four words of 6415 on that face.
-#         tests/forms.test holds that difference deliberately.
+#
+# Nothing else HERE. What is left over lies outside this module: two combining
+# marks on one letter are taken in the order the caller wrote them rather than
+# sorted by combining class, which is font.tcl's decision and is measured
+# there.
+#
+# Nothing else. The one difference this list used to hold - the Arabic
+# ligatures of "liga" under the "arab" script - went with the closing stages
+# above: measured 2026-08-26 over 7961 Arabic words and the three faces in
+# this tree that have positional forms, 0 differ from hb-shape where 66 did
+# the hour before, all 66 of them a lam followed by one of the three alef
+# forms that carry a hamza or a madda.
 #
 
 package require Tcl 8.6.11-
@@ -92,8 +140,16 @@ namespace eval ::tclpdf::forms {
     fina fina
     medi medi
     init init
-    rlig {}
   }
+
+  # The two closing stages, in the order they run: the required ligatures,
+  # then the typographic ones. liga and clig are read as ONE tag list, which
+  # is what makes the lookups of both features come back sorted by index -
+  # they share a stage, and a stage sorts. rlig is a stage of its own and
+  # sorts among its own lookups only. See the head of this file for the
+  # measurement.
+  variable closingRequired rlig
+  variable closingOptional {liga clig}
 
   # The features without which there is nothing to do. A face may carry ccmp
   # and no forms at all - then this module would decompose letters into
@@ -116,16 +172,18 @@ namespace eval ::tclpdf::forms {
 proc ::tclpdf::forms::build {font {script arab}} {
   variable features
   variable required
+  variable closingRequired
+  variable closingOptional
   set gsub [::tclpdf::sfnt table $font GSUB]
   if {$gsub eq {}} {
     return {}
   }
   set gdef [::tclpdf::gdef build $font]
+  set order [list $script DFLT]
   set stages {}
   set have {}
   foreach {tag mark} $features {
-    set prepared [::tclpdf::gsubApply feature $gsub $tag $gdef \
-        [list $script DFLT]]
+    set prepared [::tclpdf::gsubApply feature $gsub $tag $gdef $order]
     if {[llength $prepared]} {
       lappend stages $tag $mark $prepared
       lappend have $tag
@@ -136,15 +194,19 @@ proc ::tclpdf::forms::build {font {script arab}} {
       return {}
     }
   }
-  # STAGES ALONE. This used to carry a mark filter beside them, so that a
-  # caller could ask afterwards whether the shaping had produced glyphs the
-  # face means to PLACE rather than to advance - the undotted skeleton and the
-  # separate dot that ccmp makes of a beh in NotoNaskhArabic-Variable. That
-  # question decided a refusal, because a dot the package could not place
-  # landed at the pen position instead of at its anchor. markPos.tcl places it
-  # now, font.tcl no longer refuses such a face, and the filter went with the
-  # question: it had no other reader.
-  return [dict create stages $stages]
+  # NO MARK FILTER BESIDE THEM. This used to carry one, so that a caller could
+  # ask afterwards whether the shaping had produced glyphs the face means to
+  # PLACE rather than to advance - the undotted skeleton and the separate dot
+  # that ccmp makes of a beh in NotoNaskhArabic-Variable. That question decided
+  # a refusal, because a dot the package could not place landed at the pen
+  # position instead of at its anchor. markPos.tcl places it now, font.tcl no
+  # longer refuses such a face, and the filter went with the question: it had
+  # no other reader.
+  return [dict create stages $stages \
+      closingRequired [::tclpdf::gsubApply feature $gsub $closingRequired \
+          $gdef $order] \
+      closingOptional [::tclpdf::gsubApply feature $gsub $closingOptional \
+          $gdef $order]]
 }
 
 # Substitute the contextual forms into a glyph run.
@@ -159,7 +221,14 @@ proc ::tclpdf::forms::build {font {script arab}} {
 # every one of them. Deciding it later would ask the joining algorithm about
 # glyphs that are no longer letters: a detached dot is not a character with a
 # joining type.
-proc ::tclpdf::forms::apply {prepared run} {
+# LIGATURES says whether the typographic ligatures of the face take part - the
+# -ligatures of the caller, and what the second closing stage is for. Off, the
+# required ligatures still run, so the lam-alef of rlig stands whatever the
+# caller asked for: that one set as two letters is not a plainer setting of
+# the word, it is the wrong one. The forms a face puts in liga instead - in
+# DejaVu Sans the three that carry a hamza or a madda - do fall with the
+# switch, which is what HarfBuzz answers with --features=-liga,-clig.
+proc ::tclpdf::forms::apply {prepared run {ligatures 1}} {
   if {![dict size $prepared] || ![llength $run]} {
     return $run
   }
@@ -176,6 +245,17 @@ proc ::tclpdf::forms::apply {prepared run} {
   foreach {tag mark lookups} [dict get $prepared stages] {
     set marked [::tclpdf::gsubApply apply $lookups $marked $mark]
   }
+  # The closing stages run over every position, whatever form it stands in -
+  # a ligature is made of two letters that need not share one - so they take
+  # no mark. Two of them and in this order: the required ligatures are part of
+  # the shaping and always run, the typographic ones are the caller's option
+  # and run after them.
+  set marked [::tclpdf::gsubApply apply \
+      [dict get $prepared closingRequired] $marked]
+  if {$ligatures} {
+    set marked [::tclpdf::gsubApply apply \
+        [dict get $prepared closingOptional] $marked]
+  }
   # The form tags leave by the door they came in at: everything downstream -
   # widths, kerning, encoding - takes a run of {glyph codes}, and a third
   # element that means nothing to any of them would travel through the whole
@@ -187,4 +267,4 @@ proc ::tclpdf::forms::apply {prepared run} {
   return $result
 }
 
-package provide tclpdf::forms 1.2
+package provide tclpdf::forms 1.3

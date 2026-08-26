@@ -310,13 +310,18 @@ set y [expr {$y + 30}]
 # limit in its quieter form: a chaining rule of this face widens the medial
 # skeleton before certain finals, and one glyph of that word depends on it.
 #
-# THE ROW THAT STILL DIFFERS is the last one, and it is on the page for that
-# reason. Lam with alef-madda is a ligature of DejaVu Sans as well, but the
-# face keeps it in the "liga" feature of the "arab" script; tclpdf reads
-# "liga" under the Latin language system and never sees it, so the pair comes
-# out as two joined letters there. That is a script the package does not
-# resolve, not a lookup type it cannot read - and it is what "measured, not
-# asserted" means when the measurement is not all good news.
+# THE LAST ROW USED TO DIFFER and no longer does. Lam with alef-madda is a
+# ligature of DejaVu Sans as well, but the face keeps it in the "liga" feature
+# of the "arab" script - lookups 17 and 19 - and tclpdf read "liga" under the
+# Latin language system, so the pair came out as two joined letters there. It
+# was on this page as a difference for exactly as long as it was one: since
+# 2026-08-26 the cursive shaping reads "liga" and "clig" under the script it
+# was asked for, in the two closing stages a shaper applies them in - the
+# required ligatures, then the typographic ones - and the row shows the single
+# glyph the face draws. What it still shows is the
+# SWITCH: -ligatures 0 gives the two joined letters back, because a
+# typographic option may turn off a typographic ligature - while the required
+# one in the first row stands whatever that option says.
 $doc font -family sans -size 11 -color black
 $doc text "Lam-alef, and the lookups that reach it" -at [list 20 $y]
 set y [expr {$y + 8}]
@@ -332,8 +337,9 @@ foreach {word what} [list \
         ordinary ligature in the second" \
     "العربية" "one medial skeleton\
         widened before the final - a chaining rule again" \
-    "لآ" "lam + alef-madda: one glyph in DejaVu Sans, and tclpdf\
-        does not reach it - see the note in the source"] {
+    "لآ" "lam + alef-madda: one glyph in DejaVu Sans, out of \"liga\"\
+        under the \"arab\" script - reached since the cursive shaping\
+        resolves it"] {
   $doc font -family arabic -size 20 -color black
   $doc text $word -at [list 65 $y] -direction rtl
   $doc font -family hebrew -size 20 -color black
@@ -343,12 +349,37 @@ foreach {word what} [list \
   set y [expr {$y + 14}]
 }
 
+# The switch, on the one word it acts on: the same pair with -ligatures 0,
+# beside the same pair with the required ligature that -ligatures cannot
+# touch. Two glyphs against one on the left, one glyph either way on the
+# right - which is the whole difference between "liga" and "rlig".
+# The label stands over the COLUMN it belongs to, at 70, where the "DejaVu
+# Sans" heading of the block above stands - not at 20 with the left margin.
+# Only one face sets these two words and its column is the right-hand one, so
+# a label at the margin left forty millimetres of white between itself and
+# what it names.
+$doc font -family sans -size 7 -color {0.45 0.45 0.45}
+$doc text "the same two words with -ligatures 0" -at [list 70 $y]
+set y [expr {$y + 7}]
+foreach {word what} [list \
+    "لآ" "lam + alef-madda without the typographic ligature: two joined\
+        letters, which is what the face draws when nobody asks for the pair" \
+    "لا" "lam + alef is REQUIRED and stands: -ligatures says nothing about\
+        the shaping of a script"] {
+  $doc font -family hebrew -size 20 -color black
+  $doc text $word -at [list 115 $y] -direction rtl -ligatures 0
+  $doc font -family sans -size 7 -color {0.35 0.35 0.35}
+  $doc text $what -at [list 120 [expr {$y - 4}]] -width 70
+  set y [expr {$y + 14}]
+}
+
 $doc font -family sans -size 8 -color {0.35 0.35 0.35}
-$doc text "Checked against HarfBuzz rather than by eye: over 6630 Arabic\
-    words, the glyphs tclpdf produces for Noto Naskh Arabic are the glyphs\
-    hb-shape produces with nothing switched off - 0 differ, where 1552\
-    differed before the chaining lookups were read. Over thirty faces and\
-    135 750 words the count is 0 as well, against 21 543 before." \
+$doc text "Checked against HarfBuzz rather than by eye: over 7961 Arabic\
+    words and every face in this tree that has positional forms, the glyphs\
+    tclpdf produces are the glyphs hb-shape produces with nothing switched\
+    off - 0 differ, where 66 differed before \"liga\" was read under the\
+    script of the text, and 1552 before the chaining lookups were read at\
+    all." \
     -at [list 20 $y] -width 170
 set y [expr {$y + 14}]
 
