@@ -1,0 +1,533 @@
+# colrPaint.test --
+#
+# The paint graph of COLR version 1.
+#
+# NO COLOUR FONT IS SHIPPED WITH THE PACKAGE, and none is downloaded here -
+# the same reason colr.test states for version 0. The one real version 1 face
+# on the machine this was built on, Noto Color Emoji, is 25 MB of CC-licensed
+# artwork; the numbers measured from it are quoted in the module's own
+# comments and the tables below are built from nothing.
+#
+# THE FIXTURE IS AN ASSEMBLER, not a byte string. Version 0 is two flat arrays
+# and can be written out by hand; version 1 is a tree of records joined by
+# FORWARD offsets, and an offset counted by hand is an offset that is wrong
+# after the first edit. So [v1Paint] writes a paint sub-tree as one contiguous
+# blob - the record first and its children behind it - and every offset in it
+# is the distance from the record to the child, computed from the lengths that
+# were just written. A test then names a paint the way the standard names it
+# and never counts a byte.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::subset
+package require tclpdf::colr
+package require tclpdf::colrPaint
+source [file join [file dirname [info script]] helper.tcl]
+
+# --- the assembler ---------------------------------------------------------
+#
+# THE FIXTURE IS AN ASSEMBLER, not a byte string, and it lives in helper.tcl
+# because colorFontPaint.test builds its faces out of it as well. Two short
+# names for its entry points, because the fixtures below name a paint on
+# nearly every line.
+interp alias {} v1Paint {} ::tclpdfTest::colrPaint
+interp alias {} v1Colr {} ::tclpdfTest::colrTableV1
+
+# --- the fixtures the tests below share ------------------------------------
+
+set v1Stops {{0.0 0 1.0} {0.5 1 0.5} {1.0 2 1.0}}
+
+# base glyph 6: an outline filled with one colour, the simplest well-formed
+# colour glyph there is.
+set v1Simple {{6 {glyph 1 {solid 3 1.0}}}}
+
+proc v1State {base {layers {}} {clips {}}} {
+  return [::tclpdf::colrPaint build [v1Colr $base $layers $clips]]
+}
+
+proc v1Tree {base {layers {}} {glyph 6}} {
+  return [::tclpdf::colrPaint paint [v1State $base $layers] $glyph]
+}
+
+# --- the header and the three index structures -----------------------------
+
+test colrPaint-1.1 {the BaseGlyphList is read, with its own offset base} -body {
+  # The paint offset in a record counts from the start of the BaseGlyphList
+  # and not from the start of the table - the trap of this format, and one a
+  # reader gets wrong without noticing, because the two bases differ by the
+  # 34 bytes of the header and 34 bytes further on is still a plausible
+  # record.
+  set state [v1State {{6 {glyph 1 {solid 3 1.0}}} {9 {solid 0 1.0}}}]
+  list [::tclpdf::colrPaint glyphs $state] \
+      [::tclpdf::colrPaint has $state 6] [::tclpdf::colrPaint has $state 7] \
+      [dict get [::tclpdf::colrPaint paint $state 9] paint]
+} -result {{6 9} 1 0 solid}
+
+test colrPaint-1.2 {a glyph the table says nothing about has no paint} -body {
+  # An answer, not a failure: most glyphs of a colour font are shapes used by
+  # other glyphs, and a caller has to be able to ask.
+  ::tclpdf::colrPaint paint [v1State $::v1Simple] 99
+} -result {}
+
+test colrPaint-1.3 {a version 1 table with no BaseGlyphList reads as empty} -body {
+  # Legal: a version 1 header may carry version 0 records and nothing else,
+  # and it is colr.tcl that decides whether the font has colour glyphs at all.
+  set colr [v1Colr {} {}]
+  set colr [string replace $colr 14 17 [binary format Iu 0]]
+  ::tclpdf::colrPaint glyphs [::tclpdf::colrPaint build $colr]
+} -result {}
+
+test colrPaint-1.4 {the ClipList gives a box per run of glyph ids} -body {
+  # One record covers a RANGE, which is how 1966 boxes cover the glyphs of a
+  # real face without one record apiece.
+  set state [v1State $::v1Simple {} {{4 8 {-10 -20 900 800}} {9 9 {0 0 10 10}}}]
+  list [::tclpdf::colrPaint clip $state 4] [::tclpdf::colrPaint clip $state 6] \
+      [::tclpdf::colrPaint clip $state 8] [::tclpdf::colrPaint clip $state 9] \
+      [::tclpdf::colrPaint clip $state 10]
+} -result {{-10 -20 900 800} {-10 -20 900 800} {-10 -20 900 800} {0 0 10 10} {}}
+
+test colrPaint-1.5 {a table with no ClipList gives no boxes} -body {
+  # Clip boxes are optional - "a font may provide clip boxes for some color
+  # glyphs but not others" - and the drawer computes the bounds where there
+  # is none.
+  ::tclpdf::colrPaint clip [v1State $::v1Simple] 6
+} -result {}
+
+# --- the leaf paints -------------------------------------------------------
+
+test colrPaint-2.1 {PaintSolid is a palette index and an alpha} -body {
+  v1Tree {{6 {solid 17 0.25}}}
+} -result {paint solid palette 17 alpha 0.25}
+
+test colrPaint-2.2 {the 0xFFFF sentinel comes through as it stands} -body {
+  # Not resolved here: it is [colr color] that knows 0xFFFF names no palette
+  # entry, and a reader that clamped it would draw the wrong colour without
+  # ever failing.
+  dict get [v1Tree {{6 {solid 65535 1.0}}}] palette
+} -result 65535
+
+test colrPaint-2.3 {an alpha outside 0..1 is held to it} -body {
+  # F2DOT14 reaches to just under 2.0 and down to -2.0, and neither is a
+  # value PDF's /ca has a meaning for (11.6.4.4).
+  list [dict get [v1Tree {{6 {solid 0 1.75}}}] alpha] \
+      [dict get [v1Tree {{6 {solid 0 -0.5}}}] alpha]
+} -result {1.0 0.0}
+
+test colrPaint-2.4 {PaintLinearGradient keeps all three points} -body {
+  # The third is the ROTATION point, and a reader that drops it draws every
+  # gradient along p0p1 - which is right only when p0p2 happens to be
+  # perpendicular to it.
+  set node [v1Tree [list [list 6 [list linear pad $::v1Stops \
+      {10 20} {30 40} {-50 60}]]]]
+  list [dict get $node paint] [dict get $node p0] [dict get $node p1] \
+      [dict get $node p2]
+} -result {linear {10 20} {30 40} {-50 60}}
+
+test colrPaint-2.5 {PaintRadialGradient is two circles} -body {
+  set node [v1Tree [list [list 6 [list radial pad $::v1Stops \
+      {10 20} 5 {30 40} 400]]]]
+  list [dict get $node c0] [dict get $node r0] [dict get $node c1] \
+      [dict get $node r1]
+} -result {{10 20} 5 {30 40} 400}
+
+test colrPaint-2.6 {a sweep gradient's angles are degrees} -body {
+  # The field is an F2DOT14 counting 180 degrees per 1.0, which is what lets
+  # two bytes carry most of a turn; a reader that took the raw value would
+  # draw a sweep of half a degree.
+  set node [v1Tree [list [list 6 [list sweep pad $::v1Stops \
+      {100 100} 45 315]]]]
+  list [dict get $node center] [dict get $node start] [dict get $node end]
+} -result {{100 100} 45.0 315.0}
+
+test colrPaint-2.7 {a colour line is its extend mode and its stops} -body {
+  dict get [v1Tree [list [list 6 [list linear reflect $::v1Stops \
+      {0 0} {1 1} {0 1}]]]] line
+} -result {extend reflect stops {{0.0 0 1.0} {0.5 1 0.5} {1.0 2 1.0}}}
+
+test colrPaint-2.8 {stops come back in offset order whatever order they are in} -body {
+  # "Color stops must be used in their stop offset order, which can be
+  # different from the order in which they are defined in the font." A reader
+  # that took them as written would draw the gradient backwards for a font
+  # that lists them the other way about.
+  set line [list linear pad {{1.0 2 1.0} {0.0 0 1.0} {0.5 1 1.0}} \
+      {0 0} {1 1} {0 1}]
+  lmap stop [dict get [v1Tree [list [list 6 $line]]] line stops] {
+    lindex $stop 0
+  }
+} -result {0.0 0.5 1.0}
+
+test colrPaint-2.9 {two stops at one offset keep the order the font wrote} -body {
+  # The rule behind the rule: where two stops share an offset "the first one
+  # given in the font must be used for computing color values below that stop
+  # offset, and the last one must be used at or above". Only a STABLE sort
+  # keeps that, and [lsort] is one.
+  set line [list linear pad {{0.0 7 1.0} {0.5 3 1.0} {0.5 4 1.0} {1.0 9 1.0}} \
+      {0 0} {1 1} {0 1}]
+  lmap stop [dict get [v1Tree [list [list 6 $line]]] line stops] {
+    lindex $stop 1
+  }
+} -result {7 3 4 9}
+
+test colrPaint-2.10 {an extend mode outside the enumeration reads as pad} -body {
+  # Three are defined. Pad is the only one that cannot make a colour line
+  # ill-formed, and this is the one place in the module where something
+  # unknown is taken rather than named - see the comment there.
+  set colr [v1Colr [list [list 6 [list linear pad $::v1Stops \
+      {0 0} {1 1} {0 1}]]] {}]
+  set at [string first [binary format cSu 0 3] $colr]
+  set colr [string replace $colr $at $at [binary format c 9]]
+  dict get [::tclpdf::colrPaint paint [::tclpdf::colrPaint build $colr] 6] \
+      line extend
+} -result pad
+
+# --- the paints with children ----------------------------------------------
+
+test colrPaint-3.1 {PaintGlyph is a shape and a fill} -body {
+  set node [v1Tree {{6 {glyph 42 {solid 1 1.0}}}}]
+  list [dict get $node paint] [dict get $node glyph] \
+      [dict get $node child paint]
+} -result {glyph 42 solid}
+
+test colrPaint-3.2 {PaintColrLayers is a slice of the LayerList} -body {
+  # Bottom of the z-order first, and any contiguous slice - which is what
+  # lets several glyphs share a run of layers.
+  set node [v1Tree {{6 {layers 1 2}}} \
+      {{solid 0 1.0} {solid 1 1.0} {solid 2 1.0} {solid 3 1.0}}]
+  list [dict get $node paint] \
+      [lmap child [dict get $node children] {dict get $child palette}]
+} -result {layers {1 2}}
+
+test colrPaint-3.3 {PaintColrGlyph is expanded in place} -body {
+  # The referenced glyph's whole graph becomes this node's child sub-graph,
+  # so nothing downstream has to know that a reference was there.
+  dict get [v1Tree {{6 {colrGlyph 9}} {9 {glyph 3 {solid 5 1.0}}}}] glyph
+} -result 3
+
+test colrPaint-3.4 {PaintComposite carries both sides and a mode by name} -body {
+  set node [v1Tree {{6 {composite 5 {solid 1 1.0} {glyph 2 {solid 2 1.0}}}}}]
+  list [dict get $node mode] [dict get $node source paint] \
+      [dict get $node backdrop paint]
+} -result {srcIn solid glyph}
+
+test colrPaint-3.5 {every composite mode has a name} -body {
+  # All twenty-eight, because a mode read as a number is a mode the drawing
+  # side has to know the numbering of as well.
+  lmap mode {0 3 8 12 13 20 23 27} {
+    dict get [v1Tree [list [list 6 [list composite $mode {solid 1 1.0} \
+        {solid 2 1.0}]]]] mode
+  }
+} -result {clear srcOver destOut plus screen softLight multiply luminosity}
+
+# --- the twenty transformation formats -------------------------------------
+
+test colrPaint-4.1 {PaintTransform is the six numbers of a cm, in that order} -body {
+  # Affine2x3 stores xx, yx, xy, yy, dx, dy - "the transform maps the basis
+  # vectors to i' = (xx, yx) and j' = (xy, yy)" - which IS the order of the
+  # six operands of "cm". The one field order in this format that needs no
+  # rearranging, and the one a reader is most tempted to rearrange.
+  dict get [v1Tree {{6 {transform {2 0.5 -0.25 3 10 -20} {solid 0 1.0}}}}] \
+      matrix
+} -result {2.0 0.5 -0.25 3.0 10.0 -20.0}
+
+test colrPaint-4.2 {PaintTranslate} -body {
+  dict get [v1Tree {{6 {translate 30 -40 {solid 0 1.0}}}}] matrix
+} -result {1 0 0 1 30 -40}
+
+test colrPaint-4.3 {PaintScale, both axes} -body {
+  dict get [v1Tree {{6 {scale 0.5 1.5 {solid 0 1.0}}}}] matrix
+} -result {0.5 0 0 1.5 0 0}
+
+test colrPaint-4.4 {PaintScaleUniform} -body {
+  dict get [v1Tree {{6 {scaleUniform 0.25 {solid 0 1.0}}}}] matrix
+} -result {0.25 0 0 0.25 0 0}
+
+test colrPaint-4.5 {a scale about a centre leaves the centre where it was} -body {
+  # What "around center" means, and the only check that catches the two
+  # translations being applied in the wrong order: the centre is a fixed
+  # point of the map.
+  set matrix [dict get \
+      [v1Tree {{6 {scaleCenter 0.5 0.25 400 -100 {solid 0 1.0}}}}] matrix]
+  lmap value [::tclpdf::geometry apply $matrix 400 -100] {
+    expr {round($value)}
+  }
+} -result {400 -100}
+
+test colrPaint-4.6 {a uniform scale about a centre, likewise} -body {
+  set matrix [dict get \
+      [v1Tree {{6 {scaleUniformCenter 1.75 -300 250 {solid 0 1.0}}}}] matrix]
+  lmap value [::tclpdf::geometry apply $matrix -300 250] {expr {round($value)}}
+} -result {-300 250}
+
+test colrPaint-4.7 {PaintRotate is counter-clockwise degrees} -body {
+  # xx = cos, yx = sin, xy = -sin, yy = cos. A quarter turn takes the x axis
+  # onto the y axis; the other sign convention takes it onto -y and no
+  # validator says a word.
+  set matrix [dict get [v1Tree {{6 {rotate 90 {solid 0 1.0}}}}] matrix]
+  lmap value [::tclpdf::geometry apply $matrix 100 0] {expr {round($value)}}
+} -result {0 100}
+
+test colrPaint-4.8 {a rotation about a centre keeps the centre} -body {
+  set matrix [dict get \
+      [v1Tree {{6 {rotateCenter 30 500 500 {solid 0 1.0}}}}] matrix]
+  lmap value [::tclpdf::geometry apply $matrix 500 500] {expr {round($value)}}
+} -result {500 500}
+
+test colrPaint-4.9 {PaintSkew crosses its two angles over} -body {
+  # THE line of this module a reader has to check rather than trust. The
+  # standard writes the equivalent matrix as yx = tan(psi) and xy = -tan(phi)
+  # for x skew angle phi and y skew angle psi - so the X angle governs the
+  # THIRD operand of "cm" and the Y angle the second, with a minus on the x
+  # one. Written straight through, a skew comes out mirrored through the
+  # diagonal and nothing reports it.
+  #
+  # 45 degrees of x skew alone: tan is 1, so the matrix is {1 0 -1 1 0 0} and
+  # the point {0 100} moves to {-100 100}.
+  set matrix [dict get [v1Tree {{6 {skew 45 0 {solid 0 1.0}}}}] matrix]
+  list [lmap value $matrix {expr {round($value * 1000) / 1000.0}}] \
+      [lmap value [::tclpdf::geometry apply $matrix 0 100] {
+        expr {round($value)}
+      }]
+} -result {{1.0 0.0 -1.0 1.0 0.0 0.0} {-100 100}}
+
+test colrPaint-4.10 {PaintSkew in y alone} -body {
+  set matrix [dict get [v1Tree {{6 {skew 0 45 {solid 0 1.0}}}}] matrix]
+  list [lmap value $matrix {expr {round($value * 1000) / 1000.0}}] \
+      [lmap value [::tclpdf::geometry apply $matrix 100 0] {
+        expr {round($value)}
+      }]
+} -result {{1.0 1.0 0.0 1.0 0.0 0.0} {100 100}}
+
+test colrPaint-4.11 {a skew about a centre keeps the centre} -body {
+  set matrix [dict get \
+      [v1Tree {{6 {skewCenter 20 -10 120 340 {solid 0 1.0}}}}] matrix]
+  lmap value [::tclpdf::geometry apply $matrix 120 340] {expr {round($value)}}
+} -result {120 340}
+
+# --- the sixteen Var formats -----------------------------------------------
+
+test colrPaint-5.1 {a Var paint reads as its twin} -body {
+  # tclpdf draws the DEFAULT INSTANCE of a colour font - a Type 3 glyph is one
+  # drawing, and a drawing is one instance - and at the default instance every
+  # delta is zero by construction. So a Var paint carries the same fields plus
+  # a varIndexBase, and reading past that index is exact rather than
+  # approximate.
+  list [v1Tree {{6 {var solid 17 0.25}}}] [v1Tree {{6 {solid 17 0.25}}}]
+} -result {{paint solid palette 17 alpha 0.25} {paint solid palette 17 alpha 0.25}}
+
+test colrPaint-5.2 {the Var twin of every format that has one} -body {
+  # Each pair has to come out the same node, and the reason to check all of
+  # them is that the varIndexBase sits in a different place in each: behind
+  # the fields for a solid, behind the Affine2x3 for a transform, behind the
+  # centre for a rotation about one.
+  set same 1
+  foreach spec {{solid 3 0.5}
+      {linear pad {{0.0 0 1.0} {1.0 1 1.0}} {1 2} {3 4} {5 6}}
+      {radial pad {{0.0 0 1.0} {1.0 1 1.0}} {1 2} 3 {4 5} 6}
+      {sweep pad {{0.0 0 1.0} {1.0 1 1.0}} {7 8} 30 200}
+      {transform {2 0 0 2 5 5} {solid 0 1.0}}
+      {translate 9 -9 {solid 0 1.0}}
+      {scale 0.5 0.25 {solid 0 1.0}}
+      {scaleCenter 0.5 0.25 10 20 {solid 0 1.0}}
+      {scaleUniform 0.75 {solid 0 1.0}}
+      {scaleUniformCenter 0.75 10 20 {solid 0 1.0}}
+      {rotate 45 {solid 0 1.0}}
+      {rotateCenter 45 10 20 {solid 0 1.0}}
+      {skew 10 20 {solid 0 1.0}}
+      {skewCenter 10 20 30 40 {solid 0 1.0}}} {
+    if {[v1Tree [list [list 6 $spec]]]
+        ne [v1Tree [list [list 6 [linsert $spec 0 var]]]]} {
+      set same [list differs $spec]
+      break
+    }
+  }
+  set same
+} -result 1
+
+test colrPaint-5.3 {a table with an ItemVariationStore says so} -body {
+  # Read but not applied. A caller that wants to know whether the drawing is
+  # the default instance or the only instance can ask.
+  set colr [v1Colr $::v1Simple {}]
+  list [dict get [::tclpdf::colrPaint build $colr] variable] \
+      [dict get [::tclpdf::colrPaint build \
+          [string replace $colr 30 33 [binary format Iu 99]]] variable]
+} -result {0 1}
+
+# --- what is refused -------------------------------------------------------
+
+test colrPaint-6.1 {a cycle through PaintColrGlyph is refused} -body {
+  # THE refusal of this module. PaintColrGlyph and PaintColrLayers reach their
+  # children indirectly, so unlike every other link they can point back up the
+  # tree - and a graph that does recurses until the stack ends rather than
+  # until the table does.
+  lrange [::tclpdfTest::refusal {v1Tree {{6 {colrGlyph 9}} {9 {colrGlyph 6}}}}] \
+      0 2
+} -result {TCLPDF COLR CYCLE}
+
+test colrPaint-6.2 {a glyph that names itself is a cycle too} -body {
+  lrange [::tclpdfTest::refusal {v1Tree {{6 {colrGlyph 6}}}}] 0 2
+} -result {TCLPDF COLR CYCLE}
+
+test colrPaint-6.3 {a cycle through the LayerList is refused} -body {
+  # The other indirect link: a layer whose paint is a PaintColrLayers naming
+  # the slice it is itself part of.
+  lrange [::tclpdfTest::refusal {v1Tree {{6 {layers 0 1}}} {{layers 0 1}}}] 0 2
+} -result {TCLPDF COLR CYCLE}
+
+test colrPaint-6.4 {a PaintColrGlyph naming a glyph that is not there} -body {
+  # "If no BaseGlyphPaintRecord with that glyph ID is found, the color glyph
+  # is not well formed."
+  ::tclpdfTest::refusal {v1Tree {{6 {colrGlyph 77}}}}
+} -result {TCLPDF COLR REUSE 77}
+
+test colrPaint-6.5 {a layer slice that runs past the LayerList} -body {
+  lrange [::tclpdfTest::refusal {v1Tree {{6 {layers 1 4}}} \
+      {{solid 0 1.0} {solid 1 1.0}}}] 0 2
+} -result {TCLPDF COLR LAYERS}
+
+test colrPaint-6.6 {a paint format this reader does not know} -body {
+  # The standard says an unknown format "should be ignored" and the rest of
+  # the glyph drawn. This package refuses instead, and the reason is the one
+  # that runs through it: what is ignored comes out as a glyph missing a
+  # piece, valid, printable and unreported.
+  ::tclpdfTest::refusal {v1Tree {{6 {raw \x63\x00\x00\x00}}}}
+} -result {TCLPDF COLR PAINT 99}
+
+test colrPaint-6.7 {a composite mode outside the enumeration} -body {
+  ::tclpdfTest::refusal {v1Tree \
+      {{6 {composite 40 {solid 1 1.0} {solid 2 1.0}}}}}
+} -result {TCLPDF COLR COMPOSITE 40}
+
+test colrPaint-6.8 {a paint offset that leaves the table} -body {
+  ::tclpdfTest::refusal {v1Tree {{6 {glyph 1 {raw \x0a\xff\xff\xff\x00\x01}}}}}
+} -result {TCLPDF COLR TRUNCATED COLR}
+
+test colrPaint-6.8a {an offset inside a paint graph is three bytes wide} -body {
+  # Offset24 exists in exactly one table, and a reader that takes it for a
+  # uint16 is RIGHT for every offset below 65536 - which is every offset a
+  # small font produces, and every offset a hand-built fixture produces
+  # unless it is built to overflow. This one is: the source of the composite
+  # carries 70000 dead bytes behind it, so the backdrop's offset needs all
+  # three bytes, and a two-byte reader lands 65536 bytes short of it.
+  set node [v1Tree [list [list 6 [list composite 3 \
+      [list padded 70000 {glyph 1 {solid 4 1.0}}] {glyph 2 {solid 5 1.0}}]]]]
+  list [dict get $node source child palette] \
+      [dict get $node backdrop glyph] [dict get $node backdrop child palette]
+} -result {4 2 5}
+
+test colrPaint-6.9 {a BaseGlyphList longer than the table} -body {
+  set colr [v1Colr $::v1Simple {}]
+  set colr [string replace $colr 34 37 [binary format Iu 4000]]
+  ::tclpdfTest::refusal {::tclpdf::colrPaint build $colr}
+} -result {TCLPDF COLR TRUNCATED COLR}
+
+test colrPaint-6.10 {a LayerList longer than the table} -body {
+  set colr [v1Colr {{6 {layers 0 1}}} {{solid 0 1.0}}]
+  set at [expr {34 + 4 + 6 + 6}]
+  set colr [string replace $colr $at [expr {$at + 3}] [binary format Iu 4000]]
+  ::tclpdfTest::refusal {::tclpdf::colrPaint build $colr}
+} -result {TCLPDF COLR TRUNCATED COLR}
+
+test colrPaint-6.11 {a graph deeper than the guard allows} -body {
+  # Acyclic and absurd: 70 nested translations. Noto Color Emoji measures 9.
+  set paint {solid 0 1.0}
+  for {set depth 0} {$depth < 70} {incr depth} {
+    set paint [list translate 1 1 $paint]
+  }
+  lrange [::tclpdfTest::refusal {v1Tree [list [list 6 $paint]]}] 0 2
+} -result {TCLPDF COLR DEPTH}
+
+test colrPaint-6.12 {a graph just inside the guard is read} -body {
+  set paint {solid 0 1.0}
+  for {set depth 0} {$depth < 60} {incr depth} {
+    set paint [list translate 1 1 $paint]
+  }
+  dict get [v1Tree [list [list 6 $paint]]] paint
+} -result transform
+
+# --- through colr.tcl ------------------------------------------------------
+#
+# The version 1 half is reached from [colr build] like the version 0 half, and
+# a font may carry both. These check the joint rather than the reader.
+
+# The whole face around a table, so that [colr build] has a font to read.
+proc v1Font {colr cpal {numGlyphs 12}} {
+  set head [binary format IuIuIuIu 0x00010000 0x00010000 0 0x5F0F3CF5]
+  append head [binary format SuSu 0 1000]
+  append head [binary format WuWu 0 0]
+  append head [binary format SSSS 0 -200 1000 800]
+  append head [binary format SuSuSSS 0 8 2 0 0]
+  set hhea [binary format Iu 0x00010000]
+  append hhea [binary format SSS 800 -200 0]
+  append hhea [binary format Su 1000]
+  append hhea [binary format SSS 0 0 1000]
+  append hhea [binary format SSS 1 0 0]
+  append hhea [binary format SSSS 0 0 0 0]
+  append hhea [binary format SSu 0 $numGlyphs]
+  set maxp [binary format Iu 0x00010000]
+  append maxp [binary format Su $numGlyphs]
+  append maxp [string repeat \x00 26]
+  set hmtx {}
+  for {set glyph 0} {$glyph < $numGlyphs} {incr glyph} {
+    append hmtx [binary format SuS 1000 0]
+  }
+  return [::tclpdf::sfnt parse [::tclpdf::subset::Assemble \
+      [dict create head $head hhea $hhea maxp $maxp hmtx $hmtx \
+          COLR $colr CPAL $cpal]]]
+}
+
+# A CPAL of four colours, the shape colr.test builds.
+proc v1Cpal {} {
+  set colours {{0 0 255 255} {0 170 0 255} {255 0 0 128} {128 128 128 255}}
+  set table [binary format SuSuSuSuIu 0 4 1 4 14]
+  append table [binary format Su 0]
+  foreach colour $colours {
+    append table [binary format cccc {*}$colour]
+  }
+  return $table
+}
+
+test colrPaint-7.1 {colr build reads a version 1 table} -body {
+  set state [::tclpdf::colr build [v1Font [v1Colr $::v1Simple {}] [v1Cpal]]]
+  list [dict get $state colrVersion] \
+      [dict get [::tclpdf::colr paint $state 6] paint] \
+      [::tclpdf::colr paint $state 7]
+} -result {1 glyph {}}
+
+test colrPaint-7.2 {a version 1 table may carry version 0 records beside} -body {
+  # "A font may use the version 1 structures for some base glyphs and the
+  # version 0 structures for other base glyphs." Both halves have to be read,
+  # and a glyph described one way must not be looked for in the other.
+  set state [::tclpdf::colr build [v1Font \
+      [v1Colr $::v1Simple {} {} {{9 0 2}} {{1 0} {2 1}}] [v1Cpal]]]
+  list [dict get $state glyphs] [::tclpdf::colr layers $state 9] \
+      [::tclpdf::colr paint $state 9] \
+      [dict get [::tclpdf::colr paint $state 6] paint] \
+      [::tclpdf::colr layers $state 6]
+} -result {{9 {0 2}} {{1 0} {2 1}} {} glyph {}}
+
+test colrPaint-7.3 {a version 1 table with nothing in either half} -body {
+  # The one refusal of the joint: a header that promises colour glyphs and a
+  # body that has none.
+  ::tclpdfTest::refusal {::tclpdf::colr build [v1Font [v1Colr {} {}] [v1Cpal]]}
+} -result {TCLPDF COLR EMPTY COLR}
+
+test colrPaint-7.4 {a version 0 state answers no paint and no clip} -body {
+  # [colr paint] and [colr clip] are asked for every glyph of every colour
+  # font, and a version 0 face has to answer them without loading this module
+  # at all.
+  set colr [binary format SuSuIuIuSu 0 1 14 20 1]
+  append colr [binary format SuSuSu 4 0 1] [binary format SuSu 5 0]
+  set state [::tclpdf::colr build [v1Font $colr [v1Cpal]]]
+  list [dict get $state colrVersion] [dict get $state version1] \
+      [::tclpdf::colr paint $state 4] [::tclpdf::colr clip $state 4]
+} -result {0 {} {} {}}
+
+cleanupTests

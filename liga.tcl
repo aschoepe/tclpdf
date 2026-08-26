@@ -25,8 +25,14 @@
 #   dlig  discretionary, hlig historical - both off by default in the
 #         registry, so a writer that switched them on would be overruling the
 #         type designer rather than following them.
-#   clig  contextual ligatures - lookup types 5 to 8, a different mechanism
-#         and one this package does not read anywhere.
+#   clig  contextual ligatures. The mechanism - lookup types 5 and 6 - is read
+#         since 2026-08-26, so the reason this line used to give is gone and
+#         the decision is now an open one rather than a settled one. What is
+#         known: of the 77 faces in examples/assets/fonts exactly four carry a
+#         clig feature (the HelveticaLTStd family), measured 2026-08-26, so
+#         nothing here can be measured against a face this package ships.
+#         Turning it on is a change to WHICH features are read and belongs
+#         with whoever decides that.
 #
 # The one thing this file still knows about the format is that a ligature
 # breaks the assumption every other part of the package was built on - that a
@@ -51,7 +57,18 @@ namespace eval ::tclpdf::liga {
 #
 # No script is named, so the lookups come out of the Latin language system -
 # which is the right one for a typographic option a caller switched on for
-# text this package does not otherwise identify.
+# text this package does not otherwise identify. What it costs is measured:
+# DejaVu Sans keeps its Arabic ligatures under the "arab" script, so lam plus
+# alef-with-madda stays two glyphs where the face draws one. Four words of the
+# 6415 measured on that face; tests/forms.test holds the difference.
+#
+# ONLY LIGATURE LOOKUPS are asked for, which since the chaining lookups exist
+# is a narrowing rather than a description: a contextual lookup in "liga"
+# would not be prepared here. No face in this tree has one - measured
+# 2026-08-26, all 51 liga subtables of the 25 faces that carry the feature are
+# type 4 - so the narrowing costs nothing that can be shown, and lifting it
+# would let a Multiple substitution into a feature the rule at
+# [gsubApply MultipleAt] was not measured for.
 proc ::tclpdf::liga::build {font} {
   set gsub [::tclpdf::sfnt table $font GSUB]
   if {$gsub eq {}} {
@@ -73,4 +90,4 @@ proc ::tclpdf::liga::apply {prepared run} {
   return [::tclpdf::gsubApply apply $prepared $run]
 }
 
-package provide tclpdf::liga 1.2
+package provide tclpdf::liga 1.3

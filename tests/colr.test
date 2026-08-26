@@ -300,7 +300,8 @@ test colr-4.3 {the palette label arrays are deliberately not read} -body {
   set font [colrFont [colrTable $::colrRecords $::colrLayers] \
       [cpalTable 1 4 {0 0} $::colrColors {1 2}]]
   lsort [dict keys [::tclpdf::colr build $font]]
-} -result {colr entries glyphs layerOffset layerRecords palettes types version}
+} -result {colr colrVersion entries glyphs layerOffset layerRecords palettes\
+    types version version1}
 
 # --- refusals --------------------------------------------------------------
 #
@@ -308,19 +309,20 @@ test colr-4.3 {the palette label arrays are deliberately not read} -body {
 # refused BY NAME, because a reader that quietly returns nothing is
 # indistinguishable from a font that has no colour glyphs.
 
-test colr-5.1 {COLR version 1 is refused by name} -body {
-  # Not "no colour glyphs": a version 1 table hangs a paint graph off every
-  # base glyph, and every font that has one would otherwise look empty.
-  set font [colrFont [colrTable $::colrRecords $::colrLayers {version 1}] \
+test colr-5.1 {a COLR version this reader does not know is refused by name} \
+    -body {
+  # 5.7.11 defines versions 0 and 1. A version 2 header would be a table of
+  # unknown shape, and reading it as version 1 would invent a paint graph.
+  set font [colrFont [colrTable $::colrRecords $::colrLayers {version 2}] \
       [cpalTable 0 4 {0} $::colrColors]]
   ::tclpdfTest::refusal {::tclpdf::colr build $font}
-} -result {TCLPDF COLR VERSION COLR 1}
+} -result {TCLPDF COLR VERSION COLR 2}
 
-test colr-5.2 {COLR version 1 names the version in its message} -body {
-  set font [colrFont [colrTable $::colrRecords $::colrLayers {version 1}] \
+test colr-5.2 {the refusal names the version that was found} -body {
+  set font [colrFont [colrTable $::colrRecords $::colrLayers {version 2}] \
       [cpalTable 0 4 {0} $::colrColors]]
   catch {::tclpdf::colr build $font} message
-  string match {*version 1*version 0*} $message
+  string match {*version 2*versions 0 and 1*} $message
 } -result 1
 
 test colr-5.3 {a version 0 table with no base glyphs is refused} -body {
@@ -330,14 +332,16 @@ test colr-5.3 {a version 0 table with no base glyphs is refused} -body {
   ::tclpdfTest::refusal {::tclpdf::colr build $font}
 } -result {TCLPDF COLR EMPTY COLR}
 
-test colr-5.3a {the version is refused before the empty base glyph array} -body {
-  # Not academic: the COLR header of Noto Color Emoji reads version 1 AND
-  # numBaseGlyphRecords 0, so both refusals apply to it and only the version
-  # says anything useful about why nothing can be drawn.
+test colr-5.3a {a version 1 header on a version 0 table is cut short} -body {
+  # The version 1 header is 34 bytes where version 0's is 14, so a table that
+  # claims version 1 and stops after the old header cannot even be read to its
+  # BaseGlyphList offset. Not academic: the COLR header of Noto Color Emoji
+  # reads version 1 AND numBaseGlyphRecords 0, and a reader that took the
+  # header at face value without checking its length would walk off the end.
   set font [colrFont [colrTable {} {} {version 1}] \
       [cpalTable 0 4 {0} $::colrColors]]
   ::tclpdfTest::refusal {::tclpdf::colr build $font}
-} -result {TCLPDF COLR VERSION COLR 1}
+} -result {TCLPDF COLR TRUNCATED COLR}
 
 test colr-5.4 {a COLR without a CPAL is refused} -body {
   ::tclpdfTest::refusal {::tclpdf::colr build \

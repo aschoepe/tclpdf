@@ -1,0 +1,329 @@
+# gsubContext.test --
+#
+# The two GSUB lookup types that match a SEQUENCE, read out of hand-built
+# bytes and asked whether they match.
+#
+# WHY THE SUBTABLES ARE BUILT BY HAND. Six formats say the same thing six
+# ways, and a face carries the two or three of them its designer's tools
+# emitted - measured, Noto Naskh Arabic has no format 1 or format 2 subtable
+# at all, and no face in this tree has a type 5 format 1. The formats a face
+# does not use cannot be tested through it, and the ones it does use cannot be
+# tested through it PRECISELY: a real subtable holds two thousand rules and a
+# wrong answer hides among them. So the layouts are fed in as bytes here, and
+# what a whole face makes of them is measured against HarfBuzz in forms.test.
+#
+# EVERY LAYOUT IN THIS FILE IS WRITTEN OUT ABOVE ITS FIXTURE, in bytes rather
+# than in words, because the words are what the [binary format] takes and the
+# bytes are what the offsets in the table mean. Getting that wrong is the one
+# mistake these tests exist to catch: type 5 and type 6 do NOT write their
+# rules the same way, and a reader that assumes they do reads plausible
+# numbers out of the wrong fields.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::gsubContext
+source [file join [file dirname [info script]] helper.tcl]
+
+# The whole run is visible unless a test says otherwise - which is what a
+# lookup with no ignore bit sees, and the common case.
+proc contextAll {glyphs} {
+  set visible {}
+  for {set index 0} {$index < [llength $glyphs]} {incr index} {
+    lappend visible $index
+  }
+  return $visible
+}
+
+# What [match] answers for a run and a starting position, given as the index
+# WITHIN the visible list - which is what gsubApply hands in.
+proc contextMatch {ruleset glyphs at {visible {}}} {
+  if {![llength $visible]} {
+    set visible [contextAll $glyphs]
+  }
+  return [::tclpdf::gsubContext match $ruleset $glyphs $visible $at]
+}
+
+# --- type 5, the three formats ----------------------------------------------
+
+# Format 5.1: glyph 10 followed by glyph 11, and lookup 1 at the first of them.
+#
+#    0  format 1 | 2  coverage at 8 | 4  one rule set | 6  rule set at 14
+#    8  coverage format 1, one glyph: 10
+#   14  rule set: one rule, at 14+4 = 18
+#   18  rule: glyphCount 2, one record, input[0] = 11, record {0 1}
+set context51 [binary format Su* {1 8 1 14 1 1 10 1 4 2 1 11 0 1}]
+
+test gsubContext-1.1 {type 5 format 1 is read into the common shape} -body {
+  set ruleset [::tclpdf::gsubContext read $::context51 5 0]
+  list [dict get $ruleset style] [dict get $ruleset by] \
+      [dict get $ruleset coverage] [dict get $ruleset sets] \
+      [dict get $ruleset refs]
+} -result {glyph index {10 0} {0 {{{} 11 {} {{0 1}}}}} 1}
+
+test gsubContext-1.2 {and it matches the sequence it names} -body {
+  # The first glyph is matched by the coverage and is not in the rule, so a
+  # match of two positions comes out of a rule holding one.
+  set ruleset [::tclpdf::gsubContext read $::context51 5 0]
+  list [contextMatch $ruleset {10 11 12} 0] \
+      [contextMatch $ruleset {10 12 11} 0] \
+      [contextMatch $ruleset {12 10 11} 1]
+} -result {{{0 1} {{0 1}}} {} {{1 2} {{0 1}}}}
+
+test gsubContext-1.3 {a rule that would reach past the end does not match} -body {
+  # And it must not raise either: the run ends where it ends, and a lookup
+  # asked at the last position is the ordinary case, not a damaged one.
+  set ruleset [::tclpdf::gsubContext read $::context51 5 0]
+  contextMatch $ruleset {12 10} 1
+} -result {}
+
+# Format 5.2: the same sequence written as classes. Glyph 10 is class 1 and
+# glyph 11 is class 2, and the class of the first glyph picks the rule set.
+#
+#    0  format 2 | 2  coverage at 14 | 4  class definition at 20
+#    6  three rule sets | 8  none for class 0 | 10  at 30 for class 1
+#   12  none for class 2
+#   14  coverage format 1, one glyph: 10
+#   20  class definition format 1, from glyph 10, two glyphs: classes 1 and 2
+#   30  rule set: one rule, at 30+4 = 34
+#   34  rule: glyphCount 2, one record, input[0] = class 2, record {0 1}
+set context52 [binary format Su* \
+    {2 14 20 3 0 30 0 1 1 10 1 10 2 1 2 1 4 2 1 2 0 1}]
+
+test gsubContext-2.1 {type 5 format 2 keeps its class definition} -body {
+  set ruleset [::tclpdf::gsubContext read $::context52 5 0]
+  list [dict get $ruleset style] [dict get $ruleset by] \
+      [dict get $ruleset inputDef] [dict get $ruleset backDef] \
+      [dict get $ruleset sets]
+} -result {class class {10 1 11 2} {} {1 {{{} 2 {} {{0 1}}}}}}
+
+test gsubContext-2.2 {and matches by class rather than by glyph} -body {
+  # Glyph 12 is in no class, which is class 0, which this rule does not want.
+  set ruleset [::tclpdf::gsubContext read $::context52 5 0]
+  list [contextMatch $ruleset {10 11} 0] [contextMatch $ruleset {10 12} 0]
+} -result {{{0 1} {{0 1}}} {}}
+
+# The same shape with an input position of class 0, which is what a rule uses
+# to say "any glyph the definition does not name may stand here".
+#
+#    0  format 2 | 2  coverage at 12 | 4  class definition at 18
+#    6  two rule sets | 8  none for class 0 | 10  at 26 for class 1
+#   12  coverage format 1, one glyph: 10
+#   18  class definition format 1, from glyph 10, one glyph: class 1
+#   26  rule set: one rule, at 26+4 = 30
+#   30  rule: glyphCount 2, one record, input[0] = class 0, record {1 1}
+set context52any [binary format Su* {2 12 18 2 0 26 1 1 10 1 10 1 1 1 4 2 1 0 1 1}]
+
+test gsubContext-2.3 {an input position of class 0 still needs a glyph} -body {
+  # THE END OF THE RUN IS NOT A GLYPH OF CLASS 0, and this is the input half
+  # of the same trap as 5.3 below: [lindex] outside a list answers the empty
+  # string, the empty string is in no class definition, and a reader that
+  # tests it comes out with class 0 and a match. So a rule whose second
+  # position is class 0 would fire at the LAST glyph of every run.
+  set ruleset [::tclpdf::gsubContext read $::context52any 5 0]
+  list [contextMatch $ruleset {10 5} 0] [contextMatch $ruleset {5 10} 1]
+} -result {{{0 1} {{1 1}}} {}}
+
+# Format 5.3: one coverage per position and exactly one rule, and BOTH counts
+# in front of the coverage array - which is where this format differs from
+# 6.3 and where a reader that treats them alike goes wrong.
+#
+#    0  format 3 | 2  two positions | 4  one record
+#    6  coverage at 14 | 8  coverage at 20 | 10  record {1 1}
+#   14  coverage format 1, one glyph: 10
+#   20  coverage format 1, one glyph: 11
+set context53 [binary format Su* {3 2 1 14 20 1 1 1 1 10 1 1 11}]
+
+test gsubContext-3.1 {type 5 format 3 puts both counts before the coverages} -body {
+  # THE LAYOUT TEST. Read in the order 6.3 uses - a count, then its array -
+  # this takes the record count for the first coverage offset and every field
+  # after it is out of place. Measured on Noto Naskh Arabic, that turned the
+  # two type 5 subtables of its rlig feature into rules over glyphs the face
+  # never meant and left the lam-alef pair unshaped.
+  set ruleset [::tclpdf::gsubContext read $::context53 5 0]
+  list [dict get $ruleset style] [dict get $ruleset coverage] \
+      [dict get $ruleset rules]
+} -result {coverage {10 0} {{{} {{11 0}} {} {{1 1}}}}}
+
+test gsubContext-3.2 {and matches the two coverages in order} -body {
+  set ruleset [::tclpdf::gsubContext read $::context53 5 0]
+  list [contextMatch $ruleset {10 11} 0] [contextMatch $ruleset {11 10} 0]
+} -result {{{0 1} {{1 1}}} {}}
+
+# --- type 6, the three formats ----------------------------------------------
+
+# Format 6.1: two glyphs of backtrack, two of input, one of lookahead.
+#
+#    0  format 1 | 2  coverage at 8 | 4  one rule set | 6  rule set at 14
+#    8  coverage format 1, one glyph: 10
+#   14  rule set: one rule, at 14+4 = 18
+#   18  rule: backtrack 2 (20, 21), input 2 (the covered glyph and 11),
+#       lookahead 1 (30), one record {1 1}
+set context61 [binary format Su* {1 8 1 14 1 1 10 1 4 2 20 21 2 11 1 30 1 1 1}]
+
+test gsubContext-4.1 {type 6 format 1 reads backtrack, input and lookahead} -body {
+  set ruleset [::tclpdf::gsubContext read $::context61 6 0]
+  lindex [dict get $ruleset sets] 1 0
+} -result {{20 21} 11 30 {{1 1}}}
+
+test gsubContext-4.2 {THE BACKTRACK RUNS BACKWARDS} -body {
+  # Its first entry is the glyph directly in FRONT of the input, its second
+  # the one before that - so the text reads 21 20 10 11 30 and not
+  # 20 21 10 11 30. Both orders match a one-glyph backtrack, which is why a
+  # rule with two is the only one that can tell them apart.
+  set ruleset [::tclpdf::gsubContext read $::context61 6 0]
+  list [contextMatch $ruleset {21 20 10 11 30} 2] \
+      [contextMatch $ruleset {20 21 10 11 30} 2]
+} -result {{{2 3} {{1 1}}} {}}
+
+test gsubContext-4.3 {a backtrack that reaches past the start does not match} -body {
+  set ruleset [::tclpdf::gsubContext read $::context61 6 0]
+  list [contextMatch $ruleset {20 10 11 30} 1] \
+      [contextMatch $ruleset {10 11 30} 0]
+} -result {{} {}}
+
+test gsubContext-4.4 {and neither does a lookahead past the end} -body {
+  set ruleset [::tclpdf::gsubContext read $::context61 6 0]
+  contextMatch $ruleset {21 20 10 11} 2
+} -result {}
+
+# Format 6.2: three class definitions, one for each part of the rule.
+#
+#    0  format 2 | 2  coverage at 16 | 4  backtrack classes at 22
+#    6  input classes at 30 | 8  lookahead classes at 40
+#   10  two rule sets | 12  none for class 0 | 14  at 48 for class 1
+#   16  coverage format 1, one glyph: 10
+#   22  backtrack classes: from glyph 20, one glyph, class 5
+#   30  input classes: from glyph 10, two glyphs, classes 1 and 2
+#   40  lookahead classes: from glyph 30, one glyph, class 7
+#   48  rule set: one rule, at 48+4 = 52
+#   52  rule: backtrack 1 (class 5), input 2 (class 2), lookahead 1 (class 7),
+#       one record {1 1}
+set context62 [binary format Su* \
+    {2 16 22 30 40 2 0 48 1 1 10 1 20 1 5 1 10 2 1 2 1 30 1 7 1 4 \
+     1 5 2 2 1 7 1 1 1}]
+
+test gsubContext-5.1 {type 6 format 2 keeps all three class definitions} -body {
+  set ruleset [::tclpdf::gsubContext read $::context62 6 0]
+  list [dict get $ruleset backDef] [dict get $ruleset inputDef] \
+      [dict get $ruleset aheadDef]
+} -result {{20 5} {10 1 11 2} {30 7}}
+
+test gsubContext-5.2 {and each part is tested against its own definition} -body {
+  # The one mistake this catches: testing the backtrack against the INPUT
+  # class definition. Glyph 20 is class 5 in the backtrack definition and
+  # class 0 in the input one, so a reader that uses the wrong table finds no
+  # match at all and says nothing about why.
+  set ruleset [::tclpdf::gsubContext read $::context62 6 0]
+  list [contextMatch $ruleset {20 10 11 30} 1] \
+      [contextMatch $ruleset {21 10 11 30} 1] \
+      [contextMatch $ruleset {20 10 11 31} 1]
+} -result {{{1 2} {{1 1}}} {} {}}
+
+# Format 6.2 again, with a backtrack and a lookahead of CLASS 0 - the class
+# of every glyph a definition does not name, and the one a rule uses to say
+# "anything at all may stand here".
+#
+#    0  format 2 | 2  coverage at 16 | 4  no backtrack classes
+#    6  input classes at 22 | 8  no lookahead classes
+#   10  two rule sets | 12  none for class 0 | 14  at 32 for class 1
+#   16  coverage format 1, one glyph: 10
+#   22  input classes: from glyph 10, one glyph, class 1
+#   32  rule set: one rule, at 32+4 = 36
+#   36  rule: backtrack 1 (class 0), input 1, lookahead 1 (class 0),
+#       one record {0 1}
+set context62any [binary format Su* \
+    {2 16 0 22 0 2 0 32 1 1 10 1 10 1 1 0 1 4 1 0 1 1 0 1 0 1}]
+
+test gsubContext-5.3 {a context of class 0 still needs a glyph to stand on} -body {
+  # THE END OF THE RUN IS NOT A GLYPH OF CLASS 0. Class 0 matches every glyph
+  # the definition does not name, and [lindex] outside a list answers the
+  # empty string - which has no class either, so it comes out as class 0 and
+  # matches. Without the two bounds checks this rule therefore fires at the
+  # first and the last position of every run, and the substitution lands where
+  # the font said it must not. The three answers below are the same rule with
+  # a glyph on both sides, with nothing in front, and with nothing behind.
+  set ruleset [::tclpdf::gsubContext read $::context62any 6 0]
+  list [contextMatch $ruleset {5 10 5} 1] [contextMatch $ruleset {10 5} 0] \
+      [contextMatch $ruleset {5 10} 1]
+} -result {{1 {{0 1}}} {} {}}
+
+# Format 6.3: three arrays of coverage tables, each counted in front of
+# itself, and the record count last.
+#
+#    0  format 3
+#    2  backtrack 1 | 4  coverage at 22
+#    6  input 2 | 8  coverage at 28 | 10  coverage at 34
+#   12  lookahead 1 | 14  coverage at 40
+#   16  one record | 18  record {1 1}
+#   22  coverage: 20 | 28  coverage: 10 | 34  coverage: 11 | 40  coverage: 30
+set context63 [binary format Su* \
+    {3 1 22 2 28 34 1 40 1 1 1 1 1 20 1 1 10 1 1 11 1 1 30}]
+
+test gsubContext-6.1 {type 6 format 3 matches through its coverage arrays} -body {
+  set ruleset [::tclpdf::gsubContext read $::context63 6 0]
+  list [dict get $ruleset style] [contextMatch $ruleset {20 10 11 30} 1] \
+      [contextMatch $ruleset {20 10 12 30} 1]
+} -result {coverage {{1 2} {{1 1}}} {}}
+
+# --- what the lookup flag leaves out ----------------------------------------
+
+test gsubContext-7.1 {a skipped glyph is not in the sequence and not in the match} \
+    -body {
+  # The lookupFlag has had its say before this file is asked: VISIBLE is the
+  # positions the lookup can see. A mark between the two input glyphs is
+  # therefore invisible to the match without leaving the run - and the
+  # positions that come back are the RUN's, not the visible list's, which is
+  # the whole reason they come back at all.
+  set ruleset [::tclpdf::gsubContext read $::context51 5 0]
+  list [contextMatch $ruleset {10 99 11} 0 {0 2}] \
+      [contextMatch $ruleset {10 99 11} 0 {0 1 2}]
+} -result {{{0 2} {{0 1}}} {}}
+
+test gsubContext-7.2 {and the backtrack counts visible positions too} -body {
+  set ruleset [::tclpdf::gsubContext read $::context61 6 0]
+  list [contextMatch $ruleset {21 99 20 10 11 30} 2 {0 2 3 4 5}] \
+      [contextMatch $ruleset {21 99 20 10 11 30} 3 {0 1 2 3 4 5}]
+} -result {{{3 4} {{1 1}}} {}}
+
+# --- what is not read -------------------------------------------------------
+
+test gsubContext-8.1 {a format the specification does not define is refused quietly} \
+    -body {
+  # Not an error: a face may carry a subtable this package cannot read beside
+  # ones it can, and the caller that skips it is not thereby wrong about the
+  # rest. Type 8 goes the same way - it is not one of the two this reads.
+  list [::tclpdf::gsubContext read [binary format Su* {4 0 0}] 5 0] \
+      [::tclpdf::gsubContext read [binary format Su* {1 8 1 14}] 8 0]
+} -result {{} {}}
+
+test gsubContext-8.2 {a rule whose input count is zero is dropped} -body {
+  # It would match at every position and apply its records to a sequence of
+  # no glyphs. The rule set then holds nothing and the subtable comes back
+  # without it rather than with a rule that cannot be applied.
+  #
+  #   18  rule: glyphCount 0, one record {0 1}
+  set bytes [binary format Su* {1 8 1 14 1 1 10 1 4 0 1 0 1}]
+  set ruleset [::tclpdf::gsubContext read $bytes 5 0]
+  list [dict get $ruleset sets] [contextMatch $ruleset {10 11} 0]
+} -result {{} {}}
+
+test gsubContext-9.1 {the referenced lookups are collected as the rules are read} \
+    -body {
+  # The caller needs the closure over them before the first string is set,
+  # and walking every rule of every subtable a second time to find them is
+  # the walk this field saves.
+  list [::tclpdf::gsubContext references \
+          [::tclpdf::gsubContext read $::context51 5 0]] \
+      [::tclpdf::gsubContext references \
+          [::tclpdf::gsubContext read $::context63 6 0]] \
+      [::tclpdf::gsubContext references {}]
+} -result {1 1 {}}
+
+cleanupTests

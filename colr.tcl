@@ -37,17 +37,28 @@
 # the wrong colour without ever failing. [colr color] is the only sanctioned
 # way to resolve an index for that reason and returns the empty string for it.
 #
+# VERSION 1 IS A SECOND FORMAT IN THE SAME TABLE, and it is read by
+# colrPaint.tcl, not here. Its header begins with the five version 0 fields
+# and adds five offsets behind them: a BaseGlyphList that hangs a directed
+# acyclic graph of paint tables off every colour glyph, a LayerList those
+# graphs slice into, a ClipList of precomputed bounds, and two structures for
+# variable fonts. A font may use BOTH - "a font may use the version 1
+# structures for some base glyphs and the version 0 structures for other base
+# glyphs" (5.7.11) - and Noto Color Emoji does the opposite: version 1 in the
+# header with numBaseGlyphRecords 0 behind it, which a version 0 reader sees
+# as a font without colour glyphs. So the version decides which of the two
+# halves a glyph is looked for in, and neither half is a refusal any more.
+# [build] loads colrPaint.tcl only for a version 1 table; a version 0 font
+# never reads that file.
+#
 # What is refused, and refused BY NAME rather than answered with nothing:
 #
-#   - COLR version 1. A different format that hangs a paint graph off every
-#     base glyph, with gradients, transforms and composition modes. Reading
-#     the v0 header out of it and finding zero records would look like "this
-#     font has no colour glyphs", which is a lie about every v1 font there is.
-#   - A version 0 table with numBaseGlyphRecords = 0. Nothing to draw, and a
-#     caller that gets an empty answer instead has no way to tell that from a
-#     font it forgot to check. Noto Color Emoji is the near miss here: its
-#     header reads version 1 AND numBaseGlyphRecords 0 (measured), so it is
-#     turned away one line earlier, by the version.
+#   - A COLR table above version 1. There is no version 2, and a header that
+#     claims one describes records this reader would misread as version 1.
+#   - A table with nothing in either half - numBaseGlyphRecords 0 and no
+#     version 1 BaseGlyphList. Nothing to draw, and a caller that gets an
+#     empty answer instead has no way to tell that from a font it forgot to
+#     check.
 #   - A COLR table without a CPAL table beside it. 5.7.11 says such a COLR is
 #     not supported, and there would be no colours to name.
 #   - A truncated table, an array offset that points past the table end, and a
@@ -88,9 +99,8 @@ namespace eval ::tclpdf::colr {
 # real emoji font is well over a hundred kilobytes, and the answer is usually
 # "no" - a caller asks this for every font it sets, and [build] once.
 #
-# The version is NOT looked at here. A version 1 font answers 1 and is then
-# refused by name in [build], which is the whole point: a caller that never
-# sees the refusal never learns why nothing was drawn.
+# The version is NOT looked at here, and does not have to be: both versions
+# live in this one table and both need the CPAL beside it.
 proc ::tclpdf::colr::has {font} {
   set tables [dict get $font tables]
   return [expr {[dict exists $tables COLR] && [dict exists $tables CPAL]}]
@@ -99,11 +109,15 @@ proc ::tclpdf::colr::has {font} {
 # Read both tables at once and hand back the state the other two commands
 # work on. The keys a caller may read:
 #
-#   version   the CPAL version, 0 or 1 - the COLR version is always 0 here
-#   glyphs    base glyph id -> {firstLayerIndex numLayers}, in table order
+#   version      the CPAL version, 0 or 1
+#   colrVersion  the COLR version, 0 or 1
+#   glyphs    base glyph id -> {firstLayerIndex numLayers}, in table order -
+#             the VERSION 0 records, which a version 1 table may also carry
 #   entries   numPaletteEntries: how many colours every palette has
 #   palettes  a list of palettes, each a list of entries, each {colour alpha}
 #   types     the CPAL version 1 palette type flags, one per palette, or {}
+#   version1  the state of the version 1 half, for [colr paint] and
+#             [colr clip], or the empty string for a version 0 table
 #
 # A colour is what the rest of the package passes around - the output of
 # [::tclpdf::color parse], so {rgb {r g b}} with components 0 to 1, and
@@ -200,31 +214,65 @@ proc ::tclpdf::colr::color {state palette entry} {
   return [lindex $one $entry]
 }
 
+# The paint tree of one base glyph of a VERSION 1 table, or the empty string:
+# for a version 0 font, for a version 1 font whose glyph is described by the
+# old records instead, and for a glyph the table says nothing about. What the
+# tree looks like is colrPaint.tcl's subject.
+#
+# A caller draws a glyph by asking this FIRST and [layers] second. That order
+# is the standard's: a font may describe some glyphs the new way and some the
+# old, and where it describes one both ways the version 1 description is the
+# one a version 1 reader is meant to use.
+proc ::tclpdf::colr::paint {state glyph} {
+  if {[dict get $state version1] eq {}} {
+    return {}
+  }
+  return [::tclpdf::colrPaint paint [dict get $state version1] $glyph]
+}
+
+# The precomputed clip box of one version 1 colour glyph as {xMin yMin xMax
+# yMax} in font units, or the empty string where the table gives none.
+proc ::tclpdf::colr::clip {state glyph} {
+  if {[dict get $state version1] eq {}} {
+    return {}
+  }
+  return [::tclpdf::colrPaint clip [dict get $state version1] $glyph]
+}
+
 # --- COLR ------------------------------------------------------------------
 
 proc ::tclpdf::colr::Colr {colr} {
   variable baseRecord
   variable layerRecord
   set version [::tclpdf::otLayout u16 $colr 0]
-  if {$version != 0} {
+  if {$version > 1} {
     return -code error -errorcode [list TCLPDF COLR VERSION COLR $version] \
-        "tclpdf: the font's \"COLR\" table is version $version; tclpdf reads\
-        version 0 (ISO/IEC 14496-22, 5.7.11). A version 1 table describes its\
-        glyphs as paint graphs with gradients and transforms, which this\
-        package does not draw"
+        "tclpdf: the font's \"COLR\" table is version $version; ISO/IEC\
+        14496-22, 5.7.11 defines versions 0 and 1"
   }
   set count [::tclpdf::otLayout u16 $colr 2]
   set baseOffset [::tclpdf::otLayout u32 $colr 4]
   set layerOffset [::tclpdf::otLayout u32 $colr 8]
   set layerCount [::tclpdf::otLayout u16 $colr 12]
-  if {$count == 0} {
-    # A version 0 header with nothing behind it. There is nothing to draw,
-    # and the caller has to hear that rather than be handed a colour font
-    # without colour glyphs - which is indistinguishable from a font it never
-    # meant to ask about.
+  # The version 1 half, read by the module that owns it. Loaded here and not
+  # at the top of the file: a version 0 font is the common case and has no
+  # use for twenty-eight paint formats.
+  set paint {}
+  set painted 0
+  if {$version == 1} {
+    package require tclpdf::colrPaint 1.0-
+    set paint [::tclpdf::colrPaint build $colr]
+    set painted [llength [::tclpdf::colrPaint glyphs $paint]]
+  }
+  if {$count == 0 && $painted == 0} {
+    # A header with nothing behind it in either half. There is nothing to
+    # draw, and the caller has to hear that rather than be handed a colour
+    # font without colour glyphs - which is indistinguishable from a font it
+    # never meant to ask about.
     return -code error -errorcode {TCLPDF COLR EMPTY COLR} \
-        "tclpdf: the font's \"COLR\" table declares no base glyphs, so it has\
-        no colour glyphs a version 0 reader can draw"
+        "tclpdf: the font's \"COLR\" table declares no base glyphs, in\
+        version 0 records or in a version 1 BaseGlyphList, so it has no\
+        colour glyphs to draw"
   }
   set length [string length $colr]
   if {$baseOffset + $count * $baseRecord > $length} {
@@ -255,7 +303,7 @@ proc ::tclpdf::colr::Colr {colr} {
     dict set glyphs $glyph [list $first $layers]
   }
   return [dict create colr $colr glyphs $glyphs layerOffset $layerOffset \
-      layerRecords $layerCount]
+      layerRecords $layerCount version1 $paint colrVersion $version]
 }
 
 # --- CPAL ------------------------------------------------------------------
@@ -351,4 +399,4 @@ proc ::tclpdf::colr::Truncated {table detail} {
       "tclpdf: the font's \"$table\" table is cut short - $detail"
 }
 
-package provide tclpdf::colr 1.0
+package provide tclpdf::colr 1.1

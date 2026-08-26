@@ -1,7 +1,7 @@
 #
 # tclpdf - PDF generation for Tcl
 #
-# colorFont - a COLR version 0 colour font as a Type 3 font
+# colorFont - a COLR colour font as a Type 3 font
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
@@ -20,12 +20,29 @@
 # has always been for; [font -family signs] alone is for a line that is nothing
 # but symbols.
 #
-# THE JOINT, and nothing else. Three modules make a colour font a document,
-# and this is the third: colr.tcl reads which layers a base glyph has and what
-# colour each of them names, glyfPath.tcl turns one layer's outline into path
-# operators, and this file puts the two together and hands the result to
-# type3.tcl. It reads no table, decodes no outline and writes no PDF object -
-# every one of those exists once, next door.
+# THE JOINT, and nothing else. This file reads no table, decodes no outline
+# and writes no PDF object - every one of those exists once, next door:
+# colr.tcl reads which layers a version 0 base glyph has and what colour each
+# of them names, colrPaint.tcl reads the paint graph of a version 1 one,
+# glyfPath.tcl turns an outline into path operators, colorFontPaint.tcl draws
+# a paint graph, and type3.tcl takes the finished glyph streams. What is here
+# is the DECISION and the version 0 drawing, which is short enough to stay.
+#
+# THREE KINDS OF GLYPH, and the decision between them is this file's subject.
+# Asked in the order the standard gives, because a face may describe some
+# glyphs one way and some the other ("a font may use the version 1 structures
+# for some base glyphs and the version 0 structures for other base glyphs",
+# 5.7.11):
+#
+#   1. a VERSION 1 paint graph, drawn by colorFontPaint.tcl - a tree of
+#      clipped shapes, gradients, transformations and compositions.
+#   2. the VERSION 0 layer records, drawn below - flat outlines each filled
+#      with one palette colour.
+#   3. NEITHER, and then the glyph's own outline in the colour of the text.
+#      A colour face carries ordinary glyphs beside its coloured ones, and
+#      refusing those would be refusing a face for having a plain arrow in it.
+#      What IS refused is one step further on: an empty outline as well, which
+#      would put a blank glyph into the font with nothing reporting it.
 #
 # WHY TYPE 3. PDF has no colour font. A font program goes into a file as an
 # outline program and the text operators paint it in ONE colour, whatever the
@@ -106,23 +123,24 @@
 # WHAT IS REFUSED BY NAME, all of it below TCLPDF COLORFONT:
 #
 #   - a face without COLR and CPAL, before anything is defined. What colr.tcl
-#     refuses on top of that - version 1, an empty table, a truncated one -
-#     keeps its own TCLPDF COLR codes and is passed through unchanged.
-#   - a character the face has no glyph for, and a character whose glyph is
-#     not a base glyph. The second is the interesting one: most glyphs of a
-#     colour font are layers or plain outlines, and asking for one of those
-#     would produce a blank glyph rather than an error.
-#   - a layer that is a COMPOSITE glyph. [glyfPath] refuses those by name,
+#     and colrPaint.tcl refuse on top of that - an unknown version, an empty
+#     table, a truncated one, a cycle in the paint graph - keeps its own
+#     TCLPDF COLR codes and is passed through unchanged.
+#   - a character the face has no glyph for.
+#   - a shape that is a COMPOSITE glyph. [glyfPath] refuses those by name,
 #     because assembling components is glyfOutline's subject and a second
 #     walker would be the same logic twice. Whether that matters was measured
 #     rather than assumed: of Twemoji Mozilla's 33179 layer glyphs, 33179 are
-#     simple and NONE is a composite - the layers of a colour glyph are drawn
-#     shapes, not letters with accents. If a face ever needs it, the way in is
-#     a public "points with contour ends, through composites" in glyfOutline,
+#     simple and NONE is a composite, and of Noto Color Emoji's 129823 version
+#     1 shapes likewise none - the shapes of a colour glyph are drawn figures,
+#     not letters with accents. If a face ever needs it, the way in is a
+#     public "points with contour ends, through composites" in glyfOutline,
 #     not a resolver here.
-#   - a base glyph whose layers all draw nothing. That is the blank-page trap
-#     of [font embed] one level down, and it is refused for the same reason:
-#     the document would be valid, extractable and empty.
+#   - a glyph that would draw nothing: layers that are all empty, a paint
+#     graph whose every shape is missing, or a plain glyph with an empty
+#     outline. That is the blank-page trap of [font embed] one level down, and
+#     it is refused for the same reason: the document would be valid,
+#     extractable and empty.
 #   - more than 255 characters. A Type 3 font is addressed by single bytes and
 #     holds at most 255 glyphs (9.6.5.3, and [Type3Code]); the limit is
 #     checked before the font is defined, so that the 256th character is a
@@ -130,8 +148,6 @@
 #
 # WHAT IS DELIBERATELY NOT DONE HERE:
 #
-#   - COLR version 1. A different format - a paint graph per base glyph with
-#     gradients, transforms and composition - and a piece of its own.
 #   - the ZWJ sequences of an emoji face. A family emoji is one base glyph
 #     reached through a GSUB ligature, and [gsubApply] reads the lookup type
 #     it needs; what is missing is the feature wiring, not this module.
@@ -157,7 +173,7 @@ package require tclpdf::color 1.0-
 # shape.tcl, image.tcl and xObject.tcl name it the same way.
 package require tclpdf::graphics 1.0-
 package require tclpdf::sfnt 1.0-
-package require tclpdf::colr 1.0-
+package require tclpdf::colr 1.1-
 package require tclpdf::glyfOutline 1.0-
 package require tclpdf::glyfPath 1.0-
 package require tclpdf::document 1.0-
@@ -332,15 +348,33 @@ oo::define ::tclpdf::document::document {
           colour glyph to draw for it"
     }
     set glyph [dict get $cmap $point]
+    set common [dict create char $char glyph $glyph u $u parsed $parsed \
+        state $state palette $palette \
+        width [::tclpdf::sfnt advance $parsed $glyph]]
+    # THE ORDER IS THE STANDARD'S, and it is the reason a version 1 face works
+    # at all: "a font may use the version 1 structures for some base glyphs
+    # and the version 0 structures for other base glyphs" (5.7.11), so the
+    # paint graph is asked for first and the flat layer records second. A face
+    # that describes a glyph both ways - which the standard permits and calls
+    # unnecessary - is drawn from the version 1 description, which is what a
+    # version 1 reader is meant to use.
+    set tree [::tclpdf::colr paint $state $glyph]
+    if {$tree ne {}} {
+      package require tclpdf::colorFontPaint 1.0-
+      return [dict merge $common [dict create kind version1 tree $tree \
+          clip [::tclpdf::colr clip $state $glyph]]]
+    }
     set layers [::tclpdf::colr layers $state $glyph]
     if {![llength $layers]} {
-      return -code error \
-          -errorcode [list TCLPDF COLORFONT BASE $u $glyph $alias] \
-          "tclpdf: character $u is glyph $glyph of the face and the \"COLR\"\
-          table draws no colour layers for it - it is either not a base glyph\
-          or a base glyph with an empty layer list. Most glyphs of a colour\
-          font are layers or plain outlines; set this one with an embedded\
-          face instead"
+      # Neither half of the table says anything about this glyph. That is not
+      # a defect and not an error: a colour face carries ordinary glyphs
+      # beside its coloured ones - a face of warning signs may well have a
+      # plain arrow - and the answer for one of those is its own outline,
+      # drawn in the colour of the text like a letter. What IS refused is the
+      # case one step further on: an empty outline as well, which would put a
+      # blank glyph into the font with nothing reporting it.
+      return [dict merge $common [dict create kind outline \
+          operators [my ColorFontPlain $parsed $glyph $u $alias]]]
     }
     set drawn {}
     foreach layer $layers {
@@ -372,8 +406,43 @@ oo::define ::tclpdf::document::document {
           glyph would draw nothing - a font built from it comes out blank\
           with nothing reporting it"
     }
-    return [dict create char $char glyph $glyph \
-        width [::tclpdf::sfnt advance $parsed $glyph] layers $drawn]
+    return [dict merge $common [dict create kind version0 layers $drawn]]
+  }
+
+  # The plain outline of a glyph the COLR table says nothing about, as path
+  # operators - the monochrome fallback described in [ColorFontRead].
+  #
+  # THE BLANK-PAGE TRAP, one level down from [font embed]'s: a face whose
+  # base glyphs have empty outlines AND no colour layers would produce a
+  # document that is valid, extractable and empty, with neither a reader nor
+  # a validator reporting it. So an empty outline here is a refusal and not a
+  # glyph that advances and draws nothing.
+  method ColorFontPlain {parsed glyph u alias} {
+    set outline [::tclpdf::glyfOutline parse \
+        [my ColorFontGlyphData $parsed $glyph]]
+    if {[dict size $outline] && [dict get $outline type] eq "composite"} {
+      return -code error \
+          -errorcode [list TCLPDF COLORFONT COMPOSITE $u $glyph $alias] \
+          "tclpdf: character $u is glyph $glyph of the face, the \"COLR\"\
+          table says nothing about it, and its own outline is a COMPOSITE\
+          glyph - it draws other glyphs rather than an outline of its own,\
+          and tclpdf assembles those only when a face is embedded. Set this\
+          character with an embedded face instead"
+    }
+    set operators {}
+    if {[dict size $outline] && [dict get $outline type] eq "simple"} {
+      set operators [::tclpdf::glyfPath operators $outline]
+    }
+    if {$operators eq {}} {
+      return -code error \
+          -errorcode [list TCLPDF COLORFONT EMPTY $u $alias] \
+          "tclpdf: character $u is glyph $glyph of the face, the \"COLR\"\
+          table draws no colour layers for it, and its own outline is empty -\
+          so the glyph would draw nothing, and a font built from it comes out\
+          blank with nothing reporting it. Most glyphs of a colour font are\
+          layers or plain outlines; this one is neither"
+    }
+    return $operators
   }
 
   # The glyf bytes of one glyph, or the empty string where it has none.
@@ -424,6 +493,21 @@ oo::define ::tclpdf::document::document {
       set number [::tclpdf::pdfObj num $factor 6]
       append body "$number 0 0 $number 0 0 cm\n"
     }
+    switch -- [dict get $record kind] {
+      version1 {
+        # The paint graph, drawn by colorFontPaint.tcl. Everything below this
+        # line is version 0's flat layer list, which shares the unit
+        # correction above and nothing else.
+        return $body[my ColorFontPaintStream $record $alias]
+      }
+      outline {
+        # A glyph the table says nothing about: its own outline, filled in
+        # the colour of the text. No colour operator at all, for the same
+        # reason the 0xFFFF sentinel gets none, and nonzero winding for the
+        # reason at the head of glyfPath.tcl.
+        return $body[dict get $record operators]f\n
+      }
+    }
     set what "a colour glyph of font \"$alias\""
     foreach layer [dict get $record layers] {
       lassign $layer colour operators
@@ -452,4 +536,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFont 1.2
+package provide tclpdf::colorFont 1.3

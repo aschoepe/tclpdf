@@ -515,17 +515,39 @@ test colorFont-3.2 {a character the face has no glyph for} -body {
   set code
 } -result {TCLPDF COLORFONT CHAR U+0058 marks}
 
-test colorFont-3.3 {a glyph that is not a colour base glyph} -body {
-  # The interesting refusal: most glyphs of a colour font are layers or
-  # plain outlines, and asking for one of those would otherwise produce a
-  # blank glyph rather than an error.
+test colorFont-3.3 {a glyph that is not a colour base glyph and draws nothing} \
+    -body {
+  # A glyph the COLR table says nothing about falls back to its own outline
+  # (colorFont-3.3a). Glyph 11 of the fixture has no outline EITHER, and that
+  # is the blank-page trap of [font embed] one level down: the font would hold
+  # a glyph that sets, measures and extracts and draws nothing at all, with no
+  # reader and no validator reporting it.
   set doc [tclpdf new -unit mm]
   $doc page add
   set code [::tclpdfTest::refusal {$doc colorFont marks -data [cfFixture] \
       -chars $::cfNotBase}]
   $doc destroy
   set code
-} -result {TCLPDF COLORFONT BASE U+E005 11 marks}
+} -result {TCLPDF COLORFONT EMPTY U+E005 marks}
+
+test colorFont-3.3a {a glyph without a COLR entry comes out monochrome} -body {
+  # A colour face carries ordinary glyphs beside its coloured ones, and the
+  # answer for one of those is its own outline in the colour of the text -
+  # like a letter. So the stream is a path and an "f" with NO colour operator
+  # in it, which is what makes it follow [font -color].
+  set face [cfFont [list {} \
+      [cfOutline {{{100 100} {900 100} {900 900}}}] {} {} {} {} \
+      [cfOutline {{{200 200} {800 200} {800 800} {200 800}}}]] \
+      [dict create 0xE000 6 0xE005 1] [cfColr {{6 0 1}} {{1 0}}] \
+      [cfCpal 1 {0} {{0 0 255 255}}]]
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc colorFont marks -data $face -chars $::cfNotBase
+  set lines [cfLines [cfStream $doc marks $::cfNotBase]]
+  $doc destroy
+  list [lindex $lines 0] [lindex $lines end] \
+      [expr {[lsearch -glob $lines {*rg}] < 0 && [lsearch -glob $lines {*g}] < 0}]
+} -result {{1000 0 d0} f 1}
 
 test colorFont-3.4 {a layer that is a composite glyph} -body {
   # [glyfPath] refuses composites by name, because assembling components is
@@ -673,7 +695,7 @@ test colorFont-3.12 {a base glyph with an empty layer list is named for what it 
   $doc destroy
   list $code [string match {*no colour layers*} $err] \
       [string match {*no entry in*} $err]
-} -result {{TCLPDF COLORFONT BASE U+E000 6 marks} 1 0}
+} -result {{TCLPDF COLORFONT EMPTY U+E000 marks} 1 0}
 
 # --- the written document ---------------------------------------------------
 

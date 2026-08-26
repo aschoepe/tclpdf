@@ -97,11 +97,14 @@ foreach tclpdfPkg {
     tclpdf::markPos
     tclpdf::glyfPath
     tclpdf::colr
+    tclpdf::colrPaint
     tclpdf::colorFont
+    tclpdf::colorFontPaint
     tclpdf::imageTiff
     tclpdf::imageTiffStreams
     tclpdf::hyphenate
     tclpdf::kern
+    tclpdf::gsubContext
     tclpdf::gsubApply
     tclpdf::liga
     tclpdf::joiningData

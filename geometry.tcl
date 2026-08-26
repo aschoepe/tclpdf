@@ -193,6 +193,39 @@ proc ::tclpdf::geometry::apply {matrix x y} {
   return [list [expr {$a * $x + $c * $y + $e}] [expr {$b * $x + $d * $y + $f}]]
 }
 
+# The matrix that undoes another one - the way back from the space a "cm" put
+# the reader in to the space it came from.
+#
+# WHAT IT IS FOR, because it is not the obvious "undo a transform": a content
+# stream never needs that (a q/Q bracket is the way back). It is needed to
+# express a point of the OUTER space in the coordinates of the inner one -
+# most concretely, to fill "everything the clip allows" under a chain of
+# transforms, where the box to fill is known in the space the chain started
+# in and the "re" has to be written in the space the chain ended in.
+#
+# A singular matrix has no inverse at all - it maps the plane onto a line, and
+# no line maps back to a plane - so it is refused rather than divided by zero.
+# Judged by [singular], which asks the question of the numbers as they reach
+# the file rather than of the ones in memory: a determinant of 1e-30 is a
+# matrix no reader can invert either.
+proc ::tclpdf::geometry::invert {matrix} {
+  if {[llength $matrix] != 6} {
+    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX shape] \
+        "tclpdf: a matrix is six numbers {a b c d e f}, not \"$matrix\""
+  }
+  if {[singular $matrix]} {
+    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX singular] \
+        "tclpdf: the matrix {$matrix} is singular and cannot be inverted -\
+        it maps the plane onto a line, and nothing maps back"
+  }
+  lassign $matrix a b c d e f
+  set determinant [expr {$a * $d - $b * $c}]
+  return [list [expr {$d / $determinant}] [expr {-$b / $determinant}] \
+      [expr {-$c / $determinant}] [expr {$a / $determinant}] \
+      [expr {($c * $f - $d * $e) / $determinant}] \
+      [expr {($b * $e - $a * $f) / $determinant}]]
+}
+
 # An elliptical arc as cubic Bezier segments - the ONE place that
 # approximation is written.
 #
@@ -379,4 +412,4 @@ proc ::tclpdf::geometry::checkFit {options what} {
   return
 }
 
-package provide tclpdf::geometry 1.4
+package provide tclpdf::geometry 1.5

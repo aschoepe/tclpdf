@@ -652,7 +652,9 @@ oo::define ::tclpdf::document::document {
           ::tclpdf::pdfObj num $number
         }]] \
         Resources [::tclpdf::pdfObj dictionary \
-            [my Type3ResourcePairs $alias $glyphs]] \
+            [my Type3ResourcePairs $alias [lmap {code record} $glyphs {
+              dict get $record stream
+            }]]] \
         ToUnicode [$writer ref $toUnicode] \
         FontDescriptor [$writer ref [$writer put \
             [my reservation type3.$alias.descriptor] \
@@ -680,11 +682,20 @@ oo::define ::tclpdf::document::document {
   # difference before and after would miss it. A name that matches nothing -
   # /DeviceRGB, the tag of a marked-content sequence - matches no resource
   # either and drops out.
-  method Type3ResourcePairs {alias glyphs} {
+  #
+  # THE ARGUMENT IS A LIST OF STREAMS and not the font's glyph dictionary,
+  # because the same rule governs a second kind of stream: a form XObject
+  # written INSIDE a glyph - a transparency group for a blend mode, a soft
+  # mask group - needs its own /Resources for exactly the reasons above, and
+  # pointing it at the document's shared dictionary would point it at a
+  # dictionary carrying this very font. colorFontPaint.tcl builds those and
+  # asks this; making the argument a list of streams is what keeps the rule in
+  # one place instead of two.
+  method Type3ResourcePairs {alias streams} {
     set names {}
-    dict for {code record} $glyphs {
+    foreach stream $streams {
       foreach {whole name} [regexp -all -inline \
-          {/([^\s/\[\]<>(){}%]+)} [dict get $record stream]] {
+          {/([^\s/\[\]<>(){}%]+)} $stream] {
         dict set names $name 1
       }
     }
@@ -756,4 +767,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::type3 1.1
+package provide tclpdf::type3 1.2

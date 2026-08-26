@@ -400,6 +400,281 @@ proc ::tclpdfTest::refusal {script} {
   return [dict get $options -errorcode]
 }
 
+# --- COLR version 1 fixtures -----------------------------------------------
+#
+# Here rather than in colrPaint.test because colorFontPaint.test builds its
+# faces out of the same assembler, and a second copy of a byte layout is the
+# copy that gets fixed last - the same reason the TIFF fixtures above stand
+# here.
+#
+
+# F2DOT14 holds -2.0 to just under 2.0, and an angle is written as 180 degrees
+# per 1.0 of it - so a sweep running the full 360 degrees CANNOT be written as
+# 0 to 360: 2.0 encodes as 32768, which is -2.0 in a signed short, and the
+# gradient comes out running backwards. Refused here rather than written,
+# because the wrong answer looks like a flat fill and a fixture that lies is
+# worse than no fixture.
+proc ::tclpdfTest::colrF2Dot14 {value} {
+  set number [expr {int(round($value * 16384))}]
+  if {$number < -32768 || $number > 32767} {
+    error "$value is outside the range of an F2DOT14 (-2.0 to just under 2.0)"
+  }
+  return [binary format S $number]
+}
+
+# Fixed, signed 16.16 - the type an Affine2x3 stores its six numbers in.
+proc ::tclpdfTest::colrFixed {value} {
+  return [binary format I [expr {int(round($value * 65536))}]]
+}
+
+# Offset24, three bytes big-endian: the width every offset inside a paint
+# graph has, and the reason this format needs an assembler at all.
+proc ::tclpdfTest::colrOffset24 {value} {
+  return [binary format c* [list [expr {($value >> 16) & 0xFF}] \
+      [expr {($value >> 8) & 0xFF}] [expr {$value & 0xFF}]]]
+}
+
+# A ColorLine: the extend mode, then {offset paletteIndex alpha} per stop.
+#
+# A VarColorLine is the same with a varIndexBase behind every stop, which
+# makes its stops ten bytes rather than six - so a Var gradient has to carry
+# one, and the Var gradient formats are the only ones that may.
+proc ::tclpdfTest::colrLine {extend stops {varying 0}} {
+  set table [binary format cSu [dict get {pad 0 repeat 1 reflect 2} $extend] \
+      [llength $stops]]
+  foreach stop $stops {
+    lassign $stop offset entry alpha
+    append table [::tclpdfTest::colrF2Dot14 $offset] [binary format Su $entry] \
+        [::tclpdfTest::colrF2Dot14 $alpha]
+    if {$varying} {
+      append table [binary format Iu 7]
+    }
+  }
+  return $table
+}
+
+# One paint sub-tree as bytes. The kinds, and the fields each takes:
+#
+#   {solid palette alpha}
+#   {linear extend stops {x0 y0} {x1 y1} {x2 y2}}
+#   {radial extend stops {x0 y0} r0 {x1 y1} r1}
+#   {sweep extend stops {cx cy} startAngle endAngle}
+#   {glyph gid paint}        {colrGlyph gid}       {layers first count}
+#   {transform {a b c d e f} paint}   {translate dx dy paint}
+#   {scale sx sy paint}      {scaleCenter sx sy cx cy paint}
+#   {scaleUniform s paint}   {scaleUniformCenter s cx cy paint}
+#   {rotate deg paint}       {rotateCenter deg cx cy paint}
+#   {skew x y paint}         {skewCenter x y cx cy paint}
+#   {composite mode source backdrop}
+#   {raw bytes}              anything the assembler will not write
+#   {padded count paint}     the paint, then count dead bytes behind it
+#
+# and {var <kind> ...} writes the Var twin of a kind: the same fields with a
+# varIndexBase behind them. The reader must produce the same node for both.
+proc ::tclpdfTest::colrPaint {spec} {
+  set kind [lindex $spec 0]
+  set varying 0
+  if {$kind eq "var"} {
+    set varying 1
+    set spec [lrange $spec 1 end]
+    set kind [lindex $spec 0]
+  }
+  set tail [expr {$varying ? [binary format Iu 7] : {}}]
+  switch -- $kind {
+    solid {
+      return [binary format cSu [expr {$varying ? 3 : 2}] \
+          [lindex $spec 1]][::tclpdfTest::colrF2Dot14 [lindex $spec 2]]$tail
+    }
+    linear {
+      lassign $spec . extend stops p0 p1 p2
+      set head [binary format c [expr {$varying ? 5 : 4}]]
+      append head [::tclpdfTest::colrOffset24 [expr {$varying ? 20 : 16}]]
+      append head [binary format SSSSSS {*}$p0 {*}$p1 {*}$p2]
+      return $head$tail[::tclpdfTest::colrLine $extend $stops $varying]
+    }
+    radial {
+      lassign $spec . extend stops c0 r0 c1 r1
+      set head [binary format c [expr {$varying ? 7 : 6}]]
+      append head [::tclpdfTest::colrOffset24 [expr {$varying ? 20 : 16}]]
+      append head [binary format SSSuSSSu {*}$c0 $r0 {*}$c1 $r1]
+      return $head$tail[::tclpdfTest::colrLine $extend $stops $varying]
+    }
+    sweep {
+      lassign $spec . extend stops centre start end
+      set head [binary format c [expr {$varying ? 9 : 8}]]
+      append head [::tclpdfTest::colrOffset24 [expr {$varying ? 16 : 12}]]
+      append head [binary format SS {*}$centre]
+      append head [::tclpdfTest::colrF2Dot14 [expr {$start / 180.0}]] \
+          [::tclpdfTest::colrF2Dot14 [expr {$end / 180.0}]]
+      return $head$tail[::tclpdfTest::colrLine $extend $stops $varying]
+    }
+    glyph {
+      set child [::tclpdfTest::colrPaint [lindex $spec 2]]
+      return [binary format c 10][::tclpdfTest::colrOffset24 6][binary format Su \
+          [lindex $spec 1]]$child
+    }
+    colrGlyph {
+      return [binary format cSu 11 [lindex $spec 1]]
+    }
+    layers {
+      return [binary format ccIu 1 [lindex $spec 2] [lindex $spec 1]]
+    }
+    transform {
+      set child [::tclpdfTest::colrPaint [lindex $spec 2]]
+      set affine {}
+      foreach value [lindex $spec 1] {
+        append affine [::tclpdfTest::colrFixed $value]
+      }
+      append affine $tail
+      return [binary format c [expr {$varying ? 13 : 12}]][::tclpdfTest::colrOffset24 \
+          [expr {7 + [string length $affine]}]][::tclpdfTest::colrOffset24 7]$affine$child
+    }
+    translate {
+      set body [binary format SS [lindex $spec 1] [lindex $spec 2]]$tail
+      return [binary format c [expr {$varying ? 15 : 14}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 3]]
+    }
+    scale {
+      set body [::tclpdfTest::colrF2Dot14 [lindex $spec 1]][::tclpdfTest::colrF2Dot14 [lindex $spec 2]]$tail
+      return [binary format c [expr {$varying ? 17 : 16}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 3]]
+    }
+    scaleCenter {
+      set body [::tclpdfTest::colrF2Dot14 [lindex $spec 1]][::tclpdfTest::colrF2Dot14 [lindex $spec 2]]
+      append body [binary format SS [lindex $spec 3] [lindex $spec 4]] $tail
+      return [binary format c [expr {$varying ? 19 : 18}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 5]]
+    }
+    scaleUniform {
+      set body [::tclpdfTest::colrF2Dot14 [lindex $spec 1]]$tail
+      return [binary format c [expr {$varying ? 21 : 20}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 2]]
+    }
+    scaleUniformCenter {
+      set body [::tclpdfTest::colrF2Dot14 [lindex $spec 1]]
+      append body [binary format SS [lindex $spec 2] [lindex $spec 3]] $tail
+      return [binary format c [expr {$varying ? 23 : 22}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 4]]
+    }
+    rotate {
+      set body [::tclpdfTest::colrF2Dot14 [expr {[lindex $spec 1] / 180.0}]]$tail
+      return [binary format c [expr {$varying ? 25 : 24}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 2]]
+    }
+    rotateCenter {
+      set body [::tclpdfTest::colrF2Dot14 [expr {[lindex $spec 1] / 180.0}]]
+      append body [binary format SS [lindex $spec 2] [lindex $spec 3]] $tail
+      return [binary format c [expr {$varying ? 27 : 26}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 4]]
+    }
+    skew {
+      set body [::tclpdfTest::colrF2Dot14 [expr {[lindex $spec 1] / 180.0}]]
+      append body [::tclpdfTest::colrF2Dot14 [expr {[lindex $spec 2] / 180.0}]] $tail
+      return [binary format c [expr {$varying ? 29 : 28}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 3]]
+    }
+    skewCenter {
+      set body [::tclpdfTest::colrF2Dot14 [expr {[lindex $spec 1] / 180.0}]]
+      append body [::tclpdfTest::colrF2Dot14 [expr {[lindex $spec 2] / 180.0}]]
+      append body [binary format SS [lindex $spec 3] [lindex $spec 4]] $tail
+      return [binary format c [expr {$varying ? 31 : 30}]][::tclpdfTest::colrOffset24 \
+          [expr {4 + [string length $body]}]]$body[::tclpdfTest::colrPaint [lindex $spec 5]]
+    }
+    composite {
+      set source [::tclpdfTest::colrPaint [lindex $spec 2]]
+      set backdrop [::tclpdfTest::colrPaint [lindex $spec 3]]
+      return [binary format c 32][::tclpdfTest::colrOffset24 8][binary format c \
+          [lindex $spec 1]][::tclpdfTest::colrOffset24 \
+          [expr {8 + [string length $source]}]]$source$backdrop
+    }
+    raw {
+      return [lindex $spec 1]
+    }
+    padded {
+      # A paint with dead bytes behind it, so that whatever follows in the
+      # SAME blob sits a stated distance further on. The only way to make an
+      # Offset24 inside a paint graph actually need its third byte: every
+      # offset in this format is relative to its own record, and an assembler
+      # that writes the child straight after the parent never produces one
+      # above 255 - let alone above 65535, which is where a reader that took
+      # the low two bytes stops being right.
+      return [::tclpdfTest::colrPaint [lindex $spec 2]][string repeat \x00 \
+          [lindex $spec 1]]
+    }
+  }
+  error "unknown paint kind \"$kind\""
+}
+
+# The whole version 1 table.
+#
+#   base      list of {glyphId paint} - the BaseGlyphList
+#   layers    list of paints - the LayerList a {layers first count} slices into
+#   clips     list of {startGlyph endGlyph {xMin yMin xMax yMax}}
+#   v0        list of {glyphId firstLayer numLayers} - the version 0 records a
+#             version 1 table may carry BESIDE the new ones (5.7.11)
+#   v0Layers  list of {glyphId paletteIndex}
+proc ::tclpdfTest::colrTableV1 {base layers {clips {}} {v0 {}} {v0Layers {}}} {
+  set baseListAt 34
+  set records {}
+  set blobs {}
+  set at [expr {4 + [llength $base] * 6}]
+  foreach entry $base {
+    lassign $entry glyph paint
+    set bytes [::tclpdfTest::colrPaint $paint]
+    # The paint offset is measured from the start of the BaseGlyphList, not
+    # from the start of the table.
+    append records [binary format SuIu $glyph $at]
+    append blobs $bytes
+    incr at [string length $bytes]
+  }
+  set baseList [binary format Iu [llength $base]]$records$blobs
+  set layerListAt [expr {$baseListAt + [string length $baseList]}]
+  set layerList {}
+  if {[llength $layers]} {
+    set offsets {}
+    set blobs {}
+    set at [expr {4 + [llength $layers] * 4}]
+    foreach paint $layers {
+      set bytes [::tclpdfTest::colrPaint $paint]
+      append offsets [binary format Iu $at]
+      append blobs $bytes
+      incr at [string length $bytes]
+    }
+    set layerList [binary format Iu [llength $layers]]$offsets$blobs
+  }
+  set clipListAt [expr {$layerListAt + [string length $layerList]}]
+  set clipList {}
+  if {[llength $clips]} {
+    set records {}
+    set boxes {}
+    set at [expr {5 + [llength $clips] * 7}]
+    foreach clip $clips {
+      lassign $clip first last box
+      append records [binary format SuSu $first $last][::tclpdfTest::colrOffset24 $at]
+      append boxes [binary format c 1][binary format SSSS {*}$box]
+      incr at 9
+    }
+    set clipList [binary format cIu 1 [llength $clips]]$records$boxes
+  }
+  set v0At [expr {$clipListAt + [string length $clipList]}]
+  set v0Records {}
+  foreach record $v0 {
+    append v0Records [binary format SuSuSu {*}$record]
+  }
+  set v0LayerAt [expr {$v0At + [string length $v0Records]}]
+  set v0LayerRecords {}
+  foreach record $v0Layers {
+    append v0LayerRecords [binary format SuSu {*}$record]
+  }
+  set header [binary format SuSuIuIuSu 1 [llength $v0] \
+      [expr {[llength $v0] ? $v0At : 0}] \
+      [expr {[llength $v0Layers] ? $v0LayerAt : 0}] [llength $v0Layers]]
+  append header [binary format IuIuIuIuIu $baseListAt \
+      [expr {[llength $layers] ? $layerListAt : 0}] \
+      [expr {[llength $clips] ? $clipListAt : 0}] 0 0]
+  return $header$baseList$layerList$clipList$v0Records$v0LayerRecords
+}
+
 # --- TIFF fixtures ---------------------------------------------------------
 #
 # Here rather than in imageTiff.test because imageTiffStreams.test builds its
@@ -720,4 +995,84 @@ proc ::tclpdfTest::refusalsWithoutCode {module} {
     }
   }
   return $bare
+}
+
+# --- GSUB fixtures ---------------------------------------------------------
+#
+# Here rather than in gsubApply.test because gsubContext.test assembles its
+# tables out of the same three pieces, and a second copy of a byte layout is
+# the copy that gets fixed last.
+#
+# WHY A WHOLE TABLE IS BUILT AT ALL. A contextual lookup names the lookups it
+# applies BY INDEX in the lookup list, so there is no way to exercise one
+# through its subtable alone: the index has to point at something. The same
+# goes for the extension lookup, whose whole content is an offset to a lookup
+# of another type. Both are therefore tested through [gsubApply prepare],
+# which needs the script list and the feature list as well - and those are
+# eleven lines to assemble and unreadable to write by hand twice.
+
+# One lookup of a lookup list, from its subtables. The offsets are relative to
+# the start of the lookup, which is what the format says and what a reader
+# that adds the lookup list offset by mistake gets wrong.
+proc ::tclpdfTest::gsubLookup {type flag subtables} {
+  set count [llength $subtables]
+  set at [expr {6 + $count * 2}]
+  set offsets {}
+  foreach subtable $subtables {
+    lappend offsets $at
+    incr at [string length $subtable]
+  }
+  return [binary format Su* [list $type $flag $count {*}$offsets]][join \
+      $subtables {}]
+}
+
+# An extension subtable around another subtable: format 1, the type it wraps,
+# and a 32 bit offset from the start of the extension subtable itself.
+proc ::tclpdfTest::gsubExtension {type subtable} {
+  return [binary format SuSuIu 1 $type 8]$subtable
+}
+
+# A whole GSUB table: one script with one default language system, the
+# features named in FEATURES (a dict tag -> list of lookup indices), and the
+# lookups as they were handed in.
+proc ::tclpdfTest::gsubTable {lookups features {script latn}} {
+  set tags [dict keys $features]
+  set featureCount [llength $tags]
+  # The language system names every feature by its index in the feature list.
+  set indices {}
+  for {set index 0} {$index < $featureCount} {incr index} {
+    lappend indices $index
+  }
+  set langSys [binary format Su* [list 0 0xFFFF $featureCount {*}$indices]]
+  set scriptList [binary format Su 1][binary format a4 $script][binary \
+      format Su 8][binary format Su* {4 0}]$langSys
+  # The feature records first, then the feature tables they point at.
+  set at [expr {2 + $featureCount * 6}]
+  set records {}
+  set bodies {}
+  foreach tag $tags {
+    set used [dict get $features $tag]
+    set body [binary format Su* [list 0 [llength $used] {*}$used]]
+    lappend records $tag $at
+    lappend bodies $body
+    incr at [string length $body]
+  }
+  set featureList [binary format Su $featureCount]
+  foreach {tag offset} $records {
+    append featureList [binary format a4 $tag][binary format Su $offset]
+  }
+  append featureList [join $bodies {}]
+  set count [llength $lookups]
+  set at [expr {2 + $count * 2}]
+  set offsets {}
+  foreach lookup $lookups {
+    lappend offsets $at
+    incr at [string length $lookup]
+  }
+  set lookupList [binary format Su* [list $count {*}$offsets]][join $lookups {}]
+  set header 10
+  return [binary format IuSuSuSu 0x00010000 $header \
+      [expr {$header + [string length $scriptList]}] \
+      [expr {$header + [string length $scriptList] \
+          + [string length $featureList]}]]$scriptList$featureList$lookupList
 }

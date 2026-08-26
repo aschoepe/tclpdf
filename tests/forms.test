@@ -15,9 +15,13 @@
 # difference between the two outputs and it is done here rather than argued
 # about.
 #
-# THE DELIBERATE DIFFERENCES are tests too, at the end: what this package
-# leaves out of rlig is measured against HarfBuzz on purpose, so that the day
-# somebody reads the chaining lookups the tests go red and say where.
+# THE DIFFERENCES ARE TESTS TOO, at the end. They used to hold what this
+# package left out of rlig, so that the day somebody read the chaining lookups
+# they would go red and say where. That day came on 2026-08-26 and they now
+# hold the opposite: the chaining lookups ARE read, the lam-alef pair and the
+# wide medial variants come out as the face draws them, and what is left is
+# one difference of a different kind - a face whose Arabic ligatures hang off
+# the "arab" script, which liga.tcl does not resolve.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -98,13 +102,19 @@ set formsWords {مرحبا العربية بالعالم كتاب سلام شم�
 
 test forms-1.1 {a face with the positional features is prepared} \
     -constraints haveWhole -body {
+  # ccmp is in this list since the chaining lookups are read, and it is worth
+  # a line: every one of the eleven ccmp lookups this face names for Arabic is
+  # contextual, so before there was nothing in the stage at all and the stage
+  # was left out. Its output is unchanged for every word of the oracle below -
+  # what it does here is decompose a few letters that the positional features
+  # then find in the shape they expect.
   set state [::tclpdf::forms build [formsParsed $::wholeFace]]
   set tags {}
   foreach {tag mark lookups} [dict get $state stages] {
     lappend tags $tag
   }
   set tags
-} -result {fina medi init rlig}
+} -result {ccmp fina medi init rlig}
 
 test forms-1.2 {a face without them is not prepared at all} \
     -constraints havePlain -body {
@@ -155,16 +165,19 @@ test forms-2.2 {lam-alef as well, which is a required ligature} \
   list [llength $ours] [expr {$ours eq [formsHarfBuzz $::wholeFace "لا"]}]
 } -result {1 1}
 
-test forms-2.3 {the splitting face agrees except where the chaining is} \
+test forms-2.3 {the splitting face agrees with NOTHING switched off} \
     -constraints {haveSplit haveHbShape} -body {
-  # Compared with rlig, liga and locl switched off, because those are where
-  # this face keeps its contextual lookups - types 5 and 6, which gsubApply
-  # does not read. Everything else, ccmp and the three positional features
-  # included, has to agree exactly.
+  # This used to compare with rlig, liga and locl switched off, because those
+  # were where the face keeps its contextual lookups and gsubApply could not
+  # follow them. It reads them now, so the comparison is the full one - every
+  # feature HarfBuzz applies by default, and this face carries none that this
+  # package leaves out.
+  #
+  # Measured the same day over 6630 words rather than six: 0 differ.
   set faults {}
   foreach word $::formsWords {
     set ours [formsGlyphs $::splitFace $word]
-    set theirs [formsHarfBuzz $::splitFace $word -rlig,-liga,-locl]
+    set theirs [formsHarfBuzz $::splitFace $word]
     if {$ours ne $theirs} {
       lappend faults "$word: $ours vs $theirs"
     }
@@ -172,15 +185,17 @@ test forms-2.3 {the splitting face agrees except where the chaining is} \
   set faults
 } -result {}
 
-test forms-2.4 {a word with no chaining agrees with the full shaping too} \
+test forms-2.4 {and the chaining is what makes the difference} \
     -constraints {haveSplit haveHbShape} -body {
-  # The control for 2.3: where the face has no chaining rule to apply, the
-  # comparison with everything switched ON must come out the same. Otherwise
-  # 2.3 would pass by having switched off the very thing that differs.
-  set ours [formsGlyphs $::splitFace "مرحبا"]
-  list [expr {$ours eq [formsHarfBuzz $::splitFace "مرحبا"]}] \
-      [expr {$ours eq [formsHarfBuzz $::splitFace "مرحبا" -rlig,-liga,-locl]}]
-} -result {1 1}
+  # The control for 2.3: it must not pass by comparing two shapings that agree
+  # anyway. Switching the chaining features off in HarfBuzz has to change its
+  # answer, or 2.3 would prove nothing.
+  set ours [formsGlyphs $::splitFace "العربية"]
+  list [expr {$ours eq [formsHarfBuzz $::splitFace \
+          "العربية"]}] \
+      [expr {$ours eq [formsHarfBuzz $::splitFace \
+          "العربية" -rlig,-liga,-locl]}]
+} -result {1 0}
 
 test forms-2.5 {rlig is applied where its lookup type allows} \
     -constraints {haveSplit haveHbShape} -body {
@@ -193,26 +208,28 @@ test forms-2.5 {rlig is applied where its lookup type allows} \
       [expr {$ours eq [formsHarfBuzz $::splitFace "ك" -rlig,-liga,-locl]}]
 } -result {1 0}
 
-# --- the differences that are on purpose ------------------------------------
+# --- what the chaining lookups reach ----------------------------------------
 
-test forms-3.1 {lam-alef in the splitting face stays two glyphs} \
+test forms-3.1 {lam-alef in the splitting face is the pair the face draws} \
     -constraints {haveSplit haveHbShape} -body {
-  # THIS TEST HOLDS A LIMIT, and it is meant to fail the day it is lifted.
-  # The face reaches its lam-alef through a chaining lookup (type 6), which
-  # is not read, so the two letters come out as an ordinary initial and final
-  # pair - joined and legible, and not the shape the face draws for it.
-  # Whoever teaches gsubApply to follow chains has to come back here.
+  # THIS TEST HELD A LIMIT and now holds the gain. The face reaches its
+  # lam-alef through a chaining lookup (type 6) over a contextual one (type
+  # 5), which is read since 2026-08-26: the two letters come out as the two
+  # SPECIAL shapes the face draws for the pair, not as an ordinary initial
+  # and final. Written out rather than only compared, because the two answers
+  # differ by two glyph numbers and nothing else - which is exactly the kind
+  # of difference that hides in a comparison.
   set ours [formsGlyphs $::splitFace "لا"]
-  set full [formsHarfBuzz $::splitFace "لا"]
-  list [llength $ours] [llength $full] [expr {$ours ne $full}] \
-      [expr {$ours eq [formsHarfBuzz $::splitFace "لا" -rlig,-liga,-locl]}]
-} -result {2 2 1 1}
+  list $ours [expr {$ours eq [formsHarfBuzz $::splitFace "لا"]}] \
+      [expr {$ours eq [formsHarfBuzz $::splitFace "لا" \
+          -rlig,-liga,-locl]}]
+} -result {{71 10} 1 0}
 
-test forms-3.2 {and the wide medial variants are not selected} \
+test forms-3.2 {and the wide medial variants are selected} \
     -constraints {haveSplit haveHbShape} -body {
-  # The same limit in its quieter form: a chaining rlig lookup widens the
-  # medial skeleton before certain finals. Exactly one glyph of this word
-  # differs because of it.
+  # The same limit lifted in its quieter form: a chaining rlig lookup widens
+  # the medial skeleton before certain finals. Exactly one glyph of this word
+  # used to differ because of it and none does now.
   set ours [formsGlyphs $::splitFace "العربية"]
   set full [formsHarfBuzz $::splitFace "العربية"]
   set differing 0
@@ -222,7 +239,28 @@ test forms-3.2 {and the wide medial variants are not selected} \
     }
   }
   list [llength $ours] [llength $full] $differing
-} -result {10 10 1}
+} -result {10 10 0}
+
+test forms-3.3 {what is left is a SCRIPT that is not resolved, not a lookup type} \
+    -constraints {haveWhole haveHbShape} -body {
+  # THE ONE DIFFERENCE THAT REMAINS, and it is of another kind entirely.
+  # DejaVu Sans draws lam followed by alef-with-madda as one glyph, and keeps
+  # that ligature in the "liga" feature of the "arab" script - lookups 17 and
+  # 19, measured. liga.tcl resolves the LATIN language system, reaches lookup
+  # 18 alone, and never sees them; forms.tcl does not read liga at all. So the
+  # pair comes out as two joined letters: legible, and not what the face
+  # draws.
+  #
+  # Reading liga under the script of the text needs a script API this package
+  # has not got, which is why this is a test and not a fix. Four words of the
+  # 6415 measured on this face on 2026-08-26 differ for this reason and no
+  # other; the plain lam-alef of 2.2 is not among them, because that one is a
+  # required ligature and sits in rlig.
+  set ours [formsGlyphs $::wholeFace "لآ"]
+  list [llength $ours] \
+      [llength [formsHarfBuzz $::wholeFace "لآ"]] \
+      [expr {$ours eq [formsHarfBuzz $::wholeFace "لآ" -liga]}]
+} -result {2 1 1}
 
 # --- what the substitutions do to the run -----------------------------------
 

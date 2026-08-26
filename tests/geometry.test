@@ -150,6 +150,37 @@ test geometry-matrix-3.11 {a small matrix is still not a singular one} -body {
       [::tclpdf::geometry singular {0 1 1 0 0 0}]
 } -result {0 0 0}
 
+test geometry-matrix-3.12 {invert undoes what a matrix did} -body {
+  # The way back from the space a "cm" put the reader in to the space it came
+  # from. It exists for exactly one job - expressing a point of the OUTER
+  # space in the coordinates of the inner one, which is what filling
+  # "everything the clip allows" under a chain of transforms needs - and a
+  # round trip is what says it is right.
+  set matrix [::tclpdf::geometry multiply \
+      [::tclpdf::geometry rotate 30] [::tclpdf::geometry scale 2 3]]
+  lmap value [::tclpdf::geometry apply [::tclpdf::geometry invert $matrix] \
+      {*}[::tclpdf::geometry apply $matrix 70 -40]] {
+    expr {round($value * 1000) / 1000.0}
+  }
+} -result {70.0 -40.0}
+
+test geometry-matrix-3.13 {the inverse of the identity is the identity} -body {
+  ::tclpdf::geometry invert {1 0 0 1 0 0}
+} -result {1 0 0 1 0 0}
+
+test geometry-matrix-3.14 {a translation inverts to the opposite translation} -body {
+  ::tclpdf::geometry invert [::tclpdf::geometry translate 25 -8]
+} -result {1 0 0 1 -25 8}
+
+test geometry-matrix-3.15 {a singular matrix has no inverse and is refused} -body {
+  # It maps the plane onto a line, and nothing maps back. Judged by
+  # [singular], which asks the question of the numbers as they reach the file
+  # - so a determinant that rounds to nothing is refused here as well, rather
+  # than dividing by something the file cannot hold.
+  list [::tclpdfTest::refusal {::tclpdf::geometry invert {1 2 2 4 0 0}}] \
+      [::tclpdfTest::refusal {::tclpdf::geometry invert {1 0 0 1 0}}]
+} -result {{TCLPDF GEOMETRY MATRIX singular} {TCLPDF GEOMETRY MATRIX shape}}
+
 test geometry-9.1 {a size given as two numbers is taken as it stands} -body {
   # Regression: the default orientation used to be applied to an explicit
   # size too, so a 88 by 55 label came out 55 by 88. Whoever writes two

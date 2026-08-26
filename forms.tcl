@@ -46,19 +46,27 @@
 # carries vowel signs is set rather than refused: the harakat and the dots
 # ccmp detached are both marks with anchors, and the anchors are read.
 #
-# WHAT IS NOT REACHED, measured on this face rather than assumed. Of the nine
-# lookups its rlig feature names for the default Arabic language system, ONE
+# WHAT IS REACHED, measured on this face rather than assumed. Of the nine
+# lookups its rlig feature names for the default Arabic language system, one
 # is a plain multiple substitution and the other eight are contextual (type 5)
-# or chaining contextual (type 6), which gsubApply.tcl does not read. So:
+# or chaining contextual (type 6). gsubApply.tcl reads all of them since
+# 2026-08-26, and the two differences this comment used to name have gone with
+# that: lam + alef now comes out as the two special shapes the face draws for
+# the pair rather than as an ordinary initial and final, and the wide medial
+# variants before certain finals are selected. Measured against hb-shape of
+# HarfBuzz 14.3.1 over 6630 Arabic words with NOTHING switched off in
+# HarfBuzz: 0 differ, where 1552 differed the day before. Over thirty faces
+# and 135 750 words the count is 0 as well, against 21 543 before.
 #
-#   - lam + alef comes out as two joined glyphs (uni0644.init, uni0627.fina)
-#     rather than the lam-alef pair the face draws for it (…rlig). Visibly
-#     different, not wrong: the letters are the right ones and they join.
-#   - the "wide" medial variants that widen a joint before certain finals are
-#     not selected. Same kind of difference, smaller.
+# WHAT IS STILL NOT REACHED is a feature and not a lookup type:
 #
-# Both are differences from HarfBuzz that tests/forms.test holds on to
-# deliberately, so that they cannot change unnoticed.
+#   locl  see above - localised forms need a language to choose by.
+#   liga  standard ligatures are not this file's, and liga.tcl reads them
+#         under the LATIN language system. DejaVu Sans keeps its Arabic
+#         ligatures in "liga" under the "arab" script (lookups 17 and 19,
+#         measured), so lam + alef-with-madda comes out as two joined letters
+#         where the face draws one glyph - four words of 6415 on that face.
+#         tests/forms.test holds that difference deliberately.
 #
 
 package require Tcl 8.6.11-
@@ -179,4 +187,4 @@ proc ::tclpdf::forms::apply {prepared run} {
   return $result
 }
 
-package provide tclpdf::forms 1.1
+package provide tclpdf::forms 1.2
