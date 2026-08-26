@@ -1,5 +1,5 @@
-C Put\sthe\slibrary\snames\sback\sinto\sthe\sskill\sand\sone\smeasurement\scomment\n\n-\sdoc/claude/TCLPDF.md,\sSKILL.md\s-\sthe\swarning\sagainst\swriting\sa\stclpdf\scall\sfrom\smemory\sof\sjsPDF,\sReportLab,\sFPDF\sor\spdf4tcl\snames\sthem\sagain,\sas\sintended:\swith\sthe\snames\sthe\swarning\sis\ssharper\sthan\swithout.\sThe\sprevious\scheck-in\shad\staken\sthem\sout\sunder\sthe\snaming\srule,\sand\shad\scut\sthe\ssecond\shalf\sof\sthe\ssentence\sin\sSKILL.md\swith\sthem;\sboth\sare\srestored\sto\stheir\searlier\swording\n-\simportInfo.tcl\s-\sthe\scomment\snames\sjsPDF\sagain\sas\sthe\swriter\sof\sthe\smeasured\sform
-D 2026-08-26T20:28:46.321
+C Name\sthe\sorigin\sand\sthe\sterms\sof\sthe\sTcl\s9\slogo\n\n-\sexamples/assets/README.md\s-\sTcl9logo.svg\sis\sthe\sTcl/Tk\s9.0\slogo\sby\sValerie\sCarroll\swith\sSteve\sLanders,\staken\sunchanged\sfrom\sthe\spublished\sSVG,\sunder\sthe\sTcl\slicence\sas\sthe\swiki\spage\sthat\sintroduced\sit\ssays;\sthe\splaceholder\sasking\sthe\sauthor\sto\sconfirm\sthe\sterms\sis\sgone
+D 2026-08-26T20:41:30.392
 F Makefile.in cc6abf248f914790abc58db615d31f9d1811c4e3c285bb7266c9e4e0f48fdeb0
 F README 5b0e257f5c6829a2a473a4f0df904bad9bd76e82df6d4f146eb4528436a2623e
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -125,7 +125,7 @@ F examples/09.03-form-read.tcl 4335a34a05537adfce5f367f36bf9aac2784e72df90501eb0
 F examples/09.04-form-design.tcl 68836ede6c9115e92b207db87793f38c40a8561cee89761da6a889a5d8d5362d
 F examples/10.01-annotations.tcl baece5ae1ce0af5f178aeabeb7215fb02593023a9d2f13f3df70a10daf5afb89
 F examples/11.01-tk-canvas.tcl bdf2ac683b8e71c9e073d674bcd12729b9b8a1d7b396d68e21909c7b4739fb79
-F examples/assets/README.md 82502f7127b006703e5a14ca0c40e60df8dd1720f596b3e8ef877a81be81369d
+F examples/assets/README.md 29c53b67523c15b8c6deb7411d346ede9da152344ccd34a568372ccc17011bbc
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
 F examples/assets/fonts/adobe-afm/Courier-Bold.afm b1673a3770494034b259fac1b558ae1976aa75df03b5430ff8ecd395842f4c3c
@@ -491,8 +491,8 @@ F xObject.tcl 1ba69d50fac5b2630d829654c265bb75db87820a7c36e72087cc33a02b904254
 F xml.tcl f05589319f7f158e8b53cec91731498fe796825e72cd8b9353f99b0bafdeb757
 F xmp.tcl 044d7c5f38100b5ed4ae531a9bf38721caf5c43f89eb93559b3655763dfe72c7
 F zugferd.tcl 6e353d7c94f8dffd9d8c27b7f077ac1092dd1b35307391d9fa2245e035792ad1
-P 87727ccab02fa02eaef8ce3aa152c8b78c64460375f9d370f9dfd739539ae788
-R 8e4544f264d512a212b6d339b61fd4ac
+P a02c17a111f3f90218e1f45dbafe17f7b6cd0478149ef020c18508961498f62f
+R 87eed99d07f4be9c39ee57ddcbc47cd0
 U alex
-Z 02c263f63f7314135a5b5f6a7a4b46f0
+Z e7b1c9d0871b26252cd20299f67fca66
 # Remove this line to create a well-formed Fossil manifest.
