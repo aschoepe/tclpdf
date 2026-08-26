@@ -53,9 +53,17 @@
 # 4. TRANSPARENCY IS PDF'S, NOT AN APPROXIMATION. A colour line whose stops
 #    carry different alpha values - 8730 of Noto Color Emoji's 18471 colour
 #    lines, measured - cannot be a PDF shading, because a shading has no alpha
-#    channel. It becomes a shading plus a LUMINOSITY SOFT MASK whose own
-#    shading is the same geometry in DeviceGray with the alphas as grey
-#    levels; that is exact rather than close. PaintComposite likewise: the
+#    channel. It becomes a shading painted in BANDS OF CONSTANT ALPHA - the
+#    same shading over and over, each time through a clip that narrows the
+#    one before it and at a /ca that adds the next step of alpha, so that the
+#    alpha accumulates to what the font asked for to within half a step of
+#    1/64. The exact construction is a luminosity soft mask, a grey twin of
+#    the shading established with a "gs", and it is still what a gradient
+#    that cannot be banded gets - but a soft mask inside a Type 3 glyph is
+#    the one construction in this file that readers disagree about, and the
+#    bands are a clip and a /ca, which nothing can read two ways. See
+#    colorFontBand.tcl for the measurement and the arithmetic.
+#    PaintComposite likewise: the
 #    fifteen blend modes go into an isolated transparency group with a /BM,
 #    and the Porter-Duff modes that PDF has no operator for are built out of
 #    an ALPHA soft mask taken from the other side's group, which is what
@@ -126,6 +134,9 @@ package require tclpdf::xObject 1.0-
 package require tclpdf::sfnt 1.0-
 package require tclpdf::colr 1.1-
 package require tclpdf::colrPaint 1.0-
+# The bands of constant alpha a gradient's varying alpha becomes, and the clip
+# paths that carry them - see decision 4 above.
+package require tclpdf::colorFontBand 1.0-
 package require tclpdf::glyfOutline 1.0-
 package require tclpdf::glyfPath 1.0-
 package require tclpdf::pdfFunction 1.0-
@@ -1030,6 +1041,20 @@ oo::define ::tclpdf::document::document {
       }
       dict set seen $offset 1
     }
+    # AND A VERTEX WHERE THE ALPHA CROSSES A BAND, for the reason there is one
+    # at every colour stop: a wedge of the fan carries ONE alpha (see
+    # [ColorFontPaintWedges]), so a wedge spanning two bands would lose one of
+    # them and the fade would come out in four degree terraces. Nothing is
+    # added where the alpha does not vary, which is every sweep that has no
+    # fade in it at all.
+    foreach offset [::tclpdf::colorFontBand crossings \
+        [lmap stop $stops {lindex $stop 0}] \
+        [lmap stop $stops {lindex $stop 2}]] {
+      set angle [expr {$start + $offset * $turn}]
+      if {$angle > 0 && $angle < 360} {
+        lappend angles $angle
+      }
+    }
     set angles [lsort -real -unique $angles]
     # Far enough out to cover the box, and then far enough again for the
     # chords to reach where the arc would.
@@ -1107,13 +1132,106 @@ oo::define ::tclpdf::document::document {
     set options [dict merge [my ShadingDefaults $kind] $geometry \
         [list colors $colours stops $positions extend {1 1} \
             matrix [::tclpdf::geometry identity]]]
-    set alpha [my ColorFontPaintAlpha $context $alphas $kind \
-        [dict merge $options [list colors [lmap value $alphas {
-          list gray $value
-        }]]] $cover]
+    # WHICH CONSTRUCTION CARRIES THE ALPHA, asked BEFORE anything is written -
+    # the order the rest of this file keeps and for the same reason: a soft
+    # mask written for a gradient that then turns out to band would be an
+    # object no reader reaches and every validator counts.
+    set bands [my ColorFontPaintBands $kind $geometry $positions $alphas $cover]
     set number [my ShadingObject $kind $options [dict get $context what]]
-    return "q\n$alpha[::tclpdf::pdfObj name \
-        [my ShadingResource $number]] sh\nQ\n"
+    set name [::tclpdf::pdfObj name [my ShadingResource $number]]
+    if {$bands eq "mask"} {
+      return "q\n[my ColorFontPaintAlpha $context $alphas $kind \
+          [dict merge $options [list colors [lmap value $alphas {
+            list gray $value
+          }]]] $cover]$name sh\nQ\n"
+    }
+    return [my ColorFontPaintPour $bands $name]
+  }
+
+  # The bands one gradient's alpha becomes, as {increment clip} pairs: the
+  # empty list for a colour line that needs no alpha at all, ONE pair with no
+  # clip for one at a single alpha, and the word "mask" for one that cannot be
+  # banded and falls back to the luminosity soft mask below.
+  #
+  # The arithmetic and the measurement behind it are colorFontBand.tcl's. What
+  # is decided HERE is only which geometry each kind of gradient has - the
+  # axis of a linear one, the two circles of a radial one - because that is
+  # the part [shading] spells differently for each of them.
+  method ColorFontPaintBands {kind geometry positions alphas cover} {
+    set lowest [::tcl::mathfunc::min {*}$alphas]
+    set highest [::tcl::mathfunc::max {*}$alphas]
+    if {$lowest >= 1} {
+      return {}
+    }
+    if {$lowest == $highest} {
+      # One alpha over the whole colour line: one /ca and no clip at all, the
+      # same resource a translucent version 0 layer takes.
+      return [list [list $lowest {}]]
+    }
+    my RequireVersion 1.4 "colour font gradient"
+    if {$kind eq "axial"} {
+      set from [dict get $geometry from]
+      set to [dict get $geometry to]
+      lassign [::tclpdf::colorFontBand axis $from $to $cover] low high
+      set plan [::tclpdf::colorFontBand plan $positions $alphas $low $high]
+      if {$plan eq "mask"} {
+        return mask
+      }
+      return [lmap layer $plan {
+        list [lindex $layer 0] [::tclpdf::colorFontBand strips $from $to \
+            $cover [lindex $layer 1]]
+      }]
+    }
+    if {$kind eq "radial"} {
+      set c0 [dict get $geometry focus]
+      set r0 [dict get $geometry innerRadius]
+      set c1 [dict get $geometry center]
+      set r1 [dict get $geometry radius]
+      set reach [::tclpdf::colorFontBand cone $c0 $r0 $c1 $r1 $cover]
+      if {![llength $reach]} {
+        # The two circles are not nested, so the region between two of the
+        # family's circles is not a ring at all - see [colorFontBand cone].
+        return mask
+      }
+      set plan [::tclpdf::colorFontBand plan $positions $alphas {*}$reach]
+      if {$plan eq "mask"} {
+        return mask
+      }
+      return [lmap layer $plan {
+        list [lindex $layer 0] [::tclpdf::colorFontBand rings $c0 $r0 $c1 $r1 \
+            $cover [lindex $layer 1]]
+      }]
+    }
+    return mask
+  }
+
+  # One shading painted through its bands: each clip NARROWS the one before it
+  # rather than standing beside it, and each /ca adds the next step of alpha
+  # on top of what is already there. colorFontBand.tcl says why they nest - in
+  # one sentence, because two regions that merely abut seam along the edge
+  # they share and two that nest do not.
+  #
+  # THE SAME SHADING EVERY TIME, and that is what makes the colour come out
+  # right: a colour painted over itself is itself, so only the alpha
+  # accumulates.
+  #
+  # EVEN-ODD, because a radial gradient's bands are rings and a ring is two
+  # circles. A linear gradient's bands are disjoint rectangles, where the two
+  # fill rules agree.
+  method ColorFontPaintPour {bands name} {
+    if {![llength $bands]} {
+      return "q\n$name sh\nQ\n"
+    }
+    set body "q\n"
+    foreach band $bands {
+      lassign $band alpha path
+      if {$path ne {}} {
+        append body $path "W*\nn\n"
+      }
+      append body "[::tclpdf::pdfObj name [my GraphicsOpacity $alpha fill]] gs\n"
+      append body "$name sh\n"
+    }
+    return "${body}Q\n"
   }
 
   # The same for the fan of a sweep gradient, whose colours sit in its
@@ -1125,13 +1243,49 @@ oo::define ::tclpdf::document::document {
           lreplace $vertex 2 2 [lindex $vertex 2 1]
         }] matrix [::tclpdf::geometry identity]]]
     set alphas [lmap vertex $vertices {lindex $vertex 2 2}]
-    set alpha [my ColorFontPaintAlpha $context $alphas triangles \
-        [dict merge $options [list vertices [lmap vertex $vertices {
-          lreplace $vertex 2 2 [list gray [lindex $vertex 2 2]]
-        }]]] $cover]
+    set bands [my ColorFontPaintWedges $vertices]
     set number [my ShadingObject triangles $options [dict get $context what]]
-    return "q\n$alpha[::tclpdf::pdfObj name \
-        [my ShadingResource $number]] sh\nQ\n"
+    set name [::tclpdf::pdfObj name [my ShadingResource $number]]
+    if {$bands eq "mask"} {
+      return "q\n[my ColorFontPaintAlpha $context $alphas triangles \
+          [dict merge $options [list vertices [lmap vertex $vertices {
+            lreplace $vertex 2 2 [list gray [lindex $vertex 2 2]]
+          }]]] $cover]$name sh\nQ\n"
+    }
+    return [my ColorFontPaintPour $bands $name]
+  }
+
+  # The bands of a sweep gradient, which needs no geometry of its own: the fan
+  # is ALREADY cut into wedges - at four degrees, at every colour stop and,
+  # since [ColorFontPaintSweep] adds them, wherever the alpha crosses a band.
+  # So a band is a run of neighbouring wedges, and the alpha of one wedge is
+  # the alpha its centre vertex carries, which is the mean of the wedge's two
+  # rim colours - the same mean the colour there is taken at.
+  method ColorFontPaintWedges {vertices} {
+    set alphas {}
+    set wedges {}
+    foreach {middle inner outer} $vertices {
+      lappend alphas [lindex $middle 2 2]
+      lappend wedges [list [lindex $inner 0] [lindex $inner 1] \
+          [lindex $outer 0] [lindex $outer 1]]
+    }
+    set lowest [::tcl::mathfunc::min {*}$alphas]
+    set highest [::tcl::mathfunc::max {*}$alphas]
+    if {$lowest >= 1} {
+      return {}
+    }
+    if {$lowest == $highest} {
+      return [list [list $lowest {}]]
+    }
+    my RequireVersion 1.4 "colour font gradient"
+    set plan [::tclpdf::colorFontBand cells $alphas]
+    if {$plan eq "mask"} {
+      return mask
+    }
+    return [lmap layer $plan {
+      list [lindex $layer 0] [::tclpdf::colorFontBand sectors \
+          [lrange [lindex $vertices 0] 0 1] $wedges [lindex $layer 1]]
+    }]
   }
 
   # The stops of a colour line, split into the three lists a shading takes and
@@ -1417,22 +1571,36 @@ oo::define ::tclpdf::document::document {
     set alias [dict get $context alias]
     set under [my ColorFontPaintNode $backdrop $context]
     set over [my ColorFontPaintNode $source $context]
+    # The NODE the mask is taken from travels beside the operators it was
+    # drawn into, because two shapes of mask need no mask at all and only the
+    # node says which - see [ColorFontPaintMasked].
     switch -- $mode {
-      srcIn {return [my ColorFontPaintMasked $alias $over $under $cover 0]}
-      srcOut {return [my ColorFontPaintMasked $alias $over $under $cover 1]}
-      destIn {return [my ColorFontPaintMasked $alias $under $over $cover 0]}
-      destOut {return [my ColorFontPaintMasked $alias $under $over $cover 1]}
+      srcIn {
+        return [my ColorFontPaintMasked $context $over $under $backdrop \
+            $cover 0]
+      }
+      srcOut {
+        return [my ColorFontPaintMasked $context $over $under $backdrop \
+            $cover 1]
+      }
+      destIn {
+        return [my ColorFontPaintMasked $context $under $over $source $cover 0]
+      }
+      destOut {
+        return [my ColorFontPaintMasked $context $under $over $source $cover 1]
+      }
       srcAtop {
-        return "q\n$under Q\n[my ColorFontPaintMasked $alias $over $under \
-            $cover 0]"
+        return "q\n$under Q\n[my ColorFontPaintMasked $context $over $under \
+            $backdrop $cover 0]"
       }
       destAtop {
-        return "q\n$over Q\n[my ColorFontPaintMasked $alias $under $over \
-            $cover 0]"
+        return "q\n$over Q\n[my ColorFontPaintMasked $context $under $over \
+            $source $cover 0]"
       }
       xor {
-        return "[my ColorFontPaintMasked $alias $under $over $cover 1][my \
-            ColorFontPaintMasked $alias $over $under $cover 1]"
+        return "[my ColorFontPaintMasked $context $under $over $source $cover \
+            1][my ColorFontPaintMasked $context $over $under $backdrop $cover \
+            1]"
       }
     }
     return -code error -errorcode [list TCLPDF COLORFONT COMPOSITE $alias \
@@ -1454,10 +1622,11 @@ oo::define ::tclpdf::document::document {
   # reach, an uninverted mask is 0 - nothing of the source shows, which is
   # Source In - and an inverted one is 1 - all of it shows, which is Source
   # Out. Neither needs a rule of its own.
-  method ColorFontPaintMasked {alias content group cover inverted} {
+  method ColorFontPaintMasked {context content group node cover inverted} {
     if {$content eq {}} {
       return {}
     }
+    set alias [dict get $context alias]
     if {$group eq {}} {
       # Nothing to take a mask from. An empty backdrop is transparent
       # everywhere: "in" it draws nothing, "out" of it draws everything.
@@ -1469,6 +1638,44 @@ oo::define ::tclpdf::document::document {
         return "q\n$content Q\n"
       }
       return {}
+    }
+    if {!$inverted} {
+      # TWO SHAPES OF MASK NEED NO MASK, and both of them are exact rather
+      # than close. Worth having for the same reason the bands of a gradient
+      # are: a soft mask inside a Type 3 glyph is the one construction here
+      # that readers disagree about (colorFontBand.tcl says which and how),
+      # and a clip or a /ca is read the same way by all of them.
+      #
+      # Only the UNINVERTED direction. "Out" is the complement of the mask,
+      # and the complement of a clip path is not a clip path.
+      set flat [my ColorFontPaintUniform $node $context]
+      if {$flat ne {}} {
+        # A mask side that paints the whole clip at ONE alpha - a PaintSolid,
+        # which is 54 of Noto Color Emoji's 316 Source In tables, measured,
+        # and every one of them at an alpha below 1. "In" such a mask is the
+        # source at that constant alpha, and the group is what makes the /ca
+        # apply to the source's RESULT rather than to each of its fills.
+        set placed [::tclpdf::pdfObj name [my ColorFontPaintPlace $alias \
+            "q\n$content Q\n" $cover]]
+        if {$flat >= 1} {
+          return "q\n$placed Do\nQ\n"
+        }
+        return "q\n[::tclpdf::pdfObj name [my GraphicsOpacity $flat fill]]\
+            gs\n$placed Do\nQ\n"
+      }
+      set outline [my ColorFontPaintBinary $node $context]
+      if {$outline ne {}} {
+        # A mask side that is a BINARY OUTLINE - shapes filled opaque and
+        # nothing else, so its alpha is 1 inside them and 0 outside. "In"
+        # such a mask is a CLIP PATH and nothing more. Nonzero winding, so
+        # that several shapes are their union, which is what stacking them
+        # in the mask amounted to.
+        #
+        # No group either: a clip applies to every fill of the source
+        # separately and to their result alike, which a soft mask does not -
+        # that is why the masked case below needs one and this does not.
+        return "q\n$outline W\nn\n$content Q\n"
+      }
     }
     set pairs [list Type /Mask S /Alpha \
         G [[my writer] ref [my ColorFontPaintForm $alias "q\n$group Q\n" \
@@ -1487,8 +1694,8 @@ oo::define ::tclpdf::document::document {
     # name None" (11.6.4), so a "gs" anywhere inside $content that sets a
     # mask of its own throws this one away and the Porter-Duff mode silently
     # does not happen. And $content sets one whenever it holds a gradient
-    # with unequal stop alphas ([ColorFontPaintAlpha]) or a nested composite
-    # - neither of them exotic. Inside a group the soft mask starts out as
+    # that cannot be banded ([ColorFontPaintAlpha]) or a nested composite -
+    # neither of them exotic. Inside a group the soft mask starts out as
     # None again ("the current soft mask shall be initialised to None",
     # 11.6.6) and the mask established out here applies to the group's
     # RESULT, which is what a Porter-Duff mode means in the first place.
@@ -1499,6 +1706,109 @@ oo::define ::tclpdf::document::document {
     # and for the neighbouring reason - there, isolation; here, the mask.
     return "q\n[::tclpdf::pdfObj name $name] gs\n[::tclpdf::pdfObj name \
         [my ColorFontPaintPlace $alias "q\n$content Q\n" $cover]] Do\nQ\n"
+  }
+
+  # The one alpha a sub-graph paints the WHOLE clip at, or the empty string
+  # where it paints anything else. A PaintSolid is the case: it is unbounded
+  # by definition, so it covers whatever clip it stands in, and its alpha is
+  # a number in the table. A transform over one changes where it paints and
+  # not that it paints everywhere.
+  #
+  # A gradient is deliberately NOT here even when all its stops share one
+  # alpha: a radial gradient leaves the far side of its cone unpainted, and
+  # "unbounded" for the bounds of a graph is not the same promise as "covers
+  # every pixel of the clip".
+  method ColorFontPaintUniform {node context} {
+    switch -- [dict get $node paint] {
+      transform {
+        if {[::tclpdf::geometry singular [dict get $node matrix]]} {
+          return {}
+        }
+        return [my ColorFontPaintUniform [dict get $node child] $context]
+      }
+      solid {
+        set alpha [dict get $node alpha]
+        set colour [::tclpdf::colr color [dict get $context state] \
+            [dict get $context palette] [dict get $node palette]]
+        if {$colour ne {}} {
+          set alpha [expr {$alpha * [lindex $colour 1]}]
+        }
+        if {$alpha <= 0} {
+          return {}
+        }
+        return $alpha
+      }
+    }
+    return {}
+  }
+
+  # The outline of a sub-graph that is a BINARY MASK - alpha 1 inside its
+  # shapes and 0 outside - as path operators, or the empty string where it is
+  # anything else.
+  #
+  # The rule is narrow on purpose, and the reason is that a mask which is
+  # ALMOST binary is not binary. Measured over Noto Color Emoji's 316 Source
+  # In tables: 2 backdrops are a stack of opaque shapes and take this path,
+  # 250 are a stack of opaque shapes with ONE translucent shape on top of
+  # them, and those 250 are refused here. Their alpha is 1 inside the opaque
+  # union and the translucent shape's alpha outside it, and whether that
+  # second region is empty is a question about where two outlines lie, not
+  # about what the graph says - so they keep the soft mask, which is exact
+  # whatever the answer.
+  method ColorFontPaintBinary {node context} {
+    switch -- [dict get $node paint] {
+      glyph {
+        if {![my ColorFontPaintOpaque [dict get $node child] $context]} {
+          return {}
+        }
+        return [my ColorFontPaintPath $context [dict get $node glyph]]
+      }
+      layers {
+        set body {}
+        foreach child [dict get $node children] {
+          set piece [my ColorFontPaintBinary $child $context]
+          if {$piece eq {}} {
+            return {}
+          }
+          append body $piece
+        }
+        return $body
+      }
+    }
+    return {}
+  }
+
+  # Whether a sub-graph fills everything it is given, fully opaque. Only the
+  # unbounded fills can: a shape inside it covers its own outline and not the
+  # clip around it, which is why [ColorFontPaintBinary] asks this of a
+  # PaintGlyph's CHILD and never of the PaintGlyph.
+  method ColorFontPaintOpaque {node context} {
+    switch -- [dict get $node paint] {
+      solid {
+        set alpha [dict get $node alpha]
+        set colour [::tclpdf::colr color [dict get $context state] \
+            [dict get $context palette] [dict get $node palette]]
+        if {$colour ne {}} {
+          set alpha [expr {$alpha * [lindex $colour 1]}]
+        }
+        return [expr {$alpha >= 1}]
+      }
+      transform {
+        if {[::tclpdf::geometry singular [dict get $node matrix]]} {
+          return 0
+        }
+        return [my ColorFontPaintOpaque [dict get $node child] $context]
+      }
+      layers {
+        foreach child [dict get $node children] {
+          if {[my ColorFontPaintOpaque $child $context]} {
+            return 1
+          }
+        }
+        return 0
+      }
+    }
+    return 0
   }
 }
 

@@ -99,6 +99,7 @@ foreach tclpdfPkg {
     tclpdf::colr
     tclpdf::colrPaint
     tclpdf::colorFont
+    tclpdf::colorFontBand
     tclpdf::colorFontPaint
     tclpdf::imageTiff
     tclpdf::imageTiffStreams

@@ -1,0 +1,330 @@
+# colorFontBand.test --
+#
+# A gradient's varying alpha as bands of constant alpha.
+#
+# EVERYTHING HERE IS ARITHMETIC AND GEOMETRY, which is why this file needs no
+# font and no document: the module holds no state, reads no table and writes
+# no object. What the bands are used FOR - which gradient gets them and which
+# keeps its soft mask - is colorFontPaint.test's subject, at 4.10 and 5.5.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::colorFontBand
+source [file join [file dirname [info script]] helper.tcl]
+
+# The step the module cuts the alpha into, read rather than repeated: a test
+# that spelled 1/64 out would have to be found and changed with it.
+set cfbStep [set ::tclpdf::colorFontBand::step]
+
+# The alpha a colour line asks for at one position - the piecewise linear
+# walk the module's own [Cut] does, written a second time on purpose. A test
+# that called the module's arithmetic to check the module's arithmetic would
+# agree with it however wrong both were.
+proc cfbLineAlpha {positions alphas at} {
+  if {$at <= [lindex $positions 0]} {
+    return [lindex $alphas 0]
+  }
+  if {$at >= [lindex $positions end]} {
+    return [lindex $alphas end]
+  }
+  set previous [lindex $positions 0]
+  set before [lindex $alphas 0]
+  foreach position [lrange $positions 1 end] alpha [lrange $alphas 1 end] {
+    if {$at <= $position} {
+      if {$position == $previous} {
+        return $alpha
+      }
+      return [expr {$before + ($at - $previous) / double($position - $previous)
+          * ($alpha - $before)}]
+    }
+    set previous $position
+    set before $alpha
+  }
+  return [lindex $alphas end]
+}
+
+# And the alpha a run of bands adds up to there. The bands are painted in
+# order, each clip narrowing the one before it, so a position that falls out
+# of one layer's region falls out of every later one as well: 1 - (1-b1)(1-b2)
+# ... over the layers up to the first that does not hold it.
+proc cfbStackAlpha {layers at} {
+  set rest 1.0
+  foreach layer $layers {
+    lassign $layer increment intervals
+    set inside 0
+    foreach interval $intervals {
+      if {$at >= [lindex $interval 0] && $at <= [lindex $interval 1]} {
+        set inside 1
+        break
+      }
+    }
+    if {!$inside} {
+      break
+    }
+    set rest [expr {$rest * (1.0 - $increment)}]
+  }
+  return [expr {1.0 - $rest}]
+}
+
+# The operators of a clip path as a flat list of lines.
+proc cfbLines {body} {
+  return [lmap line [split [string trim $body] \n] {string trim $line}]
+}
+
+# --- the plan --------------------------------------------------------------
+
+test colorFontBand-1.1 {a fade becomes one layer per step of alpha} -body {
+  # From 1 to 0 over the axis: 64 steps of alpha, and one more for the piece
+  # the pad adds beyond the far end - so 65 levels, each an increment on the
+  # one before it. The last is 1, because the colour line reaches full
+  # opacity and 1 - (1-a)(1-b) has to arrive there exactly.
+  set layers [::tclpdf::colorFontBand plan {0.0 1.0} {1.0 0.0} -0.1 1.1]
+  list [llength $layers] [lindex $layers 0 0] [lindex $layers end 0]
+} -result {65 0.0078125 1.0}
+
+test colorFontBand-1.2 {the bands add up to the alpha the line asks for} -body {
+  # THE PROMISE THE CONSTRUCTION MAKES, and the only one: no more than half a
+  # step out, anywhere. A band is painted at the CENTRE of the step it falls
+  # in, so the error is bounded by 1/128 - about two of 255 grey levels at
+  # full contrast, which a render at 400 dpi cannot tell from the soft mask
+  # this replaces.
+  set worst 0
+  foreach {positions alphas} {{0.0 1.0} {1.0 0.0} {0.0 0.5 1.0} {0.2 0.9 0.4}
+      {0.0 1.0} {0.05 0.95} {0.0 0.25 1.0} {1.0 1.0 0.0}
+      {0.0 0.5 0.5 1.0} {1.0 0.8 0.3 0.3}} {
+    set layers [::tclpdf::colorFontBand plan $positions $alphas -0.2 1.2]
+    for {set count 0} {$count <= 1200} {incr count} {
+      set at [expr {-0.2 + $count / 1000.0}]
+      set worst [expr {max($worst, abs([cfbLineAlpha $positions $alphas $at]
+          - [cfbStackAlpha $layers $at]))}]
+    }
+  }
+  expr {$worst <= $::cfbStep / 2}
+} -result 1
+
+test colorFontBand-1.3 {every layer lies inside the one before it} -body {
+  # WHY THE BANDS NEST rather than standing side by side: two regions that
+  # merely abut SEAM. Each covers the boundary pixel partly and the two
+  # coverages composite over one another instead of adding up - measured with
+  # poppler at 400 dpi, forty abutting strips at /ca 1 showed their shared
+  # edges 58 grey levels of 255 lighter than the middle of a strip. Nested,
+  # the same half covered pixel gets half of an INCREMENT over a region that
+  # is already painted, and the result lands between the two levels.
+  #
+  # So the clips may be written without a q/Q between them, and a reader that
+  # intersects them arrives at each layer's own region. If that were ever
+  # untrue the stream would silently clip everything away.
+  set wrong {}
+  foreach {positions alphas} {{0.0 1.0} {1.0 0.0} {0.0 0.5 1.0} {0.2 0.9 0.4}
+      {0.0 0.5 1.0} {0.0 1.0 0.0} {0.0 0.25 0.75 1.0} {0.3 1.0 0.1 0.6}} {
+    set layers [::tclpdf::colorFontBand plan $positions $alphas -0.2 1.2]
+    foreach outer [lrange $layers 0 end-1] inner [lrange $layers 1 end] {
+      foreach interval [lindex $inner 1] {
+        set held 0
+        foreach around [lindex $outer 1] {
+          if {[lindex $interval 0] >= [lindex $around 0]
+              && [lindex $interval 1] <= [lindex $around 1]} {
+            set held 1
+            break
+          }
+        }
+        if {!$held} {
+          lappend wrong "$positions $alphas: $interval is not inside\
+              [lindex $outer 1]"
+        }
+      }
+    }
+  }
+  set wrong
+} -result {}
+
+test colorFontBand-1.4 {an alpha of nought leaves a gap and not a band} -body {
+  # Nought keeps itself rather than snapping to the centre of its step: a
+  # stretch the font says is invisible must not be painted at half a step.
+  # And that is also what makes the band BELOW it end where it should - a
+  # colour line fading to zero stops being painted where it reaches zero,
+  # instead of covering the rest of the box.
+  #
+  # The alpha reaches nought at 0.5 of the axis, so no interval of any layer
+  # may reach past it, and the outermost one must stop exactly there.
+  set layers [::tclpdf::colorFontBand plan {0.0 0.5 1.0} {1.0 0.0 0.0} \
+      -0.2 1.2]
+  set far {}
+  foreach layer $layers {
+    foreach interval [lindex $layer 1] {
+      lappend far [lindex $interval 1]
+    }
+  }
+  list [expr {[::tcl::mathfunc::max {*}$far] <= 0.5}] [lindex $layers 0 1]
+} -result {1 {{-0.2 0.5}}}
+
+test colorFontBand-1.5 {one alpha over the whole line needs no plan at all} -body {
+  # A colour line whose stops share an alpha never reaches [plan] - the
+  # caller has a cheaper answer for it, one /ca and no clip - but the plan
+  # must still be honest about it rather than writing 64 identical layers.
+  set layers [::tclpdf::colorFontBand plan {0.0 1.0} {0.5 0.5} -0.1 1.1]
+  list [llength $layers] [lindex $layers 0 0] [lindex $layers 0 1]
+} -result {1 0.5078125 {{-0.1 1.1}}}
+
+test colorFontBand-1.6 {a colour line with too many regions goes back} -body {
+  # A line that fades up and down repeatedly - an unfolded repeat, say - has
+  # one region per period per level, and that PRODUCT is what runs away. Past
+  # the ceiling the gradient goes back to the luminosity soft mask, which
+  # costs one object whatever the colour line does. Sixty-four sawteeth over
+  # the axis is well past it.
+  set positions {}
+  set alphas {}
+  for {set tooth 0} {$tooth < 64} {incr tooth} {
+    lappend positions [expr {$tooth / 64.0}] [expr {($tooth + 0.5) / 64.0}]
+    lappend alphas 0.1 0.9
+  }
+  lappend positions 1.0
+  lappend alphas 0.1
+  ::tclpdf::colorFontBand plan $positions $alphas -0.1 1.1
+} -result mask
+
+test colorFontBand-1.7 {a step function bands by its cells} -body {
+  # What a sweep gradient's fan hands over: one alpha per wedge, and a band
+  # is a run of neighbouring wedges. The intervals are {first past} over the
+  # cell numbers, so the last one ends at the count and not at the last index.
+  set layers [::tclpdf::colorFontBand cells {0.2 0.2 0.6 0.6 1.0}]
+  list [llength $layers] [lindex $layers 0 1] [lindex $layers end 1]
+} -result {3 {{0 5}} {{4 5}}}
+
+test colorFontBand-1.8 {a crossing is a vertex only where the alpha moves} -body {
+  # The extra vertices a FAN needs. A wedge carries ONE alpha, so a wedge
+  # spanning two bands would lose one of them - but an opaque sweep is cut at
+  # four degrees and at its colour stops and nowhere else, and asking for
+  # crossings that are not there would cost every sweep in every font a
+  # hundred vertices it has no use for.
+  list [llength [::tclpdf::colorFontBand crossings {0.0 1.0} {1.0 1.0}]] \
+      [llength [::tclpdf::colorFontBand crossings {0.0 1.0} {1.0 0.0}]] \
+      [llength [::tclpdf::colorFontBand crossings {0.0 1.0} {0.5 0.6}]]
+} -result {0 63 6}
+
+# --- the geometry ----------------------------------------------------------
+
+test colorFontBand-2.1 {the axis is banded past both ends of the box} -body {
+  # A band that ended ON the edge of the box would put a clip edge where the
+  # gradient is still being painted, and a clip edge shows. The axis runs
+  # from x=0 to x=800 and the box from 100 to 900, so the box wants the line
+  # from -0.125 to 1.125 of itself, and the margin goes outside that again.
+  lassign [::tclpdf::colorFontBand axis {0 0} {800 0} {100 100 900 900}] \
+      low high
+  list [expr {$low < 0.125}] [expr {$high > 1.125}]
+} -result {1 1}
+
+test colorFontBand-2.2 {a linear band is a rectangle across the axis} -body {
+  # In the space the operators are written in, and wide enough for the box:
+  # the two corners on the axis carry the interval, the two across it carry
+  # the box. Here the axis runs along x, so the rectangle's x are the
+  # interval and its y reach past 100 and 900.
+  set lines [cfbLines [::tclpdf::colorFontBand strips {0 0} {800 0} \
+      {100 100 900 900} {{0.25 0.5}}]]
+  # WHOLE NUMBERS ON PURPOSE. A colour font writes its geometry in font
+  # units, and the projection onto the axis used to be an integer division
+  # here - 80000 / 640000 is 0 in Tcl - so every strip came out at the same
+  # place and the clip held nothing. Font units happen to arrive as doubles
+  # through the paint graph, so nothing but a test in round numbers finds it.
+  list [llength $lines] [lindex $lines 0] [lindex $lines 1] [lindex $lines end]
+} -result {5 {200 60 m} {400 60 l} h}
+
+test colorFontBand-2.3 {two intervals are two subpaths of one clip} -body {
+  # A colour line that fades up and down again has a level whose region is
+  # two stretches of the axis. Under the even-odd rule the module writes,
+  # disjoint rectangles are their union - which is what the region is.
+  set lines [cfbLines [::tclpdf::colorFontBand strips {0 0} {800 0} \
+      {100 100 900 900} {{0.0 0.2} {0.6 0.8}}]]
+  list [llength [lsearch -all -glob $lines "* m"]] \
+      [llength [lsearch -all -exact $lines h]]
+} -result {2 2}
+
+test colorFontBand-2.4 {nested circles say how far a radial reaches} -body {
+  # One end is the TIP, where the radius reaches nought and the gradient
+  # stops being painted; the other is the first circle that holds the whole
+  # box. The circles here are concentric, r from 50 to 400, and the box
+  # corners lie at most 566 from the centre - so the tip is at -1/7 of the
+  # line and the box is covered at (566-50)/350 of it.
+  lassign [::tclpdf::colorFontBand cone {500 500} 50 {500 500} 400 \
+      {100 100 900 900}] low high
+  list [expr {abs($low + 50.0 / 350) < 0.001}] [expr {$high > 1.4}]
+} -result {1 1}
+
+test colorFontBand-2.5 {a cone that is not nested cannot be banded} -body {
+  # |c1-c0| >= |r1-r0|: the family's circles cross one another, so the region
+  # between two of them is not a ring and there is no ring to clip to. The
+  # equal case is refused with the rest - the circles are then tangent, and a
+  # ring that closes to a point at one place is not one a clip can hold.
+  #
+  # Measured over Noto Color Emoji: 7894 of its 7894 radial gradients with a
+  # varying alpha ARE nested, so this is a fallback nothing real is known to
+  # reach.
+  list [::tclpdf::colorFontBand cone {200 500} 0 {800 500} 100 \
+          {100 100 900 900}] \
+      [::tclpdf::colorFontBand cone {400 500} 0 {500 500} 100 \
+          {100 100 900 900}]
+} -result {{} {}}
+
+test colorFontBand-2.6 {a radial band is two circles under even-odd} -body {
+  # Nested circles alternate in and out, so a list of circles IS a list of
+  # rings. Four cubics to a circle, the drawing point at angle nought.
+  set lines [cfbLines [::tclpdf::colorFontBand rings {500 500} 50 {500 500} \
+      400 {100 100 900 900} {{0.2 0.4}}]]
+  list [llength [lsearch -all -glob $lines "* m"]] \
+      [llength [lsearch -all -glob $lines "* c"]] \
+      [lsearch -all -inline -glob $lines "* 500 m"]
+} -result {2 8 {{620 500 m} {690 500 m}}}
+
+test colorFontBand-2.6a {the circles go out in radius order, not in the
+        order of the parameter} -body {
+  # A gradient whose radius SHRINKS along its colour line: the parameter runs
+  # one way and the radius the other. Even-odd parity is a question about
+  # which circle lies inside which, so the subpaths have to be written in
+  # radius order, and which END of a ring a boundary is swaps with them.
+  #
+  # Written out because a growing gradient hides it - there the two orders
+  # agree and an unsorted list draws the right rings by accident.
+  set lines [cfbLines [::tclpdf::colorFontBand rings {500 500} 400 {500 500} \
+      50 {100 100 900 900} {{0.2 0.4}}]]
+  lsearch -all -inline -glob $lines "* 500 m"
+} -result {{760 500 m} {830 500 m}}
+
+test colorFontBand-2.7 {the tip of a cone needs no circle to cut out} -body {
+  # A boundary at or below radius nought is the tip: the region reaches the
+  # centre and there is nothing to cut out of it, so no circle is written -
+  # and the parity of the even-odd rule then comes out odd, which is exactly
+  # what puts the innermost disc inside. One circle and not two.
+  set lines [cfbLines [::tclpdf::colorFontBand rings {500 500} 0 {500 500} \
+      400 {100 100 900 900} {{-0.5 0.25}}]]
+  list [llength [lsearch -all -glob $lines "* m"]] [lindex $lines 0]
+} -result {1 {600 500 m}}
+
+test colorFontBand-2.8 {a circle that holds the box becomes the box} -body {
+  # The outermost subpath there can be. A circle larger than the box would
+  # clip nothing and cost four cubics; past it everything lies outside the
+  # box and is dropped altogether.
+  set lines [cfbLines [::tclpdf::colorFontBand rings {500 500} 50 {500 500} \
+      400 {100 100 900 900} {{0.5 4.0}}]]
+  list [llength [lsearch -all -glob $lines "* c"]] \
+      [lsearch -inline -glob $lines "* re"]
+} -result {4 {100 100 800 800 re}}
+
+test colorFontBand-2.9 {a sweep band is a wedge over the rim it has} -body {
+  # Drawn from the centre out over the rim points the fan already carries.
+  # Neighbouring wedges SHARE a rim corner, and a run of them would list
+  # every inner corner twice - so a point that repeats the one before it is
+  # dropped, which halves the clip of a fading sweep.
+  set wedges {{100 0 0 100} {0 100 -100 0} {-100 0 0 -100}}
+  set lines [cfbLines [::tclpdf::colorFontBand sectors {0 0} $wedges \
+      {{0 3}}]]
+  list [llength $lines] [lindex $lines 0] [lindex $lines 1] [lindex $lines end]
+} -result {6 {0 0 m} {100 0 l} h}
+
+cleanupTests

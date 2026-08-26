@@ -495,9 +495,13 @@ test colorFontPaint-4.1 {a linear gradient is an axial shading in a clip} -body 
   set lines [cpLines $doc $::cpMark]
   set shading [cpShading $doc]
   $doc destroy
+  # AND NO "gs" AT ALL. An opaque colour line needs no alpha, so it takes
+  # neither a band nor an ExtGState - the case that has to cost nothing,
+  # since it is 7505 of Noto Color Emoji's 8627 linear gradients.
   list [lsearch -inline -glob $lines "*sh"] [cpNumbers $shading Coords] \
-      [lindex [regexp -inline {/Extend \[[^\]]*\]} $shading] 0]
-} -result {{/Sh1 sh} {100.0 0.0 900.0 0.0} {/Extend [true true]}}
+      [lindex [regexp -inline {/Extend \[[^\]]*\]} $shading] 0] \
+      [lsearch -all -inline -glob $lines "*gs"]
+} -result {{/Sh1 sh} {100.0 0.0 900.0 0.0} {/Extend [true true]} {}}
 
 test colorFontPaint-4.2 {the third point rotates the gradient} -body {
   # p0p2 gives the direction the colours are projected in, and the axis is p1
@@ -651,21 +655,224 @@ test colorFontPaint-4.9 {stops at one alpha cost a constant ca} -body {
   list [lsearch -inline -glob $lines "*gs"] [llength $masks]
 } -result {{/GS0_5f gs} 0}
 
-test colorFontPaint-4.10 {stops at different alphas cost a luminosity mask} -body {
+# The alpha a colour line asks for at one position, and the alpha a run of
+# bands actually adds up to there: 1 - (1-b1)(1-b2)... over every layer whose
+# region holds the position. The two must not differ by more than half a step
+# - which is the whole promise the band construction makes.
+proc cpLineAlpha {positions alphas at} {
+  if {$at <= [lindex $positions 0]} {
+    return [lindex $alphas 0]
+  }
+  if {$at >= [lindex $positions end]} {
+    return [lindex $alphas end]
+  }
+  set previous [lindex $positions 0]
+  set before [lindex $alphas 0]
+  foreach position [lrange $positions 1 end] alpha [lrange $alphas 1 end] {
+    if {$at <= $position} {
+      if {$position == $previous} {
+        return $alpha
+      }
+      return [expr {$before + ($at - $previous) / double($position - $previous)
+          * ($alpha - $before)}]
+    }
+    set previous $position
+    set before $alpha
+  }
+  return [lindex $alphas end]
+}
+
+proc cpStackAlpha {layers at} {
+  set rest 1.0
+  foreach layer $layers {
+    lassign $layer increment intervals
+    set inside 0
+    foreach interval $intervals {
+      if {$at >= [lindex $interval 0] && $at <= [lindex $interval 1]} {
+        set inside 1
+        break
+      }
+    }
+    if {!$inside} {
+      break
+    }
+    set rest [expr {$rest * (1.0 - $increment)}]
+  }
+  return [expr {1.0 - $rest}]
+}
+
+# The alphas a run of bands actually adds up to: 1-(1-b1)(1-b2)... after
+# every clip the stream narrows to. Used by the band tests below, which are
+# about the ARITHMETIC and not about the geometry - what the clip paths are
+# has its own tests.
+proc cpBandAlphas {lines} {
+  set rest 1.0
+  set alphas {}
+  foreach line $lines {
+    if {[regexp {^/GS([0-9_]+)f gs$} $line -> name]} {
+      set rest [expr {$rest * (1.0 - [string map {_ .} $name])}]
+      lappend alphas [expr {round((1.0 - $rest) * 10000) / 10000.0}]
+    }
+  }
+  return $alphas
+}
+
+test colorFontPaint-4.10 {stops at different alphas cost bands, not a mask} -body {
   # A PDF shading has no alpha channel, and 8730 of Noto Color Emoji's 18471
-  # colour lines fade - so this is not an exotic branch. The mask's own
-  # content is the same geometry in DeviceGray with the alphas as grey
-  # levels, which is exact rather than close.
+  # colour lines fade - so this is not an exotic branch. It is drawn as the
+  # same shading painted again and again through clips that NEST, each /ca
+  # adding the next step of alpha; no soft mask, no transparency group and no
+  # form XObject, because a soft mask established inside a Type 3 glyph is
+  # the one construction here that two of seven measured readers get wrong.
   set doc [cpDocument [list glyph 1 [list linear pad \
       {{0.0 0 1.0} {1.0 2 0.0}} {0 0} {800 0} {0 900}]]]
   set lines [cpLines $doc $::cpMark]
   set masks [::tclpdfTest::objects $doc /Luminosity]
-  set greys [::tclpdfTest::objects $doc "/ColorSpace /DeviceGray"]
+  set forms [::tclpdfTest::objects $doc /Transparency]
+  set shadings [::tclpdfTest::objects $doc /ShadingType]
+  set alphas [cpBandAlphas $lines]
   $doc destroy
-  list [lsearch -inline -glob $lines "*gs"] [llength $masks] [llength $greys] \
-      [regexp {/BC \[0\]} [lindex $masks 0]]
-} -result {{/GM1 gs} 1 1 1}
+  # ONE shading for all of the bands - they are the same gradient painted
+  # over and over, and a second copy of it would be a second object saying
+  # the same thing. The cumulative alphas run from half a step to 1.
+  list [llength $masks] [llength $forms] [llength $shadings] \
+      [llength [lsearch -all -exact $lines "/Sh1 sh"]] \
+      [lindex $alphas 0] [lindex $alphas end]
+} -result {0 0 1 65 0.0078 1.0}
 
+test colorFontPaint-4.10a {a band is never more than half a step off} -body {
+  # The whole cost of the construction: the alpha is a staircase and no
+  # longer a slope. The step is 1/64 and a band is painted at the CENTRE of
+  # its step, so the error is bounded by 1/128 - about two of 255 grey levels
+  # at full contrast, which is what the rendering comparison at 400 dpi could
+  # not tell apart from the soft mask (1/32 still terraces on a slow fade
+  # over a large glyph, 1/16 plainly).
+  set worst 0
+  foreach {positions alphas} {{0.0 1.0} {1.0 0.0} {0.0 0.5 1.0} {0.2 0.9 0.4}
+      {0.0 1.0} {0.05 0.95} {0.0 0.25 1.0} {1.0 1.0 0.0}} {
+    set layers [::tclpdf::colorFontBand plan $positions $alphas -0.2 1.2]
+    for {set step 0} {$step <= 1000} {incr step} {
+      set at [expr {$step / 1000.0}]
+      set worst [expr {max($worst, abs([cpLineAlpha $positions $alphas $at]
+          - [cpStackAlpha $layers $at]))}]
+    }
+  }
+  expr {$worst <= 1.0 / 128}
+} -result 1
+
+test colorFontPaint-4.10b {a linear band is a rectangle across the axis} -body {
+  # And the rectangles NEST: each one is the one before it cut back to where
+  # the alpha has risen another step. Abutting strips would seam - two
+  # regions sharing an edge each cover the boundary pixel partly and the two
+  # coverages composite over one another rather than adding up; measured
+  # with poppler at 400 dpi, forty abutting strips at /ca 1 showed their
+  # shared edges 58 grey levels of 255 lighter than the middle of a strip.
+  set doc [cpDocument [list glyph 1 [list linear pad \
+      {{0.0 0 1.0} {1.0 2 0.0}} {0 0} {800 0} {0 900}]]]
+  set lines [cpLines $doc $::cpMark]
+  $doc destroy
+  # The far corner of each clip rectangle, which is where the strip ends on
+  # the axis. The axis runs from x=0 to x=800, the alpha from 1 to 0, so the
+  # strips end at falling x.
+  set ends {}
+  foreach line $lines {
+    if {[regexp {^([0-9.]+) 60 l$} $line -> x]} {
+      lappend ends $x
+    }
+  }
+  set falling 1
+  foreach first [lrange $ends 0 end-1] second [lrange $ends 1 end] {
+    if {$second >= $first} {
+      set falling 0
+    }
+  }
+  list [llength $ends] $falling [lindex $ends 0] \
+      [llength [lsearch -all -exact $lines "W*"]]
+} -result {65 1 800 65}
+
+test colorFontPaint-4.10c {a radial band is a ring of two circles} -body {
+  # Nested circles under the EVEN-ODD rule alternate in and out, so a list of
+  # circles IS a list of rings - and the innermost band needs no circle of
+  # its own, because there is nothing to cut out of it.
+  #
+  # Only where the two circles are NESTED: |c1-c0| < |r1-r0|. Measured over
+  # Noto Color Emoji, 7894 of its 7894 radial gradients with a varying alpha
+  # are, so the other shape is a fallback nothing real is known to reach.
+  set doc [cpDocument [list glyph 1 [list radial pad \
+      {{0.0 0 1.0} {1.0 2 0.0}} {500 500} 50 {500 500} 400]]]
+  set lines [cpLines $doc $::cpMark]
+  set masks [::tclpdfTest::objects $doc /Luminosity]
+  $doc destroy
+  # The radius of each clip circle: it starts at the drawing "m" point,
+  # which sits at angle zero, so x minus the centre is the radius. They
+  # shrink, because the alpha rises towards the middle.
+  set radii {}
+  foreach line $lines {
+    if {[regexp {^([0-9.]+) 500 m$} $line -> x]} {
+      lappend radii [expr {$x - 500}]
+    }
+  }
+  list [llength $masks] [llength [lsearch -all -exact $lines "W*"]] \
+      [lindex $radii 0] [lindex $radii end] \
+      [expr {[lindex $radii 0] > [lindex $radii end]}]
+} -result {0 65 400 50 1}
+
+test colorFontPaint-4.10d {a cone that is not nested keeps the soft mask} -body {
+  # |c1-c0| >= |r1-r0|: the family's circles cross one another and the region
+  # between two of them is not a ring, so there is no ring to clip to. The
+  # luminosity mask is exact whatever the geometry, which is why it stays as
+  # the fallback rather than being replaced outright.
+  set doc [cpDocument [list glyph 1 [list radial pad \
+      {{0.0 0 1.0} {1.0 2 0.0}} {200 500} 0 {800 500} 100]]]
+  set lines [cpLines $doc $::cpMark]
+  set masks [::tclpdfTest::objects $doc /Luminosity]
+  $doc destroy
+  list [lsearch -inline -glob $lines "*gs"] [llength $masks] \
+      [regexp {/BC \[0\]} [lindex $masks 0]]
+} -result {{/GM1 gs} 1 1}
+
+test colorFontPaint-4.10e {a sweep bands by the wedges it already has} -body {
+  # The fan is cut at four degrees and at every colour stop; a band is a run
+  # of neighbouring wedges, drawn from the centre out over the rim points
+  # that are already there. And a vertex is added wherever the alpha crosses
+  # a band, because a wedge carries ONE alpha and a wedge spanning two bands
+  # would lose one of them - so a fading sweep has MORE wedges than an
+  # opaque one over the same angles.
+  set fading [cpDocument [list glyph 1 [list sweep pad \
+      {{0.0 0 1.0} {1.0 2 0.0}} {500 500} 0 358]]]
+  set fadingFan [llength [cpFan [cpShading $fading 4]]]
+  set fadingLines [cpLines $fading $::cpMark]
+  set masks [llength [::tclpdfTest::objects $fading /Luminosity]]
+  $fading destroy
+  set opaque [cpDocument [list glyph 1 [list sweep pad \
+      {{0.0 0 1.0} {1.0 2 1.0}} {500 500} 0 358]]]
+  set opaqueFan [llength [cpFan [cpShading $opaque 4]]]
+  $opaque destroy
+  list $masks [expr {$fadingFan > $opaqueFan}] \
+      [llength [lsearch -all -exact $fadingLines "W*"]]
+} -result {0 1 64}
+
+test colorFontPaint-4.10f {an alpha of nought is not painted at all} -body {
+  # A band at nothing would be an operator that paints nothing, and leaving
+  # it out is also what makes the band BELOW it end where it should: a
+  # colour line fading to zero stops being painted where it reaches zero,
+  # rather than covering the rest of the box at half a step.
+  #
+  # The axis runs from x=0 to x=800 and the alpha reaches zero at x=400, so
+  # no clip rectangle may reach past it - while the same line with the fade
+  # ending at 0.5 covers the whole box.
+  set doc [cpDocument [list glyph 1 [list linear pad \
+      {{0.0 0 1.0} {0.5 2 0.0} {1.0 2 0.0}} {0 0} {800 0} {0 900}]]]
+  set lines [cpLines $doc $::cpMark]
+  $doc destroy
+  set ends {}
+  foreach line $lines {
+    if {[regexp {^([0-9.]+) 60 l$} $line -> x]} {
+      lappend ends $x
+    }
+  }
+  expr {[::tcl::mathfunc::max {*}$ends] <= 400}
+} -result 1
 test colorFontPaint-4.11 {extend repeat unfolds the colour line, jump and all} -body {
   # PDF's /Extend is two booleans and means pad and nothing else, so a
   # repeating colour line is copied along its own axis until it covers the
@@ -820,13 +1027,72 @@ test colorFontPaint-5.4 {every blend mode of the enumeration has a PDF name} -bo
 } -result {Screen Overlay Darken Lighten ColorDodge ColorBurn HardLight\
     SoftLight Difference Exclusion Multiply Hue Saturation Color Luminosity}
 
-test colorFontPaint-5.5 {Source In is an alpha soft mask from the backdrop} -body {
-  # 316 of Noto Color Emoji's 578 composites are this mode, and it is the
-  # reason this module knows about soft masks at all: the source is painted
-  # where the backdrop is opaque, which in PDF is the source under an /SMask
-  # whose /S is /Alpha and whose group is the backdrop.
+test colorFontPaint-5.5 {Source In over a binary outline is a clip} -body {
+  # 316 of Noto Color Emoji's 578 composites are this mode. Where the
+  # backdrop is a BINARY outline - shapes filled opaque and nothing else, so
+  # its alpha is 1 inside them and 0 outside - "the source where the backdrop
+  # is opaque" IS a clip path, and there is nothing for a soft mask to do
+  # that "W n" does not do exactly.
+  #
+  # Worth the shortcut for the reason the bands of 4.10 are worth theirs: a
+  # soft mask established inside a Type 3 glyph is the one construction in
+  # this module that readers disagree about. No mask, no transparency group
+  # and no form XObject - and no group is needed either, because a clip
+  # applies to every fill of the source separately and to their result alike,
+  # which a soft mask does not.
   set doc [cpDocument {composite 5 {glyph 2 {solid 1 1.0}} \
       {glyph 1 {solid 0 1.0}}}]
+  set lines [cpLines $doc $::cpMark]
+  set masks [::tclpdfTest::objects $doc "/S /Alpha"]
+  set forms [::tclpdfTest::objects $doc /Transparency]
+  $doc destroy
+  # The backdrop's square as a clip, the source's triangle as its own clip
+  # inside it, and the source's colour - and no "gs" and no "Do" at all.
+  list [llength $masks] [llength $forms] \
+      [lsearch -all -inline -glob $lines "*gs"] \
+      [lsearch -all -inline -glob $lines "*Do"] \
+      [llength [lsearch -all -exact $lines "W"]] \
+      [lsearch -inline -glob $lines "* rg"]
+} -result {0 0 {} {} 2 {0 0.66667 0 rg}}
+
+test colorFontPaint-5.5b {Source In over one flat alpha is one ca} -body {
+  # The other shape of mask that needs no mask: a PaintSolid is unbounded, so
+  # it covers whatever clip it stands in at ONE alpha, and "in" it is the
+  # source at that alpha. Measured over Noto Color Emoji, 54 of the 316
+  # Source In tables have a backdrop of exactly this kind, and every one of
+  # them at an alpha below 1.
+  #
+  # The group STAYS here, and that is the difference to 5.5: /ca has to apply
+  # to the source's result and not to each of its fills, or two overlapping
+  # translucent fills of the source would come out darker than the mask
+  # would have made them.
+  #
+  # Inside a shape, because a composite of two unbounded paints is unbounded
+  # and a colour glyph must be bounded (2.3).
+  set doc [cpDocument {glyph 1 {composite 5 {glyph 2 {solid 1 1.0}} \
+      {solid 3 0.5}}}]
+  set lines [cpLines $doc $::cpMark]
+  set masks [::tclpdfTest::objects $doc "/S /Alpha"]
+  set forms [::tclpdfTest::objects $doc /Transparency]
+  $doc destroy
+  # Palette entry 3 carries an alpha of its own, and the two multiply.
+  list [llength $masks] [llength $forms] \
+      [lsearch -inline -glob $lines "*gs"] [lsearch -inline -glob $lines "*Do"]
+} -result {0 1 {/GS0_25098f gs} {/XO1 Do}}
+
+test colorFontPaint-5.5c {a backdrop that is nearly binary keeps the mask} -body {
+  # And this is the case the shortcut of 5.5 is deliberately narrow for: a
+  # stack of opaque shapes with ONE translucent shape on top of them. Its
+  # alpha is 1 inside the opaque union and the translucent shape's alpha
+  # outside it, so it is not binary - and whether that second region is empty
+  # is a question about where two outlines lie, not about what the graph
+  # says. The soft mask is exact whatever the answer.
+  #
+  # Measured over Noto Color Emoji: 250 of the 316 Source In tables have
+  # exactly this shape, 2 are a stack of opaque shapes alone (5.5) and 54 a
+  # bare PaintSolid (5.5b).
+  set doc [cpDocument {composite 5 {glyph 2 {solid 1 1.0}} {layers 0 2}} \
+      layers [list {glyph 1 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
   set lines [cpLines $doc $::cpMark]
   set masks [::tclpdfTest::objects $doc "/S /Alpha"]
   $doc destroy
@@ -836,23 +1102,24 @@ test colorFontPaint-5.5 {Source In is an alpha soft mask from the backdrop} -bod
 
 test colorFontPaint-5.5a {a mask inside the masked side does not replace it} -body {
   # PDF does not COMPOSE soft masks, it REPLACES them: the graphics state
-  # holds ONE /SMask (11.6.4). So a "gs" anywhere inside the side being
-  # masked throws the Porter-Duff mask away, and the side sets one whenever
-  # it holds a gradient with unequal stop alphas - which is the common kind
-  # (4.10). The answer is the group [ColorFontPaintBlend] already uses: the
-  # masked side goes into a transparency group and is placed with a Do,
-  # where the soft mask starts as None again and the mask out here applies
-  # to the group's result.
+  # holds ONE /SMask (11.6.4). So a "gs" that sets a mask anywhere inside the
+  # side being masked throws the Porter-Duff mask away. The answer is the
+  # group [ColorFontPaintBlend] already uses: the masked side goes into a
+  # transparency group and is placed with a Do, where the soft mask starts as
+  # None again and the mask out here applies to the group's result.
   #
-  # So the LUMINOSITY mask of the fading gradient must not appear in the
-  # glyph stream at all, and the ALPHA mask of the composite must, with the
-  # form behind it. Measured 2026-08-26 by rendering: without the group the
-  # Source In drew the whole source and not its intersection with the
-  # backdrop.
+  # The source is a gradient that cannot be banded - a fading cone whose two
+  # circles are not nested (4.10d) - so it carries a luminosity mask of its
+  # own, and the backdrop is the nearly-binary stack of 5.5c so that the
+  # composite keeps its alpha mask. The luminosity mask must not appear in
+  # the glyph stream at all, and the alpha mask must, with the form behind
+  # it. Measured 2026-08-26 by rendering: without the group the Source In
+  # drew the whole source and not its intersection with the backdrop.
   set doc [cpDocument [list composite 5 \
-      [list glyph 2 [list linear pad {{0.0 1 1.0} {1.0 1 0.2}} \
-          {0 0} {800 0} {0 900}]] \
-      {glyph 1 {solid 0 1.0}}]]
+      [list glyph 2 [list radial pad {{0.0 1 1.0} {1.0 1 0.2}} \
+          {200 500} 0 {800 500} 100]] \
+      {layers 0 2}] layers \
+      [list {glyph 1 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
   set lines [cpLines $doc $::cpMark]
   set forms [::tclpdfTest::objects $doc /Transparency]
   $doc destroy
@@ -876,19 +1143,33 @@ test colorFontPaint-5.6 {Source Out inverts the same mask with a TR} -body {
 } -result {1 1 1}
 
 test colorFontPaint-5.7 {Source Atop draws the backdrop and then masks} -body {
-  # The backdrop straight into the stream, and the source under the mask -
-  # so the stream holds the backdrop's colour and NOT the source's, which
-  # went into the group of 5.5a. The source's own colour is in that form.
-  set doc [cpDocument {composite 9 {glyph 2 {solid 1 1.0}} \
+  # The backdrop straight into the stream, and the source "in" it after that.
+  # The backdrop here is the nearly-binary stack of 5.5c, so the "in" half
+  # keeps its soft mask and the source's colour goes into the group behind
+  # it - which is what makes the two halves tellable apart in one stream: the
+  # backdrop's own two colours stand in the glyph, the source's blue does not.
+  set doc [cpDocument {composite 9 {glyph 2 {solid 2 1.0}} {layers 0 2}} \
+      layers [list {glyph 1 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
+  set lines [cpLines $doc $::cpMark]
+  set forms [::tclpdfTest::objects $doc /Transparency]
+  $doc destroy
+  list [lsearch -all -inline -glob $lines "* rg"] \
+      [lsearch -inline -glob $lines "*Do"] \
+      [llength [lsearch -all -inline $forms "*0 0 1 rg*"]]
+} -result {{{1 0 0 rg} {0 0.66667 0 rg}} {/XO2 Do} 1}
+
+test colorFontPaint-5.7a {Source Atop over a binary outline is a clip too} -body {
+  # The same mode where the backdrop IS binary: the backdrop is drawn, and
+  # the source follows inside a clip rather than under a mask (5.5). Both
+  # colours then stand in the glyph stream itself and nothing is placed.
+  set doc [cpDocument {composite 9 {glyph 2 {solid 2 1.0}} \
       {glyph 1 {solid 0 1.0}}}]
   set lines [cpLines $doc $::cpMark]
   set forms [::tclpdfTest::objects $doc /Transparency]
   $doc destroy
   list [lsearch -all -inline -glob $lines "* rg"] \
-      [llength [lsearch -all -inline -glob $lines "*gs"]] \
-      [lsearch -inline -glob $lines "*Do"] \
-      [llength [lsearch -all -inline $forms "*0 0.66667 0 rg*"]]
-} -result {{{1 0 0 rg}} 1 {/XO2 Do} 1}
+      [lsearch -all -inline -glob $lines "*Do"] [llength $forms]
+} -result {{{1 0 0 rg} {0 0 1 rg}} {} 0}
 
 test colorFontPaint-5.8 {XOR masks each side by the other, inverted} -body {
   set doc [cpDocument {composite 11 {glyph 2 {solid 1 1.0}} \
