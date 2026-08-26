@@ -724,4 +724,35 @@ test fieldChoice-8.2 {-label puts the label inside the combo box's Form element}
       [regexp {/K \[[0-9]+ 0 R << /Type /OBJR /Obj [0-9]+ 0 R /Pg [0-9]+ 0 R >>\]} $form]
 } -result {1 1}
 
+# --- round 7: what the field's own font can set -----------------------------
+
+test fieldChoice-30.1 {an option the font cannot set is refused at the call} -body {
+    # The DISPLAY half is what is drawn into the appearance; the export half
+    # never leaves the file and is not asked about.
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    set outcome [::tclpdfTest::refuse {$doc field listbox l \
+        -rect {10 10 40 20} -options {{a Ein} {b "Пример"}}}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF FIELD GLYPH options}}
+
+test fieldChoice-30.2 {an export value the font cannot set is not asked about} -body {
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    set code [catch {$doc field listbox l -rect {10 10 40 20} \
+        -options {{a Ein} {"Пример" Zwei}}} message]
+    $doc destroy
+    list $code $message
+} -result {0 l}
+
+test fieldChoice-30.3 {a typed value of an editable combo is drawn and therefore asked about} -body {
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    set outcome [::tclpdfTest::refuse {$doc field combo c \
+        -rect {10 10 40 8} -options {{a Ein}} -editable 1 -value "Пример"}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF FIELD GLYPH value}}
+
 cleanupTests

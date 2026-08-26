@@ -40,6 +40,25 @@ proc ::tclpdf::pdf::info {path} {
   return [::tclpdf::pdf::Inventory $path]
 }
 
+# A SUBCOMMAND THIS ENSEMBLE HAS NOT GOT, in this package's words and under
+# the code the rest of the reader carries. Without it Tcl answers "unknown
+# or ambiguous subcommand" under TCL LOOKUP SUBCOMMAND, which is the one
+# refusal of the reader a handler written against TCLPDF IMPORT cannot see -
+# and it is the same mistake [$doc pdf nonsense] makes, which import.tcl has
+# been answering with TCLPDF IMPORT SUBCOMMAND all along. The list is read
+# off the ensemble rather than written out, so it cannot fall behind what
+# the namespace exports.
+namespace ensemble configure ::tclpdf::pdf -unknown ::tclpdf::pdf::Unknown
+
+proc ::tclpdf::pdf::Unknown {ensemble subcommand args} {
+  set known [lsort [lmap command [::info commands ${ensemble}::\[a-z\]*] {
+    namespace tail $command
+  }]]
+  return -code error -errorcode [list TCLPDF IMPORT SUBCOMMAND $subcommand] \
+      "tclpdf: unknown pdf subcommand \"$subcommand\" -\
+      known are: [join $known {, }]"
+}
+
 proc ::tclpdf::pdf::pages {path} {
   set reader [::tclpdf::pdf::Reader $path]
   return [::tclpdf::pdf::PageInventory reader]
@@ -101,11 +120,21 @@ proc ::tclpdf::pdf::Inventory {path} {
       revisions [Revisions [dict get $reader sections]] \
       id [Identifier reader] encrypted 0 encryption {} \
       pages {} size {} info {} xmp 0 pdfa {} pdfua {} tagged 0 form none \
-      outputIntents {} attachments {} signatures {}]
+      certified {} outputIntents {} attachments {} signatures {}]
 
   if {[Get [dict get $reader trailer] Encrypt] ne {}} {
     dict set facts encrypted 1
     dict set facts encryption [Encryption reader]
+    # EVERY CONTENT-DERIVED KEY STAYS EMPTY, which is what the manual
+    # promises and what two of them did not do: "tagged" answered 0 and
+    # "form" answered "none" - the two words that mean "read, and there is
+    # none" - about a file whose catalogue is cipher text and was never read
+    # (measured 2026-08-26 on 07.01-encryption.pdf). A caller cannot tell a
+    # fact from a default that way, and the whole point of this branch is
+    # that the file was not read. So both are cleared: empty is the answer
+    # every other content-derived key of an encrypted file gives.
+    dict set facts tagged {}
+    dict set facts form {}
     return $facts
   }
 
@@ -128,6 +157,7 @@ proc ::tclpdf::pdf::Inventory {path} {
     dict set facts form [expr {[Get $acroform XFA] ne {} ? "XFA" : "AcroForm"}]
     dict set facts signatures [Signatures reader $acroform]
   }
+  dict set facts certified [Certification reader $root]
   dict set facts outputIntents [OutputIntents reader $root]
   dict set facts attachments [Attachments reader $root]
 
@@ -368,6 +398,74 @@ proc ::tclpdf::pdf::Signatures {readerVar acroform} {
         [dict get $node name] $size]
   }
   return $found
+}
+
+# WHETHER THE FILE IS CERTIFIED, and with which permission.
+#
+# A certification signature is not one signature among several: it is the
+# one that says what may happen to the document afterwards. 12.8.4.2 puts it
+# in the catalogue - /Perms << /DocMDP <signature> >> - and the number that
+# matters is the /P of the DocMDP transform parameters (Table 257): 1 "no
+# changes to the document shall be permitted", 2 filling in forms and
+# signing, 3 those and annotations. Every one of them is broken by anything
+# else that is appended, and a file's whole signature is invalidated by it -
+# which is a fact a caller has to be able to read BEFORE appending.
+#
+# It is reported and not judged, like every other claim in this inventory:
+# whether the certificate is trusted and whether the digest still matches is
+# cryptography against an outside store. What comes back is the empty string
+# for a file that is not certified, and otherwise a dictionary of "field"
+# (the signature field the certification sits in, empty where the entry
+# names no field of the form) and "p".
+proc ::tclpdf::pdf::Certification {readerVar root} {
+  upvar 1 $readerVar reader
+  set perms [Resolve reader [Get $root Perms]]
+  set entry [Get $perms DocMDP]
+  if {$entry eq {}} {
+    return {}
+  }
+  set value [Resolve reader $entry]
+  if {[lindex $value 0] ne "d"} {
+    return {}
+  }
+  set p {}
+  foreach item [lindex [Resolve reader [Get $value Reference]] 1] {
+    set item [Resolve reader $item]
+    if {[lindex [Get $item TransformMethod] 1] ne "DocMDP"} continue
+    set params [Resolve reader [Get $item TransformParams]]
+    set found [Plain reader [Get $params P]]
+    if {$found ne {}} {
+      set p $found
+      break
+    }
+  }
+  # Table 257 makes /P optional with a default of 2, and a /Perms /DocMDP
+  # entry IS a certification whether or not the parameters spell it out.
+  if {$p eq {}} {
+    set p 2
+  }
+  # Which field it sits in, where the entry is a reference and one of the
+  # form's fields holds it as its value - the walk [Signatures] makes, made
+  # once more rather than a second key hung on the answer that command
+  # already gives.
+  set field {}
+  if {[lindex $entry 0] eq "r"} {
+    set wanted [lindex [lindex $entry 1] 0]
+    set acroform [Resolve reader [Get $root AcroForm]]
+    if {[lindex $acroform 0] eq "d"} {
+      set state [dict create nodes {} seen {} widgets {}]
+      FieldWalk reader [Resolve reader [Get $acroform Fields]] {d {}} {} state
+      foreach node [dict get $state nodes] {
+        set item [Get [dict get $node field] V]
+        if {[lindex $item 0] eq "r"
+            && [lindex [lindex $item 1] 0] == $wanted} {
+          set field [dict get $node name]
+          break
+        }
+      }
+    }
+  }
+  return [dict create field $field p $p]
 }
 
 proc ::tclpdf::pdf::SignatureField {readerVar field name size} {
@@ -760,7 +858,7 @@ proc ::tclpdf::pdf::FieldWalk {readerVar array inherited prefix stateVar} {
     if {[lindex $item 0] eq "r"} {
       set number [lindex [lindex $item 1] 0]
       # A /Kids that points back at an ancestor is a ring, and a file with one
-      # exists: measured on a form written by jsPDF, "qpdf --json" answers
+      # exists: measured on a form written by a JavaScript PDF library, "qpdf --json" answers
       # "loop detected while traversing /AcroForm" on three of its objects.
       if {[dict exists $state seen $number]} continue
       dict set state seen $number 1
@@ -901,7 +999,7 @@ proc ::tclpdf::pdf::FieldValueText {readerVar item type} {
       if {[lindex $value 0] eq "a"} {
         set out {}
         foreach entry [lindex $value 1] {
-          lappend out [Text [Resolve reader $entry]]
+          lappend out [FieldLines [Text [Resolve reader $entry]]]
         }
         return $out
       }
@@ -919,7 +1017,25 @@ proc ::tclpdf::pdf::FieldValueText {readerVar item type} {
   if {[lindex $value 0] eq "nm"} {
     return [lindex $value 1]
   }
-  return [Text $value]
+  return [FieldLines [Text $value]]
+}
+
+# A LINE BREAK IN A FIELD VALUE, ANSWERED THE WAY A TCL SCRIPT WROTE IT.
+#
+# 12.7.4.3 spells a break inside a field value as a CARRIAGE RETURN, and the
+# writing side of this package converts to it: [field text -value "a\nb"]
+# puts (a\rb) in the file. Reading it back handed the CR out unchanged, so a
+# script that wrote, read and compared saw a difference it never made
+# (measured 2026-08-26). The two halves are one round trip and are made
+# symmetrical here: what goes in as \n comes back as \n, and a foreign file
+# writing CRLF - which a Windows tool does - comes back as ONE break rather
+# than two.
+#
+# Only field VALUES. A /TU, a /M or a title is not a multi-line value and
+# has no such convention behind it; [Text] therefore stays as it was, and
+# this is a step on top of it.
+proc ::tclpdf::pdf::FieldLines {text} {
+  return [string map [list \r\n \n \r \n] $text]
 }
 
 # /Opt as {export display} pairs. Table 234: an entry is "either a text string
@@ -1209,4 +1325,4 @@ namespace eval ::tclpdf::pdf {
   unset tclpdfTable tclpdfCode tclpdfTarget
 }
 
-package provide tclpdf::importInfo 1.2
+package provide tclpdf::importInfo 1.3

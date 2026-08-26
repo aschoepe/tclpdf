@@ -292,7 +292,7 @@ proc ::tclpdf::imageTiffStreams::Jpeg {bytes parsed} {
     lassign $strip offset count rows
     set data [::tclpdf::imageTiff strip $bytes $parsed $index]
     if {[string range $data 0 1] ne "\xff\xd8"} {
-      return -code error -errorcode {TCLPDF TIFF JPEG} \
+      return -code error -errorcode {TCLPDF TIFF DAMAGED jpeg} \
           "tclpdf: damaged TIFF - strip $index does not begin with a JPEG\
           start-of-image marker"
     }
@@ -614,7 +614,7 @@ proc ::tclpdf::imageTiffStreams::Tables {parsed} {
     return {}
   }
   if {[string range $tables 0 1] ne "\xff\xd8"} {
-    return -code error -errorcode {TCLPDF TIFF JPEG} \
+    return -code error -errorcode {TCLPDF TIFF DAMAGED jpeg} \
         "tclpdf: damaged TIFF - the JPEGTables tag does not begin with a JPEG\
         start-of-image marker"
   }
@@ -644,4 +644,4 @@ proc ::tclpdf::imageTiffStreams::Adobe {parsed} {
   return [binary format a2Sa5SSSc "\xff\xee" 14 Adobe 100 0 0 $transform]
 }
 
-package provide tclpdf::imageTiffStreams 1.1
+package provide tclpdf::imageTiffStreams 1.2

@@ -13,8 +13,8 @@ example that quietly demonstrates the wrong thing is worse than none.
 fonts/     four families, five faces, plus their licences    (stage 2)
            urw-core35-fonts/, fourteen faces for PDF/A       (stage 2)
            adobe-afm/, the metrics afmData.tcl is built from (build)
-images/    JPEG and PNG covering each code path, plus SVG    (stages 3 and 6)
-xml/       two ZUGFeRD profiles, to attach and to detect     (stage 5)
+images/    JPEG, PNG and TIFF per code path, plus SVG        (stages 3 and 6)
+xml/       two ZUGFeRD profiles and one Order-X order       (stage 5)
 languages/ hyphenation patterns, German and English         (stage 1)
 ```
 
@@ -48,7 +48,7 @@ everything else here.
 
 ---
 
-## fonts/ — 32 MB
+## fonts/ — 55.5 MB, of which 31.2 MB travel
 
 Sorted by **origin** since 2026-08-17, one directory per source, so that a
 licence question has one place to look:
@@ -56,7 +56,7 @@ licence question has one place to look:
 | directory | what | terms |
 | --- | --- | --- |
 | `fonts/` itself | DejaVu Sans, regular and bold — the face most tests and examples reach for first, kept flat for the short path | Bitstream Vera licence, `licenses/DejaVu-*` |
-| `google/` | the Google Fonts faces: Roboto (static and variable), Arimo (variable, the Arial metrics — example 03.04 embeds it under the alias the barcode encoder asks for), Bitcount Prop Single (static and variable), Niconne, Permanent Marker, and the ten Noto faces of example 02.09 (Sans, Sans JP, Serif Tibetan, Sans Symbols, Sans Symbols 2, Emoji, Sans Cuneiform, Sans Egyptian Hieroglyphs, Naskh Arabic, Music) — 17 MB | SIL Open Font License 1.1 (Permanent Marker: Apache 2.0), one text per family in `licenses/` |
+| `google/` | the Google Fonts faces: Roboto (static and variable), Arimo (variable, the Arial metrics — example 03.04 embeds it under the alias the barcode encoder asks for), Bitcount Prop Single (static and variable), Niconne, Permanent Marker, and eleven Noto faces — the ten of example 02.09 (Sans, Sans JP, Serif Tibetan, Sans Symbols, Sans Symbols 2, Emoji, Sans Cuneiform, Sans Egyptian Hieroglyphs, Naskh Arabic, Music) plus **Noto Color Emoji** for example 02.18 — 41 MB, of which 18.1 MB travel | SIL Open Font License 1.1 (Permanent Marker: Apache 2.0), one text per family in `licenses/` |
 | `tsukurimashou/` | OCR A and OCR B, each as `.ttf`, `.otf`, `.pfb` and `.afm`, from the OCR package of the Tsukurimashou Project | public domain and free-use statements of the three authors, quoted in `licenses/OCR-LICENSE.txt` |
 | `urw-core35-fonts/` | the fourteen URW faces that stand in for the standard 14, in four formats, with their own `NOTICE.md` and licence texts | OFL 1.1 chosen of three |
 | `liberation-fonts/` | Liberation Sans, Serif and Mono, four styles each (release 2.1.5) — metric copies of Arial, Times New Roman and Courier New, the second free stand-in for the standard 14; own `NOTICE.md` with origin, hash and the measurement (2255 of 2292 advances equal to the AFM) | SIL OFL 1.1, `LICENSE` beside them |
@@ -64,9 +64,18 @@ licence question has one place to look:
 | `adobe-standard-14/` | Adobe's own Type 1 and OpenType files — **internal test material only**, ignore-globbed and kept out of every archive | all rights reserved |
 | `licenses/` | the licence texts of the flat and the `google/` faces, named after the family | — |
 
+**Noto Color Emoji is here but does not travel.** `google/NotoColorEmoji-Regular.ttf`
+is a 25 MB OFL face kept in the working tree for example `02.18` and the colour-font
+measurements. It is listed in `.fossil-settings/ignore-glob` and excluded in
+`tools/archive.sh`, so it reaches neither a commit nor any archive — the example
+skips itself where the file is absent and says where to get it. Its licence text
+`licenses/NotoColorEmoji-OFL.txt` does travel: a reader of the source tarball
+therefore finds terms for a file that is not in it, which is the harmless
+direction of that mismatch and better than the other one.
+
 The licences live in `licenses/` rather than beside each file because the OFL
-requires the text to travel with the fonts and a folder of seventeen files
-named `OFL.txt` would not say which is which; the sets (`urw-core35-fonts/`,
+requires the text to travel with the fonts and a folder of nineteen texts,
+fifteen of them named `OFL.txt`, would not say which is which; the sets (`urw-core35-fonts/`,
 `adobe-afm/`) carry their own, as their sources ship them.
 
 `adobe-afm/` is not example data at all and is the one thing here that the
@@ -152,11 +161,11 @@ back to 1.9 MB, and the source archive from 8.2 MB back to about 1.5 MB.
 
 ---
 
-## images/ — 120 KB
+## images/ — 346 KB, 24 files
 
-Generated for this project, free of third-party rights. One raster file per code
-path that stage 3 has to handle separately, plus one vector file for stage 6.
-All raster images are 640 × 480 except `sample-stencil.png`, which is 300 × 300.
+One raster file per code path that stage 3 has to handle separately, plus the vector files for stage 6. All raster images are 640 × 480 except `sample-stencil.png` (300 × 300) and the two colour-keyed PNGs (96 × 96).
+
+**Origin, in one sentence per group.** Everything here was generated for this project and is free of third-party rights, with three exceptions that are named where they stand: `erika-mustermann.jpg` and `signature-mustermann.svg` are official German works in the public domain (see below), and `Tcl9logo.svg` is not ours at all.
 
 | File | Size | What it really is | Exercises |
 | --- | --- | --- | --- |
@@ -170,6 +179,10 @@ All raster images are 640 × 480 except `sample-stencil.png`, which is 300 × 30
 | `sample-vector.svg` | 2 262 B | SVG 1.1 | stage 6, deferred |
 | `erika-mustermann.jpg` | 119 541 B | baseline JPEG (SOF0), 3 components, sRGB, **with an embedded ICC profile** (APP2, 3 160 B) — beside Exif, XMP and a Photoshop segment | the ICCBased path for pictures: the profile becomes the image colour space instead of the bare device name |
 | `signature-mustermann.svg` | 14 754 B | SVG 1.1, one filled path with 10 contours | the appearance of a visible signature (stage 8) — public domain, see below |
+| `sample-keyed.png` | 483 B | PNG, 8 bit, colour type 2 (truecolour), 96 × 96, with a `tRNS` chunk | the colour key: one transparent colour and no alpha channel, which reaches the file as `/Mask` with a colour range rather than as an `/SMask` |
+| `sample-keyed16.png` | 5 572 B | the same picture at **16 bit** per sample, colour type 2, `tRNS` | the 16-bit key, which still passes through at 16 bits — the second timing on the page of `03.01` |
+| `Tcl9logo.svg` | 4 745 B | SVG, the Tcl 9 logo | the picture of `00.02-hello-world-svg` — **not our work**, see below |
+| `svg-*.svg` (eleven files) | 900–6 851 B | SVG 1.1 test patterns: `svg-paths`, `svg-arcs`, `svg-shapes`, `svg-transform`, `svg-gradient`, `svg-text`, `svg-inherit`, `svg-lexer`, `svg-reuse`, `svg-viewbox`, `svg-viewbox-origin` | stage 6, one construct group each, built so that a translation error shows in the picture without reading the source. `03.03-svg.tcl` draws the first four, `tests/structure.test` uses `svg-shapes`; the rest are pattern material |
 
 The SVG uses `circle`, `clipPath`, `defs`, `g`, `linearGradient`, `path`,
 `radialGradient`, `rect`, `stop` and `text` — deliberately the constructs that
@@ -180,16 +193,18 @@ decide whether SVG support is worth building: gradients map onto shading types
 
 `signature-mustermann.svg` is the signature of Erika Mustermann as it stands on the German identity card specimen — traced from the artwork of the Personalausweisverordnung of 1 November 2010 into filled paths. That artwork is part of an official regulation and therefore in the public domain under section 5 paragraph 1 of the German copyright act; Wikimedia Commons carries the specimen on the same grounds. Erika Mustermann is the placeholder person of German official documents and has been since 1983 — the name is a convention, not a person, and the signature is a specimen, not anyone's mark. It is a drawing here, not a photograph of a document: the file holds paths, so `examples/08.02-signature-visible.tcl` puts real vectors into the appearance stream of its signature field.
 
+`Tcl9logo.svg` is the **logo of the Tcl project**, not a drawing made here — it is what `00.02-hello-world-svg.tcl` puts on the page, that example being the shortest program in the tree that draws a picture at all. Origin: the Tcl project. **Terms: to be confirmed by the author** — nothing in this tree states under what conditions the Tcl project permits redistribution of its logo, and none is invented here. Until that is settled, this one file is the exception to the sentence above, and the only file here whose terms are not on record.
+
 Neither PNG is interlaced. That is intentional: an interlaced PNG cannot be
 passed through and would have to be decoded and re-encoded, which is a
 different feature and not one stage 3 claims.
 
 ---
 
-## xml/ — 20 KB
+## xml/ — 26 KB, three files
 
 Two invoices from **ZUGFeRD 2.5.2 (DE)**, chosen so that the profile detection
-has something to distinguish. The identifier below is BT-24, read from
+has something to distinguish, and one Order-X order written for this project. The identifier below is BT-24, read from
 `GuidelineSpecifiedDocumentContextParameter` — the field tclpdf derives the
 profile from with a single `regexp`, without needing an XML parser.
 
@@ -197,11 +212,14 @@ profile from with a single `regexp`, without needing an XML parser.
 | --- | --- | --- | --- |
 | `zugferd-minimum.xml` | 7 929 B | `urn:factur-x.eu:1p0:minimum` | the smallest valid case — good for a first attachment example |
 | `zugferd-en16931.xml` | 12 056 B | `urn:cen.eu:en16931:2017` | the profile real business invoices use |
+| `order-x-comfort.xml` | 6 295 B | `urn:order-x.eu:1p0:comfort` | the other document kind: an **order**, not an invoice, for example `05.13` — Order-X 1.0, COMFORT |
 
-**Origin:** the official ZUGFeRD 2.5.2 DE distribution (FeRD), directories
-`Beispiele/0. MINIMUM/MINIMUM_Rechnung/` and
+**Origin of the two invoices:** the official ZUGFeRD 2.5.2 DE distribution
+(FeRD), directories `Beispiele/0. MINIMUM/MINIMUM_Rechnung/` and
 `Beispiele/3. EN16931/E02_2_Teilrechnung/`, renamed here after their profile
 because the original names say nothing about what distinguishes them.
+
+**`order-x-comfort.xml` is the other case and carries no third-party terms.** It is not a copy of a published sample: it was written for this project against the Order-X 1.0 specification (Cross Industry Order, SCRDM CIO D20B), and the order it states is invented — the same order the page of `05.13` shows, which is the point of a hybrid document. It travels under the MIT licence of tclpdf like every other file written here; its own head says so.
 
 **Licence: settled, and it travels inside the files.** There is no licence file
 beside the examples in the FeRD distribution because there does not need to be:
@@ -256,6 +274,4 @@ Record it in the table above with: what it is (**measured**, not what the
 extension claims), where it came from with a URL, and the licence by name. For
 fonts, add the `fsType` value and what it permits.
 
-tclpdf ships under the MIT licence, and everything under `examples/` ships with
-it — in the archive, in the installed package and in the repository. A file
-whose licence forbids that cannot stay, however convenient it is.
+tclpdf ships under the MIT licence, and everything under `examples/` travels in the **source** archive — with the three exclusions named above, which travel nowhere: `fonts/adobe-standard-14/`, `fonts/google/NotoColorEmoji-Regular.ttf` and `languages/`. (`examples/out/` and `examples/tmp/` are excluded as well, but those hold what a build produced and are not assets at all.) Nothing here reaches an installed package or either binary archive, and `make install` copies none of it. A file whose licence forbids even the source archive cannot stay, however convenient it is.

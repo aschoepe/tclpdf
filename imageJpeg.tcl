@@ -55,6 +55,8 @@ namespace eval ::tclpdf::imageJpeg {
 # resolution: jfif as {xDensity yDensity units} from APP0 and exif as
 # {xResolution yResolution unit} from APP1, either of them empty when the
 # segment is absent or says nothing. [resolution] below reads the two.
+# Plus orientation, the Exif tag 274: REPORTED, never applied - see
+# [ExifTags].
 proc ::tclpdf::imageJpeg::parse {bytes} {
   variable sofBaseline
   variable sofExtended
@@ -74,7 +76,7 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
   }
 
   set result [dict create adobe 0 transform -1 progressive 0 icc {} \
-      jfif {} exif {}]
+      jfif {} exif {} orientation 1]
   # An embedded ICC profile travels in APP2 segments marked "ICC_PROFILE"
   # (ICC.1, Annex B.4). A segment body holds at most 64 KB, so a profile is
   # split over several, each carrying its sequence number and the total
@@ -160,7 +162,11 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
     # a different identifier and is passed over by the same test.
     if {$marker == 0xe1 && [string range $body 0 5] eq "Exif\0\0"
         && [dict get $result exif] eq {}} {
-      dict set result exif [ExifResolution [string range $body 6 end]]
+      set tags [ExifTags [string range $body 6 end]]
+      dict set result exif [ExifResolution $tags]
+      if {[dict exists $tags orientation]} {
+        dict set result orientation [dict get $tags orientation]
+      }
     }
     if {$marker == 0xe2 && [string range $body 0 11] eq "ICC_PROFILE\0"
         && [string length $body] >= 14} {
@@ -291,17 +297,28 @@ proc ::tclpdf::imageJpeg::resolution {parsed} {
   return $answer
 }
 
-# XResolution, YResolution and ResolutionUnit out of the TIFF header an Exif
-# APP1 segment begins with (Exif 2.32, 4.6.4; TIFF 6.0, section 2). Only the
-# first directory is walked and only three tags are read - none of the sub
-# directories are entered, because the resolution is not in them.
+# XResolution, YResolution, ResolutionUnit and Orientation out of the TIFF
+# header an Exif APP1 segment begins with (Exif 2.32, 4.6.4; TIFF 6.0,
+# section 2). Only the first directory is walked and only four tags are read
+# - none of the sub directories are entered, because none of the four is in
+# them.
 #
-# Answers {x y unit} with unit 1 (none), 2 (inch) or 3 (centimetre), or an
-# empty string when the segment carries no resolution or cannot be read.
-# Empty rather than an error: this is metadata beside a picture that is
-# perfectly embeddable, and a file that is wrong about its own resolution
-# must not become a file that cannot be placed.
-proc ::tclpdf::imageJpeg::ExifResolution {tiff} {
+# Answers a dict with whichever of the keys x, y, unit and orientation the
+# directory named, empty when the segment cannot be read at all. Empty rather
+# than an error: this is metadata beside a picture that is perfectly
+# embeddable, and a file that is wrong about its own metadata must not become
+# a file that cannot be placed.
+#
+# ORIENTATION (tag 274) IS READ AND NOT OBEYED. Applying it would mean
+# turning the samples, and this package decodes no pixels on the JPEG road at
+# all - the compressed data passes into the file as it stands, which is the
+# whole point of the DCTDecode path. What it must not do is stay silent about
+# it, the way it did until 2026-08-26: [image info] now answers "orientation"
+# for every picture, 1 meaning "the rows are as they are stored", and a
+# caller who wants the turn asks for it with [transform]. TIFF refuses the
+# same tag (imageTiff.tcl) because there the rows ARE re-assembled here and a
+# wrong answer would be this package's own.
+proc ::tclpdf::imageJpeg::ExifTags {tiff} {
   set total [string length $tiff]
   if {$total < 8} {
     return {}
@@ -346,16 +363,30 @@ proc ::tclpdf::imageJpeg::ExifResolution {tiff} {
         dict set values [expr {$tag == 282 ? "x" : "y"}] \
             [expr {double($numerator) / $denominator}]
       }
-      296 {
+      274 - 296 {
         # SHORT, and short enough to sit in the entry itself.
         if {$type != 3} {
           continue
         }
-        binary scan $tiff "@[expr {$entry + 8}] $short" unit
-        dict set values unit $unit
+        binary scan $tiff "@[expr {$entry + 8}] $short" number
+        # Exif 2.32, 4.6.4: Orientation is 1..8, and anything else is a
+        # file saying something nobody can act on. Passed over rather than
+        # refused - the picture is embeddable either way, and [image info]
+        # then answers the 1 that means "as stored".
+        if {$tag == 274 && ($number < 1 || $number > 8)} {
+          continue
+        }
+        dict set values [expr {$tag == 274 ? "orientation" : "unit"}] $number
       }
     }
   }
+  return $values
+}
+
+# The three resolution tags out of that dict, in the shape [resolution]
+# reads: {x y unit} with unit 1 (none), 2 (inch) or 3 (centimetre), or an
+# empty string when the directory named no resolution at all.
+proc ::tclpdf::imageJpeg::ExifResolution {values} {
   if {![dict exists $values x]} {
     return {}
   }
@@ -389,4 +420,4 @@ proc ::tclpdf::imageJpeg::inverted {parsed} {
   return [expr {[dict get $parsed components] == 4 && [dict get $parsed adobe]}]
 }
 
-package provide tclpdf::imageJpeg 1.6
+package provide tclpdf::imageJpeg 1.7

@@ -80,6 +80,25 @@ namespace eval ::tclpdf::annotShape {
   # more: ISO 32000-2 admits further names and no reader here draws one, which
   # is the same line [annot stamp] holds for its /Name.
   variable icons {Graph Paperclip PushPin Tag}
+
+  # WHICH GEOMETRY OPTIONS EACH KIND TAKES. Beside [shapes] rather than
+  # inside [AnnotShapeGeometry], because two things read it: the option
+  # parser, which has to refuse what a kind does not take and list what it
+  # does, and the geometry itself, which reads them. One table, so the
+  # "known are:" of the refusal and what the method goes on to read cannot
+  # fall out of step - the way the same table serves [textWidth] in text.tcl.
+  # The attachment is in the table although it never reaches the parser -
+  # [AnnotShape] hands it to [AnnotAttachment] one line before, since it has
+  # options of its own (-name, -icon, -appearance). It is listed so that the
+  # table answers for every kind of [shapes] rather than for five of six.
+  variable geometry {
+    line       {from to}
+    square     {at size}
+    circle     {at size}
+    polygon    {points}
+    polyline   {points}
+    attachment {at size}
+  }
 }
 
 oo::define ::tclpdf::document::document {
@@ -94,10 +113,32 @@ oo::define ::tclpdf::document::document {
     if {$kind eq "attachment"} {
       return [my AnnotAttachment $args]
     }
-    set options [::tclpdf::option parse {
-      at {} size {} from {} to {} points {} contents {} title {} colour {}
-      color {} fill {} width {} opacity {} date {}
-    } $args "annot $kind"]
+    # THE GEOMETRY OPTIONS ARE THE KIND'S OWN, although one parser serves
+    # all five. A line is made of -from and -to, a square and a circle of
+    # -at and -size, a polygon and a polyline of -points - and each of them
+    # used to ACCEPT all five and silently drop the four it does not read:
+    # "annot line -from ... -to ... -at {5 5} -size {3 3} -points {{9 9}}"
+    # wrote the line and said nothing about the rest (measured 2026-08-26).
+    # An option accepted and ignored is the one mistake this package refuses
+    # everywhere else, down to a misspelt key in a table cell, and the
+    # message a caller needs here is the one that names the option they
+    # wrote and the ones the kind takes.
+    variable ::tclpdf::annotShape::geometry
+    set known {}
+    foreach name [dict get $geometry $kind] {
+      dict set known $name {}
+    }
+    # The kind's own first, then the shared ones - the order of the synopsis
+    # in the manual, and therefore the order the refusal lists them in.
+    foreach name {contents title colour color fill width opacity date} {
+      dict set known $name {}
+    }
+    set options [::tclpdf::option parse $known $args "annot $kind"]
+    foreach name {at size from to points} {
+      if {![dict exists $options $name]} {
+        dict set options $name {}
+      }
+    }
     set options [my AnnotColourOption $options "annot $kind"]
     # An appearance is never taken from a caller here: the picture follows
     # from the geometry, so there is nothing to hand over. The option is in
@@ -113,10 +154,14 @@ oo::define ::tclpdf::document::document {
     if {$width eq {}} {
       set width 1
     }
-    if {![string is double -strict $width] || $width <= 0} {
+    # [option finite]: NaN compares false against the bound below and Inf
+    # passes it, and both then reached the arithmetic of [AnnotShapeRect] -
+    # "can't use non-numeric floating-point value as operand of \"/\"",
+    # errorcode ARITH DOMAIN (measured 2026-08-26).
+    if {![::tclpdf::option finite $width] || $width <= 0} {
       return -code error -errorcode [list TCLPDF ANNOT WIDTH $kind $width] \
           "tclpdf: -width of annot $kind is the thickness of the line it is\
-          drawn with, above zero, not \"$width\""
+          drawn with, a finite number above zero, not \"$width\""
     }
     lassign [my AnnotShapeGeometry $kind $options] points box
     set rect [my AnnotShapeRect $kind $box $width "annot $kind"]
@@ -433,4 +478,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annotShape 1.0
+package provide tclpdf::annotShape 1.1

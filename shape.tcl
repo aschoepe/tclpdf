@@ -83,9 +83,17 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       from {} to {} stroke {} width {} dash {} cap {} join {} miter {} opacity {} blend {} overprint {}
     } $args]
-    if {[dict get $options from] eq {} || [dict get $options to] eq {}} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT line] \
-          "tclpdf: line needs -from {x y} and -to {x y}"
+    # ONE OPTION PER REFUSAL. The fourth word of a TCLPDF SHAPE ARGUMENT code
+    # is the option that is wrong, spelt without its dash - the convention
+    # STRUCTURE already states in the manual, and the one this file kept in
+    # three different ways until 2026-08-26 (the command for one refusal, the
+    # option for the next, the option WITH its dash for a third). A handler
+    # cannot read a word that means three things.
+    foreach key {from to} {
+      if {[dict get $options $key] eq {}} {
+        return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $key] \
+            "tclpdf: line needs -from {x y} and -to {x y}"
+      }
     }
     # A line is drawn in black unless told otherwise - by its own -stroke, or
     # by the stroke colour [style] set before it.
@@ -109,13 +117,33 @@ oo::define ::tclpdf::document::document {
       at {} size {} fill {} stroke {} width {} dash {} radius 0
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
-    if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT rect] \
-          "tclpdf: rect needs -at {x y} and -size {w h}"
+    foreach key {at size} {
+      if {[dict get $options $key] eq {}} {
+        return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $key] \
+            "tclpdf: rect needs -at {x y} and -size {w h}"
+      }
     }
     lassign [my ShapeBox $options rect] x y w h
     set radius [my ShapeRadius [dict get $options radius] -radius]
     if {$radius > 0} {
+      # A NEGATIVE EXTENT AND A ROUNDED CORNER DO NOT GO TOGETHER. "re" takes
+      # a negative width (8.5.2.1) and [ShapeBox] lets it through on purpose,
+      # but the rounding arithmetic does not survive it: the cap
+      # "min(w,h)/2" is then negative, the radius is capped to that negative
+      # value and the four arcs run backwards - measured 2026-08-26, a red
+      # band with two white lenses in it instead of a rounded rectangle.
+      # Refused rather than normalised, because a caller who wrote a negative
+      # size and a radius meant one of two different figures and this package
+      # would have to guess which.
+      foreach {axis extent} [list width $w height $h] {
+        if {$extent < 0} {
+          return -code error -errorcode [list TCLPDF SHAPE ARGUMENT radius] \
+              "tclpdf: -radius of rect needs a -size with a positive\
+              $axis, got \"[dict get $options size]\" - a rounded corner\
+              has no meaning on a rectangle drawn backwards; drop the\
+              -radius or give the corner it starts from"
+        }
+      }
       set path [my GraphicsRoundedRect $x $y $w $h $radius]
     } else {
       set path "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
@@ -137,25 +165,10 @@ oo::define ::tclpdf::document::document {
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
     if {[dict get $options at] eq {}} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT ellipse] \
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT at] \
           "tclpdf: ellipse needs -at {x y}"
     }
-    if {[dict get $options radius] ne {}} {
-      set rx [my ShapeRadius [dict get $options radius] -radius]
-      set ry $rx
-      # A shape with one radius IS a circle, whichever of the two names
-      # drew it - and "circle on page 3" is what a caller who wrote [circle]
-      # will look for.
-      set what circle
-    } elseif {[dict get $options size] ne {}} {
-      set what ellipse
-      lassign [dict get $options size] width height
-      set rx [expr {[my ShapeRadius $width -size] / 2.0}]
-      set ry [expr {[my ShapeRadius $height -size] / 2.0}]
-    } else {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT ellipse] \
-          "tclpdf: ellipse needs -radius or -size {w h}"
-    }
+    lassign [my ShapeRadii $options ellipse] rx ry what
     lassign [my GraphicsPoint [dict get $options at] -at $what] cx cy
     # Four Bezier arcs. 0.5523 is the classic magic number: the control point
     # distance that approximates a quarter circle to within 0.02 % - exact
@@ -216,19 +229,26 @@ oo::define ::tclpdf::document::document {
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
     if {[dict get $options at] eq {}} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT arc] \
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT at] \
           "tclpdf: arc needs -at {x y}"
     }
-    if {[dict get $options radius] ne {}} {
-      set rx [my ShapeRadius [dict get $options radius] -radius]
-      set ry $rx
-    } elseif {[dict get $options size] ne {}} {
-      lassign [dict get $options size] width height
-      set rx [expr {[my ShapeRadius $width -size] / 2.0}]
-      set ry [expr {[my ShapeRadius $height -size] / 2.0}]
-    } else {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT arc] \
-          "tclpdf: arc needs -radius or -size {w h}"
+    lassign [my ShapeRadii $options arc] rx ry
+    # AND A RADIUS THE FILE CAN HOLD. [ShapeRadius] refuses a negative one;
+    # what it lets through is a radius so small that the whole arc rounds
+    # onto one point - "100 100 m 100 100 100 100 100 100 c S" for
+    # -radius 1e-9, measured 2026-08-26. That is the very cut
+    # [geometry singular] draws for a matrix: the file is what counts, not
+    # the value handed in, and a PDF real carries five decimals (7.3.3).
+    # Refused here because -extent 0 is refused four lines down for the same
+    # reason - "there is nothing to draw" - and a promise that 1e-9 walks
+    # around is no promise.
+    foreach {option value} [list radius $rx radius $ry] {
+      if {[::tclpdf::pdfObj num $value] == 0} {
+        return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $option] \
+            "tclpdf: the radii of arc come to nothing as the file would\
+            write them (five decimals, 7.3.3) - the whole curve would round\
+            onto its centre"
+      }
     }
     if {[dict get $options extent] eq {}} {
       return -code error -errorcode [list TCLPDF SHAPE ARGUMENT extent] \
@@ -242,7 +262,7 @@ oo::define ::tclpdf::document::document {
     # with no PDF spelling (7.3.3) has to be turned away at the call.
     foreach option {start extent} {
       set value [dict get $options $option]
-      if {![string is double -strict $value] || [catch {expr {$value - $value}}]} {
+      if {![::tclpdf::option finite $value]} {
         return -code error -errorcode [list TCLPDF SHAPE ANGLE $option] \
             "tclpdf: -$option of arc is an angle in degrees,\
             not \"$value\""
@@ -254,10 +274,16 @@ oo::define ::tclpdf::document::document {
     # answer: there is no curve, and the two ends of the sweep it would be
     # cut into coincide. Refused rather than quietly writing a "m" and a
     # painting operator over nothing.
-    if {$extent == 0} {
+    #
+    # AND SO IS AN -extent THE FILE WOULD ROUND TO NOTHING. 1e-9 is not zero
+    # to Tcl and is zero to the file: the two ends of the sweep come out as
+    # the same five-decimal number and the curve is a point with three
+    # control points on it (measured 2026-08-26). Same rule, same reason -
+    # [geometry singular] states it for matrices.
+    if {[::tclpdf::pdfObj num $extent] == 0} {
       return -code error -errorcode [list TCLPDF SHAPE ANGLE zero] \
-          "tclpdf: -extent of arc is 0 - there is nothing\
-          to draw"
+          "tclpdf: -extent of arc is \"$extent\", which is 0 as the file\
+          would write it (five decimals, 7.3.3) - there is nothing to draw"
     }
     # Beyond a full turn the curve runs over itself, and what a reader makes
     # of the overlap depends on the fill rule rather than on anything the
@@ -280,6 +306,7 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -style of arc is arc, pieslice or chord,\
           not \"$style\""
     }
+    set fullTurn [expr {abs($extent) == 360}]
     # AND THE ONE REFUSAL THAT IS NOT ABOUT A MALFORMED VALUE. -style arc is
     # an OPEN path, and PDF closes an open subpath implicitly before it fills
     # it (8.5.3.1) - so a filled -style arc would come out as a chord, drawn
@@ -296,7 +323,17 @@ oo::define ::tclpdf::document::document {
     # as written. Here the CALLER said it, and the caller has a word of their
     # own for that very figure: -style chord. A silent detour to a shape that
     # already has a name is not a service.
-    if {$style eq "arc" && [dict get $options fill] ne {}} {
+    #
+    # AND A FILL COLOUR OUT OF [style] COUNTS. Until 2026-08-26 only the
+    # call's own -fill was asked about, four lines before the same command
+    # reads [streamState styleFill] to decide the painting operator - so
+    # "style -fill red" followed by "arc ... -style arc" wrote "B" and the
+    # quarter circle came out as a filled chord, which is exactly the shape
+    # the refusal below exists to prevent. The question is the same one
+    # [GraphicsPaint] asks; asking it in two different ways is how the two
+    # came to disagree.
+    if {$style eq "arc" && ([dict get $options fill] ne {}
+        || [my streamState styleFill] ne {})} {
       return -code error -errorcode [list TCLPDF SHAPE ARGUMENT fill] \
           "tclpdf: -style arc takes no -fill - PDF closes an\
           open path before filling it (8.5.3.1), so the result would silently\
@@ -326,12 +363,19 @@ oo::define ::tclpdf::document::document {
     # the one point of the arc no "c" operand holds.
     set beginX [expr {$cx + $rx * cos($startAngle)}]
     set beginY [expr {$cy + $ry * sin($startAngle)}]
-    if {$style eq "pieslice"} {
+    if {$style eq "pieslice" && !$fullTurn} {
       # The subpath starts at the CENTRE, so the first radius is drawn as a
       # line and the second one falls out of the closing "h" below.
       set path "[$N num $cx] [$N num $cy] m\n"
       append path "[$N num $beginX] [$N num $beginY] l\n"
     } else {
+      # A FULL TURN HAS NO WEDGE. At 360 degrees the two radii of a pieslice
+      # fall on top of each other, and the comment above used to call that
+      # "redundant, not wrong" - it is wrong: the line from the centre to the
+      # rim is not of length zero, it is drawn once and STROKED once, and a
+      # dial read all the way round came out with a spoke sticking out of it
+      # (seen at 300 dpi on 2026-08-26). The closing "h" still closes the
+      # ellipse, so the figure a caller asked for is what is painted.
       set path "[$N num $beginX] [$N num $beginY] m\n"
     }
     foreach segment [::tclpdf::geometry::arcSegments $cx $cy $rx $ry 1 0 \
@@ -389,7 +433,7 @@ oo::define ::tclpdf::document::document {
     } $args]
     foreach key {from c1 c2 to} {
       if {[dict get $options $key] eq {}} {
-        return -code error -errorcode [list TCLPDF SHAPE ARGUMENT curve] \
+        return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $key] \
             "tclpdf: curve needs -from, -c1, -c2 and -to"
       }
     }
@@ -450,12 +494,55 @@ oo::define ::tclpdf::document::document {
   # A radius (or a diameter) as a length in points, refused below zero: a
   # negative one draws a mirrored shape or, for a rectangle, silently no
   # rounding at all, and neither is what anyone asked for.
+  #
+  # The option is named WITH its dash in the message and WITHOUT it in the
+  # code, which is the convention for every fact behind TCLPDF SHAPE
+  # ARGUMENT - see the note at [line].
   method ShapeRadius {value option} {
-    if {![string is double -strict $value] || $value < 0} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $option] \
+    if {![::tclpdf::option finite $value] || $value < 0} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT \
+          [string trimleft $option -]] \
           "tclpdf: $option is a length of 0 or more, not \"$value\""
     }
     return [my distance $value]
+  }
+
+  # -radius or -size, EXACTLY ONE OF THE TWO, as {rx ry what} in points.
+  #
+  # Shared by [ellipse] and [arc], which describe their extent in the same
+  # two words - and which each read them with a bare [lassign] and an
+  # if/elseif until 2026-08-26, so that "-size {40 20 99}" drew a 40 by 20
+  # ellipse with the third word dropped in silence and "-radius 10 -size
+  # {40 20}" drew the circle and forgot the size. Both are what the manual
+  # promises against ("two numbers each, and a third word is refused rather
+  # than silently dropped", "exactly one of the two"), and both are what
+  # [ShapeBox] has done right for [rect] since 2026-08-25.
+  method ShapeRadii {options what} {
+    set radius [dict get $options radius]
+    set size [dict get $options size]
+    if {$radius ne {} && $size ne {}} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT radius] \
+          "tclpdf: $what takes either -radius or -size {w h}, not both -\
+          one circle and one ellipse cannot be the same figure"
+    }
+    if {$radius ne {}} {
+      set r [my ShapeRadius $radius -radius]
+      # A shape with one radius IS a circle, whichever of the two names
+      # drew it - and "circle on page 3" is what a caller who wrote
+      # [circle] will look for.
+      return [list $r $r [expr {$what eq "ellipse" ? "circle" : $what}]]
+    }
+    if {$size eq {}} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT radius] \
+          "tclpdf: $what needs -radius or -size {w h}"
+    }
+    if {[llength $size] != 2} {
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT size] \
+          "tclpdf: -size of $what is a size {w h}, not \"$size\""
+    }
+    lassign $size width height
+    return [list [expr {[my ShapeRadius $width -size] / 2.0}] \
+        [expr {[my ShapeRadius $height -size] / 2.0}] $what]
   }
 
   # Turn a segment list into path construction operators - returned as a
@@ -507,12 +594,12 @@ oo::define ::tclpdf::document::document {
     set hasRect [expr {[dict get $options at] ne {} || [dict get $options size] ne {}}]
     set hasPath [expr {[dict get $options segments] ne {}}]
     if {$hasRect && $hasPath} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT clip] \
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT segments] \
           "tclpdf: clip takes either -at with -size or\
           -segments, not both"
     }
     if {!$hasRect && !$hasPath} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT clip] \
+      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT at] \
           "tclpdf: clip needs -at {x y} with -size {w h},\
           or -segments"
     }
@@ -540,9 +627,11 @@ oo::define ::tclpdf::document::document {
       my content "$path$operator n\n"
       return
     }
-    if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
-      return -code error -errorcode [list TCLPDF SHAPE ARGUMENT clip] \
-          "tclpdf: clip needs -at {x y} and -size {w h}"
+    foreach key {at size} {
+      if {[dict get $options $key] eq {}} {
+        return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $key] \
+            "tclpdf: clip needs -at {x y} and -size {w h}"
+      }
     }
     lassign [my ShapeBox $options clip] x y w h
     my content "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
@@ -623,4 +712,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shape 1.7
+package provide tclpdf::shape 1.8

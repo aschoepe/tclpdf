@@ -294,7 +294,7 @@ test imageTiffStreams-4.8 {a padded last strip is not refused, and not cut eithe
         [expr {[dict get [partOf $result] data] eq "$packed\x80"}]
 } -result {1 1}
 
-test imageTiffStreams-4.7 {PackBits strips are joined - the coding carries no state} -body {
+test imageTiffStreams-4.9 {PackBits strips are joined - the coding carries no state} -body {
     set packed [packBitsRows $::samples]
     set half [expr {[string length $packed] / 2}]
     set result [streamsOf {259 3 32773} [list 273 4 [list 8 [expr {8 + $half}]]] \
@@ -543,13 +543,13 @@ test imageTiffStreams-7.5 {every strip is an image of its own} -body {
 test imageTiffStreams-7.6 {a strip that is not a JPEG is refused} -body {
     ::tclpdfTest::refusal {streamsOf {259 3 7} {262 3 2} {258 3 {8 8 8}} \
         {277 3 3} {279 4 5} [list 347 7 $::jpegTables] -data STRIP}
-} -result {TCLPDF TIFF JPEG}
+} -result {TCLPDF TIFF DAMAGED jpeg}
 
 test imageTiffStreams-7.7 {tables that are not a JPEG are refused} -body {
     ::tclpdfTest::refusal {streamsOf {259 3 7} {262 3 2} {258 3 {8 8 8}} \
         {277 3 3} [list 279 4 [string length $::jpegStrip]] {347 7 TABLES} \
         -data $::jpegStrip}
-} -result {TCLPDF TIFF JPEG}
+} -result {TCLPDF TIFF DAMAGED jpeg}
 
 # --- CCITT -----------------------------------------------------------------
 

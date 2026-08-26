@@ -233,7 +233,19 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options opacity] ne {}} {
       dict set options opacity [my GraphicsOpacity [dict get $options opacity]]
     }
-    set root [::tclpdf::xml parse $markup]
+    # The XML reader speaks its own language: tdom answers a malformed
+    # document with "error ... at line 1 character 4" and an -errorcode of
+    # NONE - measured 2026-08-26 on "-data {<svg}" - against the promise
+    # that every refusal of this package begins with "tclpdf:" and carries a
+    # TCLPDF code. Wrapped here rather than in xml.tcl because that module
+    # serves XMP and ZUGFeRD as well, and each of them names its own topic.
+    if {[catch {::tclpdf::xml parse $markup} root outcome]} {
+      if {[lindex [dict get $outcome -errorcode] 0] ne "TCLPDF"} {
+        return -code error -errorcode {TCLPDF SVG XML MALFORMED} \
+            "tclpdf: the drawing is not well-formed XML - $root"
+      }
+      return -options $outcome $root
+    }
     try {
       # Where the drawing will land, worked out before the mark: a Figure
       # carries the area it covers as an attribute (ISO 32000-2, 14.8.5.4.3),
@@ -702,4 +714,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.10
+package provide tclpdf::svg 1.11

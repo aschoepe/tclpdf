@@ -360,8 +360,14 @@ test attach-8.4 {the name tree is sorted by the bytes of the keys, the same unde
   # 7.9.6: keys are compared as byte strings. Sorted as Tcl strings, a name
   # outside the BMP came before U+FFC2 under 8.6 (surrogates D83D...) and
   # after it under 9.0 (1F600) - only the first is the order of the file,
-  # where both are UTF-16BE. ASCII keys are their own bytes and sort before
-  # the FE FF of a hex key.
+  # where both are UTF-16BE.
+  #
+  # And the whole tree in ONE encoding, which is the other half of the same
+  # clause ("any encoding ... as long as it is self-consistent"): this test
+  # used to expect (a.txt) and (b.txt) as literals next to two hexadecimal
+  # keys, which is the mixed tree qpdf 12.4.0 repairs as "keys are not
+  # sorted" - it compares the decoded texts, where a.txt comes before the
+  # emoji and U+FFC2. See [treeEncoding] in attach.tcl.
   set doc [tclpdf new]
   $doc page add
   $doc attach -data x -name "\uffc2.txt"
@@ -375,7 +381,7 @@ test attach-8.4 {the name tree is sorted by the bytes of the keys, the same unde
   file delete $path
   regexp {/Names \[([^\]]*)\]} $bytes -> tree
   regexp -all -inline {\([^)]*\)|<[0-9a-f]+>} $tree
-} -result {(a.txt) (b.txt) <feffd83dde00002e007400780074> <feffffc2002e007400780074>}
+} -result {<feff0061002e007400780074> <feff0062002e007400780074> <feffd83dde00002e007400780074> <feffffc2002e007400780074>}
 
 test attach-8.5 {an empty attachment is allowed: -data {} is present, not absent} -body {
   # A zero-byte marker file is a legal thing to embed; "-data {}" used to
@@ -415,5 +421,69 @@ test attach-8.6 {the /F fallback writes one "_" per code point, the same bytes u
   regexp {/F \(([^)]*)\)} $bytes -> f
   set f
 } -result {Bericht _.txt}
+
+test attach-8.7 {a tree that needs UTF-16BE for one key writes every key that way} -body {
+  # 7.9.6: "Any encoding of the keys may be used as long as it is
+  # self-consistent". Per key, [pdfObj str] picks the shorter readable form,
+  # so a tree holding "b.txt" next to "a\u00e4.txt" carried BOTH - and qpdf
+  # 12.4.0, which compares the decoded texts, repaired it as "keys are not
+  # sorted in validate" (measured 2026-08-26; tools/check.sh tolerates
+  # exactly one qpdf warning, so an invoice with a German attachment name
+  # next to Rechnung.xml would have turned make check red).
+  set doc [tclpdf new]
+  $doc page add
+  foreach name [list b.txt a\u00e4.txt c.txt \u00dcbersicht.txt z.txt] {
+    $doc attach -data x -name $name
+  }
+  set path [::tclpdfTest::scratch attach-mixed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Names \[([^\]]*)\]} $bytes -> tree
+  # Every key hexadecimal, and in code point order - which is what a reader
+  # comparing texts and a reader comparing bytes both find.
+  set keys [regexp -all -inline {\([^)]*\)|<[0-9a-f]+>} $tree]
+  list [llength [lsearch -all -inline -glob $keys <*>]] [lmap key $keys {
+    # Past the byte order mark (the first four hexadecimal digits), then
+    # UTF-16BE by hand: none of these names reaches beyond the BMP.
+    binary scan [binary decode hex [string range $key 5 end-1]] Su* codes
+    join [lmap code $codes {format %c $code}] {}
+  }]
+} -result [list 5 [list a\u00e4.txt b.txt c.txt z.txt \u00dcbersicht.txt]]
+
+test attach-8.8 {an all-ASCII tree keeps its literal keys} -body {
+  # The other side of attach-8.7: nothing changes for the tree every invoice
+  # has, and factur-x.xml stays readable in the file.
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data x -name b.txt
+  $doc attach -data x -name a.txt
+  set path [::tclpdfTest::scratch attach-ascii.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Names \[([^\]]*)\]} $bytes -> tree
+  regexp -all -inline {\([^)]*\)|<[0-9a-f]+>} $tree
+} -result {(a.txt) (b.txt)}
+
+test attach-8.9 {-name takes no control character} -body {
+  # /F and /UF are a FILE NAME (7.11.2.1) and a reader offers it as what to
+  # save the attachment as. Measured 2026-08-26: "a\x00b" wrote /F (a_b)
+  # with /UF <feff006100000062>, "qpdf --list-attachments" showed "a^@b",
+  # and veraPDF 3b called the file conformant.
+  set doc [tclpdf new]
+  $doc page add
+  set result {}
+  foreach name [list "a\x00b" "c\nd" "e\rf" "g\x07h"] {
+    lappend result [catch {$doc attach -data x -name $name} err] \
+        [lrange $::errorCode 0 2] [string match {*U+00*} $err]
+  }
+  lappend result [llength [$doc attachments]] [catch {$doc attach -data x -name ok.txt}]
+  $doc destroy
+  set result
+} -result {1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1\
+    1 {TCLPDF ATTACH NAME} 1 0 0}
 
 cleanupTests

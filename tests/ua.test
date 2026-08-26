@@ -1146,5 +1146,112 @@ test ua-17.7 {a picture inside an undescribed Figure is the Figure's complaint} 
       [string match "*without -artifact 1*" $err]
 } -result {1 1 0}
 
+# --- the table of contents under part 2 ------------------------------------
+
+test ua-18.1 {part 2 wants a Ref on every TOCI, in both orders} -constraints {haveFace haveTdom} -body {
+  # ISO 14289-2, 8.2.5.8: "Each TOCI in the table of contents shall identify
+  # the target of the reference using the Ref entry, either directly on the
+  # TOCI structure element itself or on one of its child structure
+  # elements". veraPDF fails the file under that clause, and until
+  # 2026-08-26 this package could not write the entry at all - so a UA-2
+  # document with a table of contents was never conformant.
+  #
+  # Both orders, because the claim may be made before or after the tree is
+  # built and the check runs at write time either way.
+  set claimFirst [::tclpdfTest::refusalCode {
+    set doc [accessible $face]
+    $doc ua -part 2
+    $doc structure TOC -script {
+      $doc structure TOCI -script {$doc text "1 Einleitung" -at {20 40}}
+    }
+    set code [catch {$doc write [::tclpdfTest::scratch ua-toci-a.pdf]} err \
+        options]
+    $doc destroy
+    return -options $options $err
+  }]
+  set treeFirst [::tclpdfTest::refusalCode {
+    set doc [accessible $face]
+    $doc structure TOC -script {
+      $doc structure TOCI -script {$doc text "1 Einleitung" -at {20 40}}
+    }
+    $doc ua -part 2
+    set code [catch {$doc write [::tclpdfTest::scratch ua-toci-b.pdf]} err \
+        options]
+    $doc destroy
+    return -options $options $err
+  }]
+  list $claimFirst $treeFirst
+} -result {{TCLPDF UA CLAIM problems} {TCLPDF UA CLAIM problems}}
+
+test ua-18.2 {the complaint names the page and the way out} -constraints {haveFace haveTdom} -body {
+  set doc [accessible $face]
+  $doc ua -part 2
+  $doc structure TOC -script {
+    $doc structure TOCI -script {$doc text "1 Einleitung" -at {20 40}}
+  }
+  set code [catch {$doc write [::tclpdfTest::scratch ua-toci-c.pdf]} err]
+  $doc destroy
+  list $code [string match "*page 1: a TOCI says nothing about what it\
+      points at*" $err] [string match "*structure TOCI -ref*" $err] \
+      [string match "*8.2.5.8*" $err]
+} -result {1 1 1 1}
+
+test ua-18.3 {a TOCI that names its section is taken, on itself or on a child} -constraints {haveFace haveTdom} -body {
+  # The reference may sit on the entry or on one of its children - a
+  # Reference inside the TOCI carrying it counts for the entry.
+  set doc [accessible $face]
+  $doc ua -part 2
+  $doc structure TOC -script {
+    $doc structure TOCI -ref intro -script {
+      $doc text "1 Einleitung" -at {20 40}
+    }
+    $doc structure TOCI -script {
+      $doc structure Reference -ref intro -script {
+        $doc text "2 Nochmals" -at {20 46}
+      }
+    }
+  }
+  $doc structure Sect -name intro -script {
+    $doc text "Einleitung" -at {20 60} -tag H2
+  }
+  set path [::tclpdfTest::scratch ua-toci-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  set code
+} -result 0
+
+test ua-18.4 {part 1 asks for no Ref, and the tree is written as it stands} -constraints {haveFace haveTdom} -body {
+  # ISO 14289-1 asks for nothing of the kind and veraPDF passes the same
+  # tree under ua1 - demanding it there would be this package inventing a
+  # rule.
+  set doc [accessible $face]
+  $doc structure TOC -script {
+    $doc structure TOCI -script {$doc text "1 Einleitung" -at {20 40}}
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-toci-part1.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  set code
+} -result 0
+
+test ua-18.5 {an undescribed Figure is sent to the call that can carry a description} -constraints {haveFace haveTdom} -body {
+  # The message used to offer "[$doc text -tag Figure]" as a second road,
+  # and [text] has neither -alt nor -actualText - the caller was sent to a
+  # door that does not exist.
+  set doc [accessible $face]
+  $doc structure Figure -script {
+    $doc rect -at {20 40} -size {20 20} -fill steelblue
+  }
+  $doc ua 1
+  set code [catch {$doc write [::tclpdfTest::scratch ua-figure-word.pdf]} err]
+  $doc destroy
+  list $code [string match {*structure Figure -alt*} $err] \
+      [string match {*text -tag Figure\]*where the tag was derived*} $err]
+} -result {1 1 0}
+
+
 
 cleanupTests

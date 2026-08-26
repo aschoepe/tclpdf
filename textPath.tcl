@@ -78,6 +78,30 @@ oo::define ::tclpdf::document::document {
     # count or a non-number used to crash in the arc-length arithmetic
     # instead of being refused by name.
     ::tclpdf::shape::checkSegments [dict get $options segments]
+    # A LINE FEED IS REFUSED HERE, by name and before anything is written -
+    # the same refusal [text] makes for a single line, in the same words.
+    # This road measures character by character through [textWidth], which
+    # does NOT refuse a line feed but splits at it and answers the widest
+    # line; the refusal then came out of [TextRun] as "no glyph for U+000A",
+    # with "BT" written and, in a tagged document, the mark of the run open.
+    if {[string first \n $string] >= 0} {
+      return -code error -errorcode [list TCLPDF TEXT PATH linefeed] \
+          "tclpdf: textPath sets one line along one path, and the string has\
+          a line feed at position [string first \n $string] - set each line\
+          on a path of its own"
+    }
+    # And a string with nothing in it sets no glyph. In a tagged document the
+    # bracket below would then hold nothing at all: an element in the tree
+    # that a reader announces and that has no content, which is what
+    # [text -height max] refuses in as many words ("no empty paragraph
+    # element"). Untagged it draws nothing either way, and saying so is
+    # better than a call that does nothing and answers a length.
+    if {$string eq {}} {
+      return -code error -errorcode [list TCLPDF TEXT PATH empty] \
+          "tclpdf: textPath needs a string to set - an empty one sets no\
+          glyph, and in a tagged document it would leave an element with\
+          nothing in it"
+    }
     set state [my TextMerge [my TextPathOverrides $options]]
 
     set points [my TextPathFlatten [dict get $options segments]]
@@ -88,6 +112,16 @@ oo::define ::tclpdf::document::document {
           "tclpdf: a path for text needs at least two points"
     }
     lassign [my TextPathLengths $points] lengths total
+    # A path of no length is two points on top of each other - allowed by the
+    # count above, and nothing can be placed along it: every glyph fails at
+    # [TextPathPoint] and the run comes out empty, with the mark of a tagged
+    # document bracketing nothing. Refused for the same reason the empty
+    # string is.
+    if {$total <= 0} {
+      return -code error -errorcode [list TCLPDF TEXT PATH length] \
+          "tclpdf: the path for this text has no length - its points all lie\
+          on the same spot, so there is nowhere along it to set a glyph"
+    }
 
     # Where the string starts on the path, from its own width - the same
     # decision [text] makes for a straight line, only measured along the curve.
@@ -107,7 +141,14 @@ oo::define ::tclpdf::document::document {
     }
 
     set offset [dict get $options offset]
-    if {![string is double -strict $offset]} {
+    # [text::finite] rather than [string is double]: NaN and Inf ARE doubles
+    # to Tcl, so both came through here and died in the arithmetic below -
+    # "sin($radians) * $offset" - after the mark of a tagged run had been
+    # opened. With -tag Artifact that left the artifact bracket standing and
+    # every later paragraph of the page was swallowed by it: pdfinfo
+    # -struct-text showed a document whose two following paragraphs did not
+    # exist for a reader.
+    if {![::tclpdf::text::finite $offset]} {
       # Any sign - below the path is a place too - but a number, and said
       # so here: "abc" used to fail in Tcl's words from inside the loop.
       return -code error -errorcode [list TCLPDF TEXT PATH offset] \
@@ -176,7 +217,14 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
+    # EVERYTHING THE LOOP CAN STILL FAIL ON IS CAUGHT, so that the mark is
+    # closed before the error travels on - the guard [text] holds around its
+    # own drawing (text.tcl) and the one this road did not have. What is left
+    # to fail here is what only the placing meets: a glyph a face lacks in a
+    # cluster the measuring pass above did not ask about in the same shape,
+    # and any arithmetic on a value that got this far.
     set first 1
+    set failed [catch {
     foreach cluster $clusters {
       lassign $cluster from to
       if {!$first} {
@@ -214,8 +262,12 @@ oo::define ::tclpdf::document::document {
       }
       set cursor [expr {$cursor + $step}]
     }
+    } result info]
     if {[llength $mark]} {
       my content [my StructureEnd $mark]
+    }
+    if {$failed} {
+      return -options $info $result
     }
     return $total
   }
@@ -373,4 +425,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.8
+package provide tclpdf::textPath 1.9

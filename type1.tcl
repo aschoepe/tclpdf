@@ -444,11 +444,25 @@ proc ::tclpdf::type1::Header {clear} {
 # The metrics beside the program. An AFM is a plain text file and only two of
 # its sections matter here: the per-character metrics and the header values a
 # font descriptor needs.
+# The glyphs whose upper edge a font descriptor is measured from: the cap
+# height at the H (ISO 32000-2, Table 122: "the top of flat capital
+# letters"), the ascender at the d or the b, which are the two lower-case
+# letters that reach it. Named once here because the AFM reader and the CFF
+# reader fill the same dictionary from two different files.
+proc ::tclpdf::type1::TopWanted {} {
+  return {H d b}
+}
+
 proc ::tclpdf::type1::metrics {path} {
   set text [::tclpdf::io read $path]
+  # "tops" is the upper edge of the few glyphs a font descriptor is measured
+  # from - see [::tclpdf::type1::TopWanted]. An AFM states a bounding box per
+  # character, and it is the only place a Type 1 face says how high its
+  # capitals and its ascenders reach where the header fields are 0, which the
+  # URW metrics in this tree write for Ascender and Descender.
   set metrics [dict create name {} family {} bbox {} italicAngle 0 \
       ascender {} descender {} capHeight {} xHeight {} stemV {} \
-      widths {} codes {} fixedPitch 0]
+      widths {} codes {} tops {} fixedPitch 0]
   set inChars 0
   foreach line [split $text \n] {
     set line [string trim $line]
@@ -468,6 +482,7 @@ proc ::tclpdf::type1::metrics {path} {
       set code -1
       set width {}
       set name {}
+      set top {}
       foreach field [split $line \;] {
         set field [string trim $field]
         if {[regexp {^C\s+(-?\d+)$} $field -> value]} {
@@ -476,12 +491,21 @@ proc ::tclpdf::type1::metrics {path} {
           set width $value
         } elseif {[regexp {^N\s+(\S+)$} $field -> value]} {
           set name $value
+        } elseif {[regexp {^B\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s+(-?[0-9.]+)$} \
+            $field -> - - - upper]} {
+          set top $upper
         }
       }
       if {$name ne {} && $width ne {}} {
         dict set metrics widths $name [expr {int($width)}]
         if {$code >= 0} {
           dict set metrics codes $code $name
+        }
+        # Kept for the three glyphs a descriptor is built from and no others:
+        # a box per glyph over a face of several hundred is a dictionary
+        # nobody reads.
+        if {$top ne {} && $name in [TopWanted]} {
+          dict set metrics tops $name [expr {int($top)}]
         }
       }
       continue

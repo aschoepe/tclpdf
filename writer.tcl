@@ -33,6 +33,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
+package require tclpdf::io 1.1-
 
 namespace eval ::tclpdf::writer {}
 
@@ -310,10 +311,26 @@ oo::class create ::tclpdf::writer::pdf {
     # a document does that is the encryptor's business - it knows what it
     # put into /Encrypt. The writer only says which stream it is holding.
     #
+    # For that one stream the encryptor answers with TWO things: the bytes,
+    # and the entries the stream dictionary then needs. 7.6.6 is why - a
+    # stream left in the clear inside an encrypted document says so at the
+    # stream, "/Filter /Crypt /DecodeParms << /Name /Identity >>", and a
+    # reader that does not find it applies the document's stream filter to
+    # readable bytes. Measured 2026-08-26: without the entries poppler
+    # 26.08.0 hands "pdfinfo -meta" the decrypted rubbish it makes of a
+    # packet that was never encrypted, while qpdf reads it right - the
+    # standard describes both mechanisms and each reader listens to one of
+    # them. The entries belong to the ENCRYPTOR because only it knows
+    # whether the stream was left in the clear; the stream's own author
+    # (WriteMetadata in output.tcl) knows nothing about encryption.
+    #
     # Without an encryptor nothing happens here at all.
     if {$tclpdfEncryptor ne {}} {
       if {[dict exists $pairs Type] && [dict get $pairs Type] eq "/Metadata"} {
-        set data [{*}$tclpdfEncryptor $data metadata]
+        lassign [{*}$tclpdfEncryptor $data metadata] data entries
+        if {[llength $entries]} {
+          set pairs [dict merge $pairs $entries]
+        }
       } else {
         set data [{*}$tclpdfEncryptor $data]
       }
@@ -473,6 +490,13 @@ oo::class create ::tclpdf::writer::pdf {
   # site: measured, a channel left on the default translation turns 17 written
   # bytes into 21 in the file, and no validator reports it.
   method writeFile {path trailerPairs} {
+    # Asked before the channel is opened, and asked here rather than left to
+    # [open]: the two cases a caller can do something about - a directory
+    # that is not there, a path that is a directory - come back as
+    # "tclpdf: ..." with TCLPDF IO DIRECTORY instead of as POSIX ENOENT.
+    # io.tcl owns the question because the signing road (io write) asks the
+    # same one.
+    ::tclpdf::io checkTarget $path
     set channel [open $path w]
     try {
       my writeChannel $channel $trailerPairs
@@ -494,4 +518,4 @@ oo::class create ::tclpdf::writer::pdf {
   }
 }
 
-package provide tclpdf::writer 1.5
+package provide tclpdf::writer 1.6

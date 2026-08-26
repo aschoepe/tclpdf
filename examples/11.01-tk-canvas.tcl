@@ -29,9 +29,9 @@
 # agree too - 0 at three o'clock, growing counter-clockwise as the page is
 # read - because that is the canvas convention and this package took it.
 #
-# THIS IS AN EXAMPLE, NOT A CANVAS RENDERER. It draws the six shape types, a
-# picture and a piece of text, and it passes over anything else by name in one
-# line. What it deliberately does not do is listed on the page it writes.
+# THIS IS AN EXAMPLE, NOT A CANVAS RENDERER. It draws the five shape types -
+# line, rectangle, oval, arc and polygon - a picture and a piece of text, and
+# it passes over anything else by name in one line. What it deliberately does not do is listed on the page it writes.
 # Whoever wants all of it can write it.
 #
 # WITHOUT TK IT SKIPS. Tk is not a prerequisite of tclpdf and need not be

@@ -996,4 +996,72 @@ test annot-highlight-41.2 {and in a 1.4 document it is drawn} -body {
 } -result 0
 
 
+# --- round 7: numbers that are not measurements, and what a refusal leaves ---
+
+test annot-20.1 {NaN in -at is refused at the call, in this package's words} -body {
+    set doc [annotDoc]
+    set outcome [::tclpdfTest::refuse {$doc annot note -at {10 NaN} -contents x}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF ANNOT RECT NUMBER NaN}}
+
+test annot-20.2 {and Inf in -size, which passes every comparison} -body {
+    # [annot stamp] reads -at and -size through [AnnotRectangle] itself; the
+    # five geometry kinds go through [option point] first and were never
+    # affected.
+    set doc [annotDoc]
+    set outcome [::tclpdfTest::refuse \
+        {$doc annot stamp -at {10 10} -size {Inf 20} -name Draft -contents x}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF ANNOT RECT NUMBER Inf}}
+
+test annot-20.3 {NaN in -opacity likewise} -body {
+    set doc [annotDoc]
+    set outcome [::tclpdfTest::refuse \
+        {$doc annot note -at {10 10} -contents x -opacity NaN}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF ANNOT OPACITY NaN}}
+
+test annot-20.4 {NaN in -quads likewise} -body {
+    set doc [annotDoc]
+    set outcome [::tclpdfTest::refuse \
+        {$doc annot highlight -quads {{10 NaN 20 5}} -contents x}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF ANNOT QUADS NUMBER NaN}}
+
+test annot-21.1 {a refusal at -opacity leaves no appearance stream behind} -body {
+    # The appearance is an OBJECT, written the moment it is drawn. It used to
+    # be drawn BEFORE the colour, the opacity and the date were checked, so a
+    # refused call left a form XObject in the file that nothing points at -
+    # the document still wrote, which is why nothing noticed.
+    set wrong {}
+    foreach {kind call} {
+        highlight {annot highlight -quads {{10 10 20 5}} -contents x}
+        underline {annot underline -quads {{10 10 20 5}} -contents x}
+        line      {annot line -from {10 10} -to {50 10} -contents x}
+        square    {annot square -at {10 10} -size {30 10} -contents x}
+        circle    {annot circle -at {10 30} -size {30 10} -contents x}
+        polygon   {annot polygon -points {{10 10} {30 10} {20 30}} -contents x}
+        polyline  {annot polyline -points {{10 10} {30 10} {20 30}} -contents x}
+    } {
+        foreach {why extra} {opacity {-opacity 5} date {-date abc}
+                nan {-opacity NaN} colour {-colour {1 2}}} {
+            set doc [annotDoc]
+            set before [[$doc writer] count]
+            if {![catch {$doc {*}$call {*}$extra}]} {
+                lappend wrong "$kind $why: not refused"
+            }
+            set after [[$doc writer] count]
+            $doc destroy
+            if {$after != $before} {
+                lappend wrong "$kind $why: [expr {$after - $before}] object(s)"
+            }
+        }
+    }
+    set wrong
+} -result {}
+
 cleanupTests

@@ -1,0 +1,109 @@
+# outline.test --
+#
+# Bookmarks - the navigation tree a reader shows beside the page.
+#
+# The module had no test file of its own until 2026-08-26: what there is of
+# it lives in document.test (the shared [Destination]) and in structure.test
+# (a bookmark pointing at an element). What is here is what belongs to
+# [bookmark] alone - the arguments it takes, and the two of them that used to
+# be taken and then quietly dropped.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+source [file join [file dirname [info script]] helper.tcl]
+package require tclpdf::outline
+
+proc booked {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  return $doc
+}
+
+# --- -open is a boolean, and it is asked at the call ----------------------
+
+test outline-1.1 {-open takes a boolean, said where the caller is} -body {
+  # [OutlineWrite] computes "[dict get $entry open] ? $count : -$count", so
+  # an -open that is no boolean died there - at write time, hours later,
+  # with Tcl's own "expected boolean value but got \"abc\"" and errorCode
+  # TCL VALUE NUMBER, against the promise that every refusal of this package
+  # begins with "tclpdf:" and names the call.
+  set doc [booked]
+  set code [::tclpdfTest::refusalCode {$doc bookmark "Kapitel" -open abc}]
+  set left [llength [$doc bookmarks]]
+  $doc destroy
+  list $code $left
+} -result {{TCLPDF OUTLINE ARGUMENT open} 0}
+
+test outline-1.2 {every spelling of a boolean is one} -body {
+  set doc [booked]
+  set codes [lmap value {0 1 true false yes no on off} {
+    catch [list $doc bookmark "K" -open $value]
+  }]
+  $doc destroy
+  lsort -unique $codes
+} -result 0
+
+test outline-1.3 {a closed branch counts its children negative, and writes} -body {
+  # The value reaches /Count as a number either way - the boolean is turned
+  # into one at the call, so "yes" and 1 write the same tree.
+  set doc [booked]
+  set chapter [$doc bookmark "Kapitel" -open no]
+  $doc bookmark "Abschnitt" -parent $chapter
+  set path [::tclpdfTest::scratch outline-closed.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Count -1} $bytes
+} -result 1
+
+# --- one target ------------------------------------------------------------
+
+test outline-2.1 {-structure and a page target are two targets, not a ranking} -body {
+  # [OutlineWrite] decided -structure over -page and -at and dropped the
+  # loser without a word: "bookmark -structure intro -page 2" wrote the
+  # element target and the caller believed in the page. The manual says "to
+  # a page or to a named structure element" (:900).
+  set doc [tclpdf new -unit mm -version 2.0 -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc page add
+  $doc structure Sect -name intro -script {}
+  set withPage [::tclpdfTest::refusalCode {
+    $doc bookmark "Einleitung" -structure intro -page 1}]
+  set withAt [::tclpdfTest::refusalCode {
+    $doc bookmark "Einleitung" -structure intro -at {20 30}}]
+  set plain [catch {$doc bookmark "Einleitung" -structure intro}]
+  $doc destroy
+  list $withPage $withAt $plain
+} -result {{TCLPDF OUTLINE ARGUMENT structure} {TCLPDF OUTLINE ARGUMENT structure} 0}
+
+test outline-2.2 {-at is a point, and answers as one} -body {
+  # Without the check the value reached [coords], which answers in the words
+  # of its own module ("not a measurement").
+  set doc [booked]
+  set code [::tclpdfTest::refusalCode {$doc bookmark "Kapitel" -at {a b}}]
+  $doc destroy
+  set code
+} -result {TCLPDF OPTION POINT -at bookmark}
+
+test outline-2.3 {a refused bookmark leaves the tree as it was} -body {
+  set doc [booked]
+  $doc bookmark "Eins"
+  set before [$doc bookmarks]
+  catch {$doc bookmark "Zwei" -open abc}
+  catch {$doc bookmark "Drei" -at {a b}}
+  catch {$doc bookmark "Vier" -parent 99}
+  set after [$doc bookmarks]
+  $doc destroy
+  expr {$before eq $after}
+} -result 1
+
+cleanupTests

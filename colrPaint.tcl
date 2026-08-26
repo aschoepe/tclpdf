@@ -94,6 +94,12 @@
 #   - a PaintColrGlyph naming a glyph the BaseGlyphList has not got (REUSE).
 #   - a layer slice reaching past the LayerList (LAYERS), and any offset that
 #     leaves the table (TRUNCATED) - the same two words colr.tcl uses.
+#   - a composite mode outside its enumeration (COMPOSITE), and the three
+#     smaller enumerations that have no class of their own - a colour line's
+#     extend mode, a ClipList format, a ClipBox format (UNSUPPORTED). All of
+#     them for the reason PAINT gives above; see [Unsupported] for why the
+#     ClipList is named rather than skipped, although it is called an
+#     optimisation.
 #
 # NOT READ, deliberately: the ItemVariationStore and the DeltaSetIndexMap (see
 # above - the default instance needs neither), and the version 0 arrays of a
@@ -251,18 +257,24 @@ proc ::tclpdf::colrPaint::Header {colr} {
 
 # The ClipList: a run of glyph ids per box, so one box serves a range.
 #
-# Only format 1 is defined, and a format this reader does not know is passed
-# over rather than refused - a ClipList is an OPTIMISATION ("precomputed clip
-# boxes"), and a glyph without one is drawn from its own bounds. That is the
-# one place in this module where something unknown is skipped instead of
-# named, and the reason is that skipping it changes nothing about what is
-# drawn.
+# AN UNKNOWN FORMAT IS REFUSED HERE TOO, and the argument that it need not be
+# does not hold. A ClipList is called an optimisation ("precomputed clip
+# boxes"), so skipping one looks free: the glyph is then bounded from its own
+# outlines instead. But the two answers are not the same answer. A clip box
+# is a CLIP - a graph that paints outside every outline in it is bounded by
+# the box and unbounded without it, which is the difference between a drawn
+# glyph and TCLPDF COLORFONT UNBOUNDED - and where both exist the box may be
+# SMALLER than the outlines, so a piece the font meant to cut off would be
+# drawn. A format this reader does not know is therefore a table from a later
+# minor version and named as one, exactly as an unknown paint format is.
 proc ::tclpdf::colrPaint::ClipList {colr offset} {
   if {$offset == 0} {
     return {}
   }
-  if {[::tclpdf::otLayout u16 $colr $offset] >> 8 != 1} {
-    return {}
+  set listFormat [expr {[::tclpdf::otLayout u16 $colr $offset] >> 8}]
+  if {$listFormat != 1} {
+    Unsupported "ClipList format" $listFormat "the ClipList at offset $offset" \
+        "ISO/IEC 14496-22 defines format 1 alone"
   }
   set count [::tclpdf::otLayout u32 $colr [expr {$offset + 1}]]
   set length [string length $colr]
@@ -278,11 +290,13 @@ proc ::tclpdf::colrPaint::ClipList {colr offset} {
     set box [expr {$offset + [Offset24 $colr [expr {$at + 4}]]}]
     # ClipBox format 1 is four FWORDs; format 2 adds a varIndexBase behind
     # them, which the default instance does not need. Both start with the
-    # same four numbers, so both are read the same way and only an unknown
-    # format is skipped.
+    # same four numbers, so both are read the same way, and an unknown format
+    # is named for the reason the head of this proc gives.
     set format [expr {[::tclpdf::otLayout u16 $colr $box] >> 8}]
     if {$format != 1 && $format != 2} {
-      continue
+      Unsupported "ClipBox format" $format \
+          "the ClipBox at offset $box, which bounds glyph $first" \
+          "ISO/IEC 14496-22 defines formats 1 and 2"
     }
     set rectangle [list [::tclpdf::otLayout s16 $colr [expr {$box + 1}]] \
         [::tclpdf::otLayout s16 $colr [expr {$box + 3}]] \
@@ -354,15 +368,28 @@ proc ::tclpdf::colrPaint::Node {state offset path depth} {
           r1 [::tclpdf::otLayout u16 $colr [expr {$offset + 14}]]]
     }
     8 - 9 {
-      # The two angles are F2DOT14 and count 180 degrees per 1.0, which is
-      # what lets a two-byte field carry a full turn and more. Counter
-      # clockwise from the positive x axis, and the order of the two decides
-      # the direction the colour line runs in - see the drawing module.
+      # The two angles are F2DOT14 and count 180 degrees per 1.0 - AND THEY
+      # CARRY A BIAS OF 1.0, which the two angles of PaintRotate and
+      # PaintSkew do not: degrees = (value + 1.0) x 180. F2DOT14 stops just
+      # short of 2.0, so without the bias a two-byte field reaches 358 and a
+      # full turn is not writable at all; with it the range is -180 to +360
+      # and 360 is the top of it, which is why the format spends the bias
+      # here and nowhere else. Counter clockwise from the positive x axis,
+      # and the order of the two decides the direction the colour line runs
+      # in - see the drawing module.
+      #
+      # Read WITHOUT the bias every sweep comes out turned by half a circle,
+      # and nothing reports it: the gradient is still a gradient, still the
+      # right colours, still round. Measured 2026-08-26 against hb-view at
+      # 400 dpi on a sweep stored as 30 to 200 - the two pictures differ in
+      # 196713 pixels of 128164 by more than 64 grey levels. fontTools calls
+      # the type BiasedAngle for the same reason ("a bias of 1.0 ... to allow
+      # for encoding +360deg") and HarfBuzz writes (startAngle + 1) * pi.
       return [dict create paint sweep \
           line [ColorLine $state $offset [expr {$format == 9}]] \
           center [Point $colr [expr {$offset + 4}]] \
-          start [expr {[F2Dot14 $colr [expr {$offset + 8}]] * 180.0}] \
-          end [expr {[F2Dot14 $colr [expr {$offset + 10}]] * 180.0}]]
+          start [expr {([F2Dot14 $colr [expr {$offset + 8}]] + 1.0) * 180.0}] \
+          end [expr {([F2Dot14 $colr [expr {$offset + 10}]] + 1.0) * 180.0}]]
     }
     10 {
       return [dict create paint glyph \
@@ -538,9 +565,15 @@ proc ::tclpdf::colrPaint::ColorLine {state offset varying} {
   set at [expr {$offset + [Offset24 $colr [expr {$offset + 1}]]}]
   set extend [expr {[::tclpdf::otLayout u16 $colr $at] >> 8}]
   if {![dict exists $extends $extend]} {
-    # Not in the enumeration. Pad is what every other value behaves as in
-    # practice and the only one that cannot make a colour line ill-formed.
-    set extend 0
+    # Not in the enumeration, and REFUSED rather than read as pad - the rule
+    # this module keeps for an unknown paint format and an unknown composite
+    # mode, and for the same reason. Pad is plausible and looks right, and a
+    # gradient that should have repeated and did not is a picture missing a
+    # piece: valid, printable and unreported. The enumeration has three
+    # values and this reader knows all three, so no font written to the
+    # present edition can reach it.
+    Unsupported "extend mode" $extend "the ColorLine at offset $at" \
+        "the ColorStopExtend enumeration ends at 2"
   }
   set count [::tclpdf::otLayout u16 $colr [expr {$at + 1}]]
   set width [expr {$varying ? 10 : 6}]
@@ -596,9 +629,27 @@ proc ::tclpdf::colrPaint::Point {bytes offset} {
 # The same wording and the same error code colr.tcl uses for a table that ends
 # before its own header promises, so that a caller cannot tell from the code
 # which of the two readers found it - and does not have to.
+# A value outside the enumeration it belongs to, which is what a table from a
+# later minor version of the format looks like from here.
+#
+# ONE CLASS FOR THE THREE PLACES THAT HAVE NO CLASS OF THEIR OWN - a colour
+# line's extend mode, a ClipList format, a ClipBox format - because the answer
+# a caller has to give is the same in all three: the face uses a construction
+# this reader does not know, and there is no argument to change. The two
+# enumerations that a font is likely to grow first, paint format and composite
+# mode, keep the codes they had (TCLPDF COLR PAINT and TCLPDF COLR COMPOSITE)
+# so that a caller trapping either goes on trapping it.
+proc ::tclpdf::colrPaint::Unsupported {what value where defined} {
+  return -code error -errorcode [list TCLPDF COLR UNSUPPORTED $what $value] \
+      "tclpdf: $where in the font's \"COLR\" table names $what $value, and\
+      $defined - so this is a table from a later minor version of the format.\
+      Reading it as one of the values that ARE defined would draw a colour\
+      glyph that differs from what the font says with nothing reporting it"
+}
+
 proc ::tclpdf::colrPaint::Truncated {detail} {
   return -code error -errorcode {TCLPDF COLR TRUNCATED COLR} \
       "tclpdf: the font's \"COLR\" table is cut short - $detail"
 }
 
-package provide tclpdf::colrPaint 1.1
+package provide tclpdf::colrPaint 1.2

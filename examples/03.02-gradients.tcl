@@ -9,7 +9,10 @@
 #   shading   type 2 is axial (a direction), type 3 is radial (a centre).
 #             Two colours become one exponential function; more than two are
 #             stitched together, one function per segment - which is how PDF
-#             expresses a multi-stop gradient at all.
+#             expresses a multi-stop gradient at all. Page 2 shows the other
+#             five types: type 1, whose colour at a point is what a function
+#             returns for it, and the four meshes (4 to 7), which carry their
+#             colours as points, with what each of them costs in the file.
 #
 #   pattern   a shading registered as a fill, so any shape can use it; or a
 #             tile of ordinary drawing repeated across a surface.

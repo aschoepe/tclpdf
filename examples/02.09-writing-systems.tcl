@@ -7,7 +7,8 @@
 # Eleven faces on one page: Japanese, Tibetan, two symbol sets, emoji,
 # cuneiform, Egyptian hieroglyphs, Hebrew, Arabic and a brush face. None of
 # them is a standard font, all of them are embedded, and the document is
-# PDF/A-3u.
+# PDF/A-3u. A fourth page follows the table: music needs more than a font,
+# and Noto Music is what it takes.
 #
 # TWO OF THE LINES RUN RIGHT TO LEFT and they are not the same case. Hebrew
 # needs nothing but the order, so -direction rtl sets it correctly and the
@@ -22,8 +23,8 @@
 # order and whose brackets are mirrored. The notes on the page say so.
 # Example 02.12 puts a vocalised word in both kinds of face side by side.
 #
-# WHY THIS IS AFFORDABLE. The source files add up to 15 MB, the Japanese face
-# alone being 8.7 MB for its 17 103 glyphs. What lands in the document is a
+# WHY THIS IS AFFORDABLE. The source files add up to 16 MB, the Japanese face
+# alone being 5.2 MB for its 17 103 glyphs. What lands in the document is a
 # subset of the glyphs actually drawn, and that is a few kilobytes per face.
 # The table below reads both numbers off the files rather than repeating them
 # from here.
@@ -989,7 +990,7 @@ set y [expr {$y + 7}]
 $doc font -family sans -size 8 -color {0.35 0.35 0.35}
 $doc text "The file size is read off the font, the glyph count out of the\
     document. A face is only ever as big as what it draws - which is what\
-    makes ten of them on one page reasonable at all." \
+    makes eleven of them on one page reasonable at all." \
     -at [list 20 $y] -width 170
 set y [expr {$y + 12}]
 

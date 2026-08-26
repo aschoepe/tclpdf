@@ -47,7 +47,7 @@ Rows tied by a `rowSpan` never split across a page. Unknown keys and out-of-rang
 
 ## Styles and themes
 
-Style keys, read at every level - `-style`, `-headStyle`/`-bodyStyle`/`-footStyle`, a column, a cell's `style` - the most specific wins: `family fontStyle size leading padding fill color align valign direction border lineColor lineWidth`. A theme (`plain`, `striped`, `grid`) is a set of these.
+Style keys, read at every level - `-style`, `-headStyle`/`-bodyStyle`/`-footStyle`, a column, a cell's `style` - the most specific wins: `family fontStyle size leading padding fill color align valign direction hyphenate border lineColor lineWidth`. A theme (`plain`, `striped`, `grid`) is a set of these.
 
 ```tcl
 set y [$doc table -at [list 20 [expr {$y + 8}]] -width 80 -theme plain \
@@ -91,7 +91,7 @@ set y [$doc table -at {20 40} -width 170 -theme grid \
     -head {{No. Specimen "Weight (g)" Price}} -body $rows \
     -columns {{width 14 align right} {} {width 30 align right} {width 30 align decimal}} \
     -style {family body size 8} -headStyle {family bodyBold} \
-    -top 26 -bottom 275 -repeatHead 1 \
+    -top 26 -bottom 275 -repeatHead 1 -repeatFoot 1 \
     -didParseCell {apply {{cell doc} {
         # Before measuring - a change of style still affects the wrap.
         if {[dict get $cell section] eq "body" && [dict get $cell column] == 2

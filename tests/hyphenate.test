@@ -332,11 +332,17 @@ test hyphenate-4.7 {an exception beats the patterns} \
   # and no pattern file can know which. The .dic format has no exception
   # block - what TeX writes as \hyphenation{} it encodes as whole-word
   # patterns - so the exceptions come in on the load call.
+  #
+  # What the patterns answer WITHOUT the exception changed on 2026-08-26,
+  # when the compound table of the file began to be read: "Wach-stu-be" is
+  # what libhyphen answers for this word, because the file's own compound
+  # table names the joint (wach|stube). It is still the other reading of the
+  # word, which is the whole point of the exception.
   ::tclpdf::hyphenate load de-guard $::hyphenGerman -left 2 -right 2 \
       -exceptions {Wachs-tu-be}
   list [hyphenShow de-guard Wachstube] [hyphenShow de-DE Wachstube] \
       [dict get [::tclpdf::hyphenate languages de-guard] exceptions]
-} -result {Wachs-tu-be Wachstu-be 1}
+} -result {Wachs-tu-be Wach-stu-be 1}
 
 # --- 5. the marks the caller brought -----------------------------------------
 
@@ -719,10 +725,17 @@ test hyphenate-10.5 {a word ending in a marked letter keeps that letter} \
   # the mark of the last letter and hyphenated a different word. Measured
   # here as the two spellings agreeing, which they cannot do if the mark is
   # left outside.
+  #
+  # The breaks themselves changed on 2026-08-26 with the compound table:
+  # "Sys-tem-me-nü" rather than "Sy-stem-me-nü". The file names the joint
+  # (system|menü) and the Liang patterns are then applied to "system" alone,
+  # where they give the reformed "Sys-tem"; laid over the whole compound they
+  # gave the pre-1996 "Sy-stem". What this test measures is unchanged: the
+  # two spellings answer alike.
   set word Systemmenü
   list [hyphenShow de-DE $word] \
       [string map [list u\u0308 ü] [hyphenShow de-DE [hyphenDecompose $word]]]
-} -result {Sy-stem-me-nü Sy-stem-me-nü}
+} -result {Sys-tem-me-nü Sys-tem-me-nü}
 
 test hyphenate-10.6 {an exception is found in either spelling} \
     -constraints haveGermanPatterns -body {
@@ -783,5 +796,56 @@ test hyphenate-10.9 {such a mark belongs to the word, not to the punctuation} -b
   list [llength $marked] [join $plain -]
 } -result {1 abcd-e}
 
-::tcltest::cleanupTests
-return
+::tcltest::test hyphenate-20.1 {an unknown subcommand of the ensemble is refused in this package's words} -body {
+  # doc/tclpdf.md:1723 names [tclpdf] itself as the ONE refusal without a
+  # TCLPDF code; the namespace ensembles answered Tcl's "unknown or
+  # ambiguous subcommand" with {TCL LOOKUP SUBCOMMAND} (measured
+  # 2026-08-26). The known list is read off the ensemble, so it cannot fall
+  # behind the module.
+  set code [catch {::tclpdf::hyphenate nosuch} message]
+  list $code [lrange $::errorCode 0 2] \
+      [string match {tclpdf: unknown hyphenate subcommand "nosuch" - known are: languages, load, word} $message]
+} -result {1 {TCLPDF HYPHENATE SUBCOMMAND} 1}
+
+# --- round 7 -----------------------------------------------------------------
+
+test hyphenate-r7-1.1 {a two-level file is read as libhyphen reads it} \
+    -constraints haveGermanPatterns -body {
+  # libhyphen lets a file carry several pattern tables separated by NEXTLEVEL:
+  # the first marks the joints of a compound, the LAST is the plain Liang
+  # table, and it is applied to each compound PART. Reading the last one alone
+  # is a different algorithm from the one the file was written for - measured
+  # over the 55 581 compound entries of hyph_de_DE.dic with an inner joint:
+  # 18.4 per cent came out with a one-letter piece inside the word
+  # ("aben-d-ap-pell"), and 32.5 per cent did not offer the joint the file
+  # itself names ("ab-baufront"). After: 0.1 per cent miss a joint.
+  #
+  # The manual says of this file that the breaks are "the same breaks TeX
+  # would set"; TeX sets them per compound part too, which is what dehyphn.tex
+  # was made for.
+  list [hyphenShow de-DE Betriebskostenabrechnung] \
+      [hyphenShow de-DE Wirtschaftspruefungsgesellschaft] \
+      [hyphenShow de-DE Abendappell] \
+      [hyphenShow de-DE Silbentrennung]
+} -result {Be-triebs-kos-ten-ab-rech-nung Wirt-schafts-prue-fungs-ge-sell-schaft\
+    Abend-ap-pell Sil-ben-tren-nung}
+
+test hyphenate-r7-1.2 {a one-level file is read exactly as it always was} \
+    -constraints haveEnglishPatterns -body {
+  # hyph_en_US.dic has no NEXTLEVEL, so there is no compound table, and the
+  # road [Breaks] takes is the one it always took - byte for byte the same
+  # answers, and none of the cost of building a second trie.
+  list [hyphenShow en-US hyphenation] [hyphenShow en-US representation] \
+      [hyphenShow en-US beautiful] \
+      [dict get [::tclpdf::hyphenate languages en-US] patterns]
+} -result {hy-phen-ation rep-re-sen-ta-tion beau-ti-ful 11125}
+
+test hyphenate-r7-1.3 {the last table is still the one the pattern count names} \
+    -constraints haveGermanPatterns -body {
+  # [languages] answers about the Liang table, which is the one that decides
+  # where a PART breaks; the compound table is 69 127 entries and says only
+  # where the parts are.
+  dict get [::tclpdf::hyphenate languages de-DE] patterns
+} -result 8718
+
+cleanupTests

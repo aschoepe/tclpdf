@@ -49,12 +49,19 @@ namespace eval ::tclpdf::subset {
 #
 # Returns a dict: bytes (the new font file), glyphs (old id -> new id) and
 # order (new id -> old id).
-proc ::tclpdf::subset::build {font glyphs {instanced {}}} {
+proc ::tclpdf::subset::build {font glyphs {instanced {}} {alias {}}} {
   set loca [dict get $font loca]
   if {![llength $loca]} {
-    return -code error -errorcode [list TCLPDF FONT SUBSET outlines] \
-        "tclpdf: the font has no glyf/loca tables and cannot be\
-        subsetted"
+    # THE LAST LINE OF DEFENCE, and since 2026-08-26 no longer the first: a
+    # face with no glyf/loca is refused by [font embed] (font.tcl, TCLPDF
+    # FONT TABLE glyf), where the caller can still see which call was at
+    # fault. This one is reachable only by a caller of [subset build] itself,
+    # and it names the alias where it has one - the message used to say "the
+    # font" of a document that might hold a dozen.
+    return -code error -errorcode [list TCLPDF FONT SUBSET outlines $alias] \
+        "tclpdf: [expr {$alias eq {} ? {the font} :
+            [format {the font "%s"} $alias]}] has no glyf/loca tables and\
+        cannot be subsetted"
   }
 
   # Close over composites first: a glyph that references others drags them in.
@@ -455,4 +462,4 @@ proc ::tclpdf::subset::Checksum {data} {
   return $sum
 }
 
-package provide tclpdf::subset 1.4
+package provide tclpdf::subset 1.5

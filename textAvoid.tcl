@@ -183,10 +183,15 @@ oo::define ::tclpdf::document::document {
     # comparison against it is false - the shape then narrowed no line at all
     # and the text ran straight through it, in silence. The shapes themselves
     # are read by the pattern below, which has no spelling for NaN.
-    if {![::tclpdf::text::finite $margin]} {
+    # BELOW ZERO IS NOT A MARGIN. The manual has one sentence about it - it
+    # "holds the text off" a shape - and a negative value does the opposite:
+    # the band is widened into the shape and the lines run through it, which
+    # is exactly what -avoid is asked for to prevent, and nothing says so.
+    if {![::tclpdf::text::finite $margin] || $margin < 0} {
       return -code error -errorcode [list TCLPDF TEXT AVOID margin] \
-          "tclpdf: -avoidMargin takes a distance in the\
-          document unit, not \"$margin\""
+          "tclpdf: -avoidMargin takes a distance of 0 or\
+          more in the document unit - it is how far the text is held off the\
+          shapes - not \"$margin\""
     }
     foreach shape $shapes {
       # The numbers are checked here as well as the shape of the list: a
@@ -239,4 +244,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textAvoid 1.3
+package provide tclpdf::textAvoid 1.4

@@ -1259,11 +1259,7 @@ test fieldButton-7.13 {the first [$doc field] of a script labels a button too} -
   # in the middle is the whole test. A helper that took the script would be
   # six lines around one argument, and the fault it guards against is a frame
   # count - which is exactly what another layer of frames would obscure.
-  set here [file normalize [file dirname [file dirname [info script]]]]
-  set path [::tclpdfTest::scratch button-ua-first.tcl]
-  set channel [open $path w]
-  puts $channel [list lappend auto_path $here]
-  puts $channel {
+  ::tclpdfTest::freshInterp {
     package require tclpdf
     set doc [tclpdf new -unit mm -format a4 -version 2.0]
     $doc tagged 1
@@ -1275,10 +1271,6 @@ test fieldButton-7.13 {the first [$doc field] of a script labels a button too} -
     $doc destroy
     puts $seen
   }
-  close $channel
-  set out [exec [info nameofexecutable] $path]
-  file delete $path
-  set out
 } -result {The very first button}
 
 test fieldButton-7.14 {the entry says page, label and description by name} -body {
@@ -1369,5 +1361,60 @@ test fieldButton-7.15 {veraPDF accepts a spread set and a labelled one} -constra
   lappend out $good [string match {*clause="7.18.4" testNumber="2"*} $counter]
   set out
 } -result {ok ok ok 1}
+
+# --- round 7: the reset action names fields, and the caption is drawable ----
+
+test fieldButton-30.1 {a reset action naming no field of this document is refused} -body {
+    # Table 242: "names of fields". A name that is none is an action that
+    # does nothing, and /Fields [(nope)] used to go into the file without a
+    # word. At the WRITE, because a reset button may name a field declared
+    # after it.
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    $doc field text real -rect {10 10 40 8}
+    $doc field button b -rect {10 30 30 8} -caption Reset -action reset \
+        -fields {real nope}
+    set path [::tclpdfTest::scratch fieldbutton-reset-nope.pdf]
+    set outcome [::tclpdfTest::refuse {$doc write $path}]
+    $doc destroy
+    file delete $path
+    list [lindex $outcome 0] [lindex $outcome 1] [lindex $outcome 2]
+} -result {1 1 {TCLPDF FIELD BUTTON FIELDS nope}}
+
+test fieldButton-30.2 {a reset action naming real fields is written} -body {
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    $doc field text real -rect {10 10 40 8}
+    $doc field button b -rect {10 30 30 8} -caption Reset -action reset \
+        -fields {real}
+    set path [::tclpdfTest::scratch fieldbutton-reset-ok.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    list [regexp {/S /ResetForm} $bytes] [regexp {/Fields \[[^]]*\(real\)} $bytes]
+} -result {1 1}
+
+test fieldButton-30.3 {a field declared AFTER the button counts} -body {
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    $doc field button b -rect {10 30 30 8} -caption Reset -action reset \
+        -fields {later}
+    $doc field text later -rect {10 10 40 8}
+    set path [::tclpdfTest::scratch fieldbutton-reset-later.pdf]
+    set code [catch {$doc write $path}]
+    $doc destroy
+    file delete $path
+    set code
+} -result 0
+
+test fieldButton-31.1 {a caption the button's font cannot set is refused at the call} -body {
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    set outcome [::tclpdfTest::refuse \
+        {$doc field button b -rect {10 30 30 8} -caption "Печать"}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF FIELD GLYPH caption}}
 
 cleanupTests

@@ -128,9 +128,18 @@ oo::define ::tclpdf::document::document {
     my state structureSuspend 1
     set failed [catch {uplevel #0 [dict get $options script]} result outcome]
     my state structureSuspend $suspended
+    # A "q" the script opened and never closed, counted while the tile is
+    # still the current stream. Nothing else can see it afterwards: the
+    # canvas is gone with the next line. [styleStack] is written only by
+    # [save], so a non-empty one means graphics.tcl is loaded and
+    # [GraphicsBalance] - the wording all three stream ends share - is there.
+    set openSaves [llength [my streamState styleStack]]
     set content [my canvas pop]
     if {$failed} {
       return -options $outcome $result
+    }
+    if {$openSaves} {
+      my GraphicsBalance "the tile of pattern \"$name\" leaves $openSaves open"
     }
 
     set pairs [list Type /Pattern PatternType 1 \
@@ -263,11 +272,29 @@ oo::define ::tclpdf::document::document {
   # PLACE are watched - a tiling pattern without -origin and without -matrix
   # tiles from the corner of whatever space it lands in, which is what it is
   # for, and a caller who passed -matrix has said where it belongs.
+  # THE ANCHOR IS THE STREAM, NOT THE DEPTH. Until 2026-08-26 the canvas
+  # DEPTH was remembered, and two streams at the same depth were one to this
+  # check: a gradient measured in form A was taken in form B (measured, the
+  # strip in B showed the bottom fifth of A's run and nothing else), and one
+  # measured on an A4 page was taken on an A5 page, where it sat 246 pt above
+  # the paper and the rectangle came out flat. Only page-to-form was caught,
+  # which is the one pair the manual happened to name. [canvas id] answers
+  # the identity - a serial per push, the page index on a page.
   method PatternAnchor {name} {
     set anchors [my state patternAnchors]
-    dict set anchors $name [my canvas depth]
+    dict set anchors $name [my canvas id]
     my state patternAnchors $anchors
     return
+  }
+
+  # A stream in the caller's words, for that refusal.
+  method PatternWhere {id} {
+    lassign $id kind number
+    switch -- $kind {
+      page {return "page [expr {$number + 1}]"}
+      stream {return "the form or tile #$number"}
+    }
+    return "no content stream"
   }
 
   # The resource name behind a caller's pattern name, for whichever of the two
@@ -280,13 +307,13 @@ oo::define ::tclpdf::document::document {
     set anchors [my state patternAnchors]
     if {[dict exists $anchors $name]} {
       set was [dict get $anchors $name]
-      set now [my canvas depth]
-      if {$was != $now} {
-        set there [expr {$was ? "a form or a pattern" : "the page"}]
-        set here [expr {$now ? "a form or a pattern" : "the page"}]
+      set now [my canvas id]
+      if {$was ne $now} {
+        set there [my PatternWhere $was]
+        set here [my PatternWhere $now]
         return -code error -errorcode [list TCLPDF PATTERN SPACE $name] \
-            "tclpdf: pattern \"$name\" was placed on $there and\
-            cannot be used on $here - a pattern belongs to the space of the\
+            "tclpdf: pattern \"$name\" was placed in $there and\
+            cannot be used in $here - a pattern belongs to the space of the\
             stream that carries it (ISO 32000-2, 8.7.2), and the two cannot be\
             converted into each other because a form may be placed more than\
             once; define the pattern where it is used, or pass -matrix to say\
@@ -305,4 +332,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pattern 1.6
+package provide tclpdf::pattern 1.7

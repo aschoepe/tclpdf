@@ -612,14 +612,37 @@ oo::define ::tclpdf::document::document {
 
   # The stream seam. Called by the writer for every stream, after the
   # filters, and with "metadata" for the /Metadata stream.
+  #
+  # For "metadata" the answer is a PAIR - the bytes and the entries the
+  # stream dictionary needs - because the two belong together and only this
+  # method knows which of the two cases it is. See the seam in
+  # writer.tcl [StreamBody].
   method EncryptStream {data {which {}}} {
     set current [my state encrypt]
     # /EncryptMetadata false leaves exactly this one stream readable, so that
     # a cataloguing system can index a document it cannot open (7.6.2). The
     # decision is recorded in the encryption dictionary AND in the /Perms
     # block, so the two cannot drift apart.
-    if {$which eq "metadata" && ![dict get $current metadata]} {
-      return $data
+    #
+    # And it is recorded a third time, at the stream: 7.6.6 - "A PDF
+    # processor shall provide a standard security handler crypt filter named
+    # Identity ... to allow specific streams, such as document metadata, to
+    # be unencrypted in an otherwise encrypted document. The stream's
+    # DecodeParms entry shall contain a crypt filter decode parameters
+    # dictionary whose Name entry specifies the particular crypt filter" -
+    # and the example there writes both, the /Encrypt entry and the two
+    # stream entries. A reader that goes by the dictionary alone (qpdf) and
+    # one that goes by the stream alone (poppler, and with it Evince, Okular
+    # and every pdftotext pipeline) then agree; with only one of the two,
+    # measured 2026-08-26, "pdfinfo -upw pw -meta" returned the packet run
+    # through AES.
+    if {$which eq "metadata"} {
+      if {![dict get $current metadata]} {
+        return [list $data \
+            {Filter /Crypt DecodeParms {<< /Name /Identity >>}}]
+      }
+      return [list [::tclpdf::encrypt cipher \
+          [dict get $current key] $data] {}]
     }
     return [::tclpdf::encrypt cipher [dict get $current key] $data]
   }
@@ -654,4 +677,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::encrypt 1.2
+package provide tclpdf::encrypt 1.3

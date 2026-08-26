@@ -10,7 +10,7 @@ description: >
 
 This skill ships **with the tclpdf source**, so that anyone who fetches the package has a checked reference for writing their own PDFs. Checked literally: `check.tcl` beside this file runs every snippet on your machine against your copy of the package - see the end of this page.
 
-Every call the manual describes has a working snippet in `reference/`. **Copy the snippet, then adapt** - do not write a tclpdf call from memory of jsPDF, ReportLab, FPDF or pdf4tcl: the option names, the coordinate origin, the unit of `-size` and the refusals differ, and the same handful of mistakes come back every time (the trap list below).
+Every call the manual describes has a working snippet in `reference/`. **Copy the snippet, then adapt** - do not write a tclpdf call from memory of another PDF library.
 
 ## The one setup every snippet assumes
 
@@ -26,6 +26,7 @@ set ttfBold  [file join $assets fonts DejaVuSans-Bold.ttf]
 set otf      [file join $assets fonts NimbusSans-Regular.otf]   ;# an OpenType/CFF face
 set type1    [file join $assets fonts NimbusSans-Regular.t1]    ;# with its .afm beside it
 set variable [file join $assets fonts Roboto-Variable.ttf]      ;# a variable font
+set jpTtf    [file join $assets fonts NotoSansJP-Regular.ttf]   ;# a face with vhea/vmtx and the "vert" feature, for vertical writing
 set jpeg     [file join $assets images photo.jpg]
 set png      [file join $assets images logo.png]
 set tiff     [file join $assets images scan.tiff]         ;# any TIFF
@@ -56,18 +57,18 @@ set out      /path/to/out
 | file | covers |
 | --- | --- |
 | `reference/01-document.md` | new/configure/cget, page add/size/box/typeArea, coords/distance/extent, page content, write/writeChannel, events on/off, reservation |
-| `reference/02-fonts.md` | font state, the standard 14, embed TTF/OTF/Type 1/variable/bare CFF, `-fallback` chains, font info/names, missing glyphs, kerning/ligatures/combining marks, `-render` modes, RTL and the writing systems, Type 3 (`font define`/`font glyph`), colour fonts (`colorFont`, COLR/CPAL), **vertical writing and breaking it into columns**, **what a font refusal says** (the seven `TCLPDF FONT` classes) |
-| `reference/03-text.md` | one line, paragraph, indents, soft hyphens, `-hyphenate` and `::tclpdf::hyphenate`, -avoid, -height/-height max, -paginate, -columns/-balance, leader, textPath, pageNumbers, textWidth/Height/Lines, **the four anchors**, **`-fit`/`-shrinkLimit` for one line**, **`-emergencyHyphen`** |
-| `reference/04-graphics.md` | line/rect/circle/ellipse/arc/polygon/curve/path, clip, save/restore, opacity, blend, style, transform, colour forms, separations, Lab, icc embed |
-| `reference/05-images-svg.md` | image embed/place/draw/info/size, -data, JPEG/PNG/TIFF, `-dpi auto` and where a natural size comes from, TIFF strips and stacking, `-stencil`/`-mask`/`-invert`/`-interpolate`, svg file/-data/info/size, SVG text faces, barcodes through tzint, **`-fit` for a form and a drawing**, **what a drawing left out**, **`-interpolate` under PDF/A**, SVG clip-path and mask (clipping path and luminosity soft mask), preserveAspectRatio (ten alignments, meet/slice/none), font-weight, barcodes through tzint, -fit for a form and a drawing, -interpolate under PDF/A. |
-| `reference/06-tables.md` | head/body/foot, cell dictionaries, spans, columns (width/weight/align/decimal), styles/themes, rtl cells, -top/-bottom, repeated head, the four hooks, table layout |
-| `reference/07-patterns-forms.md` | shading axial/radial, stops/extend, shading pattern, pattern create (-step/-unit/-origin/-matrix), the stream rule, form create/place, layers (`layer create/draw/state/radio/configure`) |
-| `reference/08-navigation-metadata.md` | attach, link, bookmark, destination/OpenAction, catalogEntry, info, language, xmpSchema, xmpRaw, metadata, viewerPreferences, pageLabels, **the geometry annotations** (line/square/circle/polygon/polyline) and **a file clipped to the place it belongs** |
+| `reference/02-fonts.md` | font state, the standard 14, embed TTF/OTF/Type 1/variable/bare CFF, `-fallback` chains, font info/names, missing glyphs, kerning/ligatures/combining marks, `-render` modes, RTL and the writing systems, Type 3 (`font define`/`font glyph`), colour fonts (`colorFont`, COLR/CPAL), **vertical writing and breaking it into columns**, **what a font refusal says** (the seven reader classes of `TCLPDF FONT`) |
+| `reference/03-text.md` | one line, paragraph, indents (`-indent`/`-indentRight`/`-firstIndent`), soft hyphens, `-hyphenate` and `::tclpdf::hyphenate`, -avoid, -height/-height max, -paginate, -columns/-balance, leader, textPath, pageNumbers, textWidth/Height/Lines, **the four anchors**, **`-fit`/`-shrinkLimit` for one line**, **`-emergencyHyphen`** |
+| `reference/04-graphics.md` | line/rect/circle/ellipse/arc/polygon/curve/path, clip, save/restore, opacity, blend, style, transform, **overprint** (the command, `-overprint` on a shape and on `style`), colour forms, separations, **DeviceN**, Lab, icc embed |
+| `reference/05-images-svg.md` | image embed/place/draw/info/size, -data, `-inline`, JPEG/PNG/TIFF, `-dpi auto` and where a natural size comes from, TIFF strips and stacking, `-stencil`/`-mask`/`-invert`/`-interpolate`, svg file/-data/info/size, SVG text faces, SVG clip-path and mask (clipping path and luminosity soft mask), preserveAspectRatio (ten alignments, meet/slice/none), `font-weight`, barcodes through tzint, **`-fit` for a form and a drawing**, **what a drawing left out**, **`-interpolate` under PDF/A** |
+| `reference/06-tables.md` | head/body/foot, cell dictionaries, spans, columns (width/weight/align/decimal), styles/themes, rtl cells, -top/-bottom, repeated head and foot, the four hooks, table layout |
+| `reference/07-patterns-forms.md` | shading axial/radial, stops/extend, shading pattern, **shading function** (type 1), **the four mesh shadings** (`triangles`/`lattice`/`coons`/`tensor`), pattern create (-step/-unit/-origin/-matrix), the stream rule, form create/place, layers (`layer create/draw/state/radio/configure`, `-intent`) |
+| `reference/08-navigation-metadata.md` | attach, link, bookmark, destination/OpenAction, catalogEntry, info, language, xmpSchema, xmpRaw, metadata, viewerPreferences, pageLabels, **initialView**, **annot note/stamp**, **the four text markups** (`-text`/`-lines`/`-quads`), **the geometry annotations** (line/square/circle/polygon/polyline) and **a file clipped to the place it belongs** |
 | `reference/09-tagged-ua.md` | tagged, structure, -tag, headings, lists, Figure/-alt/-artifact, Link, -expansion, artifacts and their kinds, ua / ua state |
 | `reference/10-pdfa-zugferd.md` | pdfa (parts, conformance, profiles, the colour rule), pdfa extension, zugferd, Order-X, zugferd profile/state, the validator commands |
 | `reference/11-encryption-signatures.md` | encrypt (AES-256, permissions by name), sign (invisible and visible, one- and two-stage), sign state, `::tclpdf::sign digest`/`embed`/`add` |
-| `reference/12-import-update-info.md` | pdf import, `::tclpdf::pdf info`/`pages`/`fonts`/`metadata`, `::tclpdf::update open` and the incremental update, the `TCLPDF IMPORT` error class |
-| `reference/13-form-fields.md` | `field text`/`check`/`radio`/`button`/`listbox`/`combo`, `field default`/`list`/`state`, the appearance streams and `/NeedAppearances`, `/Opt` and what lands in `/V`, the reset action under PDF/A, form fields in a tagged document and under PDF/UA, and reading a finished form back with `pdf fields` |
+| `reference/12-import-update-info.md` | pdf import, `::tclpdf::pdf info`/`pages`/`fonts`/`metadata`, `::tclpdf::update open` and the incremental update, **the handle's own vocabulary** (`add`/`reserve`/`put`/`addStream`/`replaceStream`/`release`/`ref`/`body`/`id`), the `TCLPDF IMPORT` error class |
+| `reference/13-form-fields.md` | `field text`/`check`/`radio`/`button`/`listbox`/`combo`, `field default`/`list`/`names`/`state`, the appearance streams and `/NeedAppearances`, `/Opt` and what lands in `/V`, the reset action under PDF/A, form fields in a tagged document and under PDF/UA, and reading a finished form back with `pdf fields` |
 
 Each file is one runnable script top to bottom (`check.tcl` beside this file runs them all - see below).
 
@@ -100,7 +101,7 @@ Each file is one runnable script top to bottom (`check.tcl` beside this file run
 - **`page box media {} 0`** reads another page's box - the empty value comes before the index.
 - **`-leading {}`** restores the default; `-leading 0` is refused. **`-stretch`/`-size` 0** is refused.
 - **`metadata xml`** freezes the packet as given - after it, title and claims are no longer mirrored into XMP.
-- **`-fallback` is not a rescue from a missing glyph, it is a chain you name.** Every face in it has to be embedded already, and a character no face has is refused exactly as before. Not together with `-direction rtl`.
+- **`-fallback` is not a rescue from a missing glyph, it is a chain you name.** Every alias named has to be embedded already; a standard family may stand in the chain too. A character no face in it has is refused exactly as before. Not together with `-direction rtl`.
 - **A colour font cannot be embedded, it has to be redrawn.** A face whose pictures live in a `COLR`/`CPAL`, `CBDT`, `sbix` or `SVG` table leaves every outline empty, so `font embed` refuses it (`TCLPDF FONT OUTLINES`) rather than write a valid, extractable, blank document. `colorFont alias path -chars "..."` draws the `COLR` colour glyphs into a Type 3 font instead - version 0's flat layers and version 1's paint graph with its gradients and compositing alike - and gives back the alias; it holds **only** the characters asked for - not a letter, not a space - so it lives in a `-fallback` chain, and the chain is tried in order, which means the symbol face goes first.
 - **A Type 3 font has exactly the characters it was given** - the space among them. `font glyph ballot " " -width 400 -script {}` or a string with a blank in it is refused.
 - **`-render stroke` needs `-stroke`**, and `-strokeWidth` is a **line** width in the document unit, not a font weight: the same 0.3 mm at every size.
@@ -114,7 +115,7 @@ Each file is one runnable script top to bottom (`check.tcl` beside this file run
 - **`tagged 1` is all a form needs for accessibility** - one `Form` element per **widget**, made at the call that declares the field, so a field declared *before* `tagged 1` is outside the tree and `ua` names it. `-tooltip` is the `/TU` PDF/UA requires on every field, `-contents` describes one widget, and `-label {script}` needs a PDF 2.0 file.
 - **Under PDF/A a reset button is refused at the WRITE**, in either order of the two calls (`TCLPDF FIELD BUTTON PDFA`): the profile admits no action on a widget at all. So are a field whose page never came and one whose rectangle lies entirely beside its page - everything else about a field is refused at the call.
 - **`pdf import`, `::tclpdf::pdf ...` and `::tclpdf::update open` refuse an encrypted file** - `pdf info` is the one exception and answers it. `pdf import` does not judge what it takes over: a claim covers what this document draws.
-- **The message is not a contract, the `-errorcode` is.** `trap {TCLPDF IMPORT}` catches all sixteen refusals the PDF reader produces (`FILE`, `SYNTAX`, `DEPTH`, `XREF`, `OBJECT`, `OBJSTM`, `RECURSION`, `STREAM`, `FILTER`, `PREDICTOR`, `ROOT`, `PAGES`, `BOX`, `ROTATE`, `ENCRYPTED`, `SERIALIZE`) from all four commands at once, and a refusal registers nothing. Match a class, never a wording.
+- **The message is not a contract, the `-errorcode` is.** `trap {TCLPDF IMPORT}` catches every refusal of the reader - twenty-two classes today, `XFA` and `OPTION` among them - from every command that shares it, and a refusal registers nothing. Match a class, never a wording.
 - **`::tclpdf::pdf`, `::tclpdf::update` and `::tclpdf::sign` need their own `package require`** (`tclpdf::importInfo`, `tclpdf::update`, `tclpdf::sign`) - `package require tclpdf` alone does not bring them.
 
 ## Checking a document

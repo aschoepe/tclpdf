@@ -944,16 +944,22 @@ test document-strings-24.5 {no module builds a string past the document unrecord
   # and reached a reader as empty. The guard above could not see it, because it
   # only ever looked for pdfObj. So this table sweeps the serialiser too.
   set allowedSerialize {
-    import.tcl {5 {every one of them serialises a value whose strings have ALREADY been through
+    import.tcl {8 {every one of them serialises a value whose strings have ALREADY been through
         [ImportStrings], which is the document seam - so a second pass would encrypt the
-        ciphertext. Where that happens changed on 2026-08-25: the conversion moved into the
-        reservation loop, because it carries the last refusal of the whole import and used to
-        fall with every number handed out (a caught [pdf import] left the document unwritable).
-        Three of the five read the converted value back out of the strings dict, the fourth is
-        the page's own /Resources converted at import.tcl:178, and the fifth is ImportSerialize
-        itself, still the only road for anything that has not been converted yet. The one that
-        does NOT go through the seam is the /Name of an optional content configuration: in an
-        encrypted document it is already ciphertext and is re-emitted as it stands}}
+        ciphertext. Where that happens changed twice: on 2026-08-25 the conversion moved into
+        the reservation loop, because it carries the last refusal of the whole import and used
+        to fall with every number handed out (a caught [pdf import] left the document
+        unwritable); on 2026-08-26 it moved into a pass of its own over the WHOLE closure, for
+        the same reason one object further on. Five of the eight read the converted value back
+        out of the strings dict - three in the copying loop, two in [ImportShare], which writes
+        an object that is shared rather than copied - one is the page's own /Resources, one is
+        ImportSerialize itself, still the only road for anything not yet converted, and one is
+        [ImportShare]'s POOL KEY, which is built from the value as it was READ and never
+        reaches the file: an encrypted document spells the same string differently on every
+        call, and a key that changes on every look is a pool that never hits. The one that does
+        NOT go through the seam and IS written is the /Name of an optional content
+        configuration: in an encrypted document it is already ciphertext and is re-emitted as
+        it stands}}
     update.tcl {1 {an update session refuses an encrypted file at the reader, so no encryptor
         is ever running when this one writes}}
     sign.tcl {1 {same reason as the signature dictionary above: never in an encrypted document}}
@@ -1140,5 +1146,86 @@ test document-version-25.2 {the getter still answers without an argument} -body 
   set answer
 } -result 1.5
 
+
+test document-geometry-25.1 {-unit, -format and -orientation are read at the call} -body {
+  # All three used to be stored unread: "tclpdf new -unit furlong" was
+  # taken, the first page was added, and the refusal came out of [page
+  # size], [distance] or the write - several calls away from the word that
+  # was wrong (measured 2026-08-26). The Runde-2 pattern, "values passed
+  # through to the edge of the standard".
+  set result {}
+  foreach {option value class} {unit furlong UNIT format a99 FORMAT
+      orientation diagonal ORIENTATION} {
+    lappend result [catch {tclpdf new -$option $value} err] \
+        [lrange $::errorCode 0 2] [string match "*$value*" $err]
+    set doc [tclpdf new -unit mm]
+    lappend result [catch {$doc configure -$option $value}] \
+        [lrange $::errorCode 0 2] [$doc cget -$option] [catch {$doc page add}]
+    $doc destroy
+  }
+  set result
+} -result {1 {TCLPDF GEOMETRY UNIT} 1 1 {TCLPDF GEOMETRY UNIT} mm 0\
+    1 {TCLPDF GEOMETRY FORMAT} 1 1 {TCLPDF GEOMETRY FORMAT} a4 0\
+    1 {TCLPDF GEOMETRY ORIENTATION} 1 1 {TCLPDF GEOMETRY ORIENTATION} portrait 0}
+
+test document-geometry-25.2 {and what the three still take} -body {
+  # The check is [geometry pageSize] itself rather than a second copy of its
+  # three lists, so nothing that used to work stops: a size as two numbers,
+  # every unit, both spellings of each orientation.
+  set result {}
+  foreach args {{-unit pt} {-unit in -format {8.5 11}} {-format letter -orientation quer}
+      {-format {55 88} -orientation {}} {-unit cm -format b5 -orientation hoch}} {
+    set doc [tclpdf new {*}$args]
+    lappend result [catch {$doc page add}]
+    $doc destroy
+  }
+  set result
+} -result {0 0 0 0 0}
+
+test document-io-26.1 {a path that cannot be written is refused in this package's words} -body {
+  # writer.tcl opened the channel itself, so "write /nonexistent/dir/x.pdf"
+  # came back as "couldn't open ...: no such file or directory" with
+  # -errorcode {POSIX ENOENT ...} - against doc/tclpdf.md:1379, which
+  # promises every refusal begins with "tclpdf:". io.tcl had the answer and
+  # was only ever used for reading.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set result {}
+  foreach path [list [file join [::tclpdfTest::scratch nosuchdir] x.pdf] \
+      [file dirname [::tclpdfTest::scratch x.pdf]]] {
+    lappend result [catch {$doc write $path} err] [lrange $::errorCode 0 2] \
+        [string match {tclpdf:*} $err]
+  }
+  # And the same road the signing way takes.
+  lappend result [catch {::tclpdf::io write \
+      [file join [::tclpdfTest::scratch nosuchdir] y.pdf] abc}] \
+      [lrange $::errorCode 0 2]
+  set path [::tclpdfTest::scratch io-ok.pdf]
+  lappend result [catch {$doc write $path}]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 {TCLPDF IO DIRECTORY} 1 1 {TCLPDF IO DIRECTORY} 1 1 {TCLPDF IO DIRECTORY} 0}
+
+test document-destination-27.1 {destination -zoom is a magnification of 0 or more} -body {
+  # 12.3.2.2, Table 151: an /XYZ destination takes a number or null, and "a
+  # zoom value of 0 has the same meaning as a null value" - so 0 stands and
+  # below it there is nothing to mean. [link] and [initialView] had the
+  # check; the public [destination] did not, and wrote /XYZ 28.35 813.54 -1
+  # (measured 2026-08-26).
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set result {}
+  foreach zoom {-1 NaN Inf} {
+    lappend result [catch {$doc destination 0 -to {10 10} -zoom $zoom}] \
+        [lrange $::errorCode 0 2]
+  }
+  # What still stands: 0, a factor, and no -zoom at all.
+  lappend result [regexp {/XYZ [^ ]+ [^ ]+ 0\]} [$doc destination 0 -to {10 10} -zoom 0]] \
+      [regexp {/XYZ [^ ]+ [^ ]+ 1.5\]} [$doc destination 0 -to {10 10} -zoom 1.5]] \
+      [regexp {/XYZ [^ ]+ [^ ]+ null\]} [$doc destination 0 -to {10 10}]]
+  $doc destroy
+  set result
+} -result {1 {TCLPDF OPTION ZOOM} 1 {TCLPDF OPTION ZOOM} 1 {TCLPDF OPTION ZOOM} 1 1 1}
 
 cleanupTests

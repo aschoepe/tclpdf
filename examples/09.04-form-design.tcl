@@ -193,7 +193,8 @@ $doc text "12-19 April 2026" -at {190 31} -align right
 set y 50
 cardFont $doc {} 9.5 body
 set y [expr {[$doc text "Everything you can type into or tick below is a form\
-    field and not a drawing - thirty-five of them, in six kinds. Fill the card\
+    field and not a drawing - nineteen fields in six kinds, thirty-five widgets\
+    between them. Fill the card\
     in on screen, or print it and use a pen." \
     -at [list 20 $y] -width 170] + 6}]
 

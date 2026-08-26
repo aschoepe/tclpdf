@@ -21,8 +21,9 @@
 # narrow on purpose: add objects, write a second copy of an object the file
 # already has, and set trailer entries. Deletion is not offered at all.
 #
-# The example is self-contained: it writes the document it then continues,
-# into a scratch file, and the finished third revision becomes the output.
+# The example is self-contained: it writes revision 1 into the output file
+# itself and appends the other two to it in place, so the finished third
+# revision is what the file ends up carrying.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #

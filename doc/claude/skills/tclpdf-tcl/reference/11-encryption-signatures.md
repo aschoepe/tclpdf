@@ -127,9 +127,10 @@ $doc text "An approval signature over the whole file - invisible, because\
 # is generous rather than tight). -field is the partial field name.
 if {$signing} {
     $doc sign -signer [list refSigner $refDir] -reason "Approved" \
-        -location "Bochum" -date now -field Signature1
+        -location "Bochum" -contact "signing@example.org" -date now -field Signature1
 } else {
-    $doc sign -reason "Approved" -location "Bochum" -field Signature1
+    $doc sign -reason "Approved" -location "Bochum" \
+        -contact "signing@example.org" -field Signature1
 }
 $doc write [file join $out ref-11-signature.pdf]
 
@@ -176,7 +177,8 @@ if {$signing} {
     # byte already in it stays where it is, which is what keeps the first
     # signature valid. A second [$doc sign] on one document is refused instead.
     set added [::tclpdf::sign add [file join $out ref-11-twostage.pdf] \
-        -signer [list refSigner $refDir] -field Signature2 -reason "Countersigned"]
+        -signer [list refSigner $refDir] -field Signature2 -reason "Countersigned" \
+        -contact "office@example.org"]
     puts "appended: [dict get $added appended] bytes"
 } else {
     puts "no openssl here - the file keeps its reserved zeros"

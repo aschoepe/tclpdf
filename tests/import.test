@@ -2062,4 +2062,292 @@ test import-26.2 {the same in the page's own resources dictionary} -body {
         $written [regexp {LeftBehind} $bytes]
 } -result {1 1 0 0}
 
+# --- round 7: the closure is checked whole before a number is handed out -----
+
+# A page with TWO resources whose SECOND one refuses. Round 6 fixed the case
+# where the first one does, and the loop that came out of it reserved for
+# object k-1 before it asked about object k - so the objects before the
+# refusing one stayed reserved and never written, and the whole document died
+# at the next [write] although the caller had caught the refusal.
+proc ::tclpdfTest::twoResources {name second} {
+    set content "q /A Do /B Do Q"
+    set body "0 0 m"
+    return [::tclpdfTest::buildpdf $name [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 4 0 R\
+            /Resources << /XObject << /A 5 0 R /B 6 0 R >> >> >>" \
+        "<< /Length [string length $content] >>\nstream\n$content\nendstream" \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 1 1\]\
+            /Length [string length $body] >>\nstream\n$body\nendstream" \
+        $second]]
+}
+
+test import-20.1 {a refusal at the SECOND object of the closure leaves the document writable} -body {
+    set body "0 0 m"
+    set fixture [::tclpdfTest::twoResources import-midloop.pdf \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 1 1\] /Foo <4G>\
+            /Length [string length $body] >>\nstream\n$body\nendstream"]
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    set refused [catch {$doc pdf import bad $fixture} message]
+    set path [::tclpdfTest::scratch import-midloop-out.pdf]
+    set written [catch {$doc write $path} outcome]
+    $doc destroy
+    file delete $fixture $path
+    list $refused [string match {*not a hexadecimal digit*} $message] \
+        $written [string match {*reserved but never written*} $outcome]
+} -result {1 1 0 0}
+
+test import-20.2 {and the same for the filter check, which is the writer's} -body {
+    set deflated [zlib compress "0 0 m"]
+    set fixture [::tclpdfTest::twoResources import-midloop-filter.pdf \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 1 1\] /Filter /FlateDecode\
+            /Length [string length $deflated] >>\nstream\n$deflated\nendstream"]
+    # -version 1.1 disowns FlateDecode, -compress 0 so the document itself
+    # does not need it either.
+    set doc [tclpdf new -unit pt -format a4 -version 1.1 -compress 0]
+    $doc page add
+    set refused [catch {$doc pdf import bad $fixture} message]
+    set path [::tclpdfTest::scratch import-midloop-filter-out.pdf]
+    set written [catch {$doc write $path} outcome]
+    $doc destroy
+    file delete $fixture $path
+    list $refused [string match {*FlateDecode*} $message] \
+        $written [string match {*reserved but never written*} $outcome]
+} -result {1 1 0 0}
+
+# --- round 7: the same object twice is one object ---------------------------
+
+test import-21.1 {importing one file twice shares the objects it brings} -body {
+    # The font dictionary of the fixture is one object with a marker in it.
+    # Two imports used to copy it twice - and with it every embedded font
+    # program of a letterhead placed on both sides of a sheet.
+    set fixture [::tclpdfTest::handcrafted]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import eins $fixture
+    $doc pdf import zwei $fixture
+    set path [::tclpdfTest::scratch import-twice.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $fixture $path
+    # ONE font dictionary for two imports - and TWO optional content
+    # groups, deliberately: a group is a row in the reader's layer panel and
+    # a thing this document keeps a state for, not an interchangeable value
+    # (see [ImportShare]). The two form XObjects are two, since each alias
+    # is a placement of its own.
+    list [regexp -all {/BaseFont /Helvetica} $bytes] \
+        [regexp -all {/Type /OCG} $bytes] \
+        [regexp -all {/Subtype /Form} $bytes]
+} -result {1 2 2}
+
+test import-21.2 {an object on a reference cycle is copied, not shared} -body {
+    # /Prev and /Next point at each other: neither can be keyed by its
+    # content, because the content of each holds the number of the other.
+    # Two imports therefore bring two copies, and the file is still right.
+    set content "q Q"
+    set fixture [::tclpdfTest::buildpdf import-cycle.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R\
+            /Resources << /XObject << /A 4 0 R >> >> >>" \
+        "<< /Type /XObject /Subtype /Form /BBox \[0 0 1 1\] /Next 5 0 R\
+            /Length 5 >>\nstream\n0 0 m\nendstream" \
+        "<< /Type /Marker /Prev 4 0 R >>" \
+        "<< /Length [string length $content] >>\nstream\n$content\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import eins $fixture
+    $doc pdf import zwei $fixture
+    set path [::tclpdfTest::scratch import-cycle-out.pdf]
+    set written [catch {$doc write $path} outcome]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $fixture $path
+    list $written [regexp -all {/Type /Marker} $bytes]
+} -result {0 2}
+
+# --- round 7: the foreign page's own marked content -------------------------
+
+test import-22.1 {the STRUCTURE marks of a foreign page do not travel} -body {
+    set content "/P << /MCID 0 >> BDC BT /Helv 12 Tf 20 100 Td (one) Tj ET EMC\n\
+        /Artifact BMC 0 0 1 1 re f EMC\n\
+        /OC /oc1 BDC 5 5 m 9 9 l S EMC"
+    set fixture [::tclpdfTest::buildpdf import-marked.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /Font << /Helv 4 0 R >>\
+            /Properties << /oc1 6 0 R >> >> >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" \
+        "<< /Length [string length $content] >>\nstream\n$content\nendstream" \
+        "<< /Type /OCG /Name (Layer) >>"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import marked $fixture
+    $doc form place marked -at {0 0}
+    set path [::tclpdfTest::scratch import-marked-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $fixture $path
+    # The /MCID bracket is gone with its EMC. The artifact bracket and the
+    # optional-content bracket stay - the first says "this is not content",
+    # which is true inside a form XObject too, and the second is what
+    # SWITCHES the content inside it. Two brackets left, so two EMC. The
+    # drawing itself is untouched.
+    list [regexp -all {/MCID} $bytes] [regexp -all {/Artifact BMC} $bytes] \
+        [regexp -all {/OC /oc1 BDC} $bytes] [regexp -all {EMC} $bytes] \
+        [regexp {\(one\) Tj} $bytes] [regexp {5 5 m\s+9 9 l\s+S} $bytes]
+} -result {0 1 1 2 1 1}
+
+test import-22.2 {an operator name inside a string is text, not an operator} -body {
+    set content "BT /Helv 12 Tf 20 100 Td (EMC and BDC) Tj ET"
+    set fixture [::tclpdfTest::buildpdf import-marked-string.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /Font << /Helv 4 0 R >> >> >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" \
+        "<< /Length [string length $content] >>\nstream\n$content\nendstream"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import marked $fixture
+    set path [::tclpdfTest::scratch import-marked-string-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $fixture $path
+    regexp {\(EMC and BDC\) Tj} $bytes
+} -result 1
+
+# --- round 7: what the reader says about a file it will not open ------------
+
+test import-23.1 {bytes behind the last %%EOF are passed over (7.5.5)} -body {
+    set fixture [::tclpdfTest::handcrafted]
+    set channel [open $fixture ab]
+    puts $channel "% a line a mail gateway appended"
+    close $channel
+    set doc [tclpdf new -unit pt -format a4]
+    $doc page add
+    set code [catch {$doc pdf import late $fixture} message]
+    $doc destroy
+    file delete $fixture
+    list $code $message
+} -result {0 late}
+
+test import-23.2 {a file with no startxref at all is still refused, and says so} -body {
+    set path [::tclpdfTest::scratch import-nostartxref.pdf]
+    set channel [open $path wb]
+    puts -nonewline $channel "%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
+    close $channel
+    set outcome [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+    file delete $path
+    list [lindex $outcome 0] [lindex $outcome 1] [lindex $outcome 2]
+} -result {1 1 {TCLPDF IMPORT FILE}}
+
+test import-23.3 {a startxref one byte past the object names the cross reference} -body {
+    set fixture [::tclpdfTest::handcrafted]
+    set bytes [::tclpdfTest::readBytes $fixture]
+    regexp {startxref\n(\d+)\n} $bytes -> offset
+    set bytes [string map [list "startxref\n$offset\n" \
+        "startxref\n[expr {$offset + 1}]\n"] $bytes]
+    set path [::tclpdfTest::scratch import-startxref-plus.pdf]
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    set outcome [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+    set message [catch {::tclpdf::pdf info $path} said]
+    file delete $fixture $path
+    list [lindex $outcome 2] [string match {*cross-reference offset*} $said] \
+        [string match {*startxref*} $said]
+} -result {{TCLPDF IMPORT XREF} 1 1}
+
+test import-23.4 {a cross-reference table of nineteen-byte lines names the short entry} -body {
+    set fixture [::tclpdfTest::handcrafted]
+    set bytes [::tclpdfTest::readBytes $fixture]
+    # One space where the standard has two: every line one byte short.
+    set bytes [regsub -all "(\\d{10}) (\\d{5}) (\[nf\]) \n" $bytes "\\1 \\2 \\3\n"]
+    set path [::tclpdfTest::scratch import-xref19.pdf]
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    set outcome [::tclpdfTest::refuse {::tclpdf::pdf info $path}]
+    set code [catch {::tclpdf::pdf info $path} said]
+    file delete $fixture $path
+    list [lindex $outcome 2] [string match {*twenty bytes*} $said]
+} -result {{TCLPDF IMPORT XREF} 1}
+
+test import-24.1 {an unknown subcommand of the pdf ensemble carries a tclpdf code} -body {
+    ::tclpdfTest::refuse {::tclpdf::pdf nonsense /nowhere.pdf}
+} -result {1 1 {TCLPDF IMPORT SUBCOMMAND nonsense}}
+
+test import-22.3 {a named property list is resolved before the bracket is judged} -body {
+    # /P /pm1 BDC names an entry of the page's /Properties, and only the
+    # reader can say whether that entry holds an /MCID. Two named brackets,
+    # one with and one without.
+    set content "/P /pm1 BDC BT /Helv 12 Tf 20 100 Td (marked) Tj ET EMC\n\
+        /OC /oc1 BDC 5 5 m 9 9 l S EMC\n\
+        /Span /sp1 BDC 1 1 m 2 2 l S EMC"
+    set fixture [::tclpdfTest::buildpdf import-marked-named.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
+            /Resources << /Font << /Helv 4 0 R >>\
+            /Properties << /pm1 6 0 R /oc1 7 0 R /sp1 8 0 R >> >> >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" \
+        "<< /Length [string length $content] >>\nstream\n$content\nendstream" \
+        "<< /MCID 3 >>" \
+        "<< /Type /OCG /Name (Layer) >>" \
+        "<< /Lang (de) >>"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import marked $fixture
+    $doc form place marked -at {0 0}
+    set path [::tclpdfTest::scratch import-marked-named-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $fixture $path
+    list [regexp -all {/P /pm1 BDC} $bytes] [regexp -all {/OC /oc1 BDC} $bytes] \
+        [regexp -all {/Span /sp1 BDC} $bytes] [regexp -all {EMC} $bytes] \
+        [regexp {\(marked\) Tj} $bytes]
+} -result {0 1 1 2 1}
+
+test import-22.4 {an optional-content bracket still switches its layer after the import} -body {
+    # The bracket and the group have to arrive together: the /OC name in the
+    # stream, the /Properties entry it resolves through, and the group in
+    # /OCProperties, whose state travels as well.
+    set content "/OC /oc1 BDC 5 5 m 9 9 l S EMC\n\
+        /P << /MCID 0 >> BDC 1 1 m 2 2 l S EMC"
+    set fixture [::tclpdfTest::buildpdf import-marked-oc.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties\
+            << /OCGs \[5 0 R\] /D << /Name (D) /OFF \[5 0 R\] >> >> >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R\
+            /Resources << /Properties << /oc1 5 0 R >> >> >>" \
+        "<< /Length [string length $content] >>\nstream\n$content\nendstream" \
+        "<< /Type /OCG /Name (Layer) >>"]]
+    set doc [tclpdf new -unit pt -format a4 -compress 0]
+    $doc page add
+    $doc pdf import marked $fixture
+    $doc form place marked -at {0 0}
+    set path [::tclpdfTest::scratch import-marked-oc-out.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    set entry {}
+    regexp {/OCProperties (<<.*?/Name)} $bytes -> entry
+    file delete $fixture $path
+    # The bracket, its /Properties entry, the group in the catalogue, and
+    # the group still switched OFF as the foreign file had it.
+    list [regexp -all {/OC /oc1 BDC} $bytes] [regexp -all {/MCID} $bytes] \
+        [regexp {/Properties << /oc1 \d+ 0 R >>} $bytes] \
+        [regexp -all {/Type /OCG} $bytes] \
+        [expr {[llength [::tclpdf::layer::groupReferences $entry OFF]] == 1}]
+} -result {1 0 1 1 1}
+
 cleanupTests

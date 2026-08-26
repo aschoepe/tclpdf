@@ -249,7 +249,9 @@ echo "=== 5. Mustang over every document that carries a hybrid attachment ==="
 # The exit code, never the output: 0 is valid, anything else is not. On
 # failure the report's first <error> is quoted, because a bare "invalid"
 # sends whoever reads it straight back to re-running the tool by hand.
-# Measured 2026-08-18: about 1 s per document (0.9-1.2 s, JVM start included) - three documents, three seconds.
+# Measured 2026-08-18: about 1 s per document (0.9-1.2 s, JVM start included).
+# Four documents name a hybrid attachment as of 2026-08-26 - the two ZUGFeRD
+# invoices, the Order-X order and the signed invoice - so about four seconds.
 mustang=`ls tools/Mustang-CLI-*.jar 2>/dev/null | head -1`
 if test -n "$mustang" && have java; then
   found=0

@@ -152,6 +152,18 @@ namespace eval ::tclpdf::sign {
   namespace export {[a-z]*}
   namespace ensemble create
 
+  # An unknown subcommand of this ensemble, refused in this package's words.
+  # Tcl's own answer is "unknown or ambiguous subcommand \"foo\": must be
+  # add, digest, embed" with -errorcode {TCL LOOKUP SUBCOMMAND foo}, and
+  # doc/tclpdf.md:1723 names [tclpdf] itself as the ONE refusal that carries
+  # no TCLPDF code. A namespace ensemble of the package is not that
+  # exception - measured 2026-08-26 on all four of them.
+  #
+  # The subcommands are read off the ensemble rather than listed here, so
+  # the message cannot fall behind the module.
+  namespace ensemble configure ::tclpdf::sign -unknown \
+      ::tclpdf::sign::Unknown
+
   # The /ByteRange placeholder: four numbers of fixed width, written before
   # the real ones are known and overwritten with them afterwards. Ten digits
   # hold every offset up to 9 999 999 999 bytes, which is two orders of
@@ -262,6 +274,15 @@ namespace eval ::tclpdf::sign {
 # refusal for TWO waiting signatures stands in both cases: handing out bytes
 # to be signed from a dictionary that may not be the right one is the same
 # mistake, whoever asked.
+
+proc ::tclpdf::sign::Unknown {ensemble subcommand args} {
+  set known [lsort [lmap command \
+      [info commands ${ensemble}::\[a-z\]*] {namespace tail $command}]]
+  return -code error -errorcode [list TCLPDF SIGN SUBCOMMAND $subcommand] \
+      "tclpdf: unknown [namespace tail $ensemble] subcommand\
+      \"$subcommand\" - known are: [join $known {, }]"
+}
+
 proc ::tclpdf::sign::Locate {data what {unfilled 1}} {
   set positions {}
   set from 0
@@ -339,6 +360,44 @@ proc ::tclpdf::sign::Waiting {data located} {
   set at [dict get $located contents]
   return [regexp {^0+$} [string range $data [expr {$at + 1}] \
       [expr {$at + [dict get $located hexLength]}]]]
+}
+
+# Whether ANY signature in the file is still waiting for its value - the
+# question [add] asks before it appends, over the whole file rather than
+# over the newest signature, and without [Locate]: see the comment there.
+#
+# /ByteRange and /Contents next to each other, within the same room [Entry]
+# allows, and the /Contents nothing but zeros. /SubFilter is deliberately
+# NOT required here where [Entry] requires it: a foreign file may spell its
+# signature dictionary in any order, and the question is about the file, not
+# about whether tclpdf wrote it.
+proc ::tclpdf::sign::WaitingAnywhere {data} {
+  variable contentsDistance
+  set from 0
+  while {1} {
+    set at [string first /ByteRange $data $from]
+    if {$at < 0} {
+      return 0
+    }
+    set from [expr {$at + 10}]
+    set close [string first \] $data $at]
+    if {$close < 0} {
+      continue
+    }
+    set key [string first /Contents $data $close]
+    if {$key < 0 || $key - $close > $contentsDistance} {
+      continue
+    }
+    set open [string first < $data $key]
+    set to [string first > $data $open]
+    if {$open < 0 || $to < 0 || $to <= $open + 1} {
+      continue
+    }
+    if {[regexp {^0+$} [string range $data [expr {$open + 1}] \
+        [expr {$to - 1}]]]} {
+      return 1
+    }
+  }
 }
 
 # One occurrence of /ByteRange read as the signature dictionary around it, or
@@ -821,7 +880,11 @@ proc ::tclpdf::sign::Widget {field value page rect appearance} {
 # keeps the entry out altogether.
 proc ::tclpdf::sign::Moment {date signer version} {
   if {$date ne "now"} {
-    return $date
+    # In the spelling this file uses: the caller's date was held against the
+    # version the document had at the [sign] call, and the version can move
+    # afterwards - which for /M is not cosmetic, since the value has to fit
+    # the room the placeholder holds. See [respellDate] in document.tcl.
+    return [::tclpdf::document::respellDate $date $version]
   }
   if {$signer eq {}} {
     return [DatePlaceholder $version]
@@ -1140,13 +1203,6 @@ proc ::tclpdf::sign::add {path args} {
   set page [PageIndex [dict get $options page] "sign add"]
   set signer [Signer [dict get $options signer] "sign add"]
   set date [dict get $options date]
-  if {$date ni {{} now} && [::tclpdf::document::parseDate $date] eq {}} {
-    return -code error -errorcode [list TCLPDF SIGN ARGUMENT date] \
-        "tclpdf: sign add -date takes a PDF date such as\
-        D:20260818120000+02'00' (ISO 32000-1, 7.9.4), \"now\" - which is the\
-        default and means the moment of signing - or the empty string for no\
-        /M at all, not \"$date\""
-  }
   Claim $subFilter $date "sign add"
 
   set data [::tclpdf::io read $path]
@@ -1156,6 +1212,24 @@ proc ::tclpdf::sign::add {path args} {
   # because that is where the version of a file stands and an update cannot
   # move it.
   set version [HeaderVersion $data]
+
+  # The date, held against THAT version - the file's, not this process's.
+  # 7.9.4 spells the zone offset with a closing apostrophe in 1.x and
+  # without it in 2.0, and the value goes into /M as it was written; the
+  # package spells its own dates that way ([Moment] hands the version to
+  # [pdfObj date] and to [DatePlaceholder]), and a caller's has to match.
+  # Nothing has been written at this point - the file has only been read.
+  if {$date ni {{} now}
+      && [::tclpdf::document::parseDate $date $version] eq {}} {
+    return -code error -errorcode [list TCLPDF SIGN ARGUMENT date] \
+        "tclpdf: sign add -date takes a PDF date as a\
+        $version file spells it - [expr {[package vcompare $version 2.0] < 0
+            ? {D:20260818120000+02'00' (ISO 32000-1, 7.9.4)}
+            : {D:20260818120000+02'00 (ISO 32000-2, 7.9.4, which struck the\
+               closing apostrophe)}}] - or \"now\", which is the default and\
+        means the moment of signing, or the empty string for no /M at all.\
+        Not \"$date\""
+  }
   set floor [expr {$subFilter eq "/ETSI.CAdES.detached" ? "2.0" : "1.6"}]
   if {[package vcompare $version $floor] < 0} {
     return -code error -errorcode [list TCLPDF VERSION $floor] \
@@ -1181,8 +1255,14 @@ proc ::tclpdf::sign::add {path args} {
   # other, and a file that has been through qpdf has them in another. What
   # says it beyond doubt is the value itself - a /Contents that is nothing but
   # zeros between its delimiters is reserved room and not a signature, since
-  # every DER object begins with 0x30.
-  if {[regexp {/Contents[[:space:]]*<0+>} $data]} {
+  # every DER object begins with 0x30. And that /Contents has to belong to a
+  # SIGNATURE: the search used to be over the whole file for the two words
+  # alone, so an annotation whose /Contents was written as a hexadecimal
+  # string of zeros - "<00>", which tclpdf never writes and a foreign tool
+  # may - locked the file out of [add] for good. /ByteRange next to it is
+  # what tells a signature dictionary from anything else, and it is the one
+  # part of the dictionary no reordering moves away from /Contents.
+  if {[WaitingAnywhere $data]} {
     return -code error -errorcode [list TCLPDF SIGN STATE waiting] \
         "tclpdf: a signature of $what is still waiting for its\
         value - its /Contents holds nothing but the reserved zeros. Put the\
@@ -1208,6 +1288,24 @@ proc ::tclpdf::sign::add {path args} {
     # the signature already there took. So the default is the first free name
     # of the form the readers use, and a name that is taken is refused rather
     # than written twice.
+    # A certification that forbids every change. Asked before the first
+    # object is added to the session, so a refusal leaves the file as it was.
+    # Measured 2026-08-26: a file with /Perms << /DocMDP ... >> and
+    # /TransformParams << /P 1 >> took a second signature without a word -
+    # 33 506 bytes appended, two fields afterwards - and the result is a
+    # document whose certification signature every verifier reports as
+    # broken. /P 2 and /P 3 expressly allow a further signature (Table 257),
+    # so only 1 is refused.
+    set docMdp [DocMdp $upd $catalogValue]
+    if {$docMdp eq "1"} {
+      return -code error -errorcode [list TCLPDF SIGN STATE certified] \
+          "tclpdf: $what is certified with DocMDP /P 1, which\
+          permits no change to the document at all (ISO 32000-2, 12.8.4.2,\
+          Table 257) - appending a signature is a change, and it would\
+          invalidate the certification signature that is already there.\
+          /P 2 and /P 3 do allow a further signature"
+    }
+
     set taken [FieldNames $upd $catalogValue]
     set field [dict get $options field]
     if {$field eq {}} {
@@ -1369,6 +1467,57 @@ proc ::tclpdf::sign::PageNumber {upd catalogValue index what} {
           The signature widget sits on a page, and that page has to exist"
     }
   }
+}
+
+# The DocMDP permission a certified file states, or the empty string.
+#
+# 12.8.4.2: a certification signature is the one signature that says what may
+# be done to the document afterwards. The catalog carries /Perms /DocMDP
+# pointing at that signature dictionary, its /Reference holds a signature
+# reference dictionary with /TransformMethod /DocMDP, and its
+# /TransformParams /P is the number of Table 257: 1 - "No changes to the
+# document shall be permitted; any change to the document shall invalidate
+# the signature", 2 - filling in forms and signing is allowed, 3 - and
+# commenting as well. 2 is the default when /P is absent.
+#
+# Read defensively at every step: a file that has none of this is the normal
+# case and answers the empty string, and a /Perms written in a shape this
+# does not recognise is not an error either - the question being asked is
+# "does this file forbid what is about to be done", and only a clear yes
+# counts.
+proc ::tclpdf::sign::DocMdp {upd catalogValue} {
+  set perms [Direct $upd [::tclpdf::importRead::Get $catalogValue Perms]]
+  if {[lindex $perms 0] ne "d"} {
+    return {}
+  }
+  set entry [::tclpdf::importRead::Get $perms DocMDP]
+  if {$entry eq {}} {
+    return {}
+  }
+  set signature [Direct $upd $entry]
+  set references [Direct $upd [::tclpdf::importRead::Get $signature Reference]]
+  if {[lindex $references 0] ne "a"} {
+    return {}
+  }
+  foreach reference [lindex $references 1] {
+    set value [Direct $upd $reference]
+    if {[lindex [::tclpdf::importRead::Get $value TransformMethod] 1]
+        ne "DocMDP"} {
+      continue
+    }
+    set params [Direct $upd \
+        [::tclpdf::importRead::Get $value TransformParams]]
+    set p [::tclpdf::importRead::Get $params P]
+    if {$p eq {}} {
+      # Table 257: the default.
+      return 2
+    }
+    if {[lindex $p 0] eq "n" && [string is integer -strict [lindex $p 1]]} {
+      return [lindex $p 1]
+    }
+    return {}
+  }
+  return {}
 }
 
 # The /AcroForm of the file, as {value number}: the parsed dictionary and, for
@@ -1583,6 +1732,29 @@ oo::define ::tclpdf::document::document {
           field and cannot be empty - a field dictionary without a partial\
           field name is not a field at all, only a widget annotation (ISO\
           32000-2, 12.7.4.2)"
+    }
+    # And not a name a form field already has. The mirror of this check has
+    # stood in field.tcl ([FieldTaken], which asks [my state sign]) since it
+    # was written, and only that ONE order was ever refused: measured
+    # 2026-08-26, "field text Signature1 ...; sign -field Signature1" was
+    # taken, the document was written, and "qpdf --json --json-key=acroform"
+    # showed two entries with "fullname": "Signature1" in one /Fields array
+    # - a /Tx and a /Sig. 12.7.4.2 makes the fully qualified name the way a
+    # form is addressed, and two fields under one name resolve to one:
+    # whichever a reader finds first answers for both, and nothing reports
+    # the other. The manual (:988) promised both orders all along.
+    #
+    # [state fields] is READ, not reached into: the field module owns the
+    # dictionary and this is the same question it asks itself.
+    set fields [my state fields]
+    if {$fields ne {} && [dict exists $fields [dict get $options field]]} {
+      return -code error -errorcode \
+          [list TCLPDF SIGN FIELD [dict get $options field]] \
+          "tclpdf: this document already has a field named\
+          \"[dict get $options field]\" - both would stand in the same\
+          /Fields array under one partial field name (ISO 32000-2,\
+          12.7.4.2) and two fields under one name resolve to one. Pass\
+          \"sign -field\" another name, or rename the form field"
     }
     # "now" is the default and says what it means - the moment of signing,
     # which for a -signer is the write and for the two-stage way is the
@@ -1951,4 +2123,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.4
+package provide tclpdf::sign 1.5

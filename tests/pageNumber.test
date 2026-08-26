@@ -319,4 +319,23 @@ test pageNumber-8.1 {-total is a page count and -align one of the three, both re
   list $codes [regexp {\(Page 1 of 7\)} $bytes]
 } -result {{1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0} 1}
 
+# --- round 7 -----------------------------------------------------------------
+
+test pageNumber-r7-1.1 {"%%" is a literal per cent, and the only way to write one} -body {
+  # [string map] takes the first key that matches at a position and goes on
+  # BEHIND what it replaced, so "%%n" becomes "%" and then a plain "n". Until
+  # 2026-08-26 there was no escape at all: "%%n" came out as "%1", and a
+  # document that wanted to print "%n" on its pages could not.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc page add
+  $doc pageNumbers -at {20 280} -format "%n/%m %%n %% %%m"
+  set path [::tclpdfTest::scratch pageNumber-r7-11.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list [regexp {\(1/2 %n % %m\)} $bytes] [regexp {\(2/2 %n % %m\)} $bytes]
+} -result {1 1}
+
 cleanupTests

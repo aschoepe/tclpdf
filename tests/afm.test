@@ -13,6 +13,7 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf::afm
+source [file join [file dirname [info script]] helper.tcl]
 
 test afm-1.1 {all 14 standard fonts are present} -body {
   llength [::tclpdf::afm fonts]
@@ -192,9 +193,8 @@ test afm-5.1 {an exact font name passes through whatever style is in force} -bod
   list [::tclpdf::afm resolve Times-Italic bold] \
       [::tclpdf::afm resolve Times-Italic {bold italic}] \
       [::tclpdf::afm resolve helvetica-boldoblique italic] \
-      [::tclpdf::afm resolve Symbol bold] \
       [::tclpdf::afm resolve Times-Roman bold]
-} -result {Times-Italic Times-Italic Helvetica-BoldOblique Symbol Times-Roman}
+} -result {Times-Italic Times-Italic Helvetica-BoldOblique Times-Roman}
 
 test afm-5.2 {a name that is also a family still takes the style} -body {
   # Helvetica and Courier are font names AND family names; with a style they
@@ -225,5 +225,37 @@ test afm-6.1 {the byte order mark is dropped by a standard face, like the soft h
       [expr {[::tclpdf::afm stringWidth Helvetica "a\uFEFFb" 12] ==
              [::tclpdf::afm stringWidth Helvetica "ab" 12]}]
 } -result {{97 98} {97 98} 1}
+
+# -- round 7: a family with one cut ------------------------------------------
+
+test afm-7.1 {a style a family has not got is refused, Symbol included} -body {
+  # afm.tcl:109 was unreachable code and the manual described a refusal that
+  # did not happen: Symbol and ZapfDingbats hold ONE variant each, so they
+  # were let through the exact-name road and "-style bold" on them vanished
+  # without a word. There is no bold Symbol to fall back to.
+  list [::tclpdfTest::refusalCode {::tclpdf::afm resolve symbol bold}] \
+      [::tclpdfTest::refusalCode {::tclpdf::afm resolve Symbol bold}] \
+      [::tclpdfTest::refusalCode {::tclpdf::afm resolve zapfdingbats italic}]
+} -result {{TCLPDF AFM STYLE symbol} {TCLPDF AFM STYLE Symbol} {TCLPDF AFM STYLE zapfdingbats}}
+
+test afm-7.2 {and the face itself is still reached without one} -body {
+  # The control: nothing about the two faces changed, only what happens to a
+  # style they cannot serve. A style that names no cut at all - "regular" -
+  # is the empty style and passes.
+  list [::tclpdf::afm resolve symbol] [::tclpdf::afm resolve Symbol {}] \
+      [::tclpdf::afm resolve symbol regular] \
+      [::tclpdf::afm resolve zapfdingbats]
+} -result {Symbol Symbol Symbol ZapfDingbats}
+
+test afm-7.3 {the refusal reaches the document} -body {
+  # Where it is raised matters: [font -family symbol -style bold] resolves
+  # through this proc, so the call is refused rather than the text three
+  # lines later.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc font -family symbol -style bold}]
+  $doc destroy
+  set code
+} -result {TCLPDF AFM STYLE symbol}
 
 cleanupTests

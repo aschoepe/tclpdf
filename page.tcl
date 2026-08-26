@@ -101,20 +101,23 @@ oo::define ::tclpdf::document::document {
     # the page add's own option counted, and "tclpdf new -format {55 88}
     # -orientation quer" gave 55 by 88 although the manual promised the turn.
     set stated [expr {[my state orientationStated] ne {}}]
-    set rotate 0
-    foreach {option value} $args {
-      switch -- [string trimleft $option -] {
-        format {set format $value}
-        orientation {
-          set orientation $value
-          set stated 1
-        }
-        rotate {set rotate $value}
-        default {
-          return -code error -errorcode [list TCLPDF PAGE ARGUMENT $option] \
-              "tclpdf: unknown option \"$option\" for page add"
-        }
-      }
+    # Through [option parse] like every other call of the package: it counts
+    # the pairs, strips the dash and names the options that DO exist. Read by
+    # hand here until 2026-08-26, "page add -bogus 1" answered "unknown
+    # option" and left the caller to guess the three, and an odd number of
+    # words died inside [foreach] in Tcl's own words.
+    set parsed [::tclpdf::option parse {format {} orientation {} rotate {}} \
+        $args "page add"]
+    if {[dict get $parsed format] ne {}} {
+      set format [dict get $parsed format]
+    }
+    if {[dict get $parsed orientation] ne {}} {
+      set orientation [dict get $parsed orientation]
+      set stated 1
+    }
+    set rotate [dict get $parsed rotate]
+    if {$rotate eq {}} {
+      set rotate 0
     }
     # Asked BEFORE the modulo, which is where an empty string or a word used
     # to die as "can't use empty string as operand of %" - a raw Tcl error
@@ -130,6 +133,14 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF PAGE ROTATE multiple] \
           "tclpdf: page rotation must be a multiple of 90, got $rotate"
     }
+    # Table 30 gives /Rotate four values, and -90 and 450 are not among them
+    # even though both are multiples of 90: poppler works out what they mean
+    # and turns the page, a weaker reader is entitled to take the entry as it
+    # stands. Normalised rather than refused, because -90 and 450 say
+    # perfectly clearly what the caller wants and there is exactly one entry
+    # that says it. Tcl's % follows the sign of the DIVISOR, so one
+    # expression covers both directions: -90 % 360 is 270.
+    set rotate [expr {$rotate % 360}]
     if {[llength $format] == 2 && !$stated} {
       set orientation {}
     }
@@ -396,11 +407,24 @@ oo::define ::tclpdf::document::document {
   #   $doc canvas push $width $height    start collecting elsewhere
   #   $doc canvas pop                    -> the collected content
   #   $doc canvas height                 -> the height coords mirrors against
+  #   $doc canvas id                     -> WHICH stream is being written
   method canvas {subcommand args} {
     switch -- $subcommand {
       push {
         lassign $args width height
-        lappend tclpdfCanvas [dict create width $width height $height content {}]
+        # A serial per push, never reused in the life of the document. It is
+        # what [canvas id] hands out, and the reason it is a counter rather
+        # than the position in the stack: two sibling forms sit at the same
+        # depth and are two different streams, which is exactly the
+        # distinction a pattern anchor has to make (pattern.tcl).
+        set serial [my state canvasSerial]
+        if {$serial eq {}} {
+          set serial 0
+        }
+        incr serial
+        my state canvasSerial $serial
+        lappend tclpdfCanvas [dict create width $width height $height \
+            content {} serial $serial]
         return [llength $tclpdfCanvas]
       }
       pop {
@@ -421,10 +445,28 @@ oo::define ::tclpdf::document::document {
         }
         return [dict get [lindex $tclpdfCanvas end] height]
       }
+      id {
+        # WHICH content stream is being written, as a two-word identity:
+        # {stream <serial>} for a form XObject or a tile, {page <index>} for
+        # a page, and empty for a document that has neither yet.
+        #
+        # The DEPTH is not that identity, and taking it for one is what let a
+        # gradient measured in form A be used in form B (both at depth 1) and
+        # one measured on page 1 be used on a page of another size (both at
+        # depth 0) - pattern space belongs to the stream, not to a level of
+        # nesting (ISO 32000-2, 8.7.2).
+        if {[llength $tclpdfCanvas]} {
+          return [list stream [dict get [lindex $tclpdfCanvas end] serial]]
+        }
+        if {![llength $tclpdfPages]} {
+          return {}
+        }
+        return [list page $tclpdfCurrent]
+      }
       default {
         return -code error -errorcode [list TCLPDF PAGE CANVAS $subcommand] \
             "tclpdf: unknown canvas subcommand \"$subcommand\" -\
-            known are: push, pop, depth, height"
+            known are: push, pop, depth, height, id"
       }
     }
   }
@@ -565,8 +607,17 @@ oo::define ::tclpdf::document::document {
   # single conversion from the caller's unit into points, so a value refused
   # here has not yet reached a matrix, a mark or a "q". [pdfObj num] keeps its
   # own "number has no PDF representation" - that one stands at the moment of
-  # WRITING and also catches a perfectly finite value beyond the PDF real
-  # range, which is a different mistake and needs its own words.
+  # WRITING and is the last line of defence behind this one.
+  #
+  # AND THE RANGE IS ASKED HERE TOO, not only there. A PDF real carries about
+  # +/-3.403e38 (Annex C.2); a length past that was taken by every module and
+  # refused by [pdfObj num] while the operators of the call were already in
+  # the stream - measured 2026-08-26, "rect -at {1e39 20}" left its colour
+  # and its "q" behind, and in a tagged document its marked-content bracket.
+  # The gate every measurement passes is the place for it: one line here
+  # instead of one copy per topic (text.tcl carried such a copy, TextLength).
+  # The figure itself stands once, in [pdfObj fits], which [option number]
+  # asks.
   method distance {value {unit {}}} {
     if {$unit eq {}} {
       set unit [dict get $tclpdfOption unit]
@@ -580,7 +631,13 @@ oo::define ::tclpdf::document::document {
     if {[string is double -strict $value]} {
       ::tclpdf::option number $value "a length"
     }
-    return [::tclpdf::geometry toPoints $value $unit]
+    # Asked a second time of the CONVERTED value, because the unit is a
+    # factor: 2e38 mm is inside the range as the caller wrote it and 5.7e38
+    # points once it is one. The first call is the one that answers in the
+    # caller's own figure and catches NaN before the arithmetic; this one
+    # catches the band the factor opens up.
+    set points [::tclpdf::geometry toPoints $value $unit]
+    return [::tclpdf::option number $points "a length in points"]
   }
 
   # Several lengths at once - a {width height} pair, in points. Forms and
@@ -853,4 +910,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::page 1.5
+package provide tclpdf::page 1.6

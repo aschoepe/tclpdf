@@ -773,4 +773,149 @@ test markPos-9.9 {a table with no script at all still answers} -body {
         [::tclpdf::otLayout featureLookups $table {mark}]
 } -result {{} {} {} {}}
 
+# --- cursive attachment, the vertical half ----------------------------------
+#
+# Lookup type 3 says "the entry point of this letter sits on the exit point of
+# the one before it", and the vertical half of that is this module's: the
+# staircase a Nastaliq word descends in. The horizontal half is kernGpos.tcl's
+# and is tested there.
+#
+# Built by hand, and that is not a shortcut: of the 77 faces in
+# examples/assets/fonts exactly one carries a cursive lookup at all (Noto
+# Music), and the faces the feature exists for - Noto Nastaliq Urdu, Amiri -
+# are not in this tree. A reader that gets it wrong draws every letter on the
+# baseline and says nothing.
+
+# The subtable of a type 3 lookup, format 1, as in kern.test - RECORDS is a
+# list of {glyph entry exit}, each anchor an {x y} pair or {} for a NULL
+# offset.
+proc markCursive {records} {
+  set count [llength $records]
+  set at [expr {6 + $count * 4}]
+  set coverage [binary format Su* [list 1 $count \
+      {*}[lmap record $records {lindex $record 0}]]]
+  set anchors {}
+  set offsets {}
+  set next [expr {$at + [string length $coverage]}]
+  foreach record $records {
+    foreach anchor [lrange $record 1 2] {
+      if {![llength $anchor]} {
+        lappend offsets 0
+        continue
+      }
+      lappend offsets $next
+      lappend anchors [binary format Su* [list 1 {*}$anchor]]
+      incr next 6
+    }
+  }
+  return [binary format Su* [list 1 $at $count {*}$offsets]]$coverage[join \
+      $anchors {}]
+}
+
+# A prepared state out of a GPOS table built by hand. The face travels with it
+# because [offsets] walks back over the advances of a real font.
+proc markCursiveState {parsed flag records} {
+  set gpos [::tclpdfTest::gsubTable [list [::tclpdfTest::gsubLookup 3 $flag \
+      [list [markCursive $records]]]] [dict create curs 0]]
+  return [dict create font $parsed units [dict get $parsed unitsPerEm] \
+      marks {} lookups {} cursive [list [list {} \
+          [expr {($flag & 1) != 0}] \
+          [::tclpdf::otLayout entryExit $gpos [lindex \
+              [::tclpdf::otLayout typedSubtables $gpos \
+                  [::tclpdf::otLayout lookup $gpos 0] {3} 9] 0 1]]]]]
+}
+
+test markPos-10.1 {RIGHT_TO_LEFT hangs the EARLIER letter on the later one} \
+    -constraints haveDejaVu -body {
+  # The lookupFlag bit that means something only here (S. 161), and the one an
+  # Arabic face sets: a Nastaliq word descends from its last letter to its
+  # first, so it is the letter already written that has to be lifted. The
+  # entry of the second sits 300 above the baseline and the exit of the first
+  # at 100, so the first rises by 200.
+  set parsed [::tclpdf::sfnt read $::fontDejaVu]
+  ::tclpdf::markPos offsets [markCursiveState $parsed 0x0001 \
+      {{10 {} {50 100}} {11 {20 300} {}}}] {10 11 12}
+} -result {{0 200} {0 0} {0 0}}
+
+test markPos-10.2 {and without the bit the LATER letter is hung on the earlier} \
+    -constraints haveDejaVu -body {
+  # The control for 10.1 and the other half of HarfBuzz's [PositionCursive].
+  # Same anchors, other bit, other glyph moved - and the sign turns round with
+  # it, because it is now the second letter that has to come down to the
+  # first.
+  set parsed [::tclpdf::sfnt read $::fontDejaVu]
+  ::tclpdf::markPos offsets [markCursiveState $parsed 0x0000 \
+      {{10 {} {50 100}} {11 {20 300} {}}}] {10 11 12}
+} -result {{0 0} {0 -200} {0 0}}
+
+test markPos-10.3 {the lift accumulates along the chain} \
+    -constraints haveDejaVu -body {
+  # A staircase is a chain: each letter is hung on the next, so the first one
+  # carries the sum of every step behind it. Resolved BACKWARDS here, which is
+  # where this differs from the mark chain - a mark hangs on a glyph before it,
+  # a right-to-left cursive letter on the one after.
+  set parsed [::tclpdf::sfnt read $::fontDejaVu]
+  ::tclpdf::markPos offsets [markCursiveState $parsed 0x0001 \
+      {{10 {} {0 0}} {11 {0 100} {0 0}} {12 {0 100} {}}}] {10 11 12}
+} -result {{0 200} {0 100} {0 0}}
+
+test markPos-10.4 {a mark rides up with the letter the staircase lifted} \
+    -constraints haveDejaVu -body {
+  # The order of the two chains, and the reason the cursive one is resolved
+  # first: a mark adds the whole offset of the glyph it hangs on, cursive part
+  # and all. Without it a harakat stays on the baseline while its letter
+  # climbs, which is not what HarfBuzz does -
+  # [propagate_attachment_offsets] adds both.
+  #
+  # A real face for the mark half, because the anchors have to be the font's -
+  # "b" + U+0300 is the pair the head of markPos.tcl is measured on. The
+  # cursive lookup beside it is built here, since this face has none: the "b"
+  # exits at height 0 and the grave after it enters at 200, and the flag says
+  # the EARLIER of the two rises.
+  set parsed [::tclpdf::sfnt read $::fontDejaVu]
+  set state [::tclpdf::markPos build $parsed]
+  set cmap [dict get $parsed cmap]
+  set base [dict get $cmap [scan b %c]]
+  set mark [dict get $cmap [expr {0x0300}]]
+  set plain [::tclpdf::markPos offsets $state [list $base $mark]]
+  dict set state cursive [list [list {} 1 \
+      [dict create $base [list {} {0 0}] $mark [list {0 200} {}]]]]
+  set lifted [::tclpdf::markPos offsets $state [list $base $mark]]
+  list [lindex $plain 1 1] [lindex $lifted 0 1] \
+      [expr {[lindex $lifted 1 1] - [lindex $plain 1 1]}]
+} -result {373 200 200}
+
+test markPos-10.6 {the flag is read out of the lookup header, not assumed} \
+    -constraints haveDejaVu -body {
+  # 10.1 and 10.2 hand the bit in; this one goes through [build], which is the
+  # only place it is READ - out of the lookupFlag of the lookup that carries
+  # the subtable. A reader that assumed one of the two answers would move the
+  # wrong letter of every cursive pair, silently.
+  #
+  # A parsed face is a dict of bytes and a table directory; the GPOS built
+  # here is the only table this path reads besides GDEF, which is absent.
+  set answers {}
+  foreach flag {0x0001 0x0000} {
+    set gpos [::tclpdfTest::gsubTable [list [::tclpdfTest::gsubLookup 3 $flag \
+        [list [markCursive {{10 {} {50 100}} {11 {20 300} {}}}]]]] \
+        [dict create curs 0]]
+    set parsed [dict create bytes $gpos unitsPerEm 1000 \
+        tables [dict create GPOS [list 0 [string length $gpos]]]]
+    lappend answers [::tclpdf::markPos offsets \
+        [::tclpdf::markPos build $parsed] {10 11}]
+  }
+  set answers
+} -result {{{0 200} {0 0}} {{0 0} {0 -200}}}
+
+test markPos-10.5 {a face without a cursive lookup answers exactly as before} \
+    -constraints haveDejaVu -body {
+  # The control for the whole section: the cursive pass must cost nothing
+  # where there is nothing to do, and {0 0} has to stay an exact zero - this
+  # command promises it for a glyph nothing moved.
+  set parsed [::tclpdf::sfnt read $::fontDejaVu]
+  set state [::tclpdf::markPos build $parsed]
+  list [expr {[llength [dict get $state cursive]] == 0}] \
+      [::tclpdf::markPos cursive $state {10 11 12}]
+} -result {1 {{0 0} {0 0} {0 0}}}
+
 cleanupTests

@@ -18,6 +18,25 @@ PACKAGE_VERSION=$2
 shift 2
 PKG_TCL_SOURCES="$@"
 
+# The source archive is taken from the PARENT directory with ${PACKAGE_NAME} as
+# the one argument to tar, and every exclusion pattern below is anchored on that
+# literal name. A checkout under any other name therefore packs the wrong tree,
+# or none at all. Measured 2026-08-26 on a placeholder copy of this tree: named
+# tclpdf the source archive holds 522 entries and none of the excluded paths;
+# named tclpdf1.2 not one of the name-anchored patterns matches and 1436
+# excluded paths ride along, adobe-standard-14, the Mustang jar and languages/
+# among them. Refused here, where the name is still readable - after the two
+# cd's further down, $PWD is the parent and no longer says what the checkout
+# is called.
+checkout=`basename "$PWD"`
+if [ "${checkout}" != "${PACKAGE_NAME}" ]; then
+    echo "archive: this checkout is called '${checkout}', not '${PACKAGE_NAME}'" >&2
+    echo "archive: the source archive's exclusion patterns are anchored on that name," >&2
+    echo "archive: so building it here would put excluded files into the tarball" >&2
+    echo "archive: rename the checkout to '${PACKAGE_NAME}' and run make release again" >&2
+    exit 1
+fi
+
 # ignore AppleDouble files
 # macOS 10.4
 COPY_EXTENDED_ATTRIBUTES_DISABLE=1
@@ -91,11 +110,16 @@ fi
 # colon. "make publish" would have put all of it on a public server.
 #
 # examples/assets/xml used to be excluded for an unsettled licence. It is
-# settled: both invoices carry the FeRD terms as an XML comment in their own
-# head - measured, 5 708 bytes of the 7 929 in the MINIMUM file, 72 per cent of
-# it - and those terms grant free use including redistribution and commercial
+# settled, and for the three files there in two different ways. The two ZUGFeRD
+# INVOICES are FeRD samples and carry the FeRD terms as an XML comment in their
+# own head - measured, 5 708 bytes of the 7 929 in the MINIMUM file, 72 per cent
+# of it - and those terms grant free use including redistribution and commercial
 # products. The block is what makes them redistributable, so it MUST NOT be
-# stripped when the files are copied or trimmed.
+# stripped when the files are copied or trimmed. The third file,
+# order-x-comfort.xml, is not a sample at all: it was written here against the
+# Order-X 1.0 specification for example 05.13, carries no third-party terms and
+# travels under this package's own MIT licence. Its head says so, which is where
+# the next reader will look.
 #
 # examples/assets/fonts/adobe-standard-14 is the opposite case, and it is not
 # a licence that is unsettled but one that is settled the other way. Those are
@@ -129,6 +153,21 @@ fi
 # colour-font measurements, ignore-globbed so it never reaches a commit, and
 # excluded here so the source archive does not grow by a font whoever wants
 # that example downloads themselves (the example says where).
+
+# THE THREE FILES THAT MAY NOT TRAVEL, in one place, because the exclusion list
+# below reads as a list of paths and says nothing about why any of them is
+# there. Each one is reasoned out above, at its own paragraph:
+#
+#   examples/assets/fonts/adobe-standard-14      all rights reserved
+#   tools/Mustang-CLI-*.jar                      a separate Apache 2.0 project
+#   examples/assets/fonts/google/NotoColorEmoji-Regular.ttf   OFL, and 25 MB
+#
+# All three are in .fossil-settings/ignore-glob as well, so neither a commit nor
+# an archive picks them up - two guards for the same rule, and neither is
+# redundant: ignore-glob governs the repository, this file governs the tarball,
+# and the tar below takes the WORKING TREE rather than the repository.
+# examples/assets/languages is the fourth exclusion of the same kind, but a
+# directory rather than a file; its own README carries the terms per pattern.
 
 # The source archive is taken through a staging copy for the same reason: the
 # tree itself is not touched, the copy gets the modes, and the tar takes the

@@ -4,7 +4,7 @@
 #
 #   tclsh examples/01.02-colour.tcl ?output.pdf?
 #
-# A colour chart. Four ways to say what a colour is, and they are not
+# A colour chart. Seven ways to say what a colour is, and they are not
 # interchangeable:
 #
 #   DeviceGray    one component, for rules and shadows
@@ -22,6 +22,10 @@
 #   DeviceN       several named plates at once, with one function that says
 #                 what they look like together - the space high-fidelity
 #                 printing is done in (page 3)
+#
+# Two more pages follow the chart: the blend modes, once per call as -blend
+# and once as graphics state, and a page on why there are two colour models
+# at all.
 #
 # Colour names come from a table in the package, not from Tk. [winfo rgb]
 # would have done the job and would have pulled in a windowing system to

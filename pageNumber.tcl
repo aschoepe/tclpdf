@@ -125,7 +125,13 @@ oo::define ::tclpdf::document::document {
   # the resource name are not.
   method PageNumberOne {run page number total index} {
     set key tclpdf::pageNumber.$index.$page
-    set label [string map [list %n $number %m $total] [dict get $run format]]
+    # "%%" IS A LITERAL PER CENT, and it is what makes the other two
+    # escapable. [string map] takes the first key that matches at a position
+    # and goes on BEHIND what it replaced, so "%%n" becomes "%" and then a
+    # plain "n" - the only way a document can print "%n" on its pages.
+    # Without it there was none: "%%n" came out as "%1".
+    set label [string map [list %% % %n $number %m $total] \
+        [dict get $run format]]
 
     # Drawn onto a canvas the size of THIS page, so that [text] converts the
     # coordinates against the right height - a document may mix formats, and
@@ -204,4 +210,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.5
+package provide tclpdf::pageNumber 1.6

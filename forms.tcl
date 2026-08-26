@@ -39,10 +39,29 @@
 #   4. rlig   the required ligatures, a stage of their own. AFTER the forms,
 #             which is why a lam-alef rule matches the joined shapes rather
 #             than the isolated letters.
-#   5. liga, clig - the typographic ligatures, ONE stage of two features and
-#             the last one. Together, because HarfBuzz collects them into one
-#             stage and a stage applies its lookups in LOOKUP ORDER rather
-#             than feature by feature.
+#   5. rclt, calt - the contextual alternates. Another SHAPE of a letter
+#             rather than a ligature, so they run whatever -ligatures says.
+#   6. liga, clig - the typographic ligatures, and the last stage.
+#
+# WHETHER 5 AND 6 ARE ONE STAGE OR TWO DEPENDS ON THE FACE, which is the one
+# place in this file where the arrangement is not the same for every font.
+# HarfBuzz puts a pause after calt only when the face has NO rclt feature
+# (harfbuzz issue 3005): a face WITH rclt has rclt, calt, liga and clig in one
+# stage, applied in lookup order across all four, and a face without it has
+# calt alone in a stage and liga and clig in the next.
+#
+# MEASURED BLACK-BOX, the same way the rlig boundary below was. Small faces
+# in which liga, calt and rclt each substitute the same glyph, with the lookup
+# indices permuted, shaped by hb-shape --script=arab: with all three present
+# the LOWEST index wins in all six permutations (one stage); with rclt left
+# out, calt wins over liga even from the higher index (two stages); and adding
+# an rclt feature that touches a different glyph is enough to flip the answer
+# back. The Latin side has no such split - the default shaper never pauses
+# there - and liga.tcl reads all four as one stage for that reason.
+#
+# mset is not read. It is the Syriac closing feature and stands beside fin2,
+# fin3 and med2 in the table below: adding it without a Syriac line to measure
+# would be a guess.
 #
 # THAT LAST STAGE IS WHERE THE ARABIC LIGATURES CAME BACK. Until 2026-08-26 it
 # held rlig alone and liga.tcl read "liga" under the LATIN language system, so
@@ -51,6 +70,14 @@
 # lookups 17 and 19 of that script, and this package drew two joined letters.
 # Resolving the script here costs nothing, because this module knows the
 # script: it was asked for it.
+#
+# WHY rlig STANDS ALONE HERE AND NOT IN liga.tcl. The Arabic shaper pauses
+# after rlig and the default shaper does not, so the SAME five features are
+# one stage for a Latin run and three for a cursive one. Measured on the same
+# little faces both times: with rlig at lookup 1 and liga at lookup 0,
+# hb-shape --script=arab answers the rlig glyph and --script=latn the liga
+# one. That is why the stages are declared per module and only the machinery
+# that walks them is shared ([gsubApply stages], [gsubApply applyStages]).
 #
 # WHY rlig STANDS ALONE AND liga AND clig SHARE A STAGE, measured in HarfBuzz
 # 14.3.1 rather than taken from its documentation. The three sat in ONE stage
@@ -119,6 +146,7 @@
 
 package require Tcl 8.6.11-
 package require tclpdf::sfnt 1.0-
+package require tclpdf::otLayout 1.0-
 package require tclpdf::gdef 1.0-
 package require tclpdf::gsubApply 1.0-
 package require tclpdf::joining 1.0-
@@ -142,13 +170,15 @@ namespace eval ::tclpdf::forms {
     init init
   }
 
-  # The two closing stages, in the order they run: the required ligatures,
-  # then the typographic ones. liga and clig are read as ONE tag list, which
-  # is what makes the lookups of both features come back sorted by index -
-  # they share a stage, and a stage sorts. rlig is a stage of its own and
-  # sorts among its own lookups only. See the head of this file for the
-  # measurement.
+  # The closing stages, in the order they run: the required ligatures, then
+  # the contextual alternates, then the typographic ligatures - with the last
+  # two folded into ONE stage for a face that carries rclt. Each list is read
+  # as one tag list, which is what makes the lookups of its features come back
+  # sorted by index: they share a stage, and a stage sorts. rlig is a stage of
+  # its own and sorts among its own lookups only. See the head of this file
+  # for the measurements.
   variable closingRequired rlig
+  variable closingContextual {rclt calt}
   variable closingOptional {liga clig}
 
   # The features without which there is nothing to do. A face may carry ccmp
@@ -202,11 +232,42 @@ proc ::tclpdf::forms::build {font {script arab}} {
   # position instead of at its anchor. markPos.tcl places it now, font.tcl no
   # longer refuses such a face, and the filter went with the question: it had
   # no other reader.
+  lassign [Closing $gsub $gdef $order] closingOn closingOff
   return [dict create stages $stages \
       closingRequired [::tclpdf::gsubApply feature $gsub $closingRequired \
           $gdef $order] \
-      closingOptional [::tclpdf::gsubApply feature $gsub $closingOptional \
-          $gdef $order]]
+      closingOn $closingOn closingOff $closingOff]
+}
+
+# The stages after the required ligatures, in the two shapes -ligatures asks
+# for: {withLigatures withoutLigatures}, each a LIST of prepared stages.
+#
+# A list of stages rather than one, because how many there are is the face's
+# answer and not this module's - see the head of this file. Both shapes are
+# built here rather than at drawing time: [build] is what a face is asked once
+# for, and a face without calt, rclt or liga pays an empty list for it.
+proc ::tclpdf::forms::Closing {gsub gdef order} {
+  variable closingContextual
+  variable closingOptional
+  set indices {}
+  if {[::tclpdf::otLayout damaged {
+      set indices [::tclpdf::otLayout featureLookups $gsub rclt $order]}]} {
+    # A feature list that does not read is a face without rclt as far as the
+    # stage boundary goes; the tag is asked for again by [feature] below and
+    # answers the same way.
+    set indices {}
+  }
+  set contextual [::tclpdf::gsubApply feature $gsub $closingContextual \
+      $gdef $order]
+  if {[llength $indices]} {
+    # No pause after calt: one stage over all four tags, sorted by lookup
+    # index across them.
+    return [list [list [::tclpdf::gsubApply feature $gsub \
+        [concat $closingContextual $closingOptional] $gdef $order]] \
+        [list $contextual]]
+  }
+  return [list [list $contextual [::tclpdf::gsubApply feature $gsub \
+      $closingOptional $gdef $order]] [list $contextual]]
 }
 
 # Substitute the contextual forms into a glyph run.
@@ -222,10 +283,11 @@ proc ::tclpdf::forms::build {font {script arab}} {
 # glyphs that are no longer letters: a detached dot is not a character with a
 # joining type.
 # LIGATURES says whether the typographic ligatures of the face take part - the
-# -ligatures of the caller, and what the second closing stage is for. Off, the
+# -ligatures of the caller, and what the closing stages are for. Off, the
 # required ligatures still run, so the lam-alef of rlig stands whatever the
 # caller asked for: that one set as two letters is not a plainer setting of
-# the word, it is the wrong one. The forms a face puts in liga instead - in
+# the word, it is the wrong one. So do rclt and calt, which are contextual
+# ALTERNATES rather than ligatures. The forms a face puts in liga instead - in
 # DejaVu Sans the three that carry a hamza or a madda - do fall with the
 # switch, which is what HarfBuzz answers with --features=-liga,-clig.
 proc ::tclpdf::forms::apply {prepared run {ligatures 1}} {
@@ -247,15 +309,17 @@ proc ::tclpdf::forms::apply {prepared run {ligatures 1}} {
   }
   # The closing stages run over every position, whatever form it stands in -
   # a ligature is made of two letters that need not share one - so they take
-  # no mark. Two of them and in this order: the required ligatures are part of
-  # the shaping and always run, the typographic ones are the caller's option
-  # and run after them.
+  # no mark. The required ligatures are part of the shaping and always run;
+  # what follows them is the caller's option, and WHICH stages those are was
+  # settled for this face at [build] time.
   set marked [::tclpdf::gsubApply apply \
       [dict get $prepared closingRequired] $marked]
+  set closing closingOff
   if {$ligatures} {
-    set marked [::tclpdf::gsubApply apply \
-        [dict get $prepared closingOptional] $marked]
+    set closing closingOn
   }
+  set marked [::tclpdf::gsubApply applyStages [dict get $prepared $closing] \
+      $marked]
   # The form tags leave by the door they came in at: everything downstream -
   # widths, kerning, encoding - takes a run of {glyph codes}, and a third
   # element that means nothing to any of them would travel through the whole
@@ -267,4 +331,4 @@ proc ::tclpdf::forms::apply {prepared run {ligatures 1}} {
   return $result
 }
 
-package provide tclpdf::forms 1.3
+package provide tclpdf::forms 1.4

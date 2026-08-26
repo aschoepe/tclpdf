@@ -3642,4 +3642,119 @@ test image-place-24.2 {a small but writable placement is left alone} -body {
   regexp {0.02835 0 0 0.02835 [0-9.]+ [0-9.]+ cm} $stream
 } -result 1
 
+# An APP1 Exif segment carrying nothing but Orientation (tag 274, SHORT).
+# The header begins after "Exif\0\0": the directory at 8, its one entry at
+# 10, the end marker at 22.
+proc exifOrientationSegment {value} {
+  set tiff "II[binary format s 42][binary format i 8]"
+  append tiff [binary format s 1]
+  append tiff [binary format ssiss 274 3 1 $value 0]
+  append tiff [binary format i 0]
+  set body "Exif\x00\x00$tiff"
+  return "\xff\xe1[binary format S [expr {[string length $body] + 2}]]$body"
+}
+
+test image-orientation-25.1 {Exif Orientation is read and reported, never applied} -body {
+  # ROUND 7 GREY ZONE, and decision 8 of the round: the JPEG road hands the
+  # compressed data on as it stands and decodes no pixels at all, so turning
+  # the picture is the caller's call - but the tag must not be passed over in
+  # silence the way it was until 2026-08-26, while TIFF refuses the same tag
+  # outright. [image info] answers it for every format, 1 meaning "the rows
+  # are as they are stored"; the placement is unchanged.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set answers {}
+  foreach value {1 6 8} {
+    $doc image embed pic$value -data [resolutionJpeg \
+        [list [exifOrientationSegment $value]]]
+    lappend answers [dict get [$doc image info pic$value] orientation]
+  }
+  # A file that says nothing, and one that says something out of range
+  # (Exif 2.32, 4.6.4: 1..8) - both answer 1.
+  $doc image embed plain -data [resolutionJpeg {}]
+  $doc image embed silly -data [resolutionJpeg \
+      [list [exifOrientationSegment 9]]]
+  lappend answers [dict get [$doc image info plain] orientation] \
+      [dict get [$doc image info silly] orientation]
+  # And nothing of it reaches the placement: no extra cm, no /Rotate.
+  $doc image place pic6 -at {10 10} -width 20
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $answers [regexp -all {cm} $stream]
+} -result {{1 6 8 1 1} 1}
+
+test image-orientation-25.2 {the resolution is still read beside it} -body {
+  # The two tags live in the same directory and the walk hands back both;
+  # splitting the reader in two is where one of them would go missing.
+  set doc [tclpdf new -unit mm]
+  $doc image embed both -data [resolutionJpeg \
+      [list [exifSegment II 300 300 2] [exifOrientationSegment 3]]]
+  set info [$doc image info both]
+  $doc destroy
+  list [dict get $info resolution] [format %.2f [dict get $info xResolution]] \
+      [dict get $info orientation]
+} -result {Exif 300.00 1}
+
+test image-palette-26.1 {a PNG palette of more than 256 entries is refused} -body {
+  # ROUND 7 HARDENING. PNG 11.2.3 gives a palette 256 entries at most and
+  # ISO 32000-2, 8.6.6.3 gives hival 255. The count came out of the chunk
+  # length unchecked, so a 300-entry palette was written as "/Indexed
+  # /DeviceRGB 299 <...>" and pdfimages answered "Bad Indexed color space
+  # (invalid indexHigh value, was 299 using 255 to try to recover)" - a
+  # reader repairing a file this package produced. imageTiff has enforced the
+  # same limit for a TIFF palette all along.
+  set big [::tclpdfTest::png 1 1 8 3 "\x00\x00" {} [string repeat "\xff\x00\x00" 300]]
+  set full [::tclpdfTest::png 1 1 8 3 "\x00\x00" {} [string repeat "\xff\x00\x00" 256]]
+  set code [catch {::tclpdf::imagePng parse $big} message]
+  list $code [string match {*300 entries*at most 256*} $message] \
+      [catch {::tclpdf::imagePng parse $full}]
+} -result {1 1 0}
+
+test image-place-24.3 {a -dpi that rounds to nothing is refused} -body {
+  # ROUND 7 HARDENING. A resolution DIVIDES, so a small -dpi is not a small
+  # placement but an enormous one: "-dpi 1e-9" placed a photograph
+  # 46 080 000 000 000 points wide (measured 2026-08-26) - past what Annex
+  # C.2 gives an integer and past what any reader lays out. NaN and Inf pass
+  # [string is double] and compare false against "<= 0", so they walked past
+  # the check beside it as well.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc image embed pic -data [inlinePng]
+  set codes {}
+  foreach value {1e-9 0.000001 NaN Inf} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+        $doc image place pic -at {20 20} -dpi $value}] 0 3]
+  }
+  # A resolution the file can hold is left alone, however coarse.
+  set fine [catch {$doc image place pic -at {20 20} -dpi 0.01}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lsort -unique $codes] $fine [regexp -all {Do} $stream]
+} -result {{{TCLPDF GEOMETRY ARGUMENT dpi}} 0 1}
+
+test image-icc-17.15 {both refusals about a profile carry the same class} -body {
+  # ROUND 7, G7. An unreadable profile answered TCLPDF IMAGE FORMAT and a
+  # profile that does not describe the picture's space TCLPDF IMAGE ICC -
+  # two classes for one topic, so "trap {TCLPDF IMAGE ICC}" saw only half of
+  # it, and FORMAT says "this is not a picture this package reads" while the
+  # message beside it says the opposite ("the picture itself is fine").
+  set junk [string repeat \x00 200]
+  set cmyk [::tclpdf::io read $cmykIcc]
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set codes {}
+  lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc image embed broken -data [::tclpdfTest::pngWithIccp \
+          [::tclpdfTest::png 1 1 8 2 "\x00\x20\x40\x60"] $junk]}] 0 2]
+  lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc image embed wrong -data [::tclpdfTest::pngWithIccp \
+          [::tclpdfTest::png 1 1 8 2 "\x00\x20\x40\x60"] $cmyk]}] 0 2]
+  # And -icc 0, which both messages point at, still works.
+  lappend codes [catch {$doc image embed fine -icc 0 -data \
+      [::tclpdfTest::pngWithIccp \
+          [::tclpdfTest::png 1 1 8 2 "\x00\x20\x40\x60"] $junk]}]
+  $doc destroy
+  set codes
+} -result {{TCLPDF IMAGE ICC} {TCLPDF IMAGE ICC} 0}
+
 cleanupTests

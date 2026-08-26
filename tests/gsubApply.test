@@ -481,14 +481,21 @@ test gsubApply-6.2 {a tag restricts a contextual lookup to the positions carryin
       [gsubGlyphs [::tclpdf::gsubApply apply $lookup $mixed fina]]
 } -result {{99 11} {10 11}}
 
-test gsubApply-6.3 {a nested lookup filters by ITS OWN flag} -body {
-  # Each lookup carries its own lookupFlag and matches under it - the
-  # contextual one for the sequence, the one a record names for the
-  # substitution. Here the nested single substitution ignores marks and the
-  # glyph it is applied to is one, so nothing happens; the same lookup without
-  # the flag substitutes. A reader that filtered the sequence and then applied
-  # the record unconditionally would substitute a glyph the nested lookup was
-  # told to leave alone.
+test gsubApply-6.3 {a nested lookup does NOT filter the glyph the record names} -body {
+  # THE POSITION A RECORD POINTS AT IS EXEMPT from the named lookup's own
+  # lookupFlag, and that is HarfBuzz rather than the specification: 6.3.6 says
+  # nothing about it, and [recurse] reaches [Lookup::dispatch] without going
+  # through [check_glyph_property] - the flag is asked in [apply_forward] on
+  # the outermost level and in [match_input] for the FURTHER components of a
+  # sequence, never for the first.
+  #
+  # Here the nested single substitution ignores marks and the glyph it is
+  # applied to IS one, so a reader that asked the flag would leave it alone.
+  # Both readings look plausible; the one that agrees with every other shaper
+  # is this one. Measured on a face built for it ($S/syn/t2.ttf of the review
+  # round): a chaining rule without a flag names a single substitution with
+  # IgnoreMarks at the position of a mark, hb-shape substitutes, and this
+  # package did not.
   #
   # Built by hand, as in 6.1: [prepare] reads the flag out of the lookup
   # header and answers it out of GDEF, and a table assembled here has none.
@@ -501,6 +508,214 @@ test gsubApply-6.3 {a nested lookup filters by ITS OWN flag} -body {
       [dict create 1 [list {} [list [list single [dict create 10 99]]]]]]
   list [gsubGlyphs [::tclpdf::gsubApply apply $ignoring $run]] \
       [gsubGlyphs [::tclpdf::gsubApply apply $plain $run]]
-} -result {{10 11} {99 11}}
+} -result {{99 11} {99 11}}
+
+test gsubApply-6.4 {the exemption reaches ONE position, not the whole lookup} -body {
+  # The counter-test for 6.3, and the reason the exemption is a position
+  # rather than "drop the filter". A ligature named by a record starts at the
+  # record's position - exempt - and its FURTHER components are matched under
+  # the nested lookup's own flag, which is what lets it reach across a mark.
+  #
+  # The nested ligature ignores marks and is applied at a mark: it starts
+  # there (exempt), skips the mark at position 2 while matching, and takes
+  # glyph 11 as its second component. Without the exemption nothing happens at
+  # all; with the filter dropped instead, the mark at position 2 would be
+  # matched as the second component and the rule would fail.
+  set ruleset [::tclpdf::gsubContext read [gsubContext 10 {5} {{1 1}}] 5 0]
+  set filter [list [dict create 5 3 6 3] 3 {}]
+  set ligature [dict create 5 [list [list 99 11]]]
+  set lookup [gsubLookupOf chain $ruleset {} \
+      [dict create 1 [list $filter [list [list ligature $ligature]]]]]
+  set run [list [list 10 {97}] [list 5 {769}] [list 6 {768}] [list 11 {98}]]
+  gsubGlyphs [::tclpdf::gsubApply apply $lookup $run]
+} -result {10 99 6}
+
+# --- the work budget --------------------------------------------------------
+
+test gsubApply-7.1 {a lookup that names itself twice ends instead of branching} -body {
+  # THE DEPTH ALONE DOES NOT BOUND A CYCLE. A rule with TWO records that both
+  # name the lookup they stand in branches twice at every level, so 64 levels
+  # are 2^64 calls: measured before this, a face built that way was still
+  # shaping one four-letter word after 25 seconds and had to be killed, while
+  # the same face with ONE self-reference answered in well under a second.
+  #
+  # The budget is HarfBuzz's - 64 recursions per glyph plus 16 384 - and so is
+  # what happens when it is spent: the recursion that finds it empty does
+  # nothing and the run comes back as far as it got. Here nothing has been
+  # substituted at all, because the rule substitutes only through itself.
+  #
+  # The rule matches glyph 10 and names ITS OWN lookup index twice.
+  set ruleset [::tclpdf::gsubContext read \
+      [gsubContext 10 {11} {{0 0} {0 0}}] 5 0]
+  set lookups [list [::tclpdfTest::gsubLookup 5 0 \
+      [list [gsubContext 10 {11} {{0 0} {0 0}}]]]]
+  set run [list [list 10 {97}] [list 11 {98}]]
+  set started [clock milliseconds]
+  set answer [gsubGlyphs [gsubRun $lookups $run]]
+  list $answer [expr {[clock milliseconds] - $started < 20000}]
+} -result {{10 11} 1}
+
+test gsubApply-7.2 {the budget is fresh for every call} -body {
+  # A purse per [apply], not per process: a document that sets ten thousand
+  # words must not run out of it on the last one. The same cyclic face twice
+  # over, and the second answer is the first.
+  set lookups [list [::tclpdfTest::gsubLookup 5 0 \
+      [list [gsubContext 10 {11} {{0 0} {0 0}}]]]]
+  set run [list [list 10 {97}] [list 11 {98}]]
+  list [gsubGlyphs [gsubRun $lookups $run]] [gsubGlyphs [gsubRun $lookups $run]]
+} -result {{10 11} {10 11}}
+
+test gsubApply-7.3 {an ordinary nested substitution is nowhere near the budget} -body {
+  # The control for 7.1: the budget must not be so tight that a real face
+  # feels it. One record, one substitution, and the answer is the substituted
+  # run rather than the untouched one.
+  set lookups [list \
+      [::tclpdfTest::gsubLookup 5 0 [list [gsubContext 10 {11} {{0 1}}]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [gsubSingle 10 99]]]]
+  gsubGlyphs [gsubRun $lookups [list [list 10 {97}] [list 11 {98}]]]
+} -result {99 11}
+
+# --- lookup type 8, reverse chaining single substitution --------------------
+#
+# The one lookup that runs BACKWARDS. No face in this tree carries one -
+# measured over all 77 in examples/assets/fonts and the six Arabic faces
+# fetched to measure this work against - so every case here is built by hand,
+# and that is exactly why it went unread until 2026-08-26: a face that had one
+# was shaped differently from every other reader and said nothing about it.
+
+# Lookup type 8, format 1: backtrack and lookahead as coverage arrays, ONE
+# input coverage in the header, and the substitutes beside it.
+#
+#   0  format 1 | 2  coverage at (6 + 2*back + 2*ahead + 2 + 2*count)
+#   4  backtrack count, then one offset each
+#      lookahead count, then one offset each
+#      glyph count, then one substitute each
+#      the coverage tables themselves
+proc gsubReverse {glyphs substitutes backtrack lookahead} {
+  # Ten fixed bytes - format, coverage offset, and the three counts - plus one
+  # offset per backtrack and lookahead coverage and one word per substitute.
+  set at [expr {10 + 2 * [llength $backtrack] + 2 * [llength $lookahead] \
+      + 2 * [llength $substitutes]}]
+  set bodies {}
+  set offsets {}
+  foreach set [concat [list $glyphs] $backtrack $lookahead] {
+    lappend offsets $at
+    set body [binary format Su* [list 1 [llength $set] {*}$set]]
+    lappend bodies $body
+    incr at [string length $body]
+  }
+  # The input coverage is the first body; its offset goes into field 2.
+  set head [list 1 [lindex $offsets 0] [llength $backtrack] \
+      {*}[lrange $offsets 1 [llength $backtrack]] [llength $lookahead] \
+      {*}[lrange $offsets [expr {1 + [llength $backtrack]}] end] \
+      [llength $substitutes] {*}$substitutes]
+  return [binary format Su* $head][join $bodies {}]
+}
+
+test gsubApply-8.1 {a reverse rule substitutes by coverage index} -body {
+  # No records: the substitute stands beside the coverage, one per index.
+  set lookups [list [::tclpdfTest::gsubLookup 8 0 \
+      [list [gsubReverse {10 12} {99 98} {} {{11}}]]]]
+  list [gsubGlyphs [gsubRun $lookups [list [list 10 {97}] [list 11 {98}]]]] \
+      [gsubGlyphs [gsubRun $lookups [list [list 12 {99}] [list 11 {98}]]]] \
+      [gsubGlyphs [gsubRun $lookups [list [list 10 {97}] [list 13 {98}]]]]
+} -result {{99 11} {98 11} {10 13}}
+
+test gsubApply-8.2 {and it runs from the END of the run backwards} -body {
+  # THE DIRECTION IS THE POINT OF THE TYPE. The rule turns glyph 10 into 99
+  # when a 99 FOLLOWS it, so a run of three 10s resolves from the right: the
+  # last one has no 99 after it and stays, and neither of the others would
+  # ever match if the walk went forwards. Read forwards this face substitutes
+  # nothing at all; read backwards it substitutes the first two.
+  #
+  # The lookahead is the substituted glyph, which is what a face uses to
+  # resolve a chain of forms from the end of a word.
+  set lookups [list [::tclpdfTest::gsubLookup 8 0 \
+      [list [gsubReverse {10} {99} {} {{99 11}}]]]]
+  gsubGlyphs [gsubRun $lookups \
+      [list [list 10 {97}] [list 10 {97}] [list 10 {97}] [list 11 {98}]]]
+} -result {99 99 99 11}
+
+test gsubApply-8.3 {the backtrack of a reverse rule runs backwards too} -body {
+  # Its array is in the order "nearest the input first", the reverse of text
+  # order - the same rule types 5 and 6 obey and the one a first test never
+  # catches, because a one-glyph backtrack behaves identically either way.
+  set lookups [list [::tclpdfTest::gsubLookup 8 0 \
+      [list [gsubReverse {12} {99} {{11} {10}} {}]]]]
+  list [gsubGlyphs [gsubRun $lookups \
+          [list [list 10 {97}] [list 11 {98}] [list 12 {99}]]]] \
+      [gsubGlyphs [gsubRun $lookups \
+          [list [list 11 {98}] [list 10 {97}] [list 12 {99}]]]]
+} -result {{10 11 99} {11 10 12}}
+
+test gsubApply-8.4 {a reverse lookup keeps the characters of its glyph} -body {
+  # One glyph for one, so the ToUnicode side is the plain case - and it still
+  # has to be said, because [Entry] is what carries it and a substitution
+  # written without it would lose the letter.
+  set lookups [list [::tclpdfTest::gsubLookup 8 0 \
+      [list [gsubReverse {10} {99} {} {}]]]]
+  gsubRun $lookups [list [list 10 {97} fina]]
+} -result {{99 97 fina}}
+
+test gsubApply-8.5 {an extension lookup around a reverse one is unwrapped} -body {
+  # Type 7 wraps any type, and a large GSUB puts every lookup behind one.
+  set lookups [list [::tclpdfTest::gsubLookup 7 0 \
+      [list [::tclpdfTest::gsubExtension 8 [gsubReverse {10} {99} {} {}]]]]]
+  gsubGlyphs [gsubRun $lookups [list [list 10 {97}]]]
+} -result 99
+
+# --- the stages ------------------------------------------------------------
+#
+# A STAGE is what HarfBuzz pauses between, and it is not the same as a
+# feature: several features may share one - their lookups are then applied in
+# LOOKUP ORDER across all of them - and one may stand alone, which beats any
+# lookup index. Where the boundaries lie is the caller's measurement
+# (liga.tcl for a Latin run, forms.tcl for a cursive one); what is here is the
+# walk, which both of them use.
+
+test gsubApply-9.1 {stages are applied in the order they were given} -body {
+  # THE ORDER IS THE WHOLE POINT: the first stage turns 10 into 99 and the
+  # second turns 99 into 98, so the two together answer 98 and the two the
+  # other way round answer 99 - the second stage's rule no longer matches
+  # anything once it has run first. A walk that reversed them, or applied them
+  # as one, would be silent about it.
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 1 0 [list [gsubSingle 10 99]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [gsubSingle 99 98]]]] \
+      [dict create ss01 0 ss02 1]]
+  set run [list [list 10 {97}]]
+  set forward [::tclpdf::gsubApply stages $gsub {ss01 ss02} {}]
+  set backward [::tclpdf::gsubApply stages $gsub {ss02 ss01} {}]
+  list [gsubGlyphs [::tclpdf::gsubApply applyStages $forward $run]] \
+      [gsubGlyphs [::tclpdf::gsubApply applyStages $backward $run]]
+} -result {98 99}
+
+test gsubApply-9.2 {and the tags of ONE stage are sorted by lookup index} -body {
+  # Within a stage a feature does not own its lookups: the specification
+  # applies them in the order of the LOOKUP LIST, not feature by feature
+  # (S. 217). Both tags in one stage therefore answer the LOWER index whatever
+  # order the tags are written in - which is what makes a stage a stage.
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 1 0 [list [gsubSingle 10 99]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [gsubSingle 10 98]]]] \
+      [dict create ss01 0 ss02 1]]
+  set run [list [list 10 {97}]]
+  list [gsubGlyphs [::tclpdf::gsubApply applyStages \
+          [::tclpdf::gsubApply stages $gsub {{ss01 ss02}} {}] $run]] \
+      [gsubGlyphs [::tclpdf::gsubApply applyStages \
+          [::tclpdf::gsubApply stages $gsub {{ss02 ss01}} {}] $run]]
+} -result {99 99}
+
+test gsubApply-9.3 {a stage the face has nothing for costs nothing} -body {
+  # Which is what lets a caller declare the stages it reads once and hand the
+  # same list to every face.
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 1 0 [list [gsubSingle 10 99]]]] \
+      [dict create ss01 0]]
+  set prepared [::tclpdf::gsubApply stages $gsub {zzzz ss01 zzzz} {}]
+  list [llength $prepared] [lmap stage $prepared {llength $stage}] \
+      [gsubGlyphs [::tclpdf::gsubApply applyStages $prepared \
+          [list [list 10 {97}]]]]
+} -result {3 {0 1 0} 99}
 
 cleanupTests

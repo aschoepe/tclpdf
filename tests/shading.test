@@ -539,7 +539,7 @@ test shading-7.1 {a gradient placed on the page is refused inside a form} -body 
     }
   } message
   $doc destroy
-  list [string match {*was placed on the page*a form or a pattern*} $message] \
+  list [string match {*was placed in page 1*the form or tile*} $message] \
       [string match {*8.7.2*} $message] \
       [string match {*define the pattern where it is used*-matrix*} $message]
 } -result {1 1 1}
@@ -554,7 +554,7 @@ test shading-7.2 {a gradient placed inside a form is refused on the page} -body 
   set message {}
   catch {$doc rect -at {10 10} -size {40 30} -fill {pattern g}} message
   $doc destroy
-  string match {*was placed on a form or a pattern*on the page*} $message
+  string match {*was placed in the form or tile*in page 1*} $message
 } -result 1
 
 test shading-7.3 {with -matrix the caller has said which space, and it passes} -body {
@@ -605,7 +605,7 @@ test shading-7.5 {a tile anchored with -origin is watched like a gradient} -body
     }
   } message
   $doc destroy
-  string match {*pattern "hatch" was placed on the page*} $message
+  string match {*pattern "hatch" was placed in page 1*} $message
 } -result 1
 
 test shading-7.6 {a gradient of its own inside the form is the way that works} -body {
@@ -684,7 +684,7 @@ test shading-8.3 {a text with a page gradient inside a form is refused like a sh
     }
   } message
   $doc destroy
-  string match {*pattern "g" was placed on the page*} $message
+  string match {*pattern "g" was placed in page 1*} $message
 } -result 1
 
 # --- the version floor is pinned by what reached the file, not by refusals ----
@@ -697,8 +697,14 @@ test shading-9.1 {a coordinate beyond the PDF real range is refused, nothing beh
       -colors {red blue}} message]
   set size [catch {$doc shading axial -at {0 0} -size {1e300 10} \
       -colors {red blue}} second]
-  set result [list $at [string match {*no PDF representation*} $message] \
-      $size [string match {*no PDF representation*} $second] \
+  # The refusal moved FORWARD on 2026-08-26: [distance] and [option point]
+  # now ask what a PDF real holds (Annex C.2) at the call, so the message is
+  # the gate's ("beyond what a PDF number holds") rather than [pdfObj num]'s
+  # ("no PDF representation") at the moment of writing. What the test is
+  # about is unchanged and is the last two answers: nothing written, no
+  # object made.
+  set result [list $at [string match {*beyond what a PDF number holds*} $message] \
+      $size [string match {*beyond what a PDF number holds*} $second] \
       [expr {[[$doc writer] count] - $objects}] [::tclpdfTest::content $doc]]
   $doc destroy
   set result
@@ -1520,5 +1526,143 @@ test shading-size-51.5 {an ordinary box still paints exactly what it painted} -b
   $doc destroy
   list [regexp -all {re W n} $stream] [regexp -all {sh} $stream]
 } -result {2 2}
+
+test shading-7.9 {the anchor is the stream, not the depth: two sibling forms} -body {
+  # ROUND 7, VERSTOSS 2. Pattern space belongs to the DEFAULT SPACE OF THE
+  # STREAM that carries the pattern (ISO 32000-2, 8.7.2), and the anchor
+  # remembered the canvas DEPTH - so two forms, both at depth 1, were one
+  # stream to this check. Measured 2026-08-26: a gradient measured in a
+  # 100 by 100 mm form and used in a 100 by 20 mm one showed the bottom
+  # fifth of its run and nothing else, accepted without a word.
+  set doc [tclpdf new -unit mm -format {100 100} -compress 0]
+  $doc page add
+  $doc form create A -size {100 100} -script {
+    $doc shading pattern sky axial -at {0 0} -size {100 100} \
+        -colors {red blue} -angle 90
+    $doc rect -at {0 0} -size {100 100} -fill {pattern sky}
+  }
+  set code [::tclpdfTest::refusalCode {
+      $doc form create B -size {100 20} -script {
+          $doc rect -at {0 0} -size {100 20} -fill {pattern sky}}}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF PATTERN SPACE sky}
+
+test shading-7.10 {two pages are two streams as well} -body {
+  # The same defect the other way round, and the one that hides best: on
+  # pages of the SAME size the gradient happens to land right, which is why
+  # no example and no test caught it. On an A5 page after an A4 one the
+  # gradient sat 246 pt above the paper and the rectangle came out flat blue.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add -format a4
+  $doc shading pattern sky axial -at {20 20} -size {100 50} -colors {red blue}
+  $doc rect -at {20 20} -size {100 50} -fill {pattern sky}
+  $doc page add -format a5
+  set code [::tclpdfTest::refusalCode {
+      $doc rect -at {20 20} -size {100 50} -fill {pattern sky}}]
+  catch {$doc rect -at {20 20} -size {100 50} -fill {pattern sky}} message
+  # And the same page it was measured on still takes it.
+  set doc2 [tclpdf new -unit mm -compress 0]
+  $doc2 page add -format a4
+  $doc2 shading pattern sky axial -at {20 20} -size {100 50} -colors {red blue}
+  set again [catch {$doc2 rect -at {20 20} -size {100 50} -fill {pattern sky}}]
+  $doc destroy
+  $doc2 destroy
+  list [lrange $code 0 3] [string match {*placed in page 1*page 2*} $message] $again
+} -result {{TCLPDF PATTERN SPACE sky} 1 0}
+
+test shading-7.11 {a tiling pattern with -origin is anchored the same way} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add -format a4
+  $doc pattern create hatch -size {5 5} -origin {20 20} -script {
+    $doc line -from {0 5} -to {5 0}
+  }
+  $doc page add -format a5
+  set code [::tclpdfTest::refusalCode {
+      $doc rect -at {20 20} -size {50 50} -fill {pattern hatch}}]
+  $doc destroy
+  lrange $code 0 3
+} -result {TCLPDF PATTERN SPACE hatch}
+
+test shading-15.1 {-angle under a -matrix is read raw, like -from and -to} -body {
+  # ROUND 7, VERSTOSS 4. With a -matrix the coordinates are NOT put through
+  # [coords] - they are already in the space the matrix maps from, and the
+  # matrix carries the scaling and the y flip. The -from/-to branch and the
+  # radial branch asked; the -angle branch, which derives its end points from
+  # -at and -size, did not. Measured 2026-08-26 on a 200 pt page with
+  # "-matrix {2 0 0 2 0 0} -at {0 0} -size {50 50} -angle 90": /Coords came
+  # out [25 400 25 300] - the page height mirrored in and then doubled - and
+  # the rectangle filled flat blue, while -from/-to gave red to blue.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading pattern byAngle axial -at {0 0} -size {50 50} \
+      -colors {red blue} -angle 90 -matrix {2 0 0 2 0 0}
+  $doc shading pattern byPoints axial -from {25 50} -to {25 0} \
+      -at {0 0} -size {50 50} -colors {red blue} -matrix {2 0 0 2 0 0}
+  set body [::tclpdfTest::objects $doc Coords]
+  $doc destroy
+  # The two roads to the same gradient have to give the same numbers.
+  regexp -all -inline {/Coords \[[^]]*\]} $body
+} -result {{/Coords [25 50 25 0]} {/Coords [25 50 25 0]}}
+
+test shading-15.2 {without a matrix the same call still goes through coords} -body {
+  # The counter-measurement: nothing about the mapped road changes, and it is
+  # the road every example takes. The page is 200 pt high, the rectangle sits
+  # at the top left, so the end points are mirrored into PDF space.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc shading pattern byAngle axial -at {0 0} -size {50 50} \
+      -colors {red blue} -angle 90
+  set body [::tclpdfTest::objects $doc Coords]
+  $doc destroy
+  regexp -all -inline {/Coords \[[^]]*\]} $body
+} -result {{/Coords [25 200 25 150]}}
+
+test shading-15.3 {axial and radial each take their own options} -body {
+  # ROUND 7 GREY ZONE. One list of defaults served both, so "-center" on an
+  # axial gradient and "-angle" on a radial one were accepted and written
+  # nowhere - the option was read by the branch of [ShadingCoords] that does
+  # not run, and the caller got the gradient the rectangle implies. The mesh
+  # kinds have kept their own lists from the beginning; these two now do too.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  set codes {}
+  foreach call {
+    {shading axial -at {0 0} -size {50 50} -colors {red blue} -center {10 10}}
+    {shading axial -at {0 0} -size {50 50} -colors {red blue} -radius 10}
+    {shading axial -at {0 0} -size {50 50} -colors {red blue} -innerRadius 2}
+    {shading axial -at {0 0} -size {50 50} -colors {red blue} -focus {5 5}}
+    {shading radial -at {0 0} -size {50 50} -colors {red blue} -angle 45}
+    {shading radial -at {0 0} -size {50 50} -colors {red blue} -from {1 1}}
+    {shading radial -at {0 0} -size {50 50} -colors {red blue} -to {1 1}}
+  } {
+    lappend codes [lrange [::tclpdfTest::refusalCode {$doc {*}$call}] 0 2]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lsort -unique $codes] $stream
+} -result {{{TCLPDF OPTION UNKNOWN}} {}}
+
+test shading-15.4 {-angle and -stops are numbers something can be measured in} -body {
+  # Against doc "Numbers". [ShadingOptions] checked every other option and
+  # -angle went straight into a trigonometric function: measured 2026-08-26,
+  # "abc" answered "can't use non-numeric string as operand of \"*\"" and
+  # NaN {ARITH DOMAIN}. A refused shading writes no object - the page object
+  # is the only one there is afterwards.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  set codes {}
+  foreach angle {abc NaN Inf {}} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+        $doc shading axial -at {10 10} -size {50 20} -colors {red blue} \
+            -angle $angle}] 0 3]
+  }
+  lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc shading axial -at {10 10} -size {50 20} -colors {red blue} \
+          -stops {0 NaN}}] 0 3]
+  set objects [[$doc writer] count]
+  $doc destroy
+  list [lsort -unique $codes] $objects
+} -result {{{TCLPDF SHADING ARGUMENT angle} {TCLPDF SHADING STOPS range}} 1}
 
 cleanupTests

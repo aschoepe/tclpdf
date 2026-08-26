@@ -95,6 +95,23 @@ oo::class create ::tclpdf::document::document {
   # the writer took it.
   method configure {args} {
     set options [::tclpdf::option parse $tclpdfOption $args "the document"]
+    # -unit, -format and -orientation, at the call that gave them. All three
+    # used to be stored unread and looked at for the first time by [page
+    # add] - measured 2026-08-26, "tclpdf new -unit furlong" was taken, the
+    # first page was added, and the refusal came out of [page size] or the
+    # write, several calls away from the word that was wrong. The check is
+    # [geometry pageSize] itself rather than a second copy of its three
+    # lists: it reads all three values, refuses each with the code the
+    # manual's table already names (GEOMETRY UNIT, FORMAT, ORIENTATION), and
+    # its answer is thrown away - nothing here wants a page size.
+    #
+    # The unit is asked FIRST and on its own, because [pageSize] reads it
+    # only for a size given as two numbers - a named format is millimetres
+    # by definition - so "-unit furlong -format a4" would go through it
+    # untouched.
+    ::tclpdf::geometry toPoints 0 [dict get $options unit]
+    ::tclpdf::geometry pageSize [dict get $options format] \
+        [dict get $options orientation] [dict get $options unit]
     # The type area is checked here, once, rather than by everyone who reads
     # it: two or four numbers in the document unit, none of them negative.
     # Whether it leaves room on a page is a question of the page, and is
@@ -250,6 +267,14 @@ oo::class create ::tclpdf::document::document {
   # -zoom.
   method destination {page args} {
     set options [::tclpdf::option parse {to {} zoom {}} $args "destination"]
+    # The magnification, held here as [link] and [initialView] hold theirs -
+    # one check for the three callers, see [::tclpdf::option zoom]. This one
+    # had none: measured 2026-08-26, "destination 0 -to {10 10} -zoom -1"
+    # wrote /XYZ 28.35 811 -1, and 12.3.2.2 knows a number or null and no
+    # negative factor.
+    if {[dict get $options zoom] ne {}} {
+      ::tclpdf::option zoom [dict get $options zoom] -zoom "destination"
+    }
     return [my Destination $page \
         [dict get $options to] [dict get $options zoom] {}]
   }
@@ -429,6 +454,8 @@ oo::class create ::tclpdf::document::document {
       StructureExpansion structure
       StructureBegin structure
       StructureEnd structure
+      StructureResume structure
+      structureResume structure
       StructureWrite structureWrite
       structureReport structureReport
       structureDestination structureDest
@@ -754,15 +781,36 @@ oo::class create ::tclpdf::document::document {
 
   # A PDF date (7.9.4) - "D:YYYYMMDDHHmmSSOHH'mm'", every part after the
   # year optional, as [pdfObj date] writes it and as 2.0 spells it without
-  # the closing apostrophe - checked before it is stored anywhere. Two
-  # callers: [info] for CreationDate and ModDate, and [attach] for -date;
-  # each names itself, so the message says which call was wrong.
-  method CheckDate {value what} {
-    if {[::tclpdf::document::parseDate $value] eq {}} {
+  # the closing apostrophe - checked before it is stored anywhere. Three
+  # callers: [info] for CreationDate and ModDate, [attach] for -date and
+  # [sign] for -date; each names itself, so the message says which call was
+  # wrong.
+  #
+  # Held against THIS DOCUMENT'S version, which is what decides between the
+  # two spellings - see [parseDate]. The version is taken as an argument as
+  # well, so that [configure -version] can ask the same question about the
+  # dates already stored before it moves the file.
+  method CheckDate {value what {version {}}} {
+    if {$version eq {}} {
+      set version [$tclpdfWriter version]
+    }
+    if {[::tclpdf::document::parseDate $value $version] eq {}} {
+      # The two spellings are told apart in the message, because a date that
+      # parses as the OTHER version is the one mistake a caller cannot see
+      # by looking at it.
+      set hint ""
+      if {[::tclpdf::document::parseDate $value] ne {}} {
+        set hint [expr {[package vcompare $version 2.0] < 0
+            ? " - this one is the ISO 32000-2 spelling, and a $version file\
+                wants the closing apostrophe (D:20260818120000+02'00')"
+            : " - this one is the ISO 32000-1 spelling, and a $version file\
+                is written without the closing apostrophe\
+                (D:20260818120000+02'00)"}]
+      }
       return -code error -errorcode [list TCLPDF DOCUMENT DATE $what] \
           "tclpdf: $what takes a PDF date such as\
           D:20260818120000+02'00' (ISO 32000-1, 7.9.4) - pdfObj date writes\
-          one from a clock value - not \"$value\""
+          one from a clock value - not \"$value\"$hint"
     }
     return
   }
@@ -805,6 +853,30 @@ oo::class create ::tclpdf::document::document {
 
 }
 
+# The same moment in the spelling THIS file version uses (7.9.4): ISO 32000-1
+# writes the closing apostrophe after the zone minutes and ISO 32000-2 struck
+# it, and the two are the only difference between the two spellings.
+#
+# A date is held against the version at the CALL that gives it ([CheckDate]),
+# and rewritten here when it reaches the file - because the version can move
+# under it afterwards and that is nobody's mistake: [ua -part 2] raises the
+# document to 2.0, and the CreationDate the package stamped in when the
+# document was 1.7 is its own. Refusing at the version change was tried on
+# 2026-08-26 and was wrong for exactly that reason (it turned ua-5.4 and
+# ua-5.5 red, neither of which had anything to do with dates).
+#
+# Anything that is not a PDF date at all is handed back untouched: this is a
+# spelling, not a check.
+proc ::tclpdf::document::respellDate {value version} {
+  if {[parseDate $value $version] ne {} || [parseDate $value] eq {}} {
+    return $value
+  }
+  if {[package vcompare $version 2.0] < 0} {
+    return "$value'"
+  }
+  return [string range $value 0 end-1]
+}
+
 # The fields of a PDF date string (7.9.4): a dict of year month day hour
 # minute second sign zoneHour zoneMinute, the absent ones empty - or an
 # empty string when the text is not a PDF date. The syntax is
@@ -816,9 +888,29 @@ oo::class create ::tclpdf::document::document {
 #
 # One parser for two readers: [CheckDate] refuses at the call, and xmp.tcl
 # turns the same fields into the XMP form for the packet.
-proc ::tclpdf::document::parseDate {value} {
-  if {![regexp {^D:(\d{4})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:([-+Z])(?:(\d{2})(?:'(\d{2})'?)?)?)?)?)?)?)?)?$} \
-      $value -> year month day hour minute second sign zoneHour zoneMinute]} {
+#
+# "version" is the file's, and with one the two spellings stop being
+# interchangeable: ISO 32000-1 writes the closing apostrophe and ISO 32000-2
+# struck it, so a 1.7 file needs it and a 2.0 file may not have it. The
+# package has always known that where it writes its OWN dates ([pdfObj date]
+# takes the version, and so does the /M placeholder in sign.tcl) and never
+# asked it of the caller's: measured 2026-08-26, "info CreationDate
+# D:20260820132111+02'00" - the 2.0 spelling - reached a %PDF-1.7 PDF/A-3B
+# file verbatim, veraPDF called it conformant and poppler read the date. It
+# is still the wrong spelling for that file, and the manual (:1070) says
+# such a date "is refused otherwise".
+#
+# Without a version both are taken, which is what the READERS of a date want
+# - xmp.tcl turns a date out of a foreign file into the XMP form, and
+# importInfo hands the fields back.
+proc ::tclpdf::document::parseDate {value {version {}}} {
+  if {![regexp {^D:(\d{4})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:(\d{2})(?:([-+Z])(?:(\d{2})(?:'(\d{2})('?))?)?)?)?)?)?)?)?$} \
+      $value -> year month day hour minute second sign zoneHour zoneMinute \
+      closing]} {
+    return {}
+  }
+  if {$version ne {} && $zoneMinute ne {}
+      && $closing ne [expr {[package vcompare $version 2.0] < 0 ? "'" : ""}]} {
     return {}
   }
   foreach {field low high} {month 1 12 day 1 31 hour 0 23 minute 0 59
@@ -833,4 +925,4 @@ proc ::tclpdf::document::parseDate {value} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.14
+package provide tclpdf::document 1.15

@@ -213,9 +213,17 @@ proc ::tclpdf::sfnt::ParseHead {bytes tables} {
   binary scan $bytes @[expr {$position + 36}]SSSS xMin yMin xMax yMax
   binary scan $bytes @[expr {$position + 44}]S macStyle
   binary scan $bytes @[expr {$position + 50}]S indexToLocFormat
+  # DAMAGED and not METRICS: the em of an sfnt is head.unitsPerEm and the
+  # format puts it between 16 and 16384 (ISO/IEC 14496-22, head) - a file
+  # declaring 0 is broken, and there is nothing a caller can hand over to
+  # make it readable. METRICS says "the metrics that go with this program are
+  # missing, name them with -metrics", which is advice this case cannot use;
+  # the class was the same for both until 2026-08-26, so a handler following
+  # the manual asked for an AFM that would have changed nothing.
   if {$unitsPerEm == 0} {
-    return -code error -errorcode [list TCLPDF FONT METRICS unitsPerEm] \
-        "tclpdf: the font declares unitsPerEm 0"
+    return -code error -errorcode [list TCLPDF FONT DAMAGED head] \
+        "tclpdf: damaged font - the \"head\" table declares unitsPerEm 0,\
+        and a glyph unit of nothing measures nothing"
   }
   set maxpPosition [TableAt $tables maxp 6]
   binary scan $bytes @[expr {$maxpPosition + 4}]Su numGlyphs
@@ -456,12 +464,27 @@ proc ::tclpdf::sfnt::verticalOriginY {font glyph yMax} {
 
 # Unicode to glyph id. Formats 4 (BMP) and 12 (full range) are read; a font
 # without either cannot be used for text.
+#
+# WHICH SUBTABLE. A face carries several, and the order of preference is
+# HarfBuzz's (hb-ot-cmap-table.hh): (3,10) before (0,6) before (0,4) before
+# (3,1) before the older Unicode encodings. The Windows records used to be
+# ranked above EVERY platform-0 record, which put the BMP-only (3,1) ahead of
+# a (0,4) table in format 12 - measured on a DejaVu Sans built with both, the
+# face answered 5370 characters instead of 5918 and refused U+1F600, which it
+# has. Platform 0 is the Unicode consortium's own and (0,4) is "Unicode 2.0+,
+# full repertoire": it is the table a shaper reads, so it is the table this
+# reads.
+#
+# THE BEST RECORD THIS PACKAGE CAN READ, not the best record: a face whose
+# preferred subtable is in a format nobody here parses - 0, 2, 6, 13, 14 -
+# falls through to the next one down rather than being refused for a table it
+# carries an alternative to. Only when none of them can be read is the
+# refusal raised, and it names the format of the best candidate.
 proc ::tclpdf::sfnt::ParseCmap {bytes tables} {
   # Four bytes of header: the version and the number of subtables.
   set position [TableAt $tables cmap 4]
   binary scan $bytes @[expr {$position + 2}]Su numSubtables
-  set best {}
-  set bestScore -1
+  set candidates {}
   for {set index 0} {$index < $numSubtables} {incr index} {
     set entry [expr {$position + 4 + $index * 8}]
     # The count steers the loop and is believed only as far as the file
@@ -472,41 +495,64 @@ proc ::tclpdf::sfnt::ParseCmap {bytes tables} {
           "tclpdf: the font's cmap announces $numSubtables subtables and the\
           file ends inside record [expr {$index + 1}]"
     }
-    # Preference: Windows/UCS-4 (3,10), Windows/BMP (3,1), Unicode (0,x).
-    set score -1
-    if {$platform == 3 && $encoding == 10} {
-      set score 3
-    } elseif {$platform == 3 && $encoding == 1} {
-      set score 2
-    } elseif {$platform == 0} {
-      set score 1
+    set score [CmapScore $platform $encoding]
+    if {$score < 0} {
+      continue
     }
-    if {$score > $bestScore} {
-      set bestScore $score
-      set best [expr {$position + $subOffset}]
-    }
+    lappend candidates [list $score [expr {$position + $subOffset}]]
   }
-  if {$best eq {}} {
+  if {![llength $candidates]} {
     return -code error -errorcode [list TCLPDF FONT ENCODING cmap] \
         "tclpdf: the font has no usable Unicode cmap"
   }
-  # The chosen record's own offset is a second thing the file states and may
-  # get wrong - it is counted from the start of the cmap table and may point
-  # anywhere, the end of the file included.
-  if {[binary scan $bytes @${best}Su format] != 1} {
-    return -code error -errorcode [list TCLPDF FONT DAMAGED cmap] \
-        "tclpdf: the font's cmap points its subtable at offset $best, which is\
-        past the end of the file"
-  }
-  switch -- $format {
-    4 {return [CmapFormat4 $bytes $best]}
-    12 {return [CmapFormat12 $bytes $best]}
-    default {
-      return -code error -errorcode [list TCLPDF FONT UNSUPPORTED cmap $format] \
-          "tclpdf: cmap format $format is not supported -\
-          tclpdf reads formats 4 and 12"
+  set unsupported {}
+  foreach candidate [lsort -integer -decreasing -index 0 $candidates] {
+    set best [lindex $candidate 1]
+    # The chosen record's own offset is a second thing the file states and may
+    # get wrong - it is counted from the start of the cmap table and may point
+    # anywhere, the end of the file included.
+    if {[binary scan $bytes @${best}Su format] != 1} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED cmap] \
+          "tclpdf: the font's cmap points its subtable at offset $best, which\
+          is past the end of the file"
+    }
+    switch -- $format {
+      4 {return [CmapFormat4 $bytes $best]}
+      12 {return [CmapFormat12 $bytes $best]}
+    }
+    if {$unsupported eq {}} {
+      set unsupported $format
     }
   }
+  return -code error -errorcode [list TCLPDF FONT UNSUPPORTED cmap $unsupported] \
+      "tclpdf: cmap format $unsupported is not supported -\
+      tclpdf reads formats 4 and 12"
+}
+
+# How much a cmap record is worth, or -1 for one this package cannot address
+# characters through. The order is HarfBuzz's; the numbers themselves mean
+# nothing beyond it.
+proc ::tclpdf::sfnt::CmapScore {platform encoding} {
+  if {$platform == 3} {
+    switch -- $encoding {
+      10 {return 7}
+      1 {return 4}
+    }
+    return -1
+  }
+  if {$platform != 0} {
+    return -1
+  }
+  switch -- $encoding {
+    6 {return 6}
+    4 {return 5}
+    3 {return 3}
+    2 - 1 - 0 {return 2}
+  }
+  # A platform-0 record with an encoding nobody has registered - it is still
+  # Unicode by platform, and it used to be taken; kept, below everything
+  # named above.
+  return 1
 }
 
 proc ::tclpdf::sfnt::CmapFormat4 {bytes position} {
@@ -1067,9 +1113,11 @@ proc ::tclpdf::sfnt::cffFont {bytes} {
     set matrix [dict get $top {12 7}]
   }
   set scale [lindex $matrix 0]
+  # DAMAGED for the reason [ParseHead] gives at unitsPerEm: the em of a CFF
+  # is its FontMatrix and nothing the caller can pass in replaces it.
   if {![string is double -strict $scale] || $scale <= 0} {
-    return -code error -errorcode [list TCLPDF FONT METRICS fontMatrix] \
-        "tclpdf: the CFF font program states a FontMatrix\
+    return -code error -errorcode [list TCLPDF FONT DAMAGED cff] \
+        "tclpdf: damaged font - the CFF font program states a FontMatrix\
         whose first element is \"$scale\" - the em cannot be measured from it"
   }
   dict set font unitsPerEm [expr {round(1.0 / $scale)}]
@@ -1123,6 +1171,13 @@ proc ::tclpdf::sfnt::cffFont {bytes} {
       $numGlyphs $strings]
   dict set font charset $charset
 
+  # The glyphs whose HEIGHT a font descriptor is built from: the cap height is
+  # measured at the H, the ascender at the d or the b. Three glyphs out of
+  # several hundred, so the charstring is walked for those and for nothing
+  # else - see [CffTop] for what it costs and why the box of the whole face
+  # is not an answer.
+  set wantedTops {H d b}
+  set tops {}
   set widths {}
   set glyph 0
   foreach charstring $charStrings {
@@ -1138,10 +1193,19 @@ proc ::tclpdf::sfnt::cffFont {bytes} {
     if {$name ne {}} {
       dict set widths $name [CffWidth $charstring $defaultWidthX \
           $nominalWidthX $localSubrs $globalSubrs]
+      if {$name in $wantedTops} {
+        set top [CffTop $charstring $nominalWidthX $localSubrs $globalSubrs]
+        if {$top ne {}} {
+          # Whole font units: a charstring may state a fractional coordinate
+          # and a descriptor states integers.
+          dict set tops $name [expr {int(round($top))}]
+        }
+      }
     }
     incr glyph
   }
   dict set font widths $widths
+  dict set font tops $tops
 
   dict set font encoding [CffEncoding $bytes \
       [expr {[dict exists $top 16] ? [lindex [dict get $top 16] 0] : 0}] \
@@ -1351,6 +1415,30 @@ proc ::tclpdf::sfnt::CffStandardEncoding {charset} {
 # index is the format's (107, 1131 or 32768 by the count) and is not
 # negotiable - it is what makes the small negative numbers reach the middle of
 # the array.
+# ONE NUMBER out of a charstring (TN 5177, section 4): {value next}. The
+# caller has read the byte and established that it begins a number - 28, or
+# 32 and above. Written once because two walkers need it: [CffWidth], which
+# stops at the first stem or move, and [CffTop], which runs the whole path.
+proc ::tclpdf::sfnt::CffNumber {code at byte} {
+  if {$byte == 28} {
+    binary scan $code @[expr {$at + 1}]S value
+    return [list $value [expr {$at + 3}]]
+  }
+  if {$byte <= 246} {
+    return [list [expr {$byte - 139}] [expr {$at + 1}]]
+  }
+  if {$byte <= 250} {
+    binary scan $code @[expr {$at + 1}]cu low
+    return [list [expr {($byte - 247) * 256 + $low + 108}] [expr {$at + 2}]]
+  }
+  if {$byte <= 254} {
+    binary scan $code @[expr {$at + 1}]cu low
+    return [list [expr {-($byte - 251) * 256 - $low - 108}] [expr {$at + 2}]]
+  }
+  binary scan $code @[expr {$at + 1}]I fixed
+  return [list [expr {$fixed / 65536.0}] [expr {$at + 5}]]
+}
+
 proc ::tclpdf::sfnt::CffWidth {charstring default nominal subrs globalSubrs} {
   set biases [dict create local [CffBias [llength $subrs]] \
       global [CffBias [llength $globalSubrs]]]
@@ -1371,25 +1459,7 @@ proc ::tclpdf::sfnt::CffWidth {charstring default nominal subrs globalSubrs} {
     }
     binary scan $code @${at}cu byte
     if {$byte >= 32 || $byte == 28} {
-      if {$byte == 28} {
-        binary scan $code @[expr {$at + 1}]S value
-        incr at 3
-      } elseif {$byte <= 246} {
-        set value [expr {$byte - 139}]
-        incr at
-      } elseif {$byte <= 250} {
-        binary scan $code @[expr {$at + 1}]cu low
-        set value [expr {($byte - 247) * 256 + $low + 108}]
-        incr at 2
-      } elseif {$byte <= 254} {
-        binary scan $code @[expr {$at + 1}]cu low
-        set value [expr {-($byte - 251) * 256 - $low - 108}]
-        incr at 2
-      } else {
-        binary scan $code @[expr {$at + 1}]I fixed
-        set value [expr {$fixed / 65536.0}]
-        incr at 5
-      }
+      lassign [CffNumber $code $at $byte] value at
       lappend operands $value
       continue
     }
@@ -1441,6 +1511,326 @@ proc ::tclpdf::sfnt::CffWidth {charstring default nominal subrs globalSubrs} {
       }
     }
   }
+}
+
+# THE TOP OF ONE GLYPH, in charstring units - the highest y any point of its
+# outline reaches - or {} where the charstring cannot be walked.
+#
+# WHY A CFF NEEDS THIS AT ALL. A font descriptor has to state a CapHeight
+# (ISO 32000-2, Table 122), and a CFF states none: there is no head, no OS/2,
+# nothing but the FontBBox of the whole face. Written from that box, the cap
+# height of Nimbus Sans came out as 1075 - the top of the Aring, accent and
+# all - where the face's capitals reach 729, and everything anchored at a cap
+# height sat a third of an em too high. The letter H is where a cap height is
+# measured, so the letter H is what is measured (font.tcl, [FontType1Metrics]).
+#
+# CONTROL POINTS COUNT AS POINTS, which makes the answer an upper bound
+# rather than the exact extreme of a curve. For the three glyphs this is
+# asked of - H, d, b - the top is a straight stem and the bound is exact;
+# writing a curve solver for the general case would be a piece of its own and
+# would change none of them. Measured against fontTools over the 33 CFF faces
+# in the tree: the same number for every H.
+#
+# The walk is the Type 2 charstring machine (TN 5177, section 4.3), with the
+# operators that MOVE the pen implemented and the rest skipped. A hintmask
+# takes its mask bytes from the number of stems declared before it, which is
+# why the stems are counted rather than only cleared.
+proc ::tclpdf::sfnt::CffTop {charstring nominal subrs globalSubrs} {
+  set biases [dict create local [CffBias [llength $subrs]] \
+      global [CffBias [llength $globalSubrs]]]
+  set frames {}
+  set code $charstring
+  set at 0
+  set length [string length $code]
+  set operands {}
+  set x 0.0
+  set y 0.0
+  set top {}
+  set stems 0
+  set width 0
+  while {1} {
+    if {$at >= $length} {
+      if {![llength $frames]} {
+        return $top
+      }
+      lassign [lindex $frames end] code at
+      set frames [lrange $frames 0 end-1]
+      set length [string length $code]
+      continue
+    }
+    binary scan $code @${at}cu byte
+    if {$byte >= 32 || $byte == 28} {
+      lassign [CffNumber $code $at $byte] value at
+      lappend operands $value
+      continue
+    }
+    incr at
+    set count [llength $operands]
+    switch -- $byte {
+      1 - 3 - 18 - 23 {
+        # The four stem operators: pairs, so an odd count means the first
+        # operand is the width.
+        incr stems [expr {$count / 2}]
+        set operands {}
+      }
+      19 - 20 {
+        # hintmask and cntrmask: the operands in front of them are an
+        # implicit vstem, and the mask itself is one bit per stem.
+        incr stems [expr {$count / 2}]
+        set operands {}
+        incr at [expr {($stems + 7) / 8}]
+      }
+      21 {
+        # rmoveto, with the width in front of it where the count is odd.
+        set start [expr {$count > 2 ? $count - 2 : 0}]
+        set x [expr {$x + [lindex $operands $start]}]
+        set y [expr {$y + [lindex $operands [expr {$start + 1}]]}]
+        set top [CffHighest $top $y]
+        set operands {}
+      }
+      22 {
+        set x [expr {$x + [lindex $operands end]}]
+        set top [CffHighest $top $y]
+        set operands {}
+      }
+      4 {
+        set y [expr {$y + [lindex $operands end]}]
+        set top [CffHighest $top $y]
+        set operands {}
+      }
+      5 {
+        foreach {dx dy} $operands {
+          if {$dy eq {}} {
+            break
+          }
+          set x [expr {$x + $dx}]
+          set y [expr {$y + $dy}]
+          set top [CffHighest $top $y]
+        }
+        set operands {}
+      }
+      6 - 7 {
+        # hlineto and vlineto alternate, starting with the one the operator
+        # names.
+        set horizontal [expr {$byte == 6}]
+        foreach delta $operands {
+          if {$horizontal} {
+            set x [expr {$x + $delta}]
+          } else {
+            set y [expr {$y + $delta}]
+            set top [CffHighest $top $y]
+          }
+          set horizontal [expr {!$horizontal}]
+        }
+        set operands {}
+      }
+      8 {
+        foreach {a b c d e f} $operands {
+          if {$f eq {}} {
+            break
+          }
+          lassign [CffCurve $x $y $a $b $c $d $e $f $top] x y top
+        }
+        set operands {}
+      }
+      24 {
+        # rcurveline: curves, then one line.
+        set curves [lrange $operands 0 end-2]
+        foreach {a b c d e f} $curves {
+          if {$f eq {}} {
+            break
+          }
+          lassign [CffCurve $x $y $a $b $c $d $e $f $top] x y top
+        }
+        set x [expr {$x + [lindex $operands end-1]}]
+        set y [expr {$y + [lindex $operands end]}]
+        set top [CffHighest $top $y]
+        set operands {}
+      }
+      25 {
+        # rlinecurve: lines, then one curve.
+        set lines [lrange $operands 0 end-6]
+        foreach {dx dy} $lines {
+          if {$dy eq {}} {
+            break
+          }
+          set x [expr {$x + $dx}]
+          set y [expr {$y + $dy}]
+          set top [CffHighest $top $y]
+        }
+        lassign [lrange $operands end-5 end] a b c d e f
+        if {$f ne {}} {
+          lassign [CffCurve $x $y $a $b $c $d $e $f $top] x y top
+        }
+        set operands {}
+      }
+      26 - 27 {
+        # vvcurveto and hhcurveto: an odd operand in front is the deflection
+        # of the first curve in the other direction.
+        set first 0
+        if {$count % 4} {
+          set first [lindex $operands 0]
+          set operands [lrange $operands 1 end]
+        }
+        foreach {a b c d} $operands {
+          if {$d eq {}} {
+            break
+          }
+          if {$byte == 26} {
+            lassign [CffCurve $x $y $first $a $b $c 0 $d $top] x y top
+          } else {
+            lassign [CffCurve $x $y $a $first $b $c $d 0 $top] x y top
+          }
+          set first 0
+        }
+        set operands {}
+      }
+      30 - 31 {
+        # vhcurveto and hvcurveto: curves alternating between the two
+        # directions, with an optional last operand for the free end.
+        set vertical [expr {$byte == 30}]
+        set index 0
+        while {$count - $index >= 4} {
+          set last 0
+          if {$count - $index == 5} {
+            set last [lindex $operands [expr {$index + 4}]]
+          }
+          lassign [lrange $operands $index [expr {$index + 3}]] a b c d
+          if {$vertical} {
+            lassign [CffCurve $x $y 0 $a $b $c $d $last $top] x y top
+          } else {
+            lassign [CffCurve $x $y $a 0 $b $c $last $d $top] x y top
+          }
+          set vertical [expr {!$vertical}]
+          incr index 4
+        }
+        set operands {}
+      }
+      10 - 29 {
+        set which [expr {$byte == 10 ? {local} : {global}}]
+        set table [expr {$byte == 10 ? $subrs : $globalSubrs}]
+        if {!$count || [llength $frames] >= 10} {
+          return $top
+        }
+        set index [expr {int([lindex $operands end]) + [dict get $biases $which]}]
+        set operands [lrange $operands 0 end-1]
+        if {$index < 0 || $index >= [llength $table]} {
+          return $top
+        }
+        lappend frames [list $code $at]
+        set code [lindex $table $index]
+        set at 0
+        set length [string length $code]
+      }
+      11 {
+        set at $length
+      }
+      14 {
+        return $top
+      }
+      12 {
+        # The escaped operators. The four flex forms move the pen and are
+        # walked; everything else is arithmetic on the stack and clears it.
+        binary scan $code @${at}cu second
+        incr at
+        set top [CffFlex $second $operands x y $top]
+        set operands {}
+      }
+      default {
+        set operands {}
+      }
+    }
+  }
+}
+
+# The higher of a top so far and one y - with {} meaning "nothing seen yet".
+proc ::tclpdf::sfnt::CffHighest {top y} {
+  if {$top eq {} || $y > $top} {
+    return $y
+  }
+  return $top
+}
+
+# One cubic curve from the current point, as six deltas: {x y top} after it.
+# The two control points count as points, which is what makes the answer an
+# upper bound - see [CffTop].
+proc ::tclpdf::sfnt::CffCurve {x y dx1 dy1 dx2 dy2 dx3 dy3 top} {
+  set x [expr {$x + $dx1}]
+  set y [expr {$y + $dy1}]
+  set top [CffHighest $top $y]
+  set x [expr {$x + $dx2}]
+  set y [expr {$y + $dy2}]
+  set top [CffHighest $top $y]
+  set x [expr {$x + $dx3}]
+  set y [expr {$y + $dy3}]
+  return [list $x $y [CffHighest $top $y]]
+}
+
+# The four flex operators (12 34..37), which draw two curves through six
+# points. Only the y of every point is wanted here, so each form is walked as
+# the deltas it states; anything else escaped by 12 moves no pen and is
+# ignored.
+proc ::tclpdf::sfnt::CffFlex {second operands xName yName top} {
+  upvar 1 $xName x $yName y
+  switch -- $second {
+    34 {
+      # hflex: dx1 dx2 dy2 dx3 dx4 dx5 dx6 - the y returns to where it began.
+      lassign $operands dx1 dx2 dy2 dx3 dx4 dx5 dx6
+      if {$dx6 eq {}} {
+        return $top
+      }
+      set start $y
+      lassign [CffCurve $x $y $dx1 0 $dx2 $dy2 $dx3 0 $top] x y top
+      lassign [CffCurve $x $y $dx4 0 $dx5 [expr {$start - $y}] $dx6 0 $top] \
+          x y top
+      return $top
+    }
+    35 {
+      # flex: two full curves and a final flex depth, which is not a
+      # coordinate.
+      lassign $operands a b c d e f g h i j k l
+      if {$l eq {}} {
+        return $top
+      }
+      lassign [CffCurve $x $y $a $b $c $d $e $f $top] x y top
+      lassign [CffCurve $x $y $g $h $i $j $k $l $top] x y top
+      return $top
+    }
+    36 {
+      # hflex1: dx1 dy1 dx2 dy2 dx3 dx4 dx5 dy5 dx6
+      lassign $operands dx1 dy1 dx2 dy2 dx3 dx4 dx5 dy5 dx6
+      if {$dx6 eq {}} {
+        return $top
+      }
+      set start $y
+      lassign [CffCurve $x $y $dx1 $dy1 $dx2 $dy2 $dx3 0 $top] x y top
+      lassign [CffCurve $x $y $dx4 0 $dx5 $dy5 $dx6 [expr {$start - $y - $dy5}] \
+          $top] x y top
+      return $top
+    }
+    37 {
+      # flex1: eleven deltas, the twelfth being whichever of dx6/dy6 closes
+      # the figure back to where it started.
+      lassign $operands a b c d e f g h i j k
+      if {$k eq {}} {
+        return $top
+      }
+      set startX $x
+      set startY $y
+      set sumX [expr {$a + $c + $e + $g + $i}]
+      set sumY [expr {$b + $d + $f + $h + $j}]
+      lassign [CffCurve $x $y $a $b $c $d $e $f $top] x y top
+      if {abs($sumX + $k) > abs($sumY)} {
+        set last [expr {$startY - $y - $h - $j}]
+        lassign [CffCurve $x $y $g $h $i $j $k $last $top] x y top
+      } else {
+        set last [expr {$startX - $x - $g - $i}]
+        lassign [CffCurve $x $y $g $h $i $j $last $k $top] x y top
+      }
+      return $top
+    }
+  }
+  return $top
 }
 
 # The bias a subroutine index is read through (TN 5177, section 4.7). It is
@@ -1558,7 +1948,11 @@ proc ::tclpdf::sfnt::permission {fsType} {
     }
   }
   if {$fsType & 0x0100} {
-    append words "; no subsetting (bit 8)"
+    # The one restriction this package ACTS on, so the wording says so: bit 8
+    # makes -subset 0 the default for the face (font.tcl, [FontEmbed]), and a
+    # caller who wants a subset all the same writes -subset 1.
+    append words "; no subsetting (bit 8), so the face is embedded whole\
+        unless -subset 1 asks otherwise"
   }
   if {$fsType & 0x0200} {
     append words "; bitmap embedding only (bit 9)"
@@ -1647,4 +2041,4 @@ proc ::tclpdf::sfnt::NameString {bytes start length platform} {
   return $decoded
 }
 
-package provide tclpdf::sfnt 1.9
+package provide tclpdf::sfnt 1.10

@@ -373,10 +373,20 @@ oo::define ::tclpdf::document::document {
     }
     lassign $at left top
     lassign $size width height
+    # [option finite] and not [string is double]: NaN and Inf are doubles to
+    # Tcl and neither of them places anything on a page. NaN compares FALSE
+    # against every bound, so the "$width <= 0" below waved it through and
+    # the arithmetic four lines on died in Tcl's own words - "can't use
+    # non-numeric floating-point value as operand of \"+\"", errorcode
+    # ARITH DOMAIN, against the promise that every refusal of this package
+    # begins with "tclpdf:" (round 6 grey area, measured again 2026-08-26 at
+    # [annot note -at {10 NaN}]).
     foreach value [list $left $top $width $height] {
-      if {![string is double -strict $value]} {
+      if {![::tclpdf::option finite $value]} {
         return -code error -errorcode [list TCLPDF ANNOT RECT NUMBER $value] \
-            "tclpdf: $context takes numbers for -at and -size, not \"$value\""
+            "tclpdf: $context takes finite numbers for -at and -size, not\
+            \"$value\" - NaN and Inf are doubles to Tcl and name no place on\
+            a page"
       }
     }
     if {$width <= 0 || $height <= 0} {
@@ -439,22 +449,24 @@ oo::define ::tclpdf::document::document {
       set serial 0
     }
     my state annotSerial [incr serial]
-    set appearance {}
-    if {[dict get $options appearance] ne {}} {
-      set appearance [my AnnotAppearance [dict get $options appearance] \
-          "annot [string tolower $subtype]"]
-    } elseif {[llength $quads]} {
-      set appearance [my AnnotMarkupAppearance $subtype $serial $rect $quads \
-          [dict get $options colour]]
-    } elseif {[llength $builder]} {
-      set appearance [my {*}$builder $serial $rect $options]
-    }
-    # EVERYTHING THAT CAN STILL REFUSE, worked out before the number exists.
-    # The appearance was moved above the reservation on 2026-08-25; these
-    # four were left behind, and each of them made a CAUGHT error kill the
-    # whole document - "object(s) reserved but never written" at the next
-    # write. Found in round 6 of the review, in the very method whose
-    # comment claimed the case was closed.
+    # EVERYTHING THAT CAN STILL REFUSE, worked out BEFORE THE APPEARANCE IS
+    # DRAWN and therefore before the number exists.
+    #
+    # Two moves, a round apart, and this is the second. On 2026-08-25 the
+    # appearance was lifted above the RESERVATION, because a drawing script
+    # that raised left the annotation's own number reserved and never filled,
+    # which kills the whole document at the next [write]. These three - the
+    # colour array, the opacity and the date - were left standing behind the
+    # appearance, and the reservation is not the only thing they stand
+    # behind: the appearance is an OBJECT, written the moment it is built,
+    # so a refusal here left a form XObject in the file that nothing points
+    # at. Measured 2026-08-26 over highlight, underline, squiggly,
+    # strikeout, line, square, circle, polygon and polyline with -opacity 5,
+    # -opacity NaN and -date abc: "forms=2 apN=0" - one house form and one
+    # orphan apiece. The document still wrote, which is why no test saw it;
+    # a caught refusal is not supposed to leave anything behind at all.
+    #
+    # None of the three needs the appearance, so the order costs nothing.
     set colourArray {}
     if {[dict get $options colour] ne {}} {
       set colourArray [my AnnotColourArray [dict get $options colour]]
@@ -470,6 +482,16 @@ oo::define ::tclpdf::document::document {
     set stamp {}
     if {[dict get $options date] ne {}} {
       set stamp [my AnnotDate [dict get $options date]]
+    }
+    set appearance {}
+    if {[dict get $options appearance] ne {}} {
+      set appearance [my AnnotAppearance [dict get $options appearance] \
+          "annot [string tolower $subtype]"]
+    } elseif {[llength $quads]} {
+      set appearance [my AnnotMarkupAppearance $subtype $serial $rect $quads \
+          [dict get $options colour]]
+    } elseif {[llength $builder]} {
+      set appearance [my {*}$builder $serial $rect $options]
     }
     # The structure element is OPENED here for the same reason - whether an
     # Annot may stand where the caller is does not depend on the number, and
@@ -629,7 +651,11 @@ oo::define ::tclpdf::document::document {
   }
 
   method AnnotOpacity {value} {
-    if {![string is double -strict $value] || $value < 0 || $value > 1} {
+    # [option finite] first: NaN is a double and compares false against both
+    # bounds, so it fell through this test and died one line later inside
+    # [pdfObj num] in Tcl's words - TCL VALUE DOUBLE NAN (measured
+    # 2026-08-26). Inf went the same way.
+    if {![::tclpdf::option finite $value] || $value < 0 || $value > 1} {
       return -code error -errorcode [list TCLPDF ANNOT OPACITY $value] \
           "tclpdf: -opacity of an annotation is a number from 0 to 1 (/CA,\
           ISO 32000-2, Table 170), not \"$value\""
@@ -805,4 +831,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annot 1.1
+package provide tclpdf::annot 1.2

@@ -41,6 +41,12 @@ set trueTypeFace [file join [file dirname [file dirname [info script]]] examples
     assets fonts DejaVuSans.ttf]
 testConstraint haveTrueType [file exists $trueTypeFace]
 
+# The COLR face the mask count below is measured on - 25 MB and unversioned,
+# so a machine without it skips rather than fails.
+set colourFace [file join [file dirname [file dirname [info script]]] examples \
+    assets fonts google NotoColorEmoji-Regular.ttf]
+testConstraint haveColour [file exists $colourFace]
+
 # The written objects a test looks at - the font object is the one carrying
 # /Subtype /Type3. The walk itself is in helper.tcl, because a third copy of
 # it is a copy too many.
@@ -1552,5 +1558,126 @@ test type3-10.14 {a refusal at a variation selector says what a selector is} \
       [string match {*variation selector*} $plain] \
       [string match {*draw one with*} $plain]
 } -result {1 1 1 0 1}
+
+# -- round 7: d1 specifies shape, not colour --------------------------------
+
+test type3-11.1 {a colour operator is struck out of a d1 glyph} -body {
+  # ISO 32000-2, 9.6.4, Table 111: a glyph description that begins with d1
+  # "should not execute any operators that set the colour ... any use of such
+  # operators shall be ignored". The readers disagree about the second half -
+  # measured 2026-08-26, poppler ignores a "0 g" inside a d1 glyph and paints
+  # in the text colour, Quartz executes it and paints black - and the drawing
+  # methods of this package write a colour with every figure, so every
+  # -color text glyph carried one.
+  # -compress 0 so that the stream can be read as it is written.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define box -ascent 750
+  $doc font glyph box "☐" -width 900 -color text -bbox {60 50 640 640} \
+      -script {$doc rect -at {60 50} -size {640 640} -fill black}
+  $doc font -family box -size 36 -color {0.15 0.35 0.75}
+  $doc text "☐" -at {20 40}
+  set path [::tclpdfTest::scratch d1-colour.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {\md1\M} $bytes] [regexp {\m0 g\M} $bytes] \
+      [regexp {\mre\M} $bytes] [regexp {\mf\M} $bytes]
+} -result {1 0 1 1}
+
+test type3-11.2 {a d0 glyph keeps its colours} -body {
+  # The control, and the reason -color own is the default: a d0 glyph
+  # "specifies both its shape and its colour", so nothing is taken out of it.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc font define box -ascent 750
+  $doc font glyph box "☐" -width 900 \
+      -script {$doc rect -at {60 50} -size {640 640} -fill {0 0 1}}
+  $doc font -family box -size 36
+  $doc text "☐" -at {20 40}
+  set path [::tclpdfTest::scratch d0-colour.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp {\md0\M} $bytes] [regexp {\m0 0 1 rg\M} $bytes]
+} -result {1 1}
+
+test type3-11.3 {the scanner never looks inside a string} -body {
+  # A literal string may hold the text "0 g" - "(0 g) Tj" is an ordinary line
+  # of a glyph that draws letters - and an inline image holds arbitrary
+  # bytes. So the stream is lexed rather than searched: strings with their
+  # nesting and escapes, hex strings, comments and BI ... ID ... EI pass
+  # through as single tokens.
+  set strip ::tclpdf::type3::stripColour
+  list [$strip "q\n0 g\n1 2 3 4 re\nf\nQ\n"] \
+      [$strip "BT (0 g) Tj ET\n"] \
+      [$strip "BT (a\\) 0 g) Tj ET\n"] \
+      [$strip "/Pattern cs /P1 scn 0 0 10 10 re f\n"] \
+      [$strip "% 0 g\n0 g\n1 w\n"] \
+      [$strip "\[(0 g) -10 (x)\] TJ\n"] \
+      [$strip "q 0 g /Sh1 sh Q\n"]
+} -result {{q
+1 2 3 4 re
+f
+Q
+} {BT (0 g) Tj ET
+} {BT (a\) 0 g) Tj ET
+} { 0 0 10 10 re f
+} {% 0 g
+1 w
+} {[(0 g) -10 (x)] TJ
+} {q /Sh1 sh Q
+}}
+
+test type3-11.4 {an inline image is one token, whatever its bytes spell} -body {
+  # The data between ID and EI is not operators.
+  ::tclpdf::type3::stripColour \
+      "BI /W 1 /H 1 /CS /G ID \x00 0 g EI\n0 g\n1 w\n"
+} -result "BI /W 1 /H 1 /CS /G ID \x00 0 g EI\n1 w\n"
+
+test type3-11.5 {a number option of a Type 3 font has to be finite} -body {
+  # NaN is a double to Tcl and every comparison with it is false, so it
+  # passed the range tests and went on into the FontMatrix arithmetic, the
+  # /FontBBox and the d0/d1 operand of the glyph stream.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set ascent [::tclpdfTest::refusalCode {$doc font define a -ascent NaN}]
+  set infinite [::tclpdfTest::refusalCode {$doc font define b -ascent Inf}]
+  $doc font define c -ascent 750
+  set width [::tclpdfTest::refusalCode {$doc font glyph c x -width NaN -script {}}]
+  set box [::tclpdfTest::refusalCode {$doc font glyph c y -width 500 \
+      -color text -bbox {0 0 NaN 5} -script {}}]
+  set names [$doc font names]
+  $doc destroy
+  list $ascent $infinite $width $box $names
+} -result {{TCLPDF TYPE3 ARGUMENT ascent} {TCLPDF TYPE3 ARGUMENT ascent} {TCLPDF TYPE3 ARGUMENT width} {TCLPDF TYPE3 BBOX number} c}
+
+test type3-11.6 {font info reports how many glyphs of a colour face need a mask} \
+    -constraints {haveColour haveTrueType} -body {
+  # The one thing about a drawn colour font a caller cannot see from the
+  # outside, and the one that decides how it renders in a reader that reads
+  # the mask rules differently (docs/technote-type3-softmask.md).
+  # colorFontPaint.tcl counts them as it builds the glyphs; every other kind
+  # of font answers 0, because the set of keys [font info] answers is the
+  # same whatever was embedded.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc colorFont emoji $colourFace -chars "😀🌍🇺🇳"
+  $doc text "😀🌍🇺🇳" -at {20 20} -family emoji -size 20
+  set masks [dict get [$doc font info emoji] masks]
+  $doc write [::tclpdfTest::scratch colour-masks.pdf]
+  set written [dict get [$doc font info emoji] masks]
+  # A drawn font that is not a colour face, and an embedded one: the key is
+  # there for both, at 0.
+  $doc font define drawn -ascent 750
+  set plain [dict get [$doc font info drawn] masks]
+  $doc font embed body $trueTypeFace
+  set embedded [dict get [$doc font info body] masks]
+  $doc destroy
+  file delete [::tclpdfTest::scratch colour-masks.pdf]
+  list $masks $written $plain $embedded
+} -result {1 1 0 0}
 
 cleanupTests

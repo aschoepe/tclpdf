@@ -232,4 +232,48 @@ test gdef-4.2 {markFilteringSet is absent unless the flag says otherwise} -const
   ::tclpdf::otLayout markFilteringSet $gpos [::tclpdf::otLayout lookup $gpos $index]
 } -result {}
 
+# --- the two questions both layout tables ask ------------------------------
+
+test gdef-5.1 {an exempt position is kept whatever the filter says} -body {
+  # What a SequenceLookupRecord needs, in GSUB and in GPOS alike: the lookup a
+  # record names is applied AT a position the naming rule chose, and HarfBuzz
+  # applies it there without asking that lookup's own flag about the glyph
+  # standing at it. The exempt index goes in IN ORDER, because a backtrack
+  # walks the list backwards and a lookahead forwards.
+  #
+  # The filter is built by hand - {classes ignore allowed} - with glyph 99 a
+  # mark and marks ignored.
+  set filter [list [dict create 99 3] 3 {}]
+  set glyphs {10 99 11 99 12}
+  list [::tclpdf::gdef visible $filter $glyphs] \
+      [::tclpdf::gdef visible $filter $glyphs 1] \
+      [::tclpdf::gdef visible $filter $glyphs 3] \
+      [::tclpdf::gdef visible $filter $glyphs 2] \
+      [::tclpdf::gdef visible {} $glyphs 1]
+} -result {{0 2 4} {0 1 2 4} {0 2 3 4} {0 2 4} {0 1 2 3 4}}
+
+test gdef-5.2 {and -1 is the plain question again} -body {
+  # The default, and what every walk that is not a record asks. It has to be
+  # [keep] to the element, or the two would be two answers.
+  set filter [list [dict create 99 3] 3 {}]
+  set glyphs {10 99 11}
+  list [expr {[::tclpdf::gdef visible $filter $glyphs] eq \
+          [::tclpdf::gdef keep $filter $glyphs]}] \
+      [expr {[::tclpdf::gdef visible $filter $glyphs -1] eq \
+          [::tclpdf::gdef keep $filter $glyphs]}]
+} -result {1 1}
+
+test gdef-5.3 {"is this glyph a mark" is one filter and one bit} \
+    -constraints haveAttach -body {
+  # Two callers ask it - markPos.tcl for the glyph a mark hangs on, and
+  # kernGpos.tcl for the end of a cluster - so the ignoreMarks bit is named
+  # here rather than in either of them. Measured on a real face: U+0300 is a
+  # mark in DejaVu Sans and "b" is not.
+  set parsed [::tclpdf::sfnt read $fontAttach]
+  set cmap [dict get $parsed cmap]
+  set marks [::tclpdf::gdef marks [::tclpdf::gdef build $parsed]]
+  list [::tclpdf::gdef ignored $marks [dict get $cmap [expr {0x0300}]]] \
+      [::tclpdf::gdef ignored $marks [dict get $cmap [scan b %c]]]
+} -result {1 0}
+
 cleanupTests

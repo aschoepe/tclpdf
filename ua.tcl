@@ -42,6 +42,8 @@
 #   lists        7.6 - an ordered list names its numbering and its items
 #                carry a Lbl; items with a Lbl under a list that says
 #                nothing are refused the other way round
+#   contents     UA-2 8.2.5.8 - every TOCI of a table of contents names the
+#                element it points at, through -ref; part 1 asks for none
 #   graphics     7.1, 7.3 - a picture, drawing or form placement is either
 #                described (-alt) or declared decoration (-artifact 1);
 #                one that fell into artifact by default was never judged
@@ -557,11 +559,19 @@ oo::define ::tclpdf::document::document {
         continue
       }
       set page [my UaElementPage $elements $index]
+      # THE REMEDY IS THE STRUCTURE CALL, and only it. The message used to
+      # offer [$doc text -tag $type] as a second road "where the tag was
+      # derived" - and [text] has neither -alt nor -actualText, so the
+      # caller was sent to a door that does not exist (measured 2026-08-26:
+      # unknown option "-alt" for text). A derived Figure or Formula is
+      # described by opening the element around the drawing instead, which
+      # is what the one road below says.
       lappend problems "[expr {$page eq {} ? {} : "page $page: "}]a $type\
           carries neither a description nor replacement text - PDF/UA needs\
           -alt or -actualText on every one ([dict get $clauses $type]), and\
-          an empty -alt is not one; pass it to \[\$doc structure $type\], or\
-          to \[\$doc text -tag $type\] where the tag was derived"
+          an empty -alt is not one; open it with \[\$doc structure $type\
+          -alt \"...\" -script ...\] and draw inside it - a derived \[\$doc\
+          text -tag $type\] takes no description of its own"
     }
     return $problems
   }
@@ -802,6 +812,34 @@ oo::define ::tclpdf::document::document {
       lappend problems "the tree uses Note - PDF/UA-2 wants FENote, the 2.0\
           name for it (8.2.5.14)"
     }
+    # UA-2 8.2.5.8: "Each TOCI in the table of contents shall identify the
+    # target of the reference using the Ref entry, either directly on the
+    # TOCI structure element itself or on one of its child structure
+    # elements". A table of contents whose entries point nowhere is a list
+    # of headings a reader cannot follow, and veraPDF fails the file under
+    # that clause - measured 2026-08-26 on a TOC{TOCI{text}} this package
+    # wrote without a word. [structure -ref] writes the entry; the report
+    # answers, per TOCI, whether it or anything below it carries one.
+    #
+    # Part 1 is left alone: ISO 14289-1 asks for no such thing, and veraPDF
+    # passes the same tree under ua1. Demanding it there would be this
+    # package inventing a rule - the line [UaCheckFields] and
+    # [UaCheckDescribed] draw in the same place.
+    if {[dict get [my state ua] part] == 2} {
+      set elements [my state structure]
+      foreach entry [dict get $report toci] {
+        lassign $entry index reference
+        if {$reference} {
+          continue
+        }
+        set page [my UaElementPage $elements $index]
+        lappend problems "[expr {$page eq {} ? {} : "page $page: "}]a TOCI\
+            says nothing about what it points at - PDF/UA-2 needs the Ref\
+            entry on the entry itself or on one of its children (8.2.5.8);\
+            give the section a name with \[\$doc structure Sect -name ...\]\
+            and the entry \[\$doc structure TOCI -ref <name>\]"
+      }
+    }
     # The width of a row is the number of COLUMNS it covers, spans counted
     # (Matterhorn 15-003, UA-2 8.2.5.26): a cell with -colSpan 2 is two of
     # them, and a cell spanning down from the row above is one the row
@@ -822,4 +860,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.6
+package provide tclpdf::ua 1.7

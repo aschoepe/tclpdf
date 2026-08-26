@@ -7,7 +7,8 @@
 #   tclsh examples/01.01-shapes.tcl ?output.pdf?
 #
 # Shows what stage 1 provides: page setup, the drawing primitives, the three
-# colour spaces, the graphics state stack and constant alpha.
+# colour spaces, the graphics state stack, constant alpha, and - on a page of
+# its own - the arc, a piece of a circle or an ellipse in its three styles.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -364,15 +365,17 @@ $doc arc -at {120 155} -size {70 30} -start 0 -extent 270 -style pieslice \
     -fill {1 0.85 0.6} -stroke {0.6 0.4 0.1} -width 0.6
 $doc text "-size {70 30} -extent 270" -at {120 183} -align center
 
-# A whole turn is allowed and is the whole ellipse: at 360 the two radii of a
-# pieslice have length zero, which is redundant rather than wrong.
+# A whole turn is allowed and is the whole ellipse - AND IT HAS NO SPOKE.
+# At 360 the start and the end of the sweep coincide, so the two radii of a
+# pieslice fall on top of each other; that used to be called redundant
+# rather than wrong, and it was wrong: a line of no length is still drawn
+# and still STROKED, so a dial read all the way round came out with a spoke
+# sticking out of it towards three o'clock. At a whole turn the wedge is
+# therefore left off and the "h" closes the ellipse - which is the figure
+# anybody asking for a full pie means.
 $doc arc -at {178 155} -size {30 30} -extent 360 -style pieslice \
     -fill {0.8 0.9 0.8} -stroke {0.2 0.5 0.2} -width 0.6
-# The line to the centre is the two radii of the pieslice lying on top of one
-# another: at a whole turn the start and the end of the sweep coincide, so
-# both have length zero. Redundant, not wrong - and cheaper than a special
-# case in the check.
-$doc text "-extent 360, a whole turn" -at {178 183} -align center -size 8
+$doc text "-extent 360, a whole turn - no spoke" -at {178 183} -align center -size 8
 
 # -- a dial made of arcs ----------------------------------------------------
 

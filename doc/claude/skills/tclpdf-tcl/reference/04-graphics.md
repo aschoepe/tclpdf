@@ -78,6 +78,51 @@ $doc restore
 
 `-opacity`/`-blend` on a shape keep the change inside that shape's own save/restore. `opacity`, `blend`, `style` as commands are state and hold until changed.
 
+## Overprint - the one state a reader never shows
+
+```tcl
+# Whether what is painted knocks out what lies under it on the OTHER plates
+# (the default) or leaves it standing. Nothing a viewer shows changes; the
+# press does. Black text on a cyan panel is the standing case: knocked out,
+# the cyan plate is punched where the letters go and a misregister of a tenth
+# of a millimetre shows white round every letter.
+$doc save
+$doc overprint -fill 1 -stroke 1
+$doc rect -at {20 195} -size {45 14} -fill {cmyk 1 0 0 0}
+$doc font -family helvetica -style bold -size 11 -color {cmyk 0 0 0 1}
+$doc text "OVERPRINTED" -at {23 205}
+$doc restore
+
+# -mode writes /OPM: it says what a ZERO in a CMYK value means. 0 leaves that
+# plate alone, 1 ("nonzero overprint") paints it at nought - which is how one
+# plate is set without disturbing the rest.
+$doc save
+$doc overprint -fill 1 -mode 1
+$doc rect -at {70 195} -size {45 14} -fill {cmyk 0 0.6 0.9 0}
+$doc restore
+
+# The shapes take -overprint themselves, which sets both sides at once inside
+# the shape's own q/Q - a shape filled AND stroked in one call has no way of
+# saying which of the two it meant.
+$doc rect -at {120 195} -size {30 14} -fill {cmyk 0 0.9 0.9 0} -overprint 1
+
+# And style takes it too, where it holds until changed like every other
+# drawing state - so a run of shapes is set once rather than per call.
+$doc save
+$doc style -overprint 1 -fill {cmyk 0.15 0 1 0}
+$doc rect -at {155 195} -size {12 14}
+$doc rect -at {170 195} -size {12 14}
+$doc restore
+
+# A call naming NONE of the three is refused rather than writing a graphics
+# state that changes nothing.
+if {[catch {$doc overprint} message]} {
+    puts "refused, as it should be: $message"
+}
+```
+
+Naming the stroke says something about the fill as well: a graphics state carrying `/OP` and no `/op` sets **both** parameters (ISO 32000-2, Table 58), so a call that gives `-stroke` writes the fill side out too - from `-fill` where the call gives it, otherwise from the fill overprint already in force. The fill side is remembered per content stream and taken back by `restore`, exactly as the colours of `style` are. **The trap** is that overprinting a *light* colour is a mistake - yellow over cyan, overprinted, is green - and no viewer shows it and no validator reports it.
+
 ## Transformations
 
 ```tcl
@@ -135,6 +180,31 @@ $doc rect -at {110 255} -size {40 12} -stroke {separation All {gray 0}} -width 1
 ```
 
 One name is one ink: a name appearing again must carry the same alternate. The alternate is never another separation or a pattern; under PDF/A it follows the output intent like every colour.
+
+### DeviceN - several named plates at once
+
+```tcl
+# {devicen {{Name colour} ...} ?{tint ...}?}: a list of colourants, each
+# written exactly the way a separation is, and one tint per name in the same
+# order - all of them 1 unless said otherwise. This is high-fidelity printing
+# (CMYK plus orange and green) and the duotone.
+$doc configure -version 1.6      ;# every entry of the attributes dictionary is 1.6
+$doc rect -at {20 285} -size {40 10} \
+    -fill {devicen {{Orange {cmyk 0 0.45 1 0}} {Green {cmyk 0.8 0 0.7 0.1}}} {0.7 0.3}}
+
+# A duotone: black plus one spot, at two different coverages.
+foreach {tint x} {1.0 65 0.6 90 0.3 115} {
+    $doc rect -at [list $x 285] -size {20 10} \
+        -fill [list devicen {{Black {gray 0}} {{PANTONE 300 C} {rgb 0 0.36 0.65}}} \
+            [list [expr {$tint * 0.4}] $tint]]
+}
+
+# /None names a component that is never painted, it is the one name that may
+# be repeated, and it stays out of the fallback colour as well.
+$doc rect -at {140 285} -size {20 10} -fill {devicen {{Orange {cmyk 0 0.45 1 0}} {None}} {1 1}}
+```
+
+It is **not** a separation with several names: the space carries one function that turns n tints into the alternate space, so what it describes is how the inks look *together* (ISO 32000-2, 8.6.6.5). All the colourants therefore paint into one alternate - a grey one is promoted to the space of the coloured ones, mixing RGB with CMYK is refused, and Lab and ICC based colourants are refused too (paint such a plate on its own with `{separation Name {lab L a b} tint}`). `All` is refused here; at most 32 colourants. A colourant and a separation of the same name are the same plate and must agree about their alternate. A gradient cannot take one. (PDF 1.6.)
 
 ### Lab - a colour as it was measured
 

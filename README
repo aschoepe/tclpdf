@@ -16,10 +16,11 @@ SYNOPSIS
 
         Document and graphics
             Pages and the five page boxes, paths, clipping to a rectangle or
-            an arbitrary path, transparency and blend modes, form XObjects for
-            reusable content, tiling patterns, axial and radial shadings,
-            RGB / CMYK / grey / separation colours and 148 colour names
-            without Tk.
+            an arbitrary path, transparency, blend modes and overprint, form
+            XObjects for reusable content, tiling patterns, all seven shading
+            types - axial, radial, function-based and the four meshes -,
+            RGB / CMYK / grey / separation / DeviceN / Lab / ICC based
+            colours and 148 colour names without Tk.
 
         Text
             Single lines and paragraphs with justification, indents, a height
@@ -42,10 +43,15 @@ SYNOPSIS
             an error instead of silently disappearing.
 
         Images
-            JPEG and PNG. Both are passed through unchanged wherever possible:
-            a JPEG stream goes in as /DCTDecode, a PNG without alpha as
-            /FlateDecode with /Predictor 15 - neither is ever decoded. PNG
-            alpha becomes a soft mask.
+            JPEG, PNG and TIFF. All three are passed through unchanged
+            wherever possible: a JPEG stream goes in as /DCTDecode, a PNG
+            without alpha as /FlateDecode with /Predictor 15, and a TIFF
+            strip through the PDF filter that undoes its own compression.
+            PNG alpha becomes a soft mask; so does a 16-bit colour key,
+            which is the one PNG transparency that is decoded here because
+            no reader was measured to read the array form at that depth.
+            An LZW TIFF is unpacked and written out again as Flate, since
+            PDF/A admits no /LZWDecode.
 
         Tables
             Column widths, cell wrapping, page breaks with repeated header and
@@ -92,9 +98,8 @@ SYNOPSIS
     Everything listed above is built and tested; nothing here is planned or
     partial. Measured against the page count of its chapters, that covers
     roughly a third of ISO 32000-1 - and the missing two thirds are almost
-    entirely what a READER of foreign PDFs needs rather than a writer, plus
-    encryption and form fields. See the manual for the complete list of
-    commands.
+    entirely what a READER of foreign PDFs needs rather than a writer. See
+    the manual for the complete list of commands.
 
 
 DEPENDENCIES
@@ -115,8 +120,9 @@ DEPENDENCIES
     That is the whole list; there is no other optional package. Barcodes
     need none either: tzint is a separate encoder, not a package tclpdf
     uses - it produces SVG, which "svg -data" draws, and no code in this
-    package knows about barcodes. Encryption is planned work and will name
-    its package here once it exists.
+    package knows about barcodes. Encryption needs none either: the standard
+    security handler in revision 6 - AES-256, SHA-2, the whole key ladder -
+    is written in pure Tcl, with no cryptographic library to build.
 
     Tk is not required and must not be pulled in.
 
@@ -151,7 +157,7 @@ INSTALLING
 
     Build IN the source directory. A separate build directory configures
     cleanly but cannot run the tests: the generated pkgIndex.tcl locates the
-    modules through $dir, which is then the build directory, while the 68
+    modules through $dir, which is then the build directory, while the 100
     .tcl files stay where the sources are. Nothing is lost by building
     in-tree - make install puts index and modules together again either way.
 

@@ -29,6 +29,11 @@
 # which is exactly what a bare CFF is. That also shows -data, the option for
 # a face that never was a file.
 #
+# THE SAME FACE IN ITS THREE CONTAINERS stands side by side on the page: the
+# bare table through -data, the whole .otf, and the .t1 with its AFM beside
+# it. The widths have to agree across all three, and the comparison on the
+# page is what says whether they do.
+#
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
 # See the file "license.terms" for information on usage and redistribution
@@ -102,6 +107,8 @@ set y [$doc table -at [list 20 $y] -width 170 -theme grid \
             "Top DICT ItalicAngle" post] \
         [list "Stem width" [dict get $facts stemV] \
             "Private DICT StdVW" "estimated"] \
+        [list "Cap height" [dict get $facts tops H] \
+            "the H charstring" "OS/2 sCapHeight"] \
         [list "Glyph names" [dict size [dict get $facts charset]] charset post] \
         [list "Widths" [dict size [dict get $facts widths]] \
             "the charstrings" hmtx] \
@@ -116,8 +123,11 @@ $doc text "The stem width is the one number the TrueType road cannot read and\
     has to estimate from the weight class; a CFF states it. The embedding\
     permission is the one this format has nowhere to put, so font info answers\
     it as not stated rather than as permission 0 - an absent permission is not\
-    permission." -at [list 20 $y] -width 170
-set y [expr {$y + 16}]
+    permission. The cap height is the one no CFF states at all, and Table 122\
+    asks the descriptor for it: it is read off the top of the H. From the\
+    FontBBox, where the Aring reaches, this face declared 1075 for capitals\
+    of [dict get $facts tops H]." -at [list 20 $y] -width 170
+set y [expr {$y + 20}]
 
 # -- the check that matters --------------------------------------------------
 
@@ -183,11 +193,12 @@ $doc text "Set in the bare CFF, and half of it outside ASCII. Copy the line\
 # The readers behind "font embed" refuse in classes, and the class is the part
 # a script can act on: SOURCE says "wrong format, try another reader", DAMAGED
 # says "right format, broken file - stop", UNSUPPORTED says "sound file, this
-# package does not read it", SUBSET says "sound face, it just cannot be cut
-# down". Until 2026-08-24 all four arrived as no code at all, so a script had
-# to read the message - which the manual says is not a contract.
+# package does not read it", TABLE says "the face is missing a table it cannot
+# be embedded without". Until 2026-08-24 all of them arrived as no code at
+# all, so a script had to read the message - which the manual says is not a
+# contract.
 
-set y [expr {$y + 22}]
+set y [expr {$y + 10}]
 $doc font -family bare -size 11 -color black
 $doc text "What a refusal answers with" -at [list 20 $y]
 set y [expr {$y + 7}]

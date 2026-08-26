@@ -120,6 +120,24 @@ oo::define ::tclpdf::document::document {
     # the reader may say no as often as it likes, the document does not
     # change before it has said yes.
 
+    # The page's resources, and the /Properties behind them resolved: the
+    # optional-content work further down wants them, and so does the
+    # marked-content walk two blocks below - which of the named property
+    # lists carry an /MCID is a question only the reader can answer.
+    set resources [::tclpdf::importRead::Get $pageDict Resources]
+    set resolved [::tclpdf::importRead::Resolve reader $resources]
+    set properties [::tclpdf::importRead::Resolve reader \
+        [::tclpdf::importRead::Get $resolved Properties]]
+    set marked {}
+    if {[lindex $properties 0] eq "d"} {
+      foreach {name item} [lindex $properties 1] {
+        if {[::tclpdf::importRead::Get \
+            [::tclpdf::importRead::Resolve reader $item] MCID] ne {}} {
+          lappend marked /$name
+        }
+      }
+    }
+
     # The content: one stream or an array of streams whose CONCATENATION
     # is the page description (7.8.2) - decoded, joined, and stored behind
     # this document's own compression.
@@ -144,7 +162,28 @@ oo::define ::tclpdf::document::document {
       lappend pieces [::tclpdf::importRead::DecodeStream reader $value $data \
           "the content stream"]
     }
-    set content [join $pieces \n]
+    # THE FOREIGN PAGE'S STRUCTURE MARKS COME OUT. A tagged page carries
+    # /P <</MCID 0>> BDC ... EMC brackets whose numbers point into the
+    # structure tree of the file they came from; that tree does not travel,
+    # and 14.7.4.2 makes a marked-content sequence inside a form XObject a
+    # content item only through the XObject's own /StructParents. Left
+    # standing they are marks pointing at nothing, inside the artifact or
+    # Figure bracket the placement puts around them (14.8.2.2, Matterhorn
+    # 01-005) - a reader that takes them seriously reads out paragraphs that
+    # belong to no tree. Measured 2026-08-26 on an imported 05.07-accessible:
+    # "form XObject /PI1 contains MCIDs [0..29] (needs its own
+    # /StructParents; has None)".
+    #
+    # ONLY those, and [Unmark] says which: a bracket carrying an /MCID and
+    # nothing else. An /OC bracket switches a layer and stays, a /Span with
+    # a /Lang says something about the content and stays, an /Artifact BMC
+    # stays.
+    #
+    # Always, not only in a tagged document: which of the two the caller
+    # declares can come after the import ([ua 1] does it), the stripped
+    # stream renders identically, and one behaviour is cheaper to explain
+    # than two.
+    set content [::tclpdf::importRead::Unmark [join $pieces \n] $marked]
 
     # Everything the page's resources reach, READ: object by object, the
     # closure over the references. The content streams are not part of it -
@@ -155,7 +194,6 @@ oo::define ::tclpdf::document::document {
     # deeper than the parser follows. Not one of those may leave a reserved
     # object number behind - an object reserved and never filled makes the
     # WRITE fail, for a document that could otherwise still be written.
-    set resources [::tclpdf::importRead::Get $pageDict Resources]
     set queue [::tclpdf::importRead::Refs $resources]
     set order {}
     set copies {}
@@ -181,60 +219,65 @@ oo::define ::tclpdf::document::document {
     # [ImportStrings] hands back what it cannot be asked about.
     set resourceStrings [my ImportStrings $resources]
 
+    # EVERY QUESTION THE CLOSURE CAN STILL SAY NO TO, ASKED OVER THE WHOLE
+    # CLOSURE AND BEFORE THE FIRST OBJECT NUMBER IS HANDED OUT.
+    #
+    # This used to be one loop with the numbering below: strings checked,
+    # filter checked, number reserved, next object. That reads as if it were
+    # the check-before-write order and it is not - for object k the objects
+    # 1..k-1 are already reserved when k refuses, and a reservation that is
+    # never filled makes the WHOLE document unwritable ("object(s) reserved
+    # but never written" at the next [write]), for a caller who caught the
+    # refusal and carried on. Round 6 measured the case with the refusing
+    # object FIRST, where the loop happens to be right, and closed it;
+    # round 7 measured it in the middle of a two-resource page and found it
+    # open (2026-08-26, a form XObject carrying /Foo <4G> behind another one,
+    # and the same page with the second resource deflated into a -version 1.1
+    # document). So the two refusals get a pass of their own.
+    #
+    #   [ImportStrings]  the last refusal of the reading side - a hexadecimal
+    #                    string of the foreign file holding something that is
+    #                    not a hexadecimal digit (7.3.4.3). It does not need
+    #                    the map, so it can be settled here; only the
+    #                    serialization needs it, and that stays below
+    #   [requireFilter]  the writer's, and it stays the writer's - a
+    #                    FlateDecode resource may not land in a file whose
+    #                    header disowns the filter. Asked here rather than
+    #                    reached through [stream], which runs after every
+    #                    number has been handed out
+    set writer [my writer]
+    set strings {}
+    foreach number $order {
+      lassign [dict get $copies $number] value hasStream
+      dict set strings $number [my ImportStrings $value]
+      if {$hasStream} {
+        $writer requireFilter [my ImportStreamFilters reader $value]
+      }
+    }
+
     # -- from here on the document changes --------------------------------
     #
     # [Refs] walked every value above and refused what it could not walk, so
     # the numbering below cannot run into a value the reading did not already
-    # accept - and every number is handed out only for an object whose
-    # strings have been through [ImportStrings] one line earlier, which is
-    # the last thing on this road that can still say no.
-    set writer [my writer]
-    set map {}
-    set pooled {}
-    set strings {}
+    # accept, and the pass above has asked the two questions that were left.
+    #
+    # WHAT CAN BE SHARED RATHER THAN COPIED is decided first, because a
+    # shared object is written whole and needs no number of its own - see
+    # [ImportShare]. What is left over gets its number here, all of them
+    # before the first body is written, since a body may refer to an object
+    # further down the list.
+    set context [dict create copies $copies strings $strings map {} \
+        shared {} plain {} visiting {}]
     foreach number $order {
-      # A FUNCTION IS A VALUE, not a thing with an identity: two identical
-      # ones are interchangeable, and importing the same file twice used to
-      # bring the same function twice with it. It goes through the pool the
-      # gradients already use - and the decision falls HERE, before the
-      # number is reserved, because a reservation left unfilled makes the
-      # whole document unwritable. That defect has been had once (annot.tcl,
-      # 2026-08-25) and is not worth having twice.
-      lassign [dict get $copies $number] value hasStream
-      set reuse [my ImportPooledFunction $value $hasStream]
-      if {$reuse ne {}} {
-        dict set map $number $reuse
-        lappend pooled $number
-        continue
-      }
-      # THE STRINGS OF THE OBJECT, put through the document's seam BEFORE
-      # the number is reserved and for the same reason as the pool above.
-      # [ImportStrings] is the last refusal of the whole import - a
-      # hexadecimal string of the foreign file holding something that is not
-      # a hexadecimal digit (7.3.4.3) - and it used to fall in the loop
-      # below, with every number already handed out: a [pdf import] the
-      # caller had caught left the document unwritable, "object(s) reserved
-      # but never written" at the next [write] (measured 2026-08-25 on a
-      # file carrying <4G>). The conversion does not need the map, so it can
-      # be done here; only the serialization does, and that stays below.
-      dict set strings $number [my ImportStrings $value]
-      # AND THE FILTER OF A COPIED STREAM, asked of the writer here for the
-      # third time in this loop for the same reason. The check itself is the
-      # writer's and stays there - a FlateDecode resource may not land in a
-      # file whose header disowns the filter - but it used to be reached only
-      # through [stream] in the loop below, which runs after every number of
-      # the closure has been handed out: [pdf import] of a page with a
-      # deflated resource into a -version 1.1 document was refused correctly
-      # and left the document unwritable all the same, "object(s) reserved but
-      # never written" at the next [write] (measured 2026-08-25). The refusal
-      # is the same sentence either way; only its place has moved forward.
-      if {$hasStream} {
-        $writer requireFilter [my ImportStreamFilters reader $value]
-      }
+      my ImportShare $number context
+    }
+    set map [dict get $context map]
+    foreach number $order {
+      if {[dict exists $map $number]} continue
       dict set map $number [$writer reserve]
     }
     foreach number $order {
-      if {$number in $pooled} {
+      if {[dict exists $context shared $number]} {
         # Already in the file, under a number this document gave it.
         continue
       }
@@ -291,9 +334,6 @@ oo::define ::tclpdf::document::document {
     # as a /Properties value; the catalog's /OCGs array takes the GROUPS
     # behind it - its /OCGs, a reference or an array of them - never the
     # OCMD itself (8.11.4.2 asks for every group in the document there).
-    set resolved [::tclpdf::importRead::Resolve reader $resources]
-    set properties [::tclpdf::importRead::Resolve reader \
-        [::tclpdf::importRead::Get $resolved Properties]]
     set sources {}
     set numbers {}
     set hidden {}
@@ -485,30 +525,126 @@ oo::define ::tclpdf::document::document {
   # gets is this document's business - the encryptor answers with finished
   # PDF syntax (hexadecimal, always) exactly as it does at every other string
   # in the document.
-  # A foreign object that may be reused rather than copied, or the empty
-  # string. Narrow on purpose, and each condition is a way it could go wrong:
+  # -- what is shared rather than copied ------------------------------------
   #
-  #   a stream          a sampled (type 0) or PostScript (type 4) function
-  #                     carries one, and the pool would have to key on the
-  #                     bytes as well - the common gradient types 2 and 3 do
-  #                     not, so the cheap half is taken and the rest copied
-  #   not a dictionary  nothing else can be a function
-  #   no FunctionType   the only mark a function has (ISO 32000-1, 7.10)
-  #   any reference     the serialization of a value holding one depends on
-  #                     the map, and the map is not finished at this point.
-  #                     A function of type 3 referring to its parts through
-  #                     indirect objects is therefore copied whole
-  method ImportPooledFunction {value hasStream} {
-    if {$hasStream || [lindex $value 0] ne "d"} {
-      return {}
+  # AN IMPORTED OBJECT IS A VALUE, not a thing with an identity. Two
+  # byte-identical font programs are interchangeable, and until 2026-08-26
+  # importing the same file twice brought every one of them twice: a letter
+  # with the front and the back of a letterhead carried each embedded face
+  # two times over, and [pdf fonts] counted eight where the source had four
+  # (measured on 02.01-embedding.pdf: 24 269 bytes in, 24 790 after one
+  # import, 48 831 after two). Only functions were pooled, because gradients
+  # already had a pool and the case was reached from there.
+  #
+  # So the pool is asked about EVERY object of the closure, keyed on what the
+  # object would be written as. The key is built from the value as it was
+  # READ - before the document's string seam - because an encrypted document
+  # spells the same string differently every time (a fresh initialisation
+  # vector per call), and a key that changes on every look is a pool that
+  # never hits.
+  #
+  # AN OBJECT IS ONLY SHAREABLE IF EVERYTHING IT POINTS AT IS, and that is
+  # what makes this recursive rather than a loop. The serialization of a
+  # value holding a reference depends on the number that reference resolves
+  # to, so it can only be a key once that number is settled and settled by
+  # CONTENT rather than by the order this import happened to reserve in. A
+  # font dictionary therefore reaches the pool exactly when its descendant,
+  # its descriptor and its font file have; one plainly copied object below
+  # makes the whole chain above it plain as well.
+  #
+  # Whatever is left over is copied under a reserved number, as before -
+  # anything on a reference cycle (a page tree walks back to its parent),
+  # anything reaching one, and everything above an object the pool could not
+  # take.
+  #
+  # THE OBJECT IS WRITTEN HERE, whole, rather than reserved and filled later:
+  # a shared object has no forward reference to wait for, by construction.
+  # Answers 1 where the number in the map is a shared one.
+  method ImportShare {number contextVar} {
+    upvar 1 $contextVar context
+    if {[dict exists $context shared $number]} {
+      return 1
     }
-    if {![dict exists [lindex $value 1] FunctionType]} {
-      return {}
+    if {[dict exists $context plain $number]} {
+      return 0
     }
-    if {[llength [::tclpdf::importRead::Refs $value]]} {
-      return {}
+    if {[dict exists $context visiting $number]} {
+      # A cycle. Nothing on it can be keyed by its content, because the
+      # content of each holds the number of the next.
+      return 0
     }
-    return [my FunctionPool [my ImportSerialize $value {}] {} {}]
+    if {![dict exists $context copies $number]} {
+      return 0
+    }
+    lassign [dict get $context copies $number] value hasStream data
+    dict set context visiting $number 1
+    set shareable 1
+    foreach reference [::tclpdf::importRead::Refs $value] {
+      if {![my ImportShare $reference context]} {
+        set shareable 0
+      }
+    }
+    dict unset context visiting $number
+    if {!$shareable} {
+      dict set context plain $number 1
+      return 0
+    }
+    set map [dict get $context map]
+    # A FUNCTION GOES ON THROUGH THE POOL THE GRADIENTS USE, so that an
+    # imported function and one this document computed for a [shading] of its
+    # own are one object. That pool is keyed on finished syntax, which for a
+    # value without strings is the same thing as the key below - and a
+    # function with strings in it does not exist.
+    if {!$hasStream && [lindex $value 0] eq "d"
+        && [dict exists [lindex $value 1] FunctionType]
+        && ![llength [::tclpdf::importRead::Refs $value]]} {
+      dict set context map $number [my FunctionPool \
+          [my ImportSerialize $value {}] {} {}]
+      dict set context shared $number 1
+      return 1
+    }
+    # AN OPTIONAL CONTENT GROUP IS NOT A VALUE. It is a row in the reader's
+    # layer panel, a name a person clicks, and a thing this document keeps a
+    # STATE for - which of the imported groups start out switched off travels
+    # through the catalogue entry (see below and layer.tcl), keyed on the
+    # number this document gave it. Two imports that each brought a layer are
+    # two layers the caller can tell apart and switch apart, and collapsing
+    # them into one would decide that question here rather than leaving it
+    # where it belongs. A membership dictionary goes with it, since it names
+    # groups. Everything else - a font, a picture, an ICC profile, a
+    # descriptor - is a value, and two identical ones are interchangeable.
+    if {[lindex [::tclpdf::importRead::Get $value Type] 1] in {OCG OCMD}} {
+      dict set context plain $number 1
+      return 0
+    }
+    set key [list $hasStream $data \
+        [::tclpdf::importRead::Serialize $value $map]]
+    set pool [my state importPool]
+    if {[dict exists $pool $key]} {
+      dict set context map $number [dict get $pool $key]
+      dict set context shared $number 1
+      return 1
+    }
+    set body [dict get $context strings $number]
+    if {$hasStream} {
+      # The raw bytes and their /Filter travel unchanged, and /Length is
+      # dropped rather than restated - the writer computes it. Both are the
+      # copying loop's reasons, spelled out there.
+      set pairs {}
+      foreach {entry item} [lindex $body 1] {
+        if {$entry eq "Length"} continue
+        lappend pairs $entry [::tclpdf::importRead::Serialize $item $map]
+      }
+      set target [[my writer] addStream $pairs $data]
+    } else {
+      set target [[my writer] add \
+          [::tclpdf::importRead::Serialize $body $map]]
+    }
+    dict set pool $key $target
+    my state importPool $pool
+    dict set context map $number $target
+    dict set context shared $number 1
+    return 1
   }
 
   # The filter names of a stream the import is about to copy, as a plain list
@@ -713,4 +849,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.5
+package provide tclpdf::import 1.6

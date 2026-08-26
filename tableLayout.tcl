@@ -106,6 +106,21 @@ oo::define ::tclpdf::document::document {
       # actually read. The cell's style is checked in TableStyle, where the
       # assembled style says which keys exist.
       ::tclpdf::option keys $source [dict keys $cell] "cell key" table
+      # AND IT HAS TO SAY WHAT THE CELL HOLDS. The manual explains this
+      # ambiguity by promising that such a string "then names the offending
+      # key" - and where every key IS a cell key there is no offending one to
+      # name: "align right" is a well formed cell dictionary with no text in
+      # it, so the cell came out empty and right aligned, in silence. That is
+      # the one case the sentence does not cover, and it is the likely one -
+      # a caller who writes two words meant them as text.
+      if {![dict exists $source text]} {
+        return -code error -errorcode [list TCLPDF TABLE CELL text] \
+            "tclpdf: the cell \"$source\" reads as a dictionary - it begins\
+            with the cell key \"[lindex $source 0]\" and has an even word\
+            count - but names no text, so the cell would come out empty; give\
+            it a text key, or write the string as \{[list $source]\} to set\
+            it as it stands"
+      }
       set cell [dict merge $cell $source]
     } else {
       dict set cell text $source
@@ -214,12 +229,21 @@ oo::define ::tclpdf::document::document {
       # of the table is what weight is for.
       foreach key {width weight} {
         if {[dict exists $column $key]
-            && ![string is double -strict [dict get $column $key]]} {
+            && (![::tclpdf::option finite [dict get $column $key]]
+                || [dict get $column $key] <= 0)} {
+          # ABOVE ZERO, both of them, and that is the same sentence the
+          # implicit zero width already had: "that column would come out zero
+          # wide". A width of 0 drew every cell of the column on top of its
+          # neighbour, a negative one started the next column to the LEFT of
+          # -at - measured, 20 mm outside the table - and a weight of 0 or
+          # below went into a proportion that means nothing. NaN and Inf are
+          # doubles to Tcl and passed every comparison written as "< 0".
           return -code error -errorcode [list TCLPDF TABLE COLUMN $key] \
-              "tclpdf: a column $key is a number, not\
+              "tclpdf: a column $key is a number above zero, not\
               \"[dict get $column $key]\" - width in the document unit,\
               weight as a share of what the fixed widths leave; there is no\
-              percent width"
+              percent width, and a column of no width has nowhere to put its\
+              text"
         }
       }
       if {[dict exists $column width]} {
@@ -577,13 +601,16 @@ oo::define ::tclpdf::document::document {
       lineWidth {a width of 0 or more in the document unit}
     } {
       set value [dict get $style $key]
-      if {![string is double -strict $value] || $value < 0} {
+      # [option finite] rather than [string is double]: NaN is a double to
+      # Tcl and compares false against every range check, so it travelled
+      # into the arithmetic that places the text inside the cell.
+      if {![::tclpdf::option finite $value] || $value < 0} {
         return -code error -errorcode [list TCLPDF TABLE STYLE $key] \
             "tclpdf: a table $key is $what, not \"$value\""
       }
     }
     set leading [dict get $style leading]
-    if {![string is double -strict $leading] || $leading <= 0} {
+    if {![::tclpdf::option finite $leading] || $leading <= 0} {
       return -code error -errorcode [list TCLPDF TABLE STYLE leading] \
           "tclpdf: a table leading is a factor of the font\
           size above 0, not \"$leading\""
@@ -592,4 +619,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableLayout 1.5
+package provide tclpdf::tableLayout 1.6

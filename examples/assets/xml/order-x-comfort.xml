@@ -5,6 +5,14 @@ Order-X 1.0 purchase order, profile COMFORT, for tclpdf example 05.13.
 The structure follows the Order-X 1.0 specification (Cross Industry Order,
 SCRDM CIO D20B); the business data is the order the example page shows -
 the two must state the SAME order, that is the point of the hybrid format.
+
+Origin and terms. Unlike the two ZUGFeRD invoices beside it, this file is not
+a copy of a published sample: it was written for this project against the
+specification, and the order it states is invented. It therefore carries no
+third-party terms and travels under the MIT licence of tclpdf itself, like
+every other file under examples/. The two invoices next to it are the other
+case - they are FeRD samples and carry the FeRD terms in their own head, which
+is what makes them redistributable and must not be stripped.
 -->
 <rsm:SCRDMCCBDACIOMessageStructure xmlns:rsm="urn:un:unece:uncefact:data:SCRDMCCBDACIOMessageStructure:100" xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:128" xmlns:qdt="urn:un:unece:uncefact:data:standard:QualifiedDataType:128" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:128">
   <rsm:ExchangedDocumentContext>

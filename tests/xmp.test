@@ -109,19 +109,55 @@ test xmp-2.2 {declaring a topic twice does not describe it twice} -constraints {
       [regexp {<pdfaid:conformance>U</pdfaid:conformance>} $bytes]
 } -result {1 1 1}
 
+# The caller's packet has to carry every claim itself - see xmp-2.4 - so this
+# one says pdfaid:part 9, which no builder would ever write: what reaches the
+# file is theirs and nothing else.
+set callerPacket {<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF\
+ xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description\
+ rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"><pdfaid:part>9</pdfaid:part></rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>}
+
 test xmp-2.3 {an explicit packet wins over the built one} -constraints {haveFace haveTdom} -body {
   # A caller who supplies their own has said something more specific than
   # anything this module would assemble.
   set doc [probe $face]
   $doc pdfa -part 3 -conformance B
-  $doc metadata "<?xpacket begin=\"\"?>\n<x:xmpmeta/>\n<?xpacket end=\"w\"?>"
+  $doc metadata $callerPacket
   set path [::tclpdfTest::scratch xmp-explicit.pdf]
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
-  list [regexp {pdfaid:part} $bytes] [regexp {<x:xmpmeta/>} $bytes]
-} -result {0 1}
+  list [regexp {<pdfaid:part>9</pdfaid:part>} $bytes] [regexp {dc:title} $bytes]
+} -result {1 0}
+
+test xmp-2.4 {a claim that is not in the caller's packet is refused, in both orders} -constraints {haveFace haveTdom} -body {
+  # A packet set by the caller REPLACES the built one, and with it every
+  # description a topic registered. Measured 2026-08-26: "metadata <own
+  # packet>" with "pdfa -part 3" wrote the output intent and the Info
+  # dictionary and no pdfaid at all, and veraPDF answered 6.6.4-1 - the
+  # claim never reached the file and nothing said so.
+  set empty "<?xpacket begin=\"\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>\n<?xpacket end=\"w\"?>"
+  set result {}
+  foreach order {claimFirst packetFirst} {
+    set doc [probe $face]
+    if {$order eq "claimFirst"} {
+      $doc pdfa -part 3 -conformance B
+      $doc metadata $empty
+    } else {
+      $doc metadata $empty
+      $doc pdfa -part 3 -conformance B
+    }
+    set path [::tclpdfTest::scratch xmp-caller-$order.pdf]
+    lappend result [catch {$doc write $path} err] \
+        [string match {*pdfaid*does not carry it*} $err] \
+        [lrange $::errorCode 0 2] [file exists $path]
+    $doc destroy
+    file delete $path
+  }
+  set result
+} -result {1 1 {TCLPDF XMP CALLER} 0 1 1 {TCLPDF XMP CALLER} 0}
 
 # --- what comes in from outside -------------------------------------------
 
@@ -384,7 +420,7 @@ test xmp-6.3 {a caller's packet stands through both writes} -constraints {haveFa
   set doc [probe $face]
   $doc pdfa -part 3 -conformance B
   $doc info Title "First"
-  $doc metadata "<?xpacket begin=\"\"?>\n<x:xmpmeta>mine</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+  $doc metadata $callerPacket
   set first [::tclpdfTest::scratch xmp-mine-a.pdf]
   set second [::tclpdfTest::scratch xmp-mine-b.pdf]
   $doc write $first
@@ -394,8 +430,8 @@ test xmp-6.3 {a caller's packet stands through both writes} -constraints {haveFa
   set a [::tclpdfTest::readBytes $first]
   set b [::tclpdfTest::readBytes $second]
   file delete $first $second
-  list [regexp {<x:xmpmeta>mine</x:xmpmeta>} $a] [regexp {dc:title} $a] \
-      [regexp {<x:xmpmeta>mine</x:xmpmeta>} $b] [regexp {dc:title} $b] \
+  list [regexp {<pdfaid:part>9</pdfaid:part>} $a] [regexp {dc:title} $a] \
+      [regexp {<pdfaid:part>9</pdfaid:part>} $b] [regexp {dc:title} $b] \
       [regexp {/Title \(Second\)} $b]
 } -result {1 0 1 0 1}
 
@@ -607,10 +643,17 @@ test xmp-8.5 {only a PDF date is taken for CreationDate and ModDate, and a parti
         [string match {*info CreationDate takes a PDF date*7.9.4*} $err]
   }
   lappend out [catch {$doc info ModDate "yesterday"} err] [string match {*info ModDate takes*} $err]
+  # The zone offset is spelled with the closing apostrophe in ISO 32000-1
+  # and without it in ISO 32000-2, so which of the two is a date depends on
+  # the DOCUMENT: this one is 1.7. The 2.0 spelling used to be taken here
+  # and to reach a %PDF-1.7 file verbatim (measured 2026-08-26); it now
+  # belongs to xmp-8.5b, which asks the same question of a 2.0 document.
   set accepted [lmap value {D:2026 D:202608 D:20260818 D:2026081812 D:20260818120000
-      D:20260818120000Z D:20260818120000+02'00' D:20260818120000+02'00 D:20260818120000-05'30'} {
+      D:20260818120000Z D:20260818120000+02'00' D:20260818120000-05'30'} {
     $doc info CreationDate $value
   }]
+  lappend out [catch {$doc info CreationDate D:20260818120000+02'00} err] \
+      [string match {*ISO 32000-2 spelling*1.7 file*} $err]
   $doc destroy
   # "D:2019030405" gives an hour and no zone, and comes back as the DATE:
   # XMP part 1, 8.2.1.4 has no form for a time nobody can place. See
@@ -619,7 +662,41 @@ test xmp-8.5 {only a PDF date is taken for CreationDate and ModDate, and a parti
       [::tclpdf::xmp stampFromPdf D:2019] [::tclpdf::xmp stampFromPdf D:201903] \
       [::tclpdf::xmp stampFromPdf D:2019030405] [::tclpdf::xmp stampFromPdf D:20190304050607-05'30'] \
       [::tclpdf::xmp stampFromPdf D:20190304050607+02] [::tclpdf::xmp stampFromPdf junk]
-} -result {1 9 2019 2019-03 2019-03-04 2019-03-04T05:06:07-05:30 2019-03-04T05:06:07+02:00 {}}
+} -result {1 8 2019 2019-03 2019-03-04 2019-03-04T05:06:07-05:30 2019-03-04T05:06:07+02:00 {}}
+
+test xmp-8.5b {the zone offset is spelled the way the document's version spells it} -body {
+  # ISO 32000-1, 7.9.4 writes D:YYYYMMDDHHmmSSOHH'mm' and ISO 32000-2 struck
+  # the closing apostrophe. The package has always known that where it
+  # writes its OWN dates - [pdfObj date] takes the version - and took either
+  # spelling from the caller: a 2.0-spelled date reached a %PDF-1.7 PDF/A-3B
+  # file and veraPDF called it conformant (measured 2026-08-26).
+  set out {}
+  foreach {version right wrong} {1.7 D:20260818120000+02'00' D:20260818120000+02'00
+      2.0 D:20260818120000+02'00 D:20260818120000+02'00'} {
+    set doc [tclpdf new -unit mm -version $version]
+    lappend out [$doc info CreationDate $right] \
+        [catch {$doc info ModDate $wrong} err] [lrange $::errorCode 0 2]
+    $doc destroy
+  }
+  # And the other order: the date is right when it is set and the version
+  # moves under it afterwards. That is nobody's mistake - [ua -part 2]
+  # raises a 1.7 document to 2.0 - so it is not refused; the value reaches
+  # the FILE in the spelling the file uses, and [info] still answers what
+  # the caller wrote. Refusing here was tried on 2026-08-26 and turned
+  # ua-5.4 and ua-5.5 red.
+  set doc [tclpdf new -unit mm]
+  $doc info CreationDate D:20260818120000+02'00'
+  $doc configure -version 2.0
+  $doc page add
+  set path [::tclpdfTest::scratch xmp-respell.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  lappend out [$doc info CreationDate] \
+      [regexp {/CreationDate \(D:20260818120000\+02'00\)} $bytes]
+  $doc destroy
+  file delete $path
+  set out
+} -result {D:20260818120000+02'00' 1 {TCLPDF DOCUMENT DATE} D:20260818120000+02'00 1 {TCLPDF DOCUMENT DATE} D:20260818120000+02'00' 1}
 
 test xmp-8.6 {Trapped is a name in the dictionary, takes only its three values, and stays out of the packet} -constraints {haveFace haveTdom} -body {
   # Table 317: Trapped is a NAME - True, False, Unknown. It used to be
@@ -1052,5 +1129,65 @@ test xmp-15.2 {a well formed contribution is still taken, and reaches the packet
   file delete $path
   set result
 } -result {1 1}
+
+# --- the prefix and the URI of a schema -----------------------------------
+
+test xmp-15.1 {xmpSchema holds the prefix, not only the tags} -constraints haveTdom -body {
+  # Namespaces in XML 1.0: a prefix is an NCName (3), "xml" is bound to the
+  # XML namespace and to nothing else (2.1), and "xmlns" may not be declared
+  # at all (3). None of that was asked. Measured 2026-08-26: "my" with an
+  # empty URI wrote xmlns:my="" (6.2 makes it an error), "xml" and "xmlns"
+  # went into the packet as declarations no parser takes, and "1my" and
+  # "a:b" reached [dom createNodeCmd] as attribute names it refuses - so the
+  # WRITE died with a raw tdom sentence and -errorcode NONE, and the "a b"
+  # case was refused blaming the TAG, which was in order.
+  set result {}
+  foreach {prefix uri} {xml http://x/ xmlns http://x/ 1my http://x/ a:b http://x/
+      {a b} http://x/ {} http://x/ my {}} {
+    set doc [tclpdf new -unit mm]
+    lappend result [catch {$doc xmpSchema $prefix $uri {good} XmpProbeBody} err] \
+        [lrange $::errorCode 0 2]
+    # And nothing is left behind: the document still writes.
+    $doc page add
+    set path [::tclpdfTest::scratch xmp-prefix.pdf]
+    lappend result [catch {$doc write $path}]
+    $doc destroy
+    file delete $path
+  }
+  set result
+} -result {1 {TCLPDF XMP PREFIX} 0 1 {TCLPDF XMP PREFIX} 0 1 {TCLPDF XMP PREFIX} 0\
+    1 {TCLPDF XMP PREFIX} 0 1 {TCLPDF XMP PREFIX} 0 1 {TCLPDF XMP PREFIX} 0\
+    1 {TCLPDF XMP URI} 0}
+
+test xmp-15.2 {a prefix that IS an NCName still gets through, and the tag keeps its own message} -constraints haveTdom -body {
+  set doc [tclpdf new -unit mm]
+  set good [catch {$doc xmpSchema probe urn:probe {good} XmpProbeBody}]
+  set bad [catch {$doc xmpSchema probe urn:probe {1bad} XmpProbeBody} err]
+  set code [lrange $::errorCode 0 2]
+  $doc destroy
+  list $good $bad $code [string match {*tag "1bad"*} $err]
+} -result {0 1 {TCLPDF XMP TAG} 1}
+
+test xmp-15.3 {a raw contribution is rdf:Description elements, not text and not anything else} -constraints haveTdom -body {
+  # The wrapper's children are appended to the packet's own rdf:RDF, where
+  # RDF/XML admits nothing else (XMP part 1, 7.9.2.2). Measured 2026-08-26:
+  # "xmpRaw {just text}" and "xmpRaw {<foo>bar</foo>}" were taken, and under
+  # a PDF/A claim veraPDF then answered 6.6.2.1-4/-5 and 6.6.4-1 - without a
+  # claim no tool looked at all.
+  set result {}
+  foreach xml {{just text} {<foo>bar</foo>}} {
+    set doc [tclpdf new -unit mm]
+    lappend result [catch {$doc xmpRaw $xml}] [lrange $::errorCode 0 2]
+    $doc destroy
+  }
+  # A comment and whitespace around a real description are what a
+  # hand-written schema carries, and both pass.
+  set doc [tclpdf new -unit mm]
+  lappend result [catch {$doc xmpRaw {<!-- c -->
+      <rdf:Description rdf:about="" xmlns:probe="urn:probe"><probe:a>1</probe:a></rdf:Description>
+  }} err] $err
+  $doc destroy
+  set result
+} -result {1 {TCLPDF XMP RDF} 1 {TCLPDF XMP RDF} 0 {}}
 
 cleanupTests

@@ -138,6 +138,116 @@ $doc font -color black -style {}      ;# the font state is document state, not p
 
 Every form is an isolated transparency group: `-opacity` on the placement fades it as **one** object, and shapes overlapping inside it do not add up. The group names no colour space, so a form stays valid under any PDF/A output intent. Below `-version 1.4` there are no groups. `-alt`/`-artifact` on the placement matter in tagged documents.
 
+## A colour computed at every point: shading type 1
+
+```tcl
+$doc page add
+
+# -expression is the BODY of a PostScript calculator function (ISO 32000-2,
+# 7.10.5) without its outer braces, which are written here: x and y arrive on
+# the stack in domain coordinates, and what is left when it ends is the
+# colour - one number per component, which -space says how many of.
+$doc shading function -at {20 20} -size {80 50} -space rgb \
+    -expression {exch 720 mul sin 1 add 2 div exch 720 mul sin 1 add 2 div 0.4}
+
+# -domain is the rectangle the calculation is written over ({0 1 0 1} unless
+# given, x0 below x1 and y0 below y1); -at and -size say where that rectangle
+# goes, so the domain's y runs UP the page, the way a calculation expects.
+$doc shading function -at {110 20} -size {80 50} -space gray -domain {-2 2 -2 2} \
+    -expression {dup mul exch dup mul add 4 div 1 exch sub}
+
+# Every word is held to Table 42: a misspelt operator is refused naming it,
+# and so is a brace that does not close - a reader answers either by painting
+# nothing at all.
+if {[catch {$doc shading function -at {20 20} -size {10 10} -space gray \
+        -expression {x 2 mul}} message]} {
+    puts "refused, as it should be: $message"
+}
+```
+
+What cannot be decided by reading is whether the right *number* of values is left on the stack: `if`, `ifelse` and `roll` make that depend on the values, and a function that leaves too few is a valid file and an empty rectangle.
+
+## The four mesh shadings: colours carried as points
+
+```tcl
+# A mesh BOUNDS ITSELF - it paints only where its triangles or patches are, so
+# unlike a gradient it needs no rectangle; -at with -size is a clip where one
+# is wanted, and half of a rectangle is refused.
+
+# Type 4, free-form: a vertex is {x y colour} with an optional fourth word,
+# the edge flag. 0 begins a triangle and wants two more 0s after it; 1 and 2
+# each add a SINGLE vertex to the triangle before - 1 keeps its second and
+# third corner (a strip), 2 its first and third (a fan round a centre).
+set vertices {{60 45 white}}
+set hues {{0.85 0.20 0.20} {0.90 0.55 0.15} {0.85 0.80 0.15} {0.35 0.70 0.25}
+          {0.15 0.60 0.60} {0.20 0.35 0.80} {0.50 0.25 0.75} {0.80 0.25 0.55}}
+set index 0
+foreach hue $hues {
+    set angle [expr {$index * 3.14159265 / 4.0}]
+    lappend vertices [list [expr {60 + 22 * cos($angle)}] \
+        [expr {45 + 22 * sin($angle)}] $hue [expr {$index < 2 ? 0 : 2}]]
+    incr index
+}
+$doc shading triangles -vertices $vertices
+
+# Type 5, the lattice: the same vertices WITHOUT flags, read as rows of
+# -perRow each - two or more per row and two or more rows. A flag written on a
+# lattice vertex is refused rather than ignored: the type cannot express it.
+set vertices {}
+set palette {{0.10 0.25 0.50} {0.20 0.55 0.65} {0.55 0.80 0.65} {0.95 0.95 0.70}
+             {0.30 0.45 0.65} {0.95 0.75 0.35} {0.90 0.45 0.25} {0.65 0.20 0.30}
+             {0.15 0.30 0.45} {0.45 0.60 0.55} {0.85 0.60 0.40} {0.35 0.15 0.25}}
+set index 0
+foreach colour $palette {
+    lappend vertices [list [expr {110 + 22 * ($index % 4)}] \
+        [expr {24 + 20 * ($index / 4)}] $colour]
+    incr index
+}
+$doc shading lattice -perRow 4 -vertices $vertices
+
+# Types 6 and 7: a patch is {points {...} colors {...}} - twelve control
+# points for coons, sixteen for tensor, each {x y}, and four colours, one per
+# corner. The points run round the boundary from the first corner, four cubic
+# Bezier edges with the corners shared; the corner colours belong to points
+# 1, 4, 7 and 10 in the order the boundary passes them.
+proc refBoundary {left top width height bulge} {
+    set right [expr {$left + $width}]
+    set bottom [expr {$top + $height}]
+    set thirdX [expr {$width / 3.0}]
+    set thirdY [expr {$height / 3.0}]
+    return [list \
+        [list $left $top] \
+        [list [expr {$left + $thirdX}] [expr {$top - $bulge}]] \
+        [list [expr {$right - $thirdX}] [expr {$top - $bulge}]] \
+        [list $right $top] \
+        [list [expr {$right + $bulge}] [expr {$top + $thirdY}]] \
+        [list [expr {$right + $bulge}] [expr {$bottom - $thirdY}]] \
+        [list $right $bottom] \
+        [list [expr {$right - $thirdX}] [expr {$bottom + $bulge}]] \
+        [list [expr {$left + $thirdX}] [expr {$bottom + $bulge}]] \
+        [list $left $bottom] \
+        [list [expr {$left - $bulge}] [expr {$bottom - $thirdY}]] \
+        [list [expr {$left - $bulge}] [expr {$top + $thirdY}]]]
+}
+set corners {{0.95 0.75 0.20} {0.20 0.45 0.75} {0.15 0.55 0.45} {0.85 0.25 0.35}}
+$doc shading coons -patches [list [list points [refBoundary 30 95 56 34 7] colors $corners]]
+
+# A tensor patch adds its four INTERIOR points last - left where a Coons patch
+# would put them they change nothing, pulled away they shape the inside.
+$doc shading tensor -patches [list [list \
+    points [concat [refBoundary 120 95 56 34 7] {{160 120} {160 125} {171 125} {171 120}}] \
+    colors $corners]]
+
+# The ordinary mistake, and the one no tool reports: four vertices with every
+# flag left at 0. It is refused here.
+if {[catch {$doc shading triangles -vertices {
+        {20 150 red} {40 150 green} {40 170 blue} {20 170 white}}} message]} {
+    puts "refused, as it should be: $message"
+}
+```
+
+All the colours of one mesh share **one** space, exactly as the stops of a gradient do: a grey corner among coloured ones is promoted, and mixing RGB with CMYK is refused. The points are packed as a binary stream, sixteen bits per coordinate over the mesh's own bounding box and eight per colour component, so a vertex is eight bytes in RGB and a tensor patch seventy-seven. A mesh's space counts for PDF/A like a painted colour, and every mesh type registers as a pattern - `shading pattern name triangles -vertices ...` - so any shape can be filled with one.
+
 ## Layers: optional content
 
 ```tcl
@@ -149,6 +259,13 @@ $doc page add
 $doc layer create german -title "German"
 $doc layer create english -title "English" -visible 0
 $doc layer create draft -title "Draft stamp" -visible 0
+
+# -intent is View, Design or both (Table 96). The DEFAULT CONFIGURATION
+# considers only groups whose intent it shares and its own is View, so a group
+# created with Design alone is not switched by it - which is what the standard
+# prescribes, and what makes it the intent for a layer meant for the person
+# laying the page out rather than for the reader.
+$doc layer create guides -title "Layout guides" -visible 0 -intent Design
 
 # At most one of a radio set is on at a time (/RBGroups): two or more names,
 # each a layer of this document. One language per layer is the usual case.

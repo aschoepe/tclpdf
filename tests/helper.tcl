@@ -176,6 +176,26 @@ proc ::tclpdfTest::scratch {name} {
 # to be idempotent - that contract is what these tests check, and each one of
 # them was writing the same six lines to do it. The files are removed again;
 # what the caller gets is the two contents.
+# Run a script in a FRESH interpreter - the same tclsh, the source tree on
+# its auto_path, nothing loaded - and hand back what it printed. The one way
+# to measure that a module loads itself through the core's types table: the
+# interpreter running the tests has every module loaded already. Round 7
+# hoisted this out of three field tests that each carried the eight lines.
+proc ::tclpdfTest::freshInterp {script} {
+  set here [file normalize [file dirname [file dirname [info script]]]]
+  set path [::tclpdfTest::scratch freshInterp-[pid].tcl]
+  set channel [open $path w]
+  puts $channel [list lappend auto_path $here]
+  puts $channel $script
+  close $channel
+  try {
+    set out [exec [info nameofexecutable] $path]
+  } finally {
+    file delete $path
+  }
+  return $out
+}
+
 proc ::tclpdfTest::writeTwice {doc name} {
   set first [scratch $name-a.pdf]
   set second [scratch $name-b.pdf]
@@ -409,11 +429,9 @@ proc ::tclpdfTest::refusal {script} {
 #
 
 # F2DOT14 holds -2.0 to just under 2.0, and an angle is written as 180 degrees
-# per 1.0 of it - so a sweep running the full 360 degrees CANNOT be written as
-# 0 to 360: 2.0 encodes as 32768, which is -2.0 in a signed short, and the
-# gradient comes out running backwards. Refused here rather than written,
-# because the wrong answer looks like a flat fill and a fixture that lies is
-# worse than no fixture.
+# per 1.0 of it. Out of range is refused here rather than written, because the
+# wrong answer looks like a flat fill and a fixture that lies is worse than no
+# fixture.
 proc ::tclpdfTest::colrF2Dot14 {value} {
   set number [expr {int(round($value * 16384))}]
   if {$number < -32768 || $number > 32767} {
@@ -504,8 +522,14 @@ proc ::tclpdfTest::colrPaint {spec} {
       set head [binary format c [expr {$varying ? 9 : 8}]]
       append head [::tclpdfTest::colrOffset24 [expr {$varying ? 16 : 12}]]
       append head [binary format SS {*}$centre]
-      append head [::tclpdfTest::colrF2Dot14 [expr {$start / 180.0}]] \
-          [::tclpdfTest::colrF2Dot14 [expr {$end / 180.0}]]
+      # THE SWEEP'S TWO ANGLES CARRY A BIAS OF 1.0 and the rotation's and the
+      # skew's do not: the font stores degrees / 180 - 1, so 0 to 360 is
+      # -1.0 to 1.0 and a whole turn fits where 358 was the ceiling without
+      # it. A fixture written without the bias makes every sweep in this
+      # suite half a circle out and agrees with a reader that has the same
+      # gap - which is how the gap survived until 2026-08-26.
+      append head [::tclpdfTest::colrF2Dot14 [expr {$start / 180.0 - 1.0}]] \
+          [::tclpdfTest::colrF2Dot14 [expr {$end / 180.0 - 1.0}]]
       return $head$tail[::tclpdfTest::colrLine $extend $stops $varying]
     }
     glyph {

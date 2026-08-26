@@ -652,4 +652,62 @@ test textPath-9.9 {a right-to-left cluster keeps its base and its mark together}
 } -result {{304.45748 324.71748} {32 614 379}}
 
 
+# --- round 7 -----------------------------------------------------------------
+
+test textPath-r7-1.1 {every refusal leaves the mark closed and the tree whole} -body {
+  # ISO 32000-1, 14.6.1: BDC and EMC are paired. This road opened its bracket
+  # before the loop and had no guard around it, so four refusals left it
+  # standing: -offset NaN and Inf died in the arithmetic ("string is double"
+  # is true for both), a line feed died in [TextRun] because [textWidth]
+  # splits at one rather than refusing it, and an empty string or a path of no
+  # length wrote a bracket around no glyph at all. With -tag Artifact the
+  # first three swallowed everything that came after them on the page: the
+  # artifact flag stayed set and every later mark was suppressed - measured,
+  # pdfinfo -struct-text showed a document whose two following paragraphs did
+  # not exist for a reader.
+  set answers {}
+  foreach call {
+    {textPath "abc" -segments {{move 20 40} {line 100 40}} -offset NaN}
+    {textPath "abc" -segments {{move 20 40} {line 100 40}} -offset Inf}
+    {textPath "a\nb" -segments {{move 20 40} {line 100 40}}}
+    {textPath "abc" -segments {{move 20 40} {line 100 40}} -offset NaN
+        -tag Artifact}
+    {textPath "" -segments {{move 20 40} {line 100 40}}}
+    {textPath "abc" -segments {{move 20 40} {line 20 40}}}
+  } {
+    set doc [tclpdf new -unit mm]
+    $doc tagged 1
+    $doc page add
+    set code [::tclpdfTest::refusalCode {$doc {*}$call}]
+    # Whatever follows has to reach the tree, which is what the artifact case
+    # is about.
+    $doc text "next paragraph" -at {20 60}
+    set stream [::tclpdfTest::content $doc]
+    set opened [regexp -all {BDC} $stream]
+    set closed [regexp -all {EMC} $stream]
+    $doc destroy
+    lappend answers [list [lrange $code 0 2] [expr {$opened == $closed}] \
+        [expr {$opened == 1}]]
+  }
+  set answers
+} -result {{{TCLPDF TEXT PATH} 1 1} {{TCLPDF TEXT PATH} 1 1}\
+    {{TCLPDF TEXT PATH} 1 1} {{TCLPDF TEXT PATH} 1 1}\
+    {{TCLPDF TEXT PATH} 1 1} {{TCLPDF TEXT PATH} 1 1}}
+
+test textPath-r7-1.2 {and the four are told apart by name} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach call {
+    {textPath "abc" -segments {{move 20 40} {line 100 40}} -offset NaN}
+    {textPath "a\nb" -segments {{move 20 40} {line 100 40}}}
+    {textPath "" -segments {{move 20 40} {line 100 40}}}
+    {textPath "abc" -segments {{move 20 40} {line 20 40}}}
+  } {
+    lappend codes [lindex [::tclpdfTest::refusalCode {$doc {*}$call}] 3]
+  }
+  $doc destroy
+  set codes
+} -result {offset linefeed empty length}
+
 cleanupTests

@@ -55,8 +55,10 @@
 # This is a private sub-module behind the [image] facade. Nobody loads it
 # directly.
 #
-# Failures carry an -errorcode beginning {TCLPDF TIFF}: RANGE and DAMAGED for
-# a broken file, and one word per refusal (BIGTIFF, TILED, PLANAR, ALPHA,
+# Failures carry an -errorcode beginning {TCLPDF TIFF}: DAMAGED for a broken
+# file - with a fourth word naming what about it is broken, "range" and
+# "jpeg" among them - RANGE for a strip index the CALLER got wrong, and one
+# word per refusal (BIGTIFF, TILED, PLANAR, ALPHA,
 # COMPRESSION, PHOTOMETRIC, DEPTH, SAMPLES, SAMPLEFORMAT, PREDICTOR, PALETTE,
 # ORIENTATION, CCITT, CIRCULAR, DIRECTORY, SIGNATURE). The code is the
 # contract, the message text is not.
@@ -109,7 +111,13 @@ namespace eval ::tclpdf::imageTiff {
 
 proc ::tclpdf::imageTiff::Range {bytes offset count what} {
   if {$offset < 0 || $count < 0 || $offset + $count > [string length $bytes]} {
-    return -code error -errorcode {TCLPDF TIFF RANGE} \
+    # DAMAGED, because that is what the message says: the class of a refusal
+    # is what the caller has to do about it, and there is nothing to do about
+    # a file whose directory points past its own end. RANGE stayed the class
+    # of the one refusal in this module that really is a range - a strip
+    # index the caller made up (see [strip]) - and this one joined the rest
+    # of the broken-file family on 2026-08-26.
+    return -code error -errorcode {TCLPDF TIFF DAMAGED range} \
         "tclpdf: damaged TIFF - $what at offset $offset runs past the end of\
         the file ([string length $bytes] bytes)"
   }
@@ -837,4 +845,4 @@ proc ::tclpdf::imageTiff::stateful {parsed} {
   return [expr {[dict get $parsed compressionName] ni {none packBits}}]
 }
 
-package provide tclpdf::imageTiff 1.1
+package provide tclpdf::imageTiff 1.2

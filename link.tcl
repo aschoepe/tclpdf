@@ -45,11 +45,84 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF LINK ARGUMENT target] \
           "tclpdf: link needs -url, -page or -structure"
     }
+    # ONE TARGET, and the manual says so: "to a URL, to a page, OR to a named
+    # structure element" (:886). The code below decides -url over -structure
+    # over -page and drops the loser without a word, so [link -url ... -page
+    # 2] wrote a URL link and the caller believed in a page jump. Refused
+    # instead, and named: two targets in one call is a mistake at the call,
+    # the way [pattern -matrix] with [-origin] is.
+    #
+    # -to and -zoom belong to a PAGE destination (12.3.2.2), so they are the
+    # loser's options wherever the target is not a page.
+    foreach {winner losers} {url {page to zoom} structure {to zoom}} {
+      if {[dict get $options $winner] eq {}} {
+        continue
+      }
+      foreach loser $losers {
+        if {[dict get $options $loser] eq {}} {
+          continue
+        }
+        return -code error -errorcode [list TCLPDF LINK ARGUMENT $winner] \
+            "tclpdf: link -$winner and -$loser name two\
+            different targets - a link goes to a URL, to a page or to a\
+            named structure element, never to two (ISO 32000-1 12.5.6.5).\
+            Drop -$loser, or drop -$winner"
+      }
+    }
+    # -zoom without -to is the same silence one level down: a destination
+    # with no position is /Fit, the whole page (see [DestinationArray]), and
+    # a magnification has no place in it. [initialView] refuses the pair the
+    # other way round - -to and -zoom without a page - for the same reason.
+    if {[dict get $options zoom] ne {} && [dict get $options to] eq {}} {
+      return -code error -errorcode [list TCLPDF LINK ARGUMENT zoom] \
+          "tclpdf: link -zoom says how close a reader comes to\
+          a place on the page, and no place was given - add -to {x y}, or\
+          drop -zoom; without -to the destination shows the whole page"
+    }
+    # Every number before anything is written. -at and -to are points and
+    # answer as points do everywhere (TCLPDF OPTION POINT); -size is two
+    # numbers as well, and the arithmetic below used to reach [expr] first -
+    # "link -at {a b}" came back as ARITH DOMAIN, in Tcl's words.
+    ::tclpdf::option point [dict get $options at] -at "link"
+    ::tclpdf::option point [dict get $options size] -size "link"
+    if {[dict get $options to] ne {}} {
+      ::tclpdf::option point [dict get $options to] -to "link"
+    }
+    if {[dict get $options zoom] ne {}} {
+      # 12.3.2.2 Table 151: in an /XYZ destination a zoom of 0 "has the same
+      # meaning as a null value" - the magnification the reader is already
+      # at - so 0 is a number to act on. Below it there is none to mean, and
+      # [initialView] has refused it since it was written (:1188); [link]
+      # wrote /XYZ x y -1 instead.
+      set zoom [dict get $options zoom]
+      if {![::tclpdf::option finite $zoom] || $zoom < 0} {
+        return -code error -errorcode [list TCLPDF LINK ARGUMENT zoom] \
+            "tclpdf: link -zoom is a magnification of 0 or\
+            more, 1 being actual size and 0 the magnification the reader is\
+            already at - not \"$zoom\""
+      }
+    }
+    lassign [dict get $options size] width height
+    # A RECTANGLE NOBODY CAN CLICK. A link is its /Rect and nothing else -
+    # there is no drawing under it that could still be hit - so a width or a
+    # height of zero makes an annotation no pointer ever reaches, and under
+    # PDF/UA one a screen reader announces and cannot follow. A negative
+    # size writes the corners the other way round: allowed by 7.9.5, which
+    # says a reader normalises them, and a mistake at the call all the same.
+    # [image place] and [form place] refuse both; so does this now.
+    foreach {edge value} [list width $width height $height] {
+      if {$value <= 0} {
+        return -code error -errorcode [list TCLPDF LINK ARGUMENT size] \
+            "tclpdf: link -size {$width $height} - the $edge is\
+            $value, and a link is nothing but its rectangle: with no area\
+            there is nothing to click. Give it the extent of the text it\
+            covers"
+      }
+    }
     # Annotation flags (/F) and actions (/A, the URI link) are PDF 1.1
     # (Reference 1.7, Table 8.15 and 8.5); a 1.0 file has neither.
     my RequireVersion 1.1 "link"
     lassign [dict get $options at] left top
-    lassign [dict get $options size] width height
     lassign [my coords $left [expr {$top + $height}]] x0 y0
     lassign [my coords [expr {$left + $width}] $top] x1 y1
 
@@ -217,4 +290,4 @@ oo::define ::tclpdf::document::document {
   # that a document without links costs nothing.
 }
 
-package provide tclpdf::link 1.7
+package provide tclpdf::link 1.8

@@ -495,7 +495,11 @@ test graphics-blend-9.6 {Compatible is refused, and says what to write instead} 
 
 test graphics-overprint-16.1 {the three switches reach the file as OP, op and OPM} -body {
   # 8.6.7 and Table 58. Three separate keys because they answer three
-  # different questions, and a call writes only what it names.
+  # different questions - but /OP is NOT one of them on its own: Table 58
+  # gives a dictionary with /OP and no /op both parameters, so "-stroke 1"
+  # writes the fill side out as well, from the value in force (false here).
+  # Measured with poppler before that was done: "overprint -stroke 1" over a
+  # cyan panel turned a yellow FILL green.
   set doc [tclpdf new]
   $doc page add
   $doc overprint -stroke 1
@@ -510,18 +514,27 @@ test graphics-overprint-16.1 {the three switches reach the file as OP, op and OP
   $doc destroy
   list $written [regexp -all {/OP true} $body] [regexp -all {/op true} $body] \
       [regexp -all {/OPM 1} $body]
-} -result {{GOFilltrue GOMode1 GOStroketrue} 1 1 1}
+} -result {{GOFilltrue GOMode1 GOStroketrueFillfalse} 1 1 1}
 
 test graphics-overprint-16.2 {off is written as false, not left out} -body {
   # A caller who switches overprinting OFF for one shape means it: leaving
   # the key out would inherit whatever stood before.
+  #
+  # BOTH SIDES AND THE SAME ANSWER IS WHAT /OP ALONE MEANS, word for word
+  # (Table 58), so that is what is written - and a dictionary of /OP alone
+  # is still a PDF 1.2 dictionary, which is why the two keys are not simply
+  # always spelt out. What must not happen is the reverse: /OP without /op
+  # where the two sides differ.
   set doc [tclpdf new]
   $doc page add
   $doc overprint -fill 0 -stroke 0
+  $doc overprint -fill 1
+  $doc overprint -stroke 0
   set body [::tclpdfTest::objects $doc ExtGState]
   $doc destroy
-  list [regexp {/OP false} $body] [regexp {/op false} $body]
-} -result {1 1}
+  list [regexp {/OP false >>} $body] [regexp {/op true >>} $body] \
+      [regexp {/OP false /op true} $body]
+} -result {1 1 1}
 
 test graphics-overprint-16.3 {a call that names nothing is refused} -body {
   # The lesson GraphicsOpacity already carries: a resource that changes
@@ -544,19 +557,24 @@ test graphics-overprint-16.4 {a value that is not a boolean, and a mode that is 
 } -result {{TCLPDF GRAPHICS OVERPRINT fill} {TCLPDF GRAPHICS OVERPRINT mode}}
 
 test graphics-overprint-16.5 {the version asked for is the one the call writes} -body {
-  # /OP is PDF 1.2, /op and /OPM are 1.3 (Table 58). Asked separately, so a
-  # document that only sets the stroke is not raised for a key it never
-  # wrote. Measured against a document pinned BELOW each of them, which is
-  # the only way the difference shows: a fresh document already stands at
-  # 1.4 and would take all three without a word.
+  # /OP is PDF 1.2, /op and /OPM are 1.3 (Table 58). Asked of what the call
+  # WRITES rather than of the options it was given, which is the only
+  # question with one answer: "-stroke 1" on a fresh state has to spell the
+  # two sides apart (/OP true /op false) and is therefore 1.3, while
+  # "-stroke 0" there says the same thing about both and fits into /OP
+  # alone - 1.2, and the only overprint a 1.2 file can hold. Measured
+  # against a document pinned BELOW each of them, which is the only way the
+  # difference shows: a fresh document already stands at 1.4.
   set low [tclpdf new -version 1.2]
   $low page add
-  set strokeAt12 [catch {$low overprint -stroke 1}]
+  set offAt12 [catch {$low overprint -stroke 0}]
+  set strokeAt12 [::tclpdfTest::refusalCode {$low overprint -stroke 1}]
   set fillAt12 [::tclpdfTest::refusalCode {$low overprint -fill 1}]
   set modeAt12 [::tclpdfTest::refusalCode {$low overprint -mode 1}]
   $low destroy
-  list $strokeAt12 [lrange $fillAt12 0 1] [lrange $modeAt12 0 1]
-} -result {0 {TCLPDF VERSION} {TCLPDF VERSION}}
+  list $offAt12 [lrange $strokeAt12 0 1] [lrange $fillAt12 0 1] \
+      [lrange $modeAt12 0 1]
+} -result {0 {TCLPDF VERSION} {TCLPDF VERSION} {TCLPDF VERSION}}
 
 test graphics-overprint-16.6 {-overprint on a shape stays inside its own q/Q} -body {
   # The whole reason the resource and the operator are separate: an overprint
@@ -1513,11 +1531,14 @@ test graphics-arc-23.5 {-size draws an elliptical arc, -radius a circular one} -
 } -result {70.00 130.00 110.00}
 
 test graphics-arc-23.6 {a whole turn is drawn, in every style} -body {
-    # 360 exactly is allowed and is the whole ellipse. In a pieslice the two
-    # radii then have length zero and in a chord the chord does, because the
-    # start and the end of the sweep coincide - redundant, not wrong, and
-    # cheaper than a special case in the check. What must hold is that all
-    # three still come out as four quarter segments and a painting operator.
+    # 360 exactly is allowed and is the whole ellipse. In a chord the chord
+    # then has length zero, because the start and the end of the sweep
+    # coincide. IN A PIESLICE THE SPOKE DOES NOT: the "m" at the centre and
+    # the "l" to the rim used to be called "redundant, not wrong", and they
+    # are wrong - the line is drawn once and STROKED once, and a dial read
+    # all the way round came out with a spoke sticking out of it (seen at
+    # 300 dpi on 2026-08-26). So a full turn has no "l" in any style, and the
+    # "h" is what closes the ellipse.
     set result {}
     foreach {style options} {
         arc {-stroke black}
@@ -1530,11 +1551,10 @@ test graphics-arc-23.6 {a whole turn is drawn, in every style} -body {
             -style $style {*}$options}]
         set stream [::tclpdfTest::content $doc]
         $doc destroy
-        # The whole operator sequence, not just the count of "c": at 360 the
-        # zero-length radius of a pieslice is exactly what a well-meant
-        # special case would drop, and dropping it makes a pieslice
-        # indistinguishable from a chord. The "l" is what says it is still
-        # there.
+        # The whole operator sequence, not just the count of "c": at 360 a
+        # pieslice and a chord ARE the same figure, and the absence of the
+        # "l" is what says the spoke is gone. Below 360 the "l" has to be
+        # there - test 23.5 measures that.
         lappend result $code [::tclpdfTest::operators $stream]
     }
     # And -360 as well: the other way round is a whole turn too.
@@ -1544,7 +1564,7 @@ test graphics-arc-23.6 {a whole turn is drawn, in every style} -body {
         -style pieslice -fill red}]
     $doc destroy
     set result
-} -result {0 {q G m c c c c S Q} 0 {q rg m l c c c c h f Q}\
+} -result {0 {q G m c c c c S Q} 0 {q rg m c c c c h f Q}\
     0 {q rg m c c c c h f Q} 0}
 
 test graphics-arc-23.7 {an arc names itself in the colour space record} -body {
@@ -1563,9 +1583,18 @@ test graphics-arc-23.8 {every refusal, its code, and an empty page after it} -bo
     # them: refused BEFORE the first byte, so the stream stays empty and no
     # "q" is left open. Tagged as well as untagged - a refusal after the
     # structure mark was taken leaves the mark open, which no reader reports.
+    #
+    # AND THE FOURTH WORD IS THE OPTION, WITHOUT ITS DASH, in every one of
+    # them. It was the COMMAND for the first two and the option WITH its dash
+    # for two others until 2026-08-26 - one code carrying three sorts of
+    # fact, which is a code a handler cannot read (round 7, G7).
     set calls {
-        {{arc -radius 10 -extent 90} {TCLPDF SHAPE ARGUMENT arc}}
-        {{arc -at {5 5} -extent 90} {TCLPDF SHAPE ARGUMENT arc}}
+        {{arc -radius 10 -extent 90} {TCLPDF SHAPE ARGUMENT at}}
+        {{arc -at {5 5} -extent 90} {TCLPDF SHAPE ARGUMENT radius}}
+        {{arc -at {5 5} -radius 10 -size {4 4} -extent 90} {TCLPDF SHAPE ARGUMENT radius}}
+        {{arc -at {5 5} -size {4 4 4} -extent 90} {TCLPDF SHAPE ARGUMENT size}}
+        {{arc -at {5 5} -radius 1e-9 -extent 90} {TCLPDF SHAPE ARGUMENT radius}}
+        {{arc -at {5 5} -radius 10 -extent 1e-9} {TCLPDF SHAPE ANGLE zero}}
         {{arc -at {5 5} -radius 10} {TCLPDF SHAPE ARGUMENT extent}}
         {{arc -at {5 5} -radius 10 -extent 0} {TCLPDF SHAPE ANGLE zero}}
         {{arc -at {5 5} -radius 10 -extent 0.0} {TCLPDF SHAPE ANGLE zero}}
@@ -1579,8 +1608,8 @@ test graphics-arc-23.8 {every refusal, its code, and an empty page after it} -bo
         {{arc -at {5 5} -radius 10 -extent 90 -style {}} {TCLPDF SHAPE ARGUMENT style}}
         {{arc -at {5 5} -radius 10 -extent 90 -fill red} {TCLPDF SHAPE ARGUMENT fill}}
         {{arc -at {5 5} -radius 10 -extent 90 -style arc -fill red} {TCLPDF SHAPE ARGUMENT fill}}
-        {{arc -at {5 5} -radius -2 -extent 90} {TCLPDF SHAPE ARGUMENT -radius}}
-        {{arc -at {5 5} -size {-2 2} -extent 90} {TCLPDF SHAPE ARGUMENT -size}}
+        {{arc -at {5 5} -radius -2 -extent 90} {TCLPDF SHAPE ARGUMENT radius}}
+        {{arc -at {5 5} -size {-2 2} -extent 90} {TCLPDF SHAPE ARGUMENT size}}
         {{arc -at {5 5 5} -radius 10 -extent 90} {TCLPDF GRAPHICS POINT -at}}
     }
     set wrong {}
@@ -1642,5 +1671,186 @@ test graphics-arc-23.11 {an arc does not leak its line width either} -body {
     $doc destroy
     ::tclpdfTest::takenBack $operators w m
 } -result 1
+
+test graphics-overprint-16.7 {the fill side of /OP comes out of the stream state} -body {
+  # ROUND 7, VERSTOSS 1. Table 58: a graphics state dictionary carrying /OP
+  # and no /op sets BOTH parameters. So "overprint -stroke 0" after
+  # "overprint -fill 1" used to turn the fill overprint OFF as well, and
+  # "overprint -stroke 1" on its own turned it ON - the opposite of the
+  # manual's "an option left out is not written", and measured with
+  # "pdftoppm -overprint": a yellow rectangle over a cyan panel came out
+  # green where the caller had asked for nothing of the sort.
+  #
+  # What has to hold: whenever /OP goes out, the fill side is stated too -
+  # from -fill if the call names it, from the value in force otherwise - and
+  # "in force" is per stream and is taken back by [restore] like a colour.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set names {}
+  $doc overprint -fill 1
+  lappend names [$doc overprint -stroke 0]
+  $doc save
+  $doc overprint -fill 0
+  lappend names [$doc overprint -stroke 1]
+  $doc restore
+  lappend names [$doc overprint -stroke 1]
+  set body [::tclpdfTest::objects $doc ExtGState]
+  $doc destroy
+  # The third name is the first state again: after the restore the fill side
+  # is true once more, so "-stroke 1" says the same about both and /OP alone
+  # is what that means.
+  list $names [regexp {/OP false /op true} $body] \
+      [regexp {/OP true /op false} $body] [regexp {/OP true >>} $body]
+} -result {{GOStrokefalseFilltrue GOStroketrueFillfalse GOBothtrue} 1 1 1}
+
+test graphics-save-24.1 {the graphics state stack stops at Annex C's 28} -body {
+  # Annex C.2, Table C.1: "Nesting depth of graphics state (q) ... 28". Not a
+  # syntax error and no validator objects - it is where a conforming reader
+  # is allowed to stop, and what it does with the twenty-ninth q is its own
+  # business. Counted before the operator is written, so a refused save
+  # leaves nothing.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set codes {}
+  for {set index 0} {$index < 28} {incr index} {
+    lappend codes [catch {$doc save}]
+  }
+  set deep [::tclpdfTest::refusalCode {$doc save}]
+  set operators [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  for {set index 0} {$index < 28} {incr index} {
+    $doc restore
+  }
+  $doc destroy
+  list [lsort -unique $codes] [lrange $deep 0 3] [llength $operators]
+} -result {0 {TCLPDF GRAPHICS SAVE depth} 28}
+
+test graphics-save-24.2 {a save still open where a stream ends is refused} -body {
+  # 8.4.2 gives q and Q as a pair, and the mirror refusal - restore without a
+  # save - has been made since 2026-08-18. This is the other direction:
+  # measured 2026-08-26, a page, a form and a tile all went out with an
+  # unclosed "q" and neither qpdf --check nor veraPDF said a word. The
+  # message names the place, because the write is far from the call.
+  set answers {}
+  # The page, at the write.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc page add
+  $doc save
+  $doc rect -at {10 10} -size {20 20} -fill red
+  set code [::tclpdfTest::refusalCode {$doc write [::tclpdfTest::scratch unbalanced.pdf]}]
+  lappend answers [lrange $code 0 3]
+  $doc restore
+  lappend answers [catch {$doc write [::tclpdfTest::scratch unbalanced.pdf]}]
+  file delete [::tclpdfTest::scratch unbalanced.pdf]
+  $doc destroy
+  # A form and a tile, at the end of their own stream.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  lappend answers [lrange [::tclpdfTest::refusalCode {
+      $doc form create f -size {20 20} -script {$doc save}}] 0 3]
+  lappend answers [lrange [::tclpdfTest::refusalCode {
+      $doc pattern create p -size {4 4} -script {$doc save}}] 0 3]
+  lappend answers [catch {$doc form create g -size {20 20} -script {
+      $doc save; $doc restore}}]
+  $doc destroy
+  set answers
+} -result {{TCLPDF GRAPHICS SAVE unbalanced} 0 {TCLPDF GRAPHICS SAVE unbalanced}\
+    {TCLPDF GRAPHICS SAVE unbalanced} 0}
+
+test graphics-transform-25.1 {the composed matrix is held to what -matrix is held to} -body {
+  # ROUND 7 GREY ZONE. -matrix goes through [geometry check] and a singular
+  # one is refused (8.3.4); the PARTS did not, and "transform -skew {45 45}"
+  # wrote "1 1 1 1 0 0 cm" - tan 45 is 1 on both axes, determinant zero,
+  # everything after it folded onto a line with no way back to the page.
+  # Nothing is written when it is refused.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set skew [::tclpdfTest::refusalCode {$doc transform -skew {45 45}}]
+  set matrix [::tclpdfTest::refusalCode {$doc transform -matrix {1 1 1 1 0 0}}]
+  set stream [::tclpdfTest::content $doc]
+  # And one that is merely slanted still goes out.
+  $doc transform -skew {45 0}
+  set after [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lrange $skew 0 3] [lrange $matrix 0 3] $stream [regexp {cm} $after]
+} -result {{TCLPDF GEOMETRY MATRIX transform} {TCLPDF GEOMETRY MATRIX transform} {} 1}
+
+test graphics-transform-25.2 {every number of transform is a number, and there are as many as the option takes} -body {
+  # Against doc "Numbers": a value that is not a measurement is turned away
+  # where it is READ, so the message names the option the caller wrote.
+  # Measured 2026-08-26, all of these came back as {ARITH DOMAIN} out of the
+  # trigonometry, and "-translate {1 2 3}" dropped the third word in silence.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set codes {}
+  foreach call {
+    {transform -rotate NaN} {transform -rotate abc} {transform -rotate {1 2}}
+    {transform -rotate 1e400} {transform -scale NaN} {transform -scale -1e400}
+    {transform -skew {NaN 0}} {transform -skew {a b}}
+    {transform -translate {1 2 3}} {transform -translate {NaN 2}}
+  } {
+    lappend codes [lrange [::tclpdfTest::refusalCode {$doc {*}$call}] 0 3]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lsort -unique $codes] $stream
+} -result {{{TCLPDF GRAPHICS ARGUMENT rotate} {TCLPDF GRAPHICS ARGUMENT scale}\
+    {TCLPDF GRAPHICS ARGUMENT skew} {TCLPDF GRAPHICS ARGUMENT translate}} {}}
+
+test graphics-transform-25.3 {NaN at the graphics state options} -body {
+  # The same predicate, at the three other places a number is read here:
+  # NaN passes [string is double] and compares false against BOTH bounds of
+  # a range check, so "< 0 || > 1" waved it past and it died in [num].
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set codes {}
+  foreach call {
+    {opacity NaN} {opacity Inf} {style -miter NaN}
+    {rect -at {1 1} -size {2 2} -fill red -opacity NaN}
+  } {
+    lappend codes [lrange [::tclpdfTest::refusalCode {$doc {*}$call}] 0 3]
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $stream
+} -result {{{TCLPDF GRAPHICS OPACITY value} {TCLPDF GRAPHICS OPACITY value}\
+    {TCLPDF GRAPHICS ARGUMENT miter} {TCLPDF GRAPHICS OPACITY value}} {}}
+
+test graphics-arc-23.12 {a fill colour out of [style] refuses -style arc too} -body {
+  # ROUND 7, VERSTOSS 1 OF THE ERROR-CODE REVIEW. -style arc takes no -fill
+  # because PDF closes an open subpath before filling it (8.5.3.1) and the
+  # result would silently be a chord. Only the call's OWN -fill was asked
+  # about, while four lines further down the same command reads
+  # [streamState styleFill] to pick the painting operator - so "style -fill
+  # red" then "arc ... -style arc -stroke black" wrote "B" and painted the
+  # chord the refusal exists to prevent.
+  set doc [tclpdf new -compress 0 -unit pt -format {200 200}]
+  $doc page add
+  $doc style -fill red
+  set code [::tclpdfTest::refusalCode {
+      $doc arc -at {100 100} -radius 60 -extent 90 -style arc -stroke black}]
+  set stream [::tclpdfTest::content $doc]
+  # The closed styles are unaffected - they are what the refusal points at.
+  set chord [catch {$doc arc -at {100 100} -radius 60 -extent 90 -style chord}]
+  $doc destroy
+  list [lrange $code 0 3] [::tclpdfTest::operators $stream] $chord
+} -result {{TCLPDF SHAPE ARGUMENT fill} rg 0}
+
+test graphics-rect-26.1 {a negative size and a rounded corner do not go together} -body {
+  # ROUND 7 HARDENING. "re" takes a negative width (8.5.2.1) and [ShapeBox]
+  # lets it through on purpose; the rounding does not survive it - the cap
+  # min(w,h)/2 is negative, the radius is capped to that, and the four arcs
+  # run backwards. Measured 2026-08-26 at 100 dpi: a red band with two white
+  # lenses in it. Without -radius the negative rectangle is still drawn.
+  set doc [tclpdf new -compress 0 -unit mm -format {80 80}]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {
+      $doc rect -at {60 10} -size {-40 30} -radius 5 -fill red}]
+  set empty [::tclpdfTest::content $doc]
+  $doc rect -at {60 10} -size {-40 30} -fill red
+  set drawn [::tclpdfTest::operators [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [lrange $code 0 3] $empty $drawn
+} -result {{TCLPDF SHAPE ARGUMENT radius} {} {q rg re f Q}}
 
 cleanupTests

@@ -133,21 +133,27 @@ proc rosette {doc cx cy radius colour {rays 36}} {
 }
 
 # A wedge from one angle to another - four of them make a quartered target.
-# A fan of thin triangles, because PDF has no arc operator and a quarter
-# circle out of one polygon would be a triangle.
-proc wedge {doc cx cy radius from extent colour {steps 12}} {
-    set rad [expr {3.14159265358979 / 180.0}]
-    set step [expr {$extent * $rad / $steps}]
-    set start [expr {$from * $rad}]
-    for {set i 0} {$i < $steps} {incr i} {
-        set a0 [expr {$start + $i * $step}]
-        set a1 [expr {$start + ($i + 1) * $step}]
-        $doc polygon -points [list \
-            $cx $cy \
-            [expr {$cx + $radius * cos($a0)}] [expr {$cy + $radius * sin($a0)}] \
-            [expr {$cx + $radius * cos($a1)}] [expr {$cy + $radius * sin($a1)}]] \
-            -fill $colour -close 1
-    }
+#
+# ONE [arc -style pieslice], not a fan of twelve triangles. PDF has no arc
+# operator of its own (8.5.2.1) and every arc anyone draws becomes cubic
+# Bezier curves, but that conversion belongs in the package rather than in a
+# drawing: [arc] writes one subpath - centre, radius, one "c" per quarter
+# turn - and the outer edge is a curve. Twelve chords fitted into it were
+# twelve separate filled polygons, and where two of them met the antialiasing
+# of the reader left a hairline of paper showing. On a registration target,
+# which is read under a loupe and exists to show hairlines, that is the one
+# defect it must not have of its own.
+#
+# THE ANGLE IS MIRRORED because the two conventions differ, deliberately:
+# these coordinates are document coordinates, where y counts DOWNWARDS, and
+# the sines above were written in them; [arc] takes its angles as they are
+# READ ON THE PAGE - 0 at three o'clock, growing counter-clockwise, the Tk
+# canvas convention. A span that runs from "from" clockwise on paper is
+# therefore the span that starts at -(from + extent) counter-clockwise.
+proc wedge {doc cx cy radius from extent colour} {
+    $doc arc -at [list $cx $cy] -radius $radius \
+        -start [expr {-($from + $extent)}] -extent $extent \
+        -style pieslice -fill $colour
     return
 }
 
@@ -403,7 +409,8 @@ $doc font -style {} -size 7 -color black
 $doc text "Top to bottom, on the left: one ring per plate; a quartered\
     target, one plate to a quadrant; four rosettes over one another; and the\
     plain target every plate draws alike. On the right the four-square mark -\
-    as outlined letters, then filled - and a rosette in all four plates." \
+    as outlined letters, then filled, then filled at a smaller size - and a\
+    rosette in all four plates." \
     -at [list 95 [expr {$y + 6}]] -width 95
 
 set y [expr {$cy + 15}]

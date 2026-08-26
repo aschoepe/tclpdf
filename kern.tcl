@@ -9,7 +9,15 @@
 # of this file (MIT License).
 #
 # The one place that decides between the two sources a font can carry. The
-# GPOS side lives in kernGpos.tcl and is reached from here only.
+# GPOS side - reading the lookups and applying them to a run - lives in
+# kernGpos.tcl and is reached from here only. What stays here is the DECISION
+# and the old table.
+#
+# THE OLD TABLE IS HANDED ON IN THE SHAPE OF A GPOS LOOKUP, which is what
+# keeps one evaluator for both sources: its pairs have exactly the layout a
+# PairPos format 1 subtable produces - one lookup, no filter, one subtable -
+# so kernGpos.tcl evaluates them with the same walk. Two copies of that walk
+# would drift, and the second one would be the one nobody measured.
 #
 # Kerning is producer arithmetic. The amounts end up as numbers in a TJ array
 # in the content stream, and no reader ever consults the "kern" table or GPOS
@@ -30,6 +38,30 @@
 # and 135 carry both - among them Arial and the other old Microsoft core
 # fonts, where the rule above says the kern table has to be left alone.
 #
+# THE ONE PLACE THIS PACKAGE KNOWINGLY DIFFERS FROM HarfBuzz, and it is worth
+# a paragraph because the difference is a decision and not an oversight. A
+# ValueRecord changes the ADVANCE of a glyph, and an advance moves whatever is
+# drawn after it - in a right-to-left line that is the logically EARLIER
+# glyph, so HarfBuzz's amount belongs in the gap on the other side of the pair
+# from where this package puts it (hb-ot-layout-gsubgpos.hh,
+# PairPosFormat1::apply, which puts value1 on buffer->cur_pos()).
+#
+# This package keeps the amount between the SAME two glyphs in both
+# directions, and the reason is the width: [FontRunWidth] measures a line
+# without knowing which way it will be drawn, and a line whose total depends
+# on the direction is a line that frays at the margin when it is justified.
+# With HarfBuzz's gap the first pair of a right-to-left line has no gap left
+# to go into at all and falls out of the line, which is 42 thousandths of the
+# em on "AVATAR" in DejaVu Sans - measured, and visible.
+#
+# WHAT IT COSTS is one word of the 78 Arabic, Persian and Urdu words this was
+# measured against, in one of the five faces, by one unit: Amiri joins two
+# letters of "kalima" cursively and sets the second letter's advance to its
+# entry point, and with the gap on this side that letter itself moves with it.
+# Noto Sans Arabic, Scheherazade New, Noto Kufi Arabic and Amiri otherwise
+# match hb-shape glyph for glyph and unit for unit. Turning it round is one
+# line in [kernGpos Place]; the trade is named there too.
+#
 
 package require Tcl 8.6.11-
 package require tclpdf::sfnt 1.0-
@@ -45,9 +77,8 @@ namespace eval ::tclpdf::kern {
 # worth keeping: it walks the whole table once, which a per-pair lookup must
 # not do.
 proc ::tclpdf::kern::build {font} {
-  set indices [::tclpdf::kernGpos lookups $font]
-  if {[llength $indices]} {
-    set prepared [::tclpdf::kernGpos prepare $font]
+  set prepared [::tclpdf::kernGpos prepare $font]
+  if {[llength [::tclpdf::kernGpos lookups $font]]} {
     if {[llength $prepared]} {
       return [list gpos $prepared]
     }
@@ -56,15 +87,37 @@ proc ::tclpdf::kern::build {font} {
     # would kern one font differently from every other tool.
     return [list none {}]
   }
+  # NO KERN FEATURE, so the old table decides the kerning - and whatever the
+  # GPOS side prepared BESIDES it stays: the precedence rule of 8.16 is about
+  # the "kern" feature and nothing else, so a face that joins its letters
+  # cursively and kerns from the old table does both. The old lookup goes
+  # FIRST, where the kern feature's would have stood in the lookup list.
+  set lookups {}
   set pairs [KernTable $font]
   if {[dict size $pairs]} {
-    # The old table has neither lookups nor flags, but its pairs have exactly
-    # the shape a PairPos format 1 subtable produces: one lookup, no filter,
-    # one subtable. Saying so here is what lets both sources be evaluated by
-    # the same code instead of by two copies of it that drift apart.
-    return [list kern [list [list {} [list [list pairs $pairs]]]]]
+    # The old table has neither lookups nor flags, and its pairs carry one
+    # number each where a GPOS pair carries two value records - so the amount
+    # goes in as the X ADVANCE of the first glyph and the other three fields
+    # are zero, which is what a PairPos subtable of that shape would say.
+    # Saying it here is what lets both sources be evaluated by the same walk
+    # instead of by two copies of it that drift apart.
+    set records {}
+    dict for {pair adjust} $pairs {
+      dict set records $pair [list 0 $adjust 0 0]
+    }
+    lappend lookups [list {} [list [list pairs $records]]]
   }
-  return [list none {}]
+  if {![llength $prepared]} {
+    if {![llength $lookups]} {
+      return [list none {}]
+    }
+    # Nothing from GPOS at all, so no map of nested lookups, no mark filter
+    # and no face: the old table names no lookups and has no anchors.
+    return [list kern [list $lookups {} {} {}]]
+  }
+  lassign $prepared gposLookups nested marks parsed
+  return [list [expr {[llength $lookups] ? "kern" : "gpos"}] \
+      [list [concat $lookups $gposLookups] $nested $marks $parsed]]
 }
 
 # Which source the pairs come from: gpos, kern or none. Diagnostic - the
@@ -77,56 +130,34 @@ proc ::tclpdf::kern::origin {state} {
   return [lindex $state 0]
 }
 
-# The adjustments of a glyph run, in font units: one per gap between two
-# neighbouring glyphs, so the result is one shorter than the run and every
-# caller can index it by gap without a special case.
+# The adjustments of a glyph run, in font units: ONE PER GLYPH, so the result
+# is exactly as long as the run and every caller can index it by glyph without
+# a special case.
 #
-# Lookups are applied one after another and their adjustments add up (S. 217);
-# within one lookup the first subtable that knows the pair wins, which is how
-# the specification has subtables searched.
+# The last entry is the amount that falls off the end - the advance of the
+# last glyph has no glyph behind it to move - and it is kept rather than
+# dropped because it is still part of the width of the line. It was one
+# shorter than the run until 2026-08-26, and what that cost showed only in a
+# right-to-left line: the first pair of the line had nowhere to go, so the
+# line came out one pair wider than [textWidth] measured it.
 #
-# Why a run and not a pair: a lookup that sets an ignore bit sees the run
-# WITHOUT the glyphs it filters out, so in "A acute V" the pair to look up is
-# A V. That question cannot be asked two glyphs at a time.
-#
-# WHERE the amount lands matters once glyphs are skipped. It goes to the gap
-# BEFORE the second glyph of the pair, not after the first: the acute belongs
-# at the right edge of the A, and taking the amount off the A's advance would
-# drag the accent along with it. For neighbouring glyphs - every pair in a
-# font that filters nothing - the two are the same gap.
-proc ::tclpdf::kern::run {state glyphs} {
+# The walk itself is kernGpos.tcl's, whichever source the pairs came from -
+# see the head of this file for why the old table arrives wearing the shape of
+# a GPOS lookup.
+# DIRECTION is the direction the line will be DRAWN in, and it decides which
+# of the two gaps beside a glyph an adjustment belongs in - see
+# [kernGpos Place]. It defaults to the left-to-right answer, which is what
+# every caller that does not know gets today.
+proc ::tclpdf::kern::run {state glyphs {direction ltr}} {
   set gaps [expr {[llength $glyphs] - 1}]
   if {$gaps < 1} {
     return {}
   }
-  set result [lrepeat $gaps 0]
   lassign $state kind prepared
   if {$kind eq "none"} {
-    return $result
+    return [lrepeat [expr {$gaps + 1}] 0]
   }
-  foreach lookup $prepared {
-    lassign $lookup filter subtables
-    if {$filter eq {}} {
-      set visible {}
-      for {set index 0} {$index <= $gaps} {incr index} {
-        lappend visible $index
-      }
-    } else {
-      set visible [::tclpdf::gdef keep $filter $glyphs]
-    }
-    set seen [llength $visible]
-    for {set at 1} {$at < $seen} {incr at} {
-      set second [lindex $visible $at]
-      set value [Pair $subtables \
-          [lindex $glyphs [lindex $visible [expr {$at - 1}]]] \
-          [lindex $glyphs $second]]
-      if {$value != 0} {
-        set gap [expr {$second - 1}]
-        lset result $gap [expr {[lindex $result $gap] + $value}]
-      }
-    }
-  }
-  return $result
+  return [::tclpdf::kernGpos run $prepared $glyphs $direction]
 }
 
 # The adjustment for one glyph pair, in font units. Negative moves the two
@@ -135,44 +166,8 @@ proc ::tclpdf::kern::run {state glyphs} {
 # For the caller that has two glyphs and no run - a test asking what a face
 # does with "To". It is [run] over a run of two, so the two cannot answer
 # differently.
-proc ::tclpdf::kern::value {state left right} {
-  return [lindex [run $state [list $left $right]] 0]
-}
-
-# One pair against the subtables of ONE lookup: the first that knows it wins.
-proc ::tclpdf::kern::Pair {subtables left right} {
-  foreach subtable $subtables {
-    lassign $subtable kind data
-    switch -- $kind {
-      pairs {
-        if {[dict exists $data $left,$right]} {
-          return [dict get $data $left,$right]
-        }
-      }
-      classes {
-        lassign $data coverage first second matrix
-        if {[dict exists $coverage $left]} {
-          # Class 0 is not a hole: it is "everything the class definition does
-          # not name", and the matrix has a row and a column for it.
-          set one 0
-          set two 0
-          if {[dict exists $first $left]} {
-            set one [dict get $first $left]
-          }
-          if {[dict exists $second $right]} {
-            set two [dict get $second $right]
-          }
-          # Coverage decides, not the matrix cell: a zero cell is a decision of
-          # the font, and the next subtable must not overrule it.
-          if {[dict exists $matrix $one,$two]} {
-            return [dict get $matrix $one,$two]
-          }
-          return 0
-        }
-      }
-    }
-  }
-  return 0
+proc ::tclpdf::kern::value {state left right {direction ltr}} {
+  return [lindex [run $state [list $left $right] $direction] 0]
 }
 
 # --- the old table ---------------------------------------------------------
@@ -238,4 +233,4 @@ proc ::tclpdf::kern::KernFormat0 {bytes offset limit} {
   return $result
 }
 
-package provide tclpdf::kern 1.0
+package provide tclpdf::kern 1.1

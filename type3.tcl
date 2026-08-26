@@ -126,6 +126,213 @@ package require tclpdf::text 1.0-
 
 namespace eval ::tclpdf::type3 {}
 
+# The colour operators struck out of a d1 glyph description.
+#
+# WHY THIS EXISTS. d1 says the glyph "specifies only shape, not colour", and
+# ISO 32000-2, 9.6.4, Table 111 draws two conclusions from that: the glyph
+# description "should not execute any operators that set the colour" - that is
+# the writer's duty - and "any use of such operators shall be ignored" - the
+# reader's. Measured on 2026-08-26, the readers do not agree: poppler ignores
+# a "0 g" inside a d1 glyph and paints in the text colour, Quartz (QuickLook,
+# Safari) executes it and paints black. Both are defensible readings of a
+# "should not" the file broke; the divergence is the writer's to prevent, and
+# the drawing methods of this package write a colour with every figure, so
+# every -color text glyph carried one.
+#
+# WHAT IS REMOVED: the colour SELECTORS - g, rg, k, cs, sc, scn and their
+# stroking capitals - together with their operands. What paints stays, and
+# paints in the text colour, which is what a d1 glyph is for. Nothing else is
+# touched: "sh" paints its own colours but sets none, an image is refused for
+# a d1 glyph already ([Type3RefuseImage]), and "gs" carries alpha and blend
+# mode rather than colour.
+#
+# WHY A SCANNER AND NOT A REGULAR EXPRESSION. A literal string may hold the
+# text "0 g" - "(0 g) Tj" is a perfectly ordinary line of a glyph that draws
+# letters - and an inline image holds arbitrary bytes. So the stream is
+# lexed: literal strings with their nesting and escapes, hex strings,
+# comments and BI ... ID ... EI pass through as single tokens and are never
+# looked inside.
+proc ::tclpdf::type3::stripColour {content} {
+  # The operators that SET a colour (Table 74) - the whole of them, so that a
+  # glyph written through any of this package's roads comes out the same.
+  set selectors {g G rg RG k K cs CS sc SC scn SCN}
+  set length [string length $content]
+  set position 0
+  # Each record is {lead text kind}: the whitespace in front of the token, the
+  # token itself, and what it is - 0 an operator, 1 an operand, 2 a comment.
+  # Removing a colour operator removes its records LEAD AND ALL, so the line
+  # it stood on closes up rather than leaving a blank one behind; a COMMENT
+  # among them is kept, because it is nobody's operand and may say something
+  # the next reader of the file wants.
+  set pending {}
+  set out {}
+  while {$position < $length} {
+    set lead {}
+    # Whitespace belongs to the token that follows it; a comment is a record
+    # of its own.
+    while {$position < $length} {
+      set char [string index $content $position]
+      if {[string is space -strict $char]} {
+        append lead $char
+        incr position
+      } elseif {$char eq "%"} {
+        set stop [string first "\n" $content $position]
+        if {$stop < 0} {
+          set stop $length
+        }
+        lappend pending [list $lead \
+            [string range $content $position [expr {$stop - 1}]] 2]
+        set lead {}
+        set position $stop
+      } else {
+        break
+      }
+    }
+    if {$position >= $length} {
+      append out $lead
+      break
+    }
+    lassign [Token $content $position] token operand position
+    if {$token eq "BI"} {
+      # An inline image: everything up to and including its EI is one token
+      # and is never looked inside - the bytes between ID and EI are not
+      # operators, whatever they spell.
+      lassign [InlineImage $content $position] tail position
+      append token $tail
+      set operand 0
+    }
+    if {!$operand && $token in $selectors} {
+      # Drop the operator and the operands in front of it - and no further:
+      # the walk stops at the first record that is not a number or a name,
+      # which is the operator before it.
+      set kept {}
+      set index [expr {[llength $pending] - 1}]
+      for {} {$index >= 0} {incr index -1} {
+        set kind [lindex $pending $index 2]
+        if {$kind == 2} {
+          set kept [linsert $kept 0 [lindex $pending $index]]
+          continue
+        }
+        if {$kind != 1} {
+          break
+        }
+      }
+      set pending [concat [lrange $pending 0 $index] $kept]
+      continue
+    }
+    if {!$operand} {
+      # An operator: everything in front of it belongs to it and is settled.
+      foreach record $pending {
+        append out [lindex $record 0] [lindex $record 1]
+      }
+      set pending {}
+      append out $lead $token
+      continue
+    }
+    lappend pending [list $lead $token 1]
+  }
+  foreach record $pending {
+    append out [lindex $record 0] [lindex $record 1]
+  }
+  return $out
+}
+
+# One token of a content stream, from a position that is not whitespace:
+# {text operand next}. "operand" is true for anything an operator may consume
+# - a number, a name, a string, an array or a dictionary - and false for a
+# keyword, which is an operator.
+proc ::tclpdf::type3::Token {content position} {
+  set length [string length $content]
+  set char [string index $content $position]
+  switch -- $char {
+    "(" {
+      # A literal string (7.3.4.2): parentheses nest, a backslash escapes the
+      # next byte whatever it is.
+      set start $position
+      incr position
+      set depth 1
+      while {$position < $length && $depth > 0} {
+        set char [string index $content $position]
+        if {$char eq "\\"} {
+          incr position 2
+          continue
+        } elseif {$char eq "("} {
+          incr depth
+        } elseif {$char eq ")"} {
+          incr depth -1
+        }
+        incr position
+      }
+      return [list [string range $content $start [expr {$position - 1}]] 1 \
+          $position]
+    }
+    "<" {
+      if {[string index $content [expr {$position + 1}]] eq "<"} {
+        return [list "<<" 1 [expr {$position + 2}]]
+      }
+      set stop [string first ">" $content $position]
+      if {$stop < 0} {
+        set stop [expr {$length - 1}]
+      }
+      return [list [string range $content $position $stop] 1 \
+          [expr {$stop + 1}]]
+    }
+    ">" {
+      if {[string index $content [expr {$position + 1}]] eq ">"} {
+        return [list ">>" 1 [expr {$position + 2}]]
+      }
+      return [list ">" 1 [expr {$position + 1}]]
+    }
+    "\[" - "\]" - "\{" - "\}" {
+      return [list $char 1 [expr {$position + 1}]]
+    }
+  }
+  # A regular run: a name, a number or a keyword, ended by whitespace or by a
+  # delimiter (7.2.2).
+  set start $position
+  while {$position < $length} {
+    set char [string index $content $position]
+    if {[string is space -strict $char] || $char in {( ) < > \[ \] \{ \} / %}} {
+      if {$position == $start && $char eq "/"} {
+        incr position
+        continue
+      }
+      break
+    }
+    incr position
+  }
+  if {$position == $start} {
+    # A lone delimiter this scanner has no rule for - stepped over rather
+    # than looped on.
+    incr position
+  }
+  set token [string range $content $start [expr {$position - 1}]]
+  set operand [expr {[string index $token 0] eq "/" ||
+      [string is double -strict $token]}]
+  return [list $token $operand $position]
+}
+
+# The rest of an inline image, from just behind its BI: {text next}. The data
+# between ID and EI is arbitrary bytes and is stepped over rather than lexed
+# (8.9.7).
+proc ::tclpdf::type3::InlineImage {content position} {
+  set start $position
+  set length [string length $content]
+  if {[regexp -indices -start $position {(^|[\s>\]])ID} $content match]} {
+    set position [expr {[lindex $match 1] + 1}]
+  }
+  # The first EI that stands as a token of its own closes it.
+  if {[regexp -indices -start $position {\sEI(\s|$)} $content match]} {
+    set position [lindex $match 1]
+    if {![string is space -strict [string index $content $position]]} {
+      incr position
+    }
+  } else {
+    set position $length
+  }
+  return [list [string range $content $start [expr {$position - 1}]] $position]
+}
+
 oo::define ::tclpdf::document::document {
 
   # $doc font define <alias> ?-matrix {a b c d e f}? ?-ascent n?
@@ -209,7 +416,12 @@ oo::define ::tclpdf::document::document {
       # refuses - naming an option the caller never wrote.
       set ascent [expr {0.8 / abs([lindex $matrix 3])}]
     }
-    if {![string is double -strict $ascent] || $ascent < 0} {
+    # [option finite] and not [string is double -strict]: NaN is a double to
+    # Tcl and every comparison with it is false, so "-ascent NaN" passed the
+    # range test below and went on into the FontMatrix arithmetic and the
+    # /FontBBox - the contract in the manual says a number option takes a
+    # finite number.
+    if {![::tclpdf::option finite $ascent] || $ascent < 0} {
       return -code error -errorcode [list TCLPDF TYPE3 ARGUMENT ascent] \
           "tclpdf: -ascent of font define is the height of the\
           glyph frame above the baseline, in glyph units, 0 or more - not\
@@ -290,7 +502,10 @@ oo::define ::tclpdf::document::document {
           [my Type3Codepoint $text]"
     }
     set width [dict get $options width]
-    if {![string is double -strict $width] || $width < 0} {
+    # Finite, for the reason [Type3Define] gives at -ascent: NaN compares
+    # false against everything, so it used to reach /Widths and the d0/d1
+    # operand of the glyph stream.
+    if {![::tclpdf::option finite $width] || $width < 0} {
       return -code error -errorcode [list TCLPDF TYPE3 ARGUMENT width] \
           "tclpdf: -width of font glyph is the advance in\
           glyph units, 0 or more, not \"$width\""
@@ -480,9 +695,9 @@ oo::define ::tclpdf::document::document {
           coordinates of the glyph script, not \"$box\""
     }
     foreach number $box {
-      if {![string is double -strict $number]} {
+      if {![::tclpdf::option finite $number]} {
         return -code error -errorcode [list TCLPDF TYPE3 BBOX number] \
-            "tclpdf: $what takes numbers, not \"$number\""
+            "tclpdf: $what takes finite numbers, not \"$number\""
       }
     }
     lassign $box x y width height
@@ -522,6 +737,12 @@ oo::define ::tclpdf::document::document {
     }
     if {$color eq "text"} {
       my Type3RefuseImage $alias $content
+      # d1: the glyph specifies only shape, and the colour operators the
+      # drawing methods wrote are struck out of it here - see
+      # [::tclpdf::type3::stripColour] for the two readers that made this
+      # necessary. What is left paints in the text colour, which is what
+      # -color text asks for.
+      set content [::tclpdf::type3::stripColour $content]
     }
     if {$factor != 1.0} {
       set scale [::tclpdf::pdfObj num [expr {1.0 / $factor}] 6]
@@ -725,7 +946,23 @@ oo::define ::tclpdf::document::document {
         unitsPerEm [expr {1.0 / [lindex [dict get $entry matrix] 0]}] \
         fsType {} \
         permission "not stated - a Type 3 font has no font program" \
+        masks [my Type3Masks $alias] \
         characters [dict size [dict get $entry codes]]]
+  }
+
+  # HOW MANY GLYPHS OF A COLOUR FACE NEEDED A SOFT MASK, which is the one
+  # thing about a drawn colour font a caller cannot see from the outside and
+  # the one thing that decides how it renders in a reader that reads the mask
+  # rules differently (docs/technote-type3-softmask.md). colorFontPaint.tcl
+  # counts them while it writes, under the document state key "colorFont"; a
+  # font that is not a colour face, or one that has not been written yet, has
+  # none and answers 0.
+  method Type3Masks {alias} {
+    set counts [my state colorFont]
+    if {![dict exists $counts $alias]} {
+      return 0
+    }
+    return [dict get $counts $alias mask]
   }
 
   # U+XXXX, the spelling the error code contract uses - and one per code point

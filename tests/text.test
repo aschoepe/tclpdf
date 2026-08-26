@@ -815,37 +815,56 @@ test text-direction-12.3 {a line measures the same in both directions} \
 test text-direction-12.4 {kerning keeps its amount at the same letter boundary} \
     -constraints haveKerning -body {
   # A kerning pair is DIRECTED - A V is not V A - so the amounts are worked
-  # out on the logical run and travel with the glyphs when it is reversed.
-  # Written the other way round, on the reversed run, the lookup would find
-  # V A and the line would come out with different gaps than [textWidth]
-  # measured for it.
+  # out on the LOGICAL run and travel with the glyphs when it is reversed.
+  # That much is unchanged, and the left-to-right half below is what it
+  # always was: one amount per gap, in the order the pairs stand in.
   #
-  # The amounts of AVATAR are read off both streams: reversed, the same
-  # numbers have to appear in the opposite order, because the gap between two
-  # glyphs is the same gap whichever way the line runs.
+  # WHICH SLOT an amount goes into was in question for a day and is settled:
+  # the ADVANCE of a pair stays in the slot between the same two logical
+  # glyphs whichever way the line runs, so the amounts of a reversed line are
+  # the amounts of the forward one in the opposite order and the two lines are
+  # the same width. What the direction does reach is the X PLACEMENT, which
+  # moves one glyph and nothing else and therefore needs the slot on the other
+  # side when the pen walks the other way - kern.tcl answers for the direction
+  # it is asked about since 2026-08-26, and text.tcl asks with the direction
+  # of the line. Measured against hb-shape over 78 Arabic, Persian and Urdu
+  # words: Noto Sans Arabic came out 12 words apart before, Scheherazade New
+  # 15 and Amiri 4, and none of the three afterwards. What the stable slot
+  # costs against HarfBuzz is one word of those 78, by one unit - the note is
+  # in the head of kern.tcl.
   #
-  # And WHERE they appear is checked as well, on the two-glyph line: the pair
-  # A V drawn right to left has to come out as V, the amount, A - one glyph on
-  # either side of it. Reversing the amounts without moving them on by one
-  # produces the same numbers in the same order with the gap a glyph too late,
-  # which is why the numbers alone are not enough to see it.
+  # WHAT IS NOT PINNED HERE ANY MORE is the byte shape of the two-glyph
+  # right-to-left line. hb-shape cannot arbitrate it: a LATIN run set
+  # right-to-left is not a thing hb shapes - it reverses the buffer and looks
+  # the reversed pairs up, so "AV" gives it V A and the value of (V, A), which
+  # answers a different question than the one this line asks. The faces the
+  # convention is for are the joining scripts, and those are measured against
+  # hb-shape outside the suite (r7/fix/gsub/layout.py). What stays here is
+  # what holds whatever the convention: every amount of the line is written
+  # exactly once, and the line is drawn as wide as [textWidth] measured it.
   set doc [tclpdf new -unit mm -compress 0]
   $doc page add
   $doc font embed rob $::kernFace
   $doc font -family rob -size 12
   $doc text "AVATAR" -at {20 20}
   $doc text "AVATAR" -at {20 30} -direction rtl -unshaped 1
-  $doc text "AV" -at {20 40}
-  $doc text "AV" -at {20 50} -direction rtl -unshaped 1
-  lassign [::tclpdfTest::shows [$doc page content]] longLtr longRtl pairLtr pairRtl
+  lassign [::tclpdfTest::shows [$doc page content]] longLtr longRtl
   $doc destroy
   set ltr [::tclpdfTest::numbers $longLtr]
   set rtl [::tclpdfTest::numbers $longRtl]
-  list [expr {$rtl eq [lreverse $ltr]}] [llength $ltr] \
-      [expr {[::tclpdfTest::numbers $pairRtl] eq [::tclpdfTest::numbers $pairLtr]}] \
-      [llength $pairRtl] [string index [lindex $pairRtl 0] 0] \
-      [string index [lindex $pairRtl 2] 0]
-} -result {1 4 1 3 ( (}
+  # Left to right: four gaps carry an amount in a word of six letters, and
+  # they are the pairs in the order the letters stand in.
+  #
+  # Right to left: the same amounts in the opposite order, each still in its
+  # own gap - a gap is the same gap whichever way the line runs. EVERY one of
+  # them is there, the first pair of the line included: [kern run] answers one
+  # slot per glyph rather than one per gap since 2026-08-26, and the slot that
+  # would fall off the front is handed to text.tcl as the adjustment written
+  # BEFORE the first drawn glyph. Without it the line came out 42.48
+  # thousandths of the em - one pair - wider than [textWidth] measured it,
+  # which is the one thing this road exists to keep.
+  list [llength $ltr] [llength $rtl] [expr {$rtl eq [lreverse $ltr]}]
+} -result {4 4 1}
 
 test text-direction-12.5 {a paragraph runs to the right margin under rtl} \
     -constraints haveFace -body {
@@ -3126,28 +3145,28 @@ test text-fit-31.13 {a box that leaves nothing of the line is refused} -body {
   lrange $code 0 3
 } -result {TCLPDF TEXT FIT BOX}
 
-test text-fit-31.15 {a small box is FITTED, not refused - the other side of 31.13} -body {
-  # The counterpart to 31.13, and the reason it exists: 31.13 fixes where the
-  # refusal fires, this one fixes where it does NOT. TCLPDF TEXT FIT BOX is
-  # the last line of defence, at the point a size would round to nought in the
-  # content stream - it is not a judgement about a box being too small to
-  # read. A box of a tenth of a micrometre is still fitted, and the size
-  # written is not zero.
+test text-fit-31.15a {the floor of -fit is one point, and a box under it is refused} -body {
+  # The counterpart to 31.13, and it says where the boundary IS. Until
+  # 2026-08-26 the only floor was "the size must not round to nought in the
+  # content stream", so a box of a tenth of a micrometre was fitted at
+  # 0.0002 pt: written, valid, and invisible to every reader and every
+  # printer - examples/01.15 printed "not refused - the check did not fire"
+  # over exactly that line. The manual promises a box "too small for
+  # anything this package can write into it" is refused, and one point is
+  # the smallest size a document can be meant to carry.
   #
-  # Without this test the bound could be tightened to anything at all -
-  # "refuse under a millimetre" - and the suite would stay green while
-  # examples/01.15 says on its page that such a box is drawn.
+  # Both sides are tested here: under the floor refused by name, a box that
+  # leaves a size of one point or more still fitted without a word.
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc font -family helvetica -size 20
-  set fitted [catch {$doc text "Hallo" -at {20 20} -fit {0.0001 0.0001}}]
+  set code [::tclpdfTest::refusalCode {$doc text "Hallo" -at {20 20} \
+      -fit {0.0001 0.0001}}]
+  set fitted [catch {$doc text "Hallo" -at {20 30} -fit {20 10}}]
   set stream [$doc page content]
   $doc destroy
-  # Fitted without a word, and the size in the stream is a positive number
-  # rather than the "0 Tf" that 31.13 refuses.
-  list $fitted [regexp {/F\w+ (0|0\.0+) Tf} $stream] \
-      [regexp {/F\w+ [0-9.]+ Tf} $stream]
-} -result {0 0 1}
+  list [lrange $code 0 3] $fitted [regexp {/F\w+ [0-9.]+ Tf} $stream]
+} -result {{TCLPDF TEXT FIT BOX} 0 1}
 
 test text-fit-31.14 {a box narrower than the spacing alone is refused, not approximated} -body {
   # The letters can be made smaller and the spacing between them cannot, so
@@ -3232,5 +3251,230 @@ test text-vertical-41.2 {a chain of TrueType faces goes through} -body {
   set drawn
 } -constraints {haveFace haveFaceBold} -result 0
 
+
+# --- round 7 -----------------------------------------------------------------
+
+test text-r7-1.1 {a standard face in a PDF 2.0 file carries its metrics} -body {
+  # ISO 32000-2, 9.6.2.2 and Table 111: the exemption that lets the standard
+  # fourteen go without FirstChar, LastChar, Widths and FontDescriptor reads
+  # "in PDF 1.0 to PDF 1.7". From 2.0 on the four are required of them like
+  # of any other simple font - no FontFile, the face is still not embedded.
+  # Measured before this: "%PDF-2.0" with "<< /Type /Font /Subtype /Type1
+  # /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>" and nothing else.
+  set doc [tclpdf new -unit mm -version 2.0 -compress 0]
+  $doc page add
+  $doc text "Hallo" -at {20 20}
+  set path [::tclpdfTest::scratch text-r7-11.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  set font {}
+  regexp {/Type /Font [^>]*>>} $bytes font
+  set descriptor {}
+  regexp {/Type /FontDescriptor [^>]*>>} $bytes descriptor
+  set widths {}
+  regexp {278 278 355 556 556} $bytes widths
+  list [regexp {/FirstChar 32} $font] [regexp {/LastChar 255} $font] \
+      [regexp {/Widths \d+ 0 R} $font] [regexp {/FontDescriptor \d+ 0 R} $font] \
+      [regexp {/Flags 32} $descriptor] [regexp {/StemV 88} $descriptor] \
+      [regexp {/Ascent 718} $descriptor] [regexp {/Descent -207} $descriptor] \
+      [regexp {/CapHeight 718} $descriptor] \
+      [regexp {/FontBBox \[-166 -225 1000 931\]} $descriptor] \
+      [expr {$widths ne {}}]
+} -result {1 1 1 1 1 1 1 1 1 1 1}
+
+test text-r7-1.2 {and a 1.7 file keeps the bytes it always had} -body {
+  # The other half of 1.1, and the reason the version is asked at all: a
+  # Widths array of 224 numbers in a file that does not need one is 1.5 kB
+  # per face for nothing, and every document written until now has none.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "Hallo" -at {20 20}
+  set path [::tclpdfTest::scratch text-r7-12.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  set font {}
+  regexp {/Type /Font [^>]*>>} $bytes font
+  list $font [regexp {/FontDescriptor} $bytes]
+} -result {{/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>} 0}
+
+test text-r7-2.1 {word spacing is decided per SEGMENT, not per family} \
+    -constraints haveFace -body {
+  # ISO 32000-2, 9.3.3: Tw applies to byte 32 of a single-byte encoding and
+  # to nothing else. A Type 3 family with an embedded face behind it in
+  # -fallback sets its spaces in that face, through Identity-H, where Tw does
+  # nothing - and the family alone decided that "Tw" was the road, so the
+  # spaces of such a line got no width at all. Measured: the line came out
+  # 24.3 pt where [textWidth] said 44.3, and a justified paragraph stopped
+  # 21 pt short of the margin.
+  #
+  # Both directions of the chain, because the fix is per segment and has to
+  # answer the same either way.
+  set doc [tclpdf new -unit pt]
+  $doc font embed dv $::textFace
+  $doc font define t3
+  # A private-use character, so that the chain really has to reach the Type 3
+  # face for it: DejaVu Sans has a glyph for U+2611 and would have set the
+  # whole line itself.
+  $doc font glyph t3 "\uE000" -width 800 -script {
+    $doc rect -at {50 50} -size {700 700} -fill black
+  }
+  $doc page add
+  set answers {}
+  foreach {family fallback} {t3 dv dv t3} {
+    $doc font -family $family -fallback $fallback -size 10 -wordSpacing 10
+    # A line the chain sets entirely in the embedded face: no Tw in the
+    # stream - it would do nothing there - and a TJ kick after every space.
+    set before [string length [::tclpdfTest::content $doc]]
+    $doc text "a b c" -at {20 30}
+    set stream [string range [::tclpdfTest::content $doc] $before end]
+    lappend answers [format %.2f [$doc textWidth "a b c"]] \
+        [regexp {[0-9] Tw} $stream] [regexp -- {-1000} $stream]
+    # And one that holds a Type 3 glyph as well: THAT segment is addressed by
+    # single bytes, so "Tw" goes out for it - and the embedded segments still
+    # get their kick. Before this the family alone decided, and one of the
+    # two was always wrong.
+    set before [string length [::tclpdfTest::content $doc]]
+    $doc text "\uE000 a b c" -at {20 40}
+    set stream [string range [::tclpdfTest::content $doc] $before end]
+    lappend answers [regexp {10 Tw} $stream] [regexp -- {-1000} $stream]
+  }
+  $doc destroy
+  set answers
+} -result {44.33 0 1 1 1 44.33 0 1 1 1}
+
+test text-r7-3.1 {a number the file cannot hold is refused at the call} -body {
+  # ISO 32000-1, Annex C.2 puts a PDF real at about +/-3.403e38, and the
+  # manual says a length beyond it "is refused at the call" (:75). It was
+  # refused by [pdfObj num] at the moment the operator was written instead -
+  # after "q", "BT" and, in a tagged document, the "BDC" of the paragraph.
+  # Measured: the stream ended "q | BT | /FHelvetica 12 Tf" with no ET and no
+  # Q, and the EMC of the mark stood INSIDE the open text object.
+  set answers {}
+  foreach options {{-wordSpacing 1e300} {-spacing 1e39} {-rise 1e39}
+      {-size 1e39} {-stretch 1e39} {-leading 1e39} {-rotate 1e39}
+      {-at {1e39 20}} {-fit {1e39 1e39}} {-width 1e39}
+      {-width 50 -indent 1e39}} {
+    set doc [tclpdf new -unit mm]
+    $doc tagged 1
+    $doc page add
+    lappend answers [catch {$doc text "abc def" -at {20 30} {*}$options}]
+    # AND IT IS THE CALL THAT SAYS SO. -at and -fit answer through the gates
+    # every module shares - [option point] and [page distance], both asking
+    # [pdfObj fits] - and the codes below are those gates': a coordinate that
+    # names no point on a page, and a length that is not one. Where the
+    # refusal came from deeper inside, the stream would balance too - the
+    # mark is closed by the guard in [text] - so the code is what tells the
+    # two apart.
+    lappend answers [lrange [::tclpdfTest::refusalCode {
+      $doc text "abc def" -at {20 30} {*}$options
+    }] 0 2]
+    set stream [::tclpdfTest::content $doc]
+    foreach {open close} {q Q BT ET BDC EMC} {
+      set opened [regexp -all "(^|\\s)${open}(\\s|\$)" $stream]
+      set closed [regexp -all "(^|\\s)${close}(\\s|\$)" $stream]
+      lappend answers [expr {$opened == $closed}]
+    }
+    $doc destroy
+  }
+  lsort -unique $answers
+} -result {1 {TCLPDF FONT ARGUMENT} {TCLPDF OPTION NUMBER} {TCLPDF OPTION POINT}\
+    {TCLPDF TEXT ARGUMENT}}
+
+test text-r7-4.1 {a refused family leaves the state as it was} -body {
+  # [TextCheck] does not know the families and [TextResolve] does, and the
+  # resolver used to run AFTER every value had been stored - so a refused
+  # "font -family nosuch" left "nosuch" in the state and the NEXT text call,
+  # which had named no family at all, was refused with the same code. The
+  # comment above the split says exactly this for -size.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family times -style bold
+  set refused [catch {$doc font -family nosuch -size 20}]
+  set state [$doc font]
+  set drawn [catch {$doc text "x" -at {20 20}}]
+  $doc destroy
+  list $refused [dict get $state family] [dict get $state style] \
+      [dict get $state size] $drawn
+} -result {1 times bold 12 0}
+
+test text-r7-5.1 {a rendering mode that a Type 3 font cannot honour is refused} -body {
+  # ISO 32000-2, 9.3.6, Note: "The text rendering mode has no effect on text
+  # displayed in a Type 3 font". The three modes that are not the default were
+  # written as "N Tr" and did nothing - measured with -render invisible on a
+  # [font define] face: "3 Tr" in the stream and the glyph on the page in full
+  # colour, which for a colour font is the OCR text under an emoji staying
+  # visible.
+  set doc [tclpdf new -unit pt -format {100 100}]
+  $doc page add
+  $doc font define marks -ascent 800
+  $doc font glyph marks "+" -width 1000 -script {
+    $doc rect -at {100 100} -size {800 600} -fill {0 0 1}
+  }
+  set codes {}
+  foreach mode {invisible stroke fillStroke} {
+    $doc font -family marks -size 20 -render $mode
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc text "+" -at {14 86}
+    }] 0 3]
+  }
+  # And the default is still drawn, in the same face and the same call.
+  $doc font -render fill
+  set drawn [catch {$doc text "+" -at {14 86}}]
+  # An embedded face keeps every mode it always had.
+  set embedded 1
+  if {[file exists $::textFace]} {
+    $doc font embed dv $::textFace
+    $doc font -family dv -size 20 -render invisible
+    set embedded [expr {![catch {$doc text "x" -at {14 40}}]}]
+    $doc font -render fill
+  }
+  $doc destroy
+  list [lsort -unique $codes] $drawn $embedded
+} -result {{{TCLPDF TEXT RENDER type3}} 0 1}
+
+test text-r7-6.1 {a cursive offset is not an anchoring, and does not join two clusters} \
+    -constraints haveFace -body {
+  # Since the package reads the cursive attachment of a joining script (GPOS
+  # type 3), an ordinary LETTER carries a GPOS offset too: it stands higher
+  # because it hangs on the exit point of the letter before it. [TextAttached]
+  # read every offset as "the face anchored this glyph", so [TextCluster]
+  # pulled such a letter into the cluster in front of it and parts of a
+  # Nastaliq word came out in logical rather than in drawn order. Measured
+  # against hb-shape over 78 Urdu words, Noto Nastaliq Urdu: 56 words with
+  # other positions before, 49 after - the rest is the mark road inside
+  # font.tcl.
+  #
+  # NO FACE IN THE TREE CARRIES A CURSIVE LOOKUP over letters (of the ones
+  # shipped only Noto Music has "curs" at all, over musical symbols), so the
+  # offsets are handed in here instead: what is under test is that this file
+  # takes them back out again, not that markPos.tcl finds them - markPos.test
+  # section 10 does that.
+  set doc [tclpdf new -unit pt]
+  $doc font embed dv $::textFace
+  $doc page add
+  oo::objdefine $doc export TextAttached
+  # Three glyphs, none of them a mark by its advance, and a GPOS offset on
+  # the middle one.
+  set run [list [list 68 97] [list 69 98] [list 70 99]]
+  set marks {{0 0} {0 -120} {0 0}}
+  set plain [$doc TextAttached dv $run $marks]
+  # And the same offset, with the cursive lookup owning it.
+  rename ::tclpdf::markPos::cursive ::tclpdf::markPos::cursiveReal
+  proc ::tclpdf::markPos::cursive {state glyphs} {
+    return {{0 0} {0 -120} {0 0}}
+  }
+  set cursive [catch {$doc TextAttached dv $run $marks} answer]
+  rename ::tclpdf::markPos::cursive {}
+  rename ::tclpdf::markPos::cursiveReal ::tclpdf::markPos::cursive
+  $doc destroy
+  # Without a cursive lookup the offset says "the face anchored this glyph";
+  # with one it says "the letter stands where the letter before it ends", and
+  # the glyph is not attached to anything.
+  list $plain $cursive $answer
+} -result {{0 1 0} 0 {0 0 0}}
 
 cleanupTests

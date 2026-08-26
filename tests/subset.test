@@ -78,7 +78,7 @@ test subset-2.1 {a CFF face cannot be subsetted, and says so as SUBSET} -constra
   # its own class: it is not damage and not an unsupported format, it is the
   # one operation this face does not admit.
   ::tclpdfTest::refusalCode {::tclpdf::subset build [parsedFace $::otf] {0 36}}
-} -result {TCLPDF FONT SUBSET outlines}
+} -result {TCLPDF FONT SUBSET outlines {}}
 
 test subset-2.2 {SUBSET is not DAMAGED, so a caller can tell them apart} -constraints haveOtf -body {
   # The distinction that makes four classes worth having: a CFF face is
@@ -127,6 +127,22 @@ test subset-3.1 {every refusal in the module carries a code} -body {
   # with no -errorcode is invisible to trap.
   ::tclpdfTest::refusalsWithoutCode subset.tcl
 } -result 0
+
+
+test subset-4.1 {the refusal names the face where it has a name} -body {
+  # The message used to say "the font" of a document that might hold a dozen.
+  # This is the last line of defence and since 2026-08-26 no longer the
+  # first: a face with no glyf/loca is refused by [font embed] with TCLPDF
+  # FONT TABLE glyf, where the caller can still see which call was at fault.
+  set named [::tclpdfTest::refusal {::tclpdf::subset build \
+      [parsedFace $::otf] {0 36} {} hausschrift}]
+  set anonymous [::tclpdfTest::refusal {::tclpdf::subset build \
+      [parsedFace $::otf] {0 36}}]
+  list $named [catch {::tclpdf::subset build [parsedFace $::otf] {0 36} {} \
+      hausschrift} message] \
+      [string match {*the font "hausschrift" has no glyf/loca*} $message] \
+      $anonymous
+} -result {{TCLPDF FONT SUBSET outlines hausschrift} 1 1 {TCLPDF FONT SUBSET outlines {}}}
 
 
 cleanupTests

@@ -421,9 +421,20 @@ oo::define ::tclpdf::document::document {
         dict set parsed icc {}
       } else {
         set source [expr {$path ne {} ? "\"$path\"" : "the picture data"}]
+        # TCLPDF IMAGE ICC, not FORMAT: both refusals of this block are
+        # about the PROFILE and not about the picture, and a handler that
+        # traps one has to see the other - until 2026-08-26 an unreadable
+        # profile came out under a class that says "this is not a picture
+        # this package reads", which is exactly what the message beside it
+        # denies.
         if {[catch {my IccInspect [dict get $parsed icc] \
-            "the ICC profile in $source"} inspected]} {
-          return -code error -errorcode [list TCLPDF IMAGE FORMAT $source] \
+            "the ICC profile in $source"} inspected outcome]} {
+          # A version refusal (Table 66) is the document's, not the
+          # profile's, and keeps its own code.
+          if {[lindex [dict get $outcome -errorcode] 1] eq "VERSION"} {
+            return -options $outcome $inspected
+          }
+          return -code error -errorcode [list TCLPDF IMAGE ICC $source] \
               "$inspected - the picture itself is fine;\
               -icc 0 embeds it without the profile"
         }
@@ -1346,6 +1357,15 @@ oo::define ::tclpdf::document::document {
     # true, what it paints is the fill colour in force - so it answers empty,
     # which is the same "nobody said" that an absent resolution answers with.
     dict set result space [my ImageSpaceName $image]
+    # WHICH WAY UP THE FILE SAYS IT IS, and 1 - "the rows are as they are
+    # stored" - for every file that says nothing. The Exif tag (274) is read
+    # and NOT applied: this package hands the compressed data on rather than
+    # decoding pixels, so turning the picture is the caller's call, made with
+    # [transform] around the placement. Reported for all three formats so
+    # that the key means one thing; a TIFF whose tag is not 1 never gets this
+    # far (imageTiff refuses it), and PNG has no such tag at all.
+    dict set result orientation [expr {[dict exists $parsed orientation]
+        ? [dict get $parsed orientation] : 1}]
     # The size of the ICC profile that will travel with the picture, 0 when
     # the file carries none or -icc 0 left it behind - so a caller can see
     # which of the two a placement will get.
@@ -1912,4 +1932,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.13
+package provide tclpdf::image 1.14

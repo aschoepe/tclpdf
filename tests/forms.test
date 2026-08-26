@@ -117,17 +117,19 @@ test forms-1.1 {a face with the positional features is prepared} \
   # then find in the shape they expect.
   #
   # rlig LEFT THIS LIST on 2026-08-26 and did not leave the shaping: the
-  # ligatures are TWO stages of their own now - the required ones, then the
-  # typographic ones a caller may switch off - because -ligatures may not
-  # switch off a required ligature and because HarfBuzz pauses between the
-  # two. So the closing stages are asked for separately below.
+  # ligatures are stages of their own now - the required ones, then the
+  # contextual alternates, then the typographic ligatures a caller may switch
+  # off - because -ligatures may not switch off a required ligature and
+  # because HarfBuzz pauses between them. So the closing stages are asked for
+  # separately below, and "closingOn" is the list of stages that run with
+  # -ligatures on.
   set state [::tclpdf::forms build [formsParsed $::wholeFace]]
   set tags {}
   foreach {tag mark lookups} [dict get $state stages] {
     lappend tags $tag
   }
   list $tags [expr {[llength [dict get $state closingRequired]] > 0}] \
-      [expr {[llength [dict get $state closingOptional]] > 0}]
+      [expr {[llength [dict get $state closingOn]] > 0}]
 } -result {{ccmp fina medi init} 1 1}
 
 test forms-1.2 {a face without them is not prepared at all} \
@@ -148,7 +150,7 @@ test forms-1.3 {the splitting face is prepared too, ccmp and all} \
     lappend tags $tag
   }
   list $tags [expr {[llength [dict get $state closingRequired]] > 0}] \
-      [expr {[llength [dict get $state closingOptional]] > 0}]
+      [expr {[llength [dict get $state closingOn]] > 0}]
 } -result {{ccmp fina medi init} 1 1}
 
 # --- which of the two closing stages runs first -----------------------------

@@ -634,5 +634,125 @@ test importFields-11.1 {name, type and flags agree with qpdf's own reading} -con
     set wrong
 } -cleanup {file delete $path} -result {}
 
+# --- round 7: the round trip, and what an encrypted file does not say -------
+
+test importFields-30.1 {a line break written as \n comes back as \n} -body {
+    # The writing side spells a break as the CARRIAGE RETURN of 12.7.4.3;
+    # reading it back handed the CR out unchanged, so a script that wrote,
+    # read and compared saw a difference it never made.
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    $doc field text note -rect {10 10 60 30} -multiline 1 -value "a\nb\nc"
+    set path [::tclpdfTest::scratch importfields-lines.pdf]
+    $doc write $path
+    $doc destroy
+    set fields [::tclpdf::pdf fields $path]
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    set value {}
+    foreach field $fields {
+        if {[dict get $field name] eq "note"} {
+            set value [dict get $field value]
+        }
+    }
+    # The FILE holds carriage returns, the ANSWER line feeds.
+    list [expr {$value eq "a\nb\nc"}] [regexp {/V \(a\\rb\\rc\)} $bytes]
+} -result {1 1}
+
+test importFields-30.2 {a foreign file's CRLF is one break as well} -body {
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R /AcroForm\
+        << /Fields \[4 0 R\] >> >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1\
+        /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Annots \[4 0 R\] >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 10 100 30\]\
+        /FT /Tx /T (note) /V (a\\r\\nb) /P 3 0 R >>"
+    set path [::tclpdfTest::buildpdf importfields-crlf.pdf $objects]
+    set fields [::tclpdf::pdf fields $path]
+    file delete $path
+    expr {[dict get [lindex $fields 0] value] eq "a\nb"}
+} -result 1
+
+test importFields-31.1 {an encrypted file answers nothing it would have to read} -body {
+    # doc/tclpdf.md: "Every content-derived key stays empty". Two of them
+    # answered 0 and "none" - the words that mean "read, and there is none" -
+    # about a catalogue that is cipher text and was never read.
+    set doc [tclpdf new -unit mm -format a4 -version 2.0]
+    $doc encrypt -owner secret
+    $doc page add
+    $doc tagged 1
+    $doc structure P -script {$doc text "x" -at {10 10}}
+    $doc field text t -rect {10 30 40 8}
+    set path [::tclpdfTest::scratch importfields-enc.pdf]
+    $doc write $path
+    $doc destroy
+    set facts [::tclpdf::pdf info $path]
+    file delete $path
+    list [dict get $facts encrypted] [dict get $facts tagged] \
+        [dict get $facts form] [dict get $facts certified] \
+        [dict get $facts pages]
+} -result {1 {} {} {} {}}
+
+test importFields-31.2 {and a plain one still answers both} -body {
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    $doc tagged 1
+    $doc structure P -script {$doc text "x" -at {10 10}}
+    $doc field text t -rect {10 30 40 8}
+    set path [::tclpdfTest::scratch importfields-plain.pdf]
+    $doc write $path
+    $doc destroy
+    set facts [::tclpdf::pdf info $path]
+    file delete $path
+    list [dict get $facts encrypted] [dict get $facts tagged] \
+        [dict get $facts form] [dict get $facts certified]
+} -result {0 1 AcroForm {}}
+
+test importFields-32.1 {a DocMDP certification is reported with its /P} -body {
+    # 12.8.4.2: /Perms /DocMDP names the signature that certified the file,
+    # and the /P of its transform parameters says what may still happen to
+    # it. A caller has to be able to read that BEFORE appending anything.
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R /AcroForm\
+        << /Fields \[5 0 R\] /SigFlags 3 >> /Perms << /DocMDP 4 0 R >> >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1\
+        /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R /Annots \[5 0 R\] >>"
+    lappend objects "<< /Type /Sig /Filter /Adobe.PPKLite\
+        /SubFilter /adbe.pkcs7.detached /ByteRange \[0 100 200 300\]\
+        /Contents <00> /Reference \[<< /Type /SigRef /TransformMethod /DocMDP\
+        /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>\] >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Cert)\
+        /V 4 0 R /Rect \[0 0 0 0\] /F 4 /P 3 0 R >>"
+    set path [::tclpdfTest::buildpdf importfields-docmdp.pdf $objects]
+    set facts [::tclpdf::pdf info $path]
+    file delete $path
+    dict get $facts certified
+} -result {field Cert p 1}
+
+test importFields-32.2 {/P defaults to 2, which Table 257 gives it} -body {
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R /Perms\
+        << /DocMDP 4 0 R >> >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1\
+        /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R >>"
+    lappend objects "<< /Type /Sig /Filter /Adobe.PPKLite\
+        /Reference \[<< /Type /SigRef /TransformMethod /DocMDP\
+        /TransformParams << /Type /TransformParams >> >>\] >>"
+    set path [::tclpdfTest::buildpdf importfields-docmdp2.pdf $objects]
+    set facts [::tclpdf::pdf info $path]
+    file delete $path
+    dict get $facts certified
+} -result {field {} p 2}
+
+test importFields-32.3 {a file that is not certified says so with the empty string} -body {
+    set path [::tclpdfTest::formFixture]
+    set facts [::tclpdf::pdf info $path]
+    file delete $path
+    dict get $facts certified
+} -result {}
+
 ::tcltest::cleanupTests
 return

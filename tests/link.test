@@ -159,4 +159,113 @@ test link-3.2 {a document without links answers nothing, whatever else is on it}
   set answers
 } -result {{} {}}
 
+# --- one target, and a rectangle somebody can hit --------------------------
+
+test link-4.1 {two targets in one call are named, not silently ranked} -body {
+  # [link] decided -url over -structure over -page and dropped the loser
+  # without a word, so "-url ... -page 2" wrote a URL link and the caller
+  # believed in a page jump. The manual says "to a URL, to a page, OR to a
+  # named structure element" (:886), and now so does the call. Precedent:
+  # [pattern -matrix] with -origin.
+  set doc [linked]
+  $doc page add
+  set codes [list \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {20 20} -size {40 5} -url http://example.org/ -page 1}] \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {20 30} -size {40 5} -url http://example.org/ -to {10 10}}] \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {20 40} -size {40 5} -url http://example.org/ -zoom 2}]]
+  set plain [catch {$doc link -at {20 50} -size {40 5} -page 1}]
+  $doc destroy
+  list $codes $plain
+} -result {{{TCLPDF LINK ARGUMENT url} {TCLPDF LINK ARGUMENT url}\
+    {TCLPDF LINK ARGUMENT url}} 0}
+
+test link-4.2 {-structure names an element, and -to or -zoom name a page} -body {
+  set doc [tclpdf new -unit mm -version 2.0 -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc structure Sect -name intro -script {}
+  set codes [list \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {20 20} -size {40 5} -structure intro -to {10 10}}] \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {20 30} -size {40 5} -structure intro -zoom 2}]]
+  set plain [catch {$doc link -at {20 40} -size {40 5} -structure intro}]
+  $doc destroy
+  list $codes $plain
+} -result {{{TCLPDF LINK ARGUMENT structure} {TCLPDF LINK ARGUMENT structure}} 0}
+
+test link-4.3 {-zoom is a magnification of 0 or more, and needs a place} -body {
+  # ISO 32000-1 12.3.2.2, Table 151: in an /XYZ destination a zoom of 0
+  # "has the same meaning as a null value" - the magnification the reader
+  # is already at - so 0 is a number to act on and below it there is none
+  # to mean. [initialView] has refused it since it was written (:1188);
+  # [link] wrote "/XYZ x y -1" instead. And without -to the destination is
+  # /Fit, the whole page, where a magnification has no place at all.
+  set doc [linked]
+  set negative [::tclpdfTest::refusalCode {
+    $doc link -at {20 20} -size {40 5} -page 0 -to {10 10} -zoom -1}]
+  set word [::tclpdfTest::refusalCode {
+    $doc link -at {20 30} -size {40 5} -page 0 -to {10 10} -zoom abc}]
+  set noPlace [::tclpdfTest::refusalCode {
+    $doc link -at {20 40} -size {40 5} -page 0 -zoom 2}]
+  set zero [catch {$doc link -at {20 50} -size {40 5} -page 0 -to {10 10} -zoom 0}]
+  $doc destroy
+  list $negative $word $noPlace $zero
+} -result {{TCLPDF LINK ARGUMENT zoom} {TCLPDF LINK ARGUMENT zoom}\
+    {TCLPDF LINK ARGUMENT zoom} 0}
+
+test link-4.4 {a link is nothing but its rectangle, so it needs an area} -body {
+  # /Rect [x y x y] is an annotation no pointer ever reaches - and under
+  # PDF/UA a "link" a screen reader announces and cannot follow. A negative
+  # size writes the corners the other way round: 7.9.5 says a reader
+  # normalises them, and it is a mistake at the call all the same. [image
+  # place] and [form place] refuse both.
+  set doc [linked]
+  set codes [lmap size {{0 0} {40 0} {-5 -5} {40 -5}} {
+    ::tclpdfTest::refusalCode [list $doc link -at {20 20} -size $size \
+        -url http://example.org/]
+  }]
+  set fine [catch {$doc link -at {20 20} -size {40 5} -url http://example.org/}]
+  $doc destroy
+  list [lsort -unique $codes] $fine
+} -result {{{TCLPDF LINK ARGUMENT size}} 0}
+
+test link-4.5 {-at, -size and -to answer as points do everywhere} -body {
+  # Until 2026-08-26 the sum below reached [expr] first: "link -at {a b}"
+  # came back as "can't use non-numeric string as operand of \"+\"" with
+  # errorCode ARITH DOMAIN, in Tcl's words rather than this package's.
+  set doc [linked]
+  set codes [list \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {a b} -size {40 5} -url http://example.org/}] \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {20 20} -size {a b} -url http://example.org/}] \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {20 20} -size {40 5} -page 0 -to {1 1 1}}] \
+      [::tclpdfTest::refusalCode {
+        $doc link -at {NaN 20} -size {40 5} -url http://example.org/}]]
+  $doc destroy
+  set codes
+} -result {{TCLPDF OPTION POINT -at link} {TCLPDF OPTION POINT -size link}\
+    {TCLPDF OPTION POINT -to link} {TCLPDF OPTION POINT -at link}}
+
+test link-4.6 {a refused link leaves no annotation behind} -body {
+  # Every check stands before the object is reserved: a call that is turned
+  # away must leave the document as it was, or the page carries half of what
+  # was asked for and the caller saw an error.
+  set doc [linked]
+  $doc link -at {20 20} -size {40 5} -url http://example.org/ -tooltip "eins"
+  set before [$doc state links]
+  catch {$doc link -at {20 30} -size {0 5} -url http://example.org/}
+  catch {$doc link -at {20 40} -size {40 5} -url http://example.org/ -page 0}
+  catch {$doc link -at {a b} -size {40 5} -url http://example.org/}
+  set after [$doc state links]
+  $doc destroy
+  expr {$before eq $after}
+} -result 1
+
 cleanupTests

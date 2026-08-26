@@ -116,8 +116,40 @@ namespace eval ::tclpdf::xmp {
 proc ::tclpdf::xmp::declare {prefix uri tags} {
   variable commands
   variable serial
+  # The PREFIX and the URI, before the first tag - and neither used to be
+  # looked at at all. A prefix is what [Describe] writes as "xmlns:$prefix"
+  # and a tag is what stands in front of a colon, so both have to be NCNames
+  # (Namespaces in XML 1.0, 3), and the packet is RDF/XML with namespaces
+  # (XMP part 1, 7.3): measured 2026-08-26, "my" with an empty URI wrote
+  # xmlns:my="" - which 6.2 makes an error and xmllint calls "Empty XML
+  # namespace is not allowed" - while "1my" and "a:b" reached [dom
+  # createNodeCmd] as attribute names it refuses, so the WRITE died with a
+  # raw tdom sentence and -errorcode NONE, half a document later.
+  #
+  # "xml" and "xmlns" are the two reserved ones (2.1 and 3): "xml" is bound
+  # to the XML namespace and may be bound to nothing else, "xmlns" may not
+  # be declared at all. Both went through and made the packet unparseable
+  # for every namespace-aware reader while veraPDF, which never gets that
+  # far without a PDF/A claim, said nothing.
+  if {![dom isNCName $prefix] || $prefix in {xml xmlns}} {
+    return -code error -errorcode [list TCLPDF XMP PREFIX $prefix] \
+        "tclpdf: xmpSchema prefix \"$prefix\" is not a namespace\
+        prefix - it has to be an XML name without a colon, and neither\
+        \"xml\" nor \"xmlns\", which Namespaces in XML 1.0, 2.1 and 3\
+        reserve"
+  }
+  if {$uri eq {}} {
+    return -code error -errorcode [list TCLPDF XMP URI $prefix] \
+        "tclpdf: xmpSchema needs a namespace URI for prefix\
+        \"$prefix\" - an empty one declares nothing (Namespaces in XML 1.0,\
+        6.2) and the packet would not be namespace XML at all"
+  }
+  CheckText $uri "the namespace URI of XMP schema \"$prefix\""
   foreach tag $tags {
-    set name [expr {$prefix eq {} ? $tag : "$prefix:$tag"}]
+    # Always prefixed: an empty prefix is refused above, and the unprefixed
+    # spelling this used to fall back to would have written "xmlns:" as an
+    # attribute name.
+    set name "$prefix:$tag"
     if {[dict exists $commands [list $name $uri]]} {
       continue
     }
@@ -147,8 +179,8 @@ proc ::tclpdf::xmp::declare {prefix uri tags} {
     # Refused with the caller's words, by tdom's own validator: the raw
     # "Invalid tag name 'Tag_...'" out of [dom createNodeCmd] names an
     # internal command, not the schema the caller wrote. The catch stays as
-    # the net under it - a bad PREFIX passes the tag check and still fails
-    # in the same call.
+    # the net under it - the prefix and the URI are held above, so what
+    # reaches it is the tag and the message says so.
     if {![dom isNCName $tag] || [catch {namespace eval ::tclpdf::xmp \
         [list dom createNodeCmd -tagName $name -namespace $uri \
         elementNode $command]}]} {
@@ -159,14 +191,6 @@ proc ::tclpdf::xmp::declare {prefix uri tags} {
     dict set commands [list $name $uri] $command
   }
   return
-}
-
-namespace eval ::tclpdf::xmp {
-  variable namespaces
-  declare rdf [dict get $namespaces rdf] {RDF Description Alt Bag Seq li}
-  declare dc [dict get $namespaces dc] {title creator description language}
-  declare xmp [dict get $namespaces xmp] {CreateDate ModifyDate CreatorTool}
-  declare pdf [dict get $namespaces pdf] {Producer Keywords}
 }
 
 # Hold one value against the characters XML allows (XML 1.0, 2.2:
@@ -230,6 +254,19 @@ proc ::tclpdf::xmp::CheckText {value where} {
   return
 }
 
+# The four schemas this module writes itself, declared once the checks above
+# exist: [declare] holds the URI against XML's character set, so the four
+# calls have to stand after [CheckText] rather than next to the proc they
+# call.
+
+namespace eval ::tclpdf::xmp {
+  variable namespaces
+  declare rdf [dict get $namespaces rdf] {RDF Description Alt Bag Seq li}
+  declare dc [dict get $namespaces dc] {title creator description language}
+  declare xmp [dict get $namespaces xmp] {CreateDate ModifyDate CreatorTool}
+  declare pdf [dict get $namespaces pdf] {Producer Keywords}
+}
+
 # A raw contribution, parsed - the caller owns the document that comes back
 # and has to delete it.
 #
@@ -270,6 +307,51 @@ proc ::tclpdf::xmp::ParseRaw {xml} {
     return -code error -errorcode [list TCLPDF XMP RAW] \
         "tclpdf: XMP contribution is not well formed XML -\
         [dict get $message -errorinfo]"
+  }
+  # And that it is RDF. The wrapper's children are appended to the packet's
+  # own rdf:RDF (see the loop in [packet]), where RDF/XML admits nothing but
+  # rdf:Description nodes - XMP part 1, 7.9.2.2, and ISO 19005-3, 6.6.2.1,
+  # which a validator only reaches under a conformance claim. Measured
+  # 2026-08-26: "xmpRaw {just text}" and "xmpRaw {<foo>bar</foo>}" were
+  # taken, and the packet then failed veraPDF 6.6.2.1-4/-5 and 6.6.4-1 under
+  # a PDF/A claim and nothing at all without one.
+  #
+  # Comments and whitespace pass: both are what a hand-written schema
+  # description carries around it, and neither reaches the RDF model.
+  foreach child [[$fragment documentElement] childNodes] {
+    switch -- [$child nodeType] {
+      COMMENT_NODE {}
+      TEXT_NODE {
+        if {[string trim [$child nodeValue]] ne {}} {
+          $fragment delete
+          return -code error -errorcode [list TCLPDF XMP RDF text] \
+              "tclpdf: an XMP contribution is one or more\
+              rdf:Description elements, not bare text - it is appended to\
+              the packet's rdf:RDF, and RDF/XML admits no text there (XMP\
+              part 1, 7.9.2.2)"
+        }
+      }
+      ELEMENT_NODE {
+        if {[$child namespaceURI] ne [dict get $namespaces rdf]
+            || [$child localName] ne "Description"} {
+          set name [$child nodeName]
+          $fragment delete
+          return -code error -errorcode [list TCLPDF XMP RDF $name] \
+              "tclpdf: an XMP contribution is one or more\
+              rdf:Description elements and \"$name\" is not one - it is\
+              appended to the packet's rdf:RDF, where RDF/XML admits\
+              nothing else (XMP part 1, 7.9.2.2). A property goes INSIDE an\
+              rdf:Description carrying its schema's xmlns declaration"
+        }
+      }
+      default {
+        set kind [$child nodeType]
+        $fragment delete
+        return -code error -errorcode [list TCLPDF XMP RDF $kind] \
+            "tclpdf: an XMP contribution is one or more\
+            rdf:Description elements, and a $kind is not one"
+      }
+    }
   }
   return $fragment
 }
@@ -628,6 +710,56 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   return $packet
 }
 
+# A packet the CALLER set, held against the schemas that registered with
+# this module: each one's namespace URI has to be declared somewhere in it,
+# or what the topic wanted to say is not in the file.
+#
+# The URI rather than the prefix, because a prefix is a label a document
+# picks and the URI is the thing itself (see [declare]) - a packet that
+# calls the PDF/A identification schema "pa:" instead of "pdfaid:" is
+# correct XMP and is accepted here.
+proc ::tclpdf::xmp::CheckCaller {packet schemas} {
+  if {![llength $schemas]} {
+    return
+  }
+  if {[catch {dom parse $packet} document]} {
+    return -code error -errorcode [list TCLPDF XMP CALLER packet] \
+        "tclpdf: the XMP packet set with \[metadata\] is not\
+        well formed XML, and this document has topics that have to describe\
+        themselves in it ([join [lmap entry $schemas {lindex $entry 0}] {, }]).\
+        An XMP packet is RDF/XML (XMP part 1, 7.3)"
+  }
+  set found {}
+  foreach node [[$document documentElement] selectNodes {descendant-or-self::*}] {
+    if {[$node namespaceURI] ne {}} {
+      dict set found [$node namespaceURI] 1
+    }
+    foreach attribute [$node attributes] {
+      # A declaration that is in scope but unused: {xmlns pdfaid} is how
+      # tdom hands "xmlns:pdfaid=..." back.
+      if {[llength $attribute] == 3 && [lindex $attribute 1] eq "xmlns"} {
+        dict set found [$node getAttribute \
+            xmlns:[lindex $attribute 0]] 1
+      }
+    }
+  }
+  $document delete
+  foreach entry $schemas {
+    lassign $entry prefix uri
+    if {![dict exists $found $uri]} {
+      return -code error -errorcode [list TCLPDF XMP CALLER $prefix] \
+          "tclpdf: this document claims something that has to\
+          stand in its XMP packet - the \"$prefix\" schema, $uri - and the\
+          packet set with \[metadata\] does not carry it. A packet given by\
+          the caller replaces the built one entirely, so a document that\
+          also claims pdfa or ua has to carry that description itself.\
+          Drop the \[metadata\] call and the packet is built with it, or add\
+          an rdf:Description for $uri to the packet"
+    }
+  }
+  return
+}
+
 oo::define ::tclpdf::document::document {
 
   # my xmpSchema <prefix> <uri> <tags> <method>
@@ -713,6 +845,22 @@ oo::define ::tclpdf::document::document {
   method XmpCatalog {} {
     set current [my metadata]
     if {$current ne {} && $current ne [my state xmpBuilt]} {
+      # The caller's packet REPLACES the built one, which is what the manual
+      # says and what a caller who prescribes their own XMP wants. What it
+      # also does is drop every description a topic registered - and a
+      # PDF/A or PDF/UA claim is one of those. Measured 2026-08-26:
+      # "metadata <own packet>" together with "pdfa -part 3" wrote the
+      # output intent and the Info dictionary and no pdfaid:part at all
+      # (grep -c pdfaid = 0), and veraPDF answered 6.6.4-1 - the claim never
+      # reached the file, and nothing said so.
+      #
+      # So it is said here, in both orders, since this runs at write time
+      # and neither call can know what the other will do. The question is
+      # asked of every registered schema rather than of pdfa and ua by name:
+      # this module knows what registered, not what it meant.
+      ::tclpdf::xmp::CheckCaller $current [lmap entry [my state xmpSchemas] {
+        lrange $entry 0 1
+      }]
       return
     }
     set descriptions {}
@@ -735,4 +883,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xmp 1.5
+package provide tclpdf::xmp 1.6

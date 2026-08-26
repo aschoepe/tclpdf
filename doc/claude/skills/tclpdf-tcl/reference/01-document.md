@@ -54,7 +54,7 @@ puts "type area of this page: $x0 $y0 $x1 $y1"
 
 ## Coordinates and units
 
-y counts **from the top**, `-at` is the **top left** corner of what is placed - except `circle` and `ellipse`, where it is the centre. Inside a form or a pattern script the origin is that object's own top left corner, y down, exactly as on the page.
+y counts **from the top**, `-at` is the **top left** corner of what is placed - except `circle`, `ellipse` and `arc`, where it is the centre. Inside a form or a pattern script the origin is that object's own top left corner, y down, exactly as on the page.
 
 ```tcl
 puts "PDF user space of {20 30}: [$doc coords 20 30]"   ;# points, y up, for a caller that needs it

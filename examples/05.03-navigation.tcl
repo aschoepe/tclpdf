@@ -19,6 +19,12 @@
 #   It gets a zero-width border, because the default is a visible frame that
 #   no caller asked for.
 #
+# The third thing a reader is told about a document is how to PRESENT it, and
+# that is neither a link nor an outline entry: [viewerPreferences] writes the
+# /ViewerPreferences dictionary of the catalogue - centre the window, hide the
+# toolbar, print duplex on the long edge, ask for two copies - and the last
+# section of this file sets a dozen of them and reads them back.
+#
 # The outline is built while the document is written and turned into objects
 # at the end: every entry needs the object numbers of its siblings, and the
 # format is a doubly linked list at each level rather than a nested structure.

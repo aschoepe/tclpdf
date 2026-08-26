@@ -7,8 +7,11 @@
 # The annotations that say something ABOUT a page rather than doing something
 # ON it: a sticky note, a rubber stamp, and the four ways of marking a passage
 # of text - highlighted, underlined, struck out, and underlined with a
-# squiggle. The clickable rectangle of example 5.3 and the form controls of
-# the 9.x series are annotations too, and they are their own topics.
+# squiggle. Page 2 adds the five remarks that have a shape of their own - a
+# line, a square, a circle, a polygon and a polyline - and a file clipped to
+# the paragraph it belongs to. The clickable rectangle of example 5.3 and the
+# form controls of the 9.x series are annotations too, and they are their own
+# topics.
 #
 # The one thing worth taking from this file is WHO DRAWS THE PICTURE, because
 # it decides everything else:
@@ -39,8 +42,9 @@
 #   $doc annot highlight -text "the amount due" -at {20 60} -contents ...
 #
 # Anything the measuring road cannot know - a passage broken over lines, a
-# table cell, text this package did not set - goes in as rectangles through
-# -quads, and the paragraph below shows that road as well.
+# table cell, text this package did not set - goes in through -lines or, for
+# a rectangle of one's own, through -quads; the paragraph below takes the
+# -lines road.
 #
 # This document claims PDF/UA-1, so it also shows what accessibility asks of
 # an annotation: a description in /Contents, and a place in the structure tree.

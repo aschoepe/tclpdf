@@ -209,15 +209,54 @@ proc ::tclpdf::update::open {path} {
   return [::tclpdf::update::Session new $path]
 }
 
+# A SUBCOMMAND THIS ENSEMBLE HAS NOT GOT, in this package's words. Without
+# it Tcl answers "unknown or ambiguous subcommand" under the errorcode
+# TCL LOOKUP SUBCOMMAND - the one refusal of the whole module that a handler
+# written against TCLPDF UPDATE cannot see, and against the promise that
+# every refusal of this package begins with "tclpdf:" and carries a code of
+# its own (doc/tclpdf.md, "Error codes"). The list is read off the ensemble
+# rather than written out, so it cannot fall behind what the namespace
+# exports.
+namespace ensemble configure ::tclpdf::update \
+    -unknown ::tclpdf::update::Unknown
+
+proc ::tclpdf::update::Unknown {ensemble subcommand args} {
+  set known [lsort [lmap command [info commands ${ensemble}::\[a-z\]*] {
+    namespace tail $command
+  }]]
+  return -code error -errorcode [list TCLPDF UPDATE SUBCOMMAND $subcommand] \
+      "tclpdf: unknown update subcommand \"$subcommand\" -\
+      known [expr {[llength $known] == 1 ? {is} : {are}}]: [join $known {, }]"
+}
+
 oo::class create ::tclpdf::update::Session {
   variable tclpdfReader tclpdfPath tclpdfBase tclpdfPrev tclpdfHigh \
       tclpdfBodies tclpdfOrder tclpdfOverrides tclpdfId
 
   constructor {path} {
     # The reader does the reading AND the refusing: a file without a
-    # startxref, a circular /Prev chain and an encrypted file are all its
-    # errors, and they are the same three an update has to make.
-    set tclpdfReader [::tclpdf::importRead::Open $path]
+    # startxref and a circular /Prev chain are its errors, and they are the
+    # errors an update has to make as well.
+    #
+    # ENCRYPTION IS THE ONE IT ANSWERS FOR ITSELF. The reader refuses an
+    # encrypted file in the words of the IMPORT - "encrypted files are not
+    # imported", under TCLPDF IMPORT ENCRYPTED - and nothing is being
+    # imported here: [update open] appends to a file, and a caller who
+    # trapped TCLPDF UPDATE read a message about a command they did not
+    # call (measured 2026-08-26). The refusal is the same refusal and for
+    # the same reason - every string and every stream this update appends
+    # would have to be encrypted with the file's own key, which this package
+    # has no way of deriving - so the file is opened TOLERATING it and the
+    # sentence is made here.
+    set tclpdfReader [::tclpdf::importRead::Open $path 1]
+    if {[::tclpdf::importRead::Get \
+            [dict get $tclpdfReader trailer] Encrypt] ne {}} {
+      return -code error -errorcode {TCLPDF UPDATE ENCRYPTED} \
+          "tclpdf: $path is encrypted and is not updated - every string and\
+          every stream an incremental update appends would have to be\
+          encrypted with the key of the file it is appended to (ISO 32000-2,\
+          7.6.2), and this package derives no key it was not given"
+    }
     set tclpdfPath $path
     set tclpdfBase [string length [dict get $tclpdfReader bytes]]
     set tclpdfPrev [dict get $tclpdfReader startxref]
@@ -689,4 +728,4 @@ oo::class create ::tclpdf::update::Session {
   }
 }
 
-package provide tclpdf::update 1.1
+package provide tclpdf::update 1.2

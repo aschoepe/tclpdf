@@ -89,6 +89,15 @@ namespace eval ::tclpdf::hyphenate {
   namespace export {[a-z]*}
   namespace ensemble create
 
+  # An unknown subcommand, in this package's words rather than Tcl's - see
+  # the same handler in sign.tcl for the reason and for doc/tclpdf.md:1723.
+  # Written out a second time rather than shared, because the one module
+  # both of these require is option.tcl and a helper there belongs to
+  # whoever owns it; the shape is three lines and the topic word is the
+  # difference.
+  namespace ensemble configure ::tclpdf::hyphenate -unknown \
+      ::tclpdf::hyphenate::Unknown
+
   # What [load] read, keyed by the lowercased language tag.
   variable loaded {}
 
@@ -258,6 +267,15 @@ namespace eval ::tclpdf::hyphenate {
 # looked up before the patterns and are taken exactly as given, minima and all.
 #
 # Returns the tag as given.
+
+proc ::tclpdf::hyphenate::Unknown {ensemble subcommand args} {
+  set known [lsort [lmap command \
+      [info commands ${ensemble}::\[a-z\]*] {namespace tail $command}]]
+  return -code error -errorcode [list TCLPDF HYPHENATE SUBCOMMAND $subcommand] \
+      "tclpdf: unknown [namespace tail $ensemble] subcommand\
+      \"$subcommand\" - known are: [join $known {, }]"
+}
+
 proc ::tclpdf::hyphenate::load {tag path args} {
   variable loaded
   variable defaultMinima
@@ -458,20 +476,37 @@ proc ::tclpdf::hyphenate::Read {path} {
   return $data
 }
 
-# The body of a .dic file, read TWICE: once for the directives and to find out
-# where the last table begins, once for the patterns of that table alone.
+# The body of a .dic file, read three times: once for the directives and the
+# places the tables begin, then once for each of the two tables that are run.
 # "start" is where the body begins - the position after the encoding line - and
-# is where the second pass starts when the file has no NEXTLEVEL in it.
+# is where a file without NEXTLEVEL has its only table.
 #
-# Twice rather than once with a list of the lines, and never building the
-# compound tables at all: hyph_de_DE.dic holds 69 000 compound entries in front
-# of NEXTLEVEL and 8 718 patterns after it. Building all of them and throwing
-# the first table away three lines later was measured at 430 ms and 110 MB
-# resident against 60 ms this way.
+# BOTH TABLES ARE BUILT NOW, and until 2026-08-26 only the last one was. The
+# note at the head of this file explains what the first table is; what it does
+# NOT do is sit there as decoration. Measured against the file's own first
+# table over its 55 581 compound entries of six letters or more: read with the
+# last table alone, 18.4 per cent of them came out with a ONE LETTER piece
+# inside the word - "aben-d-ap-pell", "ab-fal-l-ener-gie" - and 32.5 per cent
+# did not offer the compound joint the file names at all ("ab-baufront",
+# "hintan"). Liang's patterns are written for the parts of a compound, not for
+# the whole of it; running them over the whole word is a different algorithm
+# from the one the file was made for.
+#
+# The price is what the note used to weigh: the compound table of
+# hyph_de_DE.dic is 69 127 entries and its trie 278 747 - measured at half a
+# second and some 95 MB, against 60 ms and almost nothing for the last table
+# alone. Paid once per [load], and the alternative is a German document
+# hyphenated wrongly in one word out of five.
+#
+# A file with ONE table is untouched: "compound" comes out empty and [Breaks]
+# takes exactly the road it always took.
 proc ::tclpdf::hyphenate::Parse {channel start} {
   set left {}
   set right {}
+  set compoundLeft {}
+  set compoundRight {}
   set nohyphen {}
+  set compoundFrom {}
   set patternsFrom $start
   while {[gets $channel line] >= 0} {
     set line [string trim $line]
@@ -482,9 +517,15 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
     }
     switch -glob -- $line {
       NEXTLEVEL {
-        # Everything up to here was a compound table, driven by an algorithm
-        # of libhyphen's own; the LAST table in the file is the plain Liang
-        # one and the only one this module runs. See the note at the top.
+        # Everything up to here was a compound table, driven by libhyphen's
+        # compound algorithm; the LAST table in the file is the plain Liang
+        # one, and it is applied to each compound part. See the note at the
+        # top. Only the FIRST of them is kept as the compound table: no file
+        # in the wild carries three, and libhyphen's own chain would make the
+        # middle one a compound table over the parts of a compound.
+        if {$compoundFrom eq {}} {
+          set compoundFrom $patternsFrom
+        }
         set patternsFrom [tell $channel]
       }
       {LEFTHYPHENMIN *} {
@@ -492,6 +533,12 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
       }
       {RIGHTHYPHENMIN *} {
         set right [lindex $line 1]
+      }
+      {COMPOUNDLEFTHYPHENMIN *} {
+        set compoundLeft [lindex $line 1]
+      }
+      {COMPOUNDRIGHTHYPHENMIN *} {
+        set compoundRight [lindex $line 1]
       }
       {NOHYPHEN *} {
         # A comma separated list of characters no break may touch. Read
@@ -501,7 +548,25 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
       }
     }
   }
-  seek $channel $patternsFrom
+  lassign [Table $channel $patternsFrom] trie patterns
+  set compound {}
+  set compoundPatterns 0
+  if {$compoundFrom ne {}} {
+    lassign [Table $channel $compoundFrom] compound compoundPatterns
+  }
+  return [dict create trie $trie patterns $patterns left $left right $right \
+      nohyphen $nohyphen compound $compound \
+      compoundPatterns $compoundPatterns \
+      compoundLeft $compoundLeft compoundRight $compoundRight]
+}
+
+# One table of the file, from where it begins to NEXTLEVEL or to the end:
+# {trie count}.
+#
+# Its own proc because the file now has two of them and a second copy of the
+# loop is how the two would come to read the same syntax differently.
+proc ::tclpdf::hyphenate::Table {channel from} {
+  seek $channel $from
   set trie {}
   set patterns 0
   while {[gets $channel line] >= 0} {
@@ -509,11 +574,14 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
     if {$line eq {} || [string index $line 0] in {% #}} {
       continue
     }
-    # A directive in capitals - NEXTLEVEL cannot occur here, but
-    # COMPOUNDLEFTHYPHENMIN, HYPHEN or REPLACEMENT may - belongs to a part of
-    # libhyphen this module does not implement. Skipped rather than refused:
-    # a file is not broken for carrying a feature we do not use, and a
-    # pattern is never written in capitals.
+    if {$line eq "NEXTLEVEL"} {
+      break
+    }
+    # A directive in capitals - COMPOUNDLEFTHYPHENMIN, HYPHEN or REPLACEMENT
+    # - belongs to a part of libhyphen this module does not implement, or was
+    # read as a directive in the pass above. Skipped rather than refused: a
+    # file is not broken for carrying a feature we do not use, and a pattern
+    # is never written in capitals.
     if {[string match {[A-Z][A-Z]*} $line]} {
       continue
     }
@@ -521,8 +589,7 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
     Insert trie $letters $values
     incr patterns
   }
-  return [dict create trie $trie patterns $patterns left $left right $right \
-      nohyphen $nohyphen]
+  return [list $trie $patterns]
 }
 
 # One pattern, split into its letters and the numbers between them: ".a1be"
@@ -667,6 +734,132 @@ proc ::tclpdf::hyphenate::Compose {text} {
   return [list $composed $origins]
 }
 
+# WHERE EACH LETTER OF A TEXT BEGINS: {count letters plain}.
+#
+# A combining mark that no composition could fold into its base is part of the
+# letter in front of it and not a letter of its own - which is what the minima
+# have always been about ("a run of fewer letters", and the manual says
+# letters). Counted in characters, a left minimum of 2 let "he" plus a mark
+# stand as two letters where a reader sees one and a half, and a break could
+# fall BETWEEN a letter and its mark, which is not a place at all.
+#
+# THE FAST PATH is one regexp against the whole word, and it is what keeps a
+# German pattern run at the speed it had: no combining mark exists below
+# U+0300, so a word written entirely in the lower blocks - Latin, and
+# everything a .dic in ISO8859-1 can hold - is all letters, letter k begins at
+# character k, and the list is not built at all ("plain" says so, and the
+# callers then read "letter k" as "character k"). Measured over 20 000 German
+# words, building it cost a third of the running time.
+proc ::tclpdf::hyphenate::Letters {text} {
+  if {![regexp {[^\u0020-\u02FF]} $text]} {
+    return [list [string length $text] {} 1]
+  }
+  set letters {}
+  set index 0
+  foreach character [split $text {}] {
+    # The first character always opens a letter: a mark at the head of a word
+    # hangs on nothing and there is no piece before it to join.
+    if {![llength $letters] || ![Mark $character]} {
+      lappend letters $index
+    }
+    incr index
+  }
+  return [list [llength $letters] $letters 0]
+}
+
+# Liang's algorithm over one stretch of text with one pattern table: the break
+# positions inside it, counted in CHARACTERS from its start.
+#
+# One proc, three askers - the plain road, the compound joints of a two-level
+# file and each of the parts those joints cut the word into - because all
+# three ask the same question of a different table or a different stretch.
+proc ::tclpdf::hyphenate::Liang {trie text left right} {
+  lassign [Letters $text] count letters plain
+  set lower [string tolower $text]
+  if {[string length $lower] != [string length $text]} {
+    # A case fold that changes the length would put every position after it
+    # one place out. Nothing in a Latin pattern file does this; a word from
+    # elsewhere might, and a wrong break is worse than none.
+    return {}
+  }
+  set weights [Points $trie ".$lower."]
+  set breaks {}
+  # OVER THE LETTERS, not over the characters: "at" counts letters for the
+  # minima and names the character the letter begins at for the weights. The
+  # two are the same list wherever a word carries no mark, which is why every
+  # word that has none comes out exactly as it always did.
+  for {set at $left} {$at <= $count - $right} {incr at} {
+    set position [expr {$plain ? $at : [lindex $letters $at]}]
+    # Weight 0 sits in front of the leading dot, so the place in front of
+    # character "position" carries weight position + 1. Odd means break.
+    if {[lindex $weights $position+1] % 2} {
+      lappend breaks $position
+    }
+  }
+  return $breaks
+}
+
+# libhyphen's compound semantics, which is what a two-level .dic is written
+# for: the FIRST table finds the joints of the compound over the whole word,
+# and the LAST table - the plain Liang one - is applied to each part between
+# them, on its own.
+#
+# That is the whole of it, and it is the difference between "Be-triebs-kos-ten-
+# ab-rech-nung" and "Be triebs kos te n ab rech nung": the Liang patterns of
+# dehyphn.tex say where a German WORD breaks, and a compound is several words.
+# Laid over the whole compound they find their own syllables across the joint -
+# "aben-d-ap-pell" - and miss the joint itself in a third of the entries the
+# file's own compound table names.
+#
+# THE MINIMA. The joints answer to the file's COMPOUNDLEFTHYPHENMIN and
+# COMPOUNDRIGHTHYPHENMIN where it states them (hyph_de_DE.dic says 2 and 2)
+# and to the word's own minima otherwise, never to less than those: a joint two
+# letters from the edge is still a joint, but one letter is not a piece. Inside
+# a part the word's minima hold at the two OUTER edges and the compound minima
+# at an edge that is a joint - which is libhyphen's rule and, for every file
+# that states all four, the same number twice.
+proc ::tclpdf::hyphenate::Compound {data text left right} {
+  set compoundLeft [dict get $data compoundLeft]
+  set compoundRight [dict get $data compoundRight]
+  if {$compoundLeft eq {}} {
+    set compoundLeft $left
+  }
+  if {$compoundRight eq {}} {
+    set compoundRight $right
+  }
+  set compoundLeft [expr {max($compoundLeft, $left)}]
+  set compoundRight [expr {max($compoundRight, $right)}]
+  set joints [Liang [dict get $data compound] $text $compoundLeft \
+      $compoundRight]
+  # EVERY JOINT THE TABLE NAMES IS KEPT, including two that stand one letter
+  # apart. The table holds one entry per compound, so a neighbouring entry
+  # that matches a letter earlier ("abgabe" beside "abgaben") can mark a
+  # joint the word does not have, and the part between the two is then a
+  # single letter - "ab ga be n er hoe hung". Two rules against it were built
+  # and measured over the file's own 55 581 compounds, one keeping the later
+  # of two close joints and one the earlier: each removed about 1100 of those
+  # pieces and, in doing so, dropped a joint the ENTRY ITSELF names in 640 to
+  # 860 further words ("adressen schreibung" came out "adres sens chrei
+  # bung"). That is the defect this whole road exists to remove, traded for a
+  # smaller one, so neither rule is here. What remains is the file's own
+  # answer, and the caller can override a word with -exceptions.
+  set breaks $joints
+  set from 0
+  set edges [concat $joints [list [string length $text]]]
+  set first 1
+  foreach edge $edges {
+    set part [string range $text $from $edge-1]
+    foreach at [Liang [dict get $data trie] $part \
+        [expr {$first ? $left : $compoundLeft}] \
+        [expr {$edge == [string length $text] ? $right : $compoundRight}]] {
+      lappend breaks [expr {$from + $at}]
+    }
+    set from $edge
+    set first 0
+  }
+  return [lsort -integer -unique $breaks]
+}
+
 # The break positions inside ONE run of letters, counted in characters from its
 # start: 3 means "between the third and the fourth letter".
 proc ::tclpdf::hyphenate::Breaks {data piece} {
@@ -693,22 +886,7 @@ proc ::tclpdf::hyphenate::Breaks {data piece} {
   # at character k, and neither list has to be built at all. Measured over
   # 20 000 German words, building them cost a third of the running time.
   set length [string length $text]
-  set plain [expr {![regexp {[^\u0020-\u02FF]} $text]}]
-  set letters {}
-  if {$plain} {
-    set count $length
-  } else {
-    set index 0
-    foreach character [split $text {}] {
-      # The first character always opens a letter: a mark at the head of a
-      # word hangs on nothing and there is no piece before it to join.
-      if {![llength $letters] || ![Mark $character]} {
-        lappend letters $index
-      }
-      incr index
-    }
-    set count [llength $letters]
-  }
+  lassign [Letters $text] count letters plain
   if {$count < [dict get $data min] || $count < $left + $right} {
     return {}
   }
@@ -725,21 +903,10 @@ proc ::tclpdf::hyphenate::Breaks {data piece} {
     # exists because the patterns were wrong about this word, and a minimum
     # applied on top would overrule the correction as well.
     set breaks [dict get $exceptions $lower]
+  } elseif {[dict get $data compound] ne {}} {
+    set breaks [Compound $data $text $left $right]
   } else {
-    set weights [Points [dict get $data trie] ".$lower."]
-    set breaks {}
-    # OVER THE LETTERS, not over the characters: "at" counts letters for the
-    # minima and names the character the letter begins at for the weights.
-    # The two are the same list wherever a word carries no mark, which is why
-    # every word that has none comes out exactly as it always did.
-    for {set at $left} {$at <= $count - $right} {incr at} {
-      set position [expr {$plain ? $at : [lindex $letters $at]}]
-      # Weight 0 sits in front of the leading dot, so the place in front of
-      # character "position" carries weight position + 1. Odd means break.
-      if {[lindex $weights $position+1] % 2} {
-        lappend breaks $position
-      }
-    }
+    set breaks [Liang [dict get $data trie] $text $left $right]
   }
   set forbidden [dict get $data nohyphen]
   set kept $breaks
@@ -827,4 +994,4 @@ proc ::tclpdf::hyphenate::Pieces {data string} {
   return $pieces
 }
 
-package provide tclpdf::hyphenate 1.2
+package provide tclpdf::hyphenate 1.3

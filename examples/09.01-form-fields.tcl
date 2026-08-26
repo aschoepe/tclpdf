@@ -4,7 +4,7 @@
 #
 #   tclsh examples/09.01-form-fields.tcl ?output.pdf?
 #
-# A form to fill in on screen: five text fields, one of them multiline, one
+# A form to fill in on screen: six text fields, one of them multiline, one
 # right-aligned, one with a length limit, one read-only and one for a
 # password. Open the file in any reader that knows forms and type into it.
 #

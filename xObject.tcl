@@ -101,9 +101,15 @@ oo::define ::tclpdf::document::document {
     # drawing method works unchanged inside a form.
     my FormBegin $widthPoints $heightPoints
     set failed [catch {uplevel #0 [dict get $options script]} result options0]
+    # Counted while the form is still the current stream - see the same two
+    # lines in pattern.tcl, and [GraphicsBalance] for what they are about.
+    set openSaves [llength [my streamState styleStack]]
     set content [my FormEnd]
     if {$failed} {
       return -options $options0 $result
+    }
+    if {$openSaves} {
+      my GraphicsBalance "the stream of form \"$name\" leaves $openSaves open"
     }
 
     set pairs [list Type /XObject Subtype /Form FormType 1 \
@@ -422,4 +428,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xObject 1.6
+package provide tclpdf::xObject 1.7

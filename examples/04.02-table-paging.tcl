@@ -25,9 +25,15 @@
 #   it is pushed down to 26 mm to clear the running head, which only appears
 #   from page two onwards.
 #
-#   The four hooks: didParseCell runs before measuring (so a change of font
-#   size still affects the wrap), willDrawCell can suppress a cell,
-#   didDrawCell overlays one, didDrawPage runs once per page.
+#   Two of the four hooks are used here: didParseCell, which runs before
+#   measuring, so a change of font size still affects the wrap, and
+#   didDrawPage, which runs once per page and is where the running head goes.
+#   The other two are willDrawCell, which can suppress a cell, and
+#   didDrawCell, which overlays one.
+#
+#   pageNumbers puts "Page n of m" on every sheet, including the ones the
+#   table adds while it breaks - the numbers are drawn when the document is
+#   written, which is the only moment the total is known.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #

@@ -238,10 +238,12 @@ test kern-3.9 {the amount lands in the gap before the second glyph} -constraints
   set state [::tclpdf::kern build $parsed]
   set glyphs [list [kernGlyph $parsed A] [kernGlyph $parsed "\u0301"] \
       [kernGlyph $parsed V]]
+  # ONE SLOT PER GLYPH since 2026-08-26, the last one being the amount that
+  # falls off the end - see the head of this file.
   set adjustments [::tclpdf::kern run $state $glyphs]
   list [llength $adjustments] [lindex $adjustments 0] \
-      [expr {[lindex $adjustments 1] < 0}]
-} -result {2 0 1}
+      [expr {[lindex $adjustments 1] < 0}] [lindex $adjustments 2]
+} -result {3 0 1 0}
 
 test kern-3.10 {a font that filters nothing kerns exactly as before} -constraints haveBoth -body {
   # DejaVu sets no flag on either kerning lookup, so the whole GDEF path has
@@ -252,14 +254,280 @@ test kern-3.10 {a font that filters nothing kerns exactly as before} -constraint
   foreach char [split "AVATAR" {}] {
     lappend glyphs [kernGlyph $parsed $char]
   }
+  # The run answers one slot per glyph and the pairwise question one per pair,
+  # so the trailing slot - the amount that falls off the end, zero in this
+  # face - is what the two differ by.
   set fromRun [::tclpdf::kern run $state $glyphs]
   set pairwise {}
   for {set index 1} {$index < [llength $glyphs]} {incr index} {
     lappend pairwise [::tclpdf::kern value $state \
         [lindex $glyphs [expr {$index - 1}]] [lindex $glyphs $index]]
   }
-  list [expr {$fromRun eq $pairwise}] [expr {[llength $fromRun] == 5}]
-} -result {1 1}
+  list [expr {[lrange $fromRun 0 end-1] eq $pairwise}] \
+      [expr {[llength $fromRun] == 6}] [lindex $fromRun end]
+} -result {1 1 0}
+
+# --- the GPOS lookups beside pair positioning -------------------------------
+#
+# Everything below is built by hand, and that is the point of it: over the 77
+# faces in examples/assets/fonts and the six Arabic ones fetched to measure
+# this work against, only Noto Music carries a cursive lookup at all, and the
+# chaining kerning of the Arabic faces is not in this tree. A reader that gets
+# any of it wrong is silent about it - the glyphs are right, they stand in the
+# wrong places - so the cases are fed in as bytes.
+#
+# A GPOS TABLE HAS THE SAME FOUR FIELDS AS A GSUB and the same lookup list, so
+# the fixtures in helper.tcl build one: only the type numbers inside a lookup
+# differ, and those are the caller's argument.
+
+# The subtable of a type 1 lookup, format 1: one value record for every glyph
+# of the coverage. valueFormat 0x0005 is X placement and X advance, in that
+# order.
+#
+#   0  format 1 | 2  coverage at 10 | 4  valueFormat | 6  dx | 8  da
+#  10  coverage format 1
+proc gposSingle {glyphs dx da} {
+  return [binary format Su* [list 1 10 5 $dx $da 1 [llength $glyphs] \
+      {*}$glyphs]]
+}
+
+# The subtable of a type 3 lookup, format 1: an entry and an exit anchor per
+# covered glyph. RECORDS is a list of {glyph entry exit}, each anchor an
+# {x y} pair or {} for the NULL offset.
+proc gposCursive {records} {
+  set count [llength $records]
+  set at [expr {6 + $count * 4}]
+  set coverage [binary format Su* [list 1 $count \
+      {*}[lmap record $records {lindex $record 0}]]]
+  set anchors {}
+  set offsets {}
+  set next [expr {$at + [string length $coverage]}]
+  foreach record $records {
+    foreach anchor [lrange $record 1 2] {
+      if {![llength $anchor]} {
+        lappend offsets 0
+        continue
+      }
+      lappend offsets $next
+      lappend anchors [binary format Su* [list 1 {*}$anchor]]
+      incr next 6
+    }
+  }
+  return [binary format Su* [list 1 $at $count {*}$offsets]]$coverage[join \
+      $anchors {}]
+}
+
+# The subtable of a type 8 lookup, format 3: one input coverage, no backtrack,
+# no lookahead, and one record naming a lookup at the input position. Byte for
+# byte the layout of a GSUB type 6 format 3 subtable, which is why
+# gsubContext.tcl reads both.
+#
+#   0  format 3 | 2  no backtrack | 4  one input | 6  coverage at 16
+#   8  no lookahead | 10  one record | 12  sequence index 0 | 14  lookup
+#  16  coverage format 1
+proc gposChain {glyphs lookup} {
+  return [binary format Su* [list 3 0 1 16 0 1 0 $lookup 1 [llength $glyphs] \
+      {*}$glyphs]]
+}
+
+# A whole GPOS table with these lookups under one feature, prepared for [run].
+# PARSED is a real face and is what cursive attachment asks for the plain
+# advance of a glyph; every other lookup type works without it.
+proc gposState {lookups {parsed {}} {used {}}} {
+  if {![llength $used]} {
+    for {set index 0} {$index < [llength $lookups]} {incr index} {
+      lappend used $index
+    }
+  }
+  set gpos [::tclpdfTest::gsubTable $lookups [dict create kern $used]]
+  return [list gpos [::tclpdf::kernGpos table $gpos {} $parsed]]
+}
+
+# The plain advance of a glyph in the face the cursive tests are set in.
+proc kernAdvance {parsed glyph} {
+  return [::tclpdf::sfnt advance $parsed $glyph]
+}
+
+test kern-4.1 {a single adjustment moves the glyph and the ones after it} -body {
+  # X placement moves THIS glyph, X advance moves everything drawn after it,
+  # and the two therefore land in DIFFERENT gaps. A reader that added them up
+  # into one number would put the adjusted glyph in the right place only when
+  # the face happens to set them equal - which is the common case and the
+  # reason this is worth a test of its own.
+  set state [gposState [list [::tclpdfTest::gsubLookup 1 0 \
+      [list [gposSingle {11} -40 -60]]]]]
+  ::tclpdf::kern run $state {10 11 12 13}
+} -result {-40 -20 0 0}
+
+test kern-4.2 {and a right-to-left line moves the PLACEMENT to the other slot} -body {
+  # A slot sits between two LOGICAL neighbours, and a right-to-left line draws
+  # the logically later one first - so slot g moves the glyphs g+1 to the end
+  # in one direction and the glyphs g down to 0 in the other. The slot that
+  # moves ONE glyph and nothing else is therefore the one in front of it
+  # forwards and the one behind it back, and that is what the X PLACEMENT
+  # needs; putting it in the wrong one moves exactly the adjusted glyph by
+  # exactly the amount and nothing else in the line.
+  #
+  # The X ADVANCE stays where it is in both directions - the amount of a pair
+  # belongs between the same two glyphs however the line runs, or a line comes
+  # out wider than [textWidth] measured it. See [kernGpos Place] for what that
+  # costs.
+  #
+  # Same face and same numbers as 4.1: forwards the placement sits in slot 0
+  # and the rest of the advance in slot 1, back to front both fall together
+  # into slot 1.
+  set state [gposState [list [::tclpdfTest::gsubLookup 1 0 \
+      [list [gposSingle {11} -40 -60]]]]]
+  ::tclpdf::kern run $state {10 11 12 13} rtl
+} -result {0 -60 0 0}
+
+test kern-4.3 {a chaining lookup reaches the adjustment it names} -body {
+  # Type 8 is the whole of the kerning of Noto Sans Arabic, Scheherazade New,
+  # Noto Kufi and Amiri under "arab", and none of it was read before
+  # 2026-08-26. The rule matches glyph 11 and names lookup 1, which is the
+  # single adjustment of 4.1 - so the answer has to be 4.1's.
+  set state [gposState [list \
+      [::tclpdfTest::gsubLookup 8 0 [list [gposChain {11} 1]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [gposSingle {11} -40 -60]]]] {} {0}]
+  list [::tclpdf::kern run $state {10 11 12 13}] \
+      [::tclpdf::kern run $state {10 12 13}]
+} -result {{-40 -20 0 0} {0 0 0}}
+
+test kern-4.4 {a chaining lookup applies nothing where its rule does not match} -body {
+  # The control for 4.3: the named lookup must not be applied on its own. It
+  # is not in the feature - only the chain is - so a reader that prepared
+  # every lookup it found would adjust glyph 11 wherever it stood.
+  set state [gposState [list \
+      [::tclpdfTest::gsubLookup 8 0 [list [gposChain {99} 1]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [gposSingle {11} -40 -60]]]] {} {0}]
+  ::tclpdf::kern run $state {10 11 12}
+} -result {0 0 0}
+
+test kern-4.5 {cursive attachment sets the advance to the anchors} \
+    -constraints haveBoth -body {
+  # The horizontal half of lookup type 3: the entry point of the second letter
+  # is made to sit on the exit point of the first. Left to right the first
+  # letter's advance is SET to its exit point and the second is pulled back to
+  # its entry point; the two glyphs here advance 600 units each in the face,
+  # the exit sits at 500 and the entry at 100.
+  #
+  # "SET", not "adjusted", is what makes the plain advance of the face part of
+  # the arithmetic - and the reason the prepared state carries the face.
+  set parsed [::tclpdf::sfnt read $::fontBoth]
+  set state [gposState [list [::tclpdfTest::gsubLookup 3 0 \
+      [list [gposCursive {{10 {} {500 20}} {11 {100 30} {}}}]]]] $parsed]
+  list [::tclpdf::kern run $state {10 11 12}] \
+      [list [expr {500 - [kernAdvance $parsed 10] - 100}] 0]
+} -result {{-163 0 0} {-163 0}}
+
+test kern-4.6 {and a right-to-left line pays for it the other way round} \
+    -constraints haveBoth -body {
+  # Right to left the FIRST letter loses its exit point from both its advance
+  # and its placement and the second letter's advance is set to its entry
+  # point - which is HarfBuzz's [PositionCursive] and not a mirror image of
+  # the line above.
+  set parsed [::tclpdf::sfnt read $::fontBoth]
+  set state [gposState [list [::tclpdfTest::gsubLookup 3 0 \
+      [list [gposCursive {{10 {} {500 20}} {11 {100 30} {}}}]]]] $parsed]
+  # The exit point leaves the first letter's advance AND its placement, so it
+  # lands whole in the slot behind that letter's cluster; the second letter's
+  # advance is SET to its entry point, and that difference lands in the slot
+  # between the two.
+  list [::tclpdf::kern run $state {10 11 12} rtl] \
+      [list -500 [expr {100 - [kernAdvance $parsed 11]}] 0]
+} -result {{-500 -699 0} {-500 -699 0}}
+
+test kern-4.7 {a cursive lookup without one of the two anchors does nothing} \
+    -constraints haveBoth -body {
+  # It takes an EXIT anchor on the first glyph and an ENTRY anchor on the
+  # second; a face that gives a glyph only one of the two is saying that the
+  # letter joins on one side only.
+  set state [gposState [list [::tclpdfTest::gsubLookup 3 0 \
+      [list [gposCursive {{10 {} {}} {11 {100 30} {}}}]]]] \
+      [::tclpdf::sfnt read $::fontBoth]]
+  ::tclpdf::kern run $state {10 11 12}
+} -result {0 0 0}
+
+test kern-4.10 {the answer is one slot per glyph and the same sum either way} -body {
+  # A slot per GLYPH rather than per gap, and the last one is the amount that
+  # falls off the end - the advance of the last glyph, which has no glyph
+  # behind it to move and is still part of the width of the line. It was one
+  # per gap until 2026-08-26, and what that cost showed only backwards: the
+  # first pair of a right-to-left line had nowhere to go at all.
+  #
+  # THE SUM IS THE POINT. [FontRunWidth] measures without a direction, so a
+  # line that is drawn with a different total than the one that was measured
+  # frays at the margin. Same lookup, both directions, same sum.
+  set state [gposState [list [::tclpdfTest::gsubLookup 1 0 \
+      [list [gposSingle {11} -40 -60]]]]]
+  set glyphs {10 11 12 13}
+  set forward [::tclpdf::kern run $state $glyphs]
+  set backward [::tclpdf::kern run $state $glyphs rtl]
+  proc kernSum {values} {
+    set total 0
+    foreach value $values {
+      set total [expr {$total + $value}]
+    }
+    return $total
+  }
+  list [llength $forward] [llength $backward] \
+      [expr {[kernSum $forward] == [kernSum $backward]}] [kernSum $forward]
+} -result {4 4 1 -60}
+
+test kern-4.11 {a right-to-left line is drawn as wide as it was measured} \
+    -constraints haveBoth -body {
+  # The whole reason the slot that falls off the end is kept. A right-to-left
+  # line is placed from its right edge, so the Td of the line says how wide
+  # the writer thinks it is - and that has to be what [textWidth] said, or
+  # justified text frays. Before the trailing slot the line came out one
+  # kerning pair - 42.48 thousandths of the em, here 0.51 mm at 12 pt - wider
+  # than it was measured.
+  #
+  # -unshaped 1 because "AVATAR" is Latin and a right-to-left line of Latin
+  # letters is otherwise refused; the kerning is the same either way.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed dv $::fontBoth
+  set width [$doc textWidth "AVATAR" -family dv -size 12 -direction rtl \
+      -unshaped 1]
+  $doc text "AVATAR" -at {60 20} -family dv -size 12 -direction rtl \
+      -unshaped 1
+  set start [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc]] 0]
+  $doc destroy
+  # The Td is in points and the width in millimetres.
+  expr {abs((60.0 - $start * 25.4 / 72.0) - $width) < 0.001}
+} -result 1
+
+test kern-4.9 {a cursive lookup is read even where the old table kerns} \
+    -constraints haveBoth -body {
+  # The precedence rule of 8.16 is about the "kern" FEATURE and nothing else,
+  # so a face that has no kerning lookups in GPOS still reads its "curs" ones:
+  # it joins its letters cursively AND kerns from the old table. Which of the
+  # two the diagnostic [origin] names is the kerning source, and that is still
+  # the old table.
+  #
+  # Built here because no face in this tree has the constellation - the one
+  # face with a cursive lookup, Noto Music, has a kern feature beside it.
+  set parsed [::tclpdf::sfnt read $::fontBoth]
+  set gpos [::tclpdfTest::gsubTable [list [::tclpdfTest::gsubLookup 3 0 \
+      [list [gposCursive {{10 {} {500 20}} {11 {100 30} {}}}]]]] \
+      [dict create curs 0]]
+  set state [list kern [::tclpdf::kernGpos table $gpos {} $parsed]]
+  ::tclpdf::kern run $state {10 11 12}
+} -result {-163 0 0}
+
+test kern-4.8 {a positioning lookup that names itself ends instead of branching} -body {
+  # The same bound gsubApply.tcl has and for the same reason: a rule with two
+  # records that both name the lookup they stand in branches twice at every
+  # level. 64 levels of that are 2^64 calls, so there is a work budget beside
+  # the depth - 64 recursions per glyph plus 16 384, HarfBuzz's numbers - and
+  # the recursion that finds it spent does nothing.
+  set state [gposState [list [::tclpdfTest::gsubLookup 8 0 \
+      [list [binary format Su* {3 0 1 20 0 2 0 0 0 0 1 1 11}]]]]]
+  set started [clock milliseconds]
+  set answer [::tclpdf::kern run $state {10 11 12}]
+  list $answer [expr {[clock milliseconds] - $started < 20000}]
+} -result {{0 0 0} 1}
 
 test kern-3.7 {the subset carries no kern table} -constraints haveBoth -body {
   # Kerning is producer arithmetic: the numbers are in the content stream and

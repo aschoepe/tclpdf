@@ -31,12 +31,41 @@ namespace eval ::tclpdf::outline {}
 oo::define ::tclpdf::document::document {
 
   # $doc bookmark <title> ?-page N? ?-at {x y}? ?-parent id? ?-open 1?
+  #                       ?-structure name?
   # $doc bookmarks              -> the entries collected so far
   method bookmark {title args} {
     set options [::tclpdf::option parse {
       page {} at {} parent {} open 1 structure {}
     } $args "bookmark"]
+    # A BOOLEAN AT THE CALL, not at the write. [OutlineWrite] computes
+    # "[dict get $entry open] ? $count : -$count", so an -open that is no
+    # boolean died there, hours later, in Tcl's own words ("expected boolean
+    # value but got \"abc\"", errorCode TCL VALUE NUMBER) - against the
+    # promise that every refusal of this package begins with "tclpdf:" and
+    # names the call. [tagged] asks the same question the same way.
+    set open [dict get $options open]
+    if {![string is boolean -strict $open]} {
+      return -code error -errorcode [list TCLPDF OUTLINE ARGUMENT open] \
+          "tclpdf: bookmark -open decides whether the entry\
+          shows its children unfolded and takes a boolean, not \"$open\""
+    }
     if {[dict get $options structure] ne {}} {
+      # ONE TARGET. The manual says "to a page or to a named structure
+      # element" (:900), and the code below decides -structure over -page and
+      # -at, dropping the loser without a word: [bookmark -structure intro
+      # -page 2] wrote the element target and the caller believed in the
+      # page. Named instead, like [link]'s pair of targets.
+      foreach loser {at page} {
+        if {[dict get $options $loser] eq {}} {
+          continue
+        }
+        return -code error -errorcode \
+            [list TCLPDF OUTLINE ARGUMENT structure] \
+            "tclpdf: bookmark -structure and -$loser name two\
+            different targets - a bookmark goes to a page or to a named\
+            structure element, never to both. Drop -$loser, or drop\
+            -structure"
+      }
       # Checked here, where the caller is: left alone, the write would fail
       # later with "reserved but never written" and no word about which call
       # was at fault. What is checked, and why, stands at the guard.
@@ -69,6 +98,13 @@ oo::define ::tclpdf::document::document {
         return -code error -errorcode [list TCLPDF OUTLINE PAGE $page] \
             "tclpdf: no such page: $page - the document has\
             [my page count] page(s)"
+      }
+      # The point before the page is turned into a destination: -at reaches
+      # [coords] otherwise, which answers in the words of its own module
+      # ("not a measurement"). A coordinate option of this package answers
+      # as a point, wherever it stands.
+      if {[dict get $options at] ne {}} {
+        ::tclpdf::option point [dict get $options at] -at "bookmark"
       }
       # Asked for NOW for the same reason as the structure destination
       # above: a page destination that points forward is an indirect object
@@ -206,4 +242,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::outline 1.6
+package provide tclpdf::outline 1.7

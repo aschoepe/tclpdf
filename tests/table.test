@@ -102,20 +102,31 @@ test table-1.4 {fixed widths that leave no room for a further column are refused
   list $code [string match {*leave no room for column 3*} $message]
 } -result {1 1}
 
-test table-1.5 {a column width that is not a number is refused in tclpdf's words} -body {
+test table-1.5 {a column width and weight are numbers ABOVE ZERO} -body {
   # "50%" used to surface as a Tcl error about a non-numeric operand, which
   # names neither the column nor the key. There is no percent width - a share
   # of the table is what weight is for.
+  #
+  # And zero or below is not a width either, which was accepted until
+  # 2026-08-26: "width 0" drew every cell of the column on top of its
+  # neighbour, "width -20" started the next column twenty millimetres to the
+  # LEFT of -at, and a weight of 0 or below went into a proportion that means
+  # nothing. NaN passed every one of those checks, being false against each.
   set doc [tclpdf new -unit mm]
   $doc page add
-  set codes [list [catch {$doc table layout -width 100 -body {{a b}} \
-      -columns {{width 50%}}} width] \
-      [catch {$doc table layout -width 100 -body {{a b}} \
-      -columns {{weight x}}} weight]]
+  set codes {}
+  foreach column {{width 50%} {weight x} {width 0} {width -20} {weight 0} \
+      {weight -1} {width NaN} {weight Inf}} {
+    lappend codes [::tclpdfTest::refusalCode {$doc table layout -width 100 \
+        -body {{a b}} -columns [list $column {}]}]
+  }
+  set width {}
+  catch {$doc table layout -width 100 -body {{a b}} \
+      -columns {{width 50%}}} width
   $doc destroy
-  list $codes [string match {tclpdf: a column width is a number, not "50%"*} $width] \
-      [string match {tclpdf: a column weight is a number, not "x"*} $weight]
-} -result {{1 1} 1 1}
+  list [lsort -unique [lmap code $codes {lrange $code 0 3}]] \
+      [string match {tclpdf: a column width is a number above zero, not "50%"*} $width]
+} -result {{{TCLPDF TABLE COLUMN weight} {TCLPDF TABLE COLUMN width}} 1}
 
 test table-2.1 {long text wraps inside its cell} -body {
   # The row gets taller instead of the text running past the column - which
@@ -1777,5 +1788,180 @@ test table-26.4 {a table that draws writes one artifact bracket per cell} -body 
       [expr {[regexp -all {/Artifact <<} $stream] >= 4}]
 } -result {1 1}
 
+
+# --- round 7 -----------------------------------------------------------------
+
+test table-r7-1.1 {a cell dictionary that names no text is refused} -body {
+  # The manual (:572) explains the ambiguity of a plain string that reads as a
+  # dictionary by promising that it "then names the offending key" - and where
+  # every key IS a cell key there is no offending one to name: "align right"
+  # is a well formed cell dictionary with no text in it, so the cell came out
+  # empty and right aligned, in silence. That is the one case the sentence
+  # does not cover and the likely one, because a caller who writes two words
+  # meant them as text.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {
+    $doc table -at {20 20} -body {{"align right" b}}
+  }]
+  set message {}
+  catch {$doc table -at {20 20} -body {{"align right" b}}} message
+  # A dictionary that DOES name its text is drawn, and a plain sentence of an
+  # even word count that begins with something else is still text.
+  set drawn [catch {$doc table -at {20 40} \
+      -body {{{text "abc" align right} b} {"Medium length text here" c}}}]
+  $doc destroy
+  list [lrange $code 0 3] [regexp {names no text} $message] $drawn
+} -result {{TCLPDF TABLE CELL text} 1 0}
+
+test table-r7-2.1 {-width is a number above zero} -body {
+  # A table of no width has no columns to put anything in, and a negative one
+  # was answered by the width arithmetic with a sentence that read like a bug
+  # report: "the fixed column widths add up to 0, which is more than the table
+  # width of -10".
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach width {0 -10 abc NaN Inf} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -width $width -body {{a b}}
+    }] 0 3]
+  }
+  $doc destroy
+  lsort -unique $codes
+} -result {{TCLPDF TABLE ARGUMENT width}}
+
+test table-r7-3.1 {the three booleans are checked at the call} -body {
+  # All three used to be taken as written and read much later:
+  # -horizontalBreak by the column grouping, -repeatHead and -repeatFoot only
+  # when the table BROKE - so "-repeatHead maybe" was accepted, drew the first
+  # page, and died in Tcl's own words at the page break. A refusal that
+  # depends on how much text there is.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach option {horizontalBreak repeatHead repeatFoot} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -body {{a b}} -$option maybe
+    }] 0 3]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF TABLE ARGUMENT horizontalBreak}\
+    {TCLPDF TABLE ARGUMENT repeatHead} {TCLPDF TABLE ARGUMENT repeatFoot}}
+
+test table-r7-3.2 {NaN is not a distance for any of the table's own options} -body {
+  # NaN is a double to Tcl and compares false against every range check, so
+  # "-bottom NaN" switched the page break off in silence and a NaN padding
+  # travelled into the arithmetic that places the text inside its cell.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach {option value} {top NaN bottom Inf minRowHeight NaN} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -body {{a b}} -$option $value
+    }] 0 3]
+  }
+  foreach key {padding lineWidth leading} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -body {{a b}} -style [list $key NaN]
+    }] 0 3]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF TABLE ARGUMENT top} {TCLPDF TABLE ARGUMENT bottom}\
+    {TCLPDF TABLE ARGUMENT minRowHeight} {TCLPDF TABLE STYLE padding}\
+    {TCLPDF TABLE STYLE lineWidth} {TCLPDF TABLE STYLE leading}}
+
+test table-r7-4.1 {-alternateFill is a colour at the call, whatever the row count} -body {
+  # It was parsed by the cell that first used it - the SECOND body row - so a
+  # one-row table took "-alternateFill bogus" without a word and a three-row
+  # table refused it. A refusal that depends on how many rows there are is not
+  # one a caller can rely on.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set one [lrange [::tclpdfTest::refusalCode {
+    $doc table -at {20 20} -body {{a b}} -alternateFill bogus
+  }] 0 2]
+  set three [lrange [::tclpdfTest::refusalCode {
+    $doc table -at {20 60} -body {{a b} {c d} {e f}} -alternateFill bogus
+  }] 0 2]
+  set drawn [catch {$doc table -at {20 120} -body {{a b}} -alternateFill 0.9}]
+  $doc destroy
+  list $one $three $drawn
+} -result {{TCLPDF COLOUR UNKNOWN} {TCLPDF COLOUR UNKNOWN} 0}
+
+test table-r7-5.1 {a repeated head or foot is a pagination artifact, not a row} -body {
+  # ISO 32000-1 14.8.2.2.2 knows one way of saying "this is here because the
+  # page ended": a pagination artifact. Written as rows, the tree of a table
+  # with -repeatHead 1 -repeatFoot 1 held its head and its foot once per page,
+  # and the SUM stood in it twice - "Summe" as a data row in the middle of the
+  # table and again at the end. veraPDF called the file conformant either way.
+  set doc [tclpdf new -unit mm -typeArea {20 25} -compress 0]
+  $doc tagged 1
+  $doc page add
+  set body {}
+  for {set i 1} {$i <= 40} {incr i} {
+    lappend body [list "Zeile $i" "Wert $i"]
+  }
+  $doc table -at {20 30} -head {{Spalte Wert}} -body $body \
+      -foot {{{text Summe} 1234}} -repeatHead 1 -repeatFoot 1
+  set pages [$doc page count]
+  set path [::tclpdfTest::scratch table-r7-51.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  # 40 data rows plus one head row and one foot row, and the repeats are not
+  # in the tree at all - they are bracketed as {Artifact Pagination}, which
+  # the stream carries once per repeated section.
+  list [expr {$pages > 1}] [regexp -all {/S /TR\M} $bytes] \
+      [expr {[regexp -all {/Pagination} $bytes] > 0}]
+} -result {1 42 1}
+
+test table-r7-6.1 {a horizontally broken table is ONE table with one row per row} -body {
+  # ISO 32000-1 14.8.4.3.4 and Table 337: a TR holds the cells of THAT row.
+  # -horizontalBreak draws every row of the first column group, then every row
+  # of the second, so the cells of group two belong to rows that were closed a
+  # page ago - and they were written as NEW rows: a table of four rows and
+  # eight columns came out as eight rows of four with a second heading row in
+  # the middle, which is Matterhorn 15-003 and which veraPDF called conformant
+  # all the same. [StructureResume] hangs the further cells on the row they
+  # belong to.
+  #
+  # -repeatColumns carries the leading columns into every group, and there the
+  # SAME cell of the same row is drawn again: in the tree it stays once and the
+  # repeats are pagination artifacts (14.8.2.2.2), like a repeated head.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  set columns {}
+  set head {}
+  foreach name {A B C D E F G H} {
+    lappend columns {width 40}
+    lappend head $name
+  }
+  set body {}
+  for {set i 1} {$i <= 3} {incr i} {
+    set row {}
+    foreach name {a b c d e f g h} {
+      lappend row $name$i
+    }
+    lappend body $row
+  }
+  $doc table -at {20 30} -head [list $head] -body $body -columns $columns \
+      -width 170 -horizontalBreak 1 -repeatColumns 1
+  set pages [$doc page count]
+  set path [::tclpdfTest::scratch table-r7-61.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  # One Table, four rows (one head and three body), eight headings and
+  # 24 cells - every cell of the table once, whatever page it went on.
+  list $pages [regexp -all {/S /Table\M} $bytes] [regexp -all {/S /TR\M} $bytes] \
+      [regexp -all {/S /TH\M} $bytes] [regexp -all {/S /TD\M} $bytes] \
+      [expr {[regexp -all {/Artifact <</Type /Pagination} $bytes] > 0}]
+} -result {3 1 4 8 24 1}
 
 cleanupTests

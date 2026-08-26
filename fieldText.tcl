@@ -97,6 +97,22 @@ oo::define ::tclpdf::document::document {
       contents {} label {}
     } $args "field text"]
 
+    # A LINE BREAK IS \n HERE, whichever of the three spellings the caller
+    # wrote. A Windows script hands over "a\r\nb" and a Mac-era one "a\rb";
+    # both used to travel through untouched, and both were wrong further on
+    # in different ways - CRLF became TWO carriage returns in /V, an empty
+    # line in the reader that nobody typed, and the bare CR reached the
+    # appearance stream as a character no face has a glyph for (measured
+    # 2026-08-26). Settled here, once, so that everything below - the
+    # multiline check, the length against -maxlen, the font, the /V and the
+    # picture - sees one spelling. /V gets its carriage returns in
+    # [FieldTextBuild], which is where 12.7.4.3 applies, and [pdf fields]
+    # answers \n again.
+    foreach which {value default} {
+      dict set options $which \
+          [string map [list \r\n \n \r \n] [dict get $options $which]]
+    }
+
     # EVERYTHING is checked before the field is declared. A refused call has
     # to leave the document exactly as it was - the rule sign.tcl, encrypt.tcl
     # and text.tcl all follow, and the one that keeps a second attempt from
@@ -170,18 +186,24 @@ oo::define ::tclpdf::document::document {
             the moment it is touched. Raise -maxlen, or shorten the text"
       }
     }
+    # [option finite] rather than [string is double]: NaN is a double to Tcl
+    # and compares FALSE against every bound, so "$size <= 0" waved it past
+    # and Inf came through the same gap - a /DA reading "/FHelvetica NaN Tf"
+    # and a border of infinite width, both refused nowhere (measured
+    # 2026-08-26). Same predicate as everywhere else a number is read as a
+    # measurement.
     set size [dict get $options size]
-    if {$size ne {} && (![string is double -strict $size] || $size <= 0)} {
+    if {$size ne {} && (![::tclpdf::option finite $size] || $size <= 0)} {
       return -code error -errorcode [list TCLPDF FIELD SIZE $size] \
-          "tclpdf: -size of field text is a font size in points above zero,\
-          not \"$size\""
+          "tclpdf: -size of field text is a finite font size in points above\
+          zero, not \"$size\""
     }
     set borderWidth [dict get $options borderWidth]
-    if {![string is double -strict $borderWidth] || $borderWidth < 0} {
+    if {![::tclpdf::option finite $borderWidth] || $borderWidth < 0} {
       return -code error -errorcode [list TCLPDF FIELD BORDERWIDTH $borderWidth] \
-          "tclpdf: -borderWidth of field text is a line width of 0 or more in\
-          the unit of the document, not \"$borderWidth\". Use 0 for a field\
-          with no frame"
+          "tclpdf: -borderWidth of field text is a finite line width of 0 or\
+          more in the unit of the document, not \"$borderWidth\". Use 0 for a\
+          field with no frame"
     }
     # The three colours go through the colour module HERE, where the call can
     # still be refused, rather than at write time inside an appearance stream
@@ -211,6 +233,25 @@ oo::define ::tclpdf::document::document {
       if {[dict get $options $flag]} {
         lappend flagNames $flagName
       }
+    }
+
+    # AND THE FONT HAS TO BE ABLE TO SET WHAT THE FIELD SHOWS. The
+    # appearance is drawn at write time ([FieldTextPaint] below), and a
+    # character the face has no code for is refused there - inside a form
+    # this document is in the middle of writing, by which time the field
+    # cannot be taken back: [field text t -value "\u041F..."] in Helvetica
+    # was accepted, every [write] afterwards died with "character U+041F is
+    # not available in WinAnsiEncoding", and the document was unwritable for
+    # good (measured 2026-08-26). The same question asked here, where the
+    # answer is a refused call and nothing else.
+    #
+    # [textWidth] is the ask: it runs the string through the very glyph run
+    # the appearance will draw and refuses exactly what that would refuse,
+    # in the same words - and the font is settled one line above, so there
+    # is nothing to guess at.
+    foreach which {value default} {
+      my FieldSettable [dict get $options $which] $font $which \
+          "field text \"$name\""
     }
 
     my FieldDeclare $name -type Tx -build FieldTextBuild \
@@ -256,6 +297,9 @@ oo::define ::tclpdf::document::document {
       # not the line feed a Tcl script writes. Converted here, once, on the
       # way into the file: a reader given \n shows one long line and nothing
       # says why.
+      #
+      # One map and not two: a break reaches this point as \n whatever the
+      # caller wrote, [FieldText] having settled that at the call.
       lappend pairs $key [my Str [string map [list \n \r] $text]]
     }
     lappend pairs {*}[my FieldBorderEntries $data]
@@ -371,4 +415,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldText 1.0
+package provide tclpdf::fieldText 1.1

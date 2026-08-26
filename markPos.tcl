@@ -1,19 +1,21 @@
 #
 # tclpdf - PDF generation for Tcl
 #
-# markPos - where a combining mark sits: GPOS mark attachment
+# markPos - where a glyph sits when the pen is not where it belongs:
+#           GPOS mark attachment, and the vertical half of cursive attachment
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
 # See the file "license.terms" for information on usage and redistribution
 # of this file (MIT License).
 #
-# One topic: the three GPOS lookups that attach a mark to something -
-# MarkToBase (type 4), MarkToLigature (type 5) and MarkToMark (type 6),
-# ISO/IEC 14496-22:2019, 6.3.3. Nothing else. The walk to the lookups is
+# ONE TOPIC: the GPOS lookups whose answer is an OFFSET per glyph rather than
+# a distance between two - MarkToBase (type 4), MarkToLigature (type 5),
+# MarkToMark (type 6) and the vertical half of Cursive Attachment (type 3),
+# ISO/IEC 14496-22:2019, 6.3.3 and 6.3.2. The walk to the lookups is
 # otLayout.tcl's, the glyph classes a lookup flag filters by are gdef.tcl's,
-# and the pair kerning of kernGpos.tcl shares nothing with this file: types
-# 4, 5 and 6 carry no ValueRecord at all.
+# and the value records of kernGpos.tcl share nothing with this file: types 4,
+# 5 and 6 carry none at all.
 #
 # Why a producer needs it. Without it a combining mark is drawn at the pen
 # position, which for a mark of zero advance means: on top of the glyph that
@@ -41,11 +43,29 @@
 # later lookup moves again, and adding as we go would then use a position
 # that no longer holds.
 #
+# CURSIVE ATTACHMENT IS READ IN TWO HALVES and this file has the vertical one.
+# A type 3 lookup says "the entry point of this letter sits on the exit point
+# of the one before it", which is two statements at once: how far the first
+# letter advances - kernGpos.tcl, which answers in a gap between two glyphs -
+# and how far off the baseline the second one sits, which is this file's
+# answer. The array of anchors is read ONCE, by otLayout::entryExit, and the
+# two halves take the coordinates they can use.
+#
+# WHICH OF THE TWO LETTERS MOVES is the lookupFlag's RIGHT_TO_LEFT bit
+# (0x0001), the one bit that means something only here (S. 161). Set, the
+# EARLIER letter is hung on the later one - which is what an Arabic face
+# wants, because a Nastaliq word descends from its last letter to its first;
+# clear, the later letter is hung on the earlier. HarfBuzz reads the bit the
+# same way in [PositionCursive], and it is not the direction of the LINE: a
+# face may set it on a lookup it uses in either.
+#
+# THE OFFSETS CHAIN, and the cursive chain is resolved BEFORE the mark one so
+# that a harakat over a letter the staircase lifted rides up with it. That
+# order is HarfBuzz's [propagate_attachment_offsets], where a mark adds the
+# whole offset of the glyph it hangs on, cursive part and all.
+#
 # What is NOT here, deliberately:
 #
-#   - Lookup type 3, cursive attachment. A different topic with a different
-#     caller (forms.tcl); the anchor reader they will share already sits in
-#     otLayout.tcl for that reason.
 #   - Device and VariationIndex tables behind an anchor. See otLayout::anchor.
 #   - A language-specific language system. Every script is read, but only its
 #     DEFAULT language system; what a face puts behind "TRK " or "ROM " alone
@@ -109,10 +129,11 @@ namespace eval ::tclpdf::markPos {
   variable types {4 5 6}
   variable extensionType 9
 
-  # The lookupFlag bit that means "ignore marks". Used as a ready-made filter
-  # to answer one question gdef.tcl has no other name for: is this glyph a
-  # mark? See [Marks].
-  variable ignoreMarks 0x0008
+  # The feature and the lookup type of the cursive half, and the lookupFlag
+  # bit that says which of the two letters is hung on the other.
+  variable cursiveTag curs
+  variable cursiveType 3
+  variable rightToLeft 0x0001
 }
 
 # Prepare a font for mark attachment, or {} for a font that has none.
@@ -153,17 +174,67 @@ proc ::tclpdf::markPos::build {font} {
       lappend fallback $index
     }
   }
-  if {![llength $indices] && ![llength $fallback]} {
+  set gdef [::tclpdf::gdef build $font]
+  set cursive [CursiveLookups $gpos $gdef]
+  if {![llength $indices] && ![llength $fallback] && ![llength $cursive]} {
     return {}
   }
-  set gdef [::tclpdf::gdef build $font]
   set lookups [Lookups $gpos $gdef $indices 0]
   lappend lookups {*}[Lookups $gpos $gdef $fallback 1]
-  if {![llength $lookups]} {
+  if {![llength $lookups] && ![llength $cursive]} {
     return {}
   }
   return [dict create font $font units [dict get $font unitsPerEm] \
-      marks [Marks $gdef] lookups $lookups]
+      marks [::tclpdf::gdef marks $gdef] lookups $lookups cursive $cursive]
+}
+
+# The cursive attachment lookups of a face, as {filter rightToLeft records} in
+# lookup order, where records is otLayout::entryExit's dict.
+#
+# EVERY SCRIPT, and without the two tiers the mark lookups need. A face writes
+# its "curs" feature under every script it supports - Noto Nastaliq Urdu lists
+# the same three lookups under DFLT, arab, cyrl, grek and latn - and the
+# question the two tiers answer for a mark, "which script does this glyph
+# belong to", does not arise: a letter either has an exit anchor or it has
+# not. It is also the resolution kernGpos.tcl uses for the horizontal half,
+# and the two halves of one lookup must not disagree about which lookups
+# there are.
+proc ::tclpdf::markPos::CursiveLookups {gpos gdef} {
+  variable cursiveTag
+  variable cursiveType
+  variable extensionType
+  variable rightToLeft
+  set indices {}
+  if {[::tclpdf::otLayout damaged {
+      set indices [::tclpdf::otLayout featureLookupsAnyScript $gpos \
+          $cursiveTag]}]} {
+    return {}
+  }
+  set lookups {}
+  foreach entry [::tclpdf::otLayout collectTyped $gpos $indices \
+      [list $cursiveType] $extensionType] {
+    lassign $entry flag markSet typed
+    set records {}
+    # The error boundary sits inside the loop: one unreadable lookup must cost
+    # only itself.
+    if {[::tclpdf::otLayout damaged {
+        foreach pair $typed {
+          set one [::tclpdf::otLayout entryExit $gpos [lindex $pair 1]]
+          if {[dict size $one]} {
+            # The subtables of ONE lookup are searched in order and the first
+            # that covers a glyph wins, so an earlier subtable's record stays.
+            set records [dict merge $one $records]
+          }
+        }}]} {
+      continue
+    }
+    if {![dict size $records]} {
+      continue
+    }
+    lappend lookups [list [::tclpdf::gdef filter $gdef $flag $markSet] \
+        [expr {($flag & $rightToLeft) != 0}] $records]
+  }
+  return $lookups
 }
 
 # The readable lookups of a list of indices, as {filter subtables fallback},
@@ -204,15 +275,29 @@ proc ::tclpdf::markPos::Lookups {gpos gdef indices fallback} {
 # Thousandths, not font units, because that is what a PDF text object is
 # written in and what kern.tcl already answers in. Two units would mean two
 # conversions, and measuring and drawing would drift apart between them.
-proc ::tclpdf::markPos::run {state run} {
+# ADJUSTMENTS is what the line will actually be drawn with: one value per gap
+# between two glyphs, in thousandths of the em, exactly as [FontRunKern] hands
+# it to the writer - and {} for a line drawn with the face's own advances.
+#
+# WHY A MARK HAS TO KNOW. The horizontal offset of a mark is measured from the
+# glyph it hangs on, so it is the distance the pen has travelled since that
+# glyph was drawn - and the pen travels the FINAL advances, not the ones the
+# face ships. Where a pair between the two was kerned, or a cursive lookup
+# changed an advance, the mark stood beside its letter by the sum of those
+# corrections. HarfBuzz does the same in propagate_attachment_offsets, and for
+# the same reason. Measured on Noto Nastaliq Urdu over 78 words: the letters
+# stood right and the dots and harakat did not.
+proc ::tclpdf::markPos::run {state run {adjustments {}}} {
   set count [llength $run]
   if {$state eq {} || $count < 2} {
     return [lrepeat $count {0 0}]
   }
   set glyphs [lmap item $run {lindex $item 0}]
   set units [dict get $state units]
+  # Into font units, which is what [offsets] and the face itself speak.
+  set inUnits [lmap value $adjustments {expr {$value * $units / 1000.0}}]
   set scaled {}
-  foreach offset [offsets $state $glyphs] {
+  foreach offset [offsets $state $glyphs $inUnits] {
     lassign $offset dx dy
     if {$dx == 0 && $dy == 0} {
       # The common case by far, and it stays an EXACT zero rather than
@@ -234,7 +319,10 @@ proc ::tclpdf::markPos::run {state run} {
 # measurement are stated in: a test that wants to say "the grave moves 510
 # units left" should not have to divide by the em first, and neither should
 # the next reader of this file.
-proc ::tclpdf::markPos::offsets {state glyphs} {
+#
+# ADJUSTMENTS, in FONT units here, are what [run] describes: one per gap, or
+# {} for a line drawn with the face's own advances.
+proc ::tclpdf::markPos::offsets {state glyphs {adjustments {}}} {
   set count [llength $glyphs]
   if {$state eq {} || $count < 2} {
     return [lrepeat $count {0 0}]
@@ -297,13 +385,18 @@ proc ::tclpdf::markPos::offsets {state glyphs} {
       set anything 1
     }
   }
-  set result [lrepeat $count {0 0}]
+  # THE CURSIVE OFFSETS COME FIRST, and the order is the whole reason they are
+  # here rather than beside them: a mark adds the offset of the glyph it hangs
+  # on, so a harakat over a letter the staircase lifted has to find that
+  # letter already lifted. HarfBuzz resolves the two chains in one recursion
+  # for the same reason.
+  set result [Cursive $state $glyphs]
   if {!$anything} {
     return $result
   }
-  # The chain, resolved in one forward pass. A mark always attaches to a glyph
-  # BEFORE it, so by the time index is reached its parent is already final and
-  # no recursion is needed.
+  # The mark chain, resolved in one forward pass. A mark always attaches to a
+  # glyph BEFORE it, so by the time index is reached its parent is already
+  # final and no recursion is needed.
   set font [dict get $state font]
   for {set index 0} {$index < $count} {incr index} {
     set parent [lindex $attached $index]
@@ -313,17 +406,126 @@ proc ::tclpdf::markPos::offsets {state glyphs} {
     lassign [lindex $own $index] dx dy
     lassign [lindex $result $parent] px py
     set dx [expr {$dx + $px}]
-    set dy [expr {$dy + $py}]
+    # Plus whatever the cursive pass gave this glyph itself, which is nothing
+    # in every face measured - a cursive lookup ignores marks - and is added
+    # rather than dropped because dropping it would be silent.
+    set dy [expr {$dy + $py + [lindex $result $index 1]}]
     # Walk back over everything from the parent up to the mark: the parent's
     # own advance and every glyph in between, whether the lookup saw it or
-    # not. The advances are the font's, because the font's are what the
-    # content stream will place the glyphs by.
+    # not - and the adjustment of each gap the walk crosses, because what the
+    # content stream will place the glyphs by is the advance PLUS that. With
+    # no adjustments given the walk is the one it always was.
     for {set at $parent} {$at < $index} {incr at} {
       set dx [expr {$dx - [::tclpdf::sfnt advance $font [lindex $glyphs $at]]}]
+      if {$at < [llength $adjustments]} {
+        set dx [expr {$dx - [lindex $adjustments $at]}]
+      }
     }
     lset result $index [list $dx $dy]
   }
   return $result
+}
+
+# WHICH GLYPHS A CURSIVE LOOKUP MOVED, as one {dx dy} per glyph - the same
+# list [offsets] starts from.
+#
+# Public because a caller has to be able to tell the two kinds of offset
+# apart. A MARK offset says "this glyph hangs on the one before it" and a
+# line drawn right to left has to keep the two together; a CURSIVE offset
+# says nothing of the kind - the glyph is an ordinary letter that happens to
+# sit higher - and treating it as an attachment would draw the letters of a
+# Nastaliq word in the wrong order. text.tcl asks that question in
+# [TextAttached].
+proc ::tclpdf::markPos::cursive {state glyphs} {
+  if {$state eq {} || [llength $glyphs] < 2} {
+    return [lrepeat [llength $glyphs] {0 0}]
+  }
+  return [Cursive $state $glyphs]
+}
+
+# The vertical offsets of the cursive lookups, as one {dx dy} per glyph with
+# dx always 0 - the horizontal half is kernGpos.tcl's.
+#
+# THE RULE, and it is HarfBuzz's [PositionCursive] to the line: the glyph at
+# this position needs an ENTRY anchor and the one before it an EXIT anchor,
+# and one of the two is then lifted so that the anchors meet. Which one is the
+# lookupFlag's RIGHT_TO_LEFT bit - see the head of this file.
+proc ::tclpdf::markPos::Cursive {state glyphs} {
+  set count [llength $glyphs]
+  set flat [lrepeat $count 0]
+  if {![dict exists $state cursive] || ![llength [dict get $state cursive]]} {
+    return [lrepeat $count {0 0}]
+  }
+  set parent [lrepeat $count {}]
+  set anything 0
+  foreach lookup [dict get $state cursive] {
+    lassign $lookup filter backward records
+    set visible [::tclpdf::gdef keep $filter $glyphs]
+    set seen [llength $visible]
+    for {set at 1} {$at < $seen} {incr at} {
+      set index [lindex $visible $at]
+      set before [lindex $visible [expr {$at - 1}]]
+      set entry [Anchor $records [lindex $glyphs $index] 0]
+      set exit [Anchor $records [lindex $glyphs $before] 1]
+      if {$entry eq {} || $exit eq {}} {
+        continue
+      }
+      if {$backward} {
+        lset flat $before [expr {[lindex $entry 1] - [lindex $exit 1]}]
+        lset parent $before $index
+      } else {
+        lset flat $index [expr {[lindex $exit 1] - [lindex $entry 1]}]
+        lset parent $index $before
+      }
+      set anything 1
+    }
+  }
+  if {!$anything} {
+    return [lrepeat $count {0 0}]
+  }
+  set flat [Chain $flat $parent]
+  return [lmap value $flat {list 0 $value}]
+}
+
+# The entry (WHICH 0) or exit (1) anchor of a glyph, or {} when the face gives
+# it none.
+proc ::tclpdf::markPos::Anchor {records glyph which} {
+  if {![dict exists $records $glyph]} {
+    return {}
+  }
+  return [lindex [dict get $records $glyph] $which]
+}
+
+# A chain of offsets accumulated: every glyph adds what the glyph it hangs on
+# ended up with.
+#
+# NOT A FORWARD PASS, which is where this differs from the mark chain above: a
+# cursive lookup with the RIGHT_TO_LEFT bit hangs a glyph on the one AFTER it,
+# so neither direction alone reaches every parent before its child. Resolved
+# per glyph instead, marking each one done BEFORE its parent is resolved -
+# which is also what keeps a face whose lookups form a cycle from taking this
+# down with it.
+proc ::tclpdf::markPos::Chain {values parent} {
+  set count [llength $values]
+  set done [lrepeat $count 0]
+  for {set index 0} {$index < $count} {incr index} {
+    Resolve values done $parent $index
+  }
+  return $values
+}
+
+proc ::tclpdf::markPos::Resolve {valuesName doneName parent index} {
+  upvar 1 $valuesName values $doneName done
+  if {[lindex $done $index]} {
+    return
+  }
+  lset done $index 1
+  set up [lindex $parent $index]
+  if {$up eq {}} {
+    return
+  }
+  Resolve values done $parent $up
+  lset values $index [expr {[lindex $values $index] + [lindex $values $up]}]
 }
 
 # The readable subtables of one lookup, in the order the lookup names them.
@@ -440,17 +642,6 @@ proc ::tclpdf::markPos::Partner {state type visible at glyphs} {
     }
   }
   return {}
-}
-
-# A filter that answers one question: is this glyph a mark?
-#
-# gdef.tcl has no command of that name and does not need one - a filter built
-# from the ignoreMarks bit alone answers it exactly, through the same [ignored]
-# every lookup flag goes through. Building a second reader of the GDEF class
-# definition here would be the copy the house rule forbids.
-proc ::tclpdf::markPos::Marks {gdef} {
-  variable ignoreMarks
-  return [::tclpdf::gdef filter $gdef $ignoreMarks]
 }
 
 # --- the subtables ---------------------------------------------------------
@@ -592,4 +783,4 @@ proc ::tclpdf::markPos::AnchorRow {gpos base record classCount} {
   return $row
 }
 
-package provide tclpdf::markPos 1.1
+package provide tclpdf::markPos 1.2

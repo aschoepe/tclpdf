@@ -9,9 +9,11 @@
 # are not where intuition puts them:
 #
 #   A face's SIZE ON DISK says nothing about what it costs in a document.
-#   Bitcount is twice the file Roboto is, and its subset comes out smaller,
-#   because a subset carries the glyphs a document uses and nothing else. What
-#   the file size does decide is how long the parse takes.
+#   Bitcount is twice the file Roboto is, and what lands in the document is a
+#   subset of the glyphs this page uses and nothing else. The table below
+#   prints the file size and the glyph count off the face itself; the subset
+#   is not weighed there, because it exists only once the document is written.
+#   What the file size does decide is how long the parse takes.
 #
 #   A face's COVERAGE is what decides whether it can be used at all, and that
 #   is a property no file name mentions. Niconne is a fine heading face and
@@ -35,6 +37,12 @@
 set here [file dirname [file normalize [info script]]]
 lappend auto_path [file dirname $here]
 package require tclpdf
+# The two modules behind [font embed], asked directly - the same call the
+# writer makes when it embeds a face, so the number in the table below is the
+# number the document carries and not an estimate. Example 2.16 reaches for
+# [sfnt] the same way, to cut a CFF table out of an .otf.
+package require tclpdf::sfnt
+package require tclpdf::subset
 
 # The footer every example draws - shared, because one copy per example is
 # how a block starts drifting.
@@ -60,6 +68,24 @@ set families {
     liberation liberation-fonts/LiberationSans-Regular.ttf
             "text face, the metric twin of Helvetica and Arial"
             "The quick brown fox jumps over the lazy dog."
+}
+
+# How many bytes the subset of one line in one face comes to. The glyphs are
+# looked up through the face's own cmap, which is what [text] does, and handed
+# to the subsetter, which is what [write] does; what comes back is the font
+# program the document would carry for that line. The .notdef and the
+# components of a composite are added by the subsetter itself.
+proc subsetSize {path text} {
+    set parsed [::tclpdf::sfnt read $path]
+    set glyphs {}
+    foreach char [split $text {}] {
+        set code [scan $char %c]
+        if {[dict exists $parsed cmap $code]} {
+            lappend glyphs [dict get $parsed cmap $code]
+        }
+    }
+    return [string length [dict get [::tclpdf::subset build $parsed \
+        [lsort -unique -integer $glyphs]] bytes]]
 }
 
 set doc [tclpdf new -unit mm]
@@ -108,18 +134,23 @@ $doc text "What the five cost here" -at [list 20 $y]
 $doc font -style {} -size 8
 $doc text "The subset carries the glyphs this page uses. The file on disk is\
     what had to be parsed to get there - the two are unrelated, and only the\
-    first one ends up in the document." -at [list 20 [expr {$y + 5}]] -width 170
+    subset ends up in the document. The subset column is the sample line above\
+    each face, subsetted by the same call the writer makes." \
+    -at [list 20 [expr {$y + 5}]] -width 170
 
 set rows {}
 foreach {alias file purpose sample} $families {
     lappend rows [list [dict get [$doc font info $alias] family] \
         [file size [file join $assets fonts $file]] \
+        [subsetSize [file join $assets fonts $file] $sample] \
         [dict get [$doc font info $alias] glyphs]]
 }
-set y [$doc table -at [list 20 [expr {$y + 16}]] -width 170 -theme striped \
-    -head {{Family "File on disk, bytes" "Glyphs in the face"}} \
+set y [$doc table -at [list 20 [expr {$y + 19}]] -width 170 -theme striped \
+    -head {{Family "File on disk, bytes" "Subset of its line, bytes"
+            "Glyphs in the face"}} \
     -body $rows \
-    -columns {{} {width 42 align decimal} {width 38 align decimal}}]
+    -columns {{} {width 36 align decimal} {width 40 align decimal}
+              {width 32 align decimal}}]
 
 # The captions on this page are the sixth family: the standard faces, which
 # are not embedded and are addressed in one of two ways - by family and
@@ -143,8 +174,10 @@ $doc write $target
 puts "  written: $target ([file size $target] bytes)"
 foreach {alias file purpose sample} $families {
     set info [$doc font info $alias]
-    puts [format "  %-9s %-22s %5d glyphs, %5d characters" \
+    puts [format "  %-9s %-22s %5d glyphs, %5d characters,\
+        subset %5d bytes" \
         $alias [dict get $info family] [dict get $info glyphs] \
-        [dict get $info characters]]
+        [dict get $info characters] \
+        [subsetSize [file join $assets fonts $file] $sample]]
 }
 $doc destroy

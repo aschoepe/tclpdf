@@ -147,6 +147,31 @@ puts "labels: [$doc pageLabels]"
 
 Styles: `D`, `R`, `r`, `A`, `a`, `none`. Labels and **printed** numbers have to agree (Matterhorn 15-001) and no validator can see it: a document that prints `pageNumbers -from 3` says `pageLabels -from 0 -start 3` as well.
 
+## How the reader opens the document
+
+```tcl
+# Three catalogue entries in one call (Table 28): which panel a reader shows
+# beside the page (/PageMode), how it arranges them (/PageLayout), and where
+# it puts the reader first (/OpenAction). Calls accumulate, as
+# viewerPreferences does, and without arguments it answers what is set.
+$doc initialView -pageMode UseOutlines -pageLayout TwoColumnLeft
+$doc initialView -page 0 -to {20 20} -zoom 1
+puts "initial view: [$doc initialView]"
+
+# -page, -to and -zoom are the three words destination and link use and go
+# through the same code, so an open action and a bookmark pointing at the same
+# place cannot disagree. -page counts from 0 and may name a page not added
+# yet. Without -to the destination is /Fit, the whole page.
+#
+# A misspelt page mode is refused rather than written: a reader that meets one
+# falls back on its default, and no validator reports it either.
+if {[catch {$doc initialView -pageMode UseOutline} message]} {
+    puts "refused, as it should be: $message"
+}
+```
+
+A caller's `-pageMode` wins over the `/UseOutlines` a `bookmark` sets by itself. It is a command of its own rather than three more keys of `viewerPreferences`, because a viewer preference is a wish a reader may ignore while these are what it *does* when the file opens - and `viewerPreferences` answers the dictionary that goes into `/ViewerPreferences`, which the PDF/UA check reads. An **action** is not offered: `catalogEntry OpenAction` takes one, and ISO 19005 forbids most action types outright.
+
 ```tcl
 $doc write [file join $out ref-08-navigation-metadata.pdf]
 # The packet is built during the write - this is where it can be looked at.
@@ -154,12 +179,113 @@ puts "XMP packet: [string length [$doc metadata]] bytes, xpacket wrapper include
 $doc destroy
 ```
 
-## Annotations that have a shape
+## A note, a stamp, and marking a passage
 
 ```tcl
 package require tclpdf
 set doc [tclpdf new -unit mm]
 $doc page add
+$doc font -family helvetica -size 11
+
+# WHO DRAWS THE PICTURE decides everything else. A note, and a stamp given
+# -name, are drawn by the READER from a fixed set of symbols - which is what
+# makes a note look like the reader's other notes, and which is why a document
+# claiming PDF/A refuses one (Table 166 wants an appearance stream on every
+# annotation). The way out is -appearance.
+#
+# -contents IS the note, and it is required. -icon is one of Comment, Key,
+# Note (the default), Help, NewParagraph, Paragraph or Insert; -size defaults
+# to the 20 by 20 points a reader draws its symbol in, and the symbol does not
+# scale with the rectangle - the number decides only where it sits.
+$doc annot note -at {180 30} -contents "Check this against the delivery note" \
+    -icon Comment -title "E. Mustermann" -open 1 -colour {1 0.85 0.35} \
+    -date [clock scan "2026-08-18 12:00" -format "%Y-%m-%d %H:%M"]
+
+# A rubber stamp. -name is one of the fourteen a reader draws itself and
+# -size is then REQUIRED, there being nothing to derive one from.
+$doc annot stamp -at {150 40} -size {40 14} -name Draft -contents "not final"
+
+# -appearance names a form built with [form create] and wins over /Name: with
+# one present a reader never looks at the name, so the two are exclusive. The
+# form's own size is used where -size is left out - the numbers are then not
+# written in two places and cannot come to disagree.
+set docGlobal $doc
+$doc form create seal -size {36 14} -script {
+    $docGlobal rect -at {0 0} -size {36 14} -radius 2 \
+        -stroke {0.7 0.15 0.1} -width 0.6
+    $docGlobal font -family helvetica -style bold -size 7 -color {0.7 0.15 0.1}
+    $docGlobal text "RECEIVED" -at {18 9} -align center
+}
+$doc annot stamp -at {150 60} -appearance seal -contents "received 18 August"
+$doc annot note -at {180 60} -appearance seal -contents "the same, under PDF/A"
+$doc font -family helvetica -size 11 -color black
+```
+
+```tcl
+# THE FOUR TEXT MARKUPS need none of that: the package draws their appearance
+# itself, always and without being asked, because the marked rectangles and
+# the colour are the whole picture. What such an annotation consists of is its
+# /QuadPoints, and there are three ways to say where those are - one of them
+# is required.
+
+# 1. -text marks ONE line and repeats what the [text] call that drew it said:
+#    the same string and the same point, plus -align and -anchor where those
+#    were given. The width is textWidth's and the height the face's ascender
+#    plus descender, so the band covers capitals and descenders and nothing
+#    else.
+$doc text "The amount due is 1.284,50 EUR." -at {20 100}
+$doc annot highlight -text "The amount due is 1.284,50 EUR." -at {20 100} \
+    -contents "the amount due" -title "E. Mustermann"
+
+$doc text "recieve" -at {20 110}
+$doc annot squiggly -text "recieve" -at {20 110} -contents "spelling"
+
+$doc text "old price" -at {60 110}
+$doc annot strikeout -text "old price" -at {60 110} -contents "superseded"
+
+$doc text "Right aligned, and marked as such." -at {190 120} -align right
+$doc annot underline -text "Right aligned, and marked as such." -at {190 120} \
+    -align right -contents "the aligned line"
+
+# 2. -lines marks a PARAGRAPH and takes what [textLines] answered for it - the
+#    plain list, or the dictionaries of -hyphens 1; both are read. ONE
+#    quadrilateral per line, one leading apart, and ONE annotation for the
+#    whole passage, which is what /QuadPoints is an array for and what makes a
+#    reader announce the remark once rather than once per line.
+set passage "A passage of several lines, marked as one remark rather than as\
+    one remark per line - which is what the array of quadrilaterals is for."
+$doc text $passage -at {20 135} -width 100
+$doc annot highlight -lines [$doc textLines $passage -width 100] -at {20 135} \
+    -contents "the whole passage" -colour {0.75 0.90 1}
+
+# The leading is the text state's own, which is what the block used;
+# -leading overrides it for a block broken some other way.
+$doc annot underline -lines [$doc textLines $passage -width 100] -at {20 160} \
+    -leading 5 -contents "broken elsewhere, so the leading is given"
+
+# 3. -quads takes the rectangles directly, {x y w h} counted from the TOP LEFT
+#    as -at is everywhere else. It is the road for a passage this package did
+#    not set, for a table cell whose geometry the caller already has, for a
+#    JUSTIFIED block - whose lines were stretched after they were measured -
+#    and for text in a Type 3 face, which carries no descender to measure
+#    with. Each of those three refusals names this option.
+$doc text "A justified block, whose lines were stretched after they were\
+    measured, is marked by giving the rectangles." -at {20 180} -width 100 \
+    -align justify
+$doc annot strikeout -quads {{20 176 100 5} {20 181 100 5} {20 186 62 5}} \
+    -contents "the justified block"
+
+# One of the three is required, and asking for none is refused.
+if {[catch {$doc annot highlight -contents "nothing marked"} message]} {
+    puts "refused, as it should be: $message"
+}
+```
+
+The colour is `/C` and defaults to yellow for `highlight` and red for the other three; the appearance is drawn in the same colour, the highlight under the `Multiply` blend mode so that the words show through the band rather than disappearing under it. Shared with the note and the stamp: `-contents` (the description), `-title` (the owner of the remark, `/T`), `-colour` (grey, RGB or CMYK - the three spellings `/C` has), `-opacity` (which fades the whole annotation, appearance and all), `-date` (a time as `clock seconds` answers - without it an annotation carries **no** date at all, so that the same script writes the same bytes twice), and `-appearance`. Under PDF/UA `-contents` is required on every annotation.
+
+## Annotations that have a shape
+
+```tcl
 $doc font -family helvetica -size 10
 
 # The difference from DRAWING the same shape is not the picture but what it
@@ -180,6 +306,12 @@ $doc annot polyline -points {{110 85} {135 78} {155 108}} -contents "the route"
 # picture follows entirely from the geometry, the colours and the width - so
 # these pass PDF/A and PDF/UA where a note without -appearance does not.
 # /Rect grows by half the line width, since a reader may clip to it.
+```
+
+```tcl
+$doc info Title "Reference: annotations"
+$doc write [file join $out ref-08-annotations.pdf]
+$doc destroy
 ```
 
 `circle` is the standard's word and means an **ellipse** inscribed in the rectangle. Square, circle and line are PDF 1.3; polygon and polyline are 1.5.
@@ -207,6 +339,12 @@ $doc form create clip -size {14 16} -script {
 }
 $doc annot attachment -at {180 60} -name lieferschein.txt -appearance clip \
     -contents "the same, under PDF/A"
+```
+
+```tcl
+$doc info Title "Reference: an attachment on the page"
+$doc write [file join $out ref-08-attachment-annotation.pdf]
+$doc destroy
 ```
 
 A name nothing was attached under is refused (`TCLPDF ANNOT ATTACHMENT UNKNOWN`). With `-appearance` no `/Name` is written at all: `/AP` wins over it (Table 166), and a `/Name` nothing draws is a statement with no reader.

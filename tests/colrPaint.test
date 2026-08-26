@@ -94,6 +94,28 @@ test colrPaint-1.4 {the ClipList gives a box per run of glyph ids} -body {
       [::tclpdf::colrPaint clip $state 10]
 } -result {{-10 -20 900 800} {-10 -20 900 800} {-10 -20 900 800} {0 0 10 10} {}}
 
+test colrPaint-1.4.1 {a ClipList format this reader does not know} -body {
+  # Called an optimisation by the standard, and skipped for that reason until
+  # 2026-08-26 - but a clip box is a CLIP: a graph that paints outside every
+  # outline in it is bounded by the box and TCLPDF COLORFONT UNBOUNDED
+  # without it, and a box smaller than the outlines cuts a piece off that
+  # would otherwise be drawn. So an unknown format is named like any other.
+  set colr [v1Colr $::v1Simple {} {{4 8 {-10 -20 900 800}}}]
+  set at [string first [binary format cIu 1 1] $colr]
+  ::tclpdfTest::refusal {::tclpdf::colrPaint build \
+      [string replace $colr $at $at [binary format c 3]]}
+} -result {TCLPDF COLR UNSUPPORTED {ClipList format} 3}
+
+test colrPaint-1.4.2 {a ClipBox format this reader does not know} -body {
+  # Format 1 is four FWORDs and format 2 the same four with a varIndexBase
+  # behind them, which the default instance reads past. A third is a table
+  # from a later minor version.
+  set colr [v1Colr $::v1Simple {} {{4 8 {-10 -20 900 800}}}]
+  set at [string first [binary format cSSSS 1 -10 -20 900 800] $colr]
+  ::tclpdfTest::refusal {::tclpdf::colrPaint build \
+      [string replace $colr $at $at [binary format c 4]]}
+} -result {TCLPDF COLR UNSUPPORTED {ClipBox format} 4}
+
 test colrPaint-1.5 {a table with no ClipList gives no boxes} -body {
   # Clip boxes are optional - "a font may provide clip boxes for some color
   # glyphs but not others" - and the drawer computes the bounds where there
@@ -138,14 +160,28 @@ test colrPaint-2.5 {PaintRadialGradient is two circles} -body {
       [dict get $node r1]
 } -result {{10 20} 5 {30 40} 400}
 
-test colrPaint-2.6 {a sweep gradient's angles are degrees} -body {
-  # The field is an F2DOT14 counting 180 degrees per 1.0, which is what lets
-  # two bytes carry most of a turn; a reader that took the raw value would
-  # draw a sweep of half a degree.
+test colrPaint-2.6 {a sweep gradient's angles carry a bias of 1.0} -body {
+  # The field is an F2DOT14 counting 180 degrees per 1.0 AND BIASED BY 1.0:
+  # degrees = (value + 1) x 180, which is what lets two bytes carry a whole
+  # turn - without the bias they stop at 358 and 360 is not writable. A
+  # reader that leaves the bias out draws every sweep turned by half a
+  # circle, which is a picture nothing reports; one that took the raw value
+  # would draw a sweep of half a degree.
   set node [v1Tree [list [list 6 [list sweep pad $::v1Stops \
       {100 100} 45 315]]]]
   list [dict get $node center] [dict get $node start] [dict get $node end]
 } -result {{100 100} 45.0 315.0}
+
+test colrPaint-2.6.1 {the bias is the sweep's alone} -body {
+  # PaintRotate and PaintSkew store the same F2DOT14 angle WITHOUT the bias -
+  # HarfBuzz reads (startAngle + 1) * pi for the sweep and plain angles for
+  # the other two - so a reader that biases all of them turns every rotation
+  # by half a circle instead.
+  set turned [v1Tree [list [list 6 [list rotate 45 {glyph 7 {solid 1 1.0}}]]]]
+  set skewed [v1Tree [list [list 6 [list skew 45 0 {glyph 7 {solid 1 1.0}}]]]]
+  list [lmap value [dict get $turned matrix] {format %.4f $value}] \
+      [lmap value [dict get $skewed matrix] {format %.4f $value}]
+} -result {{0.7071 0.7071 -0.7071 0.7071 0.0000 0.0000} {1.0000 0.0000 -1.0000 1.0000 0.0000 0.0000}}
 
 test colrPaint-2.7 {a colour line is its extend mode and its stops} -body {
   dict get [v1Tree [list [list 6 [list linear reflect $::v1Stops \
@@ -176,17 +212,19 @@ test colrPaint-2.9 {two stops at one offset keep the order the font wrote} -body
   }
 } -result {7 3 4 9}
 
-test colrPaint-2.10 {an extend mode outside the enumeration reads as pad} -body {
-  # Three are defined. Pad is the only one that cannot make a colour line
-  # ill-formed, and this is the one place in the module where something
-  # unknown is taken rather than named - see the comment there.
+test colrPaint-2.10 {an extend mode outside the enumeration is refused} -body {
+  # Three are defined and this reader knows all three, so a fourth is a
+  # colour line from a later minor version of the format. Read as pad it
+  # would draw a gradient that should have repeated and did not - a picture
+  # missing a piece, valid and unreported - which is the reason the module
+  # refuses an unknown paint format as well.
   set colr [v1Colr [list [list 6 [list linear pad $::v1Stops \
       {0 0} {1 1} {0 1}]]] {}]
   set at [string first [binary format cSu 0 3] $colr]
   set colr [string replace $colr $at $at [binary format c 9]]
-  dict get [::tclpdf::colrPaint paint [::tclpdf::colrPaint build $colr] 6] \
-      line extend
-} -result pad
+  ::tclpdfTest::refusal {::tclpdf::colrPaint paint \
+      [::tclpdf::colrPaint build $colr] 6}
+} -result {TCLPDF COLR UNSUPPORTED {extend mode} 9}
 
 # --- the paints with children ----------------------------------------------
 

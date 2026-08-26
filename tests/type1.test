@@ -41,6 +41,12 @@ set ttf [file join $urw NimbusSans-Regular.ttf]
 testConstraint havePfb [file exists $pfb]
 testConstraint haveRaw [expr {[file exists $raw] && [file exists $afm]}]
 testConstraint haveBoth [expr {[file exists $raw] && [file exists $ttf]}]
+# The .otf the bare-CFF test below cuts its font program out of. Nimbus Roman
+# rather than Nimbus Sans, because its H (662) and its d (683) are DIFFERENT
+# numbers: with a face whose two agree, a cap height taken from the ascender
+# by mistake looks right.
+set otfForCff [file join $urw NimbusRoman-Regular.otf]
+testConstraint haveOtfForCff [file exists $otfForCff]
 
 test type1-1.1 {a PFB is split into the three pieces PDF asks for} -constraints havePfb -body {
   # The segment markers state the lengths, and the three pieces plus 20 bytes
@@ -227,11 +233,16 @@ test type1-2.5 {a zero in the metrics counts as absent} -constraints haveRaw -bo
   set metrics [::tclpdf::type1 metrics $afm]
   set lift [expr {[type1Baseline $::raw baseline] - [type1Baseline $::raw top]}]
   rename type1Baseline {}
-  # The AFM says zero, the bounding box says 1075 per 1000 em, so at size 100
-  # the lift is 107.5 pt. Read literally the zero would give 0 - and nothing
-  # would fail, the text would just sit one ascender too high.
-  list [dict get $metrics ascender] [expr {abs($lift - 107.5) < 0.01}]
-} -result {0 1}
+  # The AFM says zero, and what stands in for it is the top of the d - 729
+  # per 1000 em - so at size 100 the lift is 72.9 pt. It was the upper edge
+  # of the FontBBox until 2026-08-26, 1075, which is the top of the Aring
+  # and a third of an em too high: the same face as .otf writes 729 out of
+  # its hhea, and the two roads through one file disagreed by 35 pt. Read
+  # literally the zero would give 0 - and nothing would fail, the text would
+  # just sit one ascender too high.
+  list [dict get $metrics ascender] [dict get $metrics tops d] \
+      [expr {abs($lift - 72.9) < 0.01}]
+} -result {0 729 1}
 
 test type1-3.1 {a Type 1 face is embedded as the three lengths} -constraints haveRaw -body {
   # /FontFile with Length1, Length2 and Length3 - not FontFile2, which is
@@ -540,6 +551,79 @@ test type1-10.5 {the width of a position belongs to the name it is addressed by}
   set widths [::tclpdf::type1 widths $metrics]
   list [lindex $widths 183] [lindex $widths 124]
 } -result {111 222}
+
+
+# -- round 7: what a descriptor is measured from ----------------------------
+
+test type1-11.1 {the AFM's own per-glyph boxes are read for the three letters} \
+    -constraints haveRaw -body {
+  # An AFM states a bounding box per character, and it is the only place a
+  # Type 1 face says how high its capitals and its ascenders reach where the
+  # header fields are 0 - which the URW metrics in this tree write. Three
+  # glyphs are kept out of several hundred: a box per glyph would be a
+  # dictionary nobody reads.
+  set metrics [::tclpdf::type1 metrics $afm]
+  list [dict get $metrics tops] [dict get $metrics ascender] \
+      [dict get $metrics capHeight]
+} -result {{H 729 b 729 d 729} 0 729}
+
+test type1-11.2 {the descriptor of a Type 1 face states the letter, not the box} \
+    -constraints haveRaw -body {
+  # ISO 32000-2, Table 120: Ascent is "the maximum height above the baseline
+  # reached by glyphs in this font, EXCLUDING the height of glyphs for
+  # accented characters", CapHeight "the vertical coordinate of the top of
+  # flat capital letters". The upper edge of the FontBBox is neither - for
+  # Nimbus Sans it is 1075, the top of the Aring, where the letters reach
+  # 729 and the same face as .otf writes 729 out of its hhea.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed sans $::raw
+  $doc text "H" -at {20 20} -family sans
+  set path [::tclpdfTest::scratch type1-descriptor.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/Ascent ([-0-9.]+)} $bytes -> ascent
+  regexp {/CapHeight ([-0-9.]+)} $bytes -> capHeight
+  regexp {/Descent ([-0-9.]+)} $bytes -> descent
+  list $ascent $capHeight [expr {$descent < 0}]
+} -result {729 729 1}
+
+test type1-11.3 {a bare CFF states its cap height from the H it carries} \
+    -constraints haveOtfForCff -body {
+  # A CFF states no cap height at all - no head, no OS/2, nothing but the
+  # FontBBox of the whole face. Written from that box, example 02.16 said
+  # CapHeight 1075 for a face whose capitals reach 729; the charstring of the
+  # H says the number the descriptor has to state.
+  set parsed [::tclpdf::sfnt read $::otfForCff]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed bare -data [::tclpdf::sfnt table $parsed "CFF "]
+  $doc text "H" -at {20 20} -family bare
+  set path [::tclpdfTest::scratch bare-descriptor.pdf]
+  $doc write $path
+  set stated [dict get [$doc font info bare] capHeight]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  regexp {/CapHeight ([-0-9.]+)} $bytes -> capHeight
+  regexp {/Ascent ([-0-9.]+)} $bytes -> ascent
+  # font info answers what the FILE says, which for a CFF is nothing - the
+  # descriptor has to write a number all the same. The two differ, which is
+  # the point of the face chosen: the cap height is the H, the ascent is the
+  # d, and the upper edge of the FontBBox is neither.
+  list $stated $capHeight $ascent [lindex [dict get $parsed bbox] 3]
+} -result {{} 662 683 1053}
+
+test type1-11.4 {a stated ascender still wins over the letters} \
+    -constraints havePfb -body {
+  # The control: OCRB states Ascender 772 and CapHeight 701 and its d reaches
+  # 773, so nothing derived is used - a face that says something is believed.
+  set metrics [::tclpdf::type1 metrics [file rootname $::pfb].afm]
+  list [dict get $metrics ascender] [dict get $metrics capHeight] \
+      [dict get $metrics tops d]
+} -result {772 701 773}
 
 
 cleanupTests

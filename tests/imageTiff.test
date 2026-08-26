@@ -356,7 +356,7 @@ test imageTiff-5.12 {a strip that runs past the end of the file} -body {
   # file held 100 663 296. libtiff reads it and warns; here it is refused,
   # because half a picture is not a picture.
   ::tclpdfTest::refusal {::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {279 4 100000}]}
-} -result {TCLPDF TIFF RANGE}
+} -result {TCLPDF TIFF DAMAGED range}
 
 # --- the resolution ---------------------------------------------------------
 
@@ -562,7 +562,7 @@ test imageTiff-8.8 {a file with no IFD at all} -body {
 test imageTiff-8.9 {an IFD pointer past the end of the file} -body {
   ::tclpdfTest::refusal {::tclpdf::imageTiff parse [::tclpdfTest::tiffFile [list [::tclpdfTest::tiffBase]] \
       -data $::tiffData -first 900000]}
-} -result {TCLPDF TIFF RANGE}
+} -result {TCLPDF TIFF DAMAGED range}
 
 # --- the refusals -----------------------------------------------------------
 
@@ -648,7 +648,7 @@ test imageTiff-9.14 {a directory without a photometric interpretation} -body {
 test imageTiff-9.15 {a truncated IFD} -body {
   set file [::tclpdfTest::tiffOne]
   ::tclpdfTest::refusal {::tclpdf::imageTiff parse [string range $file 0 end-40]}
-} -result {TCLPDF TIFF RANGE}
+} -result {TCLPDF TIFF DAMAGED range}
 
 test imageTiff-9.16 {every refusal is trappable by one prefix} -body {
   # What the -errorcode contract is for: one prefix catches every way this

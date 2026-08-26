@@ -626,6 +626,80 @@ test colorFontPaint-4.7 {a colour line of no stops paints nothing} -body {
   list [lsearch -all -inline -glob $lines "* rg"] [llength $shadings]
 } -result {{{0 0.66667 0 rg}} 0}
 
+test colorFontPaint-4.7a {a colour line of nothing but alpha 0 is refused} -body {
+  # The manual promises TCLPDF COLORFONT EMPTY where "every fill in it is
+  # fully transparent", and a PaintSolid at alpha 0 has always gone that way.
+  # A GRADIENT whose every stop carries alpha 0 is the same fill and used to
+  # come out as a shading object, an ExtGState at /ca 0 and an "sh" that
+  # paints nothing - a font that sets, measures, extracts and draws a blank.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks -data [cpFace \
+      [list glyph 1 [list linear pad {{0.0 0 0.0} {1.0 2 0.0}} \
+          {0 0} {800 0} {0 900}]]] -chars $::cpMark}]
+  $doc destroy
+  lrange $code 0 2
+} -result {TCLPDF COLORFONT EMPTY}
+
+test colorFontPaint-4.7b {and beside a visible layer it costs no objects} -body {
+  # The other half of the same fix: the transparent gradient drops out of the
+  # stack rather than writing a shading and an ExtGState no reader reaches
+  # and every validator counts.
+  set doc [cpDocument {layers 0 2} layers [list {glyph 2 {solid 1 1.0}} \
+      [list glyph 1 [list linear pad {{0.0 0 0.0} {1.0 2 0.0}} \
+          {0 0} {800 0} {0 900}]]]]
+  set lines [cpLines $doc $::cpMark]
+  set shadings [::tclpdfTest::objects $doc /ShadingType]
+  set states [::tclpdfTest::objects $doc /ca]
+  $doc destroy
+  list [lsearch -all -inline -glob $lines "* rg"] [llength $shadings] \
+      [llength $states] [lsearch -all -inline -glob $lines "*sh"]
+} -result {{{0 0.66667 0 rg}} 0 0 {}}
+
+test colorFontPaint-4.9a {every stop on one offset is a STEP, not a flood} -body {
+  # "The first one given in the font must be used for computing color values
+  # on the color line below that stop offset, and the last one ... at or
+  # above." Two stops on offset 0.5 are therefore two colours meeting at the
+  # middle of the axis - not the last stop over everything, which is what a
+  # colour line of no length used to get. PDF spells it with /Extend
+  # [true true] over an axis a ten-thousandth of the box wide.
+  set doc [cpDocument [list glyph 1 [list linear pad \
+      {{0.5 0 1.0} {0.5 2 1.0}} {0 0} {800 0} {0 900}]]]
+  set shading [cpShading $doc]
+  set lines [cpLines $doc $::cpMark]
+  $doc destroy
+  list [llength [lsearch -all -inline -glob $lines "*sh"]] \
+      [cpNumbers $shading Coords] \
+      [regexp {/Extend \[ *true +true *\]} $shading]
+} -result {1 {400.0 0.0 400.08 0.0} 1}
+
+test colorFontPaint-4.9b {the same for a radial gradient} -body {
+  # Inside the circle at the offset the first colour, outside it the last -
+  # and where the two radii differ the old reading did not even flood, it
+  # left the glyph blank: the cone was cut at its tip with a colour line of
+  # no length and nothing came out.
+  set doc [cpDocument [list glyph 1 [list radial pad \
+      {{0.5 0 1.0} {0.5 2 1.0}} {400 400} 100 {400 400} 300]]]
+  set shading [cpShading $doc 3]
+  $doc destroy
+  cpNumbers $shading Coords
+} -result {400.0 400.0 200.0 400.0 400.0 200.14}
+
+test colorFontPaint-4.9c {a sweep of no turn splits the disc at its ray} -body {
+  # start = end squeezes the whole colour line onto one ray, and pad holds
+  # the first stop below it and the last at and above. So the fan carries two
+  # colours and not one - the "nothing shall be drawn" of the standard is for
+  # repeat and reflect, which is refused above it.
+  set doc [cpDocument [list glyph 2 [list sweep pad \
+      {{0.0 0 1.0} {1.0 2 1.0}} {400 400} 90 90]]]
+  set fan [cpFan [cpShading $doc 4] 400 400]
+  $doc destroy
+  # Which colours the rim carries, and where the two meet: red below 90
+  # degrees, blue at and above it.
+  list [lsort -unique [lmap wedge $fan {lindex $wedge 1}]] \
+      [lindex [lsearch -inline -index 1 $fan {0 0 255}] 0]
+} -result {{{0 0 255} {255 0 0}} 90.04}
+
 test colorFontPaint-4.8 {a degenerate linear gradient paints nothing} -body {
   # "If line p0p2 is parallel to line p0p1 ... then the gradient is
   # ill-formed and must not be rendered." The projection collapses to a
@@ -1220,22 +1294,69 @@ test colorFontPaint-5.6 {Source Out inverts the same mask with a TR} -body {
       [regexp {1 exch sub} [lindex $functions 0]]
 } -result {1 1 1}
 
-test colorFontPaint-5.7 {Source Atop draws the backdrop and then masks} -body {
-  # The backdrop straight into the stream, and the source "in" it after that.
-  # The backdrop here is the stack of 5.5d - a translucent bar reaching past
-  # the opaque triangle under it - so the "in" half keeps its soft mask and
-  # the source's colour goes into the group behind it, which is what makes
-  # the two halves tellable apart in one stream: the backdrop's own two
-  # colours stand in the glyph, the source's blue does not.
-  set doc [cpDocument {composite 9 {glyph 1 {solid 2 1.0}} {layers 0 2}} \
-      layers [list {glyph 2 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]]
+test colorFontPaint-5.7 {Source Atop over a backdrop of three levels is refused} -body {
+  # The backdrop is the stack of 5.5d - a translucent bar reaching past the
+  # opaque triangle under it - so its alpha is 1 on the triangle, 0.2 on the
+  # bar beside it and 0 elsewhere. Painting the backdrop and then the source
+  # under an alpha mask taken from it computes as x ab x Cs + ab x Cb x
+  # (1 - as x ab) where W3C Compositing 9.1 asks for as x Cs x ab + ab x Cb x
+  # (1 - as): the two agree only where ab is 0 or 1, and the picture that
+  # comes out otherwise differs from the font with nothing reporting it.
+  # Refused by name, the way Plus is - see [ColorFontPaintAtop].
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks \
+      -data [cpFace {composite 9 {glyph 1 {solid 2 1.0}} {layers 0 2}} \
+          [list {glyph 2 {solid 0 1.0}} {glyph 3 {solid 1 0.2}}]] \
+      -chars $::cpMark}]
+  $doc destroy
+  list [lrange $code 0 2] [lindex $code end]
+} -result {{TCLPDF COLORFONT COMPOSITE} srcAtop}
+
+test colorFontPaint-5.7b {Source Atop over ONE translucent outline is exact} -body {
+  # The case the refusal above leaves open, and the one a real face would
+  # hold: the backdrop is one outline at one alpha, so ab is a constant 0.5
+  # inside it and 0 outside. Then Co / ao is the two sides composited the
+  # ordinary way with the backdrop taken as OPAQUE - a group holding the
+  # backdrop's colour and the source over it - and ao is that constant, which
+  # is the "gs" outside the "Do". The clip is the outline the constant holds
+  # inside.
+  set doc [cpDocument {composite 9 {glyph 1 {solid 2 1.0}} \
+      {glyph 2 {solid 0 0.5}}}]
   set lines [cpLines $doc $::cpMark]
   set forms [::tclpdfTest::objects $doc /Transparency]
   $doc destroy
-  list [lsearch -all -inline -glob $lines "* rg"] \
-      [lsearch -inline -glob $lines "*Do"] \
-      [llength [lsearch -all -inline $forms "*0 0 1 rg*"]]
-} -result {{{1 0 0 rg} {0 0.66667 0 rg}} {/XO2 Do} 1}
+  list [lsearch -all -inline -glob $lines "*gs"] \
+      [lsearch -all -inline -glob $lines "*Do"] \
+      [regexp {1 0 0 rg} [lindex $forms 0]] \
+      [regexp {0 0 1 rg} [lindex $forms 0]] \
+      [regexp -all {W\nn} [join $lines \n]]
+} -result {{{/GS0_5f gs}} {{/XO1 Do}} 1 1 1}
+
+test colorFontPaint-5.7c {Destination Atop is the same the other way about} -body {
+  # ao is the SOURCE's alpha there, so the source is the side that has to be
+  # one level and the backdrop is the one drawn over it inside the group.
+  set doc [cpDocument {composite 10 {glyph 2 {solid 0 0.5}} \
+      {glyph 1 {solid 2 1.0}}}]
+  set forms [::tclpdfTest::objects $doc /Transparency]
+  set lines [cpLines $doc $::cpMark]
+  $doc destroy
+  list [lsearch -all -inline -glob $lines "*gs"] \
+      [regexp {1 0 0 rg.*0 0 1 rg} [string map [list \n { }] [lindex $forms 0]]]
+} -result {{{/GS0_5f gs}} 1}
+
+test colorFontPaint-5.7d {XOR over a translucent side is refused} -body {
+  # Both sides mask there, so both have to be sharp; the formula
+  # as x Cs x (1 - ab) + ab x Cb x (1 - as) is no more reachable through two
+  # soft masks than Source Atop's is through one.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [::tclpdfTest::refusal {$doc colorFont marks \
+      -data [cpFace {composite 11 {glyph 2 {solid 1 1.0}} \
+          {glyph 1 {solid 0 0.5}}}] -chars $::cpMark}]
+  $doc destroy
+  list [lrange $code 0 2] [lindex $code end]
+} -result {{TCLPDF COLORFONT COMPOSITE} xor}
 
 test colorFontPaint-5.7a {Source Atop over a binary outline is a clip too} -body {
   # The same mode where the backdrop IS binary: the backdrop is drawn, and
@@ -1271,6 +1392,34 @@ test colorFontPaint-5.9 {Plus is refused by name} -body {
   $doc destroy
   lrange $code 0 2
 } -result {TCLPDF COLORFONT COMPOSITE}
+
+test colorFontPaint-5.11 {which construction each glyph got is counted} -body {
+  # A caller cannot see this from the outside, and it decides how the glyph
+  # comes out in the two readers that misplace a soft mask inside a Type 3
+  # glyph: bands, a clip and a constant /ca are read the same way by every
+  # reader there is, a soft mask is not. Three glyphs, three constructions -
+  # a Source In over an opaque outline is a clip, one over a PaintSolid at a
+  # flat alpha is a constant /ca, and one over an outline at an alpha of its
+  # own keeps the mask.
+  set doc [cpDocument {layers 0 3} layers [list \
+      [list composite 5 {glyph 1 {solid 1 1.0}} {glyph 2 {solid 0 1.0}}] \
+      [list glyph 1 [list composite 5 {glyph 2 {solid 1 1.0}} \
+          {solid 0 0.5}]] \
+      [list composite 5 {glyph 1 {solid 1 1.0}} {glyph 2 {solid 0 0.5}}]]]
+  set counts [$doc state colorFont]
+  $doc destroy
+  dict get $counts marks
+} -result {bands 0 clip 1 constant 1 mask 1}
+
+test colorFontPaint-5.12 {and a banded gradient is counted as bands} -body {
+  set doc [cpDocument [list glyph 1 [list linear pad \
+      {{0.0 1 1.0} {1.0 1 0.0}} {0 0} {800 0} {0 900}]]]
+  set counts [$doc state colorFont]
+  set masks [::tclpdfTest::objects $doc /SMask]
+  $doc destroy
+  list [dict get $counts marks bands] [dict get $counts marks mask] \
+      [llength $masks]
+} -result {1 0 0}
 
 test colorFontPaint-5.10 {a form inside a glyph has resources of its own} -body {
   # It may NOT point at the document's shared dictionary: that one carries

@@ -266,4 +266,86 @@ test annotShape-6.1 {the circle is drawn around its centre, not its corner} -bod
 } -result {1 1}
 
 
+# --- round 7: each kind takes its own geometry, and no more -----------------
+
+test annotShape-20.1 {a geometry option of another kind is refused by name} -body {
+    set wrong {}
+    foreach {label call} {
+        {line -at}        {annot line -from {10 10} -to {50 10} -at {5 5} -contents x}
+        {line -size}      {annot line -from {10 10} -to {50 10} -size {5 5} -contents x}
+        {line -points}    {annot line -from {10 10} -to {50 10} -points {{9 9}} -contents x}
+        {square -from}    {annot square -at {10 10} -size {30 10} -from {1 1} -contents x}
+        {square -points}  {annot square -at {10 10} -size {30 10} -points {{9 9}} -contents x}
+        {circle -to}      {annot circle -at {10 10} -size {30 10} -to {1 1} -contents x}
+        {polygon -at}     {annot polygon -points {{10 10} {30 10} {20 30}} -at {1 1} -contents x}
+        {polyline -size}  {annot polyline -points {{10 10} {30 10} {20 30}} -size {1 1} -contents x}
+    } {
+        set doc [tclpdf new -unit mm]
+        $doc page add
+        set outcome [::tclpdfTest::refuse {$doc {*}$call}]
+        $doc destroy
+        if {[lindex $outcome 0] != 1 || [lindex $outcome 1] != 1
+                || [lindex $outcome 2 1] ne "OPTION"} {
+            lappend wrong "$label: $outcome"
+        }
+    }
+    set wrong
+} -result {}
+
+test annotShape-20.2 {and the message lists the ones the kind does take} -body {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    catch {$doc annot line -from {10 10} -to {50 10} -at {5 5} -contents x} said
+    $doc destroy
+    list [string match {*known are: -from -to *} $said] \
+        [string match {*-at*} [string range $said \
+            [string first {known are:} $said] end]]
+} -result {1 0}
+
+test annotShape-20.3 {-appearance is not among them either} -body {
+    # doc/tclpdf.md used to count -appearance among the "shared options" of
+    # the geometry annotations; the picture of one follows from its geometry
+    # and there is nothing to hand over.
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    set outcome [::tclpdfTest::refuse \
+        {$doc annot square -at {10 10} -size {30 10} -appearance x -contents y}]
+    $doc destroy
+    lrange [lindex $outcome 2] 0 2
+} -result {TCLPDF OPTION UNKNOWN}
+
+test annotShape-20.4 {every kind still takes its own} -body {
+    set wrong {}
+    foreach {label call} {
+        line     {annot line -from {10 10} -to {50 10} -contents x}
+        square   {annot square -at {10 10} -size {30 10} -contents x}
+        circle   {annot circle -at {10 30} -size {30 10} -contents x}
+        polygon  {annot polygon -points {{10 60} {30 60} {20 80}} -contents x}
+        polyline {annot polyline -points {{10 90} {30 90} {20 110}} -contents x}
+    } {
+        set doc [tclpdf new -unit mm]
+        $doc page add
+        if {[catch {$doc {*}$call} message]} {
+            lappend wrong "$label: $message"
+        }
+        $doc destroy
+    }
+    set wrong
+} -result {}
+
+test annotShape-21.1 {a line width that is not a measurement is refused at the call} -body {
+    set wrong {}
+    foreach value {NaN Inf -Inf} {
+        set doc [tclpdf new -unit mm]
+        $doc page add
+        set outcome [::tclpdfTest::refuse \
+            {$doc annot line -from {10 10} -to {50 10} -width $value -contents x}]
+        $doc destroy
+        if {$outcome ne [list 1 1 [list TCLPDF ANNOT WIDTH line $value]]} {
+            lappend wrong "$value: $outcome"
+        }
+    }
+    set wrong
+} -result {}
+
 cleanupTests

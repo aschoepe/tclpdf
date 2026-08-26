@@ -50,6 +50,17 @@ set y [$doc text "1.  The clause begins at the margin and its continuation lines
     are indented under the text, not under the number." \
     -at [list 20 [expr {$y + 4}]] -width 80 -indent 8 -firstIndent -8]
 
+# -indentRight narrows the column from the OTHER side - a quotation set in
+# from both margins, without the block having to be measured and re-placed.
+set y [$doc text "A quotation is set in from both margins, which is one option\
+    on each side rather than a narrower -width at a moved -at." \
+    -at [list 20 [expr {$y + 4}]] -width 80 -indent 6 -indentRight 6 -align justify]
+
+# textHeight and textLines take it too, so a block is measured the way it
+# will be set.
+puts "indented both sides: [llength [$doc textLines $body -width 80 -indent 6 -indentRight 6]] lines,\
+    plain: [llength [$doc textLines $body -width 80]]"
+
 # What a paragraph would take, and how it would break, without drawing.
 puts "height: [format %.1f [$doc textHeight $body -width 80 -paragraphSpacing 2 -firstIndent 5]] mm"
 puts "lines:  [llength [$doc textLines $body -width 80]]"

@@ -196,4 +196,44 @@ proc ::tclpdf::gdef::keep {filter glyphs} {
   return $kept
 }
 
-package provide tclpdf::gdef 1.0
+# The same, with ONE position the filter may not hide - or -1 for none, which
+# is [keep] again.
+#
+# EXEMPT is what a SequenceLookupRecord needs, in GSUB and in GPOS alike. The
+# lookup a record names is applied AT a position the naming rule chose, and
+# HarfBuzz applies it there whatever the named lookup's own flag says: the
+# flag is asked in [apply_forward] on the outermost level and in [match_input]
+# for the FURTHER components of a sequence, never for the glyph the record
+# points at ([recurse] reaches [Lookup::dispatch] without going through
+# [check_glyph_property]). Forcing the position into the list says that once,
+# for both callers - gsubApply.tcl and kernGpos.tcl - rather than twice.
+#
+# The position goes in IN ORDER, so that everything downstream may go on
+# treating the list as sorted: a backtrack walks it backwards and a lookahead
+# forwards.
+proc ::tclpdf::gdef::visible {filter glyphs {exempt -1}} {
+  if {$filter eq {}} {
+    # Every index, and the glob pattern that matches anything is how Tcl
+    # counts them out without a loop of its own.
+    return [lsearch -all $glyphs *]
+  }
+  set kept [keep $filter $glyphs]
+  if {$exempt < 0 || [lsearch -exact -integer -sorted $kept $exempt] >= 0} {
+    return $kept
+  }
+  return [linsert $kept \
+      [expr {[lsearch -integer -sorted -bisect $kept $exempt] + 1}] $exempt]
+}
+
+# A filter that answers one question: is this glyph a MARK?
+#
+# gdef has no command of that name and does not need one - a filter built from
+# the ignoreMarks bit alone answers it exactly, through the same [ignored]
+# every lookup flag goes through. Two callers ask it (markPos.tcl, to find the
+# glyph a mark hangs on; kernGpos.tcl, to find the end of a cluster), which is
+# why the bit is named here rather than in either of them.
+proc ::tclpdf::gdef::marks {state} {
+  return [filter $state 0x0008]
+}
+
+package provide tclpdf::gdef 1.1

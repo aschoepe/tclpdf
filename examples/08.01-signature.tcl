@@ -55,7 +55,8 @@
 # rest. The entry is there for the reader as much as for the standard: ACROBAT
 # TAKES THE SIGNING TIME FROM /M ALONE and reports it as unavailable without
 # one, even though the CMS object states it and pdfsig prints it. -date sets a
-# fixed time instead, and -date {} leaves the entry out altogether.
+# fixed time instead, and -date {} leaves the entry out altogether; neither is
+# used here, and example 08.02 shows the first of them.
 #
 # THE CERTIFICATES ARE MADE HERE AND THROWN AWAY. A test CA and one end
 # certificate under it, generated into a temporary directory a moment before

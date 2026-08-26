@@ -1793,6 +1793,45 @@ oo::define ::tclpdf::document::document {
             [::tclpdf::color operator $parsed fill]" \
         family $family style $style size $size colour $colour]
   }
+
+  # CAN THE FIELD'S OWN FONT SET THIS TEXT? Asked at the call, of every
+  # string a field type will later draw into an appearance stream - a value,
+  # a default, a button's caption, an option of a choice.
+  #
+  # It has to be asked here and nowhere else. The appearance is drawn on
+  # beforeWrite, deep inside a form XObject, and the glyph run refuses a
+  # character the face has no code for - correctly, and far too late: the
+  # field is declared by then, [write] dies, and every further [write] of
+  # the same document dies in the same place, so the document cannot even be
+  # written without the field. Measured 2026-08-26 with a Cyrillic value in
+  # Helvetica, whose WinAnsiEncoding has no such character; an umlaut goes
+  # through, which is what makes the case easy to miss.
+  #
+  # [textWidth] IS the question. It puts the string through the very run the
+  # appearance will draw, refuses precisely what that would refuse, and says
+  # so in the words the caller needs to hear ("character U+041F is not
+  # available in WinAnsiEncoding ..."). Its answer, the width, is thrown
+  # away - measuring is not what this is for.
+  #
+  # An empty string asks nothing. A list of strings - a choice field's
+  # options - is handed over one string at a time by its own type, because
+  # only that type knows which half of an {export display} pair is drawn.
+  method FieldSettable {text font which what} {
+    if {$text eq {}} {
+      return
+    }
+    if {![catch {my textWidth $text -size [dict get $font size] \
+        -family [dict get $font family] -style [dict get $font style]} \
+        message options]} {
+      return
+    }
+    return -code error -errorcode [list TCLPDF FIELD GLYPH $which] \
+        "tclpdf: -$which of $what cannot be set in the font of the field:\
+        [string trim [string map {tclpdf: {}} $message]]. A field is drawn in\
+        the one face its /DA names (ISO 32000-2, 12.7.4.3) and there is no\
+        fallback inside an appearance stream - name a face that has the\
+        characters with -family, embedded with \"font embed\""
+  }
 }
 
-package provide tclpdf::field 1.0
+package provide tclpdf::field 1.1

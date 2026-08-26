@@ -253,6 +253,14 @@ oo::define ::tclpdf::document::document {
       # string (True), which is a value the table does not know.
       if {$key eq "Trapped"} {
         lappend pairs $key [::tclpdf::pdfObj name $value]
+      } elseif {$key in {CreationDate ModDate}} {
+        # In the spelling THIS file uses. The value was held against the
+        # version the document had when [info] took it, and the version can
+        # move afterwards - [ua -part 2] raises a 1.7 document to 2.0, and
+        # the CreationDate stamped in a few lines above is the package's own.
+        # See [respellDate] in document.tcl.
+        lappend pairs $key [my Str \
+            [::tclpdf::document::respellDate $value [$tclpdfWriter version]]]
       } else {
         lappend pairs $key [my Str $value]
       }
@@ -284,4 +292,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::output 1.8
+package provide tclpdf::output 1.9

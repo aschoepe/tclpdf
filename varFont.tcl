@@ -888,6 +888,168 @@ proc ::tclpdf::varFont::Packed {bytes at end count} {
 #
 # axes is a dictionary tag -> user value covering the axes the caller set; the
 # rest are at their defaults.
+# THE METRICS OF AN INSTANCE, out of MVAR: a dictionary of the four-letter
+# value tags to the delta, in font units, that the chosen point on the axes
+# adds to what the file's own tables state.
+#
+# WHY IT MATTERS. head, hhea and OS/2 hold ONE set of numbers, the default
+# instance's, exactly as glyf holds one set of outlines. The outlines are
+# moved by gvar; the metrics are moved by MVAR (ISO/IEC 14496-22, MVAR), and
+# a font descriptor written without it states the DEFAULT's ascender, cap
+# height and x height over the INSTANCE's glyphs. Measured on
+# BitcountPropSingle at wght 700 slnt -8: fontTools' instancer writes
+# sCapHeight 660, the descriptor said 600. Four of the eight variable faces
+# in this tree carry an MVAR.
+#
+# THE STORE IS THE SAME MACHINE gvar uses, one region at a time - a list of
+# regions, each with a start, a peak and an end per axis, and a scalar per
+# region computed exactly as [Scalar] computes it there. What differs is the
+# indexing: a value tag names an outer and an inner index into a table of
+# delta sets rather than a glyph.
+#
+# {} where the face has no MVAR, where its version is not 1, or where the
+# table is too short for what it announces - a metric that cannot be read is
+# left at the file's value rather than guessed at.
+proc ::tclpdf::varFont::metrics {parsed coordinates} {
+  # The table is located the way every other table is located in this module -
+  # out of the directory in the parsed dictionary - so that varFont keeps to
+  # the one thing it depends on and does not reach into the sfnt reader.
+  set tables [dict get $parsed tables]
+  if {![dict exists $tables MVAR]} {
+    return {}
+  }
+  lassign [dict get $tables MVAR] position length
+  if {$length < 12} {
+    return {}
+  }
+  set bytes [string range [dict get $parsed bytes] $position \
+      [expr {$position + $length - 1}]]
+  binary scan $bytes SuSuSuSuSuSu major minor - recordSize count storeOffset
+  if {$major != 1 || $count == 0 || $storeOffset == 0 || $recordSize < 8} {
+    return {}
+  }
+  set store [ItemStore $bytes $storeOffset $coordinates]
+  if {![llength $store]} {
+    return {}
+  }
+  set result {}
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {12 + $index * $recordSize}]
+    if {[binary scan $bytes @${at}a4SuSu tag outer inner] != 3} {
+      break
+    }
+    set delta [Delta $bytes $store $outer $inner]
+    if {$delta ne {}} {
+      dict set result $tag $delta
+    }
+  }
+  return $result
+}
+
+# An ItemVariationStore as {scalars sets}: the scalar of every region at the
+# chosen point, and one description per delta-set table - {itemCount
+# wordCount longWords regions at rowSize}.
+proc ::tclpdf::varFont::ItemStore {bytes at coordinates} {
+  if {[binary scan $bytes @${at}SuIuSu format regionOffset dataCount] != 3} {
+    return {}
+  }
+  if {$format != 1 || $dataCount == 0} {
+    return {}
+  }
+  set scalars [Regions $bytes [expr {$at + $regionOffset}] $coordinates]
+  if {![llength $scalars]} {
+    return {}
+  }
+  set sets {}
+  for {set index 0} {$index < $dataCount} {incr index} {
+    if {[binary scan $bytes @[expr {$at + 8 + $index * 4}]Iu dataOffset] != 1} {
+      return {}
+    }
+    set data [expr {$at + $dataOffset}]
+    if {[binary scan $bytes @${data}SuSuSu itemCount wordCount regionCount] != 3} {
+      return {}
+    }
+    set long [expr {($wordCount & 0x8000) != 0}]
+    set wordCount [expr {$wordCount & 0x7FFF}]
+    set regions {}
+    for {set region 0} {$region < $regionCount} {incr region} {
+      if {[binary scan $bytes @[expr {$data + 6 + $region * 2}]Su which] != 1} {
+        return {}
+      }
+      lappend regions $which
+    }
+    # A row holds wordCount WIDE deltas and the rest narrow ones - four and
+    # two bytes where LONG_WORDS is set, two and one where it is not.
+    set wide [expr {$long ? 4 : 2}]
+    set narrow [expr {$long ? 2 : 1}]
+    lappend sets [list $itemCount $wordCount $long $regions \
+        [expr {$data + 6 + $regionCount * 2}] \
+        [expr {$wordCount * $wide + ($regionCount - $wordCount) * $narrow}]]
+  }
+  return [list $scalars $sets]
+}
+
+# The scalar of every variation region at the chosen point - the computation
+# gvar makes per tuple, over the region list of an item variation store.
+proc ::tclpdf::varFont::Regions {bytes at coordinates} {
+  if {[binary scan $bytes @${at}SuSu axisCount regionCount] != 2} {
+    return {}
+  }
+  set scalars {}
+  for {set region 0} {$region < $regionCount} {incr region} {
+    set peak {}
+    set from {}
+    set to {}
+    for {set axis 0} {$axis < $axisCount} {incr axis} {
+      set entry [expr {$at + 4 + ($region * $axisCount + $axis) * 6}]
+      if {[binary scan $bytes @${entry}SSS start middle end] != 3} {
+        return {}
+      }
+      lappend from [expr {$start / 16384.0}]
+      lappend peak [expr {$middle / 16384.0}]
+      lappend to [expr {$end / 16384.0}]
+    }
+    lappend scalars [Scalar $peak $from $to $coordinates]
+  }
+  return $scalars
+}
+
+# One delta out of a store, by its outer and inner index, rounded to whole
+# font units - or {} where the indices point at no row.
+proc ::tclpdf::varFont::Delta {bytes store outer inner} {
+  lassign $store scalars sets
+  if {$outer >= [llength $sets]} {
+    return {}
+  }
+  lassign [lindex $sets $outer] itemCount wordCount long regions at rowSize
+  if {$inner >= $itemCount} {
+    return {}
+  }
+  set position [expr {$at + $inner * $rowSize}]
+  set total 0.0
+  set index 0
+  foreach region $regions {
+    if {$index < $wordCount} {
+      set format [expr {$long ? {I} : {S}}]
+      set width [expr {$long ? 4 : 2}]
+    } else {
+      set format [expr {$long ? {S} : {c}}]
+      set width [expr {$long ? 2 : 1}]
+    }
+    if {[binary scan $bytes @${position}$format value] != 1} {
+      return {}
+    }
+    incr position $width
+    incr index
+    set scalar [expr {$region < [llength $scalars] ?
+        [lindex $scalars $region] : 0.0}]
+    if {$scalar != 0.0} {
+      set total [expr {$total + $scalar * $value}]
+    }
+  }
+  return [Round $total]
+}
+
 proc ::tclpdf::varFont::postScriptName {parsed axes} {
   set full {}
   set defaults {}
@@ -968,4 +1130,4 @@ proc ::tclpdf::varFont::Fixed {value} {
   return [expr {$value / 65536.0}]
 }
 
-package provide tclpdf::varFont 1.2
+package provide tclpdf::varFont 1.3

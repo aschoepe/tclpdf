@@ -414,6 +414,43 @@ proc ::tclpdf::zugferd::identify {bytes} {
         "tclpdf: this XML is UTF-16 encoded - re-encode the\
         XML as UTF-8"
   }
+  # The same refusal one encoding further out. UTF-16 was caught because the
+  # BT-24 pattern below cannot match it; an ISO-8859-1 file matches
+  # perfectly and went in byte for byte, declaration and all - measured
+  # 2026-08-26, "Lieferänt" as the single byte E4 under
+  # encoding="ISO-8859-1", accepted, attached, Mustang "valid" and veraPDF
+  # 3b conformant. The invoice is then a file whose bytes say one thing and
+  # whose /Subtype text#2Fxml says another to every reader that does not
+  # open it as XML.
+  #
+  # Two halves, because a file can get this wrong in two ways: the
+  # DECLARATION may name an encoding that is not UTF-8, and the BYTES may
+  # not be UTF-8 whatever the declaration says (an ISO-8859-1 file with no
+  # declaration at all is the common one out of a spreadsheet export). A
+  # byte order mark before the declaration is fine and is what XML 1.0, 4.3.3
+  # provides for.
+  set head [string range $bytes 0 255]
+  if {[string range $head 0 2] eq "\xEF\xBB\xBF"} {
+    set head [string range $head 3 end]
+  }
+  if {[regexp -nocase {^<\?xml[^>]*?encoding[[:space:]]*=[[:space:]]*["']([^"']+)["']} \
+      $head -> declared] && ![string equal -nocase $declared utf-8]} {
+    return -code error -errorcode [list TCLPDF ZUGFERD XML encoding] \
+        "tclpdf: this XML declares encoding=\"$declared\" - the\
+        invoice is embedded byte for byte and is read as UTF-8 by every\
+        reader of the attachment, so re-encode the XML as UTF-8 and say so\
+        in its declaration"
+  }
+  # [encoding convertfrom] answers rather than throwing under 8.6, so the
+  # round trip is what says it: bytes that are not UTF-8 do not come back as
+  # themselves.
+  if {[catch {encoding convertfrom utf-8 $bytes} text]
+      || [encoding convertto utf-8 $text] ne $bytes} {
+    return -code error -errorcode [list TCLPDF ZUGFERD XML encoding] \
+        "tclpdf: this XML is not UTF-8 - it carries bytes no\
+        UTF-8 sequence can hold. Re-encode it as UTF-8 (encoding convertto\
+        utf-8 \[encoding convertfrom iso8859-1 \$bytes\] for a Latin-1 file)"
+  }
   if {![regexp {GuidelineSpecifiedDocumentContextParameter>.*?<ram:ID>([^<]+)<} \
       $bytes -> identifier]} {
     return -code error -errorcode [list TCLPDF ZUGFERD XML identifier] \
@@ -510,4 +547,4 @@ proc ::tclpdf::zugferd::properties {name type version conformance {family invoic
   return $xml
 }
 
-package provide tclpdf::zugferd 1.4
+package provide tclpdf::zugferd 1.5

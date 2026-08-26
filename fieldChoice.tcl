@@ -300,6 +300,19 @@ oo::define ::tclpdf::document::document {
     set font [my FieldFont [dict get $options family] \
         [dict get $options style] $size [dict get $options color] $what]
 
+    # AND EVERY WORD THE FIELD WILL SHOW has to be one that font can set.
+    # The DISPLAY half of each option is what is drawn (the export half never
+    # leaves the file), and a value typed into an editable combo is drawn as
+    # it stands. Asked here for the reason field.tcl gives at [FieldSettable]:
+    # the refusal from inside an appearance stream at write time cannot be
+    # taken back, and it makes the whole document unwritable.
+    foreach entry $entries {
+      my FieldSettable [lindex $entry 1] $font options $what
+    }
+    foreach {which text} [list value $free default $defaultFree] {
+      my FieldSettable $text $font $which $what
+    }
+
     set flagNames {}
     foreach {flag flagName} {readonly ReadOnly required Required
         noexport NoExport sort Sort commit CommitOnSelChange} {
@@ -697,4 +710,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldChoice 1.0
+package provide tclpdf::fieldChoice 1.1

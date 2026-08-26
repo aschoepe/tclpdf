@@ -202,11 +202,25 @@ oo::define ::tclpdf::document::document {
   method ShadingDefaults {kind} {
     set common {at {} size {} matrix {}}
     switch -- $kind {
-      axial - radial {
+      axial {
         # The order is the order the message "known are: ..." prints, and
         # -at and -size lead it because they are the two that are required.
+        #
+        # AXIAL AND RADIAL KEEP THEIR OWN LISTS. One list for the two took
+        # "-center" on an axial gradient and "-angle" on a radial one and
+        # wrote neither: the option was read by the branch of [ShadingCoords]
+        # that does not run, so the caller got a gradient built from the
+        # rectangle instead - and, because the resource name is a counter,
+        # not even a name that says so. Two lists is the same rule the mesh
+        # kinds already live under ("a -perRow on a gradient ... is a caller
+        # who has the wrong kind in mind"), applied to the two that look
+        # alike.
         return {at {} size {} colors {} stops {} angle 0 extend {1 1}
-            from {} to {} center {} radius {} innerRadius 0 focus {} matrix {}}
+            from {} to {} matrix {}}
+      }
+      radial {
+        return {at {} size {} colors {} stops {} extend {1 1}
+            center {} radius {} innerRadius 0 focus {} matrix {}}
       }
       function {return [dict merge $common {space {} expression {} domain {0 1 0 1}}]}
       triangles {return [dict merge $common {vertices {}}]}
@@ -278,6 +292,18 @@ oo::define ::tclpdf::document::document {
     # refusals in this module's own terms; what is left for [checkFit] here
     # is the sign.
     ::tclpdf::geometry checkFit $options $what
+    # -angle is read straight into a trigonometric function by
+    # [ShadingCoords], which is well past the point where anything can still
+    # be refused. Measured 2026-08-26: "-angle abc" answered "can't use
+    # non-numeric string as operand of \"*\"", "-angle NaN" {ARITH DOMAIN} -
+    # Tcl's words where this package promises its own.
+    if {[dict exists $options angle]} {
+      set angle [dict get $options angle]
+      if {![::tclpdf::option finite $angle]} {
+        return -code error -errorcode [list TCLPDF SHADING ARGUMENT angle] \
+            "tclpdf: -angle of $what is an angle in degrees, not \"$angle\""
+      }
+    }
     # /Extend is two booleans (Table 78, Table 80): whether the gradient
     # goes on beyond its start and its end. One value used to pass the
     # start and fail on the missing end - after everything was written.
@@ -418,6 +444,16 @@ oo::define ::tclpdf::document::document {
     # the gradient then lands far outside its shape, which fills flat in one
     # colour and reads as "gradients do not work" rather than as a doubled
     # transform.
+    #
+    # THAT HOLDS FOR EVERY ROAD TO THE END POINTS, the ones derived from
+    # -at and -size included. Until 2026-08-26 the -angle branch below called
+    # [coords] unconditionally while -from/-to and the radial branch asked
+    # [mapped]: with "-matrix {2 0 0 2 0 0} -at {0 0} -size {50 50} -angle
+    # 90" the /Coords came out [25 400 25 300] on a 200 pt page - the page
+    # height mirrored in and then doubled - and the rectangle filled flat
+    # blue. In the raw case the rectangle is read where the matrix maps
+    # from, and there y grows UPWARDS like everywhere in PDF space, so the
+    # end points are placed directly rather than mirrored.
     set mapped [expr {[dict get $options matrix] eq {}}]
     lassign [dict get $options at] left top
     lassign [dict get $options size] width height
@@ -439,10 +475,23 @@ oo::define ::tclpdf::document::document {
         set centreY [expr {$top + $height / 2.0}]
         set reach [expr {(abs($width * cos($radians)) +
             abs($height * sin($radians))) / 2.0}]
-        lassign [my coords [expr {$centreX - $reach * cos($radians)}] \
-            [expr {$centreY - $reach * sin($radians)}]] x0 y0
-        lassign [my coords [expr {$centreX + $reach * cos($radians)}] \
-            [expr {$centreY + $reach * sin($radians)}]] x1 y1
+        if {$mapped} {
+          lassign [my coords [expr {$centreX - $reach * cos($radians)}] \
+              [expr {$centreY - $reach * sin($radians)}]] x0 y0
+          lassign [my coords [expr {$centreX + $reach * cos($radians)}] \
+              [expr {$centreY + $reach * sin($radians)}]] x1 y1
+        } else {
+          # The same two points, written out in a space whose y already
+          # points up: [coords] mirrors y, so what it produces from
+          # "centre -/+ reach*sin" is "centre +/- reach*sin" once the page
+          # height is out of it. Both halves therefore keep the direction
+          # the angle names - 90 runs from the top of the rectangle to its
+          # bottom - and the numbers stay in the space the matrix maps from.
+          set x0 [expr {$centreX - $reach * cos($radians)}]
+          set y0 [expr {$centreY + $reach * sin($radians)}]
+          set x1 [expr {$centreX + $reach * cos($radians)}]
+          set y1 [expr {$centreY - $reach * sin($radians)}]
+        }
       }
       return [list [::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] \
           [::tclpdf::pdfObj num $x1] [::tclpdf::pdfObj num $y1]]
@@ -510,7 +559,10 @@ oo::define ::tclpdf::document::document {
     # function a reader has no way to evaluate.
     set previous {}
     foreach stop $stops {
-      if {![string is double -strict $stop] || $stop < 0 || $stop > 1} {
+      # [finite] and not "string is double": NaN passes that and compares
+      # false against both bounds, so it reached the Bounds array of the
+      # stitching function.
+      if {![::tclpdf::option finite $stop] || $stop < 0 || $stop > 1} {
         return -code error -errorcode [list TCLPDF SHADING STOPS range] \
             "tclpdf: -stops are numbers from 0 to 1, not \"$stop\""
       }
@@ -715,4 +767,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.7
+package provide tclpdf::shading 1.8

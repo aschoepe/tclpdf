@@ -197,6 +197,22 @@ proc ::tclpdf::imagePng::parse {bytes} {
           "tclpdf: damaged PNG - the PLTE chunk is $entries\
           bytes, not a multiple of 3"
     }
+    # And at most 256 entries (PNG 11.2.3), which is also the ceiling an
+    # /Indexed colour space has: hival is one byte short of the count and
+    # "shall be no greater than 255" (ISO 32000-2, 8.6.6.3). Until
+    # 2026-08-26 the count came out of the chunk length unchecked and a
+    # 300-entry palette was written as "/Indexed /DeviceRGB 299 <...>";
+    # pdfimages answered "Bad Indexed color space (invalid indexHigh value,
+    # was 299 using 255 to try to recover)" - a reader repairing a file this
+    # package produced. The same limit imageTiff already enforces for a TIFF
+    # palette, and named here in the same breath as the file that broke it.
+    if {$entries > 768} {
+      return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED PLTE] \
+          "tclpdf: damaged PNG - the PLTE chunk has\
+          [expr {$entries / 3}] entries and a palette holds at most 256\
+          (PNG 11.2.3); an indexed colour space cannot index past 255\
+          either (ISO 32000-2, 8.6.6.3)"
+    }
     set trns [string length [dict get $result transparency]]
     if {$trns > $entries / 3} {
       return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED tRNS] \
@@ -626,4 +642,4 @@ proc ::tclpdf::imagePng::stencilStreams {parsed {invert 0}} {
       Filter /FlateDecode DecodeParms [decodeParms $parsed]]]
 }
 
-package provide tclpdf::imagePng 1.7
+package provide tclpdf::imagePng 1.8

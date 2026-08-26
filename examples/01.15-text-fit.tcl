@@ -21,29 +21,32 @@
 #
 # THE ONE CASE WHERE ONE MEASUREMENT IS NOT ENOUGH is -spacing and
 # -wordSpacing: those are absolute point values that do NOT shrink with the
-# size, so the width is a linear function with a constant term. A second
+# size, so the width is a linear function with a constant term. The page
+# below shows the first of the two; -wordSpacing behaves identically and is
+# not drawn a second time. A second
 # measurement without them separates the flat part, and the size is SOLVED
 # for rather than divided out. The page below sets the same string three
 # times into the same box, with no spacing, with 1 pt and with 2 pt, and
 # prints how much of the box the gaps alone take: divided out rather than
 # solved for, the spaced lines would come out too large and run over.
 #
-# WHAT IT REFUSES, in the package's own words on the page. Two of them a
-# standard face can reach, and the page shows both: a box the flat part of the
-# spacing alone is wider than - no size, however small, brings that line
-# inside, because the spacing does not shrink with the letters - and -fit
+# WHAT IT REFUSES, in the package's own words on the page. Three of them a
+# standard face can reach, and the page shows all three: a box the flat part
+# of the spacing alone is wider than - no size, however small, brings that
+# line inside, because the spacing does not shrink with the letters -, -fit
 # together with -width, which are two different questions about the same
-# rectangle. A third one, -fit on a vertical line, is named but not shown: it
-# sits BEHIND another refusal, because -direction ttb needs an embedded face
-# and none of the fourteen standard ones has a vertical writing mode.
+# rectangle, and a box under the floor of one point (below). A fourth one,
+# -fit on a vertical line, is named but not shown: it sits BEHIND another
+# refusal, because -direction ttb needs an embedded face and none of the
+# fourteen standard ones has a vertical writing mode.
 #
-# AND ONE THING IT DOES NOT REFUSE, measured rather than assumed: a very small
-# box is fitted, not turned away. -fit {0.0001 0.0001} draws the line at a
-# size no reader can show. The refusal exists (TCLPDF TEXT FIT BOX), but it
-# is the LAST line of defence and fires only where the size would round to
-# nought in the content stream - below 0.00001 pt, which a millimetre box is
-# nowhere near. A box that came out of an arithmetic that went wrong is the
-# caller's to notice.
+# AND THE THIRD ONE A STANDARD FACE CAN REACH: a box too small for anything
+# this package can write into it. The floor is one point - the smallest size
+# a document can be meant to carry - and -fit {0.0001 0.0001} is nowhere near
+# it: it would have come out at two ten-thousandths of a point, written into
+# the file, valid, and invisible to every reader and every printer. A box
+# that small came out of an arithmetic that went wrong, and the page says so
+# rather than drawing a line nobody can see.
 #
 # AND THE FOUR ANCHORS, because -fit is where a caller first has to say what
 # the y coordinate means. They measure the FACE's line box - ascender above
@@ -89,8 +92,8 @@ $doc font -family helvetica -style bold -size 15
 $doc text "A line fitted into a box" -at {20 22}
 $doc font -style {} -size 8
 $doc text "Every line below is the same string at the same 20 pt, given a\
-    different box. The rectangle is drawn so the fit can be seen; the size\
-    and the narrowing the fitting chose are printed beside it." \
+    different box. The rectangle is drawn so the fit can be seen; the box asked\
+    for and the natural width of the line are printed beside it." \
     -at {20 29} -width 170
 
 set line "Rechnungsnummer 2026-0815"
@@ -156,7 +159,7 @@ foreach {what script} [list \
         {$doc text $line -at {20 200} -fit {20 8} -spacing 3} \
     "-fit together with -width" \
         {$doc text $line -at {20 200} -fit {60 8} -width 60} \
-    "and the one that is NOT refused: -fit {0.0001 0.0001}" \
+    "a box under the floor of one point: -fit {0.0001 0.0001}" \
         {$doc text $line -at {20 200} -fit {0.0001 0.0001}}] {
     $doc font -family helvetica -style italic -size 7.5
     $doc text $what -at [list 20 $y]

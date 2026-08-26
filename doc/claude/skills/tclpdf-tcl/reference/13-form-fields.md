@@ -60,8 +60,18 @@ refRow $doc y "Aktenzeichen" reference -value "AZ 2026/4711" -readonly 1 \
 refRow $doc y "Kennwort" secret -password 1 \
     -tooltip "Never stored in the file"               ;# /Ff 8192, and no /V
 
+# -readonly, -required and -noexport are the three flags of Table 227 that
+# EVERY type has. -noexport (/Ff 4) keeps the field out of what a reader
+# submits or exports - the field a form fills in for the eye and the receiving
+# side computes for itself.
+refRow $doc y "Summe" total -value "1.284,50" -readonly 1 -noexport 1 \
+    -tooltip "Worked out from the amounts above"      ;# /Ff 5: read-only and not exported
+
 $doc write [file join $out ref-13-text-fields.pdf]
+# [field list] and [field names] are the same word twice, in declaration
+# order - which is the order the names go into /Fields.
 puts "fields: [join [$doc field list] {, }]"
+puts "the same, under its other name: [expr {[$doc field names] eq [$doc field list]}]"
 # What was declared, read back out of the document rather than repeated from
 # the calls - name, type, page, rect, tooltip, flags, contents, label and the
 # type's own data, without the object numbers.
@@ -98,6 +108,15 @@ $doc text "SEPA-Lastschriftmandat erteilt" -at {28 31}
 $doc field check mandate -rect {20 28 4.5 4.5} -checked 1 -default 0 \
     -export yes -mark cross -required 1 \
     -tooltip "Without it nothing can be collected" {*}$box
+
+# -markSize is the size of that mark in the unit of the document, fitted to
+# the box where it is left out. The four marks are PATHS, not glyphs: a tick
+# set in a dingbat face would put a font into the file for four vector
+# strokes and tie a check box to the glyph repertoire of one face.
+$doc text "Kopie an die eigene Adresse" -at {28 38}
+$doc field check copy -rect {20 35 4.5 4.5} -checked 1 -export yes \
+    -mark square -markSize 1.8 -noexport 1 \
+    -tooltip "A smaller mark inside the same box" {*}$box
 
 # A RADIO SET IS ONE FIELD with a widget per button: 12.7.4.2 says a field
 # dictionary without a partial field name of its own "shall not be considered
@@ -184,6 +203,13 @@ puts "sorted: [lmap e [dict get [$doc field state country] data entries] {lindex
 $doc field combo colour -rect {20 60 40 7} -editable 1 -spellcheck 0 \
     -options {red green blue} -value "puce" \
     -tooltip "Colour, or one of your own" {*}$box
+
+# -commit is CommitOnSelChange: the value is handed over the moment a row is
+# picked rather than when the field loses the focus, which is what a choice
+# that another field is computed from wants.
+$doc field combo delivery -rect {100 20 62 7} -commit 1 \
+    -options {{P {Per Post}} {M {Per E-Mail}}} -value P \
+    -tooltip "Takes effect as soon as it is picked" {*}$box
 
 # -index NAMES THE SELECTION BY POSITION, counting from zero, and is the way
 # out where two options show the same text - /V would name both and neither.
@@ -569,4 +595,4 @@ Measured against two other readers over 65 documents and 703 fields - 56 foreign
 - **The reset action is the only form action written.** Submit needs a server, import-data a reader's file dialogue, and an ECMAScript action has its effects defined in ISO/DIS 21757-1 rather than in the PDF standard - so calculated fields do not exist here: compute the value in the script and write it as `-value`.
 - **Reading a form back is `::tclpdf::pdf fields`**, a package command taking a path rather than a document method, from the module `tclpdf::importInfo`: one dictionary per field, every key always there, `type` in the same words `field` takes (plus `signature`), `flags` as a list of names rather than the `/Ff` integer, `selected` as the export values in force, `widgets` one entry per annotation with the file's own `/Rect`. A file with no `/AcroForm` answers the empty list; an encrypted file and an XFA form without `-xfa 1` are refused with `TCLPDF IMPORT`.
 - **Not built, and named rather than half written**: XFA (and `/DS`, `/RV`, RichText), ECMAScript and calculated fields, submit-form and import-data, the icon entries of Table 192, and `/NeedAppearances`.
-- **`trap {TCLPDF FIELD}`** catches every field refusal that carries a code (a misspelt option *name* comes from the shared option parser and carries none, here as everywhere); the button types put their word after `TCLPDF FIELD BUTTON`. Most of them fall at the call and leave nothing behind; three fall at the **write** - `TCLPDF FIELD PAGE` for a page that never came, `TCLPDF FIELD RECT OUTSIDE` for a widget entirely beside its page, and `TCLPDF FIELD BUTTON PDFA` - and a refused write leaves no file. A version floor answers `TCLPDF VERSION` with the version to raise the document to.
+- **`trap {TCLPDF FIELD}`** catches every field refusal that carries a code (a misspelt option *name* is refused by the shared option parser under `TCLPDF OPTION UNKNOWN`, here as everywhere); the button types put their word after `TCLPDF FIELD BUTTON`. Most of them fall at the call and leave nothing behind; three fall at the **write** - `TCLPDF FIELD PAGE` for a page that never came, `TCLPDF FIELD RECT OUTSIDE` for a widget entirely beside its page, and `TCLPDF FIELD BUTTON PDFA` - and a refused write leaves no file. A version floor answers `TCLPDF VERSION` with the version to raise the document to.

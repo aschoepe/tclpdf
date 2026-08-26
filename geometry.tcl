@@ -22,6 +22,11 @@ package require Tcl 8.6.11-
 # here writes PDF, and pdfObj depends on nothing but Tcl, so this stays the
 # one-way street the infrastructure is meant to be.
 package require tclpdf::pdfObj 1.0-
+# And option, for the one predicate that answers "is this a number something
+# can be measured in" - NaN and Inf are doubles to Tcl and are neither a
+# length nor a factor. option.tcl depends on nothing but Tcl, so the
+# infrastructure stays a one-way street.
+package require tclpdf::option 1.0-
 
 namespace eval ::tclpdf::geometry {
   namespace export {[a-z]*}
@@ -208,13 +213,18 @@ proc ::tclpdf::geometry::apply {matrix x y} {
 # Judged by [singular], which asks the question of the numbers as they reach
 # the file rather than of the ones in memory: a determinant of 1e-30 is a
 # matrix no reader can invert either.
-proc ::tclpdf::geometry::invert {matrix} {
+# The fourth word of TCLPDF GEOMETRY MATRIX is the OWNER of the matrix -
+# "transform", "pattern \"hatch\"", "shading axial", "invert" - everywhere in
+# this module. It named the KIND of mistake here until 2026-08-26 ("shape",
+# "singular") and the owner four lines further down in [check], so one code
+# carried two different sorts of fact and a handler could read neither.
+proc ::tclpdf::geometry::invert {matrix {what invert}} {
   if {[llength $matrix] != 6} {
-    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX shape] \
+    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX $what] \
         "tclpdf: a matrix is six numbers {a b c d e f}, not \"$matrix\""
   }
   if {[singular $matrix]} {
-    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX singular] \
+    return -code error -errorcode [list TCLPDF GEOMETRY MATRIX $what] \
         "tclpdf: the matrix {$matrix} is singular and cannot be inverted -\
         it maps the plane onto a line, and nothing maps back"
   }
@@ -349,7 +359,7 @@ proc ::tclpdf::geometry::check {matrix what} {
         not [llength $matrix]"
   }
   foreach number $matrix {
-    if {![string is double -strict $number] || [catch {expr {$number - $number}}]} {
+    if {![::tclpdf::option finite $number]} {
       return -code error -errorcode [list TCLPDF GEOMETRY MATRIX $what] \
           "tclpdf: -matrix of $what takes numbers, not \"$number\""
     }
@@ -391,25 +401,49 @@ proc ::tclpdf::geometry::checkFit {options what} {
           \"$size\""
     }
     foreach value $size {
-      if {![string is double -strict $value] || $value <= 0} {
+      if {![::tclpdf::option finite $value] || $value <= 0} {
         return -code error -errorcode [list TCLPDF GEOMETRY SIZE $what] \
             "tclpdf: -size of $what takes lengths above zero,\
             not \"$value\""
       }
     }
   }
+  # AND ABOVE ZERO AS THE FILE WOULD WRITE IT. "string is double" is true for
+  # NaN and Inf and "<= 0" is false for both, so a -dpi of NaN and one of Inf
+  # walked past this and died in the arithmetic that places the picture;
+  # 1e-9, which is a number and is above zero, placed a photograph at
+  # 46 080 000 000 000 points - measured 2026-08-26, and a number no
+  # 32-bit reader can hold (Annex C.2). Five decimals is what a PDF real
+  # carries (7.3.3), so a factor that rounds to nothing IS nothing - the
+  # same cut [singular] draws for a matrix, in the same words.
   foreach {key noun} {width length height length scale factor dpi resolution} {
     if {![dict exists $options $key] || [dict get $options $key] eq {}} {
       continue
     }
     set value [dict get $options $key]
-    if {![string is double -strict $value] || $value <= 0} {
+    if {![::tclpdf::option finite $value] || $value <= 0} {
       return -code error -errorcode [list TCLPDF GEOMETRY ARGUMENT $key] \
           "tclpdf: -$key of $what is a $noun above zero, not\
           \"$value\""
+    }
+    # -dpi ALONE GETS A SECOND QUESTION, and it is the one the others do not
+    # need: a resolution divides. The size a picture comes out at is
+    # pixels * 72 / dpi, so a small -dpi is not a small placement but an
+    # enormous one - "-dpi 1e-9" put a photograph 46 080 000 000 000 points
+    # wide (measured 2026-08-26), past what Annex C.2 gives an integer and
+    # past what any reader lays out. The other options are held to the size
+    # they PRODUCE, where each caller measures it ([image place] does, and
+    # says so in its own words); this one is held to the value, because 1e-9
+    # is already zero as a PDF real (7.3.3) and a divisor of zero is not a
+    # resolution.
+    if {$key eq "dpi" && [::tclpdf::pdfObj num $value] == 0} {
+      return -code error -errorcode [list TCLPDF GEOMETRY ARGUMENT $key] \
+          "tclpdf: -dpi of $what is \"$value\", which is 0 as the file would\
+          write it (five decimals, 7.3.3) - dividing by it places the\
+          picture kilometres wide, past what a PDF number holds (Annex C.2)"
     }
   }
   return
 }
 
-package provide tclpdf::geometry 1.5
+package provide tclpdf::geometry 1.6

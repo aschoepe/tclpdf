@@ -39,11 +39,80 @@ oo::define ::tclpdf::document::document {
   # q and Q, and with them the colours [style] set: a reader restores its
   # colour on Q, so what this package remembers about them has to follow.
   method save {} {
-    my content "q\n"
     set stack [my streamState styleStack]
-    lappend stack [list [my streamState styleFill] [my streamState styleStroke]]
+    # Annex C.2, Table C.1: "Nesting depth of graphics state (q) ... 28". A
+    # deeper stack is not a syntax error and no validator objects - it is a
+    # limit a conforming reader is allowed to stop at, and what it does with
+    # the twenty-ninth "q" is its own business. Refused rather than repaired,
+    # like every other Annex C limit this package holds to (the page frame,
+    # the real range, 32 DeviceN colourants, the name length in pdfObj).
+    # Counted BEFORE the operator is written: a refused save leaves nothing.
+    #
+    # Only the saves of this API are counted. A glyph description or a
+    # colour font's paint tree writes its own q/Q into a stream of its own,
+    # which starts at depth zero when a reader executes it.
+    if {[llength $stack] >= 28} {
+      return -code error -errorcode [list TCLPDF GRAPHICS SAVE depth] \
+          "tclpdf: 28 nested saves are open and that is as deep as the\
+          graphics state stack goes (ISO 32000-1, Annex C.2) - close one\
+          with \"restore\" before opening another"
+    }
+    my content "q\n"
+    lappend stack [list [my streamState styleFill] [my streamState styleStroke] \
+        [my streamState overprintFill]]
     my streamState styleStack $stack
+    # A stream that ends with a save still open is refused, and the refusal
+    # has to name the place: the write is far from the call, and "one save
+    # too many" without a page number is a message nobody can act on. See
+    # [GraphicsBalance]. Subscribed on the first save and never again - the
+    # arrangement annot.tcl keeps for its own write check.
+    if {[my state graphicsHooked] eq {}} {
+      my state graphicsHooked 1
+      my onSelf beforeWrite GraphicsBeforeWrite
+    }
     return
+  }
+
+  # Every page, at the write: a "q" that no "Q" answers.
+  #
+  # 8.4.2 gives q and Q as a pair. An unclosed one at the END of a page
+  # stream carries nothing into anything - the stream is over - but it is
+  # still a state the file opens and never closes, and it is almost always
+  # the symptom of a [restore] that was skipped over by an error path, with
+  # everything after it drawn in the wrong state. The mirror refusal
+  # ([restore] without a save) has been made since 2026-08-18; this is the
+  # other direction, and it is made in the same words.
+  #
+  # At the write rather than at [page add], because a caller may add a page,
+  # go back to an earlier one and close the bracket there - the page is not
+  # finished until the document is.
+  method GraphicsBeforeWrite {} {
+    set open {}
+    for {set index 0} {$index < [my page count]} {incr index} {
+      set page [my Page $index]
+      if {![dict exists $page styleStack]} {
+        continue
+      }
+      set depth [llength [dict get $page styleStack]]
+      if {$depth} {
+        lappend open "page [expr {$index + 1}] ($depth)"
+      }
+    }
+    if {[llength $open]} {
+      my GraphicsBalance [join $open {, }]
+    }
+    return
+  }
+
+  # The wording, in one place: the page write and the two stream builders
+  # (a form XObject, a tiling pattern) all end a stream and all ask the same
+  # question of it.
+  method GraphicsBalance {where} {
+    return -code error -errorcode [list TCLPDF GRAPHICS SAVE unbalanced] \
+        "tclpdf: a save is still open where the content stream ends -\
+        $where; q and Q are a pair (ISO 32000-1, 8.4.2), and a stream that\
+        opens a graphics state and never closes it is a restore that was\
+        skipped"
   }
 
   # Refused without a [save] to answer: the stack of remembered colours is
@@ -59,9 +128,10 @@ oo::define ::tclpdf::document::document {
           stack of this stream is empty (8.4.2)"
     }
     my content "Q\n"
-    lassign [lindex $stack end] fill stroke
+    lassign [lindex $stack end] fill stroke overprintFill
     my streamState styleFill $fill
     my streamState styleStroke $stroke
+    my streamState overprintFill $overprintFill
     my streamState styleStack [lrange $stack 0 end-1]
     return
   }
@@ -114,15 +184,18 @@ oo::define ::tclpdf::document::document {
       set skew {}
       set scale {}
       if {[dict get $options translate] ne {}} {
-        lassign [dict get $options translate] dx dy
+        lassign [my GraphicsNumbers [dict get $options translate] -translate 2 \
+            "{dx dy}"] dx dy
         set translate [::tclpdf::geometry translate [my distance $dx] \
             [expr {-[my distance $dy]}]]
       }
       if {[dict get $options rotate] ne {}} {
-        set rotate [::tclpdf::geometry rotate [dict get $options rotate]]
+        set rotate [::tclpdf::geometry rotate [my GraphicsNumbers \
+            [dict get $options rotate] -rotate 1 "an angle in degrees"]]
       }
       if {[dict get $options skew] ne {}} {
-        lassign [dict get $options skew] alpha beta
+        lassign [my GraphicsNumbers [dict get $options skew] -skew 2 \
+            "two angles in degrees {alpha beta}"] alpha beta
         set skew [::tclpdf::geometry skew $alpha $beta]
       }
       if {[dict get $options scale] ne {}} {
@@ -136,7 +209,10 @@ oo::define ::tclpdf::document::document {
         # it collapses to a line or a point, and there is no way back to the
         # page from there. Negative is fine - that is a mirror.
         foreach factor $scale {
-          if {![string is double -strict $factor] || $factor == 0} {
+          # [finite] and not "string is double": NaN and Inf are doubles to
+          # Tcl, "== 0" is false for both, and the cm then carried a factor
+          # that places nothing (measured 2026-08-26: {ARITH DOMAIN}).
+          if {![::tclpdf::option finite $factor] || $factor == 0} {
             return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT scale] \
                 "tclpdf: -scale takes non-zero factors,\
                 not \"$factor\""
@@ -170,8 +246,51 @@ oo::define ::tclpdf::document::document {
             [::tclpdf::geometry translate $px $py]]
       }
     }
+    # AND THE MATRIX THE PARTS COMPOSE TO IS HELD TO WHAT A RAW -matrix IS
+    # HELD TO. -matrix goes through [geometry check] above (8.3.4: a singular
+    # cm folds everything drawn after it onto a line, with no way back to the
+    # page), and the parts used to escape it: "transform -skew {45 45}" wrote
+    # "1 1 1 1 0 0 cm", determinant zero, measured 2026-08-26 - tan 45 is 1
+    # in both places, and two equal columns are a collapse. Asked here, of
+    # the composed matrix and of the numbers as they will be WRITTEN
+    # ([geometry singular]), because that is where a combination that is
+    # sound part by part can still collapse.
+    if {[::tclpdf::geometry singular $matrix]} {
+      return -code error -errorcode [list TCLPDF GEOMETRY MATRIX transform] \
+          "tclpdf: transform composes to the singular matrix {$matrix} -\
+          a*d - b*c must not be zero, or everything drawn under it collapses\
+          onto a line; -skew {45 45} is the usual way there, tan 45 being 1\
+          on both axes"
+    }
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
     return $matrix
+  }
+
+  # The numbers of -translate, -rotate and -skew: as many as the option
+  # takes, and every one of them a number something can be measured in.
+  #
+  # Written once because the three used to be read by a bare [lassign] and a
+  # bare [dict get]: "-translate {1 2 3}" dropped the third word in silence,
+  # "-rotate NaN" and "-skew {a b}" died inside the trigonometry with Tcl's
+  # own words - measured 2026-08-26 - against the promise that a value that
+  # is not a measurement is turned away where it is READ (doc, "Numbers").
+  # "shape" is what the option takes, for the message.
+  method GraphicsNumbers {value option count shape} {
+    if {[llength $value] != $count} {
+      return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT \
+          [string trimleft $option -]] \
+          "tclpdf: $option of transform is $shape, not \"$value\""
+    }
+    foreach number $value {
+      if {![::tclpdf::option finite $number]} {
+        return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT \
+            [string trimleft $option -]] \
+            "tclpdf: $option of transform takes finite numbers, not\
+            \"$number\" - NaN and Inf are doubles to Tcl and place nothing\
+            on a page"
+      }
+    }
+    return $value
   }
 
   # Set colour, line width, dash pattern, caps and joins without drawing.
@@ -251,12 +370,51 @@ oo::define ::tclpdf::document::document {
   # change. A call that names nothing at all is refused rather than writing a
   # resource that changes nothing - the lesson [GraphicsOpacity] already
   # carries.
+  #
+  # WHAT /OP ALONE MEANS, and why -stroke is not simply /OP: Table 58 says of
+  # OP "Specifying an OP entry shall set BOTH parameters unless there is also
+  # an op entry in the same graphics state parameter dictionary", and of op
+  # "If this entry is absent, the OP entry, if any, shall also set this
+  # parameter." So a dictionary carrying /OP and no /op governs filling as
+  # well - measured with poppler on 2026-08-26, "overprint -stroke 1" over a
+  # cyan panel turned a yellow FILL green. That is the opposite of what
+  # "an option left out is not written" promises, so the fill side is
+  # written out whenever the stroke side is named: from -fill if the call
+  # names it, from the fill overprint in force otherwise. See
+  # [GraphicsOverprint].
   method overprint {args} {
     set options [::tclpdf::option parse {fill {} stroke {} mode {}} \
         $args overprint]
     set name [my GraphicsOverprint $options]
     my content "[::tclpdf::pdfObj name $name] gs\n"
+    # Unlike a shape's -overprint this is NOT inside a q/Q: it stands until
+    # changed, and the next call that names only -stroke has to know what
+    # the fill side is. Remembered per stream and taken back by [restore],
+    # exactly as the colours of [style] are.
+    my GraphicsOverprintRemember $options
     return $name
+  }
+
+  # What the fill side of the overprint is at this moment in this stream, as
+  # a boolean. Empty - never set - is false: 8.6.7 gives both parameters an
+  # initial value of false.
+  method GraphicsOverprintFill {} {
+    set value [my streamState overprintFill]
+    return [expr {$value eq {} ? 0 : $value}]
+  }
+
+  # And the record. Only calls that stand OUTSIDE a q/Q write it: a shape's
+  # own -overprint is taken back by the Q that closes the shape, and
+  # remembering it would leave the document believing in a state the reader
+  # has already dropped.
+  # Only -fill moves it. A call that names -stroke alone writes the fill side
+  # out (see [GraphicsOverprint]) but writes it UNCHANGED, whichever of the
+  # two spellings the dictionary uses - so there is nothing to record.
+  method GraphicsOverprintRemember {options} {
+    if {[dict get $options fill] ne {}} {
+      my streamState overprintFill [expr {[dict get $options fill] ? 1 : 0}]
+    }
+    return
   }
 
   # The resource without the operator, so a shape can put its "gs" inside its
@@ -264,9 +422,10 @@ oo::define ::tclpdf::document::document {
   # reason: an overprint that leaks into the rest of the page is worse than
   # one that was never set, because nothing on screen shows it.
   method GraphicsOverprint {options} {
-    set pairs {Type /ExtGState}
-    set name GO
-    foreach {option key} {stroke OP fill op} {
+    # Every value first, nothing written and nothing recorded: a refused
+    # -mode used to leave an ExtGState behind for the -fill before it.
+    set values {}
+    foreach option {stroke fill} {
       set value [dict get $options $option]
       if {$value eq {}} {
         continue
@@ -276,9 +435,34 @@ oo::define ::tclpdf::document::document {
             -errorcode [list TCLPDF GRAPHICS OVERPRINT $option] \
             "tclpdf: overprint -$option is true or false, not \"$value\""
       }
-      set flag [expr {$value ? {true} : {false}}]
-      lappend pairs $key $flag
-      append name [string totitle $option] $flag
+      dict set values $option [expr {$value ? 1 : 0}]
+    }
+    # THE FILL SIDE IS NEVER LEFT TO /OP (Table 58, see [overprint]). Naming
+    # the stroke therefore says something about the fill as well, and what it
+    # says is "unchanged": the value in force in this stream.
+    if {[dict exists $values stroke] && ![dict exists $values fill]} {
+      dict set values fill [my GraphicsOverprintFill]
+    }
+    set pairs {Type /ExtGState}
+    set name GO
+    # Both parameters and the same answer for each: that is what /OP alone
+    # means, word for word, and writing it that way keeps the dictionary
+    # inside PDF 1.2, where there is no /op at all. Two different answers, or
+    # only one of the two known, need the two keys - and with them 1.3.
+    if {[dict size $values] == 2
+        && [dict get $values stroke] == [dict get $values fill]} {
+      set flag [expr {[dict get $values stroke] ? {true} : {false}}]
+      lappend pairs OP $flag
+      append name Both $flag
+    } else {
+      foreach {option key} {stroke OP fill op} {
+        if {![dict exists $values $option]} {
+          continue
+        }
+        set flag [expr {[dict get $values $option] ? {true} : {false}}]
+        lappend pairs $key $flag
+        append name [string totitle $option] $flag
+      }
     }
     set mode [dict get $options mode]
     if {$mode ne {}} {
@@ -300,12 +484,13 @@ oo::define ::tclpdf::document::document {
           changes nothing"
     }
     # /OP is PDF 1.2, /op and /OPM are 1.3 (Table 58). Asked for what the
-    # call actually writes rather than for the highest of the three: a
-    # document that only sets the stroke has no reason to be raised.
-    if {[dict get $options fill] ne {} || $mode ne {}} {
-      my RequireVersion 1.3 "overprint -fill and -mode"
+    # call actually WRITES rather than for the options it was given: a
+    # dictionary of /OP alone is a 1.2 dictionary whichever option produced
+    # it, and one that has to spell the two sides apart is a 1.3 one.
+    if {[lsearch -exact $pairs op] >= 0 || $mode ne {}} {
+      my RequireVersion 1.3 "overprint with a fill side of its own, and -mode"
     } else {
-      my RequireVersion 1.2 "overprint -stroke"
+      my RequireVersion 1.2 "overprint"
     }
     if {[my resource ExtGState $name] eq {}} {
       my resource ExtGState $name [[my writer] ref [[my writer] add \
@@ -357,7 +542,11 @@ oo::define ::tclpdf::document::document {
   # page. Writing it from here directly used to place it before the "q" that
   # GraphicsStyle now emits, which is exactly the leak this separation ends.
   method GraphicsOpacity {value {which both}} {
-    if {![string is double -strict $value] || $value < 0 || $value > 1} {
+    # [finite] rather than "string is double": NaN is a double to Tcl and
+    # compares false against BOTH bounds, so "< 0 || > 1" let it through and
+    # the ExtGState was written with a /ca of NaN - measured 2026-08-26,
+    # "opacity NaN" answered {TCL VALUE DOUBLE NAN} from deep inside [num].
+    if {![::tclpdf::option finite $value] || $value < 0 || $value > 1} {
       return -code error -errorcode [list TCLPDF GRAPHICS OPACITY value] \
           "tclpdf: opacity is a number from 0 to 1, not \"$value\""
     }
@@ -457,8 +646,17 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $options overprint]
         && [dict get $options overprint] ne {}} {
       set value [dict get $options overprint]
-      append result "[::tclpdf::pdfObj name [my GraphicsOverprint \
-          [dict create fill $value stroke $value mode {}]]] gs\n"
+      set overprintOptions [dict create fill $value stroke $value mode {}]
+      append result "[::tclpdf::pdfObj name \
+          [my GraphicsOverprint $overprintOptions]] gs\n"
+      # [style] sets the state until changed and is not wrapped in q/Q, so
+      # what it says about the fill side has to be remembered - the next
+      # [overprint -stroke] reads it. A shape's own -overprint is inside the
+      # bracket and is taken back by its Q; remembering that one would leave
+      # the document believing in a state the reader has dropped.
+      if {!$guard} {
+        my GraphicsOverprintRemember $overprintOptions
+      }
     }
     if {[dict exists $options width] && [dict get $options width] ne {}} {
       # Zero is allowed and means the thinnest line the device can draw
@@ -521,8 +719,12 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $options miter] && [dict get $options miter] ne {}} {
       # The limit is the ratio of miter length to line width and cannot be
       # under 1 (8.4.3.5) - 1 already bevels every join.
+      # NaN passes "string is double" and compares false against every
+      # bound, so "< 1" waved it through and it died in [num] - or, worse,
+      # reached the file. Asked with the one predicate the package has for
+      # the question (option.tcl).
       set miter [dict get $options miter]
-      if {![string is double -strict $miter] || $miter < 1} {
+      if {![::tclpdf::option finite $miter] || $miter < 1} {
         return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT miter] \
             "tclpdf: -miter is a number of 1 or more, not \"$miter\""
       }
@@ -662,4 +864,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.7
+package provide tclpdf::graphics 1.8

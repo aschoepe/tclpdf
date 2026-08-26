@@ -22,6 +22,9 @@
 #   no generic H       H1 to Hn, because H meant "whatever the nesting
 #                      implies" and the nesting rarely said what was meant
 #   Desc everywhere    every attachment needs a description
+#   Ref on a TOCI      a table of contents says which element each entry
+#                      points at (8.2.5.8) - page 3, and the one thing here
+#                      that is an entry rather than a type
 #
 # And what does NOT change: the structure tree is the same tree. A document
 # written for UA-1 needs no redrawing - it needs -part 2.
@@ -268,7 +271,8 @@ $doc text "A quotation is part of the argument; a DocumentFragment is a piece\
     -at {20 148} -width 170
 
 $doc rect -at {20 164} -size {170 18} -stroke {0.6 0.6 0.65} -width 0.3
-$doc structure DocumentFragment -lang de-DE -title "Aus Beispiel 5.7" -script {
+$doc structure DocumentFragment -name auszug -lang de-DE \
+    -title "Aus Beispiel 5.7" -script {
   $doc structure P -script {
     $doc font -family face -size 9 -color {0.25 0.25 0.3}
     $doc text "Titel, Sprache, Schrifteinbettung, Überschriftenfolge,\
@@ -278,6 +282,44 @@ $doc structure DocumentFragment -lang de-DE -title "Aus Beispiel 5.7" -script {
   }
 }
 $doc font -family face -size 10 -color black
+
+exampleFooter $doc face
+
+# -- a table of contents, which part 2 asks a question about ---------------
+
+# A third page for the one element of the 2.0 vocabulary that is not a type
+# but an ENTRY: Ref (Table 355), what a structure element points at.
+#
+# PDF/UA-2 8.2.5.8 is the reason it matters here: "Each TOCI in the table of
+# contents shall identify the target of the reference using the Ref entry,
+# either directly on the TOCI structure element itself or on one of its
+# child structure elements". A table of contents without it is a list of
+# headings a reader cannot follow, and the write refuses the claim by name -
+# so this page is also what that refusal looks like when it is answered.
+#
+# -ref names the target by the -name it was given, exactly as [link
+# -structure] does, and it may point forward: the entries below are written
+# before nothing, but a real table of contents stands on page 1 and names
+# sections that come later.
+$doc page add
+
+$doc font -family faceBold -size 11
+$doc text "A table of contents" -at {20 25} -tag H2
+
+$doc font -family face -size 10
+$doc text "Each entry names the element it stands for, so that a reader can\
+    follow it without a page number. The two below point at the section on\
+    page 1 and at the fragment on page 2 - by name, not by position."\
+    -at {20 33} -width 170
+
+$doc structure TOC -script {
+  $doc structure TOCI -ref baum -script {
+    $doc text "What the structure tree carries" -at {24 48}
+  }
+  $doc structure TOCI -ref auszug -script {
+    $doc text "A fragment of another document" -at {24 55}
+  }
+}
 
 exampleFooter $doc face
 

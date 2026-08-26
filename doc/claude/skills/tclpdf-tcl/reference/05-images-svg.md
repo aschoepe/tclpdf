@@ -176,6 +176,40 @@ $doc image place faded -at {145 205} -width 40
 puts [$doc image info ring]        ;# ... stencil 1 mask {} interpolate 0 bitDepth 1 ...
 ```
 
+### The picture that has no object: `-inline`
+
+```tcl
+# -inline 1 writes the picture INTO the content stream (ISO 32000-2, 8.9.7):
+# BI, an abbreviated dictionary, ID, the bytes, EI - no object number, no
+# entry in the page's resources, no line in the cross-reference table, and no
+# way of using it twice, so a picture placed inline five times travels five
+# times. That is its whole case and its whole cost, and it is why it is ASKED
+# for rather than decided by size: whether a picture occurs once is something
+# the caller knows and the writer does not.
+$doc style -fill {0.20 0.45 0.30}
+$doc image place ring -at {20 232} -size {14 14} -inline 1
+$doc style -fill {0.70 0.25 0.15}
+$doc image place ring -at {38 232} -size {14 14} -inline 1   ;# a second copy of the bytes
+$doc style -fill black
+$doc image draw [file join $out ref-05-ring.png] -at {56 232} -size {14 14} \
+    -inline 1                        ;# embed and place in one call: /CS /G, /BPC 1
+
+# The dictionary is written in the abbreviations of Table 92 - /W, /H, /BPC,
+# /CS /G, /F /Fl - and the operator is what stands in the page.
+regexp {BI\n([^\n]*)\n} [$doc page content] -> abbreviated
+puts "inline dictionary: $abbreviated"
+
+# At most 4096 bytes of image data - the line the standard itself names
+# twice - and a larger picture is REFUSED rather than quietly written as an
+# XObject: a request the caller could not tell had been ignored is worse than
+# a refusal. Refused by name as well: masked, transparent of its own accord,
+# ICC-tagged, or a stack (a striped TIFF is several images and BI ... EI is
+# one).
+if {[catch {$doc image place photo -at {80 232} -width 30 -inline 1} message]} {
+    puts "refused, as it should be: $message"
+}
+```
+
 The two need not be the same size - every image is defined on the unit square, so their edges coincide on the page. Refused, each naming the reason: a JPEG as a stencil (`DCTDecode` always delivers 8 bits), a PNG that is not one bit per sample and one sample per pixel, a mask that is not greyscale or that carries an ICC profile (`-icc 0` is the way out) or transparency of its own, a picture that already brings its own alpha channel asked to wear a second mask, and a stencil asked to wear one at all. Under `pdfa` a stencil passes under **every** output intent: it brings no colour space to be judged - what is judged is the fill colour it lets through.
 
 ## SVG: real vectors, not a picture
@@ -199,7 +233,7 @@ $doc svg -data $markup -at {80 110} -width 20 -alt "Status: OK"
 $doc svg -data $markup -at {105 110} -size {30 15} -artifact 1     ;# decoration, said so
 ```
 
-Text in a drawing uses the same faces as `text`: `font-family` is a wish list, the first name that resolves wins, an embedded alias resolves; a list nobody satisfies ends at `helvetica`, which a PDF/A document then refuses at the write - name a face the document has. `font-weight`/`font-style` are not read. `svg size` takes a file name only; for markup, the size is what drawing returns.
+Text in a drawing uses the same faces as `text`: `font-family` is a wish list, the first name that resolves wins, an embedded alias resolves; a list nobody satisfies ends at `helvetica`, which a PDF/A document then refuses at the write - name a face the document has. `font-weight` is read (bold, bolder, or a number from 600 up); `font-style` is not. `svg size` takes a file name only; for markup, the size is what drawing returns.
 
 ## Barcodes through tzint (optional, a C extension)
 

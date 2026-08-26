@@ -1438,6 +1438,27 @@ test svg-weight-31.4 {a family with no bold cut is reported} -constraints haveFa
   list [llength $names] $info
 } -result {1 {font-weight 1}}
 
+test svg-weight-31.4a {a standard family with one cut is reported, not refused} -body {
+  # THE THIRD ANSWER TO "IS THERE A BOLD CUT": a refusal. Since 2026-08-26
+  # [afm resolve] turns away a style a standard family has no cut for, which
+  # is right for a [font] call and is not an error in a drawing: SVG 10.10
+  # and CSS 2.1 15.5 make font-weight a wish, and Symbol and ZapfDingbats
+  # satisfy it with the one cut they have. Without the catch the drawing died
+  # with TCLPDF AFM STYLE where it had reported the weight as skipped.
+  #
+  # Both one-cut families, and helvetica beside them as the counter-case: a
+  # family that HAS the cut must still get it, and must report nothing.
+  set answers {}
+  foreach family {Symbol ZapfDingbats} {
+    lappend answers [weightProbe "<text x=\"10\" y=\"50\"\
+        font-family=\"$family\" font-size=\"12\"\
+        font-weight=\"bold\">Hallo</text>"]
+  }
+  lappend answers [weightProbe {<text x="10" y="50" font-family="helvetica"
+      font-size="12" font-weight="bold">Hallo</text>}]
+} -result {{/FSymbol {font-weight 1}} {/FZapfDingbats {font-weight 1}}\
+    {/FHelveticaBold {}}}
+
 test svg-weight-31.5 {the document's own weight is not inherited by a drawing} -body {
   set doc [tclpdf new -unit mm -compress 0]
   $doc page add
@@ -1784,5 +1805,19 @@ test svg-cover-30.14 {and what the caller is handed back is that box} -body {
   lmap value $area {expr {double($value)}}
 } -result {20.0 20.0 40.0 40.0}
 
+test svg-malformed-40.1 {a drawing that is not well-formed XML is refused in this package's words} -body {
+  # ROUND 7 HARDENING. The XML reader speaks its own language: tdom answered
+  # "-data {<svg}" with 'error "unclosed token" at line 1 character 4' and an
+  # -errorcode of NONE - against "every refusal is a Tcl error whose message
+  # begins with tclpdf:". Wrapped where the topic is known, since xml.tcl
+  # serves XMP and ZUGFeRD as well.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc svg -data {<svg} -at {10 10}}]
+  catch {$doc svg -data {<svg} -at {10 10}} message
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lrange $code 0 3] [string match {tclpdf:*} $message] $stream
+} -result {{TCLPDF SVG XML MALFORMED} 1 {}}
 
 cleanupTests

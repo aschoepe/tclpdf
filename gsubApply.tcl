@@ -24,6 +24,8 @@
 #   5 Contextual         a SEQUENCE matches, and the substitutions are named
 #   6 Chaining contextual   by index rather than written out
 #   7 Extension  a 32 bit offset in front of a lookup of any other type
+#   8 Reverse chaining single   one glyph becomes one other, matched with a
+#                backtrack and a lookahead and applied from the END of the run
 #
 # Types 5 and 6 substitute nothing themselves. A rule of theirs matches a
 # sequence and then names OTHER lookups by their index in the lookup list -
@@ -40,12 +42,19 @@
 # reading the GPOS number would resolve an offset into the middle of a
 # subtable and hand back plausible nonsense.
 #
-# Types 3 (Alternate) and 8 (Reverse Chaining) are not read, and that is a
-# measurement rather than a plan: over the 77 faces in examples/assets/fonts
-# there is no type 8 lookup at all, and every one of the 39 type 3 lookups
-# hangs off "aalt" or "ornm" - features this package does not apply, and could
-# not apply without an API for "give me the third alternate of this glyph".
-# Measured 2026-08-26.
+# Type 8 RUNS BACKWARDS, and it is the only one that does. Its rule names no
+# lookups at all: the substitution stands in the subtable beside the coverage,
+# one glyph per coverage index, and the whole lookup is applied from the last
+# position of the run to the first. That order is the point of the type - the
+# lookahead of a rule has then already been substituted, which is what a face
+# uses to resolve a chain of forms from the end of a word backwards. Reading
+# the match is gsubContext.tcl's, like types 5 and 6; only the walk is here.
+#
+# Type 3 (Alternate) is not read, and that is a measurement rather than a
+# plan: every one of the 39 type 3 lookups over the 77 faces in
+# examples/assets/fonts hangs off "aalt" or "ornm" - features this package
+# does not apply, and could not apply without an API for "give me the third
+# alternate of this glyph". Measured 2026-08-26.
 #
 # APPLYING A LOOKUP AT ONE POSITION is the primitive everything here is built
 # from, and it is the contextual lookups that made it one. A SequenceLookupRecord
@@ -81,7 +90,7 @@ namespace eval ::tclpdf::gsubApply {
   # lookup carries in GSUB - 7 here, where GPOS uses 9. Reading the GPOS number
   # would resolve an offset into the middle of a subtable and hand back
   # plausible nonsense.
-  variable kinds {1 single 2 multiple 4 ligature 5 context 6 chain}
+  variable kinds {1 single 2 multiple 4 ligature 5 context 6 chain 8 reverse}
   variable extensionType 7
 
   # How far a contextual lookup may reach into another one. A lookup may name
@@ -101,6 +110,35 @@ namespace eval ::tclpdf::gsubApply {
   # tree, no lookup nests deeper than two: 18 references out of 12 321 point
   # at a contextual lookup at all, and all 18 are in Noto Serif Tibetan.
   variable maxDepth 64
+
+  # HOW MUCH WORK ONE [apply] MAY SPEND, beside how deep it may go. The depth
+  # alone does not bound a cycle: a rule with TWO records that both name the
+  # lookup they stand in branches twice at every level, so 64 levels are 2^64
+  # calls and the shaping of one word never ends. Measured on a face built for
+  # it - one self-reference answers in 0 s, two do not answer at all.
+  #
+  # The budget is HarfBuzz's and so is what happens when it runs out.
+  # HB_MAX_OPS_FACTOR is 64 per glyph and HB_MAX_OPS_MIN 16 384; every
+  # recursion into a named lookup spends one, and the recursion that finds the
+  # purse empty simply does nothing (hb-ot-layout-gsubgpos.hh, [recurse]:
+  # "buffer->max_ops-- <= 0" sets shaping_failed and returns false). The run
+  # then comes back as far as it got, which is what this package does too.
+  #
+  # NOT A REFUSAL, and that is a decision rather than an omission. A cyclic
+  # font is not a caller's mistake and there is nothing the caller could do
+  # about it: the alternative to a partly shaped word is no document at all,
+  # for a defect in a file the caller may not even have made. It is also what
+  # every other reader of the same font does, so the page comes out looking
+  # like everyone else's.
+  variable opsFactor 64
+  variable opsFloor 16384
+
+  # What is left of that budget. Set by [apply] and spent by [ApplyLookupAt];
+  # a namespace variable rather than an argument because it has to be shared
+  # by a recursion that goes out through gsubContext.tcl and back in, and
+  # threading it through six signatures as an in-out parameter would put a
+  # counter in every one of them.
+  variable ops 0
 }
 
 # Prepare a list of lookups for [apply].
@@ -256,6 +294,37 @@ proc ::tclpdf::gsubApply::feature {gsub tag gdef {preferred {}} {wanted {}}} {
   return $prepared
 }
 
+# Prepare a SEQUENCE OF STAGES: one entry of [apply]'s shape per stage, in the
+# order they run.
+#
+# A STAGE is what HarfBuzz pauses between, and it is not the same thing as a
+# feature. Several features may share one stage - their lookups are then
+# applied in the order of the LOOKUP LIST across all of them - and one feature
+# may stand in a stage of its own, which beats any lookup index. TAGLISTS is
+# therefore a list of tag LISTS, one per stage, and the stage boundaries are
+# the caller's decision: liga.tcl and forms.tcl measure them against hb-shape
+# for the script they read, and they do not come out the same.
+#
+# Here rather than in either of them because both walk it, and a walk written
+# twice is the walk one of the two gets wrong.
+proc ::tclpdf::gsubApply::stages {gsub tagLists gdef {preferred {}} {wanted {}}} {
+  set prepared {}
+  foreach tags $tagLists {
+    lappend prepared [feature $gsub $tags $gdef $preferred $wanted]
+  }
+  return $prepared
+}
+
+# Apply a sequence of stages to a run, in order. A stage that prepared nothing
+# costs a call and changes nothing, which is what keeps the caller from having
+# to know which of its stages a face actually has.
+proc ::tclpdf::gsubApply::applyStages {stages run {tag {}}} {
+  foreach stage $stages {
+    set run [apply $stage $run $tag]
+  }
+  return $run
+}
+
 # Substitute in a glyph run.
 #
 # Lookups are applied one after another over the whole run, because the output
@@ -270,9 +339,15 @@ proc ::tclpdf::gsubApply::feature {gsub tag gdef {preferred {}} {wanted {}}} {
 # ligature case, and everything before this module existed - matches every
 # position, including the entries that carry no tag at all.
 proc ::tclpdf::gsubApply::apply {prepared run {tag {}}} {
+  variable opsFactor
+  variable opsFloor
+  variable ops
   if {![llength $prepared] || ![llength $run]} {
     return $run
   }
+  # A fresh purse for every call, spent by [ApplyLookupAt] - see the head of
+  # this file for what it buys and what happens when it is empty.
+  set ops [expr {$opsFactor * [llength $run] + $opsFloor}]
   foreach lookup $prepared {
     lassign $lookup filter subtables nested
     set run [ApplyLookup $filter $subtables $nested $run $tag]
@@ -297,18 +372,16 @@ proc ::tclpdf::gsubApply::Glyphs {run} {
 # acute has to be invisible to the match without disappearing from the text.
 # Where a filter is absent - the common case - the visible positions are all
 # of them and this is the plain walk it was.
-proc ::tclpdf::gsubApply::Keep {filter glyphs} {
-  if {$filter eq {}} {
-    # Every index, and the glob pattern that matches anything is how Tcl
-    # counts them out without a loop of its own.
-    return [lsearch -all $glyphs *]
-  }
-  return [::tclpdf::gdef keep $filter $glyphs]
+# EXEMPT is one position the filter may not hide, or -1 for none - what a
+# SequenceLookupRecord needs, and gdef.tcl says in one place what that means
+# and why HarfBuzz reads it so.
+proc ::tclpdf::gsubApply::Keep {filter glyphs {exempt -1}} {
+  return [::tclpdf::gdef visible $filter $glyphs $exempt]
 }
 
 # The same, for a caller that has the run rather than its glyphs.
-proc ::tclpdf::gsubApply::Visible {filter run} {
-  return [Keep $filter [Glyphs $run]]
+proc ::tclpdf::gsubApply::Visible {filter run {exempt -1}} {
+  return [Keep $filter [Glyphs $run] $exempt]
 }
 
 # Does this position take part, given the tag the caller restricted to?
@@ -353,11 +426,11 @@ proc ::tclpdf::gsubApply::Entry {source glyph codes} {
 # sequence it matched. The run is never empty at a position that exists, so {}
 # is free to mean "not here".
 
-proc ::tclpdf::gsubApply::SingleAt {filter rules run position tag} {
+proc ::tclpdf::gsubApply::SingleAt {filter rules run position tag {exempt -1}} {
   set entry [lindex $run $position]
   set glyph [lindex $entry 0]
   if {![dict exists $rules $glyph] || ![Tagged $entry $tag]
-      || [Ignored $filter $glyph]} {
+      || ($position != $exempt && [Ignored $filter $glyph])} {
     return {}
   }
   return [list [lreplace $run $position $position \
@@ -387,11 +460,11 @@ proc ::tclpdf::gsubApply::SingleAt {filter rules run position tag} {
 # dot, and markPos.tcl places it. The fix, should a face ever need it, is a
 # CID of its own per glyph-and-characters pair, which is a change to the font
 # writer and not one to make in passing.
-proc ::tclpdf::gsubApply::MultipleAt {filter rules run position tag} {
+proc ::tclpdf::gsubApply::MultipleAt {filter rules run position tag {exempt -1}} {
   set entry [lindex $run $position]
   set glyph [lindex $entry 0]
   if {![dict exists $rules $glyph] || ![Tagged $entry $tag]
-      || [Ignored $filter $glyph]} {
+      || ($position != $exempt && [Ignored $filter $glyph])} {
     return {}
   }
   set outputs {}
@@ -425,9 +498,10 @@ proc ::tclpdf::gsubApply::MultipleAt {filter rules run position tag} {
 #
 # VISIBLE is passed in by the walk below, which has it already; a
 # SequenceLookupRecord has not, and pays for one pass over the run instead.
-proc ::tclpdf::gsubApply::LigatureAt {filter rules run start tag {visible {}}} {
+proc ::tclpdf::gsubApply::LigatureAt {filter rules run start tag {visible {}} \
+    {exempt -1}} {
   if {![llength $visible]} {
-    set visible [Visible $filter $run]
+    set visible [Visible $filter $run $exempt]
   }
   set at [lsearch -exact -integer -sorted $visible $start]
   if {$at < 0} {
@@ -494,10 +568,10 @@ proc ::tclpdf::gsubApply::LigatureAt {filter rules run start tag {visible {}}} {
 # rather than carried in RULES because the map holds this very entry: a value
 # that contained itself would have no end.
 proc ::tclpdf::gsubApply::ContextAt {filter rules run position tag nested depth \
-    {glyphs {}} {visible {}}} {
+    {glyphs {}} {visible {}} {exempt -1}} {
   if {![llength $visible]} {
     set glyphs [Glyphs $run]
-    set visible [Keep $filter $glyphs]
+    set visible [Keep $filter $glyphs $exempt]
   }
   set at [lsearch -exact -integer -sorted $visible $position]
   if {$at < 0} {
@@ -516,22 +590,69 @@ proc ::tclpdf::gsubApply::ContextAt {filter rules run position tag nested depth 
   return [list $run [expr {[lindex $positions end] + 1}]]
 }
 
+# Lookup type 8 at one position: the rule matches with a backtrack and a
+# lookahead exactly as a type 6 format 3 rule does, and the substitution is
+# not named by a record but written beside the coverage - one glyph per
+# coverage index (ISO/IEC 14496-22:2019, 6.3.7, S. 290).
+#
+# The answer has the shape of the others, {run next}, so that a
+# SequenceLookupRecord may name a reverse lookup like any other. NEXT is one
+# position on; the backwards walk of [ApplyReverse] ignores it and steps by
+# itself, which is the only place the direction of this type shows.
+proc ::tclpdf::gsubApply::ReverseAt {filter rules run position tag {exempt -1} \
+    {glyphs {}} {visible {}} {at -1}} {
+  set entry [lindex $run $position]
+  set glyph [lindex $entry 0]
+  set substitutes [dict get $rules subst]
+  set coverage [dict get $rules coverage]
+  if {![dict exists $coverage $glyph] || ![Tagged $entry $tag]} {
+    return {}
+  }
+  set index [dict get $coverage $glyph]
+  if {$index >= [llength $substitutes]} {
+    # A coverage that lists more glyphs than the substitute array has entries.
+    # The specification counts the two together (glyphCount); a face that does
+    # not is read as far as it agrees with itself.
+    return {}
+  }
+  if {$at < 0} {
+    set glyphs [Glyphs $run]
+    set visible [Keep $filter $glyphs $exempt]
+    set at [lsearch -exact -integer -sorted $visible $position]
+    if {$at < 0} {
+      return {}
+    }
+  }
+  if {[Matched $rules $glyphs $visible $at $run $tag] eq {}} {
+    return {}
+  }
+  return [list [lreplace $run $position $position \
+      [Entry $entry [lindex $substitutes $index] [lindex $entry 1]]] \
+      [expr {$position + 1}]]
+}
+
 # What one lookup of any type does at one position.
 proc ::tclpdf::gsubApply::SubstituteAt {kind filter rules run position tag \
-    nested depth {glyphs {}} {visible {}}} {
+    nested depth {glyphs {}} {visible {}} {exempt -1}} {
   switch -- $kind {
     single {
-      return [SingleAt $filter $rules $run $position $tag]
+      return [SingleAt $filter $rules $run $position $tag $exempt]
     }
     multiple {
-      return [MultipleAt $filter $rules $run $position $tag]
+      return [MultipleAt $filter $rules $run $position $tag $exempt]
     }
     ligature {
-      return [LigatureAt $filter $rules $run $position $tag $visible]
+      return [LigatureAt $filter $rules $run $position $tag $visible $exempt]
     }
     context - chain {
       return [ContextAt $filter $rules $run $position $tag $nested $depth \
-          $glyphs $visible]
+          $glyphs $visible $exempt]
+    }
+    reverse {
+      # A reverse lookup named by a record is applied at that one position,
+      # exactly like the others. The BACKWARDS walk is a property of the
+      # lookup applied on its own ([ApplyReverse]), not of one application.
+      return [ReverseAt $filter $rules $run $position $tag $exempt]
     }
   }
   return {}
@@ -542,14 +663,21 @@ proc ::tclpdf::gsubApply::SubstituteAt {kind filter rules run position tag \
 # would go on is the caller's business only when the caller IS a walk.
 proc ::tclpdf::gsubApply::ApplyLookupAt {nested index run position tag depth} {
   variable maxDepth
-  if {$depth >= $maxDepth || ![dict exists $nested $index]} {
+  variable ops
+  # THE TWO BOUNDS, in HarfBuzz's order and with its short circuit: the depth
+  # is not paid for out of the work budget, so a lookup that is merely too
+  # deeply nested costs nothing ([recurse], hb-ot-layout-gsubgpos.hh).
+  if {$depth >= $maxDepth || $ops <= 0 || ![dict exists $nested $index]} {
     return {}
   }
+  incr ops -1
   lassign [dict get $nested $index] filter subtables
   foreach subtable $subtables {
     lassign $subtable kind rules
+    # THE GLYPH AT THIS POSITION IS EXEMPT from the named lookup's own flag -
+    # see [Keep].
     set answer [SubstituteAt $kind $filter $rules $run $position $tag \
-        $nested [expr {$depth + 1}]]
+        $nested [expr {$depth + 1}] {} {} $position]
     if {$answer ne {}} {
       return [lindex $answer 0]
     }
@@ -668,6 +796,11 @@ proc ::tclpdf::gsubApply::ApplyRecords {nested records positions run tag depth} 
 # lookup - Amiri's rlig does - and reading the run for each of them turns a
 # word into a walk of its own.
 proc ::tclpdf::gsubApply::ApplyLookup {filter subtables nested run tag} {
+  # A LOOKUP HAS ONE TYPE, so the first subtable settles the direction of the
+  # walk for all of them.
+  if {[lindex $subtables 0 0] eq {reverse}} {
+    return [ApplyReverse $filter $subtables $run $tag]
+  }
   # WHICH POSITIONS THE LOOKUP CAN SEE is a walk over the whole run, and only
   # a lookup that matches a SEQUENCE ever asks: a Single or a Multiple
   # substitution looks at the one glyph it stands on and answers out of its
@@ -712,6 +845,46 @@ proc ::tclpdf::gsubApply::ApplyLookup {filter subtables nested run tag} {
   return $run
 }
 
+# Apply ONE reverse chaining lookup to the whole run, from the LAST position
+# to the first (S. 290).
+#
+# The direction is the whole of this type and it is not a nicety: the
+# lookahead of a rule has already been substituted by the time the rule is
+# tried, which is what lets a face resolve a chain of forms from the end of a
+# word backwards. Walking forwards produces plausible glyphs out of the wrong
+# rules and says nothing about it.
+#
+# The glyph list and the visible positions are rebuilt after a substitution
+# because a substituted glyph may fall into another GDEF class and the
+# backtrack of the positions still to come reads it. It cannot shift anything:
+# type 8 puts exactly one glyph where one stood, so the run keeps its length
+# and every position keeps its number - which is why this walks the RUN and
+# not the visible list, the way HarfBuzz's [apply_backward] walks the buffer.
+proc ::tclpdf::gsubApply::ApplyReverse {filter subtables run tag} {
+  set glyphs [Glyphs $run]
+  set visible [Keep $filter $glyphs]
+  for {set position [expr {[llength $run] - 1}]} {$position >= 0} \
+      {incr position -1} {
+    set at [lsearch -exact -integer -sorted $visible $position]
+    if {$at < 0} {
+      continue
+    }
+    foreach subtable $subtables {
+      lassign $subtable kind rules
+      set answer [ReverseAt $filter $rules $run $position $tag -1 \
+          $glyphs $visible $at]
+      if {$answer eq {}} {
+        continue
+      }
+      set run [lindex $answer 0]
+      set glyphs [Glyphs $run]
+      set visible [Keep $filter $glyphs]
+      break
+    }
+  }
+  return $run
+}
+
 # --- reading the table ------------------------------------------------------
 
 proc ::tclpdf::gsubApply::Subtable {gsub kind offset rules} {
@@ -730,6 +903,9 @@ proc ::tclpdf::gsubApply::Subtable {gsub kind offset rules} {
     }
     chain {
       return [::tclpdf::gsubContext read $gsub 6 $offset]
+    }
+    reverse {
+      return [::tclpdf::gsubContext read $gsub 8 $offset]
     }
   }
   return $rules
@@ -856,4 +1032,4 @@ proc ::tclpdf::gsubApply::LigatureSubst {gsub subtable rules} {
   return $rules
 }
 
-package provide tclpdf::gsubApply 1.1
+package provide tclpdf::gsubApply 1.2

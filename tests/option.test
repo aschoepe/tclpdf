@@ -12,6 +12,7 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 
 package require tclpdf::option
+package require tclpdf::pdfObj
 package require tclpdf
 source [file join [file dirname [info script]] helper.tcl]
 
@@ -224,5 +225,53 @@ test option-4.5 {number refuses, names the value and carries a code} -body {
   set out
 } -result {{TCLPDF OPTION NUMBER -size text} {TCLPDF OPTION NUMBER -size text}\
     {TCLPDF OPTION NUMBER -size text} 1 1 0}
+
+test option-4.6 {a number beyond the PDF real range is refused at the call} -body {
+  # ROUND 7, from the layout package's handoff. A PDF real carries about
+  # +/-3.403e38 (ISO 32000-1, Annex C.2). [pdfObj num] has always known that
+  # and still does - but it is asked at the moment of WRITING, which is after
+  # the "q", the "BT" and the marked-content bracket of the call that carries
+  # the number. A caller who caught that refusal was left with a half-written
+  # page. So the same question is asked here, where nothing has been written,
+  # and it is asked through [pdfObj fits] so that the figure stands in one
+  # place rather than in two that can drift apart.
+  set out {}
+  foreach value {1e39 -1e39 1e300} {
+    lappend out [::tclpdfTest::refusal {::tclpdf::option number $value -size text}]
+  }
+  set code [catch {::tclpdf::option number 1e39 "a length"} message]
+  lappend out $code [string match {*beyond what a PDF number holds*3.403e38*} $message]
+  # And the range itself stays usable: 3e38 is inside it, and so is every
+  # number anybody measures a page in.
+  lappend out [catch {::tclpdf::option number 3e38 -size text}] \
+      [catch {::tclpdf::option number 0 -size text}]
+  set out
+} -result {{TCLPDF OPTION NUMBER -size text} {TCLPDF OPTION NUMBER -size text}\
+    {TCLPDF OPTION NUMBER -size text} 1 1 0 0}
+
+test option-4.7 {and so is a coordinate of a point} -body {
+  # [option point] checked the shape of the pair and the finiteness of the
+  # two numbers, not their magnitude - so every caller of it (link, leader,
+  # the geometry annotations) had the gap that [option number] had.
+  set out {}
+  foreach value {{1e39 20} {20 -1e39}} {
+    lappend out [::tclpdfTest::refusal {::tclpdf::option point $value -at link}]
+  }
+  set code [catch {::tclpdf::option point {1e39 20} -at link} message]
+  lappend out $code \
+      [string match {*two numbers a PDF file can hold*3.403e38*} $message] \
+      [catch {::tclpdf::option point {1e38 20} -at link}]
+  set out
+} -result {{TCLPDF OPTION POINT -at link} {TCLPDF OPTION POINT -at link} 1 1 0}
+
+test option-4.8 {the figure stands in one place} -body {
+  # [pdfObj fits] is what both of them ask, and what [pdfObj num] asks at the
+  # other end. A second copy of "3.403e38" in option.tcl is how the call and
+  # the write would one day disagree about what the file holds.
+  list [::tclpdf::pdfObj fits 3e38] [::tclpdf::pdfObj fits 1e39] \
+      [::tclpdf::pdfObj fits -1e39] [::tclpdf::pdfObj fits NaN] \
+      [::tclpdf::pdfObj fits Inf] [::tclpdf::pdfObj fits -Inf] \
+      [::tclpdf::pdfObj fits abc] [::tclpdf::pdfObj fits 0]
+} -result {1 0 0 0 0 0 0 1}
 
 cleanupTests

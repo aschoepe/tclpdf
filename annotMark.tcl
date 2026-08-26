@@ -199,10 +199,15 @@ oo::define ::tclpdf::document::document {
             not \"$quad\""
       }
       foreach value $quad {
-        if {![string is double -strict $value]} {
+        # [option finite], for the reason [AnnotRectangle] gives: NaN and Inf
+        # are doubles to Tcl, they pass every bound written as a comparison,
+        # and what they reach is the arithmetic of the quadrilateral, in
+        # Tcl's words rather than this package's.
+        if {![::tclpdf::option finite $value]} {
           return -code error -errorcode \
               [list TCLPDF ANNOT QUADS NUMBER $value] \
-              "tclpdf: -quads holds numbers, not \"$value\""
+              "tclpdf: -quads holds finite numbers, not \"$value\" - NaN and\
+              Inf are doubles to Tcl and mark nothing"
         }
       }
       lassign $quad -> -> width height
@@ -504,4 +509,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annotMark 1.1
+package provide tclpdf::annotMark 1.2

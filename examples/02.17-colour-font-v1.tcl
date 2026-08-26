@@ -35,13 +35,23 @@
 #   - PDF has no ANGULAR gradient at all. A sweep becomes a fan of Gouraud
 #     triangles, one per four degrees plus one per colour stop.
 #   - A gradient that FADES cannot be a shading alone, because a PDF shading
-#     has no alpha channel. It becomes the shading plus a luminosity soft
-#     mask whose own shading carries the alpha values as grey levels.
+#     has no alpha channel. It becomes the same shading painted over and over
+#     in NESTED BANDS OF CONSTANT ALPHA - one clip and one /ca per 1/64 step -
+#     which is a clip and a number where the exact construction, a luminosity
+#     soft mask, is the one thing in a Type 3 glyph that readers disagree
+#     about. The mask is what is left where no plainer form exists.
 #   - Compositing: fifteen of the twenty-eight modes are PDF blend modes under
 #     other names and go into an isolated transparency group; seven more -
-#     Source In and its relatives - are built out of alpha soft masks. One,
-#     Plus, has no PDF spelling at all and is refused by name rather than
-#     drawn wrongly.
+#     Source In and its relatives - become a clip path or a constant /ca where
+#     the masking side allows it and an alpha soft mask where it does not.
+#     One, Plus, has no PDF spelling at all and is refused by name rather than
+#     drawn wrongly, and the three that composite BOTH sides - Source Atop,
+#     Destination Atop and XOR - go the same way over a side that is neither
+#     opaque nor one flat alpha inside one outline (those three are among the
+#     seven). The remaining five - clear, src, dest, srcOver and destOver -
+#     need no group and no mask at all: one paints nothing, two paint one
+#     side alone, and two are the ordinary stacking of the two sides. That is
+#     15 + 7 + 5 + 1 = 28.
 #
 # THE FACE ON THIS PAGE IS BUILT BY THIS SCRIPT, as it is in 2.14 and for the
 # same reason: no colour font ships with this package, and every real version 1
@@ -114,10 +124,13 @@ proc faceRegular {cx cy radius sides {turn 0}} {
 # to the child, taken from the lengths that were just written.
 
 # F2DOT14 reaches from -2.0 to just under 2.0, and an angle is written as 180
-# degrees per 1.0 of it. So a sweep running the FULL 360 degrees cannot be
-# written as 0 to 360: 2.0 encodes as 32768, which is -2.0 in a signed short,
-# and the gradient comes out running backwards. That is why the sweep below
-# ends at 358 - a real font writes -180 to 180 for a full turn.
+# degrees per 1.0 of it. A ROTATION is written straight; a SWEEP GRADIENT's
+# two angles carry a BIAS of 1.0 on top of that - the font stores
+# degrees / 180 - 1 - which is exactly what buys the full turn: 360 degrees
+# comes out as 1.0 where without the bias it would be 2.0, and 2.0 encodes as
+# 32768, which is -2.0 in a signed short and a gradient running backwards.
+# The bias belongs to the sweep alone, so it sits at the sweep below and not
+# in here.
 proc faceF2Dot14 {value} {
     set number [expr {int(round($value * 16384))}]
     if {$number < -32768 || $number > 32767} {
@@ -175,8 +188,11 @@ proc facePaint {spec} {
             lassign $spec . extend stops centre start end
             set head [binary format c 8][faceOffset24 12]
             append head [binary format SS {*}$centre]
-            append head [faceF2Dot14 [expr {$start / 180.0}]] \
-                [faceF2Dot14 [expr {$end / 180.0}]]
+            # The bias of 1.0 - see [faceF2Dot14]. Left out, the font asks
+            # for a sweep half a circle away from the one written here, and
+            # every reader that knows the bias draws it turned round.
+            append head [faceF2Dot14 [expr {$start / 180.0 - 1.0}]] \
+                [faceF2Dot14 [expr {$end / 180.0 - 1.0}]]
             return $head[faceColorLine $extend $stops]
         }
         glyph {
@@ -412,11 +428,12 @@ lappend faceBase [list 11 [list glyph 1 [list radial pad \
 
 # U+E003 - a SWEEP gradient, which PDF has no shading type for at all: the
 # colour depends on the ANGLE around a centre. It becomes a fan of Gouraud
-# triangles, one per four degrees plus one per colour stop. The end angle is
-# 358 and not 360 because the field is an F2DOT14 - see [faceF2Dot14].
+# triangles, one per four degrees plus one per colour stop. A WHOLE turn, 0
+# to 360, and it fits in the two-byte field because of the bias - see
+# [faceF2Dot14].
 lappend faceBase [list 12 [list glyph 1 [list sweep pad \
     {{0.0 4 1.0} {0.25 8 1.0} {0.5 2 1.0} {0.75 3 1.0} {1.0 4 1.0}} \
-    {500 460} 0 358]]]
+    {500 460} 0 360]]]
 
 # U+E004 - LAYERS. A PaintColrLayers slices the LayerList, bottom of the
 # z-order first: an amber badge, a gradient ring over it, and a white tick on
@@ -448,18 +465,21 @@ lappend faceBase [list 15 [list composite 20 \
 
 # U+E007 - COMPOSITING with Source In (mode 5), which PDF has no operator for:
 # the source is painted where the backdrop is OPAQUE. Here a gradient is
-# poured into the shape of a cross - and it is built out of an alpha soft mask
-# taken from the backdrop's own transparency group. 316 of Noto Color Emoji's
-# 578 composites are this mode.
+# poured into the shape of a cross - and because that backdrop is one opaque
+# outline, "where it is opaque" is a CLIP PATH and needs no mask at all. 316
+# of Noto Color Emoji's 578 composites are this mode; the alpha soft mask the
+# construction started out as is what a backdrop of several outlines that
+# wind against each other still gets.
 lappend faceBase [list 16 [list composite 5 \
     [list glyph 1 [list linear pad {{0.0 4 1.0} {1.0 8 1.0}} \
         {70 890} {930 30} {930 890}]] \
     {glyph 4 {solid 6 1.0}}]]
 
 # U+E008 - a gradient that FADES OUT. A PDF shading has no alpha channel, so
-# this is a shading plus a luminosity soft mask whose own shading carries the
-# alpha values as grey levels. Nearly half of a real emoji face's colour lines
-# are of this kind: a soft edge is drawn by fading, not by clipping.
+# this is the same shading painted over and over in nested bands of constant
+# alpha, one clip and one /ca per 1/64 step. Nearly half of a real emoji
+# face's colour lines are of this kind: a soft edge is drawn by fading, not by
+# clipping - and this document holds no soft mask at all.
 lappend faceBase [list 17 [list layers 5 2]]
 lappend faceLayers {glyph 1 {solid 9 1.0}}
 lappend faceLayers [list glyph 1 [list linear pad \
@@ -567,7 +587,7 @@ set rows [list \
     $turned "PaintRotateAroundCenter - the sub-graph turns, gradient and all" \
     $blended "PaintComposite, Soft Light - a PDF blend mode in a group" \
     $punched "PaintComposite, Source In - a gradient poured into a shape" \
-    $faded "a colour line that fades - a shading plus a luminosity soft mask" \
+    $faded "a colour line that fades - one shading in bands of constant alpha" \
     $reused "PaintColrGlyph - another glyph's graph, incorporated here" \
     $old "a version 0 record in the same table, read by the older road"]
 

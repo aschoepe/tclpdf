@@ -590,8 +590,19 @@ oo::define ::tclpdf::document::document {
       # came out light without a word. What answers it is the comparison -
       # an embedded family has one cut per alias, and a standard family has
       # a bold only where the AFM resolves it to a different face.
-      if {[my TextEmbedded $family] ||
-          [::tclpdf::afm resolve $family bold] eq [::tclpdf::afm resolve $family {}]} {
+      #
+      # AND THE THIRD ANSWER IS A REFUSAL. Since 2026-08-26 [afm resolve]
+      # turns away a style the family has no cut for, which is right for a
+      # [font] call - the caller asked for something that does not exist -
+      # and is not an error HERE: SVG 10.10 and CSS 2.1 15.5 make font-weight
+      # a wish that the face satisfies as best it can, and a family with one
+      # cut satisfies it with that cut. Without the catch a drawing that says
+      # font-family="Symbol" font-weight="bold" died with TCLPDF AFM STYLE
+      # where it used to report the weight as skipped. So the refusal is read
+      # as the answer it is - "no bold cut" - and joins the other two.
+      if {[my TextEmbedded $family]
+          || [catch {::tclpdf::afm resolve $family bold} boldCut]
+          || $boldCut eq [::tclpdf::afm resolve $family {}]} {
         my SvgSkipped font-weight
         set cut {}
       }
@@ -699,4 +710,4 @@ oo::define ::tclpdf::document::document {
   # operators are the only description of the shape available here.
 }
 
-package provide tclpdf::svgElement 1.5
+package provide tclpdf::svgElement 1.6

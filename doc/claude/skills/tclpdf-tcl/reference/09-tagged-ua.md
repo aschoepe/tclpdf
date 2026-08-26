@@ -133,6 +133,16 @@ $doc bookmark "Appendix" -page 0 -at {20 200}
 # all findings at once, each naming the call to change; no file is left behind.
 $doc ua 1
 puts "ua: [$doc ua state]"                ;# part revision wtpdf registered
+
+# -revision is the year of the edition claimed, four digits, and goes into
+# the metadata as pdfuaid:rev for part 2 (ISO 14289-2, Table 1); the default
+# is 2024, the year part 2 was published. Anything that is not a four-digit
+# year is refused at the call.
+if {[catch {$doc ua -part 1 -revision 24} message]} {
+    puts "refused, as it should be: $message"
+}
+$doc ua -part 1 -revision 2024
+puts "ua after the revision: [$doc ua state]"
 ```
 
 What it insists on: title, language, every font embedded, headings from `H1` with no level skipped and of one kind, tables whose rows cover the same number of columns (spans counted), a description on every link and every link annotation inside a `Link`, every picture/drawing/form either `-alt` or `-artifact 1`, lists whose numbering and labels agree, `DisplayDocTitle` still on. Part 2 (`ua -part 2 -wtpdf {reuse accessibility}`) adds a `Desc` on every attachment, forbids the generic `H` and `Note`, and cannot be combined with `pdfa -part 3` - an accessible ZUGFeRD invoice is `ua 1` plus `pdfa -part 3`. `ua 0` withdraws the claim. Check with `verapdf --flavour ua1 file.pdf` (part 2: `ua2`) and read the tree with `pdfinfo -struct-text file.pdf`.

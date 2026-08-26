@@ -629,6 +629,11 @@ oo::define ::tclpdf::document::document {
     set font [my FieldFont [dict get $options family] \
         [dict get $options style] [dict get $options size] \
         [dict get $options color] "field button \"$name\""]
+    # And the caption has to be one that font can set - see [FieldSettable]
+    # in field.tcl for why that question belongs at the call and not in the
+    # appearance stream the caption is drawn into.
+    my FieldSettable [dict get $options caption] $font caption \
+        "field button \"$name\""
 
     my FieldDeclare $name -type Btn -build FieldButtonBuild \
         -rect [dict get $options rect] -page [dict get $options page] \
@@ -686,6 +691,26 @@ oo::define ::tclpdf::document::document {
             the actions it forbids outright (veraPDF 6.5.1-1). An archived\
             document is a record, and a record does not reset itself. Drop\
             -action, or drop the pdfa declaration"
+      }
+      # AND EVERY NAME IN -fields IS A FIELD OF THIS DOCUMENT. Table 242
+      # says of the array: "names of fields". A name that is none is an
+      # action that does nothing, written into the file with nothing to say
+      # it - measured 2026-08-26, /Fields [(nope)] went in and out of a
+      # document without a word. At the call there is nothing to check
+      # against, since a reset button may name a field declared after it;
+      # here, on beforeWrite, every field of the document is known.
+      set known [my state fields]
+      foreach which [dict get $data fields] {
+        if {[dict exists $known $which]} continue
+        set names [dict keys $known]
+        return -code error \
+            -errorcode [list TCLPDF FIELD BUTTON FIELDS $which] \
+            "tclpdf: -fields of field button \"$name\" names\
+            \"$which\", and this document has no such field - a reset\
+            action names the fields it puts back (ISO 32000-2, Table 242),\
+            and a name that is none resets nothing and says nothing. The\
+            document's fields are: [expr {[llength $names]
+                ? [join $names {, }] : {none at all}}]"
       }
       # Table 241/242. /Flags is left out: bit 1 clear means "the Fields
       # array specifies which fields to reset", which is what -fields says,
@@ -1001,4 +1026,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldButton 1.0
+package provide tclpdf::fieldButton 1.1

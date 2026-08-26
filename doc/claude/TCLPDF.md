@@ -4,13 +4,13 @@ Reusable prompt for writing Tcl that creates PDFs with **tclpdf** - from the ref
 
 ## Why a reference, not a memory
 
-A PDF library is a large surface with a small number of load-bearing conventions, and a model that has seen jsPDF, ReportLab, FPDF and pdf4tcl carries all of their conventions at once. What comes out is plausible tclpdf that is wrong in the same few places every time: y measured from the bottom, `-at` taken for the centre of a rectangle, `-size` given in millimetres, a `-style bold` expected to apply to `Times-BoldItalic`, a table cell string that starts with `text` and is read as a dictionary, a gradient defined on the page and used inside a form, a paragraph whose return value is read as a number when it was a dictionary. None of these is a bug in the package; each is a place where the package decided differently from the library the model remembers - and tclpdf refuses most of them at the call, with a message that names the fix, so the cost is a stalled turn rather than a broken file.
+A PDF library is a large surface with a small number of load-bearing conventions, and a model that has seen other PDF libraries carries all of their conventions at once. What comes out is plausible tclpdf that is wrong in the same few places every time: y measured from the bottom, `-at` taken for the centre of a rectangle, `-size` given in millimetres, a `-style bold` expected to apply to `Times-BoldItalic`, a table cell string that starts with `text` and is read as a dictionary, a gradient defined on the page and used inside a form, a paragraph whose return value is read as a number when it was a dictionary. None of these is a bug in the package; each is a place where the package decided differently from the library the model remembers - and tclpdf refuses most of them at the call, with a message that names the fix, so the cost is a stalled turn rather than a broken file.
 
 The reference files hold one working snippet per documented call, kept runnable by `check.tcl` against the package as it is. The instruction to the model is therefore short: **copy the snippet, then adapt.** Where the reference and the model's memory disagree, the reference wins; where the reference and the manual disagree, the manual wins and the reference is wrong.
 
 ## Why it ships with the source
 
-`doc/claude/` travels in the source archive, and that is the point: whoever fetches tclpdf gets a **checked** skill for writing their own PDFs along with the package it describes. Checked is meant literally - `check.tcl` runs on the recipient's machine against the assets in `examples/assets`, so the snippets are not a promise made here but something the reader can verify there, against the version they actually have. `make check` runs the same thing as section 8 of the acceptance, which is why the two cannot drift apart.
+`doc/claude/` travels in the source archive, and that is the point: whoever fetches tclpdf gets a **checked** skill for writing their own PDFs along with the package it describes. Checked is meant literally - `check.tcl` runs on the recipient's machine against the assets in `examples/assets`, so the snippets are not a promise made here but something the reader can verify there, against the version they actually have. `make check` runs the same thing as section 10 of the acceptance, which is why the two cannot drift apart.
 
 It sits under `doc/` rather than `.claude/` for the same reason: `.claude/` is this working copy's own agent configuration and is excluded from every archive, while `doc/` is what the package hands out. A project that wants the skill copies it from there into its own `.claude/skills/`.
 
@@ -18,7 +18,7 @@ It sits under `doc/` rather than `.claude/` for the same reason: `.claude/` is t
 
 1. Copy `skills/tclpdf-tcl/` to `<project>/.claude/skills/tclpdf-tcl/` (or wherever the agent loads skills from). Nothing in it refers to a path outside the directory except through `assets.tcl`.
 2. Edit `assets.tcl`: the font, image, ICC, XML and hyphenation files the snippets refer to, the output directory, and - if the package is not installed - `lappend auto_path` to where `pkgIndex.tcl` sits. The variable names are the contract with the reference files; the values are the project's. `$hyphenPatterns` is the one that may point at nothing: the package ships no pattern files, and the reference checks before it uses them.
-3. Run `tclsh check.tcl assets.tcl`. Every reference file has to PASS, `qpdf --check` has to be silent, and veraPDF has to report 0 failed checks on the files that claim PDF/A or PDF/UA. A SKIP means a tool is missing, not that a check passed. Two snippets say on their own console line that they did less than they could: `11-encryption-signatures.md` without `openssl` on the PATH leaves its signatures unfilled, and `03-text.md` without a pattern file sets its column unhyphenated. Both still PASS - what they demonstrate is the call, and the call ran.
+3. Run `tclsh check.tcl assets.tcl`. Every reference file has to PASS, `qpdf --check` has to be silent, and veraPDF has to report 0 failed checks on the files that claim PDF/A or PDF/UA. A SKIP means a tool is missing, not that a check passed. Two snippets say on their own console line that they did less than they could: `11-encryption-signatures.md` without `openssl` on the PATH leaves its signatures unfilled, and `03-text.md` without a pattern file skips the hyphenation section and says so. Both still PASS - the first because what it demonstrates is the call and the call ran, the second because a missing pattern file is the reader's machine and not a broken snippet.
 4. Put that command where the project runs its checks. A snippet that stops running after a package update is a snippet a reader will copy and fail with.
 
 ## The prompt
@@ -28,8 +28,8 @@ You are writing Tcl that creates PDF documents with the tclpdf package.
 
 Before writing any tclpdf call, open the skill "tclpdf-tcl" and take the
 snippet for that call from its reference files (reference/01-document.md
-through reference/12-import-update-info.md). Copy the snippet, then adapt it.
-Do not write a tclpdf call from memory of jsPDF, ReportLab, FPDF, pdf4tcl
+through reference/13-form-fields.md). Copy the snippet, then adapt it.
+Do not write a tclpdf call from memory of another PDF library
 or any other PDF library - the option names, the coordinate origin, the
 unit of -size and the refusals differ, and the same mistakes come back
 every time (SKILL.md, "Traps").

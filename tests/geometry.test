@@ -177,9 +177,16 @@ test geometry-matrix-3.15 {a singular matrix has no inverse and is refused} -bod
   # [singular], which asks the question of the numbers as they reach the file
   # - so a determinant that rounds to nothing is refused here as well, rather
   # than dividing by something the file cannot hold.
+  #
+  # The fourth word is the OWNER of the matrix, here the default "invert" -
+  # it named the kind of mistake ("singular", "shape") until 2026-08-26 while
+  # [check] four lines away named the owner, so one code carried two sorts of
+  # fact (round 7, G7).
   list [::tclpdfTest::refusal {::tclpdf::geometry invert {1 2 2 4 0 0}}] \
-      [::tclpdfTest::refusal {::tclpdf::geometry invert {1 0 0 1 0}}]
-} -result {{TCLPDF GEOMETRY MATRIX singular} {TCLPDF GEOMETRY MATRIX shape}}
+      [::tclpdfTest::refusal {::tclpdf::geometry invert {1 0 0 1 0}}] \
+      [::tclpdfTest::refusal {::tclpdf::geometry invert {1 2 2 4 0 0} "the glyph"}]
+} -result {{TCLPDF GEOMETRY MATRIX invert} {TCLPDF GEOMETRY MATRIX invert}\
+    {TCLPDF GEOMETRY MATRIX {the glyph}}}
 
 test geometry-9.1 {a size given as two numbers is taken as it stands} -body {
   # Regression: the default orientation used to be applied to an explicit
@@ -420,5 +427,30 @@ test geometry-arc-11.6 {the frame may be turned, and then nothing is axis-aligne
     lassign [lindex $segments end] -> -> -> -> x y
     list [format %.6f $x] [format %.6f [expr {abs($y)}]]
 } -result {-10.000000 0.000000}
+
+test geometry-fit-6.1 {checkFit turns away what is not a measurement} -body {
+  # ROUND 7 HARDENING. "string is double" is true for NaN and for Inf, and
+  # "<= 0" is false for both, so a -size, -width, -height, -scale or -dpi of
+  # NaN walked past this and died in the arithmetic that places the thing -
+  # in Tcl's words, far from the call, against doc "Numbers". The predicate
+  # is the one the package has for the question (option.tcl).
+  set codes {}
+  foreach {key value} {size {NaN 10} size {10 Inf} width NaN height Inf \
+      scale NaN dpi -Inf} {
+    lappend codes [::tclpdfTest::refusal {
+        ::tclpdf::geometry checkFit [dict create $key $value] "a picture"}]
+  }
+  # And what is a measurement still passes.
+  lappend codes [::tclpdf::geometry checkFit {size {10 20} scale 2 dpi 300} \
+      "a picture"]
+  set codes
+} -result {{TCLPDF GEOMETRY SIZE {a picture}} {TCLPDF GEOMETRY SIZE {a picture}}\
+    {TCLPDF GEOMETRY ARGUMENT width} {TCLPDF GEOMETRY ARGUMENT height}\
+    {TCLPDF GEOMETRY ARGUMENT scale} {TCLPDF GEOMETRY ARGUMENT dpi} {}}
+
+test geometry-matrix-3.16 {a matrix of NaN is refused by the same predicate} -body {
+  list [::tclpdfTest::refusal {::tclpdf::geometry check {1 0 0 NaN 0 0} transform}] \
+      [::tclpdfTest::refusal {::tclpdf::geometry check {1 0 0 Inf 0 0} transform}]
+} -result {{TCLPDF GEOMETRY MATRIX transform} {TCLPDF GEOMETRY MATRIX transform}}
 
 cleanupTests

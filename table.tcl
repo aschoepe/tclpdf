@@ -42,6 +42,7 @@ package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::option 1.0-
 package require tclpdf::geometry 1.0-
+package require tclpdf::color 1.0-
 package require tclpdf::tableLayout 1.0-
 package require tclpdf::tableDraw 1.0-
 package require tclpdf::document 1.0-
@@ -213,16 +214,32 @@ oo::define ::tclpdf::document::document {
     # switched the breaking off, "-minRowHeight -5" was taken, and "-top abc"
     # surfaced from inside the run as a Tcl error about a non-numeric operand,
     # which names neither the option nor the mistake.
+    # THE THREE BOOLEANS, at the call. All three used to be taken as written
+    # and read much later: -horizontalBreak by the column grouping,
+    # -repeatHead and -repeatFoot only when the table BROKE - so
+    # "-repeatHead maybe" was accepted, drew the first page, and died in
+    # Tcl's own words from inside an "if" at the page break. A refusal that
+    # depends on how much text there is.
+    foreach option {horizontalBreak repeatHead repeatFoot} {
+      set value [dict get $options $option]
+      if {![string is boolean -strict $value]} {
+        return -code error -errorcode [list TCLPDF TABLE ARGUMENT $option] \
+            "tclpdf: -$option takes a boolean, not \"$value\""
+      }
+    }
+    # [option finite] rather than [string is double]: NaN is a double to Tcl
+    # and false against every comparison, so "-bottom NaN" switched the page
+    # break off in silence.
     foreach option {top bottom} {
       set value [dict get $options $option]
-      if {$value ne {} && (![string is double -strict $value] || $value < 0)} {
+      if {$value ne {} && (![::tclpdf::option finite $value] || $value < 0)} {
         return -code error -errorcode [list TCLPDF TABLE ARGUMENT $option] \
             "tclpdf: -$option takes a distance from the top of\
             the page in the document unit, not \"$value\""
       }
     }
     set minimum [dict get $options minRowHeight]
-    if {![string is double -strict $minimum] || $minimum < 0} {
+    if {![::tclpdf::option finite $minimum] || $minimum < 0} {
       return -code error -errorcode [list TCLPDF TABLE ARGUMENT minRowHeight] \
           "tclpdf: -minRowHeight takes a height of 0 or more in\
           the document unit, not \"$minimum\""
@@ -239,6 +256,15 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options width] eq {}} {
       lassign [my page size] pageWidth ->
       dict set options width [expr {$pageWidth - 2 * max($left, 10)}]
+    } elseif {![::tclpdf::option finite [dict get $options width]]
+        || [dict get $options width] <= 0} {
+      # A table of no width has no columns to put anything in, and a
+      # negative one was answered by the width arithmetic with a sentence
+      # that read like a bug report: "the fixed column widths add up to 0,
+      # which is more than the table width of -10".
+      return -code error -errorcode [list TCLPDF TABLE ARGUMENT width] \
+          "tclpdf: -width is the width of the table in the document unit, a\
+          number above zero, not \"[dict get $options width]\""
     }
     # Which of -top and -bottom the caller left to the page is remembered,
     # because the answer is asked on every page the table is drawn on - see
@@ -344,6 +370,12 @@ oo::define ::tclpdf::document::document {
         set room [expr {max($room, [dict get $options bottom] - $top)}]
       }
       my TableCheckFit $run $room $options
+      # Which of the leading columns of this group are a REPEAT rather than
+      # the group's own: none in the first group, -repeatColumns in every
+      # one after it. Read by [TableRowCells], which draws those cells as
+      # artifacts so that the tree holds each cell once.
+      dict set run repeated \
+          [expr {$first ? 0 : [dict get $options repeatColumns]}]
       lappend runs $run
       set first 0
     }
@@ -353,6 +385,27 @@ oo::define ::tclpdf::document::document {
   # The second half: the measured column groups onto the pages.
   method TableDrawAll {prepared} {
     dict with prepared {}
+    set y $top
+    set first 1
+    # WHICH TR EACH LOGICAL ROW GOT, keyed "section,index", for the column
+    # groups that follow: the first group opens the element, every further
+    # one resumes it and hangs its own cells on it. Saved and restored around
+    # the whole table rather than simply cleared, because a table may be
+    # drawn inside a cell hook of another one and would otherwise take over
+    # its rows.
+    set outerRows [my state tableRows]
+    my state tableRows {}
+    set failed [catch {my TableDrawGroups $runs $left $top $options} y info]
+    my state tableRows $outerRows
+    if {$failed} {
+      return -options $info $y
+    }
+    return $y
+  }
+
+  # The groups themselves - split off so that the registry above is restored
+  # on both roads without the loop being written twice.
+  method TableDrawGroups {runs left top options} {
     set y $top
     set first 1
     foreach run $runs {
@@ -406,6 +459,16 @@ oo::define ::tclpdf::document::document {
     }
     if {[dict get $options alternateFill] eq {}} {
       dict set options alternateFill [dict get $theme alternateFill]
+    }
+    # THE BANDING COLOUR, HERE, where every other value of a table is
+    # checked. It used to be parsed by the cell that first used it - the
+    # SECOND body row - so a one-row table took "-alternateFill bogus"
+    # without a word and a three-row table refused it. A refusal that
+    # depends on how many rows there are is not one a caller can rely on.
+    # Through the parser itself, so the message is the colour module's, as
+    # it is for every other colour of a table.
+    if {[dict get $options alternateFill] ne {}} {
+      ::tclpdf::color parse [dict get $options alternateFill]
     }
     return $options
   }
@@ -628,7 +691,16 @@ oo::define ::tclpdf::document::document {
       set pageTop [dict get $options top]
       set y $pageTop
     }
-    set y [my TableSection $headCells $headHeights $widths $group $left $y $options]
+    # WHICH LOGICAL ROW EACH DRAWN ROW IS. The key travels with the row and
+    # not with the page: the head row of column group two is the SAME row of
+    # the table as the head row of group one, and its cells belong in the
+    # same TR (ISO 32000-1, 14.8.4.3.4 - a TR holds the cells of that row).
+    # The repeats a page break makes are not rows at all and carry no key;
+    # they go through [TableSectionAgain] as artifacts.
+    set repeated [expr {[dict exists $run repeated]
+        ? [dict get $run repeated] : 0}]
+    set y [my TableSection $headCells $headHeights $widths $group $left $y \
+        $options [my TableRowKeys head [llength $headCells] 0] $repeated]
     for {set index 0} {$index < [llength $bodyCells]} {incr index} {
       set row [lindex $bodyCells $index]
       set height [lindex $bodyHeights $index]
@@ -638,8 +710,8 @@ oo::define ::tclpdf::document::document {
       set needed [my TableNeed $run $index $options]
       if {$index > 0 && $needed ne {} && $y + $needed > $bottom} {
         if {[dict get $options repeatFoot]} {
-          set y [my TableSection $footCells $footHeights $widths $group \
-              $left $y $options]
+          set y [my TableSectionAgain $footCells $footHeights $widths $group \
+              $left $y $options Footer]
         }
         # The frame of "-border outer" belongs to the page, not to the table:
         # every page gets its own, from where the block started down to here.
@@ -653,14 +725,15 @@ oo::define ::tclpdf::document::document {
         set pageTop [dict get $options top]
         set y $pageTop
         if {[dict get $options repeatHead]} {
-          set y [my TableSection $headCells $headHeights $widths $group \
-              $left $y $options]
+          set y [my TableSectionAgain $headCells $headHeights $widths $group \
+              $left $y $options Header]
         }
       }
       set y [my TableSection [list $row] [list $height] $widths $group \
-          $left $y $options]
+          $left $y $options [list body,$index] $repeated]
     }
-    set y [my TableSection $footCells $footHeights $widths $group $left $y $options]
+    set y [my TableSection $footCells $footHeights $widths $group $left $y \
+        $options [my TableRowKeys foot [llength $footCells] 0] $repeated]
     my TableDrawFrame [dict get $options style] $widths $left $pageTop $y
     my TableHook didDrawPage $options [dict create page [my page current] y $y]
     return $y
@@ -723,11 +796,22 @@ oo::define ::tclpdf::document::document {
   }
 
   # Draw a run of rows that is known to fit.
-  method TableSection {rows heights widths group left y options} {
-    foreach row $rows height $heights {
-      set draw [list my TableRowCells $row $height $widths $left $y $options]
-      if {[my state tagged] eq "1"} {
-        my structure TR -script $draw
+  #
+  # "keys" names the logical row each drawn row is, one key per row, and an
+  # EMPTY list says the rows are a REPEAT - the head or the foot on a page the
+  # table was broken onto - which is drawn without opening a single element:
+  # see [TableSectionAgain], which brackets them as one pagination artifact
+  # and suspends the marking around this call. "repeated" is how many leading
+  # cells of each row -repeatColumns carries into this column group; in the
+  # first group it is 0, because there the columns are the table's own.
+  method TableSection {rows heights widths group left y options {keys {}} \
+      {repeated 0}} {
+    set artifact [expr {![llength $keys]}]
+    foreach row $rows height $heights key $keys {
+      set draw [list my TableRowCells $row $height $widths $left $y $options \
+          $artifact $repeated]
+      if {[my state tagged] eq "1" && !$artifact} {
+        my TableRow $key $draw
       } else {
         {*}$draw
       }
@@ -736,9 +820,105 @@ oo::define ::tclpdf::document::document {
     return $y
   }
 
+  # One key per row of a section, "head,0" and so on - the identity a row
+  # keeps across the column groups.
+  method TableRowKeys {section count from} {
+    set keys {}
+    for {set index 0} {$index < $count} {incr index} {
+      lappend keys $section,[expr {$from + $index}]
+    }
+    return $keys
+  }
+
+  # The TR of one logical row: opened on the first column group and RESUMED on
+  # every further one.
+  #
+  # A table broken across columns draws every row of the first group, then
+  # every row of the second - so the cells of group two belong to rows that
+  # were closed a page ago. Written as new rows, a table of four rows and
+  # eight columns came out as EIGHT rows of four with a second heading row in
+  # the middle: veraPDF called it conformant, and a reader was told the table
+  # is twice as long and half as wide as it is. [StructureResume] is the
+  # bracket that hangs the further cells on the row they belong to; the cells
+  # themselves are new elements either way, because they are different cells,
+  # and each carries its own page.
+  #
+  # The id is remembered BEFORE the body runs: a didDrawCell hook that draws
+  # a table of its own must not find this row half made, and the registry is
+  # saved and restored around the whole table for that (see [TableDrawAll]).
+  method TableRow {key script} {
+    set rows [my state tableRows]
+    if {[dict exists $rows $key]} {
+      return [my StructureResume [dict get $rows $key] $script]
+    }
+    set id [my StructureOpen TR]
+    dict set rows $key $id
+    my state tableRows $rows
+    set code [catch {uplevel 1 $script} result outcome]
+    my StructureClose $id
+    if {$code} {
+      return -options $outcome $result
+    }
+    return $result
+  }
+
+  # The head or the foot AGAIN, on a page the table was broken onto.
+  #
+  # A repeated row is not a row of the table twice. ISO 32000-1 14.8.2.2.2
+  # knows exactly one way of saying "this is here because the page ended":
+  # a pagination artifact - and 14.8.4.3.4 says what a TR is, namely a row of
+  # the table. Written as rows, the tree of a 40-row table with -repeatHead 1
+  # -repeatFoot 1 held 44 TR, and the sum stood in it twice: "Summe 1234" as
+  # a data row in the middle of the table and again at the end. Measured with
+  # treecheck.py, and veraPDF called the file conformant either way - a
+  # reader hears it, no validator does.
+  #
+  # So the whole repeat goes into ONE artifact bracket and nothing inside it
+  # is marked: the marking is suspended for the duration, which is what
+  # [pageNumber] does around the page number for the same reason, and the
+  # cells draw their fill, their rules and their text without asking the tree
+  # for anything. The logical table keeps its rows once.
+  #
+  # Suspended and restored on both roads - a colour a hook put into a style
+  # can still refuse in the middle - so that a table that fails on its second
+  # page leaves the document's marking exactly as it found it.
+  method TableSectionAgain {rows heights widths group left y options kind} {
+    return [my TableArtifact [list Pagination $kind] [list \
+        my TableSection $rows $heights $widths $group $left $y $options]]
+  }
+
+  # Draw something as ONE pagination artifact, with nothing inside it marked.
+  #
+  # Two callers ask the same question: a head or a foot repeated at a page
+  # break, and the columns -repeatColumns carries into every column group.
+  # Both are on the page because the table was broken, not because the table
+  # holds them twice, and ISO 32000-1 14.8.2.2.2 knows one way of saying so.
+  # Suspended and restored on both roads - a colour a hook put into a style
+  # can still refuse halfway - so that a table which fails on its second page
+  # leaves the document's marking exactly as it found it.
+  method TableArtifact {kind script} {
+    if {[my state tagged] ne "1"} {
+      return [uplevel 1 $script]
+    }
+    set mark [my StructureMark Artifact $kind]
+    my content [my StructureBegin $mark]
+    set suspended [my state structureSuspend]
+    my state structureSuspend 1
+    set failed [catch {uplevel 1 $script} result info]
+    my state structureSuspend $suspended
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
+    }
+    if {$failed} {
+      return -options $info $result
+    }
+    return $result
+  }
+
   # One row's cells. Split out of TableSection so that the row can be wrapped
   # in a TR without the loop body existing twice.
-  method TableRowCells {row height widths left y options} {
+  method TableRowCells {row height widths left y options {artifact 0} \
+      {repeated 0}} {
     foreach cell $row {
       set x $left
       for {set index 0} {$index < [dict get $cell column]} {incr index} {
@@ -765,7 +945,20 @@ oo::define ::tclpdf::document::document {
       # The spans are written out because a reader rebuilding the grid cannot
       # measure the page to find them.
       set draw [list my TableDrawCell $cell $x $y $cellHeight]
-      if {[my state tagged] eq "1"} {
+      # A COLUMN -repeatColumns CARRIED INTO THIS GROUP is the same cell of
+      # the same row as the one the first group already put into the tree. A
+      # second TD for it would tell a reader the row holds the value twice,
+      # so it is drawn as a pagination artifact instead - the same answer the
+      # repeated head and foot get, and for the same reason. The column index
+      # is the one within the GROUP, and the repeated columns are its leading
+      # ones (see TableGroups).
+      if {[my state tagged] eq "1" && !$artifact
+          && [dict get $cell column] < $repeated} {
+        my TableArtifact Pagination $draw
+        my TableHook didDrawCell $options $cell
+        continue
+      }
+      if {[my state tagged] eq "1" && !$artifact} {
         set head [expr {[dict get $cell section] eq "head"}]
         set attributes {}
         if {$head} {
@@ -796,4 +989,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.8
+package provide tclpdf::table 1.9

@@ -58,6 +58,38 @@ namespace eval ::tclpdf::glyfOutline {
   variable KEEP 0x41
 }
 
+# How many points a glyph has, WITHOUT decoding it: 0 for an empty one or for
+# a record with no contours, -1 for a composite, and the point count for a
+# simple glyph.
+#
+# Only the header is read - the number of contours and the last point index of
+# the last contour, which is the count minus one (ISO/IEC 14496-22, 5.3.3).
+# That is all the one caller wants: [FontDrawsNothing] in font.tcl asks
+# whether a glyph draws an area, and two points do not - Apple's sbix faces
+# carry exactly such a two-point contour with a bounding box in every glyf
+# entry, which made a blank face look like an outlined one. Decoding the
+# whole glyph through [parse] would answer the same question at fifty times
+# the work, over every character of a face.
+proc ::tclpdf::glyfOutline::points {data} {
+  if {[string length $data] < 10} {
+    return 0
+  }
+  binary scan $data S contours
+  if {$contours < 0} {
+    return -1
+  }
+  if {$contours == 0} {
+    return 0
+  }
+  # endPtsOfContours follows the ten-byte header, one unsigned short each; the
+  # last of them is the highest point index.
+  set position [expr {10 + ($contours - 1) * 2}]
+  if {[binary scan $data @${position}Su end] != 1} {
+    return 0
+  }
+  return [expr {$end + 1}]
+}
+
 # One glyph's data, as a dictionary.
 #
 #   type        simple | composite | empty
@@ -455,4 +487,4 @@ proc ::tclpdf::glyfOutline::Matrix {flags transform} {
   return {1 0 0 1}
 }
 
-package provide tclpdf::glyfOutline 1.1
+package provide tclpdf::glyfOutline 1.2

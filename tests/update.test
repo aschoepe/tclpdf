@@ -634,4 +634,34 @@ test update-release-9.1 {a number this update reserved can be given back} -body 
 } -result {1 1 1 1 1}
 
 
+# --- round 7: the refusals of the update speak for the update ---------------
+
+test update-30.1 {an encrypted file is refused in this module's words} -body {
+    # It always was refused - by the READER, in the words of the import
+    # ("encrypted files are not imported") and under TCLPDF IMPORT
+    # ENCRYPTED. Nothing is being imported here, and a caller trapping
+    # TCLPDF UPDATE saw nothing at all.
+    set doc [tclpdf new -unit mm -format a4 -version 2.0]
+    $doc encrypt -owner secret
+    $doc page add
+    $doc text "x" -at {10 10}
+    set path [::tclpdfTest::scratch update-encrypted.pdf]
+    $doc write $path
+    $doc destroy
+    set outcome [::tclpdfTest::refuse {::tclpdf::update open $path}]
+    set code [catch {::tclpdf::update open $path} said]
+    file delete $path
+    list [lindex $outcome 0] [lindex $outcome 1] [lindex $outcome 2] \
+        [string match {*not updated*} $said]
+} -result {1 1 {TCLPDF UPDATE ENCRYPTED} 1}
+
+test update-30.2 {an unknown subcommand of the ensemble carries a tclpdf code} -body {
+    ::tclpdfTest::refuse {::tclpdf::update nonsense /nowhere.pdf}
+} -result {1 1 {TCLPDF UPDATE SUBCOMMAND nonsense}}
+
+test update-30.3 {and the message names the ones there are} -body {
+    catch {::tclpdf::update nonsense /nowhere.pdf} said
+    string match {*known is: open*} $said
+} -result 1
+
 cleanupTests

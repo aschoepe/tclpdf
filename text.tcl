@@ -167,6 +167,23 @@ namespace eval ::tclpdf::text {
 # waiting to differ, so this one is the name and option.tcl has the body.
 interp alias {} ::tclpdf::text::finite {} ::tclpdf::option finite
 
+# Is this a number a content stream can carry at all? [pdfObj fits] is the one
+# place the range of a PDF real stands (Annex C.2, about +/-3.403e38), and the
+# gates ask it too - [option number], [option point] and [page distance]. Named
+# here as [text::finite] is named here, so that the two predicates this file
+# uses read alike; the answer comes from that one proc and from nowhere else.
+interp alias {} ::tclpdf::text::writable {} ::tclpdf::pdfObj fits
+
+# The sentence every refusal of a number too large for the file ends on, so
+# that the wording stands once. NaN and Inf are named with it because they
+# arrive by the same road - an arithmetic of the caller's that went wrong -
+# and [writable] answers no to all three.
+proc ::tclpdf::text::rangeHint {} {
+  return "NaN, Inf and a magnitude beyond the range of a PDF real (about\
+      +/-3.403e38, ISO 32000-1 Annex C.2) are doubles to Tcl and name no\
+      length a content stream can carry"
+}
+
 oo::define ::tclpdf::document::document {
 
   # $doc font                                  -> the current state
@@ -248,12 +265,21 @@ oo::define ::tclpdf::document::document {
     foreach {name value} $parsed {
       my TextCheck $name $value
     }
+    # Resolving now rather than at output time means a wrong family is
+    # reported where it was written, not three calls later - and resolving
+    # BEFORE the values are stored is the other half of the rule the comment
+    # above states. [TextCheck] does not know the families; the resolver
+    # does, and it used to run after [TextSet] had already written the
+    # unknown name into the state. Measured 2026-08-26: after a refused
+    # "font -family nosuch" the state said "nosuch", and the NEXT [text] -
+    # which had named no family at all - was refused with the same code. A
+    # refusal that leaves behind the very thing it refused.
+    set resolved [my TextResolve [dict get $parsed family] \
+        [dict get $parsed style]]
     foreach {name value} $parsed {
       my TextSet $name $value
     }
-    # Resolving now rather than at output time means a wrong family is
-    # reported where it was written, not three calls later.
-    my TextSet resolved [my TextResolve [my TextGet family] [my TextGet style]]
+    my TextSet resolved $resolved
     return [my TextState]
   }
 
@@ -349,6 +375,10 @@ oo::define ::tclpdf::document::document {
     # standing invitation, the braces stop the substitution, and Tcl then
     # reports "list element in braces followed by ]" from somewhere inside the
     # method - which says nothing about the actual mistake.
+    # Two numbers, both finite, and both inside the range a PDF real carries:
+    # [option point] asks all three, so a coordinate that would overflow is
+    # refused here rather than by [pdfObj num] with "q", "BT" and the mark of
+    # a tagged paragraph already in the stream.
     set at [::tclpdf::option point [dict get $options at] -at text]
     if {![string is boolean -strict [dict get $options paginate]]} {
       return -code error -errorcode [list TCLPDF TEXT ARGUMENT paginate] \
@@ -364,10 +394,10 @@ oo::define ::tclpdf::document::document {
     # act as baseline in silence, so -anchor middle drew a baseline block and
     # nobody was told. See TextAnchor for the two values there are.
     my TextAnchor [dict get $options anchor]
-    if {![::tclpdf::text::finite [dict get $options rotate]]} {
+    if {![::tclpdf::text::writable [dict get $options rotate]]} {
       return -code error -errorcode [list TCLPDF TEXT ARGUMENT rotate] \
           "tclpdf: -rotate takes an angle in degrees, not\
-          \"[dict get $options rotate]\""
+          \"[dict get $options rotate]\" - [::tclpdf::text::rangeHint]"
     }
     # EVERYTHING that can be refused is refused HERE, before a byte reaches
     # the stream or a mark the tree - the font state with its per-call
@@ -837,8 +867,9 @@ oo::define ::tclpdf::document::document {
     set reach [my TextReach $chain]
     if {$reach < 2} {
       # No face in the chain holds a sequence, so a unit is a code point -
-      # which [split {}] gives under both interpreters, surrogate pair or not.
-      return $chars
+      # which [split {}] gives under both interpreters, surrogate pair or not
+      # - with whatever hangs on it.
+      return [my TextUnitsAttach $state $chars]
     }
     set sequences [my TextSequences $chain]
     set count [llength $chars]
@@ -859,7 +890,46 @@ oo::define ::tclpdf::document::document {
       lappend units $unit
       incr position [llength [split $unit {}]]
     }
-    return $units
+    return [my TextUnitsAttach $state $units]
+  }
+
+  # What hangs on the character in front of it stays with it.
+  #
+  # A unit is what the emergency break may cut BEFORE, and a character with an
+  # advance of nought is not a thing of its own: it modifies the one before
+  # it. A registered sequence already comes out whole above; this is for the
+  # combinations no face registered - a variation selector in a face that
+  # carries U+FE0F as a glyph of its own, a combining mark on a letter.
+  # Measured before this, Noto Emoji at 5 mm: "\U1F600\u2764\uFE0F\U1F600"
+  # fell into FOUR lines, the third holding nothing but the selector - a blank
+  # line on the page and a selector without its character in the extraction.
+  # The manual promises the opposite in as many words (:434): "a mark is never
+  # cut from its variation selector".
+  #
+  # THE TEST IS THE ADVANCE, which is the same test textPath.tcl makes when it
+  # binds a combining mark to its base ([TextPathAttached]) - so it holds for
+  # every kind of face without a second road, and a face that gives the
+  # selector a width of its own is believed rather than second-guessed. The
+  # three characters of [neverDrawn] have no advance either and hang on
+  # nothing; they are named there and skipped here for that reason.
+  #
+  # A measurement per unit, on the emergency road only - the one road that
+  # asks for units at all, and one that is already measuring every candidate
+  # piece of a word that fits nowhere. A character no face can measure is not
+  # a mark: it is refused by the drawing, and saying so here would report it
+  # from the wrong place.
+  method TextUnitsAttach {state units} {
+    set result {}
+    foreach unit $units {
+      if {[llength $result] && $unit ni $::tclpdf::text::neverDrawn
+          && ![catch {my TextPoints $state $unit} points]
+          && [lindex $points 0] == 0} {
+        lset result end [lindex $result end]$unit
+        continue
+      }
+      lappend result $unit
+    }
+    return $result
   }
 
   # The line as {face text} pieces, in the order they are set.
@@ -1190,22 +1260,28 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
-    # NOTHING IS FITTED TO NOTHING. A content stream carries five decimals
-    # (see [pdfObj num]), so a size below 0.00001 pt is written as "0 Tf" and
-    # the line disappears without a word - which is the very thing the manual
-    # refuses for a -size written by hand, "rather than making the text
-    # vanish". Measured before this: -fit {1e-9 1e-9} wrote "/FHelvetica 0
-    # Tf" and drew an empty page. A box that small is a computed number that
-    # came out wrong somewhere, not a wish.
+    # NOTHING IS FITTED TO NOTHING, and the floor is ONE POINT.
+    #
+    # A content stream carries five decimals (see [pdfObj num]), so a size
+    # below 0.00001 pt is written as "0 Tf" and the line disappears without a
+    # word. But a size that rounds to zero is not the boundary a caller cares
+    # about: a line set at 0.0002 pt is written, is valid, and is invisible
+    # to every reader and every printer. The manual says a box "too small for
+    # anything this package can write into it is refused rather than filled
+    # with a size that rounds to zero", and 01.15 printed "not refused - the
+    # check did not fire" over a -fit {0.0001 0.0001} that came out at
+    # 0.0002 pt. One point is the smallest size a document can be meant to
+    # carry; below it the box is a computed number that came out wrong
+    # somewhere, not a wish.
     if {![::tclpdf::text::finite $size] || ![::tclpdf::text::finite $stretch]
-        || $size <= 0 || $stretch <= 0
-        || [::tclpdf::pdfObj num $size] == 0
+        || $size < 1 || $stretch <= 0
         || [::tclpdf::pdfObj num $stretch] == 0} {
       return -code error -errorcode [list TCLPDF TEXT FIT BOX $fit] \
           "tclpdf: -fit {$fit} leaves nothing of the line - the size would\
-          come out at $size and the stretch at $stretch, and a content stream\
-          writes five decimals, so the text would be set at nought and\
-          disappear; give a box the line can be seen in"
+          come out at [format %.4g $size] pt and the stretch at\
+          [format %.4g $stretch] per cent, and a size under one point is\
+          smaller than anything this package can write into a box; give a box\
+          the line can be seen in"
     }
     dict set state size $size
     dict set state stretch $stretch
@@ -1365,7 +1441,18 @@ oo::define ::tclpdf::document::document {
     # text ..." came out black while the stream state still said red.
     # Only when a style colour IS in force - a document without [style]
     # keeps its bytes.
-    set byTJ [my TextTJ $font $state]
+    # PER SEGMENT, not per family. Which of the two roads the word spacing
+    # takes is a property of the FACE that sets the space - Tw reaches byte 32
+    # of a single-byte encoding and nothing else (9.3.3) - and a -fallback
+    # chain sets one line in more than one face. Asked of the family alone,
+    # a Type 3 family with an embedded chain behind it answered "Tw", the
+    # chain set the spaces through Identity-H where Tw does nothing, and the
+    # line came out 20 pt short of what [textWidth] measured - which is the
+    # very chain the manual recommends for a colour face with words behind
+    # it. So the stream gets "Tw" as soon as ONE segment is addressed by
+    # single bytes, and every Identity-H segment gets its TJ kick, from
+    # [TextShowOne], which is where the face of a segment is known.
+    set byTw [my TextTw $font $state $string]
     # The rendering mode is text state (Tmode, Table 102), so it leaks past ET
     # exactly as Tc and Ts do and belongs in the guard beside them: a heading
     # set with -render stroke would otherwise leave "1 Tr" in force and the
@@ -1375,7 +1462,7 @@ oo::define ::tclpdf::document::document {
     # which is guarded already, so the mode alone decides.
     set mode [dict get $::tclpdf::text::renderModes [dict get $state render]]
     set guarded [expr {[dict get $state spacing] != 0
-        || ([dict get $state wordSpacing] != 0 && !$byTJ)
+        || $byTw
         || [dict get $state rise] != 0
         || [dict get $state stretch] != 100
         || $mode != 0
@@ -1448,7 +1535,7 @@ oo::define ::tclpdf::document::document {
       my content $stroking
     }
     foreach {key operator} {spacing Tc wordSpacing Tw rise Ts} {
-      if {$key eq "wordSpacing" && $byTJ} {
+      if {$key eq "wordSpacing" && !$byTw} {
         continue
       }
       if {[dict get $state $key] != 0} {
@@ -1531,21 +1618,21 @@ oo::define ::tclpdf::document::document {
         lassign [list $second $first] first second
         lassign [list $kernSecond $kernFirst] kernFirst kernSecond
       }
-      my content [my TextShow $font $state $first $byTJ]
+      my content [my TextShow $font $state $first auto]
       # The empty ActualText is UTF-16 with nothing after the byte order mark.
       my content "/Span <</ActualText <FEFF>>> BDC\n"
       # Inside the bracket: what the pen does on its way to the break hyphen
       # is part of the break hyphen, and an empty ActualText covers a piece of
       # content, not a piece of the text.
       my content $kernFirst
-      my content [my TextShow $font $state "-" $byTJ]
+      my content [my TextShow $font $state "-" auto]
       my content "EMC\n"
       if {$second ne {}} {
         my content $kernSecond
-        my content [my TextShow $font $state $second $byTJ]
+        my content [my TextShow $font $state $second auto]
       }
     } else {
-      my content [my TextShow $font $state $string $byTJ]
+      my content [my TextShow $font $state $string auto]
     }
     my content "ET\n"
     if {$guarded} {
@@ -1615,6 +1702,32 @@ oo::define ::tclpdf::document::document {
         && [my FontKind $font] ni {type1 type3}}]
   }
 
+  # And the other half of the same question, asked of a whole run: does "Tw"
+  # have to go into the stream for it?
+  #
+  # It does as soon as ONE segment is set in a face addressed by single bytes
+  # - a standard face, an embedded Type 1 program, a Type 3 font - because
+  # those have no TJ road here ([TextShowOne] writes a plain "Tj" for all
+  # three) and Tw is the only way their spaces can grow. For the Identity-H
+  # segments beside them the operator is valid and does nothing, so writing
+  # it costs them nothing; their spacing comes from the kick [TextAdjust]
+  # puts after every U+0020 glyph.
+  #
+  # A line with no chain in it answers exactly what [TextTJ] answered before
+  # per family, so the bytes of every document without -fallback are what
+  # they were.
+  method TextTw {font state string} {
+    if {[dict get $state wordSpacing] == 0} {
+      return 0
+    }
+    foreach segment [my TextSegments $state $string] {
+      if {![my TextTJ [lindex $segment 0] $state]} {
+        return 1
+      }
+    }
+    return 0
+  }
+
   # What has to be written after each character, in thousandths of the text
   # space - the unit of a TJ number. Empty when the run needs no TJ array at
   # all, which keeps the common case a plain "(bytes) Tj".
@@ -1641,7 +1754,25 @@ oo::define ::tclpdf::document::document {
     }
     set kern {}
     if {[dict get $state kerning] && [dict get $state size] > 0} {
-      set kern [my FontRunKern $font $run]
+      # THE DIRECTION GOES WITH IT. A gap of this list sits between two
+      # LOGICAL neighbours, and a right-to-left line draws the logically later
+      # glyph first - so a pair adjustment belongs in one gap or the other
+      # depending on which way the line runs, and in the wrong one it moves
+      # exactly one glyph by exactly its own amount. Measured against
+      # hb-shape over 78 Arabic words: Noto Sans Arabic 12 words apart,
+      # Scheherazade New 15, Amiri 4; with the direction, none. Latin is
+      # untouched - ltr is what it passes and what the default was.
+      # THE DIRECTION GOES WITH IT. A value1 advance of a GPOS pair moves what
+      # is drawn AFTER its glyph (HarfBuzz, PairPosFormat1::apply), and in a
+      # right-to-left line that is the logically EARLIER glyph - so the
+      # adjustment belongs in the gap in front of the pair rather than behind
+      # it, and kern.tcl answers the question for the direction it is asked
+      # about. Written the other way round it moves exactly one glyph by
+      # exactly its own amount: measured against hb-shape over 78 Arabic
+      # words, Noto Sans Arabic came out 12 words apart, Scheherazade New 15
+      # and Amiri 4, and with the direction none of the three. Latin is
+      # untouched - ltr is what it passes and what the default was.
+      set kern [my FontRunKern $font $run [dict get $state direction]]
     }
     if {$kick == 0 && ![llength $kern]} {
       return {}
@@ -1659,8 +1790,17 @@ oo::define ::tclpdf::document::document {
       if {[lindex [lindex $run $index] 1] eq {32}} {
         set value $kick
       }
-      # The last glyph has no successor, so there is no pair to kern.
-      if {$index < $count - 1 && [llength $kern]} {
+      # ONE ADJUSTMENT PER GLYPH, the last one included: [FontRunKern] answers
+      # a list exactly as long as the run since 2026-08-26, and its last entry
+      # is the amount that falls off the end - the advance of the last glyph,
+      # which has no glyph behind it to move and is still part of the width.
+      # In a right-to-left line [TextReorder] writes that one in FRONT of the
+      # first glyph drawn, which is the same width and the same line; in a
+      # left-to-right one it is written behind the last glyph, where it
+      # belongs. Dropping it left a line one kerning pair wider than
+      # [textWidth] had measured it - measured on DejaVu Sans "AVATAR" set
+      # right to left.
+      if {$index < [llength $kern]} {
         set value [expr {$value - [lindex $kern $index]}]
       }
       lappend adjustments $value
@@ -1799,10 +1939,16 @@ oo::define ::tclpdf::document::document {
   # object holds ONE Tf at a time and a line may show more than one piece
   # inside it - a hyphenated line shows three - so a Tf left standing from the
   # last segment would set the next piece in the wrong face.
+  # "byTJ" is either a boolean the caller insists on or the word "auto", the
+  # answer for each segment's own face. [TextRun] passes auto - see [TextTw]
+  # for why the family cannot decide it for a chain - and svgElement.tcl
+  # passes 0, because the SVG road writes no Tw either and a kick without one
+  # would be word spacing where the same text has none today.
   method TextShow {font state string byTJ} {
     set segments [my TextSegments $state $string]
     if {[llength $segments] == 1 && [lindex $segments 0 0] eq $font} {
-      return [my TextShowOne $font $state $string $byTJ]
+      return [my TextShowOne $font $state $string \
+          [my TextShowTJ $font $state $byTJ]]
     }
     set size [::tclpdf::pdfObj num [dict get $state size]]
     set current $font
@@ -1814,13 +1960,23 @@ oo::define ::tclpdf::document::document {
             $size Tf\n"
         set current $face
       }
-      append result [my TextShowOne $face $state $piece $byTJ]
+      append result [my TextShowOne $face $state $piece \
+          [my TextShowTJ $face $state $byTJ]]
     }
     if {$current ne $font} {
       append result "[my TextResource $font [dict get $state direction]]\
           $size Tf\n"
     }
     return $result
+  }
+
+  # Whether ONE segment produces its word spacing by hand: the caller's answer
+  # where it gave one, this face's own where it said "auto".
+  method TextShowTJ {font state byTJ} {
+    if {$byTJ eq "auto"} {
+      return [my TextTJ $font $state]
+    }
+    return $byTJ
   }
 
   # The show operators for one face: the whole line where nothing falls back,
@@ -1861,7 +2017,12 @@ oo::define ::tclpdf::document::document {
     # other axis is not a smaller error than no offset.
     set marks {}
     if {[dict get $state direction] ne "ttb"} {
-      set marks [my FontRunMarks $font $run]
+      # The same two facts reach the marks: a mark's horizontal offset is the
+      # distance the pen has travelled since its base was drawn, so it is
+      # measured over the advances the LINE is drawn with - which depend on
+      # the direction and on whether this line is kerned at all.
+      set marks [my FontRunMarks $font $run [dict get $state direction] \
+          [dict get $state kerning]]
     }
     # THE REORDERING, and this is the only place it happens: after the run has
     # been built and after everything that reads it in logical order - the
@@ -1995,11 +2156,31 @@ oo::define ::tclpdf::document::document {
   # every face measured anchors those marks. The neighbouring question, the
   # canonical ORDER of two marks on one letter (UAX #15), is not answered here
   # at all - see the head of [TextCluster].
+  #
+  # AND A CURSIVE OFFSET IS NOT AN ANCHORING. Since the package reads the
+  # cursive attachment of a joining script (GPOS type 3), an ordinary LETTER
+  # of a Nastaliq word carries an offset too - it stands higher because it
+  # hangs on the exit point of the letter before it. Read as "the face
+  # anchored this glyph", [TextCluster] pulled such a letter into the cluster
+  # in front of it and set parts of the word in logical rather than in drawn
+  # order. So the cursive offsets are asked for separately and taken back out
+  # again: what remains is what the MARK lookups moved.
+  #
+  # [markPos cursive] is built for the question and answers {0 0} per glyph
+  # for a face without a "curs" lookup, which costs a walk of the run and
+  # nothing else - the prepared table is the one [FontRunMarks] already
+  # builds and [FontLayoutState] caches.
   method TextAttached {font run marks} {
     set parsed [dict get [my state fonts] $font parsed]
     # The code points rather than the characters: under Tcl 8.6 [format %c]
     # cannot write an astral character, and a run may hold one.
     set never [lmap character $::tclpdf::text::neverDrawn {scan $character %c}]
+    set cursive {}
+    if {[llength $marks]} {
+      package require tclpdf::markPos
+      set cursive [::tclpdf::markPos cursive \
+          [my FontLayoutState $font markPos] [lmap item $run {lindex $item 0}]]
+    }
     set flags {}
     set index 0
     foreach item $run {
@@ -2008,6 +2189,11 @@ oo::define ::tclpdf::document::document {
       if {[llength $marks]} {
         lassign [lindex $marks $index] dx dy
         set flag [expr {$dx != 0 || $dy != 0}]
+        if {$flag && [lindex $cursive $index] ne {0 0}} {
+          # Moved by the cursive lookup, so the offset says where the letter
+          # sits and nothing about what it hangs on.
+          set flag 0
+        }
       }
       if {!$flag && [my FontAdvance $font $parsed $glyph] == 0
           && [llength $codes] == 1 && [lindex $codes 0] ni $never} {
@@ -2470,10 +2656,70 @@ oo::define ::tclpdf::document::document {
         # encoding, and declaring WinAnsi for them scrambles every glyph.
         lappend pairs Encoding /WinAnsiEncoding
       }
+      lappend pairs {*}[my TextStandardMetrics $font]
       my resource Font $name \
           [[my writer] ref [[my writer] add [::tclpdf::pdfObj dictionary $pairs]]]
     }
     return [::tclpdf::pdfObj name $name]
+  }
+
+  # What a standard face has to carry in a PDF 2.0 file, and nothing at all
+  # below it.
+  #
+  # ISO 32000-2, 9.6.2.2 and Table 111: FirstChar, LastChar, Widths and
+  # FontDescriptor are optional for a simple font "if the font program is one
+  # of the 14 standard fonts" - and the sentence that grants it reads "in PDF
+  # 1.0 to PDF 1.7". From 2.0 on the exemption is withdrawn and the four
+  # entries are required of the standard fourteen like of any other Type 1
+  # font. No FontFile with them: 2.0 still lets the face go unembedded, what
+  # it no longer lets is a reader guess the metrics.
+  #
+  # Nothing at all under 1.7, so every document written until now keeps its
+  # bytes - a Widths array of 224 numbers in a file that does not need one is
+  # 1.5 kB per face for nothing.
+  #
+  # FirstChar 32 to LastChar 255, the whole encoding rather than the range
+  # the text happens to use: that is what [FontType1Font] writes for an
+  # embedded single-byte face, for the reason named there - the widths do not
+  # depend on the text, and a range that did would have to be rebuilt
+  # whenever the text changed. The numbers come from the same metrics that
+  # measure the line ([afm width]), so what the file declares and what this
+  # package sets a line at cannot differ.
+  method TextStandardMetrics {font} {
+    if {[package vcompare [[my writer] version] 2.0] < 0} {
+      return {}
+    }
+    set first 32
+    set last 255
+    set widths {}
+    for {set code $first} {$code <= $last} {incr code} {
+      lappend widths [::tclpdf::pdfObj num [::tclpdf::afm width $font $code]]
+    }
+    set metrics [::tclpdf::afm descriptor $font]
+    # Table 122. Flags, FontBBox, ItalicAngle, Ascent, Descent and StemV are
+    # required; CapHeight is required "for fonts that have Latin characters",
+    # and the two symbolic faces of the fourteen have none - their AFM says
+    # so with a cap height of 0, which is not a height and is left out rather
+    # than declared.
+    set descriptor [list Type /FontDescriptor \
+        FontName [::tclpdf::pdfObj name $font] \
+        Flags [dict get $metrics Flags] \
+        FontBBox [::tclpdf::pdfObj arr [lmap n [dict get $metrics FontBBox] {
+          ::tclpdf::pdfObj num $n
+        }]] \
+        ItalicAngle [::tclpdf::pdfObj num [dict get $metrics ItalicAngle]] \
+        Ascent [::tclpdf::pdfObj num [dict get $metrics Ascender]] \
+        Descent [::tclpdf::pdfObj num [dict get $metrics Descender]] \
+        StemV [::tclpdf::pdfObj num [dict get $metrics StdVW]]]
+    if {[dict get $metrics CapHeight] != 0} {
+      lappend descriptor CapHeight \
+          [::tclpdf::pdfObj num [dict get $metrics CapHeight]]
+    }
+    return [list FirstChar $first LastChar $last \
+        Widths [[my writer] ref [[my writer] add \
+            [::tclpdf::pdfObj arr $widths]]] \
+        FontDescriptor [[my writer] ref [[my writer] add \
+            [::tclpdf::pdfObj dictionary $descriptor]]]]
   }
 
   # Every value the font state takes is refused HERE, where it arrives - in
@@ -2519,33 +2765,36 @@ oo::define ::tclpdf::document::document {
         # is a double to Tcl and compares false against everything, so a
         # range check of the shape "$value <= 0" waves it straight through -
         # see the proc at the head of this file.
-        if {![::tclpdf::text::finite $value] || $value <= 0} {
+        if {![::tclpdf::text::writable $value] || $value <= 0} {
           return -code error -errorcode [list TCLPDF FONT ARGUMENT size] \
               "tclpdf: -size must be a positive number of\
-              points, not \"$value\""
+              points, not \"$value\" - [::tclpdf::text::rangeHint]"
         }
       }
       stretch {
-        if {![::tclpdf::text::finite $value] || $value <= 0} {
+        if {![::tclpdf::text::writable $value] || $value <= 0} {
           return -code error -errorcode [list TCLPDF FONT ARGUMENT stretch] \
               "tclpdf: -stretch is a percentage above zero,\
-              100 being normal, not \"$value\""
+              100 being normal, not \"$value\" - [::tclpdf::text::rangeHint]"
         }
       }
       leading {
-        if {$value ne {} && (![::tclpdf::text::finite $value]
+        if {$value ne {} && (![::tclpdf::text::writable $value]
             || $value <= 0)} {
           return -code error -errorcode [list TCLPDF FONT ARGUMENT leading] \
               "tclpdf: -leading is a line spacing in points\
               above zero - or empty for the default of 1.2 times the size -\
-              not \"$value\""
+              not \"$value\" - [::tclpdf::text::rangeHint]"
         }
       }
       spacing - wordSpacing - rise {
-        if {![::tclpdf::text::finite $value]} {
+        # [writable] rather than [finite]: the three go into the stream as
+        # Tc, Tw and Ts, so a number the file cannot hold is refused here
+        # rather than by [pdfObj num] with "q" and "BT" already written.
+        if {![::tclpdf::text::writable $value]} {
           return -code error -errorcode [list TCLPDF FONT ARGUMENT $name] \
               "tclpdf: -$name takes a number of points, not\
-              \"$value\""
+              \"$value\" - [::tclpdf::text::rangeHint]"
         }
       }
       kerning - ligatures - unshaped {
@@ -2599,10 +2848,12 @@ oo::define ::tclpdf::document::document {
         # written here and a caller must not have to run a text call to find
         # out that the value was refused.
         if {$value ne {} && (![::tclpdf::text::finite $value]
-            || $value < 0)} {
+            || $value < 0
+            || ![::tclpdf::text::writable [my distance $value]])} {
           return -code error -errorcode [list TCLPDF TEXT ARGUMENT strokeWidth] \
               "tclpdf: -strokeWidth is a line width of 0 or\
-              more in the document unit, not \"$value\""
+              more in the document unit, not \"$value\" -\
+              [::tclpdf::text::rangeHint]"
         }
       }
       render {
@@ -2778,6 +3029,30 @@ oo::define ::tclpdf::document::document {
             -fallback {} for this one"
       }
     }
+    # A RENDERING MODE ON A TYPE 3 FAMILY. ISO 32000-2, 9.3.6, Note: "The
+    # text rendering mode has no effect on text displayed in a Type 3 font".
+    # The clipping modes are refused for every face at [TextCheck]; the other
+    # three that are not the default were written as "N Tr" and did nothing
+    # at all - measured with "font -render invisible" on a [font define]
+    # face: "3 Tr" in the stream and the glyph on the page in full colour.
+    # For a colour font that is the OCR text under an emoji staying visible,
+    # which is the one use -render invisible has.
+    #
+    # Refused rather than ignored, the way -direction rtl and ttb are refused
+    # on a face that cannot have them, and at the same gate: what a caller
+    # asks for and cannot get is said, not dropped. The FAMILY decides - a
+    # face reached through -fallback sets its own segments and honours the
+    # mode there.
+    if {[dict get $state render] ne "fill"
+        && [my TextEmbedded [dict get $state family]]
+        && [my FontKind [dict get $state family]] eq "type3"} {
+      return -code error -errorcode [list TCLPDF TEXT RENDER type3] \
+          "tclpdf: -render [dict get $state render] has no effect on a Type 3\
+          font (ISO 32000-2, 9.3.6) - \"[dict get $state family]\" is one, so\
+          the glyphs would be painted as its own \[font glyph\] scripts paint\
+          them whatever the mode says; use -render fill here, or set the text\
+          in a face embedded with \[font embed\]"
+    }
     if {$changed} {
       dict set state resolved \
           [my TextResolve [dict get $state family] [dict get $state style]]
@@ -2789,4 +3064,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.20
+package provide tclpdf::text 1.21

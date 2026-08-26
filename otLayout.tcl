@@ -207,26 +207,40 @@ proc ::tclpdf::otLayout::featureLookups {table wanted {preferred {}}} {
 
 # The same, but over the default language system of EVERY script in the table.
 #
-# There is one caller and one reason (markPos.tcl): a combining mark hangs off
-# the script of the LETTER it belongs to, and this package has no script API to
-# name that script with. The Hebrew nikud of DejaVu Sans sit in lookups 5 to 9,
-# reachable only from "hebr"; [featureLookups] takes "latn" and reaches 4, 12
-# and 13, so every point came out at offset zero - drawn at the pen position,
-# beside its letter instead of under it. Measured 2026-08-21.
+# TWO CALLERS AND ONE REASON: a lookup that belongs to the script of the TEXT
+# cannot be found by name, because this package has no script API to name that
+# script with.
 #
-# This answer is NOT a drop-in replacement for [featureLookups] and the caller
-# does not use it as one. Where two scripts cover the same mark glyph with
+# markPos.tcl was the first (2026-08-21). A combining mark hangs off the script
+# of the LETTER it belongs to: the Hebrew nikud of DejaVu Sans sit in lookups 5
+# to 9, reachable only from "hebr"; [featureLookups] takes "latn" and reaches
+# 4, 12 and 13, so every point came out at offset zero - drawn at the pen
+# position, beside its letter instead of under it.
+#
+# kernGpos.tcl is the second (2026-08-26), and it is the same shape of fault
+# one table over. Noto Sans Arabic names lookup 2 for "kern" under "arab" and
+# lookup 3 under "latn"; the Latin one holds no Arabic pair, so an Arabic line
+# was set without any of the kerning the face has. Measured against hb-shape
+# over 78 Arabic, Persian and Urdu words, the union answers what the resolved
+# script would have and the Latin word list of 4019 words in eight faces is
+# unchanged by it - which is the test that matters, because the union is
+# WIDER and a wider net may catch something it should not.
+#
+# THIS ANSWER IS NOT A DROP-IN REPLACEMENT for [featureLookups] and neither
+# caller uses it as one. Where two scripts cover the same MARK glyph with
 # different anchors the later lookup wins, and that need not be the right one:
 # measured on Arimo, its Cyrillic mark lookup covers U+0300 and U+018F both,
 # stands after the Latin one, and moves the grave over the capital schwa 57
 # units away from where HarfBuzz puts it - seven such pairs in that one face.
-# markPos.tcl therefore keeps the two apart and uses what this adds only where
+# markPos.tcl therefore keeps two tiers and uses what this adds only where
 # [featureLookups] had nothing to say. That division of labour is the caller's
 # and is explained there.
 #
-# Only useful for a feature whose lookups are per script. Asking it for
-# kerning would be wrong for the opposite reason - see [langSys], where taking
-# DFLT before latn loses the Latin pair kerning of DejaVu Sans.
+# Kerning needs no tiers and takes the union whole, because its lookups ADD UP
+# rather than overrule each other (S. 217) and a pair one script does not know
+# contributes nothing. What it must not do is take DFLT before latn - see
+# [langSys], where that loses the Latin pair kerning of DejaVu Sans - and the
+# union does not: it holds both.
 proc ::tclpdf::otLayout::featureLookupsAnyScript {table wanted} {
   set all {}
   dict for {name script} [scripts $table] {
@@ -504,11 +518,10 @@ proc ::tclpdf::otLayout::classDef {table offset} {
 # An anchor point as {x y} in design units, or {} when the format is not one
 # of the three the specification defines (S. 240-241).
 #
-# This sits here rather than in markPos.tcl because it has a second reader
-# waiting: cursive attachment, GPOS lookup type 3, reads the very same table
-# for its entry and exit points, and that is the lookup forms.tcl needs the
-# day Arabic joining stops being drawn at the pen position. A copy over there
-# would be the duplicate this package does not keep.
+# This sits here rather than in markPos.tcl because it has a second reader:
+# cursive attachment, GPOS lookup type 3, reads the very same table for its
+# entry and exit points - see [entryExit] below. A copy over there would be
+# the duplicate this package does not keep.
 #
 # All three formats begin with the same six bytes - format, x, y - and only
 # those are read:
@@ -541,4 +554,50 @@ proc ::tclpdf::otLayout::anchor {table offset} {
       [s16 $table [expr {$offset + 4}]]]
 }
 
-package provide tclpdf::otLayout 1.3
+# The EntryExitRecord array of a cursive attachment subtable (GPOS lookup type
+# 3, format 1, S. 224-225): a dict glyph -> {entry exit}, where each of the two
+# is an {x y} anchor or {} for the NULL offset the specification allows.
+#
+# HERE RATHER THAN IN THE CALLER because it has two readers and they want
+# different halves of the same bytes: the X coordinates change how far a
+# letter advances (kernGpos.tcl) and the Y coordinates lift it off the
+# baseline onto the exit point of the letter before it (markPos.tcl). Reading
+# the array twice would be the copy, and the copy would be the one that got
+# the coverage index wrong.
+#
+# THE ARRAY IS ORDERED BY COVERAGE INDEX, which is the index the coverage
+# table carries and not a running counter - the same rule every parallel array
+# beside a coverage follows.
+#
+# A subtable of another format is not read: the specification defines exactly
+# one, and a later number is from a later specification than this reader.
+proc ::tclpdf::otLayout::entryExit {table offset} {
+  if {[u16 $table $offset] != 1} {
+    return {}
+  }
+  set coverage [coverage $table \
+      [expr {$offset + [u16 $table [expr {$offset + 2}]]}]]
+  set count [u16 $table [expr {$offset + 4}]]
+  set records {}
+  dict for {glyph index} $coverage {
+    if {$index >= $count} {
+      continue
+    }
+    set record [expr {$offset + 6 + $index * 4}]
+    set anchors {}
+    foreach field {0 2} {
+      set at [u16 $table [expr {$record + $field}]]
+      if {$at == 0} {
+        lappend anchors {}
+      } else {
+        lappend anchors [anchor $table [expr {$offset + $at}]]
+      }
+    }
+    if {$anchors ne {{} {}}} {
+      dict set records $glyph $anchors
+    }
+  }
+  return $records
+}
+
+package provide tclpdf::otLayout 1.4

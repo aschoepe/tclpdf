@@ -449,11 +449,26 @@ proc ::tclpdf::importRead::Open {path {tolerateEncrypted 0}} {
     set reader [dict create bytes $bytes path $path xref {} \
         trailer {d {}} objects {} buffers {} sections {} flavour {} \
         inprogress {}]
-    if {![regexp {startxref\s+(\d+)\s+%%EOF\s*$} \
-            [string range $bytes end-1023 end] -> offset]} {
+    # THE LAST %%EOF, and what may stand behind it. 7.5.5 puts %%EOF on the
+    # last line of the file, and files that keep to it are the rule - but a
+    # mail gateway, a print spooler and more than one archive system append a
+    # line of their own, and such a file is not "not a PDF": every reader
+    # opens it, and the page it shows is the page that was written. So the
+    # tail is searched rather than anchored, in the same 1024 bytes 7.5.5
+    # gives a reader for finding the trailer, and what stands behind the
+    # %%EOF is passed over. A file with no startxref in that window is
+    # refused as before, and the message says which of the two it is.
+    set matches [regexp -all -inline -- \
+        {startxref[ \t\r\n\f\x00]+(\d+)[ \t\r\n\f\x00]+%%EOF} \
+        [string range $bytes end-1023 end]]
+    if {![llength $matches]} {
         return -code error -errorcode {TCLPDF IMPORT FILE} "tclpdf: $path\
-            carries no startxref - not a PDF, or a truncated one"
+            carries no startxref in its last 1024 bytes - not a PDF, or a\
+            truncated one"
     }
+    # The LAST of them: an incremental update appends its own startxref, and
+    # the newest section is the one to start the chain at.
+    set offset [lindex $matches end]
     # Where the newest cross-reference section is. Kept in the reader
     # because a second consumer needs it and must not look for it a second
     # time: update.tcl writes an incremental update whose trailer carries a
@@ -560,6 +575,28 @@ proc ::tclpdf::importRead::ClassicSection {readerVar pos} {
         SkipWs $bytes pos
         for {set i 0} {$i < $count} {incr i} {
             set entry [string range $bytes $pos [expr {$pos + 19}]]
+            # TWENTY BYTES EXACTLY, and the shape is fixed: ten digits, a
+            # space, five digits, a space, n or f, and a two-byte end of line
+            # (7.5.4, "each line ... shall be exactly 20 bytes long"). A file
+            # whose lines are nineteen - one space instead of two, or nine
+            # digits of offset - drifts by one byte per entry, and what used
+            # to be reported was the FIRST line the drift made unreadable,
+            # several entries later, as "unreadable cross-reference line at
+            # ...". That names a symptom at a place where nothing is wrong.
+            # Named here instead, at the entry that is short, with the count
+            # of the ones before it that were right.
+            if {![regexp {^\d{10} \d{5} [nf]} $entry]} {
+                return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+                    [dict get $reader path]: the cross-reference entry for\
+                    object [expr {$first + $i}] at $pos is not the twenty\
+                    bytes ISO 32000-2, 7.5.4 prescribes - ten digits, a\
+                    space, five digits, a space, n or f, and a two-byte end\
+                    of line. Read there:\
+                    \"[string map {\r \\r \n \\n} $entry]\". $i entr[expr\
+                    {$i == 1 ? {y} : {ies}}] of this subsection read before\
+                    it, so the lines of this table are short and every offset\
+                    from here on is wrong"
+            }
             set kind [string index $entry 17]
             if {$kind eq "n"} {
                 Enter reader [expr {$first + $i}] \
@@ -579,7 +616,21 @@ proc ::tclpdf::importRead::ClassicSection {readerVar pos} {
 proc ::tclpdf::importRead::StreamSection {readerVar pos} {
     upvar 1 $readerVar reader
     set bytes [dict get $reader bytes]
-    lassign [ObjectAt reader $pos] value hasStream data
+    # WHOSE OFFSET THIS IS, said here rather than left to [ObjectAt]. That
+    # proc answers "no object at offset 404", which is true and names neither
+    # startxref nor the cross reference - and an offset that is one byte off
+    # is exactly the defect a file arrives with (measured 2026-08-26 on a
+    # startxref raised by one; lowered by one it still reads, because the
+    # white space is skipped). The caller of this proc is always the chain
+    # walk, so the offset is always one a startxref or a /Prev named.
+    if {[catch {ObjectAt reader $pos} outcome]} {
+        return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
+            [dict get $reader path]: the cross-reference offset $pos points\
+            at no object - startxref or a /Prev names a byte that is not the\
+            beginning of one (ISO 32000-2, 7.5.5). The reader's own words for\
+            it: [string trim [string map {tclpdf: {}} $outcome]]"
+    }
+    lassign $outcome value hasStream data
     if {!$hasStream || [lindex [Get $value Type] 1] ne "XRef"} {
         return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
             [dict get $reader path]: no cross-reference at offset $pos"
@@ -1247,6 +1298,261 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
         width $width height $height]
 }
 
+# ------------------------------------------- a foreign content stream
+#
+# THE MARKED CONTENT OF A FOREIGN PAGE, TAKEN OUT.
+#
+# A tagged page carries its structure in brackets - "/P << /MCID 0 >> BDC
+# ... EMC" (14.7.4.2) - whose numbers index the parent tree of the file they
+# stand in. Taking the page over as a form XObject leaves those numbers
+# behind: the tree does not travel, and a marked-content sequence inside an
+# XObject is a content item only through the XObject's own /StructParents,
+# which the import writes none of. What is left is a mark pointing at
+# nothing, inside the artifact or Figure bracket [form place] puts around
+# the placement - and a reader that takes marks seriously (Acrobat does,
+# when it reads a page aloud) then finds paragraphs belonging to no tree.
+#
+# So they come out. Nothing else does: the operators between the brackets
+# are the page description and are copied byte for byte.
+#
+# ONLY WHAT CARRIES AN /MCID GOES, and that is the whole rule. An /MCID is
+# the index into the parent tree (14.7.4.2) and it is the only thing in a
+# bracket that points out of the stream; everything else a bracket can say
+# stands on its own two feet and stays:
+#
+#   /OC /oc1 BDC        optional content (8.11.3.2). The bracket is what
+#                       SWITCHES the content inside it - dropping it would
+#                       make a hidden layer of a letterhead permanently
+#                       visible, the very mistake import.tcl avoids when it
+#                       carries the groups' states over
+#   /Span << /Lang ... >> BDC
+#                       a property that says something about the content
+#                       rather than about a tree
+#   /Artifact BMC       an artifact bracket. It says "this is not content",
+#                       which stays true inside a form XObject
+#
+# A BMC has no property list at all (8.10.2.2 gives it a tag and nothing
+# else), so a BMC never carries an /MCID and never goes.
+#
+# The property list is an inline dictionary or the NAME of an entry in the
+# page's /Properties, and both are looked at: the caller hands over the
+# names whose dictionaries hold an /MCID, since resolving them is the
+# reader's business and not this walk's.
+#
+# HOW MUCH OF THE STREAM IS UNDERSTOOD: enough to tell an operator from an
+# operand, which means literal and hexadecimal strings (an operator name
+# inside one is text, not an operator), names, comments, dictionaries,
+# arrays and inline images, whose binary data may hold anything at all. A
+# stream this walk does not get to the end of comes back UNCHANGED - a mark
+# left standing is a blemish, a content stream cut in half is a lost page.
+# A stream carrying no mark at all is answered without being walked.
+proc ::tclpdf::importRead::Unmark {content {marked {}}} {
+    if {![string match *BDC* $content]} {
+        return $content
+    }
+    set length [string length $content]
+    set out {}
+    set pos 0
+    set run -1
+    set operands {}
+    set stack {}
+    while {1} {
+        SkipWs $content pos
+        if {$pos >= $length} {
+            break
+        }
+        set from $pos
+        set token [UnmarkToken $content $length pos]
+        if {$token eq {}} {
+            # Something this walk does not understand - an unterminated
+            # string, a stream that ends inside a token.
+            return $content
+        }
+        if {$run < 0} {
+            set run $from
+        }
+        lassign $token kind text
+        if {$kind ne "op"} {
+            lappend operands $text
+            continue
+        }
+        switch -- $text {
+            BDC {
+                # An /MCID in the property list, written out or standing in
+                # the named entry the caller resolved. The operand run holds
+                # the tag and the property list and nothing else - a BDC
+                # takes no string operand - so the raw text answers it.
+                set keep [expr {![regexp {/MCID\M} \
+                        [string range $content $run [expr {$pos - 1}]]]
+                    && [lindex $operands 1] ni $marked}]
+                lappend stack $keep
+                if {$keep} {
+                    append out [string range $content $run [expr {$pos - 1}]] \n
+                }
+            }
+            BMC {
+                # No property list, so no /MCID, so nothing to take out.
+                lappend stack 1
+                append out [string range $content $run [expr {$pos - 1}]] \n
+            }
+            EMC {
+                if {![llength $stack]} {
+                    # More EMC than brackets: the stream was already
+                    # unbalanced, and taking one out would not mend it.
+                    append out [string range $content $run [expr {$pos - 1}]] \n
+                } else {
+                    set keep [lindex $stack end]
+                    set stack [lrange $stack 0 end-1]
+                    if {$keep} {
+                        append out \
+                            [string range $content $run [expr {$pos - 1}]] \n
+                    } elseif {$run < $from} {
+                        # Operands standing before an EMC that goes are not
+                        # the bracket's and stay.
+                        append out \
+                            [string range $content $run [expr {$from - 1}]] \n
+                    }
+                }
+            }
+            BI {
+                # An inline image: from BI to EI the bytes are the image's,
+                # and EI is found the way every reader finds it - as a token
+                # of its own after the data (8.9.7).
+                if {![UnmarkInlineImage $content $length pos]} {
+                    return $content
+                }
+                append out [string range $content $run [expr {$pos - 1}]] \n
+            }
+            default {
+                append out [string range $content $run [expr {$pos - 1}]] \n
+            }
+        }
+        set run -1
+        set operands {}
+    }
+    if {$run >= 0} {
+        append out [string range $content $run [expr {$length - 1}]] \n
+    }
+    if {[llength $stack]} {
+        # Brackets left open. The stream was unbalanced before this walk
+        # touched it, and a half-stripped one is worse than the original.
+        return $content
+    }
+    return [string trimright $out \n]
+}
+
+# One token, from its first byte; posVar ends up behind it. Answers
+# {kind text} - kind "op" for an operator, anything else for an operand - or
+# the empty string where the stream ends inside the token. The operand text
+# is only ever looked at for a name, so the string branches answer empty.
+proc ::tclpdf::importRead::UnmarkToken {content length posVar} {
+    upvar 1 $posVar pos
+    set c [string index $content $pos]
+    switch -- $c {
+        ( {
+            # A literal string (7.3.4.2): parentheses nest, a backslash
+            # escapes the byte after it whatever that byte is. Not
+            # [ParseString], which DECODES - here the bytes stay as written
+            # and only their end is wanted.
+            set depth 0
+            while {$pos < $length} {
+                set c [string index $content $pos]
+                if {$c eq "\\"} {
+                    incr pos 2
+                    continue
+                }
+                incr pos
+                if {$c eq "("} {
+                    incr depth
+                } elseif {$c eq ")"} {
+                    incr depth -1
+                    if {$depth == 0} {
+                        return [list str {}]
+                    }
+                }
+            }
+            return {}
+        }
+        < {
+            if {[string index $content [expr {$pos + 1}]] eq "<"} {
+                incr pos 2
+                return [list punct <<]
+            }
+            set end [string first > $content $pos]
+            if {$end < 0} {
+                return {}
+            }
+            set pos [expr {$end + 1}]
+            return [list hex {}]
+        }
+        > {
+            incr pos [expr {[string index $content [expr {$pos + 1}]] eq ">"
+                ? 2 : 1}]
+            return [list punct >>]
+        }
+        \[ - \] - \{ - \} - ) {
+            incr pos
+            return [list punct $c]
+        }
+        / {
+            # A name (7.3.5), taken as written - #xx is not decoded, because
+            # nothing here compares a name to anything but the literal /OC.
+            incr pos
+            set text /[ParseToken $content pos]
+            return [list name $text]
+        }
+    }
+    # A number, a keyword or an operator: everything to the next delimiter.
+    set text [ParseToken $content pos]
+    if {$text eq {}} {
+        # A delimiter [Delimiter] knows and this walk does not - the stream
+        # is not one it may rewrite.
+        return {}
+    }
+    if {[string is double -strict $text] || $text in {true false null}} {
+        return [list value $text]
+    }
+    return [list op $text]
+}
+
+# From just past BI to just past EI. Answers 0 where the image has no end,
+# which is a stream this walk gives back untouched.
+proc ::tclpdf::importRead::UnmarkInlineImage {content length posVar} {
+    upvar 1 $posVar pos
+    # The dictionary entries first, up to the ID that introduces the data.
+    while {$pos < $length} {
+        SkipWs $content pos
+        if {$pos >= $length} {
+            return 0
+        }
+        set token [UnmarkToken $content $length pos]
+        if {$token eq {}} {
+            return 0
+        }
+        if {[lindex $token 0] eq "op" && [lindex $token 1] eq "ID"} {
+            break
+        }
+    }
+    if {$pos >= $length} {
+        return 0
+    }
+    # Exactly one byte of white space after ID, then the data (8.9.7).
+    incr pos
+    while {$pos < $length} {
+        set at [string first EI $content $pos]
+        if {$at < 0} {
+            return 0
+        }
+        if {[Delimiter [string index $content [expr {$at - 1}]]]
+                && [Delimiter [string index $content [expr {$at + 2}]]]} {
+            set pos [expr {$at + 2}]
+            return 1
+        }
+        set pos [expr {$at + 2}]
+    }
+    return 0
+}
+
 # ------------------------------------------------------------ the takeover
 
-package provide tclpdf::importRead 1.3
+package provide tclpdf::importRead 1.4

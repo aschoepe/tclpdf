@@ -124,7 +124,7 @@ if {[catch {$doc text "\u05e9\u05dc\u05d5\u05dd" -at {190 166} -family body -dir
 }
 ```
 
-Every face named has to be embedded already - a misspelt alias is refused at the call that wrote the option, not by whichever line first needs it. The option reaches everything the state reaches: a paragraph, a table cell, `textPath`, `leader`, `pageNumbers`.
+Every alias named has to be embedded already - a misspelt one is refused at the call that wrote the option, not by whichever line first needs it. A standard family may stand in the chain too, and `-style` applies to it exactly as it applies to `-family`. The option reaches everything the state reaches: a paragraph, a table cell, `textPath`, `leader`, `pageNumbers`.
 
 ### Rendering modes
 
@@ -475,7 +475,7 @@ $symbols write [file join $out ref-02-colour-font.pdf]
 $symbols destroy
 ```
 
-`TCLPDF COLORFONT TABLES` is a face without `COLR` and `CPAL`, `CHAR` a character the face has no glyph for, `EMPTY` a glyph that would draw nothing at all, `PALETTE` a `-palette` the face does not have, `LIMIT` the 256th character (a Type 3 font is addressed by single bytes), `COMPOSITE` a shape that is a composite glyph or the `Plus` compositing mode, `FOREGROUND` a gradient stop that names the text colour, `UNBOUNDED` a version 1 glyph with no bounds. What the `COLR` reader itself refuses keeps its own `TCLPDF COLR` codes - `MISSING`, `VERSION`, `EMPTY`, `TRUNCATED`, `LAYERS`, `RECORDS`, `PALETTE`, `ENTRY`, and for the version 1 paint graph `CYCLE`, `DEPTH`, `REUSE`, `PAINT`, `COMPOSITE` - and is passed through unchanged, so `trap {TCLPDF COLORFONT}` does **not** catch those.
+`TCLPDF COLORFONT TABLES` is a face without `COLR` and `CPAL`, `CHAR` a character the face has no glyph for, `EMPTY` a glyph that would draw nothing at all, `PALETTE` a `-palette` the face does not have, `LIMIT` the 256th glyph - a sequence of several characters is one, and a Type 3 font is addressed by single bytes, `COMPOSITE` a shape that is a composite glyph or the `Plus` compositing mode, `FOREGROUND` a gradient stop that names the text colour, `UNBOUNDED` a version 1 glyph with no bounds. What the `COLR` reader itself refuses keeps its own `TCLPDF COLR` codes - `MISSING`, `VERSION`, `EMPTY`, `TRUNCATED`, `LAYERS`, `RECORDS`, `PALETTE`, `ENTRY`, and for the version 1 paint graph `CYCLE`, `DEPTH`, `REUSE`, `PAINT`, `COMPOSITE` - and is passed through unchanged, so `trap {TCLPDF COLORFONT}` does **not** catch those.
 
 **COLR version 1 is read too**, and the call does not distinguish: a face may describe some glyphs with the older layer records and some with a version 1 **paint graph** - linear, radial and sweep gradients, clipped shapes, transformations, re-used sub-graphs and 28 compositing modes - and a glyph the table says nothing about is drawn from its own outline in the colour of the text, like a letter. A palette entry may carry an alpha byte, and a translucent layer then costs an `ExtGState` while an opaque one costs nothing; under PDF/A parts 2 and 3 that is admissible, and part 1 forbids transparency and is refused by `pdfa` anyway. What this is for is the two-colour mark that has to behave like a character - a tick in a table column, an amber warning sign in a line of text, a logo in a letterhead: it moves with the line, takes the font size, is measured by `textWidth`, breaks with the paragraph and comes back out of `pdftotext` as the character it stands for.
 

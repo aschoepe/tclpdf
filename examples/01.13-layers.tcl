@@ -5,8 +5,10 @@
 #   tclsh examples/01.13-layers.tcl ?output.pdf?
 #
 # One sheet that is two documents: a German invoice and an English one, drawn
-# on top of each other, and a draft stamp over both. Which of them a reader
-# shows is a checkbox in its layer panel - Acrobat calls it Layers, Preview
+# on top of each other, and a draft stamp over both. The English layer and
+# the stamp start switched OFF, so what a reader shows on opening is the
+# German invoice alone and the other two are one click away. Which of them a
+# reader shows is a checkbox in its layer panel - Acrobat calls it Layers, Preview
 # and poppler pass the groups through, and the file is one file either way.
 #
 # The standard's word for it is optional content (ISO 32000-2, 8.11) and it

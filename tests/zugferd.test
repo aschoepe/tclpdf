@@ -1677,4 +1677,47 @@ test zugferd-14.2 {the profile binds the DEFAULT, not the option} -constraints {
 } -result {{{EN 16931} Alternative Alternative} {{EN 16931} Data Data}\
     {{EN 16931} Source Source} {{EN 16931} Alternative Alternative}}
 
+test zugferd-14.2 {an XML that declares an encoding other than UTF-8 is refused} -constraints haveInvoice -body {
+  # The UTF-16 refusal one encoding further out. An ISO-8859-1 file matches
+  # the BT-24 regexp perfectly and went in byte for byte, declaration and
+  # all: measured 2026-08-26, "Lieferant" with the single byte E4 for the
+  # umlaut under encoding="ISO-8859-1", accepted, attached, Mustangproject
+  # "valid" and veraPDF 3b conformant - and the attachment then says one
+  # thing in its bytes and another in its /Subtype text#2Fxml.
+  set utf8 [::tclpdf::io read $invoice]
+  set out {}
+  # The declaration alone.
+  foreach declared {ISO-8859-1 utf-16 windows-1252} {
+    set bytes [regsub {encoding='[^']*'} $utf8 "encoding='$declared'"]
+    lappend out [catch {::tclpdf::zugferd identify $bytes} message] \
+        [lrange $::errorCode 0 3] [string match "*declares encoding=*" $message]
+  }
+  # The BYTES alone: no declaration at all and a Latin-1 umlaut in the file.
+  set bytes [regsub {<\?xml[^>]*\?>} $utf8 {<?xml version="1.0"?>}]
+  set bytes [string map [list [encoding convertto utf-8 \u00e4] "\xE4"] $bytes]
+  lappend out [catch {::tclpdf::zugferd identify $bytes} message] \
+      [lrange $::errorCode 0 3] [string match "*is not UTF-8*" $message]
+  # And what still goes through: UTF-8 said in the declaration, UTF-8 said
+  # nowhere, and a UTF-8 byte order mark in front of it (XML 1.0, 4.3.3).
+  lappend out [::tclpdf::zugferd profile $utf8] \
+      [::tclpdf::zugferd profile [regsub {<\?xml[^>]*\?>} $utf8 {<?xml version="1.0"?>}]] \
+      [::tclpdf::zugferd profile "\xEF\xBB\xBF$utf8"] \
+      [::tclpdf::zugferd profile [regsub {encoding='[^']*'} $utf8 {encoding="utf-8"}]]
+} -result {1 {TCLPDF ZUGFERD XML encoding} 1 1 {TCLPDF ZUGFERD XML encoding} 1\
+    1 {TCLPDF ZUGFERD XML encoding} 1 1 {TCLPDF ZUGFERD XML encoding} 1\
+    {EN 16931} {EN 16931} {EN 16931} {EN 16931}}
+
+test zugferd-14.3 {a refused encoding leaves the document exactly as it was} -constraints {haveInvoice haveIcc haveTdom} -body {
+  set bytes [regsub {encoding='[^']*'} [::tclpdf::io read $invoice] {encoding="ISO-8859-1"}]
+  set path [::tclpdfTest::scratch zugferd-latin1.xml]
+  ::tclpdf::io write $path $bytes
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [catch {$doc zugferd $path} message]
+  set state [list [$doc zugferd state] [$doc pdfa state] [$doc attachments]]
+  $doc destroy
+  file delete $path
+  list $code [lrange $::errorCode 0 3] $state
+} -result {1 {TCLPDF ZUGFERD XML encoding} {{} {} {}}}
+
 cleanupTests

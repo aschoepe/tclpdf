@@ -774,7 +774,21 @@ oo::define ::tclpdf::document::document {
   # what it is about; it used to live in pdfa.tcl, and an ICC colour then
   # loaded the PDF/A machinery and tdom with it.
   method IccInspect {bytes what} {
-    return [::tclpdf::color::iccSpace $bytes $what]
+    set answer [::tclpdf::color::iccSpace $bytes $what]
+    # AND THE PROFILE VERSION IS A PDF VERSION (ISO 32000-1, 8.6.5.5,
+    # Table 66, which binds the two: PDF 1.3 goes with ICC 3.3, and a
+    # version 4 profile belongs to PDF 1.7). Read from bytes 8..11 of the
+    # header, whose first byte is the major version; only the colour space
+    # at bytes 16..19 was read until 2026-08-26, so a v4 profile went into a
+    # %PDF-1.3 file without a word, against the manual's "every feature is
+    # checked against the version". Asked HERE, where a profile is taken
+    # into the document - by [icc embed] and by a picture that carries one -
+    # and before either records anything.
+    if {[string length $bytes] >= 12
+        && [scan [string index $bytes 8] %c] >= 4} {
+      my RequireVersion 1.7 "an ICC version 4 profile"
+    }
+    return $answer
   }
 
   # The stream object of a profile, written ONCE per document however many
@@ -1389,11 +1403,25 @@ proc ::tclpdf::color::Reserved {name} {
   if {$name in {DeviceGray DeviceRGB DeviceCMYK Pattern}} {
     return "it names a colour space family (ISO 32000-1, 8.6.8)"
   }
-  if {[regexp {^Lab([0-9A-F]{8})?$} $name]} {
+  # And a name the file can hold at all - no NUL (7.3.5), at most 127 bytes
+  # as it is written (Annex C.2). [pdfObj name] is where that is decided and
+  # it stays the last line of defence, but it fires when the RESOURCE ENTRY
+  # is written, which is after the tint transform and the Separation array
+  # are out: measured 2026-08-26, a 200-character separation name left one
+  # orphaned object behind. Asked here, where nothing has been written yet.
+  if {[catch {::tclpdf::pdfObj name $name} message outcome]
+      && [lrange [dict get $outcome -errorcode] 0 2] eq {TCLPDF PDFOBJ NAME}} {
+    return [string range $message 8 end]
+  }
+  # -nocase, because the pattern is about a NAMESPACE this writer keeps for
+  # itself, not about one particular spelling: a separation called "lab" or
+  # "DEVICEN1A2B3C4D" is a caller reaching into it just as "Lab" is, and the
+  # answer "that name is mine" does not depend on which letters are capital.
+  if {[regexp -nocase {^Lab([0-9A-F]{8})?$} $name]} {
     return "it is how this writer names a Lab colour space (ISO 32000-2,\
         8.6.5.4)"
   }
-  if {[regexp {^DeviceN([0-9A-F]{8})?$} $name]} {
+  if {[regexp -nocase {^DeviceN([0-9A-F]{8})?$} $name]} {
     return "it is how this writer names a DeviceN colour space (ISO 32000-2,\
         8.6.6.5)"
   }
@@ -1496,4 +1524,4 @@ proc ::tclpdf::color::Pin {value low high} {
   return $value
 }
 
-package provide tclpdf::color 1.8
+package provide tclpdf::color 1.9

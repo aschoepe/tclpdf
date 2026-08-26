@@ -16,11 +16,13 @@ Subscribers run in registration order. The events a document fires:
 | Event | When | Extra arguments |
 | --- | --- | --- |
 | `pageAdded` | after `page add` | the new page's index |
-| `beforeWrite` | at the start of every `write` and `writeChannel` | — |
+| `beforeWrite` | at the start of every `write` and `writeChannel`, once the document has at least one page | — |
 | `resources` | while the page resources are built | — |
 | `catalog` | while the catalog is built | — |
 | `info` | while the info dictionary is built | — |
 | `afterWrite` | after the file is complete | the path; empty for `writeChannel` |
+
+A document with no pages is refused before any of this happens: `write` raises `TCLPDF OUTPUT EMPTY pages` ahead of `beforeWrite`, so none of the five write-time events fires on an empty document. Read `beforeWrite` as "the write is going ahead", not as "a write was attempted".
 
 ## The two contracts
 
@@ -41,9 +43,10 @@ These methods are the supported surface for extensions:
 | `$doc state $key ?$value?` | per-document state that does not go into the PDF |
 | `$doc xmpSchema $prefix $uri $tags $method` | declare an XMP schema of your own: *method*, a document method added with `oo::define`, answers its properties each time the packet is built |
 | `$doc xmpRaw $xml` | append ready-made `rdf:Description` elements to the XMP packet |
+| `$doc trailerEntry $key ?$value?` | set, read or clear a file trailer key — the twin of `catalogEntry` for the trailer (ISO 32000-2, 7.5.5). The core writes /Root, /Info, /Size and /ID there and nothing else; everything a trailer can otherwise carry, /Encrypt above all, gets in through here. An empty value clears the key |
 | `$doc writer` | the low-level writer object, for object numbers and bodies |
 
-The table is not the whole promise: any method the manual documents is supported API in the same sense, and `xmpSchema` and `xmpRaw` are described in full in the manual's Metadata section. Both live in the `tclpdf::xmp` module, which every conformance claim loads — without one, `package require tclpdf::xmp` first. One point from there bears repeating: the packet is built once a schema is registered or a raw contribution is added — `xmpRaw` subscribes the build just as `xmpSchema` does, so a contribution on a document that claims nothing reaches the file all the same.
+The table is not the whole promise: any method the manual documents is supported API in the same sense, and `xmpSchema` and `xmpRaw` are described in full in the manual's Metadata section. Both live in the `tclpdf::xmp` module, which the core loads on first use like every other topic — no `package require` of your own is needed for either. One point from there bears repeating: the packet is built once a schema is registered or a raw contribution is added — `xmpRaw` subscribes the build just as `xmpSchema` does, so a contribution on a document that claims nothing reaches the file all the same.
 
 A worked example — a subscriber that stores a private data stream and points a catalog key at it. Readers ignore catalog keys they do not know, so the file stays valid everywhere; the pattern is the same one the ZUGFeRD module uses for keys that matter.
 
@@ -98,4 +101,4 @@ A worked example of all of this together — the event bus, a method added with 
 
 ## What not to rely on
 
-Methods whose names start with an uppercase letter are private, and everything neither in the table above nor documented in the manual is internal: it may change between releases without notice. If an extension needs something the surface above does not offer, that is worth a report — the surface is meant to grow from real cases.
+Methods whose names start with an uppercase letter are private, and everything neither in the table above nor documented in the manual is internal: it may change between releases without notice. The rule cuts both ways, and one lowercase name is worth calling out: `onSelf` is core plumbing — it is how a topical module subscribes one of its own methods, private ones included, because `on` takes a command prefix and calls it from the global context where a private method is out of reach. It is not part of the surface above, and an extension does not need it: use `$doc on` with a command prefix of your own. If an extension needs something the surface above does not offer, that is worth a report — the surface is meant to grow from real cases.

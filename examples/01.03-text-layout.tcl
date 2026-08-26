@@ -77,8 +77,8 @@ $doc line -from [list 105 [expr {$y + 4}]] -to [list 105 [expr {$y + 26}]] \
 # out loud once: the y of -at is the baseline, and the line runs left to
 # right.
 $doc font -style {} -size 10
-foreach {align label offset} {left "left of the mark" 8
-        centre "centred on it" 15  right "right of the mark" 22} {
+foreach {align label offset} {left "left edge on the mark" 8
+        centre "centred on it" 15  right "right edge on the mark" 22} {
     $doc text $label -at [list 105 [expr {$y + $offset}]] -align $align \
         -anchor baseline -direction ltr
 }

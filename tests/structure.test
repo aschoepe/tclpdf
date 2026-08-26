@@ -1743,17 +1743,26 @@ test structure-19.3 {link -zoom is the magnification behind the point} -body {
   regexp {/Dest \[\d+ 0 R /XYZ 56\.69\d* 756\.85\d* 2\]} $body
 } -result 1
 
-test structure-19.4 {without -to the page is fitted, and -zoom does not apply} -body {
+test structure-19.4 {without -to the page is fitted, and -zoom is refused} -body {
+  # A destination with no position is /Fit, the whole page - there is no
+  # magnification in it, and -zoom used to be taken and dropped without a
+  # word. The test held that silence until 2026-08-26 ("-zoom does not
+  # apply"); what a caller who wrote -zoom meant was a place on the page,
+  # and now the call says so. [initialView] refuses the same pair from the
+  # other side, -to and -zoom with no page.
   set doc [tclpdf new -unit mm -compress 0]
   $doc page add
   set plain [$doc link -at {20 80} -size {40 10} -page 0]
-  set zoomed [$doc link -at {20 100} -size {40 10} -page 0 -zoom 2]
+  set zoomed [::tclpdfTest::refusalCode {
+    $doc link -at {20 100} -size {40 10} -page 0 -zoom 2
+  }]
+  set placed [$doc link -at {20 120} -size {40 10} -page 0 -to {20 30} -zoom 2]
   set first [[$doc writer] body $plain]
-  set second [[$doc writer] body $zoomed]
+  set third [[$doc writer] body $placed]
   $doc destroy
-  list [regexp {/Dest \[\d+ 0 R /Fit\]} $first] [regexp {/Dest \[\d+ 0 R /Fit\]} $second] \
-      [regexp {XYZ} $second]
-} -result {1 1 0}
+  list [regexp {/Dest \[\d+ 0 R /Fit\]} $first] $zoomed \
+      [regexp {/Dest \[\d+ 0 R /XYZ [\d.]+ [\d.]+ 2\]} $third]
+} -result {1 {TCLPDF LINK ARGUMENT zoom} 1}
 
 test structure-19.5 {bookmark -at is a point on the page, without it the whole page} -body {
   set doc [tclpdf new -unit mm -compress 0]
@@ -3097,6 +3106,598 @@ test structure-note-37.2 {and an id the caller gives twice is still refused} -bo
   unset ::structureNoteDoc
   list $second [lrange [dict get $options -errorcode] 0 3]
 } -result {1 {TCLPDF STRUCTURE NAME duplicate}}
+
+# --- ISO/TS 32005 Table 5: the nestings a validator refuses ---------------
+
+test structure-38.1 {inline markup holds no block element} -body {
+  # A Link is an association between a run of text and an annotation (ISO
+  # 32000-1 Table 338): it holds text, other inline markup and an
+  # illustration. A Table inside one is what veraPDF reports as "Link-Table"
+  # against ISO/TS 32005 Table 5, and until 2026-08-26 the call was taken
+  # and the UA claim written over it.
+  #
+  # The grouping types stay allowed - veraPDF passes a Sect inside a Link
+  # under both profiles, and refusing what the validator allows would be
+  # this package inventing a rule.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set ::structureNestDoc $doc
+  set table [::tclpdfTest::refusalCode {
+    $doc structure Link -script {
+      $::structureNestDoc structure Table -script {}
+    }
+  }]
+  set heading [::tclpdfTest::refusalCode {
+    $doc structure Link -script {
+      $::structureNestDoc structure H2 -script {}
+    }
+  }]
+  set sect [catch {$doc structure Link -script {
+    $::structureNestDoc structure Sect -script {}
+  }}]
+  set figure [catch {$doc structure Link -script {
+    $::structureNestDoc structure Figure -alt "a picture" -script {}
+  }}]
+  $doc destroy
+  unset ::structureNestDoc
+  list $table $heading $sect $figure
+} -result {{TCLPDF STRUCTURE PLACE block} {TCLPDF STRUCTURE PLACE block} 0 0}
+
+test structure-38.2 {a Lbl in a Note is the footnote's number, not a block} -body {
+  # The exception the leaf rule makes as well: a type that names its own
+  # parents has been judged by that rule already, and a Lbl inside a Note
+  # is exactly where ISO 32000-1 14.8.4.3.3 puts it.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureNestDoc $doc
+  set code [catch {$doc structure P -script {
+    $::structureNestDoc text "text" -at {20 20}
+    $::structureNestDoc structure Note -script {
+      $::structureNestDoc structure Lbl -script {
+        $::structureNestDoc text "1" -at {20 30}
+      }
+    }
+  }} message]
+  $doc destroy
+  unset ::structureNestDoc
+  list $code $message
+} -result {0 {}}
+
+test structure-38.3 {an Art may not stand inside another Art, at any depth} -body {
+  # ISO/TS 32005 Table 5 gives Art no Art among its children: an article is
+  # a complete piece of writing, and one inside another says both are.
+  # Measured against the ANCESTORS - a Sect in between changes nothing.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set ::structureNestDoc $doc
+  set direct [::tclpdfTest::refusalCode {
+    $doc structure Art -script {$::structureNestDoc structure Art -script {}}
+  }]
+  set deep [::tclpdfTest::refusalCode {
+    $doc structure Art -script {
+      $::structureNestDoc structure Sect -script {
+        $::structureNestDoc structure Art -script {}
+      }
+    }
+  }]
+  set beside [catch {
+    $doc structure Art -script {}
+    $doc structure Art -script {}
+  }]
+  $doc destroy
+  unset ::structureNestDoc
+  list $direct $deep $beside
+} -result {{TCLPDF STRUCTURE PLACE nested} {TCLPDF STRUCTURE PLACE nested} 0}
+
+test structure-38.4 {a Document belongs under the root and nowhere else} -body {
+  # This package writes the root Document itself (structureWrite.tcl), so a
+  # caller's Document at the top level is a second one beside it, which
+  # veraPDF passes. One inside a Sect is the "Sect-Document" it refuses.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set ::structureNestDoc $doc
+  set inside [::tclpdfTest::refusalCode {
+    $doc structure Sect -script {
+      $::structureNestDoc structure Document -script {}
+    }
+  }]
+  set top [catch {$doc structure Document -script {}}]
+  $doc destroy
+  unset ::structureNestDoc
+  list $inside $top
+} -result {{TCLPDF STRUCTURE PLACE root} 0}
+
+test structure-38.5 {a Caption captions a table, a list or an illustration} -body {
+  # Its four homes and no more (ISO/TS 32005 Table 5). At the top level
+  # veraPDF reports "Document-Caption"; the package took the call.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureNestDoc $doc
+  set top [::tclpdfTest::refusalCode {
+    $doc text "caption" -at {20 20} -tag Caption
+  }]
+  set inParagraph [::tclpdfTest::refusalCode {
+    $doc structure P -script {
+      $::structureNestDoc structure Caption -script {}
+    }
+  }]
+  set inFigure [catch {$doc structure Figure -alt "a picture" -script {
+    $::structureNestDoc structure Caption -script {
+      $::structureNestDoc text "Figure 1" -at {20 40}
+    }
+  }}]
+  set inTable [catch {$doc structure Table -script {
+    $::structureNestDoc structure Caption -script {
+      $::structureNestDoc text "Table 1" -at {20 50}
+    }
+  }}]
+  $doc destroy
+  unset ::structureNestDoc
+  list $top $inParagraph $inFigure $inTable
+} -result {{TCLPDF STRUCTURE PLACE parent} {TCLPDF STRUCTURE PLACE parent} 0 0}
+
+test structure-38.6 {NonStruct is a grouping type, and -tag says so} -body {
+  # "A grouping element with no inherent meaning" (ISO 32000-2 Table 364):
+  # it holds elements, not a mark. veraPDF reported the tree that came of
+  # [text -tag NonStruct] as "Document shall not contain content items".
+  # Inside an open one the text becomes a P, as it does inside a Div.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureNestDoc $doc
+  set tag [::tclpdfTest::refusalCode {
+    $doc text "text" -at {20 20} -tag NonStruct
+  }]
+  $doc structure NonStruct -script {
+    $::structureNestDoc text "text" -at {20 30}
+  }
+  set shape [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  unset ::structureNestDoc
+  list $tag $shape
+} -result {{TCLPDF STRUCTURE TYPE tag} {NonStruct P}}
+
+test structure-38.7 {-tag Link, Annot and Form promise an annotation and hold none} -body {
+  # A derived tag closes its element again before the next call can put
+  # anything inside it, so "-tag Link" made an element that announces a link
+  # a reader cannot follow. ISO 32000-1 Table 340 forbids the Form case
+  # outright ("only one child: an object reference"), and veraPDF fails it
+  # under UA-1 7.18.4-2; the other two are the same empty promise.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set codes [lmap tag {Link Annot Form} {
+    ::tclpdfTest::refusalCode "\$doc text \"text\" -at {20 20} -tag $tag"
+  }]
+  $doc destroy
+  set codes
+} -result {{TCLPDF STRUCTURE TYPE tag} {TCLPDF STRUCTURE TYPE tag}\
+    {TCLPDF STRUCTURE TYPE tag}}
+
+test structure-38.8 {the label of a list item comes before its body} -body {
+  # The order of /K is the reading order: a Lbl opened after the body is
+  # read out after it ("the body, one point"). No validator sees it -
+  # veraPDF passes both profiles - and [UaCheckLists] counts the label
+  # either way.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureNestDoc $doc
+  set after [::tclpdfTest::refusalCode {
+    $doc structure L -numbering Decimal -script {
+      $::structureNestDoc structure LI -script {
+        $::structureNestDoc structure LBody -script {
+          $::structureNestDoc text "body" -at {28 20}
+        }
+        $::structureNestDoc structure Lbl -script {
+          $::structureNestDoc text "1." -at {20 20}
+        }
+      }
+    }
+  }]
+  # The body drawn straight into the LI is its LBody just the same.
+  set derived [::tclpdfTest::refusalCode {
+    $doc structure L -numbering Decimal -script {
+      $::structureNestDoc structure LI -script {
+        $::structureNestDoc text "body" -at {28 30}
+        $::structureNestDoc structure Lbl -script {
+          $::structureNestDoc text "1." -at {20 30}
+        }
+      }
+    }
+  }]
+  set right [catch {$doc structure L -numbering Decimal -script {
+    $::structureNestDoc structure LI -script {
+      $::structureNestDoc structure Lbl -script {
+        $::structureNestDoc text "1." -at {20 40}
+      }
+      $::structureNestDoc structure LBody -script {
+        $::structureNestDoc text "body" -at {28 40}
+      }
+    }
+  }}]
+  $doc destroy
+  unset ::structureNestDoc
+  list $after $derived $right
+} -result {{TCLPDF STRUCTURE PLACE label} {TCLPDF STRUCTURE PLACE label} 0}
+
+test structure-38.9 {an element cannot be opened where nothing is marked} -body {
+  # The manual has said since it was written that "nothing inside a form, a
+  # pattern or a page-number XObject is marked at all" - but [structure]
+  # never asked, so the element WAS created and landed in the tree with no
+  # kids. An empty H1 opened inside a form satisfied the PDF/UA rule that a
+  # document begins with an H1, and veraPDF called the file conformant.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureNestDoc $doc
+  set inForm [::tclpdfTest::refusalCode {
+    $doc form create logo -size {20 10} -script {
+      $::structureNestDoc structure H1 -script {
+        $::structureNestDoc text "empty" -at {2 5}
+      }
+    }
+  }]
+  set inPattern [::tclpdfTest::refusalCode {
+    $doc pattern create stripes -size {4 4} -script {
+      $::structureNestDoc structure P -script {}
+    }
+  }]
+  # And the state is as it was: the next element on the page is the first.
+  $doc structure H2 -script {$::structureNestDoc text "heading" -at {20 20}}
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  unset ::structureNestDoc
+  list $inForm $inPattern $types
+} -result {{TCLPDF STRUCTURE STATE suspend} {TCLPDF STRUCTURE STATE suspend} H2}
+
+# --- Ref: what an element points at ---------------------------------------
+
+test structure-39.1 {-ref writes the Ref entry, resolved at write time} -body {
+  # ISO 32000-2 Table 355. The names are NOT resolved at the call: a table
+  # of contents is written before the sections it lists, so the forward
+  # reference is the ordinary case.
+  set doc [tclpdf new -unit mm -version 2.0 -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureRefDoc $doc
+  $doc structure TOC -script {
+    $::structureRefDoc structure TOCI -ref intro -script {
+      $::structureRefDoc text "1 Introduction" -at {20 20}
+    }
+  }
+  $doc structure Sect -name intro -script {
+    $::structureRefDoc text "Introduction" -at {20 40} -tag H1
+  }
+  set path [::tclpdfTest::scratch structure-ref.pdf]
+  $doc write $path
+  $doc destroy
+  unset ::structureRefDoc
+  set channel [open $path rb]
+  set bytes [read $channel]
+  close $channel
+  file delete $path
+  # The TOCI names one object, and it is the Sect: the element whose /S is
+  # /Sect carries the number the Ref array holds.
+  regexp {/Ref \[(\d+) 0 R\]} $bytes -> target
+  # The object the number names, read as the one line it is written on
+  # (-compress 0), and it has to be the section the -name was given to.
+  regexp "\\m$target 0 obj\n(\[^\n\]*)" $bytes -> body
+  list [regexp -all {/Ref \[} $bytes] [string match {*/S /Sect*} $body]
+} -result {1 1}
+
+test structure-39.2 {-ref takes several names, and an unknown one is refused} -body {
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureRefDoc $doc
+  $doc structure TOC -script {
+    $::structureRefDoc structure TOCI -ref {one two} -script {
+      $::structureRefDoc text "Chapters 1 and 2" -at {20 20}
+    }
+  }
+  $doc structure Sect -name one -script {
+    $::structureRefDoc text "One" -at {20 30} -tag H1
+  }
+  set path [::tclpdfTest::scratch structure-ref2.pdf]
+  set code [::tclpdfTest::refusalCode {$doc write $path}]
+  $doc destroy
+  unset ::structureRefDoc
+  catch {file delete $path}
+  set code
+} -result {TCLPDF STRUCTURE NAME unknown name}
+
+test structure-39.3 {-ref is an entry of ISO 32000-2 and refused below it} -body {
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set code [::tclpdfTest::refusalCode {
+    $doc structure TOCI -ref intro -script {}
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF STRUCTURE VERSION ref}
+
+test structure-39.4 {-ref names elements, and an empty name is a mistake} -body {
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc tagged 1
+  $doc page add
+  set code [::tclpdfTest::refusalCode {
+    $doc structure TOCI -ref {intro {}} -script {}
+  }]
+  set left [llength [$doc state structure]]
+  $doc destroy
+  list $code $left
+} -result {{TCLPDF STRUCTURE ATTRIBUTE ref} 0}
+
+test structure-39.5 {the report says of every TOCI whether a Ref stands below it} -body {
+  # The fact ua.tcl judges (PDF/UA-2 8.2.5.8): the reference may sit on the
+  # TOCI itself or on one of its children, so a Reference child carrying it
+  # counts for the entry.
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureRefDoc $doc
+  $doc structure TOC -script {
+    $::structureRefDoc structure TOCI -ref intro -script {
+      $::structureRefDoc text "1 Introduction" -at {20 20}
+    }
+    $::structureRefDoc structure TOCI -script {
+      $::structureRefDoc structure Reference -ref intro -script {
+        $::structureRefDoc text "2 Again" -at {20 25}
+      }
+    }
+    $::structureRefDoc structure TOCI -script {
+      $::structureRefDoc text "3 Nowhere" -at {20 30}
+    }
+  }
+  $doc structure Sect -name intro -script {
+    $::structureRefDoc text "Introduction" -at {20 40} -tag H1
+  }
+  set toci [dict get [$doc structureReport] toci]
+  $doc destroy
+  unset ::structureRefDoc
+  lmap entry $toci {lindex $entry 1}
+} -result {1 1 0}
+
+
+# --- resuming an element that was closed -----------------------------------
+
+test structure-40.1 {a closed element takes further children, on another page} -body {
+  # The shape a table broken across columns needs: every row is drawn once
+  # per column group, the groups sit on different pages, and the tree has to
+  # come out as ONE row per logical row - not as twice as many rows, half as
+  # wide, with a second heading row in the middle.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureResumeDoc $doc
+  $doc structure Table -name grid -script {
+    $::structureResumeDoc structure TR -name head -script {
+      $::structureResumeDoc structure TH -scope Column -script {
+        $::structureResumeDoc text "A" -at {20 20}
+      }
+    }
+    $::structureResumeDoc structure TR -name first -script {
+      $::structureResumeDoc structure TD -script {
+        $::structureResumeDoc text "a1" -at {20 26}
+      }
+    }
+  }
+  $doc page add
+  $doc structureResume grid -script {
+    $::structureResumeDoc structureResume head -script {
+      $::structureResumeDoc structure TH -scope Column -script {
+        $::structureResumeDoc text "B" -at {20 20}
+      }
+    }
+    $::structureResumeDoc structureResume first -script {
+      $::structureResumeDoc structure TD -script {
+        $::structureResumeDoc text "b1" -at {20 26}
+      }
+    }
+  }
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [dict get $element parent] \
+        [llength [dict get $element kids]]
+  }]
+  set rows [dict get [$doc structureReport] rows]
+  set stack [$doc state structureStack]
+  set path [::tclpdfTest::scratch structure-resume.pdf]
+  $doc write $path
+  $doc destroy
+  unset ::structureResumeDoc
+  catch {file delete $path}
+  list $shape $rows $stack
+} -result {{{Table {} 2} {TR 0 2} {TH 1 1} {TR 0 2} {TD 3 1} {TH 1 1} {TD 3 1}}\
+    {{2 2}} {}}
+
+test structure-40.2 {the bracket closes whatever the body does} -body {
+  # The promise [structure] makes, and the reason the bracket form exists at
+  # all: an error inside must not leave the element on the stack, or every
+  # mark from there on joins an element the caller thinks is finished.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureResumeDoc $doc
+  $doc structure Sect -name part -script {
+    $::structureResumeDoc text "one" -at {20 20}
+  }
+  set failed [catch {$doc structureResume part -script {
+    $::structureResumeDoc text "two" -at {20 30}
+    error "from inside"
+  }} message]
+  set stack [$doc state structureStack]
+  # And the next text is marked as its own element again, not as the Sect's.
+  $doc text "three" -at {20 40}
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  unset ::structureResumeDoc
+  list $failed $message $stack $types
+} -result {1 {from inside} {} {Sect P P P}}
+
+test structure-40.3 {the body runs where it was written} -body {
+  # [tailcall] in [structureResume] is what makes this true: without it the
+  # [uplevel 1] of the worker would reach the public method's own frame, and
+  # a body that names a local variable of its caller would not find it.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  $doc structure Sect -name part -script {}
+  set local "a local variable"
+  set seen [$doc structureResume part -script {
+    set local
+  }]
+  $doc destroy
+  set seen
+} -result {a local variable}
+
+test structure-40.4 {an element cannot be resumed inside itself, or twice over} -body {
+  # The stack says which element a mark belongs to. One that stood on it
+  # twice would be closed once and stay behind - every mark from there on
+  # would join an element the caller thinks is finished.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  set ::structureResumeDoc $doc
+  $doc structure Sect -name part -script {}
+  set inside [::tclpdfTest::refusalCode {
+    $doc structureResume part -script {
+      $::structureResumeDoc structureResume part -script {}
+    }
+  }]
+  set stack [$doc state structureStack]
+  $doc destroy
+  unset ::structureResumeDoc
+  list $inside $stack
+} -result {{TCLPDF STRUCTURE STATE resume} {}}
+
+test structure-40.5 {an unknown handle, a leaf and a suspended stream are refused} -body {
+  # The handle is the -name or the -id an element was given - the two
+  # handles this package has. A leaf is refused because further text for an
+  # element that exists is a further MARK on it, which is the road [text
+  # -paginate] takes; two roads to the same place would not agree about
+  # what a mark belongs to.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureResumeDoc $doc
+  $doc structure P -name para -script {
+    $::structureResumeDoc text "text" -at {20 20}
+  }
+  $doc structure Sect -name part -script {}
+  $doc structure Sect -id knownId -script {}
+  set unknown [::tclpdfTest::refusalCode {$doc structureResume nosuch -script {}}]
+  set leaf [::tclpdfTest::refusalCode {$doc structureResume para -script {}}]
+  set byId [catch {$doc structureResume knownId -script {}}]
+  set inForm [::tclpdfTest::refusalCode {
+    $doc form create logo -size {20 10} -script {
+      $::structureResumeDoc structureResume part -script {}
+    }
+  }]
+  set noScript [::tclpdfTest::refusalCode {$doc structureResume part}]
+  $doc destroy
+  unset ::structureResumeDoc
+  list $unknown $leaf $byId $inForm $noScript
+} -result {{TCLPDF STRUCTURE NAME unknown name} {TCLPDF STRUCTURE PLACE leaf} 0\
+    {TCLPDF STRUCTURE STATE suspend} {TCLPDF STRUCTURE ARGUMENT script}}
+
+test structure-40.6 {what the resumed pass adds is judged like the first} -body {
+  # The element's own place was settled when it was created and is not
+  # judged again; everything drawn INSIDE goes through the nesting rules as
+  # it would have on the first pass, and the Caption's position is measured
+  # against what the element holds NOW.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  set ::structureResumeDoc $doc
+  $doc structure Table -name grid -script {
+    $::structureResumeDoc structure TR -script {
+      $::structureResumeDoc structure TD -script {
+        $::structureResumeDoc text "a" -at {20 20}
+      }
+    }
+  }
+  # A P is no child of a Table, on the second pass either.
+  set child [::tclpdfTest::refusalCode {
+    $doc structureResume grid -script {
+      $::structureResumeDoc structure P -script {}
+    }
+  }]
+  # And a Caption appended after the rows is in the wrong place, which only
+  # this pass can see.
+  set caption [::tclpdfTest::refusalCode {
+    $doc structureResume grid -script {
+      $::structureResumeDoc structure Caption -script {
+        $::structureResumeDoc text "Table 1" -at {20 30}
+      }
+    }
+  }]
+  set stack [$doc state structureStack]
+  $doc destroy
+  unset ::structureResumeDoc
+  list $child $caption $stack
+} -result {{TCLPDF STRUCTURE PLACE child} {TCLPDF STRUCTURE PLACE caption} {}}
+
+
+test structure-40.7 {a module resumes by the id StructureOpen answered} -body {
+  # The road table.tcl takes: a module that made the element itself holds
+  # the id and needs no name for it. [StructureResume] is the same bracket
+  # without the lookup, and the body still runs in the frame of the method
+  # that wrote it - which is what the object-local methods below stand in
+  # for, both of them private, as a module's are.
+  set doc [tclpdf new -unit mm]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  oo::objdefine $doc {
+    # The first pass: a Table with one row, both closed again. Answers the
+    # row's id, the way [StructureOpen] answers it inside a module.
+    method testFirstPass {} {
+      set table [my StructureOpen Table]
+      set row [my StructureOpen TR]
+      my StructureClose $row
+      my StructureClose $table
+      return $row
+    }
+    # A further pass over the same row.
+    method testCell {id text y} {
+      set where $y
+      my StructureResume $id {
+        my structure TD -script {my text $text -at [list 20 $where]}
+      }
+    }
+  }
+  set row [$doc testFirstPass]
+  $doc testCell $row "a1" 20
+  $doc testCell $row "b1" 30
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [dict get $element parent] \
+        [llength [dict get $element kids]]
+  }]
+  set stack [$doc state structureStack]
+  $doc destroy
+  list $shape $stack
+} -result {{{Table {} 1} {TR 0 2} {TD 1 1} {TD 1 1}} {}}
 
 
 cleanupTests

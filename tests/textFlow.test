@@ -2260,4 +2260,254 @@ test textFlow-vertical-41.4 {placing them is still refused, and the message says
 } -result {{TCLPDF TEXT VERTICAL block} 1}
 
 
+# --- round 7 -----------------------------------------------------------------
+
+set flowEmoji [file join [file dirname $flowFont] google NotoEmoji-Variable.ttf]
+testConstraint haveFlowEmoji [file exists $flowEmoji]
+
+# U+1F600, built from its UTF-8 bytes rather than written as a "\U" escape:
+# under Tcl 8.6 that escape yields U+FFFD, which is Tcl's limit and not the
+# package's - text read from a file or a database arrives as the surrogate
+# pair these tests are about.
+set flowGrin [encoding convertfrom utf-8 "\xF0\x9F\x98\x80"]
+
+test textFlow-r7-1.1 {a refused character is named at its code point, under both interpreters} \
+    -constraints haveFlowEmoji -body {
+  # The contract (manual, "Error codes"): the position is "the 0-based index
+  # in the string as handed in", and "a character beyond the BMP is named as
+  # one code point under Tcl 9 and under Tcl 8.6 alike". Under 8.6 such a
+  # character is stored as a SURROGATE PAIR, and the paragraph road counted
+  # with [string length] and asked the face about [string index] - half a
+  # surrogate, which is not a character and which the caller never wrote.
+  # Measured: textLines said position 6 under 8.6 and 4 under 9.0 for the
+  # same string, while [textWidth] said 4 under both.
+  set doc [tclpdf new -unit mm]
+  $doc font embed emo $::flowEmoji
+  $doc page add
+  $doc font -family emo -size 12
+  set answers {}
+  foreach string [list "$::flowGrin$::flowGrin\x78" \
+      "$::flowGrin $::flowGrin\x78" \
+      "$::flowGrin$::flowGrin $::flowGrin\x78"] {
+    set lines [lindex [::tclpdfTest::refusalCode {
+      $doc textLines $string -width 100
+    }] 4]
+    set width [lindex [::tclpdfTest::refusalCode {
+      $doc textWidth $string
+    }] 4]
+    lappend answers [list $lines $width]
+  }
+  $doc destroy
+  set answers
+} -result {{2 2} {3 3} {4 4}}
+
+test textFlow-r7-2.1 {justification divides its gap by the horizontal scale} \
+    -constraints havePdfToText -body {
+  # ISO 32000-2, 9.4.4: tx = ((w0 - Tj/1000) x Tfs + Tc + Tw) x Th - the word
+  # spacing is multiplied by the horizontal scale, whether it goes out as Tw
+  # or as a TJ number. The gap a justified line has to fill is a distance on
+  # the PAGE and already carries Th, so writing it unscaled filled Th x gap at
+  # -stretch 60 and ran (Th - 1) x gap past the margin at 130. Measured with
+  # Helvetica at 130: line two of a 120 mm column ended at 130.73 mm.
+  #
+  # Measured on the DRAWN line rather than on the stream: what is wrong is
+  # where the line ends.
+  set answers {}
+  foreach stretch {100 60 130} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font -family helvetica -size 10
+    $doc text "Die Betriebskostenabrechnung wird nach der Wohnflaeche\
+        umgelegt und die Vorauszahlungen werden mit dem Ergebnis verrechnet,\
+        so dass am Ende ein Guthaben oder eine Nachzahlung steht." \
+        -at {20 30} -width 100 -align justify -stretch $stretch
+    set path [::tclpdfTest::scratch textFlow-r7-21.pdf]
+    $doc write $path
+    $doc destroy
+    set out [exec pdftotext -bbox -f 1 -l 1 $path -]
+    file delete $path
+    # The right edge of every line but the last, rounded to a tenth of a
+    # point: 120 mm is 340.16 pt.
+    set edges {}
+    set rows {}
+    foreach {all x0 y0 x1 y1 text} [regexp -all -inline \
+        {<word xMin="([0-9.]+)" yMin="([0-9.]+)" xMax="([0-9.]+)" yMax="([0-9.]+)">([^<]*)</word>} $out] {
+      set key [format %.1f $y0]
+      if {![dict exists $rows $key] || $x1 > [dict get $rows $key]} {
+        dict set rows $key $x1
+      }
+    }
+    set keys [lsort -real [dict keys $rows]]
+    foreach key [lrange $keys 0 end-1] {
+      lappend edges [format %.1f [dict get $rows $key]]
+    }
+    lappend answers [lsort -unique $edges]
+  }
+  set answers
+} -result {340.2 340.2 340.2}
+
+test textFlow-r7-3.1 {the word space a tagged line carries does not move a right-to-left line} \
+    -constraints {haveFlowFont havePdfToText} -body {
+  # ISO 32000-1, 14.8.2.6: a line that is followed by more of the same text
+  # gets a word space appended, or the extraction runs two lines together.
+  # It is appended LOGICALLY, and [TextShowOne] turns a right-to-left run
+  # round before it writes it - so the space became the FIRST glyph drawn and
+  # pushed the whole line right by its width. Measured with DejaVu at 10 pt:
+  # every line but the last stood 3.18 pt past the right edge of its column,
+  # and the edge came out jagged.
+  set answers {}
+  foreach tagged {0 1} {
+    set doc [tclpdf new -unit mm]
+    $doc font embed dv $::flowFont
+    if {$tagged} {
+      $doc tagged 1
+    }
+    $doc page add
+    $doc font -family dv -size 10
+    $doc text "שלום עולם זהו\
+        טקסט ארוך למדי\
+        שנשבר לכמה שורות" \
+        -at {20 30} -width 80 -direction rtl -align left
+    set path [::tclpdfTest::scratch textFlow-r7-31.pdf]
+    $doc write $path
+    $doc destroy
+    set out [exec pdftotext -bbox -f 1 -l 1 $path -]
+    file delete $path
+    set edges {}
+    foreach {all x0 y0 x1 y1 text} [regexp -all -inline \
+        {<word xMin="([0-9.]+)" yMin="([0-9.]+)" xMax="([0-9.]+)" yMax="([0-9.]+)">([^<]*)</word>} $out] {
+      lappend edges [format %.1f $x1]
+    }
+    # 100 mm is 283.46 pt: no glyph of any line may stand right of it.
+    lappend answers [expr {[lindex [lsort -real $edges] end] <= 283.5}]
+  }
+  set answers
+} -result {1 1}
+
+test textFlow-r7-4.1 {the rest of a height-limited block does not open with a blank paragraph} -body {
+  # A blank line in the text is a paragraph of its own, and where the cut
+  # falls in front of one the rest began with it - so the next column set an
+  # empty line before its first word and everything in it stood one line
+  # lower than the column beside it. Measured in examples/01.08: column two
+  # started 7.4 mm below column one.
+  set text "Erster Absatz.\n\nZweiter Absatz, der in die naechste Spalte\
+      gehoert und dort oben ansetzen soll."
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  # A limit that admits the first paragraph and nothing after it, so that the
+  # cut falls exactly at the blank line between the two.
+  set first [$doc text $text -at {20 30} -width 60 -height 6]
+  set rest [dict get $first rest]
+  $doc text $rest -at {90 30} -width 60
+  # Where the two columns put their first baseline: the same y, or the second
+  # one starts a line lower for a paragraph that holds nothing.
+  set tops {}
+  foreach {all x y} [regexp -all -inline \
+      {([0-9.]+) ([0-9.]+) Td} [::tclpdfTest::content $doc]] {
+    dict lappend tops [format %.0f $x] [format %.2f $y]
+  }
+  $doc destroy
+  list [string range $rest 0 6] [regexp {^\s} $rest] \
+      [expr {[lindex [dict get $tops 57] 0]
+          == [lindex [dict get $tops 255] 0]}]
+} -result {Zweiter 0 1}
+
+test textFlow-r7-5.1 {a unit is never cut in front of a mark that carries no advance} \
+    -constraints haveFlowFont -body {
+  # The manual (:434): "a mark is never cut from its variation selector". The
+  # emergency break cut by UNIT, and a unit was a code point unless a Type 3
+  # face had registered a longer sequence - so a combining mark, or a
+  # variation selector a TrueType face carries as a glyph of width 0, opened a
+  # line of its own. Measured with Noto Emoji at 5 mm: "\U1F600❤️
+  # \U1F600" fell into FOUR lines, the third holding nothing but the selector.
+  #
+  # Measured here with a combining mark, which every face carries: the acute
+  # of U+0301 has an advance of 0 in DejaVu Sans, and no line may begin with
+  # it.
+  set doc [tclpdf new -unit pt]
+  $doc font embed dv $::flowFont
+  $doc page add
+  $doc font -family dv -size 12
+  # A column too narrow for the letter itself, which is where the cut used
+  # to fall in front of the mark: the base alone is taken, and the mark then
+  # opens the next line with nothing on it.
+  set lines [$doc textLines [string repeat "e\u0301" 4] -width 3]
+  $doc destroy
+  list [llength $lines] [lsort -unique [lmap line $lines {string length $line}]]
+} -result {4 2}
+
+test textFlow-r7-6.1 {-avoidMargin is checked whether or not there are shapes} -body {
+  # The manual (:127): "Every option is checked at the call that writes it".
+  # The margin was looked at only on the road the shapes take, so
+  # "-avoidMargin abc" without -avoid was accepted without a word - and a
+  # NEGATIVE margin widened the band INTO the shape, which is the opposite of
+  # what the option is for and what the manual says it does.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set codes {}
+  foreach options {{-avoidMargin abc} {-avoidMargin -20}
+      {-avoid {{rect {30 25} {10 10}}} -avoidMargin -20}} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc text "a b c" -at {20 30} -width 50 {*}$options
+    }] 0 3]
+  }
+  set ok [catch {$doc text "a b c" -at {20 60} -width 50 -avoidMargin 2}]
+  $doc destroy
+  list [lsort -unique $codes] $ok
+} -result {{{TCLPDF TEXT AVOID margin}} 0}
+
+test textFlow-r7-7.1 {the break hyphen of a face that has none is named as the breaker's} \
+    -constraints haveFlowEmoji -body {
+  # The hyphen a break is marked with is the LINE BREAKER's, not the text's,
+  # so a face without U+002D refused the paragraph naming a character the
+  # caller never wrote, at a position in their string that means nothing -
+  # "no glyph for U+002D (position 4)" over a text of four emoji.
+  set doc [tclpdf new -unit mm]
+  $doc font embed emo $::flowEmoji
+  $doc page add
+  $doc font -family emo -size 12
+  set message {}
+  catch {$doc textLines "$::flowGrin$::flowGrin" -width 3 \
+      -emergencyHyphen 1} message
+  set code [::tclpdfTest::refusalCode {
+    $doc textLines "$::flowGrin$::flowGrin" -width 3 -emergencyHyphen 1
+  }]
+  $doc destroy
+  list [lrange $code 0 3] [regexp {\(position \d+\)} $message] \
+      [regexp {line breaker} $message]
+} -result {{TCLPDF TEXT BREAKHYPHEN glyph} 0 1}
+
+test textFlow-r7-8.1 {pagination costs time in proportion to the text} -body {
+  # [TextPaginate] called [TextParagraphOnce] with the whole REST on every
+  # page, and that measures and breaks the same text over and over: work
+  # quadratic in the length of the block. Measured 2026-08-26 at 100, 200 and
+  # 400 paragraphs: 0.38, 1.32 and 4.87 seconds - four times the work for
+  # twice the text - and 2500 paragraphs in two balanced columns had not
+  # finished after ten minutes.
+  #
+  # Measured as a RATIO rather than against a clock, so that a slow machine
+  # does not fail it: four times the text may take five times as long, and
+  # the quadratic road took thirteen.
+  set para "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam\
+      nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat.\n"
+  set times {}
+  set pages {}
+  foreach count {100 400} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font -family helvetica -size 11
+    set start [clock microseconds]
+    $doc text [string repeat $para $count] -at {20 20} -width 170 -paginate 1
+    lappend times [expr {[clock microseconds] - $start}]
+    lappend pages [$doc page count]
+    $doc destroy
+  }
+  # And the answer is still the same one: four times the paragraphs, about
+  # four times the pages.
+  list [expr {[lindex $times 1] < [lindex $times 0] * 8}] \
+      [expr {[lindex $pages 1] > [lindex $pages 0] * 3}]
+} -result {1 1}
+
 cleanupTests

@@ -1704,7 +1704,7 @@ test font-15.9 {permission reads the subsetting and bitmap bits, and knows an ab
   list [::tclpdf::sfnt permission 0x0100] [::tclpdf::sfnt permission 0x0208] \
       [::tclpdf::sfnt permission 0x0304] [dict get $subset fsType] \
       [::tclpdf::sfnt permission [dict get $subset fsType]]
-} -result {{installable - no restriction on embedding; no subsetting (bit 8)} {editable; bitmap embedding only (bit 9)} {preview and print only; no subsetting (bit 8); bitmap embedding only (bit 9)} {} {unknown - the face has no OS/2 table and states no permission}}
+} -match glob -result {{installable - no restriction on embedding; no subsetting (bit 8),*} {editable; bitmap embedding only (bit 9)} {preview and print only; no subsetting (bit 8),*; bitmap embedding only (bit 9)} {} {unknown - the face has no OS/2 table and states no permission}}
 
 test font-15.10 {font info names an instance of a variable face as it is embedded} -body {
   # Measured before this: -instance Bold and -axes {wght 620} both answered
@@ -3394,7 +3394,7 @@ test font-25.1 {every format answers every key of font info} \
   }
   $doc destroy
   list [llength [lsort -unique $keys]] [lindex $keys 0] $formats
-} -result {1 {ascender axes capHeight characters descender family format fsType glyphs lineGap permission postScript unitsPerEm variable vertical xHeight} {truetype cff cff type1 type3}}
+} -result {1 {ascender axes capHeight characters descender family format fsType glyphs lineGap masks permission postScript unitsPerEm variable vertical xHeight} {truetype cff cff type1 type3}}
 
 test font-25.2 {one face, three formats, three different things it can say} \
     -constraints haveCffTrio -body {
@@ -3819,6 +3819,598 @@ test font-source-3.1 {a bare CFF of an unknown version names the CFF reader} \
   $doc destroy
   set code
 } -result {TCLPDF FONT SOURCE cff}
+
+
+# -- round 7 --------------------------------------------------------------
+#
+# The faces the round-7 tests measure against, beside the ones declared at the
+# top of this file: the Arabic face is $arabicFace above, under haveArabic.
+
+set robotoVariable [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts google Roboto-Variable.ttf]
+testConstraint haveRoboto [file exists $robotoVariable]
+set bitcountVariable [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts google BitcountPropSingle-Variable.ttf]
+testConstraint haveBitcount [file exists $bitcountVariable]
+
+# -- round 7: outlines a face has not got ------------------------------------
+#
+# THE FIXTURES ARE PATCHED IN PLACE, in the manner of [fontBlankOutlines]
+# above: a real face with exactly one thing changed, so that a refusal it
+# provokes can only hang on that one thing. Rewriting a table's TAG in the
+# directory is how a table is added or taken away without moving a byte of the
+# file - and nothing in this package reads the CONTENTS of an sbix table, so a
+# face that declares one is the whole of what the refusal is about.
+
+# One directory entry's tag, renamed. Returns the new bytes.
+proc fontRenameTable {bytes from to} {
+  binary scan $bytes @4Su count
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {12 + $index * 16}]
+    binary scan $bytes @${at}a4 tag
+    if {$tag eq $from} {
+      return [string replace $bytes $at [expr {$at + 3}] $to]
+    }
+  }
+  error "no \"$from\" table in the fixture"
+}
+
+# Where a table sits: {offset length}.
+proc fontTableAt {bytes wanted} {
+  binary scan $bytes @4Su count
+  for {set index 0} {$index < $count} {incr index} {
+    set at [expr {12 + $index * 16}]
+    binary scan $bytes @${at}a4IuIuIu tag - offset length
+    if {$tag eq $wanted} {
+      return [list $offset $length]
+    }
+  }
+  error "no \"$wanted\" table in the fixture"
+}
+
+# A face whose every glyph is the DEGENERATE record Apple's sbix faces carry:
+# one contour of two points with a bounding box, 26 bytes, drawing nothing.
+# loca is rewritten to hand every glyph the same 26 bytes; the table lengths
+# do not change, because the file's own glyf is far larger than the space the
+# fixture needs.
+proc fontTwoPointOutlines {bytes} {
+  binary scan $bytes @4Su count
+  lassign [fontTableAt $bytes head] headAt -
+  binary scan $bytes @[expr {$headAt + 50}]S locaFormat
+  lassign [fontTableAt $bytes maxp] maxpAt -
+  binary scan $bytes @[expr {$maxpAt + 4}]Su numGlyphs
+  lassign [fontTableAt $bytes loca] locaAt locaLength
+  lassign [fontTableAt $bytes glyf] glyfAt glyfLength
+  # numberOfContours 1, the box, one contour ending at point 1, no
+  # instructions, two on-curve points as absolute deltas.
+  set glyph [binary format SSSSS 1 1 0 801 801]
+  append glyph [binary format Su 1] [binary format Su 0] \x01\x01
+  append glyph [binary format SS 1 800] [binary format SS 0 801]
+  set size [string length $glyph]
+  if {$size != 24} {
+    error "the degenerate glyph is $size bytes, not 24"
+  }
+  set locations {}
+  for {set index 0} {$index <= $numGlyphs} {incr index} {
+    if {$locaFormat} {
+      append locations [binary format Iu [expr {$index * $size}]]
+    } else {
+      append locations [binary format Su [expr {$index * $size / 2}]]
+    }
+  }
+  if {[string length $locations] > $locaLength
+      || $numGlyphs * $size > $glyfLength} {
+    error "the fixture does not fit in the face"
+  }
+  set bytes [string replace $bytes $locaAt \
+      [expr {$locaAt + [string length $locations] - 1}] $locations]
+  set outlines [string repeat $glyph $numGlyphs]
+  return [string replace $bytes $glyfAt \
+      [expr {$glyfAt + [string length $outlines] - 1}] $outlines]
+}
+
+test font-26.1 {a two-point contour draws nothing and is counted as empty} \
+    -constraints haveFont -body {
+  # The defect this guards against was measured with a subset of Apple Color
+  # Emoji: every glyf record is 26 bytes holding one contour of TWO points
+  # and a bounding box, so the "does the offset move" test called them
+  # outlines. font embed took the face, text set it, textWidth answered
+  # 28.2 mm, pdffonts reported a clean subset, pdftotext gave the emoji back
+  # - and the rendered page was byte-identical to a blank one. Two points
+  # cannot enclose an area.
+  set path [::tclpdfTest::scratch two-point.ttf]
+  set channel [open $path wb]
+  puts -nonewline $channel [fontTwoPointOutlines \
+      [::tclpdfTest::readBytes $fontRegular]]
+  close $channel
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc font embed flat $path} message options]
+  $doc destroy
+  file delete $path
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*draws nothing*} $message]
+} -result {1 {TCLPDF FONT OUTLINES} 1}
+
+test font-26.2 {points reads the count off the header without decoding} \
+    -constraints haveFont -body {
+  # The unit under 26.1: -1 for a composite, 0 for an empty record and for
+  # one with no contours, the point count for a simple glyph.
+  package require tclpdf::glyfOutline
+  set flat [binary format SSSSS 1 1 0 801 801]
+  append flat [binary format Su 1] [binary format Su 0] \x01\x01
+  append flat [binary format SS 1 800] [binary format SS 0 801]
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set loca [dict get $parsed loca]
+  set glyf [::tclpdf::sfnt table $parsed glyf]
+  set glyph [dict get $parsed cmap 65]
+  set real [string range $glyf [lindex $loca $glyph] \
+      [expr {[lindex $loca [expr {$glyph + 1}]] - 1}]]
+  list [::tclpdf::glyfOutline points $flat] \
+      [::tclpdf::glyfOutline points {}] \
+      [::tclpdf::glyfOutline points [binary format SSSSS 0 0 0 0 0]] \
+      [::tclpdf::glyfOutline points [binary format SSSSS -1 0 0 0 0]] \
+      [expr {[::tclpdf::glyfOutline points $real] > 2}]
+} -result {2 0 0 -1 1}
+
+test font-26.3 {a colour face with no outlines is refused by the name of its table} \
+    -constraints haveFont -body {
+  # The manual promises a refusal for a face whose pictures sit in a COLR,
+  # CBDT, sbix or SVG table, and until 2026-08-26 an sbix face went straight
+  # past it - its glyf records are not empty, they are degenerate. The
+  # message now says WHICH table, because "this is an sbix colour face" is
+  # something a caller can act on and "the outlines are empty" is a symptom
+  # of it. The fixture declares the table by renaming a directory entry: the
+  # contents of an sbix table are read by nobody here.
+  set path [::tclpdfTest::scratch sbix-face.ttf]
+  set channel [open $path wb]
+  puts -nonewline $channel [fontRenameTable [fontTwoPointOutlines \
+      [::tclpdfTest::readBytes $fontRegular]] FFTM sbix]
+  close $channel
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc font embed emo $path} message options]
+  set names [$doc font names]
+  $doc destroy
+  file delete $path
+  set errorcode [dict get $options -errorcode]
+  list $code [lrange $errorcode 0 3] [lindex $errorcode end] \
+      [string match {*colour font whose pictures sit in its "sbix" table*} \
+          $message] $names
+} -result {1 {TCLPDF FONT OUTLINES emo} sbix 1 {}}
+
+test font-26.4 {a COLR face keeps its own road even with an SVG table beside it} \
+    -constraints haveFont -body {
+  # Noto Color Emoji carries an "SVG " table beside its COLR, and it is a
+  # face this package DRAWS, through colorFont. So the table name is only
+  # reached where there is no COLR - otherwise the answer is {} and the
+  # ordinary refusal applies.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  oo::objdefine $doc export FontColourTable
+  set parsed [::tclpdf::sfnt read $fontRegular]
+  set plain [$doc FontColourTable $parsed]
+  dict set parsed tables sbix {0 0}
+  set colour [$doc FontColourTable $parsed]
+  dict set parsed tables COLR {0 0}
+  set drawn [$doc FontColourTable $parsed]
+  $doc destroy
+  list $plain $colour $drawn
+} -result {{} sbix {}}
+
+test font-26.5 {an sfnt without glyf and loca is refused at the embed} \
+    -constraints haveFont -body {
+  # ISO 32000-2, 9.9, Table 128: a FontFile2 must carry glyf, head, hhea,
+  # hmtx, loca and maxp. Such a file went in whole under -subset 0 and
+  # produced a document qpdf calls clean, pdftotext reads back and pdffonts
+  # cannot make a font of - a blank page; with the default -subset 1 it was
+  # taken, measured, set, and died in [write], where no caller can tell any
+  # more which call was at fault.
+  set path [::tclpdfTest::scratch no-glyf.ttf]
+  set bytes [fontRenameTable [::tclpdfTest::readBytes $fontRegular] glyf gly2]
+  set channel [open $path wb]
+  puts -nonewline $channel [fontRenameTable $bytes loca loc2]
+  close $channel
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set whole [::tclpdfTest::refusalCode {$doc font embed ng $path -subset 0}]
+  set cut [::tclpdfTest::refusalCode {$doc font embed ng2 $path}]
+  set names [$doc font names]
+  $doc destroy
+  file delete $path
+  list $whole $cut $names
+} -result {{TCLPDF FONT TABLE glyf} {TCLPDF FONT TABLE glyf} {}}
+
+test font-26.6 {a CFF face is not asked for glyf and loca} -constraints haveOtf -body {
+  # The control for 26.5: an OTTO face has neither table and is embedded all
+  # the same - its outlines are charstrings. A check that asked the question
+  # of every face turned every .otf away.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc font embed nimbus $::otf} message]
+  set names [$doc font names]
+  $doc destroy
+  list $code $names
+} -result {0 nimbus}
+
+# -- round 7: the shadda and the hamza marks ---------------------------------
+
+test font-27.1 {shadda is drawn under the vowel in either spelling} -body {
+  # UTR #53, the Arabic Mark Transient Reordering Algorithm. Canonical order
+  # - and therefore NFC, and therefore every normalised input - sorts the
+  # marks by combining class, which puts fatha (ccc 30) before shadda (ccc
+  # 33); Arabic typography puts the shadda underneath. HarfBuzz answers
+  # [uni064E|uni0651|uni0645] for BOTH orderings of U+0645 U+064E U+0651.
+  set canonical [::tclpdf::font::markOrder \
+      [split "مَّ" {}]]
+  set shaddaFirst [::tclpdf::font::markOrder \
+      [split "مَّ" {}]]
+  # The indices are the CALLER's - what moves is the order they are walked
+  # in, so a refusal still names the position the character has in the
+  # string as written.
+  list $canonical $shaddaFirst
+} -result {{0 2 1} {0 1 2}}
+
+test font-27.2 {only the shadda and the hamza marks move, and only past vowels} -body {
+  # The rule is deliberately narrow: it is not "sort the marks by combining
+  # class", which would rewrite what the caller wrote. The sukun U+0652 (ccc
+  # 34) does not move, a mark of class 230 does not move, and a mover that
+  # follows a LETTER does not move either.
+  list [::tclpdf::font::markOrder [split "مَْ" {}]] \
+      [::tclpdf::font::markOrder [split "مّ" {}]] \
+      [::tclpdf::font::markOrder [split "مَٔ" {}]] \
+      [::tclpdf::font::markOrder [split "مَُّ" {}]] \
+      [::tclpdf::font::markOrder [split "abc" {}]]
+} -result {{0 1 2} {0 1} {0 2 1} {0 3 1 2} {0 1 2}}
+
+test font-27.3 {the two spellings reach the same glyphs} -constraints haveArabic -body {
+  # The measurement behind 27.1, through the run rather than through the
+  # rule: before this the two orderings gave 72|379|373 and 72|373|379, and
+  # mkmk hangs the second mark on the first, so the fatha sat under the
+  # shadda in one of them and over it in the other. hb-shape gives one
+  # answer for both.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed naskh $arabicFace
+  oo::objdefine $doc export FontRun
+  set canonical [lmap entry [$doc FontRun naskh "مَّ" 0 0 rtl] {
+    lindex $entry 0
+  }]
+  set shaddaFirst [lmap entry [$doc FontRun naskh "مَّ" 0 0 rtl] {
+    lindex $entry 0
+  }]
+  $doc destroy
+  list [expr {$canonical eq $shaddaFirst}] $canonical
+} -result {1 {72 373 379}}
+
+# -- round 7: what the descriptor and the tag say ---------------------------
+
+test font-28.1 {two faces of one name get two subset tags} -constraints haveFont -body {
+  # ISO 32000-2, 9.6.4: "different subsets in the same PDF file shall have
+  # different tags". The tag used to hang on the PostScript name, the glyphs
+  # and the axes - so two files with the same name id 6, which is what two
+  # cuts of a family with a wrongly filled name table are, came out as one
+  # tag over two different subsets. A reader that merges fonts by name and
+  # tag may then draw one with the other's glyphs.
+  set path [::tclpdfTest::scratch renamed.ttf]
+  set channel [open $path wb]
+  # The same face with one byte of its cvt changed: same name, same glyphs
+  # written, a different font program.
+  set bytes [::tclpdfTest::readBytes $fontRegular]
+  lassign [fontTableAt $bytes {cvt }] cvtAt -
+  binary scan $bytes @${cvtAt}cu first
+  puts -nonewline $channel [string replace $bytes $cvtAt $cvtAt \
+      [binary format cu [expr {($first + 1) % 256}]]]
+  close $channel
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed one $fontRegular
+  $doc font embed two $path
+  $doc text "H" -at {20 20} -family one
+  $doc text "H" -at {20 40} -family two
+  set target [::tclpdfTest::scratch two-tags.pdf]
+  $doc write $target
+  set tags [lsort -unique [regexp -all -inline {[A-Z]{6}\+DejaVuSans} \
+      [::tclpdfTest::readBytes $target]]]
+  $doc destroy
+  file delete $path $target
+  llength $tags
+} -result 2
+
+test font-28.2 {the same program written twice keeps its tag} -constraints haveFont -body {
+  # The other half of 28.1: same input, same tag, or two writes of one report
+  # would differ for no reason.
+  set tags {}
+  foreach round {1 2} {
+    set doc [tclpdf new -unit pt]
+    $doc page add
+    $doc font embed one $fontRegular
+    $doc text "H" -at {20 20} -family one
+    set path [::tclpdfTest::scratch stable-tag.pdf]
+    $doc write $path
+    $doc destroy
+    lappend tags [lindex [regexp -all -inline {[A-Z]{6}\+DejaVuSans} \
+        [::tclpdfTest::readBytes $path]] 0]
+    file delete $path
+  }
+  expr {[lindex $tags 0] eq [lindex $tags 1] && [lindex $tags 0] ne {}}
+} -result 1
+
+test font-28.3 {fsType bit 8 makes -subset 0 the default and -subset 1 wins} \
+    -constraints haveFont -body {
+  # OS/2 fsType bit 8: "the font may not be subsetted prior to embedding".
+  # The one bit of that field this package acts on - the others are licence
+  # terms and stay the caller's business. A caller who means it otherwise
+  # says so and is obeyed.
+  set path [::tclpdfTest::scratch nosubset.ttf]
+  set bytes [::tclpdfTest::readBytes $fontRegular]
+  lassign [fontTableAt $bytes OS/2] os2At -
+  set channel [open $path wb]
+  puts -nonewline $channel [string replace $bytes [expr {$os2At + 8}] \
+      [expr {$os2At + 9}] [binary format Su 0x0100]]
+  close $channel
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed vendor $path
+  $doc font embed anyway $path -subset 1
+  $doc text "H" -at {20 20} -family vendor
+  $doc text "H" -at {20 40} -family anyway
+  set fonts [dict get [$doc state fonts]]
+  set permission [dict get [$doc font info vendor] permission]
+  $doc destroy
+  file delete $path
+  list [dict get $fonts vendor subset] [dict get $fonts anyway subset] \
+      [string match {*no subsetting (bit 8), so the face is embedded whole*} \
+          $permission]
+} -result {0 1 1}
+
+test font-28.4 {a positive hhea descender is written as a negative Descent} \
+    -constraints haveFont -body {
+  # ISO 32000-2, Table 120: Descent "shall be a negative number". A file may
+  # state either sign - the fixture is what a face with a wrongly signed
+  # hhea looks like - and the descriptor states the one the standard names.
+  set path [::tclpdfTest::scratch posdescent.ttf]
+  set bytes [::tclpdfTest::readBytes $fontRegular]
+  lassign [fontTableAt $bytes hhea] hheaAt -
+  set channel [open $path wb]
+  puts -nonewline $channel [string replace $bytes [expr {$hheaAt + 6}] \
+      [expr {$hheaAt + 7}] [binary format S 236]]
+  close $channel
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed up $path
+  $doc text "H" -at {20 20} -family up
+  set target [::tclpdfTest::scratch posdescent.pdf]
+  $doc write $target
+  set stated [dict get [$doc font info up] descender]
+  $doc destroy
+  set written [::tclpdfTest::readBytes $target]
+  file delete $path $target
+  regexp {/Descent ([-0-9.]+)} $written -> descent
+  list $stated [expr {$descent < 0}]
+} -result {236 1}
+
+test font-28.5 {every used CID gets a bfchar, an empty destination included} \
+    -constraints haveFont -body {
+  # ISO 19005-3, 6.2.11.7.2: the font dictionary shall "define the map of ALL
+  # used character codes to Unicode values", and veraPDF counts a CID with no
+  # bfchar as unmapped. A glyph may stand for no character of its own - a
+  # piece of a one-to-many substitution, the dot a Naskh face draws beside
+  # the letter skeleton - and its entry is then "<0006> <>", which says "this
+  # code extracts as nothing". Leaving such an entry out was tried on
+  # 2026-08-26 and taken back the same day: example 02.09 came out with four
+  # failed checks against that rule. Writing the letter's own code point here
+  # as well is the other wrong answer - the letter would extract twice.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed dv $fontRegular
+  oo::objdefine $doc export FontToUnicode
+  set map [$doc FontToUnicode [dict create 5 {65} 6 {} 7 {66 67}]]
+  $doc destroy
+  list [regexp {(\d+) beginbfchar} $map -> count; set count] \
+      [regexp {<0005> <0041>} $map] [regexp {<0006> <>} $map] \
+      [regexp {<0007> <00420043>} $map]
+} -result {3 1 1 1}
+
+test font-28.6 {MVAR moves the metrics of an instance} -constraints haveBitcount -body {
+  # OpenType MVAR: head, hhea and OS/2 state ONE set of numbers, the default
+  # instance's, exactly as glyf holds one set of outlines. Measured against
+  # fontTools' instancer at wght 700, slnt -8: sCapHeight 660, where the
+  # descriptor said 600 - the default's cap height over the instance's
+  # glyphs.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed heavy $bitcountVariable -axes {wght 700 slnt -8}
+  $doc text "H" -at {20 20} -family heavy
+  set target [::tclpdfTest::scratch mvar.pdf]
+  $doc write $target
+  set info [$doc font info heavy]
+  $doc destroy
+  set written [::tclpdfTest::readBytes $target]
+  file delete $target
+  regexp {/CapHeight ([-0-9.]+)} $written -> capHeight
+  list [dict get $info capHeight] [expr {round($capHeight)}]
+} -result {660 660}
+
+test font-28.7 {a face that is not an instance is not varied} \
+    -constraints haveBitcount -body {
+  # The control for 28.6: without -axes there is no instance, MVAR is not
+  # read, and the numbers are the file's own.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed plain $bitcountVariable
+  set info [$doc font info plain]
+  $doc destroy
+  dict get $info capHeight
+} -result 600
+
+# -- round 7: refusals at the call ------------------------------------------
+
+test font-29.1 {an axis value has to be finite} -constraints haveRoboto -body {
+  # NaN is a double to Tcl and every comparison with it is false, so it
+  # passed the range test and reached varFont normalise, where the
+  # arithmetic raised a bare "ARITH DOMAIN non-numeric floating-point
+  # value" - against the contract that every refusal here is a tclpdf
+  # message.
+  set doc [tclpdf new -unit pt]
+  set nan [::tclpdfTest::refusalCode {$doc font embed a $robotoVariable -axes {wght NaN}}]
+  set infinite [::tclpdfTest::refusalCode {$doc font embed b $robotoVariable \
+      -axes {wght Inf}}]
+  set names [$doc font names]
+  $doc destroy
+  list $nan $infinite $names
+} -result {{TCLPDF FONT AXES wght} {TCLPDF FONT AXES wght} {}}
+
+test font-29.2 {an axis named twice is refused, not resolved} \
+    -constraints haveRoboto -body {
+  # -axes is a Tcl list, and [dict for] over a list with a repeated key walks
+  # the last value only - so the face came out at 700 and the 400 the caller
+  # wrote was never mentioned again. Which of the two was meant is not this
+  # package's to decide.
+  set doc [tclpdf new -unit pt]
+  set code [::tclpdfTest::refusalCode {$doc font embed a $robotoVariable \
+      -axes {wght 400 wght 700}}]
+  set names [$doc font names]
+  $doc destroy
+  list $code $names
+} -result {{TCLPDF FONT AXES wght} {}}
+
+test font-29.3 {-metrics on a face that carries its own is an ARGUMENT} \
+    -constraints haveOtfPair -body {
+  # Three meanings wore one class until 2026-08-26: the AFM that is MISSING
+  # (METRICS, "name it with -metrics"), an option the call should not have
+  # carried, and a file whose own metrics are unusable. A handler following
+  # the manual answered this refusal by passing the very option it complains
+  # about.
+  set doc [tclpdf new -unit pt]
+  set sfnt [::tclpdfTest::refusalCode {$doc font embed a $::otfTtf \
+      -metrics /nonexistent.afm}]
+  set cff [::tclpdfTest::refusalCode {$doc font embed b \
+      -data [::tclpdfTest::bareCff $::otf] -metrics /nonexistent.afm}]
+  $doc destroy
+  list $sfnt $cff
+} -result {{TCLPDF FONT ARGUMENT metrics} {TCLPDF FONT ARGUMENT metrics}}
+
+
+# -- round 7, second pass: what the gsub package needed from this one --------
+
+test font-30.1 {the writing direction reaches the kerning lookup} \
+    -constraints haveFont -body {
+  # An adjustment sits in the gap between two LOGICAL neighbours, and a
+  # right-to-left line draws the logically later of the two first: gap g moves
+  # the glyphs g+1..end in a left-to-right line and the glyphs g..0 in a
+  # right-to-left one. kernGpos.tcl decides which slot in [Place] and can only
+  # decide it when it is told. Measured against hb-shape over 78 Arabic words:
+  # Noto Sans Arabic 12 words with other positions without this and 0 with,
+  # Scheherazade New 15 and 0, Amiri 4 and 0.
+  #
+  # WHAT THE DIRECTION REACHES is the X PLACEMENT of a lookup, which moves one
+  # glyph and nothing else; the ADVANCE stays in the slot between the same two
+  # logical glyphs either way, or a reversed line would come out wider than
+  # [textWidth] measured it. This face has no placement in its kerning, so the
+  # two answers here are EQUAL - what is under test is that the argument
+  # arrives at all and that the list is one slot per glyph, the last being the
+  # amount that falls off the end. The case where the direction changes the
+  # answer is kern-4.2, on a lookup built for it.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed dv $fontRegular
+  oo::objdefine $doc export FontRun FontRunKern
+  set run [$doc FontRun dv "AVATAR"]
+  set forward [lmap value [$doc FontRunKern dv $run] {expr {round($value)}}]
+  set backward [lmap value [$doc FontRunKern dv $run rtl] {expr {round($value)}}]
+  set default [lmap value [$doc FontRunKern dv $run ltr] {expr {round($value)}}]
+  $doc destroy
+  list $forward [expr {$backward eq $forward}] [expr {$forward eq $default}] \
+      [llength $run]
+} -result {{-64 -64 -78 -78 0 0} 1 1 6}
+
+test font-30.2 {a mark is placed over the advances the line is drawn with} \
+    -constraints haveArabic -body {
+  # markPos.tcl measured a mark's horizontal offset over the advances the FACE
+  # ships, and the line is drawn with the adjusted ones - kerning and the
+  # horizontal half of cursive attachment. HarfBuzz subtracts the final
+  # advances in propagate_attachment_offsets. The adjustment of every gap the
+  # walk crosses now goes with it, in thousandths of the em, so a hundredth
+  # of an em of kerning between a base and its mark moves the mark by exactly
+  # that.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed naskh $arabicFace
+  oo::objdefine $doc export FontRun FontLayoutState
+  set run [$doc FontRun naskh "مَّد" 1 0 rtl]
+  set state [$doc FontLayoutState naskh markPos]
+  set plain [::tclpdf::markPos run $state $run]
+  set wider [::tclpdf::markPos run $state $run {100 0 0}]
+  set tighter [::tclpdf::markPos run $state $run {-100 0 0}]
+  $doc destroy
+  # Both marks hang on glyph 0, so the gap between 0 and 1 lies on the way to
+  # both of them and moves both.
+  list [lmap offset $plain {lindex $offset 0}] \
+      [lmap offset $wider {lindex $offset 0}] \
+      [lmap offset $tighter {lindex $offset 0}]
+} -result {{0 -300.0 -302.0 0} {0 -400.0 -402.0 0} {0 -200.0 -202.0 0}}
+
+test font-30.3 {the run's adjustments are what reaches markPos, and only when kerned} \
+    -constraints haveArabic -body {
+  # The other half of 30.2, and the half no face in this tree can show: a
+  # word whose base and mark have a kerned pair between them. What is under
+  # test is the ROUTE - that [FontRunMarks] hands the adjusted advances down,
+  # and hands NOTHING down for a line drawn with -kerning 0, where the writer
+  # places the glyphs by the face's own advances and a mark corrected for a
+  # kerning that never happened would stand beside its letter.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed naskh $arabicFace
+  oo::objdefine $doc export FontRun FontRunMarks FontRunKern
+  set run [$doc FontRun naskh "مَّد" 1 0 rtl]
+  rename ::tclpdf::markPos::run ::tclpdf::markPos::runReal
+  set ::markCalls {}
+  proc ::tclpdf::markPos::run {state run {adjustments {}}} {
+    lappend ::markCalls $adjustments
+    return [::tclpdf::markPos::runReal $state $run $adjustments]
+  }
+  $doc FontRunMarks naskh $run rtl 1
+  $doc FontRunMarks naskh $run rtl 0
+  set expected [$doc FontRunKern naskh $run rtl]
+  rename ::tclpdf::markPos::run {}
+  rename ::tclpdf::markPos::runReal ::tclpdf::markPos::run
+  $doc destroy
+  list [expr {[lindex $::markCalls 0] eq $expected}] \
+      [llength [lindex $::markCalls 0]] [lindex $::markCalls 1]
+} -result {1 4 {}}
+
+test font-30.4 {the ligature stage is not skipped for one glyph or for -ligatures 0} \
+    -constraints haveFont -body {
+  # Two shortcuts stood in front of it. The length test dated from when a
+  # ligature needed two glyphs; since the context machine a clig or calt rule
+  # may consist of ONE position. And "-ligatures 0" skipped the stage
+  # altogether, which took calt and rclt with it - HarfBuzz has those on for
+  # every run whatever the typographic option says, and liga.tcl decides
+  # which features the flag reaches. The reviewer's synthetic face answered
+  # [Z] in HarfBuzz and [b] here.
+  #
+  # Measured with a spy rather than with a fixture: what changed is the ROUTE,
+  # and a face in this tree that shows the difference would have to be built
+  # for it.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed dv $fontRegular
+  oo::objdefine $doc export FontRun
+  rename ::tclpdf::liga::apply ::tclpdf::liga::applyReal
+  set ::ligaCalls {}
+  proc ::tclpdf::liga::apply {prepared run {ligatures 1}} {
+    lappend ::ligaCalls [list [llength $run] $ligatures]
+    return [::tclpdf::liga::applyReal $prepared $run $ligatures]
+  }
+  $doc FontRun dv "A"
+  $doc FontRun dv "AV" 1
+  $doc FontRun dv "AV" 0
+  rename ::tclpdf::liga::apply {}
+  rename ::tclpdf::liga::applyReal ::tclpdf::liga::apply
+  $doc destroy
+  set ::ligaCalls
+} -result {{1 0} {2 1} {2 0}}
 
 
 cleanupTests

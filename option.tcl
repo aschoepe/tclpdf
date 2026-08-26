@@ -41,6 +41,12 @@
 #
 
 package require Tcl 8.6.11-
+# For [pdfObj fits] - the one place the magnitude a PDF real holds stands
+# (Annex C.2). pdfObj depends on nothing but Tcl, so the infrastructure stays
+# the one-way street it is meant to be, and the range a file can hold is
+# asked HERE, at the call, instead of at the moment of writing - by which
+# time a "q", a "BT" or a marked-content bracket is already out.
+package require tclpdf::pdfObj 1.0-
 
 namespace eval ::tclpdf::option {
   namespace export {[a-z]*}
@@ -164,6 +170,42 @@ proc ::tclpdf::option::point {value option context} {
           "tclpdf: $option takes two finite numbers {x y}, got \"$value\" -\
           NaN and Inf are doubles to Tcl and name no point on a page"
     }
+    # AND TWO NUMBERS THE FILE CAN HOLD. A PDF real carries about
+    # +/-3.403e38 (Annex C.2), and a coordinate past that was accepted here
+    # and refused by [pdfObj num] at the moment of writing - which is after
+    # the "q", the mark and, for an annotation, the appearance stream, so
+    # what a caught refusal left behind was a half-written page. Same code
+    # as the shape and the NaN above: it is the same option that is wrong.
+    if {![::tclpdf::pdfObj fits $coordinate]} {
+      return -code error \
+          -errorcode [list TCLPDF OPTION POINT $option $context] \
+          "tclpdf: $option takes two numbers a PDF file can hold {x y}, got\
+          \"$value\" - a real carries about +/-3.403e38 (ISO 32000-1,\
+          Annex C.2)"
+    }
+  }
+  return $value
+}
+
+# The magnification of an /XYZ destination (12.3.2.2, Table 151).
+#
+# 0 is a NUMBER A READER ACTS ON and not a mistake - "a zoom value of 0 has
+# the same meaning as a null value", so it means "leave the magnification as
+# it is" - and below it there is nothing to mean: no reader magnifies by a
+# negative factor, and 12.3.2.2 offers a number or null and nothing else.
+#
+# Here rather than per module, and that is the whole reason it exists: the
+# same two conditions and the same clause stood in link.tcl and in
+# viewerPreferences.tcl, and [destination] - the third caller, and the public
+# one - had neither (measured 2026-08-26: "destination 0 -to {10 10} -zoom -1"
+# wrote /XYZ 28.35 811 -1). "context" and "option" name the call, as
+# everywhere in this module, so the message says which of the three was wrong.
+proc ::tclpdf::option::zoom {value option context} {
+  if {![finite $value] || $value < 0} {
+    return -code error -errorcode [list TCLPDF OPTION ZOOM $option $context] \
+        "tclpdf: $option is a magnification of 0 or more -\
+        0 means the magnification the reader is already at (ISO 32000-2,\
+        12.3.2.2, Table 151) - not \"$value\""
   }
   return $value
 }
@@ -213,6 +255,19 @@ proc ::tclpdf::option::number {value what {context {}}} {
         "tclpdf: $what[Where $context] is a finite number, not \"$value\" -\
         NaN and Inf are doubles to Tcl and place nothing on a page"
   }
+  # AND A NUMBER THE FILE CAN HOLD (Annex C.2, about +/-3.403e38), asked
+  # through [pdfObj fits] so that the figure stands in one place. [pdfObj
+  # num] asks the same question at the moment of WRITING and keeps doing so -
+  # but by then the operators of the call are out, and a caller who caught
+  # the refusal was left with a "q" without its "Q" and a mark without its
+  # end. Measured 2026-08-26: "rect -at {1e39 20}" wrote its style and its
+  # bracket before dying.
+  if {![::tclpdf::pdfObj fits $value]} {
+    return -code error -errorcode [list TCLPDF OPTION NUMBER $what $context] \
+        "tclpdf: $what[Where $context] is \"$value\", which is beyond what a\
+        PDF number holds - a real carries about +/-3.403e38 (ISO 32000-1,\
+        Annex C.2)"
+  }
   return $value
 }
 
@@ -223,4 +278,4 @@ proc ::tclpdf::option::Where {context} {
   return " for $context"
 }
 
-package provide tclpdf::option 1.2
+package provide tclpdf::option 1.3

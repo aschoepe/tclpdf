@@ -14,7 +14,10 @@
 # At this width the line count does not even change - the raggedness does, and
 # that is the honest measure of what hyphenation buys.
 #
-# ONE LANGUAGE PER PAGE: German on the first, English on the second. Both
+# ONE LANGUAGE PER PAGE: German on the first, English on the second, and a
+# third page for the break of last resort, -emergencyHyphen, which cuts a
+# word no pattern set can break rather than letting it stand out of the
+# column. Both
 # pairs on a single page did not fit and had not been noticed, because a page
 # that overflows still writes a PDF: measured, six of the ten specimen rows
 # were drawn below the lower edge of the A4 sheet - the last at 324 mm on a

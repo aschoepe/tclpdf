@@ -12,6 +12,13 @@
 # every PDF that claims a PDF/A part or a PDF/UA part - with the flavour the
 # file itself claims. A missing tool is a SKIP, never a pass.
 #
+# A script that ends without an error is not enough, and that is the second
+# half of the file check: many snippets demonstrate a REFUSAL, and they say so
+# in the two wordings [unrefused] below looks for. Such a snippet catches its
+# own error, so a call that stopped being refused would leave the exit status
+# at 0 and print "NOT REFUSED" into a log nobody reads. Those two lines are
+# therefore failures of the file that printed them.
+#
 # assets.tcl sets the variables the snippets refer to (see SKILL.md, "The one
 # setup every snippet assumes") - ttf, png, iccRgb, invoiceXml, out ... - and
 # it is the ONLY place a project has to edit.
@@ -47,7 +54,7 @@ file mkdir $out $scripts
 # $hyphenPatterns is deliberately NOT in this list: the package ships no
 # hyphenation patterns (licence), so the file may well not be there, and
 # 03-text.md checks for it and says so instead of failing.
-foreach name {ttf ttfBold otf type1 variable jpeg png tiff svgFile iccRgb iccCmyk invoiceXml orderXml} {
+foreach name {ttf ttfBold otf type1 variable jpTtf jpeg png tiff svgFile iccRgb iccCmyk invoiceXml orderXml} {
     if {[info exists $name] && ![file exists [set $name]]} {
         puts stderr "asset \$$name does not exist: [set $name]"
         exit 2
@@ -85,6 +92,23 @@ proc snippets {path} {
     return $code
 }
 
+# The lines a snippet prints when a call it expected to be refused went
+# through. Both wordings are the reference files' own: "NOT REFUSED" is what
+# the table of field refusals prints in the column where the error code
+# belongs, and "went through, which it should not have" is what a try/trap
+# block prints in the branch that should be unreachable. Neither raises an
+# error - the snippet caught its own - so without this the file passes.
+proc unrefused {output} {
+    set lines {}
+    foreach line [split $output \n] {
+        if {[string match {*NOT REFUSED*} $line]
+            || [string match {*should not have*} $line]} {
+            lappend lines [string trim $line]
+        }
+    }
+    return $lines
+}
+
 set tclsh [info nameofexecutable]
 foreach path $files {
     set code [snippets $path]
@@ -99,6 +123,9 @@ foreach path $files {
     close $channel
     if {[catch {exec $tclsh $script 2>@1} output]} {
         fail "[file tail $path]\n[string trimright $output]"
+    } elseif {[llength [set stood [unrefused $output]]]} {
+        fail "[file tail $path]: [llength $stood] call(s) the snippet expected\
+            to be refused went through\n[join $stood \n]"
     } else {
         pass "[file tail $path] ([llength [split [string trim $output] \n]] lines of output)"
     }

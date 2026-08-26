@@ -66,15 +66,22 @@ proc ::tclpdf::afm::resolve {family {style {}}} {
   # the stale bold sent Times-Italic down the family road, and there is no
   # such family.
   #
-  # The one exception is a name that is ALSO a family with variants -
-  # Helvetica, Courier - asked for with a style: those go the family road, so
-  # that [resolve Helvetica bold] answers Helvetica-Bold. Passed through, the
-  # style was silently dropped and the heading came out in the regular weight
-  # with nothing to indicate why. Symbol and ZapfDingbats have no variants to
-  # drop a style into and pass through like any other exact name.
+  # The one exception is a name that is ALSO a family - Helvetica, Courier,
+  # Symbol - asked for with a style: those go the family road, so that
+  # [resolve Helvetica bold] answers Helvetica-Bold. Passed through, the style
+  # was silently dropped and the heading came out in the regular weight with
+  # nothing to indicate why.
+  #
+  # A FAMILY WITH ONE CUT IS NOT AN EXCEPTION TO THAT, and it used to be:
+  # Symbol and ZapfDingbats hold one variant each, so they were let through
+  # the exact-name road and "-style bold" on them vanished without a word -
+  # which made the refusal below unreachable and the manual's sentence about
+  # "a style for a family that has no such cut" a description of nothing.
+  # They now take the family road like every other family and are refused for
+  # a cut they have not got: there is no bold Symbol to fall back to, and a
+  # caller who asked for one has written something that cannot be drawn.
   set key [string tolower $family]
-  if {$style eq {} || ![dict exists $families $key]
-      || [dict size [dict get $families $key]] == 1} {
+  if {$style eq {} || ![dict exists $families $key]} {
     foreach name [fonts] {
       if {[string equal -nocase $name $family]} {
         return $name
@@ -253,4 +260,4 @@ proc ::tclpdf::afm::Check {font} {
   return
 }
 
-package provide tclpdf::afm 1.4
+package provide tclpdf::afm 1.5

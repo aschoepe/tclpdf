@@ -67,8 +67,43 @@ proc ::tclpdf::io::head {path count} {
   return $bytes
 }
 
+# Where a file is about to be written: the directory has to be one, and it
+# has to be there.
+#
+# [open $path w] says so itself, but in POSIX's words and with POSIX's error
+# code - "couldn't open \"/nonexistent/dir/x.pdf\": no such file or
+# directory", and a code whose first word is the operating system's rather
+# than this package's - while the manual promises that every refusal of this
+# package begins with "tclpdf:" (doc/tclpdf.md:1379).
+# Measured 2026-08-26 through [$doc write], which is the call a caller makes
+# with a path they built themselves.
+#
+# Only the two cases a caller can act on are named. Everything else - a
+# read-only directory, a full disk, a name too long - stays with [open],
+# whose message is then the whole truth and has nothing better to be
+# replaced with.
+proc ::tclpdf::io::checkTarget {path} {
+  set directory [file dirname $path]
+  if {![file exists $directory]} {
+    return -code error -errorcode [list TCLPDF IO DIRECTORY $directory] \
+        "tclpdf: \"$directory\" does not exist, so \"$path\" cannot be\
+        written - the directory is not created here"
+  }
+  if {![file isdirectory $directory]} {
+    return -code error -errorcode [list TCLPDF IO DIRECTORY $directory] \
+        "tclpdf: \"$directory\" is a file, not a directory, so \"$path\"\
+        cannot be written"
+  }
+  if {[file isdirectory $path]} {
+    return -code error -errorcode [list TCLPDF IO DIRECTORY $path] \
+        "tclpdf: \"$path\" is a directory, not a file"
+  }
+  return
+}
+
 # Write bytes to a file.
 proc ::tclpdf::io::write {path bytes} {
+  checkTarget $path
   set channel [open $path w]
   fconfigure $channel -translation binary
   puts -nonewline $channel $bytes
@@ -76,4 +111,4 @@ proc ::tclpdf::io::write {path bytes} {
   return $path
 }
 
-package provide tclpdf::io 1.1
+package provide tclpdf::io 1.2

@@ -20,9 +20,9 @@
 # The two private helpers below are here because only the writer asks them
 # anything - measured, not assumed.
 #
-# The one refusal here carries a code from the space structure.tcl lists in
-# its header - TCLPDF STRUCTURE NAME unknown name, for a destination that
-# names an element nobody created.
+# The refusals here carry a code from the space structure.tcl lists in its
+# header, and both are the same one - TCLPDF STRUCTURE NAME unknown name,
+# for a destination or a -ref that names an element nobody created.
 #
 
 package require Tcl 8.6.11-
@@ -183,6 +183,30 @@ oo::define ::tclpdf::document::document {
         if {[dict get $element $option] ne {}} {
           lappend pairs $key [my Str [dict get $element $option]]
         }
+      }
+      # What the element POINTS AT (Ref, ISO 32000-2 Table 355): an array of
+      # references to other elements, named by [structure -ref] with the
+      # -name of each target. Resolved here and not at the call, because a
+      # table of contents is written before the sections it lists - see the
+      # -ref block in structure.tcl.
+      #
+      # A name nobody created is refused with the words a structure
+      # destination gets for the same mistake, and with the same code: it
+      # IS the same mistake, in the same namespace.
+      if {[dict get $element ref] ne {}} {
+        set targets {}
+        foreach name [dict get $element ref] {
+          if {![dict exists [my state structureNames] $name]} {
+            return -code error -errorcode \
+                [list TCLPDF STRUCTURE NAME unknown name] \
+                "tclpdf: no structure element is named\
+                \"$name\" - the -ref of a [dict get $element type] points at\
+                it. Name one with \[\$doc structure <type> -name $name ...\]"
+          }
+          lappend targets [$writer ref [dict get [lindex $elements \
+              [dict get [my state structureNames] $name]] number]]
+        }
+        lappend pairs Ref [::tclpdf::pdfObj arr $targets]
       }
       # The identifier is a byte string, not a text string (Table 323), and
       # every element that has one goes into the IDTree of the root - the
@@ -427,4 +451,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structureWrite 1.2
+package provide tclpdf::structureWrite 1.3

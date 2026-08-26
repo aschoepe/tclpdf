@@ -286,11 +286,24 @@ oo::define ::tclpdf::document::document {
       }
       set allowed [dict get $initialValues $option]
       if {$value ni $allowed} {
-        return -code error \
-            -errorcode [list TCLPDF INITIALVIEW [string toupper $option] \
-                $value] \
-            "tclpdf: initialView -$option must be one of\
+        # The class is SPELLED OUT, twice, and the message is written once.
+        # It used to read [string toupper $option], which was right every
+        # time and which tools/mkerrorcodes.tcl cannot follow: it reported
+        # "INITIALVIEW computes a class - not in the table" and the two
+        # classes stood in no row of the manual's table, which is the one
+        # place a caller looks a code up.
+        set message "tclpdf: initialView -$option must be one of\
             [join $allowed {, }] - not \"$value\""
+        switch -- $option {
+          pageMode {
+            return -code error \
+                -errorcode [list TCLPDF INITIALVIEW PAGEMODE $value] $message
+          }
+          pageLayout {
+            return -code error \
+                -errorcode [list TCLPDF INITIALVIEW PAGELAYOUT $value] $message
+          }
+        }
       }
     }
     set page [dict get $options page]
@@ -365,4 +378,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::viewerPreferences 1.4
+package provide tclpdf::viewerPreferences 1.5

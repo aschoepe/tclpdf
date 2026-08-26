@@ -40,6 +40,88 @@ package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::font {}
 
+# The order the characters of a run are looked up in - a list of indices into
+# the character list, which is 0 1 2 ... for everything but Arabic.
+#
+# WHY THE ORDER IS NOT ALWAYS THE ONE WRITTEN. Canonical ordering (UAX #15,
+# and therefore NFC, and therefore what every normalised input carries) sorts
+# the Arabic marks by combining class, which puts fatha (ccc 30) BEFORE
+# shadda (ccc 33). Arabic typography puts the shadda underneath and the vowel
+# above it, and the rendering model gets there by moving the shadda in front:
+# Unicode 9.2 describes it, UTR #53 (Arabic Mark Transient Reordering
+# Algorithm) states it as an algorithm, and HarfBuzz implements it in
+# reorder_marks_arabic. Without it the two spellings of one word draw two
+# different pictures, because mkmk attaches the second mark to the first:
+# measured on Noto Naskh Arabic, hb-shape answers [uni064E|uni0651|uni0645]
+# for BOTH orderings of U+0645 U+064E U+0651, while this package drew the
+# fatha under the shadda for the canonical one and over it for the other.
+#
+# THE RULE IS DELIBERATELY NARROW - it is not the general "sort marks by
+# combining class" that the comment in [FontRun] refuses to do. Only two
+# groups move, and only past one group:
+#
+#   movers   the shadda U+0651 and the seven Modifier Combining Marks of
+#            UTR #53 that this rule covers - U+0654, U+0655, U+0658, U+06DC,
+#            U+06E3, U+06E7, U+06E8
+#   passed   the vowel signs, combining classes 27 to 32 and 35
+#
+# Everything else - the sukun U+0652 (ccc 34), every mark of class 220 or
+# 230, every mark of any other script - stays exactly where the caller wrote
+# it. A mover is placed in front of the run of vowel signs it directly
+# follows and nowhere else, so a shadda that follows a letter does not move
+# at all.
+#
+# THE POSITIONS THE CALLER SEES DO NOT MOVE WITH IT: the indices are the
+# indices of the string as written, so a refusal for a missing glyph still
+# names the position the character has in the caller's own string.
+namespace eval ::tclpdf::font {
+  # The marks that move, and the marks they move past. Dictionaries rather
+  # than lists: this is asked once per character of every Arabic run.
+  variable markMovers {}
+  foreach markCode {0x0651 0x0654 0x0655 0x0658 0x06DC 0x06E3 0x06E7 0x06E8} {
+    dict set markMovers [expr {$markCode}] 1
+  }
+  variable markVowels {}
+  # ccc 27 to 32: fathatan, dammatan, kasratan, fatha, damma, kasra, and the
+  # three "open" forms of the tanween in the Arabic Extended-A block; ccc 35:
+  # the superscript alef.
+  foreach markCode {0x064B 0x064C 0x064D 0x064E 0x064F 0x0650 0x0670
+      0x08F0 0x08F1 0x08F2} {
+    dict set markVowels [expr {$markCode}] 1
+  }
+  unset markCode
+}
+
+proc ::tclpdf::font::markOrder {chars} {
+  variable markMovers
+  variable markVowels
+  set order {}
+  set index -1
+  foreach char $chars {
+    incr index
+    set code [scan $char %c]
+    if {[dict exists $markMovers $code] && [llength $order]} {
+      # How far back the run of vowel signs directly in front of this mark
+      # reaches - in the order built so far, which is what makes a second
+      # mover land in front of the first one's new place as well.
+      set at [llength $order]
+      while {$at > 0} {
+        set previous [scan [lindex $chars [lindex $order [expr {$at - 1}]]] %c]
+        if {![dict exists $markVowels $previous]} {
+          break
+        }
+        incr at -1
+      }
+      if {$at < [llength $order]} {
+        set order [linsert $order $at $index]
+        continue
+      }
+    }
+    lappend order $index
+  }
+  return $order
+}
+
 # The GSUB feature that gives a face its VERTICAL glyph forms.
 #
 # A bracket, a comma, a full stop and a long vowel mark are not the same
@@ -117,8 +199,14 @@ oo::define ::tclpdf::document::document {
       set path [lindex $args 0]
       set args [lrange $args 1 end]
     }
+    # -subset has NO DEFAULT HERE, and the empty string is what "the caller
+    # did not say" looks like: which way it falls is decided further down,
+    # once the file has been read and its fsType is known (OS/2 bit 8, "the
+    # font may not be subsetted prior to embedding"). Written as a plain 1
+    # here, that decision could not tell a caller who wrote -subset 1 from
+    # one who wrote nothing.
     set options [::tclpdf::option parse \
-        {subset 1 metrics {} axes {} instance {} data {}} $args "font embed"]
+        {subset {} metrics {} axes {} instance {} data {}} $args "font embed"]
     set fonts [my state fonts]
     if {[dict exists $fonts $alias]} {
       return -code error -errorcode [list TCLPDF FONT ALIAS $alias] \
@@ -126,7 +214,8 @@ oo::define ::tclpdf::document::document {
     }
     # Validated HERE, at the call. -subset used to be taken as given and to
     # fail at write time, in an "if" nowhere near the line that set it.
-    if {![string is boolean -strict [dict get $options subset]]} {
+    if {[dict get $options subset] ne {}
+        && ![string is boolean -strict [dict get $options subset]]} {
       return -code error -errorcode [list TCLPDF FONT ARGUMENT subset] \
           "tclpdf: -subset takes a boolean, not\
           \"[dict get $options subset]\""
@@ -203,7 +292,14 @@ oo::define ::tclpdf::document::document {
             no axes - -axes and -instance apply to a variable TrueType face"
       }
       if {[dict get $options metrics] ne {}} {
-        return -code error -errorcode [list TCLPDF FONT METRICS $source] \
+        # ARGUMENT and not METRICS: this is an option the CALL should not
+        # have carried, and the caller's answer to it is to drop the option.
+        # METRICS is the opposite advice - "the metrics are missing, name
+        # them with -metrics" - and the two wore one class until 2026-08-26,
+        # so a handler that followed the manual answered this refusal by
+        # passing the very option it complains about.
+        return -code error \
+            -errorcode [list TCLPDF FONT ARGUMENT metrics] \
             "tclpdf: -metrics names the AFM of a Type 1 font\
             program - $source is a CFF font program and carries its own\
             metrics, widths and glyph names"
@@ -211,7 +307,9 @@ oo::define ::tclpdf::document::document {
       dict set fonts $alias [my FontEmbedCff $alias $path $source $bytes]
     } else {
       if {[dict get $options metrics] ne {}} {
-        return -code error -errorcode [list TCLPDF FONT METRICS $source] \
+        # ARGUMENT, for the reason given at the bare CFF above.
+        return -code error \
+            -errorcode [list TCLPDF FONT ARGUMENT metrics] \
             "tclpdf: -metrics names the AFM of a Type 1 font\
             program - $source is a TrueType or OpenType face and\
             carries its own metrics"
@@ -238,10 +336,57 @@ oo::define ::tclpdf::document::document {
             CID, not by glyph index; convert it to TrueType or to a name-keyed\
             CFF"
       }
+      # Has the face outlines at all? ISO 32000-2, 9.9, Table 128 (32000-1:
+      # Table 126) lists what a FontFile2 must contain - glyf, head, hhea,
+      # hmtx, loca, maxp - and [sfnt parse] requires four of the six. The
+      # other two are asked for HERE, because they are the two a face may
+      # sensibly lack: a CFF face has neither and goes another road entirely,
+      # and a bitmap-only colour face (the CBDT/CBLC Noto Color Emoji, the
+      # Android emoji faces) carries the TrueType signature and its pictures
+      # somewhere else.
+      #
+      # AT THE EMBED, and that is the whole point of the check. Until
+      # 2026-08-26 such a file was taken: with -subset 0 it went in whole and
+      # produced a document qpdf calls clean, pdftotext reads back and
+      # pdffonts cannot make a font of - a blank page; with the default
+      # -subset 1 it was taken, measured, set, and died in [write], the one
+      # place a caller can no longer tell which call was at fault. The parser
+      # knows the answer at the moment the file is read.
+      # True where the face has the outlines this package can write - the CFF
+      # road carries its own and is not asked.
+      set glyf [expr {[dict get $parsed outlines] ne "truetype" ||
+          ([dict exists [dict get $parsed tables] glyf]
+              && [llength [dict get $parsed loca]])}]
       # A face that draws nothing, refused here rather than embedded: the
       # file that comes out of it is valid, extractable and blank, and the
       # reasoning is at [FontDrawsNothing].
-      if {[my FontDrawsNothing $parsed]} {
+      set blank [expr {!$glyf || [my FontDrawsNothing $parsed]}]
+      # WHICH TABLE ITS PICTURES ARE IN, where the face says so - asked
+      # before the bare "no glyf" refusal below, because "this is an sbix
+      # colour face" is an answer a caller can act on and "the file has no
+      # glyf table" is a symptom of it.
+      set colour [my FontColourTable $parsed]
+      if {$blank && $colour ne {}} {
+        return -code error \
+            -errorcode [list TCLPDF FONT OUTLINES $alias $path $colour] \
+            "tclpdf: $source is a colour font whose pictures sit in its\
+            \"$colour\" table, and it has no outlines to draw instead -\
+            this package writes outlines and none of the colour tables, so a\
+            document embedding it would come out blank with nothing\
+            reporting it. Embed a monochrome face instead - Noto Emoji for\
+            Noto Color Emoji - or draw the symbols with \[font define\] and\
+            \[font glyph\] as a Type 3 font. A COLR/CPAL face is the one\
+            kind this package does draw, with \[colorFont\]"
+      }
+      if {!$glyf} {
+        return -code error -errorcode [list TCLPDF FONT TABLE glyf] \
+            "tclpdf: $source carries the TrueType signature and no\
+            \"glyf\"/\"loca\" tables, so it holds no outlines - ISO 32000-2,\
+            9.9, Table 128 requires both in an embedded TrueType program.\
+            Such a file is a bitmap or colour face whose pictures are in a\
+            table of its own"
+      }
+      if {$blank} {
         return -code error \
             -errorcode [list TCLPDF FONT OUTLINES $alias $path] \
             "tclpdf: $source draws nothing - every character it\
@@ -256,7 +401,8 @@ oo::define ::tclpdf::document::document {
       lassign [my FontAxes $parsed $options $source] coordinates axes
       dict set fonts $alias [dict create \
           kind truetype \
-          path $path parsed $parsed subset [dict get $options subset] \
+          path $path parsed $parsed \
+          subset [my FontSubset $parsed [dict get $options subset]] \
           coordinates $coordinates axes $axes \
           used {} number {}]
     }
@@ -310,6 +456,20 @@ oo::define ::tclpdf::document::document {
   #
   # A CFF face is not asked. Its outlines live in the CFF table, which this
   # package never walks - see sfnt.tcl - so there is nothing to measure here.
+  #
+  # AN EMPTY loca ENTRY IS NOT THE ONLY WAY TO DRAW NOTHING, and Apple's sbix
+  # faces are the measurement that says so: their glyf entries are 26 bytes
+  # holding one contour of TWO points and a bounding box, so the offset test
+  # alone called them outlines and the face passed. Measured 2026-08-26 on a
+  # subset of Apple Color Emoji: [font embed] took it, [text] set it,
+  # [textWidth] answered 28.2 mm, pdffonts reported a clean subset, pdftotext
+  # gave the emoji back - and the rendered page was byte-identical to a blank
+  # one. Two points cannot enclose an area; a contour needs three. So the
+  # test is the number of POINTS and not the length of the record.
+  #
+  # A COMPOSITE draws whatever its components draw, and counts as an outline
+  # without being decoded: a face whose characters are all composites is not
+  # the case this is looking for.
   method FontDrawsNothing {parsed} {
     if {[dict get $parsed outlines] ne "truetype"} {
       return 0
@@ -321,17 +481,73 @@ oo::define ::tclpdf::document::document {
       # reach at all - neither of those is this question.
       return 0
     }
+    package require tclpdf::glyfOutline 1.0-
+    set glyf [::tclpdf::sfnt table $parsed glyf]
     # loca holds numGlyphs + 1 offsets, so glyph n is empty where the offset
     # behind it does not lie behind its own (ISO/IEC 14496-22, 5.3.3). A
     # glyph number the table does not cover has no outline either.
     set last [expr {[llength $loca] - 1}]
     dict for {code glyph} $cmap {
-      if {$glyph < $last && [lindex $loca [expr {$glyph + 1}]]
-          > [lindex $loca $glyph]} {
+      if {$glyph >= $last} {
+        continue
+      }
+      set start [lindex $loca $glyph]
+      set stop [lindex $loca [expr {$glyph + 1}]]
+      if {$stop <= $start} {
+        continue
+      }
+      set points [::tclpdf::glyfOutline points \
+          [string range $glyf $start [expr {$stop - 1}]]]
+      if {$points < 0 || $points > 2} {
         return 0
       }
     }
     return 1
+  }
+
+  # Whether this face is subsetted: what the caller asked for, or - where he
+  # asked for nothing - what the FACE asks for.
+  #
+  # OS/2 fsType bit 8 says "the font may not be subsetted prior to
+  # embedding", and it is the one bit of that field this package acts on.
+  # The others are LICENCE terms and stay the caller's business: bit 1
+  # ("restricted licence embedding") is reported by [font info] and not
+  # enforced, because a package that silently declines to embed a face the
+  # user holds a licence for is the more harmful of the two errors, and
+  # because no reader and no validator enforces it either. Bit 8 is
+  # different in kind - it is about what may be DONE to the program, the
+  # vendor's answer is cheap to honour (the whole file goes in instead of a
+  # part of it), and a caller who means it otherwise says -subset 1 and is
+  # obeyed.
+  method FontSubset {parsed wanted} {
+    if {$wanted ne {}} {
+      return $wanted
+    }
+    set fsType [dict get $parsed fsType]
+    if {$fsType ne {} && ($fsType & 0x0100)} {
+      return 0
+    }
+    return 1
+  }
+
+  # The colour table this face keeps its pictures in, where that is a table
+  # this package cannot draw - "sbix", "CBDT" or "SVG " - and {} otherwise.
+  #
+  # COLR/CPAL IS NOT AMONG THEM, and that is the whole distinction: a COLR
+  # face is drawn, as a Type 3 font, by [colorFont]. So a face carrying COLR
+  # answers {} here whatever else it holds - Noto Color Emoji carries an
+  # "SVG " table beside its COLR and is a face this package draws.
+  method FontColourTable {parsed} {
+    set tables [dict get $parsed tables]
+    if {[dict exists $tables COLR]} {
+      return {}
+    }
+    foreach name {sbix CBDT {SVG }} {
+      if {[dict exists $tables $name]} {
+        return [string trimright $name]
+      }
+    }
+    return {}
   }
 
   # Where on the axes a variable font is to be embedded: a list of two - the
@@ -374,16 +590,36 @@ oo::define ::tclpdf::document::document {
       lappend known [lindex $axis 0]
       dict set ranges [lindex $axis 0] [lrange $axis 1 3]
     }
+    # A DUPLICATE TAG is refused rather than resolved. "-axes {wght 400 wght
+    # 700}" is a Tcl list, and [dict for] over a list with a repeated key
+    # walks the last value only - so the face came out at 700 and the 400 the
+    # caller wrote was never mentioned again. Which of the two was meant is
+    # not this package's to decide.
+    set seen {}
+    foreach {tag value} $axes {
+      if {[dict exists $seen $tag]} {
+        return -code error -errorcode [list TCLPDF FONT AXES $tag] \
+            "tclpdf: -axes names the axis \"$tag\" twice, with\
+            \"[dict get $seen $tag]\" and \"$value\" - name it once"
+      }
+      dict set seen $tag $value
+    }
     dict for {tag value} $axes {
       if {$tag ni $known} {
         return -code error -errorcode [list TCLPDF FONT AXES $tag] \
             "tclpdf: $source has no axis \"$tag\"\
             - it has: [join $known { }]"
       }
-      if {![string is double -strict $value]} {
+      # [option finite] and not [string is double -strict]: NaN is a double
+      # to Tcl and every comparison with it is false, so it passed the range
+      # test below and reached [varFont normalise], where the arithmetic
+      # raised a bare "ARITH DOMAIN non-numeric floating-point value" -
+      # against the contract that every refusal of this package is a tclpdf
+      # message. Inf was refused by the range all along.
+      if {![::tclpdf::option finite $value]} {
         return -code error -errorcode [list TCLPDF FONT AXES $tag] \
             "tclpdf: the value for axis \"$tag\" must be a\
-            number, got \"$value\""
+            finite number, got \"$value\""
       }
       # Inside the axis, or refused. The normalisation clamps (varFont
       # normalise, as the format prescribes), so the OUTLINES of wght 5000
@@ -596,6 +832,10 @@ oo::define ::tclpdf::document::document {
         }] \
         italicAngle [dict get $program italicAngle] \
         ascender {} descender {} capHeight {} xHeight {} \
+        tops [dict create {*}[concat {*}[lmap {name top} \
+            [dict get $program tops] {
+          list $name [expr {round($top * $scale)}]
+        }]]] \
         stemV [dict get $program stemV] \
         widths $widths \
         codes [dict get $program encoding] \
@@ -656,21 +896,67 @@ oo::define ::tclpdf::document::document {
   method FontAscender {alias size} {
     set entry [dict get [my state fonts] $alias]
     if {[dict get $entry kind] eq "type1"} {
-      # ZERO counts as absent, not as a measurement. The URW metrics in this
-      # tree write "Ascender 0" and "Descender 0" - the fields are there and
-      # say nothing. Read literally, every line anchored at its top sat one
-      # full ascender too high, which in a table put the text on the rule
-      # above it. A face has no zero ascender; the bounding box is measured
-      # from the same outlines and is the honest substitute.
-      set ascent [dict get $entry metrics ascender]
-      if {$ascent eq {} || $ascent == 0} {
-        set ascent [lindex [dict get $entry metrics bbox] 3]
-      }
-      return [expr {double($ascent) * $size / 1000.0}]
+      # One derivation for the layout and for the descriptor - see
+      # [FontType1Ascent]. They disagreed by the height of an accent while
+      # the box stood in for the ascender in one of them.
+      return [expr {double([my FontType1Ascent $entry]) * $size / 1000.0}]
     }
     set parsed [dict get $entry parsed]
     return [expr {double([dict get $parsed ascender]) * $size
         / [dict get $parsed unitsPerEm]}]
+  }
+
+  # THE ASCENT of a Type 1 face or a bare CFF, in 1/1000 em - what the AFM
+  # states, or what the outlines say where it states nothing.
+  #
+  # ZERO COUNTS AS ABSENT, not as a measurement. The URW metrics in this tree
+  # write "Ascender 0" and "Descender 0" - the fields are there and say
+  # nothing. Read literally, every line anchored at its top sat one full
+  # ascender too high, which in a table put the text on the rule above it.
+  #
+  # WHAT STANDS IN FOR IT, and this is the part that changed on 2026-08-26:
+  # the top of the d or the b, which are the lower-case letters that reach
+  # the ascender. It used to be the upper edge of the FontBBox, and that box
+  # is drawn round the WHOLE face, accents and all: Nimbus Sans reaches 1075
+  # there for an ascender of 729, and the same face as .otf writes 729 out of
+  # its hhea. So the two roads through one face disagreed by 35 pt at 100 pt
+  # under -anchor top - measured, and it is the box that was wrong. The box
+  # remains the last resort, for a face that states no ascender and has
+  # neither letter.
+  method FontType1Ascent {entry} {
+    set metrics [dict get $entry metrics]
+    set ascent [dict get $metrics ascender]
+    if {$ascent ne {} && $ascent != 0} {
+      return $ascent
+    }
+    foreach name {d b} {
+      if {[dict exists $metrics tops $name]} {
+        return [dict get $metrics tops $name]
+      }
+    }
+    set bbox [dict get $metrics bbox]
+    if {[llength $bbox] == 4} {
+      return [lindex $bbox 3]
+    }
+    return {}
+  }
+
+  # THE CAP HEIGHT of a Type 1 face or a bare CFF, in 1/1000 em - Table 122
+  # asks for "the vertical coordinate of the top of flat capital letters",
+  # which is the top of the H and not the top of anything else. An AFM may
+  # state it; a bare CFF states nothing at all, and wrote the upper edge of
+  # the FontBBox until this measured the letter instead - 1075 for a face
+  # whose capitals reach 729.
+  method FontType1CapHeight {entry} {
+    set metrics [dict get $entry metrics]
+    set capHeight [dict get $metrics capHeight]
+    if {$capHeight ne {} && $capHeight != 0} {
+      return $capHeight
+    }
+    if {[dict exists $metrics tops H]} {
+      return [dict get $metrics tops H]
+    }
+    return [my FontType1Ascent $entry]
   }
 
   # The descender of an embedded face, in points at the size asked for, as a
@@ -816,6 +1102,13 @@ oo::define ::tclpdf::document::document {
     if {[dict exists [dict get $parsed names] family]} {
       set family [dict get $parsed names family]
     }
+    # THE NUMBERS OF THE FACE AS EMBEDDED, which for an instance of a variable
+    # font is the file's numbers plus its MVAR deltas - the same rule
+    # postScript above already follows, where the instance's name is
+    # answered rather than name id 6 of the file. A caller comparing
+    # [font info] with the descriptor in the document must find the same
+    # numbers; where the face is not an instance nothing is added.
+    set varied [my FontVariedMetrics $entry]
     return [dict merge [my FontInfoStated [dict get $parsed outlines]] \
         [dict create \
             family $family \
@@ -824,23 +1117,57 @@ oo::define ::tclpdf::document::document {
             unitsPerEm [dict get $parsed unitsPerEm] \
             fsType [dict get $parsed fsType] \
             permission [::tclpdf::sfnt permission [dict get $parsed fsType]] \
-            ascender [dict get $parsed ascender] \
-            descender [dict get $parsed descender] \
-            lineGap [dict get $parsed lineGap] \
-            capHeight [dict get $os2 capHeight] \
-            xHeight [dict get $os2 xHeight] \
+            ascender [my FontVaried $varied hasc [dict get $parsed ascender]] \
+            descender [my FontVaried $varied hdsc \
+                [dict get $parsed descender]] \
+            lineGap [my FontVaried $varied hlgp [dict get $parsed lineGap]] \
+            capHeight [my FontVaried $varied cpht [dict get $os2 capHeight]] \
+            xHeight [my FontVaried $varied xhgt [dict get $os2 xHeight]] \
             vertical [my FontHasVertical $alias] \
             variable [expr {[llength $axes] > 0}] \
             axes $axes \
             characters [dict size [dict get $parsed cmap]]]]
   }
 
+  # WHAT MVAR ADDS to the file's own metrics at the point on the axes this
+  # face is embedded at - a dictionary of the four-letter value tags to a
+  # delta in font units, empty for a face that is not an instance or carries
+  # no MVAR.
+  #
+  # head, hhea and OS/2 state ONE set of numbers, the default instance's, as
+  # glyf holds one set of outlines. gvar moves the outlines and MVAR moves
+  # the numbers; a descriptor written without it states the default's cap
+  # height over the instance's glyphs - measured on BitcountPropSingle at
+  # wght 700, slnt -8: 600 where fontTools' instancer computes 660.
+  method FontVariedMetrics {entry} {
+    if {![dict exists $entry coordinates]
+        || ![llength [dict get $entry coordinates]]} {
+      return {}
+    }
+    package require tclpdf::varFont 1.0-
+    return [::tclpdf::varFont metrics [dict get $entry parsed] \
+        [dict get $entry coordinates]]
+  }
+
+  # One metric of a face as embedded: what the file states plus the MVAR
+  # delta of the instance, or the file's value where there is none.
+  method FontVaried {varied tag value} {
+    if {$value eq {} || ![dict exists $varied $tag]} {
+      return $value
+    }
+    return [expr {$value + [dict get $varied $tag]}]
+  }
+
   # The keys of [font info] that a format may leave unanswered, at their "not
   # stated" value - the frame every kind's answer is merged onto, so that the
   # SET of keys is the same whatever was embedded.
   method FontInfoStated {format} {
+    # "masks" belongs to the drawn colour faces (type3.tcl, [Type3Masks]) and
+    # is 0 for every other kind - the promise this method holds is that the
+    # SET of keys is the same whatever was embedded, so a key one kind
+    # answers is a key all of them answer.
     return [dict create format $format ascender {} descender {} lineGap {} \
-        capHeight {} xHeight {} vertical 0 variable 0 axes {}]
+        capHeight {} xHeight {} vertical 0 variable 0 axes {} masks 0]
   }
 
   # One metric an AFM may carry - as the file states it, or {} where it does
@@ -940,15 +1267,14 @@ oo::define ::tclpdf::document::document {
     set entry [dict get [my state fonts] $alias]
     set cmap [dict get $entry parsed cmap]
     set run {}
-    set position 0
-    # THE RUN IS BUILT IN THE ORDER THE CALLER WROTE, and where two marks sit
-    # on one letter that is a decision rather than an omission - the same one
-    # [TextCluster] in text.tcl states at length. HarfBuzz normalises first:
-    # two combining marks of different combining class are canonically
-    # equivalent in either order (UAX #15), and a shaper sorts them by that
-    # class before it looks anything up. This package has no combining-class
-    # table and does not sort, because sorting would silently rewrite what the
-    # caller wrote.
+    # THE RUN IS BUILT IN THE ORDER THE CALLER WROTE, with ONE exception, and
+    # where two marks sit on one letter that is a decision rather than an
+    # omission - the same one [TextCluster] in text.tcl states at length.
+    # HarfBuzz normalises first: two combining marks of different combining
+    # class are canonically equivalent in either order (UAX #15), and a shaper
+    # sorts them by that class before it looks anything up. This package has
+    # no combining-class table and does not sort, because sorting would
+    # silently rewrite what the caller wrote.
     #
     # WHAT THAT COSTS, measured 2026-08-26 against hb-shape over every ordered
     # pair of the Arabic marks U+064B..U+0655, U+0670 and U+06D6..U+06ED on
@@ -959,9 +1285,18 @@ oo::define ::tclpdf::document::document {
     # none is drawn twice and none is a different shape. What does change is
     # what stacks on what: mkmk attaches the second mark to the first, so with
     # the two exchanged the pile is built the other way round and the marks
-    # sit in the other vertical order. A caller who wants the shaper's answer
-    # writes the marks in canonical order.
-    foreach char [split $text {}] {
+    # sit in the other vertical order.
+    #
+    # THE EXCEPTION IS THE ARABIC SHADDA AND THE HAMZA MARKS, and it is not a
+    # general sort - see [::tclpdf::font::markOrder] for the rule and for the
+    # measurement that forced it.
+    set chars [split $text {}]
+    set order [::tclpdf::font::markOrder $chars]
+    set position -1
+    set index -1
+    foreach index $order {
+      set char [lindex $chars $index]
+      set position $index
       set code [scan $char %c]
       # A soft hyphen is a permission, not a character: it says a word may be
       # broken here. The breaker has already put a real hyphen wherever it took
@@ -980,7 +1315,6 @@ oo::define ::tclpdf::document::document {
       # used to be refused as an Arabic mark, because the presentation forms
       # block it closes was taken whole.
       if {$code == 0x00AD || $code == 0x200B || $code == 0xFEFF} {
-        incr position
         continue
       }
       # A paired bracket is DRAWN mirrored in a right-to-left line: U+0028 is
@@ -1013,7 +1347,6 @@ oo::define ::tclpdf::document::document {
             with this face"
       }
       lappend run [list [dict get $cmap $drawn] [list $drawn]]
-      incr position
     }
     # The contextual forms come FIRST, and not by preference: they are the
     # shaping of the script, while ligatures are a typographic option the
@@ -1054,8 +1387,25 @@ oo::define ::tclpdf::document::document {
       # not a bug fix.
       set run [::tclpdf::forms apply [my FontLayoutState $alias forms] $run \
           $ligatures]
-    } elseif {$ligatures && [llength $run] > 1} {
-      set run [::tclpdf::liga apply [my FontLayoutState $alias liga] $run]
+    } else {
+      # NO "$ligatures &&" AND NO LENGTH TEST, and both used to be here.
+      #
+      # The length test dates from when a ligature needed two glyphs to work
+      # on. Since the context machine a clig or calt rule may consist of ONE
+      # position - a chaining rule of format 1 or 3 with no backtrack and no
+      # lookahead - so a run of one glyph has something to gain from this
+      # stage. liga.tcl lost the same shortcut in the same breath; this one
+      # stayed behind and kept the answer from arriving. The reviewer's probe:
+      # a face whose rlig rewrites a single "b" answers [Z] in HarfBuzz, and
+      # this package answered [Z] through [liga apply] and [b] through
+      # [FontRun].
+      #
+      # And "-ligatures 0" no longer skips the stage: it is passed IN, because
+      # calt and rclt are not typographic options - HarfBuzz has them on for
+      # every run and turning the ligatures off must not take them with it.
+      # liga.tcl decides which features the flag reaches.
+      set run [::tclpdf::liga apply [my FontLayoutState $alias liga] $run \
+          $ligatures]
     }
     # LAST, after everything else has settled which glyphs there are: vert
     # substitutes the FINAL glyph of a position for its vertical form, and a
@@ -1230,7 +1580,18 @@ oo::define ::tclpdf::document::document {
   # The whole run goes down in one piece, not pair by pair: a lookup that
   # ignores marks kerns A against V across the acute between them, and a caller
   # that asked for one pair at a time could never see that pair.
-  method FontRunKern {alias run} {
+  #
+  # THE DIRECTION REACHES THE LOOKUP, and it is not decoration: an adjustment
+  # sits in the gap between two LOGICAL neighbours, and a right-to-left line
+  # draws the logically later of the two first. So gap g moves the glyphs
+  # g+1..end in a left-to-right line and the glyphs g..0 in a right-to-left
+  # one, and a value put in the wrong gap moves exactly one glyph - the
+  # adjusted one - by exactly the amount. kernGpos.tcl makes that decision in
+  # [Place]; it can only make it when it is told. Measured against hb-shape
+  # over 78 Arabic words: Noto Sans Arabic 12 words wrong without it and 0
+  # with, Scheherazade New 15 and 0, Amiri 4 and 0. Latin is untouched -
+  # there the direction IS the default.
+  method FontRunKern {alias run {direction ltr}} {
     if {[llength $run] < 2} {
       return {}
     }
@@ -1240,7 +1601,8 @@ oo::define ::tclpdf::document::document {
     }
     set units [dict get [my state fonts] $alias parsed unitsPerEm]
     set adjustments {}
-    foreach value [::tclpdf::kern run [my FontLayoutState $alias kern] $glyphs] {
+    foreach value [::tclpdf::kern run [my FontLayoutState $alias kern] \
+        $glyphs $direction] {
       lappend adjustments [expr {$value * 1000.0 / $units}]
     }
     return $adjustments
@@ -1263,7 +1625,27 @@ oo::define ::tclpdf::document::document {
   # mark sits when the glyphs are drawn in the order the run holds them. A
   # right-to-left line draws them in another order, and text.tcl keeps a mark
   # with the glyph it hangs on for exactly that reason - see [TextCluster].
-  method FontRunMarks {alias run} {
+  #
+  # THE ADJUSTED ADVANCES GO WITH THE RUN, and that is a contract between this
+  # method and markPos.tcl rather than a convenience: a mark's horizontal
+  # offset is the distance the pen has travelled since its base was drawn, and
+  # the pen travels the advances the LINE is drawn with - kerning and the
+  # horizontal half of cursive attachment included. Without them the letters
+  # of a Nastaliq word stood right and every dot and harakat over them stood
+  # beside its letter, by the sum of the corrections in between. HarfBuzz does
+  # this in propagate_attachment_offsets.
+  #
+  # KERNING IS A PARAMETER because the line may be drawn without it: with
+  # "-kerning 0" the writer places the glyphs by the face's own advances, and
+  # a mark corrected for a kerning that was never applied is the same error
+  # the other way round.
+  #
+  # The kerning is asked for a SECOND time here - [TextAdjust] has already
+  # asked - and that is a walk of the run, not of the font: the prepared GPOS
+  # table is built once and cached by [FontLayoutState]. Handing the list in
+  # from text.tcl would save the walk and cost a wider contract; if a line of
+  # Arabic ever measures slow, this is the place to look.
+  method FontRunMarks {alias run {direction ltr} {kerning 1}} {
     if {[llength $run] < 2} {
       return {}
     }
@@ -1271,7 +1653,11 @@ oo::define ::tclpdf::document::document {
     if {$state eq {}} {
       return {}
     }
-    set offsets [::tclpdf::markPos run $state $run]
+    set adjustments {}
+    if {$kerning} {
+      set adjustments [my FontRunKern $alias $run $direction]
+    }
+    set offsets [::tclpdf::markPos run $state $run $adjustments]
     foreach offset $offsets {
       lassign $offset dx dy
       if {$dx != 0 || $dy != 0} {
@@ -1577,20 +1963,20 @@ oo::define ::tclpdf::document::document {
     }
     # Ascent, descent and cap height are required (9.8.1 Table 122). An AFM
     # may leave any of them out - or write a zero, which the URW metrics here
-    # do and which means the same thing. The bounding box is then the honest
-    # substitute, measured from the same outlines.
-    set ascent [dict get $metrics ascender]
-    if {$ascent eq {} || $ascent == 0} {
-      set ascent [lindex $bbox 3]
-    }
+    # do and which means the same thing. What stands in for each of them is
+    # measured from the outlines the face carries: see [FontType1Ascent] and
+    # [FontType1CapHeight]. The bounding box is the last resort and no longer
+    # the first.
+    set ascent [my FontType1Ascent $entry]
     set descent [dict get $metrics descender]
     if {$descent eq {} || $descent == 0} {
       set descent [lindex $bbox 1]
     }
-    set capHeight [dict get $metrics capHeight]
-    if {$capHeight eq {} || $capHeight == 0} {
-      set capHeight $ascent
-    }
+    # Table 120: "shall be a negative number". An AFM may state either sign
+    # and the bounding box states the right one, so the sign is settled here
+    # rather than trusted.
+    set descent [expr {-abs($descent)}]
+    set capHeight [my FontType1CapHeight $entry]
     # StemV has no counterpart in an AFM that is guaranteed to be there -
     # StdVW is optional and both faces in this tree omit it. 80 is a middling
     # value, close to the 87 the TrueType road estimates for a regular
@@ -1671,7 +2057,7 @@ oo::define ::tclpdf::document::document {
       }
     } elseif {[dict get $entry subset]} {
       set built [::tclpdf::subset build $parsed [dict keys $used] \
-          [my FontInstanced $alias]]
+          [my FontInstanced $alias] $alias]
       set fontBytes [dict get $built bytes]
       set mapping [dict get $built glyphs]
     } elseif {[llength [dict get $entry coordinates]]} {
@@ -1689,7 +2075,8 @@ oo::define ::tclpdf::document::document {
       for {set glyph 0} {$glyph < [dict get $parsed numGlyphs]} {incr glyph} {
         lappend all $glyph
       }
-      set built [::tclpdf::subset build $parsed $all [my FontInstanced $alias]]
+      set built [::tclpdf::subset build $parsed $all \
+          [my FontInstanced $alias] $alias]
       set fontBytes [dict get $built bytes]
       set mapping [dict get $built glyphs]
     } else {
@@ -1852,15 +2239,27 @@ oo::define ::tclpdf::document::document {
   # merging fonts across documents is told to keep two incompatible copies,
   # and a preflight tool is entitled to reject the file.
   #
-  # The tag is derived from WHAT WAS SUBSETTED - the name, the glyphs used and
-  # the point on the axes - because 9.6.4 asks that different subsets of one
-  # face in one file carry different tags. It used to be a function of the
-  # name alone, and 02.10 then embedded twenty-four instances of Roboto all
-  # tagged SZGNUB+: a reader entitled to treat same tag and same name as the
-  # same font would have drawn Thin with the glyphs of Black. Same input, same
-  # tag, so two writes of one document stay byte-identical; a document that
-  # sets one letter more gets a different tag, which is exactly right, since
-  # it is a different subset.
+  # The tag is derived from WHAT WAS SUBSETTED - the font program, the name,
+  # the glyphs used and the point on the axes - because 9.6.4 asks that
+  # different subsets of one face in one file carry different tags. It used to
+  # be a function of the name alone, and 02.10 then embedded twenty-four
+  # instances of Roboto all tagged SZGNUB+: a reader entitled to treat same
+  # tag and same name as the same font would have drawn Thin with the glyphs
+  # of Black. Same input, same tag, so two writes of one document stay
+  # byte-identical; a document that sets one letter more gets a different tag,
+  # which is exactly right, since it is a different subset.
+  #
+  # THE PROGRAM IS IN THE KEY, and not only its name, because the name is not
+  # the face. Two files may carry the same name id 6 and different outlines -
+  # two cuts of a family whose maker filled the field wrongly, two versions of
+  # one face, a bold renamed - and with the name alone both came out as
+  # BNUWCR+DejaVuSans, one tag over two different subsets in one document.
+  # Measured 2026-08-26: nine faces, nine identical tags, among them one whose
+  # descriptor said StemV 165 over the outlines of a bold cut. A reader that
+  # merges fonts by name and tag - and 9.6.4 entitles it to - may then draw
+  # the one with the other's glyphs. The digest is a CRC-32 of the program and
+  # its length: not a cryptographic hash and not meant as one, the same
+  # standard this tag has always been held to.
   method FontBaseName {entry alias {subsetted 1}} {
     set parsed [dict get $entry parsed]
     if {[dict exists $entry axes] && [dict size [dict get $entry axes]]} {
@@ -1875,7 +2274,10 @@ oo::define ::tclpdf::document::document {
     if {!$subsetted} {
       return $name
     }
-    set key "$name|[lsort -integer [dict keys [dict get $entry used]]]|[dict get $entry coordinates]"
+    set program [dict get $parsed bytes]
+    set key "$name|[string length $program]|[zlib crc32 $program]"
+    append key "|[lsort -integer [dict keys [dict get $entry used]]]"
+    append key "|[dict get $entry coordinates]"
     # CRC-32 of the key, spelt as six capital letters - 26^6 is 308 million
     # tags, of which the checksum picks one; the top four bits of it are not
     # used. Not a cryptographic hash and not meant as one: two subsets that
@@ -1957,14 +2359,18 @@ oo::define ::tclpdf::document::document {
     if {[dict get $parsed macStyle] & 2 || $italicAngle != 0 || $italicAxis} {
       incr flags 64
     }
-    set ascent [expr {[dict get $parsed ascender] * $scale}]
+    # The metrics of THIS INSTANCE, not of the file's default - see
+    # [FontVariedMetrics].
+    set varied [my FontVariedMetrics $entry]
+    set ascent [expr {[my FontVaried $varied hasc \
+        [dict get $parsed ascender]] * $scale}]
     # OS/2 (Table 122 asks for CapHeight, TrueType keeps it here). Read with
     # the rest of the file in sfnt.tcl since [font info] came to want the same
     # two numbers - the alternative was a second scan of the same table here,
     # free to drift from the first.
     set os2 [dict get $parsed os2]
     set weight [dict get $os2 weightClass]
-    set capHeight [dict get $os2 capHeight]
+    set capHeight [my FontVaried $varied cpht [dict get $os2 capHeight]]
     if {$capHeight ne {}} {
       set capHeight [expr {$capHeight * $scale}]
     }
@@ -1986,7 +2392,8 @@ oo::define ::tclpdf::document::document {
             [::tclpdf::pdfObj num [expr {$yMax * $scale}]]]] \
         ItalicAngle [::tclpdf::pdfObj num $italicAngle] \
         Ascent [::tclpdf::pdfObj num $ascent] \
-        Descent [::tclpdf::pdfObj num [expr {[dict get $parsed descender] * $scale}]] \
+        Descent [::tclpdf::pdfObj num [expr {-abs([my FontVaried $varied hdsc \
+            [dict get $parsed descender]]) * $scale}]] \
         CapHeight [::tclpdf::pdfObj num $capHeight] \
         StemV $stemV \
         [expr {$cff ? {FontFile3} : {FontFile2}}] $fontFileRef]
@@ -2133,6 +2540,21 @@ oo::define ::tclpdf::document::document {
           append target [format %04X $code]
         }
       }
+      # AN EMPTY DESTINATION IS WRITTEN, and that is a decision measured
+      # rather than a leftover. A glyph may stand for no character of its
+      # own - a piece of a one-to-many substitution, the dot a Naskh face
+      # draws beside the letter skeleton, where the letter's code point
+      # belongs to the skeleton and writing it here as well would extract
+      # the letter twice. "<0142> <>" says "this code extracts as nothing",
+      # which is exactly the case.
+      #
+      # LEAVING THE ENTRY OUT was tried on 2026-08-26 and taken back the same
+      # day: PDF/A-3u, ISO 19005-3 6.2.11.7.2 asks the font dictionary to
+      # "define the map of ALL used character codes to Unicode values", and
+      # veraPDF counts a CID with no bfchar as unmapped - example 02.09 came
+      # out with four failed checks against that rule and had passed it for
+      # months. Adobe TN 5411 shows only non-empty destinations in its
+      # grammar, which is a matter of style; the conformance level is not.
       lappend lines "<[format %0*X $width $cid]> <$target>"
     }
     set map "/CIDInit /ProcSet findresource begin\n"
@@ -2219,4 +2641,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.15
+package provide tclpdf::font 1.16

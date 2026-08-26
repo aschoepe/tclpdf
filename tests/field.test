@@ -1050,11 +1050,7 @@ test field-7.17 {the first [$doc field] of a script reaches the caller too} -bod
   # -label script one frame too deep exactly once per script.
   # In a fresh interpreter, because within this file the topic is loaded from
   # the first test on and [unknown] never fires again.
-  set here [file normalize [file dirname [file dirname [info script]]]]
-  set path [::tclpdfTest::scratch field-ua-first.tcl]
-  set channel [open $path w]
-  puts $channel [list lappend auto_path $here]
-  puts $channel {
+  ::tclpdfTest::freshInterp {
     package require tclpdf
     set doc [tclpdf new -unit mm -format a4 -version 2.0]
     $doc tagged 1
@@ -1065,10 +1061,6 @@ test field-7.17 {the first [$doc field] of a script reaches the caller too} -bod
     $doc destroy
     puts $seen
   }
-  close $channel
-  set out [exec [info nameofexecutable] $path]
-  file delete $path
-  set out
 } -result {The very first field}
 
 test field-7.7 {-label needs PDF 2.0} -body {

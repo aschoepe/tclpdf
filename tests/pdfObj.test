@@ -62,9 +62,42 @@ test pdfObj-num-1.8 {a magnitude beyond the PDF real range is refused} -body {
 
 test pdfObj-num-1.9 {the full PDF real range stays usable} -body {
   # 3e38 is inside Annex C.2 - the limit refuses what PDF cannot hold, not
-  # what is merely large: 39 digits, no error.
+  # what is merely large: 39 digits and the trailing point that keeps it a
+  # REAL (see 1.10), so 40 characters and no error.
   string length [::tclpdf::pdfObj num 3e38]
-} -result 39
+} -result 40
+
+test pdfObj-num-1.10 {a whole number past 2^31 is written as a real} -body {
+  # THE TOKEN A READER SEES DECIDES WHICH KIND OF NUMBER IT IS. Trimming the
+  # point off makes the text an INTEGER object (7.3.3), and Annex C.2 gives
+  # an integer +/-2147483647 - beyond that a conforming reader need not read
+  # it. Measured 2026-08-26 on qpdf 12.4.0: "1 0 0 1 100000000000000000000 0
+  # cm" produced "overflow/underflow converting ... to 64-bit integer",
+  # the content stream object was treated as null, and the WHOLE page went
+  # with it. With the point qpdf --check is silent.
+  #
+  # The bound itself is not moved: the value is inside the real range, so
+  # the file can hold it - only not under that syntax.
+  list [::tclpdf::pdfObj num 3000000000] [::tclpdf::pdfObj num 1e20] \
+      [::tclpdf::pdfObj num -3000000000] [::tclpdf::pdfObj num 2147483647] \
+      [::tclpdf::pdfObj num 2147483648] [::tclpdf::pdfObj num 12.5]
+} -result {3000000000. 100000000000000000000. -3000000000. 2147483647 2147483648. 12.5}
+
+test pdfObj-name-2.6 {a name of more than 127 bytes is refused} -body {
+  # Annex C.2, Table C.1: "Name: 127 bytes", counted as the file writes it,
+  # escapes included - which is why the second case is refused at 64
+  # characters: each o-umlaut is two UTF-8 bytes and each byte three
+  # characters of "#xx". A longer name is not a syntax error and no
+  # validator objects; a reader is free to truncate it, and a truncated name
+  # is a resource that is not found (poppler: "name token is longer than
+  # what the specification says it can be").
+  set answers [list [string length [::tclpdf::pdfObj name [string repeat X 127]]]]
+  foreach value [list [string repeat X 128] [string repeat \u00f6 22]] {
+    catch {::tclpdf::pdfObj name $value} -> options
+    lappend answers [dict get $options -errorcode]
+  }
+  set answers
+} -result {128 {TCLPDF PDFOBJ NAME length} {TCLPDF PDFOBJ NAME length}}
 
 test pdfObj-name-2.1 {a plain name passes through} -body {
   ::tclpdf::pdfObj name Type

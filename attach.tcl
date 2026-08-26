@@ -59,7 +59,7 @@ namespace eval ::tclpdf::attach {
 # whole character (1F600, above it), and only one of those is the byte order
 # of the file. Read back from the string object rather than encoded a second
 # time here, so the sort and the file cannot disagree.
-proc ::tclpdf::attach::keyBytes {name} {
+proc ::tclpdf::attach::keyBytes {name {encoding auto}} {
   # pdfObj DIRECTLY, and deliberately: this asks the string constructor a
   # question - what bytes would this key be written as - and the answer never
   # reaches the file. It is the sort order of the name tree (7.9.6), which is
@@ -67,11 +67,48 @@ proc ::tclpdf::attach::keyBytes {name} {
   # sort an encrypted document by ciphertext and put the tree out of order
   # for every reader. The key itself is written at [AttachCatalog], and that
   # one does go through the document.
+  if {$encoding eq "utf16"} {
+    return [::tclpdf::pdfObj::Utf16Be $name]
+  }
   set written [::tclpdf::pdfObj str $name]
   if {[string index $written 0] eq "<"} {
     return [binary decode hex [string range $written 1 end-1]]
   }
   return $name
+}
+
+# Which of the two spellings the WHOLE tree is written in.
+#
+# 7.9.6 leaves the encoding of the keys open and then binds it: "Any encoding
+# of the keys may be used as long as it is self-consistent; keys shall be
+# compared for equality on a simple byte-by-byte basis". Per key, [pdfObj
+# str] picks the shorter readable form - a literal for printable ASCII, a
+# UTF-16BE hexadecimal string for anything else - and a tree holding
+# "b.txt" next to "aä.txt" then carries BOTH, which is what
+# self-consistent rules out.
+#
+# What it costs in practice was measured on 2026-08-26: byte order and text
+# order part company the moment the two spellings meet, because every
+# UTF-16BE key begins with FE and sorts after every ASCII one. The file was
+# in byte order - the order the clause prescribes - and qpdf 12.4.0, which
+# compares the DECODED texts, repaired it: "keys are not sorted in validate".
+# tools/check.sh tolerates exactly one qpdf warning, so an invoice with
+# "Rechnung.xml" next to "Anlage ä.pdf" would have turned make check red.
+#
+# So the tree decides once: as soon as one key needs UTF-16BE, every key of
+# that tree is written that way. Byte order over UTF-16BE is code point
+# order except across the surrogate window, so the file is then in an order
+# both kinds of reader agree on.
+proc ::tclpdf::attach::treeEncoding {names} {
+  foreach name $names {
+    # Through [keyBytes], which is the one place that asks [pdfObj str] what
+    # a key would be written as: a name that comes back as itself is the
+    # literal spelling, anything else is the hexadecimal one.
+    if {[keyBytes $name] ne $name} {
+      return utf16
+    }
+  }
+  return auto
 }
 
 # The /F entry of a file specification is a byte string in the file system's
@@ -166,6 +203,24 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -name must not contain \"/\" or \"\\\" -\
           they are path separators in a file specification (ISO 32000-1,\
           7.11.2.1) - not \"$name\""
+    }
+    # And no control character. 7.11.2.1 does not spell it out - a PDF string
+    # holds any byte - but the name is a FILE NAME: it goes into /F and /UF,
+    # a reader offers it as what to save the attachment as, and no file
+    # system on which a PDF is ever opened takes a NUL or a line break in
+    # one. Measured 2026-08-26: "-name a\x00b" wrote /F (a_b) with /UF
+    # <feff006100000062> and "qpdf --list-attachments" showed "a^@b", while
+    # veraPDF 3b called the file conformant. Refused rather than repaired,
+    # for the reason the XMP module gives for the same class of value: the
+    # writer is the last place that still knows what was meant.
+    if {[regexp {[\x00-\x1f\x7f]} $name]} {
+      regexp -indices {[\x00-\x1f\x7f]} $name where
+      set code [scan [string index $name [lindex $where 0]] %c]
+      return -code error -errorcode [list TCLPDF ATTACH NAME $name] \
+          "tclpdf: -name carries U+[format %04X $code] at position\
+          [lindex $where 0] - an attachment's name is a file name (ISO\
+          32000-2, 7.11.2.1, /F and /UF), and a control character is not\
+          part of one on any system that would save it"
     }
 
     variable ::tclpdf::attach::relationships
@@ -272,7 +327,10 @@ oo::define ::tclpdf::document::document {
           Subtype [::tclpdf::pdfObj name [dict get $entry mime]]]
       set params [list Size [string length $bytes]]
       if {[dict get $entry date] ne {}} {
-        lappend params ModDate [my Str [dict get $entry date]]
+        # In the spelling this file uses - the version can move between the
+        # [attach] call and the write (see [respellDate] in document.tcl).
+        lappend params ModDate [my Str [::tclpdf::document::respellDate \
+            [dict get $entry date] [$writer version]]]
       }
       # /Params /Size is the UNCOMPRESSED length and has to be taken before
       # the filter runs.
@@ -317,14 +375,30 @@ oo::define ::tclpdf::document::document {
     # binary-search it, and an unsorted tree then finds nothing. Sorted by
     # the BYTES of the key as written, which is what the reader compares -
     # see [keyBytes] for the case where the Tcl string order differs.
-    set sorted [lsort -command {apply {{a b} {
-      string compare [::tclpdf::attach::keyBytes [dict get $a name]] \
-          [::tclpdf::attach::keyBytes [dict get $b name]]
-    }}} $specs]
+    #
+    # One encoding for the whole tree, decided before the sort and used by
+    # both it and the writing below - see [treeEncoding] for the clause and
+    # for what a mixed tree did to qpdf.
+    set encoding [::tclpdf::attach::treeEncoding [lmap entry $specs {
+      dict get $entry name
+    }]]
+    set sorted [lsort -command [list apply {{encoding a b} {
+      string compare [::tclpdf::attach::keyBytes [dict get $a name] $encoding] \
+          [::tclpdf::attach::keyBytes [dict get $b name] $encoding]
+    }} $encoding] $specs]
     set pairs {}
     foreach entry $sorted {
-      lappend pairs [my Str [dict get $entry name]] \
-          [$writer ref [dict get $entry spec]]
+      # [my Str] for the ASCII tree, [my HexStr] of the same bytes for the
+      # UTF-16BE one - both go through the document's string seam, so an
+      # encrypted document encrypts the key exactly as it always did (the
+      # cipher takes the bytes either way, see EncryptString in encrypt.tcl).
+      if {$encoding eq "utf16"} {
+        lappend pairs [my HexStr \
+            [::tclpdf::attach::keyBytes [dict get $entry name] utf16]]
+      } else {
+        lappend pairs [my Str [dict get $entry name]]
+      }
+      lappend pairs [$writer ref [dict get $entry spec]]
     }
     my catalogEntry Names [::tclpdf::pdfObj dictionary \
         [list EmbeddedFiles [::tclpdf::pdfObj dictionary \
@@ -338,4 +412,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.6
+package provide tclpdf::attach 1.7

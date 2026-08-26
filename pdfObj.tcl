@@ -43,7 +43,11 @@ proc ::tclpdf::pdfObj::num {value {digits 5}} {
   # number of hundreds of digits - and a reader refuses that: qpdf reports
   # an overflow, treats the object as null and drops the whole content
   # stream it appears in.
-  if {abs($value) > 3.403e38} {
+  #
+  # Asked through [fits], which is where that number stands - once. The
+  # measurement gates of the package ask the same predicate BEFORE anything
+  # is written; this is the last line of defence behind them.
+  if {![fits $value]} {
     return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
         "tclpdf: number has no PDF representation: \"$value\"\
         is beyond the PDF real range of about +/-3.403e38 (ISO 32000-1,\
@@ -56,7 +60,45 @@ proc ::tclpdf::pdfObj::num {value {digits 5}} {
   if {$result in {{} - -0}} {
     set result 0
   }
+  # AND THE TOKEN A READER SEES HAS TO BE THE KIND OF NUMBER IT CAN HOLD.
+  # Trimming the point off turns the text into an INTEGER object (7.3.3: a
+  # real is what carries a point), and Annex C.2 gives an integer a range of
+  # +/-2147483647 - a whole number beyond it is an integer token no
+  # conforming reader has to be able to read. Measured 2026-08-26: a cm of
+  # "1 0 0 1 100000000000000000000 0" made qpdf report an overflow, treat
+  # the content stream object as null and drop the WHOLE page with it.
+  #
+  # The point goes back on rather than the value being refused: the value is
+  # inside the real range (7.3.3 has no bound of its own, Annex C.2 gives
+  # about +/-3.403e38 and that is checked above), so the file can hold it -
+  # only not under that syntax. "100000000000000000000." is a real, and
+  # qpdf takes it without a word.
+  if {[string first . $result] < 0 && abs($value) > 2147483647} {
+    append result .
+  }
   return $result
+}
+
+# CAN A PDF FILE HOLD THIS NUMBER AT ALL? The magnitude a real carries is
+# about +/-3.403e38 (ISO 32000-1, Annex C.2), and this proc is the ONE place
+# that figure stands - [num] above asks it at the moment of writing, and
+# [option number] and [option point] ask it at the call, which is where a
+# refusal still leaves the stream untouched. A second copy of the constant is
+# how two ends of the package come to disagree about what the file holds.
+#
+# NaN and Inf answer 0 as well: they are doubles to Tcl and neither of them
+# is a number a file can hold. Written as COMPARISONS rather than with abs()
+# - [expr] refuses NaN as an operand of a function, so a test that used one
+# would throw the very error it is meant to replace, while comparison is
+# defined for it (IEEE 754: NaN is the one value not equal to itself).
+proc ::tclpdf::pdfObj::fits {value} {
+  if {![string is double -strict $value]} {
+    return 0
+  }
+  if {!($value == $value && $value < Inf && $value > -Inf)} {
+    return 0
+  }
+  return [expr {$value <= 3.403e38 && $value >= -3.403e38}]
 }
 
 # A name object (7.3.5). Everything outside the printable ASCII range and every
@@ -84,6 +126,22 @@ proc ::tclpdf::pdfObj::name {value} {
     } else {
       append result $char
     }
+  }
+  # Annex C.2, Table C.1: "Name: 127 bytes" - the length of a name as it
+  # stands in the file, escapes included, since that is what a reader
+  # tokenises. Longer is not a syntax error and no validator objects, but a
+  # reader is free to truncate it, and a truncated name is a resource that
+  # is not found: poppler says "name token is longer than what the
+  # specification says it can be" and carries on with whatever it kept.
+  #
+  # Counted here rather than at the four places a caller names something,
+  # because this is where every name of the package - separation, ICC alias,
+  # layer, resource - is written. The slash is not part of the name.
+  set length [expr {[string length $result] - 1}]
+  if {$length > 127} {
+    return -code error -errorcode [list TCLPDF PDFOBJ NAME length] \
+        "tclpdf: the name \"$value\" is $length bytes as it would be\
+        written and a name holds at most 127 (ISO 32000-1, Annex C.2)"
   }
   return $result
 }
@@ -248,4 +306,4 @@ proc ::tclpdf::pdfObj::Utf16Be {value} {
   return $result
 }
 
-package provide tclpdf::pdfObj 1.5
+package provide tclpdf::pdfObj 1.6

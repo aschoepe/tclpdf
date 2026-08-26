@@ -375,9 +375,19 @@ oo::define ::tclpdf::document::document {
           [format %g $gutter] leave no width inside -width [format %g $width]"
     }
     my TextBlockDistances $options
-    if {[llength [dict get $options avoid]]} {
-      # Loaded only when asked for: a caller who never avoids anything does
-      # not pay for the module.
+    # THE MARGIN IS CHECKED WHETHER OR NOT THERE ARE SHAPES. It is an option
+    # of the block like -gutter, and it used to be looked at only on the road
+    # the shapes take: "text abc -width 50 -avoidMargin abc" was accepted
+    # without a word, which is against the manual's own rule that every
+    # option is checked at the call that writes it (:127). Nothing draws
+    # differently for it - there is no shape to hold the text off - and that
+    # is the point: a caller who wrote -avoidMargin and forgot -avoid was
+    # told nothing at all.
+    #
+    # Loaded only when one of the two was asked for: a caller who never
+    # avoids anything does not pay for the module.
+    if {[llength [dict get $options avoid]]
+        || [dict get $options avoidMargin] ne "0"} {
       package require tclpdf::textAvoid
       my TextAvoidCheck [dict get $options avoid] [dict get $options avoidMargin]
     }
@@ -442,10 +452,21 @@ oo::define ::tclpdf::document::document {
   # The width of a block: a positive number, or the refusal in the words
   # both roads use.
   method TextBlockWidth {width} {
-    if {![string is double -strict $width] || $width <= 0} {
+    if {![::tclpdf::text::finite $width] || $width <= 0} {
       return -code error -errorcode [list TCLPDF TEXT ARGUMENT width] \
           "tclpdf: -width must be a positive number, not\
           \"$width\""
+    }
+    # AND A NUMBER THE FILE CAN HOLD. A width is a measurement rather than an
+    # operator, but the alignment shift built from it is written as the Td of
+    # every line, and [text::writable] is [pdfObj fits] - the one place the
+    # range of a PDF real stands. ([string is double] was true for NaN and Inf
+    # as well, and both waved past the "> 0" above: NaN compares false against
+    # everything, so every line of the block broke somewhere nobody chose.)
+    if {![::tclpdf::text::writable $width]} {
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT width] \
+          "tclpdf: -width must be a positive number the document can carry,\
+          not \"$width\" - [::tclpdf::text::rangeHint]"
     }
     return $width
   }
@@ -464,6 +485,16 @@ oo::define ::tclpdf::document::document {
         return -code error -errorcode [list TCLPDF TEXT ARGUMENT $name] \
             "tclpdf: -$name takes a distance in the document\
             unit, not \"$value\""
+      }
+      # The three indents move the starting point of a line, so they DO reach
+      # the file - as the Td of every line the band gives them to. Refused
+      # here, at the call, rather than by [pdfObj num] after the mark of the
+      # paragraph and its "BT" have been written; the range itself is
+      # [pdfObj fits]'s, which the gates ask as well.
+      if {![::tclpdf::text::writable $value]} {
+        return -code error -errorcode [list TCLPDF TEXT ARGUMENT $name] \
+            "tclpdf: -$name takes a distance in the document unit the file\
+            can hold, not \"$value\" - [::tclpdf::text::rangeHint]"
       }
     }
     return
@@ -748,9 +779,20 @@ oo::define ::tclpdf::document::document {
       set position [my TextBlockLocate $arguments $string $base]
       if {$position < 0} {
         # The refused character is not one of the caller's: the only one the
-        # breaker adds is the hyphen it sets at an offer. Nothing in the
-        # string to point at, so the refusal travels as it was thrown.
-        return -options $options $message
+        # breaker adds is the hyphen it sets at a break - at an offer of the
+        # patterns or of a soft hyphen, and at the emergency break of a word
+        # that fits no line. So it is not a missing glyph the caller can look
+        # up in their string, and until 2026-08-26 it travelled on as thrown:
+        # "the font \"emo\" has no glyph for U+002D (position 4)" over a text
+        # of four emoji, naming a character nobody wrote at a position that
+        # meant nothing. Said as what it is instead.
+        return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN glyph] \
+            "tclpdf: a word had to be broken inside, and the break is marked\
+            with a hyphen (U+002D) that the face this block is set in has no\
+            glyph for - the hyphen is the line breaker's, not the text's, so\
+            there is no position in the string to name; set the block in a\
+            face that has a hyphen, or give -emergencyHyphen 0 and\
+            -hyphenate 0 and break the words yourself"
       }
       my TextBlockRebase $message $options $position
     }
@@ -770,10 +812,27 @@ oo::define ::tclpdf::document::document {
   # here instead of the character that was really refused. Everything the
   # chunk did contain in front of the refusal was measured and accepted, so
   # the first refusal from base on is the one that was thrown.
+  # COUNTED IN CODE POINTS, not in string elements. The contract (manual,
+  # "Error codes") says the position is "the 0-based index in the string as
+  # handed in" and that "a character beyond the BMP is named as one code
+  # point under Tcl 9 and under Tcl 8.6 alike". Under 8.6 a character above
+  # U+FFFF is stored as a SURROGATE PAIR, so [string index] hands a face half
+  # of one - which is not a character and which the caller never wrote - and
+  # [string length] counts it twice. Measured: [textLines "\U1F600\U1F600
+  # \U1F600x"] named position 6 under 8.6 and 4 under 9.0 for the same
+  # refusal, and the half surrogate was the character the face was asked
+  # about.
+  #
+  # [split $string {}] answers in code points under both interpreters - that
+  # is what [TextUnits] in text.tcl has counted with since the emergency break
+  # was rebuilt - so the walk is over its elements, and "base", which arrives
+  # as a STRING index from the breaker, is converted to one first.
   method TextBlockLocate {arguments string base} {
-    set length [string length $string]
-    for {set index $base} {$index < $length} {incr index} {
-      set char [string index $string $index]
+    set characters [split $string {}]
+    set from [llength [split [string range $string 0 $base-1] {}]]
+    set count [llength $characters]
+    for {set index $from} {$index < $count} {incr index} {
+      set char [lindex $characters $index]
       if {[string first $char $::tclpdf::textBlock::separators] >= 0} {
         continue
       }
@@ -929,9 +988,13 @@ oo::define ::tclpdf::document::document {
       } trap {TCLPDF FONT GLYPH} {message options} {
         # A run IS the string verbatim from $from on, so counting is exact
         # here - TextBlockRebase does the throwing on, the same one the
-        # breaker's own measurements use.
+        # breaker's own measurements use. The two numbers are added in the
+        # SAME unit: the position [textWidth] throws counts code points, and
+        # $from is a string index, which under Tcl 8.6 is not the same thing
+        # in front of a character beyond the BMP (see TextBlockLocate).
         my TextBlockRebase $message $options \
-            [expr {[lindex [dict get $options -errorcode] 4] + $from}]
+            [expr {[lindex [dict get $options -errorcode] 4]
+                + [llength [split [string range $string 0 $from-1] {}]]}]
       }
     }
     return
@@ -1107,7 +1170,13 @@ oo::define ::tclpdf::document::document {
     set spacings 0
     set below 0
     set previous {}
-    foreach line $lines {
+    # OVER THE INDICES, so that the tail can be taken in one go when the
+    # limit is reached: the loop used to walk to the end of the list and
+    # append every line after the cut to the rest one at a time, which turns
+    # a paginated block into a walk over its whole remainder on every page.
+    set count [llength $lines]
+    for {set index 0} {$index < $count} {incr index} {
+      set line [lindex $lines $index]
       set paragraph [dict get $line paragraph]
       set advance [expr {$previous ne {} && $paragraph != $previous ? $spacing : 0}]
       set top [expr {[dict get $line running] * $leading + $spacings + $advance}]
@@ -1125,10 +1194,9 @@ oo::define ::tclpdf::document::document {
       # there to be had. The tolerance is a millionth of a line: far below
       # anything a page can show, far above any rounding a column of lines
       # can accumulate.
-      if {[llength $rest] || ($limit ne {}
-          && $top + $leading > $limit + $leading * 1e-6)} {
-        lappend rest $line
-        continue
+      if {$limit ne {} && $top + $leading > $limit + $leading * 1e-6} {
+        set rest [lrange $lines $index end]
+        break
       }
       set spacings [expr {$spacings + $advance}]
       lappend drawn [list $line $top]
@@ -1200,6 +1268,36 @@ oo::define ::tclpdf::document::document {
     set element {}
     set continued 0
     set column 0
+    # THE BLOCK IS BROKEN ONCE, NOT ONCE PER PAGE.
+    #
+    # Every column of a paginated run has the same width - columnWidth above -
+    # and the band the indents make gives a line the same answer whether it
+    # is line 0 of paragraph 0 in a fresh break of the rest or line k of
+    # paragraph p in a break of the whole text: -firstIndent reaches the
+    # first line of a paragraph, and a rest that CONTINUES a paragraph has no
+    # first line of it (which is what the "continued" flag says). So the
+    # lines come out the same either way, and re-breaking the rest on every
+    # page was measuring the same text over and over - work quadratic in the
+    # length of the block. Measured 2026-08-26 at 100, 200 and 400 paragraphs:
+    # 0.38, 1.32 and 4.87 seconds, four times the work for twice the text;
+    # 2500 paragraphs in two balanced columns had not finished after ten
+    # minutes.
+    #
+    # SHAPES TO AVOID KEEP THE OLD ROAD, and they are the only thing that
+    # does: they narrow the band per line and they are positions on ONE page,
+    # so the lines of page one are not the lines of page two. [TextPaginate]
+    # drops them after the first page anyway, but the first page is the one
+    # they shape.
+    #
+    # The lines carry a "from" index into the string as it was handed in, so
+    # the string itself has to stay - the rest a column hands back is a tail
+    # of it, and a tail of a tail would count from the wrong place.
+    set whole $string
+    set broken {}
+    if {![llength [dict get $options avoid]]} {
+      lassign [my TextBlockLines $string $options] lines lineState lineLeading
+      set broken [list $lines $lineState $lineLeading]
+    }
     # Whether the page the loop is on is one IT added, as against the
     # caller's page the block was placed on. Two things hang on it. A page
     # not one line fits into is refused - but only a fresh one: there the
@@ -1275,14 +1373,29 @@ oo::define ::tclpdf::document::document {
           # Balanced columns are cut to one height when the rest fits the
           # page; otherwise every column runs to the bottom of the area.
           if {$balance && $columns > 1} {
-            set limit [my TextBalanceLimit $string $options $y $columns]
+            set limit [my TextBalanceLimit $string $options $y $columns \
+                $broken]
             if {$limit ne {}} {
               dict set options height $limit
             }
           }
           for {set column 0} {$column < $columns} {incr column} {
             dict set options at [list [expr {$x + $column * ($columnWidth + $gutter)}] $y]
-            lassign [my TextParagraphOnce $string $options] yEnd rest continued
+            if {[llength $broken]} {
+              lassign $broken pending lineState lineLeading
+              # The lift is the one thing that does change from page to page:
+              # the continuation pages are set with -anchor top, and the lift
+              # is what says how far under -at the first baseline sits. It
+              # decides where the lines GO, never where they break, so it is
+              # taken here rather than carried with them.
+              lassign [my TextParagraphDraw $whole \
+                  [my TextLinesRebase $pending] $lineState $lineLeading \
+                  [my TextLift $lineState [dict get $options anchor]] \
+                  $options] yEnd rest continued pending
+              lset broken 0 $pending
+            } else {
+              lassign [my TextParagraphOnce $string $options] yEnd rest continued
+            }
             if {$rest eq {}} {
               break
             }
@@ -1453,8 +1566,21 @@ oo::define ::tclpdf::document::document {
   # left each column takes. The first candidate is the total height over
   # n; it grows by one leading until the last column takes the last line.
   # A whole-line height, so that the columns end on a baseline together.
-  method TextBalanceLimit {string options y columns} {
-    lassign [my TextBlockLines $string $options] lines state leading lift
+  # "broken" is the block already broken into lines, as [TextPaginate] keeps
+  # it - {lines state leading} - or empty, where shapes to avoid make the
+  # lines a question about the page and the text has to be broken here.
+  method TextBalanceLimit {string options y columns {broken {}}} {
+    if {[llength $broken]} {
+      lassign $broken lines state leading
+    } else {
+      lassign [my TextBlockLines $string $options] lines state leading
+    }
+    set lift [my TextLift $state [dict get $options anchor]]
+    # Counted from the top of THIS page's first column: the lines a paginated
+    # run hands on carry the running numbers of the column they were held
+    # back from, and a total measured off those would be the height of the
+    # whole block rather than of what is left.
+    set lines [my TextLinesRebase $lines]
     set spacing [dict get $options paragraphSpacing]
     set maximum [expr {[lindex [my page typeArea] 3] - $y - $lift}]
     lassign [my TextBlockPlace $lines $leading $spacing {}] -> -> total
@@ -1518,6 +1644,17 @@ oo::define ::tclpdf::document::document {
   # last is what a continuation needs to know about its first indent.
   method TextParagraphOnce {string options} {
     lassign [my TextBlockLines $string $options] lines state leading lift
+    return [my TextParagraphDraw $string $lines $state $leading $lift $options]
+  }
+
+  # The second half of it: the lines PLACED and drawn, for a block whose
+  # lines are already broken.
+  #
+  # Split off so that a paginated run can break its text once and hand the
+  # rest on as lines - see [TextPaginate]. Answers what [TextParagraphOnce]
+  # answers and one thing more: the lines that were held back, which is what
+  # the next column takes.
+  method TextParagraphDraw {string lines state leading lift options} {
     # Mirrored once, here, for every line of the block - see TextAlign in
     # text.tcl for what "left" means in a right-to-left line.
     set align [my TextAlign [dict get $options align] $state]
@@ -1561,8 +1698,21 @@ oo::define ::tclpdf::document::document {
     # begins, and everything from there on is the rest - soft hyphens still
     # soft, a word the fallback broke by character still one word, the
     # paragraph breaks where they were.
+    #
+    # A REST NEVER OPENS WITH A BLANK PARAGRAPH. A blank line in the text is
+    # a paragraph of its own, and where the cut falls in front of one the
+    # rest began with it: the next column or page then set an empty line
+    # before its first word and everything in it stood one line lower than
+    # the column beside it - measured in examples/01.08, where column two
+    # started 7.4 mm below column one. The blank line has already done its
+    # work where it is dropped, because a column break IS a paragraph break;
+    # keeping it would say the same thing twice. Only the LEADING ones go -
+    # a blank line between two paragraphs of the rest is theirs.
     set text {}
     set continued 0
+    while {[llength $rest] && [dict get [lindex $rest 0] text] eq {}} {
+      set rest [lrange $rest 1 end]
+    }
     if {[llength $rest]} {
       set text [string range $string [dict get [lindex $rest 0] from] end]
       set continued [expr {![dict get [lindex $rest 0] first]}]
@@ -1582,9 +1732,9 @@ oo::define ::tclpdf::document::document {
     # be y plus the lift, so an -anchor top block that drew nothing moved
     # the caller's next element down by an ascent it never used.
     if {![llength $drawn]} {
-      return [list $y $text $continued]
+      return [list $y $text $continued $rest]
     }
-    return [list [expr {$y + $lift + $below}] $text $continued]
+    return [list [expr {$y + $lift + $below}] $text $continued $rest]
   }
 
   # Alignment inside the column is a shift along the baseline and is passed
@@ -1621,17 +1771,32 @@ oo::define ::tclpdf::document::document {
     if {(!$isLast || $followed) && [my state tagged] eq "1"} {
       append drawn " "
     }
+    # WHAT THE APPENDED SPACE COSTS IN A RIGHT-TO-LEFT LINE, and nothing in
+    # any other. The space is appended LOGICALLY, and [TextShowOne] turns a
+    # right-to-left run round before it writes it: the logically last
+    # character is then the FIRST one drawn, standing at the starting point,
+    # and everything else moves right by its width. Measured with DejaVu at
+    # 10 pt: every line of a tagged Hebrew paragraph but the last stood
+    # 3.18 pt past the right edge of its column, and the edge came out
+    # jagged - the one line that gets no space was flush.
+    #
+    # So the starting point moves back by exactly what the drawn line carries
+    # over the measured one. That is the width of the space AND of whatever
+    # word spacing goes with it, which is why it is measured rather than
+    # looked up - and measured against the state the line is DRAWN with, so
+    # the stretched word spacing of a justified line is in it.
+    set lead [my TextLineLead $line $drawn $state]
     switch -- $align {
       left {
-        my TextRun $drawn $state $x $y $rotate 0 $lift $hyphen
+        my TextRun $drawn $state $x $y $rotate $lead $lift $hyphen
       }
       right {
         my TextRun $drawn $state [expr {$x + $width}] $y $rotate \
-            [my TextLineWidth $line $state] $lift $hyphen
+            [expr {[my TextLineWidth $line $state] + $lead}] $lift $hyphen
       }
       center - centre {
         my TextRun $drawn $state [expr {$x + $width / 2.0}] $y $rotate \
-            [expr {[my TextLineWidth $line $state] / 2.0}] $lift $hyphen
+            [expr {[my TextLineWidth $line $state] / 2.0 + $lead}] $lift $hyphen
       }
       justify {
         # The last line of a paragraph stays flush left. Justifying it is the
@@ -1649,8 +1814,20 @@ oo::define ::tclpdf::document::document {
           return
         }
         set gap [expr {$width - [my TextLineWidth $line $state]}]
-        set extra [::tclpdf::geometry toPoints [expr {$gap / double($spaces)}] \
-            [my cget -unit]]
+        # DIVIDED BY THE HORIZONTAL SCALE, because the operator this becomes
+        # is multiplied by it again. ISO 32000-2, 9.4.4: the displacement of
+        # a glyph is "tx = ((w0 - Tj/1000) x Tfs + Tc + Tw) x Th" - the word
+        # spacing is scaled by Th whether it goes out as Tw or as a TJ number
+        # (a TJ number is scaled the same way). The gap, on the other hand,
+        # is a distance ON THE PAGE and already carries Th: it is what is
+        # left of the column after a line measured with the scale in force.
+        # Written unscaled, the line filled Th x gap at -stretch 60 and ran
+        # (Th - 1) x gap past the right margin at 130 - measured with
+        # Helvetica at -stretch 130, line 2 of a 120 mm column ended at
+        # 130.73 mm.
+        set extra [expr {[::tclpdf::geometry toPoints \
+            [expr {$gap / double($spaces)}] [my cget -unit]]
+            / ([dict get $state stretch] / 100.0)}]
         # Tw adds to every space character, which is exactly the unit the gap
         # has to be distributed over.
         set stretched $state
@@ -1662,7 +1839,8 @@ oo::define ::tclpdf::document::document {
         # last glyph still sits on the edge. Leaving it out would keep the
         # words of a justified paragraph running together for a reader, which
         # is the defect this is here to fix.
-        my TextRun $drawn $stretched $x $y $rotate 0 $lift $hyphen
+        my TextRun $drawn $stretched $x $y $rotate \
+            [my TextLineLead $line $drawn $stretched] $lift $hyphen
       }
       default {
         return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
@@ -1671,6 +1849,26 @@ oo::define ::tclpdf::document::document {
       }
     }
     return
+  }
+
+  # How much wider the DRAWN line is than the measured one: the word space a
+  # tagged document appends for the extraction, or 0 where none was appended
+  # and 0 in every left-to-right line, where the space sits after the last
+  # glyph and moves nothing.
+  #
+  # It is a lead rather than a correction because that is what it is: in a
+  # right-to-left line the appended space is drawn FIRST, so the pen has to
+  # start that much further back for the letters to land where they were
+  # measured to land. [TextRun] subtracts a shift from the anchor, so adding
+  # it to the shift of each alignment moves the start point left by it - and
+  # the same number serves all four, which is why it is worked out once here
+  # instead of four times below.
+  method TextLineLead {line drawn state} {
+    if {$drawn eq $line || [dict get $state direction] ne "rtl"} {
+      return 0
+    }
+    return [expr {[my TextLineWidth $drawn $state]
+        - [my TextLineWidth $line $state]}]
   }
 
   method TextLineWidth {line state} {
@@ -1697,4 +1895,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.14
+package provide tclpdf::textBlock 1.15

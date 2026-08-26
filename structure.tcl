@@ -61,20 +61,22 @@
 #              (what -tag accepts on a drawing call).
 #   PLACE      a type the standard knows, in a place it does not allow. The
 #              third word is the rule that refused it: parent, child, inline,
-#              leaf, duplicate, caption, sequence.
+#              block, leaf, root, nested, label, duplicate, caption,
+#              sequence.
 #   ATTRIBUTE  an option's value is wrong, or the option belongs on another
 #              type. The third word is the option without its dash: lang,
-#              scope, numbering, bbox, colSpan, rowSpan, expansion.
+#              scope, numbering, bbox, colSpan, rowSpan, expansion, ref.
 #   VERSION    what was asked for needs a newer PDF version than the document
 #              has, and raising it is the whole remedy. The third word is
-#              what needs it: type, attribute, destination.
+#              what needs it: type, attribute, destination, ref.
 #   NAME       an identifier. The third word is what is wrong with it,
 #              duplicate or unknown; the word after it names the namespace -
 #              name, this package's handle for destinations, or id, the /ID
 #              of 14.7.2.
 #   STATE      the document's state refuses the call, not its arguments: not
-#              tagged, tagged too late, closed out of order. The third word
-#              is the call at issue: tagged, element, expansion, destination.
+#              tagged, tagged too late, closed out of order, opened inside a
+#              form, resumed while open. The third word is the call at issue:
+#              tagged, element, expansion, destination, suspend, resume.
 #   ARGUMENT   the call itself is malformed - a missing -script, a [tagged]
 #              that got no boolean. The third word is the argument at fault:
 #              tagged, script.
@@ -147,8 +149,18 @@ namespace eval ::tclpdf::structure {
   # The distinction decides where a mark goes: drawing inside an open Sect
   # must make a P INSIDE it, while drawing inside an open H1 belongs to the
   # H1 itself.
+  #
+  # NonStruct is one of them, and it was missing until 2026-08-26. It is a
+  # grouping element like Div - "a grouping element with no inherent
+  # meaning" (ISO 32000-2 Table 364) - so it holds elements and no content
+  # of its own; veraPDF says so of the tree that came of it, reporting
+  # "Document shall not contain content items" (ISO/TS 32005 Table 5) for a
+  # [text ... -tag NonStruct] at the top level. Now the tag is refused where
+  # every other grouping type is, and the text becomes a P inside an open
+  # NonStruct as it does inside a Div.
   variable containers {
-    Document Part Art Sect Div TOC TOCI Index L LI Table TR THead TBody TFoot
+    Document Part Art Sect Div NonStruct TOC TOCI Index L LI Table TR THead
+    TBody TFoot
   }
 
   # Which children a type accepts, for the types where Annex L is strict.
@@ -236,6 +248,44 @@ namespace eval ::tclpdf::structure {
   variable noInlineHome {DocumentFragment Aside BlockQuote}
   variable notAtTop {Reference}
 
+  # THE INLINE-LEVEL TYPES OF ISO 32000-2 14.8.4.5, and the block-level ones
+  # of 14.8.4.4: inline markup marks up a run of text, so it holds text,
+  # other inline markup and an illustration - never a block. A Table inside
+  # a Link is what veraPDF reports as "Link-Table" against ISO/TS 32005
+  # Table 5, and it was written without a word until 2026-08-26.
+  #
+  # This is NOT the [inline] list above, which answers the other question -
+  # what a leaf MAY hold. Figure, Formula and Form are inline there because
+  # they may sit in a paragraph; they are ILLUSTRATION elements, not inline
+  # markup, and a Figure holding a Table is a diagram with a table in it,
+  # which veraPDF passes. So they are left out here, and the rule below
+  # applies to the inline-level types alone.
+  #
+  # The leafOnly rule above already refuses a block inside Span, Quote,
+  # Note, Reference, BibEntry, Code and Lbl - they hold text. What was open
+  # is the rest: Link, Annot, Em, Strong, Sub and the parts of a Ruby or a
+  # Warichu, none of which is a leaf and none of which may hold a paragraph.
+  #
+  # A type that names its own parents (parentOf) is not judged here: a Lbl
+  # inside a Note is the footnote's number, not a paragraph in a footnote,
+  # and the parent rule has already had its say about it.
+  variable inlineLevel {
+    Span Quote Note Reference BibEntry Code Link Annot Ruby RB RT RP
+    Warichu WT WP Em Strong Sub
+  }
+  variable blockLevel {
+    P H H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 L LI Lbl LBody Table TR TH TD
+    THead TBody TFoot Caption
+  }
+
+  # Types that may not stand inside themselves, at any depth. An Art is a
+  # complete piece of writing (ISO 32000-1 14.8.4.3.2, ISO/TS 32005 Table 5
+  # gives Art no Art among its children): one inside another says both are
+  # complete, and veraPDF reports "Art-Art" against a tree that does it.
+  # Checked against the ANCESTORS, not the parent - an Art in a Sect in an
+  # Art is the same claim with a step in between.
+  variable notInSelf {Art}
+
   # Where a derived P is not allowed but the right answer is obvious. Text
   # drawn in an open LI IS the list item's body; demanding an explicit LBody
   # for it would be correct and useless - the caller has already said this is
@@ -319,10 +369,18 @@ namespace eval ::tclpdf::structure {
   # almost anything and so therefore does a group's label. It is
   # [StructureLabelHome] instead, and it covers the Form as well: naming it
   # here too would be the same rule in two places.
+  #
+  # A Caption has four homes and no more (ISO/TS 32005 Table 5): the table
+  # or the list it names, and the illustration it explains. Outside them it
+  # captions nothing - veraPDF reports a [text ... -tag Caption] at the top
+  # level as "Document-Caption" - and the place it takes INSIDE a Table or
+  # an L is a second rule, kept where a bracket can be looked at whole:
+  # [StructureCheckCaption].
   variable parentOf {
     LI    {L}
     Lbl   {LI Note FENote}
     LBody {LI}
+    Caption {Table L Figure Formula}
     TR    {Table THead TBody TFoot}
     TH    {TR}
     TD    {TR}
@@ -389,7 +447,8 @@ oo::define ::tclpdf::document::document {
   }
 
   # $doc structure <type> ?-alt text? ?-lang tag? ?-title text?
-  #                       ?-actualText text? ?-expansion text? -script body
+  #                       ?-actualText text? ?-expansion text? ?-ref names?
+  #                       -script body
   #
   # Opens an element, runs the body with it open, and closes it again -
   # whatever the body does. The bracket form is the one [form create] and
@@ -399,7 +458,7 @@ oo::define ::tclpdf::document::document {
   method structure {type args} {
     set options [::tclpdf::option parse {
       alt {} lang {} title {} actualText {} expansion {} script {} name {}
-      id {} scope {} numbering {} bbox {} colSpan {} rowSpan {}
+      id {} ref {} scope {} numbering {} bbox {} colSpan {} rowSpan {}
     } $args "structure"]
     # Missing, not empty: an element with nothing in it is a legitimate thing
     # to ask for - a placeholder a link points at, an L that is filled later
@@ -409,6 +468,31 @@ oo::define ::tclpdf::document::document {
     if {"script" ni [lmap {option value} $args {string trimleft $option -}]} {
       return -code error -errorcode [list TCLPDF STRUCTURE ARGUMENT script] \
           "tclpdf: structure needs -script"
+    }
+    # NOTHING INSIDE A FORM IS MARKED, and an element that can hold no mark
+    # is no element. [form create], [pattern create] and the page-number
+    # XObject draw into a content stream of their own, where an MCID would
+    # be a number the page does not have - so [StructureMark] returns
+    # nothing there, by design (see the suspend clause there). What was
+    # missing is the other half: [structure] itself did not ask, so the
+    # element WAS created, landed in the tree with no kids, and a validator
+    # counted it. An empty H1 opened inside a form satisfied the PDF/UA
+    # rule that a document begins with an H1 - measured with veraPDF, which
+    # called the file conformant.
+    #
+    # Refused rather than quietly passed through: an element opened here is
+    # a caller's decision that cannot come true, and the manual has said so
+    # since it was written - "nothing inside a form, a pattern or a
+    # page-number XObject is marked at all". The remedy is one line up: mark
+    # the PLACEMENT, which is what -alt and -artifact on [form place] and
+    # [image place] are for.
+    if {[my state structureSuspend] eq "1"} {
+      return -code error -errorcode [list TCLPDF STRUCTURE STATE suspend] \
+          "tclpdf: a structure element cannot be opened inside\
+          a form, a pattern or a page-number XObject - nothing drawn there\
+          is marked, so the element would stay empty. Describe the\
+          PLACEMENT instead (\[\$doc form place ... -alt\] or -artifact 1),\
+          or draw the content on the page"
     }
     set script [dict get $options script]
     set id [my StructureOpen $type $options]
@@ -426,6 +510,130 @@ oo::define ::tclpdf::document::document {
     # something the caller needs - [table] answers with the y coordinate
     # below the table, and swallowing it would break every table in a tagged
     # document.
+    return $result
+  }
+
+  # $doc structureResume <name> -script body
+  #
+  # Makes an element that is ALREADY in the tree current again, so that a
+  # caller drawing in several passes can hang further children on it.
+  #
+  # Why it exists: a table broken across columns (-horizontalBreak) draws
+  # every row of the first column group, then every row of the second - so
+  # the cells of the second group belong to rows that were closed pages ago.
+  # Without this the tree came out as twice as many rows, half as wide, with
+  # a second heading row in the middle: a shape no reader can lay out, and
+  # ISO 32000-1 14.8.4.3.4 says a TR holds the cells of THAT row. The same
+  # need turns up wherever content that belongs together is drawn in two
+  # passes.
+  #
+  # THE BRACKET IS THE SAME PROMISE [structure] makes: what is opened here
+  # is closed again, whatever the body does. Nothing else is repeated - the
+  # element keeps the type, the attributes and the page it was opened with,
+  # and its place in the tree was judged when it was created. What IS judged
+  # again is everything drawn inside: a child opened now goes through
+  # [StructureCheckNesting] exactly as it would have on the first pass.
+  #
+  # The children keep their own pages. An element whose kids sit on several
+  # pages is what [text -paginate] already produces, and structureWrite.tcl
+  # writes it: no /Pg on the element, each mark as a marked-content
+  # reference naming its page (14.7.4.2), each child element carrying its
+  # own. So a row with cells on two pages needs nothing further here.
+  #
+  # The handle is the -name of the element, or its /ID from -id - the two
+  # handles this package already has. A module that made the element itself
+  # holds the id [StructureOpen] answered and calls [StructureResume] with
+  # it, which is the same bracket without the lookup.
+  method structureResume {handle args} {
+    set options [::tclpdf::option parse {script {}} $args "structureResume"]
+    # Missing, not empty, the way [structure] asks it: resuming an element
+    # to draw nothing is a call with no purpose, but an empty -script is a
+    # legitimate one to write.
+    if {"script" ni [lmap {option value} $args {string trimleft $option -}]} {
+      return -code error -errorcode [list TCLPDF STRUCTURE ARGUMENT script] \
+          "tclpdf: structureResume needs -script"
+    }
+    set named [my state structureNames]
+    if {[dict exists $named $handle]} {
+      set id [dict get $named $handle]
+    } elseif {[dict exists [my state structureIds] $handle]} {
+      set id [dict get [my state structureIds] $handle]
+    } else {
+      return -code error -errorcode \
+          [list TCLPDF STRUCTURE NAME unknown name] \
+          "tclpdf: no structure element is named \"$handle\" -\
+          structureResume takes the -name an element was opened with, or\
+          its -id. Name one with \[\$doc structure <type> -name $handle\
+          ...\]"
+    }
+    # TAILCALL, so that the body runs in the caller's scope. [uplevel 1] in
+    # the worker would otherwise reach this method's frame rather than the
+    # one that wrote the script - and the bracket has to behave like
+    # [structure]'s, which evaluates the body where it was written. The
+    # alternative was the same five lines of bracket in two places.
+    tailcall my StructureResume $id [dict get $options script]
+  }
+
+  # The bracket itself, on the id [StructureOpen] answered - what a module
+  # that made the element calls, and what [structureResume] tailcalls into.
+  method StructureResume {id script} {
+    set elements [my state structure]
+    if {![string is integer -strict $id] || $id < 0
+        || $id >= [llength $elements]} {
+      return -code error -errorcode [list TCLPDF STRUCTURE STATE resume] \
+          "tclpdf: no structure element \"$id\" - the id is\
+          the one \[StructureOpen\] answered with, and this document has\
+          [llength $elements]"
+    }
+    # Nothing inside a form, a pattern or a page-number XObject is marked,
+    # so an element resumed there would gather nothing - the refusal
+    # [structure] makes for the same reason, in the same words.
+    if {[my state structureSuspend] eq "1"} {
+      return -code error -errorcode [list TCLPDF STRUCTURE STATE suspend] \
+          "tclpdf: a structure element cannot be resumed inside\
+          a form, a pattern or a page-number XObject - nothing drawn there\
+          is marked, so nothing would reach the element. Describe the\
+          PLACEMENT instead (\[\$doc form place ... -alt\] or -artifact 1),\
+          or draw the content on the page"
+    }
+    # An element that is open cannot be opened a second time: the stack is
+    # what says which element a mark belongs to, and one that stood on it
+    # twice would be closed once and stay behind on it - every mark from
+    # there on would join an element the caller thinks is finished.
+    if {$id in [my state structureStack]} {
+      return -code error -errorcode [list TCLPDF STRUCTURE STATE resume] \
+          "tclpdf: this [dict get [lindex $elements $id] type] is open\
+          already - an element is resumed after it was closed, not inside\
+          itself"
+    }
+    # A LEAF GETS A FURTHER MARK, NOT A FURTHER CHILD. What a P, a heading
+    # or a Lbl holds is text, and text drawn for an element that already
+    # exists is [StructureMarkAgain]'s road - the one a paragraph carried
+    # over a page break by [text -paginate] takes, which keeps ONE element
+    # with a mark on each page. Resuming a leaf would open a second way to
+    # the same place, and the two would not agree about what the mark
+    # belongs to.
+    variable ::tclpdf::structure::leafOnly
+    set type [dict get [lindex $elements $id] type]
+    if {$type in $leafOnly} {
+      return -code error -errorcode [list TCLPDF STRUCTURE PLACE leaf] \
+          "tclpdf: a $type holds text, and further text for an\
+          element that exists is a further mark on it, not a further child -\
+          \[\$doc text -paginate 1\] does that for a paragraph carried over\
+          a page break. Resume a grouping element instead"
+    }
+    my state structureStack [linsert [my state structureStack] end $id]
+    set code [catch {uplevel 1 $script} result outcome]
+    my StructureClose $id
+    if {$code} {
+      return -options $outcome $result
+    }
+    # Judged with everything the element holds NOW, which is why it runs
+    # again on every resume rather than once: a Caption appended on the
+    # second pass is a Caption in the wrong place, and only this pass can
+    # see it.
+    my StructureCheckCaption $id
+    my StructureCheckSequence $id
     return $result
   }
 
@@ -455,7 +663,7 @@ oo::define ::tclpdf::document::document {
     }
     my StructureCheckNesting $type
     variable ::tclpdf::structure::attributes
-    foreach key [list alt lang title actualText expansion id name \
+    foreach key [list alt lang title actualText expansion id name ref \
         {*}[dict keys $attributes]] {
       if {![dict exists $options $key]} {
         dict set options $key {}
@@ -492,6 +700,52 @@ oo::define ::tclpdf::document::document {
     }
     if {[dict get $options expansion] ne {}} {
       my StructureExpansionGuard
+    }
+    # WHAT THIS ELEMENT POINTS AT (/Ref, ISO 32000-2 Table 355): one or more
+    # OTHER elements, by the -name they were given. The entry that makes a
+    # table of contents usable - PDF/UA-2 8.2.5.8 wants every TOCI to say
+    # which section it lists, and until 2026-08-26 this package could not
+    # write the key at all, so a UA-2 document with a TOC was never
+    # conformant. An index entry and a footnote reference take the same
+    # road.
+    #
+    # A LIST, because the key is an array: one TOCI may list two sections,
+    # and a Reference may point at several notes.
+    #
+    # The names are NOT resolved here. A table of contents is written
+    # before the sections it names - the forward reference is the ordinary
+    # case, not the exception - so the names travel with the element and
+    # structureWrite.tcl turns them into object references once every
+    # element has its number, refusing a name nobody created the way a
+    # structure destination is refused.
+    set ref [dict get $options ref]
+    if {$ref ne {}} {
+      if {[catch {llength $ref}]} {
+        return -code error -errorcode [list TCLPDF STRUCTURE ATTRIBUTE ref] \
+            "tclpdf: -ref takes the -name of an element, or a\
+            list of them - \"$ref\" is not a list"
+      }
+      foreach target $ref {
+        if {$target eq {}} {
+          return -code error \
+              -errorcode [list TCLPDF STRUCTURE ATTRIBUTE ref] \
+              "tclpdf: -ref \"$ref\" holds an empty name - name\
+              the target element with \[\$doc structure <type> -name ...\]\
+              and pass that name"
+        }
+      }
+      # Ref is an entry of ISO 32000-2 (Table 355) and of no earlier
+      # version: written into a 1.7 file it would be a key no reader of that
+      # file knows, silently ignored - the quiet mistake this package
+      # refuses everywhere, in a file that validates. Same wording as the
+      # structure destination's guard, which draws the same line.
+      if {[package vcompare [[my writer] version] 2.0] < 0} {
+        return -code error -errorcode [list TCLPDF STRUCTURE VERSION ref] \
+            "tclpdf: -ref writes the Ref entry of ISO 32000-2\
+            (Table 355) and this document is PDF [[my writer] version] -\
+            raise the version, or use \[\$doc ua -part 2\], which does it"
+      }
+      my RequireVersion 2.0 "-ref (the Ref entry of ISO 32000-2 Table 355)"
     }
     set elements [my state structure]
     set stack [my state structureStack]
@@ -552,7 +806,7 @@ oo::define ::tclpdf::document::document {
         title [dict get $options title] \
         actualText [dict get $options actualText] \
         expansion [dict get $options expansion] id $identifier \
-        attributes $attributeObjects]
+        ref $ref attributes $attributeObjects]
     if {$parent ne {}} {
       set entry [lindex $elements $parent]
       dict lappend entry kids [list element $id]
@@ -672,10 +926,38 @@ oo::define ::tclpdf::document::document {
     variable ::tclpdf::structure::leafOnly
     variable ::tclpdf::structure::inline
     variable ::tclpdf::structure::inlineOnly
+    variable ::tclpdf::structure::inlineLevel
+    variable ::tclpdf::structure::blockLevel
+    variable ::tclpdf::structure::notInSelf
     variable ::tclpdf::structure::parentOf
+    set elements [my state structure]
+    set stack [my state structureStack]
     set parent [my StructureCurrent]
     set parentType [expr {$parent eq {} ? {} :
-        [dict get [lindex [my state structure] $parent] type]}]
+        [dict get [lindex $elements $parent] type]}]
+    # A Document is the top of a tree and stands nowhere else (ISO/TS 32005
+    # Table 5 gives it the root): this package writes the root Document
+    # itself (structureWrite.tcl), so a caller's Document is a second one
+    # beside it - which veraPDF passes - while one INSIDE a Sect is the
+    # "Sect-Document" it refuses. Nothing about the second Document can be
+    # made right by what follows it, so it is refused where it is opened.
+    if {$type eq "Document" && $parent ne {}} {
+      return -code error -errorcode [list TCLPDF STRUCTURE PLACE root] \
+          "tclpdf: a Document is the top of a structure tree\
+          and belongs under the root, not in a $parentType (ISO/TS 32005\
+          Table 5) - use a Part or a Sect for a division of this document"
+    }
+    if {$type in $notInSelf} {
+      foreach id [lreverse $stack] {
+        if {[dict get [lindex $elements $id] type] ne $type} {
+          continue
+        }
+        return -code error -errorcode [list TCLPDF STRUCTURE PLACE nested] \
+            "tclpdf: an $type is a complete piece of writing\
+            and may not stand inside another $type (ISO/TS 32005 Table 5) -\
+            close the outer one first, or use a Sect for a division of it"
+      }
+    }
     if {[dict exists $parentOf $type]} {
       set wanted [dict get $parentOf $type]
       if {$parentType ni $wanted
@@ -699,6 +981,24 @@ oo::define ::tclpdf::document::document {
         return -code error -errorcode [list TCLPDF STRUCTURE PLACE parent] \
             $message
       }
+    }
+    # THE LABEL COMES FIRST. ISO 32000-1 14.8.4.3.3 describes a list item as
+    # a Lbl followed by a LBody, and the order of /K IS the reading order -
+    # a Lbl opened after the body is read out as "the body, one point", in
+    # that order, by every reader that follows the tree. No validator sees
+    # it: veraPDF passes both profiles, and [UaCheckLists] counts the label
+    # either way.
+    #
+    # Any kid at all, not only a LBody: text drawn straight into the LI
+    # becomes its body (contentChildOf), so the mark that is already there
+    # is the body just as much as an element would be.
+    if {$type eq "Lbl" && $parentType eq "LI"
+        && [llength [dict get [lindex $elements $parent] kids]]} {
+      return -code error -errorcode [list TCLPDF STRUCTURE PLACE label] \
+          "tclpdf: the Lbl of a list item is its FIRST child -\
+          this LI already holds content, and a label after the body is read\
+          out after it (ISO 32000-1 14.8.4.3.3). Open the Lbl before the\
+          LBody"
     }
     # Inline markup needs something to be inside of - see inlineOnly.
     variable ::tclpdf::structure::notAtTop
@@ -729,7 +1029,6 @@ oo::define ::tclpdf::document::document {
       # veraPDF reports the duplicate only against the finished file,
       # naming an object number - here the message still names the call.
       if {$type in {THead TFoot}} {
-        set elements [my state structure]
         foreach kid [dict get [lindex $elements $parent] kids] {
           if {[lindex $kid 0] eq "element" && [dict get [lindex $elements \
               [lindex $kid 1]] type] eq $type} {
@@ -751,6 +1050,37 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF STRUCTURE PLACE leaf] \
           "tclpdf: a $parentType holds text and inline markup,\
           not a $type - close it before starting one (ISO 32000-2 Annex L)"
+    }
+    # INLINE MARKUP HOLDS NO BLOCK. The leaf rule above says it for the
+    # inline types that hold TEXT - a Span, a Quote, a Code; this says it
+    # for the ones that hold none of their own and were therefore never
+    # asked - a Link, an Annot, an Em, a Strong, a Sub, the parts of a Ruby.
+    # A Table inside a Link renders and validates nowhere: veraPDF reports
+    # "Link-Table" against ISO/TS 32005 Table 5, and until 2026-08-26 the
+    # call was taken and the claim written.
+    #
+    # LAST of the three, so that a type the leaf rule already knows keeps
+    # the message it always had: the two rules overlap on every leaf that is
+    # also inline markup, and the leaf's wording is the one the tests and
+    # the manual quote.
+    #
+    # Grouping types are NOT refused here. A Sect inside a Link is odd and
+    # veraPDF passes it under both profiles - refusing what the validator
+    # allows would be this package inventing a rule, which is the line drawn
+    # at [childrenOf] as well. Figure, Formula and Form are left out for the
+    # same reason from the other side: they are illustration elements, not
+    # inline markup, and a Figure holding a Table is a diagram with a table
+    # in it.
+    #
+    # The parentOf exception is the leaf rule's: a Lbl in a Note is the
+    # footnote's number, and its own parent rule has already judged it.
+    if {$parentType in $inlineLevel && $type in $blockLevel
+        && ![dict exists $parentOf $type]} {
+      return -code error -errorcode [list TCLPDF STRUCTURE PLACE block] \
+          "tclpdf: a $parentType is inline markup and holds\
+          text, inline markup and illustrations - not a $type, which is a\
+          block of its own (ISO/TS 32005 Table 5). Close the $parentType\
+          first, or put the $type around it"
     }
     return
   }
@@ -1103,6 +1433,24 @@ oo::define ::tclpdf::document::document {
           holds elements and no text of its own - open it with \[\$doc\
           structure $derived -script ...\] and draw inside it"
     }
+    # THE THREE TYPES THAT STAND FOR AN ANNOTATION. A Link, an Annot and a
+    # Form are an association between a piece of content and an annotation
+    # (ISO 32000-1 Tables 338 and 340: a Form "shall have only one child,
+    # an object reference"); the object reference is written when the
+    # annotation is drawn INSIDE the open element, and a derived tag closes
+    # its element again before the next call can put anything in it. So
+    # "-tag Link" made an element that promises a link and holds none - a
+    # reader announces it and there is nothing to follow. veraPDF measures
+    # the Form case (7.18.4-2 under UA-1) and lets the other two pass; all
+    # three are the same empty promise, and all three have the same remedy.
+    if {$derived in {Link Annot Form}} {
+      return -code error -errorcode [list TCLPDF STRUCTURE TYPE tag] \
+          "tclpdf: -tag $derived names an element that stands\
+          for an annotation and holds a reference to it, not text (ISO\
+          32000-1 Table [expr {$derived eq "Form" ? 340 : 338}]) - open it\
+          with \[\$doc structure $derived -script ...\] and draw the\
+          annotation inside it"
+    }
     set element [my StructureCurrent]
     if {$element ne {}} {
       set open [dict get [lindex [my state structure] $element] type]
@@ -1340,4 +1688,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structure 1.5
+package provide tclpdf::structure 1.6

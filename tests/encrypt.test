@@ -786,4 +786,38 @@ test encrypt-5.2 {the encryption dictionary is written over, not written again} 
     expr {$firstBody eq $secondBody}
 } -result 1
 
+test encrypt-9.1 {a metadata stream left in the clear says so at the stream} -constraints haveTdom -body {
+    # ISO 32000-2, 7.6.6: "A PDF processor shall provide a standard security
+    # handler crypt filter named Identity ... to allow specific streams,
+    # such as document metadata, to be unencrypted in an otherwise encrypted
+    # document. The stream's DecodeParms entry shall contain a crypt filter
+    # decode parameters dictionary ... whose Name entry specifies the
+    # particular crypt filter" - and the example there writes both, the
+    # /Encrypt entry and the two stream entries. Only the first was written.
+    # Measured 2026-08-26: poppler 26.08.0 applies /StmF to the stream and
+    # "pdfinfo -upw pw -meta" hands back the packet run through AES, while
+    # qpdf, which goes by /EncryptMetadata, reads it right.
+    set result {}
+    foreach metadata {0 1} {
+        set doc [tclpdf new -unit mm -version 2.0]
+        $doc encrypt -user pw -owner own -metadata $metadata
+        $doc info Title "Geheim"
+        # Something has to ask for a packet: pdfa and ua both refuse an
+        # encrypted document, so the raw road is the one left.
+        $doc xmpRaw {<rdf:Description rdf:about="" xmlns:probe="urn:probe"><probe:a>1</probe:a></rdf:Description>}
+        $doc page add
+        $doc text "x" -at {20 20}
+        set path [::tclpdfTest::scratch encrypt-meta-$metadata.pdf]
+        $doc write $path
+        $doc destroy
+        set bytes [::tclpdfTest::readBytes $path]
+        file delete $path
+        regexp {/Type /Metadata[^>]*>>} $bytes dictionary
+        lappend result [regexp {/Filter /Crypt} $dictionary] \
+            [regexp {/DecodeParms << /Name /Identity >>} $dictionary] \
+            [regexp {<\?xpacket} $bytes]
+    }
+    set result
+} -result {1 1 1 0 0 0}
+
 cleanupTests

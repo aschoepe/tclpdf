@@ -20,8 +20,10 @@
 #   100 pt form comes out as "0 90 10 10 re", which is the top.
 #
 #   Placing is a transformation, not a redraw: -scale, -rotate and -opacity
-#   change the matrix the form is drawn through. The object itself stays
-#   exactly one object, which is what the count at the end demonstrates.
+#   change the matrix the form is drawn through, and -fit with -fitMode names
+#   a box instead of a factor and works the factor out from it. The object
+#   itself stays exactly one object, which is what the count at the end
+#   demonstrates.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #

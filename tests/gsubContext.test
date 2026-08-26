@@ -298,9 +298,73 @@ test gsubContext-8.1 {a format the specification does not define is refused quie
     -body {
   # Not an error: a face may carry a subtable this package cannot read beside
   # ones it can, and the caller that skips it is not thereby wrong about the
-  # rest. Type 8 goes the same way - it is not one of the two this reads.
+  # rest. Format 4 of a type 5, format 2 of a type 8 - the specification
+  # defines three of the one and exactly one of the other - and a type this
+  # file does not read at all go the same way.
   list [::tclpdf::gsubContext read [binary format Su* {4 0 0}] 5 0] \
-      [::tclpdf::gsubContext read [binary format Su* {1 8 1 14}] 8 0]
+      [::tclpdf::gsubContext read [binary format Su* {2 0 0}] 8 0] \
+      [::tclpdf::gsubContext read [binary format Su* {1 0 0}] 3 0]
+} -result {{} {} {}}
+
+# --- lookup type 8, reverse chaining ----------------------------------------
+#
+# Read here since 2026-08-26 and applied by gsubApply.tcl, which owns the
+# backwards walk. What is checked here is the SHAPE that comes back: it is the
+# shape of a format 3 chaining rule with an empty input list, plus the
+# substitutes in a field of their own, so that one matcher serves it too.
+
+# A type 8 subtable: input coverage, substitutes, backtrack and lookahead
+# coverage sets. Ten fixed bytes, then one offset per coverage set and one
+# word per substitute.
+proc gsubReverseSubtable {glyphs substitutes backtrack lookahead} {
+  set at [expr {10 + 2 * [llength $backtrack] + 2 * [llength $lookahead] \
+      + 2 * [llength $substitutes]}]
+  set bodies {}
+  set offsets {}
+  foreach set [concat [list $glyphs] $backtrack $lookahead] {
+    lappend offsets $at
+    set body [binary format Su* [list 1 [llength $set] {*}$set]]
+    lappend bodies $body
+    incr at [string length $body]
+  }
+  return [binary format Su* [list 1 [lindex $offsets 0] [llength $backtrack] \
+      {*}[lrange $offsets 1 [llength $backtrack]] [llength $lookahead] \
+      {*}[lrange $offsets [expr {1 + [llength $backtrack]}] end] \
+      [llength $substitutes] {*}$substitutes]][join $bodies {}]
+}
+
+test gsubContext-8.2 {a reverse subtable comes back as one rule with no input} \
+    -body {
+  # The coverage in the HEADER is the single input position, which is why the
+  # rule's input list is empty: the matcher has already tested that glyph
+  # before it looks at a rule at all. The substitutes are not records - there
+  # are none - and travel in a field of their own.
+  set ruleset [::tclpdf::gsubContext read \
+      [gsubReverseSubtable {10 12} {99 98} {{7}} {{11}}] 8 0]
+  list [dict get $ruleset style] [dict get $ruleset by] \
+      [dict get $ruleset coverage] [dict get $ruleset subst] \
+      [dict get $ruleset refs] [llength [dict get $ruleset rules]] \
+      [lindex [dict get $ruleset rules] 0 1]
+} -result {coverage rules {10 0 12 1} {99 98} {} 1 {}}
+
+test gsubContext-8.3 {the backtrack and the lookahead keep their own order} -body {
+  # Backtrack nearest-first, lookahead in text order - read as coverage dicts
+  # exactly as format 6.3 does, because the layout is the same one.
+  set ruleset [::tclpdf::gsubContext read \
+      [gsubReverseSubtable {10} {99} {{7} {8}} {{11 12}}] 8 0]
+  lassign [lindex [dict get $ruleset rules] 0] backtrack input lookahead records
+  list [lmap set $backtrack {dict keys $set}] $input \
+      [lmap set $lookahead {dict keys $set}] $records
+} -result {{7 8} {} {{11 12}} {}}
+
+test gsubContext-8.4 {a reverse subtable without substitutes is left out} -body {
+  # glyphCount counts the coverage AND the substitute array, so a subtable
+  # that names no substitutes has nothing to do - and an empty coverage has
+  # nowhere to do it. Both are dropped rather than kept as rules that can
+  # never fire.
+  list [::tclpdf::gsubContext read \
+          [gsubReverseSubtable {10} {} {} {}] 8 0] \
+      [::tclpdf::gsubContext read [gsubReverseSubtable {} {99} {} {}] 8 0]
 } -result {{} {}}
 
 test gsubContext-8.2 {a rule whose input count is zero is dropped} -body {

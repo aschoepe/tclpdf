@@ -1,7 +1,7 @@
 #
 # tclpdf - PDF generation for Tcl
 #
-# gsubContext - the GSUB lookups that match a SEQUENCE: types 5 and 6
+# gsubContext - the GSUB lookups that match a SEQUENCE: types 5, 6 and 8
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
@@ -10,9 +10,10 @@
 #
 # Infrastructure below gsubApply.tcl, the way otLayout.tcl and gdef.tcl are
 # below both of them. ONE topic: given a subtable of lookup type 5 (Contextual
-# Substitution) or type 6 (Chaining Contextual Substitution), does a rule of
-# it match at this position of a glyph run - and if it does, WHICH positions
-# did it match and which lookups does it ask for.
+# Substitution), type 6 (Chaining Contextual Substitution) or type 8 (Reverse
+# Chaining Contextual Single Substitution), does a rule of it match at this
+# position of a glyph run - and if it does, WHICH positions did it match and
+# which lookups does it ask for.
 #
 # It substitutes nothing. That is deliberate and it is what keeps the two
 # files apart: a contextual rule does not carry a substitution at all, it
@@ -30,6 +31,8 @@
 #   6.1  as glyph IDs, with a backtrack and a lookahead beside the input
 #   6.2  as class numbers, with THREE ClassDefs - backtrack, input, lookahead
 #   6.3  as coverage tables, three arrays of them
+#   8.1  as coverage tables like 6.3, but with ONE input position and the
+#        substitutes written beside it instead of records
 #
 # The three ways of saying "this position matches" are the whole difference.
 # Everything else - a coverage that selects which rules to try, rules tried in
@@ -43,18 +46,27 @@
 # with a one-glyph backtrack behaves identically either way, and those are the
 # rules a first test tends to use.
 #
-# WHAT IS NOT HERE. Lookup type 8, Reverse Chaining Single Substitution, is
-# the seventh format of the same idea and is not read - not for want of
-# machinery but for want of a face: of the 77 faces in examples/assets/fonts
-# not one carries a single type 8 lookup, in any feature, and neither does any
-# of the six faces fetched to measure this work against - Amiri, Noto Kufi
-# Arabic, Noto Nastaliq Urdu, Noto Sans Arabic, Scheherazade New, Noto Sans
-# Hebrew. Type 3, Alternate Substitution, is the same case with a number: it
-# occurs 39 times in the tree and every one of them hangs off "aalt" or
-# "ornm", features this package does not apply and could not apply without an
-# API for "give me the third alternate of this glyph". Measured 2026-08-26;
-# the day a face arrives that needs either, this is where the chaining half of
-# type 8 already sits.
+# TYPE 8 IS THE SEVENTH FORMAT of the same idea and is read here since
+# 2026-08-26. It writes its three arrays exactly as 6.3 does, with one
+# difference in each direction: the input is a SINGLE coverage - the one in
+# the header, which is why the rule below has an empty input list - and there
+# are no SequenceLookupRecords at all. What stands where they would is a
+# counted array of substitute glyph IDs, one per coverage index, and the
+# caller reads it out of the "subst" field. The other half of the type, that
+# the lookup is applied from the END of the run backwards, is a property of
+# the WALK and belongs to gsubApply.tcl; nothing here needs to know it.
+#
+# No face in this tree carries one - measured over the 77 faces in
+# examples/assets/fonts and the six fetched to measure this work against
+# (Amiri, Noto Kufi Arabic, Noto Nastaliq Urdu, Noto Sans Arabic, Scheherazade
+# New, Noto Sans Hebrew) - which is why it went unread for so long. A face
+# that has one was shaped differently from every other reader and said nothing
+# about it, and that is the reason it is read now rather than counted again.
+#
+# Type 3, Alternate Substitution, is the case that stays unread: it occurs 39
+# times in the tree and every one of them hangs off "aalt" or "ornm", features
+# this package does not apply and could not apply without an API for "give me
+# the third alternate of this glyph". Measured 2026-08-26.
 #
 
 package require Tcl 8.6.11-
@@ -108,6 +120,10 @@ proc ::tclpdf::gsubContext::read {gsub type offset} {
       1 { return [Format1 $gsub $offset 1] }
       2 { return [Format2 $gsub $offset 1] }
       3 { return [Format3 $gsub $offset 1] }
+    }
+  } elseif {$type == 8} {
+    if {$format == 1} {
+      return [Reverse $gsub $offset]
     }
   }
   return {}
@@ -261,6 +277,37 @@ proc ::tclpdf::gsubContext::CoverageArray {gsub offset at count} {
     incr at 2
   }
   return [list $coverages $at]
+}
+
+# Format 8.1 (S. 290): the backtrack and the lookahead of 6.3, ONE input
+# position - the coverage in the header - and a counted array of substitute
+# glyph IDs where the other formats keep their records.
+#
+# It comes back in the same shape as the rest so that one matcher serves it
+# too: style coverage, one rule with an empty input list, and the substitutes
+# in a field of their own. The rule therefore matches exactly the covered
+# glyph plus its surroundings, which is what the type says.
+#
+# A subtable whose substitute array is shorter than its coverage is read as
+# far as the two agree - the caller checks the index before it reaches into
+# the array. Both counts are written down by the font (glyphCount is the
+# length of BOTH), so a mismatch is a defect and not a shape to guess at.
+proc ::tclpdf::gsubContext::Reverse {gsub offset} {
+  set coverage [::tclpdf::otLayout coverage $gsub \
+      [expr {$offset + [::tclpdf::otLayout u16 $gsub [expr {$offset + 2}]]}]]
+  if {![dict size $coverage]} {
+    return {}
+  }
+  set at [expr {$offset + 4}]
+  lassign [Coverages $gsub $offset $at] backtrack at
+  lassign [Coverages $gsub $offset $at] lookahead at
+  lassign [Values $gsub $at] substitutes at
+  if {![llength $substitutes]} {
+    return {}
+  }
+  return [dict create style coverage coverage $coverage by rules \
+      rules [list [list $backtrack {} $lookahead {}]] subst $substitutes \
+      refs {}]
 }
 
 # Every rule of one rule set, in the order the font lists them - which is the
@@ -531,4 +578,4 @@ proc ::tclpdf::gsubContext::Class {classes glyph} {
   return 0
 }
 
-package provide tclpdf::gsubContext 1.0
+package provide tclpdf::gsubContext 1.1

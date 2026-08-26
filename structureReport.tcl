@@ -41,6 +41,8 @@ oo::define ::tclpdf::document::document {
   #              covers - spans counted, see [StructureRowWidths]
   #   lists      per L element: its ListNumbering (empty when unset), how
   #              many LI it holds and how many of those carry a Lbl
+  #   toci       per TOCI element, {index reference}: where it sits in the
+  #              tree and whether it or anything below it carries a Ref
   #   types      every type used, once
   #
   # Returned rather than read out of the state by the caller: the shape of an
@@ -62,6 +64,7 @@ oo::define ::tclpdf::document::document {
       }
     }
     set index 0
+    set toci {}
     foreach element $elements {
       switch -- [dict get $element type] {
         Table {
@@ -70,10 +73,35 @@ oo::define ::tclpdf::document::document {
         L {
           lappend lists [my StructureListShape $elements $index]
         }
+        TOCI {
+          lappend toci [list $index [my StructureRefBelow $elements $index]]
+        }
       }
       incr index
     }
-    return [dict create headings $headings rows $rows lists $lists types $types]
+    return [dict create headings $headings rows $rows lists $lists \
+        toci $toci types $types]
+  }
+
+  # Whether an element or anything below it names a target with -ref. The
+  # question PDF/UA-2 8.2.5.8 asks of every TOCI: the reference may sit "on
+  # the TOCI structure element itself or on one of its child structure
+  # elements", so an entry whose Reference child carries it counts.
+  #
+  # Depth first, like [UaElementPage] in ua.tcl walks for the same kind of
+  # question - a TOCI holds a Lbl, a Reference and a nested TOC, and the Ref
+  # may be on any of them.
+  method StructureRefBelow {elements index} {
+    if {[dict get [lindex $elements $index] ref] ne {}} {
+      return 1
+    }
+    foreach kid [dict get [lindex $elements $index] kids] {
+      if {[lindex $kid 0] eq "element"
+          && [my StructureRefBelow $elements [lindex $kid 1]]} {
+        return 1
+      }
+    }
+    return 0
   }
 
   # One list as three facts: what it says it is numbered, how many items it
@@ -185,4 +213,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structureReport 1.1
+package provide tclpdf::structureReport 1.2

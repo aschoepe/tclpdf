@@ -723,4 +723,49 @@ test varFont-18.3 {empty glyphs count for the advance only, and an empty set giv
       [::tclpdf::varFont hheaMetrics {}]
 } -result {{900 10 40 60} {250 0 0 0} {0 0 0 0}}
 
+# -- round 7: MVAR ----------------------------------------------------------
+
+set mvarFace [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts google BitcountPropSingle-Variable.ttf]
+testConstraint haveMvar [file exists $mvarFace]
+set plainFace [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts google Roboto-Variable.ttf]
+testConstraint havePlainVariable [file exists $plainFace]
+
+test varFont-19.1 {MVAR moves the metrics with the axes} -constraints haveMvar -body {
+  # head, hhea and OS/2 state ONE set of numbers, the default instance's,
+  # exactly as glyf holds one set of outlines. Measured against fontTools'
+  # instancer at wght 700, slnt -8: sCapHeight 660 over an OS/2 that says
+  # 600, so the delta is 60.
+  set parsed [::tclpdf::sfnt read $mvarFace]
+  set coordinates [::tclpdf::varFont coordinates $parsed {wght 700 slnt -8}]
+  set deltas [::tclpdf::varFont metrics $parsed $coordinates]
+  list [dict get $deltas cpht] \
+      [expr {[dict get $parsed os2 capHeight] + [dict get $deltas cpht]}]
+} -result {60 660}
+
+test varFont-19.2 {the default position moves nothing} -constraints haveMvar -body {
+  # Every scalar is zero at the default, so every delta is zero - the answer
+  # a face that is not an instance has to get.
+  set parsed [::tclpdf::sfnt read $mvarFace]
+  set deltas [::tclpdf::varFont metrics $parsed \
+      [::tclpdf::varFont coordinates $parsed {}]]
+  set moved 0
+  dict for {tag delta} $deltas {
+    if {$delta != 0} {
+      incr moved
+    }
+  }
+  list [expr {[dict size $deltas] > 0}] $moved
+} -result {1 0}
+
+test varFont-19.3 {a face without MVAR answers nothing} \
+    -constraints havePlainVariable -body {
+  # Four of the eight variable faces in this tree carry an MVAR; the rest
+  # keep the file's own numbers, which is what {} says.
+  set parsed [::tclpdf::sfnt read $plainFace]
+  ::tclpdf::varFont metrics $parsed \
+      [::tclpdf::varFont coordinates $parsed {wght 900}]
+} -result {}
+
 cleanupTests

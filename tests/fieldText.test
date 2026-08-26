@@ -309,22 +309,123 @@ test fieldText-4.1 {[$doc field text] loads this module by itself} -body {
   # core names the package, so a caller says [package require tclpdf] and
   # nothing else - no [package require tclpdf::fieldText] anywhere. Measured
   # in a FRESH interpreter, because this one has the module loaded already.
-  set here [file normalize [file dirname [file dirname [info script]]]]
-  set path [::tclpdfTest::scratch fieldText-autoload.tcl]
-  set channel [open $path w]
-  puts $channel [list lappend auto_path $here]
-  puts $channel {
+  ::tclpdfTest::freshInterp {
     package require tclpdf
     set doc [tclpdf new -unit mm -format a4]
     $doc page add
     $doc field text customer -rect {20 40 80 8} -value "Muster"
-    puts [list [package provide tclpdf::fieldText] [$doc field list]]
+    # Whether the module is loaded, not which version: the number moves with
+    # every check-in that touches the module, and a test that pins it turns
+    # red on the bump, not on a fault (round 7 measured exactly that).
+    puts [list [expr {[package provide tclpdf::fieldText] ne {}}] [$doc field list]]
     $doc destroy
   }
-  close $channel
-  set out [exec [info nameofexecutable] $path]
-  file delete $path
-  set out
-} -result {1.0 customer}
+} -result {1 customer}
+
+# --- round 7: what the field's own font can set, and what a break is --------
+
+test fieldText-20.1 {a value the field's font cannot set is refused at the call} -body {
+    # Refused at write time it could not be taken back: the field was
+    # declared, [write] died inside the appearance stream, and every further
+    # [write] of the same document died in the same place.
+    set doc [textDoc]
+    set outcome [::tclpdfTest::refuse \
+        {$doc field text t -rect {10 10 40 8} -value "При"}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF FIELD GLYPH value}}
+
+test fieldText-20.2 {and the document is writable afterwards, twice} -body {
+    set doc [textDoc]
+    set refused [catch {$doc field text t -rect {10 10 40 8} \
+        -value "При"}]
+    set path [::tclpdfTest::scratch fieldtext-glyph.pdf]
+    set first [catch {$doc write $path}]
+    set second [catch {$doc write $path}]
+    $doc destroy
+    file delete $path
+    list $refused $first $second
+} -result {1 0 0}
+
+test fieldText-20.3 {a -default outside the font is refused the same way} -body {
+    set doc [textDoc]
+    set outcome [::tclpdfTest::refuse \
+        {$doc field text t -rect {10 10 40 8} -default "П"}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF FIELD GLYPH default}}
+
+test fieldText-20.4 {what WinAnsiEncoding has still goes through} -body {
+    set doc [textDoc]
+    set code [catch {$doc field text t -rect {10 10 40 8} \
+        -value "Müller Ø"} message]
+    $doc destroy
+    list $code $message
+} -result {0 t}
+
+test fieldText-21.1 {CRLF in a value is ONE carriage return in /V} -body {
+    # 12.7.4.3 spells a break as CR. Mapping only \n turned a Windows
+    # script's "a\r\nb" into (a\r\rb) - an empty line nobody typed.
+    set doc [textDoc]
+    $doc field text t -rect {10 10 40 20} -multiline 1 -value "a\r\nb"
+    $doc write [::tclpdfTest::scratch fieldtext-crlf.pdf]
+    set body [textWidget $doc t]
+    file delete [::tclpdfTest::scratch fieldtext-crlf.pdf]
+    $doc destroy
+    # (a\rb) - the carriage return spelled with the escape of Table 3, and
+    # ONE of them: 61 5c 72 62 is "a", backslash, "r", "b". Two would be
+    # 61 5c 72 5c 72 62.
+    regexp {/V \(([^)]*)\)} $body -> value
+    binary scan $value H* hex
+    set hex
+} -result 615c7262
+
+test fieldText-21.2 {a bare CR is one break as well} -body {
+    set doc [textDoc]
+    $doc field text t -rect {10 10 40 20} -multiline 1 -value "a\rb"
+    $doc write [::tclpdfTest::scratch fieldtext-crlf.pdf]
+    set body [textWidget $doc t]
+    file delete [::tclpdfTest::scratch fieldtext-crlf.pdf]
+    $doc destroy
+    regexp {/V \(([^)]*)\)} $body -> value
+    binary scan $value H* hex
+    set hex
+} -result 615c7262
+
+test fieldText-21.3 {and a CRLF in a single-line field is still a break} -body {
+    set doc [textDoc]
+    set outcome [::tclpdfTest::refuse \
+        {$doc field text t -rect {10 10 40 8} -value "a\r\nb"}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF FIELD LINES value}}
+
+test fieldText-22.1 {a size that is not a measurement is refused} -body {
+    set wrong {}
+    foreach value {NaN Inf -Inf} {
+        set doc [textDoc]
+        set outcome [::tclpdfTest::refuse \
+            {$doc field text t -rect {10 10 40 8} -size $value}]
+        $doc destroy
+        if {$outcome ne [list 1 1 [list TCLPDF FIELD SIZE $value]]} {
+            lappend wrong "$value: $outcome"
+        }
+    }
+    set wrong
+} -result {}
+
+test fieldText-22.2 {nor a border width} -body {
+    set wrong {}
+    foreach value {NaN Inf} {
+        set doc [textDoc]
+        set outcome [::tclpdfTest::refuse \
+            {$doc field text t -rect {10 10 40 8} -borderWidth $value}]
+        $doc destroy
+        if {$outcome ne [list 1 1 [list TCLPDF FIELD BORDERWIDTH $value]]} {
+            lappend wrong "$value: $outcome"
+        }
+    }
+    set wrong
+} -result {}
 
 cleanupTests

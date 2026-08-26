@@ -464,11 +464,15 @@ test sign-1.12 {-date writes the time it is given, and -date {} keeps /M out} -b
   set result {}
   # An explicit date is the caller's own statement, not a guess the module
   # made, and is written even where there is no signer.
+  # The document is 2.0 ([signed] writes one), so the date is spelled the
+  # way ISO 32000-2, 7.9.4 spells it: no closing apostrophe. It used to be
+  # written here with one - the 1.7 spelling - and reached the file
+  # unchallenged; see xmp-8.5b for the check that now refuses it.
   set path [::tclpdfTest::signed sign-m-fixed.pdf -size 8 \
-      -date "D:20260101120000+01'00'"]
+      -date "D:20260101120000+01'00"]
   set data [::tclpdfTest::readBytes $path]
   file delete $path
-  lappend result [regexp {/M \(D:20260101120000\+01'00'\)} $data]
+  lappend result [regexp {/M \(D:20260101120000\+01'00\)} $data]
   # And the way out for whoever reads Table 255 to the letter: no entry at
   # all, on a document that is really signed.
   set path [::tclpdfTest::signed sign-m-none.pdf -size 64 -date {} \
@@ -971,14 +975,15 @@ test sign-4.15 {-date takes a PDF date, "now" or nothing, and refuses the rest} 
         [$doc sign state]
     $doc destroy
   }
-  foreach value [list {} now "D:20260101120000+01'00'"] {
+  # The 2.0 spelling, because [signDoc -version 2.0] writes a 2.0 file.
+  foreach value [list {} now "D:20260101120000+01'00"] {
     set doc [::tclpdfTest::signDoc -version 2.0]
     lappend result [catch {$doc sign -date $value}] \
         [dict get [$doc sign state] date]
     $doc destroy
   }
   set result
-} -result [list 1 1 {} 1 1 {} 1 1 {} 0 {} 0 now 0 "D:20260101120000+01'00'"]
+} -result [list 1 1 {} 1 1 {} 1 1 {} 0 {} 0 now 0 "D:20260101120000+01'00"]
 
 test sign-4.16 {a signer that states the time in the CMS object breaks the PAdES claim} -body {
   # The write way's half of the check sign-5.12 makes for [embed], and the
@@ -1172,7 +1177,7 @@ test sign-4.23 {-subfilter cades and -date {} cannot both stand} -body {
   set ok [list [catch {$doc sign -size 256 -date {}}]]
   $doc destroy
   foreach options {{-subfilter cades} {-subfilter cades -date
-      D:20260101120000+01'00'}} {
+      D:20260101120000+01'00}} {
     set doc [::tclpdfTest::signDoc -version 2.0]
     lappend ok [catch {$doc sign -size 256 {*}$options}]
     $doc destroy
@@ -2332,6 +2337,130 @@ test sign-8.19 {sign add refuses -subfilter cades with -date {} as well} -body {
   list $code [string match "*shall be present*" $message] \
       [expr {$size == $untouched}] $grew [dict get $added subFilter]
 } -result {1 1 1 1 /ETSI.CAdES.detached}
+
+# --- what a signature field's name collides with --------------------------
+
+test sign-9.1 {sign -field refuses a name a form field already has} -body {
+  # 12.7.4.2: the fully qualified name is what a form is addressed by, and
+  # two fields under one name resolve to one - whichever a reader finds
+  # first answers for both. field.tcl has asked [state sign] since it was
+  # written; the other order was never asked. Measured 2026-08-26: "field
+  # text Signature1 ...; sign -field Signature1" was taken, the document was
+  # written, and "qpdf --json --json-key=acroform" showed two entries with
+  # "fullname": "Signature1".
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc field text Signature1 -rect {20 40 80 8} -value x
+  set code [catch {$doc sign} message]
+  set state [$doc sign state]
+  # A different name still goes through, and the refusal left nothing behind.
+  set other [catch {$doc sign -field Unterschrift}]
+  set path [::tclpdfTest::scratch sign-taken.pdf]
+  set written [catch {$doc write $path}]
+  $doc destroy
+  file delete $path
+  list $code [lrange $::errorCode 0 2] [string match {*already has a field named*} $message] \
+      $state $other $written
+} -result {1 {TCLPDF SIGN FIELD} 1 {} 0 0}
+
+test sign-9.2 {and the other order keeps the message it always had} -body {
+  # field.tcl's own check, unchanged - both orders are refused now, which is
+  # what doc/tclpdf.md:988 has promised all along.
+  set doc [::tclpdfTest::signDoc -version 2.0]
+  $doc sign -field Sig
+  set code [catch {$doc field text Sig -rect {20 40 80 8}} message]
+  $doc destroy
+  list $code [lrange $::errorCode 0 2]
+} -result {1 {TCLPDF FIELD TAKEN}}
+
+test sign-9.3 {an unknown subcommand of the ensemble is refused in this package's words} -body {
+  # doc/tclpdf.md:1723 names [tclpdf] itself as the ONE refusal without a
+  # TCLPDF code; the namespace ensembles answered "unknown or ambiguous
+  # subcommand" with {TCL LOOKUP SUBCOMMAND} (measured 2026-08-26).
+  set code [catch {::tclpdf::sign nosuch} message]
+  list $code [lrange $::errorCode 0 2] \
+      [string match {tclpdf: unknown sign subcommand "nosuch" - known are: add, digest, embed} $message]
+} -result {1 {TCLPDF SIGN SUBCOMMAND} 1}
+
+test sign-9.4 {a waiting signature is recognised at its /ByteRange, not at any zero /Contents} -body {
+  # sign.tcl:1185 searched the whole file for "/Contents <0...0>", so an
+  # annotation whose /Contents was written as a hexadecimal string of zeros
+  # - which tclpdf never writes and a foreign tool may - locked the file out
+  # of [add] for good with TCLPDF SIGN STATE waiting.
+  set doc [tclpdf new -unit mm -version 2.0]
+  $doc page add
+  $doc annot note -at {20 20} -contents "x" -title t
+  set path [::tclpdfTest::scratch sign-zero-annot.pdf]
+  $doc write $path
+  $doc destroy
+  # Same length, so every xref offset stays right.
+  set bytes [string map [list "/Contents (x)" "/Contents<00>"] \
+      [::tclpdfTest::readBytes $path]]
+  ::tclpdf::io write $path $bytes
+  set added [catch {::tclpdf::sign add $path -size 256}]
+  # And a signature that really is waiting is still refused.
+  set waiting [catch {::tclpdf::sign add $path -size 256} message]
+  file delete $path
+  list [regexp {/Contents<00>} $bytes] $added $waiting [lrange $::errorCode 0 3]
+} -result {1 0 1 {TCLPDF SIGN STATE waiting}}
+
+test sign-9.5 {sign add refuses a file certified with DocMDP /P 1} -body {
+  # 12.8.4.2, Table 257: /P 1 - "No changes to the document shall be
+  # permitted; any change to the document shall invalidate the signature".
+  # Measured 2026-08-26: a file carrying /Perms << /DocMDP ... >> with
+  # /TransformParams << /P 1 >> took a second signature without a word, and
+  # the result is a document whose certification every verifier reports as
+  # broken. /P 2 and /P 3 expressly allow a further signature.
+  set result {}
+  foreach p {1 2 3} {
+    set doc [tclpdf new -unit mm -version 2.0]
+    $doc page add
+    set path [::tclpdfTest::scratch sign-docmdp-$p.pdf]
+    $doc write $path
+    $doc destroy
+    # The certification is grafted on with an incremental update, which is
+    # the shape a certifying tool leaves behind.
+    set upd [::tclpdf::update open $path]
+    set signature [$upd add "<< /Type /Sig /Filter /Adobe.PPKLite\
+        /SubFilter /adbe.pkcs7.detached /ByteRange \[0 100 200 300\]\
+        /Contents <3081> /Reference \[<< /Type /SigRef /TransformMethod /DocMDP\
+        /TransformParams << /Type /TransformParams /P $p /V /1.2 >> >>\] >>"]
+    set catalog [$upd trailer Root]
+    regexp {^\s*([0-9]+)} $catalog -> number
+    set body [$upd body $number]
+    $upd replace $number [string map [list ">>" \
+        "/Perms << /DocMDP [$upd ref $signature] >> >>"] $body]
+    $upd write
+    $upd destroy
+    set size [file size $path]
+    set code [catch {::tclpdf::sign add $path -size 256} message]
+    lappend result $code [expr {$code ? [lrange $::errorCode 0 3] : {}}] \
+        [expr {[file size $path] > $size}]
+    file delete $path
+  }
+  set result
+} -result {1 {TCLPDF SIGN STATE certified} 0 0 {} 1 0 {} 1}
+
+test sign-9.6 {sign add -date is spelled the way the FILE spells dates} -body {
+  # 7.9.4 in ISO 32000-1 writes the closing apostrophe and ISO 32000-2 struck
+  # it; the value goes into /M as it was written, and the package spells its
+  # own dates by the file's version ([Moment], [DatePlaceholder]).
+  set result {}
+  foreach {version right wrong} {1.7 D:20260818120000+02'00' D:20260818120000+02'00
+      2.0 D:20260818120000+02'00 D:20260818120000+02'00'} {
+    set doc [tclpdf new -unit mm -version $version]
+    $doc page add
+    set path [::tclpdfTest::scratch sign-add-date-$version.pdf]
+    $doc write $path
+    $doc destroy
+    set size [file size $path]
+    lappend result [catch {::tclpdf::sign add $path -size 256 -date $wrong}] \
+        [lrange $::errorCode 0 3] [expr {[file size $path] == $size}] \
+        [dict get [::tclpdf::sign add $path -size 256 -date $right] date]
+    file delete $path
+  }
+  set result
+} -result {1 {TCLPDF SIGN ARGUMENT date} 1 D:20260818120000+02'00'\
+    1 {TCLPDF SIGN ARGUMENT date} 1 D:20260818120000+02'00}
 
 # The certificates go with the rest of the scratch files: they are made at
 # load time, not by a test, so nothing else would remove them.

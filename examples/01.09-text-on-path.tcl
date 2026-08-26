@@ -20,7 +20,9 @@
 #
 #   GLYPHS THAT DO NOT FIT ARE DROPPED, not squeezed in at the end. A string
 #   longer than its path comes out short, and the return value - the length of
-#   the path - is what a caller measures against beforehand.
+#   the path - is what a caller measures against beforehand. No page here
+#   shows it: every string on the sheet is measured against its path first,
+#   which is what a caller should do.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #

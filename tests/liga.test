@@ -335,9 +335,15 @@ proc ligaGlyphs {path text} {
 }
 
 # The same word through hb-shape, with everything this package does NOT read
-# switched off - so that what is compared is the two readings of liga and
-# clig and not a list of features nobody claimed.
-proc ligaHarfBuzz {path text {features -ccmp,-locl,-rlig,-calt,-rclt}} {
+# switched off - so that what is compared is the readings of the features it
+# does and not a list nobody claimed.
+#
+# rlig, calt AND rclt LEFT THAT LIST on 2026-08-26, which is the whole point
+# of the change that let them in: hb-shape applies them and so does this
+# package, and the two answers still agree. What stays switched off is ccmp
+# and locl - the two a Latin run does not go through, for the reasons in the
+# head of liga.tcl.
+proc ligaHarfBuzz {path text {features -ccmp,-locl}} {
   set output [exec hb-shape --no-clusters --no-positions --no-glyph-names \
       --features=$features $path $text]
   return [split [string trim $output {[]}] |]
@@ -349,10 +355,17 @@ test liga-5.1 {a face whose only ligature feature is clig} -constraints haveClig
   set parsed [::tclpdf::sfnt read $::fontClig]
   set gsub [::tclpdf::sfnt table $parsed GSUB]
   set gdef [::tclpdf::gdef build $parsed]
+  # [build] answers a PAIR of STAGE LISTS since rlig, calt and rclt came in -
+  # the second is what -ligatures 0 leaves standing - and each stage list
+  # holds one stage here, so the count of prepared lookups is two levels
+  # down. The face has clig and nothing else, so the second stage list is
+  # empty of lookups.
+  set prepared [::tclpdf::liga build $parsed]
   list [llength [::tclpdf::otLayout featureLookups $gsub liga]] \
       [llength [::tclpdf::otLayout featureLookups $gsub clig]] \
-      [llength [::tclpdf::liga build $parsed]]
-} -result {0 1 1}
+      [llength [lindex $prepared 0]] [llength [lindex $prepared 0 0]] \
+      [llength [lindex $prepared 1 0]]
+} -result {0 1 1 1 0}
 
 test liga-5.2 {fi and fl are drawn as the ligature the face has} \
     -constraints {haveClig haveHbShape} -body {
@@ -382,6 +395,125 @@ test liga-5.3 {the ligature carries both characters back} \
       [ligaRun $parsed fi]]
   lmap entry $run {lindex $entry 1}
 } -result {{102 105}}
+
+test liga-5.5 {a chaining rule with ONE input glyph fires on a run of one} -body {
+  # A ligature needed two glyphs and this module said so - "fewer than two,
+  # nothing to ligate" - until the contextual machine arrived. A chaining rule
+  # may have an input of exactly one position, with everything it tests in the
+  # backtrack and the lookahead, and a rule with no context at all is then a
+  # single substitution wearing a chain. hb-shape substitutes; this answered
+  # the run it was given.
+  #
+  # Built by hand rather than measured on a face: no face in this tree carries
+  # such a rule, which is why it went unnoticed. The chain matches glyph 10
+  # with nothing around it and names a single substitution.
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 6 0 [list [binary format Su* \
+          {3 0 1 16 0 1 0 1 1 1 10}]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 99]]]] \
+      [dict create liga {0 1}]]
+  # A pair of STAGE LISTS, which is the shape [build] answers in.
+  set prepared [list [list [::tclpdf::gsubApply feature $gsub liga {} {} \
+      {ligature context chain reverse}]] {}]
+  lmap entry [::tclpdf::liga apply $prepared [list [list 10 {97}]]] \
+      {lindex $entry 0}
+} -result 99
+
+test liga-5.8 {rlig is read for a Latin run, and -ligatures 0 does not stop it} -body {
+  # HarfBuzz enables the required ligatures for EVERY script, and required is
+  # what they are: a face that draws two characters as one shape because the
+  # script demands it is not offering a typographic option. This file used to
+  # leave rlig to forms.tcl, so a Latin face that had one was set with the
+  # letters apart and said nothing about it.
+  #
+  # Lookup 0 hangs off rlig and lookup 1 off liga, both on glyph 10, and the
+  # answer is the LOWEST index either way - the default shaper puts no pause
+  # among the five, measured. What -ligatures 0 changes is only that liga is
+  # no longer in the stage: rlig still substitutes.
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 99]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 98]]]] \
+      [dict create rlig 0 liga 1]]
+  set parsed [dict create bytes $gsub \
+      tables [dict create GSUB [list 0 [string length $gsub]]]]
+  set prepared [::tclpdf::liga build $parsed]
+  set run [list [list 10 {97}]]
+  list [lmap e [::tclpdf::liga apply $prepared $run] {lindex $e 0}] \
+      [lmap e [::tclpdf::liga apply $prepared $run 0] {lindex $e 0}]
+} -constraints {} -result {99 99}
+
+test liga-5.9 {and a liga lookup below an rlig one still wins in a Latin run} -body {
+  # The counter-test for 5.8, and the reason rlig is NOT a stage of its own
+  # here. Measured against hb-shape --script=latn on a face built for it: with
+  # liga at lookup 0 and rlig at lookup 1 the answer is the LIGA glyph, so the
+  # default shaper has the two in one stage and the lookup index decides.
+  # --script=arab on the same face answers the rlig glyph, which is the pause
+  # forms.tcl models - see the head of liga.tcl.
+  #
+  # With -ligatures 0 the liga lookup leaves the stage and rlig has the field.
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 99]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 98]]]] \
+      [dict create liga 0 rlig 1]]
+  set parsed [dict create bytes $gsub \
+      tables [dict create GSUB [list 0 [string length $gsub]]]]
+  set prepared [::tclpdf::liga build $parsed]
+  set run [list [list 10 {97}]]
+  list [lmap e [::tclpdf::liga apply $prepared $run] {lindex $e 0}] \
+      [lmap e [::tclpdf::liga apply $prepared $run 0] {lindex $e 0}]
+} -result {99 98}
+
+test liga-5.7 {calt and rclt are read, and in ONE stage with liga and clig} -body {
+  # HarfBuzz's default shaper puts no pause between the four, so their lookups
+  # are applied in LOOKUP ORDER across the features rather than feature by
+  # feature. Measured black-box on four little faces in which liga, calt and
+  # rclt each substitute the same glyph with the lookup indices permuted:
+  # hb-shape answers the LOWEST index in all six permutations.
+  #
+  # Here the same arrangement in one table: lookup 0 hangs off calt and lookup
+  # 1 off liga, both on glyph 10. One stage means lookup 0 wins whichever
+  # feature named it; a stage per feature in the order this file lists them
+  # would answer 98 for the "liga first" reading and 99 either way for a
+  # reader that dropped calt altogether.
+  # A chaining lookup rather than a plain single substitution, because that is
+  # what this module asks a feature for - see [liga build].
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 6 0 [list [binary format Su* \
+          {3 0 1 16 0 1 0 2 1 1 10}]]] \
+      [::tclpdfTest::gsubLookup 6 0 [list [binary format Su* \
+          {3 0 1 16 0 1 0 3 1 1 10}]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 99]]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle 10 98]]]] \
+      [dict create calt 0 liga 1 rclt {}]]
+  # A parsed face is a dict of bytes and a table directory; the GSUB above is
+  # the only table this module reads.
+  set parsed [dict create bytes $gsub \
+      tables [dict create GSUB [list 0 [string length $gsub]]]]
+  set prepared [::tclpdf::liga build $parsed]
+  set run [list [list 10 {97}]]
+  list [lmap e [::tclpdf::liga apply $prepared $run] {lindex $e 0}] \
+      [lmap e [::tclpdf::liga apply $prepared $run 0] {lindex $e 0}] \
+      [llength [lindex $prepared 0 0]]
+} -result {99 99 2}
+
+test liga-5.6 {-ligatures 0 leaves the contextual alternates on} -constraints \
+    haveClig -body {
+  # HarfBuzz answers --features=-liga,-clig with calt and rclt still applied:
+  # a contextual alternate is another SHAPE of a letter, not a ligature, and a
+  # caller who wanted the letters to stand apart did not ask for a different
+  # letter. So [build] answers two prepared stages and [apply] drops the one
+  # that holds liga and clig.
+  #
+  # This face carries clig and nothing else, so the second stage is empty -
+  # which is the answer that has to be right as well: without ligatures it
+  # substitutes nothing.
+  set parsed [::tclpdf::sfnt read $::fontClig]
+  set prepared [::tclpdf::liga build $parsed]
+  set run [ligaRun $parsed fi]
+  list [lmap e [::tclpdf::liga apply $prepared $run 1] {lindex $e 0}] \
+      [lmap e [::tclpdf::liga apply $prepared $run 0] {lindex $e 0}] \
+      [lmap e $run {lindex $e 0}]
+} -result {224 {71 74} {71 74}}
 
 test liga-5.4 {-ligatures 0 switches BOTH off} -constraints haveClig -body {
   # The registry gives liga and clig the same default and the same job, and a
