@@ -1,5 +1,5 @@
-C Skill\sreference:\sa\sstructureResume\ssnippet\sand\s-min\son\shyphenate\sload\n\n-\sdoc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md\s-\sa\sSect\sresumed\son\sa\ssecond\spass\stakes\sa\sfurther\schild,\sand\sresuming\sa\sleaf\sis\sshown\srefused\sas\sTCLPDF\sSTRUCTURE\sPLACE\sleaf;\severy\scall\sthe\smanual\sdescribes\shas\sa\ssnippet\sagain\n-\sdoc/claude/skills/tclpdf-tcl/reference/03-text.md\s-\sthe\shyphenate\sload\scall\snames\s-min,\sthe\sshortest\sword\sbroken\sat\sall
-D 2026-08-27T22:46:59.912
+C Download\spage:\sthe\slabel\scolumn\sno\slonger\swraps\n\n-\suv/template-download.html\s-\swhite-space\snowrap\sand\stop\salignment\son\sthe\sthree\slabel\scells\s(tclpdf\sVERSION,\ssource\scode,\stdom),\sso\sthe\sgenerated\sdownload.html\skeeps\s"tclpdf\s1.3"\sand\s"source\scode"\son\sone\sline
+D 2026-08-27T23:39:58.156
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -490,7 +490,7 @@ F type1.tcl ea587c4d8e5c5c2aacb17980402caa726b746e3fcf578242729fa3748d646fcf
 F type3.tcl f9889e52853019f8ce395765b504173b3b017d499a8bed3c517594d8206c74b2
 F ua.tcl 1629f16857fe21ec258ff1de0449a1b80754da526cdc59af8afe8b854896139d
 F update.tcl bad44a375265b2b7c5e76e1e192cd3b472d88b4d4f1489193d3809bcd626b0ad
-F uv/template-download.html eb5ea7f8f3b3942c824177867f4deb396e54e12450701551a0130af770411035
+F uv/template-download.html 20b9ca84f0e0513c001eb0ce404771c49a37415f69b0f1ef770297d6152501bc
 F varFont.tcl 82f177b61927223d6902a4a00870ea5ccbd2015e50a10518fedf67b762e8f588
 F viewerPreferences.tcl 46df744bff022cd12ade22f472d91c14e458faddac51e378a3a069d8b958997c
 F writer.tcl 8811bb2b6cb9e4742c6bf5a713089017e8778fa41356537a7b0787ad35b18835
@@ -498,8 +498,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P c9286403a316c5739a679beb4dd180c29a39bdb825567ba99010826bcfc1e544
-R b1444fd74b553207a599d5dcbfbf2b7a
+P 2521448eab8aa6b70f48a1edb5cba798f1359a6d9128e37cc10e1afdfd2eed75
+R df5cc13008c6c799ca6b8f1c182f7362
 U alex
-Z 29ba359c1f3bd6965c406e9adf03e9e8
+Z b3ebaa2b94bd38427c66f755d71d7889
 # Remove this line to create a well-formed Fossil manifest.
