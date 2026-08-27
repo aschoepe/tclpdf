@@ -65,6 +65,16 @@ proc ::tclpdf::svgPath::operators {data transform {problemVariable {}}} {
   foreach {command arguments} $commands {
     set relative [string is lower -strict $command]
     set upper [string toupper $command]
+    # A LETTER THE GRAMMAR DOES NOT KNOW is an error in the path data like a
+    # missing coordinate (SVG 1.1, 8.3.9), and it is handled the same way:
+    # drawn up to it, dropped from it on, reported through [svg info]. Until
+    # 2026-08-28 the tokenizer matched only the ten command letters, so an
+    # unknown one vanished and its numbers were credited to the command
+    # before it - a silent loss the head of svg.tcl promises never to make.
+    if {![dict exists {M 2 L 2 H 1 V 1 C 6 S 4 Q 4 T 2 A 7 Z 0} $upper]} {
+      set problem $command
+      break
+    }
     set step [dict get {M 2 L 2 H 1 V 1 C 6 S 4 Q 4 T 2 A 7 Z 0} $upper]
     if {$step == 0} {
       append result "h\n"
@@ -339,7 +349,7 @@ proc ::tclpdf::svgPath::Tokenize {data} {
   set command {}
   set numbers {}
   set queue [regexp -all -inline \
-      {[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} $data]
+      {[A-Za-z]|[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} $data]
   while {[llength $queue]} {
     set token [lindex $queue 0]
     set queue [lrange $queue 1 end]
@@ -378,4 +388,4 @@ proc ::tclpdf::svgPath::Point {transform x y} {
   return "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]"
 }
 
-package provide tclpdf::svgPath 1.3
+package provide tclpdf::svgPath 1.4

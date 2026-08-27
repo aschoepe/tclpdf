@@ -41,6 +41,8 @@ set -u
 
 srcdir=`dirname "$0"`/..
 cd "$srcdir" || exit 1
+scratch=`mktemp -d /tmp/tclpdf-check.XXXXXX` || exit 1
+trap 'rm -rf "$scratch"' EXIT
 
 pass=0
 fail=0
@@ -72,7 +74,9 @@ echo "=== 1. the test suite, under every interpreter present ==="
 # is not a byte array.
 for tclsh in tclsh8.6 tclsh9.0; do
   if have $tclsh; then
-    out=`make test TCLSH_PROG=\`command -v $tclsh\` 2>&1 | grep "^all.tcl:"`
+    # -tmpdir keeps the fixtures the tests write out of the working directory
+    # (measured in round 8: two of them stayed behind after every run).
+    out=`make test TCLSH_PROG=\`command -v $tclsh\` TESTFLAGS="-tmpdir $scratch" 2>&1 | grep "^all.tcl:"`
     echo "  $tclsh: $out"
     case "$out" in
       *"Failed	0") report_pass "tests under $tclsh" ;;

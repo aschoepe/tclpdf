@@ -327,7 +327,10 @@ oo::define ::tclpdf::document::document {
     # name every document written before the desc tag was read carried. Kept
     # so that the same script keeps producing the same bytes across releases.
     set identifier [dict get $current identifier]
-    if {$identifier eq {} && [dict get $current profile] eq $::tclpdf::pdfa::icc} {
+    # Compared as normalised paths: the shipped profile reached through a
+    # symbolic link or a relative path is still the shipped profile (round 8).
+    if {$identifier eq {} && [file normalize [dict get $current profile]]
+        eq [file normalize $::tclpdf::pdfa::icc]} {
       set identifier "sRGB IEC61966-2.1"
     }
     if {$identifier eq {}} {
@@ -602,4 +605,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.12
+package provide tclpdf::pdfa 1.13

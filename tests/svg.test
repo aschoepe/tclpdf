@@ -244,6 +244,17 @@ test svg-2.9 {a wrong number of arguments ends the path, it does not throw it aw
 } -result {{0 0 m
 } C}
 
+test svg-2.10 {a command letter the grammar does not know ends the path and is reported} -body {
+  # SVG 1.1, 8.3.9 again, for the other kind of error in path data: a letter
+  # that is no path command. Until 2026-08-28 the tokenizer matched only the
+  # ten command letters, so the X below vanished and "20 20" was credited to
+  # the L before it - the path was drawn wrong and nothing said so, against
+  # the promise at the head of svg.tcl that every loss is reported. The L
+  # stands, the X and everything after it is dropped, and X is the problem.
+  set operators [::tclpdf::svgPath operators {M0 0 L10 10 X20 20 L30 30} $plain problem]
+  list [regexp -all { l\n} $operators] [regexp {30} $operators] $problem
+} -result {1 0 X}
+
 test svg-3.1 {a drawing produces path operators, not an image} -body {
   # The whole point of the module: the drawing stays vectors. If it were
   # rasterised the test would still find an XObject, so the check is for path
