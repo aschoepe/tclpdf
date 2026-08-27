@@ -903,6 +903,109 @@ test colorFontPaint-4.10c {a radial band is a ring of two circles} -body {
       [expr {[lindex $radii 0] > [lindex $radii end]}]
 } -result {0 65 400 50 1}
 
+test colorFontPaint-4.10c1 {every band a radial paints carries a clip of its
+        own} -body {
+  # ONE "re" PER BAND AND ONE BAND PER "sh". The glyph is the square from 100
+  # to 900, whose corners lie 566 from the centre, and the gradient grows
+  # from nought to 1000 - so every level above 566/1000 of the line is a ring
+  # that lies past every corner of the box. Those rings are not painted at
+  # all: 37 bands of the 64 the colour line asks for.
+  #
+  # A band that arrived without a clip would not be an empty region, it would
+  # be the WHOLE box at that band's alpha - the reading [ColorFontPaintPour]
+  # gives the single /ca of a colour line at one alpha. That is how the ring
+  # past the corners used to be painted, and the count of "sh" against the
+  # count of "W*" is what shows it.
+  set doc [cpDocument [list glyph 1 [list radial pad \
+      {{0.0 0 0.0} {1.0 2 1.0}} {500 500} 0 {500 500} 1000]]]
+  set lines [cpLines $doc $::cpMark]
+  $doc destroy
+  set radii {}
+  foreach line $lines {
+    if {[regexp {^([0-9.]+) 500 m$} $line -> x]} {
+      lappend radii [expr {$x - 500}]
+    }
+  }
+  list [llength [lsearch -all -glob $lines "* sh"]] \
+      [llength [lsearch -all -exact $lines "W*"]] \
+      [llength [lsearch -all -glob $lines "* re"]] \
+      [llength $radii] [expr {[::tcl::mathfunc::max {*}$radii] < 566}]
+} -result {37 37 37 36 1}
+
+test colorFontPaint-4.10c2 {a shrinking radial draws the rings its growing
+        twin draws} -body {
+  # THE SAME PICTURE OUT OF THE SAME GLYPH STREAM. r(w) = (r1 - r0) w + r0
+  # runs backwards as readily as forwards, and a colour line that begins at
+  # the wide circle at full opacity and ends at the narrow one at nothing
+  # describes the region its mirror describes - so the clip paths and the
+  # increments have to come out identical, operator for operator. Only the
+  # shading object differs, and it is not in the glyph stream.
+  #
+  # The shrinking half used to draw a 14 pixel dot where the mirror drew the
+  # whole square: the box stood in for the boundary at the SMALL end of the
+  # interval, which turned the ring inside out.
+  set growing [cpDocument [list glyph 1 [list radial pad \
+      {{0.0 0 0.0} {1.0 2 1.0}} {500 500} 0 {500 500} 1000]]]
+  set growingLines [cpLines $growing $::cpMark]
+  $growing destroy
+  set shrinking [cpDocument [list glyph 1 [list radial pad \
+      {{0.0 2 1.0} {1.0 0 0.0}} {500 500} 1000 {500 500} 0]]]
+  set shrinkingLines [cpLines $shrinking $::cpMark]
+  $shrinking destroy
+  list [expr {$growingLines eq $shrinkingLines}] \
+      [llength [lsearch -all -exact $shrinkingLines "W*"]]
+} -result {1 37}
+
+test colorFontPaint-4.10c3 {a radial whose every ring lies past the box
+        paints nothing and is refused} -body {
+  # The glyph is the square from 100 to 900, whose corners lie 566 from the
+  # centre. This colour line fades from opaque to nothing between radius 1000
+  # and 700 and pads at nothing below that, so every band it asks for is a
+  # ring OUTSIDE the box - and a gradient that paints nothing is the same
+  # thing as one that is fully transparent from end to end: the answer is
+  # "empty" from [ColorFontPaintBands], BEFORE the shading object and the
+  # ExtGState are written, and a graph that is nothing but such a fill is
+  # TCLPDF COLORFONT EMPTY.
+  #
+  # Both directions: the shrinking line and the growing mirror of it describe
+  # the same empty region and used to paint the whole square instead, one by
+  # way of the box and one by way of a band with no clip at all.
+  set codes {}
+  set shadings {}
+  foreach paint {{radial pad {{0.0 0 1.0} {0.3 2 0.0}} {500 500} 1000
+          {500 500} 0}
+      {radial pad {{0.7 2 0.0} {1.0 0 1.0}} {500 500} 0 {500 500} 1000}} {
+    set doc [tclpdf new -unit pt]
+    $doc page add
+    lappend codes [lrange [::tclpdfTest::refusal {$doc colorFont marks \
+        -data [cpFace [list glyph 1 $paint]] -chars $::cpMark}] 0 2]
+    lappend shadings [llength [::tclpdfTest::objects $doc /ShadingType]]
+    $doc destroy
+  }
+  list {*}$codes {*}$shadings
+} -result {{TCLPDF COLORFONT EMPTY} {TCLPDF COLORFONT EMPTY} 0 0}
+
+test colorFontPaint-4.10c4 {and it leaves no shading object behind} -body {
+  # The refusal above is only reached where the whole graph paints nothing.
+  # Beside a layer that does draw, the empty gradient simply contributes
+  # nothing - and the file must not hold a shading for it: an object no
+  # reader reaches is what [ColorFontPaintBands] answers "empty" before
+  # writing in the first place, and every validator counts it.
+  #
+  # Layer 0 is the ring past every corner of the square, layer 1 a radial on
+  # the bar that draws. ONE shading in the document, not two.
+  set doc [cpDocument {layers 0 2} layers {
+      {glyph 1 {radial pad {{0.0 0 1.0} {0.3 2 0.0}} {500 500} 1000
+          {500 500} 0}}
+      {glyph 3 {radial pad {{0.0 0 1.0} {1.0 2 0.0}} {500 500} 50
+          {500 500} 400}}}]
+  set lines [cpLines $doc $::cpMark]
+  set shadings [::tclpdfTest::objects $doc /ShadingType]
+  $doc destroy
+  list [llength $shadings] [llength [lsearch -all -glob $lines "* sh"]] \
+      [lsearch -inline -glob $lines "* 400 m"]
+} -result {1 65 {150 400 m}}
+
 test colorFontPaint-4.10d {a cone that is not nested keeps the soft mask} -body {
   # |c1-c0| >= |r1-r0|: the family's circles cross one another and the region
   # between two of them is not a ring, so there is no ring to clip to. The

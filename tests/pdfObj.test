@@ -49,6 +49,24 @@ test pdfObj-num-1.7 {infinity has no PDF spelling} -body {
   ::tclpdf::pdfObj num Inf
 } -returnCodes error -match glob -result {tclpdf: number has no PDF representation*}
 
+test pdfObj-num-1.7.1 {NaN is refused in the package's own words} -body {
+  # THE ORDER IS THE TEST. [format %.5f NaN] throws on its own - "floating
+  # point value is Not a Number" with -errorcode TCL VALUE DOUBLE NAN - so a
+  # guard placed BEHIND the formatting never runs for NaN, and the last line
+  # of defence of the whole package answers in Tcl's words for every value
+  # that reaches it (measured 2026-08-27 under 8.6.18 and 9.0.4). Every
+  # number written by any module goes through [num]; this is the one place
+  # that has to hold. -NaN and the lowercase spelling take the same path.
+  set answers {}
+  foreach value {NaN nan -NaN} {
+    catch {::tclpdf::pdfObj num $value} message options
+    lappend answers [dict get $options -errorcode] \
+        [string match {tclpdf: *} $message]
+  }
+  set answers
+} -result {{TCLPDF PDFOBJ NUMBER NaN} 1 {TCLPDF PDFOBJ NUMBER nan} 1\
+    {TCLPDF PDFOBJ NUMBER -NaN} 1}
+
 test pdfObj-num-1.8 {a magnitude beyond the PDF real range is refused} -body {
   # ISO 32000-1, Annex C.2: a PDF real reaches about +/-3.403e38. Fixed
   # notation would write 1e300 as three hundred digits, and qpdf then

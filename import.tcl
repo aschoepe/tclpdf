@@ -91,11 +91,8 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF IMPORT NAME $alias] \
           "tclpdf: a form named \"$alias\" already exists"
     }
-    if {![file exists $path]} {
-      return -code error -errorcode {TCLPDF IMPORT FILE} \
-          "tclpdf: pdf import: no file \"$path\""
-    }
-
+    # A missing path, a directory, an unreadable file: the reader refuses
+    # them at its entry, in this package's words (importRead.tcl, Open).
     set reader [::tclpdf::importRead::Open $path]
     set pageDict [::tclpdf::importRead::Page reader $page]
 
@@ -849,4 +846,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.6
+package provide tclpdf::import 1.7

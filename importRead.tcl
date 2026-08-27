@@ -42,7 +42,12 @@ namespace eval ::tclpdf::importRead {}
 #   b true|false        boolean
 #   z {}                null
 # Keeping numbers as written means a copied object round-trips
-# byte-comparably. Names and strings are decoded: strings because their
+# byte-comparably - which is why the number token is checked against the
+# whole grammar of 7.3.3 where it is read: what is kept as written and
+# written back unchanged has to be valid before it is kept. That check
+# reaches objects only; content streams are copied byte for byte, so an
+# exponential number inside a stream passes through untouched.
+# Names and strings are decoded: strings because their
 # escapes must be understood to find the closing parenthesis at all, names
 # because every Get compares plain text - /Ro#74ate IS /Rotate (7.3.5.2).
 # Serialize re-escapes both on the way out.
@@ -150,6 +155,28 @@ proc ::tclpdf::importRead::ParseToken {bytes posVar} {
         incr pos
     }
     return [string range $bytes $start [expr {$pos - 1}]]
+}
+
+# A TOKEN OF DECIMAL DIGITS AS THE NUMBER IT MEANS. "An integer shall be
+# written as one or more decimal digits optionally preceded by a sign"
+# (7.3.3), so 0007 is seven and a file that writes "0007 0 R" or "0007 0 obj"
+# is not damaged - qpdf reads it as object 7. Tcl does not, twice over: [expr]
+# reads a leading zero as octal under 8.6, where 0010 is eight and 008 is no
+# number at all and compares silently as zero, and as decimal under 9, so the
+# same file was read two ways; and a plain string comparison against the
+# cross-reference number makes "0007" and "7" two different objects.
+#
+# One helper for the three places a written number becomes a number the reader
+# works with: the "num gen R" lookahead, the "num gen obj" header, and the
+# header of an object stream. Trimming rather than [scan %lld], which is exact
+# at any length. What is NOT normalised is a plain number object - that one is
+# kept as written, so a copied object still round-trips byte for byte.
+proc ::tclpdf::importRead::Decimal {digits} {
+    set value [string trimleft $digits 0]
+    if {$value eq {}} {
+        return 0
+    }
+    return $value
 }
 
 # One object, starting at pos; pos ends up behind it. keywordVar receives a
@@ -267,21 +294,51 @@ proc ::tclpdf::importRead::Parse {bytes posVar {depth 0}} {
             return [list h $hex]
         }
         {[-+.0-9]} {
+            set start $pos
             set number [ParseToken $bytes pos]
+            # THE WHOLE NUMBER GRAMMAR, not just its first byte (7.3.3). An
+            # integer is "one or more decimal digits optionally preceded by a
+            # sign", a real the same with one leading, trailing or embedded
+            # PERIOD - and the standard says in as many words that a writer
+            # "shall not use the PostScript language syntax for numbers with
+            # non-decimal radices (such as 16#FFFE) or in exponential format
+            # (such as 6.02E23)". Everything that starts like a number used to
+            # become one here and Serialize wrote it back byte for byte, so a
+            # foreign /ca 1e3 left this package again as /ca 1e3 and qpdf read
+            # "unknown token while reading object; treating as string": tclpdf
+            # answered an invalid file with an invalid file of its own. The
+            # token is refused, NOT normalised - 1e3 turned into 1000 would
+            # quietly decide what a damaged file meant.
+            #
+            # THE LIMIT OF THIS CHECK: it guards objects. Content streams are
+            # copied byte for byte (only [Unmark] walks one, with a tokenizer
+            # of its own), so an exponential number INSIDE a stream travels
+            # through this package untouched.
+            if {![regexp {^[+-]?(\d+\.?\d*|\.\d+)$} $number]} {
+                return -code error -errorcode {TCLPDF IMPORT SYNTAX} \
+                    "tclpdf: \"$number\" at offset $start of the imported PDF\
+                    is not a number ISO 32000-2, 7.3.3 allows - digits with\
+                    an optional sign and at most one period, and no\
+                    exponential or radix form"
+            }
             # "num gen R" is one object; the lookahead is undone when the
-            # two following tokens are not "gen R".
-            if {[string is entier -strict $number]} {
+            # two following tokens are not "gen R". Both halves are plain
+            # digits (7.3.10), which is stricter than [string is entier]: that
+            # accepts 0x10 and 0b1, and a file saying "0x10 0 R" used to be
+            # read as a reference to object sixteen.
+            if {[regexp {^\d+$} $number]} {
                 set mark $pos
                 SkipWs $bytes pos
                 if {[string match {[0-9]} [string index $bytes $pos]]} {
                     set gen [ParseToken $bytes pos]
                     SkipWs $bytes pos
-                    if {[string is entier -strict $gen]
+                    if {[regexp {^\d+$} $gen]
                             && [string index $bytes $pos] eq "R"
                             && [Delimiter [string index $bytes \
                                 [expr {$pos + 1}]]]} {
                         incr pos
-                        return [list r [list $number $gen]]
+                        return [list r \
+                            [list [Decimal $number] [Decimal $gen]]]
                     }
                 }
                 set pos $mark
@@ -443,6 +500,27 @@ proc ::tclpdf::importRead::Put {valueVar key item} {
 # is the refusal: an import or an update that got a reader for an encrypted
 # file would produce a document made of cipher text.
 proc ::tclpdf::importRead::Open {path {tolerateEncrypted 0}} {
+    # THE FILE, LOOKED AT BEFORE IT IS OPENED - here, at the one entry every
+    # reading command goes through (pdf info, pages, fonts, metadata, fields,
+    # pdf import, update open), so that a path someone typed is refused the
+    # way this package refuses everything, naming itself and the path, and
+    # not as Tcl's bare "couldn't open". Three cases, told apart the way
+    # ::tclpdf::io tells them apart (io.tcl), because what the caller has to
+    # do about each differs: a DIRECTORY exists, and [open] on one succeeds -
+    # the raw "illegal operation on a directory" used to arrive from [read]
+    # afterwards under POSIX EISDIR; an unreadable file arrived as EACCES.
+    if {![file exists $path]} {
+        return -code error -errorcode {TCLPDF IMPORT FILE} \
+            "tclpdf: no file \"$path\""
+    }
+    if {[file isdirectory $path]} {
+        return -code error -errorcode {TCLPDF IMPORT FILE} \
+            "tclpdf: \"$path\" is a directory, not a PDF file"
+    }
+    if {![file readable $path]} {
+        return -code error -errorcode {TCLPDF IMPORT FILE} \
+            "tclpdf: \"$path\" is not readable"
+    }
     set channel [open $path rb]
     set bytes [read $channel]
     close $channel
@@ -732,6 +810,21 @@ proc ::tclpdf::importRead::StreamSection {readerVar pos} {
                 }
                 1 {Enter reader [expr {$first + $i}] [list o $f2]}
                 2 {Enter reader [expr {$first + $i}] [list c $f2 $f3]}
+                default {
+                    # "In PDF 1.5 through PDF 2.0, only types 0, 1, and 2 are
+                    # allowed. Any other value shall be interpreted as a
+                    # reference to the null object, thus permitting new entry
+                    # types to be defined in the future" (7.5.8.3). A type
+                    # nobody skipped was left out of the table altogether, and
+                    # the object it stands for was then "referenced but not in
+                    # the cross-reference" - a file the standard defines as
+                    # readable was refused. Recorded as free, which resolves
+                    # to null in [Object] AND shadows a live entry an older
+                    # section carries for the same number, the same way type 0
+                    # does. qpdf 12.4.0 hands out the older object there; the
+                    # standard says the newest section decides.
+                    Enter reader [expr {$first + $i}] f
+                }
             }
         }
     }
@@ -777,7 +870,7 @@ proc ::tclpdf::importRead::ObjectAt {readerVar offset {expect {}}} {
         return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
             [dict get $reader path]: no object at offset $offset"
     }
-    if {$expect ne {} && $found ne $expect} {
+    if {$expect ne {} && [Decimal $found] ne [Decimal $expect]} {
         return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
             [dict get $reader path]: the cross-reference points object $expect\
             at offset $offset, where object $found is written"
@@ -815,6 +908,69 @@ proc ::tclpdf::importRead::ObjectAt {readerVar offset {expect {}}} {
             /Length $length but does not end at endstream"
     }
     return [list $value 1 $data]
+}
+
+# THE HEADER OF AN OBJECT STREAM, read once per container and bounded by the
+# bytes that are actually there (7.5.7, Table 16). /N and /First arrive from
+# the file, and until 2026-08-27 only their type was checked: the walk then
+# read "2 * /N" tokens from wherever it got to, so a 400-byte file saying
+# /N 20000000 spent 78 seconds and 3.4 GB building a list of empty strings -
+# and was ACCEPTED at the end of it, because the one slot the caller wanted
+# happened to be there. Work has to follow the file, not a number in it.
+#
+# Three bounds, in this order: /First lies inside the decoded stream; the
+# header before /First cannot hold more than one pair per four bytes ("1 0 "
+# is the shortest, and only the last pair may go without its separator); and
+# every one of the 2N words is a non-negative integer whose offset stays
+# inside the object part. The order of the offsets is NOT checked - the
+# standard has them increasing, but files with them out of order are readable
+# and qpdf reads them, so refusing would turn a working file away.
+#
+# The same bound is the reason the header is parsed here rather than at every
+# lookup: it is the file's own header, one per object stream, and the callers
+# below share it.
+proc ::tclpdf::importRead::ObjstmHeader {readerVar container data first n} {
+    upvar 1 $readerVar reader
+    set length [string length $data]
+    if {$first > $length} {
+        return -code error -errorcode {TCLPDF IMPORT OBJSTM} "tclpdf:\
+            [dict get $reader path]: object stream $container says its first\
+            object begins at byte $first, past the $length bytes of its\
+            decoded stream"
+    }
+    if {$n > ($first + 1) / 4} {
+        return -code error -errorcode {TCLPDF IMPORT OBJSTM} "tclpdf:\
+            [dict get $reader path]: object stream $container announces $n\
+            objects, more than the $first bytes before its first object can\
+            number"
+    }
+    set head [string range $data 0 [expr {$first - 1}]]
+    set room [expr {$length - $first}]
+    set pos 0
+    set header {}
+    for {set i 0} {$i < 2 * $n} {incr i} {
+        SkipWs $head pos
+        set word [ParseToken $head pos]
+        set pair [expr {$i / 2 + 1}]
+        set what [expr {$i % 2 ? "offset" : "object number"}]
+        if {![regexp {^\d+$} $word]} {
+            return -code error -errorcode {TCLPDF IMPORT OBJSTM} "tclpdf:\
+                [dict get $reader path]: the header of object stream\
+                $container reads \"$word\" where the $what of its pair $pair\
+                belongs"
+        }
+        # Through [Decimal] like every other written number: "008" is a legal
+        # header word, and expr reads it as octal.
+        set value [Decimal $word]
+        if {$i % 2 && $value >= $room} {
+            return -code error -errorcode {TCLPDF IMPORT OBJSTM} "tclpdf:\
+                [dict get $reader path]: the header of object stream\
+                $container puts its object $pair at $value bytes behind\
+                /First, past the $room bytes that follow it"
+        }
+        lappend header $value
+    }
+    return $header
 }
 
 # The object by number, through the cross-reference - directly stored or
@@ -879,9 +1035,12 @@ proc ::tclpdf::importRead::Object {readerVar number} {
                             "tclpdf: [dict get $reader path]: object stream\
                             $container has no usable /N and /First"
                     }
-                    dict set reader buffers $container [list $data $first $n]
+                    dict set reader buffers $container \
+                        [list $data $first $n \
+                            [ObjstmHeader reader $container $data $first $n]]
                 }
-                lassign [dict get $reader buffers $container] data first n
+                lassign [dict get $reader buffers $container] \
+                    data first n header
                 # The cross-reference says object "number" is the index-th of
                 # the stream; a stream of n objects has none beyond n - 1, and
                 # asking for one reads an empty offset out of the header.
@@ -892,20 +1051,8 @@ proc ::tclpdf::importRead::Object {readerVar number} {
                         said to be number $index of object stream $container,\
                         which holds $n"
                 }
-                set pos 0
-                set header {}
-                for {set i 0} {$i < 2 * $n} {incr i} {
-                    SkipWs $data pos
-                    lappend header [ParseToken $data pos]
-                }
-                set offset [lindex $header [expr {2 * $index + 1}]]
-                if {![string is entier -strict $offset] || $offset < 0} {
-                    return -code error -errorcode {TCLPDF IMPORT OBJSTM} \
-                        "tclpdf: [dict get $reader path]: the header of\
-                        object stream $container carries no offset for\
-                        object $number"
-                }
-                set pos [expr {$first + $offset}]
+                set pos [expr {$first + [lindex $header \
+                    [expr {2 * $index + 1}]]}]
                 set object [list [Parse $data pos] 0 {}]
             }
         }
@@ -1555,4 +1702,4 @@ proc ::tclpdf::importRead::UnmarkInlineImage {content length posVar} {
 
 # ------------------------------------------------------------ the takeover
 
-package provide tclpdf::importRead 1.4
+package provide tclpdf::importRead 1.5

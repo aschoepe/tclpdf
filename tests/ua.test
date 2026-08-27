@@ -736,6 +736,130 @@ test ua-11.4 {a single unlabelled item is counted, not the whole list} -constrai
       no Lbl*" $err]
 } -result {1 1}
 
+# --- lists under part 2 ----------------------------------------------------
+#
+# Where the two parts part company. ISO 14289-1, 7.6 asks for "an explicit
+# ListNumbering attribute ... for L tags in ordered lists" and stops there,
+# so None with labels is a list of arbitrary markers and legal - ua-11.3
+# above says so for part 1 and stays as it is. ISO 14289-2, 8.2.5.25 adds
+# the sentence part 1 has not: "If Lbl structure elements are present, the
+# ListNumbering attribute ... shall be present ... in such cases the value
+# None shall not be used."
+#
+# Measured before the check existed: veraPDF 1.30 failed the file tclpdf
+# wrote under ua2 with 8.2.5.25 test 1 and passed the same tree under ua1.
+# ua-11.8 keeps that measurement in the suite rather than in a report.
+
+# A list built with one Lbl per item, which is the shape both clauses talk
+# about; the -numbering is what each test varies.
+proc labelledList {doc numbering} {
+  set options {}
+  if {$numbering ne {}} {
+    set options [list -numbering $numbering]
+  }
+  $doc structure L {*}$options -script {
+    $doc structure LI -script {
+      $doc structure Lbl -script {$doc text "*" -at {20 50}}
+      $doc structure LBody -script {$doc text "Anmerkung" -at {28 50}}
+    }
+  }
+  return
+}
+
+test ua-11.5 {UA-2 refuses None where the items carry a Lbl, in either order} -constraints {haveFace haveTdom} -body {
+  # Both call orders, because the claim may be made before the list is drawn
+  # or after it: the check runs at write time and has to see the same thing.
+  # The refusal names the clause and a way out that part 2 actually takes.
+  set first [accessible $face]
+  labelledList $first None
+  $first ua -part 2
+  set late [::tclpdfTest::refusalCode {$first write \
+      [::tclpdfTest::scratch ua-list-two-none.pdf]}]
+  set message {}
+  catch {$first write [::tclpdfTest::scratch ua-list-two-none.pdf]} message
+  $first destroy
+  set second [accessible $face]
+  $second ua -part 2
+  labelledList $second None
+  set early [::tclpdfTest::refusalCode {$second write \
+      [::tclpdfTest::scratch ua-list-two-none2.pdf]}]
+  $second destroy
+  list $late $early [string match "*list 1 is numbered None but its items\
+      carry a Lbl*" $message] [string match "*8.2.5.25*" $message] \
+      [string match "*Disc, Circle, Square*" $message] \
+      [string match "*PDF/UA-1 takes None here and is unchanged*" $message]
+} -result {{TCLPDF UA CLAIM problems} {TCLPDF UA CLAIM problems} 1 1 1 1}
+
+test ua-11.6 {UA-2 keeps refusing a missing -numbering, and no longer offers None} -constraints {haveFace haveTdom} -body {
+  # Unchanged in what it does - ua-11.2 is the same refusal under part 1 -
+  # and changed in what it advises: naming None to a part-2 caller would
+  # send them straight into ua-11.5.
+  set doc [accessible $face]
+  labelledList $doc {}
+  $doc ua -part 2
+  set code [catch {$doc write [::tclpdfTest::scratch ua-list-two-nonum.pdf]} err]
+  $doc destroy
+  list $code [string match "*list 1: its items carry a Lbl but the list says\
+      no -numbering*" $err] [string match "*or None*" $err] \
+      [string match "*Unordered*" $err] [string match "*8.2.5.25*" $err]
+} -result {1 1 0 1 1}
+
+test ua-11.7 {UA-1 with None and labels stays conformant, veraPDF included} -constraints {haveFace haveTdom} -body {
+  # The part-1 half of the split, measured with the validator rather than
+  # only with the package: the same tree ua-11.5 refuses under part 2.
+  set doc [accessible $face]
+  labelledList $doc None
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-list-one-none.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  set report [expr {$code ? $err : [::tclpdfTest::verapdf $path ua1]}]
+  file delete $path
+  list $code $report
+} -result {0 ok}
+
+test ua-11.8 {UA-2 with Disc passes, and only the value the check refuses makes veraPDF fail} -constraints {haveFace haveTdom} -body {
+  # The counter-proof that the refusal is about something a validator sees.
+  # /Disc and /None are the same five bytes, so the mutation changes the
+  # value and no offset in the file; what comes back is 8.2.5.25 test 1 and
+  # nothing else.
+  set doc [accessible $face]
+  labelledList $doc Disc
+  $doc ua -part 2
+  set path [::tclpdfTest::scratch ua-list-two-disc.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set clean [::tclpdfTest::verapdf $path ua2]
+  set count [regexp -all {/ListNumbering /Disc} $bytes]
+  set mutated [string map {{/ListNumbering /Disc} {/ListNumbering /None}} $bytes]
+  set broken [::tclpdfTest::scratch ua-list-two-mutated.pdf]
+  ::tclpdf::io write $broken $mutated
+  set report [::tclpdfTest::verapdf $broken ua2]
+  file delete $path $broken
+  list $count [expr {[string length $bytes] == [string length $mutated]}] \
+      $clean [expr {$report eq "ok" ? "not seen" :
+          [regexp {clause="8\.2\.5\.25" testNumber="1" status="failed"} $report]}]
+} -result {1 1 ok 1}
+
+test ua-11.9 {the refused claim leaves no file and no changed document} -constraints {haveFace haveTdom} -body {
+  # Checked before anything is written: the refusal comes out of the catalog
+  # pass, so there is no half a file on disk and the caller can fix the
+  # attribute and write the same document again.
+  set doc [accessible $face]
+  $doc ua -part 2
+  labelledList $doc None
+  set before [list [$doc ua state] [$doc structureReport] [$doc page count]]
+  set path [::tclpdfTest::scratch ua-list-two-refused.pdf]
+  file delete $path
+  set code [catch {$doc write $path} err]
+  set after [list [$doc ua state] [$doc structureReport] [$doc page count]]
+  set again [catch {$doc write $path} second]
+  $doc destroy
+  list $code [file exists $path] [expr {$before eq $after}] $again \
+      [expr {$err eq $second}]
+} -result {1 0 1 1 1}
+
 # --- the revision year ----------------------------------------------------
 
 test ua-12.1 {-revision is a four-digit year, and nothing else} -constraints haveTdom -body {

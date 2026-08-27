@@ -41,7 +41,9 @@
 #                as the columns they cover
 #   lists        7.6 - an ordered list names its numbering and its items
 #                carry a Lbl; items with a Lbl under a list that says
-#                nothing are refused the other way round
+#                nothing are refused the other way round. Under part 2,
+#                UA-2 8.2.5.25 also rules out None where a Lbl is present
+#                - part 1 takes it and is unchanged
 #   contents     UA-2 8.2.5.8 - every TOCI of a table of contents names the
 #                element it points at, through -ref; part 1 asks for none
 #   graphics     7.1, 7.3 - a picture, drawing or form placement is either
@@ -610,12 +612,40 @@ oo::define ::tclpdf::document::document {
   # with a Lbl under a list that says nothing leave the reader guessing what
   # the labels are.
   #
+  # None with labels is where the two parts differ, and PART 2 says the
+  # narrower thing. ISO 14289-1, 7.6 asks for "an explicit ListNumbering
+  # attribute ... for L tags in ordered lists" and nothing more, so a list of
+  # arbitrary markers may say None under part 1 - measured, not assumed:
+  # veraPDF 1.30 passes that file under ua1. ISO 14289-2, 8.2.5.25 adds the
+  # sentence part 1 has not - "If Lbl structure elements are present, the
+  # ListNumbering attribute ... shall be present ... in such cases the value
+  # None shall not be used" - and veraPDF fails the same file under ua2 with
+  # 8.2.5.25 test 1. Split by part rather than tightened for both, for the
+  # reason [UaCheckFields] gives at its own part-2-only clause: demanding it
+  # under part 1 as well would be this package inventing a rule.
+  #
+  # The way out under part 2 is a value that names the scheme the labels
+  # actually use. Disc, Circle and Square are the unordered ones every reader
+  # knows (ISO 32000-1, Table 347); PDF 2.0 added Unordered, Description and
+  # Ordered (ISO 32000-2, Table 369), and part 2 is a 2.0 format, so those
+  # are open too - but only to a list drawn after [$doc ua -part 2], which is
+  # what raises the file version. Hence the 1.7 names first.
+  #
   # The facts come from [structureReport], one entry per L; judged here.
   method UaCheckLists {} {
     if {![my tagged]} {
       return {}
     }
     set problems {}
+    set two [expr {[dict get [my state ua] part] == 2}]
+    if {$two} {
+      set names "Disc, Circle, Square, Decimal, ... - or Unordered, which\
+          needs the list drawn after \[\$doc ua -part 2\]"
+      set clause "ISO 14289-2, 8.2.5.25"
+    } else {
+      set names "Decimal, Disc, ... or None"
+      set clause "7.6, Matterhorn 16-001"
+    }
     set index 0
     foreach list [dict get [my structureReport] lists] {
       incr index
@@ -627,8 +657,15 @@ oo::define ::tclpdf::document::document {
             put the number in \[\$doc structure Lbl\] inside each LI (7.6)"
       } elseif {$numbering eq {} && $labelled} {
         lappend problems "list $index: its items carry a Lbl but the list\
-            says no -numbering - name it (Decimal, Disc, ...) or None on\
-            \[\$doc structure L\] (7.6, Matterhorn 16-001)"
+            says no -numbering - name it ($names) on \[\$doc structure L\]\
+            ($clause)"
+      } elseif {$two && $numbering eq {None} && $labelled} {
+        lappend problems "list $index is numbered None but its items carry a\
+            Lbl - PDF/UA-2 does not allow that value where Lbl elements are\
+            present ($clause), however arbitrary the markers look; name the\
+            scheme they come closest to ($names) on \[\$doc structure L\], or\
+            drop the Lbl elements. PDF/UA-1 takes None here and is unchanged\
+            (7.6)"
       }
     }
     return $problems
@@ -860,4 +897,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.7
+package provide tclpdf::ua 1.8

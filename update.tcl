@@ -229,14 +229,66 @@ proc ::tclpdf::update::Unknown {ensemble subcommand args} {
       known [expr {[llength $known] == 1 ? {is} : {are}}]: [join $known {, }]"
 }
 
+# THE READER'S REFUSALS, IN THIS MODULE'S TOPIC. Every call into importRead
+# goes through here, the constructor's [Open] and the deferred ones alike:
+# [body] and [replace] read an object the first time they are asked for it,
+# so a damaged file refuses HERE, long after [update open] answered.
+#
+# The manual says of [update open] that "its refusals carry TCLPDF UPDATE",
+# and that is a promise about the whole session, not about the one command.
+# So the TOPIC word is rewritten and the CLASS word is kept exactly as the
+# reader wrote it - TCLPDF IMPORT OBJECT reaches the caller as TCLPDF UPDATE
+# OBJECT - because the class says what the caller has to do about it, and
+# that does not change with the command that ran into it. The message is the
+# reader's own: it names the offset, the object or the byte that is wrong,
+# and nothing here knows better.
+#
+# One place, not one per call site: the rewrite is a rule of the module, and
+# a second copy of it is the copy that gets forgotten when a class word is
+# added to the reader.
+proc ::tclpdf::update::Reader {script} {
+  try {
+    return [uplevel 1 $script]
+  } trap {TCLPDF IMPORT} {message options} {
+    return -code error \
+        -errorcode [lreplace [dict get $options -errorcode] 1 1 UPDATE] \
+        $message
+  }
+}
+
 oo::class create ::tclpdf::update::Session {
   variable tclpdfReader tclpdfPath tclpdfBase tclpdfPrev tclpdfHigh \
       tclpdfBodies tclpdfOrder tclpdfOverrides tclpdfId
 
   constructor {path} {
+    # THE FILE ITSELF, BEFORE THE READER SEES IT. [open] on a path that is
+    # not there, is a directory, or cannot be read answers Tcl's own POSIX
+    # error - ENOENT, EISDIR, EACCES - and a caller who trapped TCLPDF
+    # UPDATE, as the manual tells them to, does not see the commonest
+    # failure of all (measured 2026-08-27). The three are asked here, in the
+    # words of ::tclpdf::io read (io.tcl), under the class the reader
+    # already uses for "this file is not one this package can work from".
+    if {![file exists $path]} {
+      return -code error -errorcode [list TCLPDF UPDATE FILE $path] \
+          "tclpdf: \"$path\" does not exist - an update continues a file\
+          that is already there"
+    }
+    if {[file isdirectory $path]} {
+      return -code error -errorcode [list TCLPDF UPDATE FILE $path] \
+          "tclpdf: \"$path\" is a directory, not a file"
+    }
+    if {![file readable $path]} {
+      return -code error -errorcode [list TCLPDF UPDATE FILE $path] \
+          "tclpdf: \"$path\" is not readable - an update reads the whole\
+          file before it appends to it"
+    }
+
     # The reader does the reading AND the refusing: a file without a
     # startxref and a circular /Prev chain are its errors, and they are the
     # errors an update has to make as well.
+    #
+    # THEY ARE ITS ERRORS, BUT NOT ITS TOPIC: [Reader] above rewrites the
+    # topic word and keeps the class word, here and at every later read.
     #
     # ENCRYPTION IS THE ONE IT ANSWERS FOR ITSELF. The reader refuses an
     # encrypted file in the words of the IMPORT - "encrypted files are not
@@ -248,7 +300,9 @@ oo::class create ::tclpdf::update::Session {
     # would have to be encrypted with the file's own key, which this package
     # has no way of deriving - so the file is opened TOLERATING it and the
     # sentence is made here.
-    set tclpdfReader [::tclpdf::importRead::Open $path 1]
+    set tclpdfReader [::tclpdf::update::Reader {
+      ::tclpdf::importRead::Open $path 1
+    }]
     if {[::tclpdf::importRead::Get \
             [dict get $tclpdfReader trailer] Encrypt] ne {}} {
       return -code error -errorcode {TCLPDF UPDATE ENCRYPTED} \
@@ -446,7 +500,9 @@ oo::class create ::tclpdf::update::Session {
       return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
           "tclpdf: no such object: $number"
     }
-    lassign [::tclpdf::importRead::Object tclpdfReader $number] value hasStream data
+    lassign [::tclpdf::update::Reader {
+      ::tclpdf::importRead::Object tclpdfReader $number
+    }] value hasStream data
     set body [my Text $value]
     if {$hasStream} {
       append body "\nstream\n$data\nendstream"
@@ -644,6 +700,13 @@ oo::class create ::tclpdf::update::Session {
   # reference on an IMPORT is the identity here: an update writes into the
   # file's own numbering, so every number stays the one it was.
   method Text {value} {
+    # NOT wrapped in [Reader], and measured rather than assumed: the two
+    # refusals below it are unreachable from here. Refs and Serialize refuse
+    # past a nesting of 500, and the parser refuses past the same 500 while
+    # reading (TCLPDF IMPORT DEPTH, measured 2026-08-27 at 502) - so nothing
+    # that got this far is deep enough. Serialize's other refusal is a
+    # reference the map has not got, and the map IS the references of this
+    # very value.
     set map {}
     foreach number [::tclpdf::importRead::Refs $value] {
       dict set map $number $number
@@ -673,8 +736,10 @@ oo::class create ::tclpdf::update::Session {
           update writes generation 0 - the two are different objects, not two\
           versions of one"
     }
-    set type [lindex [::tclpdf::importRead::Get \
-        [lindex [::tclpdf::importRead::Object tclpdfReader $number] 0] Type] 1]
+    set type [lindex [::tclpdf::importRead::Get [lindex [\
+        ::tclpdf::update::Reader {
+          ::tclpdf::importRead::Object tclpdfReader $number
+        }] 0] Type] 1]
     if {$type eq "ObjStm"} {
       return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
           "tclpdf: object $number of\
@@ -728,4 +793,4 @@ oo::class create ::tclpdf::update::Session {
   }
 }
 
-package provide tclpdf::update 1.2
+package provide tclpdf::update 1.3

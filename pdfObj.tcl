@@ -32,12 +32,19 @@ proc ::tclpdf::pdfObj::num {value {digits 5}} {
     return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
         "tclpdf: not a number: \"$value\""
   }
-  set result [format %.*f $digits $value]
   # Infinity and NaN survive "string is double" but have no PDF spelling.
-  if {[string match -nocase *inf* $result] || [string match -nocase *nan* $result]} {
+  #
+  # ASKED BEFORE [format], NOT AFTER. Measured 2026-08-27 under 8.6.18 and
+  # 9.0.4: [format %.5f NaN] throws on its own ("floating point value is Not
+  # a Number", -errorcode TCL VALUE DOUBLE NAN), so a guard behind it never
+  # runs for NaN and the last line of defence answers in Tcl's words instead
+  # of the package's. The comparisons below carry NaN safely - "$value !=
+  # $value" is true for it and throws nothing, while abs() would throw.
+  if {$value != $value || $value == Inf || $value == -Inf} {
     return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
         "tclpdf: number has no PDF representation: \"$value\""
   }
+  set result [format %.*f $digits $value]
   # Neither has a magnitude beyond what a PDF real holds (ISO 32000-1,
   # Annex C.2: about +/-3.403e38). Fixed notation writes it anyway, as a
   # number of hundreds of digits - and a reader refuses that: qpdf reports
@@ -306,4 +313,4 @@ proc ::tclpdf::pdfObj::Utf16Be {value} {
   return $result
 }
 
-package provide tclpdf::pdfObj 1.6
+package provide tclpdf::pdfObj 1.7

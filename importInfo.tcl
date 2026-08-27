@@ -60,17 +60,17 @@ proc ::tclpdf::pdf::Unknown {ensemble subcommand args} {
 }
 
 proc ::tclpdf::pdf::pages {path} {
-  set reader [::tclpdf::pdf::Reader $path]
+  set reader [::tclpdf::importRead::Open $path]
   return [::tclpdf::pdf::PageInventory reader]
 }
 
 proc ::tclpdf::pdf::fonts {path} {
-  set reader [::tclpdf::pdf::Reader $path]
+  set reader [::tclpdf::importRead::Open $path]
   return [::tclpdf::pdf::FontInventory reader]
 }
 
 proc ::tclpdf::pdf::metadata {path} {
-  set reader [::tclpdf::pdf::Reader $path]
+  set reader [::tclpdf::importRead::Open $path]
   return [::tclpdf::pdf::Metadata reader]
 }
 
@@ -87,27 +87,14 @@ proc ::tclpdf::pdf::fields {path args} {
   # No "tolerate encrypted" here, on purpose: [pdf info] can report what an
   # encrypted file says out of its trailer, and a field cannot say anything
   # out of one - its name and its value are strings.
-  set reader [::tclpdf::pdf::Reader $path]
+  set reader [::tclpdf::importRead::Open $path]
   return [::tclpdf::pdf::FieldInventory reader $xfa]
-}
-
-# The file, looked at before it is opened. These four commands are pointed at
-# a path someone typed, and a missing one has to be refused the way this
-# package refuses everything - naming itself and the path - rather than
-# arriving as Tcl's bare "couldn't open". [pdf import] makes the same check
-# before it opens anything, for the same reason.
-proc ::tclpdf::pdf::Reader {path {tolerateEncrypted 0}} {
-  if {![file exists $path]} {
-    return -code error -errorcode {TCLPDF IMPORT FILE} \
-        "tclpdf: no file \"$path\""
-  }
-  return [Open $path $tolerateEncrypted]
 }
 
 # -------------------------------------------------------------- the document
 
 proc ::tclpdf::pdf::Inventory {path} {
-  set reader [Reader $path 1]
+  set reader [::tclpdf::importRead::Open $path 1]
   set bytes [dict get $reader bytes]
 
   # Every key is always there, with an empty value where the file has nothing
@@ -1325,4 +1312,4 @@ namespace eval ::tclpdf::pdf {
   unset tclpdfTable tclpdfCode tclpdfTarget
 }
 
-package provide tclpdf::importInfo 1.3
+package provide tclpdf::importInfo 1.4

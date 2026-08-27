@@ -199,7 +199,50 @@ test import-3.6 {a missing file is refused by name} -body {
     set result [catch {$doc pdf import x /no/such/file.pdf} message]
     $doc destroy
     list $result $message
-} -result {1 {tclpdf: pdf import: no file "/no/such/file.pdf"}}
+} -result {1 {tclpdf: no file "/no/such/file.pdf"}}
+
+# THE SAME THREE REFUSALS FROM EVERY READING COMMAND: the checks sit at the
+# reader's one entry (importRead.tcl, Open), so pdf import and the five
+# information commands answer alike - a directory used to reach pdf import
+# as POSIX EISDIR while pdf info already refused it by name.
+test import-3.7 {a directory is refused by name, by pdf import and by pdf info alike} -setup {
+    set dir [file join [::tcltest::temporaryDirectory] import-3.7-dir]
+    file mkdir $dir
+    set doc [tclpdf new]
+} -body {
+    set out {}
+    foreach script [list [list $doc pdf import x $dir] \
+            [list ::tclpdf::pdf pages $dir] [list ::tclpdf::pdf fonts $dir]] {
+        set code [catch $script message options]
+        lappend out $code [dict get $options -errorcode] \
+            [string match {tclpdf: *is a directory*} $message]
+    }
+    set out
+} -cleanup {
+    $doc destroy
+    file delete -force $dir
+} -result {1 {TCLPDF IMPORT FILE} 1 1 {TCLPDF IMPORT FILE} 1 1 {TCLPDF IMPORT FILE} 1}
+
+test import-3.8 {a file this user cannot read is refused by name, not as EACCES} \
+        -constraints unreadableFile -setup {
+    set path [file join [::tcltest::temporaryDirectory] import-3.8.pdf]
+    close [open $path w]
+    file attributes $path -permissions 0000
+    set doc [tclpdf new]
+} -body {
+    set out {}
+    foreach script [list [list $doc pdf import x $path] \
+            [list ::tclpdf::pdf info $path]] {
+        set code [catch $script message options]
+        lappend out $code [dict get $options -errorcode] \
+            [string match {tclpdf: *is not readable*} $message]
+    }
+    set out
+} -cleanup {
+    $doc destroy
+    file attributes $path -permissions 0644
+    file delete $path
+} -result {1 {TCLPDF IMPORT FILE} 1 1 {TCLPDF IMPORT FILE} 1}
 
 # --- the handcrafted corners ----------------------------------------------
 #
@@ -1537,7 +1580,11 @@ test import-24.7 {/Index and /Size are pairs of non-negative integers, or refuse
 
 test import-24.8 {/Prev is a byte offset, not a string, a name or a real (Table 15)} -body {
     set out {}
-    foreach value {(nonsense) /Foo -12 1e9 <414243>} {
+    # 1.5 is the "real": it is a number the standard allows and not a byte
+    # offset. Until 2026-08-27 this line read 1e9, which is neither - since
+    # the tokenizer holds every number to 7.3.3, that one is turned away one
+    # step earlier under IMPORT SYNTAX and belongs to import-24.21.
+    foreach value {(nonsense) /Foo -12 1.5 <414243>} {
         set path [::tclpdfTest::buildpdf import-prev.pdf \
             [::tclpdfTest::threePages]]
         set bytes [string map [list "/Root 1 0 R " "/Root 1 0 R /Prev $value "] \
@@ -1576,34 +1623,60 @@ test import-24.10 {a /Length that refers to its own stream object is refused (7.
     set result
 } -result {1 1 {TCLPDF IMPORT RECURSION}}
 
-# An object stream (7.5.7) holding the page tree. "flaw self" makes object 2
-# say of itself that it lives inside object stream 2; "flaw index" points
-# object 3 at a slot the stream does not have.
-proc ::tclpdfTest::objstmFixture {name flaw} {
+# An object stream (7.5.7) holding the page tree, with every number the
+# reader is held to settable. The healthy shape is a catalogue written
+# plainly as object 1, the object stream as object 2 carrying the page (3)
+# and the page tree (4), and the cross-reference stream as object 5.
+#
+# "bend" names the one thing a test wants wrong, and nothing else moves:
+#   n        what the stream dictionary CLAIMS its /N is
+#   first    what it claims its /First is
+#   header   a header written in place of the computed one
+#   page     more keys for the page dictionary, for a reference to follow
+#   entries  cross-reference entries {number type f2 f3} written in place of,
+#            or in addition to, the computed ones
+# It grew out of two flaws hard-coded here ("self" and "index") when the
+# object-stream bounds of 2026-08-27 wanted five more.
+proc ::tclpdfTest::objstm {name {bend {}}} {
     set out "%PDF-1.5\n"
     set off1 [string length $out]
     append out "1 0 obj\n<< /Type /Catalog /Pages 4 0 R >>\nendobj\n"
-    set page "<< /Type /Page /Parent 4 0 R /MediaBox \[0 0 200 200\] >>"
+    set extra [expr {[dict exists $bend page] ? [dict get $bend page] : {}}]
+    set page "<< /Type /Page /Parent 4 0 R /MediaBox \[0 0 200 200\] $extra >>"
     set tree "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>"
     set header "3 0 4 [string length $page] "
+    if {[dict exists $bend header]} {
+        set header [dict get $bend header]
+    }
     set payload "$header$page$tree"
+    set n 2
+    if {[dict exists $bend n]} {
+        set n [dict get $bend n]
+    }
+    set first [string length $header]
+    if {[dict exists $bend first]} {
+        set first [dict get $bend first]
+    }
     set off2 [string length $out]
-    append out "2 0 obj\n<< /Type /ObjStm /N 2 /First [string length $header]\
+    append out "2 0 obj\n<< /Type /ObjStm /N $n /First $first\
         /Length [string length $payload] >>\nstream\n$payload\nendstream\nendobj\n"
     set off5 [string length $out]
-    set data {}
-    append data [field 0 1] [field 0 4] [field 65535 2]
-    append data [field 1 1] [field $off1 4] [field 0 2]
-    if {$flaw eq "self"} {
-        append data [field 2 1] [field 2 4] [field 0 2]
-    } else {
-        append data [field 1 1] [field $off2 4] [field 0 2]
+    set entries [dict create 0 {0 0 65535} 1 [list 1 $off1 0] \
+        2 [list 1 $off2 0] 3 {2 2 0} 4 {2 2 1} 5 [list 1 $off5 0]]
+    foreach entry [expr {[dict exists $bend entries]
+            ? [dict get $bend entries] : {}}] {
+        dict set entries [lindex $entry 0] [lrange $entry 1 3]
     }
-    set slot [expr {$flaw eq "index" ? 7 : 0}]
-    append data [field 2 1] [field 2 4] [field $slot 2]
-    append data [field 2 1] [field 2 4] [field 1 2]
-    append data [field 1 1] [field $off5 4] [field 0 2]
-    append out "5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /W \[1 4 2\]\
+    set size [expr {[::tcl::mathfunc::max {*}[dict keys $entries]] + 1}]
+    set data {}
+    for {set number 0} {$number < $size} {incr number} {
+        # A number no entry speaks for is written free, which is what a
+        # cross-reference stream does with a gap.
+        lassign [expr {[dict exists $entries $number]
+                ? [dict get $entries $number] : {0 0 0}}] type f2 f3
+        append data [field $type 1] [field $f2 4] [field $f3 2]
+    }
+    append out "5 0 obj\n<< /Type /XRef /Size $size /Root 1 0 R /W \[1 4 2\]\
         /Length [string length $data] >>\nstream\n$data\nendstream\nendobj\n"
     append out "startxref\n$off5\n%%EOF\n"
     set path [scratch $name]
@@ -1613,18 +1686,42 @@ proc ::tclpdfTest::objstmFixture {name flaw} {
     return $path
 }
 
+# An incremental update appended to one of those files: a cross-reference
+# stream of its own that enters ONE object number with the given type, and a
+# /Prev back to the section before it (7.5.6). What the older section says
+# about that number is what the update has to shadow.
+proc ::tclpdfTest::objstmUpdate {path number type} {
+    set bytes [readBytes $path]
+    regexp {startxref\n(\d+)} $bytes -> previous
+    set offset [string length $bytes]
+    set data [string cat [field $type 1] [field 0 4] [field 0 2] \
+        [field 1 1] [field $offset 4] [field 0 2]]
+    # The update's own cross-reference stream is object 7, which is why
+    # "number" may be anything below it.
+    append bytes "7 0 obj\n<< /Type /XRef /Size 8 /Index \[$number 1 7 1\]\
+        /W \[1 4 2\] /Root 1 0 R /Prev $previous\
+        /Length [string length $data] >>\nstream\n$data\nendstream\nendobj\n"
+    append bytes "startxref\n$offset\n%%EOF\n"
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    return $path
+}
+
 test import-24.11 {an object stream that contains itself is refused (7.5.7)} -body {
-    set path [::tclpdfTest::objstmFixture import-objstm-self.pdf self]
+    # The object stream says of ITSELF that it lives inside itself.
+    set path [::tclpdfTest::objstm import-objstm-self.pdf {entries {{2 2 2 0}}}]
     set result [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
     file delete $path
     set result
 } -result {1 1 {TCLPDF IMPORT RECURSION}}
 
 test import-24.12 {an object said to be past the end of its object stream is refused} -body {
-    set path [::tclpdfTest::objstmFixture import-objstm-index.pdf index]
+    # The page is pointed at slot 7 of a stream that holds two.
+    set path [::tclpdfTest::objstm import-objstm-index.pdf {entries {{3 2 2 7}}}]
     set result [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
     # The message names the slot and how many the stream holds - which is
-    # what tells this refusal from the one about a header without an offset.
+    # what tells this refusal from the ones the header itself earns.
     set message {}
     catch {::tclpdf::pdf pages $path} message
     file delete $path
@@ -1634,8 +1731,16 @@ test import-24.12 {an object said to be past the end of its object stream is ref
 
 test import-24.13 {a rectangle is four finite numbers, or refused (7.9.5)} -body {
     set out {}
-    foreach box {{[0 0 200]} {[0 0 /Foo 200]} {[0 0 (200) 200]}
-            {<< /a 1 >>} {[0 0 1e400 200]} {[0 0 200 4 0 R]}} {
+    # The infinite corner is four hundred nines and a decimal point, not
+    # 1e400: a real that overflows a double while keeping to the
+    # digits-sign-and-one-period grammar of 7.3.3. The exponential form no
+    # longer reaches this check at all - the tokenizer refuses it as syntax
+    # (import-24.21) - so writing it here would test the tokenizer twice and
+    # the box not at all. The point matters: four hundred nines WITHOUT it is
+    # an exact integer to Tcl and finite.
+    foreach box [list {[0 0 200]} {[0 0 /Foo 200]} {[0 0 (200) 200]} \
+            {<< /a 1 >>} "\[0 0 [string repeat 9 400].0 200\]" \
+            {[0 0 200 4 0 R]}] {
         set objects [::tclpdfTest::threePages]
         lset objects 2 "<< /Type /Page /Parent 2 0 R /MediaBox $box >>"
         # the last corner is written indirectly (7.3.10) and resolves to a
@@ -1810,6 +1915,290 @@ test import-24.20 {a missing file is refused with the class code} -body {
   $doc destroy
   set codes
 } -result {{TCLPDF IMPORT FILE} {TCLPDF IMPORT FILE}}
+
+
+test import-24.21 {a number token is held to the whole grammar of 7.3.3} -body {
+    # "An integer shall be written as one or more decimal digits optionally
+    # preceded by a sign", a real the same with one period, "and a PDF writer
+    # shall not use the PostScript language syntax for numbers with
+    # non-decimal radices (such as 16#FFFE) or in exponential format (such as
+    # 6.02E23)". Everything beginning with a sign, a period or a digit used to
+    # become a number here and left again byte for byte, so this package
+    # answered an invalid file with an invalid file of its own.
+    set refused {}
+    foreach token {1e3 6.02E23 1e400 --1 +-1 1.2.3 . - + 1x 0x10 1_0} {
+        set pos 0
+        lappend refused [::tclpdfTest::refuse \
+            {::tclpdf::importRead::Parse "$token " pos}]
+    }
+    set taken {}
+    foreach token {0 12 +17 -8 1.5 -.002 .5 4. 007} {
+        set pos 0
+        lappend taken [::tclpdf::importRead::Parse "$token " pos]
+    }
+    list [lsort -unique $refused] $taken
+} -result {{{1 1 {TCLPDF IMPORT SYNTAX}}} {{n 0} {n 12} {n +17} {n -8} {n 1.5}\
+ {n -.002} {n .5} {n 4.} {n 007}}}
+
+test import-24.22 {the refusal names the token and where in the file it stands} -body {
+    set pos 0
+    catch {::tclpdf::importRead::Parse "<< /A 1 /B 6.02E23 >>" pos} message
+    list [string match {*"6.02E23"*} $message] \
+        [string match {*offset 11*} $message] \
+        [string match {*7.3.3*} $message]
+} -result {1 1 1}
+
+test import-24.23 {an object number is plain digits, not what [string is entier] takes} -body {
+    # 0x10 passes [string is entier], and the "num gen R" lookahead used to
+    # read "0x10 0 R" as a reference to object sixteen - a number the file
+    # never wrote. Both halves of the lookahead are digits (7.3.10).
+    set out {}
+    foreach bytes {{<< /A 0x10 0 R >>} {<< /A 3 0x10 R >>}} {
+        set pos 0
+        lappend out [::tclpdfTest::refuse \
+            {::tclpdf::importRead::Parse $bytes pos}]
+    }
+    # What a reference still is, unchanged.
+    set pos 0
+    lappend out [::tclpdf::importRead::Parse {<< /A 3 0 R >>} pos]
+    set out
+} -result {{1 1 {TCLPDF IMPORT SYNTAX}} {1 1 {TCLPDF IMPORT SYNTAX}}\
+ {d {A {r {3 0}}}}}
+
+# A foreign file whose /ca is what the caller puts there: 1e3 for the invalid
+# number, 0.5 for its healthy twin. The two differ in nothing else, so what
+# the end-to-end pair shows is the number and not the fixture.
+proc ::tclpdfTest::alphapdf {name ca} {
+    set content "q /GS0 gs 1 0 0 rg 20 20 100 100 re f Q"
+    set objects [::tclpdfTest::threePages]
+    lset objects 2 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 200\]\
+        /Contents 4 0 R /Resources << /ExtGState << /GS0 5 0 R >> >> >>"
+    lappend objects "<< /Length [string length $content]\
+        >>\nstream\n$content\nendstream"
+    lappend objects "<< /Type /ExtGState /ca $ca /CA 0.5 >>"
+    return [::tclpdfTest::buildpdf $name $objects]
+}
+
+test import-24.24 {an exponential number in a foreign file is refused, not copied} -body {
+    # End to end: before this, /ca 1e3 was taken over and written out again,
+    # and qpdf read the result with "unknown token while reading object;
+    # treating as string" - the opacity was gone and the file this package
+    # had written was itself invalid.
+    set path [::tclpdfTest::alphapdf import-exponent.pdf 1e3]
+    set out [::tclpdfTest::scratch import-exponent-out.pdf]
+    file delete $out
+    set doc [tclpdf new -unit pt -format {200 200}]
+    $doc page add
+    set result [::tclpdfTest::refuse {$doc pdf import letter $path}]
+    $doc destroy
+    file delete $path
+    # Nothing was written: the refusal is at the reading, before a document
+    # exists to be written.
+    list $result [file exists $out]
+} -result {{1 1 {TCLPDF IMPORT SYNTAX}} 0}
+
+test import-24.25 {the healthy twin is taken over and qpdf reads the result} \
+        -constraints qpdf -body {
+    set path [::tclpdfTest::alphapdf import-alpha.pdf 0.5]
+    set out [::tclpdfTest::scratch import-alpha-out.pdf]
+    set doc [tclpdf new -unit pt -format {200 200}]
+    $doc page add
+    $doc pdf import letter $path
+    $doc form place letter -at {0 0}
+    $doc write $out
+    $doc destroy
+    set status [catch {exec qpdf --check $out 2>@1} report]
+    set bytes [::tclpdfTest::readBytes $out]
+    file delete $path $out
+    list $status [string match {*unknown token*} $report] \
+        [regexp {/ca 0\.5} $bytes]
+} -result {0 0 1}
+
+test import-24.26 {an object stream whose /First lies past its stream is refused} -body {
+    # It used to be no refusal at all: /First 10000 over a stream of a hundred
+    # bytes read the header out of nothing, and [pdf pages] answered with an
+    # EMPTY list of pages rather than saying the file is broken.
+    set path [::tclpdfTest::objstm import-objstm-first.pdf {first 10000}]
+    set result [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    set message {}
+    catch {::tclpdf::pdf pages $path} message
+    file delete $path
+    list $result [string match {*past the * bytes of its decoded stream*} \
+        $message]
+} -result {{1 1 {TCLPDF IMPORT OBJSTM}} 1}
+
+test import-24.27 {/N is bounded by the header bytes, not believed} -body {
+    # THE RESOURCE BOUND. /N is a number in the file, and the header walk used
+    # to do 2 * /N iterations of work for it: measured 2026-08-27 on a
+    # four-hundred-byte file, /N 200000 took 0.77 s and 43 MB, /N 20000000
+    # took 78 s and 3.4 GB - and the file was ACCEPTED at the end of it. A
+    # pair of header numbers is four bytes at the shortest ("1 0 "), so /First
+    # says how many there can be.
+    set path [::tclpdfTest::objstm import-objstm-n.pdf {n 200000}]
+    set elapsed [lindex [time {
+        set result [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    }] 0]
+    set message {}
+    catch {::tclpdf::pdf pages $path} message
+    file delete $path
+    # The bound has to hold BEFORE the work, so the time is part of the
+    # assertion: half a second is five hundred times what the refusal needs
+    # and well under the second the walk used to take.
+    list $result [string match {*announces 200000 objects*} $message] \
+        [expr {$elapsed < 500000}]
+} -result {{1 1 {TCLPDF IMPORT OBJSTM}} 1 1}
+
+test import-24.28 {every header word is a number, and every offset inside the stream} -body {
+    set out {}
+    # A word that is not a number where an offset belongs.
+    lappend out [::tclpdfTest::refuse {::tclpdf::pdf pages \
+        [::tclpdfTest::objstm import-objstm-word.pdf {header {3 0 4 x }}]}]
+    # An offset behind everything the stream holds after /First.
+    lappend out [::tclpdfTest::refuse {::tclpdf::pdf pages \
+        [::tclpdfTest::objstm import-objstm-far.pdf {header {3 0 4 9999 }}]}]
+    # A HEADER WORD WITH LEADING ZEROS is a decimal number, not an octal one.
+    # Tcl 8.6 reads "0056" in an [expr] as octal - 46 - and answers 0 for a
+    # comparison against "0900", which is no octal number at all; Tcl 9 reads
+    # both as decimal. So the same file used to be read two ways: the second
+    # object of this stream begins at 56, and the page tree read at 46 is a
+    # page tree the file has not got.
+    set path [::tclpdfTest::objstm import-objstm-zeros.pdf \
+        {header {003 000 004 0056 }}]
+    lappend out [llength [::tclpdf::pdf pages $path]]
+    file delete $path
+    # And the bound holds for a zero-padded offset too.
+    set path [::tclpdfTest::objstm import-objstm-zerofar.pdf \
+        {header {3 0 4 0900 }}]
+    lappend out [::tclpdfTest::refuse {::tclpdf::pdf pages $path}]
+    file delete $path
+    # And the healthy file still reads.
+    set path [::tclpdfTest::objstm import-objstm-good.pdf]
+    lappend out [llength [::tclpdf::pdf pages $path]]
+    file delete $path [::tclpdfTest::scratch import-objstm-word.pdf] \
+        [::tclpdfTest::scratch import-objstm-far.pdf]
+    set out
+} -result {{1 1 {TCLPDF IMPORT OBJSTM}} {1 1 {TCLPDF IMPORT OBJSTM}} 1\
+ {1 1 {TCLPDF IMPORT OBJSTM}} 1}
+
+test import-24.29 {an unknown cross-reference entry type is the null object (7.5.8.3)} -body {
+    # "In PDF 1.5 through PDF 2.0, only types 0, 1, and 2 are allowed. Any
+    # other value shall be interpreted as a reference to the null object, thus
+    # permitting new entry types to be defined in the future." Such an entry
+    # used to be left out of the table, and the object it stands for was then
+    # "referenced but not in the cross-reference": a file the standard defines
+    # as readable could not be read at all.
+    set path [::tclpdfTest::objstm import-objstm-type3.pdf \
+        {page {/Resources << /ExtGState << /GS0 6 0 R >> >>}
+         entries {{6 3 0 0}}}]
+    set reader [::tclpdf::importRead::Open $path]
+    set null [lindex [::tclpdf::importRead::Object reader 6] 0]
+    # And the page it hangs off is taken over, with the resource copied as
+    # the null object rather than the import refused - the copy gets an
+    # object of its own, whose whole body is "null".
+    set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+    $doc page add
+    $doc pdf import letter $path
+    set out [::tclpdfTest::scratch import-type3-out.pdf]
+    $doc form place letter -at {0 0}
+    $doc write $out
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $out]
+    file delete $path $out
+    list $null [regexp {/ExtGState << /GS0 \d+ 0 R >>} $bytes] \
+        [regexp "\nnull\nendobj" $bytes]
+} -result {{z {}} 1 1}
+
+test import-24.30 {an unknown type in a newer section shadows a live older entry} -body {
+    # The counterpart of the type-0 decision of round 5: the newest section
+    # decides. qpdf 12.4.0 hands out the older object here; 7.5.8.3 does not.
+    # The control below is the same file with type 0, the free entry, which
+    # has answered null since round 5.
+    set out {}
+    foreach {name type} {import-shadow3.pdf 3 import-shadow0.pdf 0} {
+        set path [::tclpdfTest::objstm $name {entries {{6 2 2 0}}}]
+        set reader [::tclpdf::importRead::Open $path]
+        # Before the update, object 6 is the page - alive and readable.
+        lappend out [lindex [lindex [::tclpdf::importRead::Object reader 6] 0] 0]
+        ::tclpdfTest::objstmUpdate $path 6 $type
+        set reader [::tclpdf::importRead::Open $path]
+        lappend out [lindex [::tclpdf::importRead::Object reader 6] 0]
+        file delete $path
+    }
+    set out
+} -result {d {z {}} d {z {}}}
+
+# A file whose LAST object writes its number with leading zeros, in its own
+# header and in the reference that reaches it: "0010 00 obj" and "0010 00 R".
+# Both are what 7.3.3 calls an integer - "one or more decimal digits optionally
+# preceded by a sign" - so both mean object ten, and qpdf reads them so. TEN
+# and not seven: "0010" is eight to Tcl 8.6's [expr] and ten to Tcl 9's, so a
+# reader that ever reaches for [expr] here is caught by this file as well as
+# one that compares the digits as a string. Built through [buildpdf] and
+# widened afterwards, since only the header of the last object grows and only
+# the one offset behind it moves.
+proc ::tclpdfTest::paddedpdf {name} {
+    set objects [::tclpdfTest::threePages]
+    lset objects 2 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 200\]\
+        /Resources << /ExtGState << /GS0 0010 00 R >> >> >>"
+    foreach - {4 5 6 7 8 9} {
+        lappend objects "<< /Type /Filler >>"
+    }
+    lappend objects "<< /Type /ExtGState /ca 0.5 >>"
+    set path [::tclpdfTest::buildpdf $name $objects]
+    set bytes [string map {"\n10 0 obj\n" "\n0010 00 obj\n"} \
+        [::tclpdfTest::readBytes $path]]
+    # The table moved three bytes; startxref has to say so.
+    regsub {startxref\n\d+\n} $bytes \
+        "startxref\n[expr {[string first "\nxref\n" $bytes] + 1}]\n" bytes
+    set channel [open $path wb]
+    puts -nonewline $channel $bytes
+    close $channel
+    return $path
+}
+
+test import-24.31 {a written number with leading zeros is the number it means} -body {
+    # "0010" is ten (7.3.3), in the header of an object and in a reference
+    # alike, and a reader that turns such a file away is the one at fault.
+    # Two ways it used to go wrong: the reference "0010 00 R" was looked up in
+    # the cross-reference under the key "0010", which is not the key "10"; and
+    # the header "0010 00 obj" was compared with the number the table promised
+    # as a string, so object ten was "where object 0010 is written".
+    set path [::tclpdfTest::paddedpdf import-padded.pdf]
+    set out [::tclpdfTest::scratch import-padded-out.pdf]
+    set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+    $doc page add
+    $doc pdf import letter $path
+    $doc form place letter -at {0 0}
+    $doc write $out
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $out]
+    set pages [llength [::tclpdf::pdf pages $path]]
+    file delete $path $out
+    # The ExtGState behind the padded reference came over with its content.
+    list $pages [regexp {/Type /ExtGState /ca 0\.5} $bytes]
+} -result {1 1}
+
+test import-24.32 {qpdf reads the same padded file as object 10} -constraints qpdf -body {
+    set path [::tclpdfTest::paddedpdf import-padded-qpdf.pdf]
+    set shown [exec qpdf --show-object=10 $path]
+    set status [catch {exec qpdf --check $path 2>@1} report]
+    file delete $path
+    list $status [string match {*/Type /ExtGState*} $shown] \
+        [string match {*/ca 0.5*} $shown]
+} -result {0 1 1}
+
+test import-24.33 {a directory is refused with the class code, not by POSIX} -body {
+    # [file exists] says yes to a directory and [open] opens one; the raw
+    # "illegal operation on a directory" arrived from [read] afterwards, under
+    # POSIX EISDIR, out of a command whose every other refusal names this
+    # package.
+    set here [file dirname [::tclpdfTest::scratch anything.pdf]]
+    set out {}
+    foreach command {info pages fonts metadata fields} {
+        lappend out [::tclpdfTest::refuse {::tclpdf::pdf $command $here}]
+    }
+    lsort -unique $out
+} -result {{1 1 {TCLPDF IMPORT FILE}}}
 
 
 

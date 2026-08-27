@@ -79,7 +79,10 @@
 #     |c1-c0| < |r1-r0| - because only then is the region between two circles
 #     of the family a ring at all. Measured over Noto Color Emoji: 7894 of its
 #     7894 radial gradients with a varying alpha are nested, so the cone case
-#     is a fallback nothing real is known to reach.
+#     is a fallback nothing real is known to reach. Which of a ring's two
+#     circles is the outer one follows the RADIUS and not the parameter, and
+#     a ring that lies wholly past the box says so in a word rather than in
+#     an empty path - see [rings].
 #   - a sweep gradient's bands are WEDGES, and it has them already: the fan of
 #     Gouraud triangles it is drawn as is cut at four degrees and at every
 #     colour stop, so one band is a run of neighbouring wedges.
@@ -414,17 +417,37 @@ proc ::tclpdf::colorFontBand::cone {c0 r0 c1 r1 box} {
 # the innermost disc inside. A boundary whose circle already holds the whole
 # box becomes the BOX, which is the outermost subpath there can be, and
 # everything past it lies outside the box and is dropped.
+#
+# WHICH END OF A RING IS THE OUTER ONE IS A QUESTION OF RADIUS, and not of the
+# direction the parameter runs in. r(w) = (r1 - r0) w + r0 is as regular
+# falling as rising - a colour line may begin at the wide circle and end at
+# the narrow one - and then the interval's FIRST end carries the larger radius
+# and is the ring's outer boundary. Reading the outer end off the parameter
+# instead turned a shrinking gradient's ring INSIDE OUT: the box stood in for
+# a boundary that was not the outer one, so the disc came out painted and the
+# ring around it did not.
+#
+# THE WORD "outside" comes back where the band does not meet the box at all -
+# the smaller of its two circles already holds every corner, so the whole ring
+# lies past the box. That is deliberately NOT the empty string: an empty clip
+# path is read by [ColorFontPaintPour] as "no clip needed", and a band with no
+# clip takes the WHOLE box at its alpha, which is the exact opposite of what
+# an empty region asks for.
 proc ::tclpdf::colorFontBand::rings {c0 r0 c1 r1 box intervals} {
   lassign $c0 x0 y0
   lassign $c1 x1 y1
   set grow [expr {$r1 - $r0}]
   set bounds {}
   foreach interval $intervals {
-    foreach at $interval side {open close} {
-      lappend bounds [list [expr {$r0 + $at * $grow}] \
-          [expr {$x0 + $at * ($x1 - $x0)}] [expr {$y0 + $at * ($y1 - $y0)}] \
-          $side]
+    set ends {}
+    foreach at $interval {
+      lappend ends [list [expr {$r0 + $at * $grow}] \
+          [expr {$x0 + $at * ($x1 - $x0)}] [expr {$y0 + $at * ($y1 - $y0)}]]
     }
+    # Inner end first, outer end second - by RADIUS, whichever end of the
+    # caller's interval each of them happens to be.
+    lassign [lsort -real -index 0 $ends] inner outer
+    lappend bounds [linsert $inner end inner] [linsert $outer end outer]
   }
   # The parameter runs one way and the radius may run the other, so the order
   # the circles have to be written in is the radius order and not the
@@ -437,12 +460,18 @@ proc ::tclpdf::colorFontBand::rings {c0 r0 c1 r1 box intervals} {
       continue
     }
     if {[Holds $cx $cy $radius $box]} {
-      if {$side eq "close"} {
+      if {$side eq "outer"} {
         append body [Rectangle $box]
       }
       break
     }
     append body [Circle $cx $cy $radius]
+  }
+  if {$body eq {}} {
+    # Nothing was written before the first circle that holds the box, and
+    # that circle is a ring's INNER boundary: the ring itself lies wholly
+    # past the box.
+    return outside
   }
   return $body
 }
@@ -522,4 +551,4 @@ proc ::tclpdf::colorFontBand::Numbers {values} {
   return [join [lmap value $values {::tclpdf::pdfObj num $value}] { }]
 }
 
-package provide tclpdf::colorFontBand 1.0
+package provide tclpdf::colorFontBand 1.1

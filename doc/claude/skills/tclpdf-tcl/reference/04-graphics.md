@@ -160,7 +160,9 @@ $doc restore
 
 ```tcl
 # A name (148, no Tk), a hex triplet, a grey value, {r g b}, {c m y k}, or the
-# space spelled out - the unambiguous form. Components are clamped to 0..1.
+# space spelled out - the unambiguous form. Components are clamped to 0..1;
+# NaN is refused instead (TCLPDF COLOUR COMPONENTS number) - it names no colour
+# and has no nearest valid value to be clamped to.
 foreach {colour x} {steelblue 20 #ffd700 40 #fd7 60 0.5 80 {0.2 0.45 0.75} 100
         {0 0.16 1 0} 120 {gray 0.5} 140 {rgb 1 0.84 0} 160 {cmyk 0 0.16 1 0} 180} {
     $doc rect -at [list $x 240] -size {16 10} -fill $colour
@@ -219,7 +221,8 @@ $doc rect -at {48 272} -size {24 10} -fill {lab 87.73 -86.18 83.18}
 # -whitePoint (D50 by default, the illuminant of every printed measurement)
 # and -range (the standard's own {-100 100 -100 100}). Components outside the
 # range are CLAMPED, as the standard prescribes - sRGB blue has a b* of
-# -112.05 and needs the wider range prepress uses.
+# -112.05 and needs the wider range prepress uses. A NaN among the components
+# is refused, and so is one in -whitePoint or -range (TCLPDF COLOUR LAB).
 $doc rect -at {76 272} -size {24 10} -fill {lab 32.30 79.20 -107.86 -range {-128 127 -128 127}}
 
 # The point of the space is the spot colour: a plate with the measurement

@@ -1236,9 +1236,15 @@ oo::define ::tclpdf::document::document {
 
   # The bands one gradient's alpha becomes, as {increment clip} pairs: the
   # empty list for a colour line that needs no alpha at all, ONE pair with no
-  # clip for one at a single alpha, the word "empty" for one that is fully
-  # transparent from end to end, and the word "mask" for one that cannot be
-  # banded and falls back to the luminosity soft mask below.
+  # clip for one at a single alpha, the word "empty" for one that paints
+  # nothing at all, and the word "mask" for one that cannot be banded and
+  # falls back to the luminosity soft mask below.
+  #
+  # A single band's clip may in turn be the word "outside", which is a
+  # radial's answer for a ring that lies wholly past the box - a THIRD thing
+  # beside a clip and no clip, told apart in [ColorFontPaintPour]. Where
+  # EVERY band answers that way the gradient paints nothing, and the answer
+  # given here is "empty" rather than a list of bands to skip one by one.
   #
   # The arithmetic and the measurement behind it are colorFontBand.tcl's. What
   # is decided HERE is only which geometry each kind of gradient has - the
@@ -1295,10 +1301,22 @@ oo::define ::tclpdf::document::document {
       if {$plan eq "mask"} {
         return mask
       }
-      return [lmap layer $plan {
+      set bands [lmap layer $plan {
         list [lindex $layer 0] [::tclpdf::colorFontBand rings $c0 $r0 $c1 $r1 \
             $cover [lindex $layer 1]]
       }]
+      foreach band $bands {
+        if {[lindex $band 1] ne "outside"} {
+          return $bands
+        }
+      }
+      # EVERY RING PAST EVERY CORNER OF THE BOX, which is the radial's form of
+      # the answer a fully transparent colour line gets above: the fill paints
+      # nothing. Said HERE, before the shading object and the ExtGState are
+      # written, and for the same two reasons - neither may stand in the file
+      # for a fill no reader reaches, and a graph that is nothing but such
+      # fills is TCLPDF COLORFONT EMPTY rather than a glyph written blank.
+      return empty
     }
     return mask
   }
@@ -1321,9 +1339,10 @@ oo::define ::tclpdf::document::document {
       return "q\n$name sh\nQ\n"
     }
     foreach band $bands {
-      if {[lindex $band 1] ne {}} {
+      if {[lindex $band 1] ni {{} outside}} {
         # A band with a clip of its own, which is the staircase; one band
-        # with no clip is the single /ca a colour line of one alpha takes.
+        # with no clip is the single /ca a colour line of one alpha takes,
+        # and one that says "outside" is no band at all - it is not painted.
         my ColorFontPaintCount $context bands
         break
       }
@@ -1331,6 +1350,16 @@ oo::define ::tclpdf::document::document {
     set body "q\n"
     foreach band $bands {
       lassign $band alpha path
+      if {$path eq "outside"} {
+        # THE BAND'S REGION DOES NOT MEET THE BOX AT ALL, which [colorFontBand
+        # rings] answers in a word because an empty path cannot say it: "W* n"
+        # needs a path to clip to, and a band that arrives with no path is the
+        # single /ca of a colour line at one alpha - it would take the WHOLE
+        # box. Skipped, so that a ring lying past every corner of the box
+        # paints what it covers, which is nothing. The bands NEST, so every
+        # later one lies inside this one and answers the same way.
+        continue
+      }
       if {$path ne {}} {
         append body $path "W*\nn\n"
       }
@@ -2277,4 +2306,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFontPaint 1.2
+package provide tclpdf::colorFontPaint 1.3

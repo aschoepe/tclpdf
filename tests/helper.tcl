@@ -24,6 +24,22 @@ namespace eval ::tclpdfTest {}
 # once per file and unconditionally: the answer is the same wherever it is
 # asked, so there is nothing to guard against.
 ::tcltest::testConstraint haveTdom [expr {![catch {package require tdom 0.9.0-}]}]
+# "A file this user cannot read" is only measurable where mode 0000 actually
+# denies the running user: root reads it anyway, and so does a filesystem
+# mounted without permissions. The constraint is the measurement itself -
+# make such a file and ask whether it is readable - rather than a guess from
+# [id] or $tcl_platform, which would be wrong on both counts.
+::tcltest::testConstraint unreadableFile [expr {[catch {
+    set tclpdfProbe [file join [::tcltest::temporaryDirectory] \
+        unreadable-[pid].probe]
+    close [open $tclpdfProbe w]
+    file attributes $tclpdfProbe -permissions 0000
+    set tclpdfDenied [expr {![file readable $tclpdfProbe]}]
+    file attributes $tclpdfProbe -permissions 0644
+    file delete $tclpdfProbe
+    set tclpdfDenied
+} tclpdfDenied] == 0 && $tclpdfDenied}]
+unset -nocomplain tclpdfProbe tclpdfDenied
 
 # Read a file as bytes. Every test that looks at a generated PDF needs this,
 # and it needs the binary translation - reading a PDF as text turns the binary

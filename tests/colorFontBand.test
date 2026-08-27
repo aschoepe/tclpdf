@@ -316,6 +316,84 @@ test colorFontBand-2.8 {a circle that holds the box becomes the box} -body {
       [lsearch -inline -glob $lines "* re"]
 } -result {4 {100 100 800 800 re}}
 
+test colorFontBand-2.8a {the box stands in for the boundary with the LARGER
+        radius, whichever end of the interval that is} -body {
+  # r(w) = (r1 - r0) w + r0 is as regular FALLING as rising - the OpenType
+  # colour line may begin at the wide circle and end at the narrow one - and
+  # where it falls, the interval's FIRST end carries the larger radius. Read
+  # the outer end off the parameter instead and the box lands where the INNER
+  # boundary belongs: under the even-odd rule the disc then comes out painted
+  # and the ring around it does not, which is the picture inside out.
+  #
+  # The box corners lie 566 from the centre. Shrinking 400 -> 50, the
+  # boundary at -1.0 has radius 750 and holds them all, the one at 0.4 has
+  # radius 260 and does not. The growing twin 50 -> 400 puts the same two
+  # radii at 2.0 and 0.6 and has to write the very same path.
+  set shrinking [::tclpdf::colorFontBand rings {500 500} 400 {500 500} 50 \
+      {100 100 900 900} {{-1.0 0.4}}]
+  set growing [::tclpdf::colorFontBand rings {500 500} 50 {500 500} 400 \
+      {100 100 900 900} {{0.6 2.0}}]
+  set lines [cfbLines $shrinking]
+  list [expr {$shrinking eq $growing}] [lsearch -inline -glob $lines "* re"] \
+      [lsearch -all -inline -glob $lines "* 500 m"]
+} -result {1 {100 100 800 800 re} {{760 500 m}}}
+
+test colorFontBand-2.8b {a ring that lies past every corner of the box says
+        so in a word} -body {
+  # BOTH of its boundaries hold the whole box, so the ring between them does
+  # not meet the box at all. The empty string cannot say that: a band that
+  # arrives at [ColorFontPaintPour] without a clip is the single /ca of a
+  # colour line at ONE alpha and takes the whole box - the exact opposite of
+  # an empty region. So the answer is the word "outside" and the caller skips
+  # the band.
+  #
+  # Both directions, because they used to fail differently over the same
+  # empty region: the shrinking one answered with the box and painted
+  # everything, the growing one with an empty path and painted everything.
+  list [::tclpdf::colorFontBand rings {500 500} 400 {500 500} 50 \
+          {100 100 900 900} {{-2.0 -1.0}}] \
+      [::tclpdf::colorFontBand rings {500 500} 50 {500 500} 400 \
+          {100 100 900 900} {{2.0 3.0}}]
+} -result {outside outside}
+
+test colorFontBand-2.8c {two intervals are four circles in radius order} -body {
+  # A colour line that fades up and down again has a level whose region is
+  # two rings, and four nested circles under the even-odd rule ARE two rings.
+  # The order is the radius order over all the intervals at once - not
+  # interval by interval, and not the parameter's, which the shrinking twin
+  # walks the other way round for the same four radii.
+  set growing [::tclpdf::colorFontBand rings {500 500} 0 {500 500} 1000 \
+      {100 100 900 900} {{0.1 0.2} {0.3 0.5}}]
+  set shrinking [::tclpdf::colorFontBand rings {500 500} 1000 {500 500} 0 \
+      {100 100 900 900} {{0.5 0.7} {0.8 0.9}}]
+  list [expr {$growing eq $shrinking}] \
+      [lsearch -all -inline -glob [cfbLines $growing] "* 500 m"]
+} -result {1 {{600 500 m} {700 500 m} {800 500 m} {1000 500 m}}}
+
+test colorFontBand-2.8d {a shifted centre travels with its boundary} -body {
+  # The family's circles are nested but not concentric - |c1-c0| < |r1-r0|,
+  # which is what [cone] allows - so every boundary carries its own centre
+  # and the one that holds the box is the one at the START of this shrinking
+  # line, not the one at its end. The inner circle sits 30 units to the right
+  # of the centre the outer one has.
+  set lines [cfbLines [::tclpdf::colorFontBand rings {500 500} 600 {560 500} \
+      100 {100 100 900 900} {{0.0 0.5}}]]
+  list [lsearch -inline -glob $lines "* re"] \
+      [lsearch -all -inline -glob $lines "* 500 m"]
+} -result {{100 100 800 800 re} {{880 500 m}}}
+
+test colorFontBand-2.8e {a tip below a boundary that holds the box leaves the
+        box whole} -body {
+  # Both special ends in one interval: the inner one is the TIP, at or below
+  # radius nought, where the region reaches the centre and there is nothing
+  # to cut out of it; the outer one holds every corner. What is left is the
+  # box and no circle at all - the region runs from the centre out past the
+  # box in every direction.
+  set lines [cfbLines [::tclpdf::colorFontBand rings {500 500} 400 {500 500} \
+      50 {100 100 900 900} {{-1.0 2.0}}]]
+  list [llength [lsearch -all -glob $lines "* c"]] $lines
+} -result {0 {{100 100 800 800 re}}}
+
 test colorFontBand-2.9 {a sweep band is a wedge over the rim it has} -body {
   # Drawn from the centre out over the rim points the fan already carries.
   # Neighbouring wedges SHARE a rim corner, and a run of them would list

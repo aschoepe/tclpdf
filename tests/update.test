@@ -62,6 +62,14 @@ proc ::tclpdfTest::pageNumber {upd} {
     return $page
 }
 
+# The number of that page's content stream, found the same way. Three tests
+# read it, and a third copy of the two regular expressions is the copy that
+# is left behind when the page tree changes shape.
+proc ::tclpdfTest::contentNumber {upd} {
+    regexp {/Contents (\d+) 0 R} [$upd body [pageNumber $upd]] -> content
+    return $content
+}
+
 # The whole file, and the part of it the update appended.
 proc ::tclpdfTest::tail {path base} {
     return [string range [::tclpdfTest::readBytes $path] $base end]
@@ -279,8 +287,7 @@ test update-2.5 {body answers the file's version until the update has one of its
 test update-2.6 {a stream object comes back with its data and its filter untouched} -body {
     set path [::tclpdfTest::original update-2.6.pdf]
     set upd [::tclpdf::update open $path]
-    set page [::tclpdfTest::pageNumber $upd]
-    regexp {/Contents (\d+) 0 R} [$upd body $page] -> content
+    set content [::tclpdfTest::contentNumber $upd]
     set body [$upd body $content]
     $upd destroy
     # The body is reusable as it stands: dictionary, keyword, the compressed
@@ -513,25 +520,111 @@ test update-6.1 {an encrypted file is refused} -body {
     $doc text "Secret" -at {60 700} -size 18
     $doc write $path
     $doc destroy
-    set code [catch {::tclpdf::update open $path} message]
-    list $code [regexp {is encrypted} $message]
-} -result {1 1}
+    set code [catch {::tclpdf::update open $path} message options]
+    list $code [regexp {is encrypted} $message] \
+        [string match {tclpdf: *} $message] [dict get $options -errorcode]
+} -result {1 1 1 {TCLPDF UPDATE ENCRYPTED}}
 
-test update-6.2 {a file without a startxref is refused} -body {
+# The manual's promise for this whole command: "it stands on the same reader
+# and refuses the same files, but ... its refusals carry TCLPDF UPDATE". The
+# reader's own word for a file that is not a PDF is FILE, and that word is
+# what the caller acts on, so it is kept; only the topic changes. Until
+# 2026-08-27 this test read the MESSAGE and passed while the code said
+# TCLPDF IMPORT FILE - the message was right and the contract was not.
+test update-6.2 {a file without a startxref is refused, under UPDATE} -body {
     set path [::tclpdfTest::fixture update-6.2.pdf]
     ::tclpdf::io write $path "%PDF-1.7\nnothing here\n"
-    list [catch {::tclpdf::update open $path} message] \
-        [regexp {carries no startxref} $message]
-} -result {1 1}
+    set code [catch {::tclpdf::update open $path} message options]
+    list $code [regexp {carries no startxref} $message] \
+        [string match {tclpdf: *} $message] [dict get $options -errorcode]
+} -result {1 1 1 {TCLPDF UPDATE FILE}}
 
 test update-6.3 {a file whose trailer has no /Root is refused} -body {
     set path [::tclpdfTest::original update-6.3.pdf]
     set bytes [::tclpdfTest::readBytes $path]
     set bytes [string map {"/Root 3 0 R " ""} $bytes]
     ::tclpdf::io write $path $bytes
-    list [catch {::tclpdf::update open $path} message] \
-        [regexp {no /Root in its trailer} $message]
-} -result {1 1}
+    set code [catch {::tclpdf::update open $path} message options]
+    list $code [regexp {no /Root in its trailer} $message] \
+        [string match {tclpdf: *} $message] [dict get $options -errorcode]
+} -result {1 1 1 {TCLPDF UPDATE FOREIGN Root}}
+
+test update-6.4 {a path that is not there is refused under UPDATE, not POSIX} -body {
+    set path [::tclpdfTest::scratch update-6.4-no-such-file.pdf]
+    file delete $path
+    set code [catch {::tclpdf::update open $path} message options]
+    # The MESSAGE is checked alongside the code because [file readable]
+    # answers 0 for a path that is not there at all: without the existence
+    # question of its own, the readability question would answer the missing
+    # file with "is not readable", which is true and useless. And the path
+    # is still not there afterwards - a refusal creates nothing.
+    list $code [string match {tclpdf: *} $message] \
+        [regexp {does not exist} $message] \
+        [dict get $options -errorcode] [file exists $path]
+} -result [list 1 1 1 [list TCLPDF UPDATE FILE \
+    [::tclpdfTest::scratch update-6.4-no-such-file.pdf]] 0]
+
+test update-6.5 {a directory is refused under UPDATE, not POSIX} -setup {
+    set tclpdfDir [::tclpdfTest::scratch update-6.5-dir]
+    file mkdir $tclpdfDir
+} -body {
+    set code [catch {::tclpdf::update open $tclpdfDir} message options]
+    list $code [string match {tclpdf: *} $message] \
+        [regexp {is a directory} $message] [dict get $options -errorcode]
+} -cleanup {
+    file delete -force $tclpdfDir
+    unset -nocomplain tclpdfDir
+} -result [list 1 1 1 [list TCLPDF UPDATE FILE \
+    [::tclpdfTest::scratch update-6.5-dir]]]
+
+test update-6.6 {a file this user cannot read is refused under UPDATE} \
+        -constraints unreadableFile -setup {
+    set tclpdfLocked [::tclpdfTest::original update-6.6.pdf]
+    file attributes $tclpdfLocked -permissions 0000
+} -body {
+    set code [catch {::tclpdf::update open $tclpdfLocked} message options]
+    list $code [string match {tclpdf: *} $message] \
+        [regexp {is not readable} $message] [dict get $options -errorcode]
+} -cleanup {
+    file attributes $tclpdfLocked -permissions 0644
+    unset -nocomplain tclpdfLocked
+} -result [list 1 1 1 [list TCLPDF UPDATE FILE \
+    [::tclpdfTest::scratch update-6.6.pdf]]]
+
+# THE DEFERRED HALF OF THE SAME PROMISE. [update open] answers on the trailer
+# and the cross-reference alone; an object is read the first time somebody
+# asks for it, so a file damaged BELOW the cross-reference refuses at [body]
+# or [replace], long after the session was opened. Those refusals are the
+# reader's too, and until 2026-08-27 they arrived under TCLPDF IMPORT - the
+# promise of the manual held for [open] and not for the whole session.
+#
+# The damaged file is written with this module's own commands rather than
+# patched byte by byte: an update writes a content stream whose /Length is a
+# reference to an object the file has not got. Everything above the object
+# stays intact - header, cross-reference, trailer - so the session opens, the
+# object header is the right one, and the refusal comes out of the reader
+# only when the stream is actually resolved.
+test update-6.7 {a reader refusal after [open] carries UPDATE, not IMPORT} -setup {
+    set tclpdfPath [::tclpdfTest::original update-6.7.pdf]
+    set upd [::tclpdf::update open $tclpdfPath]
+    set tclpdfContent [::tclpdfTest::contentNumber $upd]
+    $upd replace $tclpdfContent "<< /Length 99 0 R >>\nstream\nBT ET\nendstream"
+    $upd write
+    $upd destroy
+} -body {
+    # The session opens: what is damaged is below the cross-reference.
+    set upd [::tclpdf::update open $tclpdfPath]
+    set read [catch {$upd body $tclpdfContent} readMessage readOptions]
+    set replaced [catch {$upd replace $tclpdfContent "<< >>"} \
+        replaceMessage replaceOptions]
+    $upd destroy
+    list $read [string match {tclpdf: *} $readMessage] \
+        [dict get $readOptions -errorcode] \
+        $replaced [string match {tclpdf: *} $replaceMessage] \
+        [dict get $replaceOptions -errorcode]
+} -cleanup {
+    unset -nocomplain tclpdfPath tclpdfContent
+} -result {1 1 {TCLPDF UPDATE OBJECT} 1 1 {TCLPDF UPDATE OBJECT}}
 
 #
 # ---------------------------------------------------------------------------
@@ -554,8 +647,7 @@ test update-7.1 {an added stream gets its /Length from the bytes as written} -co
 test update-7.2 {a content stream can be replaced, and the page then draws the new one} -constraints qpdf -body {
     set path [::tclpdfTest::original update-7.2.pdf]
     set upd [::tclpdf::update open $path]
-    set page [::tclpdfTest::pageNumber $upd]
-    regexp {/Contents (\d+) 0 R} [$upd body $page] -> content
+    set content [::tclpdfTest::contentNumber $upd]
     $upd replaceStream $content {} "1 0 0 RG 5 w 100 100 m 400 400 l S\n"
     $upd write
     $upd destroy
@@ -632,7 +724,6 @@ test update-release-9.1 {a number this update reserved can be given back} -body 
   list [expr {$given eq $number}] $twice $never $afterWrite \
       [string match {*already written*} $message]
 } -result {1 1 1 1 1}
-
 
 # --- round 7: the refusals of the update speak for the update ---------------
 

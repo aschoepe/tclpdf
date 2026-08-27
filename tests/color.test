@@ -83,6 +83,92 @@ test color-parse-1.8 {an unknown name is an error, not a silent black} -body {
   ::tclpdf::color parse fuchsiablue
 } -returnCodes error -match glob -result {*unknown colour*}
 
+test color-parse-1.9 {NaN is refused wherever a component is read} -body {
+  # CLAMPING CANNOT SEE IT. NaN is neither smaller nor larger than a bound -
+  # [expr {"NaN" < 0}] answers 0 without an error - so both comparisons in
+  # [Pin] used to be false and the value came back untouched, through every
+  # space. It then died at the moment of writing, in Tcl's words and under
+  # Tcl's error code ("floating point value is Not a Number", TCL VALUE
+  # DOUBLE NAN), which is not the contract of doc/tclpdf.md: every refusal of
+  # this package is a message beginning with "tclpdf:" and a TCLPDF code.
+  #
+  # Every spelling that reaches a component is listed, because they reach it
+  # by different roads: the bare number, the keyword spellings, the
+  # keyword-less three and four, an ICC component, the tint AND the alternate
+  # of a separation, a DeviceN tint, and all three Lab components.
+  set specs [list NaN {gray NaN} {grey NaN} {rgb NaN 0 0} {cmyk 0 0 NaN 0} \
+      {NaN 0 0} {NaN 0 0 0} {icc srgb NaN} \
+      {separation Spot {cmyk 0 0 0 1} NaN} {separation Spot {rgb NaN 0 0}} \
+      {devicen {{Spot {cmyk 0 0 0 1}}} NaN} \
+      {lab NaN 0 0} {lab 50 NaN 0} {lab 50 0 NaN}]
+  set codes {}
+  set prefixed 0
+  foreach spec $specs {
+    catch {::tclpdf::color parse $spec} message options
+    lappend codes [dict get $options -errorcode]
+    incr prefixed [string match {tclpdf: *} $message]
+  }
+  list [lsort -unique $codes] $prefixed [llength $specs]
+} -result {{{TCLPDF COLOUR COMPONENTS number}} 14 14}
+
+test color-parse-1.10 {NaN is refused in the parameters of a Lab space too} -body {
+  # A different reader ([Double], which calls double() and would raise Tcl's
+  # own error) and therefore a different class: -whitePoint and -range name a
+  # SPACE, not a colour in it, and the module refuses them under COLOUR LAB.
+  set codes {}
+  foreach spec {{lab 50 0 0 -whitePoint {NaN 1 1}} {lab 50 0 0 -whitePoint {0.9642 NaN 0.8249}}
+      {lab 50 0 0 -range {NaN 100 -100 100}} {lab 50 0 0 -range {-100 100 -100 NaN}}} {
+    catch {::tclpdf::color parse $spec} message options
+    lappend codes [dict get $options -errorcode] [string match {tclpdf: *} $message]
+  }
+  set codes
+} -result {{TCLPDF COLOUR LAB -whitePoint} 1 {TCLPDF COLOUR LAB -whitePoint} 1\
+    {TCLPDF COLOUR LAB -range} 1 {TCLPDF COLOUR LAB -range} 1}
+
+test color-parse-1.11 {infinity is still clamped, as the manual says of components} -body {
+  # THE OTHER HALF OF 1.9, and it is deliberately NOT symmetric. A component
+  # outside its range is adjusted rather than refused - ISO 32000-2, 8.6.5.4
+  # says so in as many words for Lab ("adjusted to the nearest valid value
+  # without error indication"), and the manual says it of the device spaces -
+  # and infinity is the far end of that road: a nearest valid value exists
+  # for it. NaN is not on the road at all. Whether infinity should join the
+  # refusal is the author's decision and is open; this test holds what the
+  # package does today so that the change cannot happen by accident.
+  list [::tclpdf::color parse {gray Inf}] [::tclpdf::color parse {gray -Inf}] \
+      [::tclpdf::color parse {cmyk 0 Inf 0 0}] \
+      [lindex [::tclpdf::color parse {lab 50 Inf 0}] 1 0]
+} -result {{gray 1} {gray 0} {cmyk {0 1 0 0}} {50 100.0 0}}
+
+test color-parse-1.12 {a refused NaN colour leaves stream and state as they were} -body {
+  # WHERE THE REFUSAL HAS TO STAND: before anything is written and before
+  # anything is stored. [font -color] was the worst of them - the value was
+  # ACCEPTED into the text state and every later [text], which had named no
+  # colour at all, died on it. Checked as the review asks: the content stream
+  # and the font state before and after a run of forced errors, and then a
+  # plain call of each kind that has to still work.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc font -family Helvetica -size 12 -color {rgb 0 0 1}
+  $doc text before -at {10 10}
+  set stateBefore [$doc font]
+  set streamBefore [::tclpdfTest::content $doc]
+  set codes {}
+  foreach call {{font -color {NaN 0 0}} {style -fill {gray NaN}}
+      {rect -at {10 10} -size {20 20} -fill {gray NaN}}
+      {text z -at {10 40} -color {rgb NaN 0 0}}
+      {style -fill {lab 50 NaN 0}}
+      {style -fill {lab 50 0 0 -whitePoint {NaN 1 1}}}} {
+    lappend codes [::tclpdfTest::refusalCode {$doc {*}$call}]
+  }
+  set answers [list [lsort -unique $codes] \
+      [expr {$stateBefore eq [$doc font]}] \
+      [expr {$streamBefore eq [::tclpdfTest::content $doc]}] \
+      [catch {$doc text after -at {10 60}}] \
+      [catch {$doc rect -at {50 50} -size {10 10} -fill {rgb 1 0 0}}]]
+  $doc destroy
+  set answers
+} -result {{{TCLPDF COLOUR COMPONENTS number} {TCLPDF COLOUR LAB -whitePoint}} 1 1 0 0}
+
 test color-operator-2.1 {fill and stroke differ only in case} -body {
   set red [::tclpdf::color parse {1 0 0}]
   list [::tclpdf::color operator $red fill] [::tclpdf::color operator $red stroke]
