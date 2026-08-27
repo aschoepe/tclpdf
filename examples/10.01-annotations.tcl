@@ -242,9 +242,13 @@ $doc text "line - square - circle (which is an ELLIPSE, the standard's word)\
 # and travels once; this points at it. What it adds over the document's
 # attachment list is WHERE: a list is a file somebody has to know is there,
 # this is a paperclip at the paragraph it belongs to.
+# -date is the day the note was signed for, not the day this file was made;
+# an attachment is an associated file and /Params /ModDate is required of one
+# (ISO 32000-2, 14.13.2), and -data has no file to take a time from.
 $doc attach -data "Delivery note 2026-4711\nOne pallet, received.\n" \
     -name lieferschein.txt -mime text/plain \
-    -description "the delivery note for the line above"
+    -description "the delivery note for the line above" \
+    -date "D:20260804081000+02'00'"
 $doc font -size 9 -color {0.20 0.30 0.45}
 $doc text "The delivery note belongs to this line" -at {20 145}
 

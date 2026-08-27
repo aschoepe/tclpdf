@@ -13,11 +13,15 @@ $doc text "Attachments, links, bookmarks, metadata" -at {20 20}
 # A file, or bytes that never were one (-data needs -name). -data must be BYTES:
 # encode text first. -relationship is /AFRelationship: Alternative, Data, Source,
 # Supplement or Unspecified. -date is a PDF date. -compress is on by default.
+# -date is required with -data: an attachment is an associated file, and
+# /Params /ModDate is required of one (ISO 32000-2, 14.13.2) - the path form
+# takes the file's own modification time.
 $doc attach -data [encoding convertto utf-8 "reading;value\n1;12.4\n2;12.6\n"] \
     -name readings.csv -mime text/csv -relationship Data \
     -description "The individual readings" -date "D:20260818120000+02'00'"
 $doc attach -data [encoding convertto utf-8 "Method: ISO 2360\n"] -name procedure.txt \
-    -mime text/plain -relationship Supplement -description "Method and conditions" -compress 0
+    -mime text/plain -relationship Supplement -description "Method and conditions" \
+    -compress 0 -date "D:20260818120000+02'00'"
 $doc attach $svgFile -name drawing.svg -mime image/svg+xml -relationship Source \
     -description "The drawing this page was made from"
 puts "attached: [llength [$doc attachments]] files"
@@ -327,7 +331,8 @@ set docGlobal $doc
 # The file travels ONCE: [attach] embeds it, and the annotation points at it
 # by the name that call gave it - not by a path.
 $doc attach -data "Delivery note 2026-4711\n" -name lieferschein.txt \
-    -mime text/plain -description "the delivery note for line 1"
+    -mime text/plain -description "the delivery note for line 1" \
+    -date "D:20260818120000+02'00'"
 $doc annot attachment -at {180 40} -name lieferschein.txt \
     -contents "the delivery note"
 

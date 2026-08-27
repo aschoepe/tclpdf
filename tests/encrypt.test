@@ -404,7 +404,7 @@ test encrypt-2.8 {an attachment with null bytes survives byte for byte} -constra
     $doc page add
     $doc text "x" -at {20 700}
     $doc attach -data "a\x00b\x00c\xff" -name nul.bin \
-        -mime application/octet-stream -compress 0
+        -mime application/octet-stream -compress 0 -date "D:20260812093000+02'00"
     $doc write $path
     $doc destroy
     # Through a FILE, not through [exec]'s pipe: the pipe is decoded with

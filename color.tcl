@@ -1117,7 +1117,11 @@ proc ::tclpdf::color::Double {value option} {
   # Before double(), which throws Tcl's own "floating point value is Not a
   # Number" on NaN: the parameters of a Lab space were refused before, but in
   # Tcl's words and under Tcl's error code, and a caller cannot tell that
-  # from a defect in the package. Same predicate as [Pin]'s, see below.
+  # from a defect in the package. Infinity was not refused here at all - it
+  # survived double(), passed the bound checks of [LabWhitePoint] and
+  # [LabRange] (Inf is positive, -Inf is the smaller of a pair) and reached
+  # the /WhitePoint array, where [pdfObj num] killed the whole document at
+  # write time under PDFOBJ NUMBER. Same predicate as [Pin]'s, see below.
   if {[Unplaceable $value]} {
     return -code error -errorcode [list TCLPDF COLOUR LAB $option] \
         "tclpdf: $option takes numbers that place something, not \"$value\"\
@@ -1524,11 +1528,15 @@ proc ::tclpdf::color::Pin {value low high} {
     return -code error -errorcode [list TCLPDF COLOUR COMPONENTS number] \
         "tclpdf: colour component is not a number: \"$value\""
   }
-  # BEFORE the clamping, because clamping cannot see it: NaN is smaller than
-  # nothing and larger than nothing, so both comparisons below are false and
-  # it would be handed back unchanged (measured: [expr {"NaN" < 0}] answers 0
+  # BEFORE the clamping, because clamping is the wrong answer for both values
+  # it turns away. NaN it cannot even see: NaN is smaller than nothing and
+  # larger than nothing, so both comparisons below are false and the value
+  # would be handed back unchanged (measured: [expr {"NaN" < 0}] answers 0
   # without an error). It then travels the whole way to [pdfObj num] and, in
   # a font colour, into the state, where every later [text] dies on it.
+  # Infinity clamping saw perfectly well and put on the bound - {gray Inf}
+  # came out as {gray 1} - which is a silent answer to a question the caller
+  # did not ask; see [Unplaceable].
   if {[Unplaceable $value]} {
     return -code error -errorcode [list TCLPDF COLOUR COMPONENTS number] \
         "tclpdf: colour component is a number that places nothing, \"$value\"\
@@ -1548,28 +1556,32 @@ proc ::tclpdf::color::Pin {value low high} {
 # Lab component, and by [Double] for the parameters of a Lab space - the two
 # places every number of this module passes through, so the rule stands once.
 #
-# NOT [::tclpdf::option finite], although the module has it: that predicate
-# refuses NaN AND Inf, and infinity is deliberately still clamped here. A
-# component is clamped rather than refused where it merely leaves its range
-# (8.6.5.4 for Lab: "adjusted to the nearest valid value without error
-# indication"), and infinity is the far end of that road; NaN is not on the
-# road at all - it names no colour, no nearest valid value exists for it, and
-# clamping cannot even see it. Whether infinity should join it is the author's
-# call and is open as of 2026-08-27.
+# NaN AND infinity, both of them refused since 2026-08-27. Clamping is what a
+# component gets where it merely LEAVES ITS RANGE - 8.6.5.4 prescribes it for
+# Lab in as many words ("Component values falling outside the specified range
+# shall be adjusted to the nearest valid value without error indication"), and
+# the same holds for the device spaces - but neither of these two values left
+# a range. NaN is not on the scale at all: clamping cannot even see it, it is
+# neither smaller nor larger than a bound, and no nearest valid value exists
+# for it. Infinity is on the scale but not on the page: no PDF number can
+# hold it ([pdfObj num] refuses it as having no representation), so clamping
+# it would answer a question the caller never asked - a calculation that
+# overflowed or divided by zero came out as a saturated colour, silently, and
+# the same value in a -whitePoint reached the Lab resource and killed the
+# document at the moment of writing, under a foreign topic's error code.
 #
-# THE SWITCH IS THIS ONE LINE: adding "|| $value == Inf || $value == -Inf" to
-# the expression below turns the silent clamping of infinity into a refusal,
-# under the same error codes and with no other change anywhere - the two
-# messages are worded for the value at hand rather than for NaN by name, so
-# they read correctly either way, and color-parse-1.11 is then the test that
-# has to be turned around with it.
+# This is [::tclpdf::option finite] negated and nothing else, so that what a
+# number is stands in one place for the whole package; the name lives on here
+# because the refusal it feeds is this module's own (COLOUR COMPONENTS, COLOUR
+# LAB - not OPTION NUMBER, which speaks of measurements).
 #
-# Written as a comparison, not with abs() or an arithmetic operator: [expr]
-# throws on NaN as an operand of those, so the test would raise the very
+# That predicate is written as a comparison rather than with abs() or an
+# arithmetic operator, and that is what makes it usable on NaN at all: [expr]
+# throws on NaN as an operand of those, so such a test would raise the very
 # error it exists to replace. NaN is the one value not equal to itself
-# (IEEE 754).
+# (IEEE 754); Inf and -Inf compare perfectly well.
 proc ::tclpdf::color::Unplaceable {value} {
-  return [expr {$value != $value}]
+  return [expr {![::tclpdf::option finite $value]}]
 }
 
-package provide tclpdf::color 1.10
+package provide tclpdf::color 1.11

@@ -927,7 +927,7 @@ test import-16.5 {an archivable document reports its claim, its intent and its a
     $doc pdfa -part 3 -conformance B
     $doc info Title "An archivable document"
     $doc attach -data "<x/>" -name daten.xml -mime text/xml \
-        -relationship Data -description "the data"
+        -relationship Data -description "the data" -date "D:20260812093000+02'00'"
     $doc page add
     $doc font -family body -size 12
     $doc text "archivable" -at {50 50}

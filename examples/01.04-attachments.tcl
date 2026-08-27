@@ -111,9 +111,14 @@ foreach value $readings {
     incr position 5
 }
 # -date is when the DATA was recorded, not when this PDF was written. An
-# archive that keeps the report for ten years reads it off the attachment, and
-# a value nobody sets is left out rather than invented - which is also what
-# keeps two runs of the same document byte-identical.
+# archive that keeps the report for ten years reads it off the attachment - and
+# the standard requires it: every attachment here is an ASSOCIATED FILE (the
+# catalog lists it under /AF), and /Params /ModDate is required of one (ISO
+# 32000-2, 14.13.2). With -data there is no file whose modification time could
+# stand in, so -date has to be given rather than invented; a [clock seconds]
+# stamped in silently would put a different moment into every run of the same
+# document. The path form further down needs none - it takes the file's own
+# time.
 $doc attach -data $csv -name readings.csv -mime text/csv \
     -relationship Data -description "The twenty individual readings" \
     -date "D:20260730081500+02'00'"
@@ -122,7 +127,8 @@ $doc attach -data $csv -name readings.csv -mime text/csv \
 $doc attach -data "ISO 2360 - eddy current method\nProbe: type N, calibrated\
     2026-07-30\nTemperature: 21.4 C, humidity 44 %\n" \
     -name procedure.txt -mime text/plain -relationship Supplement \
-    -description "Method and conditions"
+    -description "Method and conditions" \
+    -date "D:20260730073000+02'00'"
 
 # The other three relationships, each on the file it describes. Source is the
 # file the document was generated from - here that is this very script.
@@ -130,6 +136,9 @@ $doc attach -data "ISO 2360 - eddy current method\nProbe: type N, calibrated\
 # text, attached uncompressed (-compress 0) so that it can be read straight out
 # of the PDF with a text editor. Unspecified is the default and says nothing;
 # it is written out here so that the choice is visible rather than silent.
+#
+# And no -date on this one: the path form reads the file's modification time
+# and writes that, which is what /ModDate means.
 $doc attach [info script] -name [file tail [info script]] -mime text/plain \
     -relationship Source -description "The script this report was made with"
 
@@ -139,11 +148,13 @@ foreach row $summary {
 }
 $doc attach -data $text -name summary.txt -mime text/plain \
     -relationship Alternative -compress 0 \
-    -description "The summary table as plain text"
+    -description "The summary table as plain text" \
+    -date "D:20260730081500+02'00'"
 
 $doc attach -data "Specimen batch 7841 was stored at room temperature for\
     48 h before measuring.\n" -name note.txt -mime text/plain \
-    -relationship Unspecified -description "A note on the specimen"
+    -relationship Unspecified -description "A note on the specimen" \
+    -date "D:20260728093000+02'00'"
 
 exampleFooter $doc
 

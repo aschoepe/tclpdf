@@ -1127,7 +1127,8 @@ oo::define ::tclpdf::document::document {
   }
 
   # The fields whose widgets reached no Form structure element, by name -
-  # a field declared before [$doc tagged 1], which is the one way it happens.
+  # a field declared before [$doc tagged 1], or a visible signature placed
+  # before it (sign -rect) - the two ways it happens.
   method fieldsOutsideStructure {} {
     set outside {}
     dict for {name record} [my state fields] {
@@ -1190,7 +1191,9 @@ oo::define ::tclpdf::document::document {
   }
 
   # The name is free - against the fields of this module AND against the
-  # signature field, which sign.tcl builds without going through here.
+  # signature field: a visible one stands in this table as a record of its
+  # own (sign.tcl), an invisible one is an artifact and stands only in
+  # [state sign] - so both places are asked.
   #
   # Two fields with one partial field name at the same level of the tree are
   # two entries a reader resolves to one (12.7.4.2): whichever it finds first
@@ -1199,6 +1202,15 @@ oo::define ::tclpdf::document::document {
   method FieldTaken {name} {
     set fields [my state fields]
     if {[dict exists $fields $name]} {
+      if {![dict exists [dict get $fields $name] build]} {
+        # The signature: in this table like any other field (see sign.tcl),
+        # and the one record without a build method.
+        return -code error -errorcode [list TCLPDF FIELD TAKEN $name] \
+            "tclpdf: \"$name\" is the name of this document's signature field\
+            and cannot be a second field as well - both would stand in the\
+            same /Fields array under one partial field name (ISO 32000-2,\
+            12.7.4.2). Rename this field, or pass \"sign -field\" another name"
+      }
       return -code error -errorcode [list TCLPDF FIELD TAKEN $name] \
           "tclpdf: this document already has a field named \"$name\" - a\
           partial field name is what a form is addressed by (ISO 32000-2,\
@@ -1332,6 +1344,14 @@ oo::define ::tclpdf::document::document {
     set resources $variable
 
     dict for {name record} [my state fields] {
+      # A FIELD ANOTHER MODULE WRITES. The signature is a field of this
+      # document - it stands in the same /Fields array under the same rules
+      # of 12.7.4.2, and PDF/UA asks its widget the same three questions -
+      # so its record stands in this table and the questions above read it.
+      # What it has not got is a build method: sign.tcl merges field and
+      # widget into one object of its own (12.5.6.19) and puts it there on
+      # the same beforeWrite event. There is nothing here to write for it.
+      if {![dict exists $record build]} continue
       if {[dict exists $record widgets]} {
         set own [my FieldWriteKids $name $record]
       } else {
@@ -1834,4 +1854,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::field 1.1
+package provide tclpdf::field 1.2

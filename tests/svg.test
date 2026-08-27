@@ -1820,4 +1820,160 @@ test svg-malformed-40.1 {a drawing that is not well-formed XML is refused in thi
   list [lrange $code 0 3] [string match {tclpdf:*} $message] $stream
 } -result {{TCLPDF SVG XML MALFORMED} 1 {}}
 
+# -- a colour component that is no number ----------------------------------
+#
+# Measured 2026-08-27: fill="rgb(NaN,0,0)" answered "floating point value is
+# Not a Number" - Tcl's words, not this package's - because min() and max()
+# are arithmetic functions and [expr] refuses NaN as their operand; and
+# fill="rgb(Inf,0,0)" came through the same clamp as 1.0 and painted a full
+# channel the file had never asked for. Both now stop at the attribute they
+# stand in, which is the rule [color parse] follows since the same day
+# (TCLPDF COLOUR COMPONENTS number) at the one point that never reaches it.
+
+# One drawing, and what the page holds afterwards: the refusal's code, whether
+# it speaks this package's language, the message, and what the stream got.
+#
+# The drawing's own bracket IS written and unwound again (SvgRoot), so the
+# stream is not empty - what has to hold is that it is BALANCED and that
+# nothing was painted before the refusal.
+proc svgRefused {markup} {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc svg -data "<svg viewBox=\"0 0 10 10\"
+      xmlns=\"http://www.w3.org/2000/svg\">$markup</svg>" -at {10 10} -width 50}]
+  catch {$doc svg -data "<svg viewBox=\"0 0 10 10\"
+      xmlns=\"http://www.w3.org/2000/svg\">$markup</svg>" -at {10 10} -width 50} message
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  return [list $code [string match {tclpdf:*} $message] $message \
+      [expr {[regexp -all {(^|\n)q(\n| )} $stream]
+          == [regexp -all {(^|\n)Q(\n|$)} $stream]}] \
+      [regexp {(rg|RG|re|scn| f\n| S\n)} $stream]]
+}
+
+# The same drawing's content stream, for the cases that are NOT refused.
+proc svgDrawn {markup} {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data "<svg viewBox=\"0 0 10 10\"
+      xmlns=\"http://www.w3.org/2000/svg\">$markup</svg>" -at {10 10} -width 50
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  return $content
+}
+
+test svg-finite-41.1 {NaN in rgb() is refused where it stands, and names the attribute} -body {
+  lassign [svgRefused {<rect width="4" height="4" fill="rgb(NaN,0,0)"/>}] \
+      code tclpdf message balanced painted
+  # The value AND the attribute: fill and stroke carry the same notation and
+  # nothing downstream tells them apart. And nothing is painted - the style
+  # is worked out before the first operator reaches the page, and the
+  # drawing's own bracket comes back to zero.
+  list $code $tclpdf [string match {*"NaN"*rgb(NaN,0,0)*} $message] \
+      $balanced $painted
+} -result {{TCLPDF SVG COLOUR fill} 1 1 1 0}
+
+test svg-finite-41.2 {the per cent spelling and the stroke side take the same road} -body {
+  lassign [svgRefused {<rect width="4" height="4" stroke="rgb(NaN%,0%,0%)"/>}] \
+      code tclpdf message balanced painted
+  list $code $tclpdf $balanced $painted
+} -result {{TCLPDF SVG COLOUR stroke} 1 1 0}
+
+test svg-finite-41.3 {Inf no longer paints a channel the file never asked for} -body {
+  # This is the half that was SILENT: Inf/255.0 is Inf, and min(1.0, Inf) is
+  # 1.0, so rgb(Inf,0,0) drew pure red and [color parse] was never asked.
+  # "1e400" is the same value written as a literal a document may really
+  # carry - it overflows to Inf on the way in.
+  list [lindex [svgRefused {<rect width="4" height="4" fill="rgb(Inf,0,0)"/>}] 0] \
+      [lindex [svgRefused {<rect width="4" height="4" fill="rgb(1e400,0,0)"/>}] 0] \
+      [lindex [svgRefused {<rect width="4" height="4" fill="rgb(-Inf,0,0)"/>}] 0]
+} -result {{TCLPDF SVG COLOUR fill} {TCLPDF SVG COLOUR fill} {TCLPDF SVG COLOUR fill}}
+
+test svg-finite-41.4 {an rgba() alpha is a component of the same value} -body {
+  lassign [svgRefused {<rect width="4" height="4" fill="rgba(0,0,0,NaN)"/>}] \
+      code tclpdf message balanced painted
+  list $code $tclpdf $balanced $painted
+} -result {{TCLPDF SVG COLOUR fill} 1 1 0}
+
+test svg-finite-41.5 {a component that is no number at all still comes back from the colour module} -body {
+  # The line between the two roads, and the reason the gate is [option
+  # finite] AFTER [string is double -strict] rather than instead of it: what
+  # this method cannot READ is handed back untouched and refused by name one
+  # module further on. Only a value that IS a double and is not finite has no
+  # such second chance.
+  lassign [svgRefused {<rect width="4" height="4" fill="rgb(oops,0,0)"/>}] \
+      code tclpdf message balanced painted
+  list [lrange $code 0 2] $tclpdf [string match {*rgb(oops,0,0)*} $message]
+} -result {{TCLPDF COLOUR UNKNOWN} 1 1}
+
+test svg-finite-41.6 {a finite component is untouched by the gate} -body {
+  # The mutation reference for 41.1 to 41.4: the notation still reaches the
+  # one colour road, so the tests above measure the refusal and not a
+  # notation that stopped working.
+  regexp {1 0\.53333\d* 0 rg} [svgDrawn {<rect width="4" height="4" fill="rgb(255, 136, 0)"/>}]
+} -result 1
+
+test svg-finite-41.7 {an opacity that is no number is ignored, not refused} -body {
+  # The other side of the line. Measured 2026-08-27, fill-opacity="NaN" died
+  # with "floating point value is Not a Number" and an -errorcode of NONE.
+  # Unlike a colour an opacity has an initial value to fall back to (SVG 1.1,
+  # 14.5), and neither NaN nor Inf is an SVG <number> (4.2) - so the
+  # declaration is in error and the property is ignored, which is what this
+  # branch always did with a value that is no number. Measured against the
+  # same rectangle with the attribute left out: the two are one drawing.
+  set plain [svgDrawn {<rect width="4" height="4" fill="#f00" stroke="#00f"/>}]
+  set answers {}
+  foreach attribute {fill-opacity stroke-opacity opacity} {
+    foreach value {NaN Inf -Inf 1e400} {
+      lappend answers [expr {[svgDrawn "<rect width=\"4\" height=\"4\"
+          fill=\"#f00\" stroke=\"#00f\" $attribute=\"$value\"/>"] eq $plain}]
+    }
+  }
+  lsort -unique $answers
+} -result 1
+
+test svg-finite-41.8 {and an opacity that IS a number still reaches the page} -body {
+  # The mutation reference for 41.7: the gate must not swallow 0.5 as well.
+  set plain [svgDrawn {<rect width="4" height="4" fill="#f00" stroke="#00f"/>}]
+  set half [svgDrawn {<rect width="4" height="4" fill="#f00" stroke="#00f"
+      fill-opacity="0.5"/>}]
+  list [expr {$half ne $plain}] [regexp {gs} $half]
+} -result {1 1}
+
+test svg-finite-41.9 {a gradient stop offset in per cent goes through the same gate} -body {
+  # offset="NaN%" was divided by 100 and came back in Tcl's words; without
+  # the per cent sign the same value already reached [shading] and was
+  # refused by name. Now both take that road.
+  lassign [svgRefused {<defs><linearGradient id="g"><stop offset="NaN%"
+      stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs>
+      <rect width="4" height="4" fill="url(#g)"/>}] code tclpdf message \
+      balanced painted
+  list $code $tclpdf [string match {*NaN*} $message] $balanced $painted
+} -result {{TCLPDF SHADING STOPS range} 1 1 1 0}
+
+test svg-finite-41.10 {and a per cent offset that is a number still divides} -body {
+  # The mutation reference for 41.9: the division has to survive the gate.
+  # Measured on the stitching function rather than on the content stream,
+  # because that is where an offset ends up - /Bounds [0.5] is the 50%, and
+  # a gate that stopped dividing would put 50 there.
+  proc svgStops {stops} {
+    set doc [tclpdf new -compress 0]
+    $doc page add
+    $doc svg -data "<svg viewBox=\"0 0 10 10\"
+        xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient
+        id=\"g\">$stops</linearGradient></defs><rect width=\"4\" height=\"4\"
+        fill=\"url(#g)\"/></svg>" -at {10 10} -width 50
+    set functions [::tclpdfTest::objects $doc /FunctionType]
+    $doc destroy
+    return $functions
+  }
+  set percent [svgStops {<stop offset="0%" stop-color="red"/><stop offset="50%"
+      stop-color="lime"/><stop offset="100%" stop-color="blue"/>}]
+  set plain [svgStops {<stop offset="0" stop-color="red"/><stop offset="0.5"
+      stop-color="lime"/><stop offset="1" stop-color="blue"/>}]
+  rename svgStops {}
+  list [expr {$percent eq $plain}] \
+      [regexp {/Bounds \[0\.5\]} [lindex $percent end]]
+} -result {1 1}
+
 cleanupTests

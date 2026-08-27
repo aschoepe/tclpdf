@@ -930,11 +930,14 @@ test document-strings-24.5 {no module builds a string past the document unrecord
         own, the stream around it is (7.6.2), and a doubly encrypted palette is a picture
         in the wrong colours. The image XObject way through the same [TiffSpace] passes
         [my BytesStr] and is encrypted like every other string in an object}}
-    sign.tcl {3 {a signature dictionary is never in an encrypted document - measured in both
+    sign.tcl {5 {a signature dictionary is never in an encrypted document - measured in both
         directions: encrypt refuses a document being signed, sign refuses an encrypted one, and
-        an update refuses an encrypted file at the reader. The three sites sit in the namespace
-        proc that builds the dictionary for both roads, the document and an update session,
-        which is why they cannot go through [my Str]}}
+        an update refuses an encrypted file at the reader. The five sites sit in the namespace
+        procs that build the dictionary and the widget for both roads, the document and an
+        update session, which is why they cannot go through [my Str]: two in [Dictionary] (the
+        strings of -reason and friends, and /M), three in [Widget] (/T, and since 2026-08-27
+        /TU from -tooltip and /Contents from -contents - the accessible name and description
+        PDF/UA asks of a visible signature)}}
   }
   # The FOURTH string door, and the one that cost a violation: an object body
   # copied out of a foreign file is written by [importRead::Serialize], which

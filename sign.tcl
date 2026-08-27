@@ -121,6 +121,30 @@
 # Print set and Hidden, Invisible, NoView and ToggleNoView clear, and a
 # visible field is no exception to it.
 #
+# A VISIBLE SIGNATURE FIELD IS A FORM FIELD, and a tagged document treats it
+# as one. ISO 14289-1, 7.18.4 ("A Widget annotation shall be nested within a
+# Form tag") and ISO 14289-2, 8.10.1 ("Each widget annotation shall be
+# enclosed by a Form structure element") make no exception for /FT /Sig, and
+# 7.18.1 wants every annotation in the structure tree in reading order and
+# described. So the widget gets the same treatment every other field's does,
+# from the same code: a Form structure element opened at the [sign] call -
+# which is where the reading order is - with the object reference into it and
+# the /StructParent key back out, and -tooltip and -contents for the two ways
+# a field says what it is (/TU, ISO 32000-2, 14.9.3; /Contents, ISO 14289-2,
+# 8.10.2.3). It also stands in the document's field table, so that [$doc ua]
+# asks it the three questions it asks every widget, in the same sentences,
+# and so that a name taken twice is refused whichever call came second.
+#
+# AND THE INVISIBLE ONE IS AN ARTIFACT, which is the other half of the same
+# rule rather than an omission: ISO 14289-2, 8.9.2.4.13 - "a widget
+# annotation of zero height and width shall be an artifact" - 8.10.1, which
+# exempts an artifact from the Form element, and 8.10.3.5, which says it of
+# this field by name. So the default signature enters neither the tree nor
+# the field table, and PDF/UA asks it nothing. The RECTANGLE decides which of
+# the two a signature is, not the claim: [$doc ua] may stand before this call
+# or after it, and a tree that depended on the order would make the two
+# orders write different files.
+#
 # What the first version does not do, each refused by name rather than
 # written wrong:
 #
@@ -852,13 +876,30 @@ proc ::tclpdf::sign::Dictionary {values} {
 # veraPDF rule 6.3.2-2 wants Print set and Hidden, Invisible, NoView and
 # ToggleNoView clear of EVERY annotation, so a visible field carries the same
 # flags as the invisible one.
-proc ::tclpdf::sign::Widget {field value page rect appearance} {
+#
+# "describe" is what PDF/UA asks of the same object and what the direct
+# writer fills in: /TU, the field's accessible name (ISO 32000-2, 14.9.3),
+# /Contents, this widget's own description (ISO 14289-2, 8.10.2.3), and
+# /StructParent, the annotation's half of the join to the Form structure
+# element that encloses it (ISO 32000-2, 14.7.5.4). All three empty for the
+# incremental writer, which refuses a file that claims PDF/UA rather than
+# rebuilding a structure tree it did not write - see [add].
+#
+# The keys stand where a form field puts them: /TU beside /T, which is the
+# field's half, and /Contents and /StructParent at the end with /F and /P,
+# which are the annotation's - the order [FieldWidgetPairs] and
+# [FieldCommonPairs] give a merged field in field.tcl.
+proc ::tclpdf::sign::Widget {field value page rect appearance {describe {}}} {
+  set describe [dict merge {tooltip {} contents {} structParent {}} $describe]
   set annotation [list \
       Type /Annot \
       Subtype /Widget \
       FT /Sig \
-      T [::tclpdf::pdfObj str $field] \
-      V $value]
+      T [::tclpdf::pdfObj str $field]]
+  if {[dict get $describe tooltip] ne {}} {
+    lappend annotation TU [::tclpdf::pdfObj str [dict get $describe tooltip]]
+  }
+  lappend annotation V $value
   if {$rect eq {}} {
     lappend annotation Rect [::tclpdf::pdfObj arr {0 0 0 0}]
   } else {
@@ -866,6 +907,16 @@ proc ::tclpdf::sign::Widget {field value page rect appearance} {
         AP [::tclpdf::pdfObj dictionary [list N $appearance]]
   }
   lappend annotation F 4 P $page
+  if {[dict get $describe contents] ne {}} {
+    lappend annotation Contents \
+        [::tclpdf::pdfObj str [dict get $describe contents]]
+  }
+  # A key pointing into a parent tree that has no entry for it is worse than
+  # none, so it is written only where a Form structure element was actually
+  # made - the same rule [FieldWidgetPairs] follows for every other widget.
+  if {[dict get $describe structParent] ne {}} {
+    lappend annotation StructParent [dict get $describe structParent]
+  }
   return [::tclpdf::pdfObj dictionary $annotation]
 }
 
@@ -1183,6 +1234,12 @@ proc ::tclpdf::sign::Signer {value what} {
 #   Both are dictionaries of their own with their own rules, and neither is
 #   what this call writes.
 #
+#   A SIGNATURE ON A FILE THAT CLAIMS PDF/UA. The widget would land on a page
+#   without /Tabs /S and outside the structure tree, which is a conformant
+#   file made non-conformant by a call that says nothing - see the refusal in
+#   [add] for what an incremental update would have to rewrite, and why that
+#   is knowable for a document being written and not for a foreign file.
+#
 
 # Answers what was written, as a dictionary: field, page, size, subFilter,
 # date, signed, byteRange, length (the CMS object's size, empty where none was
@@ -1269,6 +1326,50 @@ proc ::tclpdf::sign::add {path args} {
         CMS object in with \[::tclpdf::sign embed\] first: appending a further\
         signature now would cover those zeros, and the object that belongs\
         there could never be written without breaking it"
+  }
+
+  # A FILE THAT CLAIMS PDF/UA IS NOT SIGNED HERE, and the refusal stands
+  # before the update session is opened - nothing has been read into a
+  # session, nothing added, nothing written.
+  #
+  # A signature widget is an annotation, and PDF/UA asks three things of the
+  # page and the tree it lands in: /Tabs /S on every page that carries an
+  # annotation (ISO 14289-1, 7.18.3), a Form structure element enclosing the
+  # widget (7.18.4; ISO 14289-2, 8.10.1) and an accessible description
+  # (7.18.1). An incremental update (7.5.6) can only add objects and replace
+  # whole ones, so meeting them means rewriting the page, the parent tree,
+  # the element the Form belongs under and the structure tree root of a file
+  # THIS PACKAGE DID NOT WRITE - a number tree that may be several levels of
+  # /Kids and /Limits deep, and an element nesting that differs from one
+  # producer to the next. That is the difference between the two entry
+  # points: [$doc sign] knows the tree because it built it, and this call is
+  # for files it has never seen.
+  #
+  # Measured 2026-08-26: a veraPDF-conformant PDF/UA-1 file came out of this
+  # call failing clause 7.18.3, test 1 - and the /Tabs alone would have made
+  # it validator-green while the widget still stood outside the tree. Half a
+  # repair on a conformance claim is worse than none, so the file is left
+  # exactly as it was.
+  #
+  # The claim is read through the reader's public side - the same "pdfua"
+  # entry [::tclpdf::pdf info] answers a caller with, out of the pdfuaid
+  # namespace of the XMP packet. A file that cannot be read at all makes no
+  # claim, and what is wrong with it is [::tclpdf::update open]'s sentence to
+  # say two lines further down, in its own vocabulary.
+  package require tclpdf::importInfo 1.0-
+  if {![catch {::tclpdf::pdf info $path} facts]
+      && [dict exists $facts pdfua] && [dict get $facts pdfua] ne {}} {
+    return -code error -errorcode [list TCLPDF SIGN STATE ua] \
+        "tclpdf: $what claims PDF/UA-[dict get $facts pdfua] and\
+        \[::tclpdf::sign add\] would break that claim - a signature widget is\
+        an annotation, and PDF/UA asks for /Tabs /S on its page (ISO 14289-1,\
+        7.18.3), for a Form structure element around it (7.18.4; ISO 14289-2,\
+        8.10.1) and for a description (7.18.1), none of which an incremental\
+        update can add to a structure tree this package did not write. Sign\
+        the document as it is written, with \[\$doc sign\], which builds all\
+        three; or prepare it that way and hand the finished file to\
+        \[::tclpdf::sign digest\] and \[::tclpdf::sign embed\]. The file is\
+        unchanged"
   }
 
   set upd [::tclpdf::update open $path]
@@ -1698,6 +1799,7 @@ oo::define ::tclpdf::document::document {
   #           ?-name text? ?-reason text? ?-location text? ?-contact text?
   #           ?-date date? ?-field name? ?-page index?
   #           ?-rect {x y w h}? ?-appearance form?
+  #           ?-tooltip text? ?-contents text?
   # $doc sign state             what was declared, and what came of it
   method sign {args} {
     if {[llength $args] && [string index [lindex $args 0] 0] ne "-"} {
@@ -1718,6 +1820,7 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       signer {} size 16384 name {} reason {} location {} contact {}
       date now field Signature1 page 0 subfilter pkcs7 rect {} appearance {}
+      tooltip {} contents {}
     } $args "sign"]
 
     # Which /SubFilter, how much room, which page and what the signer is:
@@ -1874,6 +1977,74 @@ oo::define ::tclpdf::document::document {
           /adbe.pkcs7.detached - ISO 32000-2, Table 255)"
     }
 
+    # THE WIDGET'S PLACE IN THE STRUCTURE TREE, MADE HERE AND NOT AT THE
+    # WRITE. A signature field is a form field: ISO 14289-1, 7.18.4 - "A
+    # Widget annotation shall be nested within a Form tag" - and ISO 14289-2,
+    # 8.10.1 - "Each widget annotation shall be enclosed by a Form structure
+    # element" - make no exception for /FT /Sig, and 7.18.1 wants every
+    # annotation "represented in the structure tree in correct reading
+    # order". Correct reading order is the order of the script, so the
+    # element is opened where the caller called [sign] - an element made on
+    # beforeWrite would land after everything else, which is the reason
+    # field.tcl gives at [FieldStructureOpen] and the same one here.
+    #
+    # The core's own two halves are used rather than a second set: the Form
+    # element, the object reference into it and the /StructParent key are the
+    # same question for every widget of every field type, and two answers to
+    # it are two answers waiting to differ. [FieldStructureOpen] does what
+    # can still refuse - a Form may not stand everywhere - and
+    # [FieldStructureKey] does what needs the object number; between them
+    # stands nothing but the reservation, which cannot raise. In a document
+    # that is not tagged both answer empty and nothing is written.
+    #
+    # The module is required by name because this is not the [unknown] path:
+    # [FieldEnlist] and [FieldRectangle] are in the topic table of
+    # document.tcl and these two are not, and the topic has to be there
+    # before the first of them is called.
+    #
+    # It stands AFTER the version floor and BEFORE the state, so that a
+    # refusal from the tree leaves a document that can be signed again -
+    # [state sign] unset, and no second call answering "already being
+    # signed". The floor is the one thing that stays, exactly as it does for
+    # a field declared where no Form may stand.
+    #
+    # AND ONLY A VISIBLE SIGNATURE HAS A PLACE IN THE TREE AT ALL. ISO
+    # 14289-2, 8.9.2.4.13: "a widget annotation of zero height and width
+    # shall be an artifact", which 8.10.1 is the exemption of - "unless the
+    # widget annotation is an artifact" - and 8.10.3.5 says of this very
+    # field: "A signature field's widget annotation shall be considered an
+    # artifact if it meets the criteria defined in 8.9.2.2". NOTE 1 of
+    # 8.9.2.4.13 gives the reason and the workflow it comes from: the widgets
+    # of document timestamps are invisible, unpredictable in number, and
+    # "it is important that invisible widgets be exempt from any tagging
+    # requirements otherwise imposed by this document".
+    #
+    # So the RECTANGLE decides, not the claim - measured, and it has to be
+    # that way: [$doc ua -part 2] may stand before this call or after it, and
+    # a tree that depended on which order the caller chose would make one of
+    # the two orders write a different file. veraPDF 1.30 agrees from both
+    # sides (2026-08-27): the invisible signature outside the tree is
+    # conformant under ua1 AND ua2, and a Form element around it fails ua2
+    # rule 8.9.2.4.13-1 ("A Widget annotation of zero height and width is not
+    # marked as an Artifact"); the VISIBLE one out of the tree fails ua1
+    # rules 7.18.1-3 and 7.18.4-1, which is the finding this is the answer
+    # to.
+    #
+    # The invisible signature therefore enters neither the tree nor the field
+    # table below: an artifact is not real content, and there is nothing for
+    # PDF/UA to ask about it. -tooltip and -contents are written all the same
+    # where the caller passed them - ISO 14289-1, 7.18.1 exempts only the
+    # hidden flag, a rectangle outside the CropBox and Popup, so a
+    # description is never wrong.
+    set structParent {}
+    if {$rect ne {}} {
+      package require tclpdf::field 1.0-
+      set structure [lindex \
+          [my FieldStructureOpen [dict get $options field] {}] 0]
+      set widgetNumber [my reservation sign.widget]
+      set structParent [my FieldStructureKey $structure $widgetNumber $page]
+    }
+
     my state sign [dict create \
         signer [dict get $options signer] \
         size $size \
@@ -1886,8 +2057,47 @@ oo::define ::tclpdf::document::document {
         page $page \
         rect $rect \
         appearance $appearance \
+        tooltip [dict get $options tooltip] \
+        contents [dict get $options contents] \
+        structParent $structParent \
         subFilter $subFilter \
         signed 0 byteRange {} length {}]
+
+    # AND INTO THE FIELD TABLE, because a visible signature IS a form field
+    # of this document: it stands in the same /Fields array under the same
+    # rules of 12.7.4.2, and PDF/UA asks its widget the same three questions
+    # it asks every other one - an accessible name (/TU, 7.18.1 with ISO
+    # 32000-2, 14.9.3), a description of the widget itself under part 2
+    # (8.10.2.3), and a place in the structure tree (7.18.4). One list and
+    # one asker, rather than a second state for ua.tcl to remember to ask:
+    # the record here is what [fieldsWithoutDescription],
+    # [fieldWidgetsWithoutDescription] and [fieldsOutsideStructure] read, and
+    # [UaCheckFields] judges the signature by the same sentences it judges a
+    # text field by. A signature declared before [$doc tagged 1] is reported
+    # by the third of them, exactly as a text field declared there is.
+    #
+    # It is a record WITHOUT a build method, which is what tells field.tcl
+    # that the object is not its to write: field and widget are merged into
+    # one object here (12.5.6.19), by [SignWrite] on the same beforeWrite
+    # event, and [FieldWrite] passes the record over.
+    #
+    # The name check above ([state fields] read for a clash) and this entry
+    # are the two halves of one rule, and they make it symmetric: whichever
+    # of [$doc field ...] and [$doc sign] comes second is the one refused.
+    if {$rect ne {}} {
+      set fields [my state fields]
+      dict set fields [dict get $options field] [dict create \
+          name [dict get $options field] \
+          type Sig \
+          page $page \
+          rect $rect \
+          widget $widgetNumber \
+          structParent $structParent \
+          tooltip [dict get $options tooltip] \
+          contents [dict get $options contents] \
+          label {} flags 0 data {}]
+      my state fields $fields
+    }
 
     # The channel way is refused BEFORE the bytes go anywhere: the core asks
     # [state needsFile] and reports the reason it finds there. Saying it in
@@ -1923,7 +2133,7 @@ oo::define ::tclpdf::document::document {
       return {}
     }
     return [dict filter $current key date field page rect appearance size \
-        subFilter signed byteRange length]
+        tooltip contents subFilter signed byteRange length]
   }
 
   # The objects, built on beforeWrite: the signature dictionary with both
@@ -1992,10 +2202,16 @@ oo::define ::tclpdf::document::document {
       set rect [my SignRectangle $page [dict get $current rect]]
       set appearance [my SignAppearance [dict get $current appearance]]
     }
+    # The three keys PDF/UA asks of the widget, decided at the [sign] call
+    # and written here: /TU, /Contents and the /StructParent that joins the
+    # annotation to the Form structure element opened around it. Nothing is
+    # worked out at this point - the element and the key were made where the
+    # caller stood, which is the only place that knows the reading order.
     [my writer] put $widgetNumber [::tclpdf::sign::Widget \
         [dict get $current field] [[my writer] ref $sigNumber] \
         [[my writer] ref [dict get [my Page $page] number]] \
-        $rect $appearance]
+        $rect $appearance [dict filter $current key \
+            tooltip contents structParent]]
 
     # Into the page's /Annots, the same scratch state link.tcl uses - once,
     # however often the document is written.
@@ -2123,4 +2339,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.5
+package provide tclpdf::sign 1.6

@@ -725,8 +725,10 @@ oo::define ::tclpdf::document::document {
   #
   # There is no check for the Form structure element itself beyond the third
   # one: the core makes one per widget for every field of a tagged document
-  # (see [FieldStructure] in field.tcl), so the only way a widget ends up
-  # outside the tree is a field declared before [$doc tagged 1].
+  # (see [FieldStructure] in field.tcl), so the two ways a widget ends up
+  # outside the tree are a field declared before [$doc tagged 1] and a
+  # visible signature placed before it (sign -rect; the invisible one is an
+  # artifact by 14289-2, 8.9.2.4.13 and never in the tree).
   method UaCheckFields {} {
     if {[my state fields] eq {}} {
       return {}
@@ -746,7 +748,7 @@ oo::define ::tclpdf::document::document {
           {are form fields} : {is a form field}}] without a description -\
           PDF/UA reads /TU as the field's accessible name (7.18.1 with ISO\
           32000-2, 14.9.3), and the field name is not it; pass -tooltip to\
-          \[\$doc field\]"
+          \[\$doc field\] (\[\$doc sign\] for the signature field)"
     }
     # /Contents or a Lbl per WIDGET, and PART 2 ONLY. ISO 14289-2, 8.10.2.3
     # asks for it of every widget; ISO 14289-1 has no such clause and is
@@ -767,7 +769,8 @@ oo::define ::tclpdf::document::document {
             wants one or the other on every widget annotation (8.10.2.3), and\
             the field's /TU is not it (8.10.2.4). Pass -label {script} to draw\
             the label into the widget's own Form element, or -contents to\
-            describe it; the buttons of \[\$doc field radio\] take theirs\
+            describe it (\[\$doc sign\] takes -contents for the signature\
+            field); the buttons of \[\$doc field radio\] take theirs\
             inside their own entry of -buttons, as the third word or as\
             -contents, and their label as that entry's -label"
       }
@@ -897,4 +900,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.8
+package provide tclpdf::ua 1.9

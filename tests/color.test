@@ -35,11 +35,11 @@ test color-parse-1.1 {a name from the table} -body {
 test color-parse-1.2 {six hexadecimal digits, ff becoming exactly 1.0} -body {
   # Divided by 255 rather than 256 - otherwise white comes out at 0.996 and
   # a PDF/A validator flags the output intent mismatch. #ffffff is grey, so
-  # it comes back as one component (1.9); #fffffe is not.
+  # it comes back as one component (1.13); #fffffe is not.
   list [::tclpdf::color parse #ffffff] [::tclpdf::color parse #fffffe]
 } -result {{gray 1.0} {rgb {1.0 1.0 0.996078431372549}}}
 
-test color-parse-1.9 {a name or hex with equal components is DeviceGray, not three equal RGB numbers} -body {
+test color-parse-1.13 {a name or hex with equal components is DeviceGray, not three equal RGB numbers} -body {
   # DeviceRGB is allowed by PDF/A only under an RGB output intent (ISO
   # 19005-2, 6.2.4.3), DeviceGray under any - so black, white and the greys
   # must not drag a CMYK document into DeviceRGB. Measured: a {0.45 0.45 0.5}
@@ -51,7 +51,7 @@ test color-parse-1.9 {a name or hex with equal components is DeviceGray, not thr
       [::tclpdf::color operator [::tclpdf::color parse white] fill]
 } -result {{gray 0.0} {gray 1.0} {gray 0.5019607843137255} {gray 0.7529411764705882} rgb {1 g}}
 
-test color-parse-1.10 {a grey stop is promoted to the space of the coloured stops} -body {
+test color-parse-1.14 {a grey stop is promoted to the space of the coloured stops} -body {
   list [::tclpdf::color promote {gray 1.0} rgb] [::tclpdf::color promote {gray 0.25} cmyk] \
       [::tclpdf::color promote {gray 0.5} gray] [::tclpdf::color promote {rgb {1 0 0}} cmyk]
 } -result {{rgb {1.0 1.0 1.0}} {cmyk {0 0 0 0.75}} {gray 0.5} {rgb {1 0 0}}}
@@ -125,19 +125,107 @@ test color-parse-1.10 {NaN is refused in the parameters of a Lab space too} -bod
 } -result {{TCLPDF COLOUR LAB -whitePoint} 1 {TCLPDF COLOUR LAB -whitePoint} 1\
     {TCLPDF COLOUR LAB -range} 1 {TCLPDF COLOUR LAB -range} 1}
 
-test color-parse-1.11 {infinity is still clamped, as the manual says of components} -body {
-  # THE OTHER HALF OF 1.9, and it is deliberately NOT symmetric. A component
-  # outside its range is adjusted rather than refused - ISO 32000-2, 8.6.5.4
-  # says so in as many words for Lab ("adjusted to the nearest valid value
-  # without error indication"), and the manual says it of the device spaces -
-  # and infinity is the far end of that road: a nearest valid value exists
-  # for it. NaN is not on the road at all. Whether infinity should join the
-  # refusal is the author's decision and is open; this test holds what the
-  # package does today so that the change cannot happen by accident.
-  list [::tclpdf::color parse {gray Inf}] [::tclpdf::color parse {gray -Inf}] \
-      [::tclpdf::color parse {cmyk 0 Inf 0 0}] \
-      [lindex [::tclpdf::color parse {lab 50 Inf 0}] 1 0]
-} -result {{gray 1} {gray 0} {cmyk {0 1 0 0}} {50 100.0 0}}
+test color-parse-1.11 {infinity is refused too, wherever a component is read} -body {
+  # THE OTHER HALF OF 1.9 and, since 2026-08-27, symmetric with it. This test
+  # used to hold the opposite: infinity was clamped to the bound, {gray Inf}
+  # came out as {gray 1}, {gray -Inf} as {gray 0} and {lab 50 Inf 0} as an a*
+  # of 100, on the reading that a component outside its range is "adjusted to
+  # the nearest valid value without error indication" (ISO 32000-2, 8.6.5.4).
+  # That reading does not hold for infinity: it did not leave a range, it
+  # left the numbers a PDF can write (pdfObj-num-1.7 - no spelling exists for
+  # it), and a component that came out of an overflow or a division by zero
+  # was silently turned into a saturated colour the caller never asked for.
+  # The author decided it on 2026-08-27; the test is turned round rather than
+  # dropped, so that clamping cannot come back by accident either.
+  #
+  # Every road of 1.9 walked again, and both signs: the bare number, the
+  # keyword spellings, the keyword-less three and four, an ICC component, the
+  # tint AND the alternate of a separation, a DeviceN tint, all three Lab
+  # components - plus 1e400, which is how infinity usually arrives: nobody
+  # types "Inf", a literal simply overflows the double.
+  set specs [list Inf {gray Inf} {gray -Inf} {grey Inf} {rgb Inf 0 0} \
+      {cmyk 0 Inf 0 0} {-Inf 0 0} {0 0 0 Inf} {icc srgb Inf} \
+      {separation Spot {cmyk 0 0 0 1} Inf} {separation Spot {rgb -Inf 0 0}} \
+      {devicen {{Spot {cmyk 0 0 0 1}}} Inf} \
+      {lab Inf 0 0} {lab 50 Inf 0} {lab 50 0 -Inf} \
+      {gray 1e400} {gray -1e400}]
+  set codes {}
+  set prefixed 0
+  foreach spec $specs {
+    catch {::tclpdf::color parse $spec} message options
+    lappend codes [dict get $options -errorcode]
+    incr prefixed [string match {tclpdf: *} $message]
+  }
+  list [lsort -unique $codes] $prefixed [llength $specs]
+} -result {{{TCLPDF COLOUR COMPONENTS number}} 17 17}
+
+test color-parse-1.11.1 {infinity in the parameters of a Lab space} -body {
+  # THE ONE THAT REACHED THE FILE. A Lab component was clamped, but the
+  # parameters are not clamped at all, and infinity passed both bound checks
+  # of Table 64 unharmed: Inf is positive, so "Xw and Zw shall be positive"
+  # let {Inf 1 1} through, and -Inf is the smaller of a pair, so "-range runs
+  # from the smaller value to the larger" let {-Inf 100 -100 100} through.
+  # Measured before the fix: {lab 50 0 0 -whitePoint {Inf 1 1}} parsed, and
+  # the Inf sat in /WhitePoint until [pdfObj num] killed the whole document
+  # at write time under PDFOBJ NUMBER - a foreign topic's code for a mistake
+  # made at the call. The finiteness check therefore stands BEFORE every
+  # other comparison, in [Double], where the list is read.
+  set answers {}
+  foreach spec {{lab 50 0 0 -whitePoint {Inf 1 1}}
+      {lab 50 0 0 -whitePoint {0.9642 1 -Inf}}
+      {lab 50 0 0 -range {-Inf 100 -100 100}}
+      {lab 50 0 0 -range {-100 100 -100 Inf}}} {
+    catch {::tclpdf::color parse $spec} message options
+    lappend answers [dict get $options -errorcode] [string match {tclpdf: *} $message]
+  }
+  set answers
+} -result {{TCLPDF COLOUR LAB -whitePoint} 1 {TCLPDF COLOUR LAB -whitePoint} 1\
+    {TCLPDF COLOUR LAB -range} 1 {TCLPDF COLOUR LAB -range} 1}
+
+test color-parse-1.11.2 {a refused infinite colour leaves stream and state as they were} -body {
+  # 1.12 for infinity, and [font -color] is the reason it is asked again: an
+  # accepted value sits in the TEXT STATE, and until 2026-08-27 an infinite
+  # one was accepted there as a bound. A document whose footer colour came
+  # out of a failed calculation was painted in solid red without a word.
+  # Checked as the review asks: content stream and font state before and
+  # after a run of forced errors, then a plain call of each kind that has to
+  # still work.
+  set doc [tclpdf new -unit pt -format {200 200} -compress 0]
+  $doc page add
+  $doc font -family Helvetica -size 12 -color {rgb 0 0 1}
+  $doc text before -at {10 10}
+  set stateBefore [$doc font]
+  set streamBefore [::tclpdfTest::content $doc]
+  set codes {}
+  foreach call {{font -color {Inf 0 0}} {style -fill {gray -Inf}}
+      {rect -at {10 10} -size {20 20} -fill {rgb Inf 0 0}}
+      {text z -at {10 40} -color {rgb 0 -Inf 0}}
+      {style -fill {lab 50 Inf 0}}
+      {style -fill {lab 50 0 0 -whitePoint {Inf 1 1}}}
+      {style -fill {lab 50 0 0 -range {-Inf 100 -100 100}}}} {
+    lappend codes [::tclpdfTest::refusalCode {$doc {*}$call}]
+  }
+  set answers [list [lsort -unique $codes] \
+      [expr {$stateBefore eq [$doc font]}] \
+      [expr {$streamBefore eq [::tclpdfTest::content $doc]}] \
+      [catch {$doc text after -at {10 60}}] \
+      [catch {$doc rect -at {50 50} -size {10 10} -fill {rgb 1 0 0}}] \
+      [dict get [$doc font] color]]
+  $doc destroy
+  set answers
+} -result {{{TCLPDF COLOUR COMPONENTS number} {TCLPDF COLOUR LAB -range}\
+    {TCLPDF COLOUR LAB -whitePoint}} 1 1 0 0 {rgb 0 0 1}}
+
+test color-parse-1.11.3 {a finite component that leaves its range is still clamped} -body {
+  # THE OTHER SIDE OF THE SAME LINE, and it has to stay put: refusing
+  # infinity is not a licence to refuse 1.2. A rounding error in a computed
+  # colour must not abort a document - 8.6.5.4 says the value is "adjusted to
+  # the nearest valid value without error indication", and that is what a
+  # value which merely left its range gets, in every space.
+  list [::tclpdf::color parse {rgb 1.2 -0.1 0.5}] [::tclpdf::color parse {gray 2}] \
+      [::tclpdf::color parse {cmyk 0 1.5 0 -0.2}] \
+      [lindex [::tclpdf::color parse {lab 200 -300 300}] 1 0]
+} -result {{rgb {1 0 0.5}} {gray 1} {cmyk {0 1 0 0}} {100 -100.0 100.0}}
 
 test color-parse-1.12 {a refused NaN colour leaves stream and state as they were} -body {
   # WHERE THE REFUSAL HAS TO STAND: before anything is written and before

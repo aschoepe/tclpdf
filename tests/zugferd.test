@@ -803,7 +803,7 @@ test zugferd-8.2 {an RGB colour under a CMYK intent is refused the same way, on 
 test zugferd-8.3 {grey under either intent, RGB under sRGB and CMYK under CMYK are all written} \
     -constraints {haveIcc haveCmykIcc haveInvoice} -body {
   # Named greys - silver, gray, black, white - parse as DeviceGray on
-  # purpose (color-parse-1.9), which is what keeps them usable here.
+  # purpose (color-parse-1.13), which is what keeps them usable here.
   list [intentProbe $face $icc {
     $doc rect -at {20 20} -size {40 20} -fill {rgb 0.2 0.4 0.6} -stroke silver
     $doc text "text" -at {20 50} -color {gray 0.3}
@@ -1251,7 +1251,7 @@ test zugferd-12.3 {a missing -icc, a -compress that is no boolean and a name alr
       [string match {*ICC profile "*nowhere.icc" does not exist*} $err] [untouched $doc]
   lappend out [catch {$doc zugferd $invoice -compress maybe} err] \
       [string match {*-compress takes a boolean, not "maybe"*} $err] [untouched $doc]
-  $doc attach -data "<x/>" -name factur-x.xml
+  $doc attach -data "<x/>" -name factur-x.xml -date "D:20260812093000+02'00'"
   lappend out [catch {$doc zugferd $invoice} err] \
       [string match {*attachment named "factur-x.xml" already exists*} $err] \
       [$doc pdfa state] [$doc state xmpRaw] [$doc zugferd state]
@@ -1274,7 +1274,7 @@ test zugferd-12.4 {a refused pdfa leaves the version, the floor and the ceiling 
   } {
     set doc [tclpdf new -unit mm -version 1.4]
     $doc page add
-    $doc attach -data x -name x.txt
+    $doc attach -data x -name x.txt -date "D:20260812093000+02'00'"
     lappend out [catch {$doc {*}$call} err] [string match $pattern $err] \
         [$doc pdfa state] [$doc cget -version] [[$doc writer] version] \
         [catch {$doc configure -version 2.0}] [catch {$doc configure -version 1.3}]
@@ -1287,10 +1287,11 @@ test zugferd-12.5 {an attachment under a PDF/A-2 claim is refused, part 3 admits
   set doc [tclpdf new -unit mm]
   $doc page add
   $doc pdfa -part 2
-  set code [catch {$doc attach -data x -name x.txt} err]
+  set code [catch {$doc attach -data x -name x.txt \
+        -date "D:20260812093000+02'00'"} err]
   set none [$doc attachments]
   $doc pdfa -part 3
-  $doc attach -data x -name x.txt
+  $doc attach -data x -name x.txt -date "D:20260812093000+02'00'"
   set one [$doc attachments]
   $doc destroy
   list $code [string match {*claims PDF/A-2*ISO 19005-2, 6.8*pdfa -part 3*} $err] $none $one

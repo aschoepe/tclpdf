@@ -59,8 +59,13 @@ if {$subject eq {}} {
     if {![catch {package require tdom}]} {
         $doc pdfa -part 3 -conformance B
     }
+    # -date is the moment the DATA carries, and it is required: an attachment
+    # is an associated file and /Params /ModDate is required of one (ISO
+    # 32000-2, 14.13.2). Given rather than taken from the clock, so that two
+    # runs of this example write the same specimen.
     $doc attach -data "<invoice number=\"4711\"/>" -name rechnung.xml \
-        -mime text/xml -relationship Data -description "the invoice data"
+        -mime text/xml -relationship Data -description "the invoice data" \
+        -date "D:20260811104500+02'00'"
     $doc page add
     $doc font -family haus -size 11
     $doc text "Rechnung 4711" -at {20 30}

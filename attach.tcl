@@ -134,7 +134,12 @@ oo::define ::tclpdf::document::document {
 
   # $doc attach <path> ?-name factur-x.xml? ?-description "..."?
   #                    ?-relationship Data? ?-mime text/xml? ?-compress 0?
-  # $doc attach -data $bytes -name x.xml ...        (no file on disk)
+  #                    ?-date D:20260818120000+02'00'?
+  # $doc attach -data $bytes -name x.xml -date D:...  (no file on disk)
+  #
+  # -date is REQUIRED with -data and defaults to the file's modification time
+  # for the path form: every attachment is an associated file and /Params
+  # /ModDate is required of one (ISO 32000-2, 14.13.2) - see the check below.
   #
   # -relationship is the /AFRelationship of PDF/A-3: Source, Data, Alternative,
   # Supplement or Unspecified. ZUGFeRD requires Data (or Alternative); getting
@@ -245,8 +250,46 @@ oo::define ::tclpdf::document::document {
     }
     # /ModDate in the Params dictionary is a PDF date (Table 46) - the same
     # shape [info CreationDate] takes, checked by the same reader.
+    #
+    # AND IT IS REQUIRED, not optional. Every attachment this package writes
+    # is an ASSOCIATED FILE: the file specification carries /AFRelationship
+    # and the catalog lists it under /AF ([AttachCatalog]), for any
+    # -relationship including the default Unspecified. ISO 32000-2, 14.13.2
+    # says of such a stream that its dictionary contains "a Params key whose
+    # value shall be a dictionary containing at least a ModDate key whose
+    # value shall be the latest modification date of the source file", and
+    # Tables 44 and 45 spell the same thing as "required in the case of an
+    # embedded file stream used as an associated file". No validator here
+    # reports its absence - veraPDF 3b called a file without it conformant
+    # (measured 2026-08-26) - which is why it went unnoticed until the date
+    # was read out of the norm rather than out of a report.
+    #
+    # There are two ways to a date and deliberately no third:
+    #
+    #   - the PATH form has the file itself, so its modification time is the
+    #     default. That is what the field means, and it is what zugferd.tcl
+    #     has passed for the invoice XML since it was written.
+    #   - -data has no file behind it. Stamping [clock seconds] in would
+    #     break the rule the whole package writes by - the same document
+    #     written twice gives the same bytes - so the caller has to say, and
+    #     is refused rather than guessed for.
+    #
+    # An explicit -date always wins, in both forms.
     if {[dict get $options date] ne {}} {
       my CheckDate [dict get $options date] "attach -date"
+    } elseif {$path ne {}} {
+      # In this file's spelling; [respellDate] in AttachWrite moves it again
+      # if the version moves between here and the write.
+      dict set options date [::tclpdf::pdfObj date [file mtime $path] \
+          [[my writer] version]]
+    } else {
+      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT date] \
+          "tclpdf: attach -data needs -date, the modification time of the\
+          data it carries - /Params /ModDate is required of an embedded file\
+          stream used as an associated file (ISO 32000-2, 14.13.2 and Tables\
+          44 and 45), every attachment of this document is one, and -data\
+          has no file whose time could stand in for it - pdfObj date writes\
+          one from a clock value (D:20260818120000+02'00')"
     }
     # The mirror of the check in pdfa.tcl: PDF/A-2 admits no embedded file
     # that is not itself PDF/A (ISO 19005-2, 6.8), and a claim already made
@@ -325,13 +368,16 @@ oo::define ::tclpdf::document::document {
       set bytes [dict get $entry bytes]
       set pairs [list Type /EmbeddedFile \
           Subtype [::tclpdf::pdfObj name [dict get $entry mime]]]
-      set params [list Size [string length $bytes]]
-      if {[dict get $entry date] ne {}} {
-        # In the spelling this file uses - the version can move between the
-        # [attach] call and the write (see [respellDate] in document.tcl).
-        lappend params ModDate [my Str [::tclpdf::document::respellDate \
-            [dict get $entry date] [$writer version]]]
-      }
+      # /ModDate beside /Size, and unconditionally: EVERY entry carries a
+      # date, because [attach] takes the file's modification time for the
+      # path form and refuses -data without -date - see there for 14.13.2,
+      # which requires the entry of an associated file.
+      #
+      # In the spelling this file uses - the version can move between the
+      # [attach] call and the write (see [respellDate] in document.tcl).
+      set params [list Size [string length $bytes] \
+          ModDate [my Str [::tclpdf::document::respellDate \
+              [dict get $entry date] [$writer version]]]]
       # /Params /Size is the UNCOMPRESSED length and has to be taken before
       # the filter runs.
       lappend pairs Params [::tclpdf::pdfObj dictionary $params]
@@ -412,4 +458,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.7
+package provide tclpdf::attach 1.8

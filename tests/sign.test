@@ -667,8 +667,8 @@ test sign-2.3 {the signer is not in the state} -body {
   # back from a state either.
   list [lsort [dict keys $state]] [dict exists $inner signer] \
       [dict get $inner signer]
-} -result [list [lsort {appearance byteRange date field length page rect
-    signed size subFilter}] 1 [list ::tclpdfTest::signFake 4]]
+} -result [list [lsort {appearance byteRange contents date field length page rect
+    signed size subFilter tooltip}] 1 [list ::tclpdfTest::signFake 4]]
 
 test sign-2.4 {the call answers what the query answers} -body {
   set doc [::tclpdfTest::signDoc -version 2.0]
@@ -2461,6 +2461,367 @@ test sign-9.6 {sign add -date is spelled the way the FILE spells dates} -body {
   set result
 } -result {1 {TCLPDF SIGN ARGUMENT date} 1 D:20260818120000+02'00'\
     1 {TCLPDF SIGN ARGUMENT date} 1 D:20260818120000+02'00}
+
+#
+# --- PDF/UA -----------------------------------------------------------------
+#
+# A signature field is a form field, and a document that claims PDF/UA has to
+# treat it as one: the widget of a VISIBLE signature is enclosed by a Form
+# structure element, reached from it by an object reference and pointing back
+# through /StructParent (ISO 14289-1, 7.18.1 and 7.18.4; ISO 14289-2, 8.10.1),
+# and it says what it is (/TU, ISO 32000-2, 14.9.3; /Contents, ISO 14289-2,
+# 8.10.2.3).
+#
+# The INVISIBLE one is the opposite case and the tests say so: ISO 14289-2,
+# 8.9.2.4.13 - "a widget annotation of zero height and width shall be an
+# artifact" - and 8.10.3.5 for this field by name, so it stands outside the
+# tree and PDF/UA asks it nothing. Which of the two a signature is decided by
+# its rectangle and not by the claim, because [$doc ua] may stand before the
+# [sign] call or after it and the two orders have to write the same file.
+
+if {[testConstraint haveTdom]} {
+    package require tclpdf::ua
+}
+
+# A document that meets every UA requirement, in the shape ua.test uses:
+# tagged, a title, a language, an embedded face - a standard font cannot be
+# embedded and PDF/UA needs one that can be - and an H1 to start the outline.
+proc ::tclpdfTest::signAccessible {{part 1}} {
+    variable signFace
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc tagged 1
+    $doc info Title "Signierte Unterweisung"
+    $doc language de-DE
+    $doc page add
+    $doc font embed haus $signFace
+    $doc font -family haus -size 12
+    $doc structure H1 -script {
+        uplevel 1 [list $doc text "Ueberschrift" -at {20 20}]
+    }
+    return $doc
+}
+
+# The form XObject a visible signature shows, drawn by the caller as the
+# module's head insists it is.
+proc ::tclpdfTest::signBox {doc} {
+    $doc form create sigbox -size {60 20} -script {
+        $doc rect -at {0 0} -size {60 20} -stroke {0 0 0} -width 0.4
+        $doc text "Unterschrift" -at {2 12}
+    }
+    return sigbox
+}
+
+test sign-10.1 {a visible signature is in the structure tree, named and described} \
+        -constraints {haveTdom haveFace} -body {
+    # THE MEASUREMENT OF C-01. Four things at once, because they are one
+    # thing: the Form structure element (7.18.4), the object reference into
+    # it (ISO 32000-2, 14.7.5.4), the /StructParent that points back, and the
+    # description without which a reader announces the field name. Any one of
+    # them missing is a widget outside the reading order, and no validator
+    # says a word about three of the four.
+    set doc [::tclpdfTest::signAccessible]
+    ::tclpdfTest::signBox $doc
+    $doc ua 1
+    $doc sign -size 256 -rect {20 60 60 20} -appearance sigbox \
+        -tooltip "Unterschrift der Ausstellerin" \
+        -contents "Unterschriftsfeld von E. Mustermann"
+    set fields [$doc field list]
+    set path [::tclpdfTest::scratch sign-ua-visible.pdf]
+    $doc write $path
+    $doc destroy
+    set data [::tclpdfTest::readBytes $path]
+    file delete $path
+    regexp {<< /Type /Annot /Subtype /Widget /FT /Sig.*?/StructParent [0-9]+ >>} \
+        $data widget
+    list $fields \
+        [regexp {/TU \(Unterschrift der Ausstellerin\)} $widget] \
+        [regexp {/Contents \(Unterschriftsfeld von E\. Mustermann\)} $widget] \
+        [regexp {/StructParent [0-9]+} $widget] \
+        [regexp {/S /Form} $data] \
+        [regexp {/Type /OBJR} $data] \
+        [regexp {/Tabs /S} $data]
+} -result {Signature1 1 1 1 1 1 1}
+
+test sign-10.2 {the object reference names the widget and the parent tree agrees} \
+        -constraints {haveTdom haveFace} -body {
+    # The two halves of 14.7.5.4 read against one another: the element
+    # reaches the annotation through /OBJR /Obj, and the annotation reaches
+    # the element through the parent tree at the number in its /StructParent.
+    # Read out of the file rather than out of the module's own state, because
+    # a state checked against itself agrees with every mistake it makes.
+    set doc [::tclpdfTest::signAccessible]
+    ::tclpdfTest::signBox $doc
+    $doc ua 1
+    $doc sign -size 256 -rect {20 60 60 20} -appearance sigbox \
+        -tooltip "Unterschrift" -contents "Unterschriftsfeld"
+    set path [::tclpdfTest::scratch sign-ua-objr.pdf]
+    $doc write $path
+    $doc destroy
+    set data [::tclpdfTest::readBytes $path]
+    file delete $path
+    # The widget's own object number, and the key it carries.
+    regexp {([0-9]+) 0 obj\s*<< /Type /Annot /Subtype /Widget /FT /Sig.*?/StructParent ([0-9]+) >>} \
+        $data -> widgetNumber structParent
+    regexp "/Type /OBJR /Obj $widgetNumber 0 R" $data reference
+    # /ParentTree is a number tree; the entry for the key is the element the
+    # OBJR sits in, and /ParentTreeNextKey has to be past it.
+    regexp {/Nums \[([^\]]*)\]} $data -> nums
+    regexp {/ParentTreeNextKey ([0-9]+)} $data -> next
+    set entry [lindex $nums [expr {2 * [lsearch -exact \
+        [lmap {key value} $nums {set key}] $structParent] + 1}]]
+    list [expr {$reference ne {}}] [expr {$entry ne {}}] \
+        [expr {$next > $structParent}]
+} -result {1 1 1}
+
+test sign-10.3 {both orders of ua and sign write the same structure} \
+        -constraints {haveTdom haveFace} -body {
+    # The order is the caller's and may not decide anything: [$doc ua] states
+    # a claim and [$doc sign] builds a field, and neither reads the other.
+    set files {}
+    foreach order {{ua sign} {sign ua}} {
+        set doc [::tclpdfTest::signAccessible]
+        ::tclpdfTest::signBox $doc
+        foreach step $order {
+            if {$step eq "ua"} {
+                $doc ua 1
+            } else {
+                $doc sign -size 256 -rect {20 60 60 20} -appearance sigbox \
+                    -tooltip "Unterschrift" -contents "Unterschriftsfeld"
+            }
+        }
+        set path [::tclpdfTest::scratch sign-ua-order.pdf]
+        $doc write $path
+        $doc destroy
+        set data [::tclpdfTest::readBytes $path]
+        file delete $path
+        lappend files [list [regexp -all {/StructParent [0-9]+} $data] \
+            [regexp -all {/Type /OBJR} $data] [regexp -all {/S /Form} $data] \
+            [regexp -all {/TU \(} $data]]
+    }
+    list [lindex $files 0] [expr {[lindex $files 0] eq [lindex $files 1]}]
+} -result {{1 1 1 1} 1}
+
+test sign-10.4 {a visible signature without a description is refused before the write} \
+        -constraints {haveTdom haveFace} -body {
+    # The claim is checked on the catalog event, which is after every
+    # beforeWrite subscriber and before a single byte goes to the path - so
+    # the refusal leaves no file behind. /TU is asked for under both parts
+    # (7.18.1 with ISO 32000-2, 14.9.3) and the widget's own description only
+    # under part 2 (ISO 14289-2, 8.10.2.3), which is what the two rows below
+    # tell apart.
+    set result {}
+    foreach {part described} {1 {-tooltip {}} 1 {-tooltip Unterschrift}
+            2 {-tooltip Unterschrift} 2 {-tooltip Unterschrift -contents Feld}} {
+        set doc [::tclpdfTest::signAccessible]
+        ::tclpdfTest::signBox $doc
+        $doc ua -part $part
+        $doc sign -size 256 -rect {20 60 60 20} -appearance sigbox {*}$described
+        set path [::tclpdfTest::scratch sign-ua-nodesc.pdf]
+        set code [catch {$doc write $path} message outcome]
+        $doc destroy
+        lappend result $code [file exists $path]
+        if {$code} {
+            lappend result [dict get $outcome -errorcode]
+        }
+        file delete $path
+    }
+    set result
+} -result {1 0 {TCLPDF UA CLAIM problems} 0 1 1 0 {TCLPDF UA CLAIM problems} 0 1}
+
+test sign-10.5 {an invisible signature is an artifact and stays out of the tree} \
+        -constraints {haveTdom haveFace} -body {
+    # ISO 14289-2, 8.9.2.4.13: "a widget annotation of zero height and width
+    # shall be an artifact", which 8.10.1 exempts from the Form element and
+    # 8.10.3.5 repeats for the signature field by name. So the default
+    # signature - /Rect [0 0 0 0], the invisible one of ISO 32000-2, 12.8.5.3
+    # - has no /StructParent, no object reference and no Form element, it is
+    # not in the field table, and PDF/UA asks it nothing: no -tooltip is
+    # demanded of it under either part.
+    set result {}
+    foreach part {1 2} {
+        set doc [::tclpdfTest::signAccessible]
+        $doc ua -part $part
+        $doc sign -size 256
+        set fields [$doc field list]
+        set path [::tclpdfTest::scratch sign-ua-invisible.pdf]
+        set code [catch {$doc write $path} message]
+        $doc destroy
+        set data [::tclpdfTest::readBytes $path]
+        file delete $path
+        lappend result $code $fields [regexp {/StructParent } $data] \
+            [regexp {/Type /OBJR} $data] [regexp {/S /Form} $data] \
+            [regexp {/Rect \[0 0 0 0\]} $data]
+    }
+    set result
+} -result {0 {} 0 0 0 1 0 {} 0 0 0 1}
+
+test sign-10.6 {a signature declared before [tagged 1] is reported like a field} \
+        -constraints {haveTdom haveFace} -body {
+    # The one way a widget ends up outside the structure tree of a tagged
+    # document, and it is the same way for a form field: the call came before
+    # the document was tagged, so there was no tree to put it in.
+    # [fieldsOutsideStructure] sees it because the signature stands in the
+    # same table, which is the whole point of putting it there.
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc font embed haus $::tclpdfTest::signFace
+    $doc font -family haus -size 12
+    ::tclpdfTest::signBox $doc
+    $doc sign -size 256 -rect {20 60 60 20} -appearance sigbox \
+        -tooltip "Unterschrift" -contents "Unterschriftsfeld"
+    $doc tagged 1
+    $doc info Title "Zu spaet getaggt"
+    $doc language de-DE
+    $doc structure H1 -script {$doc text "Ueberschrift" -at {20 20}}
+    $doc ua 1
+    set path [::tclpdfTest::scratch sign-ua-late.pdf]
+    set code [catch {$doc write $path} message]
+    $doc destroy
+    file delete $path
+    list $code [string match "*Signature1*outside the structure tree*" $message]
+} -result {1 1}
+
+test sign-10.7 {the widget's page is resolved at the write, not at the call} \
+        -constraints {haveTdom haveFace} -body {
+    # -page may name a page the document has not got yet: the structure
+    # element and the object reference are made at the [sign] call, and the
+    # /Pg of that reference is a page INDEX until the file is written. So a
+    # signature on page 2 named before page 2 exists has to come out pointing
+    # at page 2 - which is the risk this whole seam carries, measured.
+    set doc [::tclpdfTest::signAccessible]
+    ::tclpdfTest::signBox $doc
+    $doc ua 1
+    $doc sign -size 256 -page 1 -rect {20 60 60 20} -appearance sigbox \
+        -tooltip "Unterschrift" -contents "Unterschriftsfeld"
+    $doc page add
+    $doc structure P -script {$doc text "Zweite Seite" -at {20 20}}
+    set path [::tclpdfTest::scratch sign-ua-page.pdf]
+    $doc write $path
+    $doc destroy
+    set data [::tclpdfTest::readBytes $path]
+    file delete $path
+    # The widget's /P and the object reference's /Pg are the same page, and
+    # it is the SECOND one of the file.
+    regexp {/Type /Annot /Subtype /Widget /FT /Sig.*?/P ([0-9]+) 0 R} $data -> page
+    regexp {/Type /OBJR /Obj [0-9]+ 0 R /Pg ([0-9]+) 0 R} $data -> pg
+    set pages {}
+    foreach {match number} [regexp -all -inline \
+            {([0-9]+) 0 obj\s*<< /Type /Page\M} $data] {
+        lappend pages $number
+    }
+    list [expr {$page eq $pg}] [expr {$page eq [lindex $pages 1]}]
+} -result {1 1}
+
+test sign-10.8 {veraPDF passes both signatures under both parts} \
+        -constraints {haveTdom haveFace verapdf} -body {
+    # The four files C-01 was found on, run past the validator that found two
+    # of them: the visible signature under ua1 used to fail rules 7.18.1-3 and
+    # 7.18.4-1, and a Form element around the INVISIBLE one fails ua2 rule
+    # 8.9.2.4.13-1. Both directions are checked here, because a fix for one
+    # that breaks the other is the mistake this pair of tests exists for.
+    set result {}
+    foreach {part visible} {1 1 2 1 1 0 2 0} {
+        set doc [::tclpdfTest::signAccessible]
+        set arguments [list -size 256]
+        if {$visible} {
+            ::tclpdfTest::signBox $doc
+            lappend arguments -rect {20 60 60 20} -appearance sigbox \
+                -tooltip "Unterschrift" -contents "Unterschriftsfeld"
+        }
+        $doc ua -part $part
+        $doc sign {*}$arguments
+        set path [::tclpdfTest::scratch sign-ua-verapdf.pdf]
+        $doc write $path
+        $doc destroy
+        catch {exec verapdf --flavour ua$part $path 2>@1} report
+        file delete $path
+        lappend result [expr {[regexp {isCompliant="true"} $report] ? 1 : $report}]
+    }
+    set result
+} -result {1 1 1 1}
+
+test sign-10.9 {sign -tooltip and -contents are answered by [sign state]} -body {
+    set doc [::tclpdfTest::signDoc -version 2.0]
+    $doc sign -size 256 -tooltip "Unterschrift" -contents "Feld"
+    set state [$doc sign state]
+    $doc destroy
+    list [dict get $state tooltip] [dict get $state contents]
+} -result {Unterschrift Feld}
+
+test sign-10.10 {sign add refuses a file that claims PDF/UA, and leaves it alone} \
+        -constraints {haveTdom haveFace} -body {
+    # THE MEASUREMENT OF C-02. A conformant PDF/UA file came out of this call
+    # failing ISO 14289-1, 7.18.3 - no /Tabs /S on the page the widget landed
+    # on - and, under everything a validator sees, with a widget outside the
+    # structure tree. An incremental update cannot put it there without
+    # rewriting the page, the parent tree and the element nesting of a file
+    # this package did not write, so the call refuses and says where the
+    # signature belongs instead.
+    set result {}
+    foreach part {1 2} {
+        set doc [::tclpdfTest::signAccessible]
+        $doc ua -part $part
+        set path [::tclpdfTest::scratch sign-add-ua.pdf]
+        $doc write $path
+        $doc destroy
+        set before [::tclpdfTest::readBytes $path]
+        set code [catch {::tclpdf::sign add $path -size 256} message options]
+        set after [::tclpdfTest::readBytes $path]
+        file delete $path
+        lappend result $code [dict get $options -errorcode] \
+            [expr {$before eq $after}] \
+            [string match {*$doc sign*} $message]
+    }
+    set result
+} -result {1 {TCLPDF SIGN STATE ua} 1 1 1 {TCLPDF SIGN STATE ua} 1 1}
+
+test sign-10.12 {a visible signature and a form field in one document} \
+        -constraints {haveTdom haveFace} -body {
+    # The record of the signature stands in the field table, and the field
+    # module walks that table on beforeWrite to write every field it owns.
+    # The signature is not one of them - its object is built by [SignWrite],
+    # field and widget merged into one (12.5.6.19) - so the record carries no
+    # build method and [FieldWrite] passes it over. Without that the write
+    # dies on a field with no rectangle to measure, which is the one place
+    # where the two modules meet over one table.
+    set doc [::tclpdfTest::signAccessible]
+    ::tclpdfTest::signBox $doc
+    $doc ua 1
+    # The form's default appearance names a font, and PDF/UA embeds every
+    # face - the Helvetica a text field falls back to cannot be embedded.
+    $doc field default -family haus
+    $doc field text kunde -rect {20 100 80 8} -tooltip "Name der Kundin"
+    $doc sign -size 256 -rect {20 60 60 20} -appearance sigbox \
+        -tooltip "Unterschrift" -contents "Unterschriftsfeld"
+    set fields [$doc field list]
+    set path [::tclpdfTest::scratch sign-ua-both.pdf]
+    set code [catch {$doc write $path} message]
+    $doc destroy
+    set data [expr {$code ? {} : [::tclpdfTest::readBytes $path]}]
+    file delete $path
+    list $code [expr {$code ? $message : {}}] [lsort $fields] \
+        [llength [regexp -all -inline {/FT /Tx} $data]] \
+        [llength [regexp -all -inline {/FT /Sig} $data]] \
+        [llength [regexp -all -inline {/StructParent [0-9]+} $data]] \
+        [llength [regexp -all -inline {/S /Form} $data]]
+} -result {0 {} {Signature1 kunde} 1 1 2 2}
+
+test sign-10.11 {a file with no PDF/UA claim is signed as it always was} -body {
+    # The other half of the refusal above: what is refused is the CLAIM, not
+    # a tagged document and not a document carrying XMP. A file that makes no
+    # claim takes the second signature it always took.
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc text "Ohne Anspruch" -at {20 20}
+    set path [::tclpdfTest::scratch sign-add-noclaim.pdf]
+    $doc write $path
+    $doc destroy
+    set size [file size $path]
+    set state [::tclpdf::sign add $path -size 256]
+    set grown [expr {[file size $path] > $size}]
+    file delete $path
+    list [dict get $state field] $grown
+} -result {Signature1 1}
 
 # The certificates go with the rest of the scratch files: they are made at
 # load time, not by a test, so nothing else would remove them.

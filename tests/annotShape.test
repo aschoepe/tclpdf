@@ -162,7 +162,7 @@ test annotShape-3.4 {a line width of zero is refused} -body {
 
 test annotShape-4.1 {the annotation points at an attached file} -body {
   set bytes [shapeDocument {
-    @doc@ attach -data "the note" -name note.txt -mime text/plain
+    @doc@ attach -data "the note" -name note.txt -mime text/plain -date "D:20260812093000+02'00'"
     @doc@ annot attachment -at {180 28} -name note.txt
   }]
   # /EmbeddedFile appears twice - once as the stream's /Type and once in the
@@ -185,7 +185,7 @@ test annotShape-4.2 {a name nothing was attached under is refused} -body {
 test annotShape-4.3 {an icon outside Table 184 is refused} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
-  $doc attach -data "x" -name x.txt -mime text/plain
+  $doc attach -data "x" -name x.txt -mime text/plain -date "D:20260812093000+02'00'"
   set code [::tclpdfTest::refusalCode {$doc annot attachment -at {20 20} \
       -name x.txt -icon Banana}]
   $doc destroy
@@ -196,7 +196,7 @@ test annotShape-4.4 {-appearance and the reader's icon are exclusive} -body {
   # Table 166 makes /AP win, so writing both would put a /Name in the file
   # that nothing ever draws.
   set bytes [shapeDocument {
-    @doc@ attach -data "the note" -name note.txt -mime text/plain
+    @doc@ attach -data "the note" -name note.txt -mime text/plain -date "D:20260812093000+02'00'"
     # [form create -script] runs its body at level #0, so the document has to
     # be reachable there - one of the four -script roads that do.
     set ::annotShapeDoc @doc@
@@ -241,7 +241,7 @@ test annotShape-5.2 {an attachment without an appearance is refused under PDF/A}
   set doc [tclpdf new -unit mm]
   $doc pdfa -part 3 -conformance B
   $doc page add
-  $doc attach -data "x" -name x.txt -mime text/plain
+  $doc attach -data "x" -name x.txt -mime text/plain -date "D:20260812093000+02'00'"
   set code [catch {$doc annot attachment -at {20 20} -name x.txt} message]
   $doc destroy
   list $code [string match {*no appearance stream*} $message]

@@ -158,14 +158,24 @@ oo::define ::tclpdf::document::document {
     # at 1, which is the initial state anyway. Measured before 2026-08-18
     # only fill-opacity was applied, and opacity and stroke-opacity were
     # read and dropped although the header claimed them.
+    #
+    # THE TEST IS [option finite], not [string is double -strict]. Both are
+    # true of "NaN", and only the second lets it into the clamp - where
+    # min() and max() are arithmetic functions and [expr] refuses NaN as an
+    # operand, so fill-opacity="NaN" died with Tcl's "floating point value is
+    # Not a Number" and no error code at all (measured 2026-08-27). Neither
+    # NaN nor Inf is an SVG <number> (SVG 1.1, 4.2), so the declaration is in
+    # error and the property is ignored, which is what this branch has always
+    # done with a value that is no number - not refused, because unlike a
+    # colour an opacity has an initial value to fall back to (SVG 1.1, 14.5).
     set group [dict get $style opacity]
-    if {$group eq {} || ![string is double -strict $group]} {
+    if {![::tclpdf::option finite $group]} {
       set group 1
     }
     set alphas {}
     foreach key {fill-opacity stroke-opacity} {
       set alpha [dict get $style $key]
-      if {$alpha eq {} || ![string is double -strict $alpha]} {
+      if {![::tclpdf::option finite $alpha]} {
         set alpha 1
       }
       lappend alphas [expr {max(0.0, min(1.0, $alpha)) * max(0.0, min(1.0, $group))}]
@@ -292,7 +302,11 @@ oo::define ::tclpdf::document::document {
   # Returns a two-element list: the colour, and the alpha to fold in (1 where
   # there is none). Anything it cannot read is handed back unchanged, so the
   # refusal still comes from the colour module and still names the value.
-  method SvgColourValue {value} {
+  #
+  # THE ATTRIBUTE IS AN ARGUMENT because the refusal below is the one that
+  # cannot be handed on: a component that IS a double but is not finite has
+  # nothing left for [color parse] to name - see [SvgColourFinite].
+  method SvgColourValue {value attribute} {
     if {![regexp -nocase {^\s*rgba?\s*\((.*)\)\s*$} $value -> inside]} {
       return [list $value 1]
     }
@@ -313,19 +327,52 @@ oo::define ::tclpdf::document::document {
         if {![string is double -strict $number]} {
           return [list $value 1]
         }
+        my SvgColourFinite $number $value $attribute
         lappend channels [expr {max(0.0, min(1.0, $number / 100.0))}]
       } else {
         if {![string is double -strict $part]} {
           return [list $value 1]
         }
+        my SvgColourFinite $part $value $attribute
         lappend channels [expr {max(0.0, min(1.0, $part / 255.0))}]
       }
     }
     set alpha 1
     if {[llength $parts] > 3 && [string is double -strict [lindex $parts 3]]} {
+      my SvgColourFinite [lindex $parts 3] $value $attribute
       set alpha [expr {max(0.0, min(1.0, double([lindex $parts 3])))}]
     }
     return [list [linsert $channels 0 rgb] $alpha]
+  }
+
+  # A component of the functional notation, refused where it is a double to
+  # Tcl but not a finite number.
+  #
+  # NOT the same road as the rest of [SvgColourValue]. What that method
+  # cannot READ - "rgb(oops)" - it hands back untouched, and [color parse]
+  # then refuses the whole value by name; NaN and Inf have no such second
+  # chance, because they pass [string is double -strict] and go straight into
+  # the clamp. min() and max() are arithmetic functions and [expr] refuses
+  # NaN as their operand, so a drawing with "rgb(NaN,0,0)" died with Tcl's
+  # own "floating point value is Not a Number" (measured 2026-08-27), against
+  # the promise that every refusal begins with "tclpdf:"; Inf came through
+  # the clamp as 1.0 and painted a channel the file never asked for. Since
+  # 2026-08-27 the colour module refuses both in every component (TCLPDF
+  # COLOUR COMPONENTS number), and this is the same rule at the one point
+  # that never reaches it.
+  #
+  # The refusal names the ATTRIBUTE as well as the value: fill and stroke
+  # carry the same notation, and the two are told apart nowhere downstream.
+  # [option finite] is the package's one predicate for this - a second copy
+  # is how two modules come to disagree about what a number is.
+  method SvgColourFinite {number value attribute} {
+    if {[::tclpdf::option finite $number]} {
+      return
+    }
+    return -code error -errorcode [list TCLPDF SVG COLOUR $attribute] \
+        "tclpdf: $attribute has a colour component that names no colour,\
+        \"$number\" in \"$value\" - NaN and Inf are doubles to Tcl and paint\
+        nothing"
   }
 
   method SvgStyle {node inheritedStyle} {
@@ -335,7 +382,8 @@ oo::define ::tclpdf::document::document {
     # at 0.5 is at 0.5 times its own. The style carries the product; the
     # element's own value is collected on its own below and folded in.
     set groupOpacity 1
-    if {[dict exists $style opacity] && [string is double -strict [dict get $style opacity]]} {
+    if {[dict exists $style opacity] \
+        && [::tclpdf::option finite [dict get $style opacity]]} {
       set groupOpacity [dict get $style opacity]
     }
     dict set style opacity {}
@@ -363,18 +411,18 @@ oo::define ::tclpdf::document::document {
       if {$value eq {} || $value eq "none"} {
         continue
       }
-      lassign [my SvgColourValue $value] colour alpha
+      lassign [my SvgColourValue $value $key] colour alpha
       dict set style $key $colour
       if {$alpha != 1} {
         set was [dict get $style $opacityKey]
-        if {$was eq {} || ![string is double -strict $was]} {
+        if {![::tclpdf::option finite $was]} {
           set was 1
         }
         dict set style $opacityKey [expr {$was * $alpha}]
       }
     }
     set own [dict get $style opacity]
-    if {$own eq {} || ![string is double -strict $own]} {
+    if {![::tclpdf::option finite $own]} {
       set own 1
     }
     set own [expr {max(0.0, min(1.0, $own))}]
@@ -530,7 +578,17 @@ oo::define ::tclpdf::document::document {
       }
       set offset [::tclpdf::xml attribute $child offset 0]
       if {[string match {*%} $offset]} {
-        set offset [expr {[string trimright $offset %] / 100.0}]
+        # Only a number gets divided. offset="NaN%" and offset="oops%" both
+        # went into [expr] as an operand of "/" and came back in Tcl's words
+        # rather than this package's (measured 2026-08-27); handed on
+        # untouched they take the same road as offset="NaN" without the per
+        # cent, which [shading] refuses by name.
+        set number [string trimright $offset %]
+        if {[::tclpdf::option finite $number]} {
+          set offset [expr {$number / 100.0}]
+        } else {
+          set offset $number
+        }
       }
       set colour [::tclpdf::xml attribute $child stop-color]
       foreach {-> key value} [regexp -all -inline {([-a-z]+)\s*:\s*([^;]+)} \
@@ -550,4 +608,4 @@ oo::define ::tclpdf::document::document {
   # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.6
+package provide tclpdf::svgPaint 1.7

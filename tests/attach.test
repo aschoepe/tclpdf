@@ -20,10 +20,19 @@ source [file join [file dirname [info script]] helper.tcl]
 # the wrong translation would mangle.
 set attachSample [binary format H* 0d0a00ff41420d0a]
 
+# Every attachment this package writes is an ASSOCIATED FILE - /AFRelationship
+# on the file specification, the catalog's /AF pointing at it - and ISO
+# 32000-2, 14.13.2 with Tables 44 and 45 requires /Params /ModDate of one. The
+# path form takes the file's modification time; -data has no file, so it is
+# refused without -date (attach-3.6). One fixed moment for every test whose
+# subject is something else, so that none of them measures the clock. The 1.7
+# spelling, with the closing apostrophe: every document here is 1.7.
+set attachMoment "D:20260812093000+02'00'"
+
 test attach-1.1 {an attachment is listed by name} -body {
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data $attachSample -name daten.bin
+  $doc attach -data $attachSample -name daten.bin -date $attachMoment
   set names [$doc attachments]
   $doc destroy
   set names
@@ -34,9 +43,9 @@ test attach-1.2 {several attachments per document} -body {
   # this replaces cannot do it at all.
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data a -name eins.txt
-  $doc attach -data b -name zwei.txt
-  $doc attach -data c -name drei.txt
+  $doc attach -data a -name eins.txt -date $attachMoment
+  $doc attach -data b -name zwei.txt -date $attachMoment
+  $doc attach -data c -name drei.txt -date $attachMoment
   set names [$doc attachments]
   $doc destroy
   set names
@@ -45,9 +54,9 @@ test attach-1.2 {several attachments per document} -body {
 test attach-1.3 {a duplicate name is refused} -body {
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data a -name gleich.txt
+  $doc attach -data a -name gleich.txt -date $attachMoment
   try {
-    $doc attach -data b -name gleich.txt
+    $doc attach -data b -name gleich.txt -date $attachMoment
   } finally {
     $doc destroy
   }
@@ -57,7 +66,7 @@ test attach-1.4 {an unknown relationship is refused} -body {
   set doc [tclpdf new]
   $doc page add
   try {
-    $doc attach -data a -name x.txt -relationship Beilage
+    $doc attach -data a -name x.txt -relationship Beilage -date $attachMoment
   } finally {
     $doc destroy
   }
@@ -111,7 +120,7 @@ test attach-3.1 {Filespec, name tree and AF all appear} -body {
   set doc [tclpdf new]
   $doc page add
   $doc attach -data "<invoice/>" -name factur-x.xml -relationship Data \
-      -mime text/xml -description "Rechnungsdaten"
+      -mime text/xml -description "Rechnungsdaten" -date $attachMoment
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
@@ -130,7 +139,8 @@ test attach-3.2 {AF points straight at the Filespec} -body {
   set path [::tclpdfTest::scratch attach-af.pdf]
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data "<invoice/>" -name factur-x.xml -relationship Data
+  $doc attach -data "<invoice/>" -name factur-x.xml -relationship Data \
+      -date $attachMoment
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
@@ -147,7 +157,7 @@ test attach-3.3 {the name tree is sorted} -body {
   set doc [tclpdf new]
   $doc page add
   foreach name {zulu.txt alpha.txt mike.txt} {
-    $doc attach -data x -name $name
+    $doc attach -data x -name $name -date $attachMoment
   }
   $doc write $path
   $doc destroy
@@ -165,12 +175,13 @@ test attach-3.4 {Params Size is the uncompressed length} -body {
   set path [::tclpdfTest::scratch attach-size.pdf]
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data [string repeat "x" 5000] -name gross.txt -compress 1
+  $doc attach -data [string repeat "x" 5000] -name gross.txt -compress 1 \
+      -date $attachMoment
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
-  regexp {/Params << /Size (\d+) >>} $bytes -> size
+  regexp {/Params << /Size (\d+) /ModDate} $bytes -> size
   regexp {/Size 5000.*?/Length (\d+)} $bytes -> length
   # Size is the original, Length the compressed one - and it did compress
   list $size [expr {$length < 5000}]
@@ -192,27 +203,140 @@ test attach-3.5 {-date becomes the ModDate of the embedded file} -body {
   regexp {/Params << [^>]*?/ModDate \(D:20260812093000\+02'00'\)} $bytes
 } -result 1
 
-test attach-3.6 {without -date no ModDate is invented} -body {
-  # The counterpart: a date nobody gave must not appear, or every attachment
-  # would carry the moment it happened to be written and no two runs of the
-  # same document would be byte-identical.
-  set path [::tclpdfTest::scratch attach-nodate.pdf]
+test attach-3.6 {-data without -date is refused, and the document is unchanged} -body {
+  # THIS TEST USED TO SAY THE OPPOSITE. Until 2026-08-27 it read "without
+  # -date no ModDate is invented" and held that no /ModDate at all was the
+  # right answer, for a reason that is still true - a date nobody gave must
+  # not be the moment the file happened to be written, or no two runs of the
+  # same document are byte-identical. What it missed is that leaving the
+  # entry out is not the third way: EVERY attachment of this package is an
+  # associated file (/AFRelationship on the specification, the catalog's /AF
+  # pointing at it, for the default Unspecified as much as for -relationship
+  # Data), and ISO 32000-2, 14.13.2 with Tables 44 and 45 makes /Params
+  # /ModDate required of one. So the refusal moved to the call: -data has no
+  # file whose modification time could stand in, and the caller is asked
+  # rather than guessed for.
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data "Rechnung" -name rechnung.txt
+  set before [$doc subscribers]
+  set code [catch {$doc attach -data "Rechnung" -name rechnung.txt} err]
+  set errorcode $::errorCode
+  # Nothing recorded, nothing hooked onto the bus - refused before the first
+  # change, like every other option of this method.
+  set state [list [$doc attachments] [expr {[$doc subscribers] eq $before}]]
+  $doc destroy
+  list $code [lrange $errorcode 0 3] \
+      [string match {*attach -data needs -date*14.13.2*} $err] $state
+} -result {1 {TCLPDF ATTACH ARGUMENT date} 1 {{} 1}}
+
+test attach-3.7 {the path form takes the file's modification time as /ModDate} -body {
+  # The other half of 3.6: a file HAS a time, and that time is what /ModDate
+  # means ("the latest modification date of the source file", 14.13.2), so
+  # the path form needs no -date. The precedent is zugferd.tcl, which has
+  # passed the mtime of the invoice XML since it was written.
+  #
+  # The fixture's mtime is SET, so the expectation does not move with the
+  # machine; the expected spelling comes from [pdfObj date] rather than being
+  # written out by hand, because it carries the local time zone.
+  set source [::tclpdfTest::scratch attach-mtime.txt]
+  ::tclpdf::io write $source "hello\n"
+  file mtime $source 1755000000
+  set path [::tclpdfTest::scratch attach-mtime.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach $source -name quelle.txt -relationship Source
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $source $path
+  regexp {/Params << /Size 6 /ModDate \(([^)]*)\) >>} $bytes -> written
+  list $written [expr {$written eq [::tclpdf::pdfObj date 1755000000 1.7]}]
+} -result [list [::tclpdf::pdfObj date 1755000000 1.7] 1]
+
+test attach-3.8 {an explicit -date wins over the file's modification time} -body {
+  set source [::tclpdfTest::scratch attach-override.txt]
+  ::tclpdf::io write $source "hello\n"
+  file mtime $source 1755000000
+  set path [::tclpdfTest::scratch attach-override.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach $source -name quelle.txt -date $attachMoment
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $source $path
+  # The given date, and exactly one /ModDate - the mtime is not written
+  # beside it.
+  list [regexp {/Params << /Size 6 /ModDate \(D:20260812093000\+02'00'\) >>} \
+      $bytes] [regexp -all {/ModDate} $bytes]
+} -result {1 1}
+
+test attach-3.9 {the default follows the file version into the 2.0 spelling} -body {
+  # ISO 32000-1 writes the closing apostrophe after the zone minutes and ISO
+  # 32000-2 struck it. The default is made in the spelling of the document at
+  # the [attach] call and moved by [respellDate] if the version moves after
+  # it, exactly as a caller's own date is - so a 2.0 file gets the 2.0 form
+  # without anyone asking.
+  set source [::tclpdfTest::scratch attach-two-oh.txt]
+  ::tclpdf::io write $source "hello\n"
+  file mtime $source 1755000000
+  set path [::tclpdfTest::scratch attach-two-oh.pdf]
+  set doc [tclpdf new]
+  $doc configure -version 2.0
+  $doc page add
+  $doc attach $source -name quelle.txt
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $source $path
+  regexp {/Params << /Size 6 /ModDate \(([^)]*)\) >>} $bytes -> written
+  list $written [expr {$written eq [::tclpdf::pdfObj date 1755000000 2.0]}]
+} -result [list [::tclpdf::pdfObj date 1755000000 2.0] 1]
+
+test attach-3.10 {an associated file carries AFRelationship, AF, Params, Size and ModDate together} -body {
+  # The five belong together and are measured together, from the FILE rather
+  # than from the state: 14.13.2 does not require /ModDate of an embedded
+  # file stream as such - only of one used as an associated file - and what
+  # makes this one an associated file is the catalog's /AF and the
+  # /AFRelationship on the specification. So the test walks the same road a
+  # reader walks: /AF names an object, that object is the Filespec, its /EF
+  # /F names the stream, and THAT stream is the one that has to carry
+  # /Params with both /Size and /ModDate. A document with no /AF would have
+  # nothing to check here; this package writes none.
+  set path [::tclpdfTest::scratch attach-associated.pdf]
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data "<invoice/>" -name factur-x.xml -relationship Data \
+      -mime text/xml -compress 0 -date $attachMoment
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
-  regexp {/Params << [^>]*?/ModDate} $bytes
-} -result 0
+  set result {}
+  # 1. the catalog associates the file with the document
+  lappend result [regexp {/AF \[(\d+) 0 R\]} $bytes -> spec]
+  # 2. the object it names IS the file specification, and it says what the
+  #    file is to the document
+  regexp "(?n)^$spec 0 obj\\n(.*)\$" $bytes -> body
+  lappend result [regexp {/Type /Filespec} $body] \
+      [regexp {/AFRelationship /Data\M} $body]
+  # 3. its embedded file stream
+  lappend result [regexp {/EF << /F (\d+) 0 R} $body -> stream]
+  regexp "(?n)^$stream 0 obj\\n(.*)\$" $bytes -> embedded
+  # 4. /Params with BOTH entries - Table 44 makes /Params required of an
+  #    associated file, Table 45 /ModDate inside it
+  lappend result [regexp {/Type /EmbeddedFile} $embedded] \
+      [regexp {/Params << /Size 10 /ModDate \(D:20260812093000\+02'00'\) >>} \
+          $embedded]
+  set result
+} -result {1 1 1 1 1 1}
 
 test attach-4.1 {a private method can be hooked onto an event} -body {
   # onSelf exists because the bus calls from the global context, where a
   # method starting with a capital is not exported and "$doc Method" fails.
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data x -name x.txt
+  $doc attach -data x -name x.txt -date $attachMoment
   set events [lsort [$doc subscribers]]
   $doc destroy
   set events
@@ -249,7 +373,8 @@ test attach-7.1 {every documented -relationship is written as /AFRelationship} -
     set path [::tclpdfTest::scratch attach-$relationship.pdf]
     set doc [tclpdf new]
     $doc page add
-    $doc attach -data "<x/>" -name $relationship.xml -relationship $relationship
+    $doc attach -data "<x/>" -name $relationship.xml -relationship $relationship \
+        -date $attachMoment
     $doc write $path
     $doc destroy
     set bytes [::tclpdfTest::readBytes $path]
@@ -265,8 +390,10 @@ test attach-7.2 {two attachments keep their own relationships} -body {
   set path [::tclpdfTest::scratch attach-two-relations.pdf]
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data "a" -name source.txt -relationship Source
-  $doc attach -data "b" -name alt.txt -relationship Alternative
+  $doc attach -data "a" -name source.txt -relationship Source \
+      -date $attachMoment
+  $doc attach -data "b" -name alt.txt -relationship Alternative \
+      -date $attachMoment
   $doc write $path
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
@@ -293,7 +420,8 @@ test attach-8.1 {-data with a character above U+00FF is refused at the call, com
         [string match {*-data takes bytes, not text*encoding convertto*} $err]
   }
   # Bytes up to U+00FF are bytes and go through - and come out unchanged.
-  $doc attach -data "M\xfcller\x00\xff" -name latin.bin -compress 0
+  $doc attach -data "M\xfcller\x00\xff" -name latin.bin -compress 0 \
+      -date $attachMoment
   set path [::tclpdfTest::scratch attach-bytes.pdf]
   $doc write $path
   set names [$doc attachments]
@@ -343,7 +471,7 @@ test attach-8.3 {a name with a path separator is refused; a non-ASCII name gets 
     lappend out [catch {$doc attach -data x -name $name} err] \
         [string match {*-name must not contain "/" or "\\"*7.11.2.1*} $err]
   }
-  $doc attach -data x -name "\u00c4rger \u00fc.txt"
+  $doc attach -data x -name "\u00c4rger \u00fc.txt" -date $attachMoment
   set path [::tclpdfTest::scratch attach-names.pdf]
   $doc write $path
   $doc destroy
@@ -370,10 +498,11 @@ test attach-8.4 {the name tree is sorted by the bytes of the keys, the same unde
   # emoji and U+FFC2. See [treeEncoding] in attach.tcl.
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data x -name "\uffc2.txt"
-  $doc attach -data x -name "[encoding convertfrom utf-8 [binary format H* F09F9880]].txt"
-  $doc attach -data x -name b.txt
-  $doc attach -data x -name a.txt
+  $doc attach -data x -name "\uffc2.txt" -date $attachMoment
+  $doc attach -data x -name "[encoding convertfrom utf-8 [binary format H* F09F9880]].txt" \
+      -date $attachMoment
+  $doc attach -data x -name b.txt -date $attachMoment
+  $doc attach -data x -name a.txt -date $attachMoment
   set path [::tclpdfTest::scratch attach-order.pdf]
   $doc write $path
   $doc destroy
@@ -388,7 +517,7 @@ test attach-8.5 {an empty attachment is allowed: -data {} is present, not absent
   # be refused as "needs a file name or -data".
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data {} -name empty.txt -compress 0
+  $doc attach -data {} -name empty.txt -compress 0 -date $attachMoment
   set none [catch {$doc attach -name x.txt} err]
   set names [$doc attachments]
   set path [::tclpdfTest::scratch attach-empty.pdf]
@@ -397,7 +526,7 @@ test attach-8.5 {an empty attachment is allowed: -data {} is present, not absent
   set bytes [::tclpdfTest::readBytes $path]
   file delete $path
   list $names $none [string match {*needs a file name or -data*} $err] \
-      [regexp {/Params << /Size 0 >>} $bytes] [regexp {/Length 0 >>} $bytes]
+      [regexp {/Params << /Size 0 /ModDate} $bytes] [regexp {/Length 0 >>} $bytes]
 } -result {empty.txt 1 1 1 1}
 
 
@@ -412,7 +541,8 @@ test attach-8.6 {the /F fallback writes one "_" per code point, the same bytes u
   set doc [tclpdf new]
   $doc page add
   $doc attach -data x \
-      -name "Bericht [encoding convertfrom utf-8 [binary format H* F09F9880]].txt"
+      -name "Bericht [encoding convertfrom utf-8 [binary format H* F09F9880]].txt" \
+          -date $attachMoment
   set path [::tclpdfTest::scratch attach-fallback.pdf]
   $doc write $path
   $doc destroy
@@ -433,7 +563,7 @@ test attach-8.7 {a tree that needs UTF-16BE for one key writes every key that wa
   set doc [tclpdf new]
   $doc page add
   foreach name [list b.txt a\u00e4.txt c.txt \u00dcbersicht.txt z.txt] {
-    $doc attach -data x -name $name
+    $doc attach -data x -name $name -date $attachMoment
   }
   set path [::tclpdfTest::scratch attach-mixed.pdf]
   $doc write $path
@@ -457,8 +587,8 @@ test attach-8.8 {an all-ASCII tree keeps its literal keys} -body {
   # has, and factur-x.xml stays readable in the file.
   set doc [tclpdf new]
   $doc page add
-  $doc attach -data x -name b.txt
-  $doc attach -data x -name a.txt
+  $doc attach -data x -name b.txt -date $attachMoment
+  $doc attach -data x -name a.txt -date $attachMoment
   set path [::tclpdfTest::scratch attach-ascii.pdf]
   $doc write $path
   $doc destroy
@@ -480,7 +610,8 @@ test attach-8.9 {-name takes no control character} -body {
     lappend result [catch {$doc attach -data x -name $name} err] \
         [lrange $::errorCode 0 2] [string match {*U+00*} $err]
   }
-  lappend result [llength [$doc attachments]] [catch {$doc attach -data x -name ok.txt}]
+  lappend result [llength [$doc attachments]] \
+      [catch {$doc attach -data x -name ok.txt -date $attachMoment}]
   $doc destroy
   set result
 } -result {1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1\
