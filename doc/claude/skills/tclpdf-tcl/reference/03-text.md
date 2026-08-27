@@ -85,7 +85,8 @@ if {[info exists hyphenPatterns] && [file exists $hyphenPatterns]} {
     # default of 3 on the right refuses the two-letter endings German breaks
     # off every day. -exceptions are written with - at the breaks and are
     # looked up before the patterns.
-    ::tclpdf::hyphenate load de $hyphenPatterns -left 2 -right 2 \
+    # -min is the shortest word broken at all, 5 unless said otherwise.
+    ::tclpdf::hyphenate load de $hyphenPatterns -left 2 -right 2 -min 5 \
         -exceptions {Wachs-tu-be Ur-in-stinkt}
     puts "loaded: [::tclpdf::hyphenate languages]"
     puts [::tclpdf::hyphenate languages de]        ;# tag patterns exceptions left right min

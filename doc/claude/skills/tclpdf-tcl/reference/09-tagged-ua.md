@@ -133,6 +133,30 @@ $doc bookmark "Appendix" -page 0 -at {20 200}
 
 `-scope Row|Column|Both` belongs on a `TH`; `-bbox` on `Figure`, `Formula`, `Table`; `-colSpan`/`-rowSpan` on a cell (the table writes them itself); `-lang` a language tag for one element; `-actualText`, `-title`; `-id` an element identifier for the `IDTree` (a `Note` gets one by itself); `-ref` names another element - by the `-name` it was opened with - as the thing this one points at, which is the `Ref` entry of ISO 32000-2, Table 355 and therefore needs a 2.0 file (`TCLPDF STRUCTURE VERSION ref` below it). Part 2 asks for `-ref` in two places, and both are shown at the end of this file. Each is refused where the standard does not allow it. `-script` may be empty but not missing. Types beyond 1.7 (`Title`, `Aside`, `Em`, `Strong`, `Sub`, `FENote`, `H7`..`H10`) need a 2.0 file. Inline types (`Span`, `Em`, `Strong`, `Quote`, `Sub`) need a text-holding parent; a `P` inside a `P` is refused (Annex L).
 
+## Coming back to an element: `structureResume`
+
+```tcl
+# A caller that draws in several passes - a second column, a later page, the
+# cells of a table row that continues - hangs further children on an element
+# that is already in the tree by resuming it under the -name (or -id) it was
+# opened with. Only the OPENING is repeated: type, attributes and page stay
+# what they were, and what is drawn inside is judged as it would have been on
+# the first pass - a child the element may not hold is refused now as then.
+$doc structureResume appendix -script {
+    $doc text "Added on a second pass, and a child of the same Sect." \
+        -at {20 206} -family body -size 10
+}
+# A LEAF cannot be resumed: what a P or a heading holds is text, and more text
+# for it is a further mark on the same element - the road text -paginate takes
+# by itself - not a further child.
+$doc structure P -name closing -script {$doc text "A paragraph." -at {20 214}}
+if {[catch {$doc structureResume closing -script {$doc text "more" -at {20 220}}} message options]} {
+    puts "resuming a leaf: [dict get $options -errorcode]"
+} else {
+    puts "resuming a leaf: NOT REFUSED"
+}
+```
+
 ## Declaring PDF/UA
 
 ```tcl

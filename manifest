@@ -1,5 +1,5 @@
-C Version\s1.3;\sthe\sfour\sdecisions\sof\sround\s8\snamed\sin\sthe\smanual,\san\sunknown\spath\sletter\sreported,\sthe\sshipped\sprofile\sfound\sthrough\sa\slink,\sthe\ssuite\srun\sin\sits\sown\sdirectory\n\n-\sconfigure.ac,\stclpdf.tcl,\sconfigure\s-\sthe\spackage\sis\s1.3\n-\sdoc/tclpdf.md\s-\sa\sfillable\sfield\soverrides\san\sexplicit\s-subset\s1\son\sits\sface,\sand\ssays\sso;\sa\smask\swhose\sdata\sfail\sonly\swhile\sits\sstreams\sare\sbuilt\sleaves\sthe\sICC\sprofile\sof\sits\scarrier\sas\san\sunreferenced\sobject,\sand\ssays\sso;\spackage\srequire\stclpdf\s1.3\n-\ssvgPath.tcl\s-\sa\scommand\sletter\sthe\spath\sgrammar\sdoes\snot\sknow\sends\sthe\spath\swhere\sit\sstands\sand\sis\sreported\sthrough\ssvg\sinfo\slike\sa\smissing\scoordinate\s(SVG\s1.1,\s8.3.9);\sthe\stokenizer\sused\sto\smatch\sthe\sten\sknown\sletters\sonly,\sso\san\sunknown\sone\svanished\sand\sits\snumbers\swent\sto\sthe\scommand\sbefore\sit\n-\spdfa.tcl\s-\sthe\sshipped\sICC\sprofile\sis\srecognised\sthrough\sa\ssymbolic\slink\sor\sa\srelative\spath,\sso\sits\sidentifier\sstays\ssRGB\sIEC61966-2.1\n-\stools/check.sh\s-\smake\stest\sruns\swith\s-tmpdir\sin\sa\sdirectory\sof\sits\sown,\sso\sno\sfixture\sstays\sin\sthe\sworking\sdirectory\n-\stests\s-\ssvg-2.10\swith\sits\smutation\sproof;\spdfa\sand\ssvgPath\sraised\sone\sminor\sstep
-D 2026-08-27T22:39:48.568
+C Skill\sreference:\sa\sstructureResume\ssnippet\sand\s-min\son\shyphenate\sload\n\n-\sdoc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md\s-\sa\sSect\sresumed\son\sa\ssecond\spass\stakes\sa\sfurther\schild,\sand\sresuming\sa\sleaf\sis\sshown\srefused\sas\sTCLPDF\sSTRUCTURE\sPLACE\sleaf;\severy\scall\sthe\smanual\sdescribes\shas\sa\ssnippet\sagain\n-\sdoc/claude/skills/tclpdf-tcl/reference/03-text.md\s-\sthe\shyphenate\sload\scall\snames\s-min,\sthe\sshortest\sword\sbroken\sat\sall
+D 2026-08-27T22:46:59.912
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -30,13 +30,13 @@ F doc/claude/skills/tclpdf-tcl/assets.tcl 3a3ccb2514bbf52d7aacd9a52385c0b1be9671
 F doc/claude/skills/tclpdf-tcl/check.tcl 626ee542258686f3197389bdc241439b584bbb083793d8eee0318846c9913544
 F doc/claude/skills/tclpdf-tcl/reference/01-document.md 70be90debb430ec2ba5982a8924d11909277ba3e4be6db53e34fd77db024b52d
 F doc/claude/skills/tclpdf-tcl/reference/02-fonts.md a066e58a7d7bd552111db22cf547428cf3eecfe66b2445b161fac73b80f87510
-F doc/claude/skills/tclpdf-tcl/reference/03-text.md 7ddac4e34172db46423ad729b1d610735450f5180aed5b479d819cf040b6a509
+F doc/claude/skills/tclpdf-tcl/reference/03-text.md 9cfd3d7804b168154b978682cae2dd0900e8e72c54c45fbb9d292a3179bf0665
 F doc/claude/skills/tclpdf-tcl/reference/04-graphics.md ccededa506a6083a24d8f20805c4f274d0c79e20e6e74c3c43d27b39d87852c8
 F doc/claude/skills/tclpdf-tcl/reference/05-images-svg.md 4f25af4acaaef95cd30791aaebd0d793f3b9afeb671d0202c4794d26dd4114d0
 F doc/claude/skills/tclpdf-tcl/reference/06-tables.md e6e0dd839e0d12e7bafda2e7a90a207e24f4d27583d785bbf9cfd2dd641eb708
 F doc/claude/skills/tclpdf-tcl/reference/07-patterns-forms.md d4d5b9dc042e0b4f2430390e9a80a5d07d25595fbf624374f559873190c01d30
 F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md 2438d89c37b769afebdfc7bb6c677b8ef7ae3b3d500e8f1809dfbf2dc1f72169
-F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md c581bee6b52f2864eeddd57084813d4a6aedac8dfe6d4b1872f6191277ea986f
+F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md 7dc3cfe40086f6bc6971b03ef3645b2cc7326b26c1a427826008f65e233ad0fb
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 6f89ea60debe14e0e025b55c52ea4aed14a37f4592f65fe95edb9c4d2931aa63
 F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md a0c71ba1faf9452c8d99c2690888acb3f1425f2a4708e5a4b44998ad96915e2f
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
@@ -498,8 +498,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 438392197a24328be8a29fa2a33f771a6a54b3ce6ec6cb38d5465bb83ab6c3b3
-R f25588c56c0ef4c2a8afde6bc09af51f
+P c9286403a316c5739a679beb4dd180c29a39bdb825567ba99010826bcfc1e544
+R b1444fd74b553207a599d5dcbfbf2b7a
 U alex
-Z 37b87dc9dc831bf9d74dc02d290399d7
+Z 29ba359c1f3bd6965c406e9adf03e9e8
 # Remove this line to create a well-formed Fossil manifest.
