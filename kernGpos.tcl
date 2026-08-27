@@ -655,6 +655,16 @@ proc ::tclpdf::kernGpos::Subst {kind filter data context glyphs visible at \
 # line. A PLACEMENT at the first position is the one thing still dropped: it
 # would shift the whole line sideways, and no face in reach writes one.
 #
+# WHAT IS NOT DROPPED WITH IT IS THE ADVANCE, and that distinction had to be
+# made rather than assumed. The rest of the line owes the DIFFERENCE between
+# the advance and the placement, because the placement has already moved this
+# glyph; where the placement was not applied it has moved nothing, and the
+# difference is then the whole advance. A single adjustment usually writes the
+# same number twice - "pos x <-50 0 -50 0>", which narrows the glyph by moving
+# it and its successors alike - so at position 0 the difference came to zero
+# and the glyph kept its full width: measured against hb-shape on a face built
+# for it, 600 units where HarfBuzz says 550.
+#
 # PREVIOUS is unused since 2026-08-26 and stays in the signature because the
 # alternative reading above needs it and is one line away - see kern.tcl.
 proc ::tclpdf::kernGpos::Place {resultName context position next previous \
@@ -668,12 +678,16 @@ proc ::tclpdf::kernGpos::Place {resultName context position next previous \
     set own [expr {$position - 1}]
   }
   set rest [expr {($next eq {} ? $position + 1 : $next) - 1}]
+  set placed 0
   if {$dx != 0 && $own >= 0 && $own < $slots} {
     lset result $own [expr {[lindex $result $own] + $dx}]
+    set placed $dx
   }
   # The advance moves everything drawn after this glyph; the placement has
-  # already moved this glyph, so what the rest still owe is the difference.
-  set amount [expr {$da - $dx}]
+  # already moved this glyph, so what the rest still owe is the difference -
+  # and the difference from what was actually placed, which is nothing at the
+  # first position. See the head of this proc.
+  set amount [expr {$da - $placed}]
   if {$amount != 0 && $rest >= 0 && $rest < $slots} {
     lset result $rest [expr {[lindex $result $rest] + $amount}]
   }
@@ -852,4 +866,4 @@ proc ::tclpdf::kernGpos::LookupAt {context index glyphs position resultName \
       [expr {$depth + 1}]
 }
 
-package provide tclpdf::kernGpos 1.3
+package provide tclpdf::kernGpos 1.4

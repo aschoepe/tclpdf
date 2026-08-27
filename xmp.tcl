@@ -75,6 +75,13 @@ namespace eval ::tclpdf::xmp {
     pdf     "http://ns.adobe.com/pdf/1.3/"
   }
 
+  # The PDF/A extension schema container's namespace (ISO 19005-3,
+  # 6.6.2.3.3). Not in the dict above, because this module writes no
+  # property of it - it only recognises the container a contribution brings
+  # along, to gather every one of them into a single bag: see
+  # [MergeExtensionSchemas].
+  variable extension "http://www.aiim.org/pdfa/ns/extension/"
+
   # Which element commands have been declared, keyed by the PAIR of tag name
   # and namespace URI: {name uri} -> command. [dom createNodeCmd] overwrites
   # silently when called twice, and the dict keeps that work out of the
@@ -469,6 +476,188 @@ proc ::tclpdf::xmp::Describe {rdf prefix uri script} {
   return
 }
 
+# The PDF/A extension schema container, gathered into ONE.
+#
+# Every topic that describes a schema of its own hands a whole
+# rdf:Description to [xmpRaw]: PDF/UA its pdfuaid schema (ua.tcl), ZUGFeRD
+# and Order-X their fx schema (zugferd.tcl), a caller whatever it needs
+# through [pdfa extension]. Each of those carries a
+# <pdfaExtension:schemas> of its own, and appended side by side they write
+# that property into the packet twice.
+#
+# XMP part 1 (ISO 16684-1), 6.1: "Each property name in an XMP packet shall
+# be unique within that packet", NOTE 1 "it is invalid to have multiple
+# occurrences of the same property name in an XMP packet. Multiple values
+# are represented using an XMP array value". Every one of these
+# descriptions carries rdf:about="", so they all describe ONE resource, and
+# the property stands on it more than once. ISO 19005-3, 6.6.2.3.3 says the
+# same from the other side: the container is one bag carrying one rdf:li
+# per schema.
+#
+# Measured 2026-08-27, before this existed: [ua 1] together with [zugferd]
+# wrote the property twice, and veraPDF then threw the whole packet away -
+# 6.6.2.1-4 ("A metadata stream is serialized incorrectly and can not be
+# parsed"), 6.6.2.1-5 and 6.6.4-1 under 3b, 5-1 and 7.1-9 under ua1. Both
+# identifications were in the file and NEITHER reached the validator; the
+# two claims a caller made were the two things they lost. Two [pdfa
+# extension] calls do it as well, and so does one contribution carrying two
+# containers.
+#
+# Merged HERE rather than at the call, and that is what keeps the topics
+# out of it: [ua 0] takes its contribution back out of the state by its
+# exact text (ua.tcl, UaWithdraw), and a contribution rewritten on the way
+# in could not be found again. The packet is built from the state on every
+# write, so this runs on every write over whatever the state holds then.
+#
+# The FIRST container keeps its place - registration order is packet order
+# here as everywhere - and every further one hands its rdf:li over and
+# goes. The namespace declarations of an emptied description are carried
+# onto the one that stays BEFORE its elements move, and the order is not
+# cosmetic: measured, tdom writes a declaration of its own on an element
+# whose prefix was not in scope at the moment it was appended, so the
+# merged bag came out with xmlns:pdfaProperty on every pdfaProperty:name
+# in it. Correct XML either way, and not the shape every other XMP writer
+# produces - nor the one a caller grepping for "pdfaProperty:name>"
+# survives (see the note on prefix declarations in [packet]).
+proc ::tclpdf::xmp::MergeExtensionSchemas {rdf} {
+  variable extension
+  set target {}
+  foreach description [$rdf childNodes] {
+    if {[$description nodeType] ne "ELEMENT_NODE"} {
+      continue
+    }
+    set moved 0
+    foreach node [$description childNodes] {
+      if {[$node nodeType] ne "ELEMENT_NODE"
+          || [$node namespaceURI] ne $extension
+          || [$node localName] ne "schemas"} {
+        continue
+      }
+      if {$target eq {}} {
+        set target $node
+        continue
+      }
+      CarryDeclarations $description [$target parentNode]
+      set bag [SchemasBag $target]
+      foreach item [[SchemasBag $node] childNodes] {
+        $bag appendChild $item
+      }
+      $description removeChild $node
+      $node delete
+      set moved 1
+    }
+    # An rdf:Description that held nothing but the container says nothing
+    # once the container has moved - the same rule [Describe] applies to a
+    # schema that answered with no properties.
+    if {$moved && [DescriptionIsEmpty $description]} {
+      $rdf removeChild $description
+      $description delete
+    }
+  }
+  return
+}
+
+# The rdf:Bag of one pdfaExtension:schemas, made if the contribution left it
+# out: an empty container is a legal contribution (measured - [pdfa
+# extension] with <rdf:Bag/> and without any bag at all both pass [xmpRaw]),
+# and it is still the place the other contributions are gathered into.
+proc ::tclpdf::xmp::SchemasBag {schemas} {
+  variable namespaces
+  foreach child [$schemas childNodes] {
+    if {[$child nodeType] eq "ELEMENT_NODE"
+        && [$child namespaceURI] eq [dict get $namespaces rdf]
+        && [$child localName] eq "Bag"} {
+      return $child
+    }
+  }
+  $schemas appendFromScript { Tag_rdf:Bag {} }
+  return [$schemas lastChild]
+}
+
+# The namespace declarations one element makes ITSELF, as a dict of prefix
+# to URI - not the ones it inherits, which is what the XPath namespace axis
+# would answer with.
+#
+# How tdom reports them was measured (0.9.7, both interpreters), because it
+# is not what the shape of the list suggests: [$node attributes] answers
+# with {name prefix uri} for a namespaced attribute, with the bare name for
+# a plain one - and with {prefix prefix {}} for xmlns:prefix="...",
+# {xmlns {} {}} for a default declaration. So a three element entry whose
+# URI is EMPTY is a declaration and nothing else is: a prefixed attribute
+# always has a bound prefix, or the parser would not have taken the
+# document. The declared URI is then read with [getAttribute xmlns:prefix],
+# which does answer.
+proc ::tclpdf::xmp::Declarations {node} {
+  set declarations {}
+  foreach attribute [$node attributes] {
+    if {[llength $attribute] != 3 || [lindex $attribute 2] ne {}} {
+      continue
+    }
+    lassign $attribute name prefix
+    if {$prefix eq {}} {
+      # xmlns="..." - the default namespace, which nothing prefixed uses.
+      continue
+    }
+    dict set declarations $prefix [$node getAttribute xmlns:$prefix {}]
+  }
+  return $declarations
+}
+
+# Every namespace declaration of one element that the other does not have
+# yet. A prefix already bound there keeps its binding - two contributions
+# may label two URIs with one prefix, and the elements that came from the
+# second one then carry their own declaration, which tdom writes for them.
+proc ::tclpdf::xmp::CarryDeclarations {from to} {
+  set declared [Declarations $to]
+  dict for {prefix uri} [Declarations $from] {
+    if {[dict exists $declared $prefix] || $uri eq {}} {
+      continue
+    }
+    $to setAttributeNS {} xmlns:$prefix $uri
+    dict set declared $prefix $uri
+  }
+  return
+}
+
+# Whether an rdf:Description carries nothing any more: no element, no text
+# and no property as an attribute. rdf:about and the namespace declarations
+# are not properties - the first is what the description is ABOUT and the
+# second is how it spells them - so a description holding only those is
+# empty. RDF/XML admits a property as an attribute (XMP part 1, 7.9.2.2),
+# which is why the attributes are looked at at all.
+proc ::tclpdf::xmp::DescriptionIsEmpty {description} {
+  variable namespaces
+  foreach child [$description childNodes] {
+    switch -- [$child nodeType] {
+      ELEMENT_NODE {
+        return 0
+      }
+      TEXT_NODE - CDATA_SECTION_NODE {
+        if {[string trim [$child nodeValue]] ne {}} {
+          return 0
+        }
+      }
+    }
+  }
+  foreach attribute [$description attributes] {
+    if {[llength $attribute] != 3} {
+      # A plain name: an attribute in no namespace, which RDF/XML reads as
+      # a property (rdf:about and the declarations are all namespaced).
+      return 0
+    }
+    lassign $attribute name prefix uri
+    if {$uri eq {}} {
+      # A namespace declaration - see [Declarations].
+      continue
+    }
+    if {$uri eq [dict get $namespaces rdf] && $name eq "about"} {
+      continue
+    }
+    return 0
+  }
+  return 1
+}
+
 # Build the packet.
 #
 #   descriptions   list of {prefix uri {{kind tag value} ...}}
@@ -684,6 +873,7 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
     }
     $fragment delete
   }
+  MergeExtensionSchemas $rdf
   set body [$root asXML -indent 2]
   $document delete
 
@@ -710,9 +900,86 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   return $packet
 }
 
+# The schemas a set of RAW contributions writes into, as the {prefix uri}
+# pairs [xmpSchema] registers - so that a caller's packet can be held
+# against both kinds through one loop (see [CheckCaller]).
+#
+# Every property element of every rdf:Description of the contribution
+# counts, and every property written as an ATTRIBUTE too (RDF/XML admits
+# both, XMP part 1, 7.9.2.2); rdf:about is not a property. That is what
+# names the ZUGFeRD case: [zugferd] contributes the four fx: properties
+# under urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0# and the
+# Factur-X extension schema under the pdfaExtension namespace, and both
+# have to stand in the packet the file carries or the invoice is only half
+# in it. Order-X the same under its own URI, [ua 1] the extension schema
+# describing pdfuaid.
+#
+# Parsed again here rather than remembered at [xmpRaw]: what a contribution
+# says is in the contribution, the state holds the text, and one parser
+# reading it twice cannot disagree with itself. Contributions are few and
+# short.
+proc ::tclpdf::xmp::RawSchemas {raw} {
+  variable namespaces
+  set schemas {}
+  foreach xml $raw {
+    set fragment [ParseRaw $xml]
+    foreach description [[$fragment documentElement] childNodes] {
+      if {[$description nodeType] ne "ELEMENT_NODE"} {
+        continue
+      }
+      foreach node [$description childNodes] {
+        if {[$node nodeType] ne "ELEMENT_NODE" || [$node namespaceURI] eq {}} {
+          continue
+        }
+        dict set schemas [$node namespaceURI] [$node prefix]
+      }
+      foreach attribute [$description attributes] {
+        if {[llength $attribute] != 3} {
+          continue
+        }
+        lassign $attribute name prefix uri
+        if {$uri eq {} || ($uri eq [dict get $namespaces rdf]
+            && $name eq "about")} {
+          continue
+        }
+        dict set schemas $uri $prefix
+      }
+    }
+    $fragment delete
+  }
+  set result {}
+  dict for {uri prefix} $schemas {
+    lappend result [list $prefix $uri]
+  }
+  return $result
+}
+
 # A packet the CALLER set, held against the schemas that registered with
 # this module: each one's namespace URI has to be declared somewhere in it,
 # or what the topic wanted to say is not in the file.
+#
+# Both kinds of contribution are held, and the second one was not until
+# 2026-08-27: a schema registered with [xmpSchema] - pdfaid, pdfuaid - and
+# a whole description handed to [xmpRaw], which is how [zugferd] writes the
+# four fx: properties and every extension schema reaches the packet. Only
+# the first was asked for, so "metadata <own packet>" together with
+# [zugferd] wrote the output intent, the attachment and the /AF entry, and
+# the XMP half of the standard was silently gone: measured 2026-08-27,
+# "fx: properties in file: 0", veraPDF 3b isCompliant="true" - it has no
+# opinion on Factur-X - and Mustangproject five errors (ConformanceLevel
+# not found, DocumentType not found, DocumentFileName not found, ...),
+# while [zugferd state] went on answering "profile {EN 16931} name
+# factur-x.xml". Both orders wrote it.
+#
+# REFUSED rather than merged into the caller's packet, and that is the
+# decision this module makes for the whole class. A merge would have to
+# prove for every property that the caller does not carry it already, since
+# a property may stand in an XMP packet exactly once (XMP part 1, 6.1 - the
+# rule [MergeExtensionSchemas] exists for), and a caller who spells
+# fx:ConformanceLevel or pdfaid:part themselves means it: two sources for
+# one value is precisely the silent decision this refusal replaces. So the
+# packet the caller set is written exactly as it was set, and what is
+# missing from it is named at the write.
 #
 # The URI rather than the prefix, because a prefix is a label a document
 # picks and the URI is the thing itself (see [declare]) - a packet that
@@ -734,28 +1001,41 @@ proc ::tclpdf::xmp::CheckCaller {packet schemas} {
     if {[$node namespaceURI] ne {}} {
       dict set found [$node namespaceURI] 1
     }
-    foreach attribute [$node attributes] {
-      # A declaration that is in scope but unused: {xmlns pdfaid} is how
-      # tdom hands "xmlns:pdfaid=..." back.
-      if {[llength $attribute] == 3 && [lindex $attribute 1] eq "xmlns"} {
-        dict set found [$node getAttribute \
-            xmlns:[lindex $attribute 0]] 1
+    # A declaration that is in scope but unused counts as well - the packet
+    # says the schema is there. Read through [Declarations], which knows
+    # how tdom reports one; this used to look for a prefix "xmlns" in the
+    # attribute list and tdom never writes one, so the branch was dead and
+    # an unused declaration was not found at all (measured 2026-08-27).
+    dict for {- declared} [Declarations $node] {
+      if {$declared ne {}} {
+        dict set found $declared 1
       }
     }
   }
   $document delete
+  # Every missing one at once rather than one per run: a ZUGFeRD invoice
+  # contributes two - the fx properties and the extension schema that
+  # describes them - and a caller told about one of them would come back
+  # for the other.
+  set missing {}
   foreach entry $schemas {
     lassign $entry prefix uri
-    if {![dict exists $found $uri]} {
-      return -code error -errorcode [list TCLPDF XMP CALLER $prefix] \
-          "tclpdf: this document claims something that has to\
-          stand in its XMP packet - the \"$prefix\" schema, $uri - and the\
-          packet set with \[metadata\] does not carry it. A packet given by\
-          the caller replaces the built one entirely, so a document that\
-          also claims pdfa or ua has to carry that description itself.\
-          Drop the \[metadata\] call and the packet is built with it, or add\
-          an rdf:Description for $uri to the packet"
+    if {![dict exists $found $uri] && ![dict exists $missing $uri]} {
+      dict set missing $uri $prefix
     }
+  }
+  if {[dict size $missing]} {
+    set named [join [lmap {uri prefix} $missing {format {"%s" (%s)} $prefix $uri}] {, }]
+    return -code error -errorcode \
+        [list TCLPDF XMP CALLER [lindex [dict values $missing] 0]] \
+        "tclpdf: this document claims something that has to\
+        stand in its XMP packet - the $named schema description(s) - and the\
+        packet set with \[metadata\] does not carry it. A packet given by\
+        the caller replaces the built one entirely, so a document that\
+        also claims pdfa, ua or zugferd has to carry the pdfaid, pdfuaid,\
+        fx and extension schema descriptions itself.\
+        Drop the \[metadata\] call and the packet is built with them, or add\
+        an rdf:Description for each to the packet"
   }
   return
 }
@@ -858,9 +1138,14 @@ oo::define ::tclpdf::document::document {
       # and neither call can know what the other will do. The question is
       # asked of every registered schema rather than of pdfa and ua by name:
       # this module knows what registered, not what it meant.
-      ::tclpdf::xmp::CheckCaller $current [lmap entry [my state xmpSchemas] {
-        lrange $entry 0 1
-      }]
+      #
+      # Of every RAW contribution too, through [RawSchemas] - the fx
+      # properties of a ZUGFeRD invoice and every extension schema reach
+      # the packet that way, and they used to fall out of a caller's packet
+      # without a word while [zugferd state] went on describing them.
+      ::tclpdf::xmp::CheckCaller $current [concat [lmap entry \
+          [my state xmpSchemas] {lrange $entry 0 1}] \
+          [::tclpdf::xmp::RawSchemas [my state xmpRaw]]]
       return
     }
     set descriptions {}
@@ -883,4 +1168,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xmp 1.6
+package provide tclpdf::xmp 1.7

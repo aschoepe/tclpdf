@@ -636,4 +636,53 @@ test imageTiffStreams-9.3 {the parts cover the picture exactly once} -body {
     set row
 } -result 3
 
+test imageTiffStreams-9.4 {the part count is answered from the tags alone} -body {
+    # [partCount] is the same answer [streams] arrives at, reached without
+    # reading a strip - which is what lets the caller ask BEFORE anything is
+    # written. It exists because the two refusals a stack can earn (a stack
+    # cannot be another picture's mask, and it cannot exceed the stacking
+    # limit) used to be made after every strip had been decoded, and, when
+    # the picture was a mask, after the carrier had put its ICC profile into
+    # the file.
+    #
+    # Measured against the parts actually built, one compression at a time,
+    # so the cheap answer cannot drift away from the expensive one.
+    set first [::tclpdf::filter encodeFlate [string range $::samples 0 7]]
+    set second [::tclpdf::filter encodeFlate [string range $::samples 8 11]]
+    set two [list 273 4 [list 8 [expr {8 + [string length $first]}]]]
+    set counts [list 279 4 [list [string length $first] [string length $second]]]
+    set cases [list \
+        deflate      [list {257 3 3} {259 3 8} $two $counts {278 3 2} \
+                          -data $first$second] \
+        uncompressed [list {278 3 1} {273 4 {8 12 16 20}} {279 4 {4 4 4 4}}] \
+        oneStrip     [list -data $::samples]]
+    set out {}
+    foreach {label args} $cases {
+        set bytes [::tclpdfTest::tiffOne {*}$args]
+        set parsed [::tclpdf::imageTiff parse $bytes]
+        set built [llength [dict get [::tclpdf::imageTiffStreams streams \
+            $bytes $parsed] parts]]
+        lappend out $label [::tclpdf::imageTiffStreams partCount $parsed] $built
+    }
+    set out
+} -result {deflate 2 2 uncompressed 1 1 oneStrip 1 1}
+
+test imageTiffStreams-9.5 {a Deflate file taken apart for its samples is one part} -body {
+    # The exception the tags have to be read for: a 16-bit little-endian
+    # Deflate file is decoded and re-deflated as ONE stream however many
+    # strips it has, so counting the strips would answer two where [streams]
+    # answers one - and a picture would be refused as a stack that is not one.
+    set values {1000 1050 1100 1150 2000 2050 2100 2150}
+    set first [::tclpdf::filter encodeFlate [binary format su* $values]]
+    set second [::tclpdf::filter encodeFlate [binary format su* $values]]
+    set bytes [::tclpdfTest::tiffOne {258 3 16} {259 3 8} {278 3 2} \
+        [list 273 4 [list 8 [expr {8 + [string length $first]}]]] \
+        [list 279 4 [list [string length $first] [string length $second]]] \
+        -order II -data $first$second]
+    set parsed [::tclpdf::imageTiff parse $bytes]
+    list [dict get $parsed stripCount] \
+        [::tclpdf::imageTiffStreams partCount $parsed] \
+        [llength [dict get [::tclpdf::imageTiffStreams streams $bytes $parsed] parts]]
+} -result {2 1 1}
+
 cleanupTests

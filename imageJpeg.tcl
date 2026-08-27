@@ -76,7 +76,7 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
   }
 
   set result [dict create adobe 0 transform -1 progressive 0 icc {} \
-      jfif {} exif {} orientation 1]
+      jfif {} exif {} orientation 1 componentIds {}]
   # An embedded ICC profile travels in APP2 segments marked "ICC_PROFILE"
   # (ICC.1, Annex B.4). A segment body holds at most 64 KB, so a profile is
   # split over several, each carrying its sequence number and the total
@@ -136,13 +136,45 @@ proc ::tclpdf::imageJpeg::parse {bytes} {
             "tclpdf: unsupported JPEG frame type\
             [format 0x%02x $marker]"
       }
+      # A frame header is six bytes plus three per component (ITU-T T.81,
+      # B.2.2): the sample precision, the two dimensions, the component
+      # count, and for each component an identifier, a sampling byte and a
+      # quantisation table number. Held against the LENGTH FIELD before it is
+      # read, because [binary scan] leaves the variables it could not fill
+      # untouched: a SOF0 announcing four bytes set "precision" and nothing
+      # else, and the next line answered with "can't read \"width\": no such
+      # variable" and -errorcode {TCL READ VARNAME} - a bare Tcl error out of
+      # a package that promises a tclpdf: message for every refusal.
+      if {[string length $body] < 6} {
+        return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED frame] \
+            "tclpdf: damaged JPEG - the frame header is [string length $body]\
+            bytes, and one holds at least six (ITU-T T.81, B.2.2)"
+      }
       binary scan $body cuSuSucu precision height width components
+      if {[string length $body] < 6 + 3 * $components} {
+        return -code error -errorcode [list TCLPDF IMAGE JPEG DAMAGED frame] \
+            "tclpdf: damaged JPEG - the frame header announces $components\
+            components and is [string length $body] bytes, which is too short\
+            for the three bytes each of them needs (ITU-T T.81, B.2.2)"
+      }
       dict set result width $width
       dict set result height $height
       dict set result components $components
       dict set result bitsPerComponent $precision
+      # The component identifiers. Kept because in a file that carries
+      # neither a JFIF nor an Adobe marker they are the only thing that says
+      # what the three components MEAN - see [colourTransform], which is the
+      # one reader of them.
+      set ids {}
+      for {set index 0} {$index < $components} {incr index} {
+        binary scan [string index $body [expr {6 + 3 * $index}]] cu id
+        lappend ids $id
+      }
+      dict set result componentIds $ids
       # Keep walking: the APP14 segment may follow the frame header, and its
-      # transform flag decides whether a four-component file is inverted.
+      # transform flag says how the components are coded - which decides the
+      # /DecodeParms of a three-component file ([colourTransform]) and, at
+      # four components, that the file is an Adobe CMYK one ([inverted]).
     }
     # The JFIF APP0 segment (JFIF 1.02, Annex A): identifier, two version
     # bytes, the density unit and the two densities. Unit 0 means the pair
@@ -416,8 +448,59 @@ proc ::tclpdf::imageJpeg::space {components} {
 # segment. Without the /Decode array such a file comes out looking like a
 # photographic negative - a defect no validator reports, because the file is
 # structurally perfect.
+#
+# THE PRESENCE of the segment is what decides here, not its transform flag:
+# every four-component file Adobe's encoder marks carries inverted values,
+# whether the flag says 0 (CMYK) or 2 (YCCK). The flag is read all the same,
+# and by [colourTransform], which is where it does decide something.
 proc ::tclpdf::imageJpeg::inverted {parsed} {
   return [expr {[dict get $parsed components] == 4 && [dict get $parsed adobe]}]
 }
 
-package provide tclpdf::imageJpeg 1.7
+# The ColorTransform a DCTDecode filter has to be told, or the empty string
+# when the value the reader assumes by itself is already the right one.
+#
+# ISO 32000-2, Table 13: with no Adobe APP14 marker in the data and no entry
+# in the filter dictionary, "the default value of ColorTransform shall be 1
+# if the image has three components" - so the reader converts YCbCr to RGB.
+# A file whose three components already ARE R, G and B is then converted
+# once too often. Measured 2026-08-27 on a cjpeg -rgb file with its APP14
+# removed: Quartz (CoreGraphics, and so Preview.app) rendered a red and blue
+# picture as (134,252,82) and (163,33,21). poppler guesses from the frame
+# header and comes out right, but the default in the table is what a
+# conforming reader takes, and the file has to say so.
+#
+# WHICH file that is, is not read off the declared colour space but off the
+# markers, in the order every decoder in the field reads them - libjpeg's
+# [default_decompress_parms] (jdapimin.c) is the one they all follow:
+#
+#   JFIF APP0    the segment is defined for YCbCr data (JFIF 1.02, clause 2),
+#                and it outranks everything else - nothing to write
+#   Adobe APP14  its transform flag: 0 is untransformed, anything else YCbCr
+#   neither      the component identifiers of the frame header - 1, 2, 3 mean
+#                YCbCr, and 'R', 'G', 'B' (82, 71, 66) the RGB convention
+#                libjpeg writes without a marker; anything else is read as
+#                YCbCr, the default the table already gives
+#
+# Three components only. At four the table's default is 0, which is what an
+# untransformed CMYK file is, and a YCCK one carries the APP14 that says so.
+proc ::tclpdf::imageJpeg::colourTransform {parsed} {
+  if {[dict get $parsed components] != 3} {
+    return {}
+  }
+  if {[dict get $parsed jfif] ne {}} {
+    return {}
+  }
+  if {[dict get $parsed adobe]} {
+    if {[dict get $parsed transform] == 0} {
+      return 0
+    }
+    return {}
+  }
+  if {[dict get $parsed componentIds] eq {82 71 66}} {
+    return 0
+  }
+  return {}
+}
+
+package provide tclpdf::imageJpeg 1.8

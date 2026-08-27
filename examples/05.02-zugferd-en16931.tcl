@@ -203,7 +203,11 @@ puts "  attachment: [dict get [$doc zugferd state] name],\
 # one invoice above.
 #
 # The values are the ones the standards allow. -name is what a reader looks
-# the attachment up by, and exactly four are permitted; -type goes verbatim
+# the attachment up by, and exactly four are permitted - but not all four to
+# every invoice: xrechnung.xml belongs to the XRECHNUNG profile and to no
+# other, and no other name belongs to it (Factur-X 1.09.2, 7.7), which is
+# why the BASIC WL line below leaves the name to the profile and the
+# XRECHNUNG line gets the one name it may have. -type goes verbatim
 # into fx:DocumentType, ORDER being Order-X; -profile overrides BT-24 - meant
 # for an XML whose identifier the reader does not know, and here it stands in
 # for five different invoices, because one XML serves them all; -version is
@@ -220,7 +224,7 @@ set variants [list \
     {-name factur-x.xml -profile "EN 16931" -type INVOICE -version 1.0 \
         -description "EN 16931 invoice data" -compress 0} \
     {-name zugferd-invoice.xml -profile MINIMUM -relationship Data} \
-    {-name xrechnung.xml -profile "BASIC WL"} \
+    {-profile "BASIC WL"} \
     {-name xrechnung.xml -profile XRECHNUNG -relationship Source} \
     {-name order-x.xml -type ORDER -profile BASIC -description "Order-X order data"} \
     [list -profile EXTENDED -relationship Alternative -compress 1 -icc $srgb2014]]

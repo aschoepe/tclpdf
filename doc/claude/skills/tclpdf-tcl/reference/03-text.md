@@ -115,6 +115,8 @@ if {[info exists hyphenPatterns] && [file exists $hyphenPatterns]} {
     # unhyphenated in silence.
     if {[catch {$doc textLines $german -width 38 -hyphenate fr} message]} {
         puts "not loaded: $message"
+    } else {
+        puts "a language that was never loaded: NOT REFUSED"
     }
 } else {
     puts "no pattern file here - point \$hyphenPatterns at one in assets.tcl"

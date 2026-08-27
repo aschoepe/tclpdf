@@ -80,10 +80,21 @@ oo::define ::tclpdf::document::document {
           [join $styles {, }] - not \"$style\""
     }
     set start [dict get $options start]
-    if {![string is integer -strict $start] || $start < 1} {
+    # AND AN INTEGER THE FILE CAN HOLD. /St is an integer (ISO 32000-2,
+    # Table 159), and the upper bound of a PDF integer is 2^31-1 (Annex C.2).
+    # [string is integer] is true for 3000000000 under both interpreters, and
+    # [pdfObj num] writes a whole number past the integer range as a REAL -
+    # so "-start 3000000000" put "/St 3000000000." into the number tree,
+    # which is a real where the table says integer, and no validator objects
+    # (measured 2026-08-27, qpdf --check silent). Refused at the call, before
+    # the range is stored and before the version is raised to 1.3: the value
+    # is the caller's and the mistake is in the call, not in the write.
+    if {![string is integer -strict $start] || $start < 1
+        || $start > 2147483647} {
       return -code error -errorcode [list TCLPDF PAGELABEL ARGUMENT start] \
-          "tclpdf: pageLabels -start takes a positive integer,\
-          not \"$start\""
+          "tclpdf: pageLabels -start takes a positive integer up to\
+          2147483647 - /St is an integer (ISO 32000-2, Table 159) and a PDF\
+          integer stops there (Annex C.2) - not \"$start\""
     }
     # Page labels are PDF 1.3 (Reference 1.7, 8.3.1).
     my RequireVersion 1.3 "pageLabels"
@@ -146,4 +157,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageLabel 1.2
+package provide tclpdf::pageLabel 1.3

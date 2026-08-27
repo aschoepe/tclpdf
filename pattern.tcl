@@ -88,6 +88,14 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -size of pattern \"$name\" is\
           {[dict get $options size]} - a tile needs a width and a height above zero"
     }
+    # AND ABOVE ZERO AS THE /BBox WILL SAY IT (Table 95; [aboveZero] in
+    # page.tcl carries the reasoning): a tile of "-size {1e-6 1e-6}" passed
+    # the line above and wrote "/BBox [0 0 0 0]" with "/XStep 0 /YStep 0"
+    # beside it - measured 2026-08-27, a valid file that paints nothing.
+    foreach {side points} [list width $widthPoints height $heightPoints] {
+      my aboveZero $points "the $side of pattern \"$name\" (-size\
+          {[dict get $options size]})" [list TCLPDF PATTERN ARGUMENT size]
+    }
     # The step is how far apart the tiles sit. Equal to the tile size they
     # touch; larger, and the gaps show through - which is what a caller wants
     # for a sparse watermark rather than a hatch.
@@ -100,11 +108,19 @@ oo::define ::tclpdf::document::document {
     # Neither may be zero (Table 75: XStep and YStep "shall not be zero") -
     # a tile that repeats every nothing is one a reader cannot lay. Negative
     # is permitted there and left alone.
+    #
+    # ASKED OF THE NUMBER THE FILE GETS, not of the one the caller wrote:
+    # "-step {1e-6 4}" is 2.8e-6 pt, which is not zero to Tcl and IS zero as
+    # a PDF real (7.3.3, five decimals) - measured 2026-08-27, the file said
+    # "/XStep 0". [pdfObj written] is that question, once, for the four
+    # commands that had it wrong. Not [aboveZero], which is the other half of
+    # the class: a step may be negative, a size may not.
     foreach {axis step} [list X $stepX Y $stepY] {
-      if {$step == 0} {
+      if {[::tclpdf::pdfObj written $step] == 0} {
         return -code error -errorcode [list TCLPDF PATTERN STEP $axis] \
             "tclpdf: the ${axis} step of pattern \"$name\"\
-            is 0 - a step shall not be zero (ISO 32000-1 Table 75)"
+            is 0 in the file (\"$step\" pt, and a PDF real carries five\
+            decimals) - a step shall not be zero (ISO 32000-1 Table 75)"
       }
     }
     # Before the canvas is pushed: -origin goes through [coords], and inside
@@ -332,4 +348,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pattern 1.7
+package provide tclpdf::pattern 1.8

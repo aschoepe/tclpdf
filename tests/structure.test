@@ -870,10 +870,11 @@ test structure-12.7 {a turned form gets the box around the turned form} -body {
   # corners go through the same matrix the stream gets and the box is the
   # upright one around them.
   #
-  # A 40x20 mm form turned by 30 degrees about its bottom left corner: the
-  # hull is 40*cos30 + 20*sin30 = 44.64 mm wide and 40*sin30 + 20*cos30 =
-  # 37.32 mm high - wider AND higher than the form itself, which is what
-  # makes the difference visible at all.
+  # A 40x20 mm form turned by 30 degrees about its top left corner - the
+  # point -at names, which is what the manual promises of -rotate (round 8,
+  # finding 70): the hull is 40*cos30 + 20*sin30 = 44.64 mm wide and
+  # 40*sin30 + 20*cos30 = 37.32 mm high - wider AND higher than the form
+  # itself, which is what makes the difference visible at all.
   set doc [tclpdf new -unit mm -compress 0]
   $doc tagged 1
   $doc page add
@@ -888,17 +889,19 @@ test structure-12.7 {a turned form gets the box around the turned form} -body {
   file delete $path
   regexp {/O /Layout /BBox \[([^\]]*)\]} $bytes -> box
   lassign $box left bottom right top
-  # The corner given is the bottom left of the UNTURNED form, at 80 mm from
-  # the left and 160 mm from the top. Turning about that corner takes the
-  # figure 10 mm to the LEFT of it (20 mm of height times sin 30) and up to
-  # 122.68 mm from the top, above the 140 mm -at named. Both lie outside the
-  # rectangle an unturned box would have written, which is what the hull is
-  # for. A4 is 841.89 pt high and a millimetre is 2.8346 pt.
+  # The corner given is the top left of the UNTURNED form, at 80 mm from the
+  # left and 140 mm from the top, and it is the fixed point of the turn: the
+  # hull BEGINS there, 80 mm from the left and 120 mm from the top, and the
+  # turned form stands to the right of it and above it - the four corners are
+  # (80,140), (114.64,120), (124.64,137.32) and (90,157.32). Before round 8
+  # the turn was about the bottom left corner and the hull reached 10 mm to
+  # the left of the point named. A4 is 841.89 pt high and a millimetre is
+  # 2.8346 pt.
   list [format %.2f [expr {($right - $left) / 2.8346457}]] \
       [format %.2f [expr {($top - $bottom) / 2.8346457}]] \
       [format %.2f [expr {$left / 2.8346457}]] \
       [format %.2f [expr {(841.8898 - $top) / 2.8346457}]]
-} -result {44.64 37.32 70.00 122.68}
+} -result {44.64 37.32 80.00 120.00}
 
 test structure-12.9 {a turned picture gets the box around the turned picture} \
     -constraints haveImage -body {
@@ -910,7 +913,8 @@ test structure-12.9 {a turned picture gets the box around the turned picture} \
   # unit square, because an image XObject IS the unit square.
   #
   # A 40 mm wide picture of 4:3 is 30 mm high. Turned by 30 degrees about its
-  # bottom left corner the hull is 40*cos30 + 30*sin30 = 49.64 mm wide and
+  # top left corner - the point -at names, which is what the manual promises
+  # of -rotate - the hull is 40*cos30 + 30*sin30 = 49.64 mm wide and
   # 40*sin30 + 30*cos30 = 45.98 mm high.
   set doc [tclpdf new -unit mm -compress 0]
   $doc tagged 1
@@ -924,11 +928,14 @@ test structure-12.9 {a turned picture gets the box around the turned picture} \
   file delete $path
   regexp {/O /Layout /BBox \[([^\]]*)\]} $bytes -> box
   lassign $box left bottom right top
-  # Wider and higher than the picture itself, and reaching left of the corner
-  # that was named - both outside the rectangle written before.
+  # Wider and higher than the picture itself, and beginning exactly at the
+  # corner that was named: the turn has its fixed point there, so nothing of
+  # the figure reaches to the left of it and the hull grows to the right and
+  # upwards instead. Before round 8 the third line asked for "< 80", which a
+  # box turned about the right point passes by a rounding remainder only.
   list [expr {($right - $left) / 2.8346457 > 40}] \
       [expr {($top - $bottom) / 2.8346457 > 30}] \
-      [expr {$left / 2.8346457 < 80}]
+      [expr {[format %.2f [expr {$left / 2.8346457}]] eq "80.00"}]
 } -result {1 1 1}
 
 test structure-12.9a {and an unturned picture keeps the box it always had} \
@@ -1298,12 +1305,20 @@ test structure-15.9 {a Caption is the first child of a Table or an L} -body {
   }} listErr]
   $doc destroy
   list $second [string match "*Caption of a Table*first*child, not child 2 of 3*" $err] \
-      $first $none $list [string match "*Caption of a L*first child, not child 2 of 2*" $listErr]
+      $first $none $list [string match \
+      "*Caption of a L*not child 2 of 2*" $listErr]
 } -result {1 1 0 0 1 1}
 
-test structure-15.10 {a table caption may come last in a 2.0 file only} -body {
-  # ISO 32000-2 lets a Table carry its caption as the last child as well; a
-  # 1.7 file has only Annex L's first. An L never takes it last.
+test structure-15.10 {a caption may come last in a 2.0 file} -body {
+  # ISO 32000-2 lets a Table carry its caption as the last child as well, and
+  # says the same of an L in so many words: "If a Caption is present, it
+  # shall be either the first or last child in the L (list) structure
+  # element" (14.8.4.8). A 1.7 file has only Annex L's first, for both.
+  #
+  # The L was refused last in a 2.0 file too until 2026-08-27 - the rule read
+  # "Table" where the standard reads Table AND L, and a legitimate list was
+  # turned away. The old expectation is corrected rather than kept: it held a
+  # defect, not a decision.
   set draw {
     $doc structure TR -script {
       $doc structure TD -script {$doc text "a" -at {20 20}}
@@ -1325,7 +1340,7 @@ test structure-15.10 {a table caption may come last in a 2.0 file only} -body {
   set one [catch {$doc structure Table -script $draw} err]
   $doc destroy
   list $two $listLast $one [string match "*first or, in a 2.0 file, last*" $err]
-} -result {0 1 1 1}
+} -result {0 0 1 1}
 
 # --- the page destination beside the structure destination ----------------
 #
@@ -2382,6 +2397,11 @@ test structure-26.1 {-tag inside an open leaf opens a child, or is refused namin
   # that P; inside a Figure a -tag Caption is its Caption; an H1 inside a P
   # is what Annex L forbids and is refused - before the bracket is written.
   # Until now the tag was dropped and the text marked as the open element.
+  #
+  # And the refused bracket leaves NOTHING behind: the P whose body failed
+  # gathered no mark, so it goes with it (the transaction of 2026-08-27,
+  # [StructureRollback]). Until then the count grew by one and the tree kept
+  # an empty P that the UA checks counted.
   set doc [tclpdf new -unit mm -compress 0]
   $doc tagged 1
   $doc page add
@@ -2412,7 +2432,7 @@ test structure-26.1 {-tag inside an open leaf opens a child, or is refused namin
       [regexp {/Caption <</MCID \d+>> BDC} $before] \
       $refused [string match "*a P holds text and inline markup, not a H1*" $err] \
       [expr {$after eq $before}] [expr {[llength $shape] - $elementsBefore}]
-} -result {{{P {} 2} {Span 0 1} {Figure {} 2} {Caption 2 1} {Link {} 1} {Span 4 1} {P {} 0}} 2 1 1 1 1 1}
+} -result {{{P {} 2} {Span 0 1} {Figure {} 2} {Caption 2 1} {Link {} 1} {Span 4 1}} 2 1 1 1 1 0}
 
 test structure-26.2 {-tag with a grouping type is refused, and nothing is written} -body {
   # A Table or a Sect holds elements, not a mark; "-tag Table" on a line of
@@ -2429,13 +2449,16 @@ test structure-26.2 {-tag with a grouping type is refused, and nothing is writte
   set stream [::tclpdfTest::content $doc]
   set elements [$doc state structure]
   set mcid [$doc state structureMcid]
-  # Inside an open Sect the same refusal, and the Sect stays empty.
+  # Inside an open Sect the same refusal - and the Sect goes with it. Until
+  # 2026-08-27 it stayed behind, empty, which is what [StructureRollback]
+  # now undoes: the bracket claimed no MCID, so nothing in the stream points
+  # at it and the tree is as it was.
   set inside [catch {$doc structure Sect -script {
     $doc text x -at {20 30} -tag L
   }} err2]
-  set kids [dict get [lindex [$doc state structure] 0] kids]
+  set left [$doc state structure]
   $doc destroy
-  list $codes $stream $elements $mcid $inside [string match "*grouping type*" $err2] $kids
+  list $codes $stream $elements $mcid $inside [string match "*grouping type*" $err2] $left
 } -result {{1 1 1 1 1 1 1 1 1 1 1 1 1 1} {} {} {} 1 1 {}}
 
 test structure-26.3 {inline markup needs an element that holds text around it} -body {
@@ -2717,8 +2740,11 @@ test structure-32.3 {an incomplete Ruby and an incomplete Warichu are refused} -
 } -result {1 1 1 1}
 
 test structure-32.4 {an orphaned part is refused where it opens} -body {
-  # The part never opens, so nothing has to be unwound: the tree holds the
-  # P and nothing else, and the stream holds no bracket for the part.
+  # The part never opens - and the P around it does not survive the refusal
+  # either: its body failed before anything was marked, so the bracket is
+  # undone whole ([StructureRollback], 2026-08-27). The tree is empty and
+  # the stream holds no bracket for the part. Until then the P stayed, and
+  # an empty P in the tree is what the UA checks counted.
   set doc [rubyDoc]
   set code [catch {$doc structure P -script {
     $doc structure RT -script {$doc text ruby -at {20 20}}
@@ -2727,7 +2753,7 @@ test structure-32.4 {an orphaned part is refused where it opens} -body {
   $doc destroy
   list $code [string match "*a RT belongs in Ruby, not in a P (ISO 32000-2\
       Annex L)*" $err] $left
-} -result {1 1 1}
+} -result {1 1 0}
 
 test structure-32.5 {a second THead is refused, one THead and one TFoot are fine} -body {
   set doc [rubyDoc]
@@ -3698,6 +3724,338 @@ test structure-40.7 {a module resumes by the id StructureOpen answered} -body {
   $doc destroy
   list $shape $stack
 } -result {{{Table {} 1} {TR 0 2} {TD 1 1} {TD 1 1}} {}}
+
+# --- round 8: the bracket is a transaction (finding 5) --------------------
+#
+# A [structure ... -script] whose body fails used to close its element and
+# leave it in the tree, empty - and the UA checks counted it: an empty H1
+# satisfied "a document begins with an H1" and veraPDF called the file
+# conformant. The bracket now undoes itself, up to the one boundary it
+# cannot cross: what has already reached the content stream.
+
+proc ::structureR8NoId {bytes} {
+  regsub -all {/ID \[<[0-9a-f]+> <[0-9a-f]+>\]} $bytes {/ID []} bytes
+  return $bytes
+}
+
+proc ::structureR8Doc {args} {
+  set doc [tclpdf new -unit mm -compress 0 {*}$args]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 10
+  return $doc
+}
+
+test structure-r8-1.1 {a bracket that gathered nothing leaves nothing behind} -body {
+  # The reviewer's probe (docs/review-8-proben/structure/p17_dead_elements.tcl,
+  # case a): the only heading of the document, whose body is refused for a
+  # NaN coordinate. Before the fix the tree held "#0 H1 kids={}" and the
+  # write went out with a heading nobody can read.
+  set doc [::structureR8Doc]
+  set code [catch {$doc structure H1 -script {
+    $doc text "Heading" -at {20 NaN}
+  }} err]
+  set left [$doc state structure]
+  set stack [$doc state structureStack]
+  set mcid [$doc state structureMcid]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [lindex [split $err] 0] $left $stack $mcid $stream
+} -result {1 tclpdf: {} {} {} {}}
+
+test structure-r8-1.2 {a bracket that marked something keeps what it marked} -body {
+  # The commit boundary. The first line was drawn and bracketed in the
+  # stream; the second is refused. The mark cannot be taken out of the page,
+  # so neither is its half of the tree - a /P <</MCID 0>> BDC with no entry
+  # in the ParentTree is content a reader neither finds nor knows to skip
+  # (ISO 14289-1 7.1).
+  set doc [::structureR8Doc]
+  set code [catch {$doc structure P -script {
+    $doc text "drawn" -at {20 20}
+    $doc text "refused" -at {20 NaN}
+  }} err]
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [llength [dict get $element kids]]
+  }]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # One bracket, closed, and the element that owns it still in the tree.
+  list $code $shape [regexp -all {BDC} $stream] [regexp -all {EMC} $stream] \
+      [regexp -all {\mBT\M} $stream] [regexp -all {\mET\M} $stream]
+} -result {1 {{P 1}} 1 1 1 1}
+
+test structure-r8-1.3 {a child opened before the error goes with the parent} -body {
+  # Codex's objection to "drop it when it is empty": the body may have
+  # opened children before it failed. The transaction covers the whole
+  # subtree - the Sect, the P inside it and the name the P claimed.
+  set doc [::structureR8Doc]
+  set code [catch {$doc structure Sect -name outer -script {
+    $doc structure P -name inner -script {}
+    $doc structure Div -script {}
+    error "the body gives up"
+  }} err]
+  set left [$doc state structure]
+  set names [$doc state structureNames]
+  # And the names are free again: the same call can be made a second time.
+  set again [catch {$doc structure Sect -name outer -script {}}]
+  $doc destroy
+  list $code $err $left $names $again
+} -result {1 {the body gives up} {} {} 0}
+
+test structure-r8-1.4 {an annotation inside the bracket commits it} -body {
+  # An OBJR is the other half of a promise the file already carries: the
+  # link annotation holds a /StructParent naming an entry in the ParentTree,
+  # and dropping the element would leave it pointing at nothing (14.7.5.4).
+  set doc [::structureR8Doc]
+  set code [catch {$doc structure Link -script {
+    $doc link -at {20 20} -size {30 6} -url https://example.org/ -tooltip a
+    error "after the annotation"
+  }} err]
+  # The kid is named by its KIND and its page; the object number is the
+  # writer's business and would make this a test of the numbering.
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [lmap kid [dict get $element kids] {
+      list [lindex $kid 0] [lindex $kid 2]
+    }]
+  }]
+  set annots [llength [$doc state structureAnnots]]
+  $doc destroy
+  list $code $shape $annots
+} -result {1 {{Link {{objr 0}}}} 1}
+
+test structure-r8-1.5 {an id claimed inside a rolled back bracket is free again} -body {
+  # /ID lives in a namespace of its own (14.7.2) and is checked for
+  # duplicates. A refused bracket that kept its ids would turn away the very
+  # call the caller repairs and repeats.
+  set doc [::structureR8Doc]
+  catch {$doc structure Sect -id chapter -script {
+    $doc text "x" -at {20 NaN}
+  }}
+  set ids [$doc state structureIds]
+  set again [catch {$doc structure Sect -id chapter -script {}}]
+  $doc destroy
+  list $ids $again
+} -result {{} 0}
+
+test structure-r8-1.6 {structureResume rolls back the pass, not the element} -body {
+  # The element was there before and stays; what this pass opened goes.
+  set doc [::structureR8Doc]
+  $doc structure Sect -name section -script {}
+  set code [catch {$doc structureResume section -script {
+    $doc structure P -name second -script {}
+    error "second pass gives up"
+  }}]
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [llength [dict get $element kids]]
+  }]
+  set names [$doc state structureNames]
+  set stack [$doc state structureStack]
+  $doc destroy
+  list $code $shape $names $stack
+} -result {1 {{Sect 0}} {section 0} {}}
+
+test structure-r8-1.7 {after a rolled back bracket the file is the one that never made the call} -body {
+  # The proof at the byte level: two documents drawn the same way, one of
+  # them with a refused bracket in the middle, come out identical - tree,
+  # ParentTree, StructParents and all.
+  set build {
+    set doc [::structureR8Doc]
+    $doc info Title "Probe"
+    $doc language de-DE
+    $doc text "Heading" -at {20 20} -tag H1
+  }
+  set doc {}
+  eval $build
+  catch {$doc structure H2 -script {$doc text "gone" -at {20 NaN}}}
+  $doc text "Body" -at {20 40}
+  set with [::tclpdfTest::scratch structure-rollback-with.pdf]
+  $doc write $with
+  $doc destroy
+  eval $build
+  $doc text "Body" -at {20 40}
+  set without [::tclpdfTest::scratch structure-rollback-without.pdf]
+  $doc write $without
+  $doc destroy
+  # Everything but /ID, which carries the moment of the write (14.4) and
+  # differs between two documents by design.
+  set same [expr {[::structureR8NoId [::tclpdfTest::readBytes $with]]
+      eq [::structureR8NoId [::tclpdfTest::readBytes $without]]}]
+  file delete $with $without
+  set same
+} -result 1
+
+test structure-r8-1.8 {the stream is balanced whatever the bracket did} -body {
+  # The half the undo cannot reach, measured rather than argued: after a
+  # caught error the page has to be a page - as many EMC as BDC, as many Q
+  # as q, as many ET as BT - and the artifact switch has to be off again, or
+  # everything drawn afterwards would silently become artifact.
+  set bodies {
+    {$doc text "gone" -at {20 NaN}}
+    {$doc rect -at {20 20} -size {10 10} -fill nosuchcolour}
+    {$doc text "drawn" -at {20 20}; error "after the text"}
+    {$doc text "decoration" -at {20 30} -tag Artifact; error "after it"}
+  }
+  set answers {}
+  foreach body $bodies {
+    set doc [::structureR8Doc]
+    catch {$doc structure Sect -script $body}
+    set stream [::tclpdfTest::content $doc]
+    lappend answers [list \
+        [expr {[regexp -all {BDC} $stream] == [regexp -all {EMC} $stream]}] \
+        [expr {[regexp -all {\mq\M} $stream] == [regexp -all {\mQ\M} $stream]}] \
+        [expr {[regexp -all {\mBT\M} $stream] == [regexp -all {\mET\M} $stream]}] \
+        [expr {[$doc state structureInArtifact] eq "1" ? 1 : 0}] \
+        [llength [$doc state structure]]]
+    $doc destroy
+  }
+  set answers
+} -result {{1 1 1 0 0} {1 1 1 0 0} {1 1 1 0 2} {1 1 1 0 0}}
+
+# --- round 8: -tag inside an open LI (finding 24) -------------------------
+
+test structure-r8-2.1 {-tag Lbl in an open LI is the label} -body {
+  # docs/review-8-proben/structure/p01_li_tag.tcl: every -tag inside an open
+  # LI used to be rewritten to LBody without a word, so a numbered list drawn
+  # with [text "1." -tag Lbl] came out with two LBody children and no label
+  # at all - and PDF/UA-1 7.6 then refused the whole document.
+  set doc [::structureR8Doc]
+  $doc structure L -numbering Decimal -script {
+    $doc structure LI -script {
+      $doc text "1." -at {20 30} -tag Lbl
+      $doc text "body" -at {30 30}
+    }
+  }
+  set shape [lmap element [$doc state structure] {
+    list [dict get $element type] [dict get $element parent]
+  }]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $shape [regexp -all {/Lbl <</MCID \d+>> BDC} $stream] \
+      [regexp -all {/LBody <</MCID \d+>> BDC} $stream]
+} -result {{{L {}} {LI 0} {Lbl 1} {LBody 1}} 1 1}
+
+test structure-r8-2.2 {the empty tag, P and LBody are still the item's body} -body {
+  # The three the substitution is for: what [text] passes when nothing was
+  # said, the explicit P that means the same, and the type itself.
+  set doc [::structureR8Doc]
+  foreach tag {P LBody} {
+    $doc structure L -script {
+      $doc structure LI -script {$doc text "b" -at {20 30} -tag $tag}
+    }
+  }
+  $doc structure L -script {
+    $doc structure LI -script {$doc text "b" -at {20 30}}
+  }
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  set types
+} -result {L LI LBody L LI LBody L LI LBody}
+
+test structure-r8-2.3 {any other -tag in an open LI is refused naming both} -body {
+  # What the manual promised all along (:1178): a type the open element may
+  # not hold is refused naming both. An LI takes a Lbl and an LBody
+  # (childrenOf), and nothing else.
+  set doc [::structureR8Doc]
+  set codes [lmap tag {H2 Note Caption Span} {
+    ::tclpdfTest::refusalCode {
+      $doc structure L -script {
+        $doc structure LI -script {$doc text "x" -at {20 30} -tag $tag}
+      }
+    }
+  }]
+  set left [$doc state structure]
+  $doc destroy
+  list $codes $left
+} -result {{{TCLPDF STRUCTURE PLACE child} {TCLPDF STRUCTURE PLACE child}\
+    {TCLPDF STRUCTURE PLACE parent} {TCLPDF STRUCTURE PLACE inline}} {}}
+
+test structure-r8-2.4 {the label still has to come first} -body {
+  # The rule that was there before and is now reachable at all: a Lbl after
+  # the body is read out after it (ISO 32000-1 14.8.4.3.3).
+  set doc [::structureR8Doc]
+  set code [::tclpdfTest::refusalCode {
+    $doc structure L -script {
+      $doc structure LI -script {
+        $doc text "body" -at {20 30}
+        $doc text "1." -at {30 30} -tag Lbl
+      }
+    }
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF STRUCTURE PLACE label}
+
+test structure-r8-2.5 {the expansion road takes the same answer} -body {
+  # [text -expansion] opens a Span for the mark and passes the same -tag
+  # through [StructureExpansion]; the substitution is the one helper for
+  # both roads.
+  set doc [::structureR8Doc -version 2.0]
+  $doc structure L -script {
+    $doc structure LI -script {
+      $doc text "PDF" -at {20 30} -tag Lbl -expansion "Portable Document Format"
+    }
+  }
+  set types [lmap element [$doc state structure] {dict get $element type}]
+  $doc destroy
+  set types
+} -result {L LI Lbl Span}
+
+# --- round 8: where a Caption may stand (finding 28) ----------------------
+
+test structure-r8-3.1 {a Caption in the middle of a Figure or a Formula is refused} -body {
+  # ISO 32000-2 Table 372: "The Caption shall be the first or the last
+  # structure element inside its parent structure element". The rule used to
+  # ask it of a Table and an L only, so a Figure took a caption between two
+  # pictures - veraPDF ua1 passes it and the recipient's does not.
+  set doc [::structureR8Doc]
+  set codes [lmap type {Figure Formula} {
+    ::tclpdfTest::refusalCode {
+      $doc structure $type -alt "a diagram" -script {
+        $doc text "first" -at {20 20}
+        $doc text "caption" -at {20 30} -tag Caption
+        $doc text "last" -at {20 40}
+      }
+    }
+  }]
+  $doc destroy
+  set codes
+} -result {{TCLPDF STRUCTURE PLACE caption} {TCLPDF STRUCTURE PLACE caption}}
+
+test structure-r8-3.2 {a second Caption is refused in every one of the four homes} -body {
+  # "The number of captions cannot exceed 1" (Table 372); ISO/TS 32005 Table
+  # 5 gives Table, L, Figure and Formula a Caption 0..1. No version
+  # disagrees, so it is asked of a 1.7 file as well.
+  set doc [::structureR8Doc -version 2.0]
+  set codes [lmap type {Figure Formula Table L} {
+    ::tclpdfTest::refusalCode {
+      $doc structure $type -script {
+        $doc text "one" -at {20 20} -tag Caption
+        $doc text "two" -at {20 40} -tag Caption
+      }
+    }
+  }]
+  $doc destroy
+  lsort -unique $codes
+} -result {{TCLPDF STRUCTURE PLACE caption}}
+
+test structure-r8-3.3 {a caption under the picture is the ordinary shape} -body {
+  # Figure and Formula are governed by Table 372 alone - ISO 32000-1 Annex L
+  # has no position rule for them - so the last child is right in a 1.7 file
+  # too. A Table and an L keep Annex L's first there, and take last from 2.0.
+  set doc [::structureR8Doc]
+  set figure [catch {$doc structure Figure -alt "a chart" -script {
+    $doc text "the chart" -at {20 20}
+    $doc text "Figure 1" -at {20 30} -tag Caption
+  }}]
+  set table [catch {$doc structure Table -script {
+    $doc structure TR -script {$doc structure TD -script {
+      $doc text "a" -at {20 40}
+    }}
+    $doc structure Caption -script {$doc text "Table 1" -at {20 50}}
+  }} err]
+  $doc destroy
+  list $figure $table [string match "*first or, in a 2.0 file, last*" $err]
+} -result {0 1 1}
 
 
 cleanupTests

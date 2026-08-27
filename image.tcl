@@ -301,13 +301,11 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF IMAGE ALIAS $alias] \
           "tclpdf: an image named \"$alias\" is already embedded"
     }
+    my ImageSource "image embed" $path [dict get $options data]
     if {$path ne {}} {
       set bytes [::tclpdf::io read $path]
-    } elseif {[dict get $options data] ne {}} {
-      set bytes [dict get $options data]
     } else {
-      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT source] \
-          "tclpdf: image embed needs a file name or -data"
+      set bytes [dict get $options data]
     }
     set type [dict get $options type]
     if {$type eq "auto"} {
@@ -746,15 +744,15 @@ oo::define ::tclpdf::document::document {
     # was decided further above, so nothing is written before its check.
     set matrix [::tclpdf::geometry multiply \
         [list $w 0 0 $h 0 0] [::tclpdf::geometry translate $x $y]]
-    if {[dict get $options rotate] != 0} {
-      # Rotate about the placement corner, not about the origin of the page -
-      # otherwise a rotated picture leaves the sheet, which is exactly the
-      # defect the -at handling in graphics.tcl was fixed for.
-      set matrix [::tclpdf::geometry multiply \
-          [list $w 0 0 $h 0 0] [::tclpdf::geometry multiply \
-              [::tclpdf::geometry rotate [dict get $options rotate]] \
-              [::tclpdf::geometry translate $x $y]]]
-    }
+    # ABOUT THE POINT -at NAMES, which is what the manual promises of
+    # -rotate and what the picture used to do only by accident: the old sum
+    # turned the unit square before it was moved, a rotation about the
+    # placement's BOTTOM left corner - the one corner -at never names.
+    # Measured 2026-08-27: a picture placed at (50, 50) with -rotate 30 hung
+    # below the point instead of turning around it, by the height of the
+    # picture. [turnedAbout] in page.tcl is the one place that arithmetic
+    # stands, shared with form place; an angle of zero comes back untouched.
+    set matrix [my turnedAbout $matrix $left $top [dict get $options rotate]]
 
     # The bounding box goes with the Figure. Not required by the letter of
     # the standard, but the Best Practice Guide names it as what the reading
@@ -1006,10 +1004,7 @@ oo::define ::tclpdf::document::document {
       set space [::tclpdf::imageJpeg space [dict get $parsed components]]
       lappend pairs ColorSpace /$space \
           BitsPerComponent [dict get $parsed bitsPerComponent] \
-          Filter /DCTDecode
-      if {[::tclpdf::imageJpeg inverted $parsed]} {
-        lappend pairs Decode [::tclpdf::pdfObj arr {1 0 1 0 1 0 1 0}]
-      }
+          Filter /DCTDecode {*}[my JpegPairs $parsed]
       set data [dict get $image bytes]
     } elseif {$type eq "tiff"} {
       set parsed [my TiffInvert $parsed [dict get $image invert]]
@@ -1267,15 +1262,12 @@ oo::define ::tclpdf::document::document {
     }
     lassign [::tclpdf::option partition {data {}} $args] own rest
     set data [dict get $own data]
-    if {$path eq {} && $data eq {}} {
-      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT source] \
-          "tclpdf: image draw needs a file name or -data"
-    }
+    my ImageSource "image draw" $path $data
     if {$path ne {}} {
       set alias [my ImageAlias $path]
       set embed [list $path]
     } else {
-      set alias "auto:data:[my ImageDigest $data]"
+      set alias [my ImageDataAlias $data]
       set embed [list -data $data]
     }
     if {![dict exists [my state images] $alias]} {
@@ -1284,9 +1276,67 @@ oo::define ::tclpdf::document::document {
     return [my ImagePlace $alias {*}$rest]
   }
 
-  # A key for a block of bytes. Not a checksum for integrity - just enough for
-  # two calls with the same image to find the same entry, with the length in
-  # front so that two different images would have to agree on both.
+  # A picture is named by a file OR handed over as bytes, and never by both.
+  #
+  # Both roads in ask here, because both took the file and dropped the bytes
+  # without a word: measured 2026-08-27, "image embed a blue.png -data
+  # <red bytes>" embedded the blue file and "image info" reported its path,
+  # with nothing anywhere saying that half the call had been ignored.
+  # [font embed] has refused exactly this since it was written (font.tcl),
+  # and a caller who wrote both meant one of them - which one is a question
+  # only they can answer.
+  method ImageSource {what path data} {
+    if {$path ne {} && $data ne {}} {
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT source] \
+          "tclpdf: $what takes a file name or -data, not both - the file\
+          would be embedded and the bytes dropped; name one of the two"
+    }
+    if {$path eq {} && $data eq {}} {
+      return -code error -errorcode [list TCLPDF IMAGE ARGUMENT source] \
+          "tclpdf: $what needs a file name or -data"
+    }
+    return
+  }
+
+  # The alias a block of image bytes is cached under - and THE BYTES ARE THE
+  # KEY, which is what the manual says of this road and what a 32-bit
+  # checksum cannot deliver on its own.
+  #
+  # [ImageDigest] only picks the shelf. What decides is the full comparison
+  # against the picture already standing on it: equal bytes are the same
+  # picture and share the alias, different bytes take the next slot on the
+  # same shelf. Measured 2026-08-27 before this was so: two 80-byte PNGs, a
+  # red square and a blue one, both key as "80:1437593237", the second draw
+  # was answered out of the cache, and the page carried the red square twice.
+  # No validator sees anything - the file is perfect, it shows the wrong
+  # picture.
+  #
+  # WHY NOT A CRYPTOGRAPHIC DIGEST, which would need no comparison: SHA-256
+  # is in the package already (::tclpdf::crypto, pure Tcl), and it costs
+  # 140 ms per 256 KiB on this machine - 2.8 s for a 5 MB JPEG, on every
+  # single [image draw -data]. The full comparison of two 5 MB strings costs
+  # 0.2 ms, and it only happens once the cheap digests have already agreed.
+  # A wider non-cryptographic hash was never an option: it makes the
+  # collision rarer and still does not rule it out.
+  method ImageDataAlias {data} {
+    set images [my state images]
+    set shelf "auto:data:[my ImageDigest $data]"
+    set alias $shelf
+    set slot 1
+    while {[dict exists $images $alias]} {
+      if {[dict get $images $alias bytes] eq $data} {
+        return $alias
+      }
+      incr slot
+      set alias "$shelf:$slot"
+    }
+    return $alias
+  }
+
+  # A key for a block of bytes. Not a checksum for integrity, and not the
+  # cache key either - just the shelf [ImageDataAlias] looks on, with the
+  # length in front so that two different images have to agree on both before
+  # their bytes are even compared.
   method ImageDigest {data} {
     set sum 0
     foreach byte [split $data {}] {
@@ -1579,29 +1629,21 @@ oo::define ::tclpdf::document::document {
   # the one thing a stack cannot be - [TiffStreams] refuses it there, before
   # any of the parts is written.
   method ImageObject {alias image {asMask 0}} {
-    if {[dict get $image object] ne {}} {
-      # Written already - but a picture that was PLACED on an earlier page and
-      # is only now asked for as a mask has never been through [TiffStreams],
-      # so the question has to be put again here. Measured while this was
-      # being built: a striped TIFF placed on page 1 and then named with
-      # -mask went into the file as the /SMask of its FIRST strip, sixteen
-      # rows covering the whole picture, and nothing anywhere said so.
-      if {[dict exists $image parts]} {
-        my TiffStackCheck $alias $image [dict get $image parsed] $asMask
-      }
-      return [dict get $image object]
-    }
-    # THE FIRST QUESTION OF ALL, because it is the only one that can be asked
-    # before anything exists. Everything below this line creates objects - an
-    # ICC profile stream on the JPEG road, a soft mask stream on the PNG one -
-    # and a refusal after that leaves them in the file as waste nothing points
-    # at. Asked here it costs a dict lookup; asked where the entry is built
-    # it cost 2503 bytes of orphaned alpha channel in an archive document,
-    # measured on 2026-08-25 with qpdf --qdf, which drops what is
+    # THE FIRST QUESTIONS OF ALL, for this picture AND for the one it names
+    # as its mask, because they are the only ones that can be asked before
+    # anything exists. Everything below this line creates objects - an ICC
+    # profile stream on the JPEG road, a soft mask stream on the PNG one -
+    # and a refusal after that leaves them in the file as waste nothing
+    # points at. Asked here they cost a dict lookup; asked where the entry is
+    # built they cost 2503 bytes of orphaned alpha channel in an archive
+    # document, measured on 2026-08-25 with qpdf --qdf, which drops what is
     # unreachable. The RECORD is not made here - see [ImageInterpolateCheck]
     # for why the two are separate calls, and [streams] below for what can
     # still refuse the picture after this point.
-    my ImageInterpolateCheck $image $alias
+    my ImageRefusals $alias $image $asMask
+    if {[dict get $image object] ne {}} {
+      return [dict get $image object]
+    }
     set parsed [dict get $image parsed]
     set pairs [list Type /XObject Subtype /Image \
         Width [dict get $parsed width] Height [dict get $parsed height]]
@@ -1625,10 +1667,7 @@ oo::define ::tclpdf::document::document {
       }
       lappend pairs ColorSpace $colourSpace \
           BitsPerComponent [dict get $parsed bitsPerComponent] \
-          Filter /DCTDecode
-      if {[::tclpdf::imageJpeg inverted $parsed]} {
-        lappend pairs Decode [::tclpdf::pdfObj arr {1 0 1 0 1 0 1 0}]
-      }
+          Filter /DCTDecode {*}[my JpegPairs $parsed]
       set data [dict get $image bytes]
     } elseif {[dict get $image type] eq "tiff"} {
       # -invert BEFORE the streams are built, and not as a second Decode
@@ -1793,14 +1832,12 @@ oo::define ::tclpdf::document::document {
     return $number
   }
 
-  # The strips of a TIFF as the streams of PDF images - and the three things
-  # this package will not do with a stack of them. Nothing has been written
-  # when it answers, so every refusal here leaves the file as it was.
+  # The strips of a TIFF as the streams of PDF images. Nothing has been
+  # written when it answers, so every refusal here leaves the file as it was.
   #
-  # A picture in ONE part is a picture like any other and none of the three
-  # applies to it: 80 of the 194 measured files are single-stripped, and an
-  # uncompressed, a PackBits or an LZW file is one part however many strips
-  # it has, because those carry no state and are joined into one stream.
+  # The three things this package will not do with a stack of them are
+  # [TiffStackAsk] below, and they are put to the picture long before this -
+  # by [ImageRefusals], from the tags, before the first object exists:
   #
   #   the limit    over [stripLimit] parts the picture is refused rather than
   #                stacked - see the namespace variable for the count
@@ -1814,10 +1851,69 @@ oo::define ::tclpdf::document::document {
     set streams [::tclpdf::imageTiffStreams streams \
         [dict get $image bytes] $parsed]
     set parts [dict get $streams parts]
-    if {[llength $parts] < 2} {
-      return $parts
+    # The same three questions [ImageRefusals] has already put from the tags,
+    # asked once more from the parts that were actually built. They cost a
+    # comparison and they are the guarantee that the cheap answer and the
+    # expensive one agree - if [partCount] ever learns a compression wrong,
+    # the picture is refused here rather than written as a stack nothing
+    # expects.
+    my TiffStackAsk $alias $image $parsed $asMask [llength $parts]
+    return $parts
+  }
+
+  # Everything that can refuse a picture and can be asked BEFORE anything is
+  # written - for the picture itself and, in the same breath, for the one it
+  # names as its mask.
+  #
+  # The mask is the point of this method. Until 2026-08-27 the carrier asked
+  # its own questions first, built its colour space - and its ICC profile
+  # stream with it - and only then fetched the mask, whose own refusal then
+  # left that stream in the file with nothing pointing at it: 2598 bytes and
+  # a version floor raised to 1.3 for a picture that never went in. Two doors
+  # led there, [TiffStackCheck] and [ImageInterpolateCheck], and closing them
+  # one at a time would have left the third to be found later. So the
+  # questions are put once, here, for both pictures, before the first object
+  # exists - and a mask that names no mask of its own ends the recursion,
+  # which the embedding guarantees by refusing a mask that carries one.
+  #
+  # Neither check remembers anything, so both may be asked twice - which they
+  # are: [ImageObject] asks them of the mask again on its way through, and
+  # [TiffStreams] asks the stack questions again of the parts it built.
+  method ImageRefusals {alias image asMask} {
+    my ImageInterpolateCheck $image $alias
+    if {[dict get $image type] eq "tiff"} {
+      # A picture whose objects exist carries the answer already; one that has
+      # not been written yet is asked of its tags, which is the same answer
+      # without decoding a strip. The first case is the picture PLACED on page
+      # 1 and named with -mask on page 2, which has never been through
+      # [TiffStreams] as a mask: measured while the stacking was built, it
+      # went into the file as the /SMask of its FIRST strip, sixteen rows
+      # covering the whole picture, and nothing anywhere said so.
+      set count [expr {[dict exists $image parts]
+          ? [llength [dict get $image parts]]
+          : [::tclpdf::imageTiffStreams partCount [dict get $image parsed]]}]
+      if {[dict get $image object] eq {} || [dict exists $image parts]} {
+        my TiffStackAsk $alias $image [dict get $image parsed] $asMask $count
+      }
     }
-    set count [llength $parts]
+    if {[dict get $image mask] ne {}} {
+      set maskAlias [dict get $image mask]
+      my ImageRefusals $maskAlias [dict get [my state images] $maskAlias] 1
+    }
+    return
+  }
+
+  # The three things a stack of images cannot be, over a count of parts that
+  # either was measured from the tags or was counted off the built parts.
+  #
+  # A picture in ONE part is a picture like any other and none of the three
+  # applies to it: 80 of the 194 measured files are single-stripped, and an
+  # uncompressed, a PackBits or an LZW file is one part however many strips
+  # it has, because those carry no state and are joined into one stream.
+  method TiffStackAsk {alias image parsed asMask count} {
+    if {$count < 2} {
+      return
+    }
     set limit $::tclpdf::image::stripLimit
     if {$count > $limit} {
       return -code error -errorcode {TCLPDF TIFF STRIPS} \
@@ -1827,13 +1923,11 @@ oo::define ::tclpdf::document::document {
           state and are joined into a single stream"
     }
     my TiffStackCheck $alias $image $parsed $asMask
-    return $parts
+    return
   }
 
-  # The two things a stack of images cannot be. Asked from [TiffStreams] when
-  # the objects are built, and again from [ImageObject] for a picture whose
-  # objects already exist - a picture placed on page 1 and named with -mask on
-  # page 2 comes past the second door only.
+  # The two things a stack of images cannot be, asked through [TiffStackAsk]
+  # once the count has decided that this picture is one.
   method TiffStackCheck {alias image parsed asMask} {
     if {$asMask} {
       return -code error -errorcode {TCLPDF TIFF STACKED} \
@@ -1851,6 +1945,31 @@ oo::define ::tclpdf::document::document {
           TiffStackFix $parsed]"
     }
     return
+  }
+
+  # What a JPEG needs said about its SAMPLES, beyond the colour space and the
+  # filter: how its components are coded, and whether their values mean the
+  # opposite of what they say. Written once, because both roads into the file
+  # need it and two copies are two chances to teach only one of them
+  # something - the /Decode array of an Adobe CMYK file had been written on
+  # both of them, and the /DecodeParms of an RGB-coded file on neither.
+  #
+  # /DecodeParms << /ColorTransform 0 >> is the one entry a JPEG cannot say
+  # for itself once its Adobe marker is gone; [colourTransform] holds the
+  # rule and the reasoning, and answers the empty string wherever the
+  # reader's own default (Table 13) is already right - which is every JFIF
+  # file and every ordinary YCbCr one, so nothing changes for them.
+  method JpegPairs {parsed} {
+    set pairs {}
+    set transform [::tclpdf::imageJpeg colourTransform $parsed]
+    if {$transform ne {}} {
+      lappend pairs DecodeParms \
+          [::tclpdf::pdfObj dictionary [list ColorTransform $transform]]
+    }
+    if {[::tclpdf::imageJpeg inverted $parsed]} {
+      lappend pairs Decode [::tclpdf::pdfObj arr {1 0 1 0 1 0 1 0}]
+    }
+    return $pairs
   }
 
   # The PDF colour space of a parsed TIFF over a given base: the base itself,
@@ -1932,4 +2051,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.14
+package provide tclpdf::image 1.15

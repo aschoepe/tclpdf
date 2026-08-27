@@ -27,8 +27,8 @@
 #   THE SCAN ARRIVES AT ITS OWN SIZE. A TIFF states its resolution, and
 #   -dpi auto - the default - uses it. The picture below is 640 pixels wide
 #   at 200 dpi, which is 81 mm of paper. Read as 72 dpi it would be 226 mm
-#   wide and off the sheet; a 1728-pixel fax page at the same 200 dpi would
-#   be 610 mm instead of 219.
+#   wide and off the sheet; a 1728-pixel fax page is 219 mm of paper at its
+#   own 200 dpi and 610 mm read as 72.
 #
 #   THE PARTS BUTT TOGETHER SEAMLESSLY. The picture below is thirty XObjects
 #   of sixteen rows each. Each part carries the rows it holds and no others,

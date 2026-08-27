@@ -1064,4 +1064,111 @@ test annot-21.1 {a refusal at -opacity leaves no appearance stream behind} -body
     set wrong
 } -result {}
 
+# --- round 8: where an annotation may be made, and the keys younger than it ---
+
+test annot-22.1 {an annotation inside a form script is refused, and refused first} -body {
+    # ISO 32000-2, 12.5.2: /Rect places the annotation "on the page in
+    # default user space units", and a form XObject has no /Annots to hold
+    # one. The call used to be taken: the rectangle was worked out in the
+    # FORM's mirrored space and the annotation hung on whatever page was
+    # current, so a 50 by 20 mm form placed in the middle of the page put its
+    # square in the lower left corner (round 8, annot V3).
+    #
+    # The script of [form create] runs at the GLOBAL level, so the document
+    # is reached through a global here - which is what any caller of it does.
+    set ::annotForm [annotDoc]
+    $::annotForm form create F -size {50 20} -script {
+        $::annotForm rect -at {0 0} -size {50 20} -stroke blue
+        set ::annotFormShape [::tclpdfTest::refusalCode {
+            $::annotForm annot square -at {5 5} -size {20 8} -contents x
+        }]
+        set ::annotFormMark [::tclpdfTest::refusalCode {
+            $::annotForm annot note -at {5 5} -contents x
+        }]
+    }
+    $::annotForm form place F -at {100 100}
+    set bytes [annotBytes $::annotForm annot-22-1.pdf]
+    $::annotForm destroy
+    list $::annotFormShape $::annotFormMark \
+        [regexp -all {/Subtype /Square} $bytes] [regexp -all {/Annots} $bytes]
+} -result {{TCLPDF ANNOT PLACE form} {TCLPDF ANNOT PLACE form} 0 0}
+
+test annot-22.2 {the refusal leaves the form stream and the state untouched} -body {
+    # Zustandsneutral: the refusal is the first line of [annot], before the
+    # kind is looked up and before its module is even loaded.
+    set ::annotForm [annotDoc]
+    $::annotForm form create F -size {50 20} -script {
+        $::annotForm rect -at {0 0} -size {50 20} -stroke blue
+        set ::annotFormBefore [$::annotForm page content]
+        catch {$::annotForm annot square -at {5 5} -size {20 8} -contents x}
+        catch {$::annotForm annot highlight -quads {{1 1 5 5}} -contents x}
+        set ::annotFormAfter [$::annotForm page content]
+    }
+    set annots [$::annotForm state annots]
+    $::annotForm destroy
+    list [expr {$::annotFormBefore eq $::annotFormAfter}] $annots
+} -result {1 {}}
+
+test annot-22.3 {an annotation on the page after form place is written as before} -body {
+    set ::annotForm [annotDoc]
+    $::annotForm form create F -size {50 20} -script {
+        $::annotForm rect -at {0 0} -size {50 20} -stroke blue
+    }
+    $::annotForm form place F -at {100 100}
+    $::annotForm annot square -at {105 105} -size {20 8} -contents x
+    set bytes [annotBytes $::annotForm annot-22-3.pdf]
+    $::annotForm destroy
+    regexp -all {/Subtype /Square} $bytes
+} -result 1
+
+test annot-22.4 {-date writes /CreationDate, which is 1.5} -body {
+    # ISO 32000-2, Table 172: /CreationDate is "(Optional; PDF 1.5)", while
+    # /M beside it is 1.1. A 1.3 document took both (round 8, annot V2).
+    set doc [tclpdf new -unit mm -version 1.3]
+    $doc page add
+    set code [::tclpdfTest::refusalCode {
+        $doc annot stamp -at {20 20} -size {30 10} -name Draft -date 1700000000
+    }]
+    set fine [catch {$doc annot stamp -at {20 40} -size {30 10} -name Draft}]
+    $doc destroy
+    list $code $fine
+} -result {{TCLPDF VERSION 1.5} 0}
+
+test annot-22.5 {a 1.5 document takes -date and writes both keys} -body {
+    set doc [tclpdf new -unit mm -version 1.5 -compress 0]
+    $doc page add
+    $doc annot stamp -at {20 20} -size {30 10} -name Draft -date 1700000000
+    set bytes [annotBytes $doc annot-22-5.pdf]
+    $doc destroy
+    list [regexp -all {/CreationDate \(D:} $bytes] [regexp -all {/M \(D:} $bytes]
+} -result {2 1}
+
+test annot-22.6 {the table of version floors refuses a key it does not hold} -body {
+    # The table is the single place seven keys ask; a key that is not in it
+    # would be silently exempt from its own floor, which is the defect the
+    # table exists to close. Exported for the length of this test, because
+    # the method is one module asking another and not an API.
+    set doc [annotDoc]
+    oo::objdefine $doc export AnnotKeyVersion
+    set code [::tclpdfTest::refusalCode {$doc AnnotKeyVersion Bogus}]
+    set fine [catch {$doc AnnotKeyVersion IC}]
+    $doc destroy
+    list $code $fine
+} -result {{TCLPDF ANNOT VERSION Bogus} 0}
+
+test annot-22.7 {a rectangle that is empty once written is refused} -body {
+    # A PDF real carries five decimals (Annex C.2). -size {1e-9 1e-9} is
+    # positive to Tcl and comes out as /Rect [x y x y] - an annotation of no
+    # area, which no reader shows and no validator objects to.
+    set doc [annotDoc]
+    set before [$doc state annots]
+    set code [::tclpdfTest::refusalCode {
+        $doc annot note -at {20 20} -size {1e-9 1e-9} -contents x
+    }]
+    set after [$doc state annots]
+    set fine [catch {$doc annot note -at {20 40} -size {5 5} -contents x}]
+    $doc destroy
+    list $code [expr {$before eq $after}] $fine
+} -result {{TCLPDF ANNOT RECT EMPTY {1e-9 1e-9}} 1 0}
+
 cleanupTests

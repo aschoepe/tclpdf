@@ -44,8 +44,73 @@ proc ::tclpdf::filter::encodeFlate {bytes {level 6}} {
   return [zlib compress $bytes $level]
 }
 
-proc ::tclpdf::filter::decodeFlate {bytes} {
-  return [zlib decompress $bytes]
+# HOW MUCH A DEFLATE STREAM MAY GROW WHILE IT IS BEING READ. Deflate is the
+# one header number of a foreign PDF that binds nothing: /Length says how
+# many bytes to read, and what comes out is whatever the data say - measured
+# on 2026-08-27, a 306 KB file whose page content is one deflate stream
+# unpacked to 300 MB and took 858 MB of resident memory before the import
+# accepted it. Every other number of the reader is already held against the
+# file (the object-stream header against its own bytes, /W times /Index
+# against the stream length, the CCITT geometry against its rows), and this
+# is the last one that was not.
+#
+# 64 MiB, and the number comes from a measurement rather than from a feeling:
+# over 3984 foreign PDF files (~/src and ~/Downloads, 2026-08-27) the largest
+# DECODED content stream of a first page is 7.75 MiB, so the bound is eight
+# times the biggest thing anybody in this corpus wrote. It is a matter of
+# availability, not of security - a caller who wants no bound passes 0.
+namespace eval ::tclpdf::filter {
+  variable flateLimit [expr {64 * 1024 * 1024}]
+}
+
+# FlateDecode (7.4.4), read with a ceiling on what it may produce.
+#
+# "limit" is the number of bytes the output may reach, 0 for no ceiling; the
+# DEFAULT is no ceiling, because the two callers that hand this proc data of
+# their own - a PNG's IDAT and a TIFF strip - already know how many pixels
+# they asked for, and a picture legitimately unpacks to hundreds of
+# megabytes. The reader of a foreign PDF passes the limit above.
+#
+# Streamed rather than measured afterwards: [zlib decompress] builds the
+# whole result before anybody can look at it, so a check behind it would
+# refuse the file only after the memory was spent.
+proc ::tclpdf::filter::decodeFlate {bytes {limit 0}} {
+  if {$limit <= 0} {
+    return [zlib decompress $bytes]
+  }
+  set stream [zlib stream decompress]
+  set out {}
+  try {
+    $stream put -finalize $bytes
+    # UNTIL THE STREAM HANDS OUT NOTHING MORE, not until it says eof: data
+    # that end in the middle of a deflate block never reach eof, and [$s
+    # get] answers the empty string for ever after (measured 2026-08-27
+    # under 8.6.18 and 9.0.4). Which of the two it was is the question
+    # below.
+    while {1} {
+      set chunk [$stream get 65536]
+      if {$chunk eq {}} {
+        break
+      }
+      append out $chunk
+      if {[string length $out] > $limit} {
+        return -code error -errorcode [list TCLPDF FILTER ROOM $limit] \
+            "tclpdf: this FlateDecode stream unpacks to more than the\
+            $limit bytes this package reads one out to"
+      }
+    }
+    if {![$stream eof]} {
+      # What [zlib decompress] answers with "stream error" - said here in
+      # this package's words, because the streaming road has to say it
+      # itself.
+      return -code error -errorcode [list TCLPDF FILTER FLATE truncated] \
+          "tclpdf: the FlateDecode data end before the compressed stream\
+          does"
+    }
+  } finally {
+    $stream close
+  }
+  return $out
 }
 
 # ASCII85Decode (7.4.3). Four bytes become five characters from "!" onwards,
@@ -86,6 +151,16 @@ proc ::tclpdf::filter::encodeAscii85 {bytes {width 75}} {
   return $result
 }
 
+# ANYTHING THAT IS NOT ONE OF THE 85 DIGITS IS AN ERROR, and the standard
+# says so in as many words: "Any other characters, and any character
+# sequences that represent impossible combinations in the ASCII base-85
+# encoding, shall cause an error" (7.4.3). Read as digits anyway, a 'z' in
+# the middle of a group became the value 89 and a 'v' the value 87 - both
+# outside the 0..84 a digit may have - and the bytes that came out were
+# rubbish that no tool afterwards can tell from data: the imported page kept
+# its /Length, its filters and its structure, and only its font name and its
+# text were nonsense (measured 2026-08-27; qpdf refuses the same streams
+# with "unexpected z during base 85 decode").
 proc ::tclpdf::filter::decodeAscii85 {text} {
   # White space may appear anywhere in the stream (7.2.3) and carries no
   # meaning, so it is removed before anything is interpreted.
@@ -96,12 +171,28 @@ proc ::tclpdf::filter::decodeAscii85 {text} {
   }
   set result {}
   set group {}
+  set at 0
   foreach char [split $text {}] {
-    if {$char eq "z" && [llength $group] == 0} {
+    incr at
+    if {$char eq "z"} {
+      # "z" stands for four zero bytes and is a whole group by itself
+      # (7.4.3), so it cannot stand inside one.
+      if {[llength $group]} {
+        return -code error -errorcode [list TCLPDF FILTER ASCII85 z] \
+            "tclpdf: the ASCII85 stream has a \"z\" at character $at, inside\
+            a group of [llength $group] - \"z\" abbreviates four zero bytes\
+            and stands for a whole group"
+      }
       append result [binary format I 0]
       continue
     }
-    lappend group [expr {[scan $char %c] - 33}]
+    set code [scan $char %c]
+    if {$code < 33 || $code > 117} {
+      return -code error -errorcode [list TCLPDF FILTER ASCII85 character] \
+          "tclpdf: the ASCII85 stream holds \"$char\" at character $at - a\
+          digit is one of the 85 characters from \"!\" to \"u\""
+    }
+    lappend group [expr {$code - 33}]
     if {[llength $group] == 5} {
       append result [Ascii85Group $group]
       set group {}
@@ -129,6 +220,21 @@ proc ::tclpdf::filter::Ascii85Group {digits} {
   foreach digit $digits {
     set word [expr {$word * 85 + $digit}]
   }
+  # A GROUP STANDS FOR FOUR BYTES, so a group worth more than four bytes can
+  # hold is an "impossible combination in the ASCII base-85 encoding" (7.4.3)
+  # - "uuuuu" is the example, and "uu" is the same thing one byte shorter.
+  # Asked of short groups too, and that is safe rather than lucky: the
+  # padding with the highest digit rounds UP, and the highest value a real
+  # encoding can round to is 4294967124 for a group of four (measured for
+  # every group length; filter-a85-7.4 walks the round trip). Without the
+  # question [binary format I] silently kept the low 32 bits and handed back
+  # a byte that was never written.
+  if {$word > 0xFFFFFFFF} {
+    return -code error -errorcode [list TCLPDF FILTER ASCII85 group] \
+        "tclpdf: the ASCII85 group \"[join [lmap d $digits {
+            format %c [expr {$d + 33}]}] {}]\" is worth $word, which is more\
+        than the four bytes a group stands for can hold"
+  }
   return [string range [binary format I $word] 0 [expr {$count - 2}]]
 }
 
@@ -148,10 +254,23 @@ proc ::tclpdf::filter::encodeAsciiHex {bytes {width 64}} {
   return $result
 }
 
+# THE SAME RULE AS ASCII85's, from the same place: "Any other characters
+# shall cause an error" (7.4.2). Every foreign character used to be silently
+# deleted, which does not lose one byte but SHIFTS every byte after it -
+# "<48G5>" came out as "HP" (measured; qpdf: "invalid character (G) in
+# hexstring"). White space is allowed anywhere and carries no meaning
+# (7.2.3), and ">" ends the data.
 proc ::tclpdf::filter::decodeAsciiHex {text} {
   set stop [string first > $text]
   if {$stop >= 0} {
     set text [string range $text 0 $stop-1]
+  }
+  if {[regexp -indices {[^0-9A-Fa-f \t\r\n\f\x00]} $text where]} {
+    set at [lindex $where 0]
+    return -code error -errorcode [list TCLPDF FILTER ASCIIHEX character] \
+        "tclpdf: the ASCIIHex stream holds \"[string index $text $at]\" at\
+        character [expr {$at + 1}] - only hexadecimal digits, white space\
+        and the closing \">\" belong in one"
   }
   regsub -all {[^0-9A-Fa-f]} $text {} hex
   # An odd number of digits is not an error: the missing one counts as zero
@@ -561,4 +680,4 @@ proc ::tclpdf::filter::decodeCcitt {bytes args} {
   tailcall ::tclpdf::filterCcitt decode $bytes {*}$args
 }
 
-package provide tclpdf::filter 1.4
+package provide tclpdf::filter 1.5

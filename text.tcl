@@ -2170,6 +2170,24 @@ oo::define ::tclpdf::document::document {
   # for a face without a "curs" lookup, which costs a walk of the run and
   # nothing else - the prepared table is the one [FontRunMarks] already
   # builds and [FontLayoutState] caches.
+  #
+  # AND A GLYPH WITH NO CHARACTER OF ITS OWN belongs to the cluster in front
+  # of it. A multiple substitution writes one input glyph as several output
+  # glyphs, and only the first of them keeps the characters ([gsubApply]
+  # MultipleAt); the rest carry an empty code list. Noto Nastaliq Urdu puts
+  # such a glyph - "sp0", advance 0, no anchor, no character - after every
+  # initial form, and the dots of the letter follow it. Counted as a letter,
+  # sp0 opened a piece of its own, the dots joined THAT piece, and the drawn
+  # order came out {235} {671} {966 13} {389} instead of {235} {671}
+  # {389 966 13}: the dots were drawn before their base, their walk back
+  # started from the wrong pen, and they landed one letter width away -
+  # measured over 86 Urdu words, 46 of them more than two font units off
+  # hb-shape. The face inserted the glyph and said nothing about it, so it
+  # cannot be a piece boundary; a boundary is a character.
+  #
+  # The advance is still asked for. A decomposition into two SPACING glyphs -
+  # a lam-alef written back as two letters, say - also leaves the second one
+  # without codes, and that one is a letter of its own and must stay a piece.
   method TextAttached {font run marks} {
     set parsed [dict get [my state fonts] $font parsed]
     # The code points rather than the characters: under Tcl 8.6 [format %c]
@@ -2196,7 +2214,7 @@ oo::define ::tclpdf::document::document {
         }
       }
       if {!$flag && [my FontAdvance $font $parsed $glyph] == 0
-          && [llength $codes] == 1 && [lindex $codes 0] ni $never} {
+          && [llength $codes] <= 1 && [lindex $codes 0] ni $never} {
         set flag 1
       }
       lappend flags $flag
@@ -3064,4 +3082,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.21
+package provide tclpdf::text 1.22

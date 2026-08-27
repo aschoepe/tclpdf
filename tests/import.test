@@ -27,12 +27,32 @@ source [file join [file dirname [info script]] helper.tcl]
 
 testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
 
+# THE HEADER OF A FIXTURE, LOWERED. [::tclpdfTest::buildpdf] writes
+# "%PDF-1.4", and since round 8 [pdf import] enters what the source file
+# claims for itself as a floor of the document it copies the page into
+# (7.5.2) - so a test about some OTHER refusal in a document older than 1.4
+# has to hand it a file that old, or the version refusal answers first. The
+# header is eight bytes wide either way, so every offset of the fixture
+# stands.
+proc ::tclpdfTest::headerVersion {path version} {
+    set bytes [readBytes $path]
+    set channel [open $path wb]
+    puts -nonewline $channel [string replace $bytes 0 7 "%PDF-$version"]
+    close $channel
+    return $path
+}
+
 # The template most tests import: one A4 page written by tclpdf itself,
 # with an embedded piece of everything a letterhead drags along - text in
 # a standard face, a filled rectangle, a line.
-proc ::tclpdfTest::template {{pages 1}} {
+proc ::tclpdfTest::template {{pages 1} {version {}}} {
     set path [scratch import-template.pdf]
-    set doc [tclpdf new -unit pt -format a4]
+    # The version matters to a test that imports into an OLDER document:
+    # [pdf import] enters what the source file claims for itself as a floor
+    # (7.5.2), so a template written as 1.7 cannot be taken over by a 1.3
+    # document at all.
+    set doc [tclpdf new -unit pt -format a4 {*}[expr {$version eq {}
+        ? {} : [list -version $version]}]]
     for {set i 1} {$i <= $pages} {incr i} {
         $doc page add
         $doc rect -at {40 40} -size {515 60} -fill #e8e0f0
@@ -621,7 +641,7 @@ test import-11.1 {the imported form carries the same group as form create} -body
 } -result {1 1 0}
 
 test import-11.2 {a document older than PDF 1.4 gets no group} -body {
-    set template [::tclpdfTest::template]
+    set template [::tclpdfTest::template 1 1.3]
     set doc [tclpdf new -unit pt -format a4 -compress 0 -version 1.3]
     $doc page add
     $doc pdf import kopfbogen $template
@@ -716,7 +736,10 @@ test import-15.1 {a Flate resource copied into a 1.1 document is refused, not sm
     # -compress 0, so the only deflated stream in the file is the one the
     # import copies: what the check answers about is unambiguous.
     set stream [::tclpdf::filter encodeFlate "q Q"]
-    set fixture [::tclpdfTest::buildpdf import-old-flate.pdf [list \
+    # 1.0 in the header, so that the version floor the import enters for the
+    # source file (7.5.2, round 8) is not the refusal this test reads.
+    set fixture [::tclpdfTest::headerVersion [::tclpdfTest::buildpdf \
+        import-old-flate.pdf [list \
         "<< /Type /Catalog /Pages 2 0 R >>" \
         "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
@@ -724,7 +747,7 @@ test import-15.1 {a Flate resource copied into a 1.1 document is refused, not sm
         "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\]\
             /Filter /FlateDecode /Length [string length $stream] >>\
             \nstream\n$stream\nendstream" \
-        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]] 1.0]
     set doc [tclpdf new -unit pt -format a4 -version 1.1 -compress 0]
     $doc page add
     set result [catch {$doc pdf import alt $fixture} message]
@@ -784,7 +807,9 @@ test import-15.3 {the refusal falls before the numbers, so the document writes o
     # [lindex]: a filter the check cannot see is a deflated resource in a
     # file whose header disowns the filter.
     set stream [::tclpdf::filter encodeFlate "q Q"]
-    set direct [::tclpdfTest::buildpdf import-flate-writes.pdf [list \
+    # 1.0 headers, for the reason import-15.1 gives.
+    set direct [::tclpdfTest::headerVersion [::tclpdfTest::buildpdf \
+        import-flate-writes.pdf [list \
         "<< /Type /Catalog /Pages 2 0 R >>" \
         "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
@@ -792,8 +817,9 @@ test import-15.3 {the refusal falls before the numbers, so the document writes o
         "<< /Type /XObject /Subtype /Form /BBox \[0 0 10 10\]\
             /Filter /FlateDecode /Length [string length $stream] >>\
             \nstream\n$stream\nendstream" \
-        "<< /Length 3 >>\nstream\nq Q\nendstream"]]
-    set indirect [::tclpdfTest::buildpdf import-flate-indirect.pdf [list \
+        "<< /Length 3 >>\nstream\nq Q\nendstream"]] 1.0]
+    set indirect [::tclpdfTest::headerVersion [::tclpdfTest::buildpdf \
+        import-flate-indirect.pdf [list \
         "<< /Type /Catalog /Pages 2 0 R >>" \
         "<< /Type /Pages /Kids \[3 0 R\] /Count 1 /MediaBox \[0 0 200 200\] >>" \
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R\
@@ -802,7 +828,7 @@ test import-15.3 {the refusal falls before the numbers, so the document writes o
             /Filter 6 0 R /Length [string length $stream] >>\
             \nstream\n$stream\nendstream" \
         "<< /Length 3 >>\nstream\nq Q\nendstream" \
-        "/FlateDecode"]]
+        "/FlateDecode"]] 1.0]
     set answers {}
     foreach fixture [list $direct $indirect] {
         set doc [tclpdf new -unit pt -format a4 -version 1.1 -compress 0]
@@ -1654,6 +1680,12 @@ proc ::tclpdfTest::objstm {name {bend {}}} {
         set n [dict get $bend n]
     }
     set first [string length $header]
+    # "firstFmt" writes the SAME number with leading zeros - what 7.3.3
+    # calls an integer either way, and what [expr] used to read as octal
+    # under Tcl 8.6.
+    if {[dict exists $bend firstFmt]} {
+        set first [format [dict get $bend firstFmt] $first]
+    }
     if {[dict exists $bend first]} {
         set first [dict get $bend first]
     }
@@ -1844,8 +1876,20 @@ test import-24.16 {a cross-reference entry pointing at another object is refused
 # what they are about is the /Filter and the /DecodeParms, not the file
 # around them.
 proc ::tclpdfTest::bareReader {{objects {}}} {
-    return [dict create bytes {} path bare.pdf xref {} trailer {d {}} \
-        objects $objects buffers {} sections {} flavour {} inprogress {}]
+    # Every cached object gets a cross-reference entry of its own, at
+    # generation 0: a reference names a number AND a generation, and the
+    # reader holds the pair against the table before it looks in the cache
+    # (7.3.10) - a cache without a table answers every reference with the
+    # null object.
+    set xref {}
+    set gens {}
+    foreach {number -} $objects {
+        dict set xref $number {o 0 0}
+        dict set gens $number 0
+    }
+    return [dict create bytes {} path bare.pdf xref $xref gens $gens \
+        trailer {d {}} objects $objects buffers {} sections {} flavour {} \
+        inprogress {}]
 }
 
 test import-24.17 {a predictor whose /Columns is not a positive integer is refused} -body {
@@ -2113,15 +2157,22 @@ test import-24.30 {an unknown type in a newer section shadows a live older entry
     # decides. qpdf 12.4.0 hands out the older object here; 7.5.8.3 does not.
     # The control below is the same file with type 0, the free entry, which
     # has answered null since round 5.
+    #
+    # OBJECT 3, which is the object the stream's own header names at index 0.
+    # It used to be object 6, entered at that index by the fixture - a
+    # cross-reference that says one thing and an object stream header that
+    # says another, which since round 8 is refused by name (import-24.14a):
+    # the fixture was wrong about the file it built, and the question it
+    # asks is about the cross-reference SECTIONS, not about the header.
     set out {}
     foreach {name type} {import-shadow3.pdf 3 import-shadow0.pdf 0} {
-        set path [::tclpdfTest::objstm $name {entries {{6 2 2 0}}}]
+        set path [::tclpdfTest::objstm $name]
         set reader [::tclpdf::importRead::Open $path]
-        # Before the update, object 6 is the page - alive and readable.
-        lappend out [lindex [lindex [::tclpdf::importRead::Object reader 6] 0] 0]
-        ::tclpdfTest::objstmUpdate $path 6 $type
+        # Before the update, object 3 is the page - alive and readable.
+        lappend out [lindex [lindex [::tclpdf::importRead::Object reader 3] 0] 0]
+        ::tclpdfTest::objstmUpdate $path 3 $type
         set reader [::tclpdf::importRead::Open $path]
-        lappend out [lindex [::tclpdf::importRead::Object reader 6] 0]
+        lappend out [lindex [::tclpdf::importRead::Object reader 3] 0]
         file delete $path
     }
     set out
@@ -2491,9 +2542,12 @@ test import-20.1 {a refusal at the SECOND object of the closure leaves the docum
 
 test import-20.2 {and the same for the filter check, which is the writer's} -body {
     set deflated [zlib compress "0 0 m"]
-    set fixture [::tclpdfTest::twoResources import-midloop-filter.pdf \
+    # 1.0 in the header, for the reason import-15.1 gives.
+    set fixture [::tclpdfTest::headerVersion [::tclpdfTest::twoResources \
+        import-midloop-filter.pdf \
         "<< /Type /XObject /Subtype /Form /BBox \[0 0 1 1\] /Filter /FlateDecode\
-            /Length [string length $deflated] >>\nstream\n$deflated\nendstream"]
+            /Length [string length $deflated] >>\nstream\n$deflated\nendstream"] \
+        1.0]
     # -version 1.1 disowns FlateDecode, -compress 0 so the document itself
     # does not need it either.
     set doc [tclpdf new -unit pt -format a4 -version 1.1 -compress 0]
@@ -2583,15 +2637,19 @@ test import-22.1 {the STRUCTURE marks of a foreign page do not travel} -body {
     $doc destroy
     set bytes [::tclpdfTest::readBytes $path]
     file delete $fixture $path
-    # The /MCID bracket is gone with its EMC. The artifact bracket and the
-    # optional-content bracket stay - the first says "this is not content",
-    # which is true inside a form XObject too, and the second is what
-    # SWITCHES the content inside it. Two brackets left, so two EMC. The
-    # drawing itself is untouched.
+    # The /MCID bracket is gone with its EMC, AND SO IS THE ARTIFACT
+    # BRACKET (round 8): "this is not content" is a sentence about the
+    # structure tree of the file the page came from, and what the page is
+    # here is said by [form place] - an artifact under -artifact 1, a Figure
+    # under -alt. Left standing inside a Figure it is content marked as
+    # artifact inside tagged content, which ISO 14289-1, 7.1 forbids and
+    # veraPDF names (7.1-1, 7.1-2). The optional-content bracket stays - it
+    # is what SWITCHES the content inside it. One bracket left, so one EMC.
+    # The drawing itself is untouched.
     list [regexp -all {/MCID} $bytes] [regexp -all {/Artifact BMC} $bytes] \
         [regexp -all {/OC /oc1 BDC} $bytes] [regexp -all {EMC} $bytes] \
         [regexp {\(one\) Tj} $bytes] [regexp {5 5 m\s+9 9 l\s+S} $bytes]
-} -result {0 1 1 2 1 1}
+} -result {0 0 1 1 1 1}
 
 test import-22.2 {an operator name inside a string is text, not an operator} -body {
     set content "BT /Helv 12 Tf 20 100 Td (EMC and BDC) Tj ET"
@@ -2738,5 +2796,600 @@ test import-22.4 {an optional-content bracket still switches its layer after the
         [regexp -all {/Type /OCG} $bytes] \
         [expr {[llength [::tclpdf::layer::groupReferences $entry OFF]] == 1}]
 } -result {1 0 1 1 1}
+
+# ---------------------------------------------------------------------------
+# ROUND 8 - THE READING SIDE: A FILE WHOSE OBJECTS STAND AT A GENERATION OF
+# THEIR OWN, AND WHOSE NUMBERS ARE SPELT WITH LEADING ZEROS
+# ---------------------------------------------------------------------------
+#
+# [::tclpdfTest::buildpdf] writes every object at generation 0 and every
+# number in its shortest form. Both are the common case and neither is the
+# only legal one: 7.5.4 gives every cross-reference entry a five-digit
+# generation, and 7.3.3 defines an integer as "one or more decimal digits
+# optionally preceded by a sign", so "0007" is seven wherever a number is
+# written. This builder can write both, and nothing else about it differs.
+#
+#   objects   {number generation body ...}
+#   -version  what the header claims (the import enters it as a floor)
+#   -objnum   the format of the number in the "N G obj" header
+#   -count    the format of the count in the subsection header
+#   -size     the format of the trailer's /Size
+#   -startxref the format of the startxref offset
+#   -trailer  extra trailer entries
+proc ::tclpdfTest::generations {name objects args} {
+    set o [dict merge {-version 1.4 -objnum %d -count %d -size %d \
+        -startxref %d -trailer {}} $args]
+    set out "%PDF-[dict get $o -version]\n"
+    set offsets {}
+    set gens {}
+    foreach {number generation body} $objects {
+        dict set offsets $number [string length $out]
+        dict set gens $number $generation
+        append out "[format [dict get $o -objnum] $number] $generation obj\n"
+        append out "$body\nendobj\n"
+    }
+    set size [expr {[::tcl::mathfunc::max {*}[dict keys $offsets]] + 1}]
+    set xref [string length $out]
+    append out "xref\n0 [format [dict get $o -count] $size]\n"
+    append out [format "%010d %05d f \n" 0 65535]
+    for {set number 1} {$number < $size} {incr number} {
+        if {[dict exists $offsets $number]} {
+            append out [format "%010d %05d n \n" [dict get $offsets $number] \
+                [dict get $gens $number]]
+        } else {
+            append out [format "%010d %05d f \n" 0 0]
+        }
+    }
+    append out "trailer\n<< /Size [format [dict get $o -size] $size]\
+        /Root 1 0 R [dict get $o -trailer] >>\n"
+    append out "startxref\n[format [dict get $o -startxref] $xref]\n%%EOF\n"
+    set path [scratch $name]
+    set channel [open $path wb]
+    puts -nonewline $channel $out
+    close $channel
+    return $path
+}
+
+# The four objects most of the tests below want, at the generations given:
+# catalogue, page tree, page (with a font resource), font.
+proc ::tclpdfTest::generationPage {name fontGeneration reference args} {
+    return [::tclpdfTest::generations $name [list \
+        1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+        2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R /Resources << /Font << /F1 $reference >> >> >>" \
+        4 $fontGeneration "<< /Type /Font /Subtype /Type1\
+            /BaseFont /Helvetica >>" \
+        5 0 "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"] \
+        {*}$args]
+}
+
+test import-25.1 {a reference naming another generation is the null object} -body {
+    # ISO 32000-2, 7.3.10: an object is named by its number AND its
+    # generation, and "an indirect reference to an undefined object ... shall
+    # be treated as a reference to the null object". The font stands at
+    # generation 1 and the page asks for "4 0 R", so the page has no font -
+    # which is what qpdf (--show-object=4 -> null) and poppler (pdffonts
+    # lists nothing) answer about the same file. The reader used to hand out
+    # the object at generation 1 and copy it into the result.
+    set path [::tclpdfTest::generationPage import-gen-wrong.pdf 1 {4 0 R}]
+    set reader [::tclpdf::importRead::Open $path]
+    set direct [lindex [::tclpdf::importRead::Object reader 4 0] 0]
+    set doc [tclpdf new -unit pt -format {200 100} -compress 0]
+    $doc page add
+    $doc pdf import gen $path
+    $doc form place gen -at {0 0}
+    set out [::tclpdfTest::scratch import-gen-wrong-out.pdf]
+    $doc write $out
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $out]
+    file delete $path $out
+    list $direct [regexp {Helvetica} $bytes] \
+        [regexp {/Font << /F1 \d+ 0 R >>} $bytes] \
+        [regexp "\nnull\nendobj" $bytes]
+} -result {{z {}} 0 1 1}
+
+test import-25.2 {and the same reference at its own generation reads the object} -body {
+    # The control: nothing about the file changes but the two digits of the
+    # reference.
+    set path [::tclpdfTest::generationPage import-gen-right.pdf 1 {4 1 R}]
+    set reader [::tclpdf::importRead::Open $path]
+    set generation [::tclpdf::importRead::Generation reader 4]
+    set direct [lindex [::tclpdf::importRead::Object reader 4 1] 0]
+    set doc [tclpdf new -unit pt -format {200 100} -compress 0]
+    $doc page add
+    $doc pdf import gen $path
+    $doc form place gen -at {0 0}
+    set out [::tclpdfTest::scratch import-gen-right-out.pdf]
+    $doc write $out
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $out]
+    file delete $path $out
+    list $generation [lindex $direct 0] [regexp {Helvetica} $bytes]
+} -result {1 d 1}
+
+test import-25.3 {both generations of one number go their own way in a copy} -body {
+    # The page names the object twice, once at each generation: one of them
+    # is the font, the other is the null object. A map keyed on the object
+    # NUMBER alone made both of them the same copy.
+    set path [::tclpdfTest::generations import-gen-both.pdf [list \
+        1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+        2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R /Resources << /Font << /F1 4 1 R /F2 4 0 R >> >> >>" \
+        4 1 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" \
+        5 0 "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"]]
+    set doc [tclpdf new -unit pt -format {200 100} -compress 0]
+    $doc page add
+    $doc pdf import gen $path
+    $doc form place gen -at {0 0}
+    set out [::tclpdfTest::scratch import-gen-both-out.pdf]
+    $doc write $out
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $out]
+    set one {}
+    set two {}
+    regexp {/Font << /F1 (\d+) 0 R /F2 (\d+) 0 R >>} $bytes -> one two
+    file delete $path $out
+    list [expr {$one ne $two}] \
+        [regexp "\n$one 0 obj\n<< /Type /Font" $bytes] \
+        [regexp "\n$two 0 obj\nnull\nendobj" $bytes]
+} -result {1 1 1}
+
+test import-25.4 {an object header whose generation is not the table's is refused} -body {
+    # The counterpart of import-24.32 for the second half of the name: an
+    # offset that lands on "4 2 obj" where the table promised generation 1 is
+    # the same corrupt cross-reference as one that lands on another number.
+    set path [::tclpdfTest::generationPage import-gen-header.pdf 1 {4 1 R}]
+    set bytes [::tclpdfTest::readBytes $path]
+    set channel [open $path wb]
+    puts -nonewline $channel [string map {"4 1 obj" "4 2 obj"} $bytes]
+    close $channel
+    set doc [tclpdf new -unit pt -format {200 100}]
+    $doc page add
+    set result [::tclpdfTest::refuse {$doc pdf import gen $path}]
+    $doc destroy
+    set reader [::tclpdf::importRead::Open $path]
+    set message {}
+    catch {::tclpdf::importRead::Object reader 4} message
+    file delete $path
+    list $result [string match {*at generation 1 at offset*} $message] \
+        [string match {*\"4 2 obj\" is written*} $message]
+} -result {{1 1 {TCLPDF IMPORT OBJECT}} 1 1}
+
+test import-25.5 {the generation travels through update and sign, not as zero} -body {
+    # An identity map keeps the reference's own generation (importRead
+    # Serialize): an update writes into the file's OWN numbering, where
+    # "7 1 R" has to stay "7 1 R" - written as "7 0 R" it resolves to the
+    # null object and the annotation is gone from the file without a word.
+    set path [::tclpdfTest::generations import-gen-update.pdf [list \
+        1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+        2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R /Annots \[7 1 R\] >>" \
+        5 0 "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream" \
+        7 1 "<< /Type /Annot /Subtype /Link /Rect \[0 0 10 10\]\
+            /Border \[0 0 0\] >>"]]
+    set upd [::tclpdf::update open $path]
+    set body [$upd body 3]
+    set reference [$upd ref 7]
+    $upd replace 3 $body
+    $upd write
+    $upd destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    list $reference [regexp -all {/Annots \[ 7 1 R \]} $bytes]
+} -result {{7 1 R} 1}
+
+test import-25.6 {an object stream header that names another object is refused} -body {
+    # 7.5.7: "The first integer in each pair shall represent the object number
+    # of a compressed object" - so the pair is the object's NAME, exactly as
+    # the "N G obj" header is for an uncompressed one, and [ObjectAt] has
+    # refused a mismatch there since round 6. For a compressed object nobody
+    # asked: the cross-reference said "object 3 is index 0", the header said
+    # index 0 is object 4, and the reader handed out object 4 under the name
+    # 3 - a page came out with the wrong font, silently, where qpdf refuses
+    # the same file.
+    set path [::tclpdfTest::objstm import-objstm-swap.pdf \
+        {entries {{3 2 2 1} {4 2 2 0}}}]
+    set reader [::tclpdf::importRead::Open $path]
+    set result [::tclpdfTest::refuse {::tclpdf::importRead::Object reader 3}]
+    set message {}
+    catch {::tclpdf::importRead::Object reader 3} message
+    file delete $path
+    list $result [string match {*whose own header names object 4 there*} \
+        $message]
+} -result {{1 1 {TCLPDF IMPORT OBJSTM}} 1}
+
+test import-25.7 {a literal string reads its end-of-line markers as one LF} -body {
+    # 7.3.4.2: an end-of-line marker inside a literal string without a
+    # preceding backslash "shall be treated as a byte value of (0Ah),
+    # irrespective of whether the end-of-line marker was a CARRIAGE RETURN
+    # (0Dh), a LINE FEED (0Ah), or both". A CR left standing made the /Title
+    # of an imported file one byte longer than the file means, a CRLF two.
+    set pos 0
+    set crlf [::tclpdf::importRead::Parse "(Hello\r\nWorld)" pos]
+    set pos 0
+    set cr [::tclpdf::importRead::Parse "(A\rB)" pos]
+    set pos 0
+    set lf [::tclpdf::importRead::Parse "(A\nB)" pos]
+    set pos 0
+    set escaped [::tclpdf::importRead::Parse "(A\\\rB)" pos]
+    list [binary encode hex [lindex $crlf 1]] \
+        [binary encode hex [lindex $cr 1]] [binary encode hex [lindex $lf 1]] \
+        [binary encode hex [lindex $escaped 1]]
+} -result {48656c6c6f0a576f726c64 410a42 410a42 4142}
+
+test import-25.8 {an octal escape is one byte, high-order overflow ignored} -body {
+    # 7.3.4.2: "The number ddd may consist of one, two, or three octal digits
+    # ... High-order overflow shall be ignored". \777 is 255, not code point
+    # 511 - which under Tcl 9 killed the whole import with a raw TCL VALUE
+    # BYTES, against the manual's promise that trap {TCLPDF IMPORT} catches
+    # every refusal of the reader.
+    # The backslash is built rather than written: a braced list is
+    # backslash-substituted when it is split into elements, so {(a\777b)}
+    # would reach the parser as "(a?7b)" and the test would measure Tcl.
+    #
+    # AND MEASURED AS CODE POINTS, not as encoded bytes: under Tcl 8.6
+    # [binary encode hex] truncates a character above 0xFF to 0xFF on its
+    # own and would hit the standard by accident, so the same file was
+    # right under 8.6 and killed the import under 9.0 with a raw TCL VALUE
+    # BYTES far away from the string that caused it.
+    set bs \\
+    set out {}
+    foreach text [list "(Oct${bs}777X)" "(${bs}101${bs}102)" "(${bs}0)" \
+            "(${bs}77)" "(${bs}400)"] {
+        set pos 0
+        lappend out [lmap character [split \
+            [lindex [::tclpdf::importRead::Parse $text pos] 1] {}] {
+                scan $character %c
+            }]
+    }
+    set out
+} -result {{79 99 116 255 88} {65 66} 0 63 0}
+
+test import-25.9 {a duplicate dictionary key is read once and written once} -body {
+    # 7.3.7: "Multiple entries in the same dictionary shall not have the same
+    # key" - a rule for writing, which the copy broke by carrying both
+    # entries over. The LAST one counts, which is what [Get] has always
+    # answered and what qpdf and poppler do.
+    set pos 0
+    set parsed [::tclpdf::importRead::Parse \
+        {<< /A 1 /B 2 /A 3 >>} pos]
+    set fixture [::tclpdfTest::buildpdf import-dupkeys.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier\
+            /BaseFont /Helvetica >>" \
+        "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"]]
+    set doc [tclpdf new -unit pt -format {200 100} -compress 0]
+    $doc page add
+    $doc pdf import dup $fixture
+    $doc form place dup -at {0 0}
+    set out [::tclpdfTest::scratch import-dupkeys-out.pdf]
+    $doc write $out
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $out]
+    file delete $fixture $out
+    list $parsed [regexp -all {/BaseFont} $bytes] [regexp {Helvetica} $bytes] \
+        [regexp {Courier} $bytes]
+} -result {{d {A {n 3} B {n 2}}} 1 1 0}
+
+test import-25.9a {and qpdf finds no duplicated key in the output} -constraints qpdf -body {
+    set fixture [::tclpdfTest::buildpdf import-dupkeys2.pdf [list \
+        "<< /Type /Catalog /Pages 2 0 R >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /MediaBox \[0 0 300 100\] /Contents 5 0 R\
+            /Resources << /Font << /F1 4 0 R /F1 4 0 R >> >> >>" \
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" \
+        "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"]]
+    set doc [tclpdf new -unit pt -format {300 100} -compress 0]
+    $doc page add
+    $doc pdf import dup $fixture
+    $doc form place dup -at {0 0}
+    set out [::tclpdfTest::scratch import-dupkeys2-out.pdf]
+    $doc write $out
+    $doc destroy
+    set check [exec qpdf --check $out]
+    file delete $fixture $out
+    regexp {duplicated key} $check
+} -result 0
+
+# --- leading zeros: the same file under both interpreters -------------------
+#
+# 7.3.3 defines an integer as "one or more decimal digits optionally preceded
+# by a sign", so 0007 is seven wherever a number is written - and qpdf reads
+# it so. Tcl does not: [expr] reads a leading zero as OCTAL under 8.6 and as
+# decimal under 9, so the same valid file was read two ways. Round 7 closed
+# three places, round 8 the other eight; every one of them goes through
+# [importRead::Decimal] now.
+
+test import-25.10 {startxref, the subsection count and /Size may carry leading zeros} -body {
+    set out {}
+    foreach {label options} {
+        startxref {-startxref %010d}
+        count {-count %04d}
+        size {-size %04d}
+        objnum {-objnum %04d}
+        all {-startxref %010d -count %04d -size %04d -objnum %04d}
+    } {
+        set path [::tclpdfTest::generationPage import-lz-$label.pdf 0 {4 0 R} \
+            {*}$options]
+        lappend out $label [catch {::tclpdf::pdf pages $path} answer] \
+            [expr {[llength $answer] == 1
+                ? [dict get [lindex $answer 0] width] : $answer}]
+        file delete $path
+    }
+    set out
+} -result {startxref 0 200 count 0 200 size 0 200 objnum 0 200 all 0 200}
+
+test import-25.11 {/Prev, /Length, /N and /First may carry leading zeros} -body {
+    set out {}
+    # /Length: the content stream is DECODED by the import, so a length read
+    # as octal cuts the stream short and the whole file is refused.
+    set path [::tclpdfTest::generations import-lz-length.pdf [list \
+        1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+        2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R >>" \
+        5 0 "<< /Length 0025 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"]]
+    set doc [tclpdf new -unit pt -format {200 100}]
+    $doc page add
+    lappend out length [catch {$doc pdf import lz $path} message] 
+    $doc destroy
+    file delete $path
+    # /N and /First of an object stream, both spelt with a leading zero.
+    set path [::tclpdfTest::objstm import-lz-objstm.pdf {n 02}]
+    lappend out n [catch {::tclpdf::pdf pages $path} answer] \
+        [dict get [lindex $answer 0] width]
+    file delete $path
+    set path [::tclpdfTest::objstm import-lz-objstm2.pdf {firstFmt %04d}]
+    lappend out first [catch {::tclpdf::pdf pages $path} answer] \
+        [dict get [lindex $answer 0] width]
+    file delete $path
+    set out
+} -result {length 0 n 0 200 first 0 200}
+
+test import-25.12 {and /Prev, through an incremental update with a padded offset} -body {
+    set path [::tclpdfTest::scratch import-lz-prev.pdf]
+    file copy -force [::tclpdfTest::template 3] $path
+    set upd [::tclpdf::update open $path]
+    $upd add "<< /Type /Probe >>"
+    set appended [$upd appendix]
+    $upd destroy
+    # The /Prev of the appended trailer, written with leading zeros: the same
+    # offset, spelt the way 7.5.4 spells an offset in the table.
+    set previous {}
+    regexp {/Prev (\d+)} $appended -> previous
+    set padded [string map [list "/Prev $previous" \
+        "/Prev [format %010d $previous]"] $appended]
+    set channel [open $path ab]
+    puts -nonewline $channel $padded
+    close $channel
+    set answer [::tclpdf::pdf pages $path]
+    set revisions [dict get [::tclpdf::pdf info $path] revisions]
+    file delete $path
+    list [llength $answer] $revisions
+} -result {3 2}
+
+test import-25.13 {a null value is a key that is not there (7.3.9)} -body {
+    # "Specifying the null object as the value of a dictionary entry shall be
+    # equivalent to omitting the entry entirely" - answered once, in [Get]
+    # and [Resolve], instead of at each of the consumers: /Rotate null used
+    # to be refused as "carries /Rotate \"\"", /CropBox null as "not an array
+    # of four numbers", /Contents null as "not a stream".
+    set out {}
+    foreach {label extra} {
+        rotate {/Rotate null}
+        cropbox {/CropBox null}
+        contents {/Contents null}
+        annots {/Annots null}
+        resources {/Resources null}
+    } {
+        set body "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R /Resources << >> $extra >>"
+        if {$label in {contents resources}} {
+            set body [string map [list "/Contents 5 0 R " {} \
+                "/Resources << >> " {}] $body]
+        }
+        set path [::tclpdfTest::generations import-null-$label.pdf [list \
+            1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+            2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+            3 0 $body \
+            5 0 "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"]]
+        set doc [tclpdf new -unit pt -format {200 100}]
+        $doc page add
+        lappend out $label [catch {::tclpdf::pdf pages $path}] \
+            [catch {$doc pdf import n $path}]
+        $doc destroy
+        file delete $path
+    }
+    set out
+} -result {rotate 0 0 cropbox 0 0 contents 0 0 annots 0 0 resources 0 0}
+
+test import-25.13a {[Get] and [Resolve] both answer the null object as nothing} -body {
+    # The two places the rule lives, asked directly: a key whose value is
+    # null, a direct null, a reference to an object that IS null, and a
+    # reference the table does not answer. All four are "nothing", so that
+    # no consumer of this reader has to know the difference (7.3.9, 7.3.10).
+    set reader [::tclpdfTest::bareReader {9 {{z {}} 0 {}}}]
+    set value {d {A {z {}} B {n 1}}}
+    list [::tclpdf::importRead::Get $value A] \
+        [::tclpdf::importRead::Get $value B] \
+        [::tclpdf::importRead::Resolve reader {z {}}] \
+        [::tclpdf::importRead::Resolve reader {r {9 0}}] \
+        [::tclpdf::importRead::Resolve reader {r {8 0}}] \
+        [::tclpdf::importRead::Resolve reader {n 5}]
+} -result {{} {n 1} {} {} {} {n 5}}
+
+test import-25.14 {a reference the cross-reference does not answer is null too} -body {
+    # 7.3.10: "An indirect reference to an undefined object shall not be
+    # considered an error by a PDF processor; it shall be treated as a
+    # reference to the null object". The same sentence as import-25.1, for
+    # the number the table has no entry for at all - and the same rule this
+    # package applies when it WRITES (doc/tclpdf.md, release).
+    set out {}
+    foreach {label extra} {
+        rotate {/Rotate 42 0 R}
+        cropbox {/CropBox 42 0 R}
+    } {
+        set path [::tclpdfTest::generations import-missing-$label.pdf [list \
+            1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+            2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+            3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+                /Contents 5 0 R /Resources << >> $extra >>" \
+            5 0 "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"]]
+        set doc [tclpdf new -unit pt -format {200 100}]
+        $doc page add
+        lappend out $label [catch {::tclpdf::pdf pages $path}] \
+            [catch {$doc pdf import m $path}]
+        $doc destroy
+        file delete $path
+    }
+    set out
+} -result {rotate 0 0 cropbox 0 0}
+
+test import-25.15 {an integer beyond Annex C.2 is written back as a real} -body {
+    # ISO 32000-1, Annex C.2 bounds an INTEGER at +/-2147483647; a whole
+    # number beyond it, written back as an integer token, is one no
+    # conforming reader has to be able to read - qpdf treats such an object
+    # as null and drops the dictionary it stands in. The value does not
+    # change: the point makes the same digits a real (7.3.3). It is the rule
+    # [pdfObj num] applies to every number this package writes itself
+    # (round 7), on the reading side.
+    set map {}
+    foreach number {5 -5 2147483647 -2147483647 2147483648 -2147483648 \
+            3000000000 99999999999999999999} {
+        dict set map $number $number
+    }
+    set out {}
+    foreach number [dict keys $map] {
+        lappend out [::tclpdf::importRead::Serialize [list n $number] {}]
+    }
+    set out
+} -result {5 -5 2147483647 -2147483647 2147483648. -2147483648. 3000000000.\
+    99999999999999999999.}
+
+test import-25.15a {and the copied dictionary of a foreign page carries it} -constraints qpdf -body {
+    set path [::tclpdfTest::generations import-bigint.pdf [list \
+        1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+        2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R\
+            /Resources << /ExtGState << /G1 4 0 R >> >> >>" \
+        4 0 "<< /Type /ExtGState /CA 1 /LW 3000000000 /XXNeg -2147483649 >>" \
+        5 0 "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream"]]
+    set doc [tclpdf new -unit pt -format {200 100} -compress 0]
+    $doc page add
+    $doc pdf import big $path
+    $doc form place big -at {0 0}
+    set out [::tclpdfTest::scratch import-bigint-out.pdf]
+    $doc write $out
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $out]
+    set check [exec qpdf --check $out]
+    file delete $path $out
+    list [regexp -all -inline {/LW [^ /]*|/XXNeg [^ /]*} $bytes] \
+        [regexp {No syntax or stream encoding errors} $check]
+} -result {{{/LW 3000000000.} {/XXNeg -2147483649.}} 1}
+
+test import-25.15b {update replace reads an object header spelt with leading zeros} -body {
+    # update.tcl held the number of the "N G obj" header against the one it
+    # was asked for with [!=], which under Tcl 8.6 read "0010" as octal: the
+    # same file was refused as "the object there is 0010" under one
+    # interpreter and replaced under the other. Through the reader's
+    # [Decimal] now, like every other written number.
+    #
+    # OBJECT TEN, because that is where the two readings part: "0004" is
+    # four either way, and "0010" is ten in decimal and eight in octal.
+    set path [::tclpdfTest::generations import-lz-replace.pdf [list \
+        1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+        2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 5 0 R /Resources << /Font << /F1 10 0 R >> >> >>" \
+        5 0 "<< /Length 25 >>\nstream\n0 0 1 rg 10 10 50 50 re f\nendstream" \
+        10 0 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"] \
+        -objnum %04d]
+    set upd [::tclpdf::update open $path]
+    set code [catch {$upd replace 10 "<< /Type /Font /Subtype /Type1\
+        /BaseFont /Courier >>"} message]
+    $upd write
+    $upd destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    list $code [regexp {Courier} $bytes]
+} -result {0 1}
+
+test import-25.16 {the /Artifact brackets of a foreign page do not travel either} -body {
+    # ISO 14289-1, 7.1: "this is not content" is a sentence about the
+    # structure tree of the file the page came from, and that tree does not
+    # travel. Both spellings go - the BMC without a property list and the
+    # BDC with one - while /OC and /Span stay. import-22.1 measures the
+    # same rule end to end; this one is the tokenizer alone, with the
+    # property-list form and a name written with a #xx escape.
+    set content "/Artifact <</Type /Pagination /Subtype /Footer>> BDC\
+        0 0 1 1 re f EMC\n/Artifac#74 BMC 1 1 2 2 re f EMC\n\
+        /Span << /Lang (de) >> BDC (x) Tj EMC\n/OC /oc1 BDC 5 5 m 9 9 l S EMC"
+    set stripped [::tclpdf::importRead::Unmark $content]
+    list [regexp -all {Artifact} $stripped] [regexp -all {Artifac} $stripped] \
+        [regexp -all {EMC} $stripped] [regexp -all {BDC} $stripped] \
+        [regexp -all {BMC} $stripped] \
+        [regexp {0 0 1 1 re} $stripped] [regexp {1 1 2 2 re} $stripped] \
+        [regexp {/Span} $stripped] [regexp {/OC /oc1} $stripped]
+} -result {0 0 2 2 0 1 1 1 1}
+
+test import-25.17 {every refusal of round 8 leaves the document as it was} -body {
+    # THE CHECK-BEFORE-WRITE RULE, asked of the refusals this round added.
+    # All of them fall while the reader is still the only thing being asked -
+    # before the first object number is handed out - so the writer's count
+    # does not move, no form is registered, and the document still writes.
+    # A reservation that is never filled makes the WHOLE document unwritable
+    # at the next [write], for a caller who caught the refusal and carried on.
+    set fixtures {}
+    # an object stream whose header names another object
+    dict set fixtures objstm [::tclpdfTest::objstm import-state-objstm.pdf \
+        {entries {{3 2 2 1} {4 2 2 0}}}]
+    # an ASCII85 content stream with a "z" inside a group
+    set bad "87cz*Sy~>"
+    dict set fixtures ascii85 [::tclpdfTest::generations \
+        import-state-a85.pdf [list \
+            1 0 "<< /Type /Catalog /Pages 2 0 R >>" \
+            2 0 "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+            3 0 "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+                /Contents 5 0 R /Resources << >> >>" \
+            5 0 "<< /Length [string length $bad] /Filter /ASCII85Decode >>\
+                \nstream\n$bad\nendstream"]]
+    # a page from a file that claims a newer version
+    dict set fixtures version [::tclpdfTest::generationPage \
+        import-state-version.pdf 0 {4 0 R} -version 2.0]
+    # an object header whose generation is not the table's
+    set path [::tclpdfTest::generationPage import-state-gen.pdf 1 {4 1 R}]
+    set bytes [::tclpdfTest::readBytes $path]
+    set channel [open $path wb]
+    puts -nonewline $channel [string map {"4 1 obj" "4 2 obj"} $bytes]
+    close $channel
+    dict set fixtures generation $path
+
+    set out {}
+    dict for {label fixture} $fixtures {
+        set doc [tclpdf new -unit pt -format {200 100} -version 1.4]
+        $doc page add
+        $doc text "before" -at {20 20} -size 10
+        set before [[$doc writer] count]
+        set forms [$doc state forms]
+        set refused [catch {$doc pdf import s $fixture} message]
+        lappend out $label $refused [string match {tclpdf: *} $message] \
+            [expr {[[$doc writer] count] == $before}] \
+            [expr {[$doc state forms] eq $forms}] \
+            [lindex [::tclpdfTest::writes $doc import-state-$label.pdf] 0]
+        $doc destroy
+        file delete $fixture
+    }
+    set out
+} -result {objstm 1 1 1 1 0 ascii85 1 1 1 1 0 version 1 1 1 1 0\
+    generation 1 1 1 1 0}
 
 cleanupTests

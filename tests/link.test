@@ -268,4 +268,136 @@ test link-4.6 {a refused link leaves no annotation behind} -body {
   expr {$before eq $after}
 } -result 1
 
+# --- round 8: where a link may be drawn, and what it may share ------------
+
+test link-r8-1.1 {a link inside a form is refused, and nothing is written} -body {
+  # ISO 32000-2 12.5.2: an annotation belongs to a page and its /Rect is in
+  # the page's default user space. Drawn inside [form create] the rectangle
+  # was measured against the form's height and then hung on the page:
+  # docs/review-8-proben/annot/p10b-annot-in-form.tcl put a 5 mm annotation
+  # of a form placed at {100 100} into the bottom left corner of the page.
+  set doc [linked]
+  set code [::tclpdfTest::refusalCode {
+    $doc form create block -size {50 20} -script {
+      $doc rect -at {0 0} -size {50 20} -stroke blue
+      $doc link -at {5 5} -size {20 8} -url https://example.org/ -tooltip x
+    }
+  }]
+  set links [$doc state links]
+  set forms [$doc state xobjects]
+  $doc destroy
+  list $code $links $forms
+} -result {{TCLPDF LINK PLACE form} {} {}}
+
+test link-r8-1.2 {a tile and the page-number XObject are the same stream} -body {
+  # The refusal is measured on the STREAM IDENTITY ([canvas id]), which is
+  # what a form, a tiling pattern and the page-number XObject share - not on
+  # the marking switch, which a table also throws while drawing a pagination
+  # artifact.
+  set doc [linked]
+  set code [::tclpdfTest::refusalCode {
+    $doc pattern create hatch -size {4 4} -script {
+      $doc link -at {0 0} -size {4 4} -url https://example.org/ -tooltip x
+    }
+  }]
+  $doc destroy
+  set code
+} -result {TCLPDF LINK PLACE form}
+
+test link-r8-1.3 {over a placed form the link is an ordinary one} -body {
+  # The way out the message names: place the form, then lay the rectangle
+  # over where it landed.
+  set doc [linked]
+  $doc form create block -size {50 20} -script {
+    $doc rect -at {0 0} -size {50 20} -stroke blue
+  }
+  $doc form place block -at {100 100}
+  set code [catch {$doc link -at {100 100} -size {50 20} \
+      -url https://example.org/ -tooltip x}]
+  set links [llength [dict get [$doc state links] 0]]
+  $doc destroy
+  list $code $links
+} -result {0 1}
+
+test link-r8-2.1 {a link remembers where it goes} -body {
+  # The third fact of [LinkRecord]. Where a link goes is known at the call
+  # and nowhere else afterwards: a forward page destination is an indirect
+  # reference by the time the dictionary is written, and a structure
+  # destination is an action naming two reserved objects.
+  set doc [linked]
+  $doc link -at {20 20} -size {40 5} -url "https://example.org/ä" -tooltip a
+  $doc link -at {20 30} -size {40 5} -page 0 -tooltip b
+  set targets [lmap link [dict get [$doc state links] 0] {
+    dict get $link target
+  }]
+  $doc destroy
+  set targets
+} -result {{url https://example.org/%C3%A4} {page 0 {} {}}}
+
+test link-r8-2.2 {the second target in one Link element is refused at the call} -body {
+  # ISO 14289-2 8.2.5.20: "Link annotations that target different locations
+  # shall be in separate Link or Reference structure elements". Said here
+  # where the part-2 claim already stands - and by ua.tcl at the write, for
+  # the order where the claim comes last (ua.test).
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc info Title "Probe"
+  $doc language de-DE
+  $doc ua -part 2
+  set code [::tclpdfTest::refusalCode {
+    $doc structure Link -script {
+      $doc text "two targets" -at {20 40}
+      $doc link -at {20 36} -size {20 6} -url https://example.org/a -tooltip a
+      $doc link -at {45 36} -size {20 6} -url https://example.org/b -tooltip b
+    }
+  }]
+  # The second annotation is not in the file: the refusal stands before the
+  # object is reserved.
+  set links [llength [dict get [$doc state links] 0]]
+  $doc destroy
+  list $code $links
+} -result {{TCLPDF LINK PLACE target} 1}
+
+test link-r8-2.3 {the same target twice, and a second Link element, are fine} -body {
+  # Examples 2 and 3 of the same clause: several annotations for one target
+  # are the ordinary case, and two targets in two elements are what the
+  # clause asks for.
+  set doc [tclpdf new -unit mm -compress 0 -version 2.0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 12
+  $doc info Title "Probe"
+  $doc language de-DE
+  $doc ua -part 2
+  set same [catch {$doc structure Link -script {
+    $doc text "one target" -at {20 40}
+    $doc link -at {20 36} -size {20 6} -url https://example.org/a -tooltip a
+    $doc link -at {45 36} -size {20 6} -url https://example.org/a -tooltip a
+  }}]
+  set apart [catch {$doc structure Link -script {
+    $doc text "the other" -at {20 50}
+    $doc link -at {20 46} -size {20 6} -url https://example.org/b -tooltip b
+  }}]
+  set shared [$doc linksSharingElement {Link Reference}]
+  $doc destroy
+  list $same $apart $shared
+} -result {0 0 {}}
+
+test link-r8-2.4 {without a part-2 claim nothing is refused at the call} -body {
+  # The clause belongs to ISO 14289-2 and to no other promise: a document
+  # making none, or claiming part 1, draws what it likes. The fact is still
+  # established, so a claim made later still finds it.
+  set doc [linked]
+  set code [catch {$doc structure Link -script {
+    $doc text "two targets" -at {20 40}
+    $doc link -at {20 36} -size {20 6} -url https://example.org/a -tooltip a
+    $doc link -at {45 36} -size {20 6} -url https://example.org/b -tooltip b
+  }}]
+  set shared [$doc linksSharingElement {Link Reference}]
+  $doc destroy
+  list $code $shared
+} -result {0 {{1 Link 2}}}
+
 cleanupTests

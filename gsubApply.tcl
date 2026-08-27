@@ -133,6 +133,9 @@ namespace eval ::tclpdf::gsubApply {
   variable opsFactor 64
   variable opsFloor 16384
 
+  # The identity of the next ligature this file forms - see [LigatureId].
+  variable ligatureSerial 0
+
   # What is left of that budget. Set by [apply] and spent by [ApplyLookupAt];
   # a namespace variable rather than an argument because it has to be shared
   # by a recursion that goes out through gsubContext.tcl and back in, and
@@ -401,11 +404,74 @@ proc ::tclpdf::gsubApply::Ignored {filter glyph} {
 # afterwards still finds the skeleton. Entries WITHOUT a tag stay without one,
 # which is what keeps a run built before this existed exactly two elements
 # long.
+#
+# So do the LIGATURE PROPERTIES in the fourth place, for the same reason and
+# with the same care: a run that never met a ligature never grows a fourth
+# element. See [Ligature] below for what they are.
+#
+# ONE OPERATION rather than a cascade over the length. The rule is "the first
+# two elements are replaced and whatever else the entry carries stays", and
+# [lreplace] is that rule; a cascade spells the entry's width out and has to
+# be widened by hand every time the entry grows a place - which is how
+# [morx Entry3], the same rule on the Apple road, came to be a place behind.
 proc ::tclpdf::gsubApply::Entry {source glyph codes} {
-  if {[llength $source] > 2} {
-    return [list $glyph $codes [lindex $source 2]]
+  return [lreplace $source 0 1 $glyph $codes]
+}
+
+# --- which component of a ligature a mark belongs to -------------------------
+#
+# ISO/IEC 14496-22:2019 6.3.3, MarkToLigature (S. 225): "For a given mark
+# assigned to a particular class, the appropriate base attachment point is
+# determined by which ligature component the mark is associated with. ...
+# While a text-layout client is performing ... any glyph-substitution
+# operations using the GSUB table, the text-layout client must keep track of
+# associations of marks to particular ligature-glyph components."
+#
+# The association is not in the font and cannot be recovered afterwards: it is
+# made HERE, when the ligature swallows the components, and the only thing
+# that knows it is the substitution that skipped the mark. Without it every
+# mark falls on the last component - the fatha of the Arabic lam-alef then
+# sits over the alef instead of over the lam, which is 920 font units off in
+# Scheherazade New and the ordinary spelling of the word.
+#
+# So an entry may carry a fourth element, {id component count}, the same three
+# numbers HarfBuzz keeps as lig_id/lig_comp/lig_num_comps:
+#
+#   a LIGATURE glyph carries {id 0 count}: its own identity and how many
+#   components it stands for (a ligature of ligatures counts theirs);
+#   a MARK skipped inside one carries {id component 1}, the component being
+#   1-based and counted the way the specification counts them;
+#   everything else carries nothing, and a mark that never met a ligature
+#   keeps falling on the last component, which is what it did before.
+#
+# The ID exists to answer "is this mark's component index about THIS
+# ligature": a mark that came out of one ligature and is placed against
+# another has an index that means nothing there. markPos.tcl asks exactly
+# that.
+
+# The next ligature identity. A counter rather than a position, because a
+# position stops identifying anything as soon as the next lookup moves the
+# run; it never resets, and it does not have to - two runs of one document
+# never meet.
+proc ::tclpdf::gsubApply::LigatureId {} {
+  variable ligatureSerial
+  return [incr ligatureSerial]
+}
+
+# How many components an entry stands for: a ligature's own count, and one for
+# every other glyph.
+proc ::tclpdf::gsubApply::Components {entry} {
+  set properties [lindex $entry 3]
+  if {[llength $properties] == 3 && [lindex $properties 1] == 0} {
+    return [lindex $properties 2]
   }
-  return [list $glyph $codes]
+  return 1
+}
+
+# The same entry with these ligature properties.
+proc ::tclpdf::gsubApply::Ligature {entry properties} {
+  return [list [lindex $entry 0] [lindex $entry 1] [lindex $entry 2] \
+      $properties]
 }
 
 # --- one lookup, one position -----------------------------------------------
@@ -452,14 +518,22 @@ proc ::tclpdf::gsubApply::SingleAt {filter rules run position tag {exempt -1}} {
 #                 boundary.
 #
 # So the characters belong on the glyph that carries the advance, which is the
-# base, which is the first. What that costs is a ToUnicode map in which two
-# letters sharing one base glyph cannot be told apart - a per-glyph map cannot
-# say "these two glyphs together are one letter". It does not arise for the
-# faces this package will shape, because a face that writes a letter as a
-# shared skeleton plus a separate dot needs GPOS mark attachment to place that
-# dot, and markPos.tcl places it. The fix, should a face ever need it, is a
-# CID of its own per glyph-and-characters pair, which is a change to the font
-# writer and not one to make in passing.
+# base, which is the first.
+#
+# WHAT THAT USED TO COST was a ToUnicode map in which two letters sharing one
+# base glyph could not be told apart, and the comment here said it did not
+# arise for the faces this package shapes. It arises constantly: Noto Naskh
+# Arabic and Noto Sans Arabic write sin and shin, and beh, teh, theh, nun and
+# yeh, as one skeleton plus separate dots, so the skeleton carries whichever
+# letter used it first and every other reading of it extracted wrongly -
+# measured over 89 Arabic words, 49 of them came out as a different word.
+# Mark attachment has nothing to do with it: the dots are placed correctly and
+# the map is still wrong.
+#
+# The fix named here has been built and is in font.tcl: a CID of its own per
+# glyph-and-characters pair ([FontRunEncode]), which is what CIDToGIDMap is
+# for. Nothing about this file changed with it - the characters still go to
+# the first output, and the rest still get none.
 proc ::tclpdf::gsubApply::MultipleAt {filter rules run position tag {exempt -1}} {
   set entry [lindex $run $position]
   set glyph [lindex $entry 0]
@@ -543,11 +617,36 @@ proc ::tclpdf::gsubApply::LigatureAt {filter rules run start tag {visible {}} \
     foreach part $parts {
       lappend codes {*}[lindex [lindex $run $part] 1]
     }
-    set replacement [list [Entry $entry $ligature $codes]]
+    # WHICH COMPONENT each skipped glyph stands behind, recorded now because
+    # nothing afterwards can work it out: the components are about to stop
+    # existing. Counted the way HarfBuzz counts in [ligate_input] - components
+    # seen so far, and a component that is itself a ligature counts all of the
+    # ones it stands for, so that a mark inside a ligature of ligatures keeps
+    # pointing at the letter it was written after.
+    set identity [LigatureId]
+    set soFar [Components $entry]
+    set previous $soFar
+    set marks {}
     set end [lindex $parts end]
+    for {set step 1} {$step <= $need} {incr step} {
+      for {set index [expr {[lindex $parts [expr {$step - 1}]] + 1}]
+           } {$index < [lindex $parts $step]} {incr index} {
+        set own [lindex [lindex $run $index] 3 1]
+        if {$own eq {} || $own == 0} {
+          set own $previous
+        }
+        dict set marks $index [expr {$soFar - $previous
+            + min($own, $previous)}]
+      }
+      set previous [Components [lindex $run [lindex $parts $step]]]
+      incr soFar $previous
+    }
+    set replacement [list [Ligature [Entry $entry $ligature $codes] \
+        [list $identity 0 $soFar]]]
     for {set index $start} {$index <= $end} {incr index} {
       if {$index ni $parts} {
-        lappend replacement [lindex $run $index]
+        lappend replacement [Ligature [lindex $run $index] \
+            [list $identity [dict get $marks $index] 1]]
       }
     }
     # Past the ligature AND past the glyphs it took along. Those are the ones
@@ -1032,4 +1131,4 @@ proc ::tclpdf::gsubApply::LigatureSubst {gsub subtable rules} {
   return $rules
 }
 
-package provide tclpdf::gsubApply 1.2
+package provide tclpdf::gsubApply 1.3

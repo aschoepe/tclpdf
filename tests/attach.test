@@ -617,4 +617,74 @@ test attach-8.9 {-name takes no control character} -body {
 } -result {1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1\
     1 {TCLPDF ATTACH NAME} 1 0 0}
 
+# --- the names the hybrid standards reserve -------------------------------
+#
+# The only block here that needs an invoice, and with it tdom and an
+# embeddable face - so the fixtures stand here rather than at the top, where
+# every other test would carry them for nothing.
+
+set attachRoot [file dirname [file dirname [file normalize [info script]]]]
+set attachInvoice [file join $attachRoot examples assets xml zugferd-en16931.xml]
+set attachFace [file join $attachRoot examples assets fonts DejaVuSans.ttf]
+testConstraint haveTdomInvoice [expr {[testConstraint haveTdom]
+    && [file exists $attachInvoice] && [file exists $attachFace]}]
+if {[testConstraint haveTdomInvoice]} {
+  package require tclpdf::zugferd
+}
+
+
+test attach-9.1 {after the invoice, a reserved name is refused - in any spelling} -constraints haveTdomInvoice -body {
+  # Factur-X 1.09.2, 6.2 and 7.7 and Order-X 1.0, 4.1.1 bind these four
+  # names to the one XML that IS the document a second time, and a reader
+  # looks it up BY NAME. Measured 2026-08-27, before this: after [zugferd] a
+  # plain [attach -name order-x.xml] and an [attach -name factur-x.XML] both
+  # went in - the second under a key of its own, since the name tree keys on
+  # bytes (7.9.6) and the uniqueness check therefore never saw it - and
+  # Mustangproject and veraPDF called the result valid.
+  set out {}
+  foreach name {factur-x.xml factur-x.XML ZUGFERD-Invoice.xml xrechnung.xml
+      order-x.xml} {
+    set doc [tclpdf new]
+    $doc page add
+    $doc font embed face $attachFace
+    $doc text "x" -at {20 20} -family face
+    $doc zugferd $attachInvoice
+    lappend out [catch {$doc attach -data x -name $name \
+        -date $attachMoment} message] [lrange $::errorCode 0 2] \
+        [string match {*reserve*} $message] [$doc attachments]
+    $doc destroy
+  }
+  set out
+} -result {1 {TCLPDF ATTACH NAME} 1 factur-x.xml 1 {TCLPDF ATTACH NAME} 1 factur-x.xml\
+    1 {TCLPDF ATTACH NAME} 1 factur-x.xml 1 {TCLPDF ATTACH NAME} 1 factur-x.xml\
+    1 {TCLPDF ATTACH NAME} 1 factur-x.xml}
+
+test attach-9.2 {a supporting document with a name of its own still goes in} -constraints haveTdomInvoice -body {
+  # The counter-direction: Factur-X 6.2 allows further supporting documents,
+  # and only the reserved names are the invoice's.
+  set doc [tclpdf new]
+  $doc page add
+  $doc font embed face $attachFace
+  $doc text "x" -at {20 20} -family face
+  $doc zugferd $attachInvoice
+  $doc attach -data x -name anlage.xml -date $attachMoment -relationship Supplement
+  set names [$doc attachments]
+  $doc destroy
+  set names
+} -result {factur-x.xml anlage.xml}
+
+test attach-9.3 {without an invoice the names are ordinary names} -body {
+  # The guard hangs on the invoice being there, not on the name alone: a
+  # caller building the hybrid by hand out of [attach] and [pdfa extension]
+  # is what the module has always allowed, and nothing in the standards
+  # reserves a name in a document that carries no invoice.
+  set doc [tclpdf new]
+  $doc page add
+  $doc attach -data x -name factur-x.xml -date $attachMoment
+  $doc attach -data x -name order-x.xml -date $attachMoment
+  set names [$doc attachments]
+  $doc destroy
+  set names
+} -result {factur-x.xml order-x.xml}
+
 cleanupTests

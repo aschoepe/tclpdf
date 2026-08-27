@@ -269,6 +269,17 @@ oo::define ::tclpdf::document::document {
           "tclpdf: colorFont needs a name for the font"
     }
     set alias [lindex $args 0]
+    # THE NAME IS CHECKED FIRST, before the face is even opened. [font define]
+    # refuses a name that is taken (TCLPDF TYPE3 ALIAS), and it is called at
+    # the END of the build - by which time the pictures of every glyph have
+    # been embedded and written, so a refusal used to leave six image objects
+    # and three names in the document that nothing referenced. The rest of
+    # this command is careful to touch nothing before it can succeed; this is
+    # the one thing it could not check without asking first.
+    if {[dict exists [my state fonts] $alias]} {
+      return -code error -errorcode [list TCLPDF TYPE3 ALIAS $alias] \
+          "tclpdf: a font named \"$alias\" already exists"
+    }
     set args [lrange $args 1 end]
     set path {}
     if {[llength $args] % 2} {
@@ -366,15 +377,24 @@ oo::define ::tclpdf::document::document {
     # call that names one character the face has not got leaves no half-built
     # font behind - not a family that exists with no glyphs in it, and not an
     # ExtGState for a layer that never reached a stream.
+    #
+    # ONE UNIT MAY BE SEVERAL GLYPHS. Where the face hangs a second glyph on
+    # the first ([ColorFontAttachments]) the two are one drawing with one
+    # advance, so each of them is read as a record of its own and the offset
+    # travels with it; pass two puts them into one glyph stream.
     set built {}
     foreach unit [my ColorFontUnits $parsed $text $alias] {
-      set common [my ColorFontCommon $parsed $unit]
-      if {$kind eq "bitmap"} {
-        lappend built \
-            [my ColorFontBitmapRead $parsed $state $strike $common $alias]
-      } else {
-        lappend built [my ColorFontRead $parsed $state $palette $common $alias]
+      lassign $unit unitText unitGlyph attached
+      set record [my ColorFontGlyphRecord $parsed $kind $state $strike \
+          $palette [my ColorFontCommon $parsed $unit] $alias]
+      set pieces {}
+      foreach piece $attached {
+        lassign $piece pieceGlyph dx dy
+        lappend pieces [list $dx $dy [my ColorFontGlyphRecord $parsed $kind \
+            $state $strike $palette \
+            [my ColorFontCommon $parsed [list $unitText $pieceGlyph]] $alias]]
       }
+      lappend built [list $record $pieces]
     }
     # PASS TWO builds. The matrix is the face's own em, so the numbers in the
     # glyph streams are the integers the face stores; the ascent is the one
@@ -396,9 +416,25 @@ oo::define ::tclpdf::document::document {
     # alias taken and no glyphs a caller could finish or retry; built here it
     # throws before the family exists.
     set streams {}
-    foreach record $built {
+    foreach entry $built {
+      lassign $entry record pieces
+      if {![llength $pieces]} {
+        set body [my ColorFontStream $record $alias]
+      } else {
+        # EACH PIECE IN ITS OWN q/Q, the base included. The unit correction
+        # [ColorFontStream] writes is a "cm" like any other and would
+        # otherwise be concatenated once per piece; inside the brackets each
+        # drawing starts from the glyph's own space, which is what a second
+        # picture placed at an anchor needs.
+        set body "q\n[my ColorFontStream $record $alias]Q\n"
+        foreach piece $pieces {
+          lassign $piece dx dy pieceRecord
+          append body "q\n[my ColorFontStream $pieceRecord $alias \
+              [list $dx $dy]]Q\n"
+        }
+      }
       lappend streams [list [dict get $record text] [dict get $record width] \
-          [my ColorFontStream $record $alias]]
+          $body]
     }
     my font define $alias -matrix [list $scale 0 0 $scale 0 0] -ascent $ascent
     foreach stream $streams {
@@ -407,6 +443,17 @@ oo::define ::tclpdf::document::document {
           -script [list my content $body]
     }
     return $alias
+  }
+
+  # One glyph read out of the face, whichever of the three kinds of face it
+  # is. The fork stood in [ColorFontBuild] until a unit could be more than one
+  # glyph; it is one line either way and belongs in one place, so that a
+  # second glyph of a unit cannot be read by a different rule than the first.
+  method ColorFontGlyphRecord {parsed kind state strike palette common alias} {
+    if {$kind eq "bitmap"} {
+      return [my ColorFontBitmapRead $parsed $state $strike $common $alias]
+    }
+    return [my ColorFontRead $parsed $state $palette $common $alias]
   }
 
   # Which strike of a bitmap face to draw from, checked before the table is
@@ -572,7 +619,11 @@ oo::define ::tclpdf::document::document {
       package require tclpdf::morx 1.0-
       set run [::tclpdf::morx apply [::tclpdf::morx build $parsed] $run]
     }
-    set seen {}
+    # WHERE THE FACE HANGS ONE GLYPH ON ANOTHER. One {dx dy} per position of
+    # the run, in font units and counted from the ORIGIN of the glyph it hangs
+    # on - see [ColorFontAttachments], and the sequences of Apple Color Emoji
+    # for why a colour font has to ask.
+    set attachments [my ColorFontAttachments $parsed $run]
     set units {}
     # WHICH CHARACTER AND WHERE, for the refusal below - the same two facts
     # the sister refusal COLORFONT CHAR names, and for the same reason: a
@@ -584,6 +635,7 @@ oo::define ::tclpdf::document::document {
     set ownerCodes {}
     set ownerAt 0
     set consumed 0
+    set index 0
     foreach entry $run {
       lassign $entry glyph codes
       if {![llength $codes]} {
@@ -612,12 +664,33 @@ oo::define ::tclpdf::document::document {
       set ownerAt $consumed
       incr consumed [llength $codes]
       set unitText [join [lmap point $codes {dict get $charOf $point}] {}]
-      if {[dict exists $seen $unitText]} {
+      set hangs [lindex $attachments $index]
+      incr index
+      if {[llength $hangs]} {
+        # A GLYPH THE FACE HUNG ON THE ONE BEFORE IT is not a unit of its own:
+        # it is part of the same drawing, and its characters are part of the
+        # same text. Folded in with the offset the anchors give, so that the
+        # sequence comes out as one Type 3 glyph with one advance - which is
+        # what this module promises everywhere else.
+        if {![llength $units]} {
+          # Nothing to hang it on. The face anchored the first glyph of the
+          # run to something that is not there, which no face measured does
+          # and which cannot be drawn: there is no base to fold into.
+          set u [join [lmap point $codes {format U+%04X $point}]]
+          return -code error \
+              -errorcode [list TCLPDF COLORFONT ANCHOR $u $alias] \
+              "tclpdf: the face hangs the first glyph of -chars ($u) on a\
+              glyph in front of it, and there is none - a mark needs a base,\
+              and the sequence begins with the mark"
+        }
+        lset units end 0 [lindex $units end 0]$unitText
+        lset units end 2 [linsert [lindex $units end 2] end \
+            [list $glyph {*}$hangs]]
         continue
       }
-      dict set seen $unitText 1
-      lappend units [list $unitText $glyph]
+      lappend units [list $unitText $glyph {}]
     }
+    set units [my ColorFontDistinct $units $alias]
     if {![llength $units]} {
       # EVERY CHARACTER WAS DELETED. An AAT state machine marks a glyph as
       # gone by putting 0xFFFF in its place, and Apple Color Emoji's very
@@ -646,6 +719,113 @@ oo::define ::tclpdf::document::document {
           build a second font for the rest and name both in -fallback"
     }
     return $units
+  }
+
+  # WHERE THE FACE HANGS ONE GLYPH ON ANOTHER: one {dx dy} per position of the
+  # run, in font units and counted from the ORIGIN of the glyph it hangs on,
+  # or the empty string for a glyph that hangs on nothing.
+  #
+  # WHY A COLOUR FONT HAS TO ASK. Apple Color Emoji draws 968 of its 997
+  # multi-person sequences - the couple with a heart, the kiss, the handshake,
+  # with and without skin tone - as TWO glyphs, and stacks the second on the
+  # first with a GPOS "mark" lookup: 773 of them carry an anchor offset of one
+  # em to the left. Read without GPOS the two halves stand side by side, the
+  # sequence comes out two ems wide, and the unmodified kiss - an everyday
+  # sequence - is half a woman beside half a man. Measured against hb-shape:
+  # "[3734+800|3676@-800,0+0]", one em in total, the second glyph exactly on
+  # the first. The face carries no GSUB and forms the sequence in "morx";
+  # its positioning is ordinary OpenType GPOS, which markPos.tcl reads.
+  #
+  # FROM THE BASE'S ORIGIN, not from the pen. [markPos offsets] answers what a
+  # line of text needs - how far the mark sits from the pen it would be drawn
+  # at - and the pen has moved by the advances in between. A Type 3 glyph has
+  # no pen: it is one drawing, and the second picture is placed inside it
+  # relative to the first. So the walk is added back on.
+  #
+  # A CURSIVE OFFSET IS NOT AN ANCHORING, exactly as text.tcl says at
+  # [TextAttached]: a glyph of a joining script stands higher because it hangs
+  # on the exit point of the letter before it, which says nothing about what
+  # it belongs to. Asked separately and taken back out again.
+  method ColorFontAttachments {parsed run} {
+    set empty [lrepeat [llength $run] {}]
+    if {[llength $run] < 2 || [::tclpdf::sfnt table $parsed GPOS] eq {}} {
+      return $empty
+    }
+    package require tclpdf::markPos 1.0-
+    set state [::tclpdf::markPos build $parsed]
+    if {$state eq {}} {
+      return $empty
+    }
+    set glyphs [lmap entry $run {lindex $entry 0}]
+    set offsets [::tclpdf::markPos offsets $state $glyphs {} \
+        [lmap entry $run {lindex $entry 3}]]
+    set cursive [::tclpdf::markPos cursive $state $glyphs]
+    set result {}
+    set index 0
+    foreach offset $offsets {
+      lassign $offset dx dy
+      if {($dx == 0 && $dy == 0) || [lindex $cursive $index] ne {0 0}
+          || $index == 0} {
+        lappend result {}
+        incr index
+        continue
+      }
+      # Back to the base: the previous glyph that is not itself hung on
+      # something, and the advances of everything from it up to here.
+      set base [expr {$index - 1}]
+      while {$base > 0 && [lindex $result $base] ne {}} {
+        incr base -1
+      }
+      for {set at $base} {$at < $index} {incr at} {
+        set dx [expr {$dx + [::tclpdf::sfnt advance $parsed \
+            [lindex $glyphs $at]]}]
+      }
+      lappend result [list $dx $dy]
+      incr index
+    }
+    return $result
+  }
+
+  # The units of a font, each of them once: the key is the TEXT AND THE GLYPH
+  # together, and two glyphs for one text are refused.
+  #
+  # WHY NOT THE TEXT ALONE, which is what this was until the folding above
+  # existed. Two sequences may well reach one glyph - a face that draws the
+  # couple and the couple with a heart the same way - and one Type 3 glyph for
+  # both is right. The reverse was not thought of: ONE text, TWO glyphs.
+  # Apple's kiss is two glyphs of which the second is the man, and the man is
+  # also a sequence of his own, so "the kiss then the man" and "the man then
+  # the kiss" built the two Type 3 glyphs in the other order and the text
+  # "man" drew half a kiss - measured, glyph 3676 against glyph 1193, and the
+  # order in -chars decided which one the reader saw.
+  #
+  # The folding above takes the case away where it came from; the key is the
+  # pair all the same, because a silent choice between two drawings for one
+  # text is exactly the injectivity this package refuses everywhere else - a
+  # name that reaches two resources. Where it happens the caller is told both
+  # glyph numbers, which is what they need to split the call in two.
+  method ColorFontDistinct {units alias} {
+    set seen {}
+    set result {}
+    foreach unit $units {
+      lassign $unit text glyph
+      if {[dict exists $seen $text]} {
+        if {[dict get $seen $text] eq $unit} {
+          continue
+        }
+        set u [join [lmap char [split $text {}] {format U+%04X [scan $char %c]}]]
+        return -code error \
+            -errorcode [list TCLPDF COLORFONT AMBIGUOUS $u $alias] \
+            "tclpdf: -chars reaches the text $u twice and the face draws it\
+            with two different glyphs ([lindex [dict get $seen $text] 1] and\
+            $glyph) - a Type 3 font has one glyph per code, so one of the two\
+            drawings would be lost; name the two in separate colorFont calls\
+            and put both in \[font -fallback\]"
+      }
+      dict set seen $text $unit
+      lappend result $unit
+    }
+    return $result
   }
 
   # Does this character ride along with its neighbour where the face has no
@@ -824,7 +1004,11 @@ oo::define ::tclpdf::document::document {
   # itself, which goes through [ColourUsed] exactly as a rectangle's does, so
   # that a PDF/A document without a matching output intent refuses a colour
   # glyph as it refuses everything else.
-  method ColorFontStream {record alias} {
+  # OFFSET, where it is given, is {dx dy} in FONT UNITS: where inside the
+  # glyph this drawing belongs. What a second glyph folded into the first one
+  # needs ([ColorFontAttachments]), and written after the unit correction so
+  # that it is a shift in the units the operators themselves speak.
+  method ColorFontStream {record alias {offset {}}} {
     set body {}
     # The inverse of [Type3Stream]'s own correction. That one scales POINTS
     # back to glyph units, because a glyph script draws through the document
@@ -834,6 +1018,11 @@ oo::define ::tclpdf::document::document {
     if {$factor != 1.0} {
       set number [::tclpdf::pdfObj num $factor 6]
       append body "$number 0 0 $number 0 0 cm\n"
+    }
+    if {[llength $offset]} {
+      lassign $offset dx dy
+      append body "1 0 0 1 [::tclpdf::pdfObj num $dx 4]\
+          [::tclpdf::pdfObj num $dy 4] cm\n"
     }
     switch -- [dict get $record kind] {
       bitmap {
@@ -884,4 +1073,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFont 1.5
+package provide tclpdf::colorFont 1.6

@@ -1853,4 +1853,143 @@ test graphics-rect-26.1 {a negative size and a rounded corner do not go together
   list [lrange $code 0 3] $empty $drawn
 } -result {{TCLPDF SHAPE ARGUMENT radius} {} {q rg re f Q}}
 
+# --- the eighth review: Nr. 66, the miter hardening, the OPM combination ----
+
+# The CMYK press profile that ships with the package, for the one combination
+# PDF/A forbids outright.
+set graphicsCmykIcc [file join [file dirname [file dirname [file normalize \
+    [info script]]]] icc ISOcoated_v2_bas.ICC]
+testConstraint haveCmykIcc [file exists $graphicsCmykIcc]
+
+test graphics-dash-27.1 {a dash array that is all zeros IN THE FILE is refused} -body {
+  # 8.4.3.6: the lengths "shall be nonnegative and not all zero". The array is
+  # written in points with five decimals (7.3.3), so "-dash {1e-6 1e-6}" -
+  # two numbers plainly above zero to Tcl - went out as "[0 0] 0 d", measured
+  # 2026-08-27, past a check that was looking at the caller's numbers.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc line -from {0 0} -to {50 50} \
+      -stroke black -dash {0.000001 0.000001}}]
+  lappend out [::tclpdfTest::content $doc]
+  # One length that survives the writing is enough - the array may hold
+  # zeros, it may only not be all of them.
+  $doc line -from {0 10} -to {50 10} -stroke black -dash {3 0.000001}
+  lappend out [regexp {\[([-0-9. ]*)\] 0 d} [::tclpdfTest::content $doc] -> array]
+  lappend out $array
+  $doc destroy
+  set out
+} -result {{TCLPDF GRAPHICS ARGUMENT dash} {} 1 {8.50394 0}}
+
+test graphics-miter-27.2 {-miter beyond the PDF real range is this command's own refusal} -body {
+  # It used to walk past both bounds and die one line further down in
+  # [pdfObj num] under TCLPDF PDFOBJ NUMBER - the last line of defence
+  # answering for a value this call had already read. Measured 2026-08-27.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc line -from {0 0} -to {50 50} \
+      -stroke black -miter 1e39}]
+  lappend out [::tclpdfTest::refusal {$doc line -from {0 0} -to {50 50} \
+      -stroke black -miter 0.5}]
+  lappend out [::tclpdfTest::content $doc]
+  $doc destroy
+  set out
+} -result {{TCLPDF GRAPHICS ARGUMENT miter} {TCLPDF GRAPHICS ARGUMENT miter} {}}
+
+test graphics-pattern-27.3 {a tile whose BBox or step would be zero in the file} -body {
+  # Table 95 for the /BBox, Table 75 for the steps ("XStep and YStep ... shall
+  # not be zero"). "-size {1e-6 1e-6}" wrote "/BBox [0 0 0 0]" with
+  # "/XStep 0 /YStep 0" beside it and "-step {1e-6 4}" wrote "/XStep 0" -
+  # measured 2026-08-27, valid files that paint nothing.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc pattern create tiny \
+      -size {0.000001 0.000001} -script {}}]
+  lappend out [::tclpdfTest::refusal {$doc pattern create stepless -size {4 4} \
+      -step {0.000001 4} -script {}}]
+  lappend out [::tclpdfTest::refusal {$doc pattern create stepless2 -size {4 4} \
+      -step {4 -0.000001} -script {}}]
+  # A negative step is legal and stays legal - Table 75 forbids zero, not the
+  # sign - and a size the file can hold is untouched.
+  lappend out [$doc pattern create hatch -size {4 4} -step {4 -4} -script {}]
+  lappend out [$doc pattern names]
+  $doc destroy
+  set out
+} -result {{TCLPDF PATTERN ARGUMENT size} {TCLPDF PATTERN STEP X} {TCLPDF PATTERN STEP Y} hatch hatch}
+
+test graphics-overprint-27.4 {PDF/A forbids an overprinted ICC CMYK fill at mode 1} \
+    -constraints {haveCmykIcc haveTdom} -body {
+  # ISO 19005-2 and -3, 6.2.4.2, reported by veraPDF as 6.2.4.2-2: the OPM
+  # "shall not be 1 when an ICCBased CMYK colour space is used for fill and
+  # overprinting for fill is set to true". Measured 2026-08-27: the file went
+  # out with isCompliant="false" and nothing in the package had a word to say
+  # - neither half is wrong on its own, which is what made it a combination.
+  # Refused at the WRITE, which is what the manual promises of every PDF/A
+  # refusal and the only way to catch both orders.
+  set out {}
+  foreach order {claim-first claim-last} {
+    set doc [tclpdf new -format {100 100}]
+    if {$order eq "claim-first"} {
+      $doc pdfa -part 3 -conformance B -profile $::graphicsCmykIcc
+    }
+    $doc icc embed press $::graphicsCmykIcc
+    $doc page add
+    $doc overprint -mode 1 -fill 1
+    $doc rect -at {10 10} -size {50 50} -fill {icc press 0 1 1 0}
+    if {$order eq "claim-last"} {
+      $doc pdfa -part 3 -conformance B -profile $::graphicsCmykIcc
+    }
+    lappend out [::tclpdfTest::writes $doc overprint-icc-$order.pdf]
+    $doc destroy
+  }
+  set out
+} -result {{1 0} {1 0}}
+
+test graphics-overprint-27.5 {and the three near misses are written} \
+    -constraints {haveCmykIcc haveTdom} -body {
+  # The counter-measurement, so the refusal cannot be a blanket one: the same
+  # colour without the overprint, the same overprint at mode 0, and the same
+  # combination with the mode taken back by a [restore] are all conformant -
+  # veraPDF says PASS to each of them, measured 2026-08-27.
+  set out {}
+  set doc [tclpdf new -format {100 100}]
+  $doc pdfa -part 3 -conformance B -profile $::graphicsCmykIcc
+  $doc icc embed press $::graphicsCmykIcc
+  $doc page add
+  $doc overprint -mode 1 -fill 0
+  $doc rect -at {10 10} -size {20 20} -fill {icc press 0 1 1 0}
+  lappend out [::tclpdfTest::writes $doc overprint-icc-off.pdf]
+  $doc destroy
+  set doc [tclpdf new -format {100 100}]
+  $doc pdfa -part 3 -conformance B -profile $::graphicsCmykIcc
+  $doc icc embed press $::graphicsCmykIcc
+  $doc page add
+  $doc overprint -mode 0 -fill 1
+  $doc rect -at {10 10} -size {20 20} -fill {icc press 0 1 1 0}
+  lappend out [::tclpdfTest::writes $doc overprint-icc-mode0.pdf]
+  $doc destroy
+  set doc [tclpdf new -format {100 100}]
+  $doc pdfa -part 3 -conformance B -profile $::graphicsCmykIcc
+  $doc icc embed press $::graphicsCmykIcc
+  $doc page add
+  $doc save
+  $doc overprint -mode 1 -fill 1
+  $doc restore
+  $doc rect -at {10 10} -size {20 20} -fill {icc press 0 1 1 0}
+  lappend out [::tclpdfTest::writes $doc overprint-icc-restored.pdf]
+  $doc destroy
+  # And a device CMYK fill under the same overprint: the space is what the
+  # clause is about.
+  set doc [tclpdf new -format {100 100}]
+  $doc pdfa -part 3 -conformance B -profile $::graphicsCmykIcc
+  $doc page add
+  $doc overprint -mode 1 -fill 1
+  $doc rect -at {10 10} -size {20 20} -fill {cmyk 0 1 1 0}
+  lappend out [::tclpdfTest::writes $doc overprint-device.pdf]
+  $doc destroy
+  set out
+} -result {{0 1} {0 1} {0 1} {0 1}}
+
 cleanupTests

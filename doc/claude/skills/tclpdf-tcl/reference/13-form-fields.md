@@ -286,11 +286,13 @@ $doc field text silent -rect {20 20 80 7}
 $doc ua 1
 if {[catch {$doc write [file join $out ref-13-refused.pdf]} message]} {
     puts "ua: $message"
+} else {
+    puts "a field with no -tooltip under ua: NOT REFUSED"
 }
 $doc destroy
 ```
 
-`-label {script}` draws the widget's own label into its own `Form` element, as the `Lbl` that ISO 14289-2, 8.10.2.2 puts there - "a direct descendent of a Form structure element that also includes the object reference to the widget annotation". It runs in the caller's scope and before the object reference, the order of `/K` being the reading order. **It needs a PDF 2.0 file** (`ua -part 2` gives one): ISO 32000-1, Table 340 gave a `Form` "only one child: an object reference identifying the widget annotation", and veraPDF still holds a 1.7 file to it. A UA-1 document describes its widgets with `-contents` instead, and a label for a whole radio group is a `structure Lbl` beside the field either way.
+`-label {script}` draws the widget's own label into its own `Form` element, as the `Lbl` that ISO 14289-2, 8.10.2.2 puts there - "a direct descendent of a Form structure element that also includes the object reference to the widget annotation". It runs in the caller's scope and before the object reference, the order of `/K` being the reading order. **It needs a PDF 2.0 file** (`ua -part 2` gives one): ISO 32000-1, Table 340 gave a `Form` "only one child: an object reference identifying the widget annotation", and veraPDF still holds a 1.7 file to it. **And it needs `tagged 1`**: in an untagged document there is no `Form` element to put a `Lbl` in, so the script is not run at all - the page stays empty and nothing is said. A 1.7 document without `tagged 1` is refused for the version, a 2.0 one without it is not refused at all, which is why the tagged call is the one to copy. A UA-1 document describes its widgets with `-contents` instead, and a label for a whole radio group is a `structure Lbl` beside the field either way.
 
 ```tcl
 # A PDF 2.0 document, so that -label may be used at all.
@@ -320,7 +322,21 @@ if {[catch {$doc field text email -rect {60 20 110 7} -label {
         $doc text "E-Mail" -at {20 21.5}
     }} message options]} {
     puts "label below 2.0: [dict get $options -errorcode]"
+} else {
+    puts "label below 2.0: NOT REFUSED"
 }
+$doc destroy
+
+# A 2.0 document WITHOUT [tagged 1] is the quiet case, and it is the reason
+# the sentence above says both things: the call is taken, the script never
+# runs, the page stays empty, and no message is printed anywhere.
+set doc [tclpdf new -unit mm -version 2.0]
+$doc page add
+$doc field text email -rect {60 20 110 7} -label {
+    $doc text "E-Mail" -at {20 21.5}
+}
+puts "untagged 2.0, the label script ran:\
+    [expr {[string match {*E-Mail*} [$doc page content]] ? "yes" : "no"}]"
 $doc destroy
 ```
 
@@ -373,6 +389,8 @@ $doc field button clear -rect {20 20 40 8} -caption "Leeren" -action reset \
 $doc pdfa -part 3 -conformance B -profile $iccRgb -identifier "sRGB IEC61966-2.1"
 if {[catch {$doc write [file join $out ref-13-pdfa-refused.pdf]} message options]} {
     puts "pdfa + reset: [dict get $options -errorcode]"
+} else {
+    puts "a reset button under pdfa: NOT REFUSED"
 }
 # The refused write leaves NO file behind, so the same script may drop the
 # button and write again to the same name.
@@ -416,7 +434,7 @@ puts "after the refusals the document holds: [$doc field list]"
 $doc destroy
 ```
 
-**Three of the field refusals fall at the write rather than at the call**, and they are the ones that depend on something the call cannot know yet: the page a widget names does not exist, the rectangle lies entirely beside that page, and the PDF/A claim above. A `-rect` is checked for being four numbers a PDF can hold and for having an area at the call; where it *lands* is a question for the page, and the page may be added later.
+**Four of the field refusals fall at the write rather than at the call**, and they are the ones that depend on something the call cannot know yet: the page a widget names does not exist, the rectangle lies entirely beside that page, a reset button's `-fields` names a field the document never got, and the PDF/A claim above. A `-rect` is checked for being four numbers a PDF can hold and for having an area at the call; where it *lands* is a question for the page, and the page may be added later. The reset button waits for the same reason: it may name a field that is declared after it.
 
 ```tcl
 set doc [tclpdf new -unit mm]
@@ -427,7 +445,23 @@ $doc field text later -rect {20 20 80 7} -page 4
 if {[catch {$doc write [file join $out ref-13-outside.pdf]} message options]} {
     puts "at the write: [dict get $options -errorcode]"
     puts "             [string range $message 0 120]..."
+} else {
+    puts "at the write: NOT REFUSED"
 }
+$doc destroy
+
+# The fourth one, in a document of its own so that its code is the one that
+# answers: a reset button naming a field the document never got.
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc field button clear -rect {20 40 40 8} -caption "Leeren" -action reset \
+    -fields {ghost}
+if {[catch {$doc write [file join $out ref-13-ghost.pdf]} message options]} {
+    puts "at the write: [dict get $options -errorcode]"
+} else {
+    puts "a reset button naming no field: NOT REFUSED"
+}
+puts "file left behind: [file exists [file join $out ref-13-ghost.pdf]]"
 $doc destroy
 ```
 
@@ -573,8 +607,10 @@ try {
 }
 # [pdf info] answers an encrypted file rather than refusing it - but only out
 # of the trailer and the cross reference: "form" and every other key that
-# would have to be read out of the catalogue stays EMPTY, "none" being what
-# the key holds when nothing was read.
+# would have to be read out of the catalogue stays EMPTY - the empty string,
+# not "none". "none" is what the key holds when the catalogue WAS read and
+# carries no /AcroForm, so the three values of "form" are {} (nothing read),
+# none, and AcroForm or XFA.
 set facts [::tclpdf::pdf info [file join $out ref-13-locked.pdf]]
 puts "locked: encrypted [dict get $facts encrypted],\
     [dict get $facts encryption], form [dict get $facts form]"
@@ -595,4 +631,4 @@ Measured against two other readers over 65 documents and 703 fields - 56 foreign
 - **The reset action is the only form action written.** Submit needs a server, import-data a reader's file dialogue, and an ECMAScript action has its effects defined in ISO/DIS 21757-1 rather than in the PDF standard - so calculated fields do not exist here: compute the value in the script and write it as `-value`.
 - **Reading a form back is `::tclpdf::pdf fields`**, a package command taking a path rather than a document method, from the module `tclpdf::importInfo`: one dictionary per field, every key always there, `type` in the same words `field` takes (plus `signature`), `flags` as a list of names rather than the `/Ff` integer, `selected` as the export values in force, `widgets` one entry per annotation with the file's own `/Rect`. A file with no `/AcroForm` answers the empty list; an encrypted file and an XFA form without `-xfa 1` are refused with `TCLPDF IMPORT`.
 - **Not built, and named rather than half written**: XFA (and `/DS`, `/RV`, RichText), ECMAScript and calculated fields, submit-form and import-data, the icon entries of Table 192, and `/NeedAppearances`.
-- **`trap {TCLPDF FIELD}`** catches every field refusal that carries a code (a misspelt option *name* is refused by the shared option parser under `TCLPDF OPTION UNKNOWN`, here as everywhere); the button types put their word after `TCLPDF FIELD BUTTON`. Most of them fall at the call and leave nothing behind; three fall at the **write** - `TCLPDF FIELD PAGE` for a page that never came, `TCLPDF FIELD RECT OUTSIDE` for a widget entirely beside its page, and `TCLPDF FIELD BUTTON PDFA` - and a refused write leaves no file. A version floor answers `TCLPDF VERSION` with the version to raise the document to.
+- **`trap {TCLPDF FIELD}`** catches every field refusal that carries a code (a misspelt option *name* is refused by the shared option parser under `TCLPDF OPTION UNKNOWN`, here as everywhere); the button types put their word after `TCLPDF FIELD BUTTON`. Most of them fall at the call and leave nothing behind; **four** fall at the **write** - `TCLPDF FIELD PAGE` for a page that never came, `TCLPDF FIELD RECT OUTSIDE` for a widget entirely beside its page, `TCLPDF FIELD BUTTON FIELDS` for a reset button whose `-fields` names a field the document never got, and `TCLPDF FIELD BUTTON PDFA` - and a refused write leaves no file. A version floor answers `TCLPDF VERSION` with the version to raise the document to.

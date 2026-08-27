@@ -34,12 +34,13 @@
 # carries the same point - a face with more glyphs than a Latin one has
 # characters.
 #
-# WHAT DOES NOT WORK, and it is worth knowing before reaching for it: a COLOUR
-# font. Noto Color Emoji is 24.5 MB and comes out EMPTY - its glyphs carry no
-# outlines at all, the picture lives in COLR layers referencing a palette, and
-# subsetting keeps neither. The monochrome Noto Emoji on this page is the one
-# that draws. Measured, not assumed: the colour face embeds without complaint
-# and renders as nothing.
+# WHAT DOES NOT GO DOWN THIS ROAD, and it is worth knowing before reaching for
+# it: a COLOUR font. Noto Color Emoji is 25 MB of pictures and no outlines at
+# all - the drawing lives in COLR layers referencing a palette, and subsetting
+# keeps neither. Measured, not assumed: [font embed] REFUSES the face by name,
+# TCLPDF FONT OUTLINES, rather than writing 25 MB that render as nothing. The
+# monochrome Noto Emoji on this page is the face that draws here; the colour
+# one is drawn by [colorFont] instead, in 02.14, 02.17 and 02.18.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -211,9 +212,10 @@ foreach {alias file what line} $faces {
 # Thin" and a visibly thin line. Not a mistake in the label: a variable font
 # carries one set of outlines plus a rule for bending them, and what gets
 # embedded is the DEFAULT instance - measured, this family defaults to
-# wght 100, not 400. Regular exists in it as a named instance, but reaching a
-# named instance means computing outlines, which this package does not do yet.
-# The static Regular is 5.2 MB against 8.7 MB for the variable file, so it is
+# wght 100, not 400. Regular exists in it as a named instance and [font embed]
+# -instance reaches it - the Bold further down this script is exactly that, and
+# 02.10 is a whole example about it. The static file is simply the cheaper
+# answer here: 5.2 MB against 8.7 MB for the variable one, so it is
 # the cheaper answer as well.
 
 # -- where this package stops --------------------------------------------------
@@ -975,9 +977,11 @@ set y [expr {$y + 7}]
 $doc font -family sans -size 8 -color {0.35 0.35 0.35}
 set y [$doc text "Noto Color Emoji is not on this page, and not by oversight. Its\
     glyphs carry no outlines: the picture is a stack of COLR layers over a\
-    palette, and subsetting keeps neither. tclpdf embeds the face without\
-    complaining and the page comes out empty - 24.5 MB for nothing. The\
-    monochrome Noto Emoji above is the one that draws." \
+    palette, and subsetting keeps neither. So \[font embed\] refuses the face\
+    by name - TCLPDF FONT OUTLINES - rather than writing 25 MB that come out\
+    empty. The monochrome Noto Emoji above is the face that draws this way,\
+    and \[colorFont\] in 02.14, 02.17 and 02.18 is the road for the colour\
+    one." \
     -at [list 20 $y] -width 170]
 
 # -- what it costs -----------------------------------------------------------
@@ -986,13 +990,6 @@ set y [expr {$y + 8}]
 $doc font -family sans -size 11 -color black
 $doc text "What a face costs in the document" -at [list 20 $y]
 set y [expr {$y + 7}]
-
-$doc font -family sans -size 8 -color {0.35 0.35 0.35}
-$doc text "The file size is read off the font, the glyph count out of the\
-    document. A face is only ever as big as what it draws - which is what\
-    makes eleven of them on one page reasonable at all." \
-    -at [list 20 $y] -width 170
-set y [expr {$y + 12}]
 
 set rows {}
 foreach {alias file what line} $faces {
@@ -1012,6 +1009,16 @@ foreach {alias file what} {
       [format "%.1f MB" [expr {[file size [file join $fonts $file]] / 1048576.0}]] \
       [dict get [$doc font info $alias] glyphs]]
 }
+
+$doc font -family sans -size 8 -color {0.35 0.35 0.35}
+# [llength $rows], not a typed-out number: the tally used to say "eleven" while
+# the table under it had thirteen lines, because a face was added and the
+# sentence was not.
+$doc text "The file size is read off the font, the glyph count out of the\
+    document. A face is only ever as big as what it draws - which is what\
+    makes [llength $rows] of them on one page reasonable at all." \
+    -at [list 20 $y] -width 170
+set y [expr {$y + 12}]
 
 $doc font -family sans -size 8 -color black
 set y [$doc table -at [list 20 $y] -width 170 -theme grid \

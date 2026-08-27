@@ -119,6 +119,49 @@ oo::define ::tclpdf::document::document {
             covers"
       }
     }
+    # NOT INSIDE A FORM, A TILE OR THE PAGE-NUMBER XOBJECT. An annotation
+    # belongs to a PAGE and its /Rect is in the page's default user space
+    # (ISO 32000-2 12.5.2) - a content stream of its own has neither. Drawn
+    # inside [form create] the rectangle was computed against the form's
+    # height and then hung on the page: measured 2026-08-27, a link at {5 5}
+    # in a 50x20 mm form placed at {100 100} came out in the bottom left
+    # corner of the page, where nothing is drawn, and a second [form place]
+    # did not give it a second rectangle either.
+    #
+    # Refused early and with nothing written yet, in the words [annot] uses
+    # for the same mistake (TCLPDF ANNOT PLACE form): the caller means a
+    # clickable area over the form, and the way to that is to place the form
+    # first and lay the link over where it landed.
+    #
+    # Measured on the STREAM IDENTITY, not on the marking switch: [canvas id]
+    # answers {stream <serial>} for a form XObject, a tiling pattern and the
+    # page-number XObject and {page <index>} for a page (page.tcl), while
+    # structureSuspend is also set by a table drawing a pagination artifact -
+    # where a link is perfectly legitimate.
+    if {[lindex [my canvas id] 0] eq "stream"} {
+      return -code error -errorcode [list TCLPDF LINK PLACE form] \
+          "tclpdf: a link cannot be placed inside a form; place\
+          it on the page after form place - an annotation belongs to a page\
+          and its rectangle is in the page's coordinates (ISO 32000-2\
+          12.5.2), which a form, a pattern or a page-number XObject does not\
+          have"
+    }
+    # WHERE THIS LINK GOES, as one comparable value. Two link annotations
+    # may share a Link structure element only while they go to the SAME
+    # place (ISO 14289-2 8.2.5.20, Examples 2 and 3), so the target has to be
+    # something two links can be held against each other by - which the
+    # serialised action dictionary is not, and the raw -url is not either
+    # (the same address written twice with a different escape is one target).
+    # The URI is normalised the way it is written, by [LinkUri].
+    if {[dict get $options url] ne {}} {
+      set target [list url [my LinkUri [dict get $options url]]]
+    } elseif {[dict get $options structure] ne {}} {
+      set target [list structure [dict get $options structure]]
+    } else {
+      set target [list page [dict get $options page] \
+          [dict get $options to] [dict get $options zoom]]
+    }
+    my LinkTargetGuard $target
     # Annotation flags (/F) and actions (/A, the URI link) are PDF 1.1
     # (Reference 1.7, Table 8.15 and 8.5); a 1.0 file has neither.
     my RequireVersion 1.1 "link"
@@ -172,8 +215,97 @@ oo::define ::tclpdf::document::document {
     # Remembered as a record - see [LinkRecord], which says why the two UA
     # questions may not be put to the serialised dictionary.
     my LinkRecord [my page current] $number \
-        [expr {[dict get $options tooltip] ne {}}]
+        [expr {[dict get $options tooltip] ne {}}] $target
     return $number
+  }
+
+  # ONE TARGET PER Link ELEMENT, refused before the second annotation is
+  # written - but only where the claim that asks for it already stands.
+  #
+  # ISO 14289-2 8.2.5.20: "Link annotations that target different locations
+  # shall be in separate Link or Reference structure elements". The same
+  # clause allows several annotations that go to the same place, which is
+  # the ordinary case - an icon and the word beside it, two lines of a
+  # wrapped link - so it is the TARGETS that are counted, not the
+  # annotations. A reader announces one link and would otherwise have two
+  # places to follow it to.
+  #
+  # Said at the call when [ua -part 2] has already been claimed, and at the
+  # write otherwise ([UaCheckLinks]): a claim made after the drawing cannot
+  # be refused at a call that has already happened, and the write is where
+  # this package makes good on every promise it took on late.
+  method LinkTargetGuard {target} {
+    if {[my state tagged] ne "1" || [my state ua] eq {}
+        || [dict get [my state ua] part] != 2} {
+      return
+    }
+    set element [my StructureCurrent]
+    if {$element eq {}} {
+      return
+    }
+    set type [dict get [lindex [my state structure] $element] type]
+    if {$type ni {Link Reference}} {
+      return
+    }
+    foreach other [my LinkTargetsIn $element] {
+      if {$other eq $target} {
+        continue
+      }
+      return -code error -errorcode [list TCLPDF LINK PLACE target] \
+          "tclpdf: this $type structure element already holds a\
+          link to another target - PDF/UA-2 wants link annotations that go to\
+          different places in separate Link or Reference elements (8.2.5.20),\
+          because a reader announces the element once. Close the $type and\
+          open a second one around the second link"
+    }
+    return
+  }
+
+  # The distinct targets of the link annotations that joined one structure
+  # element. The one place that answers it: [LinkTargetGuard] asks it of the
+  # element that is open, [linksSharingElement] of every element in the tree.
+  method LinkTargetsIn {element} {
+    set targets {}
+    dict for {page links} [my state links] {
+      foreach link $links {
+        set owner [my StructureAnnotationElement [dict get $link number]]
+        if {[lindex $owner 0] ne $element} {
+          continue
+        }
+        if {[dict get $link target] ni $targets} {
+          lappend targets [dict get $link target]
+        }
+      }
+    }
+    return $targets
+  }
+
+  # Which Link or Reference structure elements hold link annotations with
+  # more than one target, as {page type count} - the fact behind ISO 14289-2
+  # 8.2.5.20, established here and judged by ua.tcl, exactly as
+  # [linksWithoutContents] and [linksWithoutElement] are. The page is the one
+  # the FIRST of the links sits on, which is where the caller has to look.
+  method linksSharingElement {types} {
+    if {[my state tagged] ne "1"} {
+      return {}
+    }
+    set seen {}
+    set problems {}
+    dict for {page links} [my state links] {
+      foreach link $links {
+        set owner [my StructureAnnotationElement [dict get $link number]]
+        lassign $owner element type
+        if {$element eq {} || $type ni $types || [dict exists $seen $element]} {
+          continue
+        }
+        dict set seen $element 1
+        set targets [my LinkTargetsIn $element]
+        if {[llength $targets] > 1} {
+          lappend problems [list [expr {$page + 1}] $type [llength $targets]]
+        }
+      }
+    }
+    return $problems
   }
 
   # Which link annotations carry no Contents, by page. Empty when every one
@@ -250,9 +382,16 @@ oo::define ::tclpdf::document::document {
   # nothing about what it points at. So the module that makes the links keeps
   # the list of the links - page -> list of {number N described 0|1} - which
   # is also all ua.tcl needs to know that a document has any at all.
-  method LinkRecord {page number described} {
+  # TARGET is the third fact, and it is kept for the same reason as the other
+  # two: where a link goes is known here and nowhere else afterwards. A page
+  # destination that points forward is an indirect reference by the time the
+  # dictionary is written, and a structure destination is an action naming
+  # two reserved objects - neither says which page or which element the
+  # caller asked for. See [LinkTargetGuard] for what the value looks like.
+  method LinkRecord {page number described target} {
     set links [my state links]
-    dict lappend links $page [dict create number $number described $described]
+    dict lappend links $page [dict create number $number \
+        described $described target $target]
     my state links $links
     return
   }
@@ -290,4 +429,4 @@ oo::define ::tclpdf::document::document {
   # that a document without links costs nothing.
 }
 
-package provide tclpdf::link 1.8
+package provide tclpdf::link 1.9

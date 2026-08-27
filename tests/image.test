@@ -1588,14 +1588,30 @@ test image-stencil-18.6 {a picture that cannot be one bit per sample is refused}
       "\x00\x40"] -stencil 1} m1]
   # a JPEG: DCTDecode always delivers 8-bit samples (Table 87)
   lappend answers [catch {$doc image embed b $photo -stencil 1} m2]
-  # 1 bit, but three samples per pixel
+  # 1 bit, but three samples per pixel. CORRECTED on 2026-08-27: the fixture
+  # this case used to hand in was not a PNG at all - PNG 11.2.2 writes
+  # truecolour at 8 or 16 bits and never at 1 - and the reader now says so at
+  # the IHDR, before -stencil is ever weighed. The case measures what a
+  # caller really gets, and the sentence about one sample per pixel is
+  # measured where it can still be reached, in image-stencil-18.8.
   lappend answers [catch {$doc image embed c -data [::tclpdfTest::png 1 1 1 2 \
       "\x00\x80"] -stencil 1} m3]
   $doc destroy
   list $answers [string match {*one bit per sample*carries 8*1-bit image*} $m1] \
       [string match {*DCTDecode*1-bit PNG, not a JPEG*} $m2] \
-      [string match {*one sample per pixel*colour type 2*} $m3]
+      [string match {*1 bits per sample at colour type 2*11.2.2*} $m3]
 } -result {{1 1 1} 1 1 1}
+
+test image-stencil-18.8 {the colour-type half of the stencil refusal} -body {
+  # [stencilInk] asks two questions in turn - one bit per sample, then one
+  # sample per pixel - and since 2026-08-27 no FILE can reach the second:
+  # the three colour types with more than one sample are written at 8 or 16
+  # bits (PNG 11.2.2) and are turned away at the first. The sentence is kept
+  # all the same, in the manner of the neighbouring guards, and is measured
+  # here by asking the reader directly what no reader will hand it.
+  ::tclpdf::imagePng stencilInk [dict create bitDepth 1 colorType 2 \
+      channels [::tclpdf::imagePng channels 2]]
+} -returnCodes error -match glob -result {*one sample per pixel*colour type 2*}
 
 test image-stencil-18.7 {a stencil records no colour space, so a CMYK intent admits it} \
     -constraints {haveCmykIcc haveTdom} -body {
@@ -3756,5 +3772,315 @@ test image-icc-17.15 {both refusals about a profile carry the same class} -body 
   $doc destroy
   set codes
 } -result {{TCLPDF IMAGE ICC} {TCLPDF IMAGE ICC} 0}
+
+# --- Runde 8: what the bytes of a picture decide -----------------------------
+#
+# The four findings of the norm review of 2026-08-27 that the bild modules
+# had to answer, and the hardenings beside them. What they have in common is
+# that no validator sees any of them: every file below is structurally
+# perfect and shows, or refuses, the wrong thing.
+
+# The two 80-byte PNGs of the review's probe: a red 8x8 square and a blue one,
+# each with six bytes of padding after IEND chosen so that both agree on the
+# length AND on the 32-bit djb2 checksum the cache used to key data on.
+# Carried as literal bytes because the collision is what the case is about
+# and searching for a fresh one at test time would take longer than the whole
+# file does.
+proc collidingRed {} {
+  return [binary format H* 89504e470d0a1a0a0000000d49484452000000080000000808020000004b6d29dc000000114944415478da63f8cfc08015310c2d090028ff3fc1ce77c84f0000000049454e44ae42608254ddb144325d]
+}
+proc collidingBlue {} {
+  return [binary format H* 89504e470d0a1a0a0000000d49484452000000080000000808020000004b6d29dc000000104944415478da636060f88f030d290900a9703fc1fccb45fc0000000049454e44ae42608200d2cb01f62109]
+}
+
+# A JPEG built for its MARKERS. Nothing in this package decodes JPEG data -
+# the bytes are passed through into a /DCTDecode stream - so a file that
+# holds a frame header, the markers before it and the start of a scan is
+# every JPEG these cases need. "ids" are the component identifiers of the
+# frame header, "jfif" writes an APP0 and "adobe" an APP14 with that
+# transform flag; the three of them together are what decides how the
+# samples are coded.
+proc jpegFile {{ids {1 2 3}} {jfif 0} {adobe {}}} {
+  set out "\xff\xd8"
+  if {$jfif} {
+    set body "JFIF\x00\x01\x02\x01\x00\x48\x00\x48\x00\x00"
+    append out "\xff\xe0[binary format Su [expr {[string length $body] + 2}]]$body"
+  }
+  if {$adobe ne {}} {
+    set body "Adobe\x00\x64\x00\x00\x00\x00[binary format cu $adobe]"
+    append out "\xff\xee[binary format Su [expr {[string length $body] + 2}]]$body"
+  }
+  set frame [binary format cuSuSucu 8 2 2 [llength $ids]]
+  foreach id $ids {
+    append frame [binary format cucucu $id 0x11 0]
+  }
+  append out "\xff\xc0[binary format Su [expr {[string length $frame] + 2}]]$frame"
+  set scan [binary format cu [llength $ids]]
+  foreach id $ids {
+    append scan [binary format cucu $id 0]
+  }
+  append scan "\x00\x3f\x00"
+  append out "\xff\xda[binary format Su [expr {[string length $scan] + 2}]]$scan"
+  return "$out\x00\x00\x00\x00\xff\xd9"
+}
+
+test image-data-27.1 {two pictures that share a digest are two pictures} -body {
+  # THE BYTES ARE THE KEY, which is what the manual says of the -data road.
+  # Before 2026-08-27 the key was the length and a 32-bit djb2 checksum, and
+  # these two files agree on both: the second [image draw] was answered out
+  # of the cache and the page carried the red square twice. qpdf and veraPDF
+  # have nothing to say about it - the document is perfect and shows the
+  # wrong picture.
+  set red [collidingRed]
+  set blue [collidingBlue]
+  set doc [tclpdf new -unit pt -format {200 120} -compress 0]
+  $doc page add
+  $doc image draw -data $red -at {10 10} -size {80 80}
+  $doc image draw -data $blue -at {110 10} -size {80 80}
+  set names [$doc image names]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # same length, same digest, different bytes - and so two aliases and two
+  # XObjects named in the stream
+  list [expr {[string length $red] == [string length $blue]}] \
+      [expr {$red eq $blue}] [llength $names] \
+      [llength [lsort -unique [regexp -all -inline {/Im\d+ Do} $content]]]
+} -result {1 0 2 2}
+
+test image-data-27.2 {the same bytes twice are still one picture} -body {
+  # The other half of the promise: the cache is what keeps a picture drawn
+  # twice from travelling twice, and comparing the bytes must not cost that.
+  set doc [tclpdf new -unit pt -format {200 120} -compress 0]
+  $doc page add
+  $doc image draw -data [collidingRed] -at {10 10} -size {80 80}
+  $doc image draw -data [collidingRed] -at {110 10} -size {80 80}
+  set names [$doc image names]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [llength $names] \
+      [llength [lsort -unique [regexp -all -inline {/Im\d+ Do} $content]]] \
+      [regexp -all {/Im\d+ Do} $content]
+} -result {1 1 2}
+
+test image-data-27.3 {a file name and -data together are refused} -body {
+  # [font embed] has said so since it was written; [image embed] took the
+  # file and dropped the bytes without a word, and [image info] then named a
+  # path the caller had not meant. Both roads in ask the same question now.
+  set doc [tclpdf new]
+  $doc page add
+  set codes {}
+  lappend codes [::tclpdfTest::refusalCode {
+      $doc image embed a $indexed -data [collidingRed]}]
+  lappend codes [::tclpdfTest::refusalCode {
+      $doc image draw $indexed -data [collidingRed] -at {10 10} -width 10}]
+  # and either one alone is still taken
+  lappend codes [catch {$doc image embed b -data [collidingRed]}]
+  lappend codes [catch {$doc image embed c $indexed}]
+  $doc destroy
+  set codes
+} -result {{TCLPDF IMAGE ARGUMENT source} {TCLPDF IMAGE ARGUMENT source} 0 0}
+
+test image-jpeg-27.4 {an RGB-coded JPEG says so with /DecodeParms} -body {
+  # ISO 32000-2, Table 13: with no Adobe marker in the data and no entry in
+  # the filter dictionary, ColorTransform defaults to 1 for a three-component
+  # image - so the reader converts YCbCr to RGB over samples that are already
+  # RGB. Measured 2026-08-27 with Quartz on a cjpeg -rgb file whose APP14 had
+  # been removed: red came out (134,252,82). poppler guesses from the frame
+  # header and is right by luck; the file has to say it.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed rgb -data [jpegFile {82 71 66}]
+  $doc image embed ycc -data [jpegFile {1 2 3}]
+  $doc image place rgb -at {10 10} -width 10
+  $doc image place ycc -at {10 40} -width 10
+  set path [::tclpdfTest::scratch jpeg-transform.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/DecodeParms << /ColorTransform 0 >>} $bytes] \
+      [regexp -all {/DCTDecode} $bytes]
+} -result {1 2}
+
+test image-jpeg-27.5 {which marker decides the colour transform} -body {
+  # The order libjpeg's [default_decompress_parms] reads them in, and the
+  # order every decoder in the field follows: JFIF outranks Adobe, Adobe
+  # outranks the component identifiers, and an unknown set of identifiers
+  # falls back on the default the table already gives.
+  set out {}
+  foreach {label ids jfif adobe} [list \
+      "ids RGB, no marker"     {82 71 66} 0 {}  \
+      "ids YCbCr, no marker"   {1 2 3}    0 {}  \
+      "ids unknown, no marker" {0 1 2}    0 {}  \
+      "JFIF over RGB ids"      {82 71 66} 1 {}  \
+      "Adobe transform 0"      {1 2 3}    0 0   \
+      "Adobe transform 1"      {82 71 66} 0 1   \
+      "JFIF over Adobe 0"      {1 2 3}    1 0   ] {
+    set parsed [::tclpdf::imageJpeg parse [jpegFile $ids $jfif $adobe]]
+    lappend out $label [::tclpdf::imageJpeg colourTransform $parsed]
+  }
+  # and neither a greyscale nor a CMYK file is asked at all
+  lappend out "one component" [::tclpdf::imageJpeg colourTransform \
+      [::tclpdf::imageJpeg parse [jpegFile 1]]]
+  lappend out "four components" [::tclpdf::imageJpeg colourTransform \
+      [::tclpdf::imageJpeg parse [jpegFile {1 2 3 4} 0 2]]]
+  set out
+} -result {{ids RGB, no marker} 0 {ids YCbCr, no marker} {} {ids unknown, no marker} {}\
+ {JFIF over RGB ids} {} {Adobe transform 0} 0 {Adobe transform 1} {}\
+ {JFIF over Adobe 0} {} {one component} {} {four components} {}}
+
+test image-jpeg-27.6 {the inline road carries the same entry} -body {
+  # An inline image is the same picture written in a different place, so it
+  # is the same dictionary - abbreviated by Table 92, where DecodeParms is
+  # /DP. The parameter inside it keeps its full name: the table abbreviates
+  # the entries of the image dictionary, not the parameters of a filter.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image draw -data [jpegFile {82 71 66}] -at {10 10} -width 10 -inline 1
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {/DP << /ColorTransform 0 >>} $content] \
+      [regexp {/DecodeParms} $content]
+} -result {1 0}
+
+test image-jpeg-27.7 {a frame header shorter than itself is a damaged JPEG} -body {
+  # [binary scan] leaves the variables it cannot fill untouched, so a SOF0
+  # whose length field says four bytes set "precision" and nothing else, and
+  # the next line answered "can't read \"width\": no such variable" with
+  # -errorcode {TCL READ VARNAME}. Every refusal this package makes carries a
+  # TCLPDF code (manual, "Errors").
+  set short "\xff\xd8\xff\xc0\x00\x04\x08\x00\xff\xd9"
+  set codes [list [::tclpdfTest::refusalCode {::tclpdf::imageJpeg parse $short}]]
+  # and one long enough for the six fixed bytes but not for its components
+  set body [binary format cuSuSucu 8 2 2 3]
+  append body [binary format cucucu 1 0x11 0]
+  set cut "\xff\xd8\xff\xc0[binary format Su [expr {[string length $body] + 2}]]$body\xff\xd9"
+  lappend codes [::tclpdfTest::refusalCode {::tclpdf::imageJpeg parse $cut}]
+  set codes
+} -result {{TCLPDF IMAGE JPEG DAMAGED frame} {TCLPDF IMAGE JPEG DAMAGED frame}}
+
+test image-parse-27.8 {a bit depth its colour type does not have is refused} -body {
+  # PNG 11.2.2 pairs the two, and ISO 32000-2 Table 87 admits 1, 2, 4, 8 and
+  # 16 and nothing else. Until 2026-08-27 the depth was never read: /BitsPerComponent 0
+  # and 3 reached the file, together with the same number in the predictor's
+  # /DecodeParms, and qpdf answered "PNGFilter created with invalid
+  # bits_per_sample" as a WARNING - so the document counted as sound.
+  set out {}
+  foreach {depth colorType} {0 0 3 0 5 0 32 0 1 2 4 2 16 3 2 4 1 6} {
+    lappend out [::tclpdfTest::refusalCode {::tclpdf::imagePng parse \
+        [::tclpdfTest::png 1 1 $depth $colorType "\x00\x00\x00\x00\x00\x00\x00"]}]
+  }
+  lsort -unique $out
+} -result {{TCLPDF IMAGE PNG DAMAGED IHDR}}
+
+test image-parse-27.9 {the lawful combinations still pass} -body {
+  # The other side of the same table, so that the guard cannot be tightened
+  # into a refusal of ordinary files: every pair PNG 11.2.2 allows.
+  set out {}
+  foreach {depth colorType} {1 0 2 0 4 0 8 0 16 0 8 2 16 2 1 3 2 3 4 3 8 3 \
+      8 4 16 4 8 6 16 6} {
+    set plte [expr {$colorType == 3 ? "\xff\x00\x00" : {}}]
+    lappend out [catch {::tclpdf::imagePng parse [::tclpdfTest::png 1 1 \
+        $depth $colorType [string repeat "\x00" 16] {} $plte]}]
+  }
+  lsort -unique $out
+} -result 0
+
+test image-parse-27.10 {palette indices are unpacked at four depths only} -body {
+  # The depths a palette image has (PNG 11.2.2). "8 / $depth" is 0 at 16 and
+  # the loop then ran no turn at all, which came out as a soft mask of nought
+  # bytes rather than as a refusal; at 3 it is 2, with a mask of 7, and the
+  # indices are read out of the wrong bits. Unreachable since the IHDR is
+  # held to the same table - and that is why it says so instead of computing
+  # an answer.
+  set codes {}
+  foreach depth {0 3 16 32} {
+    lappend codes [::tclpdfTest::refusalCode {
+        ::tclpdf::imagePngAlpha::Indices {0 1 2 3} $depth 4}]
+  }
+  lappend codes [::tclpdf::imagePngAlpha::Indices {0x1B} 2 4]
+  set codes
+} -result {{TCLPDF IMAGE PNG indices} {TCLPDF IMAGE PNG indices}\
+ {TCLPDF IMAGE PNG indices} {TCLPDF IMAGE PNG indices} {0 1 2 3}}
+
+test image-mask-27.11 {a refused mask leaves neither an object nor a version floor} \
+    -constraints haveSrgbIcc -body {
+  # THE COMBINATION IS THE FINDING: the carrier travels with an ICC profile
+  # and the mask has to be refused. Both promises held on their own - the
+  # profile goes into the file once, the stacked mask is turned away - and
+  # together they left a 2598-byte profile stream in the document with
+  # nothing pointing at it, and the version floor raised to 1.3 for a picture
+  # that never went in. qpdf --qdf drops the orphan silently; qpdf --check
+  # and veraPDF say nothing at all.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc image embed cover -data [tiffStack 12 4]
+  $doc image embed pic -mask cover -data [::tclpdfTest::pngWithIccp \
+      [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+      [::tclpdf::io read $srgbIcc]]
+  set before [[$doc writer] count]
+  set code [::tclpdfTest::refusal {$doc image place pic -at {20 20} -width 40}]
+  set after [[$doc writer] count]
+  # nothing written, nothing pinned: the floor is still low enough to lower
+  # the document under the 1.3 an ICC profile would have demanded
+  set floor [catch {$doc configure -version 1.2}]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [expr {$after - $before}] $floor $content
+} -result {{TCLPDF TIFF STACKED} 0 0 {}}
+
+test image-mask-27.12 {the same through the PDF/A door, in both orders} \
+    -constraints {haveSrgbIcc haveCmykIcc} -body {
+  # The second way to the same room: the mask is refused by
+  # [ImageInterpolateCheck] rather than by the stack question, and the
+  # carrier's profile used to be in the file by then either way. Asked in
+  # both orders, because a declaration made before the picture and one made
+  # after it are two different moments.
+  set out {}
+  foreach first {pdfa image} {
+    set doc [tclpdf new -compress 0]
+    if {$first eq "pdfa"} {
+      $doc pdfa -part 3 -conformance B -profile $cmykIcc
+    }
+    $doc page add
+    $doc image embed cut -interpolate 1 -stencil 1 -data [stencilPng]
+    $doc image embed pic -mask cut -data [::tclpdfTest::pngWithIccp \
+        [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"] \
+        [::tclpdf::io read $srgbIcc]]
+    if {$first eq "image"} {
+      $doc pdfa -part 3 -conformance B -profile $cmykIcc
+    }
+    set before [[$doc writer] count]
+    lappend out [::tclpdfTest::refusal {$doc image place pic -at {20 20} -width 40}]
+    lappend out [expr {[[$doc writer] count] - $before}]
+    $doc destroy
+  }
+  set out
+} -result {{TCLPDF IMAGE INTERPOLATE PDFA cut} 0 {TCLPDF IMAGE INTERPOLATE PDFA cut} 0}
+
+test image-place-27.13 {-rotate turns the picture about the point -at names} -body {
+  # The manual: "-rotate turns the placement about the point -at names", and
+  # -at is the TOP left corner everywhere in this package. The old sum turned
+  # the unit square before it was moved, which fixes the BOTTOM left corner -
+  # the one corner -at never names - so a picture at (50, 50) hung its own
+  # height below the point it was supposed to turn around.
+  # An image XObject is drawn on the unit square, so the corner -at names is
+  # (0, 1) - which the matrix carries to (c + e, d + f). 50 mm is 141.73 pt,
+  # and the page is 100 mm tall, so the point sits at (141.73, 141.73) in the
+  # file's own coordinates whichever way it is counted. Asked at four angles
+  # and at none, because a fixed point that only holds at one angle is not a
+  # fixed point.
+  set out {}
+  foreach angle {0 30 90 -45 180} {
+    set doc [tclpdf new -unit mm -format {100 100} -compress 0]
+    $doc page add
+    $doc image embed pic -data [::tclpdfTest::png 2 1 8 2 "\x00\x10\x20\x30\x40\x50\x60"]
+    $doc image place pic -at {50 50} -width 40 -rotate $angle
+    lassign [lindex [placements [::tclpdfTest::content $doc]] 0] a b c d e f
+    $doc destroy
+    lappend out [format {%.2f %.2f} [expr {$c + $e}] [expr {$d + $f}]]
+  }
+  lsort -unique $out
+} -result {{141.73 141.73}}
 
 cleanupTests

@@ -48,11 +48,18 @@
 # separated by NEXTLEVEL: the earlier ones mark compound boundaries and are
 # driven by a compound algorithm of libhyphen's own, the LAST one is the plain
 # Liang table. hyph_de_DE.dic is such a file - 69 000 compound entries, then
-# NEXTLEVEL, then the 8 700 patterns of dehyphn.tex. This module reads the LAST
-# table and nothing else, so what it does is Liang and only Liang: the same
-# breaks TeX would set, which is the reference every one of these files was
-# measured against. Measured on hyph_de_DE.dic 2017-01-12, that also makes the
-# loaded table an order of magnitude smaller.
+# NEXTLEVEL, then the 8 700 patterns of dehyphn.tex. Since 2026-08-26 this
+# module reads BOTH tables (see [Compound] below): the first finds the joints
+# of a compound over the whole word, the last is applied to each part between
+# them, which is what those files are written for. Until then only the last
+# table was read - Liang and only Liang, the breaks TeX would set - and that
+# read found its own syllables across a joint (measured: 18 per cent of the
+# compounds the file names came out with a one-letter piece). What the two-
+# level read does NOT copy is libhyphen's state machine: libhyphen applies the
+# compound level recursively per part and misses patterns of a file that was
+# not preprocessed with its substrings script, so about five per cent of
+# German compounds fall differently between the two - measured in round 8, and
+# the manual says so.
 #
 # WHAT IS NOT BROKEN, because a rule without brakes sets "A-bend": a word
 # shorter than -min, a run of fewer letters than the language's left and right
@@ -994,4 +1001,4 @@ proc ::tclpdf::hyphenate::Pieces {data string} {
   return $pieces
 }
 
-package provide tclpdf::hyphenate 1.3
+package provide tclpdf::hyphenate 1.4

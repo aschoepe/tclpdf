@@ -214,4 +214,42 @@ test pageLabel-3.1 {-style a writes /S /a, and the reader counts the range in lo
   list [nums $bytes] [regexp {"/S": "/a"} $json] [regexp {"/P": "u:Appendix "} $json]
 } -result {{0 << /S /D >> 3 << /S /a /P (Appendix ) >>} 1 1}
 
+# --- round 8 no. 34: /St is an integer -------------------------------------
+
+test pageLabel-r8-34.1 {a start past the integer range is refused at the call} -body {
+  # [string is integer] is true for 3000000000 under both interpreters, and
+  # [pdfObj num] writes a whole number past 2^31-1 as a REAL - so
+  # "-start 3000000000" put "/St 3000000000." into the number tree, a real
+  # where Table 159 says integer, and qpdf --check said nothing (measured
+  # 2026-08-27). Refused at the call, before the range is stored and before
+  # the version is raised for it.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach value {2147483648 3000000000 99999999999999} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc pageLabels -from 0 -start $value
+    }] 0 3]
+  }
+  # Nothing was recorded by any of them, and the largest integer a file can
+  # hold still goes in.
+  set ranges [$doc pageLabels]
+  set edge [catch {$doc pageLabels -from 0 -start 2147483647}]
+  set written [dict get [dict get [$doc pageLabels] 0] start]
+  $doc destroy
+  list [lsort -unique $codes] $ranges $edge $written
+} -result {{{TCLPDF PAGELABEL ARGUMENT start}} {} 0 2147483647}
+
+test pageLabel-r8-34.2 {the number tree carries an integer, not a real} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc pageLabels -from 0 -start 2147483647
+  set path [::tclpdfTest::scratch pageLabelInteger.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list [regexp {/St 2147483647[^.]} $bytes] [regexp {/St [0-9]+\.} $bytes]
+} -result {1 0}
+
 cleanupTests

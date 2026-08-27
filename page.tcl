@@ -91,6 +91,25 @@ oo::define ::tclpdf::document::document {
   }
 
   method PageAdd {args} {
+    # NOT WHILE A FORM OR A TILE IS BEING BUILT. A canvas is a content stream
+    # of its own and the script that fills it is not on any page; a "page
+    # add" inside it was accepted until 2026-08-27 and did something nobody
+    # can have meant - measured: the document had two pages, the current one
+    # was the new and empty one, and everything after the call went on
+    # drawing into the form, so the caller who thought the break had taken
+    # effect wrote the rest of the drawing into a stream that was already
+    # being closed. [layer draw] has refused exactly this since it was built,
+    # in these words; the two builders of a canvas did not.
+    #
+    # Before anything is read: a refused page add leaves no page, no state
+    # and no half-parsed option.
+    if {[my canvas depth]} {
+      return -code error -errorcode [list TCLPDF PAGE CANVAS add] \
+          "tclpdf: page add inside the -script of a form or a tiling pattern\
+          - the script fills a content stream of its own (ISO 32000-1,\
+          8.10.1) and is on no page, so the new page would stay empty while\
+          the drawing went on into the form; close the script first"
+    }
     set format [dict get $tclpdfOption format]
     set orientation [dict get $tclpdfOption orientation]
     # Whether the caller SAID which way round, or is getting the default. It
@@ -525,7 +544,20 @@ oo::define ::tclpdf::document::document {
   # away. Both rectangles are upright and in the caller's system, so the
   # intersection is exact; an empty one comes back as a box of no size at the
   # clip's corner, which is what a placement entirely outside its box covers.
+  # AND THROUGH THE TRANSFORMATION IN FORCE. 14.8.5.4.3 asks for the
+  # rectangle in DEFAULT USER SPACE, and a "cm" that a [transform] put in
+  # force before the placement stands between the two: the matrix below maps
+  # the corners into the space the stream is CURRENTLY in, not into the space
+  # the page started in. Measured 2026-08-27: under "transform -translate
+  # {50 0}" a form placed at 10 mm sits at 60 mm on the paper and declared
+  # "/BBox [28.34646 226.77165 ...]" - the numbers of the untransformed
+  # placement, four values that are wrong with nothing in the file to say so,
+  # since no validator compares a /BBox with the stream. See [ctm].
   method PlacedBox {width height matrix {clip {}}} {
+    set active [my ctm]
+    if {$active ne [::tclpdf::geometry identity]} {
+      set matrix [::tclpdf::geometry multiply $matrix $active]
+    }
     lassign [my coords 0 0] zeroX zeroY
     set unit [my cget -unit]
     set xs {}
@@ -568,6 +600,109 @@ oo::define ::tclpdf::document::document {
     set left [expr {min($right, max($left, $clipLeft))}]
     set top [expr {min($bottom, max($top, $clipTop))}]
     return [list $left $top [expr {$right - $left}] [expr {$bottom - $top}]]
+  }
+
+  # A placement matrix turned about the point -at names - THE one place the
+  # manual's promise "-rotate turns the placement about the point -at names"
+  # is arithmetic, for the picture road and the form road alike.
+  #
+  # Both build their upright placement first and then turn it, and both had
+  # the turn wrong in the same way until 2026-08-27 (eighth review, Nr. 70):
+  # composed BEFORE the translation, the fixed point is wherever the thing's
+  # own (0, 0) lands - the BOTTOM left corner of the upright placement, a
+  # height away from the top left corner -at names. Nothing in the file says
+  # so; only the caller who drew a mark at -at sees it.
+  #
+  # Here rather than twice: the shared piece is not the "move, turn, move
+  # back" alone - that is [geometry about] - but the wiring around it, the
+  # [coords] of -at and the order of the multiplication. dup-scan found the
+  # second copy the day it was written.
+  #
+  # left and top are -at IN THE CALLER'S SYSTEM (the anchored corner: a
+  # -align or -valign that moves it is refused beside -rotate, see
+  # [fitCheck], so the two are the same point). The matrix goes in and comes
+  # out in PDF points, and an angle of zero returns it untouched rather than
+  # multiplying by an identity that is only nearly one.
+  method turnedAbout {matrix left top degrees} {
+    if {$degrees == 0} {
+      return $matrix
+    }
+    lassign [my coords $left $top] pivotX pivotY
+    return [::tclpdf::geometry multiply $matrix \
+        [::tclpdf::geometry about [::tclpdf::geometry rotate $degrees] \
+            $pivotX $pivotY]]
+  }
+
+  # -- the transformation in force ----------------------------------------
+
+  # WHERE THE CURRENT STREAM IS, as the matrix that maps its coordinates into
+  # the default user space of the page: the product of every "cm" the API has
+  # put out and not taken back again.
+  #
+  # It is kept because three answers depend on it and none of them can be
+  # read off the stream. A Figure's /BBox is stated in default user space
+  # (ISO 32000-2, 14.8.5.4.3), a link's /Rect likewise, and the box [svg] and
+  # [form place] hand back to the caller is what the caption goes under - all
+  # three were worked out from the placement alone until 2026-08-27 and were
+  # simply wrong under an open [transform]. Nothing in the file contradicts
+  # them, which is why it stood for a year.
+  #
+  # Per STREAM, through [streamState]: a form or a tile is a space of its own
+  # and starts at the identity, and the CTM of the page it is later placed on
+  # is none of its business (8.10.1 - the Do concatenates, and that happens
+  # at the placement, which is where the placement matrix already stands).
+  # [transform] concatenates it, [save] puts it away and [restore] brings it
+  # back, exactly as they do for the colours - all three in graphics.tcl, the
+  # module that writes the "cm". A document that never transformed anything
+  # never loads that module, and the empty state answers the identity here.
+  #
+  # NOT tracked: the "cm" that [image place], [form place], [shading] and
+  # [svg] write inside a q/Q of their own. Those are closed before the next
+  # call sees them, so they are never in force when anything asks.
+  method ctm {} {
+    set matrix [my streamState ctm]
+    if {[llength $matrix] != 6} {
+      return [::tclpdf::geometry identity]
+    }
+    return $matrix
+  }
+
+  # A box in the caller's system - {left top width height}, counted from the
+  # top - put through the transformation in force, as the upright hull of its
+  # four turned corners. Same in, same out.
+  #
+  # The road for a box that was NOT worked out from a placement matrix: a
+  # drawing computes its own rectangle in document units ([svg]), and putting
+  # it through [PlacedBox] would mean inventing a matrix for it. The turned
+  # hull is the same answer 14.8.5.4.3 asks of every other road.
+  #
+  # The identity is answered with the box itself rather than with four
+  # numbers that are equal to it up to the unit conversion: mm to points and
+  # back is a multiplication and a division, and a box that came out
+  # 39.99999999999999 mm wide where nothing was transformed would be a change
+  # nobody asked for.
+  method ctmBox {box} {
+    set matrix [my ctm]
+    if {$matrix eq [::tclpdf::geometry identity]} {
+      return $box
+    }
+    lassign $box left top width height
+    lassign [my coords 0 0] zeroX zeroY
+    set unit [my cget -unit]
+    set xs {}
+    set ys {}
+    foreach {cornerX cornerY} [list $left $top [expr {$left + $width}] $top \
+        [expr {$left + $width}] [expr {$top + $height}] \
+        $left [expr {$top + $height}]] {
+      lassign [my coords $cornerX $cornerY] pointX pointY
+      lassign [::tclpdf::geometry apply $matrix $pointX $pointY] pointX pointY
+      lappend xs [::tclpdf::geometry fromPoints [expr {$pointX - $zeroX}] $unit]
+      lappend ys [::tclpdf::geometry fromPoints [expr {$zeroY - $pointY}] $unit]
+    }
+    set x [::tcl::mathfunc::min {*}$xs]
+    set y [::tcl::mathfunc::min {*}$ys]
+    return [list $x $y [expr {[::tcl::mathfunc::max {*}$xs] - $x}] \
+        [expr {[::tcl::mathfunc::max {*}$ys] - $y}]]
   }
 
   method coords {x y {index {}}} {
@@ -645,6 +780,47 @@ oo::define ::tclpdf::document::document {
   # twice is how the two would drift apart.
   method extent {size {unit {}}} {
     return [lmap value $size {my distance $value $unit}]
+  }
+
+  # A length that is STILL ABOVE ZERO ONCE THE FILE HAS IT - the refusal that
+  # goes with [pdfObj written], so that the wording stands once for all the
+  # commands that need it.
+  #
+  # Four of them wrote the forbidden zero on 2026-08-27 (Nr. 65-68 of the
+  # eighth review): a stitching /Bounds against Table 40, a dash array
+  # against 8.4.3.6, /XStep against Table 75, a form's and a tile's /BBox
+  # against Table 95. Each had a "> 0" of its own, each asked it of the
+  # number the CALLER handed in, and each then wrote a real of five decimals
+  # (7.3.3) - which 0.000001 is not. The file is what a reader gets, so the
+  # file is what the check has to be about; that is the cut [geometry
+  # singular] draws for a matrix, in the same words and for the same reason.
+  #
+  # ONLY THE FILE'S HALF IS ASKED HERE. Whether a length may be negative at
+  # all is the calling command's own question - a size may not, a pattern
+  # step may - and each of them already words that refusal in its own terms,
+  # naming the option and the object. This one adds the half none of them can
+  # see from where they stand.
+  #
+  # VALUE IS THE NUMBER AS IT WILL BE WRITTEN, so a caller converts to points
+  # first ([distance], [extent]): a millimetre and a point round differently,
+  # and asking in the wrong unit refuses values the file holds perfectly
+  # well. "what" names it in the caller's terms ("the width of form \"f\""),
+  # errorcode is the whole code of the command doing the refusing - one
+  # shared wording, not one shared error class, because a caller catches
+  # "form" or "pattern", never "page".
+  #
+  # In the core rather than in one of the four modules because none of the
+  # four loads any of the others, and because the fifth caller will be a
+  # sixth module again.
+  method aboveZero {value what errorcode} {
+    if {[::tclpdf::pdfObj written $value] > 0} {
+      return $value
+    }
+    return -code error -errorcode $errorcode \
+        "tclpdf: $what is \"$value\" pt, which is 0 in the file - a PDF real\
+        carries five decimals (ISO 32000-1, 7.3.3), so a length below\
+        0.00001 pt is written as zero and everything measured by it\
+        collapses"
   }
 
   # How large something with a natural size should come out, given -size,
@@ -910,4 +1086,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::page 1.6
+package provide tclpdf::page 1.7

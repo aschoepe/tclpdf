@@ -1377,5 +1377,226 @@ test ua-18.5 {an undescribed Figure is sent to the call that can carry a descrip
 } -result {1 1 0}
 
 
+# --- round 8: what part 2 asks for and part 1 does not --------------------
+
+test ua-r8-1.1 {a FENote without Ref, and a citation without one, are refused} -constraints {haveFace haveTdom} -body {
+  # ISO 14289-2 8.2.5.14.1 asks for the entry on BOTH ends: the content that
+  # cites the note names it, and the note names the citation. Neither was
+  # asked for until 2026-08-27, and veraPDF 1.30 passes the file either way
+  # (docs/review-8-proben/structure/p03_ua2_fenote.tcl).
+  # The claim comes first because Sub and FENote are 2.0 types and [ua -part
+  # 2] is what raises the file version to hold them.
+  set doc [accessible $face]
+  $doc ua -part 2
+  $doc structure P -script {
+    $doc text "A claim with a footnote" -at {20 40}
+    $doc structure Sub -script {$doc text "1" -at {70 38} -size 6}
+  }
+  $doc structure FENote -script {$doc text "1) The note." -at {20 250} -size 8}
+  set path [::tclpdfTest::scratch ua-fenote.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [string match "*a FENote neither names a citation nor is cited\
+      by anything*" $err] [string match "*8.2.5.14.1*" $err] \
+      [string match "*structure FENote -name*" $err]
+} -result {1 1 1 1}
+
+test ua-r8-1.2 {a FENote cited in both directions is written} -constraints {haveFace haveTdom} -body {
+  # The shape the API could always express and nothing asked for: the marker
+  # in the text names the note, and the note names the marker.
+  set doc [accessible $face]
+  $doc ua -part 2
+  $doc structure P -script {
+    $doc text "A claim with a footnote" -at {20 40}
+    $doc structure Sub -name cite1 -ref note1 -script {
+      $doc text "1" -at {70 38} -size 6
+    }
+  }
+  $doc structure FENote -name note1 -ref cite1 -script {
+    $doc text "1) The note." -at {20 250} -size 8
+  }
+  set path [::tclpdfTest::scratch ua-fenote-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-r8-1.3 {half the pair is not enough, in either direction} -constraints {haveFace haveTdom} -body {
+  # The note that names its citation but is cited by nothing, and the note
+  # that is cited and names nothing: each gets its own wording.
+  set build {
+    set doc [accessible $face]
+    $doc ua -part 2
+    $doc structure P -script {
+      $doc text "A claim" -at {20 40}
+      $doc structure Sub -name cite1 {*}$citation -script {
+        $doc text "1" -at {70 38} -size 6
+      }
+    }
+    $doc structure FENote -name note1 {*}$note -script {
+      $doc text "1) The note." -at {20 250} -size 8
+    }
+  }
+  set doc {}
+  set citation {}
+  set note {-ref cite1}
+  eval $build
+  catch {$doc write [::tclpdfTest::scratch ua-fenote-half1.pdf]} uncited
+  $doc destroy
+  set citation {-ref note1}
+  set note {}
+  eval $build
+  catch {$doc write [::tclpdfTest::scratch ua-fenote-half2.pdf]} unnaming
+  $doc destroy
+  list [string match "*a FENote is cited by nothing*" $uncited] \
+      [string match "*a FENote does not name the content that cites it*" \
+          $unnaming]
+} -result {1 1}
+
+test ua-r8-1.4 {the pair cannot even arise under part 1} -constraints {haveFace haveTdom} -body {
+  # Why the check is part 2 only, measured rather than argued: FENote is a
+  # structure type of ISO 32000-2 and PDF/UA-1 is a PDF 1.7 format (ISO
+  # 14289-1 6.1), so the two never meet. A document with a FENote is refused
+  # the part-1 claim before the note is looked at.
+  set doc [accessible $face]
+  $doc configure -version 2.0
+  $doc structure FENote -script {$doc text "1) The note." -at {20 250} -size 8}
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-fenote-part1.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [string match "*PDF/UA-1 is a PDF 1.7 format*" $err]
+} -result {1 1}
+
+test ua-r8-2.1 {part 2 refuses a page destination, in both orders} -constraints {haveFace haveTdom} -body {
+  # ISO 14289-2 8.8: "All destinations whose target lies within the same
+  # document shall be structure destinations". veraPDF sees this one (8.8-1)
+  # - the finding is that [ua] wrote the claim over a document that breaks
+  # it, in both orders (docs/review-8-proben/structure/p02_ua2_pagedest.tcl).
+  set messages {}
+  foreach order {claimFirst claimLast} {
+    set doc [accessible $face]
+    if {$order eq "claimFirst"} {
+      $doc ua -part 2
+    }
+    $doc structure Link -script {
+      $doc text "to page 2" -at {20 40}
+      $doc link -at {20 36} -size {40 6} -page 1 -tooltip "to page 2"
+    }
+    $doc bookmark "Second page" -page 1
+    $doc initialView -page 1
+    $doc page add
+    $doc text "Second" -at {20 20}
+    if {$order eq "claimLast"} {
+      $doc ua -part 2
+    }
+    set path [::tclpdfTest::scratch ua-pagedest-$order.pdf]
+    lappend messages [catch {$doc write $path} err] $err
+    $doc destroy
+    catch {file delete $path}
+  }
+  lassign $messages firstCode firstErr lastCode lastErr
+  list $firstCode $lastCode \
+      [string match {*\[$doc link -page 1\] on page 1*} $firstErr] \
+      [string match {*\[$doc bookmark "Second page" -page 1\]*} $firstErr] \
+      [string match {*\[$doc initialView -page 1\]*} $firstErr] \
+      [string match "*structure destination*8.8*" $firstErr] \
+      [expr {$firstErr eq $lastErr}]
+} -result {1 1 1 1 1 1 1}
+
+test ua-r8-2.2 {a link to a URL and a structure destination are untouched} -constraints {haveFace haveTdom} -body {
+  # 8.8 speaks of targets "within the same document"; a URL is not one, and
+  # a structure destination is what the clause asks for.
+  set doc [accessible $face]
+  $doc ua -part 2
+  $doc structure Sect -name intro -script {$doc text "Intro" -at {20 60}}
+  $doc structure Link -script {
+    $doc text "out" -at {20 40}
+    $doc link -at {20 36} -size {40 6} -url https://example.org/ -tooltip out
+  }
+  $doc bookmark "Intro" -structure intro
+  set path [::tclpdfTest::scratch ua-pagedest-ok.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-r8-2.3 {part 1 takes page destinations} -constraints {haveFace haveTdom} -body {
+  # ISO 14289-1 has no clause 8.8, and veraPDF ua1 passes the file.
+  set doc [accessible $face]
+  $doc structure Link -script {
+    $doc text "to page 2" -at {20 40}
+    $doc link -at {20 36} -size {40 6} -page 1 -tooltip "to page 2"
+  }
+  $doc bookmark "Second page" -page 1
+  $doc page add
+  $doc text "Second" -at {20 20}
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-pagedest-part1.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-r8-3.1 {two targets in one Link element are caught at the write} -constraints {haveFace haveTdom} -body {
+  # The order where the claim comes after the drawing - [link] itself
+  # refuses the second annotation where the claim already stands
+  # (link.test). ISO 14289-2 8.2.5.20.
+  set doc [accessible $face]
+  $doc structure Link -script {
+    $doc text "two targets, one Link" -at {20 40}
+    $doc link -at {20 36} -size {20 6} -url https://example.org/a -tooltip a
+    $doc link -at {45 36} -size {20 6} -url https://example.org/b -tooltip b
+  }
+  $doc ua -part 2
+  set path [::tclpdfTest::scratch ua-two-targets.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [string match "*one Link structure element holds link\
+      annotations going to 2 different targets*" $err] \
+      [string match "*8.2.5.20*" $err]
+} -result {1 1 1}
+
+test ua-r8-3.2 {two annotations going to the same place share their element} -constraints {haveFace haveTdom} -body {
+  # 8.2.5.20 Examples 2 and 3: several annotations for one target are the
+  # ordinary case - an icon and the word beside it, a link broken over two
+  # lines. So it is the TARGETS that are counted, not the annotations.
+  set doc [accessible $face]
+  $doc ua -part 2
+  $doc structure Link -script {
+    $doc text "one target, two rectangles" -at {20 40}
+    $doc link -at {20 36} -size {20 6} -url https://example.org/a -tooltip a
+    $doc link -at {45 36} -size {20 6} -url https://example.org/a -tooltip a
+  }
+  set path [::tclpdfTest::scratch ua-one-target.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
+test ua-r8-3.3 {part 1 has no such clause} -constraints {haveFace haveTdom} -body {
+  # ISO 14289-1 7.18.5 asks for the description and the Link element, and
+  # nothing about the number of targets; veraPDF ua1 passes the file.
+  set doc [accessible $face]
+  $doc structure Link -script {
+    $doc text "two targets, one Link" -at {20 40}
+    $doc link -at {20 36} -size {20 6} -url https://example.org/a -tooltip a
+    $doc link -at {45 36} -size {20 6} -url https://example.org/b -tooltip b
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch ua-two-targets-part1.pdf]
+  set code [catch {$doc write $path} err]
+  $doc destroy
+  catch {file delete $path}
+  list $code [expr {$code ? $err : {}}]
+} -result {0 {}}
+
 
 cleanupTests

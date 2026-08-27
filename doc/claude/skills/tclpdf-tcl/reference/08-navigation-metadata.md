@@ -171,6 +171,8 @@ puts "initial view: [$doc initialView]"
 # falls back on its default, and no validator reports it either.
 if {[catch {$doc initialView -pageMode UseOutline} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "a misspelt page mode: NOT REFUSED"
 }
 ```
 
@@ -282,6 +284,8 @@ $doc annot strikeout -quads {{20 176 100 5} {20 181 100 5} {20 186 62 5}} \
 # One of the three is required, and asking for none is refused.
 if {[catch {$doc annot highlight -contents "nothing marked"} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "a highlight marking nothing: NOT REFUSED"
 }
 ```
 

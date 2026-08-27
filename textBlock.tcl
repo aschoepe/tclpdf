@@ -369,7 +369,7 @@ oo::define ::tclpdf::document::document {
           page - it cannot be combined with -avoid"
     }
     set width [dict get $options width]
-    if {($width - $gutter * ($columns - 1)) / double($columns) <= 0} {
+    if {[my TextBlockColumn $options] <= 0} {
       return -code error -errorcode [list TCLPDF TEXT COLUMNS width] \
           "tclpdf: $columns columns with a gutter of\
           [format %g $gutter] leave no width inside -width [format %g $width]"
@@ -472,10 +472,18 @@ oo::define ::tclpdf::document::document {
   }
 
   # The distances that shape the band - the three indents and the paragraph
-  # spacing. Numbers, any sign: a negative -firstIndent is a hanging indent
-  # by design. Refused here rather than left to the band, which met a value
+  # spacing. Refused here rather than left to the band, which met a value
   # like "bogus" in an [expr] and reported it in Tcl's words from inside the
   # line breaker - after the mark of a tagged paragraph had been written.
+  #
+  # THE INDENTS TAKE ANY SIGN, the spacing does not. A negative -firstIndent
+  # is a hanging indent by design, and a negative -indent starts a line
+  # outside the block on purpose; a negative -paragraphSpacing, on the other
+  # hand, sets the next paragraph ON TOP of the one before it - measured
+  # 2026-08-27 with -20 over three paragraphs, the second stood at 770.8 pt
+  # and the first at 728.5, so the text ran backwards up the page and
+  # overprinted itself. The option is a gap between paragraphs; a gap below
+  # zero is not a layout anybody asks for, and nothing said so.
   method TextBlockDistances {options} {
     foreach name {indent indentRight firstIndent paragraphSpacing} {
       set value [dict get $options $name]
@@ -496,8 +504,61 @@ oo::define ::tclpdf::document::document {
             "tclpdf: -$name takes a distance in the document unit the file\
             can hold, not \"$value\" - [::tclpdf::text::rangeHint]"
       }
+      if {$name eq "paragraphSpacing" && $value < 0} {
+        return -code error -errorcode [list TCLPDF TEXT ARGUMENT $name] \
+            "tclpdf: -paragraphSpacing is the gap between two paragraphs and\
+            is 0 or more, not \"$value\" - a negative gap sets the next\
+            paragraph over the one before it"
+      }
+    }
+    # AND THE INDENTS HAVE TO LEAVE A BAND. The same question the gutter is
+    # asked in TextBlockCheck, for the three distances that narrow a line:
+    # the band of a line is the column less -indent, less -indentRight and,
+    # on the first line of a paragraph, less -firstIndent. Nothing checked
+    # it, and what a band of zero or less does is not an error but a column
+    # one character wide - the breaker's fallback takes one unit per line
+    # whatever the width. Measured 2026-08-27: "-width 50 -indent 60",
+    # "-indent 25 -indentRight 25" and "-firstIndent 60" each set 62 lines of
+    # a single letter, 335 mm down the page, in silence. Here rather than in
+    # TextBlockCheck because the measuring calls take the same three options
+    # and answered the same nonsense - [textLines] one letter per line,
+    # [textHeight] the height of 62 of them.
+    foreach extra [list 0 [dict get $options firstIndent]] \
+        also [list {} " and -firstIndent [dict get $options firstIndent]"] {
+      set column [my TextBlockColumn $options]
+      if {$column - [dict get $options indent]
+          - [dict get $options indentRight] - $extra <= 0} {
+        return -code error -errorcode [list TCLPDF TEXT INDENT width] \
+            "tclpdf: -indent [format %g [dict get $options indent]] and\
+            -indentRight [format %g [dict get $options indentRight]]$also\
+            leave no width inside a column of [format %g $column] - a line\
+            with no band left is set one character at a time"
+      }
     }
     return
+  }
+
+  # The width ONE column of the block gets: -width less the gutters, over the
+  # number of columns. One place, because two questions turn on it - whether
+  # the columns leave a width at all (TextBlockCheck) and whether the indents
+  # leave a band inside one of them (above) - and a second copy of the
+  # arithmetic is how the two would come to disagree.
+  #
+  # A measuring call does not come through TextBlockCheck, so neither -columns
+  # nor -gutter has been looked at when this is asked from there: a value that
+  # is not a number counts as one column and no gutter here, and the drawing
+  # road says what is wrong with it in its own words.
+  method TextBlockColumn {options} {
+    set columns [dict get $options columns]
+    set gutter [dict get $options gutter]
+    if {![string is integer -strict $columns] || $columns < 1} {
+      set columns 1
+    }
+    if {![::tclpdf::text::finite $gutter]} {
+      set gutter 0
+    }
+    return [expr {([dict get $options width] - $gutter * ($columns - 1))
+        / double($columns)}]
   }
 
   # The line breaker itself. Everything wrapped in this package comes through
@@ -534,7 +595,7 @@ oo::define ::tclpdf::document::document {
         # moving it down would add its own blank line below the shape.
         lassign [{*}$band 0 $paragraphIndex $globalLine] width offset
         lappend lines [dict create text {} offset $offset width $width hyphen 0 \
-            paragraph $paragraphIndex first 1 running $globalLine \
+            split 0 paragraph $paragraphIndex first 1 running $globalLine \
             from $paragraphFrom]
         incr paragraphIndex
         incr globalLine
@@ -628,6 +689,7 @@ oo::define ::tclpdf::document::document {
           lappend lines [dict create text [my TextBlockClose $emit] offset $offset \
               width $width paragraph $paragraphIndex \
               hyphen [expr {[llength $taken] ? 1 : 0}] \
+              split [expr {[llength $taken] ? 1 : 0}] \
               first [expr {$inParagraph == 0}] running $running from $from]
           incr inParagraph
           set globalLine [expr {$running + 1}]
@@ -717,7 +779,7 @@ oo::define ::tclpdf::document::document {
           lappend lines [dict create \
               text "$piece$mark" \
               offset $offset width $width paragraph $paragraphIndex \
-              hyphen [expr {$mark ne ""}] \
+              hyphen [expr {$mark ne ""}] split 1 \
               first [expr {$inParagraph == 0}] running $running from $wordFrom]
           incr inParagraph
           set globalLine [expr {$running + 1}]
@@ -737,7 +799,7 @@ oo::define ::tclpdf::document::document {
       }
       if {$current ne {}} {
         lappend lines [dict create text [my TextBlockClose $current] offset $offset width $width hyphen 0 \
-            paragraph $paragraphIndex first [expr {$inParagraph == 0}] \
+            split 0 paragraph $paragraphIndex first [expr {$inParagraph == 0}] \
             running $running from $currentFrom]
         set globalLine [expr {$running + 1}]
       }
@@ -1688,7 +1750,7 @@ oo::define ::tclpdf::document::document {
             [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
             $align [dict get $line closes] [dict get $options rotate] \
             [expr {$lift + $top}] [dict get $line hyphen] \
-            [expr {$line ne $last}]
+            [expr {$line ne $last}] [dict get $line split]
       }
     }
     # Text, not lines: the rest may have to be broken again for a column of
@@ -1741,7 +1803,7 @@ oo::define ::tclpdf::document::document {
   # to TextRun rather than applied to x - with -rotate the baseline is
   # turned, and a pre-shifted x would rotate about the wrong point (same
   # reasoning as in [text], text.tcl).
-  method TextParagraphLine {line state x y width align isLast rotate {lift 0} {hyphen 0} {followed 1}} {
+  method TextParagraphLine {line state x y width align isLast rotate {lift 0} {hyphen 0} {followed 1} {split 0}} {
     # The space the line breaker consumed has to reappear in the content
     # stream: a line ends where a word ended, and without it the next line
     # follows immediately - "der Antrieb ist" plus "getauscht" comes back out
@@ -1767,8 +1829,28 @@ oo::define ::tclpdf::document::document {
     #
     # Only for tagged documents, so nothing that exists today comes out with
     # different bytes.
+    #
+    # AND NEVER AFTER A LINE THAT WAS CUT INSIDE A WORD - "split" in the line
+    # dictionary, which the breaker sets on both kinds of cut: a break the
+    # hyphenation offered (a soft hyphen, a pattern) and the emergency break
+    # that takes a word too long for its column apart by unit. 14.8.2.6.2
+    # asks for the white space "that would be present to separate words in a
+    # pure text representation", and a break INSIDE a word is not one of
+    # those: the two pieces are one word. Measured 2026-08-27 before this
+    # line existed: a tagged block of "Betriebskostenabrechnung" in a 20 mm
+    # column came back out of pdfinfo -struct-text as "Betriebskost
+    # enabrechnu ng", and with -emergencyHyphen 1 or a pattern break as
+    # "Betriebs kosten abrechnung" - the empty ActualText span (14.8.2.3)
+    # took the hyphen away and the space this line appended stayed. The
+    # manual promises the opposite three times (:397, :401, :1180) and
+    # example 04.04 prints it on the page.
+    #
+    # It is the SAME question the flag "hyphen" answers for the bracket, but
+    # not the same flag: a line broken by the emergency fallback without
+    # -emergencyHyphen carries no hyphen and is cut inside a word all the
+    # same, and that was the case pdfinfo showed first.
     set drawn $line
-    if {(!$isLast || $followed) && [my state tagged] eq "1"} {
+    if {(!$isLast || $followed) && !$split && [my state tagged] eq "1"} {
       append drawn " "
     }
     # WHAT THE APPENDED SPACE COSTS IN A RIGHT-TO-LEFT LINE, and nothing in
@@ -1895,4 +1977,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.15
+package provide tclpdf::textBlock 1.16

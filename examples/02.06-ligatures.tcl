@@ -22,11 +22,17 @@
 #     it exists only as the output of a GSUB lookup
 #   kerning afterwards applies to the ligature, not to the letters inside it
 #
-# ONLY "liga" is read: the standard ligatures, which the OpenType feature
-# registry has on by default. Not the discretionary ones (dlig), which the
-# registry has off and which the designer meant as a choice, and not the
-# required ones (rlig) of the Arabic scripts, which need a shaper this package
-# does not have.
+# WHAT -ligatures SWITCHES is "liga" and "clig": the standard ligatures, which
+# the OpenType feature registry has on by default, and the contextual ones that
+# share their stage. Not the discretionary ones (dlig), which the registry has
+# off and which the designer meant as a choice.
+#
+# THE REQUIRED ONES (rlig) ARE NOT A TYPOGRAPHIC CHOICE and are not switched
+# here: they belong to the shaping of a script, so their stage always runs
+# (forms.tcl:106-110). Measured on this tree: lam plus alef in Noto Naskh
+# Arabic is 3.654778 mm wide at 20 pt with -ligatures 1 AND with -ligatures 0 -
+# the lam-alef form comes out of the shaper either way. 02.09 and 02.12 set
+# that script; this page is about the typographic stage.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #

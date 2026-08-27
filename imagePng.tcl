@@ -52,6 +52,11 @@ namespace eval ::tclpdf::imagePng {
   # CR/LF pair exist so that a file mangled by a text-mode transfer is caught
   # immediately rather than half-way through decoding.
   variable signature "\x89PNG\r\n\x1a\n"
+  # The bit depths each colour type may be written at (PNG 11.2.2, the table
+  # of allowed combinations). PDF admits the same five values and no others
+  # (ISO 32000-2, Table 87: BitsPerComponent "shall be 1, 2, 4, 8, or 16"),
+  # so a depth this table refuses is a depth the file could not carry either.
+  variable depths {0 {1 2 4 8 16} 2 {8 16} 3 {1 2 4 8} 4 {8 16} 6 {8 16}}
 }
 
 # Read a PNG and return its structure:
@@ -106,6 +111,7 @@ proc ::tclpdf::imagePng::parse {bytes} {
         dict set result colorType $colorType
         dict set result interlace $interlace
         dict set result channels [channels $colorType]
+        BitDepth $bitDepth $colorType
         set seenHeader 1
       }
       PLTE {dict set result palette $body}
@@ -231,6 +237,32 @@ proc ::tclpdf::imagePng::parse {bytes} {
         [dict get $result colorType] image is $trns bytes, expected $expected"
   }
   return $result
+}
+
+# The bit depth of the IHDR, held against the colour type it stands beside.
+#
+# Checked where [compression] and [filter] are checked, and for the same
+# reason: the value is written into the file. Until 2026-08-27 it was not,
+# and it was not merely accepted - it was PASSED ON, into /BitsPerComponent
+# and into the /DecodeParms of the PNG predictor, both of which ISO 32000-2
+# holds to 1, 2, 4, 8 or 16 (Table 87 and Table 10). A greyscale IHDR
+# claiming depth 3 or depth 0 produced a document qpdf answered with
+# "PNGFilter created with invalid bits_per_sample" - as a WARNING, so the
+# file counted as sound - and a 16-bit palette, which PNG does not have at
+# all, reached [imagePngAlpha::Indices] and made a soft mask of nought bytes.
+# The TIFF reader has held this line since it was written
+# (imageTiff.tcl); this is the same line for the other format.
+proc ::tclpdf::imagePng::BitDepth {bitDepth colorType} {
+  variable depths
+  set allowed [dict get $depths $colorType]
+  if {$bitDepth in $allowed} {
+    return
+  }
+  return -code error -errorcode [list TCLPDF IMAGE PNG DAMAGED IHDR] \
+      "tclpdf: damaged PNG - the IHDR chunk says $bitDepth bits per sample at\
+      colour type $colorType, and PNG 11.2.2 writes that colour type at\
+      [join $allowed {, }]; a PDF image is written at 1, 2, 4, 8 or 16 (ISO\
+      32000-2, Table 87) and at no other depth either"
 }
 
 # Samples per pixel, by colour type (PNG 6.1).
@@ -642,4 +674,4 @@ proc ::tclpdf::imagePng::stencilStreams {parsed {invert 0}} {
       Filter /FlateDecode DecodeParms [decodeParms $parsed]]]
 }
 
-package provide tclpdf::imagePng 1.8
+package provide tclpdf::imagePng 1.9

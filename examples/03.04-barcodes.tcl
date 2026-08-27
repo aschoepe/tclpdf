@@ -120,13 +120,13 @@ foreach {label data options} {
 # -- EPC-QR, the one with a rule of its own ----------------------------------
 
 $doc font -family bold -size 10 -color black
-$doc text "GiroCode nach EPC069-12" -at [list 20 $y]
+$doc text "GiroCode, to EPC069-12" -at [list 20 $y]
 set y [expr {$y + 6}]
 
 $doc font -family body -size 8 -color {0.45 0.45 0.45}
-$doc text "Zeile 3 des Datensatzes sagt \"1\", also UTF-8. -eci 26 haelt die\
-    Kodierung mit dieser Zusage in Deckung; -security 2 ist die von der\
-    Spezifikation verlangte Fehlerkorrekturstufe M." -at [list 20 $y] -width 170
+$doc text "Line 3 of the EPC dataset says \"1\", which means UTF-8. -eci 26\
+    holds the encoding to that promise; -security 2 is error correction\
+    level M, the level the specification asks for." -at [list 20 $y] -width 170
 set y [expr {$y + 12}]
 
 # A published example account: the check digits are valid, the bank code and
@@ -136,7 +136,7 @@ set epc "BCD\n002\n1\nSCT\nBYLADEM1001\nMuster GmbH\n\
     DE02120300000000202051\nEUR12.34\n\n\nRechnung 2026-114"
 encode markup $epc -barcode qrcode -security 2 -eci 26
 $doc svg -data $markup -at [list 20 $y] -height 30 \
-    -alt "GiroCode: Ueberweisung 12,34 Euro an Muster GmbH"
+    -alt "GiroCode: a transfer of 12.34 euro to Muster GmbH"
 
 $doc font -family body -size 8 -color black
 $doc text "Muster GmbH" -at [list 60 [expr {$y + 8}]]

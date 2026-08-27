@@ -43,7 +43,8 @@
 # AND THE THIRD ONE A STANDARD FACE CAN REACH: a box too small for anything
 # this package can write into it. The floor is one point - the smallest size
 # a document can be meant to carry - and -fit {0.0001 0.0001} is nowhere near
-# it: it would have come out at two ten-thousandths of a point, written into
+# it: it would have come out at two hundred-thousandths of a point (2.223e-05,
+# the figure the refusal on the page names), written into
 # the file, valid, and invisible to every reader and every printer. A box
 # that small came out of an arithmetic that went wrong, and the page says so
 # rather than drawing a line nobody can see.

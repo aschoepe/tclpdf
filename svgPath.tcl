@@ -45,7 +45,11 @@ namespace eval ::tclpdf::svgPath {
 # Turn path data into PDF operators. The coordinate transform is a command
 # prefix called with x and y, returning the pair in PDF space - that way this
 # module knows nothing about pages, units or the y axis.
-proc ::tclpdf::svgPath::operators {data transform} {
+proc ::tclpdf::svgPath::operators {data transform {problemVariable {}}} {
+  if {$problemVariable ne {}} {
+    upvar 1 $problemVariable problem
+  }
+  set problem {}
   set numbers {}
   set commands [Tokenize $data]
   set x 0.0
@@ -69,10 +73,18 @@ proc ::tclpdf::svgPath::operators {data transform} {
       set previous Z
       continue
     }
+    # AN INCOMPLETE GROUP ENDS THE PATH, it does not throw it away. SVG 1.1,
+    # 8.3.9: "the general rule for error processing in path data is that the
+    # SVG user agent shall render a path element up to (but not including)
+    # the path command containing the first error". Refused - which is what
+    # happened until 2026-08-27, with TCLPDF SVG PATH - one missing
+    # coordinate cost the WHOLE drawing: everything after the path as well as
+    # the valid beginning of the path itself, and the error went to the
+    # caller. The complete groups of THIS command are drawn, the rest of the
+    # data is dropped, and the loss is reported through [svg info].
     if {[llength $arguments] % $step} {
-      return -code error -errorcode [list TCLPDF SVG PATH $command] \
-          "tclpdf: path command \"$command\" takes groups of\
-          $step numbers, got [llength $arguments]"
+      set problem $command
+      break
     }
 
     set first 1
@@ -313,21 +325,39 @@ proc ::tclpdf::svgPath::Angle {ux uy vx vy} {
 # The lexical rules are looser than they look: separators are optional where
 # the meaning is clear, so "M0 0L10 10" and "m.5.5" are both legal, and the
 # second one is two numbers, not one. A plain [split] gets that wrong.
+#
+# AND THE TWO FLAGS OF AN ARC ARE SINGLE DIGITS, whatever stands behind them.
+# The grammar in F.6 spells "flag: '0' | '1'" and makes the separator between
+# a flag and the number after it OPTIONAL, so "a30,30 0 0160,0" is well
+# formed and means large-arc 0, sweep 1, endpoint 60,0. Read as ordinary
+# numbers, "0160" was ONE token, the group came out five long instead of
+# seven, and the whole drawing was lost over a path a browser draws
+# (measured 2026-08-27). The queue is what makes it possible to hand the
+# remainder of a token back to the scanner.
 proc ::tclpdf::svgPath::Tokenize {data} {
   set result {}
   set command {}
   set numbers {}
-  foreach token [regexp -all -inline \
-      {[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} $data] {
+  set queue [regexp -all -inline \
+      {[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} $data]
+  while {[llength $queue]} {
+    set token [lindex $queue 0]
+    set queue [lrange $queue 1 end]
     if {[string is alpha -strict $token]} {
       if {$command ne {}} {
         lappend result $command $numbers
       }
       set command $token
       set numbers {}
-    } else {
-      lappend numbers $token
+      continue
     }
+    if {[string toupper $command] eq "A" && [string length $token] > 1 &&
+        [expr {[llength $numbers] % 7}] in {3 4} &&
+        [string index $token 0] in {0 1}} {
+      set queue [linsert $queue 0 [string range $token 1 end]]
+      set token [string index $token 0]
+    }
+    lappend numbers $token
   }
   if {$command ne {}} {
     lappend result $command $numbers
@@ -348,4 +378,4 @@ proc ::tclpdf::svgPath::Point {transform x y} {
   return "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]"
 }
 
-package provide tclpdf::svgPath 1.2
+package provide tclpdf::svgPath 1.3

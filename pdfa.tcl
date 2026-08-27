@@ -169,7 +169,8 @@ oo::define ::tclpdf::document::document {
       default {
         return -code error -errorcode [list TCLPDF PDFA PART number] \
             "tclpdf: PDF/A part must be 2 or 3 - part\
-            [dict get $current part] needs PDF 2.0, which tclpdf does not write"
+            [dict get $current part] (ISO 19005-4) is a PDF 2.0 profile this\
+            package has not measured itself against, so it does not claim it"
       }
     }
     # Part 2 admits an embedded file only when that file is itself PDF/A
@@ -601,4 +602,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.11
+package provide tclpdf::pdfa 1.12

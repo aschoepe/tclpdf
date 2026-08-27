@@ -755,4 +755,95 @@ test fieldChoice-30.3 {a typed value of an editable combo is drawn and therefore
     set outcome
 } -result {1 1 {TCLPDF FIELD GLYPH value}}
 
+# --- round 8: the flags and the index are younger than the field -----------
+
+test fieldChoice-31.1 {three flags and /I carry version floors of their own} -body {
+  # ISO 32000-2, Table 233: MultiSelect and DoNotSpellCheck are "(PDF 1.4)",
+  # CommitOnSelChange is "(PDF 1.5)"; Table 234 makes /I a 1.4 entry. The
+  # field itself is 1.2, so a 1.2 document was given bits and a key its own
+  # header says no reader need understand (round 8, annot V2).
+  set said {}
+  foreach {what call} {
+    {multi}      {field listbox l -rect {20 40 40 20} -options {a b} -multi 1}
+    {commit}     {field listbox l -rect {20 40 40 20} -options {a b} -commit 1}
+    {spellcheck} {field combo c -rect {20 40 40 8} -options {a b} -editable 1 -spellcheck 0}
+    {index}      {field listbox l -rect {20 40 40 20} -options {a a} -index 0}
+  } {
+    set doc [tclpdf new -unit mm -version 1.2]
+    $doc page add
+    lappend said $what [::tclpdfTest::refusalCode "\$doc $call"]
+    $doc destroy
+  }
+  set said
+} -result {multi {TCLPDF VERSION 1.4} commit {TCLPDF VERSION 1.5} spellcheck {TCLPDF VERSION 1.4} index {TCLPDF VERSION 1.4}}
+
+test fieldChoice-31.2 {a document new enough writes them as before} -body {
+  set widget [choiceBuilt {
+    $doc field listbox colour -rect {20 40 40 20} -options {red green blue} \
+        -multi 1 -commit 1 -index {0 2}
+  } colour]
+  list [choiceFlags $widget] [regexp {/I \[0 2\]} $widget]
+} -result {69206016 1}
+
+test fieldChoice-31.3 {/I is asked for once and written on the same condition} -body {
+  # The floor is required at the declaration and the key written at the
+  # write; two readings of the same condition are two answers waiting to
+  # differ, so both ask [FieldChoiceIndexNeeded]. Measured through the key
+  # that appears in the file.
+  set said {}
+  foreach {what call} {
+    {single unambiguous} {field listbox l -rect {20 40 40 20} -options {a b} -index 0}
+    {multi}              {field listbox l -rect {20 40 40 20} -options {a b} -multi 1 -index 0}
+    {ambiguous}          {field listbox l -rect {20 40 40 20} -options {a a} -index 0}
+    {nothing selected}   {field listbox l -rect {20 40 40 20} -options {a a}}
+  } {
+    set doc [tclpdf new -unit mm -version 1.4]
+    $doc page add
+    $doc {*}$call
+    $doc write [::tclpdfTest::scratch fieldchoice-31-3.pdf]
+    set widget [choiceWidget $doc l]
+    file delete [::tclpdfTest::scratch fieldchoice-31-3.pdf]
+    $doc destroy
+    lappend said $what [regexp {/I \[} $widget]
+  }
+  set said
+} -result {{single unambiguous} 0 multi 1 ambiguous 1 {nothing selected} 0}
+
+test fieldChoice-31.4 {the /I floor is asked only where the key will be written} -body {
+  # The ambiguous list box is the case that isolates /I: it carries no other
+  # 1.4 feature, so a refusal in a 1.3 document is about the key and nothing
+  # else - and the unambiguous one beside it is written.
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {
+    $doc field listbox l -rect {20 40 40 20} -options {a a} -index 0
+  }]
+  set plain [catch {
+    $doc field listbox m -rect {20 70 40 20} -options {a b} -index 0
+  }]
+  set fields [$doc field list]
+  $doc destroy
+  list $code $plain $fields
+} -result {{TCLPDF VERSION 1.4} 0 m}
+
+test fieldChoice-31.5 {NaN and Inf are turned away at the call, not at the write} -body {
+  # The round-7 repair reached fieldText.tcl and stopped there: a list box or
+  # a combo took both at the call and died at the write, one of them in Tcl's
+  # own words from inside an appearance stream - which leaves the document
+  # unwritable for good (round 8, annot H1).
+  set said {}
+  foreach {option value} {-borderWidth NaN -borderWidth Inf -size NaN -size Inf} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    set code [::tclpdfTest::refusalCode {
+      $doc field listbox l -rect {20 40 40 20} -options {a b} $option $value
+    }]
+    set written [catch {$doc write [::tclpdfTest::scratch fieldchoice-31-4.pdf]}]
+    file delete [::tclpdfTest::scratch fieldchoice-31-4.pdf]
+    $doc destroy
+    lappend said [list $code $written]
+  }
+  set said
+} -result {{{TCLPDF FIELD BORDERWIDTH NaN} 0} {{TCLPDF FIELD BORDERWIDTH Inf} 0} {{TCLPDF FIELD SIZE NaN} 0} {{TCLPDF FIELD SIZE Inf} 0}}
+
 cleanupTests

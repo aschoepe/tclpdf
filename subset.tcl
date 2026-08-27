@@ -172,11 +172,23 @@ proc ::tclpdf::subset::build {font glyphs {instanced {}} {alias {}}} {
   # together or not at all; VORG travels on its own.
   if {[::tclpdf::sfnt hasVertical $font]} {
     if {[dict exists $font vertical advances]} {
+      # The INSTANCE's numbers where there is one, for the reason the hmtx
+      # above takes them: the file holds the default position, and an instance
+      # is a different design - its vertical origin and height come off the
+      # same phantom points its width does ([varFont instance]). Written from
+      # the file's default vmtx over a moved glyf, the pair contradicted each
+      # other by up to 24 units of the em.
       set vmtx {}
       foreach glyph $order {
-        append vmtx [binary format SuS \
-            [::tclpdf::sfnt verticalAdvance $font $glyph] \
-            [::tclpdf::sfnt verticalBearing $font $glyph]]
+        if {[dict exists $font instanced $glyph verticalAdvance]} {
+          append vmtx [binary format SuS \
+              [dict get $font instanced $glyph verticalAdvance] \
+              [dict get $font instanced $glyph verticalBearing]]
+        } else {
+          append vmtx [binary format SuS \
+              [::tclpdf::sfnt verticalAdvance $font $glyph] \
+              [::tclpdf::sfnt verticalBearing $font $glyph]]
+        }
       }
       dict set tables vmtx $vmtx
       dict set tables vhea [Vhea $font $count]
@@ -462,4 +474,4 @@ proc ::tclpdf::subset::Checksum {data} {
   return $sum
 }
 
-package provide tclpdf::subset 1.5
+package provide tclpdf::subset 1.6

@@ -118,6 +118,8 @@ $doc restore
 # state that changes nothing.
 if {[catch {$doc overprint} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "overprint with no argument: NOT REFUSED"
 }
 ```
 
@@ -170,7 +172,7 @@ foreach {colour x} {steelblue 20 #ffd700 40 #fd7 60 0.5 80 {0.2 0.45 0.75} 100
 }
 ```
 
-A name or triplet whose three components are equal (`black`, `white`, `gray`, `#808080`) is written as DeviceGray - usable under every PDF/A output intent. Three and four numbers are told apart by count.
+A name or **hex** triplet whose three components are equal (`black`, `white`, `gray`, `#808080`) is written as DeviceGray - usable under every PDF/A output intent. A **numeric** triplet is not: `{0.4 0.4 0.4}` stays DeviceRGB and is refused under a CMYK output intent (`TCLPDF PDFA COLOUR intent`), where `0.4`, `{gray 0.4}`, `gray` and `#666666` all pass. Write a grey as one number when it is meant to be one. Three and four numbers are told apart by count.
 
 ### Separations - spot colours
 

@@ -194,6 +194,33 @@ oo::define ::tclpdf::document::document {
       repeatColumns 0 decimal . didParseCell {} willDrawCell {} didDrawCell {}
       didDrawPage {}
     } $arguments "table"]
+    # THE FIVE LIST OPTIONS ARE LISTS, asked before anything counts them.
+    # [llength] on a string that is not one is a Tcl error, and that is what
+    # a caller heard: -columns with a single unmatched opening brace answered
+    # TCL VALUE LIST BRACE - "unmatched open brace in list" - out of the
+    # [foreach] below, in Tcl's words and naming no option (measured
+    # 2026-08-27). The same for -head, -body and -foot, which are counted one
+    # line further down.
+    foreach name {head body foot columns at} {
+      if {[catch {llength [dict get $options $name]}]} {
+        return -code error -errorcode [list TCLPDF TABLE ARGUMENT $name] \
+            "tclpdf: -$name takes a list, and \"[dict get $options $name]\" is\
+            not one - a brace or a quote in it is unmatched"
+      }
+    }
+    # -at goes through the same gate as [text], [leader] and [pageNumbers]
+    # (round 7 no. 28 unified them and left the table out): two numbers,
+    # finite, and within what a PDF real holds. Until now the words were
+    # counted nowhere and the value read with [lindex] - a point of two words
+    # that are not numbers died as "expected floating-point number but got
+    # a" with an errorcode of NONE, a NaN as ARITH DOMAIN from inside the
+    # placing, and a point of THREE words was taken with the third dropped
+    # in silence.
+    # [layout] measures without a position, so an empty -at is not this
+    # method's to refuse - [TablePrepare] does that for the drawing.
+    if {[dict get $options at] ne {}} {
+      ::tclpdf::option point [dict get $options at] -at table
+    }
     if {![llength [dict get $options body]] &&
         ![llength [dict get $options head]]} {
       return -code error -errorcode [list TCLPDF TABLE ARGUMENT rows] \
@@ -227,19 +254,19 @@ oo::define ::tclpdf::document::document {
             "tclpdf: -$option takes a boolean, not \"$value\""
       }
     }
-    # [option finite] rather than [string is double]: NaN is a double to Tcl
-    # and false against every comparison, so "-bottom NaN" switched the page
-    # break off in silence.
+    # [TableMeasurable] rather than [string is double] or a bare comparison:
+    # see the method in tableLayout.tcl for the three questions every
+    # distance of a table asks, and why they stand in one place.
     foreach option {top bottom} {
       set value [dict get $options $option]
-      if {$value ne {} && (![::tclpdf::option finite $value] || $value < 0)} {
+      if {$value ne {} && ![my TableMeasurable $value 0]} {
         return -code error -errorcode [list TCLPDF TABLE ARGUMENT $option] \
             "tclpdf: -$option takes a distance from the top of\
             the page in the document unit, not \"$value\""
       }
     }
     set minimum [dict get $options minRowHeight]
-    if {![::tclpdf::option finite $minimum] || $minimum < 0} {
+    if {![my TableMeasurable $minimum 0]} {
       return -code error -errorcode [list TCLPDF TABLE ARGUMENT minRowHeight] \
           "tclpdf: -minRowHeight takes a height of 0 or more in\
           the document unit, not \"$minimum\""
@@ -256,8 +283,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options width] eq {}} {
       lassign [my page size] pageWidth ->
       dict set options width [expr {$pageWidth - 2 * max($left, 10)}]
-    } elseif {![::tclpdf::option finite [dict get $options width]]
-        || [dict get $options width] <= 0} {
+    } elseif {![my TableMeasurable [dict get $options width] 0 1]} {
       # A table of no width has no columns to put anything in, and a
       # negative one was answered by the width arithmetic with a sentence
       # that read like a bug report: "the fixed column widths add up to 0,
@@ -350,6 +376,7 @@ oo::define ::tclpdf::document::document {
         [dict get $options columns] [dict get $options width] $options]
 
     set groups [my TableGroups $widths $options]
+    my TableSpanGroups $sections $groups
     # Every column group is measured, and measured against the area, before
     # the first one is drawn: a group that cannot be broken to fit is refused
     # with nothing on the page, not after the group before it went out.
@@ -507,10 +534,32 @@ oo::define ::tclpdf::document::document {
       return [list $all]
     }
     set limit [dict get $options width]
+    # THE REPEATED COLUMNS HAVE TO LEAVE ROOM FOR A COLUMN THAT IS NOT ONE.
+    # A group is the repeated leading columns plus at least one column of the
+    # slice; ask for as many repeats as the table has columns and the loop
+    # below never closes a group, so every column ends up in one group that
+    # is wider than -width - drawn, and running off the page in silence
+    # (measured 2026-08-27: -width 60, three columns of 40 mm,
+    # -repeatColumns 2 and 3). The same happens when the repeats alone are
+    # already as wide as the table.
     set repeat [lrange $all 0 [dict get $options repeatColumns]-1]
+    if {[llength $repeat] >= $count} {
+      return -code error -errorcode [list TCLPDF TABLE ARGUMENT repeatColumns] \
+          "tclpdf: -repeatColumns [dict get $options repeatColumns] carries\
+          every one of the $count columns into each group, so a horizontal\
+          break would have nothing left to break - it takes fewer columns\
+          than the table has"
+    }
     set repeatWidth 0
     foreach index $repeat {
       set repeatWidth [expr {$repeatWidth + [lindex $widths $index]}]
+    }
+    if {[llength $repeat] && $repeatWidth >= $limit} {
+      return -code error -errorcode [list TCLPDF TABLE ARGUMENT repeatColumns] \
+          "tclpdf: the [llength $repeat] repeated column(s) are\
+          [format %g $repeatWidth] wide together and the table is\
+          [format %g $limit] - a group of them plus one more column cannot\
+          fit, and would be drawn past the edge"
     }
     set groups {}
     set current $repeat
@@ -774,6 +823,65 @@ oo::define ::tclpdf::document::document {
     return $ends
   }
 
+  # A CELL CANNOT BE DRAWN IN TWO COLUMN GROUPS. With -horizontalBreak the
+  # columns are cut into groups and each group is drawn as a table of its own
+  # (see TableGroups); [TableSlice] below keeps the cells whose STARTING
+  # column is in the group. A cell that spans past the end of its group is
+  # kept with a colSpan that reaches into columns the group does not have,
+  # and the widths of the group end before the span does: measured
+  # 2026-08-27, "-width 60 -columns {2 x 40 mm} -horizontalBreak 1" with a
+  # cell of colSpan 2 died as "can't use empty string as operand of +" out of
+  # [TableMeasure], in Tcl's words and against the promise (:1459) that every
+  # refusal begins with "tclpdf:".
+  #
+  # Refused rather than given a meaning, and the choice is not close: drawing
+  # the cell in both groups would set its text twice and put two TD elements
+  # in the tree for one cell (ISO 14289-1 7.4.7 wants one), and clipping the
+  # span to the group would silently draw a cell narrower than the caller
+  # asked for. What the caller can do instead is name the group boundary
+  # himself - fewer columns in the span, -repeatColumns, or -horizontalBreak
+  # 0 - which is why the message says where the boundary fell.
+  #
+  # Asked in TablePrepare, before the first operator and before the Table
+  # element is opened, so a caught refusal leaves the page and the tree as
+  # they were.
+  method TableSpanGroups {sections groups} {
+    if {[llength $groups] < 2} {
+      return
+    }
+    dict for {-> grid} $sections {
+      foreach row $grid {
+        foreach cell $row {
+          set column [dict get $cell column]
+          set last [expr {$column + [dict get $cell colSpan] - 1}]
+          if {$last <= $column} {
+            continue
+          }
+          foreach group $groups {
+            if {$column ni $group} {
+              continue
+            }
+            for {set index $column} {$index <= $last} {incr index} {
+              if {$index in $group} {
+                continue
+              }
+              return -code error \
+                  -errorcode [list TCLPDF TABLE ARGUMENT colSpan] \
+                  "tclpdf: the cell at column $column spans\
+                  [dict get $cell colSpan] columns, to column $last, and\
+                  -horizontalBreak puts columns [join $group {, }] in one\
+                  group - column $index is in another one, and a cell cannot\
+                  be drawn in two of them. Break the span at the group edge,\
+                  carry the columns with -repeatColumns, or give\
+                  -horizontalBreak 0"
+            }
+          }
+        }
+      }
+    }
+    return
+  }
+
   # Keep only the cells belonging to a column group, and shift them so that
   # the group starts at column zero.
   method TableSlice {grid group} {
@@ -851,12 +959,32 @@ oo::define ::tclpdf::document::document {
     if {[dict exists $rows $key]} {
       return [my StructureResume [dict get $rows $key] $script]
     }
+    # A REFUSED ROW LEAVES NO EMPTY TR BEHIND. The bracket used to be closed
+    # and the error rethrown, so a cell that refused before it drew anything -
+    # an unknown colour in its style is the short way there - left a TR in
+    # the tree with no TD under it: an element a reader announces and that
+    # holds nothing, which ISO 14289-1 7.1 has no room for and which veraPDF
+    # counts as a row all the same. Same class as the empty H1 and the empty
+    # Lbl of round 8 no. 5, and the same machinery: the snapshot is taken
+    # before the element is opened, and the rollback undoes it UNLESS the
+    # bracket has already been paid for in the content stream (see
+    # StructureRollback and the commit boundary beside commitKeys in
+    # structure.tcl) - a row whose first cells did draw keeps its element and
+    # what it drew.
+    #
+    # The registry goes back with it: a TR that was undone must not be
+    # resumed by the next column group, and the id in it names an element
+    # that is no longer there.
+    set snapshot [my StructureSnapshot]
     set id [my StructureOpen TR]
     dict set rows $key $id
     my state tableRows $rows
     set code [catch {uplevel 1 $script} result outcome]
     my StructureClose $id
     if {$code} {
+      if {[my StructureRollback $snapshot]} {
+        my state tableRows [dict remove [my state tableRows] $key]
+      }
       return -options $outcome $result
     }
     return $result
@@ -989,4 +1117,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.9
+package provide tclpdf::table 1.10

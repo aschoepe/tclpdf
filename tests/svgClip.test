@@ -520,4 +520,69 @@ test svgClip-4.12 {and its own value still beats what it inherits} -body {
 } -result {1 {}}
 
 
+# -- round 8: the mask's grey is the norm's grey ---------------------------
+
+test svgClip-r8-5.1 {a mask is converted with the coefficients SVG names} \
+    -constraints havePdftoppm -body {
+  # SVG 1.1, 14.4: the alpha of a luminosity mask is
+  # 0.2125 R + 0.7154 G + 0.0721 B. Painted in DeviceRGB inside a DeviceGray
+  # group, the conversion was left to the READER, which applies the
+  # 0.3/0.59/0.11 of ISO 32000-2, 8.6.5.4 - so a red mask came out at alpha
+  # 0.302 where rsvg-convert gives 0.212, 42 % too opaque (measured
+  # 2026-08-27, srgb(178,178,178) against srgb(201,201,201)).
+  #
+  # Measured on the PIXEL, because that is where the difference is: a black
+  # rectangle under a fully red mask on white paper is 255 * (1 - alpha),
+  # which is 201 under the norm's coefficients and 178 under the reader's.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="100"
+      height="100"><rect width="100" height="100" fill="#ff0000"/></mask></defs>
+      <rect width="100" height="100" fill="#000000" mask="url(#m)"/></svg>} \
+      -at {20 20} -size {60 60}
+  set path [::tclpdfTest::scratch svgclip-luminosity.pdf]
+  $doc write $path
+  $doc destroy
+  lassign [::tclpdfTest::pixel $path 50 50] red green blue
+  file delete $path
+  # Within two levels of 201, and nowhere near the 178 of the other set.
+  list [expr {abs($red - 201) <= 2}] [expr {abs($red - 178) <= 2}]
+} -result {1 0}
+
+test svgClip-r8-5.2 {a grey mask is untouched by the conversion} -body {
+  # The mutation reference for 5.1: a mask painted in grey or white - the
+  # common case - has the same luminosity under both sets of coefficients,
+  # so the conversion must leave it exactly where it was.
+  lassign [clipProbe "<defs><mask id=\"m\" maskUnits=\"userSpaceOnUse\"\
+      x=\"0\" y=\"0\" width=\"100\" height=\"100\"><rect width=\"100\"\
+      height=\"100\" fill=\"#ffffff\"/></mask></defs><rect width=\"100\"\
+      height=\"45\" fill=\"red\" mask=\"url(#m)\"/>"] content info
+  list [regexp {svgMask[0-9]+ gs} $content] $info
+} -result {1 {}}
+
+test svgClip-r8-5.3 {a mask that masks itself is reported, not a stack overflow} -body {
+  # The answer used to be Tcl's own "too many nested evaluations (infinite
+  # loop?)" under TCL LIMIT STACK - no tclpdf: prefix and no TCLPDF code,
+  # against the promise the manual makes for every refusal. SVG 1.1 gives no
+  # rendering for a reference that reaches itself (5.6 for <use>), so the
+  # element is drawn UNMASKED and the loss is named.
+  lassign [clipProbe "<defs><mask id=\"m\"><rect width=\"100\" height=\"100\"\
+      fill=\"#fff\" mask=\"url(#m)\"/></mask></defs><rect width=\"100\"\
+      height=\"45\" fill=\"red\" mask=\"url(#m)\"/>"] content info
+  # The OUTER mask is honoured - only the reference that reaches back into
+  # itself is dropped, and it is the dropped one that is named.
+  list [regexp {svgMask[0-9]+ gs} $content] [dict get $info mask-cycle]
+} -result {1 1}
+
+test svgClip-r8-5.4 {a clip path whose data stops at an error still clips} -body {
+  # SVG 8.3.9 applies inside a clipPath as well: the shape is taken as far as
+  # it is readable and the loss is counted, rather than costing the drawing.
+  lassign [clipProbe "<defs><clipPath id=\"c\"><path d=\"M0,0 L50,0 L50,100 L0\"/>\
+      </clipPath></defs><rect width=\"100\" height=\"45\" fill=\"red\"\
+      clip-path=\"url(#c)\"/>"] content info
+  list [regexp {W n} $content] [dict get $info path-error]
+} -result {1 1}
+
+
 cleanupTests

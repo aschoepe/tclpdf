@@ -23,9 +23,15 @@
 #                 entities only when -externalentitycommand is given, and it
 #                 is not given here. -paramentityparsing never says so in the
 #                 code instead of relying on a missing ingredient
-#   entity bomb   tdom refuses one that amplifies beyond 100x, its own
-#                 default; the parser below cannot expand at all, because it
-#                 does not know user-defined entities
+#   entity bomb   MEASURED AND WRONG until 2026-08-27, when this line said
+#                 "tdom refuses one that amplifies beyond 100x, its own
+#                 default". It does not: a 424-byte document with six levels
+#                 of nested entities came back after 13 ms with a text node
+#                 of a million characters, an amplification of 2360. The
+#                 limit is drawn HERE now, before the document is handed to
+#                 either parser - see [Amplification]. The parser below
+#                 cannot expand at all, because it does not know
+#                 user-defined entities, so the check is free for it
 #
 # The accessors exist so that svg.tcl works against BOTH without knowing
 # which: a tdom node is an object, a node from here is a dictionary, and
@@ -56,6 +62,14 @@ namespace eval ::tclpdf::xml {
   # Asked once. A failed [package require] is not an error here - it decides
   # which of the two parsers runs, and both produce the same answers.
   variable haveTdom [expr {![catch {package require tdom 0.9.0-}]}]
+
+  # How far the entities of a document may amplify it, as a multiple of the
+  # markup's own length, and the floor below which no document is refused at
+  # all. Availability, not security: the standard sets no limit, and neither
+  # does tdom - a few nested entities turn a kilobyte into a gigabyte and the
+  # process never comes back.
+  variable amplificationLimit 100
+  variable amplificationFloor 65536
 }
 
 # Which parser is in use - for a caller who wants to know, and for the tests
@@ -70,6 +84,7 @@ proc ::tclpdf::xml::parser {} {
 proc ::tclpdf::xml::parse {text} {
   variable haveTdom
 
+  Amplification $text
   if {$haveTdom} {
     # -paramentityparsing never, spelled out. The default is "always": tdom
     # then TRIES to resolve external entities and the external subset, and
@@ -85,6 +100,99 @@ proc ::tclpdf::xml::parse {text} {
     return [list tdom $document $root]
   }
   return [list tclpdf {} [Parse $text]]
+}
+
+# What the internal subset's entities would expand to, refused where it is
+# out of proportion to the document that carries them.
+#
+# The classic bomb is six lines: ten a's, then ten of those, ten of THOSE, and
+# a document that is 400 bytes long and a gigabyte once expanded. No parser on
+# this machine draws a line - measured 2026-08-27, tdom answered a 424-byte
+# file with a million characters in 13 ms - and the standard has nothing to
+# say about it either, so the limit is this package's own, like the ones on
+# Flate and on <use>.
+#
+# The lengths are worked out SYMBOLICALLY, before anything is expanded: each
+# entity's length is its literal text with every entity reference in it
+# replaced by that entity's own length. A definition that refers to itself,
+# directly or round a corner, is a cycle and is refused as one - no depth of
+# recursion is enough for it.
+proc ::tclpdf::xml::Amplification {text} {
+  variable amplificationLimit
+  variable amplificationFloor
+  if {![regexp -indices {<!DOCTYPE[^>\[]*\[} $text head]} {
+    return
+  }
+  set subset [string range $text [expr {[lindex $head 1] + 1}] end]
+  set close [string first \] $subset]
+  if {$close >= 0} {
+    set subset [string range $subset 0 $close-1]
+  }
+  set definitions [dict create]
+  foreach {-> name double single} [regexp -all -inline \
+      {<!ENTITY\s+([^\s%>]+)\s+(?:"([^"]*)"|'([^']*)')\s*>} $subset] {
+    dict set definitions $name [expr {$double ne {} ? $double : $single}]
+  }
+  if {![dict size $definitions]} {
+    return
+  }
+  set budget [expr {max($amplificationFloor,
+      $amplificationLimit * [string length $text])}]
+  set lengths [dict create]
+  foreach name [dict keys $definitions] {
+    Expanded $name $definitions lengths [dict create] $budget
+  }
+  # And the references in the document itself, each one costing its entity's
+  # expanded length.
+  set total 0
+  foreach {-> reference} [regexp -all -inline {&([^;&\s]+);} $text] {
+    if {[dict exists $lengths $reference]} {
+      incr total [dict get $lengths $reference]
+    }
+  }
+  if {$total > $budget} {
+    return -code error -errorcode [list TCLPDF XML ENTITY expansion] \
+        "tclpdf: the entities of this document expand it to more than\
+        $total characters out of [string length $text] - past the\
+        ${amplificationLimit}-fold this package allows, and a document\
+        that amplifies without a limit does not finish parsing"
+  }
+  return
+}
+
+# One entity's expanded length, memoised, with the entities open on the way
+# down as the cycle guard.
+proc ::tclpdf::xml::Expanded {name definitions lengthsVariable open budget} {
+  upvar 1 $lengthsVariable lengths
+  if {[dict exists $lengths $name]} {
+    return [dict get $lengths $name]
+  }
+  if {[dict exists $open $name]} {
+    return -code error -errorcode [list TCLPDF XML ENTITY cycle] \
+        "tclpdf: the entity \"&$name;\" is defined in terms of itself -\
+        an entity that refers back to its own definition has no expansion"
+  }
+  if {![dict exists $definitions $name]} {
+    return 0
+  }
+  dict set open $name 1
+  set literal [dict get $definitions $name]
+  set length [string length $literal]
+  foreach {-> reference} [regexp -all -inline {&([^;&\s]+);} $literal] {
+    if {![dict exists $definitions $reference]} {
+      continue
+    }
+    set inner [Expanded $reference $definitions lengths $open $budget]
+    # The reference itself is gone and its expansion takes its place.
+    set length [expr {$length - [string length $reference] - 2 + $inner}]
+    if {$length > $budget} {
+      # Far enough: the answer is already past the limit, and going on would
+      # be the arithmetic the limit exists to prevent.
+      break
+    }
+  }
+  dict set lengths $name $length
+  return $length
 }
 
 # A tdom document holds memory that nothing frees on its own. Every [parse]
@@ -143,6 +251,43 @@ proc ::tclpdf::xml::children {node} {
   lappend context $element
   foreach child [dict get $element children] {
     lappend result [list tclpdf $context $child]
+  }
+  return $result
+}
+
+# Character data and elements TOGETHER, in document order: a list of
+# {text <string>} and {element <handle>}.
+#
+# [text] and [children] each answer half the question and neither says how the
+# two halves interleave - which is exactly what a <text> in an SVG needs:
+# "A<tspan>B</tspan>C" is A, then the tspan, then C, and reading the two
+# accessors put the C in front of the B. The fallback parser therefore keeps
+# an ORDER list beside its text and children; a tdom node has the order in its
+# childNodes already.
+proc ::tclpdf::xml::nodes {node} {
+  lassign $node kind context element
+  set result {}
+  if {$kind eq "tdom"} {
+    foreach child [$element childNodes] {
+      switch -- [$child nodeType] {
+        TEXT_NODE - CDATA_SECTION_NODE {
+          lappend result [list text [$child nodeValue]]
+        }
+        ELEMENT_NODE {
+          lappend result [list element [list tdom $context $child]]
+        }
+      }
+    }
+    return $result
+  }
+  set children [children $node]
+  foreach part [dict get $element order] {
+    lassign $part what value
+    if {$what eq "text"} {
+      lappend result [list text $value]
+    } else {
+      lappend result [list element [lindex $children $value]]
+    }
   }
   return $result
 }
@@ -244,7 +389,13 @@ proc ::tclpdf::xml::Parse {text} {
     set before [string range $text $position $matchStart-1]
     if {[llength $stack] && [string trim $before] ne {}} {
       set top [lindex $stack end]
-      dict append top text [Unescape $before]
+      set chunk [Unescape $before]
+      dict append top text $chunk
+      # And the same chunk in the ORDER list, which is what [nodes] reads:
+      # where the character data of an element stands relative to its
+      # element children is a question neither [text] nor [children] can
+      # answer, and an SVG <text> is nothing but that question.
+      dict lappend top order [list text $chunk]
       lset stack end $top
     }
     set position [expr {$matchEnd + 1}]
@@ -262,6 +413,8 @@ proc ::tclpdf::xml::Parse {text} {
       }
       if {[llength $stack]} {
         set parent [lindex $stack end]
+        dict lappend parent order \
+            [list element [llength [dict get $parent children]]]
         dict lappend parent children $node
         lset stack end $parent
       } else {
@@ -272,12 +425,14 @@ proc ::tclpdf::xml::Parse {text} {
 
     set node [dict create name $elementName \
         attributes [Attributes [string range $text {*}$attributes]] \
-        text {} children {}]
+        text {} children {} order {}]
     if {$isEmpty} {
       if {![llength $stack]} {
         return $node
       }
       set parent [lindex $stack end]
+      dict lappend parent order \
+          [list element [llength [dict get $parent children]]]
       dict lappend parent children $node
       lset stack end $parent
       continue
@@ -321,4 +476,4 @@ proc ::tclpdf::xml::Unescape {text} {
   return [string map {&amp; &} $text]
 }
 
-package provide tclpdf::xml 1.1
+package provide tclpdf::xml 1.2

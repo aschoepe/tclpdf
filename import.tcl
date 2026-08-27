@@ -149,6 +149,13 @@ oo::define ::tclpdf::document::document {
       set list [list [::tclpdf::importRead::Get $pageDict Contents]]
     }
     foreach item $list {
+      # A member of the array that is the null object contributes nothing:
+      # "Specifying the null object as the value of a dictionary entry shall
+      # be equivalent to omitting the entry entirely" (7.3.9), and 7.3.10
+      # makes a reference to an object the file does not define exactly that
+      # object. A page whose /Contents names a freed object is an EMPTY
+      # page, not a refusal - /Contents is optional (Table 31).
+      if {[lindex $item 0] ne "r"} continue
       set number [lindex [lindex $item 1] 0]
       lassign [::tclpdf::importRead::Object reader $number] value hasStream data
       if {!$hasStream} {
@@ -171,10 +178,15 @@ oo::define ::tclpdf::document::document {
     # "form XObject /PI1 contains MCIDs [0..29] (needs its own
     # /StructParents; has None)".
     #
-    # ONLY those, and [Unmark] says which: a bracket carrying an /MCID and
-    # nothing else. An /OC bracket switches a layer and stays, a /Span with
-    # a /Lang says something about the content and stays, an /Artifact BMC
-    # stays.
+    # AND THE /Artifact BRACKETS WITH THEM, for the reason [Unmark] spells
+    # out: "this is not content" is a sentence about the STRUCTURE TREE of
+    # the file the page came from, and that tree does not travel. What the
+    # page is HERE is said by the placement - an artifact under [form place
+    # -artifact 1], a Figure under -alt - and an /Artifact bracket left
+    # standing inside a Figure is content marked as artifact inside tagged
+    # content, which ISO 14289-1, 7.1 forbids and veraPDF names (7.1-1,
+    # 7.1-2). An /OC bracket switches a layer and stays; a /Span with a
+    # /Lang says something about the content and stays.
     #
     # Always, not only in a tagged document: which of the two the caller
     # declares can come after the import ([ua 1] does it), the stripped
@@ -191,16 +203,35 @@ oo::define ::tclpdf::document::document {
     # deeper than the parser follows. Not one of those may leave a reserved
     # object number behind - an object reserved and never filled makes the
     # WRITE fail, for a document that could otherwise still be written.
-    set queue [::tclpdf::importRead::Refs $resources]
+    # WALKED AS {number generation} PAIRS, because that is what a reference
+    # is (7.3.10). A reference whose generation the file does not have at
+    # that number - a generation of its own, a free entry, no entry at all -
+    # names the NULL OBJECT and reaches nothing; the reader answers those
+    # with a null value ([Object] with a generation), and they are collected
+    # apart, so that a page naming both "4 0 R" and "4 1 R" copies the one
+    # object it has and writes null for the other. Keyed on the number the
+    # copy is not: a file has one live generation per number, and it is that
+    # object which is copied.
+    set queue [::tclpdf::importRead::RefPairs $resources]
     set order {}
     set copies {}
+    set dead {}
+    set walked {}
     while {[llength $queue]} {
-      set queue [lassign $queue number]
+      set queue [lassign $queue pair]
+      if {[dict exists $walked $pair]} continue
+      dict set walked $pair 1
+      lassign $pair number generation
+      lassign [::tclpdf::importRead::Object reader $number $generation] \
+          value hasStream data
+      if {[lindex $value 0] eq "z"} {
+        dict set dead $pair 1
+        continue
+      }
       if {[dict exists $copies $number]} continue
-      lassign [::tclpdf::importRead::Object reader $number] value hasStream data
       dict set copies $number [list $value $hasStream $data]
       lappend order $number
-      lappend queue {*}[::tclpdf::importRead::Refs $value]
+      lappend queue {*}[::tclpdf::importRead::RefPairs $value]
     }
 
     # Which of the foreign optional content groups start out switched off,
@@ -243,6 +274,28 @@ oo::define ::tclpdf::document::document {
     #                    reached through [stream], which runs after every
     #                    number has been handed out
     set writer [my writer]
+    # WHAT THE SOURCE FILE CLAIMS FOR ITSELF, CLAIMED BY THE COPY. The
+    # header names the version a file conforms to (7.5.2) and the
+    # catalogue's /Version raises it from PDF 1.4 on (7.5.5); everything on
+    # the page is written under that claim, and the copy carries it along
+    # unread - the objects travel with their bytes untouched, so not one of
+    # the version bindings the rest of this package sets sees them. A 1.4
+    # document used to take over a page with /BitsPerComponent 16 (PDF 1.5,
+    # Table 89) and write %PDF-1.4 over it, against the promise that every
+    # feature is checked against the version before it is written.
+    #
+    # Entered as a FLOOR, in the words of every other feature of this
+    # package: the document is not raised behind the caller's back - whoever
+    # said -version 1.4 said what the file may contain - so a source that
+    # needs more is refused by name, and the message names the version to
+    # create the document with. A version this package has no name for (a
+    # header saying 1.8, which no standard defines) is passed over rather
+    # than turned into a refusal nobody can answer.
+    set claimed [::tclpdf::importRead::Version reader]
+    if {$claimed in {1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 2.0}} {
+      my RequireVersion $claimed "the page imported from\
+          \"[file tail $path]\", which is written as PDF $claimed"
+    }
     set strings {}
     foreach number $order {
       lassign [dict get $copies $number] value hasStream
@@ -264,14 +317,36 @@ oo::define ::tclpdf::document::document {
     # before the first body is written, since a body may refer to an object
     # further down the list.
     set context [dict create copies $copies strings $strings map {} \
-        shared {} plain {} visiting {}]
+        shared {} plain {} visiting {} dead $dead]
     foreach number $order {
       my ImportShare $number context
     }
     set map [dict get $context map]
     foreach number $order {
       if {[dict exists $map $number]} continue
-      dict set map $number [$writer reserve]
+      # {number generation} - and the generation is 0, ALWAYS. The map is
+      # what [importRead::Serialize] renumbers references through, and this
+      # document writes every copied object as "N 0 obj" whatever generation
+      # it stood at in the file it came from. Its short form (a bare number)
+      # means "keep the reference's own generation", which is what an update
+      # writing into a file's own numbering wants and what a copy must not
+      # have: a resource that was "7 3 obj" over there is "42 0 obj" here.
+      dict set map $number [list [$writer reserve] 0]
+    }
+    # AND ONE OBJECT FOR EVERY REFERENCE THAT REACHES NOTHING. 7.3.10 reads
+    # such a reference as the null object, and the copy says so with a null
+    # object of its own rather than by dropping the entry: an /ExtGState
+    # naming a resource the file does not define keeps its key, and what a
+    # reader finds behind it is what it found in the file it came from. One
+    # object for all of them - they are all the same object - and none at
+    # all where the page has no such reference. Keyed on the PAIR, so that
+    # the live "4 1 R" and the dead "4 0 R" of one number go different ways
+    # (importRead::Serialize looks the pair up first).
+    if {[dict size $dead]} {
+      set nothing [list [$writer add null] 0]
+      dict for {pair -} $dead {
+        dict set map $pair $nothing
+      }
     }
     foreach number $order {
       if {[dict exists $context shared $number]} {
@@ -305,18 +380,18 @@ oo::define ::tclpdf::document::document {
           if {$key eq "Length"} continue
           lappend pairs $key [::tclpdf::importRead::Serialize $item $map]
         }
-        $writer stream [dict get $map $number] $pairs $data
+        $writer stream [lindex [dict get $map $number] 0] $pairs $data
       } else {
-        $writer put [dict get $map $number] \
+        $writer put [lindex [dict get $map $number] 0] \
             [::tclpdf::importRead::Serialize $value $map]
       }
     }
 
     # The resources dictionary itself: referenced and already part of the
     # closure, or direct on the page and written as an object of its own.
-    if {[lindex $resources 0] eq "r"} {
+    if {[lindex $resources 0] eq "r" && $resolved ne {}} {
       set resourcesRef [$writer ref \
-          [dict get $map [lindex [lindex $resources 1] 0]]]
+          [lindex [dict get $map [lindex [lindex $resources 1] 0]] 0]]
     } elseif {[lindex $resources 0] eq "d"} {
       set resourcesRef [$writer ref [$writer add \
           [::tclpdf::importRead::Serialize $resourceStrings $map]]]
@@ -364,27 +439,29 @@ oo::define ::tclpdf::document::document {
         set configName [::tclpdf::importRead::Serialize $name {}]
       }
     }
-    if {[lindex $properties 0] eq "d"} {
-      foreach {- item} [lindex $properties 1] {
-        if {[lindex $item 0] ne "r"} continue
-        set entry [::tclpdf::importRead::Resolve reader $item]
-        if {[lindex [::tclpdf::importRead::Get $entry Type] 1] eq "OCMD"} {
-          set members [::tclpdf::importRead::Get $entry OCGs]
-          if {[lindex $members 0] eq "r"} {
-            set members [list $members]
-          } elseif {[lindex $members 0] eq "a"} {
-            set members [lindex $members 1]
-          } else {
-            set members {}
-          }
-          foreach member $members {
-            if {[lindex $member 0] eq "r"} {
-              lappend sources [lindex [lindex $member 1] 0]
-            }
-          }
-        } else {
-          lappend sources [lindex [lindex $item 1] 0]
-        }
+    # EVERY OPTIONAL CONTENT GROUP OF THE CLOSURE, not only the ones a
+    # /Properties entry of the page names. 8.11.4.2 asks the catalogue's
+    # /OCGs for "an array of indirect references to all the optional content
+    # groups in the document", and a group reaches this document by more
+    # roads than one: a /Properties entry, which is what a BDC bracket in
+    # the content stream switches (8.11.3.2); the /OC of an image or a form
+    # XObject, which is how Illustrator and every CAD exporter write a layer
+    # (8.11.3.3); the /OC of an annotation; and an OCMD standing in front of
+    # any of them (Table 98). Only the first was looked at, so a group whose
+    # single road was an XObject's /OC was COPIED and then named in no
+    # configuration - and 8.11.4.3 gives /BaseState the default ON, so the
+    # layer the source file hides was drawn (measured 2026-08-27: 729 red
+    # pixels in the result where poppler renders none in the source).
+    #
+    # All of those roads end at an object of the closure, and an optional
+    # content group says what it is (Table 96: /Type /OCG is required). So
+    # the question is asked ONCE, of the closure, instead of once per road -
+    # the OCMD needs no unwrapping here either, because the groups it names
+    # are objects of the closure themselves.
+    foreach number $order {
+      if {[lindex [::tclpdf::importRead::Get \
+          [lindex [dict get $copies $number] 0] Type] 1] eq "OCG"} {
+        lappend sources $number
       }
     }
     # A GROUP THAT WAS OFF IN THE FILE IT COMES FROM STAYS OFF. Switching
@@ -396,7 +473,7 @@ oo::define ::tclpdf::document::document {
     # the seam between the two writers of it, for the state of a group as
     # much as for the group itself (layer.tcl reads both out of it).
     foreach source $sources {
-      set number [dict get $map $source]
+      set number [lindex [dict get $map $source] 0]
       lappend numbers $number
       if {[dict exists $foreignStates $source]} {
         if {![dict get $foreignStates $source]} {
@@ -576,8 +653,13 @@ oo::define ::tclpdf::document::document {
     lassign [dict get $context copies $number] value hasStream data
     dict set context visiting $number 1
     set shareable 1
-    foreach reference [::tclpdf::importRead::Refs $value] {
-      if {![my ImportShare $reference context]} {
+    # Walked as PAIRS: a value holding a reference that reaches nothing is
+    # never pooled, because the null object it is written with is handed out
+    # after this pass - and because the pool is keyed on finished syntax, in
+    # which a dead "4 0 R" and a live "4 1 R" would otherwise look the same.
+    foreach pair [::tclpdf::importRead::RefPairs $value] {
+      if {[dict exists $context dead $pair]
+          || ![my ImportShare [lindex $pair 0] context]} {
         set shareable 0
       }
     }
@@ -595,8 +677,8 @@ oo::define ::tclpdf::document::document {
     if {!$hasStream && [lindex $value 0] eq "d"
         && [dict exists [lindex $value 1] FunctionType]
         && ![llength [::tclpdf::importRead::Refs $value]]} {
-      dict set context map $number [my FunctionPool \
-          [my ImportSerialize $value {}] {} {}]
+      dict set context map $number [list [my FunctionPool \
+          [my ImportSerialize $value {}] {} {}] 0]
       dict set context shared $number 1
       return 1
     }
@@ -618,7 +700,7 @@ oo::define ::tclpdf::document::document {
         [::tclpdf::importRead::Serialize $value $map]]
     set pool [my state importPool]
     if {[dict exists $pool $key]} {
-      dict set context map $number [dict get $pool $key]
+      dict set context map $number [list [dict get $pool $key] 0]
       dict set context shared $number 1
       return 1
     }
@@ -639,7 +721,7 @@ oo::define ::tclpdf::document::document {
     }
     dict set pool $key $target
     my state importPool $pool
-    dict set context map $number $target
+    dict set context map $number [list $target 0]
     dict set context shared $number 1
     return 1
   }
@@ -846,4 +928,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.7
+package provide tclpdf::import 1.8

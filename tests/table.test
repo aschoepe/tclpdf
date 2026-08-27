@@ -1739,7 +1739,11 @@ test table-26.1 {a refused cell closes its artifact bracket} -body {
   $doc font -family helvetica -size 10
   catch {$doc table -at {20 20} -width 100 -body {{a b}} \
       -bodyStyle {fill nosuchcolour}}
-  set open [$doc state structureInArtifact]
+  # "is an artifact still open", not the raw value: the state is unset until
+  # the first bracket opens one and is restored to what it was when a
+  # refused element is rolled back, so "no artifact standing" is 0 or the
+  # empty string, and what the test turns on is neither of the two spellings.
+  set open [expr {[$doc state structureInArtifact] eq "1"}]
   $doc structure P -script {$doc text "danach" -at {20 60}}
   set stream [::tclpdfTest::content $doc]
   $doc destroy
@@ -1963,5 +1967,183 @@ test table-r7-6.1 {a horizontally broken table is ONE table with one row per row
       [regexp -all {/S /TH\M} $bytes] [regexp -all {/S /TD\M} $bytes] \
       [expr {[regexp -all {/Artifact <</Type /Pagination} $bytes] > 0}]
 } -result {3 1 4 8 24 1}
+
+# --- round 8 no. 37: -at is a point --------------------------------------
+
+test table-r8-37.1 {-at goes through the same gate as text, leader and pageNumbers} -body {
+  # Round 7 no. 28 unified POINT for -at and left the table out: the words
+  # were counted nowhere and the value read with [lindex], so "-at {a b}"
+  # died as "expected floating-point number but got a" with an errorcode of
+  # NONE, "-at {NaN 2}" as ARITH DOMAIN from inside the placing, and
+  # "-at {1 2 3}" was taken with the third word dropped in silence (measured
+  # 2026-08-27).
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes {}
+  foreach value {{a b} {NaN 2} {1 2 3} {1e39 20}} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at $value -width 60 -body {{a b}}
+    }] 0 3]
+  }
+  # Nothing was drawn by any of the four; [layout] still measures without a
+  # position at all.
+  set empty [expr {[::tclpdfTest::content $doc] eq {}}]
+  set layout [catch {$doc table layout -width 60 -body {{a b}}}]
+  $doc destroy
+  list [lsort -unique $codes] $empty $layout
+} -result {{{TCLPDF OPTION POINT -at}} 1 0}
+
+# --- round 8 no. 36: a cell cannot be drawn in two column groups ----------
+
+test table-r8-36.1 {a colSpan across a group boundary is refused, not a Tcl error} -body {
+  # With -horizontalBreak the columns are cut into groups and each group is
+  # drawn as a table of its own; the slice keeps the cells whose STARTING
+  # column is in the group, so a span reaching past the end of its group met
+  # widths that end before it does: "can't use empty string as operand of +"
+  # out of TableMeasure, in Tcl's words and against :1459 (measured
+  # 2026-08-27).
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 9
+  set code [lrange [::tclpdfTest::refusalCode {
+    $doc table -at {20 20} -width 60 -horizontalBreak 1 \
+        -columns {{width 40} {width 40}} \
+        -body {{{text ab colSpan 2}} {c d}}
+  }] 0 3]
+  # Nothing on the page: the refusal is made in TablePrepare, before the
+  # first operator and before the Table element is opened.
+  set empty [expr {[::tclpdfTest::content $doc] eq {}}]
+  # A span INSIDE one group is drawn as ever, and so is the same table
+  # without a horizontal break.
+  set inside [catch {$doc table -at {20 20} -width 100 -horizontalBreak 1 \
+      -columns {{width 40} {width 40} {width 40}} \
+      -body {{{text ab colSpan 2} c}}}]
+  set whole [catch {$doc table -at {20 100} -width 60 \
+      -columns {{width 30} {width 30}} \
+      -body {{{text ab colSpan 2}} {c d}}}]
+  $doc destroy
+  list $code $empty $inside $whole
+} -result {{TCLPDF TABLE ARGUMENT colSpan} 1 0 0}
+
+# --- round 8 hardening: lists, repeated columns, and the PDF range --------
+
+test table-r8-38.1 {the list options are lists} -body {
+  # [llength] on a string that is not a list is a Tcl error, and that is what
+  # a caller heard: TCL VALUE LIST BRACE, "unmatched open brace in list",
+  # naming no option.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach option {columns head body foot} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -width 60 -body {{a b}} -$option \{
+    }] 0 3]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF TABLE ARGUMENT columns} {TCLPDF TABLE ARGUMENT head}\
+    {TCLPDF TABLE ARGUMENT body} {TCLPDF TABLE ARGUMENT foot}}
+
+test table-r8-38.2 {repeated columns have to leave room for one that is not} -body {
+  # A group is the repeated columns plus at least one of the slice. Ask for
+  # as many repeats as the table has columns and no group is ever closed:
+  # every column ends up in one group wider than -width, drawn and running
+  # off the page in silence (measured 2026-08-27).
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 9
+  set columns {{width 40} {width 40} {width 40}}
+  set codes {}
+  foreach repeat {3 4 2} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -width 60 -horizontalBreak 1 -columns $columns \
+          -body {{a b c}} -repeatColumns $repeat
+    }] 0 3]
+  }
+  set empty [expr {[::tclpdfTest::content $doc] eq {}}]
+  set fits [catch {$doc table -at {20 20} -width 100 -horizontalBreak 1 \
+      -columns $columns -body {{a b c}} -repeatColumns 1}]
+  $doc destroy
+  list [lsort -unique $codes] $empty $fits
+} -result {{{TCLPDF TABLE ARGUMENT repeatColumns}} 1 0}
+
+test table-r8-38.3 {a distance beyond a PDF real is refused at the call} -body {
+  # :77 says a length beyond about +/-3.403e38 is "refused at the call". The
+  # table's own distances were checked for finiteness only, so 1e39 was taken
+  # by the call and thrown out much later by TableCheckFit, with a forty
+  # digit number in the message.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach option {top bottom minRowHeight width} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -width 100 -body {{a b}} -$option 1e39
+    }] 0 3]
+  }
+  foreach key {padding lineWidth leading} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 20} -width 100 -body {{a b}} -style [list $key 1e39]
+    }] 0 3]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF TABLE ARGUMENT top} {TCLPDF TABLE ARGUMENT bottom}\
+    {TCLPDF TABLE ARGUMENT minRowHeight} {TCLPDF TABLE ARGUMENT width}\
+    {TCLPDF TABLE STYLE padding} {TCLPDF TABLE STYLE lineWidth}\
+    {TCLPDF TABLE STYLE leading}}
+
+# --- round 8 no. 5, the same class in TableRow ----------------------------
+
+test table-r8-5.1 {a refused row leaves no empty TR beside the rows that drew} -body {
+  # TableRow opened a TR, ran the cells under [catch] and closed the bracket
+  # on the way out - so a cell that refused before it drew anything left an
+  # element a reader announces and that holds nothing (ISO 14289-1 7.1), and
+  # veraPDF counts it as a row. Handed over from the structure package,
+  # whose StructureSnapshot/StructureRollback draw the commit boundary at
+  # the content stream: nothing marked, nothing attached, nothing reserved,
+  # and the element goes back.
+  #
+  # THE SECOND ROW IS THE ONE THAT FAILS, and that is the case the outer
+  # bracket cannot answer: the whole table sits in a Table element which is
+  # rolled back the same way, so a table whose FIRST cell refuses disappears
+  # whole. Here row one is drawn and marked, the Table has been paid for and
+  # stays - and without this fix row two's empty TR stayed with it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 9
+  set refused [catch {$doc table -at {20 20} -width 100 \
+      -body {{a b} {{text c style {fill nosuchcolour}} d}}}]
+  $doc structure P -script {$doc text "danach" -at {20 80}}
+  set path [::tclpdfTest::scratch tableDeadRow.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  # One Table, ONE row, the two cells that were drawn, and the paragraph
+  # after it.
+  list $refused [regexp -all {/S /Table} $bytes] [regexp -all {/S /TR} $bytes] \
+      [regexp -all {/S /TD} $bytes] [regexp -all {/S /P} $bytes]
+} -result {1 1 1 2 1}
+
+test table-r8-5.2 {a table that drew nothing at all leaves nothing behind} -body {
+  # The other half, carried by the Table bracket rather than by the row: a
+  # refusal in the FIRST cell has nothing marked anywhere, so the whole
+  # element goes and the tree holds only what came after it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 9
+  set refused [catch {$doc table -at {20 20} -width 100 -body {{a b}} \
+      -bodyStyle {fill nosuchcolour}}]
+  $doc structure P -script {$doc text "danach" -at {20 60}}
+  set path [::tclpdfTest::scratch tableDeadTable.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $refused [regexp -all {/S /Table} $bytes] [regexp -all {/S /TR} $bytes] \
+      [regexp -all {/S /P} $bytes]
+} -result {1 0 0 1}
 
 cleanupTests

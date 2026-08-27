@@ -95,6 +95,16 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -size of form \"$name\" is\
           {[dict get $options size]} - a form needs a width and a height above zero"
     }
+    # AND ABOVE ZERO AS THE /BBox WILL SAY IT (Table 95; [aboveZero] in
+    # page.tcl carries the reasoning for the whole class). "-size {1e-6
+    # 1e-6}" is 2.8e-6 pt: it passes the line above, which reads the number
+    # the caller wrote, and reached the file as "/BBox [0 0 0 0]" - a frame
+    # with no inside, everything the script drew clipped away, and no reader
+    # or validator with a word to say about it. Measured 2026-08-27.
+    foreach {side points} [list width $widthPoints height $heightPoints] {
+      my aboveZero $points "the $side of form \"$name\" (-size\
+          {[dict get $options size]})" [list TCLPDF FORM ARGUMENT size]
+    }
 
     # The script draws onto a temporary page whose height is the form height -
     # that way [coords] mirrors against the right value and every existing
@@ -293,13 +303,46 @@ oo::define ::tclpdf::document::document {
         [expr {$heightUnit * $scale}] $options] x y
     lassign [my coords $x [expr {$y + $heightUnit * $scale}]] px py
     set matrix [::tclpdf::geometry translate $px $py]
-    if {[dict get $options rotate] != 0} {
-      set matrix [::tclpdf::geometry multiply \
-          [::tclpdf::geometry rotate [dict get $options rotate]] $matrix]
-    }
     if {$scale != 1} {
       set matrix [::tclpdf::geometry multiply \
           [::tclpdf::geometry scale $scale] $matrix]
+    }
+    # AND THE TURN IS ABOUT -at, which is the manual's word for it (doc,
+    # "form place" and "image place": "-rotate turns the placement about the
+    # point -at names") and the word the refusal in [fitCheck] uses as well.
+    #
+    # It was about the form's OWN origin until 2026-08-27 - the rotation was
+    # composed before the translation, so the fixed point was wherever the
+    # form's (0, 0) landed, which is the BOTTOM left corner of the upright
+    # placement while -at names the top left one. Measured: a 30 by 10 mm
+    # form at -at {50 50} -rotate 90 wrote "0 1 -1 0 141.73228 113.38583 cm"
+    # and hung below and left of the point it was supposed to turn about, a
+    # form's height away from it. No reader and no validator has anything to
+    # say about that; only the caller who drew a mark at -at sees it.
+    #
+    # Through [turnedAbout] in page.tcl, which is where the picture road asks
+    # the same question - the wiring around [geometry about] stood twice for
+    # a day and dup-scan said so. AFTER the scale, not before: the turn is of
+    # the finished placement, so scaling first and turning the result is what
+    # "turns the placement" says. The two commute about their own origin but
+    # not about a point.
+    set matrix [my turnedAbout $matrix $x $y [dict get $options rotate]]
+    # AND THE MATRIX THAT GOES INTO THE STREAM IS HELD TO WHAT A RAW -matrix
+    # IS HELD TO, exactly as [transform] holds its own composed one (8.3.4).
+    # "-scale 1e-6" passed the "above zero" check on the factor and wrote
+    # "0 0 0 0 28.34646 255.11808 cm" - measured 2026-08-27: a singular cm,
+    # the very matrix [transform] refuses in the caller's own words, and
+    # everything under it collapsed onto a point. Asked of the numbers AS
+    # WRITTEN ([geometry singular]), because that is the cut a PDF real of
+    # five decimals draws. Nothing has been written at this point - the mark
+    # below is what opens the placement.
+    if {[::tclpdf::geometry singular $matrix]} {
+      return -code error -errorcode [list TCLPDF GEOMETRY MATRIX "form place"] \
+          "tclpdf: form place composes to the singular matrix {$matrix} -\
+          a*d - b*c must not be zero, or the form collapses onto a line with\
+          no way back to the page; a factor below 0.00001 counts as zero\
+          here, because that is what a PDF real holds (7.3.3) and what the\
+          file would say"
     }
 
     # The invocation is content on the page: a Figure when -alt describes it,
@@ -428,4 +471,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xObject 1.7
+package provide tclpdf::xObject 1.8

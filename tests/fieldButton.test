@@ -1417,4 +1417,48 @@ test fieldButton-31.1 {a caption the button's font cannot set is refused at the 
     set outcome
 } -result {1 1 {TCLPDF FIELD GLYPH caption}}
 
+# --- round 8: every measurement is turned away at the call -----------------
+
+test fieldButton-32.1 {NaN and Inf at -markSize, -borderWidth and -size} -body {
+  # [string is double] is true for both: NaN then compares false against
+  # every bound and Inf passes the lower one, so the pair was taken at the
+  # call and died at the WRITE - "can't use non-numeric floating-point value
+  # as operand of \"-\"", ARITH DOMAIN, from inside an appearance stream,
+  # which leaves the document unwritable for good (round 8, annot H1). The
+  # round-7 repair reached fieldText.tcl and stopped there.
+  set said {}
+  foreach {what call} {
+    {check -markSize}    {field check k -rect {20 40 5 5} -markSize @}
+    {check -border}      {field check k -rect {20 40 5 5} -borderWidth @}
+    {radio -markSize}    {field radio r -buttons {{a {20 40 5 5}} {b {20 50 5 5}}} -markSize @}
+    {radio -border}      {field radio r -buttons {{a {20 40 5 5}} {b {20 50 5 5}}} -borderWidth @}
+    {button -size}       {field button p -rect {20 40 30 8} -caption Go -size @}
+    {button -border}     {field button p -rect {20 40 30 8} -caption Go -borderWidth @}
+  } {
+    foreach value {NaN Inf} {
+      set doc [buttonDoc]
+      set code [::tclpdfTest::refusalCode \
+          "\$doc [string map [list @ $value] $call]"]
+      set written [catch {$doc write [::tclpdfTest::scratch fieldbutton-32-1.pdf]}]
+      file delete [::tclpdfTest::scratch fieldbutton-32-1.pdf]
+      $doc destroy
+      if {[lrange $code 0 1] ne {TCLPDF FIELD} || $written} {
+        lappend said [list $what $value $code $written]
+      }
+    }
+  }
+  set said
+} -result {}
+
+test fieldButton-32.2 {a finite measurement is taken as before} -body {
+  set doc [buttonDoc]
+  set fine {}
+  lappend fine [catch {$doc field check k -rect {20 40 5 5} -markSize 3 -borderWidth 0}]
+  lappend fine [catch {$doc field button p -rect {20 60 30 8} -caption Go -size 9}]
+  lappend fine [catch {$doc write [::tclpdfTest::scratch fieldbutton-32-2.pdf]}]
+  file delete [::tclpdfTest::scratch fieldbutton-32-2.pdf]
+  $doc destroy
+  set fine
+} -result {0 0 0}
+
 cleanupTests

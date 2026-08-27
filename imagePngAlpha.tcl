@@ -263,9 +263,23 @@ proc ::tclpdf::imagePngAlpha::colourKeyMask {parsed} {
 
 # Unpack one row of palette indices. For depths below 8 several indices share a
 # byte, most significant bits first (PNG 7.2).
+#
+# The four depths a palette image has (PNG 11.2.2) and no other, said here
+# rather than computed round: "8 / $depth" is 0 at depth 16 and the loop then
+# runs no turn at all, which came out as a soft mask of nought bytes rather
+# than as a refusal; at depth 3 it is 2, with a mask of 7, and the indices
+# are read out of the wrong bits. [parse] refuses both depths at the IHDR
+# now, so nothing in the package can reach this - and that is exactly why it
+# says so instead of computing an answer. The neighbour [colourKeyMask] above
+# guards its own way in the same words.
 proc ::tclpdf::imagePngAlpha::Indices {line depth width} {
   if {$depth == 8} {
     return [lrange $line 0 [expr {$width - 1}]]
+  }
+  if {$depth ni {1 2 4}} {
+    return -code error -errorcode [list TCLPDF IMAGE PNG indices] \
+        "tclpdf: palette indices are unpacked for the four depths a palette\
+        image is written at - 1, 2, 4 and 8 (PNG 11.2.2), not $depth"
   }
   set perByte [expr {8 / $depth}]
   set mask [expr {(1 << $depth) - 1}]
@@ -284,4 +298,4 @@ proc ::tclpdf::imagePngAlpha::Indices {line depth width} {
   return $indices
 }
 
-package provide tclpdf::imagePngAlpha 1.3
+package provide tclpdf::imagePngAlpha 1.4

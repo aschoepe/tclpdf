@@ -1231,4 +1231,100 @@ test document-destination-27.1 {destination -zoom is a magnification of 0 or mor
   set result
 } -result {1 {TCLPDF OPTION ZOOM} 1 {TCLPDF OPTION ZOOM} 1 {TCLPDF OPTION ZOOM} 1 1 1}
 
+# --- round 8 no. 35: -typeArea is a distance at the call ------------------
+
+test document-r8-35.1 {NaN and a magnitude past a PDF real are not margins} -body {
+  # [string is double] is true for NaN and for Inf, and NaN compares false
+  # against every range check, so "$value < 0" waved it past: "-typeArea
+  # {NaN 10}" was taken by [new] and by [configure] and died in Tcl's own
+  # words - "can't use non-numeric floating-point value as operand of +" -
+  # out of [page typeArea], which is the first call that measures a page
+  # against it (measured 2026-08-27). The same value reaches -height max,
+  # -paginate and every table.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach value {{NaN 10} {10 Inf} {1e39 10} {10 10 -Inf 10}} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc configure -typeArea $value
+    }] 0 3]
+  }
+  # The document is untouched by all four: the margins it had still measure.
+  set area [lmap value [$doc page typeArea] {format %.2f $value}]
+  $doc destroy
+  list [lsort -unique $codes] $area
+} -result {{{TCLPDF DOCUMENT ARGUMENT typeArea}} {10.50 14.85 199.50 282.15}}
+
+test document-r8-35.2 {the same at the constructor, before anything exists} -body {
+  set code [lrange [::tclpdfTest::refusalCode {
+    tclpdf new -unit mm -typeArea {NaN 10}
+  }] 0 3]
+  set good [tclpdf new -unit mm -typeArea {20 25}]
+  set area [$good cget -typeArea]
+  $good destroy
+  list $code $area
+} -result {{TCLPDF DOCUMENT ARGUMENT typeArea} {20 25}}
+
+# --- round 8 no. 64: every public method routes through the topic table ----
+
+test document-lazy-1.1 {no public method answers "unknown method" as a first call} -body {
+  # The topic table of [unknown] is the ONLY place the core knows a module
+  # exists, and it is kept by hand. A name missing from it works perfectly
+  # for as long as anything else has already pulled the module in, and
+  # answers TCL LOOKUP METHOD the moment a script BEGINS with it - against
+  # the promise (:1459) that every refusal of this package starts with
+  # "tclpdf:". Measured 2026-08-27: [overprint] was missing, and with it
+  # [streamState] of page.tcl, which [save] and [restore] ask for, plus
+  # [linksWithoutElement] and the three field reports - six names, so a class
+  # rather than a slip.
+  #
+  # Every public method of the class, each one as the FIRST call of a fresh
+  # interpreter of its own. A slave interpreter per name rather than a
+  # process per name: a slave loads its own copy of the package, which is
+  # what makes the call the first one, and the whole sweep costs about two
+  # seconds. The answer may be any refusal at all - most of these methods
+  # need arguments or a page - as long as it is not the interpreter saying
+  # the method does not exist.
+  set here [file dirname [file dirname [file normalize [info script]]]]
+  ::tclpdfTest::freshInterp [string map [list @HERE@ [list $here]] {
+    set here @HERE@
+    package require tclpdf
+    # Every module of the tree, so that the class is complete before the
+    # names are read off it. A module that cannot load (no tdom, no Tk) is
+    # simply not asked about.
+    foreach file [lsort [glob -directory $here *.tcl]] {
+      set name [file rootname [file tail $file]]
+      if {$name in {tclpdf pkgIndex}} {
+        continue
+      }
+      catch {package require tclpdf::$name}
+    }
+    set doc [::tclpdf::new]
+    foreach method [lsort -unique [info object methods $doc -all]] {
+      if {$method eq "destroy"} {
+        continue
+      }
+      set slave [interp create]
+      $slave eval [list lappend auto_path $here]
+      set script [string map [list @M@ $method] {
+        package require tclpdf
+        set d [::tclpdf::new]
+        set code [catch {$d @M@} error options]
+        set errorcode {}
+        if {[dict exists $options -errorcode]} {
+          set errorcode [dict get $options -errorcode]
+        }
+        return [lrange $errorcode 0 1]
+      }]
+      if {[catch {$slave eval $script} answer]} {
+        set answer "the interpreter itself failed: $answer"
+      }
+      interp delete $slave
+      if {$answer eq "TCL LOOKUP"} {
+        puts "$method is missing from the topic table of \[unknown\]"
+      }
+    }
+  }]
+} -result {}
+
 cleanupTests

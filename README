@@ -37,7 +37,9 @@ SYNOPSIS
             as Type0/CIDFontType2 with Identity-H and a ToUnicode CMap, subset
             down to the glyphs actually used, a variable face at any point on
             its axes; OpenType with CFF outlines and Type 1 whole, since
-            subsetting either would need outlines this package does not read.
+            subsetting either would need the outlines rewritten, which this
+            package does not do - it reads the charstrings for their widths
+            and metrics, not to redraw them.
             Pair kerning and the standard ligatures are applied from the
             font's own tables, both on by default. A missing character raises
             an error instead of silently disappearing.
@@ -157,7 +159,7 @@ INSTALLING
 
     Build IN the source directory. A separate build directory configures
     cleanly but cannot run the tests: the generated pkgIndex.tcl locates the
-    modules through $dir, which is then the build directory, while the 100
+    modules through $dir, which is then the build directory, while the 103
     .tcl files stay where the sources are. Nothing is lost by building
     in-tree - make install puts index and modules together again either way.
 

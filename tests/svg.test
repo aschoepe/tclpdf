@@ -232,9 +232,17 @@ test svg-2.8 {radii too small for the distance are scaled up} -body {
   list [format %.1f $endX] [format %.1f $endY]
 } -result {20.0 0.0}
 
-test svg-2.9 {a wrong number of arguments is refused} -body {
-  ::tclpdf::svgPath operators {M0 0 C1 2 3} $plain
-} -returnCodes error -match glob -result {*groups of 6 numbers*}
+test svg-2.9 {a wrong number of arguments ends the path, it does not throw it away} -body {
+  # CORRECTED ON 2026-08-27, and the old expectation was the defect: this
+  # test held a refusal (TCLPDF SVG PATH) that cost the caller the whole
+  # drawing over one missing coordinate. SVG 1.1, 8.3.9 asks for the path to
+  # be rendered "up to (but not including) the path command containing the
+  # first error" - so the moveto stands, the incomplete C is dropped, and the
+  # loss is named in the variable the caller passes.
+  set operators [::tclpdf::svgPath operators {M0 0 C1 2 3} $plain problem]
+  list $operators $problem
+} -result {{0 0 m
+} C}
 
 test svg-3.1 {a drawing produces path operators, not an image} -body {
   # The whole point of the module: the drawing stays vectors. If it were
@@ -757,12 +765,18 @@ proc svgPaintOf {attributes} {
   return [list $code $stream]
 }
 
-test svg-8.1 {a colour the parser refuses leaves the drawing balanced} -body {
+test svg-8.1 {a colour the parser refuses leaves the page as it was} -body {
   # The paint used to open a bare [save] that the drawing's own bracket
   # count knew nothing about, so the unwinding at the end left it standing.
+  #
+  # CORRECTED ON 2026-08-27 from "balanced" to "nothing at all": every paint
+  # value of the tree is read before the mark and before the drawing's own
+  # q, so a refusal now leaves the page untouched rather than a matched pair
+  # of brackets around nothing. Balanced was the right answer while the
+  # refusal came per element; it is not the right answer any more.
   lassign [svgPaintOf {fill="nosuchcolour"}] code stream
   list $code [regexp -all {(?:^|\s)q(?=\s)} $stream] [regexp -all {(?:^|\s)Q(?=\s)} $stream]
-} -result {1 1 1}
+} -result {1 0 0}
 
 test svg-8.2 {a dash array keeps its exponent} -body {
   # "1e-3 2" used to be cut into 1, 3 and 2 by a pattern that knew digits
@@ -1538,8 +1552,12 @@ proc svgAfter {markup} {
 test svg-text-32.1 {a text whose paint is refused leaves no bracket open} -body {
   # The paint is worked out BEFORE the flip is written, so the refusal
   # reaches the caller with the stream as balanced as it was.
+  #
+  # CORRECTED ON 2026-08-27, for the reason svg-8.1 records: the paint values
+  # are read before the mark, so the page keeps NO bracket at all rather
+  # than a closed one.
   svgAfter {<text x="10" y="50" font-size="12" fill="notacolour">Hallo</text>}
-} -result {1 1 1}
+} -result {0 0 1}
 
 test svg-text-32.2 {the same text with a paint that parses} -body {
   # The mutation of 32.1: two brackets, both closed, and no refusal - so 32.1
@@ -1975,5 +1993,681 @@ test svg-finite-41.10 {and a per cent offset that is a number still divides} -bo
   list [expr {$percent eq $plain}] \
       [regexp {/Bounds \[0\.5\]} [lindex $percent end]]
 } -result {1 1}
+
+# -- round 8: SVG 1.1 against the drawing ----------------------------------
+#
+# The measurements behind these are in docs/NORM-REVIEW-8.md (Nr. 11 and
+# 40-62) and were taken against rsvg-convert, one probe per finding. What
+# they have in common is that no PDF checker sees any of them: the file is
+# well formed, qpdf --check is silent, and the drawing is simply not the one
+# the file describes.
+
+# A drawing with its own viewBox, so that lengths and per cents have a
+# viewport with numbers worth reading.
+proc svgIn {viewBox markup {options {-width 50}}} {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data "<svg viewBox=\"$viewBox\"
+      xmlns=\"http://www.w3.org/2000/svg\">$markup</svg>" -at {10 10} {*}$options
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  return $content
+}
+
+proc svgInfoOf {markup} {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  catch {$doc svg -data "<svg viewBox=\"0 0 100 100\"
+      xmlns=\"http://www.w3.org/2000/svg\">$markup</svg>" -at {10 10} -width 50}
+  set info [$doc svg info]
+  $doc destroy
+  return $info
+}
+
+test svg-r8-50.1 {rotate(a) turns the way SVG 1.1 7.6 says} -body {
+  # "equivalent to matrix(cos(a), sin(a), -sin(a), cos(a), 0, 0)" - and the y
+  # flip of this module stands outside the element matrix, so the two are the
+  # same six numbers. The angle was negated, and every rotation came out
+  # mirrored; example 03.03 prints its own counter-test and failed it.
+  regexp {0\.86603 0\.5 -0\.5 0\.86603 0 0 cm} \
+      [svgIn {0 0 100 100} {<g transform="rotate(30)"><rect width="10"
+          height="10" fill="red"/></g>}]
+} -result 1
+
+test svg-r8-50.2 {and a rotation about a point keeps its pivot} -body {
+  # Three matrices in one order: translate(-cx,-cy), rotate, translate(cx,cy).
+  # The point (cx,cy) has to come back to itself, which is what says the
+  # order is right - three correct matrices multiplied the wrong way round
+  # give a wrong drawing.
+  set stream [svgIn {0 0 100 100} {<g transform="rotate(90 50 50)"><rect
+      x="50" y="50" width="10" height="10" fill="red"/></g>}]
+  regexp {(\S+) (\S+) (\S+) (\S+) (\S+) (\S+) cm\nq\n1 0 0 rg} $stream \
+      -> a b c d e f
+  # (50,50) through the matrix: a*50 + c*50 + e, b*50 + d*50 + f
+  list [format %.3f [expr {$a * 50 + $c * 50 + $e}]] \
+      [format %.3f [expr {$b * 50 + $d * 50 + $f}]]
+} -result {50.000 50.000}
+
+test svg-r8-50.3 {skewX and skewY are not each other} -body {
+  # skewX(a) is matrix(1, 0, tan(a), 1, 0, 0) - the THIRD number - and
+  # skewY(a) the second. The two were passed to [geometry skew] the other
+  # way round, so every skewX drew a skewY.
+  list [regexp {1 0 0\.57735 1 0 0 cm} [svgIn {0 0 100 100} \
+          {<g transform="skewX(30)"><rect width="10" height="10"/></g>}]] \
+      [regexp {1 0\.57735 0 1 0 0 cm} [svgIn {0 0 100 100} \
+          {<g transform="skewY(30)"><rect width="10" height="10"/></g>}]]
+} -result {1 1}
+
+test svg-r8-51.1 {an odd number of polyline coordinates writes no broken operator} -body {
+  # "50  l" - an "l" with one operand - is what [foreach {x y}] left behind.
+  # qpdf --check does not see it and poppler reports "Too few (1) args to 'l'
+  # operator"; a reader that leaves the operand on the stack shifts every
+  # operator after it. SVG 9.7: render up to the last properly specified
+  # point, and say so.
+  set stream [svgIn {0 0 100 100} {<polyline points="10,10 90,10 90,90 50"
+      fill="none" stroke="blue"/>}]
+  list [regexp {\n[-0-9.]+ +l\n} $stream] \
+      [regexp -all {[-0-9.]+ [-0-9.]+ l\n} $stream] \
+      [dict get [svgInfoOf {<polyline points="10,10 90,10 90,90 50"
+          fill="none" stroke="blue"/>}] points]
+} -result {0 2 1}
+
+test svg-r8-52.1 {stroke-width="0" paints no stroke at all} -body {
+  # SVG 11.4: "A zero value causes no stroke to be painted." PDF 8.4.3.2 says
+  # the opposite for "0 w" - the thinnest line the device can render - so the
+  # number written through put a hairline on a page that should have been
+  # empty.
+  set stream [svgIn {0 0 100 100} {<rect x="10" y="10" width="80" height="80"
+      fill="none" stroke="red" stroke-width="0"/>}]
+  list [regexp {RG} $stream] [regexp { S\n} $stream]
+} -result {0 0}
+
+test svg-r8-52.2 {and a width above zero still strokes} -body {
+  # The mutation reference for 52.1.
+  set stream [svgIn {0 0 100 100} {<rect x="10" y="10" width="80" height="80"
+      fill="none" stroke="red" stroke-width="2"/>}]
+  list [regexp {RG} $stream] [regexp {\nS\n} $stream]
+} -result {1 1}
+
+test svg-r8-53.1 {currentColor is the colour property, black by default} -body {
+  # The keyword is a <paint> (SVG 4.2, 11.3) and reached [color parse] as a
+  # colour name: TCLPDF COLOUR UNKNOWN, and the whole drawing was lost. It is
+  # the spelling both icon libraries in the corpus use.
+  list [regexp {\n0 g\n} [svgIn {0 0 100 100} \
+          {<rect width="10" height="10" fill="currentColor"/>}]] \
+      [regexp {0\.8 0 0 rg} [svgIn {0 0 100 100} \
+          {<g color="#c00"><rect width="10" height="10" fill="currentColor"/></g>}]] \
+      [regexp {0\.8 0 0 RG} [svgIn {0 0 100 100} \
+          {<g color="#c00"><rect width="10" height="10" fill="none"
+              stroke="CURRENTCOLOR"/></g>}]]
+} -result {1 1 1}
+
+test svg-r8-54.1 {a switch draws the first child whose conditions hold} -body {
+  # SVG 5.8: the first child that evaluates to true is rendered and "the
+  # others are bypassed". Drawn like a <g>, a multilingual label came out in
+  # every language at once.
+  set stream [svgIn {0 0 100 100} {<switch>
+      <rect systemLanguage="zz" width="80" height="80" fill="red"/>
+      <rect width="40" height="40" fill="green"/></switch>}]
+  list [regexp {1 0 0 rg} $stream] [regexp {0 0\.50196 0 rg} $stream]
+} -result {0 1}
+
+test svg-r8-54.2 {an unsatisfiable switch draws nothing} -body {
+  regexp {rg} [svgIn {0 0 100 100} {<switch>
+      <rect requiredExtensions="http://example.com/x" width="80" height="80"
+          fill="red"/></switch>}]
+} -result 0
+
+test svg-r8-54.3 {and the document language decides which child it is} -body {
+  set doc [tclpdf new -compress 0]
+  $doc language de-DE
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><switch>
+      <rect systemLanguage="fr" width="80" height="80" fill="red"/>
+      <rect systemLanguage="de" width="40" height="40" fill="blue"/>
+      </switch></svg>} -at {10 10} -width 50
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {1 0 0 rg} $content] [regexp {0 0 1 rg} $content]
+} -result {0 1}
+
+test svg-r8-55.1 {visibility="hidden" hides, and a child may take it back} -body {
+  # Inherited (SVG 11.5) and read WHERE THE PAINTING HAPPENS - a "visible"
+  # child under a hidden group is drawn, which is only possible if the walk
+  # descends into the group.
+  set stream [svgIn {0 0 100 100} {<rect width="10" height="10" fill="green"/>
+      <rect visibility="hidden" width="10" height="10" fill="red"/>
+      <g visibility="collapse"><circle cx="5" cy="5" r="3" fill="blue"/>
+      <circle cx="5" cy="5" r="2" fill="yellow" visibility="visible"/></g>}]
+  list [regexp {0 0\.50196 0 rg} $stream] [regexp {1 0 0 rg} $stream] \
+      [regexp {0 0 1 rg} $stream] [regexp {1 1 0 rg} $stream]
+} -result {1 0 0 1}
+
+test svg-r8-56.1 {display:none in a style attribute is honoured} -body {
+  # SVG 6.4 puts a style="" declaration above the presentation attribute, and
+  # only the attribute was read - the header of svg.tcl claimed otherwise.
+  list [regexp {1 0 0 rg} [svgIn {0 0 100 100} \
+          {<rect style="display:none" width="10" height="10" fill="red"/>}]] \
+      [regexp {1 0 0 rg} [svgIn {0 0 100 100} \
+          {<rect display="none" width="10" height="10" fill="red"/>}]] \
+      [regexp {1 0 0 rg} [svgIn {0 0 100 100} \
+          {<g display="none"><rect width="10" height="10" fill="red"/></g>}]]
+} -result {0 0 0}
+
+test svg-r8-56.2 {display is not inherited} -body {
+  # A group that IS rendered must not pass a sibling's "none" down. The
+  # slot is cleared per element, the way opacity's is.
+  regexp {1 0 0 rg} [svgIn {0 0 100 100} \
+      {<g display="inline"><rect width="10" height="10" fill="red"/></g>}]
+} -result 1
+
+test svg-r8-57.1 {!important is part of the declaration, not of the value} -body {
+  # CSS 2.1, 6.4.2. Taken for part of the value, "fill:#0a0 !important"
+  # reached the colour module whole and cost the drawing.
+  list [regexp {0 0\.66667 0 rg} [svgIn {0 0 100 100} \
+          {<rect width="10" height="10" fill="#c00"
+              style="fill:#0a0 !important"/>}]] \
+      [regexp {0 0\.66667 0 rg} [svgIn {0 0 100 100} \
+          {<rect width="10" height="10" style="/* weg */ fill:#0a0"/>}]]
+} -result {1 1}
+
+test svg-r8-58.1 {em, ex and per cent are lengths} -body {
+  # "2em" lost its "e" to the number pattern and arrived at [pdfObj num] as
+  # "2e": TCLPDF PDFOBJ NUMBER, from a module the caller never spoke to, and
+  # the whole drawing gone. A per cent is measured against the viewport
+  # (7.10), which is the viewBox here.
+  list [regexp {\n10 10 32 20 re\n} [svgIn {0 0 100 100} \
+          {<rect x="10" y="10" width="2em" height="20" fill="red"/>}]] \
+      [regexp {\n10 10 50 20 re\n} [svgIn {0 0 100 100} \
+          {<rect x="10" y="10" width="50%" height="20" fill="red"/>}]] \
+      [regexp {\n10 10 100 20 re\n} [svgIn {0 0 200 200} \
+          {<rect x="10" y="10" width="50%" height="20" fill="red"/>}]]
+} -result {1 1 1}
+
+test svg-r8-58.2 {and font-size sets what an em is} -body {
+  regexp {\n0 0 24 10 re\n} [svgIn {0 0 100 100} \
+      {<g font-size="12"><rect width="2em" height="10" fill="red"/></g>}]
+} -result 1
+
+test svg-r8-58.3 {a physical unit lands in the unit the drawing measures in} -body {
+  # ONE USER UNIT IS ONE POINT here, and the conversion used 96 px to the
+  # inch while [SvgExtent] read the answer as points: a drawing that named
+  # its own size as 50mm came out 66.67 mm wide, a third too large.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set placed [$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg"
+      width="50mm" height="25mm"><rect width="50" height="25"
+      fill="red"/></svg>} -at {10 10}]
+  $doc destroy
+  list [format %.2f [lindex $placed 2]] [format %.2f [lindex $placed 3]]
+} -result {50.00 25.00}
+
+test svg-r8-58.4 {and pt, cm, in and pc agree with it} -body {
+  set stream [svgIn {0 0 400 400} {<rect width="72pt" height="1in" fill="red"/>
+      <rect width="2.54cm" height="6pc" fill="blue"/>}]
+  list [regexp {\n0 0 72 72 re\n} $stream] [regexp {\n0 0 72 72 re\n} $stream]
+} -result {1 1}
+
+test svg-r8-59.1 {a viewBox of no area draws nothing} -body {
+  # SVG 7.7: "A value of zero disables rendering of the element." Falling
+  # back to width/height drew the whole picture instead.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set placed [$doc svg -data {<svg viewBox="0 0 0 100" width="100"
+      height="100" xmlns="http://www.w3.org/2000/svg"><rect width="80"
+      height="80" fill="red"/></svg>} -at {10 10} -width 50]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [string trim $content] [lrange $placed 2 3]
+} -result {{} {0 0}}
+
+test svg-r8-59.2 {a negative one is an error and is reported} -body {
+  dict get [svgInfoOf {}] viewBox
+} -constraints {} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  catch {$doc svg -data {<svg viewBox="0 0 -10 100"
+      xmlns="http://www.w3.org/2000/svg"><rect width="8" height="8"/></svg>} \
+      -at {10 10} -width 50}
+  set info [$doc svg info]
+  $doc destroy
+  set info
+} -result {viewBox 1}
+
+test svg-r8-60.1 {the three silent omissions are counted} -body {
+  # svg.tcl promises at its head that everything a drawing loses is reported
+  # by [svg info]. Three of the four it names reported nothing: a <style>
+  # block stood in the drawable list, and spreadMethod and gradientTransform
+  # are attributes, which leave no trace of their own.
+  list [dict exists [svgInfoOf {<defs><linearGradient id="g"
+          spreadMethod="reflect"><stop offset="0" stop-color="red"/>
+          <stop offset="1" stop-color="blue"/></linearGradient></defs>
+          <rect width="9" height="9" fill="url(#g)"/>}] spreadMethod] \
+      [dict exists [svgInfoOf {<defs><linearGradient id="g"
+          gradientTransform="rotate(90)"><stop offset="0" stop-color="red"/>
+          <stop offset="1" stop-color="blue"/></linearGradient></defs>
+          <rect width="9" height="9" fill="url(#g)"/>}] gradientTransform] \
+      [dict exists [svgInfoOf {<style>.a { fill: #0a0; }</style>
+          <rect class="a" width="9" height="9"/>}] style]
+} -result {1 1 1}
+
+test svg-r8-60.2 {and a gradient without them reports nothing} -body {
+  # The mutation reference for 60.1.
+  svgInfoOf {<defs><linearGradient id="g"><stop offset="0" stop-color="red"/>
+      <stop offset="1" stop-color="blue"/></linearGradient></defs>
+      <rect width="9" height="9" fill="url(#g)"/>}
+} -result {}
+
+test svg-r8-61.1 {a nested <svg> establishes a viewport} -body {
+  # SVG 7.2 and 14.3.3: a new viewport, mapped through its own viewBox and
+  # clipped to itself. Drawn like a <g>, a 50x50 window with a 100-unit
+  # viewBox came out at full size over the whole drawing.
+  set stream [svgIn {0 0 100 100} {<svg x="50" y="50" width="50" height="50"
+      viewBox="0 0 100 100"><rect width="100" height="100" fill="blue"/></svg>}]
+  list [regexp {50 50 50 50 re W n} $stream] \
+      [regexp {0\.5 0 0 0\.5 50 50 cm} $stream]
+} -result {1 1}
+
+test svg-r8-61.2 {a <symbol> through <use> takes the use's width} -body {
+  # SVG 5.6: width and height on a <use> "only have an effect ... when the
+  # referenced element is an svg or a symbol". The children were taken
+  # directly, so a symbol whose viewBox says 10 units came out ten units
+  # wide where the use asked for 80 - a sixty-fourth of the area.
+  regexp {8 0 0 8 0 0 cm} [svgIn {0 0 100 100} {<defs><symbol id="s"
+      viewBox="0 0 10 10"><rect width="10" height="10" fill="red"/></symbol>
+      </defs><use href="#s" x="10" y="10" width="80" height="80"/>}]
+} -result 1
+
+test svg-r8-62.1 {one gradient stop is a solid colour} -body {
+  # SVG 13.2.4: "If one gradient stop is defined, then paint with the solid
+  # colour fill using the colour defined for that gradient stop." The element
+  # vanished instead, reported as an unresolvable gradient.
+  set stream [svgIn {0 0 100 100} {<defs><linearGradient id="g"><stop
+      offset="0" stop-color="#c00"/></linearGradient></defs>
+      <rect x="10" y="10" width="80" height="80" fill="url(#g)"/>}]
+  list [regexp {0\.8 0 0 rg} $stream] [regexp {scn} $stream]
+} -result {1 0}
+
+test svg-r8-62.2 {and no stop at all is still nothing} -body {
+  # The mutation reference for 62.1: the line is between one stop and none.
+  dict get [svgInfoOf {<defs><linearGradient id="g"/></defs>
+      <rect width="9" height="9" fill="url(#g)"/>}] gradient
+} -result 1
+
+test svg-r8-63.1 {stop-opacity is read and its loss is reported} -body {
+  list [dict exists [svgInfoOf {<defs><linearGradient id="g">
+          <stop offset="0" stop-color="blue" stop-opacity="1"/>
+          <stop offset="1" stop-color="blue" stop-opacity="0"/>
+          </linearGradient></defs>
+          <rect width="9" height="9" fill="url(#g)"/>}] stop-opacity] \
+      [dict exists [svgInfoOf {<defs><linearGradient id="g">
+          <stop offset="0" stop-color="blue"/>
+          <stop offset="1" stop-color="red"/></linearGradient></defs>
+          <rect width="9" height="9" fill="url(#g)"/>}] stop-opacity]
+} -result {1 0}
+
+test svg-r8-64.1 {stop offsets out of order are clamped, not refused} -body {
+  # SVG 13.2.4 has an express repair instruction for it; the values went to
+  # [shading] as they stood and TCLPDF SHADING STOPS order cost the whole
+  # drawing. PDF wants them strictly increasing (7.10.4) and compares them as
+  # the file carries them, five decimals - so equal ones are nudged apart by
+  # a hair rather than merged.
+  set stream [svgIn {0 0 100 100} {<defs><linearGradient id="g">
+      <stop offset="0" stop-color="#000"/><stop offset="0.8" stop-color="#f00"/>
+      <stop offset="0.3" stop-color="#0f0"/><stop offset="1" stop-color="#00f"/>
+      </linearGradient></defs>
+      <rect x="10" y="10" width="80" height="80" fill="url(#g)"/>}]
+  regexp {scn} $stream
+} -result 1
+
+test svg-r8-64.2 {and an offset outside 0..1 is clamped into it} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g"><stop offset="-1" stop-color="#000"/>
+      <stop offset="0.5" stop-color="#f00"/><stop offset="9" stop-color="#00f"/>
+      </linearGradient></defs><rect width="80" height="80" fill="url(#g)"/></svg>} \
+      -at {10 10} -width 50
+  set functions [::tclpdfTest::objects $doc /FunctionType]
+  $doc destroy
+  regexp {/Bounds \[0\.5\]} [lindex $functions end]
+} -result 1
+
+test svg-r8-65.1 {href carries the attributes as well as the stops} -body {
+  # SVG 13.2.4 inherits gradientUnits, the end points, the circle,
+  # spreadMethod and gradientTransform too. Only the stops were followed, so
+  # a gradient that took its geometry from a base ran with the DEFAULTS -
+  # horizontally where the base said vertical, without a word.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"
+      xmlns:xlink="http://www.w3.org/1999/xlink"><defs>
+      <linearGradient id="base" x1="0" y1="0" x2="0" y2="1"/>
+      <linearGradient id="g" xlink:href="#base"><stop offset="0"
+      stop-color="#000"/><stop offset="1" stop-color="#fff"/></linearGradient>
+      </defs><rect x="10" y="10" width="80" height="80" fill="url(#g)"/></svg>} \
+      -at {10 10} -width 50
+  set shadings [::tclpdfTest::objects $doc /ShadingType]
+  $doc destroy
+  # x1 = x2 and y1 != y2: a vertical axis.
+  regexp {/Coords \[10 10 10 90\]} [lindex $shadings end]
+} -result 1
+
+test svg-r8-66.1 {a radial gradient in objectBoundingBox units is an ellipse} -body {
+  # SVG 7.11 maps the unit square onto the bounding box and 13.2.3 puts a
+  # CIRCLE in that square, so the mapping belongs in the pattern matrix. The
+  # radius was worked out as a scalar against the longer side: on a 100x40
+  # box the circle ran out of the shape above and below.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><radialGradient id="g"><stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#004"/></radialGradient></defs>
+      <rect x="0" y="30" width="100" height="40" fill="url(#g)"/></svg>} \
+      -at {10 10} -width 50
+  set shadings [::tclpdfTest::objects $doc /ShadingType]
+  set patterns [::tclpdfTest::objects $doc /PatternType]
+  $doc destroy
+  # The circle is the unit one; the box mapping is in the /Matrix, whose
+  # first and fourth numbers are the two extents and therefore differ.
+  regexp {/Matrix \[([-0-9.]+) 0 0 ([-0-9.]+) } [lindex $patterns end] -> a d
+  list [regexp {/Coords \[0\.5 0\.5 0 0\.5 0\.5 0\.5\]} [lindex $shadings end]] \
+      [format %.3f [expr {abs($a / double($d))}]]
+} -result {1 2.500}
+
+test svg-r8-67.1 {gradientUnits alone decides what a number means} -body {
+  # The 0..1 heuristic read x2="1" under userSpaceOnUse as a fraction and
+  # drew the ramp over the whole box; a focus at -0.2 under
+  # objectBoundingBox, which 13.2.3 expressly allows, became a length.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0"
+      x2="1" y2="0"><stop offset="0" stop-color="#f00"/>
+      <stop offset="1" stop-color="#00f"/></linearGradient></defs>
+      <rect width="100" height="40" fill="url(#g)"/></svg>} -at {10 10} -width 50
+  set shadings [::tclpdfTest::objects $doc /ShadingType]
+  $doc destroy
+  regexp {/Coords \[0 0 1 0\]} [lindex $shadings end]
+} -result 1
+
+test svg-r8-68.1 {a tspan keeps its place in the line and its own paint} -body {
+  # "A<tspan>B</tspan>C" came out as "ACB": the element's own character data
+  # was collected first and the tspan text appended behind it. The tspan's
+  # own attributes were dropped with it.
+  set stream [svgIn {0 0 200 100} {<text x="10" y="30" font-size="16"
+      fill="#000">A<tspan fill="#c00">B</tspan>C</text>}]
+  list [join [::tclpdfTest::shows $stream] {}] [regexp {0\.8 0 0 rg} $stream]
+} -result {(A)(B)(C) 1}
+
+test svg-r8-68.2 {a tspan with its own x starts a new chunk there} -body {
+  regexp {1 0 0 1 100 60 Tm} [svgIn {0 0 200 100} {<text x="10" y="60"
+      font-size="16"><tspan x="100" y="60">weit rechts</tspan></text>}]
+} -result 1
+
+test svg-r8-68.3 {an x list is read, not thrown away} -body {
+  # SVG 10.4 makes x a coordinate LIST. [SvgLength] could not read "10 40 70"
+  # and answered its default of 0, so the line jumped to the left edge.
+  regexp {1 0 0 1 10 90 Tm} [svgIn {0 0 200 100} {<text x="10 40 70" y="90"
+      font-size="16">XYZ</text>}]
+} -result 1
+
+test svg-r8-68.4 {fill="none" on text paints nothing} -body {
+  # SVG 11.3. Turned into black, an invisible line stood on the page in the
+  # darkest colour there is.
+  set stream [svgIn {0 0 200 100} {<text x="10" y="50" font-size="20"
+      fill="none">unsichtbar</text>}]
+  list [regexp {BT} $stream] [regexp {\n0 g\n} $stream]
+} -result {0 0}
+
+test svg-r8-68.5 {and a text with a colour still reaches the page} -body {
+  # The mutation reference for 68.4.
+  regexp {BT} [svgIn {0 0 200 100} {<text x="10" y="50" font-size="20"
+      fill="red">sichtbar</text>}]
+} -result 1
+
+test svg-r8-69.1 {stroke-miterlimit is written, because the two defaults differ} -body {
+  # SVG 11.4 starts at 4, ISO 32000-2 8.4.3.5 at 10 - so a file that says
+  # nothing came out with spikes SVG would have cut off, at every corner
+  # under 28.96 degrees.
+  list [regexp {\n4 M\n} [svgIn {0 0 100 100} {<path d="M35,95 L50,30 L65,95"
+          fill="none" stroke="#000" stroke-width="10"/>}]] \
+      [regexp {\n8 M\n} [svgIn {0 0 100 100} {<path d="M35,95 L50,30 L65,95"
+          fill="none" stroke="#000" stroke-miterlimit="8"/>}]] \
+      [regexp {M\n} [svgIn {0 0 100 100} {<path d="M35,95 L50,30 L65,95"
+          fill="none" stroke="#000" stroke-linejoin="round"/>}]]
+} -result {1 1 0}
+
+test svg-r8-70.1 {stroke-dashoffset is the phase of the dash pattern} -body {
+  # 8.4.3.6 has the operand and it was written as a fixed 0.
+  list [regexp {\[10 10\] 10 d} [svgIn {0 0 100 100} {<line x1="0" y1="50"
+          x2="100" y2="50" stroke="#000" stroke-dasharray="10 10"
+          stroke-dashoffset="10"/>}]] \
+      [regexp {\[10 10\] 0 d} [svgIn {0 0 100 100} {<line x1="0" y1="50"
+          x2="100" y2="50" stroke="#000" stroke-dasharray="10 10"
+          stroke-dashoffset="-4"/>}]]
+} -result {1 1}
+
+test svg-r8-71.1 {the objectBoundingBox is the curve, not its control points} -body {
+  # SVG 7.11 asks for "the tightest fitting rectangle". A cubic reaches its
+  # extremes at the roots of its derivative: for "M0,10 C0,110 100,110
+  # 100,10" the real lower edge is 85 and the control points sit at 110, so
+  # a gradient ran only three quarters of its ramp inside the shape.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#fff"/>
+      </linearGradient></defs><path d="M0,10 C0,110 100,110 100,10 Z"
+      fill="url(#g)"/></svg>} -at {10 10} -width 50
+  set shadings [::tclpdfTest::objects $doc /ShadingType]
+  $doc destroy
+  regexp {/Coords \[0 10 0 85\]} [lindex $shadings end]
+} -result 1
+
+test svg-r8-72.1 {white space in a text is collapsed} -body {
+  # SVG 10.15 for xml:space="default": newlines out, tabs to spaces, runs of
+  # spaces to one, and the ends trimmed. [string trim] did the ends only.
+  list [join [::tclpdfTest::shows [svgIn {0 0 200 60} \
+          "<text x=\"10\" y=\"40\" font-size=\"16\">   Hallo    Welt   </text>"]] {}] \
+      [join [::tclpdfTest::shows [svgIn {0 0 200 60} \
+          "<text x=\"10\" y=\"40\" font-size=\"16\"\
+          xml:space=\"preserve\"> Hallo  Welt </text>"]] {}]
+} -result {{{(Hallo Welt)}} {{( Hallo  Welt )}}}
+
+test svg-r8-73.1 {the two arc flags are single digits} -body {
+  # The path grammar in F.6 makes the separator between a flag and the number
+  # behind it optional, so "a30,30 0 0160,0" is well formed: large-arc 0,
+  # sweep 1, endpoint 60,0. Read as ordinary numbers, "0160" was one token
+  # and the group came out five long.
+  # An own transform: "plain" is a global that a test further up rebinds to
+  # a content stream.
+  set identity {apply {{x y} {list $x $y}}}
+  set glued [::tclpdf::svgPath operators {M20,50a30,30 0 0160,0} $identity]
+  set spaced [::tclpdf::svgPath operators {M20,50a30,30 0 0 1 60,0} $identity]
+  list [expr {$glued eq $spaced}] [expr {$glued ne {}}]
+} -result {1 1}
+
+test svg-r8-73.2 {a path error costs the rest of the path and nothing more} -body {
+  # SVG 8.3.9. The refusal cost the whole drawing - the valid beginning of
+  # the path AND everything drawn after it.
+  set stream [svgIn {0 0 100 100} {<path d="M10,10 L90,10 L90,90 L50"
+      fill="none" stroke="black"/><circle cx="20" cy="80" r="10" fill="green"/>}]
+  list [regexp {10 10 m} $stream] [regexp {0 0\.50196 0 rg} $stream] \
+      [dict get [svgInfoOf {<path d="M10,10 L90,10 L50"/>}] path-error]
+} -result {1 1 1}
+
+test svg-r8-74.1 {a use cycle is refused before anything is drawn} -body {
+  # SVG 5.6 calls it an error. The answer used to be "restore without a save"
+  # - about this package's own bookkeeping, naming neither the use nor the
+  # cycle.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc svg -data {<svg viewBox="0 0 100 100"
+      xmlns="http://www.w3.org/2000/svg"><g id="a"><rect width="20" height="20"
+      fill="red"/><use href="#a" x="5" y="5"/></g></svg>} -at {10 10} -width 50}]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string trim $content]
+} -result {{TCLPDF SVG REFERENCE cycle} {}}
+
+test svg-r8-74.2 {a use that is merely deep is drawn} -body {
+  # The mutation reference for 74.1: the check must not turn a diamond into
+  # a cycle. #b is used twice, which is a shared reference, not a loop.
+  regexp {rg} [svgIn {0 0 100 100} {<defs><rect id="b" width="5" height="5"
+      fill="red"/><g id="a"><use href="#b"/><use href="#b" x="10"/></g></defs>
+      <use href="#a"/><use href="#a" y="10"/>}]
+} -result 1
+
+test svg-r8-74.3 {an unfolding beyond the limit is refused with its own code} -body {
+  # Availability, not security: ten levels of ten copies is 10^10 rectangles
+  # out of two kilobytes of markup, and thirteen levels already took 6.8 s.
+  set markup {<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs>}
+  append markup {<rect id="l0" width="1" height="1" fill="red"/>}
+  for {set level 1} {$level <= 14} {incr level} {
+    append markup "<g id=\"l$level\">"
+    for {set copy 0} {$copy < 3} {incr copy} {
+      append markup "<use href=\"#l[expr {$level - 1}]\" x=\"$copy\"/>"
+    }
+    append markup "</g>"
+  }
+  append markup {</defs><use href="#l14"/></svg>}
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc svg -data $markup -at {10 10} -width 50}]
+  $doc destroy
+  set code
+} -result {TCLPDF SVG LIMIT use}
+
+test svg-r8-75.1 {an entity bomb is refused before it is expanded} -body {
+  # xml.tcl claimed "tdom refuses one that amplifies beyond 100x, its own
+  # default". Measured 2026-08-27: a 424-byte document came back with a
+  # million characters in 13 ms.
+  set markup "<?xml version=\"1.0\"?>\n<!DOCTYPE svg \[\n"
+  append markup " <!ENTITY a \"aaaaaaaaaa\">\n"
+  foreach {name inner} {b a c b d c e d f e} {
+    append markup " <!ENTITY $name \"[string repeat &$inner\; 10]\">\n"
+  }
+  append markup "\]>\n<svg xmlns=\"http://www.w3.org/2000/svg\"\
+      viewBox=\"0 0 100 100\"><text x=\"0\" y=\"20\">&f;</text></svg>"
+  set doc [tclpdf new]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc svg -data $markup -at {10 10} -width 50}]
+  $doc destroy
+  set code
+} -result {TCLPDF XML ENTITY expansion}
+
+test svg-r8-75.2 {and an ordinary entity still expands} -body {
+  # The mutation reference for 75.1.
+  set markup "<!DOCTYPE svg \[<!ENTITY hallo \"Welt\">\]>\n<svg\
+      xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 60\">\
+      <text x=\"0\" y=\"20\" font-size=\"16\">&hallo;</text></svg>"
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data $markup -at {10 10} -width 50
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  join [::tclpdfTest::shows $content] {}
+} -result {(Welt)}
+
+test svg-r8-75.3 {an entity defined in terms of itself is a cycle} -body {
+  set markup "<!DOCTYPE svg \[<!ENTITY a \"x&b;\"><!ENTITY b \"y&a;\">\]>\n<svg\
+      xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"/>"
+  set doc [tclpdf new]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc svg -data $markup -at {10 10} -width 50}]
+  $doc destroy
+  set code
+} -result {TCLPDF XML ENTITY cycle}
+
+test svg-r8-76.1 {a refused drawing leaves the page and the tree as they were} -body {
+  # The finding of the codex review: a colour refusal reached the caller with
+  # the elements BEFORE it already on the page, and in a tagged document a
+  # Figure carrying the caller's -alt stood around the fragment. Streams and
+  # marks were balanced and veraPDF ua1 called the file conformant, so no
+  # tool saw it - and a screen reader read out a description of a picture
+  # that is not there.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc language de-DE
+  $doc page add
+  set code [::tclpdfTest::refusalCode {$doc svg -data {<svg viewBox="0 0 20 20"
+      xmlns="http://www.w3.org/2000/svg"><rect width="5" height="5" fill="#00f"/>
+      <g opacity="0.5"><rect x="6" y="6" width="5" height="5"
+      fill="rgb(NaN,0,0)"/></g></svg>} -at {10 10} -width 20 -alt "drawing"}]
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [string trim $content]
+} -result {{TCLPDF SVG COLOUR fill} {}}
+
+test svg-r8-76.2 {and the same drawing with a readable colour is complete} -body {
+  # The mutation reference for 76.1: without the bad component both
+  # rectangles reach the page inside one Figure.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+      <rect width="5" height="5" fill="#00f"/><g opacity="0.5">
+      <rect x="6" y="6" width="5" height="5" fill="rgb(255,0,0)"/></g></svg>} \
+      -at {10 10} -width 20 -alt "drawing"
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {0 0 1 rg} $content] [regexp -all {BDC} $content]
+} -result {1 1}
+
+test svg-r8-77.1 {a report from the fitting reaches svg info as the first drawing} -body {
+  # [SvgAspect] reports an unreadable preserveAspectRatio out of [SvgFit],
+  # which runs before anything has loaded svgElement.tcl - where the tally
+  # used to live. As the first drawing of a process the report died with
+  # "unknown method SvgSkipped" and a TCL LOOKUP METHOD code, against the
+  # promise that every refusal of this package carries a TCLPDF one.
+  ::tclpdfTest::freshInterp {
+    package require tclpdf
+    set doc [tclpdf new]
+    $doc page add
+    $doc svg -data {<svg viewBox="0 0 100 100" preserveAspectRatio="xMitYMid"
+        xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>} \
+        -at {10 10} -fit {40 40}
+    set answer [$doc svg info]
+    $doc destroy
+    puts $answer
+  }
+} -result {preserveAspectRatio 1}
+
+test svg-r8-78.1 {the two parsers agree on document order} -body {
+  # [text] and [children] each answer half the question; [nodes] is what says
+  # how the halves interleave, and an SVG <text> is nothing but that.
+  svgBothParsers {
+    set root [::tclpdf::xml parse {<text>A<tspan>B</tspan>C</text>}]
+    set answer [lmap part [::tclpdf::xml nodes $root] {
+      lassign $part kind value
+      expr {$kind eq "text" ? $value : [::tclpdf::xml name $value]}
+    }]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result {{A tspan C}}
+
+
+test svg-r8-79.1 {the box a drawing answers is the one under the active CTM} -body {
+  # Round 8, Nr. 63: [transform -translate] moves what is drawn but did not
+  # move the rectangle the drawing hands back, nor the /BBox its Figure
+  # carries (ISO 32000-2, 14.8.5.4.3) - the placement stood at 60 mm and the
+  # box said 10 mm, and no checker compares the two. [ctmBox] is page.tcl's,
+  # from the same round.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc save
+  $doc transform -translate {50 0}
+  set placed [$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg"
+      width="20" height="10"><rect width="20" height="10" fill="blue"/></svg>} \
+      -at {10 10}]
+  $doc restore
+  set plain [$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg"
+      width="20" height="10"><rect width="20" height="10" fill="blue"/></svg>} \
+      -at {10 10}]
+  $doc destroy
+  list [format %.2f [lindex $placed 0]] [format %.2f [lindex $plain 0]]
+} -result {60.00 10.00}
 
 cleanupTests

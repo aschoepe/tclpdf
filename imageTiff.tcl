@@ -578,12 +578,34 @@ proc ::tclpdf::imageTiff::Palette {bytes entries order photometric depth} {
         "tclpdf: damaged TIFF - a $depth-bit palette image wants a ColorMap of\
         [expr {3 * $count}] entries, and this one has [llength $map]"
   }
+  # HOW WIDE THE VALUES REALLY ARE. TIFF 6.0 writes a ColorMap in 16-bit
+  # values ("0 represents the minimum intensity, 65535 the maximum"), and the
+  # commonest mistake of the whole format is a writer that fills it with
+  # 0..255 instead. Shifted down by eight those become a palette of nothing
+  # but zeroes - measured 2026-08-27 on a fixture whose first entry is pure
+  # red: the /Indexed lookup came out as 48 null bytes and the picture
+  # rendered black, with qpdf and veraPDF finding nothing to say.
+  #
+  # libtiff has carried the same heuristic since 1993 (checkcmap(): all
+  # entries at 255 or below means an 8-bit map, and it is then scaled rather
+  # than truncated). It is followed here, because the alternative - refusing
+  # the file - would turn a picture every other reader shows into an error,
+  # and because a genuinely 16-bit map whose every entry is under 256 is a
+  # picture that is black either way. The shift is what the file says; the
+  # heuristic is what the file MEANS.
+  set shift 0
+  foreach value $map {
+    if {$value > 255} {
+      set shift 8
+      break
+    }
+  }
   set palette {}
   for {set index 0} {$index < $count} {incr index} {
     append palette [binary format ccc \
-        [expr {[lindex $map $index] >> 8}] \
-        [expr {[lindex $map [expr {$count + $index}]] >> 8}] \
-        [expr {[lindex $map [expr {2 * $count + $index}]] >> 8}]]
+        [expr {[lindex $map $index] >> $shift}] \
+        [expr {[lindex $map [expr {$count + $index}]] >> $shift}] \
+        [expr {[lindex $map [expr {2 * $count + $index}]] >> $shift}]]
   }
   return $palette
 }
@@ -845,4 +867,4 @@ proc ::tclpdf::imageTiff::stateful {parsed} {
   return [expr {[dict get $parsed compressionName] ni {none packBits}}]
 }
 
-package provide tclpdf::imageTiff 1.2
+package provide tclpdf::imageTiff 1.3

@@ -116,6 +116,27 @@ namespace eval ::tclpdf::zugferd {
   }
   variable types {INVOICE ORDER ORDER_RESPONSE ORDER_CHANGE}
 
+  # A REFERENCE profile and the name its XML is embedded under. Factur-X
+  # 1.09.2, 6.2: "Die XML-Datei wird immer unter dem Namen factur-x.xml
+  # eingebettet. Die einzige Ausnahme bilden Referenzprofile wie das Profil
+  # XRECHNUNG; hier muss der Name xrechnung.xml lauten", and 7.7: "Der Name
+  # der xml-Komponente ... muss immer xrechnung.xml lauten, sie darf nicht
+  # factur-x.xml sein. Konsequenterweise darf es in einem XRECHNUNG-Profil
+  # ... auch keine Einbettung einer factur-x.xml-Datei geben".
+  #
+  # So the name is bound to the PROFILE and not only to the family, which
+  # is how it was read until 2026-08-27: [zugferd -profile XRECHNUNG] took
+  # the family's first name, factur-x.xml, and an EN 16931 invoice was
+  # allowed to call itself xrechnung.xml. Both files pass Mustangproject
+  # and veraPDF - neither tests the binding - and both name themselves
+  # something they are not.
+  #
+  # A dict rather than one "if", because that is what the standard's
+  # sentence says: a reference profile is a KIND, XRECHNUNG is today's
+  # only member, and the names of every reference profile are what a
+  # non-reference profile may not use.
+  variable reference {XRECHNUNG xrechnung.xml}
+
   # The relationships that may stand on the XML this module embeds, for
   # BOTH families. Order-X 1.0, 4.1.1 lists these three for order-x.xml and
   # names no default; Factur-X 1.09.2 binds the invoice's to the profile -
@@ -262,10 +283,26 @@ oo::define ::tclpdf::document::document {
           use one of: [join $levels {, }]"
     }
 
-    # The name is bound to the family. Without -name the file's own name is
-    # kept where it is one the family allows, and the family's default is
-    # taken otherwise.
+    # The name is bound to the family AND to the profile: a reference
+    # profile has one name of its own and no other profile may use it (see
+    # [reference] at the top). Everything a non-reference profile may be
+    # called is what the family allows minus the reference names, and the
+    # first of what is left is its default.
+    #
+    # Without -name the file's own name is kept where it is one the profile
+    # allows, and the default is taken otherwise - so an XRECHNUNG invoice
+    # in a file called rechnung.xml becomes xrechnung.xml, and one in a
+    # file called factur-x.xml becomes xrechnung.xml as well rather than
+    # keeping a name 7.7 forbids it.
+    variable ::tclpdf::zugferd::reference
     set names [dict get $families $family names]
+    if {[dict exists $reference $profile]} {
+      set names [list [dict get $reference $profile]]
+    } else {
+      foreach {referenceProfile referenceName} $reference {
+        set names [lsearch -all -inline -not -exact $names $referenceName]
+      }
+    }
     set name [dict get $options name]
     if {$name eq {}} {
       set name [file tail $path]
@@ -284,6 +321,29 @@ oo::define ::tclpdf::document::document {
             [dict get $families $other description] pass -type\
             [join [dict get $families $other types] {, }]"
       }
+      # A name that belongs to a reference profile, or the name of a
+      # reference profile used by one that is not it: the two halves of
+      # 7.7, said with the profile in hand rather than as "not a name the
+      # standards allow". After the family question, which is the coarser
+      # one - an order named xrechnung.xml is first of all not an invoice.
+      dict for {referenceProfile referenceName} $reference {
+        if {$name ne $referenceName} {
+          continue
+        }
+        return -code error -errorcode [list TCLPDF ZUGFERD NAME $name] \
+            "tclpdf: \"$name\" is the file name of the\
+            $referenceProfile profile and this $kind is $profile - a\
+            reference profile's name is its own (Factur-X 1.09.2, 7.7);\
+            this one is embedded as [join $names {, }], or pass -profile\
+            $referenceProfile if that is what the XML is"
+      }
+      if {[dict exists $reference $profile]} {
+        return -code error -errorcode [list TCLPDF ZUGFERD NAME $name] \
+            "tclpdf: a $profile $kind is embedded as\
+            \"[lindex $names 0]\" and under no other name - Factur-X\
+            1.09.2, 7.7 forbids it the names of the ordinary profiles,\
+            \"$name\" among them"
+      }
       return -code error -errorcode [list TCLPDF ZUGFERD NAME $name] \
           "tclpdf: \"$name\" is not a file name the standards\
           allow - use one of: [join $names {, }]"
@@ -292,6 +352,22 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF ZUGFERD NAME $name] \
           "tclpdf: an attachment named \"$name\" already\
           exists - names in the embedded file name tree have to be unique"
+    }
+    # The mirror of the guard in attach.tcl, so the two orders answer the
+    # same: there a reserved name is refused because the invoice is already
+    # in the tree, here the invoice is refused because a reserved name is.
+    # Case-insensitively for the same reason - "factur-x.XML" is a key of
+    # its own and the same name to a reader (Factur-X 1.09.2, 6.2 and 7.7;
+    # Order-X 1.0, 4.1.1).
+    foreach existing [my attachments] {
+      if {[::tclpdf::attach::isReserved $existing]} {
+        return -code error -errorcode [list TCLPDF ZUGFERD NAME $existing] \
+            "tclpdf: this document already carries an\
+            attachment named \"$existing\", which is a name the hybrid\
+            standards reserve for the XML that IS the document a second\
+            time - a reader looking the $kind up by name would find two.\
+            Give that attachment a name of its own, or drop it"
+      }
     }
     # fx:Version is the version of the standard the XML follows - "1.0" for
     # every Factur-X and ZUGFeRD 2.x invoice and for Order-X 1.0 - and it
@@ -547,4 +623,4 @@ proc ::tclpdf::zugferd::properties {name type version conformance {family invoic
   return $xml
 }
 
-package provide tclpdf::zugferd 1.5
+package provide tclpdf::zugferd 1.6

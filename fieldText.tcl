@@ -186,25 +186,13 @@ oo::define ::tclpdf::document::document {
             the moment it is touched. Raise -maxlen, or shorten the text"
       }
     }
-    # [option finite] rather than [string is double]: NaN is a double to Tcl
-    # and compares FALSE against every bound, so "$size <= 0" waved it past
-    # and Inf came through the same gap - a /DA reading "/FHelvetica NaN Tf"
-    # and a border of infinite width, both refused nowhere (measured
-    # 2026-08-26). Same predicate as everywhere else a number is read as a
-    # measurement.
-    set size [dict get $options size]
-    if {$size ne {} && (![::tclpdf::option finite $size] || $size <= 0)} {
-      return -code error -errorcode [list TCLPDF FIELD SIZE $size] \
-          "tclpdf: -size of field text is a finite font size in points above\
-          zero, not \"$size\""
-    }
-    set borderWidth [dict get $options borderWidth]
-    if {![::tclpdf::option finite $borderWidth] || $borderWidth < 0} {
-      return -code error -errorcode [list TCLPDF FIELD BORDERWIDTH $borderWidth] \
-          "tclpdf: -borderWidth of field text is a finite line width of 0 or\
-          more in the unit of the document, not \"$borderWidth\". Use 0 for a\
-          field with no frame"
-    }
+    # The two measurements, through the one place that reads a measurement of
+    # a field option - see [FieldSize] in field.tcl for why the predicate is
+    # [option finite] and not [string is double], and why the question is
+    # asked there rather than once per type.
+    set size [my FieldSize [dict get $options size] "field text"]
+    set borderWidth [my FieldBorderWidth [dict get $options borderWidth] \
+        "field text"]
     # The three colours go through the colour module HERE, where the call can
     # still be refused, rather than at write time inside an appearance stream
     # nobody is looking at.
@@ -260,6 +248,7 @@ oo::define ::tclpdf::document::document {
         -contents [dict get $options contents] \
         -label [dict get $options label] \
         -flags [::tclpdf::field flags $flagNames] \
+        -font [dict get $font alias] \
         -data [dict create \
             value [dict get $options value] \
             default [dict get $options default] \
@@ -415,4 +404,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldText 1.1
+package provide tclpdf::fieldText 1.2

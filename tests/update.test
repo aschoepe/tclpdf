@@ -604,6 +604,13 @@ test update-6.6 {a file this user cannot read is refused under UPDATE} \
 # stays intact - header, cross-reference, trailer - so the session opens, the
 # object header is the right one, and the refusal comes out of the reader
 # only when the stream is actually resolved.
+#
+# THE CLASS WORD IS STREAM SINCE ROUND 8, and it used to be OBJECT: a
+# reference to an object the file does not define is the null object (ISO
+# 32000-2, 7.3.10) rather than a refusal, so what is wrong with this file is
+# no longer "there is no object 99" but "this stream has no usable /Length".
+# What the test is about is the TOPIC word - UPDATE, not IMPORT - and that
+# is unchanged.
 test update-6.7 {a reader refusal after [open] carries UPDATE, not IMPORT} -setup {
     set tclpdfPath [::tclpdfTest::original update-6.7.pdf]
     set upd [::tclpdf::update open $tclpdfPath]
@@ -624,7 +631,7 @@ test update-6.7 {a reader refusal after [open] carries UPDATE, not IMPORT} -setu
         [dict get $replaceOptions -errorcode]
 } -cleanup {
     unset -nocomplain tclpdfPath tclpdfContent
-} -result {1 1 {TCLPDF UPDATE OBJECT} 1 1 {TCLPDF UPDATE OBJECT}}
+} -result {1 1 {TCLPDF UPDATE STREAM} 1 1 {TCLPDF UPDATE STREAM}}
 
 #
 # ---------------------------------------------------------------------------

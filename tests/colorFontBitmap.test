@@ -340,4 +340,105 @@ test colorFontBitmap-4.2 {a smaller strike is a smaller document} \
   expr {[lindex $sizes 0] * 4 < [lindex $sizes 1]}
 } -result 1
 
+# --- a sequence the face draws as two glyphs stacked on one another ---------
+#
+# Apple Color Emoji draws 968 of its 997 multi-person sequences as TWO glyphs
+# and stacks the second on the first with a GPOS "mark" lookup - the couple,
+# the kiss, the handshake, with and without skin tone. hb-shape:
+# "[3734+800|3676@-800,0+0]", one em in total. Read without GPOS the halves
+# stood side by side, the sequence was two ems wide, and the unmodified kiss
+# came out as half a woman beside half a man.
+
+test colorFontBitmap-5.1 {a two-glyph sequence is one glyph of one em} \
+    -constraints haveAppleColorEmoji -body {
+  # The kiss without skin tone, which is an everyday sequence. One unit, one
+  # advance of one em - 24 points at 24 points - and the second picture folded
+  # into the first glyph, so the font holds ONE glyph and TWO pictures.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc colorFont e $appleFace -chars "👩‍❤️‍💋‍👨"
+  $doc font -family e -size 24
+  set width [$doc textWidth "👩‍❤️‍💋‍👨"]
+  set info [$doc font info e]
+  set pictures [dict keys [dict get [$doc state colorFont] e pictures]]
+  $doc destroy
+  list [dict get $info glyphs] $width [lsort $pictures]
+} -result {1 24.0 {e#sbix3676 e#sbix3734}}
+
+test colorFontBitmap-5.2 {the half of a sequence is not the character it shares} \
+    -constraints haveAppleColorEmoji -body {
+  # The second glyph of the kiss IS the man, and the man is a sequence of his
+  # own - so with the deduplication done by TEXT the two shared one Type 3
+  # code and the order in -chars decided which drawing the reader saw: glyph
+  # 3676, half a kiss, for the text "man". Both orders now give the same three
+  # pictures and the same two glyphs.
+  set answers {}
+  foreach chars [list "👩‍❤️‍💋‍👨👨" \
+      "👨👩‍❤️‍💋‍👨"] {
+    set doc [tclpdf new -unit pt]
+    $doc page add
+    $doc colorFont e $appleFace -chars $chars
+    lappend answers [list [dict get [$doc font info e] glyphs] \
+        [lsort [dict keys [dict get [$doc state colorFont] e pictures]]]]
+    $doc destroy
+  }
+  list [expr {[lindex $answers 0] eq [lindex $answers 1]}] [lindex $answers 0]
+} -result {1 {2 {e#sbix1193 e#sbix3676 e#sbix3734}}}
+
+test colorFontBitmap-5.4 {one text and two glyphs is refused, not chosen
+    between} -constraints havePlain -body {
+  # The deduplication of the units used to be done by TEXT alone, on the
+  # reasoning that two sequences may well reach one glyph - which is true and
+  # is not the whole question. ONE text and TWO glyphs is the other direction,
+  # and there the first one recorded won silently: in Apple Color Emoji the
+  # second half of the kiss IS the man, so "the kiss then the man" and "the
+  # man then the kiss" put a different drawing under the same character code.
+  #
+  # A Type 3 font holds one glyph per code, so the second drawing cannot be
+  # kept - and choosing between two drawings for one text without saying so is
+  # the injectivity this package refuses everywhere else. The fixture makes
+  # the case on purpose: a "ccmp" contextual rule turns the FIRST of two A's
+  # into the glyph of B, so both units carry the text "A".
+  set parsed [::tclpdf::sfnt read $::plainFace]
+  set a [dict get [dict get $parsed cmap] 65]
+  set b [dict get [dict get $parsed cmap] 66]
+  set context [binary format Su* [list 1 8 1 14 1 1 $a 1 4 2 1 $a 0 1]]
+  set gsub [::tclpdfTest::gsubTable [list \
+      [::tclpdfTest::gsubLookup 5 0 [list $context]] \
+      [::tclpdfTest::gsubLookup 1 0 [list [::tclpdfTest::gsubSingle $a $b]]]] \
+      [dict create ccmp {0}]]
+  set records [dict create \
+      $a [list 0 0 "png " [::tclpdfTest::sbixPng 8 8]] \
+      $b [list 0 0 "png " [::tclpdfTest::sbixPng 8 8]]]
+  set bytes [::tclpdfTest::sfntWith $::plainFace [dict create GSUB $gsub \
+      sbix [::tclpdfTest::sbix [dict get $parsed numGlyphs] \
+          [list 32 $records]]]]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc colorFont marks -data $bytes -chars "AA"} \
+      message options]
+  set names [$doc font names]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 3] \
+      [expr {[string first $a $message] >= 0
+          && [string first $b $message] >= 0}] $names
+} -result {1 {TCLPDF COLORFONT AMBIGUOUS U+0041} 1 {}}
+
+test colorFontBitmap-5.3 {a refused colour font leaves no pictures behind} \
+    -constraints {haveAppleColorEmoji havePlain} -body {
+  # [font define] refuses a name that is taken, and it used to be called at
+  # the END of the build - by which time every picture had been embedded and
+  # WRITTEN. The document then carried six image objects and three names that
+  # nothing referenced, and qpdf said nothing. The name is checked first now.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed e $plainFace
+  set code [catch {$doc colorFont e $appleFace -chars "😀🎯🌈"} \
+      message options]
+  set images [dict keys [$doc state images]]
+  set colour [expr {[dict exists [$doc state colorFont] e]}]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] $images $colour
+} -result {1 {TCLPDF TYPE3 ALIAS} {} 0}
+
 cleanupTests

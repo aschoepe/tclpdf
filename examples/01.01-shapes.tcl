@@ -375,7 +375,13 @@ $doc text "-size {70 30} -extent 270" -at {120 183} -align center
 # anybody asking for a full pie means.
 $doc arc -at {178 155} -size {30 30} -extent 360 -style pieslice \
     -fill {0.8 0.9 0.8} -stroke {0.2 0.5 0.2} -width 0.6
-$doc text "-extent 360, a whole turn - no spoke" -at {178 183} -align center -size 8
+# The caption is set as a BLOCK, not as one centred line: at 8 pt the sentence
+# is 45 mm wide, and centred on the 178 mm this figure stands at it ran to
+# 200.5 mm - ten millimetres into the right margin, while every other caption
+# on the page stays inside the 20 to 190 mm the rule above marks out. -width
+# 32 breaks it over two lines that end at 190.
+$doc text "-extent 360, a whole turn - no spoke" -at {158 181} -width 32 \
+    -align center -size 8
 
 # -- a dial made of arcs ----------------------------------------------------
 

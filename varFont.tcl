@@ -294,10 +294,28 @@ proc ::tclpdf::varFont::all {parsed coordinates} {
       # moved phantom point 1 to the moved xMin.
       set bearing [Round [expr {[lindex $bounds 0] - [dict get $entry origin]}]]
     }
-    dict set result $glyph [dict create \
-        bytes [::tclpdf::glyfOutline compose $outline] \
-        advance [dict get $entry advance] \
-        bearing $bearing]
+    set bytes [::tclpdf::glyfOutline compose $outline]
+    set record [dict create bytes $bytes \
+        advance [dict get $entry advance] bearing $bearing]
+    if {[dict exists $entry verticalOrigin]} {
+      # The TOP side bearing of the instance follows its outline, exactly as
+      # the left one does above: the origin is where the glyph hangs from and
+      # yMax is where its ink begins, so the distance between the two is what
+      # vmtx states. Taken from the composed bytes rather than from the
+      # outline dictionary, because that is where the moved box ends up - and
+      # it is the same ten bytes font.tcl reads for the same number.
+      set top 0
+      if {[string length $bytes] >= 10} {
+        binary scan $bytes @8S top
+      }
+      dict set record verticalOrigin [dict get $entry verticalOrigin]
+      dict set record verticalBearing \
+          [expr {[dict get $entry verticalOrigin] - $top}]
+      if {[dict exists $entry verticalAdvance]} {
+        dict set record verticalAdvance [dict get $entry verticalAdvance]
+      }
+    }
+    dict set result $glyph $record
   }
   return $result
 }
@@ -420,9 +438,34 @@ proc ::tclpdf::varFont::hheaMetrics {instanced} {
 # has one - all seven variable faces in the tree do - carries the same
 # deltas a second time for readers that do not walk gvar; a full instance
 # needs only one source, and this is the one that also moves the outline.
+#
+# AND THE OTHER TWO PHANTOM POINTS ARE THE VERTICAL METRIC, which is the same
+# argument one writing mode over. Phantom point 3 sits at the glyph's VERTICAL
+# ORIGIN - the point it hangs from, yMax plus the top side bearing - and
+# phantom point 4 an advance height below it (ISO/IEC 14496-22 "gvar", the
+# four points appended to every glyph). So an instance's origin and height
+# come from the same deltas its width does, and a VVAR table carries them a
+# second time for a reader that does not walk gvar, exactly as HVAR carries
+# the width.
+#
+# WHY IT MATTERS, and it is not a rounding: the vertical origin used to be
+# built from the INSTANCED yMax and the DEFAULT top side bearing. Those two
+# move in opposite directions by design - a heavier weight grows upward and
+# the face lowers the bearing to keep the origin where it is - so the sum
+# drifted with every step along the axis. Measured on NotoSansSymbols with
+# -direction ttb: the arrows hang at 1470 and 1474 at wght 100 and at 1492
+# and 1504 at wght 900, where fontTools and the face's own VVAR say 1480 at
+# every weight - up to 24 units of the em, and /W2 said so in the file.
 proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
   set advance [::tclpdf::sfnt advance $parsed $glyph]
   set bearing [lindex [dict get $parsed bearings] $glyph]
+  # The default vertical origin, before anything moves: yMax of the glyph as
+  # the FILE has it plus the top side bearing. {} for a face that says nothing
+  # about vertical writing, and then nothing vertical is answered at all.
+  set verticalAdvance [::tclpdf::sfnt verticalAdvance $parsed $glyph]
+  set verticalOrigin [::tclpdf::sfnt verticalOriginY $parsed $glyph \
+      [expr {[dict exists $outline bounds] ?
+          [lindex [dict get $outline bounds] 3] : {}}]]
   set simple [expr {[dict size $outline] && [dict get $outline type] eq "simple"}]
   set composite [expr {[dict size $outline] &&
       [dict get $outline type] eq "composite"}]
@@ -447,6 +490,17 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
     set movedAdvance 0
   }
   set origin [expr {$phantomX + $shiftFirst}]
+  # The vertical pair, moved by the deltas of phantom points 3 and 4.
+  set vertical {}
+  if {$verticalOrigin ne {}} {
+    set shiftTop [lindex $dy [expr {$points + 2}]]
+    set shiftBottom [lindex $dy [expr {$points + 3}]]
+    dict set vertical verticalOrigin [Round [expr {$verticalOrigin + $shiftTop}]]
+    if {$verticalAdvance ne {}} {
+      set moved [Round [expr {$verticalAdvance + $shiftTop - $shiftBottom}]]
+      dict set vertical verticalAdvance [expr {$moved < 0 ? 0 : $moved}]
+    }
+  }
   if {$composite} {
     # Only offsets move. A component placed by matching two point numbers
     # (without ARGS_ARE_XY_VALUES) has no offset to shift, and the standard
@@ -466,12 +520,12 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
       incr index
     }
     dict set outline components $moved
-    return [dict create outline $outline advance $movedAdvance \
-        bearing $bearing origin $origin]
+    return [dict merge [dict create outline $outline advance $movedAdvance \
+        bearing $bearing origin $origin] $vertical]
   }
   if {!$simple} {
-    return [dict create outline $outline advance $movedAdvance \
-        bearing $bearing origin $origin]
+    return [dict merge [dict create outline $outline advance $movedAdvance \
+        bearing $bearing origin $origin] $vertical]
   }
 
   # Rounding happens ONCE, on the sum of every region - rounding each region as
@@ -493,8 +547,8 @@ proc ::tclpdf::varFont::instance {parsed glyph outline coordinates} {
   set movedBearing [expr {[llength $xs] ?
       [Round [expr {[::tcl::mathfunc::min {*}$xs] - $origin}]] :
       $bearing}]
-  return [dict create outline $outline advance $movedAdvance \
-      bearing $movedBearing origin $origin]
+  return [dict merge [dict create outline $outline advance $movedAdvance \
+      bearing $movedBearing origin $origin] $vertical]
 }
 
 # The deltas for one glyph at one point in the axis space.
@@ -785,6 +839,27 @@ proc ::tclpdf::varFont::Scalar {peak from to coordinates} {
       # Without an intermediate record the region runs from zero to the peak.
       set start [expr {min(0.0, $p)}]
       set end [expr {max(0.0, $p)}]
+    }
+    # AN ILL-FORMED REGION IS IGNORED, AXIS AND ALL, and the delta counts in
+    # full - which is what the specification says in as many words, in the
+    # pseudocode of ISO/IEC 14496-22:2019 7.1.7:
+    #
+    #   if (startCoords[i] > peakCoords[i] || peakCoords[i] > endCoords[i])
+    #     AS = 1; /* Not an error, apply the delta */
+    #   else if (startCoords[i] < 0 && endCoords[i] > 0 && peakCoords[i] != 0)
+    #     AS = 1;
+    #
+    # An axis whose three numbers are out of order, and one whose region
+    # straddles the default with a peak somewhere else, describe no region at
+    # all; the reading that stands is "this axis says nothing", not "this
+    # region is off" and not a share of the way in. Only a damaged file
+    # reaches it - no face this package ships carries such a tuple, and
+    # fontTools writes none - but the two readings differ by the whole delta:
+    # measured on a Roboto built for it, an advance of 1261 units where
+    # HarfBuzz and fontTools both say 1300, and outline points up to 36 units
+    # away.
+    if {$start > $p || $p > $end || ($start < 0 && $end > 0)} {
+      continue
     }
     if {$value <= $start || $value >= $end} {
       return 0.0
@@ -1130,4 +1205,4 @@ proc ::tclpdf::varFont::Fixed {value} {
   return [expr {$value / 65536.0}]
 }
 
-package provide tclpdf::varFont 1.3
+package provide tclpdf::varFont 1.4

@@ -48,9 +48,21 @@ oo::define ::tclpdf::document::document {
     # the real range, 32 DeviceN colourants, the name length in pdfObj).
     # Counted BEFORE the operator is written: a refused save leaves nothing.
     #
-    # Only the saves of this API are counted. A glyph description or a
-    # colour font's paint tree writes its own q/Q into a stream of its own,
-    # which starts at depth zero when a reader executes it.
+    # ONLY THE SAVES OF THIS API ARE COUNTED, and that is less than the
+    # depth of the stream. Every shape with a style of its own, every text
+    # run, every placement writes a q/Q of its own inside the bracket, so 28
+    # open saves plus one "rect -fill red" is 29 nested "q" in the file -
+    # measured 2026-08-27. Nor does the count follow a form onto the page it
+    # is placed on: 8.10.1 gives the "Do" its own save, and the form's stream
+    # runs inside it, so the depths add up there as well. What starts at
+    # depth zero for a reader is a Type 3 glyph description and a colour
+    # font's paint tree, which are executed rather than placed.
+    #
+    # The limit is therefore held on THE SAVES A CALLER OPENS, which is the
+    # number a caller can do something about, and not on the file's own
+    # nesting. Annex C.2 of ISO 32000-2 keeps the figure only historically
+    # ("In previous versions of PDF, a maximum depth ... was 28"), so the
+    # difference costs nothing a reader made after 2008 will notice.
     if {[llength $stack] >= 28} {
       return -code error -errorcode [list TCLPDF GRAPHICS SAVE depth] \
           "tclpdf: 28 nested saves are open and that is as deep as the\
@@ -58,8 +70,14 @@ oo::define ::tclpdf::document::document {
           with \"restore\" before opening another"
     }
     my content "q\n"
+    # The transformation in force goes on the stack with the colours: "Q"
+    # restores the whole graphics state (8.4.2), the CTM included, and what
+    # this package remembers about it has to follow the reader. A fourth word
+    # in the same record rather than a stack of its own, so the two cannot
+    # come apart - see [ctm] in page.tcl for what it is for.
     lappend stack [list [my streamState styleFill] [my streamState styleStroke] \
-        [my streamState overprintFill]]
+        [my streamState overprintFill] [my ctm] \
+        [my streamState overprintMode]]
     my streamState styleStack $stack
     # A stream that ends with a save still open is refused, and the refusal
     # has to name the place: the write is far from the call, and "one save
@@ -128,10 +146,12 @@ oo::define ::tclpdf::document::document {
           stack of this stream is empty (8.4.2)"
     }
     my content "Q\n"
-    lassign [lindex $stack end] fill stroke overprintFill
+    lassign [lindex $stack end] fill stroke overprintFill ctm overprintMode
     my streamState styleFill $fill
     my streamState styleStroke $stroke
     my streamState overprintFill $overprintFill
+    my streamState ctm $ctm
+    my streamState overprintMode $overprintMode
     my streamState styleStack [lrange $stack 0 end-1]
     return
   }
@@ -221,14 +241,6 @@ oo::define ::tclpdf::document::document {
         set scale [::tclpdf::geometry scale {*}$scale]
       }
       set matrix [::tclpdf::geometry identity]
-      if {[dict get $options at] ne {}} {
-        # To the origin FIRST: a point q ends up at (q - p) transformed, plus
-        # p. The other order turns the whole page about the origin and then
-        # shifts, which puts the shape somewhere else entirely.
-        lassign [my GraphicsPoint [dict get $options at] -at transform] px py
-        set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry translate [expr {-$px}] [expr {-$py}]]]
-      }
       # Scale, skew, rotate, translate: the point meets them in this order,
       # which is the sequence "translate, rotate, skew, scale" of cm calls.
       foreach part [list $scale $skew $rotate $translate] {
@@ -237,13 +249,14 @@ oo::define ::tclpdf::document::document {
         }
       }
       if {[dict get $options at] ne {}} {
-        # And back again - the counterpart to the shift above. Both negative
-        # puts the shape off the page; both positive turns about the origin
-        # and then moves. Neither produces an error, only a shape in the wrong
-        # place, which is why the pair is written out here rather than folded
-        # into the loop above.
-        set matrix [::tclpdf::geometry multiply $matrix \
-            [::tclpdf::geometry translate $px $py]]
+        # ABOUT the point instead of about the origin of the page - to the
+        # origin first, transform, and back again. The pair stood written out
+        # here until 2026-08-27 and is [geometry about] now, which is where
+        # the two placement roads read it as well: three copies of "move,
+        # turn, move back" is how the fourth one gets the order backwards,
+        # and neither order produces an error - only a shape somewhere else.
+        lassign [my GraphicsPoint [dict get $options at] -at transform] px py
+        set matrix [::tclpdf::geometry about $matrix $px $py]
       }
     }
     # AND THE MATRIX THE PARTS COMPOSE TO IS HELD TO WHAT A RAW -matrix IS
@@ -263,6 +276,14 @@ oo::define ::tclpdf::document::document {
           on both axes"
     }
     my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
+    # AND THE STREAM NOW SITS SOMEWHERE ELSE. "cm" concatenates (8.4.4): the
+    # new CTM is this matrix followed by the one in force, in that order,
+    # because a point drawn from here on meets this matrix first. Recorded so
+    # that the three answers stated in default user space - a Figure's
+    # /BBox, a link's /Rect, the box a placement hands back - can be worked
+    # out at all; see [ctm] in page.tcl. Written LAST, after the refusals
+    # above, so a transform that was turned away leaves the record alone.
+    my streamState ctm [::tclpdf::geometry multiply $matrix [my ctm]]
     return $matrix
   }
 
@@ -410,9 +431,18 @@ oo::define ::tclpdf::document::document {
   # Only -fill moves it. A call that names -stroke alone writes the fill side
   # out (see [GraphicsOverprint]) but writes it UNCHANGED, whichever of the
   # two spellings the dictionary uses - so there is nothing to record.
+  # The MODE is remembered beside it, and for a second reason: /OPM 1 is the
+  # one graphics state value that PDF/A forbids in company (ISO 19005-2 and
+  # -3, 6.2.4.2: not 1 while an ICCBased CMYK space is overprinted). Knowing
+  # what is in force is what lets that combination be caught at all - see
+  # [GraphicsOverprintIcc]. Not scoped by -fill/-stroke: OPM is one value for
+  # both sides (Table 58).
   method GraphicsOverprintRemember {options} {
     if {[dict get $options fill] ne {}} {
       my streamState overprintFill [expr {[dict get $options fill] ? 1 : 0}]
+    }
+    if {[dict exists $options mode] && [dict get $options mode] ne {}} {
+      my streamState overprintMode [dict get $options mode]
     }
     return
   }
@@ -497,6 +527,91 @@ oo::define ::tclpdf::document::document {
           [::tclpdf::pdfObj dictionary $pairs]]]
     }
     return $name
+  }
+
+  # THE ONE COMBINATION PDF/A FORBIDS OUTRIGHT: an overprinted fill or stroke
+  # in an ICCBased CMYK space while /OPM is 1. ISO 19005-2 and -3, 6.2.4.2:
+  # "the value of the OPM key ... shall not be 1 when an ICCBased CMYK
+  # colour space is used for fill and overprinting for fill is set to true";
+  # veraPDF reports it as 6.2.4.2-2, and measured on 2026-08-27 the package
+  # wrote such a file without a word - "pdfa -part 3", "overprint -mode 1
+  # -fill 1", a fill of {icc press 0 1 1 0}, isCompliant="false". With
+  # {cmyk 0 1 1 0} the same drawing is conformant, which is what makes it a
+  # combination rather than a value: neither half is wrong on its own, and
+  # neither half knows about the other.
+  #
+  # NOTHING IS REFUSED HERE. The fact is recorded and the refusal is made at
+  # the WRITE ([GraphicsOverprintBeforeWrite]), which is what the manual
+  # promises of every PDF/A refusal ("refuses at the write whatever does not
+  # fit the intent, naming the call") and the only way to catch both orders:
+  # the claim may be made after the drawing as easily as before it.
+  #
+  # What is NOT seen: the stroke side of a stream-level [overprint -stroke],
+  # which this package does not remember at all (only the fill side is, see
+  # [GraphicsOverprintFill]), and a colour set by [text] rather than through
+  # a shape's -fill. Both would be over-refusals to guess at; what is caught
+  # is every road that states the colour and the overprint in the calls this
+  # module owns.
+  method GraphicsOverprintIcc {parsed which options what} {
+    if {[my streamState overprintMode] ne "1"} {
+      return
+    }
+    if {[lindex $parsed 0] ne "icc"} {
+      return
+    }
+    lassign [lindex $parsed 1] alias values
+    # CMYK is four components - the profile said so when it was embedded,
+    # and the colour carries as many as the profile takes ([IccColourUsed]
+    # refuses any other count).
+    if {[llength $values] != 4} {
+      return
+    }
+    # Is this side overprinted at this moment? A shape's own -overprint sets
+    # both sides for the length of its q/Q; otherwise only the fill side is
+    # on record.
+    if {[dict exists $options overprint] && [dict get $options overprint] ne {}} {
+      set on [expr {[dict get $options overprint] ? 1 : 0}]
+    } else {
+      set on [expr {$which eq "fill" ? [my GraphicsOverprintFill] : 0}]
+    }
+    if {!$on} {
+      return
+    }
+    set where "$what -$which \{icc $alias ...\}"
+    set page [my page current]
+    if {$page >= 0} {
+      append where " on page [expr {$page + 1}]"
+    }
+    set seen [my state overprintIcc]
+    if {$where ni $seen} {
+      lappend seen $where
+      my state overprintIcc $seen
+    }
+    # Subscribed on the first one and never again, the arrangement [save]
+    # keeps for the unbalanced "q".
+    if {[my state overprintIccHooked] eq {}} {
+      my state overprintIccHooked 1
+      my onSelf beforeWrite GraphicsOverprintBeforeWrite
+    }
+    return
+  }
+
+  # And the refusal, at the write, when a PDF/A claim stands.
+  #
+  # The claim is read out of the state directly rather than through
+  # [pdfa state]: that method belongs to a module which is loaded on its
+  # first call, and asking it here would pull the PDF/A machinery and tdom
+  # into every document that ever overprinted. An empty key means no claim
+  # was ever made, and then there is nothing to check.
+  method GraphicsOverprintBeforeWrite {} {
+    if {[my state pdfa] eq {} || ![llength [my state overprintIcc]]} {
+      return
+    }
+    return -code error -errorcode [list TCLPDF GRAPHICS OVERPRINT pdfa] \
+        "tclpdf: PDF/A forbids an overprinted ICC based CMYK colour while\
+        the overprint mode is 1 (ISO 19005-2 and -3, 6.2.4.2) -\
+        [join [my state overprintIcc] {, }]; use \"overprint -mode 0\", or\
+        paint that colour as {cmyk ...} rather than through the profile"
   }
 
   # The sixteen standard modes (11.3.5). Deliberately NOT accepted:
@@ -676,6 +791,15 @@ oo::define ::tclpdf::document::document {
         # 8.4.3.6: the lengths shall be non-negative and not all zero - an
         # all-zero array would ask for a line made of nothing, and a reader
         # is free to do anything with it, including nothing at all.
+        #
+        # AND "ABOVE ZERO" MEANS IN THE FILE. The array is written in points
+        # with five decimals (7.3.3), so "-dash {1e-6 1e-6}" - two numbers
+        # that are plainly above zero to Tcl - went out as "[0 0] 0 d",
+        # measured 2026-08-27: exactly the array 8.4.3.6 forbids, past a
+        # check that was looking at the caller's numbers. [pdfObj written]
+        # is the one place that question is asked; the length is converted
+        # first, because points are what the file carries and a millimetre
+        # rounds elsewhere.
         set positive 0
         foreach number $dash {
           if {![string is double -strict $number] || $number < 0} {
@@ -683,14 +807,16 @@ oo::define ::tclpdf::document::document {
                 "tclpdf: -dash takes lengths of 0 or more,\
                 not \"$number\""
           }
-          if {$number > 0} {
+          if {[::tclpdf::pdfObj written [my distance $number]] > 0} {
             set positive 1
           }
         }
         if {!$positive} {
           return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT dash] \
               "tclpdf: -dash needs at least one length above\
-              zero - {[join $dash { }]} would draw nothing"
+              zero in the file - {[join $dash { }]} is written as an array of\
+              zeros (a PDF real carries five decimals, 7.3.3) and would draw\
+              nothing"
         }
         set lengths [lmap number $dash {::tclpdf::pdfObj num [my distance $number]}]
         append result "\[[join $lengths { }]\] 0 d\n"
@@ -723,19 +849,29 @@ oo::define ::tclpdf::document::document {
       # bound, so "< 1" waved it through and it died in [num] - or, worse,
       # reached the file. Asked with the one predicate the package has for
       # the question (option.tcl).
+      # And a number the file can hold (Annex C.2, about +/-3.403e38), asked
+      # through [pdfObj fits] where that figure stands. Without it "-miter
+      # 1e39" walked past both bounds above and died one line further down
+      # in [pdfObj num] under TCLPDF PDFOBJ NUMBER - the LAST line of
+      # defence answering for a value this call had already read, and a
+      # foreign error class for a caller who is catching this command's own.
+      # Measured 2026-08-27.
       set miter [dict get $options miter]
-      if {![::tclpdf::option finite $miter] || $miter < 1} {
+      if {![::tclpdf::option finite $miter] || $miter < 1
+          || ![::tclpdf::pdfObj fits $miter]} {
         return -code error -errorcode [list TCLPDF GRAPHICS ARGUMENT miter] \
-            "tclpdf: -miter is a number of 1 or more, not \"$miter\""
+            "tclpdf: -miter is a number from 1 to about 3.403e38 (the range\
+            of a PDF real, ISO 32000-1 Annex C.2), not \"$miter\""
       }
       append result "[::tclpdf::pdfObj num $miter] M\n"
     }
     set colours {}
     foreach {key which} {fill fill stroke stroke} {
       if {[dict exists $options $key] && [dict get $options $key] ne {}} {
-        append colours [::tclpdf::color operator \
-            [::tclpdf::color parse [my GraphicsColour [dict get $options $key] $what]] \
-            $which] "\n"
+        set parsed [::tclpdf::color parse \
+            [my GraphicsColour [dict get $options $key] $what]]
+        my GraphicsOverprintIcc $parsed $which $options $what
+        append colours [::tclpdf::color operator $parsed $which] "\n"
       }
     }
     set result $colours$result
@@ -864,4 +1000,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.8
+package provide tclpdf::graphics 1.9

@@ -34,6 +34,8 @@ oo::define ::tclpdf::document::document {
     # axis come out flat, while the horizontal ones looked right because
     # their box happened to be correct by accident.
     set minX {}
+    set currentX {}
+    set currentY {}
     foreach line [split $operators \n] {
       set fields [regexp -all -inline -- {[-0-9.]+|[a-zA-Z*]+} $line]
       set operator [lindex $fields end]
@@ -46,17 +48,35 @@ oo::define ::tclpdf::document::document {
             continue
           }
           set points [list $x $y [expr {$x + $width}] [expr {$y + $height}]]
+          set currentX $x
+          set currentY $y
         }
         m - l {
           if {[llength $numbers] >= 2} {
             set points [lrange $numbers 0 1]
+            lassign $numbers currentX currentY
           }
         }
         c {
-          # All three control points: the curve stays inside their hull, so
-          # this is an upper bound and never cuts the shape short.
+          # THE CURVE, not the hull of its control points. SVG 1.1, 7.11 asks
+          # for "the tightest fitting rectangle" in the object's own user
+          # space, and a cubic reaches its extremes at the roots of its
+          # derivative - which for a drawn arc lie well inside the control
+          # polygon. Measured 2026-08-27 on "M0,10 C0,110 100,110 100,10 Z":
+          # the real lower edge is y = 85 and the control points sit at
+          # y = 110, so an objectBoundingBox gradient ran only 75 % of its
+          # ramp inside the shape and the bottom stayed grey.
           if {[llength $numbers] >= 6} {
-            set points [lrange $numbers 0 5]
+            lassign $numbers x1 y1 x2 y2 x3 y3
+            set points [list $x3 $y3]
+            if {$currentX ne {}} {
+              lappend points {*}[my SvgCurveExtrema \
+                  $currentX $currentY $x1 $y1 $x2 $y2 $x3 $y3]
+            } else {
+              lappend points $x1 $y1 $x2 $y2
+            }
+            set currentX $x3
+            set currentY $y3
           }
         }
         default {continue}
@@ -79,6 +99,57 @@ oo::define ::tclpdf::document::document {
       return {}
     }
     return [list $minX $minY [expr {$maxX - $minX}] [expr {$maxY - $minY}]]
+  }
+
+  # The points a cubic Bezier actually reaches between its end points, per
+  # axis: the roots of the derivative that lie in 0..1, evaluated. The end
+  # points themselves are added by the caller.
+  #
+  # B'(t) = 3(1-t)^2 (p1-p0) + 6(1-t)t (p2-p1) + 3t^2 (p3-p2), which is the
+  # quadratic a t^2 + b t + c with a = -p0+3p1-3p2+p3, b = 2(p0-2p1+p2),
+  # c = p1-p0. At most two roots per axis, so at most four extra points.
+  method SvgCurveExtrema {x0 y0 x1 y1 x2 y2 x3 y3} {
+    set points {}
+    foreach axis {x y} {
+      if {$axis eq "x"} {
+        lassign [list $x0 $x1 $x2 $x3] p0 p1 p2 p3
+      } else {
+        lassign [list $y0 $y1 $y2 $y3] p0 p1 p2 p3
+      }
+      set a [expr {-$p0 + 3.0 * $p1 - 3.0 * $p2 + $p3}]
+      set b [expr {2.0 * ($p0 - 2.0 * $p1 + $p2)}]
+      set c [expr {$p1 - $p0}]
+      set roots {}
+      if {abs($a) < 1e-12} {
+        if {abs($b) > 1e-12} {
+          lappend roots [expr {-$c / $b}]
+        }
+      } else {
+        set discriminant [expr {$b * $b - 4.0 * $a * $c}]
+        if {$discriminant >= 0} {
+          set root [expr {sqrt($discriminant)}]
+          lappend roots [expr {(-$b + $root) / (2.0 * $a)}] \
+              [expr {(-$b - $root) / (2.0 * $a)}]
+        }
+      }
+      foreach t $roots {
+        if {$t <= 0 || $t >= 1} {
+          continue
+        }
+        set u [expr {1.0 - $t}]
+        set value [expr {$u * $u * $u * $p0 + 3.0 * $u * $u * $t * $p1 +
+            3.0 * $u * $t * $t * $p2 + $t * $t * $t * $p3}]
+        # The caller reads PAIRS, so the other axis is filled with a value
+        # that is on the curve anyway - the start point. An extreme of x says
+        # nothing about y and must not be read as one.
+        if {$axis eq "x"} {
+          lappend points $value $y0
+        } else {
+          lappend points $x0 $value
+        }
+      }
+    }
+    return $points
   }
 
   # Fill and stroke a completed path, then paint it.
@@ -106,8 +177,27 @@ oo::define ::tclpdf::document::document {
     set fill [dict get $style fill]
     set stroke [dict get $style stroke]
     set hasFill [expr {$fill ne "none" && $fill ne {}}]
-    set hasStroke [expr {$stroke ne "none" && $stroke ne {}}]
+    # A ZERO STROKE WIDTH PAINTS NOTHING. SVG 1.1, 11.4: "A zero value causes
+    # no stroke to be painted." ISO 32000-2, 8.4.3.2 says the opposite for
+    # PDF - "0 w" is the thinnest line the device can render, which on a
+    # platesetter is thinner still - so writing the number through put a red
+    # hairline on a page where the file asked for nothing, and no checker
+    # says a word about it. A NEGATIVE width is an error and the property
+    # falls back to its initial value of 1, which is the line below.
+    set width [my SvgLength [dict get $style stroke-width] 1 d]
+    if {$width < 0} {
+      set width 1
+    }
+    set hasStroke [expr {$stroke ne "none" && $stroke ne {} && $width > 0}]
     if {!$hasFill && !$hasStroke} {
+      return
+    }
+    # visibility is inherited and is read WHERE THE PAINTING HAPPENS, not on
+    # the way down (SVG 1.1, 11.5): a child that says "visible" under a
+    # hidden group is drawn, which is only possible if the walk descends into
+    # the group. "collapse" is the same as "hidden" outside a table.
+    if {[string tolower [string trim [dict get $style visibility]]] in
+        {hidden collapse}} {
       return
     }
     # Assembled first, written afterwards: a colour the parser refuses used
@@ -121,28 +211,46 @@ oo::define ::tclpdf::document::document {
       # what turns a pattern ALIAS into the resource name the content stream
       # needs. Without it the operator names the alias and the reader reports
       # an unknown pattern - a page with the shapes drawn and nothing in them.
-      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $fill svg]] fill]\n"
+      append body "[::tclpdf::color operator [my SvgLuminosity \
+          [::tclpdf::color parse [my GraphicsColour $fill svg]]] fill]\n"
     }
     if {$hasStroke} {
-      append body "[::tclpdf::color operator [::tclpdf::color parse [my GraphicsColour $stroke svg]] stroke]\n"
-      # A negative width is an error in SVG and the property is then
-      # ignored, which leaves the initial value of 1 (SVG 1.1, 11.4).
-      set width [my SvgLength [dict get $style stroke-width] 1]
-      if {$width < 0} {
-        set width 1
-      }
+      append body "[::tclpdf::color operator [my SvgLuminosity \
+          [::tclpdf::color parse [my GraphicsColour $stroke svg]]] stroke]\n"
       append body "[::tclpdf::pdfObj num $width] w\n"
       set caps {butt 0 round 1 square 2}
       if {[dict exists $caps [dict get $style stroke-linecap]]} {
         append body "[dict get $caps [dict get $style stroke-linecap]] J\n"
       }
       set joins {miter 0 round 1 bevel 2}
-      if {[dict exists $joins [dict get $style stroke-linejoin]]} {
-        append body "[dict get $joins [dict get $style stroke-linejoin]] j\n"
+      set join [string trim [dict get $style stroke-linejoin]]
+      if {[dict exists $joins $join]} {
+        append body "[dict get $joins $join] j\n"
+      }
+      # THE MITER LIMIT IS ALWAYS WRITTEN where the join is a miter, and the
+      # reason is a difference in the two initial values: SVG 1.1, 11.4 makes
+      # stroke-miterlimit 4, ISO 32000-2, 8.4.3.5 makes the PDF one 10. A
+      # file that says nothing therefore came out with spikes SVG would have
+      # cut off - measured 2026-08-27, every corner under 28.96 degrees
+      # differs from rsvg. A value below 1 is an error and the property falls
+      # back (11.4).
+      if {$join eq {} || $join eq "miter" || $join eq "inherit"} {
+        set limit [my SvgLength [dict get $style stroke-miterlimit] 4 d]
+        if {$limit < 1} {
+          set limit 4
+        }
+        append body "[::tclpdf::pdfObj num $limit] M\n"
       }
       set dash [my SvgDashArray [dict get $style stroke-dasharray]]
       if {[llength $dash]} {
-        append body "\[[join $dash { }]\] 0 d\n"
+        # The second operand of "d" is the phase (8.4.3.6), which is exactly
+        # what stroke-dashoffset names - it was written as a fixed 0. A
+        # negative value is an error and the property is ignored (11.4).
+        set phase [my SvgLength [dict get $style stroke-dashoffset] 0 d]
+        if {$phase < 0} {
+          set phase 0
+        }
+        append body "\[[join $dash { }]\] [::tclpdf::pdfObj num $phase] d\n"
       }
     }
     # Three properties, two operands: fill-opacity goes into /ca,
@@ -232,18 +340,22 @@ oo::define ::tclpdf::document::document {
   # gradientUnits="objectBoundingBox" that box IS the gradient's coordinate
   # system, so whoever knows it has to say so. It is put into the state around
   # the call, where [SvgGradient] has always looked for it.
+  # The answer is the finished PAINT VALUE and not a pattern name, because a
+  # gradient with exactly one stop is a solid colour (13.2.4) and a radial one
+  # of radius zero is the colour of its last stop (13.2.3) - two cases that
+  # have no pattern at all. [SvgGradient] returns whichever it is.
   method SvgPaintServer {value box} {
     if {![string match "url(*" $value]} {
       return {}
     }
     set saved [my state svgShapeBox]
     my state svgShapeBox $box
-    set resolved [my SvgGradient [string trim [string range $value 4 end-1] "#'\" "]]
-    my state svgShapeBox $saved
-    if {$resolved eq {}} {
-      return {}
+    try {
+      set resolved [my SvgGradient [string trim [string range $value 4 end-1] "#'\" "]]
+    } finally {
+      my state svgShapeBox $saved
     }
-    return [list pattern $resolved]
+    return $resolved
   }
 
   # A stroke-dasharray as the lengths of a PDF dash array, or an empty list
@@ -278,102 +390,9 @@ oo::define ::tclpdf::document::document {
     return [lmap number $numbers {::tclpdf::pdfObj num $number}]
   }
 
-  # Merge the element's own painting properties over the inherited ones. The
-  # style="" attribute wins over presentation attributes (SVG 6.4).
-  # A colour in the FUNCTIONAL notation, translated into what this package
-  # writes. Everything else is handed on untouched: [color parse] already
-  # reads "#rgb", "#rrggbb" and the named colours, and this is the one
-  # spelling it does not.
-  #
-  # NOT A FLOURISH. SVG 1.1, 11.13.1 lists "rgb(255,255,255)" and
-  # "rgb(100%,100%,100%)" among the four ways of writing a colour, and until
-  # 2026-08-24 a drawing using it was refused OUTRIGHT - "colour component is
-  # not a number: rgb(245," - so the whole file was lost over a notation the
-  # standard names first. Measured over the SVG on this machine with the icon
-  # libraries taken out: 6 of 167 files, one of them a floor plan, none of
-  # them drawable.
-  #
-  # rgba() is CSS Color 3 rather than SVG 1.1, and it occurs twice in the same
-  # corpus. Its fourth value is a real alpha, so it is multiplied into the
-  # opacity property that belongs to the side it paints instead of being
-  # dropped - a translucent colour drawn opaque is a wrong picture, and a
-  # refused one is no picture at all.
-  #
-  # Returns a two-element list: the colour, and the alpha to fold in (1 where
-  # there is none). Anything it cannot read is handed back unchanged, so the
-  # refusal still comes from the colour module and still names the value.
-  #
-  # THE ATTRIBUTE IS AN ARGUMENT because the refusal below is the one that
-  # cannot be handed on: a component that IS a double but is not finite has
-  # nothing left for [color parse] to name - see [SvgColourFinite].
-  method SvgColourValue {value attribute} {
-    if {![regexp -nocase {^\s*rgba?\s*\((.*)\)\s*$} $value -> inside]} {
-      return [list $value 1]
-    }
-    set parts {}
-    foreach part [split [string map {, " "} $inside]] {
-      set part [string trim $part]
-      if {$part ne {}} {
-        lappend parts $part
-      }
-    }
-    if {[llength $parts] < 3} {
-      return [list $value 1]
-    }
-    set channels {}
-    foreach part [lrange $parts 0 2] {
-      if {[string index $part end] eq "%"} {
-        set number [string range $part 0 end-1]
-        if {![string is double -strict $number]} {
-          return [list $value 1]
-        }
-        my SvgColourFinite $number $value $attribute
-        lappend channels [expr {max(0.0, min(1.0, $number / 100.0))}]
-      } else {
-        if {![string is double -strict $part]} {
-          return [list $value 1]
-        }
-        my SvgColourFinite $part $value $attribute
-        lappend channels [expr {max(0.0, min(1.0, $part / 255.0))}]
-      }
-    }
-    set alpha 1
-    if {[llength $parts] > 3 && [string is double -strict [lindex $parts 3]]} {
-      my SvgColourFinite [lindex $parts 3] $value $attribute
-      set alpha [expr {max(0.0, min(1.0, double([lindex $parts 3])))}]
-    }
-    return [list [linsert $channels 0 rgb] $alpha]
-  }
-
-  # A component of the functional notation, refused where it is a double to
-  # Tcl but not a finite number.
-  #
-  # NOT the same road as the rest of [SvgColourValue]. What that method
-  # cannot READ - "rgb(oops)" - it hands back untouched, and [color parse]
-  # then refuses the whole value by name; NaN and Inf have no such second
-  # chance, because they pass [string is double -strict] and go straight into
-  # the clamp. min() and max() are arithmetic functions and [expr] refuses
-  # NaN as their operand, so a drawing with "rgb(NaN,0,0)" died with Tcl's
-  # own "floating point value is Not a Number" (measured 2026-08-27), against
-  # the promise that every refusal begins with "tclpdf:"; Inf came through
-  # the clamp as 1.0 and painted a channel the file never asked for. Since
-  # 2026-08-27 the colour module refuses both in every component (TCLPDF
-  # COLOUR COMPONENTS number), and this is the same rule at the one point
-  # that never reaches it.
-  #
-  # The refusal names the ATTRIBUTE as well as the value: fill and stroke
-  # carry the same notation, and the two are told apart nowhere downstream.
-  # [option finite] is the package's one predicate for this - a second copy
-  # is how two modules come to disagree about what a number is.
-  method SvgColourFinite {number value attribute} {
-    if {[::tclpdf::option finite $number]} {
-      return
-    }
-    return -code error -errorcode [list TCLPDF SVG COLOUR $attribute] \
-        "tclpdf: $attribute has a colour component that names no colour,\
-        \"$number\" in \"$value\" - NaN and Inf are doubles to Tcl and paint\
-        nothing"
-  }
+  # The style cascade of one element - the painting properties it inherits
+  # with its own written over them (SVG 6.4). The functional colour notation
+  # is read in svg.tcl, at [SvgColourValue].
 
   method SvgStyle {node inheritedStyle} {
     set style $inheritedStyle
@@ -387,9 +406,15 @@ oo::define ::tclpdf::document::document {
       set groupOpacity [dict get $style opacity]
     }
     dict set style opacity {}
+    # display is NOT inherited (SVG 1.1, 11.5): a group that is not rendered
+    # takes its children with it, but a child of a rendered group does not
+    # inherit "none" from a sibling's declaration. So the slot is emptied
+    # before the element's own value is read, exactly as opacity's is.
+    dict set style display {}
     foreach key {fill stroke stroke-width stroke-linecap stroke-linejoin
-        stroke-dasharray fill-opacity stroke-opacity fill-rule opacity
-        font-size font-family font-weight text-anchor} {
+        stroke-miterlimit stroke-dasharray stroke-dashoffset fill-opacity
+        stroke-opacity fill-rule opacity font-size font-family font-weight
+        text-anchor color display visibility} {
       if {![dict exists $style $key]} {
         dict set style $key {}
       }
@@ -398,9 +423,31 @@ oo::define ::tclpdf::document::document {
         dict set style $key $value
       }
     }
-    foreach {-> key value} [regexp -all -inline {([-a-z]+)\s*:\s*([^;]+)} \
-        [::tclpdf::xml attribute $node style]] {
-      dict set style $key [string trim $value]
+    # A declaration in style="" beats the presentation attribute (SVG 6.4).
+    # Read through [SvgDeclarations], which is where !important and a CSS
+    # comment are taken off the value - until 2026-08-27 "fill:#0a0
+    # !important" reached the colour module whole and cost the drawing.
+    dict for {key value} [my SvgDeclarations [::tclpdf::xml attribute $node style]] {
+      dict set style $key $value
+    }
+    # currentColor, which is a <paint> in its own right (SVG 4.2 and 11.3):
+    # it stands for the value of the "color" property, whose initial value is
+    # black. Resolved HERE, before anything downstream sees it - handed on
+    # untouched it reached [color parse] as a colour name and cost the whole
+    # drawing, and it is the spelling both icon libraries in the corpus use
+    # for "take the colour of your surroundings".
+    set current [string trim [dict get $style color]]
+    if {$current eq {} || [string equal -nocase $current currentColor] ||
+        [string equal -nocase $current inherit]} {
+      set current black
+    } else {
+      set current [lindex [my SvgColourValue $current color] 0]
+    }
+    dict set style color $current
+    foreach key {fill stroke} {
+      if {[string equal -nocase [string trim [dict get $style $key]] currentColor]} {
+        dict set style $key $current
+      }
     }
     # The functional notation, resolved here so that everything downstream
     # sees the one spelling the package writes - and so that an rgba() alpha
@@ -456,33 +503,119 @@ oo::define ::tclpdf::document::document {
   # gradient happened to share an id lost its own. The names come from a
   # document-wide counter instead, and the reuse key is what actually makes
   # two uses interchangeable: the gradient plus every argument of the pattern.
-  method SvgGradient {id} {
-    set node [my SvgDefinition $id]
-    if {$node eq {}} {
-      return {}
-    }
-    set kind [string map {svg: {}} [::tclpdf::xml name $node]]
-    if {$kind ni {linearGradient radialGradient}} {
-      return {}
-    }
-
-    # Stops. A gradient inheriting them through href is followed once - that
-    # is the only case measured in the corpus.
-    set stops [my SvgStops $node]
-    if {[llength $stops] < 2} {
-      set reference [::tclpdf::xml attribute $node href \
-          [::tclpdf::xml attribute $node xlink:href]]
-      set inheritedFrom [my SvgDefinition [string trimleft $reference #]]
-      if {$inheritedFrom ne {}} {
-        set stops [my SvgStops $inheritedFrom]
+  # A gradient with everything it inherits through href, as
+  # {kind attributes stops}.
+  #
+  # SVG 1.1, 13.2.4 makes the inheritance cover the ATTRIBUTES as well as the
+  # stops: "if this element has no defined gradient stops, and the referenced
+  # element does ... then this element inherits" is one sentence of it, and
+  # the list of attributes above it - gradientUnits, gradientTransform,
+  # spreadMethod, the end points, the circle - is the other. Only the stops
+  # were followed until 2026-08-27, so a gradient that took its geometry from
+  # a base and stated only its own colours came out with the DEFAULTS: a
+  # vertical ramp ran horizontally, and nothing said so.
+  #
+  # The chain is walked with the ids seen on it, because href may point back:
+  # a cycle ends the walk instead of the process.
+  method SvgGradientChain {id} {
+    set kind {}
+    set attributes [dict create]
+    set stops {}
+    set seen [dict create]
+    set current [string trim $id]
+    while {$current ne {} && ![dict exists $seen $current]} {
+      dict set seen $current 1
+      set node [my SvgDefinition $current]
+      if {$node eq {}} {
+        break
       }
+      set name [string map {svg: {}} [::tclpdf::xml name $node]]
+      if {$name ni {linearGradient radialGradient}} {
+        break
+      }
+      if {$kind eq {}} {
+        set kind $name
+      }
+      # The nearer element wins, which is what "an attribute the element does
+      # not state is taken from the one it references" means.
+      foreach key {gradientUnits gradientTransform spreadMethod
+          x1 y1 x2 y2 cx cy r fx fy} {
+        set value [::tclpdf::xml attribute $node $key]
+        if {$value ne {} && ![dict exists $attributes $key]} {
+          dict set attributes $key $value
+        }
+      }
+      if {![llength $stops]} {
+        set stops [my SvgStops $node]
+      }
+      set current [string trimleft [string trim [::tclpdf::xml attribute \
+          $node href [::tclpdf::xml attribute $node xlink:href]]] #]
     }
-    if {[llength $stops] < 2} {
+    return [list $kind $attributes $stops]
+  }
+
+  # A number in objectBoundingBox units: a fraction, or a per cent of one.
+  # Values outside 0..1 are legal there (13.2.3 puts a focus outside the box).
+  method SvgUnitValue {value default} {
+    if {[string match {*%} $value]} {
+      set value [string trimright $value %]
+      if {![::tclpdf::option finite $value]} {
+        return $default
+      }
+      return [expr {$value / 100.0}]
+    }
+    if {![::tclpdf::option finite $value]} {
+      return $default
+    }
+    return $value
+  }
+
+  method SvgGradient {id} {
+    lassign [my SvgGradientChain $id] kind attributes stops
+    if {$kind eq {}} {
       return {}
+    }
+    # THE TWO SILENT OMISSIONS. Neither is built - a spreadMethod other than
+    # pad needs /Extend to repeat, which PDF's two booleans cannot do, and a
+    # gradientTransform would have to be folded into a pattern matrix that
+    # already carries three transforms. Until 2026-08-27 both went by without
+    # a word, against the promise at the top of svg.tcl that a caller can see
+    # what a drawing lost; an ignored ATTRIBUTE is exactly the kind of
+    # omission that leaves no other trace.
+    if {[dict exists $attributes spreadMethod] &&
+        [dict get $attributes spreadMethod] ni {pad {}}} {
+      my SvgSkipped spreadMethod
+    }
+    if {[dict exists $attributes gradientTransform]} {
+      my SvgSkipped gradientTransform
+    }
+    if {![llength $stops]} {
+      return {}
+    }
+    # ONE STOP IS A COLOUR, not nothing. SVG 1.1, 13.2.4: "If one gradient
+    # stop is defined, then paint with the solid colour fill using the colour
+    # defined for that gradient stop." Only NO stop means the paint server
+    # cannot be resolved. Measured 2026-08-27: a one-stop gradient made the
+    # element vanish and was reported as an unresolvable gradient.
+    if {[llength $stops] == 1} {
+      if {[lindex [lindex $stops 0] 2] != 1} {
+        my SvgSkipped stop-opacity
+      }
+      return [lindex [lindex $stops 0] 1]
+    }
+    foreach stop $stops {
+      if {[lindex $stop 2] != 1} {
+        # A per-stop alpha is a luminosity /SMask running along the same
+        # axis, which is a gradient of its own; reported rather than dropped
+        # in silence, so the drawing does not quietly come out opaque.
+        my SvgSkipped stop-opacity
+        break
+      }
     }
 
     lassign [my state svgBox] boxX boxY boxWidth boxHeight
-    set units [::tclpdf::xml attribute $node gradientUnits objectBoundingBox]
+    set units [expr {[dict exists $attributes gradientUnits]
+        ? [dict get $attributes gradientUnits] : {objectBoundingBox}}]
     if {$units eq "userSpaceOnUse"} {
       set frameX $boxX
       set frameY $boxY
@@ -525,22 +658,61 @@ oo::define ::tclpdf::document::document {
       set matrix [::tclpdf::geometry multiply [my state svgTransform] \
           [my state svgMatrix]]
     }
-    set arguments [list -colors $colors -stops $offsets -matrix $matrix]
+    set arguments [list -colors $colors -stops $offsets]
+    set stated [list x1 0 y1 0 x2 1 y2 0 cx 0.5 cy 0.5 r 0.5 fx {} fy {}]
+    foreach {key fallback} $stated {
+      if {[dict exists $attributes $key]} {
+        dict set stated $key [dict get $attributes $key]
+      }
+    }
     if {$kind eq "linearGradient"} {
-      set x1 [my SvgFraction [::tclpdf::xml attribute $node x1 0] $frameWidth $frameX]
-      set y1 [my SvgFraction [::tclpdf::xml attribute $node y1 0] $frameHeight $frameY]
-      set x2 [my SvgFraction [::tclpdf::xml attribute $node x2 1] $frameWidth $frameX]
-      set y2 [my SvgFraction [::tclpdf::xml attribute $node y2 0] $frameHeight $frameY]
+      set x1 [my SvgFraction [dict get $stated x1] $frameWidth $frameX $units x]
+      set y1 [my SvgFraction [dict get $stated y1] $frameHeight $frameY $units y]
+      set x2 [my SvgFraction [dict get $stated x2] $frameWidth $frameX $units x]
+      set y2 [my SvgFraction [dict get $stated y2] $frameHeight $frameY $units y]
       lappend arguments -from [list $x1 $y1] -to [list $x2 $y2] \
-          -at [list $frameX $frameY] -size [list $frameWidth $frameHeight]
+          -at [list $frameX $frameY] -size [list $frameWidth $frameHeight] \
+          -matrix $matrix
       set sub axial
-    } else {
-      set cx [my SvgFraction [::tclpdf::xml attribute $node cx 0.5] $frameWidth $frameX]
-      set cy [my SvgFraction [::tclpdf::xml attribute $node cy 0.5] $frameHeight $frameY]
-      set r [my SvgFraction [::tclpdf::xml attribute $node r 0.5] \
-          [expr {max($frameWidth, $frameHeight)}] 0]
+    } elseif {$units eq "userSpaceOnUse"} {
+      set cx [my SvgFraction [dict get $stated cx] $frameWidth $frameX $units x]
+      set cy [my SvgFraction [dict get $stated cy] $frameHeight $frameY $units y]
+      set r [my SvgFraction [dict get $stated r] $frameWidth 0 $units d]
+      if {$r <= 0} {
+        return [lindex [lindex $stops end] 1]
+      }
       lappend arguments -center [list $cx $cy] -radius $r \
-          -at [list $frameX $frameY] -size [list $frameWidth $frameHeight]
+          -at [list $frameX $frameY] -size [list $frameWidth $frameHeight] \
+          -matrix $matrix
+      set sub radial
+    } else {
+      # A RADIAL GRADIENT IN objectBoundingBox UNITS IS AN ELLIPSE on a box
+      # that is not square. SVG 1.1, 7.11 maps the UNIT SQUARE onto the
+      # bounding box, and 13.2.3 defines the gradient as a circle in that
+      # square - so the mapping belongs in the pattern's matrix, not in the
+      # radii. Worked out per axis as it was until 2026-08-27, cx and cy came
+      # out right and r could only be a scalar: on a 100x40 rectangle the
+      # circle of r = 50 ran out of the shape at the top and bottom and went
+      # dark too early at the sides. Written as a matrix, fx/fy and an r
+      # beyond 1 come out right of their own accord.
+      set cx [my SvgUnitValue [dict get $stated cx] 0.5]
+      set cy [my SvgUnitValue [dict get $stated cy] 0.5]
+      set r [my SvgUnitValue [dict get $stated r] 0.5]
+      if {$r <= 0} {
+        # 13.2.3: "A value of zero will cause the area to be painted as a
+        # single colour using the colour and opacity of the last gradient
+        # stop."
+        return [lindex [lindex $stops end] 1]
+      }
+      lappend arguments -center [list $cx $cy] -radius $r \
+          -at {0 0} -size {1 1} \
+          -matrix [::tclpdf::geometry multiply \
+              [list $frameWidth 0 0 $frameHeight $frameX $frameY] $matrix]
+      if {[dict get $stated fx] ne {} && [dict get $stated fy] ne {}} {
+        lappend arguments -focus [list \
+            [my SvgUnitValue [dict get $stated fx] $cx] \
+            [my SvgUnitValue [dict get $stated fy] $cy]]
+      }
       set sub radial
     }
     # Reuse only what is genuinely interchangeable: same gradient, same
@@ -563,19 +735,38 @@ oo::define ::tclpdf::document::document {
     # four drawings of the same file, three of them without colour. With
     # unique names a failure here is a real defect and must be heard.
     my shading pattern $name $sub {*}$arguments
-    dict set known $key $name
+    dict set known $key [list pattern $name]
     my state svgGradients $known
-    return $name
+    return [list pattern $name]
   }
 
-  # The stops of a gradient, as {offset colour} pairs. stop-color may sit in
-  # an attribute or inside style="" - both occur, the second more often.
+  # The stops of a gradient, as {offset colour opacity} triples. stop-color
+  # and stop-opacity may sit in an attribute or inside style="" - both occur,
+  # the second more often.
+  #
+  # THE OFFSETS COME OUT IN ORDER, because the norm says how. SVG 1.1,
+  # 13.2.4: "Each gradient offset value is required to be equal to or greater
+  # than the previous ... If a given gradient stop's offset value is not equal
+  # to or greater than all previous offset values, then the offset value is
+  # adjusted to be equal to the largest of all previous offset values" - and
+  # the whole range is clamped to 0..1. Handed through as they stood, an
+  # out-of-order pair reached [shading] and cost the WHOLE drawing under
+  # TCLPDF SHADING STOPS order, where the standard has an express repair
+  # instruction. That refusal stays right for a caller who passes -stops
+  # itself; here the file is repaired the way a reader would.
+  #
+  # PDF wants them STRICTLY increasing (7.10.4: Domain0 < Bounds0 < ... ), so
+  # a clamped-to-equal pair is nudged apart by a hair rather than merged - the
+  # hard colour transition the norm means is then still a transition. A stop
+  # for which no room is left at the end of the ramp is dropped and reported.
   method SvgStops {node} {
     set stops {}
+    set previous {}
     foreach child [::tclpdf::xml children $node] {
       if {[string map {svg: {}} [::tclpdf::xml name $child]] ne "stop"} {
         continue
       }
+      set declarations [my SvgDeclarations [::tclpdf::xml attribute $child style]]
       set offset [::tclpdf::xml attribute $child offset 0]
       if {[string match {*%} $offset]} {
         # Only a number gets divided. offset="NaN%" and offset="oops%" both
@@ -590,22 +781,39 @@ oo::define ::tclpdf::document::document {
           set offset $number
         }
       }
-      set colour [::tclpdf::xml attribute $child stop-color]
-      foreach {-> key value} [regexp -all -inline {([-a-z]+)\s*:\s*([^;]+)} \
-          [::tclpdf::xml attribute $child style]] {
-        if {$key eq "stop-color"} {
-          set colour [string trim $value]
+      if {[::tclpdf::option finite $offset]} {
+        set offset [expr {max(0.0, min(1.0, double($offset)))}]
+        if {$previous ne {} && $offset <= $previous} {
+          # A HAIR, and not a hair's breadth: the offsets are compared as the
+          # FILE will carry them, five decimals (7.3.3), so anything below
+          # 1e-5 is the same number once written and [shading] refuses the
+          # pair it was given to separate.
+          set offset [expr {min(1.0, $previous + 1e-4)}]
         }
+        if {$previous ne {} && $offset <= $previous} {
+          my SvgSkipped stop-offset
+          continue
+        }
+        set previous $offset
+      }
+      set colour [::tclpdf::xml attribute $child stop-color]
+      if {[dict exists $declarations stop-color]} {
+        set colour [dict get $declarations stop-color]
       }
       if {$colour eq {} || [string match "url(*" $colour]} {
         set colour black
       }
-      lappend stops [list $offset $colour]
+      set opacity [::tclpdf::xml attribute $child stop-opacity]
+      if {[dict exists $declarations stop-opacity]} {
+        set opacity [dict get $declarations stop-opacity]
+      }
+      if {![::tclpdf::option finite $opacity]} {
+        set opacity 1
+      }
+      lappend stops [list $offset $colour [expr {max(0.0, min(1.0, $opacity))}]]
     }
     return $stops
   }
-
-  # A gradient coordinate: a fraction of the frame, or a length in it.
 }
 
-package provide tclpdf::svgPaint 1.7
+package provide tclpdf::svgPaint 1.8

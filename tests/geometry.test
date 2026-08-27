@@ -453,4 +453,38 @@ test geometry-matrix-3.16 {a matrix of NaN is refused by the same predicate} -bo
       [::tclpdfTest::refusal {::tclpdf::geometry check {1 0 0 Inf 0 0} transform}]
 } -result {{TCLPDF GEOMETRY MATRIX transform} {TCLPDF GEOMETRY MATRIX transform}}
 
+# --- a matrix applied ABOUT a point -----------------------------------------
+
+test geometry-about-12.1 {the point it is about does not move} -body {
+  # The whole of what [about] promises: whatever the matrix does, the point
+  # named is its fixed point. Measured for a turn, a scale and a skew.
+  set results {}
+  foreach matrix [list [::tclpdf::geometry rotate 90] \
+      [::tclpdf::geometry scale 3] [::tclpdf::geometry skew 20 0]] {
+    lassign [::tclpdf::geometry apply \
+        [::tclpdf::geometry about $matrix 100 200] 100 200] x y
+    lappend results [format %.6f $x] [format %.6f $y]
+  }
+  set results
+} -result {100.000000 200.000000 100.000000 200.000000 100.000000 200.000000}
+
+test geometry-about-12.2 {and everything else turns around it} -body {
+  # 90 degrees about (100, 200) takes the point 30 to the right of it to the
+  # point 30 above it - counter-clockwise, as [rotate] is.
+  lassign [::tclpdf::geometry apply \
+      [::tclpdf::geometry about [::tclpdf::geometry rotate 90] 100 200] \
+      130 200] x y
+  list [format %.5f $x] [format %.5f $y]
+} -result {100.00000 230.00000}
+
+test geometry-about-12.3 {about the origin is the matrix itself} -body {
+  # The degenerate case, spelled out because it is what tells a wrong sign
+  # from a right one: at (0, 0) the two shifts cancel and nothing is left of
+  # them.
+  set matrix [::tclpdf::geometry rotate 30]
+  set about [::tclpdf::geometry about $matrix 0 0]
+  list [llength $about] \
+      [lmap a $matrix b $about {expr {abs($a - $b) < 1e-12}}]
+} -result {6 {1 1 1 1 1 1}}
+
 cleanupTests

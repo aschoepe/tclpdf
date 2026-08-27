@@ -10,13 +10,20 @@ themselves. What a file is named is not evidence of what it contains, and an
 example that quietly demonstrates the wrong thing is worse than none.
 
 ```
-fonts/     four families, five faces, plus their licences    (stage 2)
-           urw-core35-fonts/, fourteen faces for PDF/A       (stage 2)
-           adobe-afm/, the metrics afmData.tcl is built from (build)
-images/    JPEG, PNG and TIFF per code path, plus SVG        (stages 3 and 6)
-xml/       two ZUGFeRD profiles and one Order-X order       (stage 5)
-languages/ hyphenation patterns, German and English         (stage 1)
+fonts/     DejaVu Sans, regular and bold, kept flat            (stage 2)
+           google/, eighteen faces, eleven of them Noto        (stages 2 and 6)
+           liberation-fonts/, twelve metric stand-ins          (stage 2)
+           tsukurimashou/, OCR A and OCR B in four formats     (stage 2)
+           urw-core35-fonts/, fourteen faces for PDF/A         (stage 2)
+           adobe-afm/, the metrics afmData.tcl is built from   (build)
+           adobe-standard-14/, internal test material only     (travels nowhere)
+           licenses/, nineteen texts, one per family           (stage 2)
+images/    JPEG, PNG and TIFF per code path, plus SVG          (stages 3 and 6)
+xml/       two ZUGFeRD profiles and one Order-X order          (stage 5)
+languages/ hyphenation patterns, German and English            (stage 1)
 ```
+
+**Sizes here are decimal** — 1 KB is 1000 bytes and 1 MB is 1 000 000, the unit `stat` and `ls -l` count in. Two of the figures below used to be binary (MiB) while the rest were decimal, which made one directory look like two sizes.
 
 The sRGB ICC profile does **not** belong here. It is not example data but part
 of the package — it goes to `icc/` at the top level and is installed with it.
@@ -48,7 +55,7 @@ everything else here.
 
 ---
 
-## fonts/ — 55.5 MB, of which 31.2 MB travel
+## fonts/ — 58.2 MB, of which 31.2 MB travel
 
 Sorted by **origin** since 2026-08-17, one directory per source, so that a
 licence question has one place to look:
@@ -56,7 +63,7 @@ licence question has one place to look:
 | directory | what | terms |
 | --- | --- | --- |
 | `fonts/` itself | DejaVu Sans, regular and bold — the face most tests and examples reach for first, kept flat for the short path | Bitstream Vera licence, `licenses/DejaVu-*` |
-| `google/` | the Google Fonts faces: Roboto (static and variable), Arimo (variable, the Arial metrics — example 03.04 embeds it under the alias the barcode encoder asks for), Bitcount Prop Single (static and variable), Niconne, Permanent Marker, and eleven Noto faces — the ten of example 02.09 (Sans, Sans JP, Serif Tibetan, Sans Symbols, Sans Symbols 2, Emoji, Sans Cuneiform, Sans Egyptian Hieroglyphs, Naskh Arabic, Music) plus **Noto Color Emoji** for example 02.18 — 41 MB, of which 18.1 MB travel | SIL Open Font License 1.1 (Permanent Marker: Apache 2.0), one text per family in `licenses/` |
+| `google/` | the Google Fonts faces: Roboto (static and variable), Arimo (variable, the Arial metrics — example 03.04 embeds it under the alias the barcode encoder asks for), Bitcount Prop Single (static and variable), Niconne, Permanent Marker, and eleven Noto faces — the ten of example 02.09 (Sans, Sans JP, Serif Tibetan, Sans Symbols, Sans Symbols 2, Emoji, Sans Cuneiform, Sans Egyptian Hieroglyphs, Naskh Arabic, Music) plus **Noto Color Emoji** for example 02.18 — 43.2 MB, of which 18.1 MB travel | SIL Open Font License 1.1 (Permanent Marker: Apache 2.0), one text per family in `licenses/` |
 | `tsukurimashou/` | OCR A and OCR B, each as `.ttf`, `.otf`, `.pfb` and `.afm`, from the OCR package of the Tsukurimashou Project | public domain and free-use statements of the three authors, quoted in `licenses/OCR-LICENSE.txt` |
 | `urw-core35-fonts/` | the fourteen URW faces that stand in for the standard 14, in four formats, with their own `NOTICE.md` and licence texts | OFL 1.1 chosen of three |
 | `liberation-fonts/` | Liberation Sans, Serif and Mono, four styles each (release 2.1.5) — metric copies of Arial, Times New Roman and Courier New, the second free stand-in for the standard 14; own `NOTICE.md` with origin, hash and the measurement (2255 of 2292 advances equal to the AFM) | SIL OFL 1.1, `LICENSE` beside them |
@@ -112,12 +119,14 @@ refuse on it.
 | DejaVu | <https://github.com/dejavu-fonts/dejavu-fonts/releases> | Bitstream Vera (c) 2003 Bitstream Inc., Arev glyphs (c) Tavmjong Bah, DejaVu's own changes public domain |
 | Roboto | Google Fonts, `googlefonts/roboto-classic` | **OFL 1.1**, (c) 2011 The Roboto Project Authors — no reserved font name |
 | Bitcount Prop Single | Google Fonts, `petrvanblokland/TYPETR-Bitcount` | **OFL 1.1**, (c) 1980 The Bitcount Project Authors — no reserved font name |
-| Niconne | Google Fonts | **OFL 1.1**, (c) 2011 Vernon Adams — **reserved font name**, written `Nicone` in the file |
+| Niconne | Google Fonts | **OFL 1.1**, (c) 2011 Vernon Adams — **reserved font name**, spelt `Niconne` in the font (name ID 0) and `Nicone` in the licence text beside it |
 
 All four permit redistribution as part of a larger package, which is this
 case, and all four require the notices to travel along. That is what
 `licenses/` is for, and it must not be tidied away.
 
+> **Both spellings are in the tree, and that is the upstream state.** `licenses/Niconne-OFL.txt:2` reserves `Nicone`; the font's own copyright string (`name` ID 0, read with `ttx -t name`) reserves `Niconne`, which is also its family name (IDs 1 and 4) and the name a subset carries into a PDF. Neither file is edited here — a licence text is quoted, not corrected.
+>
 > **Niconne's reserved font name — settled 2026-08-10.** A subset is strictly
 > speaking a modification, and the OFL forbids a modified version from carrying
 > the reserved name. The six-letter prefix a PDF puts in front of every subset
@@ -138,20 +147,9 @@ case, and all four require the notices to travel along. That is what
 From DejaVu: the Serif, Mono, Condensed and ExtraLight faces, the obliques,
 `DejaVuMathTeXGyre.ttf` and the fontconfig snippets — 8.4 MB no example needs.
 
-From the three Google packages: the `static/` folders (54 faces for Roboto, 27
-for Bitcount) and the **variable font files**. That took the folder from 20 MB
-back to 1.9 MB, and the source archive from 8.2 MB back to about 1.5 MB.
+From the three Google packages: the `static/` folders — 54 cuts for Roboto and 27 for Bitcount, which no example reaches.
 
-> **Why the variable fonts went:** PDF has nowhere to put an axis coordinate —
-> no entry in the font dictionary, none in the descriptor. Embedding
-> `Roboto-VariableFont_wdth,wght.ttf` therefore yields the default instance and
-> nothing else, at the price of a 298 KB `gvar` table that no reader can use.
-> Measured on Bitcount, that default is not even one of the shipped styles: its
-> `CRSV` axis defaults to **0.5** while all 18 named instances sit at 0 or 1,
-> so the outlines of `a` differ from *every* static file including Regular.
-> Supporting variable fonts means instancing them at embed time — reading
-> `gvar` and interpolating, including untouched points. That is a stage of its
-> own, and it is not this one.
+> **The variable files went and came back, and the reason is worth keeping.** They were dropped once because PDF has nowhere to put an axis coordinate — no entry in the font dictionary, none in the descriptor — so embedding one could only yield its default instance, at the price of a `gvar` table no reader can use. Measured on Bitcount, that default is not even one of the shipped styles: its `CRSV` axis defaults to **0.5** while all 18 named instances sit at 0 or 1, so the outlines of `a` differ from *every* static file including Regular. The answer to that is instancing at EMBED time — reading `gvar` and interpolating, untouched points included — and it is built (`varFont.tcl`). **Eight of the eighteen faces in `google/` are variable today**, `font embed -instance` reaches a name the designer stood behind and `-axes` any point between; example `02.10` is about nothing else, and `02.09` embeds a second cut of Noto Sans out of the same file that way.
 
 > Measured in passing: `DejaVuMathTeXGyre.ttf` carries **`fsType=12`**, which
 > sets the "preview and print" and "editable" bits at the same time — a
@@ -161,9 +159,9 @@ back to 1.9 MB, and the source archive from 8.2 MB back to about 1.5 MB.
 
 ---
 
-## images/ — 346 KB, 24 files
+## images/ — 354 KB, 24 files
 
-One raster file per code path that stage 3 has to handle separately, plus the vector files for stage 6. All raster images are 640 × 480 except `sample-stencil.png` (300 × 300) and the two colour-keyed PNGs (96 × 96).
+One raster file per code path that stage 3 has to handle separately, plus the vector files for stage 6. Measured with `sips -g pixelWidth -g pixelHeight` over all ten raster files (the other fourteen are SVG): six are 640 × 480 (`sample-photo.jpg`, `sample-gray.jpg`, `sample-indexed.png`, `sample-rgba.png`, `sample-vignette.png`, `sample-scan.tiff`), `sample-stencil.png` is 300 × 300, the two colour-keyed PNGs are 96 × 96, and `erika-mustermann.jpg` is **420 × 540** — a passport photograph is upright and is not one of the generated ones.
 
 **Origin, in one sentence per group.** Everything here was generated for this project and is free of third-party rights, with three exceptions that are named where they stand: `erika-mustermann.jpg` and `signature-mustermann.svg` are official German works in the public domain (see below), and `Tcl9logo.svg` is not ours at all.
 
@@ -176,7 +174,7 @@ One raster file per code path that stage 3 has to handle separately, plus the ve
 | `sample-stencil.png` | 1 507 B | PNG, **1 bit**, colour type 0 (greyscale), 300 × 300 | the stencil mask (`/ImageMask true`, ISO 32000-2, 8.9.6.2) — a picture with no colour space, painted in whatever fill colour is in force |
 | `sample-scan.tiff` | 12 396 B | TIFF, 8 bit greyscale, 200 dpi, Deflate with predictor 2, `RowsPerStrip` 16 | the multi-strip case: a stateful compression restarts in every strip, so this one picture becomes **30** image XObjects stacked by the placement. Drawn here rather than taken from a real scan, and its sky is a smooth ramp because that is where a seam would show first |
 | `sample-vignette.png` | 34 181 B | PNG, 8 bit, colour type 0 (greyscale), 640 × 480 | the mask a caller names (`-mask`) — reaches the file as the `/SMask` of another picture (11.6.5.2, Table 143: a soft-mask image is DeviceGray) |
-| `sample-vector.svg` | 2 262 B | SVG 1.1 | stage 6, deferred |
+| `sample-vector.svg` | 2 262 B | SVG 1.1 | stage 6, built — drawn by `03.03-svg.tcl` and read by `tests/svg.test` |
 | `erika-mustermann.jpg` | 119 541 B | baseline JPEG (SOF0), 3 components, sRGB, **with an embedded ICC profile** (APP2, 3 160 B) — beside Exif, XMP and a Photoshop segment | the ICCBased path for pictures: the profile becomes the image colour space instead of the bare device name |
 | `signature-mustermann.svg` | 14 754 B | SVG 1.1, one filled path with 10 contours | the appearance of a visible signature (stage 8) — public domain, see below |
 | `sample-keyed.png` | 483 B | PNG, 8 bit, colour type 2 (truecolour), 96 × 96, with a `tRNS` chunk | the colour key: one transparent colour and no alpha channel, which reaches the file as `/Mask` with a colour range rather than as an `/SMask` |
@@ -195,13 +193,11 @@ decide whether SVG support is worth building: gradients map onto shading types
 
 `Tcl9logo.svg` is the **logo of the Tcl project**, not a drawing made here — it is what `00.02-hello-world-svg.tcl` puts on the page, that example being the shortest program in the tree that draws a picture at all. Origin: the logo for Tcl/Tk 9.0, designed by Valerie Carroll (Carroll Graphics) in consultation with Steve Landers; the SVG is the one published at <https://cmacleod.me.uk/tcl/logo/>, unchanged. Terms: the Tcl wiki page that introduced it, <https://wiki.tcl-lang.org/page/A+logo+for+Tcl+9>, states "same license as Tcl" — the Tcl/Tk licence, <https://www.tcl-lang.org/software/tcltk/license.html>, a BSD-style licence that permits redistribution with its notice; no separate licence file ships with the logo, so none is copied here. The picture is used as the logo of the project whose language this package is written in, and nothing about it is claimed as this project's work.
 
-Neither PNG is interlaced. That is intentional: an interlaced PNG cannot be
-passed through and would have to be decoded and re-encoded, which is a
-different feature and not one stage 3 claims.
+**None of the six PNGs is interlaced** — read out of byte 13 of each `IHDR`, all zero. That is intentional: an interlaced PNG cannot be passed through and would have to be decoded and re-encoded, which is a different feature and not one stage 3 claims.
 
 ---
 
-## xml/ — 26 KB, three files
+## xml/ — 27 KB, three files
 
 Two invoices from **ZUGFeRD 2.5.2 (DE)**, chosen so that the profile detection
 has something to distinguish, and one Order-X order written for this project. The identifier below is BT-24, read from
@@ -212,7 +208,7 @@ profile from with a single `regexp`, without needing an XML parser.
 | --- | --- | --- | --- |
 | `zugferd-minimum.xml` | 7 929 B | `urn:factur-x.eu:1p0:minimum` | the smallest valid case — good for a first attachment example |
 | `zugferd-en16931.xml` | 12 056 B | `urn:cen.eu:en16931:2017` | the profile real business invoices use |
-| `order-x-comfort.xml` | 6 295 B | `urn:order-x.eu:1p0:comfort` | the other document kind: an **order**, not an invoice, for example `05.13` — Order-X 1.0, COMFORT |
+| `order-x-comfort.xml` | 6 815 B | `urn:order-x.eu:1p0:comfort` | the other document kind: an **order**, not an invoice, for example `05.13` — Order-X 1.0, COMFORT |
 
 **Origin of the two invoices:** the official ZUGFeRD 2.5.2 DE distribution
 (FeRD), directories `Beispiele/0. MINIMUM/MINIMUM_Rechnung/` and

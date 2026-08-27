@@ -2058,7 +2058,7 @@ test sign-8.9 {the refusals that do not depend on openssl} -body {
   set unchanged [expr {$size == [file size $path]}]
   file delete $path $old
   list $unchanged [lsort -unique [lmap {label answer} $result {lindex $answer 0}]] \
-      [string match "*states version 1.7 in its header*2.0*7.5.6 NOTE 4*" \
+      [string match "*is a version 1.7 file*/Version in its catalogue*2.0*7.5.6 NOTE 4*" \
           [lindex [dict get $result version] 1]] \
       [string match "*sign add -subfilter is the signature profile*" \
           [lindex [dict get $result subfilter] 1]] \
@@ -2822,6 +2822,120 @@ test sign-10.11 {a file with no PDF/UA claim is signed as it always was} -body {
     file delete $path
     list [dict get $state field] $grown
 } -result {Signature1 1}
+
+# --- what the file's version is, and what -size may reserve ---------------
+
+test sign-11.1 {sign -size has an upper end, said at the call} -body {
+    # Measured 2026-08-27: "-size 3000000000" was taken at the call and the
+    # WRITE died with a raw "ARITH IOVERFLOW integer value too large to
+    # represent" out of [string repeat] - against the manual's promise that
+    # every refusal begins with "tclpdf:", and half a document later than
+    # the value that caused it. The bound is on what is WRITTEN, the
+    # 2 * size hexadecimal digits, against the PDF integer (7.3.3, Annex
+    # C.2).
+    set out {}
+    foreach size {3000000000 1073741824 1073741823 16384} {
+        set doc [tclpdf new -unit mm]
+        $doc page add
+        set code [catch {$doc sign -size $size} message]
+        lappend out $code [expr {$code ? [lrange $::errorCode 0 3] : {}}] \
+            [expr {$code ? [string match {*2147483647*} $message] : 0}]
+        $doc destroy
+    }
+    set out
+} -result {1 {TCLPDF SIGN ARGUMENT size} 1 1 {TCLPDF SIGN ARGUMENT size} 1\
+    0 {} 0 0 {} 0}
+
+test sign-11.2 {a /ByteRange that is no array of byte positions is named as such} -body {
+    # Measured 2026-08-27: the four numbers were picked out with a digit-run
+    # pattern, so "[0 -388 33604 8543]" read as 0, 388, 33604, 8543 - the
+    # minus sign is not a digit and simply fell out - and failed further
+    # down as SIGN CHANGED, "the file was changed after it was written".
+    # Nothing had changed: the array never held four byte positions. 12.8.1
+    # makes them byte positions and 7.3.3 says what an integer looks like.
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc text "Signiert" -at {20 20}
+    $doc sign -size 64
+    set path [::tclpdfTest::scratch sign-byterange.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    regexp {/ByteRange \[([^]]*)\]} $bytes -> inner
+    set out {}
+    foreach broken [list [regsub {^0 (\d+)} $inner {0 -\1}] \
+            [regsub {^0 (\d+)} $inner {0 1e2}] \
+            [regsub {^0 (\d+)} $inner {0 12.5}]] {
+        set variant [::tclpdfTest::scratch sign-byterange-broken.pdf]
+        ::tclpdf::io write $variant \
+            [string map [list "\[$inner\]" "\[$broken\]"] $bytes]
+        lappend out [catch {::tclpdf::sign digest $variant} message] \
+            [lrange $::errorCode 0 3] \
+            [string match {*not a byte position*} $message]
+        file delete $variant
+    }
+    set out
+} -result {1 {TCLPDF SIGN FOREIGN ByteRange} 1 1 {TCLPDF SIGN FOREIGN ByteRange} 1\
+    1 {TCLPDF SIGN FOREIGN ByteRange} 1}
+
+test sign-11.3 {a /Version in the catalogue raises the file's version} -body {
+    # ISO 32000-2, 7.7.2 Table 29: the catalogue's /Version counts where it
+    # is later than the header's, and 7.5.6 NOTE 4 names it as the one way
+    # an incremental update can raise a version at all. Measured 2026-08-27,
+    # before this: a file with header 1.7 and /Version /2.0 was refused a
+    # CAdES signature ("states version 1.7 in its header"), and one with
+    # header 1.5 and /Version /1.6 was refused a PKCS#7 one - both of them
+    # 2.0 and 1.6 files by 7.7.2.
+    set out {}
+    foreach {version entry subfilter} {1.7 /2.0 cades 1.5 /1.6 pkcs7} {
+        set doc [tclpdf new -unit mm -version $version]
+        $doc page add
+        $doc text "Fremd" -at {20 20}
+        $doc catalogEntry Version $entry
+        set path [::tclpdfTest::scratch sign-catalog-version.pdf]
+        $doc write $path
+        $doc destroy
+        set code [catch {::tclpdf::sign add $path \
+            -subfilter $subfilter -size 256} message]
+        lappend out $code [expr {$code ? [lrange $::errorCode 0 2] : {}}]
+        file delete $path
+    }
+    # And the floor still holds where nothing raises it: a 1.5 file with no
+    # /Version takes no CAdES signature.
+    set doc [tclpdf new -unit mm -version 1.5]
+    $doc page add
+    $doc text "Fremd" -at {20 20}
+    set path [::tclpdfTest::scratch sign-catalog-none.pdf]
+    $doc write $path
+    $doc destroy
+    set code [catch {::tclpdf::sign add $path -subfilter cades -size 256}]
+    lappend out $code [expr {$code ? [lrange $::errorCode 0 2] : {}}]
+    file delete $path
+    set out
+} -result {0 {} 0 {} 1 {TCLPDF VERSION 2.0}}
+
+test sign-11.4 {and with it the spelling of the /M it writes} -body {
+    # 7.9.4 NOTE 2 makes the closing apostrophe the spelling of "PDF
+    # versions up to and including 1.7", so the date written into a file
+    # that is 2.0 by its catalogue has to be the 2.0 one - and [digest]
+    # measures the placeholder it overwrites against the same version.
+    set doc [tclpdf new -unit mm -version 1.7]
+    $doc page add
+    $doc text "Fremd" -at {20 20}
+    $doc catalogEntry Version /2.0
+    set path [::tclpdfTest::scratch sign-catalog-m.pdf]
+    $doc write $path
+    $doc destroy
+    ::tclpdf::sign add $path -subfilter pkcs7 -size 256
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    # The placeholder of a 2.0 file is 22 characters, one less than the 1.7
+    # one, and carries no closing apostrophe.
+    set entries [regexp -all -inline {/M \(([^)]*)\)} $bytes]
+    list [llength $entries] [string length [lindex $entries 1]] \
+        [string match {*'} [lindex $entries 1]]
+} -result {2 22 0}
 
 # The certificates go with the rest of the scratch files: they are made at
 # load time, not by a test, so nothing else would remove them.

@@ -96,7 +96,8 @@ $doc text "Column 1 is fixed at 20 mm, column 4 at 16 mm. Column 3 carries a\
 $doc font -style bold -size 10
 $doc text "Too wide for the page" -at [list 20 [expr {$y2 + 14}]]
 $doc font -style {} -size 8
-$doc text "Twelve columns of 26 mm are 312 mm wide. With -horizontalBreak the\
+$doc text "Twelve columns - 26 mm each but for the 24 mm date column - are\
+    310 mm wide. With -horizontalBreak the\
     table is dealt out over further pages, and -repeatColumns 2 keeps the\
     station and the date on every one of them." \
     -at [list 20 [expr {$y2 + 19}]] -width 170

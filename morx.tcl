@@ -16,8 +16,13 @@
 # and which characters form a sequence is a property of the FACE. On an
 # OpenType face that property is in GSUB and gsubApply.tcl reads it. On an
 # APPLE face there is no GSUB at all: Apple Color Emoji, 192 MB and 3844
-# glyphs, carries "morx" and nothing else, and without it the six characters
-# of a family emoji reach the font as six pictures instead of one.
+# glyphs, carries no GSUB and forms its sequences in "morx", and without that
+# the six characters of a family emoji reach the font as six pictures instead
+# of one. It is not the only layout table it carries, and saying so used to
+# mislead: measured over its table directory, face 0 also has GPOS (1086
+# bytes, a "mark" feature with one MarkBasePos lookup, which stacks the second
+# half of a two-glyph sequence on the first - colorFont.tcl reads it), GDEF,
+# "trak", "feat", "meta" and "bgcl", and face 1 a "cntr" beside them.
 #
 # MEASURED 2026-08-26 on /System/Library/Fonts/Apple Color Emoji.ttc, face 0:
 # no GSUB table; one morx chain with 13 feature entries and 25 subtables, of
@@ -695,13 +700,16 @@ proc ::tclpdf::morx::Sweep {run} {
 }
 
 # A new run entry that keeps what the old one carried besides its glyph - the
-# same rule as [gsubApply Entry], and named apart because a run entry is two
-# elements or three and both files have to agree about it.
+# same rule as [gsubApply Entry], and named apart because the two roads into a
+# run must agree about what an entry carries and neither file is below the
+# other.
+#
+# It is one operation and not a cascade over the length for that very reason:
+# spelled out place by place, this copy stayed two-or-three while the
+# OpenType road grew a fourth place for the ligature component of a mark, and
+# a run that crossed both roads lost it silently.
 proc ::tclpdf::morx::Entry3 {source glyph codes} {
-  if {[llength $source] > 2} {
-    return [list $glyph $codes [lindex $source 2]]
-  }
-  return [list $glyph $codes]
+  return [lreplace $source 0 1 $glyph $codes]
 }
 
 # Type 4: a lookup over every glyph, no state and no order.
@@ -1035,4 +1043,4 @@ proc ::tclpdf::morx::Insert {runName cursorName glyphs before} {
   return [llength $entries]
 }
 
-package provide tclpdf::morx 1.0
+package provide tclpdf::morx 1.1

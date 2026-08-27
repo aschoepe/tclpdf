@@ -35,7 +35,13 @@ namespace eval ::tclpdf::importRead {}
 #   d {key value ...}   dictionary, keys as plain text without the slash
 #   a {value ...}       array
 #   n text              number, kept as written
-#   r {num gen}         indirect reference
+#   r {num gen}         indirect reference - BOTH numbers are the identity
+#                       of what it points at (7.3.10), and both are carried
+#                       through the whole reader: the cross-reference entry
+#                       records the generation, [Object] holds a reference
+#                       against it, and a reference naming a generation the
+#                       file does not have at that number is the NULL object,
+#                       not the object that stands there
 #   nm bytes            name, #xx escapes DECODED (7.3.5.2)
 #   s bytes             literal string, DECODED bytes
 #   h hextext           hex string, digits as written
@@ -136,16 +142,68 @@ proc ::tclpdf::importRead::ParseString {bytes posVar} {
                                     incr pos
                                 }
                             }
-                            append out [format %c [scan $octal %o]]
+                            # "The number ddd may consist of one, two, or
+                            # three octal digits ... High-order overflow
+                            # shall be ignored" (7.3.4.2): \777 is a byte,
+                            # not code point 511. Left unmasked the value
+                            # travelled on as a character above 0xFF, which
+                            # Tcl 8.6 silently truncated in [binary format]
+                            # and Tcl 9 refused with a raw TCL VALUE BYTES
+                            # far away from the file that caused it.
+                            append out [format %c \
+                                [expr {[scan $octal %o] & 0xFF}]]
                         } else {
                             append out $e
                         }
                     }
                 }
             }
+            \r {
+                # AN END-OF-LINE MARKER INSIDE A LITERAL STRING IS ONE BYTE,
+                # AND THAT BYTE IS LF. 7.3.4.2: an end-of-line marker
+                # appearing within a literal string without a preceding
+                # backslash "shall be treated as a byte value of (0Ah),
+                # irrespective of whether the end-of-line marker was a
+                # CARRIAGE RETURN (0Dh), a LINE FEED (0Ah), or both". A CR
+                # left as it was made the /Title of an imported file one byte
+                # longer than the file means, and a CRLF two.
+                if {[string index $bytes $pos] eq "\n"} {incr pos}
+                append out \n
+            }
             default {append out $c}
         }
     }
+}
+
+# THE BYTES A NAME MEANS (7.3.5.2): #xx decodes to its byte; a # NOT
+# followed by two hex digits stays literal - broken files exist, and reading
+# them as written loses less than refusing.
+#
+# One decoder, because two consumers compare names: [Parse] for every
+# dictionary key of the file, and [UnmarkToken] for the tag and the property
+# name of a marked-content bracket. The second used to compare the RAW text
+# against names the first had already decoded, so a page whose property list
+# is called /Pr#31 was compared as "/Pr#31" against "/Pr1".
+proc ::tclpdf::importRead::DecodeName {raw} {
+    if {[string first # $raw] < 0} {
+        return $raw
+    }
+    set name {}
+    set i 0
+    set length [string length $raw]
+    while {$i < $length} {
+        set c [string index $raw $i]
+        set hex [string range $raw [expr {$i + 1}] [expr {$i + 2}]]
+        if {$c eq "#" && [string length $hex] == 2
+                && [string is xdigit -strict $hex]} {
+            append name [format %c [scan $hex %x]]
+            incr i 3
+        } else {
+            append name $c
+            incr i
+        }
+    }
+    return $name
 }
 
 proc ::tclpdf::importRead::ParseToken {bytes posVar} {
@@ -166,15 +224,32 @@ proc ::tclpdf::importRead::ParseToken {bytes posVar} {
 # same file was read two ways; and a plain string comparison against the
 # cross-reference number makes "0007" and "7" two different objects.
 #
-# One helper for the three places a written number becomes a number the reader
-# works with: the "num gen R" lookahead, the "num gen obj" header, and the
-# header of an object stream. Trimming rather than [scan %lld], which is exact
-# at any length. What is NOT normalised is a plain number object - that one is
-# kept as written, so a copied object still round-trips byte for byte.
-proc ::tclpdf::importRead::Decimal {digits} {
+# ONE HELPER FOR EVERY PLACE A WRITTEN NUMBER BECOMES A NUMBER THE READER
+# WORKS WITH - and that is a rule of the reader, not a list of three: the
+# "num gen R" lookahead, the "num gen obj" header, the header of an object
+# stream, startxref, /Prev, the counts of a classic subsection, /Index and
+# /Size of a cross-reference stream, /Length, and /N and /First of an object
+# stream. Eleven, counted with [grep] on 2026-08-27; every one of them used
+# to hand its token to [expr] or to [string range] unfiltered, and read the
+# same valid file differently under the two interpreters.
+#
+# Trimming rather than [scan %lld], which is exact at any length. The token
+# has to be an integer of 7.3.3 - decimal digits with an optional sign, and
+# nothing else: the empty string comes back for anything that is not, so a
+# caller tests one thing instead of two ([string is entier] is no help here,
+# it takes 0x10 and 0b1). What is NOT normalised is a plain number OBJECT -
+# that one is kept as written, so a copied object still round-trips byte for
+# byte.
+proc ::tclpdf::importRead::Decimal {token} {
+    if {![regexp {^([-+]?)(\d+)$} $token -> sign digits]} {
+        return {}
+    }
     set value [string trimleft $digits 0]
     if {$value eq {}} {
-        return 0
+        set value 0
+    }
+    if {$sign eq "-"} {
+        return -$value
     }
     return $value
 }
@@ -203,30 +278,7 @@ proc ::tclpdf::importRead::Parse {bytes posVar {depth 0}} {
         ( {return [list s [ParseString $bytes pos]]}
         / {
             incr pos
-            set raw [ParseToken $bytes pos]
-            # #xx decodes to its byte (7.3.5.2); a # NOT followed by two
-            # hex digits stays literal - broken files exist, and reading
-            # them as written loses less than refusing.
-            if {[string first # $raw] >= 0} {
-                set name {}
-                set i 0
-                set length [string length $raw]
-                while {$i < $length} {
-                    set c [string index $raw $i]
-                    set hex [string range $raw [expr {$i + 1}] \
-                        [expr {$i + 2}]]
-                    if {$c eq "#" && [string length $hex] == 2
-                            && [string is xdigit -strict $hex]} {
-                        append name [format %c [scan $hex %x]]
-                        incr i 3
-                    } else {
-                        append name $c
-                        incr i
-                    }
-                }
-                set raw $name
-            }
-            return [list nm $raw]
+            return [list nm [DecodeName [ParseToken $bytes pos]]]
         }
         {\[} {
             incr pos
@@ -276,7 +328,24 @@ proc ::tclpdf::importRead::Parse {bytes posVar {depth 0}} {
                             "tclpdf: dictionary key is not a name in imported\
                             PDF"
                     }
-                    lappend pairs [lindex $key 1] \
+                    # ONE ENTRY PER KEY, ALWAYS. "A dictionary object is
+                    # an associative table ... Multiple entries in the same
+                    # dictionary shall not have the same key" (7.3.7), and
+                    # what is read here is written back by [Serialize]: with
+                    # [lappend] a foreign file's duplicate /BaseFont came out
+                    # of this package duplicated again, so tclpdf answered a
+                    # file that breaks 7.3.7 with a file of its own that
+                    # breaks it (qpdf warns on the OUTPUT).
+                    #
+                    # WHICH ONE COUNTS: the LAST, which is what [Get] has
+                    # always answered (it reads with [dict get]) and what
+                    # qpdf and poppler do - qpdf says so in as many words,
+                    # "dictionary has duplicated key /BaseFont; last
+                    # occurrence overrides earlier ones". The standard leaves
+                    # it undefined because it forbids the case; choosing the
+                    # reading two other readers already have keeps this
+                    # package from being the odd one out on a damaged file.
+                    dict set pairs [lindex $key 1] \
                         [Parse $bytes pos [expr {$depth + 1}]]
                 }
             }
@@ -377,8 +446,30 @@ proc ::tclpdf::importRead::EscapeName {name} {
 }
 
 # Writes a parsed object back as PDF syntax; every reference is renumbered
-# through the map (old number -> new number). A reference to an object that
-# was never copied names itself - it means the closure walk has a hole.
+# through the map. A reference to an object that was never copied names
+# itself - it means the closure walk has a hole.
+#
+# THE MAP CARRIES THE GENERATION, because a reference is a NUMBER AND A
+# GENERATION (7.3.10) and the two writers of this reader want opposite
+# things of it:
+#
+#   {newNumber newGeneration}   the reference becomes exactly that. An
+#                               IMPORT renumbers into a document of its own,
+#                               where every copied object stands at
+#                               generation 0 whatever generation it had in
+#                               the file it came from - so import.tcl maps
+#                               to {n 0}
+#   newNumber                   the short form: the number is mapped, the
+#                               reference KEEPS ITS OWN GENERATION. That is
+#                               what an identity map means - an update
+#                               (update.tcl) and a signature (sign.tcl)
+#                               write into the file's OWN numbering, where
+#                               "7 1 R" has to stay "7 1 R". Writing
+#                               "7 0 R" there made the annotation of an
+#                               object at generation 1 resolve to null, and
+#                               the link was gone from the signed file
+#                               without a word (measured 2026-08-27, qpdf
+#                               --show-object on a signed q6-sign-gen.pdf)
 proc ::tclpdf::importRead::Serialize {value map {depth 0}} {
     if {$depth > 500} {
         return -code error -errorcode {TCLPDF IMPORT DEPTH} "tclpdf: imported\
@@ -403,7 +494,27 @@ proc ::tclpdf::importRead::Serialize {value map {depth 0}} {
             append out " \]"
             return $out
         }
-        n {return $payload}
+        n {
+            # ANNEX C.2 BOUNDS THE INTEGER, NOT THE REAL. A whole number
+            # beyond +/-2147483647 written back as an integer token is one
+            # no conforming reader has to be able to read - measured with
+            # qpdf on a foreign /LW 3000000000, which a 32-bit reader turns
+            # into null and drops the dictionary with. The value does not
+            # change: the point makes the same digits a REAL (7.3.3), which
+            # Annex C.2 bounds at about +/-3.403e38 instead, and [Parse]
+            # has already refused anything past that. The digits are kept
+            # as they stand rather than run through [pdfObj num], which
+            # would take the detour through a double and turn twenty nines
+            # into a one and twenty zeros.
+            #
+            # This is the rule [pdfObj num] applies to every number this
+            # package writes itself (round 7), on the reading side.
+            set whole [Decimal $payload]
+            if {$whole ne {} && ($whole > 2147483647 || $whole < -2147483647)} {
+                return $payload.
+            }
+            return $payload
+        }
         nm {return "/[EscapeName $payload]"}
         h {return "<$payload>"}
         b {return $payload}
@@ -423,13 +534,24 @@ proc ::tclpdf::importRead::Serialize {value map {depth 0}} {
             return "($out)"
         }
         r {
-            lassign $payload number -
-            if {![dict exists $map $number]} {
+            lassign $payload number generation
+            # Keyed on the pair first, on the bare number second: a map may
+            # name one target per generation where the file uses more than
+            # one, and the short form covers the common case where it does
+            # not.
+            if {[dict exists $map [list $number $generation]]} {
+                set entry [dict get $map [list $number $generation]]
+            } elseif {[dict exists $map $number]} {
+                set entry [dict get $map $number]
+            } else {
                 return -code error \
                     -errorcode {TCLPDF IMPORT SERIALIZE} "tclpdf: reference\
                     to object $number, which the import never reached"
             }
-            return "[dict get $map $number] 0 R"
+            if {[llength $entry] == 2} {
+                return "[lindex $entry 0] [lindex $entry 1] R"
+            }
+            return "$entry $generation R"
         }
         default {
             return -code error -errorcode {TCLPDF IMPORT SERIALIZE} \
@@ -438,7 +560,11 @@ proc ::tclpdf::importRead::Serialize {value map {depth 0}} {
     }
 }
 
-# All object numbers a parsed value refers to.
+# All object numbers a parsed value refers to. NUMBERS, not pairs: the two
+# callers outside this file (update.tcl, sign.tcl) build an IDENTITY map from
+# them, where the reference keeps its own generation anyway - see [Serialize].
+# The takeover, which renumbers into a document of its own and therefore has
+# to tell one generation from another, walks with [RefPairs] below.
 proc ::tclpdf::importRead::Refs {value {depth 0}} {
     if {$depth > 500} {
         return -code error -errorcode {TCLPDF IMPORT DEPTH} "tclpdf: imported\
@@ -465,12 +591,61 @@ proc ::tclpdf::importRead::Refs {value {depth 0}} {
     }
 }
 
+# One entry of a dictionary, or the empty string where the dictionary has
+# none.
+#
+# AND THE NULL OBJECT IS "NONE". "Specifying the null object as the value of
+# a dictionary entry shall be equivalent to omitting the entry entirely"
+# (7.3.9, and 7.3.7 says it again) - so it is answered here, at the ONE place
+# every consumer of this reader reads a key, rather than at each of them.
+# Left to the consumers, a /Rotate null came back as a value that is not a
+# number and the page was refused as "carries /Rotate \"\"", a /CropBox null
+# as "is not an array of four numbers", a /Contents null as "is not a
+# stream" - three refusals of a file the standard defines as readable, and
+# one of them for a file this very reader writes null into (7.5.8.3, an
+# unknown cross-reference entry type).
+# EVERY REFERENCE OF A PARSED VALUE AS THE {number generation} PAIR IT IS.
+# What [Refs] answers is enough to write into a file's own numbering; a COPY
+# needs both halves, because a reference names an object only together with
+# its generation (7.3.10): a page that names "4 0 R" and "4 1 R" names the
+# object once and the null object once, and a walk that saw two 4s would
+# copy one of them twice.
+proc ::tclpdf::importRead::RefPairs {value {depth 0}} {
+    if {$depth > 500} {
+        return -code error -errorcode {TCLPDF IMPORT DEPTH} "tclpdf: imported\
+            object nests deeper than this reader walks for references"
+    }
+    lassign $value type payload
+    switch -- $type {
+        r {return [list $payload]}
+        d {
+            set found {}
+            foreach {- item} $payload {
+                lappend found {*}[RefPairs $item [expr {$depth + 1}]]
+            }
+            return $found
+        }
+        a {
+            set found {}
+            foreach item $payload {
+                lappend found {*}[RefPairs $item [expr {$depth + 1}]]
+            }
+            return $found
+        }
+        default {return {}}
+    }
+}
+
 proc ::tclpdf::importRead::Get {value key} {
     lassign $value type payload
     if {$type ne "d" || ![dict exists $payload $key]} {
         return {}
     }
-    return [dict get $payload $key]
+    set item [dict get $payload $key]
+    if {[lindex $item 0] eq "z"} {
+        return {}
+    }
+    return $item
 }
 
 proc ::tclpdf::importRead::Put {valueVar key item} {
@@ -488,7 +663,19 @@ proc ::tclpdf::importRead::Put {valueVar key item} {
 #   startxref the offset the chain started at - the newest section
 #   sections  every offset of the /Prev chain, newest first
 #   flavour   table|stream, how the NEWEST section is written
-#   xref      num -> {o offset} | {c objstmNum indexInStream}
+#   xref      num -> {o offset generation} | {c objstmNum indexInStream} | f
+#             The GENERATION is part of the entry because it is part of the
+#             object's identity (7.3.10): a reference naming another one at
+#             the same number points at the null object, not at what stands
+#             there. A compressed object is at generation 0 by definition
+#             (7.5.7), and a free entry defines no object at all.
+#   gens      num -> the generation of that entry, or the empty string where
+#             the entry defines no object. The same fact as the third word
+#             of an "o" entry, written out once by [Enter] because every
+#             reference that is followed asks for it and the walk of a large
+#             page tree asks millions of times: reading it out of the entry
+#             instead cost 13 % on a two-thousand-page file (measured
+#             2026-08-27)
 #   trailer   the merged trailer/xref-stream dictionary (parsed)
 #   objects   cache num -> {value hasStream data}
 #   buffers   cache of decoded object stream payloads
@@ -524,7 +711,7 @@ proc ::tclpdf::importRead::Open {path {tolerateEncrypted 0}} {
     set channel [open $path rb]
     set bytes [read $channel]
     close $channel
-    set reader [dict create bytes $bytes path $path xref {} \
+    set reader [dict create bytes $bytes path $path xref {} gens {} \
         trailer {d {}} objects {} buffers {} sections {} flavour {} \
         inprogress {}]
     # THE LAST %%EOF, and what may stand behind it. 7.5.5 puts %%EOF on the
@@ -546,7 +733,10 @@ proc ::tclpdf::importRead::Open {path {tolerateEncrypted 0}} {
     }
     # The LAST of them: an incremental update appends its own startxref, and
     # the newest section is the one to start the chain at.
-    set offset [lindex $matches end]
+    # Through [Decimal] like every other written number: "startxref
+    # 0000000123" is what 7.5.5 asks for in a twenty-byte world, and [expr]
+    # read it as octal under 8.6 and as decimal under 9.
+    set offset [Decimal [lindex $matches end]]
     # Where the newest cross-reference section is. Kept in the reader
     # because a second consumer needs it and must not look for it a second
     # time: update.tcl writes an incremental update whose trailer carries a
@@ -582,9 +772,8 @@ proc ::tclpdf::importRead::PrevOffset {readerVar previous} {
     if {$previous eq {}} {
         return {}
     }
-    set offset [lindex $previous 1]
-    if {[lindex $previous 0] ne "n" || ![string is entier -strict $offset]
-            || $offset < 0} {
+    set offset [Decimal [lindex $previous 1]]
+    if {[lindex $previous 0] ne "n" || $offset eq {} || $offset < 0} {
         return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
             [dict get $reader path]: /Prev is not a byte offset"
     }
@@ -632,11 +821,14 @@ proc ::tclpdf::importRead::ClassicSection {readerVar pos} {
             }
             return [PrevOffset reader $previous]
         }
-        set first [ParseToken $bytes pos]
+        # Both through [Decimal]: a subsection header of "0 010" is ten
+        # entries, and [expr] made it eight under 8.6 - the last two objects
+        # of the file then had no entry at all and were "referenced but not
+        # in the cross-reference".
+        set first [Decimal [ParseToken $bytes pos]]
         SkipWs $bytes pos
-        set count [ParseToken $bytes pos]
-        if {![string is entier -strict $first] || $first < 0
-                || ![string is entier -strict $count] || $count < 0} {
+        set count [Decimal [ParseToken $bytes pos]]
+        if {$first eq {} || $first < 0 || $count eq {} || $count < 0} {
             return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
                 [dict get $reader path]: unreadable cross-reference line at\
                 $pos"
@@ -677,8 +869,15 @@ proc ::tclpdf::importRead::ClassicSection {readerVar pos} {
             }
             set kind [string index $entry 17]
             if {$kind eq "n"} {
+                # The five digits between offset and keyword are the
+                # GENERATION (7.5.4, Table 16) and they are kept: they say
+                # WHICH object stands at that offset, and a reference naming
+                # another generation is the null object (7.3.10). Read with
+                # [scan %d], so the leading zeros of the fixed-width field
+                # are decimal digits and not an octal number.
                 Enter reader [expr {$first + $i}] \
-                    [list o [scan [string range $entry 0 9] %d]]
+                    [list o [scan [string range $entry 0 9] %d] \
+                        [scan [string range $entry 11 15] %d]]
             } elseif {$kind eq "f"} {
                 # A free entry is recorded, not skipped: the newest section
                 # wins (7.5.6), so an object freed by an incremental update
@@ -726,9 +925,8 @@ proc ::tclpdf::importRead::StreamSection {readerVar pos} {
     }
     set w {}
     foreach item [lindex $wval 1] {
-        set width [lindex $item 1]
-        if {[lindex $item 0] ne "n" || ![string is entier -strict $width]
-                || $width < 0} {
+        set width [Decimal [lindex $item 1]]
+        if {[lindex $item 0] ne "n" || $width eq {} || $width < 0} {
             return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
                 [dict get $reader path]: cross-reference stream at $pos has a\
                 /W field width that is not a non-negative integer"
@@ -757,13 +955,13 @@ proc ::tclpdf::importRead::StreamSection {readerVar pos} {
                 an /Index that is not pairs of numbers"
         }
         foreach item [lindex $indexValue 1] {
-            lappend index [lindex $item 1]
+            lappend index [Decimal [lindex $item 1]]
         }
     } else {
-        set index [list 0 [lindex [Get $value Size] 1]]
+        set index [list 0 [Decimal [lindex [Get $value Size] 1]]]
     }
     foreach number $index {
-        if {![string is entier -strict $number] || $number < 0} {
+        if {$number eq {} || $number < 0} {
             return -code error -errorcode {TCLPDF IMPORT XREF} "tclpdf:\
                 [dict get $reader path]: cross-reference stream at $pos names\
                 a subsection start or count that is not a non-negative\
@@ -808,8 +1006,20 @@ proc ::tclpdf::importRead::StreamSection {readerVar pos} {
                     # of the classic 'f' line above.
                     Enter reader [expr {$first + $i}] f
                 }
-                1 {Enter reader [expr {$first + $i}] [list o $f2]}
-                2 {Enter reader [expr {$first + $i}] [list c $f2 $f3]}
+                1 {
+                    # Field 3 of a type 1 entry is the GENERATION (7.5.8.3,
+                    # Table 18) and its default is 0, which a /W of [1 n 0]
+                    # produces on its own - the field arithmetic above
+                    # leaves an absent field at zero.
+                    Enter reader [expr {$first + $i}] [list o $f2 $f3]
+                }
+                2 {
+                    # A compressed object is at generation 0: "the
+                    # generation number of an object stored in an object
+                    # stream shall be zero" (7.5.7), and field 3 of a type 2
+                    # entry is its index in the stream instead.
+                    Enter reader [expr {$first + $i}] [list c $f2 $f3]
+                }
                 default {
                     # "In PDF 1.5 through PDF 2.0, only types 0, 1, and 2 are
                     # allowed. Any other value shall be interpreted as a
@@ -836,6 +1046,20 @@ proc ::tclpdf::importRead::Enter {readerVar number entry} {
     upvar 1 $readerVar reader
     if {![dict exists $reader xref $number]} {
         dict set reader xref $number $entry
+        dict set reader gens $number [EntryGeneration $entry]
+    }
+}
+
+# WHICH GENERATION AN ENTRY DEFINES, or the empty string where it defines no
+# object at all - a free entry, and the unknown entry type 7.5.8.3 makes one.
+# The one place that knows the shape of an entry; [Enter] above asks it once
+# per entry and writes the answer into "gens", so that following a reference
+# is a dictionary lookup and not a walk of the entry.
+proc ::tclpdf::importRead::EntryGeneration {entry} {
+    switch -- [lindex $entry 0] {
+        o {return [lindex $entry 2]}
+        c {return 0}
+        default {return {}}
     }
 }
 
@@ -857,14 +1081,23 @@ proc ::tclpdf::importRead::Merge {readerVar trailer} {
 # "num gen obj" header is checked against it: an offset that lands on a
 # different object is a corrupt (or forged) cross-reference, and reading the
 # wrong object there is the silent-wrong-answer this reader refuses (7.5.4).
-proc ::tclpdf::importRead::ObjectAt {readerVar offset {expect {}}} {
+# The same question is asked of a COMPRESSED object in [Object] below,
+# against the pair in its object stream's own header (7.5.7) - this proc
+# never sees one, and until 2026-08-27 nothing else asked either.
+#
+# BOTH NUMBERS OF THE HEADER, because both are the object's name: "expectGen"
+# names the generation the cross-reference recorded, and a header that says
+# another one is the same corrupt table as a header that says another number.
+# The generation used to be read and thrown away here, which is where the
+# whole "a generation is not part of the identity" of this reader began.
+proc ::tclpdf::importRead::ObjectAt {readerVar offset {expect {}} {expectGen {}}} {
     upvar 1 $readerVar reader
     set bytes [dict get $reader bytes]
     set pos $offset
     SkipWs $bytes pos
     set found [ParseToken $bytes pos]
     SkipWs $bytes pos
-    ParseToken $bytes pos
+    set foundGen [ParseToken $bytes pos]
     SkipWs $bytes pos
     if {[ParseToken $bytes pos] ne "obj"} {
         return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
@@ -874,6 +1107,14 @@ proc ::tclpdf::importRead::ObjectAt {readerVar offset {expect {}}} {
         return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
             [dict get $reader path]: the cross-reference points object $expect\
             at offset $offset, where object $found is written"
+    }
+    if {$expectGen ne {} && [Decimal $foundGen] ne [Decimal $expectGen]} {
+        return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
+            [dict get $reader path]: the cross-reference puts object $expect\
+            at generation $expectGen at offset $offset, where\
+            \"$found $foundGen obj\" is written - a generation is part of an\
+            object's name (ISO 32000-2, 7.3.10), so these are two objects\
+            and not two versions of one"
     }
     set value [Parse $bytes pos]
     SkipWs $bytes pos
@@ -886,10 +1127,13 @@ proc ::tclpdf::importRead::ObjectAt {readerVar offset {expect {}}} {
     set length [Get $value Length]
     if {[lindex $length 0] eq "r"} {
         set length [lindex [Object reader \
-            [lindex [lindex $length 1] 0]] 0]
+            {*}[lindex $length 1]] 0]
     }
-    set length [lindex $length 1]
-    if {![string is entier -strict $length]} {
+    # Through [Decimal]: "/Length 0025" is twenty-five bytes, and [expr]
+    # made it twenty-one under 8.6 - the stream then did not end at
+    # endstream and the whole file was refused.
+    set length [Decimal [lindex $length 1]]
+    if {$length eq {} || $length < 0} {
         return -code error -errorcode {TCLPDF IMPORT STREAM} "tclpdf:\
             [dict get $reader path]: stream at offset $offset has no usable\
             /Length"
@@ -973,14 +1217,58 @@ proc ::tclpdf::importRead::ObjstmHeader {readerVar container data first n} {
     return $header
 }
 
+# THE GENERATION THE FILE GIVES THAT OBJECT, or the empty string where the
+# file defines no object of that number at all - no entry, or a free one. A
+# reference to one of those is the null object whatever generation it names
+# (7.3.10), which is why both answer the same thing here.
+#
+# One place, because the two flavours of cross-reference record it in two
+# different fields and a compressed object has none at all (7.5.7).
+proc ::tclpdf::importRead::Generation {readerVar number} {
+    upvar 1 $readerVar reader
+    if {![dict exists $reader gens $number]} {
+        return {}
+    }
+    return [dict get $reader gens $number]
+}
+
 # The object by number, through the cross-reference - directly stored or
 # inside an object stream (7.5.7; those never hold streams themselves).
-proc ::tclpdf::importRead::Object {readerVar number} {
+#
+# WITH A GENERATION, THE ANSWER IS 7.3.10's. Every caller that got the number
+# out of a REFERENCE hands the generation over with it ([Resolve] does it for
+# all of them), and then a number the file does not define at that generation
+# - a generation of its own, a free entry, no entry at all - is the null
+# object: "An indirect reference to an undefined object shall not be
+# considered an error by a PDF processor; it shall be treated as a reference
+# to the null object". Without a generation the caller is naming an object
+# rather than following a reference ([update body], [update replace]), and
+# there a number the file does not define stays the refusal it was: the
+# caller typed it.
+proc ::tclpdf::importRead::Object {readerVar number {generation {}}} {
     upvar 1 $readerVar reader
+    set known [dict exists $reader xref $number]
+    if {$generation ne {}} {
+        if {$known} {
+            set live [dict get $reader gens $number]
+        } else {
+            set live {}
+        }
+        # The cheap comparison first: a reference that came out of [Parse]
+        # carries a generation that went through [Decimal] already, and the
+        # overwhelming case is "0" against "0".
+        if {$live ne $generation
+                && ($live eq {} || [Decimal $generation] ne $live)} {
+            # NOT put in the cache: the cache is keyed on the number, and
+            # the same number may be named by a reference that resolves and
+            # by one that does not.
+            return [list {z {}} 0 {}]
+        }
+    }
     if {[dict exists $reader objects $number]} {
         return [dict get $reader objects $number]
     }
-    if {![dict exists $reader xref $number]} {
+    if {!$known} {
         return -code error -errorcode {TCLPDF IMPORT OBJECT} "tclpdf:\
             [dict get $reader path]: object $number is referenced but not in\
             the cross-reference"
@@ -1004,7 +1292,8 @@ proc ::tclpdf::importRead::Object {readerVar number} {
     try {
         switch -- [lindex $entry 0] {
             o {
-                set object [ObjectAt reader [lindex $entry 1] $number]
+                set object [ObjectAt reader [lindex $entry 1] $number \
+                    [lindex $entry 2]]
             }
             f {
                 # A freed object resolves to null (7.3.10): a reference to an
@@ -1026,11 +1315,16 @@ proc ::tclpdf::importRead::Object {readerVar number} {
                     # Without them the header walk below runs "2 * $n" and
                     # "$first + ..." on names or on nothing and dies with a
                     # raw Tcl message naming an operand instead of the file.
-                    set n [lindex [Resolve reader [Get $value N]] 1]
-                    set first [lindex [Resolve reader [Get $value First]] 1]
-                    if {![string is entier -strict $n] || $n < 0
-                            || ![string is entier -strict $first]
-                            || $first < 0} {
+                    # Through [Decimal], like every other written number:
+                    # "/First 0014" is fourteen, and [expr] made it twelve
+                    # under 8.6 - the header was then read from the middle
+                    # of a word, the catalogue came out as a keyword, and
+                    # [pdf pages] answered the EMPTY list without a word.
+                    set n [Decimal \
+                        [lindex [Resolve reader [Get $value N]] 1]]
+                    set first [Decimal \
+                        [lindex [Resolve reader [Get $value First]] 1]]
+                    if {$n eq {} || $n < 0 || $first eq {} || $first < 0} {
                         return -code error -errorcode {TCLPDF IMPORT OBJSTM} \
                             "tclpdf: [dict get $reader path]: object stream\
                             $container has no usable /N and /First"
@@ -1051,6 +1345,26 @@ proc ::tclpdf::importRead::Object {readerVar number} {
                         said to be number $index of object stream $container,\
                         which holds $n"
                 }
+                # THE HEADER SAYS WHICH OBJECT STANDS AT THAT INDEX, AND
+                # IT IS HELD AGAINST THE NUMBER THAT WAS ASKED FOR. "The
+                # first integer in each pair shall represent the object
+                # number of a compressed object" (7.5.7) - so the pair is
+                # the object's name, exactly as the "num gen obj" header is
+                # for an uncompressed one, and [ObjectAt] refuses a
+                # mismatch there for the same reason. Until 2026-08-27 the
+                # even word of the pair was never read: a cross-reference
+                # that pointed object 4 at index 0 of a stream whose header
+                # says the index-0 object is 9 handed out object 9 under
+                # the name 4, and a page came out with the WRONG FONT and
+                # no complaint from any tool (qpdf refuses the same file).
+                set said [lindex $header [expr {2 * $index}]]
+                if {$said ne $number} {
+                    return -code error -errorcode {TCLPDF IMPORT OBJSTM} \
+                        "tclpdf: [dict get $reader path]: the\
+                        cross-reference puts object $number at index $index\
+                        of object stream $container, whose own header names\
+                        object $said there"
+                }
                 set pos [expr {$first + [lindex $header \
                     [expr {2 * $index + 1}]]}]
                 set object [list [Parse $data pos] 0 {}]
@@ -1064,10 +1378,25 @@ proc ::tclpdf::importRead::Object {readerVar number} {
 }
 
 # Follows a reference; hands a direct value through unchanged.
+#
+# THE GENERATION GOES WITH THE NUMBER. A reference names both (7.3.10), and
+# [Object] holds the pair against the cross-reference - so a reference to a
+# generation the file does not have at that number resolves to the null
+# object, which this proc answers as "nothing" for the same reason [Get]
+# does (7.3.9). A direct null answers the same way, so that a consumer never
+# has to know the difference between a key that is absent, a key that is
+# null, and a key naming an object that is not there.
 proc ::tclpdf::importRead::Resolve {readerVar value} {
     upvar 1 $readerVar reader
-    if {[lindex $value 0] eq "r"} {
-        return [lindex [Object reader [lindex [lindex $value 1] 0]] 0]
+    switch -- [lindex $value 0] {
+        r {
+            set item [lindex [Object reader {*}[lindex $value 1]] 0]
+            if {[lindex $item 0] eq "z"} {
+                return {}
+            }
+            return $item
+        }
+        z {return {}}
     }
     return $value
 }
@@ -1150,6 +1479,15 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
         # the first width change and wrong after it.
         set p [Resolve reader [lindex $parmsList $i]]
         set extra {}
+        # THE ONE HEADER NUMBER THAT BINDS NOTHING GETS A BOUND HERE. What a
+        # deflate stream unpacks to is in the data, not in the dictionary,
+        # and a reader of foreign files has to say how far it will follow -
+        # the ceiling and the measurement behind it stand in filter.tcl. Only
+        # the READER passes it: the picture side of this package unpacks its
+        # own PNG and TIFF data, where the size is known from the pixels.
+        if {$decoder eq "decodeFlate"} {
+            set extra [list $::tclpdf::filter::flateLimit]
+        }
         if {$decoder eq "decodeLzw" && $p ne {} && [lindex $p 0] eq "d"} {
             set early [lindex [Resolve reader [Get $p EarlyChange]] 1]
             if {$early ne {}} {
@@ -1186,7 +1524,19 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
                 }
             }
         }
-        if {[catch {::tclpdf::filter::$decoder $data {*}$extra} decoded]} {
+        if {[catch {::tclpdf::filter::$decoder $data {*}$extra} decoded \
+                options]} {
+            # A stream that is too big is not a stream that cannot be
+            # decoded, and the caller has to do something else about it -
+            # so the class travels, with the file's name put in front of
+            # the decoder's sentence.
+            if {[lrange [dict get $options -errorcode] 0 2]
+                    eq {TCLPDF FILTER ROOM}} {
+                return -code error -errorcode {TCLPDF IMPORT ROOM} "tclpdf:\
+                    [dict get $reader path]: $what is a /$name stream this\
+                    package will not unpack: [string trim [string map \
+                        {tclpdf: {}} $decoded]]"
+            }
             return -code error -errorcode {TCLPDF IMPORT FILTER} "tclpdf:\
                 [dict get $reader path]: $what is a /$name stream this\
                 package cannot decode: $decoded"
@@ -1201,9 +1551,13 @@ proc ::tclpdf::importRead::DecodeStream {readerVar value data what} {
                 if {$colors eq {}} {set colors 1}
                 set depth [lindex [Resolve reader [Get $p BitsPerComponent]] 1]
                 if {$depth eq {}} {set depth 8}
-                # /Columns is a byte count per row and has to be a positive
-                # integer: zero or a non-number would drive the predictor's
-                # own row arithmetic onto a raw error with no file named.
+                # /Columns is the number of SAMPLES per row (Table 8) -
+                # not a byte count, which is what this comment used to say
+                # while [filter::decodePredictor] next door computed
+                # (columns * colors * depth + 7) / 8 from it and was right.
+                # It has to be a positive integer: zero or a non-number
+                # would drive the predictor's own row arithmetic onto a raw
+                # error with no file named.
                 if {![string is entier -strict $columns] || $columns < 1} {
                     return -code error -errorcode {TCLPDF IMPORT PREDICTOR} \
                         "tclpdf: [dict get $reader path]: $what carries a\
@@ -1462,10 +1816,28 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
 # So they come out. Nothing else does: the operators between the brackets
 # are the page description and are copied byte for byte.
 #
-# ONLY WHAT CARRIES AN /MCID GOES, and that is the whole rule. An /MCID is
-# the index into the parent tree (14.7.4.2) and it is the only thing in a
-# bracket that points out of the stream; everything else a bracket can say
-# stands on its own two feet and stays:
+# WHAT GOES IS WHAT SPEAKS ABOUT THE FOREIGN FILE'S STRUCTURE TREE, and that
+# is two things:
+#
+#   an /MCID in the property list
+#                       the index into the parent tree (14.7.4.2), and the
+#                       one thing in a bracket that points out of the stream
+#   /Artifact           the bracket that says "this content is NOT in the
+#                       tree" (14.8.2.2). That sentence is the foreign
+#                       file's, about the foreign file's tree, and it does
+#                       not survive the journey: the page arrives here as a
+#                       PICTURE, and what [form place] puts around it says
+#                       what it is in THIS document - an artifact under
+#                       -artifact 1, a Figure under -alt. Left standing, an
+#                       /Artifact bracket inside a Figure is tagged content
+#                       inside content marked as artifact, which ISO
+#                       14289-1, 7.1 forbids and veraPDF names as 7.1-1 and
+#                       7.1-2 (measured 2026-08-27 on an imported
+#                       05.07-accessible placed with -alt). Under -artifact 1
+#                       the placement is an artifact anyway, so nothing is
+#                       lost there either
+#
+# Everything else a bracket can say stands on its own two feet and stays:
 #
 #   /OC /oc1 BDC        optional content (8.11.3.2). The bracket is what
 #                       SWITCHES the content inside it - dropping it would
@@ -1475,11 +1847,10 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
 #   /Span << /Lang ... >> BDC
 #                       a property that says something about the content
 #                       rather than about a tree
-#   /Artifact BMC       an artifact bracket. It says "this is not content",
-#                       which stays true inside a form XObject
 #
 # A BMC has no property list at all (8.10.2.2 gives it a tag and nothing
-# else), so a BMC never carries an /MCID and never goes.
+# else), so a BMC never carries an /MCID - but it does carry a tag, and
+# "/Artifact BMC" is the commonest artifact bracket of all.
 #
 # The property list is an inline dictionary or the NAME of an entry in the
 # page's /Properties, and both are looked at: the caller hands over the
@@ -1492,9 +1863,11 @@ proc ::tclpdf::importRead::Geometry {readerVar pageDict number} {
 # arrays and inline images, whose binary data may hold anything at all. A
 # stream this walk does not get to the end of comes back UNCHANGED - a mark
 # left standing is a blemish, a content stream cut in half is a lost page.
-# A stream carrying no mark at all is answered without being walked.
+# A stream carrying no mark at all is answered without being walked - BMC as
+# well as BDC since the artifact bracket goes, and a page whose only marks
+# are "/Artifact BMC" used to be handed back untouched by this very line.
 proc ::tclpdf::importRead::Unmark {content {marked {}}} {
-    if {![string match *BDC* $content]} {
+    if {![string match *BDC* $content] && ![string match *BMC* $content]} {
         return $content
     }
     set length [string length $content]
@@ -1525,22 +1898,26 @@ proc ::tclpdf::importRead::Unmark {content {marked {}}} {
         }
         switch -- $text {
             BDC {
-                # An /MCID in the property list, written out or standing in
-                # the named entry the caller resolved. The operand run holds
-                # the tag and the property list and nothing else - a BDC
-                # takes no string operand - so the raw text answers it.
-                set keep [expr {![regexp {/MCID\M} \
-                        [string range $content $run [expr {$pos - 1}]]]
-                    && [lindex $operands 1] ni $marked}]
+                # The operand run holds the tag and the property list and
+                # nothing else - a BDC takes no string operand - so the raw
+                # text answers the /MCID question.
+                set keep [expr {![UnmarkForeign [lindex $operands 0] \
+                    [lindex $operands 1] \
+                    [string range $content $run [expr {$pos - 1}]] $marked]}]
                 lappend stack $keep
                 if {$keep} {
                     append out [string range $content $run [expr {$pos - 1}]] \n
                 }
             }
             BMC {
-                # No property list, so no /MCID, so nothing to take out.
-                lappend stack 1
-                append out [string range $content $run [expr {$pos - 1}]] \n
+                # No property list, so no /MCID - but the tag is there, and
+                # "/Artifact BMC" is one.
+                set keep [expr {![UnmarkForeign [lindex $operands 0] {} {} \
+                    $marked]}]
+                lappend stack $keep
+                if {$keep} {
+                    append out [string range $content $run [expr {$pos - 1}]] \n
+                }
             }
             EMC {
                 if {![llength $stack]} {
@@ -1586,6 +1963,27 @@ proc ::tclpdf::importRead::Unmark {content {marked {}}} {
         return $content
     }
     return [string trimright $out \n]
+}
+
+# WHETHER A BRACKET OF THE FOREIGN STREAM SPEAKS ABOUT THE FOREIGN FILE'S
+# STRUCTURE TREE - the whole rule of [Unmark], in one predicate rather than
+# once per bracket kind, so that BMC and BDC cannot drift apart.
+#
+#   tag        the bracket's tag, as a name with its slash ("/Artifact")
+#   property   the property list operand where it is a NAME, empty otherwise
+#   text       the bracket's own bytes, where an inline property list may
+#              hold the /MCID; empty for a BMC, which has no property list
+#   marked     the names of the page's /Properties entries whose dictionary
+#              carries an /MCID - resolving them is the reader's business
+#              and not this walk's, so the caller hands them over
+proc ::tclpdf::importRead::UnmarkForeign {tag property text marked} {
+    if {$tag eq "/Artifact"} {
+        return 1
+    }
+    if {$text ne {} && [regexp {/MCID\M} $text]} {
+        return 1
+    }
+    return [expr {$property ne {} && $property in $marked}]
 }
 
 # One token, from its first byte; posVar ends up behind it. Answers
@@ -1642,11 +2040,12 @@ proc ::tclpdf::importRead::UnmarkToken {content length posVar} {
             return [list punct $c]
         }
         / {
-            # A name (7.3.5), taken as written - #xx is not decoded, because
-            # nothing here compares a name to anything but the literal /OC.
+            # A name (7.3.5), through the same decoder every other name of
+            # this reader goes through - what is compared here (the tag of a
+            # bracket, the name of a property list) is compared against
+            # names that came out of [Parse].
             incr pos
-            set text /[ParseToken $content pos]
-            return [list name $text]
+            return [list name /[DecodeName [ParseToken $content pos]]]
         }
     }
     # A number, a keyword or an operator: everything to the next delimiter.
@@ -1700,6 +2099,47 @@ proc ::tclpdf::importRead::UnmarkInlineImage {content length posVar} {
     return 0
 }
 
+# ------------------------------------------------------------- the version
+#
+# WHAT VERSION A FILE CLAIMS FOR ITSELF. The header names it (7.5.2), and
+# from PDF 1.4 on the catalogue's /Version overrides it - upwards only
+# (7.5.5: the entry is a name object, and it counts "if it is later than the
+# version specified in the file's header"). The higher of the two is what
+# the file says it needs.
+#
+# Two consumers, which is why it lives here: [pdf info] reports both numbers
+# separately (importInfo.tcl), and [pdf import] enters the source's version
+# as a floor of the document it copies the page into (import.tcl).
+
+# The header alone, looked for in the first kilobyte rather than at byte 0: a
+# file with junk in front of its header is what Annex H tells a reader to
+# cope with, and the cross-reference offsets of such a file are the ones this
+# reader has just followed.
+proc ::tclpdf::importRead::HeaderVersion {bytes} {
+    if {[regexp {%PDF-(\d+\.\d+)} [string range $bytes 0 1023] -> version]} {
+        return $version
+    }
+    return {}
+}
+
+# The higher of the header and the catalogue's /Version, or the empty string
+# where the file names neither in a shape this package knows. A version this
+# package does not write (a 1.8 of somebody's invention) is answered as it
+# stands - the caller decides what to do with it.
+proc ::tclpdf::importRead::Version {readerVar} {
+    upvar 1 $readerVar reader
+    set version [HeaderVersion [dict get $reader bytes]]
+    set catalogue [Resolve reader [Get [dict get $reader trailer] Root]]
+    set claimed [Resolve reader [Get $catalogue Version]]
+    if {[lindex $claimed 0] eq "nm"
+            && [regexp {^\d+\.\d+$} [lindex $claimed 1]]
+            && ($version eq {}
+                || [package vcompare [lindex $claimed 1] $version] > 0)} {
+        set version [lindex $claimed 1]
+    }
+    return $version
+}
+
 # ------------------------------------------------------------ the takeover
 
-package provide tclpdf::importRead 1.5
+package provide tclpdf::importRead 1.6

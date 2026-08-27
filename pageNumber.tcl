@@ -57,15 +57,16 @@ oo::define ::tclpdf::document::document {
     # whole reason the option has to reach this far.
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "pageNumbers"]
-    if {[dict get $options at] eq {}} {
-      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT at] \
-          "tclpdf: pageNumbers needs -at {x y}"
-    }
-    if {[llength [dict get $options at]] != 2} {
-      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT at] \
-          "tclpdf: -at takes two numbers {x y}, got\
-          \"[dict get $options at]\""
-    }
+    # [option point] rather than a word count of its own, which is what stood
+    # here: it counted the words and let every value through - "-at {a b}",
+    # "-at {NaN 10}" and "-at {1e39 10}" were taken by the call and refused
+    # by [write], from inside the [text] the number is drawn with, in words
+    # naming -at of THAT call rather than the pageNumbers call that wrote it
+    # (measured 2026-08-27). The run is stored and read once per page at write
+    # time, so a value refused there is refused after every other run has
+    # already been placed. Same predicate as [text], [leader] and [table]:
+    # two numbers, finite, and within what a PDF real holds (Annex C.2).
+    ::tclpdf::option point [dict get $options at] -at pageNumbers
     if {![string is integer -strict [dict get $options from]]
         || [dict get $options from] < 1} {
       return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT from] \
@@ -86,6 +87,18 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT align] \
           "tclpdf: -align must be left, right or center,\
           not \"[dict get $options align]\""
+    }
+    # A page number is ONE line: it is drawn with [text] and no -width, and
+    # [text] refuses a line feed there by name (TCLPDF TEXT LINEFEED). Asked
+    # here for the same reason -at is: the label is built and drawn at write
+    # time, so "-format \"Page\\n%n\"" was taken by the call and refused by
+    # [write], naming the string rather than the option that carried it.
+    if {[string first \n [dict get $options format]] >= 0} {
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT format] \
+          "tclpdf: -format is one line - a page number is set as a single\
+          line, and the format has a line feed at position\
+          [string first \n [dict get $options format]]; use a second\
+          pageNumbers call for a second line"
     }
 
     set state [my state pageNumbers]
@@ -210,4 +223,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.6
+package provide tclpdf::pageNumber 1.7

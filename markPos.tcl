@@ -293,11 +293,16 @@ proc ::tclpdf::markPos::run {state run {adjustments {}}} {
     return [lrepeat $count {0 0}]
   }
   set glyphs [lmap item $run {lindex $item 0}]
+  # The ligature properties gsubApply.tcl records when a ligature swallows a
+  # mark - {id component count}, or nothing for a glyph no ligature touched.
+  # This is the one road that has them: [offsets] takes a plain glyph list and
+  # a caller with one cannot know which component a mark belongs to.
+  set properties [lmap item $run {lindex $item 3}]
   set units [dict get $state units]
   # Into font units, which is what [offsets] and the face itself speak.
   set inUnits [lmap value $adjustments {expr {$value * $units / 1000.0}}]
   set scaled {}
-  foreach offset [offsets $state $glyphs $inUnits] {
+  foreach offset [offsets $state $glyphs $inUnits $properties] {
     lassign $offset dx dy
     if {$dx == 0 && $dy == 0} {
       # The common case by far, and it stays an EXACT zero rather than
@@ -322,7 +327,13 @@ proc ::tclpdf::markPos::run {state run {adjustments {}}} {
 #
 # ADJUSTMENTS, in FONT units here, are what [run] describes: one per gap, or
 # {} for a line drawn with the face's own advances.
-proc ::tclpdf::markPos::offsets {state glyphs {adjustments {}}} {
+#
+# PROPERTIES, one per glyph, are the ligature properties of the run entries -
+# see [run] and [gsubApply Entry]. They answer the one question a glyph list
+# cannot: which component of a ligature a mark was written behind. {} for a
+# caller that has no run, and then a mark falls on the ligature's last
+# component, which is what every mark did before this existed.
+proc ::tclpdf::markPos::offsets {state glyphs {adjustments {}} {properties {}}} {
   set count [llength $glyphs]
   if {$state eq {} || $count < 2} {
     return [lrepeat $count {0 0}]
@@ -370,7 +381,7 @@ proc ::tclpdf::markPos::offsets {state glyphs {adjustments {}}} {
       if {$fallback && [lindex $locked $index] ne {}} {
         continue
       }
-      set found [Attach $state $subtables $visible $at $glyphs]
+      set found [Attach $state $subtables $visible $at $glyphs $properties]
       if {![llength $found]} {
         continue
       }
@@ -554,7 +565,7 @@ proc ::tclpdf::markPos::Subtables {gpos typed} {
 # subtable try. That is the reading HarfBuzz settled on, and the alternative
 # (mark covered, therefore done) silently drops marks in faces that split
 # their classes over two subtables.
-proc ::tclpdf::markPos::Attach {state subtables visible at glyphs} {
+proc ::tclpdf::markPos::Attach {state subtables visible at glyphs {properties {}}} {
   set index [lindex $visible $at]
   set glyph [lindex $glyphs $index]
   foreach subtable $subtables {
@@ -570,15 +581,44 @@ proc ::tclpdf::markPos::Attach {state subtables visible at glyphs} {
     if {$partner eq {}} {
       continue
     }
+    if {$type == 6 && ![Together $properties $index $partner]} {
+      # MarkToMark, and the two marks are not on the same thing - see
+      # [Together]. The next subtable gets its turn, which is what a mark this
+      # subtable cannot place is entitled to.
+      continue
+    }
     set partnerGlyph [lindex $glyphs $partner]
     if {![dict exists $partnerCoverage $partnerGlyph]} {
       continue
     }
     set byClass [lindex $anchors [dict get $partnerCoverage $partnerGlyph]]
     if {$type == 5} {
-      # Which component of the ligature carries the mark is not in the font -
-      # see [LigatureArray]. The last one, and the comment there says why.
-      set byClass [lindex $byClass end]
+      # WHICH COMPONENT of the ligature carries the mark is not in the font -
+      # see [LigatureArray] - and ISO/IEC 14496-22:2019 6.3.3 (S. 225) says
+      # who has to know instead: "the text-layout client must keep track of
+      # associations of marks to particular ligature-glyph components ... To
+      # correctly access the subtables, the client must keep track of the
+      # component associated with the mark." gsubApply.tcl keeps track of it
+      # when the ligature is formed, and PROPERTIES carry it here.
+      #
+      # The last component is still the answer where there is no such record,
+      # and that is the specification's own fallback for a mark whose
+      # association is unknown - it is also what HarfBuzz does
+      # (MarkLigPosFormat1::apply): no ligature identity, an identity other
+      # than the mark's, or no component index, and the mark takes the last
+      # row. Taken as the rule rather than as the fallback, the fatha of the
+      # Arabic lam-alef sat over the alef instead of over the lam, 920 font
+      # units away in Scheherazade New.
+      set component [lindex $properties $index 1]
+      set identity [lindex $properties $partner 0]
+      if {$component eq {} || $component == 0 || $identity eq {}
+          || $identity ne [lindex $properties $index 0]
+          || [lindex $properties $partner 1] != 0} {
+        set byClass [lindex $byClass end]
+      } else {
+        set byClass [lindex $byClass \
+            [expr {min($component, [llength $byClass]) - 1}]]
+      }
     }
     # Two ways a font can leave this row without the anchor the mark asks for,
     # and both used to be answered by [lindex] handing back the empty string
@@ -607,6 +647,43 @@ proc ::tclpdf::markPos::Attach {state subtables visible at glyphs} {
     return [list $partner [expr {$bx - $mx}] [expr {$by - $my}]]
   }
   return {}
+}
+
+# Do these two marks sit on the SAME thing - the test a MarkToMark lookup owes
+# ISO/IEC 14496-22:2019 6.3.3 (S. 227), where mark2 is "the preceding mark
+# glyph ... that the mark1 glyph is to be positioned relative to".
+#
+# Two marks that hang on two different components of one ligature are not on
+# one another, however close they stand in the run, and stacking the second on
+# the first then puts it over the wrong letter. The Urdu spelling of "Allah"
+# is the case that forced this: shadda and fatha belong to the second lam and
+# the damma to the heh, and with the damma stacked on the fatha it stood 524
+# font units from where hb-shape puts it - over the middle of the word rather
+# than over its last letter.
+#
+# The rule is HarfBuzz's, in MarkMarkPosFormat1::apply, and it reads off the
+# ligature properties [gsubApply Entry] records: the same identity means the
+# same base, or - inside a ligature - the same component; different
+# identities match only where one of the two IS a ligature, which carries
+# component 0. A run in which no ligature was formed has no properties at all,
+# every identity is empty, and every pair passes, which is what every mark did
+# before this existed.
+proc ::tclpdf::markPos::Together {properties mark partner} {
+  lassign [lindex $properties $mark] markId markComponent
+  lassign [lindex $properties $partner] partnerId partnerComponent
+  if {$markId eq {}} {
+    set markId 0
+    set markComponent 0
+  }
+  if {$partnerId eq {}} {
+    set partnerId 0
+    set partnerComponent 0
+  }
+  if {$markId == $partnerId} {
+    return [expr {$markId == 0 || $markComponent == $partnerComponent}]
+  }
+  return [expr {($markId != 0 && $markComponent == 0)
+      || ($partnerId != 0 && $partnerComponent == 0)}]
 }
 
 # The glyph this mark attaches to: an index into the run, or {} when there is
@@ -783,4 +860,4 @@ proc ::tclpdf::markPos::AnchorRow {gpos base record classCount} {
   return $row
 }
 
-package provide tclpdf::markPos 1.2
+package provide tclpdf::markPos 1.3

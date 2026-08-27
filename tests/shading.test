@@ -1501,20 +1501,45 @@ test shading-size-51.3 {-size of a shading is two lengths above zero} -body {
 } -result {{1 1 1 1 1 1 1 1} {}}
 
 test shading-size-51.4 {a box too small to be written is refused as well} -body {
-  # The /Matrix of a type 1 shading is built from -at and -size, so it never
-  # goes through [::tclpdf::geometry check] - and it collapses the same way.
   # A PDF real carries five decimals (7.3.3), so a box of 1e-7 mm rounds to
-  # nothing and the matrix comes out singular. Judged over the numbers that
-  # reach the file, which is what [singular] answers.
+  # nothing and everything measured by it collapses - the type 1 /Matrix
+  # comes out singular, the axial road writes "0 0 re W n" with the "sh"
+  # inside it.
+  #
+  # The refusal moved on 2026-08-27 (eighth review, Nr. 65-68): it used to
+  # be made further down, at the /Matrix of the function shading, and that
+  # left the OTHER kinds unrefused - "shading axial -size {1e-6 1e-6}" builds
+  # no matrix and went into the file. It is now made where -size is read, for
+  # every kind alike, which is why the code and the wording here are the
+  # ones -size answers with. The /Matrix check is still there and still
+  # reachable - see 51.6.
   set doc [tclpdf new -unit mm -compress 0]
   $doc page add
   set code [catch {$doc shading function -at {20 20} -size {0.0000001 0.0000001} \
-      -space rgb -expression {1 0 0}} message]
+      -space rgb -expression {1 0 0}} message options]
+  set axial [catch {$doc shading axial -at {20 20} -size {0.000001 0.000001} \
+      -colors {red blue}} axialMessage axialOptions]
   set stream [::tclpdfTest::content $doc]
   $doc destroy
-  list $code [string match {*singular*} $message] [string match {*0.00001 pt*} $message] \
-      $stream
-} -result {1 1 1 {}}
+  list $code [dict get $options -errorcode] [string match {*0 in the file*} $message] \
+      [string match {*0.00001 pt*} $message] \
+      $axial [dict get $axialOptions -errorcode] $stream
+} -result {1 {TCLPDF SHADING ARGUMENT size} 1 1 1 {TCLPDF SHADING ARGUMENT size} {}}
+
+test shading-size-51.6 {the singular /Matrix of a type 1 shading is still refused} -body {
+  # The counterpart to 51.4: -size is not the only road to a matrix that
+  # collapses. The /Matrix scales the domain onto the box, so a domain wide
+  # enough does it with a perfectly ordinary box - and that is what
+  # [geometry singular] is there for. Measured 2026-08-27.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set code [catch {$doc shading function -at {20 20} -size {60 40} \
+      -domain {0 1e9 0 1e9} -space rgb -expression {1 0 0}} message options]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*singular*} $message] $stream
+} -result {1 {TCLPDF SHADING SIZE} 1 {}}
 
 test shading-size-51.5 {an ordinary box still paints exactly what it painted} -body {
   # The counter-measurement: the two checks are gates and change no drawing.
@@ -1664,5 +1689,48 @@ test shading-15.4 {-angle and -stops are numbers something can be measured in} -
   $doc destroy
   list [lsort -unique $codes] $objects
 } -result {{{TCLPDF SHADING ARGUMENT angle} {TCLPDF SHADING STOPS range}} 1}
+
+# --- the eighth review: Nr. 65 and the axis with no length ------------------
+
+test shading-stops-52.1 {stops must increase strictly IN THE FILE} -body {
+  # The inner stops become the /Bounds of the stitching function, written as
+  # PDF reals of five decimals (7.3.3). "-stops {0 0.000001 0.000002 1}"
+  # increases perfectly well to Tcl and came out as "/Bounds [0 0]" -
+  # measured 2026-08-27, against Table 40 ("in order of increasing value")
+  # and against the promise that two equal stops are refused.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc shading axial -at {10 10} \
+      -size {80 10} -colors {red green blue yellow} \
+      -stops {0 0.000001 0.000002 1}}]
+  lappend out [::tclpdfTest::content $doc]
+  lappend out [[$doc writer] count]
+  # Stops the file can tell apart are untouched: this is not a tolerance.
+  lappend out [catch {$doc shading axial -at {10 30} -size {80 10} \
+      -colors {red green blue} -stops {0 0.00002 1}}]
+  $doc destroy
+  set out
+} -result {{TCLPDF SHADING STOPS order} {} 1 0}
+
+test shading-axis-52.2 {an axis with no length paints nothing and is refused} -body {
+  # Table 79: "If the starting and ending coordinates are coincident ...
+  # nothing shall be painted." Every validator passes such a file and what a
+  # reader does with it is its own invention - measured 2026-08-27 with
+  # poppler, the whole clip came out in the FIRST colour. Coincident in the
+  # file, five decimals, like everything else in this class.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc shading axial -at {10 10} \
+      -size {80 10} -colors {red blue} -from {50 35} -to {50 35}}]
+  lappend out [::tclpdfTest::content $doc]
+  lappend out [[$doc writer] count]
+  # An axis of 0.02 mm is short, not absent, and goes into the file.
+  lappend out [catch {$doc shading axial -at {10 10} -size {80 10} \
+      -colors {red blue} -from {50 35} -to {50 35.02}}]
+  $doc destroy
+  set out
+} -result {{TCLPDF SHADING AXIS length} {} 1 0}
 
 cleanupTests

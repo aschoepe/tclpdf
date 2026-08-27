@@ -374,6 +374,16 @@ package require tclpdf::document 1.0-
 # stream sets the value in it - so the text topic is not optional here the
 # way it is for a document that only draws rectangles.
 package require tclpdf::text 1.0-
+# A WIDGET IS AN ANNOTATION - /Type /Annot /Subtype /Widget (ISO 32000-2,
+# 12.5.6.19) - and this module writes that dictionary itself, /Rect, /F,
+# /Contents and all. What it takes from annot.tcl is one thing: the table of
+# version floors per KEY, asked through [AnnotKeyVersion]. /TU, /I and the
+# three choice flags are entries of an annotation family whose floor is a
+# fact about the format, and the same table answers for /IC and
+# /CreationDate on the remark side. Two copies of it are two answers waiting
+# to differ, and there is no third module both of these could hang it on
+# without inventing one for seven lines of table.
+package require tclpdf::annot 1.0-
 
 namespace eval ::tclpdf::field {
   namespace export {[a-z]*}
@@ -633,7 +643,7 @@ oo::define ::tclpdf::document::document {
   method FieldDeclare {name args} {
     set options [::tclpdf::option parse {
       type {} build {} kid {} rect {} widgets {} contents {} label {}
-      labels {} page {} tooltip {} flags 0 data {}
+      labels {} page {} tooltip {} flags 0 data {} font {}
     } $args "field declare"]
     if {$name eq {}} {
       return -code error -errorcode {TCLPDF FIELD NAME} \
@@ -651,6 +661,25 @@ oo::define ::tclpdf::document::document {
           12.7.4.2 joins the fully qualified name out of the partial names\
           with periods between them, so a period in one of them names a\
           parent field that does not exist. Use another separator"
+    }
+    # AND NO CONTROL CHARACTER. 12.7.4.2 does not spell it out - /T is a text
+    # string and a PDF string holds any byte - but the name is what an
+    # exported FDF, a script in a reader and [$doc field list] all address
+    # the field by, and every one of them reads it as ONE line. Measured
+    # 2026-08-27: "field text a\nb" wrote /T (a\nb) and [field list] gave the
+    # name back with the break in it, so a caller listing the fields of a
+    # document gets a list one entry longer than the document has fields.
+    # Refused rather than repaired, for the reason attach.tcl gives for the
+    # same class of value at -name: the writer is the last place that still
+    # knows what was meant.
+    if {[regexp {[\x00-\x1f\x7f]} $name]} {
+      regexp -indices {[\x00-\x1f\x7f]} $name where
+      set code [scan [string index $name [lindex $where 0]] %c]
+      return -code error -errorcode [list TCLPDF FIELD NAME $name] \
+          "tclpdf: the name of a form field carries U+[format %04X $code] at\
+          position [lindex $where 0] - a partial field name (/T, ISO 32000-2,\
+          12.7.4.2) is what an exported form and a script in a reader address\
+          the field by, and a control character is part of no such name"
     }
     if {[dict get $options type] ni {Tx Btn Ch Sig}} {
       return -code error -errorcode \
@@ -823,6 +852,15 @@ oo::define ::tclpdf::document::document {
     # Interactive forms are PDF 1.2 (ISO 32000-1, Table 28 - /AcroForm), and
     # so is the widget annotation that carries them.
     my RequireVersion 1.2 "an interactive form field"
+    # /TU is younger than the field it describes: 1.3 against 1.2 (ISO
+    # 32000-2, Table 228). Asked HERE rather than where the key is written,
+    # which is [FieldCommonPairs] at write time - by then the field is
+    # declared, the structure element is open and a refusal cannot be taken
+    # back. The floor comes from the one table annot.tcl keeps for every key
+    # of this kind.
+    if {[dict get $options tooltip] ne {}} {
+      my AnnotKeyVersion TU
+    }
 
     set record [dict create \
         name $name \
@@ -900,7 +938,75 @@ oo::define ::tclpdf::document::document {
       my state fieldHooked 1
       my onSelf beforeWrite FieldWrite
     }
+    my FieldFontWhole [dict get $options type] [dict get $options flags] \
+        [dict get $options font]
     return $name
+  }
+
+  # A FIELD THE RECIPIENT CAN FILL IN IS SET IN THE WHOLE FACE, NOT IN A
+  # SUBSET OF IT.
+  #
+  # ISO 32000-2, 12.7.4.3 says what /DA and /DR are for: they are what a
+  # reader "shall" build an appearance stream from when the value of a
+  # variable-text field changes. So the promise a field that is not read-only
+  # makes is that the recipient may type something the writer never wrote -
+  # and a subsetted face holds exactly the glyphs the writer DID write.
+  # Measured 2026-08-27 with PDFBox (the reader inside the Mustang jar, the
+  # same one tools/formcheck.java uses): a text field declared with -value
+  # "abc" in a subsetted DejaVu Sans answered setValue("Quiz") with
+  # "IllegalArgumentException: No glyph for U+0051 (Q) in font
+  # OVMOXL+DejaVuSans", and it warns of the subset by name - "You should
+  # replace this font with a non-subsetted font". The same file with the face
+  # embedded whole filled without a word. Nothing else sees it: qpdf --check
+  # is silent, veraPDF passes the file, and make check never noticed because
+  # formcheck.java writes the value the field already had.
+  #
+  # THE FACE IS MARKED, THE FIELD IS NOT. The record of an embedded face
+  # carries "subset" (font.tcl), and the same flag is what fsType bit 8
+  # clears for a vendor who forbids subsetting - "the whole file goes in
+  # instead of a part of it". A fillable field is the second reason to go
+  # whole, it is discovered at the declaration, and the subset is not built
+  # until the write: setting the flag is all it takes, and no second road
+  # into the subsetter has to exist.
+  #
+  # WHICH FIELDS. A text field and a choice field, and only where ReadOnly is
+  # not set. Those are the two types whose value is variable text drawn from
+  # /DA: a text field takes anything typed, and a choice field's appearance
+  # is rebuilt for whichever option the recipient picks - including one whose
+  # display text this document never drew. A push button's caption is fixed
+  # and a check box draws a path rather than a glyph, so neither pays. A
+  # read-only field of any type keeps its subset: it shows what was written
+  # and nothing else, which is exactly what a subset holds - and it is what
+  # example 09.02, an archived invoice, is made of.
+  #
+  # THE PRICE IS THE FILE, and the manual says so. Measured 2026-08-27 on a
+  # document of one page and one text field in DejaVu Sans: 4 856 bytes with
+  # -readonly 1 and 384 013 with the field left fillable, the face going in
+  # whole as a FlateDecode stream. Nothing in examples/ pays it - every form
+  # example sets its fields in one of the standard fourteen, and 09.02, the
+  # archived one, is read-only besides (measured: not one of the thirteen
+  # documents of groups 08, 09 and 10 changed size).
+  #
+  # Called LAST, after the field is recorded and where nothing can raise any
+  # more: this changes the state of another module's record, and a refusal
+  # after it would leave a face marked for a field that does not exist.
+  method FieldFontWhole {type flags alias} {
+    if {$alias eq {} || $type ni {Tx Ch}} {
+      return
+    }
+    # ReadOnly is bit position 1 of /Ff (ISO 32000-2, Table 227), which is
+    # the value 1 - asked through the same table the flag was built from
+    # rather than by writing the number here.
+    if {$flags & [::tclpdf::field flags ReadOnly]} {
+      return
+    }
+    set fonts [my state fonts]
+    if {![dict exists $fonts $alias] || ![dict get $fonts $alias subset]} {
+      return
+    }
+    dict set fonts $alias subset 0
+    my state fonts $fonts
+    return
   }
 
   # The object numbers of a field that is NOT going to exist, given back -
@@ -992,10 +1098,28 @@ oo::define ::tclpdf::document::document {
   # ANSWERS {id label}: the element to close, {} in a document that is not
   # tagged, and the label AS IT COUNTS - see below, which is not always the
   # label that was passed in.
+  # THE STATE BEFORE THE BRACKET, so that a bracket which costs nothing can be
+  # taken back. Everything that can refuse stands before [StructureOpen] -
+  # the name, the page, the rectangle, the version floors of the field and of
+  # /TU, the font and every string it has to set - and one thing cannot: the
+  # LABEL SCRIPT, which is the caller's own and may raise anywhere. It used
+  # to leave a Form holding an empty Lbl and no widget: measured 2026-08-27
+  # under 2.0 with "-label { text ... -at {20 NaN} }", the tree kept
+  # "#0 Form kids=1 | #1 Lbl kids=0", the PDF/UA-2 claim was written and
+  # veraPDF called the file conformant - a Form element without the object
+  # reference ISO 32000-2, Table 368 requires of it (round 8, structure V1).
+  #
+  # [StructureSnapshot] and [StructureRollback] are structure.tcl's, one
+  # bracket transaction for every module that opens one, and the rollback
+  # refuses itself where the bracket has been PAID FOR - an MCID claimed, an
+  # OBJR attached, a destination reserved. Then the element stays, because
+  # something else in the file already points at it. The snapshot is taken
+  # before the OUTERMOST open, which here is the Form and not the Lbl.
   method FieldStructureOpen {name label} {
     if {![my tagged]} {
       return [list {} $label]
     }
+    set snapshot [my StructureSnapshot]
     if {[catch {my StructureOpen Form} id options]} {
       # WHAT IS REWRAPPED IS WHAT THE TREE REFUSED. A refusal from
       # [StructureOpen] that is about something else - the PDF version floor
@@ -1034,8 +1158,10 @@ oo::define ::tclpdf::document::document {
       if {$code} {
         # The Form is closed too, or the tree stays half open in a document
         # the caller may still write: the bracket rule of [structure], one
-        # level further in.
+        # level further in. And then both are taken back, unless the script
+        # drew something that already names them.
         my StructureClose $id
+        my StructureRollback $snapshot
         return -options $outcome $result
       }
       # A LABEL IS WHAT WAS DRAWN, NOT THAT A SCRIPT WAS PASSED. The Lbl
@@ -1713,13 +1839,10 @@ oo::define ::tclpdf::document::document {
       return $current
     }
     set options [::tclpdf::option parse $current $args "field default"]
-    if {![string is double -strict [dict get $options size]]
-        || [dict get $options size] <= 0} {
-      return -code error -errorcode \
-          [list TCLPDF FIELD SIZE [dict get $options size]] \
-          "tclpdf: -size of field default is a font size in points above\
-          zero, not \"[dict get $options size]\""
-    }
+    # optional 0: every other caller of [FieldSize] may leave -size out and
+    # get whatever this call settled, and this is that call - an empty size
+    # here would leave the document with no default at all.
+    my FieldSize [dict get $options size] "field default" 0
     # Both are checked by building the string they will produce - a family
     # that does not resolve or a colour with no /DA spelling has to be
     # refused here, at the call that named it, and not inside a catalogue
@@ -1811,7 +1934,57 @@ oo::define ::tclpdf::document::document {
     return [dict create \
         da "[my TextResource $resolved] [::tclpdf::pdfObj num $size] Tf\
             [::tclpdf::color operator $parsed fill]" \
-        family $family style $style size $size colour $colour]
+        family $family style $style size $size colour $colour \
+        alias [expr {[my TextEmbedded $resolved] ? $resolved : {}}]]
+  }
+
+  # -- the measurements a field option carries ------------------------------
+
+  # THE FONT SIZE OF A FIELD, in one place for the four calls that read one -
+  # [field text], [field listbox]/[field combo], [field button] and [field
+  # default]. Empty means "whatever [field default] says", which is why the
+  # three field types leave it out and the default itself passes optional 0.
+  #
+  # [option finite] AND NOT [string is double]: NaN and Inf are doubles to
+  # Tcl, NaN then compares false against every bound and Inf passes the lower
+  # one, so both used to travel on - to [pdfObj num], which answered TCLPDF
+  # PDFOBJ NUMBER ("a number reached the writer") where the caller needs the
+  # code that names the option they wrote, or, at -borderWidth, all the way
+  # into an appearance stream at write time, where a refusal cannot be taken
+  # back and the document stays unwritable. The round-7 repair reached
+  # fieldText.tcl and stopped there; round 8 measured the other three and put
+  # the question here instead of writing it a fourth time (annot H1).
+  #
+  # A SIZE OF ZERO IS NEVER TAKEN. It is legal and means auto-size - "its size
+  # shall be computed as an implementation dependent function" (ISO 32000-2,
+  # 12.7.4.3) - and a package that draws the appearance itself cannot know
+  # what a reader redrawing it would choose.
+  method FieldSize {value what {optional 1}} {
+    if {$value eq {} && $optional} {
+      return $value
+    }
+    if {![::tclpdf::option finite $value] || $value <= 0} {
+      return -code error -errorcode [list TCLPDF FIELD SIZE $value] \
+          "tclpdf: -size of $what is a finite font size in points above zero,\
+          not \"$value\""
+    }
+    return $value
+  }
+
+  # The same question for the frame, and the same reason for asking it here.
+  # Zero is a value with a meaning of its own - a field with no frame - so
+  # the bound is 0 and not above it. [field check], [field radio] and [field
+  # button] ask under a class of their own, TCLPDF FIELD BUTTON BORDERWIDTH,
+  # because every option of the button family does (see fieldButton.tcl);
+  # this is the refusal of the two types that do not.
+  method FieldBorderWidth {value what} {
+    if {![::tclpdf::option finite $value] || $value < 0} {
+      return -code error -errorcode [list TCLPDF FIELD BORDERWIDTH $value] \
+          "tclpdf: -borderWidth of $what is a finite line width of 0 or more\
+          in the unit of the document, not \"$value\". Use 0 for a field\
+          with no frame"
+    }
+    return $value
   }
 
   # CAN THE FIELD'S OWN FONT SET THIS TEXT? Asked at the call, of every
@@ -1854,4 +2027,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::field 1.2
+package provide tclpdf::field 1.3

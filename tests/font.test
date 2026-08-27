@@ -2063,6 +2063,7 @@ testConstraint haveMarkChain [file exists $markFace]
 set arabicFace [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts google NotoNaskhArabic-Variable.ttf]
 testConstraint haveArabic [file exists $arabicFace]
+testConstraint pdftotext [expr {[auto_execok pdftotext] ne {}}]
 
 # The marks of a string, as the drawing side gets them. Both methods are
 # internal and stay so - the object is asked to export them for the length of
@@ -4441,6 +4442,144 @@ test font-30.4 {the ligature stage is not skipped for one glyph or for -ligature
   $doc destroy
   set ::ligaCalls
 } -result {{1 0} {2 1} {2 0}}
+
+# --- one CID per glyph AND characters ---------------------------------------
+#
+# A ToUnicode CMap has room for one destination per character code (9.10.3),
+# so a glyph two pieces of text reach can be spelt back only one way - and the
+# other reading is then wrong in every reader. Noto Naskh Arabic writes sin
+# and shin as ONE skeleton plus separate dots, so "shams" and "sin" shared the
+# skeleton and the second word extracted as "shin"; over 89 Arabic words, 49
+# came out as a different word. CIDToGIDMap maps many CIDs onto one glyph
+# (9.7.4.2, Table 116), which is what the second reading gets.
+
+test font-20.1 {two readings of one glyph get two CIDs and two bfchars} \
+    -constraints haveArabic -body {
+  # The two words share glyph 35, the initial tooth skeleton: hb-shape gives
+  # 35 for both. The first reading keeps the glyph's own number, the second
+  # is counted from numGlyphs up, and both rows of CIDToGIDMap point at 35.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed f $arabicFace
+  $doc font -family f -size 18
+  $doc text "\u0634\u0645\u0633" -at {400 700} -direction rtl
+  $doc text "\u0633\u0646" -at {400 660} -direction rtl
+  set entry [dict get [$doc state fonts] f]
+  set used [dict get $entry used]
+  set readings {}
+  dict for {cid pair} $used {
+    if {[lindex $pair 0] == 35} {
+      lappend readings [list [expr {$cid == 35}] [lindex $pair 1]]
+    }
+  }
+  set glyphs [dict get $entry cids]
+  $doc destroy
+  list [lsort $readings] [llength [dict get $glyphs 35]]
+} -result {{{0 1587} {1 1588}} 4}
+
+test font-20.2 {both words come back out of the file} \
+    -constraints {haveArabic pdftotext} -body {
+  # The end of the road, read by a program that is not this package: before
+  # this, "sin" extracted as "shin".
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed f $arabicFace
+  $doc font -family f -size 18
+  $doc text "\u0634\u0645\u0633" -at {400 700} -direction rtl
+  $doc text "\u0633\u0646" -at {400 660} -direction rtl
+  set path [::tclpdfTest::scratch font-20.2.pdf]
+  $doc write $path
+  $doc destroy
+  set text [exec pdftotext -enc UTF-8 $path -]
+  file delete $path
+  # The bidi control characters poppler wraps a right-to-left line in are not
+  # the answer to this question.
+  regsub -all {[\u202a-\u202e\u2066-\u2069\u200e\u200f]} $text {} text
+  lsort [lmap line [split [string trim $text] \n] {string trim $line}]
+} -result "\u0633\u0646 \u0634\u0645\u0633"
+
+test font-20.3 {a glyph read one way is written exactly as it always was} \
+    -constraints haveFont -body {
+  # The price is paid only where there is a second reading: a document in
+  # which every glyph is read one way gets the CIDs it always got, which are
+  # the glyph numbers, and its bytes do not move.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc font embed f $fontRegular
+  $doc font -family f -size 12
+  $doc text "Rechnung" -at {20 40}
+  set entry [dict get [$doc state fonts] f]
+  set same 1
+  dict for {cid pair} [dict get $entry used] {
+    if {$cid != [lindex $pair 0]} {
+      set same 0
+    }
+  }
+  $doc destroy
+  list $same [dict size [dict get $entry used]] \
+      [dict size [dict get $entry cids]]
+} -result {1 7 7}
+
+set symbolFace [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts google NotoSansSymbols-Variable.ttf]
+testConstraint haveSymbols [file exists $symbolFace]
+set variableRoboto [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts google Roboto-Variable.ttf]
+testConstraint havePlainVariableFont [file exists $variableRoboto]
+
+test font-21.1 {the vertical origin of an instance is the instance's} \
+    -constraints haveSymbols -body {
+  # /W2 states where a glyph hangs from in vertical writing (9.7.4.3, Table
+  # 117). It used to be built from the INSTANCED yMax and the DEFAULT top side
+  # bearing, and those two move in opposite directions by design: the arrows
+  # came out at 1470 and 1474 at wght 100 and at 1492 and 1504 at wght 900,
+  # where fontTools' instancer and the face's own VVAR say 1480 at every
+  # weight. Up to 24 units of the em, and nothing reads the file and says so.
+  set answers {}
+  foreach weight {100 400 900} {
+    set doc [tclpdf new -unit pt]
+    $doc page add
+    $doc font embed s $symbolFace -axes [list wght $weight]
+    oo::objdefine $doc export FontVerticalOrigin
+    set parsed [dict get [$doc state fonts] s parsed]
+    foreach glyph {301 432} {
+      lappend answers [$doc FontVerticalOrigin s $parsed $glyph]
+    }
+    $doc destroy
+  }
+  lsort -unique $answers
+} -result 1480
+
+test font-21.2 {an -axes list with an odd number of elements is refused} \
+    -constraints havePlainVariableFont -body {
+  # "{wght}" is a perfectly good Tcl list and no dictionary, so [dict merge]
+  # and [dict for] answered a bare TCL VALUE DICTIONARY six levels down - the
+  # one shape of failure this package refuses to hand a caller. Nothing is
+  # embedded either way.
+  set answers {}
+  set doc [tclpdf new -unit pt]
+  foreach axes {{wght} {wght 400 wdth}} {
+    set code [catch {$doc font embed r $variableRoboto -axes $axes} \
+        message options]
+    lappend answers $code [dict get $options -errorcode]
+  }
+  lappend answers [$doc font names]
+  $doc destroy
+  set answers
+} -result {1 {TCLPDF FONT AXES odd} 1 {TCLPDF FONT AXES odd} {}}
+
+test font-21.3 {a -face that is no face number is refused as FACE} \
+    -constraints haveFont -body {
+  # The class says what the caller has to do about it, and here it is "name a
+  # face number" - which is what [colorFont] answers as COLORFONT FACE and
+  # what the reader answers as FONT FACE when the number is one the file has
+  # not got. ARGUMENT means "this option does not belong to this kind of face
+  # at all", which is a different sentence.
+  set doc [tclpdf new -unit pt]
+  set code [catch {$doc font embed r $fontRegular -face x} message options]
+  $doc destroy
+  list $code [dict get $options -errorcode]
+} -result {1 {TCLPDF FONT FACE x}}
 
 
 cleanupTests

@@ -17,7 +17,8 @@
 # per size. Apple Color Emoji is the face that matters: 3844 glyphs, nine
 # sizes and 191 MB of PNG, which is 99.5 % of the file.
 #
-# THE TABLE (Apple, "TrueType Reference Manual", sbix; ISO/IEC 14496-22, 5.7):
+# THE TABLE (Apple, "TrueType Reference Manual", sbix; ISO/IEC 14496-22,
+# 5.6.7 - "5.7" is the COLR clause and was named here by mistake):
 #
 #   uint16 version         1
 #   uint16 flags           bit 0 always set, bit 1 "draw outlines as well"
@@ -32,8 +33,14 @@
 #
 # A glyph is EMPTY in a strike where the offset behind it does not lie behind
 # its own - the same convention "loca" uses, and it is not a defect: a face
-# has ordinary glyphs beside its pictures, and 136 of Apple Color Emoji's 3844
-# are empty in every strike.
+# has ordinary glyphs beside its pictures.
+#
+# AND THE COVERAGE DIFFERS FROM STRIKE TO STRIKE, which "136 of Apple Color
+# Emoji's 3844 are empty in every strike" said too simply: 136 is the count at
+# 64 and 160 pixels, and the same face leaves 232 empty at 20, 235 at 26, 156
+# at 32 and 96, and 288 at 40, 48 and 52. So a character drawn at one size may
+# have no picture at another - U+1F46A has one at 160 and none at 40 - and
+# -strike is not only a trade of sharpness against bytes.
 #
 # THE RECORD of a glyph that has one:
 #
@@ -177,6 +184,15 @@ proc ::tclpdf::sbix::graphic {font state strike glyph} {
   set mirror 0
   set source $glyph
   set seen {}
+  # Which record sent us here, or {} for the glyph the caller asked about. A
+  # GLYPH WITH NO PICTURE IS NOT A DEFECT - a colour face carries ordinary
+  # glyphs beside its pictures, and 136 of Apple Color Emoji's 3844 have none
+  # at any strike - but a "dupe" or "flip" that names such a glyph IS one:
+  # the record exists to say where the picture comes from, and it points at
+  # nothing. Read as "no picture" the glyph fell through to its own outline,
+  # which in an sbix face is an empty box - a blank glyph in a valid file,
+  # which is the trap this package refuses by name everywhere else.
+  set chased {}
   for {set step 0} {$step <= $maximumChain} {incr step} {
     if {[dict exists $seen $source]} {
       return -code error -errorcode [list TCLPDF SBIX CYCLE $glyph] \
@@ -187,6 +203,12 @@ proc ::tclpdf::sbix::graphic {font state strike glyph} {
     dict set seen $source 1
     set record [Record $font $state $strike $source]
     if {$record eq {}} {
+      if {$chased ne {}} {
+        return -code error -errorcode [list TCLPDF SBIX DAMAGED $chased] \
+            "tclpdf: damaged font - a \"$chased\" record of glyph $glyph names\
+            glyph $source, and that glyph has no picture in this strike to\
+            take"
+      }
       return {}
     }
     lassign $record originX originY type data
@@ -203,9 +225,16 @@ proc ::tclpdf::sbix::graphic {font state strike glyph} {
               names another glyph in two bytes and carries\
               [string length $data]"
         }
+        if {$next >= [dict get $state numGlyphs] || $next < 0} {
+          return -code error -errorcode [list TCLPDF SBIX DAMAGED $type] \
+              "tclpdf: damaged font - the \"$type\" record of glyph $source\
+              names glyph $next and the face has\
+              [dict get $state numGlyphs] glyphs"
+        }
         if {$type eq "flip"} {
           set mirror [expr {!$mirror}]
         }
+        set chased $type
         set source $next
       }
       default {
@@ -278,4 +307,4 @@ proc ::tclpdf::sbix::Header {data glyph} {
   return [list $width $height]
 }
 
-package provide tclpdf::sbix 1.0
+package provide tclpdf::sbix 1.1

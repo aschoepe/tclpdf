@@ -16,15 +16,18 @@
 #   namespaces         a 2.0 tree may not rely on the default namespace any
 #                      more; one Namespace dictionary and /NS on the elements
 #   new types          Title, Aside, FENote, Em, Strong, H7 and beyond - and
-#                      eleven old ones (Code, Note, Quote, TOC ...) that
+#                      twelve old ones (Code, Note, Quote, TOC ...) that
 #                      exist ONLY in the 1.7 namespace and therefore keep the
 #                      default
 #   no generic H       H1 to Hn, because H meant "whatever the nesting
 #                      implies" and the nesting rarely said what was meant
 #   Desc everywhere    every attachment needs a description
 #   Ref on a TOCI      a table of contents says which element each entry
-#                      points at (8.2.5.8) - page 3, and the one thing here
-#                      that is an entry rather than a type
+#                      points at (8.2.5.8) - page 3
+#   Ref on a footnote  a FENote and the content citing it point AT EACH
+#                      OTHER (8.2.5.14.1) - page 1. Ref is the one thing
+#                      here that is an entry rather than a type, and both
+#                      uses of it are checked at the write
 #
 # And what does NOT change: the structure tree is the same tree. A document
 # written for UA-1 needs no redrawing - it needs -part 2.
@@ -96,11 +99,11 @@ $doc structure Sect -name baum -script {
 
 $doc font -family face -size 10
 $doc text "The elements sit in the 2.0 namespace, which a Namespace\
-    dictionary at the root of the tree names. Eleven older types deliberately\
+    dictionary at the root of the tree names. Twelve older types deliberately\
     keep the default namespace, because 2.0 does not have them:" \
     -at {20 62} -width 170
 
-# Code is one of the eleven. It carries no /NS, and that is not an omission -
+# Code is one of the twelve. It carries no /NS, and that is not an omission -
 # naming the 2.0 namespace on a type that does not exist there would be a
 # claim about nothing.
 $doc font -family face -size 9
@@ -146,12 +149,30 @@ $doc structure Aside -script {
 }
 
 # FENote is the 2.0 type for a footnote or endnote. Before it there was Note,
-# which is one of the eleven types that stayed in the 1.7 namespace - so a
+# which is one of the twelve types that stayed in the 1.7 namespace - so a
 # 2.0 document that wants a footnote uses this one.
+#
+# AND IT NEEDS SOMETHING TO BE A FOOTNOTE TO. ISO 14289-2 8.2.5.14.1 asks for
+# the Ref entry on both ends: the content that cites the note points at it,
+# and the note points back at every citation. Two -name handles and two -ref
+# options are the whole of it - the names are this package's handles, and the
+# write turns them into the /Ref arrays. Without them [ua -part 2] refuses
+# the claim, because a footnote nobody cites is a footnote to nothing and a
+# marker that names no note leaves a reader with nowhere to go.
 $doc font -family face -size 9 -color black
-$doc structure FENote -script {
+$doc structure P -script {
+  $doc text "The marker after this sentence is the citation." -at {20 130}
+  $doc structure Sub -name citation1 -ref footnote1 -script {
+    $doc font -family face -size 6
+    # 93, which is 20 plus the width of the sentence above (measured with
+    # [textWidth]): a citation marker sits at the end of what it cites.
+    $doc text "1" -at {93.2 128}
+  }
+}
+$doc font -family face -size 9
+$doc structure FENote -name footnote1 -ref citation1 -script {
   $doc text "1) A footnote is a type of its own in 2.0; Note is gone from\
-      that namespace." -at {20 132} -width 170
+      that namespace." -at {20 137} -width 170
 }
 
 # -- an attachment, which needs a description in part 2 ---------------------

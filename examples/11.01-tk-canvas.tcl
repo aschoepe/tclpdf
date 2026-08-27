@@ -324,7 +324,8 @@ para $doc y "The conversion itself is almost nothing, and that is the point.\
 
 heading $doc y "Where this example stops"
 para $doc y "It is an example, not a canvas renderer, and it has no claim to\
-    completeness. Six shape types, a photo and a line of text are drawn; a\
+    completeness. Five shape types - line, rectangle, oval, arc and polygon -\
+    a photo and a line of text are drawn; a\
     bitmap and a window item are passed over by name in one line, and the\
     console says so. Stipples, arrows, smoothed lines, tags and states,\
     Tk's dash patterns written as \"-.\", and a faithful mapping of Tk's font\

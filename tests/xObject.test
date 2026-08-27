@@ -564,22 +564,29 @@ test xObject-10.1 {a form inside a form hands the marking back in order} -body {
   regexp -all {/P <</MCID \d+>> BDC} $stream
 } -result 1
 
-test xObject-10.2 {an annotation inside a form nests too} -body {
-  # Not a corner case: an annotation draws its own appearance through a form
-  # (annot.tcl), so every annotation written inside [form create] is a nested
-  # form. Measured before the fix: no BDC and no EMC on the page at all.
+test xObject-10.2 {an annotation inside a form is refused, and the page marks on} -body {
+  # Until round 8 an annotation written inside [form create] was accepted and
+  # went to the page with its /Rect in the form's own space (finding 30,
+  # ISO 32000-2 12.5.2); this test then held that the nested appearance form
+  # left the page's marking intact. The refusal is the annotation's (annot
+  # test), what stays to be shown here is the second half: a refused
+  # annotation inside a form leaves the suspension balanced, so the page
+  # marks on afterwards exactly as before.
   set doc [tclpdf new -unit mm -compress 0]
   $doc tagged 1
   $doc page add
   $doc font -family helvetica -size 10
-  $doc form create f -size {40 20} -script {
-    $doc annot square -at {2 2} -size {10 10}
-  }
+  set code [catch {
+    $doc form create f -size {40 20} -script {
+      $doc annot square -at {2 2} -size {10 10}
+    }
+  } msg options]
   $doc structure P -script {$doc text "danach" -at {20 60}}
   set stream [::tclpdfTest::content $doc]
   $doc destroy
-  regexp -all {/P <</MCID \d+>> BDC} $stream
-} -result 1
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [regexp -all {/P <</MCID \d+>> BDC} $stream]
+} -result {1 {TCLPDF ANNOT PLACE} 1}
 
 test xObject-10.3 {nothing inside the form is marked, before or after} -body {
   # What the suspension is for, unchanged: the form's own stream carries no
@@ -698,5 +705,116 @@ test xObject-anchor-11.5 {-scale NaN is a factor and no factor} -body {
   $doc destroy
   set out
 } -result {1 1 1 1 1 1 0}
+
+# --- the eighth review: Nr. 63, 68, 69, 70 ----------------------------------
+
+test xObject-bbox-12.1 {a Figure declares its box in DEFAULT user space} -body {
+  # ISO 32000-2, 14.8.5.4.3: the /BBox is stated in default user space, and a
+  # "cm" that a [transform] put in force stands between the placement matrix
+  # and that space. Measured 2026-08-27, before the CTM was kept: under
+  # "transform -translate {50 0}" the form sat at 60 mm on the paper and the
+  # attribute said 10 mm - the same four numbers as for the untransformed
+  # placement below it, with nothing in the file to say they were wrong.
+  set doc [tclpdf new -unit mm -format {100 100} -compress 0]
+  $doc tagged 1
+  $doc info Title bbox
+  $doc page add
+  $doc form create f -size {20 10} -script {
+    $doc rect -at {0 0} -size {20 10} -fill blue
+  }
+  $doc save
+  $doc transform -translate {50 0}
+  $doc form place f -at {10 10} -alt "moved"
+  $doc restore
+  $doc form place f -at {10 70} -alt "untouched"
+  set path [::tclpdfTest::scratch xobject-bbox-ctm.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The LAYOUT attribute, not the form's own /BBox: the two are spelt the
+  # same and only the attribute is stated in default user space.
+  set boxes {}
+  foreach {match box} [regexp -all -inline \
+      {/O /Layout /BBox \[([-0-9. ]*)\]} $bytes] {
+    lappend boxes [format %.1f [lindex $box 0]]
+  }
+  # 10 mm is 28.3 pt and 60 mm is 170.1: the moved placement first, the
+  # untouched one after it.
+  set boxes
+} -result {170.1 28.3}
+
+test xObject-rotate-12.2 {-rotate turns the placement about -at} -body {
+  # The manual, of both placement roads: "-rotate turns the placement about
+  # the point -at names", and -at is the TOP left corner. Measured
+  # 2026-08-27: the rotation was composed before the translation, so the
+  # fixed point was the form's own origin - the BOTTOM left corner - and a 30
+  # by 10 mm form at {50 50} hung a form height below the point it was meant
+  # to turn about ("0 1 -1 0 141.73228 113.38583 cm").
+  set doc [tclpdf new -unit mm -format {100 100} -compress 0]
+  $doc page add
+  $doc form create f -size {30 10} -script {
+    $doc rect -at {0 0} -size {30 10} -fill blue
+  }
+  $doc form place f -at {50 50} -rotate 90
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([-0-9. ]+) cm} $stream -> matrix
+  # 50 mm is 141.73228 pt. Turning the box 90 degrees about its top left
+  # corner puts the form's own origin 10 mm (28.34646 pt) to the RIGHT of
+  # that corner and level with it.
+  lmap value $matrix {format %.5f $value}
+} -result {0.00000 1.00000 -1.00000 0.00000 170.07874 141.73228}
+
+test xObject-rotate-12.3 {and without a turn nothing moved} -body {
+  # The counter-measurement: the pivot is only about -rotate, and an upright
+  # placement writes exactly the translation it always did.
+  set doc [tclpdf new -unit mm -format {100 100} -compress 0]
+  $doc page add
+  $doc form create f -size {30 10} -script {
+    $doc rect -at {0 0} -size {30 10} -fill blue
+  }
+  $doc form place f -at {50 50}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([-0-9. ]+) cm} $stream -> matrix
+  lmap value $matrix {format %.5f $value}
+} -result {1.00000 0.00000 0.00000 1.00000 141.73228 113.38583}
+
+test xObject-scale-12.4 {a placement that composes to a singular cm is refused} -body {
+  # 8.3.4, and the very matrix [transform] refuses in the caller's own words:
+  # "-scale 1e-6" passed the "factor above zero" check and wrote
+  # "0 0 0 0 28.34646 255.11808 cm" - measured 2026-08-27. Judged over the
+  # numbers as WRITTEN, and nothing is written when it is refused.
+  set doc [tclpdf new -unit mm -format {100 100} -compress 0]
+  $doc page add
+  $doc form create f -size {10 10} -script {
+    $doc rect -at {0 0} -size {10 10} -fill red
+  }
+  set code [::tclpdfTest::refusal {$doc form place f -at {10 10} -scale 0.000001}]
+  set stream [::tclpdfTest::content $doc]
+  set fine [catch {$doc form place f -at {10 10} -scale 0.001}]
+  $doc destroy
+  list $code $stream $fine
+} -result {{TCLPDF GEOMETRY MATRIX {form place}} {} 0}
+
+test xObject-size-12.5 {a form whose BBox would be all zeros is refused} -body {
+  # Table 95: a /BBox of [0 0 0 0] is a frame with no inside and everything
+  # the script drew is clipped away. "-size {1e-6 1e-6}" is 2.8e-6 pt, which
+  # passes a check on the caller's number and IS zero as a PDF real (7.3.3) -
+  # measured 2026-08-27, the file carried it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc form create tiny \
+      -size {0.000001 0.000001} -script {}}]
+  lappend out [::tclpdfTest::refusal {$doc form create tiny2 \
+      -size {20 0.000001} -script {}}]
+  lappend out [$doc form names]
+  # And a size the file CAN hold is untouched - this is not a tolerance.
+  lappend out [$doc form create small -size {0.00001 0.00001} -script {}]
+  $doc destroy
+  set out
+} -result {{TCLPDF FORM ARGUMENT size} {TCLPDF FORM ARGUMENT size} {} small}
 
 cleanupTests

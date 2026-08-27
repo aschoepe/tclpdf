@@ -38,6 +38,25 @@ package require tclpdf::gsubApply
 package require tclpdf::gsubContext
 source [file join [file dirname [info script]] helper.tcl]
 
+# A run with the IDENTITY of every ligature written as "id".
+#
+# A ligature entry carries {identity component count} and a mark skipped
+# inside one carries {identity component 1} - see [gsubApply Entry]. The
+# identity is a serial number that only has to tell two ligatures of one run
+# apart, so its VALUE says nothing and depends on how many ligatures were
+# formed before; what a test may assert is that two entries share one and
+# which component each names.
+proc gsubAnonymous {run} {
+  set result {}
+  foreach entry $run {
+    if {[llength $entry] > 3} {
+      lset entry 3 0 id
+    }
+    lappend result $entry
+  }
+  return $result
+}
+
 # --- reading a subtable -----------------------------------------------------
 
 test gsubApply-1.1 {Single substitution, format 1, with a negative delta} -body {
@@ -164,8 +183,9 @@ test gsubApply-3.1 {a mark between the components does not stop the ligature} -b
   # ligature is lost - which is what happened to every accented word in a font
   # that sets the bit.
   set run [list [list 10 {102}] [list 99 {769}] [list 11 {105}]]
-  ::tclpdf::gsubApply apply [gsubLookupOf ligature $ligaRules $ligaFilter] $run
-} -result {{20 {102 105}} {99 769}}
+  gsubAnonymous [::tclpdf::gsubApply apply \
+      [gsubLookupOf ligature $ligaRules $ligaFilter] $run]
+} -result {{20 {102 105} {} {id 0 2}} {99 769 {} {id 1 1}}}
 
 test gsubApply-3.2 {the same run without a filter is left alone} -body {
   # The mark is then an ordinary glyph, it does not match the rule, and
@@ -183,8 +203,44 @@ test gsubApply-3.3 {a skipped glyph keeps its own characters and its place} -bod
       [list 12 {102}] [list 13 {108}] [list 2 {98}]]
   set result [::tclpdf::gsubApply apply \
       [gsubLookupOf ligature $ligaRules $ligaFilter] $run]
+  set result [gsubAnonymous $result]
   list [llength $result] [lindex $result 2] [lindex $result 3]
-} -result {5 {99 769} {21 {102 108}}}
+} -result {5 {99 769 {} {id 1 1}} {21 {102 108} {} {id 0 2}}}
+
+test gsubApply-3.4 {each skipped mark names the component it stands behind} -body {
+  # ISO/IEC 14496-22:2019 6.3.3, S. 225: the client "must keep track of
+  # associations of marks to particular ligature-glyph components". Made here,
+  # because after the substitution the components are gone. Three components
+  # with a mark behind each of the first two: the marks belong to component 1
+  # and component 2, and markPos.tcl reads the anchor row by that number - the
+  # fatha of an Arabic lam-alef used to take the last row and sit over the
+  # alef.
+  set rules [dict create 10 [list [list 20 11 12]]]
+  set run [list [list 10 {102}] [list 99 {769}] [list 11 {105}] \
+      [list 99 {770}] [list 12 {108}]]
+  gsubAnonymous [::tclpdf::gsubApply apply \
+      [gsubLookupOf ligature $rules $ligaFilter] $run]
+} -result {{20 {102 105 108} {} {id 0 3}} {99 769 {} {id 1 1}}\
+    {99 770 {} {id 2 1}}}
+
+test gsubApply-3.5 {a ligature of ligatures counts the components of both} -body {
+  # HarfBuzz counts "components so far" over the components each input stands
+  # for, not over the inputs. Here 10+11 becomes 20 with a mark behind each,
+  # and 20+12 then becomes 30. The mark behind 10 still names component 1;
+  # the one behind 11 names component 2 and not component 1, although its
+  # input 20 is a single glyph by then - counted over the inputs it would
+  # have moved onto the wrong letter. The ligature stands for three
+  # components, which is what a mark behind 12 would have to be told.
+  set first [dict create 10 [list [list 20 11]]]
+  set second [dict create 20 [list [list 30 12]]]
+  set run [list [list 10 {102}] [list 99 {769}] [list 11 {105}] \
+      [list 99 {770}] [list 12 {108}]]
+  set run [::tclpdf::gsubApply apply \
+      [gsubLookupOf ligature $first $ligaFilter] $run]
+  gsubAnonymous [::tclpdf::gsubApply apply \
+      [gsubLookupOf ligature $second $ligaFilter] $run]
+} -result {{30 {102 105 108} {} {id 0 3}} {99 769 {} {id 1 1}}\
+    {99 770 {} {id 2 1}}}
 
 # --- the extension lookup, and the contextual ones ---------------------------
 #
@@ -298,8 +354,8 @@ test gsubApply-4.5 {the characters travel through a nested substitution} -body {
   set lookups [list \
       [::tclpdfTest::gsubLookup 5 0 [list [gsubContext 10 {11} {{0 1}}]]] \
       [::tclpdfTest::gsubLookup 4 0 [list [gsubLigature {10 11} 99]]]]
-  gsubRun $lookups [list [list 10 {102}] [list 11 {105}]]
-} -result {{99 {102 105}}}
+  gsubAnonymous [gsubRun $lookups [list [list 10 {102}] [list 11 {105}]]]
+} -result {{99 {102 105} {} {id 0 2}}}
 
 # --- the positions move while the records run -------------------------------
 

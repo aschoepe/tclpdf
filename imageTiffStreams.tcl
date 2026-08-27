@@ -152,6 +152,36 @@ namespace eval ::tclpdf::imageTiffStreams {
 #
 # Width, ColorSpace and BitsPerComponent are the caller's: they are the same
 # for every part and they come out of the description, not out of the bytes.
+# How many image XObjects this picture becomes - answered from the TAGS
+# alone, without reading a single strip.
+#
+# The same answer [streams] arrives at, and this is where the rule lives: a
+# compression whose coder restarts in every strip becomes one image per
+# strip, and one that carries no state across strips is joined into a single
+# stream. The exception is the Deflate file that has to be taken apart
+# anyway ([Unpacked]) - it comes back joined too.
+#
+# It exists because the caller has to know BEFORE anything is written. A
+# stack cannot be another picture's mask and cannot exceed the stacking
+# limit, and both refusals used to be made after every strip of the picture
+# had been decoded - and, when the picture was a mask, after the carrier had
+# already put its ICC profile into the file. Asked here they cost a dict
+# lookup.
+proc ::tclpdf::imageTiffStreams::partCount {parsed} {
+  if {[dict get $parsed stripCount] < 2} {
+    return 1
+  }
+  switch -- [dict get $parsed compressionName] {
+    deflate {
+      return [expr {[Unpacked $parsed] ? 1 : [dict get $parsed stripCount]}]
+    }
+    jpeg - ccittRle - ccittG3 - ccittG4 {
+      return [dict get $parsed stripCount]
+    }
+  }
+  return 1
+}
+
 proc ::tclpdf::imageTiffStreams::streams {bytes parsed} {
   switch -- [dict get $parsed compressionName] {
     none {return [Raw $bytes $parsed]}
@@ -644,4 +674,4 @@ proc ::tclpdf::imageTiffStreams::Adobe {parsed} {
   return [binary format a2Sa5SSSc "\xff\xee" 14 Adobe 100 0 0 $transform]
 }
 
-package provide tclpdf::imageTiffStreams 1.2
+package provide tclpdf::imageTiffStreams 1.3

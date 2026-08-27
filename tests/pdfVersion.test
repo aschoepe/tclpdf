@@ -592,4 +592,119 @@ test pdfVersion-9.3 {a document created at 1.5 takes a 1.5 feature and refuses a
       [string match "*needs PDF 1.6 - this document is written as PDF 1.5*" $message]
 } -constraints haveFonts -result {0 1 1}
 
+# --- round 8: what a page brought in by [pdf import] claims ---------------
+#
+# The takeover copies the objects of a foreign page with their bytes and
+# their /Filter untouched (doc/tclpdf.md, Import), so not one of the version
+# gates above sees what travels: a 1.4 document used to take over a page
+# carrying /BitsPerComponent 16 (PDF 1.5, Table 89) and write %PDF-1.4 over
+# it, against the promise of doc/tclpdf.md:53 that every feature is checked
+# against the version before it is written.
+#
+# What the source claims for itself is entered as a FLOOR instead of the
+# content being examined: the header names the version a file conforms to
+# (7.5.2) and the catalogue's /Version raises it from PDF 1.4 on (7.5.5).
+# Everything on that page was written under that claim, and the copy carries
+# the claim along.
+
+package require tclpdf::import
+
+# A minimal foreign page, whose header and catalogue say what the test wants.
+proc pdfVersionForeign {name header {catalogue {}}} {
+    set content "0 0 1 rg 10 10 50 50 re f"
+    set bodies [list \
+        "<< /Type /Catalog /Pages 2 0 R $catalogue >>" \
+        "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+        "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 100\]\
+            /Contents 4 0 R /Resources << >> >>" \
+        "<< /Length [string length $content] >>\nstream\n$content\nendstream"]
+    set out "%PDF-$header\n"
+    set entries {}
+    foreach body $bodies {
+        lappend entries [format "%010d 00000 n \n" [string length $out]]
+        append out "[llength $entries] 0 obj\n$body\nendobj\n"
+    }
+    set startxref [string length $out]
+    append out "xref\n0 [expr {[llength $entries] + 1}]\n"
+    append out "0000000000 65535 f \n" [join $entries {}]
+    append out "trailer\n<< /Size [expr {[llength $entries] + 1}]\
+        /Root 1 0 R >>\nstartxref\n$startxref\n%%EOF\n"
+    package require tclpdf::io
+    set path [::tclpdfTest::scratch $name]
+    ::tclpdf::io write $path $out
+    return $path
+}
+
+test pdfVersion-10.1 {a page from a newer file is refused by a document that is older} -body {
+    set path [pdfVersionForeign import-version-15.pdf 1.5]
+    set doc [tclpdf new -unit pt -format {200 100} -version 1.4]
+    $doc page add
+    set refused [::tclpdfTest::refuse {$doc pdf import s $path}]
+    set message {}
+    catch {$doc pdf import s $path} message
+    $doc destroy
+    file delete $path
+    list $refused [string match {*written as PDF 1.5*} $message] \
+        [string match {*create it with -version 1.5 or higher*} $message]
+} -result {{1 1 {TCLPDF VERSION 1.5}} 1 1}
+
+test pdfVersion-10.2 {and the same page is taken over at that version and above} -body {
+    set out {}
+    foreach version {1.5 1.6 1.7 2.0} {
+        set path [pdfVersionForeign import-version-ok.pdf 1.5]
+        set doc [tclpdf new -unit pt -format {200 100} -version $version]
+        $doc page add
+        lappend out [catch {$doc pdf import s $path}]
+        $doc destroy
+        file delete $path
+    }
+    lsort -unique $out
+} -result 0
+
+test pdfVersion-10.3 {the catalogue's /Version counts, and only upwards} -body {
+    # 7.5.5: the catalogue entry names the version the file conforms to "if
+    # it is later than the version specified in the file's header". So a 1.4
+    # header with /Version /1.7 is a 1.7 file, and a 1.7 header with
+    # /Version /1.3 is still a 1.7 file.
+    set raised [pdfVersionForeign import-version-cat.pdf 1.4 {/Version /1.7}]
+    set lowered [pdfVersionForeign import-version-cat2.pdf 1.5 {/Version /1.3}]
+    set reader [::tclpdf::importRead::Open $raised]
+    set first [::tclpdf::importRead::Version reader]
+    set reader [::tclpdf::importRead::Open $lowered]
+    set second [::tclpdf::importRead::Version reader]
+    set doc [tclpdf new -unit pt -format {200 100} -version 1.5]
+    $doc page add
+    set refused [::tclpdfTest::refuse {$doc pdf import a $raised}]
+    set accepted [catch {$doc pdf import b $lowered}]
+    $doc destroy
+    file delete $raised $lowered
+    list $first $second $refused $accepted
+} -result {1.7 1.5 {1 1 {TCLPDF VERSION 1.7}} 0}
+
+test pdfVersion-10.4 {a version this package has no name for is passed over} -body {
+    # A header saying 1.8 names no standard; turning it into a refusal
+    # nobody can answer would refuse a file every other reader opens.
+    set path [pdfVersionForeign import-version-18.pdf 1.8]
+    set doc [tclpdf new -unit pt -format {200 100} -version 1.4]
+    $doc page add
+    set code [catch {$doc pdf import s $path}]
+    $doc destroy
+    file delete $path
+    set code
+} -result 0
+
+test pdfVersion-10.5 {the floor holds against a later lowering of the version} -body {
+    # [require] records the floor, and [configure -version] refuses to go
+    # below what the document already uses - the same road every other
+    # feature takes.
+    set path [pdfVersionForeign import-version-floor.pdf 1.6]
+    set doc [tclpdf new -unit pt -format {200 100} -version 1.7]
+    $doc page add
+    $doc pdf import s $path
+    set refused [::tclpdfTest::refuse {$doc configure -version 1.5}]
+    $doc destroy
+    file delete $path
+    set refused
+} -result {1 1 {TCLPDF VERSION 1.6}}
+
 cleanupTests

@@ -435,4 +435,95 @@ test filter-predictor-5.18 {an incomplete last row is refused, not dropped} -bod
           -predictor 12 -columns 3}]
 } -result {{TCLPDF FILTER PREDICTOR ROW} {TCLPDF FILTER PREDICTOR ROW}}
 
+# ---------------------------------------------------------------------------
+# ROUND 8 - WHAT THE ASCII FILTERS REFUSE, AND HOW FAR FLATE IS FOLLOWED
+# ---------------------------------------------------------------------------
+
+test filter-a85-7.1 {a "z" inside a group is refused, not read as a digit} -body {
+  # 7.4.3: "Any other characters, and any character sequences that represent
+  # impossible combinations in the ASCII base-85 encoding, shall cause an
+  # error". A "z" abbreviates four zero bytes and is a whole group; inside
+  # one it used to be read as the digit 89 - outside the 0..84 a digit may
+  # have - and what came out was rubbish no tool afterwards can tell from
+  # data. qpdf: "unexpected z during base 85 decode".
+  list [filterRefusal {::tclpdf::filter decodeAscii85 "87cz*Sy~>"}] \
+      [::tclpdf::filter decodeAscii85 "z~>"] \
+      [::tclpdf::filter decodeAscii85 "87cURD\]j7BEbo80~>"]
+} -result [list {TCLPDF FILTER ASCII85 z} [binary format I 0] "Hello world!"]
+
+test filter-a85-7.2 {a character outside "!" to "u" is refused} -body {
+  # The 85 digits are the characters 33 to 117 (7.4.3). "v" is 118 and used
+  # to become the digit 85, one past the highest there is.
+  list [filterRefusal {::tclpdf::filter decodeAscii85 "87cvR~>"}] \
+      [filterRefusal {::tclpdf::filter decodeAscii85 "87c\x01R~>"}] \
+      [::tclpdf::filter decodeAscii85 "87cU\n RD\]j7BEbo80~>"]
+} -result [list {TCLPDF FILTER ASCII85 character} \
+    {TCLPDF FILTER ASCII85 character} "Hello world!"]
+
+test filter-a85-7.3 {a group worth more than four bytes is refused} -body {
+  # "uuuuu" is 4437053125 and four bytes hold 4294967295 - an impossible
+  # combination in the words of 7.4.3. A SHORT group is padded with the
+  # highest digit and rounds up, so it is asked the same question: "uu" is
+  # 4437053124 after the padding, which [binary format I] used to truncate
+  # into the byte 0x08. The single byte 0xFF, as an encoder writes it, is
+  # the control.
+  list [filterRefusal {::tclpdf::filter decodeAscii85 "uuuuu~>"}] \
+      [filterRefusal {::tclpdf::filter decodeAscii85 "uu~>"}] \
+      [binary encode hex [::tclpdf::filter decodeAscii85 \
+          [::tclpdf::filter encodeAscii85 [binary format H* ff]]]] \
+      [binary encode hex [::tclpdf::filter decodeAscii85 "s8W-!~>"]]
+} -result {{TCLPDF FILTER ASCII85 group} {TCLPDF FILTER ASCII85 group} ff\
+    ffffffff}
+
+test filter-a85-7.4 {what the encoder writes the decoder reads back} -body {
+  set out {}
+  foreach length {0 1 2 3 4 5 8 17 64 255} {
+    set bytes [binary format H* [string repeat 4a5f00ff 64]]
+    set bytes [string range $bytes 0 [expr {$length - 1}]]
+    lappend out [expr {[::tclpdf::filter decodeAscii85 \
+        [::tclpdf::filter encodeAscii85 $bytes]] eq $bytes}]
+  }
+  lsort -unique $out
+} -result 1
+
+test filter-ahx-7.5 {a character that is not a hexadecimal digit is refused} -body {
+  # 7.4.2: "Any other characters shall cause an error". Deleting them does
+  # not lose one byte, it SHIFTS every byte after it - "<48G5>" came out as
+  # "HP" where qpdf says "invalid character (G) in hexstring".
+  list [filterRefusal {::tclpdf::filter decodeAsciiHex "4865G6c6c6f>"}] \
+      [::tclpdf::filter decodeAsciiHex "48 65\n6c\t6c 6f>"] \
+      [binary encode hex [::tclpdf::filter decodeAsciiHex "486>"]]
+} -result [list {TCLPDF FILTER ASCIIHEX character} "Hello" 4860]
+
+test filter-flate-7.6 {a deflate stream is followed only so far} -body {
+  # THE ONE HEADER NUMBER OF A FOREIGN FILE THAT BINDS NOTHING: /Length says
+  # how many bytes to read, and what comes out is whatever the data say -
+  # measured 2026-08-27, a 306 KB file whose page content unpacked to 300 MB
+  # and 858 MB of resident memory, accepted. A matter of availability, not
+  # of security; the default is no ceiling, because a picture legitimately
+  # unpacks to hundreds of megabytes and the two callers that hand this proc
+  # data of their own know how many pixels they asked for.
+  set bomb [zlib compress [string repeat A 200000]]
+  list [string length [::tclpdf::filter decodeFlate $bomb]] \
+      [string length [::tclpdf::filter decodeFlate $bomb 0]] \
+      [string length [::tclpdf::filter decodeFlate $bomb 200000]] \
+      [filterRefusal {::tclpdf::filter decodeFlate $bomb 199999}]
+} -result {200000 200000 200000 {TCLPDF FILTER ROOM 199999}}
+
+test filter-flate-7.7 {and data that end inside a block are refused either way} -body {
+  # The streaming road has to say for itself what [zlib decompress] says
+  # with "stream error": truncated data never reach eof, and [$stream get]
+  # answers the empty string for ever after.
+  set broken [string range [zlib compress [string repeat A 200000]] 0 99]
+  list [expr {[catch {::tclpdf::filter decodeFlate $broken}] == 1}] \
+      [filterRefusal {::tclpdf::filter decodeFlate $broken 1000000}]
+} -result {1 {TCLPDF FILTER FLATE truncated}}
+
+test filter-flate-7.8 {the reader's ceiling is a named constant with a measurement behind it} -body {
+  # 64 MiB: over 3984 foreign PDF files (2026-08-27) the largest DECODED
+  # content stream of a first page is 7.75 MiB, so the bound is eight times
+  # the biggest thing anybody in that corpus wrote.
+  set ::tclpdf::filter::flateLimit
+} -result 67108864
+
 cleanupTests

@@ -449,6 +449,36 @@ test imageTiff-7.4 {the palette entries are in PDF's order} -body {
   set bytes
 } -result {255 0 0 0 255 0 0 0 255 0 0 0}
 
+test imageTiff-7.4a {a ColorMap of 8-bit values is read as one} -body {
+  # TIFF 6.0 writes a ColorMap in 16-bit values ("0 represents the minimum
+  # intensity, 65535 the maximum"), and the commonest mistake of the whole
+  # format is a writer that fills it with 0..255 instead. Shifted down by
+  # eight those become a palette of nothing but zeroes: measured 2026-08-27
+  # on a fixture whose first entry is pure red, the /Indexed lookup came out
+  # as 48 null bytes and the picture rendered black, with qpdf and veraPDF
+  # finding nothing to say. libtiff has carried the same heuristic since 1993
+  # (checkcmap: every entry at 255 or below means an 8-bit map), and refusing
+  # the file instead would turn a picture every other reader shows into an
+  # error.
+  set map {255 0 0 0  0 255 0 0  0 0 255 0}
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {258 3 2} {262 3 3} \
+      {279 4 4} [list 320 3 $map]]]
+  binary scan [dict get $parsed palette] cu* bytes
+  set bytes
+} -result {255 0 0 0 255 0 0 0 255 0 0 0}
+
+test imageTiff-7.4b {one entry above 255 makes the whole map a 16-bit one} -body {
+  # The heuristic decides for the MAP, not for the entry: a single value the
+  # 8-bit reading cannot hold says the writer meant 16 bits, and every entry
+  # is then scaled down. The fixture is the 8-bit map above with its red
+  # raised to full 16-bit range.
+  set map {65535 0 0 0  0 255 0 0  0 0 255 0}
+  set parsed [::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {258 3 2} {262 3 3} \
+      {279 4 4} [list 320 3 $map]]]
+  binary scan [dict get $parsed palette] cu* bytes
+  set bytes
+} -result {255 0 0 0 0 0 0 0 0 0 0 0}
+
 test imageTiff-7.5 {a ColorMap of the wrong length is damaged} -body {
   ::tclpdfTest::refusal {::tclpdf::imageTiff parse [::tclpdfTest::tiffOne {258 3 2} {262 3 3} \
       {279 4 4} {320 3 {0 0 0 0 0 0}}]}

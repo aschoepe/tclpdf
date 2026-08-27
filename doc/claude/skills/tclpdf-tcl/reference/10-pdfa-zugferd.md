@@ -17,7 +17,10 @@ $doc page add
 $doc font embed body $ttf
 $doc font embed bodyBold $ttfBold
 
-# Part 2 or 3 (1 forbids transparency, 4 needs 2.0); conformance B (default), U or A.
+# Part 2 or 3, and neither of the others can be reached: part 1 forbids transparency,
+# which this package writes through opacity and PNG soft masks, and part 4 is refused
+# outright because every PDF/A claim here is written as PDF 1.7 (a 2.0 document is
+# refused the claim, and pdfa lowers nothing). Conformance B (default), U or A.
 # Without -profile the shipped sRGB profile is the output intent. Raises the file
 # to 1.7 - configure -version 2.0 is refused from here on. Part 2 refuses attachments.
 $doc pdfa -part 3 -conformance U
@@ -29,6 +32,8 @@ $doc rect -at {20 30} -size {40 10} -fill steelblue           ;# RGB under an sR
 $doc rect -at {65 30} -size {40 10} -fill {gray 0.5}          ;# grey passes under EVERY intent
 if {[catch {$doc rect -at {110 30} -size {40 10} -fill {cmyk 0 0.16 1 0}; $doc write [file join $out ref-10-wrong.pdf]} message]} {
     puts "CMYK under an sRGB intent is refused at the write: [string range $message 0 120]..."
+} else {
+    puts "CMYK under an sRGB intent: NOT REFUSED"
 }
 ```
 
@@ -135,7 +140,7 @@ $doc write [file join $out ref-10-zugferd.pdf]
 $doc destroy
 ```
 
-Options: `-name` (`factur-x.xml`, `zugferd-invoice.xml`, `xrechnung.xml`; `order-x.xml` for an order), `-profile` overrides the level read from BT-24 (`MINIMUM`, `BASIC WL`, `BASIC`, `EN 16931`, `EXTENDED`, `XRECHNUNG`), `-type` (`INVOICE`, `ORDER`, `ORDER_RESPONSE`, `ORDER_CHANGE`), `-icc` another output intent profile (a CMYK one for an invoice in process colours), `-relationship`, `-description`, `-version` (the `fx:Version`, `1.0`), `-compress 1`. Every option is checked before the document is changed; a refused call leaves no claim, no schema, no attachment behind. Any further attachments (`attach`) ride along - part 3 admits them.
+Options: `-name` - the four names the standards allow, each bound to what it names: `factur-x.xml` or `zugferd-invoice.xml` for an ordinary invoice, `xrechnung.xml` for the `XRECHNUNG` profile **and for no other** (Factur-X 1.09.2, 7.7 binds the reference profile's name to it and forbids it every other, so `-profile XRECHNUNG` takes `xrechnung.xml` by default and refuses `factur-x.xml`), and `order-x.xml` for an order. Once the document carries the invoice, `attach` refuses all four for anything else, in any spelling - `factur-x.XML` is a key of its own in the name tree and a reader would find two candidates. `-profile` overrides the level read from BT-24 (`MINIMUM`, `BASIC WL`, `BASIC`, `EN 16931`, `EXTENDED`, `XRECHNUNG`), `-type` (`INVOICE`, `ORDER`, `ORDER_RESPONSE`, `ORDER_CHANGE`), `-icc` another output intent profile (a CMYK one for an invoice in process colours), `-relationship`, `-description`, `-version` (the `fx:Version`, `1.0`), `-compress 1`. Every option is checked before the document is changed; a refused call leaves no claim, no schema, no attachment behind. Any further attachments (`attach`) ride along - part 3 admits them.
 
 ## Order-X on the same call
 

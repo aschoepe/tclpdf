@@ -16,10 +16,10 @@ It sits under `doc/` rather than `.claude/` for the same reason: `.claude/` is t
 
 ## Installing the skill in a project
 
-1. Copy `skills/tclpdf-tcl/` to `<project>/.claude/skills/tclpdf-tcl/` (or wherever the agent loads skills from). Nothing in it refers to a path outside the directory except through `assets.tcl`.
+1. Copy `skills/tclpdf-tcl/` to `<project>/.claude/skills/tclpdf-tcl/` (or wherever the agent loads skills from). Nothing in it refers to a path outside the directory except through `assets.tcl` and the one guarded macOS path in `02-fonts.md` - `/System/Library/Fonts/Apple Color Emoji.ttc`, which no licence lets this package ship, so the snippet asks `file exists` first and says on its own line that it skipped itself.
 2. Edit `assets.tcl`: the font, image, ICC, XML and hyphenation files the snippets refer to, the output directory, and - if the package is not installed - `lappend auto_path` to where `pkgIndex.tcl` sits. The variable names are the contract with the reference files; the values are the project's. `$hyphenPatterns` is the one that may point at nothing: the package ships no pattern files, and the reference checks before it uses them.
-3. Run `tclsh check.tcl assets.tcl`. Every reference file has to PASS, `qpdf --check` has to be silent, and veraPDF has to report 0 failed checks on the files that claim PDF/A or PDF/UA. A SKIP means a tool is missing, not that a check passed. Two snippets say on their own console line that they did less than they could: `11-encryption-signatures.md` without `openssl` on the PATH leaves its signatures unfilled, and `03-text.md` without a pattern file skips the hyphenation section and says so. Both still PASS - the first because what it demonstrates is the call and the call ran, the second because a missing pattern file is the reader's machine and not a broken snippet.
-4. Put that command where the project runs its checks. A snippet that stops running after a package update is a snippet a reader will copy and fail with.
+3. Run `tclsh check.tcl assets.tcl`. Every reference file has to PASS, `qpdf --check` has to be silent, and veraPDF has to report 0 failed checks on the files that claim PDF/A or PDF/UA. A SKIP means a tool is missing, not that a check passed. `qpdf --check` has one tolerated complaint and only one - the `/Length` warning it raises on every revision 6 encrypted file, which `check.tcl` matches by name. Four snippets say on their own console line that they did less than they could: `11-encryption-signatures.md` without `openssl` on the PATH leaves its signatures unfilled, `03-text.md` without a pattern file skips the hyphenation section, `02-fonts.md` skips the `sbix` section on every machine that is not a Mac with Apple Color Emoji, and `05-images-svg.md` skips the barcodes without `tzint`. All still PASS - what they demonstrate is the call, and where the machine cannot make the call the snippet says so instead of pretending.
+4. Put that command where the project runs its checks. A snippet that stops running after a package update is a snippet a reader will copy and fail with - and so is a refusal that stops being one, which is why every `catch` and `try` in the reference carries a branch printing `NOT REFUSED`, why `check.tcl` treats that line as a failure, and why it counts the two against each other before it runs anything.
 
 ## The prompt
 
@@ -57,9 +57,16 @@ The rules that decide most calls:
   (the standard fourteen are out), a title and a language, colours that
   fit the output intent, and tdom for the XMP packet.
 - encrypt and sign are declared the same way and are refused together;
-  encrypt has to be the first call, needs -version 2.0, and excludes
-  every PDF/A claim. tclpdf never holds a key: a signature comes from a
-  -signer command prefix that answers a CMS object in DER.
+  encrypt comes before anything is DRAWN and before language and link
+  (an empty page add may already stand), needs -version 2.0, and
+  excludes every PDF/A claim. tclpdf never holds a key: a signature
+  comes from a -signer command prefix that answers a CMS object in DER.
+- A VISIBLE signature is a form field: under tagged 1 it gets a Form
+  element and an object reference, sign -tooltip writes its /TU and
+  sign -contents its /Contents, and a PDF/UA claim asks for them. An
+  INVISIBLE one - the default, /Rect [0 0 0 0] - is an artifact and is
+  asked nothing. ::tclpdf::sign add refuses a file that claims PDF/UA
+  (TCLPDF SIGN STATE ua): sign the document as it is written instead.
 - Whatever addresses a FINISHED file - pdf import, ::tclpdf::pdf info,
   ::tclpdf::update open, ::tclpdf::sign digest/embed/add - refuses an
   encrypted one (pdf info is the exception), and each of the package

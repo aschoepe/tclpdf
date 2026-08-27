@@ -338,4 +338,42 @@ test pageNumber-r7-1.1 {"%%" is a literal per cent, and the only way to write on
   list [regexp {\(1/2 %n % %m\)} $bytes] [regexp {\(2/2 %n % %m\)} $bytes]
 } -result {1 1}
 
+# --- round 8 hardening: -at and -format at the call -----------------------
+
+test pageNumber-r8-1.1 {-at goes through the same gate as text, leader and table} -body {
+  # The words were counted and nothing else: "-at {a b}", "-at {NaN 10}" and
+  # "-at {1e39 10}" were taken by the call and refused by [write], out of the
+  # [text] the number is drawn with and naming -at of THAT call (measured
+  # 2026-08-27). The run is read once per page at write time, so the refusal
+  # arrived after every other run had already been placed.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach value {{a b} {NaN 10} {1e39 10} {1 2 3}} {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc pageNumbers -at $value
+    }] 0 3]
+  }
+  # A good one still goes in and still writes.
+  $doc pageNumbers -at {100 280} -format "Page %n of %m"
+  set written [::tclpdfTest::writes $doc pageNumberAt.pdf]
+  $doc destroy
+  list [lsort -unique $codes] $written
+} -result {{{TCLPDF OPTION POINT -at}} {0 1}}
+
+test pageNumber-r8-1.2 {a format with a line feed is refused at the call} -body {
+  # A page number is one line: it is drawn with [text] and no -width, and
+  # [text] refuses a line feed there by name. Asked here for the same reason
+  # -at is - the label is built and drawn at write time.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [lrange [::tclpdfTest::refusalCode {
+    $doc pageNumbers -at {20 280} -format "Page\n%n"
+  }] 0 3]
+  set plain [catch {$doc pageNumbers -at {20 285} -format "Page %n"}]
+  set written [::tclpdfTest::writes $doc pageNumberFormat.pdf]
+  $doc destroy
+  list $code $plain $written
+} -result {{TCLPDF PAGENUMBER ARGUMENT format} 0 {0 1}}
+
 cleanupTests

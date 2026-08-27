@@ -267,20 +267,15 @@ oo::define ::tclpdf::document::document {
           has nothing to spell-check. Pass -editable 1, or drop -spellcheck"
     }
 
-    set size [dict get $options size]
-    if {$size ne {} && (![string is double -strict $size] || $size <= 0)} {
-      return -code error -errorcode [list TCLPDF FIELD SIZE $size] \
-          "tclpdf: -size of $what is a font size in points above zero, not\
-          \"$size\""
-    }
-    set borderWidth [dict get $options borderWidth]
-    if {![string is double -strict $borderWidth] || $borderWidth < 0} {
-      return -code error -errorcode \
-          [list TCLPDF FIELD BORDERWIDTH $borderWidth] \
-          "tclpdf: -borderWidth of $what is a line width of 0 or more in the\
-          unit of the document, not \"$borderWidth\". Use 0 for a field with\
-          no frame"
-    }
+    # The two measurements, through the one place that reads a measurement of
+    # a field option - see [FieldSize] in field.tcl. Both used to be read
+    # here with [string is double], which is true for NaN and for Inf: the
+    # pair was taken at the call and died at the WRITE, one of them in Tcl's
+    # own words ("can't use non-numeric floating-point value as operand of
+    # \"+\"", ARITH DOMAIN) and from inside an appearance stream, which leaves
+    # the document unwritable for good (measured 2026-08-27, annot H1).
+    set size [my FieldSize [dict get $options size] $what]
+    set borderWidth [my FieldBorderWidth [dict get $options borderWidth] $what]
     set colours {color border background}
     if {!$combo} {
       lappend colours highlight
@@ -313,10 +308,20 @@ oo::define ::tclpdf::document::document {
       my FieldSettable $text $font $which $what
     }
 
+    # THREE OF THESE FLAGS ARE YOUNGER THAN THE FIELD THEY SIT ON. A form
+    # field is 1.2 and so is /Ff, but CommitOnSelChange came with 1.5 and
+    # MultiSelect and DoNotSpellCheck with 1.4 (ISO 32000-2, Table 233) - so
+    # a document pinned to 1.2 used to be given a bit its own header says no
+    # reader need understand. The floors come from the one table annot.tcl
+    # keeps for keys of this kind; each stands beside the line that sets its
+    # bit, so a fourth flag cannot be added without the question being asked.
     set flagNames {}
     foreach {flag flagName} {readonly ReadOnly required Required
         noexport NoExport sort Sort commit CommitOnSelChange} {
       if {[dict get $options $flag]} {
+        if {$flagName eq "CommitOnSelChange"} {
+          my AnnotKeyVersion CommitOnSelChange
+        }
         lappend flagNames $flagName
       }
     }
@@ -326,9 +331,11 @@ oo::define ::tclpdf::document::document {
         lappend flagNames Edit
       }
       if {![dict get $options spellcheck]} {
+        my AnnotKeyVersion DoNotSpellCheck
         lappend flagNames DoNotSpellCheck
       }
     } elseif {$multi} {
+      my AnnotKeyVersion MultiSelect
       lappend flagNames MultiSelect
     }
 
@@ -336,27 +343,36 @@ oo::define ::tclpdf::document::document {
     if {!$combo} {
       set highlight [dict get $options highlight]
     }
+    set data [dict create \
+        combo $combo editable $editable multi $multi \
+        entries $entries \
+        selection $selection free $free \
+        defaultSelection $defaultSelection defaultFree $defaultFree \
+        top $top \
+        align [dict get $options align] \
+        da [dict get $font da] \
+        size [dict get $font size] \
+        family [dict get $font family] style [dict get $font style] \
+        color [dict get $font colour] \
+        border [dict get $options border] \
+        borderWidth $borderWidth \
+        background [dict get $options background] \
+        highlight $highlight]
+    # /I is a 1.4 entry (Table 234), and whether it will be written is
+    # settled by the declaration - so it is asked here, through the very
+    # predicate the build asks at write time. Two readings of the same
+    # condition are two answers waiting to differ.
+    if {[my FieldChoiceIndexNeeded $data]} {
+      my AnnotKeyVersion I
+    }
     my FieldDeclare $name -type Ch -build FieldChoiceBuild \
         -rect [dict get $options rect] -page [dict get $options page] \
         -tooltip [dict get $options tooltip] \
         -contents [dict get $options contents] \
         -label [dict get $options label] \
         -flags [::tclpdf::field flags $flagNames] \
-        -data [dict create \
-            combo $combo editable $editable multi $multi \
-            entries $entries \
-            selection $selection free $free \
-            defaultSelection $defaultSelection defaultFree $defaultFree \
-            top $top \
-            align [dict get $options align] \
-            da [dict get $font da] \
-            size [dict get $font size] \
-            family [dict get $font family] style [dict get $font style] \
-            color [dict get $font colour] \
-            border [dict get $options border] \
-            borderWidth $borderWidth \
-            background [dict get $options background] \
-            highlight $highlight]
+        -font [dict get $font alias] \
+        -data $data
     return $name
   }
 
@@ -537,8 +553,7 @@ oo::define ::tclpdf::document::document {
     # /I, and only where it says something /V cannot - see the head of this
     # file. The indices belong to the VALUE, so they are written for /V and
     # have no counterpart for /DV: Table 234 knows no default index.
-    if {[llength [dict get $data selection]]
-        && ([dict get $data multi] || [my FieldChoiceAmbiguous $data])} {
+    if {[my FieldChoiceIndexNeeded $data]} {
       lappend pairs I [::tclpdf::pdfObj arr [dict get $data selection]]
     }
     if {[dict get $data top] > 0} {
@@ -575,6 +590,14 @@ oo::define ::tclpdf::document::document {
   # Does /V leave the selection open? It does as soon as two options SHOW
   # the same text: /V holds that text and names both of them. Then /I is the
   # only entry that says which one is selected.
+  # WILL THIS FIELD CARRY /I? Asked twice and answered once: at the
+  # declaration, where the 1.4 floor of the key has to be required while the
+  # call can still be refused, and at the write, where the key is put in.
+  method FieldChoiceIndexNeeded {data} {
+    return [expr {[llength [dict get $data selection]]
+        && ([dict get $data multi] || [my FieldChoiceAmbiguous $data])}]
+  }
+
   method FieldChoiceAmbiguous {data} {
     set seen {}
     foreach entry [dict get $data entries] {
@@ -710,4 +733,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldChoice 1.1
+package provide tclpdf::fieldChoice 1.2

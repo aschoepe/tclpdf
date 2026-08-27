@@ -118,12 +118,27 @@ proc appendPage {path heading line} {
     # The boxes and the resources of the first page, taken over as they are.
     regexp {/MediaBox (\[[^\]]*\])} $model -> box
     regexp {/Resources (\d+) 0 R} $model -> resources
-    # And the name the resource dictionary gives the standard face - /FHelvetica
-    # here, but read rather than assumed: it is the writer's private name.
-    regexp {/Font << /([A-Za-z0-9]+) } [$upd body $resources] -> face
+    # And the names the resource dictionary gives the two standard faces page 1
+    # is set in. "Read rather than assumed" has to cover the ORDER of the keys
+    # as well as the names: both are the writer's private business, and this
+    # file writes /Font << /FHelveticaBold ... /FHelvetica ... >>, so the FIRST
+    # key is the BOLD one. Taking it set the whole of pages 2 and 3 in bold,
+    # and a page that does not look like page 1 reads as a difference the
+    # update caused - the one thing this example must not show. So every
+    # name/reference pair is read and the /BaseFont behind it decides.
+    regexp {/Font <<([^>]*)>>} [$upd body $resources] -> fontDict
+    array set faceOf {}
+    foreach {match name object} \
+        [regexp -all -inline {/([A-Za-z0-9]+)\s+(\d+) 0 R} $fontDict] {
+      regexp {/BaseFont /([-A-Za-z0-9]+)} [$upd body $object] -> base
+      set faceOf($base) $name
+    }
+    set face $faceOf(Helvetica)
+    set faceBold $faceOf(Helvetica-Bold)
 
     set page [$upd reserve]
-    set content [$upd addStream {} "BT /$face 20 Tf 60 760 Td ($heading) Tj ET\n\
+    set content [$upd addStream {} \
+        "BT /$faceBold 20 Tf 60 760 Td ($heading) Tj ET\n\
         BT /$face 11 Tf 60 730 Td ($line) Tj ET\n\
         0.93 0.91 0.96 rg 60 640 475 60 re f\n\
         BT /$face 10 Tf 0 g 75 670 Td ($note) Tj ET\n"]

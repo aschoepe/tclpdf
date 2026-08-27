@@ -124,6 +124,19 @@ proc formLine {doc yName label value {colour {0 0 0}}} {
     return
 }
 
+# The value of ONE field as one line of text. A listbox with more than one
+# selection answers a LIST, and a Tcl list handed to [text] or to [format]
+# prints as "Lesungen Ehrenamt" - two values with nothing between them, which
+# reads as one. The export line beside it has always joined with a comma; this
+# makes the value agree with it, on the page and on the console both.
+proc formValue {field} {
+    set value [dict get $field value]
+    if {[dict get $field type] eq "listbox"} {
+        set value [join $value {, }]
+    }
+    return $value
+}
+
 set y [expr {$y + 2}]
 foreach field $fields {
     if {$y > 250} {
@@ -139,7 +152,7 @@ foreach field $fields {
     if {$value eq {}} {
         formLine $doc y "value" "- empty -" {0.55 0.55 0.6}
     } else {
-        formLine $doc y "value" $value {0 0 0.5}
+        formLine $doc y "value" [formValue $field] {0 0 0.5}
     }
     if {[dict get $field selected] ne {} \
             && [dict get $field selected] ne $value} {
@@ -210,12 +223,13 @@ $doc destroy
 puts "  read: $label ([dict get $facts form], [llength $fields] fields)"
 foreach field $fields {
     set value [dict get $field value]
+    set shown [formValue $field]
     if {[dict get $field selected] ne {} \
             && [dict get $field selected] ne $value} {
-        append value " (exports as [join [dict get $field selected] {, }])"
+        append shown " (exports as [join [dict get $field selected] {, }])"
     }
     puts [format "  %-12s %-10s %s" [dict get $field name] \
-        [dict get $field type] $value]
+        [dict get $field type] $shown]
 }
 puts "  written: $target"
 

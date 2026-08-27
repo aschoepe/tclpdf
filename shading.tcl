@@ -292,6 +292,23 @@ oo::define ::tclpdf::document::document {
     # refusals in this module's own terms; what is left for [checkFit] here
     # is the sign.
     ::tclpdf::geometry checkFit $options $what
+    # AND ABOVE ZERO IN THE FILE AS WELL, which is the other half of the
+    # same sentence: "-size {1e-6 1e-6}" passed the sign check above and
+    # wrote "28.34646 85.03937 0 0 re W n" with the "sh" inside it -
+    # measured 2026-08-27, a clipping path of no area, the gradient gone and
+    # nothing in the file to say why. [aboveZero] in page.tcl carries the
+    # reasoning for the whole class. In POINTS, because points are what the
+    # "re" gets - except under a -matrix, where the numbers are read in the
+    # space the matrix maps from and go out as they stand.
+    if {[dict exists $options size] && [dict get $options size] ne {}} {
+      set lengths [expr {[dict get $options matrix] eq {}
+          ? [my extent [dict get $options size]] : [dict get $options size]}]
+      foreach {side value} [list width [lindex $lengths 0] \
+          height [lindex $lengths 1]] {
+        my aboveZero $value "the $side of $what (-size\
+            {[dict get $options size]})" [list TCLPDF SHADING ARGUMENT size]
+      }
+    }
     # -angle is read straight into a trigonometric function by
     # [ShadingCoords], which is well past the point where anything can still
     # be refused. Measured 2026-08-26: "-angle abc" answered "can't use
@@ -493,6 +510,28 @@ oo::define ::tclpdf::document::document {
           set y1 [expr {$centreY - $reach * sin($radians)}]
         }
       }
+      # AN AXIS WITH NO LENGTH IS NOT A GRADIENT. Table 79 of the axis
+      # coordinates: "If the starting and ending coordinates are coincident
+      # ... nothing shall be painted." A file that says so is well formed and
+      # every validator passes it - and what a reader does with it is its own
+      # invention: measured 2026-08-27 with poppler, "-from {50 35} -to
+      # {50 35}" filled the whole clip with the FIRST colour, against the
+      # sentence just quoted, while another reader is free to leave it blank.
+      # Refused rather than written, like [arc -extent 0] ("there is nothing
+      # to draw") and for the same reason.
+      #
+      # Coincident IN THE FILE (five decimals, 7.3.3, [pdfObj written]): two
+      # points a millionth apart are the same point once they are written,
+      # and this package holds the file to what it says, not the arithmetic
+      # that led there.
+      if {[::tclpdf::pdfObj written $x0] == [::tclpdf::pdfObj written $x1]
+          && [::tclpdf::pdfObj written $y0] == [::tclpdf::pdfObj written $y1]} {
+        return -code error -errorcode [list TCLPDF SHADING AXIS length] \
+            "tclpdf: the axis of an axial shading runs from\
+            ([::tclpdf::pdfObj num $x0], [::tclpdf::pdfObj num $y0]) to the\
+            same point - coincident ends paint nothing (ISO 32000-1,\
+            Table 79); -from and -to name two different places"
+      }
       return [list [::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] \
           [::tclpdf::pdfObj num $x1] [::tclpdf::pdfObj num $y1]]
     }
@@ -566,9 +605,20 @@ oo::define ::tclpdf::document::document {
         return -code error -errorcode [list TCLPDF SHADING STOPS range] \
             "tclpdf: -stops are numbers from 0 to 1, not \"$stop\""
       }
-      if {$previous ne {} && $stop <= $previous} {
+      # STRICTLY INCREASING IN THE FILE, not in the caller's arithmetic. The
+      # inner stops go into /Bounds as PDF reals of five decimals (7.3.3,
+      # written by pdfFunction.tcl), so "-stops {0 0.000001 0.000002 1}" -
+      # three values that increase perfectly well to Tcl - came out as
+      # "/Bounds [0 0]", measured 2026-08-27: two equal bounds and one of
+      # them on the domain edge, against Table 40 ("in order of increasing
+      # value") and against the promise that two equal stops are refused.
+      # [pdfObj written] is that question, in the one place it is asked.
+      if {$previous ne {}
+          && [::tclpdf::pdfObj written $stop]
+              <= [::tclpdf::pdfObj written $previous]} {
         return -code error -errorcode [list TCLPDF SHADING STOPS order] \
-            "tclpdf: -stops must increase strictly:\
+            "tclpdf: -stops must increase strictly, and in the file, where\
+            a real carries five decimals (ISO 32000-1, 7.3.3):\
             [join $stops { }]"
       }
       set previous $stop
@@ -767,4 +817,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.8
+package provide tclpdf::shading 1.9

@@ -26,6 +26,31 @@ package require tclpdf::layer
 source [file join [file dirname [info script]] helper.tcl]
 
 testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+testConstraint pdftoppm [expr {[auto_execok pdftoppm] ne {}}]
+
+# How many red pixels a page holds when it is rendered. Rendered rather than
+# read, because what the finding is about is what a VIEWER shows - a layer
+# the source file hides and the copy did not.
+#
+# The PPM goes through a FILE rather than through [exec]: under Tcl 9 the
+# output of a command is decoded text, and binary picture data arriving that
+# way carries U+FFFD where a byte above 0x7F stood.
+proc redPixels {path {dpi 40}} {
+  set stem [::tclpdfTest::scratch [file rootname [file tail $path]]-ppm]
+  exec {*}[auto_execok pdftoppm] -r $dpi $path $stem
+  set files [glob $stem-*.ppm]
+  set bytes [::tclpdfTest::readBytes [lindex $files 0]]
+  file delete {*}$files
+  regexp {^P6\s+(\d+)\s+(\d+)\s+(\d+)\s} $bytes header - - -
+  binary scan [string range $bytes [string length $header] end] cu* pixels
+  set red 0
+  foreach {r g b} $pixels {
+    if {$r > 200 && $g < 80 && $b < 80} {
+      incr red
+    }
+  }
+  return $red
+}
 
 # THE FOREIGN PAGE, byte for byte - one fixture with three knobs, because
 # every test here wants the same page and differs in one thing about it.
@@ -254,25 +279,36 @@ test importLayer-3.1 {a content stream that cannot be decoded changes nothing} -
       $written $exists
 } -result {1 1 0 {{} {}} 0 1}
 
-test importLayer-3.2 {a resource the file does not hold changes nothing either} -body {
-  # The same rule for the other side of the read: an object number the
-  # cross-reference does not know. While the reading and the writing were
-  # interleaved, the numbers of the objects already copied were RESERVED and
-  # never filled - and a reserved object that never gets a body makes the
-  # WRITE fail, for a document that could otherwise still have been written.
+test importLayer-3.2 {a resource the file does not hold is the null object} -body {
+  # THE OTHER SIDE OF THE READ, and since round 8 not a refusal at all: an
+  # object number the cross-reference does not know is the NULL OBJECT - "An
+  # indirect reference to an undefined object shall not be considered an
+  # error by a PDF processor; it shall be treated as a reference to the null
+  # object" (ISO 32000-2, 7.3.10). It used to be TCLPDF IMPORT OBJECT, which
+  # turned a file qpdf reads without a word into one this package would take
+  # no page out of; the package applies the very same rule when it WRITES
+  # (doc/tclpdf.md, release).
+  #
+  # The copy says so with a null object of its own rather than by dropping
+  # the entry, so the /Properties key stands and a reader finds behind it
+  # what it found in the file the page came from. That a refused import
+  # leaves no reserved number behind is measured in importLayer-3.1 and in
+  # import-15.3.
   set path [importLayerForeign import-layer-missing.pdf \
       -properties "/oc3 99 0 R"]
-  set doc [tclpdf new -unit pt -format a4]
+  set doc [tclpdf new -unit pt -format a4 -compress 0]
   $doc page add
-  $doc text "before" -at {20 20} -size 10
-  set before [[$doc writer] count]
   set code [catch {$doc pdf import sheet $path} message]
-  set grew [expr {[[$doc writer] count] - $before}]
-  lassign [::tclpdfTest::writes $doc import-layer-missing-out.pdf] written exists
+  $doc form place sheet -at {0 0}
+  set out [::tclpdfTest::scratch import-layer-missing-out.pdf]
+  $doc write $out
   $doc destroy
-  file delete $path
-  list $code [string match {tclpdf: *} $message] $grew $written $exists
-} -result {1 1 0 0 1}
+  set bytes [::tclpdfTest::readBytes $out]
+  file delete $path $out
+  set number {}
+  list $code [regexp {/oc3 (\d+) 0 R} $bytes -> number] \
+      [regexp "\n$number 0 obj\nnull\nendobj" $bytes]
+} -result {0 1 1}
 
 # -- the state a foreign group brings with it ------------------------------
 
@@ -333,5 +369,85 @@ test importLayer-4.3 {two writes and a second import keep the states} -body {
       [llength [::tclpdf::layer::groupReferences $entry ON]] \
       [llength [::tclpdf::layer::groupReferences $entry OFF]]
 } -result {5 3 2}
+
+# -- round 8: a group that a /Properties entry does not name ----------------
+
+# THE SOURCE OF THE FINDING, by hand: a page whose only optional content is
+# the /OC of a form XObject, with the group switched OFF in the file's own
+# configuration. That is the normal shape of an Illustrator or CAD layer
+# (8.11.3.3) and the one road the import did not walk.
+proc importLayerXObject {name} {
+  set inner "1 0 0 rg 0 0 100 100 re f"
+  set content "q 1 0 0 1 20 20 cm /X1 Do Q"
+  set bodies [list \
+      "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs \[6 0 R\]\
+          /D << /Name (Default) /Order \[6 0 R\] /OFF \[6 0 R\] >> >> >>" \
+      "<< /Type /Pages /Kids \[3 0 R\] /Count 1 >>" \
+      "<< /Type /Page /Parent 2 0 R /MediaBox \[0 0 200 200\]\
+          /Resources << /XObject << /X1 5 0 R >> >> /Contents 4 0 R >>" \
+      "<< /Length [string length $content] >>\nstream\n$content\nendstream" \
+      "<< /Type /XObject /Subtype /Form /BBox \[0 0 100 100\] /OC 6 0 R\
+          /Length [string length $inner] >>\nstream\n$inner\nendstream" \
+      "<< /Type /OCG /Name (Hidden layer) >>"]
+  set out "%PDF-1.5\n"
+  set entries {}
+  foreach body $bodies {
+    lappend entries [format "%010d 00000 n \n" [string length $out]]
+    append out "[llength $entries] 0 obj\n$body\nendobj\n"
+  }
+  set startxref [string length $out]
+  append out "xref\n0 [expr {[llength $entries] + 1}]\n"
+  append out "0000000000 65535 f \n" [join $entries {}]
+  append out "trailer\n<< /Size [expr {[llength $entries] + 1}] /Root 1 0 R >>\n"
+  append out "startxref\n$startxref\n%%EOF\n"
+  package require tclpdf::io
+  set path [::tclpdfTest::scratch $name]
+  ::tclpdf::io write $path $out
+  return $path
+}
+
+test importLayer-5.1 {a group reachable only through an XObject's /OC is in the catalogue} -body {
+  # ISO 32000-2, 8.11.4.2 asks the catalogue's /OCGs for "an array of
+  # indirect references to all the optional content groups in the document",
+  # and 8.11.4.3 gives /BaseState the default ON - so a group that arrives
+  # in no configuration is a group that is SWITCHED ON. The groups used to
+  # be collected out of the page's /Properties alone, and a layer whose only
+  # road is the /OC of a form XObject (8.11.3.3, the normal shape of an
+  # Illustrator or CAD layer) was copied, named nowhere, and drawn. The
+  # question is asked of the CLOSURE now: every copied object that says
+  # /Type /OCG is a group of this document.
+  set path [importLayerXObject import-layer-oc-xobject.pdf]
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  ::tclpdfTest::writeTwice $doc import-layer-oc-xobject-out
+  set entry [$doc catalogEntry OCProperties]
+  $doc destroy
+  file delete $path
+  list [llength [::tclpdf::layer::groupReferences $entry]] \
+      [llength [::tclpdf::layer::groupReferences $entry OFF]] \
+      [llength [::tclpdf::layer::groupReferences $entry ON]]
+} -result {1 1 0}
+
+test importLayer-5.2 {and the hidden layer stays invisible in the result} -constraints \
+    {qpdf pdftoppm} -body {
+  # The measurement that named the finding: poppler renders the SOURCE with
+  # no red pixel at all and used to render the result with 729 of them.
+  set path [importLayerXObject import-layer-oc-render.pdf]
+  set doc [tclpdf new -unit pt -format {200 200}]
+  $doc page add
+  $doc pdf import sheet $path
+  $doc form place sheet -at {0 0}
+  set out [::tclpdfTest::scratch import-layer-oc-render-out.pdf]
+  $doc write $out
+  $doc destroy
+  set counts {}
+  foreach file [list $path $out] {
+    lappend counts [redPixels $file]
+  }
+  file delete $path $out
+  set counts
+} -result {0 0}
 
 cleanupTests

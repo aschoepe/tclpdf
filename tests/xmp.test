@@ -1190,4 +1190,249 @@ test xmp-15.3 {a raw contribution is rdf:Description elements, not text and not 
   set result
 } -result {1 {TCLPDF XMP RDF} 1 {TCLPDF XMP RDF} 0 {}}
 
+# --- the PDF/A extension schema container ---------------------------------
+#
+# One packet, one container: XMP part 1 (ISO 16684-1), 6.1 makes a property
+# name unique within a packet and ISO 19005-3, 6.6.2.3.3 makes
+# pdfaExtension:schemas one bag with one rdf:li per schema. Every topic
+# contributes a whole rdf:Description of its own, so this is the one place
+# where two of them meet.
+
+# A contribution shaped like the ones ua.tcl and zugferd.tcl write: one
+# schema in its own container. "bag" chooses what the container holds -
+# a filled rdf:Bag, an empty one, or nothing at all.
+proc extensionSchema {prefix {bag full}} {
+  set container {<rdf:Bag><rdf:li rdf:parseType="Resource"><pdfaSchema:schema>PREFIX schema</pdfaSchema:schema><pdfaSchema:namespaceURI>urn:PREFIX</pdfaSchema:namespaceURI><pdfaSchema:prefix>PREFIX</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource"><pdfaProperty:name>a</pdfaProperty:name><pdfaProperty:valueType>Text</pdfaProperty:valueType><pdfaProperty:category>external</pdfaProperty:category><pdfaProperty:description>a</pdfaProperty:description></rdf:li></rdf:Seq></pdfaSchema:property></rdf:li></rdf:Bag>}
+  switch -- $bag {
+    empty {set container {<rdf:Bag/>}}
+    none {set container {}}
+  }
+  # The container's own placeholders first: [string map] does not map what
+  # it has just inserted, so a CONTAINER carrying PREFIX would go in unread.
+  set container [string map [list PREFIX $prefix] $container]
+  return [string map [list CONTAINER $container] \
+      {<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#"><pdfaExtension:schemas>CONTAINER</pdfaExtension:schemas></rdf:Description>}]
+}
+
+# The packet of a document written to the scratch directory, as text.
+proc writtenPacket {doc name} {
+  set path [::tclpdfTest::scratch $name]
+  $doc write $path
+  set packet [packetBytes $path]
+  file delete $path
+  return $packet
+}
+
+test xmp-16.1 {two extension schemas share ONE container and ONE bag} -constraints {haveTdom haveFace} -body {
+  # Measured 2026-08-27, before the merge: "ua 1" together with "zugferd" -
+  # and two [pdfa extension] calls just the same - wrote
+  # <pdfaExtension:schemas> twice, so veraPDF threw the packet away and
+  # answered 6.6.2.1-4, 6.6.2.1-5 and 6.6.4-1 under 3b and 5-1 under ua1:
+  # BOTH identifications lost, though both stood in the file.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa extension [extensionSchema one]
+  $doc pdfa extension [extensionSchema two]
+  set packet [writtenPacket $doc xmp-merge.pdf]
+  $doc destroy
+  list [regexp -all {<pdfaExtension:schemas>} $packet] \
+      [regexp -all {<rdf:Bag>} $packet] \
+      [regexp -all {<pdfaSchema:prefix>} $packet] \
+      [regexp -all {<rdf:Description[^>]*pdfaExtension} $packet] \
+      [string match {*<pdfaSchema:prefix>one</pdfaSchema:prefix>*} $packet] \
+      [string match {*<pdfaSchema:prefix>two</pdfaSchema:prefix>*} $packet]
+} -result {1 1 2 1 1 1}
+
+test xmp-16.2 {ua and a caller's extension share it too, in both orders} -constraints {haveTdom haveFace} -body {
+  # ua.tcl contributes its pdfuaid schema description whether or not PDF/A
+  # is declared, and neither call can know the other is coming - so both
+  # orders have to end in one container.
+  set out {}
+  foreach order {uaFirst extensionFirst} {
+    # A document PDF/UA will pass: tagged, titled, with a language and its
+    # text inside a structure element.
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc tagged 1
+    $doc language de
+    $doc info Title "Probe"
+    $doc page add
+    $doc font embed face $face
+    $doc font -family face
+    $doc text "x" -at {20 20} -tag P
+    if {$order eq "uaFirst"} {
+      $doc ua 1
+      $doc pdfa -part 3 -conformance B
+      $doc pdfa extension [extensionSchema one]
+    } else {
+      $doc pdfa -part 3 -conformance B
+      $doc pdfa extension [extensionSchema one]
+      $doc ua 1
+    }
+    set packet [writtenPacket $doc xmp-merge-$order.pdf]
+    $doc destroy
+    lappend out [regexp -all {<pdfaExtension:schemas>} $packet] \
+        [regexp -all {<pdfaSchema:prefix>} $packet] \
+        [string match {*<pdfaSchema:prefix>pdfuaid</pdfaSchema:prefix>*} $packet]
+  }
+  set out
+} -result {1 2 1 1 2 1}
+
+test xmp-16.3 {the emptied description goes, and nothing grows a second xmlns} -constraints {haveTdom haveFace} -body {
+  # Two things the merge must not leave behind. An rdf:Description with
+  # nothing in it but its declarations says nothing and is dropped, as
+  # [Describe] drops one for a schema that answered with no properties. And
+  # the declarations of the emptied description are carried onto the one
+  # that stays BEFORE its elements move - measured, tdom writes a
+  # declaration of its own on an element whose prefix was not in scope when
+  # it was appended, and every pdfaProperty:name in the merged bag came out
+  # carrying xmlns:pdfaProperty.
+  # The second contribution declares a prefix the first does not, which is
+  # the only shape in which the ordering shows: where both declare the same
+  # three, the prefix is in scope either way.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa extension {<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource"><pdfaSchema:prefix>one</pdfaSchema:prefix></rdf:li></rdf:Bag></pdfaExtension:schemas></rdf:Description>}
+  $doc pdfa extension {<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#"><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource"><pdfaSchema:prefix>two</pdfaSchema:prefix><pdfaProperty:name>a</pdfaProperty:name></rdf:li></rdf:Bag></pdfaExtension:schemas></rdf:Description>}
+  set packet [writtenPacket $doc xmp-merge-empty.pdf]
+  $doc destroy
+  list [regexp -all {<rdf:Description[^>]*/>} $packet] \
+      [regexp -all {<pdfaProperty:name>} $packet] \
+      [regexp -all {<pdfaProperty:name xmlns} $packet] \
+      [regexp -all {<rdf:Description[^>]*pdfaProperty} $packet]
+} -result {0 1 0 1}
+
+test xmp-16.4 {an empty container and one with no bag at all merge without loss} -constraints {haveTdom haveFace} -body {
+  # A plugin may contribute a container it has not filled yet - probe D of
+  # the combos review was exactly that, <rdf:Bag/> - and one that carries no
+  # bag at all is well formed too. Neither may cost the packet the schema
+  # that IS there, whichever of them comes first.
+  set out {}
+  foreach shape {empty none} {
+    foreach order {fullFirst emptyFirst} {
+      set doc [probe $face]
+      $doc pdfa -part 3 -conformance B
+      if {$order eq "fullFirst"} {
+        $doc pdfa extension [extensionSchema one]
+        $doc pdfa extension [extensionSchema two $shape]
+      } else {
+        $doc pdfa extension [extensionSchema two $shape]
+        $doc pdfa extension [extensionSchema one]
+      }
+      set packet [writtenPacket $doc xmp-merge-$shape-$order.pdf]
+      $doc destroy
+      lappend out [regexp -all {<pdfaExtension:schemas>} $packet] \
+          [string match {*<pdfaSchema:prefix>one</pdfaSchema:prefix>*} $packet]
+    }
+  }
+  set out
+} -result {1 1 1 1 1 1 1 1}
+
+test xmp-16.5 {a description that carries more than the container keeps the rest} -constraints {haveTdom haveFace} -body {
+  # The container moves, the description stays where it has anything else to
+  # say - a property beside the container, or one written as an attribute,
+  # which RDF/XML admits (XMP part 1, 7.9.2.2).
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa extension [extensionSchema one]
+  $doc pdfa extension {<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:probe="urn:probe" probe:b="attribute"><pdfaExtension:schemas><rdf:Bag/></pdfaExtension:schemas><probe:a>kept</probe:a></rdf:Description>}
+  set packet [writtenPacket $doc xmp-merge-rest.pdf]
+  $doc destroy
+  list [regexp -all {<pdfaExtension:schemas>} $packet] \
+      [string match {*<probe:a>kept</probe:a>*} $packet] \
+      [string match {*probe:b="attribute"*} $packet]
+} -result {1 1 1}
+
+# --- a caller's packet and the raw contributions --------------------------
+
+test xmp-17.1 {a caller's packet has to carry the RAW contributions too} -constraints {haveTdom haveFace} -body {
+  # The half that was missing until 2026-08-27. A packet set with [metadata]
+  # replaces the built one, and the registered schemas - pdfaid, pdfuaid -
+  # were asked for; the whole descriptions [xmpRaw] carries were not. So a
+  # document with a Factur-X extension schema and its fx: properties wrote
+  # neither, veraPDF said isCompliant="true" (it has no opinion on
+  # Factur-X), and Mustangproject answered five "not found" errors.
+  #
+  # Both orders: the check runs at write time, where neither call can know
+  # what the other did.
+  set out {}
+  foreach order {rawFirst metadataFirst} {
+    set doc [probe $face]
+    $doc pdfa -part 3 -conformance B
+    set packet {<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" rdf:about="">
+      <pdfaid:part>3</pdfaid:part>
+      <pdfaid:conformance>B</pdfaid:conformance>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>}
+    if {$order eq "rawFirst"} {
+      $doc pdfa extension [extensionSchema one]
+      $doc metadata $packet
+    } else {
+      $doc metadata $packet
+      $doc pdfa extension [extensionSchema one]
+    }
+    set path [::tclpdfTest::scratch xmp-caller-raw.pdf]
+    lappend out [catch {$doc write $path} message] [lrange $::errorCode 0 2] \
+        [string match {*"pdfaExtension"*} $message] [file exists $path] \
+        [llength [dict get [$doc pdfa state] extensions]]
+    $doc destroy
+    file delete $path
+  }
+  set out
+} -result {1 {TCLPDF XMP CALLER} 1 0 1 1 {TCLPDF XMP CALLER} 1 0 1}
+
+test xmp-17.2 {and a packet that does carry them is written as it stands} -constraints {haveTdom haveFace} -body {
+  # The counter-direction, and what the refusal is FOR: the caller adds the
+  # descriptions to their own packet and the file goes out with them. The
+  # packet is kept exactly as it was set - nothing is merged into it, since
+  # a property may stand in an XMP packet once (6.1) and two sources for one
+  # value is the silent decision the refusal replaces. That the built
+  # descriptions are NOT there is what the missing pdf:Producer says.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc pdfa extension [extensionSchema one]
+  $doc metadata "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>
+<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">
+  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">
+    <rdf:Description xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" rdf:about=\"\">
+      <pdfaid:part>3</pdfaid:part>
+      <pdfaid:conformance>B</pdfaid:conformance>
+    </rdf:Description>
+[extensionSchema one]
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end=\"w\"?>"
+  set packet [writtenPacket $doc xmp-caller-ok.pdf]
+  $doc destroy
+  list [regexp -all {<pdfaExtension:schemas>} $packet] \
+      [string match {*<pdfaSchema:prefix>one</pdfaSchema:prefix>*} $packet] \
+      [regexp -all {<pdf:Producer>} $packet]
+} -result {1 1 0}
+
+test xmp-17.3 {a declaration in scope but unused counts as carrying the schema} -constraints {haveTdom haveFace} -body {
+  # What the module has always meant to allow and could not: the branch that
+  # looked for it tested for a prefix "xmlns" in tdom's attribute list, and
+  # tdom reports xmlns:p="u" as {p p {}} - so the branch never fired and an
+  # unused declaration was not found at all (measured 2026-08-27).
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc metadata {<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""/>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>}
+  set path [::tclpdfTest::scratch xmp-caller-declared.pdf]
+  set code [catch {$doc write $path}]
+  set exists [file exists $path]
+  $doc destroy
+  file delete $path
+  list $code $exists
+} -result {0 1}
+
 cleanupTests

@@ -13,11 +13,29 @@
 # file itself claims. A missing tool is a SKIP, never a pass.
 #
 # A script that ends without an error is not enough, and that is the second
-# half of the file check: many snippets demonstrate a REFUSAL, and they say so
-# in the two wordings [unrefused] below looks for. Such a snippet catches its
-# own error, so a call that stopped being refused would leave the exit status
-# at 0 and print "NOT REFUSED" into a log nobody reads. Those two lines are
-# therefore failures of the file that printed them.
+# half of the file check: many snippets demonstrate a REFUSAL, and a snippet
+# demonstrating one catches its own error - so a call that STOPPED being
+# refused would leave the exit status at 0 and nothing would say anything.
+# Two things close that hole, and they close it from both ends:
+#
+#   at run time  every catch/try that demonstrates a refusal carries a SUCCESS
+#                branch printing one of the two wordings [unrefused] looks
+#                for, "NOT REFUSED" or "went through, which it should not
+#                have". Such a line is a failure of the file that printed it.
+#
+#   at read time [branches] counts, in the extracted code, the catch and try
+#                commands against those success branches and requires ONE
+#                EACH. A demonstration written without its else would pass the
+#                run silently for ever; here it fails at once, before the
+#                script is even started. A [catch {package require ...}] is a
+#                capability probe rather than a demonstration and is not
+#                counted - it is the one form whose two branches are both
+#                ordinary outcomes.
+#
+# Until 2026-08-27 only the first half existed, and only for the files that
+# happened to write the branch: around 28 demonstrations across the reference
+# had none, and a mutation that made one of them stop refusing (measured:
+# "overprint" to "overprint -fill 1" in 04-graphics.md) passed the check.
 #
 # assets.tcl sets the variables the snippets refer to (see SKILL.md, "The one
 # setup every snippet assumes") - ttf, png, iccRgb, invoiceXml, out ... - and
@@ -109,10 +127,37 @@ proc unrefused {output} {
     return $lines
 }
 
+# The read-time half: how many refusals a file demonstrates, and how many
+# success branches it carries. Comment lines are left out (a comment may name
+# a call it is not making), and so is the capability probe form.
+proc branches {code} {
+    set demonstrations 0
+    set answers 0
+    foreach line [split $code \n] {
+        if {[string match "#*" [string trimleft $line]]} { continue }
+        if {[string match {*NOT REFUSED*} $line]
+            || [string match {*should not have*} $line]} {
+            incr answers
+            continue
+        }
+        incr demonstrations [regexp -all {(?:^|[^A-Za-z0-9_])catch[^A-Za-z0-9_]} $line]
+        incr demonstrations [regexp -all {(?:^|[^A-Za-z0-9_])try\s*\{} $line]
+        incr demonstrations -[regexp -all {catch\s*\{\s*package\s+require} $line]
+    }
+    return [list $demonstrations $answers]
+}
+
 set tclsh [info nameofexecutable]
 foreach path $files {
     set code [snippets $path]
     if {$code eq {}} { skip "[file tail $path]: no tcl block"; continue }
+    lassign [branches $code] demonstrations answers
+    if {$demonstrations != $answers} {
+        fail "[file tail $path]: $demonstrations refusal demonstration(s)\
+            (catch/try) but $answers success branch(es) - every catch or try\
+            that shows a refusal needs the branch that prints NOT REFUSED\
+            when the call goes through, or the demonstration is silent"
+    }
     set script [file join $scripts "check-[file rootname [file tail $path]].tcl"]
     set channel [open $script w]
     fconfigure $channel -encoding utf-8

@@ -324,11 +324,24 @@ proc ::tclpdf::forms::apply {prepared run {ligatures 1}} {
   # widths, kerning, encoding - takes a run of {glyph codes}, and a third
   # element that means nothing to any of them would travel through the whole
   # chain waiting to be mistaken for something.
+  #
+  # WHAT THE SUBSTITUTIONS RECORDED STAYS. gsubApply.tcl writes the ligature
+  # properties of an entry into the FOURTH place - which component of a
+  # ligature a mark was written behind - and markPos.tcl reads them there to
+  # place that mark; they are not a tag of this file's making and they mean
+  # something downstream. So the tag is emptied rather than the entry
+  # shortened, because shortening it would move the properties into the tag's
+  # place. An entry that never met a ligature is the two elements it always
+  # was.
   set result {}
   foreach entry $marked {
-    lappend result [lrange $entry 0 1]
+    if {[llength $entry] > 3} {
+      lappend result [lreplace $entry 2 2 {}]
+    } else {
+      lappend result [lrange $entry 0 1]
+    }
   }
   return $result
 }
 
-package provide tclpdf::forms 1.4
+package provide tclpdf::forms 1.5

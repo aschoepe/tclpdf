@@ -185,4 +185,39 @@ test pdfObj-date-8.1 {date carries the format of 7.9.4} -body {
   regexp {^D:\d{14}[-+]\d{2}'\d{2}'$} [::tclpdf::pdfObj date 1770000000]
 } -result 1
 
+# --- what the file will actually carry (7.3.3) ------------------------------
+#
+# [written] is the predicate the whole "the call passed, the file says zero"
+# class of the eighth review rests on (Nr. 65-68). If it ever answers the
+# value handed in rather than the value written, four commands go back to
+# writing the forbidden zero and nothing else in the suite notices.
+
+test pdfObj-written-9.1 {a value below the fifth decimal IS zero in the file} -body {
+  list [::tclpdf::pdfObj written 0.000001] [::tclpdf::pdfObj written -0.000001] \
+      [::tclpdf::pdfObj written 0.000004] [::tclpdf::pdfObj written 0]
+} -result {0.0 0.0 0.0 0.0}
+
+test pdfObj-written-9.2 {and one at the fifth decimal is not} -body {
+  # The cut is exactly where [num] puts it - not a tolerance one place either
+  # side of it.
+  list [expr {[::tclpdf::pdfObj written 0.00001] > 0}] \
+      [expr {[::tclpdf::pdfObj written 0.000005] > 0}] \
+      [::tclpdf::pdfObj written 2.5] [::tclpdf::pdfObj written 1]
+} -result {1 1 2.5 1.0}
+
+test pdfObj-written-9.3 {it answers through [num], trailing point and all} -body {
+  # A whole number beyond the integer range is written as a real ("1e+20."),
+  # and that point is syntax rather than value - the number comes back as a
+  # number, not as a string a comparison would choke on.
+  expr {[::tclpdf::pdfObj written 100000000000000000000] == 1e20}
+} -result 1
+
+test pdfObj-written-9.4 {what the file cannot hold at all comes back unchanged} -body {
+  # NaN, Inf and a value past the real range are refused where they are read;
+  # turning them into 0.0 here would answer a caller's "is it zero" with the
+  # wrong word and let them through as a refusal that never happened.
+  list [::tclpdf::pdfObj written NaN] [::tclpdf::pdfObj written Inf] \
+      [::tclpdf::pdfObj written 1e400] [::tclpdf::pdfObj written abc]
+} -result {NaN Inf 1e400 abc}
+
 cleanupTests

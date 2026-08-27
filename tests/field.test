@@ -1456,18 +1456,23 @@ test field-7.25 {a -label script that raises leaves the document writable} -body
   } message]
   # The tree is not half OPEN either - a P here would land inside the Form or
   # the Lbl if either had been left standing, and it lands at the top level.
-  # The empty Form element itself STAYS, and that is the package's answer
-  # everywhere: [$doc structure P -script {error boom}] leaves an empty P
-  # behind in exactly the same way (measured), because nothing in
-  # structure.tcl takes an element back. Written down here so that a change
-  # to it is a decision and not a surprise.
+  #
+  # AND THE EMPTY FORM ELEMENT IS GONE, which is the answer this test used to
+  # hold the opposite of. It said the element stays, "because nothing in
+  # structure.tcl takes an element back", and wrote that down so that a
+  # change to it would be a decision. It is one: round 8 measured what such
+  # an element costs - a Form without the object reference ISO 32000-2, Table
+  # 368 requires of it, counted as a described widget by ISO 14289-1, 7.18.4
+  # and passed by veraPDF (structure V1) - and structure.tcl now offers
+  # [StructureSnapshot]/[StructureRollback] for exactly this. The bracket
+  # that cost nothing is taken back; one that drew is kept, which is
+  # field-8.11.
   $doc structure P -script { $doc text "The document goes on" -at {20 70} }
   set written [::tclpdfTest::writes $doc field-label-raises.pdf]
   set forms [fieldElements $doc Form]
   $doc destroy
-  list $code $message $written [llength $forms] \
-      [regexp {/Type /OBJR} [lindex $forms 0]]
-} -result {1 {the label gives up} {0 1} 1 0}
+  list $code $message $written [llength $forms]
+} -result {1 {the label gives up} {0 1} 0}
 
 test field-7.26 {the first widget of a set reserves nothing before its label} -body {
   # A field of SEVERAL widgets walks them one by one, and the first one's
@@ -1598,5 +1603,271 @@ test field-7.27 {a -label that draws nothing is no label} -body {
   list $missing [string match {*neither a label nor a description*} $text] \
       $drawn $written
 } -result {{{customer {}}} 1 {} {0 1}}
+
+#
+# --- round 8: version floors, names, measurements, and the face of a form ---
+#
+
+# The face every test below embeds, and the constraint that says it is there.
+set fieldFace [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts DejaVuSans.ttf]
+testConstraint haveFieldFace [file exists $fieldFace]
+
+test field-8.1 {-tooltip writes /TU, which is 1.3 where the field is 1.2} -body {
+  # ISO 32000-2, Table 228: /TU is "(Optional; PDF 1.3)", /AcroForm and the
+  # widget are 1.2 (Table 28). A 1.2 document was given /TU (round 8, annot
+  # V2). Asked at the DECLARATION, not where the key is written: by write
+  # time the field is declared and its structure element is open.
+  set doc [tclpdf new -unit mm -version 1.2]
+  $doc page add
+  set code [::tclpdfTest::refusalCode {
+    $doc field text customer -rect {20 40 80 8} -tooltip "Your name"
+  }]
+  set plain [catch {$doc field text plain -rect {20 60 80 8}}]
+  set fields [$doc field list]
+  $doc destroy
+  list $code $plain $fields
+} -result {{TCLPDF VERSION 1.3} 0 plain}
+
+test field-8.2 {a 1.3 document writes /TU as before} -body {
+  set doc [tclpdf new -unit mm -version 1.3]
+  $doc page add
+  $doc field text customer -rect {20 40 80 8} -tooltip "Your name"
+  set data [fieldBytes $doc field-8-2.pdf]
+  $doc destroy
+  regexp -all {/TU \(Your name\)} $data
+} -result 1
+
+test field-8.3 {a field name with a control character is refused} -body {
+  # 12.7.4.2 does not spell it out, but /T is what an exported FDF, a script
+  # in a reader and [$doc field list] address the field by, and all three
+  # read it as one line: "field text a\nb" wrote /T (a\nb) and [field list]
+  # gave a name with a break in it (round 8, annot G5).
+  set doc [fieldDoc]
+  set said {}
+  foreach name [list "a\nb" "a\tb" "a\x00b" "a\x7fb"] {
+    lappend said [::tclpdfTest::refusalCode {$doc field text $name -rect {20 40 80 8}}]
+  }
+  set fine [catch {$doc field text "a b" -rect {20 60 80 8}}]
+  set fields [$doc field list]
+  $doc destroy
+  list [lsort -unique [lmap code $said {lrange $code 0 2}]] $fine $fields
+} -result {{{TCLPDF FIELD NAME}} 0 {{a b}}}
+
+test field-8.4 {-size of field default is a finite number, and says so} -body {
+  # NaN and Inf are doubles to Tcl: [string is double] took both, NaN
+  # compares false against every bound and Inf passes the lower one, so the
+  # pair travelled to [pdfObj num] and came back as TCLPDF PDFOBJ NUMBER -
+  # the right prefix and the wrong topic (round 8, annot H1).
+  set doc [fieldDoc]
+  set said {}
+  foreach size {NaN Inf -Inf} {
+    lappend said [::tclpdfTest::refusalCode {$doc field default -size $size}]
+  }
+  set fine [catch {$doc field default -size 12}]
+  $doc destroy
+  list $said $fine
+} -result {{{TCLPDF FIELD SIZE NaN} {TCLPDF FIELD SIZE Inf} {TCLPDF FIELD SIZE -Inf}} 0}
+
+test field-8.5 {every measurement a field option carries is refused at the call} -constraints haveFieldFace -body {
+  # THE CLASS, not the four call sites. The round-7 repair reached
+  # fieldText.tcl and stopped there, so five field types took NaN and Inf at
+  # the call and died at the WRITE - one of them in Tcl's own words from
+  # inside an appearance stream, which leaves the document unwritable for
+  # good. This test walks every numeric option of every type; a new type or a
+  # new option that reads a length has to appear here.
+  set wrong {}
+  foreach {what call} {
+    {text -size}          {field text t -rect {20 40 80 8} -size @}
+    {text -borderWidth}   {field text t -rect {20 40 80 8} -borderWidth @}
+    {listbox -size}       {field listbox l -rect {20 40 80 8} -options {a b} -size @}
+    {listbox -border}     {field listbox l -rect {20 40 80 8} -options {a b} -borderWidth @}
+    {combo -size}         {field combo c -rect {20 40 80 8} -options {a b} -size @}
+    {combo -border}       {field combo c -rect {20 40 80 8} -options {a b} -borderWidth @}
+    {check -border}       {field check k -rect {20 40 8 8} -borderWidth @}
+    {check -markSize}     {field check k -rect {20 40 8 8} -markSize @}
+    {radio -border}       {field radio r -buttons {{yes {20 40 5 5}} {no {20 50 5 5}}} -borderWidth @}
+    {radio -markSize}     {field radio r -buttons {{yes {20 40 5 5}} {no {20 50 5 5}}} -markSize @}
+    {button -size}        {field button b -rect {20 40 30 8} -caption Go -size @}
+    {button -border}      {field button b -rect {20 40 30 8} -caption Go -borderWidth @}
+    {default -size}       {field default -size @}
+  } {
+    foreach value {NaN Inf -Inf} {
+      set doc [fieldDoc]
+      set code [::tclpdfTest::refusalCode \
+          "\$doc [string map [list @ $value] $call]"]
+      # And the document is still writable afterwards - which is the half
+      # that was broken: the refusal used to come from the write.
+      set written [catch {$doc write [::tclpdfTest::scratch field-8-5.pdf]}]
+      file delete [::tclpdfTest::scratch field-8-5.pdf]
+      $doc destroy
+      if {[lrange $code 0 1] ne {TCLPDF FIELD} || $written} {
+        lappend wrong [list $what $value $code $written]
+      }
+    }
+  }
+  set wrong
+} -result {}
+
+test field-8.6 {a fillable field embeds its face whole, a read-only one keeps the subset} -constraints haveFieldFace -body {
+  # ISO 32000-2, 12.7.4.3: /DA and /DR are what a reader "shall" build an
+  # appearance stream from when the value of a variable-text field changes.
+  # A subsetted face holds only the glyphs the WRITER wrote, so the recipient
+  # could type nothing new - PDFBox answers setValue("Quiz") with "No glyph
+  # for U+0051 (Q) in font OVMOXL+DejaVuSans" (round 8, annot V4). The
+  # subset tag of 9.9.2 is what says which of the two a file got.
+  set answers {}
+  foreach {what call} {
+    {text}            {field text t -rect {20 40 80 8} -value abc -family face}
+    {text read-only}  {field text t -rect {20 40 80 8} -value abc -family face -readonly 1}
+    {combo}           {field combo c -rect {20 40 80 8} -options {a b} -family face}
+    {combo read-only} {field combo c -rect {20 40 80 8} -options {a b} -family face -readonly 1}
+    {button}          {field button b -rect {20 40 30 8} -caption Go -family face}
+    {no field}        {text abc -at {20 40} -family face}
+  } {
+    set doc [fieldDoc]
+    $doc font embed face $::fieldFace
+    $doc {*}$call
+    set data [fieldBytes $doc field-8-6.pdf]
+    $doc destroy
+    # A six-letter tag and a plus sign in front of the name MEANS subset
+    # (ISO 32000-2, 9.9.2), and a face embedded whole must not carry one.
+    lappend answers $what [expr {[regexp {/BaseFont /[A-Z]{6}\+DejaVuSans} $data] ? "subset" : "whole"}]
+  }
+  set answers
+} -result {text whole {text read-only} subset combo whole {combo read-only} subset button subset {no field} subset}
+
+test field-8.7 {the whole face is written once, however many fields ask for it} -constraints haveFieldFace -body {
+  set doc [fieldDoc]
+  $doc font embed face $::fieldFace
+  $doc field text a -rect {20 40 80 8} -family face -readonly 1
+  $doc field text b -rect {20 60 80 8} -family face
+  $doc field text c -rect {20 80 80 8} -family face
+  set data [fieldBytes $doc field-8-7.pdf]
+  $doc destroy
+  list [regexp -all {/BaseFont /DejaVuSans\M} $data] \
+      [regexp -all {/BaseFont /[A-Z]{6}\+DejaVuSans} $data]
+} -result {2 0}
+
+test field-8.8 {a refused field leaves no element in the structure tree} -constraints {haveTdom haveFieldFace} -body {
+  # Prufen VOR dem Schreiben, one layer in: the widget's Form element is
+  # opened by [FieldStructureOpen] and everything that can still refuse has
+  # to stand before it, or a caught refusal leaves an empty Form in the tree
+  # that the PDF/UA checks then count (round 8, structure V1; ISO 14289-1,
+  # 7.18.4 with ISO 32000-2, Table 368 - a Form holds exactly one object
+  # reference). A document of its own per call, so that one call that is NOT
+  # refused cannot make the next one look like a leak.
+  set leftovers {}
+  foreach call {
+    {field text "a.b" -rect {20 40 80 8} -tooltip x}
+    {field text "a\nb" -rect {20 40 80 8} -tooltip x}
+    {field text ok -rect {20 40 0 8} -tooltip x}
+    {field text ok -rect {20 40 NaN 8} -tooltip x}
+    {field text ok -rect {20 40 80 8} -tooltip x -size NaN}
+    {field text ok -rect {20 40 80 8} -tooltip x -family nosuchface}
+    {field text ok -rect {20 40 80 8} -tooltip x -family helvetica -value "П"}
+    {field text ok -rect {20 40 80 8} -tooltip x -maxlen 0}
+    {field listbox ok -rect {20 40 80 8} -tooltip x -options {}}
+    {field combo ok -rect {20 40 80 8} -tooltip x -options {a b} -multi 1}
+    {field radio ok -tooltip x -buttons {{yes {20 40 5 5}} {yes {20 50 5 5}}}}
+    {field check ok -rect {20 40 5 5} -tooltip x -mark bogus}
+    {field button ok -rect {20 40 30 8} -tooltip x -caption Go -action bogus}
+  } {
+    set doc [fieldTaggedDoc]
+    set before [$doc state structure]
+    if {![catch "\$doc $call"]} {
+      lappend leftovers [list "not refused" $call]
+      $doc destroy
+      continue
+    }
+    if {[$doc state structure] ne $before} {
+      lappend leftovers [list "element left" $call \
+          [llength [$doc state structure]]]
+    }
+    if {[$doc field list] ne {}} {
+      lappend leftovers [list "field left" $call]
+    }
+    $doc destroy
+  }
+  set leftovers
+} -result {}
+
+test field-8.9 {the document a refusal was caught in still writes, and passes ua1} -constraints {haveTdom haveFieldFace verapdf} -body {
+  set doc [fieldTaggedDoc]
+  $doc ua -part 1
+  catch {$doc field text bad -rect {20 20 0 8} -tooltip x}
+  catch {$doc field listbox bad -rect {20 20 80 8} -tooltip x -options {}}
+  $doc field text customer -rect {20 40 80 8} -tooltip "Your name" \
+      -contents "Your name"
+  set path [::tclpdfTest::scratch field-8-9.pdf]
+  $doc write $path
+  set forms [llength [fieldElements $doc Form]]
+  set report [::tclpdfTest::verapdf $path ua1]
+  file delete $path
+  $doc destroy
+  list $forms $report
+} -result {1 ok}
+
+test field-8.10 {a label script that fails takes its Form element with it} -constraints {haveTdom haveFieldFace} -body {
+  # The one refusal that cannot stand before [FieldStructureOpen], because it
+  # is the caller's own script: the Form and its Lbl are already open when it
+  # raises. It used to leave "#0 Form kids=1 | #1 Lbl kids=0" behind - a Form
+  # without the object reference ISO 32000-2, Table 368 requires of it, which
+  # ISO 14289-1, 7.18.4 and veraPDF both take for a described widget (round
+  # 8, structure V1). [StructureSnapshot]/[StructureRollback] are
+  # structure.tcl's, and the snapshot is taken before the OUTERMOST open.
+  #
+  # -label is a 2.0 feature (Table 368), so this is a 2.0 document.
+  set ::fieldLabelDoc [tclpdf new -unit mm -version 2.0]
+  $::fieldLabelDoc tagged 1
+  $::fieldLabelDoc language en-GB
+  $::fieldLabelDoc info Title "A form"
+  $::fieldLabelDoc page add
+  $::fieldLabelDoc font embed face $::fieldFace
+  $::fieldLabelDoc font -family face -size 10
+  $::fieldLabelDoc field default -family face -size 10
+  set before [$::fieldLabelDoc state structure]
+  set refused [catch {
+    $::fieldLabelDoc field text name -rect {20 40 60 8} -tooltip Name \
+        -contents Name -label {$::fieldLabelDoc text "L:" -at {20 NaN}}
+  }]
+  set after [$::fieldLabelDoc state structure]
+  set fields [$::fieldLabelDoc field list]
+  # And the document still writes, with one Form for the one field there is.
+  $::fieldLabelDoc ua -part 2
+  $::fieldLabelDoc field text ok -rect {20 80 60 8} -tooltip Ok -contents Ok
+  set path [::tclpdfTest::scratch field-8-10.pdf]
+  $::fieldLabelDoc write $path
+  set forms [llength [fieldElements $::fieldLabelDoc Form]]
+  set report [::tclpdfTest::verapdf $path ua2]
+  file delete $path
+  $::fieldLabelDoc destroy
+  list $refused [expr {$before eq $after}] $fields $forms $report
+} -result {1 1 {} 1 ok}
+
+test field-8.11 {a label that already drew keeps its element, and says so} -constraints {haveTdom haveFieldFace} -body {
+  # The other half of the transaction: [StructureRollback] declines where the
+  # bracket has been PAID FOR - an MCID in the content stream names the Lbl,
+  # and a tree without its half of a mark is worse than a tree with an
+  # element too many. structure.tcl draws that line, in commitKeys.
+  set ::fieldLabelDoc [tclpdf new -unit mm -version 2.0]
+  $::fieldLabelDoc tagged 1
+  $::fieldLabelDoc page add
+  $::fieldLabelDoc font embed face $::fieldFace
+  $::fieldLabelDoc font -family face -size 10
+  $::fieldLabelDoc field default -family face -size 10
+  set before [llength [$::fieldLabelDoc state structure]]
+  set refused [catch {
+    $::fieldLabelDoc field text name -rect {20 40 60 8} -tooltip Name \
+        -contents Name -label {
+          $::fieldLabelDoc text "L:" -at {20 38}
+          error "the script's own"
+        }
+  }]
+  set after [llength [$::fieldLabelDoc state structure]]
+  $::fieldLabelDoc destroy
+  list $refused $before $after
+} -result {1 0 2}
+
 
 cleanupTests

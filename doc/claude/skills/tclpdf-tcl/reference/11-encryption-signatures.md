@@ -14,8 +14,9 @@ package require tclpdf
 # document has to be one - the version is not raised behind the caller's back.
 set doc [tclpdf new -unit mm -version 2.0]
 
-# ENCRYPT COMES FIRST: before the first page, the first line of text, before
-# [language] and [link], which build their entries at the call. A stream
+# ENCRYPT COMES BEFORE ANYTHING IS DRAWN, and before [language] and [link],
+# which build their entries at the call. An empty [page add] may already
+# stand - the refusal is about CONTENT, not about the page - but a stream
 # written before the cipher was installed would stay in the clear inside a
 # file whose /Encrypt says otherwise, and no tool complains about that.
 #
@@ -51,23 +52,40 @@ $doc destroy
 # something, or both passwords would be empty and every reader would open the
 # file as its owner, with every permission granted.
 set doc [tclpdf new -unit mm -version 2.0]
-if {[catch {$doc encrypt -user {}} message]} { puts "no owner: $message" }
+if {[catch {$doc encrypt -user {}} message]} {
+    puts "no owner: $message"
+} else { puts "no owner: NOT REFUSED" }
 $doc destroy
 
 set doc [tclpdf new -unit mm]                       ;# 1.7
-if {[catch {$doc encrypt -user {} -owner secret} message]} { puts "version: $message" }
+if {[catch {$doc encrypt -user {} -owner secret} message]} {
+    puts "version: $message"
+} else { puts "encrypt in a 1.7 document: NOT REFUSED" }
+$doc destroy
+
+# "Too late" means CONTENT, and the difference is worth measuring rather than
+# guessing: three empty pages are not too late, one line of text is.
+set doc [tclpdf new -unit mm -version 2.0]
+$doc page add
+$doc page add
+$doc encrypt -user {} -owner secret
+puts "after two empty pages: taken, method [dict get [$doc encrypt state] method]"
 $doc destroy
 
 set doc [tclpdf new -unit mm -version 2.0]
 $doc page add
 $doc font -family helvetica -size 10
 $doc text "already drawn" -at {20 20}
-if {[catch {$doc encrypt -user {} -owner secret} message]} { puts "too late: $message" }
+if {[catch {$doc encrypt -user {} -owner secret} message options]} {
+    puts "too late: [dict get $options -errorcode]"
+} else { puts "encrypt after content: NOT REFUSED" }
 $doc destroy
 
 set doc [tclpdf new -unit mm -version 2.0]
 $doc encrypt -user {} -owner secret
-if {[catch {$doc pdfa -part 3} message]} { puts "pdfa: $message" }
+if {[catch {$doc pdfa -part 3} message]} {
+    puts "pdfa: $message"
+} else { puts "pdfa on an encrypted document: NOT REFUSED" }
 $doc destroy
 ```
 
@@ -143,7 +161,9 @@ puts "signed: [dict get $state signed], /ByteRange [dict get $state byteRange],\
 
 # A signed document has to go to a FILE: /ByteRange is computed from the
 # finished file, and a channel cannot be read back.
-if {[catch {$doc writeChannel stdout} message]} { puts "channel: $message" }
+if {[catch {$doc writeChannel stdout} message]} {
+    puts "channel: $message"
+} else { puts "writeChannel on a signed document: NOT REFUSED" }
 $doc destroy
 ```
 
@@ -224,12 +244,151 @@ if {$signing} { file delete -force $refDir }
 
 What a visible appearance **cannot** show is the time of signing, unless the signing happens at the write: in the two-stage way the file is signed later, possibly on another machine, so a picture naming a time there would be a picture of something that has not happened. Say in the appearance where the time is to be found instead.
 
+### A signature in a tagged document, and under PDF/UA
+
+A signature field is a form field, and a tagged document treats it as one - out of the same code that tags `field`. The rectangle decides which of the two cases it is, and the claim does not: **`ua` may stand before the `sign` call or after it**, and a tree that depended on the order would make the two orders write two different files. Example `08.05-signature-accessible.tcl` in the source tree is this snippet at full length.
+
+```tcl
+set doc [tclpdf new -unit mm]
+$doc tagged 1                       ;# first, as always
+$doc info Title "Signed notice, accessible"   ;# ua insists on both
+$doc language en-GB
+$doc page add
+# PDF/UA rules out the standard 14 whole, the appearance stream included, so
+# the faces of the drawing below are embedded ones.
+$doc font embed face $ttf
+$doc font embed faceBold $ttfBold
+$doc font -family faceBold -size 15
+$doc text "A signature in the reading order" -at {20 20} -tag H1
+$doc font -family face -size 10
+$doc text "The field below stands in the structure tree between these\
+    paragraphs: inside a Form element, joined to its widget annotation by an\
+    object reference, with an accessible name and a description of its own." \
+    -at {20 30} -width 170
+
+# The appearance, as above: a form XObject the caller draws, the size of the
+# -rect it is shown in.
+$doc form create signatureBox -size {70 26} -script {
+    $doc rect -at {0 0} -size {70 26} -stroke {0.30 0.30 0.40} -width 0.3
+    $doc font -family face -size 7 -color {0.32 0.32 0.36}
+    $doc text "E. Mustermann - specimen" -at {4 8}
+}
+
+$doc ua 1                           ;# before or after the sign call - it decides nothing
+
+# WHERE THIS CALL STANDS IS WHERE THE FIELD STANDS IN THE TREE: the Form
+# element opens here, so a reader reaches the field after the text explaining
+# it. Two options fill in what a reader says out loud, and they answer two
+# different questions:
+#   -tooltip   /TU, the accessible name of the FIELD (ISO 32000-2, 14.9.3) -
+#              what is announced instead of the field name, since "Signature1"
+#              tells a listener nothing. Part 1 and part 2 both ask for it.
+#   -contents  /Contents, the description of that one WIDGET (ISO 14289-2,
+#              8.10.2.3) - what the mark on the page is. Part 2 asks for it.
+# Both are written wherever they are given, claim or no claim; under a claim a
+# signature without them is refused at the WRITE, in the same sentence a text
+# field without them is, because it is the same check.
+$doc sign -field Signature1 -page 0 -rect {120 50 70 26} \
+    -appearance signatureBox \
+    -tooltip "Signature of E. Mustermann, issuing officer" \
+    -contents "Specimen signature field, signed with a test certificate"
+$doc write [file join $out ref-11-signature-ua.pdf]
+set state [$doc sign state]
+puts "visible under ua: /TU \"[dict get $state tooltip]\",\
+    /Contents \"[dict get $state contents]\""
+$doc destroy
+
+# The four things this is about, looked for in the BYTES: a document asked
+# about itself agrees with every mistake it makes.
+set channel [open [file join $out ref-11-signature-ua.pdf] rb]
+set data [read $channel]
+close $channel
+foreach {pattern what} {
+    {/S /Form}              "the Form structure element (ISO 14289-1, 7.18.4)"
+    {/Type /OBJR}           "the object reference to the widget (14.7.5.4)"
+    {/StructParent [0-9]+}  "the widget's way back into the parent tree"
+    {/Tabs /S}              "the page's tab order (7.18.3)"
+} {
+    puts "  [expr {[regexp $pattern $data] ? "yes" : "NO "}]  $what"
+}
+
+# THE INVISIBLE SIGNATURE IS THE OPPOSITE CASE, and deliberately: ISO 14289-2,
+# 8.9.2.4.13 makes a widget annotation of zero height and width an artifact,
+# 8.10.1 exempts an artifact from the Form element, and 8.10.3.5 says it of
+# the signature field by name. So the default signature - /Rect [0 0 0 0] -
+# carries no /StructParent, sits in no element, and is asked for NO
+# description at all: the call below has neither -tooltip nor -contents and
+# the claim is written all the same.
+set doc [tclpdf new -unit mm]
+$doc tagged 1
+$doc info Title "Signed notice, invisible signature"
+$doc language en-GB
+$doc page add
+$doc font embed face $ttf
+$doc font -family face -size 10
+$doc text "The signature over this document is invisible, and PDF/UA asks it\
+    nothing." -at {20 20} -width 170 -tag H1
+$doc ua 1
+$doc sign -field Signature1 -reason "Approved"
+$doc write [file join $out ref-11-signature-ua-invisible.pdf]
+$doc destroy
+puts "invisible under ua: written, with no description asked for"
+
+# And what the SAME claim costs a VISIBLE signature that says nothing: the
+# write is refused, naming the field, and no file is left behind.
+set doc [tclpdf new -unit mm]
+$doc tagged 1
+$doc info Title "Refused"
+$doc language en-GB
+$doc page add
+$doc font embed face $ttf
+$doc font -family face -size 10
+$doc text "Head" -at {20 20} -tag H1
+$doc form create box -size {70 26} -script { $doc rect -at {0 0} -size {70 26} -stroke black -width 0.3 }
+$doc ua 1
+$doc sign -field Signature1 -page 0 -rect {120 50 70 26} -appearance box
+if {[catch {$doc write [file join $out ref-11-ua-refused.pdf]} message options]} {
+    puts "a visible signature with no -tooltip: [dict get $options -errorcode]"
+} else {
+    puts "a visible signature with no -tooltip: NOT REFUSED"
+}
+puts "file left behind: [file exists [file join $out ref-11-ua-refused.pdf]]"
+$doc destroy
+```
+
+**`::tclpdf::sign add` refuses a file that claims PDF/UA**, with `TCLPDF SIGN STATE ua`, before the update session is opened and therefore before a byte is written - and it refuses an already certified one with `TCLPDF SIGN STATE certified`. An incremental update can only add objects and replace whole ones, so hanging a widget in the tree of a file this package never saw would mean rewriting that file's page, parent tree, enclosing element and structure tree root. The way to a signed PDF/UA document is the snippet above - `sign` on the document as it is written - or that document handed to `::tclpdf::sign digest` and `::tclpdf::sign embed`, which touch neither the tree nor the pages.
+
+```tcl
+# A finished PDF/UA-1 file that carries no signature at all, so that the code
+# that answers is the one being shown - a file with a signature WAITING in it
+# is refused earlier, under TCLPDF SIGN STATE waiting.
+set doc [tclpdf new -unit mm]
+$doc tagged 1
+$doc info Title "Accessible, unsigned"
+$doc language en-GB
+$doc page add
+$doc font embed face $ttf
+$doc font -family face -size 10
+$doc text "Head" -at {20 20} -tag H1
+$doc ua 1
+$doc write [file join $out ref-11-ua-unsigned.pdf]
+$doc destroy
+
+try {
+    ::tclpdf::sign add [file join $out ref-11-ua-unsigned.pdf] -field Signature2
+    puts "sign add on a PDF/UA file: NOT REFUSED"
+} trap {TCLPDF SIGN STATE} {message options} {
+    puts "sign add on a PDF/UA file: [dict get $options -errorcode]"
+}
+```
+
 ## What to know before promising anything
 
 - **`-subfilter` is the caller's choice**: `pkcs7` (`/adbe.pkcs7.detached`, the default, PDF 1.6) or `cades` (`/ETSI.CAdES.detached`, PDF 2.0). Each brings its own version floor and a document below it is refused rather than raised. The default claims less **and** has the lower floor - deliberately, since PDF/A-2 and -3 are written as 1.7 at most.
 - **`cades` is a promise about the CMS object, not a second name for it.** ETSI EN 319 142-1 puts `signing-time` at "shall not be present", and a signer writes that attribute unless told otherwise. An object carrying it is refused with `TCLPDF SIGN SIGNINGTIME`, on both ways in. pyHanko and the EU DSS library leave it out by themselves; `openssl cms -sign` needs `-no_signing_time`, which OpenSSL 3 has and the LibreSSL shipped as `/usr/bin/openssl` on macOS does not; BouncyCastle adds it unasked.
 - **A PDF/A or ZUGFeRD document may be signed** - measured: veraPDF `isCompliant true`, 0 failed checks, Mustangproject valid, the embedded invoice byte-identical to the unsigned file's.
 - **A timestamp needs nothing here**: an RFC 3161 token is an *unsigned* attribute of the CMS object, so the signer puts it there and this package never sees it as anything but bytes. Reserve enough room - such an object measured 7108 bytes against the 16384 reserved by default.
+- **A visible signature is a form field under a claim**: `-tooltip` writes its `/TU` and `-contents` its `/Contents`, `tagged 1` gives it a `Form` element and an object reference, and PDF/UA asks for the `/TU` (part 2 for the `/Contents` besides) at the write. An **invisible** one is an artifact and is asked nothing. `::tclpdf::sign add` refuses a file that claims PDF/UA (`TCLPDF SIGN STATE ua`) or is certified (`TCLPDF SIGN STATE certified`).
 - **Not there**: a document timestamp (`/DocTimeStamp`), `/DocMDP` certification, and a signature and encryption in one file.
 - A signed document is **not** byte-identical over two writes - `/M` and the CMS object carry the moment. One prepared *without* `-signer` is, and stays so until `::tclpdf::sign digest` names a time in it.
 - `::tclpdf::sign digest`, `embed` and `add` are **package commands**, not document methods: the second stage happens in another process, often on another machine and days later. A script that only embeds a signature never creates a document, so it needs `package require tclpdf::sign` of its own.

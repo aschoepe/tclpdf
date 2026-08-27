@@ -38,6 +38,24 @@ proc flowLines {stream} {
   return [llength [regexp -all -inline {Td} $stream]]
 }
 
+# How many space characters the stream DRAWS - the text of every show
+# operator, string tokens joined, spaces counted. What the appended word
+# separator of a tagged block costs is visible nowhere else: it sits inside
+# the show string of its line, or, behind a hyphen bracket, in a show of its
+# own after the EMC.
+proc flowSpaces {stream} {
+  set text {}
+  foreach line [split $stream \n] {
+    if {![string match {*Tj*} $line] && ![string match {*TJ*} $line]} {
+      continue
+    }
+    foreach token [regexp -all -inline {\((?:[^()\\]|\\.)*\)} $line] {
+      append text [string range $token 1 end-1]
+    }
+  }
+  return [regexp -all { } $text]
+}
+
 test textFlow-1.1 {a height limit draws what fits and returns the rest} -body {
   set doc [tclpdf new -unit mm]
   $doc page add
@@ -2509,5 +2527,192 @@ test textFlow-r7-8.1 {pagination costs time in proportion to the text} -body {
   list [expr {[lindex $times 1] < [lindex $times 0] * 8}] \
       [expr {[lindex $pages 1] > [lindex $pages 0] * 3}]
 } -result {1 1}
+
+# --- round 8 no. 12: no space where the break falls inside a word ----------
+
+test textFlow-r8-12.1 {a tagged line cut inside a word gets no trailing space} -body {
+  # 14.8.2.6.2 asks for the white space that would separate WORDS in a pure
+  # text representation. A line that ends in the middle of a word is not a
+  # word boundary, and the space this road appends for the reader came out
+  # after it all the same: the emergency break of "Betriebskostenabrechnung"
+  # in a narrow column extracted as "Betriebskost enabrechnu ng", and with a
+  # hyphen offer as "Betriebs kosten abrechnung" - the empty ActualText span
+  # took the hyphen away and left the space behind (measured 2026-08-27 with
+  # pdfinfo -struct-text). Counted as SPACES IN THE DRAWN TEXT, because the
+  # appended one reaches the stream two ways: inside the show string of the
+  # line, and as a show of its own behind the EMC of the hyphen bracket.
+  #
+  # The third block is the counterpart and the reason the flag is not simply
+  # "always off": a line that ends at a word boundary keeps its space, and
+  # the count there is the two spaces of the text plus the one appended.
+  set counts {}
+  foreach call {
+    {$doc text "Betriebskostenabrechnung" -at {20 20} -width 20}
+    {$doc text "Betriebskostenabrechnung" -at {20 20} -width 20 \
+        -emergencyHyphen 1}
+    {$doc text "eins zwei drei vier" -at {20 20} -width 18}
+  } {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc tagged 1
+    $doc page add
+    $doc font -family helvetica -size 9
+    eval $call
+    lappend counts [flowSpaces [::tclpdfTest::content $doc]]
+    $doc destroy
+  }
+  set counts
+} -result {0 0 3}
+
+test textFlow-r8-12.2 {an untagged block is not touched by any of it} -body {
+  # The space is written for tagged documents only, so nothing that exists
+  # today may come out with different bytes: the two spaces of the third
+  # block are the ones the caller wrote.
+  set counts {}
+  foreach call {
+    {$doc text "Betriebskostenabrechnung" -at {20 20} -width 20}
+    {$doc text "Betriebskostenabrechnung" -at {20 20} -width 20 \
+        -emergencyHyphen 1}
+    {$doc text "eins zwei drei vier" -at {20 20} -width 18}
+  } {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc font -family helvetica -size 9
+    eval $call
+    lappend counts [flowSpaces [::tclpdfTest::content $doc]]
+    $doc destroy
+  }
+  set counts
+} -result {0 0 2}
+
+test textFlow-r8-12.3 {the word comes back whole out of a tagged block} -body {
+  # The promise of the manual (:397, :401, :1180) and of example 04.04, read
+  # back with the tool that shows what a reader of the tree gets.
+  set doc [tclpdf new -unit mm]
+  $doc info Title "extraction"
+  $doc language de-DE
+  $doc tagged 1
+  $doc page add
+  $doc font -family helvetica -size 9
+  $doc text "Betriebskostenabrechnung" -at {20 20} -width 20
+  set path [::tclpdfTest::scratch flowSplit.pdf]
+  $doc write $path
+  $doc destroy
+  set text {}
+  catch {exec pdfinfo -struct-text $path} text
+  file delete $path
+  # Skipped where poppler is not installed - a missing tool is not a failure
+  # in this tree.
+  if {[string match "*couldn't execute*" $text]} {
+    return whole
+  }
+  expr {[string match "*Betriebskostenabrechnung*" $text] ? "whole" : $text}
+} -result whole
+
+# --- round 8 no. 32: the band around a shape has an end -------------------
+
+test textFlow-r8-32.1 {a shape past every page ends the walk instead of hanging} -body {
+  # The band moved down one line at a time until the shapes let it through,
+  # with no bound at all: a rectangle 1e38 high and an -avoidMargin of 1e39
+  # never came back (measured 2026-08-27, twenty second guard), and a shape
+  # 5000 mm high set the text at y = 5023 mm, off every page, in silence.
+  # Timed here, because the defect is not a wrong answer but no answer.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set began [clock milliseconds]
+  set answers {}
+  foreach call {
+    {$doc text "abc" -at {20 20} -width 100 -avoid {{rect {0 0} {300 1e38}}}}
+    {$doc text "abc" -at {20 20} -width 100 -height max \
+        -avoid {{rect {0 0} {300 1e38}}}}
+    {$doc textHeight "abc" -width 100 -at {20 20} \
+        -avoid {{rect {0 0} {300 5000}}}}
+  } {
+    lappend answers [catch $call]
+  }
+  set spent [expr {[clock milliseconds] - $began}]
+  $doc destroy
+  list $answers [expr {$spent < 5000}]
+} -result {{0 0 0} 1}
+
+test textFlow-r8-32.2 {a magnitude beyond a PDF real is refused at the call} -body {
+  # -avoidMargin and the numbers of a shape are distances of the block like
+  # -gutter, and :77 says a length beyond the range of a PDF real is refused
+  # at the call. Both were checked for finiteness only.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach call {
+    {$doc text "abc" -at {20 20} -width 100 -avoid {{rect {20 20} {5 5}}} \
+        -avoidMargin 1e39}
+    {$doc text "abc" -at {20 20} -width 100 -avoid {{rect {0 0} {300 1e39}}}}
+    {$doc text "abc" -at {20 20} -width 100 -avoid {{circle {20 20} 1e39}}}
+  } {
+    lappend codes [lrange [::tclpdfTest::refusalCode $call] 0 3]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF TEXT AVOID margin} {TCLPDF TEXT AVOID rect}\
+    {TCLPDF TEXT AVOID circle}}
+
+test textFlow-r8-32.3 {a shape that leaves room is unaffected} -body {
+  # The bound may only end a walk that has left the page - a normal wrap
+  # around a picture answers exactly as it did.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -size 10
+  set y [$doc text "Ein etwas laengerer Text der um die Form fliesst und\
+      mehrere Zeilen braucht." -at {20 20} -width 100 \
+      -avoid {{rect {20 20} {40 30}}}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [format %.2f $y] [flowLines $stream]
+} -result {28.47 2}
+
+# --- round 8 hardening: indents that leave no band, and a negative gap -----
+
+test textFlow-r8-33.1 {indents that leave no band are refused at the call} -body {
+  # A band of zero or less is not an error to the breaker: its fallback takes
+  # one unit per line whatever the width, so "-width 50 -indent 60" set 62
+  # lines of a single letter, 335 mm down the page, in silence. The measuring
+  # calls answered the same nonsense, which is why the check sits on the road
+  # both of them share.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach call {
+    {$doc text "Lorem ipsum" -at {20 20} -width 50 -indent 60}
+    {$doc text "Lorem ipsum" -at {20 20} -width 50 -indent 25 -indentRight 25}
+    {$doc text "Lorem ipsum" -at {20 20} -width 50 -firstIndent 60}
+    {$doc textLines "Lorem ipsum" -width 50 -indent 60}
+    {$doc textHeight "Lorem ipsum" -width 50 -indent 60}
+    {$doc text "Lorem ipsum" -at {20 20} -width 170 -height max -columns 2 \
+        -indent 90}
+  } {
+    lappend codes [lrange [::tclpdfTest::refusalCode $call] 0 3]
+  }
+  # A hanging indent is a negative first indent and stays welcome.
+  lappend codes [catch {$doc text "Lorem ipsum dolor sit amet" -at {20 20} \
+      -width 50 -indent 10 -firstIndent -10}]
+  $doc destroy
+  set codes
+} -result {{TCLPDF TEXT INDENT width} {TCLPDF TEXT INDENT width}\
+    {TCLPDF TEXT INDENT width} {TCLPDF TEXT INDENT width}\
+    {TCLPDF TEXT INDENT width} {TCLPDF TEXT INDENT width} 0}
+
+test textFlow-r8-33.2 {a negative paragraph spacing is refused} -body {
+  # -paragraphSpacing -20 over three paragraphs put the second at 770.8 pt
+  # and the first at 728.5: the text ran backwards up the page and
+  # overprinted itself. A gap between paragraphs is 0 or more.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set code [lrange [::tclpdfTest::refusalCode {
+    $doc text "a\n\nb" -at {20 20} -width 50 -paragraphSpacing -20
+  }] 0 3]
+  set zero [catch {$doc text "a\n\nb" -at {20 100} -width 50 \
+      -paragraphSpacing 0}]
+  $doc destroy
+  list $code $zero
+} -result {{TCLPDF TEXT ARGUMENT paragraphSpacing} 0}
 
 cleanupTests

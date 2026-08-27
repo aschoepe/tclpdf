@@ -620,6 +620,14 @@ oo::define ::tclpdf::document::document {
             32000-2, 12.7.4.2) and is not empty"
       }
     }
+    # The caption's size, through the one place that reads a measurement of a
+    # field option ([FieldSize] in field.tcl) - and the fourth caller that
+    # was missing the question altogether: NaN and Inf reached [FieldFont]
+    # and came back from [pdfObj num] as TCLPDF PDFOBJ NUMBER, the code that
+    # means "a number reached the writer", where the caller needs the one
+    # that names the option (measured 2026-08-27 with the guard test that
+    # walks every numeric option of every type).
+    my FieldSize [dict get $options size] "field button \"$name\""
     # The caption's font, settled HERE. [FieldFont] refuses a family that
     # does not resolve, registers the resource so the appearance stream and
     # the /DA name the same thing, and hands back both halves - the same
@@ -642,6 +650,7 @@ oo::define ::tclpdf::document::document {
         -label [dict get $options label] \
         -flags [::tclpdf::field flags \
             [my FieldButtonFlagNames $options Pushbutton]] \
+        -font [dict get $font alias] \
         -data [dict merge $options [dict create \
             da [dict get $font da] size [dict get $font size] \
             family [dict get $font family] style [dict get $font style] \
@@ -753,21 +762,30 @@ oo::define ::tclpdf::document::document {
           and it is drawn as a path rather than set in ZapfDingbats, so the\
           four are all there is"
     }
+    # [option finite] rather than [string is double]: NaN and Inf are doubles
+    # to Tcl and pass that test, NaN then compares false against every bound
+    # and Inf passes the lower one - so both were taken at the call and died
+    # at the write, inside an appearance stream and in Tcl's own words
+    # ("can't use non-numeric floating-point value as operand of \"-\"",
+    # ARITH DOMAIN), which leaves the document unwritable for good. Measured
+    # 2026-08-27 at -markSize and -borderWidth on a check box. The round-7
+    # repair reached fieldText.tcl and stopped there; this is the same
+    # predicate, and fieldChoice.tcl has it since the same day.
     set markSize [dict get $options markSize]
     if {$markSize ne {}
-        && (![string is double -strict $markSize] || $markSize <= 0)} {
+        && (![::tclpdf::option finite $markSize] || $markSize <= 0)} {
       return -code error -errorcode [list TCLPDF FIELD BUTTON MARKSIZE $markSize] \
-          "tclpdf: -markSize of $what is the size of the mark in the unit of\
-          the document and is above zero, not \"$markSize\". Leave it out for\
-          a mark that fits itself to the box"
+          "tclpdf: -markSize of $what is the finite size of the mark in the\
+          unit of the document and is above zero, not \"$markSize\". Leave it\
+          out for a mark that fits itself to the box"
     }
     set borderWidth [dict get $options borderWidth]
-    if {![string is double -strict $borderWidth] || $borderWidth < 0} {
+    if {![::tclpdf::option finite $borderWidth] || $borderWidth < 0} {
       return -code error -errorcode \
           [list TCLPDF FIELD BUTTON BORDERWIDTH $borderWidth] \
-          "tclpdf: -borderWidth of $what is a line width of 0 or more in the\
-          unit of the document, not \"$borderWidth\". Use 0 for a field with\
-          no frame"
+          "tclpdf: -borderWidth of $what is a finite line width of 0 or more\
+          in the unit of the document, not \"$borderWidth\". Use 0 for a\
+          field with no frame"
     }
     foreach which {color border background} {
       if {![dict exists $options $which] || [dict get $options $which] eq {}} continue
@@ -1026,4 +1044,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldButton 1.1
+package provide tclpdf::fieldButton 1.2

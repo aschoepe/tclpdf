@@ -470,13 +470,28 @@ oo::class create ::tclpdf::update::Session {
   # An indirect reference, checked: a reference to a number that neither the
   # file nor this update defines produces a file readers open and render with
   # pieces missing.
+  #
+  # AND WITH THE GENERATION THE FILE GIVES IT. A reference names a number
+  # and a generation, and both are the object's identity (7.3.10): "7 0 R"
+  # written for an object the file carries as "7 1 obj" resolves to the null
+  # object, so an /Annots array built with it loses the annotation without a
+  # word - qpdf shows "[ null 10 0 R ]" and reports no error. What this
+  # update ADDS is at generation 0 (nothing here ever raises one), so the
+  # question is only asked of the file.
   method ref {number} {
     if {![my defines $number]} {
       return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
           "tclpdf: no such object: $number - neither\
           \"[file tail $tclpdfPath]\" nor this update defines it"
     }
-    return [::tclpdf::pdfObj ref $number]
+    if {[dict exists $tclpdfBodies $number]} {
+      return [::tclpdf::pdfObj ref $number]
+    }
+    set generation [::tclpdf::importRead::Generation tclpdfReader $number]
+    if {$generation eq {}} {
+      set generation 0
+    }
+    return [::tclpdf::pdfObj ref $number $generation]
   }
 
   # The body of an object as PDF syntax: the one this update holds, or - for
@@ -776,7 +791,14 @@ oo::class create ::tclpdf::update::Session {
           header at offset $offset, where the cross-reference puts object\
           $number"
     }
-    if {$found != $number} {
+    # Both numbers through the reader's [Decimal], which is where a written
+    # number becomes a number this package works with: "0010 0 obj" is
+    # object ten (7.3.3), and [expr] read the leading zero as octal under
+    # 8.6 - the same file was then refused as "the object there is 0010"
+    # under one interpreter and replaced under the other.
+    set found [::tclpdf::importRead::Decimal $found]
+    set generation [::tclpdf::importRead::Decimal $generation]
+    if {$found ne [::tclpdf::importRead::Decimal $number]} {
       return -code error -errorcode [list TCLPDF UPDATE FOREIGN $number] \
           "tclpdf: \"[file tail $tclpdfPath]\": the\
           cross-reference puts object $number at offset $offset, and the\
@@ -793,4 +815,4 @@ oo::class create ::tclpdf::update::Session {
   }
 }
 
-package provide tclpdf::update 1.3
+package provide tclpdf::update 1.4

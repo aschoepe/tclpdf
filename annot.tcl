@@ -160,6 +160,42 @@ namespace eval ::tclpdf::annot {
     tclpdf::annotMark  AnnotMarkup
     tclpdf::annotShape AnnotShape
   }
+
+  # WHICH ENTRY OF AN ANNOTATION OR A FORM FIELD ENTERED THE FORMAT WHEN.
+  # One table, asked through [AnnotKeyVersion], for every key that is younger
+  # than the annotation it sits in - and therefore younger than the document
+  # a caller may have pinned with -version.
+  #
+  # WHY A TABLE AND NOT A LINE PER KEY. The kinds themselves have their floor
+  # at the call that writes them ("annot stamp" is 1.3, "annot note" 1.1) and
+  # that is one number per kind; a KEY is different, because the same key is
+  # written from several places and its floor is a fact about the format
+  # rather than about this package. Seven of them were written without one -
+  # /IC into a 1.3 file, /CreationDate into a 1.3 file, four field flags and
+  # /I into a 1.2 file, /TU into a 1.2 file - each a file whose header
+  # promises less than it holds (ISO 32000-2, 7.5.2: the header names the
+  # version "to which the file conforms"). Written out seven times, the eighth
+  # key would have been the eighth omission.
+  #
+  # The floors are read from the tables of ISO 32000-2 that carry the key,
+  # named beside each one. Asked BEFORE anything of the annotation or the
+  # field is written, like every other version floor of this package.
+  variable since {
+    IC {1.4 {-fill of a geometry annotation, which writes /IC (ISO 32000-2,
+        Table 176 for a line, Table 177 for a square or a circle)}}
+    CreationDate {1.5 {-date of an annotation, which writes /CreationDate
+        beside /M (ISO 32000-2, Table 172)}}
+    TU {1.3 {-tooltip of a form field, which writes /TU (ISO 32000-2,
+        Table 228)}}
+    I {1.4 {the selection of a choice field that /V cannot say on its own,
+        which writes /I (ISO 32000-2, Table 234)}}
+    MultiSelect {1.4 {-multi of a list box, the MultiSelect flag (ISO 32000-2,
+        Table 233)}}
+    CommitOnSelChange {1.5 {-commit of a choice field, the CommitOnSelChange
+        flag (ISO 32000-2, Table 233)}}
+    DoNotSpellCheck {1.4 {-spellcheck 0 of a choice field, the DoNotSpellCheck
+        flag (ISO 32000-2, Table 233)}}
+  }
 }
 
 oo::define ::tclpdf::document::document {
@@ -174,6 +210,7 @@ oo::define ::tclpdf::document::document {
   # Answers the object number of the annotation, as [link] does.
   method annot {kind args} {
     variable ::tclpdf::annot::kinds
+    my AnnotPlace "annot $kind"
     switch -- $kind {
       note {return [my AnnotNote {*}$args]}
       stamp {return [my AnnotStamp {*}$args]}
@@ -200,6 +237,74 @@ oo::define ::tclpdf::document::document {
             annotations too and both are topics of their own"
       }
     }
+  }
+
+  # WHERE AN ANNOTATION MAY BE MADE AT ALL, asked before the kind is even
+  # looked up - the first line of [annot], and of nothing else in this file.
+  #
+  # AN ANNOTATION BELONGS TO A PAGE. ISO 32000-2, 12.5.2: /Rect is "the
+  # annotation rectangle, defining the location of the annotation on the page
+  # in default user space units", and the page reaches its annotations
+  # through /Annots and through nothing else - a form XObject and a tiling
+  # pattern have no such entry and can hold none.
+  #
+  # SO A CALL INSIDE A FORM SCRIPT MEANS TWO THINGS AT ONCE and neither of
+  # them is what it says. The drawing methods of this package are mirrored
+  # against the form's own height while the script runs (see [FormBegin]), so
+  # -at names a point in the FORM; the annotation, having nowhere else to go,
+  # was hung on the page that happened to be current, with a /Rect made of
+  # the form's coordinates read as the page's. Measured 2026-08-27 with a
+  # 50 by 20 mm form placed at {100 100}: the square annotation came out at
+  # the lower left corner of the page while the form sat in the middle. A
+  # second [form place] did not double it either - the form is drawn twice
+  # and the remark exists once, which is the second half of the same
+  # mistake.
+  #
+  # REFUSED, AND BEFORE ANYTHING HAPPENS. The way out is one line further
+  # out: place the form, then make the annotation on the page over it, where
+  # the coordinates mean what the caller wrote. link.tcl refuses the same
+  # call for the same reason and in its own words.
+  #
+  # ASKED OF [canvas id] rather than of the canvas depth: the identity of the
+  # stream being written is what says whether this is a page at all
+  # ({page <index>}) or a stream of its own ({stream <serial>}), and it is
+  # empty in a document that has no page yet - which is the refusal one line
+  # further on and not this one.
+  method AnnotPlace {what} {
+    if {[lindex [my canvas id] 0] ne "stream"} {
+      return
+    }
+    return -code error -errorcode {TCLPDF ANNOT PLACE form} \
+        "tclpdf: $what cannot be placed inside a form or a pattern - an\
+        annotation belongs to a page and its /Rect is in that page's default\
+        user space (ISO 32000-2, 12.5.2), while the script of \[\$doc form\
+        create\] draws in the form's own. Place it on the page after \[\$doc\
+        form place\], where -at means what it says"
+  }
+
+  # THE VERSION FLOOR OF ONE KEY, from the table at the head of this file.
+  # Called by whoever is about to write the key, and before it is written:
+  # annotShape for /IC, this file for /CreationDate, field.tcl and
+  # fieldChoice.tcl for /TU, /I and the three choice flags.
+  #
+  # The refusal is [RequireVersion]'s - TCLPDF VERSION <floor>, the code every
+  # version refusal of this package carries - and the feature it names is the
+  # OPTION the caller wrote, not the key, because the option is what has to
+  # go or the document has to be raised.
+  #
+  # An unknown key is refused rather than waved through: a key silently
+  # exempt from its own floor is exactly the defect this table exists to
+  # close, and a misspelling here would be one.
+  method AnnotKeyVersion {key} {
+    variable ::tclpdf::annot::since
+    if {![dict exists $since $key]} {
+      return -code error -errorcode [list TCLPDF ANNOT VERSION $key] \
+          "tclpdf: no version floor is recorded for the annotation key\
+          \"$key\" - known are: [join [dict keys $since] {, }]"
+    }
+    lassign [dict get $since $key] version feature
+    my RequireVersion $version [regsub -all {\s+} $feature { }]
+    return
   }
 
   # -- the note (12.5.6.4) --------------------------------------------------
@@ -396,10 +501,25 @@ oo::define ::tclpdf::document::document {
     }
     lassign [my coords $left [expr {$top + $height}]] x0 y0
     lassign [my coords [expr {$left + $width}] $top] x1 y1
+    set corners [lmap number [list $x0 $y0 $x1 $y1] {::tclpdf::pdfObj num $number}]
+    # AND A RECTANGLE THAT IS STILL THERE ONCE IT IS WRITTEN. The check above
+    # reads the CALLER'S numbers; a PDF real is written with five decimals,
+    # so a size that is positive but smaller than that becomes the empty
+    # rectangle the check just refused - "annot square -size {1e-9 1e-9}" was
+    # taken and wrote /Rect [56.69 787.28 56.69 787.28] (measured
+    # 2026-08-27), an annotation no reader shows and no validator objects to.
+    # The same class as a /BS /W that rounds to zero, and the same rule: where
+    # the WRITTEN value is what counts, the written value is what is checked.
+    if {[lindex $corners 0] eq [lindex $corners 2]
+        || [lindex $corners 1] eq [lindex $corners 3]} {
+      return -code error -errorcode [list TCLPDF ANNOT RECT EMPTY $size] \
+          "tclpdf: -size of $context is {$size}, which comes out as the empty\
+          rectangle \[[join $corners { }]\] once it is written - a PDF real\
+          carries five decimals (ISO 32000-1, Annex C.2), and an annotation\
+          of no area is one no reader shows"
+    }
     return [dict create left $left top $top width $width height $height \
-        array [::tclpdf::pdfObj arr [list \
-            [::tclpdf::pdfObj num $x0] [::tclpdf::pdfObj num $y0] \
-            [::tclpdf::pdfObj num $x1] [::tclpdf::pdfObj num $y1]]]]
+        array [::tclpdf::pdfObj arr $corners]]
   }
 
   # Build the dictionary, write it, hang it in the tree, and remember what
@@ -482,6 +602,9 @@ oo::define ::tclpdf::document::document {
     set stamp {}
     if {[dict get $options date] ne {}} {
       set stamp [my AnnotDate [dict get $options date]]
+      # /M is 1.1 and needs nothing beyond what an annotation already is;
+      # /CreationDate, written from the same option, came in with 1.5.
+      my AnnotKeyVersion CreationDate
     }
     set appearance {}
     if {[dict get $options appearance] ne {}} {
@@ -831,4 +954,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annot 1.2
+package provide tclpdf::annot 1.3

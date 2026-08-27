@@ -994,4 +994,148 @@ test page-distance-9.8 {the unit is a factor, so the converted length is asked t
   list [lrange $mm 0 2] [lindex $mm 3] $pt
 } -result {{TCLPDF OPTION NUMBER} {a length in points} 0}
 
+# --- the transformation in force (14.8.5.4.3) -------------------------------
+#
+# The CTM is kept so that the three answers stated in DEFAULT user space - a
+# Figure's /BBox, a link's /Rect, the box a placement hands back - can be
+# worked out under an open [transform]. Nothing in a file contradicts a wrong
+# one, which is why it needs measuring here.
+
+test page-ctm-12.1 {a document that never transformed anything sits at the identity} -body {
+  set doc [tclpdf new]
+  $doc page add
+  set answer [$doc ctm]
+  $doc destroy
+  set answer
+} -result {1 0 0 1 0 0}
+
+test page-ctm-12.2 {transform concatenates it, restore takes it back} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc save
+  $doc transform -translate {50 0}
+  set inside [$doc ctm]
+  $doc transform -translate {10 0}
+  set twice [$doc ctm]
+  $doc restore
+  set after [$doc ctm]
+  $doc destroy
+  # 50 mm is 141.73228 pt, and the second transform adds 10 mm to it: "cm"
+  # concatenates (8.4.4), it does not replace.
+  list [lrange $inside 0 3] [format %.5f [lindex $inside 4]] \
+      [format %.5f [lindex $twice 4]] $after
+} -result {{1 0 0 1} 141.73228 170.07874 {1 0 0 1 0 0}}
+
+test page-ctm-12.3 {a form is a space of its own and starts at the identity} -body {
+  # 8.10.1: the form's stream is its own; the CTM of the page it is later
+  # placed on is none of its business, and the placement matrix carries that.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -translate {50 0}
+  set inside {}
+  $doc form create f -size {20 10} -script {
+    set ::tclpdfTestCtm [$doc ctm]
+    $doc rect -at {0 0} -size {20 10} -fill blue
+  }
+  set inside $::tclpdfTestCtm
+  unset ::tclpdfTestCtm
+  set outside [$doc ctm]
+  $doc destroy
+  list $inside [format %.5f [lindex $outside 4]]
+} -result {{1 0 0 1 0 0} 141.73228}
+
+test page-ctm-12.4 {a refused transform leaves the record alone} -body {
+  # The record is written last, past every refusal - a transform that was
+  # turned away has written no "cm" either.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -translate {50 0}
+  set before [$doc ctm]
+  set code [catch {$doc transform -skew {45 45}}]
+  set after [$doc ctm]
+  $doc destroy
+  list $code [expr {$before eq $after}]
+} -result {1 1}
+
+test page-ctmbox-12.5 {a box under the identity comes back untouched} -body {
+  # Not "equal to five decimals": the same numbers. Millimetres to points and
+  # back is a multiplication and a division, and a box that came out
+  # 39.99999999999999 wide where nothing was transformed would be a change
+  # nobody asked for.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set answer [$doc ctmBox {10 20 40 15}]
+  $doc destroy
+  set answer
+} -result {10 20 40 15}
+
+test page-ctmbox-12.6 {and under a translation it moves with the drawing} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -translate {50 0}
+  set answer [$doc ctmBox {10 20 40 15}]
+  $doc destroy
+  lmap value $answer {format %.5f $value}
+} -result {60.00000 20.00000 40.00000 15.00000}
+
+test page-ctmbox-12.7 {a turned box answers the upright hull of its corners} -body {
+  # 14.8.5.4.3 asks for "the rectangle that completely encloses" the visible
+  # content - for a turned rectangle that is the box around its four corners,
+  # which has no error term. The turn is counter-clockwise in PDF space and
+  # therefore clockwise as the caller counts, y running downwards: the 40 mm
+  # side goes UP the page and the box ends above its own corner.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc transform -at {10 20} -rotate 90
+  set answer [$doc ctmBox {10 20 40 15}]
+  $doc destroy
+  lmap value $answer {format %.5f $value}
+} -result {10.00000 -20.00000 15.00000 40.00000}
+
+test page-add-12.8 {page add inside a form script is refused} -body {
+  # The script fills a content stream of its own and is on no page: the call
+  # was accepted until 2026-08-27 and left the document with a second, empty
+  # page as the current one while the drawing went on into the form. [layer
+  # draw] has refused exactly this since it was built.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set code {}
+  catch {$doc form create f -size {10 10} -script {
+    $doc rect -at {0 0} -size {5 5} -fill red
+    $doc page add
+  }} message options
+  set code [dict get $options -errorcode]
+  set pages [$doc page count]
+  set forms [$doc form names]
+  $doc destroy
+  list $code $pages $forms
+} -result {{TCLPDF PAGE CANVAS add} 1 {}}
+
+test page-add-12.9 {and inside a tiling pattern script too} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  catch {$doc pattern create p -size {5 5} -script {$doc page add}} \
+      message options
+  set code [dict get $options -errorcode]
+  set pages [$doc page count]
+  $doc destroy
+  list $code $pages
+} -result {{TCLPDF PAGE CANVAS add} 1}
+
+test page-above-12.10 {a length that reaches the file as zero is named as such} -body {
+  # [aboveZero] is the shared refusal of the rounding class (Nr. 65-68 of the
+  # eighth review). It answers about the FILE and takes the caller's own
+  # error code, so a caller still catches "form" or "pattern".
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc aboveZero 0.000001 "the width of x" \
+      {TCLPDF DEMO ARGUMENT size}}]
+  lappend out [$doc aboveZero 0.00001 "the width of x" {TCLPDF DEMO ARGUMENT size}]
+  catch {$doc aboveZero 0.000001 "the width of x" {TCLPDF DEMO ARGUMENT size}} \
+      message
+  $doc destroy
+  lappend out [string match {*0 in the file*} $message]
+} -result {{TCLPDF DEMO ARGUMENT size} 0.00001 1}
+
 cleanupTests

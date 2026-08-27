@@ -42,6 +42,10 @@
 # from a test CA that is thrown away when this script ends, so every reader
 # will say the issuer is not trusted, and that is the right answer.
 #
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
 
 set here [file dirname [file normalize [info script]]]
 lappend auto_path [file dirname $here]

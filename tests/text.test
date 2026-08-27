@@ -3477,4 +3477,34 @@ test text-r7-6.1 {a cursive offset is not an anchoring, and does not join two cl
   list $plain $cursive $answer
 } -result {{0 1 0} 0 {0 0 0}}
 
+test text-r8-6.2 {a glyph with no character of its own joins the cluster before it} \
+    -constraints haveFace -body {
+    # A Multiple substitution gives the characters to its FIRST output and
+    # none to the rest ([gsubApply MultipleAt]). Noto Nastaliq Urdu writes
+    # such an output after every initial form - "sp0", advance 0, no anchor,
+    # no character - and the dots of the letter follow it. Read as a letter,
+    # sp0 opened a piece of its own, the dots joined THAT piece, and
+    # [TextCluster] drew them before their base: measured over 86 Urdu words
+    # against hb-shape, 46 stood more than two font units out, most of them a
+    # whole letter width.
+    #
+    # NO SUCH FACE IS IN THE TREE, so the run is handed in: glyph 689 is
+    # DejaVu's combining grave, which has an advance of 0, and here it stands
+    # without characters, as the second output of a substitution would.
+    #
+    # THE ADVANCE IS STILL ASKED FOR. A decomposition into two SPACING glyphs
+    # leaves the second one without characters too, and that one is a letter
+    # of its own: glyph 70 with its own advance stays a piece.
+    set doc [tclpdf new -unit pt]
+    $doc font embed dv $::textFace
+    $doc page add
+    oo::objdefine $doc export TextAttached
+    set spacer [list [list 68 97] [list 689 {}] [list 70 99]]
+    set letter [list [list 68 97] [list 70 {}] [list 71 99]]
+    set answer [list [$doc TextAttached dv $spacer {}] \
+        [$doc TextAttached dv $letter {}]]
+    $doc destroy
+    set answer
+} -result {{0 1 0} {0 0 0}}
+
 cleanupTests

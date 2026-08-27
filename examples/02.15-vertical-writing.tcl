@@ -34,11 +34,18 @@
 # WHAT THIS DOES NOT DO, said here rather than left to be discovered. It sets
 # ONE column per call. There is no vertical line breaker, no leading between
 # columns, no vertical table: -width, -columns and -paginate belong to the
-# horizontal block road and are refused with -direction ttb rather than drawn
-# into a horizontal paragraph's positions. A page of columns is a loop, and
-# the loop is on this page. Pair kerning is off in a vertical line as well -
-# the pairs in GPOS "kern" are horizontal, and a face that kerns vertically
-# names the feature "vkrn", which this package does not read.
+# horizontal block road. -width is refused by name with -direction ttb -
+# TCLPDF TEXT VERTICAL block, caught and printed on page 2 - rather than drawn
+# into a horizontal paragraph's positions. -columns and -paginate are options OF
+# that road and reach a refusal only through the -width they need: measured on
+# this tree, -paginate 1 without -width answers TCLPDF TEXT PAGINATE width and
+# -columns 3 with -width answers TCLPDF TEXT COLUMNS height, while -columns 3
+# on its own is taken and has no block to divide - with -direction ttb as with
+# ltr. A page of columns is a loop, and the loop is on this page.
+#
+# Pair kerning is off in a vertical line as well - the pairs in GPOS "kern" are
+# horizontal, and a face that kerns vertically names the feature "vkrn", which
+# this package does not read.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #

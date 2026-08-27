@@ -77,12 +77,14 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -width must be a positive number, not\
           \"$width\""
     }
+    my LeaderRoom $width width
     set gap [dict get $options gap]
     if {![::tclpdf::text::finite $gap] || $gap < 0} {
       return -code error -errorcode [list TCLPDF LEADER ARGUMENT gap] \
           "tclpdf: -gap takes a distance of 0 or more, not\
           \"$gap\""
     }
+    my LeaderRoom $gap gap
     # One element for the whole row rather than one per end: the heading and
     # its page number are one entry, and a reader following the tree should
     # hear them together.
@@ -97,6 +99,41 @@ oo::define ::tclpdf::document::document {
       }]
     }
     return [my LeaderDraw $options]
+  }
+
+  # A distance of the row against the largest page a PDF file can hold:
+  # 14400 points on a side (ISO 32000-1, Annex C.2), which is what [page add]
+  # measures a format against.
+  #
+  # WHY A ROW HAS AN UPPER BOUND AT ALL, where [text -width] has none. The row
+  # is FILLED: the number of copies of -fill is the room divided by one copy,
+  # and the run is then measured as a string of that many characters
+  # ([LeaderDraw] below). So a -width nobody could see still costs the time
+  # and the memory of building and shaping it. Measured 2026-08-27:
+  # "-width 1e7" (ten million millimetres) did not come back inside twenty
+  # seconds - ten million dots in one string, measured glyph by glyph -,
+  # "-width 1e30" answered "ARITH IOVERFLOW integer value too large to
+  # represent" out of [int()] in raw Tcl words, and "-width 1e39" did not
+  # return either. All three name a row wider than any page that can exist,
+  # which is why the bound is the page and not the arithmetic: a caller who
+  # wrote a width like that meant a different unit, and hears so at the call
+  # instead of waiting.
+  #
+  # [finite] is asked by both callers before this, so the conversion below
+  # cannot meet a NaN. [writable] is asked HERE and before the conversion,
+  # because [distance] refuses a magnitude beyond the PDF real range itself,
+  # with the code and the wording of the length it was handed - which names
+  # neither the option nor this call. A value that big is wider than any page
+  # as well, so it is the same refusal.
+  method LeaderRoom {value option} {
+    if {![::tclpdf::text::writable $value] || [my distance $value] > 14400} {
+      return -code error -errorcode [list TCLPDF LEADER ARGUMENT $option] \
+          "tclpdf: -$option is \"$value\" in the document unit, which is\
+          wider than the largest page a PDF file can hold - a page is at most\
+          14400 points on a side (ISO 32000-1, Annex C.2), and a leader row\
+          is drawn on one"
+    }
+    return $value
   }
 
   # Whether the row is declared an artifact - by the first word of -tag,
@@ -266,4 +303,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::leader 1.4
+package provide tclpdf::leader 1.5

@@ -69,9 +69,19 @@ oo::define ::tclpdf::document::document {
     set style [my SvgStyle $node $inheritedStyle]
     set name [string map {svg: {}} [::tclpdf::xml name $node]]
 
-    if {[::tclpdf::xml attribute $node display] eq "none"} {
+    # display, read from the STYLE and not from the attribute. SVG 1.1, 6.4
+    # makes a declaration in style="" beat the presentation attribute, and
+    # 11.5 makes display:none mean the element and its children are not
+    # rendered at all. Asking the attribute alone made style="display:none"
+    # inert - measured 2026-08-27, and the header of svg.tcl claimed the
+    # opposite. Not inherited: [SvgStyle] clears the slot per element.
+    if {[string trim [dict get $style display]] eq "none"} {
       return
     }
+    # em and ex are resolved against the font size in force (CSS 2.1, 4.3.2),
+    # so the walk carries it: pushed here, put back where the transform is.
+    set outerFontSize [my state svgFontSize]
+    my state svgFontSize [my SvgFontSizeOf $style $outerFontSize]
     set transform [::tclpdf::xml attribute $node transform]
     if {$transform ne {}} {
       # The transformation is applied to the content stream AND carried in
@@ -110,9 +120,7 @@ oo::define ::tclpdf::document::document {
           my SvgGroup $node [my SvgGroupStyle $style $inheritedStyle] \
               [dict get $style ownOpacity]
         } else {
-          foreach child [::tclpdf::xml children $node] {
-            my SvgElement $child $style
-          }
+          my SvgContainer $name $node $style
         }
       }
       defs - symbol - linearGradient - radialGradient - clipPath - mask -
@@ -130,6 +138,16 @@ oo::define ::tclpdf::document::document {
         if {$name eq "defs"} {
           my SvgCountOnly $node
         }
+        # A <style> BLOCK IS AN OMISSION and is counted as one. It stands in
+        # the drawable list because the element switch has a case for it, and
+        # that made [SvgCountOnly] pass it over as well - so a drawing whose
+        # shapes take their colour from a class came out in the initial
+        # colour and [svg info] was empty (measured 2026-08-27: black instead
+        # of green, without a word). CSS in a <style> block is not built;
+        # that it is not built is now visible.
+        if {$name eq "style" && [string trim [::tclpdf::xml text $node]] ne {}} {
+          my SvgSkipped style
+        }
       }
       use {
         # A <use> renders its target as a group of its own (SVG 5.6), so its
@@ -142,8 +160,15 @@ oo::define ::tclpdf::document::document {
         }
       }
       path {
-        my SvgPaint [::tclpdf::svgPath operators \
-            [::tclpdf::xml attribute $node d] $::tclpdf::svg::identity] $style
+        # A path that stops at its first error is drawn as far as it goes
+        # (SVG 8.3.9) and the loss is counted - an omission with no other
+        # trace is the one thing this module does not allow itself.
+        set operators [::tclpdf::svgPath operators \
+            [::tclpdf::xml attribute $node d] $::tclpdf::svg::identity problem]
+        if {$problem ne {}} {
+          my SvgSkipped path-error
+        }
+        my SvgPaint $operators $style
       }
       rect - circle - ellipse - line - polyline - polygon {
         my SvgPaint [my SvgShape $name $node] $style
@@ -165,6 +190,204 @@ oo::define ::tclpdf::document::document {
       my state svgTransform $outerTransform
       my SvgGroupUnshift $outerRelative
     }
+    my state svgFontSize $outerFontSize
+    return
+  }
+
+  # The font size an em below this element means. font-size is itself a
+  # length and may be written in em or per cent, both relative to the
+  # ENCLOSING size (CSS 2.1, 15.7) - so the outer value is the reference and
+  # is put back in place around the call.
+  method SvgFontSizeOf {style outer} {
+    set value [string trim [dict get $style font-size]]
+    if {$value eq {} || $value eq "inherit"} {
+      return $outer
+    }
+    set saved [my state svgFontSize]
+    my state svgFontSize $outer
+    try {
+      if {[string match {*%} $value]} {
+        set number [string trimright $value %]
+        set size [expr {[::tclpdf::option finite $number]
+            ? $number / 100.0 * $outer : $outer}]
+      } else {
+        set size [my SvgLength $value $outer d]
+      }
+    } finally {
+      my state svgFontSize $saved
+    }
+    if {![::tclpdf::option finite $size] || $size <= 0} {
+      return $outer
+    }
+    return $size
+  }
+
+  # The children of a container, or - for a <switch> - the FIRST child whose
+  # conditions hold.
+  #
+  # SVG 1.1, 5.8: a <switch> "evaluates the requiredFeatures,
+  # requiredExtensions and systemLanguage attributes on its direct child
+  # elements ... the first direct child element whose attributes evaluate to
+  # true is rendered ... the others are bypassed and therefore not rendered".
+  # Drawn like a <g> - which is what happened until 2026-08-27 - a
+  # multilingual label came out in every language at once, one on top of the
+  # other, and nothing said so.
+  #
+  # A nested <svg> is a VIEWPORT of its own (7.2) and goes through
+  # [SvgViewport]; the drawing's outermost one is not, because SvgRoot's
+  # matrix already is that viewport.
+  method SvgContainer {name node style} {
+    if {$name eq "svg"} {
+      if {[my state svgAtRoot]} {
+        my state svgAtRoot 0
+      } else {
+        my SvgViewport $node $node $style
+        return
+      }
+    }
+    if {$name eq "switch"} {
+      foreach child [::tclpdf::xml children $node] {
+        if {[my SvgConditions $child]} {
+          my SvgElement $child $style
+          return
+        }
+      }
+      return
+    }
+    foreach child [::tclpdf::xml children $node] {
+      my SvgElement $child $style
+    }
+    return
+  }
+
+  # Whether the three conditional attributes of an element all hold (5.8.3
+  # to 5.8.5). An attribute that is absent, or an empty string, is true; an
+  # attribute this package cannot evaluate is FALSE, because the point of the
+  # switch is that the alternative gets its turn.
+  method SvgConditions {node} {
+    # No extension and no feature string is claimed. An empty value is true
+    # by the norm's own wording; anything named is not available here.
+    foreach attribute {requiredExtensions requiredFeatures} {
+      set value [::tclpdf::xml attribute $node $attribute]
+      if {[::tclpdf::xml attribute $node $attribute x] ne "x" &&
+          [string trim $value] ne {}} {
+        return 0
+      }
+    }
+    set languages [::tclpdf::xml attribute $node systemLanguage x]
+    if {$languages eq "x"} {
+      return 1
+    }
+    if {[string trim $languages] eq {}} {
+      return 0
+    }
+    # 5.8.5: true if one of the comma-separated tags equals the user's
+    # language or is a prefix of it followed by "-". The document's own
+    # language is the closest this package has to a user preference; without
+    # one, English - which is what the drawings in the corpus fall back to.
+    set wanted [string tolower [my language]]
+    if {$wanted eq {}} {
+      set wanted en
+    }
+    foreach tag [split $languages ,] {
+      set tag [string tolower [string trim $tag]]
+      if {$tag eq {}} {
+        continue
+      }
+      if {$tag eq $wanted || [string match "$tag-*" $wanted] ||
+          [string match "$wanted-*" $tag]} {
+        return 1
+      }
+    }
+    return 0
+  }
+
+  # A nested viewport: a <svg> below the root, or a <symbol> reached through
+  # a <use> (SVG 1.1, 7.2, 7.7 and 5.6).
+  #
+  # Both establish a new viewport, and both were drawn as if they were a <g>
+  # - so a 50x50 window with its own viewBox came out at full size, and a
+  # symbol whose viewBox says 10 units came out ten units wide instead of the
+  # 80 the <use> asked for: a sixty-fourth of the area (measured 2026-08-27).
+  # "viewport" carries x/y/width/height, "content" the viewBox and the
+  # preserveAspectRatio - for a <symbol> the two are different elements.
+  #
+  # overflow is hidden by default for both (14.3.3), so the viewport clips.
+  method SvgViewport {viewport content style {width {}} {height {}}} {
+    set x [my SvgLength [::tclpdf::xml attribute $viewport x] 0 x]
+    set y [my SvgLength [::tclpdf::xml attribute $viewport y] 0 y]
+    if {$width eq {}} {
+      set width [my SvgLength [::tclpdf::xml attribute $viewport width] {} x]
+    }
+    if {$height eq {}} {
+      set height [my SvgLength [::tclpdf::xml attribute $viewport height] {} y]
+    }
+    lassign [my state svgViewport] outerWidth outerHeight
+    if {$width eq {}} {
+      set width $outerWidth
+    }
+    if {$height eq {}} {
+      set height $outerHeight
+    }
+    # 7.7 again: a zero extent disables rendering, a negative one is an error.
+    if {![string is double -strict $width] || ![string is double -strict $height] ||
+        $width <= 0 || $height <= 0} {
+      if {[string is double -strict $width] && [string is double -strict $height] &&
+          ($width < 0 || $height < 0)} {
+        my SvgSkipped viewport
+      }
+      return
+    }
+    lassign [my SvgViewBox $content] boxX boxY boxWidth boxHeight
+    if {![string is double -strict $boxWidth] ||
+        ![string is double -strict $boxHeight]} {
+      return
+    }
+    if {$boxWidth <= 0 || $boxHeight <= 0} {
+      # No viewBox of its own: the child coordinates ARE the viewport's, and
+      # only the offset applies.
+      if {[::tclpdf::xml attribute $content viewBox] ne {}} {
+        return
+      }
+      lassign [list 0 0 $width $height] boxX boxY boxWidth boxHeight
+    }
+    lassign [my SvgAspect $content [dict create fitMode {} given {}]] \
+        align meetOrSlice
+    set fullX [expr {$width / double($boxWidth)}]
+    set fullY [expr {$height / double($boxHeight)}]
+    if {$align eq "none"} {
+      set scaleX $fullX
+      set scaleY $fullY
+    } else {
+      set scaleX [expr {$meetOrSlice eq "slice" ? max($fullX, $fullY)
+          : min($fullX, $fullY)}]
+      set scaleY $scaleX
+    }
+    lassign [my SvgAspectShare $align] shareX shareY
+    set offsetX [expr {$x + ($width - $boxWidth * $scaleX) * $shareX}]
+    set offsetY [expr {$y + ($height - $boxHeight * $scaleY) * $shareY}]
+    set matrix [::tclpdf::geometry multiply \
+        [::tclpdf::geometry translate [expr {-$boxX}] [expr {-$boxY}]] \
+        [list $scaleX 0 0 $scaleY $offsetX $offsetY]]
+    my SvgSave
+    my content "[::tclpdf::pdfObj num $x] [::tclpdf::pdfObj num $y]\
+        [::tclpdf::pdfObj num $width] [::tclpdf::pdfObj num $height] re W n\n"
+    my content "[join [lmap number $matrix {::tclpdf::pdfObj num $number}] { }] cm\n"
+    set outerTransform [my state svgTransform]
+    my state svgTransform [::tclpdf::geometry multiply $matrix $outerTransform]
+    set outerRelative [my SvgGroupShift $matrix]
+    set outerViewport [my state svgViewport]
+    my state svgViewport [list $boxWidth $boxHeight]
+    try {
+      foreach child [::tclpdf::xml children $content] {
+        my SvgElement $child $style
+      }
+    } finally {
+      my state svgViewport $outerViewport
+      my state svgTransform $outerTransform
+      my SvgGroupUnshift $outerRelative
+      my SvgRestore
+    }
     return
   }
 
@@ -185,14 +408,9 @@ oo::define ::tclpdf::document::document {
   # factor stays multiplied down, and the gs it would need is refused with
   # the version in the message, as every alpha is.
 
-  # One element counted as skipped. The one place that touches the tally, so
-  # that the three callers cannot drift - the element switch, the paint road
-  # when it cannot resolve a reference, and the walk through <defs>.
-  method SvgSkipped {what} {
-    set skipped [my state svgSkipped]
-    dict incr skipped $what
-    my state svgSkipped $skipped
-  }
+  # [SvgSkipped] - the one place that touches the tally - moved to svg.tcl on
+  # 2026-08-27, because [SvgAspect] calls it before anything has loaded this
+  # module. See there.
 
   # Walk a subtree WITHOUT drawing it, counting what this package would not
   # have drawn anyway. Everything under <defs> is reached by reference or not
@@ -376,10 +594,10 @@ oo::define ::tclpdf::document::document {
     set N ::tclpdf::pdfObj
     switch -- $name {
       rect {
-        set x [my SvgLength [::tclpdf::xml attribute $node x] 0]
-        set y [my SvgLength [::tclpdf::xml attribute $node y] 0]
-        set width [my SvgLength [::tclpdf::xml attribute $node width] 0]
-        set height [my SvgLength [::tclpdf::xml attribute $node height] 0]
+        set x [my SvgLength [::tclpdf::xml attribute $node x] 0 x]
+        set y [my SvgLength [::tclpdf::xml attribute $node y] 0 y]
+        set width [my SvgLength [::tclpdf::xml attribute $node width] 0 x]
+        set height [my SvgLength [::tclpdf::xml attribute $node height] 0 y]
         # THE TWO KINDS OF BAD NUMBER THE NORM DISTINGUISHES (SVG 1.1, 9.2):
         # a negative width or height "is an error", a zero one "disables
         # rendering of the element". The error is reported and the element
@@ -400,8 +618,8 @@ oo::define ::tclpdf::document::document {
         # takes its value - which is what makes <rect ry="10"> round at all
         # instead of coming out square. Read as ABSENT rather than as zero,
         # because the norm makes "no rx" and rx="0" two different things.
-        set rx [my SvgLength [::tclpdf::xml attribute $node rx] {}]
-        set ry [my SvgLength [::tclpdf::xml attribute $node ry] {}]
+        set rx [my SvgLength [::tclpdf::xml attribute $node rx] {} x]
+        set ry [my SvgLength [::tclpdf::xml attribute $node ry] {} y]
         if {$rx eq {}} {
           set rx $ry
         } elseif {$ry eq {}} {
@@ -439,14 +657,14 @@ oo::define ::tclpdf::document::document {
         return [::tclpdf::svgPath operators $data $::tclpdf::svg::identity]
       }
       circle - ellipse {
-        set cx [my SvgLength [::tclpdf::xml attribute $node cx] 0]
-        set cy [my SvgLength [::tclpdf::xml attribute $node cy] 0]
+        set cx [my SvgLength [::tclpdf::xml attribute $node cx] 0 x]
+        set cy [my SvgLength [::tclpdf::xml attribute $node cy] 0 y]
         if {$name eq "circle"} {
-          set rx [my SvgLength [::tclpdf::xml attribute $node r] 0]
+          set rx [my SvgLength [::tclpdf::xml attribute $node r] 0 d]
           set ry $rx
         } else {
-          set rx [my SvgLength [::tclpdf::xml attribute $node rx] 0]
-          set ry [my SvgLength [::tclpdf::xml attribute $node ry] 0]
+          set rx [my SvgLength [::tclpdf::xml attribute $node rx] 0 x]
+          set ry [my SvgLength [::tclpdf::xml attribute $node ry] 0 y]
         }
         # The same two rules as the rectangle, one section further on (9.3
         # and 9.4): a negative radius is an error, a zero radius "disables
@@ -466,14 +684,28 @@ oo::define ::tclpdf::document::document {
         return [::tclpdf::svgPath operators $data $::tclpdf::svg::identity]
       }
       line {
-        return "[list [my SvgLength [::tclpdf::xml attribute $node x1] 0] \
-            [my SvgLength [::tclpdf::xml attribute $node y1] 0]] m\n[list \
-            [my SvgLength [::tclpdf::xml attribute $node x2] 0] \
-            [my SvgLength [::tclpdf::xml attribute $node y2] 0]] l\n"
+        return "[list [my SvgLength [::tclpdf::xml attribute $node x1] 0 x] \
+            [my SvgLength [::tclpdf::xml attribute $node y1] 0 y]] m\n[list \
+            [my SvgLength [::tclpdf::xml attribute $node x2] 0 x] \
+            [my SvgLength [::tclpdf::xml attribute $node y2] 0 y]] l\n"
       }
       polyline - polygon {
-        set numbers [regexp -all -inline {[-+0-9.eE]+} \
+        set numbers [regexp -all -inline \
+            {[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} \
             [::tclpdf::xml attribute $node points]]
+        # AN ODD NUMBER OF COORDINATES IS AN ERROR, and SVG 1.1, 9.6/9.7 say
+        # what to do with it: "the element is in error ... the document shall
+        # be rendered up to, but not including, the last properly specified
+        # point". Written through, [foreach {x y}] left $y EMPTY and the
+        # stream got "50  l" - an operator with one operand, which ISO
+        # 32000-2, 7.8.2 does not allow, which poppler reports as "Too few
+        # (1) args to 'l' operator" and which qpdf --check does not see at
+        # all. A reader that leaves the operand on the stack shifts
+        # everything after it.
+        if {[llength $numbers] % 2} {
+          set numbers [lrange $numbers 0 end-1]
+          my SvgSkipped points
+        }
         set result {}
         set operator m
         foreach {x y} $numbers {
@@ -490,17 +722,48 @@ oo::define ::tclpdf::document::document {
   }
 
   # A <use> draws whatever its href points at, at an offset.
+  #
+  # THREE GUARDS, and all three are about availability rather than about the
+  # standard (which only says, in 5.6, that a cycle is an error). A use that
+  # reaches itself used to end in "restore without a save" - a message about
+  # this package's own bookkeeping, naming neither the use nor the cycle -
+  # and a mask that masked itself in Tcl's "too many nested evaluations" with
+  # no TCLPDF code at all. And the unfolding is EXPONENTIAL: measured
+  # 2026-08-27, ten levels of ten copies took 0.63 s, thirteen took 6.8 s,
+  # and the twenty-level file of 2314 bytes would have been a quarter of an
+  # hour and ten million rectangles. The cycle itself is caught before the
+  # drawing starts ([SvgCheck] in svg.tcl); what is left here is the depth,
+  # the total, and a belt for the case a cycle is built out of nodes the
+  # check could not follow.
   method SvgUse {node style} {
     set reference [::tclpdf::xml attribute $node href]
     if {$reference eq {}} {
       set reference [::tclpdf::xml attribute $node xlink:href]
     }
-    set target [my SvgDefinition [string trimleft $reference #]]
+    set id [string trimleft [string trim $reference] #]
+    set target [my SvgDefinition $id]
     if {$target eq {}} {
       return
     }
-    set x [my SvgLength [::tclpdf::xml attribute $node x] 0]
-    set y [my SvgLength [::tclpdf::xml attribute $node y] 0]
+    set stack [my state svgUseStack]
+    if {$id ne {} && $id in $stack} {
+      my SvgSkipped use-cycle
+      return
+    }
+    if {[llength $stack] >= $::tclpdf::svg::useDepthLimit} {
+      my SvgSkipped use-depth
+      return
+    }
+    set count [expr {[my state svgUseCount] + 1}]
+    my state svgUseCount $count
+    if {$count > $::tclpdf::svg::useCountLimit} {
+      return -code error -errorcode [list TCLPDF SVG LIMIT use] \
+          "tclpdf: the drawing's <use> elements unfold to more than\
+          $::tclpdf::svg::useCountLimit copies - nesting them multiplies,\
+          and this drawing would not finish"
+    }
+    set x [my SvgLength [::tclpdf::xml attribute $node x] 0 x]
+    set y [my SvgLength [::tclpdf::xml attribute $node y] 0 y]
     my SvgSave
     set outerRelative {}
     if {$x != 0 || $y != 0} {
@@ -509,18 +772,31 @@ oo::define ::tclpdf::document::document {
       # capture's relative matrix has to follow it too.
       set outerRelative [my SvgGroupShift [::tclpdf::geometry translate $x $y]]
     }
-    # A <symbol> is not drawn where it stands but IS drawn through a use -
-    # so its children are taken directly rather than going through the
-    # element switch, which would skip it again.
-    if {[string map {svg: {}} [::tclpdf::xml name $target]] eq "symbol"} {
-      foreach child [::tclpdf::xml children $target] {
-        my SvgElement $child $style
+    my state svgUseStack [linsert $stack end $id]
+    try {
+      # A <symbol> is not drawn where it stands but IS drawn through a use,
+      # and it brings a VIEWPORT with it (5.6: "width and height ... only
+      # have an effect ... when the referenced element is an svg or a
+      # symbol"; 7.7 for the viewBox). Taking its children directly - which
+      # is what happened until 2026-08-27 - threw away both, and a symbol
+      # whose viewBox says 10 units came out ten units wide where the use
+      # asked for 80.
+      set targetName [string map {svg: {}} [::tclpdf::xml name $target]]
+      if {$targetName in {symbol svg}} {
+        # The viewport element is the TARGET, not the use: the use's own x/y
+        # are already in the stream as a translate above, and reading them a
+        # second time would place the symbol twice as far along.
+        my SvgViewport $target $target $style \
+            [my SvgLength [::tclpdf::xml attribute $node width] {} x] \
+            [my SvgLength [::tclpdf::xml attribute $node height] {} y]
+      } else {
+        my SvgElement $target $style
       }
-    } else {
-      my SvgElement $target $style
+    } finally {
+      my state svgUseStack $stack
+      my SvgGroupUnshift $outerRelative
+      my SvgRestore
     }
-    my SvgGroupUnshift $outerRelative
-    my SvgRestore
     return
   }
 
@@ -530,23 +806,176 @@ oo::define ::tclpdf::document::document {
   # through it would come out mirrored. So the text is wrapped in a second
   # flip about its own baseline - two wrongs that are exactly one right, and
   # cheaper than keeping a second unflipped coordinate system around.
+  #
+  # A <text> IS A SEQUENCE, not a string. Until 2026-08-27 the element's own
+  # character data was collected first and the text of every <tspan> appended
+  # behind it, which put "A<tspan>B</tspan>C" on the page as "ACB"; a tspan's
+  # own painting attributes were dropped, so a red letter came out black; and
+  # its own x/y were never read, so a tspan placed elsewhere sat where its
+  # parent did. SVG 1.1, 10.5 makes each tspan a piece with its own position
+  # and its own properties, set in document order.
   method SvgText {node style} {
-    set text [string trim [::tclpdf::xml text $node]]
-    foreach child [::tclpdf::xml children $node] {
-      if {[string map {svg: {}} [::tclpdf::xml name $child]] eq "tspan"} {
-        append text [string trim [::tclpdf::xml text $child]]
-      }
-    }
-    if {$text eq {}} {
+    # A <tspan> is drawn by the <text> that holds it. Reached on its own -
+    # the element switch has a case for both names - it must not be set a
+    # second time.
+    if {[string map {svg: {}} [::tclpdf::xml name $node]] ne "text"} {
       return
     }
-    set x [my SvgLength [::tclpdf::xml attribute $node x] 0]
-    set y [my SvgLength [::tclpdf::xml attribute $node y] 0]
-    set size [my SvgLength [dict get $style font-size] 12]
+    set preserve [expr {[string trim [my SvgInherited $node xml:space]] eq "preserve"}]
+    set runs [my SvgTextSpace [my SvgTextRuns $node $style $preserve] $preserve]
+    if {![llength $runs]} {
+      return
+    }
+    # x and y are coordinate LISTS (10.4), one value per character. Only the
+    # first is honoured here - per-character placement would mean one Tm per
+    # glyph - but reading the list is what keeps the rest of the values from
+    # making the whole attribute unreadable: [SvgLength] answered its default
+    # of 0 for "10 40 70", and the line jumped to the left edge of the
+    # drawing.
+    set penX [my SvgTextCoordinate [::tclpdf::xml attribute $node x] 0 x]
+    set penY [my SvgTextCoordinate [::tclpdf::xml attribute $node y] 0 y]
+    set total [llength $runs]
+    set index 0
+    while {$index < $total} {
+      # ONE CHUNK: from a run that names an absolute position up to the one
+      # before the next. text-anchor applies to a chunk as a whole (10.9),
+      # so its width has to be known before the first glyph is placed.
+      lassign [lindex $runs $index] -> chunkX chunkY chunkStyle
+      if {$chunkX ne {}} {
+        set penX $chunkX
+      }
+      if {$chunkY ne {}} {
+        set penY $chunkY
+      }
+      set last $index
+      while {$last + 1 < $total} {
+        lassign [lindex $runs [expr {$last + 1}]] -> nextX nextY
+        if {$nextX ne {} || $nextY ne {}} {
+          break
+        }
+        incr last
+      }
+      set prepared {}
+      set widths {}
+      set chunkWidth 0
+      for {set piece $index} {$piece <= $last} {incr piece} {
+        lassign [lindex $runs $piece] string -> -> pieceStyle
+        set face [my SvgTextFace $pieceStyle]
+        set width [lindex [my TextPoints [dict get $face state] $string] 0]
+        lappend prepared $face
+        lappend widths $width
+        set chunkWidth [expr {$chunkWidth + $width}]
+      }
+      switch -- [string trim [dict get $chunkStyle text-anchor]] {
+        middle {set penX [expr {$penX - $chunkWidth / 2.0}]}
+        end {set penX [expr {$penX - $chunkWidth}]}
+      }
+      for {set piece $index} {$piece <= $last} {incr piece} {
+        lassign [lindex $runs $piece] string -> pieceY pieceStyle
+        if {$pieceY ne {}} {
+          set penY $pieceY
+        }
+        set face [lindex $prepared [expr {$piece - $index}]]
+        set width [lindex $widths [expr {$piece - $index}]]
+        my SvgTextShow $string $pieceStyle $face $penX $penY $width
+        set penX [expr {$penX + $width}]
+      }
+      set index [expr {$last + 1}]
+    }
+    return
+  }
+
+  # The first value of a coordinate list (SVG 10.4), as a length.
+  method SvgTextCoordinate {value default axis} {
+    set value [string trim $value]
+    if {$value eq {}} {
+      return $default
+    }
+    set first [lindex [regexp -all -inline {[^\s,]+} $value] 0]
+    return [my SvgLength $first $default $axis]
+  }
+
+  # The pieces of a <text> or a <tspan>, in document order: a list of
+  # {string x y style}, where x and y are the empty string wherever the piece
+  # simply continues where the one before it ended.
+  method SvgTextRuns {node style preserve} {
+    set runs {}
+    set pending {}
+    foreach part [::tclpdf::xml nodes $node] {
+      lassign $part kind value
+      if {$kind eq "text"} {
+        if {$value ne {}} {
+          lappend runs [list $value {} {} $style]
+        }
+        continue
+      }
+      set name [string map {svg: {}} [::tclpdf::xml name $value]]
+      if {$name ni {tspan a}} {
+        # textPath, tref and anything else: reported, like every element this
+        # module does not draw.
+        my SvgSkipped $name
+        continue
+      }
+      set own [my SvgStyle $value $style]
+      set space [string trim [::tclpdf::xml attribute $value xml:space]]
+      set ownPreserve [expr {$space eq {} ? $preserve : ($space eq "preserve")}]
+      set inner [my SvgTextRuns $value $own $ownPreserve]
+      if {![llength $inner]} {
+        continue
+      }
+      # The tspan's own position goes on its FIRST run; dx and dy are
+      # relative and are added to whatever the pen has reached.
+      set x [my SvgTextCoordinate [::tclpdf::xml attribute $value x] {} x]
+      set y [my SvgTextCoordinate [::tclpdf::xml attribute $value y] {} y]
+      if {$x ne {} || $y ne {}} {
+        lassign [lindex $inner 0] string -> -> firstStyle
+        lset inner 0 [list $string $x $y $firstStyle]
+      }
+      lappend runs {*}$inner
+    }
+    return $runs
+  }
+
+  # White space, over the whole element rather than per piece.
+  #
+  # XML 1.0 / SVG 1.1, 10.15 for xml:space="default": newlines are dropped,
+  # tabs become spaces, runs of spaces collapse to one, and leading and
+  # trailing space of the element goes. Under "preserve" newlines and tabs
+  # become spaces and nothing else changes. [string trim] on each piece -
+  # which is what happened until 2026-08-27 - did neither: "Hallo    Welt"
+  # kept its four spaces and a preserved leading space was cut off.
+  method SvgTextSpace {runs preserve} {
+    set result {}
+    foreach run $runs {
+      lassign $run string x y style
+      set string [string map [list \n { } \r { } \t { }] $string]
+      if {!$preserve} {
+        regsub -all {  +} $string { } string
+      }
+      lappend result [list $string $x $y $style]
+    }
+    if {!$preserve && [llength $result]} {
+      lassign [lindex $result 0] string x y style
+      lset result 0 [list [string trimleft $string] $x $y $style]
+      lassign [lindex $result end] string x y style
+      lset result end [list [string trimright $string] $x $y $style]
+    }
+    # A piece that is nothing but the space between two others still separates
+    # them; one that is empty carries nothing at all.
+    return [lmap run $result {
+      if {[lindex $run 0] eq {}} continue
+      set run
+    }]
+  }
+
+  # The face one run is set in: the resolved state, the font, its resource
+  # name and the size. Its own method because every run of a <text> asks the
+  # same four questions and a tspan may answer them differently.
+  method SvgTextFace {style} {
+    set size [my SvgLength [dict get $style font-size] 12 d]
     if {$size <= 0} {
       set size 12
     }
-
     # font-family is a comma-separated wish list; the first name that resolves
     # wins, and helvetica catches the rest. A drawing must not fail because it
     # asks for a face nobody has.
@@ -607,7 +1036,6 @@ oo::define ::tclpdf::document::document {
         set cut {}
       }
     }
-    #
     # Everything after this goes through the same text state a [text] call
     # builds, which is what gives a drawing the embedded path: the same
     # measurement, the same resource, the same kerning and ligatures as the
@@ -617,25 +1045,39 @@ oo::define ::tclpdf::document::document {
     # needed the state.
     my TextInit
     set state [my TextMerge [list -family $family -style $cut -size $size]]
-    set font [dict get $state resolved]
+    return [dict create state $state font [dict get $state resolved] size $size]
+  }
+
+  # One run of a <text>, at the pen position the caller has worked out.
+  method SvgTextShow {text style face x y width} {
+    set state [dict get $face state]
+    set font [dict get $face font]
+    set size [dict get $face size]
+    # visibility is read where the painting happens, exactly as it is for a
+    # shape (SVG 11.5).
+    if {[string tolower [string trim [dict get $style visibility]]] in
+        {hidden collapse}} {
+      return
+    }
+    set fill [dict get $style fill]
+    # fill="none" MEANS NOT PAINTED (11.3). Turned into black - which is what
+    # happened until 2026-08-27 - a line the file had asked to be invisible
+    # stood on the page in the darkest colour there is.
+    if {[string trim $fill] eq "none"} {
+      return
+    }
     # Measured BEFORE the face is registered, and that order is deliberate.
     # Measuring is what refuses a character the face cannot set, and a
     # registered resource outlives the failed drawing: a caught error left
     # Helvetica in the document, which is enough to make [pdfa] refuse to
     # write it. An attempt that came to nothing must leave nothing behind.
-    set width [lindex [my TextPoints $state $text] 0]
     set resource [my TextResource $font]
-    switch -- [dict get $style text-anchor] {
-      middle {set x [expr {$x - $width / 2.0}]}
-      end {set x [expr {$x - $width}]}
-    }
     # For a transparency group's BBox: one full size above and below the
     # baseline is generous for any face - a BBox clips, so the safe side is
     # the large one.
     if {[llength [my state svgGroupStack]]} {
       my SvgGroupBox $x [expr {$y - $size}] [expr {$x + $width}] [expr {$y + $size}]
     }
-
     # ASSEMBLED FIRST, WRITTEN AFTERWARDS - the order [SvgPaint] keeps, and
     # for the same reason. The flip used to go out as a bare "q ... cm"
     # BEFORE the colour was looked at, and a bare q is a bracket nothing
@@ -645,7 +1087,6 @@ oo::define ::tclpdf::document::document {
     # down and mirrored on a page qpdf finds nothing wrong with. Every value
     # below is settled before a byte reaches the stream, and the bracket goes
     # through SvgSave/SvgRestore like every other one in a drawing.
-    set fill [dict get $style fill]
     if {[string match "url(*" $fill]} {
       # A PAINT SERVER ON <text>, through the same road a shape takes since
       # 2026-08-25 - the resolution used to sit inside [SvgPaint] and work
@@ -686,12 +1127,12 @@ oo::define ::tclpdf::document::document {
         set fill $resolved
       }
     }
-    if {$fill eq {} || $fill eq "none"} {
+    if {$fill eq {}} {
       set fill black
     }
     set body "1 0 0 -1 0 [::tclpdf::pdfObj num [expr {2.0 * $y}]] cm\n"
-    append body "[::tclpdf::color operator [::tclpdf::color parse \
-        [my GraphicsColour $fill svg]] fill]\n"
+    append body "[::tclpdf::color operator [my SvgLuminosity \
+        [::tclpdf::color parse [my GraphicsColour $fill svg]]] fill]\n"
     # [TextResource] already returns PDF name syntax - running it through
     # [name] again escapes the slash into #2F, and the reader then looks for a
     # font whose name begins with a slash.
@@ -710,4 +1151,4 @@ oo::define ::tclpdf::document::document {
   # operators are the only description of the shape available here.
 }
 
-package provide tclpdf::svgElement 1.6
+package provide tclpdf::svgElement 1.7

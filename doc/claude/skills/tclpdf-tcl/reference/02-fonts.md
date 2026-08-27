@@ -92,9 +92,13 @@ puts [$doc font info body]        ;# family postScript glyphs unitsPerEm charact
 # trusting a font viewer: viewers substitute silently, a PDF cannot.
 if {[catch {$doc textWidth "Łódź" -family helvetica} message]} {
     puts "refused, as it should be: $message"        ;# WinAnsi has no Ł
+} else {
+    puts "Ł in a standard 14 face: NOT REFUSED"
 }
 if {[catch {$doc textWidth "中" -family body} message]} {
     puts "refused, as it should be: $message"        ;# DejaVu Sans has no CJK
+} else {
+    puts "CJK in DejaVu Sans: NOT REFUSED"
 }
 ```
 
@@ -115,12 +119,16 @@ $doc font -fallback {}                      ;# state like -size: clear it delibe
 # message names every face that was asked.
 if {[catch {$doc textWidth "\u4e2d" -family cff -fallback {body}} message]} {
     puts "chain exhausted: $message"
+} else {
+    puts "a character no face in the chain has: NOT REFUSED"
 }
 # -fallback and -direction rtl do not go together: a face change inside a
 # right-to-left line would reorder only its own piece.
 if {[catch {$doc text "\u05e9\u05dc\u05d5\u05dd" -at {190 166} -family body -direction rtl \
         -fallback {cff}} message]} {
     puts "rtl: $message"
+} else {
+    puts "-fallback with -direction rtl: NOT REFUSED"
 }
 ```
 
@@ -198,6 +206,8 @@ $doc text "الفاتورة 4711 - 1.234,50 €" -at {190 150} -family hebrew -d
 # A mixed line is refused: set the runs as separate calls, one per direction.
 if {[catch {$doc text "Rechnung 4711 שלום" -at {190 160} -family hebrew -direction rtl} message]} {
     puts "mixed line: $message"
+} else {
+    puts "a mixed-direction line: NOT REFUSED"
 }
 # -unshaped 1 lifts every refusal and draws isolated glyphs in the order given -
 # for the caller who knows; not the answer where -direction rtl is.
@@ -264,6 +274,8 @@ puts "the pair is one glyph: [format %.2f [$marks textWidth "\u2611\u2610" \
             + [$marks textWidth "\u2610" -family ballot -size 12]}]] mm apart"
 if {[catch {$marks text "\u2612" -at {20 30} -family ballot} message]} {
     puts "no such glyph: $message"
+} else {
+    puts "a glyph the Type 3 font was not given: NOT REFUSED"
 }
 $marks write [file join $out ref-02-type3.pdf]
 $marks destroy
@@ -475,7 +487,7 @@ $symbols write [file join $out ref-02-colour-font.pdf]
 $symbols destroy
 ```
 
-`TCLPDF COLORFONT TABLES` is a face without `COLR` and `CPAL`, `CHAR` a character the face has no glyph for, `EMPTY` a glyph that would draw nothing at all, `PALETTE` a `-palette` the face does not have, `LIMIT` the 256th glyph - a sequence of several characters is one, and a Type 3 font is addressed by single bytes, `COMPOSITE` a shape that is a composite glyph or the `Plus` compositing mode, `FOREGROUND` a gradient stop that names the text colour, `UNBOUNDED` a version 1 glyph with no bounds. What the `COLR` reader itself refuses keeps its own `TCLPDF COLR` codes - `MISSING`, `VERSION`, `EMPTY`, `TRUNCATED`, `LAYERS`, `RECORDS`, `PALETTE`, `ENTRY`, and for the version 1 paint graph `CYCLE`, `DEPTH`, `REUSE`, `PAINT`, `COMPOSITE` - and is passed through unchanged, so `trap {TCLPDF COLORFONT}` does **not** catch those.
+`TCLPDF COLORFONT TABLES` is a face without `COLR` and `CPAL`, `CHAR` a character the face has no glyph for, `EMPTY` a glyph that would draw nothing at all, `PALETTE` a `-palette` the face does not have, `LIMIT` the 256th glyph - a sequence of several characters is one, and a Type 3 font is addressed by single bytes, `COMPOSITE` a shape that is a composite glyph or the `Plus` compositing mode, `FOREGROUND` a gradient stop that names the text colour, `UNBOUNDED` a version 1 glyph with no bounds. What the `COLR` reader itself refuses keeps its own `TCLPDF COLR` codes - `MISSING`, `VERSION`, `EMPTY`, `TRUNCATED`, `LAYERS`, `RECORDS`, `PALETTE`, `ENTRY`, and for the version 1 paint graph `CYCLE`, `DEPTH`, `REUSE`, `PAINT`, `COMPOSITE`, `UNSUPPORTED` (an extend, a clip list or a clip box the reader does not know) - fourteen in all, and they are passed through unchanged, so `trap {TCLPDF COLORFONT}` does **not** catch those.
 
 **COLR version 1 is read too**, and the call does not distinguish: a face may describe some glyphs with the older layer records and some with a version 1 **paint graph** - linear, radial and sweep gradients, clipped shapes, transformations, re-used sub-graphs and 28 compositing modes - and a glyph the table says nothing about is drawn from its own outline in the colour of the text, like a letter. A palette entry may carry an alpha byte, and a translucent layer then costs an `ExtGState` while an opaque one costs nothing; under PDF/A parts 2 and 3 that is admissible, and part 1 forbids transparency and is refused by `pdfa` anyway. What this is for is the two-colour mark that has to behave like a character - a tick in a table column, an amber warning sign in a line of text, a logo in a letterhead: it moves with the line, takes the font size, is measured by `textWidth`, breaks with the paragraph and comes back out of `pdftotext` as the character it stands for.
 
@@ -547,7 +559,7 @@ if {[file exists $applePath]} {
 }
 ```
 
-`TCLPDF SBIX STRIKE` is a pixel size the face has not got, and its message lists the ones it has; `TCLPDF COLORFONT STRIKE` is `-strike` given for a `COLR` face, which has no strikes, and `TCLPDF COLORFONT PALETTE` is `-palette` given for a bitmap face, which has no palette. `TCLPDF FONT FACE` is a face number a collection has not got. `font embed` refuses an `sbix` face **even where some of its characters have outlines** (`TCLPDF FONT OUTLINES`, the table as its fourth word): measured on Apple Color Emoji, 42 of the 1469 characters its `cmap` covers have real outlines - the digits and the keycap bases - and the other 1397 are contours of two points, which enclose no area. What the `sbix` and `morx` readers refuse themselves keeps its own `TCLPDF SBIX` and `TCLPDF MORX` codes.
+`TCLPDF SBIX STRIKE` is a pixel size the face has not got, and its message lists the ones it has; `TCLPDF COLORFONT STRIKE` is `-strike` given for a `COLR` face, which has no strikes, and `TCLPDF COLORFONT PALETTE` is `-palette` given for a bitmap face, which has no palette. `TCLPDF FONT FACE` is a face number a collection has not got. `font embed` refuses an `sbix` face **even where some of its characters have outlines** (`TCLPDF FONT OUTLINES`, the table as its fourth word): measured on Apple Color Emoji, 42 of the 1469 characters its `cmap` covers have real outlines - the digits and the keycap bases - 1397 more are contours of two points, which enclose no area, and the remaining 30 have no outline at all (42 + 1397 + 30 = 1469, counted with fontTools over the `cmap` of face 0). What the `sbix` and `morx` readers refuse themselves keeps its own `TCLPDF SBIX` and `TCLPDF MORX` codes.
 
 ## Vertical writing, and breaking it into columns
 
@@ -596,8 +608,10 @@ $doc page add
 #   SUBSET       sound face, it just cannot be cut down (a CFF)
 #   METRICS      the face states no em, or the AFM is missing
 #   ENCODING     no usable Unicode cmap
+#   FACE         -face names a face the collection has not got
 try {
     $doc font embed broken -data "not a font at all, really"
+    puts "a face made of prose: NOT REFUSED"
 } trap {TCLPDF FONT SOURCE} {message options} {
     puts "wrong format: [lindex [dict get $options -errorcode] 3]"
 } trap {TCLPDF FONT DAMAGED} {message options} {
@@ -605,4 +619,4 @@ try {
 }
 ```
 
-`trap {TCLPDF FONT}` catches the lot. A `.ttc` is `UNSUPPORTED collection` — extract the single face first; a CFF2 is `UNSUPPORTED cff2`.
+Those **eight** are what the readers themselves say; `trap {TCLPDF FONT}` catches them and the rest of the topic besides - the whole `TCLPDF FONT` space has twenty-two classes, most of them about the call rather than the file. A CFF2 is `UNSUPPORTED cff2`. A `.ttc` is **not** among the refusals: it is a collection and `-face n` picks one of its faces, 0 by default, and only a number the file has not got answers `TCLPDF FONT FACE`.

@@ -54,9 +54,10 @@
 # of bounding rectangles with no contours in them, there so that a renderer
 # ignorant of sbix still gets the right advance. Embedding such a face as a
 # font program therefore gives a document that is valid, extractable and
-# blank, which is the trap [font embed] refuses by name (TCLPDF FONT OUTLINES,
-# and TCLPDF FONT BITMAPS where the face carries sbix). This module is the
-# road past it.
+# blank, which is the trap [font embed] refuses by name - TCLPDF FONT
+# OUTLINES, whose message names the bitmap table where the face carries one.
+# There is no TCLPDF FONT BITMAPS code and there never was; this comment
+# invented one. This module is the road past the refusal.
 #
 # WHICH SIZE IS DRAWN is [sbix strike]'s decision and the reason stands there:
 # the largest, because nothing here knows the point size the font will be set
@@ -250,4 +251,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFontBitmap 1.0
+package provide tclpdf::colorFontBitmap 1.1

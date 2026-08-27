@@ -27,6 +27,9 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::option 1.0-
+# For [pdfObj fits] - the one place the magnitude a PDF real holds stands
+# (Annex C.2), asked by TableMeasurable below.
+package require tclpdf::pdfObj 1.0-
 package require tclpdf::textBlock 1.0-
 package require tclpdf::document 1.0-
 
@@ -601,22 +604,47 @@ oo::define ::tclpdf::document::document {
       lineWidth {a width of 0 or more in the document unit}
     } {
       set value [dict get $style $key]
-      # [option finite] rather than [string is double]: NaN is a double to
-      # Tcl and compares false against every range check, so it travelled
-      # into the arithmetic that places the text inside the cell.
-      if {![::tclpdf::option finite $value] || $value < 0} {
+      if {![my TableMeasurable $value 0]} {
         return -code error -errorcode [list TCLPDF TABLE STYLE $key] \
             "tclpdf: a table $key is $what, not \"$value\""
       }
     }
     set leading [dict get $style leading]
-    if {![::tclpdf::option finite $leading] || $leading <= 0} {
+    if {![my TableMeasurable $leading 0 1]} {
       return -code error -errorcode [list TCLPDF TABLE STYLE leading] \
           "tclpdf: a table leading is a factor of the font\
           size above 0, not \"$leading\""
     }
     return $style
   }
+
+  # Whether a number is one a table can be measured in.
+  #
+  # Three questions in one place, because every distance of a table asks the
+  # same three and each site keeps its own wording and its own error code:
+  #
+  #   finite            NaN and Inf are doubles to Tcl and compare false
+  #                     against every range check, so "-bottom NaN" switched
+  #                     the page break off in silence and a NaN padding
+  #                     travelled into the arithmetic that places the text
+  #                     inside its cell
+  #   a PDF real holds it  the manual (:77) says a length beyond about
+  #                     +/-3.403e38 is "refused at the call"; the table's own
+  #                     distances were not, and 1e39 in -top, -bottom,
+  #                     -minRowHeight or a padding was taken by the call and
+  #                     thrown out much later by TableCheckFit, with a forty
+  #                     digit number in the message (measured 2026-08-27)
+  #   the bound the option carries  0 or more for a distance, above 0 for a
+  #                     factor
+  #
+  # Answers a boolean rather than refusing: the message and the code belong
+  # to the option, and there are seven of them with seven different sentences.
+  method TableMeasurable {value minimum {exclusive 0}} {
+    if {![::tclpdf::option finite $value] || ![::tclpdf::pdfObj fits $value]} {
+      return 0
+    }
+    return [expr {$exclusive ? $value > $minimum : $value >= $minimum}]
+  }
 }
 
-package provide tclpdf::tableLayout 1.6
+package provide tclpdf::tableLayout 1.7

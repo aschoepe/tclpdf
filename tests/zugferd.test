@@ -146,7 +146,7 @@ test zugferd-2.4 {PDF/A part 4 is refused with a reason} -constraints haveTdom -
   } finally {
     $doc destroy
   }
-} -returnCodes error -match glob -result {*part 4 needs PDF 2.0*}
+} -returnCodes error -match glob -result {*part 4 (ISO 19005-4) is a PDF 2.0 profile this package has not measured itself against*}
 
 test zugferd-3.1 {every page carries its own Resources} -body {
   # Regression, found by veraPDF (6.2.2, "inheritedResourceNames == ''").
@@ -1061,10 +1061,16 @@ test zugferd-11.1 {each of the three invoice names is written to the filespec, t
   # order-x.xml, the fourth name the standards know, is an order's and is
   # refused for an invoice since 2026-08-18 - block 13. This test used to
   # pin it as a name for the invoice.
+  #
+  # And xrechnung.xml is the XRECHNUNG profile's and no other invoice's,
+  # since 2026-08-27 - block 17. This test used to pin THAT too: it wrote
+  # an EN 16931 invoice under the name Factur-X 1.09.2, 7.7 keeps for the
+  # reference profile, which is the defect the block below refuses. So the
+  # profile goes with the name here.
   set result {}
-  foreach name {factur-x.xml zugferd-invoice.xml xrechnung.xml} {
+  foreach {name profile} {factur-x.xml {EN 16931} zugferd-invoice.xml {EN 16931}      xrechnung.xml XRECHNUNG} {
     set doc [archivable $face]
-    $doc zugferd $invoice -name $name
+    $doc zugferd $invoice -name $name -profile $profile
     set path [::tclpdfTest::scratch zugferd-name.pdf]
     $doc write $path
     set state [$doc zugferd state]
@@ -1478,8 +1484,10 @@ test zugferd-13.5 {order-x.xml is the order's name and no invoice's; the file's 
   set out {}
   # An invoice may not be called order-x.xml, an order nothing else.
   set doc [archivable $face]
+  # The names the message offers are the ones THIS invoice may use, which
+  # since block 17 no longer include the reference profile's xrechnung.xml.
   lappend out [catch {$doc zugferd $invoice -name order-x.xml} err] \
-      [string match {*"order-x.xml" is the file name of an order, and this document is an invoice (-type INVOICE)*factur-x.xml, zugferd-invoice.xml, xrechnung.xml*Order-X 1.0, 4.1.1*pass -type ORDER, ORDER_RESPONSE, ORDER_CHANGE} $err] \
+      [string match {*"order-x.xml" is the file name of an order, and this document is an invoice (-type INVOICE)*factur-x.xml, zugferd-invoice.xml*Order-X 1.0, 4.1.1*pass -type ORDER, ORDER_RESPONSE, ORDER_CHANGE} $err] \
       [untouched $doc]
   $doc destroy
   foreach name {factur-x.xml zugferd-invoice.xml xrechnung.xml} {
@@ -1720,5 +1728,160 @@ test zugferd-14.3 {a refused encoding leaves the document exactly as it was} -co
   file delete $path
   list $code [lrange $::errorCode 0 3] $state
 } -result {1 {TCLPDF ZUGFERD XML encoding} {{} {} {}}}
+
+# --- the name is bound to the profile, not only to the family -------------
+#
+# Factur-X 1.09.2, 6.2 and 7.7: the XML is always factur-x.xml, and the one
+# exception is a reference profile such as XRECHNUNG, whose name must be
+# xrechnung.xml and may not be factur-x.xml. Measured 2026-08-27, before
+# this: "-profile XRECHNUNG" embedded the invoice as factur-x.xml and an
+# EN 16931 invoice was allowed to call itself xrechnung.xml - both files
+# valid to Mustangproject and to veraPDF, neither of which tests the
+# binding, and both naming themselves something they are not.
+
+test zugferd-17.1 {XRECHNUNG defaults to its own name} -constraints {haveInvoice haveTdom} -body {
+  set doc [archivable $face]
+  $doc zugferd $invoice -profile XRECHNUNG
+  set state [$doc zugferd state]
+  $doc destroy
+  list [dict get $state name] [dict get $state profile] \
+      [dict get $state type]
+} -result {xrechnung.xml XRECHNUNG INVOICE}
+
+test zugferd-17.2 {and takes no other name} -constraints {haveInvoice haveTdom} -body {
+  # Every name the ordinary invoice profiles use is refused for it, and the
+  # document is left as it was - no PDF/A claim, no schema, no attachment.
+  set out {}
+  foreach name {factur-x.xml zugferd-invoice.xml} {
+    set doc [archivable $face]
+    lappend out [catch {$doc zugferd $invoice -profile XRECHNUNG -name $name} message] \
+        [lrange $::errorCode 0 3] [string match {*7.7*} $message] \
+        [list [$doc zugferd state] [$doc pdfa state] [$doc attachments]]
+    $doc destroy
+  }
+  set out
+} -result {1 {TCLPDF ZUGFERD NAME factur-x.xml} 1 {{} {} {}}\
+    1 {TCLPDF ZUGFERD NAME zugferd-invoice.xml} 1 {{} {} {}}}
+
+test zugferd-17.3 {and no other profile takes its name} -constraints {haveInvoice haveTdom} -body {
+  # The other half of 7.7, and the one a reader would be misled by: an
+  # EN 16931 or MINIMUM invoice calling itself xrechnung.xml.
+  set out {}
+  foreach profile {{} {EN 16931} MINIMUM} {
+    set doc [archivable $face]
+    set options [list -name xrechnung.xml]
+    if {$profile ne {}} {
+      lappend options -profile $profile
+    }
+    lappend out [catch {$doc zugferd $invoice {*}$options} message] \
+        [lrange $::errorCode 0 3] \
+        [string match {*XRECHNUNG*} $message] \
+        [list [$doc zugferd state] [$doc pdfa state]]
+    $doc destroy
+  }
+  set out
+} -result {1 {TCLPDF ZUGFERD NAME xrechnung.xml} 1 {{} {}}\
+    1 {TCLPDF ZUGFERD NAME xrechnung.xml} 1 {{} {}}\
+    1 {TCLPDF ZUGFERD NAME xrechnung.xml} 1 {{} {}}}
+
+test zugferd-17.4 {an order is told it is not an invoice first} -constraints {haveInvoice haveTdom} -body {
+  # The family question is the coarser one and is asked first: order-x.xml
+  # is the only name an order has, and "xrechnung.xml" is an invoice name
+  # before it is a reference profile's.
+  set doc [archivable $face]
+  set code [catch {$doc zugferd [orderXml urn:order-x.eu:1p0:basic] \
+      -type ORDER -name xrechnung.xml} message]
+  $doc destroy
+  list $code [lrange $::errorCode 0 3] [string match {*is an order*} $message]
+} -result {1 {TCLPDF ZUGFERD NAME xrechnung.xml} 1}
+
+test zugferd-17.5 {the file's own name is not kept where the profile forbids it} -constraints {haveInvoice haveTdom} -body {
+  # Without -name the file's own name is kept where the profile allows it
+  # and the default is taken otherwise - which for an XRECHNUNG invoice in a
+  # file called factur-x.xml means xrechnung.xml, not the name 7.7 forbids
+  # it, and for an EN 16931 invoice in a file called xrechnung.xml means
+  # factur-x.xml.
+  set out {}
+  foreach {name profile} {factur-x.xml XRECHNUNG xrechnung.xml {EN 16931}} {
+    set path [::tclpdfTest::scratch $name]
+    ::tclpdf::io write $path [::tclpdf::io read $invoice]
+    set doc [archivable $face]
+    $doc zugferd $path -profile $profile
+    lappend out [dict get [$doc zugferd state] name]
+    $doc destroy
+    file delete $path
+  }
+  set out
+} -result {xrechnung.xml factur-x.xml}
+
+# --- the reserved names and the rest of the name tree ---------------------
+
+test zugferd-18.1 {a reserved name already in the tree refuses the invoice} -constraints {haveInvoice haveTdom} -body {
+  # The mirror of the guard in attach.tcl, so both orders answer the same.
+  # Case-insensitively: the name tree keys on bytes (7.9.6), so
+  # "factur-x.XML" is a key of its own, and to a reader looking the invoice
+  # up it is the same name.
+  set out {}
+  foreach name {factur-x.xml factur-x.XML ORDER-X.xml zugferd-invoice.xml} {
+    set doc [archivable $face]
+    $doc attach -data x -name $name -date "D:20260812093000+02'00'"
+    lappend out [catch {$doc zugferd $invoice} message] \
+        [lrange $::errorCode 0 3] \
+        [list [$doc zugferd state] [$doc pdfa state] [$doc attachments]]
+    $doc destroy
+  }
+  set out
+} -result {1 {TCLPDF ZUGFERD NAME factur-x.xml} {{} {} factur-x.xml}\
+    1 {TCLPDF ZUGFERD NAME factur-x.XML} {{} {} factur-x.XML}\
+    1 {TCLPDF ZUGFERD NAME ORDER-X.xml} {{} {} ORDER-X.xml}\
+    1 {TCLPDF ZUGFERD NAME zugferd-invoice.xml} {{} {} zugferd-invoice.xml}}
+
+test zugferd-18.2 {an attachment with a name of its own is no obstacle} -constraints {haveInvoice haveTdom} -body {
+  set doc [archivable $face]
+  $doc attach -data x -name anlage.xml -date "D:20260812093000+02'00'"
+  $doc zugferd $invoice
+  set state [list [dict get [$doc zugferd state] name] [$doc attachments]]
+  $doc destroy
+  set state
+} -result {factur-x.xml {anlage.xml factur-x.xml}}
+
+# --- a caller's XMP packet and the invoice --------------------------------
+
+test zugferd-19.1 {a caller's packet without the fx description refuses the write} -constraints {haveInvoice haveTdom} -body {
+  # Measured 2026-08-27: "metadata <own packet>" together with [zugferd]
+  # wrote the output intent, the attachment and the /AF entry, and lost the
+  # Factur-X extension schema and the four fx: properties without a word -
+  # veraPDF said isCompliant="true" and Mustangproject answered five
+  # "not found" errors, while [zugferd state] went on naming the profile.
+  # Both orders, since the packet is built at write time.
+  set packet {<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" rdf:about="">
+      <pdfaid:part>3</pdfaid:part>
+      <pdfaid:conformance>B</pdfaid:conformance>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>}
+  set out {}
+  foreach order {invoiceFirst metadataFirst} {
+    set doc [archivable $face]
+    if {$order eq "invoiceFirst"} {
+      $doc zugferd $invoice
+      $doc metadata $packet
+    } else {
+      $doc metadata $packet
+      $doc zugferd $invoice
+    }
+    set path [::tclpdfTest::scratch zugferd-caller.pdf]
+    lappend out [catch {$doc write $path} message] [lrange $::errorCode 0 2] \
+        [string match {*"fx"*} $message] [file exists $path] \
+        [dict get [$doc zugferd state] name]
+    $doc destroy
+    file delete $path
+  }
+  set out
+} -result {1 {TCLPDF XMP CALLER} 1 0 factur-x.xml 1 {TCLPDF XMP CALLER} 1 0 factur-x.xml}
 
 cleanupTests

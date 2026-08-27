@@ -381,6 +381,26 @@ test kern-4.2 {and a right-to-left line moves the PLACEMENT to the other slot} -
   ::tclpdf::kern run $state {10 11 12 13} rtl
 } -result {0 -60 0 0}
 
+test kern-4.12 {a single adjustment at the first position keeps its advance} -body {
+  # The X PLACEMENT of the first glyph is dropped - it would shift the whole
+  # line sideways, and [kernGpos Place] says why. What must not go with it is
+  # the X ADVANCE: the rest of the line owes the difference between the two
+  # because the placement has already moved this glyph, and at position 0 the
+  # placement has moved nothing. A single adjustment usually writes the same
+  # number twice, so the difference came to zero and the glyph kept its full
+  # width - measured against hb-shape on a face built for it, "x" 600 units
+  # where HarfBuzz says 550.
+  #
+  # Same lookup as 4.1, with the adjusted glyph first and then second. Either
+  # way the line is 50 units narrower; at position 0 the whole 50 falls into
+  # the slot that moves everything after the glyph, and at position 1 the
+  # placement takes it and the advance owes nothing more. The first of the two
+  # answered {0 0} before.
+  set state [gposState [list [::tclpdfTest::gsubLookup 1 0 \
+      [list [gposSingle {10} -50 -50]]]]]
+  list [::tclpdf::kern run $state {10 11}] [::tclpdf::kern run $state {11 10}]
+} -result {{-50 0} {-50 0}}
+
 test kern-4.3 {a chaining lookup reaches the adjustment it names} -body {
   # Type 8 is the whole of the kerning of Noto Sans Arabic, Scheherazade New,
   # Noto Kufi and Amiri under "arab", and none of it was read before

@@ -43,6 +43,9 @@ oo::define ::tclpdf::document::document {
   #              many LI it holds and how many of those carry a Lbl
   #   toci       per TOCI element, {index reference}: where it sits in the
   #              tree and whether it or anything below it carries a Ref
+  #   fenote     per FENote element, {index ref cited}: where it sits, whether
+  #              it names a citation with -ref, and whether anything else in
+  #              the tree points AT it with -ref
   #   types      every type used, once
   #
   # Returned rather than read out of the state by the caller: the shape of an
@@ -63,8 +66,31 @@ oo::define ::tclpdf::document::document {
         lappend headings $level
       }
     }
+    # WHO POINTS AT WHOM, once for the whole tree: -ref travels as the NAME
+    # of the target element (see [StructureOpen]), and the names are resolved
+    # in structureNames. Built here rather than per FENote, because the
+    # question "does anything cite this footnote" is asked of every one of
+    # them and the answer is one walk over the same list.
+    set named [my state structureNames]
+    set cited {}
+    set index 0
+    foreach element $elements {
+      foreach name [dict get $element ref] {
+        if {![dict exists $named $name]} {
+          continue
+        }
+        set target [dict get $named $name]
+        # A citation is another element. An element naming itself points at
+        # nothing a reader can follow back.
+        if {$target != $index} {
+          dict set cited $target 1
+        }
+      }
+      incr index
+    }
     set index 0
     set toci {}
+    set fenote {}
     foreach element $elements {
       switch -- [dict get $element type] {
         Table {
@@ -76,11 +102,16 @@ oo::define ::tclpdf::document::document {
         TOCI {
           lappend toci [list $index [my StructureRefBelow $elements $index]]
         }
+        FENote {
+          lappend fenote [list $index \
+              [expr {[dict get $element ref] ne {}}] \
+              [dict exists $cited $index]]
+        }
       }
       incr index
     }
     return [dict create headings $headings rows $rows lists $lists \
-        toci $toci types $types]
+        toci $toci fenote $fenote types $types]
   }
 
   # Whether an element or anything below it names a target with -ref. The
@@ -213,4 +244,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structureReport 1.2
+package provide tclpdf::structureReport 1.3

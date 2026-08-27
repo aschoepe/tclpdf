@@ -108,6 +108,41 @@ proc ::tclpdf::pdfObj::fits {value} {
   return [expr {$value <= 3.403e38 && $value >= -3.403e38}]
 }
 
+# AND WHAT WILL THE FILE ACTUALLY CARRY? The number [num] above would write,
+# read back as a number: 0.000001 answers 0.0, because a PDF real is written
+# in fixed notation with five decimals (7.3.3) and there is no sixth.
+#
+# THE ONE PLACE THAT QUESTION IS ASKED, and it is asked often enough to be
+# worth a name. A check made on the value HANDED IN and a file that says
+# something else is a whole class of defect, and every member of it looks the
+# same from outside: the call is accepted, the file is well formed, no
+# validator objects, and the drawing is gone. Measured on 2026-08-27:
+# "-stops {0 0.000001 0.000002 1}" wrote "/Bounds [0 0]" against Table 40,
+# "-dash {1e-6 1e-6}" wrote "[0 0] 0 d" against 8.4.3.6, "-step {1e-6 4}"
+# wrote "/XStep 0" against Table 75, "-size {1e-6 1e-6}" wrote
+# "/BBox [0 0 0 0]" against Table 95 - four commands, one mistake.
+# [geometry singular] drew this cut for matrices before anything else did and
+# says why at length; [arc], -dpi and -extent already ask it of their own
+# values. This is that question, once, so the fifth caller does not write a
+# fifth version of it.
+#
+# The value comes back UNCHANGED when the file could not hold it at all
+# (NaN, Inf, past the real range): those are refused elsewhere and turning
+# them into 0.0 here would let them slip through a caller's "is it zero"
+# with the wrong answer.
+#
+# Through [num] rather than beside it: the five decimals, the trimming and
+# the integer/real spelling are that proc's business, and a second [format]
+# here is how the two come to disagree. The trailing point [num] puts back on
+# a whole number beyond the integer range is stripped again - it is syntax,
+# not value.
+proc ::tclpdf::pdfObj::written {value {digits 5}} {
+  if {![fits $value]} {
+    return $value
+  }
+  return [expr {double([string trimright [num $value $digits] .])}]
+}
+
 # A name object (7.3.5). Everything outside the printable ASCII range and every
 # delimiter has to be written as #xx, which is why "/Mein Name" or a name with
 # a slash in it cannot simply be concatenated.
@@ -313,4 +348,4 @@ proc ::tclpdf::pdfObj::Utf16Be {value} {
   return $result
 }
 
-package provide tclpdf::pdfObj 1.7
+package provide tclpdf::pdfObj 1.8

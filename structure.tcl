@@ -297,6 +297,40 @@ namespace eval ::tclpdf::structure {
     LI LBody
   }
 
+  # THE BRACKET IS A TRANSACTION, and these are the keys it saves and puts
+  # back. A [structure ... -script] whose body fails leaves the tree as it
+  # was - the element, the children the body managed to open, the names and
+  # the ids they claimed - so that a refusal the caller traps costs the
+  # document nothing.
+  #
+  # THE COMMIT BOUNDARY IS THE CONTENT STREAM, and it is not a choice: what
+  # a page already carries cannot be taken back. A mark is two halves that
+  # meet by number (ISO 32000-1 14.7) - "/P <</MCID 3>> BDC" in the stream
+  # and a kid in the tree - and dropping the tree half alone would leave a
+  # number in the page that the ParentTree does not answer: content a reader
+  # neither finds in the tree nor knows to skip (ISO 14289-1 7.1). An OBJR
+  # is the same bargain one step further out - the annotation carries a
+  # /StructParent naming an entry that would be gone (14.7.5.4). So:
+  #
+  #   nothing reached the stream, no annotation joined  ->  undo it all
+  #   anything did                                      ->  keep it all
+  #
+  # and the second half is said out loud in the manual: an element whose
+  # body drew something before it failed stays, with what it drew.
+  #
+  # Measured from the state rather than by walking the subtree, because the
+  # three facts ARE the three payments: a mark is a number claimed from the
+  # per-page counter (structureMcid), an annotation is an entry in
+  # structureAnnots, and a structure destination is a reservation the write
+  # resolves against the names (structureDestinations) - a name dropped
+  # under it would fail the write with "no structure element named".
+  variable transactionKeys {
+    structure structureStack structureNames structureIds structureAnnots
+    structureMcid structureExpansionSpan structureInArtifact
+    structureDestinations
+  }
+  variable commitKeys {structureMcid structureAnnots structureDestinations}
+
   # Attributes an element can carry, as option name -> {owner key kind}.
   #
   # An attribute is not a key of the element dictionary but lives in an
@@ -495,10 +529,15 @@ oo::define ::tclpdf::document::document {
           or draw the content on the page"
     }
     set script [dict get $options script]
+    # Taken BEFORE the element is opened, so that the undo reaches the
+    # element itself and not only what the body did with it - see
+    # [StructureRollback] and the transaction comment beside transactionKeys.
+    set snapshot [my StructureSnapshot]
     set id [my StructureOpen $type $options]
     set code [catch {uplevel 1 $script} result outcome]
     my StructureClose $id
     if {$code} {
+      my StructureRollback $snapshot
       return -options $outcome $result
     }
     # Judged once the body is through and only then: an error from inside
@@ -622,10 +661,16 @@ oo::define ::tclpdf::document::document {
           \[\$doc text -paginate 1\] does that for a paragraph carried over\
           a page break. Resume a grouping element instead"
     }
+    # The resumed pass is a transaction of its own, on the same commit
+    # boundary [structure]'s bracket keeps: the element was there before and
+    # stays, but the children this pass opened and the names they claimed go
+    # again when the pass gathered no mark, no OBJR and no destination.
+    set snapshot [my StructureSnapshot]
     my state structureStack [linsert [my state structureStack] end $id]
     set code [catch {uplevel 1 $script} result outcome]
     my StructureClose $id
     if {$code} {
+      my StructureRollback $snapshot
       return -options $outcome $result
     }
     # Judged with everything the element holds NOW, which is why it runs
@@ -1110,6 +1155,36 @@ oo::define ::tclpdf::document::document {
         && $parentType ni $leafOnly}]
   }
 
+  # The type a mark or an expansion takes when it is drawn inside an open
+  # CONTAINER that has a content child of its own (contentChildOf): text in
+  # an open LI is the item's LBody, whatever [text] was going to call it.
+  #
+  # ONLY WHERE THE ANSWER IS OBVIOUS, which is the whole of the fix of
+  # 2026-08-27. The substitution used to be unconditional, so every -tag in
+  # an open LI came out as a second LBody - "structure LI -script { text
+  # \"1.\" -tag Lbl; text \"body\" }" gave the item two LBody children and no
+  # label at all, and a numbered list without a Lbl is what PDF/UA-1 7.6
+  # refuses. The manual (:1178) promised the opposite from the start: a type
+  # the open element may not hold is refused naming both.
+  #
+  # So three tags are substituted and no others: the empty one, the P that
+  # [text] passes when nothing was said, and the content child itself. Every
+  # other tag is opened under its own name and judged by
+  # [StructureCheckNesting], which already knows that a Lbl belongs in an LI
+  # (parentOf, and the label-comes-first rule) and that an H2 does not
+  # (childrenOf).
+  method StructureDerivedIn {open derived} {
+    variable ::tclpdf::structure::contentChildOf
+    if {![dict exists $contentChildOf $open]} {
+      return $derived
+    }
+    set child [dict get $contentChildOf $open]
+    if {$derived in [list {} P $child]} {
+      return $child
+    }
+    return $derived
+  }
+
   # Whether an inline element opened now would sit inside something that
   # holds text: 1 when the nearest open element that is not transparent
   # (Div, Part, NonStruct pass the question up, as ISO 32005 does) is
@@ -1196,18 +1271,71 @@ oo::define ::tclpdf::document::document {
     return $key
   }
 
-  # The type of the element an annotation was attached to by
-  # [StructureAnnotation], or {} when it was attached to none - drawn
-  # outside any element, or before the document was tagged. Asked by
-  # link.tcl for the UA rule that a link annotation sits inside a Link.
-  method StructureAnnotationOwner {number} {
+  # The element an annotation was attached to by [StructureAnnotation], as
+  # {id type}, or {} when it was attached to none - drawn outside any
+  # element, or before the document was tagged.
+  #
+  # The ID is wanted beside the type because two questions are asked of the
+  # same fact: link.tcl asks WHAT an annotation joined, for the UA rule that
+  # a link annotation sits inside a Link, and WHICH element it joined, for
+  # the UA-2 rule that one Link element holds one target (8.2.5.20). One
+  # walk answers both.
+  method StructureAnnotationElement {number} {
     foreach annotation [my state structureAnnots] {
       lassign $annotation element owner
       if {$owner == $number} {
-        return [dict get [lindex [my state structure] $element] type]
+        return [list $element \
+            [dict get [lindex [my state structure] $element] type]]
       }
     }
     return {}
+  }
+
+  # The type alone, which is what the older of the two questions wants.
+  method StructureAnnotationOwner {number} {
+    return [lindex [my StructureAnnotationElement $number] 1]
+  }
+
+  # THE STATE OF THE TREE, whole, as one value - what a bracket saves before
+  # it opens its element. Nine keys, listed once in transactionKeys beside
+  # the reasoning; a tenth added later has to be added there and nowhere
+  # else.
+  #
+  # Public in the sense the rest of this package is: a module that opens an
+  # element with [StructureOpen] and runs a caller's script around it -
+  # table.tcl for a row, field.tcl for a label - takes a snapshot the same
+  # way and hands it back to [StructureRollback].
+  method StructureSnapshot {} {
+    variable ::tclpdf::structure::transactionKeys
+    set snapshot {}
+    foreach key $transactionKeys {
+      dict set snapshot $key [my state $key]
+    }
+    return $snapshot
+  }
+
+  # Put the tree back the way [StructureSnapshot] found it - unless the
+  # bracket has been paid for in the content stream. Answers 1 when it undid
+  # the work and 0 when it left it standing, so a caller can say which
+  # happened.
+  #
+  # The three keys that decide are commitKeys, and the comment beside them
+  # says why those three and no others: an MCID claimed, an OBJR attached or
+  # a structure destination reserved is a promise something ELSE in the file
+  # already carries, and a tree without its half of it is worse than a tree
+  # with an element too many.
+  method StructureRollback {snapshot} {
+    variable ::tclpdf::structure::transactionKeys
+    variable ::tclpdf::structure::commitKeys
+    foreach key $commitKeys {
+      if {[my state $key] ne [dict get $snapshot $key]} {
+        return 0
+      }
+    }
+    foreach key $transactionKeys {
+      my state $key [dict get $snapshot $key]
+    }
+    return 1
   }
 
   method StructureClose {id} {
@@ -1223,40 +1351,70 @@ oo::define ::tclpdf::document::document {
     return
   }
 
-  # A Caption has a place, not just a parent: Annex L wants it as the FIRST
-  # child of a Table or an L, and ISO 32000-2 lets a table carry it last as
-  # well. Checked when the element's bracket closes, because only then is it
-  # known what else it holds - and still at the call, where the message can
-  # name the position rather than an object number. No caption, no complaint.
+  # A Caption has a place and a number, not just a parent. ISO 32000-2 Table
+  # 372: "The Caption shall be the first or the last structure element inside
+  # its parent structure element. The number of captions cannot exceed 1" -
+  # and the descriptions of L and Table (14.8.4.8) say the same of those two
+  # in their own words. Checked when the element's bracket closes, because
+  # only then is it known what else it holds - and still at the call, where
+  # the message can name the position rather than an object number. No
+  # caption, no complaint.
+  #
+  # EVERY HOME OF A CAPTION, not two of them. The rule used to read "Table
+  # or L", so a Figure or a Formula - the other two parents parentOf gives a
+  # Caption, and the ones Table 372 names first - took a caption in the
+  # middle and took a second one: measured 2026-08-27, a Figure with two
+  # captions passed under ua1 and was failed by veraPDF ua2 (ISO/TS 32005
+  # Table 5, "Figure-Caption"). The four homes are read from parentOf, so
+  # the two rules cannot drift apart.
+  #
+  # WHERE "LAST" IS ALLOWED, and it is not one answer for the four. ISO
+  # 32000-1 Annex L puts the caption of a Table or an L FIRST, and this
+  # package applies Annex L to 1.7 files deliberately (see childrenOf); ISO
+  # 32000-2 lets those two stand last as well (14.8.4.8, the L and Table
+  # descriptions). Figure and Formula are governed by Table 372 alone, which
+  # says "first or the last" and has no earlier rule to contradict - and a
+  # caption UNDER a picture is the ordinary shape of one. So the two types
+  # Annex L speaks about keep the stricter rule in a 1.7 file, and the two it
+  # does not take Table 372's in every file.
+  #
+  # THE COUNT is not version-dependent at all: "The number of captions cannot
+  # exceed 1" (Table 372), and ISO/TS 32005 Table 5 gives all four a Caption
+  # 0..1. Asked of every file.
   method StructureCheckCaption {id} {
+    variable ::tclpdf::structure::parentOf
     set elements [my state structure]
     set element [lindex $elements $id]
     set type [dict get $element type]
-    if {$type ni {Table L}} {
+    if {$type ni [dict get $parentOf Caption]} {
       return
     }
     set kids [dict get $element kids]
+    set last [expr {$type in {Figure Formula}
+        || [package vcompare [[my writer] version] 2.0] >= 0}]
+    set where [expr {$last ? "first or last" : "first or, in a 2.0 file, last"}]
     set position 0
+    set seen 0
     foreach kid $kids {
       incr position
       if {[lindex $kid 0] ne "element"
           || [dict get [lindex $elements [lindex $kid 1]] type] ne "Caption"} {
         continue
       }
-      if {$position == 1} {
-        continue
+      if {[incr seen] > 1} {
+        return -code error -errorcode [list TCLPDF STRUCTURE PLACE caption] \
+            "tclpdf: this $type holds $seen Caption elements -\
+            a structure element carries at most one, and a second says the\
+            first was not the caption after all (ISO 32000-2 Table 372).\
+            Put the two texts in one Caption"
       }
-      if {$type eq "Table" && $position == [llength $kids]
-          && [package vcompare [[my writer] version] 2.0] >= 0} {
+      if {$position == 1 || ($last && $position == [llength $kids])} {
         continue
-      }
-      set where "first"
-      if {$type eq "Table"} {
-        set where "first or, in a 2.0 file, last"
       }
       return -code error -errorcode [list TCLPDF STRUCTURE PLACE caption] \
           "tclpdf: the Caption of a $type has to be its $where\
-          child, not child $position of [llength $kids] (ISO 32000-2 Annex L)"
+          child, not child $position of [llength $kids] (ISO 32000-2 Table\
+          372)"
     }
     return
   }
@@ -1421,7 +1579,6 @@ oo::define ::tclpdf::document::document {
       set derived {}
     }
     variable ::tclpdf::structure::containers
-    variable ::tclpdf::structure::contentChildOf
     # A grouping type holds elements, not a mark: "-tag Table" on a line of
     # text would make a Table whose one kid is a marked-content sequence,
     # which no reader can make anything of. The structure call is the way to
@@ -1460,8 +1617,8 @@ oo::define ::tclpdf::document::document {
         # Without a derived type there is nothing to make, and the mark falls
         # through to being an artifact.
         set element {}
-        if {$derived ne {} && [dict exists $contentChildOf $open]} {
-          set derived [dict get $contentChildOf $open]
+        if {$derived ne {}} {
+          set derived [my StructureDerivedIn $open $derived]
         }
       } elseif {$derived ni [list {} P $open]
           && $element ne [my state structureExpansionSpan]} {
@@ -1598,15 +1755,12 @@ oo::define ::tclpdf::document::document {
       return {}
     }
     variable ::tclpdf::structure::containers
-    variable ::tclpdf::structure::contentChildOf
     set opened {}
     set current [my StructureCurrent]
     if {$current ne {}} {
       set open [dict get [lindex [my state structure] $current] type]
       if {$open in $containers} {
-        if {[dict exists $contentChildOf $open]} {
-          set derived [dict get $contentChildOf $open]
-        }
+        set derived [my StructureDerivedIn $open $derived]
         set current {}
       }
     }
@@ -1688,4 +1842,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structure 1.6
+package provide tclpdf::structure 1.7

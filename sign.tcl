@@ -211,6 +211,10 @@ namespace eval ::tclpdf::sign {
   # which for the longer of the two values is 32 bytes.
   variable subFilterDistance 64
 
+  # The largest PDF integer (7.3.3, Annex C.2). The reservation of [Size] is
+  # measured against it as the number of hexadecimal digits it becomes.
+  variable sizeMaximum 2147483647
+
   # The /M placeholder: a date of nothing but zeros, written where the time
   # of signing is not yet known - the two-stage way, where the document is
   # prepared here and signed elsewhere and later. [digest] writes the real
@@ -436,13 +440,34 @@ proc ::tclpdf::sign::Entry {data at what} {
         "tclpdf: the /ByteRange of $what is not an array -\
         the file is not one tclpdf wrote"
   }
+  # TOKENISED, not scanned for digit runs, and that is the difference
+  # between reading the array and reading past it. A digit-run pattern took
+  # "[0 -388 33604 8543]" as the four numbers 0, 388, 33604 and 8543 - the
+  # minus sign is not a digit and simply fell out - and "1e2" as the two
+  # numbers 1 and 2. The first then failed further down as SIGN CHANGED
+  # ("the file was changed after it was written"), which is the wrong
+  # reason for the right refusal: nothing changed, the array never held
+  # four offsets. 7.3.3 makes an offset an integer, 12.8.1 makes it a byte
+  # position, and a byte position is not negative.
   set numbers {}
-  foreach word [regexp -all -inline {[0-9]+} \
+  set malformed {}
+  foreach word [regexp -all -inline {[^[:space:]]+} \
       [string range $data [expr {$open + 1}] [expr {$close - 1}]]] {
+    if {![regexp {^[0-9]+$} $word]} {
+      lappend malformed $word
+      continue
+    }
     # [scan] and not [expr]: "0000000010" is a leading-zero literal, and Tcl
     # reads that as octal - "0000000008" would be an error and "0000000010"
     # would be eight.
     lappend numbers [scan $word %d]
+  }
+  if {[llength $malformed]} {
+    return -code error -errorcode [list TCLPDF SIGN FOREIGN ByteRange] \
+        "tclpdf: the /ByteRange of $what holds\
+        \"[join $malformed {", "}]\", which is not a byte position - the\
+        four entries are non-negative integers (12.8.1, and 7.3.3 for what\
+        an integer looks like). The file is not one tclpdf wrote"
   }
   if {[llength $numbers] != 4} {
     return -code error -errorcode [list TCLPDF SIGN FOREIGN ByteRange] \
@@ -571,6 +596,45 @@ proc ::tclpdf::sign::DatePlaceholder {version} {
 proc ::tclpdf::sign::HeaderVersion {data} {
   if {![regexp {^%PDF-([0-9]+\.[0-9]+)} $data -> version]} {
     return 1.7
+  }
+  return $version
+}
+
+# The version the FILE is, which is not always the one its header states: a
+# /Version name in the document catalogue counts where it is later than the
+# header (ISO 32000-2, 7.7.2, Table 29 - "shall be used ... if it is later
+# than the version specified in the file's header"; 7.5.6 NOTE 4 names it as
+# the one way an incremental update can raise a version at all). The maximum
+# of the two, never less than the header - only upwards, as 7.5.5 has it.
+#
+# It matters here for two things that both come out of the version and were
+# both read off the header alone until 2026-08-27. The /M spelling: 7.9.4
+# NOTE 2 makes the closing apostrophe the spelling of "PDF versions up to
+# and including 1.7", so a file with header 1.7 and /Version /2.0 got a
+# 1.7 date written into a 2.0 file, and [digest] then measured the
+# placeholder against the wrong spelling. And the /SubFilter floor: a file
+# with header 1.5 and /Version /1.6 was refused a PKCS#7 signature naming
+# "states version 1.5", and one with /Version /2.0 was refused a CAdES one.
+# tclpdf writes no /Version of its own, so this is about files that come
+# from elsewhere - which is what [sign add] is for.
+#
+# Read through [::tclpdf::pdf info], the reader's public side, rather than
+# by a second parse here: the entry is an indirect reference as often as
+# not, and resolving it is the reader's work. A file the reader cannot read
+# is not judged here - the caller's next call says what is wrong with it in
+# its own words - and a /Version that is not a version number is ignored,
+# because Table 29 makes it a name and a name may say anything.
+proc ::tclpdf::sign::FileVersion {path data} {
+  set version [HeaderVersion $data]
+  package require tclpdf::importInfo 1.0-
+  if {[catch {::tclpdf::pdf info $path} facts]
+      || ![dict exists $facts catalogVersion]} {
+    return $version
+  }
+  set catalog [dict get $facts catalogVersion]
+  if {[regexp {^[0-9]+\.[0-9]+$} $catalog]
+      && [package vcompare $catalog $version] > 0} {
+    return $catalog
   }
   return $version
 }
@@ -1005,7 +1069,7 @@ proc ::tclpdf::sign::digest {path args} {
   set range [LocateDate $data $located $what]
   if {[llength $range] && [Waiting $data $located]} {
     if {$date eq "now"} {
-      set date [::tclpdf::pdfObj date {} [HeaderVersion $data]]
+      set date [::tclpdf::pdfObj date {} [FileVersion $path $data]]
     }
     set length [string length $data]
     set data [WriteDate $data $range $date $what]
@@ -1123,6 +1187,7 @@ proc ::tclpdf::sign::Claim {subFilter date what} {
 
 # How much room is reserved for the signature value.
 proc ::tclpdf::sign::Size {value what} {
+  variable sizeMaximum
   if {![string is integer -strict $value] || $value < 1} {
     return -code error -errorcode [list TCLPDF SIGN ARGUMENT size] \
         "tclpdf: $what -size is the number of bytes reserved\
@@ -1130,6 +1195,25 @@ proc ::tclpdf::sign::Size {value what} {
         Measured: a CMS object with an RSA-2048 certificate and its issuer\
         is 2599 bytes, one with ECDSA P-256 2209 - the default of 16384\
         leaves room for a timestamp and a longer chain"
+  }
+  # And an upper end, which there was none of: the room is written as
+  # 2 * size hexadecimal digits, and "-size 3000000000" was taken at the
+  # call and died in the WRITE with a raw "ARITH IOVERFLOW integer value
+  # too large to represent" out of [string repeat] - against the manual's
+  # promise that every refusal begins with "tclpdf:", and half a document
+  # later than the value that caused it. Measured 2026-08-27.
+  #
+  # The bound is the PDF integer (7.3.3, Annex C.2: +/-2147483647), applied
+  # to what is WRITTEN rather than to what was handed in - the digits, not
+  # the bytes - because the hexadecimal string's own length is what has to
+  # remain a number the file can carry.
+  if {2 * $value > $sizeMaximum} {
+    return -code error -errorcode [list TCLPDF SIGN ARGUMENT size] \
+        "tclpdf: $what -size $value reserves\
+        [expr {2 * $value}] hexadecimal digits, and a PDF integer stops at\
+        $sizeMaximum (7.3.3, Annex C.2) - the largest reservation is\
+        [expr {$sizeMaximum / 2}] bytes. A CMS object with an RSA-2048\
+        certificate and its issuer is 2599 bytes"
   }
   return $value
 }
@@ -1265,10 +1349,10 @@ proc ::tclpdf::sign::add {path args} {
   set data [::tclpdf::io read $path]
   set what "\"$path\""
 
-  # The version floor of the /SubFilter, read off the file's own header
-  # because that is where the version of a file stands and an update cannot
-  # move it.
-  set version [HeaderVersion $data]
+  # The version floor of the /SubFilter, read off the file itself - its
+  # header, raised by a /Version in the catalogue where the file carries a
+  # later one (7.7.2). An update cannot move either of them.
+  set version [FileVersion $path $data]
 
   # The date, held against THAT version - the file's, not this process's.
   # 7.9.4 spells the zone offset with a closing apostrophe in 1.x and
@@ -1290,12 +1374,13 @@ proc ::tclpdf::sign::add {path args} {
   set floor [expr {$subFilter eq "/ETSI.CAdES.detached" ? "2.0" : "1.6"}]
   if {[package vcompare $version $floor] < 0} {
     return -code error -errorcode [list TCLPDF VERSION $floor] \
-        "tclpdf: $what states version $version in its header\
-        and $subFilter needs $floor (ISO 32000-2, Table 255) - an incremental\
-        update cannot raise it, because the header is inside the bytes it\
-        leaves untouched. 7.5.6 NOTE 4 names the one way, a /Version entry in\
-        the catalog, and this call does not write it: on a PDF/A file that\
-        entry would break the profile"
+        "tclpdf: $what is a version $version file - its header,\
+        or a later /Version in its catalogue (7.7.2) - and $subFilter needs\
+        $floor (ISO 32000-2, Table 255). An incremental update cannot raise\
+        it, because the header is inside the bytes it leaves untouched.\
+        7.5.6 NOTE 4 names the one way, a /Version entry in the catalog, and\
+        this call does not write it: on a PDF/A file that entry would break\
+        the profile"
   }
 
   # A signature that is still waiting for its value, and why that is the end
@@ -2339,4 +2424,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.6
+package provide tclpdf::sign 1.7

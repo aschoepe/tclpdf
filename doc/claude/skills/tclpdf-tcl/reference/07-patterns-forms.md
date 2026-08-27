@@ -106,6 +106,8 @@ if {[catch {$doc form create wrong -size {20 10} -script {
     $doc rect -at {0 0} -size {20 10} -fill {pattern sunset}   ;# a page gradient inside a form
 }} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "a page gradient inside a form: NOT REFUSED"
 }
 ```
 
@@ -162,6 +164,8 @@ $doc shading function -at {110 20} -size {80 50} -space gray -domain {-2 2 -2 2}
 if {[catch {$doc shading function -at {20 20} -size {10 10} -space gray \
         -expression {x 2 mul}} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "an operator that is not in Table 42: NOT REFUSED"
 }
 ```
 
@@ -243,6 +247,8 @@ $doc shading tensor -patches [list [list \
 if {[catch {$doc shading triangles -vertices {
         {20 150 red} {40 150 green} {40 170 blue} {20 170 white}}} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "four vertices with every flag at 0: NOT REFUSED"
 }
 ```
 
@@ -302,10 +308,32 @@ puts [$doc layer configure]              ;# title and listMode, read back
 # what it drew before that is still closed properly.
 if {[catch {$doc layer draw german -script {$doc page add}} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "page add inside a layer bracket: NOT REFUSED"
+}
+
+# An annotation inside a form or a pattern script is refused as well, and for
+# a different reason: an annotation belongs to a PAGE and its rectangle is in
+# that page's coordinates (ISO 32000-2, 12.5.2), which a content stream of its
+# own does not have. Place the form first and lay the annotation over where it
+# landed. Inside [layer draw] the same call is TAKEN and lands outside the
+# layer - a layer is a bracket in the stream and an annotation is not content.
+foreach {label script} [list \
+        "a link inside form create"    [list $doc form create linked -size {20 10} \
+            -script [list $doc link -at {2 2} -size {10 5} -url https://example.org]] \
+        "a note inside pattern create" [list $doc pattern create noted -size {20 10} \
+            -script [list $doc annot note -at {2 2} -contents "here"]] \
+        "page add inside form create"  [list $doc form create paged -size {20 10} \
+            -script [list $doc page add]]] {
+    if {[catch $script message options]} {
+        puts "[format %-30s $label] [dict get $options -errorcode]"
+    } else {
+        puts "[format %-30s $label] NOT REFUSED"
+    }
 }
 ```
 
-`/OCProperties` is written for you, with every group in `/OCGs` and a default configuration `/D` carrying `/Order`, `/ON`, `/OFF`, `/RBGroups` and `/ListMode`. `/Order` lists every group, which is what ISO 19005-2/-3, 6.9 asks - so a **PDF/A document with layers stays conforming**. What is not offered: an `/OC` entry on an XObject or on an annotation - bracket the placement instead, and a link cannot be put into a layer at all. A page taken over with `pdf import` keeps the layers it brought (`12-import-update-info.md`).
+`/OCProperties` is written for you, with every group in `/OCGs` and a default configuration `/D` carrying `/Order`, `/ON`, `/OFF`, `/RBGroups` and `/ListMode`. `/Order` lists every group, which is what ISO 19005-2/-3, 6.9 asks - so a **PDF/A document with layers stays conforming**. What is not offered: an `/OC` entry on an XObject or on an annotation - bracket the placement instead. An `annot` or a `link` written inside `layer draw` is *taken* and lands outside the layer; inside `form create` or `pattern create` it is refused (`TCLPDF ANNOT PLACE form`, `TCLPDF LINK PLACE form`), because there the rectangle would be wrong as well - `page add` is refused in all three (`TCLPDF PAGE CANVAS add`, `TCLPDF LAYER SCRIPT`). A page taken over with `pdf import` keeps the layers it brought (`12-import-update-info.md`).
 
 ```tcl
 $doc write [file join $out ref-07-patterns-forms.pdf]

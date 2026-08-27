@@ -95,6 +95,7 @@ $scan image place page -at {110 20} -width 80 -rotate 2 -opacity 0.7
 $scan image embed wearer $jpeg -mask page
 try {
     $scan image place wearer -at {20 100} -width 40
+    puts "a stacked TIFF as a mask: NOT REFUSED"
 } trap {TCLPDF TIFF STACKED} {message options} {
     puts "[dict get $options -errorcode]: [string range $message 0 90]..."
 }
@@ -207,6 +208,8 @@ puts "inline dictionary: $abbreviated"
 # one).
 if {[catch {$doc image place photo -at {80 232} -width 30 -inline 1} message]} {
     puts "refused, as it should be: $message"
+} else {
+    puts "a photograph as an inline image: NOT REFUSED"
 }
 ```
 
@@ -267,6 +270,8 @@ if {![catch {package require tzint 1.3-}]} {
     # $doc font embed OCRB /path/to/OCRB.ttf
     encode markup "123456789012" -barcode ean13 -smalltext 1
     $doc svg -data $markup -at {20 180} -height 24 -alt "EAN-13 1234567890128"
+} else {
+    puts "barcodes: skipped - tzint 1.3 or newer is not on this machine"
 }
 ```
 
@@ -321,9 +326,37 @@ $doc svg $svgFile -at {20 20} -width 60 -artifact 1
 # animation, objectBoundingBox units. Everything under <defs> is counted too,
 # which is exactly where a filter is declared.
 puts "skipped: [$doc svg info]"
+
+# The counting is the promise, so it is worth seeing it fire: three things
+# this package does not build, in one drawing, each named in the answer.
+$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20"
+    viewBox="0 0 60 20">
+  <style>rect { stroke: black }</style>
+  <defs>
+    <linearGradient id="ramp" spreadMethod="reflect" gradientTransform="rotate(20)">
+      <stop offset="0" stop-color="#e67e22" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#2980b9"/>
+    </linearGradient>
+  </defs>
+  <rect width="60" height="20" fill="url(#ramp)"/>
+</svg>} -at {20 90} -width 60 -artifact 1
+puts "skipped: [$doc svg info]"
+
+# A drawing is not lost over a mistake in it. A path stops at the command
+# that cannot be read and what came before it is drawn (SVG 1.1, 8.3.9); a
+# polyline with an odd number of coordinates is drawn to its last complete
+# point (9.6). Both are reported rather than silently swallowed.
+$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20"
+    viewBox="0 0 60 20">
+  <path d="M0 0 L20 15 L40 zz" fill="none" stroke="#c0392b" stroke-width="1"/>
+  <polyline points="0,18 20,4 40" fill="none" stroke="#2980b9" stroke-width="1"/>
+</svg>} -at {20 120} -width 60 -artifact 1
+puts "drawn all the same: [$doc svg info]"
 ```
 
 `rgb(r, g, b)` and `rgb(r%, g%, b%)` are read (SVG 1.1, 11.13.1); an `rgba()` alpha is multiplied into the opacity of the side it paints.
+
+**`image draw -data` keys the cache on the BYTES**, so the same picture drawn twice still travels once - and it is the bytes, not a checksum over them: the checksum only picks the shelf, and two blocks of bytes that land on the same one are then compared in full, so no collision can make one picture stand in for another. The full comparison is reached only where the checksums have already agreed and costs 0.2 ms for 5 MB, against 2.8 s for a cryptographic digest over the same bytes in pure Tcl. A file name and `-data` in one call are refused (`TCLPDF IMAGE ARGUMENT source`), at `image draw` and at `image embed` alike: one of the two would win and the other be dropped in silence.
 
 ## -interpolate under PDF/A
 
@@ -340,6 +373,7 @@ $doc page add
 try {
     $doc image embed smooth $jpeg -interpolate 1
     $doc image place smooth -at {20 20} -width 40
+    puts "-interpolate 1 under PDF/A: NOT REFUSED"
 } trap {TCLPDF IMAGE INTERPOLATE PDFA} {message options} {
     puts "not under PDF/A: [lrange [dict get $options -errorcode] 3 end]"
 }
@@ -389,7 +423,11 @@ puts "clip and mask: \"[$doc svg info]\" (empty = nothing skipped)"
 
 `clip-rule="evenodd"` writes `W*` instead of `W`. A mask needs PDF 1.4, and the same mask used twice is one resource.
 
-**What cannot be honoured is REPORTED and the element is then drawn whole** - visible and complete beats invisible or wrongly cut, and `svg info` says which happened: `objectBoundingBox` units (which occur in none of the 15046 SVG files measured), a reference to nothing, a transform on a clipping shape, a shape the package cannot draw, and a mask that draws nothing.
+**What cannot be honoured is REPORTED and the element is then drawn whole** - visible and complete beats invisible or wrongly cut, and `svg info` says which happened: `objectBoundingBox` units (which occur in none of the 15046 SVG files measured), a reference to nothing, a transform on a clipping shape, a shape the package cannot draw, a mask that draws nothing, and a `mask-cycle` or `use-cycle`. A mask is converted to grey with the coefficients SVG 1.1, 14.4 names - 0.2125 R + 0.7154 G + 0.0721 B - and not with the ones a PDF reader applies to DeviceRGB in a DeviceGray group; for a grey or white mask, which is the common case, the two agree.
+
+**`svg info` is the whole answer to "what came out different from the file"**, so the list is long on purpose: `filter` and its primitives, `image`, `foreignObject` and every other element that is not drawn; `clipPathUnits`, `maskUnits`, `maskContentUnits` and `maskRegion` in `objectBoundingBox` units; a dangling `clip-path` or `mask`; a `use` nested deeper than 25 levels (`use-depth`); a negative width, height or radius (`rect-size`, `<name>-radius`); a family with no bold cut (`font-weight`); an unreadable `preserveAspectRatio`; a `<style>` block, a `spreadMethod` and a `gradientTransform`, none of which is built; a `stop-opacity` below one; a stop for which no room is left in the ramp (`stop-offset`); an odd coordinate count on a `polyline` (`points`); a path that stopped at an error (`path-error`); a negative `viewBox` or nested viewport (`viewBox`, `viewport`).
+
+Two things about a drawing ARE refused rather than reported, and both are limits rather than judgements: a `use` element that reaches itself, directly or round a corner (`TCLPDF SVG REFERENCE cycle` - SVG 1.1, 5.6 calls it an error and the drawing has no rendering), and a drawing whose `use` elements unfold to more than 20 000 copies (`TCLPDF SVG LIMIT use`, since nesting them multiplies). The XML in front of them has two of its own: `TCLPDF XML ENTITY expansion` past a hundredfold of the document's length and `TCLPDF XML ENTITY cycle` for an entity defined in terms of itself. A path error is **not** among them any more: it is drawn up to the command that failed and reported.
 
 ## preserveAspectRatio, and why it is read at all
 
@@ -436,3 +474,14 @@ puts "weights: \"[$doc svg info]\" (empty = every cut was there)"
 ```
 
 The document's own weight is never inherited by a drawing: a drawing must not come out bold because the running text around it happens to be. `font-style` is not read.
+
+## The rules of the drawing that are easy to get wrong
+
+- **Lengths carry their units**: `px`, `pt`, `mm`, `cm`, `in`, `pc`, `em`, `ex` and per cent are all read (SVG 1.1, 4.2 and 7.10). One user unit is one **point**, so `50mm` is 50 mm on the paper and `svg size` says so; a per cent is measured against the viewport in force and `em`/`ex` against the `font-size` at that element, whose initial value is 16.
+- **Viewports nest**: an `svg` element below the root and a `symbol` reached through a `use` each establish a viewport of their own, mapped through their `viewBox` and `preserveAspectRatio` and clipped to it - `overflow: hidden` is the initial value for both. `width`/`height` on a `use` apply to exactly these two.
+- **`<switch>` draws ONE child**: the first whose `requiredFeatures`, `requiredExtensions` and `systemLanguage` all hold. No feature string and no extension is claimed, so naming either is false; `systemLanguage` is held against the document's `language`, and against `en` where none is set.
+- **`display` and `visibility` are both read.** `display:none` - as an attribute or in `style=""`, which wins - leaves the element and its children out and is not inherited. `visibility` is inherited and read where the painting happens, so `hidden` on a group can be taken back by a child that says `visible`.
+- **`currentColor` is a paint**, standing for the `color` property (initial value black) - the spelling an icon uses to take the colour of its surroundings. `!important` and a `/* comment */` are stripped from a `style=""` declaration rather than taken for part of the value.
+- **`stroke-width="0"` paints no stroke at all** (SVG 1.1, 11.4), where `0 w` in PDF would give a hairline. A `viewBox` whose width or height is zero disables the drawing altogether (7.7): nothing is written and the rectangle answered is the empty one at `-at`.
+- **What a gradient inherits and how it is measured**: `href` carries the *attributes* as well as the stops - `gradientUnits`, `gradientTransform`, `spreadMethod`, the end points and the circle - wherever the element itself does not state them. `gradientUnits` alone decides what a number means, so a value outside 0..1 is legal under `objectBoundingBox`, and a radial gradient in those units is an **ellipse** on a box that is not square. Offsets are clamped into 0..1 and into order rather than refused; one stop is a solid fill in that colour, and only a gradient with no stop cannot be honoured.
+- **A `<text>` is a sequence**: its character data and its `tspan` children are set in document order, each `tspan` with its own painting properties and position, `x`/`y` coordinate lists whose first value is honoured, and `fill="none"` painting nothing. White space is collapsed as 10.15 asks unless `xml:space="preserve"` says otherwise.

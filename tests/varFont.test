@@ -768,4 +768,72 @@ test varFont-19.3 {a face without MVAR answers nothing} \
       [::tclpdf::varFont coordinates $parsed {wght 900}]
 } -result {}
 
+# -- round 8: an ill-formed variation region, and the vertical phantom points -
+
+set symbolFace [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts google NotoSansSymbols-Variable.ttf]
+testConstraint haveSymbols [file exists $symbolFace]
+
+test varFont-20.1 {an ill-formed region is ignored, axis and all} -body {
+  # ISO/IEC 14496-22:2019 7.1.7, the pseudocode of the scalar: a region whose
+  # three numbers are out of order, and one that straddles the default with a
+  # peak somewhere else, give a per-axis scalar of 1 - "not an error, apply
+  # the delta". Taken as a range test, the first came out 0 and the second a
+  # share of the way in, which is the delta applied partly. fontTools'
+  # supportScalar answers 1.0 for both at either point.
+  set answers {}
+  foreach {start peak end} {0.8 0.5 1.0 -0.5 0.5 1.0} {
+    foreach value {0.4 0.6} {
+      lappend answers [::tclpdf::varFont::Scalar [list $peak] [list $start] \
+          [list $end] [list $value]]
+    }
+  }
+  set answers
+} -result {1.0 1.0 1.0 1.0}
+
+test varFont-20.2 {a well-formed region still falls off towards its edges} -body {
+  # The control for 20.1: the ordinary region is untouched, or every variable
+  # face in the tree would be set at full delta everywhere.
+  list [::tclpdf::varFont::Scalar {0.5} {0.0} {1.0} {0.4}] \
+      [::tclpdf::varFont::Scalar {0.5} {0.0} {1.0} {0.0}] \
+      [::tclpdf::varFont::Scalar {0.5} {0.0} {1.0} {0.5}]
+} -result {0.8 0.0 1.0}
+
+test varFont-20.3 {the vertical origin of an instance comes off its phantom
+    points} -constraints haveSymbols -body {
+  # An instance's yMax moves with the axis and its top side bearing moves the
+  # other way, so that the origin stays where the design puts it. Built from
+  # the moved yMax and the DEFAULT bearing the two stopped cancelling: the
+  # arrows of NotoSansSymbols hung at 1470 and 1474 at wght 100 and at 1492
+  # and 1504 at wght 900, where fontTools' instancer and the face's own VVAR
+  # say 1480 at every weight.
+  set parsed [::tclpdf::sfnt read $symbolFace]
+  set answers {}
+  foreach weight {100 400 900} {
+    set moved [::tclpdf::varFont all $parsed \
+        [::tclpdf::varFont coordinates $parsed [list wght $weight]]]
+    foreach glyph {301 432} {
+      lappend answers [dict get $moved $glyph verticalOrigin]
+    }
+  }
+  lsort -unique $answers
+} -result 1480
+
+test varFont-20.4 {and the top side bearing follows the moved outline} \
+    -constraints haveSymbols -body {
+  # vmtx states the distance from the origin to the ink, so the bearing has to
+  # move with yMax while the origin stands still. fontTools' instancer: 798
+  # and 1027 at wght 100, 776 and 997 at wght 900.
+  set parsed [::tclpdf::sfnt read $symbolFace]
+  set answers {}
+  foreach weight {100 900} {
+    set moved [::tclpdf::varFont all $parsed \
+        [::tclpdf::varFont coordinates $parsed [list wght $weight]]]
+    foreach glyph {301 432} {
+      lappend answers [dict get $moved $glyph verticalBearing]
+    }
+  }
+  set answers
+} -result {798 1027 776 997}
+
 cleanupTests

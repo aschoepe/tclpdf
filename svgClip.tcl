@@ -66,11 +66,9 @@ oo::define ::tclpdf::document::document {
   # then filled the hole in the shape it was supposed to punch.
   method SvgClipProperty {node property} {
     set value [::tclpdf::xml attribute $node $property]
-    foreach {-> key text} [regexp -all -inline {([-a-z]+)\s*:\s*([^;]+)} \
-        [::tclpdf::xml attribute $node style]] {
-      if {$key eq $property} {
-        set value [string trim $text]
-      }
+    set declarations [my SvgDeclarations [::tclpdf::xml attribute $node style]]
+    if {[dict exists $declarations $property]} {
+      set value [dict get $declarations $property]
     }
     return $value
   }
@@ -277,7 +275,11 @@ oo::define ::tclpdf::document::document {
       switch -- $name {
         path {
           append operators [::tclpdf::svgPath operators \
-              [::tclpdf::xml attribute $child d] $::tclpdf::svg::identity]
+              [::tclpdf::xml attribute $child d] $::tclpdf::svg::identity \
+              problem]
+          if {$problem ne {}} {
+            my SvgSkipped path-error
+          }
         }
         rect - circle - ellipse - polyline - polygon {
           append operators [my SvgShape $name $child]
@@ -310,6 +312,17 @@ oo::define ::tclpdf::document::document {
       my SvgSkipped mask
       return {}
     }
+    # A MASK THAT MASKS ITSELF. SVG 1.1 does not name the case, but the
+    # answer is the one 5.6 gives for <use>: it has no rendering. Without the
+    # guard the recursion ended in Tcl's "too many nested evaluations
+    # (infinite loop?)" under TCL LIMIT STACK - no tclpdf: prefix, no TCLPDF
+    # code (measured 2026-08-27). The element is then drawn UNMASKED, which
+    # is what every other mask this module cannot honour does.
+    set open [my state svgClipStack]
+    if {"mask:$id" in $open} {
+      my SvgSkipped mask-cycle
+      return {}
+    }
     # THE TWO UNIT ATTRIBUTES HAVE DIFFERENT DEFAULTS, and reading them as
     # one was wrong in both directions (found 2026-08-25, the day this was
     # built). SVG 1.1, 14.4: maskContentUnits defaults to userSpaceOnUse -
@@ -333,7 +346,8 @@ oo::define ::tclpdf::document::document {
       set value [::tclpdf::xml attribute $node $key]
       if {$value ne {}} {
         lappend stated $key
-        lappend region [my SvgLength $value 0]
+        lappend region [my SvgLength $value 0 \
+            [expr {$key in {x width} ? {x} : {y}}]]
       }
     }
     set regionUnits [::tclpdf::xml attribute $node maskUnits]
@@ -364,11 +378,26 @@ oo::define ::tclpdf::document::document {
     # was dropped as "draws nothing" - the element then went out UNMASKED.
     # The initial value of fill is black (SVG 11.3), which is what SvgRoot
     # gives the drawing itself.
-    lassign [my SvgCapture {
-      foreach child [::tclpdf::xml children $node] {
-        my SvgElement $child [my SvgStyle $node [my SvgInheritedStyle $node]]
-      }
-    }] content bounds
+    # THE COLOURS OF THE MASK ARE CONVERTED HERE, with the coefficients SVG
+    # 1.1, 14.4 names - 0.2125/0.7154/0.0721 - and not left to the reader,
+    # which applies the 0.3/0.59/0.11 of ISO 32000-2, 8.6.5.4 to a DeviceRGB
+    # content in a DeviceGray group. Measured 2026-08-27 on a mask painted
+    # #ff0000: rsvg-convert gave an alpha of 0.212 and this package 0.302 -
+    # 42 % too opaque for red, too transparent for green. A grey or white
+    # mask, which is the common case, is untouched by either.
+    set luminosity [my state svgLuminosity]
+    my state svgLuminosity 1
+    my state svgClipStack [linsert $open end "mask:$id"]
+    try {
+      lassign [my SvgCapture {
+        foreach child [::tclpdf::xml children $node] {
+          my SvgElement $child [my SvgStyle $node [my SvgInheritedStyle $node]]
+        }
+      }] content bounds
+    } finally {
+      my state svgLuminosity $luminosity
+      my state svgClipStack $open
+    }
     if {$bounds eq {}} {
       # A mask that draws nothing is a mask of black: it would hide the
       # element entirely. Reported and dropped - an element that vanishes
@@ -413,4 +442,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svgClip 1.0
+package provide tclpdf::svgClip 1.1

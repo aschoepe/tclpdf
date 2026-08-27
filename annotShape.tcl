@@ -163,10 +163,35 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -width of annot $kind is the thickness of the line it is\
           drawn with, a finite number above zero, not \"$width\""
     }
+    # AND A THICKNESS THE FILE CAN HOLD AND STILL SHOW. Both ends were open:
+    # 1e39 passed here and was refused three frames on by [pdfObj num] inside
+    # the rectangle - TCLPDF OPTION NUMBER "a length", a code that names
+    # neither the option nor the annotation - and 1e-9 passed and was WRITTEN
+    # as /BS /W 0.00000, which Table 168 reads as "no border shall be drawn":
+    # the caller asked for a hairline and the file says there is no line at
+    # all. Measured 2026-08-27. Both are the same question - what the number
+    # looks like once it is a PDF real - so both are asked here, of the value
+    # in POINTS, which is what /W and the appearance are written in.
+    set widthPoints [::tclpdf::geometry toPoints $width [my cget -unit]]
+    if {![::tclpdf::pdfObj fits $widthPoints]
+        || [::tclpdf::pdfObj num $widthPoints] == 0} {
+      return -code error -errorcode [list TCLPDF ANNOT WIDTH $kind $width] \
+          "tclpdf: -width of annot $kind is \"$width\", which is $widthPoints\
+          points and no thickness a file can carry - a PDF real holds five\
+          decimals and about +/-3.403e38 (ISO 32000-1, Annex C.2), and a\
+          /BS /W that rounds to zero is what ISO 32000-2, Table 168 reads as\
+          no border at all"
+    }
     lassign [my AnnotShapeGeometry $kind $options] points box
     set rect [my AnnotShapeRect $kind $box $width "annot $kind"]
-    my RequireVersion $version "annot $kind"
+    # THE PAIRS BEFORE THE FLOOR OF THE KIND, because the pairs carry a floor
+    # of their own: /IC is 1.4 in a family that starts at 1.3, and asking the
+    # kind's floor first would record a requirement of 1.3 on a document that
+    # is then refused at 1.4 - a raised floor left behind by a call that never
+    # happened. [RequireVersion] remembers what it granted (writer.tcl), so
+    # the order of the two decides what a caught refusal leaves in the state.
     set pairs [my AnnotShapePairs $kind $points $options $width]
+    my RequireVersion $version "annot $kind"
     return [my AnnotWrite $subtype $rect $options $pairs 4 {} \
         [list AnnotShapeAppearance $kind $points $width]]
   }
@@ -199,16 +224,40 @@ oo::define ::tclpdf::document::document {
         ::tclpdf::option point [dict get $options size] -size "annot $kind"
         lassign [dict get $options at] left top
         lassign [dict get $options size] width height
+        # A NEGATIVE EXTENT, HERE AND NOT IN THE BOX. The box below is made
+        # of the smallest and the largest coordinate, so a -size of {-10 10}
+        # comes out as a perfectly ordinary 10 by 10 box and the sign is
+        # gone. It used to be caught deep inside the appearance script, in
+        # the drawing module's words and under its code - TCLPDF SHAPE
+        # ARGUMENT size, "-size is a length of 0 or more" - which is right
+        # about a call the caller never wrote. -size counts to the right and
+        # downwards from -at, as it does at [$doc rect].
+        foreach {extent name} [list $width width $height height] {
+          if {$extent < 0} {
+            return -code error -errorcode [list TCLPDF ANNOT RECT EMPTY $kind] \
+                "tclpdf: -size of annot $kind is\
+                {[dict get $options size]} and its $name is negative - the\
+                two numbers count to the right and downwards from -at, as\
+                they do at \[\$doc rect\]"
+          }
+        }
         set points [list [list $left $top] \
             [list [expr {$left + $width}] [expr {$top + $height}]]]
       }
       polygon - polyline {
         set points [dict get $options points]
-        if {[llength $points] < 2} {
+        # THREE CORNERS FOR A POLYGON, TWO POINTS FOR A POLYLINE. ISO 32000-2,
+        # 12.5.6.9 calls the one "a closed polygon on the page" and the other
+        # "a series of connected line segments": two points close to a line
+        # drawn twice, which is a /Line written as a /Polygon, and one point
+        # is nothing at all. Both were taken until 2026-08-27.
+        set least [expr {$kind eq "polygon" ? 3 : 2}]
+        if {[llength $points] < $least} {
           return -code error -errorcode [list TCLPDF ANNOT POINTS $kind] \
-              "tclpdf: annot $kind needs -points, a list of at least two\
-              {x y} pairs - a polygon of one point has no shape and nothing\
-              to draw"
+              "tclpdf: annot $kind needs -points, a list of at least $least\
+              {x y} pairs - ISO 32000-2, 12.5.6.9 makes a polygon a CLOSED\
+              figure, which takes three corners, and a polyline a series of\
+              connected segments, which takes two ends"
         }
         foreach point $points {
           ::tclpdf::option point $point -points "annot $kind"
@@ -224,9 +273,55 @@ oo::define ::tclpdf::document::document {
     }
     set left [::tcl::mathfunc::min {*}$xs]
     set top [::tcl::mathfunc::min {*}$ys]
-    return [list $points [list $left $top \
+    set box [list $left $top \
         [expr {[::tcl::mathfunc::max {*}$xs] - $left}] \
-        [expr {[::tcl::mathfunc::max {*}$ys] - $top}]]]
+        [expr {[::tcl::mathfunc::max {*}$ys] - $top}]]
+    my AnnotShapeArea $kind $box
+    return [list $points $box]
+  }
+
+  # HAS THE SHAPE ANYTHING TO SHOW? Asked of the bare box, before the line
+  # width inflates it - which is the reason the question was never asked.
+  #
+  # [AnnotRectangle] refuses an annotation of no area and has since it was
+  # written ("annot note -size {0 0}" is turned away, so is every field), but
+  # a geometry annotation never reaches that refusal: [AnnotShapeRect] grows
+  # the box by half the line width plus a hair FIRST, so a square of {0 0}
+  # arrives there as a rectangle 1.05 points wide. Measured 2026-08-27:
+  # "annot square -size {0 0}", "annot line -from {10 10} -to {10 10}" and
+  # "annot polyline" on two identical points were all written, all valid PDF
+  # and all invisible.
+  #
+  # WHAT COUNTS AS AREA DIFFERS BY KIND, and that is the whole of this
+  # method. A square and a circle are drawn INTO the box and need both
+  # extents - a square of zero height is a line and this package has one. A
+  # line, a polyline and a polygon are drawn ALONG their points, so one
+  # extent is enough: a horizontal line has no height and is perfectly
+  # visible. What none of them may be is a single point.
+  #
+  # AND THE WRITTEN EXTENT IS WHAT IS MEASURED, in points and with the five
+  # decimals a PDF real carries: a box of 1e-9 mm is positive to Tcl and
+  # exactly nothing in the file.
+  method AnnotShapeArea {kind box} {
+    lassign $box -> -> width height
+    set both [expr {$kind in {square circle}}]
+    set points {}
+    foreach extent [list $width $height] {
+      set inPoints [::tclpdf::geometry toPoints $extent [my cget -unit]]
+      lappend points [expr {[::tclpdf::pdfObj fits $inPoints]
+          ? [::tclpdf::pdfObj num $inPoints] : 0}]
+    }
+    if {$both ? ([lindex $points 0] == 0 || [lindex $points 1] == 0)
+        : ([lindex $points 0] == 0 && [lindex $points 1] == 0)} {
+      return -code error -errorcode [list TCLPDF ANNOT RECT EMPTY $kind] \
+          "tclpdf: annot $kind covers [lindex $points 0] by\
+          [lindex $points 1] points, which shows nothing -\
+          [expr {$both ? {a square and a circle are drawn into their box and
+          need a width and a height above zero} : {a line, a polyline and a
+          polygon are drawn along their points, and all of theirs are the
+          same one}}]"
+    }
+    return
   }
 
   # /Rect, grown by half the line width on every side.
@@ -277,8 +372,11 @@ oo::define ::tclpdf::document::document {
     lappend pairs BS [::tclpdf::pdfObj dictionary \
         [list Type /Border W [::tclpdf::pdfObj num \
             [my distance $width]] S /S]]
-    # /IC is the inside, and only the closed kinds have one (Table 176).
+    # /IC is the inside, and only the closed kinds have one (Table 176) - and
+    # it is a 1.4 entry in a family of annotations that is 1.3, which is the
+    # one place in this file where the key is younger than the kind.
     if {[dict get $options fill] ne {} && $kind ne "line" && $kind ne "polyline"} {
+      my AnnotKeyVersion IC
       lappend pairs IC [my AnnotColourArray [dict get $options fill]]
     }
     return $pairs
@@ -478,4 +576,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annotShape 1.1
+package provide tclpdf::annotShape 1.2

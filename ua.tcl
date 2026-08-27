@@ -441,6 +441,7 @@ oo::define ::tclpdf::document::document {
     lappend problems {*}[my UaCheckGraphics]
     lappend problems {*}[my UaCheckDescribed]
     lappend problems {*}[my UaCheckLinks]
+    lappend problems {*}[my UaCheckDestinations]
     lappend problems {*}[my UaCheckFields]
     lappend problems {*}[my UaCheckAttachments]
     if {[llength $problems] == 1} {
@@ -711,7 +712,81 @@ oo::define ::tclpdf::document::document {
           ([expr {$two ? {8.2.5.20} : {7.18.5}}]); draw the text and the\
           link inside \[\$doc structure Link -script ...\]"
     }
+    # AND ONE TARGET PER ELEMENT, part 2 only. The same clause 8.2.5.20 that
+    # lets a Reference stand in for a Link says that "Link annotations that
+    # target different locations shall be in separate Link or Reference
+    # structure elements" - a reader announces the element once, and two
+    # destinations under it leave it with nothing to say. Several annotations
+    # going to the SAME place are expressly allowed (Examples 2 and 3) and
+    # are the ordinary case, so it is the targets that are counted.
+    #
+    # [link] refuses the second one at the call where the claim already
+    # stands ([LinkTargetGuard]); this is the other order, where the claim
+    # comes after the drawing. Part 1 knows no such clause and is unchanged.
+    if {$two} {
+      foreach entry [my linksSharingElement {Link Reference}] {
+        lassign $entry page type count
+        lappend problems "page $page: one $type structure element holds link\
+            annotations going to $count different targets - PDF/UA-2 wants\
+            link annotations that target different locations in separate Link\
+            or Reference structure elements (8.2.5.20). Open one \[\$doc\
+            structure $type -script ...\] per target"
+      }
+    }
     return $problems
+  }
+
+  # PART 2 KNOWS NO PAGE DESTINATIONS. ISO 14289-2 8.8: "All destinations
+  # whose target lies within the same document shall be structure
+  # destinations" - a place on a page is a place the content may have left,
+  # and a reader following it lands wherever the page break happened to put
+  # things. veraPDF sees this one (8.8-1, one failure per destination), which
+  # is not the point: [ua] promises that no file leaves this package with a
+  # claim it does not keep, and until 2026-08-27 it wrote three kinds of page
+  # destination under a part-2 claim in both orders.
+  #
+  # ASKED OF THE STATE the three callers keep, not of a record of its own:
+  # link.tcl remembers where each of its links goes ([LinkRecord]),
+  # outline.tcl keeps the -page and the -structure of every bookmark, and
+  # viewerPreferences.tcl keeps the page of [initialView]. Read through
+  # [state] rather than through their methods, so that a document with no
+  # bookmarks does not load outline.tcl to be told it has none.
+  #
+  # [link -url] is untouched: its target does not lie within the document.
+  method UaCheckDestinations {} {
+    if {[dict get [my state ua] part] != 2} {
+      return {}
+    }
+    set callers {}
+    dict for {page links} [my state links] {
+      foreach link $links {
+        if {[lindex [dict get $link target] 0] ne "page"} {
+          continue
+        }
+        lappend callers "\[\$doc link -page\
+            [lindex [dict get $link target] 1]\] on page [expr {$page + 1}]"
+      }
+    }
+    foreach entry [my state outline] {
+      if {[dict get $entry structure] ne {}} {
+        continue
+      }
+      lappend callers "\[\$doc bookmark \"[dict get $entry title]\" -page\
+          [dict get $entry page]\]"
+    }
+    if {[dict exists [my state initialView] page]} {
+      lappend callers "\[\$doc initialView -page\
+          [dict get [my state initialView] page]\]"
+    }
+    if {![llength $callers]} {
+      return {}
+    }
+    return [list "[join $callers {, }] [expr {[llength $callers] > 1 ?
+        {name page destinations} : {names a page destination}}] - PDF/UA-2\
+        wants every target inside the document to be a structure destination\
+        (8.8), which survives the content moving. Name the element with\
+        \[\$doc structure <type> -name ...\] and point at it with\
+        -structure instead of -page; a link to a URL is not affected"]
   }
 
   # The form. Three rules, and all three are about the same thing: a widget
@@ -879,6 +954,37 @@ oo::define ::tclpdf::document::document {
             give the section a name with \[\$doc structure Sect -name ...\]\
             and the entry \[\$doc structure TOCI -ref <name>\]"
       }
+      # UA-2 8.2.5.14.1, and it asks for the entry in BOTH directions: "Real
+      # content that refers to footnotes ... shall use the Ref entry ... to
+      # reference the FENote. The corresponding FENote shall also use the Ref
+      # entry to identify all citations that reference it." A footnote nobody
+      # cites is a footnote to nothing, and a citation that does not name its
+      # note leaves a reader at the marker with nowhere to go - neither is
+      # visible in the finished file, and veraPDF 1.30 passes both.
+      #
+      # Part 1 is left alone for the reason [UaCheckFields] and the TOCI
+      # clause above give: ISO 14289-1 knows no FENote at all, and demanding
+      # the entry there would be this package inventing a rule.
+      foreach entry [dict get $report fenote] {
+        lassign $entry index ref cited
+        if {$ref && $cited} {
+          continue
+        }
+        set page [my UaElementPage $elements $index]
+        set what "neither names a citation nor is cited by anything"
+        if {$ref} {
+          set what "is cited by nothing"
+        } elseif {$cited} {
+          set what "does not name the content that cites it"
+        }
+        lappend problems "[expr {$page eq {} ? {} : "page $page: "}]a FENote\
+            $what - PDF/UA-2 wants the Ref entry on both ends, the citation\
+            naming the note and the note naming the citation (8.2.5.14.1).\
+            Name the two elements and point them at each other: \[\$doc\
+            structure Sub -name cite1 -ref note1\] around the marker in the\
+            text and \[\$doc structure FENote -name note1 -ref cite1\]\
+            around the note"
+      }
     }
     # The width of a row is the number of COLUMNS it covers, spans counted
     # (Matterhorn 15-003, UA-2 8.2.5.26): a cell with -colSpan 2 is two of
@@ -900,4 +1006,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.9
+package provide tclpdf::ua 1.10

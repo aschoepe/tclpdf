@@ -331,10 +331,18 @@ oo::define ::tclpdf::document::document {
       # sfnt.tcl rebuilds that face as a standalone sfnt - which is what a
       # /FontFile2 has to be. 0 is the default and is what a file with one
       # face is.
+      #
+      # FACE AND NOT ARGUMENT: the class says what the caller has to do about
+      # it, and here it is "name a face number". ARGUMENT means "this option
+      # does not belong to this kind of face at all", which is what the two
+      # refusals above say; a face number that is not a number is the same
+      # question [colorFont] answers as COLORFONT FACE and the reader answers
+      # as FONT FACE one step further on, when the number is one the file has
+      # not got.
       if {![string is integer -strict [dict get $options face]]
           || [dict get $options face] < 0} {
         return -code error \
-            -errorcode [list TCLPDF FONT ARGUMENT face] \
+            -errorcode [list TCLPDF FONT FACE [dict get $options face]] \
             "tclpdf: -face of font embed is the face inside a TrueType\
             collection, 0 or more, not \"[dict get $options face]\""
       }
@@ -469,7 +477,7 @@ oo::define ::tclpdf::document::document {
           path $path parsed $parsed \
           subset [my FontSubset $parsed [dict get $options subset]] \
           coordinates $coordinates axes $axes \
-          used {} number {}]
+          used {} cids {} number {}]
     }
     my state fonts $fonts
 
@@ -650,6 +658,17 @@ oo::define ::tclpdf::document::document {
     set instance [dict get $options instance]
     if {$axes eq {} && $instance eq {}} {
       return {{} {}}
+    }
+    # AN ODD LIST IS REFUSED BEFORE ANYTHING READS IT. -axes is {tag value
+    # tag value ...}, and "{wght}" is a perfectly good Tcl list that is no
+    # dictionary: [dict merge] and [dict for] answered a bare TCL VALUE
+    # DICTIONARY six levels down, which names neither the option nor what is
+    # wrong with it. Said here, where the caller's own words can be quoted.
+    if {[llength $axes] % 2} {
+      return -code error -errorcode [list TCLPDF FONT AXES odd] \
+          "tclpdf: -axes is an axis tag and a value for each axis to set,\
+          \"{wght 620 wdth 90}\" - \"$axes\" has an odd number of\
+          elements, so one tag has no value"
     }
     package require tclpdf::varFont 1.0-
     if {![::tclpdf::varFont isVariable $parsed]} {
@@ -1526,6 +1545,10 @@ oo::define ::tclpdf::document::document {
   # cells, which is right for CJK and is the only defined answer for anything
   # else.
   method FontVerticalAdvance {alias parsed glyph} {
+    set instanced [my FontInstanced $alias]
+    if {[dict exists $instanced $glyph verticalAdvance]} {
+      return [dict get $instanced $glyph verticalAdvance]
+    }
     set height [::tclpdf::sfnt verticalAdvance $parsed $glyph]
     if {$height eq {}} {
       return [dict get $parsed unitsPerEm]
@@ -1540,7 +1563,20 @@ oo::define ::tclpdf::document::document {
   # the whole column at the wrong height, because a glyph is drawn from its
   # origin and its vertical origin is not its horizontal one. The default is
   # the standard's again - 880 thousandths of the em, /DW2's first number.
+  # FROM THE INSTANCE WHERE THERE IS ONE, and that is not the same sum. An
+  # instance's yMax moves with the axis and its top side bearing moves the
+  # other way - the face lowers the bearing as the letter grows, so that the
+  # origin stays where the design puts it. Built out of the MOVED yMax and the
+  # DEFAULT bearing the two no longer cancel: measured on NotoSansSymbols with
+  # -direction ttb, the arrows hung at 1470 and 1474 at wght 100 and at 1492
+  # and 1504 at wght 900 where the face says 1480 throughout, and /W2 carried
+  # the drift into the file. varFont.tcl reads the origin off the same phantom
+  # points the advance comes from - see [varFont instance].
   method FontVerticalOrigin {alias parsed glyph} {
+    set instanced [my FontInstanced $alias]
+    if {[dict exists $instanced $glyph verticalOrigin]} {
+      return [dict get $instanced $glyph verticalOrigin]
+    }
     set y [::tclpdf::sfnt verticalOriginY $parsed $glyph \
         [my FontGlyphYMax $alias $parsed $glyph]]
     if {$y eq {}} {
@@ -1568,42 +1604,92 @@ oo::define ::tclpdf::document::document {
     return [expr {double($total) * $size / [dict get $parsed unitsPerEm]}]
   }
 
-  # Two-byte glyph numbers for a run, recording which glyphs were used and
+  # Two-byte character codes for a run, recording which glyphs were used and
   # what each of them stands for.
   #
-  # One glyph can be reached in more than one way, and a ToUnicode CMap has
-  # room for only one destination per CID. In DejaVu Sans glyph 5044 is both
-  # the GSUB output of "ffi" and the cmap entry for U+FB03, the precomposed
-  # ligature character. Whichever was written last used to win, so a document
-  # that drew "office" before it drew U+FB03 extracted the word as
-  # o U+FB03 c e - rendering perfectly, validating cleanly, and no longer
-  # findable by searching for "office".
+  # ONE CID PER GLYPH AND CHARACTERS, not one per glyph. A ToUnicode CMap has
+  # room for exactly one destination per character code (9.10.3), so a glyph
+  # that two different pieces of text reach can be spelt back only one way -
+  # and one of the two readings is then wrong in every reader.
   #
-  # The longer decomposition therefore wins, and the order stops mattering:
-  # three characters say more about the glyph than one does, and "ffi" is what
-  # a reader wants back from a search either way.
+  #   In DejaVu Sans glyph 5044 is both the GSUB output of "ffi" and the cmap
+  #   entry for U+FB03, the precomposed ligature character.
+  #   Roboto maps U+0394 and U+2206 to one glyph through the cmap alone.
+  #   Noto Naskh Arabic and Noto Sans Arabic write sin and shin, and beh, teh,
+  #   theh, nun and yeh, as ONE skeleton glyph plus separate dots (ccmp, a
+  #   Multiple substitution): the characters go to the skeleton, and whichever
+  #   word used the skeleton first decided the letter for the whole document.
+  #   Measured: a page holding "shams" and "sin" extracted the second word as
+  #   "shin", and a paragraph of Arabic prose gets one letter in five wrong.
   #
-  # This does NOT settle the older ambiguity of two characters sharing one
-  # glyph through the cmap alone - Roboto maps U+0394 and U+2206 to the same
-  # glyph, both lists are one long, and there is no answer that is right for
-  # both. There the first one recorded stays.
+  # A CID is not a glyph number, and Identity-H does not make it one - it says
+  # the CODE is the CID, and CIDToGIDMap says which glyph the CID draws. That
+  # table maps many CIDs onto one glyph without a word of complaint (9.7.4.2,
+  # Table 116), which is exactly what is wanted here: the second reading of a
+  # glyph gets a CID of its own, points at the same glyph, carries its own
+  # width and its own bfchar, and both words extract as they were written.
+  #
+  # THE FIRST READING KEEPS THE GLYPH'S OWN NUMBER, so a document in which no
+  # glyph is read two ways is written byte for byte as it was before; the
+  # extra CIDs are counted from numGlyphs up, where no glyph number can be.
+  # Measured over the 90 example documents: 88 unchanged, and the two Arabic
+  # ones grew by 39 and 25 CIDs - 1.2 kB in a 1.1 MB file.
+  #
+  # WHY NOT ActualText. A Span with /ActualText round every ambiguous word
+  # says the same thing and costs a marked-content bracket per word rather
+  # than a table entry per reading; it also only works in a TAGGED document,
+  # only for readers that honour it (pdftotext does, several do not), and it
+  # would leave the font's own map saying something false. The CMap is where
+  # a reader looks first, so that is where the truth belongs.
   method FontRunEncode {alias run} {
     set fonts [my state fonts]
     set entry [dict get $fonts $alias]
     set used [dict get $entry used]
+    set cids [dict get $entry cids]
     set bytes {}
     foreach item $run {
       lassign $item glyph codes
-      if {![dict exists $used $glyph]
-          || [llength $codes] > [llength [dict get $used $glyph]]} {
-        dict set used $glyph $codes
+      if {[dict exists $cids $glyph $codes]} {
+        set cid [dict get $cids $glyph $codes]
+      } elseif {![dict exists $cids $glyph]} {
+        # The first reading of this glyph: the glyph's own number.
+        set cid $glyph
+        dict set cids $glyph $codes $cid
+        dict set used $cid [list $glyph $codes]
+      } else {
+        # A second reading. The next free number above every glyph the face
+        # has - a walk over the CIDs already given out, which is the only
+        # place a number can have gone.
+        set cid [dict get $entry parsed numGlyphs]
+        foreach given [dict keys $used] {
+          if {$given >= $cid} {
+            set cid [expr {$given + 1}]
+          }
+        }
+        dict set cids $glyph $codes $cid
+        dict set used $cid [list $glyph $codes]
       }
-      append bytes [binary format Su $glyph]
+      append bytes [binary format Su $cid]
     }
     dict set entry used $used
+    dict set entry cids $cids
     dict set fonts $alias $entry
     my state fonts $fonts
     return $bytes
+  }
+
+  # The glyphs a font resource draws, each of them once, in the order their
+  # first CID was given out. What the subset is built from, and what the
+  # subset tag is derived from - two CIDs onto one glyph are ONE glyph in the
+  # file.
+  method FontGlyphsUsed {entry} {
+    return [dict keys [dict get $entry cids]]
+  }
+
+  # The characters each CID stands for: the shape [FontToUnicode] reads, and
+  # the shape type3.tcl builds for itself on the other road.
+  method FontCidCodes {entry} {
+    return [dict map {cid pair} [dict get $entry used] {lindex $pair 1}]
   }
 
   # Encode text directly. Kept for the callers that have a string and no
@@ -2132,11 +2218,11 @@ oo::define ::tclpdf::document::document {
     if {$cff} {
       set fontBytes [dict get $parsed bytes]
       set mapping {}
-      foreach glyph [dict keys $used] {
+      foreach glyph [my FontGlyphsUsed $entry] {
         dict set mapping $glyph $glyph
       }
     } elseif {[dict get $entry subset]} {
-      set built [::tclpdf::subset build $parsed [dict keys $used] \
+      set built [::tclpdf::subset build $parsed [my FontGlyphsUsed $entry] \
           [my FontInstanced $alias] $alias]
       set fontBytes [dict get $built bytes]
       set mapping [dict get $built glyphs]
@@ -2162,7 +2248,7 @@ oo::define ::tclpdf::document::document {
     } else {
       set fontBytes [dict get $parsed bytes]
       set mapping {}
-      foreach glyph [dict keys $used] {
+      foreach glyph [my FontGlyphsUsed $entry] {
         dict set mapping $glyph $glyph
       }
     }
@@ -2246,7 +2332,7 @@ oo::define ::tclpdf::document::document {
     if {!$cff} {
       set cidToGidNumber [$writer stream [my FontSlot $alias cidToGid] \
           {Filter /FlateDecode} \
-          [::tclpdf::filter encodeFlate [my FontCidToGid $mapping]]]
+          [::tclpdf::filter encodeFlate [my FontCidToGid $used $mapping]]]
       lappend pairs CIDToGIDMap [$writer ref $cidToGidNumber]
     }
     set descendantNumber [$writer put [my FontSlot $alias descendant] \
@@ -2254,7 +2340,8 @@ oo::define ::tclpdf::document::document {
 
     set toUnicodeNumber [$writer stream [my FontSlot $alias toUnicode] \
         {Filter /FlateDecode} \
-        [::tclpdf::filter encodeFlate [my FontToUnicode $used]]]
+        [::tclpdf::filter encodeFlate [my FontToUnicode \
+            [my FontCidCodes $entry]]]]
 
     # ONE Type 0 font per writing mode, over the one descendant written
     # above. Horizontal only where a line was actually set that way - a face
@@ -2356,7 +2443,7 @@ oo::define ::tclpdf::document::document {
     }
     set program [dict get $parsed bytes]
     set key "$name|[string length $program]|[zlib crc32 $program]"
-    append key "|[lsort -integer [dict keys [dict get $entry used]]]"
+    append key "|[lsort -integer [my FontGlyphsUsed $entry]]"
     append key "|[dict get $entry coordinates]"
     # CRC-32 of the key, spelt as six capital letters - 26^6 is 308 million
     # tags, of which the checksum picks one; the top four bits of it are not
@@ -2522,12 +2609,18 @@ oo::define ::tclpdf::document::document {
   # The /W array: widths per CID, in 1/1000 em. Written as individual entries
   # rather than as ranges - a range that is one CID off shifts every following
   # width, and the saving is a few dozen bytes.
+  #
+  # USED is CID to {glyph characters}: two CIDs may draw one glyph (see
+  # [FontRunEncode]), and each of them needs its width said - a reader takes
+  # /DW for a CID that /W leaves out, and 1000 is not the width of an Arabic
+  # letter skeleton.
   method FontWidthArray {alias parsed used units} {
     set scale [expr {1000.0 / $units}]
     set entries {}
-    foreach glyph [lsort -integer [dict keys $used]] {
+    foreach cid [lsort -integer [dict keys $used]] {
+      set glyph [lindex [dict get $used $cid] 0]
       set width [expr {[my FontAdvance $alias $parsed $glyph] * $scale}]
-      lappend entries $glyph [::tclpdf::pdfObj arr [list [::tclpdf::pdfObj num $width]]]
+      lappend entries $cid [::tclpdf::pdfObj arr [list [::tclpdf::pdfObj num $width]]]
     }
     return [::tclpdf::pdfObj arr $entries]
   }
@@ -2556,7 +2649,8 @@ oo::define ::tclpdf::document::document {
   method FontVerticalWidthArray {alias parsed used units} {
     set scale [expr {1000.0 / $units}]
     set entries {}
-    foreach glyph [lsort -integer [dict keys $used]] {
+    foreach cid [lsort -integer [dict keys $used]] {
+      set glyph [lindex [dict get $used $cid] 0]
       set displacement [expr {-[my FontVerticalAdvance $alias $parsed $glyph]
           * $scale}]
       set originY [expr {[my FontVerticalOrigin $alias $parsed $glyph] * $scale}]
@@ -2564,7 +2658,7 @@ oo::define ::tclpdf::document::document {
         continue
       }
       set originX [expr {[my FontAdvance $alias $parsed $glyph] * $scale / 2.0}]
-      lappend entries $glyph [::tclpdf::pdfObj arr [list \
+      lappend entries $cid [::tclpdf::pdfObj arr [list \
           [::tclpdf::pdfObj num $displacement] \
           [::tclpdf::pdfObj num $originX] \
           [::tclpdf::pdfObj num $originY]]]
@@ -2578,17 +2672,25 @@ oo::define ::tclpdf::document::document {
   # CID to glyph id in the embedded file: two bytes per CID, from 0 to the
   # highest one used. Unused positions hold 0, which is .notdef - a reader
   # that lands there shows the fallback rather than a random glyph.
-  method FontCidToGid {mapping} {
+  #
+  # USED is CID to {glyph characters} and MAPPING is the glyph of the original
+  # face to its number in the embedded file. TWO CIDS MAY NAME ONE GLYPH -
+  # that is what the table is for here as well as for the subset: a glyph two
+  # words read differently gets a CID per reading ([FontRunEncode]), and both
+  # rows of this table point at the same drawing.
+  method FontCidToGid {used mapping} {
+    set glyphs {}
     set highest 0
-    dict for {original new} $mapping {
-      if {$original > $highest} {
-        set highest $original
+    dict for {cid pair} $used {
+      dict set glyphs $cid [dict get $mapping [lindex $pair 0]]
+      if {$cid > $highest} {
+        set highest $cid
       }
     }
     set bytes {}
     for {set cid 0} {$cid <= $highest} {incr cid} {
-      append bytes [binary format Su [expr {[dict exists $mapping $cid] ?
-          [dict get $mapping $cid] : 0}]]
+      append bytes [binary format Su [expr {[dict exists $glyphs $cid] ?
+          [dict get $glyphs $cid] : 0}]]
     }
     return $bytes
   }
@@ -2721,4 +2823,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.17
+package provide tclpdf::font 1.18

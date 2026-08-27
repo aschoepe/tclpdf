@@ -47,6 +47,36 @@ namespace eval ::tclpdf::attach {
   # -relationship before it starts declaring things - one list, so the two
   # cannot drift.
   variable relationships {Source Data Alternative Supplement Unspecified}
+
+  # The names the hybrid standards RESERVE for the one XML that is the
+  # document a second time: Factur-X 1.09.2, 6.2 and 7.7 for the three
+  # invoice spellings, Order-X 1.0, 4.1.1 for the order. Owned here beside
+  # the relationships and read by zugferd.tcl, for the same reason - the
+  # name tree is this module's, and one list keeps the two from drifting.
+  #
+  # What they are reserved FOR is decided in zugferd.tcl, which binds each
+  # one to a family and a profile. What is decided here is narrower and is
+  # about the tree: once a document carries the invoice or the order, no
+  # second attachment may take one of these names, however it is spelled.
+  # A reader looks the XML up BY NAME, and two candidates under one name
+  # is a document that answers two ways - Factur-X 7.7 says as much for
+  # the XRECHNUNG case ("es darf ... auch keine Einbettung einer
+  # factur-x.xml-Datei geben"). Measured 2026-08-27, before this list
+  # existed: after [zugferd] a plain [attach -name order-x.xml] and a
+  # [attach -name factur-x.XML] both went in, and Mustangproject and
+  # veraPDF called the result valid.
+  variable reserved {factur-x.xml zugferd-invoice.xml xrechnung.xml order-x.xml}
+}
+
+# Whether a name is one the hybrid standards reserve, compared the way a
+# READER compares it: case is not part of the answer. The name tree keys on
+# bytes, so "factur-x.XML" is a key of its own and sits beside
+# "factur-x.xml" without the uniqueness check noticing - and a reader
+# looking for the invoice finds two files whose names differ in nothing
+# that means anything.
+proc ::tclpdf::attach::isReserved {name} {
+  variable reserved
+  return [expr {[string tolower $name] in $reserved}]
 }
 
 # The bytes a reader compares when it looks a name up in the EmbeddedFiles
@@ -301,6 +331,26 @@ oo::define ::tclpdf::document::document {
           declare pdfa -part 3, which admits any file"
     }
 
+    # A document that already carries the invoice or the order keeps the
+    # reserved names for it. [zugferd] runs through this method too and is
+    # not caught by it: its own state is recorded AFTER the attachment, so
+    # the invoice itself always goes in and only what follows it is held.
+    #
+    # Case-insensitively, which the uniqueness check below is not and
+    # cannot be: the name tree keys on bytes (7.9.6), "factur-x.XML" is a
+    # key of its own, and for the reader looking the invoice up it is the
+    # same name. See [isReserved].
+    if {[my state zugferd] ne {} && [::tclpdf::attach::isReserved $name]} {
+      return -code error -errorcode [list TCLPDF ATTACH NAME $name] \
+          "tclpdf: \"$name\" is a name the hybrid standards\
+          reserve for the one XML that IS the document a second time, and\
+          this document already carries it as\
+          \"[dict get [my state zugferd] name]\" - a reader looks that file\
+          up by name and would find two (Factur-X 1.09.2, 6.2 and 7.7;\
+          Order-X 1.0, 4.1.1). Give the supporting document a name of its\
+          own"
+    }
+
     # Embedded file streams and the EmbeddedFiles name tree are PDF 1.3
     # (Reference 1.7, 3.10.3). /AF and /AFRelationship are PDF 2.0 entries
     # that ISO 19005-3 (Annex E) admits into a 1.7 file as an extension -
@@ -458,4 +508,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.8
+package provide tclpdf::attach 1.9

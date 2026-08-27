@@ -91,12 +91,15 @@ proc exampleFooter {doc {family {}} {colour {0.45 0.45 0.5}}} {
     # The colour is a parameter for one reason: a document under a CMYK
     # output intent (05.09) may not paint DeviceRGB, footer included.
     $doc font -family $family -style {} -size 6 -color $colour
-    # A footer that names twelve faces (02.09) is wider than the page and ran
-    # off its left edge - measured 243 mm on A4. Where the list does not fit
-    # between the margins, the count stands in for it; the page that embeds
-    # that many faces has a table of them anyway.
+    # A footer that names twelve families (02.09, whose thirteen embedded
+    # faces are twelve families because two of them are cuts of Noto Sans) is
+    # wider than the page and ran off its left edge - measured 243 mm on A4.
+    # Where the list does not fit between the margins, the count stands in for
+    # it; the page that embeds that many has a table of them anyway. The count
+    # is of FAMILIES, because that is what $families holds - a face is a cut
+    # of a family, and the footer above lists family names.
     if {[$doc textWidth "$script - $fonts"] > $width - 20} {
-        set fonts "embedded: [llength $families] faces"
+        set fonts "embedded: [llength $families] font families"
     }
     # -tag Artifact: a footer is a fact about the sheet, not about the text,
     # and in a tagged document it has to say so or a reader announces it as
@@ -207,24 +210,26 @@ proc exampleIccFacts {path} {
 }
 
 # ---------------------------------------------------------------------------
-# What the two signature examples share
+# What the signature examples share
 # ---------------------------------------------------------------------------
 #
-# 08.01 (an invisible signature), 08.02 (a visible one) and 08.03 (a second
-# signature appended to a finished file) show three different things about the
-# same mechanism, and all three need the same outside world to show it: a test
-# CA, an end certificate under it, a command prefix that answers a CMS object,
-# and a way to ask openssl what it thinks of its own work. All of that stood
-# twice, line for line, until it moved here.
+# 08.01 (an invisible signature), 08.02 (a visible one), 08.03 (a second
+# signature appended to a finished file), 08.04 (a signed ZUGFeRD invoice) and
+# 08.05 (a described signature in a PDF/UA-1 tree) show five different things
+# about the same mechanism, and all five need the same outside world to show
+# it: a test CA, an end certificate under it, a command prefix that answers a
+# CMS object, and a way to ask openssl what it thinks of its own work. All of
+# that stood twice, line for line, until it moved here.
 #
-# NOTHING BELOW RUNS WHILE THIS FILE IS SOURCED. All 49 examples load it and
-# 47 of them have nothing to do with signatures, so there is no [package
-# require tclpdf::sign] here, no openssl call, and no work in the body -
-# procedures only, called by the two examples that want them.
+# NOTHING BELOW RUNS WHILE THIS FILE IS SOURCED. Eighty of the 81 examples
+# load it - 00.01 is the one that does not, because it is about how little it
+# takes - and 75 of them have nothing to do with signatures, so there is no
+# [package require tclpdf::sign] here, no openssl call, and no work in the
+# body - procedures only, called by the five examples that want them.
 #
-# What is NOT here is what the two examples differ in, and that is the larger
-# half: the wording on their pages, the appearance form 08.02 draws, the dates
-# it needs for it, and the [$doc sign] calls themselves. A signature example
+# What is NOT here is what those five differ in, and that is the larger half:
+# the wording on their pages, the appearance form 08.02 draws, the dates it
+# needs for it, and the [$doc sign] calls themselves. A signature example
 # whose central call sat behind a helper would be showing the helper.
 
 # Every call to an outside program goes through here for one reason: openssl
@@ -377,11 +382,19 @@ proc exampleSigningSetup {{extra {}}} {
 # and print, for each document written, the commands a reader can check it
 # with. "commands" is a command prefix called with the plain file name - the
 # list differs per example, so the example that knows it supplies it.
+#
+# The heading counts the names it was handed rather than saying "both": three
+# of the five callers (08.03, 08.04, 08.05) write ONE document, and the line
+# used to promise a second one that is not there.
 proc exampleSigningEnd {dir names commands} {
     if {$dir ne {}} {
         file delete -force $dir
     }
-    puts "  check both with:"
+    switch -- [llength $names] {
+        1 {puts "  check it with:"}
+        2 {puts "  check both with:"}
+        default {puts "  check each with:"}
+    }
     foreach name $names {
         foreach line [{*}$commands [file tail $name]] {
             puts "    $line"
@@ -390,10 +403,10 @@ proc exampleSigningEnd {dir names commands} {
     return
 }
 
-# The three commands every signed file answers to, which is what both examples
-# print and put on their pages; "extra" appends the lines one of them wants on
-# top of that. Not a fourth and fifth line here with a switch to leave them
-# out: what 08.01 adds needs the detached content only that script keeps.
+# The three commands every signed file answers to, which is what the signature
+# examples print and put on their pages; "extra" appends the lines one of them
+# wants on top of that. Not a fourth and fifth line here with a switch to leave
+# them out: what 08.01 adds needs the detached content only that script keeps.
 proc exampleSignatureChecks {name {extra {}}} {
     return [concat [list \
         "pdfsig $name" \
@@ -425,13 +438,14 @@ proc exampleConsoleParagraph {text {width 74}} {
     return
 }
 
-# Running text on a page of prose, top down. Both signature examples set the
-# same kind of page, and prose at hard-coded coordinates is how paragraphs
-# start overlapping the day one of them gains a line: [text] with -width
-# answers the y the next line would start at, so the page stays right.
+# Running text on a page of prose, top down. Eighteen examples set the same
+# kind of page - the signature and form groups among them - and prose at
+# hard-coded coordinates is how paragraphs start overlapping the day one of
+# them gains a line: [text] with -width answers the y the next line would
+# start at, so the page stays right.
 #
 # The 20 mm left margin and the 170 mm measure are an A4 page in mm with the
-# margins these two examples use. An example laid out otherwise sets its text
+# margins those examples use. An example laid out otherwise sets its text
 # itself rather than passing a fourth and fifth argument.
 proc exampleHeading {doc yName text} {
     upvar 1 $yName y

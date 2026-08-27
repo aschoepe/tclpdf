@@ -186,6 +186,42 @@ test sbix-2.8 {a record that says PNG and holds none is refused} \
       [string match {*does not begin with one*} $message]
 } -result {1 {TCLPDF SBIX DAMAGED png} 1}
 
+test sbix-2.9 {a "flip" that names a glyph the face has not got is refused} \
+    -constraints havePlain -body {
+  # A "dupe" or "flip" record exists to say WHERE the picture comes from, and
+  # one that names a glyph outside the face points at nothing. It used to be
+  # answered "no picture", which sends the glyph to its own outline - and an
+  # sbix face's outlines are empty boxes, so the document came out valid with
+  # a blank glyph in it and nothing reporting the reference.
+  set bytes [::tclpdfTest::sfntWith $plainFace [dict create sbix \
+      [::tclpdfTest::sbix 40 [list 32 [dict create \
+          4 [list 0 0 "flip" [binary format Su 65535]]]]]]]
+  set font [::tclpdf::sfnt parse $bytes]
+  set state [::tclpdf::sbix build $font]
+  set code [catch {::tclpdf::sbix graphic $font $state \
+      [::tclpdf::sbix strike $state {}] 4} message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*names glyph 65535*} $message]
+} -result {1 {TCLPDF SBIX DAMAGED flip} 1}
+
+test sbix-2.10 {and one that names a glyph with no picture is refused too} \
+    -constraints havePlain -body {
+  # Glyph 9 exists and has no record - which is no defect for a glyph a caller
+  # asks about, and is one for a glyph a "dupe" record names. Glyph 8 asked
+  # about directly is the control: it has no picture either, and the answer is
+  # the empty string it always was.
+  set bytes [::tclpdfTest::sfntWith $plainFace [dict create sbix \
+      [::tclpdfTest::sbix 40 [list 32 [dict create \
+          4 [list 0 0 "dupe" [binary format Su 9]]]]]]]
+  set font [::tclpdf::sfnt parse $bytes]
+  set state [::tclpdf::sbix build $font]
+  set strike [::tclpdf::sbix strike $state {}]
+  set code [catch {::tclpdf::sbix graphic $font $state $strike 4} \
+      message options]
+  list $code [dict get $options -errorcode] \
+      [::tclpdf::sbix graphic $font $state $strike 8]
+} -result {1 {TCLPDF SBIX DAMAGED dupe} {}}
+
 # --- what a damaged table is refused for ------------------------------------
 
 test sbix-3.1 {an unknown version is refused} -constraints havePlain -body {

@@ -191,6 +191,25 @@ proc ::tclpdf::geometry::multiply {first second} {
       [expr {$e1 * $b2 + $f1 * $d2 + $f2}]]
 }
 
+# The same matrix, but ABOUT A POINT: move the point to the origin, do the
+# thing, move back. T(-x,-y) . M . T(x,y).
+#
+# Every turn a caller asks for is about something - a stamp about its corner,
+# a picture about the place it was put - and the origin of a PDF page is
+# almost never that something. Written out three times before 2026-08-27
+# ([transform -at] in graphics.tcl, [form place -rotate] and [image place
+# -rotate], the last two about the wrong corner), which is exactly how a
+# fourth caller gets the order backwards: both shifts positive turns the page
+# about its origin and then moves the result, both negative puts the drawing
+# off the sheet, and neither produces an error - only a shape somewhere else.
+#
+# x and y are in the space the matrix works in, which everywhere in this
+# package means PDF points.
+proc ::tclpdf::geometry::about {matrix x y} {
+  return [multiply [translate [expr {-$x}] [expr {-$y}]] \
+      [multiply $matrix [translate $x $y]]]
+}
+
 # Apply a matrix to a point - needed to know where something ended up, for
 # instance to place a link annotation over rotated text.
 proc ::tclpdf::geometry::apply {matrix x y} {
@@ -446,4 +465,4 @@ proc ::tclpdf::geometry::checkFit {options what} {
   return
 }
 
-package provide tclpdf::geometry 1.6
+package provide tclpdf::geometry 1.7

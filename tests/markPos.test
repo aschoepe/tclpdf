@@ -604,6 +604,12 @@ test markPos-9.8 {a face whose scripts share their lookups gains nothing and los
 # The options say what to break: a 0 in one of the four offset fields of the
 # header - which means "not present", not "starts here" - a mark class beyond
 # markClassCount, or a LigatureAttach with no components at all.
+#
+# EVERY COMPONENT OF A LIGATURE GETS ITS OWN ANCHOR, 1000 units apart, so that
+# which row was read can be told from the answer: component 1 anchors at
+# x 300, component 2 at 1300, component 3 at 2300. With one component - every
+# type 4 table and the type 5 control - that is the single anchor at 300 this
+# proc always wrote.
 proc markBytes {args} {
     set o [dict merge {type 4 markCoverage 1 baseCoverage 1 markArray 1 \
         baseArray 1 class 0 classCount 1 components 1} $args]
@@ -629,8 +635,8 @@ proc markBytes {args} {
     # from the LigatureAttach); class 0 carries the anchor, the rest are NULL.
     for {set class 0} {$class < $classCount * max(1, $components)} {incr class} {
         if {[dict get $o type] == 5 && $components == 0} break
-        append partner [binary format Su [expr {$class == 0 ?
-            $atBaseAnchor - $atAttach : 0}]]
+        append partner [binary format Su [expr {$class % $classCount == 0 ?
+            $atBaseAnchor + $class / $classCount * 6 - $atAttach : 0}]]
     }
     set bytes [binary format SuSuSuSuSuSu 1 \
         [expr {[dict get $o markCoverage] ? $atMarkCoverage : 0}] \
@@ -646,7 +652,9 @@ proc markBytes {args} {
     # Pad up to where the anchors were promised, then the anchors themselves.
     append bytes [string repeat \x00 [expr {$atMarkAnchor - [string length $bytes]}]]
     append bytes [binary format SSS 1 -100 200]
-    append bytes [binary format SSS 1 300 400]
+    for {set component 0} {$component < max(1, $components)} {incr component} {
+        append bytes [binary format SSS 1 [expr {300 + 1000 * $component}] 400]
+    }
     return $bytes
 }
 
@@ -704,6 +712,72 @@ test markPos-10.4 {a LigatureAttach with no components attaches nothing} \
     }
     set answers
 } -result {{-900 200} {0 0}}
+
+# --- which component of a ligature a mark hangs on --------------------------
+#
+# ISO/IEC 14496-22:2019 6.3.3, S. 225: the client "must keep track of
+# associations of marks to particular ligature-glyph components". gsubApply.tcl
+# writes that association into the fourth element of a run entry when the
+# ligature is formed, [markPos run] passes the fourth elements down, and these
+# tests drive [offsets] with them by hand so that the choice of row can be
+# read off a number: component 1 anchors at x 300, component 2 at 1300,
+# component 3 at 2300, and DejaVu's b advances 1300, which the walk back
+# subtracts. The mark's own anchor is at -100.
+
+proc markLigState {parsed components} {
+    return [dict create font $parsed units 2048 marks {} \
+        lookups [list [list {} [list [::tclpdf::markPos::Subtable \
+            [markBytes type 5 components $components] 5 0]] 0]]]
+}
+
+test markPos-10.5 {a mark takes the component it was written behind} \
+    -constraints haveDejaVu -body {
+    # THE DEFECT THIS ANSWERS: every mark took the LAST component, so the
+    # fatha between the lam and the alef of an Arabic lam-alef sat over the
+    # alef - 920 font units away in Scheherazade New, and the ordinary
+    # spelling of the word.
+    set state [markLigState [::tclpdf::sfnt read $::fontDejaVu] 3]
+    lmap component {1 2 3} {
+        lindex [::tclpdf::markPos offsets $state {69 689} {} \
+            [list [list 7 0 3] [list 7 $component 1]]] 1
+    }
+} -result {{-900 200} {100 200} {1100 200}}
+
+test markPos-10.6 {without an association the last component is still it} \
+    -constraints haveDejaVu -body {
+    # The specification leaves the case open and HarfBuzz answers it with the
+    # last row (MarkLigPosFormat1::apply), which is what a mark that never met
+    # this ligature gets: no properties at all, a component of 0, or an
+    # identity that belongs to some other ligature.
+    set state [markLigState [::tclpdf::sfnt read $::fontDejaVu] 3]
+    lmap properties [list {} [list [list 7 0 3] [list 7 0 1]] \
+        [list [list 7 0 3] [list 9 1 1]]] {
+        lindex [::tclpdf::markPos offsets $state {69 689} {} $properties] 1
+    }
+} -result {{1100 200} {1100 200} {1100 200}}
+
+test markPos-10.7 {two marks on different components are not stacked} \
+    -constraints haveDejaVu -body {
+    # MarkToMark, S. 227. Two marks match only if they hang on the same base
+    # or on the same component of one ligature - HarfBuzz's
+    # MarkMarkPosFormat1::apply, and the Urdu spelling of "Allah" is what
+    # forced it: shadda and fatha belong to the second lam, the damma to the
+    # heh, and with the damma stacked on the fatha it stood 524 font units
+    # from where hb-shape puts it. A mark that IS a ligature - component 0 -
+    # matches anything, and a run in which no ligature was formed carries no
+    # properties and behaves as it always did.
+    set parsed [::tclpdf::sfnt read $::fontDejaVu]
+    set state [dict create font $parsed units 2048 marks {} \
+        lookups [list [list {} [list [::tclpdf::markPos::Subtable \
+            [markBytes type 6] 6 0]] 0]]]
+    lmap properties [list {} \
+        [list [list 7 2 1] [list 7 2 1]] \
+        [list [list 7 1 1] [list 7 2 1]] \
+        [list [list 7 0 2] [list 9 2 1]] \
+        [list [list 7 1 1] [list 9 1 1]]] {
+        lindex [::tclpdf::markPos offsets $state {69 689} {} $properties] 1
+    }
+} -result {{-900 200} {-900 200} {0 0} {-900 200} {0 0}}
 
 # --- coverage and class ranges, on bytes this file wrote itself ------------
 

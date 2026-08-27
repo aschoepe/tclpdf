@@ -124,7 +124,19 @@ oo::class create ::tclpdf::document::document {
             {top bottom left right}, got \"$area\""
       }
       foreach value $area {
-        if {![string is double -strict $value] || $value < 0} {
+        # [option finite] and [pdfObj fits] rather than [string is double]:
+        # NaN and Inf are doubles to Tcl, and NaN compares false against
+        # every range check, so "$value < 0" waved it past. What it cost was
+        # measured on 2026-08-27: "-typeArea {NaN 10}" was taken by [new] and
+        # by [configure] and died in Tcl's own words - "can't use non-numeric
+        # floating-point value as operand of +" - out of [page typeArea],
+        # which is the first call that measures a page against it, and out of
+        # every [text -height max], [-paginate] and table after it. The
+        # magnitude is asked as well because the margins become the corners
+        # the type area answers, and those are coordinates a caller places
+        # against (Annex C.2, the range [pdfObj fits] keeps).
+        if {![::tclpdf::option finite $value]
+            || ![::tclpdf::pdfObj fits $value] || $value < 0} {
           return -code error -errorcode [list TCLPDF DOCUMENT ARGUMENT typeArea] \
               "tclpdf: -typeArea takes distances of 0 or\
               more, not \"$value\""
@@ -343,6 +355,21 @@ oo::class create ::tclpdf::document::document {
   # The point is that loading tclpdf stays cheap: a caller who writes text
   # never loads the image code, and a module can be added without touching
   # anything here except one line.
+  #
+  # THE LINE IS EASY TO FORGET, AND WHAT IT COSTS IS INVISIBLE UNTIL THE
+  # METHOD IS THE FIRST CALL OF A PROCESS. A name that is missing here works
+  # perfectly for as long as anything else has already pulled its module in -
+  # and answers "unknown method" the moment a script begins with it. Measured
+  # 2026-08-27: [overprint] as the first graphics call answered TCL LOOKUP
+  # METHOD, against the promise that every refusal of this package begins with
+  # "tclpdf:"; and because [save] asks [streamState] of page.tcl, a name
+  # missing here takes its callers with it. Five more were missing beside it
+  # (streamState, linksWithoutElement and the three field reports), so this
+  # is a class rather than a slip. The guard is document-lazy-1.1 in
+  # tests/document.test: it runs EVERY public method of the class once as the
+  # first call of a fresh interpreter and fails on a TCL LOOKUP answer, so a
+  # module added without its line is caught by the suite rather than by a
+  # caller.
   method unknown {method args} {
     set topics {
       SvgCollect svgElement
@@ -369,6 +396,11 @@ oo::class create ::tclpdf::document::document {
       Page page
       content page
       canvas page
+      streamState page
+      aboveZero page
+      ctm page
+      ctmBox page
+      turnedAbout page
       coords page
       distance page
       extent page
@@ -382,6 +414,7 @@ oo::class create ::tclpdf::document::document {
       style graphics
       opacity graphics
       blend graphics
+      overprint graphics
       GraphicsColour graphics
       GraphicsOpacity graphics
       line shape
@@ -431,12 +464,17 @@ oo::class create ::tclpdf::document::document {
       sign sign
       field field
       FieldEnlist field
+      fieldsWithoutDescription field
+      fieldsOutsideStructure field
+      fieldWidgetsWithoutDescription field
       FieldRectangle field
       xmpSchema xmp
       xmpRaw xmp
       zugferd zugferd
       link link
       linksWithoutContents link
+      linksWithoutElement link
+      linksSharingElement link
       annot annot
       pageNumbers pageNumber
       pageLabels pageLabel
@@ -925,4 +963,4 @@ proc ::tclpdf::document::parseDate {value {version {}}} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.15
+package provide tclpdf::document 1.16

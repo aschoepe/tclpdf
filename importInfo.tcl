@@ -188,15 +188,14 @@ proc ::tclpdf::pdf::Revisions {sections} {
   return $revisions
 }
 
-# The version out of the header (7.5.2), looked for in the first kilobyte
-# rather than at byte 0: a file with junk in front of its header is what Annex
-# H tells a reader to cope with, and the cross-reference offsets of such a
-# file are the ones this reader has just followed.
+# The version out of the header (7.5.2). The reading itself is the reader's
+# ([importRead::HeaderVersion], where the reasoning for the first kilobyte
+# stands) because [pdf import] asks the same question of the same bytes - it
+# enters the source file's version as a floor of the document it copies a
+# page into - and two readings of one header are two answers waiting to
+# disagree.
 proc ::tclpdf::pdf::Header {bytes} {
-  if {[regexp {%PDF-(\d+\.\d+)} [string range $bytes 0 1023] -> version]} {
-    return $version
-  }
-  return {}
+  return [::tclpdf::importRead::HeaderVersion $bytes]
 }
 
 # The file identifier (14.4) as two hexadecimal strings, the way every tool
@@ -492,7 +491,10 @@ proc ::tclpdf::pdf::Metadata {readerVar} {
   if {[lindex $entry 0] ne "r"} {
     return {}
   }
-  lassign [Object reader [lindex [lindex $entry 1] 0]] value hasStream data
+  # With the generation, like every read that follows a reference: a
+  # /Metadata naming a generation the file does not have at that number is
+  # the null object (7.3.10), and this file then carries no packet.
+  lassign [Object reader {*}[lindex $entry 1]] value hasStream data
   if {!$hasStream} {
     return {}
   }
@@ -1312,4 +1314,4 @@ namespace eval ::tclpdf::pdf {
   unset tclpdfTable tclpdfCode tclpdfTarget
 }
 
-package provide tclpdf::importInfo 1.4
+package provide tclpdf::importInfo 1.5
