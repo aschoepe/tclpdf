@@ -947,7 +947,22 @@ oo::define ::tclpdf::document::document {
         fsType {} \
         permission "not stated - a Type 3 font has no font program" \
         masks [my Type3Masks $alias] \
+        bitmaps [my Type3Bitmaps $alias] \
         characters [dict size [dict get $entry codes]]]
+  }
+
+  # HOW MANY GLYPHS OF A COLOUR FACE ARE PICTURES rather than paths, which is
+  # the second thing a caller cannot see from the outside and the one that
+  # decides how the font behaves under magnification: a path is sharp at every
+  # size, a picture is sharp up to its own resolution. colorFontBitmap.tcl
+  # counts them as it writes, under the same document state key the mask count
+  # lives in; a font that is not a bitmap face answers 0.
+  method Type3Bitmaps {alias} {
+    set counts [my state colorFont]
+    if {![dict exists $counts $alias bitmaps]} {
+      return 0
+    }
+    return [dict get $counts $alias bitmaps]
   }
 
   # HOW MANY GLYPHS OF A COLOUR FACE NEEDED A SOFT MASK, which is the one
@@ -959,7 +974,7 @@ oo::define ::tclpdf::document::document {
   # none and answers 0.
   method Type3Masks {alias} {
     set counts [my state colorFont]
-    if {![dict exists $counts $alias]} {
+    if {![dict exists $counts $alias mask]} {
       return 0
     }
     return [dict get $counts $alias mask]
@@ -1184,4 +1199,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::type3 1.3
+package provide tclpdf::type3 1.4

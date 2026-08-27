@@ -98,10 +98,13 @@ foreach tclpdfPkg {
     tclpdf::glyfPath
     tclpdf::colr
     tclpdf::colrPaint
+    tclpdf::sbix
+    tclpdf::morx
     tclpdf::colorFont
     tclpdf::colorFontBand
     tclpdf::colorFontPaint
     tclpdf::colorFontRegion
+    tclpdf::colorFontBitmap
     tclpdf::imageTiff
     tclpdf::imageTiffStreams
     tclpdf::hyphenate

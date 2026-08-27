@@ -91,6 +91,118 @@ proc ::tclpdfTest::png {width height depth colorType rows {trns {}} {plte {}}} {
   return $png
 }
 
+# An sfnt built out of a real face with tables added or replaced - the fixture
+# behind every sbix and every collection test.
+#
+# The tables of the face are read through [sfnt parse] and handed back to
+# [sfnt Rebuild], which is the module's own writer. That is deliberate: what a
+# test needs here is a WELL-FORMED container for the one table it cares about,
+# and building a second sfnt writer for it would be a second thing to get
+# wrong. What the tests measure is never the container.
+proc ::tclpdfTest::sfntWith {path replacements} {
+  package require tclpdf::sfnt
+  set parsed [::tclpdf::sfnt read $path]
+  set data {}
+  dict for {tag entry} [dict get $parsed tables] {
+    dict set data $tag [::tclpdf::sfnt table $parsed $tag]
+  }
+  dict for {tag bytes} $replacements {
+    if {$bytes eq {}} {
+      set data [dict remove $data $tag]
+    } else {
+      dict set data $tag $bytes
+    }
+  }
+  return [::tclpdf::sfnt::Rebuild [binary format I 0x00010000] $data]
+}
+
+# A TrueType COLLECTION out of a list of complete sfnt byte strings.
+#
+# Each face keeps its own tables rather than sharing them with the others - a
+# real collection shares, and nothing that READS one can tell the difference:
+# what a face is, is its table directory. Sharing would make the fixture a
+# test of the fixture.
+#
+# THE DIRECTORY IS RELOCATED, and that is the whole of what makes a collection
+# one: a table position in a face of a ttcf is measured from the start of the
+# FILE and not from the start of the face. A fixture that simply concatenated
+# the faces would have every face after the first pointing into the one before
+# it - which is exactly the mistake a reader makes, and a fixture that shared
+# it would hide it.
+proc ::tclpdfTest::collection {faces} {
+    set count [llength $faces]
+    # ttcf, version 1.0, the count, and one offset per face. Version 1 has no
+    # digital signature fields behind the offsets; version 2 has three more,
+    # and nothing here reads them.
+    set header [binary format a4SuSuIu ttcf 1 0 $count]
+    set base [expr {[string length $header] + $count * 4}]
+    set offsets {}
+    set body {}
+    foreach face $faces {
+        set at [expr {$base + [string length $body]}]
+        lappend offsets $at
+        binary scan $face @4Su numTables
+        for {set index 0} {$index < $numTables} {incr index} {
+            set entry [expr {12 + $index * 16 + 8}]
+            binary scan $face @${entry}Iu position
+            set face [string replace $face $entry [expr {$entry + 3}] \
+                [binary format Iu [expr {$position + $at}]]]
+        }
+        append body $face
+        # Every face starts on a four byte boundary, as every table does.
+        if {[string length $body] % 4} {
+            append body [string repeat \x00 [expr {4 - [string length $body] % 4}]]
+        }
+    }
+    return $header[binary format Iu$count $offsets]$body
+}
+
+# An "sbix" table: one strike per {ppem records} pair, where records is a dict
+# of glyph number to {originX originY graphicType data}. Everything not named
+# is empty in that strike, which is what a face does for a glyph that has no
+# picture at that size.
+proc ::tclpdfTest::sbix {numGlyphs strikes} {
+    set count [expr {[llength $strikes] / 2}]
+    set header [binary format SuSuIu 1 1 $count]
+    set base [expr {[string length $header] + $count * 4}]
+    set offsets {}
+    set body {}
+    foreach {ppem records} $strikes {
+        lappend offsets [expr {$base + [string length $body]}]
+        set data {}
+        set positions {}
+        for {set glyph 0} {$glyph <= $numGlyphs} {incr glyph} {
+            lappend positions [expr {4 + ($numGlyphs + 1) * 4
+                + [string length $data]}]
+            if {[dict exists $records $glyph]} {
+                lassign [dict get $records $glyph] x y type bytes
+                append data [binary format SSa4 $x $y $type] $bytes
+            }
+        }
+        append body [binary format SuSu $ppem 72] \
+            [binary format Iu[expr {$numGlyphs + 1}] $positions] $data
+    }
+    return $header[binary format Iu$count $offsets]$body
+}
+
+# A tiny opaque PNG of one colour, and one with an alpha channel - the two
+# pictures an sbix fixture puts in a glyph.
+proc ::tclpdfTest::sbixPng {width height {alpha 0}} {
+    set rows {}
+    for {set row 0} {$row < $height} {incr row} {
+        append rows \x00
+        for {set column 0} {$column < $width} {incr column} {
+            if {$alpha} {
+                append rows [binary format cccc 200 30 40 \
+                    [expr {$column * 255 / $width}]]
+            } else {
+                append rows [binary format ccc 200 30 40]
+            }
+        }
+    }
+    return [::tclpdfTest::png $width $height 8 [expr {$alpha ? 6 : 2}] $rows]
+}
+
 # The bodies of every object whose text matches a pattern - what a test reads
 # when it has to check what went into the FILE rather than what the API said.
 #

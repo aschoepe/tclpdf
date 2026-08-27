@@ -1,0 +1,686 @@
+# morx.test --
+#
+# The AAT extended glyph metamorphosis table: the five subtable types, the six
+# lookup formats, and what a chain applies by default.
+#
+# TWO KINDS OF TEST, and they answer different questions. The synthetic ones
+# build a state machine by hand - a handful of classes, three states, four
+# entries - and check that it does exactly what the format says, one subtable
+# type at a time. Nothing on this machine ships a morx table small enough to
+# read by eye, so the fixtures are written here, in the shape a face writes
+# them; the builders below are the format's own layout and nothing more.
+#
+# The other kind asks the ORACLE. A state machine is right or wrong by what it
+# produces and there is nothing in between to inspect, so every unit of
+# example 02.18 and better than a thousand further sequences out of the face's
+# own cmap are put through hb-shape and compared glyph for glyph. That is what
+# actually settles whether this module is correct; the synthetic tests settle
+# WHERE it is wrong when it is.
+#
+# THE 27 KNOWN DIFFERENCES that are not differences: a TAG CHARACTER standing
+# ALONE (U+E0061 to U+E007A and U+E007F). HarfBuzz replaces a default-ignorable
+# character it has shaped with the space glyph after shaping is over, which is
+# not morx and is not this module's business - inside a sequence, where such a
+# character actually occurs, the two agree. Those inputs are left out of the
+# comparison by name rather than papered over.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::morx
+source [file join [file dirname [info script]] helper.tcl]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set plainFace [file join $here examples assets fonts DejaVuSans.ttf]
+testConstraint havePlain [file exists $plainFace]
+set appleFace "/System/Library/Fonts/Apple Color Emoji.ttc"
+testConstraint haveAppleColorEmoji [file exists $appleFace]
+testConstraint hbShape [expr {[auto_execok hb-shape] ne {}}]
+
+# --- building a morx table --------------------------------------------------
+
+# The six lookup formats, each of them answering "what value does this glyph
+# carry". Written out one procedure each rather than one with a switch: what
+# differs between them is the whole of what is being tested.
+
+proc mxLookup0 {values} {
+  return [binary format Su 0][binary format Su* $values]
+}
+
+# The binary search header is unitSize, nUnits and three numbers that restate
+# the length. The three are written as zero on purpose: nothing reads them,
+# and a fixture that filled them in would hide a reader that did.
+proc mxBinSearch {unitSize units} {
+  return [binary format SuSuSuSuSu $unitSize [llength $units] 0 0 0]
+}
+
+proc mxLookup2 {segments} {
+  set units {}
+  set body {}
+  foreach {last first value} $segments {
+    lappend units 1
+    append body [binary format SuSuSu $last $first $value]
+  }
+  return [binary format Su 2][mxBinSearch 6 $units]$body
+}
+
+# Format 4 names an ARRAY per segment, at an offset from the start of the
+# LOOKUP - the one offset in the format that is not measured from the subtable,
+# and the one a reader gets wrong without noticing.
+proc mxLookup4 {segments} {
+  set units {}
+  foreach {last first values} $segments {
+    lappend units 1
+  }
+  set head [binary format Su 4][mxBinSearch 6 $units]
+  set at [expr {[string length $head] + 6 * [llength $units]}]
+  set body {}
+  set arrays {}
+  foreach {last first values} $segments {
+    append body [binary format SuSuSu $last $first [expr {$at + [string length $arrays]}]]
+    append arrays [binary format Su* $values]
+  }
+  return $head$body$arrays
+}
+
+proc mxLookup6 {pairs} {
+  set units {}
+  set body {}
+  foreach {glyph value} $pairs {
+    lappend units 1
+    append body [binary format SuSu $glyph $value]
+  }
+  return [binary format Su 6][mxBinSearch 4 $units]$body
+}
+
+proc mxLookup8 {first values} {
+  return [binary format SuSuSu 8 $first [llength $values]][binary format Su* $values]
+}
+
+proc mxLookup10 {size first values} {
+  set code [dict get {1 cu 2 Su 4 Iu} $size]
+  return [binary format SuSuSuSu 10 $size $first [llength $values]][binary \
+      format $code* $values]
+}
+
+# An extended state table, with as many further uint32 offsets in its header
+# as there are extra arrays behind it.
+#
+# STATES is a list of rows, each of nClasses entry indices; ENTRIES a list of
+# {newState flags ?word ...?}; EXTRAS a list of blobs whose offsets go into
+# the header in order.
+proc mxState {classes lookup states entries extras} {
+  set entrySize 4
+  foreach entry $entries {
+    set size [expr {4 + 2 * ([llength $entry] - 2)}]
+    if {$size > $entrySize} {
+      set entrySize $size
+    }
+  }
+  if {[string length $lookup] % 2} {
+    append lookup \x00
+  }
+  set stateBytes {}
+  foreach row $states {
+    append stateBytes [binary format Su* $row]
+  }
+  set entryBytes {}
+  foreach entry $entries {
+    append entryBytes [binary format Su* [lrange $entry 0 1]]
+    set words [lrange $entry 2 end]
+    if {[llength $words]} {
+      append entryBytes [binary format Su* $words]
+    }
+    while {[string length $entryBytes] % $entrySize} {
+      append entryBytes \x00
+    }
+  }
+  set headerSize [expr {16 + 4 * [llength $extras]}]
+  set classAt $headerSize
+  set stateAt [expr {$classAt + [string length $lookup]}]
+  set entryAt [expr {$stateAt + [string length $stateBytes]}]
+  set extraAt [expr {$entryAt + [string length $entryBytes]}]
+  set offsets {}
+  set blobs {}
+  foreach extra $extras {
+    lappend offsets [expr {$extraAt + [string length $blobs]}]
+    append blobs $extra
+  }
+  set header [binary format IuIuIuIu $classes $classAt $stateAt $entryAt]
+  if {[llength $offsets]} {
+    append header [binary format Iu* $offsets]
+  }
+  return $header$lookup$stateBytes$entryBytes$blobs
+}
+
+# One chain subtable: its 12 byte header and its body.
+proc mxSubtable {coverage selector body} {
+  return [binary format IuIuIu [expr {12 + [string length $body]}] \
+      $coverage $selector]$body
+}
+
+# A whole morx table: one chain, the given default flags, the subtables in
+# order. No feature entries - see the head of morx.tcl for why none is read.
+proc mxTable {flags subtables} {
+  set body [join $subtables {}]
+  set chain [binary format IuIuIuIu $flags [expr {16 + [string length $body]}] \
+      0 [llength $subtables]]$body
+  return [binary format SuSuIu 3 0 1]$chain
+}
+
+proc mxFace {table} {
+  return [::tclpdf::sfnt parse [::tclpdfTest::sfntWith $::plainFace \
+      [dict create morx $table]]]
+}
+
+# What a run comes out as, as a flat list of glyph numbers.
+proc mxRun {table glyphs} {
+  set font [mxFace $table]
+  set run {}
+  foreach glyph $glyphs {
+    lappend run [list $glyph [list [expr {$glyph + 1000}]]]
+  }
+  return [lmap entry [::tclpdf::morx apply [::tclpdf::morx build $font] $run] {
+    lindex $entry 0
+  }]
+}
+
+# The same, but the CHARACTERS each glyph ends up standing for.
+proc mxCodes {table glyphs} {
+  set font [mxFace $table]
+  set run {}
+  foreach glyph $glyphs {
+    lappend run [list $glyph [list [expr {$glyph + 1000}]]]
+  }
+  return [lmap entry [::tclpdf::morx apply [::tclpdf::morx build $font] $run] {
+    lindex $entry 1
+  }]
+}
+
+# AllDirections plus the subtable type - what every subtable of a real face
+# carries, and what leaves the direction question out of the way.
+proc mxCoverage {type} {
+  return [expr {0x20000000 | $type}]
+}
+
+# --- the lookup formats -----------------------------------------------------
+#
+# Exercised through a NONCONTEXTUAL subtable, which is nothing but a lookup:
+# every glyph the lookup names is replaced by the value it carries and every
+# other glyph is left alone.
+
+test morx-1.1 {format 0, an array over the glyphs of the face} \
+    -constraints havePlain -body {
+  set lookup [mxLookup0 {0 1 2 3 40 50 60}]
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]] {4 5 6 9}
+} -result {40 50 60 9}
+
+test morx-1.2 {format 2, one value for a whole range} -constraints havePlain \
+    -body {
+  set lookup [mxLookup2 {7 5 99 12 10 88}]
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]] {4 5 6 7 8 11}
+} -result {4 99 99 99 8 88}
+
+test morx-1.3 {format 4, one value per glyph of a range} -constraints havePlain \
+    -body {
+  set lookup [mxLookup4 [list 7 5 {51 52 53} 12 11 {61 62}]]
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]] {4 5 6 7 11 12}
+} -result {4 51 52 53 61 62}
+
+test morx-1.4 {format 6, single glyphs} -constraints havePlain -body {
+  set lookup [mxLookup6 {4 44 9 99}]
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]] {4 5 9}
+} -result {44 5 99}
+
+test morx-1.5 {format 8, a trimmed array} -constraints havePlain -body {
+  set lookup [mxLookup8 5 {55 56 57}]
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]] {4 5 6 7 8}
+} -result {4 55 56 57 8}
+
+test morx-1.6 {format 10, a trimmed array of one, two or four byte values} \
+    -constraints havePlain -body {
+  set results {}
+  foreach size {1 2 4} {
+    set lookup [mxLookup10 $size 5 {55 56}]
+    lappend results [mxRun [mxTable 1 \
+        [list [mxSubtable [mxCoverage 4] 1 $lookup]]] {4 5 6}]
+  }
+  lsort -unique $results
+} -result {{4 55 56}}
+
+test morx-1.7 {a format the standard does not define is refused by name} \
+    -constraints havePlain -body {
+  set lookup [binary format SuSu 3 0]
+  set code [catch {::tclpdf::morx build [mxFace \
+      [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]]]} \
+      message options]
+  list $code [dict get $options -errorcode] [string match {*format 3*} $message]
+} -result {1 {TCLPDF MORX LOOKUP 3} 1}
+
+test morx-1.8 {a unit narrower than its own record is refused} \
+    -constraints havePlain -body {
+  set lookup [binary format Su 6][binary format SuSuSuSuSu 2 1 0 0 0][binary \
+      format SuSu 4 44]
+  set code [catch {::tclpdf::morx build [mxFace \
+      [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]]]} \
+      message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*unit of 2 bytes*} $message]
+} -result {1 {TCLPDF MORX DAMAGED lookup} 1}
+
+# --- which subtables run ----------------------------------------------------
+
+test morx-2.1 {a subtable the default flags do not name is not applied} \
+    -constraints havePlain -body {
+  # The whole of feature selection as this package does it: the chain's
+  # default flags decide, because no caller can ask for an AAT feature. A
+  # subtable behind flag 2 is left alone where the defaults are 1.
+  set lookup [mxLookup6 {4 44}]
+  list [mxRun [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]] {4}] \
+      [mxRun [mxTable 1 [list [mxSubtable [mxCoverage 4] 2 $lookup]]] {4}] \
+      [mxRun [mxTable 3 [list [mxSubtable [mxCoverage 4] 2 $lookup]]] {4}]
+} -result {44 4 44}
+
+test morx-2.2 {a vertical-only subtable is skipped in horizontal text} \
+    -constraints havePlain -body {
+  set lookup [mxLookup6 {4 44}]
+  # 0x80000000 is Vertical; without AllDirections beside it the subtable
+  # belongs to vertical writing alone, and this package sets none.
+  list [mxRun [mxTable 1 [list [mxSubtable [expr {0x80000000 | 4}] 1 $lookup]]] {4}] \
+      [mxRun [mxTable 1 [list [mxSubtable [expr {0xA0000000 | 4}] 1 $lookup]]] {4}]
+} -result {4 44}
+
+test morx-2.3 {a backwards subtable sees the run the other way round} \
+    -constraints havePlain -body {
+  # Bit 30 says the subtable runs from the end of the run to its start. The
+  # machine below marks the FIRST glyph it sees and substitutes it, so which
+  # glyph changes says which way it ran.
+  set lookup [mxLookup6 {4 4 5 5}]
+  set states [list {0 0 0 0 1 1} {0 0 0 0 1 1} {0 0 0 0 0 0}]
+  set entries [list {0 0 0xFFFF 0xFFFF} {2 0 0xFFFF 0}]
+  set subs [mxLookup6 {4 44 5 55}]
+  set body [mxState 6 $lookup $states $entries [list [binary format Iu 4]]]
+  # The substitution table list: one uint32 offset from the list's own start.
+  append body $subs
+  set forwards [mxSubtable [mxCoverage 1] 1 $body]
+  set backwards [mxSubtable [expr {0x60000000 | 1}] 1 $body]
+  list [mxRun [mxTable 1 [list $forwards]] {4 5}] \
+      [mxRun [mxTable 1 [list $backwards]] {4 5}]
+} -result {{44 5} {4 55}}
+
+# --- type 4, noncontextual --------------------------------------------------
+
+test morx-3.1 {a deleted glyph is taken out of the run and its characters go
+    to the glyph before it} -constraints havePlain -body {
+  # 0xFFFF is how an AAT machine deletes: the position stays until the last
+  # subtable has run, so that the machines after it can still step over it,
+  # and what it stood for goes to its neighbour. Both halves are checked -
+  # the run and the characters.
+  set lookup [mxLookup6 {5 65535}]
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]]
+  list [mxRun $table {4 5 6}] [mxCodes $table {4 5 6}]
+} -result {{4 6} {{1004 1005} 1006}}
+
+test morx-3.2 {a deleted FIRST glyph gives its characters to the one behind} \
+    -constraints havePlain -body {
+  set lookup [mxLookup6 {4 65535}]
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 $lookup]]]
+  list [mxRun $table {4 5}] [mxCodes $table {4 5}]
+} -result {5 {{1004 1005}}}
+
+# --- type 2, ligature -------------------------------------------------------
+
+# A machine that joins glyph 4 and glyph 5 into glyph 9.
+#
+# Classes 0 to 3 are the format's own; 4 is glyph 4 and 5 is glyph 5. State 2
+# is "a 4 has been marked". The entry at state 2, class 5 marks the second
+# glyph and performs the action, whose two words are read from the top of the
+# match stack down: the first deletes glyph 5, the second stores the ligature
+# over glyph 4.
+proc mxLigature {ligature} {
+  set lookup [mxLookup6 {4 4 5 5}]
+  set states [list \
+      {0 0 0 0 1 0} \
+      {0 0 0 0 1 0} \
+      {0 0 0 0 1 2}]
+  set entries [list {0 0 0} {2 0x8000 0} {0 0xA000 0}]
+  # The component table is all zeros, so both offsets are "back to index 0"
+  # and the ligature index stays 0 - which is the one entry of the ligature
+  # table. A real face uses the additions to reach thousands of ligatures
+  # from one machine; what is tested here is the arithmetic, not the size.
+  set action [binary format Iu2 [list [expr {(-5) & 0x3FFFFFFF}] \
+      [expr {0xC0000000 | ((-4) & 0x3FFFFFFF)}]]]
+  set component [binary format Su4 {0 0 0 0}]
+  set ligatures [binary format Su1 [list $ligature]]
+  return [mxState 6 $lookup $states $entries \
+      [list $action $component $ligatures]]
+}
+
+test morx-4.1 {two glyphs become one, and the ligature carries the characters
+    of both} -constraints havePlain -body {
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 2] 1 [mxLigature 9]]]]
+  list [mxRun $table {4 5}] [mxCodes $table {4 5}]
+} -result {9 {{1004 1005}}}
+
+test morx-4.2 {the run around a ligature is left alone} -constraints havePlain \
+    -body {
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 2] 1 [mxLigature 9]]]]
+  list [mxRun $table {6 4 5 7}] [mxCodes $table {6 4 5 7}]
+} -result {{6 9 7} {1006 {1004 1005} 1007}}
+
+test morx-4.3 {a machine that marks and never performs changes nothing} \
+    -constraints havePlain -body {
+  # Glyph 4 on its own: the machine marks it and the run ends. Nothing is
+  # stored, nothing is deleted, and the character it stood for is still its.
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 2] 1 [mxLigature 9]]]]
+  list [mxRun $table {4}] [mxCodes $table {4}]
+} -result {4 1004}
+
+test morx-4.4 {two ligatures in one run} -constraints havePlain -body {
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 2] 1 [mxLigature 9]]]]
+  mxRun $table {4 5 4 5}
+} -result {9 9}
+
+# --- type 1, contextual -----------------------------------------------------
+
+test morx-5.1 {the current glyph is substituted through a named lookup} \
+    -constraints havePlain -body {
+  set lookup [mxLookup6 {4 4}]
+  set states [list {0 0 0 0 1} {0 0 0 0 1} ]
+  # markIndex 0xFFFF, currentIndex 0 - substitute the glyph standing here.
+  set entries [list {0 0 0xFFFF 0xFFFF} {0 0 0xFFFF 0}]
+  set body [mxState 5 $lookup $states $entries [list [binary format Iu 4]]]
+  append body [mxLookup6 {4 44}]
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 1] 1 $body]]] {4 5}
+} -result {44 5}
+
+test morx-5.2 {and the MARKED glyph is substituted where the entry says so} \
+    -constraints havePlain -body {
+  # The state machine marks glyph 4 and, on meeting glyph 5, rewrites the
+  # MARK rather than the glyph it is standing on - which is the whole reason
+  # a contextual subtable exists.
+  set lookup [mxLookup6 {4 4 5 5}]
+  set states [list \
+      {0 0 0 0 1 0} \
+      {0 0 0 0 1 0} \
+      {0 0 0 0 1 2}]
+  set entries [list {0 0 0xFFFF 0xFFFF} {2 0x8000 0xFFFF 0xFFFF} \
+      {0 0 0 0xFFFF}]
+  set body [mxState 6 $lookup $states $entries [list [binary format Iu 4]]]
+  append body [mxLookup6 {4 44}]
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 1] 1 $body]]] {4 5}
+} -result {44 5}
+
+# --- type 0, rearrangement --------------------------------------------------
+
+# A machine that marks the first glyph it sees and the last, and then performs
+# the verb it was built with.
+proc mxRearrange {verb} {
+  set lookup [mxLookup6 {4 4 5 5 6 6 7 7}]
+  # State 2 is "the range is open": the glyphs in the middle keep it open
+  # (entry 3 changes nothing and stays), and glyph 7 closes it with the verb.
+  # Without entry 3 the machine drops back to state 0 on the second glyph and
+  # the range never ends - which is what a state table does when a row is
+  # written for the classes it expects and not for the ones it will see.
+  set states [list \
+      {0 0 0 0 1 0 0 0} \
+      {0 0 0 0 1 0 0 0} \
+      {0 0 0 0 0 3 3 2}]
+  set entries [list {0 0} {2 0x8000} [list 0 [expr {0x2000 | $verb}]] {2 0}]
+  return [mxState 8 $lookup $states $entries {}]
+}
+
+test morx-6.1 {verb 1 moves the first glyph to the end of the range} \
+    -constraints havePlain -body {
+  # Ax => xA. The range is glyph 4 to glyph 7 inclusive; 5 and 6 are the "x".
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 0] 1 [mxRearrange 1]]]] \
+      {4 5 6 7}
+} -result {5 6 7 4}
+
+test morx-6.2 {verb 2 moves the last to the front} -constraints havePlain -body {
+  # xD => Dx.
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 0] 1 [mxRearrange 2]]]] \
+      {4 5 6 7}
+} -result {7 4 5 6}
+
+test morx-6.3 {verb 3 swaps the two ends} -constraints havePlain -body {
+  # AxD => DxA.
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 0] 1 [mxRearrange 3]]]] \
+      {4 5 6 7}
+} -result {7 5 6 4}
+
+test morx-6.4 {verb 0 is "no change", and the range still ends} \
+    -constraints havePlain -body {
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 0] 1 [mxRearrange 0]]]] \
+      {4 5 6 7}
+} -result {4 5 6 7}
+
+test morx-6.5 {verb 15 reverses two glyphs at each end} -constraints havePlain \
+    -body {
+  # ABxCD => DCxBA, the widest of the sixteen.
+  mxRun [mxTable 1 [list [mxSubtable [mxCoverage 0] 1 [mxRearrange 15]]]] \
+      {4 5 6 7}
+} -result {7 6 5 4}
+
+# --- type 5, insertion ------------------------------------------------------
+
+proc mxInsert {flags} {
+  set lookup [mxLookup6 {4 4}]
+  set states [list {0 0 0 0 1} {0 0 0 0 1}]
+  # currentInsertIndex 0, markedInsertIndex 0xFFFF.
+  set entries [list {0 0 0xFFFF 0xFFFF} [list 0 $flags 0 0xFFFF]]
+  return [mxState 5 $lookup $states $entries \
+      [list [binary format Su2 {88 89}]]]
+}
+
+test morx-7.1 {a glyph is put in behind the current one} -constraints havePlain \
+    -body {
+  # The count is in the flags: two glyphs at the current position, and
+  # without CurrentInsertBefore they land behind it.
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 5] 1 \
+      [mxInsert [expr {2 << 5}]]]]]
+  list [mxRun $table {4 5}] [mxCodes $table {4 5}]
+} -result {{4 88 89 5} {1004 {} {} 1005}}
+
+test morx-7.2 {and in front of it where the flag says so} -constraints havePlain \
+    -body {
+  # 0x0800 is CurrentInsertBefore.
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 5] 1 \
+      [mxInsert [expr {0x0800 | (2 << 5)}]]]]]
+  mxRun $table {4 5}
+} -result {88 89 4 5}
+
+test morx-7.3 {an inserted glyph stands for no character of its own} \
+    -constraints havePlain -body {
+  # The same rule a Multiple substitution follows in GSUB: giving the
+  # neighbour's characters to a glyph the FACE added would extract them twice.
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 5] 1 \
+      [mxInsert [expr {1 << 5}]]]]]
+  mxCodes $table {4}
+} -result {1004 {}}
+
+# --- a damaged table --------------------------------------------------------
+
+test morx-8.1 {a version this reader does not know is refused} \
+    -constraints havePlain -body {
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 [mxLookup6 {4 44}]]]]
+  set table [string replace $table 0 1 [binary format Su 1]]
+  set code [catch {::tclpdf::morx build [mxFace $table]} message options]
+  list $code [dict get $options -errorcode] [string match {*version 1*} $message]
+} -result {1 {TCLPDF MORX VERSION 1} 1}
+
+test morx-8.2 {a chain that reaches past the table is refused} \
+    -constraints havePlain -body {
+  set table [mxTable 1 [list [mxSubtable [mxCoverage 4] 1 [mxLookup6 {4 44}]]]]
+  set table [string replace $table 12 15 [binary format Iu 100000]]
+  set code [catch {::tclpdf::morx build [mxFace $table]} message options]
+  list $code [dict get $options -errorcode] [string match {*only*bytes long*} $message]
+} -result {1 {TCLPDF MORX DAMAGED chain} 1}
+
+test morx-8.3 {a state table with fewer than the four reserved classes is
+    refused} -constraints havePlain -body {
+  set body [mxState 3 [mxLookup6 {4 4}] {{0 0 0}} {{0 0 0}} {}]
+  set code [catch {::tclpdf::morx build [mxFace \
+      [mxTable 1 [list [mxSubtable [mxCoverage 2] 1 $body]]]]} message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*first four are reserved*} $message]
+} -result {1 {TCLPDF MORX DAMAGED state} 1}
+
+test morx-8.4 {a face without the table has nothing to apply} \
+    -constraints havePlain -body {
+  ::tclpdf::morx has [::tclpdf::sfnt read $plainFace]
+} -result 0
+
+# --- the oracle -------------------------------------------------------------
+
+# UTF-8 by hand: under Tcl 8.6 [format %c] cannot write a character beyond the
+# BMP, and that is where an emoji face lives. Writing the bytes is the only
+# spelling both interpreters read the same way.
+proc mxUtf8 {point} {
+  if {$point < 0x80} {
+    return [binary format c $point]
+  }
+  if {$point < 0x800} {
+    return [binary format cc [expr {0xC0 | ($point >> 6)}] \
+        [expr {0x80 | ($point & 0x3F)}]]
+  }
+  if {$point < 0x10000} {
+    return [binary format ccc [expr {0xE0 | ($point >> 12)}] \
+        [expr {0x80 | (($point >> 6) & 0x3F)}] \
+        [expr {0x80 | ($point & 0x3F)}]]
+  }
+  return [binary format cccc [expr {0xF0 | ($point >> 18)}] \
+      [expr {0x80 | (($point >> 12) & 0x3F)}] \
+      [expr {0x80 | (($point >> 6) & 0x3F)}] \
+      [expr {0x80 | ($point & 0x3F)}]]
+}
+
+# A tag character standing alone is left out - see the head of this file.
+proc mxComparable {codes} {
+  if {[llength $codes] != 1} {
+    return 1
+  }
+  set point [lindex $codes 0]
+  return [expr {$point < 0xE0000 || $point > 0xE007F}]
+}
+
+test morx-9.1 {every sequence comes out as the glyph hb-shape picks} \
+    -constraints {haveAppleColorEmoji hbShape} -body {
+  set font [::tclpdf::sfnt openFace $appleFace 0]
+  set cmap [dict get $font cmap]
+  set state [::tclpdf::morx build $font]
+
+  # THE WORD LIST, built out of the face's own cmap so that it is the face
+  # that decides what is asked: every character it maps, on its own; every
+  # skin tone modifier behind ten bases that take one; and a joiner between
+  # two people, which is what a family is made of.
+  set words {}
+  foreach point [lsort -integer [dict keys $cmap]] {
+    lappend words [list $point]
+  }
+  foreach base {128077 128078 128075 128591 128119 129489 128104 128105
+      128102 128103} {
+    for {set tone 127995} {$tone <= 127999} {incr tone} {
+      lappend words [list $base $tone]
+      lappend words [list $base $tone 8205 127806]
+    }
+  }
+  foreach a {128104 128105 129489} {
+    foreach b {128102 128103 128105} {
+      lappend words [list $a 8205 $b]
+      lappend words [list $a 8205 $b 8205 128102]
+    }
+  }
+  # Only what the face can map at all: a character it has no glyph for is a
+  # question for [colorFont], not for the state machines.
+  set asked {}
+  foreach codes $words {
+    set keep 1
+    foreach point $codes {
+      if {![dict exists $cmap $point]} {
+        set keep 0
+        break
+      }
+    }
+    if {$keep && [mxComparable $codes]} {
+      lappend asked $codes
+    }
+  }
+
+  set path [::tclpdfTest::scratch morx-words.txt]
+  set channel [open $path wb]
+  foreach codes $asked {
+    foreach point $codes {
+      puts -nonewline $channel [mxUtf8 $point]
+    }
+    puts -nonewline $channel "\n"
+  }
+  close $channel
+  set oracle [split [string trim [exec hb-shape $appleFace --face-index=0 \
+      --no-glyph-names --no-positions --no-clusters --text-file=$path]] \n]
+  file delete $path
+
+  set differ {}
+  foreach codes $asked answer $oracle {
+    set run {}
+    foreach point $codes {
+      lappend run [list [dict get $cmap $point] [list $point]]
+    }
+    set glyphs [lmap entry [::tclpdf::morx apply $state $run] {lindex $entry 0}]
+    if {[join $glyphs "|"] ne [string trim $answer "\[\]"]} {
+      lappend differ [list $codes $glyphs $answer]
+    }
+  }
+  ::tclpdf::sfnt closeFace $font
+  list [expr {[llength $asked] > 500}] [llength $differ] [lrange $differ 0 2]
+} -result {1 0 {}}
+
+test morx-9.2 {the units of example 02.18, one call each} \
+    -constraints {haveAppleColorEmoji hbShape} -body {
+  # The sequences the example sets, written literally: the family of three
+  # and of four, two flags of regional indicators, the transgender flag with
+  # its two selectors, the Scottish flag with its six tag characters, the
+  # three skin tone ramps. Each is one call to hb-shape and one run through
+  # this module, and each has to come out as one glyph.
+  set units [list \
+      👨‍👩‍👧 👨‍👩‍👧‍👦 🇩🇪 🇫🇷 🏳️‍⚧️ 🏴󠁧󠁢󠁳󠁣󠁴󠁿 \
+      👍🏻 👍🏼 👍🏽 👍🏾 👍🏿 \
+      👷‍♀️ 👷🏻‍♀️ 👷🏽‍♀️ 👷🏿‍♀️ \
+      🧑‍🌾 🧑🏻‍🌾 🧑🏽‍🌾 🧑🏿‍🌾 \
+      ❤️ 😀]
+  set font [::tclpdf::sfnt openFace $appleFace 0]
+  set cmap [dict get $font cmap]
+  set state [::tclpdf::morx build $font]
+  set differ {}
+  set single 0
+  foreach unit $units {
+    set run {}
+    foreach char [split $unit {}] {
+      set point [scan $char %c]
+      if {![dict exists $cmap $point]} {
+        continue
+      }
+      lappend run [list [dict get $cmap $point] [list $point]]
+    }
+    set glyphs [lmap entry [::tclpdf::morx apply $state $run] {lindex $entry 0}]
+    if {[llength $glyphs] == 1} {
+      incr single
+    }
+    set answer [string trim [exec hb-shape $appleFace --face-index=0 \
+        --no-glyph-names --no-positions --no-clusters $unit] "\[\]\n"]
+    if {[join $glyphs "|"] ne $answer} {
+      lappend differ [list $unit $glyphs $answer]
+    }
+  }
+  ::tclpdf::sfnt closeFace $font
+  list [llength $units] $single [llength $differ] $differ
+} -result {21 21 0 {}}
+
+cleanupTests

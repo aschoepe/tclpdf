@@ -96,7 +96,8 @@ proc fontMakeCollectionHeader {{faces 2}} {
 
 test font-1.5 {a TrueType collection is refused, and says how to get on} -body {
   ::tclpdf::sfnt parse [fontMakeCollectionHeader]
-} -returnCodes error -match glob -result {*TrueType collection*extract the single face*}
+} -returnCodes error -match glob \
+    -result {*TrueType collection*name the face you want with -face*}
 
 test font-1.5a {and it is the tag that decides, not the rest of the header} -body {
   # The same bytes with the tag of a plain TrueType file: the parse gets past
@@ -3394,7 +3395,7 @@ test font-25.1 {every format answers every key of font info} \
   }
   $doc destroy
   list [llength [lsort -unique $keys]] [lindex $keys 0] $formats
-} -result {1 {ascender axes capHeight characters descender family format fsType glyphs lineGap masks permission postScript unitsPerEm variable vertical xHeight} {truetype cff cff type1 type3}}
+} -result {1 {ascender axes bitmaps capHeight characters descender family format fsType glyphs lineGap masks permission postScript unitsPerEm variable vertical xHeight} {truetype cff cff type1 type3}}
 
 test font-25.2 {one face, three formats, three different things it can say} \
     -constraints haveCffTrio -body {
@@ -3978,6 +3979,35 @@ test font-26.3 {a colour face with no outlines is refused by the name of its tab
       [string match {*colour font whose pictures sit in its "sbix" table*} \
           $message] $names
 } -result {1 {TCLPDF FONT OUTLINES emo} sbix 1 {}}
+
+test font-26.3a {an sbix face is refused even where some of its characters DO
+    have outlines} -constraints haveFont -body {
+  # THE REAL Apple Color Emoji is this case and font-26.3's fixture is not:
+  # 42 of the 1469 characters its cmap covers have outlines - the digits, the
+  # hash and the star, which are the bases of the keycap sequences - and the
+  # other 1397 are contours of two points. So [FontDrawsNothing] answers "it
+  # draws something", truthfully, and until 2026-08-27 the face went into the
+  # document and set 1397 blanks and 42 digits. A face whose pictures are in
+  # sbix or CBDT is therefore refused whatever its outlines look like; COLR
+  # and SVG are not, because a face may carry either beside a complete
+  # monochrome set.
+  set path [::tclpdfTest::scratch sbix-with-outlines.ttf]
+  set channel [open $path wb]
+  puts -nonewline $channel [fontRenameTable \
+      [::tclpdfTest::readBytes $fontRegular] FFTM sbix]
+  close $channel
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc font embed emo $path} message options]
+  set names [$doc font names]
+  $doc destroy
+  file delete $path
+  set errorcode [dict get $options -errorcode]
+  list $code [lrange $errorcode 0 3] [lindex $errorcode end] \
+      [string match {*colour font whose pictures sit in its "sbix" table*} \
+          $message] \
+      [string match {*colorFont*} $message] $names
+} -result {1 {TCLPDF FONT OUTLINES emo} sbix 1 1 {}}
 
 test font-26.4 {a COLR face keeps its own road even with an SVG table beside it} \
     -constraints haveFont -body {

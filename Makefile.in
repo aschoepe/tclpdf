@@ -129,8 +129,15 @@ test:
 # whose worth lies in LOOKING at the result. The scripts write more documents
 # than there are scripts: the writing-systems example produces one file per font
 # situation, to show what the standard faces cannot set and what a smaller face
-# still can, and the signature example writes the same document twice, once
-# signed while it is written and once signed afterwards.
+# still can, the signature example writes the same document twice, once signed
+# while it is written and once signed afterwards, and the colour emoji example
+# writes the same three pages from two faces - Noto Color Emoji and, where
+# macOS has it, Apple Color Emoji.
+#
+# AND FEWER, on a machine without what an example needs: the Tk example, the
+# Noto half of the emoji example and its Apple half each skip themselves with
+# a line on the console and an exit status of zero, the way a missing validator
+# is a skip and not a failure. The count below is therefore 86 to 89.
 #
 # Each script takes its output path as the first argument, so nothing is
 # written next to the sources. The scripts find the package through

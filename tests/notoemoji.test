@@ -57,6 +57,11 @@ set ::notoEmojiFace [file join $::notoEmojiTree examples assets fonts google \
     NotoColorEmoji-Regular.ttf]
 
 testConstraint haveNotoColorEmoji [file exists $::notoEmojiFace]
+# The second face the example draws from, where the machine has one. Apple
+# Color Emoji is part of macOS and is not redistributable, so a test that
+# needs it carries a constraint exactly as the Noto ones do.
+set ::notoEmojiApple "/System/Library/Fonts/Apple Color Emoji.ttc"
+testConstraint haveAppleColorEmoji [file exists $::notoEmojiApple]
 testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
 testConstraint pdftotext [expr {[auto_execok pdftotext] ne {}}]
 
@@ -134,10 +139,10 @@ test notoemoji-1.1 {the example runs and writes a document} \
   lassign [::tclpdfTest::notoEmojiConsole] code output
   # The glyph count is the one number worth asserting from the console, and
   # it is the whole subject of the pages: 127 characters go in as one string
-  # and 56 glyphs come out, because the face joins them into sequences. A
+  # and 61 glyphs come out, because the face joins them into sequences. A
   # count of 127 would mean the sequences had been taken apart.
   list $code [string range [::tclpdf::io read $target] 0 4] \
-      [string match {*56 glyphs out of 127 characters*} $output]
+      [string match {*61 glyphs out of 127 characters*} $output]
 } -result {0 %PDF- 1}
 
 test notoemoji-1.2 {qpdf reads what came out} \
@@ -221,48 +226,132 @@ test notoemoji-2.2 {twice the size is exactly twice the width} \
   list [expr {$small > 0}] [expr {abs($large - 2 * $small) < 1e-9}]
 } -result {1 1}
 
-test notoemoji-1.5 {without the face the example skips: no document, status zero} -body {
-  # The face is hidden from the child rather than removed - see the head of
-  # this file. [file exists] answers 0 for exactly the one path the example
-  # asks about and for nothing else; every other use of [file], in the
-  # example and in everything it loads, goes through to the builtin.
+test notoemoji-1.5 {without either face the example skips: no document, status
+    zero} -body {
+  # The faces are hidden from the child rather than removed - see the head of
+  # this file. [file exists] answers 0 for exactly the paths the example asks
+  # about and for nothing else; every other use of [file], in the example and
+  # in everything it loads, goes through to the builtin.
+  #
+  # BOTH of them, since 2026-08-27: the example writes a second document from
+  # Apple Color Emoji where macOS has one, and each half skips itself. What is
+  # measured here is that each half says so on a line of its own and that
+  # neither writes anything.
   set wrapper [::tclpdfTest::scratch notoemoji-hide-face.tcl]
   set channel [open $wrapper w]
   puts $channel {
       rename file realFile
       proc file {args} {
           if {[lindex $args 0] eq "exists"
-                  && [lindex $args 1] eq $::notoEmojiHidden} {
+                  && [lindex $args 1] in $::notoEmojiHidden} {
               return 0
           }
           return [uplevel 1 [linsert $args 0 realFile]]
       }
-      set ::notoEmojiHidden [lindex $argv 0]
-      set example [lindex $argv 1]
-      set argv [lrange $argv 2 end]
+      set ::notoEmojiHidden [lrange $argv 0 1]
+      set example [lindex $argv 2]
+      set argv [lrange $argv 3 end]
       set argc [llength $argv]
       source $example
   }
   close $channel
-  set target [::tclpdfTest::scratch notoemoji-skipped.pdf]
-  file delete $target
+  # A directory of its own: the second document is written BESIDE the one
+  # that was asked for, so a target in the scratch directory would name the
+  # very file the tests above wrote there.
+  set dir [::tclpdfTest::scratch notoemoji-skip]
+  file delete -force $dir
+  file mkdir $dir
+  set target [file join $dir notoemoji-skipped.pdf]
+  set apple [file join $dir 02.18-apple-color-emoji.pdf]
   lassign [::tclpdfTest::notoEmojiRun $wrapper $::notoEmojiFace \
-      $::notoEmojiExample $target] code output
+      $::notoEmojiApple $::notoEmojiExample $target] code output
   file delete $wrapper
   set lines [split [string trim $output] \n]
-  # One line, and it has to be useful to somebody who has just watched an
-  # example write nothing: what is missing, where it comes from, under which
-  # licence, and which directory to put it in.
-  list $code [file exists $target] [llength $lines] \
+  set wrote [list [file exists $target] [file exists $apple]]
+  file delete -force $dir
+  # Two lines, and the first has to be useful to somebody who has just watched
+  # an example write nothing: what is missing, where it comes from, under
+  # which licence, and which directory to put it in. The second names the
+  # system path Apple's face lives at and says why it is nowhere else.
+  list $code {*}$wrote [llength $lines] \
       [string match "skipped: NotoColorEmoji-Regular.ttf is not in the tree*" \
           [string trim [lindex $lines 0]]] \
       [string match {*fonts.google.com*} $output] \
       [string match {*Open Font License*} $output] \
-      [string match "*[file dirname $::notoEmojiFace]*" $output]
-} -result {0 0 1 1 1 1 1}
+      [string match "*[file dirname $::notoEmojiFace]*" $output] \
+      [string match "skipped: $::notoEmojiApple is not on this machine*" \
+          [string trim [lindex $lines 1]]] \
+      [string match {*not redistributable*} $output]
+} -result {0 0 0 2 1 1 1 1 1 1}
 
-# The document is a test fixture, not an artefact: it goes when the file is
-# done with it, whether or not the face was there to write one.
-file delete [::tclpdfTest::scratch notoemoji-example.pdf]
+# --- the second document ----------------------------------------------------
+
+test notoemoji-3.1 {where macOS has Apple Color Emoji the example writes a
+    second document from it} -constraints haveAppleColorEmoji -body {
+  ::tclpdfTest::notoEmojiDocument
+  lassign [::tclpdfTest::notoEmojiConsole] code output
+  set apple [::tclpdfTest::scratch 02.18-apple-color-emoji.pdf]
+  # The SAME glyph count out of a face that forms its sequences with a state
+  # machine rather than with GSUB, and every one of the sixty-one a picture
+  # bar the female sign, which Apple draws as an outline and has no bitmap
+  # for at any strike.
+  list $code [expr {[file exists $apple] ? [string range \
+          [::tclpdf::io read $apple] 0 4] : "missing"}] \
+      [string match {*Apple Color Emoji: 61 glyphs out of 127 characters*} \
+          $output] \
+      [string match {*60 of them bitmaps*} $output]
+} -result {0 %PDF- 1 1}
+
+test notoemoji-3.2 {and the pictures are in it} \
+    -constraints {haveAppleColorEmoji qpdf pdftotext} -body {
+  # The mirror image of notoemoji-1.4: where the Noto document has no bitmap
+  # anywhere, this one has one image XObject per glyph drawn - which is what
+  # an sbix face IS.
+  #
+  # COUNTED IN THE FILE AND NOT WITH pdfimages, and the difference is the
+  # point rather than a workaround: pdfimages walks PAGE content streams, and
+  # every picture here sits inside a Type 3 glyph description, so it lists
+  # nothing for this document as it lists nothing for the Noto one. Both
+  # halves are measured, or "no pictures" would look like one answer for two
+  # documents that could not differ more.
+  ::tclpdfTest::notoEmojiDocument
+  set apple [::tclpdfTest::scratch 02.18-apple-color-emoji.pdf]
+  set listed [llength [lrange [split [string trim \
+      [exec pdfimages -list $apple 2>@1]] \n] 2 end]]
+  set text [exec qpdf --qdf --object-streams=disable $apple - 2>@1]
+  # One picture and one soft mask for each glyph that has one, and 60 of the
+  # 61 have: the female sign is an outline in this face and no bitmap at all.
+  # ANCHORED at the start of a line: the command that counts them is printed
+  # ON the last page, so an unanchored count finds one more than there are.
+  list $listed [regexp -all -line {^ */Subtype /Image} $text]
+} -result {0 120}
+
+test notoemoji-3.3 {qpdf reads the second document too}     -constraints {haveAppleColorEmoji qpdf} -body {
+  ::tclpdfTest::notoEmojiDocument
+  set report [exec qpdf --check \
+      [::tclpdfTest::scratch 02.18-apple-color-emoji.pdf] 2>@1]
+  expr {[string match {*No syntax or stream encoding errors found*} $report]
+      ? "ok" : $report}
+} -result ok
+
+test notoemoji-3.4 {pdftotext gives the sequences back out of the Apple
+    document as well} -constraints {haveAppleColorEmoji pdftotext} -body {
+  # The /ToUnicode of a Type 3 font built from a state machine has to carry
+  # what the machine swallowed, exactly as the ligature road does - and the
+  # order matters: the transgender flag is U+1F3F3 U+FE0F U+200D U+26A7
+  # U+FE0F, and a selector deleted early and appended late would come back
+  # with both selectors at the end.
+  ::tclpdfTest::notoEmojiDocument
+  set text [exec pdftotext -enc UTF-8 \
+      [::tclpdfTest::scratch 02.18-apple-color-emoji.pdf] - 2>@1]
+  lmap sequence $::notoEmojiSequences {
+      expr {[string first $sequence $text] >= 0}
+  }
+} -result {1 1 1 1 1 1}
+
+# The documents are test fixtures, not artefacts: they go when the file is
+# done with them, whether or not the faces were there to write them.
+file delete [::tclpdfTest::scratch notoemoji-example.pdf] \
+    [::tclpdfTest::scratch 02.18-apple-color-emoji.pdf]
 
 cleanupTests

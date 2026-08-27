@@ -1,0 +1,249 @@
+# sbix.test --
+#
+# The standard bitmap graphics table: strikes, glyph records, the two
+# reference types and what is refused.
+#
+# THE FIXTURE IS A REAL FACE WITH AN sbix TABLE PUT ON IT. Nothing in this
+# tree ships a bitmap colour font - the one on this machine is Apple Color
+# Emoji, which is part of macOS and not redistributable - so DejaVu Sans gets
+# a table of hand-built PNGs bolted to it (::tclpdfTest::sfntWith and
+# ::tclpdfTest::sbix in helper.tcl). What that costs is realism about SIZE and
+# nothing else: the records, the offsets and the reference types are the
+# format's, and every one of them is exercised.
+#
+# THE REAL FACE IS ASKED TOO where it is there (constraint
+# haveAppleColorEmoji), for the numbers no fixture can stand in for: nine
+# strikes, 3844 glyphs, 191 MB of PNG read by range out of a file that is
+# never held in memory.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::sbix
+source [file join [file dirname [info script]] helper.tcl]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set plainFace [file join $here examples assets fonts DejaVuSans.ttf]
+testConstraint havePlain [file exists $plainFace]
+set appleFace "/System/Library/Fonts/Apple Color Emoji.ttc"
+testConstraint haveAppleColorEmoji [file exists $appleFace]
+
+# --- the fixture ------------------------------------------------------------
+
+# Four glyphs of the plain face carry something: 4 a picture, 5 a second one,
+# 6 a "flip" that names 4, and 7 a "dupe" that names 5. Everything else is
+# empty at every strike, which is what a face does for a character that has no
+# picture.
+proc sbixFixture {path {ppem 32}} {
+  set small [::tclpdfTest::sbixPng 8 6]
+  set alpha [::tclpdfTest::sbixPng 10 10 1]
+  set records [dict create \
+      4 [list 0 0 "png " $small] \
+      5 [list 2 -3 "png " $alpha] \
+      6 [list 0 0 "flip" [binary format Su 4]] \
+      7 [list 0 0 "dupe" [binary format Su 5]]]
+  return [::tclpdfTest::sfntWith $path \
+      [dict create sbix [::tclpdfTest::sbix 40 [list $ppem $records \
+          [expr {$ppem * 2}] $records]]]]
+}
+
+proc sbixFace {path} {
+  return [::tclpdf::sfnt parse [sbixFixture $path]]
+}
+
+# --- reading the table ------------------------------------------------------
+
+test sbix-1.1 {a face without the table has no bitmap glyphs} \
+    -constraints havePlain -body {
+  ::tclpdf::sbix has [::tclpdf::sfnt read $plainFace]
+} -result 0
+
+test sbix-1.2 {a face with one is found, and its strikes come out in order} \
+    -constraints havePlain -body {
+  set font [sbixFace $plainFace]
+  set state [::tclpdf::sbix build $font]
+  list [::tclpdf::sbix has $font] [::tclpdf::sbix sizes $state]
+} -result {1 {32 64}}
+
+test sbix-1.3 {the largest strike is what an unnamed -strike gets} \
+    -constraints havePlain -body {
+  set state [::tclpdf::sbix build [sbixFace $plainFace]]
+  lindex [::tclpdf::sbix strike $state {}] 0
+} -result 64
+
+test sbix-1.4 {a strike may be named by its ppem} -constraints havePlain -body {
+  set state [::tclpdf::sbix build [sbixFace $plainFace]]
+  lindex [::tclpdf::sbix strike $state 32] 0
+} -result 32
+
+test sbix-1.5 {a size the face has not got is refused, and the message lists
+    the ones it has} -constraints havePlain -body {
+  set state [::tclpdf::sbix build [sbixFace $plainFace]]
+  set code [catch {::tclpdf::sbix strike $state 48} message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*32, 64*} $message]
+} -result {1 {TCLPDF SBIX STRIKE 48} 1}
+
+# --- one glyph's picture ----------------------------------------------------
+
+test sbix-2.1 {a PNG comes back whole, with its size read out of IHDR} \
+    -constraints havePlain -body {
+  set font [sbixFace $plainFace]
+  set state [::tclpdf::sbix build $font]
+  set strike [::tclpdf::sbix strike $state 32]
+  set picture [::tclpdf::sbix graphic $font $state $strike 4]
+  list [dict get $picture kind] [dict get $picture width] \
+      [dict get $picture height] [dict get $picture originX] \
+      [dict get $picture originY] [dict get $picture mirror] \
+      [dict get $picture source] \
+      [string range [dict get $picture data] 1 3]
+} -result {png 8 6 0 0 0 4 PNG}
+
+test sbix-2.2 {the origin offsets are the record's own} -constraints havePlain \
+    -body {
+  set font [sbixFace $plainFace]
+  set state [::tclpdf::sbix build $font]
+  set picture [::tclpdf::sbix graphic $font $state \
+      [::tclpdf::sbix strike $state 32] 5]
+  list [dict get $picture originX] [dict get $picture originY] \
+      [dict get $picture width] [dict get $picture height]
+} -result {2 -3 10 10}
+
+test sbix-2.3 {a glyph with no picture answers the empty string} \
+    -constraints havePlain -body {
+  set font [sbixFace $plainFace]
+  set state [::tclpdf::sbix build $font]
+  ::tclpdf::sbix graphic $font $state [::tclpdf::sbix strike $state 32] 9
+} -result {}
+
+test sbix-2.4 {a "flip" record draws another glyph's picture, mirrored} \
+    -constraints havePlain -body {
+  # The saving this record type exists for: the picture that comes back is
+  # glyph 4's, byte for byte, and only the mirror flag differs. Two Type 3
+  # glyphs then share one image XObject - see colorFontBitmap.test.
+  set font [sbixFace $plainFace]
+  set state [::tclpdf::sbix build $font]
+  set strike [::tclpdf::sbix strike $state 32]
+  set source [::tclpdf::sbix graphic $font $state $strike 4]
+  set flipped [::tclpdf::sbix graphic $font $state $strike 6]
+  list [dict get $flipped mirror] [dict get $flipped source] \
+      [expr {[dict get $flipped data] eq [dict get $source data]}]
+} -result {1 4 1}
+
+test sbix-2.5 {a "dupe" record draws it unmirrored} -constraints havePlain \
+    -body {
+  set font [sbixFace $plainFace]
+  set state [::tclpdf::sbix build $font]
+  set strike [::tclpdf::sbix strike $state 32]
+  set duped [::tclpdf::sbix graphic $font $state $strike 7]
+  list [dict get $duped mirror] [dict get $duped source] \
+      [dict get $duped width]
+} -result {0 5 10}
+
+test sbix-2.6 {a picture in another format is refused by name} \
+    -constraints havePlain -body {
+  set bytes [::tclpdfTest::sfntWith $plainFace [dict create sbix \
+      [::tclpdfTest::sbix 40 [list 32 [dict create \
+          4 [list 0 0 "jpg " "not really a jpeg"]]]]]]
+  set font [::tclpdf::sfnt parse $bytes]
+  set state [::tclpdf::sbix build $font]
+  set code [catch {::tclpdf::sbix graphic $font $state \
+      [::tclpdf::sbix strike $state {}] 4} message options]
+  list $code [dict get $options -errorcode] [string match {*jpg*} $message]
+} -result {1 {TCLPDF SBIX FORMAT {jpg }} 1}
+
+test sbix-2.7 {a reference that leads back to itself is refused} \
+    -constraints havePlain -body {
+  set bytes [::tclpdfTest::sfntWith $plainFace [dict create sbix \
+      [::tclpdfTest::sbix 40 [list 32 [dict create \
+          4 [list 0 0 "dupe" [binary format Su 5]] \
+          5 [list 0 0 "dupe" [binary format Su 4]]]]]]]
+  set font [::tclpdf::sfnt parse $bytes]
+  set state [::tclpdf::sbix build $font]
+  set code [catch {::tclpdf::sbix graphic $font $state \
+      [::tclpdf::sbix strike $state {}] 4} message options]
+  list $code [lrange [dict get $options -errorcode] 0 1] \
+      [string match {*names its way back*} $message]
+} -result {1 {TCLPDF SBIX} 1}
+
+test sbix-2.8 {a record that says PNG and holds none is refused} \
+    -constraints havePlain -body {
+  set bytes [::tclpdfTest::sfntWith $plainFace [dict create sbix \
+      [::tclpdfTest::sbix 40 [list 32 [dict create \
+          4 [list 0 0 "png " "not a PNG at all, but long enough"]]]]]]
+  set font [::tclpdf::sfnt parse $bytes]
+  set state [::tclpdf::sbix build $font]
+  set code [catch {::tclpdf::sbix graphic $font $state \
+      [::tclpdf::sbix strike $state {}] 4} message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*does not begin with one*} $message]
+} -result {1 {TCLPDF SBIX DAMAGED png} 1}
+
+# --- what a damaged table is refused for ------------------------------------
+
+test sbix-3.1 {an unknown version is refused} -constraints havePlain -body {
+  set table [::tclpdfTest::sbix 40 [list 32 {}]]
+  set table [string replace $table 0 1 [binary format Su 2]]
+  set font [::tclpdf::sfnt parse [::tclpdfTest::sfntWith $plainFace \
+      [dict create sbix $table]]]
+  set code [catch {::tclpdf::sbix build $font} message options]
+  list $code [dict get $options -errorcode] [string match {*version 2*} $message]
+} -result {1 {TCLPDF SBIX VERSION 2} 1}
+
+test sbix-3.2 {a table announcing no strikes at all is refused} \
+    -constraints havePlain -body {
+  set font [::tclpdf::sfnt parse [::tclpdfTest::sfntWith $plainFace \
+      [dict create sbix [binary format SuSuIu 1 1 0]]]]
+  set code [catch {::tclpdf::sbix build $font} message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*no size at all*} $message]
+} -result {1 {TCLPDF SBIX DAMAGED header} 1}
+
+test sbix-3.3 {a strike drawn for no pixels is refused} -constraints havePlain \
+    -body {
+  set font [::tclpdf::sfnt parse [::tclpdfTest::sfntWith $plainFace \
+      [dict create sbix [::tclpdfTest::sbix 40 [list 0 {}]]]]]
+  set code [catch {::tclpdf::sbix build $font} message options]
+  list $code [dict get $options -errorcode] \
+      [string match {*no pixels is no picture*} $message]
+} -result {1 {TCLPDF SBIX DAMAGED strike} 1}
+
+# --- the real face ----------------------------------------------------------
+
+test sbix-4.1 {Apple Color Emoji: nine strikes, read out of a 192 MB file
+    without holding it} -constraints haveAppleColorEmoji -body {
+  set font [::tclpdf::sfnt openFace $appleFace 0]
+  set state [::tclpdf::sbix build $font]
+  set sizes [::tclpdf::sbix sizes $state]
+  # The table is NOT in memory: it is streamed, and [sfnt table] says so
+  # rather than answering the empty string.
+  set held [catch {::tclpdf::sfnt table $font sbix} - options]
+  set code [dict get $options -errorcode]
+  set extent [::tclpdf::sfnt extent $font sbix]
+  ::tclpdf::sfnt closeFace $font
+  list $sizes $held $code $extent
+} -result {{20 26 32 40 48 52 64 96 160} 1 {TCLPDF FONT STREAMED sbix} 191134508}
+
+test sbix-4.2 {and one glyph's picture comes out of it by range} \
+    -constraints haveAppleColorEmoji -body {
+  set font [::tclpdf::sfnt openFace $appleFace 0]
+  set state [::tclpdf::sbix build $font]
+  set strike [::tclpdf::sbix strike $state 160]
+  # U+1F44D, the thumb - the face draws it 160 by 160 pixels with its origin
+  # on the baseline, which is what makes the em box the picture's box.
+  set glyph [dict get [dict get $font cmap] 128077]
+  set picture [::tclpdf::sbix graphic $font $state $strike $glyph]
+  ::tclpdf::sfnt closeFace $font
+  list [dict get $picture kind] [dict get $picture width] \
+      [dict get $picture height] [dict get $picture originX] \
+      [dict get $picture originY] [dict get $picture mirror]
+} -result {png 160 160 0 0 0}
+
+cleanupTests

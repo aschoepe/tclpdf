@@ -206,7 +206,8 @@ oo::define ::tclpdf::document::document {
     # here, that decision could not tell a caller who wrote -subset 1 from
     # one who wrote nothing.
     set options [::tclpdf::option parse \
-        {subset {} metrics {} axes {} instance {} data {}} $args "font embed"]
+        {subset {} metrics {} axes {} instance {} data {} face 0} $args \
+        "font embed"]
     set fonts [my state fonts]
     if {[dict exists $fonts $alias]} {
       return -code error -errorcode [list TCLPDF FONT ALIAS $alias] \
@@ -244,10 +245,19 @@ oo::define ::tclpdf::document::document {
           [string length [dict get $options data]] bytes besides; drop\
           whichever of the two is not the font program you mean"
     }
+    # THE FIRST KILOBYTE DECIDES WHICH READER, and only then is the file read
+    # whole. Which of the three kinds of font program this is - a Type 1, a
+    # bare CFF, an sfnt - is settled by the first few bytes, and reading the
+    # whole file to look at them costs nothing on a 400 KB face and 192 MB on
+    # Apple Color Emoji, which is a collection whose sbix table is 99.5 % of
+    # it. The sfnt road below never reads the file into a string at all: it
+    # goes through [sfnt openFace], which reads the tables it needs by range.
+    # Measured 2026-08-26: 13.2 s and 4.3 GB before, 0.4 s and 30 MB after,
+    # for one call that ends in a refusal either way.
     if {$path ne {}} {
-      set bytes [::tclpdf::io read $path]
+      set probe [::tclpdf::io head $path 1024]
     } elseif {[dict get $options data] ne {}} {
-      set bytes [dict get $options data]
+      set probe [dict get $options data]
     } else {
       return -code error -errorcode [list TCLPDF FONT EMBED $alias] \
           "tclpdf: font embed needs a file name or -data - \"$alias\" names\
@@ -256,7 +266,7 @@ oo::define ::tclpdf::document::document {
     # What the refusals below call the face. A path can be named; bytes cannot,
     # so they are described instead - and every message from here on says
     # $source rather than reaching for a file name that may not exist.
-    set source [my FontSource $path $bytes]
+    set source [my FontSource $path $probe]
     # An embedded face is PDF 1.2 whatever its kind: the program goes in as
     # a FlateDecode stream (Reference 1.7, Table 3.5), and a TrueType face is
     # written as a Type 0 font with Identity-H and a ToUnicode CMap (5.6 and
@@ -270,16 +280,16 @@ oo::define ::tclpdf::document::document {
     # use for, and -axes or -instance ask a variable font for a point on its
     # axes, which a Type 1 program does not have. Silently taking either
     # would embed something other than what the call describes.
-    if {[string index $bytes 0] eq "\x80" || [string range $bytes 0 1] eq "%!"} {
+    if {[string index $probe 0] eq "\x80" || [string range $probe 0 1] eq "%!"} {
       if {[dict get $options axes] ne {} || [dict get $options instance] ne {}} {
         return -code error -errorcode [list TCLPDF FONT AXES $source] \
             "tclpdf: $source is a Type 1 font\
             program, which has no axes - -axes and -instance apply to a\
             variable TrueType face"
       }
-      dict set fonts $alias [my FontEmbedType1 $alias $path $bytes \
-          [dict get $options metrics]]
-    } elseif {[::tclpdf::sfnt isBareCff $bytes]} {
+      dict set fonts $alias [my FontEmbedType1 $alias $path \
+          [my FontBytes $path $probe] [dict get $options metrics]]
+    } elseif {[::tclpdf::sfnt isBareCff $probe]} {
       # A CFF with no sfnt around it - see [FontEmbedCff]. Asked here, after
       # Type 1 and before the sfnt reader, because its signature is the
       # thinnest of the three: four bytes of which three say anything. An sfnt
@@ -304,7 +314,8 @@ oo::define ::tclpdf::document::document {
             program - $source is a CFF font program and carries its own\
             metrics, widths and glyph names"
       }
-      dict set fonts $alias [my FontEmbedCff $alias $path $source $bytes]
+      dict set fonts $alias [my FontEmbedCff $alias $path $source \
+          [my FontBytes $path $probe]]
     } else {
       if {[dict get $options metrics] ne {}} {
         # ARGUMENT, for the reason given at the bare CFF above.
@@ -314,7 +325,37 @@ oo::define ::tclpdf::document::document {
             program - $source is a TrueType or OpenType face and\
             carries its own metrics"
       }
-      set parsed [::tclpdf::sfnt parse $bytes]
+      # -face NAMES ONE FACE OF A COLLECTION. A ttcf file is a directory of
+      # faces that share their tables and has no metrics of its own, so it
+      # used to be refused outright; naming a face makes it a font, and
+      # sfnt.tcl rebuilds that face as a standalone sfnt - which is what a
+      # /FontFile2 has to be. 0 is the default and is what a file with one
+      # face is.
+      if {![string is integer -strict [dict get $options face]]
+          || [dict get $options face] < 0} {
+        return -code error \
+            -errorcode [list TCLPDF FONT ARGUMENT face] \
+            "tclpdf: -face of font embed is the face inside a TrueType\
+            collection, 0 or more, not \"[dict get $options face]\""
+      }
+      # AN sbix FACE IS ALREADY REFUSED, and one step further on: its
+      # outlines are degenerate boxes rather than glyphs, [FontDrawsNothing]
+      # notices that, and [FontColourTable] names the table in the message
+      # (TCLPDF FONT OUTLINES, test font-26.3). A second refusal here would
+      # be the same rule written twice.
+      #
+      # THE FACE IS OPENED AND NOT READ where there is a file: see the note
+      # at the probe above. The handle is given back at once - subsetting and
+      # writing read the tables out of the face's own bytes, and the only
+      # tables [openFace] leaves in the file are the bitmap ones, which an
+      # embedded face has no use for.
+      if {$path ne {}} {
+        set parsed [::tclpdf::sfnt openFace $path [dict get $options face]]
+        ::tclpdf::sfnt closeFace $parsed
+        set parsed [dict remove $parsed channel]
+      } else {
+        set parsed [::tclpdf::sfnt parse $probe [dict get $options face]]
+      }
       # A CFF face goes in as FontFile3 with /Subtype /OpenType, which is
       # PDF 1.6 (Reference 1.7, Table 5.23).
       if {[dict get $parsed outlines] eq "cff"} {
@@ -366,6 +407,30 @@ oo::define ::tclpdf::document::document {
       # colour face" is an answer a caller can act on and "the file has no
       # glyf table" is a symptom of it.
       set colour [my FontColourTable $parsed]
+      # A BITMAP COLOUR FACE IS REFUSED WHETHER OR NOT IT DRAWS NOTHING, and
+      # that is the one place this rule parts from the blank test beside it.
+      # Measured 2026-08-26 on the real Apple Color Emoji rather than on a
+      # fixture: 42 of the 1469 characters its cmap covers DO have outlines -
+      # the digits, the hash and the star, which are the bases of the keycap
+      # sequences - and the other 1397 are contours of two points. So
+      # [FontDrawsNothing] answers "it draws something", truthfully, and an
+      # embedded copy sets 1397 blanks and 42 digits. sbix and CBDT hold
+      # PICTURES, and a face that keeps its glyphs there has no outline road
+      # at all; COLR and SVG are different in kind - a face may carry those
+      # beside a complete monochrome set, and refusing it for the table alone
+      # would take a working face away.
+      if {!$blank && $colour in {sbix CBDT}} {
+        return -code error \
+            -errorcode [list TCLPDF FONT OUTLINES $alias $path $colour] \
+            "tclpdf: $source is a colour font whose pictures sit in its\
+            \"$colour\" table, and the outlines beside them are the stand-in\
+            a renderer that cannot read that table falls back on - two-point\
+            contours that enclose no area. This package writes outlines and\
+            none of the colour tables, so an embedded copy would set and\
+            extract and draw almost nothing. Build it with \[colorFont\]\
+            instead, which puts the pictures of an sbix face into a Type 3\
+            font, or embed a monochrome face"
+      }
       if {$blank && $colour ne {}} {
         return -code error \
             -errorcode [list TCLPDF FONT OUTLINES $alias $path $colour] \
@@ -537,17 +602,31 @@ oo::define ::tclpdf::document::document {
   # face is drawn, as a Type 3 font, by [colorFont]. So a face carrying COLR
   # answers {} here whatever else it holds - Noto Color Emoji carries an
   # "SVG " table beside its COLR and is a face this package draws.
+  # ASKED THROUGH [sfnt hasTable] AND NOT OF THE TABLE DICTIONARY, because a
+  # face opened by [sfnt openFace] leaves its bitmap tables in the file and
+  # they are then in no dictionary at all - and sbix is exactly the table this
+  # method exists to name. [hasTable] answers for a table wherever it is.
   method FontColourTable {parsed} {
-    set tables [dict get $parsed tables]
-    if {[dict exists $tables COLR]} {
+    if {[::tclpdf::sfnt hasTable $parsed COLR]} {
       return {}
     }
     foreach name {sbix CBDT {SVG }} {
-      if {[dict exists $tables $name]} {
+      if {[::tclpdf::sfnt hasTable $parsed $name]} {
         return [string trimright $name]
       }
     }
     return {}
+  }
+
+  # The whole font program, for the two roads that need it: a Type 1 face and
+  # a bare CFF. Both are small, and neither can be read by range - a Type 1
+  # program is three segments of encrypted charstrings and a CFF is one index
+  # of them.
+  method FontBytes {path probe} {
+    if {$path eq {}} {
+      return $probe
+    }
+    return [::tclpdf::io read $path]
   }
 
   # Where on the axes a variable font is to be embedded: a list of two - the
@@ -1162,12 +1241,13 @@ oo::define ::tclpdf::document::document {
   # stated" value - the frame every kind's answer is merged onto, so that the
   # SET of keys is the same whatever was embedded.
   method FontInfoStated {format} {
-    # "masks" belongs to the drawn colour faces (type3.tcl, [Type3Masks]) and
-    # is 0 for every other kind - the promise this method holds is that the
-    # SET of keys is the same whatever was embedded, so a key one kind
-    # answers is a key all of them answer.
+    # "masks" and "bitmaps" belong to the drawn colour faces (type3.tcl,
+    # [Type3Masks] and [Type3Bitmaps]) and are 0 for every other kind - the
+    # promise this method holds is that the SET of keys is the same whatever
+    # was embedded, so a key one kind answers is a key all of them answer.
     return [dict create format $format ascender {} descender {} lineGap {} \
-        capHeight {} xHeight {} vertical 0 variable 0 axes {} masks 0]
+        capHeight {} xHeight {} vertical 0 variable 0 axes {} masks 0 \
+        bitmaps 0]
   }
 
   # One metric an AFM may carry - as the file states it, or {} where it does
@@ -2641,4 +2721,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.16
+package provide tclpdf::font 1.17

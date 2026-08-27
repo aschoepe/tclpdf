@@ -44,12 +44,65 @@ namespace eval ::tclpdf::sfnt {
 }
 
 # Read a font file and return everything the other modules need, as a dict.
-proc ::tclpdf::sfnt::read {path} {
+#
+# FACE is the index of the face inside a TrueType COLLECTION, or the empty
+# string for "no face was named" - which is what every caller that knows
+# nothing of collections passes, and what keeps the refusal below in place for
+# them. A file that is not a collection has one face and its number is 0.
+proc ::tclpdf::sfnt::read {path {face {}}} {
   set bytes [::tclpdf::io read $path]
-  return [parse $bytes]
+  return [parse $bytes $face]
 }
 
-proc ::tclpdf::sfnt::parse {bytes} {
+# The same, WITHOUT reading the whole file - see the section "reading a face
+# out of a large file" further down for what that is for and what it costs.
+proc ::tclpdf::sfnt::openFace {path {face {}}} {
+  set channel [::open $path rb]
+  fconfigure $channel -translation binary
+  try {
+    set font [OpenFace $channel $path $face]
+  } on error {message options} {
+    ::close $channel
+    return -options $options $message
+  }
+  # A face that needed no channel - the ordinary case - was read whole and
+  # holds no handle; closing here is what keeps [closeFace] optional for it.
+  if {![dict exists $font channel]} {
+    ::close $channel
+  }
+  return $font
+}
+
+# Give back the file handle a face from [openFace] holds, if it holds one.
+# Idempotent: a face read whole has none, and a face closed twice is closed
+# once - a caller unwinding through several [finally] clauses must not have to
+# know which of the two it has.
+proc ::tclpdf::sfnt::closeFace {font} {
+  if {[dict exists $font channel]} {
+    catch {::close [dict get $font channel]}
+  }
+  return
+}
+
+proc ::tclpdf::sfnt::parse {bytes {face {}}} {
+  if {[string range $bytes 0 3] eq "ttcf"} {
+    # A COLLECTION IS NOT A FONT: it is a directory of faces that share their
+    # tables, and there is no answer to "what is the unitsPerEm of this file".
+    # Naming a face makes it one, and [Collection] rebuilds that face as a
+    # standalone sfnt - the same bytes, a directory of their own - so that
+    # everything below this line reads one face and knows nothing of
+    # collections.
+    if {$face eq {}} {
+      return -code error -errorcode [list TCLPDF FONT UNSUPPORTED collection] \
+          "tclpdf: this is a TrueType collection - name the face you want\
+          with -face, or extract it first"
+    }
+    set bytes [Collection $bytes $face]
+  } elseif {$face ne {} && (![string is integer -strict $face] || $face != 0)} {
+    return -code error -errorcode [list TCLPDF FONT FACE $face] \
+        "tclpdf: -face names the face inside a TrueType collection and this\
+        file is a single face, which is face 0, not \"$face\""
+  }
   if {[string length $bytes] < 12} {
     return -code error -errorcode [list TCLPDF FONT SOURCE sfnt] \
         "tclpdf: not a font file - too short"
@@ -80,51 +133,8 @@ proc ::tclpdf::sfnt::parse {bytes} {
   }
 
   binary scan $bytes @4Su numTables
-  set tables {}
-  for {set index 0} {$index < $numTables} {incr index} {
-    set offset [expr {12 + $index * 16}]
-    # binary scan fills what it can and leaves the rest of the variables
-    # unset, reporting how many it filled. Without that count a file whose
-    # directory is cut short reads a table entry that is not there and fails
-    # on an unset variable - a raw Tcl error where this package promises a
-    # message of its own.
-    if {[binary scan $bytes @${offset}a4IuIuIu \
-            name checksum position length] != 4} {
-      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
-          "tclpdf: the font's table directory is cut short -\
-          it announces $numTables tables and the file ends inside entry\
-          [expr {$index + 1}]"
-    }
-    # A TAG APPEARS ONCE. The directory is a set, unique and sorted by tag
-    # (OpenType, "Organization of an OpenType Font"), and a second entry for
-    # a tag used to overwrite the first without a word - so a file could
-    # carry two "head" tables and the reader would silently use whichever
-    # came last. The sort order is NOT enforced beside it: files that keep
-    # the tags out of order are in circulation and read correctly here, so
-    # refusing them would cost more than it buys.
-    if {[dict exists $tables $name]} {
-      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
-          "tclpdf: the font's table directory names \"$name\" twice, and a\
-          table directory is a set - there is no telling which of the two\
-          the file means"
-    }
-    # THE ENTRY HAS TO POINT INTO THE FILE. Every parser below reads its
-    # table through the offset out of this directory, and until this was
-    # checked a truncated file or a corrupt offset sent [binary scan] past
-    # the end, where it fills nothing and leaves its variables unset: what
-    # reached the caller was "can't read \"fixed\": no such variable" with
-    # errorCode TCL READ VARNAME, not a refusal of this package. Checked
-    # HERE, once, for every table rather than at each of the six reads - the
-    # directory is the one place a table's extent is established, and a guard
-    # per read would be six copies of one rule.
-    if {$position + $length > [string length $bytes]} {
-      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
-          "tclpdf: damaged font - the \"$name\" table is declared at\
-          $position for $length bytes and the file is only\
-          [string length $bytes] bytes long"
-    }
-    dict set tables $name [list $position $length]
-  }
+  set tables [Directory [string range $bytes 12 \
+      [expr {12 + $numTables * 16 - 1}]] $numTables [string length $bytes] 0]
   # cmap is NOT required: a subset built by subset.tcl deliberately carries
   # none, because with Identity-H the PDF addresses glyphs directly. Demanding
   # it here would make the package unable to re-read its own output.
@@ -176,13 +186,87 @@ proc ::tclpdf::sfnt::parse {bytes} {
 }
 
 # The raw bytes of one table, or {} when it is absent.
+#
+# A STREAMED table is refused rather than answered with the empty string. A
+# face opened by [openFace] leaves the bitmap tables in the file (see the
+# section at the end of this file), and answering {} for one of them would say
+# "this face has no sbix" to a caller holding a face that is nothing but sbix.
+# [slice] and [extent] are the accessors for those.
 proc ::tclpdf::sfnt::table {font name} {
   set tables [dict get $font tables]
   if {![dict exists $tables $name]} {
+    if {[dict exists $font streamed] && $name in [dict get $font streamed]} {
+      return -code error -errorcode [list TCLPDF FONT STREAMED $name] \
+          "tclpdf: the \"$name\" table of this face is read from the file by\
+          range and is not held in memory - read it with \[sfnt slice\]"
+    }
     return {}
   }
   lassign [dict get $tables $name] position length
   return [string range [dict get $font bytes] $position [expr {$position + $length - 1}]]
+}
+
+# Has this face a table of this name, wherever it is held? A table left in the
+# file by [openFace] is in no dictionary at all, and [dict exists] on the
+# table directory answers "no" for exactly the tables that matter most - so
+# the question is asked here rather than there. A table of zero length is
+# still a table: a directory entry is what the face STATES about itself.
+proc ::tclpdf::sfnt::hasTable {font name} {
+  if {[dict exists [dict get $font tables] $name]} {
+    return 1
+  }
+  return [expr {[dict exists $font fileTables]
+      && [dict exists $font fileTables $name]}]
+}
+
+# How long one table is, whether it is held in memory or left in the file.
+proc ::tclpdf::sfnt::extent {font name} {
+  set tables [dict get $font tables]
+  if {[dict exists $tables $name]} {
+    return [lindex [dict get $tables $name] 1]
+  }
+  if {[dict exists $font fileTables] && [dict exists $font fileTables $name]} {
+    return [lindex [dict get $font fileTables $name] 1]
+  }
+  return 0
+}
+
+# LENGTH bytes of one table, from START inside it - the accessor a table too
+# large to hold is read through.
+#
+# A range that reaches past the end of the table comes back SHORT rather than
+# refused, exactly as [binary scan] fills what it can: the caller reading a
+# record out of a damaged table is the one that knows what a short record
+# means, and it has to check the length either way.
+proc ::tclpdf::sfnt::slice {font name start length} {
+  if {$length <= 0} {
+    return {}
+  }
+  set tables [dict get $font tables]
+  if {[dict exists $tables $name]} {
+    lassign [dict get $tables $name] position extent
+    if {$start >= $extent} {
+      return {}
+    }
+    if {$start + $length > $extent} {
+      set length [expr {$extent - $start}]
+    }
+    return [string range [dict get $font bytes] [expr {$position + $start}] \
+        [expr {$position + $start + $length - 1}]]
+  }
+  if {![dict exists $font fileTables] || ![dict exists $font fileTables $name]} {
+    return {}
+  }
+  lassign [dict get $font fileTables $name] position extent
+  if {$start >= $extent} {
+    return {}
+  }
+  if {$start + $length > $extent} {
+    set length [expr {$extent - $start}]
+  }
+  set channel [dict get $font channel]
+  seek $channel [expr {$position + $start}]
+  return [::read $channel $length]
 }
 
 # Where a table starts, refused where the directory declares it too short for
@@ -2041,4 +2125,280 @@ proc ::tclpdf::sfnt::NameString {bytes start length platform} {
   return $decoded
 }
 
-package provide tclpdf::sfnt 1.10
+# -- the table directory ----------------------------------------------------
+
+# The table directory of ONE face, checked, as a dict of tag -> {position
+# length}. ENTRIES is the directory block itself - numTables entries of 16
+# bytes - and TOTAL the length of the file the positions are measured in.
+#
+# Its own procedure since 2026-08-26, because there are now two ways in: a
+# whole file in a string, and a face inside a collection read through a
+# channel. The checks are the same for both and were the kind of thing that
+# gets fixed in one copy.
+#
+# BASE is added to every position: a face of a collection has its directory
+# at an offset and its table positions from the START OF THE FILE, so the
+# base is 0 there too. It exists for the rebuilt face, whose directory says
+# where the tables sit in the NEW string.
+proc ::tclpdf::sfnt::Directory {entries numTables total base} {
+  set tables {}
+  for {set index 0} {$index < $numTables} {incr index} {
+    set offset [expr {$index * 16}]
+    # binary scan fills what it can and leaves the rest of the variables
+    # unset, reporting how many it filled. Without that count a file whose
+    # directory is cut short reads a table entry that is not there and fails
+    # on an unset variable - a raw Tcl error where this package promises a
+    # message of its own.
+    if {[binary scan $entries @${offset}a4IuIuIu \
+            name checksum position length] != 4} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+          "tclpdf: the font's table directory is cut short -\
+          it announces $numTables tables and the file ends inside entry\
+          [expr {$index + 1}]"
+    }
+    # A TAG APPEARS ONCE. The directory is a set, unique and sorted by tag
+    # (OpenType, "Organization of an OpenType Font"), and a second entry for
+    # a tag used to overwrite the first without a word - so a file could
+    # carry two "head" tables and the reader would silently use whichever
+    # came last. The sort order is NOT enforced beside it: files that keep
+    # the tags out of order are in circulation and read correctly here, so
+    # refusing them would cost more than it buys.
+    if {[dict exists $tables $name]} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+          "tclpdf: the font's table directory names \"$name\" twice, and a\
+          table directory is a set - there is no telling which of the two\
+          the file means"
+    }
+    # THE ENTRY HAS TO POINT INTO THE FILE. Every parser below reads its
+    # table through the offset out of this directory, and until this was
+    # checked a truncated file or a corrupt offset sent [binary scan] past
+    # the end, where it fills nothing and leaves its variables unset: what
+    # reached the caller was "can't read \"fixed\": no such variable" with
+    # errorCode TCL READ VARNAME, not a refusal of this package. Checked
+    # HERE, once, for every table rather than at each of the six reads - the
+    # directory is the one place a table's extent is established, and a guard
+    # per read would be six copies of one rule.
+    if {$position + $length > $total} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED directory] \
+          "tclpdf: damaged font - the \"$name\" table is declared at\
+          $position for $length bytes and the file is only\
+          $total bytes long"
+    }
+    dict set tables $name [list [expr {$position + $base}] $length]
+  }
+  return $tables
+}
+
+# -- collections ------------------------------------------------------------
+#
+# A TrueType COLLECTION (ttcf) is a directory of faces that SHARE their
+# tables: Apple Color Emoji holds two faces whose 21 and 22 table entries name
+# the same twenty-one byte ranges, one of them 191 MB of artwork that would
+# otherwise be in the file twice. So a face is not a slice of the file and
+# cannot be handed on as one - what it is, is a table directory.
+#
+# WHAT IS BUILT HERE is that directory as a font of its own: an sfnt header, a
+# directory sorted by tag, and the table bytes behind it. Everything above
+# this line then reads one face and knows nothing of collections, and what
+# [font embed] writes into the document is a face rather than a collection -
+# which is what a /FontFile2 has to be.
+#
+# THE CHECKSUMS ARE COMPUTED and not copied. They could be copied - the table
+# bytes are unchanged - but computing them is four lines, and the head table's
+# checkSumAdjustment is wrong in the rebuilt file either way: it is a checksum
+# over the WHOLE file, and this is a different file. Nothing reads it; a font
+# validator would, and would be right.
+
+# The offsets of the faces in a collection, checked against the file.
+proc ::tclpdf::sfnt::CollectionFaces {header} {
+  if {[string length $header] < 12} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED collection] \
+        "tclpdf: damaged font - the file begins with \"ttcf\" and ends inside\
+        the collection header"
+  }
+  binary scan $header @8Iu count
+  if {$count < 1} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED collection] \
+        "tclpdf: damaged font - this collection announces $count faces"
+  }
+  return $count
+}
+
+# Which face was asked for, checked against how many there are.
+proc ::tclpdf::sfnt::CollectionIndex {face count} {
+  if {![string is integer -strict $face] || $face < 0 || $face >= $count} {
+    return -code error -errorcode [list TCLPDF FONT FACE $face] \
+        "tclpdf: -face is the face inside this collection, 0 to\
+        [expr {$count - 1}], not \"$face\""
+  }
+  return $face
+}
+
+# One face of a collection held in a string, as a standalone sfnt.
+proc ::tclpdf::sfnt::Collection {bytes face} {
+  set count [CollectionFaces $bytes]
+  set face [CollectionIndex $face $count]
+  set at [expr {12 + $face * 4}]
+  if {[binary scan $bytes @${at}Iu base] != 1} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED collection] \
+        "tclpdf: damaged font - this collection announces $count faces and\
+        the file ends inside the offset of face $face"
+  }
+  set total [string length $bytes]
+  if {[binary scan $bytes @${base}a4Su signature numTables] != 2} {
+    return -code error -errorcode [list TCLPDF FONT DAMAGED collection] \
+        "tclpdf: damaged font - face $face of this collection is declared at\
+        $base and the file is only $total bytes long"
+  }
+  set tables [Directory [string range $bytes [expr {$base + 12}] \
+      [expr {$base + 12 + $numTables * 16 - 1}]] $numTables $total 0]
+  set data {}
+  dict for {tag entry} $tables {
+    lassign $entry position length
+    dict set data $tag [string range $bytes $position \
+        [expr {$position + $length - 1}]]
+  }
+  return [Rebuild $signature $data]
+}
+
+# An sfnt built out of a signature and a dict of tag -> bytes.
+proc ::tclpdf::sfnt::Rebuild {signature data} {
+  set tags [lsort [dict keys $data]]
+  set numTables [llength $tags]
+  # The three numbers of the header after numTables are a binary search hint
+  # and nothing else, but a wrong one is a wrong file: searchRange is 16 times
+  # the largest power of two not exceeding numTables, entrySelector its
+  # logarithm, rangeShift the remainder (ISO/IEC 14496-22, 5.2).
+  set power 1
+  set selector 0
+  while {$power * 2 <= $numTables} {
+    set power [expr {$power * 2}]
+    incr selector
+  }
+  set searchRange [expr {$power * 16}]
+  set header [binary format a4SuSuSuSu $signature $numTables $searchRange \
+      $selector [expr {$numTables * 16 - $searchRange}]]
+  set directory {}
+  set body {}
+  set position [expr {12 + $numTables * 16}]
+  foreach tag $tags {
+    set bytes [dict get $data $tag]
+    set length [string length $bytes]
+    append directory [binary format a4IuIuIu $tag [Checksum $bytes] \
+        [expr {$position + [string length $body]}] $length]
+    append body $bytes
+    # EVERY TABLE STARTS ON A FOUR BYTE BOUNDARY (5.2), and the padding is
+    # not counted in the length the directory states.
+    if {$length % 4} {
+      append body [string repeat \x00 [expr {4 - $length % 4}]]
+    }
+  }
+  return $header$directory$body
+}
+
+# The table checksum of 5.2: the sum of the table's 32 bit words, zero-padded
+# to a whole number of words, modulo 2^32.
+proc ::tclpdf::sfnt::Checksum {bytes} {
+  set length [string length $bytes]
+  if {$length % 4} {
+    append bytes [string repeat \x00 [expr {4 - $length % 4}]]
+  }
+  set sum 0
+  binary scan $bytes Iu* words
+  foreach word $words {
+    set sum [expr {($sum + $word) & 0xFFFFFFFF}]
+  }
+  return $sum
+}
+
+# -- reading a face out of a large file -------------------------------------
+#
+# WHY THIS EXISTS: Apple Color Emoji is 192 123 488 bytes and 191 134 508 of
+# them are one table - "sbix", a PNG per glyph per size. Reading the file the
+# way [read] reads one costs 192 MB of memory to reach a cmap of 3580 bytes,
+# and a document that sets sixty emoji needs sixty of those PNGs and nothing
+# else. Measured before this existed: [io read] on that file took 1.1 s and
+# the interpreter never gave the memory back.
+#
+# WHAT IS STREAMED, and it is a list rather than a size: "sbix", "CBDT" and
+# "EBDT" are the tables that hold bitmap IMAGE data, and they are the only
+# sfnt tables that reach hundreds of megabytes. Everything else about such a
+# face - its cmap, its metrics, its morx, its outlines - comes to under a
+# megabyte and is read whole, so the parsers above this line are unchanged and
+# see a face exactly like any other.
+#
+# A SIZE LIMIT WAS THE OTHER CANDIDATE and is worse: it makes which tables a
+# reader can see depend on how big they happen to be, so a face works on one
+# machine's copy and refuses on another's. The list is a statement about the
+# FORMAT and holds for every file.
+#
+# WHAT IT COSTS: the face is rebuilt (see [Collection]), so [font embed]
+# without a subset writes the rebuilt face rather than the file's own bytes.
+# That is why the rebuild is skipped entirely where nothing has to be
+# streamed and the file is not a collection - the overwhelming majority of
+# faces - and those go through [io read] and [parse] exactly as before.
+
+namespace eval ::tclpdf::sfnt {
+  variable streamedTables {sbix CBDT EBDT}
+}
+
+proc ::tclpdf::sfnt::OpenFace {channel path face} {
+  variable streamedTables
+  set total [file size $path]
+  set header [::read $channel 12]
+  set base 0
+  set collection 0
+  if {[string range $header 0 3] eq "ttcf"} {
+    set collection 1
+    set count [CollectionFaces $header]
+    set index [CollectionIndex [expr {$face eq {} ? 0 : $face}] $count]
+    seek $channel [expr {12 + $index * 4}]
+    if {[binary scan [::read $channel 4] Iu base] != 1} {
+      return -code error -errorcode [list TCLPDF FONT DAMAGED collection] \
+          "tclpdf: damaged font - this collection announces $count faces and\
+          the file ends inside the offset of face $index"
+    }
+    seek $channel $base
+    set header [::read $channel 12]
+  } elseif {$face ne {} && (![string is integer -strict $face] || $face != 0)} {
+    return -code error -errorcode [list TCLPDF FONT FACE $face] \
+        "tclpdf: -face names the face inside a TrueType collection and\
+        \"$path\" is a single face, which is face 0, not \"$face\""
+  }
+  if {[binary scan $header a4Su signature numTables] != 2} {
+    return -code error -errorcode [list TCLPDF FONT SOURCE sfnt] \
+        "tclpdf: not a font file - too short"
+  }
+  seek $channel [expr {$base + 12}]
+  set tables [Directory [::read $channel [expr {$numTables * 16}]] \
+      $numTables $total 0]
+  set streamed {}
+  foreach tag $streamedTables {
+    if {[dict exists $tables $tag]} {
+      lappend streamed $tag
+    }
+  }
+  if {!$collection && ![llength $streamed]} {
+    # Nothing to gain: an ordinary face read exactly as [read] reads it, down
+    # to the byte, so that everything downstream sees the file itself.
+    return [parse [::tclpdf::io read $path]]
+  }
+  set data {}
+  dict for {tag entry} $tables {
+    if {$tag in $streamed} {
+      continue
+    }
+    lassign $entry position length
+    seek $channel $position
+    dict set data $tag [::read $channel $length]
+  }
+  set font [parse [Rebuild $signature $data]]
+  dict set font channel $channel
+  dict set font path $path
+  dict set font face [expr {$face eq {} ? 0 : $face}]
+  dict set font fileTables $tables
+  dict set font streamed $streamed
+  return $font
+}
+
+package provide tclpdf::sfnt 1.11

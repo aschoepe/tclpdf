@@ -486,5 +486,141 @@ test sfnt-5.5 {a face with no H states no top for it} -constraints haveOtf -body
       [::tclpdf::sfnt table $parsed "CFF "]] tops
 } -result {}
 
+# --- collections and the channel-backed reader ------------------------------
+#
+# A collection is a directory of faces that SHARE their tables, so a face of
+# one is not a slice of the file and cannot be handed on as one. [parse] and
+# [openFace] rebuild it as a standalone sfnt; what these check is that the
+# right face comes out, that a number the file has not got is refused with the
+# count in the message, and that a face read by range answers exactly what the
+# same face read whole answers.
+
+test sfnt-6.1 {a collection named by face number is read} -constraints haveFont \
+    -body {
+  # Two faces of the same file, told apart by a table that is in one of them
+  # and not in the other. What is measured is which directory came out, which
+  # is the whole of what a face IS.
+  set first [::tclpdfTest::sfntWith $fontRegular {}]
+  set second [::tclpdfTest::sfntWith $fontRegular \
+      [dict create Zzzz "a table of the second face alone"]]
+  set bytes [::tclpdfTest::collection [list $first $second]]
+  set a [::tclpdf::sfnt parse $bytes 0]
+  set b [::tclpdf::sfnt parse $bytes 1]
+  list [dict exists [dict get $a tables] Zzzz] \
+      [dict exists [dict get $b tables] Zzzz] \
+      [dict get $a unitsPerEm] [dict get $b unitsPerEm] \
+      [::tclpdf::sfnt table $b Zzzz]
+} -result {0 1 2048 2048 {a table of the second face alone}}
+
+test sfnt-6.2 {the rebuilt face is a font in its own right} -constraints haveFont \
+    -body {
+  # Everything the parser needs comes out of the rebuilt directory, and the
+  # tables are the file's own bytes: a /FontFile2 written from this is a face
+  # and not a collection.
+  set bytes [::tclpdfTest::collection \
+      [list [::tclpdfTest::sfntWith $fontRegular {}]]]
+  set face [::tclpdf::sfnt parse $bytes 0]
+  set whole [::tclpdf::sfnt read $fontRegular]
+  list [string range [dict get $face bytes] 0 3] \
+      [expr {[dict get $face numGlyphs] == [dict get $whole numGlyphs]}] \
+      [expr {[::tclpdf::sfnt table $face head]
+          eq [::tclpdf::sfnt table $whole head]}] \
+      [expr {[::tclpdf::sfnt table $face glyf]
+          eq [::tclpdf::sfnt table $whole glyf]}]
+} -result "\x00\x01\x00\x00 1 1 1"
+
+test sfnt-6.3 {a collection with no face named is refused, and says how to
+    get on} -constraints haveFont -body {
+  set bytes [::tclpdfTest::collection \
+      [list [::tclpdfTest::sfntWith $fontRegular {}]]]
+  set code [catch {::tclpdf::sfnt parse $bytes} message options]
+  list $code [dict get $options -errorcode] [string match {*-face*} $message]
+} -result {1 {TCLPDF FONT UNSUPPORTED collection} 1}
+
+test sfnt-6.4 {a face number the collection has not got is refused, with the
+    count in the message} -constraints haveFont -body {
+  set bytes [::tclpdfTest::collection [list \
+      [::tclpdfTest::sfntWith $fontRegular {}] \
+      [::tclpdfTest::sfntWith $fontRegular {}]]]
+  set code [catch {::tclpdf::sfnt parse $bytes 2} message options]
+  list $code [dict get $options -errorcode] [string match {*0 to 1*} $message]
+} -result {1 {TCLPDF FONT FACE 2} 1}
+
+test sfnt-6.5 {and so is a number that is not one} -constraints haveFont -body {
+  set bytes [::tclpdfTest::collection \
+      [list [::tclpdfTest::sfntWith $fontRegular {}]]]
+  set code [catch {::tclpdf::sfnt parse $bytes second} - options]
+  list $code [dict get $options -errorcode]
+} -result {1 {TCLPDF FONT FACE second}}
+
+test sfnt-6.6 {a single face is face 0, and any other number is refused} \
+    -constraints haveFont -body {
+  set bytes [::tclpdfTest::readBytes $fontRegular]
+  set zero [::tclpdf::sfnt parse $bytes 0]
+  set code [catch {::tclpdf::sfnt parse $bytes 1} message options]
+  list [expr {[dict get $zero numGlyphs] > 0}] $code \
+      [dict get $options -errorcode] [string match {*single face*} $message]
+} -result {1 1 {TCLPDF FONT FACE 1} 1}
+
+test sfnt-7.1 {an ordinary face opened by range is the file itself} \
+    -constraints haveFont -body {
+  # NOTHING IS REBUILT where there is nothing to gain: a file that is not a
+  # collection and carries no bitmap table is read whole, exactly as [read]
+  # reads it, so that a face embedded without a subset is the file's own bytes
+  # down to the byte.
+  set opened [::tclpdf::sfnt openFace $fontRegular]
+  set whole [::tclpdf::sfnt read $fontRegular]
+  set same [expr {[dict get $opened bytes] eq [dict get $whole bytes]}]
+  set held [dict exists $opened channel]
+  ::tclpdf::sfnt closeFace $opened
+  list $same $held
+} -result {1 0}
+
+test sfnt-7.2 {a face with a bitmap table keeps it in the file and reads it by
+    range} -constraints haveFont -body {
+  set table [::tclpdfTest::sbix 40 [list 32 [dict create \
+      4 [list 0 0 "png " [::tclpdfTest::sbixPng 6 6]]]]]
+  set path [::tclpdfTest::scratch sfnt-sbix.ttf]
+  set channel [open $path wb]
+  puts -nonewline $channel [::tclpdfTest::sfntWith $fontRegular \
+      [dict create sbix $table]]
+  close $channel
+  set face [::tclpdf::sfnt openFace $path]
+  set streamed [dict get $face streamed]
+  # It is NOT in memory - and [table] says so rather than answering the empty
+  # string, which would tell a caller the face has no sbix.
+  set code [catch {::tclpdf::sfnt table $face sbix} - options]
+  set extent [::tclpdf::sfnt extent $face sbix]
+  set slice [::tclpdf::sfnt slice $face sbix 0 8]
+  set hasTable [::tclpdf::sfnt hasTable $face sbix]
+  set held [dict exists $face channel]
+  ::tclpdf::sfnt closeFace $face
+  file delete $path
+  list $streamed $code [dict get $options -errorcode] \
+      [expr {$extent == [string length $table]}] \
+      [expr {$slice eq [string range $table 0 7]}] $hasTable $held
+} -result {sbix 1 {TCLPDF FONT STREAMED sbix} 1 1 1 1}
+
+test sfnt-7.3 {a range past the end of a table comes back short} \
+    -constraints haveFont -body {
+  # The same rule [binary scan] follows: the caller reading a record is the
+  # one that knows what a short one means.
+  set face [::tclpdf::sfnt openFace $fontRegular]
+  set head [::tclpdf::sfnt extent $face head]
+  set slice [::tclpdf::sfnt slice $face head [expr {$head - 4}] 100]
+  set past [::tclpdf::sfnt slice $face head 1000 4]
+  ::tclpdf::sfnt closeFace $face
+  list $head [string length $slice] [string length $past]
+} -result {54 4 0}
+
+test sfnt-7.4 {closing a face twice is closing it once} -constraints haveFont \
+    -body {
+  # A caller unwinding through several [finally] clauses must not have to know
+  # whether the face it holds carries a handle.
+  set face [::tclpdf::sfnt openFace $fontRegular]
+  ::tclpdf::sfnt closeFace $face
+  ::tclpdf::sfnt closeFace $face
+  ::tclpdf::sfnt closeFace [::tclpdf::sfnt read $fontRegular]
+} -result {}
 
 cleanupTests

@@ -479,6 +479,76 @@ $symbols destroy
 
 **COLR version 1 is read too**, and the call does not distinguish: a face may describe some glyphs with the older layer records and some with a version 1 **paint graph** - linear, radial and sweep gradients, clipped shapes, transformations, re-used sub-graphs and 28 compositing modes - and a glyph the table says nothing about is drawn from its own outline in the colour of the text, like a letter. A palette entry may carry an alpha byte, and a translucent layer then costs an `ExtGState` while an opaque one costs nothing; under PDF/A parts 2 and 3 that is admissible, and part 1 forbids transparency and is refused by `pdfa` anyway. What this is for is the two-colour mark that has to behave like a character - a tick in a table column, an amber warning sign in a line of text, a logo in a letterhead: it moves with the line, takes the font size, is measured by `textWidth`, breaks with the paragraph and comes back out of `pdftotext` as the character it stands for.
 
+## A bitmap colour font: an sbix face, and the state machine that forms its sequences
+
+The third kind of colour face keeps a **PNG file per glyph and per size** rather than outlines - Apple Color Emoji is 192 MB of them at nine sizes - and `colorFont` takes it exactly as it takes a `COLR` face: the glyph becomes an image XObject placed by its glyph description, with the alpha channel of the PNG as its soft mask. Two options belong to this road. **`-face n`** names one face of a TrueType **collection** (`.ttc`), which is a directory of faces that share their tables; 0 is the default and is what a file with one face is. **`-strike ppem`** names the pixel size to draw from, and the default is the **largest** the face carries - nothing at build time knows the point size the font will be set at, and of the two ways to be wrong only one is visible. `font info` then reports how many glyphs of the font are pictures under `bitmaps`.
+
+Such a face is never read whole: the package reads its table directory and everything under a megabyte, and takes the pictures it needs out of the file by range. Measured on Apple Color Emoji, 192 123 488 bytes: 0.7 s and 50 MB of memory for a font of 61 emoji, against 13.2 s and 4.3 GB for a naive read.
+
+**Where the sequences come from is not the same question in every face.** An OpenType face forms them with the `ccmp` feature of `GSUB`. An Apple face has no `GSUB` at all - what joins a thumb to a skin tone there is `morx`, a chain of finite state machines - and the package applies it where the face carries one and no `GSUB`. Nothing in the call changes: `-chars` still takes text, and what comes back is still one glyph per sequence with one advance and the whole sequence in its `ToUnicode`.
+
+```tcl
+# Apple Color Emoji is part of macOS and is not redistributable, so the
+# snippet skips itself where the file is not there - the same rule the
+# package follows for a missing validator.
+set applePath "/System/Library/Fonts/Apple Color Emoji.ttc"
+if {[file exists $applePath]} {
+    set bitmaps [tclpdf new -unit mm]
+    $bitmaps page add
+    $bitmaps font embed body $ttf
+
+    # ONE CALL, and -face 0 is the default: the file is a collection of two
+    # faces that share their tables. Four units go in as one string and four
+    # glyphs come out - a thumb with a skin tone, a family of three, a flag
+    # of two regional indicators and the Scottish flag, which is a black flag
+    # and six invisible tag characters.
+    set emoji [$bitmaps colorFont emoji $applePath \
+        -chars "👍🏽👨‍👩‍👧🇩🇪🏴󠁧󠁢󠁳󠁣󠁴󠁿" -face 0]
+    set info [$bitmaps font info $emoji]
+    puts "sbix: [dict get $info glyphs] glyphs,\
+        [dict get $info bitmaps] of them pictures,\
+        [format %.0f [dict get $info unitsPerEm]] units to the em"
+
+    $bitmaps font -family $emoji -size 24
+    $bitmaps text "👍🏽👨‍👩‍👧🇩🇪🏴󠁧󠁢󠁳󠁣󠁴󠁿" -at {20 30}
+
+    # A sequence is one glyph with one width whichever road formed it: the
+    # Scottish flag is seven characters and measures what a single emoji
+    # measures.
+    puts "seven characters, one glyph:\
+        [format %.3f [$bitmaps textWidth "🏴󠁧󠁢󠁳󠁣󠁴󠁿" -family $emoji -size 24]] mm\
+        against [format %.3f [$bitmaps textWidth "👍🏽" \
+            -family $emoji -size 24]] mm"
+
+    # -strike trades resolution against file size, and the same document out
+    # of the 32 pixel strike is a fraction of the bytes.
+    $bitmaps colorFont small $applePath -chars "👍🏽" -strike 32
+    $bitmaps font -family small -size 24
+    $bitmaps text "👍🏽" -at {20 50}
+
+    # The refusals of this road, each naming what to do instead.
+    foreach {label script} [list \
+            "embedding a bitmap face" [list $bitmaps font embed no $applePath] \
+            "a strike it lacks"       [list $bitmaps colorFont other \
+                                          $applePath -chars "👍" -strike 99] \
+            "-palette on pictures"    [list $bitmaps colorFont other \
+                                          $applePath -chars "👍" -palette 1]] {
+        try {
+            {*}$script
+            puts "$label: went through, which it should not have"
+        } on error {message options} {
+            puts "$label -> [dict get $options -errorcode]"
+        }
+    }
+    $bitmaps write [file join $out ref-02-bitmap-font.pdf]
+    $bitmaps destroy
+} else {
+    puts "sbix: skipped - $applePath is not on this machine"
+}
+```
+
+`TCLPDF SBIX STRIKE` is a pixel size the face has not got, and its message lists the ones it has; `TCLPDF COLORFONT STRIKE` is `-strike` given for a `COLR` face, which has no strikes, and `TCLPDF COLORFONT PALETTE` is `-palette` given for a bitmap face, which has no palette. `TCLPDF FONT FACE` is a face number a collection has not got. `font embed` refuses an `sbix` face **even where some of its characters have outlines** (`TCLPDF FONT OUTLINES`, the table as its fourth word): measured on Apple Color Emoji, 42 of the 1469 characters its `cmap` covers have real outlines - the digits and the keycap bases - and the other 1397 are contours of two points, which enclose no area. What the `sbix` and `morx` readers refuse themselves keeps its own `TCLPDF SBIX` and `TCLPDF MORX` codes.
+
 ## Vertical writing, and breaking it into columns
 
 ```tcl

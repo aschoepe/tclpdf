@@ -227,6 +227,13 @@ package require tclpdf::color 1.0-
 package require tclpdf::graphics 1.0-
 package require tclpdf::sfnt 1.0-
 package require tclpdf::colr 1.1-
+# The third kind of colour face: a picture per glyph. Read at the top like
+# colr.tcl, because [colorFont] has to ASK which of the three a face is before
+# it can decide anything - and both answers are a table lookup.
+package require tclpdf::sbix 1.0-
+# For [morx has], which is asked of every face that has no GSUB - see
+# [ColorFontUnits]. The table READER is loaded only where there is a table.
+package require tclpdf::morx 1.0-
 package require tclpdf::glyfOutline 1.0-
 package require tclpdf::glyfPath 1.0-
 package require tclpdf::document 1.0-
@@ -268,30 +275,92 @@ oo::define ::tclpdf::document::document {
       set path [lindex $args 0]
       set args [lrange $args 1 end]
     }
-    set options [::tclpdf::option parse {data {} chars {} palette 0} $args \
-        "colorFont"]
+    set options [::tclpdf::option parse \
+        {data {} chars {} palette 0 face 0 strike {}} $args "colorFont"]
+    set face [my ColorFontFaceNumber [dict get $options face]]
     if {$path ne {}} {
-      set bytes [::tclpdf::io read $path]
+      # READ BY RANGE, NOT WHOLE. [openFace] reads the table directory and
+      # everything under a megabyte, and leaves the bitmap table in the file -
+      # which is what makes Apple Color Emoji, 192 MB of which 191 are
+      # pictures, cost 26 MB of memory and 40 ms instead of the whole file.
+      # See the end of sfnt.tcl. An ordinary face is read exactly as [read]
+      # reads one, down to the byte.
+      set parsed [::tclpdf::sfnt openFace $path $face]
     } elseif {[dict get $options data] ne {}} {
-      set bytes [dict get $options data]
+      set parsed [::tclpdf::sfnt parse [dict get $options data] $face]
     } else {
       return -code error -errorcode {TCLPDF COLORFONT SOURCE} \
           "tclpdf: colorFont needs a file name or -data"
     }
-    set text [my ColorFontChars [dict get $options chars]]
-    set parsed [::tclpdf::sfnt parse $bytes]
-    if {![::tclpdf::colr has $parsed]} {
-      return -code error -errorcode [list TCLPDF COLORFONT TABLES $alias] \
-          "tclpdf: this face has no \"COLR\" and \"CPAL\" tables and therefore\
-          no colour glyphs - it is an ordinary face and goes into the document\
-          with \[font embed\]"
+    # The face may be an open file handle, and the record of every glyph
+    # carries what it needs OUT of it before this returns - see
+    # [ColorFontBitmapRead]. Closing a face that was read whole is a no-op.
+    try {
+      return [my ColorFontBuild $alias $parsed $options]
+    } finally {
+      ::tclpdf::sfnt closeFace $parsed
     }
-    # Anything colr refuses on top of that - version 1, an empty table, a
-    # truncated one - comes back with its own TCLPDF COLR code and is not
-    # dressed up here: a caller trapping TCLPDF COLR gets the same answer
-    # whether it read the tables itself or through this.
-    set state [::tclpdf::colr build $parsed]
-    set palette [my ColorFontPalette $state [dict get $options palette]]
+  }
+
+  # Which face of a TrueType collection, checked before the file is opened.
+  #
+  # ZERO IS THE DEFAULT and a file that is not a collection has one face,
+  # which is face 0 - so a caller who has never heard of collections writes
+  # nothing and gets the face they expect. sfnt.tcl refuses a number the file
+  # has not got, with the count in the message.
+  method ColorFontFaceNumber {face} {
+    if {![string is integer -strict $face] || $face < 0} {
+      return -code error -errorcode [list TCLPDF COLORFONT FACE $face] \
+          "tclpdf: -face of colorFont is the face inside a TrueType\
+          collection, 0 or more, not \"$face\""
+    }
+    return $face
+  }
+
+  # Which of the three kinds of colour face this is, and the font built from
+  # it - everything that happens with the face open.
+  #
+  # THE ORDER IS THE ORDER OF THE STANDARDS. COLR is asked for first because
+  # a face carrying both describes the same glyphs twice and the outline
+  # description is the one that scales; sbix second; and a face with neither
+  # is the refusal it always was, now naming both tables.
+  method ColorFontBuild {alias parsed options} {
+    set text [my ColorFontChars [dict get $options chars]]
+    set strike {}
+    if {[::tclpdf::colr has $parsed]} {
+      set kind colour
+      if {[dict get $options strike] ne {}} {
+        return -code error -errorcode [list TCLPDF COLORFONT STRIKE $alias] \
+            "tclpdf: -strike is the pixel size of the BITMAPS to draw from,\
+            and this face draws its colour glyphs with the \"COLR\" table -\
+            paths, at every size"
+      }
+      # Anything colr refuses on top of that - version 1, an empty table, a
+      # truncated one - comes back with its own TCLPDF COLR code and is not
+      # dressed up here: a caller trapping TCLPDF COLR gets the same answer
+      # whether it read the tables itself or through this.
+      set state [::tclpdf::colr build $parsed]
+      set palette [my ColorFontPalette $state [dict get $options palette]]
+    } elseif {[::tclpdf::sbix has $parsed]} {
+      set kind bitmap
+      if {[dict get $options palette] != 0} {
+        return -code error -errorcode [list TCLPDF COLORFONT PALETTE \
+            [dict get $options palette] 0] \
+            "tclpdf: -palette is the colour palette to draw with and this\
+            face draws its colour glyphs as PICTURES, which carry their own\
+            colours - it has no palette at all"
+      }
+      package require tclpdf::colorFontBitmap 1.0-
+      set state [::tclpdf::sbix build $parsed]
+      set strike [::tclpdf::sbix strike $state \
+          [my ColorFontStrike [dict get $options strike]]]
+      set palette 0
+    } else {
+      return -code error -errorcode [list TCLPDF COLORFONT TABLES $alias] \
+          "tclpdf: this face has no \"COLR\" and \"CPAL\" tables and no\
+          \"sbix\" table either, and therefore no colour glyphs - it is an\
+          ordinary face and goes into the document with \[font embed\]"
+    }
 
     # PASS ONE reads and refuses; nothing about the document is touched. So a
     # call that names one character the face has not got leaves no half-built
@@ -299,7 +368,13 @@ oo::define ::tclpdf::document::document {
     # ExtGState for a layer that never reached a stream.
     set built {}
     foreach unit [my ColorFontUnits $parsed $text $alias] {
-      lappend built [my ColorFontRead $parsed $state $palette $unit $alias]
+      set common [my ColorFontCommon $parsed $unit]
+      if {$kind eq "bitmap"} {
+        lappend built \
+            [my ColorFontBitmapRead $parsed $state $strike $common $alias]
+      } else {
+        lappend built [my ColorFontRead $parsed $state $palette $common $alias]
+      }
     }
     # PASS TWO builds. The matrix is the face's own em, so the numbers in the
     # glyph streams are the integers the face stores; the ascent is the one
@@ -332,6 +407,38 @@ oo::define ::tclpdf::document::document {
           -script [list my content $body]
     }
     return $alias
+  }
+
+  # Which strike of a bitmap face to draw from, checked before the table is
+  # read. The empty string is "the face decides", which is [sbix strike]'s
+  # rule and stated there.
+  method ColorFontStrike {strike} {
+    if {$strike eq {}} {
+      return {}
+    }
+    if {![string is integer -strict $strike] || $strike < 1} {
+      return -code error -errorcode [list TCLPDF COLORFONT STRIKE $strike] \
+          "tclpdf: -strike of colorFont is the size of the bitmaps to draw\
+          from, in pixels to the em, and is a positive whole number - not\
+          \"$strike\""
+    }
+    return $strike
+  }
+
+  # What every glyph of the font needs whichever kind of face it comes from:
+  # the glyph number, the characters it stands for, and its advance.
+  #
+  # UNIT is {text glyph} out of [ColorFontUnits] - one character or a whole
+  # sequence, and the glyph number the face draws it with. The cmap is not
+  # asked again here: it was asked there, and a sequence has no cmap entry to
+  # ask about.
+  method ColorFontCommon {parsed unit} {
+    lassign $unit text glyph
+    set u [join [lmap char [split $text {}] {
+      format U+%04X [scan $char %c]
+    }]]
+    return [dict create text $text glyph $glyph u $u parsed $parsed \
+        width [::tclpdf::sfnt advance $parsed $glyph]]
   }
 
   # The characters to build glyphs for, as a list of one-character strings.
@@ -449,6 +556,21 @@ oo::define ::tclpdf::document::document {
       package require tclpdf::gdef 1.0-
       set run [::tclpdf::gsubApply apply [::tclpdf::gsubApply feature $gsub \
           ccmp [::tclpdf::gdef build $parsed] {}] $run]
+    } elseif {[::tclpdf::morx has $parsed]} {
+      # AN APPLE FACE FORMS ITS SEQUENCES SOMEWHERE ELSE. There is no GSUB in
+      # Apple Color Emoji at all - what joins a base emoji to a skin tone
+      # modifier is "morx", a state machine, and without it a family of three
+      # reaches the font as three pictures. Asked SECOND and not first: a face
+      # carrying both is an OpenType face with an Apple table beside it, and
+      # the feature this reads ("ccmp") is the one that says what belongs
+      # together.
+      #
+      # WHICH SUBTABLES RUN is morx.tcl's decision and is the default set -
+      # see the head of that file. There is no equivalent of naming "ccmp"
+      # here, because an AAT chain has no feature tags: it has flags, and the
+      # ones that are on by default are the ones every reader applies.
+      package require tclpdf::morx 1.0-
+      set run [::tclpdf::morx apply [::tclpdf::morx build $parsed] $run]
     }
     set seen {}
     set units {}
@@ -479,11 +601,12 @@ oo::define ::tclpdf::document::document {
         }
         return -code error \
             -errorcode [list TCLPDF COLORFONT SPLIT $u $alias] \
-            "tclpdf: the \"ccmp\" feature of this face draws character $u\
+            "tclpdf: the glyph forming of this face draws character $u\
             (position $ownerAt of -chars) as SEVERAL glyphs (glyph $glyph is\
-            one of them and stands for no character of its own) - a Type 3\
-            glyph is one drawing with one advance, so this face cannot be\
-            built into a colour font; set it with \[font embed\] instead"
+            one of them and stands for no character of its own - a \"ccmp\"\
+            Multiple substitution, or a \"morx\" insertion) - a Type 3 glyph\
+            is one drawing with one advance, so this face cannot be built\
+            into a colour font; set it with \[font embed\] instead"
       }
       set ownerCodes $codes
       set ownerAt $consumed
@@ -494,6 +617,25 @@ oo::define ::tclpdf::document::document {
       }
       dict set seen $unitText 1
       lappend units [list $unitText $glyph]
+    }
+    if {![llength $units]} {
+      # EVERY CHARACTER WAS DELETED. An AAT state machine marks a glyph as
+      # gone by putting 0xFFFF in its place, and Apple Color Emoji's very
+      # first subtable does that to the variation selectors and the zero
+      # width joiner - so -chars "\u200D" alone comes back as a run of
+      # nothing, and the font would be defined with no glyphs in it: a family
+      # a caller can name, set text in and measure, that draws and extracts
+      # nothing. Refused with the same code an empty glyph gets, because it
+      # is the same trap one step earlier.
+      set u [join [lmap char [split $text {}] {
+        format U+%04X [scan $char %c]
+      }]]
+      return -code error -errorcode [list TCLPDF COLORFONT EMPTY $u $alias] \
+          "tclpdf: the glyph forming of this face deletes every character of\
+          -chars ($u) - a joiner, a variation selector or a tag character\
+          draws nothing by design and is swallowed by the sequence it belongs\
+          to, so on its own it leaves no glyph at all and the font would come\
+          out empty"
     }
     if {[llength $units] > $::tclpdf::colorFont::maximum} {
       return -code error \
@@ -538,26 +680,19 @@ oo::define ::tclpdf::document::document {
     return $palette
   }
 
-  # Everything one glyph of the font needs, read out of the face: the base
-  # glyph, its advance, and its layers bottom first as {colour alpha
-  # operators}.
+  # Everything one glyph of a COLR face needs, read out of it: the layers
+  # bottom first as {colour alpha operators}, or the paint graph.
   #
-  # UNIT is {text glyph} out of [ColorFontUnits] - one character or a whole
-  # sequence, and the glyph number the face draws it with. The cmap is not
-  # asked again here: it was asked there, and a sequence has no cmap entry to
-  # ask about.
+  # COMMON is what [ColorFontCommon] read - the glyph, its text and its
+  # advance, which is the half both kinds of face answer the same way.
   #
   # The colour is the empty string for the 0xFFFF sentinel and the alpha is
   # then absent as well - a layer that takes the text colour takes its alpha
   # with it.
-  method ColorFontRead {parsed state palette unit alias} {
-    lassign $unit text glyph
-    set u [join [lmap char [split $text {}] {
-      format U+%04X [scan $char %c]
-    }]]
-    set common [dict create text $text glyph $glyph u $u parsed $parsed \
-        state $state palette $palette \
-        width [::tclpdf::sfnt advance $parsed $glyph]]
+  method ColorFontRead {parsed state palette common alias} {
+    set glyph [dict get $common glyph]
+    set u [dict get $common u]
+    set common [dict merge $common [dict create state $state palette $palette]]
     # THE ORDER IS THE STANDARD'S, and it is the reason a version 1 face works
     # at all: "a font may use the version 1 structures for some base glyphs
     # and the version 0 structures for other base glyphs" (5.7.11), so the
@@ -701,6 +836,12 @@ oo::define ::tclpdf::document::document {
       append body "$number 0 0 $number 0 0 cm\n"
     }
     switch -- [dict get $record kind] {
+      bitmap {
+        # A picture per glyph, placed by colorFontBitmap.tcl. The unit
+        # correction above is shared with the two drawing roads below and
+        # nothing else is - a placement matrix is not a path.
+        return $body[my ColorFontBitmapStream $record $alias]
+      }
       version1 {
         # The paint graph, drawn by colorFontPaint.tcl. Everything below this
         # line is version 0's flat layer list, which shares the unit
@@ -743,4 +884,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFont 1.4
+package provide tclpdf::colorFont 1.5

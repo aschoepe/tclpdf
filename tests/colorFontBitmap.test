@@ -1,0 +1,343 @@
+# colorFontBitmap.test --
+#
+# A bitmap colour glyph as a Type 3 glyph: the placement matrix, the image
+# XObject behind it, and what one glyph shares with the next.
+#
+# THE FIXTURE is the one sbix.test builds, for the reason given there - no
+# bitmap colour face ships with this package. DejaVu Sans gets an sbix table
+# of hand-built PNGs bolted to it, and the characters that carry a picture are
+# named by letter rather than by glyph number: which glyph "A" is, is DejaVu's
+# business and not this file's.
+#
+# WHAT IS MEASURED HERE and nowhere else: that the four numbers of the "cm"
+# come out of ppem and unitsPerEm and not out of anything else, that a
+# mirrored glyph places the SAME XObject with a negative horizontal scale, and
+# that the advance is the face's own. The real face is asked at the end, where
+# there is one.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::sfnt
+package require tclpdf::sbix
+package require tclpdf::colorFont
+package require tclpdf::colorFontBitmap
+package require tclpdf::font
+source [file join [file dirname [info script]] helper.tcl]
+
+testConstraint qpdf [expr {[auto_execok qpdf] ne {}}]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+set plainFace [file join $here examples assets fonts DejaVuSans.ttf]
+testConstraint havePlain [file exists $plainFace]
+set appleFace "/System/Library/Fonts/Apple Color Emoji.ttc"
+testConstraint haveAppleColorEmoji [file exists $appleFace]
+
+# --- the fixture ------------------------------------------------------------
+#
+# "A" carries an opaque picture of 8 by 6 pixels, "B" one of 10 by 10 with an
+# alpha channel and an origin offset, "C" a "flip" record naming A's glyph,
+# and "D" nothing at all - a character of the face with no picture, which is
+# what most of a real bitmap face's cmap is.
+
+proc cbFixture {path {ppem 32}} {
+  set parsed [::tclpdf::sfnt read $path]
+  set cmap [dict get $parsed cmap]
+  set a [dict get $cmap 65]
+  set b [dict get $cmap 66]
+  set c [dict get $cmap 67]
+  set records [dict create \
+      $a [list 0 0 "png " [::tclpdfTest::sbixPng 8 6]] \
+      $b [list 2 -3 "png " [::tclpdfTest::sbixPng 10 10 1]] \
+      $c [list 0 0 "flip" [binary format Su $a]]]
+  return [::tclpdfTest::sfntWith $path [dict create sbix \
+      [::tclpdfTest::sbix [dict get $parsed numGlyphs] \
+          [list $ppem $records [expr {$ppem * 2}] $records]]]]
+}
+
+# A document with the fixture in it under the alias "marks". -compress 0 so
+# that the streams can be read out of the written file.
+proc cbDocument {chars args} {
+  global plainFace
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc colorFont marks -data [cbFixture $plainFace] -chars $chars {*}$args
+  return $doc
+}
+
+# The glyph stream of one character, as the reader will execute it.
+proc cbStream {doc alias char} {
+  set entry [dict get [$doc state fonts] $alias]
+  return [dict get $entry glyphs [dict get $entry codes $char] stream]
+}
+
+proc cbLines {stream} {
+  return [lmap line [split [string trim $stream] \n] {string trim $line}]
+}
+
+# --- the glyph stream -------------------------------------------------------
+
+test colorFontBitmap-1.1 {a bitmap face becomes a Type 3 font of pictures} \
+    -constraints havePlain -body {
+  set doc [cbDocument "AB"]
+  set info [$doc font info marks]
+  $doc destroy
+  list [dict get $info format] [dict get $info glyphs] \
+      [dict get $info bitmaps] [dict get $info masks]
+} -result {type3 2 2 0}
+
+test colorFontBitmap-1.2 {one glyph is one matrix and one Do} \
+    -constraints havePlain -body {
+  # The whole of a bitmap glyph: a q/Q bracket, the placement, the picture.
+  set doc [cbDocument "A"]
+  set lines [cbLines [cbStream $doc marks A]]
+  $doc destroy
+  # The width operator [font glyph] writes, then the bracket, the placement
+  # and the picture. Five lines, and nothing else in any of them.
+  list [llength $lines] [lindex $lines 0] [lindex $lines 1] \
+      [lindex $lines end] [regexp {^/\w+ Do$} [lindex $lines 3]]
+} -result {5 {1401 0 d0} q Q 1}
+
+test colorFontBitmap-1.3 {the matrix is the picture's size in glyph units} \
+    -constraints havePlain -body {
+  # 8 by 6 pixels at 64 pixels to the em in a face of 2048 units: one pixel is
+  # 32 units, so the box is 256 by 192 with its bottom left on the origin.
+  # Nothing here is rounded to the pixel and nothing is taken from the em box:
+  # the numbers follow from ppem alone, which is why they are not square.
+  set doc [cbDocument "A"]
+  set upem [dict get [::tclpdf::sfnt parse [cbFixture $::plainFace]] unitsPerEm]
+  set lines [cbLines [cbStream $doc marks A]]
+  $doc destroy
+  list $upem [lrange [lindex $lines 2] 0 5]
+} -result {2048 {256 0 0 192 0 0}}
+
+test colorFontBitmap-1.4 {the origin offsets move the box off the origin} \
+    -constraints havePlain -body {
+  # Glyph B is 10 by 10 pixels with its left edge two pixels right of the
+  # origin and its bottom three below it - so at 32 units to the pixel the
+  # box is 320 by 320 at (64, -96). An origin read as font units rather than
+  # as PIXELS would put it at (2, -3), which is a tenth of a pixel and looks
+  # like a rounding error rather than the mistake it is.
+  set doc [cbDocument "B"]
+  set lines [cbLines [cbStream $doc marks B]]
+  $doc destroy
+  lrange [lindex $lines 2] 0 5
+} -result {320 0 0 320 64 -96}
+
+test colorFontBitmap-1.5 {a smaller strike gives the same box out of fewer
+    pixels} -constraints havePlain -body {
+  # THE BOX DOES NOT MOVE WITH THE STRIKE, which is the point: the 32 pixel
+  # picture is half the pixels of the 64 pixel one and covers exactly the same
+  # glyph units, because a pixel of the smaller strike is twice as wide.
+  set doc [tclpdf new -unit pt -compress 0]
+  $doc page add
+  $doc colorFont marks -data [cbFixture $::plainFace] -chars "A" -strike 32
+  set lines [cbLines [cbStream $doc marks A]]
+  $doc destroy
+  lrange [lindex $lines 2] 0 5
+} -result {512 0 0 384 0 0}
+
+test colorFontBitmap-1.6 {the advance is the face's own} -constraints havePlain \
+    -body {
+  # Not the picture's width: a bitmap says nothing about how far the pen
+  # moves, and hmtx does. The two differ here by a factor of three.
+  set parsed [::tclpdf::sfnt parse [cbFixture $::plainFace]]
+  set glyph [dict get [dict get $parsed cmap] 65]
+  set doc [cbDocument "A"]
+  set entry [dict get [$doc state fonts] marks]
+  set width [dict get $entry glyphs [dict get $entry codes A] width]
+  $doc destroy
+  list $width [::tclpdf::sfnt advance $parsed $glyph]
+} -result {1401 1401}
+
+# --- the picture ------------------------------------------------------------
+
+test colorFontBitmap-2.1 {the picture is an image XObject with the PNG's own
+    alpha as its soft mask} -constraints {havePlain qpdf} -body {
+  set doc [cbDocument "B"]
+  set target [::tclpdfTest::scratch colorfontbitmap-alpha.pdf]
+  $doc write $target
+  $doc destroy
+  set report [exec qpdf --check $target 2>@1]
+  set text [::tclpdf::io read $target]
+  file delete $target
+  list [string match {*No syntax or stream encoding errors found*} $report] \
+      [regexp {/Subtype /Image} $text] [regexp {/SMask } $text]
+} -result {1 1 1}
+
+test colorFontBitmap-2.2 {a mirrored glyph places the SAME picture with a
+    negative horizontal scale} -constraints havePlain -body {
+  # What the "flip" record is for: one XObject, two glyphs. The mirrored one
+  # negates the horizontal scale and translates by the width, so the picture
+  # lands in the same box the other way round - a matrix of {-w 0 0 h 0 0}
+  # would draw it off to the left of where it belongs.
+  set doc [cbDocument "AC"]
+  set direct [cbLines [cbStream $doc marks A]]
+  set flipped [cbLines [cbStream $doc marks C]]
+  set names [$doc image names]
+  $doc destroy
+  list [lrange [lindex $direct 2] 0 5] [lrange [lindex $flipped 2] 0 5] \
+      [expr {[lindex $direct 3] eq [lindex $flipped 3]}] [llength $names]
+} -result {{256 0 0 192 0 0} {-256 0 0 192 256 0} 1 1}
+
+test colorFontBitmap-2.3 {two glyphs of two pictures cost two XObjects} \
+    -constraints havePlain -body {
+  set doc [cbDocument "AB"]
+  set names [$doc image names]
+  $doc destroy
+  list [llength $names] [lsort $names]
+} -result {2 {marks#sbix36 marks#sbix37}}
+
+test colorFontBitmap-2.4 {the picture is named after the SOURCE glyph, and an
+    image of the caller's under that name is refused} -constraints havePlain \
+    -body {
+  set parsed [::tclpdf::sfnt parse [cbFixture $::plainFace]]
+  set glyph [dict get [dict get $parsed cmap] 65]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  $doc image embed marks#sbix$glyph -data [::tclpdfTest::sbixPng 4 4]
+  set code [catch {$doc colorFont marks -data [cbFixture $::plainFace] \
+      -chars "A"} message options]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*already embedded*} $message]
+} -result {1 {TCLPDF COLORFONT IMAGE} 1}
+
+# --- what is refused --------------------------------------------------------
+
+test colorFontBitmap-3.1 {a character with no picture and no outline is
+    refused by name} -constraints havePlain -body {
+  # The space: DejaVu draws it with an empty outline and the fixture gives it
+  # no picture, so a glyph built from it would advance and draw nothing. That
+  # is the blank-page trap, and it is refused here exactly as it is on the
+  # COLR road.
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc colorFont marks -data [cbFixture $::plainFace] \
+      -chars " "} message options]
+  set names [$doc font names]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*draw nothing*} $message] $names
+} -result {1 {TCLPDF COLORFONT EMPTY} 1 {}}
+
+test colorFontBitmap-3.2 {a character with no picture but a real outline is
+    drawn as that outline} -constraints havePlain -body {
+  # A bitmap face carries ordinary glyphs beside its pictures - Apple Color
+  # Emoji has 42 of them, the digits and the keycap bases - and the answer for
+  # one of those is its own outline in the colour of the text. "D" is one
+  # here: a letter of DejaVu with no record in the fixture's sbix table.
+  set doc [cbDocument "AD"]
+  set lines [cbLines [cbStream $doc marks D]]
+  set names [$doc image names]
+  $doc destroy
+  # A path filled with "f" and no Do anywhere: an outline, not a picture.
+  list [lindex $lines end] [regexp {Do} [join $lines { }]] [llength $names]
+} -result {f 0 1}
+
+test colorFontBitmap-3.3 {-palette has nothing to act on in a bitmap face} \
+    -constraints havePlain -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc colorFont marks -data [cbFixture $::plainFace] \
+      -chars "A" -palette 1} message options]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*no palette at all*} $message]
+} -result {1 {TCLPDF COLORFONT PALETTE} 1}
+
+test colorFontBitmap-3.4 {-strike takes a positive whole number} \
+    -constraints havePlain -body {
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc colorFont marks -data [cbFixture $::plainFace] \
+      -chars "A" -strike none} message options]
+  $doc destroy
+  list $code [dict get $options -errorcode] \
+      [string match {*positive whole number*} $message]
+} -result {1 {TCLPDF COLORFONT STRIKE none} 1}
+
+test colorFontBitmap-3.5 {a -chars the face deletes every character of is
+    refused rather than defined empty} -constraints havePlain -body {
+  # An AAT machine deletes by putting 0xFFFF in a glyph's place, and a face
+  # whose first subtable does that to the joiners and the selectors answers a
+  # -chars of nothing but those with an EMPTY RUN. Defined, that would be a
+  # family a caller can name, set text in and measure, that draws and extracts
+  # nothing - the blank-page trap one level up from an empty glyph, and
+  # refused under the same code.
+  #
+  # The fixture takes DejaVu's GSUB away so that the morx road is the one
+  # taken, and gives it a subtable that deletes the glyph of "A".
+  set parsed [::tclpdf::sfnt read $::plainFace]
+  set glyph [dict get [dict get $parsed cmap] 65]
+  set lookup [binary format Su 6][binary format SuSuSuSuSu 4 1 0 0 0][binary \
+      format SuSu $glyph 65535]
+  set subtable [binary format IuIuIu [expr {12 + [string length $lookup]}] \
+      [expr {0x20000004}] 1]$lookup
+  set chain [binary format IuIuIuIu 1 [expr {16 + [string length $subtable]}] \
+      0 1]$subtable
+  set morx [binary format SuSuIu 3 0 1]$chain
+  set records [dict create $glyph [list 0 0 "png " [::tclpdfTest::sbixPng 8 8]]]
+  set bytes [::tclpdfTest::sfntWith $::plainFace [dict create GSUB {} \
+      morx $morx sbix [::tclpdfTest::sbix [dict get $parsed numGlyphs] \
+          [list 32 $records]]]]
+  set doc [tclpdf new -unit pt]
+  $doc page add
+  set code [catch {$doc colorFont marks -data $bytes -chars "A"} \
+      message options]
+  set names [$doc font names]
+  $doc destroy
+  list $code [lrange [dict get $options -errorcode] 0 2] \
+      [string match {*deletes every character*} $message] $names
+} -result {1 {TCLPDF COLORFONT EMPTY} 1 {}}
+
+# --- the real face ----------------------------------------------------------
+
+test colorFontBitmap-4.1 {Apple Color Emoji: sequences, pictures, and a
+    document qpdf reads} -constraints {haveAppleColorEmoji qpdf} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  # Four units of two to seven characters each. Every one of them is one
+  # glyph, and every one of them is a picture out of the 160 pixel strike.
+  set alias [$doc colorFont emoji $appleFace \
+      -chars "👍🏽👨‍👩‍👧🇩🇪🏴󠁧󠁢󠁳󠁣󠁴󠁿"]
+  $doc font -family $alias -size 24
+  $doc text "👍🏽👨‍👩‍👧🇩🇪🏴󠁧󠁢󠁳󠁣󠁴󠁿" -at {20 40}
+  set info [$doc font info $alias]
+  set target [::tclpdfTest::scratch colorfontbitmap-apple.pdf]
+  $doc write $target
+  $doc destroy
+  set report [exec qpdf --check $target 2>@1]
+  file delete $target
+  list [dict get $info glyphs] [dict get $info bitmaps] \
+      [format %.0f [dict get $info unitsPerEm]] \
+      [string match {*No syntax or stream encoding errors found*} $report]
+} -result {4 4 800 1}
+
+test colorFontBitmap-4.2 {a smaller strike is a smaller document} \
+    -constraints haveAppleColorEmoji -body {
+  # The one thing -strike is for, measured rather than claimed: the same four
+  # glyphs out of the 32 pixel strike come to a fraction of the bytes.
+  set sizes {}
+  foreach strike {32 160} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc colorFont emoji $appleFace -chars "👍🏽👨‍👩‍👧🇩🇪🏴󠁧󠁢󠁳󠁣󠁴󠁿" -strike $strike
+    $doc font -family emoji -size 24
+    $doc text "👍🏽" -at {20 40}
+    set target [::tclpdfTest::scratch colorfontbitmap-strike.pdf]
+    $doc write $target
+    lappend sizes [file size $target]
+    $doc destroy
+    file delete $target
+  }
+  expr {[lindex $sizes 0] * 4 < [lindex $sizes 1]}
+} -result 1
+
+cleanupTests
