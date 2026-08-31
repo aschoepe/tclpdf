@@ -1,5 +1,5 @@
-C Document\stimestamps:\snew\smodule\stimestamp.tcl,\sexamples,\stests,\sshared\ssigning\shelpers\n\n-\stimestamp.tcl\s-\s::tclpdf::sign\stimestamp\sappends\san\sRFC\s3161\sdocument\stimestamp\s(/Type\s/DocTimeStamp)\sto\sa\sfinished\sfile;\sno\ssignature\srequired,\sthe\sauthority\sis\sconfigurable\sthrough\s-url\sor\sa\s-tsa\stransport\sprefix,\sand\sthe\sreply's\sdigest,\snonce\sand\sstatus\sare\sverified\sbefore\sthe\sfile\sis\stouched\n-\ssign.tcl\s-\sFieldName\sand\sRanged\shoisted\sout\sof\ssign::add\sas\sshared\sprivate\sprocs,\sused\sby\sadd\sand\stimestamp\salike\n-\stests/timestamp.test\s-\snetwork-free\ssuite\sagainst\sa\slocal\sopenssl\sts\sauthority\swith\smutation\scounter-proofs;\ssign-9.3\sfollows\sthe\sgrown\sensemble\smessage\n-\sexamples\s08.06\sto\s08.08,\ssimple\sto\sinvolved:\sthe\sminimal\sstamp,\sthe\sstamped\sPDF/A\sarchive\sfile,\sand\sa\ssigned\sfile\sstamped\son\stop;\swithout\snetwork\sthey\sfall\sback\sto\sa\sthrowaway\sauthority\sand\ssay\sso\son\sthe\sconsole\n-\sexamples/common.tcl\s-\sshared\stimestamp\sscaffolding;\sthe\sreachability\sprobe\snow\shonours\sthe\sport\sin\sthe\sURL\sand\sdetects\sa\srefused\sconnect\n-\stools/check.sh\s-\sthe\spdfsig\ssection\sknows\sdocument\stimestamps\sand\schecks\stheir\scoverage\sinstead\sof\sskipping\sstamped\sfiles\sas\sunfilled\splaceholders\n-\smanual\sand\sskill\sreference\sdocument\sthe\scall;\sconfigure.ac,\spkgIndex.tcl.in\sand\stests/all.tcl\scarry\sthe\snew\smodule
-D 2026-08-31T13:14:32.621
+C Version\s1.4\n\n-\sconfigure.ac\sand\stclpdf.tcl\scarry\s1.4,\sthe\smanual\ssynopsis\sfollows\n-\sconfigure\sregenerated\sby\sautoconf
+D 2026-08-31T13:24:26.634
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -19,8 +19,8 @@ F colorFontPaint.tcl 3e27380d2d30583c1b357c74de16461d8fba9b9233be7942aea6623bf8a
 F colorFontRegion.tcl 72f2692546cbd02e1a971c35ade4d5e865912c95e981376d156c7552669d83e3
 F colr.tcl e02e12b299f2202f4f243ffa0d4d14079e45d3753591c0f2a328553b620bb864
 F colrPaint.tcl e5bc8abc1ae92aab94c60afcfac052e8980346e5176a0101547b35349b60c48e
-F configure 3146aa66fe0866bddb3b781855b9764253e879f37e9d448ebff4e7a87088e771 x
-F configure.ac da3aa46cb306a2c3314994ef4949797c12e6ca2067932f7e47a155f4a05da6c4
+F configure 8cedd55a87b763c41edf4977d0f6d908b239bb7a9c560e3b8dfbeadac38b422f x
+F configure.ac 20da5fb2b76016821d36693b8881b6995b32dfaf50b1d9d39e42cc06d1aae969
 F crypto.tcl 851746f7541be0efb73f7d4da5cd63ca0e2ca7b3d00a9ef4f054af52cba572d2
 F doc/PLUGINS.md 631ccfc36c86d130a5568b59b26ef22833b39988b97e3a1405151924f98a018d
 F doc/TCLPDF-VS-PDF4TCL.md 6c339a524e8f47f0473a9541a6e54181508f7beb0bdd2cced87f534d3224f025
@@ -42,7 +42,7 @@ F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md d976f1e6936b507e8c66a415d6ab5003480d539396876c2dcadb7517b7031301
+F doc/tclpdf.md 15d9de39a17330f34ea5071f7c7b5c7f121b5ef532be09fe1fb3cd39e2b5b136
 F document.tcl 2cddf5b04129044d711ccaadc5087108e8c19f0b3b3b2459291e88bb0ce2d5b0
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -381,7 +381,7 @@ F tclconfig/ChangeLog 5afc872331b2b8e3ecfdbd0e8222da460b071c2f815080e47e0a1f6c49
 F tclconfig/README.txt 8285d9bad9933ad1ca9fd89398e7f22bea1b96dc68fb3d1536d0b3922725b21d
 F tclconfig/install-sh d5e7acec82cb30a616dc8023b6d77abf3e7109f86175f47741afe89b34d1d4f8 x
 F tclconfig/tcl.m4 24841be70516af95124d989e9b9a9fb07879fdc9cf2248c4ce6fc7aa3a5ae72b
-F tclpdf.tcl cae803f5e90d7411eeceaa6f3a126da59c884f5706f63964c1d2a9252eb255bb
+F tclpdf.tcl 8b2ae3f9c06ff14acdc1ea94a8cf3cca8c2d77fdff9c8f2717828100408064d3
 F tests/000-tools.test a34212d4211e2a058407007db81dafe473ca4ae292f0689f2401dcee19eb2e52
 F tests/afm.test 81f1892d2b472eabff6c10e1a6cb5a488b467102dd9128d6d42738698aefac2a
 F tests/all.tcl 6e39b59220df71d105fe88961ddfcde65e3a8a2c48d0a27ca243d8f3c1f4b3c9
@@ -503,8 +503,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 456b2e4724852ea0e6439abad1af065a2231bf9680fb8784f6566c30ff4ee9d3
-R becfa726f930c4bf248ca987f2e0da7e
+P d09d9bafb8338bceb971d8c2a3ccd75b669d79dd76a91a9863e24337fb755fe8
+R dcaae26a0dc04741b8afb05ad1f65e46
 U alex
-Z 147dda560fe0883ac5d3acaa4cabb517
+Z db02ca15bcce952085426d89dde4cf2c
 # Remove this line to create a well-formed Fossil manifest.
