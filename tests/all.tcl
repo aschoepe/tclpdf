@@ -55,6 +55,7 @@ foreach tclpdfPkg {
     tclpdf::fieldButton
     tclpdf::fieldChoice
     tclpdf::fieldText
+    tclpdf::timestamp
     tclpdf::update
     tclpdf::layer
     tclpdf::type3

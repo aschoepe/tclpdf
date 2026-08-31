@@ -2378,7 +2378,7 @@ test sign-9.3 {an unknown subcommand of the ensemble is refused in this package'
   # subcommand" with {TCL LOOKUP SUBCOMMAND} (measured 2026-08-26).
   set code [catch {::tclpdf::sign nosuch} message]
   list $code [lrange $::errorCode 0 2] \
-      [string match {tclpdf: unknown sign subcommand "nosuch" - known are: add, digest, embed} $message]
+      [string match {tclpdf: unknown sign subcommand "nosuch" - known are: add, digest, embed, timestamp} $message]
 } -result {1 {TCLPDF SIGN SUBCOMMAND} 1}
 
 test sign-9.4 {a waiting signature is recognised at its /ByteRange, not at any zero /Contents} -body {

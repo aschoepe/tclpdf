@@ -514,3 +514,129 @@ proc exampleSignatureDone {doc target dir} {
     }
     return
 }
+
+# Whether a host answers at all: one TCP connect with a short leash. Only
+# this probe is time-boxed - the request that follows it gets the timeout of
+# whoever makes it. The variable is global because [vwait] needs one; the
+# name is this file's own.
+proc exampleReachable {url {leash 3000}} {
+    if {![regexp {^https?://([^/:]+)(?::(\d+))?} $url -> host port]} {
+        return 0
+    }
+    if {$port eq {}} {
+        set port [expr {[string match https://* $url] ? 443 : 80}]
+    }
+    if {[catch {socket -async $host $port} sock]} {
+        return 0
+    }
+    set deadline [after $leash [list set ::exampleProbe timeout]]
+    fileevent $sock writable [list set ::exampleProbe ok]
+    vwait ::exampleProbe
+    after cancel $deadline
+    # Writable fires on a FAILED connect as well - refused is an answer too,
+    # just not the one wanted. Only a socket without an error is a host.
+    set refused [expr {$::exampleProbe eq "ok"
+        && [fconfigure $sock -error] ne {}}]
+    catch {close $sock}
+    return [expr {$::exampleProbe eq "ok" && !$refused}]
+}
+
+# A throwaway timestamp authority: a self-signed certificate whose one
+# extended key usage is timeStamping, and the config [openssl ts -reply]
+# wants. This is the fallback for a build WITHOUT network - the token it
+# issues verifies technically and vouches for nothing, exactly like the test
+# CA of the signature examples. The test suite keeps a twin of this in
+# tests/timestamp.test, deliberately: examples must run without the suite's
+# scaffolding and the suite without the examples'.
+proc exampleTsaAuthority {dir} {
+    exampleRun openssl req -x509 -newkey rsa:2048 \
+        -keyout [file join $dir tsa.key] -out [file join $dir tsa.pem] \
+        -days 30 -nodes -subj "/C=DE/O=tclpdf example/CN=throwaway TSA" \
+        -addext "extendedKeyUsage=critical,timeStamping"
+    exampleWriteBinary [file join $dir tsa.cnf] "\[tsa\]
+default_tsa = tsa_config
+\[tsa_config\]
+serial = [file join $dir serial]
+signer_cert = [file join $dir tsa.pem]
+signer_key = [file join $dir tsa.key]
+default_policy = 1.2.3.4.1
+digests = sha256, sha384, sha512
+accuracy = secs:1
+ordering = no
+tsa_name = no
+ess_cert_id_chain = no
+signer_digest = sha256
+"
+    exampleWriteBinary [file join $dir serial] "01\n"
+    return
+}
+
+# The transport for -tsa: request bytes in, response bytes out, through the
+# throwaway authority in "dir". What [::tclpdf::sign timestamp] checks about
+# the answer - imprint, nonce, status - it checks here exactly as it would
+# against a public one; -tsa changes who answers, never what is accepted.
+proc exampleTsaTransport {dir tsq} {
+    exampleWriteBinary [file join $dir query.tsq] $tsq
+    exampleRun openssl ts -reply -config [file join $dir tsa.cnf] \
+        -queryfile [file join $dir query.tsq] -out [file join $dir reply.tsr]
+    return [exampleReadBinary [file join $dir reply.tsr]]
+}
+
+# Where the stamp comes from, decided ONCE and before the document is
+# written. Answers three values for [lassign]:
+#
+#   dir    the throwaway authority's directory, {} when the public one
+#          answers - delete it when the script is done
+#   stamp  extra arguments for [::tclpdf::sign timestamp]: empty for the
+#          public authority, "-tsa ..." for the local fallback
+#   why    why neither is to be had, in a sentence; {} otherwise
+#
+# The public authority first, a local throwaway one without network, and a
+# skip only where there is no openssl to build even that.
+proc exampleTimestampSetup {{authority https://tsr.open-tsa.eu}} {
+    if {[exampleReachable $authority]} {
+        return [list {} {} {}]
+    }
+    if {![llength [auto_execok openssl]]} {
+        return [list {} {} "$authority is not reachable and openssl was not\
+            found on the PATH, so there is no throwaway authority either"]
+    }
+    set dir [exampleTempDirectory]
+    if {[catch {exampleTsaAuthority $dir} message]} {
+        file delete -force $dir
+        return [list {} {} "$authority is not reachable and openssl would\
+            not make a throwaway authority:\
+            [lindex [split $message \n] 0]"]
+    }
+    return [list $dir [list -tsa [list exampleTsaTransport $dir]] {}]
+}
+
+# The stamp itself, shared by the three timestamp examples: the call onto
+# the finished file, the report line, and the throwaway authority's directory
+# gone when there was one. What differs per example is everything BEFORE this
+# - the document - which is why only the tail is shared.
+proc exampleStamp {target stamp dir} {
+    set stamped [::tclpdf::sign timestamp $target {*}$stamp]
+    exampleTimestampReport $stamped
+    if {$dir ne {}} {
+        file delete -force $dir
+    }
+    return
+}
+
+# The one line every timestamp example prints about its stamp: field, token,
+# serial, time, and WHO answered - the public authority by its URL, or the
+# throwaway one, named as such so nobody mistakes an offline build's token
+# for evidence.
+proc exampleTimestampReport {stamped} {
+    if {[dict exists $stamped url]} {
+        set from "from [dict get $stamped url]"
+    } else {
+        set from "from a local throwaway authority - offline build, the\
+            token vouches for nothing"
+    }
+    puts "  field [dict get $stamped field]: token [dict get $stamped length]\
+        bytes, serial [dict get $stamped serial],\
+        time [dict get $stamped time] ($from)"
+    return
+}

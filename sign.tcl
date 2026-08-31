@@ -546,6 +546,24 @@ proc ::tclpdf::sign::WriteRange {data located byteRange} {
   return [string replace $data $open $close $text]
 }
 
+# The appendix joined onto the file and its /ByteRange filled in: locate the
+# placeholders the appendix carries, compute the range that describes the
+# whole file except /Contents, and write it in. The length is checked not to
+# have moved - the array describes offsets into its own file.
+proc ::tclpdf::sign::Ranged {data appended what} {
+  append data $appended
+  set length [string length $data]
+  set located [Locate $data $what]
+  set byteRange [Range $data $located]
+  set data [WriteRange $data $located $byteRange]
+  if {[string length $data] != $length} {
+    return -code error -errorcode [list TCLPDF SIGN INTERNAL length] \
+        "tclpdf: writing /ByteRange into $what changed the file\
+        length, which cannot be - it describes its own file"
+  }
+  return [list $data $located $byteRange $length]
+}
+
 # The bytes a /ByteRange covers, in order - what gets signed.
 proc ::tclpdf::sign::Bytes {data byteRange} {
   set bytes {}
@@ -1492,22 +1510,8 @@ proc ::tclpdf::sign::add {path args} {
           /P 2 and /P 3 do allow a further signature"
     }
 
-    set taken [FieldNames $upd $catalogValue]
-    set field [dict get $options field]
-    if {$field eq {}} {
-      set number 1
-      while {"Signature$number" in $taken} {
-        incr number
-      }
-      set field "Signature$number"
-    } elseif {$field in $taken} {
-      return -code error -errorcode [list TCLPDF SIGN FIELD $field] \
-          "tclpdf: $what already carries a signature field\
-          named \"$field\" - a partial field name has to be unique among its\
-          siblings (ISO 32000-2, 12.7.4.2). Taken are: [join $taken {, }].\
-          Leave -field out and the first free name of the form Signature<n>\
-          is used"
-    }
+    set field [FieldName $upd $catalogValue [dict get $options field] \
+        Signature $what]
 
     # The two new objects: the dictionary with both placeholders in it, and
     # the field merged with its widget. Written through the same two builders
@@ -1537,16 +1541,7 @@ proc ::tclpdf::sign::add {path args} {
     $upd destroy
   }
 
-  append data $appended
-  set length [string length $data]
-  set located [Locate $data $what]
-  set byteRange [Range $data $located]
-  set data [WriteRange $data $located $byteRange]
-  if {[string length $data] != $length} {
-    return -code error -errorcode [list TCLPDF SIGN INTERNAL length] \
-        "tclpdf: writing /ByteRange into $what changed the file\
-        length, which cannot be - it describes its own file"
-  }
+  lassign [Ranged $data $appended $what] data located byteRange length
 
   set signed 0
   set derLength {}
@@ -1738,6 +1733,30 @@ proc ::tclpdf::sign::FieldNames {upd catalogValue} {
     }
   }
   return $names
+}
+
+# The partial field name the new signature field will carry: the -field the
+# caller chose, refused when a sibling of that name is already there
+# (12.7.4.2 again), or - with -field left out - the first free name of the
+# form <prefix><n>.
+proc ::tclpdf::sign::FieldName {upd catalogValue field prefix what} {
+  set taken [FieldNames $upd $catalogValue]
+  if {$field eq {}} {
+    set number 1
+    while {"$prefix$number" in $taken} {
+      incr number
+    }
+    return "$prefix$number"
+  }
+  if {$field in $taken} {
+    return -code error -errorcode [list TCLPDF SIGN FIELD $field] \
+        "tclpdf: $what already carries a signature field\
+        named \"$field\" - a partial field name has to be unique among its\
+        siblings (ISO 32000-2, 12.7.4.2). Taken are: [join $taken {, }].\
+        Leave -field out and the first free name of the form $prefix<n>\
+        is used"
+  }
+  return $field
 }
 
 # The text a /T holds, whichever of the two ways it is written in.

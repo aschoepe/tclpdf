@@ -382,6 +382,71 @@ try {
 }
 ```
 
+### A document timestamp needs nobody's key
+
+```tcl
+# A DOCUMENT TIMESTAMP (ISO 32000-2, 12.8.5) proves the file existed at the
+# authority's stated time - the file needs no signature at all. Default
+# authority is Open TSA (https://tsr.open-tsa.eu); -url names any RFC 3161
+# service; -tsa hands the transport to your own command prefix. This snippet
+# uses -tsa with a throwaway local authority so it runs without network.
+package require tclpdf::timestamp
+
+proc refTsa {dir tsq} {
+    set fh [open [file join $dir q.tsq] wb]
+    puts -nonewline $fh $tsq
+    close $fh
+    exec openssl ts -reply -config [file join $dir tsa.cnf] \
+        -queryfile [file join $dir q.tsq] -out [file join $dir r.tsr] \
+        2> [file join $dir openssl.log]
+    set fh [open [file join $dir r.tsr] rb]
+    set tsr [read $fh]
+    close $fh
+    return $tsr
+}
+proc refTsaSetup {dir} {
+    exec openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
+        -keyout [file join $dir tsa.key] -out [file join $dir tsa.pem] \
+        -subj "/CN=reference TSA" \
+        -addext "extendedKeyUsage=critical,timeStamping" \
+        2> [file join $dir openssl.log]
+    set fh [open [file join $dir tsa.cnf] w]
+    puts $fh "\[tsa\]\ndefault_tsa = c\n\[c\]"
+    puts $fh "serial = [file join $dir serial]"
+    puts $fh "signer_cert = [file join $dir tsa.pem]"
+    puts $fh "signer_key = [file join $dir tsa.key]"
+    puts $fh "default_policy = 1.2.3.4.1\ndigests = sha256, sha384, sha512"
+    puts $fh "accuracy = secs:1\nordering = no\ntsa_name = no"
+    puts $fh "ess_cert_id_chain = no\nsigner_digest = sha256"
+    close $fh
+    set fh [open [file join $dir serial] w]
+    puts $fh 01
+    close $fh
+}
+
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc font -family helvetica -size 11
+$doc text "existed no later than the token says" -at {20 30}
+$doc write [file join $out ref-11-doctimestamp.pdf]
+$doc destroy
+
+if {$signing} {
+    set tsaDir [file join $refDir tsa]
+    file mkdir $tsaDir
+    refTsaSetup $tsaDir
+    # In production, drop -tsa for the public default, or set -url.
+    set stamped [::tclpdf::sign timestamp \
+        [file join $out ref-11-doctimestamp.pdf] -tsa [list refTsa $tsaDir]]
+    puts "field [dict get $stamped field]: token [dict get $stamped length]\
+        bytes, time [dict get $stamped time]"
+} else {
+    puts "no openssl here - the file stays without its stamp"
+}
+```
+
+The dictionary that comes back names the authority's `time` (genTime, UTC) and the token's `serial`. There is deliberately no `/M` in the field - the time is *in* the token. A token answering a different digest or nonce than this very request is refused (`TCLPDF TIMESTAMP IMPRINT`, `NONCE`); the authority's refusal comes out as `TCLPDF TIMESTAMP STATUS` with its own words.
+
 ## What to know before promising anything
 
 - **`-subfilter` is the caller's choice**: `pkcs7` (`/adbe.pkcs7.detached`, the default, PDF 1.6) or `cades` (`/ETSI.CAdES.detached`, PDF 2.0). Each brings its own version floor and a document below it is refused rather than raised. The default claims less **and** has the lower floor - deliberately, since PDF/A-2 and -3 are written as 1.7 at most.
@@ -389,6 +454,6 @@ try {
 - **A PDF/A or ZUGFeRD document may be signed** - measured: veraPDF `isCompliant true`, 0 failed checks, Mustangproject valid, the embedded invoice byte-identical to the unsigned file's.
 - **A timestamp needs nothing here**: an RFC 3161 token is an *unsigned* attribute of the CMS object, so the signer puts it there and this package never sees it as anything but bytes. Reserve enough room - such an object measured 7108 bytes against the 16384 reserved by default.
 - **A visible signature is a form field under a claim**: `-tooltip` writes its `/TU` and `-contents` its `/Contents`, `tagged 1` gives it a `Form` element and an object reference, and PDF/UA asks for the `/TU` (part 2 for the `/Contents` besides) at the write. An **invisible** one is an artifact and is asked nothing. `::tclpdf::sign add` refuses a file that claims PDF/UA (`TCLPDF SIGN STATE ua`) or is certified (`TCLPDF SIGN STATE certified`).
-- **Not there**: a document timestamp (`/DocTimeStamp`), `/DocMDP` certification, and a signature and encryption in one file.
+- **Not there**: `/DocMDP` certification, and a signature and encryption in one file.
 - A signed document is **not** byte-identical over two writes - `/M` and the CMS object carry the moment. One prepared *without* `-signer` is, and stays so until `::tclpdf::sign digest` names a time in it.
 - `::tclpdf::sign digest`, `embed` and `add` are **package commands**, not document methods: the second stage happens in another process, often on another machine and days later. A script that only embeds a signature never creates a document, so it needs `package require tclpdf::sign` of its own.

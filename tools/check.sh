@@ -322,10 +322,19 @@ if have pdfsig; then
   for f in examples/out/*.pdf; do
     grep -l "/ByteRange" "$f" >/dev/null 2>&1 || continue
     out=`pdfsig "$f" 2>/dev/null`
+    stamped=""
+    grep -l "/DocTimeStamp" "$f" >/dev/null 2>&1 && stamped=yes
     case "$out" in
       *"has not yet been verified"*)
-        report_skip "pdfsig `basename $f` - placeholder unfilled, the example found no openssl"
-        continue
+        # pdfsig says this in TWO situations that must not be confused: an
+        # unfilled placeholder (nothing to check - the SKIP above holds), and
+        # a document timestamp, whose field it lists without verifying the
+        # RFC 3161 token inside. The token is the test suite's business,
+        # against openssl ts; what stays pdfsig's call here is coverage.
+        if test -z "$stamped"; then
+          report_skip "pdfsig `basename $f` - placeholder unfilled, the example found no openssl"
+          continue
+        fi
         ;;
     esac
     signed=`expr $signed + 1`
@@ -342,8 +351,22 @@ if have pdfsig; then
         esac
         ;;
       *)
-        verdict=`echo "$out" | sed -n 's/.*Signature Validation: //p' | head -1`
-        report_fail "pdfsig `basename $f`: ${verdict:-no verdict}"
+        if test -n "$stamped"; then
+          # No signature to be valid - a stamp-only document. The one thing
+          # pdfsig can and must say about it is that the timestamp's range
+          # covers the whole file.
+          case "$out" in
+            *"Total document signed"*)
+              report_pass "pdfsig `basename $f`: timestamp covers the whole file"
+              ;;
+            *)
+              report_fail "pdfsig `basename $f`: timestamp does NOT cover the whole file"
+              ;;
+          esac
+        else
+          verdict=`echo "$out" | sed -n 's/.*Signature Validation: //p' | head -1`
+          report_fail "pdfsig `basename $f`: ${verdict:-no verdict}"
+        fi
         ;;
     esac
   done
