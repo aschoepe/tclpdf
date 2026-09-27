@@ -1,5 +1,5 @@
-C Markdown\sas\sthe\ssecond\snotation\sof\s-markup\n\n-\smarkdown.tcl\s(new)\s-\stext\s-markup\smarkdown\sreads\sstrong,\sem,\sboth,\sstrikeout,\slinks\sand\sheadings\s1\sto\s3\sinto\sthe\ssame\sruns\sthe\stags\sbecome;\sread\sas\sstrictly\sas\sthe\stags,\swith\sOPEN,\sNESTING,\sLINK\sand\sHEADING\srefusals\snaming\sthe\sposition;\sunderscore\sis\stext,\sthere\sis\sno\sunderline,\sand\sthe\srest\sof\sMarkdown\sis\stext\srather\sthan\srefused\n-\smarkup.tcl\s-\sthe\semit\sstep\sis\spublic\sand\sshared\sby\sboth\stranslators,\sso\sone\svocabulary\sdecides\swhat\sa\srun\sis\n-\stextBlock.tcl,\stext.tcl\s-\s-markup\stakes\stags\sor\smarkdown\sand\sloads\sthe\stranslator\sit\sneeds\n-\stests/markdown.test\s(new)\s-\sthe\srules,\severy\srefusal,\sand\sthe\sproof\sthat\sthe\ssame\sparagraph\sin\sboth\snotations\sgives\sthe\ssame\slist\sand\sthe\ssame\scontent\sstream;\srunDoc\smoved\sinto\shelper.tcl\sfor\sthe\ssecond\stest\sfile\sthat\sneeds\sit\n-\sexamples/01.18-markdown.tcl\s(new)\s-\sthe\sparagraph\sof\s1.17\sin\sMarkdown\sand\sas\stags,\schecked\sline\sby\sline\swith\stextLines\n-\smanual:\s-markup\smarkdown,\sthe\serror\scode\stable\sregenerated;\sconfigure.ac,\spkgIndex.tcl.in,\stests/all.tcl\scarry\sthe\smodule;\sconfigure\sregenerated\n-\sversions:\smarkup\s1.1,\stextBlock\s1.18,\stext\s1.24\n-\sknowingly\sopen:\sno\scode\sspans,\sa\slink\saddress\scannot\shold\sa\sclosing\sparenthesis,\sand\sa\sbracketed\snumber\sin\srunning\stext\sneeds\sa\sbackslash
-D 2026-09-27T21:20:13.693
+C Examples\s1.17\sand\s1.18\scut\salong\sthe\srule\sof\sone\sthing\sper\sexample\n\n-\s01.17-markup\s-\sthe\stwo\snotations,\sone\spage\seach,\sas\styped\sand\sas\sset:\sthe\sstring\sin\sCourier\swithout\s-markup,\sunderneath\sthe\ssame\sstring\swith\s-markup\stags\sand\swith\s-markup\smarkdown;\sthe\slast\sline\smeasures\sthat\sboth\sbreak\sinto\sthe\ssame\slines,\sthe\sunderline\sapart\n-\s01.18-runs\s(was\s01.18-markdown)\s-\sthe\slist\sunderneath\sthe\snotations,\swritten\sby\shand\sand\sset\sin\san\sembedded\sfamily:\sfont\sfamily,\sthe\srefusal\sof\sa\sface\sthe\sfamily\sdoes\snot\shave,\sand\swhat\sthe\sheadings\scost\sby\stextHeight
+D 2026-09-27T22:11:27.238
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -65,8 +65,8 @@ F examples/01.13-layers.tcl 9cba0d656ff8a76569fe43461f1a818cabca0129d642d330fe3d
 F examples/01.14-hyphenation.tcl d0ea89654b19092c3084142d6ac5790954db231769a5d79d551ac6abfaf3a816
 F examples/01.15-text-fit.tcl 478204bee098622001ba1024f2c657b7184491d3bf80637ef04a99efc9e438f1
 F examples/01.16-prepress-control.tcl 1546ee0ea65d3fd4ab097c0f40c835af6d8eaa451e313b5b7d1d2001fb9cefe6
-F examples/01.17-markup.tcl f1832447ac39e7accdddd24b7246033922b9257f958f21d3f7e9f28572bd2d61
-F examples/01.18-markdown.tcl 941de820824121afd53f050e984ba5288e3c7fd77e552ba2384d89ed36e938c2
+F examples/01.17-markup.tcl fa477759dcaec3eba84d69e094e80c6514627820cb7c9ac8d00190ee9bd66872
+F examples/01.18-runs.tcl ffeccfcf17cda8bb119428e282e02699cf92d1753ce9e8954508e64b13f4a72b w examples/01.18-markdown.tcl
 F examples/02.01-embedding.tcl 1585debf1c1d1f771933cd1c43d938fb9b612c151eba3a11e2060aede0b7b361
 F examples/02.02-languages.tcl efc4b0d943ef43227a5d02bd1afd9c67f522c7383aaf63645069745de323067d
 F examples/02.03-font-families.tcl f7a622ffe24931cab3646753180275e9cbb11bca702cd8ad1057ae67a3168edc
@@ -512,8 +512,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P d4105fe94f5b015d4a450ba95805551d27a9076d716c55310ec8303945ea7f76
-R d2da0267dfb01478a70d915fb7127187
+P ea2b9be3d4eb1e079649a8d0826f0e1230783beb44f4b15eb7162d2c7094ea30
+R 7c298704b3da7a2e3e04b8c94be73ea5
 U alex
-Z b56248125862076a3ac225c61fdc0365
+Z a282e0bdd54802827ba1a5fd444a7401
 # Remove this line to create a well-formed Fossil manifest.
