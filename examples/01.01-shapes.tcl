@@ -17,7 +17,7 @@
 
 # Find the package next to this example when it has not been installed yet.
 set here [file dirname [file normalize [info script]]]
-lappend auto_path [file dirname $here]
+set auto_path [linsert $auto_path 0 [file dirname $here]]
 package require tclpdf
 
 # The footer every example draws - shared, because one copy per example is

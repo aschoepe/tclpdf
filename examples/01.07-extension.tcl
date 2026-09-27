@@ -36,7 +36,7 @@
 # of this file (MIT License).
 
 set here [file dirname [file normalize [info script]]]
-lappend auto_path [file dirname $here]
+set auto_path [linsert $auto_path 0 [file dirname $here]]
 package require tclpdf
 # The document CLASS, not just the facade: [tclpdf new] loads it on the way,
 # but an extension that runs [oo::define] before the first document exists has

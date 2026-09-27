@@ -62,7 +62,7 @@
 # of this file (MIT License).
 
 set here [file dirname [file normalize [info script]]]
-lappend auto_path [file dirname $here]
+set auto_path [linsert $auto_path 0 [file dirname $here]]
 package require tclpdf
 # Named outright, because the second signature is put on by a package command
 # and not by a document method: at that point there is no document object left

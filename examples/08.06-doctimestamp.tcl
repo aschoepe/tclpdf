@@ -46,7 +46,7 @@
 # of this file (MIT License).
 
 set here [file dirname [file normalize [info script]]]
-lappend auto_path [file dirname $here]
+set auto_path [linsert $auto_path 0 [file dirname $here]]
 source [file join $here common.tcl]
 
 package require tclpdf

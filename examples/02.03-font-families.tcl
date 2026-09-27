@@ -35,7 +35,7 @@
 # of this file (MIT License).
 
 set here [file dirname [file normalize [info script]]]
-lappend auto_path [file dirname $here]
+set auto_path [linsert $auto_path 0 [file dirname $here]]
 package require tclpdf
 # The two modules behind [font embed], asked directly - the same call the
 # writer makes when it embeds a face, so the number in the table below is the

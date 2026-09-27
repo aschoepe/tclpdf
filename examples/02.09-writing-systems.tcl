@@ -48,7 +48,7 @@
 # of this file (MIT License).
 
 set here [file dirname [file normalize [info script]]]
-lappend auto_path [file dirname $here]
+set auto_path [linsert $auto_path 0 [file dirname $here]]
 package require tclpdf
 
 # The footer every example draws - shared, because one copy per example is
@@ -58,6 +58,32 @@ source [file join $here common.tcl]
 set target [expr {[llength $argv] ? [lindex $argv 0] : "02.09-writing-systems.pdf"}]
 set fonts [file join $here assets fonts]
 set profile [file join [file dirname $here] icc sRGB.icc]
+
+# Characters ABOVE the BMP - emoji, cuneiform, hieroglyphs, the music page -
+# are built from their code points; not one of them stands in this file as
+# itself. Measured, both obvious spellings fail under Tcl 8.6: \U0001D11E
+# yields U+FFFD, and a literal four-byte UTF-8 character survives only while
+# it does not straddle a 4096-byte buffer boundary of the channel [source]
+# reads the script from. With its first byte just before the boundary, 8.6
+# decodes it as four Latin-1 characters - U+00F0 U+009D ... - so an edit far
+# up the file decided whether the music page could be drawn. Made from its
+# UTF-8 bytes by [encoding convertfrom], the character is right under both:
+# a surrogate pair in 8.6, which [split] and [scan] still return as the one
+# code point the glyph run needs, and a single character in Tcl 9.
+proc codepoints {hexes {sep ""}} {
+  set chars {}
+  foreach hex $hexes {
+    set c [expr {"0x$hex"}]
+    if {$c < 0x10000} {
+      lappend chars [format %c $c]
+      continue
+    }
+    lappend chars [encoding convertfrom utf-8 [binary format c4 [list \
+        [expr {0xF0 | ($c >> 18)}] [expr {0x80 | (($c >> 12) & 0x3F)}] \
+        [expr {0x80 | (($c >> 6) & 0x3F)}] [expr {0x80 | ($c & 0x3F)}]]]]
+  }
+  join $chars $sep
+}
 
 # alias, file, what it is, and a line set in it. The text is the point of the
 # example, so it is in the language the face is for - everything ABOUT the
@@ -76,12 +102,8 @@ set profile [file join [file dirname $here] icc sRGB.icc]
 # in this face, so nothing shifts. They do end up in the subset and in the
 # ToUnicode map, where they belong - the text extracts as it was written.
 #
-# The music and emoji lines carry characters ABOVE the BMP, and they are
-# written as literal UTF-8 rather than as \U escapes on purpose: measured,
-# Tcl 8.6 turns \U0001D11E into U+FFFD while Tcl 9 yields the character. The
-# literal works under both - 8.6 reports a string length of 2 for it, being a
-# surrogate pair internally, but splits it into one character with the right
-# code point, which is what the glyph run needs.
+# The emoji, cuneiform and hieroglyph lines are given by code point, through
+# [codepoints] above, for the reason noted there.
 # The cuneiform signs are Sumerian logograms one meets first: AN (heaven,
 # god), KI (earth), LUGAL (king), E2 (house), URU (city), A (water), UD (sun,
 # day), GISH (tree, wood), EN (lord), KA (mouth), LU2 (man), SAL (woman), DISH
@@ -110,11 +132,14 @@ set faces {
   symbols2 google/NotoSansSymbols2-Regular.ttf   {More symbols}
       "✁ ✂ ✈ ✏ ✔ ✖ ✤ ✪ ❄ ❤ ➜ ➡ ⭐ ⭕ ⚀ ⚁ ⚂ ⚃ ⚄ ⚅ ♔ ♕ ♖ ♗ ♘ ♙"
   emoji    google/NotoEmoji-Variable.ttf         {Emoji, monochrome}
-      "🏡🧁🍰🏜️🎁🎂🎈🎺🙏💕🌶︎🔋🔥🍾😃🐬🚲🌳🔧🌧🔬"
+      "[codepoints {1F3E1 1F9C1 1F370 1F3DC FE0F 1F381 1F382 1F388 1F3BA 1F64F 1F495
+          1F336 FE0E 1F50B 1F525 1F37E 1F603 1F42C 1F6B2 1F333 1F527 1F327 1F52C}]"
   cuneiform google/NotoSansCuneiform-Regular.ttf {Cuneiform - Sumerian logograms}
-      "𒀭 𒆠 𒈗 𒂍 𒌷 𒀀 𒌓 𒄑 𒂗 𒅗 𒇽 𒊩 𒁹 𒌋"
+      "[codepoints {1202D 121A0 12217 1208D 12337 12000 12313 12111 12097 12157 121FD
+          122A9 12079 1230B} { }]"
   hiero    google/NotoSansEgyptianHieroglyphs-Regular.ttf {Egyptian hieroglyphs}
-      "𓂀 𓋹 𓆣 𓅓 𓅃 𓄿 𓅱 𓇋 𓈖 𓇳 𓆓 𓃭 𓀀 𓁐 𓊽 𓂻"
+      "[codepoints {13080 132F9 131A3 13153 13143 1313F 13171 131CB 13216 131F3 13193
+          130ED 13000 13050 132BD 130BB} { }]"
   hebrew   DejaVuSans.ttf                 {Hebrew - see the note below}
       "שלום עולם ברוכים הבאים"
   arabic   google/NotoNaskhArabic-Variable.ttf   {Arabic - see the note below}
@@ -122,6 +147,8 @@ set faces {
   marker   google/PermanentMarker-Regular.ttf    {A brush face}
       "Handwritten, more or less - 0123456789, 42 %, 17.08.2026, No. 4711"
 }
+# The table is braced, so its [codepoints] calls are made here.
+set faces [subst -nobackslashes -novariables $faces]
 
 # The lines of the two right-to-left faces, kept by alias: the demonstration
 # further down sets the Arabic one in a second face, and typing it twice is
@@ -462,7 +489,7 @@ $doc text "Arabic mathematical letters (U+1EE00 block, in DejaVu Sans) - the\
     carries; Phoenician or Kharoshthi would need a face of their own:" \
     -at [list 20 $y] -width 170
 $doc font -family hebrew -size 14 -color black
-$doc text "𞸎 = 𞸁 + 𞸃" -at [list 190 [expr {$y + 10}]] -direction rtl
+$doc text "[codepoints 1EE0E] = [codepoints 1EE01] + [codepoints 1EE03]" -at [list 190 [expr {$y + 10}]] -direction rtl
 
 # -- what a music font is not ------------------------------------------------
 
@@ -602,7 +629,7 @@ proc note {doc top x step {value quarter} args} {
   foreach {key value} $args {dict set opts [string range $key 1 end] $value}
   set middle [stepY $top $step]
   ledger $doc $top $x $step
-  set glyph [expr {$value eq "half" ? "𝅗" : "𝅘"}]
+  set glyph [expr {$value eq "half" ? [codepoints 1D157] : [codepoints 1D158]}]
   glyph $doc $x [staffY $top $step] $glyph
   set stem [dict get $opts stem]
   if {$stem eq ""} {set stem [expr {$step > 4 ? "down" : "up"}]}
@@ -621,12 +648,12 @@ proc note {doc top x step {value quarter} args} {
     # Away from the stem; a head on a line (even step) reaches into the next
     # space, one on a space into the next one.
     set off [expr {($step % 2 == 0 ? 1.5 : 1.0) * $gap * ($stem eq "up" ? 1 : -1)}]
-    glyph $doc [expr {$centre - 0.097 * $em}] [expr {$middle + $off - 0.067 * $em}] "𝅼"
+    glyph $doc [expr {$centre - 0.097 * $em}] [expr {$middle + $off - 0.067 * $em}] [codepoints 1D17C]
   }
   if {[dict get $opts dot]} {
     set dotStep [expr {$step % 2 == 0 ? $step + 1 : $step}]
     glyph $doc [expr {$headRight + 0.45 * $gap - 0.047 * $em}] \
-        [expr {[stepY $top $dotStep] + 0.278 * $em}] "𝅭"
+        [expr {[stepY $top $dotStep] + 0.278 * $em}] [codepoints 1D16D]
   }
   if {[dict get $opts accidental] ne ""} {
     accidental $doc $top $x $step [dict get $opts accidental]
@@ -666,7 +693,7 @@ proc chord {doc top x steps {stem up} {arpeggio 0}} {
   }
   if {$arpeggio} {
     glyph $doc [expr {$x - 0.35 * $em}] \
-        [expr {[stepY $top [expr {($low + $high) / 2.0}]] + 0.5 * $em}] "𝆃"
+        [expr {[stepY $top [expr {($low + $high) / 2.0}]] + 0.5 * $em}] [codepoints 1D183]
   }
 }
 
@@ -758,7 +785,7 @@ proc grace {doc top x step toX toStep} {
   global gap em
   set scale 0.6
   set y [staffY $top $step [expr {0.134 * $em * $scale}]]
-  glyph $doc $x $y "𝅘𝅥𝅮" $scale
+  glyph $doc $x $y [codepoints {1D158 1D165 1D16E}] $scale
   set stemX [expr {$x + 0.33 * $em * $scale}]
   $doc line -from [list [expr {$stemX - 0.7}] [expr {$y - 0.45 * $em * $scale}]] \
       -to [list [expr {$stemX + 0.7}] [expr {$y - 0.72 * $em * $scale}]] -width 0.18
@@ -782,9 +809,9 @@ proc grace {doc top x step toX toStep} {
 proc rest {doc top x kind} {
   global em
   switch $kind {
-    whole {glyph $doc $x [expr {[stepY $top 6] + 0.512 * $em}] "𝄻"}
-    eighth {glyph $doc $x [expr {[stepY $top 4] + 0.5 * $em}] "𝄾"}
-    default {glyph $doc $x [expr {[stepY $top 4] + 0.5 * $em}] "𝄽"}
+    whole {glyph $doc $x [expr {[stepY $top 6] + 0.512 * $em}] [codepoints 1D13B]}
+    eighth {glyph $doc $x [expr {[stepY $top 4] + 0.5 * $em}] [codepoints 1D13E]}
+    default {glyph $doc $x [expr {[stepY $top 4] + 0.5 * $em}] [codepoints 1D13D]}
   }
 }
 
@@ -793,15 +820,15 @@ proc rest {doc top x kind} {
 # centred over the head (the glyph's middle is 379 thousandths in).
 proc fermata {doc top x underside} {
   global em
-  glyph $doc [expr {$x + 0.2 * $em - 0.379 * $em}] [expr {$underside + 0.648 * $em}] "𝄐"
+  glyph $doc [expr {$x + 0.2 * $em - 0.379 * $em}] [expr {$underside + 0.648 * $em}] [codepoints 1D110]
 }
 
 # Dynamics from the face - p U+1D18F, f U+1D191, s U+1D18D (SUBITO), so sf
 # and ff are two glyphs each - on one baseline below the system, and the
 # hairpin as two lines opening from a point.
-proc dynamic {doc top x text} {
+proc dynamic {doc top x codes} {
   global gap
-  glyph $doc $x [expr {$top + 4 * $gap + 5.4 * $gap}] $text
+  glyph $doc $x [expr {$top + 4 * $gap + 5.4 * $gap}] [codepoints $codes]
 }
 proc hairpin {doc top from to} {
   global gap
@@ -815,14 +842,14 @@ proc hairpin {doc top from to} {
 # and so goes on the middle line.
 proc opening {doc top left {time 0}} {
   global em
-  glyph $doc [expr {$left + 1}] [staffY $top 2 0] "𝄞"
+  glyph $doc [expr {$left + 1}] [staffY $top 2 0] [codepoints 1D11E]
   set x [expr {$left + 7}]
   foreach step {4 7 3 6} {
     glyph $doc $x [staffY $top $step 0.6] "♭"
     set x [expr {$x + 2.2}]
   }
   if {$time} {
-    glyph $doc [expr {$left + 16.5}] [expr {[stepY $top 4] + 0.497 * $em}] "𝄵"
+    glyph $doc [expr {$left + 16.5}] [expr {[stepY $top 4] + 0.497 * $em}] [codepoints 1D135]
   }
 }
 
@@ -839,7 +866,7 @@ proc opening {doc top left {time 0}} {
 #   slur X1 STEP1 X2 STEP2             a bow above the heads
 #   rest X quarter|whole|eighth        a rest
 #   fermata X STEP                     over the head at that step
-#   dynamic X TEXT / hairpin FROM TO   below the system
+#   dynamic X CODES / hairpin FROM TO  below the system, CODES in hex
 #   bar X ?final?                      a bar line
 # The x values are millimetres on the page and were chosen by hand.
 
@@ -861,7 +888,7 @@ $doc text "5" -at [list [expr {$left + 1.8}] [expr {$top2 - 5.7}]] -align center
 
 set systems [list \
   $top1 {
-    dynamic 40.5 "𝆏"
+    dynamic 40.5 1D18F
     note 43.5 -2 quarter -staccato 1
     bar 49
     note 51.5 1 quarter -staccato 1
@@ -890,10 +917,10 @@ set systems [list \
     bar 190
   } \
   $top2 {
-    dynamic 35.5 "𝆏"
+    dynamic 35.5 1D18F
     grace 39.5 5 43 10
     note 43 10 quarter -dot 1
-    dynamic 41.5 "𝆍𝆑"
+    dynamic 41.5 {1D18D 1D191}
     beam {53 9 58 8 63 7} -beams 2 -triplet 1
     accidental 63 7 "♮"
     slur 43 10 69 8
@@ -902,20 +929,20 @@ set systems [list \
     bar 77
     grace 78.5 6 82 11
     note 82 11 quarter -dot 1
-    dynamic 80.5 "𝆍𝆑"
+    dynamic 80.5 {1D18D 1D191}
     beam {92 10 97 9 102 8} -beams 2 -triplet 1
     slur 82 11 108 9
     note 108 9 quarter -staccato 1
     rest 112.5 quarter
     bar 116
-    dynamic 118.5 "𝆑𝆑"
+    dynamic 118.5 {1D191 1D191}
     chord 119.5 {1 3 5 8} up 1
     note 126.5 12 quarter -dot 1
     beam {134.5 11 138.5 10 142.5 9} -beams 2
     slur 126.5 12 142.5 9
     note 147 8 quarter
     bar 151
-    dynamic 152.5 "𝆏"
+    dynamic 152.5 1D18F
     beam {154.5 7 159.5 8 163.5 9} -second {1 2}
     accidental 154.5 7 "♮"
     note 168 10 quarter

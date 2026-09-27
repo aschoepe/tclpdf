@@ -21,15 +21,18 @@
 # down to the footer the other examples draw.
 #
 # The one line that is not about PDF at all is the auto_path: it makes the
-# package findable while running from an unbuilt source tree. After
-# "make install" it is unnecessary - "package require tclpdf" finds it.
+# package findable while running from an unbuilt source tree - in FRONT of
+# the path, so that the tree wins over an installed copy of the same version
+# (Tcl runs the ifneeded script registered last, and reads auto_path from
+# the back, so the first directory has the last word). After "make install"
+# it is unnecessary - "package require tclpdf" finds it.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
 # See the file "license.terms" for information on usage and redistribution
 # of this file (MIT License).
 
-lappend auto_path [file dirname [file dirname [file normalize [info script]]]]
+set auto_path [linsert $auto_path 0 [file dirname [file dirname [file normalize [info script]]]]]
 package require tclpdf
 
 set target [expr {[llength $argv] ? [lindex $argv 0] : "00.01-hello-world.pdf"}]
