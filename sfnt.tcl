@@ -2435,4 +2435,4 @@ proc ::tclpdf::sfnt::OpenFace {channel path face} {
   return $font
 }
 
-package provide tclpdf::sfnt 1.11
+package provide tclpdf::sfnt 1.12

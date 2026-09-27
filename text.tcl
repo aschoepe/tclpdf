@@ -3265,4 +3265,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.22
+package provide tclpdf::text 1.23

@@ -2199,4 +2199,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.16
+package provide tclpdf::textBlock 1.17

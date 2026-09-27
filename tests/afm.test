@@ -180,6 +180,15 @@ test afm-4.2 {the descriptor carries what a FontDescriptor needs} -body {
       [dict get $descriptor CapHeight] [llength [dict get $descriptor FontBBox]]
 } -result {718 -207 718 4}
 
+test afm-4.4 {the descriptor carries the AFM's underline position and thickness} -body {
+  set out {}
+  foreach name {Helvetica Times-Bold Courier-Oblique Symbol ZapfDingbats} {
+    set descriptor [::tclpdf::afm descriptor $name]
+    lappend out [dict get $descriptor UnderlinePosition] [dict get $descriptor UnderlineThickness]
+  }
+  lsort -unique $out
+} -result {-100 50}
+
 test afm-4.3 {an unknown font names the known ones} -body {
   ::tclpdf::afm width DoesNotExist 65
 } -returnCodes error -match glob -result {*not one of the 14 standard fonts*}

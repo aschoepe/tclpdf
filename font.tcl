@@ -1090,11 +1090,13 @@ oo::define ::tclpdf::document::document {
 
   # Where an embedded face draws an underline or a strikeout, at a size, in
   # points: {position thickness}, position counted from the baseline, up
-  # positive - or {} where the face states nothing, which is every Type 1
-  # and Type 3 face here (the AFM's UnderlinePosition is not read, and a
+  # positive - or {} where the face states nothing, which is every embedded
+  # Type 1 and Type 3 face here (an embedded Type 1 brings no AFM, and a
   # Type 3 font has no such table) and a TrueType face whose post or OS/2
-  # table leaves the field at 0. The caller (textRun.tcl) then falls back
-  # to a fraction of the size. Asked here for the same reason [FontAscender]
+  # table leaves the field at 0. The standard 14 are not asked here: their
+  # AFM descriptor carries UnderlinePosition and UnderlineThickness, and the
+  # caller (textRun.tcl) reads them there, falling back to a fraction of the
+  # size only where nothing is stated. Asked here for the same reason [FontAscender]
   # is: the two tables keep the number in font units, and whoever draws the
   # line should not have to know which table.
   method FontDecoration {alias size kind} {
@@ -2858,4 +2860,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.18
+package provide tclpdf::font 1.19

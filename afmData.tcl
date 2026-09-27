@@ -44,7 +44,7 @@ set ::tclpdf::afmData::widths(Courier) {
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
 }
-set ::tclpdf::afmData::descriptor(Courier) {FontBBox {-23 -250 715 805} CapHeight 562 XHeight 426 Ascender 629 Descender -157 ItalicAngle 0 StdVW 51 Flags 33}
+set ::tclpdf::afmData::descriptor(Courier) {FontBBox {-23 -250 715 805} CapHeight 562 XHeight 426 Ascender 629 Descender -157 ItalicAngle 0 StdVW 51 UnderlinePosition -100 UnderlineThickness 50 Flags 33}
 
 set ::tclpdf::afmData::widths(Courier-Bold) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -64,7 +64,7 @@ set ::tclpdf::afmData::widths(Courier-Bold) {
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
 }
-set ::tclpdf::afmData::descriptor(Courier-Bold) {FontBBox {-113 -250 749 801} CapHeight 562 XHeight 439 Ascender 629 Descender -157 ItalicAngle 0 StdVW 106 Flags 33}
+set ::tclpdf::afmData::descriptor(Courier-Bold) {FontBBox {-113 -250 749 801} CapHeight 562 XHeight 439 Ascender 629 Descender -157 ItalicAngle 0 StdVW 106 UnderlinePosition -100 UnderlineThickness 50 Flags 33}
 
 set ::tclpdf::afmData::widths(Courier-Oblique) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -84,7 +84,7 @@ set ::tclpdf::afmData::widths(Courier-Oblique) {
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
 }
-set ::tclpdf::afmData::descriptor(Courier-Oblique) {FontBBox {-27 -250 849 805} CapHeight 562 XHeight 426 Ascender 629 Descender -157 ItalicAngle -12 StdVW 51 Flags 97}
+set ::tclpdf::afmData::descriptor(Courier-Oblique) {FontBBox {-27 -250 849 805} CapHeight 562 XHeight 426 Ascender 629 Descender -157 ItalicAngle -12 StdVW 51 UnderlinePosition -100 UnderlineThickness 50 Flags 97}
 
 set ::tclpdf::afmData::widths(Courier-BoldOblique) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -104,7 +104,7 @@ set ::tclpdf::afmData::widths(Courier-BoldOblique) {
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
   600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600
 }
-set ::tclpdf::afmData::descriptor(Courier-BoldOblique) {FontBBox {-57 -250 869 801} CapHeight 562 XHeight 439 Ascender 629 Descender -157 ItalicAngle -12 StdVW 106 Flags 97}
+set ::tclpdf::afmData::descriptor(Courier-BoldOblique) {FontBBox {-57 -250 869 801} CapHeight 562 XHeight 439 Ascender 629 Descender -157 ItalicAngle -12 StdVW 106 UnderlinePosition -100 UnderlineThickness 50 Flags 97}
 
 set ::tclpdf::afmData::widths(Helvetica) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -124,7 +124,7 @@ set ::tclpdf::afmData::widths(Helvetica) {
   556 556 556 556 556 556 889 500 556 556 556 556 278 278 278 278
   556 556 556 556 556 556 556 584 611 556 556 556 556 500 556 500
 }
-set ::tclpdf::afmData::descriptor(Helvetica) {FontBBox {-166 -225 1000 931} CapHeight 718 XHeight 523 Ascender 718 Descender -207 ItalicAngle 0 StdVW 88 Flags 32}
+set ::tclpdf::afmData::descriptor(Helvetica) {FontBBox {-166 -225 1000 931} CapHeight 718 XHeight 523 Ascender 718 Descender -207 ItalicAngle 0 StdVW 88 UnderlinePosition -100 UnderlineThickness 50 Flags 32}
 
 set ::tclpdf::afmData::widths(Helvetica-Bold) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -144,7 +144,7 @@ set ::tclpdf::afmData::widths(Helvetica-Bold) {
   556 556 556 556 556 556 889 556 556 556 556 556 278 278 278 278
   611 611 611 611 611 611 611 584 611 611 611 611 611 556 611 556
 }
-set ::tclpdf::afmData::descriptor(Helvetica-Bold) {FontBBox {-170 -228 1003 962} CapHeight 718 XHeight 532 Ascender 718 Descender -207 ItalicAngle 0 StdVW 140 Flags 32}
+set ::tclpdf::afmData::descriptor(Helvetica-Bold) {FontBBox {-170 -228 1003 962} CapHeight 718 XHeight 532 Ascender 718 Descender -207 ItalicAngle 0 StdVW 140 UnderlinePosition -100 UnderlineThickness 50 Flags 32}
 
 set ::tclpdf::afmData::widths(Helvetica-Oblique) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -164,7 +164,7 @@ set ::tclpdf::afmData::widths(Helvetica-Oblique) {
   556 556 556 556 556 556 889 500 556 556 556 556 278 278 278 278
   556 556 556 556 556 556 556 584 611 556 556 556 556 500 556 500
 }
-set ::tclpdf::afmData::descriptor(Helvetica-Oblique) {FontBBox {-170 -225 1116 931} CapHeight 718 XHeight 523 Ascender 718 Descender -207 ItalicAngle -12 StdVW 88 Flags 96}
+set ::tclpdf::afmData::descriptor(Helvetica-Oblique) {FontBBox {-170 -225 1116 931} CapHeight 718 XHeight 523 Ascender 718 Descender -207 ItalicAngle -12 StdVW 88 UnderlinePosition -100 UnderlineThickness 50 Flags 96}
 
 set ::tclpdf::afmData::widths(Helvetica-BoldOblique) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -184,7 +184,7 @@ set ::tclpdf::afmData::widths(Helvetica-BoldOblique) {
   556 556 556 556 556 556 889 556 556 556 556 556 278 278 278 278
   611 611 611 611 611 611 611 584 611 611 611 611 611 556 611 556
 }
-set ::tclpdf::afmData::descriptor(Helvetica-BoldOblique) {FontBBox {-174 -228 1114 962} CapHeight 718 XHeight 532 Ascender 718 Descender -207 ItalicAngle -12 StdVW 140 Flags 96}
+set ::tclpdf::afmData::descriptor(Helvetica-BoldOblique) {FontBBox {-174 -228 1114 962} CapHeight 718 XHeight 532 Ascender 718 Descender -207 ItalicAngle -12 StdVW 140 UnderlinePosition -100 UnderlineThickness 50 Flags 96}
 
 set ::tclpdf::afmData::widths(Times-Roman) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -204,7 +204,7 @@ set ::tclpdf::afmData::widths(Times-Roman) {
   444 444 444 444 444 444 667 444 444 444 444 444 278 278 278 278
   500 500 500 500 500 500 500 564 500 500 500 500 500 500 500 500
 }
-set ::tclpdf::afmData::descriptor(Times-Roman) {FontBBox {-168 -218 1000 898} CapHeight 662 XHeight 450 Ascender 683 Descender -217 ItalicAngle 0 StdVW 84 Flags 32}
+set ::tclpdf::afmData::descriptor(Times-Roman) {FontBBox {-168 -218 1000 898} CapHeight 662 XHeight 450 Ascender 683 Descender -217 ItalicAngle 0 StdVW 84 UnderlinePosition -100 UnderlineThickness 50 Flags 32}
 
 set ::tclpdf::afmData::widths(Times-Bold) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -224,7 +224,7 @@ set ::tclpdf::afmData::widths(Times-Bold) {
   500 500 500 500 500 500 722 444 444 444 444 444 278 278 278 278
   500 556 500 500 500 500 500 570 500 556 556 556 556 500 556 500
 }
-set ::tclpdf::afmData::descriptor(Times-Bold) {FontBBox {-168 -218 1000 935} CapHeight 676 XHeight 461 Ascender 683 Descender -217 ItalicAngle 0 StdVW 139 Flags 32}
+set ::tclpdf::afmData::descriptor(Times-Bold) {FontBBox {-168 -218 1000 935} CapHeight 676 XHeight 461 Ascender 683 Descender -217 ItalicAngle 0 StdVW 139 UnderlinePosition -100 UnderlineThickness 50 Flags 32}
 
 set ::tclpdf::afmData::widths(Times-Italic) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -244,7 +244,7 @@ set ::tclpdf::afmData::widths(Times-Italic) {
   500 500 500 500 500 500 667 444 444 444 444 444 278 278 278 278
   500 500 500 500 500 500 500 675 500 500 500 500 500 444 500 444
 }
-set ::tclpdf::afmData::descriptor(Times-Italic) {FontBBox {-169 -217 1010 883} CapHeight 653 XHeight 441 Ascender 683 Descender -217 ItalicAngle -15.5 StdVW 76 Flags 96}
+set ::tclpdf::afmData::descriptor(Times-Italic) {FontBBox {-169 -217 1010 883} CapHeight 653 XHeight 441 Ascender 683 Descender -217 ItalicAngle -15.5 StdVW 76 UnderlinePosition -100 UnderlineThickness 50 Flags 96}
 
 set ::tclpdf::afmData::widths(Times-BoldItalic) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -264,7 +264,7 @@ set ::tclpdf::afmData::widths(Times-BoldItalic) {
   500 500 500 500 500 500 722 444 444 444 444 444 278 278 278 278
   500 556 500 500 500 500 500 570 500 556 556 556 556 444 500 444
 }
-set ::tclpdf::afmData::descriptor(Times-BoldItalic) {FontBBox {-200 -218 996 921} CapHeight 669 XHeight 462 Ascender 683 Descender -217 ItalicAngle -15 StdVW 121 Flags 96}
+set ::tclpdf::afmData::descriptor(Times-BoldItalic) {FontBBox {-200 -218 996 921} CapHeight 669 XHeight 462 Ascender 683 Descender -217 ItalicAngle -15 StdVW 121 UnderlinePosition -100 UnderlineThickness 50 Flags 96}
 
 set ::tclpdf::afmData::widths(Symbol) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -284,7 +284,7 @@ set ::tclpdf::afmData::widths(Symbol) {
   494 329 790 790 786 713 384 384 384 384 384 384 494 494 494 494
   0 329 274 686 686 686 384 384 384 384 384 384 494 494 494 0
 }
-set ::tclpdf::afmData::descriptor(Symbol) {FontBBox {-180 -293 1090 1010} CapHeight 0 XHeight 0 Ascender 0 Descender 0 ItalicAngle 0 StdVW 85 Flags 4}
+set ::tclpdf::afmData::descriptor(Symbol) {FontBBox {-180 -293 1090 1010} CapHeight 0 XHeight 0 Ascender 0 Descender 0 ItalicAngle 0 StdVW 85 UnderlinePosition -100 UnderlineThickness 50 Flags 4}
 
 set ::tclpdf::afmData::widths(ZapfDingbats) {
   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
@@ -304,6 +304,6 @@ set ::tclpdf::afmData::widths(ZapfDingbats) {
   873 828 924 924 917 930 931 463 883 836 836 867 867 696 696 874
   0 874 760 946 771 865 771 888 967 888 831 873 927 970 918 0
 }
-set ::tclpdf::afmData::descriptor(ZapfDingbats) {FontBBox {-1 -143 981 820} CapHeight 0 XHeight 0 Ascender 0 Descender 0 ItalicAngle 0 StdVW 90 Flags 4}
+set ::tclpdf::afmData::descriptor(ZapfDingbats) {FontBBox {-1 -143 981 820} CapHeight 0 XHeight 0 Ascender 0 Descender 0 ItalicAngle 0 StdVW 90 UnderlinePosition -100 UnderlineThickness 50 Flags 4}
 
-package provide tclpdf::afmData 1.1
+package provide tclpdf::afmData 1.2

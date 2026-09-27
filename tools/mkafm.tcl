@@ -253,5 +253,5 @@ foreach font $fonts {
 # The number is written out here rather than read from anywhere: a module
 # version is raised by the author, deliberately, and a generator that guessed
 # it would raise it behind their back.
-puts "package provide tclpdf::afmData 1.0"
+puts "package provide tclpdf::afmData 1.2"
 
