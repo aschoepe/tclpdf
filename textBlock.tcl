@@ -283,18 +283,18 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF TEXT RUNS FLAG $runs $context] \
           "tclpdf: -runs takes a boolean, not \"$runs\""
     }
-    # -markup names the notation the string is written in: "tags" is the
-    # one there is. A string is written EITHER as tags or as a list of
+    # -markup names the notation the string is written in: "tags" or
+    # "markdown". A string is written EITHER in a notation or as a list of
     # runs, so the two options exclude each other.
     set markup [dict get $options markup]
-    if {$markup ni {{} tags}} {
+    if {$markup ni {{} tags markdown}} {
       return -code error -errorcode [list TCLPDF TEXT MARKUP KIND $markup $context] \
-          "tclpdf: -markup takes \"tags\", not \"$markup\""
+          "tclpdf: -markup takes \"tags\" or \"markdown\", not \"$markup\""
     }
     if {$markup ne {} && $runs} {
       return -code error -errorcode [list TCLPDF TEXT MARKUP RUNS $context] \
-          "tclpdf: -markup tags reads the string as tagged text and -runs 1\
-          reads it as a list of runs - give one of the two"
+          "tclpdf: -markup $markup reads the string as marked-up text and\
+          -runs 1 reads it as a list of runs - give one of the two"
     }
     return
   }
@@ -306,13 +306,22 @@ oo::define ::tclpdf::document::document {
   # knows runs is loaded here and only here: a document that never asks for
   # one never reads it.
   method TextBlockIntake {string options context} {
-    if {[dict get $options markup] eq "tags"} {
-      # The tagged string becomes the list of runs a caller could have
-      # written by hand, and takes the same road from here on - one road,
-      # so that the two notations cannot come to set a block differently.
-      package require tclpdf::markup
-      set string [::tclpdf::markup::parse $string]
-      dict set options runs 1
+    # A marked-up string - tags or Markdown - becomes the list of runs a
+    # caller could have written by hand, and takes the same road from here
+    # on: one road, so that the notations and the list cannot come to set a
+    # block differently. Each translator is loaded only when its notation is
+    # asked for.
+    switch -- [dict get $options markup] {
+      tags {
+        package require tclpdf::markup
+        set string [::tclpdf::markup::parse $string]
+        dict set options runs 1
+      }
+      markdown {
+        package require tclpdf::markdown
+        set string [::tclpdf::markdown::parse $string]
+        dict set options runs 1
+      }
     }
     if {[dict get $options runs]} {
       package require tclpdf::textRun
@@ -2199,4 +2208,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.17
+package provide tclpdf::textBlock 1.18

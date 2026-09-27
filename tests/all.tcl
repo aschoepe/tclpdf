@@ -87,6 +87,7 @@ foreach tclpdfPkg {
     tclpdf::textBlock
     tclpdf::textRun
     tclpdf::markup
+    tclpdf::markdown
     tclpdf::textAvoid
     tclpdf::textPath
     tclpdf::leader

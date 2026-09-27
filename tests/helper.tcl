@@ -56,6 +56,16 @@ proc ::tclpdfTest::content {doc {index {}}} {
   return [$doc page content $index]
 }
 
+# A document with one page and Helvetica at 10 pt - the block the tests of
+# runs set, so that a width means the same thing in each of them. Here since
+# markdown.test needed it beside textRun.test.
+proc ::tclpdfTest::runDoc {} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10 -style {}
+  return $doc
+}
+
 # Where the lines of a content stream start: the x values of every Td, and the
 # y values, in the order they were written. Two test files wanted the same
 # five lines of parsing, which is one too many - a wrapped paragraph is

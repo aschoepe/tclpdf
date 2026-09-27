@@ -1,0 +1,206 @@
+# markdown.test --
+#
+# The Markdown notation of a paragraph (markdown.tcl): one string in, the
+# list of {text options} pairs out that [text -runs 1] sets - the same list
+# the tags give, because both translators end in markup.tcl's [emit]. The
+# parser knows no document, so most of these tests need none; what they
+# check is the subset, the strictness, the escapes and every refusal by
+# name. The last group sets the same paragraph in both notations and
+# compares the bytes.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+package require tclpdf
+package require tclpdf::markup
+package require tclpdf::markdown
+source [file join [file dirname [info script]] helper.tcl]
+
+set P ::tclpdf::markdown::parse
+
+test markdown-1.1 {plain text is one run without options} -body {
+  $P "nur Text"
+} -result {{nur Text} {}}
+
+test markdown-1.2 {** is strong, * is em, ~~ is struck; text around them stays plain} -body {
+  $P {Der **Betrag** ist *bald* fällig, nicht ~~gestern~~.}
+} -result {{Der } {} Betrag {strong 1 style bold} { ist } {} bald {em 1 style italic} { fällig, nicht } {} gestern {strike 1} . {}}
+
+test markdown-1.3 {*** is em around strong, as in CommonMark} -body {
+  $P {***beides***}
+} -result {beides {em 1 strong 1 style {bold italic}}}
+
+test markdown-1.4 {runs nest in either order, and three asterisks close two runs at once} -body {
+  list [$P {**a *b* c**}] [$P {*a **b***}] [$P {**a *b***}]
+} -result {{{a } {strong 1 style bold} b {strong 1 em 1 style {bold italic}} { c} {strong 1 style bold}} {{a } {em 1 style italic} b {em 1 strong 1 style {bold italic}}} {{a } {strong 1 style bold} b {strong 1 em 1 style {bold italic}}}}
+
+test markdown-1.5 {three asterisks with one kind open close that one and read the rest again} -body {
+  list [$P {**a***b*}] [$P {*a***b**}]
+} -result {{a {strong 1 style bold} b {em 1 style italic}} {a {em 1 style italic} b {strong 1 style bold}}}
+
+test markdown-1.6 {a link carries its address, and runs inside the link text keep it} -body {
+  list [$P {Siehe [die Seite](https://fossil.sowaswie.de/tclpdf).}] [$P {[**AGB** hier](https://example.org)}]
+} -result {{{Siehe } {} {die Seite} {url https://fossil.sowaswie.de/tclpdf} . {}} {AGB {url https://example.org strong 1 style bold} { hier} {url https://example.org}}}
+
+# --- headings and paragraphs ----------------------------------------------------
+
+test markdown-2.1 {a heading ends at its line feed, which goes out as a pair of its own} -body {
+  $P "# Titel\nText danach"
+} -result {Titel {heading 1} {
+} {} {Text danach} {}}
+
+test markdown-2.2 {a heading at the end, or ending on the last line feed, adds no trailing one} -body {
+  list [$P "Text davor\n## Kopf"] [$P "### Kopf\n"]
+} -result {{{Text davor
+} {} Kopf {heading 2}} {Kopf {heading 3}}}
+
+test markdown-2.3 {a heading after a line feed in the middle of the text} -body {
+  $P "eins\n# Kopf\nzwei"
+} -result {{eins
+} {} Kopf {heading 1} {
+} {} zwei {}}
+
+test markdown-2.4 {a heading may carry runs inside it, and they keep the heading} -body {
+  $P {## Kapitel *zwei*}
+} -result {{Kapitel } {heading 2} zwei {heading 2 em 1 style italic}}
+
+test markdown-2.5 {a line feed in the text stays a paragraph break, as without markup} -body {
+  $P "eins\nzwei **drei**"
+} -result {{eins
+zwei } {} drei {strong 1 style bold}}
+
+test markdown-2.6 {a # not at a line start, or without its space, is text} -body {
+  $P "#1 in a # b\n#nicht"
+} -result {{#1 in a # b
+#nicht} {}}
+
+# --- what is text ---------------------------------------------------------------
+
+test markdown-3.1 {a delimiter in front of a space, a line end or the end is text} -body {
+  $P "5 * 3 = 15, a ** b, x ~~ y, \[ z \], and *\nand **"
+} -result {{5 * 3 = 15, a ** b, x ~~ y, [ z ], and *
+and **} {}}
+
+test markdown-3.2 {an underscore is always text - no underline and no emphasis in Markdown} -body {
+  $P {file_name.tcl, _not em_, __not strong__}
+} -result {{file_name.tcl, _not em_, __not strong__} {}}
+
+test markdown-3.3 {a single ~, three ~ and four or more * are text} -body {
+  $P {~1 %, ~~~ fence, ****x****}
+} -result {{~1 %, ~~~ fence, ****x****} {}}
+
+test markdown-3.4 {the rest of Markdown - lists, quotes, code, tags, autolinks, images - is text, not a refusal} -body {
+  $P [string cat "- item\n> quote\n" {`code` <b>tag</b> https://example.org ![image](pic.png) ![alt]}]
+} -result {{- item
+> quote
+`code` <b>tag</b> https://example.org ![image](pic.png) ![alt]} {}}
+
+test markdown-3.5 {a backslash makes * ~ [ ] # and itself text, and is text in front of anything else} -body {
+  $P [string cat {\*no\* \~\~x\~\~ \[a\](b) \\ \q} \n {\# kein Kopf}]
+} -result {{*no* ~~x~~ [a](b) \ \q
+# kein Kopf} {}}
+
+test markdown-3.6 {a [ inside a link text and a ] outside a link are text} -body {
+  $P {[a [b](x) c] d}
+} -result {{a [b} {url x} { c] d} {}}
+
+# --- refusals -------------------------------------------------------------------
+
+test markdown-4.1 {a closer that is not the innermost open run is NESTING, with delimiter and position} -body {
+  list [::tclpdfTest::refusal {$P {**a *b** c*}}] [::tclpdfTest::refusal {$P {*a ~~b* c~~}}]
+} -result {{TCLPDF TEXT MARKDOWN NESTING ** 6} {TCLPDF TEXT MARKDOWN NESTING * 6}}
+
+test markdown-4.2 {a run still open at the end is OPEN, with the delimiter and where it opened} -body {
+  list [::tclpdfTest::refusal {$P {nur **offen}}] [::tclpdfTest::refusal {$P {a ~~b}}] \
+      [::tclpdfTest::refusal {$P {**a *b}}]
+} -result {{TCLPDF TEXT MARKDOWN OPEN ** 4} {TCLPDF TEXT MARKDOWN OPEN ~~ 2} {TCLPDF TEXT MARKDOWN OPEN * 4}}
+
+test markdown-4.3 {a link needs a non-empty address without space} -body {
+  lmap text {{[x]} {[x] (y)} {[x]()} {[x](a b)} {vor [x](y} {[offen}} {
+    ::tclpdfTest::refusal {$P $text}
+  }
+} -result {{TCLPDF TEXT MARKDOWN LINK 0} {TCLPDF TEXT MARKDOWN LINK 0} {TCLPDF TEXT MARKDOWN LINK 0} {TCLPDF TEXT MARKDOWN LINK 0} {TCLPDF TEXT MARKDOWN LINK 4} {TCLPDF TEXT MARKDOWN LINK 0}}
+
+test markdown-4.4 {a run open across the ] of a link, or across the end of a heading, is NESTING} -body {
+  list [::tclpdfTest::refusal {$P {[a **b](x) c**}}] [::tclpdfTest::refusal {$P "# a *b\nc*"}]
+} -result {{TCLPDF TEXT MARKDOWN NESTING \]( 6} {TCLPDF TEXT MARKDOWN NESTING * 6}}
+
+test markdown-4.5 {a heading inside an open run is NESTING, four or more # are HEADING} -body {
+  list [::tclpdfTest::refusal {$P "*a\n# b*"}] [::tclpdfTest::refusal {$P "eins\n#### vier"}] \
+      [::tclpdfTest::refusal {$P "###### sechs"}]
+} -result {{TCLPDF TEXT MARKDOWN NESTING # 3} {TCLPDF TEXT MARKDOWN HEADING 5} {TCLPDF TEXT MARKDOWN HEADING 0}}
+
+test markdown-4.6 {a refusal names the position and the escape in its message} -body {
+  catch {$P {abc [x]}} msg
+  list [regexp {position 4} $msg] [regexp {\\\[} $msg]
+} -result {1 1}
+
+# --- one vocabulary: the tags and Markdown give the same pairs ------------------
+
+test markdown-5.1 {the same paragraph written as tags and as Markdown gives the identical list} -body {
+  set tagged "<h1>Runs</h1>The <strong>amount</strong> is due by <em>31 October</em>;\
+      <em><strong>both</strong></em> and <s>980.00 EUR</s>, see <a href=\"https://example.org/x\">the\
+      <strong>terms</strong></a>.\nA second paragraph.\n<h2>More</h2>End."
+  set markdown "# Runs\nThe **amount** is due by *31 October*; ***both*** and ~~980.00 EUR~~,\
+      see \[the **terms**\](https://example.org/x).\nA second paragraph.\n## More\nEnd."
+  set a [::tclpdf::markup::parse $tagged]
+  set b [$P $markdown]
+  list [string equal $a $b] [llength $a]
+} -result {1 34}
+
+test markdown-5.2 {-markup markdown sets the same bytes as -markup tags, and breaks the same lines} -body {
+  set tagged "<h2>Terms</h2>The <strong>amount of 1,234.56 EUR</strong> is payable by\
+      <em>31 October</em>; after that the price of <s>980.00 EUR</s> no longer applies. See\
+      <a href=\"https://fossil.sowaswie.de/tclpdf\">the site</a> for the <em><strong>complete</strong></em> terms."
+  set markdown "## Terms\nThe **amount of 1,234.56 EUR** is payable by *31 October*; after that\
+      the price of ~~980.00 EUR~~ no longer applies. See \[the site\](https://fossil.sowaswie.de/tclpdf)\
+      for the ***complete*** terms."
+  set streams {}
+  set lines {}
+  foreach {notation string} [list tags $tagged markdown $markdown] {
+    set doc [::tclpdfTest::runDoc]
+    lappend lines [$doc textLines $string -width 60 -align justify -markup $notation]
+    $doc text $string -at {20 30} -width 60 -align justify -markup $notation
+    lappend streams [::tclpdfTest::content $doc]
+    $doc destroy
+  }
+  list [string equal {*}$streams] [string equal {*}$lines] [llength [lindex $lines 0]] \
+      [expr {[string length [lindex $streams 0]] > 200}]
+} -result {1 1 6 1}
+
+test markdown-5.3 {-markup names tags or markdown, excludes -runs, and needs -width in [text]} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach script {
+    {$doc textLines "x" -width 60 -markup md}
+    {$doc textLines "x" -width 60 -markup markdown -runs 1}
+    {$doc text "x" -at {20 30} -markup markdown}
+    {$doc text "**x" -at {20 30} -width 60 -markup markdown}
+  } {
+    catch $script msg opts
+    lappend codes [lrange [dict get $opts -errorcode] 2 3]
+  }
+  catch {$doc textLines "x" -width 60 -markup md} msg
+  $doc destroy
+  list $codes $msg
+} -result {{{MARKUP KIND} {MARKUP RUNS} {RUNS WIDTH} {MARKDOWN OPEN}} {tclpdf: -markup takes "tags" or "markdown", not "md"}}
+
+test markdown-5.4 {a document that asks for tags never loads the Markdown translator} -body {
+  ::tclpdfTest::freshInterp {
+    package require tclpdf
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc text {<b>fett</b>} -at {20 30} -width 60 -markup tags
+    set before [catch {package present tclpdf::markdown}]
+    $doc text {**fett**} -at {20 40} -width 60 -markup markdown
+    set after [catch {package present tclpdf::markdown}]
+    $doc destroy
+    puts [list $before $after]
+  }
+} -result {1 0}
+
+cleanupTests

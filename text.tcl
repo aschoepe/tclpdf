@@ -413,8 +413,8 @@ oo::define ::tclpdf::document::document {
       my TextBlockRunsFlag $options text
       if {[dict get $options width] eq {}} {
         return -code error -errorcode [list TCLPDF TEXT RUNS WIDTH] \
-            "tclpdf: -runs 1 and -markup tags set a paragraph, and a\
-            paragraph needs -width"
+            "tclpdf: -runs 1 and -markup set a paragraph, and a paragraph\
+            needs -width"
       }
       lassign [my TextBlockIntake $string $options text] string options
       set whole $string
@@ -3265,4 +3265,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.23
+package provide tclpdf::text 1.24

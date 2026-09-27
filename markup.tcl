@@ -17,6 +17,9 @@
 # explicit, so a nesting fault is a refusal with a position rather than a
 # guess. And the names are the structure vocabulary of ISO 32000-2, 14.8.4 -
 # a tagged document gets its H1, Strong, Em and Link from the spelling.
+# Markdown is read as well, since the same day, as the SECOND notation
+# (markdown.tcl): a strict subset that ends in the same pairs through [emit]
+# below.
 #
 # WHAT THIS MODULE IS: a translator from one string into the list of {text
 # options} pairs that textRun.tcl takes, and nothing else. It knows no
@@ -134,7 +137,7 @@ proc ::tclpdf::markup::parse {text} {
             not the innermost open one - $expected is"
       }
       # The text inside goes out with the options in force up to here.
-      lassign [Emit $pairs $buffer $stack] pairs buffer
+      lassign [emit $pairs $buffer $stack] pairs buffer
       set stack [lrange $stack 0 end-1]
       if {$block} {
         # A paragraph ends here. The line feed that ends it is text of the
@@ -151,7 +154,7 @@ proc ::tclpdf::markup::parse {text} {
     }
     # An opening tag. Text in front of it goes out first, with what was in
     # force in front of it.
-    lassign [Emit $pairs $buffer $stack] pairs buffer
+    lassign [emit $pairs $buffer $stack] pairs buffer
     if {$block} {
       if {[llength $stack]} {
         return -code error -errorcode [list TCLPDF TEXT MARKUP NESTING $name $position] \
@@ -184,13 +187,18 @@ proc ::tclpdf::markup::parse {text} {
         "tclpdf: <[lindex $stack end 0]> is still open at the end of the\
         text - close it with </[lindex $stack end 0]>"
   }
-  lassign [Emit $pairs $buffer $stack] pairs buffer
+  lassign [emit $pairs $buffer $stack] pairs buffer
   return $pairs
 }
 
 # The buffered text as one pair carrying the options of the tags in force.
 # An empty buffer emits nothing; the buffer comes back empty.
-proc ::tclpdf::markup::Emit {pairs buffer stack} {
+#
+# Public because it is shared by the Markdown translator (markdown.tcl): its
+# stack carries the names of the vocabulary above, and this is the one place
+# that decides what a name does to a run - so the same paragraph written in
+# either notation comes out as the identical list of pairs.
+proc ::tclpdf::markup::emit {pairs buffer stack} {
   variable tags
   if {$buffer eq {}} {
     return [list $pairs {}]
@@ -219,4 +227,4 @@ proc ::tclpdf::markup::Emit {pairs buffer stack} {
   return [list $pairs {}]
 }
 
-package provide tclpdf::markup 1.0
+package provide tclpdf::markup 1.1

@@ -24,14 +24,8 @@ set runFace [file join $root examples assets fonts DejaVuSans.ttf]
 set runFaceBold [file join $root examples assets fonts DejaVuSans-Bold.ttf]
 testConstraint haveFaces [expr {[file exists $runFace] && [file exists $runFaceBold]}]
 
-# A document with one page and Helvetica at 10 pt - the block every test
-# below sets, so that a width means the same thing in each of them.
-proc ::tclpdfTest::runDoc {} {
-  set doc [tclpdf new -unit mm]
-  $doc page add
-  $doc font -family helvetica -size 10 -style {}
-  return $doc
-}
+# The document every test below sets its block in is ::tclpdfTest::runDoc,
+# in helper.tcl since markdown.test sets the same one.
 
 # The runs the tests set: a plain lead, a bold amount, a plain tail.
 set ::runsSample [list "Der Betrag von " {} "1.234,56 EUR" {style bold} \
