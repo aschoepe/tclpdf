@@ -313,7 +313,11 @@ proc ::tclpdfTest::freshInterp {script} {
   set here [file normalize [file dirname [file dirname [info script]]]]
   set path [::tclpdfTest::scratch freshInterp-[pid].tcl]
   set channel [open $path w]
-  puts $channel [list lappend auto_path $here]
+  # In FRONT of the path, as all.tcl and every example put the tree: for an
+  # equal version Tcl runs the ifneeded script registered last and reads
+  # auto_path from the back, so an appended tree lost to an installed copy
+  # (measured 2026-09-27, see all.tcl).
+  puts $channel "set auto_path \[linsert \$auto_path 0 [list $here]\]"
   puts $channel $script
   close $channel
   try {

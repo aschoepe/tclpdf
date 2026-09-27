@@ -68,7 +68,7 @@ namespace eval ::tclpdf::textBlock {
       height {} paginate 0 columns 1 gutter {} balance 0
       indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
       avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0
-      hyphens 0 emergencyHyphen 0}
+      hyphens 0 emergencyHyphen 0 runs 0 markup {}}
 
   # Where a line may break. Two classes, told apart by what happens to the
   # character when the line breaks there:
@@ -147,7 +147,18 @@ oo::define ::tclpdf::document::document {
   method textLines {string args} {
     my TextInit
     set options [my TextBlockOptions $args textLines]
+    lassign [my TextBlockIntake $string $options textLines] string options
     set lines [my TextBlockBroken $string $options]
+    # With runs every line comes back as the caller wrote the runs - a list
+    # of {text options} pairs - so that a line can be drawn with the faces it
+    # was broken with; a string could not carry that.
+    if {[llength [dict get $options runs]]} {
+      set map [dict get $options runs]
+      set lines [lmap line $lines {
+        list [my TextRunsLine [lindex $line 0] $map [lindex $line 2]] \
+            [lindex $line 1]
+      }]
+    }
     if {![dict get $options hyphens]} {
       return [lmap line $lines {lindex $line 0}]
     }
@@ -168,7 +179,9 @@ oo::define ::tclpdf::document::document {
   # answers dictionaries.
   method TextLinesBroken {string args} {
     my TextInit
-    return [my TextBlockBroken $string [my TextBlockOptions $args textLines]]
+    set options [my TextBlockOptions $args textLines]
+    lassign [my TextBlockIntake $string $options textLines] string options
+    return [my TextBlockBroken $string $options]
   }
 
   # The ONE road from a parsed option list to broken lines with their flag -
@@ -188,7 +201,7 @@ oo::define ::tclpdf::document::document {
     set needsLift [expr {[dict get $options avoid] ne {}}]
     lassign [my TextBlockLines $string $options $needsLift] lines
     return [lmap line $lines {
-      list [dict get $line text] [dict get $line hyphen]
+      list [dict get $line text] [dict get $line hyphen] [dict get $line from]
     }]
   }
 
@@ -204,6 +217,7 @@ oo::define ::tclpdf::document::document {
   method textHeight {string args} {
     my TextInit
     set options [my TextBlockOptions $args textHeight]
+    lassign [my TextBlockIntake $string $options textHeight] string options
     lassign [my TextBlockLines $string $options] lines state leading lift
     lassign [my TextBlockPlace $lines $leading \
         [dict get $options paragraphSpacing] {}] drawn rest below
@@ -253,9 +267,59 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -hyphens takes a boolean, not\
           \"[dict get $options hyphens]\""
     }
+    my TextBlockRunsFlag $options $context
     # A measurement has no limit: see the note on the option list above.
     dict set options height {}
     return $options
+  }
+
+  # -runs is a boolean at the call, and the map of the runs after the intake
+  # (TextRunsIntake): a list of entries, never a boolean. Checked as a word
+  # wherever the options are parsed, so that "-runs yes" is refused at the
+  # first of the three calls a caller may make with one option list.
+  method TextBlockRunsFlag {options context} {
+    set runs [dict get $options runs]
+    if {![string is boolean -strict $runs]} {
+      return -code error -errorcode [list TCLPDF TEXT RUNS FLAG $runs $context] \
+          "tclpdf: -runs takes a boolean, not \"$runs\""
+    }
+    # -markup names the notation the string is written in: "tags" is the
+    # one there is. A string is written EITHER as tags or as a list of
+    # runs, so the two options exclude each other.
+    set markup [dict get $options markup]
+    if {$markup ni {{} tags}} {
+      return -code error -errorcode [list TCLPDF TEXT MARKUP KIND $markup $context] \
+          "tclpdf: -markup takes \"tags\", not \"$markup\""
+    }
+    if {$markup ne {} && $runs} {
+      return -code error -errorcode [list TCLPDF TEXT MARKUP RUNS $context] \
+          "tclpdf: -markup tags reads the string as tagged text and -runs 1\
+          reads it as a list of runs - give one of the two"
+    }
+    return
+  }
+
+  # The one road from a caller's string - or, with -runs 1, a list of {text
+  # options} pairs - to the string the block road works on. Without runs
+  # the string passes through and "runs" becomes the empty map, so every
+  # later question "are there runs" is [llength] on it. The module that
+  # knows runs is loaded here and only here: a document that never asks for
+  # one never reads it.
+  method TextBlockIntake {string options context} {
+    if {[dict get $options markup] eq "tags"} {
+      # The tagged string becomes the list of runs a caller could have
+      # written by hand, and takes the same road from here on - one road,
+      # so that the two notations cannot come to set a block differently.
+      package require tclpdf::markup
+      set string [::tclpdf::markup::parse $string]
+      dict set options runs 1
+    }
+    if {[dict get $options runs]} {
+      package require tclpdf::textRun
+      return [my TextRunsIntake $string $options $context]
+    }
+    dict set options runs {}
+    return [list $string $options]
   }
 
   # Everything a drawn paragraph refuses, checked in ONE place and BEFORE
@@ -278,9 +342,7 @@ oo::define ::tclpdf::document::document {
     # same words, for a caller that reaches it directly - but a paragraph of
     # [text] has to be refused before its mark.
     if {[dict get $options align] ni {left right center centre justify}} {
-      return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
-          "tclpdf: -align must be left, right, center or\
-          justify, not \"[dict get $options align]\""
+      my TextAlignUnknown [dict get $options align]
     }
     set height [dict get $options height]
     if {$height ne {} && $height ne "max"
@@ -836,6 +898,11 @@ oo::define ::tclpdf::document::document {
   # goes on. Everything else passes through untouched.
   method TextBlockMeasure {text arguments string base} {
     try {
+      set runs [my state textRuns]
+      if {[llength $runs]} {
+        return [my TextRunsMeasure [my TextRunsSplit $text $runs $base] \
+            $runs $arguments]
+      }
       return [my textWidth $text {*}$arguments]
     } trap {TCLPDF FONT GLYPH} {message options} {
       set position [my TextBlockLocate $arguments $string $base]
@@ -898,8 +965,15 @@ oo::define ::tclpdf::document::document {
       if {[string first $char $::tclpdf::textBlock::separators] >= 0} {
         continue
       }
+      # With runs the character is asked of the face of ITS run - the block's
+      # face may well have the glyph the run's bold face lacks.
+      set own $arguments
+      if {[llength [my state textRuns]]} {
+        set own [my TextRunsArgumentsAt [my state textRuns] \
+            [string length [join [lrange $characters 0 $index-1] {}]] $arguments]
+      }
       try {
-        my textWidth $char {*}$arguments
+        my textWidth $char {*}$own
       } trap {TCLPDF FONT GLYPH} {} {
         return $index
       }
@@ -1041,7 +1115,7 @@ oo::define ::tclpdf::document::document {
   # top of the many the breaker makes anyway - linear, not quadratic: the
   # breaker's chunk measurements stay what they were, and every chunk it
   # measures is text this pass has already accepted.
-  method TextBlockPremeasure {string arguments} {
+  method TextBlockPremeasure {string arguments {offset 0}} {
     set skip "$::tclpdf::textBlock::separators$::tclpdf::textBlock::breakable"
     foreach span [regexp -all -inline -indices "\[^$skip\]+" $string] {
       lassign $span from to
@@ -1056,7 +1130,8 @@ oo::define ::tclpdf::document::document {
         # in front of a character beyond the BMP (see TextBlockLocate).
         my TextBlockRebase $message $options \
             [expr {[lindex [dict get $options -errorcode] 4]
-                + [llength [split [string range $string 0 $from-1] {}]]}]
+                + [llength [split [string range $string 0 $from-1] {}]]
+                + $offset}]
       }
     }
     return
@@ -1099,7 +1174,36 @@ oo::define ::tclpdf::document::document {
     # The whole string, measured once and first - a glyph refusal has to
     # name the position in the caller's string, not in a chunk of the
     # breaker's; see TextBlockPremeasure.
-    my TextBlockPremeasure $string $arguments
+    # The runs of this block, kept where the breaker's measurements and the
+    # drawing can reach them without every signature between here and there
+    # growing an argument: set on every block, so a block without runs
+    # leaves nothing behind for the next one to trip over.
+    set runs [expr {[dict exists $options runs] ? [dict get $options runs] : {}}]
+    # The option's own default is the boolean 0, and a road that never went
+    # through the intake - a caller of [TextBlockLines] from outside the
+    # three public calls - hands it on as it is. A boolean is not a map:
+    # measured 2026-09-27, [llength 0] is 1, and every table cell went
+    # looking for the runs module in a document that had never loaded it.
+    if {[string is boolean -strict $runs]} {
+      set runs {}
+    }
+    my state textRuns $runs
+    my state textRunsString $string
+    # A heading has a leading of its own - one per paragraph, read by
+    # [TextBlockPlace] beside the block's - and, where it opens the block,
+    # the lift of the first baseline is its ascent, not the block's.
+    my state textRunsLeadings [expr {[dict exists $options runsLeadings]
+        ? [dict get $options runsLeadings] : {}}]
+    my state textRunsHeadings [expr {[dict exists $options runsHeadings]
+        ? [dict get $options runsHeadings] : {}}]
+    if {[llength $runs]} {
+      foreach entry $runs {
+        lassign $entry from to style own
+        my TextBlockPremeasure [string range $string $from $to-1] $own $from
+      }
+    } else {
+      my TextBlockPremeasure $string $arguments
+    }
     set state [my TextMerge $arguments]
     set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
         [my cget -unit]]
@@ -1110,7 +1214,11 @@ oo::define ::tclpdf::document::document {
     # paragraph drew all of its lines on top of one another - measured, and
     # unreadable. As a lift the advance goes through the text matrix and turns
     # with the text, which is what makes the lines run across the page.
-    set lift [expr {$lift ? [my TextLift $state [dict get $options anchor]] : 0}]
+    set liftState $state
+    if {[dict exists $options runsFirst] && [dict get $options runsFirst] ne {}} {
+      set liftState [my TextMerge [dict get $options runsFirst]]
+    }
+    set lift [expr {$lift ? [my TextLift $liftState [dict get $options anchor]] : 0}]
 
     # The band this paragraph is set in - built by TextBlockBand, which the
     # no-room answer of TextBlockNoRoom asks as well.
@@ -1206,9 +1314,34 @@ oo::define ::tclpdf::document::document {
       # that the pre-measurement does not are the breakable spaces; the
       # place they hold in the caller's string is looked up like the
       # breaker's (TextBlockMeasure).
-      set width [my TextBlockMeasure $char $arguments $string 0]
-      if {$width > $widest} {
-        set widest $width
+      set runs [my state textRuns]
+      if {![llength $runs]} {
+        set width [my TextBlockMeasure $char $arguments $string 0]
+        if {$width > $widest} {
+          set widest $width
+        }
+        continue
+      }
+      # With runs, a single character asked of every face the block sets:
+      # the widest of them is what a line has to offer at least. Asked of
+      # [textWidth] directly - the breaker's measurement would lay the
+      # character over the runs at position 0, where it does not stand -
+      # and a refusal is rebased the way the breaker rebases it, to the
+      # place the character holds in the caller's string.
+      set faces [list $arguments]
+      foreach entry $runs {
+        lappend faces [lindex $entry 3]
+      }
+      foreach own $faces {
+        try {
+          set width [my textWidth $char {*}$own]
+        } trap {TCLPDF FONT GLYPH} {message options} {
+          my TextBlockRebase $message $options \
+              [my TextBlockLocate $arguments $string 0]
+        }
+        if {$width > $widest} {
+          set widest $width
+        }
       }
     }
     return $widest
@@ -1232,6 +1365,16 @@ oo::define ::tclpdf::document::document {
     set spacings 0
     set below 0
     set previous {}
+    # A block with headings has a leading per paragraph (textRun.tcl), and
+    # its lines are placed one under the other by each line's OWN leading:
+    # the distance from the previous baseline down to this one is what this
+    # line needs, so a heading takes its larger leading ABOVE itself, where
+    # its ascender is, and the body line under it steps by the body's. The
+    # old sum is kept where there are no headings - it is what every
+    # existing document was placed by, and it is the one a band that skips
+    # lines (-avoid) relies on, which a block with headings refuses.
+    set leadings [my state textRunsLeadings]
+    set previousTop 0
     # OVER THE INDICES, so that the tail can be taken in one go when the
     # limit is reached: the loop used to walk to the end of the list and
     # append every line after the cut to the rest one at a time, which turns
@@ -1241,7 +1384,15 @@ oo::define ::tclpdf::document::document {
       set line [lindex $lines $index]
       set paragraph [dict get $line paragraph]
       set advance [expr {$previous ne {} && $paragraph != $previous ? $spacing : 0}]
-      set top [expr {[dict get $line running] * $leading + $spacings + $advance}]
+      set own $leading
+      if {[dict size $leadings]} {
+        if {[dict exists $leadings $paragraph]} {
+          set own [dict get $leadings $paragraph]
+        }
+        set top [expr {($index == 0 ? 0 : $previousTop + $own) + $advance}]
+      } else {
+        set top [expr {[dict get $line running] * $leading + $spacings + $advance}]
+      }
       # Once one line has been held back, everything after it goes with it -
       # otherwise a short line would jump ahead of a long one.
       # A HAIR OF TOLERANCE ON THE COMPARISON, and it is not cosmetic. Both
@@ -1256,14 +1407,39 @@ oo::define ::tclpdf::document::document {
       # there to be had. The tolerance is a millionth of a line: far below
       # anything a page can show, far above any rounding a column of lines
       # can accumulate.
-      if {$limit ne {} && $top + $leading > $limit + $leading * 1e-6} {
+      if {$limit ne {} && $top + $own > $limit + $own * 1e-6} {
         set rest [lrange $lines $index end]
         break
       }
       set spacings [expr {$spacings + $advance}]
       lappend drawn [list $line $top]
-      set below [expr {$top + $leading}]
+      set below [expr {$top + $own}]
+      set previousTop $top
       set previous $paragraph
+    }
+    # A HEADING NEVER CLOSES A PAGE OR A COLUMN: what it heads stands under
+    # it, and a heading with its text on the next page is the one break
+    # every typographer's rule book forbids. Where the limit cut right after
+    # a heading, the heading goes with the rest - every trailing line that
+    # belongs to a heading paragraph, so a two-line heading moves whole.
+    set headings [my state textRunsHeadings]
+    if {[dict size $headings] && [llength $rest]} {
+      while {[llength $drawn]} {
+        set lastLine [lindex [lindex $drawn end] 0]
+        if {![dict exists $headings [dict get $lastLine paragraph]]} {
+          break
+        }
+        set rest [linsert $rest 0 $lastLine]
+        set drawn [lrange $drawn 0 end-1]
+      }
+      if {[llength $drawn]} {
+        lassign [lindex $drawn end] lastLine lastTop
+        set p [dict get $lastLine paragraph]
+        set below [expr {$lastTop + ([dict exists $leadings $p]
+            ? [dict get $leadings $p] : $leading)}]
+      } else {
+        set below 0
+      }
     }
     return [list $drawn $rest $below]
   }
@@ -1468,6 +1644,12 @@ oo::define ::tclpdf::document::document {
         if {[llength $mark]} {
           my content [my StructureEnd $mark]
         }
+        # The strokes and links the runs of this page recorded go onto THIS
+        # page, before it is turned - see TextRunsFlush; nothing of a failed
+        # page.
+        if {[llength [my state textRuns]]} {
+          my TextRunsFlush $failed
+        }
         if {$failed} {
           return -options $info $result
         }
@@ -1517,8 +1699,7 @@ oo::define ::tclpdf::document::document {
   # says no to draws nothing whatever the shapes.)
   method TextPaginateNoRoom {options y} {
     set state [my TextMerge [my TextOverrides $options]]
-    set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
-        [my cget -unit]]
+    set leading [my TextBlockFirstLeading $options $state]
     set lift [my TextLift $state [dict get $options anchor]]
     set limit [expr {max(0, [lindex [my page typeArea] 3] - $y - $lift)}]
     return [expr {$leading > $limit}]
@@ -1576,8 +1757,7 @@ oo::define ::tclpdf::document::document {
       return 0
     }
     set state [my TextMerge [my TextOverrides $options]]
-    set leading [::tclpdf::geometry fromPoints [dict get $state leading] \
-        [my cget -unit]]
+    set leading [my TextBlockFirstLeading $options $state]
     set lift [my TextLift $state [dict get $options anchor]]
     set y [lindex [dict get $options at] 1]
     if {$height eq "max"} {
@@ -1614,6 +1794,19 @@ oo::define ::tclpdf::document::document {
         [dict get $options paragraphSpacing] 0 [my TextBlockBand $options]]
     lassign [my TextBlockAsk $band 0 0 0] width offset running
     return [expr {($running + 1) * $leading > $limit}]
+  }
+
+  # The leading of the block's FIRST line: the heading's where paragraph 0
+  # is one (textRun.tcl), the block's otherwise. What the two no-room
+  # questions above ask about, because the first line is the one that has
+  # to fit.
+  method TextBlockFirstLeading {options state} {
+    if {[dict exists $options runsLeadings]
+        && [dict exists [dict get $options runsLeadings] 0]} {
+      return [dict get [dict get $options runsLeadings] 0]
+    }
+    return [::tclpdf::geometry fromPoints [dict get $state leading] \
+        [my cget -unit]]
   }
 
   # The height that spreads a text evenly over n columns starting at y on
@@ -1743,15 +1936,42 @@ oo::define ::tclpdf::document::document {
     # held back, is followed by that rest, on the next page of a paginated
     # run or in the caller's next call.
     set last [lindex $lines end]
+    # A tagged block with headings is several structure elements, one per
+    # paragraph - H1 to H3 for the headings, the block's tag for the rest -
+    # and each is opened where its first line is drawn and closed after its
+    # last; [text] opens no mark round such a block. An artifact block stays
+    # one artifact whatever it holds.
+    set headings [my state textRunsHeadings]
+    set perParagraph [expr {[dict size $headings] && [my state tagged] eq "1"}]
+    set tag [dict get $options tag]
+    set mark {}
+    set marked -1
+    set ascent [my TextLift $state top]
     foreach entry $drawn {
       lassign $entry line top
+      set paragraph [dict get $line paragraph]
+      if {$perParagraph && $paragraph != $marked} {
+        if {[llength $mark]} {
+          my content [my StructureEnd $mark]
+        }
+        set own $tag
+        if {[dict exists $headings $paragraph] && [lindex $tag 0] ne "Artifact"} {
+          set own H[dict get $headings $paragraph]
+        }
+        set mark [my StructureMark $own Layout [expr {$y + $lift + $top - $ascent}]]
+        my content [my StructureBegin $mark]
+        set marked $paragraph
+      }
       if {[dict get $line text] ne {}} {
         my TextParagraphLine [dict get $line text] $state \
             [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
             $align [dict get $line closes] [dict get $options rotate] \
             [expr {$lift + $top}] [dict get $line hyphen] \
-            [expr {$line ne $last}] [dict get $line split]
+            [expr {$line ne $last}] [dict get $line split] [dict get $line from]
       }
+    }
+    if {[llength $mark]} {
+      my content [my StructureEnd $mark]
     }
     # Text, not lines: the rest may have to be broken again for a column of
     # a different width, and handing back lines would silently fix the old
@@ -1803,7 +2023,15 @@ oo::define ::tclpdf::document::document {
   # to TextRun rather than applied to x - with -rotate the baseline is
   # turned, and a pre-shifted x would rotate about the wrong point (same
   # reasoning as in [text], text.tcl).
-  method TextParagraphLine {line state x y width align isLast rotate {lift 0} {hyphen 0} {followed 1} {split 0}} {
+  method TextParagraphLine {line state x y width align isLast rotate {lift 0} {hyphen 0} {followed 1} {split 0} {from {}}} {
+    # A block with runs draws its line as pieces, one glyph run per run of
+    # the text - textRun.tcl, which needs to know where in the string the
+    # line begins. Everything below is the one-run line it always was.
+    if {$from ne {} && [llength [my state textRuns]]} {
+      my TextRunsDraw $line $state $from $x $y $width $align $isLast $rotate \
+          $lift $hyphen $followed $split
+      return
+    }
     # The space the line breaker consumed has to reappear in the content
     # stream: a line ends where a word ended, and without it the next line
     # follows immediately - "der Antrieb ist" plus "getauscht" comes back out
@@ -1925,9 +2153,7 @@ oo::define ::tclpdf::document::document {
             [my TextLineLead $line $drawn $stretched] $lift $hyphen
       }
       default {
-        return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
-            "tclpdf: -align must be left, right, center or\
-            justify, not \"$align\""
+        my TextAlignUnknown $align
       }
     }
     return
@@ -1954,11 +2180,7 @@ oo::define ::tclpdf::document::document {
   }
 
   method TextLineWidth {line state} {
-    set arguments {}
-    foreach name $::tclpdf::text::lineOptions {
-      lappend arguments -$name [dict get $state $name]
-    }
-    return [my textWidth $line {*}$arguments]
+    return [my textWidth $line {*}[my TextStateArguments $state]]
   }
 
   # The font options out of a parsed option dictionary, as a -name value list

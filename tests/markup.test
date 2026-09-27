@@ -1,0 +1,117 @@
+# markup.test --
+#
+# The tag notation of a paragraph (markup.tcl): one string in, the list of
+# {text options} pairs out that [text -runs 1] sets. The parser knows no
+# document, so these tests need none - what they check is the vocabulary,
+# the one escape, the nesting rules and every refusal by name.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+package require tclpdf
+package require tclpdf::markup
+
+set P ::tclpdf::markup::parse
+
+test markup-1.1 {plain text is one run without options} -body {
+  $P "nur Text"
+} -result {{nur Text} {}}
+
+test markup-1.2 {b, i, u and s set their run; text around them stays plain} -body {
+  $P {Der <b>Betrag</b> ist <i>bald</i> <u>fällig</u>, nicht <s>gestern</s>.}
+} -result {{Der } {} Betrag {style bold} { ist } {} bald {style italic} { } {} fällig {underline 1} {, nicht } {} gestern {strike 1} . {}}
+
+test markup-1.3 {strong and em set bold and italic and travel as themselves} -body {
+  $P {<strong>stark</strong> und <em>betont</em>}
+} -result {stark {strong 1 style bold} { und } {} betont {em 1 style italic}}
+
+test markup-1.4 {nested tags add up, in either order, and a tag repeated inside itself is harmless} -body {
+  list [$P {<b><i>beides</i></b>}] [$P {<i><b>beides</b></i>}] [$P {<b>a<b>b</b>c</b>}]
+} -result {{beides {style {bold italic}}} {beides {style {bold italic}}} {a {style bold} b {style bold} c {style bold}}}
+
+test markup-1.5 {a link carries its address, with double quotes and nothing else} -body {
+  $P {Siehe <a href="https://fossil.sowaswie.de/tclpdf">die Seite</a>.}
+} -result {{Siehe } {} {die Seite} {url https://fossil.sowaswie.de/tclpdf} . {}}
+
+test markup-1.6 {the case of a tag does not matter} -body {
+  $P {<B>x</B><Em>y</EM>}
+} -result {x {style bold} y {em 1 style italic}}
+
+# --- paragraphs and headings ------------------------------------------------
+
+test markup-2.1 {a heading is a paragraph: a line feed stands between it and what follows} -body {
+  $P {<h1>Titel</h1>Text danach}
+} -result {Titel {heading 1} {
+} {} {Text danach} {}}
+
+test markup-2.2 {a heading at the end adds no trailing line feed} -body {
+  $P {Text davor <h2>Kopf</h2>}
+} -result {{Text davor } {} {
+} {} Kopf {heading 2}}
+
+test markup-2.3 {two p elements are two paragraphs, and text between them is one of its own} -body {
+  $P {<p>Erster</p>dazwischen<p>Zweiter <em>betont</em></p>}
+} -result {Erster {} {
+} {} dazwischen {} {
+} {} {Zweiter } {} betont {em 1 style italic}}
+
+test markup-2.4 {a heading may carry runs inside it, and they keep the heading} -body {
+  $P {<h2>Kapitel <i>zwei</i></h2>}
+} -result {{Kapitel } {heading 2} zwei {heading 2 style italic}}
+
+test markup-2.5 {a line feed in the text stays a paragraph break, as without markup} -body {
+  $P "eins\nzwei <b>drei</b>"
+} -result {{eins
+zwei } {} drei {style bold}}
+
+test markup-2.6 {a heading after a line feed adds no second one} -body {
+  $P "eins\n<h1>Kopf</h1>zwei"
+} -result {{eins
+} {} Kopf {heading 1} {
+} {} zwei {}}
+
+# --- what is text, and the one escape -----------------------------------------
+
+test markup-3.1 {a < in front of a space, a digit, = or the end is text} -body {
+  $P {a < b, 5 <3, x <= y, und <}
+} -result {{a < b, 5 <3, x <= y, und <} {}}
+
+test markup-3.2 {&lt; &gt; and &amp; are the escapes; any other & is text} -body {
+  $P {&lt;b&gt; ist kein Tag, Tom &amp; Jerry, R&D, &copy;}
+} -result {{<b> ist kein Tag, Tom & Jerry, R&D, &copy;} {}}
+
+# --- refusals -----------------------------------------------------------------
+
+test markup-4.1 {an unknown tag, a misnested close, an open tag, a paragraph inside a run} -body {
+  set codes {}
+  foreach text {{<bold>x</bold>} {<b>x</i>} {<b>offen} {<b><p>x</p></b>} {<i>y<h1>z</h1></i>} {</b>}} {
+    catch {$P $text} msg opts
+    lappend codes [lrange [dict get $opts -errorcode] 2 3]
+  }
+  set codes
+} -result {{MARKUP UNKNOWN} {MARKUP NESTING} {MARKUP OPEN} {MARKUP NESTING} {MARKUP NESTING} {MARKUP NESTING}}
+
+test markup-4.2 {a refusal names the position} -body {
+  catch {$P {abc <bold>x</bold>}} msg opts
+  list [lindex [dict get $opts -errorcode] 5] [regexp {position 4} $msg]
+} -result {4 1}
+
+test markup-4.3 {an attribute on any tag but a, and an a without href, are refused} -body {
+  set codes {}
+  foreach text {{<b class="x">y</b>} {<a>x</a>} {<a href=x>y</a>} {<a href="">y</a>}} {
+    catch {$P $text} msg opts
+    lappend codes [lindex [dict get $opts -errorcode] 3]
+  }
+  set codes
+} -result {ATTRIBUTE HREF HREF HREF}
+
+test markup-4.4 {a < in front of a letter that opens no tag is refused, with the escape named} -body {
+  catch {$P {x <y}} msg opts
+  list [lindex [dict get $opts -errorcode] 3] [regexp {&lt;} $msg]
+} -result {UNKNOWN 1}
+
+cleanupTests

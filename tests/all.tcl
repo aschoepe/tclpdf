@@ -34,7 +34,19 @@ if {![file exists [file join $libdir pkgIndex.tcl]]} {
     puts stderr "tclpdf: pkgIndex.tcl is missing - run ./configure first"
     exit 1
 }
-lappend auto_path $libdir
+# THE TREE WINS, whatever is installed on the machine. Two rules of Tcl's
+# package mechanism decide that, both measured on 2026-09-27: for an EQUAL
+# version the ifneeded script registered LAST is the one that runs, and
+# [package unknown] walks auto_path from its END to its FRONT when it sources
+# the pkgIndex files - so the first directory of auto_path has the last word.
+# Appended with lappend, the tree was sourced first and an installed copy of
+# the same version overrode it: the suite passed against /opt/tcl/8.6/lib
+# while the tree had changed. So the tree goes to the FRONT, and its index
+# is sourced here once more, explicitly and last, so that no later scan can
+# take the registration away again. A test in the project directory tests
+# the project directory.
+set auto_path [linsert $auto_path 0 $libdir]
+apply {{dir} {source [file join $dir pkgIndex.tcl]}} $libdir
 package require tclpdf
 
 # Every module is required here, not only in the test file that exercises it:
@@ -73,6 +85,8 @@ foreach tclpdfPkg {
     tclpdf::afm
     tclpdf::text
     tclpdf::textBlock
+    tclpdf::textRun
+    tclpdf::markup
     tclpdf::textAvoid
     tclpdf::textPath
     tclpdf::leader

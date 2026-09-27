@@ -244,6 +244,13 @@ oo::define ::tclpdf::document::document {
     # held in a local variable is visible inside the script. "uplevel #0"
     # would see the global namespace only, and [form create] pays for that
     # to this day.
+    # "font family" registers the faces of one embedded family under one
+    # name, so that -style reaches an embedded face the way it reaches a
+    # standard one. Font state, not embedding: it lives here beside the
+    # resolver it feeds and loads no module.
+    if {[lindex $args 0] eq "family"} {
+      return [my FontFamily {*}[lrange $args 1 end]]
+    }
     if {[lindex $args 0] in {define glyph}} {
       package require tclpdf::type3
       switch -- [lindex $args 0] {
@@ -362,7 +369,7 @@ oo::define ::tclpdf::document::document {
         height {} paginate 0 columns 1 gutter {} balance 0
         indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
         avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0
-        fit {} shrinkLimit 85 emergencyHyphen 0}
+        fit {} shrinkLimit 85 emergencyHyphen 0 runs 0 markup {}}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -389,6 +396,30 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF TEXT ARGUMENT breakHyphen] \
           "tclpdf: -breakHyphen takes a boolean, not\
           \"[dict get $options breakHyphen]\""
+    }
+    # -runs 1: the string is a list of {text options} pairs, and from here on
+    # the block road works on the one string they join into, with the map of
+    # the runs beside it (textRun.tcl). Taken in before anything reads the
+    # string as text - the hyphen check below is the first that does. Refused
+    # without -width there: a run is a thing of a paragraph.
+    if {![string is boolean -strict [dict get $options runs]]} {
+      return -code error -errorcode [list TCLPDF TEXT RUNS FLAG \
+          [dict get $options runs] text] \
+          "tclpdf: -runs takes a boolean, not \"[dict get $options runs]\""
+    }
+    set whole {}
+    if {[dict get $options runs] || [dict get $options markup] ne {}} {
+      package require tclpdf::textBlock
+      my TextBlockRunsFlag $options text
+      if {[dict get $options width] eq {}} {
+        return -code error -errorcode [list TCLPDF TEXT RUNS WIDTH] \
+            "tclpdf: -runs 1 and -markup tags set a paragraph, and a\
+            paragraph needs -width"
+      }
+      lassign [my TextBlockIntake $string $options text] string options
+      set whole $string
+    } else {
+      dict set options runs {}
     }
     # Checked here, before the mark below is opened - a wrong value used to
     # act as baseline in silence, so -anchor middle drew a baseline block and
@@ -506,11 +537,7 @@ oo::define ::tclpdf::document::document {
       # and -align right put the start of the line 18.9 pt to the LEFT of the
       # sheet. Same list as [LeaderFont] builds, and the same reason: whatever
       # a line takes with it, it takes all of it.
-      set fontArgs {}
-      foreach name $::tclpdf::text::lineOptions {
-        lappend fontArgs -$name [dict get $state $name]
-      }
-      set lineWidth [my textWidth $string {*}$fontArgs]
+      set lineWidth [my textWidth $string {*}[my TextStateArguments $state]]
       switch -- [my TextAlign [dict get $options align] $state] {
         left {set shift 0}
         right {set shift $lineWidth}
@@ -521,9 +548,7 @@ oo::define ::tclpdf::document::document {
               "tclpdf: -align justify needs -width"
         }
         default {
-          return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
-              "tclpdf: -align must be left, right, center or\
-              justify, not \"[dict get $options align]\""
+          my TextAlignUnknown [dict get $options align]
         }
       }
       # THE TWO OFFSETS SWAP AXES WITH THE WRITING DIRECTION, and this is the
@@ -573,6 +598,10 @@ oo::define ::tclpdf::document::document {
     # exit, its answer to no room is the next page.
     if {$width ne {} && ![dict get $options paginate]
         && [dict get $options columns] == 1 && [my TextBlockNoRoom $options]} {
+      if {$whole ne {}} {
+        return [dict create y [lindex $at 1] \
+            rest [my TextRunsRest [dict get $options runs] $whole $string]]
+      }
       return [dict create y [lindex $at 1] rest $string]
     }
     set opened {}
@@ -589,6 +618,13 @@ oo::define ::tclpdf::document::document {
     # bracketed here.
     set perPage [expr {$width ne {} && ([dict get $options paginate]
         || [dict get $options columns] > 1)}]
+    # A block with headings marks per paragraph (TextParagraphDraw), for the
+    # same reason a paginated one marks per page: one mark round the block
+    # would make the heading part of the paragraph's element.
+    if {[dict exists $options runsHeadings]
+        && [dict size [dict get $options runsHeadings]]} {
+      set perPage 1
+    }
     set mark {}
     if {[my state tagged] eq "1" && !$perPage} {
       # The mark is told where the text BEGINS - its top edge, which is -at
@@ -635,13 +671,48 @@ oo::define ::tclpdf::document::document {
     foreach id [lreverse $opened] {
       my StructureClose $id
     }
+    # What the runs of the block recorded - underlines, strikeouts, links -
+    # goes onto the page now, outside the mark; nothing of a failed block.
+    if {$whole ne {}} {
+      my TextRunsFlush $failed
+    }
     if {$failed} {
       return -options $info $result
+    }
+    # A rest is a tail of the string the block was set from; with runs it
+    # goes back in the shape the runs came in, so that the caller can set it
+    # with the same faces (TextRunsRest).
+    if {$whole ne {} && [dict exists $result rest]} {
+      dict set result rest [my TextRunsRest [dict get $options runs] $whole \
+          [dict get $result rest]]
     }
     return $result
   }
 
   # -- internals ----------------------------------------------------------
+
+  # A merged state as the -name value list [textWidth] and [TextMerge] take
+  # - every line option, so that whatever a line is drawn with, it is
+  # measured with. THE one place this list is built: [text] for its own
+  # line, [TextLineWidth] for a block's, textRun.tcl for a piece's, and
+  # before it was one place each of them had a copy of the loop.
+  method TextStateArguments {state} {
+    set arguments {}
+    foreach name $::tclpdf::text::lineOptions {
+      lappend arguments -$name [dict get $state $name]
+    }
+    return $arguments
+  }
+
+  # The one refusal of a -align nobody knows, thrown from the four places a
+  # value can reach a switch: the single line, the block's check, a
+  # paragraph line and a line of runs. Four copies of the sentence were
+  # three too many.
+  method TextAlignUnknown {align} {
+    return -code error -errorcode [list TCLPDF TEXT ALIGN name] \
+        "tclpdf: -align must be left, right, center or\
+        justify, not \"$align\""
+  }
 
   # The alignment as the page sees it.
   #
@@ -668,14 +739,120 @@ oo::define ::tclpdf::document::document {
     return $align
   }
 
-  # The one place that knows there are two kinds of font. An embedded alias
-  # passes through unchanged - it has no family/style variants, it IS the
-  # face. Everything else goes to the standard-font table.
+  # The one place that knows there are three kinds of font. A registered
+  # family ([font family]) answers the alias its style names. An embedded
+  # alias passes through unchanged - it has no family/style variants, it IS
+  # the face. Everything else goes to the standard-font table.
   method TextResolve {family style} {
+    if {[dict exists [my state fontFamilies] $family]} {
+      return [my FontFamilyMember $family $style]
+    }
     if {[my TextEmbedded $family]} {
       return $family
     }
     return [::tclpdf::afm resolve $family $style]
+  }
+
+  # -- a family of embedded faces ------------------------------------------
+  #
+  # [font embed] gives one face one alias, and -style has never reached it:
+  # the alias IS the face, and "font -family body -style bold" set the regular
+  # face in silence, which is the defect the manual promises this package
+  # does not have. So a caller embedded "bodyBold" beside "body" and named
+  # the bold alias himself wherever a heading stood - every example does.
+  #
+  # [font family name -regular a -bold b -italic c -boldItalic d] ties the
+  # four together under one name: from then on -family name with -style
+  # bold sets b, exactly as -family helvetica -style bold sets
+  # Helvetica-Bold. The members are ALIASES of embedded faces and have to
+  # exist when the family is registered - a family that names a face nobody
+  # embedded would fail at the first heading, three calls later. -regular is
+  # required; the others may be left out, and a style that names a member
+  # the family does not have is refused by name rather than set in the
+  # regular face, because that silence is the very thing this exists to end.
+  #
+  # Font STATE rather than the embedding module: it is a lookup between a
+  # name and four aliases, and the resolver above is its only reader.
+
+  # The words of a style as the member they name: {} regular, bold, italic,
+  # or both - normalised the way [TextCheck] reads a style, so "Bold,
+  # oblique" and {italic bold} name the same member.
+  method FontFamilyKey {style} {
+    set bold 0
+    set italic 0
+    foreach word [split [string tolower [join $style " "]] " ,-"] {
+      switch -- $word {
+        bold {set bold 1}
+        italic - oblique {set italic 1}
+      }
+    }
+    if {$bold && $italic} {
+      return boldItalic
+    } elseif {$bold} {
+      return bold
+    } elseif {$italic} {
+      return italic
+    }
+    return regular
+  }
+
+  method FontFamily {name args} {
+    my TextInit
+    set families [my state fontFamilies]
+    if {![llength $args]} {
+      if {![dict exists $families $name]} {
+        return -code error -errorcode [list TCLPDF FONT FAMILY UNKNOWN $name] \
+            "tclpdf: no family \"$name\" is registered - \[font family\]\
+            registers one from the aliases of embedded faces"
+      }
+      return [dict get $families $name]
+    }
+    if {$name eq {}} {
+      return -code error -errorcode [list TCLPDF FONT FAMILY NAME {}] \
+          "tclpdf: a family needs a name"
+    }
+    # A name that already means a face - an embedded alias, or one of the
+    # standard families and their exact PostScript names - would resolve two
+    # ways from then on, and the resolver asks the families first; refused,
+    # so that "font family helvetica ..." cannot quietly replace Helvetica.
+    if {[my TextEmbedded $name] || ![catch {::tclpdf::afm resolve $name {}}]} {
+      return -code error -errorcode [list TCLPDF FONT FAMILY NAME $name] \
+          "tclpdf: \"$name\" already names a face - a family needs a name\
+          of its own, and its members are the aliases of the faces"
+    }
+    set members [::tclpdf::option parse \
+        {regular {} bold {} italic {} boldItalic {}} $args "font family"]
+    if {[dict get $members regular] eq {}} {
+      return -code error -errorcode [list TCLPDF FONT FAMILY REGULAR $name] \
+          "tclpdf: a family needs -regular, the face its plain text is set\
+          in - the other three may be left out"
+    }
+    foreach {member alias} $members {
+      if {$alias ne {} && ![my TextEmbedded $alias]} {
+        return -code error -errorcode [list TCLPDF FONT FAMILY MEMBER $name \
+            $member $alias] \
+            "tclpdf: -$member of family \"$name\" names \"$alias\", and no\
+            face is embedded under that alias - \[font embed\] it first"
+      }
+    }
+    dict set families $name $members
+    my state fontFamilies $families
+    return $members
+  }
+
+  # The alias a family sets a style in, or a refusal that names the member
+  # the family lacks - never the regular face in silence.
+  method FontFamilyMember {family style} {
+    set key [my FontFamilyKey $style]
+    set members [dict get [my state fontFamilies] $family]
+    set alias [dict get $members $key]
+    if {$alias eq {}} {
+      return -code error -errorcode [list TCLPDF FONT FAMILY STYLE $family $key] \
+          "tclpdf: family \"$family\" has no $key face - register one with\
+          \[font family $family ... -$key alias\], or set this text without\
+          the style"
+    }
+    return $alias
   }
 
   # Asked without loading the font module: a document that never embedded
@@ -2974,8 +3151,8 @@ oo::define ::tclpdf::document::document {
       # vertical metrics. Measured 2026-08-25 with a Type 1 in the chain:
       # the run came out diagonal, and an embedded Type 1 left an object
       # number reserved that nothing ever filled.
-      foreach family [list [dict get $state family] \
-          {*}[dict get $state fallback]] {
+      foreach family [list [my TextResolve [dict get $state family] \
+          [dict get $state style]] {*}[dict get $state fallback]] {
         if {[my TextEmbedded $family] && [my FontKind $family] ni {type1 type3}} {
           continue
         }
@@ -3009,14 +3186,20 @@ oo::define ::tclpdf::document::document {
     # nothing else. Same for an embedded Type 1 face, which is addressed
     # through the same encoding.
     if {[dict get $state direction] eq "rtl"} {
+      # The FACE the family resolves to is what has a kind: a registered
+      # family ([font family]) is a name over aliases. Resolved here rather
+      # than read from the state - the state's "resolved" is the document's,
+      # and a -family given per call has not reached it yet. The message
+      # keeps the family as the caller wrote it.
       set family [dict get $state family]
-      if {![my TextEmbedded $family] || [my FontKind $family] in {type1 type3}} {
+      set face [my TextResolve $family [dict get $state style]]
+      if {![my TextEmbedded $face] || [my FontKind $face] in {type1 type3}} {
         # Which encoding it is addressed through, named exactly: the standard
         # fourteen and an embedded Type 1 face go through WinAnsiEncoding, a
         # Type 3 font through the /Differences array it was drawn with, and a
         # caller who has to fix the call is helped by the right one.
-        set through [expr {[my TextEmbedded $family]
-            && [my FontKind $family] eq "type3"
+        set through [expr {[my TextEmbedded $face]
+            && [my FontKind $face] eq "type3"
             ? {its own /Differences encoding}
             : {WinAnsiEncoding}}]
         return -code error -errorcode [list TCLPDF TEXT DIRECTION rtl] \

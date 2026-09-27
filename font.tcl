@@ -1088,6 +1088,41 @@ oo::define ::tclpdf::document::document {
         / [dict get $parsed unitsPerEm]}]
   }
 
+  # Where an embedded face draws an underline or a strikeout, at a size, in
+  # points: {position thickness}, position counted from the baseline, up
+  # positive - or {} where the face states nothing, which is every Type 1
+  # and Type 3 face here (the AFM's UnderlinePosition is not read, and a
+  # Type 3 font has no such table) and a TrueType face whose post or OS/2
+  # table leaves the field at 0. The caller (textRun.tcl) then falls back
+  # to a fraction of the size. Asked here for the same reason [FontAscender]
+  # is: the two tables keep the number in font units, and whoever draws the
+  # line should not have to know which table.
+  method FontDecoration {alias size kind} {
+    set entry [dict get [my state fonts] $alias]
+    if {![dict exists $entry parsed]} {
+      return {}
+    }
+    set parsed [dict get $entry parsed]
+    switch -- $kind {
+      underline {
+        set stated [expr {[dict exists $parsed underline]
+            ? [dict get $parsed underline] : {}}]
+      }
+      strike {
+        set stated [expr {[dict exists $parsed os2 strikeout]
+            ? [dict get $parsed os2 strikeout] : {}}]
+      }
+      default {return {}}
+    }
+    if {$stated eq {}} {
+      return {}
+    }
+    lassign $stated position thickness
+    set units [dict get $parsed unitsPerEm]
+    return [list [expr {double($position) * $size / $units}] \
+        [expr {double($thickness) * $size / $units}]]
+  }
+
   # A Type 1 face is addressed by single bytes through WinAnsiEncoding, so it
   # is encoded by the same code as the standard fourteen - only the widths
   # come from its own metrics. [afm encodeWidths] is that shared road; what

@@ -176,6 +176,7 @@ proc ::tclpdf::sfnt::parse {bytes {face {}}} {
   dict set font os2 $os2
   dict set font fsType [dict get $os2 fsType]
   dict set font italicAngle [ParsePost $bytes $tables]
+  dict set font underline [ParsePostUnderline $bytes $tables]
   dict set font names [ParseNames $bytes $tables]
   # The vertical metrics, or {} for the overwhelming majority of faces that
   # carry none. Read here with the rest because it is three short tables and
@@ -1943,6 +1944,10 @@ proc ::tclpdf::sfnt::CffBias {count} {
 #                field only exists from version 2 of the table on, and a
 #                version 2 face may still write 0
 #   xHeight      sxHeight, under the same rule
+#   strikeout    {position size} of the strikeout stroke, yStrikeoutPosition
+#                and yStrikeoutSize at 28 and 26 (version 0 fields, present
+#                in every table long enough to hold them), or {} where the
+#                table is shorter or states a size of 0
 #
 # The two heights are {} rather than a guess BECAUSE the two callers want
 # different things from that: the font descriptor has to write a number and
@@ -1950,7 +1955,8 @@ proc ::tclpdf::sfnt::CffBias {count} {
 # file says and must not invent. One reader, two answers to the same "not
 # stated".
 proc ::tclpdf::sfnt::ParseOs2 {bytes tables} {
-  set os2 [dict create fsType {} weightClass 400 capHeight {} xHeight {}]
+  set os2 [dict create fsType {} weightClass 400 capHeight {} xHeight {} \
+      strikeout {}]
   if {![dict exists $tables OS/2]} {
     return $os2
   }
@@ -1969,6 +1975,12 @@ proc ::tclpdf::sfnt::ParseOs2 {bytes tables} {
   binary scan $bytes @[expr {$position + 8}]Su fsType
   dict set os2 fsType $fsType
   dict set os2 weightClass $weightClass
+  if {$length >= 30} {
+    binary scan $bytes @[expr {$position + 26}]SS strikeSize strikePosition
+    if {$strikeSize > 0} {
+      dict set os2 strikeout [list $strikePosition $strikeSize]
+    }
+  }
   # sxHeight at 86 and sCapHeight at 88, both from version 2 on (OpenType,
   # "OS/2"). A face that declares version 2 and ends before them is damaged
   # rather than informative, so the length is checked as well as the version.
@@ -2003,6 +2015,28 @@ proc ::tclpdf::sfnt::ParsePost {bytes tables} {
   binary scan $bytes @[expr {$position + 4}]I fixed
   set angle [expr {$fixed / 65536.0}]
   return [expr {$angle == int($angle) ? int($angle) : $angle}]
+}
+
+# Where the post table puts an underline: underlinePosition at offset 8 and
+# underlineThickness at 10, both signed 16-bit in font units (OpenType,
+# "post"). Answered as {position thickness}, or {} for a face without the
+# table, with a table too short for the two fields, or with a thickness of
+# 0 - a stated nothing is not a measurement, and the caller falls back to
+# the size (textRun.tcl). Read for the underline a run asks for; nothing
+# else in the package draws one.
+proc ::tclpdf::sfnt::ParsePostUnderline {bytes tables} {
+  if {![dict exists $tables post]} {
+    return {}
+  }
+  lassign [dict get $tables post] position length
+  if {$length < 12} {
+    return {}
+  }
+  binary scan $bytes @[expr {$position + 8}]SS underlinePosition thickness
+  if {$thickness <= 0} {
+    return {}
+  }
+  return [list $underlinePosition $thickness]
 }
 
 # What fsType permits, in words - the whole of it, not the low nibble alone.

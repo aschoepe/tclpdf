@@ -1,0 +1,602 @@
+# textRun.test --
+#
+# Runs inside a paragraph: a bold word, an italic name, set in the middle of
+# flowing text with the line breaker running over all of it (textRun.tcl).
+# The tests measure the three promises the module makes: the breaker sees
+# the widths of the faces the runs are set in, the drawing sets each piece in
+# its own face, and a block without runs writes the bytes it always wrote.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+package require tclpdf
+package require tclpdf::text
+package require tclpdf::textBlock
+package require tclpdf::textRun
+source [file join [file dirname [info script]] helper.tcl]
+
+set root [file dirname [file dirname [file normalize [info script]]]]
+set runFace [file join $root examples assets fonts DejaVuSans.ttf]
+set runFaceBold [file join $root examples assets fonts DejaVuSans-Bold.ttf]
+testConstraint haveFaces [expr {[file exists $runFace] && [file exists $runFaceBold]}]
+
+# A document with one page and Helvetica at 10 pt - the block every test
+# below sets, so that a width means the same thing in each of them.
+proc ::tclpdfTest::runDoc {} {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc font -family helvetica -size 10 -style {}
+  return $doc
+}
+
+# The runs the tests set: a plain lead, a bold amount, a plain tail.
+set ::runsSample [list "Der Betrag von " {} "1.234,56 EUR" {style bold} \
+    " ist bis zum 31. Oktober zu zahlen." {}]
+set ::runsPlain [join [lmap {t o} $::runsSample {set t}] {}]
+
+# --- the intake ---------------------------------------------------------------
+
+test textRun-1.1 {a block with runs measures the same height as the plain block where the breaks agree} -body {
+  set doc [::tclpdfTest::runDoc]
+  # 60 mm: the bold amount changes no break at this width, so the two
+  # blocks have the same number of lines and the same leading.
+  set plain [$doc textHeight $::runsPlain -width 60]
+  set runs [$doc textHeight $::runsSample -width 60 -runs 1]
+  $doc destroy
+  expr {abs($plain - $runs) < 1e-9}
+} -result 1
+
+test textRun-1.2 {a bold run is wider and moves a break the plain text does not make} -body {
+  # Lower-case letters: the digits and capitals of Helvetica-Bold are as
+  # wide as the regular ones (measured, 556 and 667/722 units in both), so
+  # the amount of the sample moves nothing. The width is chosen so that the
+  # plain line holds the three words and the bold pair does not fit beside
+  # the lead any more.
+  set doc [::tclpdfTest::runDoc]
+  set runs [list "Der Betrag ist " {} "sofort zahlbar" {style bold} " und fertig." {}]
+  set plainText "Der Betrag ist sofort zahlbar und fertig."
+  set width [expr {[$doc textWidth "Der Betrag ist sofort zahlbar"] + 0.2}]
+  set wider [expr {[$doc textWidth "sofort zahlbar" -style bold]
+      > [$doc textWidth "sofort zahlbar"]}]
+  set plain [$doc textLines $plainText -width $width]
+  set broken [$doc textLines $runs -width $width -runs 1]
+  $doc destroy
+  list $wider [lindex $plain 0] [lindex $broken 0]
+} -result {1 {Der Betrag ist sofort zahlbar} {{Der Betrag ist } {} sofort {style bold}}}
+
+test textRun-1.3 {every line of textLines comes back as {text options} pairs with the run's style} -body {
+  set doc [::tclpdfTest::runDoc]
+  set lines [$doc textLines $::runsSample -width 45 -runs 1]
+  $doc destroy
+  list [llength $lines] [lindex $lines 0] [lindex $lines 1]
+} -result {3 {{Der Betrag von } {} 1.234,56 {style bold}} {EUR {style bold} { ist bis zum 31. Oktober} {}}}
+
+test textRun-1.4 {-hyphens 1 answers the pair shape inside the dictionary} -body {
+  set doc [::tclpdfTest::runDoc]
+  set line [lindex [$doc textLines $::runsSample -width 45 -runs 1 -hyphens 1] 0]
+  $doc destroy
+  list [dict get $line hyphen] [dict get $line text]
+} -result {0 {{Der Betrag von } {} 1.234,56 {style bold}}}
+
+test textRun-1.5 {a break inside a bold word keeps the hyphen in the bold piece} -body {
+  set doc [::tclpdfTest::runDoc]
+  set runs [list "ab " {} "Betriebs­kosten­abrechnung" {style bold} " cd" {}]
+  set lines [$doc textLines $runs -width 24 -runs 1 -hyphens 1]
+  $doc destroy
+  list [dict get [lindex $lines 0] hyphen] [dict get [lindex $lines 0] text]
+} -result {1 {{ab } {} Betriebs- {style bold}}}
+
+test textRun-1.6 {the rest of a height-limited block comes back in the caller's shape} -body {
+  set doc [::tclpdfTest::runDoc]
+  set answer [$doc text $::runsSample -at {20 30} -width 45 -runs 1 -height 5]
+  $doc destroy
+  dict get $answer rest
+} -result {EUR {style bold} { ist bis zum 31. Oktober zu zahlen.} {}}
+
+test textRun-1.7 {the rest can be set again with -runs 1 and ends where the whole block would} -body {
+  set doc [::tclpdfTest::runDoc]
+  set whole [$doc text $::runsSample -at {20 30} -width 45 -runs 1]
+  set first [$doc text $::runsSample -at {20 100} -width 45 -runs 1 -height 5]
+  set second [$doc text [dict get $first rest] -at [list 20 [dict get $first y]] \
+      -width 45 -runs 1]
+  $doc destroy
+  expr {abs(($whole - 30) - ($second - 100)) < 1e-9}
+} -result 1
+
+# --- the drawing --------------------------------------------------------------
+
+test textRun-2.1 {each piece is drawn in its own face, in the order of the text} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text $::runsSample -at {20 30} -width 60 -runs 1
+  set fonts [regexp -all -inline {/F(\w+) 10 Tf} [::tclpdfTest::content $doc]]
+  $doc destroy
+  lmap {all name} $fonts {set name}
+} -result {Helvetica HelveticaBold Helvetica Helvetica}
+
+test textRun-2.2 {a run with both words sets the bold oblique face} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "a " {} "b" {style {bold italic}} " c" {style oblique}] \
+      -at {20 30} -width 60 -runs 1
+  set fonts [regexp -all -inline {/F(\w+) 10 Tf} [::tclpdfTest::content $doc]]
+  $doc destroy
+  lmap {all name} $fonts {set name}
+} -result {Helvetica HelveticaBoldOblique HelveticaOblique}
+
+test textRun-2.3 {the pieces of a line stand where the plain line's words stand} -body {
+  # A run that changes no width - the same face under another name - has to
+  # leave every glyph where the plain block put it: the first piece at the
+  # block's x, the second exactly one lead further.
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "Der Betrag von " {} "heute" {}] -at {20 30} -width 60 -runs 1
+  set starts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  set lead [$doc textWidth "Der Betrag von "]
+  $doc destroy
+  list [llength $starts] \
+      [expr {abs([lindex $starts 1] - [lindex $starts 0] \
+          - [::tclpdf::geometry toPoints $lead mm]) < 1e-4}]
+} -result {2 1}
+
+test textRun-2.4 {a justified line stretches the spaces of every piece by the same amount} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text $::runsSample -at {20 30} -width 45 -runs 1 -align justify
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Line one holds three pieces? No - two: the lead and the bold amount. Both
+  # carry the same Tw, and the last line, flush left, carries none.
+  set tws [lmap {all n} [regexp -all -inline {([0-9.]+) Tw} $stream] {set n}]
+  list [expr {[lindex $tws 0] eq [lindex $tws 1]}] [expr {[lindex $tws 0] > 0}]
+} -result {1 1}
+
+test textRun-2.5 {a right-aligned line with runs ends at the right edge} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "ab " {} "cd" {style bold}] -at {20 30} -width 60 -runs 1 -align right
+  set stream [::tclpdfTest::content $doc]
+  set starts [::tclpdfTest::starts $stream]
+  set lastWidth [$doc textWidth "cd" -style bold]
+  $doc destroy
+  # The last piece starts one bold "cd" short of x + 60 mm - to the five
+  # decimals the stream carries (pdfObj num), hence the tolerance.
+  expr {abs([lindex $starts end] + [::tclpdf::geometry toPoints $lastWidth mm] \
+      - [::tclpdf::geometry toPoints 80 mm]) < 1e-4}
+} -result 1
+
+test textRun-2.6 {a rotated block with runs turns every piece with the line} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "ab " {} "cd" {style bold}] -at {20 30} -width 60 -runs 1 -rotate 30
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all { Tm} $stream] [regexp -all { Td} $stream]
+} -result {2 0}
+
+test textRun-2.7 {a tagged block with runs keeps one mark and appends the extraction space to the last piece} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc tagged 1
+  $doc text $::runsSample -at {20 30} -width 45 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {BDC} $stream] [regexp -all {\(1\.234,56 \) Tj} $stream]
+} -result {1 1}
+
+# --- byte identity --------------------------------------------------------------
+
+test textRun-3.1 {a block without runs writes the bytes it wrote before the module existed} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text $::runsPlain -at {20 30} -width 45 -align justify
+  set plain [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list $::runsPlain {}] -at {20 30} -width 45 -align justify -runs 1
+  set oneRun [::tclpdfTest::content $doc]
+  $doc destroy
+  string equal $plain $oneRun
+} -result 1
+
+# --- refusals --------------------------------------------------------------------
+
+test textRun-4.1 {runs need -width} -body {
+  set doc [::tclpdfTest::runDoc]
+  catch {$doc text $::runsSample -at {20 30} -runs 1} msg opts
+  $doc destroy
+  lrange [dict get $opts -errorcode] 0 3
+} -result {TCLPDF TEXT RUNS WIDTH}
+
+test textRun-4.2 {an odd list, an odd option list, an unknown option and an unknown style are refused by name} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach pairs [list [list "a" {} "b"] [list "a" {style}] \
+      [list "a" {color red}] [list "a" {style fat}]] {
+    catch {$doc textLines $pairs -width 40 -runs 1} msg opts
+    lappend codes [lindex [dict get $opts -errorcode] 3]
+  }
+  $doc destroy
+  set codes
+} -result {LIST OPTIONS OPTION STYLE}
+
+test textRun-4.3 {-runs takes a boolean, at every call that parses the options} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach script {
+    {$doc text $::runsSample -at {20 30} -width 40 -runs maybe}
+    {$doc textLines $::runsSample -width 40 -runs maybe}
+    {$doc textHeight $::runsSample -width 40 -runs maybe}
+  } {
+    catch $script msg opts
+    lappend codes [lindex [dict get $opts -errorcode] 3]
+  }
+  $doc destroy
+  set codes
+} -result {FLAG FLAG FLAG}
+
+test textRun-4.4 {runs refuse a right-to-left block and a block that avoids shapes} -body {
+  set doc [::tclpdfTest::runDoc]
+  catch {$doc textLines $::runsSample -width 40 -runs 1 -direction rtl} msg opts
+  set a [lindex [dict get $opts -errorcode] 3]
+  catch {$doc text $::runsSample -at {20 30} -width 40 -runs 1 \
+      -avoid {{rect 0 0 5 5}}} msg opts
+  set b [lindex [dict get $opts -errorcode] 3]
+  $doc destroy
+  list $a $b
+} -result {DIRECTION AVOID}
+
+test textRun-4.5 {a style on an embedded alias no family covers is refused, not set regular} -constraints haveFaces -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed body $::runFace
+  $doc font -family body
+  catch {$doc textLines [list "a " {} "b" {style bold}] -width 40 -runs 1} msg opts
+  $doc destroy
+  lrange [dict get $opts -errorcode] 0 4
+} -result {TCLPDF TEXT RUNS FAMILY body}
+
+# --- a family of embedded faces -----------------------------------------------
+
+test textRun-5.1 {a registered family sets a bold run in its bold face} -constraints haveFaces -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed body $::runFace
+  $doc font embed bodyBold $::runFaceBold
+  $doc font family text -regular body -bold bodyBold
+  $doc font -family text
+  $doc text [list "ab " {} "cd" {style bold} " ef" {}] -at {20 30} -width 60 -runs 1
+  set fonts [regexp -all -inline {/F(\w+) 10 Tf} [::tclpdfTest::content $doc]]
+  $doc destroy
+  lmap {all name} $fonts {set name}
+} -result {Ebody EbodyBold Ebody}
+
+test textRun-5.2 {font -style bold reaches the family's bold face outside runs as well} -constraints haveFaces -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed body $::runFace
+  $doc font embed bodyBold $::runFaceBold
+  $doc font family text -regular body -bold bodyBold
+  set a [dict get [$doc font -family text -style bold] resolved]
+  set b [dict get [$doc font -style {}] resolved]
+  set c [$doc font family text]
+  $doc destroy
+  list $a $b [dict get $c bold]
+} -result {bodyBold body bodyBold}
+
+test textRun-5.3 {a style the family has no face for is refused by member, never set regular} -constraints haveFaces -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed body $::runFace
+  $doc font family text -regular body
+  catch {$doc font -family text -style italic} msg opts
+  set a [dict get $opts -errorcode]
+  catch {$doc textLines [list "a " {} "b" {style {bold italic}}] -width 40 -runs 1 -family text} msg opts
+  set b [dict get $opts -errorcode]
+  $doc destroy
+  list $a $b
+} -result {{TCLPDF FONT FAMILY STYLE text italic} {TCLPDF FONT FAMILY STYLE text boldItalic}}
+
+test textRun-5.4 {a family needs -regular, embedded members and a name that is not a face} -constraints haveFaces -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed body $::runFace
+  set codes {}
+  foreach script {
+    {$doc font family text -bold body}
+    {$doc font family text -regular body -bold nobody}
+    {$doc font family helvetica -regular body}
+    {$doc font family body -regular body}
+    {$doc font family nosuch}
+  } {
+    catch $script msg opts
+    lappend codes [lindex [dict get $opts -errorcode] 3]
+  }
+  $doc destroy
+  set codes
+} -result {REGULAR MEMBER NAME NAME UNKNOWN}
+
+# --- headings ----------------------------------------------------------------
+
+set ::runsHeaded [list "Titel" {heading 1} "Erster Absatz mit genug Text für zwei Zeilen im Block." {}]
+
+test textRun-6.1 {a heading is set 1.6 times the size, bold, in a paragraph of its own} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text $::runsHeaded -at {20 30} -width 60 -runs 1
+  set fonts [regexp -all -inline {/F(\w+) ([0-9.]+) Tf} [::tclpdfTest::content $doc]]
+  $doc destroy
+  lmap {all name size} $fonts {list $name $size}
+} -result {{HelveticaBold 16} {Helvetica 10} {Helvetica 10}}
+
+test textRun-6.2 {a heading without a line feed still closes its paragraph, and comes back with its option} -body {
+  set doc [::tclpdfTest::runDoc]
+  set lines [$doc textLines $::runsHeaded -width 60 -runs 1]
+  $doc destroy
+  list [llength $lines] [lindex $lines 0] [lindex [lindex $lines 1] 1]
+} -result {3 {Titel {heading 1}} {}}
+
+test textRun-6.3 {a line steps down by its own leading: the heading's above the heading, the block's under it} -body {
+  set doc [::tclpdfTest::runDoc]
+  # Body, then a heading, then body: 12 pt (1.2 x 10) between body lines,
+  # 1.6 times that from the body line UP TO the heading's baseline, and 12
+  # again from the heading down to the next body line.
+  $doc text [list "Erste Zeile" {} "Titel" {heading 1} "Letzte Zeile" {}] \
+      -at {20 30} -width 60 -runs 1
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  list [format %.2f [expr {[lindex $ys 0] - [lindex $ys 1]}]] \
+      [format %.2f [expr {[lindex $ys 1] - [lindex $ys 2]}]]
+} -result {19.20 12.00}
+
+test textRun-6.4 {textHeight counts every line's own leading, the heading's included} -body {
+  set doc [::tclpdfTest::runDoc]
+  # Body line, heading, body line: 12 + 19.2 + 12 = 43.2 pt to the baseline
+  # one line under the block.
+  set height [$doc textHeight [list "Erste" {} "Titel" {heading 1} "Letzte" {}] \
+      -width 60 -runs 1]
+  $doc destroy
+  format %.3f [::tclpdf::geometry toPoints $height mm]
+} -result 43.200
+
+test textRun-6.5 {a heading never closes a height-limited block: it goes with the rest} -body {
+  set doc [::tclpdfTest::runDoc]
+  # Room for the heading and not one body line: 19.2 pt plus a hair.
+  set room [::tclpdf::geometry fromPoints 20 mm]
+  set answer [$doc text $::runsHeaded -at {20 30} -width 60 -runs 1 -height $room]
+  $doc destroy
+  list [dict get $answer y] [lindex [dict get $answer rest] 0] [lindex [dict get $answer rest] 1]
+} -result {30 Titel {heading 1}}
+
+test textRun-6.6 {a heading and its text are two elements in a tagged document} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc tagged 1
+  $doc text $::runsHeaded -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all {/H1 <<} $stream] [regexp -all {/P <<} $stream] [regexp -all {EMC} $stream]
+} -result {1 1 2}
+
+test textRun-6.7 {a heading with -anchor top lifts the first baseline by its own ascent} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text $::runsHeaded -at {20 30} -width 60 -runs 1 -anchor top
+  set headed [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc] y] 0]
+  $doc destroy
+  set doc [::tclpdfTest::runDoc]
+  $doc text "Titel" -at {20 30} -width 60 -anchor top -size 16 -style bold
+  set plain [lindex [::tclpdfTest::starts [::tclpdfTest::content $doc] y] 0]
+  $doc destroy
+  expr {abs($headed - $plain) < 1e-4}
+} -result 1
+
+test textRun-6.8 {a heading level outside 1 to 3, a tagged paginated block and an expansion are refused} -body {
+  set doc [::tclpdfTest::runDoc]
+  catch {$doc textLines [list "T" {heading 4}] -width 60 -runs 1} msg opts
+  set a [lrange [dict get $opts -errorcode] 0 4]
+  catch {$doc text $::runsHeaded -at {20 30} -width 60 -runs 1 -expansion "Titel Text"} msg opts
+  set c [lrange [dict get $opts -errorcode] 0 4]
+  $doc tagged 1
+  catch {$doc text $::runsHeaded -at {20 30} -width 60 -runs 1 -paginate 1} msg opts
+  set b [lrange [dict get $opts -errorcode] 0 4]
+  $doc destroy
+  list $a $b $c
+} -result {{TCLPDF TEXT RUNS HEADING 4} {TCLPDF TEXT RUNS HEADING marks} {TCLPDF TEXT RUNS HEADING expansion}}
+
+test textRun-6.9 {a block without headings is placed by the sum it always was} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text "Eins\n\nDrei" -at {20 30} -width 60 -paragraphSpacing 2
+  set plain [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "Eins\n\nDrei" {}] -at {20 30} -width 60 -paragraphSpacing 2 -runs 1
+  set runs [::tclpdfTest::content $doc]
+  $doc destroy
+  string equal $plain $runs
+} -result 1
+
+# --- underline, strikeout, links ------------------------------------------------
+
+test textRun-7.1 {an underlined run draws one stroke under its piece, after the text, in the text's colour} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "ab " {} "cd" {underline 1} " ef" {}] -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  # Helvetica states no underline in the descriptor yet (afmData is
+  # regenerated by the author): a tenth of the size below the baseline, a
+  # twentieth thick - 1 pt and 0.5 pt at 10 pt. The stroke comes after the
+  # last ET of the line.
+  set after [string range $stream [string last "ET" $stream] end]
+  list [regexp -all { l S} $after] [regexp {0\.5 w} $after] \
+      [regexp {([0-9.]+) ([0-9.]+) m ([0-9.]+) ([0-9.]+) l S} $after -> x1 y1 x2 y2] \
+      [format %.2f [expr {$x2 - $x1}]] \
+      [format %.2f [expr {[lindex [::tclpdfTest::starts $stream y] 0] - $y1}]]
+} -result [list 1 1 1 [format %.2f [::tclpdf::geometry toPoints [[::tclpdfTest::runDoc] textWidth cd] mm]] 1.00]
+
+test textRun-7.2 {a strikeout sits a quarter of the size above the baseline} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "ab " {} "cd" {strike 1}] -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp {([0-9.]+) ([0-9.]+) m [0-9.]+ [0-9.]+ l S} $stream -> x1 y1
+  format %.2f [expr {$y1 - [lindex [::tclpdfTest::starts $stream y] 0]}]
+} -result 2.50
+
+test textRun-7.3 {an embedded face draws the underline where its post table puts it} -constraints haveFaces -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed body $::runFace
+  $doc font -family body
+  set parsed [::tclpdf::sfnt::parse [::tclpdfTest::readBytes $::runFace]]
+  $doc text [list "cd" {underline 1}] -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  lassign [dict get $parsed underline] position thickness
+  set units [dict get $parsed unitsPerEm]
+  regexp {([0-9.]+) w} $stream -> w
+  list [expr {$thickness > 0}] \
+      [format %.3f $w] [format %.3f [expr {double($thickness) * 10 / $units}]]
+} -result {1 0.439 0.439}
+
+test textRun-7.4 {a run spanning several lines underlines each line's piece} -body {
+  set doc [::tclpdfTest::runDoc]
+  set runs [list "Der Betrag " {} "ist bis zum Monatsende sofort zahlbar" {underline 1}]
+  set lines [llength [$doc textLines $runs -width 40 -runs 1]]
+  $doc text $runs -at {20 30} -width 40 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [expr {$lines > 1}] [expr {[regexp -all { l S} $stream] == $lines}]
+} -result {1 1}
+
+test textRun-7.5 {a link is an annotation over its piece, underlined, one per line it spans} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "Siehe " {} "die Seite des Projekts im Netz" {url https://fossil.sowaswie.de/tclpdf} " dazu." {}] \
+      -at {20 30} -width 40 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  set annots [llength [::tclpdfTest::objects $doc {*/Subtype /Link*}]]
+  $doc destroy
+  list [regexp -all { l S} $stream] $annots
+} -result {2 2}
+
+test textRun-7.6 {a link without underline draws no stroke} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "cd" {url https://example.org underline 0}] -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  set annots [llength [::tclpdfTest::objects $doc {*/Subtype /Link*}]]
+  $doc destroy
+  list [regexp -all { l S} $stream] $annots
+} -result {0 1}
+
+test textRun-7.7 {in a tagged document the strokes are an artifact outside the paragraph's mark} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc tagged 1
+  $doc text [list "ab " {} "cd" {underline 1}] -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set p [string first "/P <<" $stream]
+  set emc [string first "EMC" $stream]
+  set artifact [string first "/Artifact" $stream]
+  list [expr {$p < $emc}] [expr {$emc < $artifact}] [regexp -all {EMC} $stream]
+} -result {1 1 2}
+
+test textRun-7.8 {a link in a rotated block, an empty url and a non-boolean underline are refused} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach {pairs extra} [list [list "a" {url x}] {-rotate 10} [list "a" {url {}}] {} \
+      [list "a" {underline maybe}] {}] {
+    catch {$doc text $pairs -at {20 30} -width 60 -runs 1 {*}$extra} msg opts
+    lappend codes [lrange [dict get $opts -errorcode] 3 4]
+  }
+  $doc destroy
+  set codes
+} -result {{URL rotate} {URL empty} {underline maybe}}
+
+test textRun-7.9 {a rotated underline turns with its line} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "cd" {underline 1}] -at {20 30} -width 60 -runs 1 -rotate 30
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp -all { cm} $stream] [regexp -all { l S} $stream]
+} -result {1 1}
+
+# --- -markup tags, end to end ---------------------------------------------------
+
+test textRun-8.1 {-markup tags sets a tagged string as the runs it names} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text {Der Betrag von <b>1.234,56 EUR</b> ist <i>bald</i> fällig.} -at {20 30} -width 60 -markup tags
+  set fonts [regexp -all -inline {/F(\w+) 10 Tf} [::tclpdfTest::content $doc]]
+  $doc destroy
+  lmap {all name} $fonts {set name}
+} -result {Helvetica HelveticaBold Helvetica HelveticaOblique Helvetica}
+
+test textRun-8.2 {a heading tag becomes a heading paragraph, runs inside it stay in the heading} -body {
+  set doc [::tclpdfTest::runDoc]
+  set lines [$doc textLines {<h2>Kapitel <i>zwei</i></h2>Text danach.} -width 60 -markup tags]
+  $doc text {<h2>Kapitel <i>zwei</i></h2>Text danach.} -at {20 30} -width 60 -markup tags
+  set fonts [regexp -all -inline {/F(\w+) ([0-9.]+) Tf} [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [llength $lines] [lindex $lines 0] [lmap {all name size} $fonts {list $name $size}]
+} -result {2 {{Kapitel } {heading 2} zwei {heading 2 style italic}} {{HelveticaBold 13} {HelveticaBoldOblique 13} {Helvetica 10}}}
+
+test textRun-8.3 {a link tag is underlined and annotated} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text {Siehe <a href="https://example.org">dort</a>.} -at {20 30} -width 60 -markup tags
+  set stream [::tclpdfTest::content $doc]
+  set annots [llength [::tclpdfTest::objects $doc {*/Subtype /Link*}]]
+  $doc destroy
+  list [regexp -all { l S} $stream] $annots
+} -result {1 1}
+
+test textRun-8.4 {the height of a tagged string equals the height of the same runs given as a list} -body {
+  set doc [::tclpdfTest::runDoc]
+  set a [$doc textHeight {<h1>Titel</h1>Erster Absatz mit genug Text für zwei Zeilen im Block.} -width 60 -markup tags]
+  set b [$doc textHeight $::runsHeaded -width 60 -runs 1]
+  $doc destroy
+  expr {abs($a - $b) < 1e-9}
+} -result 1
+
+test textRun-8.5 {an unknown notation, tags beside -runs, and tags without -width are refused} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach script {
+    {$doc textLines "x" -width 60 -markup html}
+    {$doc textLines "x" -width 60 -markup tags -runs 1}
+    {$doc text "x" -at {20 30} -markup tags}
+    {$doc text "<bold>x</bold>" -at {20 30} -width 60 -markup tags}
+  } {
+    catch $script msg opts
+    lappend codes [lrange [dict get $opts -errorcode] 2 3]
+  }
+  $doc destroy
+  set codes
+} -result {{MARKUP KIND} {MARKUP RUNS} {RUNS WIDTH} {MARKUP UNKNOWN}}
+
+test textRun-8.6 {a string without a single tag sets the bytes the plain block sets} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text $::runsPlain -at {20 30} -width 45 -align justify
+  set plain [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [::tclpdfTest::runDoc]
+  $doc text $::runsPlain -at {20 30} -width 45 -align justify -markup tags
+  set tagged [::tclpdfTest::content $doc]
+  $doc destroy
+  string equal $plain $tagged
+} -result 1
+
+test textRun-8.7 {strong and em set bold and italic and are not refused as options} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text {<strong>stark</strong> und <em>betont</em>} -at {20 30} -width 60 -markup tags
+  set fonts [regexp -all -inline {/F(\w+) 10 Tf} [::tclpdfTest::content $doc]]
+  set lines [$doc textLines [list "a" {strong 1} "b" {em 1}] -width 60 -runs 1]
+  $doc destroy
+  list [lmap {all name} $fonts {set name}] [lindex $lines 0]
+} -result {{HelveticaBold Helvetica HelveticaOblique} {a {strong 1} b {em 1}}}
+
+# --- a document that never asks for runs ---------------------------------------
+
+test textRun-9.1 {a table breaks its cells without the runs module ever being loaded} -body {
+  # The suite loads every module up front, which is exactly what hid this:
+  # a fresh interpreter with nothing but tclpdf, a table, and the block
+  # road of its cells - measured 2026-09-27 as "unknown method
+  # TextRunsSplit" from every table example and the skill's own snippets.
+  ::tclpdfTest::freshInterp {
+    package require tclpdf
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc table -at {20 20} -width 100 -columns {{width 40} {}} \
+        -body {{"eine lange Zelle die umbrechen muss" "zwei"}}
+    set lines [$doc textLines "ein Absatz ohne jeden Lauf, der umbricht" -width 30]
+    $doc destroy
+    puts [list [catch {package present tclpdf::textRun}] [expr {[llength $lines] > 1}]]
+  }
+} -result {1 1}
+
+cleanupTests

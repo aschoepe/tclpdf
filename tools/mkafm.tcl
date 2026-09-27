@@ -123,7 +123,7 @@ proc readAfm {path} {
       continue
     }
     foreach key {FontBBox CapHeight XHeight Ascender Descender ItalicAngle
-                 IsFixedPitch StdVW FontName} {
+                 IsFixedPitch StdVW FontName UnderlinePosition UnderlineThickness} {
       if {[string match "$key *" $line]} {
         dict set header $key [string trim [string range $line [string length $key] end]]
       }
@@ -231,7 +231,8 @@ foreach font $fonts {
   }
   set values {}
   foreach {key default} {FontBBox {0 0 0 0} CapHeight 0 XHeight 0 Ascender 0
-                         Descender 0 ItalicAngle 0 StdVW 80} {
+                         Descender 0 ItalicAngle 0 StdVW 80
+                         UnderlinePosition {} UnderlineThickness {}} {
     set value $default
     if {[dict exists $header $key]} {
       set value [dict get $header $key]
