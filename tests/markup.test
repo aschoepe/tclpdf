@@ -114,4 +114,76 @@ test markup-4.4 {a < in front of a letter that opens no tag is refused, with the
   list [lindex [dict get $opts -errorcode] 3] [regexp {&lt;} $msg]
 } -result {UNKNOWN 1}
 
+# --- lists -------------------------------------------------------------------
+
+test markup-5.1 {every run of an item carries the kind of its list, beside what b and a add} -body {
+  $P {<ul><li>eins</li><li><b>zwei</b> und <a href="https://example.org">drei</a></li></ul>}
+} -result {eins {item bullet} {
+} {} zwei {item bullet style bold} { und } {item bullet} drei {item bullet url https://example.org}}
+
+test markup-5.2 {ol numbers its items, and every run tag combines inside an item as elsewhere} -body {
+  $P {<ol><li><em><strong>beides</strong></em> <u>unter</u> <s>durch</s></li><li>zwei</li></ol>}
+} -result {beides {item number em 1 strong 1 style {bold italic}} { } {item number} unter {item number underline 1} { } {item number} durch {item number strike 1} {
+} {} zwei {item number}}
+
+test markup-5.3 {white space behind <ul>, between items and in front of </ul> is swallowed} -body {
+  set compact [$P {<ul><li>a</li><li>b</li><li>c</li></ul>}]
+  set spread [$P "<ul>\n  <li>a</li>\n  <li>b</li>\t<li>c</li>\n</ul>"]
+  list [string equal $compact $spread] $spread
+} -result {1 {a {item bullet} {
+} {} b {item bullet} {
+} {} c {item bullet}}}
+
+test markup-5.4 {white space inside an item is text of the item} -body {
+  $P {<ul><li> a </li></ul>}
+} -result {{ a } {item bullet}}
+
+test markup-5.5 {a list at the end adds no trailing line feed; in front of it one, unless the text ends in one} -body {
+  list [$P {Davor<ul><li>a</li></ul>}] [$P "Davor\n<ul><li>a</li></ul>"] [$P {<ul><li>a</li></ul>}]
+} -result {{Davor {} {
+} {} a {item bullet}} {{Davor
+} {} a {item bullet}} {a {item bullet}}}
+
+test markup-5.6 {text behind a list is a paragraph of its own; a line feed right behind </ul> is text, as behind </p>} -body {
+  list [$P {<ul><li>a</li></ul>Danach}] [$P "<ul><li>a</li></ul>\nDanach"] [$P "<p>a</p>\nDanach"]
+} -result {{a {item bullet} {
+} {} Danach {}} {a {item bullet} {
+} {} {
+Danach} {}} {a {} {
+} {} {
+Danach} {}}}
+
+test markup-5.7 {two lists apart: a paragraph between them, and a bulleted list followed by a numbered one} -body {
+  list [$P {<ul><li>a</li></ul>Mitte<ol><li>b</li></ol>}] [$P {<ul><li>a</li></ul><ol><li>b</li></ol>}]
+} -result {{a {item bullet} {
+} {} Mitte {} {
+} {} b {item number}} {a {item bullet} {
+} {} b {item number}}}
+
+test markup-5.8 {list tags are read in any case, a heading may stand in front, and a list takes no attribute} -body {
+  catch {$P {<ul class="x"><li>a</li></ul>}} msg opts
+  list [$P {<h1>Kopf</h1><UL><Li>a</lI></Ul>}] [lrange [dict get $opts -errorcode] 2 end]
+} -result {{Kopf {heading 1} {
+} {} a {item bullet}} {MARKUP ATTRIBUTE ul 0}}
+
+test markup-5.9 {every list fault is refused with its code, the tag at fault and the position} -body {
+  set codes {}
+  foreach text [list \
+      {<ul>x<li>a</li></ul>} {<ul><li>a</li>&lt;</ul>} {<ul><li>a</li> < </ul>} \
+      {<ul><b>a</b></ul>} {<ol><p>a</p></ol>} {<ul><ul></ul></ul>} \
+      {<li>a</li>} {<p><li>a</li></p>} {<b><li>a</li></b>} \
+      {<b><ul><li>a</li></ul></b>} {<h1><ol><li>a</li></ol></h1>} {<ul><li><ol><li>a</li></ol></li></ul>} \
+      {<ul><li><p>a</p></li></ul>} {<ul><li><h2>a</h2></li></ul>} "<ul><li>a\nb</li></ul>" \
+      {<ul><li>a</ul>} {<ul><li>a</li></ol>} {<ul><li>a</li>} {<ol><li>a}] {
+    catch {$P $text} msg opts
+    lappend codes [lrange [dict get $opts -errorcode] 2 end]
+  }
+  set codes
+} -result {{MARKUP NESTING li 4} {MARKUP NESTING li 14} {MARKUP NESTING li 15} {MARKUP NESTING b 4} {MARKUP NESTING p 4} {MARKUP NESTING ul 4} {MARKUP NESTING li 0} {MARKUP NESTING li 3} {MARKUP NESTING li 3} {MARKUP NESTING ul 3} {MARKUP NESTING ol 4} {MARKUP NESTING ol 8} {MARKUP NESTING p 8} {MARKUP NESTING h2 8} {MARKUP NESTING li 9} {MARKUP NESTING ul 9} {MARKUP NESTING ol 14} {MARKUP OPEN ul} {MARKUP OPEN li}}
+
+test markup-5.10 {a refusal inside a list says what a list holds} -body {
+  catch {$P {<ul>x</ul>}} msg
+  list [regexp {position 4} $msg] [regexp {nothing but <li>} $msg]
+} -result {1 1}
+
 cleanupTests

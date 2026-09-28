@@ -2,7 +2,8 @@
 # tclpdf - PDF generation for Tcl
 #
 # textRun - runs of one paragraph: a fat word, an italic name, a link, set
-# in the middle of flowing text, with the line breaker running over all of it
+# in the middle of flowing text, with the line breaker running over all of it;
+# and the paragraph states a run can carry - a heading, a list item
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
@@ -62,7 +63,31 @@ namespace eval ::tclpdf::textRun {
   # document, where the two are the inline elements Strong and Em (ISO
   # 32000-2, 14.8.4.7) - not written yet, and carried so that the notation
   # need not change when they are.
-  variable options {style heading underline strike url strong em}
+  variable options {style heading item start continued underline strike url
+      strong em}
+
+  # The options that make a pair a PARAGRAPH of its own rather than a run
+  # inside one - a heading, a list item. Runs that follow each other with
+  # the same one of them share the paragraph; anything else closes it. One
+  # mechanism for both, the paragraph state (see TextRunsIntake).
+  variable paragraphOptions {heading item}
+
+  # The kinds of list item, and what the tagged document names the list
+  # after each (ListNumbering, ISO 32000-1 Table 347): the bullet drawn is
+  # U+2022, a "solid circular bullet", which is Disc; the numbers are 1., 2.,
+  # 3., which is Decimal. A list that says what its labels are is what PDF/UA
+  # asks for (ua.tcl, UaCheckLists) - under part 2 even for bullets, where
+  # None is no longer allowed beside a Lbl.
+  variable items {bullet Disc number Decimal}
+
+  # The geometry of a list item, as fractions of the block's size (a
+  # decision of the author, 2026-09-28): every line of the item stands 1.6
+  # sizes further in than the block's own lines, and the label ends half a
+  # size before the text. The indent grows for a list whose widest label
+  # needs more - see TextRunsItems.
+  variable itemIndent 1.6
+  variable itemGap 0.5
+  variable bullet "\u2022"
 
   # Where a line is drawn when the face says nothing, as fractions of the
   # size: {position thickness}, position from the baseline, up positive.
@@ -110,14 +135,23 @@ oo::define ::tclpdf::document::document {
   # [textLines] hand back.
   #
   # A HEADING IS A PARAGRAPH, never a run inside one: the size changes only
-  # at a paragraph boundary, which is what keeps every line one height.
-  # So a pair with "heading n" is closed off with a line feed on either
-  # side where the caller left one out - inside the pair's own text, so
-  # that a rest handed back and set again arrives already bounded. The
-  # options gain, beside the map, "runsHeadings" (paragraph index -> level),
-  # "runsLeadings" (paragraph index -> leading in the document unit) and
-  # "runsFirst" (the arguments of paragraph 0 where it is a heading, for
-  # the lift of the first baseline).
+  # at a paragraph boundary, which is what keeps every line one height. A
+  # LIST ITEM is a paragraph too - it is indented as a whole and carries a
+  # label in front of its first line. Both are a PARAGRAPH STATE, and they
+  # take one road: a pair with "heading n" or "item kind" is closed off with
+  # a line feed on either side where the caller left one out - inside the
+  # pair's own text, so that a rest handed back and set again arrives
+  # already bounded -, and runs that follow each other with the same state
+  # share the paragraph until a line feed or another state comes.
+  #
+  # The options gain, beside the map, "runsParagraphs" - paragraph index ->
+  # a dictionary of what the paragraph is: {heading n leading l} for a
+  # heading, {item kind ordinal n list k indent i gap g marker m
+  # markerWidth w ?continued 1?} for a list item (TextRunsItems) - and
+  # "runsFirst" (the arguments of paragraph 0 where it is a heading, for the
+  # lift of the first baseline). A paragraph is only in the table where a
+  # run with a state holds one of its characters; a blank line is never a
+  # heading or an item.
   method TextRunsIntake {pairs options context} {
     if {[llength $pairs] % 2} {
       return -code error -errorcode [list TCLPDF TEXT RUNS LIST] \
@@ -146,15 +180,18 @@ oo::define ::tclpdf::document::document {
     set baseState [my TextMerge $base]
     set baseLeading [::tclpdf::geometry fromPoints \
         [dict get $baseState leading] [my cget -unit]]
-    set headings {}
-    set leadings {}
+    set paragraphs {}
     set first {}
-    # The level of the heading paragraph in progress, {} between headings:
-    # runs of one heading that follow each other ("Kapitel " and "zwei" of
-    # <h2>Kapitel <i>zwei</i></h2>) share the paragraph, and the line feed
-    # that closes it is written only where something follows - never twice,
-    # so a caller's own line feed in front of the next text is respected.
-    set headingOpen {}
+    # The paragraph state in progress - {heading n}, {item kind} or {} for a
+    # plain paragraph. Runs of one heading that follow each other ("Kapitel "
+    # and "zwei" of <h2>Kapitel <i>zwei</i></h2>) share the paragraph, and so
+    # do the runs of one list item; the line feed that closes it is written
+    # only where something follows - never twice, so a caller's own line
+    # feed in front of the next text is respected.
+    set paragraphOpen {}
+    # The line feeds in the string so far: the index of the paragraph the
+    # next character lands in, counted as the breaker counts.
+    set newlines 0
     # A run's style has to reach a face. For a standard family it does; for
     # an embedded alias -style has never done anything, and a bold run set
     # in the regular face would be the silent wrong this whole road exists
@@ -172,6 +209,7 @@ oo::define ::tclpdf::document::document {
       }
       set style $baseStyle
       set heading {}
+      set item {}
       set given {}
       foreach {name value} $runOptions {
         set name [string trimleft $name -]
@@ -185,7 +223,7 @@ oo::define ::tclpdf::document::document {
             set style [my TextRunsStyle $style $value]
             dict set given style [my TextRunsStyle {} $value]
           }
-          underline - strike - strong - em {
+          underline - strike - strong - em - continued {
             if {![string is boolean -strict $value]} {
               return -code error -errorcode [list TCLPDF TEXT RUNS $name $value] \
                   "tclpdf: a run's -$name takes a boolean, not \"$value\""
@@ -214,22 +252,70 @@ oo::define ::tclpdf::document::document {
             set heading $value
             dict set given heading $value
           }
+          item {
+            if {![dict exists $::tclpdf::textRun::items $value]} {
+              return -code error -errorcode [list TCLPDF TEXT RUNS ITEM $value] \
+                  "tclpdf: a list item is \"bullet\" or \"number\", not\
+                  \"$value\""
+            }
+            set item $value
+            dict set given item $value
+          }
+          start {
+            # Digits only, and no leading zero: "010" is ten to Tcl 9 and
+            # eight to Tcl 8.6, and a list number is not the place to learn
+            # that.
+            if {![regexp {^[1-9][0-9]*$} $value]} {
+              return -code error -errorcode [list TCLPDF TEXT RUNS START $value] \
+                  "tclpdf: a run's -start is the number of its list item, a\
+                  whole number from 1, not \"$value\""
+            }
+            dict set given start $value
+          }
         }
       }
+      if {$heading ne {} && $item ne {}} {
+        return -code error -errorcode [list TCLPDF TEXT RUNS ITEM HEADING] \
+            "tclpdf: a run is a heading or a list item, not both - a\
+            heading is set larger and a list item indented, and one\
+            paragraph cannot be both"
+      }
+      # What only a list item can say. "start" is the number the item
+      # carries, and a bullet has none; "continued" is an item that began
+      # before this call - the head of the rest [text -height] hands back
+      # (TextRunsRest) - and draws no label.
+      if {[dict exists $given start] && $item ne "number"} {
+        return -code error -errorcode [list TCLPDF TEXT RUNS START \
+            [expr {$item eq {} ? "item" : $item}]] \
+            "tclpdf: -start numbers a list item, and only an item of\
+            \"item number\" has a number"
+      }
+      if {[dict exists $given continued] && $item eq {}} {
+        return -code error -errorcode [list TCLPDF TEXT RUNS CONTINUED item] \
+            "tclpdf: -continued says a list item began before this block,\
+            and the run is no list item - give it \"item bullet\" or\
+            \"item number\""
+      }
+      set paragraphState [expr {$heading ne {} ? [list heading $heading]
+          : ($item ne {} ? [list item $item] : {})}]
       if {$heading ne {}} {
         set style [my TextRunsStyle $style bold]
-        if {$headingOpen ne $heading} {
+      }
+      if {$paragraphState ne {}} {
+        if {$paragraphOpen ne $paragraphState} {
           if {$string ne {} && [string index $string end] ne "\n"} {
             append string "\n"
+            incr newlines
           }
-          set headingOpen $heading
+          set paragraphOpen $paragraphState
         }
-      } elseif {$headingOpen ne {}} {
+      } elseif {$paragraphOpen ne {}} {
         if {$string ne {} && [string index $string end] ne "\n"
             && [string index $text 0] ne "\n"} {
           append string "\n"
+          incr newlines
         }
-        set headingOpen {}
+        set paragraphOpen {}
       }
       if {$plainAlias && $style ne {}} {
         return -code error -errorcode [list TCLPDF TEXT RUNS FAMILY $family] \
@@ -239,7 +325,9 @@ oo::define ::tclpdf::document::document {
             and set the block in that family"
       }
       set from [string length $string]
+      set paragraph $newlines
       append string $text
+      incr newlines [regexp -all \n $text]
       if {$text eq {}} {
         # An empty run marks nothing; it is left out of the map rather than
         # kept as a zero-length entry the walk would have to step over.
@@ -262,42 +350,216 @@ oo::define ::tclpdf::document::document {
           set arguments [lreplace $arguments $at $at+1]
         }
         lappend arguments -size [expr {[dict get $options size] * $factor}]
-        # Which paragraph this is: the line feeds in front of it, each of
-        # which the breaker takes as a paragraph boundary.
-        set paragraph [regexp -all \n [string range $string 0 $from-1]]
-        dict set headings $paragraph $heading
-        dict set leadings $paragraph [expr {$baseLeading * $factor}]
-        if {$paragraph == 0} {
-          set first $arguments
+      }
+      # Every paragraph the run holds a character of takes its state - a
+      # line feed inside the text of a heading or an item begins a second
+      # heading or item, which is what the breaker makes of it anyway.
+      if {$paragraphState ne {}} {
+        foreach piece [split $text \n] {
+          if {[string trim $piece $::tclpdf::textBlock::separators] ne {}} {
+            set entry [expr {[dict exists $paragraphs $paragraph]
+                ? [dict get $paragraphs $paragraph] : {}}]
+            if {$heading ne {}} {
+              dict set entry heading $heading
+              dict set entry leading [expr {$baseLeading * $factor}]
+              if {$paragraph == 0} {
+                set first $arguments
+              }
+            } else {
+              dict set entry item $item
+              foreach key {start continued} {
+                if {[dict exists $given $key] && [dict get $given $key]} {
+                  dict set entry $key [dict get $given $key]
+                }
+              }
+            }
+            dict set paragraphs $paragraph $entry
+          }
+          incr paragraph
         }
       }
       lappend map [list $from [string length $string] $style $arguments $given]
     }
+    set paragraphs [my TextRunsItems $paragraphs $options $base $baseState]
+    # A block that opens with the rest of an item begun in the call before
+    # opens in the middle of a paragraph: its first line takes no
+    # -firstIndent, as the continuation of a paginated block takes none
+    # (TextBlockBand).
+    if {[dict exists $paragraphs 0 continued]} {
+      dict set options continued 1
+    }
     dict set options runs $map
-    dict set options runsHeadings $headings
-    dict set options runsLeadings $leadings
+    dict set options runsParagraphs $paragraphs
     dict set options runsFirst $first
-    if {[dict size $headings]} {
-      # The marks of a tagged document are opened per PARAGRAPH where a
-      # block carries headings - H1 to H3 beside P - and the paginating
-      # roads open theirs per page, one for the whole block. The two do not
-      # meet yet; refused by name rather than tagged wrong.
-      if {[my state tagged] eq "1" && ([dict get $options paginate]
-          || [dict get $options columns] > 1)} {
+    set kinds {}
+    foreach entry [dict values $paragraphs] {
+      foreach kind $::tclpdf::textRun::paragraphOptions {
+        if {[dict exists $entry $kind] && $kind ni $kinds} {
+          lappend kinds $kind
+        }
+      }
+    }
+    # The marks of a tagged document are opened per PARAGRAPH where a block
+    # carries a paragraph state - H1 to H3 beside P, an L of LI with a Lbl
+    # and a LBody each - and the paginating roads open theirs per page, one
+    # for the whole block (TextPaginate). The two do not meet: a list would
+    # have to stay open over the page break, its LI and LBody go on as the
+    # same elements on the next page, and the one mark per page that road
+    # opens round the block would have to give way to the marks of the
+    # paragraphs. [StructureMarkAgain] carries a LEAF over a page (a further
+    # mark on the LBody would do), but the L and the LI are groups on the
+    # structure stack, which the page break with its pageAdded handlers runs
+    # through - a running head drawn there would become a child of the open
+    # item. Refused by name rather than tagged wrong.
+    if {[llength $kinds] && [my state tagged] eq "1"
+        && ([dict get $options paginate] || [dict get $options columns] > 1)} {
+      if {"heading" in $kinds} {
         return -code error -errorcode [list TCLPDF TEXT RUNS HEADING marks] \
             "tclpdf: a heading in a tagged block is a structure element of\
             its own, and a block set with -paginate or -columns marks its\
             content per page - the two are not combined; set the headings\
             as blocks of their own"
       }
-      if {[dict exists $options expansion] && [dict get $options expansion] ne {}} {
+      return -code error -errorcode [list TCLPDF TEXT RUNS ITEM PAGINATE] \
+          "tclpdf: a list in a tagged block is an L with an LI per item,\
+          and a block set with -paginate or -columns marks its content per\
+          page - a list carried over a page break is not built; set the\
+          list without -paginate and -columns, and place the rest with\
+          -height, which hands it back"
+    }
+    if {[llength $kinds] && [dict exists $options expansion]
+        && [dict get $options expansion] ne {}} {
+      if {"heading" in $kinds} {
         return -code error -errorcode [list TCLPDF TEXT RUNS HEADING expansion] \
             "tclpdf: -expansion wraps the whole block in one Span, and a\
             block with headings is several elements - give the expansion to\
             the paragraph it belongs to, as a block of its own"
       }
+      return -code error -errorcode [list TCLPDF TEXT RUNS ITEM EXPANSION] \
+          "tclpdf: -expansion wraps the whole block in one Span, and a\
+          block with a list is several elements - give the expansion to the\
+          paragraph it belongs to, as a block of its own"
     }
     return [list $string $options]
+  }
+
+  # The list items of the paragraph table, counted, labelled and measured.
+  #
+  # A LIST is the run of item paragraphs of one kind that follow each other:
+  # a paragraph without an item - plain text, a heading, a blank line - or
+  # an item of the other kind ends it, and the next item begins a new list
+  # at 1. The number is counted here, per paragraph, once for the whole
+  # block, so that a line on the next page of a paginated block knows it as
+  # well as the first; "start" on an item sets its number and the items
+  # after it count on from there, which is how a rest keeps counting.
+  #
+  # THE LABEL is set in the face, size and colour of the BLOCK - the item's
+  # runs may be bold, its label is not - and it is measured here, before a
+  # byte is written: a face without U+2022, or without the digits, is
+  # refused by name, never set in another face in silence.
+  #
+  # THE INDENT is 1.6 sizes, and more where the list's widest label needs
+  # it. The label stands RIGHT-ALIGNED, ending half a size before the text:
+  # so the numbers of a list line up on their full stops, "9." over "10.",
+  # and every label keeps the same distance to its text - aligned left at
+  # the band, "1." and "10." would stand with gaps of two widths. The price
+  # of that alignment is width: in Helvetica "10." is 1.39 sizes, in DejaVu
+  # Sans 1.59, and with the half size in front of the text neither fits into
+  # 1.6 - aligned at 1.1 sizes it would begin to the left of the block's own
+  # edge, in the margin. So the indent of a list is its widest label plus
+  # the gap where that is more than 1.6 sizes, for every item of the list
+  # alike; a bullet (0.35 sizes in Helvetica, 0.59 in DejaVu) and the numbers
+  # 1 to 9 stay at 1.6. The bullet sits in the middle of the indent that way,
+  # where a word processor puts it.
+  method TextRunsItems {paragraphs options base baseState} {
+    set unit [my cget -unit]
+    set size [dict get $baseState size]
+    set gap [::tclpdf::geometry fromPoints \
+        [expr {$::tclpdf::textRun::itemGap * $size}] $unit]
+    set least [::tclpdf::geometry fromPoints \
+        [expr {$::tclpdf::textRun::itemIndent * $size}] $unit]
+    set widest {}
+    set previous {}
+    set list 0
+    foreach paragraph [lsort -integer [dict keys $paragraphs]] {
+      set entry [dict get $paragraphs $paragraph]
+      if {![dict exists $entry item]} {
+        continue
+      }
+      set kind [dict get $entry item]
+      if {[llength $previous] && [lindex $previous 0] == $paragraph - 1
+          && [lindex $previous 1] eq $kind} {
+        set ordinal [expr {[lindex $previous 2] + 1}]
+      } else {
+        incr list
+        set ordinal 1
+      }
+      if {[dict exists $entry start]} {
+        set ordinal [dict get $entry start]
+      }
+      # NOT [expr {... ? ... : "$ordinal."}]: expr reads "1." as a number
+      # and answers "1.0" - measured, the first list came out numbered so.
+      if {$kind eq "bullet"} {
+        set marker $::tclpdf::textRun::bullet
+      } else {
+        set marker "$ordinal."
+      }
+      try {
+        set width [my textWidth $marker {*}$base]
+      } trap {TCLPDF FONT GLYPH} {message} {
+        set alias [dict get $baseState resolved]
+        if {$kind eq "bullet"} {
+          return -code error -errorcode [list TCLPDF TEXT RUNS BULLET $alias] \
+              "tclpdf: a bulleted list sets its bullet (U+2022) in the face\
+              of the block, and \"$alias\" has no glyph for it - set the\
+              block in a face that has one, or number the list"
+        }
+        return -code error -errorcode [list TCLPDF TEXT RUNS NUMBER $alias] \
+            "tclpdf: a numbered list sets its number \"$marker\" in the face\
+            of the block, and \"$alias\" lacks a glyph of it - set the block\
+            in a face that has the digits and the full stop"
+      }
+      dict set entry ordinal $ordinal
+      dict set entry list $list
+      dict set entry marker $marker
+      dict set entry markerWidth $width
+      dict set entry gap $gap
+      dict set paragraphs $paragraph $entry
+      if {![dict exists $widest $list] || $width > [dict get $widest $list]} {
+        dict set widest $list $width
+      }
+      set previous [list $paragraph $kind $ordinal]
+    }
+    if {![dict size $widest]} {
+      return $paragraphs
+    }
+    # The indent per list, and whether it leaves a band: the question
+    # [TextBlockDistances] asks of the three indents, asked once more with
+    # the list's own indent beside them - a list in a column narrower than
+    # its indent would be set one character per line.
+    set column [my TextBlockColumn $options]
+    set indents {}
+    dict for {list width} $widest {
+      set indent [expr {max($least, $width + $gap)}]
+      dict set indents $list $indent
+      set extra [expr {max(0, [dict get $options firstIndent])}]
+      if {$column - [dict get $options indent] - [dict get $options indentRight]
+          - $extra - $indent <= 0} {
+        return -code error -errorcode [list TCLPDF TEXT INDENT width] \
+            "tclpdf: a list item is indented by [format %g $indent] beside\
+            -indent [format %g [dict get $options indent]] and -indentRight\
+            [format %g [dict get $options indentRight]], and that leaves no\
+            width inside a column of [format %g $column] - a line with no\
+            band left is set one character at a time"
+      }
+    }
+    dict for {paragraph entry} $paragraphs {
+      if {[dict exists $entry list]} {
+        dict set entry indent [dict get $indents [dict get $entry list]]
+        dict set paragraphs $paragraph $entry
+      }
+    }
+    return $paragraphs
   }
 
   # The style of a run from the block's style and the words the run gave:
@@ -713,13 +975,145 @@ oo::define ::tclpdf::document::document {
   # runs in. A rest is always a tail of the string verbatim (TextParagraphDraw
   # hands back "string range ... from end"), so where it begins is the length
   # of the whole less the length of the rest - no position has to travel.
-  method TextRunsRest {map string rest} {
+  #
+  # A rest that begins in a list item keeps its place in the list: the
+  # first pair says the number the item has where it is not 1 ("start"), and
+  # "continued 1" where the cut fell inside the item, so that the rest set
+  # again draws no second label and keeps the indent. Without the two a rest
+  # would begin a new list at 1 with a label in the middle of a sentence.
+  method TextRunsRest {map string rest {paragraphs {}}} {
     if {$rest eq {}} {
       return {}
     }
-    return [my TextRunsSlice $map $string \
-        [expr {[string length $string] - [string length $rest]}]]
+    set from [expr {[string length $string] - [string length $rest]}]
+    set pairs [my TextRunsSlice $map $string $from]
+    set paragraph [regexp -all \n [string range $string 0 $from-1]]
+    if {[llength $pairs] < 2 || ![dict exists $paragraphs $paragraph item]} {
+      return $pairs
+    }
+    set entry [dict get $paragraphs $paragraph]
+    set given [lindex $pairs 1]
+    if {[dict get $entry item] eq "number" && [dict get $entry ordinal] != 1} {
+      dict set given start [dict get $entry ordinal]
+    }
+    set begins [expr {[string last \n $string $from-1] + 1}]
+    if {$from > $begins || [dict exists $entry continued]} {
+      dict set given continued 1
+    }
+    lset pairs 1 $given
+    return $pairs
+  }
+
+  # WHAT A PARAGRAPH STATE WRITES WHERE ITS PARAGRAPH BEGINS, called by
+  # [TextParagraphDraw] for the first drawn line of every paragraph of a
+  # block that has one - headings and list items take this one road.
+  #
+  # In a tagged document the marks are per paragraph: H1 to H3 for a
+  # heading, the block's -tag for plain text, and for a list item an LI in
+  # an L - the L opened with the first item of a list and closed after its
+  # last, the LI holding a Lbl with the label and a LBody with the text, in
+  # that order (Annex L; the Lbl first, structure.tcl). The list is named
+  # Disc or Decimal after its labels, which is what PDF/UA-1 7.6 and part 2,
+  # 8.2.5.25 ask of a list whose items carry a Lbl. An Artifact block stays
+  # one artifact per paragraph and draws its labels inside it.
+  #
+  # A CONTINUED item - the head of a rest, whose label was drawn by the call
+  # before - draws no label, and in a tagged document it cannot be the LI it
+  # continues: that one was closed with the call that opened it. It is set
+  # as the block's -tag, a paragraph in front of the list, the shape a
+  # paragraph split over two calls with -height has as well (two P).
+  #
+  # marking is what the previous paragraph left open, as {mark m li id l id
+  # list k}; the answer is what this one leaves open, for the next call and
+  # finally for [TextRunsParagraphClose].
+  method TextRunsParagraph {marking paragraph line state tag x y lift top ascent rotate} {
+    set paragraphs [my state textRunsParagraphs]
+    set entry [expr {[dict exists $paragraphs $paragraph]
+        ? [dict get $paragraphs $paragraph] : {}}]
+    set continued [dict exists $entry continued]
+    set item [expr {[dict exists $entry item] && !$continued}]
+    set label [expr {$item && [dict get $line first]}]
+    if {[my state tagged] ne "1"} {
+      if {$label} {
+        my TextRunsLabel $entry $line $state $x $y $lift $top $rotate
+      }
+      return $marking
+    }
+    set artifact [expr {[lindex $tag 0] eq "Artifact"}]
+    # The list stays open while the items of one list follow each other.
+    set marking [my TextRunsParagraphClose $marking [expr {$item && !$artifact
+        && [dict exists $marking list]
+        && [dict get $marking list] == [dict get $entry list]}]]
+    set markTop [expr {$y + $lift + $top - $ascent}]
+    if {$item && !$artifact} {
+      if {![dict exists $marking l]} {
+        dict set marking l [my StructureOpen L [dict create numbering \
+            [dict get $::tclpdf::textRun::items [dict get $entry item]]]]
+        dict set marking list [dict get $entry list]
+      }
+      dict set marking li [my StructureOpen LI]
+      if {$label} {
+        set mark [my StructureMark Lbl Layout $markTop]
+        my content [my StructureBegin $mark]
+        my TextRunsLabel $entry $line $state $x $y $lift $top $rotate
+        my content [my StructureEnd $mark]
+      }
+      set mark [my StructureMark LBody Layout $markTop]
+    } else {
+      set own $tag
+      if {[dict exists $entry heading] && !$artifact} {
+        set own H[dict get $entry heading]
+      }
+      set mark [my StructureMark $own Layout $markTop]
+    }
+    my content [my StructureBegin $mark]
+    dict set marking mark $mark
+    if {$label && $artifact} {
+      my TextRunsLabel $entry $line $state $x $y $lift $top $rotate
+    }
+    return $marking
+  }
+
+  # Close what a paragraph left open - its mark, its LI and, unless the
+  # next paragraph is an item of the same list (keepList), its L - and
+  # answer what stays open. Called between two paragraphs and after the
+  # last, where nothing stays.
+  method TextRunsParagraphClose {marking {keepList 0}} {
+    if {[dict exists $marking mark]} {
+      my content [my StructureEnd [dict get $marking mark]]
+      dict unset marking mark
+    }
+    if {[dict exists $marking li]} {
+      my StructureClose [dict get $marking li]
+      dict unset marking li
+    }
+    if {[dict exists $marking l] && !$keepList} {
+      my StructureClose [dict get $marking l]
+      dict unset marking l
+      dict unset marking list
+    }
+    return $marking
+  }
+
+  # The label of a list item, on the baseline of its first line: right-
+  # aligned against the line's own start less the gap (see TextRunsItems for
+  # why right), in the block's state - its face, size and colour. Drawn from
+  # the same anchor as the line with a shift back along the baseline, the
+  # road [TextRun] takes for -align right, so a rotated block turns the
+  # label with its line. A tagged document gets the word space after it
+  # that every line gets for the extraction (TextParagraphLine): "1." and
+  # the text are two words to a reader, and the space sits after the last
+  # glyph of the label, where it moves nothing.
+  method TextRunsLabel {entry line state x y lift top rotate} {
+    set text [dict get $entry marker]
+    if {[my state tagged] eq "1"} {
+      append text " "
+    }
+    my TextRun $text $state [expr {$x + [dict get $line offset]}] $y $rotate \
+        [expr {[dict get $entry gap] + [dict get $entry markerWidth]}] \
+        [expr {$lift + $top}] 0
+    return
   }
 }
 
-package provide tclpdf::textRun 1.0
+package provide tclpdf::textRun 1.1

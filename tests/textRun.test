@@ -592,6 +592,306 @@ test textRun-8.7 {strong and em set bold and italic and are not refused as optio
   list [lmap {all name} $fonts {set name}] [lindex $lines 0]
 } -result {{HelveticaBold Helvetica HelveticaOblique} {a {strong 1} b {em 1}}}
 
+# --- list items ----------------------------------------------------------------
+
+set ocrFace [file join $root examples assets fonts tsukurimashou OCRB.ttf]
+set emojiFace [file join $root examples assets fonts google NotoEmoji-Variable.ttf]
+testConstraint haveOcr [file exists $ocrFace]
+testConstraint haveEmoji [file exists $emojiFace]
+
+# The labels a content stream draws, in order: the bullet of WinAnsi (octal
+# 225) or a number with its full stop, with the extraction space a tagged
+# document appends.
+proc ::listLabels {stream} {
+  lmap {all label} [regexp -all -inline {\((\\225|[0-9]+\.) ?\) Tj} $stream] {
+    string map {\\225 bullet} $label
+  }
+}
+
+# The items of a list as pairs, "\n" between them, the way the translators
+# hand them over.
+proc ::listPairs {kind texts} {
+  set pairs {}
+  foreach text $texts {
+    lappend pairs $text [list item $kind] "\n" {}
+  }
+  lrange $pairs 0 end-2
+}
+
+set ::listLong "ein Punkt mit so viel Text, dass er über mehrere Zeilen läuft"
+
+test textRun-10.1 {the intake counts the items per list: a change of kind and a paragraph between begin a new list} -body {
+  set doc [::tclpdfTest::runDoc]
+  set ns [info object namespace $doc]
+  set options [${ns}::my TextBlockOptions {-width 60 -runs 1} textLines]
+  lassign [${ns}::my TextBlockIntake [list \
+      "a" {item bullet} "\n" {} "b " {item bullet} "b2" {item bullet style bold} "\n" {} \
+      "c" {item number} "\n" {} "d" {item number} "\n" {} \
+      "plain" {} "\n" {} "e" {item number} "\n" {} "\n" {} "f" {item number}] \
+      $options textLines] string options
+  $doc destroy
+  set table {}
+  dict for {paragraph entry} [dict get $options runsParagraphs] {
+    lappend table $paragraph [dict get $entry item] [dict get $entry ordinal] \
+        [dict get $entry list] [dict get $entry marker]
+  }
+  list [split $string \n] $table
+} -result [list {a {b b2} c d plain e {} f} [list 0 bullet 1 1 • 1 bullet 2 1 • 2 number 1 2 1. 3 number 2 2 2. 5 number 1 3 1. 7 number 1 4 1.]]
+
+test textRun-10.2 {an item is a paragraph of its own, bounded without a line feed pair, and comes back with its option} -body {
+  set doc [::tclpdfTest::runDoc]
+  set lines [$doc textLines [list "Vorher" {} "Punkt" {item bullet} "Nachher" {}] -width 60 -runs 1]
+  $doc destroy
+  set lines
+} -result {{Vorher {}} {Punkt {item bullet}} {Nachher {}}}
+
+test textRun-10.3 {the label stands in front of the first line of each item and nowhere else} -body {
+  set doc [::tclpdfTest::runDoc]
+  set pairs [::listPairs number [list $::listLong "kurz" $::listLong]]
+  set lines [llength [$doc textLines $pairs -width 50 -runs 1]]
+  $doc text $pairs -at {20 30} -width 50 -runs 1
+  set labels [::listLabels [::tclpdfTest::content $doc]]
+  $doc destroy
+  list [expr {$lines > 3}] $labels
+} -result {1 {1. 2. 3.}}
+
+test textRun-10.4 {every line of an item stands 1.6 sizes in, the label ends half a size before it, plain text stays} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "Vorher" {} {*}[::listPairs bullet [list $::listLong]] "\n" {} \
+      {*}[::listPairs number [list "eins"]] "\n" {} "Nachher" {}] \
+      -at {20 30} -width 50 -runs 1
+  set starts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # 20 mm is 56.69291 pt; at 10 pt the item is 16 pt in, all three lines of
+  # it, and the label ends 5 pt before it: the Helvetica bullet is 3.5 pt
+  # wide, "1." 8.34 pt.
+  lmap x $starts {format %.3f [expr {$x - 56.69291}]}
+} -result {0.000 7.500 16.000 16.000 16.000 2.660 16.000 0.000}
+
+test textRun-10.5 {the item's indent comes on top of -indent and -firstIndent} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [::listPairs bullet [list $::listLong]] -at {20 30} -width 60 -runs 1 \
+      -indent [::tclpdf::geometry fromPoints 10 mm] \
+      -firstIndent [::tclpdf::geometry fromPoints 4 mm]
+  set starts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  $doc destroy
+  # The label moves with the first line; the lines after it keep the item's
+  # indent and lose the first one's.
+  lmap x [lrange $starts 0 2] {format %.3f [expr {$x - 56.69291}]}
+} -result {21.500 30.000 26.000}
+
+test textRun-10.6 {a list whose widest number needs more than 1.6 sizes gets the wider indent for every item} -body {
+  set doc [::tclpdfTest::runDoc]
+  set texts {}
+  for {set i 1} {$i <= 10} {incr i} {
+    lappend texts "Punkt $i"
+  }
+  $doc text [::listPairs number $texts] -at {20 30} -width 60 -runs 1
+  set starts [::tclpdfTest::starts [::tclpdfTest::content $doc]]
+  set wide [::tclpdf::geometry toPoints [$doc textWidth "10."] mm]
+  $doc destroy
+  # "10." is 13.9 pt at 10 pt: the text stands that plus the gap in, the
+  # first and the last item alike, and "10." begins at the block's edge.
+  list [format %.3f $wide] [format %.3f [expr {[lindex $starts 1] - 56.69291}]] \
+      [format %.3f [expr {[lindex $starts end] - 56.69291}]] \
+      [format %.3f [expr {[lindex $starts end-1] - 56.69291}]]
+} -result {13.900 18.900 18.900 0.000}
+
+test textRun-10.7 {a justified item is the justified block with the indent: same Tw, same lines, the label beside} -body {
+  set doc [::tclpdfTest::runDoc]
+  set text "$::listLong und noch viel weiter, bis der Block drei Zeilen hat."
+  $doc text [list $text {item bullet}] -at {20 30} -width 50 -runs 1 -align justify
+  set item [::tclpdfTest::content $doc]
+  $doc destroy
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list $text {}] -at {20 30} -width 50 -runs 1 -align justify \
+      -indent [::tclpdf::geometry fromPoints 16 mm]
+  set plain [::tclpdfTest::content $doc]
+  $doc destroy
+  # The label is the first text object of the item block; without it the
+  # two streams are one.
+  set label [string range $item 0 [expr {[string first "ET\n" $item] + 2}]]
+  list [llength [::listLabels $label]] \
+      [string equal [string range $item [string length $label] end] $plain] \
+      [expr {[regexp -all {Tw} $plain] >= 2}]
+} -result {1 1 1}
+
+test textRun-10.8 {the rest of a block cut inside an item continues it: no second label, the indent kept, the count kept} -body {
+  set doc [::tclpdfTest::runDoc]
+  set pairs [::listPairs number [list "1: $::listLong" "2: $::listLong" "3: kurz"]]
+  # Two lines of room: the first item is cut after its second line.
+  set answer [$doc text $pairs -at {20 30} -width 50 -runs 1 \
+      -height [::tclpdf::geometry fromPoints 25 mm]]
+  set rest [dict get $answer rest]
+  $doc page add
+  $doc text $rest -at {20 30} -width 50 -runs 1
+  set second [::tclpdfTest::content $doc 1]
+  $doc destroy
+  list [lindex $rest 1] [::listLabels $second] \
+      [format %.3f [expr {[lindex [::tclpdfTest::starts $second] 0] - 56.69291}]]
+} -result {{item number continued 1} {2. 3.} 16.000}
+
+test textRun-10.9 {a rest that begins with a whole item carries its number} -body {
+  set doc [::tclpdfTest::runDoc]
+  set pairs [::listPairs number [list "eins" "zwei" "drei"]]
+  set answer [$doc text $pairs -at {20 30} -width 50 -runs 1 \
+      -height [::tclpdf::geometry fromPoints 13 mm]]
+  set rest [dict get $answer rest]
+  $doc page add
+  $doc text $rest -at {20 30} -width 50 -runs 1
+  set labels [list [::listLabels [::tclpdfTest::content $doc 0]] \
+      [::listLabels [::tclpdfTest::content $doc 1]]]
+  $doc destroy
+  list [lindex $rest 1] $labels
+} -result {{item number start 2} {1. {2. 3.}}}
+
+test textRun-10.10 {a paginated item runs over the page: the label on the first line only, the indent on the next page} -body {
+  set doc [::tclpdfTest::runDoc]
+  set pairs [::listPairs bullet [list "$::listLong $::listLong $::listLong" "zwei"]]
+  # Three lines of room under -at before the type area ends.
+  lassign [$doc page typeArea] -> -> -> bottom
+  $doc text $pairs -at [list 20 [expr {$bottom - [::tclpdf::geometry fromPoints 30 mm]}]] \
+      -width 50 -runs 1 -paginate 1
+  set first [::tclpdfTest::content $doc 0]
+  set second [::tclpdfTest::content $doc 1]
+  set pages [$doc page count]
+  $doc destroy
+  list $pages [llength [::listLabels $first]] [llength [::listLabels $second]] \
+      [format %.3f [expr {[lindex [::tclpdfTest::starts $second] 0] - 56.69291}]]
+} -result {2 1 1 16.000}
+
+test textRun-10.11 {tagged, a list is an L of LI with a Lbl before a LBody, named Disc or Decimal} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc tagged 1
+  $doc text [list "Vorher" {} {*}[::listPairs bullet {a b}] "\n" {} \
+      {*}[::listPairs number {c d e}] "\n" {} "Nachher" {}] \
+      -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  set report [$doc structureReport]
+  $doc destroy
+  list [dict get $report lists] [lsort [dict get $report types]] \
+      [regexp -all -inline {/(?:P|Lbl|LBody) } $stream] [::listLabels $stream]
+} -result {{{numbering Disc items 2 labelled 2} {numbering Decimal items 3 labelled 3}} {L LBody LI Lbl P} {{/P } {/Lbl } {/LBody } {/Lbl } {/LBody } {/Lbl } {/LBody } {/Lbl } {/LBody } {/Lbl } {/LBody } {/P }} {bullet bullet 1. 2. 3.}}
+
+test textRun-10.12 {tagged, the continued head of a rest is a paragraph in front of the list} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc tagged 1
+  $doc text [list "das Ende eines Punkts" {item number continued 1 start 4} "\n" {} "fünf" {item number}] \
+      -at {20 30} -width 60 -runs 1
+  set stream [::tclpdfTest::content $doc]
+  set report [$doc structureReport]
+  $doc destroy
+  list [dict get $report lists] [regexp -all -inline {/(?:P|Lbl|LBody) } $stream] \
+      [::listLabels $stream]
+} -result {{{numbering Decimal items 1 labelled 1}} {{/P } {/Lbl } {/LBody }} 5.}
+
+test textRun-10.13 {a tagged list of an embedded face passes veraPDF under UA-1 and UA-2} -constraints haveFaces -body {
+  set results {}
+  foreach part {1 2} {
+    set doc [tclpdf new -unit mm]
+    $doc tagged 1
+    $doc info Title "Listen"
+    $doc language de-DE
+    $doc page add
+    $doc font embed body $::runFace
+    $doc font -family body -size 10
+    $doc structure H1 -script [list $doc text "Titel" -at {20 20}]
+    $doc text [list "Vorher" {} {*}[::listPairs bullet [list $::listLong b]] "\n" {} \
+        {*}[::listPairs number {c d}]] -at {20 30} -width 60 -runs 1
+    if {$part == 1} {$doc ua 1} else {$doc ua -part 2}
+    set path [::tclpdfTest::scratch textRun-list-ua$part.pdf]
+    $doc write $path
+    $doc destroy
+    lappend results [::tclpdfTest::verapdf $path ua$part]
+    file delete $path
+  }
+  set results
+} -result {ok ok}
+
+test textRun-10.14 {an item is refused by value, beside a heading, and start and continued only where they mean something} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach pairs [list [list "a" {item star}] [list "a" {item bullet heading 1}] \
+      [list "a" {item bullet start 2}] [list "a" {start 2}] [list "a" {item number start 0}] \
+      [list "a" {item number start 010}] [list "a" {continued 1}] \
+      [list "a" {item bullet continued maybe}]] {
+    catch {$doc textLines $pairs -width 60 -runs 1} msg opts
+    lappend codes [lrange [dict get $opts -errorcode] 3 end]
+  }
+  $doc destroy
+  set codes
+} -result {{ITEM star} {ITEM HEADING} {START bullet} {START item} {START 0} {START 010} {CONTINUED item} {continued maybe}}
+
+test textRun-10.15 {a tagged list in a paginating block or beside an expansion, and an indent with no band left, are refused} -body {
+  set doc [::tclpdfTest::runDoc]
+  set pairs [::listPairs bullet {a b}]
+  set codes {}
+  catch {$doc text $pairs -at {20 30} -width 60 -runs 1 -expansion "x"} msg opts
+  lappend codes [lrange [dict get $opts -errorcode] 0 end]
+  catch {$doc text $pairs -at {20 30} -width 5 -runs 1} msg opts
+  lappend codes [lrange [dict get $opts -errorcode] 0 end]
+  $doc tagged 1
+  foreach extra {{-paginate 1} {-columns 2 -height max}} {
+    catch {$doc text $pairs -at {20 30} -width 60 -runs 1 {*}$extra} msg opts
+    lappend codes [lrange [dict get $opts -errorcode] 0 end]
+  }
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $content
+} -result {{{TCLPDF TEXT RUNS ITEM EXPANSION} {TCLPDF TEXT INDENT width} {TCLPDF TEXT RUNS ITEM PAGINATE} {TCLPDF TEXT RUNS ITEM PAGINATE}} {}}
+
+test textRun-10.16 {a face without the bullet is refused by name, not set in another face} -constraints haveOcr -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed ocr $::ocrFace
+  $doc font -family ocr
+  catch {$doc text [list "A" {item bullet}] -at {20 30} -width 60 -runs 1} msg opts
+  set code [dict get $opts -errorcode]
+  # The same face numbers a list: it has the digits and the full stop.
+  $doc text [list "A" {item number}] -at {20 30} -width 60 -runs 1
+  $doc destroy
+  set code
+} -result {TCLPDF TEXT RUNS BULLET ocr}
+
+test textRun-10.17 {a face without the full stop cannot number a list} -constraints haveEmoji -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc font embed emoji $::emojiFace
+  $doc font -family emoji
+  catch {$doc textHeight [list "1" {item number}] -width 60 -runs 1} msg opts
+  $doc destroy
+  dict get $opts -errorcode
+} -result {TCLPDF TEXT RUNS NUMBER emoji}
+
+test textRun-10.18 {a block without items writes the bytes it wrote before lists existed} -body {
+  # Content streams of a tagged block with headings, underline and a link,
+  # of a paginated one over two pages, and of a plain indented block,
+  # measured with the code of 2026-09-28 before the list items were added
+  # (the same under tclsh8.6 and tclsh9.0): the paragraph state that
+  # headings and items now share must not have moved one byte of them.
+  set body "Erster Absatz mit genug Text für zwei Zeilen im Block, und noch etwas mehr."
+  set pairs [list "Titel" {heading 1} $body {} "Mitte" {heading 2} "Betrag " {} \
+      "fällig" {underline 1 style bold} " am Monatsende, " {} \
+      "siehe dort" {url https://example.org} "." {}]
+  set sums {}
+  set doc [::tclpdfTest::runDoc]
+  $doc tagged 1
+  $doc text $pairs -at {20 30} -width 60 -runs 1 -align justify -paragraphSpacing 2 \
+      -indent 3 -firstIndent 4
+  lappend sums [zlib crc32 [::tclpdfTest::content $doc 0]]
+  $doc destroy
+  set doc [::tclpdfTest::runDoc]
+  $doc text [concat $pairs [list [string repeat "$body " 40] {}]] -at {20 250} \
+      -width 60 -runs 1 -paginate 1 -firstIndent 4
+  lappend sums [zlib crc32 [::tclpdfTest::content $doc 0]] \
+      [zlib crc32 [::tclpdfTest::content $doc 1]]
+  $doc destroy
+  set doc [::tclpdfTest::runDoc]
+  $doc text "$body\n\n$body" -at {20 30} -width 45 -align justify -indent 3 \
+      -firstIndent -2 -paragraphSpacing 1
+  lappend sums [zlib crc32 [::tclpdfTest::content $doc 0]]
+  $doc destroy
+  set sums
+} -result {4243662729 887920847 2573411919 471202099}
+
 # --- a document that never asks for runs ---------------------------------------
 
 test textRun-9.1 {a table breaks its cells without the runs module ever being loaded} -body {

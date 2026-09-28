@@ -447,6 +447,50 @@ proc exampleConsoleParagraph {text {width 74}} {
 # The 20 mm left margin and the 170 mm measure are an A4 page in mm with the
 # margins those examples use. An example laid out otherwise sets its text
 # itself rather than passing a fourth and fifth argument.
+# One page "as typed, as set" for a notation of [text -markup]: the title,
+# the string set WITHOUT -markup in Courier - so that every tag and every
+# asterisk stands on the page as text - and the same string set with -markup.
+# Shared by the examples that show a notation (1.17, 1.19). Returns the y
+# below the set block.
+proc exampleTypedAndSet {doc title source notation block} {
+    $doc page add
+    $doc font -family helvetica -size 14 -style bold -color black
+    $doc text $title -at {20 22}
+    $doc font -size 8 -style {} -color {0.45 0.45 0.45}
+    $doc text "As typed:" -at {20 32}
+    $doc font -family courier -size 7.5 -color black
+    set y [$doc text $source -at {20 37} -width 170 -paragraphSpacing 1]
+    $doc font -family helvetica -size 8 -color {0.45 0.45 0.45}
+    $doc text "As set with -markup $notation:" -at [list 20 [expr {$y + 8}]]
+    $doc font -size 10 -color black
+    return [$doc text $source -at [list 20 [expr {$y + 17}]] {*}$block -markup $notation]
+}
+
+# The proof the notation examples end with: the lines each notation breaks
+# into, as [textLines] answers them - the runs of every line with their
+# options, not only the words. The tags are compared without their <u>, the
+# one thing Markdown cannot write. Draws the finding in grey below y, says
+# it on the console, and exits 1 where the two differ - an example that
+# claims what it does not measure would be worth nothing. Shared by 1.17 and
+# 1.19.
+proc exampleSameLines {doc tagged markdown block y {note {}}} {
+    set fromTags [$doc textLines [regsub -all {</?u>} $tagged {}] {*}$block -markup tags]
+    set fromMarkdown [$doc textLines $markdown {*}$block -markup markdown]
+    set same [expr {$fromTags eq $fromMarkdown}]
+    set verdict [expr {$same ? {identical} : {DIFFERENT}}]
+    $doc font -family helvetica -size 8 -color {0.45 0.45 0.45}
+    $doc text "Both notations break into [llength $fromMarkdown] lines, and the\
+        lines are $verdict, runs and options alike - the underline apart,\
+        which Markdown has no spelling for.$note" \
+        -at [list 20 [expr {$y + 8}]] -width 170
+    puts "  tags and Markdown break into [llength $fromTags] and\
+        [llength $fromMarkdown] lines: $verdict"
+    if {!$same} {
+        exit 1
+    }
+    return
+}
+
 proc exampleHeading {doc yName text} {
     upvar 1 $yName y
     $doc font -family helvetica -style bold -size 11 -color {0 0 0}

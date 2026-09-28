@@ -2,7 +2,8 @@
 # tclpdf - PDF generation for Tcl
 #
 # markup - a paragraph written with tags, turned into the runs [text -runs 1]
-# sets: "<b>bold</b>, <i>italic</i>, <a href=...>a link</a>, <h1>a heading</h1>"
+# sets: "<b>bold</b>, <i>italic</i>, <a href=...>a link</a>, <h1>a heading</h1>,
+# <ul><li>an item</li></ul>"
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
@@ -10,13 +11,13 @@
 # of this file (MIT License).
 #
 # WHY TAGS AND NOT MARKDOWN (decided by the author, 2026-09-27; the whole
-# weighing is in docs/MARKUP.md). The vocabulary is CLOSED: eleven names, and
+# weighing is in docs/MARKUP.md). The vocabulary is CLOSED: fourteen names, and
 # nothing else between angle brackets is a tag - so the one character a
 # caller has to watch is a "<" in front of a letter, where Markdown's "*",
 # "_", "#", "~" and "[" all occur in ordinary text. Opening and closing are
 # explicit, so a nesting fault is a refusal with a position rather than a
 # guess. And the names are the structure vocabulary of ISO 32000-2, 14.8.4 -
-# a tagged document gets its H1, Strong, Em and Link from the spelling.
+# a tagged document gets its H1, Strong, Em, Link, L and LI from the spelling.
 # Markdown is read as well, since the same day, as the SECOND notation
 # (markdown.tcl): a strict subset that ends in the same pairs through [emit]
 # below.
@@ -30,8 +31,8 @@
 #
 # THE RULES, as the manual states them:
 #
-#   - Tags are b i u s em strong a h1 h2 h3 p, opening and closing, in any
-#     case; <a> takes href="..." and nothing else takes an attribute.
+#   - Tags are b i u s em strong a h1 h2 h3 p ul ol li, opening and closing,
+#     in any case; <a> takes href="..." and nothing else takes an attribute.
 #   - A "<" in front of a space, a digit, "=" or the end is text ("a < b",
 #     "< 5 %"). A "<" in front of a letter or "/" has to open a known tag -
 #     otherwise TCLPDF TEXT MARKUP UNKNOWN, with the name and the position.
@@ -45,6 +46,25 @@
 #     its own. A line feed in the text stays a paragraph break, as it is
 #     without markup, so that a caller who wants nothing but <b> changes
 #     nothing else.
+#   - <ul> and <ol> are lists, bulleted and numbered, and hold nothing but
+#     <li> items. An item is a paragraph: every run inside it carries the
+#     option "item bullet" or "item number", taken from the list around it,
+#     beside whatever b, i, u, s, a, strong or em add. Between two items
+#     stands exactly one "\n" pair; around the list the paragraph rule of <p>
+#     holds - a line feed in front of it unless the text there already ends
+#     in one, and one behind it only where something follows. Consecutive
+#     items of one kind are one list; the numbers are counted by the setting,
+#     not written here.
+#   - White space directly inside <ul> or <ol> - behind <ul>, between </li>
+#     and <li>, in front of </ul> - is swallowed, so that a list can be
+#     written one item per line without an empty paragraph between the items.
+#     Anything else there, text or a tag other than <li>, is NESTING, and so
+#     is an <li> anywhere but directly inside a list.
+#   - Lists do not nest: <ul> or <ol> inside a list, a run, a paragraph or a
+#     heading is NESTING, like <p> inside a run. Inside an <li> a line feed is
+#     NESTING too: an item is ONE paragraph, and a line feed would begin a
+#     second one that no longer belongs to the item, as a <p> inside it would.
+#     A line feed directly behind </ul> is text, as behind </p>.
 #   - b and strong, i and em set alike; what differs is the structure
 #     element a tagged document gets, which textRun.tcl decides from the
 #     option names handed on here: "strong" and "em" travel as such.
@@ -54,7 +74,9 @@ package require Tcl 8.6.11-
 
 namespace eval ::tclpdf::markup {
   # The vocabulary, and what each name means to a run: the option it sets,
-  # or "paragraph"/"heading" for the block-level ones.
+  # or "paragraph"/"heading"/"list" for the block-level ones. An item takes
+  # its kind from the list around it - [emit] fills in the "item" option from
+  # the "list" entry below it on the stack.
   variable tags {
     b {style bold} strong {style bold strong 1}
     i {style italic} em {style italic em 1}
@@ -62,6 +84,7 @@ namespace eval ::tclpdf::markup {
     a {url {}}
     h1 {heading 1} h2 {heading 2} h3 {heading 3}
     p {paragraph 1}
+    ul {list bullet} ol {list number} li {item {}}
   }
   variable entities {&lt; < &gt; > &amp; &}
 }
@@ -83,6 +106,27 @@ proc ::tclpdf::markup::parse {text} {
   set boundary 1
   while {$position < $length} {
     set char [string index $text $position]
+    # What the innermost open tag is: directly inside <ul> or <ol> white
+    # space is swallowed and any other text refused, and inside an <li> a
+    # line feed is refused - the item is one paragraph.
+    set inside [expr {[llength $stack] ? [dict get $tags [lindex $stack end 0]] : {}}]
+    if {[dict exists $inside list]} {
+      if {[string is space $char]} {
+        incr position
+        continue
+      }
+      if {$char ne "<" || ![regexp {[A-Za-z/]} [string index $text $position+1]]} {
+        return -code error -errorcode [list TCLPDF TEXT MARKUP NESTING li $position] \
+            "tclpdf: text at position $position stands directly inside\
+            <[lindex $stack end 0]> - a list holds nothing but <li> items;\
+            put the text into an <li>, or close the list first"
+      }
+    }
+    if {$char eq "\n" && [lsearch -exact -index 0 $stack li] >= 0} {
+      return -code error -errorcode [list TCLPDF TEXT MARKUP NESTING li $position] \
+          "tclpdf: the line feed at position $position stands inside <li> - an\
+          item is one paragraph; close the item, or the list, first"
+    }
     if {$char eq "&"} {
       set taken 0
       foreach {entity literal} $entities {
@@ -118,8 +162,8 @@ proc ::tclpdf::markup::parse {text} {
       return -code error -errorcode [list TCLPDF TEXT MARKUP UNKNOWN \
           [string range $text $position+1 $position+12] $position] \
           "tclpdf: \"<\" at position $position opens no tag - a tag is\
-          <b>, <i>, <u>, <s>, <em>, <strong>, <a href=\"...\">, <h1> to <h3>\
-          or <p>; write &lt; for a literal \"<\" in front of a letter"
+          <b>, <i>, <u>, <s>, <em>, <strong>, <a href=\"...\">, <h1> to <h3>,\
+          <p>, <ul>, <ol> or <li>; write &lt; for a literal \"<\" in front of a letter"
     }
     set name [string tolower $name]
     if {![dict exists $tags $name]} {
@@ -128,7 +172,9 @@ proc ::tclpdf::markup::parse {text} {
           [join [lmap n [dict keys $tags] {string cat < $n >}] {, }]"
     }
     set effect [dict get $tags $name]
-    set block [expr {[dict exists $effect paragraph] || [dict exists $effect heading]}]
+    set block [expr {[dict exists $effect paragraph] || [dict exists $effect heading]
+        || [dict exists $effect list]}]
+    set item [dict exists $effect item]
     if {$closing eq "/"} {
       if {![llength $stack] || [lindex $stack end 0] ne $name} {
         set expected [expr {[llength $stack] ? "</[lindex $stack end 0]>" : "no tag"}]
@@ -148,6 +194,11 @@ proc ::tclpdf::markup::parse {text} {
           lappend pairs "\n" {}
           set boundary 1
         }
+      } elseif {$item} {
+        # An item ends here, and its paragraph break waits for the next
+        # <li>: behind the last item the list's own close decides, so that a
+        # list at the end of the text does not end on an empty paragraph.
+        set boundary 0
       }
       incr position [string length $whole]
       continue
@@ -155,16 +206,26 @@ proc ::tclpdf::markup::parse {text} {
     # An opening tag. Text in front of it goes out first, with what was in
     # force in front of it.
     lassign [emit $pairs $buffer $stack] pairs buffer
-    if {$block} {
-      if {[llength $stack]} {
-        return -code error -errorcode [list TCLPDF TEXT MARKUP NESTING $name $position] \
-            "tclpdf: <$name> at position $position is a paragraph and\
-            cannot stand inside <[lindex $stack end 0]> - close the run\
-            first"
-      }
-      if {!$boundary} {
-        lappend pairs "\n" {}
-      }
+    set top [lindex $stack end 0]
+    if {[dict exists $inside list] && !$item} {
+      return -code error -errorcode [list TCLPDF TEXT MARKUP NESTING $name $position] \
+          "tclpdf: <$name> at position $position stands directly inside\
+          <$top> - a list holds nothing but <li> items"
+    }
+    if {$item && ![dict exists $inside list]} {
+      set where [expr {[llength $stack] ? "not inside <$top>" : "not on its own"}]
+      return -code error -errorcode [list TCLPDF TEXT MARKUP NESTING $name $position] \
+          "tclpdf: <$name> at position $position is a list item and stands\
+          directly inside <ul> or <ol>, $where"
+    }
+    if {$block && [llength $stack]} {
+      set what [expr {[dict exists $effect list] ? "a list - lists do not nest -" : "a paragraph"}]
+      return -code error -errorcode [list TCLPDF TEXT MARKUP NESTING $name $position] \
+          "tclpdf: <$name> at position $position is $what and cannot stand\
+          inside <$top> - close <$top> first"
+    }
+    if {($block || $item) && !$boundary} {
+      lappend pairs "\n" {}
     }
     set href {}
     if {$name eq "a"} {
@@ -179,7 +240,7 @@ proc ::tclpdf::markup::parse {text} {
           only <a href=\"...\"> does"
     }
     lappend stack [list $name $href]
-    set boundary [expr {$block ? 1 : 0}]
+    set boundary [expr {$block || $item}]
     incr position [string length $whole]
   }
   if {[llength $stack]} {
@@ -205,6 +266,7 @@ proc ::tclpdf::markup::emit {pairs buffer stack} {
   }
   set options {}
   set style {}
+  set kind {}
   foreach entry $stack {
     lassign $entry name href
     foreach {key value} [dict get $tags $name] {
@@ -216,6 +278,8 @@ proc ::tclpdf::markup::emit {pairs buffer stack} {
         }
         url {dict set options url $href}
         paragraph {}
+        list {set kind $value}
+        item {dict set options item $kind}
         default {dict set options $key $value}
       }
     }
@@ -227,4 +291,4 @@ proc ::tclpdf::markup::emit {pairs buffer stack} {
   return [list $pairs {}]
 }
 
-package provide tclpdf::markup 1.1
+package provide tclpdf::markup 1.2

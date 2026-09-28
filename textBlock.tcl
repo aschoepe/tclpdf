@@ -1198,13 +1198,13 @@ oo::define ::tclpdf::document::document {
     }
     my state textRuns $runs
     my state textRunsString $string
-    # A heading has a leading of its own - one per paragraph, read by
-    # [TextBlockPlace] beside the block's - and, where it opens the block,
-    # the lift of the first baseline is its ascent, not the block's.
-    my state textRunsLeadings [expr {[dict exists $options runsLeadings]
-        ? [dict get $options runsLeadings] : {}}]
-    my state textRunsHeadings [expr {[dict exists $options runsHeadings]
-        ? [dict get $options runsHeadings] : {}}]
+    # The paragraph states of the block (textRun.tcl): a heading has a
+    # leading of its own - one per paragraph, read by [TextBlockPlace]
+    # beside the block's - and, where it opens the block, the lift of the
+    # first baseline is its ascent, not the block's; a list item has an
+    # indent the band adds and a label [TextParagraphDraw] draws.
+    my state textRunsParagraphs [expr {[dict exists $options runsParagraphs]
+        ? [dict get $options runsParagraphs] : {}}]
     if {[llength $runs]} {
       foreach entry $runs {
         lassign $entry from to style own
@@ -1296,17 +1296,34 @@ oo::define ::tclpdf::document::document {
   #
   # One builder, because the same band now serves two askers: the breaker
   # (TextBlockLines) and the no-room answer of TextBlockNoRoom.
+  #
+  # A LIST ITEM (textRun.tcl) is indented once more, on every line of it -
+  # the first carries the label in front of it, the others stand under the
+  # first - so the paragraphs that are items narrow the band by their indent
+  # beside the three distances. A continuation keeps it: the indent belongs
+  # to the item, not to its first line.
   method TextBlockBand {options} {
     set continued [expr {[dict exists $options continued]
         && [dict get $options continued]}]
-    return [list apply {{width indent indentRight firstIndent continued line paragraph running} {
+    set items {}
+    if {[dict exists $options runsParagraphs]} {
+      dict for {paragraph entry} [dict get $options runsParagraphs] {
+        if {[dict exists $entry indent]} {
+          dict set items $paragraph [dict get $entry indent]
+        }
+      }
+    }
+    return [list apply {{width indent indentRight firstIndent continued items line paragraph running} {
       set extra [expr {$line == 0 && !($continued && $paragraph == 0) ?
           $firstIndent : 0}]
+      if {[dict exists $items $paragraph]} {
+        set extra [expr {$extra + [dict get $items $paragraph]}]
+      }
       return [list [expr {$width - $indent - $indentRight - $extra}] \
           [expr {$indent + $extra}]]
     }} [dict get $options width] [dict get $options indent] \
         [dict get $options indentRight] [dict get $options firstIndent] \
-        $continued]
+        $continued $items]
   }
 
   # The widest single character of a string - the least a line has to offer
@@ -1382,7 +1399,8 @@ oo::define ::tclpdf::document::document {
     # old sum is kept where there are no headings - it is what every
     # existing document was placed by, and it is the one a band that skips
     # lines (-avoid) relies on, which a block with headings refuses.
-    set leadings [my state textRunsLeadings]
+    set paragraphs [my state textRunsParagraphs]
+    set leadings [my TextBlockParagraphs $paragraphs leading]
     set previousTop 0
     # OVER THE INDICES, so that the tail can be taken in one go when the
     # limit is reached: the loop used to walk to the end of the list and
@@ -1431,7 +1449,7 @@ oo::define ::tclpdf::document::document {
     # every typographer's rule book forbids. Where the limit cut right after
     # a heading, the heading goes with the rest - every trailing line that
     # belongs to a heading paragraph, so a two-line heading moves whole.
-    set headings [my state textRunsHeadings]
+    set headings [my TextBlockParagraphs $paragraphs heading]
     if {[dict size $headings] && [llength $rest]} {
       while {[llength $drawn]} {
         set lastLine [lindex [lindex $drawn end] 0]
@@ -1810,12 +1828,26 @@ oo::define ::tclpdf::document::document {
   # questions above ask about, because the first line is the one that has
   # to fit.
   method TextBlockFirstLeading {options state} {
-    if {[dict exists $options runsLeadings]
-        && [dict exists [dict get $options runsLeadings] 0]} {
-      return [dict get [dict get $options runsLeadings] 0]
+    if {[dict exists $options runsParagraphs 0 leading]} {
+      return [dict get $options runsParagraphs 0 leading]
     }
     return [::tclpdf::geometry fromPoints [dict get $state leading] \
         [my cget -unit]]
+  }
+
+  # One column of the paragraph table of a block (textRun.tcl): paragraph
+  # index -> the value of key, for the paragraphs that have one - their
+  # leading, their heading level. Here rather than beside the table's
+  # builder because every block is placed through [TextBlockPlace], and a
+  # block without runs must not reach for a module it never loaded.
+  method TextBlockParagraphs {paragraphs key} {
+    set column {}
+    dict for {paragraph entry} $paragraphs {
+      if {[dict exists $entry $key]} {
+        dict set column $paragraph [dict get $entry $key]
+      }
+    }
+    return $column
   }
 
   # The height that spreads a text evenly over n columns starting at y on
@@ -1945,42 +1977,43 @@ oo::define ::tclpdf::document::document {
     # held back, is followed by that rest, on the next page of a paginated
     # run or in the caller's next call.
     set last [lindex $lines end]
-    # A tagged block with headings is several structure elements, one per
-    # paragraph - H1 to H3 for the headings, the block's tag for the rest -
-    # and each is opened where its first line is drawn and closed after its
-    # last; [text] opens no mark round such a block. An artifact block stays
-    # one artifact whatever it holds.
-    set headings [my state textRunsHeadings]
-    set perParagraph [expr {[dict size $headings] && [my state tagged] eq "1"}]
+    # A block with PARAGRAPH STATES - headings, list items (textRun.tcl) -
+    # hands the first drawn line of every paragraph to [TextRunsParagraph],
+    # which draws a list item's label and, in a tagged document, opens the
+    # paragraph's own marks: H1 to H3 for a heading, an LI in an L for an
+    # item, the block's tag for the rest, each opened where its first line
+    # is drawn and closed after its last; [text] opens no mark round such a
+    # block. An artifact block stays one artifact per paragraph.
+    #
+    # What the paragraphs left open is closed on the way out whatever
+    # happens, so that a line that fails does not leave a BDC, an LI or an
+    # L standing for the next call to fall into.
+    set perParagraph [dict size [my state textRunsParagraphs]]
     set tag [dict get $options tag]
-    set mark {}
+    set marking {}
     set marked -1
     set ascent [my TextLift $state top]
-    foreach entry $drawn {
-      lassign $entry line top
-      set paragraph [dict get $line paragraph]
-      if {$perParagraph && $paragraph != $marked} {
-        if {[llength $mark]} {
-          my content [my StructureEnd $mark]
+    try {
+      foreach entry $drawn {
+        lassign $entry line top
+        set paragraph [dict get $line paragraph]
+        if {$perParagraph && $paragraph != $marked} {
+          set marking [my TextRunsParagraph $marking $paragraph $line $state \
+              $tag $x $y $lift $top $ascent [dict get $options rotate]]
+          set marked $paragraph
         }
-        set own $tag
-        if {[dict exists $headings $paragraph] && [lindex $tag 0] ne "Artifact"} {
-          set own H[dict get $headings $paragraph]
+        if {[dict get $line text] ne {}} {
+          my TextParagraphLine [dict get $line text] $state \
+              [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
+              $align [dict get $line closes] [dict get $options rotate] \
+              [expr {$lift + $top}] [dict get $line hyphen] \
+              [expr {$line ne $last}] [dict get $line split] [dict get $line from]
         }
-        set mark [my StructureMark $own Layout [expr {$y + $lift + $top - $ascent}]]
-        my content [my StructureBegin $mark]
-        set marked $paragraph
       }
-      if {[dict get $line text] ne {}} {
-        my TextParagraphLine [dict get $line text] $state \
-            [expr {$x + [dict get $line offset]}] $y [dict get $line width] \
-            $align [dict get $line closes] [dict get $options rotate] \
-            [expr {$lift + $top}] [dict get $line hyphen] \
-            [expr {$line ne $last}] [dict get $line split] [dict get $line from]
+    } finally {
+      if {$perParagraph} {
+        my TextRunsParagraphClose $marking
       }
-    }
-    if {[llength $mark]} {
-      my content [my StructureEnd $mark]
     }
     # Text, not lines: the rest may have to be broken again for a column of
     # a different width, and handing back lines would silently fix the old
@@ -2208,4 +2241,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.18
+package provide tclpdf::textBlock 1.19

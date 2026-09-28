@@ -5,8 +5,8 @@
 # the tags give, because both translators end in markup.tcl's [emit]. The
 # parser knows no document, so most of these tests need none; what they
 # check is the subset, the strictness, the escapes and every refusal by
-# name. The last group sets the same paragraph in both notations and
-# compares the bytes.
+# name. The fifth group sets the same paragraph in both notations and
+# compares the pairs and the bytes; the sixth reads lists.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -93,10 +93,9 @@ test markdown-3.3 {a single ~, three ~ and four or more * are text} -body {
   $P {~1 %, ~~~ fence, ****x****}
 } -result {{~1 %, ~~~ fence, ****x****} {}}
 
-test markdown-3.4 {the rest of Markdown - lists, quotes, code, tags, autolinks, images - is text, not a refusal} -body {
-  $P [string cat "- item\n> quote\n" {`code` <b>tag</b> https://example.org ![image](pic.png) ![alt]}]
-} -result {{- item
-> quote
+test markdown-3.4 {the rest of Markdown - quotes, code, tags, autolinks, images - is text, not a refusal} -body {
+  $P [string cat "> quote\n" {`code` <b>tag</b> https://example.org ![image](pic.png) ![alt]}]
+} -result {{> quote
 `code` <b>tag</b> https://example.org ![image](pic.png) ![alt]} {}}
 
 test markdown-3.5 {a backslash makes * ~ [ ] # and itself text, and is text in front of anything else} -body {
@@ -202,5 +201,104 @@ test markdown-5.4 {a document that asks for tags never loads the Markdown transl
     puts [list $before $after]
   }
 } -result {1 0}
+
+test markdown-5.5 {the same bulleted list written as tags and as Markdown gives the identical list} -body {
+  set tagged "An opening paragraph.\n<ul>\n  <li>The <strong>amount</strong> is due</li>\n  <li>see\
+      <a href=\"https://example.org/x\">the terms</a></li>\n  <li>and <em>nothing</em> else</li>\n</ul>A\
+      closing paragraph."
+  set markdown "An opening paragraph.\n- The **amount** is due\n* see \[the terms\](https://example.org/x)\n+ and\
+      *nothing* else\nA closing paragraph."
+  set a [::tclpdf::markup::parse $tagged]
+  set b [$P $markdown]
+  list [string equal $a $b] $b
+} -result {1 {{An opening paragraph.
+} {} {The } {item bullet} amount {item bullet strong 1 style bold} { is due} {item bullet} {
+} {} {see } {item bullet} {the terms} {item bullet url https://example.org/x} {
+} {} {and } {item bullet} nothing {item bullet em 1 style italic} { else} {item bullet} {
+} {} {A closing paragraph.} {}}}
+
+test markdown-5.6 {the same numbered list written as tags and as Markdown gives the identical list} -body {
+  set tagged "Steps:\n<ol><li>Open <strong>the</strong> file</li><li><em>Edit</em> it</li><li>Save\
+      <s>twice</s> once</li></ol>"
+  set markdown "Steps:\n1. Open **the** file\n1. *Edit* it\n12. Save ~~twice~~ once"
+  set a [::tclpdf::markup::parse $tagged]
+  set b [$P $markdown]
+  list [string equal $a $b] [llength $b] [lsort -unique [lmap {text options} $b {
+    expr {[dict exists $options item] ? [dict get $options item] : "-"}
+  }]]
+} -result {1 22 {- number}}
+
+# --- lists ----------------------------------------------------------------------
+
+test markdown-6.1 {"- ", "* " and "+ " start a bulleted item, digits with ". " a numbered one} -body {
+  list [$P "- a\n* b\n+ c"] [$P "1. a\n2. b"]
+} -result {{a {item bullet} {
+} {} b {item bullet} {
+} {} c {item bullet}} {a {item number} {
+} {} b {item number}}}
+
+test markdown-6.2 {the number written in front of an item is not read - one or two digits, any of them} -body {
+  $P "7. a\n1. b\n99. c\n07. d"
+} -result {a {item number} {
+} {} b {item number} {
+} {} c {item number} {
+} {} d {item number}}
+
+test markdown-6.3 {runs, links and struck text inside an item keep the item} -body {
+  $P {- **fett**, *kursiv*, ~~weg~~ und [hier](https://example.org)}
+} -result {fett {item bullet strong 1 style bold} {, } {item bullet} kursiv {item bullet em 1 style italic} {, } {item bullet} weg {item bullet strike 1} { und } {item bullet} hier {item bullet url https://example.org}}
+
+test markdown-6.4 {a marker not at a line start, without its space, indented, or with three digits is text} -body {
+  $P "a - b, 5 * 3, c + d\n-x\n*y*\n1.x\n1) x\n100. x\n  - eingerückt"
+} -result {{a - b, 5 * 3, c + d
+-x
+} {} y {em 1 style italic} {
+1.x
+1) x
+100. x
+  - eingerückt} {}}
+
+test markdown-6.5 {a list at the end adds no trailing line feed, also when the text ends on one} -body {
+  list [$P "Davor\n- a\n- b"] [$P "- a\n"]
+} -result {{{Davor
+} {} a {item bullet} {
+} {} b {item bullet}} {a {item bullet}}}
+
+test markdown-6.6 {text behind an item is a paragraph of its own, and a heading may stand in front} -body {
+  $P "# Kopf\n- a\nDanach"
+} -result {Kopf {heading 1} {
+} {} a {item bullet} {
+} {} Danach {}}
+
+test markdown-6.7 {two lists apart: a paragraph between them, a change of kind, an empty line} -body {
+  list [$P "- a\nMitte\n1. b"] [$P "- a\n1. b"] [$P "- a\n\n- b"]
+} -result {{a {item bullet} {
+} {} {Mitte
+} {} b {item number}} {a {item bullet} {
+} {} b {item number}} {a {item bullet} {
+} {} {
+} {} b {item bullet}}}
+
+test markdown-6.8 {spaces behind the marker's one space are text of the item} -body {
+  $P "-   x"
+} -result {{  x} {item bullet}}
+
+test markdown-6.9 {a backslash makes - + and . text, so that a line can start with what reads as a marker} -body {
+  $P "\\- a\n\\+ b\n\\* c\n1\\. d"
+} -result {{- a
++ b
+* c
+1. d} {}}
+
+test markdown-6.10 {a run open across the end of an item, or an item inside an open run, is NESTING; open at the end is OPEN} -body {
+  list [::tclpdfTest::refusal {$P "- a *b\nc*"}] [::tclpdfTest::refusal {$P "*a\n- b*"}] \
+      [::tclpdfTest::refusal {$P "*a\n12. b*"}] [::tclpdfTest::refusal {$P "- \[a\nb\](x)"}] \
+      [::tclpdfTest::refusal {$P "- a\n- **b"}]
+} -result {{TCLPDF TEXT MARKDOWN NESTING * 6} {TCLPDF TEXT MARKDOWN NESTING - 3} {TCLPDF TEXT MARKDOWN NESTING 12. 3} {TCLPDF TEXT MARKDOWN NESTING {[} 4} {TCLPDF TEXT MARKDOWN OPEN ** 6}}
+
+test markdown-6.11 {a refusal at the end of an item names the item} -body {
+  catch {$P "- a *b\nc*"} msg
+  list [regexp {list item ends at position 6} $msg] [regexp {opened at position 4} $msg]
+} -result {1 1}
 
 cleanupTests

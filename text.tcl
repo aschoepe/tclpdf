@@ -600,7 +600,8 @@ oo::define ::tclpdf::document::document {
         && [dict get $options columns] == 1 && [my TextBlockNoRoom $options]} {
       if {$whole ne {}} {
         return [dict create y [lindex $at 1] \
-            rest [my TextRunsRest [dict get $options runs] $whole $string]]
+            rest [my TextRunsRest [dict get $options runs] $whole $string \
+                [dict get $options runsParagraphs]]]
       }
       return [dict create y [lindex $at 1] rest $string]
     }
@@ -618,11 +619,12 @@ oo::define ::tclpdf::document::document {
     # bracketed here.
     set perPage [expr {$width ne {} && ([dict get $options paginate]
         || [dict get $options columns] > 1)}]
-    # A block with headings marks per paragraph (TextParagraphDraw), for the
-    # same reason a paginated one marks per page: one mark round the block
-    # would make the heading part of the paragraph's element.
-    if {[dict exists $options runsHeadings]
-        && [dict size [dict get $options runsHeadings]]} {
+    # A block with headings or list items marks per paragraph
+    # (TextParagraphDraw), for the same reason a paginated one marks per
+    # page: one mark round the block would make the heading part of the
+    # paragraph's element, and a list has elements of its own.
+    if {[dict exists $options runsParagraphs]
+        && [dict size [dict get $options runsParagraphs]]} {
       set perPage 1
     }
     set mark {}
@@ -684,7 +686,7 @@ oo::define ::tclpdf::document::document {
     # with the same faces (TextRunsRest).
     if {$whole ne {} && [dict exists $result rest]} {
       dict set result rest [my TextRunsRest [dict get $options runs] $whole \
-          [dict get $result rest]]
+          [dict get $result rest] [dict get $options runsParagraphs]]
     }
     return $result
   }
@@ -3265,4 +3267,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.24
+package provide tclpdf::text 1.25

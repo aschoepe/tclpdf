@@ -155,7 +155,20 @@ puts "height of the tagged block: [format %.1f [$doc textHeight $tagged -width 8
     -markup tags -family helvetica]] mm"
 ```
 
-A run changes the face and what is drawn over or under it - never the size, the colour or the spacing, which belong to the paragraph and keep every line one height. A heading is a paragraph of its own at 1.6, 1.3 and 1.15 times the block's size, bold, and never the last line of a page or column. Runs and `-markup` need `-width` (`TCLPDF TEXT RUNS`), and `-markup` excludes `-runs 1`. Kerning ends at a run boundary. The *rest* of a height-limited block comes back as a list of runs, to be set again with `-runs 1`.
+```tcl
+# Lists are item paragraphs: <ul>/<ol> with <li> in tags, "- " or "1. " at
+# the start of a line in Markdown, "item bullet|number" on the runs of the
+# list. The package counts the numbers, indents every line of the item and
+# draws the label in front of the first; one level, no nesting.
+$doc page add
+set y [$doc text {<p>Before shipping:</p><ol><li>print the <b>invoice</b></li><li>close the carton</li><li>hand it to the carrier</li></ol>} \
+    -at {20 20} -width 80 -anchor top -markup tags -family helvetica]
+set y [$doc text "Or as Markdown:\n- the invoice\n- the packing list\n- the return label" \
+    -at [list 20 [expr {$y + 6}]] -width 80 -anchor top -markup markdown -family helvetica]
+puts "an item's runs carry item: [lrange [$doc textLines {<ul><li>one</li></ul>} -width 80 -markup tags -family helvetica] 0 0]"
+```
+
+A run changes the face and what is drawn over or under it - never the size, the colour or the spacing, which belong to the paragraph and keep every line one height. A heading is a paragraph of its own at 1.6, 1.3 and 1.15 times the block's size, bold, and never the last line of a page or column; a list item is a paragraph indented by 1.6 times the size with its label in front of the first line, and a tagged list (L, LI, Lbl, LBody) is refused beside -paginate and -columns. Runs and `-markup` need `-width` (`TCLPDF TEXT RUNS`), and `-markup` excludes `-runs 1`. Kerning ends at a run boundary. The *rest* of a height-limited block comes back as a list of runs, to be set again with `-runs 1`.
 
 ## Hyphenation: the patterns come from the caller
 

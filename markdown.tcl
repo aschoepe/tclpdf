@@ -2,7 +2,8 @@
 # tclpdf - PDF generation for Tcl
 #
 # markdown - a paragraph written in Markdown, turned into the runs [text
-# -runs 1] sets: "**bold**, *italic*, ~~struck~~, [a link](...), # a heading"
+# -runs 1] sets: "**bold**, *italic*, ~~struck~~, [a link](...), # a heading,
+# - an item, 1. an item"
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE, <alx.tcl@sowaswie.de>
 #
@@ -16,14 +17,15 @@
 # this is the second, read with the same strictness.
 #
 # WHY THIS SUBSET. It is the part of Markdown that names something a run or
-# a heading paragraph can be: strong, em, struck, a link, headings 1 to 3.
-# Underline has no Markdown spelling and gets none here: "_" is emphasis in
-# CommonMark, and it is TEXT here, because it stands in file names,
-# identifiers and snake_case far more often than around a word - -markup
-# tags has <u> for the caller who needs one. Lists, code, images, quotes,
-# tables and autolinks would need what a run cannot be (an indent, a second
-# face, a picture, a grid), so they are neither set nor refused: they come
-# out as they were typed.
+# a paragraph can be: strong, em, struck, a link, headings 1 to 3, and - since
+# 2026-09-28, the author's decision - the items of a flat list, bulleted or
+# numbered, one level deep. Underline has no Markdown spelling and gets none
+# here: "_" is emphasis in CommonMark, and it is TEXT here, because it stands
+# in file names, identifiers and snake_case far more often than around a
+# word - -markup tags has <u> for the caller who needs one. Nested lists,
+# code, images, quotes, tables and autolinks would need what a run cannot be
+# (a second indent, a second face, a picture, a grid), so they are neither
+# set nor refused: they come out as they were typed.
 #
 # WHY STRICT. CommonMark decides whether a "*" opens, closes or is text from
 # what stands on both sides of it, and a caller cannot foresee the outcome
@@ -33,7 +35,7 @@
 # WHAT THIS MODULE IS: a translator from one string into the list of {text
 # options} pairs that textRun.tcl takes, like markup.tcl - and the pairs come
 # out of markup.tcl's [emit], from a stack that carries markup.tcl's names
-# (strong, em, s, a, h1 to h3). There is one vocabulary, not two: what
+# (strong, em, s, a, h1 to h3, ul, ol, li). There is one vocabulary, not two: what
 # "strong" does to a run is decided there alone, so a paragraph written in
 # either notation gives the identical list.
 #
@@ -62,9 +64,24 @@
 #     end, or a heading inside an open run, is NESTING; four or more "#" in
 #     front of the space are HEADING. A "#" elsewhere, or without the space,
 #     is text.
+#   - "- ", "* " or "+ " at the start of the text or of a line make that line
+#     a bulleted list item, one or two digits with ". " behind them ("1. " to
+#     "99. ") a numbered one. An item is a paragraph: it ends at the line
+#     feed, which is its paragraph end, exactly as a heading's - where nothing
+#     follows, no empty paragraph is added, as behind </li></ul>. Every run of
+#     the item carries "item bullet" or "item number"; consecutive items of
+#     one kind are one list, and the number written in front of an item is
+#     not read - the setting counts. Runs inside an item are allowed; one
+#     still open at its end, or an item starting inside an open run, is
+#     NESTING. Only the very start of a line counts: an indented "  - b" is
+#     not a nested item but a line of text, spaces, dash and all - nesting by
+#     indent is not built. Spaces behind the marker's one space are text of
+#     the item. A "-", "*" or "+" without the space, or anywhere but at a
+#     line start, and "100. " are text, as before - "5 * 3" stays text.
 #   - Any other line feed stays a paragraph break, as without markup.
-#   - A backslash in front of * ~ [ ] # or \ makes that character text; in
-#     front of anything else it is text itself.
+#   - A backslash in front of * ~ [ ] # - + . or \ makes that character
+#     text; in front of anything else it is text itself. "\- x" and "1\. x"
+#     are how a line starts with what would otherwise be an item marker.
 #   - A run still open at the end of the text is OPEN.
 #
 
@@ -75,12 +92,16 @@ namespace eval ::tclpdf::markdown {
   # How each name the stack can carry is written in Markdown - the spelling
   # a refusal quotes. What a name DOES to a run is not here: that is
   # markup.tcl's vocabulary, read by [::tclpdf::markup::emit].
-  variable delimiters {em * strong ** s ~~ a [ h1 # h2 ## h3 ###}
+  variable delimiters {em * strong ** s ~~ a [ h1 # h2 ## h3 ### ul - ol 1. li -}
+  # The names that make a line a paragraph of its own - a heading, or a list
+  # item - rather than a run in it. They stand at the bottom of the stack,
+  # below every run, and a line feed ends them.
+  variable lineBlocks {h1 h2 h3 ul ol li}
   # A run of delimiter characters, and the names it stands for; opened in
   # this order, so that *** is em around strong.
   variable runs {* em ** strong *** {em strong} ~~ s}
   # The characters a backslash turns into text.
-  variable escapable {* ~ [ ] # \\}
+  variable escapable {* ~ [ ] # - + . \\}
 }
 
 # The pairs a Markdown string sets as. Every refusal names the position in
@@ -92,6 +113,7 @@ namespace eval ::tclpdf::markdown {
 # link is open - where its "]" stands and where reading goes on behind it.
 proc ::tclpdf::markdown::parse {text} {
   variable escapable
+  variable lineBlocks
   set pairs {}
   set buffer {}
   set stack {}
@@ -103,7 +125,7 @@ proc ::tclpdf::markdown::parse {text} {
   set lineStart 1
   while {$position < $length} {
     set char [string index $text $position]
-    if {$lineStart && $char eq "#" && [Heading $text]} {
+    if {$lineStart && [LineMarker $text]} {
       set lineStart 0
       continue
     }
@@ -143,9 +165,9 @@ proc ::tclpdf::markdown::parse {text} {
       }
     }
   }
-  # A heading is always the outermost entry and ends with the text; any
-  # other entry still open is a run nobody closed.
-  if {[llength $stack] && [lindex $stack end 0] ni {h1 h2 h3}} {
+  # A heading or a list item is always at the bottom of the stack and ends
+  # with the text; any other entry still open is a run nobody closed.
+  if {[llength $stack] && [lindex $stack end 0] ni $lineBlocks} {
     set delimiter [Spelling [lindex $stack end 0]]
     set start [lindex $opened end]
     return -code error -errorcode [list TCLPDF TEXT MARKDOWN OPEN $delimiter $start] \
@@ -163,49 +185,68 @@ proc ::tclpdf::markdown::Spelling {name} {
   return [dict get $delimiters $name]
 }
 
-# A "#" at the start of a line: a heading marker, or text. Answers 1 when it
-# opened a heading, 0 when the "#" is text and the caller reads it as such.
-proc ::tclpdf::markdown::Heading {text} {
+# The start of a line: a heading marker ("# " to "### "), a list item marker
+# ("- ", "* ", "+ ", "1. " to "99. "), or neither. Answers 1 when it opened
+# the paragraph the marker stands for, 0 when there is no marker and the
+# caller reads on as usual.
+proc ::tclpdf::markdown::LineMarker {text} {
   upvar 1 pairs pairs buffer buffer stack stack opened opened position position
-  if {![regexp -start $position {\A(#+) } $text -> hashes]} {
+  if {[regexp -start $position {\A(#+) } $text -> marker]} {
+    set level [string length $marker]
+    if {$level > 3} {
+      return -code error -errorcode [list TCLPDF TEXT MARKDOWN HEADING $position] \
+          "tclpdf: \"$marker \" at position $position is no heading - a heading\
+          is \"# \", \"## \" or \"### \"; write \\# for a literal \"#\""
+    }
+    set names [list h$level]
+    set what heading
+  } elseif {[regexp -start $position {\A([-*+]|[0-9]{1,2}\.) } $text -> marker]} {
+    # The kind comes from the marker; the number in front of the "." is
+    # not kept - the setting counts the items.
+    set names [expr {[string index $marker end] eq "." ? {ol li} : {ul li}}]
+    set what "list item"
+  } else {
     return 0
-  }
-  set level [string length $hashes]
-  if {$level > 3} {
-    return -code error -errorcode [list TCLPDF TEXT MARKDOWN HEADING $position] \
-        "tclpdf: \"$hashes \" at position $position is no heading - a heading\
-        is \"# \", \"## \" or \"### \"; write \\# for a literal \"#\""
   }
   if {[llength $stack]} {
     set delimiter [Spelling [lindex $stack end 0]]
-    return -code error -errorcode [list TCLPDF TEXT MARKDOWN NESTING $hashes $position] \
-        "tclpdf: the heading at position $position starts inside the\
-        \"$delimiter\" opened at position [lindex $opened end] - a heading\
+    return -code error -errorcode [list TCLPDF TEXT MARKDOWN NESTING $marker $position] \
+        "tclpdf: the $what at position $position starts inside the\
+        \"$delimiter\" opened at position [lindex $opened end] - a $what\
         is a paragraph, close the run first"
   }
   lassign [::tclpdf::markup::emit $pairs $buffer $stack] pairs buffer
-  lappend stack [list h$level {}]
-  lappend opened $position
-  incr position [expr {$level + 1}]
+  foreach name $names {
+    lappend stack [list $name {}]
+    lappend opened $position
+  }
+  incr position [expr {[string length $marker] + 1}]
   return 1
 }
 
-# A line feed. Inside a heading it is the heading's end, and its paragraph
-# break goes out as a pair of its own - only where something follows, as
-# behind </h1>. Anywhere else it is text, and a paragraph break as such.
+# A line feed. Inside a heading or a list item it is that paragraph's end,
+# and its paragraph break goes out as a pair of its own - only where
+# something follows, as behind </h1> and </ul>. Anywhere else it is text,
+# and a paragraph break as such.
 proc ::tclpdf::markdown::LineEnd {text} {
+  variable lineBlocks
   upvar 1 pairs pairs buffer buffer stack stack opened opened position position
-  if {![llength $stack] || [lindex $stack 0 0] ni {h1 h2 h3}} {
+  set depth [llength [lmap entry $stack {
+    if {[lindex $entry 0] ni $lineBlocks} continue
+    set entry
+  }]]
+  if {!$depth} {
     append buffer "\n"
     incr position
     return
   }
-  if {[llength $stack] > 1} {
+  if {[llength $stack] > $depth} {
     set delimiter [Spelling [lindex $stack end 0]]
+    set what [expr {[lindex $stack 0 0] in {ul ol} ? "list item" : "heading"}]
     return -code error -errorcode [list TCLPDF TEXT MARKDOWN NESTING $delimiter $position] \
-        "tclpdf: the heading ends at position $position with the\
+        "tclpdf: the $what ends at position $position with the\
         \"$delimiter\" opened at position [lindex $opened end] still open -\
-        close it on the heading's line"
+        close it on the $what's line"
   }
   lassign [::tclpdf::markup::emit $pairs $buffer $stack] pairs buffer
   set stack {}
@@ -351,4 +392,4 @@ proc ::tclpdf::markdown::LinkClose {} {
   return
 }
 
-package provide tclpdf::markdown 1.0
+package provide tclpdf::markdown 1.1

@@ -82,56 +82,28 @@ A run does not change the size or the colour. Both belong to the paragraph; a he
 
 set block {-width 170 -align justify -paragraphSpacing 2}
 
-# One page per notation: the title, the string as typed - set WITHOUT
-# -markup, so that every tag and every asterisk stands on the page as text -
-# and the same string set with -markup. Returns the y below the set block.
-proc page {doc title source notation} {
-    $doc page add
-    $doc font -family helvetica -size 14 -style bold -color black
-    $doc text $title -at {20 22}
-    $doc font -size 8 -style {} -color {0.45 0.45 0.45}
-    $doc text "As typed:" -at {20 32}
-    $doc font -family courier -size 7.5 -color black
-    set y [$doc text $source -at {20 37} -width 170 -paragraphSpacing 1]
-    $doc font -family helvetica -size 8 -color {0.45 0.45 0.45}
-    $doc text "As set with -markup $notation:" -at [list 20 [expr {$y + 8}]]
-    $doc font -size 10 -color black
-    return [$doc text $source -at [list 20 [expr {$y + 17}]] {*}$::block -markup $notation]
-}
+# One page per notation, "as typed, as set" - the page is drawn by
+# exampleTypedAndSet in common.tcl, shared with example 1.19.
 
 set doc [tclpdf new -unit mm]
 $doc info Title "Runs in flowing text: tags and Markdown, as typed and as set"
 
-page $doc "Written with tags" $tagged tags
-set y [page $doc "Written in Markdown" $markdown markdown]
+exampleTypedAndSet $doc "Written with tags" $tagged tags $block
+set y [exampleTypedAndSet $doc "Written in Markdown" $markdown markdown $block]
 
-# The proof, measured in the state the blocks were set in: the lines each
-# notation breaks into, as [textLines] answers them - the runs of every line
-# with their options, not only the words. The tags are compared without
-# their <u>, the one thing Markdown cannot write.
-set fromTags [$doc textLines [regsub -all {</?u>} $tagged {}] {*}$block -markup tags]
-set fromMarkdown [$doc textLines $markdown {*}$block -markup markdown]
-set same [expr {$fromTags eq $fromMarkdown}]
-$doc font -size 8 -color {0.45 0.45 0.45}
-$doc text "Both notations break into [llength $fromMarkdown] lines, and the\
-    lines are [expr {$same ? {identical} : {DIFFERENT}}], runs and options\
-    alike - the underline apart, which Markdown has no spelling for." \
-    -at [list 20 [expr {$y + 8}]] -width 170
+# The proof - the lines each notation breaks into - is measured and drawn
+# by exampleSameLines in common.tcl, shared with 1.19.
+exampleSameLines $doc $tagged $markdown $block $y
 
 exampleFooter $doc
 $doc write $target
 $doc destroy
 
 puts "  written: $target ([file size $target] bytes)"
-puts "  tags and Markdown break into [llength $fromTags] and\
-    [llength $fromMarkdown] lines: [expr {$same ? {identical} : {DIFFERENT}}]"
 puts "  the first three runs of each notation:"
 foreach notation {markup markdown} source [list $tagged $markdown] {
     puts "    from $notation:"
     foreach {text options} [lrange [::tclpdf::${notation}::parse $source] 0 5] {
         puts "      [format %-40s [list $text]] [list $options]"
     }
-}
-if {!$same} {
-    exit 1
 }
