@@ -68,6 +68,95 @@ puts "lines:  [llength [$doc textLines $body -width 80]]"
 
 Where a line breaks: at ASCII white space, U+2000..U+200A, U+3000, U+200B (zero width space, drawn by every face) and the rest of UAX #14's BA class; **never** at U+00A0, U+2007, U+202F. A tab or a stray CR is set as a space. U+FEFF is dropped. Extracting a line that took a soft-hyphen offer yields the hyphen too.
 
+## Runs inside a paragraph: tags, Markdown, and the list
+
+```tcl
+# A bold word, an italic date, a link in the middle of flowing text: runs. The
+# breaker runs over all of them and measures every piece in its own face.
+# Helvetica here because a standard family brings its bold and oblique; an
+# embedded face needs [font family] first - further down.
+$doc page add
+
+# -markup tags: <b> <i> <u> <s> <em> <strong> <a href="..."> <h1>..<h3> <p> -
+# and nothing else between angle brackets is a tag. A "<" in front of a space,
+# a digit or the end is text; in front of a letter it has to open a known tag,
+# so a literal one is written &lt;. Braces rather than quotes: [text](url) in
+# a double-quoted string is a command substitution.
+set tagged {<h2>Payment</h2><p>The <b>amount</b> is due by <i>31 October</i>;\
+    the price of <s>980.00 EUR</s> no longer applies and the <u>surcharge</u>\
+    becomes due. Terms: <a href="https://fossil.sowaswie.de/tclpdf">project page</a>.</p>\
+    A &lt;b> is text here, and so is a < 5 %.}
+set y [$doc text $tagged -at {20 20} -width 80 -anchor top -markup tags -family helvetica]
+
+# -markup markdown: **strong** *em* ***both*** ~~struck~~ [text](url), and
+# "# ", "## ", "### " after a line feed open a heading that ends at the next.
+# No underline - Markdown has no spelling for it - and "_" is always text.
+set markdown {## Payment
+The **amount** is due by *31 October*; the price of ~~980.00 EUR~~ no longer\
+    applies and the surcharge becomes due. Terms: [project page](https://fossil.sowaswie.de/tclpdf).
+A snake_case name is text here, and so is 5 * 3.}
+set y [$doc text $markdown -at [list 20 [expr {$y + 6}]] -width 80 -anchor top \
+    -markup markdown -family helvetica]
+
+# -runs 1: the list both notations translate into, written by hand - what a
+# program assembling a paragraph from data writes. Pairs {text options}:
+# style bold|italic|{bold italic}, underline 1, strike 1, url address,
+# heading 1|2|3 (a paragraph of its own). A run without options is {}.
+set runs {
+    "Payment" {heading 2}
+    "The " {} "amount" {style bold} " is due by " {} "31 October" {style italic}
+    "; the price of " {} "980.00 EUR" {strike 1} " no longer applies and the " {}
+    "surcharge" {underline 1} " becomes due. Terms: " {}
+    "project page" {url https://fossil.sowaswie.de/tclpdf} "." {}
+}
+set y [$doc text $runs -at [list 20 [expr {$y + 6}]] -width 80 -anchor top \
+    -runs 1 -family helvetica]
+
+# An embedded alias is ONE face: a bold run in "body" is refused rather than
+# set regular in silence. [font family] ties embedded faces under one name -
+# -regular is required, -bold, -italic, -boldItalic as far as the faces exist -
+# and from then on -style bold, <b>, ** and {style bold} reach the bold face.
+$doc font family dejavu -regular body -bold bodyBold
+puts "family dejavu: [$doc font family dejavu]"     ;# without options: the registration
+$doc text "Set in DejaVu Sans Bold through the family." \
+    -at [list 20 [expr {$y + 6}]] -family dejavu -style bold -anchor top
+set y [$doc text {The <b>amount</b> is bold, the rest regular - both embedded.} \
+    -at [list 20 [expr {$y + 12}]] -width 80 -anchor top -markup tags -family dejavu]
+
+# Refused by name: a style the family has no face for, and a run left open in
+# either notation. Both read strictly: no fallback to plain text because one
+# "*" was forgotten.
+foreach {label script} [list \
+        "italic in a family without one" \
+            [list $doc text {"set " {} "slanted" {style italic}} -at {20 200} \
+                -width 80 -runs 1 -family dejavu] \
+        "a tag left open" \
+            [list $doc text {an <b>open tag} -at {20 200} -width 80 \
+                -markup tags -family helvetica] \
+        "a Markdown run left open" \
+            [list $doc text {an **open run} -at {20 200} -width 80 \
+                -markup markdown -family helvetica]] {
+    try {
+        {*}$script
+        puts "$label: went through, which it should not have"
+    } on error {message options} {
+        puts "$label -> [dict get $options -errorcode]"
+    }
+}
+
+# textLines and textHeight take -markup and -runs as well, and every line comes
+# back as a list of {text options} pairs - drawable again with -runs 1. ** is
+# <strong>, not <b>: set alike, told apart only in a tagged document.
+set fromTags [$doc textLines $tagged -width 80 -markup tags -family helvetica]
+set fromMarkdown [$doc textLines $markdown -width 80 -markup markdown -family helvetica]
+puts "line 2, tags:     [lindex $fromTags 1]"
+puts "line 2, Markdown: [lindex $fromMarkdown 1]"
+puts "height of the tagged block: [format %.1f [$doc textHeight $tagged -width 80 \
+    -markup tags -family helvetica]] mm"
+```
+
+A run changes the face and what is drawn over or under it - never the size, the colour or the spacing, which belong to the paragraph and keep every line one height. A heading is a paragraph of its own at 1.6, 1.3 and 1.15 times the block's size, bold, and never the last line of a page or column. Runs and `-markup` need `-width` (`TCLPDF TEXT RUNS`), and `-markup` excludes `-runs 1`. Kerning ends at a run boundary. The *rest* of a height-limited block comes back as a list of runs, to be set again with `-runs 1`.
+
 ## Hyphenation: the patterns come from the caller
 
 ```tcl

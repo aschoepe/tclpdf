@@ -11,8 +11,13 @@ set root [file normalize [file join [file dirname [info script]] .. .. .. ..]]
 set assets [file join $root examples assets]
 
 # The package itself, when it is not installed: a checkout carries pkgIndex.tcl
-# at its root. An installed package needs no line here.
-lappend auto_path $root
+# at its root, and it goes to the FRONT of auto_path, once - so that the tree
+# is checked and not an installed copy of the same version. Tcl runs the
+# ifneeded script registered last and reads auto_path from the back, so the
+# first directory has the last word; a second copy of the same directory
+# further back would be read first and the front one skipped, which is why
+# any earlier entry is removed. An installed package needs no line here.
+set auto_path [linsert [lsearch -all -inline -not -exact $auto_path $root] 0 $root]
 
 set ttf      [file join $assets fonts DejaVuSans.ttf]
 set ttfBold  [file join $assets fonts DejaVuSans-Bold.ttf]

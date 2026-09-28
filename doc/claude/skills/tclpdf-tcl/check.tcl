@@ -161,8 +161,10 @@ foreach path $files {
     set script [file join $scripts "check-[file rootname [file tail $path]].tcl"]
     set channel [open $script w]
     fconfigure $channel -encoding utf-8
-    # Every script starts from the same assets; the auto_path is the caller's.
-    puts $channel "lappend auto_path {*}[list $auto_path]"
+    # Every script starts from the same assets; the auto_path is the caller's,
+    # taken over as it is rather than appended, so that no directory stands
+    # in it twice - assets.tcl then puts the source tree in front.
+    puts $channel "set auto_path [list $auto_path]"
     puts $channel "source [list $assetsFile]"
     puts $channel $code
     close $channel

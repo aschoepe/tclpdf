@@ -1,5 +1,5 @@
-C Examples\s1.17\sand\s1.18\scut\salong\sthe\srule\sof\sone\sthing\sper\sexample\n\n-\s01.17-markup\s-\sthe\stwo\snotations,\sone\spage\seach,\sas\styped\sand\sas\sset:\sthe\sstring\sin\sCourier\swithout\s-markup,\sunderneath\sthe\ssame\sstring\swith\s-markup\stags\sand\swith\s-markup\smarkdown;\sthe\slast\sline\smeasures\sthat\sboth\sbreak\sinto\sthe\ssame\slines,\sthe\sunderline\sapart\n-\s01.18-runs\s(was\s01.18-markdown)\s-\sthe\slist\sunderneath\sthe\snotations,\swritten\sby\shand\sand\sset\sin\san\sembedded\sfamily:\sfont\sfamily,\sthe\srefusal\sof\sa\sface\sthe\sfamily\sdoes\snot\shave,\sand\swhat\sthe\sheadings\scost\sby\stextHeight
-D 2026-09-27T22:11:27.238
+C Skill\sreference:\sruns\sinside\sa\sparagraph,\sand\sthe\scheck\sruns\sagainst\sthe\ssource\stree\n\n-\sreference/03-text.md\s-\snew\ssection\swith\stags,\sMarkdown,\sthe\slist\sof\s-runs\s1,\sfont\sfamily\son\san\sembedded\sface,\sthree\srefusals\sshown\sby\stheir\serror\scodes,\sand\stextLines/textHeight\sanswering\sruns;\sSKILL.md\snames\sit\n-\sassets.tcl\sand\scheck.tcl\sput\sthe\ssource\stree\sin\sfront\sof\sauto_path,\sonce,\sso\sthat\sthe\ssnippets\scheck\sthe\stree\sand\snot\san\sinstalled\scopy\sof\sthe\ssame\sversion
+D 2026-09-28T05:48:37.377
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -25,12 +25,12 @@ F crypto.tcl 851746f7541be0efb73f7d4da5cd63ca0e2ca7b3d00a9ef4f054af52cba572d2
 F doc/PLUGINS.md 631ccfc36c86d130a5568b59b26ef22833b39988b97e3a1405151924f98a018d
 F doc/TCLPDF-VS-PDF4TCL.md 6c339a524e8f47f0473a9541a6e54181508f7beb0bdd2cced87f534d3224f025
 F doc/claude/TCLPDF.md 63a687111c53696ac48c59455fbd99fd0978acfbd2fdf647cdc2873424be2129
-F doc/claude/skills/tclpdf-tcl/SKILL.md f0499f58247aba371ba6de88451567b0b215ef2d046d0fc5bdd7e0f7b149c5ad
-F doc/claude/skills/tclpdf-tcl/assets.tcl 3a3ccb2514bbf52d7aacd9a52385c0b1be96717b0f1188d33d2d0293f1bab19d
-F doc/claude/skills/tclpdf-tcl/check.tcl 626ee542258686f3197389bdc241439b584bbb083793d8eee0318846c9913544
+F doc/claude/skills/tclpdf-tcl/SKILL.md b0554301c20c2c70a0290d2deb2d7d5560d42581665fc357b9f18fceb716fbe9
+F doc/claude/skills/tclpdf-tcl/assets.tcl 4bcc5e716bbb03489d086b94b1bc8d9d5360975c212a53e7a66bb5870c0f53ae
+F doc/claude/skills/tclpdf-tcl/check.tcl a97c8006f0c8f15de829cbe4329b12a8149f2ca78606bb0c683c5a795e439d04
 F doc/claude/skills/tclpdf-tcl/reference/01-document.md 70be90debb430ec2ba5982a8924d11909277ba3e4be6db53e34fd77db024b52d
 F doc/claude/skills/tclpdf-tcl/reference/02-fonts.md a066e58a7d7bd552111db22cf547428cf3eecfe66b2445b161fac73b80f87510
-F doc/claude/skills/tclpdf-tcl/reference/03-text.md 9cfd3d7804b168154b978682cae2dd0900e8e72c54c45fbb9d292a3179bf0665
+F doc/claude/skills/tclpdf-tcl/reference/03-text.md b4b01ae1fd90465481894d8f1246d32e94183696195ab123ded7ab163380eb61
 F doc/claude/skills/tclpdf-tcl/reference/04-graphics.md ccededa506a6083a24d8f20805c4f274d0c79e20e6e74c3c43d27b39d87852c8
 F doc/claude/skills/tclpdf-tcl/reference/05-images-svg.md 4f25af4acaaef95cd30791aaebd0d793f3b9afeb671d0202c4794d26dd4114d0
 F doc/claude/skills/tclpdf-tcl/reference/06-tables.md e6e0dd839e0d12e7bafda2e7a90a207e24f4d27583d785bbf9cfd2dd641eb708
@@ -66,7 +66,7 @@ F examples/01.14-hyphenation.tcl d0ea89654b19092c3084142d6ac5790954db231769a5d79
 F examples/01.15-text-fit.tcl 478204bee098622001ba1024f2c657b7184491d3bf80637ef04a99efc9e438f1
 F examples/01.16-prepress-control.tcl 1546ee0ea65d3fd4ab097c0f40c835af6d8eaa451e313b5b7d1d2001fb9cefe6
 F examples/01.17-markup.tcl fa477759dcaec3eba84d69e094e80c6514627820cb7c9ac8d00190ee9bd66872
-F examples/01.18-runs.tcl ffeccfcf17cda8bb119428e282e02699cf92d1753ce9e8954508e64b13f4a72b w examples/01.18-markdown.tcl
+F examples/01.18-runs.tcl ffeccfcf17cda8bb119428e282e02699cf92d1753ce9e8954508e64b13f4a72b
 F examples/02.01-embedding.tcl 1585debf1c1d1f771933cd1c43d938fb9b612c151eba3a11e2060aede0b7b361
 F examples/02.02-languages.tcl efc4b0d943ef43227a5d02bd1afd9c67f522c7383aaf63645069745de323067d
 F examples/02.03-font-families.tcl f7a622ffe24931cab3646753180275e9cbb11bca702cd8ad1057ae67a3168edc
@@ -512,8 +512,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P ea2b9be3d4eb1e079649a8d0826f0e1230783beb44f4b15eb7162d2c7094ea30
-R 7c298704b3da7a2e3e04b8c94be73ea5
+P d5f6877491cf227f009eaefd8b0410f58f599b8d80c4d586640e7c480c13f4b9
+R 261e7cb48483c36dd111f4ff3e6cd7bd
 U alex
-Z a282e0bdd54802827ba1a5fd444a7401
+Z 953c356eb019bab5ce2501d9f5ed03de
 # Remove this line to create a well-formed Fossil manifest.
