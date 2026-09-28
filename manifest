@@ -1,5 +1,5 @@
-C Lists\sin\sflowing\stext:\sbullet\sand\snumbered\sitems\sin\stags,\sin\sMarkdown\sand\sas\sruns\n\n-\stextRun.tcl,\stextBlock.tcl,\stext.tcl\s-\sa\slist\sitem\sis\sa\sparagraph\sstate\slike\sa\sheading:\sthe\sruns\scarry\sitem\sbullet\sor\sitem\snumber,\sthe\sitem\sis\sindented\son\severy\sline\sand\slabelled\sin\sfront\sof\sits\sfirst,\sthe\spackage\scounts\sthe\snumbers;\sheadings\sand\sitems\snow\sshare\sone\sparagraph\stable,\swhich\salso\sgives\sthe\ssecond\sparagraph\sof\sa\stwo-line\sheading\sits\sheading\sleading;\sthe\srest\sof\sa\sheight-limited\sblock\scarries\sstart\sand\scontinued\sso\sthat\snumbering\sand\sindent\ssurvive\sthe\scut;\sin\sa\stagged\sdocument\sa\slist\sis\sL\swith\sListNumbering\sholding\sLI,\sLbl\sand\sLBody,\sand\sis\srefused\sbeside\s-paginate\sand\s-columns\n-\smarkup.tcl\s-\sul,\sol\sand\sli;\smarkdown.tcl\s-\sa\sline\sbeginning\swith\s-,\s*\sor\s+\sor\swith\sa\snumber\sand\sa\sfull\sstop,\sthe\sbackslash\salso\sescapes\s-,\s+\sand\s.\n-\stests/textRun.test,\stests/markup.test,\stests/markdown.test\s-\sthe\sstate,\sthe\scount,\severy\srefusal,\sthe\stagged\stree\sagainst\sveraPDF,\sthe\ssame\slist\sfrom\sboth\snotations,\sand\sthe\sunchanged\sbytes\sof\sblocks\swithout\sitems\n-\sexamples/01.19-lists.tcl\s(new)\s-\sboth\snotations\sas\styped\sand\sas\sset;\sexamples/common.tcl\scarries\sthe\styped-and-set\spage\sand\sthe\ssame-lines\sproof\sthat\s01.17\sand\s01.19\sshare\n-\sdoc/tclpdf.md\s-\sitem,\sstart\sand\scontinued\sunder\s-runs,\slists\sunder\s-markup\stags\sand\smarkdown;\sthe\sskill's\s03-text.md\sand\sSKILL.md\sshow\sa\slist\sin\sboth\snotations\n-\sversions:\stextRun\s1.1,\stextBlock\s1.19,\stext\s1.25,\smarkup\s1.2,\smarkdown\s1.1\n-\sknowingly\sopen:\sone\slevel\sonly,\sno\snesting;\sa\stagged\slist\sdoes\snot\spaginate;\sthe\slabel\sof\sa\sright-aligned\sor\scentred\sitem\sstands\sat\sthe\sleft\sedge\sof\sthe\sband
-D 2026-09-28T13:15:38.452
+C Version\s1.5\n\n-\sconfigure.ac\sand\stclpdf.tcl\scarry\s1.5,\sthe\smanual\ssynopsis\sfollows;\sconfigure\sregenerated\sby\sautoconf\n-\sexample\s01.17\ssays\s"since\s1.5"\sfor\sruns\sand\smarkup,\swhich\sare\snew\sin\sthis\srelease\sand\snot\sin\s1.4\n-\sskill:\sSKILL.md\snames\ssign\stimestamp\sunder\sthe\ssignatures\sreference,\sand\sthe\sfonts\sreference\spoints\sat\sfont\sfamily\sfor\sa\sbold\srun\son\san\sembedded\sface
+D 2026-09-28T15:01:00.235
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -19,17 +19,17 @@ F colorFontPaint.tcl 3e27380d2d30583c1b357c74de16461d8fba9b9233be7942aea6623bf8a
 F colorFontRegion.tcl 72f2692546cbd02e1a971c35ade4d5e865912c95e981376d156c7552669d83e3
 F colr.tcl e02e12b299f2202f4f243ffa0d4d14079e45d3753591c0f2a328553b620bb864
 F colrPaint.tcl e5bc8abc1ae92aab94c60afcfac052e8980346e5176a0101547b35349b60c48e
-F configure c11a37429959d1e31f0b9b227e3a18ae156e0d8cc08cd4761772b6f3cc7a7892 x
-F configure.ac 060e92e4eb285de39fc0b47d8099335c125eab643b6e94852a52484adfa1eb44
+F configure b415255d9508794c1f5ce91cc9c1a8ceef1becabe3d48ac0b6f308be41307da0 x
+F configure.ac a43bec74de837173be7a263a349d225eea27017ea70c7bdcdf4c42123c52f4be
 F crypto.tcl 851746f7541be0efb73f7d4da5cd63ca0e2ca7b3d00a9ef4f054af52cba572d2
 F doc/PLUGINS.md 631ccfc36c86d130a5568b59b26ef22833b39988b97e3a1405151924f98a018d
 F doc/TCLPDF-VS-PDF4TCL.md 6c339a524e8f47f0473a9541a6e54181508f7beb0bdd2cced87f534d3224f025
 F doc/claude/TCLPDF.md 63a687111c53696ac48c59455fbd99fd0978acfbd2fdf647cdc2873424be2129
-F doc/claude/skills/tclpdf-tcl/SKILL.md 537e350accf02a3624d9c05e8a8bf473fdbbf6a39b3fbb17978410d5cd24372f
+F doc/claude/skills/tclpdf-tcl/SKILL.md 829aadf7a551e85c8d300308f8bacdc63682dc0f0122d9b3de7e0920698df2ff
 F doc/claude/skills/tclpdf-tcl/assets.tcl 4bcc5e716bbb03489d086b94b1bc8d9d5360975c212a53e7a66bb5870c0f53ae
 F doc/claude/skills/tclpdf-tcl/check.tcl a97c8006f0c8f15de829cbe4329b12a8149f2ca78606bb0c683c5a795e439d04
 F doc/claude/skills/tclpdf-tcl/reference/01-document.md 70be90debb430ec2ba5982a8924d11909277ba3e4be6db53e34fd77db024b52d
-F doc/claude/skills/tclpdf-tcl/reference/02-fonts.md a066e58a7d7bd552111db22cf547428cf3eecfe66b2445b161fac73b80f87510
+F doc/claude/skills/tclpdf-tcl/reference/02-fonts.md ef972a656b642738a2756e304da28a42ab4a2b3d4182cc741860c9ee14b83728
 F doc/claude/skills/tclpdf-tcl/reference/03-text.md 3821e8569607f3218a2a8d9daf28a08ca0d0ef6473ab41d8b836f8e556e3d2ad
 F doc/claude/skills/tclpdf-tcl/reference/04-graphics.md ccededa506a6083a24d8f20805c4f274d0c79e20e6e74c3c43d27b39d87852c8
 F doc/claude/skills/tclpdf-tcl/reference/05-images-svg.md 4f25af4acaaef95cd30791aaebd0d793f3b9afeb671d0202c4794d26dd4114d0
@@ -42,7 +42,7 @@ F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
-F doc/tclpdf.md b772883c5f53e0d14f8132f2880326003d067babaf34d27bfa983202ecaf00cd
+F doc/tclpdf.md 733b9f78fd14b457851435340b273db47e66edf12a579e8b659969db45ceda67
 F document.tcl 2cddf5b04129044d711ccaadc5087108e8c19f0b3b3b2459291e88bb0ce2d5b0
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -65,7 +65,7 @@ F examples/01.13-layers.tcl 9cba0d656ff8a76569fe43461f1a818cabca0129d642d330fe3d
 F examples/01.14-hyphenation.tcl d0ea89654b19092c3084142d6ac5790954db231769a5d79d551ac6abfaf3a816
 F examples/01.15-text-fit.tcl 478204bee098622001ba1024f2c657b7184491d3bf80637ef04a99efc9e438f1
 F examples/01.16-prepress-control.tcl 1546ee0ea65d3fd4ab097c0f40c835af6d8eaa451e313b5b7d1d2001fb9cefe6
-F examples/01.17-markup.tcl a6fed5a09c1b0a7f778c7442753137d69015cd6ca642b3e2de7c9da733bb7afb
+F examples/01.17-markup.tcl e69fac894126df5578dc384eaf01bc84574c5a174435cc0b3566a8db8091944d
 F examples/01.18-runs.tcl ffeccfcf17cda8bb119428e282e02699cf92d1753ce9e8954508e64b13f4a72b
 F examples/01.19-lists.tcl efff0d889ffb083c896862ed48835f9d19251ab6c085360ff6c4bc4dfd954d08
 F examples/02.01-embedding.tcl 1585debf1c1d1f771933cd1c43d938fb9b612c151eba3a11e2060aede0b7b361
@@ -361,7 +361,7 @@ F pattern.tcl 67ae336f3187514b173e85ddcaf70098314c396fd57de90052f65227621edef8
 F pdfFunction.tcl 97f146ab14597d72298ada5a85e04531cc1252736c429b918ac9c7be0cedc912
 F pdfObj.tcl f19a808ead80028ae22294197c91f61358a4619e9b9beb9b0d97422b3bbf88cc
 F pdfa.tcl 807bba92833fc386ae58f66239d14ce2423ba71b89a775f2778525109ee78a55
-F pkgIndex.tcl.in d0d82d09caaec7efec34b2ae1c4c2fa340ea3a193ebb4875e86e820b5ab64163
+F pkgIndex.tcl.in d410abbdab5275c138583872f781ff9a9c5299c014e69333199d6397752bbdfe
 F sbix.tcl 79af5fd7e5d26953f740b2477893c42cc8beb98ebc5b9aa71396f69fb835480c
 F sfnt.tcl a8799a9873ffb24ad7bc0a3bcf3a0aa4c2d0ed8488b639853a5f3f833aaf4122
 F shading.tcl 91a99b382f631cc98e63365a33bcd3686aae6574a2a5572141f4baea1d07fb0d
@@ -386,7 +386,7 @@ F tclconfig/ChangeLog 5afc872331b2b8e3ecfdbd0e8222da460b071c2f815080e47e0a1f6c49
 F tclconfig/README.txt 8285d9bad9933ad1ca9fd89398e7f22bea1b96dc68fb3d1536d0b3922725b21d
 F tclconfig/install-sh d5e7acec82cb30a616dc8023b6d77abf3e7109f86175f47741afe89b34d1d4f8 x
 F tclconfig/tcl.m4 24841be70516af95124d989e9b9a9fb07879fdc9cf2248c4ce6fc7aa3a5ae72b
-F tclpdf.tcl 8b2ae3f9c06ff14acdc1ea94a8cf3cca8c2d77fdff9c8f2717828100408064d3
+F tclpdf.tcl 8267e29eece89b46dd81c1cd11168761e29a7afbce823255d770d8ba5672f805
 F tests/000-tools.test a34212d4211e2a058407007db81dafe473ca4ae292f0689f2401dcee19eb2e52
 F tests/afm.test 730621be45681198dcb117c01ca2accb6d25b5ceb668a6b6f6fa3677c13ac99a
 F tests/all.tcl f7b7f442ac44f8fb772c64e9869924545eee52337342e90e244523fab4e7df5a
@@ -465,7 +465,7 @@ F tests/table.test f146b9892548399ab80a1584918a502e1ce9d91f0ef5eb5ca5be6d2aa1523
 F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e0b
 F tests/textFlow.test b1a67e17cb618eb8cc2908766363c68fc130469c010ee71f051032edb7f713b2
 F tests/textPath.test d52bd06f46b3551b59442bc43cfff9b64c8f8901e49467c42bb8c10357dd9c5c
-F tests/textRun.test bb1d64bad75bdbdfae783379b02cde1917d5c8b602f32bf2b5760c9a8d503020
+F tests/textRun.test 225ec839e6a51b1fbad4e460eb5d8cc29d4d7363e7f2e7666db1c1a77071c7ea
 F tests/timestamp.test e1a2de8cfb5c9b660ec48fee323355a46dd51f70812a2785f3c472cdc9f19541
 F tests/tkcanvas.test fe55f5dc8f5a52fff8d36ae2b13bf6059ff13b290f825a84578502815beec090
 F tests/type1.test 8b4b5a67ad3d6606a0584c26b38e3d479e13762a6bb09c3478e1ccf313888079
@@ -483,7 +483,7 @@ F text.tcl 14e06b4073ffece3b084d4b823fe1e9704d295fc2c024f8411679b24429e11a5
 F textAvoid.tcl 1bbb96cb2a679d0f926f42e0103aea52866eec3b7f3920e15de827cb5e223f83
 F textBlock.tcl 8be395ea6e84c69a3de4a3e826454507e662755255daed1a6bd64419abad71c9
 F textPath.tcl 6345ab994b7c321ac00f16d24bbe27128f257554afb04998629f629c56524e07
-F textRun.tcl f32817513cb22a00740edbf14168a1185627c8e1e19ebca5cf50d44f3bfa70d4
+F textRun.tcl 8997f885f824c9c72c8af1e804306a86488f8e6c0628c8403f7522e09ff08ca3
 F timestamp.tcl d65c60dba08638d38c0867a6f8b7fad829f282e3fc881c3800594d7f8b027ff5
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
@@ -513,8 +513,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 9231b254a07a0c6e427ab3642656da2d8dc24149be1e88c2792954df84b071fe
-R 2cab4768547bc63b5b3f0a8696365396
+P 1b898182002c155860824a290e716ba9efcad2a350d3d8e67fa17da08112dbbc
+R ef3f8292b17825e8c3bb259721803059
 U alex
-Z eae60a85b9dfbc57542aa849ff2fcdb1
+Z 7537d717d9c1e5d2fc9e0165b1b6fdb6
 # Remove this line to create a well-formed Fossil manifest.

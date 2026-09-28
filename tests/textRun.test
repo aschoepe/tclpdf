@@ -384,7 +384,7 @@ test textRun-6.8 {a heading level outside 1 to 3, a tagged paginated block and a
   set b [lrange [dict get $opts -errorcode] 0 4]
   $doc destroy
   list $a $b $c
-} -result {{TCLPDF TEXT RUNS HEADING 4} {TCLPDF TEXT RUNS HEADING marks} {TCLPDF TEXT RUNS HEADING expansion}}
+} -result {{TCLPDF TEXT RUNS HEADING 4} {TCLPDF TEXT RUNS HEADING MARKS} {TCLPDF TEXT RUNS HEADING EXPANSION}}
 
 test textRun-6.9 {a block without headings is placed by the sum it always was} -body {
   set doc [::tclpdfTest::runDoc]

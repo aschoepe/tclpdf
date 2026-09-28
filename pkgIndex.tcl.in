@@ -107,7 +107,7 @@ package ifneeded @PACKAGE_NAME@::tableLayout 1.7 [list source [file join $dir ta
 package ifneeded @PACKAGE_NAME@::text 1.25 [list source [file join $dir text.tcl]]
 package ifneeded @PACKAGE_NAME@::textAvoid 1.5 [list source [file join $dir textAvoid.tcl]]
 package ifneeded @PACKAGE_NAME@::textBlock 1.19 [list source [file join $dir textBlock.tcl]]
-package ifneeded @PACKAGE_NAME@::textRun 1.1 [list source [file join $dir textRun.tcl]]
+package ifneeded @PACKAGE_NAME@::textRun 1.2 [list source [file join $dir textRun.tcl]]
 package ifneeded @PACKAGE_NAME@::markup 1.2 [list source [file join $dir markup.tcl]]
 package ifneeded @PACKAGE_NAME@::markdown 1.1 [list source [file join $dir markdown.tcl]]
 package ifneeded @PACKAGE_NAME@::textPath 1.9 [list source [file join $dir textPath.tcl]]

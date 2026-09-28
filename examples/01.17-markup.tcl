@@ -5,8 +5,8 @@
 #
 #   tclsh examples/01.17-markup.tcl ?output.pdf?
 #
-# Until 1.4 a paragraph was set in ONE face: a bold word inside it meant a
-# table cell or a line assembled by hand from [textWidth]. Since 1.4 the
+# Until 1.5 a paragraph was set in ONE face: a bold word inside it meant a
+# table cell or a line assembled by hand from [textWidth]. Since 1.5 the
 # string of [text] may carry its own bold, italic, underlined and struck
 # words, links and headings - written in one of two notations, which is
 # what -markup names. This example shows each notation the same way: the

@@ -414,7 +414,7 @@ oo::define ::tclpdf::document::document {
     if {[llength $kinds] && [my state tagged] eq "1"
         && ([dict get $options paginate] || [dict get $options columns] > 1)} {
       if {"heading" in $kinds} {
-        return -code error -errorcode [list TCLPDF TEXT RUNS HEADING marks] \
+        return -code error -errorcode [list TCLPDF TEXT RUNS HEADING MARKS] \
             "tclpdf: a heading in a tagged block is a structure element of\
             its own, and a block set with -paginate or -columns marks its\
             content per page - the two are not combined; set the headings\
@@ -430,7 +430,7 @@ oo::define ::tclpdf::document::document {
     if {[llength $kinds] && [dict exists $options expansion]
         && [dict get $options expansion] ne {}} {
       if {"heading" in $kinds} {
-        return -code error -errorcode [list TCLPDF TEXT RUNS HEADING expansion] \
+        return -code error -errorcode [list TCLPDF TEXT RUNS HEADING EXPANSION] \
             "tclpdf: -expansion wraps the whole block in one Span, and a\
             block with headings is several elements - give the expansion to\
             the paragraph it belongs to, as a block of its own"
@@ -1116,4 +1116,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textRun 1.1
+package provide tclpdf::textRun 1.2

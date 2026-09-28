@@ -56,6 +56,8 @@ The standard faces reach the 224 positions of WinAnsiEncoding and nothing else: 
 
 ```tcl
 # TrueType: subset to the glyphs used, kerning and ligatures from its tables. (PDF 1.2)
+# An embedded alias is ONE face: -style bold reaches nothing until [font family]
+# ties the faces of a family under one name - shown in 03-text.md, "Runs".
 $doc font embed body $ttf
 $doc font embed bodyBold $ttfBold
 
