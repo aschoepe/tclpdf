@@ -85,9 +85,25 @@ oo::define ::tclpdf::document::document {
   }
 
   # One cell, from either spelling.
+  #
+  # runs and markup, since 1.6. A cell holds its content as text, or as the
+  # list of {text options} pairs [text -runs 1] takes, under runs - a bold
+  # amount, a link, a struck old price, set with the faces the pairs name
+  # and broken with them. markup is NOT a second content key: it names the
+  # notation the TEXT is written in, tags or markdown, the way [text
+  # -markup] does, and it is a style key like hyphenate and direction - said
+  # once for a column of descriptions, or for the whole table, and read off
+  # the cell only where the cell says it. So the string stays under text,
+  # and the pair form {markup {markdown ...}} is refused by name below: it
+  # would make markup mean two things.
+  #
+  # Both are cell keys so that a cell written as {runs {...}} READS as a
+  # dictionary: until 1.6 the first word "runs" was no key, the cell was
+  # text, and "runs {{...} {}}" stood on the page as typed - for two days,
+  # in a shipped report, until somebody read the paper.
   method TableCell {source} {
-    set cell [dict create text {} colSpan 1 rowSpan 1 align {} valign {} \
-        direction {} style {}]
+    set cell [dict create text {} runs {} markup {} colSpan 1 rowSpan 1 \
+        align {} valign {} direction {} style {}]
     # String or dictionary - and in Tcl a string can BE a dictionary, so this
     # decides rather than detects. It used to ask "is text one of the keys",
     # which any plain sentence of even word count can satisfy: "Medium length
@@ -116,13 +132,17 @@ oo::define ::tclpdf::document::document {
       # it, so the cell came out empty and right aligned, in silence. That is
       # the one case the sentence does not cover, and it is the likely one -
       # a caller who writes two words meant them as text.
-      if {![dict exists $source text]} {
+      # The content keys, checked before the cell is asked for its text,
+      # so that {markup {markdown ...}} hears what is wrong with the pair
+      # rather than that it names no text.
+      my TableCellContent [dict merge $cell $source]
+      if {![dict exists $source text] && ![dict exists $source runs]} {
         return -code error -errorcode [list TCLPDF TABLE CELL text] \
             "tclpdf: the cell \"$source\" reads as a dictionary - it begins\
             with the cell key \"[lindex $source 0]\" and has an even word\
-            count - but names no text, so the cell would come out empty; give\
-            it a text key, or write the string as \{[list $source]\} to set\
-            it as it stands"
+            count - but names no text and no runs, so the cell would come\
+            out empty; give it a text key, or write the string as\
+            \{[list $source]\} to set it as it stands"
       }
       set cell [dict merge $cell $source]
     } else {
@@ -137,6 +157,130 @@ oo::define ::tclpdf::document::document {
       }
     }
     return $cell
+  }
+
+  # What a cell may say about its content, checked once, where the cell is
+  # read. Every refusal here is one the drawing could not make: a cell with
+  # text AND runs would set one of the two in silence, a list of an odd
+  # length would pair the wrong words, and markup written as a pair would
+  # be read as a notation named "markdown some text".
+  method TableCellContent {cell} {
+    # Asked twice: of the cell as written, and of what a didParseCell hook
+    # hands back - a hook that puts runs beside text, or the pair form of
+    # markup, was measured to pass through in silence until 2026-09-30.
+    # A hook may hand back a cell without the keys, so each is defaulted.
+    foreach key {text runs markup style} {
+      if {![dict exists $cell $key]} {
+        dict set cell $key {}
+      }
+    }
+    set markup [dict get $cell markup]
+    # The pair form. Its first word is a notation and it has two words,
+    # which is how nobody misspells a notation.
+    if {[llength $markup] == 2 && [lindex $markup 0] in {tags markdown}} {
+      return -code error -errorcode [list TCLPDF TABLE CELL markup] \
+          "tclpdf: markup names the notation the cell's text is written\
+          in - tags or markdown - and the string itself stands under text:\
+          write {text [list [lindex $markup 1]] markup [lindex $markup 0]}"
+    }
+    set runs [dict get $cell runs]
+    if {[catch {llength $runs} count] || $count % 2} {
+      return -code error -errorcode [list TCLPDF TABLE CELL runs] \
+          "tclpdf: runs takes a list of {text options} pairs, as \[text\
+          -runs 1\] does, and \"[string range $runs 0 40]\" is not one"
+    }
+    if {$count && [dict get $cell text] ne {}} {
+      return -code error -errorcode [list TCLPDF TABLE CELL runs] \
+          "tclpdf: a cell holds its content as text or as runs, not both -\
+          the runs are the text with its faces, so drop the text key"
+    }
+    # On the cell itself or inside its style - the two places a cell can
+    # say it; a column's markup beside a cell of runs is not the cell's
+    # word and stands for the text cells of that column.
+    if {$count && ($markup ne {} || [dict exists [dict get $cell style] markup])} {
+      return -code error -errorcode [list TCLPDF TABLE CELL markup] \
+          "tclpdf: runs are already the pairs a notation translates into -\
+          markup names how the TEXT of a cell is read, and this cell has\
+          none; drop the markup key, or write the string under text"
+    }
+    return
+  }
+
+  # What a cell is set from: answers {pairs text} - the pairs where the
+  # cell IS runs, an empty list and the text for a cell that is plain.
+  #
+  # The runs the cell gave, or the text translated by the notation the
+  # assembled style names - the same two translators [text -markup] loads,
+  # each only when its notation is asked for. A TRANSLATION THAT FOUND
+  # NOTHING TO MARK is plain text, and the cell takes the plain road with
+  # the translated text (its escapes resolved): a table that says "markup
+  # markdown" once has columns of figures in it, and "1.50" in a decimal
+  # column is not a cell of runs because the column beside it is Markdown -
+  # measured 2026-09-30, it was refused as one. What the pairs may not
+  # carry in a cell is refused here, once, before anything is drawn: a
+  # paragraph state - heading, item, start, continued - because a cell's
+  # lines are one height and one indent, which is how a row knows how tall
+  # it is, and a heading in a cell would need a leading of its own the row
+  # cannot see; and decimal alignment, which hangs a line on ONE separator
+  # of ONE string and has no meaning for a line drawn as pieces. Neither is
+  # flattened to plain text in silence. A right-to-left cell is refused by
+  # [textLines] itself, in the words [text] uses for the same block.
+  method TableRuns {cell style} {
+    set text [dict get $cell text]
+    set pairs [expr {[dict exists $cell runs] ? [dict get $cell runs] : {}}]
+    if {![llength $pairs]} {
+      switch -- [dict get $style markup] {
+        tags {
+          package require tclpdf::markup
+          set pairs [::tclpdf::markup::parse $text]
+        }
+        markdown {
+          package require tclpdf::markdown
+          set pairs [::tclpdf::markdown::parse $text]
+        }
+      }
+      set marked 0
+      foreach {piece options} $pairs {
+        if {[dict size $options]} {
+          set marked 1
+          break
+        }
+      }
+      if {[llength $pairs] && !$marked} {
+        set text [join [lmap {piece options} $pairs {set piece}] {}]
+        set pairs {}
+      }
+    }
+    if {![llength $pairs]} {
+      return [list {} $text]
+    }
+    if {[dict get $style align] eq "decimal"} {
+      return -code error -errorcode [list TCLPDF TABLE CELL decimal] \
+          "tclpdf: a cell set as runs cannot be aligned on a decimal\
+          separator - the column hangs one string on one separator, and a\
+          line of pieces has none; give the cell align left, right or\
+          center, or set the figure as text"
+    }
+    foreach {text options} $pairs {
+      foreach key {heading item start continued} {
+        if {[dict exists $options $key]} {
+          return -code error -errorcode [list TCLPDF TABLE CELL paragraph $key] \
+              "tclpdf: a run in a table cell cannot carry \"$key\" - a\
+              heading or a list item is a paragraph of its own size and\
+              indent, and the lines of a cell are one height, which is how\
+              the row knows how tall it is; set the words as a plain run,\
+              or put the list in a \[text\] block beside the table"
+        }
+      }
+    }
+    return [list $pairs $text]
+  }
+
+  # The width inside a cell, what its lines are broken to and drawn with -
+  # one place, because the two have to agree to the last digit.
+  method TableInner {width padding} {
+    set inner [expr {$width - 2 * $padding}]
+    return [expr {$inner <= 0 ? 0.1 : $inner}]
   }
 
   # The font options of a cell style, in the form the text methods take them.
@@ -342,8 +486,15 @@ oo::define ::tclpdf::document::document {
             continue
           }
           set style [my TableStyle $cell $options]
-          set width [expr {[my textWidth [dict get $cell text] \
-              {*}[my TableFont $style]] + 2 * [dict get $style padding]}]
+          # A cell of runs is measured piece by piece in the face of each
+          # piece, as its lines will be broken; the bold word IS wider.
+          lassign [my TableRuns $cell $style] pairs text
+          if {[llength $pairs]} {
+            set width [my TextLinesWidest $pairs -runs 1 {*}[my TableFont $style]]
+          } else {
+            set width [my textWidth $text {*}[my TableFont $style]]
+          }
+          set width [expr {$width + 2 * [dict get $style padding]}]
           set column [dict get $cell column]
           if {$width > [lindex $natural $column]} {
             lset natural $column $width
@@ -374,10 +525,7 @@ oo::define ::tclpdf::document::document {
         for {set c 0} {$c < [dict get $cell colSpan]} {incr c} {
           set span [expr {$span + [lindex $widths [expr {[dict get $cell column] + $c}]]}]
         }
-        set inner [expr {$span - 2 * [dict get $style padding]}]
-        if {$inner <= 0} {
-          set inner 0.1
-        }
+        set inner [my TableInner $span [dict get $style padding]]
         # THE ONE PLACE IN THE PACKAGE THAT WRAPS TEXT THE CALLER NEVER OPENED
         # A BLOCK FOR, and therefore the one place -hyphenate has to be handed
         # on rather than taken from the caller's own [text] call. The lines
@@ -399,8 +547,25 @@ oo::define ::tclpdf::document::document {
         # the flags it hands back to [text] - so the bracket the paragraph
         # road writes is written here as well (14.8.2.6). Extraction of a
         # tagged table gave "Betriebskostenab-rechnung" until it did.
-        set broken [my TextLinesBroken [dict get $cell text] $inner \
-            {*}[my TableFont $style] -hyphenate [dict get $style hyphenate]]
+        #
+        # A CELL OF RUNS takes the public road, [textLines -runs 1 -hyphens
+        # 1]: every line comes back as the pairs it is made of, which is the
+        # shape the drawing needs to set it with its faces and the shape a
+        # hook reads under "lines" - and the hyphen flag beside it, as the
+        # pair road has it. The runs are kept on the cell, so that the
+        # drawing knows which road to take without asking the style again.
+        lassign [my TableRuns $cell $style] pairs text
+        if {[llength $pairs]} {
+          set broken [lmap line [my textLines $pairs -runs 1 -hyphens 1 \
+              -width $inner {*}[my TableFont $style] \
+              -hyphenate [dict get $style hyphenate]] {
+            list [dict get $line text] [dict get $line hyphen]
+          }]
+        } else {
+          set broken [my TextLinesBroken $text $inner \
+              {*}[my TableFont $style] -hyphenate [dict get $style hyphenate]]
+        }
+        dict set cell runs $pairs
         set lines [lmap line $broken {lindex $line 0}]
         set leading [::tclpdf::geometry fromPoints \
             [expr {[dict get $style size] * [dict get $style leading]}] \
@@ -492,7 +657,10 @@ oo::define ::tclpdf::document::document {
           if {[dict get $style align] ne "decimal"} {
             continue
           }
-          set text [dict get $cell text]
+          # The text as it is set: a notation resolves its escapes before the
+          # separator is looked for, or the tail of "12.50 \*" would be
+          # measured a backslash too wide (measured 2026-09-30).
+          set text [lindex [my TableRuns $cell $style] 1]
           set at [string first $separator $text]
           if {$at < 0} {
             continue
@@ -553,8 +721,11 @@ oo::define ::tclpdf::document::document {
     # valign was documented as a cell key from the start and read from nowhere,
     # so it vanished without a word. It only shows once a row has a cell that
     # wraps, which is why no example caught it.
-    foreach key {align valign direction} {
-      if {[dict get $cell $key] ne {}} {
+    #
+    # markup for the same reason: a column of Markdown with one cell that
+    # says "markup plain" sets that cell as it stands.
+    foreach key {align valign direction markup} {
+      if {[dict exists $cell $key] && [dict get $cell $key] ne {}} {
         dict set style $key [dict get $cell $key]
       }
     }
@@ -592,6 +763,7 @@ oo::define ::tclpdf::document::document {
       align {left right center decimal}
       valign {top middle bottom}
       border {none all horizontal vertical outer}
+      markup {plain tags markdown}
     } {
       if {[dict get $style $key] ni $known} {
         return -code error -errorcode [list TCLPDF TABLE STYLE $key] \
@@ -647,4 +819,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableLayout 1.7
+package provide tclpdf::tableLayout 1.8

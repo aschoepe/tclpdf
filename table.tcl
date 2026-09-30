@@ -28,7 +28,9 @@
 # Hooks are command prefixes, called with one dictionary:
 #
 #   didParseCell   before measuring. Returns the cell, possibly changed - this
-#                  is where a negative amount turns red.
+#                  is where a negative amount turns red, and where a caller
+#                  who wants a refused notation to fall back to plain text
+#                  catches it: the package never does that in silence.
 #   willDrawCell   before drawing. Return 0 to draw nothing at all.
 #   didDrawCell    after drawing, for an overlay.
 #   didDrawPage    after each page, for a running header or a page number.
@@ -110,10 +112,18 @@ namespace eval ::tclpdf::table {
   # the two literals are the switch - "no" is a Tcl false and the tag for
   # Norwegian - and an unloaded language is refused by name where the cell is
   # wrapped, see TableMeasure.
+  #
+  # markup, since 1.6, for the reason hyphenate is: it says how the TEXT of
+  # a cell is read - as tags, as Markdown, or plain, as it stands - and a
+  # column of descriptions says it once, while a cell that is set as runs
+  # already says nothing a notation could add. The two notations are [text
+  # -markup]'s; "plain" is the word for none, because on a cell an EMPTY
+  # value means "not said" (as it does for align), and a cell in a Markdown
+  # column has to be able to opt out.
   variable defaults {
     family helvetica fontStyle {} size 9 leading 1.15 padding 1.5
     fill {} color black align left valign top direction ltr hyphenate 0
-    border horizontal lineColor {0.6 0.6 0.6} lineWidth 0.1
+    markup plain border horizontal lineColor {0.6 0.6 0.6} lineWidth 0.1
   }
 }
 
@@ -512,6 +522,11 @@ oo::define ::tclpdf::document::document {
         set cells {}
         foreach cell $row {
           set changed [my TableHook didParseCell $options $cell]
+          if {$changed ne {}} {
+            # What the hook hands back is checked as the cell was: a hook
+            # is a caller, and a caller's runs beside text are refused.
+            my TableCellContent $changed
+          }
           lappend cells [expr {$changed eq {} ? $cell : $changed}]
         }
         lappend rows $cells
@@ -1117,4 +1132,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.10
+package provide tclpdf::table 1.11

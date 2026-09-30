@@ -476,12 +476,22 @@ oo::define ::tclpdf::document::document {
     # is a typo or a line the caller closed himself and forgot the "-" on;
     # either way nothing would happen, which is the kind of nothing that
     # takes an afternoon to find in a stream.
+    #
+    # THE ONE EXCEPTION IS A LINE OF RUNS, since 1.6: runs need -width
+    # because a run is a thing of a paragraph, and a table that broke a
+    # cell of runs draws each line by itself, with the width it was broken
+    # to - so here the caller may say both, and the block road holds the
+    # string to ONE line at that width (TextParagraphOnce) rather than let
+    # the breaker and the caller disagree in silence. -paginate and
+    # -columns stay out: they are the roads a single line never takes.
     if {[dict get $options breakHyphen]} {
-      if {$width ne {}} {
+      if {$width ne {} && (![llength [dict get $options runs]]
+          || [dict get $options paginate] || [dict get $options columns] > 1)} {
         return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN width] \
             "tclpdf: -breakHyphen names the break hyphen of ONE\
             line, and with -width the line breaker decides that for each line\
-            it makes"
+            it makes - a line of runs is the one exception, and it has to\
+            stay one line"
       }
       if {[string first "-" $string] < 0} {
         return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN hyphen] \

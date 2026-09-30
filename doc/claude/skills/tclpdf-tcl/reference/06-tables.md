@@ -132,6 +132,46 @@ puts "90 rows would take [format %.1f [dict get $layout height]] mm; columns: [d
 puts "body row heights: [lrange [dict get $layout bodyHeights] 0 2] ..."
 ```
 
+## Cells set as runs, and cells in a notation (1.6)
+
+```tcl
+# "runs" is a content key beside "text": the {text options} pairs of [text -runs 1],
+# built from data. "markup" is a STYLE key like hyphenate: plain (the default),
+# tags or markdown say how the cell's TEXT is read - once for a column, or on a
+# cell. The string stays under text; {markup {markdown ...}} as a pair is refused.
+# A text the notation finds nothing to mark in stays a plain cell - figures in a
+# decimal column under a Markdown table are figures.
+$doc font family report -regular body -bold bodyBold
+set client "Weber & Sohn"
+set y [$doc table -at [list 20 [expr {$y + 8}]] -width 170 -theme striped \
+    -head {{Date {text "**Activity**" markup markdown} Hours}} \
+    -body [list \
+        {"2026-09-01" "**Mueller GmbH** - kick-off, see [ticket](https://example.org)" 3.5} \
+        [list "2026-09-04" [list runs [list $client {style bold} " - on-site training" {}]] 4] \
+        {"2026-09-05" {text "<b>Schmidt AG</b> - <u>final acceptance</u>" markup tags} 1} \
+        {"2026-09-06" {text "the **markers** stay as typed" markup plain} 0.5}] \
+    -columns {{width 24} {markup markdown} {width 18 align decimal}} \
+    -style {family report size 9}]
+# The row is as tall as the bold words make it; the first baseline of a cell of
+# runs is the baseline of the plain cell beside it. Hooks see "lines" of such a
+# cell as a list of pair lists and the pairs under "runs".
+# Refused by name, before a cell is drawn: text AND runs in one cell, an odd list,
+# runs in a decimal column (a BODY cell - a head or foot cell of runs over such a
+# column is set flush right like a plain heading), a heading or list item in a
+# cell, an rtl cell, and a notation left open - nothing falls back to plain text
+# in silence.
+if {[catch {$doc table -at {20 300} -width 60 -theme plain \
+        -body {{{runs {"1.50" {style bold}}}}} -columns {{align decimal}}} msg]} {
+    puts "refused: $msg"
+} else {
+    puts "NOT REFUSED: runs in a decimal column went through, which it should not have"
+}
+# The fallback a caller may want - a lone asterisk in text typed by people - is
+# the caller's to write: in -didParseCell, try ::tclpdf::markdown::parse on the
+# cell's text yourself and set "markup plain" on the cell where it fails
+# (examples/04.05-table-markup.tcl shows it).
+```
+
 ```tcl
 $doc write [file join $out ref-06-tables.pdf]
 $doc destroy

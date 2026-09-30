@@ -17,6 +17,11 @@ source [file join [file dirname [info script]] helper.tcl]
 set tableFace [file join [file dirname [file dirname [file normalize [info script]]]] \
     examples assets fonts DejaVuSans.ttf]
 testConstraint haveTableFace [file exists $tableFace]
+# The bold face beside it, for the cells of runs (table-26.x): a bold run on
+# an embedded face needs a family, and a family needs its bold member.
+set tableFaceBold [file join [file dirname [file dirname [file normalize [info script]]]] \
+    examples assets fonts DejaVuSans-Bold.ttf]
+testConstraint haveTableFaces [expr {[file exists $tableFace] && [file exists $tableFaceBold]}]
 
 # THE PATTERNS ARE NOT PART OF THIS PACKAGE and are not in the repository -
 # see the head of tests/hyphenate.test and examples/assets/languages/README.
@@ -2145,5 +2150,400 @@ test table-r8-5.2 {a table that drew nothing at all leaves nothing behind} -body
   list $refused [regexp -all {/S /Table} $bytes] [regexp -all {/S /TR} $bytes] \
       [regexp -all {/S /P} $bytes]
 } -result {1 0 0 1}
+
+# --- 27: cells set as runs, and cells whose text is a notation -------------
+#
+# What the application that asked for this used to do: break the runs with
+# [textLines] in front of the table, hand the lines over as plain text, and
+# draw the cell itself from a willDrawCell hook - a copy of TableDrawCell
+# outside the package, wrong the day the padding or the tagging changed, and
+# in a tagged document a cell that was not in the tree at all. And before
+# that: two days of reports with "runs {{...} {}}" printed on them, because
+# "runs" was no cell key and the cell was text.
+
+# The first y of every cell drawn - the Td of its first line - read off the
+# stream in the order the cells were drawn.
+proc ::tableTds {stream} {
+  return [regexp -all -inline {[0-9.]+ ([0-9.]+) Td} $stream]
+}
+
+test table-27.1 {a cell written as {runs ...} is a dictionary, and its runs are set as runs} -body {
+  # Nothing named "runs" reaches the page, and the bold piece is a Tj of its
+  # own in the bold face.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain \
+      -body {{{runs {"the " {} "amount" {style bold} " is due" {}}} plain}} \
+      -style {family helvetica size 9}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [string first "(runs" $stream] [regexp {\(amount\) Tj} $stream] \
+      [llength [lsort -unique [regexp -all -inline {/[A-Za-z0-9]+ [0-9.]+ Tf} $stream]]]
+} -result {-1 1 2}
+
+test table-27.2 {the first baseline of a cell of runs is the baseline of the plain cell beside it} -body {
+  # The hard condition of this build, measured on the stream rather than on
+  # a renderer: three cells in one row - plain, runs, Markdown - with the
+  # same word, and every first Td stands on the same y and its own x. The
+  # application that drew its own cells measured 1.44 pt of drift until it
+  # said -anchor top; here there is nothing to say.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {20 30} -width 120 -theme plain \
+      -body {{Alpha {runs {Alpha {}}} {text Alpha markup markdown}}} \
+      -style {family helvetica size 9}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set tds [::tableTds $stream]
+  set ys [lsort -unique [lmap {whole y} $tds {set y}]]
+  list [expr {[llength $tds] / 2}] [llength $ys] \
+      [llength [lsort -unique [lmap {whole y} $tds {lindex [split $whole] 0}]]]
+} -result {3 1 3}
+
+test table-27.3 {the three alignments of a cell of runs start where the plain cell starts} -body {
+  # For every alignment the x of the runs line is the x of the plain line
+  # with the same words: the runs road is given the inner width and the
+  # left edge, and works the alignment out over the pieces.
+  set result {}
+  foreach align {left right center} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc table -at {20 30} -width 100 -theme plain \
+        -body [list [list "Alpha beta" [list runs [list "Alpha beta" {}]]]] \
+        -columns [list [list width 50 align $align] [list width 50 align $align]] \
+        -style {family helvetica size 9}
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    lassign [regexp -all -inline {([0-9.]+) [0-9.]+ Td} $stream] -> x1 -> x2
+    lappend result [expr {abs($x2 - $x1 - 50 * 72 / 25.4) < 0.001}]
+  }
+  set result
+} -result {1 1 1}
+
+test table-27.4 {a bold run takes more lines than the same words plain, and the row follows} -body {
+  # The bold face is wider, so the same sentence breaks into more lines,
+  # and the row is as tall as those lines. The next row begins under it:
+  # the y of the second row's cell is the first row's y plus its height,
+  # which the didDrawCell hook reads off the cell.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set words "Betriebskostenabrechnung Wohnflaeche Verwaltung Abrechnung Nebenkosten Hausmeister"
+  set layout [$doc table layout -width 60 -theme plain \
+      -body [list [list $words] [list [list runs [list $words {style bold}]]]] \
+      -style {family helvetica size 9}]
+  set plainLines [llength [dict get [lindex [dict get $layout body] 0 0] lines]]
+  set boldLines [llength [dict get [lindex [dict get $layout body] 1 0] lines]]
+  lassign [dict get $layout bodyHeights] plainHeight boldHeight
+  set seen {}
+  $doc table -at {20 30} -width 60 -theme plain \
+      -body [list [list [list runs [list $words {style bold}]]] [list $words]] \
+      -style {family helvetica size 9} \
+      -didDrawCell {apply {{cell doc} {
+        lappend ::seen [dict get $cell y] [dict get $cell height]
+      }}}
+  $doc destroy
+  lassign $seen y1 h1 y2 h2
+  list [expr {$boldLines > $plainLines}] [expr {$boldHeight > $plainHeight}] \
+      [expr {abs($y2 - $y1 - $h1) < 1e-9}]
+} -result {1 1 1}
+
+test table-27.5 {the natural width of a column measures the runs in their faces} -body {
+  # Two tables of one automatic column each, same words: the bold cell asks
+  # for a wider column than the plain one, because it IS wider.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set widths {}
+  foreach body {{{"wide words here" x}} {{{runs {"wide words here" {style bold}}} x}}} {
+    lappend widths [lindex [dict get [$doc table layout -width 170 -theme plain \
+        -body $body -style {family helvetica size 9}] widths] 0]
+  }
+  $doc destroy
+  lassign $widths plain bold
+  expr {$bold > $plain}
+} -result 1
+
+test table-27.6 {markup is a style key: a column of Markdown, a table of tags, a cell that opts out} -body {
+  # The notation is said once for the column, and a cell that says
+  # "markup plain" is set as it stands - the asterisks reach the page.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain \
+      -body {{"a **b** c" {text "a **b** c" markup plain}} {{text "<b>d</b>" markup tags} "e"}} \
+      -columns {{markup markdown} {}} -style {family helvetica size 9}
+  set stream [::tclpdfTest::content $doc]
+  # And the two levels above the column: the table says tags, the head
+  # says Markdown, the column of the second cell says plain - the most
+  # specific wins, as with align.
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain \
+      -head {{"h **i**" "j **k**"}} -body {{"<b>l</b>" "<b>m</b>"}} \
+      -columns {{} {markup plain}} -style {family helvetica size 9 markup tags} \
+      -headStyle {markup markdown}
+  set second [::tclpdfTest::content $doc]
+  $doc destroy
+  list [regexp {\(b\) Tj} $stream] [regexp {\(a \*\*b\*\* c\) Tj} $stream] \
+      [regexp {\(d\) Tj} $stream] [regexp {<b>} $stream] \
+      [regexp {\(i\) Tj} $second] [regexp {\(j \*\*k\*\*\) Tj} $second] \
+      [regexp {\(l\) Tj} $second] [regexp {\(<b>m</b>\) Tj} $second]
+} -result {1 1 1 0 1 1 1 1}
+
+test table-27.7 {what a cell of runs is refused for, each by name} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach body {
+    {{{text a runs {b {}}}}}
+    {{{runs {a}}}}
+    {{{runs {a {} b}}}}
+    {{{runs {a {}} markup tags}}}
+    {{{runs {a {}} style {markup tags}}}}
+    {{{markup {markdown "a **b**"}}}}
+    {{{text a markup foo}}}
+    {{{runs {a {style bold}} align decimal}}}
+    {{{runs {a {style bold}} direction rtl}}}
+    {{{runs {a {heading 1}}}}}
+    {{{runs {a {item bullet}}}}}
+    {{{runs {a {item number start 2}}}}}
+    {{{runs {a {item bullet continued 1}}}}}
+    {{{text "- a" markup markdown}}}
+    {{{text "a **b" markup markdown}}}
+    {{{text "a <b>b" markup tags}}}
+  } {
+    lappend codes [lrange [::tclpdfTest::refusalCode {
+      $doc table -at {20 30} -width 100 -theme plain -body $body \
+          -style {family helvetica size 9}
+    }] 0 end]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE STYLE markup} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL paragraph item} {TCLPDF TABLE CELL paragraph item} {TCLPDF TABLE CELL paragraph item} {TCLPDF TABLE CELL paragraph item} {TCLPDF TEXT MARKDOWN OPEN ** 2} {TCLPDF TEXT MARKUP OPEN b}}
+
+test table-27.8 {a refused cell of runs draws nothing - the refusal comes before the first cell} -body {
+  # Measured at the layout, before anything is drawn: a decimal cell of
+  # runs in the last row leaves the page empty.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set refused [catch {$doc table -at {20 30} -width 100 -theme plain \
+      -body {{a b} {c {runs {d {}}}}} -columns {{} {align decimal}} \
+      -style {family helvetica size 9}}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $refused [regexp {Tj} $stream]
+} -result {1 0}
+
+test table-27.9 {a head cell of runs over a decimal column is set flush right, as a plain heading is} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 60 -theme plain \
+      -head {{{runs {Amount {style bold}}}}} -body {{1.50}} \
+      -columns {{align decimal}} -style {family helvetica size 9}]
+  $doc destroy
+  dict get [dict get [lindex [dict get $layout head] 0 0] resolved] align
+} -result right
+
+test table-27.10 {the hooks see the lines of a cell of runs as pairs, with a flag per line} -body {
+  # lines is a list of run lists for such a cell - the shape [textLines
+  # -runs 1] answers - and hyphens keeps one flag per line; the pairs the
+  # cell was set from stand under runs, for a Markdown cell as well.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set words "one **two** three four five six seven eight nine ten"
+  set layout [$doc table layout -width 40 -theme plain \
+      -body [list [list [list text $words markup markdown]]] \
+      -style {family helvetica size 9}]
+  set cell [lindex [dict get $layout body] 0 0]
+  $doc destroy
+  set lines [dict get $cell lines]
+  list [expr {[llength $lines] > 1}] [llength [dict get $cell hyphens]] \
+      [expr {[llength [lindex $lines 0]] % 2}] \
+      [dict get [lindex [lindex $lines 0] 3] style] \
+      [expr {[llength [dict get $cell runs]] % 2}]
+} -result {1 2 0 bold 0}
+
+test table-27.11 {a hyphenated Markdown cell brackets its break hyphen like a plain cell} \
+    -constraints haveGermanPatterns -body {
+  # The bold compound breaks inside the bold run; tagged, the hyphen sits in
+  # its Span, untagged it is the last character of the piece - and the Td
+  # of every line is the same either way.
+  set results {}
+  foreach tagged {0 1} {
+    set doc [tclpdf new -unit mm -compress 0]
+    if {$tagged} {
+      $doc tagged 1
+      $doc language de-DE
+    }
+    $doc page add
+    $doc table -at {20 30} -width 40 -theme plain \
+        -body {{{text "Die **Betriebskostenabrechnung** wird nach der Wohnflaeche umgelegt." markup markdown}}} \
+        -columns {{width 40 hyphenate de-DE}} -style {family helvetica size 9}
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    lappend results [regexp -all {/Span <</ActualText <FEFF>>> BDC} $stream] \
+        [regexp {\(Betriebskostenab-\) Tj} $stream] [regexp {\(Betriebskostenab\) Tj} $stream] \
+        [::tableTds $stream]
+  }
+  lassign $results s0 h0 b0 td0 s1 h1 b1 td1
+  list $s0 $h0 $b0 $s1 $h1 $b1 [expr {$td0 eq $td1}]
+} -result {0 1 0 1 0 1 1}
+
+test table-27.12 {a tagged table of runs passes veraPDF under UA-1, and the cell is a TD holding the text} \
+    -constraints haveTableFaces -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "Runs in cells"
+  $doc language de-DE
+  $doc page add
+  $doc font embed body $::tableFace
+  $doc font embed bodyBold $::tableFaceBold
+  $doc font family fam -regular body -bold bodyBold
+  $doc table -at {20 30} -width 100 -theme plain \
+      -head {{{text "**Item** and count" markup markdown} Count}} \
+      -body {{{runs {"the " {} "amount" {style bold strong 1} " is due" {}}} 4}} \
+      -style {family fam size 9}
+  set stream [::tclpdfTest::content $doc]
+  $doc ua 1
+  set path [::tclpdfTest::scratch table-runs-ua.pdf]
+  $doc write $path
+  set report [$doc structureReport]
+  $doc destroy
+  set verdict [::tclpdfTest::verapdf $path ua1]
+  file delete $path
+  list $verdict [regexp -all {/TD <</MCID} $stream] [regexp -all {/TH <</MCID} $stream] \
+      [llength [lsort -unique [regexp -all -inline {/[A-Za-z0-9]+ [0-9.]+ Tf} $stream]]]
+} -result {ok 2 2 2}
+
+test table-27.13 {a table of Markdown cells over three pages, the head repeated as an artifact} \
+    -constraints haveTableFaces -body {
+  # The head is a TH on the first page and a pagination artifact on every
+  # page after it - the glyphs of an embedded face are hex in the stream,
+  # so the bracket is what is counted - and the file passes UA-1.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "Runs over pages"
+  $doc language de-DE
+  $doc page add
+  $doc font embed body $::tableFace
+  $doc font embed bodyBold $::tableFaceBold
+  $doc font family fam -regular body -bold bodyBold
+  set rows {}
+  for {set n 1} {$n <= 40} {incr n} {
+    lappend rows [list $n "Position **$n** with a plain word and some more of them to wrap"]
+  }
+  $doc table -at {20 30} -width 100 -theme plain \
+      -head {{No. {text "**Description**" markup markdown}}} -body $rows \
+      -columns {{width 15 align right} {width 40 markup markdown}} \
+      -style {family fam size 9} -top 30 -bottom 120 -repeatHead 1
+  set pages [$doc page count]
+  set heads {}
+  for {set index 0} {$index < $pages} {incr index} {
+    set stream [::tclpdfTest::content $doc $index]
+    lappend heads [list [regexp -all {/TH <</MCID} $stream] \
+        [expr {[regexp -all {/Pagination} $stream] > 0}]]
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch table-runs-pages.pdf]
+  $doc write $path
+  $doc destroy
+  set verdict [::tclpdfTest::verapdf $path ua1]
+  file delete $path
+  list [expr {$pages >= 3}] [lindex $heads 0] [lsort -unique [lrange $heads 1 end]] $verdict
+} -result {1 {2 0} {{0 1}} ok}
+
+test table-27.14 {a link run in a cell draws its annotation over the run} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain \
+      -body {{{text "see [the site](https://example.org) now" markup markdown}}} \
+      -style {family helvetica size 9}
+  set annots [llength [::tclpdfTest::objects $doc {/Subtype /Link}]]
+  $doc destroy
+  set annots
+} -result 1
+
+test table-27.15 {a plain table writes the bytes it wrote before cells could be runs} -body {
+  # The plain road is untouched: a table without runs and without markup
+  # is byte for byte the table of 1.5.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme striped \
+      -head {{A B}} -body {{1 2} {"a longer cell that wraps in its column" 4}} \
+      -columns {{width 40} {align decimal}} -style {family helvetica size 9}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  zlib crc32 $stream
+} -result 2959492231
+
+# -breakHyphen beside -width, the one case [text] admits it: a line of runs.
+test table-27.16 {text takes -breakHyphen beside -width for runs, and holds the string to one line} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  lappend codes [::tclpdfTest::refusalCode {
+    $doc text "Betriebskostenab-" -at {20 30} -width 60 -breakHyphen 1
+  }]
+  lappend codes [::tclpdfTest::refusalCode {
+    $doc text [list "Betriebskostenab-" {}] -at {20 30} -width 60 -runs 1 -breakHyphen 1
+  }]
+  lappend codes [::tclpdfTest::refusalCode {
+    $doc text [list "a long line of many words that will not fit into ten millimetres-" {}] \
+        -at {20 30} -width 10 -runs 1 -breakHyphen 1
+  }]
+  foreach extra {{-paginate 1} {-columns 2 -height max}} {
+    lappend codes [::tclpdfTest::refusalCode {
+      $doc text [list "Betriebskostenab-" {}] -at {20 30} -width 60 -runs 1 \
+          -breakHyphen 1 {*}$extra
+    }]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF TEXT BREAKHYPHEN width} {no refusal} {TCLPDF TEXT BREAKHYPHEN lines} {TCLPDF TEXT BREAKHYPHEN width} {TCLPDF TEXT BREAKHYPHEN width}}
+
+test table-27.17 {what a didParseCell hook hands back is checked as a cell is} -body {
+  # A hook is a caller: runs beside text, or the pair form of markup, are
+  # refused by name and draw nothing - measured 2026-09-30, both went
+  # through in silence and the text vanished under the runs.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes {}
+  foreach change {{runs {R {}}} {runs {R {}} markup tags} {markup {markdown "**x**"}}} {
+    lappend codes [::tclpdfTest::refusalCode {
+      $doc table -at {20 30} -width 100 -theme plain -body {{T}} \
+          -style {family helvetica size 9} \
+          -didParseCell [list apply {{change cell doc} {
+            return [dict merge $cell $change]
+          }} $change]
+    }]
+  }
+  # And a hook that builds a cell without the new keys is served as before.
+  set built [catch {$doc table -at {20 30} -width 100 -theme plain -body {{T}} \
+      -style {family helvetica size 9} \
+      -didParseCell {apply {{cell doc} {
+        return [dict create text U colSpan 1 rowSpan 1 align {} valign {} \
+            direction {} style {} row 0 column 0 section body]
+      }}}}]
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list $codes $built [regexp {\(U\) Tj} $stream] [regexp {\(R\) Tj} $stream]
+} -result {{{TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL markup}} 0 1 0}
+
+test table-27.18 {a notation that marks nothing leaves the cell plain - figures in a decimal column under a Markdown table} -body {
+  # -style {markup markdown} for the whole table: the figures of the decimal
+  # column are plain cells and line up on their separator, and a figure
+  # that IS marked is refused as a cell of runs. An escape is resolved on
+  # the plain road too.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {20 30} -width 100 -theme plain \
+      -body {{"a **b**" 1.50} {"c" 12.5} {"d \\* e" 7}} \
+      -columns {{} {align decimal}} -style {family helvetica size 9 markup markdown}
+  set stream [::tclpdfTest::content $doc]
+  set refused [::tclpdfTest::refusalCode {
+    $doc table -at {20 60} -width 100 -theme plain \
+        -body {{a "**1.50**"}} -columns {{} {align decimal}} \
+        -style {family helvetica size 9 markup markdown}
+  }]
+  $doc destroy
+  list [regexp {\(b\) Tj} $stream] [regexp {\(\.50\) Tj} $stream] [regexp {\(\.5\) Tj} $stream] \
+      [regexp {\(d \* e\) Tj} $stream] $refused
+} -result {1 1 1 1 {TCLPDF TABLE CELL decimal}}
 
 cleanupTests

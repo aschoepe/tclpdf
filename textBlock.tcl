@@ -184,6 +184,31 @@ oo::define ::tclpdf::document::document {
     return [my TextBlockBroken $string $options]
   }
 
+  # The width of the widest paragraph of a list of runs, unbroken - what
+  # [textWidth] answers for a string with line feeds, for the pairs [text
+  # -runs 1] takes: every piece measured in its own face, which is what a
+  # table asks for the natural width of a column whose cell is set as runs.
+  # The intake asks for a width because a run is a thing of a paragraph;
+  # nothing here breaks at it.
+  method TextLinesWidest {string args} {
+    my TextInit
+    set options [my TextBlockOptions [list {*}$args -width 1] textLines]
+    lassign [my TextBlockIntake $string $options textLines] string options
+    set arguments [my TextOverrides $options]
+    my state textRuns [dict get $options runs]
+    my state textRunsString $string
+    set widest 0
+    set from 0
+    foreach paragraph [split $string \n] {
+      set width [my TextBlockMeasure $paragraph $arguments $string $from]
+      if {$width > $widest} {
+        set widest $width
+      }
+      incr from [expr {[string length $paragraph] + 1}]
+    }
+    return $widest
+  }
+
   # The ONE road from a parsed option list to broken lines with their flag -
   # both methods above sit on it, so the public shape and the internal one
   # cannot come to disagree about where a line ends.
@@ -1940,6 +1965,22 @@ oo::define ::tclpdf::document::document {
   # last is what a continuation needs to know about its first indent.
   method TextParagraphOnce {string options} {
     lassign [my TextBlockLines $string $options] lines state leading lift
+    # -breakHyphen beside -width, which [text] admits for a block of runs
+    # only (text.tcl): the caller says the string is ONE line that ends on
+    # a break hyphen, and the breaker has to agree - a line a table broke
+    # at this width breaks into itself again. Two lines would be a
+    # contradiction drawn as two lines in the room of one, so they are
+    # refused; the one line gets the flag the breaker gives its own breaks,
+    # and the drawing brackets the hyphen as it brackets those.
+    if {[dict get $options breakHyphen]} {
+      if {[llength $lines] != 1} {
+        return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN lines] \
+            "tclpdf: -breakHyphen says the string is one line ending on a\
+            break hyphen, and at this -width it breaks into\
+            [llength $lines] lines"
+      }
+      lset lines 0 [dict replace [lindex $lines 0] hyphen 1]
+    }
     return [my TextParagraphDraw $string $lines $state $leading $lift $options]
   }
 

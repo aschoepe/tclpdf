@@ -89,6 +89,13 @@ oo::define ::tclpdf::document::document {
     set padding [dict get $style padding]
     set leading [dict get $cell leading]
     set textHeight [expr {[llength $lines] * $leading}]
+    # A cell measured as runs (TableMeasure) draws every line as the pairs
+    # it came back as - the second road below. Defaulted like the flags: a
+    # hook may hand back a cell it built itself.
+    set runs {}
+    if {[dict exists $cell runs]} {
+      set runs [dict get $cell runs]
+    }
     # Vertical placement inside the cell. The default is top, because a table
     # whose rows are all one line looks identical either way and the
     # difference only shows once something wraps - by which time a middle
@@ -133,6 +140,30 @@ oo::define ::tclpdf::document::document {
     # for every alignment - which a cell that cut the string itself and made
     # two calls could not promise.
     foreach line $lines hyphen $hyphens {
+      # A LINE OF RUNS is drawn by [text -runs 1], which needs the width
+      # the line was broken to - a run is a thing of a paragraph, and the
+      # line, measured to fit that width, breaks into itself again; so the
+      # pieces are set in their faces, the underlines, strikes and link
+      # rectangles recorded and drawn, all by the one road every paragraph
+      # takes; in a tagged document the marks land in the TD or TH the row
+      # opened, as the plain lines' marks do, and a link annotation hangs
+      # on that cell (a Link element for a url run is not built, for a cell
+      # as for a paragraph). -breakHyphen travels with it: the one case
+      # [text] takes the option beside -width, and it holds [text] to ONE
+      # line. The three alignments are the block's own, from the same left
+      # edge the plain road starts at, so the first baseline of a cell of
+      # runs sits where the plain cell beside it sits - measured,
+      # table-27.2. decimal cannot reach a BODY cell here: TableRuns
+      # refuses it; a head or foot cell without a digit was set to right
+      # by TableStyle before, as a plain heading over such a column is.
+      if {[llength $runs]} {
+        my text $line -runs 1 -width [my TableInner $width $padding] \
+            -at [list [expr {$x + $padding}] $top] -anchor top \
+            -align [my TextAlign $align $state] {*}[my TableFont $style] \
+            -color [dict get $style color] -breakHyphen $hyphen
+        set top [expr {$top + $leading}]
+        continue
+      }
       # What [text] is told about the trailing hyphen. Kept in a variable
       # rather than written into the calls: the option is refused for a
       # string with no hyphen in it (text.tcl), and the decimal road below
@@ -269,4 +300,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.6
+package provide tclpdf::tableDraw 1.7
