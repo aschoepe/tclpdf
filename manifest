@@ -1,5 +1,5 @@
-C Table\scells\sset\sas\sruns,\sand\scells\sread\sas\stags\sor\sMarkdown\n\n-\stableLayout.tcl,\stable.tcl\s-\sruns\sis\sa\scell\skey\sholding\sthe\spairs\sof\stext\s-runs\s1,\sand\smarkup\sa\sstyle\skey\s(plain,\stags,\smarkdown)\ssaid\sfor\sthe\stable,\sa\ssection,\sa\scolumn\sor\sthe\scell;\sthe\sstring\sstays\sunder\stext,\sand\sa\stranslation\sthat\smarks\snothing\sleaves\sthe\scell\splain\s-\sa\scell\sof\sruns\sis\smeasured\sline\sby\sline\sin\sits\sfaces\sand\sthe\snatural\scolumn\swidth\sfollows;\srefused\sby\sname:\stext\sbeside\sruns,\san\sodd\slist,\sruns\sbeside\smarkup,\sthe\spair\sform\sof\smarkup,\sdecimal\son\sa\sbody\scell\sof\sruns,\sa\sheading\sor\slist\sitem\sin\sa\scell,\sand\swhat\sa\sdidParseCell\shook\shands\sback\sis\schecked\slike\sa\swritten\scell\n-\stableDraw.tcl\s-\sa\sline\sof\sruns\sis\sdrawn\sby\stext\s-runs\s1\swith\sthe\swidth\sit\swas\sbroken\sto\sand\s-breakHyphen\sfor\sthe\sflag\sthe\sbreaker\sgave\sit\n-\stext.tcl,\stextBlock.tcl\s-\s-breakHyphen\sbeside\s-width\sis\sadmitted\sfor\sruns\sonly,\sand\sthe\sstring\sthen\shas\sto\sstay\sone\sline\s(TCLPDF\sTEXT\sBREAKHYPHEN\slines);\sTextLinesWidest\smeasures\sthe\swidest\sparagraph\sof\sa\slist\sof\sruns\n-\stests/table.test\s-\stable-27.1\sto\s27.18:\sbaseline\sagainst\sthe\splain\scell,\sheight\sand\snatural\swidth,\severy\srefusal,\sthe\shyphen\sbracket\sin\sa\stagged\scell,\sveraPDF\sUA-1\sover\sthree\spages\swith\sthe\srepeated\shead,\shooks,\sthe\sbytes\sof\sa\splain\stable\sunchanged\n-\sexamples/04.05-table-markup.tcl\s(new)\s-\sa\sMarkdown\scolumn,\sa\scell\sof\sruns\sfrom\sdata,\sa\scell\sof\stags,\sthe\srefusals,\sand\sa\sfallback\swritten\sas\sa\shook\n-\sdoc/tclpdf.md\s-\sruns\sand\smarkup\sunder\stable,\sthe\smarkup\sstyle\skey,\sthe\shook\sdictionary,\sthe\s-breakHyphen\sexception;\sthe\surl\ssentence\sunder\s-runs\scorrected:\sa\surl\srun\swrites\sthe\sannotation\sonly,\sno\sLink\selement\sand\sno\sContents,\sso\ssuch\sa\sdocument\scannot\sclaim\sua\n-\sskill:\s06-tables.md\sshows\scells\sof\sruns\sand\sthe\smarkup\skey,\sSKILL.md\snames\sboth\scell\skeys\n-\sversions:\stable\s1.11,\stableLayout\s1.8,\stableDraw\s1.7\n-\sknowingly\sopen:\sa\sLink\selement\sand\sContents\sfor\sa\surl\srun;\sa\sheading\sor\sa\slist\sinside\sa\scell\sis\srefused\srather\sthan\sset
-D 2026-09-30T22:00:30.248
+C io:\sone\sroad\sthrough\sopen,\sclosed\son\severy\sexit\s-\swith\sthanks\sto\sRalf\sFassel\sfor\spointing\sit\sout\n\n-\sio.tcl\s-\sread,\shead\sand\swrite\sgo\sthrough\sone\sprivate\sTransfer:\sopen\sin\stry,\strap\sPOSIX,\sfinally\sclose,\sso\sa\schannel\snever\sstays\sopen\safter\sa\srefusal;\sthe\srefusal\sis\ssorted\sout\sAFTER\sopen\sfailed\s(Refuse:\sMISSING\sfor\sa\smissing\sfile\son\sread,\sDIRECTORY\sfor\sa\sdirectory\son\sread\sand\swrite)\sinstead\sof\sa\sfile\scheck\sin\sfront\sof\sopen,\sand\sno\sPOSIX\sname\sis\smatched;\sa\sclose\serror\sof\sa\swrite\sreaches\sthe\scaller\n-\stests/io.test\s(new)\s-\sbytes\sround\strip,\shead\sshorter,\slonger\sand\sof\slength\s0,\sthe\srefusals\sby\scode,\sand\schan\snames\sbefore\sand\safter\severy\scall\n-\stools/check.sh\s-\sa\sfailing\stest\ssuite\sprints\sthe\sfailed\stests\swith\sresult,\sexpectation\sand\serrorInfo\sand\skeeps\sthe\sfull\soutput\sunder\s/tmp;\seach\sinterpreter\sgets\sa\s-tmpdir\sof\sits\sown\n-\sknowingly\sopen:\swriter.tcl\sopens\sits\sown\schannel\swith\sits\sown\sfinally;\sa\sfailed\swrite\sleaves\sthe\struncated\sfile\sbehind\sas\sbefore;\sWindows\sunmeasured
+D 2026-10-01T11:49:53.624
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -337,7 +337,7 @@ F imageTiffStreams.tcl 7585e501979a12a4b89cf53775be35767e7230327494cf94cee71c84e
 F import.tcl ab9b19ddaa4d9714c4167b445950d55ab46045df4d013f9db43677ab072afcaf
 F importInfo.tcl 72c30fe7f01e1d0a8451609c4faa0d0ae1770a23ef181c42803f3691c9f2c3f4
 F importRead.tcl a45c06db024cf029d6171d58997f7e04145309fe93c9605d8a3d43b003940a4a
-F io.tcl ed0f26522cd9d1e1849abf28fa7d166091eb147f6f8a7439912ca8fa5fdeaed5
+F io.tcl 640ded8c57e4f8fad4bcf0623f723cf9e27c33f99601e1e56e332e88d4f62f77
 F joining.tcl dc3b951a953ca221e6ca9098e5c1fa9f98a0bde39414b1bfc3fb5887326c7371
 F joiningData.tcl 5dc72c4ff25673d73d837f18e29adfdac9f06b96ac227709ca5bd0eac6ce6085
 F kern.tcl 22b97ec8f719d85747ed1cf5ca81ad1209cf21e411c0ffe1740bfe784f429f5d
@@ -432,6 +432,7 @@ F tests/imageTiffStreams.test 22c06c95311e7c4f6d8b742bd595f0943ad04135fcb236fa2b
 F tests/import.test f184903f1fc32b2c313867066c5a939eff9f96ac265e18771436401bbc8acec5
 F tests/importFields.test da84a5ba0c03ec243391f79a48ae519080f8fa79b6a3a78e3c33b48589f62fb6
 F tests/importLayer.test 33dff30aace8efa86b31882732e781990fbfda67adb1ffd8ed3cd408f5258a6b
+F tests/io.test 67d604b30207db8b11d791d8d2fa7d27c1f0ebee02d8221265c36b2106a71621
 F tests/joining.test 9ba3834dcf0dce5d3c025084ed9d88df24b00e4f85e59bca4c7cadb1ba84f276
 F tests/kern.test 1a3cf2660fec5806215fe45881c8d57ea0e74a108d5679df309f3f76319607ba
 F tests/layer.test 5416fb30d6f0385928b09a0b8e77fbc53f8cb1b709f169d6c24fe9af2138a709
@@ -489,7 +490,7 @@ F timestamp.tcl d65c60dba08638d38c0867a6f8b7fad829f282e3fc881c3800594d7f8b027ff5
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
 F tools/archive.sh 2d78655a4958f01cae308cb4fab10bada66e63aa33db03c71fd2d0606d9ff355 x
-F tools/check.sh 965659c1356abbd817754c835efbbf3a488207513d1130e21986cf3e21b65306 x
+F tools/check.sh bce5930474f295016a06129bd9c3f3f9b342890b381a266047bc452421615d0a x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/formcheck.java 6fcfc8b9b37f786b65123d3fc54a12ef7d23448c5bc0e3f93119c1e61def6f07
 F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
@@ -514,8 +515,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 3da3371f2b5ad2d71725f442691593bc1bbf943b58774265367ac15f8837ade4
-R 55cc3fb045399ecb99e75763da6f443d
+P 4083d221a0d99e64a7e9f9eaf82a4db8097f96a9ca090988ad39451bc3850028
+R 1d38b38805b12dc29a6525538ecde34b
 U alex
-Z 26e3fe92d551e7285f381e8f122e04ae
+Z 40f1cfbd15e17a143864443535d9339f
 # Remove this line to create a well-formed Fossil manifest.

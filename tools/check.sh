@@ -69,18 +69,58 @@ have() {
 
 echo "=== 1. the test suite, under every interpreter present ==="
 
+# What tcltest says about each failed test: the "error: test failed" line, the
+# ==== header, the ---- blocks (result, expected result, errorInfo, errorCode)
+# and the closing ==== line - not the test body, that is in the .test file.
+# At most 40 lines a test. Then "Files with failing tests" and "files left
+# behind", if the run printed them.
+failed_tests() {
+  awk '
+    function show(line) { print "      " line }
+    inside {
+      if ($0 == "==== Contents of test case:") { body = 1; next }
+      if (body && /^---- /) body = 0
+      if (body) next
+      if (++n <= 40) show($0)
+      else if (n == 41) show("... (cut at 40 lines - the rest is in the log)")
+      if ($0 == "==== " name " FAILED") inside = 0
+      next
+    }
+    /^==== .* FAILED$/ { inside = 1; body = 0; n = 1; name = $2; show($0); next }
+    /: error: test failed: / { show($0); next }
+    /^Files with failing tests:/ { show($0); next }
+    /^Warning: files left behind:/ { left = 1; show($0); next }
+    left && /^\t/ { show($0); next }
+    { left = 0 }
+  ' "$1"
+}
+
 # Both interpreters, because the package promises both. A run under one of them
 # is half a run - and the half that is missing is the one where a Tcl 9 string
-# is not a byte array.
+# is not a byte array. They run one after the other, never side by side. Each
+# still gets a -tmpdir of its own: in a shared one the second run found the
+# first run's leftovers already there and tcltest did not call them "left
+# behind" (measured 2026-10-01).
 for tclsh in tclsh8.6 tclsh9.0; do
   if have $tclsh; then
     # -tmpdir keeps the fixtures the tests write out of the working directory
     # (measured in round 8: two of them stayed behind after every run).
-    out=`make test TCLSH_PROG=\`command -v $tclsh\` TESTFLAGS="-tmpdir $scratch" 2>&1 | grep "^all.tcl:"`
+    # The whole output goes to a log, not through a grep: the summary line
+    # alone said "Failed 1" and not which test (2026-10-01), and the next two
+    # runs were green. The log sits in /tmp beside the examples log, not in
+    # $scratch - the EXIT trap removes $scratch, and the path the FAIL line
+    # names has to outlive the run. A passing run leaves no log.
+    log=/tmp/tclpdf-tests-$tclsh.$$
+    mkdir -p "$scratch/$tclsh"
+    make test TCLSH_PROG=`command -v $tclsh` TESTFLAGS="-tmpdir $scratch/$tclsh" >"$log" 2>&1
+    out=`grep "^all.tcl:" "$log"`
     echo "  $tclsh: $out"
     case "$out" in
-      *"Failed	0") report_pass "tests under $tclsh" ;;
-      *) report_fail "tests under $tclsh" ;;
+      *"Failed	0") report_pass "tests under $tclsh"; rm -f "$log" ;;
+      *) report_fail "tests under $tclsh - full output in $log"
+         failed_tests "$log"
+         # No summary at all: the interpreter died - its last words then.
+         [ -z "$out" ] && tail -5 "$log" | sed 's/^/      /' ;;
     esac
   else
     report_skip "tests under $tclsh - interpreter not installed"
