@@ -29,7 +29,8 @@
 # signer - see the manual at [sign], "A timestamp needs nothing here".
 
 package require Tcl 8.6.11-
-package require tclpdf::sign 1.0-
+# 1.8 for [sign::Ranged], which joins the appendix and fills its /ByteRange.
+package require tclpdf::sign 1.8-
 package require tclpdf::crypto 1.0-
 
 namespace eval ::tclpdf::sign {}
@@ -439,4 +440,4 @@ proc ::tclpdf::sign::timestamp {path args} {
       {*}$through]
 }
 
-package provide tclpdf::timestamp 1.0
+package provide tclpdf::timestamp 1.1

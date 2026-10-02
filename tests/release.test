@@ -1,0 +1,345 @@
+# release.test --
+#
+# A module version is a promise about the FILE: two copies that announce the
+# same number are interchangeable. Tcl relies on that and nothing else - when
+# two installed releases offer the same version of a subpackage, it runs the
+# ifneeded script registered last, which is the older release whenever that
+# one sits in front of the newer one on auto_path. If the contents differ, the
+# newer main package then runs on an older module.
+#
+# That is what happened between 1.5 and 1.6: io, text and textBlock changed
+# and kept their numbers, and with both releases installed a table cell of
+# runs died with 'unknown method "TextLinesWidest"' - the method is in the
+# textBlock of 1.6, the file that was loaded came from 1.5.
+#
+# Two checks keep it from happening again:
+#
+#   release-1.x  every module whose version equals the one in a release tag
+#                must be byte for byte the file of that tag - measured against
+#                EVERY "version-*" tag in the repository;
+#   release-2.x  the youngest release before the tree and the tree itself,
+#                installed side by side in a scratch directory, in both orders
+#                on auto_path: every loaded subpackage has to be the tree's
+#                file - from the tree's directory, or from the other one with
+#                identical bytes - and a table cell of runs has to be set.
+#
+# Both need the repository: fossil on the PATH and a checkout around the
+# tree. An unpacked source archive has neither, and the tests skip there.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+source [file join [file dirname [info script]] helper.tcl]
+
+namespace eval ::releaseTest {
+  variable root [file dirname [file dirname [file normalize [info script]]]]
+}
+
+# Run fossil inside the checkout and answer what it printed. The diff and the
+# tag list need the checkout as the working directory, whichever directory
+# the suite was started from.
+proc ::releaseTest::fossil {args} {
+  variable root
+  set here [pwd]
+  cd $root
+  try {
+    return [exec fossil {*}$args]
+  } finally {
+    cd $here
+  }
+}
+
+# A file as it stands in a check-in, as bytes. Through a binary pipe rather
+# than [exec], which would translate the line ends and drop the last newline -
+# the comparison below is byte for byte, and so must the reading be.
+proc ::releaseTest::released {tag file} {
+  variable root
+  set here [pwd]
+  cd $root
+  try {
+    set channel [open |[list fossil cat -r $tag $file] rb]
+    set bytes [read $channel]
+    close $channel
+  } finally {
+    cd $here
+  }
+  return $bytes
+}
+
+# The release tags, oldest first: "version-1.1.1" is a release as well, so
+# the version is compared as a version, not as a string.
+proc ::releaseTest::tags {} {
+  set versions {}
+  foreach line [split [fossil tag list] \n] {
+    if {[regexp {^version-(\d+(?:\.\d+)+)$} [string trim $line] -> version]} {
+      lappend versions $version
+    }
+  }
+  set tags {}
+  foreach version [lsort -command {package vcompare} $versions] {
+    lappend tags version-$version
+  }
+  return $tags
+}
+
+# The version a module file provides for itself: "tclpdf" for the entry
+# module, "tclpdf::<file>" for every other one.
+proc ::releaseTest::provided {file text} {
+  set name [file rootname [file tail $file]]
+  if {$name ne "tclpdf"} {
+    set name tclpdf::$name
+  }
+  if {[regexp "\npackage provide $name (\\d+(?:\\.\\d+)+)" $text -> version]} {
+    return $version
+  }
+  return {}
+}
+
+# The Tcl sources a configure.ac installs - TEA_ADD_TCL_SOURCES, the list
+# "make install" and the binary archive both take.
+proc ::releaseTest::sources {configure} {
+  if {![regexp {TEA_ADD_TCL_SOURCES\(\[([^\]]*)\]\)} $configure -> list]} {
+    return -code error "TEA_ADD_TCL_SOURCES not found"
+  }
+  return $list
+}
+
+proc ::releaseTest::acVersion {configure} {
+  if {![regexp {AC_INIT\(\[[^\]]*\]\s*,\s*\[([^\]]*)\]\)} $configure -> version]} {
+    return -code error "AC_INIT not found"
+  }
+  return $version
+}
+
+proc ::releaseTest::readBytes {path} {
+  set channel [open $path rb]
+  set bytes [read $channel]
+  close $channel
+  return $bytes
+}
+
+proc ::releaseTest::writeBytes {path bytes} {
+  file mkdir [file dirname $path]
+  set channel [open $path wb]
+  puts -nonewline $channel $bytes
+  close $channel
+}
+
+# A release as "make install" put it down, rebuilt from the repository: the
+# sources its configure.ac names, license.terms, icc/, and the pkgIndex.tcl
+# its configure would have written - the template with the two substitutions
+# it carries.
+proc ::releaseTest::installRelease {tag target} {
+  set configure [encoding convertfrom utf-8 [released $tag configure.ac]]
+  set version [acVersion $configure]
+  foreach file [sources $configure] {
+    writeBytes [file join $target $file] [released $tag $file]
+  }
+  writeBytes [file join $target license.terms] [released $tag license.terms]
+  foreach line [split [fossil ls -r $tag icc] \n] {
+    set file [string trim $line]
+    if {$file ne {}} {
+      writeBytes [file join $target $file] [released $tag $file]
+    }
+  }
+  set index [encoding convertfrom utf-8 [released $tag pkgIndex.tcl.in]]
+  writeBytes [file join $target pkgIndex.tcl] [encoding convertto utf-8 \
+      [string map [list @PACKAGE_NAME@ tclpdf @PACKAGE_VERSION@ $version] $index]]
+  return $version
+}
+
+# The tree installed by tools/install.tcl itself, with the arguments the
+# Makefile hands it: the sources, manifest.txt where "make all" has made one,
+# pkgIndex.tcl, license.terms and icc/.
+proc ::releaseTest::installTree {target} {
+  variable root
+  set configure [encoding convertfrom utf-8 [readBytes [file join $root configure.ac]]]
+  set files {}
+  foreach file [sources $configure] {
+    lappend files [file join $root $file]
+  }
+  foreach file {manifest.txt pkgIndex.tcl license.terms icc} {
+    if {[file exists [file join $root $file]]} {
+      lappend files [file join $root $file]
+    }
+  }
+  exec [info nameofexecutable] [file join $root tools install.tcl] {*}$files $target
+  return [acVersion $configure]
+}
+
+# Where the two installations go. Fixed before anything is built, so that
+# whatever fails halfway can still be cleared away by name.
+proc ::releaseTest::base {} {
+  return [::tclpdfTest::scratch release-[pid]]
+}
+
+# Both installations under one scratch directory, built once for the tests
+# of group 2: "old" is the youngest release tag older than the tree, unless
+# a tag is named. A build that fails halfway removes what it had made before
+# the error goes on - nothing of it is cached, and nothing stays behind.
+proc ::releaseTest::installations {{oldTag {}}} {
+  variable root
+  variable installed
+  if {[info exists installed]} {
+    return $installed
+  }
+  set configure [encoding convertfrom utf-8 [readBytes [file join $root configure.ac]]]
+  set treeVersion [acVersion $configure]
+  if {$oldTag eq {}} {
+    foreach tag [tags] {
+      if {[package vcompare [string range $tag 8 end] $treeVersion] < 0} {
+        set oldTag $tag
+      }
+    }
+  }
+  if {$oldTag eq {}} {
+    return -code error "no release older than $treeVersion"
+  }
+  set base [base]
+  file delete -force $base
+  set oldDir [file join $base tclpdf[string range $oldTag 8 end]]
+  set newDir [file join $base tclpdf$treeVersion]
+  try {
+    installRelease $oldTag $oldDir
+    installTree $newDir
+  } on error {message options} {
+    file delete -force $base
+    return -options $options $message
+  }
+  set installed [list $base $oldDir $newDir]
+  return $installed
+}
+
+# Load tclpdf in a fresh interpreter whose auto_path is exactly the given
+# directories plus Tcl's own script library - without that one even the
+# module handler [package unknown] calls first cannot be autoloaded - and
+# report every subpackage that was loaded from a file other than the one in
+# $expected, and a table cell of runs that could not be set or written. Empty
+# is right. A subpackage loaded from the OTHER directory is not reported when
+# the two files are identical: with the older release in front, every
+# unchanged module comes from there, and must be allowed to.
+proc ::releaseTest::probe {paths expected} {
+  set base [lindex [installations] 0]
+  set script [file join $base probe.tcl]
+  set pdf [file join $base probe.pdf]
+  set channel [open $script w]
+  puts $channel "set auto_path \[list [list {*}$paths] \[info library\]\]"
+  puts $channel [list set expected [file normalize $expected]]
+  puts $channel [list set pdf $pdf]
+  puts $channel {
+    set problems {}
+    package require tclpdf
+    if {[catch {
+      set doc [tclpdf new -unit mm]
+      $doc page add
+      $doc table -at {20 30} -width 100 -body {{{runs {a {style bold} b {}}}}}
+      $doc write $pdf
+      $doc destroy
+    } message]} {
+      # The first line is the finding; an unknown method goes on to list
+      # every method the object has.
+      lappend problems "table: [string range [lindex [split $message \n] 0] 0 59]"
+    }
+    foreach name [lsort [package names]] {
+      if {$name ne "tclpdf" && ![string match tclpdf::* $name]} {
+        continue
+      }
+      if {[catch {package present $name} version]} {
+        continue
+      }
+      set file [file normalize [lindex [package ifneeded $name $version] end]]
+      set from [file dirname $file]
+      if {$from eq $expected} {
+        continue
+      }
+      # Loaded from the other installation. Harmless where that file is the
+      # tree's file byte for byte - an equal version is meant to say exactly
+      # that, and Tcl is free to pick either copy. A defect where it is not.
+      set channel [open $file rb]
+      set loaded [read $channel]
+      close $channel
+      set channel [open [file join $expected [file tail $file]] rb]
+      set wanted [read $channel]
+      close $channel
+      if {$loaded ne $wanted} {
+        lappend problems "$name $version from [file tail $from], which differs"
+      }
+    }
+    puts [join $problems \n]
+  }
+  close $channel
+  try {
+    set out [exec [info nameofexecutable] $script 2>@1]
+  } on error message {
+    set out "probe failed: $message"
+  } finally {
+    file delete $script $pdf
+  }
+  return $out
+}
+
+testConstraint fossilCheckout [expr {[auto_execok fossil] ne {}
+    && ([file exists [file join $::releaseTest::root .fslckout]]
+        || [file exists [file join $::releaseTest::root _FOSSIL_]])
+    && ![catch {::releaseTest::tags} tags] && [llength $tags] > 0}]
+unset -nocomplain tags
+
+# --- 1: the same module version means the same file --------------------------
+
+test release-1.1 {a module that keeps the version of a release keeps its content} -constraints fossilCheckout -body {
+  # One diff per tag names the files that changed since; only for those is
+  # the released file read, and only where its version equals the tree's does
+  # the content have to - and then it is compared byte for byte, so a change
+  # of nothing but the file mode is not counted.
+  set wrong {}
+  foreach tag [::releaseTest::tags] {
+    set changed {}
+    foreach line [split [::releaseTest::fossil diff --from $tag --brief] \n] {
+      if {[regexp {^CHANGED\s+([^/\s]+\.tcl)$} [string trim $line] -> file]} {
+        lappend changed $file
+      }
+    }
+    ::tclpdfTest::eachModule module text {
+      if {$module ni $changed} {
+        continue
+      }
+      set now [::releaseTest::provided $module $text]
+      if {$now eq {} || [catch {::releaseTest::released $tag $module} old]} {
+        continue
+      }
+      if {[::releaseTest::provided $module $old] ne $now} {
+        continue
+      }
+      set bytes [::releaseTest::readBytes [file join $::releaseTest::root $module]]
+      if {$bytes ne $old} {
+        lappend wrong "$module: $now in $tag and in the tree, but the content differs"
+      }
+    }
+  }
+  join $wrong \n
+} -result {}
+
+# --- 2: two releases installed side by side ----------------------------------
+
+test release-2.1 {the older release in front on auto_path: every module loaded is the tree's file} -constraints fossilCheckout -body {
+  # The order in which the older one wins any tie: auto_path is read from the
+  # back, so the FIRST directory registers last.
+  lassign [::releaseTest::installations] base old new
+  ::releaseTest::probe [list $old $new] $new
+} -result {}
+
+test release-2.2 {the tree in front on auto_path: every module loaded is the tree's file} -constraints fossilCheckout -body {
+  lassign [::releaseTest::installations] base old new
+  ::releaseTest::probe [list $new $old] $new
+} -result {}
+
+# The two installations go with the file, whichever of its tests ran and
+# however far the build got - by the fixed path, not by what was cached.
+file delete -force [::releaseTest::base]
+
+cleanupTests

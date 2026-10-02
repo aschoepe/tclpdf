@@ -2443,4 +2443,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.7
+package provide tclpdf::sign 1.8

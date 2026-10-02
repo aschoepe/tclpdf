@@ -143,4 +143,4 @@ proc ::tclpdf::io::write {path bytes} {
   return $path
 }
 
-package provide tclpdf::io 1.2
+package provide tclpdf::io 1.3

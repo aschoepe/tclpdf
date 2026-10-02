@@ -30,7 +30,8 @@ package require tclpdf::option 1.0-
 # For [pdfObj fits] - the one place the magnitude a PDF real holds stands
 # (Annex C.2), asked by TableMeasurable below.
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::textBlock 1.0-
+# 1.20 for [TextLinesWidest], the width of a cell of runs.
+package require tclpdf::textBlock 1.20-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::tableLayout {}
@@ -819,4 +820,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableLayout 1.8
+package provide tclpdf::tableLayout 1.9

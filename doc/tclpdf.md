@@ -10,7 +10,7 @@ tclpdf - PDF generation for Tcl
 
 **package require Tcl 8.6.11-**
 
-**package require tclpdf 1.6**
+**package require tclpdf 1.6.1**
 
 # DESCRIPTION
 

@@ -74,6 +74,10 @@ The rules that decide most calls:
   tclpdf::update, tclpdf::sign, tclpdf::hyphenate.
 - tclpdf ships no hyphenation patterns; the caller loads a libhyphen .dic
   with ::tclpdf::hyphenate load before -hyphenate can be asked for.
+- After an update, [package ifneeded <pkg> [package present <pkg>]] names
+  the file a module was loaded from: with two releases installed, a module
+  that carries the same version in both may come from the older one - up
+  to 1.6, io, text and textBlock had the same numbers in 1.5 and 1.6.
 
 When the document claims PDF/A, PDF/UA or is a hybrid invoice, say how it
 is validated: qpdf --check, verapdf -f <the claimed flavour> or --flavour

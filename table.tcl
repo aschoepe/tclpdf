@@ -45,7 +45,8 @@ package require TclOO
 package require tclpdf::option 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::color 1.0-
-package require tclpdf::tableLayout 1.0-
+# 1.8 for [TableCellContent], the check of a cell of runs or markup.
+package require tclpdf::tableLayout 1.8-
 package require tclpdf::tableDraw 1.0-
 package require tclpdf::document 1.0-
 
@@ -1132,4 +1133,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.11
+package provide tclpdf::table 1.12

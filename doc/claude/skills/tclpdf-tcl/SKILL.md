@@ -118,6 +118,7 @@ Each file is one runnable script top to bottom (`check.tcl` beside this file run
 - **`pdf import`, `::tclpdf::pdf ...` and `::tclpdf::update open` refuse an encrypted file** - `pdf info` is the one exception and answers it. `pdf import` does not judge what it takes over: a claim covers what this document draws.
 - **The message is not a contract, the `-errorcode` is.** `trap {TCLPDF IMPORT}` catches every refusal of the reader - twenty-three classes today, `XFA`, `OPTION` and `ROOM` among them - from every command that shares it, and a refusal registers nothing. Match a class, never a wording.
 - **`::tclpdf::pdf`, `::tclpdf::update` and `::tclpdf::sign` need their own `package require`** (`tclpdf::importInfo`, `tclpdf::update`, `tclpdf::sign`) - `package require tclpdf` alone does not bring them.
+- **After an update, ask where the modules came from**: `package ifneeded tclpdf::text [package present tclpdf::text]` names the file that was loaded - with two releases installed, a module that carries the same version in both may be taken from the older one, and up to 1.6 `io`, `text` and `textBlock` carried the same numbers in 1.5 and in 1.6, which is fixed in 1.6.1.
 
 ## Checking a document
 

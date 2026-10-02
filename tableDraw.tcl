@@ -18,7 +18,8 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::shape 1.0-
-package require tclpdf::text 1.0-
+# 1.26 for [text -runs 1 -width ... -breakHyphen], one broken line of runs.
+package require tclpdf::text 1.26-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::tableDraw {}
@@ -300,4 +301,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.7
+package provide tclpdf::tableDraw 1.8

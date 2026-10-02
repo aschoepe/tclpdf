@@ -409,7 +409,8 @@ oo::define ::tclpdf::document::document {
     }
     set whole {}
     if {[dict get $options runs] || [dict get $options markup] ne {}} {
-      package require tclpdf::textBlock
+      # 1.20 for the -breakHyphen of one line of runs at a -width.
+      package require tclpdf::textBlock 1.20-
       my TextBlockRunsFlag $options text
       if {[dict get $options width] eq {}} {
         return -code error -errorcode [list TCLPDF TEXT RUNS WIDTH] \
@@ -3277,4 +3278,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.25
+package provide tclpdf::text 1.26
