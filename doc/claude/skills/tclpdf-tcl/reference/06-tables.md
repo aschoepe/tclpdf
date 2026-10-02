@@ -156,6 +156,8 @@ set y [$doc table -at [list 20 [expr {$y + 8}]] -width 170 -theme striped \
 # runs is the baseline of the plain cell beside it. Hooks see "lines" of such a
 # cell as a list of pair lists and the pairs under "runs".
 # Refused by name, before a cell is drawn: text AND runs in one cell, an odd list,
+# runs beside a markup (CELL markup), a markup other than plain|tags|markdown
+# (TCLPDF TABLE STYLE markup),
 # runs in a decimal column (a BODY cell - a head or foot cell of runs over such a
 # column is set flush right like a plain heading), a heading or list item in a
 # cell, an rtl cell, and a notation left open - nothing falls back to plain text

@@ -13,7 +13,7 @@ dnl     to configure the system for the local environment.
 # so that we create the export library with the dll.
 #-----------------------------------------------------------------------
 
-AC_INIT([tclpdf],[1.5])
+AC_INIT([tclpdf],[1.6])
 
 #--------------------------------------------------------------------
 # Remember whether the user gave --prefix on the command line, before

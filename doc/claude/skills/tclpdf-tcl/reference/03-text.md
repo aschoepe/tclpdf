@@ -168,7 +168,7 @@ set y [$doc text "Or as Markdown:\n- the invoice\n- the packing list\n- the retu
 puts "an item's runs carry item: [lrange [$doc textLines {<ul><li>one</li></ul>} -width 80 -markup tags -family helvetica] 0 0]"
 ```
 
-A run changes the face and what is drawn over or under it - never the size, the colour or the spacing, which belong to the paragraph and keep every line one height. A heading is a paragraph of its own at 1.6, 1.3 and 1.15 times the block's size, bold, and never the last line of a page or column; a list item is a paragraph indented by 1.6 times the size with its label in front of the first line, and a tagged list (L, LI, Lbl, LBody) is refused beside -paginate and -columns. Runs and `-markup` need `-width` (`TCLPDF TEXT RUNS`), and `-markup` excludes `-runs 1`. Kerning ends at a run boundary. The *rest* of a height-limited block comes back as a list of runs, to be set again with `-runs 1`.
+A run changes the face and what is drawn over or under it - never the size, the colour or the spacing, which belong to the paragraph and keep every line one height. A heading is a paragraph of its own at 1.6, 1.3 and 1.15 times the block's size, bold, and never the last line of a page or column; a list item is a paragraph indented by 1.6 times the size with its label in front of the first line, and a tagged list (L, LI, Lbl, LBody) is refused beside -paginate and -columns. Runs and `-markup` need `-width` (`TCLPDF TEXT RUNS`), and `-markup` excludes `-runs 1`. Kerning ends at a run boundary. A `url` run writes the link annotation only - no `Link` element, no `Contents` - so a tagged document with one cannot claim `ua`; there it is `link -tooltip` inside `structure Link` (`09-tagged-ua.md`). The *rest* of a height-limited block comes back as a list of runs, to be set again with `-runs 1`.
 
 ## Hyphenation: the patterns come from the caller
 
@@ -403,4 +403,4 @@ foreach line [$doc textLines $word -width 32 -emergencyHyphen 1 -hyphens 1] {
 }
 ```
 
-A column too narrow to hold one letter *and* a hyphen drops the hyphen rather than the letter.
+A column too narrow to hold one letter *and* a hyphen drops the hyphen rather than the letter. `-breakHyphen 1` is refused beside `-width` and on a string without a hyphen - except, since 1.6, on a line of runs (`-runs 1`/`-markup`, which need `-width`; not beside `-paginate` or `-columns`), whose string must then break into exactly one line at that width (`TCLPDF TEXT BREAKHYPHEN lines`).

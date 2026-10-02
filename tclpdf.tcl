@@ -102,4 +102,4 @@ namespace eval ::tclpdf {
 # NOTE: second place carrying the version number. The first one is AC_INIT in
 # configure.ac. Both must agree - tests/version.test checks that, so a drift
 # shows up at build time instead of at the user's site.
-package provide tclpdf 1.5
+package provide tclpdf 1.6
