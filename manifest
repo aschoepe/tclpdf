@@ -1,7 +1,7 @@
-C Version\s1.6.1:\sa\schanged\smodule\scarries\sa\snew\sversion,\sand\sa\srelease\sis\schecked\sfor\sit\n\n-\sio\s1.3,\stext\s1.26,\stextBlock\s1.20,\ssign\s1.8,\sstructureDest\s1.2\s-\seach\shad\schanged\ssince\san\searlier\srelease\sunder\sthe\snumber\sit\scarried\sthere,\sso\stwo\sinstalled\sreleases\sside\sby\sside\sloaded\sthe\solder\sfile\sunder\sthe\snewer\spackage;\sa\stable\scell\sof\sruns\sthen\sfailed\son\sa\smethod\sthe\solder\stextBlock\slacks\n-\stableLayout\s1.9,\stableDraw\s1.8,\stable\s1.12,\stext,\stimestamp\s1.1\s-\srequire\sthe\sversion\sof\sthe\smodule\swhose\snew\scode\sthey\scall,\sso\sa\smixed\sinstallation\sfails\sat\sthe\sload\n-\stests/release.test\s(new)\s-\sthe\ssame\smodule\sversion\smeans\sthe\ssame\scontent,\sacross\severy\srelease\stag;\sand\stwo\sreleases\sside\sby\sside\sin\sauto_path\sload\sthe\sfiles\sof\sthe\snewer\sone\sand\sset\sa\scell\sof\sruns\n-\sconfigure.ac\sand\stclpdf.tcl\scarry\s1.6.1,\sthe\smanual\ssynopsis\sfollows;\sconfigure\sregenerated\sby\sautoconf\n-\sskill\sand\sdoc/claude/TCLPDF.md:\safter\san\supdate,\sask\spackage\sifneeded\swhich\sdirectory\sa\ssub-package\scomes\sfrom\n-\sknowingly\sopen:\srelease.test\sskips\swithout\sfossil\sor\soutside\sa\scheckout
-D 2026-10-02T18:58:19.783
+C README\srewritten:\sshort,\scurrent,\spointing\sto\sthe\smanual\sand\sthe\swiki\n\n-\sREADME:\sone\sline\sper\sfeature\sarea\sup\sto\s1.6\s-\sruns\sand\smarkup,\sform\sfields,\ssignatures\sand\stimestamps,\simport,\slayers,\scolour\sfonts,\sencryption\s-\sin\splace\sof\sthe\slong\sdescription\n-\sdependencies\scorrected:\shttp\sand\stls\sare\sloaded\sfor\sa\sdocument\stimestamp\n-\slicence\sblock\snames\sthe\scontributors:\sspecial\sthanks\sto\sRalf\sFassel
+D 2026-10-04T18:20:31.902
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
-F README d4de8b0e324d107581fd459c299e0fbc01dc72a233964eb86eb20502050703c4
+F README c148ac5981cc0868f8eb5f94af974ac59ef4875be571fee8fa4e008c573eca75
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F afm.tcl ae1b533f335e9bcd2a61e118f2b2200070aff50dafc0480fb296297b1c4eb968
 F afmData.tcl 93d80761e2e451b29d71529b7e3066be46d17bbe301c74eb3883a262c25a3531
@@ -516,8 +516,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 09b0ee7c84af7dc704f6db36e565c452efc711daab073e15d4a2cfefce4c48ee
-R f7c4d3b65898a6a6a259edf31a3d6626
+P 30d451f6e2955182395c9da0138213408d41f2ae080045294115afac97214e43
+R b84a4cb1c1d239215d73e47f19f6ac6c
 U alex
-Z 1942bf3b60911074e3b702972d488434
+Z 52aad4528fde20088b09d0bcc3f52303
 # Remove this line to create a well-formed Fossil manifest.

@@ -7,234 +7,91 @@
 
 SYNOPSIS
 
-    Create PDF documents from Tcl: pages, graphics, embedded fonts, images,
-    tables and electronic invoices.
+    Create PDF documents from Tcl. tclpdf is pure Tcl built on TclOO - no
+    compiler, no binary extension, no Tk. A document is an object, every
+    command takes -options, and each topic module is loaded on first use.
 
-    Beyond the usual page, text and graphics work it does two things a PDF
-    writer often leaves out: general file attachments, and form XObjects that
-    store a drawing once and place it as often as wanted.
-
-        Document and graphics
-            Pages and the five page boxes, paths, clipping to a rectangle or
-            an arbitrary path, transparency, blend modes and overprint, form
-            XObjects for reusable content, tiling patterns, all seven shading
-            types - axial, radial, function-based and the four meshes -,
-            RGB / CMYK / grey / separation / DeviceN / Lab / ICC based
-            colours and 148 colour names without Tk.
-
-        Text
-            Single lines and paragraphs with justification, indents, a height
-            limit that hands back what did not fit, text flowing around
-            shapes, soft hyphens, leader rows, text along a path and page
-            numbers. Right-to-left lines are set as well: Hebrew by order
-            alone, Arabic with its contextual forms from the face's own GSUB
-            tables, with the numbers inside such a line keeping their own
-            order and paired brackets mirrored. What cannot be set correctly
-            is refused rather than drawn wrong.
-
-        Fonts
-            The fourteen standard faces, and three formats to embed: TrueType
-            as Type0/CIDFontType2 with Identity-H and a ToUnicode CMap, subset
-            down to the glyphs actually used, a variable face at any point on
-            its axes; OpenType with CFF outlines and Type 1 whole, since
-            subsetting either would need the outlines rewritten, which this
-            package does not do - it reads the charstrings for their widths
-            and metrics, not to redraw them.
-            Pair kerning and the standard ligatures are applied from the
-            font's own tables, both on by default. A missing character raises
-            an error instead of silently disappearing.
-
-        Images
-            JPEG, PNG and TIFF. All three are passed through unchanged
-            wherever possible: a JPEG stream goes in as /DCTDecode, a PNG
-            without alpha as /FlateDecode with /Predictor 15, and a TIFF
-            strip through the PDF filter that undoes its own compression.
-            PNG alpha becomes a soft mask; so does a 16-bit colour key,
-            which is the one PNG transparency that is decoded here because
-            no reader was measured to read the array form at that depth.
-            An LZW TIFF is unpacked and written out again as Flate, since
-            PDF/A admits no /LZWDecode.
-
-        Tables
-            Column widths, cell wrapping, page breaks with repeated header and
-            footer rows, a table too wide for the page dealt over further
-            pages, rowSpan/colSpan, decimal alignment and per-cell hooks.
-
-        SVG
-            Shapes, paths, transforms, groups, reuse, viewBox and gradients,
-            drawn as PDF vectors rather than as a picture. Text in a drawing
-            uses the same faces as the rest of the document, embedded ones
-            included.
-
-        Barcodes
-            Through tzint, which encodes into SVG that tclpdf then draws as
-            vectors. No encoder of its own, and none needed; tzint is not a
-            dependency of this package.
-
-        Tagged PDF and PDF/A-3a
-            A structure tree with the 49 standard types, nesting checked
-            against Annex L, artifacts kept out of it and named by kind, and
-            abbreviations carrying their expansion.
-
-        Accessibility
-            On top of the structure tree, PDF/UA-1 and PDF/UA-2 with the
-            Well-Tagged PDF declaration. The claim is refused when the
-            document does not keep it: a title, a language, every font
-            embedded including the standard fourteen, headings without a gap,
-            tables with the same number of cells in every row, a description
-            on every link, every picture either described or declared
-            decoration. All of them are reported at once when the file is
-            written, each naming the call to change.
-
-        Navigation and presentation
-            Links to a URL, a page or a structure element, bookmarks, page
-            labels, viewer preferences, and file attachments with their own
-            relationship, description and date.
-
-        Electronic invoices
-            ZUGFeRD / Factur-X as PDF/A-3B: ICC profile, OutputIntent, XMP with
-            the Factur-X extension schema, embedded XML, file specification,
-            /AF entry and name tree. The conformance level is derived from
-            BT-24 of the invoice XML rather than taken on trust.
-
-    Everything listed above is built and tested; nothing here is planned or
-    partial. Measured against the page count of its chapters, that covers
-    roughly a third of ISO 32000-1 - and the missing two thirds are almost
-    entirely what a READER of foreign PDFs needs rather than a writer. See
-    the manual for the complete list of commands.
+      Graphics    paths, arcs, clipping, transparency, form XObjects, patterns,
+                  shadings; grey, RGB, CMYK, spot, DeviceN, Lab, ICC colour
+      Text        paragraphs, pagination and columns, text around shapes and
+                  along a path, hyphenation, right-to-left, vertical writing
+      Runs        bold, italic, links, headings and lists in flowing text,
+                  runs in table cells - as a run list, as tags or Markdown
+      Fonts       standard 14, TrueType, OpenType/CFF, Type 1, collections,
+                  variable, Type 3, colour fonts and emoji, fallback chains
+      Images      JPEG, PNG and TIFF, passed through where possible
+      Tables      column widths, page breaks with repeated header and footer
+                  rows, rowSpan/colSpan
+      SVG         drawn as vectors, clip paths and masks; barcodes via tzint
+      Navigation  links, bookmarks, page labels, attachments, annotations,
+                  form fields, layers
+      Existing    a page of another PDF placed as a form, a finished file
+      PDFs        read or continued by incremental update
+      Standards   tagged PDF, PDF/A-2 and -3 (B, U, A), PDF/UA-1 and -2,
+                  ZUGFeRD / Factur-X, Order-X
+      Security    AES-256 encryption, digital signatures, RFC 3161 timestamps
 
 
 DEPENDENCIES
 
-    Tcl >= 8.6.11 (runs under Tcl 9 as well)
+    Tcl >= 8.6.11, Tcl 9 as well. The core needs nothing else; Tk is never
+    loaded. Optional:
 
-    The core needs nothing beyond Tcl itself: zlib is a built-in command,
-    not a package.
+      tdom 0.9.0+  every document claiming PDF/A, PDF/UA or ZUGFeRD (XMP);
+                   SVG parses with it when present, with its own parser if not
+      http         part of Tcl; loaded only to request a document timestamp
+      tls          only for an https timestamp authority (or use -tsa)
 
-        tdom     - 0.9.0 or newer; required for the XMP metadata packet, so
-                   every document that declares PDF/A, PDF/UA or ZUGFeRD
-                   needs it. It is also what reads SVG when present: it
-                   parses 27 to 48 times faster than the parser tclpdf brings
-                   along and refuses an entity expansion bomb. Without it SVG
-                   still works, through the built-in element tree parser, and
-                   a document with no metadata claim runs without tdom.
-
-    That is the whole list; there is no other optional package. Barcodes
-    need none either: tzint is a separate encoder, not a package tclpdf
-    uses - it produces SVG, which "svg -data" draws, and no code in this
-    package knows about barcodes. Encryption needs none either: the standard
-    security handler in revision 6 - AES-256, SHA-2, the whole key ladder -
-    is written in pure Tcl, with no cryptographic library to build.
-
-    Tk is not required and must not be pulled in.
-
-
-GETTING THE CODE
-
-    The development repository is hosted at https://fossil.sowaswie.de/tclpdf
-    You are encouraged to use trunk.
+    tzint is needed by your script for barcodes, not by tclpdf. The signature
+    value comes from the caller (-signer); encryption is pure Tcl.
 
 
 INSTALLING
 
-    The release archives tclpdf<version>.zip and tclpdf<version>.tar.gz hold
-    the same thing: one directory tclpdf<version> with the Tcl modules,
-    pkgIndex.tcl and the ICC profiles in icc/ - nothing to build. Extract
-    it into a directory on the auto_path of your tclsh (the lib directory
-    of the Tcl installation, or one you add with lappend auto_path), and
+    The release archives tclpdf<version>.zip and .tar.gz hold the modules,
+    pkgIndex.tcl and icc/ - nothing to build: extract onto the auto_path
+    and "package require tclpdf". The source archive, like a checkout, adds
+    tests, examples and the manual source; build it in the source directory:
 
-        package require tclpdf
-
-    finds it. Nothing else is needed; tdom only for PDF/A, PDF/UA and
-    ZUGFeRD (see the manual, "Optional packages").
-
-    The source archive tclpdf<version>-src.tar.gz - and a checkout of the
-    repository - carry the tests, the examples with their fonts, the manual
-    sources and the tools. Since tclpdf is TEA-compatible you should be
-    able to do
-
-        ./configure
+        ./configure [--with-tcl=<dir of tclConfig.sh>] [--prefix=<tree>]
         make test
-        make install
-
-    Build IN the source directory. A separate build directory configures
-    cleanly but cannot run the tests: the generated pkgIndex.tcl locates the
-    modules through $dir, which is then the build directory, while the 103
-    .tcl files stay where the sources are. Nothing is lost by building
-    in-tree - make install puts index and modules together again either way.
-
-    By default this installs into the lib directory of the Tcl
-    installation found by configure (use --with-tcl to point it to the
-    tclConfig.sh of another Tcl), so that this tclsh finds the package
-    on its auto_path. To install into a different location use
-
-        ./configure --prefix /path/to/tree
-
-    which installs the package into /path/to/tree/lib/tclpdf<version>.
+        make install        into <prefix>/lib/tclpdf<version>
+        make examples       every example into examples/out
 
 
-LICENCE, AND WHY NO FONT IS PART OF IT
+DOCUMENTATION
 
-    tclpdf itself is MIT - see the file license.terms. That covers everything
-    the package installs: the Tcl modules, pkgIndex.tcl and the ICC
-    profiles in icc/, which are a runtime part because their bytes end up
-    inside every PDF/A document. Four profiles ship: sRGB.icc (the default
-    output intent, "no copyright, use freely"), ISOcoated_v2_bas.ICC, a CMYK
-    intent for print work, and ISOcoated_v2_grey1c_bas.ICC, a grey intent for
-    monochrome documents - the two from basICColor under the zlib licence,
-    the grant is the file LICENSE-ZLIB-bICC beside them - and sRGB2014.icc,
-    the ICC's own sRGB profile under the ICC's terms (LICENSE-ICC.txt), kept
-    beside the default for comparison; see icc/README.md.
-
-    TWO OTHER PIECES OF THIRD-PARTY MATERIAL travel in the source archive,
-    both BUILD-TIME data and neither installed: tools/agl/glyphlist.txt, the
-    Adobe Glyph List, verbatim and under Adobe's own BSD licence, whose text
-    is the header of the file - tools/mkafm.tcl turns glyph names into the
-    widths in afmData.tcl with it; and examples/assets/fonts/adobe-afm/, the
-    fourteen Adobe core font metrics (the AFM files with Adobe's LICENSE.txt
-    and MustRead.html beside them, Adobe's AFM grant, which forbids
-    separating the licence from the metrics) that afmData.tcl is generated
-    from. Before 2026-08-13 the same table was read out of a pdf4tcl
-    installation instead, which made afmData.tcl unreproducible without
-    another project on the disk.
-
-    NO FONT IS PART OF THE PACKAGE. The faces under examples/assets/fonts are
-    there so that the tests and the examples have something to embed, and they
-    travel in the source archive alone:
-
-        make install                    installs no font
-        tclpdf<version>.zip, .tar.gz    contain no font
-        tclpdf<version>-src.tar.gz      carries them, with their licences
-
-    They are third-party work under their own terms, sorted by origin:
-    DejaVu (Bitstream Vera licence) directly under fonts/, the Google Fonts
-    faces - Roboto, Bitcount Prop Single, Niconne, Permanent Marker and ten
-    Noto faces - under fonts/google/ (SIL Open Font License 1.1, Permanent
-    Marker Apache 2.0), OCR A and OCR B under fonts/tsukurimashou/ (public
-    domain and free-use statements of their authors), the URW Core 35 under
-    fonts/urw-core35-fonts/ (OFL 1.1 chosen of three) and the Liberation
-    fonts under fonts/liberation-fonts/ (OFL 1.1) - two free sets that keep
-    the measure of the standard 14, see the manual - and the fourteen Adobe
-    core font metrics under fonts/adobe-afm/ (Adobe's AFM grant, LICENSE.txt
-    beside them; build input, not example data). The full texts sit in
-    examples/assets/fonts/licenses/, each named after the family it belongs
-    to, and they have to travel with any copy of those files. The inventory in
-    examples/assets/README.md records for every face where it came from, under
-    what terms, and what its embedding flag says.
-
-    Whether you may embed a font into a PDF that tclpdf writes is a question
-    for THAT font's licence, not for this one. All of them here allow it without
-    restriction; a face you add yourself may not, and tclpdf will not stop you
-    - it reads the fsType flag and reports it, but does not refuse on it,
-    because no validator and no reader enforces it either and a package that
-    silently declined a licensed face would be the more damaging mistake.
+    doc/tclpdf.md   the manual - "make all" makes .n and .html (pandoc)
+    doc/PLUGINS.md  extending tclpdf without touching its source
+    examples/       scripts, each saying in its header what it shows
+    Wiki            https://fossil.sowaswie.de/tclpdf - manual, finished
+                    example PDFs, technical notes
+    Bugs            https://fossil.sowaswie.de/tclpdf/ticket, as anonymous
 
 
-REPORTING BUGS
+LICENCE
 
-    Please head to https://fossil.sowaswie.de/tclpdf/ticket and
-    click on "New Ticket". Log in as anonymous and report your findings.
-    If you prefer to have an individual login write Alex a mail.
+    Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+    Contributors - special thanks: Ralf Fassel
+
+    MIT - see license.terms. It covers all that is installed: the modules,
+    pkgIndex.tcl and icc/, whose profiles end up inside PDF/A documents.
+    sRGB.icc reads "no copyright, use freely", the basICColor CMYK and grey
+    intents are zlib (LICENSE-ZLIB-bICC), sRGB2014.icc is under the ICC's
+    terms (LICENSE-ICC.txt); see icc/README.md. Build-time data, not
+    installed: the Adobe Glyph List (tools/agl, BSD licence in its header)
+    and the Adobe core font metrics (examples/assets/fonts/adobe-afm, with
+    Adobe's LICENSE.txt, which must stay with them).
+
+    NO FONT IS PART OF THE PACKAGE. The faces under examples/assets/fonts
+    serve the tests and examples; make install and the release archives
+    contain none, only the source archive carries them. Each is third-party
+    work under its own licence - DejaVu, Google Fonts faces such as Roboto,
+    Arimo and Noto, OCR A/B, URW Core 35, Liberation - with the text beside
+    it or in fonts/licenses/; examples/assets/README.md records origin, terms
+    and embedding flag of every face. Whether a font may be embedded is a
+    question for its own licence: tclpdf reports fsType, but does not refuse
+    a restricted face.
 
 
 HISTORY
