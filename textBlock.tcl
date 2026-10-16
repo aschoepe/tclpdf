@@ -190,21 +190,35 @@ oo::define ::tclpdf::document::document {
   # table asks for the natural width of a column whose cell is set as runs.
   # The intake asks for a width because a run is a thing of a paragraph;
   # nothing here breaks at it.
+  #
+  # A LIST ITEM is as wide as its text plus the indent of its marker - the
+  # indent the band of every line of it loses (TextBlockBand), read from
+  # the paragraph table the intake built. The width handed to the intake is
+  # therefore one no indent can use up: it was 1 until 2026-10-16, and the
+  # intake refused every list against it (TCLPDF TEXT INDENT width), as it
+  # refuses a list in a column narrower than its indent.
   method TextLinesWidest {string args} {
     my TextInit
-    set options [my TextBlockOptions [list {*}$args -width 1] textLines]
+    set options [my TextBlockOptions [list {*}$args -width 1e6] textLines]
     lassign [my TextBlockIntake $string $options textLines] string options
     set arguments [my TextOverrides $options]
     my state textRuns [dict get $options runs]
     my state textRunsString $string
+    set paragraphs [expr {[dict exists $options runsParagraphs]
+        ? [dict get $options runsParagraphs] : {}}]
     set widest 0
     set from 0
+    set index 0
     foreach paragraph [split $string \n] {
       set width [my TextBlockMeasure $paragraph $arguments $string $from]
+      if {[dict exists $paragraphs $index indent]} {
+        set width [expr {$width + [dict get $paragraphs $index indent]}]
+      }
       if {$width > $widest} {
         set widest $width
       }
       incr from [expr {[string length $paragraph] + 1}]
+      incr index
     }
     return $widest
   }
@@ -349,7 +363,9 @@ oo::define ::tclpdf::document::document {
       }
     }
     if {[dict get $options runs]} {
-      package require tclpdf::textRun
+      # 1.3 for a list drawn where nothing is marked - a form, a pattern, a
+      # repeated table head - which opens no L.
+      package require tclpdf::textRun 1.3-
       return [my TextRunsIntake $string $options $context]
     }
     dict set options runs {}
@@ -2282,4 +2298,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.20
+package provide tclpdf::textBlock 1.21

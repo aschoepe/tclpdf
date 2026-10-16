@@ -140,6 +140,32 @@ oo::define ::tclpdf::document::document {
     # drawn line starts where the measured one said it starts, at the same Td,
     # for every alignment - which a cell that cut the string itself and made
     # two calls could not promise.
+    # A CELL HOLDING A LIST (TableMeasure, "listed") is drawn in ONE call,
+    # from the pairs the cell was set from, not line by line: a line drawn
+    # by a [text] of its own is the first line of its paragraph, and every
+    # first line of an item gets a marker - measured 2026-10-16, a bullet
+    # before each line of an item, "1." before each line of a numbered one,
+    # and in a tagged document an L with one LI per line. The indent of a
+    # list follows its widest marker, which only the whole list knows. So
+    # marker, numbering, indent and the L/LI/Lbl/LBody of a tagged document
+    # come from the road every paragraph takes (textRun.tcl), broken at the
+    # width and with the -hyphenate the cell was measured with - the same
+    # breaker on the same pairs, so the lines it draws are the lines counted
+    # in TableMeasure and the height above holds them. The leading is the
+    # cell's, in points as [text] takes it - without it the lines stepped by
+    # the 1.2 of [text] under rows measured with the 1.15 of a table. The
+    # first baseline is where the line road puts it, from the same top. The
+    # hooks see "lines" and "runs" as for every cell of runs; this road
+    # draws from "runs".
+    if {[llength $runs] && [dict exists $cell listed] && [dict get $cell listed]} {
+      my text $runs -runs 1 -width [my TableInner $width $padding] \
+          -at [list [expr {$x + $padding}] $top] -anchor top \
+          -align [my TextAlign $align $state] {*}[my TableFont $style] \
+          -color [dict get $style color] \
+          -leading [expr {[dict get $style size] * [dict get $style leading]}] \
+          -hyphenate [dict get $style hyphenate]
+      return
+    }
     foreach line $lines hyphen $hyphens {
       # A LINE OF RUNS is drawn by [text -runs 1], which needs the width
       # the line was broken to - a run is a thing of a paragraph, and the
@@ -301,4 +327,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableDraw 1.8
+package provide tclpdf::tableDraw 1.9

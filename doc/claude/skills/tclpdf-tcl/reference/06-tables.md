@@ -159,9 +159,9 @@ set y [$doc table -at [list 20 [expr {$y + 8}]] -width 170 -theme striped \
 # runs beside a markup (CELL markup), a markup other than plain|tags|markdown
 # (TCLPDF TABLE STYLE markup),
 # runs in a decimal column (a BODY cell - a head or foot cell of runs over such a
-# column is set flush right like a plain heading), a heading or list item in a
-# cell, an rtl cell, and a notation left open - nothing falls back to plain text
-# in silence.
+# column is set flush right like a plain heading), a heading in a cell (CELL
+# paragraph heading - a list is allowed, see below), an rtl cell, and a notation
+# left open - nothing falls back to plain text in silence.
 if {[catch {$doc table -at {20 300} -width 60 -theme plain \
         -body {{{runs {"1.50" {style bold}}}}} -columns {{align decimal}}} msg]} {
     puts "refused: $msg"
@@ -172,6 +172,27 @@ if {[catch {$doc table -at {20 300} -width 60 -theme plain \
 # the caller's to write: in -didParseCell, try ::tclpdf::markdown::parse on the
 # cell's text yourself and set "markup plain" on the cell where it fails
 # (examples/04.05-table-markup.tcl shows it).
+```
+
+```tcl
+# A LIST in a cell is a list as in flowing text: item/start/continued in runs,
+# <ul>/<ol>/<li> under markup tags, "- " and "1. " under markup markdown. Each
+# item is a paragraph of the cell, indented and labelled as in [text -runs 1],
+# consecutive items of one kind are one list, and the row grows with the lines.
+# Tagged, the TD holds an L with LI/Lbl/LBody per item. Hooks see every line of
+# an item carrying its {item ...}. A heading in a cell stays refused, and so
+# does a list in a decimal body column (CELL decimal).
+set y [$doc table -at [list 20 [expr {$y + 8}]] -width 170 -theme grid \
+    -head {{Pos Description}} \
+    -body {{1 {text "- a\n- b" markup markdown}}} \
+    -columns {{width 14} {markup markdown}} \
+    -style {family report size 9}]
+if {[catch {$doc table -at {20 300} -width 60 -theme plain \
+        -body {{{text "# Title" markup markdown}}}} msg]} {
+    puts "refused: $msg"
+} else {
+    puts "NOT REFUSED: a heading in a cell went through, which it should not have"
+}
 ```
 
 ```tcl

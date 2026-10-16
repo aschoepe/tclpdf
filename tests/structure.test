@@ -657,6 +657,49 @@ test structure-11.4 {a gradient is marked, a pattern body is not} -body {
       [expr {[regexp -all {BDC|BMC} $stream] == [regexp -all {EMC} $stream]}]
 } -result {2 0 1}
 
+test structure-11.5 {a list drawn where nothing is marked opens no L - form, pattern, table repeat} -body {
+  # The L and the LI of a list are opened with [StructureOpen], which used to
+  # make them whatever happened to the marks: inside a form, a pattern or a
+  # head a table repeats on a later page the marks are suspended, and every
+  # list left an L with an empty LI in the tree. The labels are still drawn.
+  set items {{one} {item bullet} "\n" {} {two} {item number}}
+  set result {}
+  foreach where {form pattern repeat} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc tagged 1
+    $doc language en
+    $doc page add
+    switch -- $where {
+      form {
+        $doc form create box -size {50 20} -script [list $doc text $items -runs 1 \
+            -width 40 -at {2 2} -anchor top]
+        $doc form place box -at {20 20}
+        set stream [lindex [::tclpdfTest::objects $doc {/Subtype /Form}] 0]
+      }
+      pattern {
+        $doc pattern create dots -size {50 20} -script [list $doc text $items -runs 1 \
+            -width 40 -at {2 2} -anchor top]
+        set stream [lindex [::tclpdfTest::objects $doc {/PatternType 1}] 0]
+      }
+      repeat {
+        set rows {}
+        for {set n 1} {$n <= 40} {incr n} {
+          lappend rows [list $n "row $n"]
+        }
+        $doc table -at {20 30} -width 100 -theme plain -top 30 -bottom 120 \
+            -head [list [list No. [list runs $items]]] -body $rows \
+            -headStyle {fontStyle {}} -style {family helvetica size 9}
+        set stream [::tclpdfTest::content $doc 1]
+      }
+    }
+    set types [lmap element [$doc state structure] {dict get $element type}]
+    $doc destroy
+    lappend result [list $where [llength [lsearch -all $types L]] \
+        [llength [lsearch -all $types LI]] [regexp {\(1\. ?\) Tj} $stream]]
+  }
+  set result
+} -result {{form 0 0 1} {pattern 0 0 1} {repeat 2 2 1}}
+
 # --- attributes ------------------------------------------------------------
 
 test structure-12.1 {an attribute is written under the owner it belongs to} -body {

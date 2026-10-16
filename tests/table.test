@@ -2302,10 +2302,11 @@ test table-27.7 {what a cell of runs is refused for, each by name} -body {
     {{{runs {a {style bold}} align decimal}}}
     {{{runs {a {style bold}} direction rtl}}}
     {{{runs {a {heading 1}}}}}
-    {{{runs {a {item bullet}}}}}
-    {{{runs {a {item number start 2}}}}}
-    {{{runs {a {item bullet continued 1}}}}}
-    {{{text "- a" markup markdown}}}
+    {{{runs {a {item bullet}} align decimal}}}
+    {{{runs {a {item bullet}} direction rtl}}}
+    {{{text "# a" markup markdown}}}
+    {{{text "<h1>a</h1>" markup tags}}}
+    {{{text "<ul><li>a" markup tags}}}
     {{{text "a **b" markup markdown}}}
     {{{text "a <b>b" markup tags}}}
   } {
@@ -2316,7 +2317,7 @@ test table-27.7 {what a cell of runs is refused for, each by name} -body {
   }
   $doc destroy
   set codes
-} -result {{TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE STYLE markup} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL paragraph item} {TCLPDF TABLE CELL paragraph item} {TCLPDF TABLE CELL paragraph item} {TCLPDF TABLE CELL paragraph item} {TCLPDF TEXT MARKDOWN OPEN ** 2} {TCLPDF TEXT MARKUP OPEN b}}
+} -result {{TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE STYLE markup} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TEXT MARKUP OPEN li} {TCLPDF TEXT MARKDOWN OPEN ** 2} {TCLPDF TEXT MARKUP OPEN b}}
 
 test table-27.8 {a refused cell of runs draws nothing - the refusal comes before the first cell} -body {
   # Measured at the layout, before anything is drawn: a decimal cell of
@@ -2545,5 +2546,348 @@ test table-27.18 {a notation that marks nothing leaves the cell plain - figures 
   list [regexp {\(b\) Tj} $stream] [regexp {\(\.50\) Tj} $stream] [regexp {\(\.5\) Tj} $stream] \
       [regexp {\(d \* e\) Tj} $stream] $refused
 } -result {1 1 1 1 {TCLPDF TABLE CELL decimal}}
+
+# LISTS IN CELLS (2026-10-16): a list item is a paragraph inside the cell -
+# measured by the breaker as every cell of runs is, drawn in ONE [text]
+# call so that marker, numbering, indent and the L of a tagged document
+# come from the road a paragraph takes. Items joined by a line feed, so
+# that no empty paragraph trails the last one.
+proc ::tableListPairs {count kind {words "words that run on over the line"}} {
+  set pairs {}
+  for {set n 1} {$n <= $count} {incr n} {
+    if {$n > 1} {
+      lappend pairs "\n" {}
+    }
+    lappend pairs "item $n $words" [list item $kind]
+  }
+  return $pairs
+}
+
+# The Td and the string after it, per text object: {x y string ...}.
+proc ::tableShows {stream} {
+  return [lmap {whole x y text} [regexp -all -inline \
+      {([0-9.]+) ([0-9.]+) Td\s*\(((?:[^()\\]|\\.)*)\) Tj} $stream] {
+    list $x $y $text
+  }]
+}
+
+# What a structure element holds, as the types of its element kids.
+proc ::tableKidTypes {elements id} {
+  set types {}
+  foreach kid [dict get [lindex $elements $id] kids] {
+    if {[lindex $kid 0] eq "element"} {
+      lappend types [dict get [lindex $elements [lindex $kid 1]] type]
+    }
+  }
+  return $types
+}
+
+test table-28.1 {a cell holding a list is as tall as the list set at its inner width} -body {
+  # The row height stays "lines times leading": what [textHeight] answers
+  # for the same pairs at the same width and leading, and every line of an
+  # item - the second as well - carries the item.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set pairs [::tableListPairs 3 bullet]
+  set layout [$doc table layout -width 40 -theme plain -columns {{width 40}} \
+      -body [list [list [list runs $pairs]]] -style {family helvetica size 9}]
+  set cell [lindex [dict get $layout body] 0 0]
+  set style [dict get $cell resolved]
+  set inner [expr {40 - 2 * [dict get $style padding]}]
+  set expected [$doc textHeight $pairs -runs 1 -width $inner -family helvetica \
+      -size 9 -leading [expr {9 * [dict get $style leading]}]]
+  $doc destroy
+  set lines [dict get $cell lines]
+  list [expr {[llength $lines] > 3}] [dict get $cell listed] \
+      [expr {abs([dict get $cell height] - 2 * [dict get $style padding] - $expected) < 1e-9}] \
+      [lsort -unique [lmap line $lines {dict get [lindex $line 1] item}]]
+} -result {1 1 1 bullet}
+
+test table-28.2 {the baselines of a list cell are the baselines of the plain cell beside it} -body {
+  # Plain, a bulleted list of runs and a numbered Markdown list in one row:
+  # two baselines for the three cells, labels and lines alike - the first
+  # where the plain road puts it, the second one leading of the cell below.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc table -at {20 30} -width 120 -theme plain \
+      -columns {{width 40} {width 40} {width 40}} \
+      -body {{"Alpha\nBeta" {runs {Alpha {item bullet} "\n" {} Beta {item bullet}}}
+              {text "1. Alpha\n2. Beta" markup markdown}}} \
+      -style {family helvetica size 9}
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  set tds [::tableTds $stream]
+  list [expr {[llength $tds] / 2}] [llength [lsort -unique [lmap {whole y} $tds {set y}]]]
+} -result {10 2}
+
+test table-28.3 {a list of twelve items keeps one indent, and every item one label} -body {
+  # Drawn line by line every line was the first of its paragraph: a bullet
+  # or a "1." in front of each, and an indent that followed the widest
+  # label of that one line. Drawn as one block the text of every line of
+  # every item starts at one x, and the labels are 1. to 12. once each.
+  set result {}
+  foreach kind {bullet number} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc table -at {20 30} -width 60 -theme plain -columns {{width 60}} \
+        -body [list [list [list runs [::tableListPairs 12 $kind]]]] \
+        -style {family helvetica size 9}
+    set shows [::tableShows [::tclpdfTest::content $doc]]
+    $doc destroy
+    # NOT [expr {... ? ... : ...}] for the labels: expr reads "1." as a
+    # number and answers "1.0", the trap textRun.tcl names for the same
+    # string.
+    set texts {}
+    set labels {}
+    foreach show $shows {
+      if {[regexp {^(item|line)} [lindex $show 2]]} {
+        lappend texts $show
+      } else {
+        lappend labels [lindex $show 2]
+      }
+    }
+    lappend result [expr {[llength $texts] > 12}] \
+        [llength [lsort -unique [lmap show $texts {lindex $show 0}]]] [llength $labels]
+    if {$kind eq "number"} {
+      lappend result [expr {$labels eq [lmap n {1 2 3 4 5 6 7 8 9 10 11 12} {string cat $n .}]}]
+    }
+  }
+  set result
+} -result {1 1 12 1 1 12 1}
+
+test table-28.4 {a Markdown list and a list in tags give the lines of the pairs} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set layout [$doc table layout -width 40 -theme plain -columns {{width 40}} \
+      -body {{{runs {"alpha beta gamma delta epsilon" {item bullet} "\n" {} "zeta eta" {item bullet}}}}
+             {{text "- alpha beta gamma delta epsilon\n- zeta eta" markup markdown}}
+             {{text "<ul><li>alpha beta gamma delta epsilon</li><li>zeta eta</li></ul>" markup tags}}} \
+      -style {family helvetica size 9}]
+  $doc destroy
+  set cells [lmap row [dict get $layout body] {lindex $row 0}]
+  set lines [lmap cell $cells {dict get $cell lines}]
+  set heights [lmap cell $cells {dict get $cell height}]
+  list [llength [lindex $lines 0]] [llength [lsort -unique $lines]] \
+      [llength [lsort -unique $heights]] [lsort -unique [lmap cell $cells {dict get $cell listed}]]
+} -result {3 1 1 1}
+
+test table-28.5 {the automatic width of a column holding a list takes the indent in} -body {
+  # Measured unbroken plus the indent of the marker. Two automatic columns
+  # share the width in proportion to what each needs, so the list column
+  # stands to the column of the same words plain as their needs do - the
+  # words and the padding, and for the list the indent as drawn. Until the
+  # indent was taken in, the measurement asked for a width of 1 and the
+  # list was refused (TEXT INDENT width).
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set pairs {"short item" {item bullet} "\n" {} "two" {item bullet}}
+  set body [list [list [list runs $pairs] "short item"]]
+  set layout [$doc table layout -width 170 -theme plain -body $body \
+      -style {family helvetica size 9}]
+  $doc table -at {20 30} -width 170 -theme plain -body $body \
+      -style {family helvetica size 9}
+  set shows [::tableShows [::tclpdfTest::content $doc]]
+  set words [$doc textWidth "short item" -family helvetica -size 9]
+  $doc destroy
+  set cell [lindex [dict get $layout body] 0 0]
+  set padding [dict get $cell resolved padding]
+  # Where the text of the first item starts, less where a plain cell starts.
+  set start [lindex [lsearch -inline -index 2 $shows "short item"] 0]
+  set indent [expr {$start * 25.4 / 72 - 20 - $padding}]
+  lassign [dict get $layout widths] listed plain
+  list [llength [dict get $cell lines]] [expr {$indent > 0}] \
+      [expr {abs($listed / $plain - ($words + 2 * $padding + $indent) / ($words + 2 * $padding)) < 1e-5}]
+} -result {2 1 1}
+
+test table-28.6 {a list cell is placed by valign like a plain cell of as many lines} -body {
+  # A tall plain cell, then a list of two one-line items and a plain cell
+  # of two lines, both with the same valign: their baselines coincide.
+  set result {}
+  foreach valign {top middle bottom} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc table -at {20 30} -width 120 -theme plain \
+        -columns [list {width 40} [list width 40 valign $valign] [list width 40 valign $valign]] \
+        -body {{"a\nb\nc\nd\ne\nf" {runs {x {item bullet} "\n" {} y {item bullet}}} "x\ny"}} \
+        -style {family helvetica size 9}
+    set shows [::tableShows [::tclpdfTest::content $doc]]
+    $doc destroy
+    set second {}
+    set third {}
+    foreach show $shows {
+      lassign $show x y
+      if {$x > 100 * 72 / 25.4} {
+        lappend third $y
+      } elseif {$x > 60 * 72 / 25.4} {
+        lappend second $y
+      }
+    }
+    lappend result [expr {[lsort -unique $second] eq [lsort -unique $third]}]
+  }
+  set result
+} -result {1 1 1}
+
+test table-28.7 {a tagged table with lists: an L in the TD, an LI per item, and UA-1 holds} \
+    -constraints haveTableFaces -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "Lists in cells"
+  $doc language en
+  $doc page add
+  $doc font embed body $::tableFace
+  $doc font embed bodyBold $::tableFaceBold
+  $doc font family fam -regular body -bold bodyBold
+  $doc table -at {20 30} -width 120 -theme plain \
+      -head {{Pos Description}} \
+      -body {{1 {text "It covers:\n\n- the first point, long enough to wrap in its cell\n- the **second** point" markup markdown}}
+             {2 {text "<ol><li>one</li><li>two</li><li>three</li></ol>" markup tags}}} \
+      -columns {{width 15} {width 60}} -style {family fam size 9}
+  $doc ua 1
+  set path [::tclpdfTest::scratch table-lists-ua.pdf]
+  $doc write $path
+  set report [$doc structureReport]
+  set elements [$doc state structure]
+  $doc destroy
+  set verdict [::tclpdfTest::verapdf $path ua1]
+  file delete $path
+  set shapes {}
+  set index 0
+  foreach element $elements {
+    if {[dict get $element type] eq "L"} {
+      set items [::tableKidTypes $elements $index]
+      set parts [lsort -unique [lmap kid [dict get $element kids] {
+        ::tableKidTypes $elements [lindex $kid 1]
+      }]]
+      lappend shapes [list [dict get [lindex $elements [dict get $element parent]] type] \
+          [lsort -unique $items] [llength $items] $parts]
+    }
+    incr index
+  }
+  list $verdict [dict get $report lists] $shapes
+} -result {ok {{numbering Disc items 2 labelled 2} {numbering Decimal items 3 labelled 3}} {{TD LI 2 {{Lbl LBody}}} {TD LI 3 {{Lbl LBody}}}}}
+
+test table-28.8 {a list in a head repeated on later pages is drawn, and puts no L in the tree} \
+    -constraints haveTableFaces -body {
+  # The repeat is a pagination artifact with the marking suspended: the
+  # labels are drawn there as the words are, and only the head of the first
+  # page holds the list. Before, every repeat left an L with an empty LI.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "A list in a repeated head"
+  $doc language en
+  $doc page add
+  $doc font embed body $::tableFace
+  $doc font embed bodyBold $::tableFaceBold
+  $doc font family fam -regular body -bold bodyBold
+  set rows {}
+  for {set n 1} {$n <= 40} {incr n} {
+    lappend rows [list $n "Position $n with a plain word and some more of them to wrap"]
+  }
+  $doc table -at {20 30} -width 100 -theme plain \
+      -head {{No. {text "- first\n- second" markup markdown}}} -body $rows \
+      -columns {{width 15} {width 40}} -style {family fam size 9} \
+      -top 30 -bottom 120 -repeatHead 1
+  set pages [$doc page count]
+  # The head on every later page is drawn: "No.", the two labels and the
+  # two items are five shows inside its pagination artifact.
+  set repeats {}
+  for {set index 1} {$index < $pages} {incr index} {
+    set stream [::tclpdfTest::content $doc $index]
+    set from [string first /Pagination $stream]
+    set artifact [string range $stream $from [string first EMC $stream $from]]
+    lappend repeats [regexp -all {\) Tj} $artifact]
+  }
+  $doc ua 1
+  set path [::tclpdfTest::scratch table-lists-head.pdf]
+  $doc write $path
+  set elements [$doc state structure]
+  $doc destroy
+  set verdict [::tclpdfTest::verapdf $path ua1]
+  file delete $path
+  set types [lmap element $elements {dict get $element type}]
+  list [expr {$pages >= 3}] [llength [lsearch -all $types L]] \
+      [llength [lsearch -all $types LI]] [lsort -unique $repeats] $verdict
+} -result {1 1 2 5 ok}
+
+test table-28.9 {a list may not stand in a decimal body column, and a head over one is set flush right} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set codes {}
+  foreach {head body foot} {
+    {} {{a {text "- a" markup markdown}}} {}
+    {} {{a 1.5}} {{a {text "- 1.5" markup markdown}}}
+  } {
+    lappend codes [::tclpdfTest::refusalCode {
+      $doc table -at {20 30} -width 100 -theme plain -head $head -body $body \
+          -foot $foot -columns {{} {align decimal}} -style {family helvetica size 9}
+    }]
+  }
+  set layout [$doc table layout -width 100 -theme plain \
+      -head {{a {text "- Amount" markup markdown}}} -body {{a 1.5}} \
+      -columns {{} {align decimal}} -style {family helvetica size 9}]
+  lappend codes [::tclpdfTest::refusalCode {
+    $doc table -at {20 30} -width 100 -theme plain \
+        -body {{{runs {a {item bullet}}}}} -columns {{width 6}} \
+        -style {family helvetica size 9}
+  }]
+  $doc destroy
+  list {*}$codes [dict get [lindex [dict get $layout head] 0 1] resolved align]
+} -result {{TCLPDF TABLE CELL decimal} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT INDENT width} right}
+
+test table-28.10 {the hooks see the lines of a list cell with the item on each, and the runs} -body {
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set ::seen {}
+  $doc table -at {20 30} -width 40 -theme plain -columns {{width 40}} \
+      -body [list [list [list runs [::tableListPairs 2 number]]]] \
+      -style {family helvetica size 9} \
+      -willDrawCell {apply {{cell doc} {
+        lappend ::seen [lmap line [dict get $cell lines] {dict get [lindex $line 1] item}] \
+            [expr {[dict get $cell runs] eq [::tableListPairs 2 number]}]
+      }}}
+  $doc destroy
+  lassign $::seen items same
+  list [expr {[llength $items] > 2}] [lsort -unique $items] $same
+} -result {1 number 1}
+
+test table-28.11 {a hyphenated list item draws the lines the cell was measured with} \
+    -constraints haveGermanPatterns -body {
+  # The one call breaks the pairs again, at the same width with the same
+  # -hyphenate: the strings it draws are the measured lines, the break
+  # hyphens included, and tagged each break hyphen is in its Span.
+  set results {}
+  foreach tagged {0 1} {
+    set doc [tclpdf new -unit mm -compress 0]
+    if {$tagged} {
+      $doc tagged 1
+      $doc language de-DE
+    }
+    $doc page add
+    set body {{{runs {"Die Betriebskostenabrechnung wird umgelegt" {item bullet}}}}}
+    set layout [$doc table layout -width 30 -theme plain \
+        -columns {{width 30 hyphenate de-DE}} -body $body -style {family helvetica size 9}]
+    $doc table -at {20 30} -width 30 -theme plain \
+        -columns {{width 30 hyphenate de-DE}} -body $body -style {family helvetica size 9}
+    set stream [::tclpdfTest::content $doc]
+    $doc destroy
+    set cell [lindex [dict get $layout body] 0 0]
+    # Tagged, the break hyphen is a show of its own in its Span, so the
+    # string before it ends one character short of the measured line.
+    set measured [lmap line [dict get $cell lines] hyphen [dict get $cell hyphens] {
+      expr {$tagged && $hyphen ? [string range [lindex $line 0] 0 end-1] : [lindex $line 0]}
+    }]
+    set drawn {}
+    foreach show [::tableShows $stream] {
+      if {[string match {\\*} [lindex $show 2]] || [lindex $show 2] in {- {}}} {
+        continue
+      }
+      lappend drawn [lindex $show 2]
+    }
+    lappend results [expr {$drawn eq $measured}] \
+        [regexp -all {/Span <</ActualText <FEFF>>> BDC} $stream] \
+        [llength [lsort -unique [lmap {whole y} [::tableTds $stream] {set y}]]]
+  }
+  set results
+} -result {1 0 4 1 3 4}
 
 cleanupTests

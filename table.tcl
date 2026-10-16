@@ -45,9 +45,11 @@ package require TclOO
 package require tclpdf::option 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::color 1.0-
-# 1.8 for [TableCellContent], the check of a cell of runs or markup.
-package require tclpdf::tableLayout 1.8-
-package require tclpdf::tableDraw 1.0-
+# 1.8 for [TableCellContent], the check of a cell of runs or markup; 1.10
+# for a list in a cell, measured with its indent.
+package require tclpdf::tableLayout 1.10-
+# 1.9 for a cell holding a list, drawn in one call.
+package require tclpdf::tableDraw 1.9-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::table {
@@ -1133,4 +1135,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.12
+package provide tclpdf::table 1.13

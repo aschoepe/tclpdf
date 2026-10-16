@@ -30,8 +30,9 @@ package require tclpdf::option 1.0-
 # For [pdfObj fits] - the one place the magnitude a PDF real holds stands
 # (Annex C.2), asked by TableMeasurable below.
 package require tclpdf::pdfObj 1.0-
-# 1.20 for [TextLinesWidest], the width of a cell of runs.
-package require tclpdf::textBlock 1.20-
+# 1.20 for [TextLinesWidest], the width of a cell of runs; 1.21 for the
+# width of a list in it, its indent taken in.
+package require tclpdf::textBlock 1.21-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::tableLayout {}
@@ -219,13 +220,23 @@ oo::define ::tclpdf::document::document {
   # column is not a cell of runs because the column beside it is Markdown -
   # measured 2026-09-30, it was refused as one. What the pairs may not
   # carry in a cell is refused here, once, before anything is drawn: a
-  # paragraph state - heading, item, start, continued - because a cell's
-  # lines are one height and one indent, which is how a row knows how tall
-  # it is, and a heading in a cell would need a leading of its own the row
-  # cannot see; and decimal alignment, which hangs a line on ONE separator
-  # of ONE string and has no meaning for a line drawn as pieces. Neither is
-  # flattened to plain text in silence. A right-to-left cell is refused by
-  # [textLines] itself, in the words [text] uses for the same block.
+  # heading, because the lines of a cell are one leading, which is how a
+  # row knows how tall it is, and a heading sets its own size and a leading
+  # of its own the row cannot see; and decimal alignment, which hangs a line
+  # on ONE separator of ONE string and has no meaning for a line drawn as
+  # pieces - a list in a decimal column of the body is refused by that
+  # rule. Neither is flattened to plain text in silence. A right-to-left
+  # cell is refused by [textLines] itself, in the words [text] uses for the
+  # same block.
+  #
+  # A LIST ITEM IS NOT REFUSED (since 2026-10-16): it keeps the size and
+  # the leading of the cell and only moves its lines in by the indent of its
+  # marker, so the row height stays "lines times leading" - measured,
+  # [textLines -runs 1] answers lines of the body leading for a list, every
+  # line of an item carrying {item ...}, and [textHeight] of the same pairs
+  # at the same width is that sum. start and continued go with it. The cell
+  # is then drawn in one call rather than line by line (TableDrawCell), so
+  # that marker, numbering and indent come from the one road [text] takes.
   method TableRuns {cell style} {
     set text [dict get $cell text]
     set pairs [expr {[dict exists $cell runs] ? [dict get $cell runs] : {}}]
@@ -262,19 +273,29 @@ oo::define ::tclpdf::document::document {
           line of pieces has none; give the cell align left, right or\
           center, or set the figure as text"
     }
-    foreach {text options} $pairs {
-      foreach key {heading item start continued} {
-        if {[dict exists $options $key]} {
-          return -code error -errorcode [list TCLPDF TABLE CELL paragraph $key] \
-              "tclpdf: a run in a table cell cannot carry \"$key\" - a\
-              heading or a list item is a paragraph of its own size and\
-              indent, and the lines of a cell are one height, which is how\
-              the row knows how tall it is; set the words as a plain run,\
-              or put the list in a \[text\] block beside the table"
-        }
+    foreach {piece options} $pairs {
+      if {[dict exists $options heading]} {
+        return -code error -errorcode [list TCLPDF TABLE CELL paragraph heading] \
+            "tclpdf: a run in a table cell cannot carry \"heading\" - a\
+            heading sets its own size and leading, and the lines of a cell\
+            are one leading, which is how the row knows how tall it is; set\
+            the words as a bold run, or put the heading above the table"
       }
     }
     return [list $pairs $text]
+  }
+
+  # Whether the pairs of a cell hold a list item - a paragraph state, which
+  # makes the cell one block for [text] rather than a stack of lines (see
+  # TableDrawCell). Asked once, where the cell is measured; the answer
+  # travels on the cell as "listed".
+  method TableListed {pairs} {
+    foreach {piece options} $pairs {
+      if {[dict exists $options item]} {
+        return 1
+      }
+    }
+    return 0
   }
 
   # The width inside a cell, what its lines are broken to and drawn with -
@@ -567,6 +588,7 @@ oo::define ::tclpdf::document::document {
               {*}[my TableFont $style] -hyphenate [dict get $style hyphenate]]
         }
         dict set cell runs $pairs
+        dict set cell listed [my TableListed $pairs]
         set lines [lmap line $broken {lindex $line 0}]
         set leading [::tclpdf::geometry fromPoints \
             [expr {[dict get $style size] * [dict get $style leading]}] \
@@ -820,4 +842,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableLayout 1.9
+package provide tclpdf::tableLayout 1.10

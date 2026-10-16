@@ -31,11 +31,19 @@
 # names the notation, not the content), a body cell in a decimal column - a
 # line of pieces has no one separator to hang on; a head or foot cell of
 # runs over such a column is set flush right like a plain heading -, a
-# right-to-left cell, and a heading or
-# a list item inside a cell, which are paragraphs of their own size and
-# indent. A notation left open is refused as [text -markup] refuses it;
-# nothing falls back to plain text in silence. The caller who wants that
-# fallback writes it, in the didParseCell hook at the foot of this file.
+# right-to-left cell, and a heading inside a cell, which sets its own size
+# and leading where the lines of a cell are one leading. A notation left
+# open is refused as [text -markup] refuses it; nothing falls back to plain
+# text in silence. The caller who wants that fallback writes it, in the
+# didParseCell hook at the foot of this file.
+#
+# A LIST IS NOT REFUSED. A list item keeps the size and leading of the cell
+# and only moves its lines in by its marker, so it is a paragraph in the
+# cell as it is in a block: "- " lines in a Markdown cell, <ul>/<ol> and
+# <li> in a cell of tags, {item bullet} or {item number} in the pairs. The
+# seventh and eighth row below are the two notations; marker, numbering and
+# indent come from [text], and in a tagged document the cell's TD holds an
+# L with an LI per item.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -75,6 +83,14 @@ lappend rows [list "2026-09-05" \
 lappend rows [list "2026-09-06" \
     {text "internal: note the **bold** markers are meant literally here" markup plain} 0.5]
 
+# Lists in a cell: a position text in Markdown whose "- " lines become a
+# bulleted list under the sentence that introduces it, and a cell of tags
+# with a numbered one. The row is as tall as the items wrap.
+lappend rows [list "2026-09-07" \
+    "**Mueller GmbH** - maintenance, which covers in particular:\n- the removal of minor faults in running operation,\n- the answering of simple questions by telephone" 2]
+lappend rows [list "2026-09-08" \
+    {text "<b>Schmidt AG</b> - support in three steps: <ol><li>the call taken and logged</li><li>a remote session</li><li>the <u>written</u> report</li></ol>" markup tags} 1.5]
+
 set doc [tclpdf new -unit mm]
 $doc info Title "Runs and markup in table cells"
 $doc page add
@@ -85,13 +101,15 @@ $doc font -family helvetica -style {} -size 9.5
 set y [$doc text "The activity column is Markdown by its column description; the\
     fourth row was written as the list of runs a program builds from data, the\
     fifth says \"markup tags\" for an underline, the sixth \"markup plain\" and\
-    keeps its asterisks. The rows are as tall as their bold words make them,\
-    and every first line stands on the baseline of the date beside it." \
+    keeps its asterisks; the seventh holds a Markdown list, the eighth a\
+    numbered list in tags. The rows are as tall as their bold words and their\
+    items make them, and every first line stands on the baseline of the date\
+    beside it." \
     -at {20 30} -width 170]
 
 set y [$doc table -at [list 20 [expr {$y + 6}]] -width 170 -theme striped \
     -head {{Date {text "**Activity**" markup markdown} Hours}} -body $rows \
-    -foot {{{text Total colSpan 2 align right} 12.5}} \
+    -foot {{{text Total colSpan 2 align right} 16}} \
     -columns {{width 24} {markup markdown} {width 18 align decimal}} \
     -style {family helvetica size 9}]
 
@@ -134,7 +152,7 @@ proc plainWhereRefused {cell doc} {
 $doc font -family helvetica -style bold -size 10
 $doc text "A fallback the caller writes: didParseCell" -at [list 20 [expr {$y + 6}]]
 set y [$doc table -at [list 20 [expr {$y + 11}]] -width 170 -theme plain \
-    -body {{"2026-09-07" "a **closed** run sets" 1} {"2026-09-08" "an *open run is set as typed" 1}} \
+    -body {{"2026-09-09" "a **closed** run sets" 1} {"2026-09-10" "an *open run is set as typed" 1}} \
     -columns {{width 24} {markup markdown} {width 18 align decimal}} \
     -style {family helvetica size 9} -didParseCell plainWhereRefused]
 
@@ -143,4 +161,4 @@ $doc write $target
 $doc destroy
 
 puts "  written: $target ([file size $target] bytes)"
-puts "  [llength $rows] rows: three in Markdown, one as runs, one in tags, one as it stands"
+puts "  [llength $rows] rows: four in Markdown, one as runs, two in tags, one as it stands"

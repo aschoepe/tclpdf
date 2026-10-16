@@ -1039,7 +1039,17 @@ oo::define ::tclpdf::document::document {
       }
       return $marking
     }
-    set artifact [expr {[lindex $tag 0] eq "Artifact"}]
+    # NOTHING IS MARKED WHILE THE MARKING IS SUSPENDED OR AN ARTIFACT IS
+    # OPEN - a form or a pattern being drawn, the head of a table repeated
+    # on a page it was broken onto ([TableArtifact]). [StructureMark]
+    # answers nothing there, but the L and the LI below are opened with
+    # [StructureOpen], which makes the element whatever is drawn into it:
+    # measured 2026-10-16, a list inside [form create], [pattern create] or
+    # a repeated table head left an L with an empty LI in the tree. Such a
+    # block takes the road of an Artifact block - labels drawn, no element.
+    set artifact [expr {[lindex $tag 0] eq "Artifact"
+        || [my state structureSuspend] eq "1"
+        || [my state structureInArtifact] eq "1"}]
     # The list stays open while the items of one list follow each other.
     set marking [my TextRunsParagraphClose $marking [expr {$item && !$artifact
         && [dict exists $marking list]
@@ -1116,4 +1126,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textRun 1.2
+package provide tclpdf::textRun 1.3
