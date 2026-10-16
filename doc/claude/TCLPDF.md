@@ -50,6 +50,11 @@ The rules that decide most calls:
 - A pattern belongs to the content stream it was made in: define a
   gradient INSIDE the form that uses it; under a transform pass the
   returned matrix as -matrix.
+- A table cell holds runs or marked-up text as a paragraph does: runs
+  as in [text -runs 1], or text with the style key markup tags|markdown
+  (a column says it once); since 1.7 also a list (item in runs,
+  <ul>/<ol>/<li>, "- "/"1. "). A heading in a cell is refused, and so
+  are runs or a list in a body cell of a decimal column.
 - Tagged PDF: [$doc tagged 1] before anything is drawn; -tag H1 for
   headings; -alt or -artifact 1 on every picture; structure Type -script
   for grouping.

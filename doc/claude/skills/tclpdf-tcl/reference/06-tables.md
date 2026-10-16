@@ -29,9 +29,10 @@ Without `-width` the table takes the page width less twice the larger of its lef
 ## Cells: strings, dictionaries, spans, alignment
 
 ```tcl
-# A cell is read as a dictionary when its FIRST word is a cell key (text colSpan
-# rowSpan align valign direction style) and the word count is even. A plain string
-# that happens to start with one of those - write it as {text "..."}.
+# A cell is read as a dictionary when its FIRST word is a cell key (text runs
+# markup colSpan rowSpan align valign direction style) and the word count is
+# even. A plain string that happens to start with one of those - write it as
+# {text "..."}.
 set y [$doc table -at [list 20 [expr {$y + 8}]] -width 170 -theme grid \
     -head {{{text "Region" rowSpan 2} {text "Sales" colSpan 2} {text "Notes" rowSpan 2}} {{"2025" "2026"}}} \
     -body {
@@ -47,7 +48,7 @@ Rows tied by a `rowSpan` never split across a page. Unknown keys and out-of-rang
 
 ## Styles and themes
 
-Style keys, read at every level - `-style`, `-headStyle`/`-bodyStyle`/`-footStyle`, a column, a cell's `style` - the most specific wins: `family fontStyle size leading padding fill color align valign direction hyphenate border lineColor lineWidth`. A theme (`plain`, `striped`, `grid`) is a set of these.
+Style keys, read at every level - `-style`, `-headStyle`/`-bodyStyle`/`-footStyle`, a column, a cell's `style` - the most specific wins: `family fontStyle size leading padding fill color align valign direction hyphenate markup border lineColor lineWidth`. A theme (`plain`, `striped`, `grid`) is a set of these.
 
 ```tcl
 set y [$doc table -at [list 20 [expr {$y + 8}]] -width 80 -theme plain \
@@ -121,7 +122,7 @@ set y [$doc table -at {20 40} -width 170 -theme grid \
 puts "the register ends on page [expr {[$doc page current] + 1}] at y = [format %.1f $y]"
 ```
 
-Each hook receives a dictionary and the document. `didParseCell` sees the cell keys plus `row column section`; the draw hooks add `lines width height leading resolved x y spanHeight decimal tail`; `didDrawPage` gets `page` and `y`. A head plus first row that does not fit below `-at` starts on the next page instead of leaving the head alone. `-horizontalBreak 1` deals a too-wide table over further pages, `-repeatColumns n` keeps the leading columns on each.
+Each hook receives a dictionary and the document. `didParseCell` sees the cell keys plus `row column section`; a measured cell also carries `listed` (1 where its runs hold a list item); the draw hooks add `lines hyphens width height leading resolved x y spanHeight decimal tail`; `didDrawPage` gets `page` and `y`. A head plus first row that does not fit below `-at` starts on the next page instead of leaving the head alone. `-horizontalBreak 1` deals a too-wide table over further pages, `-repeatColumns n` keeps the leading columns on each.
 
 ## Measuring without drawing
 
@@ -175,7 +176,7 @@ if {[catch {$doc table -at {20 300} -width 60 -theme plain \
 ```
 
 ```tcl
-# A LIST in a cell is a list as in flowing text: item/start/continued in runs,
+# A LIST in a cell (1.7) is a list as in flowing text: item/start/continued in runs,
 # <ul>/<ol>/<li> under markup tags, "- " and "1. " under markup markdown. Each
 # item is a paragraph of the cell, indented and labelled as in [text -runs 1],
 # consecutive items of one kind are one list, and the row grows with the lines.

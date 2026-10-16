@@ -16,7 +16,7 @@ SYNOPSIS
       Text        paragraphs, pagination and columns, text around shapes and
                   along a path, hyphenation, right-to-left, vertical writing
       Runs        bold, italic, links, headings and lists in flowing text,
-                  runs in table cells - as a run list, as tags or Markdown
+                  runs and lists in table cells - a run list, tags or Markdown
       Fonts       standard 14, TrueType, OpenType/CFF, Type 1, collections,
                   variable, Type 3, colour fonts and emoji, fallback chains
       Images      JPEG, PNG and TIFF, passed through where possible
