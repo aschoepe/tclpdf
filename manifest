@@ -1,5 +1,5 @@
-C Licence\snotices\sfor\sthe\sthird-party\sdata\sthe\spackage\sships,\safter\sthe\sprovenance\sreview\n\n-\safmData,\sbidiData\sand\sjoiningData\scarry\sthe\sterms\sof\stheir\ssources\sin\sthe\sheader:\sAdobe's\spermission\sparagraph\sand\strademark\snotices\sfor\sthe\score\sfont\smetrics,\sthe\sUnicode\sLicense\sv3\sfor\sthe\scharacter\sdatabase\stables\s-\swritten\sby\stools/mkafm.tcl,\smkbidi.tcl\sand\smkjoining.tcl,\swhich\sregenerate\sthe\smodules\sbyte\sfor\sbyte;\sthe\sUnicode\stext\salso\sas\stools/ucd/LICENSE\n-\stclconfig/license.terms:\sthe\sTcl\slicence\sfor\sthe\sTEA\sfiles,\stests/all.tcl\sand\sthe\sTcl\s9\slogo,\swhich\spointed\sat\sthe\spackage's\sown\sMIT\sfile\n-\stools/mkversion.tcl\snames\sFossil's\smkversion.c\sand\scarries\sits\sBSD-2-Clause\snotice\n-\sREADME\sand\sexamples/assets/README.md:\swhat\sMIT\scovers\sand\swhat\sicc/\scarries,\sthe\sgenerated\sdata\smodules\sand\stheir\ssources,\sthe\sFeRD\ssample\sinvoices\sunder\sFeRD's\sown\sterms,\sthe\sspecimen\sportrait;\surw-core35\sNOTICE.md\sstates\sthe\smeasured\sfsType\sper\sface\n-\sexample\s02.09\sprints\sthe\sApache\s2.0\snotice\sfor\sPermanent\sMarker,\swhose\ssubset\scarries\sno\sname\stable\n-\shyphenate.tcl:\sthe\scomment\son\scomment\slines\sin\sa\s.dic\sfile\ssays\swhat\slibhyphen\sactually\sskips
-D 2026-10-29T10:09:03.837
+C timestamp.test:\scut\sthe\stoken\sby\sits\sDER\slength,\snot\sby\strimming\szeros\n\n-\sthe\strim\stook\sthe\stoken's\sown\slast\snibble\sone\stime\sin\ssixteen,\sand\sthe\sshort\stoken\sfailed\sopenssl's\sverification\sby\schance\son\seither\sinterpreter
+D 2026-10-29T10:25:36.756
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -470,7 +470,7 @@ F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e
 F tests/textFlow.test b1a67e17cb618eb8cc2908766363c68fc130469c010ee71f051032edb7f713b2
 F tests/textPath.test d52bd06f46b3551b59442bc43cfff9b64c8f8901e49467c42bb8c10357dd9c5c
 F tests/textRun.test 225ec839e6a51b1fbad4e460eb5d8cc29d4d7363e7f2e7666db1c1a77071c7ea
-F tests/timestamp.test e1a2de8cfb5c9b660ec48fee323355a46dd51f70812a2785f3c472cdc9f19541
+F tests/timestamp.test f8a4bc3e264715dc14cd944c5e85d5f75673c87acf160201a7f08ca849f31937
 F tests/tkcanvas.test fe55f5dc8f5a52fff8d36ae2b13bf6059ff13b290f825a84578502815beec090
 F tests/type1.test 8b4b5a67ad3d6606a0584c26b38e3d479e13762a6bb09c3478e1ccf313888079
 F tests/type3.test b4e28cb689643691b018ee1e4f99b8011cd0a54628e7cd5aa088d70c0fc7a873
@@ -518,8 +518,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 9ba4e3def97e8949ba1ff41ccaa05ca210b4cbcc40951940a2a4c144573f7ef7
-R e6087cffe52f9f08fb5c0c504af88bfa
+P f144958ae7f01cb01e9b3aea55eba1c1082a8883127550310f5850842532f974
+R 89d7919844b0640a66cba760b72c4785
 U alex
-Z adfc8459d4813ddc03cd6919106e7eef
+Z cecfbdc29ea410e94767a0005a195492
 # Remove this line to create a well-formed Fossil manifest.

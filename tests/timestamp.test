@@ -190,8 +190,12 @@ test timestamp-3.1 {an unsigned file gains a /DocTimeStamp that openssl verifies
   puts -nonewline $fh $ranged
   close $fh
   regexp {/Contents <([0-9a-f]+)} $data -> hex
-  set token [binary decode hex [string trimright $hex 0]]
   # DER states its own length; the padding zeros behind it are the room.
+  # Cut by that length, not by trimming zeros: the token's own last byte
+  # ends in a zero nibble one time in sixteen, and a trim would take it.
+  set raw [binary decode hex $hex]
+  binary scan $raw x2Su length
+  set token [string range $raw 0 [expr {$length + 3}]]
   set tokenFile [file join [::tcltest::temporaryDirectory] token.der]
   set fh [open $tokenFile wb]
   puts -nonewline $fh $token
